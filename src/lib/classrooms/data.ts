@@ -1,12 +1,14 @@
-import { withRoomDayOperation } from "@/lib/room-booking/locking";
+import { withRoomDayOperation, lockRoomDay, assertRoomDayIdle } from "@/lib/room-booking/locking";
 import { reservationRoomBlocks } from "@/lib/room-booking/service";
 import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as schema from "@/lib/db/schema";
 import { WiseClient } from "@/lib/wise/client";
+import { fetchWiseSessionsForBangkokDates } from "@/lib/wise/day-sessions";
+import { assertPublishAttemptActive, claimPublishAttempt, isRetryablePublishError, publishFence,
+  PublishDeferredError, releasePublishAttempt, withPublishClaim, type PublishClaim } from "./publish-queue";
 import {
-  fetchAllFutureSessions,
   fetchInstituteLocations,
   updateSessionLocation,
 } from "@/lib/wise/fetchers";
@@ -57,6 +59,7 @@ export interface ClassroomAssignmentDetail {
   activeSnapshotMeta: ClassroomSnapshotMeta;
   liveRoomBlocks: LiveRoomBlock[];
   roomConflictWarnings: RoomConflictWarning[];
+  publishProgress?: PublishJobProgress | null;
 }
 
 export interface ClassroomSnapshotMeta {
@@ -121,6 +124,9 @@ export interface PublishJobProgress {
   elapsedMs: number | null;
   estimatedRemainingMs: number | null;
   lastError: string | null;
+  nextAttemptAt?: string | null;
+  attemptCount?: number;
+  verifiedAt?: string | null;
   startedAt: string | null;
   finishedAt: string | null;
   createdAt: string;
@@ -133,7 +139,7 @@ export interface PublishJobStatusResponse {
 }
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const PUBLISH_ROW_CONCURRENCY = 10;
+const PUBLISH_ROW_CONCURRENCY = 1;
 const PUBLISH_JOB_STALE_AFTER_MS = 6 * 60 * 1000;
 export const CLASSROOM_ASSIGNMENT_FRESHNESS_MS = 15 * 60 * 1000;
 
@@ -676,10 +682,13 @@ export function toPublishJobProgress(
     successCount: job.successCount,
     failedCount: job.failedCount,
     skippedCount: job.skippedCount,
-    remainingCount: Math.max(0, job.totalCount - job.completedCount),
+    remainingCount: Math.max(0, job.eligibleCount - job.successCount),
     elapsedMs,
     estimatedRemainingMs: estimatePublishRemainingMs(job, now),
     lastError: job.lastError,
+    nextAttemptAt: job.nextAttemptAt?.toISOString() ?? null,
+    attemptCount: job.attemptCount ?? 0,
+    verifiedAt: job.verifiedAt?.toISOString() ?? null,
     startedAt: job.startedAt?.toISOString() ?? null,
     finishedAt: job.finishedAt?.toISOString() ?? null,
     createdAt: job.createdAt.toISOString(),
@@ -733,7 +742,9 @@ export async function getClassroomAssignmentForDate(
     return { run: null, rows: [], rooms, ...metas, liveRoomBlocks: [], roomConflictWarnings: [] };
   }
   const rows = await loadRowsForRun(db, run.id);
-  return { run, rows, rooms, ...metas, liveRoomBlocks: [], roomConflictWarnings: [] };
+  const [job] = await db.select().from(schema.classroomPublishJobs).where(eq(schema.classroomPublishJobs.runId, run.id))
+    .orderBy(desc(schema.classroomPublishJobs.createdAt)).limit(1);
+  return { run, rows, rooms, ...metas, liveRoomBlocks: [], roomConflictWarnings: [], publishProgress: job ? toPublishJobProgress(job) : null };
 }
 
 async function loadAssignmentSessions(
@@ -971,7 +982,7 @@ async function runIncrementalClassroomAssignmentUnlocked(
   // Wise's FUTURE list stops returning classes as they finish; retain today's started rows.
   const sessions = [...snapshotSessions, ...previousRows.filter(row => startedIds.has(row.wiseSessionId) && !currentIds.has(row.wiseSessionId)).map(rowToSession)];
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
-  const liveSessions = input.liveSessions ?? await fetchAllFutureSessions(createWiseClientFromEnv(), instituteId);
+  const liveSessions = input.liveSessions ?? await fetchWiseSessionsForBangkokDates(createWiseClientFromEnv(), instituteId, [input.date]);
   const liveBlocks = liveRoomBlocksForDate(liveSessions, date);
   const localWiseSessionIds = new Set(sessions.map((session) => session.wiseSessionId));
   const unmanagedWiseSessionIds = unmanagedWiseSessionIdsForDate(liveSessions, date, localWiseSessionIds);
@@ -1064,7 +1075,7 @@ async function updateRunRowsFromAssignment(
   const rooms = await listClassroomRooms(db);
   const enabled = classroomContinuityEnabled();
   const roomPolicies = enabled ? await ensureTutorRoomProfiles(db, run.snapshotId, run.assignmentDate, rooms) : new Map();
-  const live = await fetchAllFutureSessions(createWiseClientFromEnv(), process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413");
+  const live = await fetchWiseSessionsForBangkokDates(createWiseClientFromEnv(), process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413", [run.assignmentDate]);
   const blocks = liveRoomBlocksForDate(live, run.assignmentDate);
   const localIds = new Set(sourceRows.map(row => row.wiseSessionId));
   const diagnostics: { quality?: RoomQualityMetrics } = {};
@@ -1163,20 +1174,20 @@ async function updateClassroomAssignmentOverrideUnlocked(
   return { run: nextRun, rows, rooms, ...metas, liveRoomBlocks: [], roomConflictWarnings: [] };
 }
 
-function createWiseClientFromEnv(): WiseClient {
+function createWiseClientFromEnv(signal?: AbortSignal, beforeRequest?: (url: string, init: RequestInit) => Promise<void>): WiseClient {
   const userId = process.env.WISE_USER_ID;
   const apiKey = process.env.WISE_API_KEY;
   const namespace = process.env.WISE_NAMESPACE ?? "begifted-education";
   if (!userId || !apiKey) {
     throw new Error("WISE_USER_ID and WISE_API_KEY are required to publish assignments");
   }
-  return new WiseClient({ userId, apiKey, namespace });
+  return new WiseClient({ userId, apiKey, namespace, maxConcurrency: 1, maxRetries: 0, requestsPerSecond: 1 / 3, stopOnRateLimit: true, signal, beforeRequest });
 }
 
 async function markPublishResult(
   db: Database,
   rowId: string,
-  publishStatus: "skipped" | "success" | "failed",
+  publishStatus: "skipped" | "success" | "failed" | "not_published",
   publishError: string | null,
   publishedLocation?: string,
 ): Promise<void> {
@@ -1193,7 +1204,7 @@ async function markPublishResult(
   await db
     .update(schema.classroomAssignmentRows)
     .set(set)
-    .where(eq(schema.classroomAssignmentRows.id, rowId));
+    .where(and(eq(schema.classroomAssignmentRows.id, rowId), publishFence()));
 }
 
 async function updateRowCurrentWiseLocation(
@@ -1207,7 +1218,7 @@ async function updateRowCurrentWiseLocation(
       currentWiseLocation,
       updatedAt: new Date(),
     })
-    .where(eq(schema.classroomAssignmentRows.id, rowId));
+    .where(and(eq(schema.classroomAssignmentRows.id, rowId), publishFence()));
 }
 
 async function refreshRowsCurrentWiseLocations(
@@ -1259,22 +1270,32 @@ export async function createClassroomPublishJob(
     .limit(1);
   if (!run) throw new Error("Assignment run not found");
 
-  const rows = await loadRowsForRun(db, input.runId);
-  const targetRowIdSet = input.targetRowIds ? new Set(input.targetRowIds) : null;
-  const targetRows = targetRowIdSet ? rows.filter((row) => targetRowIdSet.has(row.id)) : rows;
-  const eligibleCount = targetRows.filter((row) => isClassroomPublishEligible(row).eligible).length;
-  const [job] = await db
-    .insert(schema.classroomPublishJobs)
-    .values({
-      runId: input.runId,
-      targetRowIds: input.targetRowIds ?? null,
-      totalCount: targetRows.length,
-      eligibleCount,
-      createdBy: input.createdBy ?? null,
-    })
-    .returning();
+  return withDatabaseTransaction(db, async tx => {
+    const state = await lockRoomDay(tx, run.assignmentDate);
+    const latest = await loadLatestRunForDate(tx, run.assignmentDate);
+    if (latest?.id !== input.runId) throw new Error("Assignment plan was superseded; publish the latest saved plan");
+    const [existing] = await tx.select().from(schema.classroomPublishJobs)
+      .where(and(eq(schema.classroomPublishJobs.runId, input.runId), inArray(schema.classroomPublishJobs.status, ["pending", "running"])))
+      .orderBy(desc(schema.classroomPublishJobs.createdAt)).limit(1);
+    if (existing) return toPublishJobProgress(existing);
+    assertRoomDayIdle(state);
+    const rows = await loadRowsForRun(tx, input.runId);
+    const targetRowIdSet = input.targetRowIds ? new Set(input.targetRowIds) : null;
+    const targetRows = targetRowIdSet ? rows.filter((row) => targetRowIdSet.has(row.id)) : rows;
+    const eligibleCount = targetRows.filter((row) => isClassroomPublishEligible(row).eligible).length;
+    const [job] = await tx
+      .insert(schema.classroomPublishJobs)
+      .values({
+        runId: input.runId,
+        targetRowIds: input.targetRowIds ?? null,
+        totalCount: targetRows.length,
+        eligibleCount,
+        createdBy: input.createdBy ?? null,
+      })
+      .returning();
 
-  return toPublishJobProgress(job);
+    return toPublishJobProgress(job);
+  });
 }
 
 async function incrementPublishJobCounters(
@@ -1299,24 +1320,7 @@ async function incrementPublishJobCounters(
   await db
     .update(schema.classroomPublishJobs)
     .set(set)
-    .where(eq(schema.classroomPublishJobs.id, jobId));
-}
-
-async function markPublishJobFailed(
-  db: Database,
-  jobId: string,
-  error: unknown,
-): Promise<void> {
-  const message = error instanceof Error ? error.message : "Wise publish job failed";
-  await db
-    .update(schema.classroomPublishJobs)
-    .set({
-      status: "failed",
-      lastError: message,
-      finishedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(eq(schema.classroomPublishJobs.id, jobId));
+    .where(and(eq(schema.classroomPublishJobs.id, jobId), publishFence()));
 }
 
 async function updateRunPublishStatus(db: Database, runId: string): Promise<void> {
@@ -1324,13 +1328,16 @@ async function updateRunPublishStatus(db: Database, runId: string): Promise<void
     .select({
       id: schema.classroomAssignmentRows.id,
       publishStatus: schema.classroomAssignmentRows.publishStatus,
+      status: schema.classroomAssignmentRows.status, assignedRoom: schema.classroomAssignmentRows.assignedRoom,
+      sessionType: schema.classroomAssignmentRows.sessionType, wiseClassId: schema.classroomAssignmentRows.wiseClassId,
+      wiseSessionId: schema.classroomAssignmentRows.wiseSessionId, warnings: schema.classroomAssignmentRows.warnings,
     })
     .from(schema.classroomAssignmentRows)
     .where(eq(schema.classroomAssignmentRows.runId, runId));
   const publishedCount = publishedRows.filter((row) => row.publishStatus === "success").length;
   const failedPublishCount = publishedRows.filter((row) => row.publishStatus === "failed").length;
   const status =
-    failedPublishCount > 0
+    failedPublishCount > 0 || publishedRows.some(row => isClassroomPublishEligible(row).eligible && row.publishStatus !== "success")
       ? "partial"
       : publishedCount > 0
         ? "published"
@@ -1344,10 +1351,11 @@ async function updateRunPublishStatus(db: Database, runId: string): Promise<void
       status,
       updatedAt: new Date(),
     })
-    .where(eq(schema.classroomAssignmentRuns.id, runId));
+    .where(and(eq(schema.classroomAssignmentRuns.id, runId), publishFence()));
 }
 
 function isStaleRunningPublishJob(job: ClassroomPublishJob, now = new Date()): boolean {
+  if (job.leaseExpiresAt) return false;
   if (job.status !== "running" || !job.startedAt || job.finishedAt) return false;
   return now.getTime() - job.startedAt.getTime() > PUBLISH_JOB_STALE_AFTER_MS;
 }
@@ -1380,6 +1388,7 @@ export async function updateWiseLocationOnly(
     await updateLocation(row.wiseClassId, row.wiseSessionId, location);
     return null;
   } catch (error) {
+    if (isRetryablePublishError(error)) throw error;
     return error instanceof Error ? error.message : "Wise publish failed";
   }
 }
@@ -1455,6 +1464,9 @@ async function moveCycleRowToTemporaryLocation(
       continue;
     }
 
+    await assertPublishAttemptActive(db);
+    if (Date.parse(classroomTimestampToWiseIso(row.startTime)) <= Date.now()) continue;
+    await markPublishResult(db, row.id, "not_published", null);
     const updateError = await updateWiseLocationOnly(
       (classId, sessionId, location) => updateSessionLocation(client, classId, sessionId, location),
       row,
@@ -1477,35 +1489,49 @@ async function moveCycleRowToTemporaryLocation(
   };
 }
 
-export async function runClassroomPublishJob(...args: Parameters<typeof runClassroomPublishJobUnlocked>) {
-  const job = await loadPublishJob(args[0], args[1]);
-  if (isPublishJobTerminal(job.status)) return getClassroomPublishJobProgress(args[0], job.runId, args[1]);
-  const [run] = await args[0].select().from(schema.classroomAssignmentRuns).where(eq(schema.classroomAssignmentRuns.id, job.runId)).limit(1);
-  if (!run) throw new Error("Assignment run not found");
-  return withRoomDayOperation(args[0], run.assignmentDate, () => runClassroomPublishJobUnlocked(...args));
+export async function runClassroomPublishJob(db: Database, jobId: string, client?: WiseClient) {
+  const existing = await loadPublishJob(db, jobId);
+  const claim = await claimPublishAttempt(db, jobId);
+  if (!claim) return getClassroomPublishJobProgress(db, existing.runId, jobId);
+  try {
+    await withPublishClaim(claim, async () => {
+      const [run] = await db.select().from(schema.classroomAssignmentRuns).where(eq(schema.classroomAssignmentRuns.id, existing.runId)).limit(1);
+      if (!run) throw new Error("Assignment run not found");
+      await withRoomDayOperation(db, run.assignmentDate, async () => {
+        const latest = await loadLatestRunForDate(db, run.assignmentDate);
+        if (latest?.id !== run.id) throw new Error("Assignment plan was superseded; publish the latest saved plan");
+        const boundedClient = client ?? createWiseClientFromEnv(AbortSignal.timeout(Math.max(1, claim.deadlineAt - Date.now())), async (url, init) => {
+          await assertPublishAttemptActive(db);
+          if (init.method === "PUT") {
+            const sessionId = /\/sessions\/([^/?]+)/.exec(new URL(url).pathname)?.[1];
+            const [target] = await db.select({ startTime: schema.classroomAssignmentRows.startTime }).from(schema.classroomAssignmentRows)
+              .where(and(eq(schema.classroomAssignmentRows.runId, run.id), eq(schema.classroomAssignmentRows.wiseSessionId, sessionId ?? ""))).limit(1);
+            if (!target || Date.parse(classroomTimestampToWiseIso(target.startTime)) <= Date.now()) {
+              throw new Error("Class has started; room changes require manual review");
+            }
+          }
+        });
+        await runClassroomPublishJobUnlocked(db, jobId, boundedClient, claim);
+      });
+    });
+    await releasePublishAttempt(db, claim);
+  } catch (error) {
+    await releasePublishAttempt(db, claim, error);
+  }
+  return getClassroomPublishJobProgress(db, existing.runId, jobId);
 }
 
 async function runClassroomPublishJobUnlocked(
   db: Database,
   jobId: string,
-  client = createWiseClientFromEnv(),
-  options: { liveSessions?: WiseSession[] } = {},
+  client: WiseClient,
+  claim: PublishClaim,
 ): Promise<PublishJobStatusResponse> {
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
   const existingJob = await loadPublishJob(db, jobId);
   if (isPublishJobTerminal(existingJob.status)) {
     return getClassroomPublishJobProgress(db, existingJob.runId, jobId);
   }
-
-  await db
-    .update(schema.classroomPublishJobs)
-    .set({
-      status: "running",
-      startedAt: existingJob.startedAt ?? new Date(),
-      lastError: null,
-      updatedAt: new Date(),
-    })
-    .where(eq(schema.classroomPublishJobs.id, jobId));
 
   try {
     const [run] = await db
@@ -1518,7 +1544,7 @@ async function runClassroomPublishJobUnlocked(
     const allRows = await loadRowsForRun(db, existingJob.runId);
     const targetRowIds = Array.isArray(existingJob.targetRowIds) ? new Set(existingJob.targetRowIds) : null;
     const rows = targetRowIds ? allRows.filter((row) => targetRowIds.has(row.id)) : allRows;
-    const liveSessions = options.liveSessions ?? await fetchAllFutureSessions(client, instituteId);
+    const liveSessions = await fetchWiseSessionsForBangkokDates(client, instituteId, [run.assignmentDate], { deadlineAt: claim.deadlineAt });
     const liveBySessionId = new Map(liveSessions.map((session) => [session._id, session]));
     await refreshRowsCurrentWiseLocations(db, allRows, liveBySessionId);
 
@@ -1550,7 +1576,7 @@ async function runClassroomPublishJobUnlocked(
         eligibleCount: eligibleRows.length,
         updatedAt: new Date(),
       })
-      .where(eq(schema.classroomPublishJobs.id, jobId));
+      .where(and(eq(schema.classroomPublishJobs.id, jobId), publishFence()));
 
     const summary: PublishSummary = { attempted: 0, success: 0, skipped: 0, failed: 0 };
     const skippedSummary = await markSkippedRows(db, jobId, skippedRows);
@@ -1562,6 +1588,7 @@ async function runClassroomPublishJobUnlocked(
       try {
         publishCatalog = await loadWisePublishLocationCatalog(db, client, instituteId);
       } catch (error) {
+        if (isRetryablePublishError(error)) throw error;
         const message = error instanceof Error ? error.message : "Wise location catalog unavailable";
         catalogError = `Wise location catalog unavailable: ${message}`;
       }
@@ -1580,6 +1607,7 @@ async function runClassroomPublishJobUnlocked(
         bangkokDateKey(new Date(live.scheduledStartTime)) !== run.assignmentDate
         || getLocalMinuteOfDay(live.scheduledStartTime) !== row.startMinute
         || getLocalMinuteOfDay(live.scheduledEndTime) !== row.endMinute
+        || getWiseSessionClassId(live) !== row.wiseClassId
         || !isOfflineSession(live.type) || !isBlockingStatus(live.meetingStatus)
       );
       if (plannedBlocker || staleSession) {
@@ -1668,6 +1696,7 @@ async function runClassroomPublishJobUnlocked(
     }
 
     while (pendingRows.size > 0) {
+      await assertPublishAttemptActive(db);
       const pending = [...pendingRows.values()];
       let dependencyFailures = 0;
       for (const row of pending) {
@@ -1731,6 +1760,16 @@ async function runClassroomPublishJobUnlocked(
           return;
         }
 
+        await assertPublishAttemptActive(db);
+        const live = liveBySessionId.get(row.wiseSessionId)!;
+        if (Date.parse(live.scheduledStartTime) <= Date.now()) {
+          const result = await publishRowResult(db, jobId, row, { status: "failed", error: "Class has started; room changes require manual review" });
+          summary.failed += result.failed;
+          failedRows.set(row.id, row);
+          pendingRows.delete(row.id);
+          return;
+        }
+        await markPublishResult(db, row.id, "not_published", null);
         const updateError = await updateWiseLocationOnly(
           (classId, sessionId, location) => updateSessionLocation(client, classId, sessionId, location),
           row,
@@ -1748,16 +1787,39 @@ async function runClassroomPublishJobUnlocked(
           return;
         }
 
-        const result = await publishRowResult(db, jobId, row, {
-          status: "success",
-          publishedLocation: publishLocation,
-        });
-        summary.attempted += result.attempted;
-        summary.success += result.success;
+        row.currentWiseLocation = publishLocation;
+        await updateRowCurrentWiseLocation(db, row.id, publishLocation);
         pendingRows.delete(row.id);
       });
     }
 
+    await assertPublishAttemptActive(db);
+    const verified = await fetchWiseSessionsForBangkokDates(client, instituteId, [run.assignmentDate], { deadlineAt: claim.deadlineAt });
+    const verifiedById = new Map(verified.map(session => [session._id, session]));
+    let mismatch = false;
+    for (const row of eligibleRows) {
+      if (failedRows.has(row.id)) continue;
+      const live = verifiedById.get(row.wiseSessionId);
+      const desired = publishLocationByRowId.get(row.id);
+      if (!live || getWiseSessionClassId(live) !== row.wiseClassId || !isOfflineSession(live.type)
+        || !isBlockingStatus(live.meetingStatus) || getLocalMinuteOfDay(live.scheduledStartTime) !== row.startMinute
+        || getLocalMinuteOfDay(live.scheduledEndTime) !== row.endMinute) {
+        await markPublishResult(db, row.id, "failed", "Live Wise session changed during publishing; review the assignment");
+        failedRows.set(row.id, row);
+      } else if (!desired || !isCurrentWisePublishLocation(live.location, desired)) {
+        await markPublishResult(db, row.id, "not_published", "Wise read-back did not confirm the assigned room");
+        mismatch = true;
+      } else {
+        await markPublishResult(db, row.id, "success", null, desired);
+      }
+    }
+    const finalRows = await loadRowsForRun(db, run.id);
+    summary.success = finalRows.filter(row => eligibleRows.some(target => target.id === row.id) && row.publishStatus === "success").length;
+    summary.failed = failedRows.size;
+    await db.update(schema.classroomPublishJobs).set({ successCount: summary.success, failedCount: summary.failed,
+      skippedCount: summary.skipped, completedCount: summary.success + summary.failed + summary.skipped, updatedAt: new Date(),
+    }).where(and(eq(schema.classroomPublishJobs.id, jobId), publishFence()));
+    if (mismatch) throw new PublishDeferredError("Wise read-back did not confirm every assigned room; retry queued");
     await updateRunPublishStatus(db, existingJob.runId);
 
     const terminalStatus: ClassroomPublishJob["status"] =
@@ -1770,15 +1832,15 @@ async function runClassroomPublishJobUnlocked(
       .update(schema.classroomPublishJobs)
       .set({
         status: terminalStatus,
+        verifiedAt: terminalStatus === "succeeded" ? new Date() : null,
         lastError: terminalStatus === "failed" ? "No Wise locations were published" : null,
         finishedAt: new Date(),
         updatedAt: new Date(),
       })
-      .where(eq(schema.classroomPublishJobs.id, jobId));
+      .where(and(eq(schema.classroomPublishJobs.id, jobId), publishFence()));
 
     return getClassroomPublishJobProgress(db, existingJob.runId, jobId);
   } catch (error) {
-    await markPublishJobFailed(db, jobId, error);
     await updateRunPublishStatus(db, existingJob.runId).catch(() => undefined);
     throw error;
   }
@@ -1805,16 +1867,14 @@ export async function getClassroomPublishJobProgress(
 export async function publishClassroomAssignmentRun(
   db: Database,
   runId: string,
-  client = createWiseClientFromEnv(),
+  client?: WiseClient,
   options: { targetRowIds?: string[] | null; liveSessions?: WiseSession[] } = {},
 ): Promise<{ detail: ClassroomAssignmentDetail; summary: PublishSummary }> {
   const progress = await createClassroomPublishJob(db, {
     runId,
     targetRowIds: options.targetRowIds,
   });
-  const result = await runClassroomPublishJob(db, progress.jobId, client, {
-    liveSessions: options.liveSessions,
-  });
+  const result = await runClassroomPublishJob(db, progress.jobId, client);
   const finalProgress = result.progress;
   const detail = result.detail ?? await getClassroomAssignmentByRunId(db, runId);
   return {
@@ -1922,7 +1982,9 @@ export async function getClassroomAssignmentByRunId(
   if (!run) throw new Error("Assignment run not found");
   const rows = await loadRowsForRun(db, runId);
   const metas = await loadClassroomSnapshotMetas(db, run.snapshotId);
-  return { run, rows, rooms, ...metas, liveRoomBlocks: [], roomConflictWarnings: [] };
+  const [job] = await db.select().from(schema.classroomPublishJobs).where(eq(schema.classroomPublishJobs.runId, runId))
+    .orderBy(desc(schema.classroomPublishJobs.createdAt)).limit(1);
+  return { run, rows, rooms, ...metas, liveRoomBlocks: [], roomConflictWarnings: [], publishProgress: job ? toPublishJobProgress(job) : null };
 }
 
 export async function getTeacherScheduleForRun(

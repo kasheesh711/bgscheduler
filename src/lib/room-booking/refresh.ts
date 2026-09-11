@@ -1,3 +1,4 @@
+import { fetchWiseSessionsForBangkokDates } from "@/lib/wise/day-sessions";
 import { randomUUID } from "crypto";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
@@ -5,20 +6,17 @@ import * as s from "@/lib/db/schema";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import { createWiseClient, type WiseClient } from "@/lib/wise/client";
 import {
-  fetchAllFutureSessions,
   fetchWiseSessionDetail,
 } from "@/lib/wise/fetchers";
 import {
   getWiseSessionClassId,
   getWiseSessionTeacherUserId,
   type WiseSession,
-  type WiseSessionsResponse,
 } from "@/lib/wise/types";
 import { isBlockingStatus } from "@/lib/normalization/sessions";
 import { isOnlineSessionType } from "@/lib/classrooms/session-mode";
 import { physicalRoom } from "@/lib/classrooms/room-policy";
 import { pushLineTextMessage } from "@/lib/line/client";
-import { addBangkokDays } from "@/lib/room-capacity/dates";
 import { lockRoomDay, assertRoomDayIdle } from "./locking";
 import { loadRoomDay, endRoomReservation } from "./service";
 import {
@@ -50,60 +48,7 @@ export function confirmsRoomSessionDeletion(
   }
 }
 
-async function pastToday(
-  client: WiseClient,
-  institute: string,
-  date: string,
-  deadlineAt: number,
-) {
-  const sessions: WiseSession[] = [];
-  const seen = new Set<string>();
-  let count = 1;
-  for (let page = 1; page <= count; page++) {
-    if (Date.now() >= deadlineAt)
-      throw new Error("Room refresh time budget exceeded");
-    const res = await client.get<WiseSessionsResponse>(
-      `/institutes/${institute}/sessions`,
-      {
-        status: "PAST",
-        paginateBy: "DATE",
-        startDate: date,
-        endDate: addBangkokDays(date, 1),
-        page_number: String(page),
-        page_size: "50",
-      },
-      {
-        signal: AbortSignal.timeout(Math.max(1, deadlineAt - Date.now())),
-        cache: "no-store",
-      },
-    );
-    const rows = res.data?.sessions;
-    const pages = res.data?.page_count;
-    if (
-      !Array.isArray(rows) ||
-      !Number.isInteger(pages) ||
-      pages! < 0 ||
-      (page > 1 && pages !== count) ||
-      (!rows.length && pages! > 1) ||
-      (rows.length > 0 && pages === 0)
-    )
-      throw new Error("Incomplete same-day Wise pagination");
-    for (const row of rows) {
-      if (
-        !row._id ||
-        seen.has(row._id) ||
-        !Number.isFinite(Date.parse(row.scheduledStartTime)) ||
-        !Number.isFinite(Date.parse(row.scheduledEndTime)) ||
-        Date.parse(row.scheduledEndTime) <= Date.parse(row.scheduledStartTime)
-      )
-        throw new Error("Invalid same-day Wise session");
-      seen.add(row._id);
-      sessions.push(row);
-    }
-    count = pages!;
-  }
-  return sessions;
-}
+
 export function buildRoomEvidence(
   sessions: WiseSession[],
   date: string,
@@ -386,28 +331,12 @@ export async function refreshRoomOccupancy(
               id,
               identities.has(id) && identities.get(id) !== m.key ? null : m.key,
             );
-        // One strict read shared by both days. Keep the age of the oldest read.
-        const future = await fetchAllFutureSessions(client, institute, {
-          strict: true,
-          deadlineAt,
-        });
-        let past: WiseSession[] = [];
-        let pastError: unknown;
-        try {
-          past = await pastToday(client, institute, dates[0], deadlineAt);
-        } catch (error) {
-          pastError = error;
-        }
-        const shared = new Map(future.map((session) => [session._id, session]));
+        // Each date is independently complete; a failed today read does not
+        // suppress verified tomorrow evidence. Missing sessions still get detail checks.
         for (const day of days) {
           try {
-            if (day.date === dates[0] && pastError) throw pastError;
-            const sessions = new Map(
-              day.date === dates[0]
-                ? past.map((session) => [session._id, session])
-                : [],
-            );
-            for (const [id, session] of shared) sessions.set(id, session);
+            const daySessions = await fetchWiseSessionsForBangkokDates(client, institute, [day.date], { now, deadlineAt });
+            const sessions = new Map(daySessions.map(session => [session._id, session]));
             const expected = new Map([
               ...day.evidence.blocks.map(
                 (block) => [block.sessionId, block.classId] as const,

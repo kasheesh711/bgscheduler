@@ -504,7 +504,7 @@ describe("next-day availability and lifecycle", () => {
     expect(notifications).toHaveLength(1);
     expect(notifications[0].text).toContain("2026-09-12, 07:00–08:00");
   });
-  it("refreshes both dates from one future listing and retains a blocked writer's date", async () => {
+  it("refreshes both dates with bounded reads and retains a blocked writer's date", async () => {
     const client = {
       get: vi.fn(async () => ({ data: { sessions: [], page_count: 0 } })),
     } as unknown as WiseClient;
@@ -517,7 +517,12 @@ describe("next-day availability and lifecycle", () => {
       vi
         .mocked(client.get)
         .mock.calls.filter((call) => call[1]?.status === "FUTURE"),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
+    expect(vi.mocked(client.get).mock.calls.map((call) => call[1])).toEqual([
+      expect.objectContaining({ status: "PAST", startDate: date, endDate: tomorrow }),
+      expect.objectContaining({ status: "FUTURE", startDate: date, endDate: tomorrow }),
+      expect.objectContaining({ status: "FUTURE", startDate: tomorrow, endDate: "2026-09-13" }),
+    ]);
     await db
       .update(s.roomDayStates)
       .set({
@@ -640,8 +645,8 @@ describe("next-day availability and lifecycle", () => {
     const client = {
       get: vi.fn(async (_path: string, params: Record<string, string>) => ({
         data: {
-          sessions: params.status === "FUTURE" ? sessions : [],
-          page_count: params.status === "FUTURE" ? 1 : 0,
+          sessions: params.status === "FUTURE" && params.startDate === date ? sessions : [],
+          page_count: params.status === "FUTURE" && params.startDate === date ? 1 : 0,
         },
       })),
     } as unknown as WiseClient;

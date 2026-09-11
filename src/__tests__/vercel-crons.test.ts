@@ -17,6 +17,7 @@ function loadVercelConfig(): VercelConfig {
 const EXPECTED_SCHEDULES: Record<string, string> = {
   "/api/internal/room-booking": "1,5,9,13,17,21,25,29,33,37,41,45,49,53,57 * * * *",
   "/api/internal/class-assignments/weekend-check": "0,16,31 2 * * 3-5",
+  "/api/internal/class-assignments/publish-recovery": "1-56/5 * * * *",
   "/api/internal/sync-wise": "*/30 * * * *",
   "/api/internal/sync-sales-dashboard": "10,40 * * * *",
   "/api/internal/sync-unearned-revenue": "30 18 * * *",
@@ -101,10 +102,10 @@ function canCollide(left: FiringSet, right: FiringSet): boolean {
 }
 
 describe("vercel cron configuration", () => {
-  it("registers exactly the 21 known crons, each on its pinned schedule", () => {
+  it("registers exactly the 22 known crons, each on its pinned schedule", () => {
     const crons = loadVercelConfig().crons;
 
-    expect(crons).toHaveLength(21);
+    expect(crons).toHaveLength(22);
     expect(Object.fromEntries(crons.map((cron) => [cron.path, cron.schedule]))).toEqual(EXPECTED_SCHEDULES);
   });
 
@@ -139,7 +140,11 @@ describe("vercel cron configuration", () => {
         // It shares one Wise listing across dates, uses refresh/day leases,
         // and is offset from the heavy half-hour snapshot and classroom writers.
         const roomAvailabilityOverlap = pair.has("/api/internal/room-booking");
-        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck && !nextDayClassroomOverlap && !roomAvailabilityOverlap) {
+        // Publish recovery makes no Wise calls when idle and owns a global
+        // publisher lease, day lease and paced client during an attempt.
+        const publishRecoveryOverlap = pair.has("/api/internal/class-assignments/publish-recovery")
+          && (pair.has("/api/internal/class-assignments/weekend-check") || pair.has("/api/internal/class-assignments/admin-email"));
+        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck && !nextDayClassroomOverlap && !roomAvailabilityOverlap && !publishRecoveryOverlap) {
           collisions.push(`${crons[i].path} vs ${crons[j].path}`);
         }
       }

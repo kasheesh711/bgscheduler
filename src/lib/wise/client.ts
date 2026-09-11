@@ -7,6 +7,8 @@ export interface WiseClientConfig {
   maxRetries?: number;
   requestsPerSecond?: number;
   signal?: AbortSignal;
+  stopOnRateLimit?: boolean;
+  beforeRequest?: (url: string, init: RequestInit) => Promise<void>;
 }
 
 interface QueuedRequest<T> {
@@ -30,6 +32,13 @@ export interface WiseClientStats {
 
 /** Matches a Mongo-style 24-hex object id segment. */
 const OBJECT_ID_SEGMENT = /^[0-9a-f]{24}$/i;
+
+export class WiseApiError extends Error {
+  constructor(public readonly status: number, body: string, url: string, public readonly retryAfterMs: number | null = null) {
+    super(`Wise API ${status}: ${body} (${url})`);
+    this.name = "WiseApiError";
+  }
+}
 
 export class WiseClient {
   // REL-05: only these HTTP status codes are considered transient and worth
@@ -56,6 +65,9 @@ export class WiseClient {
   private signal?: AbortSignal;
   private nextAttemptAt = 0;
   private cooldownUntil = 0;
+  private stoppedError: WiseApiError | null = null;
+  private stopOnRateLimit: boolean;
+  private beforeRequest?: (url: string, init: RequestInit) => Promise<void>;
 
   // Simple concurrency limiter
   private maxConcurrency: number;
@@ -74,6 +86,8 @@ export class WiseClient {
     this.maxRetries = config.maxRetries ?? 3;
     this.requestsPerSecond = config.requestsPerSecond ?? 0;
     this.signal = config.signal;
+    this.stopOnRateLimit = config.stopOnRateLimit ?? false;
+    this.beforeRequest = config.beforeRequest;
   }
 
   private get headers(): Record<string, string> {
@@ -148,12 +162,19 @@ export class WiseClient {
   ): Promise<T> {
     const signal = init.signal ?? undefined;
     signal?.throwIfAborted();
+    if (this.stoppedError) throw this.stoppedError;
     while (true) {
       while (this.cooldownUntil > Date.now()) await abortableDelay(this.cooldownUntil - Date.now(), signal);
       const slot = Math.max(Date.now(), this.nextAttemptAt);
       if (this.requestsPerSecond > 0) this.nextAttemptAt = slot + 1000 / this.requestsPerSecond;
       if (slot > Date.now()) await abortableDelay(slot - Date.now(), signal);
       if (this.cooldownUntil <= Date.now()) break;
+    }
+    signal?.throwIfAborted();
+    if (this.stoppedError) throw this.stoppedError;
+    await this.beforeRequest?.(url, init);
+    if (this.beforeRequest && this.requestsPerSecond > 0) {
+      this.nextAttemptAt = Math.max(this.nextAttemptAt, Date.now() + 1000 / this.requestsPerSecond);
     }
     signal?.throwIfAborted();
     this.recordRequest(new URL(url).pathname);
@@ -186,10 +207,14 @@ export class WiseClient {
     // Permanent error path — 4xx (except 429) and any other non-retryable
     // status. Fail fast; no retry budget wasted.
     if (!WiseClient.RETRYABLE_STATUS_CODES.has(response.status)) {
-      throw new Error(`Wise API ${response.status}: ${text} (${url})`);
+      throw new WiseApiError(response.status, text, url, parseRetryAfter(response.headers.get("retry-after")));
     }
 
     const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
+    if (response.status === 429 && this.stopOnRateLimit) {
+      this.stoppedError = new WiseApiError(response.status, text, url, retryAfterMs);
+      throw this.stoppedError;
+    }
     if (response.status === 429 && retryAfterMs !== null) this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + retryAfterMs);
 
     // Retryable error path — 5xx, 408, 429.
@@ -198,7 +223,7 @@ export class WiseClient {
       await abortableDelay(delay, signal);
       return this.fetchWithRetry<T>(url, init, attempt + 1);
     }
-    throw new Error(`Wise API ${response.status}: ${text} (${url})`);
+    throw new WiseApiError(response.status, text, url, parseRetryAfter(response.headers.get("retry-after")));
   }
 
   private requestSignal(signal?: AbortSignal | null): AbortSignal | undefined {

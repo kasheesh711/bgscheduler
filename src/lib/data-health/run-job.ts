@@ -1,3 +1,4 @@
+import { runClassroomPublishRecovery } from "@/lib/classrooms/publish-worker";
 import { runRoomRefresh } from "@/lib/room-booking/refresh";
 import { NextResponse } from "next/server";
 import { runWeekendClassroomCheck } from "@/lib/classrooms/weekend-check";
@@ -174,6 +175,11 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
           const message = error instanceof Error ? error.message : "Leave request sync failed";
           return NextResponse.json({ error: message }, { status: 500 });
         }
+      }
+
+      if (jobKey === "classroom_publish_recovery") {
+        const result = await runClassroomPublishRecovery(getDb());
+        return NextResponse.json(result, { status: result.ok ? 200 : 500 });
       }
 
       if (jobKey === "classroom_morning") {

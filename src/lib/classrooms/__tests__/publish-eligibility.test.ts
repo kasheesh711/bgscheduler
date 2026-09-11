@@ -111,6 +111,7 @@ describe("publish job progress", () => {
   it("reports remaining row counts and terminal elapsed time", () => {
     const progress = toPublishJobProgress({
       id: "job-1",
+      attemptCount: 1, nextAttemptAt: new Date(), claimToken: null, leaseExpiresAt: null, verifiedAt: null,
       runId: "run-1",
       status: "partial",
       targetRowIds: null,
@@ -128,7 +129,7 @@ describe("publish job progress", () => {
       updatedAt: new Date("2026-05-15T00:00:12.000Z"),
     });
 
-    expect(progress.remainingCount).toBe(0);
+    expect(progress.remainingCount).toBe(1);
     expect(progress.elapsedMs).toBe(12_000);
     expect(progress.estimatedRemainingMs).toBeNull();
   });

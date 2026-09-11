@@ -110,6 +110,9 @@ interface PublishJobProgress {
   elapsedMs: number | null;
   estimatedRemainingMs: number | null;
   lastError: string | null;
+  nextAttemptAt?: string | null;
+  attemptCount?: number;
+  verifiedAt?: string | null;
   startedAt: string | null;
   finishedAt: string | null;
   createdAt: string;
@@ -246,7 +249,10 @@ export function ClassAssignmentsWorkspace() {
     setError(null);
     try {
       const response = await fetch(`/api/class-assignments?date=${encodeURIComponent(targetDate)}`);
-      setDetail(await readAssignmentDetailResponse(response));
+      const loaded = await readAssignmentDetailResponse(response);
+      setDetail(loaded);
+      setPublishProgress(loaded.publishProgress ?? null);
+      setPublishing(Boolean(loaded.publishProgress && !isPublishJobTerminal(loaded.publishProgress.status)));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load assignments");
     } finally {
@@ -339,10 +345,10 @@ export function ClassAssignmentsWorkspace() {
   }, [playing, playbackSpeed, rows.length, timelineBounds]);
 
   useEffect(() => {
-    setPublishProgress(null);
+    setPublishProgress(detail?.publishProgress ?? null);
     setScheduleEmailPreview(null);
     setScheduleEmailResult(null);
-  }, [run?.id]);
+  }, [run?.id, detail?.publishProgress]);
 
   const publishActive = Boolean(publishProgress && !isPublishJobTerminal(publishProgress.status));
   useEffect(() => {
@@ -467,7 +473,7 @@ export function ClassAssignmentsWorkspace() {
         if (isPublishJobTerminal(body.progress.status)) {
           setPublishing(false);
           setMessage(
-            `Publish complete: ${body.progress.successCount} succeeded, ${body.progress.failedCount} failed, ${body.progress.skippedCount} skipped.`,
+            `Publish ${body.progress.status}: ${body.progress.successCount} verified, ${body.progress.failedCount} failed, ${body.progress.remainingCount} remaining.`,
           );
         }
       }
@@ -686,7 +692,7 @@ export function ClassAssignmentsWorkspace() {
           <Button
             variant="secondary"
             onClick={() => setPublishOpen(true)}
-            disabled={!run || rows.length === 0 || publishing}
+            disabled={!run || rows.length === 0}
           >
             <UploadCloud />
             Publish to Wise
@@ -759,7 +765,8 @@ export function ClassAssignmentsWorkspace() {
         <div className="rounded-lg border bg-card p-3">
           <div className="text-xs text-muted-foreground">Wise publish</div>
           <div className="mt-1 text-sm font-medium">
-            {run ? `${run.publishedCount} ok / ${run.failedPublishCount} failed` : "No run"}
+            {publishProgress?.status === "pending" ? "Waiting for Wise"
+              : run ? `${run.publishedCount} verified / ${run.failedPublishCount} failed` : "No run"}
           </div>
         </div>
       </div>
@@ -1010,7 +1017,10 @@ export function ClassAssignmentsWorkspace() {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="text-xs text-muted-foreground">Publish status</div>
-                    <div className="font-medium capitalize">{publishProgress.status}</div>
+                    <div className="font-medium capitalize">{publishProgress.status === "pending" ? "Waiting for Wise" : publishProgress.status}</div>
+                    {publishProgress.status === "pending" && publishProgress.nextAttemptAt && (
+                      <div className="text-xs text-muted-foreground">Next retry: {new Date(publishProgress.nextAttemptAt).toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })} Bangkok. You can close this page.</div>
+                    )}
                   </div>
                   <div className="text-right">
                     <div className="text-xs text-muted-foreground">Elapsed / ETA</div>
@@ -1032,7 +1042,7 @@ export function ClassAssignmentsWorkspace() {
                   </div>
                   <div className="rounded-md border bg-muted/30 p-2">
                     <div className="text-muted-foreground">Eligible</div>
-                    <div className="font-semibold">{publishProgress.eligibleCount}</div>
+                    <div className="font-semibold">{publishProgress.eligibleCount} ({publishProgress.remainingCount} remaining)</div>
                   </div>
                   <div className="rounded-md border bg-muted/30 p-2">
                     <div className="text-muted-foreground">Succeeded</div>

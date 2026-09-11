@@ -2009,6 +2009,11 @@ export const classroomPublishJobs = pgTable("classroom_publish_jobs", {
   failedCount: integer("failed_count").notNull().default(0),
   skippedCount: integer("skipped_count").notNull().default(0),
   lastError: text("last_error"),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  claimToken: uuid("claim_token"),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
   createdBy: text("created_by"),
   startedAt: timestamp("started_at", { withTimezone: true }),
   finishedAt: timestamp("finished_at", { withTimezone: true }),
@@ -2017,7 +2022,17 @@ export const classroomPublishJobs = pgTable("classroom_publish_jobs", {
 }, (table) => [
   index("classroom_publish_jobs_run_idx").on(table.runId),
   index("classroom_publish_jobs_status_idx").on(table.status),
+  index("classroom_publish_jobs_due_idx").on(table.status, table.nextAttemptAt),
 ]);
+
+// Singleton lease/cooldown shared by manual, cron and automation publishers.
+export const classroomPublishWorker = pgTable("classroom_publish_worker", {
+  id: text("id").primaryKey(),
+  jobId: uuid("job_id").references(() => classroomPublishJobs.id, { onDelete: "set null" }),
+  claimToken: uuid("claim_token"),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  cooldownUntil: timestamp("cooldown_until", { withTimezone: true }),
+});
 
 export const classroomAutomationEvents = pgTable("classroom_automation_events", {
   id: uuid("id").primaryKey().defaultRandom(),
