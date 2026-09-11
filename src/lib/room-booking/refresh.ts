@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
@@ -31,6 +31,26 @@ import {
   type RoomEvidenceBlock,
   RoomBookingError,
 } from "./model";
+
+export function confirmsRoomSessionDeletion(
+  error: unknown,
+  hasDeletionEvent: boolean,
+) {
+  if (!hasDeletionEvent || !(error instanceof Error)) return false;
+  const match = /^Wise API (?:400|404): (.+) \(https?:\/\/[^)]+\)$/.exec(
+    error.message,
+  );
+  if (!match) return false;
+  try {
+    const payload = JSON.parse(match[1]);
+    return (
+      typeof payload.message === "string" &&
+      /^Session not found!?$/i.test(payload.message.trim())
+    );
+  } catch {
+    return false;
+  }
+}
 
 async function pastToday(
   client: WiseClient,
@@ -344,15 +364,39 @@ async function refreshRoomOccupancyUnlocked(
       ...day.evidence.blocks.map((b) => [b.sessionId, b.classId] as const),
       ...day.rows.map((r) => [r.wiseSessionId, r.wiseClassId] as const),
     ]);
+    const missingIds = [...expected.keys()].filter((id) => !sessions.has(id));
+    const deletedIds = new Set(
+      missingIds.length
+        ? (
+            await db
+              .select({ id: s.wiseActivityEvents.sessionId })
+              .from(s.wiseActivityEvents)
+              .where(
+                and(
+                  eq(s.wiseActivityEvents.eventName, "SessionDeletedEvent"),
+                  inArray(s.wiseActivityEvents.sessionId, missingIds),
+                ),
+              )
+          ).map((row) => row.id)
+        : [],
+    );
     for (const [id, classId] of expected)
       if (!sessions.has(id)) {
         if (!classId)
           throw new Error(
             "Cannot verify a missing Wise session without its class ID",
           );
-        const detail = await fetchWiseSessionDetail(client, classId, id, {
-          deadlineAt,
-        });
+        let detail;
+        try {
+          detail = await fetchWiseSessionDetail(client, classId, id, {
+            deadlineAt,
+          });
+        } catch (error) {
+          // A persisted deletion event plus a current explicit not-found proves
+          // deletion. List omission, auth errors, or generic 404s do not.
+          if (confirmsRoomSessionDeletion(error, deletedIds.has(id))) continue;
+          throw error;
+        }
         if (
           detail._id !== id ||
           !Number.isFinite(Date.parse(detail.scheduledStartTime)) ||

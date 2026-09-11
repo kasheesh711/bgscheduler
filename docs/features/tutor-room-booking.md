@@ -43,6 +43,8 @@ A Postgres day row serializes booking commits. A persisted day lease excludes as
 
 Wise collection validates future and same-day past pagination, retains completed class history, and verifies missing known sessions individually. Unknown room occupancy blocks the relevant interval. Online sessions need proof that they have no onsite connection before being treated as remote. Classroom plans reserve pending destinations until verified cancellation or a time change supersedes them.
 
+A missing session is also retired from room evidence when both its exact `SessionDeletedEvent` is present in the Wise activity mirror and its current detail endpoint returns Wise's explicit `Session not found` response. A missing list entry or detail error alone never releases its occupancy; other read failures retain the prior evidence and prevent a fresh availability claim.
+
 Webhook IDs, reservation idempotency keys, and durable notification retry keys prevent duplicate effects. A five-minute cron refreshes room evidence during 06:55–21:05 Bangkok and retries notifications and interrupted room commands. It fires at UTC minutes 4, 9, 14, …, 59 to avoid the existing cron minute slots.
 
 See [API and persistence](../reference/api/tutor-room-booking.md) and [enablement and recovery](../operations/tutor-room-booking.md).

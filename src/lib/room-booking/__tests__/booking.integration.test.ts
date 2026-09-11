@@ -25,7 +25,12 @@ import {
   reservationRoomBlocks,
 } from "../service";
 import { withRoomDayOperation } from "../locking";
-import { commitRoomEvidence, deliverRoomNotifications } from "../refresh";
+import {
+  commitRoomEvidence,
+  deliverRoomNotifications,
+  refreshRoomOccupancy,
+} from "../refresh";
+import type { WiseClient } from "@/lib/wise/client";
 import { reviewRoomTutorLink } from "../admin";
 import { ingestRoomEvents } from "../ingress";
 import { processRoomEvent, routeRoomCommand } from "../bot";
@@ -65,7 +70,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   await truncateAll(handle.db);
   await db.execute(
-    sql`TRUNCATE room_tutor_links,room_day_states,room_actions,room_command_events,room_booking_groups,line_group_settings CASCADE`,
+    sql`TRUNCATE room_tutor_links,room_day_states,room_actions,room_command_events,room_booking_groups,line_group_settings,wise_activity_events CASCADE`,
   );
   const [snapshot] = await db
     .insert(s.snapshots)
@@ -103,6 +108,64 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 describe("transactional room reservations", () => {
+  it.each([false, true])(
+    "retires missing Wise occupancy only with deletion evidence: %s",
+    async (hasDeletion) => {
+      const block = {
+        sessionId: "deleted-wise-session",
+        classId: "class-id",
+        room: "Focus",
+        canonicalKey: "alice",
+        remote: false,
+        blocking: true,
+        status: "UPCOMING",
+        startMinute: 600,
+        endMinute: 660,
+      };
+      await db
+        .update(s.roomDayStates)
+        .set({ evidence: { blocks: [block], uncertain: [] } });
+      if (hasDeletion)
+        await db
+          .insert(s.wiseActivityEvents)
+          .values({
+            eventId: crypto.randomUUID(),
+            eventName: "SessionDeletedEvent",
+            eventTimestamp: now,
+            sessionId: block.sessionId,
+            classroomId: block.classId,
+          });
+      const missing = new Error(
+        'Wise API 400: {"status":400,"message":"Session not found!"} (https://api.wiseapp.live/user/classes/class-id/sessions/deleted-wise-session)',
+      );
+      const client = {
+        get: vi.fn(async (path: string) => {
+          if (path.startsWith("/institutes/"))
+            return { data: { sessions: [], page_count: 0 } };
+          throw missing;
+        }),
+      } as unknown as WiseClient;
+      if (hasDeletion) {
+        await refreshRoomOccupancy(db, now, client);
+        expect(
+          (await db.select().from(s.roomDayStates))[0].evidence.blocks,
+        ).toEqual([]);
+        await expect(
+          createRoomReservation(db, "alice", input()),
+        ).resolves.toMatchObject({ status: "confirmed" });
+      } else {
+        await expect(refreshRoomOccupancy(db, now, client)).rejects.toThrow(
+          "Session not found",
+        );
+        expect(
+          (await db.select().from(s.roomDayStates))[0].evidence.blocks,
+        ).toEqual([block]);
+        await expect(
+          createRoomReservation(db, "alice", input()),
+        ).rejects.toMatchObject({ code: "ROOM_CONFLICT" });
+      }
+    },
+  );
   it("allows exactly one concurrent winner for the same room", async () => {
     const result = await Promise.allSettled([
       createRoomReservation(db, "alice", input()),

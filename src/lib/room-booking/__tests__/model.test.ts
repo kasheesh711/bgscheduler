@@ -7,7 +7,7 @@ import {
   roomMinute,
   parseRoomTime,
 } from "../model";
-import { buildRoomEvidence } from "../refresh";
+import { buildRoomEvidence, confirmsRoomSessionDeletion } from "../refresh";
 import { splitRoomEvents, isRoomText } from "../ingress";
 import type { WiseSession } from "@/lib/wise/types";
 const now = new Date("2026-09-11T02:00:00Z");
@@ -79,6 +79,32 @@ describe("room intervals", () => {
     ).not.toThrow());
 });
 describe("Wise room evidence", () => {
+  it("requires a deletion event and an exact current Wise not-found response", () => {
+    const missing = new Error(
+      'Wise API 400: {"status":400,"message":"Session not found!"} (https://api.wiseapp.live/user/classes/a/sessions/b)',
+    );
+    expect(confirmsRoomSessionDeletion(missing, true)).toBe(true);
+    expect(confirmsRoomSessionDeletion(missing, false)).toBe(false);
+    expect(
+      confirmsRoomSessionDeletion(
+        new Error(
+          'Wise API 404: {"message":"Route not found"} (https://api.wiseapp.live/path)',
+        ),
+        true,
+      ),
+    ).toBe(false);
+    expect(
+      confirmsRoomSessionDeletion(
+        new Error(
+          'Wise API 401: {"message":"Session not found!"} (https://api.wiseapp.live/path)',
+        ),
+        true,
+      ),
+    ).toBe(false);
+    expect(confirmsRoomSessionDeletion(new Error("fetch failed"), true)).toBe(
+      false,
+    );
+  });
   it("rejects malformed detail evidence instead of treating it as an empty room", () => {
     expect(() =>
       buildRoomEvidence(
