@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
       try {
         const result = await runRoomRefresh(getDb());
         await retryRoomEvents(getDb());
-        return NextResponse.json(result);
+        return NextResponse.json(result, { status: result.ok ? 200 : 500 });
       } catch {
         return NextResponse.json(
           {

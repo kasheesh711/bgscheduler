@@ -43,7 +43,7 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
     },
     async () => {
       if (jobKey === "room_booking") {
-        try { return NextResponse.json(await runRoomRefresh(getDb())); }
+        try { const result = await runRoomRefresh(getDb()); return NextResponse.json(result, { status: result.ok ? 200 : 500 }); }
         catch { return NextResponse.json({ ok: false, errorSummary: "Room refresh failed" }, { status: 500 }); }
       }
       if (jobKey === "classroom_weekend_check") {

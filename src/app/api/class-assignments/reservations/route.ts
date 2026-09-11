@@ -2,7 +2,11 @@ import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
-import { loadRoomDay, cancelRoomReservation } from "@/lib/room-booking/service";
+import {
+  loadRoomDay,
+  cancelRoomReservation,
+  roomAvailabilityStatus,
+} from "@/lib/room-booking/service";
 import { roomDate } from "@/lib/room-booking/model";
 import { roomJson, roomError } from "@/lib/room-booking/http";
 export async function GET(request: NextRequest) {
@@ -18,6 +22,8 @@ export async function GET(request: NextRequest) {
     return roomJson({
       date,
       rooms: day.rooms,
+      availabilityStatus: roomAvailabilityStatus(day),
+      uncertain: day.uncertain,
       checkedAt: day.state?.checkedAt ?? null,
       lastError: day.state?.lastError ?? null,
       reservations: day.reservations,

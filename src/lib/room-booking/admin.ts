@@ -1,10 +1,10 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, gte } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
-import { lockRoomDay } from "./locking";
+import { lockRoomDay, lockRoomTutor } from "./locking";
 import { endRoomReservation } from "./service";
-import { roomDate, roomMinute, RoomBookingError } from "./model";
+import { roomDate, roomReservationUpcoming, RoomBookingError } from "./model";
 
 export async function listRoomTutorLinks(db: Database) {
   const links = await db
@@ -34,14 +34,7 @@ export async function reviewRoomTutorLink(
   actorEmail: string,
 ) {
   return withDatabaseTransaction(db, async (tx) => {
-    // Same lock order as booking: day, then identity. v1 has only today's holds.
-    const date = roomDate();
-    await lockRoomDay(tx, date);
-    const [link] = await tx
-      .select()
-      .from(s.roomTutorLinks)
-      .where(eq(s.roomTutorLinks.lineUserId, input.lineUserId))
-      .for("update");
+    const link = await lockRoomTutor(tx, input.lineUserId);
     if (!link)
       throw new RoomBookingError(
         "NOT_FOUND",
@@ -95,12 +88,14 @@ export async function reviewRoomTutorLink(
         .where(
           and(
             eq(s.roomReservations.lineUserId, input.lineUserId),
-            eq(s.roomReservations.date, date),
+            gte(s.roomReservations.date, roomDate()),
             eq(s.roomReservations.status, "confirmed"),
           ),
         );
+      for (const date of [...new Set(reservations.map((r) => r.date))].sort())
+        await lockRoomDay(tx, date);
       for (const r of reservations)
-        if (r.endMinute > roomMinute())
+        if (roomReservationUpcoming(r.date, r.endMinute))
           await endRoomReservation(
             tx,
             r,

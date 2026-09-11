@@ -21,6 +21,10 @@ import {
   formatRoomMinute as time,
   parseRoomTime,
   roomMinute,
+  roomDate,
+  roomBookingDates,
+  validateRoomDate,
+  overlaps,
   validateRoomInterval,
   ROOM_CLOSE,
   ROOM_OPEN,
@@ -29,7 +33,7 @@ import {
 } from "./model";
 
 export const ROOM_HELP =
-  "Rooms today · 07:00–21:00 Bangkok\n/room — my day and free rooms\n/room free 14:00 15:00\n/room book Focus 14:00 15:00\n/room bookings\n/room cancel <booking-id>\n/room web — private mobile timetable\nUse 15-minute steps. A later Wise class takes priority; we will notify you.";
+  "Rooms today and tomorrow · 07:00–21:00 Bangkok\n/room — my day and free rooms\n/room free 14:00 15:00\n/room book Focus 14:00 15:00\n/room tomorrow\n/room tomorrow free 14:00 15:00\n/room tomorrow book Focus 14:00 15:00\n/room bookings\n/room cancel <booking-id>\n/room web — private mobile timetable\nUse 15-minute steps. A scheduled class takes priority; we will notify you.";
 export const isRoomText = (text: string) =>
   /^\/room(?:\s|$)/i.test(text.trim());
 const uuidPattern =
@@ -63,10 +67,13 @@ async function menu(
   db: Database,
   event: RoomBotEvent,
   text: string,
+  date = roomDate(),
 ): Promise<LineRoomMessage> {
   const choices = [
-    ["now", "Free now"],
-    ["choose", "Choose time"],
+    ...(date === roomDate() ? [[`${date} now`, "Free now"]] : []),
+    [`${date} choose`, "Choose time"],
+    [roomBookingDates()[0], "Today"],
+    [roomBookingDates()[1], "Tomorrow"],
     ["bookings", "My bookings"],
     ["web", "Mobile timetable"],
   ];
@@ -86,10 +93,7 @@ async function availableCards(
   end: string,
   page = 0,
 ): Promise<LineRoomMessage[]> {
-  const startMinute =
-    start === "now"
-      ? Math.max(ROOM_OPEN, view.nowMinute)
-      : parseRoomTime(start);
+  const startMinute = start === "now" ? view.nowMinute : parseRoomTime(start);
   const endMinute = parseRoomTime(end);
   validateRoomInterval(
     view.date,
@@ -103,6 +107,18 @@ async function availableCards(
         db,
         event,
         "Availability unavailable. Waiting for a complete room update; no rooms can be booked yet.",
+        view.date,
+      ),
+    ];
+  if (
+    view.uncertain.some((block) => overlaps(block, { startMinute, endMinute }))
+  )
+    return [
+      await menu(
+        db,
+        event,
+        `Availability needs checking for ${view.date} ${time(startMinute)}–${end}. Ask an admin or choose another time.`,
+        view.date,
       ),
     ];
   const rooms = view.rooms.filter((r) =>
@@ -115,7 +131,8 @@ async function availableCards(
       await menu(
         db,
         event,
-        `No room is free for ${time(startMinute)}–${end}. Try another time.`,
+        `No room is free for ${view.date} ${time(startMinute)}–${end}. Try another time.`,
+        view.date,
       ),
     ];
   page = Math.max(0, Math.min(page, Math.floor((rooms.length - 1) / 6)));
@@ -132,7 +149,7 @@ async function availableCards(
           { type: "text", text: room.name, weight: "bold", wrap: true },
           {
             type: "text",
-            text: `${time(startMinute)}–${end} · ${room.capacity} seats${room.hasTv ? " · TV" : ""}`,
+            text: `${view.date} ${time(startMinute)}–${end} · ${room.capacity} seats${room.hasTv ? " · TV" : ""}`,
             size: "sm",
             wrap: true,
           },
@@ -154,7 +171,7 @@ async function availableCards(
             action: await action(
               db,
               event,
-              `book ${room.id} ${start} ${end}`,
+              `${view.date} book ${room.id} ${start} ${end}`,
               "Book",
             ),
           },
@@ -165,7 +182,7 @@ async function availableCards(
   const messages: LineRoomMessage[] = [
     {
       type: "flex",
-      altText: `${rooms.length} free rooms, ${time(startMinute)}–${end}. Use /room book <room> ${start} ${end}.`,
+      altText: `${view.date} · ${rooms.length} free rooms, ${time(startMinute)}–${end}. Use /room book <room> ${start} ${end}.`,
       contents: { type: "carousel", contents: bubbles },
     },
   ];
@@ -180,7 +197,7 @@ async function availableCards(
             action: await action(
               db,
               event,
-              `free ${start} ${end} ${page + 1}`,
+              `${view.date} free ${start} ${end} ${page + 1}`,
               "More rooms",
             ),
           },
@@ -240,6 +257,18 @@ export async function routeRoomCommand(db: Database, event: RoomBotEvent) {
       );
     command = saved.command;
     if (event.params?.time) command += ` ${event.params.time}`;
+  }
+  let date = roomDate();
+  const dated = /^(tomorrow|today|\d{4}-\d{2}-\d{2})(?:\s+|$)/i.exec(command);
+  if (dated) {
+    date =
+      dated[1].toLowerCase() === "tomorrow"
+        ? roomBookingDates()[1]
+        : dated[1].toLowerCase() === "today"
+          ? roomDate()
+          : dated[1];
+    validateRoomDate(date);
+    command = command.slice(dated[0].length).trim();
   }
   const respond = (messages: LineRoomMessage[]) =>
     sendLineRoomMessages({
@@ -369,12 +398,15 @@ export async function routeRoomCommand(db: Database, event: RoomBotEvent) {
         "Use the complete booking ID shown by /room bookings.",
         400,
       );
-    await cancelRoomReservation(db, cancel[1], { userId: event.userId });
+    const cancelled = await cancelRoomReservation(db, cancel[1], {
+      userId: event.userId,
+    });
     await respond([
       await menu(
         db,
         event,
-        "Reservation cancelled. The remaining time is now available.",
+        `Reservation on ${cancelled.date} cancelled. The remaining time is now available.`,
+        cancelled.date,
       ),
     ]);
     return;
@@ -408,21 +440,52 @@ export async function routeRoomCommand(db: Database, event: RoomBotEvent) {
         "BUTTON_EXPIRED",
         "This confirmation has expired. Start a new booking.",
       );
-    const reservation = await createRoomReservation(db, event.userId, {
-      roomId: parsed[1],
-      startMinute:
-        parsed[2] === "now" ? roomMinute() : parseRoomTime(parsed[2]),
-      endMinute: parseRoomTime(parsed[3]),
-      date: parsed[4],
-      immediate: parsed[2] === "now",
-      idempotencyKey: saved.id,
-      source: "line",
-    });
+    let reservation;
+    try {
+      reservation = await createRoomReservation(db, event.userId, {
+        roomId: parsed[1],
+        startMinute:
+          parsed[2] === "now" ? roomMinute() : parseRoomTime(parsed[2]),
+        endMinute: parseRoomTime(parsed[3]),
+        date: parsed[4],
+        immediate: parsed[2] === "now",
+        idempotencyKey: saved.id,
+        source: "line",
+      });
+    } catch (error) {
+      if (
+        !(error instanceof RoomBookingError) ||
+        error.code !== "ROOM_CONFLICT"
+      )
+        throw error;
+      const current = await getRoomDayView(
+        db,
+        event.userId,
+        new Date(),
+        parsed[4],
+      );
+      const alternatives = await availableCards(
+        db,
+        event,
+        current,
+        parsed[2],
+        parsed[3],
+      );
+      await respond([
+        {
+          type: "text",
+          text: "That room was taken before your confirmation. Choose an alternative and confirm a new booking.",
+        },
+        ...alternatives,
+      ]);
+      return;
+    }
     await respond([
       await menu(
         db,
         event,
-        `Reservation ${reservation.status}: ${time(reservation.startMinute)}–${time(reservation.endMinute)}\nBooking ID: ${reservation.id}`,
+        `Reservation ${reservation.status}: ${reservation.date} · ${time(reservation.startMinute)}–${time(reservation.endMinute)}\nBooking ID: ${reservation.id}`,
+        reservation.date,
       ),
     ]);
     return;
@@ -431,12 +494,18 @@ export async function routeRoomCommand(db: Database, event: RoomBotEvent) {
     await respond([
       {
         type: "text",
-        text: "Choose a start time today (07:00–21:00, 15-minute steps).",
+        text: `Choose a start time for ${date} (07:00–21:00, 15-minute steps).`,
         quickReply: {
           items: [
             {
               type: "action",
-              action: await action(db, event, "choose-end", "Start time", true),
+              action: await action(
+                db,
+                event,
+                `${date} choose-end`,
+                "Start time",
+                true,
+              ),
             },
           ],
         },
@@ -450,7 +519,7 @@ export async function routeRoomCommand(db: Database, event: RoomBotEvent) {
     await respond([
       {
         type: "text",
-        text: `Start: ${startChoice[1]}. Choose an end time.`,
+        text: `${date} · Start: ${startChoice[1]}. Choose an end time.`,
         quickReply: {
           items: [
             {
@@ -458,7 +527,7 @@ export async function routeRoomCommand(db: Database, event: RoomBotEvent) {
               action: await action(
                 db,
                 event,
-                `free ${startChoice[1]}`,
+                `${date} free ${startChoice[1]}`,
                 "End time",
                 true,
               ),
@@ -469,18 +538,33 @@ export async function routeRoomCommand(db: Database, event: RoomBotEvent) {
     ]);
     return;
   }
-  const view = await getRoomDayView(db, event.userId);
+  const view = await getRoomDayView(db, event.userId, new Date(), date);
   if (command === "bookings") {
-    const active = view.reservations.filter(
-      (r) => r.status === "confirmed" && r.endMinute > view.nowMinute,
+    const views = await Promise.all(
+      roomBookingDates().map((day) =>
+        day === view.date
+          ? view
+          : getRoomDayView(db, event.userId, new Date(), day),
+      ),
     );
+    const active = views
+      .flatMap((day) => day.reservations)
+      .filter(
+        (r) =>
+          r.status === "confirmed" &&
+          (r.date > view.todayDate || r.endMinute > view.nowMinute),
+      )
+      .sort(
+        (a, b) => a.date.localeCompare(b.date) || a.startMinute - b.startMinute,
+      );
     const text =
       active
         .map(
           (r) =>
-            `${r.roomName} · ${time(r.startMinute)}–${time(r.endMinute)}\n/room cancel ${r.id}`,
+            `${r.date} · ${r.roomName} · ${time(r.startMinute)}–${time(r.endMinute)}\n/room cancel ${r.id}`,
         )
-        .join("\n\n") || "You have no upcoming room reservations today.";
+        .join("\n\n") ||
+      "You have no upcoming room reservations today or tomorrow.";
     const items = [];
     for (const r of active.slice(0, 8))
       items.push({
@@ -518,6 +602,11 @@ export async function routeRoomCommand(db: Database, event: RoomBotEvent) {
       endMinute: parseRoomTime(book[3]),
     };
     validateRoomInterval(view.date, interval, new Date(), immediate);
+    if (view.fresh && view.uncertain.some((block) => overlaps(block, interval)))
+      throw new RoomBookingError(
+        "UNRESOLVED_ROOMS",
+        "Availability needs checking for this time. Ask an admin or choose another time.",
+      );
     if (
       !view.fresh ||
       !room[0].free.some(
@@ -542,7 +631,7 @@ export async function routeRoomCommand(db: Database, event: RoomBotEvent) {
     await respond([
       {
         type: "text",
-        text: `Reserve ${room[0].name}\nToday ${time(interval.startMinute)}–${book[3]} Bangkok\nA later Wise class takes priority.\n/room confirm ${pending.id}`,
+        text: `Reserve ${room[0].name}\n${view.date} ${time(interval.startMinute)}–${book[3]} Bangkok\nA scheduled class takes priority.\n/room confirm ${pending.id}`,
         quickReply: {
           items: [
             {
@@ -577,6 +666,12 @@ export async function routeRoomCommand(db: Database, event: RoomBotEvent) {
     return;
   }
   if (command === "now") {
+    if (view.date !== view.todayDate)
+      throw new RoomBookingError(
+        "INVALID_IMMEDIATE",
+        "Start now is available for today only.",
+        400,
+      );
     const start = Math.max(ROOM_OPEN, view.nowMinute);
     const end = Math.min(ROOM_CLOSE, Math.ceil((start + 60) / 15) * 15);
     await respond(
@@ -595,18 +690,32 @@ export async function routeRoomCommand(db: Database, event: RoomBotEvent) {
     return;
   }
   const freeNow = view.fresh
-    ? view.rooms.flatMap((r) => {
-        const f = r.free.find(
-          (f) =>
-            f.startMinute <= Math.max(ROOM_OPEN, view.nowMinute) &&
-            f.endMinute > Math.max(ROOM_OPEN, view.nowMinute),
+    ? view.rooms.flatMap((room) => {
+        const from =
+          view.date === view.todayDate
+            ? Math.max(ROOM_OPEN, view.nowMinute)
+            : ROOM_OPEN;
+        const slot = room.free.find((slot) =>
+          view.date === view.todayDate
+            ? slot.startMinute <= from && slot.endMinute > from
+            : slot.endMinute > from,
         );
-        return f ? [`${r.name} · free until ${time(f.endMinute)}`] : [];
+        return slot
+          ? [
+              `${room.name} · ${view.date === view.todayDate ? "free until" : `free ${time(slot.startMinute)}–`} ${time(slot.endMinute)}`,
+            ]
+          : [];
       })
     : [];
+  const uncertainNow =
+    view.date === view.todayDate &&
+    view.uncertain.some(
+      (block) =>
+        block.startMinute <= view.nowMinute && block.endMinute > view.nowMinute,
+    );
   const classes = view.classes.map(
     (c) =>
-      `${time(c.startMinute)}–${time(c.endMinute)} · ${c.room}${c.plannedRoom ? ` (planned: ${c.plannedRoom})` : ""}`,
+      `${time(c.startMinute)}–${time(c.endMinute)} · ${c.room}${c.roomSource === "classroom_plan" ? " (Class Assignments)" : ""}${c.plannedRoom ? ` (planned: ${c.plannedRoom})` : ""}`,
   );
   const reservations = view.reservations
     .filter((r) => r.status === "confirmed")
@@ -615,7 +724,8 @@ export async function routeRoomCommand(db: Database, event: RoomBotEvent) {
     await menu(
       db,
       event,
-      `${tutor.displayName} · ${view.date}\n\nMy classes\n${classes.join("\n") || "No classes found in the latest room update."}\n\nMy reservations\n${reservations.join("\n") || "None"}\n\n${view.fresh ? "Free rooms" : "Availability unavailable"}\n${freeNow.join("\n") || (view.fresh ? "No rooms free now." : "Waiting for a complete room update.")}\n\n${view.checkedAt ? `Last checked ${new Date(view.checkedAt).toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" })} Bangkok` : "No verified room update yet."}`,
+      `${tutor.displayName} · ${view.date}\n\nMy classes\n${classes.join("\n") || "No classes found in the latest room update."}\n\nMy reservations\n${reservations.join("\n") || "None"}\n\n${view.fresh ? (uncertainNow ? "Availability needs checking" : "Free rooms") : "Availability unavailable"}\n${freeNow.join("\n") || (view.fresh ? (uncertainNow ? "A class needs its room checked. Ask an admin or choose another time." : "No rooms free for this time. Choose another interval.") : "Waiting for a complete room update.")}\n\n${view.checkedAt ? `Last checked ${new Date(view.checkedAt).toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" })} Bangkok` : "No verified room update yet."}`,
+      view.date,
     ),
   ]);
 }

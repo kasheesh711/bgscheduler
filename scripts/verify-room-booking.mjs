@@ -21,20 +21,14 @@ const today = new Intl.DateTimeFormat("en-CA", {
   month: "2-digit",
   day: "2-digit",
 }).format(new Date());
-const parts = new Intl.DateTimeFormat("en-GB", {
+const tomorrow = new Intl.DateTimeFormat("en-CA", {
   timeZone: "Asia/Bangkok",
-  hour: "2-digit",
-  minute: "2-digit",
-  hourCycle: "h23",
-})
-  .format(new Date())
-  .split(":")
-  .map(Number);
-const nowMinute = parts[0] * 60 + parts[1],
-  start = Math.max(420, Math.ceil((nowMinute + 1) / 15) * 15),
-  end = start + 30;
-if (end > 1260)
-  throw new Error("Run the booking smoke test before 20:15 Bangkok");
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+}).format(new Date(Date.now() + 86400000));
+const start = 540,
+  end = 600;
 const fmt = (m) =>
   `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 const user = `room-browser-${randomUUID()}`,
@@ -90,6 +84,13 @@ try {
     [today, evidence],
   );
   await pool.query(
+    "INSERT INTO room_day_states(date,checked_at,evidence) VALUES($1,now(),$2) ON CONFLICT(date) DO UPDATE SET checked_at=now(),evidence=$2,lease_owner=null,lease_until=null,revision=room_day_states.revision+1",
+    [tomorrow, { blocks: [], uncertain: [] }],
+  );
+  await pool.query(
+    "INSERT INTO classroom_rooms(name,capacity,active) VALUES('Cool',2,true) ON CONFLICT(name) DO UPDATE SET active=true",
+  );
+  await pool.query(
     "INSERT INTO room_access_grants(token_hash,line_user_id,expires_at) VALUES($1,$2,now()+interval '1 hour')",
     [hash, user],
   );
@@ -98,6 +99,13 @@ try {
     deviceScaleFactor: 1,
   });
   page.on("pageerror", (e) => failures.push(e.message));
+  page.on("console", (message) => {
+    if (
+      ["error", "warning"].includes(message.type()) &&
+      !/server responded with a status of 409/.test(message.text())
+    )
+      failures.push(message.text());
+  });
   await page.goto(`${origin}/room/${token}`);
   await page.waitForLoadState("networkidle");
   await page.screenshot({
@@ -109,7 +117,12 @@ try {
     await page.locator("body").innerText(),
   );
   await page.getByRole("heading", { name: "A room for your day" }).waitFor();
-  await page.getByRole("checkbox", { name: "Start now" }).uncheck();
+  if ((await page.title()) !== "BeGifted · Tutor rooms")
+    throw new Error("Wrong page title");
+  await page.getByRole("button", { name: "Tomorrow", exact: true }).click();
+  await page.getByRole("heading", { name: /rooms? available/ }).waitFor();
+  if (!(await page.getByRole("checkbox", { name: "Start now" }).isDisabled()))
+    throw new Error("Tomorrow permits Start now");
   await page.getByLabel("From", { exact: true }).fill(fmt(start));
   await page.getByLabel("Until", { exact: true }).fill(fmt(end));
   const card = page
@@ -121,10 +134,75 @@ try {
   await page.getByRole("button", { name: "Cancel reservation" }).click();
   await page.getByText("Cancelled by you.", { exact: true }).waitFor();
   await page.getByRole("button", { name: "My day", exact: true }).click();
-  await page.getByRole("heading", { name: "Today’s classes" }).waitFor();
+  await page.getByRole("heading", { name: `Classes · ${tomorrow}` }).waitFor();
+  await page.getByRole("button", { name: "Today", exact: true }).click();
+  await page.getByRole("heading", { name: `Classes · ${today}` }).waitFor();
+  await page.getByRole("button", { name: "Tomorrow", exact: true }).click();
+  await page.getByRole("heading", { name: `Classes · ${tomorrow}` }).waitFor();
   await page
     .getByRole("button", { name: "Available rooms", exact: true })
     .click();
+  // A late response for Today must not replace the selected Tomorrow.
+  let releaseToday;
+  const heldToday = new Promise((resolve) => {
+    releaseToday = resolve;
+  });
+  let sawToday;
+  const requestedToday = new Promise((resolve) => {
+    sawToday = resolve;
+  });
+  await page.route(`**/api/room/availability?date=${today}`, async (route) => {
+    const response = await route.fetch();
+    sawToday();
+    await heldToday;
+    await route.fulfill({ response });
+  });
+  await page.getByRole("button", { name: "Today", exact: true }).click();
+  await requestedToday;
+  await page.getByRole("button", { name: "Tomorrow", exact: true }).click();
+  await page.getByRole("heading", { name: /rooms? available/ }).waitFor();
+  const oldResponse = page.waitForResponse((response) =>
+    response.url().endsWith(`availability?date=${today}`),
+  );
+  releaseToday();
+  await oldResponse;
+  await page.unroute(`**/api/room/availability?date=${today}`);
+  if (
+    (await page
+      .getByRole("button", { name: "Tomorrow", exact: true })
+      .getAttribute("aria-pressed")) !== "true"
+  )
+    throw new Error("Late response changed the selected date");
+  await page.getByLabel("From", { exact: true }).fill(fmt(start));
+  await page.getByLabel("Until", { exact: true }).fill(fmt(end));
+  // Fresh uncertainty and stale evidence must never masquerade as zero rooms.
+  await pool.query(
+    "UPDATE room_day_states SET checked_at=now(),evidence=$2 WHERE date=$1",
+    [
+      tomorrow,
+      { blocks: [], uncertain: [{ startMinute: start, endMinute: end }] },
+    ],
+  );
+  await page.getByRole("button", { name: "Refresh room availability" }).click();
+  await page
+    .getByRole("heading", { name: "Availability needs checking" })
+    .waitFor();
+  if (await page.getByRole("heading", { name: "0 rooms available" }).count())
+    throw new Error("Uncertainty shown as zero");
+  await pool.query(
+    "UPDATE room_day_states SET checked_at=now()-interval '6 minutes',evidence=$2 WHERE date=$1",
+    [tomorrow, { blocks: [], uncertain: [] }],
+  );
+  await page.getByRole("button", { name: "Refresh room availability" }).click();
+  await page
+    .getByRole("heading", { name: "Availability unavailable" })
+    .waitFor();
+  await pool.query(
+    "UPDATE room_day_states SET checked_at=now() WHERE date=$1",
+    [tomorrow],
+  );
+  await page.getByRole("button", { name: "Refresh room availability" }).click();
+  await page.getByRole("heading", { name: /rooms? available/ }).waitFor();
   await mkdir("/tmp/room-browser-artifacts", { recursive: true });
   await page.screenshot({
     path: "/tmp/room-browser-artifacts/mobile-light.png",
@@ -155,6 +233,63 @@ try {
     animations: "disabled",
     fullPage: true,
   });
+  const rival = `${user}-rival`;
+  await pool.query(
+    "INSERT INTO tutor_identity_groups(snapshot_id,canonical_key,display_name) VALUES($1,$2,'Rival Tutor')",
+    [snapshot, rival],
+  );
+  await pool.query(
+    "INSERT INTO room_tutor_links(line_user_id,canonical_key,display_name,status) VALUES($1,$1,'Rival Tutor','approved')",
+    [rival],
+  );
+  await card.getByRole("button", { name: "Book room" }).click();
+  const focus = (
+    await pool.query("SELECT id FROM classroom_rooms WHERE name='Focus'")
+  ).rows[0].id;
+  await pool.query(
+    "INSERT INTO room_reservations(date,room_id,line_user_id,canonical_key,start_minute,end_minute,idempotency_key,source) VALUES($1,$2,$3,$3,$4,$5,$6,'test')",
+    [tomorrow, focus, rival, start, end, randomUUID()],
+  );
+  await page.getByRole("button", { name: "Confirm booking" }).click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  await page
+    .getByText(
+      "That room is no longer free for the whole interval. Choose another room or time.",
+    )
+    .waitFor();
+  if (await page.getByRole("dialog").count())
+    throw new Error("Conflict left old confirmation open");
+  await page
+    .getByRole("article")
+    .filter({ has: page.getByRole("heading", { name: "Cool", exact: true }) })
+    .getByRole("button", { name: "Book room" })
+    .waitFor();
+  if (
+    (
+      await pool.query(
+        "SELECT count(*)::int AS count FROM room_reservations WHERE date=$1 AND room_id=$2 AND status='confirmed'",
+        [tomorrow, focus],
+      )
+    ).rows[0].count !== 1
+  )
+    throw new Error("Concurrent room double booking");
+  await pool.query("DELETE FROM room_reservations WHERE line_user_id=$1", [
+    rival,
+  ]);
+  await pool.query("DELETE FROM room_tutor_links WHERE line_user_id=$1", [
+    rival,
+  ]);
+  await pool.query("DELETE FROM tutor_identity_groups WHERE canonical_key=$1", [
+    rival,
+  ]);
+  if (
+    await page
+      .locator("nextjs-portal")
+      .innerText()
+      .catch(() => "")
+      .then((text) => /Unhandled Runtime Error|Build Error/.test(text))
+  )
+    throw new Error("Framework error overlay");
   const unauthenticated = await page.request.get(
     `${origin}/api/room/availability`,
   );
@@ -168,10 +303,23 @@ try {
   await page.getByRole("heading", { name: "Open a new room link" }).waitFor();
   if (failures.length) throw new Error(failures.join("\n"));
   console.log(
-    "PASS: mobile booking, confirmation, cancellation, personal schedule, light/dark rendering, overflow, API auth, expired link",
+    "PASS: tomorrow booking/cancellation, date switching and response races, uncertainty/staleness states, conflict alternatives, light/dark mobile/desktop, overflow, API auth, expired link",
   );
 } finally {
   await browser.close();
+  const rival = `${user}-rival`;
+  await pool.query("DELETE FROM room_notifications WHERE line_user_id=$1", [
+    rival,
+  ]);
+  await pool.query("DELETE FROM room_reservations WHERE line_user_id=$1", [
+    rival,
+  ]);
+  await pool.query("DELETE FROM room_tutor_links WHERE line_user_id=$1", [
+    rival,
+  ]);
+  await pool.query("DELETE FROM tutor_identity_groups WHERE canonical_key=$1", [
+    rival,
+  ]);
   await pool.query("DELETE FROM room_notifications WHERE line_user_id=$1", [
     user,
   ]);

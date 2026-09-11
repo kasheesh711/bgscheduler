@@ -701,4 +701,4 @@ _Verified against main@0cd1e81 (clean tree) on 2026-09-02._
 
 ## Tutor room availability
 
-`GET /api/internal/room-booking` runs at `4-59/5 * * * *` UTC with a 300-second limit and the normal cron-secret and invocation audit gates. It refreshes Wise room evidence during 06:55–21:05 Bangkok when `ROOM_BOOKING_COLLECTOR_ENABLED=true`, reconciles reservations, and retries durable room messages. See [the room booking runbook](../operations/tutor-room-booking.md).
+`GET /api/internal/room-booking` runs every four minutes at UTC minutes 1, 5, 9, …, 57 with a 300-second limit and the normal cron-secret and invocation audit gates. It refreshes Wise room evidence for today and tomorrow around the clock when `ROOM_BOOKING_COLLECTOR_ENABLED=true`, reconciles reservations, and retries durable room messages. See [the room booking runbook](../operations/tutor-room-booking.md).
