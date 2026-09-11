@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { scheduleRecipientEmail } from "@/lib/tutor-onboarding/planner";
@@ -23,6 +23,7 @@ interface AssignmentEmailRow {
   assignedRoom: string;
   status: "assigned" | "needs_review" | "no_room" | "remote";
   publishStatus?: string;
+  publishPending?: boolean;
   studentName: string | null;
   subject: string | null;
   classType: string | null;
@@ -393,6 +394,8 @@ async function loadRows(db: Database, runId: string): Promise<AssignmentEmailRow
       assignedRoom: schema.classroomAssignmentRows.assignedRoom,
       status: schema.classroomAssignmentRows.status,
       publishStatus: schema.classroomAssignmentRows.publishStatus,
+      publishPending: sql<boolean>`exists (select 1 from ${schema.classroomPublishJobs} where ${schema.classroomPublishJobs.runId} = ${schema.classroomAssignmentRows.runId}
+        and ${schema.classroomPublishJobs.status} in ('pending', 'running'))`,
       studentName: schema.classroomAssignmentRows.studentName,
       subject: schema.classroomAssignmentRows.subject,
       classType: schema.classroomAssignmentRows.classType,
@@ -483,7 +486,7 @@ export async function getScheduleEmailPreview(
     const email = scheduleRecipientEmail(contact);
     const missingEmail = !email;
     const groupUnfinalizedRows = groupRows.filter((row) => row.status === "needs_review" || row.status === "no_room" || row.publishStatus === "failed"
-      || (row.status === "assigned" && isOnsiteSessionType(row.sessionType) && row.publishStatus !== "success"));
+      || (row.status === "assigned" && isOnsiteSessionType(row.sessionType) && (row.publishStatus !== "success" || row.publishPending)));
     const rowBlockReason = groupUnfinalizedRows.length > 0
       ? `${groupUnfinalizedRows.length} schedule row${groupUnfinalizedRows.length === 1 ? "" : "s"} still need assignment review or successful Wise publishing`
       : null;

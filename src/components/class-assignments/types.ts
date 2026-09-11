@@ -86,6 +86,7 @@ export interface AssignmentRoomConflictWarning {
 }
 
 export interface AssignmentDetail {
+  publishProgress?: import("@/lib/classrooms/data").PublishJobProgress | null;
   run: ClassroomRun | null;
   rows: ClassroomRow[];
   rooms: ClassroomRoom[];

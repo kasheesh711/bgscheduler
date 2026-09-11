@@ -86,6 +86,10 @@
     {
       "path": "/api/internal/room-booking",
       "schedule": "1,5,9,13,17,21,25,29,33,37,41,45,49,53,57 * * * *"
+    },
+    {
+      "path": "/api/internal/class-assignments/publish-recovery",
+      "schedule": "1-56/5 * * * *"
     }
   ]
 }

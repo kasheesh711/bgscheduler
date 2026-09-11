@@ -415,3 +415,18 @@ _Verified against main@0cd1e81 (clean tree) on 2026-09-02._
 - `GET /api/class-assignments/weekend-readiness`: session required; optional UUID `checkId` selects a saved check, otherwise returns the latest check for the current/upcoming weekend. Response `{ check, dates }`; `check` contains ID, check date, execution status, report, last error and delivery status, excluding the recipient and rendered email. A report contains `checkedAt`, covered dates, snapshot lineage, `readiness` (`clear | attention | unverified`), daily counts and findings. Returns 400 for invalid IDs, 404 for an explicit missing check, 500 for read failure; no current check returns `check: null`. Private, no-store.
 - `GET /api/internal/class-assignments/weekend-check`: cron-secret authentication; 800-second limit, audited as `classroom_weekend_check`. Returns execution `ok`, check ID, readiness, finding count and notification kind; HTTP 500 for execution/delivery failure. Detected shortages or a delivered unverified warning remain separate from successful execution. The enabled Wednesday–Friday calendar applies to manual reruns too.
 - `/class-assignments?date=YYYY-MM-DD&weekendCheck=UUID` opens the affected date and saved report. Invalid date input falls back to today's Bangkok date.
+
+
+## Persistent publish recovery
+
+`GET /api/internal/class-assignments/publish-recovery` is cron-secret protected,
+with `maxDuration = 300`. Each call claims at most one due publish job, earliest
+assignment date first, and performs a bounded attempt. Idle calls do not read Wise.
+Transient failures return HTTP 200 with pending progress and a saved retry time;
+terminal failures return HTTP 500. Data Health exposes the same runner.
+
+The existing publish POST deduplicates pending/running jobs for the same run.
+Progress adds `nextAttemptAt`, `attemptCount` and `verifiedAt`; `pending` means the
+worker will retry without a browser. Assignment detail includes `publishProgress`
+for its latest job so a reloaded page can resume polling. `successCount` counts
+verified room destinations; successful HTTP writes still await Wise read-back.

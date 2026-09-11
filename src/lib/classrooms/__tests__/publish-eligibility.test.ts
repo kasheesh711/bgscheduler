@@ -111,6 +111,7 @@ describe("publish job progress", () => {
   it("reports remaining row counts and terminal elapsed time", () => {
     const progress = toPublishJobProgress({
       id: "job-1",
+      attemptCount: 1, nextAttemptAt: new Date(), claimToken: null, leaseExpiresAt: null, verifiedAt: null,
       runId: "run-1",
       status: "partial",
       targetRowIds: null,

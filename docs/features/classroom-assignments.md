@@ -2,6 +2,15 @@
 
 **Status: stable**
 
+## Rate-limit recovery
+
+Publishing reads only the selected Bangkok day, sends Wise requests serially at
+three-second intervals, and verifies final locations with a fresh complete day read.
+Rate limits and interrupted attempts leave a durable pending job. The recovery cron
+runs every five minutes; progress includes the next retry time and survives a page
+reload. Newer plans supersede queued older plans, and started classes cannot move.
+See the [recovery runbook](../operations/classroom-publish-recovery.md).
+
 ## Purpose
 
 Classroom Assignments turns one Bangkok day's blocking Wise teaching sessions into a concrete room plan for the BeGifted center, lets admin staff review and hand-correct it, and then — only on an explicit publish action — writes each eligible OFFLINE session's room back to Wise as its `location`. The same run also feeds two outbound emails: a personalized "room route" schedule for every tutor teaching that day (with a numbered floor-plan map) and a daily readiness/blocker digest for the admin team.

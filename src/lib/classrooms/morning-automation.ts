@@ -6,7 +6,7 @@ import * as schema from "@/lib/db/schema";
 import { addBangkokDays, todayBangkok } from "@/lib/room-capacity/dates";
 import { runWiseSyncRequest } from "@/lib/sync/run-wise-sync";
 import { createWiseClient } from "@/lib/wise/client";
-import { fetchAllFutureSessions } from "@/lib/wise/fetchers";
+import { fetchWiseSessionsForBangkokDates } from "@/lib/wise/day-sessions";
 import type { WiseSession } from "@/lib/wise/types";
 import {
   CLASSROOM_ASSIGNMENT_FRESHNESS_MS,
@@ -207,7 +207,7 @@ export async function runClassroomMorningAutomation(
   const classroomSnapshot = await getFreshClassroomSnapshotForAssignment(db);
   const client = createWiseClient();
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
-  const liveSessions = options.liveSessions ?? await fetchAllFutureSessions(client, instituteId);
+  const liveSessions = options.liveSessions ?? await fetchWiseSessionsForBangkokDates(client, instituteId, dates);
   const results: MorningAutomationDateResult[] = [];
 
   for (const date of dates) {
@@ -223,7 +223,7 @@ export async function runClassroomMorningAutomation(
     const targetRowIds = await selectAutomationPublishTargetRowIds(db, detail.rows, liveSessions, client);
     let publishSummary: PublishSummary = { attempted: 0, success: 0, skipped: 0, failed: 0 };
     if (targetRowIds.length > 0) {
-      const published = await publishClassroomAssignmentRun(db, detail.run.id, client, {
+      const published = await publishClassroomAssignmentRun(db, detail.run.id, undefined, {
         targetRowIds,
         liveSessions,
       });

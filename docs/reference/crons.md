@@ -702,3 +702,13 @@ _Verified against main@0cd1e81 (clean tree) on 2026-09-02._
 ## Tutor room availability
 
 `GET /api/internal/room-booking` runs every four minutes at UTC minutes 1, 5, 9, …, 57 with a 300-second limit and the normal cron-secret and invocation audit gates. It refreshes Wise room evidence for today and tomorrow around the clock when `ROOM_BOOKING_COLLECTOR_ENABLED=true`, reconciles reservations, and retries durable room messages. See [the room booking runbook](../operations/tutor-room-booking.md).
+
+
+### Classroom Publish Recovery
+
+`/api/internal/class-assignments/publish-recovery` runs at `1-56/5 * * * *` UTC,
+with a 300-second route limit and a 210-second attempt budget. A shared database
+lease serializes publishers; the existing day lease excludes assignment and room
+booking mutations. A pending job is not a failed invocation. The worker honors
+persisted Wise cooldowns and prioritizes the earliest assignment date. Its cadence
+can overlap the existing daily review/email windows; idle ticks make no Wise calls.
