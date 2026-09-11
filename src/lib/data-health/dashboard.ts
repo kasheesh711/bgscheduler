@@ -577,7 +577,7 @@ function buildDomains(
       lastRunAt: iso(allRuns.credit[0]?.startedAt),
       recordCountLabel: `${allRuns.credit[0]?.studentCount ?? 0} students`,
       issueCount: allRuns.credit[0]?.status === "failed" ? 1 : 0,
-      detail: "Student credit depletion and follow-up queue snapshot.",
+      detail: "Shared student, session and credit history for schedules, Parent Reports, LINE and Progress Tests.",
     },
     {
       key: "leave_requests",
