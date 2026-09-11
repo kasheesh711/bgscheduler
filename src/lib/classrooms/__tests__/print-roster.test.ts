@@ -6,11 +6,19 @@ vi.mock("@/lib/credit-control/wise", () => ({ fetchCreditStudents: vi.fn() }));
 import { fetchAllFutureSessions, fetchWiseSessionDetail } from "@/lib/wise/fetchers";
 import { fetchCreditStudents } from "@/lib/credit-control/wise";
 import { loadPrintRosters, projectPrintRoster, type PrintRosterSource } from "../print-roster";
-const source: PrintRosterSource = { id: "row", wiseSessionId: "session", wiseClassId: "class", wiseTeacherUserId: "teacher", startTime: new Date("2099-09-12T02:00:00Z"), endTime: new Date("2099-09-12T03:00:00Z"), sessionType: "OFFLINE" };
-const session = (patch: Partial<WiseSession> = {}): WiseSession => ({ _id: "session", classId: "class", userId: "teacher", scheduledStartTime: source.startTime.toISOString(), scheduledEndTime: source.endTime.toISOString(), type: "OFFLINE", meetingStatus: "SCHEDULED", students: [{ _id: "a", name: "แสงดาว" }], ...patch });
+// Drizzle reads timestamp-without-time-zone values as Dates with Bangkok wall-clock UTC fields.
+const source: PrintRosterSource = { id: "row", wiseSessionId: "session", wiseClassId: "class", wiseTeacherUserId: "teacher", startTime: new Date("2099-09-12T09:00:00Z"), endTime: new Date("2099-09-12T10:00:00Z"), sessionType: "OFFLINE" };
+const session = (patch: Partial<WiseSession> = {}): WiseSession => ({ _id: "session", classId: "class", userId: "teacher", scheduledStartTime: "2099-09-12T02:00:00Z", scheduledEndTime: "2099-09-12T03:00:00Z", type: "OFFLINE", meetingStatus: "SCHEDULED", students: [{ _id: "a", name: "แสงดาว" }], ...patch });
 beforeEach(() => { vi.resetAllMocks(); vi.useFakeTimers(); vi.setSystemTime(new Date("2026-09-11T10:00:00Z")); });
 afterEach(() => vi.useRealTimers());
 describe("exact session roster projection", () => {
+  it.each([
+    ["2099-09-12T09:00:00Z", "2099-09-12T10:00:00Z", "2099-09-12T02:00:00Z", "2099-09-12T03:00:00Z"],
+    ["2099-09-12T00:30:00Z", "2099-09-12T01:30:00Z", "2099-09-11T17:30:00Z", "2099-09-11T18:30:00Z"],
+  ])("compares saved Bangkok wall-clock times with Wise instants: %s", (savedStart, savedEnd, liveStart, liveEnd) => {
+    const result = projectPrintRoster({ ...source, startTime: new Date(savedStart), endTime: new Date(savedEnd) }, session({ scheduledStartTime: liveStart, scheduledEndTime: liveEnd }), new Map());
+    expect(result).toMatchObject({ sessionState: "current", warnings: [] });
+  });
   it("deduplicates IDs while retaining identical names for different students, including Thai", () => {
     const result = projectPrintRoster(source, session({ students: ["a", { _id: "a", name: "แสงดาว" }, "b", "c"] }), new Map([["a", "Older name"], ["b", "Same Name"], ["c", "Same Name"]]));
     expect(result).toMatchObject({ rosterStatus: "verified", studentCount: 3, sessionState: "current" });
@@ -28,7 +36,7 @@ describe("exact session roster projection", () => {
   it.each(["CANCELLED", "CANCELED"])("detects %s without losing the student list", status => {
     expect(projectPrintRoster(source, session({ meetingStatus: status }), new Map())).toMatchObject({ sessionState: "cancelled", students: ["แสงดาว"], warnings: [expect.stringContaining("Regenerate assignments")] });
   });
-  it.each<Partial<WiseSession>>([{ scheduledStartTime: "2099-09-13T02:00:00Z", scheduledEndTime: "2099-09-13T03:00:00Z" }, { userId: "other" }, { classId: "other" }, { type: "ONLINE" }])("detects a changed saved session: %j", patch => {
+  it.each<Partial<WiseSession>>([{ scheduledStartTime: "2099-09-13T02:00:00Z", scheduledEndTime: "2099-09-13T03:00:00Z" }, { scheduledStartTime: "2099-09-12T03:00:00Z", scheduledEndTime: "2099-09-12T04:00:00Z" }, { scheduledStartTime: "2099-09-12T09:00:00Z", scheduledEndTime: "2099-09-12T10:00:00Z" }, { userId: "other" }, { classId: "other" }, { type: "ONLINE" }])("detects a changed saved session: %j", patch => {
     expect(projectPrintRoster(source, session(patch), new Map()).sessionState).toBe("rescheduled");
   });
   it("fails closed for a wrong ID, absent session or invalid times", () => {
@@ -36,6 +44,18 @@ describe("exact session roster projection", () => {
   });
 });
 describe("report-wide roster refresh", () => {
+  it.each([
+    ["2099-09-12T01:59:59Z", false],
+    ["2099-09-12T02:00:00Z", true],
+    ["2099-09-12T02:30:00Z", true],
+  ])("refreshes started Bangkok sessions at the actual instant: %s", async (now, started) => {
+    vi.setSystemTime(new Date(now));
+    vi.mocked(fetchAllFutureSessions).mockResolvedValue([session()]);
+    vi.mocked(fetchWiseSessionDetail).mockResolvedValue(session());
+    const result = await loadPrintRosters([source]);
+    expect(fetchWiseSessionDetail).toHaveBeenCalledTimes(started ? 1 : 0);
+    expect(result.byRow.get(source.id)?.sessionState).toBe("current");
+  });
   it("shares one strict sweep and one necessary directory read across all seven days", async () => {
     const rows = Array.from({ length: 7 }, (_, i) => ({ ...source, id: `row-${i}`, wiseSessionId: `session-${i}` }));
     vi.mocked(fetchAllFutureSessions).mockResolvedValue(rows.map(row => session({ _id: row.wiseSessionId, students: ["a"] })));

@@ -1,13 +1,38 @@
 import { describe, expect, it } from "vitest";
 import { buildClassroomPrintDay, printRunsSchema, printViewSchema, type ClassroomPrintReport } from "../print-report";
-import type { PrintRoster } from "../print-roster";
+import { projectPrintRoster, type PrintRoster } from "../print-roster";
 import { buildPrintCards, paginatePrintCards, splitPrintCard } from "@/components/class-assignments/print-pagination";
 const run = { id: "run", assignmentDate: "2099-09-12", changeSummary: {} };
-const row = (id: string, patch: Partial<Parameters<typeof buildClassroomPrintDay>[1][number]> = {}) => ({ id, runId: "run", canonicalKey: id, tutorDisplayName: `Tutor ${id}`, wiseSessionId: id, wiseClassId: "class", startTime: new Date("2099-09-12T02:00:00Z"), endTime: new Date("2099-09-12T03:00:00Z"), startMinute: 540, endMinute: 600, sessionType: "OFFLINE", assignedRoom: "Room B", status: "assigned", publishStatus: "success", ...patch });
+const row = (id: string, patch: Partial<Parameters<typeof buildClassroomPrintDay>[1][number]> = {}) => ({ id, runId: "run", canonicalKey: id, tutorDisplayName: `Tutor ${id}`, wiseSessionId: id, wiseClassId: "class", startTime: new Date("2099-09-12T09:00:00Z"), endTime: new Date("2099-09-12T10:00:00Z"), startMinute: 540, endMinute: 600, sessionType: "OFFLINE", assignedRoom: "Room B", status: "assigned", publishStatus: "success", ...patch });
 const catalog = [{ id: "b", name: "Room B", sortOrder: 0, capacity: 2, active: true }, { id: "a", name: "Room A", sortOrder: 1, capacity: 5, active: true }, { id: "inactive", name: "Closed", sortOrder: 2, capacity: 5, active: false }];
 const roster = (patch: Partial<PrintRoster> = {}): PrintRoster => ({ students: ["Student"], studentCount: 1, rosterStatus: "verified", sessionState: "current", warnings: [], ...patch });
 const report = (day: ReturnType<typeof buildClassroomPrintDay>): ClassroomPrintReport => ({ days: [day], generatedAt: "2099-09-11T10:00:00Z", rosterCheckedAt: "2099-09-11T10:00:00Z", refreshFailed: false });
 describe("shared classroom print data", () => {
+  it("keeps live-verified database rows in alphabetical tutor groups and their assigned rooms", () => {
+    const rows = [
+      row("z", { tutorDisplayName: "Zulu" }),
+      row("a", { tutorDisplayName: "Amy", startTime: new Date("2099-09-12T10:00:00Z"), endTime: new Date("2099-09-12T11:00:00Z"), startMinute: 600, endMinute: 660 }),
+      row("remote", { canonicalKey: "a", tutorDisplayName: "Amy", startTime: new Date("2099-09-12T11:00:00Z"), endTime: new Date("2099-09-12T12:00:00Z"), startMinute: 660, endMinute: 720, sessionType: "ONLINE", status: "remote", assignedRoom: "REMOTE_NO_ROOM_NEEDED" }),
+    ];
+    const liveTimes = [
+      ["2099-09-12T02:00:00Z", "2099-09-12T03:00:00Z"],
+      ["2099-09-12T03:00:00Z", "2099-09-12T04:00:00Z"],
+      ["2099-09-12T04:00:00Z", "2099-09-12T05:00:00Z"],
+    ];
+    const rosters = new Map(rows.map((saved, i) => [saved.id, projectPrintRoster(saved, {
+      _id: saved.wiseSessionId, classId: "class", scheduledStartTime: liveTimes[i][0], scheduledEndTime: liveTimes[i][1],
+      type: saved.sessionType ?? undefined, meetingStatus: "SCHEDULED", students: [{ _id: `student-${i}`, name: `Student ${i}` }],
+    }, new Map())]));
+    const day = buildClassroomPrintDay(run, rows, catalog, rosters);
+    const tutorCards = buildPrintCards(report(day), "tutors")[0].cards;
+    expect(tutorCards.map(card => card.title)).toEqual(["Amy", "Zulu"]);
+    expect(tutorCards.map(card => card.blocks.map(block => block.rowId))).toEqual([["a", "remote"], ["z"]]);
+    const roomCards = buildPrintCards(report(day), "rooms")[0].cards;
+    expect(roomCards.map(card => card.title)).toEqual(["Room B", "Room A"]);
+    expect(roomCards.map(card => card.blocks.map(block => block.rowId))).toEqual([["z", "a"], []]);
+    expect(day.exceptions).toEqual([]);
+    expect(day.roomExceptions).toEqual([]);
+  });
   it("keeps catalog ordering and empty rooms, sorts time and tutors, separates exceptions and remote classes", () => {
     const rows = [row("z"), row("a", { startMinute: 480, endMinute: 540, assignedRoom: "Room B (TV)" }), row("cancelled"), row("rescheduled"), row("remote", { status: "remote", sessionType: "ONLINE" }), row("unassigned", { status: "no_room", assignedRoom: "NO_ROOM_AVAILABLE" }), row("closed", { assignedRoom: "Closed" })];
     const rosters = new Map(rows.map(r => [r.id, roster()]));
