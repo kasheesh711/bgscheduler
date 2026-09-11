@@ -45,6 +45,8 @@ import { buildTeacherSchedule, type ProjectedTeacherSchedule } from "./schedule-
 import { ensureTutorRoomProfiles } from "./room-profiles";
 import { notifiedTutorKeys, preferenceFrozenSessionIds } from "./notification-state";
 import { CLASSROOM_ALGORITHM_VERSION, classroomContinuityEnabled, roomPolicySnapshot, roomQualityMetrics, type RoomQualityMetrics } from "./room-policy";
+import { classroomTimestampToWiseIso } from "./timestamps";
+export { classroomTimestampToWiseIso } from "./timestamps";
 
 export type ClassroomRun = typeof schema.classroomAssignmentRuns.$inferSelect;
 export type ClassroomRow = Omit<typeof schema.classroomAssignmentRows.$inferSelect, "canonicalKey"> & { canonicalKey?: string | null };
@@ -376,20 +378,6 @@ export function isCurrentWisePublishLocation(
 ): boolean {
   const current = normalizedExactLocation(currentWiseLocation);
   return Boolean(current) && current === normalizedExactLocation(desiredPublishLocation);
-}
-
-export function classroomTimestampToWiseIso(value: Date | string): string {
-  const date = typeof value === "string" ? new Date(value) : value;
-  const utcMillis = Date.UTC(
-    date.getUTCFullYear(),
-    date.getUTCMonth(),
-    date.getUTCDate(),
-    date.getUTCHours() - 7,
-    date.getUTCMinutes(),
-    date.getUTCSeconds(),
-    date.getUTCMilliseconds(),
-  );
-  return new Date(utcMillis).toISOString();
 }
 
 type PublishDependencyRow = Pick<

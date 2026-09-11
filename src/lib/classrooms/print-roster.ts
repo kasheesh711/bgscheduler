@@ -3,12 +3,14 @@ import { fetchAllFutureSessions, fetchWiseSessionDetail } from "@/lib/wise/fetch
 import { fetchCreditStudents } from "@/lib/credit-control/wise";
 import { getWiseSessionClassId, getWiseSessionTeacherUserId, type WiseSession } from "@/lib/wise/types";
 import { getClassroomSessionMode } from "./session-mode";
+import { classroomTimestampToWiseIso } from "./timestamps";
 
 export interface PrintRosterSource {
   id: string;
   wiseSessionId: string;
   wiseClassId: string | null;
   wiseTeacherUserId?: string | null;
+  /** Database timestamps encode Bangkok wall-clock time in UTC Date fields. */
   startTime: Date;
   endTime: Date;
   sessionType: string | null;
@@ -43,7 +45,7 @@ export function projectPrintRoster(source: PrintRosterSource, session: WiseSessi
   const classChanged = Boolean(source.wiseClassId && getWiseSessionClassId(session) && source.wiseClassId !== getWiseSessionClassId(session));
   const teacherChanged = Boolean(source.wiseTeacherUserId && getWiseSessionTeacherUserId(session) && source.wiseTeacherUserId !== getWiseSessionTeacherUserId(session));
   const savedMode = getClassroomSessionMode(source.sessionType), liveMode = getClassroomSessionMode(session.type);
-  const changed = validTimes && (start !== source.startTime.getTime() || end !== source.endTime.getTime() || classChanged || teacherChanged
+  const changed = validTimes && (start !== Date.parse(classroomTimestampToWiseIso(source.startTime)) || end !== Date.parse(classroomTimestampToWiseIso(source.endTime)) || classChanged || teacherChanged
     || (savedMode !== "unknown" && liveMode !== "unknown" && savedMode !== liveMode));
   const sessionState = cancelled ? "cancelled" : !validTimes ? "unverified" : changed ? "rescheduled" : "current";
   if (cancelled) warnings.push("Cancelled in Wise. Regenerate assignments.");
@@ -72,7 +74,7 @@ export async function loadPrintRosters(rows: PrintRosterSource[]) {
   const uniqueRows = [...new Map(rows.map(row => [row.wiseSessionId, row])).values()];
   const needsDetail = uniqueRows.filter(row => {
     const session = sessions.get(row.wiseSessionId);
-    return row.startTime.getTime() <= Date.now() || !session || !Array.isArray(session.students) || studentRefs(session).invalid
+    return Date.parse(classroomTimestampToWiseIso(row.startTime)) <= Date.now() || !session || !Array.isArray(session.students) || studentRefs(session).invalid
       || (typeof session.studentCount === "number" && session.studentCount > studentRefs(session).refs.size);
   });
   // Bound fallback concurrency and stop queued work once the overall deadline expires.
