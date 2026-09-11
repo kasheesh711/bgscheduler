@@ -29,8 +29,8 @@ const EXPECTED_SCHEDULES: Record<string, string> = {
   "/api/internal/post-class-feedback-backfill": "23,53 * * * *",
   "/api/internal/post-class-feedback/payout-accrual": "33 * * * *",
   "/api/internal/sync-leave-requests": "15,45 * * * *",
-  "/api/internal/class-assignments/morning": "41 23 * * *",
-  "/api/internal/class-assignments/admin-email": "4,14,24,36 0 * * *",
+  "/api/internal/class-assignments/morning": "0 10 * * *",
+  "/api/internal/class-assignments/admin-email": "0,16,31,46 12 * * *",
   "/api/internal/student-promotions/july-1": "5 17 30 6 *",
   "/api/internal/cron-watchdog": "7,37 * * * *",
   "/api/internal/admissions-notifications": "12 1 * * *",
@@ -129,7 +129,11 @@ describe("vercel cron configuration", () => {
         // The private 09:00 assessment waits for a fresh snapshot, sharing the scheduled sync;
         // it never starts another sync. Its retry ticks occupy free minutes.
         const coordinatedWeekendCheck = pair.has("/api/internal/sync-wise") && pair.has("/api/internal/class-assignments/weekend-check");
-        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck) {
+        // Explicit 17:00 / 19:00 Bangkok business times. Preparation shares
+        // the single-flight Wise sync; delivery only reads Postgres and emails.
+        const nextDayClassroomOverlap = pair.has("/api/internal/sync-wise")
+          && (pair.has("/api/internal/class-assignments/morning") || pair.has("/api/internal/class-assignments/admin-email"));
+        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck && !nextDayClassroomOverlap) {
           collisions.push(`${crons[i].path} vs ${crons[j].path}`);
         }
       }

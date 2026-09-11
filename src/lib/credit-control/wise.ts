@@ -146,14 +146,16 @@ export function creditSessionTeacher(session: WiseCreditSession): {
 export async function fetchCreditStudents(
   client: WiseClient,
   instituteId: string,
+  options: { deadlineAt?: number } = {},
 ): Promise<WiseCreditStudent[]> {
   const all: WiseCreditStudent[] = [];
   for (let page = 1; ; page += 1) {
+    if (options.deadlineAt && Date.now() >= options.deadlineAt) throw new Error("Wise student read exceeded its time budget");
     const response = await client.get<unknown>(`/institutes/v3/${instituteId}/students`, {
       page_number: String(page),
       page_size: String(PAGE_SIZE),
       showParents: "true",
-    });
+    }, ...(options.deadlineAt ? [{ signal: AbortSignal.timeout(Math.max(1, options.deadlineAt - Date.now())), cache: "no-store" as const }] : []));
     const parsed = WiseStudentsEnvelopeSchema.parse(response);
     const students = parsed.data.students;
     all.push(...students);

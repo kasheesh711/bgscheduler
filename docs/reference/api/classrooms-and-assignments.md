@@ -372,60 +372,19 @@ Neither route reads any query parameter or body — each calls its library entry
 
 ### `GET /api/internal/class-assignments/morning`
 
-The daily automation: refresh Wise, re-assign the next 7 days, publish what changed, and email tutors. Handler: [`morning/route.ts:8-24`](../../../src/app/api/internal/class-assignments/morning/route.ts). `export const maxDuration = 800` ([`morning/route.ts:6`](../../../src/app/api/internal/class-assignments/morning/route.ts)). Cron `41 23 * * *` UTC = 06:41 Bangkok; job key `classroom_morning`, registered `dangerous: true` ([`vercel.json:48-51`](../../../vercel.json), [`cron-registry.ts:273-288`](../../../src/lib/data-health/cron-registry.ts)).
+Secret-authenticated next-day preparation, despite the retained historical route name. Runs daily at **17:00 Bangkok** (`0 10 * * *` UTC), `maxDuration = 800`, audit key `classroom_morning`.
 
-**Auth:** `CRON_SECRET` bearer ([`morning/route.ts:9-10`](../../../src/app/api/internal/class-assignments/morning/route.ts)).
-
-**Side effects** (`runClassroomMorningAutomation`, [`morning-automation.ts:174-259`](../../../src/lib/classrooms/morning-automation.ts)):
-
-1. **Ensures a fresh Wise sync** — reuses a successful sync finished within 15 minutes, otherwise waits up to 90 s (`DEFAULT_SYNC_WAIT_MS`, polling every 5 s) on a running sync, otherwise triggers one via `runWiseSyncRequest()` ([`morning-automation.ts:25-26,105-168`](../../../src/lib/classrooms/morning-automation.ts)).
-2. Asserts the classroom snapshot is fresh ([`data.ts:580-586`](../../../src/lib/classrooms/data.ts)), then fetches all future Wise sessions **once** and reuses them across the whole horizon ([`morning-automation.ts:189-192`](../../../src/lib/classrooms/morning-automation.ts)).
-3. Per day across a 7-day Bangkok horizon starting today ([`morning-automation.ts:170-172`](../../../src/lib/classrooms/morning-automation.ts)): runs `runIncrementalClassroomAssignment` (new run + rows + `classroom_automation_events`, `createdBy = "cron@classroom-assignments"`), selects only rows whose Wise location actually needs changing plus their blockers, and **publishes those rows to Wise** ([`morning-automation.ts:195-213`](../../../src/lib/classrooms/morning-automation.ts), [`data.ts:1757-1862`](../../../src/lib/classrooms/data.ts)).
-4. For the start date only: sends tutor schedule emails with `mode: "failed_only"` as `cron@classroom-schedule-email`; a failure there is captured into `scheduleEmailError` rather than aborting the run ([`morning-automation.ts:217-233`](../../../src/lib/classrooms/morning-automation.ts)).
-
-**Response 200** — `MorningAutomationResult` ([`morning-automation.ts:37-63`](../../../src/lib/classrooms/morning-automation.ts)):
-
-| Key | Type | Notes |
-|-----|------|-------|
-| `ok` | boolean | False when rooms, review, publishing or tutor delivery remain unresolved. |
-| `noRoomCount`, `needsReviewCount`, `failedPublishCount`, `failedEmailCount`, `blockedEmailCount`, `unmanagedWiseSessionCount` | number | Compact failure counts retained by cron auditing. |
-| `errorSummary` | string? | Present for incomplete automation; completed work remains in `dates`. |
-| `automationBatchId` | uuid | Ties the horizon's runs and `classroom_automation_events` together. |
-| `startDate`, `endDate` | string | The 7-day Bangkok horizon. |
-| `sync` | object | `{ mode: "reused" \| "waited" \| "triggered", syncRunId, finishedAt, snapshotId }`. |
-| `dates` | array | Per day: `{ date, runId, changedRows, targetPublishRows, publishSummary: { attempted, success, skipped, failed }, scheduleEmail?, scheduleEmailError?, events, detail }`. `detail` is a full [assignment detail](#the-assignment-detail-envelope), so the response is large. |
-
-**Status codes:**
-
-| Status | When |
-|--------|------|
-| 200 | Automation completed without unresolved rooms, review, publishing or tutor delivery. |
-| 401 | Bad or missing `CRON_SECRET`. |
-| 500 | The full result with `ok: false`, failure counts and `errorSummary` for incomplete automation; `{ ok: false, error }` on a thrown automation error ([`morning/route.ts:18-21`](../../../src/app/api/internal/class-assignments/morning/route.ts)); or `{"error":"Server misconfigured"}` when `CRON_SECRET` is unset ([`cron-auth.ts:22-24`](../../../src/lib/internal/cron-auth.ts)). |
-
----
+`prepareNextDayClassrooms()` captures tomorrow's Bangkok date, calls the existing seven-day assignment/publish pipeline with `sendEmails: false`, and allows up to ten minutes to share a running Wise sync. No schedule emails are sent during preparation. The result retains the existing `MorningAutomationResult` shape. HTTP 200 means `ok: true`; incomplete preparation or a thrown error returns 500. Missing/bad cron secret returns 401; missing server configuration returns 500.
 
 ### `GET /api/internal/class-assignments/admin-email`
 
-Sends the daily admin summary of today's classroom assignments — or an "ACTION REQUIRED" alert if the automation is not ready by the final retry. Handler: [`admin-email/route.ts:8-25`](../../../src/app/api/internal/class-assignments/admin-email/route.ts). `export const maxDuration = 300` ([`admin-email/route.ts:6`](../../../src/app/api/internal/class-assignments/admin-email/route.ts)). Cron `4,14,24,36 0 * * *` UTC = four attempts across 07:04–07:36 Bangkok; job key `classroom_admin_email`, registered `dangerous: true` ([`vercel.json:52-55`](../../../vercel.json), [`cron-registry.ts:289-305`](../../../src/lib/data-health/cron-registry.ts)).
+Secret-authenticated next-day **teacher and admin** schedule delivery. Runs at **19:00 Bangkok**, retrying at 19:16, 19:31 and 19:46 (`0,16,31,46 12 * * *` UTC), `maxDuration = 800`, audit key `classroom_admin_email`.
 
-**Auth:** `CRON_SECRET` bearer ([`admin-email/route.ts:9-10`](../../../src/app/api/internal/class-assignments/admin-email/route.ts)).
+`deliverNextDayClassroomSchedules()` loads tomorrow's latest saved run. A run older than today's 17:00 preparation is blocked from teacher delivery. Teacher schedules use `failed_only` deduplication across assignment runs; onsite rows need successful publication. The admin summary is attempted after teacher delivery, even if that delivery threw. It waits for missing preparation/pending publishing until 19:46, then sends an actionable failure summary. Successful recipients are not resent on subsequent ticks.
 
-**Behavior** (`sendAdminClassroomScheduleEmail`, [`admin-schedule-email.ts:345-491`](../../../src/lib/classrooms/admin-schedule-email.ts)) — the date is today in Bangkok and the primary Apps Script sender is used, since the route passes no options:
+Response: `{ ok, assignmentDate, teacherEmail?, teacherEmailError?, adminEmail, errorSummary? }`. `teacherEmail` contains attempted/success/failed/blocked counts. `adminEmail` retains `AdminScheduleEmailResult`: `{ status, assignmentDate, assignmentRunId, emailRunId, attempted, success, failed, message, errorSummary? }`. Incomplete delivery returns HTTP 500 with `ok: false`; successful or already-completed delivery returns 200. Secret/configuration failures follow the preparation route.
 
-- Returns `status: "skipped"` **without sending** when a successfully sent admin-email run already exists for the date, or when another invocation holds the delivery claim ([`admin-schedule-email.ts:355-366,399-410`](../../../src/lib/classrooms/admin-schedule-email.ts)).
-- Returns `status: "pending"` **without writing** when there is no assignment run yet or a publish job is still pending **and** the Bangkok clock is before 07:36 (`FINAL_RETRY_MINUTE`, [`admin-schedule-email.ts:24`](../../../src/lib/classrooms/admin-schedule-email.ts)) — this is how the four staggered attempts back off ([`admin-schedule-email.ts:374-387`](../../../src/lib/classrooms/admin-schedule-email.ts)).
-- Otherwise atomically claims the existing date-keyed `classroom_admin_email_runs` row (creating it if absent); failed/partial runs retry, successful recipients are skipped, and abandoned claims are recoverable after ten minutes. Recipient attempt history is retained. The claim timestamp fences stale workers. The subject flips from `BeGifted classroom assignments - <date>` to `ACTION REQUIRED: classroom assignments need attention - <date>` whenever rooms, publishing or tutor delivery remain unresolved, [`admin-schedule-email.ts:389-397`](../../../src/lib/classrooms/admin-schedule-email.ts). The sender **sends one email per unsent `admin_users` address**, writing a `classroom_admin_email_recipients` row per address ([`admin-schedule-email.ts:206-211,448-478`](../../../src/lib/classrooms/admin-schedule-email.ts)). No recipients configured → `status: "failed"` with `No admin_users email recipients are configured.` ([`admin-schedule-email.ts:426-447`](../../../src/lib/classrooms/admin-schedule-email.ts)). Otherwise the final status is `sent`, or `partial`/`failed` depending on how many sends threw ([`admin-schedule-email.ts:479-491`](../../../src/lib/classrooms/admin-schedule-email.ts)).
-
-**Response body** — `AdminScheduleEmailResult` ([`admin-schedule-email.ts:26-35`](../../../src/lib/classrooms/admin-schedule-email.ts)): `{ status: "sent" | "partial" | "failed" | "pending" | "skipped", assignmentDate, assignmentRunId, emailRunId, attempted, success, failed, message, errorSummary? }`. Returned as the body for both the 200 and the result-driven 500.
-
-**Status codes:**
-
-| Status | When |
-|--------|------|
-| 200 | `result.status` is `sent`, `pending` or `skipped` ([`admin-email/route.ts:17`](../../../src/app/api/internal/class-assignments/admin-email/route.ts)). |
-| 401 | Bad or missing `CRON_SECRET`. |
-| 500 | `result.status` is `failed` or `partial` (the `AdminScheduleEmailResult` is still the body), or a thrown error (`{ error }`, [`admin-email/route.ts:19-22`](../../../src/app/api/internal/class-assignments/admin-email/route.ts)); or `{"error":"Server misconfigured"}` when `CRON_SECRET` is unset. |
+See [cron timing and retries](../crons.md#12-next-day-classroom-preparation--apiinternalclass-assignmentsmorning). The corresponding Data Health manual actions use these same tomorrow-targeted workflows.
 
 ---
 
@@ -438,9 +397,10 @@ All routes below use the existing authenticated `/class-assignments` page scope 
 | `GET /api/class-assignments/room-profiles` | Read-only `{ rooms, profiles }`; each profile includes canonical identity, ordered `roomIds`, expanded room records, preferred primary room, source, provenance, revision and update information. 401 without session; 500 on load failure. |
 | `PATCH /api/class-assignments/room-profiles/[canonicalKey]` | `{ roomIds: UUID[1..3], revision: positive integer }`. Requires distinct active standard rooms, TV compatibility, existing preferred primary and Gift's fixed room. Actor comes from the authenticated email. Returns the updated record; 400 invalid choices/body, 401 unauthenticated, 404 unknown teacher, 409 stale revision, 500 storage failure. |
 | `GET /api/class-assignments/print-runs?date=YYYY-MM-DD` | Read-only `{ runs: [{ id, date }], missingDates }` for seven dates. Latest saved run per date, ascending date. 400 invalid/impossible dates, 401 unauthenticated, 500 load failure. |
-| `/class-assignments/report?runIds=UUID,...&missingDates=YYYY-MM-DD,...` | Authenticated page, 1–7 distinct saved run IDs and at most one per date. Displays a visible error card for missing/invalid/conflicting runs. A4 landscape, client font-measured pagination and browser Print/Save PDF. No generation, seeding, Wise writes or email sends. |
+| `GET /api/class-assignments/print-report?runIds=UUID,...` | Authenticated, Class Assignments scope, read-only and `private, no-store`. 1–7 distinct saved UUIDs, at most one per date. Returns `{ generatedAt, rosterCheckedAt, refreshFailed, days }`; each day has `runId`, `date`, `revision`, `draft`, `tutors`, active `rooms`, `exceptions`, and `roomExceptions`. Blocks include student names, roster/session verification state and review notes, with saved time/room facts. 400 invalid IDs, 401 no session, 403 wrong scope, 409 missing/conflicting runs or concurrent assignment edit, 503 failed Wise sweep. Partial detail/directory failures set `refreshFailed` and block printing until retry succeeds. |
+| `/class-assignments/report?runIds=UUID,...&missingDates=YYYY-MM-DD,...&view=tutors\|rooms` | Authenticated page, same run validation; omitted `view` means tutors. A4 landscape, two-column tutor sheets or one room per page, font-measured continuations. Refreshes rosters on open and through the API immediately before Print/Save PDF. Visible retry for failed reads. No generation, seeding, Wise writes or email sends. |
 
-Assignment rows now carry the resolved `canonicalKey`, independent of snapshot group UUIDs. Run `changeSummary` adds `algorithmVersion`, applied `roomPolicies` and `quality` metrics. The teacher-schedule response uses one canonical grouping and includes `usualRooms`, `unavailableRooms`, per-teacher room changes, and block `roomChange`, `shortGapChange`, `outsideUsualRooms`, `exceptionReasons`, and `publication` fields. Email previews include usual rooms and the same projected exception labels. Noticeboard payloads explicitly omit student/subject/class/contact fields.
+Assignment rows now carry the resolved `canonicalKey`, independent of snapshot group UUIDs. Run `changeSummary` adds `algorithmVersion`, applied `roomPolicies` and `quality` metrics. The teacher-schedule response uses one canonical grouping and includes `usualRooms`, `unavailableRooms`, per-teacher room changes, and block `roomChange`, `shortGapChange`, `outsideUsualRooms`, `exceptionReasons`, and `publication` fields. Email previews include usual rooms and the same projected exception labels. Noticeboard payloads include names from exact live session membership, deduplicated by student ID; they omit student IDs, subject/class-title/contact fields. Neither saved student/class labels nor course enrollment establish attendance.
 
 Manual and incremental runs share reconciliation; in-place overrides preserve unchanged rows' publishing outcomes. Successful teacher deliveries are checked date-wide. The email relay idempotency prefix uses assignment date and canonical identity, not run UUID.
 

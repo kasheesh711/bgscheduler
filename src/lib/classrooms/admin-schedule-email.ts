@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import { getDb } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
-import { todayBangkok } from "@/lib/room-capacity/dates";
+import { addBangkokDays, todayBangkok } from "@/lib/room-capacity/dates";
 import {
   getClassroomAssignmentForDate,
   type ClassroomAssignmentDetail,
@@ -17,11 +17,10 @@ import { claimAdminEmailRun, adminEmailClaimPredicate, assertAdminEmailClaim, se
 import { REMOTE_NO_ROOM_NEEDED } from "./assignment-engine";
 
 /**
- * Bangkok minute of the cron's LAST tick (`4,14,24,36 0 * * *` UTC =
- * 07:04-07:36 Bangkok). At or past this minute the run stops waiting for a
- * clean assignment and forces the failure summary out.
+ * Last tick of the evening delivery cron (`0,16,31,46 12 * * *` UTC).
+ * At 19:46 Bangkok, send the summary even when preparation is incomplete.
  */
-const FINAL_RETRY_MINUTE = 7 * 60 + 36;
+const FINAL_RETRY_MINUTE = 19 * 60 + 46;
 
 export interface AdminScheduleEmailResult {
   status: "sent" | "partial" | "failed" | "pending" | "skipped";
@@ -324,12 +323,14 @@ export async function sendAdminClassroomScheduleEmail(
     now?: Date;
     assignmentDate?: string;
     sender?: ScheduleEmailSender;
+    preparedAfter?: Date;
+    additionalBlockers?: string[];
   } = {},
 ): Promise<AdminScheduleEmailResult> {
   const wallStart = Date.now();
   const now = options.now ?? new Date();
   const clock = () => new Date(now.getTime() + Date.now() - wallStart);
-  const assignmentDate = options.assignmentDate ?? todayBangkok(now);
+  const assignmentDate = options.assignmentDate ?? addBangkokDays(todayBangkok(now), 1);
   if (await hasTerminalAdminEmailForDate(db, assignmentDate)) {
     return {
       status: "skipped",
@@ -349,11 +350,14 @@ export async function sendAdminClassroomScheduleEmail(
     ? await loadTeacherScheduleEmailSummary(db, assignmentDate)
     : null;
   const blockers = buildBlockers(detail, publishJobs);
+  blockers.push(...(options.additionalBlockers ?? []));
+  const preparationMissing = Boolean(options.preparedAfter && (!detail.run || new Date(detail.run.createdAt).getTime() < options.preparedAfter.getTime()));
+  if (preparationMissing) blockers.push("The next-day classroom plan has not been prepared since 17:00 Bangkok.");
   if (!teacherScheduleEmailSummary || ["failed", "partial", "blocked", "pending"].includes(teacherScheduleEmailSummary.latestStatus)) {
     blockers.push("Tutor schedule email delivery is incomplete.");
   }
   const finalRetry = bangkokMinuteOfDay(now) >= FINAL_RETRY_MINUTE;
-  const stillPreparing = !detail.run || publishPending(publishJobs);
+  const stillPreparing = !detail.run || preparationMissing || publishPending(publishJobs);
   if (stillPreparing && !finalRetry) {
     return {
       status: "pending",

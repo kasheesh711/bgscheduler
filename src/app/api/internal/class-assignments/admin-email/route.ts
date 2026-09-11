@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { sendAdminClassroomScheduleEmail } from "@/lib/classrooms/admin-schedule-email";
+import { deliverNextDayClassroomSchedules } from "@/lib/classrooms/daily-automation";
 import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import { rejectInvalidCronSecret } from "@/lib/internal/cron-auth";
 
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 export async function GET(request: NextRequest) {
   const rejected = rejectInvalidCronSecret(request);
@@ -13,8 +13,8 @@ export async function GET(request: NextRequest) {
     { jobKey: "classroom_admin_email", triggerSource: "cron", requestMethod: request.method },
     async () => {
       try {
-        const result = await sendAdminClassroomScheduleEmail();
-        const status = result.status === "failed" || result.status === "partial" ? 500 : 200;
+        const result = await deliverNextDayClassroomSchedules();
+        const status = result.ok ? 200 : 500;
         return NextResponse.json(result, { status });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Admin classroom schedule email failed";

@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { runWeekendClassroomCheck } from "@/lib/classrooms/weekend-check";
 import { getDb } from "@/lib/db";
-import { runClassroomMorningAutomation } from "@/lib/classrooms/morning-automation";
-import { sendAdminClassroomScheduleEmail } from "@/lib/classrooms/admin-schedule-email";
+import { prepareNextDayClassrooms, deliverNextDayClassroomSchedules } from "@/lib/classrooms/daily-automation";
 import { runCompetitorIntelligenceSync } from "@/lib/competitor-intelligence/sync";
 import { runCreditControlSyncRequest } from "@/lib/credit-control/run-sync-request";
 import { syncLeaveRequests } from "@/lib/leave-requests/sync";
@@ -174,18 +173,18 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
 
       if (jobKey === "classroom_morning") {
         try {
-          const result = await runClassroomMorningAutomation();
-          return NextResponse.json(result);
+          const result = await prepareNextDayClassrooms();
+          return NextResponse.json(result, { status: result.ok ? 200 : 500 });
         } catch (error) {
-          const message = error instanceof Error ? error.message : "Classroom morning automation failed";
+          const message = error instanceof Error ? error.message : "Next-day classroom preparation failed";
           return NextResponse.json({ ok: false, error: message }, { status: 500 });
         }
       }
 
       if (jobKey === "classroom_admin_email") {
         try {
-          const result = await sendAdminClassroomScheduleEmail();
-          const status = result.status === "failed" ? 500 : 200;
+          const result = await deliverNextDayClassroomSchedules();
+          const status = result.ok ? 200 : 500;
           return NextResponse.json(result, { status });
         } catch (error) {
           const message = error instanceof Error ? error.message : "Admin classroom schedule email failed";

@@ -164,6 +164,16 @@ describe("runClassroomMorningAutomation", () => {
     mockMorningDependencies();
   });
 
+  it("prepares and publishes all seven days without sending when delivery is deferred", async () => {
+    const db = makeDbSelect([[syncRow({ finishedAt: new Date() })]]);
+    const result = await runClassroomMorningAutomation(db as never, { startDate: "2026-12-31", liveSessions: [], sendEmails: false });
+    expect(result.startDate).toBe("2026-12-31");
+    expect(result.endDate).toBe("2027-01-06");
+    expect(publishClassroomAssignmentRun).toHaveBeenCalledTimes(7);
+    expect(sendScheduleEmailsForRun).not.toHaveBeenCalled();
+    expect(result.dates.every(day => !day.scheduleEmail && !day.scheduleEmailError)).toBe(true);
+  });
+
   it("reports live sessions omitted from the snapshot as an actionable failure", async () => {
     vi.mocked(runIncrementalClassroomAssignment).mockImplementation(async (_db, input) => {
       const detail = assignmentDetail(input.date);

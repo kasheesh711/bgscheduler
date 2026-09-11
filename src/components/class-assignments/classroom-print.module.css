@@ -1,6 +1,10 @@
 .root { overflow: auto; flex: 1; min-height: 0; background: #edf1f6; color: #16203a; }
 .toolbar { position: sticky; top: 0; z-index: 10; padding: 12px 24px; background: white; border-bottom: 1px solid #dfe5ec; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .toolbar span { font-size: 13px; color: #3e4859; }
+.toolbar label { display: flex; align-items: center; gap: 8px; }
+.toolbar select { border: 1px solid #c8d1dc; border-radius: 5px; padding: 6px 10px; background: white; }
+.root [hidden] { display: none !important; }
+.printNotice { display: none; }
 .missing { padding: 12px 24px; background: #fff4ec; }
 .sheets { padding: 24px; width: max-content; min-width: 100%; }
 .sheet { width: 297mm; height: 210mm; padding: 10mm; margin: 0 auto 24px; background: white; box-shadow: 0 2px 12px #16203a18; position: relative; box-sizing: border-box; page: classroom-a4; break-after: page; font-family: var(--font-sarabun), sans-serif; }
@@ -12,6 +16,7 @@
 .draft { color: #963c00; border-color: #ff7518; background: #fff4ec; }
 .approved { color: #0b4685; }
 .columns { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8mm; }
+.singleColumn { width: 100%; }
 .teacher { font-size: 11pt; line-height: 1.25; border: 1px solid #dfe5ec; border-top: 2px solid #126dce; border-radius: 5px; overflow: hidden; margin-bottom: 10px; break-inside: avoid; }
 .teacher header { padding: 6px 9px; background: #f6f8fb; }
 .teacher h2 { font-size: 14pt; font-weight: 700; margin: 0 0 2px; overflow-wrap: anywhere; }
@@ -23,6 +28,10 @@
 .teacher td { vertical-align: top; padding: 5px 9px; border-bottom: 1px solid #edf1f6; overflow-wrap: anywhere; }
 .teacher td:first-child { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .teacher strong { font-weight: 600; }
+.room th:nth-child(2) { width: 70mm; }
+.students { list-style: none; padding: 0; margin: 4px 0 0; }
+.students li { overflow-wrap: anywhere; }
+.teacher .empty { padding: 12px; }
 .change, .note, .problem { display: block; font-size: 11pt; }
 .change { color: #963c00; font-weight: 600; }
 .note { color: #3e4859; }
@@ -30,10 +39,13 @@
 .footer { position: absolute; bottom: 7mm; left: 10mm; right: 10mm; border-top: 1px solid #dfe5ec; padding-top: 3mm; display: flex; justify-content: space-between; font-size: 9pt; color: #3e4859; }
 .footer span:last-child { text-align: right; }
 .measure { position: fixed; top: 0; left: -10000px; width: 134.5mm; visibility: hidden; pointer-events: none; }
+.measure { font-family: var(--font-sarabun), sans-serif; }
 @page classroom-a4 { size: A4 landscape; margin: 0; }
 @media print {
   .root { overflow: visible !important; background: white; }
   .toolbar, .measure, .missing { display: none !important; }
+  .root:not([data-print-approved="true"]) .sheets { display: none !important; }
+  .root:not([data-print-approved="true"]) .printNotice { display: block; padding: 20mm; }
   .sheets { padding: 0; width: auto; min-width: 0; }
   .sheet { margin: 0; box-shadow: none; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   .sheet:last-child { break-after: auto; }

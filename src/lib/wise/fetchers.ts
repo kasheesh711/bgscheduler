@@ -305,7 +305,7 @@ export async function fetchAllInstituteSessions(
     const res = await client.get<WiseSessionsResponse>(
       `/institutes/${instituteId}/sessions`,
       requestParams,
-      options.deadlineAt ? { signal: AbortSignal.timeout(Math.max(1, options.deadlineAt - Date.now())) } : undefined,
+      options.deadlineAt ? { signal: AbortSignal.timeout(Math.max(1, options.deadlineAt - Date.now())), cache: "no-store" } : undefined,
     );
 
     if (options.strict && (!Array.isArray(res.data?.sessions) || !Number.isInteger(res.data?.page_count)
@@ -385,7 +385,7 @@ export async function fetchWiseSessionDetail(
       showFeedbackConfig: "true",
       showFeedbackSubmission: "true",
     },
-    options.deadlineAt ? { signal: AbortSignal.timeout(Math.max(1, options.deadlineAt - Date.now())) } : undefined,
+    options.deadlineAt ? { signal: AbortSignal.timeout(Math.max(1, options.deadlineAt - Date.now())), cache: "no-store" } : undefined,
   );
   if (!res.data || typeof res.data !== "object") {
     throw new Error(`Wise session detail response was missing data for session ${sessionId}`);

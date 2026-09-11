@@ -270,6 +270,7 @@ export function ClassAssignmentsWorkspace() {
   const readiness = useMemo(() => summarizeAssignmentReadiness(detail, date, loading), [detail, date, loading]);
   const projected = useMemo(() => buildTeacherSchedule(rows, date, run?.changeSummary ?? {}), [rows, date, run]);
   const [preparingPrint, setPreparingPrint] = useState(false);
+  const [printView, setPrintView] = useState<"tutors" | "rooms">("tutors");
   async function printSevenDays() {
     const tab = window.open("about:blank", "_blank");
     setPreparingPrint(true);
@@ -278,7 +279,7 @@ export function ClassAssignmentsWorkspace() {
       const body = await response.json();
       if (!response.ok) throw new Error(body.error ?? "Unable to load printable assignments");
       if (!body.runs.length) throw new Error("No saved assignment runs in these seven days. Generate assignments first.");
-      const query = new URLSearchParams({ runIds: body.runs.map((run: { id: string }) => run.id).join(","), missingDates: body.missingDates.join(",") });
+      const query = new URLSearchParams({ runIds: body.runs.map((run: { id: string }) => run.id).join(","), missingDates: body.missingDates.join(","), view: printView });
       const url = `/class-assignments/report?${query}`;
       if (tab) tab.location.href = url; else window.location.href = url;
     } catch (cause) { tab?.close(); setError(cause instanceof Error ? cause.message : "Unable to prepare printing"); }
@@ -695,7 +696,10 @@ export function ClassAssignmentsWorkspace() {
             <Mail />
             {loadingSchedulePreview ? "Loading email" : "Email schedules"}
           </Button>
-          <Button variant="outline" disabled={!run || !rows.length} onClick={() => window.open(`/class-assignments/report?runIds=${run!.id}`, "_blank", "noopener,noreferrer")}>Print day</Button>
+          <select aria-label="Print grouping" className="h-9 rounded-md border bg-background px-3 text-sm" value={printView} onChange={event => setPrintView(event.target.value as "tutors" | "rooms")}>
+            <option value="tutors">By tutor</option><option value="rooms">By room</option>
+          </select>
+          <Button variant="outline" disabled={!run} onClick={() => window.open(`/class-assignments/report?runIds=${run!.id}&view=${printView}`, "_blank", "noopener,noreferrer")}>Print day</Button>
           <Button variant="outline" disabled={!date || preparingPrint} onClick={printSevenDays}>{preparingPrint ? "Preparing…" : "Print seven days"}</Button>
         </div>
       </div>

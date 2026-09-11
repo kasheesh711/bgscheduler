@@ -39,8 +39,8 @@ Rows are in `vercel.json` order. Schedules are **UTC**; the business timezone is
 | 11 | `/api/internal/post-class-feedback-backfill` | `23,53 * * * *` | :23 / :53 hourly | `post_class_feedback_backfill` | 800s | Drain the oldest unreconciled feedback history window |
 | 12 | `/api/internal/post-class-feedback/payout-accrual` | `33 * * * *` | :33 hourly | `post_class_feedback_payout_accrual` | 800s | Unattended charging: sweep → retire → accrue → finalize |
 | 13 | `/api/internal/sync-leave-requests` | `15,45 * * * *` | :15 / :45 hourly | `leave_requests` | 800s | Pull leave-form rows from Sheets, match tutors, notify admins |
-| 14 | `/api/internal/class-assignments/morning` | `41 23 * * *` | 06:41 daily | `classroom_morning` | 800s | Assign rooms for a 7-day horizon, publish, email tutors |
-| 15 | `/api/internal/class-assignments/admin-email` | `4,14,24,36 0 * * *` | 07:04–07:36 daily | `classroom_admin_email` | 300s | Send (or retry) the daily admin classroom summary |
+| 14 | `/api/internal/class-assignments/morning` | `0 10 * * *` | 17:00 daily | `classroom_morning` | 800s | Prepare and publish seven days starting tomorrow |
+| 15 | `/api/internal/class-assignments/admin-email` | `0,16,31,46 12 * * *` | 19:00–19:46 daily | `classroom_admin_email` | 800s | Send (or retry) tomorrow's tutor schedules and admin summary |
 | 16 | `/api/internal/student-promotions/july-1` | `5 17 30 6 *` | 1 Jul 00:05 (annual) | `student_promotions_july_1` | 800s | One-shot Wise grade/course promotion writeback |
 | 17 | `/api/internal/cron-watchdog` | `7,37 * * * *` | :07 / :37 hourly | `cron_watchdog` | 300s | Sweep every cron's health, email admins on new failures, prune audit rows |
 | 18 | `/api/internal/admissions-notifications` | `12 1 * * *` | 08:12 daily | `admissions_notifications` | 300s | Deadline reminders daily; weekly digest on Bangkok Sundays |
@@ -93,7 +93,7 @@ The seven daily jobs include the isolated 01:18 foot-traffic reconciliation, the
 
 ```mermaid
 flowchart LR
-    A["06:41 Bangkok<br/>class-assignments/morning<br/>(needs a fresh Wise snapshot)"] --> B["07:04 · 07:14 · 07:24 · 07:36<br/>class-assignments/admin-email<br/>retry window; 07:36 is the forced send"]
+    A["17:00 Bangkok<br/>class-assignments/morning<br/>(needs a fresh Wise snapshot)"] --> B["19:00 · 19:16 · 19:31 · 19:46<br/>class-assignments/admin-email<br/>retry window; 19:46 is the forced send"]
     C["07:35 progress-tests/admin-digest"]
     D["08:12 admissions-notifications<br/>(+ weekly digest on Sundays)"]
     E["09:03 line-credit-digest"]
@@ -102,7 +102,7 @@ flowchart LR
     style B fill:#e0f2fe,stroke:#0369a1
 ```
 
-The morning automation waits on the Wise snapshot; the admin email waits on the morning automation — see [cron 12](#12-classroom-morning-automation--apiinternalclass-assignmentsmorning) and [cron 13](#13-classroom-admin-email--apiinternalclass-assignmentsadmin-email).
+The morning automation waits on the Wise snapshot; the admin email waits on the morning automation — see [cron 12](#12-next-day-classroom-preparation--apiinternalclass-assignmentsmorning) and [cron 13](#13-next-day-classroom-schedule-delivery--apiinternalclass-assignmentsadmin-email).
 
 ---
 
@@ -253,7 +253,7 @@ Maturity badges in the **Feature** rows are applied from the documentation matur
 
 The spine job. Acquires the single-flight guard, runs fetch → normalize → persist → validate → promote against `WISE_INSTITUTE_ID` (falling back to the literal `696e1f4d90102225641cc413`, [`run-wise-sync.ts:145`](../../src/lib/sync/run-wise-sync.ts)), and on success calls `revalidateTag("snapshot", { expire: 0 })` so cached Server Component reads pick up the new snapshot immediately ([`run-wise-sync.ts:160-162`](../../src/lib/sync/run-wise-sync.ts)). Returns `200` on success, `500` on failure, `202` when already running ([`:148-150`](../../src/lib/sync/run-wise-sync.ts), [`:164-166`](../../src/lib/sync/run-wise-sync.ts)). The promotion gate refuses to activate a candidate snapshot when ≥ 50% of identity groups are unresolved, but the run still records `success` ([`orchestrator.ts:472-476`](../../src/lib/sync/orchestrator.ts)).
 
-This is also the only cron another cron waits on — see [cron 12](#12-classroom-morning-automation--apiinternalclass-assignmentsmorning).
+This is also the only cron another cron waits on — see [cron 12](#12-next-day-classroom-preparation--apiinternalclass-assignmentsmorning).
 
 ### 2. Sales dashboard sync — `/api/internal/sync-sales-dashboard`
 
@@ -432,65 +432,37 @@ Per run: insert a run row (a running-row conflict on `leave_request_sync_runs_si
 
 Both verbs pass `triggerType: "cron"` — an operator's `POST` is persisted as cron-triggered ([`route.ts:9-36`](../../src/app/api/internal/sync-leave-requests/route.ts)).
 
-### 12. Classroom morning automation — `/api/internal/class-assignments/morning`
+### 12. Next-day classroom preparation — `/api/internal/class-assignments/morning`
 
 | | |
 |---|---|
-| Schedule | `41 23 * * *` UTC = **06:41 Bangkok** daily ([`vercel.json:48-51`](../../vercel.json)) |
-| `maxDuration` | 800s ([`route.ts:6`](../../src/app/api/internal/class-assignments/morning/route.ts)) |
-| Job body | `runClassroomMorningAutomation()` ([`route.ts:16`](../../src/app/api/internal/class-assignments/morning/route.ts)) |
-| Run table | `classroom_assignment_runs` (automation rows only, [`dashboard.ts:780-785`](../../src/lib/data-health/dashboard.ts)) |
-| Feature | [Classroom Assignments](../features/classroom-assignments.md) — **stable** |
-| Danger | `dangerous: true` — "Runs assignment automation, publishes eligible rooms, and sends tutor schedule emails." ([`cron-registry.ts:284-285`](../../src/lib/data-health/cron-registry.ts)) |
+| Schedule | `0 10 * * *` UTC = **17:00 Bangkok**, daily |
+| `maxDuration` | 800s |
+| Job body | `prepareNextDayClassrooms()` in `src/lib/classrooms/daily-automation.ts` |
+| Run table / audit key | `classroom_assignment_runs` / `classroom_morning` |
 
-The most involved cron, and the only one that depends on another cron's output.
+Prepares and publishes seven Bangkok dates starting **tomorrow**. The historical route and audit key are retained for continuity. The underlying assignment engine uses one captured fresh snapshot and one shared live Wise session read. It sends no teacher emails in this phase.
 
-```mermaid
-flowchart TD
-    A["06:41 Bangkok tick"] --> B{"Latest successful sync_run<br/>finished ≤ 15 min ago?"}
-    B -- yes --> E["mode: reused"]
-    B -- no --> C{"A Wise sync is<br/>currently running?"}
-    C -- yes --> D["Poll every 5s, up to 90s"]
-    D --> E2["mode: waited"]
-    C -- no --> F["Trigger runWiseSyncRequest"]
-    F -- 202 skipped --> D2["Poll every 5s, up to 90s"]
-    D2 --> E2
-    F -- 200 --> E3["mode: triggered"]
-    E --> G["Load classroom snapshot +<br/>fetchAllFutureSessions"]
-    E2 --> G
-    E3 --> G
-    G --> H["For each of 7 Bangkok days from today"]
-    H --> I["runIncrementalClassroomAssignment"]
-    I --> J["selectAutomationPublishTargetRowIds"]
-    J --> K{"Eligible rows?"}
-    K -- yes --> L["publishClassroomAssignmentRun<br/>writes Wise location"]
-    K -- no --> M["skip publish"]
-    L --> N{"date === today?"}
-    M --> N
-    N -- yes --> O["sendScheduleEmailsForRun<br/>mode: failed_only"]
-    N -- no --> H
-```
+The exact 17:00 business time overlaps the half-hour Wise sync. Both use its existing single-flight guard; preparation reuses a fresh promoted snapshot or waits up to ten minutes for the running sync. A wait timeout fails visibly rather than starting a second wait window. Unresolved assignments or publish failures retain completed work and return HTTP 500.
 
-Specifics: a snapshot is fresh if its sync finished within `CLASSROOM_ASSIGNMENT_FRESHNESS_MS` = 15 minutes ([`classrooms/data.ts:134`](../../src/lib/classrooms/data.ts), [`morning-automation.ts:96-99`](../../src/lib/classrooms/morning-automation.ts)); the wait loop polls at 5-second intervals for up to 90 seconds ([`morning-automation.ts:25-26`](../../src/lib/classrooms/morning-automation.ts), [`:105-168`](../../src/lib/classrooms/morning-automation.ts)); a sync that fails, or that is still running after the wait window, or that completes without a fresh promoted snapshot, throws and fails the whole automation ([`:138-140`](../../src/lib/classrooms/morning-automation.ts), [`:155`](../../src/lib/classrooms/morning-automation.ts), [`:159-161`](../../src/lib/classrooms/morning-automation.ts)). The horizon is exactly **7 Bangkok days** starting today ([`:170-172`](../../src/lib/classrooms/morning-automation.ts), [`:183-184`](../../src/lib/classrooms/morning-automation.ts)); tutor schedule emails are sent only for the first day and only in `failed_only` mode, and an email failure is captured as `scheduleEmailError` without aborting the remaining dates. Unresolved room, review, publishing or tutor-delivery counts produce `ok: false`, `errorSummary` and HTTP 500 while retaining completed work ([`:217-233`](../../src/lib/classrooms/morning-automation.ts)). Actors are the literals `cron@classroom-assignments` and `cron@classroom-schedule-email` ([`:27-28`](../../src/lib/classrooms/morning-automation.ts)).
-
-Timing: the 06:41 slot sits 11 minutes after the 06:30 Wise snapshot tick, so on a normal morning the `reused` branch is taken and no extra Wise sync is triggered.
-
-### 13. Classroom admin email — `/api/internal/class-assignments/admin-email`
+### 13. Next-day classroom schedule delivery — `/api/internal/class-assignments/admin-email`
 
 | | |
 |---|---|
-| Schedule | `4,14,24,36 0 * * *` UTC = **07:04, 07:14, 07:24, 07:36 Bangkok** ([`vercel.json:52-55`](../../vercel.json)) |
-| `maxDuration` | 300s ([`route.ts:6`](../../src/app/api/internal/class-assignments/admin-email/route.ts)) |
-| Job body | `sendAdminClassroomScheduleEmail()` ([`route.ts:16`](../../src/app/api/internal/class-assignments/admin-email/route.ts)) |
-| Run table | `classroom_admin_email_runs` |
-| Feature | [Classroom Assignments](../features/classroom-assignments.md) — **stable** |
-| Danger | `dangerous: true` — "May send or retry the daily admin classroom summary email." ([`cron-registry.ts:300-301`](../../src/lib/data-health/cron-registry.ts)) |
+| Schedule | `0,16,31,46 12 * * *` UTC = **19:00, 19:16, 19:31, 19:46 Bangkok** |
+| `maxDuration` | 800s |
+| Job body | `deliverNextDayClassroomSchedules()` in `src/lib/classrooms/daily-automation.ts` |
+| Run tables / audit key | Tutor and admin email ledgers / `classroom_admin_email` |
 
-Four ticks are **one retry window**, not four emails. The handler is idempotent by date: if a successfully sent admin-email row already exists for today it returns `skipped` immediately ([`admin-schedule-email.ts:355-366`](../../src/lib/classrooms/admin-schedule-email.ts)). If the morning automation ([cron 12](#12-classroom-morning-automation--apiinternalclass-assignmentsmorning)) has not finished — no assignment run, or publish jobs still pending — it returns `pending` and lets the window run on ([`:374-387`](../../src/lib/classrooms/admin-schedule-email.ts)).
+Each tick targets **tomorrow**, sends the saved teacher schedules in `failed_only` mode, then attempts the admin summary. Delivery does not regenerate assignments or query Wise. Teacher deliveries are deduplicated by canonical identity and assignment date across runs; successful admin recipients are also preserved across retries. A teacher send exception still reaches the admin-summary phase.
 
-The 07:36 tick is the **final retry**: `FINAL_RETRY_MINUTE = 7 * 60 + 36`, with a comment tying it to the cron expression ([`admin-schedule-email.ts:19-24`](../../src/lib/classrooms/admin-schedule-email.ts)). At or after that minute the handler stops waiting and sends regardless — with a different subject, `ACTION REQUIRED: classroom assignments need attention - {date}` instead of the normal summary ([`:389-392`](../../src/lib/classrooms/admin-schedule-email.ts)). Silence is never an acceptable outcome: admins either get the schedule or get told it is missing. Failed/partial runs retry on the same date key while preserving successful recipients and all recipient attempt rows. An atomic ten-minute claim prevents concurrent sends and recovers abandoned attempts (`admin-email-claim.ts`). Any room, publishing or tutor-delivery blocker selects `ACTION REQUIRED`, even before the last tick. `result.status` of `failed` or `partial` → `500`, else `200` ([`route.ts:17-18`](../../src/app/api/internal/class-assignments/admin-email/route.ts)).
+A plan created before today's 17:00 preparation cutoff cannot be emailed as tomorrow's finalized schedule. With no fresh preparation or with publishing in progress, the admin summary waits until the final **19:46** tick, when an `ACTION REQUIRED` summary is sent. Other room, publication or delivery blockers also produce an actionable summary. Onsite teacher schedules require successful publishing. The route returns `{ ok, assignmentDate, teacherEmail?, teacherEmailError?, adminEmail, errorSummary? }`, with HTTP 500 for incomplete preparation/delivery and 200 for successful or already-delivered work.
 
-Registry lateness is correspondingly tight — a 07:04–07:36 Bangkok window with `lateAfterMinutes: 30` ([`cron-registry.ts:295-303`](../../src/lib/data-health/cron-registry.ts)). The minutes `4, 14, 24, 36` (rather than a clean `0,10,20,30`) exist so the window never shares a UTC minute with the half-hourly syncs.
+The 19:00 overlap with Wise sync is intentional: this delivery phase reads Postgres and uses the email relay, without Wise requests. Retry ticks are at free minutes and are separated by more than the route's execution limit.
+
+These times start the jobs; external service latency and unresolved issues can delay completion. Explicit operational corrections remain available.
+
+---
 
 ### 14. Student promotions apply — `/api/internal/student-promotions/july-1`
 

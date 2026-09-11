@@ -47,7 +47,7 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 | admissions | `/api/admissions` | 61 | [university-admissions.md](./university-admissions.md) |
 | ai-scheduler | `/api/ai-scheduler` | 8 | [ai-scheduler.md](./ai-scheduler.md) |
 | auth | `/api/auth` | 2 | [misc.md](./misc.md#auth) |
-| class-assignments | `/api/class-assignments` | 11 | [classrooms-and-assignments.md](./classrooms-and-assignments.md) |
+| class-assignments | `/api/class-assignments` | 13 | [classrooms-and-assignments.md](./classrooms-and-assignments.md) |
 | classrooms | `/api/classrooms` | 2 | [classrooms-and-assignments.md](./classrooms-and-assignments.md#room-catalog-and-floor-plan) |
 | compare | `/api/compare` | 2 | [misc.md](./misc.md#compare) |
 | competitor-intelligence | `/api/competitor-intelligence` | 9 | [competitor-intelligence.md](./competitor-intelligence.md) |
@@ -83,7 +83,7 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 | Detail page | Prefixes it owns | Endpoints |
 |---|---|---:|
 | [ai-scheduler.md](./ai-scheduler.md) | `/api/ai-scheduler` | 8 |
-| [classrooms-and-assignments.md](./classrooms-and-assignments.md) | `/api/class-assignments`, `/api/classrooms`, 2 internal crons | 13 |
+| [classrooms-and-assignments.md](./classrooms-and-assignments.md) | `/api/class-assignments`, `/api/classrooms`, 2 internal crons | 17 |
 | [competitor-intelligence.md](./competitor-intelligence.md) | `/api/competitor-intelligence` | 9 |
 | [credit-control.md](./credit-control.md) | `/api/credit-control` | 8 |
 | [data-health.md](./data-health.md) | `/api/data-health` | 2 |
@@ -204,6 +204,7 @@ Sorted by group, then path, then method. `[bracketed]` segments are Next.js dyna
 | `GET` | `/api/class-assignments/room-profiles` | [classrooms-and-assignments](./classrooms-and-assignments.md) | admin | Read stable usual-room profiles. |
 | `PATCH` | `/api/class-assignments/room-profiles/[canonicalKey]` | [classrooms-and-assignments](./classrooms-and-assignments.md) | admin | Revise a teacher's ordered usual rooms. |
 | `GET` | `/api/class-assignments/print-runs` | [classrooms-and-assignments](./classrooms-and-assignments.md) | admin | Resolve seven days of explicitly saved runs for printing. |
+| `GET` | `/api/class-assignments/print-report` | [classrooms-and-assignments](./classrooms-and-assignments.md) | admin | Refresh exact Wise student rosters for one to seven saved runs; uncached tutor/room print payload with review exceptions. |
 | `GET` | `/api/class-assignments` | [class-assignments](./classrooms-and-assignments.md) | admin | The assignment detail envelope for one ISO date (`assertIsoDate` rejects anything else). |
 | `POST` | `/api/class-assignments/run` | [class-assignments](./classrooms-and-assignments.md) | admin | Generate a room-assignment run for a date. Local generation only — nothing is written to Wise here. |
 | `POST` | `/api/class-assignments/runs/[runId]/publish` | [class-assignments](./classrooms-and-assignments.md) | admin | Create a publish job and schedule it; only eligible OFFLINE sessions have their Wise `location` written, after explicit admin confirmation. |
@@ -239,8 +240,8 @@ Sorted by group, then path, then method. `[bracketed]` segments are Next.js dyna
 | `GET` | `/api/home/summary` | [home](./misc.md#home-summary) | admin | Home-hub action summary feeding the seven nav count badges. Exempted from `allowedPages` scoping in middleware so restricted users still get their badges. |
 | `GET` | `/api/internal/admissions-notifications` | [internal](./internal-crons.md) | cron | Daily admissions deadline-reminder scan; on Bangkok Sundays the same invocation also runs the weekly digest. An explicit `runType` query param runs exactly one orchestrator. Scheduled `12 1 * * *`. |
 | `POST` | `/api/internal/admissions-notifications` | [internal](./internal-crons.md) | cron | Same handler as the GET, with `runType` taken from the JSON body — the manual-trigger half. |
-| `GET` | `/api/internal/class-assignments/admin-email` | [internal](./classrooms-and-assignments.md#internal-cron-endpoints) | cron | Send the daily admin classroom-schedule email. Scheduled `4,14,24,36 0 * * *`. |
-| `GET` | `/api/internal/class-assignments/morning` | [internal](./classrooms-and-assignments.md#internal-cron-endpoints) | cron | Morning classroom automation: generate the day's run and drive the downstream steps. Scheduled `41 23 * * *`; `maxDuration = 800`. |
+| `GET` | `/api/internal/class-assignments/admin-email` | [internal](./classrooms-and-assignments.md#internal-cron-endpoints) | cron | Deliver tomorrow's tutor schedules and admin summary at 19:00 Bangkok, retry through 19:46. Scheduled `0,16,31,46 12 * * *`; `maxDuration = 800`. |
+| `GET` | `/api/internal/class-assignments/morning` | [internal](./classrooms-and-assignments.md#internal-cron-endpoints) | cron | Prepare and publish the next seven days starting tomorrow, at 17:00 Bangkok. Scheduled `0 10 * * *`; `maxDuration = 800`. |
 | `GET` | `/api/internal/cron-watchdog` | [internal](./internal-crons.md) | cron | Supervises the other jobs — fails abandoned `running` rows and updates `cron_alert_state`. Scheduled `7,37 * * * *`. |
 | `POST` | `/api/internal/cron-watchdog` | [internal](./internal-crons.md) | cron | Identical sweep; the POST half exists for manual invocation. |
 | `GET` | `/api/internal/line-backlog-recovery` | [internal](./internal-crons.md) | cron | Scans LINE contacts and re-matches the unresolved backlog in memory. Backlog-recovery only — it deliberately does **not** call the followers re-anchor. Registered `manualOnly`, so no `vercel.json` entry. |
