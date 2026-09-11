@@ -575,6 +575,13 @@
       "when": 1789109105564,
       "tag": "0081_tutor_room_booking",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1789111660215,
+      "tag": "0082_student_schedule_live_cache",
+      "breakpoints": true
     }
   ]
 }

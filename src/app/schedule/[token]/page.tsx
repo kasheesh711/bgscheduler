@@ -1,3 +1,5 @@
+import { ScheduleFreshness } from "@/components/student-schedule/schedule-freshness";
+import { RefreshScheduleButton } from "@/components/student-schedule/refresh-schedule-button";
 // ----------------------------------------------------------------------------
 // PUBLIC parent schedule page — the only unauthenticated page in the app that
 // renders student data.
@@ -137,6 +139,8 @@ async function PublicScheduleBody({ params }: { params: Params }) {
             {PUBLIC_PAGE_COPY.emptyMonth}
           </Card>
           <footer className="mt-8 border-t pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] text-center text-xs text-muted-foreground">
+            <ScheduleFreshness payload={payload} thai />
+            <RefreshScheduleButton url={`/schedule/${encodeURIComponent(token)}/refresh`} method="POST" thai />
             {PUBLIC_PAGE_COPY.brand} · {PUBLIC_PAGE_COPY.updatedPrefix}{" "}
             {formatBangkokDateTime(payload.generatedAt)}
           </footer>
@@ -168,7 +172,9 @@ async function PublicScheduleBody({ params }: { params: Params }) {
       desktopCalendar={<ScheduleMonthCalendar payload={payload} todayKey={todayKey} />}
       footer={
         <footer className="mt-8 border-t pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] text-center text-xs text-muted-foreground">
-          {PUBLIC_PAGE_COPY.brand} · {PUBLIC_PAGE_COPY.updatedPrefix}{" "}
+          <ScheduleFreshness payload={payload} thai />
+            <RefreshScheduleButton url={`/schedule/${encodeURIComponent(token)}/refresh`} method="POST" thai />
+            {PUBLIC_PAGE_COPY.brand} · {PUBLIC_PAGE_COPY.updatedPrefix}{" "}
           {formatBangkokDateTime(payload.generatedAt)}
         </footer>
       }

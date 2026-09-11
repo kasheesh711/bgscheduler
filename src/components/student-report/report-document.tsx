@@ -126,7 +126,7 @@ export function ReportDocument({ payload }: { payload: ParentReportPayload }) {
 
       <footer className="mt-12 border-t border-begifted-neutral-200 pt-4 text-center text-[11px] text-begifted-neutral-500">
         BeGifted Education · Generated{" "}
-        <span className="digits">{generatedAt}</span> · Snapshot{" "}
+        <span className="digits">{generatedAt}</span> · Data as of <span className="digits">{formatBangkokDateTime(meta.snapshotGeneratedAt)}</span> · Snapshot{" "}
         <span className="digits">{meta.snapshotId.slice(0, 8)}</span>
       </footer>
     </article>

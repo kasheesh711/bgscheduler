@@ -1,3 +1,4 @@
+import { creditControlActive } from "@/lib/credit-control/mode";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
@@ -8,6 +9,8 @@ async function CreditControlBody() {
   if (!session?.user?.email || !session.user.name) {
     redirect("/login");
   }
+
+  if (!creditControlActive()) return <section className="mx-auto w-full max-w-xl space-y-3 p-8"><h1 className="text-2xl font-semibold">Credit Control is temporarily retired</h1><p>Student schedules, Parent Reports, LINE and Progress Tests remain available. Shared student data refreshes daily.</p></section>;
 
   return (
     <DashboardShell

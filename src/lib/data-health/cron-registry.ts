@@ -1,3 +1,4 @@
+import { creditControlActive } from "@/lib/credit-control/mode";
 import type { CronJobStatus } from "./types";
 
 export type CronJobKey =
@@ -39,6 +40,8 @@ export interface CronJobDefinition {
   lateAfterMinutes: number;
   maxDurationSeconds: number;
   manualOnly: boolean;
+  paused?: boolean;
+  requiresSuccessfulRun?: boolean;
   dangerous: boolean;
   confirmationLabel: string | null;
   expectedBangkokMinute?: number;
@@ -472,4 +475,12 @@ export function statusRank(status: CronJobStatus): number {
   if (status === "unknown") return 2;
   if (status === "manual-only") return 1;
   return 0;
+}
+
+/** Physical cron schedules remain registered; expected work follows feature mode. */
+export function effectiveCronJob(job: CronJobDefinition): CronJobDefinition {
+  if (job.key === "line_credit_digest" && !creditControlActive()) return { ...job, paused: true, cadenceLabel: "Paused while Credit Control is retired" };
+  if (job.key === "progress_tests") return { ...job, requiresSuccessfulRun: true, cadenceMinutes: 1440, expectedBangkokMinute: 445, lateAfterMinutes: 90, cadenceLabel: "Daily 07:25 Bangkok; recovery 07:55 / 08:25" };
+  if (job.key === "credit_control" && !creditControlActive()) return { ...job, label: "Shared Student Data", feature: "Student Data", requiresSuccessfulRun: true, cadenceMinutes: 1440, expectedBangkokMinute: 380, lateAfterMinutes: 90, cadenceLabel: "Daily 06:20 Bangkok; recovery 06:50 / 07:20" };
+  return job;
 }

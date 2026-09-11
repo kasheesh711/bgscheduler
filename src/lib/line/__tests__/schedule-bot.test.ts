@@ -513,7 +513,7 @@ describe("default path — reply to the requesting admin", () => {
 
     // The bot never pays the live Wise sweep and reuses the search's snapshot.
     expect(vi.mocked(getStudentMonthlySchedule).mock.calls[0][1]).toMatchObject({
-      liveSweep: "rescue",
+      liveSweep: "always",
       preResolved: { snapshot: SNAP, student: expect.objectContaining({ studentKey: expect.any(String) }) },
     });
   });

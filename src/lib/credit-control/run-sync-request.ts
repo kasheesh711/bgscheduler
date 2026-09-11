@@ -1,3 +1,5 @@
+import { creditControlActive } from "./mode";
+import { bangkokDailyWindow, claimDailyRefresh } from "./daily-refresh";
 import { NextResponse } from "next/server";
 import { and, desc, eq, lt } from "drizzle-orm";
 import { getDb } from "@/lib/db";
@@ -118,8 +120,14 @@ async function acquireSyncRun(
     const [syncRun] = await db
       .insert(schema.creditControlSyncRuns)
       .values({ status: "running", startedAt: now })
+      .onConflictDoNothing()
       .returning({ id: schema.creditControlSyncRuns.id });
 
+    if (!syncRun) {
+      const running = await findRunningSyncRun(db);
+      if (!running) throw new Error("Concurrent sync finished before its run could be read; retry the request.");
+      return skippedSyncResult(running, staleRunningSyncsFailed);
+    }
     return { syncRunId: syncRun.id, staleRunningSyncsFailed };
   } catch (err) {
     if (!isUniqueViolation(err)) {
@@ -135,19 +143,23 @@ async function acquireSyncRun(
   }
 }
 
-export async function runCreditControlSyncRequest() {
+export async function runCreditControlSyncRequest(options: { triggerSource?: "cron" | "admin" } = {}) {
   const db = getDb();
-  const client = createWiseClient();
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
   const now = new Date();
-  const guard = await acquireSyncRun(db, now);
+  const retired = !creditControlActive();
+  const guard = retired && options.triggerSource === "cron"
+    ? await claimDailyRefresh(db, "shared", now, tx => acquireSyncRun(tx, now))
+    : await acquireSyncRun(db, now);
 
   if ("skipped" in guard) {
     return NextResponse.json(guard, { status: 202 });
   }
 
+  const client = createWiseClient(retired ? { requestsPerSecond: 2, signal: AbortSignal.timeout(760_000) } : {});
   const result = await runCreditControlSync(db, client, instituteId, now, {
     syncRunId: guard.syncRunId,
+    runMetadata: retired && options.triggerSource === "cron" ? { dailyDate: bangkokDailyWindow(now, "shared").day, dailySlot: bangkokDailyWindow(now, "shared").slot, dailyTrigger: "cron" } : {},
   });
 
   return NextResponse.json({

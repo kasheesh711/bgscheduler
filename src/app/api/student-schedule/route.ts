@@ -31,11 +31,13 @@ export async function GET(request: NextRequest) {
     const payload = await getStudentMonthlySchedule(getDb(), {
       studentKey: parsed.data.studentKey,
       monthKey: parsed.data.month,
+      signal: request.signal,
+      forceRefresh: request.nextUrl.searchParams.get("refresh") === "1",
     });
     if (!payload) {
       return NextResponse.json({ error: "Student not found" }, { status: 404 });
     }
-    return NextResponse.json(payload);
+    return NextResponse.json(payload, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load schedule";
     return NextResponse.json({ error: message }, { status: 500 });

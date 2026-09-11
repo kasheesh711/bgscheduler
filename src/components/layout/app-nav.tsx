@@ -105,12 +105,14 @@ export function AppNav({
   learningPlansAccess = false,
   unearnedRevenueAccess = false,
   ownerAccess = false,
+  creditControlEnabled = false,
 }: {
   allowedPages: string[] | null;
   postClassFeedbackAccess?: boolean;
   learningPlansAccess?: boolean;
   unearnedRevenueAccess?: boolean;
   ownerAccess?: boolean;
+  creditControlEnabled?: boolean;
 }) {
   const pathname = usePathname();
   const [openSection, setOpenSection] = useState<NavSectionId | null>(null);
@@ -140,7 +142,7 @@ export function AppNav({
     return [...withoutLegacyLearningPlans, LEARNING_PLANS_ROUTE];
   }, [financeAllowedPages, learningPlansAccess]);
   const sections = useMemo(() => {
-    const visible = visibleSections(visibleAllowedPages);
+    const visible = visibleSections(visibleAllowedPages).map(section => ({ ...section, tools: section.tools.filter(tool => creditControlEnabled || tool.id !== "credit-control") })).filter(section => section.tools.length > 0);
     // Unearned Revenue is deliberately stricter than the legacy `allowedPages`
     // model: even an unrestricted admin must hold a fresh feature-local grant.
     if (unearnedRevenueAccess) return visible;
@@ -150,7 +152,7 @@ export function AppNav({
         tools: section.tools.filter((tool) => tool.id !== "unearned-revenue"),
       }))
       .filter((section) => section.tools.length > 0);
-  }, [unearnedRevenueAccess, visibleAllowedPages]);
+  }, [unearnedRevenueAccess, visibleAllowedPages, creditControlEnabled]);
   const activeSectionId = activeSection(pathname, visibleAllowedPages);
   // A fresh Learning Plans grant only changes tool visibility. Keep Home and
   // the brand destination tied to the existing raw/post-class page behavior.

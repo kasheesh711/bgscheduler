@@ -1,3 +1,4 @@
+import { creditControlActive } from "@/lib/credit-control/mode";
 import { cacheLife, cacheTag } from "next/cache";
 import { getDb } from "@/lib/db";
 import { attachActionStatesToStudents } from "@/lib/credit-control/action-helpers";
@@ -76,7 +77,7 @@ export async function getCreditControlPayload(
   }
 
   attachActionStatesToStudents(students, today, actionStateMap);
-  if (options.clearRecoveredActionStates !== false) {
+  if (creditControlActive() && options.clearRecoveredActionStates !== false) {
     await clearRecoveredActionStates(students);
   }
 
@@ -113,6 +114,7 @@ export async function clearRecoveredActionStates(students: Array<{
   actionState: unknown;
   packages: Array<{ status: string }>;
 }>): Promise<void> {
+  if (!creditControlActive()) return;
   const recovered = students.filter(
     (student) =>
       student.actionState &&

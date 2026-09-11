@@ -6,7 +6,7 @@
 // link carries the exact keys/dates the Parent Report page parses.
 // ----------------------------------------------------------------------------
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Partial: exactCodeMatches must run the real nicknameCodes normalization.
 vi.mock("@/lib/line/student-links", async (importOriginal) => {
@@ -521,5 +521,18 @@ describe("/schedule keeps working alongside /credit", () => {
     // Credit's no-snapshot copy, not the schedule bot's.
     expect(result.action).toBe("credit_no_snapshot");
     expect(push.mock.calls[0][0].text).toContain("balances");
+  });
+});
+
+
+describe("retired credit alerts", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it("preserves a staff group's stored preference and explains the pause", async () => {
+    vi.stubEnv("CREDIT_CONTROL_MODE", "retired");
+    const { db, updates } = makeDb([[{ audience: "staff" }]]);
+    const respond = vi.fn();
+    const result = await handleCreditCommand({ db, lineUserId: ADMIN, command: "setup on", surface: { kind: "group", groupId: GROUP }, respond, now: () => NOW, baseUrl: "https://example.com" });
+    expect(result.action).toBe("credit_digest_paused"); expect(updates).toEqual([]);
+    expect(respond).toHaveBeenCalledWith(expect.stringContaining("temporarily paused"));
   });
 });

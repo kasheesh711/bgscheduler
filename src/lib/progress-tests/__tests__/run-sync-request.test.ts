@@ -1,9 +1,11 @@
+vi.mock("@/lib/credit-control/daily-refresh", async (original) => ({ ...await original<typeof import("@/lib/credit-control/daily-refresh")>(), hasTodayRefresh: vi.fn().mockResolvedValue(true), claimDailyRefresh: async (db: unknown, _kind: unknown, _now: unknown, claim: (db: unknown) => Promise<unknown>) => claim(db) }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
 vi.mock("@/lib/wise/client", () => ({ createWiseClient: vi.fn() }));
 vi.mock("@/lib/progress-tests/sync", () => ({ runProgressTestSync: vi.fn() }));
 
+import { hasTodayRefresh } from "@/lib/credit-control/daily-refresh";
 import { getDb } from "@/lib/db";
 import { createWiseClient } from "@/lib/wise/client";
 import { runProgressTestSync } from "@/lib/progress-tests/sync";
@@ -43,9 +45,9 @@ function makeDbMock(options: {
       })),
     })),
     insert: vi.fn(() => ({
-      values: vi.fn(() => ({
+      values: vi.fn(() => ({ onConflictDoNothing: vi.fn(() => ({
         returning: vi.fn().mockResolvedValue([{ id: "guard-run-1" }]),
-      })),
+      })), })),
     })),
   };
 }
@@ -55,6 +57,7 @@ describe("runProgressTestSyncRequest", () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(hasTodayRefresh).mockResolvedValue(true);
     process.env.WISE_INSTITUTE_ID = "institute-1";
     vi.mocked(getDb).mockReturnValue(makeDbMock() as never);
     vi.mocked(createWiseClient).mockReturnValue({ client: true } as never);
@@ -78,6 +81,14 @@ describe("runProgressTestSyncRequest", () => {
     expect(runProgressTestSync).toHaveBeenCalledWith(
       expect.objectContaining({ instituteId: "institute-1", syncRunId: "guard-run-1" }),
     );
+  });
+
+  it("preserves counts and sends no notifications before today's shared snapshot succeeds", async () => {
+    vi.mocked(hasTodayRefresh).mockResolvedValue(false);
+    const response = await runProgressTestSyncRequest({ triggerType: "manual" });
+    expect(await response.json()).toMatchObject({ skipped: true, reason: "waiting_for_today_shared_snapshot" });
+    expect(createWiseClient).not.toHaveBeenCalled();
+    expect(runProgressTestSync).not.toHaveBeenCalled();
   });
 
   it("returns 202 and skips when a fresh sync is already running (single-flight)", async () => {

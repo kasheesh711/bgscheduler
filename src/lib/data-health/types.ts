@@ -3,6 +3,7 @@ export type CronJobStatus =
   | "late"
   | "failing"
   | "running"
+  | "paused"
   | "manual-only"
   | "unknown";
 

@@ -98,6 +98,7 @@ export interface ProgressTestSyncDeps {
   instituteId: string;
   now?: Date;
   syncRunId: string;
+  runMetadata?: Record<string, unknown>;
   /** Overridable email sender for the teacher heads-up step (defaults to Apps Script). */
   sender?: ScheduleEmailSender;
 }
@@ -588,6 +589,7 @@ export async function runProgressTestSync(deps: ProgressTestSyncDeps): Promise<P
         dueCount,
         notificationCount,
         metadata: {
+          ...deps.runMetadata,
           attendedSessions: attendedSessions.length,
           wiseSessionsFetched: wiseSessions.length,
           unresolvedTeacherCount,

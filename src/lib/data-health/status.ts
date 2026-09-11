@@ -1,3 +1,4 @@
+import { effectiveCronJob } from "./cron-registry";
 import type { CronJobDefinition } from "./cron-registry";
 import type { CronInvocationOutcome, CronJobStatus, CronProofSource } from "./types";
 
@@ -191,14 +192,15 @@ function runIsRunning(run: RunEvidence | null): boolean {
 }
 
 export function evaluateCronJobStatus(input: CronStatusInput): CronStatusResult {
-  const { job, now } = input;
+  const { now } = input;
+  const job = effectiveCronJob(input.job);
   const { lastExpectedAt, nextExpectedAt, lateAfterAt } = expectedWindowForJob(job, now);
 
   const disabled = Boolean(job.enabledAtEnv && !process.env[job.enabledAtEnv]?.trim());
-  if (job.manualOnly || disabled) {
+  if (job.manualOnly || disabled || job.paused) {
     const lastSeenAt = input.latestRun?.startedAt ?? input.latestInvocation?.receivedAt ?? null;
     return {
-      status: "manual-only",
+      status: job.paused ? "paused" : "manual-only",
       proof: lastSeenAt ? (input.latestInvocation ? "direct" : "inferred") : "none",
       proofLabel: lastSeenAt ? "Manual run evidence" : "No automatic schedule",
       lastSeenAt,
@@ -210,21 +212,21 @@ export function evaluateCronJobStatus(input: CronStatusInput): CronStatusResult 
       durationMs: input.latestInvocation?.durationMs ?? null,
       responseStatus: input.latestInvocation?.responseStatus ?? null,
       errorSummary: input.latestRun?.errorSummary ?? input.latestInvocation?.errorSummary ?? null,
-      healthDetail: disabled ? "Weekend alerts have not been activated." : "Not listed in vercel.json; runs only from manual controls.",
+      healthDetail: job.paused ? "Automatic credit alerts are paused; saved preferences are retained." : disabled ? "Weekend alerts have not been activated." : "Not listed in vercel.json; runs only from manual controls.",
     };
   }
 
   const latestDirect = input.latestCronInvocation;
   const latestRun = input.latestRun;
   const proof: CronProofSource = latestDirect ? "direct" : latestRun ? "inferred" : "none";
-  const lastSeenAt = latestDirect?.receivedAt ?? latestRun?.startedAt ?? null;
+  const lastSeenAt = job.requiresSuccessfulRun ? latestRun?.startedAt ?? null : latestDirect?.receivedAt ?? latestRun?.startedAt ?? null;
   const latestRunningAt = invocationIsRunning(latestDirect)
     ? latestDirect?.receivedAt
     : runIsRunning(input.runningRun)
       ? input.runningRun?.startedAt
       : null;
   const latestSuccessAt = dateMax([
-    latestDirect?.outcome === "success" || latestDirect?.outcome === "skipped" ? latestDirect.finishedAt ?? latestDirect.receivedAt : null,
+    !job.requiresSuccessfulRun && (latestDirect?.outcome === "success" || latestDirect?.outcome === "skipped") ? latestDirect.finishedAt ?? latestDirect.receivedAt : null,
     input.latestSuccessfulRun?.finishedAt ?? null,
   ]);
   const latestFailureAt = dateMax([
@@ -323,7 +325,7 @@ export function evaluateCronJobStatus(input: CronStatusInput): CronStatusResult 
     lateAfterAt !== null &&
     lastExpectedAt !== null &&
     now.getTime() > lateAfterAt.getTime() &&
-    (lastSeenAt === null || lastSeenAt.getTime() < lastExpectedAt.getTime());
+    ((job.requiresSuccessfulRun ? latestSuccessAt : lastSeenAt) === null || (job.requiresSuccessfulRun ? latestSuccessAt : lastSeenAt)!.getTime() < lastExpectedAt.getTime());
 
   if (intervalEvidenceTooOld || missedExpectedWindow) {
     return {

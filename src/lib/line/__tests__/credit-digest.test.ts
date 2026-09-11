@@ -2,7 +2,7 @@
 // Credit-digest suite: the pure run-out classifier and the once-daily sender.
 // ----------------------------------------------------------------------------
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { computeCreditRunouts, sendLineCreditDigest } from "@/lib/line/credit-digest";
 import type { Database } from "@/lib/db";
@@ -244,7 +244,16 @@ beforeEach(() => {
   delete process.env.ENABLE_LINE_SCHEDULER;
 });
 
+afterEach(() => vi.unstubAllEnvs());
 describe("sendLineCreditDigest", () => {
+  it("pauses automatic alerts without reading or changing stored group preferences", async () => {
+    vi.stubEnv("CREDIT_CONTROL_MODE", "retired");
+    const push = okPush();
+    const result = await sendLineCreditDigest({} as Database, NOW, { push });
+    expect(result).toMatchObject({ status: "skipped", attempted: 0, digestRunId: null });
+    expect(result.message).toContain("paused");
+    expect(push).not.toHaveBeenCalled();
+  });
   it("pushes one digest per registered group and finalizes the run", async () => {
     const push = okPush();
     const { db, inserts, updates } = makeDb(fullQueue());

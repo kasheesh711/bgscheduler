@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getCronJobDefinition } from "../cron-registry";
 import { evaluateCronJobStatus, type RunEvidence } from "../status";
 
@@ -168,5 +168,27 @@ describe("cron status evaluation", () => {
     });
 
     expect(result.status).toBe("healthy");
+  });
+});
+
+
+describe("retired shared-data health", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it("does not let skipped heartbeat ticks hide an old snapshot", () => {
+    vi.stubEnv("CREDIT_CONTROL_MODE", "retired");
+    const previous = run({ startedAt: new Date("2026-09-09T23:20:00Z"), finishedAt: new Date("2026-09-09T23:25:00Z") });
+    const now = new Date("2026-09-11T03:00:00Z");
+    const result = evaluateCronJobStatus({ job: job("credit_control"), now,
+      latestInvocation: null, latestCronInvocation: { receivedAt: now, finishedAt: now, outcome: "skipped", responseStatus: 200, durationMs: 1, errorSummary: null },
+      latestRun: previous, latestSuccessfulRun: previous, latestFailedRun: null, runningRun: null });
+    expect(result.status).toBe("late");
+    expect(result.lastSuccessAt).toEqual(previous.finishedAt);
+  });
+  it("reports paused alerts without stale or failure alarms", () => {
+    vi.stubEnv("CREDIT_CONTROL_MODE", "retired");
+    const result = evaluateCronJobStatus({ job: job("line_credit_digest"), now: new Date(),
+      latestInvocation: null, latestCronInvocation: null, latestRun: run({ status: "failed" }), latestSuccessfulRun: null,
+      latestFailedRun: run({ status: "failed" }), runningRun: null });
+    expect(result.status).toBe("paused"); expect(result.nextExpectedAt).toBeNull();
   });
 });

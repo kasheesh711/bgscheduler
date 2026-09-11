@@ -1,3 +1,4 @@
+import { creditControlActive } from "@/lib/credit-control/mode";
 import { revalidateTag } from "next/cache";
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
@@ -921,7 +922,7 @@ export async function runCreditControlSync(
   client: WiseClient,
   instituteId: string,
   now = new Date(),
-  options: { syncRunId?: string } = {},
+  options: { syncRunId?: string; runMetadata?: Record<string, unknown> } = {},
 ): Promise<CreditControlSyncResult> {
   const run = options.syncRunId
     ? { id: options.syncRunId }
@@ -1045,7 +1046,7 @@ export async function runCreditControlSync(
 
     // Churn lifecycle (best-effort; never roll back the promoted snapshot).
     try {
-      await applyChurnMaintenance(db, packageRows, now);
+      if (creditControlActive()) await applyChurnMaintenance(db, packageRows, now);
     } catch (churnError) {
       console.error("[credit-control] churn maintenance failed", churnError);
     }
@@ -1062,6 +1063,7 @@ export async function runCreditControlSync(
         packageCount: packageRows.length,
         sessionCount: sessionRows.length,
         metadata: {
+          ...options.runMetadata,
           failedCreditPairs,
           creditHistoryRows: histories.length,
           // EFF-00: how much of this run was Wise, recorded per run so the

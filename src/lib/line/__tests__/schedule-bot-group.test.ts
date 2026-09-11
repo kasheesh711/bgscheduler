@@ -520,7 +520,7 @@ describe("GRP-BOT-07 instant mode", () => {
     expect(d.reply.mock.calls[0][0].text).toContain("https://example.test/schedule/tok_abc");
     // The bot never pays the live Wise sweep and reuses the search's snapshot.
     expect(vi.mocked(getStudentMonthlySchedule).mock.calls[0][1]).toMatchObject({
-      liveSweep: "rescue",
+      liveSweep: "always",
       preResolved: {
         snapshot: SNAP,
         student: expect.objectContaining({ studentKey: "aadhiya srisethi::nok srisethi" }),

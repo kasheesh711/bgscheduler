@@ -1,5 +1,8 @@
 "use client";
 
+import { ScheduleFreshness } from "./schedule-freshness";
+import { RefreshScheduleButton } from "./refresh-schedule-button";
+
 // ----------------------------------------------------------------------------
 // Admin workspace for the student monthly schedule.
 //
@@ -254,6 +257,8 @@ export function StudentScheduleWorkspace() {
           )}
           {payload && (
             <div className={cn(loading && "opacity-60 transition-opacity")}>
+              <ScheduleFreshness payload={payload} />
+              <RefreshScheduleButton key={`${payload.student.studentKey}:${payload.monthKey}`} url={`/api/student-schedule?studentKey=${encodeURIComponent(payload.student.studentKey)}&month=${payload.monthKey}&refresh=1`} onRefresh={setPayload} />
               <ScheduleMonthCalendar payload={payload} todayKey={todayKey} />
             </div>
           )}

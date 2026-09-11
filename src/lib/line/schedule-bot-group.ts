@@ -529,7 +529,7 @@ async function startGroupSend(
   const schedule = await getStudentMonthlySchedule(db, {
     studentKey: student.studentKey,
     monthKey,
-    liveSweep: "rescue",
+    liveSweep: "always",
     preResolved: snapshot ? { snapshot, student } : undefined,
   });
   if (!schedule) {

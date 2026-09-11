@@ -424,3 +424,7 @@ No model failure falls back to an unverified leave window. The queue retains exi
 | `ROOM_BOOKING_WRITES_ENABLED` | disabled | Exactly `true` permits new standalone reservations. Cancellation, notification retries, and existing reservation blockers remain active when disabled. |
 
 Existing LINE credentials and `APP_BASE_URL` supply messaging and private mobile links. Enable the collector and verify evidence before enabling writes; see the [room booking runbook](../operations/tutor-room-booking.md).
+
+## Credit Control lifecycle
+
+`CREDIT_CONTROL_MODE` is `retired` by default. Only `active` restores the workspace, feature APIs, half-hourly shared sync and saved credit alert preferences after redeployment. Progress Tests remains daily. The shared snapshot and 60-second schedule cache continue in retired mode. See [restoration procedure](../operations/credit-control-retirement.md).

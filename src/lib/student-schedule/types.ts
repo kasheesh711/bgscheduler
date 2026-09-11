@@ -57,4 +57,7 @@ export interface StudentSchedulePayload {
   sessions: StudentScheduleSession[];
   /** ISO instant the payload was assembled. */
   generatedAt: string;
+  source?: "wise" | "cache" | "snapshot";
+  sourceAt?: string;
+  stale?: boolean;
 }

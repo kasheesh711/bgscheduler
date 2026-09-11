@@ -53,11 +53,11 @@ function makeDbMock(options: {
       })),
     })),
     insert: vi.fn(() => ({
-      values: vi.fn(() => ({
+      values: vi.fn(() => ({ onConflictDoNothing: vi.fn(() => ({
         returning: options.insertError
           ? vi.fn().mockRejectedValue(options.insertError)
           : vi.fn().mockResolvedValue([{ id: "guard-run-1" }]),
-      })),
+      })), })),
     })),
   };
 }
@@ -103,7 +103,7 @@ describe("GET/POST /api/internal/sync-credit-control", () => {
       { client: true },
       "institute-1",
       expect.any(Date),
-      { syncRunId: "guard-run-1" },
+      expect.objectContaining({ syncRunId: "guard-run-1" }),
     );
   });
 

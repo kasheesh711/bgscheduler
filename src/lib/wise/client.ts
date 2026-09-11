@@ -5,12 +5,16 @@ export interface WiseClientConfig {
   baseUrl?: string;
   maxConcurrency?: number;
   maxRetries?: number;
+  requestsPerSecond?: number;
+  signal?: AbortSignal;
 }
 
 interface QueuedRequest<T> {
   fn: () => Promise<T>;
   resolve: (value: T) => void;
   reject: (reason: unknown) => void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
 }
 
 /**
@@ -48,6 +52,10 @@ export class WiseClient {
   private namespace: string;
   private baseUrl: string;
   private maxRetries: number;
+  private requestsPerSecond: number;
+  private signal?: AbortSignal;
+  private nextAttemptAt = 0;
+  private cooldownUntil = 0;
 
   // Simple concurrency limiter
   private maxConcurrency: number;
@@ -64,6 +72,8 @@ export class WiseClient {
     this.baseUrl = config.baseUrl ?? "https://api.wiseapp.live";
     this.maxConcurrency = config.maxConcurrency ?? 5;
     this.maxRetries = config.maxRetries ?? 3;
+    this.requestsPerSecond = config.requestsPerSecond ?? 0;
+    this.signal = config.signal;
   }
 
   private get headers(): Record<string, string> {
@@ -101,33 +111,33 @@ export class WiseClient {
   }
 
   async get<T>(path: string, params?: Record<string, string>, init?: RequestInit): Promise<T> {
-    this.recordRequest(path);
     const url = new URL(`${this.baseUrl}${path}`);
     if (params) {
       for (const [k, v] of Object.entries(params)) {
         url.searchParams.set(k, v);
       }
     }
-    return this.withConcurrency(() => this.fetchWithRetry<T>(url.toString(), { ...init, method: "GET" }));
+    const signal = this.requestSignal(init?.signal);
+    return this.withConcurrency(() => this.fetchWithRetry<T>(url.toString(), { ...init, signal, method: "GET" }), signal);
   }
 
   async post<T>(path: string, body: unknown): Promise<T> {
-    this.recordRequest(path);
     return this.withConcurrency(() =>
       this.fetchWithRetry<T>(`${this.baseUrl}${path}`, {
+        signal: this.signal,
         method: "POST",
         body: JSON.stringify(body),
-      })
+      }), this.signal
     );
   }
 
   async put<T>(path: string, body: unknown): Promise<T> {
-    this.recordRequest(path);
     return this.withConcurrency(() =>
       this.fetchWithRetry<T>(`${this.baseUrl}${path}`, {
+        signal: this.signal,
         method: "PUT",
         body: JSON.stringify(body),
-      })
+      }), this.signal
     );
   }
 
@@ -136,6 +146,17 @@ export class WiseClient {
     init: RequestInit,
     attempt = 0,
   ): Promise<T> {
+    const signal = init.signal ?? undefined;
+    signal?.throwIfAborted();
+    while (true) {
+      while (this.cooldownUntil > Date.now()) await abortableDelay(this.cooldownUntil - Date.now(), signal);
+      const slot = Math.max(Date.now(), this.nextAttemptAt);
+      if (this.requestsPerSecond > 0) this.nextAttemptAt = slot + 1000 / this.requestsPerSecond;
+      if (slot > Date.now()) await abortableDelay(slot - Date.now(), signal);
+      if (this.cooldownUntil <= Date.now()) break;
+    }
+    signal?.throwIfAborted();
+    this.recordRequest(new URL(url).pathname);
     let response: Response;
     try {
       response = await fetch(url, {
@@ -146,10 +167,11 @@ export class WiseClient {
         },
       });
     } catch (networkErr) {
+      if (signal?.aborted || (networkErr instanceof Error && networkErr.name === "AbortError")) throw networkErr;
       // Network-level failure (DNS / ECONNRESET / fetch TypeError) — retry.
       if (attempt < this.maxRetries) {
         const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
-        await new Promise((r) => setTimeout(r, delay));
+        await abortableDelay(delay, signal);
         return this.fetchWithRetry<T>(url, init, attempt + 1);
       }
       throw networkErr;
@@ -167,18 +189,33 @@ export class WiseClient {
       throw new Error(`Wise API ${response.status}: ${text} (${url})`);
     }
 
+    const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
+    if (response.status === 429 && retryAfterMs !== null) this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + retryAfterMs);
+
     // Retryable error path — 5xx, 408, 429.
     if (attempt < this.maxRetries) {
-      const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
-      await new Promise((r) => setTimeout(r, delay));
+      const delay = retryAfterMs ?? Math.pow(2, attempt) * 1000;
+      await abortableDelay(delay, signal);
       return this.fetchWithRetry<T>(url, init, attempt + 1);
     }
     throw new Error(`Wise API ${response.status}: ${text} (${url})`);
   }
 
-  private withConcurrency<T>(fn: () => Promise<T>): Promise<T> {
+  private requestSignal(signal?: AbortSignal | null): AbortSignal | undefined {
+    return signal && this.signal ? AbortSignal.any([signal, this.signal]) : signal ?? this.signal;
+  }
+
+  private withConcurrency<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      this.queue.push({ fn, resolve, reject } as QueuedRequest<unknown>);
+      if (signal?.aborted) { reject(signal.reason); return; }
+      const item = { fn, resolve, reject, signal } as QueuedRequest<unknown>;
+      item.onAbort = () => {
+        const index = this.queue.indexOf(item);
+        if (index >= 0) this.queue.splice(index, 1);
+        reject(signal?.reason);
+      };
+      signal?.addEventListener("abort", item.onAbort, { once: true });
+      this.queue.push(item);
       this.processQueue();
     });
   }
@@ -186,17 +223,16 @@ export class WiseClient {
   private processQueue() {
     while (this.activeRequests < this.maxConcurrency && this.queue.length > 0) {
       const item = this.queue.shift()!;
+      if (item.onAbort) item.signal?.removeEventListener("abort", item.onAbort);
+      if (item.signal?.aborted) { item.reject(item.signal.reason); continue; }
       this.activeRequests++;
-      item
-        .fn()
-        .then(item.resolve)
-        .catch(item.reject)
-        .finally(() => {
-          this.activeRequests--;
-          this.processQueue();
-        });
+      item.fn().then(item.resolve).catch(item.reject).finally(() => {
+        this.activeRequests--;
+        this.processQueue();
+      });
     }
   }
+
 }
 
 /**
@@ -230,11 +266,30 @@ export function resolveWiseMaxConcurrency(): number {
   return parsed;
 }
 
-export function createWiseClient(): WiseClient {
+export function createWiseClient(options: Pick<WiseClientConfig, "requestsPerSecond" | "signal" | "maxConcurrency"> = {}): WiseClient {
   return new WiseClient({
     userId: process.env.WISE_USER_ID!,
     apiKey: process.env.WISE_API_KEY!,
     namespace: process.env.WISE_NAMESPACE ?? "begifted-education",
     maxConcurrency: resolveWiseMaxConcurrency(),
+    ...options,
+  });
+}
+
+/** Supports Retry-After seconds and HTTP dates. */
+export function parseRetryAfter(value: string | null, now = Date.now()): number | null {
+  if (!value?.trim()) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - now) : null;
+}
+
+export function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason); return; }
+    const onAbort = () => { clearTimeout(timer); reject(signal?.reason); };
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, Math.max(0, ms));
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }

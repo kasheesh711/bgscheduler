@@ -1,3 +1,4 @@
+import { creditControlActive } from "@/lib/credit-control/mode";
 // ----------------------------------------------------------------------------
 // LINE credit bot — `/credit <code>` replies with the family's current credit
 // balances plus a Parent Report link, and `/credit setup` registers a staff
@@ -74,6 +75,7 @@ export type CreditBotAction =
   | "credit_not_exact"
   | "credit_no_snapshot"
   | "credit_silent_audience"
+  | "credit_digest_paused"
   | "credit_digest_on"
   | "credit_digest_off"
   | "credit_setup_dm_refused";
@@ -302,6 +304,10 @@ async function handleSetup(
   ctx: CreditCommandContext & { surface: { kind: "group"; groupId: string } },
   enable: boolean,
 ): Promise<{ handled: true; action: CreditBotAction }> {
+  if (!creditControlActive()) {
+    await ctx.respond("Automatic credit alerts are temporarily paused. Balance replies and Parent Reports remain available with daily data.");
+    return { handled: true, action: "credit_digest_paused" };
+  }
   await ctx.db
     .update(schema.lineGroupSettings)
     .set({

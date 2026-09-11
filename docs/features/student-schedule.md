@@ -1,5 +1,7 @@
 # Student Schedule
 
+**Freshness update:** normal schedule reads (including LINE) share an institute/month Postgres cache for at most 60 seconds. Explicit refresh joins an active lease or starts a new sweep. Failed reads retain complete cached evidence or the daily shared snapshot, visibly marked stale; timestamps describe observation time, not page-render time. Public refresh revalidates the capability token. See [retirement and restoration](../operations/credit-control-retirement.md).
+
 **Status: stable** — all three render surfaces, both minting paths and the LINE delivery bot are
 built and unit-tested, and the feature landed on `main` in `2a17065` (2026-08-05); whether that is
 deployed to production is a runtime fact the repo cannot attest. The last commit touching a

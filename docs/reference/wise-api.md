@@ -1,5 +1,7 @@
 # Wise API Reference
 
+**Transport update:** `WiseClient` accepts an optional abort signal and per-client requests-per-second cap. Every HTTP attempt, including retries, is counted and paced. Aborted queued requests are removed and aborted requests are never retried. Retry-After seconds/HTTP dates are honored, with 429 cooldown shared within that client. The retired daily student-data job uses two attempts/second and a 760-second Wise budget; this is not an institute-wide limiter.
+
 How BGScheduler talks to the external **Wise** scheduling platform — the single
 production source of truth (tenant `begifted-education`, institute
 `696e1f4d90102225641cc413`). This page is the canonical contract for the transport

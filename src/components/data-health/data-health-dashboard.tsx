@@ -34,7 +34,7 @@ function statusTone(status: CronJobStatus): string {
   if (status === "running") return "border-sky-300 bg-sky-50 text-sky-800";
   if (status === "late") return "border-amber-300 bg-amber-50 text-amber-900";
   if (status === "failing") return "border-destructive/30 bg-destructive/10 text-destructive";
-  if (status === "manual-only") return "border-muted bg-muted text-muted-foreground";
+  if (status === "manual-only" || status === "paused") return "border-muted bg-muted text-muted-foreground";
   return "border-slate-300 bg-slate-50 text-slate-700";
 }
 
@@ -43,7 +43,7 @@ function StatusGlyph({ status, className }: { status: CronJobStatus; className?:
   if (status === "running") return <TimerReset className={className} />;
   if (status === "late") return <Clock3 className={className} />;
   if (status === "failing") return <XCircle className={className} />;
-  if (status === "manual-only") return <Play className={className} />;
+  if (status === "manual-only" || status === "paused") return <Play className={className} />;
   return <AlertTriangle className={className} />;
 }
 
