@@ -19,3 +19,13 @@ Implemented tutor/room print selection, exact Wise session rosters, refresh-befo
 The accompanying cron changes prepare the next day's assignments starting at **17:00 Bangkok**, and begin tutor/admin schedule delivery at **19:00 Bangkok** on the preceding day, with failed-delivery retries through **19:46**. Preparation still projects seven days ahead; delivery uses tomorrow's saved plan and does not regenerate rooms. A missing preparation since 17:00 blocks delivery of an older provisional plan. These are configured job start times; actual completion depends on Wise and email processing.
 
 This verification does not deploy the changes or send any schedules.
+
+## Safari margin correction — 11 September 2026
+
+The supplied Safari export used the app's general 14 mm / 12 mm print margins instead of the classroom named-page margins. The room content was scaled and shifted, and the last footer line spilled onto a second physical page. The downloaded file contained only the first 24 of Safari's 48 physical pages, ending at OMG and omitting Think Outside the Box and the remaining rooms.
+
+The classroom report now mounts its own unnamed A4 landscape, zero-margin rule alongside its existing named rule. Keeping that fallback in the mounted component prevents it from changing other reports after navigation. Footer line height is explicit and the footer avoids internal page breaks.
+
+Verification used the actual component with the global print-margin default and production line height. WebKit and Chromium passed both views, one/seven days, large Thai/English rosters, refresh failures, revision conflicts, all student occurrences, 11 pt timetable text and footer clearance. Chromium exports also assert physical page count and landscape paper dimensions with named-page support removed. Native Safari's print dialog could not be completed through the UI automation; the delivered PDF was exported with Chromium and independently inspected.
+
+The complete 12 September report, run `04b86cce-4a04-4ed4-b3e4-4ef82ab3d66b`, revision `3ba53b02`, was refreshed from Wise at 17:46 Bangkok. Its PDF contains 24 landscape pages, all 152 room assignments and all nine Kevin classes on page 16 (Think Outside the Box). Every page contains its room heading, correct page number and roster-check footer. All pages were rendered for visual review. Release verification passed 4,941 unit tests in 430 files, typechecks, production build and the 244-route guard; lint had zero errors and 19 existing warnings.

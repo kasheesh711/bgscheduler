@@ -36,7 +36,7 @@
 .change { color: #963c00; font-weight: 600; }
 .note { color: #3e4859; }
 .problem { color: #a32229; font-weight: 600; }
-.footer { position: absolute; bottom: 7mm; left: 10mm; right: 10mm; border-top: 1px solid #dfe5ec; padding-top: 3mm; display: flex; justify-content: space-between; font-size: 9pt; color: #3e4859; }
+.footer { position: absolute; bottom: 7mm; left: 10mm; right: 10mm; border-top: 1px solid #dfe5ec; padding-top: 3mm; display: flex; justify-content: space-between; font-size: 9pt; line-height: 1.25; break-inside: avoid; color: #3e4859; }
 .footer span:last-child { text-align: right; }
 .measure { position: fixed; top: 0; left: -10000px; width: 134.5mm; visibility: hidden; pointer-events: none; }
 .measure { font-family: var(--font-sarabun), sans-serif; }
