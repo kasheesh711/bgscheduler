@@ -6,7 +6,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { build } from "esbuild";
-import { chromium } from "playwright-core";
+import { chromium, webkit } from "playwright-core";
 
 const root = process.cwd();
 const output = path.resolve(process.argv[2] || path.join(tmpdir(), "classroom-print-qa"));
@@ -50,7 +50,7 @@ const server = createServer(async (req, res) => {
       const initial = fixture(false, url.searchParams.has("seven") ? 7 : 1);
       if (url.searchParams.has("failed")) initial.refreshFailed = true;
       res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.end(`<!doctype html><html><head><link rel="stylesheet" href="/app.css"><style>*{box-sizing:border-box}body{margin:0}html{--font-sarabun:'Sarabun';--font-cormorant:'Cormorant Garamond'}button{font:inherit;padding:8px;border:1px solid #126dce;border-radius:6px;background:#126dce;color:white}button:disabled{opacity:.5}main{font-family:'Sarabun',sans-serif}p{margin:0}</style></head><body><div id="app"></div><script>window.fixture=${JSON.stringify(initial)};window.printCount=0;window.print=()=>{window.printCount++}</script><script src="/app.js"></script></body></html>`);
+      res.end(`<!doctype html><html><head><style>@page{size:A4;margin:14mm 12mm}</style><link rel="stylesheet" href="/app.css"><style>*{box-sizing:border-box}body{margin:0}html{line-height:1.5;--font-sarabun:'Sarabun';--font-cormorant:'Cormorant Garamond'}button{font:inherit;padding:8px;border:1px solid #126dce;border-radius:6px;background:#126dce;color:white}button:disabled{opacity:.5}main{font-family:'Sarabun',sans-serif}p{margin:0}</style></head><body><div id="app"></div><script>window.fixture=${JSON.stringify(initial)};window.printCount=0;window.print=()=>{window.printCount++}</script><script src="/app.js"></script></body></html>`);
       return;
     }
     const file = url.pathname === "/brand/logo-horizontal.png" ? path.join(root, "public", url.pathname) : path.join(output, path.basename(url.pathname));
@@ -59,7 +59,10 @@ const server = createServer(async (req, res) => {
   } catch { res.statusCode = 404; res.end(); }
 });
 await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", headless: true });
+const useWebkit = process.env.PRINT_BROWSER === "webkit";
+const browser = useWebkit
+  ? await webkit.launch({ executablePath: process.env.WEBKIT_EXECUTABLE_PATH || undefined, headless: true })
+  : await chromium.launch({ executablePath: process.env.CHROME_PATH || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } });
 page.on("pageerror", error => errors.push(error.message));
 const base = `http://127.0.0.1:${server.address().port}`;
@@ -75,6 +78,13 @@ async function print() {
   const before = await page.evaluate(() => window.printCount);
   await page.getByRole("button", { name: "Print / Save PDF", exact: true }).click();
   await page.waitForFunction(n => window.printCount === n + 1, before);
+}
+function inspectPdf(pdf, sheets, label) {
+  const source = pdf.toString("latin1");
+  assert.equal(source.match(/\/Type\s*\/Page\b/g)?.length, sheets, `${label}: one physical page per prepared sheet`);
+  const box = source.match(/\/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)\s*\]/);
+  assert(box, `${label}: PDF paper dimensions are present`);
+  assert(Math.abs(Number(box[1]) - 841.89) < 1 && Math.abs(Number(box[2]) - 595.28) < 1, `${label}: A4 landscape paper`);
 }
 async function inspect(view, count) {
   const expected = fixture(true, count).days.flatMap(day => (view === "rooms" ? [...day.rooms.flatMap(r => r.blocks), ...day.roomExceptions] : [...day.tutors.flatMap(t => t.blocks), ...day.exceptions])).flatMap(block => block.students).sort();
@@ -103,7 +113,23 @@ async function inspect(view, count) {
   await page.emulateMedia({ media: "print" });
   const sheets = await page.locator("[data-print-sheet]:visible").count();
   assert(sheets > 0);
-  await page.pdf({ path: path.join(output, `${view}-${count}-days.pdf`), preferCSSPageSize: true, printBackground: true });
+  if (!useWebkit) {
+    // DOM page counts alone miss Safari's extra footer-only physical pages.
+    const pdf = await page.pdf({ path: path.join(output, `${view}-${count}-days.pdf`), preferCSSPageSize: true, printBackground: true });
+    inspectPdf(pdf, sheets, "Named page");
+    // Exercise the unnamed-page fallback used when named page rules are ignored.
+    await page.evaluate(() => {
+      document.querySelector("main").dataset.printApproved = "true";
+      for (const sheet of document.styleSheets) {
+        for (let i = sheet.cssRules.length - 1; i >= 0; i--) {
+          const rule = sheet.cssRules[i];
+          if (rule instanceof CSSPageRule && rule.selectorText === "classroom-a4") sheet.deleteRule(i);
+        }
+      }
+    });
+    const fallback = await page.pdf({ path: path.join(output, `${view}-${count}-days-unnamed.pdf`), preferCSSPageSize: true, printBackground: true });
+    inspectPdf(fallback, sheets, "Unnamed page fallback");
+  }
   await page.emulateMedia({ media: "screen" });
   await page.locator("[data-print-sheet]").first().screenshot({ path: path.join(output, `${view}-first-page.png`) });
   await page.evaluate(() => window.dispatchEvent(new Event("afterprint")));
@@ -138,7 +164,7 @@ try {
   await page.getByLabel("Print grouping").selectOption("tutors"); await ready();
   await print(); const sevenTutorPages = await inspect("tutors", 7);
   assert.deepEqual(errors, []);
-  const result = { tutorPages, roomPages, sevenRoomPages, sevenTutorPages, requests, studentNamesPerLargeClass: longNames.length, checks: "Roster freshness, failure/retry, revision conflict, all names, overflow, 11pt text, empty rooms, both views/day ranges and PDF export passed." };
+  const result = { browser: useWebkit ? "webkit" : "chromium", tutorPages, roomPages, sevenRoomPages, sevenTutorPages, requests, studentNamesPerLargeClass: longNames.length, checks: `Roster freshness, failure/retry, revision conflict, all names, overflow, 11pt text, empty rooms and both views/day ranges passed.${useWebkit ? "" : " Physical PDF page counts and unnamed-page fallback passed."}` };
   await writeFile(path.join(output, "results.json"), JSON.stringify(result, null, 2));
   console.log(JSON.stringify({ ...result, output }, null, 2));
 } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }

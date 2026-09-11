@@ -157,6 +157,9 @@ export function ClassroomPrintDocument({ report: initialReport, missingDates = [
 
   const warning = error ?? layout?.error ?? (report.refreshFailed ? "Some student rosters could not be refreshed from Wise. Retry before printing." : null);
   return <main ref={root} className={`begifted ${styles.root}`}>
+    {/* Safari can fall back to the app's unnamed @page rule. Mount this override
+        with the report so its landscape margins do not affect other reports. */}
+    <style>{"@page { size: A4 landscape; margin: 0; }"}</style>
     <div className={styles.toolbar}><Link href="/class-assignments">← Class Assignments</Link>
       <label>Print by <select aria-label="Print grouping" value={view} disabled={refreshing} onChange={event => {
         const next = event.target.value as ClassroomPrintView; setView(next);
