@@ -213,6 +213,21 @@ describe("runCreditControlSync", () => {
     expect(CREDIT_CONTROL_INSERT_CHUNK_SIZE * 22).toBeLessThan(65_535);
   });
 
+  it.each(["timeout", "upstream failure"])("retains the prior snapshot after a daily credit-fetch %s", async kind => {
+    const { db, events } = makeDbMock();
+    const controller = new AbortController();
+    vi.mocked(fetchSessionCredits).mockImplementation(async () => {
+      if (kind === "timeout") controller.abort(new Error("Refresh deadline exceeded"));
+      throw new Error("Wise unavailable");
+    });
+    const result = await runCreditControlSync(db, fakeClient(), "institute-1", new Date("2026-09-11T00:00:00Z"), {
+      syncRunId: "run-1", signal: controller.signal, requireComplete: true,
+    });
+    expect(result.success).toBe(false);
+    expect(events.some(event => event.table === schema.creditControlSnapshots)).toBe(false);
+    expect(latestUpdate(events, "failed")).toBeDefined();
+  });
+
   it("attaches the candidate snapshot id before inserting snapshot rows", async () => {
     const { db, events } = makeDbMock();
 

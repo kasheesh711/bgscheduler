@@ -922,7 +922,7 @@ export async function runCreditControlSync(
   client: WiseClient,
   instituteId: string,
   now = new Date(),
-  options: { syncRunId?: string; runMetadata?: Record<string, unknown> } = {},
+  options: { syncRunId?: string; runMetadata?: Record<string, unknown>; signal?: AbortSignal; requireComplete?: boolean } = {},
 ): Promise<CreditControlSyncResult> {
   const run = options.syncRunId
     ? { id: options.syncRunId }
@@ -933,6 +933,7 @@ export async function runCreditControlSync(
   let snapshotId: string | undefined;
 
   try {
+    options.signal?.throwIfAborted();
     const pastStart = addDays(now, -PAST_WINDOW_DAYS);
     const futureEnd = addDays(now, FUTURE_WINDOW_DAYS);
     const [students, pastSessions, futureSessions] = await Promise.all([
@@ -988,6 +989,10 @@ export async function runCreditControlSync(
       now,
     );
     const creditPairs = [...fetchedPairs, ...carriedRecords];
+    options.signal?.throwIfAborted();
+    if (options.requireComplete && failedCreditPairs > 0) {
+      throw new Error(`Shared student refresh incomplete: ${failedCreditPairs} credit fetches failed; prior snapshot retained.`);
+    }
 
     const [snapshot] = await db
       .insert(schema.creditControlSnapshots)
@@ -1023,10 +1028,14 @@ export async function runCreditControlSync(
       futureSessions,
     );
 
+    options.signal?.throwIfAborted();
     await insertChunks(db, schema.creditControlStudents, studentRows, "credit_control_students");
     await insertChunks(db, schema.creditControlPackages, packageRows, "credit_control_packages");
     await insertChunks(db, schema.creditControlSessions, sessionRows, "credit_control_sessions");
     await insertChunks(db, schema.creditControlCreditHistory, histories, "credit_control_credit_history");
+    // Pair/feedback fetchers tolerate individual errors in active mode. An
+    // aborted daily refresh must never promote their incomplete results.
+    options.signal?.throwIfAborted();
 
     // Atomic promotion via a single UPDATE: PostgreSQL MVCC + the row-level
     // lock held for the duration of one statement guarantee that concurrent

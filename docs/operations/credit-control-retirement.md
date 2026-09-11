@@ -13,3 +13,7 @@ Student schedules use a shared institute/month live cache for at most 60 seconds
 3. Confirm Credit Control's navigation, workspace, half-hourly refresh and saved LINE digest preferences are restored. Progress Tests remain daily.
 
 Apply the additive schedule-cache migration before deploying this change. No Credit Control table is removed or renamed. Skipped cron invocations are not proof of fresh data. A live Wise outage can exceed the schedule freshness target; the page must show this rather than claiming a fresh or empty schedule.
+
+## Failure handling
+
+Retired-mode shared refreshes require complete credit fetches and check their abort signal before creating or promoting a snapshot. A deadline or failed credit fetch records a failed run and preserves the prior active snapshot for readers and the next scheduled recovery attempt. The existing attendance and credit-history calculations remain unchanged.
