@@ -250,7 +250,7 @@ describe("sendLineCreditDigest", () => {
     vi.stubEnv("CREDIT_CONTROL_MODE", "retired");
     const push = okPush();
     const result = await sendLineCreditDigest({} as Database, NOW, { push });
-    expect(result).toMatchObject({ status: "skipped", attempted: 0, digestRunId: null });
+    expect(result).toMatchObject({ status: "skipped", skipped: true, attempted: 0, digestRunId: null });
     expect(result.message).toContain("paused");
     expect(push).not.toHaveBeenCalled();
   });

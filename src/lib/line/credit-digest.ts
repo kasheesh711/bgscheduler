@@ -59,6 +59,7 @@ const RUNOUT_WINDOW_DAYS = 7;
 
 export interface LineCreditDigestResult {
   status: "sent" | "partial" | "failed" | "skipped";
+  skipped?: boolean;
   digestDate: string;
   digestRunId: string | null;
   runsOutCount: number;
@@ -259,7 +260,7 @@ export async function sendLineCreditDigest(
     ...counts,
   });
 
-  if (!creditControlActive()) return base({ message: "Credit Control is retired; automatic credit alerts are paused." });
+  if (!creditControlActive()) return base({ skipped: true, message: "Credit Control is retired; automatic credit alerts are paused." });
 
   if (!lineSchedulerEnabled()) {
     return base({ message: "LINE scheduler is disabled; credit digest not sent." });
