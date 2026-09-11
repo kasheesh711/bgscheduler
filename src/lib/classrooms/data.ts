@@ -682,7 +682,7 @@ export function toPublishJobProgress(
     successCount: job.successCount,
     failedCount: job.failedCount,
     skippedCount: job.skippedCount,
-    remainingCount: Math.max(0, job.totalCount - job.completedCount),
+    remainingCount: Math.max(0, job.eligibleCount - job.successCount),
     elapsedMs,
     estimatedRemainingMs: estimatePublishRemainingMs(job, now),
     lastError: job.lastError,
@@ -1832,7 +1832,7 @@ async function runClassroomPublishJobUnlocked(
       .update(schema.classroomPublishJobs)
       .set({
         status: terminalStatus,
-        verifiedAt: new Date(),
+        verifiedAt: terminalStatus === "succeeded" ? new Date() : null,
         lastError: terminalStatus === "failed" ? "No Wise locations were published" : null,
         finishedAt: new Date(),
         updatedAt: new Date(),

@@ -129,7 +129,7 @@ describe("publish job progress", () => {
       updatedAt: new Date("2026-05-15T00:00:12.000Z"),
     });
 
-    expect(progress.remainingCount).toBe(0);
+    expect(progress.remainingCount).toBe(1);
     expect(progress.elapsedMs).toBe(12_000);
     expect(progress.estimatedRemainingMs).toBeNull();
   });

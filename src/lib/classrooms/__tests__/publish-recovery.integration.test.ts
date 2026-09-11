@@ -9,6 +9,7 @@ import type { WiseSession } from "@/lib/wise/types";
 import { createClassroomPublishJob, runClassroomPublishJob, getClassroomAssignmentForDate } from "../data";
 import { claimPublishAttempt, withPublishClaim, publishFence, publishRetryDelay } from "../publish-queue";
 import { getScheduleEmailPreview } from "../schedule-email";
+import { runClassroomPublishRecovery } from "../publish-worker";
 
 let handle: Awaited<ReturnType<typeof startTestDb>>, db: Database;
 beforeAll(async () => { handle = await startTestDb(); db = handle.db as unknown as Database; });
@@ -163,5 +164,16 @@ describe("durable classroom publication", () => {
   });
   it("uses bounded backoff", () => {
     expect([1, 2, 3, 4, 99].map(n => publishRetryDelay(n) / 60_000)).toEqual([5, 10, 20, 30, 30]);
+  });
+  it("closes abandoned legacy workers without touching Wise or future retries", async () => {
+    const f = await fixture();
+    const job = await createClassroomPublishJob(db, { runId: f.run.id });
+    await handle.db.update(s.classroomPublishJobs).set({ status: "running", startedAt: new Date(0) }).where(eq(s.classroomPublishJobs.id, job.jobId));
+    expect(await runClassroomPublishRecovery(db)).toEqual({ ok: true, idle: true });
+    expect((await handle.db.select().from(s.classroomPublishJobs))[0]).toMatchObject({ status: "failed", claimToken: null });
+    const retry = await createClassroomPublishJob(db, { runId: f.run.id });
+    await handle.db.update(s.classroomPublishJobs).set({ nextAttemptAt: new Date(Date.now() + 3600000) }).where(eq(s.classroomPublishJobs.id, retry.jobId));
+    expect(await runClassroomPublishRecovery(db)).toEqual({ ok: true, idle: true });
+    expect(f.get).not.toHaveBeenCalled();
   });
 });
