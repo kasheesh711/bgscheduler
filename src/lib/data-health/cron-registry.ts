@@ -55,8 +55,8 @@ export interface CronJobDefinition {
 
 export const CRON_JOBS = [
   { key: "room_booking", label: "Tutor Room Availability", feature: "Class Assignments",
-    path: "/api/internal/room-booking", schedule: "4-59/5 * * * *", cadenceLabel: "Every 5 min; occupancy 06:55–21:05 Bangkok",
-    cadenceMinutes: 5, lateAfterMinutes: 10, maxDurationSeconds: 300, manualOnly: false,
+    path: "/api/internal/room-booking", schedule: "1,5,9,13,17,21,25,29,33,37,41,45,49,53,57 * * * *", cadenceLabel: "Every 4 min; today and tomorrow, 24 hours",
+    cadenceMinutes: 4, lateAfterMinutes: 10, maxDurationSeconds: 300, manualOnly: false,
     dangerous: true, confirmationLabel: "Refreshes rooms, releases reservations superseded by Wise classes, and retries tutor notifications.", routeMethod: "GET" },
   {
     key: "classroom_weekend_check",

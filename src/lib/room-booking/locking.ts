@@ -2,8 +2,19 @@ import { randomUUID } from "crypto";
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
-import { roomDayStates } from "@/lib/db/schema";
+import { roomDayStates, roomTutorLinks } from "@/lib/db/schema";
 import { RoomBookingError } from "./model";
+
+// Tutor mutations always lock identity before dates (in ascending order).
+// Collectors and classroom writers only lock dates and never acquire tutor locks.
+export async function lockRoomTutor(tx: Database, userId: string) {
+  const [link] = await tx
+    .select()
+    .from(roomTutorLinks)
+    .where(eq(roomTutorLinks.lineUserId, userId))
+    .for("update");
+  return link;
+}
 
 export async function lockRoomDay(tx: Database, date: string) {
   await tx.insert(roomDayStates).values({ date }).onConflictDoNothing();

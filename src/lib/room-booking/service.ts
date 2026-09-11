@@ -5,7 +5,7 @@ import * as s from "@/lib/db/schema";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import { physicalRoom } from "@/lib/classrooms/room-policy";
 import { FLOOR_PLAN_ASSIGNABLE_ROOM_NAMES } from "@/lib/classrooms/floor-plan";
-import { lockRoomDay, assertRoomDayIdle } from "./locking";
+import { lockRoomDay, lockRoomTutor, assertRoomDayIdle } from "./locking";
 import {
   freeIntervals,
   overlaps,
@@ -15,6 +15,10 @@ import {
   roomWritesEnabled,
   RoomBookingError,
   validateRoomInterval,
+  validateRoomDate,
+  roomBookingDates,
+  roomReservationUpcoming,
+  formatRoomMinute,
   type Interval,
 } from "./model";
 
@@ -152,6 +156,11 @@ export async function loadRoomDay(db: Database, date = roomDate()) {
   };
 }
 export type RoomDay = Awaited<ReturnType<typeof loadRoomDay>>;
+export function roomAvailabilityStatus(day: RoomDay, now = new Date()) {
+  if (!day.rooms.length) return "no_catalog" as const;
+  if (day.state?.leaseOwner) return "updating" as const;
+  return roomDayFresh(day, now) ? ("ready" as const) : ("stale" as const);
+}
 export function roomDayFresh(day: RoomDay, now = new Date()) {
   return Boolean(
     day.state?.checkedAt &&
@@ -165,9 +174,11 @@ export async function getRoomDayView(
   db: Database,
   userId: string,
   now = new Date(),
+  date = roomDate(now),
 ) {
+  validateRoomDate(date, now);
   const tutor = await approvedRoomTutor(db, userId);
-  const day = await loadRoomDay(db, roomDate(now));
+  const day = await loadRoomDay(db, date);
   const fresh = roomDayFresh(day, now);
   const classes = day.evidence.blocks
     .filter((b) => b.canonicalKey === tutor.canonicalKey)
@@ -184,6 +195,7 @@ export async function getRoomDayView(
         room: block.remote
           ? "Remote / no room needed"
           : (block.room ?? "Room TBC"),
+        roomSource: block.roomSource ?? (block.room ? "wise" : null),
         plannedRoom:
           row?.assignedRoom &&
           row.status === "assigned" &&
@@ -195,9 +207,13 @@ export async function getRoomDayView(
     .sort((a, b) => a.startMinute - b.startMinute);
   return {
     date: day.date,
+    todayDate: roomDate(now),
+    tomorrowDate: roomBookingDates(now)[1],
     nowMinute: roomMinute(now),
     tutorName: tutor.displayName,
     fresh,
+    availabilityStatus: roomAvailabilityStatus(day, now),
+    uncertain: day.uncertain,
     checkedAt: day.state?.checkedAt?.toISOString() ?? null,
     writesEnabled: roomWritesEnabled(),
     rooms: day.rooms.map((room) => ({ ...room, free: fresh ? room.free : [] })),
@@ -206,6 +222,7 @@ export async function getRoomDayView(
       .filter((r) => r.lineUserId === userId)
       .map((r) => ({
         id: r.id,
+        date: r.date,
         roomId: r.roomId,
         roomName:
           day.rooms.find((room) => room.id === r.roomId)?.name ??
@@ -238,9 +255,11 @@ export async function createRoomReservation(
       400,
     );
   return withDatabaseTransaction(db, async (tx) => {
+    await lockRoomTutor(tx, userId);
+    const tutor = await approvedRoomTutor(tx, userId);
+    validateRoomDate(input.date, now ?? new Date());
     const state = await lockRoomDay(tx, input.date);
     assertRoomDayIdle(state);
-    const tutor = await approvedRoomTutor(tx, userId);
     const [existing] = await tx
       .select()
       .from(s.roomReservations)
@@ -273,6 +292,11 @@ export async function createRoomReservation(
       throw new RoomBookingError(
         "ROOM_UNAVAILABLE",
         "This room is not available for booking.",
+      );
+    if (day.uncertain.some((block) => overlaps(block, interval)))
+      throw new RoomBookingError(
+        "UNRESOLVED_ROOMS",
+        "Room availability needs checking for this time. Please ask an admin or choose another time.",
       );
     if (
       !room.free.some(
@@ -338,7 +362,7 @@ export async function endRoomReservation(
       .values({
         reservationId: changed.id,
         lineUserId: changed.lineUserId,
-        text: `Your room reservation ${changed.id} has been ${status}. ${reason} Use /room to see current alternatives.`,
+        text: `Your room reservation ${changed.id} on ${changed.date}, ${formatRoomMinute(changed.startMinute)}–${formatRoomMinute(changed.endMinute)} Bangkok, has been ${status}. ${reason} Send /room ${changed.date} free ${formatRoomMinute(changed.startMinute)} ${formatRoomMinute(changed.endMinute)} for alternatives, or /room web for the timetable.`,
       })
       .onConflictDoNothing();
   return changed ?? reservation;
@@ -350,23 +374,28 @@ export async function cancelRoomReservation(
   now = new Date(),
 ) {
   return withDatabaseTransaction(db, async (tx) => {
-    const [reservation] = await tx
+    let [reservation] = await tx
       .select()
       .from(s.roomReservations)
       .where(eq(s.roomReservations.id, id));
     if (!reservation)
       throw new RoomBookingError("NOT_FOUND", "Reservation not found.", 404);
-    await lockRoomDay(tx, reservation.date);
+    if (!actor.adminEmail && reservation.lineUserId !== actor.userId)
+      throw new RoomBookingError("NOT_FOUND", "Reservation not found.", 404);
+    await lockRoomTutor(tx, reservation.lineUserId);
     if (!actor.adminEmail) {
       await approvedRoomTutor(tx, actor.userId ?? "");
       if (reservation.lineUserId !== actor.userId)
         throw new RoomBookingError("NOT_FOUND", "Reservation not found.", 404);
     }
+    await lockRoomDay(tx, reservation.date);
+    [reservation] = await tx
+      .select()
+      .from(s.roomReservations)
+      .where(eq(s.roomReservations.id, id));
     if (reservation.status !== "confirmed") return reservation;
     if (
-      reservation.date < roomDate(now) ||
-      (reservation.date === roomDate(now) &&
-        reservation.endMinute <= roomMinute(now))
+      !roomReservationUpcoming(reservation.date, reservation.endMinute, now)
     ) {
       throw new RoomBookingError(
         "ENDED",
@@ -413,14 +442,17 @@ export async function mintRoomLink(
   userId: string,
   now = new Date(),
 ) {
-  await approvedRoomTutor(db, userId);
   const token = randomBytes(32).toString("base64url");
   const midnight =
     new Date(`${roomDate(now)}T00:00:00+07:00`).getTime() + 24 * 60 * 60_000;
-  await db.insert(s.roomAccessGrants).values({
-    tokenHash: hashToken(token),
-    lineUserId: userId,
-    expiresAt: new Date(Math.min(now.getTime() + 60 * 60_000, midnight)),
+  await withDatabaseTransaction(db, async (tx) => {
+    await lockRoomTutor(tx, userId);
+    await approvedRoomTutor(tx, userId);
+    await tx.insert(s.roomAccessGrants).values({
+      tokenHash: hashToken(token),
+      lineUserId: userId,
+      expiresAt: new Date(Math.min(now.getTime() + 60 * 60_000, midnight)),
+    });
   });
   return token;
 }

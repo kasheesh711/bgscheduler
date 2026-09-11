@@ -15,7 +15,7 @@ function loadVercelConfig(): VercelConfig {
  * timing, so the only place a stagger regression can be caught is here.
  */
 const EXPECTED_SCHEDULES: Record<string, string> = {
-  "/api/internal/room-booking": "4-59/5 * * * *",
+  "/api/internal/room-booking": "1,5,9,13,17,21,25,29,33,37,41,45,49,53,57 * * * *",
   "/api/internal/class-assignments/weekend-check": "0,16,31 2 * * 3-5",
   "/api/internal/sync-wise": "*/30 * * * *",
   "/api/internal/sync-sales-dashboard": "10,40 * * * *",
@@ -112,7 +112,7 @@ describe("vercel cron configuration", () => {
   // limit and Neon connection pool. Six such collisions existed while daily
   // calendar jobs sat on minutes the half-hourly syncs already owned, so the
   // check expands each schedule rather than eyeballing the minute field.
-  it("gives every cron a UTC minute no other cron can fire in", () => {
+  it("limits shared cron minutes to documented exceptions", () => {
     const crons = loadVercelConfig().crons.map((cron) => ({
       path: cron.path,
       firing: firingSet(cron.schedule),
@@ -134,13 +134,28 @@ describe("vercel cron configuration", () => {
         // the single-flight Wise sync; delivery only reads Postgres and emails.
         const nextDayClassroomOverlap = pair.has("/api/internal/sync-wise")
           && (pair.has("/api/internal/class-assignments/morning") || pair.has("/api/internal/class-assignments/admin-email"));
-        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck && !nextDayClassroomOverlap) {
+        // Room evidence expires after five minutes. The approved four-minute
+        // collector cannot fit exclusively into the remaining cron minutes.
+        // It shares one Wise listing across dates, uses refresh/day leases,
+        // and is offset from the heavy half-hour snapshot and classroom writers.
+        const roomAvailabilityOverlap = pair.has("/api/internal/room-booking");
+        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck && !nextDayClassroomOverlap && !roomAvailabilityOverlap) {
           collisions.push(`${crons[i].path} vs ${crons[j].path}`);
         }
       }
     }
 
     expect(collisions).toEqual([]);
+  });
+
+  it("refreshes room evidence every four minutes without coinciding with the heavy Wise snapshot", () => {
+    const cron = loadVercelConfig().crons.find((row) => row.path === "/api/internal/room-booking")!;
+    const minutes = [...firingSet(cron.schedule).minutes].sort((a, b) => a - b);
+    expect(minutes).toHaveLength(15);
+    expect(minutes.map((minute, index) => ((minutes[(index + 1) % minutes.length] - minute + 60) % 60))).toEqual(Array(15).fill(4));
+    expect(minutes).not.toContain(0);
+    expect(minutes).not.toContain(30);
+    expect(cron.schedule.split(" ").slice(1)).toEqual(["*", "*", "*", "*"]);
   });
 
   it("runs Wise, Sales Dashboard, and Credit Control on staggered 30-minute schedules", () => {
@@ -162,9 +177,9 @@ describe("vercel cron configuration", () => {
     expect(crons.get("/api/internal/sync-wise-activity")).toBe("2,17,32,47 * * * *");
   });
 
-  it("keeps the Wise Activity mirror clear of every other cron minute", () => {
+  it("keeps the Wise Activity mirror clear of other crons except the room collector", () => {
     const otherMinuteFields = loadVercelConfig()
-      .crons.filter((cron) => cron.path !== "/api/internal/sync-wise-activity")
+      .crons.filter((cron) => !["/api/internal/sync-wise-activity", "/api/internal/room-booking"].includes(cron.path))
       .map((cron) => cron.schedule.split(" ")[0]);
     const usedMinutes = new Set(
       otherMinuteFields.flatMap((field) =>

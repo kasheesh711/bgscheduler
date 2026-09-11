@@ -420,7 +420,7 @@ No model failure falls back to an unverified leave window. The queue retains exi
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ROOM_BOOKING_COLLECTOR_ENABLED` | disabled | Exactly `true` enables the complete Wise room-evidence refresh during 06:55–21:05 Bangkok. |
+| `ROOM_BOOKING_COLLECTOR_ENABLED` | disabled | Exactly `true` enables the complete Wise room-evidence refresh for today and tomorrow around the clock. |
 | `ROOM_BOOKING_WRITES_ENABLED` | disabled | Exactly `true` permits new standalone reservations. Cancellation, notification retries, and existing reservation blockers remain active when disabled. |
 
 Existing LINE credentials and `APP_BASE_URL` supply messaging and private mobile links. Enable the collector and verify evidence before enabling writes; see the [room booking runbook](../operations/tutor-room-booking.md).

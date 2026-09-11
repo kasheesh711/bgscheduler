@@ -25,6 +25,8 @@ interface AdminRoomData {
   reservations: AdminRoomReservation[];
   checkedAt: string | null;
   lastError: string | null;
+  availabilityStatus: RoomDayView["availabilityStatus"];
+  uncertain: RoomDayView["uncertain"];
 }
 export function useAdminRoomReservations(date: string) {
   const [data, setData] = useState<AdminRoomData | null>(null);
@@ -145,6 +147,28 @@ export function AdminRoomReservations({
       {data?.lastError && (
         <p className="text-sm text-amber-700 dark:text-amber-300">
           Latest occupancy refresh: {data.lastError}
+        </p>
+      )}
+      {data && (
+        <p className="text-sm text-muted-foreground">
+          {data.date} · Availability: {data.availabilityStatus} · Last checked:{" "}
+          {data.checkedAt
+            ? new Date(data.checkedAt).toLocaleString("en-GB", {
+                timeZone: "Asia/Bangkok",
+              })
+            : "No verified update"}
+        </p>
+      )}
+      {Boolean(data?.uncertain.length) && (
+        <p role="status" className="text-sm text-amber-700 dark:text-amber-300">
+          Room locations need checking:{" "}
+          {data!.uncertain
+            .map(
+              (interval) =>
+                `${time(interval.startMinute)}–${time(interval.endMinute)}`,
+            )
+            .join(", ")}
+          . New bookings are blocked during these intervals.
         </p>
       )}
       {data && !data.reservations.length && (

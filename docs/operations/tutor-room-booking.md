@@ -4,12 +4,12 @@ The feature ships with new reservations and Wise collection off by default. Exis
 
 1. Apply the additive `0081_tutor_room_booking.sql` migration through the normal Drizzle migration procedure before deploying code that reads the new tables.
 2. In the target environment, set `ROOM_BOOKING_COLLECTOR_ENABLED=true`. Keep `ROOM_BOOKING_WRITES_ENABLED` unset or `false`. Existing LINE credentials and `ENABLE_LINE_SCHEDULER` must permit the webhook; set `APP_BASE_URL` to the target app's HTTPS origin.
-3. Run **Data Health → Tutor Room Availability** during opening hours. Confirm a successful, complete refresh and verify the displayed room timetable against Wise. The refresh collects evidence only; it does not generate or publish classroom assignments.
+3. Run **Data Health → Tutor Room Availability** at any time. Confirm a successful, complete refresh and verify the displayed room timetable against Wise. The refresh collects evidence only; it does not generate or publish classroom assignments.
 4. Have the test tutor add/message the Official Account and DM `/room`. In **Tutor Profiles → Tutor LINE access**, verify and approve their tutor identity. Ensure the account can receive DMs before relying on private links and conflict notifications.
 5. For group access, an existing `LINE_SCHEDULE_BOT_ADMIN_IDS` admin runs `/schedule setup staff`, then `/room setup on` in the intended tutor group.
 6. In a test environment, set `ROOM_BOOKING_WRITES_ENABLED=true` and verify a free room booking, cancellation, mobile link, and conflict notification. After this check, enable the write flag in production and verify one intended real reservation with the linked tutor.
 
-The cron runs every five minutes at UTC minutes 4, 9, 14, …, 59. Room evidence refreshes only from 06:55 through 21:05 Bangkok; durable message retries can run outside that window. The first scheduled pre-opening refresh is 06:59. If evidence is more than five minutes old, tutors can view prior schedules and cancel reservations but cannot create new ones.
+The cron runs every four minutes, around the clock, at UTC minutes 1, 5, 9, …, 57. It shares one complete future-session read across today and tomorrow and retains failed dates’ previous evidence independently. This cadence deliberately overlaps some other crons but avoids the heavy half-hour Wise snapshot. Refresh/day leases continue to serialize competing room operations. If evidence is more than five minutes old, tutors can view prior schedules and cancel reservations but cannot create new ones.
 
 ## Recovery
 
@@ -40,4 +40,8 @@ Then run:
 TEST_DATABASE_URL=postgresql://room_test@127.0.0.1:55439/room_booking_test node scripts/verify-room-booking.mjs
 ```
 
-The script refuses remote database/app hosts, uses a synthetic linked tutor, verifies booking/cancellation and expired access, and saves light/dark screenshots under `/tmp/room-browser-artifacts`. It does not call Wise or send LINE messages. Run before 20:15 Bangkok so its same-day reservation fits opening hours.
+The script refuses remote database/app hosts, uses a synthetic linked tutor, verifies booking/cancellation and expired access, and saves light/dark screenshots under `/tmp/room-browser-artifacts`. It does not call Wise or send LINE messages. It can run at any time; it books tomorrow morning.
+
+## Diagnosing a zero-room report
+
+Check the selected date and interval first. Stale evidence, unresolved locations, and invalid times render explicit messages rather than a zero-room count. Class Assignments → Room reservations shows the selected date’s freshness and unresolved intervals. Online classes with blank Wise locations can use current matching Class Assignments rooms; they do not require an OFFLINE-only Wise publication. Check both dates after deployment and confirm the collector runs overnight. No database migration is required for next-day support; the original room-booking tables already carry dates.

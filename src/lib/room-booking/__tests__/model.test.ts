@@ -54,7 +54,7 @@ describe("room intervals", () => {
     (value) => expect(() => parseRoomTime(value)).toThrow(),
   );
   it.each([
-    ["2026-09-12", 600, 660],
+    ["2026-09-13", 600, 660],
     ["2026-09-11", 525, 600],
     ["2026-09-11", 600, 605],
     ["2026-09-11", 600, 1275],
@@ -77,8 +77,137 @@ describe("room intervals", () => {
         true,
       ),
     ).not.toThrow());
+  it("permits tomorrow morning and overnight booking, but never tomorrow now", () => {
+    const late = new Date("2026-09-11T16:30:00Z");
+    expect(() =>
+      validateRoomInterval(
+        "2026-09-12",
+        { startMinute: 420, endMinute: 480 },
+        late,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateRoomInterval(
+        "2026-09-12",
+        { startMinute: 420, endMinute: 480 },
+        late,
+        true,
+      ),
+    ).toThrow("today only");
+    expect(() =>
+      validateRoomInterval(
+        "2026-09-11",
+        { startMinute: 420, endMinute: 480 },
+        late,
+      ),
+    ).toThrow("passed");
+  });
+  it("rolls the date window at Bangkok midnight and rejects invalid calendar dates", () => {
+    const midnight = new Date("2026-09-11T17:00:00Z");
+    expect(() =>
+      validateRoomInterval(
+        "2026-09-11",
+        { startMinute: 600, endMinute: 660 },
+        midnight,
+      ),
+    ).toThrow("today or tomorrow");
+    expect(() =>
+      validateRoomInterval(
+        "2026-09-13",
+        { startMinute: 600, endMinute: 660 },
+        midnight,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateRoomInterval(
+        "2026-02-30",
+        { startMinute: 600, endMinute: 660 },
+        midnight,
+      ),
+    ).toThrow();
+  });
 });
 describe("Wise room evidence", () => {
+  const plan = {
+    wiseSessionId: "a",
+    startMinute: 600,
+    endMinute: 660,
+    status: "assigned",
+    assignedRoom: "Focus",
+    canonicalKey: "alice",
+  };
+  const online = wise({ type: "SCHEDULED", location: "" });
+  const members = new Map([["teacher", "alice"]]);
+  it("scopes blank online locations to the matching current classroom plan", () => {
+    const evidence = buildRoomEvidence(
+      [online],
+      "2026-09-11",
+      ["Focus", "Cool"],
+      members,
+      [plan],
+    );
+    expect(evidence.uncertain).toEqual([]);
+    expect(evidence.blocks[0]).toMatchObject({
+      room: "Focus",
+      roomSource: "classroom_plan",
+      remote: false,
+    });
+  });
+  it.each([
+    { canonicalKey: "bob" },
+    { startMinute: 615 },
+    { assignedRoom: "Inactive" },
+    { status: "needs_review" },
+    { endMinute: 675 },
+  ])("never trusts a mismatched or unassignable plan: %j", (change) => {
+    const evidence = buildRoomEvidence(
+      [online],
+      "2026-09-11",
+      ["Focus"],
+      members,
+      [{ ...plan, ...change }],
+    );
+    expect(evidence.blocks[0].room).toBeNull();
+    expect(evidence.uncertain).toHaveLength(1);
+  });
+  it("keeps Wise locations authoritative and never uses a plan to mask an unknown location", () => {
+    expect(
+      buildRoomEvidence(
+        [{ ...online, location: "Cool" }],
+        "2026-09-11",
+        ["Focus", "Cool"],
+        members,
+        [plan],
+      ).blocks[0],
+    ).toMatchObject({ room: "Cool", roomSource: "wise" });
+    expect(
+      buildRoomEvidence(
+        [{ ...online, location: "Unknown" }],
+        "2026-09-11",
+        ["Focus"],
+        members,
+        [plan],
+      ).uncertain,
+    ).toHaveLength(1);
+    expect(
+      buildRoomEvidence(
+        [{ ...online, type: "OFFLINE" }],
+        "2026-09-11",
+        ["Focus"],
+        members,
+        [plan],
+      ).uncertain,
+    ).toHaveLength(1);
+    expect(
+      buildRoomEvidence(
+        [{ ...online, meetingStatus: "CANCELLED" }],
+        "2026-09-11",
+        ["Focus"],
+        members,
+        [plan],
+      ).blocks,
+    ).toEqual([]);
+  });
   it("requires a deletion event and an exact current Wise not-found response", () => {
     const missing = new Error(
       'Wise API 400: {"status":400,"message":"Session not found!"} (https://api.wiseapp.live/user/classes/a/sessions/b)',

@@ -1,5 +1,6 @@
 import { formatInTimeZone } from "date-fns-tz";
 import { TIMEZONE } from "@/lib/normalization/timezone";
+import { addBangkokDays } from "@/lib/room-capacity/dates";
 
 export const ROOM_TIMEZONE = TIMEZONE;
 export const ROOM_OPEN = 7 * 60;
@@ -9,6 +10,28 @@ export const roomWritesEnabled = () =>
   process.env.ROOM_BOOKING_WRITES_ENABLED === "true";
 export const roomDate = (now = new Date()) =>
   formatInTimeZone(now, ROOM_TIMEZONE, "yyyy-MM-dd");
+export const roomBookingDates = (now = new Date()) => [
+  roomDate(now),
+  addBangkokDays(roomDate(now), 1),
+];
+export function validateRoomDate(date: string, now = new Date()) {
+  if (!roomBookingDates(now).includes(date))
+    throw new RoomBookingError(
+      "INVALID_DATE",
+      "Choose today or tomorrow in Bangkok.",
+      400,
+    );
+}
+export function roomReservationUpcoming(
+  date: string,
+  endMinute: number,
+  now = new Date(),
+) {
+  return (
+    date > roomDate(now) ||
+    (date === roomDate(now) && endMinute > roomMinute(now))
+  );
+}
 export const roomMinute = (now = new Date()) =>
   Number(formatInTimeZone(now, ROOM_TIMEZONE, "H")) * 60 +
   Number(formatInTimeZone(now, ROOM_TIMEZONE, "m"));
@@ -24,6 +47,7 @@ export interface RoomEvidenceBlock extends Interval {
   sessionId: string;
   classId: string | null;
   room: string | null;
+  roomSource?: "wise" | "classroom_plan";
   canonicalKey: string | null;
   remote: boolean;
   blocking: boolean;
@@ -65,10 +89,11 @@ export function validateRoomInterval(
   now = new Date(),
   immediate = false,
 ) {
-  if (date !== roomDate(now))
+  validateRoomDate(date, now);
+  if (immediate && date !== roomDate(now))
     throw new RoomBookingError(
-      "TODAY_ONLY",
-      "Room reservations are for today only.",
+      "INVALID_IMMEDIATE",
+      "Start now is available for today only.",
       400,
     );
   const { startMinute: start, endMinute: end } = interval;
@@ -86,7 +111,7 @@ export function validateRoomInterval(
       400,
     );
   }
-  if (start < roomMinute(now))
+  if (date === roomDate(now) && start < roomMinute(now))
     throw new RoomBookingError(
       "PAST_TIME",
       "That start time has passed. Choose a new time.",

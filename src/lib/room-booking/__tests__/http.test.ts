@@ -45,6 +45,22 @@ describe("room HTTP boundary", () => {
     expect(res.headers.get("Cache-Control")).toContain("no-store");
     expect(res.headers.get("Referrer-Policy")).toBe("no-referrer");
   });
+  it("passes the requested date without accepting a caller-supplied tutor", async () => {
+    vi.mocked(getRoomDayView).mockResolvedValue({
+      date: "2026-09-12",
+    } as never);
+    await GET(
+      req("availability?date=2026-09-12&lineUserId=bob", {
+        headers: { Authorization: "Bearer valid" },
+      }),
+    );
+    expect(getRoomDayView).toHaveBeenCalledWith(
+      {},
+      "alice",
+      expect.any(Date),
+      "2026-09-12",
+    );
+  });
   it("rejects body-supplied identities rather than overriding the credential", async () => {
     const res = await POST(
       req("reservations", {

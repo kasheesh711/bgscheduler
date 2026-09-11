@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { DoorOpen, CalendarDays, Clock3, RefreshCw, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,7 +14,6 @@ import {
 import type { RoomDayView } from "@/lib/room-booking/service";
 import {
   formatRoomMinute as time,
-  parseRoomTime,
   ROOM_OPEN,
   ROOM_CLOSE,
 } from "@/lib/room-booking/model";
@@ -67,6 +66,8 @@ export function RoomTimeline({ rooms }: { rooms: RoomDayView["rooms"] }) {
     </div>
   );
 }
+import { roomSelection } from "@/lib/room-booking/selection";
+
 export function RoomMobileWorkspace({
   token,
   initial,
@@ -75,12 +76,18 @@ export function RoomMobileWorkspace({
   initial: RoomDayView;
 }) {
   const [view, setView] = useState(initial);
+  const [selectedDate, setSelectedDate] = useState(initial.date);
+  const dateRef = useRef(initial.date);
+  const requestSequence = useRef(0);
   const [tab, setTab] = useState("rooms");
   const [error, setError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [expired, setExpired] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [immediate, setImmediate] = useState(initial.nowMinute >= ROOM_OPEN);
+  const [immediate, setImmediate] = useState(
+    initial.nowMinute >= ROOM_OPEN && initial.nowMinute <= ROOM_CLOSE - 15,
+  );
   const [start, setStart] = useState(
     time(
       Math.min(
@@ -124,13 +131,43 @@ export function RoomMobileWorkspace({
     [token],
   );
   const refresh = useCallback(async () => {
+    const date = dateRef.current;
+    const sequence = ++requestSequence.current;
     try {
-      setView(await request("/api/room/availability"));
+      const next = await request(`/api/room/availability?date=${date}`);
+      if (dateRef.current === date && sequence === requestSequence.current) {
+        setView(next);
+        setRefreshError(null);
+      }
     } catch (e) {
+      if (dateRef.current !== date || sequence !== requestSequence.current)
+        return;
       setView((v) => ({ ...v, fresh: false }));
-      setError(e instanceof Error ? e.message : "Could not refresh rooms.");
+      setRefreshError(
+        e instanceof Error ? e.message : "Could not refresh rooms.",
+      );
     }
   }, [request]);
+  function selectDate(date: string) {
+    if (busy) return;
+    dateRef.current = date;
+    setSelectedDate(date);
+    setSelected(null);
+    setError(null);
+    setRefreshError(null);
+    setNotice(null);
+    setImmediate(false);
+    const minute =
+      date === view.todayDate
+        ? Math.min(
+            ROOM_CLOSE - 15,
+            Math.max(ROOM_OPEN, Math.ceil(view.nowMinute / 15) * 15),
+          )
+        : ROOM_OPEN;
+    setStart(time(minute));
+    setEnd(time(Math.min(ROOM_CLOSE, minute + 60)));
+    void refresh();
+  }
   useEffect(() => {
     const tick = () => {
       if (document.visibilityState === "visible") void refresh();
@@ -142,28 +179,15 @@ export function RoomMobileWorkspace({
       document.removeEventListener("visibilitychange", tick);
     };
   }, [refresh]);
-  let from = 0,
-    to = 0;
-  try {
-    from = immediate ? view.nowMinute : parseRoomTime(start);
-    to = parseRoomTime(end);
-  } catch {
-    /* Invalid inputs disable booking. */
-  }
-  const valid =
-    from >= Math.max(ROOM_OPEN, view.nowMinute) &&
-    to <= ROOM_CLOSE &&
-    to - from >= 15 &&
-    (immediate || from % 15 === 0) &&
-    to % 15 === 0;
-  const available =
-    view.fresh && valid
-      ? view.rooms.filter((r) =>
-          r.free.some((f) => f.startMinute <= from && f.endMinute >= to),
-        )
-      : [];
+  const { from, to, valid, status, available } = roomSelection(
+    view,
+    selectedDate,
+    start,
+    end,
+    immediate,
+  );
   async function book() {
-    if (!selected || busy) return;
+    if (!selected || busy || status !== "ready") return;
     setBusy(true);
     setError(null);
     try {
@@ -171,7 +195,7 @@ export function RoomMobileWorkspace({
         method: "POST",
         body: JSON.stringify({
           roomId: selected.roomId,
-          date: view.date,
+          date: selectedDate,
           startMinute: from,
           endMinute: to,
           immediate,
@@ -179,13 +203,15 @@ export function RoomMobileWorkspace({
         }),
       });
       setNotice(
-        `${selected.name} ${result.reservation.status} · ${time(result.reservation.startMinute)}–${time(result.reservation.endMinute)}`,
+        `${selected.name} ${result.reservation.status} · ${selectedDate} · ${time(result.reservation.startMinute)}–${time(result.reservation.endMinute)}`,
       );
       setSelected(null);
       setTab("bookings");
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Booking failed.");
+      setSelected(null);
+      setTab("rooms");
       await refresh();
     } finally {
       setBusy(false);
@@ -196,7 +222,9 @@ export function RoomMobileWorkspace({
     setError(null);
     try {
       await request(`/api/room/reservations/${id}`, { method: "DELETE" });
-      setNotice("Reservation cancelled. The remaining time is available.");
+      setNotice(
+        `Reservation on ${selectedDate} cancelled. The remaining time is available.`,
+      );
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Cancellation failed.");
@@ -238,7 +266,7 @@ export function RoomMobileWorkspace({
             <div>
               <p className="font-medium">{view.tutorName}</p>
               <p className="text-sm text-muted-foreground">
-                {view.date} · 07:00–21:00 Bangkok
+                {selectedDate} · 07:00–21:00 Bangkok
               </p>
             </div>
             <Button
@@ -251,6 +279,25 @@ export function RoomMobileWorkspace({
               <RefreshCw className="size-4" />
             </Button>
           </div>
+          <div
+            className="mt-4 grid grid-cols-2 gap-2"
+            aria-label="Booking date"
+          >
+            {[
+              [view.todayDate, "Today"],
+              [view.tomorrowDate, "Tomorrow"],
+            ].map(([date, label]) => (
+              <Button
+                key={date}
+                variant={selectedDate === date ? "default" : "outline"}
+                aria-pressed={selectedDate === date}
+                disabled={busy}
+                onClick={() => selectDate(date)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
         </header>
         {notice && (
           <p
@@ -261,21 +308,30 @@ export function RoomMobileWorkspace({
             {notice}
           </p>
         )}
-        {error && (
+        {(error || refreshError) && (
           <p
             role="alert"
             className="mb-4 rounded-lg border border-destructive p-3 text-sm"
           >
-            {error}
+            {error || refreshError}
           </p>
         )}
-        {!view.fresh && (
+        {view.date !== selectedDate && (
+          <p role="status" className="mb-4 text-sm">
+            Loading rooms for {selectedDate}…
+          </p>
+        )}
+        {!view.fresh && view.date === selectedDate && (
           <p
             role="status"
             className="mb-4 rounded-lg border border-amber-500 bg-amber-500/10 p-3 text-sm"
           >
-            Availability unavailable. Waiting for a complete room update. You
-            can still cancel your reservations.
+            {view.availabilityStatus === "no_catalog"
+              ? "No active rooms are configured. Please ask an admin."
+              : view.availabilityStatus === "updating"
+                ? "Rooms are being updated. Please try again shortly."
+                : "Availability unavailable. Waiting for a complete room update."}{" "}
+            You can still cancel your reservations.
           </p>
         )}
         {!view.writesEnabled && (
@@ -303,11 +359,11 @@ export function RoomMobileWorkspace({
             </Button>
           ))}
         </nav>
-        {tab === "day" && (
+        {tab === "day" && view.date === selectedDate && (
           <section aria-label="My classes" className="space-y-3">
             <h2 className="flex items-center gap-2 text-lg font-semibold">
               <CalendarDays className="size-5" />
-              Today’s classes
+              Classes · {selectedDate}
             </h2>
             {!view.classes.length && (
               <p className="rounded-lg border p-4 text-muted-foreground">
@@ -328,6 +384,11 @@ export function RoomMobileWorkspace({
                 </p>
                 <div>
                   <h3 className="font-semibold">{c.room}</h3>
+                  {c.roomSource === "classroom_plan" && (
+                    <p className="text-sm text-muted-foreground">
+                      Class Assignments
+                    </p>
+                  )}
                   {c.plannedRoom && (
                     <p className="text-sm text-muted-foreground">
                       Planned room: {c.plannedRoom} · awaiting Wise publication
@@ -353,8 +414,9 @@ export function RoomMobileWorkspace({
                     setImmediate(e.target.checked);
                     setSelected(null);
                   }}
+                  disabled={selectedDate !== view.todayDate}
                 />
-                Start now
+                Start now (today)
               </label>
               <div className="grid grid-cols-2 gap-3">
                 <label className="space-y-1 text-sm">
@@ -367,7 +429,10 @@ export function RoomMobileWorkspace({
                     min="07:00"
                     max="20:45"
                     disabled={immediate}
-                    onChange={(e) => setStart(e.target.value)}
+                    onChange={(e) => {
+                      setStart(e.target.value);
+                      setSelected(null);
+                    }}
                   />
                 </label>
                 <label className="space-y-1 text-sm">
@@ -379,20 +444,31 @@ export function RoomMobileWorkspace({
                     step={900}
                     min="07:15"
                     max="21:00"
-                    onChange={(e) => setEnd(e.target.value)}
+                    onChange={(e) => {
+                      setEnd(e.target.value);
+                      setSelected(null);
+                    }}
                   />
                 </label>
               </div>
               {!valid && (
                 <p className="mt-2 text-sm text-muted-foreground">
-                  Choose at least 15 minutes today, ending by 21:00.
+                  Choose a future interval of at least 15 minutes on{" "}
+                  {selectedDate}, ending by 21:00.
                 </p>
               )}
             </div>
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">
-                {available.length} {available.length === 1 ? "room" : "rooms"}{" "}
-                available
+                {status === "ready"
+                  ? `${available.length} ${available.length === 1 ? "room" : "rooms"} available`
+                  : status === "loading"
+                    ? "Loading rooms…"
+                    : status === "invalid"
+                      ? "Choose a valid time"
+                      : status === "unresolved"
+                        ? "Availability needs checking"
+                        : "Availability unavailable"}
               </h2>
               <span className="text-sm text-muted-foreground">
                 {valid ? `${time(from)}–${time(to)}` : "Choose a time"}
@@ -430,27 +506,39 @@ export function RoomMobileWorkspace({
                 </article>
               ))}
             </div>
-            {view.fresh && valid && !available.length && (
+            {status === "unresolved" && (
+              <p
+                role="status"
+                className="rounded-lg border border-amber-500 p-4 text-sm"
+              >
+                A class needs its room checked during this time. Ask an admin or
+                choose another interval.
+              </p>
+            )}
+            {status === "ready" && !available.length && (
               <p className="rounded-lg border p-4 text-muted-foreground">
                 No room is free for this entire interval. Try a different time.
               </p>
             )}
             <details className="rounded-lg border p-4">
               <summary className="cursor-pointer font-medium">
-                All rooms · today’s timetable
+                All rooms · {selectedDate}
               </summary>
               <div className="mt-4">
-                <RoomTimeline rooms={view.rooms} />
+                <RoomTimeline
+                  rooms={view.date === selectedDate ? view.rooms : []}
+                />
               </div>
             </details>
           </section>
         )}
-        {tab === "bookings" && (
+        {tab === "bookings" && view.date === selectedDate && (
           <section className="space-y-3">
             <h2 className="text-lg font-semibold">My reservations</h2>
             {!view.reservations.length && (
               <p className="rounded-lg border p-4 text-muted-foreground">
-                No reservations today. Choose a free room to get started.
+                No reservations for {selectedDate}. Choose a free room to get
+                started.
               </p>
             )}
             {view.reservations.map((r) => (
@@ -459,11 +547,14 @@ export function RoomMobileWorkspace({
                   <div>
                     <h3 className="font-semibold">{r.roomName}</h3>
                     <p className="mt-1 font-mono text-sm">
-                      {time(r.startMinute)}–{time(r.endMinute)}
+                      {r.date} · {time(r.startMinute)}–{time(r.endMinute)}
                     </p>
                   </div>
                   <span className="rounded bg-muted px-2 py-1 text-xs capitalize">
-                    {r.status === "confirmed" && r.endMinute <= view.nowMinute
+                    {r.status === "confirmed" &&
+                    (r.date < view.todayDate ||
+                      (r.date === view.todayDate &&
+                        r.endMinute <= view.nowMinute))
                       ? "Ended"
                       : r.status}
                   </span>
@@ -473,16 +564,19 @@ export function RoomMobileWorkspace({
                     {r.reason}
                   </p>
                 )}
-                {r.status === "confirmed" && r.endMinute > view.nowMinute && (
-                  <Button
-                    variant="outline"
-                    className="mt-3 h-11 text-foreground"
-                    disabled={busy}
-                    onClick={() => void cancel(r.id)}
-                  >
-                    Cancel reservation
-                  </Button>
-                )}
+                {r.status === "confirmed" &&
+                  (r.date > view.todayDate ||
+                    (r.date === view.todayDate &&
+                      r.endMinute > view.nowMinute)) && (
+                    <Button
+                      variant="outline"
+                      className="mt-3 h-11 text-foreground"
+                      disabled={busy}
+                      onClick={() => void cancel(r.id)}
+                    >
+                      Cancel reservation
+                    </Button>
+                  )}
               </article>
             ))}
           </section>
@@ -513,8 +607,8 @@ export function RoomMobileWorkspace({
           <DialogHeader>
             <DialogTitle>Reserve {selected?.name}</DialogTitle>
             <DialogDescription>
-              Today, {time(from)}–{time(to)} Bangkok. A later Wise class may
-              take priority; we’ll notify you in LINE.
+              {selectedDate}, {time(from)}–{time(to)} Bangkok. A later Wise
+              class may take priority; we’ll notify you in LINE.
             </DialogDescription>
           </DialogHeader>
           {error && (
@@ -533,7 +627,11 @@ export function RoomMobileWorkspace({
             </Button>
             <Button
               className="h-11"
-              disabled={busy || !view.fresh || !valid}
+              disabled={
+                busy ||
+                status !== "ready" ||
+                !available.some((room) => room.id === selected?.roomId)
+              }
               onClick={() => void book()}
             >
               {busy ? "Booking…" : "Confirm booking"}

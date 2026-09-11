@@ -29,6 +29,7 @@ import {
   commitRoomEvidence,
   deliverRoomNotifications,
   refreshRoomOccupancy,
+  runRoomRefresh,
 } from "../refresh";
 import type { WiseClient } from "@/lib/wise/client";
 import { reviewRoomTutorLink } from "../admin";
@@ -99,9 +100,23 @@ beforeEach(async () => {
     ])
     .returning();
   [roomId, secondRoomId] = rooms.map((r) => r.id);
-  await db
-    .insert(s.roomDayStates)
-    .values({ date, checkedAt: now, evidence: { blocks: [], uncertain: [] } });
+  await db.insert(s.roomDayStates).values(
+    [date, "2026-09-12"].map((day) => ({
+      date: day,
+      checkedAt: now,
+      evidence: { blocks: [], uncertain: [] },
+    })),
+  );
+  const groups = await db.select().from(s.tutorIdentityGroups);
+  await db.insert(s.tutorIdentityGroupMembers).values(
+    groups.map((group) => ({
+      groupId: group.id,
+      snapshotId: group.snapshotId,
+      wiseTeacherId: group.canonicalKey,
+      wiseUserId: group.canonicalKey,
+      wiseDisplayName: group.displayName,
+    })),
+  );
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -126,15 +141,13 @@ describe("transactional room reservations", () => {
         .update(s.roomDayStates)
         .set({ evidence: { blocks: [block], uncertain: [] } });
       if (hasDeletion)
-        await db
-          .insert(s.wiseActivityEvents)
-          .values({
-            eventId: crypto.randomUUID(),
-            eventName: "SessionDeletedEvent",
-            eventTimestamp: now,
-            sessionId: block.sessionId,
-            classroomId: block.classId,
-          });
+        await db.insert(s.wiseActivityEvents).values({
+          eventId: crypto.randomUUID(),
+          eventName: "SessionDeletedEvent",
+          eventTimestamp: now,
+          sessionId: block.sessionId,
+          classroomId: block.classId,
+        });
       const missing = new Error(
         'Wise API 400: {"status":400,"message":"Session not found!"} (https://api.wiseapp.live/user/classes/class-id/sessions/deleted-wise-session)',
       );
@@ -148,17 +161,28 @@ describe("transactional room reservations", () => {
       if (hasDeletion) {
         await refreshRoomOccupancy(db, now, client);
         expect(
-          (await db.select().from(s.roomDayStates))[0].evidence.blocks,
+          (await db.select().from(s.roomDayStates)).find(
+            (state) => state.date === date,
+          )!.evidence.blocks,
         ).toEqual([]);
         await expect(
           createRoomReservation(db, "alice", input()),
         ).resolves.toMatchObject({ status: "confirmed" });
       } else {
-        await expect(refreshRoomOccupancy(db, now, client)).rejects.toThrow(
-          "Session not found",
-        );
+        expect(await refreshRoomOccupancy(db, now, client)).toMatchObject({
+          ok: false,
+          dates: expect.arrayContaining([
+            {
+              date,
+              ok: false,
+              error: expect.stringContaining("Session not found"),
+            },
+          ]),
+        });
         expect(
-          (await db.select().from(s.roomDayStates))[0].evidence.blocks,
+          (await db.select().from(s.roomDayStates)).find(
+            (state) => state.date === date,
+          )!.evidence.blocks,
         ).toEqual([block]);
         await expect(
           createRoomReservation(db, "alice", input()),
@@ -253,7 +277,9 @@ describe("transactional room reservations", () => {
   it("preempts once, preserves audit, and retries a failed private notification", async () => {
     // A booking can commit while Wise evidence is fetched. The collector must
     // reconcile the current reservations without discarding its fresh read.
-    const [state] = await db.select().from(s.roomDayStates);
+    const state = (await db.select().from(s.roomDayStates)).find(
+      (row) => row.date === date,
+    )!;
     const a = await createRoomReservation(db, "alice", input());
     const evidence = {
       blocks: [
@@ -357,6 +383,296 @@ describe("transactional room reservations", () => {
     ).toBe("no_room");
   });
 });
+describe("next-day availability and lifecycle", () => {
+  const tomorrow = "2026-09-12";
+  it("books and cancels tomorrow morning after closing while stale reads still block new holds", async () => {
+    vi.setSystemTime(new Date("2026-09-11T16:30:00Z"));
+    await db.update(s.roomDayStates).set({ checkedAt: new Date() });
+    const reservation = await createRoomReservation(
+      db,
+      "alice",
+      input({ date: tomorrow, startMinute: 420, endMinute: 480 }),
+    );
+    expect(reservation.date).toBe(tomorrow);
+    expect(
+      await getRoomDayView(db, "alice", new Date(), tomorrow),
+    ).toMatchObject({
+      date: tomorrow,
+      fresh: true,
+      reservations: [
+        expect.objectContaining({ date: tomorrow, status: "confirmed" }),
+      ],
+    });
+    await db.update(s.roomDayStates).set({ checkedAt: null });
+    await expect(
+      createRoomReservation(
+        db,
+        "bob",
+        input({ date: tomorrow, startMinute: 420, endMinute: 480 }),
+      ),
+    ).rejects.toMatchObject({ code: "STALE_ROOMS" });
+    expect(
+      (await cancelRoomReservation(db, reservation.id, { userId: "alice" }))
+        .status,
+    ).toBe("cancelled");
+  });
+  it("keeps tomorrow conflicts atomic across separate connections", async () => {
+    const clients = await Promise.all([
+      handle.pool.connect(),
+      handle.pool.connect(),
+    ]);
+    const { drizzle } = await import("drizzle-orm/node-postgres");
+    try {
+      const databases = clients.map(
+        (client) => drizzle(client, { schema: s }) as unknown as Database,
+      );
+      const results = await Promise.allSettled(
+        databases.map((database, index) =>
+          createRoomReservation(
+            database,
+            index ? "bob" : "alice",
+            input({ date: tomorrow }),
+          ),
+        ),
+      );
+      expect(
+        results.filter((result) => result.status === "fulfilled"),
+      ).toHaveLength(1);
+      expect(
+        results.find((result) => result.status === "rejected"),
+      ).toMatchObject({ reason: { code: "ROOM_CONFLICT" } });
+    } finally {
+      clients.forEach((client) => client.release());
+    }
+  });
+  it("releases both dates and prevents a racing booking when tutor access is revoked", async () => {
+    await createRoomReservation(db, "alice", input());
+    await createRoomReservation(db, "alice", input({ date: tomorrow }));
+    const results = await Promise.allSettled([
+      reviewRoomTutorLink(
+        db,
+        { lineUserId: "alice", status: "revoked" },
+        "admin@test",
+      ),
+      createRoomReservation(
+        db,
+        "alice",
+        input({ date: tomorrow, startMinute: 720, endMinute: 780 }),
+      ),
+    ]);
+    expect(results[0].status).toBe("fulfilled");
+    expect(
+      (await db.select().from(s.roomReservations)).filter(
+        (row) => row.status === "confirmed",
+      ),
+    ).toEqual([]);
+    await expect(
+      createRoomReservation(db, "alice", input({ date: tomorrow })),
+    ).rejects.toMatchObject({ code: "TUTOR_ACCESS" });
+  });
+  it("preempts tomorrow morning once even when today's clock is later", async () => {
+    const reservation = await createRoomReservation(
+      db,
+      "alice",
+      input({ date: tomorrow, startMinute: 420, endMinute: 480 }),
+    );
+    const evidence = {
+      blocks: [
+        {
+          sessionId: "tomorrow-class",
+          classId: "class",
+          canonicalKey: "bob",
+          room: "Focus",
+          roomSource: "classroom_plan" as const,
+          remote: false,
+          blocking: true,
+          status: "UPCOMING",
+          startMinute: 420,
+          endMinute: 480,
+        },
+      ],
+      uncertain: [],
+    };
+    await commitRoomEvidence(db, tomorrow, 0, evidence, now);
+    await commitRoomEvidence(db, tomorrow, 1, evidence, now);
+    expect(
+      (await db.select().from(s.roomReservations)).find(
+        (row) => row.id === reservation.id,
+      )?.status,
+    ).toBe("preempted");
+    const notifications = await db.select().from(s.roomNotifications);
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].text).toContain("2026-09-12, 07:00–08:00");
+  });
+  it("refreshes both dates from one future listing and retains a blocked writer's date", async () => {
+    const client = {
+      get: vi.fn(async () => ({ data: { sessions: [], page_count: 0 } })),
+    } as unknown as WiseClient;
+    const result = await refreshRoomOccupancy(db, now, client);
+    expect(result.dates).toEqual([
+      expect.objectContaining({ date, ok: true }),
+      expect.objectContaining({ date: tomorrow, ok: true }),
+    ]);
+    expect(
+      vi
+        .mocked(client.get)
+        .mock.calls.filter((call) => call[1]?.status === "FUTURE"),
+    ).toHaveLength(1);
+    await db
+      .update(s.roomDayStates)
+      .set({
+        leaseOwner: "active-writer",
+        leaseUntil: new Date(now.getTime() + 900000),
+      })
+      .where(eq(s.roomDayStates.date, tomorrow));
+    expect(await refreshRoomOccupancy(db, now, client)).toMatchObject({
+      ok: false,
+      dates: [
+        expect.objectContaining({ date, ok: true }),
+        expect.objectContaining({ date: tomorrow, ok: false }),
+      ],
+    });
+  });
+  it("retains evidence and releases refresh claims on incomplete Wise reads", async () => {
+    const client = {
+      get: vi.fn(async () => ({ data: { sessions: [], page_count: 2 } })),
+    } as unknown as WiseClient;
+    const result = await refreshRoomOccupancy(db, now, client);
+    expect(result.ok).toBe(false);
+    expect(result.dates).toHaveLength(2);
+    for (const state of await db.select().from(s.roomDayStates)) {
+      expect(state.checkedAt).toEqual(now);
+      expect(state.refreshOwner).toBeNull();
+      expect(state.lastError).toBeTruthy();
+    }
+  });
+  it("refreshes overnight when enabled and isolates today's past-list failures", async () => {
+    vi.setSystemTime(new Date("2026-09-11T16:30:00Z"));
+    vi.stubEnv("ROOM_BOOKING_COLLECTOR_ENABLED", "true");
+    const client = {
+      get: vi.fn(async (_path: string, params: Record<string, string>) => {
+        if (params.status === "PAST")
+          throw new Error("Past listing unavailable");
+        return { data: { sessions: [], page_count: 0 } };
+      }),
+    } as unknown as WiseClient;
+    const result = await runRoomRefresh(db, new Date(), client);
+    expect(result).toMatchObject({
+      ok: false,
+      dates: [
+        expect.objectContaining({ date, ok: false }),
+        expect.objectContaining({ date: tomorrow, ok: true }),
+      ],
+    });
+  });
+  it("rejects tomorrow now, later dates, and stale confirmations across Bangkok midnight", async () => {
+    await expect(
+      createRoomReservation(
+        db,
+        "alice",
+        input({ date: tomorrow, immediate: true }),
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_IMMEDIATE" });
+    await expect(
+      createRoomReservation(db, "alice", input({ date: "2026-09-13" })),
+    ).rejects.toMatchObject({ code: "INVALID_DATE" });
+    vi.setSystemTime(new Date("2026-09-11T17:00:00Z"));
+    await expect(
+      createRoomReservation(db, "alice", input()),
+    ).rejects.toMatchObject({ code: "INVALID_DATE" });
+    await db.update(s.roomDayStates).set({ checkedAt: new Date() });
+    expect(
+      (
+        await createRoomReservation(
+          db,
+          "alice",
+          input({ date: tomorrow, startMinute: 420, endMinute: 480 }),
+        )
+      ).date,
+    ).toBe(tomorrow);
+  });
+  it("does not depend on opening hours when the collector is disabled", async () => {
+    vi.stubEnv("ROOM_BOOKING_COLLECTOR_ENABLED", "false");
+    expect(
+      await runRoomRefresh(db, new Date("2026-09-11T16:30:00Z")),
+    ).toMatchObject({ skipped: true });
+  });
+  it("reproduces five blank online locations while preserving other free rooms", async () => {
+    const group = (await db.select().from(s.tutorIdentityGroups)).find(
+      (row) => row.canonicalKey === "alice",
+    )!;
+    const [run] = await db
+      .insert(s.classroomAssignmentRuns)
+      .values({ assignmentDate: date, snapshotId: group.snapshotId })
+      .returning();
+    const starts = [960, 960, 1020, 1080, 1140];
+    const sessions = starts.map((start, index) => ({
+      _id: `online-${index}`,
+      classroomId: "class",
+      userId: "alice",
+      type: "SCHEDULED",
+      location: "",
+      meetingStatus: "UPCOMING",
+      scheduledStartTime: `${date}T${String(Math.floor(start / 60)).padStart(2, "0")}:00:00+07:00`,
+      scheduledEndTime: `${date}T${String(Math.floor(start / 60) + 1).padStart(2, "0")}:00:00+07:00`,
+    }));
+    await db.insert(s.classroomAssignmentRows).values(
+      sessions.map((session, index) => ({
+        runId: run.id,
+        snapshotId: group.snapshotId,
+        groupId: group.id,
+        canonicalKey: "alice",
+        tutorDisplayName: "Alice",
+        wiseTeacherId: "alice",
+        wiseSessionId: session._id,
+        wiseClassId: "class",
+        startTime: new Date(session.scheduledStartTime),
+        endTime: new Date(session.scheduledEndTime),
+        startMinute: starts[index],
+        endMinute: starts[index] + 60,
+        weekday: 5,
+        wiseStatus: "UPCOMING",
+        sessionType: "SCHEDULED",
+        minCapacity: 1,
+        assignedRoom: "Focus",
+      })),
+    );
+    const client = {
+      get: vi.fn(async (_path: string, params: Record<string, string>) => ({
+        data: {
+          sessions: params.status === "FUTURE" ? sessions : [],
+          page_count: params.status === "FUTURE" ? 1 : 0,
+        },
+      })),
+    } as unknown as WiseClient;
+    expect((await refreshRoomOccupancy(db, now, client)).ok).toBe(true);
+    const view = await getRoomDayView(db, "alice");
+    expect(view.uncertain).toEqual([]);
+    expect(view.classes).toHaveLength(5);
+    expect(
+      view.classes.every((row) => row.roomSource === "classroom_plan"),
+    ).toBe(true);
+    expect(view.rooms.find((room) => room.id === secondRoomId)?.free).toEqual([
+      { startMinute: 420, endMinute: 1260 },
+    ]);
+    await expect(
+      createRoomReservation(
+        db,
+        "bob",
+        input({ startMinute: 960, endMinute: 1020 }),
+      ),
+    ).rejects.toMatchObject({ code: "ROOM_CONFLICT" });
+    expect(
+      (
+        await createRoomReservation(
+          db,
+          "bob",
+          input({ roomId: secondRoomId, startMinute: 960, endMinute: 1020 }),
+        )
+      ).status,
+    ).toBe("confirmed");
+  });
+});
 describe("LINE authorization and idempotency", () => {
   const event = (text: string, extra: Record<string, unknown> = {}) => ({
     eventId: crypto.randomUUID(),
@@ -423,6 +739,55 @@ describe("LINE authorization and idempotency", () => {
     expect(
       message.type === "flex" ? message.contents.contents : undefined,
     ).toHaveLength(2);
+  });
+  it("carries tomorrow through native time pickers, room buttons, and confirmation", async () => {
+    await routeRoomCommand(db, event("/room tomorrow choose"));
+    let actions = await db.select().from(s.roomActions);
+    const start = actions.find(
+      (row) => row.command === "2026-09-12 choose-end",
+    )!;
+    await routeRoomCommand(
+      db,
+      event(`room:${start.id}`, { params: { time: "07:00" } }),
+    );
+    actions = await db.select().from(s.roomActions);
+    const end = actions.find((row) => row.command === "2026-09-12 free 07:00")!;
+    await routeRoomCommand(
+      db,
+      event(`room:${end.id}`, { params: { time: "08:00" } }),
+    );
+    actions = await db.select().from(s.roomActions);
+    const book = actions.find(
+      (row) => row.command === `2026-09-12 book ${roomId} 07:00 08:00`,
+    )!;
+    await routeRoomCommand(db, event(`room:${book.id}`));
+    actions = await db.select().from(s.roomActions);
+    const confirm = actions.find((row) => row.command.startsWith("confirm "))!;
+    await routeRoomCommand(db, event(`room:${confirm.id}`));
+    expect((await db.select().from(s.roomReservations))[0]).toMatchObject({
+      date: "2026-09-12",
+      startMinute: 420,
+    });
+    await routeRoomCommand(db, event("/room bookings"));
+    expect(
+      JSON.stringify(vi.mocked(sendLineRoomMessages).mock.lastCall),
+    ).toContain("2026-09-12");
+  });
+  it("returns fresh alternatives after a competing teacher wins", async () => {
+    await routeRoomCommand(db, event("/room tomorrow book Focus 07:00 08:00"));
+    const confirm = (await db.select().from(s.roomActions)).find((row) =>
+      row.command.startsWith("confirm "),
+    )!;
+    await createRoomReservation(
+      db,
+      "bob",
+      input({ date: "2026-09-12", startMinute: 420, endMinute: 480 }),
+    );
+    await routeRoomCommand(db, event(`room:${confirm.id}`));
+    const reply = JSON.stringify(vi.mocked(sendLineRoomMessages).mock.lastCall);
+    expect(reply).toContain("taken before your confirmation");
+    expect(reply).toContain("Cool");
+    expect(await db.select().from(s.roomReservations)).toHaveLength(1);
   });
   it("DMs mobile links without putting credentials in the group response", async () => {
     await db.insert(s.lineGroupSettings).values({

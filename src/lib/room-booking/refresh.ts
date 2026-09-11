@@ -22,11 +22,9 @@ import { addBangkokDays } from "@/lib/room-capacity/dates";
 import { lockRoomDay, assertRoomDayIdle } from "./locking";
 import { loadRoomDay, endRoomReservation } from "./service";
 import {
-  roomDate,
-  roomMinute,
+  roomBookingDates,
+  roomReservationUpcoming,
   overlaps,
-  ROOM_OPEN,
-  ROOM_CLOSE,
   type RoomEvidence,
   type RoomEvidenceBlock,
   RoomBookingError,
@@ -116,6 +114,8 @@ export function buildRoomEvidence(
     startMinute: number;
     endMinute: number;
     status: string;
+    assignedRoom?: string;
+    canonicalKey?: string | null;
   }> = [],
 ): RoomEvidence {
   if (
@@ -155,7 +155,7 @@ export function buildRoomEvidence(
     const matching = rooms.filter(
       (name) => physicalRoom(name) === physicalRoom(session.location ?? ""),
     );
-    const room = matching.length === 1 ? matching[0] : null;
+    const wiseRoom = matching.length === 1 ? matching[0] : null;
     // Online sessions inherit an onsite requirement through transitive <60m chains.
     const chain = new Set([b]);
     let changed = true;
@@ -175,23 +175,46 @@ export function buildRoomEvidence(
           changed = true;
         }
     }
-    const plan = plans.find(
+    const sessionPlans = plans.filter((p) => p.wiseSessionId === session._id);
+    const plan = sessionPlans.find(
       (p) =>
         p.wiseSessionId === session._id &&
         p.startMinute === startMinute &&
         p.endMinute === endMinute,
     );
+    const plannedRoom =
+      plan?.assignedRoom &&
+      plan.status === "assigned" &&
+      key &&
+      plan.canonicalKey === key &&
+      isOnlineSessionType(session.type) &&
+      !session.location?.trim()
+        ? (rooms.find(
+            (name) => physicalRoom(name) === physicalRoom(plan.assignedRoom!),
+          ) ?? null)
+        : null;
+    const room = wiseRoom ?? plannedRoom;
     const remote =
       !room &&
+      !session.location?.trim() &&
       Boolean(key) &&
       isOnlineSessionType(session.type) &&
-      (!plan || plan.status === "remote") &&
+      (!sessionPlans.length ||
+        (plan?.status === "remote" &&
+          (!plan.canonicalKey || plan.canonicalKey === key))) &&
       [...chain].every((c) => isOnlineSessionType(c.session.type));
     const blocking = isBlockingStatus(session.meetingStatus);
     const block = {
       sessionId: session._id,
       classId: getWiseSessionClassId(session) ?? null,
       room,
+      ...(room
+        ? {
+            roomSource: wiseRoom
+              ? ("wise" as const)
+              : ("classroom_plan" as const),
+          }
+        : {}),
       canonicalKey: key,
       remote,
       blocking,
@@ -234,7 +257,14 @@ export async function commitRoomEvidence(
         ),
       );
     for (const { reservation, room } of reservations) {
-      if (reservation.endMinute <= roomMinute(checkedAt)) continue;
+      if (
+        !roomReservationUpcoming(
+          reservation.date,
+          reservation.endMinute,
+          checkedAt,
+        )
+      )
+        continue;
       if (
         evidence.blocks.some(
           (b) =>
@@ -248,7 +278,7 @@ export async function commitRoomEvidence(
           tx,
           reservation,
           "preempted",
-          `A Wise class now needs ${room} during your reservation.`,
+          `A scheduled class now needs ${room} during your reservation.`,
           "wise-refresh",
           true,
         );
@@ -270,170 +300,234 @@ export async function refreshRoomOccupancy(
   now = new Date(),
   client = createWiseClient(),
 ) {
-  const date = roomDate(now),
-    owner = randomUUID();
+  const dates = roomBookingDates(now);
+  const owner = randomUUID();
+  const startedAt = new Date();
+  const deadlineAt = Date.now() + 210_000;
+  // Claim both days before reading Wise, including across the midnight rollover.
   await withDatabaseTransaction(db, async (tx) => {
-    const state = await lockRoomDay(tx, date);
-    if (state.refreshUntil && state.refreshUntil.getTime() > Date.now())
-      throw new RoomBookingError(
-        "REFRESH_RUNNING",
-        "Another room refresh is running.",
-      );
-    await tx
-      .update(s.roomDayStates)
-      .set({
-        refreshOwner: owner,
-        refreshUntil: new Date(Date.now() + 240_000),
-      })
-      .where(eq(s.roomDayStates.date, date));
+    for (const date of dates) {
+      const state = await lockRoomDay(tx, date);
+      if (state.refreshUntil && state.refreshUntil.getTime() > Date.now())
+        throw new RoomBookingError(
+          "REFRESH_RUNNING",
+          "Another room refresh is running.",
+        );
+      await tx
+        .update(s.roomDayStates)
+        .set({
+          refreshOwner: owner,
+          refreshUntil: new Date(Date.now() + 240_000),
+        })
+        .where(eq(s.roomDayStates.date, date));
+    }
   });
+  const results: Array<{
+    date: string;
+    ok: boolean;
+    sessions?: number;
+    uncertain?: number;
+    error?: string;
+  }> = [];
   try {
-    return await refreshRoomOccupancyUnlocked(db, now, client);
+    const days = [];
+    for (const date of dates) {
+      try {
+        await withDatabaseTransaction(db, async (tx) => {
+          const state = await lockRoomDay(tx, date);
+          if (state.leaseUntil && state.leaseUntil.getTime() < Date.now()) {
+            await tx
+              .update(s.roomDayStates)
+              .set({
+                leaseOwner: null,
+                leaseUntil: null,
+                checkedAt: null,
+                revision: sql`${s.roomDayStates.revision} + 1`,
+              })
+              .where(eq(s.roomDayStates.date, date));
+          } else assertRoomDayIdle(state);
+        });
+        const day = await loadRoomDay(db, date);
+        if (!day.rooms.length)
+          throw new Error("The active room catalog is empty");
+        days.push(day);
+      } catch (error) {
+        results.push({
+          date,
+          ok: false,
+          error: error instanceof Error ? error.message : "Room refresh failed",
+        });
+      }
+    }
+    if (days.length) {
+      const institute =
+        process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
+      try {
+        const members = await db
+          .select({
+            userId: s.tutorIdentityGroupMembers.wiseUserId,
+            teacherId: s.tutorIdentityGroupMembers.wiseTeacherId,
+            key: s.tutorIdentityGroups.canonicalKey,
+          })
+          .from(s.tutorIdentityGroupMembers)
+          .innerJoin(
+            s.tutorIdentityGroups,
+            eq(s.tutorIdentityGroups.id, s.tutorIdentityGroupMembers.groupId),
+          )
+          .innerJoin(
+            s.snapshots,
+            eq(s.snapshots.id, s.tutorIdentityGroups.snapshotId),
+          )
+          .where(eq(s.snapshots.active, true));
+        const identities = new Map<string, string | null>();
+        for (const m of members)
+          for (const id of [m.userId, m.teacherId].filter(Boolean) as string[])
+            identities.set(
+              id,
+              identities.has(id) && identities.get(id) !== m.key ? null : m.key,
+            );
+        // One strict read shared by both days. Keep the age of the oldest read.
+        const future = await fetchAllFutureSessions(client, institute, {
+          strict: true,
+          deadlineAt,
+        });
+        let past: WiseSession[] = [];
+        let pastError: unknown;
+        try {
+          past = await pastToday(client, institute, dates[0], deadlineAt);
+        } catch (error) {
+          pastError = error;
+        }
+        const shared = new Map(future.map((session) => [session._id, session]));
+        for (const day of days) {
+          try {
+            if (day.date === dates[0] && pastError) throw pastError;
+            const sessions = new Map(
+              day.date === dates[0]
+                ? past.map((session) => [session._id, session])
+                : [],
+            );
+            for (const [id, session] of shared) sessions.set(id, session);
+            const expected = new Map([
+              ...day.evidence.blocks.map(
+                (block) => [block.sessionId, block.classId] as const,
+              ),
+              ...day.rows.map(
+                (row) => [row.wiseSessionId, row.wiseClassId] as const,
+              ),
+            ]);
+            const missingIds = [...expected.keys()].filter(
+              (id) => !sessions.has(id),
+            );
+            const deletedIds = new Set(
+              missingIds.length
+                ? (
+                    await db
+                      .select({ id: s.wiseActivityEvents.sessionId })
+                      .from(s.wiseActivityEvents)
+                      .where(
+                        and(
+                          eq(
+                            s.wiseActivityEvents.eventName,
+                            "SessionDeletedEvent",
+                          ),
+                          inArray(s.wiseActivityEvents.sessionId, missingIds),
+                        ),
+                      )
+                  ).map((row) => row.id)
+                : [],
+            );
+            for (const [id, classId] of expected) {
+              if (sessions.has(id)) continue;
+              if (!classId)
+                throw new Error(
+                  "Cannot verify a missing Wise session without its class ID",
+                );
+              let detail;
+              try {
+                detail = await fetchWiseSessionDetail(client, classId, id, {
+                  deadlineAt,
+                });
+              } catch (error) {
+                if (confirmsRoomSessionDeletion(error, deletedIds.has(id)))
+                  continue;
+                throw error;
+              }
+              if (
+                detail._id !== id ||
+                !Number.isFinite(Date.parse(detail.scheduledStartTime)) ||
+                !Number.isFinite(Date.parse(detail.scheduledEndTime))
+              )
+                throw new Error("Unable to verify a missing Wise session");
+              sessions.set(id, detail);
+            }
+            const evidence = buildRoomEvidence(
+              [...sessions.values()],
+              day.date,
+              day.rooms.map((room) => room.name),
+              identities,
+              day.rows,
+            );
+            await commitRoomEvidence(
+              db,
+              day.date,
+              day.state!.revision,
+              evidence,
+              startedAt,
+            );
+            results.push({
+              date: day.date,
+              ok: true,
+              sessions: evidence.blocks.length,
+              uncertain: evidence.uncertain.length,
+            });
+          } catch (error) {
+            results.push({
+              date: day.date,
+              ok: false,
+              error:
+                error instanceof Error ? error.message : "Room refresh failed",
+            });
+          }
+        }
+      } catch (error) {
+        for (const day of days)
+          if (!results.some((result) => result.date === day.date))
+            results.push({
+              date: day.date,
+              ok: false,
+              error:
+                error instanceof Error ? error.message : "Room refresh failed",
+            });
+      }
+    }
+    for (const result of results)
+      if (!result.ok)
+        await db
+          .update(s.roomDayStates)
+          .set({ lastError: result.error })
+          .where(
+            and(
+              eq(s.roomDayStates.date, result.date),
+              eq(s.roomDayStates.refreshOwner, owner),
+            ),
+          );
+    const ok = results.every((result) => result.ok);
+    return {
+      ok,
+      dates: results.sort((a, b) => a.date.localeCompare(b.date)),
+      ...(!ok
+        ? {
+            errorSummary:
+              "Room availability refresh incomplete; previous evidence retained for failed dates.",
+          }
+        : {}),
+    };
   } finally {
     await db
       .update(s.roomDayStates)
       .set({ refreshOwner: null, refreshUntil: null })
-      .where(
-        and(
-          eq(s.roomDayStates.date, date),
-          eq(s.roomDayStates.refreshOwner, owner),
-        ),
-      );
-  }
-}
-async function refreshRoomOccupancyUnlocked(
-  db: Database,
-  now: Date,
-  client: WiseClient,
-) {
-  const date = roomDate(now);
-  const startedAt = new Date();
-  const deadlineAt = Date.now() + 210_000;
-  // Clearing an abandoned writer invalidates all evidence before another reader
-  // can book. Route writers are bounded to 800s; the lease is 900s.
-  await withDatabaseTransaction(db, async (tx) => {
-    const state = await lockRoomDay(tx, date);
-    if (state.leaseUntil && state.leaseUntil.getTime() < Date.now()) {
-      await tx
-        .update(s.roomDayStates)
-        .set({
-          leaseOwner: null,
-          leaseUntil: null,
-          checkedAt: null,
-          revision: sql`${s.roomDayStates.revision} + 1`,
-        })
-        .where(eq(s.roomDayStates.date, date));
-    } else assertRoomDayIdle(state);
-  });
-  const day = await loadRoomDay(db, date);
-  if (!day.rooms.length) throw new Error("The active room catalog is empty");
-  const institute = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
-  try {
-    const members = await db
-      .select({
-        userId: s.tutorIdentityGroupMembers.wiseUserId,
-        teacherId: s.tutorIdentityGroupMembers.wiseTeacherId,
-        key: s.tutorIdentityGroups.canonicalKey,
-      })
-      .from(s.tutorIdentityGroupMembers)
-      .innerJoin(
-        s.tutorIdentityGroups,
-        eq(s.tutorIdentityGroups.id, s.tutorIdentityGroupMembers.groupId),
-      )
-      .innerJoin(
-        s.snapshots,
-        eq(s.snapshots.id, s.tutorIdentityGroups.snapshotId),
-      )
-      .where(eq(s.snapshots.active, true));
-    const identities = new Map<string, string | null>();
-    for (const m of members)
-      for (const id of [m.userId, m.teacherId].filter(Boolean) as string[])
-        identities.set(
-          id,
-          identities.has(id) && identities.get(id) !== m.key ? null : m.key,
-        );
-    const future = await fetchAllFutureSessions(client, institute, {
-      strict: true,
-      deadlineAt,
-    });
-    const past = await pastToday(client, institute, date, deadlineAt);
-    const sessions = new Map(past.map((s) => [s._id, s]));
-    for (const session of future) sessions.set(session._id, session);
-    // Previously observed or planned sessions cannot disappear into an empty room.
-    const expected = new Map([
-      ...day.evidence.blocks.map((b) => [b.sessionId, b.classId] as const),
-      ...day.rows.map((r) => [r.wiseSessionId, r.wiseClassId] as const),
-    ]);
-    const missingIds = [...expected.keys()].filter((id) => !sessions.has(id));
-    const deletedIds = new Set(
-      missingIds.length
-        ? (
-            await db
-              .select({ id: s.wiseActivityEvents.sessionId })
-              .from(s.wiseActivityEvents)
-              .where(
-                and(
-                  eq(s.wiseActivityEvents.eventName, "SessionDeletedEvent"),
-                  inArray(s.wiseActivityEvents.sessionId, missingIds),
-                ),
-              )
-          ).map((row) => row.id)
-        : [],
-    );
-    for (const [id, classId] of expected)
-      if (!sessions.has(id)) {
-        if (!classId)
-          throw new Error(
-            "Cannot verify a missing Wise session without its class ID",
-          );
-        let detail;
-        try {
-          detail = await fetchWiseSessionDetail(client, classId, id, {
-            deadlineAt,
-          });
-        } catch (error) {
-          // A persisted deletion event plus a current explicit not-found proves
-          // deletion. List omission, auth errors, or generic 404s do not.
-          if (confirmsRoomSessionDeletion(error, deletedIds.has(id))) continue;
-          throw error;
-        }
-        if (
-          detail._id !== id ||
-          !Number.isFinite(Date.parse(detail.scheduledStartTime)) ||
-          !Number.isFinite(Date.parse(detail.scheduledEndTime))
-        )
-          throw new Error("Unable to verify a missing Wise session");
-        sessions.set(id, detail);
-      }
-    const evidence = buildRoomEvidence(
-      [...sessions.values()],
-      date,
-      day.rooms.map((r) => r.name),
-      identities,
-      day.rows,
-    );
-    await commitRoomEvidence(
-      db,
-      date,
-      day.state!.revision,
-      evidence,
-      startedAt,
-    );
-    return {
-      ok: true,
-      date,
-      sessions: evidence.blocks.length,
-      uncertain: evidence.uncertain.length,
-    };
-  } catch (error) {
-    await db
-      .update(s.roomDayStates)
-      .set({
-        lastError:
-          error instanceof Error ? error.message : "Room refresh failed",
-      })
-      .where(eq(s.roomDayStates.date, date));
-    throw error;
+      .where(eq(s.roomDayStates.refreshOwner, owner));
   }
 }
 export async function deliverRoomNotifications(db: Database) {
@@ -469,17 +563,17 @@ export async function deliverRoomNotifications(db: Database) {
     }
   }
 }
-export async function runRoomRefresh(db: Database, now = new Date()) {
-  if (
-    process.env.ROOM_BOOKING_COLLECTOR_ENABLED !== "true" ||
-    roomMinute(now) < ROOM_OPEN - 5 ||
-    roomMinute(now) > ROOM_CLOSE + 5
-  ) {
+export async function runRoomRefresh(
+  db: Database,
+  now = new Date(),
+  client?: WiseClient,
+) {
+  if (process.env.ROOM_BOOKING_COLLECTOR_ENABLED !== "true") {
     await deliverRoomNotifications(db);
     return { ok: true, skipped: true };
   }
   try {
-    return await refreshRoomOccupancy(db, now);
+    return await refreshRoomOccupancy(db, now, client);
   } finally {
     await deliverRoomNotifications(db);
   }
