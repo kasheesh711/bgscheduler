@@ -156,9 +156,11 @@ export async function runCreditControlSyncRequest(options: { triggerSource?: "cr
     return NextResponse.json(guard, { status: 202 });
   }
 
-  const client = createWiseClient(retired ? { requestsPerSecond: 2, signal: AbortSignal.timeout(760_000) } : {});
+  const signal = retired ? AbortSignal.timeout(760_000) : undefined;
+  const client = createWiseClient(retired ? { requestsPerSecond: 2, signal } : {});
   const result = await runCreditControlSync(db, client, instituteId, now, {
     syncRunId: guard.syncRunId,
+    ...(retired ? { signal, requireComplete: true } : {}),
     runMetadata: retired && options.triggerSource === "cron" ? { dailyDate: bangkokDailyWindow(now, "shared").day, dailySlot: bangkokDailyWindow(now, "shared").slot, dailyTrigger: "cron" } : {},
   });
 
