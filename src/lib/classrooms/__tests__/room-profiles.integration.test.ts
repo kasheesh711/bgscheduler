@@ -9,11 +9,17 @@ import { notifiedTutorKeys } from "../notification-state";
 import { listPrintRuns, loadClassroomPrintReport } from "../print-report";
 import { ensureDefaultClassroomRooms, runIncrementalClassroomAssignment } from "../data";
 import { roomQualityMetrics } from "../room-policy";
+import { loadPrintRosters } from "../print-roster";
+vi.mock("../print-roster", () => ({ loadPrintRosters: vi.fn() }));
 
 let handle: Awaited<ReturnType<typeof startTestDb>>, db: Database;
 beforeAll(async () => { handle = await startTestDb(); db = handle.db as unknown as Database; });
 afterAll(async () => { if (handle) await stopTestDb(handle); });
-beforeEach(async () => { await truncateAll(handle.db); });
+beforeEach(async () => {
+  await truncateAll(handle.db);
+  vi.mocked(loadPrintRosters).mockImplementation(async rows => ({ checkedAt: new Date().toISOString(), refreshFailed: false,
+    byRow: new Map(rows.map(row => [row.id, { students: ["Live Student นักเรียน"], studentCount: 1, rosterStatus: "verified", sessionState: "current", warnings: [] }])) }));
+});
 afterEach(() => vi.unstubAllEnvs());
 async function seed(name = "Da") {
   const [snapshot] = await handle.db.insert(s.snapshots).values({}).returning();
@@ -76,7 +82,7 @@ describe("stable room policies and saved print data in Postgres", () => {
     await expect(updateTutorRoomProfile(db, { canonicalKey: "da", roomIds: wanted, revision: 2, actor: "admin" })).rejects.toMatchObject({ status: 400 });
     await expect(updateTutorRoomProfile(db, { canonicalKey: "da", roomIds: [rooms[0].id], revision: 2, actor: "admin" })).rejects.toMatchObject({ status: 400 });
   });
-  it("recognizes sent schedules across runs and produces a PII-free, explicitly selected print revision", async () => {
+  it("recognizes sent schedules and prints exact live students without stored class titles or contact details", async () => {
     const { snapshot, group, session } = await seed("ครูทดสอบ");
     const [oldRun, latest] = await handle.db.insert(s.classroomAssignmentRuns).values([
       { snapshotId: snapshot.id, assignmentDate: "2026-09-12", createdAt: new Date("2026-09-10T00:00:00Z") },
@@ -95,8 +101,18 @@ describe("stable room policies and saved print data in Postgres", () => {
     const report = await loadClassroomPrintReport(db, [oldRun.id]);
     expect(report.days[0]).toMatchObject({ runId: oldRun.id, draft: true });
     expect(report.days[0].tutors[0].blocks[0]).toMatchObject({ publication: "failed", room: "Very long room ห้องเรียน" });
+    expect(report.days[0].tutors[0].blocks[0].students).toEqual(["Live Student นักเรียน"]);
     expect(JSON.stringify(report)).not.toMatch(/PRIVATE|private@example|studentName|subject|classType/);
     expect((await loadClassroomPrintReport(db, [oldRun.id])).days[0].revision).toBe(report.days[0].revision);
+    vi.mocked(loadPrintRosters).mockImplementationOnce(async rows => ({ checkedAt: new Date().toISOString(), refreshFailed: false,
+      byRow: new Map(rows.map(row => [row.id, { students: ["Updated enrollment"], studentCount: 1, rosterStatus: "verified", sessionState: "current", warnings: [] }])) }));
+    expect((await loadClassroomPrintReport(db, [oldRun.id])).days[0].revision).not.toBe(report.days[0].revision);
+    const originalRefresh = vi.mocked(loadPrintRosters).getMockImplementation()!;
+    vi.mocked(loadPrintRosters).mockImplementationOnce(async rows => {
+      await handle.db.update(s.classroomAssignmentRuns).set({ updatedAt: new Date(Date.now() + 1000) }).where(eq(s.classroomAssignmentRuns.id, oldRun.id));
+      return originalRefresh(rows);
+    });
+    await expect(loadClassroomPrintReport(db, [oldRun.id])).rejects.toThrow("Assignments changed while loading");
     await expect(loadClassroomPrintReport(db, [oldRun.id, latest.id])).rejects.toThrow("one saved run per day");
     await expect(loadClassroomPrintReport(db, [crypto.randomUUID()])).rejects.toThrow("could not be found");
   });

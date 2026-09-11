@@ -59,11 +59,11 @@
     },
     {
       "path": "/api/internal/class-assignments/morning",
-      "schedule": "41 23 * * *"
+      "schedule": "0 10 * * *"
     },
     {
       "path": "/api/internal/class-assignments/admin-email",
-      "schedule": "4,14,24,36 0 * * *"
+      "schedule": "0,16,31,46 12 * * *"
     },
     {
       "path": "/api/internal/student-promotions/july-1",

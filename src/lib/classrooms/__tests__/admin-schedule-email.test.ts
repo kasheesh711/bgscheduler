@@ -241,7 +241,7 @@ describe("sendAdminClassroomScheduleEmail", () => {
 
     const result = await sendAdminClassroomScheduleEmail(db as never, {
       assignmentDate: "2026-05-26",
-      now: new Date("2026-05-26T00:36:00.000Z"),
+      now: new Date("2026-05-25T12:46:00.000Z"),
       sender,
     });
 
@@ -264,5 +264,17 @@ describe("sendAdminClassroomScheduleEmail", () => {
 
     expect(result.status).toBe("skipped");
     expect(sender.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("waits until the evening final retry if only an older provisional plan exists", async () => {
+    vi.mocked(getClassroomAssignmentForDate).mockResolvedValue(detail({ run: { ...run, createdAt: new Date("2026-05-24T10:00:00Z") } }) as never);
+    const sender = { sendEmail: vi.fn().mockResolvedValue({ id: "msg-1" }) };
+    const options = { assignmentDate: "2026-05-26", preparedAfter: new Date("2026-05-25T10:00:00Z"), sender };
+    const pending = await sendAdminClassroomScheduleEmail(makeDb({}) as never, { ...options, now: new Date("2026-05-25T12:00:00Z") });
+    expect(pending.status).toBe("pending");
+    expect(sender.sendEmail).not.toHaveBeenCalled();
+    const final = await sendAdminClassroomScheduleEmail(makeDb({}) as never, { ...options, now: new Date("2026-05-25T12:46:00Z") });
+    expect(final.status).toBe("sent");
+    expect(sender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ subject: expect.stringContaining("ACTION REQUIRED"), text: expect.stringContaining("17:00") }));
   });
 });

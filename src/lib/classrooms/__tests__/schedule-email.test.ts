@@ -37,7 +37,7 @@ function row(overrides: Record<string, unknown> = {}) {
     sessionType: overrides.sessionType ?? "OFFLINE",
     assignedRoom: overrides.assignedRoom ?? "Focus",
     status: overrides.status ?? "assigned",
-    publishStatus: overrides.publishStatus ?? "not_published",
+    publishStatus: overrides.publishStatus ?? "success",
     studentName: overrides.studentName ?? "Student One",
     subject: overrides.subject ?? "Math",
     classType: overrides.classType ?? "ONE_TO_ONE",
@@ -161,6 +161,16 @@ describe("schedule email preview", () => {
     const preview = await getScheduleEmailPreview(db as never, "run-1");
     expect(preview.blockedCount).toBe(1);
     expect(preview.sendable).toBe(false);
+  });
+
+  it("blocks onsite schedules until publishing succeeds, while remote schedules remain sendable", async () => {
+    vi.stubEnv("SCHEDULE_EMAIL_APPS_SCRIPT_URL", "https://example.test/relay");
+    vi.stubEnv("SCHEDULE_EMAIL_APPS_SCRIPT_SECRET", "test");
+    const contacts = [{ canonicalKey: "Kevin", onsiteEmail: "teacher@example.com", active: true }];
+    const unpublished = await getScheduleEmailPreview(makePreviewDb({ rows: [row({ publishStatus: "not_published" })], contacts }) as never, "run-1");
+    expect(unpublished.recipients[0].status).toBe("blocked");
+    const remote = await getScheduleEmailPreview(makePreviewDb({ rows: [row({ status: "remote", sessionType: "SCHEDULED", publishStatus: "not_published" })], contacts }) as never, "run-1");
+    expect(remote.recipients[0].status).toBe("ready");
   });
 
   it("combines onsite and remote online rows for one tutor", async () => {

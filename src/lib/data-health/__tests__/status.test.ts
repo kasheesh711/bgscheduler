@@ -57,8 +57,8 @@ describe("cron status evaluation", () => {
 
   it("evaluates daily Bangkok windows without rolling 24-hour shortcuts", () => {
     const latest = run({
-      startedAt: new Date("2026-05-31T23:41:00.000Z"),
-      finishedAt: new Date("2026-05-31T23:51:00.000Z"),
+      startedAt: new Date("2026-05-31T10:00:00.000Z"),
+      finishedAt: new Date("2026-05-31T10:10:00.000Z"),
     });
     const result = evaluateCronJobStatus({
       job: job("classroom_morning"),
@@ -72,7 +72,7 @@ describe("cron status evaluation", () => {
     });
 
     expect(result.status).toBe("healthy");
-    expect(result.lastExpectedAt?.toISOString()).toBe("2026-05-31T23:41:00.000Z");
+    expect(result.lastExpectedAt?.toISOString()).toBe("2026-05-31T10:00:00.000Z");
   });
 
   it("evaluates the weekly competitor intelligence Monday Bangkok window", () => {

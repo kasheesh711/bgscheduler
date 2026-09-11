@@ -143,6 +143,9 @@ export async function ensureFreshWiseSyncForClassroomAutomation(
       }
       if (!await latestRunningSync(db)) break;
     }
+    if (await latestRunningSync(db)) {
+      throw new Error("Wise sync was still running after the classroom automation wait window.");
+    }
   }
 
   const response = await runWiseSyncRequest();
@@ -192,6 +195,7 @@ export async function runClassroomMorningAutomation(
     automationBatchId?: string;
     maxSyncWaitMs?: number;
     liveSessions?: WiseSession[];
+    sendEmails?: boolean;
   } = {},
 ): Promise<MorningAutomationResult> {
   const startDate = options.startDate ?? todayBangkok();
@@ -228,7 +232,7 @@ export async function runClassroomMorningAutomation(
 
     let scheduleEmail: MorningAutomationDateResult["scheduleEmail"];
     let scheduleEmailError: string | undefined;
-    if (date === startDate) {
+    if (date === startDate && options.sendEmails !== false) {
       try {
         const sent = await sendScheduleEmailsForRun(
           db,

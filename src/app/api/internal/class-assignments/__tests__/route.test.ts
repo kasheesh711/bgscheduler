@@ -1,16 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
-vi.mock("@/lib/classrooms/morning-automation", () => ({
-  runClassroomMorningAutomation: vi.fn(),
+vi.mock("@/lib/classrooms/daily-automation", () => ({
+  prepareNextDayClassrooms: vi.fn(),
+  deliverNextDayClassroomSchedules: vi.fn(),
 }));
 
-vi.mock("@/lib/classrooms/admin-schedule-email", () => ({
-  sendAdminClassroomScheduleEmail: vi.fn(),
-}));
-
-import { runClassroomMorningAutomation } from "@/lib/classrooms/morning-automation";
-import { sendAdminClassroomScheduleEmail } from "@/lib/classrooms/admin-schedule-email";
+import { prepareNextDayClassrooms, deliverNextDayClassroomSchedules } from "@/lib/classrooms/daily-automation";
 import { GET as morningGET } from "../morning/route";
 import { GET as adminEmailGET } from "../admin-email/route";
 
@@ -24,7 +20,7 @@ describe("internal classroom assignment automation routes", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     process.env.CRON_SECRET = "test-secret";
-    vi.mocked(runClassroomMorningAutomation).mockResolvedValue({
+    vi.mocked(prepareNextDayClassrooms).mockResolvedValue({
       ok: true,
       automationBatchId: "batch-1",
       startDate: "2026-05-26",
@@ -32,39 +28,32 @@ describe("internal classroom assignment automation routes", () => {
       sync: { mode: "reused", syncRunId: "sync-1", finishedAt: "2026-05-25T23:35:00.000Z" },
       dates: [],
     });
-    vi.mocked(sendAdminClassroomScheduleEmail).mockResolvedValue({
-      status: "sent",
-      assignmentDate: "2026-05-26",
-      assignmentRunId: "run-1",
-      emailRunId: "email-run-1",
-      attempted: 2,
-      success: 2,
-      failed: 0,
-      message: "Admin classroom schedule email sent.",
-    });
+    vi.mocked(deliverNextDayClassroomSchedules).mockResolvedValue({
+      ok: true, assignmentDate: "2026-05-26", adminEmail: { status: "sent", emailRunId: "email-run-1" },
+    } as never);
   });
 
   it("rejects morning automation without the cron secret", async () => {
     const res = await morningGET(cronRequest("/api/internal/class-assignments/morning"));
 
     expect(res.status).toBe(401);
-    expect(runClassroomMorningAutomation).not.toHaveBeenCalled();
+    expect(prepareNextDayClassrooms).not.toHaveBeenCalled();
   });
 
   it("runs morning automation with the cron secret", async () => {
     const res = await morningGET(cronRequest("/api/internal/class-assignments/morning", "test-secret"));
 
     expect(res.status).toBe(200);
-    expect(runClassroomMorningAutomation).toHaveBeenCalledTimes(1);
+    expect(prepareNextDayClassrooms).toHaveBeenCalledTimes(1);
     await expect(res.json()).resolves.toEqual(expect.objectContaining({ ok: true, automationBatchId: "batch-1" }));
   });
 
   it("reports incomplete morning work and partial admin delivery as failures", async () => {
-    vi.mocked(runClassroomMorningAutomation).mockResolvedValueOnce({ ok: false, dates: [], errorSummary: "2 classes without rooms" } as never);
+    vi.mocked(prepareNextDayClassrooms).mockResolvedValueOnce({ ok: false, dates: [], errorSummary: "2 classes without rooms" } as never);
     const morning = await morningGET(cronRequest("/api/internal/class-assignments/morning", "test-secret"));
     expect(morning.status).toBe(500);
     expect(await morning.json()).toMatchObject({ errorSummary: "2 classes without rooms" });
-    vi.mocked(sendAdminClassroomScheduleEmail).mockResolvedValueOnce({ status: "partial", success: 1, failed: 1 } as never);
+    vi.mocked(deliverNextDayClassroomSchedules).mockResolvedValueOnce({ ok: false, adminEmail: { status: "partial", success: 1, failed: 1 } } as never);
     expect((await adminEmailGET(cronRequest("/api/internal/class-assignments/admin-email", "test-secret"))).status).toBe(500);
   });
 
@@ -72,14 +61,14 @@ describe("internal classroom assignment automation routes", () => {
     const res = await adminEmailGET(cronRequest("/api/internal/class-assignments/admin-email", "bad-secret"));
 
     expect(res.status).toBe(401);
-    expect(sendAdminClassroomScheduleEmail).not.toHaveBeenCalled();
+    expect(deliverNextDayClassroomSchedules).not.toHaveBeenCalled();
   });
 
   it("runs admin email with the cron secret", async () => {
     const res = await adminEmailGET(cronRequest("/api/internal/class-assignments/admin-email", "test-secret"));
 
     expect(res.status).toBe(200);
-    expect(sendAdminClassroomScheduleEmail).toHaveBeenCalledTimes(1);
-    await expect(res.json()).resolves.toEqual(expect.objectContaining({ status: "sent", emailRunId: "email-run-1" }));
+    expect(deliverNextDayClassroomSchedules).toHaveBeenCalledTimes(1);
+    await expect(res.json()).resolves.toEqual(expect.objectContaining({ ok: true, adminEmail: { status: "sent", emailRunId: "email-run-1" } }));
   });
 });

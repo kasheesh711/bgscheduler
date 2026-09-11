@@ -6,7 +6,7 @@ import { scheduleRecipientEmail } from "@/lib/tutor-onboarding/planner";
 import { REMOTE_NO_ROOM_NEEDED } from "./assignment-engine";
 import { buildTeacherSchedule } from "./schedule-projection";
 import { notifiedTutorKeys } from "./notification-state";
-import { sessionModeLabel } from "./session-mode";
+import { isOnsiteSessionType, sessionModeLabel } from "./session-mode";
 
 type ClassroomRun = typeof schema.classroomAssignmentRuns.$inferSelect;
 const DEFAULT_PUBLIC_BASE_URL = "https://bgscheduler.vercel.app";
@@ -482,7 +482,8 @@ export async function getScheduleEmailPreview(
     const contact = contacts.get(first.canonicalKey);
     const email = scheduleRecipientEmail(contact);
     const missingEmail = !email;
-    const groupUnfinalizedRows = groupRows.filter((row) => row.status === "needs_review" || row.status === "no_room" || row.publishStatus === "failed");
+    const groupUnfinalizedRows = groupRows.filter((row) => row.status === "needs_review" || row.status === "no_room" || row.publishStatus === "failed"
+      || (row.status === "assigned" && isOnsiteSessionType(row.sessionType) && row.publishStatus !== "success"));
     const rowBlockReason = groupUnfinalizedRows.length > 0
       ? `${groupUnfinalizedRows.length} schedule row${groupUnfinalizedRows.length === 1 ? "" : "s"} still need assignment review or successful Wise publishing`
       : null;
