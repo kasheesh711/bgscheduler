@@ -289,3 +289,7 @@ A separate private checkpoint checks Saturday and Sunday on Wednesday, Thursday 
 Class Assignments presents readiness separately from execution status in a compact status bar for the selected day, weekend and Wise data. **Review issues** opens an accessible side drawer with grouped class findings, live room reservations, saved weekend observations and date-specific review links. New findings update the bar without opening the drawer or displacing the room views. The Classroom issues count includes affected classes even when the assignment run reports zero `needs_review` rows. Unverified data is never rendered as clear.
 
 Room-readiness checks prefer an active exact-name match, then an unambiguous active physical-room alias; inactive legacy room names cannot shadow their valid `(TV)` counterparts. See [the weekend alert runbook](../operations/weekend-classroom-alerts.md) for delivery, failure recovery, configuration and rollout.
+
+## Tutor room self-service
+
+The `/room` command, private mobile timetable, tutor identity approval, and standalone reservations are documented in [Tutor room booking](tutor-room-booking.md). Room reservations participate in classroom occupancy and publish checks.

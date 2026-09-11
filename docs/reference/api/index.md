@@ -2,6 +2,8 @@
 
 The canonical lookup of every HTTP endpoint in BGScheduler. This page carries **method + path + group + auth + a one-line purpose** and nothing else. Request and response bodies, query parameters, status codes, and error shapes live on the per-group detail pages linked from the Group column.
 
+The new [tutor room booking reference](./tutor-room-booking.md) covers the capability-protected `/api/room` endpoints, tutor LINE approval, admin reservations, and room refresh cron.
+
 > **Canonical-home rule:** `docs/reference/*` owns mechanical detail; `docs/features/*` owns meaning — purpose, rules, and flows. This index is the mechanical inventory. It does not restate business rules, and feature docs link here rather than reproduce endpoint signatures.
 
 ## What this counts

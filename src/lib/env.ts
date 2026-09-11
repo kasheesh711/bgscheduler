@@ -17,6 +17,8 @@ const envSchema = z.object({
   LINE_CHANNEL_SECRET: z.string().min(1).optional(),
   LINE_CHANNEL_ACCESS_TOKEN: z.string().min(1).optional(),
   ENABLE_LINE_SCHEDULER: z.string().optional(),
+  ROOM_BOOKING_COLLECTOR_ENABLED: z.string().optional(),
+  ROOM_BOOKING_WRITES_ENABLED: z.string().optional(),
   // Comma-separated LINE user IDs allowed to drive the schedule bot. Unset or
   // empty disables the bot entirely — it is fail-closed by construction, so a
   // parent messaging the OA can never reach it.

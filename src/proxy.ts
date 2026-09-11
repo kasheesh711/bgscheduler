@@ -20,6 +20,10 @@ function isPublicRoute(pathname: string) {
     // see src/lib/student-schedule/links.ts. Note the trailing slash: it keeps
     // the authenticated /student-schedule admin page out of this allowlist.
     pathname.startsWith("/schedule/") ||
+    /^\/room\/[^/]+$/.test(pathname) ||
+    pathname === "/api/room/availability" ||
+    pathname === "/api/room/reservations" ||
+    /^\/api\/room\/reservations\/[^/]+$/.test(pathname) ||
     pathname === "/api/line/contacts/oa-resolver/worklist" ||
     /^\/api\/line\/contacts\/oa-resolver\/runs\/[^/]+\/rows$/.test(pathname) ||
     pathname.startsWith("/api/internal/")
@@ -93,7 +97,13 @@ export default edgeAuth(async (req) => {
   }
 
   if (isPublicRoute(pathname)) {
-    return NextResponse.next();
+    const response = NextResponse.next();
+    if (pathname.startsWith("/room/") || pathname.startsWith("/api/room/")) {
+      response.headers.set("Cache-Control", "private, no-store");
+      response.headers.set("Referrer-Policy", "no-referrer");
+      response.headers.set("X-Robots-Tag", "noindex, nofollow");
+    }
+    return response;
   }
 
   // The wrapper decodes cookies only. Skip all DB work for public routes and

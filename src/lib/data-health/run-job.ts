@@ -1,3 +1,4 @@
+import { runRoomRefresh } from "@/lib/room-booking/refresh";
 import { NextResponse } from "next/server";
 import { runWeekendClassroomCheck } from "@/lib/classrooms/weekend-check";
 import { getDb } from "@/lib/db";
@@ -41,6 +42,10 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
       requestMethod: "POST",
     },
     async () => {
+      if (jobKey === "room_booking") {
+        try { return NextResponse.json(await runRoomRefresh(getDb())); }
+        catch { return NextResponse.json({ ok: false, errorSummary: "Room refresh failed" }, { status: 500 }); }
+      }
       if (jobKey === "classroom_weekend_check") {
         try {
           const result = await runWeekendClassroomCheck();

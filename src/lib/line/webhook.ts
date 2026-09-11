@@ -1,3 +1,4 @@
+import { splitRoomEvents, ingestRoomEvents } from "@/lib/room-booking/ingress";
 import type { Database } from "@/lib/db";
 import { recordLineWebhookPayload, type LineGroupCommand } from "@/lib/line/data";
 import { verifyLineSignature } from "@/lib/line/signature";
@@ -23,6 +24,7 @@ export async function handleLineWebhookPost(input: {
   scheduleProcessing: (lineMessageId: string) => void;
   /** Optional so existing callers and tests keep working unchanged. */
   scheduleGroupCommand?: (command: LineGroupCommand) => void;
+  scheduleRoomCommand?: (eventId: string) => void;
 }): Promise<LineWebhookHandlerResult> {
   if (!verifyLineSignature({
     rawBody: input.rawBody,
@@ -45,7 +47,12 @@ export async function handleLineWebhookPost(input: {
     };
   }
 
-  const ingest = await recordLineWebhookPayload(input.db, payload);
+  const roomEvents = splitRoomEvents(payload);
+  if (roomEvents.room.length) {
+    await ingestRoomEvents(input.db, roomEvents.room);
+    for (const event of roomEvents.room) input.scheduleRoomCommand?.(event.eventId);
+  }
+  const ingest = await recordLineWebhookPayload(input.db, roomEvents.otherPayload);
   for (const messageId of ingest.createdMessageIds) {
     input.scheduleProcessing(messageId);
   }

@@ -1,5 +1,7 @@
 {
-  "regions": ["sin1"],
+  "regions": [
+    "sin1"
+  ],
   "crons": [
     {
       "path": "/api/internal/class-assignments/weekend-check",
@@ -80,6 +82,10 @@
     {
       "path": "/api/internal/line-credit-digest",
       "schedule": "3 2 * * *"
+    },
+    {
+      "path": "/api/internal/room-booking",
+      "schedule": "4-59/5 * * * *"
     }
   ]
 }

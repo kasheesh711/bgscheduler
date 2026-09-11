@@ -1,4 +1,5 @@
 "use client";
+import { AdminRoomReservations, useAdminRoomReservations, reservationDisplayRows } from "@/components/room-booking/admin-reservations";
 
 import { ClassroomReadiness } from "./readiness-notice";
 import { summarizeAssignmentReadiness } from "./readiness-summary";
@@ -264,8 +265,10 @@ export function ClassAssignmentsWorkspace() {
     void loadAssignments(date, true);
   }, [date, loadAssignments]);
 
+  const roomReservations = useAdminRoomReservations(date);
   const rooms = useMemo(() => (detail?.rooms ?? []).filter((room) => room.active), [detail?.rooms]);
   const rows = useMemo(() => detail?.rows ?? [], [detail?.rows]);
+  const displayRows = useMemo(() => [...rows, ...reservationDisplayRows(roomReservations.data?.reservations ?? [], rooms)], [rows, roomReservations.data, rooms]);
   const run = detail?.run ?? null;
   const readiness = useMemo(() => summarizeAssignmentReadiness(detail, date, loading), [detail, date, loading]);
   const projected = useMemo(() => buildTeacherSchedule(rows, date, run?.changeSummary ?? {}), [rows, date, run]);
@@ -761,6 +764,7 @@ export function ClassAssignmentsWorkspace() {
         </div>
       </div>
 
+      {roomReservations.error && <p role="alert" className="rounded-lg border border-amber-500 bg-amber-500/10 p-3 text-sm">Room reservation overlays are unavailable: {roomReservations.error}</p>}
       <Tabs defaultValue="floor-plan" className="min-h-[480px] flex-1 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <TabsList className="max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto">
@@ -781,6 +785,7 @@ export function ClassAssignmentsWorkspace() {
               Tutor Schedule
             </TabsTrigger>
             <TabsTrigger value="usual-rooms">Usual rooms</TabsTrigger>
+            <TabsTrigger value="reservations">Room reservations</TabsTrigger>
           </TabsList>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Grid3X3 className="size-4" />
@@ -788,6 +793,7 @@ export function ClassAssignmentsWorkspace() {
           </div>
         </div>
 
+        <TabsContent value="reservations" className="min-h-0 overflow-hidden"><AdminRoomReservations data={roomReservations.data} error={roomReservations.error} refresh={roomReservations.refresh} /></TabsContent>
         <TabsContent value="usual-rooms" className="min-h-0 overflow-hidden"><UsualRoomsPanel /></TabsContent>
         <TabsContent value="floor-plan" className="min-h-0 overflow-hidden">
           <div className="flex h-full min-h-0 flex-col gap-3">
@@ -796,7 +802,7 @@ export function ClassAssignmentsWorkspace() {
               currentMinute={currentMinute}
               playing={playing}
               speed={playbackSpeed}
-              disabled={!hasRows}
+              disabled={displayRows.length === 0}
               onMinuteChange={handleTimelineMinuteChange}
               onPlayingChange={setPlaying}
               onReset={resetTimeline}
@@ -804,13 +810,13 @@ export function ClassAssignmentsWorkspace() {
             />
             <div className="grid min-h-0 flex-1 gap-3 2xl:grid-cols-[minmax(0,1fr)_minmax(420px,0.55fr)]">
               <FloorPlanOccupancy
-                rows={rows}
+                rows={displayRows}
                 rooms={rooms}
                 currentMinute={currentMinute}
                 onUpdateOverride={updateOverride}
               />
               <RoomOccupancyHeatmap
-                rows={rows}
+                rows={displayRows}
                 rooms={rooms}
                 bounds={timelineBounds}
                 currentMinute={currentMinute}
@@ -822,7 +828,7 @@ export function ClassAssignmentsWorkspace() {
 
         <TabsContent value="room-calendar" className="min-h-0 overflow-hidden">
           <RoomCalendarView
-            rows={rows}
+            rows={displayRows}
             rooms={rooms}
             bounds={timelineBounds}
             onUpdateOverride={updateOverride}

@@ -113,9 +113,11 @@ export async function pushLineTextMessage(input: {
   to: string;
   text: string;
   retryKey?: string;
+  signal?: AbortSignal;
 }): Promise<LinePushResult> {
   const retryKey = input.retryKey ?? randomUUID();
   const response = await fetch(`${LINE_API_BASE}/v2/bot/message/push`, {
+    signal: input.signal,
     method: "POST",
     headers: {
       Authorization: `Bearer ${lineAccessToken()}`,
@@ -188,4 +190,20 @@ export async function replyLineMessage(input: {
     sentMessageId: typeof first.id === "string" ? first.id : null,
     response: payload,
   };
+}
+
+/** Structured room cards; existing text callers retain their original contract. */
+export type LineRoomMessage = { type: "text"; text: string; quickReply?: { items: unknown[] } }
+  | { type: "flex"; altText: string; contents: Record<string, unknown> };
+export async function sendLineRoomMessages(input: { to: string; replyToken?: string | null; messages: LineRoomMessage[]; retryKey: string }) {
+  const send = async (reply: boolean) => {
+    const response = await fetch(`${LINE_API_BASE}/v2/bot/message/${reply ? "reply" : "push"}`, {
+      signal: AbortSignal.timeout(10000),
+      method: "POST", headers: { Authorization: `Bearer ${lineAccessToken()}`, "Content-Type": "application/json", ...(!reply ? { "X-Line-Retry-Key": input.retryKey } : {}) },
+      body: JSON.stringify({ ...(reply ? { replyToken: input.replyToken } : { to: input.to }), messages: input.messages }),
+    });
+    if (!response.ok && !(!reply && response.status === 409)) throw new Error("LINE room message delivery failed");
+  };
+  if (input.replyToken) { try { await send(true); return; } catch { /* Expired reply token: stable-key push fallback. */ } }
+  await send(false);
 }

@@ -85,9 +85,10 @@ export function AssignmentDetailPopover({
                 </div>
 
                 <label className="mt-2 grid gap-1 text-xs font-medium text-muted-foreground">
-                  Override room
+                  {row.id.startsWith("reservation:") ? "Standalone reservation — manage in Room reservations" : "Override room"}
                   <select
                     className="h-8 rounded-md border bg-background px-2 text-sm text-foreground"
+                    disabled={row.id.startsWith("reservation:")}
                     value={row.overrideRoom ?? ""}
                     onChange={(event) => onUpdateOverride(row, event.target.value)}
                   >
