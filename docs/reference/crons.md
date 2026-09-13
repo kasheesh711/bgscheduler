@@ -308,7 +308,7 @@ The `maxDuration` carries an unusually specific comment: the route sat at 300s w
 
 Cron GET uses the secret; POST requires a freshly authorized Progress Tests admin. Maximum 800s. After immutable launch, direct Wise student/session/credit-history reads run with a 650s deadline, concurrency four and three requests per second. Groups and unknown course types do not count. The durable ledger preserves corrections and each tutor's cadence. Before launch, the prior daily shared-snapshot gate remains intact. The registry reflects the new half-hour schedule while the workspace is enabled.
 
-The new `/api/internal/progress-tests/process` runs every minute (300s), dispatching persisted jobs with five-minute leases, three bounded attempts and explicit recovery. Paused publication jobs stay queued while document jobs continue. It is registered in Data Health and its overlap is deliberate, with lease claims preventing duplicate workers.
+The new `/api/internal/progress-tests/process` runs every minute (300s), dispatching persisted jobs with five-minute leases, three bounded attempts and explicit recovery. Paused publication jobs stay queued while document jobs continue. It is registered in Data Health and its overlap is deliberate, with lease claims preventing duplicate workers. New paper requests also dispatch their specific persisted job immediately. Formatting checkpoints retain conversion, AI extraction and each version-bound PDF; recovery reuses those steps after browser closure or a rendering failure.
 
 ### 6. Progress tests admin digest — `/api/internal/progress-tests/admin-digest`
 

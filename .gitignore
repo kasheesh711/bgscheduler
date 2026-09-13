@@ -73,3 +73,6 @@ graphify-out/
 
 # Synthetic Progress Tests verification artifacts
 /output/progress-tests-verification/
+
+# Private paper inputs, benchmark responses and generated document previews
+/output/progress-tests-pdf/

@@ -97,9 +97,11 @@ export async function uploadHandler(request: Request, body: HandleUploadBody, sc
 }
 export async function storeGenerated(ownerKey: string, name: string, bytes: Buffer, db: Database = getDb()) {
   if (bytes.length > MAX_FILE_BYTES) throw new WorkspaceError(400, "Generated PDF exceeds 25 MB. Reduce the source image sizes.");
+  const { PDFDocument } = await import("pdf-lib");
+  const pageCount = (await PDFDocument.load(bytes)).getPageCount();
   const id = randomUUID();
   const pathname = `progress-tests/${id}/generated`;
   await put(pathname, bytes, { access: "private", contentType: "application/pdf", addRandomSuffix: false, allowOverwrite: false });
-  const [file] = await db.insert(ptFiles).values({ id, ownerKey, name, mime: "application/pdf", size: bytes.length, pathname, purpose: "generated", status: "ready", sha256: createHash("sha256").update(bytes).digest("hex") }).returning();
+  const [file] = await db.insert(ptFiles).values({ id, ownerKey, name, mime: "application/pdf", size: bytes.length, pageCount, pathname, purpose: "generated", status: "ready", sha256: createHash("sha256").update(bytes).digest("hex") }).returning();
   return file;
 }

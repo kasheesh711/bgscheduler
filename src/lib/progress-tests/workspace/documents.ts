@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { PDFDocument } from "pdf-lib";
 import { type Browser, chromium as playwright } from "playwright-core";
-import { validateMarks, WorkspaceError, type Paper, type Review } from "./model";
+import { validateMarks, WorkspaceError, type Paper, type Review, type ReviewData, isUploadedReview } from "./model";
 import { readBlobBytes, type StoredFile } from "./files";
 
 export const escapeHtml = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
@@ -34,13 +34,16 @@ export async function launchDocumentBrowser(): Promise<Browser> {
 export async function renderHtmlPdf(html: string) {
   const browser = await launchDocumentBrowser();
   try {
-    const context = await browser.newContext({ serviceWorkers: "block" });
+    const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 665, height: 1000 } });
     await context.route("**/*", route => route.abort());
     const page = await context.newPage();
+    await page.emulateMedia({ media: "print" });
     await page.setContent(html, { waitUntil: "load", timeout: 30_000 });
     await page.evaluate(() => document.fonts.ready);
     const broken = await page.evaluate(() => Array.from(document.images).some(i => !i.complete || i.naturalWidth === 0));
     if (broken) throw new WorkspaceError(400, "A document illustration could not be rendered.");
+    const overflow = await page.evaluate(() => Array.from(document.querySelectorAll("p,table,.equation,figure")).some(el => el.scrollWidth > el.clientWidth + 3));
+    if (overflow) throw new WorkspaceError(400, "Some content is too wide for the paper. Check the source layout and reformat it.");
     return Buffer.from(await page.pdf({ format: "A4", printBackground: true, preferCSSPageSize: true, tagged: true,
       displayHeaderFooter: true, headerTemplate: "<span></span>", footerTemplate: '<div style="font-size:8px;color:#4e5d72;width:100%;text-align:center">BeGifted Education · Progress Tests &nbsp; | &nbsp; <span class="pageNumber"></span> / <span class="totalPages"></span></div>',
       margin: { top: "16mm", right: "17mm", bottom: "16mm", left: "17mm" } }));
@@ -138,6 +141,7 @@ export async function documentHtml(title: string, eyebrow: string, content: stri
   </style></head><body><header><img src="${logo}" alt="BeGifted Education"><span>${escapeHtml(eyebrow)}</span></header><h1>${escapeHtml(title)}</h1>${content}</body></html>`;
 }
 export async function renderPaper(paper: Paper, original?: Buffer) {
+  if (paper.coverage && original) return (await import("./paper-renderer")).renderFormattedPaper(paper, original);
   const content = `<div class="meta">Name: __________________________ &nbsp; Date: ______________</div>${para(paper.instructions)}<p class="label">Total · ${paper.questions.reduce((n,q) => n+q.maxMarks,0)} marks</p>`
     + paper.questions.map((q,i) => `<section class="question"><h2>${i+1}. <span class="score">${q.maxMarks} marks</span></h2>${para(q.text)}${q.needsVisual ? `<p class="callout">Refer to the original illustration on source page ${q.sourcePage ?? "indicated in the attached paper"}. The complete source paper follows.</p>` : ""}<div class="response"></div></section>`).join("");
   const pdf = await renderHtmlPdf(await documentHtml(paper.title, "Progress Test", content));
@@ -145,13 +149,22 @@ export async function renderPaper(paper: Paper, original?: Buffer) {
 }
 export async function renderReview(paper: Paper, review: Review, student: string, course: string, tutor: string, cycle: number, work: Buffer[], originalPaper?: Buffer) {
   const total = validateMarks(paper, review.marks);
+  const rich = paper.coverage ? await import("./paper-renderer") : null;
+  const figures = rich && originalPaper ? await rich.sourceFigures(paper, originalPaper) : new Map<string, string>();
   const meta = `<div class="meta">${escapeHtml(student)} · ${escapeHtml(course)}<br>Tutor: ${escapeHtml(tutor)} · Cycle ${cycle} · ${escapeHtml(paper.title)}</div>`;
   const marks = paper.questions.map((q,i) => {
     const mark = review.marks.find(m => m.questionId === q.id)!;
-    return `<section class="mark"><h3>${i+1}. ${escapeHtml(q.topic)} <span class="score">${mark.marks} / ${q.maxMarks}</span></h3>${para(q.text)}${q.needsVisual && originalPaper ? `<p class="muted">Illustration: source paper page ${q.sourcePage ?? "as indicated"}, attached after the response pages.</p>` : ""}${para(mark.explanation)}<p class="muted">Answer reference: ${escapeHtml(mark.answerReference || "See the original response pages attached.")}${mark.needsReview ? " · Tutor review required" : ""}</p></section>`;
+    const question = rich ? q.blocks?.filter(b => b.kind !== "working-area").map(b => rich.blockHtml(b, figures)).join("") ?? `<p>${rich.formattedText(q.text)}</p>` : para(q.text);
+    return `<section class="mark"><h3>${escapeHtml(q.number ?? String(i+1))}. ${escapeHtml(q.topic)} <span class="score">${mark.marks} / ${q.maxMarks}</span></h3>${question}${!rich && q.needsVisual && originalPaper ? `<p class="muted">Illustration: source paper page ${q.sourcePage ?? "as indicated"}, attached after the response pages.</p>` : ""}${rich ? `<p>${rich.formattedText(mark.explanation)}</p>` : para(mark.explanation)}<p class="muted">Answer reference: ${escapeHtml(mark.answerReference || "See the original response pages attached.")}${mark.needsReview ? " · Tutor review required" : ""}</p></section>`;
   }).join("");
-  const graded = await renderHtmlPdf(await documentHtml("Graded progress test", "Assessment", `${meta}<div class="totals">${total.earned} / ${total.possible} <small>(${total.percent}%)</small></div><p class="callout">The student's original responses follow this marking record, in the submitted page order.</p>${marks}`));
-  const list = (title: string, values: string[]) => `<h2>${title}</h2><ul>${values.map(v => `<li>${escapeHtml(v)}</li>`).join("")}</ul>`;
-  const report = await renderHtmlPdf(await documentHtml("Progress report", "Learning progress", `${meta}<div class="totals">${total.percent}% <span class="muted">${total.earned} of ${total.possible} marks</span></div>${para(review.report.summary)}${list("Strengths", review.report.strengths)}${list("Areas to develop", review.report.focusAreas)}${list("Next steps", review.report.nextSteps)}${review.report.contextLimitations ? `<h2>Context and limitations</h2>${para(review.report.contextLimitations)}` : ""}<footer>Based on this reviewed assessment${review.feedback.length ? ` and ${review.feedback.length} verified class-feedback record(s)` : ""}. Class feedback informs learning recommendations; marks reflect the test answers and approved rubric.</footer>`));
-  return { graded: await appendPdfs(graded, [...work, ...(originalPaper ? [originalPaper] : [])]), report };
+  const gradedHtml = await documentHtml("Graded progress test", "Assessment", `${meta}<div class="totals">${total.earned} / ${total.possible} <small>(${total.percent}%)</small></div><p class="callout">The student's original responses follow this marking record, in the submitted page order.</p>${marks}`);
+  const graded = await renderHtmlPdf(rich ? await rich.withPaperStyles(gradedHtml) : gradedHtml);
+  const report = await renderProgressReport(paper.title, review, total, student, course, tutor, cycle);
+  return { graded: await appendPdfs(graded, [...work, ...(!rich && originalPaper ? [originalPaper] : [])]), report };
+}
+export async function renderProgressReport(title: string, review: ReviewData, total: { earned: number; possible: number; percent: number }, student: string, course: string, tutor: string, cycle: number) {
+  const meta = '<div class="meta">' + escapeHtml(student) + ' · ' + escapeHtml(course) + '<br>Tutor: ' + escapeHtml(tutor) + ' · Cycle ' + cycle + ' · ' + escapeHtml(title) + '</div>';
+  const list = (heading: string, values: string[]) => '<h2>' + heading + '</h2><ul>' + values.map(v => '<li>' + escapeHtml(v) + '</li>').join('') + '</ul>';
+  return renderHtmlPdf(await documentHtml("Progress report", "Learning progress", meta + '<div class="totals">' + total.percent + '% <span class="muted">' + total.earned + ' of ' + total.possible + ' marks</span></div>' + para(review.report.summary) + list("Strengths", review.report.strengths) + list("Areas to develop", review.report.focusAreas) + list("Next steps", review.report.nextSteps) + (review.report.contextLimitations ? '<h2>Context and limitations</h2>' + para(review.report.contextLimitations) : '') + '<footer>Based on this reviewed assessment' + (review.feedback.length ? ' and ' + review.feedback.length + ' verified class-feedback record(s)' : '') + '. Class feedback informs learning recommendations; marks reflect ' + (isUploadedReview(review) ? 'the tutor-marked test.' : 'the test answers and approved rubric.') + '</footer>'));
+
 }
