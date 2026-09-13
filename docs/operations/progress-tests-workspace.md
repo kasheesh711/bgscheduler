@@ -51,6 +51,22 @@ The publication pause is database-backed and independent of the environment flag
 
 ## Verification results
 
-Disposable PostgreSQL integration: 18 tests passed, including ownership revocation, group exclusion, fixed cycles/corrections, reviewed versions, partial failures, uncertain attachment reconciliation, pause/resume and account-scoped guide revisions. Full unit suite: 438 files / 4,986 tests passed. Complete release verification and production checks are recorded below when the deployment finishes.
+Disposable PostgreSQL integration: 18 tests passed, including ownership revocation, group exclusion, fixed cycles/corrections, reviewed versions, partial failures, uncertain attachment reconciliation, pause/resume and account-scoped guide revisions. Full unit suite: 438 files / 4,986 tests passed. Complete release verification and production checks are recorded below.
 
 Local release verification completed: typecheck, 438 unit files / 4,986 tests, production build, post-build typecheck, diff checks and preservation of all 254 existing source route entries. Full ESLint completed with zero errors (19 existing warnings). Guide browser checks passed all sample actions, account persistence/replay, light/dark phone layouts, keyboard focus and preservation of an unsaved real paper draft.
+
+## Production launch — 2026-09-13
+
+[Release PR #68](https://github.com/kasheesh711/bgscheduler/pull/68) merged as clean main commit `790f9382cf6f2a4cf4d94f0a19074e1a89177623`. All required GitHub checks and the Vercel preview passed. Additive migrations 0084/0085 were applied before activation.
+
+- First deployed with the workflow disabled: `dpl_6MJZ4a7VKskRNV4HgBGZfAM9i15a`; the worker returned HTTP 200 with `paused:true`.
+- Enabled production deployment: `dpl_FfGCVPs5m94KbYMqp5KpYcxGqQTt`, built from that same main commit and assigned to `bgscheduler.vercel.app`.
+- The authenticated admin activation recorded **2026-09-13T11:36:37.162Z** (18:36 Bangkok) as the immutable launch time and enabled publishing in the same transaction. Never reset this timestamp.
+- Initial independent attendance synchronization returned HTTP 200, success, **559 one-to-one student/course/tutor series**, every count zero, no group/unknown series, no unresolved instructors, and no reminders sent. Run ID: `4e8a1310-d572-4dbd-806a-55a761e84669`.
+- The live pause/resume controls advanced the settings revision to 3 and preserved the exact launch timestamp. Publishing was left enabled.
+- The authenticated production worker returned HTTP 200 with `paused:false`. Unauthenticated worker access and public upload-token requests returned 401; the guide required login. A forged upload completion was rejected and created no file records (the generic error response was 500).
+- Production private Blob upload/read returned identical bytes; an unauthenticated direct download returned 403. Original submissions retain private storage and authenticated application downloads.
+- The production first-use welcome, skip, replay, all nine admin practice steps, sample formatting, document previews, simulated approval/publication and history completed successfully. Only guide progress persisted; no real processing or publication jobs were created. The permanent Help / Practise button remained available.
+- A real private browser upload and AI job were also verified in the isolated database: processing completed after the browser was closed. A raster-only synthetic handwriting-style answer was read correctly; the missing second page was flagged for review and embedded instructions to award full marks were ignored. This is not a claim about the accuracy of arbitrary student handwriting.
+
+Detailed operator evidence is retained in ignored `output/progress-tests-verification/production-*.json`, alongside the native publication, document and AI checks. The intended-student visibility limitation stated above remains explicit: membership and access settings were verified, but no separate student-account login was available.
