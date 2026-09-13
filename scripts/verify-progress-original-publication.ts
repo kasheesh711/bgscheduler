@@ -4,7 +4,7 @@ import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { parseEnv } from "node:util";
 import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { put } from "@vercel/blob";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import * as s from "../src/lib/db/schema";
@@ -21,7 +21,7 @@ async function main() {
   if (!databaseUrl || new URL(databaseUrl).hostname !== "localhost" || !new URL(databaseUrl).pathname.endsWith("_test")) throw new Error("Use a disposable localhost *_test database.");
   if (!process.argv.includes("--live-wise") || !envFile || courseId !== "6990f14e2f5bc252039abf3b" || studentId !== "696e2a2043579bbada1ff78f") throw new Error("Pass --live-wise, PT_WISE_ENV_FILE and the documented synthetic-validation course/student IDs.");
   const validation = parseEnv(await readFile(".env.local", "utf8")), production = parseEnv(await readFile(envFile, "utf8"));
-  Object.assign(process.env, production, { BLOB_READ_WRITE_TOKEN: validation.BLOB_READ_WRITE_TOKEN, DATABASE_URL: databaseUrl, PROGRESS_TEST_WORKSPACE_ENABLED: "true", OPENAI_API_KEY: "", OPENAI_PROGRESS_TEST_API_KEY: "" });
+  Object.assign(process.env, { WISE_USER_ID: production.WISE_USER_ID, WISE_API_KEY: production.WISE_API_KEY, WISE_NAMESPACE: production.WISE_NAMESPACE ?? "begifted-education", VERCEL: "", AWS_LAMBDA_FUNCTION_NAME: "", BLOB_READ_WRITE_TOKEN: validation.BLOB_READ_WRITE_TOKEN, DATABASE_URL: databaseUrl, PROGRESS_TEST_WORKSPACE_ENABLED: "true", OPENAI_API_KEY: "", OPENAI_PROGRESS_TEST_API_KEY: "" });
   const pool = new Pool({ connectionString: databaseUrl }), db = drizzle(pool, { schema: s }) as unknown as Database;
   try {
     const email = "original-publication-verification@example.test", owner = "original-publication-verification-20260914";
@@ -34,8 +34,8 @@ async function main() {
       assessment = (await getAssessment(scope, assessment.id, db)).assessment;
       return executeCommand(scope, { ...action, id: assessment.id, expectedRevision: assessment.revision } as Command, db);
     };
-    const process = async (id: string) => {
-      const job = await claimJob(db, undefined, id); assert(job); await runJob(job, db);
+    const runRequestedJob = async (id: string) => {
+      const job = await claimJob(db, new Date(Date.now() + 120_000), id); assert(job); await runJob(job, db);
       const [done] = await db.select().from(s.ptJobs).where(eq(s.ptJobs.id, id));
       assert.equal(done.status, "completed", done.error ?? "Processing incomplete");
     };
@@ -63,10 +63,11 @@ async function main() {
     }
     assessment = (await getAssessment(scope, assessment.id, db)).assessment;
     if (!assessment.approvedReviewId) {
-      const preview = await act({ action: "preview-review" }); await process(preview.jobId!);
-      const approved = await act({ action: "approve", confirmed: true }); await process(approved.jobId!);
+      const [pending] = await db.select().from(s.ptJobs).where(and(eq(s.ptJobs.targetId, assessment.id), eq(s.ptJobs.kind, "render-review"), inArray(s.ptJobs.status, ["queued", "running"])));
+      const preview = pending ? { jobId: pending.id } : await act({ action: "preview-review" }); await runRequestedJob(preview.jobId!);
+      const approved = await act({ action: "approve", confirmed: true }); await runRequestedJob(approved.jobId!);
     } else {
-      const result = await act({ action: "publish" }); if (result.jobId) await process(result.jobId);
+      const result = await act({ action: "publish" }); if (result.jobId) await runRequestedJob(result.jobId);
     }
     assessment = (await getAssessment(scope, assessment.id, db)).assessment;
     assert.equal(assessment.publicationStatus, "published");
