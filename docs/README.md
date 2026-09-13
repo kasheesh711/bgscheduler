@@ -191,7 +191,7 @@ surface has no nav entry of its own.
 
 | Feature | Badge | Summary |
 |---|---|---|
-| [Progress Tests](./features/progress-tests.md) | stable | The every-8-classes progress-test cadence as a tracked lifecycle, with a teacher heads-up, a morning admin digest, and bilingual parent outreach. |
+| [Progress Tests](./features/progress-tests.md) | stable | Tutor-owned one-to-one preparation, grading, native Wise publication and interactive first-use practice, with fixed eight-class cadence. |
 | [Student Schedule](./features/student-schedule.md) | stable | One student's month of classes: admin lookup and print-to-PDF, plus a no-login capability-token link a parent opens from LINE. Same payload across all three surfaces. |
 | [Parent Class Report](./features/student-report.md) | stable | What a family actually got for its money over a date range: per-class rows off the credit-control snapshot, optional tutor-feedback sub-rows, an A4 print surface, three CSV exports, and the LINE `/report` command. Nav label **Parent Report**. |
 | [Learning Plans](./features/learning-plans.md) | stable | Turns the committed BeGifted syllabus into a printable, student-specific plan. Stateless — plan content lives in the URL; only access grants are stored. |

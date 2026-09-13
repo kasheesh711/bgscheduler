@@ -90,6 +90,10 @@
     {
       "path": "/api/internal/class-assignments/publish-recovery",
       "schedule": "1-56/5 * * * *"
+    },
+    {
+      "path": "/api/internal/progress-tests/process",
+      "schedule": "* * * * *"
     }
   ]
 }

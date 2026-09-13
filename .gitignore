@@ -70,3 +70,6 @@ graphify-out/
 # oh-my-claudecode operational state (`.omc/skills/` is the committable exception)
 .omc/*
 !.omc/skills/
+
+# Synthetic Progress Tests verification artifacts
+/output/progress-tests-verification/

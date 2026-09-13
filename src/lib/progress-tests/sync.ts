@@ -62,6 +62,7 @@ import {
   type TeacherHeadsUpEnrollment,
 } from "./teacher-heads-up";
 import type { ProgressTestAiSummary } from "./types";
+import { launchConfig } from "./workspace/cutover";
 
 const SESSION_PAGE_SIZE = 1000;
 // Wise rejects PAST-session date ranges of roughly 100+ days with
@@ -497,6 +498,13 @@ export async function runProgressTestSync(deps: ProgressTestSyncDeps): Promise<P
   const now = deps.now ?? new Date();
 
   try {
+    const launch = await launchConfig(db);
+    if (launch) {
+      const { syncWorkspace } = await import("./workspace/sync");
+      const result = await syncWorkspace(deps, launch.activatedAt);
+      revalidateTag(PROGRESS_TESTS_CACHE_TAG, { expire: 0 });
+      return result;
+    }
     // Step 1: attended-with-credit sessions from the active credit-control snapshot.
     const attendedSessions = await loadActiveCreditControlSnapshotSessions(db);
 

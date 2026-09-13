@@ -1,3 +1,5 @@
+vi.mock("@/lib/progress-tests/workspace/cutover", () => ({ launchConfig: vi.fn().mockResolvedValue(null) }));
+import { launchConfig } from "@/lib/progress-tests/workspace/cutover";
 vi.mock("@/lib/credit-control/daily-refresh", async (original) => ({ ...await original<typeof import("@/lib/credit-control/daily-refresh")>(), hasTodayRefresh: vi.fn().mockResolvedValue(true), claimDailyRefresh: async (db: unknown, _kind: unknown, _now: unknown, claim: (db: unknown) => Promise<unknown>) => claim(db) }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -57,6 +59,7 @@ describe("runProgressTestSyncRequest", () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(launchConfig).mockResolvedValue(null);
     vi.mocked(hasTodayRefresh).mockResolvedValue(true);
     process.env.WISE_INSTITUTE_ID = "institute-1";
     vi.mocked(getDb).mockReturnValue(makeDbMock() as never);
@@ -89,6 +92,15 @@ describe("runProgressTestSyncRequest", () => {
     expect(await response.json()).toMatchObject({ skipped: true, reason: "waiting_for_today_shared_snapshot" });
     expect(createWiseClient).not.toHaveBeenCalled();
     expect(runProgressTestSync).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the launched workspace independently of the daily shared snapshot", async () => {
+    vi.mocked(launchConfig).mockResolvedValue({id:"launch",activatedAt:new Date(),activatedBy:"admin"});
+    vi.mocked(hasTodayRefresh).mockResolvedValue(false);
+    const res = await runProgressTestSyncRequest({triggerType:"cron"});
+    expect(res.status).toBe(200);
+    expect(hasTodayRefresh).not.toHaveBeenCalled();
+    expect(createWiseClient).toHaveBeenCalledWith(expect.objectContaining({requestsPerSecond:3,maxConcurrency:4}));
   });
 
   it("returns 202 and skips when a fresh sync is already running (single-flight)", async () => {

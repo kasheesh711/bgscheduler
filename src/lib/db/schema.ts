@@ -3,6 +3,7 @@ import type { RoomBotEvent, RoomEvidence } from "@/lib/room-booking/model";
 import type { CompletionEvidence, CoverageRevision, LeaveInterpretation, WorkStudent } from "@/lib/leave-requests/work-types";
 import {
   pgTable,
+  primaryKey,
   uuid,
   text,
   boolean,
@@ -5496,4 +5497,120 @@ export const studentScheduleLiveCache = pgTable("student_schedule_live_cache", {
   leaseToken: uuid("lease_token"),
   leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
   retryAfter: timestamp("retry_after", { withTimezone: true }),
+});
+
+// Tutor Progress Tests: additive workspace. Legacy state remains historical.
+export const ptWorkspaceConfig = pgTable("pt_workspace_config", {
+  id: text("id").primaryKey(), activatedAt: timestamp("activated_at", { withTimezone: true }).notNull(),
+  activatedBy: text("activated_by").notNull(),
+});
+export const ptSeries = pgTable("pt_series", {
+  id: uuid("id").primaryKey().defaultRandom(), ownerKey: text("owner_key").notNull(),
+  wiseClassId: text("wise_class_id").notNull(), wiseStudentId: text("wise_student_id").notNull(),
+  studentName: text("student_name").notNull(), courseName: text("course_name").notNull(),
+  tutorName: text("tutor_name").notNull(), classType: text("class_type"),
+  count: integer("count").notNull().default(0), sessionIds: jsonb("session_ids").$type<string[]>().notNull().default([]),
+  upcomingSessions: jsonb("upcoming_sessions").$type<{ id: string; date: string }[]>().notNull().default([]),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex("pt_series_owner_course_student_idx").on(t.ownerKey, t.wiseClassId, t.wiseStudentId)]);
+export const ptFiles = pgTable("pt_files", {
+  id: uuid("id").primaryKey().defaultRandom(), ownerKey: text("owner_key").notNull(),
+  name: text("name").notNull(), mime: text("mime").notNull(), size: integer("size").notNull(),
+  pageCount: integer("page_count"),
+  pathname: text("pathname").notNull(), sha256: text("sha256"), status: text("status").notNull().default("pending"),
+  purpose: text("purpose").notNull(), createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex("pt_files_path_idx").on(t.pathname), index("pt_files_owner_idx").on(t.ownerKey)]);
+export const ptPapers = pgTable("pt_papers", {
+  id: uuid("id").primaryKey().defaultRandom(), ownerKey: text("owner_key").notNull(), title: text("title").notNull(),
+  revision: integer("revision").notNull().default(0), createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [index("pt_papers_owner_idx").on(t.ownerKey)]);
+export const ptPaperVersions = pgTable("pt_paper_versions", {
+  id: uuid("id").primaryKey().defaultRandom(), paperId: uuid("paper_id").notNull().references(() => ptPapers.id),
+  revision: integer("revision").notNull(), sourceFileId: uuid("source_file_id").references(() => ptFiles.id),
+  keyFileId: uuid("key_file_id").references(() => ptFiles.id),
+  paper: jsonb("paper").$type<import("../progress-tests/workspace/model").Paper>().notNull(),
+  approved: boolean("approved").notNull().default(false), createdBy: text("created_by").notNull(),
+  model: text("model"), createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex("pt_paper_version_idx").on(t.paperId, t.revision)]);
+export const ptAssessments = pgTable("pt_assessments", {
+  id: uuid("id").primaryKey().defaultRandom(), seriesId: uuid("series_id").notNull().references(() => ptSeries.id),
+  cycle: integer("cycle").notNull(), revision: integer("revision").notNull().default(0),
+  preparation: jsonb("preparation").$type<import("../progress-tests/workspace/model").Preparation>().notNull().default({ paperVersionId: null, topics: "", studentInformed: false }),
+  notifiedAt: timestamp("notified_at", { withTimezone: true }), notificationError: text("notification_error"),
+  currentSubmissionId: uuid("current_submission_id"), currentReviewId: uuid("current_review_id"),
+  approvedReviewId: uuid("approved_review_id"), publicationStatus: text("publication_status").notNull().default("not_ready"),
+  publicationError: text("publication_error"), updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex("pt_assessment_series_cycle_idx").on(t.seriesId, t.cycle)]);
+export const ptSubmissions = pgTable("pt_submissions", {
+  id: uuid("id").primaryKey().defaultRandom(), assessmentId: uuid("assessment_id").notNull().references(() => ptAssessments.id),
+  data: jsonb("data").$type<import("../progress-tests/workspace/model").Submission>().notNull(),
+  createdBy: text("created_by").notNull(), createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export const ptReviews = pgTable("pt_reviews", {
+  id: uuid("id").primaryKey().defaultRandom(), assessmentId: uuid("assessment_id").notNull().references(() => ptAssessments.id),
+  data: jsonb("data").$type<import("../progress-tests/workspace/model").Review>().notNull(),
+  approved: boolean("approved").notNull().default(false), createdBy: text("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export const ptJobs = pgTable("pt_jobs", {
+  id: uuid("id").primaryKey().defaultRandom(), ownerKey: text("owner_key").notNull(), kind: text("kind").notNull(),
+  targetId: uuid("target_id").notNull(), expectedRevision: integer("expected_revision").notNull(),
+  input: jsonb("input").$type<Record<string, unknown>>().notNull().default({}),
+  result: jsonb("result").$type<Record<string, unknown>>(), status: text("status").notNull().default("queued"),
+  attempts: integer("attempts").notNull().default(0), leaseToken: uuid("lease_token"),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }), availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
+  error: text("error"), createdBy: text("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+}, t => [index("pt_jobs_due_idx").on(t.status, t.availableAt), uniqueIndex("pt_jobs_active_target_idx").on(t.kind, t.targetId).where(sql`${t.status} in ('queued','running')`)]);
+export const ptArtifacts = pgTable("pt_artifacts", {
+  id: uuid("id").primaryKey().defaultRandom(), reviewId: uuid("review_id").notNull().references(() => ptReviews.id),
+  kind: text("kind").notNull(), fileId: uuid("file_id").notNull().references(() => ptFiles.id),
+}, t => [uniqueIndex("pt_artifact_review_kind_idx").on(t.reviewId, t.kind)]);
+
+export const ptJobAttempts = pgTable("pt_job_attempts", {
+  id: uuid("id").primaryKey().defaultRandom(), jobId: uuid("job_id").notNull().references(() => ptJobs.id),
+  attempt: integer("attempt").notNull(), model: text("model"), prompt: text("prompt"),
+  input: jsonb("input").$type<Record<string, unknown>>().notNull().default({}),
+  result: jsonb("result").$type<Record<string, unknown>>(), status: text("status").notNull().default("running"),
+  error: text("error"), startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+}, t => [uniqueIndex("pt_job_attempt_number_idx").on(t.jobId,t.attempt)]);
+export const ptPublications = pgTable("pt_publications", {
+  version: integer("version").notNull().default(1), sectionId: text("section_id"), updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  id: uuid("id").primaryKey().defaultRandom(), reviewId: uuid("review_id").notNull().references(() => ptReviews.id),
+  status: text("status").notNull(), remoteIds: jsonb("remote_ids").$type<string[]>().notNull().default([]),
+  error: text("error"), createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex("pt_publication_review_idx").on(t.reviewId)]);
+
+export const ptAttendanceEvidence = pgTable("pt_attendance_evidence", {
+  id: uuid("id").primaryKey().defaultRandom(), wiseSessionId: text("wise_session_id").notNull(),
+  wiseStudentId: text("wise_student_id").notNull(), contentHash: text("content_hash").notNull(),
+  data: jsonb("data").$type<Record<string, unknown>>().notNull(),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex("pt_attendance_evidence_version_idx").on(t.wiseSessionId, t.wiseStudentId, t.contentHash)]);
+
+export const ptWorkspaceSettings = pgTable("pt_workspace_settings", {
+  id: text("id").primaryKey().default("workspace"), revision: integer("revision").notNull().default(0),
+  publishingEnabled: boolean("publishing_enabled").notNull().default(false), verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  updatedBy: text("updated_by"), updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export const ptWiseDestinations = pgTable("pt_wise_destinations", {
+  wiseClassId: text("wise_class_id").primaryKey(), wiseStudentId: text("wise_student_id").notNull(),
+  sectionId: text("section_id"), status: text("status").notNull().default("new"), updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export const ptPublicationFiles = pgTable("pt_publication_files", {
+  id: uuid("id").primaryKey().defaultRandom(), publicationId: uuid("publication_id").notNull().references(() => ptPublications.id),
+  kind: text("kind").$type<"graded" | "report">().notNull(), fileId: uuid("file_id").notNull().references(() => ptFiles.id),
+  name: text("name").notNull(), sha256: text("sha256").notNull(), status: text("status").notNull().default("pending"),
+  resourceId: text("resource_id"), wiseFileId: text("wise_file_id"), attempts: integer("attempts").notNull().default(0),
+  error: text("error"), verifiedAt: timestamp("verified_at", { withTimezone: true }), updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex("pt_publication_files_publication_id_kind_key").on(t.publicationId,t.kind),uniqueIndex("pt_publication_files_name_key").on(t.name)]);
+export const ptGuideProgress = pgTable("pt_guide_progress", {
+  email: text("email").notNull(), guideVersion: integer("guide_version").notNull(), status: text("status").$type<"new" | "started" | "skipped" | "completed">().notNull(),
+  step: integer("step").notNull().default(0), revision: integer("revision").notNull().default(0), updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [primaryKey({columns:[t.email,t.guideVersion]})]);
+export const ptSourceIssues = pgTable("pt_source_issues", {
+  sourceKey: text("source_key").primaryKey(), studentName: text("student_name").notNull(), courseName: text("course_name").notNull(),
+  reason: text("reason").notNull(), observedAt: timestamp("observed_at", { withTimezone: true }).notNull().defaultNow(),
 });

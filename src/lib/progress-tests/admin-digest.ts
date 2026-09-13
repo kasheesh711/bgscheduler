@@ -26,6 +26,9 @@ import {
 } from "@/lib/classrooms/schedule-email";
 import { APP_BASE_URL } from "@/lib/leave-requests/config";
 import { PROGRESS_TEST_THRESHOLD } from "./config";
+import { launchConfig } from "./workspace/cutover";
+import { workspaceDigest } from "./workspace/digest";
+import { hasPageAccess } from "./page-access";
 
 const ADMIN_DIGEST_ACTOR = "cron@progress-test-admin-digest";
 
@@ -53,6 +56,7 @@ interface DigestStudentRow {
 
 /** Aggregated content the digest reports on. */
 interface DigestContent {
+  tutorWorkflow?: boolean;
   approaching: DigestStudentRow[];
   due: DigestStudentRow[];
   unresolvedEmails: string[];
@@ -83,9 +87,9 @@ function dashboardUrl(): string {
  */
 async function loadAdminEmails(db: Database): Promise<string[]> {
   const rows = await db
-    .select({ email: schema.adminUsers.email })
+    .select({ email: schema.adminUsers.email, disabled: schema.adminUsers.disabled, allowedPages: schema.adminUsers.allowedPages })
     .from(schema.adminUsers);
-  return [...new Set(rows.map((row) => row.email.trim().toLowerCase()).filter(Boolean))].sort();
+  return [...new Set(rows.filter(row => !row.disabled && hasPageAccess(row.allowedPages,"/progress-tests")).map((row) => row.email.trim().toLowerCase()).filter(Boolean))].sort();
 }
 
 /**
@@ -100,6 +104,8 @@ async function loadAdminEmails(db: Database): Promise<string[]> {
  * @returns the approaching/due student rows plus unresolved teacher emails.
  */
 async function buildDigestContent(db: Database): Promise<DigestContent> {
+  const launch = await launchConfig(db);
+  if (launch) return workspaceDigest(db,launch.activatedAt);
   const cycleRows = await db
     .select({
       studentName: schema.progressTestCycleState.studentName,
@@ -166,7 +172,7 @@ function renderText(digestDate: string, content: DigestContent): string {
     "",
   );
 
-  lines.push(`Due, not yet booked (${content.due.length}):`);
+  lines.push(`${content.tutorWorkflow ? "Due or awaiting approval" : "Due, not yet booked"} (${content.due.length}):`);
   lines.push(
     ...(content.due.length > 0 ? content.due.map(studentLine) : ["- None"]),
     "",
@@ -174,7 +180,7 @@ function renderText(digestDate: string, content: DigestContent): string {
 
   if (content.unresolvedEmails.length > 0) {
     lines.push(
-      "Action needed - teacher heads-up could not be sent (resolve the tutor contact or notify the teacher manually):",
+      content.tutorWorkflow ? "Action needed — identities, reminders and publication:" : "Action needed - teacher heads-up could not be sent (resolve the tutor contact or notify the teacher manually):",
       ...content.unresolvedEmails.map((email) => `- ${email}`),
       "",
     );
@@ -199,7 +205,7 @@ function renderStudentListHtml(rows: DigestStudentRow[]): string {
 function renderHtml(digestDate: string, content: DigestContent): string {
   const actionNeeded =
     content.unresolvedEmails.length > 0
-      ? `<h3 style="margin:16px 0 8px;color:#b45309;">Action needed</h3><p style="margin:0 0 8px;color:#475569;">A teacher heads-up could not be sent for the tutors below — resolve the tutor contact or notify the teacher manually.</p><ul style="margin:0 0 16px;">${content.unresolvedEmails
+      ? `<h3 style="margin:16px 0 8px;color:#b45309;">Action needed</h3><p style="margin:0 0 8px;color:#475569;">${content.tutorWorkflow ? "Review instructor identities, failed reminders and pending publication in the workspace." : "A teacher heads-up could not be sent for the tutors below — resolve the tutor contact or notify the teacher manually."}</p><ul style="margin:0 0 16px;">${content.unresolvedEmails
           .map((email) => `<li>${escapeHtml(email)}</li>`)
           .join("")}</ul>`
       : "";
@@ -209,7 +215,7 @@ function renderHtml(digestDate: string, content: DigestContent): string {
       <p style="margin:0 0 16px;color:#475569;">${escapeHtml(digestDate)}</p>
       <h3 style="margin:16px 0 8px;">Approaching a progress test (${content.approaching.length})</h3>
       ${renderStudentListHtml(content.approaching)}
-      <h3 style="margin:16px 0 8px;">Due, not yet booked (${content.due.length})</h3>
+      <h3 style="margin:16px 0 8px;">${content.tutorWorkflow ? "Due or awaiting approval" : "Due, not yet booked"} (${content.due.length})</h3>
       ${renderStudentListHtml(content.due)}
       ${actionNeeded}
       <p><a href="${dashboardUrl()}">Open Progress Tests dashboard</a></p>

@@ -1,5 +1,5 @@
 import { creditControlActive } from "@/lib/credit-control/mode";
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import { getDb } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -107,7 +107,18 @@ async function countLinePendingReviews(db: Database): Promise<number> {
   return Number(row?.count ?? "0");
 }
 
-async function countProgressTestActions(db: Database): Promise<{ due: number; approaching: number }> {
+async function countProgressTestActions(db: Database, email?: string | null): Promise<{ due: number; approaching: number }> {
+  const { launchConfig } = await import("@/lib/progress-tests/workspace/cutover");
+  if (await launchConfig(db)) {
+    if (!email) return { due:0,approaching:0 };
+    const { scopeForEmail } = await import("@/lib/progress-tests/workspace/access");
+    const { ownerWhere } = await import("@/lib/progress-tests/workspace/data");
+    const scope = await scopeForEmail(email,db);
+    const rows = await db.select({ count:schema.ptSeries.count,cycle:schema.ptAssessments.cycle,approved:schema.ptAssessments.approvedReviewId,current:schema.ptAssessments.currentReviewId }).from(schema.ptAssessments)
+      .innerJoin(schema.ptSeries,eq(schema.ptSeries.id,schema.ptAssessments.seriesId)).where(and(ownerWhere(schema.ptSeries.ownerKey,scope),eq(schema.ptSeries.classType,"ONE_TO_ONE")));
+    const outstanding = rows.filter(r => !(r.approved && r.approved === r.current));
+    return { due:outstanding.filter(r => r.count>=r.cycle*8).length,approaching:outstanding.filter(r => r.count>=r.cycle*8-2 && r.count<r.cycle*8).length };
+  }
   const rows = await db
     .select({
       status: schema.progressTestCycleState.status,
@@ -174,7 +185,7 @@ export async function getHomeSummaryPayload(
       ? loadSource(() => countLinePendingReviews(db))
       : Promise.resolve({ data: null, error: null }),
     canAccess("progressTests")
-      ? loadSource(() => countProgressTestActions(db))
+      ? loadSource(() => countProgressTestActions(db,input.email))
       : Promise.resolve({ data: null, error: null }),
     canAccess("creditControl")
       ? loadSource(() => getCreditControlPayload(undefined, { clearRecoveredActionStates: false }))

@@ -2,10 +2,12 @@ import { NextResponse } from "next/server";
 import { requireProgressTestsSession, progressTestsErrorResponse } from "@/lib/progress-tests/api";
 import { getProgressTestsPayload } from "@/lib/progress-tests/service";
 import { resolveTeacherCanonicalKeys } from "@/lib/progress-tests/teacher-access";
+import { assertLegacyActive } from "@/lib/progress-tests/workspace/cutover";
 
 export async function GET() {
   try {
     const user = await requireProgressTestsSession();
+    await assertLegacyActive();
     // Teachers see only their own students; resolve their canonicalKey set fresh
     // (covers online + onsite identities). Admins (null) see every enrollment.
     const teacherCanonicalKeys =
