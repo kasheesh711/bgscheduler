@@ -1,6 +1,7 @@
 import { edgeAuth } from "@/lib/auth-edge";
 import { validateSessionAccess } from "@/lib/auth-session";
 import { isTeacherEmailAsset } from "@/lib/teacher-emails/brand";
+import { isProgressTestBrandAsset } from "@/lib/progress-tests/workspace/brand";
 import {
   isMaintenanceBypassEmail,
   isMaintenanceExempt,
@@ -12,6 +13,7 @@ import { NextResponse } from "next/server";
 function isPublicRoute(pathname: string) {
   return (
     isTeacherEmailAsset(pathname) ||
+    isProgressTestBrandAsset(pathname) ||
     pathname.startsWith("/login") ||
     pathname.startsWith("/api/auth") ||
     pathname === "/api/search/assistant" ||

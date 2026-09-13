@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("@/lib/progress-tests/workspace/cutover", () => ({ launchConfig: vi.fn().mockResolvedValue(null) }));
 
 vi.mock("@/lib/credit-control/service", () => ({ getCreditControlPayload: vi.fn() }));
 vi.mock("@/lib/data-health/dashboard", () => ({ getDataHealthDashboardPayload: vi.fn() }));

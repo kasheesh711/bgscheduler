@@ -3,8 +3,10 @@ import { auth } from "@/lib/auth";
 import { getCronSecretStatus } from "@/lib/internal/cron-auth";
 import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import { runProgressTestSyncRequest } from "@/lib/progress-tests/run-sync-request";
+import { scopeForEmail } from "@/lib/progress-tests/workspace/access";
+import { workspaceError } from "@/lib/progress-tests/workspace/http";
 
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 async function handleSync(request: NextRequest, options: { allowSessionAuth: boolean }) {
   const cronSecretStatus = getCronSecretStatus(request);
@@ -18,7 +20,11 @@ async function handleSync(request: NextRequest, options: { allowSessionAuth: boo
 
   if (options.allowSessionAuth) {
     const session = await auth();
-    if (session) {
+    if (session?.user?.role === "admin") {
+      try {
+        const scope = await scopeForEmail(session.user.email || "");
+        if (scope.keys !== null) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      } catch (error) { return workspaceError(error); }
       return withCronInvocationAudit(
         {
           jobKey: "progress_tests",

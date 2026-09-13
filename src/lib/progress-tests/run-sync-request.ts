@@ -7,6 +7,7 @@ import * as schema from "@/lib/db/schema";
 import { createWiseClient } from "@/lib/wise/client";
 import { STALE_RUNNING_PROGRESS_TEST_SYNC_MS } from "./config";
 import { runProgressTestSync } from "./sync";
+import { launchConfig } from "./workspace/cutover";
 
 const STALE_RUNNING_PROGRESS_TEST_SYNC_ERROR =
   "Progress test sync marked failed because it was still running after 20 minutes; likely timed out or the request was aborted.";
@@ -147,22 +148,23 @@ export async function runProgressTestSyncRequest(
   const db = getDb();
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
   const now = new Date();
-  if (!await hasTodayRefresh(db, "shared", now)) return NextResponse.json(dailySkip("waiting_for_today_shared_snapshot"));
+  const launched = !!await launchConfig(db);
+  if (!launched && !await hasTodayRefresh(db, "shared", now)) return NextResponse.json(dailySkip("waiting_for_today_shared_snapshot"));
   const claim = (tx: Database) => acquireSyncRun(tx, now, options.triggerType ?? "manual", options.actorEmail ?? null);
-  const guard = options.triggerType === "cron" ? await claimDailyRefresh(db, "progress", now, claim) : await claim(db);
+  const guard = !launched && options.triggerType === "cron" ? await claimDailyRefresh(db, "progress", now, claim) : await claim(db);
 
   if ("skipped" in guard) {
     return NextResponse.json(guard, { status: 202 });
   }
 
-  const client = createWiseClient();
+  const client = createWiseClient(launched ? { requestsPerSecond: 3, maxConcurrency: 4, signal: AbortSignal.timeout(650_000) } : {});
   const result = await runProgressTestSync({
     db,
     client,
     instituteId,
     now,
     syncRunId: guard.syncRunId,
-    runMetadata: options.triggerType === "cron" ? { dailyDate: bangkokDailyWindow(now, "progress").day, dailySlot: bangkokDailyWindow(now, "progress").slot, dailyTrigger: "cron" } : {},
+    runMetadata: !launched && options.triggerType === "cron" ? { dailyDate: bangkokDailyWindow(now, "progress").day, dailySlot: bangkokDailyWindow(now, "progress").slot, dailyTrigger: "cron" } : {},
   });
 
   return NextResponse.json({

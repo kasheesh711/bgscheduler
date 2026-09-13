@@ -1,6 +1,7 @@
 import { hasTodayRefresh } from "@/lib/credit-control/daily-refresh";
 vi.mock("@/lib/credit-control/daily-refresh", () => ({ hasTodayRefresh: vi.fn().mockResolvedValue(true) }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("@/lib/progress-tests/workspace/cutover", () => ({ launchConfig: vi.fn().mockResolvedValue(null) }));
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { ScheduleEmailSender } from "@/lib/classrooms/schedule-email";

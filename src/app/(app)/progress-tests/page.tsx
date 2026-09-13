@@ -2,6 +2,9 @@ import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { requireProgressTestsSession } from "@/lib/progress-tests/api";
 import { ProgressTestsDashboard } from "@/components/progress-tests/progress-tests-dashboard";
+import { TutorProgressWorkspace } from "@/components/progress-tests/workspace/workspace";
+import { workspaceEnabled } from "@/lib/progress-tests/workspace/model";
+import { launchConfig } from "@/lib/progress-tests/workspace/cutover";
 
 async function ProgressTestsBody() {
   let user;
@@ -14,6 +17,8 @@ async function ProgressTestsBody() {
     throw error;
   }
 
+  if (workspaceEnabled()) return <TutorProgressWorkspace />;
+  if (await launchConfig()) return <p>The tutor Progress Tests workspace is temporarily paused. Your submissions, approvals and class counters are preserved.</p>;
   return <ProgressTestsDashboard sessionUser={user} />;
 }
 

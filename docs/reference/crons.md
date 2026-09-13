@@ -1,6 +1,6 @@
 # Cron Schedule
 
-**Credit Control retirement:** physical cron expressions are retained for easy restoration. In default `CREDIT_CONTROL_MODE=retired`, shared student-data work runs at 06:20 Bangkok, with recovery at 06:50 / 07:20. Progress Tests runs daily at 07:25, recovering at 07:55 / 08:25 in both modes. Other ticks are audited skips and never count as data freshness. LINE credit digests are paused; Progress Tests digests require today’s successful refresh. See [operating procedure](../operations/credit-control-retirement.md).
+**Credit Control retirement:** physical cron expressions are retained for easy restoration. In default `CREDIT_CONTROL_MODE=retired`, shared student-data work runs at 06:20 Bangkok, with recovery at 06:50 / 07:20. Before tutor-workspace launch, Progress Tests runs daily at 07:25, recovering at 07:55 / 08:25. After launch it owns fresh Wise attendance reads every half-hour, independently of the shared daily snapshot. Other ticks are audited skips and never count as data freshness. LINE credit digests are paused; Progress Tests digests require today’s successful refresh. See [operating procedure](../operations/credit-control-retirement.md).
 
 **Status:** Stable. **Authoritative source:** [`vercel.json`](../../vercel.json).
 
@@ -34,7 +34,8 @@ Rows are in `vercel.json` order. Schedules are **UTC**; the business timezone is
 | 4 | `/api/internal/sync-onsite-foot-traffic` | `18 18 * * *` | 01:18 daily | `onsite_foot_traffic` | 800s | Reconcile Wise PAST sessions into de-identified onsite student-visits |
 | 5 | `/api/internal/sync-competitor-intelligence` | `28 18 * * 0` | Mon 01:28 weekly | `competitor_intelligence` | 800s | Crawl competitor sources under a budget cap, normalize, AI-summarize |
 | 6 | `/api/internal/sync-credit-control` | `20,50 * * * *` | :20 / :50 hourly | `credit_control` | 800s | Rebuild the prepaid-credit depletion snapshot |
-| 7 | `/api/internal/sync-progress-tests` | `25,55 * * * *` | :25 / :55 hourly | `progress_tests` | 300s | Recompute every-8-classes progress-test cycle state |
+| 7 | `/api/internal/sync-progress-tests` | `25,55 * * * *` | :25 / :55 hourly | `progress_tests` | 800s | Fresh one-to-one attendance and tutor-owned fixed cycles after launch |
+| PT | `/api/internal/progress-tests/process` | `* * * * *` | Every minute | `progress_tests_processing` | 300s | Durable document/publication jobs; leases, retries and pause enforcement |
 | 8 | `/api/internal/progress-tests/admin-digest` | `35 0 * * *` | 07:35 daily | `progress_tests_digest` | 300s | Email admins the approaching/due progress-test digest |
 | 9 | `/api/internal/sync-wise-activity` | `2,17,32,47 * * * *` | :02/:17/:32/:47 hourly | `wise_activity` | 800s | Mirror Wise audit events into the persisted event store |
 | 10 | `/api/internal/sync-post-class-feedback` | `13,43 * * * *` | :13 / :43 hourly | `post_class_feedback` | 800s | Rolling 4-day feedback collection + AI review + retries + hygiene |
@@ -305,17 +306,9 @@ The `maxDuration` carries an unusually specific comment: the route sat at 300s w
 
 ### 5. Progress tests sync — `/api/internal/sync-progress-tests`
 
-| | |
-|---|---|
-| Schedule | `25,55 * * * *` ([`vercel.json:20-23`](../../vercel.json)) |
-| `maxDuration` | 300s ([`route.ts:7`](../../src/app/api/internal/sync-progress-tests/route.ts)) |
-| Job body | `runProgressTestSyncRequest({ triggerType: "cron" })` ([`route.ts:15`](../../src/app/api/internal/sync-progress-tests/route.ts)) |
-| Run table | `progress_test_sync_runs` |
-| Feature | [Progress Tests](../features/progress-tests.md) — **stable** |
+Cron GET uses the secret; POST requires a freshly authorized Progress Tests admin. Maximum 800s. After immutable launch, direct Wise student/session/credit-history reads run with a 650s deadline, concurrency four and three requests per second. Groups and unknown course types do not count. The durable ledger preserves corrections and each tutor's cadence. Before launch, the prior daily shared-snapshot gate remains intact. The registry reflects the new half-hour schedule while the workspace is enabled.
 
-Loads attended-with-credit sessions from the active credit-control snapshot, resolves each session's teacher through the active Wise snapshot's identity groups, upserts the durable ledger idempotently on `wiseSessionId + wiseStudentId`, recomputes per-enrollment cycle state, and — for enrollments newly crossing into "approaching" — generates an AI summary and emails the most-frequent tutor ([`progress-tests/sync.ts:474-493`](../../src/lib/progress-tests/sync.ts)). Thresholds: due at 8 attended-with-credit classes, teacher heads-up at 6; counting starts 2026-03-01 Bangkok ([`progress-tests/config.ts:8-14`](../../src/lib/progress-tests/config.ts)). On success it sweeps the `progress-tests` cache tag ([`sync.ts:599`](../../src/lib/progress-tests/sync.ts)).
-
-Notification and AI failures are fail-isolated — caught, logged, and never allowed to fail the run ([`sync.ts:484-487`](../../src/lib/progress-tests/sync.ts)). Because this job reads the credit-control snapshot, it is scheduled five minutes after that sync's slot.
+The new `/api/internal/progress-tests/process` runs every minute (300s), dispatching persisted jobs with five-minute leases, three bounded attempts and explicit recovery. Paused publication jobs stay queued while document jobs continue. It is registered in Data Health and its overlap is deliberate, with lease claims preventing duplicate workers.
 
 ### 6. Progress tests admin digest — `/api/internal/progress-tests/admin-digest`
 
@@ -685,7 +678,7 @@ Two behavioural differences from the cron path when run this way: `post_class_fe
 
 14. **The watchdog is itself unmonitored.** `sweepCronJobs` excludes `cron_watchdog` ([`cron-watchdog.ts:167`](../../src/lib/internal/cron-watchdog.ts)) and nothing else checks it, so a silently dead watchdog is indistinguishable from a healthy system. An external heartbeat is the obvious gap.
 
-15. **`sync-progress-tests` keeps a 300s ceiling.** It is the only Wise-fetching sync left at 300s ([`route.ts:7`](../../src/app/api/internal/sync-progress-tests/route.ts)) while it pulls all Wise PAST sessions since 2026-03-01 plus all teachers on every tick ([`progress-tests/sync.ts:503-507`](../../src/lib/progress-tests/sync.ts)). Given the credit-control history (372–390s runs against a 300s limit), confirm current run durations leave headroom, or raise both the route and the registry mirror.
+15. **Historical issue, resolved by tutor workspace: `sync-progress-tests` now has an 800s ceiling.** It is the only Wise-fetching sync left at 300s ([`route.ts:7`](../../src/app/api/internal/sync-progress-tests/route.ts)) while it pulls all Wise PAST sessions since 2026-03-01 plus all teachers on every tick ([`progress-tests/sync.ts:503-507`](../../src/lib/progress-tests/sync.ts)). Given the credit-control history (372–390s runs against a 300s limit), confirm current run durations leave headroom, or raise both the route and the registry mirror.
 
 16. **"Vercel invokes via GET" is a code assertion, not a verified platform fact.** The routes, the registry's `routeMethod`, and the `sync-wise` comment all model the cron request as `GET`; nothing in the repository can attest what the platform actually sends.
 

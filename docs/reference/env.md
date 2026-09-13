@@ -428,3 +428,16 @@ Existing LINE credentials and `APP_BASE_URL` supply messaging and private mobile
 ## Credit Control lifecycle
 
 `CREDIT_CONTROL_MODE` is `retired` by default. Only `active` restores the workspace, feature APIs, half-hourly shared sync and saved credit alert preferences after redeployment. Progress Tests remains daily. The shared snapshot and 60-second schedule cache continue in retired mode. See [restoration procedure](../operations/credit-control-retirement.md).
+
+## Tutor Progress Tests
+
+| Variable | Purpose |
+|---|---|
+| `PROGRESS_TEST_WORKSPACE_ENABLED` | `true` exposes the tutor workspace/worker; deploy false before cutover. After immutable launch, false pauses the surface and never restores legacy behavior. |
+| `BLOB_READ_WRITE_TOKEN` | Token for the environment's **private** Vercel Blob store. Production and validation use separate stores. |
+| `PROGRESS_TEST_PUBLIC_ORIGIN` | Reachable deployment origin for SDK-signed `/api/internal/progress-tests/uploads` callbacks. Production: `https://bgscheduler.vercel.app`. |
+| `OPENAI_PROGRESS_TEST_API_KEY` | Optional dedicated feature credential; falls back to nonempty `OPENAI_API_KEY`. |
+| `OPENAI_PROGRESS_TEST_MODEL` | Explicit model override; validated with `gpt-5.4-mini`. |
+| Existing `WISE_*`, `CRON_SECRET` | Native Content integration and durable worker authorization. |
+
+`pt_workspace_settings.publishing_enabled` is the independent admin pause. `verified_at` records operator integration validation. Neither resets the immutable launch timestamp. No private source-file URLs are exposed in application responses.

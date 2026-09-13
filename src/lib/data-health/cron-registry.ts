@@ -12,6 +12,7 @@ export type CronJobKey =
   | "credit_control"
   | "progress_tests"
   | "progress_tests_digest"
+  | "progress_tests_processing"
   | "post_class_feedback"
   | "post_class_feedback_backfill"
   | "post_class_feedback_digest"
@@ -55,6 +56,10 @@ export interface CronJobDefinition {
 }
 
 export const CRON_JOBS = [
+  { key: "progress_tests_processing", label: "Progress Test Processing", feature: "Progress Tests",
+    path: "/api/internal/progress-tests/process", schedule: "* * * * *", cadenceLabel: "Every minute; recovers document and publication jobs",
+    cadenceMinutes: 1, lateAfterMinutes: 5, maxDurationSeconds: 300, manualOnly: false,
+    dangerous: false, confirmationLabel: null, routeMethod: "GET" },
   { key: "classroom_publish_recovery", label: "Classroom Publish Recovery", feature: "Class Assignments",
     path: "/api/internal/class-assignments/publish-recovery", schedule: "1-56/5 * * * *", cadenceLabel: "Every 5 min; resumes queued room publishing",
     cadenceMinutes: 5, lateAfterMinutes: 15, maxDurationSeconds: 300, manualOnly: false,
@@ -203,7 +208,7 @@ export const CRON_JOBS = [
     cadenceLabel: "Every 30 min",
     cadenceMinutes: 30,
     lateAfterMinutes: 45,
-    maxDurationSeconds: 300,
+    maxDurationSeconds: 800,
     manualOnly: false,
     dangerous: false,
     confirmationLabel: null,
@@ -485,6 +490,7 @@ export function statusRank(status: CronJobStatus): number {
 /** Physical cron schedules remain registered; expected work follows feature mode. */
 export function effectiveCronJob(job: CronJobDefinition): CronJobDefinition {
   if (job.key === "line_credit_digest" && !creditControlActive()) return { ...job, paused: true, cadenceLabel: "Paused while Credit Control is retired" };
+  if (job.key === "progress_tests" && process.env.PROGRESS_TEST_WORKSPACE_ENABLED === "true") return { ...job, requiresSuccessfulRun: true, cadenceMinutes: 30, lateAfterMinutes: 60, cadenceLabel: "Every 30 min — tutor workspace" };
   if (job.key === "progress_tests") return { ...job, requiresSuccessfulRun: true, cadenceMinutes: 1440, expectedBangkokMinute: 445, lateAfterMinutes: 90, cadenceLabel: "Daily 07:25 Bangkok; recovery 07:55 / 08:25" };
   if (job.key === "credit_control" && !creditControlActive()) return { ...job, label: "Shared Student Data", feature: "Student Data", requiresSuccessfulRun: true, cadenceMinutes: 1440, expectedBangkokMinute: 380, lateAfterMinutes: 90, cadenceLabel: "Daily 06:20 Bangkok; recovery 06:50 / 07:20" };
   return job;

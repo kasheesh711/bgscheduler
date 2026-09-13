@@ -3,6 +3,7 @@ import { describe, expect, it, vi, beforeEach, type Mock } from "vitest";
 // `@/lib/auth` instantiates NextAuth at import time; stub it so the pure
 // hasPageAccess helper + session guards can be unit-tested in isolation.
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
+vi.mock("@/lib/progress-tests/workspace/cutover", () => ({ assertLegacyActive: vi.fn().mockResolvedValue(undefined) }));
 
 import { auth } from "@/lib/auth";
 import {

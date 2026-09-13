@@ -43,6 +43,10 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
       requestMethod: "POST",
     },
     async () => {
+      if (jobKey === "progress_tests_processing") {
+        const { processJobs } = await import("@/lib/progress-tests/workspace/jobs");
+        return NextResponse.json(await processJobs());
+      }
       if (jobKey === "room_booking") {
         try { const result = await runRoomRefresh(getDb()); return NextResponse.json(result, { status: result.ok ? 200 : 500 }); }
         catch { return NextResponse.json({ ok: false, errorSummary: "Room refresh failed" }, { status: 500 }); }

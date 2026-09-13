@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import type { AppSessionUser } from "./types";
+import { assertLegacyActive } from "./workspace/cutover";
+import { WorkspaceError } from "./workspace/model";
 
 /** Route prefix this domain's pages and APIs live under. */
 const PROGRESS_TESTS_ROUTE = "/progress-tests";
@@ -12,13 +14,8 @@ const PROGRESS_TESTS_ROUTE = "/progress-tests";
  *   allowedPages means full access (all existing admins); otherwise the route
  *   must match one of the allowed prefixes.
  */
-export function hasPageAccess(
-  allowedPages: string[] | null | undefined,
-  route: string,
-): boolean {
-  if (!allowedPages) return true;
-  return allowedPages.some((page) => route === page || route.startsWith(`${page}/`));
-}
+export { hasPageAccess } from "./page-access";
+import { hasPageAccess } from "./page-access";
 
 /**
  * Resolves and authorizes the current session for progress-tests routes.
@@ -68,10 +65,12 @@ export async function requireProgressTestsAdminSession(): Promise<AppSessionUser
   if (user.role !== "admin") {
     throw new Error("Forbidden");
   }
+  await assertLegacyActive();
   return user;
 }
 
 export function progressTestsErrorResponse(route: string, error: unknown, fallbackMessage: string) {
+  if (error instanceof WorkspaceError) return NextResponse.json({ error: error.message }, { status: error.status });
   if (
     typeof error === "object" &&
     error !== null &&

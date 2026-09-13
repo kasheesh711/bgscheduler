@@ -31,6 +31,7 @@ import {
 } from "@/lib/progress-tests/sync";
 
 vi.mock("next/cache", () => ({ revalidateTag: vi.fn() }));
+vi.mock("@/lib/progress-tests/workspace/cutover", () => ({ launchConfig: vi.fn().mockResolvedValue(null) }));
 vi.mock("@/lib/wise/fetchers", () => ({ fetchAllTeachers: vi.fn() }));
 vi.mock("@/lib/progress-tests/db", () => ({
   loadActiveCreditControlSnapshotSessions: vi.fn(),

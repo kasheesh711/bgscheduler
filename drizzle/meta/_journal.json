@@ -589,6 +589,20 @@
       "when": 1789116061226,
       "tag": "0083_classroom_publish_recovery",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1789290000000,
+      "tag": "0084_tutor_progress_workspace",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1789290001000,
+      "tag": "0085_progress_publication_guide",
+      "breakpoints": true
     }
   ]
 }

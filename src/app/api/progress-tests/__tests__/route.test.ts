@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import { NextRequest } from "next/server";
 
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
+vi.mock("@/lib/progress-tests/workspace/cutover", () => ({ assertLegacyActive: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@/lib/progress-tests/service", () => ({
   getProgressTestsPayload: vi.fn(),
   bookTest: vi.fn(),
