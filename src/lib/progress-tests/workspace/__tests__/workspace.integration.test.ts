@@ -30,10 +30,9 @@ async function assessment(owner="a",count=8) {
 async function readyPaper() {
   const created = await executeCommand(a,{action:"create-paper",title:paper.title},db);
   const id = created.id!;
-  await executeCommand(a,{action:"save-paper",id,expectedRevision:0,paper,sourceFileId:null,keyFileId:null,approved:false},db);
-  await db.insert(s.ptJobs).values({kind:"render-paper",targetId:id,ownerKey:"a",expectedRevision:1,status:"completed",createdBy:a.user.email,result:{fileId:crypto.randomUUID()}});
-  const saved = await executeCommand(a,{action:"save-paper",id,expectedRevision:1,paper,sourceFileId:null,keyFileId:null,approved:true},db);
-  return saved.versionId!;
+  const [version] = await db.insert(s.ptPaperVersions).values({paperId:id,revision:1,paper,approved:true,createdBy:a.user.email}).returning();
+  await db.update(s.ptPapers).set({revision:1}).where(eq(s.ptPapers.id,id));
+  return version.id;
 }
 describe("tutor workspace database contracts", () => {
   it("reconciles source corrections and independent attendance while preserving fixed-cycle obligations", async () => {
@@ -95,13 +94,10 @@ describe("tutor workspace database contracts", () => {
     await db.insert(s.adminUsers).values({email:b.user.email,disabled:true});
     await expect(scopeForEmail(b.user.email,db)).rejects.toMatchObject({status:403});
   });
-  it("commits only one concurrent paper edit and requires a preview of the exact version before readiness", async () => {
+  it("retires question-authoring mutations without changing saved evidence", async () => {
     const created=await executeCommand(a,{action:"create-paper",title:"Draft"},db);
-    const cmd={action:"save-paper" as const,id:created.id!,expectedRevision:0,paper,sourceFileId:null,keyFileId:null,approved:false};
-    const outcomes=await Promise.allSettled([executeCommand(a,cmd,db),executeCommand(a,cmd,db)]);
-    expect(outcomes.filter(o=>o.status==="fulfilled")).toHaveLength(1);
-    expect(outcomes.filter(o=>o.status==="rejected")).toHaveLength(1);
-    await expect(executeCommand(a,{...cmd,expectedRevision:1,approved:true},db)).rejects.toMatchObject({status:409});
+    await expect(executeCommand(a,{action:"save-paper",id:created.id!,expectedRevision:0,paper,sourceFileId:null,keyFileId:null,approved:false},db)).rejects.toMatchObject({status:410});
+    expect(await db.select().from(s.ptPaperVersions)).toHaveLength(0);
   });
   it("preserves submissions and reviewed versions while approvals are blocked from Wise publishing", async () => {
     const versionId=await readyPaper();const row=await assessment();
@@ -125,7 +121,7 @@ describe("tutor workspace database contracts", () => {
     expect(approved.series.count).toBe(8);
     await executeCommand(a,{action:"save-review",id:row.a.id,expectedRevision:4,marks:[{...marks[0],marks:2}],report},db);
     const reviews=await db.select().from(s.ptReviews).where(eq(s.ptReviews.assessmentId,row.a.id));
-    expect(reviews).toHaveLength(3);expect(reviews.find(r=>r.approved)?.data.marks[0].marks).toBe(1);
+    expect(reviews).toHaveLength(3);const approvedData = reviews.find(r=>r.approved)!.data; expect("marks" in approvedData && approvedData.marks[0].marks).toBe(1);
     expect((await db.select().from(s.ptSubmissions))).toHaveLength(1);
     await expect(ownedFiles(b,[fileId],"a",db)).rejects.toMatchObject({status:404});
   });
@@ -140,7 +136,7 @@ describe("tutor workspace database contracts", () => {
     const attempts=await db.select().from(s.ptJobAttempts).where(eq(s.ptJobAttempts.jobId,first.id));
     expect(attempts.find(r=>r.attempt===1)?.status).toBe("interrupted");
     expect(attempts.find(r=>r.attempt===2)?.status).toBe("running");
-    await executeCommand(a,{action:"save-paper",id:created.id!,expectedRevision:0,paper,sourceFileId:null,keyFileId:null,approved:false},db);
+    await db.update(s.ptPapers).set({revision:1}).where(eq(s.ptPapers.id,created.id!));
     await runJob(recovered!,db);
     const [job]=await db.select().from(s.ptJobs).where(eq(s.ptJobs.id,first.id));expect(job.status).toBe("superseded");
   });

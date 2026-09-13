@@ -5515,6 +5515,7 @@ export const ptSeries = pgTable("pt_series", {
 }, t => [uniqueIndex("pt_series_owner_course_student_idx").on(t.ownerKey, t.wiseClassId, t.wiseStudentId)]);
 export const ptFiles = pgTable("pt_files", {
   id: uuid("id").primaryKey().defaultRandom(), ownerKey: text("owner_key").notNull(),
+  assessmentId: uuid("assessment_id").references(() => ptAssessments.id),
   name: text("name").notNull(), mime: text("mime").notNull(), size: integer("size").notNull(),
   pageCount: integer("page_count"),
   pathname: text("pathname").notNull(), sha256: text("sha256"), status: text("status").notNull().default("pending"),
@@ -5522,16 +5523,33 @@ export const ptFiles = pgTable("pt_files", {
 }, t => [uniqueIndex("pt_files_path_idx").on(t.pathname), index("pt_files_owner_idx").on(t.ownerKey)]);
 export const ptPapers = pgTable("pt_papers", {
   id: uuid("id").primaryKey().defaultRandom(), ownerKey: text("owner_key").notNull(), title: text("title").notNull(),
+  assessmentId: uuid("assessment_id").references(() => ptAssessments.id),
   revision: integer("revision").notNull().default(0), createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, t => [index("pt_papers_owner_idx").on(t.ownerKey)]);
 export const ptPaperVersions = pgTable("pt_paper_versions", {
   id: uuid("id").primaryKey().defaultRandom(), paperId: uuid("paper_id").notNull().references(() => ptPapers.id),
   revision: integer("revision").notNull(), sourceFileId: uuid("source_file_id").references(() => ptFiles.id),
   keyFileId: uuid("key_file_id").references(() => ptFiles.id),
-  paper: jsonb("paper").$type<import("../progress-tests/workspace/model").Paper>().notNull(),
+  paper: jsonb("paper").$type<import("../progress-tests/workspace/model").PaperContent>().notNull(),
+  sourceVersionId: uuid("source_version_id"),
   approved: boolean("approved").notNull().default(false), createdBy: text("created_by").notNull(),
   model: text("model"), createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, t => [uniqueIndex("pt_paper_version_idx").on(t.paperId, t.revision)]);
+export const ptPaperArtifacts = pgTable("pt_paper_artifacts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  versionId: uuid("version_id").notNull().references(() => ptPaperVersions.id),
+  kind: text("kind").notNull(), fileId: uuid("file_id").notNull().references(() => ptFiles.id),
+  rendererVersion: text("renderer_version").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex("pt_paper_artifact_kind_idx").on(t.versionId, t.kind)]);
+export const ptPaperApprovals = pgTable("pt_paper_approvals", {
+  versionId: uuid("version_id").primaryKey().references(() => ptPaperVersions.id),
+  createdBy: text("created_by").notNull(), createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export const ptRubricApprovals = pgTable("pt_rubric_approvals", {
+  versionId: uuid("version_id").primaryKey().references(() => ptPaperVersions.id),
+  createdBy: text("created_by").notNull(), createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
 export const ptAssessments = pgTable("pt_assessments", {
   id: uuid("id").primaryKey().defaultRandom(), seriesId: uuid("series_id").notNull().references(() => ptSeries.id),
   cycle: integer("cycle").notNull(), revision: integer("revision").notNull().default(0),
@@ -5548,7 +5566,7 @@ export const ptSubmissions = pgTable("pt_submissions", {
 });
 export const ptReviews = pgTable("pt_reviews", {
   id: uuid("id").primaryKey().defaultRandom(), assessmentId: uuid("assessment_id").notNull().references(() => ptAssessments.id),
-  data: jsonb("data").$type<import("../progress-tests/workspace/model").Review>().notNull(),
+  data: jsonb("data").$type<import("../progress-tests/workspace/model").ReviewData>().notNull(),
   approved: boolean("approved").notNull().default(false), createdBy: text("created_by").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -5562,6 +5580,10 @@ export const ptJobs = pgTable("pt_jobs", {
   error: text("error"), createdBy: text("created_by").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   finishedAt: timestamp("finished_at", { withTimezone: true }),
+  stage: text("stage").notNull().default("queued"),
+  stageStartedAt: timestamp("stage_started_at", { withTimezone: true }),
+  checkpoint: jsonb("checkpoint").$type<Record<string, unknown>>().notNull().default({}),
+  timings: jsonb("timings").$type<Record<string, number>>().notNull().default({}),
 }, t => [index("pt_jobs_due_idx").on(t.status, t.availableAt), uniqueIndex("pt_jobs_active_target_idx").on(t.kind, t.targetId).where(sql`${t.status} in ('queued','running')`)]);
 export const ptArtifacts = pgTable("pt_artifacts", {
   id: uuid("id").primaryKey().defaultRandom(), reviewId: uuid("review_id").notNull().references(() => ptReviews.id),
@@ -5592,6 +5614,7 @@ export const ptAttendanceEvidence = pgTable("pt_attendance_evidence", {
 
 export const ptWorkspaceSettings = pgTable("pt_workspace_settings", {
   id: text("id").primaryKey().default("workspace"), revision: integer("revision").notNull().default(0),
+  formattingEnabled: boolean("formatting_enabled").notNull().default(true),
   publishingEnabled: boolean("publishing_enabled").notNull().default(false), verifiedAt: timestamp("verified_at", { withTimezone: true }),
   updatedBy: text("updated_by"), updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

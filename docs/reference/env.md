@@ -437,7 +437,9 @@ Existing LINE credentials and `APP_BASE_URL` supply messaging and private mobile
 | `BLOB_READ_WRITE_TOKEN` | Token for the environment's **private** Vercel Blob store. Production and validation use separate stores. |
 | `PROGRESS_TEST_PUBLIC_ORIGIN` | Reachable deployment origin for SDK-signed `/api/internal/progress-tests/uploads` callbacks. Production: `https://bgscheduler.vercel.app`. |
 | `OPENAI_PROGRESS_TEST_API_KEY` | Optional dedicated feature credential; falls back to nonempty `OPENAI_API_KEY`. |
-| `OPENAI_PROGRESS_TEST_MODEL` | Explicit model override; validated with `gpt-5.4-mini`. |
+| `OPENAI_PROGRESS_TEST_MODEL` | Grading/report model override; paper formatting has a separate setting. |
+| `OPENAI_PROGRESS_TEST_FORMAT_MODEL` | Paper-formatting model override; release/default `gpt-6-astra`. Uses the separate effort setting. Changes do not alter grading/report models. |
+| `OPENAI_PROGRESS_TEST_FORMAT_EFFORT` | Formatting effort only: `none`, `low` (release/default), `medium`, `high`, `xhigh`, or `max`; the selected model must support it. Stored with each processing job. |
 | Existing `WISE_*`, `CRON_SECRET` | Native Content integration and durable worker authorization. |
 
-`pt_workspace_settings.publishing_enabled` is the independent admin pause. `verified_at` records operator integration validation. Neither resets the immutable launch timestamp. No private source-file URLs are exposed in application responses.
+`pt_workspace_settings.formatting_enabled` defaults true and controls optional beta jobs. `publishing_enabled` independently controls Wise writes. Formatting uses native PDF input, a 32,000-token output cap and a 180-second request timeout; grading/report timeouts remain 110 seconds. There is no automatic model substitution. `verified_at` records operator integration validation. Neither resets the immutable launch timestamp. No private source-file URLs are exposed in application responses.

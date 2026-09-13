@@ -1,6 +1,6 @@
 # Progress Tests launch and recovery
 
-## Release scope
+## Original launch scope (historical)
 
 One-to-one courses only. The release combines the tutor workspace, native Wise publication, private documents, durable processing and account-scoped guided practice. Groups and unknown course types cannot produce counts, reminders or publication. Existing uncommitted work was preserved in the original checkout; the release branch starts from current production `origin/main` (`295db668`). Unpublished migrations are **0084** (workspace) and **0085** (publication/guide), after production's existing 0082/0083.
 
@@ -33,13 +33,13 @@ The user-authorized one-to-one course `6990f14e2f5bc252039abf3b` with expected s
 
 Operator scripts under `scripts/verify-progress-*` require an explicit local `*_test` database where applicable. The live native test additionally requires `--live-wise`, explicit course/student IDs and a credentials environment file. Credentials, signed URLs and private source URLs are never logged. Detailed synthetic evidence remains in ignored `output/progress-tests-verification/`.
 
-## Files, AI and guide
+## Original files, AI and guide (historical)
 
 PDF/DOCX papers and keys; PDF/JPG/PNG responses; page ordering/preview before processing. DOCX uses docx-preview in network-isolated Chromium. Unsupported equations, drawings, charts, active content or tracked changes require a PDF exported from Word; conversion never silently discards them. Visual inputs and all prompt/model/input/review references are preserved. Marks are calculated in code and feedback cannot affect numerical grading. Manual editing remains available when AI fails.
 
 The first-use guide uses actual workspace editors with an isolated local data adapter. Practice IDs are invalid for real mutation schemas. It cannot trigger upload, AI, reminders, attendance or Wise operations. Only guide version/status/step/revision persist against the authenticated account. Real mounted forms remain untouched when Help opens or closes.
 
-## Rollout and recovery
+## Original rollout and recovery (historical)
 
 1. Run complete release verification, integration checks, lint, browser practice and PDF inspection on the isolated release branch. Provision separate private Blob stores and the feature-specific OpenAI credential. Keep workflow/publishing disabled.
 2. Apply additive 0084/0085 migrations to production. Push/merge the reviewed release; deploy clean `main` exactly matching `origin/main`, preserving the production route guard.
@@ -70,3 +70,39 @@ Local release verification completed: typecheck, 438 unit files / 4,986 tests, p
 - A real private browser upload and AI job were also verified in the isolated database: processing completed after the browser was closed. A raster-only synthetic handwriting-style answer was read correctly; the missing second page was flagged for review and embedded instructions to award full marks were ignored. This is not a claim about the accuracy of arbitrary student handwriting.
 
 Detailed operator evidence is retained in ignored `output/progress-tests-verification/production-*.json`, alongside the native publication, document and AI checks. The intended-student visibility limitation stated above remains explicit: membership and access settings were verified, but no separate student-account login was available.
+
+## Earlier upload-to-PDF revision — historical validation
+
+The current revision removes the question editor and onboarding. Prepare and Test library share one upload/format action with authenticated PDF.js previews and durable progress. Additive migration 0086 adds processing stages/checkpoints, assessment-linked paper drafts, immutable version/artifact bindings and separate readiness approvals. Existing approved versions and completed rendering jobs are reconciled without changing their evidence.
+
+Conversion and AI results survive render retries. The immutable launch remains **2026-09-13T11:36:37.162Z**; this upgrade must not call activation, reset counters or rewrite approvals/publication history. Apply the additive migration before deploying the compatible application.
+
+`scripts/verify-progress-paper-pipeline.ts` exercises real private Blob and OpenAI against a disposable local database. `scripts/progress-paper-benchmark/run.ts --run` performs an explicit paid 23-setting model/effort comparison using local private fixtures; `render.ts` validates saved outputs without additional AI calls. All private sources, responses, images and PDFs are ignored under `output/progress-tests-pdf/`.
+
+The API comparison captured 163 evaluable matrix outcomes before the account returned `credit_balance_exhausted`. The user declined an API top-up and requested continued testing through Codex. `codex.ts --run` uses the desktop app's signed-in, ephemeral, read-only runtime with attached page images and tools disabled; the completed 108-outcome comparison produced 95 complete responses and 190 PDFs. Its 25 source-check failures and 13 capture timeouts are separate from API billing or latency evidence. See the [model analysis](progress-paper-model-benchmark-2026-09-13.md).
+
+Manual benchmark review identified a remaining document-quality release gate: Sol and other models omitted printed subpart marks; those failures are now included in all final scores. Some outputs also count only printed dotted lines and compress the blank space students need for their workings; source-check scores do not cover working-space suitability. Keep the fixed benchmark prompt for comparable measurements; validate explicit subpart-mark and working-area contracts and the final live long-paper pipeline before deploying this revision. The production launch timestamp, configuration and published history are untouched by the benchmark.
+
+Release checks passed with 438 unit files / 4,991 tests, typecheck, production build, post-build typecheck, cron consistency and preservation of 255 existing route entries. Disposable PostgreSQL integration checks passed 25 tests across three suites. Private browser upload, automatic preview, approval persistence, tutor isolation and mobile overflow fixes were verified in isolation. DOCX visual conversion preserved the sample diagram/table; unsupported equations returned an actionable request for an exported PDF. Renderer v3 keeps subpart labels with their equations, verified by replaying saved finalist responses without AI charges. API-derived short-paper timing samples supplement recent comparable jobs; Codex timings never drive website estimates.
+
+The final long-paper live API/browser validation and production deployment remain pending. This revision has not changed production's launch timestamp, counters, approved artifacts or Wise publication records.
+
+## Original-paper release — 2026-09-14
+
+The approved release defaults to **Use my uploaded paper**, with **Format with BeGifted — Beta** enabled by explicit opt-in. Formatting uses `OPENAI_PROGRESS_TEST_FORMAT_MODEL=gpt-6-astra` and `OPENAI_PROGRESS_TEST_FORMAT_EFFORT=low`. The benchmark favored checked content preservation; historical estimates of about $0.51 across its paper mix and $1.00 for the 17-page paper are neither pricing guarantees nor reliability claims. No paid AI tests or credit purchases are authorized for this release.
+
+Original PDFs retain their bytes. DOCX conversion is independent of AI and rejects unsupported content with an export-to-PDF instruction. Original readiness does not require extraction, a marking key or rubric approval. New original assessments use uploaded tutor-marked PDFs and manually entered scores/reports. Structured papers also offer that recovery route. Each saved review binds immutable paper, submission, marked-file hash, score and report; approval checks the marked artifact hash before the existing native Wise publisher receives only the graded test and report.
+
+Migration `0086_progress_paper_pipeline` remains additive. It adds immutable paper/artifact/readiness/rubric records, source-version links, marked-file assessment binding, frozen ready-file metadata, job stages/checkpoints and `formatting_enabled=true`. Legacy approvals are backfilled without rewriting existing evidence. Production preflight found migration 0085 last applied, 560 series, two qualifying classes, five paper versions and no approved reviews/publications; the launch is exactly **2026-09-13T11:36:37.162Z**. Never rerun activation.
+
+The formatting request alone has a 180-second timeout inside the 300-second worker. Stages check the remaining invocation and lease budget. A successful response is saved before rendering, including when formatting is paused during extraction. Render retries reuse it. Interrupted calls, quota failures and timeouts require explicit retry, with no automatic model replacement. The original remains usable throughout.
+
+Offline verification uses `scripts/verify-progress-original-documents.ts` and `scripts/progress-paper-benchmark/replay-layout.ts`. Source annotations exercise 166.32 mm unruled and 136.62 mm ruled areas, explicit 2/3 subpart marks, an original diagram, a continued question and a blank working page. The visual DOCX fixture converts; an equation fixture requests Word PDF export. Saved Astra-low long-paper output retains the older response's inadequate working-space metadata; the revised prompt has not been tested live. This is why beta output requires explicit review and adoption.
+
+Release validation: `npm run verify:release` passed on Node 24 with 438 unit files / 4,996 tests, typechecks, production build, diff checks and all 255 source routes preserved. Fresh disposable PostgreSQL checks passed 29 integration files / 301 tests. ESLint had zero errors and 19 existing warnings. No paid AI requests were made.
+
+A real local production-build browser run used the separate validation Blob store and synthetic records. Original upload/readback matched exactly, readiness survived reload, the complete marked-PDF/score/report flow generated both previews and reached approval while publishing was paused, and the approved marked artifact matched the upload hash. Another tutor received 404 for the assessment and source file. Desktop and 390px dark-mode phone views had no browser errors, failed requests or horizontal overflow. Regular installed Playwright was used because the testing skill's browser plugin was unavailable; its console, interaction, screenshot and responsive checks were retained. This run also found and fixed JSONB key-order comparisons that could leave a saved report looking unsaved.
+
+Private browser/document evidence is in ignored `output/progress-tests-pdf/original-release/`. The operator script `scripts/verify-progress-original-publication.ts --live-wise` exercises the same commands with labelled synthetic files and the documented validation course; it clears AI credentials and cannot call AI. Deployment and native publication completion are recorded below.
+
+Rollback must retain support for original-paper and uploaded-review records. For a formatting incident, pause **Formatting**; original use and manual grading remain available. For a publication incident, pause **Wise publishing** independently. Keep migration 0086 and immutable versions, launch, counters, approvals and publication checkpoints. Use a compatible forward fix or compatible release; do not restore the pre-original application against these new records.

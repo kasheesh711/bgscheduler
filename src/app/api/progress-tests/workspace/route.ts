@@ -15,7 +15,7 @@ export async function POST(request: Request) {
     const scope = await requireWorkspace();
     const command = commandSchema.parse(await requestJson(request));
     const result = await executeCommand(scope, command);
-    if ("jobId" in result) after(async () => { await processJobs().catch(() => undefined); });
+    if ("jobId" in result) after(async () => { await processJobs(undefined, 1, result.jobId).catch(() => undefined); });
     return privateJson(result, "jobId" in result ? 202 : 200);
   } catch (error) { return workspaceError(error); }
 }

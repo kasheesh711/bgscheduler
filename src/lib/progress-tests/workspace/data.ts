@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
 import { chooseOwner, type Scope } from "./access";
 import type { Command } from "./commands";
-import { assertOwner, assertRevision, cyclePosition, stageFor, validateMarks, WorkspaceError, type FeedbackEvidence, type Review } from "./model";
+import { assertOwner, assertRevision, cyclePosition, stageFor, validateMarks, WorkspaceError, type FeedbackEvidence, type ReviewData, isOriginalPaper, isUploadedReview, structuredPaper, reviewTotals, scoreTotals, cleanReport } from "./model";
 import { publicationReadiness, publishingSettings, preparePublication, publicationForScope } from "./publication";
+import { formatModel, formatEffort, FORMAT_PROMPT_VERSION, FORMAT_INSTRUCTIONS } from "./ai";
 import { launchConfig } from "./cutover";
 export { launchConfig } from "./cutover";
 
@@ -41,7 +41,9 @@ export async function paperVersionForOwner(id: string, owner: string, db: Databa
     .innerJoin(s.ptPapers, eq(s.ptPapers.id, s.ptPaperVersions.paperId))
     .where(and(eq(s.ptPaperVersions.id, id), eq(s.ptPapers.ownerKey, owner))).limit(1);
   if (!row) throw new WorkspaceError(404, "Paper version not found.");
-  return row.version;
+  const [approval] = await db.select().from(s.ptPaperApprovals).where(eq(s.ptPaperApprovals.versionId, id));
+  const [rubric] = await db.select().from(s.ptRubricApprovals).where(eq(s.ptRubricApprovals.versionId, id));
+  return { ...row.version, approved: row.version.approved || !!approval, rubricApproved: row.version.approved || !!rubric };
 }
 export function assessmentView(row: Awaited<ReturnType<typeof getAssessment>>) {
   const { assessment: a, series } = row;
@@ -69,9 +71,10 @@ export async function workspaceOverview(scope: Scope, db: Database = getDb()) {
   const unresolved = scope.keys === null && config ? await db.select({ id: s.progressTestAttendanceLedger.id, student: s.progressTestAttendanceLedger.studentName, course: s.progressTestAttendanceLedger.subject, date: s.progressTestAttendanceLedger.scheduledStartTime })
     .from(s.progressTestAttendanceLedger).where(and(isNull(s.progressTestAttendanceLedger.tutorCanonicalKey), sql`${s.progressTestAttendanceLedger.scheduledStartTime} >= ${config.activatedAt}`, eq(s.progressTestAttendanceLedger.countsTowardCycle, true))).limit(200) : [];
   const legacy = scope.keys === null ? await db.select({ id:s.progressTestCycleState.enrollmentKey,student:s.progressTestCycleState.studentName,course:s.progressTestCycleState.subject,tutor:s.progressTestCycleState.mostFrequentTutorDisplayName,ownerKey:s.progressTestCycleState.mostFrequentTutorCanonicalKey,status:s.progressTestCycleState.status,count:s.progressTestCycleState.currentCount,date:s.progressTestCycleState.updatedAt }).from(s.progressTestCycleState).orderBy(s.progressTestCycleState.studentName) : [];
-  return { user: scope.user, activatedAt: config?.activatedAt ?? null, publication: publicationReadiness(await publishingSettings(db)),
+  const settings = await publishingSettings(db);
+  return { formatting: { enabled: settings.formattingEnabled, revision: settings.revision }, user: scope.user, activatedAt: config?.activatedAt ?? null, publication: publicationReadiness(settings),
     sourceIssues: scope.keys===null ? await db.select().from(s.ptSourceIssues).limit(200) : [],
-    capabilities: { uploads: !!process.env.BLOB_READ_WRITE_TOKEN, ai: !!(process.env.OPENAI_PROGRESS_TEST_API_KEY || process.env.OPENAI_API_KEY) },
+    capabilities: { formatting: settings.formattingEnabled, uploads: !!process.env.BLOB_READ_WRITE_TOKEN, ai: !!(process.env.OPENAI_PROGRESS_TEST_API_KEY || process.env.OPENAI_API_KEY) },
     assessments: rows.map(assessmentView), papers, jobs, tutors, unresolved, legacy };
 }
 export type Overview = Awaited<ReturnType<typeof workspaceOverview>>;
@@ -104,19 +107,26 @@ export async function assessmentDetail(scope: Scope, id: string, db: Database = 
     series.sessionIds.length ? db.select({ id: s.progressTestAttendanceLedger.wiseSessionId, date: s.progressTestAttendanceLedger.scheduledStartTime })
       .from(s.progressTestAttendanceLedger).where(and(inArray(s.progressTestAttendanceLedger.wiseSessionId, series.sessionIds), eq(s.progressTestAttendanceLedger.wiseStudentId, series.wiseStudentId), eq(s.progressTestAttendanceLedger.tutorCanonicalKey, series.ownerKey))).orderBy(s.progressTestAttendanceLedger.scheduledStartTime) : [],
     feedbackContext(series, a.cycle, db),
-    db.select({ version: s.ptPaperVersions, title: s.ptPapers.title }).from(s.ptPaperVersions).innerJoin(s.ptPapers, eq(s.ptPapers.id, s.ptPaperVersions.paperId))
-      .where(and(eq(s.ptPapers.ownerKey, series.ownerKey), eq(s.ptPaperVersions.approved, true))).orderBy(desc(s.ptPaperVersions.createdAt)),
+    db.select({ version: s.ptPaperVersions, title: s.ptPapers.title, rubricApproved: sql<boolean>`exists (select 1 from ${s.ptRubricApprovals} ra where ra.version_id = ${s.ptPaperVersions.id})` }).from(s.ptPaperVersions).innerJoin(s.ptPapers, eq(s.ptPapers.id, s.ptPaperVersions.paperId))
+      .where(and(eq(s.ptPapers.ownerKey, series.ownerKey), sql`(${s.ptPaperVersions.approved} or exists (select 1 from ${s.ptPaperApprovals} pa where pa.version_id = ${s.ptPaperVersions.id}))`)).orderBy(desc(s.ptPaperVersions.createdAt)),
   ]);
   const artifacts = reviews.length ? await db.select().from(s.ptArtifacts).where(inArray(s.ptArtifacts.reviewId, reviews.map(r => r.id))) : [];
   const publications = reviews.length ? await db.select().from(s.ptPublications).where(inArray(s.ptPublications.reviewId, reviews.map(r => r.id))) : [];
   const publicationFiles = publications.length ? await db.select().from(s.ptPublicationFiles).where(inArray(s.ptPublicationFiles.publicationId,publications.map(p=>p.id))) : [];
-  return { ...assessmentView(row), publicationFiles, submissions, reviews, sessions: sessions.map(x => ({ ...x, ordinal: series.sessionIds.indexOf(x.id) + 1 })), feedback, versions, artifacts, publications };
+  const paperArtifacts = versions.length ? await db.select().from(s.ptPaperArtifacts).where(inArray(s.ptPaperArtifacts.versionId, versions.map(v => v.version.id))) : [];
+  const preparingPapers = await db.select().from(s.ptPapers).where(and(eq(s.ptPapers.assessmentId, id), eq(s.ptPapers.ownerKey, series.ownerKey))).orderBy(desc(s.ptPapers.createdAt));
+  return { ...assessmentView(row), paperArtifacts, preparingPapers, publicationFiles, submissions, reviews, sessions: sessions.map(x => ({ ...x, ordinal: series.sessionIds.indexOf(x.id) + 1 })), feedback, versions: versions.map(v => ({ ...v, version: { ...v.version, approved: true, rubricApproved: v.version.approved || v.rubricApproved } })), artifacts, publications };
 }
 export type AssessmentDetail = Awaited<ReturnType<typeof assessmentDetail>>;
 export async function paperDetail(scope: Scope, id: string, db: Database = getDb()) {
   const paper = await getPaper(scope, id, db);
   const versions = await db.select().from(s.ptPaperVersions).where(eq(s.ptPaperVersions.paperId, id)).orderBy(desc(s.ptPaperVersions.revision));
-  return { ...paper, versions };
+  const ids = versions.map(v => v.id);
+  const artifacts = ids.length ? await db.select().from(s.ptPaperArtifacts).where(inArray(s.ptPaperArtifacts.versionId, ids)) : [];
+  const approvals = ids.length ? await db.select().from(s.ptPaperApprovals).where(inArray(s.ptPaperApprovals.versionId, ids)) : [];
+  const rubrics = ids.length ? await db.select().from(s.ptRubricApprovals).where(inArray(s.ptRubricApprovals.versionId, ids)) : [];
+  const jobs = await db.select({ id: s.ptJobs.id, status: s.ptJobs.status, kind: s.ptJobs.kind, stage: s.ptJobs.stage, input: sql<{ sourceFileId?: string }>`jsonb_build_object('sourceFileId', ${s.ptJobs.input}->'sourceFileId')`, createdAt: s.ptJobs.createdAt, error: s.ptJobs.error }).from(s.ptJobs).where(and(eq(s.ptJobs.ownerKey, paper.ownerKey), or(eq(s.ptJobs.targetId, id), sql`${s.ptJobs.input}->>'paperId' = ${id}`))).orderBy(desc(s.ptJobs.createdAt)).limit(30);
+  return { ...paper, versions: versions.map(v => ({ ...v, approved: v.approved || approvals.some(a => a.versionId === v.id), rubricApproved: v.approved || rubrics.some(a => a.versionId === v.id) })), artifacts, jobs };
 }
 export type PaperDetail = Awaited<ReturnType<typeof paperDetail>>;
 
@@ -142,26 +152,37 @@ export async function executeCommand(scope: Scope, command: Command, db: Databas
       await tx.update(s.ptWorkspaceSettings).set({publishingEnabled:true,revision:settings.revision+1,updatedBy:scope.user.email,updatedAt:new Date()}).where(eq(s.ptWorkspaceSettings.id,"workspace"));
       return {};
     }
-    if(c.action === "publishing") {
+    if(c.action === "publishing" || c.action === "formatting") {
       if(scope.keys!==null)throw new WorkspaceError(403,"Administrator access is required.");
       const [settings]=await tx.select().from(s.ptWorkspaceSettings).where(eq(s.ptWorkspaceSettings.id,"workspace")).for("update");
       assertRevision(settings.revision,c.expectedRevision);
-      if(c.enabled && !publicationReadiness(settings).configured)throw new WorkspaceError(409,publicationReadiness(settings).reason);
-      await tx.update(s.ptWorkspaceSettings).set({publishingEnabled:c.enabled,revision:settings.revision+1,updatedBy:scope.user.email,updatedAt:new Date()}).where(eq(s.ptWorkspaceSettings.id,"workspace"));
+      if(c.action === "publishing" && c.enabled && !publicationReadiness(settings).configured)throw new WorkspaceError(409,publicationReadiness(settings).reason);
+      await tx.update(s.ptWorkspaceSettings).set({...(c.action === "publishing" ? {publishingEnabled:c.enabled} : {formattingEnabled:c.enabled}),revision:settings.revision+1,updatedBy:scope.user.email,updatedAt:new Date()}).where(eq(s.ptWorkspaceSettings.id,"workspace"));
       return {revision:settings.revision+1};
     }
     if (c.action === "upload-intent") {
-      const ownerKey = await chooseOwner(scope, c.ownerKey, tx);
+      const contextOwner = c.assessmentId ? (await getAssessment(scope, c.assessmentId, tx)).series.ownerKey : c.ownerKey;
+      if (c.assessmentId && c.ownerKey && c.ownerKey !== contextOwner) throw new WorkspaceError(404, "Tutor does not own this assessment.");
+      const ownerKey = await chooseOwner(scope, contextOwner, tx);
+      if (c.purpose === "marked" && (!c.assessmentId || c.mime !== "application/pdf")) throw new WorkspaceError(400, "Upload the marked test as a PDF for this assessment.");
       if (c.purpose !== "work" && c.mime.startsWith("image/")) throw new WorkspaceError(400, "Papers and marking keys must be PDF or DOCX.");
       if (c.purpose === "work" && c.mime.includes("wordprocessingml")) throw new WorkspaceError(400, "Student work must be PDF, JPG or PNG.");
       const id = randomUUID();
       const pathname = `progress-tests/${id}/source`;
-      await tx.insert(s.ptFiles).values({ id, ownerKey, name: c.name.replace(/[\r\n\x00-\x1f]/g, ""), mime: c.mime, size: c.size, pathname, purpose: c.purpose });
+      await tx.insert(s.ptFiles).values({ id, ownerKey, name: c.name.replace(/[\r\n\x00-\x1f]/g, ""), mime: c.mime, size: c.size, pathname, purpose: c.purpose, assessmentId: c.assessmentId });
       return { id, pathname };
     }
     if (c.action === "create-paper") {
-      const ownerKey = await chooseOwner(scope, c.ownerKey, tx);
-      const [paper] = await tx.insert(s.ptPapers).values({ ownerKey, title: c.title }).returning();
+      const contextOwner = c.assessmentId ? (await getAssessment(scope, c.assessmentId, tx)).series.ownerKey : c.ownerKey;
+      if (c.assessmentId && c.ownerKey && c.ownerKey !== contextOwner) throw new WorkspaceError(404, "Tutor does not own this assessment.");
+      const ownerKey = await chooseOwner(scope, contextOwner, tx);
+      if (c.assessmentId) {
+        // Serialize double-clicks against the assessment; ownership is never supplied by the browser.
+        await getAssessment(scope, c.assessmentId, tx, true);
+        const [existing] = await tx.select().from(s.ptPapers).where(and(eq(s.ptPapers.assessmentId, c.assessmentId), eq(s.ptPapers.ownerKey, ownerKey))).orderBy(desc(s.ptPapers.createdAt)).limit(1);
+        if (existing) return { id: existing.id };
+      }
+      const [paper] = await tx.insert(s.ptPapers).values({ ownerKey, title: c.title, assessmentId: c.assessmentId }).returning();
       return { id: paper.id };
     }
     if (c.action === "retry-job") {
@@ -169,34 +190,64 @@ export async function executeCommand(scope: Scope, command: Command, db: Databas
       if (!job) throw new WorkspaceError(404, "Job not found.");
       if (job.status !== "failed") throw new WorkspaceError(409, "Only failed jobs can be retried.");
       if(job.kind==="publish")await publicationForScope(scope,job.targetId,tx);
-      return enqueue(tx, scope, job.kind, job.targetId, job.expectedRevision, job.ownerKey, job.input);
+      if (job.kind === "format-paper" && !(await publishingSettings(tx)).formattingEnabled) throw new WorkspaceError(409, "Formatting is paused. Your original paper remains available.");
+      const queued = await enqueue(tx, scope, job.kind, job.targetId, job.expectedRevision, job.ownerKey, job.input);
+      const checkpoint = { ...job.checkpoint };
+      delete checkpoint.aiStartedAt;
+      delete checkpoint.deferrals;
+      await tx.update(s.ptJobs).set({ checkpoint, timings: job.timings }).where(eq(s.ptJobs.id, queued.jobId));
+      return queued;
     }
-    if (["save-paper", "process-paper", "preview-paper"].includes(c.action)) {
-      // Discriminants are repeated below to keep their input types precise.
-      if (c.action !== "save-paper" && c.action !== "process-paper" && c.action !== "preview-paper") throw new WorkspaceError(400, "Unknown paper action.");
+    if (c.action === "save-paper" || c.action === "process-paper" || c.action === "preview-paper") throw new WorkspaceError(410, "Paper editing has retired. Use your uploaded paper or opt into BeGifted formatting.");
+    if (c.action === "attach-original" || c.action === "format-paper" || c.action === "approve-paper" || c.action === "approve-rubric") {
       const paper = await getPaper(scope, c.id, tx, true);
+      if (c.action === "attach-original" || c.action === "format-paper") {
+        const files = await ownedFiles(scope, [c.sourceFileId, c.keyFileId].filter((v): v is string => !!v), paper.ownerKey, tx);
+        if (files[0].purpose !== "paper" || (files[1] && files[1].purpose !== "key") || files.some(f => f.mime.startsWith("image/") || !f.sha256)) throw new WorkspaceError(400, "Upload and validate the paper and optional marking key as PDF or DOCX.");
+        if (c.action === "format-paper") {
+          if (!(await publishingSettings(tx)).formattingEnabled) throw new WorkspaceError(409, "Formatting is paused. Your original paper remains available.");
+          const [active] = await tx.select().from(s.ptJobs).where(and(eq(s.ptJobs.targetId, c.id), eq(s.ptJobs.kind, "format-paper"), inArray(s.ptJobs.status, ["queued", "running"])));
+          if (active && active.input.sourceFileId === c.sourceFileId && active.input.keyFileId === c.keyFileId) return { id: paper.id, revision: paper.revision, jobId: active.id };
+          if (active) throw new WorkspaceError(409, "Another beta draft is processing. You can use or replace your original now, and format again when it finishes.");
+        }
+        assertRevision(paper.revision, c.expectedRevision);
+        const [original] = await tx.select().from(s.ptPaperVersions).where(and(eq(s.ptPaperVersions.paperId, paper.id), sql`${s.ptPaperVersions.paper}->>'kind' = 'original'`)).orderBy(desc(s.ptPaperVersions.revision)).limit(1);
+        if (c.action === "attach-original" && original?.sourceFileId === c.sourceFileId && original?.keyFileId === c.keyFileId) return { id: paper.id, revision: paper.revision, versionId: original.id };
+        if (c.action === "format-paper" && (!original || original.sourceFileId !== c.sourceFileId || original.keyFileId !== c.keyFileId)) throw new WorkspaceError(409, "Save this upload as your original paper before starting beta formatting.");
+        const revision = paper.revision + 1;
+        const versionId = randomUUID();
+        await tx.update(s.ptPapers).set({ revision }).where(eq(s.ptPapers.id, paper.id));
+        if (c.action === "attach-original") {
+          await tx.insert(s.ptPaperVersions).values({ id: versionId, paperId: paper.id, revision, sourceFileId: c.sourceFileId, keyFileId: c.keyFileId, paper: { kind: "original", title: paper.title }, createdBy: scope.user.email });
+          if (files[0].mime === "application/pdf") {
+            await tx.insert(s.ptPaperArtifacts).values({ versionId, kind: "paper", fileId: files[0].id, rendererVersion: "original-pdf-v1" });
+            return { id: paper.id, revision, versionId };
+          }
+          return { id: paper.id, revision, versionId, ...await enqueue(tx, scope, "convert-paper", versionId, revision, paper.ownerKey, { paperId: paper.id, sourceFileId: c.sourceFileId, sourceHash: files[0].sha256 }) };
+        }
+        const sourceVersionId = original?.sourceFileId === c.sourceFileId && original.keyFileId === c.keyFileId ? original.id : null;
+        const queued = await enqueue(tx, scope, "format-paper", paper.id, revision, paper.ownerKey, { versionId, sourceVersionId, sourceFileId: c.sourceFileId, keyFileId: c.keyFileId, sourceHash: files[0].sha256, keyHash: files[1]?.sha256 ?? null, model: formatModel(), reasoningEffort: formatEffort(), promptVersion: FORMAT_PROMPT_VERSION, formatPrompt: FORMAT_INSTRUCTIONS });
+        return { id: paper.id, revision, versionId, ...queued };
+      }
       assertRevision(paper.revision, c.expectedRevision);
-      if (c.action === "preview-paper") {
-        const [version] = await tx.select().from(s.ptPaperVersions).where(and(eq(s.ptPaperVersions.paperId, c.id), eq(s.ptPaperVersions.revision, paper.revision)));
-        if (!version) throw new WorkspaceError(400, "Save the paper before previewing it.");
-        return enqueue(tx, scope, "render-paper", c.id, paper.revision, paper.ownerKey, { versionId: version.id });
+      const version = await paperVersionForOwner(c.versionId, paper.ownerKey, tx);
+      if (version.paperId !== paper.id) throw new WorkspaceError(404, "Paper version not found.");
+      const artifacts = await tx.select().from(s.ptPaperArtifacts).where(eq(s.ptPaperArtifacts.versionId, version.id));
+      if (c.action === "approve-rubric") {
+        const content = structuredPaper(version.paper);
+        if (!version.approved || !artifacts.some(a => a.kind === "key")) throw new WorkspaceError(409, "Review the paper and open its private marking scheme first.");
+        if (content.warnings.length || content.gradingWarnings?.length || content.questions.some(q => !q.rubric.trim() || !(q.maxMarks > 0))) throw new WorkspaceError(400, "Complete mark allocations and marking criteria in the source paper or key before AI grading.");
+        await tx.insert(s.ptRubricApprovals).values({ versionId: version.id, createdBy: scope.user.email }).onConflictDoNothing();
+      } else {
+        if (!isOriginalPaper(version.paper) && version.paper.warnings.length) throw new WorkspaceError(400, "Resolve the flagged source-content issues, or use your original paper.");
+        const artifact = artifacts.find(a => a.kind === "paper");
+        if (!artifact) throw new WorkspaceError(409, "Wait for this paper's PDF preview before marking it ready.");
+        const [file] = await ownedFiles(scope, [artifact.fileId], paper.ownerKey, tx);
+        if (file.mime !== "application/pdf" || !file.sha256 || !file.pageCount) throw new WorkspaceError(409, "The PDF is not ready to preview.");
+        await tx.insert(s.ptPaperApprovals).values({ versionId: version.id, createdBy: scope.user.email }).onConflictDoNothing();
       }
-      const files = await ownedFiles(scope, [c.sourceFileId, c.keyFileId].filter((v): v is string => !!v), paper.ownerKey, tx);
-      if (files.some(f => f.mime.startsWith("image/") || f.purpose === "work")) throw new WorkspaceError(400, "Select a paper or marking-key PDF/DOCX.");
-      if (c.action === "process-paper") return enqueue(tx, scope, "parse-paper", c.id, paper.revision, paper.ownerKey, { sourceFileId: c.sourceFileId, keyFileId: c.keyFileId });
-      if (c.approved && (c.paper.warnings.length || c.paper.questions.some(q => !q.rubric.trim()))) throw new WorkspaceError(400, "Review every warning and supply a marking rubric for each question before marking this paper ready.");
-      if (c.approved) {
-        const [previous] = await tx.select().from(s.ptPaperVersions).where(and(eq(s.ptPaperVersions.paperId,paper.id),eq(s.ptPaperVersions.revision,paper.revision)));
-        const [preview] = await tx.select({ id: s.ptJobs.id }).from(s.ptJobs).where(and(eq(s.ptJobs.targetId,paper.id),eq(s.ptJobs.expectedRevision,paper.revision),eq(s.ptJobs.kind,"render-paper"),eq(s.ptJobs.status,"completed"))).limit(1);
-        if (!previous || !preview || !isDeepStrictEqual(previous.paper,c.paper) || previous.sourceFileId !== c.sourceFileId || previous.keyFileId !== c.keyFileId) throw new WorkspaceError(409, "Save your draft and preview the formatted PDF before marking that exact version ready.");
-      }
-      if (c.paper.questions.some(q => q.needsVisual) && !c.sourceFileId) throw new WorkspaceError(400, "Keep the original paper attached to preserve its illustrations.");
-      const revision = paper.revision + 1;
-      const [version] = await tx.insert(s.ptPaperVersions).values({ paperId: paper.id, revision, sourceFileId: c.sourceFileId, keyFileId: c.keyFileId, paper: c.paper, approved: c.approved, createdBy: scope.user.email }).returning();
-      await tx.update(s.ptPapers).set({ revision, title: c.paper.title }).where(eq(s.ptPapers.id, paper.id));
-      return { id: paper.id, revision, versionId: version.id };
+      return { id: paper.id, revision: paper.revision, versionId: version.id };
     }
-    if (c.action === "save-paper" || c.action === "process-paper" || c.action === "preview-paper") throw new WorkspaceError(400, "Unknown action.");
     const { assessment: a, series } = await getAssessment(scope, c.id, tx, true);
     assertRevision(a.revision, c.expectedRevision);
     const update = async (patch: Partial<typeof s.ptAssessments.$inferInsert>) => {
@@ -206,7 +257,7 @@ export async function executeCommand(scope: Scope, command: Command, db: Databas
     if (c.action === "prepare") {
       if (a.currentSubmissionId) throw new WorkspaceError(409, "A submitted assessment keeps its approved paper. Create a new submission to correct student work.");
       const paper = await paperVersionForOwner(c.paperVersionId, series.ownerKey, tx);
-      if (!paper.approved) throw new WorkspaceError(400, "Review the paper and rubric in your library first.");
+      if (!paper.approved) throw new WorkspaceError(400, "Review and mark the paper ready in your library first.");
       return update({ preparation: { paperVersionId: paper.id, topics: c.topics, studentInformed: c.studentInformed } });
     }
     if (!a.preparation.paperVersionId) throw new WorkspaceError(400, "Select a reviewed paper first.");
@@ -238,18 +289,32 @@ export async function executeCommand(scope: Scope, command: Command, db: Databas
     if (!submission) throw new WorkspaceError(400, "Submit the student's completed work first.");
     if (!series.sessionIds.includes(submission.data.sessionId)) throw new WorkspaceError(409, "Attendance or instructor ownership changed. Review the administered class and submit a corrected version.");
     const [current] = a.currentReviewId ? await tx.select().from(s.ptReviews).where(and(eq(s.ptReviews.id, a.currentReviewId), eq(s.ptReviews.assessmentId, a.id))) : [];
-    if (c.action === "grade") return enqueue(tx, scope, "grade", a.id, a.revision, series.ownerKey, { submissionId: submission.id, paperVersionId: paper.id });
-    if (c.action === "save-review") {
-      validateMarks(paper.paper, c.marks);
-      const lines = (values: string[]) => values.map(v => v.trim()).filter(Boolean);
-      const report = { ...c.report, strengths: lines(c.report.strengths), focusAreas: lines(c.report.focusAreas), nextSteps: lines(c.report.nextSteps) };
-      const data: Review = { ...(current?.data ?? { feedback: await feedbackContext(series,a.cycle,tx), priorReviewIds: [], model: null, promptVersion: "manual-v1", submissionId: submission.id, paperVersionId: paper.id }), marks: c.marks, report };
+    if (c.action === "grade") {
+      structuredPaper(paper.paper);
+      if (!paper.rubricApproved) throw new WorkspaceError(409, "Review and approve the private rubric before AI grading, or upload a marked PDF.");
+      return enqueue(tx, scope, "grade", a.id, a.revision, series.ownerKey, { submissionId: submission.id, paperVersionId: paper.id });
+    }
+    if (c.action === "save-review" || c.action === "save-marked-review") {
+      const report = cleanReport(c.report);
+      const common = { report, feedback: current?.data.feedback ?? await feedbackContext(series, a.cycle, tx), priorReviewIds: current?.data.priorReviewIds ?? [], model: null, promptVersion: "manual-v2", submissionId: submission.id, paperVersionId: paper.id };
+      let data: ReviewData;
+      if (c.action === "save-marked-review") {
+        scoreTotals(c.earned, c.possible);
+        const [file] = await ownedFiles(scope, [c.markedFileId], series.ownerKey, tx);
+        if (file.purpose !== "marked" || file.mime !== "application/pdf" || file.assessmentId !== a.id || !file.sha256) throw new WorkspaceError(400, "Upload a marked PDF specifically for this assessment.");
+        data = { ...common, kind: "uploaded", markedFileId: file.id, markedSha256: file.sha256, earned: c.earned, possible: c.possible };
+      } else {
+        validateMarks(structuredPaper(paper.paper), c.marks);
+        data = { ...common, marks: c.marks };
+      }
       const [review] = await tx.insert(s.ptReviews).values({ assessmentId: a.id, data, createdBy: scope.user.email }).returning();
       return update({ currentReviewId: review.id, publicationStatus: "not_ready", publicationError: null });
     }
-    if (!current) throw new WorkspaceError(400, "Review and save the question marks first.");
+    if (!current) throw new WorkspaceError(400, "Review and save the marks first.");
+    if (current.data.paperVersionId !== paper.id || current.data.submissionId !== submission.id) throw new WorkspaceError(409, "These results belong to an earlier paper or submission. Save a new review before continuing.");
     if (c.action === "report") {
-      validateMarks(paper.paper, current.data.marks, true);
+      if (isUploadedReview(current.data)) throw new WorkspaceError(409, "Write and save the report for this manually marked assessment.");
+      reviewTotals(paper.paper, current.data, true);
       const feedback = await feedbackContext(series, a.cycle, tx);
       const prior = await tx.select({ review: s.ptReviews }).from(s.ptReviews).innerJoin(s.ptAssessments, eq(s.ptReviews.assessmentId, s.ptAssessments.id))
         .where(and(eq(s.ptAssessments.seriesId, series.id), sql`${s.ptAssessments.cycle} < ${a.cycle}`, eq(s.ptReviews.id, s.ptAssessments.approvedReviewId), eq(s.ptReviews.approved, true)))
@@ -258,12 +323,18 @@ export async function executeCommand(scope: Scope, command: Command, db: Databas
     }
     if (c.action === "preview-review") return enqueue(tx, scope, "render-review", a.id, a.revision, series.ownerKey, { reviewId: current.id });
     if (c.action === "approve") {
+      if (!isUploadedReview(current.data) && !paper.rubricApproved) throw new WorkspaceError(409, "Approve the marking rubric before approving question-based results.");
       if(current.approved)throw new WorkspaceError(409,"These results are already approved. Save a new review for corrections.");
-      validateMarks(paper.paper, current.data.marks, true);
+      reviewTotals(paper.paper, current.data, true);
       if (!current.data.report.summary.trim() || !current.data.report.nextSteps.some(step => step.trim())) throw new WorkspaceError(400, "Complete the report summary and next steps before approval.");
       if (!current.data.feedback.length && !current.data.report.contextLimitations.trim()) throw new WorkspaceError(400, "Record the limitation that verified class feedback is unavailable.");
       const artifacts = await tx.select().from(s.ptArtifacts).where(eq(s.ptArtifacts.reviewId, current.id));
       if (!artifacts.some(x => x.kind === "graded") || !artifacts.some(x => x.kind === "report")) throw new WorkspaceError(409, "Generate and preview both PDFs for this saved version before approving.");
+      if (isUploadedReview(current.data)) {
+        const graded = artifacts.find(x => x.kind === "graded")!;
+        const [markedFile, gradedFile] = await ownedFiles(scope, [current.data.markedFileId, graded.fileId], series.ownerKey, tx);
+        if (markedFile.purpose !== "marked" || markedFile.assessmentId !== a.id || markedFile.sha256 !== current.data.markedSha256 || gradedFile.sha256 !== current.data.markedSha256) throw new WorkspaceError(409, "The preview must exactly match this review's marked PDF. Generate both previews again.");
+      }
       const [approved] = await tx.insert(s.ptReviews).values({ assessmentId: a.id, data: current.data, approved: true, createdBy: scope.user.email }).returning();
       await tx.insert(s.ptArtifacts).values(artifacts.map(x => ({ reviewId: approved.id, kind: x.kind, fileId: x.fileId })));
       const queued=await preparePublication(tx,scope,a,series,approved.id,artifacts);
