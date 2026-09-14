@@ -28,3 +28,17 @@
 
 /* A PDF canvas must never set the minimum width of its surrounding grid column. */
 .detailGrid>*{min-width:0}.pdfViewer{width:100%;max-width:100%;contain:inline-size}
+
+/* Compact BeGifted operations: reserve the viewport for the work. */
+.workspace{padding:16px 24px;border-radius:8px}
+.workspaceHeader{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:44px;margin-bottom:8px}
+.workspaceHeader h1{display:flex;align-items:center;gap:10px;font-size:24px;margin:0;letter-spacing:-.6px}
+.headerTools{display:flex;align-items:center;gap:12px}.theme{margin:0}.theme select{min-height:36px}
+.help{position:relative;font:12px PTLabel,sans-serif}.help summary{display:flex;align-items:center;gap:6px;cursor:pointer;list-style:none;color:var(--pt-muted)}.help summary::-webkit-details-marker{display:none}.help>div{position:absolute;right:0;top:28px;z-index:10;width:240px;padding:16px;background:var(--pt-panel);border:1px solid var(--pt-border);border-radius:8px;box-shadow:0 8px 24px #16203a14}.help p{margin-top:8px;color:var(--pt-muted);line-height:1.7}
+.tabs{margin-bottom:14px;gap:24px}.tabs button{padding:10px 0}
+.toolbar{gap:12px;margin-bottom:14px}.toolbar .filters{max-width:none;flex:1}.filters select{max-width:250px}.toolbar .actions{flex:none}
+.row{padding:14px 18px;gap:24px;grid-template-columns:minmax(220px,1.4fr) minmax(150px,.8fr) minmax(160px,1fr) auto}.student h3{font-size:14px}.student p{font-size:12px}.avatar{height:34px;width:34px;flex:none}.rowAction .button{white-space:nowrap}.countBlock small{font-size:11px}
+.detailHeader{margin-bottom:10px;gap:12px}.detailHeader h2{font-size:22px;margin:4px 0}.detailHeader p{font-size:12px}.detailHeader .button{padding:6px 8px;min-height:32px}.stepList{margin:8px 0 14px}.panel{padding:18px;border-radius:8px;margin-bottom:14px}.panel>h3{margin-bottom:14px}.panel>summary{display:flex;align-items:center;gap:8px;cursor:pointer;font:15px PTHead,sans-serif}.panel[open]>summary{margin-bottom:12px}
+@media(max-width:1100px){.row{grid-template-columns:minmax(200px,1.3fr) 1fr 1fr}.rowAction{grid-column:3;align-items:flex-start}.toolbar{align-items:stretch;flex-direction:row;flex-wrap:wrap}.filters{max-width:none}.detailGrid{grid-template-columns:1fr}}
+@media(max-width:640px){.workspace{padding:12px}.workspaceHeader{gap:8px}.workspaceHeader h1{font-size:21px}.headerTools{gap:8px}.help summary span{display:none}.theme select{max-width:118px;padding:6px!important}.tabs{gap:20px;margin-bottom:12px}.tabs button{min-height:44px}.toolbar{gap:8px}.toolbar .filters{display:grid;grid-template-columns:1fr 1fr;gap:8px}.toolbar .filters label{grid-column:1/-1}.filters select{max-width:none}.toolbar .actions{margin-left:auto}.row{grid-template-columns:1fr;gap:10px;padding:14px}.row>.rowAction,.row>.student,.row>.next,.row>.countBlock{grid-column:1}.rowAction .button{min-height:44px}.detailHeader{flex-direction:row;align-items:flex-start}.detailHeader h2{font-size:20px}.detailHeader>.actions{width:auto}.panel{padding:14px}.workspace .button{min-height:40px}}
+.tabs{scrollbar-width:none}.tabs::-webkit-scrollbar{display:none}
