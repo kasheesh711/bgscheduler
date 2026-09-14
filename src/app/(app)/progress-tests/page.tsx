@@ -32,12 +32,6 @@ export function ProgressTestsSkeleton() {
         </div>
         <div className="h-9 w-24 animate-pulse rounded-md bg-muted" />
       </div>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="h-24 animate-pulse rounded-lg border bg-card" />
-        <div className="h-24 animate-pulse rounded-lg border bg-card" />
-        <div className="h-24 animate-pulse rounded-lg border bg-card" />
-        <div className="h-24 animate-pulse rounded-lg border bg-card" />
-      </div>
       <div className="h-10 animate-pulse rounded-lg border bg-card" />
       <div className="min-h-0 flex-1 animate-pulse rounded-lg border bg-card" />
     </div>
