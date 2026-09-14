@@ -8,6 +8,7 @@ import type { Command } from "./commands";
 import { assertOwner, assertRevision, cyclePosition, stageFor, validateMarks, WorkspaceError, type FeedbackEvidence, type ReviewData, isOriginalPaper, isUploadedReview, structuredPaper, reviewTotals, scoreTotals, cleanReport } from "./model";
 import { publicationReadiness, publishingSettings, preparePublication, publicationForScope } from "./publication";
 import { formatModel, formatEffort, FORMAT_PROMPT_VERSION, FORMAT_INSTRUCTIONS } from "./ai";
+import { queuePreparation, latestPreparation, preparationForScope } from "./preparation-publication";
 import { launchConfig } from "./cutover";
 export { launchConfig } from "./cutover";
 
@@ -72,10 +73,13 @@ export async function workspaceOverview(scope: Scope, db: Database = getDb()) {
     .from(s.progressTestAttendanceLedger).where(and(isNull(s.progressTestAttendanceLedger.tutorCanonicalKey), sql`${s.progressTestAttendanceLedger.scheduledStartTime} >= ${config.activatedAt}`, eq(s.progressTestAttendanceLedger.countsTowardCycle, true))).limit(200) : [];
   const legacy = scope.keys === null ? await db.select({ id:s.progressTestCycleState.enrollmentKey,student:s.progressTestCycleState.studentName,course:s.progressTestCycleState.subject,tutor:s.progressTestCycleState.mostFrequentTutorDisplayName,ownerKey:s.progressTestCycleState.mostFrequentTutorCanonicalKey,status:s.progressTestCycleState.status,count:s.progressTestCycleState.currentCount,date:s.progressTestCycleState.updatedAt }).from(s.progressTestCycleState).orderBy(s.progressTestCycleState.studentName) : [];
   const settings = await publishingSettings(db);
+  const prepRows = rows.length ? await db.select().from(s.ptPreparationPublications).where(inArray(s.ptPreparationPublications.assessmentId, rows.map(r => r.assessment.id))).orderBy(desc(s.ptPreparationPublications.assessmentRevision)) : [];
+  const prepByAssessment = new Map<string, typeof s.ptPreparationPublications.$inferSelect>();
+  for (const prep of prepRows) if (!prepByAssessment.has(prep.assessmentId)) prepByAssessment.set(prep.assessmentId, prep);
   return { formatting: { enabled: settings.formattingEnabled, revision: settings.revision }, user: scope.user, activatedAt: config?.activatedAt ?? null, publication: publicationReadiness(settings),
     sourceIssues: scope.keys===null ? await db.select().from(s.ptSourceIssues).limit(200) : [],
     capabilities: { formatting: settings.formattingEnabled, uploads: !!process.env.BLOB_READ_WRITE_TOKEN, ai: !!(process.env.OPENAI_PROGRESS_TEST_API_KEY || process.env.OPENAI_API_KEY) },
-    assessments: rows.map(assessmentView), papers, jobs, tutors, unresolved, legacy };
+    assessments: rows.map(row => ({ ...assessmentView(row), preparationPublication: prepByAssessment.get(row.assessment.id) ?? null })), papers, jobs, tutors, unresolved, legacy };
 }
 export type Overview = Awaited<ReturnType<typeof workspaceOverview>>;
 
@@ -115,7 +119,9 @@ export async function assessmentDetail(scope: Scope, id: string, db: Database = 
   const publicationFiles = publications.length ? await db.select().from(s.ptPublicationFiles).where(inArray(s.ptPublicationFiles.publicationId,publications.map(p=>p.id))) : [];
   const paperArtifacts = versions.length ? await db.select().from(s.ptPaperArtifacts).where(inArray(s.ptPaperArtifacts.versionId, versions.map(v => v.version.id))) : [];
   const preparingPapers = await db.select().from(s.ptPapers).where(and(eq(s.ptPapers.assessmentId, id), eq(s.ptPapers.ownerKey, series.ownerKey))).orderBy(desc(s.ptPapers.createdAt));
-  return { ...assessmentView(row), paperArtifacts, preparingPapers, publicationFiles, submissions, reviews, sessions: sessions.map(x => ({ ...x, ordinal: series.sessionIds.indexOf(x.id) + 1 })), feedback, versions: versions.map(v => ({ ...v, version: { ...v.version, approved: true, rubricApproved: v.version.approved || v.rubricApproved } })), artifacts, publications };
+  const preparationPublications = await db.select().from(s.ptPreparationPublications).where(eq(s.ptPreparationPublications.assessmentId, id)).orderBy(desc(s.ptPreparationPublications.assessmentRevision));
+  const [preparationJob] = preparationPublications.length ? await db.select({ id: s.ptJobs.id, status: s.ptJobs.status }).from(s.ptJobs).where(and(eq(s.ptJobs.targetId, preparationPublications[0].id), eq(s.ptJobs.kind, "publish-preparation"))).orderBy(desc(s.ptJobs.createdAt)).limit(1) : [];
+  return { ...assessmentView(row), preparationPublications, preparationPublication: preparationPublications[0] ?? null, preparationJob: preparationJob ?? null, paperArtifacts, preparingPapers, publicationFiles, submissions, reviews, sessions: sessions.map(x => ({ ...x, ordinal: series.sessionIds.indexOf(x.id) + 1 })), feedback, versions: versions.map(v => ({ ...v, version: { ...v.version, approved: true, rubricApproved: v.version.approved || v.rubricApproved } })), artifacts, publications };
 }
 export type AssessmentDetail = Awaited<ReturnType<typeof assessmentDetail>>;
 export async function paperDetail(scope: Scope, id: string, db: Database = getDb()) {
@@ -136,7 +142,7 @@ export async function enqueue(db: Database, scope: Scope, kind: string, targetId
   return { jobId: job.id };
 }
 
-export async function executeCommand(scope: Scope, command: Command, db: Database = getDb()): Promise<{ id?: string; revision?: number; pathname?: string; versionId?: string; jobId?: string; publicationId?: string }> {
+export async function executeCommand(scope: Scope, command: Command, db: Database = getDb()): Promise<{ id?: string; revision?: number; pathname?: string; versionId?: string; jobId?: string; publicationId?: string; preparationPublicationId?: string }> {
   return withDatabaseTransaction(db, async tx => {
     const c = command;
     if (c.action === "activate") {
@@ -186,7 +192,15 @@ export async function executeCommand(scope: Scope, command: Command, db: Databas
       return { id: paper.id };
     }
     if (c.action === "retry-job") {
-      const [job] = await tx.select().from(s.ptJobs).where(and(eq(s.ptJobs.id, c.id), ownerWhere(s.ptJobs.ownerKey, scope))).for("update");
+      const [found] = await tx.select().from(s.ptJobs).where(and(eq(s.ptJobs.id, c.id), ownerWhere(s.ptJobs.ownerKey, scope)));
+      if (!found) throw new WorkspaceError(404, "Job not found.");
+      // Preparation edits and retries always lock assessment before job.
+      if (found.kind === "publish-preparation") {
+        const row = await preparationForScope(scope, found.targetId, tx);
+        await getAssessment(scope, row.assessment.id, tx, true);
+        if ((await latestPreparation(row.assessment.id, tx))?.id !== row.publication.id) throw new WorkspaceError(409, "This upload was replaced by a newer preparation.");
+      }
+      const [job] = await tx.select().from(s.ptJobs).where(eq(s.ptJobs.id, found.id)).for("update");
       if (!job) throw new WorkspaceError(404, "Job not found.");
       if (job.status !== "failed") throw new WorkspaceError(409, "Only failed jobs can be retried.");
       if(job.kind==="publish")await publicationForScope(scope,job.targetId,tx);
@@ -258,7 +272,13 @@ export async function executeCommand(scope: Scope, command: Command, db: Databas
       if (a.currentSubmissionId) throw new WorkspaceError(409, "A submitted assessment keeps its approved paper. Create a new submission to correct student work.");
       const paper = await paperVersionForOwner(c.paperVersionId, series.ownerKey, tx);
       if (!paper.approved) throw new WorkspaceError(400, "Review and mark the paper ready in your library first.");
-      return update({ preparation: { paperVersionId: paper.id, topics: c.topics, studentInformed: c.studentInformed } });
+      const queued = await queuePreparation(tx, scope, a, series, paper.id);
+      return { ...await update({ preparation: { paperVersionId: paper.id, topics: c.topics, studentInformed: c.studentInformed } }), ...queued };
+    }
+    if (c.action === "remove-preparation-paper") {
+      if (a.currentSubmissionId) throw new WorkspaceError(409, "A submitted assessment keeps its reviewed paper.");
+      const queued = await queuePreparation(tx, scope, a, series, null);
+      return { ...await update({ preparation: { ...a.preparation, paperVersionId: null, studentInformed: false } }), ...queued };
     }
     if (!a.preparation.paperVersionId) throw new WorkspaceError(400, "Select a reviewed paper first.");
     const paper = await paperVersionForOwner(a.preparation.paperVersionId, series.ownerKey, tx);

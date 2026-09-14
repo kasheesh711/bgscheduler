@@ -32,6 +32,8 @@ async function readyPaper() {
   const id = created.id!;
   const [version] = await db.insert(s.ptPaperVersions).values({paperId:id,revision:1,paper,approved:true,createdBy:a.user.email}).returning();
   await db.update(s.ptPapers).set({revision:1}).where(eq(s.ptPapers.id,id));
+  const [file] = await db.insert(s.ptFiles).values({ownerKey:"a",name:"paper.pdf",mime:"application/pdf",size:10,pageCount:1,pathname:crypto.randomUUID(),purpose:"generated",status:"ready",sha256:"a".repeat(64)}).returning();
+  await db.insert(s.ptPaperArtifacts).values({versionId:version.id,kind:"paper",fileId:file.id,rendererVersion:"fixture"});
   return version.id;
 }
 describe("tutor workspace database contracts", () => {
@@ -101,7 +103,10 @@ describe("tutor workspace database contracts", () => {
   });
   it("preserves submissions and reviewed versions while approvals are blocked from Wise publishing", async () => {
     const versionId=await readyPaper();const row=await assessment();
-    await executeCommand(a,{action:"prepare",id:row.a.id,expectedRevision:0,paperVersionId:versionId,topics:"Fractions",studentInformed:true},db);
+    const prepared = await executeCommand(a,{action:"prepare",id:row.a.id,expectedRevision:0,paperVersionId:versionId,topics:"Fractions",studentInformed:true},db);
+    // The review suite starts after the separately tested preparation worker has completed.
+    await db.update(s.ptPreparationPublications).set({status:"published",phase:"completed"}).where(eq(s.ptPreparationPublications.id,prepared.preparationPublicationId!));
+    await db.update(s.ptJobs).set({status:"completed"}).where(eq(s.ptJobs.id,prepared.jobId!));
     const fileId=crypto.randomUUID();
     await db.insert(s.ptFiles).values({id:fileId,ownerKey:"a",name:"work.pdf",mime:"application/pdf",size:10,pageCount:2,pathname:`progress-tests/${fileId}/source`,status:"ready",purpose:"work"});
     await expect(executeCommand(a,{action:"submit",id:row.a.id,expectedRevision:1,sessionId:"another-tutors-session",fileIds:[fileId]},db)).rejects.toMatchObject({status:400});

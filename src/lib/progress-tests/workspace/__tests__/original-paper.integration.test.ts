@@ -63,7 +63,10 @@ async function act(id: string, values: Record<string, unknown>) {
 }
 async function submitted() {
   const target = await assessment(), p = await original(target.id); await ready(p);
-  await act(target.id, { action: "prepare", paperVersionId: p.versionId, topics: "Algebra", studentInformed: true });
+  // A completed preparation is a fixture here; native paper publication has its own integration suite.
+  const prepared = await act(target.id, { action: "prepare", paperVersionId: p.versionId, topics: "Algebra", studentInformed: true });
+  await db.update(s.ptPreparationPublications).set({ status: "published", phase: "completed" }).where(eq(s.ptPreparationPublications.id, prepared.preparationPublicationId!));
+  await db.update(s.ptJobs).set({ status: "completed" }).where(eq(s.ptJobs.id, prepared.jobId!));
   await act(target.id, { action: "submit", sessionId: "session9", fileIds: [await file("work", "a", target.id)] });
   return { target, p };
 }
@@ -182,7 +185,7 @@ describe("original papers and uploaded marked reviews", () => {
     const graded = publicationFiles.find(f => f.kind === "graded")!;
     expect(graded.sha256).toBe(hash(mock.bytes.get(markedFileId)!)); expect(graded.fileId).not.toBe(markedFileId);
     const sections: WiseSection[] = [];
-    const wise: NativeWise = { verifyCourse: vi.fn().mockResolvedValue(undefined), timeline: vi.fn(async () => structuredClone(sections)), createSection: vi.fn(async () => { sections.push({ _id: "section", name: "Progress Tests", enabled: true, entities: [] }); return "section"; }), upload: vi.fn().mockResolvedValue("private-token"), attach: vi.fn(async (classId, sectionId, name) => { sections[0].entities.push({ _id: randomUUID(), name, classId, type: "file", file: { _id: randomUUID(), path: "https://files.wiseapp.live/test", type: "pdf", size: pdf.length } }); }), verifyFile: vi.fn().mockResolvedValue(undefined) };
+    const wise: NativeWise = { remove: vi.fn(), verifyCourse: vi.fn().mockResolvedValue(undefined), timeline: vi.fn(async () => structuredClone(sections)), createSection: vi.fn(async () => { sections.push({ _id: "section", name: "Progress Tests", enabled: true, entities: [] }); return "section"; }), upload: vi.fn().mockResolvedValue("private-token"), attach: vi.fn(async (classId, sectionId, name) => { sections[0].entities.push({ _id: randomUUID(), name, classId, type: "file", file: { _id: randomUUID(), path: "https://files.wiseapp.live/test", type: "pdf", size: pdf.length } }); }), verifyFile: vi.fn().mockResolvedValue(undefined) };
     const job = (await claimJob(db, undefined, approved.jobId))!;
     await runPublication(job, db, wise); await runPublication(job, db, wise);
     expect(wise.attach).toHaveBeenCalledTimes(2); expect((await db.select().from(s.ptPublications))[0].status).toBe("published");

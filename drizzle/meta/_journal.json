@@ -610,6 +610,13 @@
       "when": 1789308149285,
       "tag": "0086_progress_paper_pipeline",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1789354242745,
+      "tag": "0087_progress_preparation_publication",
+      "breakpoints": true
     }
   ]
 }

@@ -52,7 +52,8 @@ async function main() {
       const created = await executeCommand(scope, { action: "create-paper", title: "SYNTHETIC original-paper validation", assessmentId: assessment.id }, db);
       const version = await executeCommand(scope, { action: "attach-original", id: created.id!, expectedRevision: 0, sourceFileId: original.id, keyFileId: null }, db);
       await executeCommand(scope, { action: "approve-paper", id: created.id!, expectedRevision: version.revision!, versionId: version.versionId!, confirmed: true }, db);
-      await act({ action: "prepare", paperVersionId: version.versionId, topics: "Synthetic technical validation only", studentInformed: true });
+      const preparation = await act({ action: "prepare", paperVersionId: version.versionId, topics: "Synthetic technical validation only", studentInformed: true });
+      if (preparation.jobId) await runRequestedJob(preparation.jobId);
     }
     assessment = (await getAssessment(scope, assessment.id, db)).assessment;
     if (!assessment.currentSubmissionId) await act({ action: "submit", sessionId: "technical-validation-class", fileIds: [(await upload("work", ["Synthetic student-work placeholder; no real answers."])).id] });

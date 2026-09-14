@@ -16,7 +16,7 @@ export async function readApi<T>(url: string, init?: RequestInit): Promise<T> {
   if (!response.ok) throw new Error(body.error || "The request failed. Please try again.");
   return body;
 }
-export async function command(c: Command) { return readApi<{ id?: string; revision?: number; jobId?: string; versionId?: string; pathname?: string }>(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) }); }
+export async function command(c: Command) { return readApi<{ id?: string; revision?: number; jobId?: string; preparationPublicationId?: string; versionId?: string; pathname?: string }>(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) }); }
 /** Accept refreshed server values only while that field still matches its last saved value. */
 export function useSavedDraft<T>(saved: T): [T, Dispatch<SetStateAction<T>>] {
   const [state, setState] = useState({ saved, value: saved });

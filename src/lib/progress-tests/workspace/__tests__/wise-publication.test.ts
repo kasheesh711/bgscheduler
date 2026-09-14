@@ -18,6 +18,12 @@ describe("verified native Wise boundary",()=>{
   expect(fetch.mock.calls[1][1].headers).toEqual({"Content-Type":"application/pdf"});expect(fetch.mock.calls[1][1].redirect).toBe("error");
   await expect(wise.attach(course._id,"c".repeat(24),"test.pdf",token)).rejects.toThrow();expect(fetch).toHaveBeenCalledTimes(3);
  });
+ it("scopes native removal to one resource and never retries an uncertain deletion POST",async()=>{
+  const fetch=vi.fn().mockRejectedValue(new Error("lost response"));vi.stubGlobal("fetch",fetch);
+  await expect(nativeWise(async()=>{}).remove(course._id,"c".repeat(24),"d".repeat(24))).rejects.toThrow();
+  expect(fetch).toHaveBeenCalledTimes(1);expect(String(fetch.mock.calls[0][0])).toContain("/teacher/deleteResourceInBulk/");
+  expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({classId:course._id,sectionId:"c".repeat(24),entityType:"resource",resourceIds:["d".repeat(24)]});
+ });
  it("rejects a byte mismatch on native readback",async()=>{
   vi.stubGlobal("fetch",vi.fn().mockResolvedValue(new Response("changed")));
   await expect(nativeWise(async()=>{}).verifyFile({_id:"r",name:"x.pdf",classId:course._id,type:"file",file:{_id:"f",path:"https://files.wiseapp.live/x.pdf",size:7,type:"pdf"}},fileHash(Buffer.from("approved")))).rejects.toMatchObject({status:422});

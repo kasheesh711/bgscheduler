@@ -14,6 +14,7 @@ export const commandSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("process-paper"), ...target, sourceFileId: id, keyFileId: id.nullable() }).strict(),
   z.object({ action: z.literal("preview-paper"), ...target }).strict(),
   z.object({ action: z.literal("prepare"), ...target, paperVersionId: id, topics: z.string().trim().min(1).max(10000), studentInformed: z.boolean() }).strict(),
+  z.object({ action: z.literal("remove-preparation-paper"), ...target }).strict(),
   z.object({ action: z.literal("submit"), ...target, sessionId: z.string().min(1).max(150), fileIds: z.array(id).min(1).max(30), pageOrder: z.array(z.object({ fileId: id, page: z.number().int().positive() }).strict()).min(1).max(100).optional() }).strict(),
   z.object({ action: z.literal("grade"), ...target }).strict(),
   z.object({ action: z.literal("report"), ...target }).strict(),
