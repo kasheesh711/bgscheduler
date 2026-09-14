@@ -98,6 +98,18 @@ describe("preparation paper publication", () => {
     expect(await claimJob(db)).toBeNull(); expect((await x.remove()).jobId).toBeUndefined();
     await db.update(s.ptWorkspaceSettings).set({ publishingEnabled: true }); expect(await claimJob(db, undefined, q.jobId)).toBeNull(); expect(x.wise.attach).not.toHaveBeenCalled();
   });
+  it("allows submission during a publishing pause, locks the paper and finishes its queued upload", async () => {
+    const x = await setup(), queued = await x.prepare();
+    await db.update(s.ptWorkspaceSettings).set({ publishingEnabled: false });
+    await db.update(s.ptSeries).set({ count: 8, sessionIds: ["class-8"] }).where(eq(s.ptSeries.id, x.series.id));
+    const [file] = await db.insert(s.ptFiles).values({ ownerKey: "tutor", assessmentId: x.assessment.id, name: "work.pdf", mime: "application/pdf", size: 1, pageCount: 1, pathname: crypto.randomUUID(), purpose: "work", status: "ready" }).returning();
+    await executeCommand(x.scope, { action: "submit", id: x.assessment.id, expectedRevision: (await x.assessmentNow()).revision, sessionId: "class-8", fileIds: [file.id] }, db);
+    expect((await x.assessmentNow()).currentSubmissionId).toBeTruthy();
+    await expect(x.remove()).rejects.toMatchObject({ status: 409 });
+    await expect(x.prepare(x.second.version.id)).rejects.toMatchObject({ status: 409 });
+    await db.update(s.ptWorkspaceSettings).set({ publishingEnabled: true });
+    await x.run(queued.jobId!); expect((await latestPreparation(x.assessment.id, db))?.status).toBe("published");
+  });
   it("rejects overlapping replacement/removal and stale revisions", async () => {
     const x = await setup(), q = await x.prepare(); await claimJob(db, undefined, q.jobId);
     await expect(x.remove()).rejects.toMatchObject({ status: 409 }); await expect(x.prepare(x.second.version.id)).rejects.toMatchObject({ status: 409 });

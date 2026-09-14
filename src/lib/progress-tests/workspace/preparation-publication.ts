@@ -57,11 +57,6 @@ export async function queuePreparation(db: Database, scope: Scope, assessment: t
   return { preparationPublicationId: publication.id, jobId: job.id };
 }
 
-export async function assertPreparationCanSubmit(assessmentId: string, db: Database) {
-  const latest = await latestPreparation(assessmentId, db);
-  if (latest && !terminal.includes(latest.status)) throw new WorkspaceError(409, "Finish or remove the pending Wise paper upload before submitting student work.");
-}
-
 export async function runPreparationPublication(job: typeof s.ptJobs.$inferSelect, db: Database = getDb(), injectedWise?: NativeWise) {
   const row = await preparationForScope(await scopeForEmail(job.createdBy, db), job.targetId, db);
   let pub = row.publication;

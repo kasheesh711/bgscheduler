@@ -8,7 +8,7 @@ import type { Command } from "./commands";
 import { assertOwner, assertRevision, cyclePosition, stageFor, validateMarks, WorkspaceError, type FeedbackEvidence, type ReviewData, isOriginalPaper, isUploadedReview, structuredPaper, reviewTotals, scoreTotals, cleanReport } from "./model";
 import { publicationReadiness, publishingSettings, preparePublication, publicationForScope } from "./publication";
 import { formatModel, formatEffort, FORMAT_PROMPT_VERSION, FORMAT_INSTRUCTIONS } from "./ai";
-import { queuePreparation, latestPreparation, preparationForScope, assertPreparationCanSubmit } from "./preparation-publication";
+import { queuePreparation, latestPreparation, preparationForScope } from "./preparation-publication";
 import { launchConfig } from "./cutover";
 export { launchConfig } from "./cutover";
 
@@ -283,7 +283,6 @@ export async function executeCommand(scope: Scope, command: Command, db: Databas
     if (!a.preparation.paperVersionId) throw new WorkspaceError(400, "Select a reviewed paper first.");
     const paper = await paperVersionForOwner(a.preparation.paperVersionId, series.ownerKey, tx);
     if (c.action === "submit") {
-      await assertPreparationCanSubmit(a.id, tx);
       if (!a.preparation.studentInformed || !a.preparation.topics.trim()) throw new WorkspaceError(400, "Complete the preparation checklist first.");
       const ordinal = series.sessionIds.indexOf(c.sessionId) + 1;
       if (ordinal <= (a.cycle - 1) * 8) throw new WorkspaceError(400, "Select a completed class in this tutor's assessment cycle or a later class.");
