@@ -31,7 +31,7 @@ async function setup(){
   const job=(await claimJob(db))!;
   const sections:WiseSection[]=[];
   let sequence=0;
-  const wise:NativeWise={verifyCourse:vi.fn().mockResolvedValue(undefined),timeline:vi.fn(async()=>structuredClone(sections)),createSection:vi.fn(async()=>{sections.push({_id:"section",name:"Progress Tests",enabled:true,entities:[]});return "section";}),upload:vi.fn().mockResolvedValue("private-token"),attach:vi.fn(async(classId,sectionId,name)=>{sections[0].entities.push({_id:`resource-${++sequence}`,name,type:"file",classId,file:{_id:`file-${sequence}`,path:"https://files.wiseapp.live/test",type:"pdf",size:bytes.length}});}),verifyFile:vi.fn().mockResolvedValue(undefined)};
+  const wise:NativeWise={remove:vi.fn(),verifyCourse:vi.fn().mockResolvedValue(undefined),timeline:vi.fn(async()=>structuredClone(sections)),createSection:vi.fn(async()=>{sections.push({_id:"section",name:"Progress Tests",enabled:true,entities:[]});return "section";}),upload:vi.fn().mockResolvedValue("private-token"),attach:vi.fn(async(classId,sectionId,name)=>{sections[0].entities.push({_id:`resource-${++sequence}`,name,type:"file",classId,file:{_id:`file-${sequence}`,path:"https://files.wiseapp.live/test",type:"pdf",size:bytes.length}});}),verifyFile:vi.fn().mockResolvedValue(undefined)};
   return {scope,series,assessment,review,queued,job,wise,sections};
 }
 describe("durable native publication",()=>{

@@ -32,7 +32,8 @@ Each body has `action`. Paper and assessment commands require `id` and `expected
 | `approve-paper` | `versionId`, `confirmed: true` | Reviewed paper PDF required; original needs no extraction, key or rubric. Structured content warnings block adoption |
 | `approve-rubric` | `versionId`, `confirmed: true` | Separate immutable private rubric approval after paper readiness; complete marks and criteria required |
 | `save-paper`, `process-paper`, `preview-paper` | — | Retired; returns 410 |
-| `prepare` | `paperVersionId`, `topics`, `studentInformed` | Approved owned paper, frozen once submitted |
+| `prepare` | `paperVersionId`, `topics`, `studentInformed` | Save and enqueue exact reviewed paper PDF for Wise; frozen once submitted |
+| `remove-preparation-paper` | — | Clear selection and informed checkbox, retain topics, withdraw only the recorded preparation attachment |
 | `submit` | `sessionId`, `fileIds`, optional `pageOrder: [{fileId,page}]` | New submission; actual class belongs to this relationship from this cycle onward, every page exactly once |
 | `grade` | — | Grade against the approved paper/rubric |
 | `save-review` | `marks`, `report` | New reviewed draft; bounded per-question marks, empty report bullets removed |
@@ -64,3 +65,9 @@ Paper job status is polled independently of the overview. `artifact` contains au
 Original content has `{kind: "original", title}` plus immutable version/file metadata and no synthetic questions. Existing structured paper records remain compatible. Uploaded reviews have `kind: "uploaded"`, `markedFileId`, `markedSha256`, `earned` and `possible` instead of per-question marks. Every review binds exact `paperVersionId` and `submissionId`. Corrections create new reviews; stale jobs cannot change them. Approved marked artifacts must match the saved marked-file hash, and native publishing still accepts only the approved graded/report pair.
 
 `format-paper` requires the latest saved original source/key tuple. Processing input freezes `sourceVersionId`, source/key hashes, `model`, `reasoningEffort`, `promptVersion` and the prompt text. Successful extraction precedes rendering. Timeouts, interrupted calls and quota failures become explicit-retry failures; renderer retries reuse saved extraction. The overview exposes independent `formatting.enabled` and `formatting.revision`.
+
+### Preparation upload and removal
+
+`prepare` retains its existing fields and revision guard; it saves the preparation and returns a durable `jobId`/`preparationPublicationId` (202) for immediate Wise dispatch. An unchanged active paper is reused. `remove-preparation-paper` takes `id` and `expectedRevision`, clears the selection and student-informed flag, preserves topics, and queues withdrawal when needed. An operation with an uncertain remote attachment must be reconciled before changing its selection. Both commands reject submitted assessments.
+
+Assessment and overview reads include preparation-publication state separately from final-result publication. The existing `retry-job` command supports failed preparation jobs. Only approved paper artifacts are uploaded; rubric and marking-key artifacts are excluded. Publishing pause preserves queued work. Migration 0087 adds the preparation ledger; no existing preparation triggers a bulk upload.

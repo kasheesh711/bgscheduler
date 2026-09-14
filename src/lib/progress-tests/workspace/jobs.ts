@@ -11,6 +11,7 @@ import { generateReport, gradeWork, parsePaper, PROMPT_VERSION, PARSE_INSTRUCTIO
 import { progressTestAiModel } from "../ai-summary";
 import { assertOwner, emptyReport, WorkspaceError, workspaceEnabled, type FeedbackEvidence, type Review, isUploadedReview, structuredPaper, reviewTotals } from "./model";
 
+import { runPreparationPublication } from "./preparation-publication";
 import { runPublication } from "./publication";
 import { runFormatting } from "./formatting";
 import { runOriginalConversion } from "./original-paper";
@@ -23,7 +24,7 @@ export async function claimJob(db: Database, now?: Date, jobId?: string): Promis
   return withDatabaseTransaction(db, async tx => {
     const dueAt = now ?? sql`clock_timestamp()`;
     // A process that outlives its lease cannot commit: completion also checks the token.
-    const [job] = await tx.select().from(s.ptJobs).where(and(jobId ? eq(s.ptJobs.id, jobId) : undefined, sql`(${s.ptJobs.kind} <> 'format-paper' or exists (select 1 from ${s.ptWorkspaceSettings} ws where ws.id = 'workspace' and ws.formatting_enabled = true))`, sql`(${s.ptJobs.kind} <> 'publish' or exists (select 1 from ${s.ptWorkspaceSettings} ws where ws.id = 'workspace' and ws.publishing_enabled = true and ws.verified_at is not null))`,or(
+    const [job] = await tx.select().from(s.ptJobs).where(and(jobId ? eq(s.ptJobs.id, jobId) : undefined, sql`(${s.ptJobs.kind} <> 'format-paper' or exists (select 1 from ${s.ptWorkspaceSettings} ws where ws.id = 'workspace' and ws.formatting_enabled = true))`, sql`(${s.ptJobs.kind} not in ('publish', 'publish-preparation') or exists (select 1 from ${s.ptWorkspaceSettings} ws where ws.id = 'workspace' and ws.publishing_enabled = true and ws.verified_at is not null))`,or(
       and(eq(s.ptJobs.status, "queued"), lte(s.ptJobs.availableAt, dueAt)),
       and(eq(s.ptJobs.status, "running"), lte(s.ptJobs.leaseUntil, dueAt)),
     ))).orderBy(s.ptJobs.availableAt).limit(1).for("update", { skipLocked: true });
@@ -31,6 +32,7 @@ export async function claimJob(db: Database, now?: Date, jobId?: string): Promis
     if (job.status === "running") await tx.update(s.ptJobAttempts).set({status:"interrupted",finishedAt:dueAt,error:"Worker lease expired; retry will use a new lease."}).where(and(eq(s.ptJobAttempts.jobId,job.id),eq(s.ptJobAttempts.attempt,job.attempts)));
     if ((job.attempts - Number(job.checkpoint.deferrals ?? 0)) >= MAX_ATTEMPTS) {
       await tx.update(s.ptJobs).set({ status: "failed", error: job.kind === "format-paper" ? "Formatting exhausted its retries. Your upload is saved; retry or replace the source file." : "Processing exhausted its retries. Review the files and retry, or complete marks and reports manually.", finishedAt: dueAt }).where(eq(s.ptJobs.id, job.id));
+      if (job.kind === "publish-preparation") await tx.update(s.ptPreparationPublications).set({ status: "failed", error: "Wise operation exhausted its retries. Retry to resume from saved progress.", updatedAt: dueAt }).where(eq(s.ptPreparationPublications.id, job.targetId));
       if(job.kind === "publish") {
         const message="Publication exhausted its retries. Check Wise and retry reconciliation from History.";
         const [pub]=await tx.update(s.ptPublications).set({status:"failed",error:message,updatedAt:dueAt}).where(eq(s.ptPublications.id,job.targetId)).returning();
@@ -154,8 +156,8 @@ export async function runJob(job: Job, db: Database = getDb(), deadline = Date.n
       await db.update(s.ptJobAttempts).set({ status: "completed", result, finishedAt: new Date() }).where(and(eq(s.ptJobAttempts.jobId, job.id), eq(s.ptJobAttempts.attempt, job.attempts)));
       return;
     }
-    if(job.kind==="publish") {
-      const result=await runPublication(job,db);
+    if(job.kind==="publish" || job.kind==="publish-preparation") {
+      const result=job.kind === "publish" ? await runPublication(job,db) : await runPreparationPublication(job,db);
       await db.update(s.ptJobs).set({status:"completed",result,error:null,finishedAt:new Date(),leaseUntil:null}).where(and(eq(s.ptJobs.id,job.id),eq(s.ptJobs.leaseToken,job.leaseToken!),eq(s.ptJobs.status,"running")));
       await db.update(s.ptJobAttempts).set({status:"completed",result,finishedAt:new Date()}).where(and(eq(s.ptJobAttempts.jobId,job.id),eq(s.ptJobAttempts.attempt,job.attempts)));
       return;

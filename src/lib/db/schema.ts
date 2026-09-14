@@ -3,6 +3,7 @@ import type { RoomBotEvent, RoomEvidence } from "@/lib/room-booking/model";
 import type { CompletionEvidence, CoverageRevision, LeaveInterpretation, WorkStudent } from "@/lib/leave-requests/work-types";
 import {
   pgTable,
+  type AnyPgColumn,
   primaryKey,
   uuid,
   text,
@@ -5637,3 +5638,23 @@ export const ptSourceIssues = pgTable("pt_source_issues", {
   sourceKey: text("source_key").primaryKey(), studentName: text("student_name").notNull(), courseName: text("course_name").notNull(),
   reason: text("reason").notNull(), observedAt: timestamp("observed_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/** Exact student-facing paper per preparation operation; final results use ptPublications. */
+export const ptPreparationPublications = pgTable("pt_preparation_publications", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  assessmentId: uuid("assessment_id").notNull().references(() => ptAssessments.id),
+  assessmentRevision: integer("assessment_revision").notNull(),
+  operation: text("operation").$type<"upload" | "remove">().notNull(),
+  paperVersionId: uuid("paper_version_id").references(() => ptPaperVersions.id),
+  fileId: uuid("file_id").references(() => ptFiles.id),
+  sha256: text("sha256"), name: text("name"), previousId: uuid("previous_id").references((): AnyPgColumn => ptPreparationPublications.id),
+  status: text("status").notNull().default("queued"), phase: text("phase").notNull().default("pending"),
+  sectionId: text("section_id"), resourceId: text("resource_id"), wiseFileId: text("wise_file_id"),
+  error: text("error"), verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  createdBy: text("created_by").notNull(), createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [
+  uniqueIndex("pt_preparation_assessment_revision_idx").on(t.assessmentId, t.assessmentRevision), uniqueIndex("pt_preparation_name_idx").on(t.name),
+  check("pt_preparation_publications_operation_check", sql`${t.operation} in ('upload', 'remove')`),
+  check("pt_preparation_file_shape", sql`(${t.operation} = 'upload' and ${t.paperVersionId} is not null and ${t.fileId} is not null and ${t.sha256} is not null and ${t.name} is not null) or (${t.operation} = 'remove' and ${t.paperVersionId} is null and ${t.fileId} is null and ${t.sha256} is null and ${t.name} is null)`),
+]);

@@ -12,6 +12,7 @@ export interface NativeWise {
   createSection(classId: string): Promise<string>;
   upload(name: string, bytes: Buffer): Promise<string>;
   attach(classId: string, sectionId: string, name: string, token: string): Promise<void>;
+  remove(classId: string, sectionId: string, resourceId: string): Promise<void>;
   verifyFile(resource: WiseResource, hash: string): Promise<void>;
 }
 export function validateCourse(data: Record<string, unknown>, classId: string, studentId: string) {
@@ -65,6 +66,9 @@ export function nativeWise(guard: () => Promise<void>, signal = AbortSignal.time
     },
     async attach(classId,sectionId,name,token) {
       await client.post("/teacher/createResourceInBulk",{classId:checkedId(classId),sectionId:checkedId(sectionId),resources:[{name,uploadTokens:[token],type:"file"}]});
+    },
+    async remove(classId, sectionId, resourceId) {
+      await client.post("/teacher/deleteResourceInBulk/", { classId: checkedId(classId), sectionId: checkedId(sectionId), entityType: "resource", resourceIds: [checkedId(resourceId)] });
     },
     async verifyFile(resource,hash) {
       if (!resource.file?._id || resource.type !== "file" || resource.file.type !== "pdf") throw new WorkspaceError(422,"Wise attachment does not match the approved PDF.");

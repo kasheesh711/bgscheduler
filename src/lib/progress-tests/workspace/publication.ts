@@ -45,12 +45,12 @@ export async function publicationForScope(scope: Scope, id: string, db: Database
 function sectionById(sections: WiseSection[], id: string): WiseSection | undefined {
   for (const s of sections) { if(s._id===id) return s; const child=sectionById(s.children??[],id); if(child)return child; }
 }
-function requireSection(sections: WiseSection[], id: string) {
+export function requireSection(sections: WiseSection[], id: string) {
   const section=sectionById(sections,id);
   if (!section || section.enabled !== true || !Array.isArray(section.entities)) throw new WorkspaceError(422,"The Progress Tests section is missing or inaccessible. An administrator must review the destination.");
   return section;
 }
-async function destination(db: Database, wise: NativeWise, classId: string, studentId: string, guard:()=>Promise<void>) {
+export async function destination(db: Database, wise: NativeWise, classId: string, studentId: string, guard:()=>Promise<void>) {
   await db.insert(s.ptWiseDestinations).values({wiseClassId:classId,wiseStudentId:studentId}).onConflictDoNothing();
   const [binding]=await db.select().from(s.ptWiseDestinations).where(eq(s.ptWiseDestinations.wiseClassId,classId));
   if(binding.wiseStudentId!==studentId)throw new WorkspaceError(422,"The course's saved student destination changed. Administrator review is required.");

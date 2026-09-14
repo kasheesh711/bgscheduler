@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { ArrowLeft, CheckCheck, ClipboardCheck, FileText, RefreshCw, Sparkles } from "lucide-react";
+import { ArrowLeft, CheckCheck, ClipboardCheck, FileText, RefreshCw, Sparkles, Replace, Trash2, Upload, LoaderCircle } from "lucide-react";
 import type { AssessmentDetail, Overview } from "@/lib/progress-tests/workspace/data";
 import { emptyReport, validateMarks, isOriginalPaper, isUploadedReview, scoreTotals, sameJsonValue, cleanReport, type Mark, type PageRef, type Report } from "@/lib/progress-tests/workspace/model";
 import type { Command } from "@/lib/progress-tests/workspace/commands";
@@ -32,6 +32,17 @@ export function AssessmentEditor({ data, overview, onBack, onSaved, onError }: {
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const [choosing, setChoosing] = useState(!data.preparation.paperVersionId);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [removeConfirm, setRemoveConfirm] = useState(false);
+  const [mobilePane, setMobilePane] = useState("details");
+  const chosenPaper = data.versions.find(v => v.version.id === paperId)?.version;
+  const publication = data.preparationPublication;
+  const pending = !!publication && !["published", "removed", "cancelled"].includes(publication.status);
+  const uploading = data.preparationJob?.status === "running";
+  const retryable = data.preparationJob?.status === "failed";
+  const choosePaper = (id: string) => { if (id !== paperId) setInformed(false); setPaperId(id); setPreview(null); };
+  const publicationLabel = !publication || publication.status === "removed" || publication.status === "cancelled" ? "Not uploaded to Wise" : publication.status === "published" ? "Uploaded to Wise" : !overview.publication.ready ? "Paused · saved for upload" : retryable ? "Wise upload needs attention" : publication.operation === "remove" ? "Removing from Wise…" : publication.phase === "removing" ? "Retiring previous paper…" : "Uploading to Wise…";
   const paperArtifacts = data.paperArtifacts.filter(a => a.versionId === paperId);
   const displayPreview = preview ?? (!data.currentSubmissionId ? paperArtifacts.find(a => a.kind === "paper")?.fileId : data.artifacts.find(a => a.reviewId === data.currentReviewId)?.fileId);
   const sameReview = !!current && (isUploadedReview(current.data) ? manual && current.data.markedFileId === markedFileId && earned.trim() !== "" && possible.trim() !== "" && current.data.earned === Number(earned) && current.data.possible === Number(possible) : !manual && sameJsonValue(current.data.marks, marks)) && sameJsonValue(current.data.report, cleanReport(report));
@@ -39,7 +50,11 @@ export function AssessmentEditor({ data, overview, onBack, onSaved, onError }: {
   const totals = (() => { try { return manual ? earned.trim() && possible.trim() ? scoreTotals(Number(earned), Number(possible)) : null : currentPaper ? validateMarks(currentPaper,marks) : null; } catch { return null; } })();
   const run = async (c: Command) => {
     setBusy(true); onError(""); setMessage("");
-    try { const result = await command(c); setMessage(result.jobId ? "Processing started. You can close this page; your job will continue." : c.action === "approve" ? "Results approved. Both documents are queued for Wise publication." : "Saved."); await onSaved(); }
+    try { const result = await command(c);
+      if (c.action === "prepare") { setChoosing(false); setUploadOpen(false); }
+      if (c.action === "remove-preparation-paper") { setPaperId(""); setInformed(false); setPreview(null); setChoosing(true); setUploadOpen(false); setRemoveConfirm(false); }
+      setMessage(c.action === "prepare" ? result.jobId ? "Preparation saved. Your paper is queued for Wise; upload status will update here." : "Preparation saved. This paper is already uploaded to Wise." : c.action === "remove-preparation-paper" ? result.jobId ? "Paper selection removed. Its Wise attachment is being withdrawn." : "Paper removed from this assessment." : result.jobId ? "Processing started. You can close this page; your job will continue." : c.action === "approve" ? "Results approved. Both documents are queued for Wise publication." : "Saved.");
+      await onSaved(); }
     catch (e) { onError(e instanceof Error ? e.message : "Could not save."); }
     finally { setBusy(false); }
   };
@@ -49,19 +64,34 @@ export function AssessmentEditor({ data, overview, onBack, onSaved, onError }: {
   return <>
     <div className={css.detailHeader}><div className={css.detailHeading}><Button variant="quiet" aria-label="Back to workspace" onClick={onBack}><ArrowLeft size={18}/></Button><div><h2>{data.series.studentName}</h2><p>{data.series.courseName} · {data.series.tutorName} · Cycle {data.cycle} · Due in class {data.dueClass}</p></div></div><div className={css.actions}><span className={`${css.badge} ${data.overdue ? css.warning : ""}`}>{STAGE_LABELS[data.stage]}{data.overdue ? " · Overdue" : ""}</span><Button variant="quiet" aria-label="Refresh saved results" onClick={() => { void onSaved().catch(e => onError(e.message)); }}><RefreshCw size={16}/></Button></div></div>
     {message && <div className={css.notice} role="status">{message}</div>}
-    <div className={css.detailGrid}><div>
+    <div className={css.mobilePanes} aria-label="Assessment view"><Button variant={mobilePane === "details" ? "primary" : "quiet"} aria-pressed={mobilePane === "details"} onClick={() => setMobilePane("details")}>Details</Button><Button variant={mobilePane === "preview" ? "primary" : "quiet"} aria-pressed={mobilePane === "preview"} onClick={() => setMobilePane("preview")}>PDF preview</Button></div>
+    <div className={`${css.detailGrid} ${css.assessmentGrid}`} data-mobile-pane={mobilePane}><div className={css.assessmentControls}>
       <section className={css.panel}><h3>1. Prepare the test <small>Discuss in class {data.discussionClass}</small></h3>
-        <Field label="Ready test paper"><select value={paperId} disabled={!!data.currentSubmissionId} onChange={e => { setPaperId(e.target.value); setPreview(null); }}><option value="">Choose a paper from your library</option>{data.versions.map(v => <option value={v.version.id} key={v.version.id}>{v.version.paper.title} · {isOriginalPaper(v.version.paper) ? "Original" : "Formatted"} · version {v.version.revision}</option>)}</select></Field>
-        <div className={css.inlinePaper}>{!data.currentSubmissionId && <AssessmentPaperPreparation assessment={data} capabilities={overview.capabilities} onSaved={onSaved} onReady={setPaperId} onPreview={setPreview} onError={onError}/>}</div>
+        {chosenPaper && <div className={css.selectedPaper}><FileText size={23}/><div><strong>{chosenPaper.paper.title}</strong><p>{isOriginalPaper(chosenPaper.paper) ? "Original" : "Formatted"} · Version {chosenPaper.revision}</p></div><div className={css.actions}>
+          <Button variant="quiet" disabled={!paperArtifacts.some(a => a.kind === "paper")} onClick={() => { setPreview(paperArtifacts.find(a => a.kind === "paper")!.fileId); setMobilePane("preview"); }}>Preview</Button>
+          {!data.currentSubmissionId && <><Button variant="quiet" disabled={busy || uploading} onClick={() => { setChoosing(true); setRemoveConfirm(false); }}><Replace size={14}/>Replace</Button><Button variant="quiet" disabled={busy || uploading} onClick={() => setRemoveConfirm(true)}><Trash2 size={14}/>Remove</Button></>}
+        </div></div>}
+        {removeConfirm && <div className={css.removeConfirmation} role="alert"><strong>Remove the paper from this assessment and Wise?</strong><p>The library paper and local history will be kept.</p><div className={css.actions}><Button disabled={busy} onClick={() => run({ action: "remove-preparation-paper", ...target })}>Remove paper</Button><Button variant="quiet" onClick={() => setRemoveConfirm(false)}>Cancel</Button></div></div>}
+        {!data.currentSubmissionId && choosing && <div className={css.paperChooser}>
+          <Field label="Choose a ready paper"><select value={paperId} onChange={e => choosePaper(e.target.value)}><option value="">Choose from your library</option>{data.versions.map(v => <option value={v.version.id} key={v.version.id}>{v.version.paper.title} · {isOriginalPaper(v.version.paper) ? "Original" : "Formatted"} · version {v.version.revision}</option>)}</select></Field>
+          <div className={css.actions}><Button variant="quiet" onClick={() => setUploadOpen(!uploadOpen)}><Upload size={14}/>{uploadOpen ? "Hide upload" : "Upload a new paper"}</Button>{data.preparation.paperVersionId && <Button variant="quiet" onClick={() => { setPaperId(data.preparation.paperVersionId!); setInformed(data.preparation.studentInformed); setPreview(null); setChoosing(false); setUploadOpen(false); }}>Cancel replacement</Button>}</div>
+          {uploadOpen && <AssessmentPaperPreparation assessment={data} capabilities={overview.capabilities} onSaved={onSaved} onReady={id => { choosePaper(id); setChoosing(false); setUploadOpen(false); }} onPreview={id => { setPreview(id); setMobilePane("preview"); }} onError={onError}/>}
+        </div>}
         <Field label="Topics the student should revise"><textarea value={topics} disabled={!!data.currentSubmissionId} placeholder="For example: linear equations, substitution and interpreting graphs." onChange={e => setTopics(e.target.value)}/></Field>
         <label className={css.check}><input type="checkbox" checked={informed} disabled={!!data.currentSubmissionId} onChange={e => setInformed(e.target.checked)}/>I explained the test and its covered topics to the student.</label>
-        {!data.currentSubmissionId && <Button variant="primary" disabled={busy || !paperId || !topics.trim()} onClick={() => run({ action:"prepare",...target,paperVersionId:paperId,topics,studentInformed:informed })}>Save preparation</Button>}
+        {!data.currentSubmissionId && <Button variant="primary" disabled={busy || uploading || !paperId || !topics.trim()} onClick={() => run({ action:"prepare",...target,paperVersionId:paperId,topics,studentInformed:informed })}><Upload size={15}/>Upload to Wise</Button>}
+        <div className={css.preparationStatus} role="status">{pending && !retryable && <LoaderCircle size={14} className={css.spinner}/>}<strong>{publicationLabel}</strong>{publication?.verifiedAt && publication.status === "published" && <span> · {formatDate(publication.verifiedAt)}</span>}</div>
+        {paperId && publication?.paperVersionId && paperId !== publication.paperVersionId && <p className={css.hint}>Your replacement is not uploaded yet. The previous paper stays in Wise until the replacement is verified.</p>}
+        <p className={css.hint}>Destination: {data.series.courseName} → Content → Progress Tests. Your marking key stays private.</p>
+        {publication?.sectionId && <a href={`https://learn.begiftededucation.com/teacher/classes/${data.series.wiseClassId}/overview?type=one_to_one&tab=content`} target="_blank" rel="noreferrer">Open Wise Content ↗</a>}
+        {publication?.error && <p className={css.hint} role="alert">{publication.error}</p>}
+        {retryable && data.preparationJob && <Button disabled={busy} onClick={() => run({ action: "retry-job", id: data.preparationJob!.id })}><RefreshCw size={14}/>Retry Wise upload</Button>}
       </section>
       <section className={css.panel}><h3>2. Submit student work <small>Within an ordinary class</small></h3><p className={css.hint}>Record the class in which you administered the test. A late test does not move the next eight-class deadline.</p>
         <Field label="Class in which the test was administered"><select value={sessionId} onChange={e => setSessionId(e.target.value)}><option value="">Choose a completed class</option>{data.sessions.filter(s => s.ordinal > (data.cycle-1)*8).map(s => <option key={s.id} value={s.id}>Class {s.ordinal} · {formatDate(s.date)}</option>)}</select></Field>
         <UploadField purpose="work" ownerKey={data.series.ownerKey} assessmentId={data.id} disabled={!overview.capabilities.uploads || !data.preparation.paperVersionId} onUploaded={uploaded => { setFiles([...files,...uploaded]); setOrder([...order,...uploaded.flatMap(f => Array.from({ length:f.pageCount },(_,i) => ({ fileId:f.id,page:i+1 })))]); }}/>
         {files.length > 0 && <PageOrder files={files} order={order} onOrder={setOrder} onRemove={id => { setFiles(files.filter(f => f.id!==id)); setOrder(order.filter(p => p.fileId!==id)); }}/ >}
-        <Button variant="primary" disabled={busy || !sessionId || !files.length} onClick={() => run({ action:"submit",...target,sessionId,fileIds:files.map(f => f.id),pageOrder:order })}>{data.currentSubmissionId ? "Submit corrected work as a new version" : "Submit for review"}</Button>
+        <Button variant="primary" disabled={busy || pending || !sessionId || !files.length} onClick={() => run({ action:"submit",...target,sessionId,fileIds:files.map(f => f.id),pageOrder:order })}>{data.currentSubmissionId ? "Submit corrected work as a new version" : "Submit for review"}</Button>
         {data.submissions.length > 0 && <details className={css.versionList}><summary>Submitted work · {data.submissions.length} version(s)</summary>{data.submissions.map((s,i) => <div key={s.id}><strong>{i===0 ? "Latest submission" : "Earlier submission"} · {formatDate(s.createdAt)}</strong><p>{data.sessions.find(c => c.id===s.data.sessionId) ? `Administered in class ${data.sessions.find(c => c.id===s.data.sessionId)!.ordinal}` : "Recorded class needs attendance review"}</p><div className={css.actions}>{s.data.fileIds.map((id,j) => <Button variant="quiet" key={id} onClick={() => setPreview(id)}>Original file {j+1}</Button>)}</div></div>)}</details>}
       </section>
       {data.currentSubmissionId && paperContent && <section className={css.panel}><h3>3. Review the marked test</h3>
@@ -92,7 +122,7 @@ export function AssessmentEditor({ data, overview, onBack, onSaved, onError }: {
         <Field label="Context limitations or missing evidence"><textarea value={report.contextLimitations} onChange={e => { setReport({ ...report,contextLimitations:e.target.value }); setConfirmed(false); }}/></Field>
         <Button variant="primary" disabled={busy || (manual && (!markedFileId || !totals))} onClick={() => { void saveReview(); }}>Save report and marks</Button>
       </section>}
-    </div><aside>
+    </div><aside className={css.assessmentPreview}>
       <section className={css.panel}><h3><FileText size={18}/>Document preview</h3><div className={css.actions}>{!data.currentSubmissionId && paperArtifacts.map(a => <Button key={a.id} onClick={() => setPreview(a.fileId)}>{a.kind === "paper" ? "Test paper" : "Private marking scheme"}</Button>)}{artifacts.map(a => <Button key={a.id} onClick={() => setPreview(a.fileId)}>{a.kind === "graded" ? "Graded test" : "Progress report"}</Button>)}</div>
         {displayPreview ? <PdfViewer fileId={displayPreview} title="Assessment document preview"/> : <div className={css.empty}><FileText/><p>{data.currentSubmissionId ? "Open original work or build both reviewed PDFs." : "Upload your own paper, or select a ready paper to preview it here."}</p></div>}
         {current && <><Button disabled={busy || !overview.capabilities.uploads || !sameReview} onClick={() => run({ action:"preview-review",...target })}><FileText size={15}/>Build both PDF previews</Button><label className={css.check}><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)}/>I reviewed every page of the graded test and progress report, checked that the score matches the marked test, and approve these results.</label>
@@ -102,7 +132,8 @@ export function AssessmentEditor({ data, overview, onBack, onSaved, onError }: {
         {data.publicationError && <p className={css.hint}>Publication: {data.publicationStatus === "blocked" ? "Waiting for Wise publishing" : data.publicationStatus}</p>}
       </section>
       <details className={css.panel}><summary><ClipboardCheck size={18}/>Class feedback</summary><p className={css.hint}>Only verified feedback from this tutor, student and course cycle is included.</p><div className={css.versionList}>{data.feedback.length ? data.feedback.map(f => <div key={f.id}><strong>{formatDate(f.date)}</strong><p style={{ whiteSpace:"pre-wrap" }}>{f.text}</p></div>) : <p>No verified feedback is available for this cycle. Record this limitation in the report.</p>}</div></details>
-      <details className={css.panel}><summary>Review history</summary><p className={css.hint}>Wise destination: Content → Progress Tests. Earlier approved versions are retained.</p>
+      <details className={css.panel}><summary>Paper and review history</summary><p className={css.hint}>Wise destination: Content → Progress Tests. Earlier approved versions are retained.</p>
+      {data.preparationPublications.map(p => <div className={css.versionList} key={p.id}><div><strong>{p.operation === "remove" ? "Paper removed" : data.versions.find(v => v.version.id === p.paperVersionId)?.version.paper.title ?? "Prepared paper"} · {formatDate(p.createdAt)}</strong><p>{p.status.replaceAll("_", " ")}</p>{p.fileId && <Button variant="quiet" onClick={() => { setPreview(p.fileId); setMobilePane("preview"); }}>Preview saved paper</Button>}</div></div>)}
       {data.publications.map(p=><div className={css.notice} key={p.id}><div><strong>Version {p.version} · {p.status.replaceAll("_"," ")}</strong><p>{p.error}</p>{data.publicationFiles.filter(f=>f.publicationId===p.id).map(f=><p key={f.id}>{f.kind==="graded"?"Graded test":"Progress report"}: {f.status==="verified"?"Verified in Wise":f.status}</p>)}{p.status!=="published"&&<Button disabled={busy} onClick={()=>run({action:"publish",...target,publicationId:p.id})}>Check Wise and retry</Button>}{p.status==="published"&&<a href={`https://learn.begiftededucation.com/teacher/classes/${data.series.wiseClassId}/overview?type=one_to_one&tab=content`} target="_blank" rel="noreferrer">Open Wise Content ↗</a>}</div></div>)}<div className={css.versionList}>{data.reviews.map((r,i) => <div key={r.id}><strong>{r.approved ? "Approved" : "Draft"} · {formatDate(r.createdAt)}</strong><p>{i===0 ? "Latest review" : "Earlier review"} · {r.data.feedback.length} feedback references</p><div className={css.actions}>{data.artifacts.filter(a => a.reviewId===r.id).map(a => <Button key={a.id} variant="quiet" onClick={() => setPreview(a.fileId)}>{a.kind === "graded" ? "Graded test" : "Report"}</Button>)}</div></div>)}</div></details>
     </aside></div>
   </>;
