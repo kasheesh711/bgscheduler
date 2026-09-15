@@ -98,6 +98,8 @@ export async function storeGoogleOAuthTokenForUser(
   db: Database = getDb(),
 ): Promise<void> {
   if (!account || account.provider !== "google" || !account.access_token) return;
+  // An identity-only attendance login must never overwrite integration tokens.
+  if (!hasSheetsReadScope(account.scope) && !hasDriveFileScope(account.scope)) return;
   const normalizedEmail = email.trim().toLowerCase();
   if (!normalizedEmail) return;
 

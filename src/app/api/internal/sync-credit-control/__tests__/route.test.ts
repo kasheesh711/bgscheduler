@@ -126,7 +126,7 @@ describe("GET/POST /api/internal/sync-credit-control", () => {
   });
 
   it("allows a signed-in admin to trigger POST manually", async () => {
-    authMock.mockResolvedValue({ user: { email: "admin@example.com" }, expires: "2026-05-26T00:00:00.000Z" });
+    authMock.mockResolvedValue({ user: { role: "admin", email: "admin@example.com" }, expires: "2026-05-26T00:00:00.000Z" });
 
     const res = await POST(request(undefined));
 

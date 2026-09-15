@@ -8,6 +8,7 @@ import { isSuperAdminEmail } from "@/lib/admin-users/policy";
 import { getLearningPlansAccess } from "@/lib/learning-plans/access";
 import { getPostClassCapabilities } from "@/lib/post-class-feedback/access";
 import { getUnearnedRevenueCapabilities } from "@/lib/unearned-revenue/access";
+import { canUseAttendance } from "@/lib/tutor-attendance/access";
 
 // Resolves the signed-in user's page access for nav filtering. Kept in its own
 // async component (wrapped in <Suspense> below) so the uncached auth() call does
@@ -16,10 +17,11 @@ import { getUnearnedRevenueCapabilities } from "@/lib/unearned-revenue/access";
 // so dynamic-param routes do not trigger a prerender error on the static shell.
 async function AppNavWithAccess() {
   const session = await auth();
-  const [capabilities, learningPlansAccess, unearnedRevenueCapabilities] = await Promise.all([
+  const [capabilities, attendanceAccess, learningPlansAccess, unearnedRevenueCapabilities] = await Promise.all([
     session?.user?.email
       ? getPostClassCapabilities(session.user.email)
       : Promise.resolve([]),
+    session?.user?.email ? canUseAttendance(session.user.email) : Promise.resolve(false),
     getLearningPlansAccess(),
     session?.user?.email
       ? getUnearnedRevenueCapabilities(session.user.email)
@@ -29,6 +31,7 @@ async function AppNavWithAccess() {
     <AppNav
       allowedPages={session?.user?.allowedPages ?? null}
       creditControlEnabled={creditControlActive()}
+      attendanceAccess={attendanceAccess}
       learningPlansAccess={learningPlansAccess}
       postClassFeedbackAccess={capabilities.includes("viewer")}
       unearnedRevenueAccess={unearnedRevenueCapabilities.includes("viewer")}

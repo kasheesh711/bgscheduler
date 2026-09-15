@@ -466,3 +466,11 @@ The Leave Requests domain now owns 13 tables. The original five above remain for
 | `leave_family_tasks` | `leaveFamilyTasks` | Assignment + established family/student identity |
 | `leave_work_events` | `leaveWorkEvents` | Audited, idempotent workflow mutation |
 | `leave_work_state` | `leaveWorkState` | Source/roster/class freshness and resumable bundle checkpoint |
+
+## Office attendance addition (migration 0088)
+
+Seven new `tutor_attendance_*` tables store explicit enrollment, weekly schedule versions,
+date exceptions, office-network configuration, daily attendance, correction requests and
+immutable audit evidence. They use durable tutor keys and survive Wise snapshot rotation.
+The complete [table inventory and transaction contract](../api/tutor-attendance.md#persistence)
+accompany the [feature](../../features/tutor-attendance.md).

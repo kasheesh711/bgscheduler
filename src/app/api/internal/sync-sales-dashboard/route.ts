@@ -28,7 +28,7 @@ async function handleSync(request: NextRequest, options: { allowSessionAuth: boo
   if (cronSecretStatus !== "valid") {
     if (options.allowSessionAuth) {
       const session = await auth();
-      if (session?.user?.email) actorEmail = session.user.email;
+      if (session?.user?.role === "admin" && session.user.email) actorEmail = session.user.email;
       else if (cronSecretStatus === "missing-secret") {
         return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
       } else {

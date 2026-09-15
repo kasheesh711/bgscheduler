@@ -119,7 +119,7 @@ function mockExecution(result = schedulerResult()) {
 describe("POST /api/search/assistant", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    authMock.mockResolvedValue({ user: { email: "admin@example.com" } });
+    authMock.mockResolvedValue({ user: { role: "admin", email: "admin@example.com" } });
     vi.mocked(isAiSchedulerConfigured).mockReturnValue(true);
     vi.mocked(logSchedulerRun).mockResolvedValue("log-1");
     mockExecution();
