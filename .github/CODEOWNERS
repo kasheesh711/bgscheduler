@@ -57,6 +57,9 @@ SKILL.md @kasheesh711
 /src/app/api/**/access/ @kasheesh711
 /src/app/api/**/members/ @kasheesh711
 /src/app/api/**/memberships/ @kasheesh711
+/src/lib/tutor-attendance/service.ts @kasheesh711
+/src/lib/tutor-attendance/network.ts @kasheesh711
+/src/app/api/tutor-attendance/settings/ @kasheesh711
 
 # Preview isolation, credentials, cron authentication, and external-write flags.
 /src/lib/preview*.ts @kasheesh711

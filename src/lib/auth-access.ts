@@ -17,6 +17,9 @@
 //
 // Node-only (does DB work): imported by src/lib/auth.ts (sign-in + jwt). The edge
 // auth config never imports this — it only reads the resulting token claims.
+// Explicit office-attendance enrollment adds /tutor-attendance to non-admin
+// access. An attendance-only Google email receives that page alone; disabled
+// admins still fail before any lower-role or attendance fallback.
 
 import { sql } from "drizzle-orm";
 import { resolveAdmissionsRole } from "@/lib/admissions/access";
@@ -24,6 +27,8 @@ import { ADMISSIONS_ROUTE } from "@/lib/admissions/config";
 import { getDb, type Database } from "@/lib/db";
 import { adminUsers } from "@/lib/db/schema";
 import { resolveTeacherCanonicalKeys } from "@/lib/progress-tests/teacher-access";
+import { attendanceEnrollmentForEmail } from "@/lib/tutor-attendance/access";
+import { ATTENDANCE_ROUTE } from "@/lib/tutor-attendance/model";
 
 /** Page route a teacher is restricted to. */
 const PROGRESS_TESTS_ROUTE = "/progress-tests";
@@ -74,18 +79,23 @@ export async function resolveUserAccess(
   }
 
   const admissionsRole = await resolveAdmissionsRole(normalized, db);
+  const attendance = await attendanceEnrollmentForEmail(normalized, db);
+  const attendancePages = attendance ? [ATTENDANCE_ROUTE] : [];
   if (admissionsRole === "counselor") {
-    return { role: "counselor", allowedPages: [ADMISSIONS_ROUTE] };
+    return { role: "counselor", allowedPages: [ADMISSIONS_ROUTE, ...attendancePages] };
   }
 
   const teacherKeys = await resolveTeacherCanonicalKeys(normalized, db);
   if (teacherKeys.length > 0) {
-    return { role: "teacher", allowedPages: [PROGRESS_TESTS_ROUTE] };
+    return { role: "teacher", allowedPages: [PROGRESS_TESTS_ROUTE, ...attendancePages] };
   }
 
   if (admissionsRole === "student" || admissionsRole === "parent") {
-    return { role: admissionsRole, allowedPages: [ADMISSIONS_ROUTE] };
+    return { role: admissionsRole, allowedPages: [ADMISSIONS_ROUTE, ...attendancePages] };
   }
+
+  // Explicit attendance-only email bindings do not grant the Progress Tests workspace.
+  if (attendance) return { role: "teacher", allowedPages: attendancePages };
 
   return null;
 }

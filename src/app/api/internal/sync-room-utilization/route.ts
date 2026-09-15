@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
   let actorEmail: string | null = null;
   if (cronSecretStatus !== "valid") {
     const session = await auth();
-    if (!session) {
+    if (session?.user?.role !== "admin") {
       if (cronSecretStatus === "missing-secret") {
         return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
       }

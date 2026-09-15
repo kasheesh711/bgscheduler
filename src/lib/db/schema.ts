@@ -20,6 +20,7 @@ import {
   check,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import type { Week, OfficeNetwork } from "@/lib/tutor-attendance/model";
 
 // ── Enums ──────────────────────────────────────────────────────────────
 
@@ -5658,3 +5659,82 @@ export const ptPreparationPublications = pgTable("pt_preparation_publications", 
   check("pt_preparation_publications_operation_check", sql`${t.operation} in ('upload', 'remove')`),
   check("pt_preparation_file_shape", sql`(${t.operation} = 'upload' and ${t.paperVersionId} is not null and ${t.fileId} is not null and ${t.sha256} is not null and ${t.name} is not null) or (${t.operation} = 'remove' and ${t.paperVersionId} is null and ${t.fileId} is null and ${t.sha256} is null and ${t.name} is null)`),
 ]);
+
+// ── Tutor Office Attendance ─────────────────────────────────────────────
+
+// Office attendance is independent of Wise snapshots and payroll.
+export const tutorAttendanceEnrollments = pgTable("tutor_attendance_enrollments", {
+  canonicalKey: text("canonical_key").primaryKey(),
+  loginEmail: text("login_email").notNull(),
+  startDate: date("start_date").notNull(),
+  endDate: date("end_date"),
+  active: boolean("active").notNull().default(true),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex("ta_enrollment_email_idx").on(sql`lower(btrim(${t.loginEmail}))`).where(sql`${t.active} = true`), check("ta_enrollment_dates", sql`${t.endDate} IS NULL OR ${t.endDate} >= ${t.startDate}`)]);
+
+export const tutorAttendanceSchedules = pgTable("tutor_attendance_schedules", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  canonicalKey: text("canonical_key").notNull().references(() => tutorAttendanceEnrollments.canonicalKey),
+  effectiveFrom: date("effective_from").notNull(),
+  week: jsonb("week").$type<Week>().notNull(),
+  revision: integer("revision").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [index("ta_schedule_key_date_idx").on(t.canonicalKey, t.effectiveFrom)]);
+
+export const tutorAttendanceExceptions = pgTable("tutor_attendance_exceptions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  canonicalKey: text("canonical_key").references(() => tutorAttendanceEnrollments.canonicalKey),
+  date: date("date").notNull(),
+  kind: text("kind").notNull(),
+  start: text("start"),
+  end: text("end"),
+  reason: text("reason").notNull(),
+  revision: integer("revision").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [index("ta_exception_date_idx").on(t.date), check("ta_exception_kind", sql`${t.kind} IN ('hours', 'excused', 'reset')`)]);
+
+export const tutorAttendanceConfig = pgTable("tutor_attendance_config", {
+  id: text("id").primaryKey().default("office"),
+  networks: jsonb("networks").$type<OfficeNetwork[]>().notNull().default([]),
+  revision: integer("revision").notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const tutorAttendanceDays = pgTable("tutor_attendance_days", {
+  canonicalKey: text("canonical_key").notNull().references(() => tutorAttendanceEnrollments.canonicalKey),
+  date: date("date").notNull(),
+  recordedIn: timestamp("recorded_in", { withTimezone: true }),
+  recordedOut: timestamp("recorded_out", { withTimezone: true }),
+  effectiveIn: timestamp("effective_in", { withTimezone: true }),
+  effectiveOut: timestamp("effective_out", { withTimezone: true }),
+  corrected: boolean("corrected").notNull().default(false),
+  revision: integer("revision").notNull().default(0),
+}, t => [primaryKey({ columns: [t.canonicalKey, t.date] }), check("ta_effective_order", sql`${t.effectiveOut} IS NULL OR ${t.effectiveIn} IS NULL OR ${t.effectiveOut} >= ${t.effectiveIn}`)]);
+
+export const tutorAttendanceCorrections = pgTable("tutor_attendance_corrections", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  canonicalKey: text("canonical_key").notNull().references(() => tutorAttendanceEnrollments.canonicalKey),
+  date: date("date").notNull(),
+  proposedIn: timestamp("proposed_in", { withTimezone: true }),
+  proposedOut: timestamp("proposed_out", { withTimezone: true }),
+  reason: text("reason").notNull(),
+  expectedRevision: integer("expected_revision").notNull(),
+  status: text("status").notNull().default("pending"),
+  requestedBy: text("requested_by").notNull(),
+  requestKey: uuid("request_key").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  reviewedBy: text("reviewed_by"),
+  reviewReason: text("review_reason"),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+}, t => [uniqueIndex("ta_correction_request_idx").on(t.requestedBy, t.requestKey), index("ta_correction_status_idx").on(t.status, t.date), check("ta_correction_status", sql`${t.status} IN ('pending', 'approved', 'rejected')`)]);
+
+export const tutorAttendanceAudit = pgTable("tutor_attendance_audit", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  actor: text("actor").notNull(),
+  action: text("action").notNull(),
+  canonicalKey: text("canonical_key"),
+  date: date("date"),
+  data: jsonb("data").$type<Record<string, unknown>>().notNull(),
+  requestKey: uuid("request_key"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex("ta_audit_request_idx").on(t.actor, t.requestKey).where(sql`${t.requestKey} IS NOT NULL`), index("ta_audit_key_date_idx").on(t.canonicalKey, t.date)]);

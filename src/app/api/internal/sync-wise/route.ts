@@ -45,7 +45,7 @@ async function handleSync(
   if (options.allowSessionAuth) {
     const session = await auth();
 
-    if (session) {
+    if (session?.user?.role === "admin") {
       return withCronInvocationAudit(
         {
           jobKey: "wise_snapshot",

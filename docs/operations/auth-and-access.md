@@ -67,6 +67,13 @@ When `VERCEL_ENV=preview` or `PREVIEW_SANDBOX_ENABLED=true`, both Google configu
 
 ## The auth vs auth-edge split
 
+Office Attendance adds an explicit, fresh enrollment binding. An active attendance-only
+Google email can sign in as `teacher` with only `/tutor-attendance`; existing non-admin
+roles retain their other pages and gain attendance only when enrolled. Attendance login
+requests identity-only Google scopes and cannot overwrite stored integration tokens.
+Legacy public scheduler/manual-sync entry points now require an admin role, so a new
+attendance account cannot use those session fallbacks. See [Office Attendance](../features/tutor-attendance.md).
+
 The legacy-named `src/lib/auth-edge.ts` remains the lightweight cookie decoder used by the request gate. Public URLs can pass through without querying Postgres. The actual request interception file is now **`src/proxy.ts`**, using the Next.js 16 **Node.js runtime**. It invokes current-session validation for protected requests before authorizing them.
 
 Server Components and route handlers use `auth()` from `src/lib/auth.ts`, which applies the same current-session validation independently. A route cannot retain access merely by bypassing the Proxy's page gate. Both configurations share their environment's `AUTH_SECRET`; preview and production must use different secrets.

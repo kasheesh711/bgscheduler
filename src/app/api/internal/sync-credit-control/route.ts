@@ -42,7 +42,7 @@ async function handleSync(request: NextRequest, options: { allowSessionAuth: boo
 
   if (options.allowSessionAuth) {
     const session = await auth();
-    if (session) {
+    if (session?.user?.role === "admin") {
       return withCronInvocationAudit(
         {
           jobKey: "credit_control",

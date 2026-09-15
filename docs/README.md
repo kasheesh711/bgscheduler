@@ -53,6 +53,8 @@ The mechanical inventories behind the first six rows live in
 
 See also the new [Tutor room booking](features/tutor-room-booking.md) feature and its [enablement runbook](operations/tutor-room-booking.md).
 
+[Office Attendance](features/tutor-attendance.md) adds full-time tutor clocking, individual office hours and reviewed corrections. Read its [enablement runbook](operations/tutor-attendance.md) before enabling new punches.
+
 ## Reading order
 
 New to the codebase? Read in this order. The first two pages give you the model; everything after

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
 vi.mock("@/lib/progress-tests/teacher-access", () => ({ resolveTeacherCanonicalKeys: vi.fn() }));
+vi.mock("@/lib/tutor-attendance/access", () => ({ attendanceEnrollmentForEmail: vi.fn() }));
 // The real module pulls @/lib/auth (NextAuth instantiation) transitively; stub
 // it so resolveUserAccess's resolution ORDER can be unit-tested in isolation.
 vi.mock("@/lib/admissions/access", () => ({ resolveAdmissionsRole: vi.fn() }));
@@ -9,6 +10,7 @@ vi.mock("@/lib/admissions/access", () => ({ resolveAdmissionsRole: vi.fn() }));
 import { resolveUserAccess } from "@/lib/auth-access";
 import { resolveAdmissionsRole } from "@/lib/admissions/access";
 import { resolveTeacherCanonicalKeys } from "@/lib/progress-tests/teacher-access";
+import { attendanceEnrollmentForEmail } from "@/lib/tutor-attendance/access";
 
 /** Chainable fake whose admin_users lookup resolves to `adminRows`. */
 function fakeDb(adminRows: unknown[]) {
@@ -26,6 +28,7 @@ describe("resolveUserAccess", () => {
     vi.resetAllMocks();
     vi.mocked(resolveAdmissionsRole).mockResolvedValue(null);
     vi.mocked(resolveTeacherCanonicalKeys).mockResolvedValue([]);
+    vi.mocked(attendanceEnrollmentForEmail).mockResolvedValue(null);
   });
 
   it("returns admin (full access) for an admin_users row with null allowedPages", async () => {
@@ -120,5 +123,15 @@ describe("resolveUserAccess", () => {
     expect(access).toBeNull();
     expect(resolveAdmissionsRole).not.toHaveBeenCalled();
     expect(resolveTeacherCanonicalKeys).not.toHaveBeenCalled();
+  });
+
+  it("grants an explicit attendance-only email no unrelated tutor tools", async () => {
+    vi.mocked(attendanceEnrollmentForEmail).mockResolvedValue({ canonicalKey: "tutor-a" } as never);
+    expect(await resolveUserAccess("approved@example.com", fakeDb([]))).toEqual({ role: "teacher", allowedPages: ["/tutor-attendance"] });
+  });
+  it("adds attendance to existing tutor access only when explicitly enrolled", async () => {
+    vi.mocked(resolveTeacherCanonicalKeys).mockResolvedValue(["tutor-a"]);
+    vi.mocked(attendanceEnrollmentForEmail).mockResolvedValue({ canonicalKey: "tutor-a" } as never);
+    expect(await resolveUserAccess("approved@example.com", fakeDb([]))).toEqual({ role: "teacher", allowedPages: ["/progress-tests", "/tutor-attendance"] });
   });
 });

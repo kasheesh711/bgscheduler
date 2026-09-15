@@ -106,6 +106,7 @@ export function AppNav({
   unearnedRevenueAccess = false,
   ownerAccess = false,
   creditControlEnabled = false,
+  attendanceAccess = false,
 }: {
   allowedPages: string[] | null;
   postClassFeedbackAccess?: boolean;
@@ -113,6 +114,7 @@ export function AppNav({
   unearnedRevenueAccess?: boolean;
   ownerAccess?: boolean;
   creditControlEnabled?: boolean;
+  attendanceAccess?: boolean;
 }) {
   const pathname = usePathname();
   const [openSection, setOpenSection] = useState<NavSectionId | null>(null);
@@ -134,15 +136,16 @@ export function AppNav({
     if (!financeAllowedPages) return null;
 
     const withoutLegacyLearningPlans = financeAllowedPages.filter(
-      (page) => page !== LEARNING_PLANS_ROUTE,
+      (page) => page !== LEARNING_PLANS_ROUTE && page !== "/tutor-attendance",
     );
+    if (attendanceAccess) withoutLegacyLearningPlans.push("/tutor-attendance");
     if (!learningPlansAccess) {
       return withoutLegacyLearningPlans;
     }
     return [...withoutLegacyLearningPlans, LEARNING_PLANS_ROUTE];
-  }, [financeAllowedPages, learningPlansAccess]);
+  }, [financeAllowedPages, learningPlansAccess, attendanceAccess]);
   const sections = useMemo(() => {
-    const visible = visibleSections(visibleAllowedPages).map(section => ({ ...section, tools: section.tools.filter(tool => creditControlEnabled || tool.id !== "credit-control") })).filter(section => section.tools.length > 0);
+    const visible = visibleSections(visibleAllowedPages).map(section => ({ ...section, tools: section.tools.filter(tool => (creditControlEnabled || tool.id !== "credit-control") && (attendanceAccess || tool.id !== "tutor-attendance")) })).filter(section => section.tools.length > 0);
     // Unearned Revenue is deliberately stricter than the legacy `allowedPages`
     // model: even an unrestricted admin must hold a fresh feature-local grant.
     if (unearnedRevenueAccess) return visible;
@@ -152,7 +155,7 @@ export function AppNav({
         tools: section.tools.filter((tool) => tool.id !== "unearned-revenue"),
       }))
       .filter((section) => section.tools.length > 0);
-  }, [unearnedRevenueAccess, visibleAllowedPages, creditControlEnabled]);
+  }, [unearnedRevenueAccess, visibleAllowedPages, creditControlEnabled, attendanceAccess]);
   const activeSectionId = activeSection(pathname, visibleAllowedPages);
   // A fresh Learning Plans grant only changes tool visibility. Keep Home and
   // the brand destination tied to the existing raw/post-class page behavior.

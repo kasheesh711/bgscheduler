@@ -443,3 +443,12 @@ Existing LINE credentials and `APP_BASE_URL` supply messaging and private mobile
 | Existing `WISE_*`, `CRON_SECRET` | Native Content integration and durable worker authorization. |
 
 `pt_workspace_settings.formatting_enabled` defaults true and controls optional beta jobs. `publishing_enabled` independently controls Wise writes. Formatting uses native PDF input, a 32,000-token output cap and a 180-second request timeout; grading/report timeouts remain 110 seconds. There is no automatic model substitution. `verified_at` records operator integration validation. Neither resets the immutable launch timestamp. No private source-file URLs are exposed in application responses.
+
+## Tutor Office Attendance
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TUTOR_ATTENDANCE_ENABLED` | disabled | Exactly `true` permits new office attendance punches. Setup, history and correction requests/review remain available when off. |
+
+Uses existing Google authentication and Postgres. Office networks are configured in the
+administrator workspace. See [enablement and verification](../operations/tutor-attendance.md).

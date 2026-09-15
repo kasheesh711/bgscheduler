@@ -138,7 +138,7 @@ describe("GET/POST /api/internal/sync-wise", () => {
   it("returns 200 when POST has a valid session and CRON_SECRET is missing", async () => {
     delete process.env.CRON_SECRET;
     vi.mocked(auth).mockResolvedValue({
-      user: { email: "kevinhsieh711@gmail.com" },
+      user: { role: "admin", email: "kevinhsieh711@gmail.com" },
       expires: "2026-05-06T00:00:00.000Z",
     } as never);
 
@@ -157,7 +157,7 @@ describe("GET/POST /api/internal/sync-wise", () => {
   it("keeps GET blocked when CRON_SECRET is missing even with a valid session", async () => {
     delete process.env.CRON_SECRET;
     vi.mocked(auth).mockResolvedValue({
-      user: { email: "kevinhsieh711@gmail.com" },
+      user: { role: "admin", email: "kevinhsieh711@gmail.com" },
       expires: "2026-05-06T00:00:00.000Z",
     } as never);
 
@@ -185,7 +185,7 @@ describe("GET/POST /api/internal/sync-wise", () => {
 
   it("returns 200 when POST has no Authorization header but has a valid session", async () => {
     vi.mocked(auth).mockResolvedValue({
-      user: { email: "kevinhsieh711@gmail.com" },
+      user: { role: "admin", email: "kevinhsieh711@gmail.com" },
       expires: "2026-05-06T00:00:00.000Z",
     } as never);
 
@@ -204,7 +204,7 @@ describe("GET/POST /api/internal/sync-wise", () => {
 
   it("returns 200 when POST has an invalid cron secret but has a valid session", async () => {
     vi.mocked(auth).mockResolvedValue({
-      user: { email: "kevinhsieh711@gmail.com" },
+      user: { role: "admin", email: "kevinhsieh711@gmail.com" },
       expires: "2026-05-06T00:00:00.000Z",
     } as never);
 
@@ -307,7 +307,7 @@ describe("GET/POST /api/internal/sync-wise", () => {
 
   it("returns 401 when GET has no Authorization header even with a valid session", async () => {
     vi.mocked(auth).mockResolvedValue({
-      user: { email: "kevinhsieh711@gmail.com" },
+      user: { role: "admin", email: "kevinhsieh711@gmail.com" },
       expires: "2026-05-06T00:00:00.000Z",
     } as never);
 
