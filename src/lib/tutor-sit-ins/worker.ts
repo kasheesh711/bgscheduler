@@ -143,8 +143,14 @@ export async function publishObservation(observationId: string, db: Database) {
         .select()
         .from(s.tutorSitInAssignments)
         .where(eq(s.tutorSitInAssignments.id, observation.assignmentId));
-      const access = await accessForEmail(observation.observerEmail, db);
-      assertScope(access, scopeOf(assignment), true);
+      try {
+        const access = await accessForEmail(observation.observerEmail, db);
+        assertScope(access, scopeOf(assignment), true);
+      } catch (error) {
+        if (error instanceof SitInError)
+          throw new SitInError(error.status, error.message, "HEAD_UNAVAILABLE");
+        throw error;
+      }
       if (assignment.observerEmail !== observation.observerEmail)
         throw new SitInError(
           409,
@@ -708,8 +714,7 @@ export async function processJobs(
         if (
           observation.current &&
           e instanceof SitInError &&
-          (e.status === 403 ||
-            ["LESSON_CHANGED", "HEAD_UNAVAILABLE"].includes(e.code))
+          ["LESSON_CHANGED", "HEAD_UNAVAILABLE"].includes(e.code)
         )
           await invalidateObservation(
             db,

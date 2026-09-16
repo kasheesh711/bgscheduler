@@ -475,8 +475,9 @@ export function SitInDashboard({
             <CalendarSettings />
             <p className="mt-3 text-sm text-muted-foreground">
               Your calendar account can differ from your sign-in email. Your
-              assigned access stays the same. Finish or cancel upcoming
-              observations before switching accounts.
+              assigned access stays the same. Withdraw previously exported
+              events before switching accounts. Observations awaiting their
+              first event stay queued.
             </p>
           </div>
         )}

@@ -459,8 +459,8 @@ administrator workspace. See [enablement and verification](../operations/tutor-a
 | Variable | Default and behavior |
 |---|---|
 | `TUTOR_SIT_INS_ENABLED` | Off unless exactly `true`; enables entry points, enrollment and background processing after migration 0089. Also enables half-hour shared student snapshot refresh in Credit Control retired mode. |
-| `TUTOR_SIT_INS_DELIVERY_ENABLED` | Off unless exactly `true`; additionally requires the feature on and a non-preview environment. Controls bookings, Calendar writes and email delivery. Calendar setup/read access can be tested while delivery is off. |
-| `TUTOR_SIT_INS_MICROSOFT_ENABLED` | Off unless exactly `true`. Enables new Outlook connections/bookings; disabling retains token refresh, reconciliation and cancellation of existing events. Preview remains blocked. |
+| `TUTOR_SIT_INS_DELIVERY_ENABLED` | Off unless exactly `true`; additionally requires the feature on and a non-preview environment. Controls Calendar writes and email sending only. Wise booking, reconciliation, reports and family acknowledgements remain available while delivery is off. |
+| `TUTOR_SIT_INS_MICROSOFT_ENABLED` | Off unless exactly `true`. Enables new Outlook connections/event exports; disabling retains token refresh, reconciliation and cancellation of existing events. Preview remains blocked. |
 | `TUTOR_SIT_INS_MICROSOFT_CLIENT_ID` | Microsoft confidential web application's client ID; personal and work/school accounts must be supported. Production only. |
 | `TUTOR_SIT_INS_MICROSOFT_CLIENT_SECRET` | Microsoft application client secret. Store in Vercel Production, independently of previews; never commit it. |
 | `TUTOR_SIT_INS_TEST_RECIPIENTS` | Optional comma-separated exact email allowlist for isolated tests. If set, all Calendar owner/tutor and email recipients must belong to it. Unknown recipients fail visibly; they are never redirected. |

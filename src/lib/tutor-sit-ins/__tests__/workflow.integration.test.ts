@@ -45,6 +45,7 @@ import {
   finishCalendarOAuth,
   calendarProvider,
   calendarConnection,
+  saveCalendarSelection,
   disconnectCalendar,
   beginCalendarOAuth,
   verifyOAuthState,
@@ -1081,7 +1082,7 @@ describe("isolated Calendar and email delivery", () => {
   it.each([true, false])(
     "does not create a new invitation after the start with delivery enabled=%s",
     async (enabled) => {
-      const b = await booking();
+      await booking();
       vi.stubEnv("TUTOR_SIT_INS_DELIVERY_ENABLED", String(enabled));
       vi.setSystemTime(new Date(lesson.start));
       const fetcher = vi.fn();
@@ -1166,6 +1167,40 @@ describe("isolated Calendar and email delivery", () => {
       { current: true, calendarStatus: "error" },
     );
     expect(b.report.id).toBeDefined();
+  });
+  it("accepts a destination alone and ignores legacy conflict-calendar selections", async () => {
+    const fetcher = vi.fn(async (url: unknown) => {
+      expect(String(url)).toContain("calendarList");
+      return googleList();
+    });
+    vi.stubGlobal("fetch", fetcher);
+    await saveCalendarSelection(
+      email,
+      { calendarId: "head-calendar", expectedRevision: 0 },
+      db,
+    );
+    await saveCalendarSelection(
+      email,
+      {
+        calendarId: "head-calendar",
+        expectedRevision: 1,
+        busyCalendarIds: ["inaccessible-old-calendar"],
+      },
+      db,
+    );
+    expect((await calendarConnection(email, db)).calendarId).toBe(
+      "head-calendar",
+    );
+    expect(
+      fetcher.mock.calls.every(([url]) => String(url).includes("calendarList")),
+    ).toBe(true);
+    await expect(
+      saveCalendarSelection(
+        email,
+        { calendarId: "not-owned", expectedRevision: 2 },
+        db,
+      ),
+    ).rejects.toThrow("own");
   });
   it("verifies OAuth state, keeps setup connections separate from delivery, and blocks previews", () => {
     vi.stubEnv("TUTOR_SIT_INS_DELIVERY_ENABLED", "false");

@@ -546,7 +546,19 @@ export async function withObserverOperation<T>(
           409,
           "Scheduling took too long or access changed. Refresh and retry.",
         );
-      if (!options.cleanup) await accessForEmail(email, tx || db);
+      if (!options.cleanup) {
+        try {
+          await accessForEmail(email, tx || db);
+        } catch (error) {
+          if (error instanceof SitInError)
+            throw new SitInError(
+              error.status,
+              error.message,
+              "HEAD_UNAVAILABLE",
+            );
+          throw error;
+        }
+      }
       await (tx || db)
         .update(s.tutorSitInGrants)
         .set({ operationUntil: new Date(Date.now() + 120_000) })
