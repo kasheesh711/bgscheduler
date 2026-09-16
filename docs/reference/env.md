@@ -464,3 +464,10 @@ administrator workspace. See [enablement and verification](../operations/tutor-a
 | `APP_BASE_URL` | Exact app origin for OAuth callback and authenticated links; falls back to `https://bgscheduler.vercel.app`. Register its `/api/tutor-sit-ins/calendar/callback` URI. |
 
 Reuses `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET` and the existing `AUTH_SECRET` token encryption helper, but stores Calendar tokens separately from Sheets. The existing `SCHEDULE_EMAIL_APPS_SCRIPT_URL` and `SCHEDULE_EMAIL_APPS_SCRIPT_SECRET` relay configuration is required for email. `VERCEL_ENV=preview` or `PREVIEW_SANDBOX_ENABLED=true` forbids Calendar consent and external delivery. See [rollout](../operations/tutor-sit-ins-rollout.md).
+# Email-code login
+
+`AUTH_EMAIL_CODE_ENABLED` defaults to false. Enable after migration `0091_email_code_login`
+and a verified Apps Script relay. Reuses `AUTH_SECRET` for keyed hashes and the existing
+`SCHEDULE_EMAIL_*` primary/backup sender configuration. Neither codes nor browser bindings
+are logged. `VERCEL_ENV=preview` or `PREVIEW_SANDBOX_ENABLED=true` disables email login
+regardless of the flag. Turning the flag off preserves Google login and existing sessions.

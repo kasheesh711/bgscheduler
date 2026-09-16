@@ -1,5 +1,7 @@
 import NextAuth, { type NextAuthConfig } from "next-auth";
 import Google from "next-auth/providers/google";
+import Credentials from "next-auth/providers/credentials";
+import { emailCodeEnabled } from "@/lib/auth/email-code-policy";
 import { resolveUserAccess } from "@/lib/auth-access";
 import { validateSessionAccess } from "@/lib/auth-session";
 import { googleAuthorizationParams, shouldStoreGoogleIntegrationTokens } from "@/lib/preview-policy";
@@ -40,7 +42,22 @@ export const authConfig = {
         params: googleAuthorizationParams(),
       },
     }),
+    ...(emailCodeEnabled() ? [Credentials({
+      id: "email-code",
+      name: "Email code",
+      credentials: { email: {}, challengeId: {}, code: {} },
+      async authorize(credentials, request) {
+        try {
+          const { verifyEmailCode } = await import("@/lib/auth/email-code");
+          return await verifyEmailCode(credentials, request);
+        } catch {
+          console.error("Email login verification failed");
+          return null;
+        }
+      },
+    })] : []),
   ],
+  session: { strategy: "jwt" },
   pages: {
     signIn: "/login",
     error: "/login",
@@ -48,7 +65,7 @@ export const authConfig = {
   callbacks: {
     async signIn({ user, account }) {
       const allowed = await signInCallback({ user });
-      if (allowed && user.email && shouldStoreGoogleIntegrationTokens()) {
+      if (allowed && user.email && account?.provider === "google" && shouldStoreGoogleIntegrationTokens()) {
         const { storeGoogleOAuthTokenForUser } = await import("@/lib/sales-dashboard/google-oauth");
         await storeGoogleOAuthTokenForUser(user.email, account);
       }
@@ -59,6 +76,7 @@ export const authConfig = {
       // stale or legacy access by copying a newer database version.
       if (user) {
         const access = await resolveUserAccess(user.email);
+        if (!access) return null;
         token.allowedPages = access?.allowedPages ?? null;
         token.role = access?.role ?? null;
         token.adminAccessVersion = access?.adminAccessVersion;
