@@ -80,6 +80,7 @@ beforeEach(() => {
       canonicalKey: "head",
       wiseTeacherId: id,
       wiseUserId: id,
+      status: "active",
       lastSnapshotId: "snapshot",
     })),
   } as Sources;
@@ -102,6 +103,14 @@ beforeEach(() => {
 });
 const suggest = () => suggestionsFor(assignment, sources, db, now);
 describe("observation-specific availability", () => {
+  it.each(["absent", "identity_conflict", "unknown"])(
+    "blocks a current but %s linked account",
+    async (status) => {
+      sources.accounts[1].status = status;
+      expect(snapshotAvailable(sources, "head", lesson)).toBe(false);
+      await expect(suggest()).rejects.toThrow("identity verification");
+    },
+  );
   it("uses time evidence across verified accounts, independent of labels and qualifications", async () => {
     expect(snapshotAvailable(sources, "head", lesson)).toBe(true);
     expect(await suggest()).toMatchObject([

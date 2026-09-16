@@ -251,7 +251,10 @@ export function snapshotAvailable(
     !head ||
     !accounts.length ||
     accounts.some(
-      (a) => !a.wiseUserId || a.lastSnapshotId !== sources.index.snapshotId,
+      (a) =>
+        !a.wiseUserId ||
+        a.lastSnapshotId !== sources.index.snapshotId ||
+        !["active", "invalid_email", "email_conflict"].includes(a.status),
     ) ||
     head.wiseRecords.some(
       (r) => !accounts.some((a) => a.wiseTeacherId === r.wiseTeacherId),
@@ -582,7 +585,10 @@ export async function verifyLiveLesson(
   if (
     !accounts.length ||
     accounts.some(
-      (a) => !a.wiseUserId || a.lastSnapshotId !== sources.index.snapshotId,
+      (a) =>
+        !a.wiseUserId ||
+        a.lastSnapshotId !== sources.index.snapshotId ||
+        !["active", "invalid_email", "email_conflict"].includes(a.status),
     )
   )
     throw new SitInError(

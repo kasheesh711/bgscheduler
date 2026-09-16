@@ -74,18 +74,21 @@ beforeEach(() => {
       {
         canonicalKey: "head",
         wiseUserId: "head-online",
+        status: "active",
         wiseTeacherId: "teacher-online",
         lastSnapshotId: "snapshot",
       },
       {
         canonicalKey: "head",
         wiseUserId: "head-onsite",
+        status: "active",
         wiseTeacherId: "teacher-onsite",
         lastSnapshotId: "snapshot",
       },
       {
         canonicalKey: "target",
         wiseUserId: "target-user",
+        status: "active",
         wiseTeacherId: "target-teacher",
         lastSnapshotId: "snapshot",
       },
@@ -190,12 +193,22 @@ describe("live booking verification", () => {
     sources.accounts[1].lastSnapshotId = "old";
     await expect(verify()).rejects.toThrow("identity review");
   });
+  it.each(["absent", "identity_conflict", "unknown"])(
+    "blocks live confirmation for a current but %s account",
+    async (status) => {
+      sources.accounts[1].status = status;
+      await expect(verify()).rejects.toThrow("identity review");
+      expect(fetchTeacherAvailability).not.toHaveBeenCalled();
+    },
+  );
   it("rejects personal Google conflicts and unavailable Google evidence", async () => {
     vi.mocked(googleBusy).mockResolvedValue([
       { start: new Date(lesson.start), end: new Date(lesson.end) },
     ]);
     await expect(verify()).rejects.toMatchObject({ code: "HEAD_UNAVAILABLE" });
     vi.mocked(googleBusy).mockRejectedValue(new Error("Provider unavailable"));
-    await expect(verify()).rejects.toMatchObject({ code: "SOURCE_UNAVAILABLE" });
+    await expect(verify()).rejects.toMatchObject({
+      code: "SOURCE_UNAVAILABLE",
+    });
   });
 });

@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { and, eq, or, sql } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
@@ -47,6 +47,7 @@ export async function promoteWithTutorContacts(db: Database, input: {
     const contacts = (await tx.select().from(schema.tutorContacts)).map(contactValues);
     const previous = await tx.select().from(schema.tutorWiseAccounts);
     const plan = planTutorContacts(input.teachers, input.groups, input.blocked, contacts, previous);
+    const unchangedAccountIds: string[] = [];
     for (const a of plan.accounts) {
       const value = { wiseTeacherId: a.wiseTeacherId, wiseUserId: a.wiseUserId, canonicalKey: a.canonicalKey,
         displayName: a.displayName, isOnlineVariant: a.isOnlineVariant, email: a.email, status: a.status };
@@ -55,12 +56,20 @@ export async function promoteWithTutorContacts(db: Database, input: {
         displayName: old.displayName, isOnlineVariant: old.isOnlineVariant, email: old.email, status: old.status } : null;
       // Keep the established mapping even when conflicting records are encountered.
       if (old && old.canonicalKey !== a.canonicalKey) throw new Error("Wise account ownership changed during sync; retry with current mappings");
-      if (isDeepStrictEqual(before, value)) continue;
+      if (isDeepStrictEqual(before, value)) {
+        unchangedAccountIds.push(a.wiseTeacherId);
+        continue;
+      }
       await tx.insert(schema.tutorWiseAccounts).values({ ...value, lastSnapshotId: input.snapshotId })
         .onConflictDoUpdate({ target: schema.tutorWiseAccounts.wiseTeacherId, set: { ...value, lastSnapshotId: input.snapshotId, updatedAt: new Date() } });
       await tx.insert(schema.tutorContactSyncEvents).values({ snapshotId: input.snapshotId, canonicalKey: a.canonicalKey,
         entityType: "wise_account", entityId: a.wiseTeacherId, beforeValue: before, afterValue: value });
     }
+    // Freshness is evidence of reconciliation, not of a content change. Keep
+    // unchanged accounts current atomically with promotion, without audit churn.
+    if (unchangedAccountIds.length) await tx.update(schema.tutorWiseAccounts)
+      .set({ lastSnapshotId: input.snapshotId })
+      .where(inArray(schema.tutorWiseAccounts.wiseTeacherId, unchangedAccountIds));
     for (const c of plan.contacts) {
       const before = contacts.find(p => p.canonicalKey === c.canonicalKey) ?? null;
       if (isDeepStrictEqual(before, c)) continue;
