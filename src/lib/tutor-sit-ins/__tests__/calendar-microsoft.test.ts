@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   microsoftCalendarProvider,
-  microsoftTime,
   OBSERVATION_PROPERTY,
 } from "../calendar-microsoft";
 import { SitInError } from "../model";
@@ -59,115 +58,6 @@ const graphEvent = {
   ],
 };
 describe("Microsoft personal and work calendar provider", () => {
-  it("reads recurring calendarView occurrences across all pages, always including primary and destination", async () => {
-    const { provider, request } = fixture((path) =>
-      path.includes("$skiptoken")
-        ? {
-            value: [
-              { id: "occurrence-two", showAs: "tentative", ...eventTime },
-            ],
-          }
-        : {
-            value: [{ id: "occurrence-one", ...eventTime }],
-            "@odata.nextLink":
-              "https://graph.microsoft.com/v1.0/" +
-              path.split("?")[0] +
-              "?$skiptoken=page2",
-          },
-    );
-    const busy = await provider.busy(start, end, {
-      calendarId: "Work-ID",
-      busyCalendarIds: [],
-    });
-    expect(busy).toHaveLength(4);
-    expect(
-      request.mock.calls.filter(([p]) => p.includes("calendarView")),
-    ).toHaveLength(4);
-    expect(request.mock.calls.some(([p]) => p.includes("getSchedule"))).toBe(
-      false,
-    );
-    expect(busy[0].start.toISOString()).toBe("2026-10-02T00:00:00.000Z");
-  });
-  it("excludes only the exact observation and retains overlapping private and unknown-status events", async () => {
-    const { provider } = fixture(() => ({
-      value: [
-        { id: "own", ...eventTime },
-        { id: "personal", showAs: "busy", ...eventTime },
-        { id: "unknown", ...eventTime },
-        { id: "free", showAs: "free" },
-        { id: "cancelled", isCancelled: true },
-      ],
-    }));
-    const busy = await provider.busy(start, end, {
-      calendarId: "primary",
-      busyCalendarIds: [],
-      exclude: { calendarId: "primary", eventId: "own" },
-    });
-    expect(busy).toHaveLength(2);
-  });
-  it("preserves all-day and timezone boundary intervals", async () => {
-    const { provider } = fixture(() => ({
-      value: [
-        {
-          id: "all-day",
-          isAllDay: true,
-          start: { dateTime: "2026-10-01T17:00:00", timeZone: "UTC" },
-          end: { dateTime: "2026-10-02T17:00:00", timeZone: "UTC" },
-        },
-      ],
-    }));
-    expect(
-      await provider.busy(start, end, {
-        calendarId: "primary",
-        busyCalendarIds: [],
-      }),
-    ).toEqual([{ start, end }]);
-    expect(microsoftTime({ dateTime: "2026-10-02T00:00:00+07:00" })).toEqual(
-      start,
-    );
-    expect(() =>
-      microsoftTime({ dateTime: "2026-10-02T00:00:00", timeZone: "Unknown" }),
-    ).toThrow("timezone");
-  });
-  it.each([
-    { value: undefined },
-    { value: [{ id: "missing-times" }] },
-    { value: [{ id: "negative", start: eventTime.end, end: eventTime.start }] },
-    {
-      value: [],
-      "@odata.nextLink":
-        "https://evil.example/v1.0/me/calendars/Primary-ID/calendarView",
-    },
-    {
-      value: [],
-      "@odata.nextLink":
-        "https://graph.microsoft.com/v1.0/users/other/calendarView",
-    },
-    {
-      value: [],
-      "@odata.nextLink":
-        "https://graph.microsoft.com/v1.0/me/calendars/Primary-ID/calendarView?$skiptoken=loop",
-    },
-  ])("fails closed for incomplete or unsafe pages: %j", async (response) => {
-    const { provider } = fixture(() => response);
-    await expect(
-      provider.busy(start, end, { calendarId: "primary", busyCalendarIds: [] }),
-    ).rejects.toThrow();
-  });
-  it("rejects inaccessible selected calendars and provider outages", async () => {
-    const { provider } = fixture(() => {
-      throw new SitInError(502, "Outlook unavailable");
-    });
-    await expect(
-      provider.busy(start, end, {
-        calendarId: "primary",
-        busyCalendarIds: ["removed"],
-      }),
-    ).rejects.toThrow("accessible");
-    await expect(
-      provider.busy(start, end, { calendarId: "primary", busyCalendarIds: [] }),
-    ).rejects.toThrow("unavailable");
-  });
   it("does not treat someone else's editable shared calendar as owned", async () => {
     const request = vi.fn(async (path: string) =>
       path === "me/calendar"

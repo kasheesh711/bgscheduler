@@ -17,6 +17,7 @@ import { ReportEditor } from "./report-editor";
 import { CommunicationList } from "./communications";
 import {
   api,
+  calendarDeliveryLabel,
   control,
   Loading,
   Notice,
@@ -186,9 +187,16 @@ export function SitInDetail({ id }: { id: string }) {
                 <p className="text-sm">
                   Calendar delivery:{" "}
                   <strong>
-                    {observation.calendarStatus.replaceAll("_", " ")}
+                    {calendarDeliveryLabel(observation.calendarStatus)}
                   </strong>
                 </p>
+                {!!assignment.readinessIssues?.length && (
+                  <Notice error>
+                    {assignment.readinessIssues
+                      .map((i) => i.message + " " + i.action)
+                      .join(" ")}
+                  </Notice>
+                )}
                 {observation.calendarError && (
                   <Notice error>{observation.calendarError}</Notice>
                 )}
@@ -208,7 +216,7 @@ export function SitInDetail({ id }: { id: string }) {
                 <p className="text-sm text-muted-foreground">
                   {assignment.status === "exempt"
                     ? "This obligation has a recorded exemption."
-                    : "Choose an entire lesson when the observer is free. Confirmation checks the live lesson, Wise schedule, leave and Calendar."}
+                    : "Choose an entire lesson when the observer is free. Confirmation checks the live Wise lesson, teaching schedule, leave and other observations."}
                 </p>
                 {assignment.suggestionError && (
                   <Notice>
@@ -263,9 +271,9 @@ export function SitInDetail({ id }: { id: string }) {
                               {s.title} · {s.location || s.modality}
                             </span>
                             <span className="mt-1 block font-medium">
-                              {s.verification === "verified"
-                                ? "Wise and Calendar checked"
-                                : "Provisional — Calendar check pending."}
+                              {s.verification === "wise_verified"
+                                ? "Wise schedule checked"
+                                : "Refresh to check the Wise schedule."}
                             </span>
                             {s.issues?.map((i) => (
                               <span
@@ -281,19 +289,15 @@ export function SitInDetail({ id }: { id: string }) {
                       {chosen && (
                         <div className="space-y-3 rounded-lg border border-primary/30 bg-primary/5 p-4">
                           <p className="text-sm">
-                            {chosen.verification !== "verified"
-                              ? "The observer must connect Calendar and refresh availability before confirming this lesson."
-                              : !data.deliveryEnabled
-                                ? "Calendar delivery setup is still in progress. Confirmation will become available after validation."
-                                : "Confirm " +
-                                  slot(chosen.start, chosen.end) +
-                                  ". The tutor will receive a Calendar invitation, and operations staff will be asked to inform the family."}
+                            {chosen.verification !== "wise_verified"
+                              ? "Refresh availability to check this lesson against the Wise schedule."
+                              : "Confirm " +
+                                slot(chosen.start, chosen.end) +
+                                ". Wise will be checked again. Calendar delivery is queued separately, and operations staff can record family communication immediately."}
                           </p>
                           <Button
                             disabled={
-                              busy ||
-                              chosen.verification !== "verified" ||
-                              !data.deliveryEnabled
+                              busy || chosen.verification !== "wise_verified"
                             }
                             onClick={() => void book()}
                           >

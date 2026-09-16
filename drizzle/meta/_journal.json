@@ -652,6 +652,13 @@
       "when": 1789520996212,
       "tag": "0092_sit_in_calendar_providers",
       "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1789520997212,
+      "tag": "0093_sit_in_wise_scheduling",
+      "breakpoints": true
     }
   ]
 }

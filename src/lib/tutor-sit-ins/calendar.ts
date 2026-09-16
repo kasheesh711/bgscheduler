@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { and, eq, gt, inArray, ne, or, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Database } from "@/lib/db";
 import {
@@ -17,11 +17,9 @@ import {
 import type {
   CalendarProviderName,
   CalendarSummary,
-  CalendarBusyOptions,
 } from "./calendar-provider";
 export const CALENDAR_SCOPES = [
   "https://www.googleapis.com/auth/calendar.events.owned",
-  "https://www.googleapis.com/auth/calendar.events.freebusy",
   "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
 ];
 export const OAUTH_COOKIE = "sit-in-calendar-oauth",
@@ -32,7 +30,8 @@ export const calendarConnectSchema = z
 export const calendarSelectionSchema = z
   .object({
     calendarId: z.string().min(1).max(1000),
-    busyCalendarIds: z.array(z.string().min(1).max(1000)).min(1).max(30),
+    // Accepted for older clients, but never used for scheduling.
+    busyCalendarIds: z.array(z.string().min(1).max(1000)).max(30).optional(),
     expectedRevision: z.number().int().nonnegative(),
   })
   .strict();
@@ -62,7 +61,7 @@ export function assertCalendarBooking(provider: CalendarProviderName) {
   if (provider === "microsoft" && !microsoftEnabled())
     throw new SitInError(
       503,
-      "Outlook booking is not enabled yet.",
+      "Outlook event delivery is not enabled yet.",
       "MICROSOFT_DISABLED",
     );
 }
@@ -224,6 +223,7 @@ async function assertCanSwitch(email: string, db: Database) {
     .where(
       and(
         eq(observations.observerEmail, email),
+        isNotNull(observations.calendarProvider),
         or(
           and(
             gt(observations.endTime, new Date()),
@@ -316,7 +316,9 @@ export async function finishCalendarOAuth(
     const same =
       !!existing &&
       existing.provider === provider &&
-      (existing.provider === "google" ? existing.googleSubject : existing.providerAccountId) === accountId;
+      (existing.provider === "google"
+        ? existing.googleSubject
+        : existing.providerAccountId) === accountId;
     if (existing && !same) await assertCanSwitch(email, db);
     const refresh = token.refresh_token
       ? encryptToken(token.refresh_token)
@@ -352,6 +354,29 @@ export async function finishCalendarOAuth(
         set: { ...values, revision: sql`${connections.revision} + 1` },
       });
   });
+  const pending = await db
+    .select({ id: observations.id })
+    .from(observations)
+    .where(
+      and(
+        eq(observations.observerEmail, email),
+        eq(observations.current, true),
+      ),
+    );
+  if (pending.length)
+    await db
+      .update(jobs)
+      .set({ retryAt: new Date() })
+      .where(
+        and(
+          inArray(
+            jobs.observationId,
+            pending.map((o) => o.id),
+          ),
+          eq(jobs.kind, "calendar_upsert"),
+          inArray(jobs.status, ["pending", "failed"]),
+        ),
+      );
 }
 export async function calendarConnection(
   email: string,
@@ -369,8 +394,10 @@ export async function calendarConnection(
     );
   // Legacy Google releases can still update their original identity columns
   // during an additive migration rollout. These remain authoritative for Google.
-  const providerAccountId = row.provider === "google" ? row.googleSubject : row.providerAccountId;
-  const accountEmail = row.provider === "google" ? row.googleEmail : row.accountEmail;
+  const providerAccountId =
+    row.provider === "google" ? row.googleSubject : row.providerAccountId;
+  const accountEmail =
+    row.provider === "google" ? row.googleEmail : row.accountEmail;
   if (!providerAccountId || !accountEmail)
     throw new SitInError(
       409,
@@ -433,15 +460,7 @@ async function providerRequest<T>(
   db: Database,
 ): Promise<T> {
   const method = init.method || "GET";
-  if (
-    method !== "GET" &&
-    !(
-      connection.provider === "google" &&
-      method === "POST" &&
-      path === "freeBusy"
-    )
-  )
-    assertCalendarDelivery();
+  if (method !== "GET") assertCalendarDelivery();
   const token = await accessToken(
     await calendarConnection(connection.email, db).then((fresh) => {
       if (
@@ -493,7 +512,7 @@ export async function calendarProvider(
   email: string,
   db: Database = getDb(),
   expected?: {
-    calendarProvider: CalendarProviderName;
+    calendarProvider: CalendarProviderName | null;
     calendarAccountId: string | null;
   },
 ) {
@@ -550,7 +569,8 @@ export async function calendarSettings(email: string, db: Database = getDb()) {
     deliveryEnabled: deliveryEnabled(),
     availableProviders,
     provider: row.provider,
-    accountEmail: row.provider === "google" ? row.googleEmail : row.accountEmail,
+    accountEmail:
+      row.provider === "google" ? row.googleEmail : row.accountEmail,
     calendarId: row.calendarId,
     busyCalendarIds: row.busyCalendarIds,
     revision: row.revision,
@@ -576,19 +596,11 @@ export async function saveCalendarSelection(
         400,
         "Choose a calendar you own for observation events.",
       );
-    const busy = [
-      ...new Set(["primary", ...input.busyCalendarIds, destination.id]),
-    ];
-    if (
-      busy.some((id) => id !== "primary" && !calendars.some((c) => c.id === id))
-    )
-      throw new SitInError(400, "A selected calendar is no longer accessible.");
     await assertLease();
     const changed = await db
       .update(connections)
       .set({
         calendarId: destination.id,
-        busyCalendarIds: busy,
         revision: input.expectedRevision + 1,
         updatedAt: new Date(),
       })
@@ -604,20 +616,6 @@ export async function saveCalendarSelection(
         409,
         "Calendar settings changed. Refresh and try again.",
       );
-  });
-}
-export async function calendarBusy(
-  email: string,
-  start: Date,
-  end: Date,
-  db: Database = getDb(),
-  exclude?: CalendarBusyOptions["exclude"],
-) {
-  const { provider, connection } = await calendarProvider(email, db);
-  return provider.busy(start, end, {
-    calendarId: connection.calendarId,
-    busyCalendarIds: connection.busyCalendarIds,
-    exclude,
   });
 }
 export async function disconnectCalendar(

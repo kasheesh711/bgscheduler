@@ -20,12 +20,7 @@ import {
   type CoverageScope,
   type Participant,
 } from "./model";
-import {
-  suggestionsFor,
-  teachingEvidence,
-  type Sources,
-  type SuggestionCache,
-} from "./sources";
+import { suggestionsFor, teachingEvidence, type Sources } from "./sources";
 
 import { allocateScience, type ScienceCandidate } from "./allocation";
 
@@ -123,7 +118,6 @@ export async function generateAssignments(
       });
     }
   }
-  const cache: SuggestionCache = new Map();
   const science: ScienceCandidate[] = [];
   // Network checks occur outside the transaction. Selection and load balancing
   // are serialized below and confirmed lessons always undergo fresh live checks.
@@ -140,7 +134,6 @@ export async function generateAssignments(
             sources,
             db,
             new Date(),
-            cache,
           )
         ).map((s) => s.start);
       } catch (error) {

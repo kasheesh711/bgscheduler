@@ -18,6 +18,7 @@ import {
   assignmentCommand,
   saveReport,
   acknowledgeCommunication,
+  refreshQuarter,
   overview,
 } from "../service";
 import {
@@ -30,7 +31,13 @@ import {
   listAssignments,
 } from "../repository";
 import { EMPTY_REPORT, RUBRIC } from "../rubric";
-import { type Lesson, HEADS, titleScopes, titleDepartments } from "../model";
+import {
+  type Lesson,
+  HEADS,
+  titleScopes,
+  titleDepartments,
+  SitInError,
+} from "../model";
 import { readFileSync } from "node:fs";
 import { decryptToken, encryptToken } from "@/lib/sales-dashboard/google-oauth";
 import {
@@ -38,7 +45,6 @@ import {
   finishCalendarOAuth,
   calendarProvider,
   calendarConnection,
-  calendarBusy,
   disconnectCalendar,
   beginCalendarOAuth,
   verifyOAuthState,
@@ -49,6 +55,7 @@ import {
   eventMatches,
   observationEmail,
   reconcileObservation,
+  runSitInWorker,
 } from "../worker";
 import {
   loadSources,
@@ -194,6 +201,41 @@ async function booking() {
     report: result.reports[0],
   };
 }
+async function bindRecordedEvent(
+  observation: typeof s.tutorSitInObservations.$inferSelect,
+  provider: "google" | "microsoft" = "google",
+) {
+  const [bound] = await db
+    .update(s.tutorSitInObservations)
+    .set({
+      calendarProvider: provider,
+      calendarAccountId:
+        provider === "google" ? "google-head" : "microsoft-head",
+      calendarId: provider === "google" ? "head-calendar" : "Primary/Case+ID",
+      eventId:
+        provider === "google"
+          ? observation.id.replaceAll("-", "")
+          : "Immutable+ID/Case",
+      calendarAttemptedAt: now,
+      calendarSyncedAt: now,
+      calendarStatus: "synced",
+      lesson: { ...observation.lesson, tutorEmail: "tutor@example.test" },
+    })
+    .where(eq(s.tutorSitInObservations.id, observation.id))
+    .returning();
+  return bound;
+}
+const googleList = () =>
+  Response.json({
+    items: [
+      {
+        id: "head-calendar",
+        summary: "Primary",
+        primary: true,
+        accessRole: "owner",
+      },
+    ],
+  });
 describe("database-enforced QA workflow", () => {
   it("checks notice again after a slow live verification before persisting any booking", async () => {
     vi.setSystemTime(new Date(Date.parse(lesson.start) - 24 * 3600000 - 1));
@@ -615,7 +657,16 @@ describe("database-enforced QA workflow", () => {
       { sessionId: lesson.id, expectedRevision: 0 },
       db,
     );
-    expect(await db.select().from(s.tutorSitInJobs)).toHaveLength(1);
+    expect(
+      (await db.select().from(s.tutorSitInJobs)).filter(
+        (j) => j.kind === "calendar_upsert",
+      ),
+    ).toHaveLength(1);
+    expect(
+      (await db.select().from(s.tutorSitInJobs)).filter(
+        (j) => j.kind === "staff_email",
+      ),
+    ).toHaveLength(5);
     expect(await db.select().from(s.tutorSitInReports)).toHaveLength(1);
   });
   it("also serializes separate sign-in emails bound to the same observer identity", async () => {
@@ -837,7 +888,7 @@ describe("isolated Calendar and email delivery", () => {
     observation: Awaited<ReturnType<typeof booking>>["observation"],
   ) {
     return {
-      id: observation.eventId!,
+      id: observation.eventId || observation.id.replaceAll("-", ""),
       etag: "etag",
       description:
         "Quarterly tutor observation. Details: http://localhost:3000/tutor-sit-ins/" +
@@ -850,76 +901,271 @@ describe("isolated Calendar and email delivery", () => {
       extendedProperties: { private: { sitInObservationId: observation.id } },
     };
   }
-  it("invalidates a direct Google edit and retains cancellation acknowledgements and report history", async () => {
+  it.each(["edited", "deleted", "unavailable"])(
+    "keeps Wise confirmed when the Google event is %s",
+    async (state) => {
+      const b = await booking();
+      b.observation = await bindRecordedEvent(b.observation);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          state === "edited"
+            ? Response.json({
+                ...event(b.observation),
+                start: { dateTime: "2026-10-05T03:30:00Z" },
+              })
+            : Response.json({}, { status: state === "deleted" ? 404 : 503 }),
+        ),
+      );
+      await reconcileObservation(db, b.assignment, b.observation, sources, now);
+      expect((await db.select().from(s.tutorSitInAssignments))[0].status).toBe(
+        "scheduled",
+      );
+      const [observation] = await db.select().from(s.tutorSitInObservations);
+      expect(observation.current).toBe(true);
+      expect(observation.calendarStatus).toBe(
+        state === "unavailable" ? "error" : "discrepancy",
+      );
+      expect(
+        (await db.select().from(s.tutorSitInJobs)).some(
+          (j) => j.kind === "calendar_delete",
+        ),
+      ).toBe(false);
+      expect(
+        (await db.select().from(s.tutorSitInCommunications)).every(
+          (c) => !c.supersededAt,
+        ),
+      ).toBe(true);
+      expect(await db.select().from(s.tutorSitInReports)).toHaveLength(1);
+    },
+  );
+  it("confirms without Calendar or delivery and allows family acknowledgements and reports", async () => {
+    await db.delete(s.tutorSitInCalendarConnections);
+    vi.stubEnv("TUTOR_SIT_INS_DELIVERY_ENABLED", "false");
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    const b = await booking();
+    expect(b.assignment.status).toBe("scheduled");
+    expect(b.observation).toMatchObject({
+      calendarId: null,
+      calendarProvider: null,
+      calendarAccountId: null,
+      eventId: null,
+    });
+    expect(
+      (await db.select().from(s.tutorSitInJobs)).filter(
+        (j) => j.kind === "staff_email",
+      ),
+    ).toHaveLength(5);
+    const [task] = await db.select().from(s.tutorSitInCommunications);
+    const ack = await acknowledgeCommunication(
+      await accessForEmail(manager, db),
+      task.id,
+      { expectedRevision: 0, audience: "parent" },
+      db,
+    );
+    expect(ack.parentInformedBy).toBe(manager);
+    vi.setSystemTime(new Date(Date.parse(lesson.end) + 49 * 3600000));
+    const report = await saveReport(
+      await accessForEmail(email, db),
+      b.report.id,
+      {
+        expectedRevision: 0,
+        submit: true,
+        data: {
+          ...EMPTY_REPORT,
+          occurred: true,
+          scores: Object.fromEntries(
+            RUBRIC.sections
+              .flatMap((section) => section.criteria)
+              .map((c) => [c.id, 10]),
+          ),
+          strengths: "Clear explanations",
+          priorities: "Use more checks",
+          nextSteps: "Review next quarter",
+        },
+      },
+      db,
+    );
+    expect(report.score).toBe(100);
+    expect(report.late).toBe(true);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("connects after confirmation, wakes the queued job and adds one event even within 24 hours", async () => {
+    await db.delete(s.tutorSitInCalendarConnections);
+    const b = await booking();
+    expect((await processJobs(db, { limit: 1 })).failed).toBe(1);
+    expect(
+      (await db.select().from(s.tutorSitInObservations))[0].calendarStatus,
+    ).toBe("connection_required");
+    vi.setSystemTime(new Date(Date.parse(lesson.start) - 3600000));
+    let existing: ReturnType<typeof event> | null = null;
+    const fetcher = vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes("oauth2.googleapis.com/token"))
+        return Response.json({
+          access_token: "new",
+          refresh_token: "new-refresh",
+          expires_in: 3600,
+          scope: CALENDAR_SCOPES.join(" "),
+        });
+      if (String(url).includes("/userinfo"))
+        return Response.json({
+          sub: "google-head",
+          email,
+          email_verified: true,
+        });
+      if (String(url).includes("calendarList")) return googleList();
+      if (init?.method === "POST") {
+        existing = event(b.observation);
+        return Response.json(existing);
+      }
+      return existing
+        ? Response.json(existing)
+        : Response.json({}, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const begin = beginCalendarOAuth(email, "http://localhost:3000");
+    const state = verifyOAuthState(
+      begin.cookie,
+      new URL(begin.url).searchParams.get("state")!,
+      email,
+    );
+    expect(new URL(begin.url).searchParams.get("scope")).not.toContain(
+      "freebusy",
+    );
+    await finishCalendarOAuth(email, "code", state, db);
+    expect(
+      (await processJobs(db, { observationId: b.observation.id })).failed,
+    ).toBe(0);
+    expect(
+      (await processJobs(db, { observationId: b.observation.id })).sent,
+    ).toBe(0);
+    const [o] = await db.select().from(s.tutorSitInObservations);
+    expect(o).toMatchObject({
+      calendarStatus: "synced",
+      calendarId: "head-calendar",
+      calendarProvider: "google",
+    });
+    expect(
+      fetcher.mock.calls.filter(
+        ([url, init]) =>
+          String(url).includes("/events?") && init?.method === "POST",
+      ),
+    ).toHaveLength(1);
+    expect(
+      vi.mocked(verifyLiveLesson).mock.calls.at(-1)![4]?.requireAdvance,
+    ).toBe(false);
+  });
+  it("finishes a cancellation before delivery without needing credentials, even with delivery paused", async () => {
+    await db.delete(s.tutorSitInCalendarConnections);
+    const b = await booking();
+    await assignmentCommand(
+      await accessForEmail(email, db),
+      b.assignment.id,
+      {
+        action: "cancel",
+        expectedRevision: b.assignment.revision,
+        reason: "Lesson cancelled",
+      },
+      db,
+    );
+    vi.stubEnv("TUTOR_SIT_INS_DELIVERY_ENABLED", "false");
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    await processJobs(db);
+    expect(
+      (await db.select().from(s.tutorSitInObservations))[0].calendarStatus,
+    ).toBe("cancelled");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it.each([true, false])(
+    "does not create a new invitation after the start with delivery enabled=%s",
+    async (enabled) => {
+      const b = await booking();
+      vi.stubEnv("TUTOR_SIT_INS_DELIVERY_ENABLED", String(enabled));
+      vi.setSystemTime(new Date(lesson.start));
+      const fetcher = vi.fn();
+      vi.stubGlobal("fetch", fetcher);
+      await processJobs(db, { limit: 1 });
+      expect(
+        (await db.select().from(s.tutorSitInObservations))[0],
+      ).toMatchObject({ current: true, calendarStatus: "missed" });
+      expect((await db.select().from(s.tutorSitInAssignments))[0].status).toBe(
+        "scheduled",
+      );
+      expect(fetcher).not.toHaveBeenCalled();
+      expect((await processJobs(db, { limit: 1 })).failed).toBe(0);
+    },
+  );
+  it.each(["refresh", "worker"])(
+    "reconciles Wise changes during %s with no Calendar and paused delivery",
+    async (mode) => {
+      await db.delete(s.tutorSitInCalendarConnections);
+      const b = await booking();
+      vi.stubEnv("TUTOR_SIT_INS_DELIVERY_ENABLED", "false");
+      vi.mocked(verifyLiveLesson).mockRejectedValue(
+        new SitInError(409, "Wise class cancelled", "LESSON_CHANGED"),
+      );
+      if (mode === "refresh")
+        await refreshQuarter(await accessForEmail(email, db), "2026-Q4", db);
+      else await runSitInWorker(db, now);
+      expect(
+        (await db.select().from(s.tutorSitInAssignments)).find(
+          (a) => a.id === b.assignment.id,
+        )?.status,
+      ).toBe("needs_rescheduling");
+      expect(
+        (await db.select().from(s.tutorSitInObservations))[0].current,
+      ).toBe(false);
+    },
+  );
+  it("retains a Wise booking and records a retryable availability issue after Wise failure", async () => {
+    const b = await booking();
+    vi.mocked(verifyLiveLesson).mockRejectedValue(
+      new SitInError(503, "Wise unavailable", "SOURCE_UNAVAILABLE"),
+    );
+    expect(
+      await reconcileObservation(db, b.assignment, b.observation, sources, now),
+    ).toBe(false);
+    const [a] = await db.select().from(s.tutorSitInAssignments);
+    expect(a.status).toBe("scheduled");
+    expect(a.readinessIssues[0].category).toBe("availability");
+    expect(
+      (await db.select().from(s.tutorSitInObservations))[0].calendarError,
+    ).toBeNull();
+  });
+  it("allows Calendar account disconnection before any queued observation is bound", async () => {
+    const b = await booking();
+    await disconnectCalendar(email, db);
+    expect((await db.select().from(s.tutorSitInAssignments))[0].status).toBe(
+      "scheduled",
+    );
+    expect(
+      (await processJobs(db, { observationId: b.observation.id })).failed,
+    ).toBe(1);
+  });
+  it("keeps missing invitation contact as a delivery issue", async () => {
+    await db
+      .update(s.tutorContacts)
+      .set({ onsiteEmail: null })
+      .where(eq(s.tutorContacts.canonicalKey, "target"));
     const b = await booking();
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        Response.json({
-          ...event(b.observation),
-          start: { dateTime: "2026-10-05T03:30:00Z" },
-        }),
+      vi.fn(async (url: unknown) =>
+        String(url).includes("calendarList")
+          ? googleList()
+          : Response.json({}, { status: 404 }),
       ),
     );
-    await reconcileObservation(db, b.assignment, b.observation, sources, now);
+    expect((await processJobs(db, { limit: 1 })).failed).toBe(1);
     expect((await db.select().from(s.tutorSitInAssignments))[0].status).toBe(
-      "needs_rescheduling",
+      "scheduled",
     );
-    expect((await db.select().from(s.tutorSitInObservations))[0].current).toBe(
-      false,
+    expect((await db.select().from(s.tutorSitInObservations))[0]).toMatchObject(
+      { current: true, calendarStatus: "error" },
     );
-    const jobs = await db.select().from(s.tutorSitInJobs);
-    expect(jobs.some((j) => j.kind === "calendar_delete")).toBe(true);
-    expect(jobs.some((j) => j.kind === "head_alert")).toBe(true);
-    const communications = await db.select().from(s.tutorSitInCommunications);
-    expect(communications.filter((c) => c.kind === "cancelled")).toHaveLength(
-      2,
-    );
-    expect(await db.select().from(s.tutorSitInReports)).toHaveLength(1);
-  });
-  it("does not subtract a merged own-event interval and accidentally hide another conflict", async () => {
-    const fetcher = vi.fn(async (input: string | URL | Request) => {
-      const url = String(input);
-      if (url.includes("calendarList"))
-        return Response.json({
-          items: [
-            {
-              id: "head-calendar",
-              summary: "Primary",
-              primary: true,
-              accessRole: "owner",
-            },
-          ],
-        });
-      return Response.json({
-        items: [
-          {
-            id: "own-event",
-            start: { dateTime: lesson.start },
-            end: { dateTime: lesson.end },
-          },
-          {
-            id: "personal",
-            start: { dateTime: "2026-10-05T03:30:00Z" },
-            end: { dateTime: "2026-10-05T04:00:00Z" },
-          },
-        ],
-      });
-    });
-    vi.stubGlobal("fetch", fetcher);
-    const busy = await calendarBusy(
-      email,
-      new Date(lesson.start),
-      new Date(lesson.end),
-      db,
-      { calendarId: "primary", eventId: "own-event" },
-    );
-    expect(busy).toEqual([
-      {
-        start: new Date("2026-10-05T03:30:00Z"),
-        end: new Date("2026-10-05T04:00:00Z"),
-      },
-    ]);
+    expect(b.report.id).toBeDefined();
   });
   it("verifies OAuth state, keeps setup connections separate from delivery, and blocks previews", () => {
     vi.stubEnv("TUTOR_SIT_INS_DELIVERY_ENABLED", "false");
@@ -949,6 +1195,7 @@ describe("isolated Calendar and email delivery", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (_input: unknown, init?: RequestInit) => {
+        if (String(_input).includes("calendarList")) return googleList();
         if (init?.method === "POST") {
           writes++;
           existing = event(b.observation);
@@ -986,10 +1233,6 @@ describe("isolated Calendar and email delivery", () => {
   });
   it("shows staff relay failures and retries with the same delivery key", async () => {
     const b = await booking();
-    await db
-      .update(s.tutorSitInObservations)
-      .set({ calendarStatus: "synced" })
-      .where(eq(s.tutorSitInObservations.id, b.observation.id));
     await db.update(s.tutorSitInJobs).set({ status: "sent" });
     await db.insert(s.tutorSitInJobs).values({
       key: "staff-test",
@@ -1021,6 +1264,7 @@ describe("isolated Calendar and email delivery", () => {
   });
   it("claims each delivery job once and retains credentials until event withdrawal finishes", async () => {
     const b = await booking();
+    b.observation = await bindRecordedEvent(b.observation);
     const [job] = await db.select().from(s.tutorSitInJobs);
     const claimed = await Promise.all([
       claimJob(db, job.id, "worker-a"),
@@ -1045,16 +1289,14 @@ describe("isolated Calendar and email delivery", () => {
 
 describe("Outlook account and booking persistence", () => {
   async function microsoft() {
-    await db
-      .update(s.tutorSitInCalendarConnections)
-      .set({
-        provider: "microsoft",
-        providerAccountId: "microsoft-head",
-        accountEmail: "apivit.s@hotmail.com",
-        googleSubject: null,
-        googleEmail: null,
-        scope: MICROSOFT_SCOPES.join(" "),
-      });
+    await db.update(s.tutorSitInCalendarConnections).set({
+      provider: "microsoft",
+      providerAccountId: "microsoft-head",
+      accountEmail: "apivit.s@hotmail.com",
+      googleSubject: null,
+      googleEmail: null,
+      scope: MICROSOFT_SCOPES.join(" "),
+    });
   }
   function graphEvent(
     observation: Awaited<ReturnType<typeof booking>>["observation"],
@@ -1151,12 +1393,10 @@ describe("Outlook account and booking persistence", () => {
   );
   it("persists rotated refresh credentials and sends immutable UTC/text preferences", async () => {
     await microsoft();
-    await db
-      .update(s.tutorSitInCalendarConnections)
-      .set({
-        expiresAt: new Date("2020-01-01"),
-        refreshTokenCiphertext: encryptToken("old-refresh"),
-      });
+    await db.update(s.tutorSitInCalendarConnections).set({
+      expiresAt: new Date("2020-01-01"),
+      refreshTokenCiphertext: encryptToken("old-refresh"),
+    });
     const fetcher = graph((url) => {
       expect(url).toContain("oauth2/v2.0/token");
       return Response.json({
@@ -1184,8 +1424,8 @@ describe("Outlook account and booking persistence", () => {
     await microsoft();
     const b = await booking();
     expect(b.observation).toMatchObject({
-      calendarProvider: "microsoft",
-      calendarAccountId: "microsoft-head",
+      calendarProvider: null,
+      calendarAccountId: null,
       eventId: null,
     });
     let existing: ReturnType<typeof graphEvent> | null = null,
@@ -1204,16 +1444,16 @@ describe("Outlook account and booking persistence", () => {
     expect(writes).toBe(1);
     const [observation] = await db.select().from(s.tutorSitInObservations);
     expect(observation).toMatchObject({
+      calendarProvider: "microsoft",
+      calendarAccountId: "microsoft-head",
       eventId: "Immutable+ID/Case",
       calendarStatus: "synced",
     });
-    expect(
-      vi.mocked(verifyLiveLesson).mock.calls.at(-1)![4]!.observation!.eventId,
-    ).toBe("Immutable+ID/Case");
   });
   it("keeps cleanup working after rollout rollback and retries cancellation safely", async () => {
     await microsoft();
     const b = await booking();
+    b.observation = await bindRecordedEvent(b.observation, "microsoft");
     const event = graphEvent(b.observation);
     await db
       .update(s.tutorSitInObservations)
@@ -1247,8 +1487,9 @@ describe("Outlook account and booking persistence", () => {
       beginCalendarOAuth(email, "http://localhost:3000", "microsoft"),
     ).toThrow("not enabled");
   });
-  it("rejects account switches while future bookings or old unfinished jobs exist", async () => {
+  it("rejects account switches while exported bookings or old unfinished jobs exist", async () => {
     const b = await booking();
+    b.observation = await bindRecordedEvent(b.observation);
     graph((url) =>
       url.includes("oauth2")
         ? Response.json({
@@ -1294,13 +1535,59 @@ describe("Outlook account and booking persistence", () => {
       await db.select().from(s.tutorSitInCalendarConnections),
     ).toHaveLength(1);
   });
-  it("blocks new Outlook bookings when the rollout flag is off", async () => {
+  it("keeps Wise booking available when Outlook delivery is disabled", async () => {
     await microsoft();
     vi.stubEnv("TUTOR_SIT_INS_MICROSOFT_ENABLED", "false");
-    await expect(booking()).rejects.toMatchObject({
-      code: "MICROSOFT_DISABLED",
-    });
-    expect(await db.select().from(s.tutorSitInObservations)).toHaveLength(0);
+    const b = await booking();
+    expect(b.assignment.status).toBe("scheduled");
+    expect((await processJobs(db, { limit: 1 })).failed).toBe(1);
+    expect((await db.select().from(s.tutorSitInAssignments))[0].status).toBe(
+      "scheduled",
+    );
+  });
+  it("preserves uncertain historical writes when introducing optional Calendar bindings", async () => {
+    const client = await handle.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        "CREATE TEMP TABLE tutor_sit_in_observations (calendar_id text NOT NULL, calendar_provider text NOT NULL DEFAULT 'google', calendar_status text, event_etag text, event_url text, event_id text, created_at timestamptz) ON COMMIT DROP",
+      );
+      await client.query(
+        "CREATE TEMP TABLE tutor_sit_in_assignments (status text, suggestions jsonb, checked_at timestamptz) ON COMMIT DROP",
+      );
+      await client.query(
+        "INSERT INTO tutor_sit_in_observations VALUES ('original','google','error',NULL,NULL,'persistent-id','2026-10-01')",
+      );
+      await client.query(
+        "INSERT INTO tutor_sit_in_assignments VALUES ('scheduled','[{\"sessionId\":\"unchanged\"}]',now()), ('pending','[{\"verification\":\"wise_only\"}]',now())",
+      );
+      await client.query(
+        readFileSync("drizzle/0093_sit_in_wise_scheduling.sql", "utf8"),
+      );
+      const o = (await client.query("SELECT * FROM tutor_sit_in_observations"))
+        .rows[0];
+      expect(o).toMatchObject({
+        calendar_id: "original",
+        calendar_provider: "google",
+        event_id: "persistent-id",
+        calendar_synced_at: null,
+      });
+      expect(o.calendar_attempted_at).toEqual(o.created_at);
+      const a = (
+        await client.query(
+          "SELECT * FROM tutor_sit_in_assignments ORDER BY status",
+        )
+      ).rows;
+      expect(a[0].suggestions).toEqual([]);
+      expect(a[0].checked_at).toBeNull();
+      expect(a[1].suggestions).toEqual([{ sessionId: "unchanged" }]);
+      await client.query(
+        "INSERT INTO tutor_sit_in_observations (calendar_id, calendar_provider) VALUES (NULL,NULL)",
+      );
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
   });
   it("preserves historical Google fields in migration without touching ciphertext or selected calendars", async () => {
     const client = await handle.pool.connect();

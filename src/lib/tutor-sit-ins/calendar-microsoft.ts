@@ -198,57 +198,6 @@ export function microsoftCalendarProvider(
   return {
     list,
     findEvent,
-    async busy(start, end, options) {
-      const calendars = await list();
-      const primaryId = calendars.find((c) => c.primary)!.id;
-      const resolveId = (id: string) => (id === "primary" ? primaryId : id);
-      const ids = [
-        ...new Set(
-          [primaryId, options.calendarId, ...options.busyCalendarIds].map(
-            resolveId,
-          ),
-        ),
-      ];
-      if (ids.some((id) => !calendars.some((c) => c.id === id)))
-        throw new SitInError(
-          409,
-          "A selected Outlook calendar is no longer accessible.",
-        );
-      const result: Array<{ start: Date; end: Date }> = [];
-      for (const id of ids) {
-        const query = new URLSearchParams({
-          startDateTime: start.toISOString(),
-          endDateTime: end.toISOString(),
-          $top: "1000",
-          $select: "id,isCancelled,showAs,start,end",
-        });
-        const events = await pages<GraphEvent>(
-          request,
-          calendarPath(id) + "/calendarView?" + query,
-        );
-        for (const event of events) {
-          if (!event.id)
-            throw new SitInError(
-              502,
-              "Outlook returned incomplete availability.",
-            );
-          if (
-            event.isCancelled ||
-            event.showAs === "free" ||
-            (options.exclude &&
-              id === resolveId(options.exclude.calendarId) &&
-              event.id === options.exclude.eventId)
-          )
-            continue;
-          const a = microsoftTime(event.start),
-            b = microsoftTime(event.end);
-          if (b <= a)
-            throw new SitInError(502, "Outlook returned invalid availability.");
-          result.push({ start: a, end: b });
-        }
-      }
-      return result;
-    },
     async createEvent(input) {
       const calendars = await list();
       if (
@@ -261,7 +210,7 @@ export function microsoftCalendarProvider(
       )
         throw new SitInError(
           409,
-          "Choose an owned Outlook calendar before booking.",
+          "Choose an owned Outlook calendar for event delivery.",
         );
       const recovered = await findEvent(input);
       if (recovered) return recovered;

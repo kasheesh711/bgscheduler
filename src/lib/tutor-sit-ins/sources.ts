@@ -20,7 +20,6 @@ import {
   isBlockingStatus,
   sessionStudentIds,
 } from "@/lib/normalization/sessions";
-import { calendarBusy } from "./calendar";
 import { resolveObserver } from "./access";
 import {
   type Department,
@@ -38,9 +37,6 @@ import {
   coverageScopes,
   scopeOf,
   lessonScopes,
-  issueFromError,
-  type ReadinessIssue,
-  tutorInvitationEmail,
   isCancelled,
   isUpcoming,
   ZONE,
@@ -315,13 +311,11 @@ export function snapshotAvailable(
       }),
   );
 }
-export type SuggestionCache = Map<string, ReturnType<typeof calendarBusy>>;
 export async function suggestionsFor(
   assignment: typeof s.tutorSitInAssignments.$inferSelect,
   sources: Sources,
   db: Database,
   now = new Date(),
-  cache: SuggestionCache = new Map(),
 ): Promise<Suggestion[]> {
   if (!assignment.observerEmail)
     throw new SitInError(
@@ -393,46 +387,16 @@ export async function suggestionsFor(
       ),
   );
   if (!free.length) return [];
-  if (!cache.has(head.email)) {
-    const end = new Date(
-      Math.max(...sources.lessons.map((l) => Date.parse(l.end))),
-    );
-    cache.set(head.email, calendarBusy(head.email, now, end, db));
-  }
-  let busy: Awaited<ReturnType<typeof calendarBusy>> = [];
-  let pending: ReadinessIssue | undefined;
-  try {
-    busy = await cache.get(head.email)!;
-  } catch (error) {
-    pending = {
-      ...issueFromError(error),
-      code:
-        error instanceof SitInError && error.code.startsWith("CALENDAR")
-          ? error.code
-          : "CALENDAR_UNAVAILABLE",
-      category: "calendar",
-      action:
-        "Connect or reconnect the observer's Calendar; temporary failures retry on refresh.",
-      retryable: true,
-    };
-  }
-  return free
-    .filter(
-      (l) =>
-        !busy.some((b) =>
-          overlap({ start: new Date(l.start), end: new Date(l.end) }, b),
-        ),
-    )
-    .map((l) => ({
-      sessionId: l.id,
-      title: l.title,
-      start: l.start,
-      end: l.end,
-      location: l.location,
-      modality: l.modality,
-      verification: pending ? "wise_only" : "verified",
-      issues: [...(l.issues || []), ...(pending ? [pending] : [])],
-    }));
+  return free.map((l) => ({
+    sessionId: l.id,
+    title: l.title,
+    start: l.start,
+    end: l.end,
+    location: l.location,
+    modality: l.modality,
+    verification: "wise_verified",
+    issues: l.issues || [],
+  }));
 }
 export function sameLesson(a: Lesson, b: Lesson) {
   return (
@@ -602,9 +566,8 @@ export async function verifyLiveLesson(
     }),
     institute = process.env.WISE_INSTITUTE_ID || "696e1f4d90102225641cc413";
   const start = new Date(proposed.start),
-    end = new Date(proposed.end),
     deadlineAt = Date.now() + 80_000;
-  const [sessions, availability, detail, busy] = await Promise.all([
+  const [sessions, availability, detail] = await Promise.all([
     fetchWiseSessionsForBangkokDates(client, institute, [localDate(start)], {
       now,
       deadlineAt,
@@ -623,23 +586,11 @@ export async function verifyLiveLesson(
     fetchWiseSessionDetail(client, proposed.classId, proposed.id, {
       deadlineAt,
     }),
-    calendarBusy(
-      observer.email,
-      start,
-      end,
-      db,
-      options.observation?.eventId
-        ? {
-            calendarId: options.observation.calendarId,
-            eventId: options.observation.eventId,
-          }
-        : undefined,
-    ),
   ]).catch((error) => {
     if (error instanceof SitInError) throw error;
     throw new SitInError(
       503,
-      "Wise or Calendar verification is temporarily unavailable. Retry after the next refresh.",
+      "Wise verification is temporarily unavailable. Retry after the next refresh.",
       "SOURCE_UNAVAILABLE",
     );
   });
@@ -703,12 +654,6 @@ export async function verifyLiveLesson(
     normalizeWorkingHours(availability.flatMap((a) => a.workingHours!.slots!)),
     availability.flatMap((a) => a.leaves || []),
   );
-  if (busy.some((b) => overlap({ start, end }, b)))
-    throw new SitInError(
-      409,
-      "The observer is busy in Calendar.",
-      "HEAD_UNAVAILABLE",
-    );
   const ids = sessionStudentIds(
     Array.isArray(detail.students) ? detail : session,
   );
@@ -757,18 +702,6 @@ export async function verifyLiveLesson(
     throw new SitInError(
       409,
       "The observation's location or modality changed.",
-      "LESSON_CHANGED",
-    );
-  if (
-    options.observation &&
-    tutorInvitationEmail(
-      sources.contacts.find((c) => c.canonicalKey === assignment.canonicalKey),
-      modality,
-    ) !== proposed.tutorEmail
-  )
-    throw new SitInError(
-      409,
-      "The tutor invitation contact changed.",
       "LESSON_CHANGED",
     );
   return { observer, lesson: { ...proposed, location, modality } };

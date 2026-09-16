@@ -8,15 +8,13 @@ export function CalendarSettings() {
   const [data, setData] = useState<CalendarData | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
-  const [destination, setDestination] = useState("primary"),
-    [selected, setSelected] = useState<string[]>(["primary"]);
+  const [destination, setDestination] = useState("primary");
   async function load() {
     try {
       const result = await api<CalendarData>("/calendar");
       setData(result);
       if (result.connected) {
         setDestination(result.calendarId);
-        setSelected(result.busyCalendarIds);
       }
     } catch (e) {
       setError((e as Error).message);
@@ -46,7 +44,6 @@ export function CalendarSettings() {
           "/calendar",
           {
             calendarId: destination,
-            busyCalendarIds: selected,
             expectedRevision: data.revision,
           },
           "PATCH",
@@ -66,9 +63,9 @@ export function CalendarSettings() {
         Your calendar
       </h2>
       <p className="mt-2 text-sm text-muted-foreground">
-        Connect one Google or Outlook account and select the calendars to check.
-        Your teaching and personal time stay protected; personal event details
-        stay private.
+        Wise determines your availability. Connect a calendar to receive
+        confirmed observation events. You can confirm observations before
+        connecting.
       </p>
       {error && (
         <div className="mt-4">
@@ -105,40 +102,6 @@ export function CalendarSettings() {
                     ))}
                 </select>
               </label>
-              <fieldset>
-                <legend className="mb-2 text-sm font-medium">
-                  Calendars to check for conflicts
-                </legend>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {data.calendars.map((c) => (
-                    <label
-                      key={c.id}
-                      className="flex min-h-10 items-center gap-2 rounded-md border p-2 text-sm"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={
-                          !!c.primary ||
-                          selected.includes(c.id) ||
-                          c.id === destination
-                        }
-                        disabled={c.primary || c.id === destination || busy}
-                        onChange={(e) =>
-                          setSelected((v) =>
-                            e.target.checked
-                              ? [...v, c.id]
-                              : v.filter((id) => id !== c.id),
-                          )
-                        }
-                      />
-                      {c.summary}
-                    </label>
-                  ))}
-                </div>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Your primary and observation calendars are always checked.
-                </p>
-              </fieldset>
             </>
           )}
           <div className="flex flex-wrap gap-2">
@@ -146,7 +109,7 @@ export function CalendarSettings() {
               disabled={busy || !data.calendars.length}
               onClick={() => void action("save")}
             >
-              Save calendars
+              Save destination
             </Button>
             <Button
               variant="outline"
