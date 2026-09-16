@@ -12,7 +12,8 @@ import {
 import { Button } from "@/components/ui/button";
 import type { SitInAccess } from "@/lib/tutor-sit-ins/access";
 import {
-  HEADS,
+  DEPARTMENT_INFO,
+  scopeLabel,
   currentQuarter,
   FIRST_QUARTER,
 } from "@/lib/tutor-sit-ins/model";
@@ -278,7 +279,7 @@ export function SitInDashboard({
                   onChange={(e) => setDepartment(e.target.value)}
                 >
                   <option value="all">All my departments</option>
-                  {HEADS.filter(
+                  {DEPARTMENT_INFO.filter(
                     (h) =>
                       access.role !== "observer" ||
                       access.departments.includes(h.department),
@@ -346,11 +347,7 @@ export function SitInDashboard({
                     <div>
                       <p className="font-semibold">{a.tutorName}</p>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        {
-                          HEADS.find((h) => h.department === a.department)
-                            ?.label
-                        }{" "}
-                        · {a.quarter}
+                        {scopeLabel(a)} · {a.quarter}
                       </p>
                     </div>
                     <div>
@@ -390,12 +387,24 @@ export function SitInDashboard({
                         <>
                           <p>
                             {a.suggestions.length
-                              ? a.suggestions.length + " suitable lessons"
+                              ? a.suggestions.length + " proposed lessons"
                               : a.status === "exempt"
                                 ? a.reason
                                 : a.suggestionError ||
                                   "Waiting for a suitable lesson"}
                           </p>
+                          {a.suggestions.some(
+                            (s) => s.verification === "wise_only",
+                          ) && (
+                            <p className="mt-1 text-xs font-medium text-amber-800 dark:text-amber-300">
+                              Provisional — Google Calendar check pending.
+                            </p>
+                          )}
+                          {!!a.readinessIssues?.length && (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {a.readinessIssues[0].action}
+                            </p>
+                          )}
                           <p className="mt-1 text-xs text-muted-foreground">
                             {a.suggestions[0]
                               ? "Earliest: " + when(a.suggestions[0].start)

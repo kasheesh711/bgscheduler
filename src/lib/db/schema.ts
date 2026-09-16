@@ -1699,6 +1699,8 @@ export const futureSessionBlocks = pgTable("future_session_blocks", {
   location: text("location"),
   studentName: text("student_name"),
   studentCount: integer("student_count"),
+  // Null means the provider omitted a complete dated roster; [] means known empty.
+  studentIds: jsonb("student_ids").$type<string[] | null>(),
   subject: text("subject"),
   classType: text("class_type"),
   recurrenceId: text("recurrence_id"),
@@ -5745,6 +5747,7 @@ export const tutorSitInGrants = pgTable(
     email: text("email").primaryKey(),
     role: text("role").notNull().default("observer"),
     departments: jsonb("departments").$type<string[]>().notNull().default([]),
+    scopes: jsonb("scopes").$type<string[] | null>(),
     canonicalKey: text("canonical_key"),
     active: boolean("active").notNull().default(true),
     revision: integer("revision").notNull().default(0),
@@ -5765,6 +5768,7 @@ export const tutorSitInGrants = pgTable(
 export const tutorSitInMappings = pgTable("tutor_sit_in_mappings", {
   classId: text("class_id").primaryKey(),
   departments: jsonb("departments").$type<string[]>().notNull().default([]),
+  scopes: jsonb("scopes").$type<string[] | null>(),
   revision: integer("revision").notNull().default(0),
   updatedBy: text("updated_by").notNull(),
   reason: text("reason").notNull(),
@@ -5779,6 +5783,8 @@ export const tutorSitInAssignments = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     quarter: text("quarter").notNull(),
     department: text("department").notNull(),
+    coverageScope: text("coverage_scope"),
+    allocationMode: text("allocation_mode").notNull().default("automatic"),
     canonicalKey: text("canonical_key").notNull(),
     tutorName: text("tutor_name").notNull(),
     observerEmail: text("observer_email"),
@@ -5790,6 +5796,7 @@ export const tutorSitInAssignments = pgTable(
       .notNull()
       .default([]),
     suggestionError: text("suggestion_error"),
+    readinessIssues: jsonb("readiness_issues").$type<import("../tutor-sit-ins/model").ReadinessIssue[]>().notNull().default([]),
     checkedAt: timestamp("checked_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -5799,15 +5806,15 @@ export const tutorSitInAssignments = pgTable(
       .defaultNow(),
   },
   (t) => [
-    uniqueIndex("sit_in_quarter_tutor_department").on(
+    uniqueIndex("sit_in_quarter_tutor_scope").on(
       t.quarter,
       t.canonicalKey,
-      t.department,
-    ),
+      sql`coalesce(${t.coverageScope}, case when ${t.department} = 'iseb' then 'iseb_other' else ${t.department} end)`,
+    ).where(sql`${t.status} <> 'superseded'`),
     index("sit_in_assignment_observer").on(t.observerEmail, t.quarter),
     check(
       "sit_in_assignment_status",
-      sql`${t.status} in ('pending','scheduled','needs_rescheduling','completed','exempt')`,
+      sql`${t.status} in ('pending','scheduled','needs_rescheduling','completed','exempt','superseded')`,
     ),
     check(
       "sit_in_quarter_check",
@@ -5815,8 +5822,10 @@ export const tutorSitInAssignments = pgTable(
     ),
     check(
       "sit_in_department_check",
-      sql`${t.department} IN ('physics','maths','english','chemistry','iseb')`,
+      sql`${t.department} IN ('physics','maths','english','chemistry','iseb','science')`,
     ),
+    check("sit_in_scope_check", sql`${t.coverageScope} IS NULL OR (${t.department} <> 'iseb' AND ${t.coverageScope} = ${t.department}) OR (${t.department} = 'iseb' AND ${t.coverageScope} IN ('iseb_english_vr','iseb_maths_vr','iseb_other'))`),
+    check("sit_in_allocation_mode", sql`${t.allocationMode} IN ('automatic','manual')`),
   ],
 );
 

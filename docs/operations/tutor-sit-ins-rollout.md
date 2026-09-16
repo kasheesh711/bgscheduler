@@ -43,3 +43,12 @@ The worker runs at UTC minutes `4,14,24,34,44,54`; the digest runs at `0 1 * * *
 - Google rejected the isolated Calendar consent request with `redirect_uri_mismatch`. The existing `bgscheduler` OAuth client in project `begifted-scheduling` currently registers only its login callbacks. The two new Calendar callbacks (local test and production) are prepared in Google Cloud, awaiting the owner's confirmation to save. No Calendar token or test event has been created. Production delivery remains disabled.
 
 _This is an execution record for the feature branch, not proof of production rollout._
+
+## Allocation corrections — 2026-09-16
+
+- Migration `0090_sit_in_coverage_scopes.sql` was applied to the verified production Neon database. All five original active grants were still untouched at revision zero; the approved Science and ISEB strand scopes were added with an audit record. Existing manually edited or revoked grants are preserved by the migration. Production had 61 automatic obligations, zero observations and zero reports before reconciliation.
+- Validation: `verify:release` passed with **5,098 unit tests across 448 files**, production build, TypeScript and the 276-route guard. **22 focused Postgres integration tests** cover scope isolation, concurrent strand generation, supersession, Science balancing, self-exclusion, manual/booked preservation and revocation while availability loads. Whole-repo ESLint has 19 existing warnings and no errors.
+- Desktop and 390×844 mobile checks used real components with isolated synthetic APIs. ISEB strand labels, provisional lesson selection, disabled confirmation, known-student aggregation, separate incomplete-occurrence counts and scope controls passed without horizontal overflow.
+- Both Calendar OAuth callbacks were saved after owner confirmation. The isolated Calendar flow now reaches Google's unverified-app warning; completion is awaiting the owner's browser handoff. Production delivery remains disabled until Calendar delivery validation succeeds.
+- Google's OAuth audience is still **Testing**. Gift is already enrolled; Ek, Peat, Tito and Mimi were missing. Their enrollment form is prepared and awaits action-time confirmation. This is separate from the application's verified grants.
+- Rollout sequence after the code deploy: refresh the core Wise snapshot to populate dated student IDs, refresh shared student data, run the sit-in worker, then inspect Q4 coverage, Science allocation and provisional openings. Never backfill missing dated rosters from another occurrence.

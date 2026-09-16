@@ -3,7 +3,6 @@ import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { getDb, type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { ensureIndex, type SearchIndex } from "@/lib/search/index";
-import { executeSearch } from "@/lib/search/engine";
 import { createWiseClient } from "@/lib/wise/client";
 import { fetchWiseSessionsForBangkokDates } from "@/lib/wise/day-sessions";
 import {
@@ -17,7 +16,10 @@ import {
 } from "@/lib/wise/types";
 import { normalizeWorkingHours } from "@/lib/normalization/availability";
 import { getClassroomSessionMode } from "@/lib/classrooms/session-mode";
-import { isBlockingStatus } from "@/lib/normalization/sessions";
+import {
+  isBlockingStatus,
+  sessionStudentIds,
+} from "@/lib/normalization/sessions";
 import { googleBusy } from "./calendar";
 import { resolveObserver } from "./access";
 import {
@@ -32,11 +34,19 @@ import {
   SitInError,
   SOURCE_MAX_AGE_MS,
   titleDepartments,
+  titleScopes,
+  coverageScopes,
+  scopeOf,
+  lessonScopes,
+  issueFromError,
+  type ReadinessIssue,
   tutorInvitationEmail,
   isCancelled,
   isUpcoming,
   ZONE,
 } from "./model";
+
+import { datedRoster } from "./readiness";
 
 export type Sources = {
   lessons: Lesson[];
@@ -137,6 +147,7 @@ export async function loadSources(
         departments: explicit
           ? (explicit.departments as Department[])
           : titleDepartments(row.title),
+        scopes: explicit ? coverageScopes(explicit) : titleScopes(row.title),
         participants: [],
       };
       lessonMap.set(row.wiseSessionId, lesson);
@@ -157,6 +168,7 @@ export async function loadSources(
     // missing parent stays unresolved; student names never supply parent identity.
     if (!lesson.participants.some((p) => p.studentKey === row.studentKey))
       lesson.participants.push({
+        wiseStudentId: row.wiseStudentId,
         studentKey: row.studentKey,
         studentName: row.studentName,
         parentName,
@@ -172,12 +184,7 @@ export async function loadSources(
     .from(s.futureSessionBlocks)
     .where(eq(s.futureSessionBlocks.snapshotId, index.snapshotId));
   for (const row of core) {
-    if (
-      lessonMap.has(row.wiseSessionId) ||
-      !row.wiseClassId ||
-      !isUpcoming(row.wiseStatus)
-    )
-      continue;
+    if (!row.wiseClassId || !isUpcoming(row.wiseStatus)) continue;
     const date = row.startTime.toISOString().slice(0, 10);
     const hhmm = (minute: number) =>
       String(Math.floor(minute / 60)).padStart(2, "0") +
@@ -205,7 +212,8 @@ export async function loadSources(
       departments: mapping
         ? (mapping.departments as Department[])
         : titleDepartments(row.title || ""),
-      participants: [],
+      scopes: mapping ? coverageScopes(mapping) : titleScopes(row.title || ""),
+      ...datedRoster(row.studentIds, studentMap),
     });
   }
   return {
@@ -223,6 +231,10 @@ export function teachingEvidence(lesson: Lesson, now = new Date()) {
     ? isUpcoming(lesson.status)
     : /^(completed|attended|ended|ongoing)$/i.test(lesson.status);
 }
+// Core snapshot timestamps encode Bangkok wall time; convert explicitly, without
+// depending on the worker/server host timezone.
+const snapshotInstant = (date: Date) =>
+  fromZonedTime(date.toISOString().slice(0, -1), ZONE);
 export function snapshotAvailable(
   sources: Sources,
   observerKey: string,
@@ -232,38 +244,72 @@ export function snapshotAvailable(
   const head = sources.index.tutorGroups.find(
     (g) => g.canonicalKey === observerKey,
   );
+  const accounts = sources.accounts.filter(
+    (a) => a.canonicalKey === observerKey,
+  );
   if (
     !head ||
-    !head.leavesCompleteThrough ||
-    head.leavesCompleteThrough < new Date(lesson.end) ||
-    !lesson.modality
+    !accounts.length ||
+    accounts.some(
+      (a) => !a.wiseUserId || a.lastSnapshotId !== sources.index.snapshotId,
+    ) ||
+    head.wiseRecords.some(
+      (r) => !accounts.some((a) => a.wiseTeacherId === r.wiseTeacherId),
+    )
   ) {
     reviewReasons?.add(
-      "Tutor identity, modality or leave coverage needs review for these dates.",
+      "The observer's linked Wise accounts need identity verification.",
     );
     return false;
   }
-  const date = localDate(new Date(lesson.start));
-  if (date !== localDate(new Date(lesson.end))) return false;
-  const result = executeSearch(sources.index, {
-    searchMode: "one_time",
-    slots: [
-      {
-        id: lesson.id,
-        date,
-        start: formatInTimeZone(new Date(lesson.start), ZONE, "HH:mm"),
-        end: formatInTimeZone(new Date(lesson.end), ZONE, "HH:mm"),
-        mode: "either",
-      },
-    ],
-  });
-  result.perSlotResults[0]?.needsReview
-    .find((t) => t.tutorCanonicalKey === observerKey)
-    ?.reasons.forEach((r) => reviewReasons?.add(r));
-  return (
-    result.perSlotResults[0]?.available.some(
-      (t) => t.tutorCanonicalKey === observerKey,
-    ) ?? false
+  if (
+    !head.leavesCompleteThrough ||
+    head.leavesCompleteThrough < new Date(lesson.end)
+  ) {
+    reviewReasons?.add(
+      "Wise leave coverage is temporarily incomplete for these dates. The source sync will retry automatically.",
+    );
+    return false;
+  }
+  if (!lesson.modality) {
+    reviewReasons?.add(
+      "The observed lesson's location or modality needs verification.",
+    );
+    return false;
+  }
+  const interval = { start: new Date(lesson.start), end: new Date(lesson.end) };
+  const minute = (d: Date) =>
+    Number(formatInTimeZone(d, ZONE, "H")) * 60 +
+    Number(formatInTimeZone(d, ZONE, "m"));
+  const weekday = Number(formatInTimeZone(interval.start, ZONE, "i")) % 7;
+  if (localDate(interval.start) !== localDate(interval.end)) return false;
+  // Observe inside any verified working window, irrespective of account labels
+  // or teaching qualifications. Every linked account's classes and leave block.
+  if (
+    !head.availabilityWindows.some(
+      (w) =>
+        w.weekday === weekday &&
+        w.startMinute <= minute(interval.start) &&
+        w.endMinute >= minute(interval.end),
+    )
+  )
+    return false;
+  if (
+    head.leaves.some((l) =>
+      overlap(interval, {
+        start: snapshotInstant(l.startTime),
+        end: snapshotInstant(l.endTime),
+      }),
+    )
+  )
+    return false;
+  return !head.sessionBlocks.some(
+    (b) =>
+      b.isBlocking &&
+      overlap(interval, {
+        start: snapshotInstant(b.startTime),
+        end: snapshotInstant(b.endTime),
+      }),
   );
 }
 export type SuggestionCache = Map<string, ReturnType<typeof googleBusy>>;
@@ -275,22 +321,30 @@ export async function suggestionsFor(
   cache: SuggestionCache = new Map(),
 ): Promise<Suggestion[]> {
   if (!assignment.observerEmail)
-    throw new SitInError(409, "Assign an eligible observer first.");
+    throw new SitInError(
+      409,
+      "Assign an eligible alternate observer first.",
+      "ASSIGN_OBSERVER",
+    );
   const head = await resolveObserver(
     assignment.observerEmail,
-    assignment.department,
+    scopeOf(assignment),
     assignment.canonicalKey,
     db,
   );
   const reviewReasons = new Set<string>();
-  const eligible = sources.lessons
+  const matching = sources.lessons.filter(
+    (l) =>
+      l.tutorKey === assignment.canonicalKey &&
+      lessonScopes(l).includes(scopeOf(assignment)) &&
+      isUpcoming(l.status) &&
+      Date.parse(l.start) >= now.getTime() + NOTICE_MS,
+  );
+  const eligible = matching
     .filter(
       (l) =>
-        l.tutorKey === assignment.canonicalKey &&
-        l.departments.includes(assignment.department as Department) &&
         l.participants.length > 0 &&
-        isUpcoming(l.status) &&
-        new Date(l.start).getTime() >= now.getTime() + NOTICE_MS &&
+        !l.issues?.some((i) => i.category === "students") &&
         snapshotAvailable(sources, head.canonicalKey, l, reviewReasons),
     )
     .sort((a, b) => a.start.localeCompare(b.start));
@@ -298,19 +352,22 @@ export async function suggestionsFor(
     if (reviewReasons.size)
       throw new SitInError(
         409,
-        "Needs review: " + [...reviewReasons].slice(0, 3).join(" "),
+        [...reviewReasons].join(" "),
+        [...reviewReasons].some((r) => r.includes("identity"))
+          ? "IDENTITY_REVIEW"
+          : "WISE_VERIFICATION_PENDING",
       );
     if (
-      sources.lessons.some(
+      matching.some(
         (l) =>
-          l.tutorKey === assignment.canonicalKey &&
-          l.departments.includes(assignment.department as Department) &&
-          !l.participants.length,
+          !l.participants.length ||
+          l.issues?.some((i) => i.category === "students"),
       )
     )
       throw new SitInError(
         409,
-        "Student participants need source-data review before scheduling.",
+        "These dated lessons are awaiting student verification. Refresh the Wise student source.",
+        "STUDENT_ROSTER",
       );
     return [];
   }
@@ -323,24 +380,44 @@ export async function suggestionsFor(
         eq(s.tutorSitInObservations.current, true),
       ),
     );
-  const key = head.email;
-  if (!cache.has(key)) {
-    const future = sources.lessons.filter((l) => new Date(l.end) > now);
-    const end = new Date(Math.max(...future.map((l) => Date.parse(l.end))));
-    cache.set(key, googleBusy(head.email, now, end, db));
+  const free = eligible.filter(
+    (l) =>
+      !bookings.some((b) =>
+        overlap(
+          { start: new Date(l.start), end: new Date(l.end) },
+          { start: b.startTime, end: b.endTime },
+        ),
+      ),
+  );
+  if (!free.length) return [];
+  if (!cache.has(head.email)) {
+    const end = new Date(
+      Math.max(...sources.lessons.map((l) => Date.parse(l.end))),
+    );
+    cache.set(head.email, googleBusy(head.email, now, end, db));
   }
-  const busy = await cache.get(key)!;
-  return eligible
+  let busy: Awaited<ReturnType<typeof googleBusy>> = [];
+  let pending: ReadinessIssue | undefined;
+  try {
+    busy = await cache.get(head.email)!;
+  } catch (error) {
+    pending = {
+      ...issueFromError(error),
+      code:
+        error instanceof SitInError && error.code.startsWith("CALENDAR")
+          ? error.code
+          : "CALENDAR_UNAVAILABLE",
+      category: "calendar",
+      action:
+        "Connect or reconnect the observer's Calendar; temporary failures retry on refresh.",
+      retryable: true,
+    };
+  }
+  return free
     .filter(
       (l) =>
         !busy.some((b) =>
           overlap({ start: new Date(l.start), end: new Date(l.end) }, b),
-        ) &&
-        !bookings.some((b) =>
-          overlap(
-            { start: new Date(l.start), end: new Date(l.end) },
-            { start: b.startTime, end: b.endTime },
-          ),
         ),
     )
     .map((l) => ({
@@ -350,6 +427,8 @@ export async function suggestionsFor(
       end: l.end,
       location: l.location,
       modality: l.modality,
+      verification: pending ? "wise_only" : "verified",
+      issues: [...(l.issues || []), ...(pending ? [pending] : [])],
     }));
 }
 export function sameLesson(a: Lesson, b: Lesson) {
@@ -362,14 +441,24 @@ export function sameLesson(a: Lesson, b: Lesson) {
     a.location === b.location &&
     a.modality === b.modality &&
     JSON.stringify(
-      [...a.participants].sort((x, y) =>
-        x.studentKey.localeCompare(y.studentKey),
-      ),
+      a.participants
+        .map(({ studentKey, studentName, familyKey, parentName }) => ({
+          studentKey,
+          studentName,
+          familyKey,
+          parentName,
+        }))
+        .sort((x, y) => x.studentKey.localeCompare(y.studentKey)),
     ) ===
       JSON.stringify(
-        [...b.participants].sort((x, y) =>
-          x.studentKey.localeCompare(y.studentKey),
-        ),
+        b.participants
+          .map(({ studentKey, studentName, familyKey, parentName }) => ({
+            studentKey,
+            studentName,
+            familyKey,
+            parentName,
+          }))
+          .sort((x, y) => x.studentKey.localeCompare(y.studentKey)),
       )
   );
 }
@@ -464,7 +553,7 @@ export async function verifyLiveLesson(
   try {
     observer = await resolveObserver(
       assignment.observerEmail,
-      assignment.department,
+      scopeOf(assignment),
       assignment.canonicalKey,
       db,
     );
@@ -540,7 +629,14 @@ export async function verifyLiveLesson(
           }
         : undefined,
     ),
-  ]);
+  ]).catch((error) => {
+    if (error instanceof SitInError) throw error;
+    throw new SitInError(
+      503,
+      "Wise or Calendar verification is temporarily unavailable. Retry after the next refresh.",
+      "SOURCE_UNAVAILABLE",
+    );
+  });
   const session = sessions.find((s) => s._id === proposed.id);
   if (!session || isCancelled(session.meetingStatus || ""))
     throw new SitInError(
@@ -551,10 +647,10 @@ export async function verifyLiveLesson(
   if (!isUpcoming(session.meetingStatus || ""))
     throw new SitInError(409, "The Wise lesson status needs review.");
   const mapping = sources.mappings.find((m) => m.classId === proposed.classId);
-  const departments = mapping
-    ? mapping.departments
-    : titleDepartments(session.title || proposed.title);
-  if (!departments.includes(assignment.department))
+  const scopes = mapping
+    ? coverageScopes(mapping)
+    : titleScopes(session.title || proposed.title);
+  if (!scopes.includes(scopeOf(assignment)))
     throw new SitInError(
       409,
       "The lesson no longer belongs to this department.",
@@ -607,19 +703,15 @@ export async function verifyLiveLesson(
       "The observer is busy in Google Calendar.",
       "HEAD_UNAVAILABLE",
     );
-  const participants =
-    detail.students ||
-    session.students ||
-    detail.participants ||
-    session.participants;
-  if (!Array.isArray(participants) || !participants.length)
+  const ids = sessionStudentIds(
+    Array.isArray(detail.students) ? detail : session,
+  );
+  if (!ids?.length)
     throw new SitInError(
       409,
       "Wise did not provide a complete student list. Review this lesson before scheduling.",
+      "STUDENT_ROSTER",
     );
-  const ids = [
-    ...new Set(participants.map((p) => (typeof p === "string" ? p : p._id))),
-  ].sort();
   const [snapshot] = await db
     .select()
     .from(s.creditControlSnapshots)

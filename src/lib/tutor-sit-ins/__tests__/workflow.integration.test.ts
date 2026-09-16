@@ -26,9 +26,11 @@ import {
   claimJob,
   detail,
   withObserverOperation,
+  getAssignment,
+  listAssignments,
 } from "../repository";
 import { EMPTY_REPORT, RUBRIC } from "../rubric";
-import { type Lesson, HEADS } from "../model";
+import { type Lesson, HEADS, titleScopes, titleDepartments } from "../model";
 import { encryptToken } from "@/lib/sales-dashboard/google-oauth";
 import {
   CALENDAR_SCOPES,
@@ -43,10 +45,16 @@ import {
   observationEmail,
   reconcileObservation,
 } from "../worker";
-import { loadSources, verifyLiveLesson, type Sources } from "../sources";
+import {
+  loadSources,
+  suggestionsFor,
+  verifyLiveLesson,
+  type Sources,
+} from "../sources";
 vi.mock("../sources", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../sources")>()),
   loadSources: vi.fn(),
+  suggestionsFor: vi.fn(),
   verifyLiveLesson: vi.fn(),
 }));
 let handle: Awaited<ReturnType<typeof startTestDb>>, db: Database;
@@ -135,6 +143,7 @@ beforeEach(async () => {
     scope: CALENDAR_SCOPES.join(" "),
   });
   vi.mocked(loadSources).mockResolvedValue(sources);
+  vi.mocked(suggestionsFor).mockResolvedValue([]);
   vi.mocked(verifyLiveLesson).mockImplementation(async (_a, proposed) => ({
     observer: {
       ...(await accessForEmail(email, db)),
@@ -352,6 +361,228 @@ describe("database-enforced QA workflow", () => {
     await expect(
       resolveObserver(email, "physics", "head", db),
     ).rejects.toMatchObject({ code: "SELF_OBSERVATION" });
+  });
+  it("isolates ISEB strands for list, detail and observer eligibility", async () => {
+    await db
+      .update(s.tutorSitInGrants)
+      .set({ departments: ["iseb"], scopes: ["iseb_english_vr"] })
+      .where(eq(s.tutorSitInGrants.email, email));
+    const [english, maths, other] = await db
+      .insert(s.tutorSitInAssignments)
+      .values(
+        ["iseb_english_vr", "iseb_maths_vr", "iseb_other"].map(
+          (coverageScope) => ({
+            quarter: "2026-Q4",
+            department: "iseb",
+            coverageScope,
+            canonicalKey: "target",
+            tutorName: "Tutor",
+            observerEmail: email,
+          }),
+        ),
+      )
+      .returning();
+    const access = await accessForEmail(email, db);
+    expect(
+      (await listAssignments(access, "2026-Q4", db)).map((a) => a.id),
+    ).toEqual([english.id]);
+    await expect(getAssignment(access, maths.id, db)).rejects.toMatchObject({
+      status: 403,
+    });
+    await expect(detail(access, other.id, db)).rejects.toMatchObject({
+      status: 403,
+    });
+    await expect(
+      resolveObserver(email, "iseb_maths_vr", "target", db),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+  it("generates distinct strands concurrently and supersedes only unused automatic coverage", async () => {
+    const old = await obligation("english");
+    const manual = await obligation("maths");
+    await db
+      .update(s.tutorSitInAssignments)
+      .set({ allocationMode: "manual" })
+      .where(eq(s.tutorSitInAssignments.id, manual.id));
+    const sample = {
+      ...sources,
+      lessons: ["Eng+VR", "Math + VR", "Non VR"].map((title, i) => ({
+        ...lesson,
+        id: "strand-" + i,
+        title,
+        departments: titleDepartments(title),
+        scopes: titleScopes(title),
+      })),
+    } as Sources;
+    const results = await Promise.all([
+      generateAssignments("2026-Q4", sample, db),
+      generateAssignments("2026-Q4", sample, db),
+    ]);
+    expect(results.reduce((a, b) => a + b, 0)).toBe(3);
+    const rows = await db.select().from(s.tutorSitInAssignments);
+    expect(rows.find((a) => a.id === old.id)?.status).toBe("superseded");
+    expect(rows.find((a) => a.id === manual.id)?.status).toBe("pending");
+    expect(
+      await listAssignments(await accessForEmail(manager, db), "2026-Q4", db),
+    ).toHaveLength(4);
+    expect(
+      (await db.select().from(s.tutorSitInAudit)).filter(
+        (e) => e.action === "assignment_superseded",
+      ),
+    ).toHaveLength(1);
+    // An actual ordinary lesson recreates legitimate ordinary subject coverage.
+    await generateAssignments(
+      "2026-Q4",
+      {
+        ...sample,
+        lessons: [
+          ...sample.lessons,
+          {
+            ...lesson,
+            title: "English",
+            departments: ["english"],
+            scopes: ["english"],
+          },
+        ],
+      },
+      db,
+    );
+    expect(
+      (await db.select().from(s.tutorSitInAssignments)).filter(
+        (a) => a.department === "english" && a.status === "pending",
+      ),
+    ).toHaveLength(1);
+  });
+  it("balances only automatic Science, excludes self, and preserves manual and booked allocations", async () => {
+    const heads = [HEADS[0], HEADS[1], HEADS[3]];
+    await db.insert(s.tutorContacts).values([
+      { canonicalKey: "peat", displayName: "Peat" },
+      { canonicalKey: "mimi", displayName: "Mimi" },
+    ]);
+    await db
+      .update(s.tutorSitInGrants)
+      .set({
+        departments: ["physics", "science"],
+        scopes: ["physics", "science"],
+      })
+      .where(eq(s.tutorSitInGrants.email, email));
+    await db.insert(s.tutorSitInGrants).values([
+      {
+        email: heads[1].email,
+        departments: ["maths", "science"],
+        scopes: ["maths", "science"],
+        canonicalKey: "peat",
+      },
+      {
+        email: heads[2].email,
+        departments: ["chemistry", "science"],
+        scopes: ["chemistry", "science"],
+        canonicalKey: "mimi",
+      },
+    ]);
+    vi.mocked(suggestionsFor).mockResolvedValue([
+      {
+        sessionId: "science",
+        title: "Science",
+        start: lesson.start,
+        end: lesson.end,
+        location: "Room",
+        modality: "onsite",
+        verification: "wise_only",
+      },
+    ]);
+    const sample = {
+      ...sources,
+      lessons: ["head", "peat", "mimi", "t1", "t2", "t3", "t4", "t5", "t6"].map(
+        (tutorKey, i) => ({
+          ...lesson,
+          tutorKey,
+          id: "science-" + i,
+          departments: ["science"],
+          scopes: ["science"],
+        }),
+      ),
+    } as Sources;
+    await Promise.all([
+      generateAssignments("2026-Q4", sample, db),
+      generateAssignments("2026-Q4", sample, db),
+    ]);
+    let rows = await db.select().from(s.tutorSitInAssignments);
+    expect(rows).toHaveLength(9);
+    expect(
+      heads.map((h) => rows.filter((a) => a.observerEmail === h.email).length),
+    ).toEqual([3, 3, 3]);
+    for (const a of rows)
+      expect(a.observerEmail).not.toBe(
+        (
+          {
+            head: heads[0].email,
+            peat: heads[1].email,
+            mimi: heads[2].email,
+          } as Record<string, string>
+        )[a.canonicalKey],
+      );
+    const manual = rows.find((a) => a.canonicalKey === "t1")!;
+    const booked = rows.find((a) => a.canonicalKey === "t2")!;
+    await db
+      .update(s.tutorSitInAssignments)
+      .set({ allocationMode: "manual" })
+      .where(eq(s.tutorSitInAssignments.id, manual.id));
+    await db
+      .update(s.tutorSitInAssignments)
+      .set({ status: "scheduled" })
+      .where(eq(s.tutorSitInAssignments.id, booked.id));
+    vi.mocked(suggestionsFor).mockImplementation(async (a) =>
+      a.observerEmail === email
+        ? [
+            {
+              sessionId: "free",
+              title: "Science",
+              start: lesson.start,
+              end: lesson.end,
+              location: "Room",
+              modality: "onsite",
+            },
+          ]
+        : [],
+    );
+    await generateAssignments("2026-Q4", sample, db);
+    rows = await db.select().from(s.tutorSitInAssignments);
+    expect(rows.find((a) => a.id === manual.id)?.observerEmail).toBe(
+      manual.observerEmail,
+    );
+    expect(rows.find((a) => a.id === booked.id)?.observerEmail).toBe(
+      booked.observerEmail,
+    );
+    expect(rows.find((a) => a.canonicalKey === "t3")?.observerEmail).toBe(
+      email,
+    );
+  });
+  it("does not allocate a head revoked while availability was loading", async () => {
+    await db
+      .update(s.tutorSitInGrants)
+      .set({
+        departments: ["physics", "science"],
+        scopes: ["physics", "science"],
+      })
+      .where(eq(s.tutorSitInGrants.email, email));
+    vi.mocked(suggestionsFor).mockImplementation(async () => {
+      await db
+        .update(s.tutorSitInGrants)
+        .set({ active: false })
+        .where(eq(s.tutorSitInGrants.email, email));
+      return [];
+    });
+    await generateAssignments(
+      "2026-Q4",
+      {
+        ...sources,
+        lessons: [{ ...lesson, departments: ["science"], scopes: ["science"] }],
+      },
+      db,
+    );
+    expect(
+      (await db.select().from(s.tutorSitInAssignments))[0].observerEmail,
+    ).toBeNull();
   });
   it("serializes competing confirmation requests and makes retries idempotent", async () => {
     const a = await obligation(),

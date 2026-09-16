@@ -13,14 +13,109 @@ export const DEPARTMENTS = [
   "english",
   "chemistry",
   "iseb",
+  "science",
 ] as const;
 export type Department = (typeof DEPARTMENTS)[number];
+export const SCOPES = [
+  "physics",
+  "maths",
+  "english",
+  "chemistry",
+  "science",
+  "iseb_english_vr",
+  "iseb_maths_vr",
+  "iseb_other",
+] as const;
+export type CoverageScope = (typeof SCOPES)[number];
+export const SCOPE_INFO = [
+  {
+    scope: "physics",
+    department: "physics",
+    label: "Physics",
+    observers: ["apivit.s@hotmail.com"],
+  },
+  {
+    scope: "maths",
+    department: "maths",
+    label: "Maths",
+    observers: ["kasidej.ju@gmail.com"],
+  },
+  {
+    scope: "english",
+    department: "english",
+    label: "English",
+    observers: ["drxiox@gmail.com"],
+  },
+  {
+    scope: "chemistry",
+    department: "chemistry",
+    label: "Chemistry",
+    observers: ["miieiiem@gmail.com"],
+  },
+  {
+    scope: "science",
+    department: "science",
+    label: "General Science",
+    observers: [
+      "kasidej.ju@gmail.com",
+      "apivit.s@hotmail.com",
+      "miieiiem@gmail.com",
+    ],
+  },
+  {
+    scope: "iseb_english_vr",
+    department: "iseb",
+    label: "ISEB · English VR",
+    observers: ["drxiox@gmail.com"],
+  },
+  {
+    scope: "iseb_maths_vr",
+    department: "iseb",
+    label: "ISEB · Maths VR",
+    observers: ["kasidej.ju@gmail.com"],
+  },
+  {
+    scope: "iseb_other",
+    department: "iseb",
+    label: "ISEB · VR / Non VR",
+    observers: ["gift.m@begiftededucation.com"],
+  },
+] as const;
+export function scopeOf(row: {
+  coverageScope?: string | null;
+  department: string;
+}): CoverageScope {
+  return (row.coverageScope ||
+    (row.department === "iseb"
+      ? "iseb_other"
+      : row.department)) as CoverageScope;
+}
+export function coverageScopes(row: {
+  scopes?: string[] | null;
+  departments: readonly string[];
+}): CoverageScope[] {
+  return (
+    row.scopes ?? row.departments.map((department) => scopeOf({ department }))
+  ).filter((v): v is CoverageScope => SCOPES.includes(v as CoverageScope));
+}
+export function scopeLabel(row: {
+  coverageScope?: string | null;
+  department: string;
+}) {
+  return (
+    SCOPE_INFO.find((v) => v.scope === scopeOf(row))?.label || row.department
+  );
+}
 export const HEADS = [
   { department: "physics", label: "Physics", email: "apivit.s@hotmail.com" },
   { department: "maths", label: "Maths", email: "kasidej.ju@gmail.com" },
   { department: "english", label: "English", email: "drxiox@gmail.com" },
   { department: "chemistry", label: "Chemistry", email: "miieiiem@gmail.com" },
   { department: "iseb", label: "ISEB", email: "gift.m@begiftededucation.com" },
+] as const;
+export const DEPARTMENT_INFO = [
+  ...HEADS.map(({ department, label }) => ({ department, label })),
+  { department: "science", label: "General Science" },
 ] as const;
 export const OPERATIONS = [
   { name: "Petchy", email: "panida.wiya@gmail.com" },
@@ -52,6 +147,7 @@ export const quarterSchema = z
     "Observation coverage starts in Q4 2026.",
   );
 export const departmentSchema = z.enum(DEPARTMENTS);
+export const scopeSchema = z.enum(SCOPES);
 export const emailSchema = z.string().trim().toLowerCase().email();
 export const revisionSchema = z.number().int().nonnegative();
 export const reasonSchema = z.string().trim().min(3).max(1000);
@@ -99,15 +195,84 @@ export function isUpcoming(status: string) {
   return /^(scheduled|upcoming|future|not_started|not started)$/i.test(status);
 }
 export function titleDepartments(title: string): Department[] {
-  const result: Department[] = [];
-  if (/\bphysics\b/i.test(title)) result.push("physics");
-  if (/\b(math|maths|mathematics)\b/i.test(title)) result.push("maths");
-  if (/\b(english|efl|esl)\b/i.test(title)) result.push("english");
-  if (/\bchemistry\b/i.test(title)) result.push("chemistry");
-  if (/\biseb\b/i.test(title)) result.push("iseb");
+  return [
+    ...new Set(
+      titleScopes(title).map(
+        (scope) => SCOPE_INFO.find((v) => v.scope === scope)!.department,
+      ),
+    ),
+  ];
+}
+export function titleScopes(title: string): CoverageScope[] {
+  const text = title
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[‐‑–—]/g, "-")
+    .replace(/\b(eng(?:lish)?|maths?|mathematics)(?=vr\b)/g, "$1 ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ");
+  const result: CoverageScope[] = [];
+  const reasoning =
+    /\b(vr|nvr|non[\s-]*vr|(?:non[\s-]*)?verbal(?:\s+reasoning)?)\b/.test(text);
+  const english = /\b(eng|english|efl|esl)\b/.test(text);
+  const maths = /\b(math|maths|mathematics)\b/.test(text);
+  if (/\bphysics\b/.test(text)) result.push("physics");
+  if (/\bchemistry\b/.test(text)) result.push("chemistry");
+  if (/\bscience\b/.test(text) && !result.length) result.push("science");
+  if (reasoning) {
+    if (english) result.push("iseb_english_vr");
+    if (maths) result.push("iseb_maths_vr");
+    if (!english && !maths) result.push("iseb_other");
+  } else {
+    if (maths) result.push("maths");
+    if (english) result.push("english");
+    if (/\biseb\b/.test(text)) result.push("iseb_other");
+  }
   return result;
 }
+export type ReadinessIssue = {
+  code: string;
+  category:
+    | "mapping"
+    | "students"
+    | "family"
+    | "identity"
+    | "availability"
+    | "calendar";
+  message: string;
+  action: string;
+  retryable: boolean;
+};
+export function issueFromError(error: unknown): ReadinessIssue {
+  const code = error instanceof SitInError ? error.code : "SOURCE_UNAVAILABLE";
+  const category = code.startsWith("CALENDAR")
+    ? "calendar"
+    : code === "STUDENT_ROSTER"
+      ? "students"
+      : code === "IDENTITY_REVIEW" ||
+          code === "SELF_OBSERVATION" ||
+          code === "ASSIGN_OBSERVER"
+        ? "identity"
+        : "availability";
+  return {
+    code,
+    category,
+    message:
+      error instanceof SitInError
+        ? error.message
+        : "Source verification is temporarily unavailable.",
+    action:
+      category === "calendar"
+        ? "Connect or reconnect the observer’s Calendar."
+        : category === "identity"
+          ? "Review the observer assignment."
+          : category === "students"
+            ? "Verify student IDs on the dated Wise lesson and refresh the source sync."
+            : "The next refresh will retry verification.",
+    retryable: category !== "identity",
+  };
+}
 export type Participant = {
+  wiseStudentId?: string;
   studentKey: string;
   studentName: string;
   familyKey: string | null;
@@ -125,9 +290,13 @@ export type Lesson = {
   location: string | null;
   modality: string | null;
   departments: Department[];
+  scopes?: CoverageScope[];
+  issues?: ReadinessIssue[];
   participants: Participant[];
   tutorEmail?: string;
 };
+export const lessonScopes = (lesson: Lesson): CoverageScope[] =>
+  coverageScopes(lesson);
 export type Suggestion = {
   sessionId: string;
   title: string;
@@ -135,6 +304,8 @@ export type Suggestion = {
   end: string;
   location: string | null;
   modality: string | null;
+  verification?: "wise_only" | "verified";
+  issues?: ReadinessIssue[];
 };
 export const bookingSchema = z
   .object({
@@ -179,7 +350,8 @@ export const settingsSchema = z.discriminatedUnion("action", [
       action: z.literal("grant"),
       email: emailSchema,
       role: z.enum(["observer", "coordinator", "manager"]),
-      departments: z.array(departmentSchema).max(5),
+      departments: z.array(departmentSchema).max(6),
+      scopes: z.array(scopeSchema).max(8).optional(),
       canonicalKey: z.string().min(1).max(200).nullable(),
       active: z.boolean(),
       expectedRevision: revisionSchema,
@@ -190,7 +362,8 @@ export const settingsSchema = z.discriminatedUnion("action", [
     .object({
       action: z.literal("mapping"),
       classId: z.string().min(1).max(200),
-      departments: z.array(departmentSchema).max(5),
+      departments: z.array(departmentSchema).max(6),
+      scopes: z.array(scopeSchema).max(8).optional(),
       expectedRevision: revisionSchema,
       reason: reasonSchema,
     })
@@ -201,6 +374,7 @@ export const settingsSchema = z.discriminatedUnion("action", [
       quarter: quarterSchema,
       canonicalKey: z.string().min(1).max(200),
       department: departmentSchema,
+      coverageScope: scopeSchema.optional(),
       reason: reasonSchema,
     })
     .strict(),

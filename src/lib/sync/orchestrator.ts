@@ -433,6 +433,7 @@ export async function runFullSync(
         location: block.location,
         studentName: block.studentName,
         studentCount: block.studentCount,
+        studentIds: block.studentIds,
         subject: block.subject,
         classType: block.classType,
         recurrenceId: block.recurrenceId,

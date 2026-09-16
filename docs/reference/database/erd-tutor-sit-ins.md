@@ -4,9 +4,9 @@ Ten additive, snapshot-independent tables are declared in [`schema.ts`](../../..
 
 | SQL table | Drizzle export | Row grain |
 |---|---|---|
-| `tutor_sit_in_grants` | `tutorSitInGrants` | One account; role, departments, verified tutor binding, active status, revision, observer operation lease |
-| `tutor_sit_in_mappings` | `tutorSitInMappings` | One Wise class mapped to zero or more departments |
-| `tutor_sit_in_assignments` | `tutorSitInAssignments` | One tutor + department + quarter obligation; observer, state, suggestions and revision |
+| `tutor_sit_in_grants` | `tutorSitInGrants` | One account; role, departments, coverage scopes, verified tutor binding, active status, revision, observer operation lease |
+| `tutor_sit_in_mappings` | `tutorSitInMappings` | One Wise class mapped to zero or more coverage scopes |
+| `tutor_sit_in_assignments` | `tutorSitInAssignments` | One active tutor + coverage scope + quarter obligation; allocation mode, observer, state, suggestions, structured readiness issues and revision |
 | `tutor_sit_in_observations` | `tutorSitInObservations` | One scheduling attempt with frozen lesson/participants, current marker and separate Calendar delivery state |
 | `tutor_sit_in_reports` | `tutorSitInReports` | One report version per assignment, pinned rubric, observer attribution, draft/submission state and score |
 | `tutor_sit_in_calendar_connections` | `tutorSitInCalendarConnections` | One app account's separately consented Google identity, encrypted tokens and calendar selection |
@@ -28,10 +28,12 @@ Grants, mappings and connections are looked up by durable natural keys, without 
 
 ## Database invariants
 
-- Unique obligation `(quarter, canonical_key, department)`; unique current observation per assignment; unique persistent Calendar event, report version, family notice and job key.
+- Unique active obligation `(quarter, canonical_key, coverage_scope)` excluding superseded rows; legacy null scopes coalesce to the department (`iseb` → `iseb_other`); unique current observation per assignment; unique persistent Calendar event, report version, family notice and job key.
 - Quarter starts at Q4 2026; valid departments; observation end after start; score is null or within 10–100.
 - Observation trigger takes an advisory transaction lock on the canonical observer, rejects self-observation and overlaps across email grants. Changing the tutor identity cannot bypass it.
 - Submitted reports cannot be changed/deleted. Reopening inserts a new version with its original rubric. Audit rows cannot be changed/deleted.
 - No deletion of report or communication history is part of cancellation or snapshot refresh.
 
 _Verified against `codex/tutor-sit-ins` on 2026-09-16._
+
+Migration `0090_sit_in_coverage_scopes.sql` adds scope, allocation mode and readiness fields and preserves manual provenance. `future_session_blocks.student_ids` stores the dated Wise roster independently of package joins: null means unknown, an empty array means known empty. No roster is backfilled from another occurrence.

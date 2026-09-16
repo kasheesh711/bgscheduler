@@ -25,6 +25,7 @@ export interface NormalizedSessionBlock {
   location?: string;
   studentName?: string;
   studentCount?: number;
+  studentIds?: string[] | null;
   subject?: string;
   classType?: string;
   recurrenceId?: string;
@@ -48,6 +49,14 @@ export function isBlockingStatus(status: string | undefined): boolean {
   const upper = status.toUpperCase();
   if (NON_BLOCKING_STATUSES.has(upper)) return false;
   return true; // Unknown statuses remain blocking (fail-closed)
+}
+
+export function sessionStudentIds(session: WiseSession): string[] | null {
+  // Participants may include the teacher; only the authoritative students field is a roster.
+  if (!Array.isArray(session.students)) return null;
+  const ids = session.students.map(v => typeof v === "string" ? v : v?._id);
+  if (ids.some(id => typeof id !== "string" || !id.trim())) return null;
+  return [...new Set(ids as string[])];
 }
 
 /**
@@ -84,6 +93,7 @@ export function normalizeSessions(
       location: session.location,
       studentName: getWiseSessionClassName(session),
       studentCount: typeof session.studentCount === "number" ? session.studentCount : undefined,
+      studentIds: sessionStudentIds(session),
       subject: getWiseSessionClassSubject(session),
       classType: getWiseSessionClassType(session),
       recurrenceId: session.metadata?.recurrenceId,

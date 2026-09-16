@@ -70,14 +70,14 @@ describe("quarterly observation policy", () => {
       "24 hours",
     );
   });
-  it("uses title evidence, keeps ISEB separate, and refuses level-only or generic science guesses", () => {
+  it("uses title evidence, keeps ISEB separate, and refuses level-only titles and recognizes general Science", () => {
     expect(titleDepartments("Y6 ISEB Maths and English")).toEqual([
       "maths",
       "english",
       "iseb",
     ]);
     expect(titleDepartments("Year 7–9")).toEqual([]);
-    expect(titleDepartments("IGCSE Science")).toEqual([]);
+    expect(titleDepartments("IGCSE Science")).toEqual(["science"]);
     expect(
       teachingEvidence(
         { ...lesson, status: "CANCELLED" },

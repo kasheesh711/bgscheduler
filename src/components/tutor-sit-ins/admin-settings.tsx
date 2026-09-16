@@ -1,31 +1,40 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { HEADS, type Department } from "@/lib/tutor-sit-ins/model";
+import {
+  SCOPE_INFO,
+  coverageScopes,
+  type CoverageScope,
+} from "@/lib/tutor-sit-ins/model";
 import type { SettingsData } from "@/lib/tutor-sit-ins/client-types";
 import { api, control, Notice, panel } from "./shared";
-function Departments({
+const departmentsFor = (scopes: string[]) => [
+  ...new Set(
+    SCOPE_INFO.filter((s) => scopes.includes(s.scope)).map((s) => s.department),
+  ),
+];
+function Scopes({
   value,
   change,
 }: {
   value: string[];
-  change: (v: Department[]) => void;
+  change: (v: CoverageScope[]) => void;
 }) {
   return (
     <div className="flex flex-wrap gap-2">
-      {HEADS.map((h) => (
+      {SCOPE_INFO.map((h) => (
         <label
-          key={h.department}
+          key={h.scope}
           className="flex min-h-10 items-center gap-2 rounded-md border px-3 text-sm"
         >
           <input
             type="checkbox"
-            checked={value.includes(h.department)}
+            checked={value.includes(h.scope)}
             onChange={(e) =>
               change(
                 (e.target.checked
-                  ? [...value, h.department]
-                  : value.filter((v) => v !== h.department)) as Department[],
+                  ? [...value, h.scope]
+                  : value.filter((v) => v !== h.scope)) as CoverageScope[],
               )
             }
           />
@@ -45,7 +54,7 @@ function Mapping({
   onSave: () => void;
 }) {
   const [value, setValue] = useState<string[]>(
-      saved?.departments || row.departments,
+      saved ? coverageScopes(saved) : row.scopes,
     ),
     [reason, setReason] = useState(""),
     [error, setError] = useState(""),
@@ -57,7 +66,8 @@ function Mapping({
       await api("/settings", {
         action: "mapping",
         classId: row.classId,
-        departments: value,
+        departments: departmentsFor(value),
+        scopes: value,
         expectedRevision: saved?.revision || 0,
         reason,
       });
@@ -74,17 +84,48 @@ function Mapping({
         <strong>{row.title}</strong> · {row.tutorName}
         <span className="ml-2 text-muted-foreground">
           {row.unresolved
-            ? "Needs review"
+            ? "Subject mapping needed"
             : value
-                .map((v) => HEADS.find((h) => h.department === v)?.label)
+                .map((v) => SCOPE_INFO.find((h) => h.scope === v)?.label)
                 .join(" + ") || "Excluded"}
         </span>
       </summary>
       <div className="mt-4 space-y-3">
-        <Departments value={value} change={setValue} />
+        <div className="space-y-1 text-xs text-muted-foreground">
+          <p>
+            {row.students.length
+              ? "Known students: " +
+                row.students.map((p) => p.studentName).join(", ")
+              : "Students awaiting verification"}
+          </p>
+          <p>
+            {row.sessionCount} dated lessons · {row.rosterPending} awaiting
+            student verification · {row.familyPending} needing family contacts
+          </p>
+          {!!row.rosterPending && (
+            <p>
+              Verify the affected dated lesson in Wise, then refresh. Other
+              lessons retain their own student rosters.
+            </p>
+          )}
+          {!!row.familyPending && (
+            <p>
+              Operations must resolve family contacts before acknowledging
+              communication.
+            </p>
+          )}
+          {!!row.identityPending && (
+            <p>
+              {row.identityPending} lessons need tutor identity review in the
+              source data.
+            </p>
+          )}
+        </div>
+        <Scopes value={value} change={setValue} />
         <p className="text-xs text-muted-foreground">
-          Select every applicable subject. ISEB has its own obligation. An empty
-          selection explicitly excludes this class.
+          Select each applicable subject or ISEB strand. Reasoning strands have
+          separate obligations. An empty selection explicitly excludes this
+          class.
         </p>
         <label className="block text-sm">
           Reason for mapping
@@ -138,7 +179,7 @@ export function AdminSettings({
     const grant = data?.grants.find((g) => g.email === email);
     setEmail(email);
     setRole(grant?.role || "observer");
-    setDepartments(grant?.departments || []);
+    setDepartments(grant ? coverageScopes(grant) : []);
     setCanonicalKey(grant?.canonicalKey || "");
     setActive(grant?.active ?? true);
     setReason("");
@@ -165,7 +206,9 @@ export function AdminSettings({
       action: "assignment",
       quarter,
       canonicalKey: values.get("tutor"),
-      department: values.get("department"),
+      coverageScope: values.get("scope"),
+      department: SCOPE_INFO.find((s) => s.scope === values.get("scope"))
+        ?.department,
       reason: values.get("reason"),
     });
   }
@@ -198,7 +241,9 @@ export function AdminSettings({
                   <span className="block break-all font-medium">{g.email}</span>
                   <span className="text-xs text-muted-foreground">
                     {g.active ? g.role : "Revoked"} ·{" "}
-                    {g.departments.join(", ") || "Operations"}
+                    {coverageScopes(g)
+                      .map((v) => SCOPE_INFO.find((s) => s.scope === v)?.label)
+                      .join(", ") || "Operations"}
                     {g.role === "observer" && !g.canonicalKey
                       ? " · Identity needs review"
                       : ""}
@@ -214,7 +259,8 @@ export function AdminSettings({
                   action: "grant",
                   email,
                   role,
-                  departments,
+                  departments: departmentsFor(departments),
+                  scopes: departments,
                   canonicalKey: canonicalKey || null,
                   active,
                   expectedRevision:
@@ -253,9 +299,9 @@ export function AdminSettings({
               </div>
               <fieldset>
                 <legend className="mb-2 text-sm">
-                  Departments eligible to observe
+                  Subjects and ISEB strands eligible to observe
                 </legend>
-                <Departments value={departments} change={setDepartments} />
+                <Scopes value={departments} change={setDepartments} />
               </fieldset>
               <label className="block text-sm">
                 Verified tutor identity
@@ -298,7 +344,9 @@ export function AdminSettings({
         )}
       </section>
       <section className={panel}>
-        <h2 className="text-lg font-semibold">Class-to-department mappings</h2>
+        <h2 className="text-lg font-semibold">
+          Class coverage and student readiness
+        </h2>
         <p className="mt-2 text-sm text-muted-foreground">
           Review uncertain titles and correct class mappings. Level bands alone
           do not assign departments.
@@ -373,10 +421,10 @@ export function AdminSettings({
             </select>
           </label>
           <label className="text-sm">
-            Department
-            <select name="department" className={control + " mt-1"}>
-              {HEADS.map((h) => (
-                <option key={h.department} value={h.department}>
+            Subject / ISEB strand
+            <select name="scope" className={control + " mt-1"}>
+              {SCOPE_INFO.map((h) => (
+                <option key={h.scope} value={h.scope}>
                   {h.label}
                 </option>
               ))}
