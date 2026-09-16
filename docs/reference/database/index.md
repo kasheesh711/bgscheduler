@@ -1,5 +1,9 @@
 # Database Reference — Master Table Index
 
+## Tutor Sit-ins addition (2026-09-16)
+
+Migration `0089_tutor_sit_ins.sql` adds ten snapshot-independent tables for grants, mappings, obligations, observation attempts, report versions, Calendar connections, family acknowledgements, deliveries, audit and worker leases. The complete [table inventory and relationship diagram](erd-tutor-sit-ins.md) describe their grain and constraints. Aggregate counts below predate this addition and other recent migrations.
+
 The canonical lookup for every table in the BGScheduler Postgres database: **203 tables**, declared in
 [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) (5,198 lines, Drizzle ORM) and migrated under
 [`drizzle/`](../../../drizzle) (74 `.sql` files, latest `0073_funny_ego.sql`). The

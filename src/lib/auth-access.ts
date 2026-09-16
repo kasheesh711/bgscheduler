@@ -21,6 +21,8 @@
 // access. An attendance-only Google email receives that page alone; disabled
 // admins still fail before any lower-role or attendance fallback.
 
+import { sitInGrant } from "@/lib/tutor-sit-ins/access";
+import { enabled as sitInsEnabled, SIT_INS_ROUTE } from "@/lib/tutor-sit-ins/model";
 import { sql } from "drizzle-orm";
 import { resolveAdmissionsRole } from "@/lib/admissions/access";
 import { ADMISSIONS_ROUTE } from "@/lib/admissions/config";
@@ -80,7 +82,8 @@ export async function resolveUserAccess(
 
   const admissionsRole = await resolveAdmissionsRole(normalized, db);
   const attendance = await attendanceEnrollmentForEmail(normalized, db);
-  const attendancePages = attendance ? [ATTENDANCE_ROUTE] : [];
+  const sitIns = sitInsEnabled() ? await sitInGrant(normalized, db) : null;
+  const attendancePages = [...(attendance ? [ATTENDANCE_ROUTE] : []), ...(sitIns ? [SIT_INS_ROUTE] : [])];
   if (admissionsRole === "counselor") {
     return { role: "counselor", allowedPages: [ADMISSIONS_ROUTE, ...attendancePages] };
   }
@@ -95,7 +98,7 @@ export async function resolveUserAccess(
   }
 
   // Explicit attendance-only email bindings do not grant the Progress Tests workspace.
-  if (attendance) return { role: "teacher", allowedPages: attendancePages };
+  if (attendance || sitIns) return { role: "teacher", allowedPages: attendancePages };
 
   return null;
 }

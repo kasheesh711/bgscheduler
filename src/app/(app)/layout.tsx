@@ -1,3 +1,4 @@
+import { canUseSitIns } from "@/lib/tutor-sit-ins/access";
 import { creditControlActive } from "@/lib/credit-control/mode";
 import { Suspense } from "react";
 import { AppNav, AppNavSkeleton } from "@/components/layout/app-nav";
@@ -17,7 +18,7 @@ import { canUseAttendance } from "@/lib/tutor-attendance/access";
 // so dynamic-param routes do not trigger a prerender error on the static shell.
 async function AppNavWithAccess() {
   const session = await auth();
-  const [capabilities, attendanceAccess, learningPlansAccess, unearnedRevenueCapabilities] = await Promise.all([
+  const [capabilities, attendanceAccess, learningPlansAccess, unearnedRevenueCapabilities, sitInAccess] = await Promise.all([
     session?.user?.email
       ? getPostClassCapabilities(session.user.email)
       : Promise.resolve([]),
@@ -26,12 +27,14 @@ async function AppNavWithAccess() {
     session?.user?.email
       ? getUnearnedRevenueCapabilities(session.user.email)
       : Promise.resolve([]),
+    session?.user?.email ? canUseSitIns(session.user.email) : Promise.resolve(false),
   ]);
   return (
     <AppNav
       allowedPages={session?.user?.allowedPages ?? null}
       creditControlEnabled={creditControlActive()}
       attendanceAccess={attendanceAccess}
+      sitInAccess={sitInAccess}
       learningPlansAccess={learningPlansAccess}
       postClassFeedbackAccess={capabilities.includes("viewer")}
       unearnedRevenueAccess={unearnedRevenueCapabilities.includes("viewer")}

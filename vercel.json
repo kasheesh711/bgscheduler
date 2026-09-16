@@ -94,6 +94,14 @@
     {
       "path": "/api/internal/progress-tests/process",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/internal/tutor-sit-ins",
+      "schedule": "4,14,24,34,44,54 * * * *"
+    },
+    {
+      "path": "/api/internal/tutor-sit-ins/digest",
+      "schedule": "0 1 * * *"
     }
   ]
 }

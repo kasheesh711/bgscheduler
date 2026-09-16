@@ -47,6 +47,8 @@ function isPathAllowed(pathname: string, allowedPages: string[] | null): boolean
   // The owner guard checks current designation and admin status independently.
   if (pathname === "/admin/users" || pathname === "/api/admin/users") return true;
   if (pathname === "/api/home/summary") return true;
+  // Every sit-in handler checks current department grants independently.
+  if (pathname === "/tutor-sit-ins" || pathname.startsWith("/tutor-sit-ins/") || pathname === "/api/tutor-sit-ins" || pathname.startsWith("/api/tutor-sit-ins/")) return true;
   // Coarse authenticated pass; fresh attendance enrollment/admin checks own access.
   if (pathname === "/tutor-attendance" || pathname.startsWith("/tutor-attendance/") || pathname === "/api/tutor-attendance" || pathname.startsWith("/api/tutor-attendance/")) return true;
   // Post-class feedback uses fresh database capabilities on every page/API

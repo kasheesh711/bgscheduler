@@ -1,5 +1,14 @@
 # Cron Schedule
 
+## Tutor Sit-ins jobs
+
+| Path | UTC schedule | Bangkok | Registry key | Maximum |
+|---|---|---|---|---|
+| `/api/internal/tutor-sit-ins` | `4,14,24,34,44,54 * * * *` | Every ten minutes | `tutor_sit_ins` | 300s |
+| `/api/internal/tutor-sit-ins/digest` | `0 1 * * *` | 08:00 daily | `tutor_sit_ins_digest` | 300s |
+
+Both require `CRON_SECRET` and are monitored. With `TUTOR_SIT_INS_ENABLED` unset they skip and appear paused. The worker uses a database single-flight lease; both handlers use persisted outbox claims. With delivery off they do not send external messages. Enabling Tutor Sit-ins restores shared Credit Control snapshot reads on its existing half-hour ticks, even in retired mode. See the [runbook](../operations/tutor-sit-ins-rollout.md). The older inventory totals below predate these jobs; `vercel.json` and registry contract tests remain authoritative.
+
 **Credit Control retirement:** physical cron expressions are retained for easy restoration. In default `CREDIT_CONTROL_MODE=retired`, shared student-data work runs at 06:20 Bangkok, with recovery at 06:50 / 07:20. Before tutor-workspace launch, Progress Tests runs daily at 07:25, recovering at 07:55 / 08:25. After launch it owns fresh Wise attendance reads every half-hour, independently of the shared daily snapshot. Other ticks are audited skips and never count as data freshness. LINE credit digests are paused; Progress Tests digests require today’s successful refresh. See [operating procedure](../operations/credit-control-retirement.md).
 
 **Status:** Stable. **Authoritative source:** [`vercel.json`](../../vercel.json).

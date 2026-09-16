@@ -148,7 +148,8 @@ export async function runCreditControlSyncRequest(options: { triggerSource?: "cr
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
   const now = new Date();
   const retired = !creditControlActive();
-  const guard = retired && options.triggerSource === "cron"
+  const dailyOnly = retired && process.env.TUTOR_SIT_INS_ENABLED !== "true";
+  const guard = dailyOnly && options.triggerSource === "cron"
     ? await claimDailyRefresh(db, "shared", now, tx => acquireSyncRun(tx, now))
     : await acquireSyncRun(db, now);
 
@@ -161,7 +162,7 @@ export async function runCreditControlSyncRequest(options: { triggerSource?: "cr
   const result = await runCreditControlSync(db, client, instituteId, now, {
     syncRunId: guard.syncRunId,
     ...(retired ? { signal, requireComplete: true } : {}),
-    runMetadata: retired && options.triggerSource === "cron" ? { dailyDate: bangkokDailyWindow(now, "shared").day, dailySlot: bangkokDailyWindow(now, "shared").slot, dailyTrigger: "cron" } : {},
+    runMetadata: dailyOnly && options.triggerSource === "cron" ? { dailyDate: bangkokDailyWindow(now, "shared").day, dailySlot: bangkokDailyWindow(now, "shared").slot, dailyTrigger: "cron" } : {},
   });
 
   return NextResponse.json({
