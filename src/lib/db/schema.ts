@@ -5865,7 +5865,9 @@ export const tutorSitInObservations = pgTable(
     current: boolean("current").notNull().default(true),
     invalidReason: text("invalid_reason"),
     calendarId: text("calendar_id").notNull(),
-    eventId: text("event_id").notNull(),
+    calendarProvider: text("calendar_provider").$type<"google" | "microsoft">().notNull().default("google"),
+    calendarAccountId: text("calendar_account_id"),
+    eventId: text("event_id"),
     eventEtag: text("event_etag"),
     eventUrl: text("event_url"),
     calendarStatus: text("calendar_status").notNull().default("pending"),
@@ -5880,11 +5882,13 @@ export const tutorSitInObservations = pgTable(
       .where(sql`${t.current} = true`),
     uniqueIndex("sit_in_calendar_event").on(
       t.observerEmail,
+      t.calendarProvider,
       t.calendarId,
       t.eventId,
     ),
     index("sit_in_observer_times").on(t.observerEmail, t.startTime),
     check("sit_in_time_order", sql`${t.endTime} > ${t.startTime}`),
+    check("sit_in_observation_provider", sql`${t.calendarProvider} IN ('google','microsoft')`),
   ],
 );
 
@@ -5930,8 +5934,12 @@ export const tutorSitInCalendarConnections = pgTable(
   "tutor_sit_in_calendar_connections",
   {
     email: text("email").primaryKey(),
-    googleEmail: text("google_email").notNull(),
-    googleSubject: text("google_subject").notNull(),
+    provider: text("provider").$type<"google" | "microsoft">().notNull().default("google"),
+    providerAccountId: text("provider_account_id"),
+    accountEmail: text("account_email"),
+    // Retained for rolling Google releases; Microsoft connections leave these null.
+    googleEmail: text("google_email"),
+    googleSubject: text("google_subject"),
     accessTokenCiphertext: text("access_token_ciphertext").notNull(),
     refreshTokenCiphertext: text("refresh_token_ciphertext"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
@@ -5947,6 +5955,7 @@ export const tutorSitInCalendarConnections = pgTable(
       .notNull()
       .defaultNow(),
   },
+  (t) => [check("sit_in_calendar_provider", sql`${t.provider} IN ('google','microsoft')`)],
 );
 
 export const tutorSitInCommunications = pgTable(

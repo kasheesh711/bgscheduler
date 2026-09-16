@@ -31,14 +31,19 @@ import {
 } from "../repository";
 import { EMPTY_REPORT, RUBRIC } from "../rubric";
 import { type Lesson, HEADS, titleScopes, titleDepartments } from "../model";
-import { encryptToken } from "@/lib/sales-dashboard/google-oauth";
+import { readFileSync } from "node:fs";
+import { decryptToken, encryptToken } from "@/lib/sales-dashboard/google-oauth";
 import {
   CALENDAR_SCOPES,
-  googleBusy,
+  finishCalendarOAuth,
+  calendarProvider,
+  calendarConnection,
+  calendarBusy,
   disconnectCalendar,
   beginCalendarOAuth,
   verifyOAuthState,
 } from "../calendar";
+import { MICROSOFT_SCOPES, OBSERVATION_PROPERTY } from "../calendar-microsoft";
 import {
   processJobs,
   eventMatches,
@@ -111,6 +116,9 @@ beforeEach(async () => {
   vi.unstubAllGlobals();
   vi.stubEnv("TUTOR_SIT_INS_ENABLED", "true");
   vi.stubEnv("TUTOR_SIT_INS_DELIVERY_ENABLED", "true");
+  vi.stubEnv("TUTOR_SIT_INS_MICROSOFT_ENABLED", "true");
+  vi.stubEnv("TUTOR_SIT_INS_MICROSOFT_CLIENT_ID", "ms-client");
+  vi.stubEnv("TUTOR_SIT_INS_MICROSOFT_CLIENT_SECRET", "ms-secret");
   vi.stubEnv("VERCEL_ENV", "development");
   vi.stubEnv("PREVIEW_SANDBOX_ENABLED", "false");
   vi.stubEnv("AUTH_SECRET", "test-only-sit-in-encryption-key");
@@ -829,7 +837,7 @@ describe("isolated Calendar and email delivery", () => {
     observation: Awaited<ReturnType<typeof booking>>["observation"],
   ) {
     return {
-      id: observation.eventId,
+      id: observation.eventId!,
       etag: "etag",
       description:
         "Quarterly tutor observation. Details: http://localhost:3000/tutor-sit-ins/" +
@@ -899,7 +907,7 @@ describe("isolated Calendar and email delivery", () => {
       });
     });
     vi.stubGlobal("fetch", fetcher);
-    const busy = await googleBusy(
+    const busy = await calendarBusy(
       email,
       new Date(lesson.start),
       new Date(lesson.end),
@@ -1024,9 +1032,325 @@ describe("isolated Calendar and email delivery", () => {
       .update(s.tutorSitInObservations)
       .set({ current: false, calendarStatus: "cancelled" })
       .where(eq(s.tutorSitInObservations.id, b.observation.id));
+    await expect(disconnectCalendar(email, db)).rejects.toThrow(
+      "calendar jobs",
+    );
+    await db.update(s.tutorSitInJobs).set({ status: "sent" });
     await disconnectCalendar(email, db);
     expect(
       await db.select().from(s.tutorSitInCalendarConnections),
     ).toHaveLength(0);
+  });
+});
+
+describe("Outlook account and booking persistence", () => {
+  async function microsoft() {
+    await db
+      .update(s.tutorSitInCalendarConnections)
+      .set({
+        provider: "microsoft",
+        providerAccountId: "microsoft-head",
+        accountEmail: "apivit.s@hotmail.com",
+        googleSubject: null,
+        googleEmail: null,
+        scope: MICROSOFT_SCOPES.join(" "),
+      });
+  }
+  function graphEvent(
+    observation: Awaited<ReturnType<typeof booking>>["observation"],
+    id = "Immutable+ID/Case",
+  ) {
+    return {
+      id,
+      subject: "BeGifted Sit-in · " + lesson.title + " · " + lesson.tutorName,
+      body: {
+        contentType: "text",
+        content:
+          "Quarterly tutor observation. Details: http://localhost:3000/tutor-sit-ins/" +
+          observation.assignmentId,
+      },
+      location: { displayName: lesson.location },
+      sensitivity: "private",
+      start: { dateTime: lesson.start, timeZone: "UTC" },
+      end: { dateTime: lesson.end, timeZone: "UTC" },
+      attendees: [{ emailAddress: { address: "tutor@example.test" } }],
+      singleValueExtendedProperties: [
+        { id: OBSERVATION_PROPERTY, value: observation.id },
+      ],
+    };
+  }
+  const primary = {
+    id: "primary",
+    name: "Calendar",
+    owner: { address: "apivit.s@hotmail.com" },
+    canEdit: true,
+    canShare: true,
+  };
+  function graph(
+    handler: (url: string, init?: RequestInit) => Response | Promise<Response>,
+  ) {
+    const fetcher = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://graph.microsoft.com/v1.0/me/calendar")
+        return Response.json(primary);
+      if (url.includes("/me/calendars?"))
+        return Response.json({ value: [primary] });
+      return handler(url, init);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    return fetcher;
+  }
+  it.each(["apivit.s@hotmail.com", "observer@school.example"])(
+    "connects verified personal/work account %s without changing site grants",
+    async (mail) => {
+      graph((url) =>
+        url.includes("oauth2")
+          ? Response.json({
+              access_token: "ms-access",
+              refresh_token: "ms-refresh",
+              expires_in: 3600,
+              scope: MICROSOFT_SCOPES.join(" "),
+            })
+          : Response.json({
+              id: "new-ms-account",
+              mail,
+              userPrincipalName: mail,
+            }),
+      );
+      const begin = beginCalendarOAuth(
+        email,
+        "http://localhost:3000",
+        "microsoft",
+      );
+      const url = new URL(begin.url);
+      expect(url.pathname).toBe("/common/oauth2/v2.0/authorize");
+      expect(url.searchParams.get("code_challenge_method")).toBe("S256");
+      expect(url.searchParams.get("scope")).toContain("offline_access");
+      const state = verifyOAuthState(
+        begin.cookie,
+        url.searchParams.get("state")!,
+        email,
+        Date.now(),
+        "microsoft",
+      );
+      expect(() =>
+        verifyOAuthState(begin.cookie, url.searchParams.get("state")!, email),
+      ).toThrow();
+      await finishCalendarOAuth(email, "code", state, db);
+      const connection = await calendarConnection(email, db);
+      expect(connection).toMatchObject({
+        provider: "microsoft",
+        providerAccountId: "new-ms-account",
+        accountEmail: mail,
+        googleEmail: null,
+      });
+      expect(connection.accessTokenCiphertext).not.toBe("ms-access");
+      expect((await accessForEmail(email, db)).role).toBe("observer");
+      expect(await db.select().from(s.adminUsers)).toHaveLength(1);
+    },
+  );
+  it("persists rotated refresh credentials and sends immutable UTC/text preferences", async () => {
+    await microsoft();
+    await db
+      .update(s.tutorSitInCalendarConnections)
+      .set({
+        expiresAt: new Date("2020-01-01"),
+        refreshTokenCiphertext: encryptToken("old-refresh"),
+      });
+    const fetcher = graph((url) => {
+      expect(url).toContain("oauth2/v2.0/token");
+      return Response.json({
+        access_token: "fresh-access",
+        refresh_token: "rotated-refresh",
+        expires_in: 3600,
+        scope: MICROSOFT_SCOPES.join(" "),
+      });
+    });
+    await (await calendarProvider(email, db)).provider.list();
+    const connection = await calendarConnection(email, db);
+    expect(decryptToken(connection.refreshTokenCiphertext)).toBe(
+      "rotated-refresh",
+    );
+    const headers = fetcher.mock.calls.find(([url]) =>
+      String(url).includes("graph.microsoft.com"),
+    )![1]!.headers as Record<string, string>;
+    expect(headers.Prefer).toContain('IdType="ImmutableId"');
+    expect(headers.Prefer).toContain('outlook.timezone="UTC"');
+    expect(
+      fetcher.mock.calls.filter(([url]) => String(url).includes("oauth2")),
+    ).toHaveLength(1);
+  });
+  it("keeps an uncertain Outlook creation to one invitation and stamps provider identity", async () => {
+    await microsoft();
+    const b = await booking();
+    expect(b.observation).toMatchObject({
+      calendarProvider: "microsoft",
+      calendarAccountId: "microsoft-head",
+      eventId: null,
+    });
+    let existing: ReturnType<typeof graphEvent> | null = null,
+      writes = 0;
+    graph((_url, init) => {
+      if (init?.method === "POST") {
+        writes++;
+        existing = graphEvent(b.observation);
+        return Response.json({}, { status: 503 });
+      }
+      return Response.json({ value: existing ? [existing] : [] });
+    });
+    expect((await processJobs(db, { limit: 1 })).failed).toBe(1);
+    await db.update(s.tutorSitInJobs).set({ retryAt: new Date("2026-09-01") });
+    expect((await processJobs(db, { limit: 1 })).failed).toBe(0);
+    expect(writes).toBe(1);
+    const [observation] = await db.select().from(s.tutorSitInObservations);
+    expect(observation).toMatchObject({
+      eventId: "Immutable+ID/Case",
+      calendarStatus: "synced",
+    });
+    expect(
+      vi.mocked(verifyLiveLesson).mock.calls.at(-1)![4]!.observation!.eventId,
+    ).toBe("Immutable+ID/Case");
+  });
+  it("keeps cleanup working after rollout rollback and retries cancellation safely", async () => {
+    await microsoft();
+    const b = await booking();
+    const event = graphEvent(b.observation);
+    await db
+      .update(s.tutorSitInObservations)
+      .set({ eventId: event.id, calendarStatus: "synced" });
+    await db.update(s.tutorSitInJobs).set({ status: "sent" });
+    const [observation] = await db.select().from(s.tutorSitInObservations);
+    await invalidateObservation(db, observation, "Cancelled", manager);
+    await db
+      .update(s.tutorSitInJobs)
+      .set({ status: "sent" })
+      .where(sql`kind <> 'calendar_delete'`);
+    vi.stubEnv("TUTOR_SIT_INS_MICROSOFT_ENABLED", "false");
+    let deletes = 0;
+    graph((_url, init) => {
+      if (init?.method === "DELETE") {
+        deletes++;
+        return Response.json({}, { status: 503 });
+      }
+      return deletes
+        ? Response.json({}, { status: 404 })
+        : Response.json(event);
+    });
+    expect((await processJobs(db, { limit: 1 })).failed).toBe(1);
+    await db.update(s.tutorSitInJobs).set({ retryAt: new Date("2026-09-01") });
+    expect((await processJobs(db, { limit: 1 })).failed).toBe(0);
+    expect(deletes).toBe(1);
+    expect(
+      (await db.select().from(s.tutorSitInObservations))[0].calendarStatus,
+    ).toBe("cancelled");
+    expect(() =>
+      beginCalendarOAuth(email, "http://localhost:3000", "microsoft"),
+    ).toThrow("not enabled");
+  });
+  it("rejects account switches while future bookings or old unfinished jobs exist", async () => {
+    const b = await booking();
+    graph((url) =>
+      url.includes("oauth2")
+        ? Response.json({
+            access_token: "new",
+            refresh_token: "new",
+            expires_in: 3600,
+            scope: MICROSOFT_SCOPES.join(" "),
+          })
+        : Response.json({ id: "new-account", mail: "another@hotmail.com" }),
+    );
+    const begin = beginCalendarOAuth(
+      email,
+      "http://localhost:3000",
+      "microsoft",
+    );
+    const state = verifyOAuthState(
+      begin.cookie,
+      new URL(begin.url).searchParams.get("state")!,
+      email,
+      Date.now(),
+      "microsoft",
+    );
+    await expect(finishCalendarOAuth(email, "code", state, db)).rejects.toThrow(
+      "calendar jobs",
+    );
+    vi.setSystemTime(new Date("2026-11-01"));
+    await expect(disconnectCalendar(email, db)).rejects.toThrow(
+      "calendar jobs",
+    );
+    await db.update(s.tutorSitInJobs).set({ status: "sent" });
+    await finishCalendarOAuth(email, "code", state, db);
+    await expect(calendarProvider(email, db, b.observation)).rejects.toThrow(
+      "different calendar account",
+    );
+  });
+  it("serializes account switches with active booking operations", async () => {
+    await withObserverOperation(db, email, async () => {
+      await expect(disconnectCalendar(email, db)).rejects.toThrow(
+        "Another observation",
+      );
+    });
+    expect(
+      await db.select().from(s.tutorSitInCalendarConnections),
+    ).toHaveLength(1);
+  });
+  it("blocks new Outlook bookings when the rollout flag is off", async () => {
+    await microsoft();
+    vi.stubEnv("TUTOR_SIT_INS_MICROSOFT_ENABLED", "false");
+    await expect(booking()).rejects.toMatchObject({
+      code: "MICROSOFT_DISABLED",
+    });
+    expect(await db.select().from(s.tutorSitInObservations)).toHaveLength(0);
+  });
+  it("preserves historical Google fields in migration without touching ciphertext or selected calendars", async () => {
+    const client = await handle.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        "CREATE TEMP TABLE tutor_sit_in_calendar_connections (email text PRIMARY KEY, google_email text NOT NULL, google_subject text NOT NULL, access_token_ciphertext text, busy_calendar_ids jsonb) ON COMMIT DROP",
+      );
+      await client.query(
+        "CREATE TEMP TABLE tutor_sit_in_observations (observer_email text, calendar_id text, event_id text NOT NULL) ON COMMIT DROP",
+      );
+      await client.query(
+        "CREATE UNIQUE INDEX sit_in_calendar_event ON tutor_sit_in_observations(observer_email, calendar_id, event_id)",
+      );
+      await client.query(
+        "INSERT INTO tutor_sit_in_calendar_connections VALUES ($1,$2,$3,$4,$5)",
+        [
+          "head",
+          "calendar@google.test",
+          "old-sub",
+          "unchanged-ciphertext",
+          JSON.stringify(["primary", "selected"]),
+        ],
+      );
+      await client.query(
+        "INSERT INTO tutor_sit_in_observations VALUES ('head','primary','old-event')",
+      );
+      await client.query(
+        readFileSync("drizzle/0092_sit_in_calendar_providers.sql", "utf8"),
+      );
+      expect(
+        (await client.query("SELECT * FROM tutor_sit_in_calendar_connections"))
+          .rows[0],
+      ).toMatchObject({
+        provider: "google",
+        provider_account_id: "old-sub",
+        account_email: "calendar@google.test",
+        access_token_ciphertext: "unchanged-ciphertext",
+        busy_calendar_ids: ["primary", "selected"],
+      });
+      expect(
+        (await client.query("SELECT * FROM tutor_sit_in_observations")).rows[0],
+      ).toMatchObject({
+        calendar_provider: "google",
+        calendar_account_id: "old-sub",
+        event_id: "old-event",
+      });
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
   });
 });

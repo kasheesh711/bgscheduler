@@ -20,7 +20,7 @@ import {
   isBlockingStatus,
   sessionStudentIds,
 } from "@/lib/normalization/sessions";
-import { googleBusy } from "./calendar";
+import { calendarBusy } from "./calendar";
 import { resolveObserver } from "./access";
 import {
   type Department,
@@ -315,7 +315,7 @@ export function snapshotAvailable(
       }),
   );
 }
-export type SuggestionCache = Map<string, ReturnType<typeof googleBusy>>;
+export type SuggestionCache = Map<string, ReturnType<typeof calendarBusy>>;
 export async function suggestionsFor(
   assignment: typeof s.tutorSitInAssignments.$inferSelect,
   sources: Sources,
@@ -397,9 +397,9 @@ export async function suggestionsFor(
     const end = new Date(
       Math.max(...sources.lessons.map((l) => Date.parse(l.end))),
     );
-    cache.set(head.email, googleBusy(head.email, now, end, db));
+    cache.set(head.email, calendarBusy(head.email, now, end, db));
   }
-  let busy: Awaited<ReturnType<typeof googleBusy>> = [];
+  let busy: Awaited<ReturnType<typeof calendarBusy>> = [];
   let pending: ReadinessIssue | undefined;
   try {
     busy = await cache.get(head.email)!;
@@ -623,12 +623,12 @@ export async function verifyLiveLesson(
     fetchWiseSessionDetail(client, proposed.classId, proposed.id, {
       deadlineAt,
     }),
-    googleBusy(
+    calendarBusy(
       observer.email,
       start,
       end,
       db,
-      options.observation
+      options.observation?.eventId
         ? {
             calendarId: options.observation.calendarId,
             eventId: options.observation.eventId,
@@ -706,7 +706,7 @@ export async function verifyLiveLesson(
   if (busy.some((b) => overlap({ start, end }, b)))
     throw new SitInError(
       409,
-      "The observer is busy in Google Calendar.",
+      "The observer is busy in Calendar.",
       "HEAD_UNAVAILABLE",
     );
   const ids = sessionStudentIds(

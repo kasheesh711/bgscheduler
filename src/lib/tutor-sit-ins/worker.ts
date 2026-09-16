@@ -14,9 +14,10 @@ import { accessForEmail, assertScope } from "./access";
 import {
   appOrigin,
   calendarConnection,
-  calendarRequest,
-  type GoogleEvent,
+  calendarProvider,
+  assertCalendarBooking,
 } from "./calendar";
+import type { CalendarEvent } from "./calendar-provider";
 import {
   assertDeliveryRecipients,
   scopeOf,
@@ -48,10 +49,12 @@ import {
   type SuggestionCache,
 } from "./sources";
 
-export function eventMatches(observation: Observation, event: GoogleEvent) {
+export function eventMatches(observation: Observation, event: CalendarEvent) {
   return (
     event.id === observation.eventId &&
     event.status !== "cancelled" &&
+    (observation.calendarProvider !== "microsoft" ||
+      event.visibility === "private") &&
     event.extendedProperties?.private?.sitInObservationId === observation.id &&
     Date.parse(event.start?.dateTime || "") ===
       observation.startTime.getTime() &&
@@ -72,21 +75,47 @@ export function eventMatches(observation: Observation, event: GoogleEvent) {
     (event.location || "") === (observation.lesson.location || "")
   );
 }
-export async function observationEvent(observation: Observation, db: Database) {
-  try {
-    return await calendarRequest<GoogleEvent>(
-      observation.observerEmail,
-      "calendars/" +
-        encodeURIComponent(observation.calendarId) +
-        "/events/" +
-        observation.eventId,
-      {},
-      db,
-    );
-  } catch (e) {
-    if (e instanceof SitInError && e.status === 404) return null;
-    throw e;
+async function rememberEventId(
+  observation: Observation,
+  event: CalendarEvent | null,
+  db: Database,
+) {
+  if (event && !observation.eventId) {
+    if (
+      event.extendedProperties?.private?.sitInObservationId !== observation.id
+    )
+      throw new SitInError(
+        409,
+        "Calendar event ownership could not be verified.",
+      );
+    await db
+      .update(s.tutorSitInObservations)
+      .set({ eventId: event.id })
+      .where(
+        and(
+          eq(s.tutorSitInObservations.id, observation.id),
+          isNull(s.tutorSitInObservations.eventId),
+        ),
+      );
+    observation.eventId = event.id;
   }
+  return event;
+}
+export async function observationEvent(observation: Observation, db: Database) {
+  const { provider } = await calendarProvider(
+    observation.observerEmail,
+    db,
+    observation,
+  );
+  return rememberEventId(
+    observation,
+    await provider.findEvent({
+      calendarId: observation.calendarId,
+      eventId: observation.eventId,
+      observationId: observation.id,
+    }),
+    db,
+  );
 }
 export async function publishObservation(observationId: string, db: Database) {
   const [initial] = await db
@@ -119,7 +148,7 @@ export async function publishObservation(observationId: string, db: Database) {
       if (event && !eventMatches(observation, event))
         throw new SitInError(
           409,
-          "The Google event was changed. Choose a replacement observation.",
+          "The calendar event was changed. Choose a replacement observation.",
           "LESSON_CHANGED",
         );
       if (!event || observation.startTime > new Date()) {
@@ -140,48 +169,44 @@ export async function publishObservation(observationId: string, db: Database) {
         observation.observerEmail,
         db,
       );
-      assertDeliveryRecipients([connection.googleEmail, tutorEmail]);
+      assertDeliveryRecipients([connection.accountEmail, tutorEmail]);
       if (!event) {
         requireNotice(observation.startTime);
-        const body = {
-          id: observation.eventId,
-          summary:
-            "BeGifted Sit-in · " +
-            observation.lesson.title +
-            " · " +
-            observation.lesson.tutorName,
-          description:
-            "Quarterly tutor observation. Details: " +
-            appOrigin() +
-            "/tutor-sit-ins/" +
-            assignment.id,
-          location: observation.lesson.location || "",
-          start: {
-            dateTime: observation.startTime.toISOString(),
-            timeZone: ZONE,
-          },
-          end: { dateTime: observation.endTime.toISOString(), timeZone: ZONE },
-          attendees: [{ email: tutorEmail }],
-          guestsCanModify: false,
-          guestsCanInviteOthers: false,
-          visibility: "private",
-          extendedProperties: {
-            private: { sitInObservationId: observation.id },
-          },
-        };
-        try {
-          event = await calendarRequest<GoogleEvent>(
-            observation.observerEmail,
-            "calendars/" +
-              encodeURIComponent(observation.calendarId) +
-              "/events?sendUpdates=all",
-            { method: "POST", body: JSON.stringify(body) },
-            db,
+        assertCalendarBooking(observation.calendarProvider);
+        if (observation.calendarStatus === "synced")
+          throw new SitInError(
+            409,
+            "The calendar event was deleted. Choose a replacement observation.",
+            "LESSON_CHANGED",
           );
-        } catch (e) {
-          if (!(e instanceof SitInError) || e.code !== "GOOGLE_409") throw e;
-          event = await observationEvent(observation, db);
-        }
+        const { provider } = await calendarProvider(
+          observation.observerEmail,
+          db,
+          observation,
+        );
+        event = await rememberEventId(
+          observation,
+          await provider.createEvent({
+            observationId: observation.id,
+            eventId: observation.eventId,
+            calendarId: observation.calendarId,
+            summary:
+              "BeGifted Sit-in · " +
+              observation.lesson.title +
+              " · " +
+              observation.lesson.tutorName,
+            description:
+              "Quarterly tutor observation. Details: " +
+              appOrigin() +
+              "/tutor-sit-ins/" +
+              assignment.id,
+            location: observation.lesson.location || "",
+            start: observation.startTime,
+            end: observation.endTime,
+            tutorEmail,
+          }),
+          db,
+        );
       }
       if (
         !event ||
@@ -399,7 +424,7 @@ export async function processJobs(
             db,
           );
           assertDeliveryRecipients([
-            connection.googleEmail,
+            connection.accountEmail,
             obsolete.lesson.tutorEmail || "",
           ]);
           await withObserverOperation(
@@ -409,7 +434,7 @@ export async function processJobs(
               const event = await observationEvent(obsolete, db);
               if (event && event.status !== "cancelled") {
                 assertDeliveryRecipients([
-                  connection.googleEmail,
+                  connection.accountEmail,
                   ...(event.attendees || []).map(
                     (attendee) => attendee.email || "",
                   ),
@@ -423,16 +448,16 @@ export async function processJobs(
                     "Calendar event ownership could not be verified.",
                   );
                 await assertLease();
-                await calendarRequest(
+                const { provider } = await calendarProvider(
                   obsolete.observerEmail,
-                  "calendars/" +
-                    encodeURIComponent(obsolete.calendarId) +
-                    "/events/" +
-                    obsolete.eventId +
-                    "?sendUpdates=all",
-                  { method: "DELETE" },
                   db,
+                  obsolete,
                 );
+                await provider.cancelEvent({
+                  calendarId: obsolete.calendarId,
+                  eventId: obsolete.eventId,
+                  observationId: obsolete.id,
+                });
               }
               await db
                 .update(s.tutorSitInObservations)
@@ -760,7 +785,7 @@ export async function reconcileObservation(
     if (!event || !eventMatches(observation, event))
       throw new SitInError(
         409,
-        "The Google observation event changed or was removed.",
+        "The calendar observation event changed or was removed.",
         "LESSON_CHANGED",
       );
     await verifyLiveLesson(assignment, observation.lesson, sources, db, {

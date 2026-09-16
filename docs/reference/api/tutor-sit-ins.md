@@ -1,6 +1,6 @@
 # Tutor Sit-ins API
 
-All workspace routes require Google sign-in, the feature flag, an enabled account and fresh feature authorization. Responses are `private, no-store`. Mutations require an `Origin` matching the request origin. Inputs are strict Zod objects; unknown properties are rejected. IDs are UUIDs except Wise IDs. `expectedRevision` is the last revision read; conflicting edits return 409.
+All workspace routes require Google or email-code sign-in, the feature flag, an enabled account and fresh feature authorization. Responses are `private, no-store`. Mutations require an `Origin` matching the request origin. Inputs are strict Zod objects; unknown properties are rejected. IDs are UUIDs except Wise IDs. `expectedRevision` is the last revision read; conflicting edits return 409.
 
 | Method | Path | Contract |
 |---|---|---|
@@ -13,11 +13,12 @@ All workspace routes require Google sign-in, the feature flag, an enabled accoun
 | POST | `/api/tutor-sit-ins/{assignmentId}/book` | `{sessionId,expectedRevision}`. Assigned head or manager confirms after live checks; exact repeat returns the existing booking. Up to 300 seconds. |
 | PUT | `/api/tutor-sit-ins/reports/{reportId}` | `{expectedRevision,submit,data}`. Only the actual observer may write. `data`: `scores` and optional criterion `notes`, `strengths`, `priorities`, `nextSteps`, `occurred`. Returns the saved report with server score, revision and late/submission state. |
 | PATCH | `/api/tutor-sit-ins/communications/{communicationId}` | Staff `{expectedRevision,audience:"parent"\|"student"}` acknowledgement. Manager resolution: `{action:"resolve",expectedRevision,familyKey,parentName,reason}`. |
-| GET | `/api/tutor-sit-ins/calendar` | Current account's connection status, safe calendar list, selection, revision and errors; no tokens. |
+| GET | `/api/tutor-sit-ins/calendar` | Connection status, `provider`, `accountEmail`, `availableProviders`, safe calendar list, selection, revision and errors; no tokens. |
 | PATCH | `/api/tutor-sit-ins/calendar` | `{calendarId,busyCalendarIds,expectedRevision}`; owned destination required. |
 | DELETE | `/api/tutor-sit-ins/calendar` | Disconnect current account after outstanding event withdrawals finish. |
-| POST | `/api/tutor-sit-ins/calendar/connect` | Sets encrypted HttpOnly OAuth state cookie; returns `{url}` for separate Google consent. |
+| POST | `/api/tutor-sit-ins/calendar/connect` | `{provider:"google"|"microsoft"}`; omitted provider defaults to Google. Sets encrypted HttpOnly OAuth state cookie; returns `{url}` for calendar consent. |
 | GET | `/api/tutor-sit-ins/calendar/callback` | Verifies session/state, exchanges code, stores encrypted credentials; redirects to dashboard with `calendar=connected` or `calendar=error`. Codes/provider bodies are not logged. |
+| GET | `/api/tutor-sit-ins/calendar/microsoft/callback` | Microsoft-specific session/state/PKCE callback. Same safe redirect and cookie cleanup as Google. |
 | GET | `/api/internal/tutor-sit-ins` | Cron-secret only, monitored worker; every ten minutes; 300-second maximum. |
 | GET | `/api/internal/tutor-sit-ins/digest` | Cron-secret only, queues daily digest and drains outbox at 08:00 Bangkok; 300-second maximum. |
 

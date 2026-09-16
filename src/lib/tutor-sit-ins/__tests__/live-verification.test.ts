@@ -7,7 +7,7 @@ import {
 } from "@/lib/wise/fetchers";
 import { fetchWiseSessionsForBangkokDates } from "@/lib/wise/day-sessions";
 import { resolveObserver } from "../access";
-import { googleBusy } from "../calendar";
+import { calendarBusy } from "../calendar";
 import { verifyLiveLesson, type Sources } from "../sources";
 import { HEADS, type Lesson } from "../model";
 import type { WiseSession } from "@/lib/wise/types";
@@ -21,7 +21,7 @@ vi.mock("@/lib/wise/day-sessions", () => ({
   fetchWiseSessionsForBangkokDates: vi.fn(),
 }));
 vi.mock("../access", () => ({ resolveObserver: vi.fn() }));
-vi.mock("../calendar", () => ({ googleBusy: vi.fn() }));
+vi.mock("../calendar", () => ({ calendarBusy: vi.fn() }));
 
 const lesson: Lesson = {
   id: "lesson",
@@ -120,7 +120,7 @@ beforeEach(() => {
     students: undefined,
     participants: ["other-non-student-id"],
   });
-  vi.mocked(googleBusy).mockResolvedValue([]);
+  vi.mocked(calendarBusy).mockResolvedValue([]);
 });
 const verify = () => verifyLiveLesson(assignment, lesson, sources, db, { now });
 describe("live booking verification", () => {
@@ -139,7 +139,7 @@ describe("live booking verification", () => {
       ["2026-10-01"],
       expect.objectContaining({ now }),
     );
-    expect(googleBusy).toHaveBeenCalledWith(
+    expect(calendarBusy).toHaveBeenCalledWith(
       HEADS[0].email,
       new Date(lesson.start),
       new Date(lesson.end),
@@ -202,11 +202,11 @@ describe("live booking verification", () => {
     },
   );
   it("rejects personal Google conflicts and unavailable Google evidence", async () => {
-    vi.mocked(googleBusy).mockResolvedValue([
+    vi.mocked(calendarBusy).mockResolvedValue([
       { start: new Date(lesson.start), end: new Date(lesson.end) },
     ]);
     await expect(verify()).rejects.toMatchObject({ code: "HEAD_UNAVAILABLE" });
-    vi.mocked(googleBusy).mockRejectedValue(new Error("Provider unavailable"));
+    vi.mocked(calendarBusy).mockRejectedValue(new Error("Provider unavailable"));
     await expect(verify()).rejects.toMatchObject({
       code: "SOURCE_UNAVAILABLE",
     });

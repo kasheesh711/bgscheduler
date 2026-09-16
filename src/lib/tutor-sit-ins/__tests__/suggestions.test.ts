@@ -2,11 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Database } from "@/lib/db";
 import type { IndexedTutorGroup } from "@/lib/search/index";
 import type { Assignment } from "../repository";
-import { googleBusy } from "../calendar";
+import { calendarBusy } from "../calendar";
 import { resolveObserver } from "../access";
 import { suggestionsFor, snapshotAvailable, type Sources } from "../sources";
 import { SitInError, type Lesson } from "../model";
-vi.mock("../calendar", () => ({ googleBusy: vi.fn() }));
+vi.mock("../calendar", () => ({ calendarBusy: vi.fn() }));
 vi.mock("../access", () => ({ resolveObserver: vi.fn() }));
 const now = new Date("2026-09-30T00:00:00Z");
 const lesson: Lesson = {
@@ -97,7 +97,7 @@ beforeEach(() => {
     scopes: ["science"],
     name: "Head",
   });
-  vi.mocked(googleBusy).mockRejectedValue(
+  vi.mocked(calendarBusy).mockRejectedValue(
     new SitInError(409, "Connect Calendar first.", "CALENDAR_RECONNECT"),
   );
 });
@@ -162,7 +162,7 @@ describe("observation-specific availability", () => {
     await expect(suggest()).rejects.toMatchObject({
       code: "WISE_VERIFICATION_PENDING",
     });
-    expect(googleBusy).not.toHaveBeenCalled();
+    expect(calendarBusy).not.toHaveBeenCalled();
   });
   it("rejects competing observations and less than 24 hours notice", async () => {
     bookings.push({
@@ -181,13 +181,13 @@ describe("observation-specific availability", () => {
     ).toEqual([]);
   });
   it("distinguishes connected, busy, disconnected and temporarily unavailable Google calendars", async () => {
-    vi.mocked(googleBusy).mockResolvedValue([]);
+    vi.mocked(calendarBusy).mockResolvedValue([]);
     expect(await suggest()).toMatchObject([{ verification: "verified" }]);
-    vi.mocked(googleBusy).mockResolvedValue([
+    vi.mocked(calendarBusy).mockResolvedValue([
       { start: new Date(lesson.start), end: new Date(lesson.end) },
     ]);
     expect(await suggest()).toEqual([]);
-    vi.mocked(googleBusy).mockRejectedValue(new Error("429"));
+    vi.mocked(calendarBusy).mockRejectedValue(new Error("429"));
     expect(await suggest()).toMatchObject([
       { verification: "wise_only", issues: [{ code: "CALENDAR_UNAVAILABLE" }] },
     ]);
@@ -204,6 +204,6 @@ describe("observation-specific availability", () => {
     expect(await suggestionsFor(assignment, sources, db, now, cache)).toEqual(
       a,
     );
-    expect(googleBusy).toHaveBeenCalledTimes(1);
+    expect(calendarBusy).toHaveBeenCalledTimes(1);
   });
 });

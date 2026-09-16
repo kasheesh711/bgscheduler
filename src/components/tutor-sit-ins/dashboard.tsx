@@ -145,14 +145,14 @@ export function SitInDashboard({
         </header>
         {calendarResult === "error" && (
           <Notice error>
-            Google Calendar connection was not completed. Open Calendar setup
-            and reconnect.
+            Calendar connection was not completed. Open Calendar setup and
+            reconnect.
           </Notice>
         )}
         {calendarResult === "connected" && (
           <Notice>
-            Google Calendar connected. Review the calendars selected for
-            conflict checking below.
+            Calendar connected. Review the calendars selected for conflict
+            checking below.
           </Notice>
         )}
         {error && (
@@ -176,7 +176,7 @@ export function SitInDashboard({
             <ul className="mt-2 space-y-1">
               {data.deliveryIssues.slice(0, 5).map((issue) => (
                 <li key={issue.id}>
-                  {issue.recipient || "Google Calendar"}:{" "}
+                  {issue.recipient || "Calendar"}:{" "}
                   {issue.error || "Delivery could not complete."}
                 </li>
               ))}
@@ -397,7 +397,7 @@ export function SitInDashboard({
                             (s) => s.verification === "wise_only",
                           ) && (
                             <p className="mt-1 text-xs font-medium text-amber-800 dark:text-amber-300">
-                              Provisional — Google Calendar check pending.
+                              Provisional — Calendar check pending.
                             </p>
                           )}
                           {!!a.readinessIssues?.length && (
@@ -465,20 +465,11 @@ export function SitInDashboard({
         {tab === "calendar" && (
           <div className="max-w-3xl">
             <CalendarSettings />
-            {access.email === "apivit.s@hotmail.com" && (
-              <p className="mt-3 text-sm text-muted-foreground">
-                Use the Google Account associated with your Hotmail address for
-                sign-in.{" "}
-                <a
-                  className="text-primary underline"
-                  href="https://support.google.com/accounts/answer/27441"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Google Account guidance
-                </a>
-              </p>
-            )}
+            <p className="mt-3 text-sm text-muted-foreground">
+              Your calendar account can differ from your sign-in email. Your
+              assigned access stays the same. Finish or cancel upcoming
+              observations before switching accounts.
+            </p>
           </div>
         )}
         {tab === "settings" && access.role === "manager" && (
