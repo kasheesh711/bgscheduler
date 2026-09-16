@@ -21,4 +21,4 @@ Rollback: set `AUTH_EMAIL_CODE_ENABLED=false` and redeploy. Google login and exi
 
 ## Deployment record
 
-Production migration, flag and deployment are pending. Outlook registration requires an owner Microsoft Entra session and observer consent.
+Production migration `0091_email_code_login` was applied on 2026-09-16 after verifying the linked database and existing migration ledger. Ek's existing active observer grant still contains Physics and General Science. Sender verification, flag and deployment are pending. Outlook registration requires an owner Microsoft Entra session and observer consent.
