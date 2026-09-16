@@ -29,10 +29,14 @@ describe("atomic teacher onboarding", () => {
     expect(await handle.db.select().from(schema.tutorContacts)).toHaveLength(1);
     expect(await handle.db.select().from(schema.tutorContactSyncEvents)).toHaveLength(2);
     expect(await resolveTeacherCanonicalKeys("new@example.com", db)).toEqual(["New"]);
+    const [originalAccount] = await handle.db.select().from(schema.tutorWiseAccounts);
     const again = await candidate();
     const result = await promoteWithTutorContacts(db, again);
     expect(result.counts).toEqual({ created: 0, updated: 0, blocked: 0 });
     expect(await handle.db.select().from(schema.tutorContactSyncEvents)).toHaveLength(2);
+    const [unchangedAccount] = await handle.db.select().from(schema.tutorWiseAccounts);
+    expect(unchangedAccount.lastSnapshotId).toBe(again.snapshotId);
+    expect(unchangedAccount.updatedAt).toEqual(originalAccount.updatedAt);
   });
   it("rolls contact changes and audit back when promotion fails", async () => {
     const first = await candidate();
@@ -48,6 +52,7 @@ describe("atomic teacher onboarding", () => {
     }
     expect((await handle.db.select().from(schema.snapshots).where(eq(schema.snapshots.active, true)))[0].id).toBe(first.snapshotId);
     expect((await handle.db.select().from(schema.tutorContacts))[0].onsiteEmail).toBe("new@example.com");
+    expect((await handle.db.select().from(schema.tutorWiseAccounts))[0].lastSnapshotId).toBe(first.snapshotId);
     expect(await handle.db.select().from(schema.tutorContactSyncEvents)).toHaveLength(2);
   });
   it("preserves a human edit that commits while import waits on the contact lock", async () => {

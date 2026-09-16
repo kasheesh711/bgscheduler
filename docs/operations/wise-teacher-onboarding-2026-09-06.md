@@ -27,6 +27,12 @@ contacts. Empty/malformed rosters cannot erase imported contacts. Unchanged
 imports create no audit noise. Missing/invalid/conflicting accounts lose their
 managed email fields without deleting history.
 
+The account `last_snapshot_id` watermark advances whenever a promoted roster
+reconciles that account, including unchanged records. This freshness update
+does not create a content-change audit event or alter `updated_at`. Consumers
+must also inspect account status: an absent or identity-conflicted account is
+not verified merely because its reconciliation marker is current.
+
 Classroom delivery selects a valid non-Online address, then a valid Online
 address. Runtime previews no longer seed hardcoded contacts. Post-Class Feedback
 keeps its primary override and distinct-address conflict policy. Imported
