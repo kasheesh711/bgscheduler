@@ -25,15 +25,21 @@ All workspace routes require Google sign-in, the feature flag, an enabled accoun
 
 ```ts
 { action: "grant", email, role: "observer" | "coordinator" | "manager",
-  departments: Department[], canonicalKey: string | null, active: boolean,
+  departments: Department[], scopes: CoverageScope[], canonicalKey: string | null, active: boolean,
   expectedRevision: number, reason: string }
-{ action: "mapping", classId: string, departments: Department[],
+{ action: "mapping", classId: string, departments: Department[], scopes: CoverageScope[],
   expectedRevision: number, reason: string }
 { action: "assignment", quarter: string, canonicalKey: string,
-  department: Department, reason: string }
+  department: Department, coverageScope: CoverageScope, reason: string }
 ```
 
-Departments: `physics`, `maths`, `english`, `chemistry`, `iseb`. A mapping can contain multiple departments or an explicit empty list. New mapping/grant creation starts at expected revision zero. Reasons are trimmed, 3–1000 characters.
+Departments: `physics`, `maths`, `english`, `chemistry`, `iseb`, `science`. Coverage scopes: the five ordinary subject names plus `iseb_english_vr`, `iseb_maths_vr`, `iseb_other`. Scope and department must agree. Legacy omitted scope fields map `iseb` only to `iseb_other`, never to all strands. A mapping can contain multiple departments or an explicit empty list. New mapping/grant creation starts at expected revision zero. Reasons are trimmed, 3–1000 characters.
+
+## Readiness payloads
+
+Assignments include `coverageScope`, `allocationMode` (`automatic` / `manual`) and `readinessIssues`. Each issue has `code`, `category`, `message`, `action`, and `retryable`. Suggestions include `verification: "wise_only" | "verified"` and their own `issues`. `wise_only` is provisional and cannot be confirmed without live Calendar and Wise checks. Detail includes `deliveryEnabled` for the confirmation control. Superseded obligations are omitted from active lists but their authorized detail and audit history remain available.
+
+Settings class summaries aggregate `students`, `scopes`, `sessionCount`, `rosterPending`, `familyPending`, and `identityPending`; `unresolved` refers only to missing subject mapping. Summary students are display evidence, never a replacement lesson roster.
 
 ## Failure behavior
 
@@ -41,4 +47,4 @@ Departments: `physics`, `maths`, `english`, `chemistry`, `iseb`. A mapping can c
 
 The cron routes use the existing constant-time secret check and `withCronInvocationAudit` monitoring. Worker leases, per-observer operation leases and outbox leases are persisted separately.
 
-_Verified against `codex/tutor-sit-ins` on 2026-09-16._
+_Verified against `codex/sit-in-allocations` on 2026-09-16._

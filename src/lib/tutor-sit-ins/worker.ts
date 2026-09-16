@@ -10,7 +10,7 @@ import {
 } from "@/lib/classrooms/schedule-email";
 import { renderTeacherEmail } from "@/lib/teacher-emails/render";
 import { teacherEmailLogoUrl } from "@/lib/teacher-emails/brand";
-import { accessForEmail, assertDepartment } from "./access";
+import { accessForEmail, assertScope } from "./access";
 import {
   appOrigin,
   calendarConnection,
@@ -19,6 +19,10 @@ import {
 } from "./calendar";
 import {
   assertDeliveryRecipients,
+  scopeOf,
+  scopeLabel,
+  issueFromError,
+  type ReadinessIssue,
   defaultQuarter,
   deliveryEnabled,
   enabled,
@@ -104,7 +108,7 @@ export async function publishObservation(observationId: string, db: Database) {
         .from(s.tutorSitInAssignments)
         .where(eq(s.tutorSitInAssignments.id, observation.assignmentId));
       const access = await accessForEmail(observation.observerEmail, db);
-      assertDepartment(access, assignment.department, true);
+      assertScope(access, scopeOf(assignment), true);
       if (assignment.observerEmail !== observation.observerEmail)
         throw new SitInError(
           409,
@@ -300,7 +304,7 @@ async function digestEmail(email: string, quarter: string, db: Database) {
       ),
     );
   const actionable = rows.filter(
-    (a) => !["completed", "exempt"].includes(a.status),
+    (a) => !["completed", "exempt", "superseded"].includes(a.status),
   );
   if (!actionable.length) return null;
   return renderTeacherEmail({
@@ -320,7 +324,7 @@ async function digestEmail(email: string, quarter: string, db: Database) {
           return (
             a.tutorName +
             " · " +
-            a.department +
+            scopeLabel(a) +
             " · " +
             (observation
               ? "Lesson " +
@@ -455,7 +459,7 @@ export async function processJobs(
             .from(s.tutorSitInAssignments)
             .where(eq(s.tutorSitInAssignments.id, observation.assignmentId));
           try {
-            assertDepartment(recipientAccess, assignment.department);
+            assertScope(recipientAccess, scopeOf(assignment));
           } catch {
             skipped = true;
           }
@@ -629,6 +633,7 @@ export async function runSitInWorker(db: Database = getDb(), now = new Date()) {
         if (["pending", "needs_rescheduling"].includes(assignment.status)) {
           let suggestions: typeof assignment.suggestions = [],
             error: string | null = null;
+          let readinessIssues: ReadinessIssue[] = [];
           try {
             suggestions = await suggestionsFor(
               assignment,
@@ -638,6 +643,7 @@ export async function runSitInWorker(db: Database = getDb(), now = new Date()) {
               cache,
             );
           } catch (e) {
+            readinessIssues = [issueFromError(e)];
             error =
               e instanceof SitInError
                 ? e.message
@@ -645,7 +651,12 @@ export async function runSitInWorker(db: Database = getDb(), now = new Date()) {
           }
           await db
             .update(s.tutorSitInAssignments)
-            .set({ suggestions, suggestionError: error, checkedAt: now })
+            .set({
+              suggestions,
+              suggestionError: error,
+              readinessIssues,
+              checkedAt: now,
+            })
             .where(
               and(
                 eq(s.tutorSitInAssignments.id, assignment.id),

@@ -631,6 +631,13 @@
       "when": 1789493822096,
       "tag": "0089_tutor_sit_ins",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1789520994212,
+      "tag": "0090_sit_in_coverage_scopes",
+      "breakpoints": true
     }
   ]
 }

@@ -196,6 +196,6 @@ describe("live booking verification", () => {
     ]);
     await expect(verify()).rejects.toMatchObject({ code: "HEAD_UNAVAILABLE" });
     vi.mocked(googleBusy).mockRejectedValue(new Error("Provider unavailable"));
-    await expect(verify()).rejects.toThrow("Provider unavailable");
+    await expect(verify()).rejects.toMatchObject({ code: "SOURCE_UNAVAILABLE" });
   });
 });

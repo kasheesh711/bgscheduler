@@ -7,7 +7,12 @@ import type {
   DetailData,
   SettingsData,
 } from "@/lib/tutor-sit-ins/client-types";
-import { HEADS, REPORT_WINDOW_MS } from "@/lib/tutor-sit-ins/model";
+import {
+  scopeLabel,
+  scopeOf,
+  coverageScopes,
+  REPORT_WINDOW_MS,
+} from "@/lib/tutor-sit-ins/model";
 import { ReportEditor } from "./report-editor";
 import { CommunicationList } from "./communications";
 import {
@@ -135,8 +140,7 @@ export function SitInDetail({ id }: { id: string }) {
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-primary">
-              {HEADS.find((h) => h.department === assignment.department)?.label}{" "}
-              · {assignment.quarter}
+              {scopeLabel(assignment)} · {assignment.quarter}
             </p>
             <h1 className="mt-1 text-3xl font-semibold">
               {assignment.tutorName}
@@ -207,10 +211,19 @@ export function SitInDetail({ id }: { id: string }) {
                     : "Choose an entire lesson when the observer is free. Confirmation checks the live lesson, Wise schedule, leave and Google Calendar."}
                 </p>
                 {assignment.suggestionError && (
-                  <Notice>{assignment.suggestionError}</Notice>
+                  <Notice>
+                    {assignment.suggestionError}
+                    {assignment.readinessIssues?.map((i) => (
+                      <p key={i.code} className="mt-1">
+                        {i.action}
+                      </p>
+                    ))}
+                  </Notice>
                 )}
                 {canSchedule &&
-                  !["completed", "exempt"].includes(assignment.status) && (
+                  !["completed", "exempt", "superseded"].includes(
+                    assignment.status,
+                  ) && (
                     <>
                       <Button
                         variant="outline"
@@ -222,7 +235,7 @@ export function SitInDetail({ id }: { id: string }) {
                       </Button>
                       {!assignment.suggestions.length && (
                         <p className="text-sm text-muted-foreground">
-                          No verified openings yet. The background check looks
+                          No eligible openings yet. The background check looks
                           for new opportunities every ten minutes.
                         </p>
                       )}
@@ -249,17 +262,41 @@ export function SitInDetail({ id }: { id: string }) {
                             <span className="mt-1 block text-muted-foreground">
                               {s.title} · {s.location || s.modality}
                             </span>
+                            <span className="mt-1 block font-medium">
+                              {s.verification === "verified"
+                                ? "Wise and Google Calendar checked"
+                                : "Provisional — Google Calendar check pending."}
+                            </span>
+                            {s.issues?.map((i) => (
+                              <span
+                                className="mt-1 block text-xs text-muted-foreground"
+                                key={i.code}
+                              >
+                                {i.message} {i.action}
+                              </span>
+                            ))}
                           </span>
                         </label>
                       ))}
                       {chosen && (
                         <div className="space-y-3 rounded-lg border border-primary/30 bg-primary/5 p-4">
                           <p className="text-sm">
-                            Confirm {slot(chosen.start, chosen.end)}. The tutor
-                            will receive a Calendar invitation, and operations
-                            staff will be asked to inform the family.
+                            {chosen.verification !== "verified"
+                              ? "The observer must connect Google Calendar and refresh availability before confirming this lesson."
+                              : !data.deliveryEnabled
+                                ? "Calendar delivery setup is still in progress. Confirmation will become available after validation."
+                                : "Confirm " +
+                                  slot(chosen.start, chosen.end) +
+                                  ". The tutor will receive a Calendar invitation, and operations staff will be asked to inform the family."}
                           </p>
-                          <Button disabled={busy} onClick={() => void book()}>
+                          <Button
+                            disabled={
+                              busy ||
+                              chosen.verification !== "verified" ||
+                              !data.deliveryEnabled
+                            }
+                            onClick={() => void book()}
+                          >
                             {busy
                               ? "Verifying and confirming…"
                               : "Confirm observation"}
@@ -281,24 +318,25 @@ export function SitInDetail({ id }: { id: string }) {
                     Cancel / reschedule
                   </Button>
                 )}
-                {isManager && assignment.status !== "completed" && (
-                  <>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setAction("reassign")}
-                    >
-                      Reassign observer
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setAction("exempt")}
-                    >
-                      Record exemption
-                    </Button>
-                  </>
-                )}
+                {isManager &&
+                  !["completed", "superseded"].includes(assignment.status) && (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setAction("reassign")}
+                      >
+                        Reassign observer
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setAction("exempt")}
+                      >
+                        Record exemption
+                      </Button>
+                    </>
+                  )}
                 {isManager && assignment.status === "completed" && (
                   <Button
                     size="sm"
@@ -341,7 +379,7 @@ export function SitInDetail({ id }: { id: string }) {
                             g.role !== "coordinator" &&
                             g.canonicalKey &&
                             g.canonicalKey !== assignment.canonicalKey &&
-                            g.departments.includes(assignment.department),
+                            coverageScopes(g).includes(scopeOf(assignment)),
                         )
                         .map((g) => (
                           <option key={g.email}>{g.email}</option>

@@ -1,12 +1,21 @@
 import { and, eq, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { adminUsers, tutorContacts, tutorSitInGrants } from "@/lib/db/schema";
-import { SitInError, SIT_INS_ROUTE, enabled, type Department } from "./model";
+import {
+  SitInError,
+  SIT_INS_ROUTE,
+  enabled,
+  coverageScopes,
+  scopeOf,
+  type CoverageScope,
+  type Department,
+} from "./model";
 
 export type SitInAccess = {
   email: string;
   role: "observer" | "coordinator" | "manager";
   departments: Department[];
+  scopes?: CoverageScope[];
   canonicalKey: string | null;
 };
 export async function sitInGrant(
@@ -49,6 +58,7 @@ export async function accessForEmail(
       email: normalized,
       role: "observer",
       departments: grant.departments as Department[],
+      scopes: coverageScopes(grant),
       canonicalKey: grant.canonicalKey,
     };
   const adminAllowed =
@@ -89,14 +99,14 @@ export function requireManager(access: SitInAccess) {
   if (access.role !== "manager")
     throw new SitInError(403, "Administrator access is required.");
 }
-export function assertDepartment(
+export function assertScope(
   access: SitInAccess,
   department: string,
   reports = false,
 ) {
   if (
     (access.role === "observer" &&
-      !access.departments.includes(department as Department)) ||
+      !coverageScopes(access).includes(scopeOf({ department }))) ||
     (reports && access.role === "coordinator")
   ) {
     throw new SitInError(403, "This observation is outside your access.");
@@ -111,12 +121,12 @@ export async function resolveObserver(
   const access = await accessForEmail(email, db);
   if (access.role === "coordinator")
     throw new SitInError(409, "Choose an enrolled observer.");
-  assertDepartment(access, department);
+  assertScope(access, department);
   const grant = await sitInGrant(email, db);
-  if (grant && !grant.departments.includes(department))
+  if (grant && !coverageScopes(grant).includes(scopeOf({ department })))
     throw new SitInError(
       409,
-      "This observer is not designated for this department.",
+      "This observer is not designated for this coverage scope.",
     );
   if (!grant?.canonicalKey)
     throw new SitInError(

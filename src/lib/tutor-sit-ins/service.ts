@@ -6,7 +6,7 @@ import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
 import {
   accessForEmail,
-  assertDepartment,
+  assertScope,
   requireManager,
   resolveObserver,
   type SitInAccess,
@@ -16,14 +16,19 @@ import {
   assignmentCommandSchema,
   bookingSchema,
   deliveryEnabled,
-  HEADS,
+  DEPARTMENT_INFO,
+  SCOPE_INFO,
+  scopeOf,
+  coverageScopes,
+  lessonScopes,
+  issueFromError,
+  type ReadinessIssue,
   overlap,
   requireNotice,
   REPORT_WINDOW_MS,
   settingsSchema,
   SitInError,
   tutorInvitationEmail,
-  type Department,
 } from "./model";
 import {
   EMPTY_REPORT,
@@ -47,6 +52,8 @@ import {
   verifyLiveLesson,
   type SuggestionCache,
 } from "./sources";
+
+import { classSummaries } from "./readiness";
 
 export async function overview(
   access: SitInAccess,
@@ -145,7 +152,7 @@ export async function overview(
     })),
     deliveryEnabled: deliveryEnabled(),
     deliveryIssues,
-    departments: HEADS,
+    departments: DEPARTMENT_INFO,
   };
 }
 export async function refreshQuarter(
@@ -161,7 +168,7 @@ export async function refreshQuarter(
       quarter,
       sources,
       db,
-      fresh.role === "observer" ? fresh.departments : undefined,
+      fresh.role === "observer" ? coverageScopes(fresh) : undefined,
     );
   const assignments = await listAssignments(fresh, quarter, db);
   const { reconcileObservation } = await import("./worker");
@@ -193,6 +200,7 @@ export async function refreshQuarter(
     if (Date.now() > deadline) break;
     let suggestions: typeof assignment.suggestions = [],
       error: string | null = null;
+    let readinessIssues: ReadinessIssue[] = [];
     try {
       suggestions = await suggestionsFor(
         assignment,
@@ -202,6 +210,7 @@ export async function refreshQuarter(
         cache,
       );
     } catch (e) {
+      readinessIssues = [issueFromError(e)];
       error =
         e instanceof SitInError
           ? e.message
@@ -209,7 +218,12 @@ export async function refreshQuarter(
     }
     await db
       .update(s.tutorSitInAssignments)
-      .set({ suggestions, suggestionError: error, checkedAt: new Date() })
+      .set({
+        suggestions,
+        suggestionError: error,
+        readinessIssues,
+        checkedAt: new Date(),
+      })
       .where(
         and(
           eq(s.tutorSitInAssignments.id, assignment.id),
@@ -238,7 +252,7 @@ export async function bookObservation(
     );
   if (!assignment.observerEmail)
     throw new SitInError(409, "Assign an observer first.");
-  if (["completed", "exempt"].includes(assignment.status))
+  if (["completed", "exempt", "superseded"].includes(assignment.status))
     throw new SitInError(409, "This assignment is already complete or exempt.");
   return withObserverOperation(
     db,
@@ -274,7 +288,7 @@ export async function bookObservation(
         (l) =>
           l.id === input.sessionId &&
           l.tutorKey === assignment.canonicalKey &&
-          l.departments.includes(assignment.department as Department),
+          lessonScopes(l).includes(scopeOf(assignment)),
       );
       if (!candidate)
         throw new SitInError(
@@ -307,7 +321,7 @@ export async function bookObservation(
           .from(s.tutorSitInAssignments)
           .where(eq(s.tutorSitInAssignments.id, assignmentId))
           .for("update");
-        assertDepartment(freshAccess, locked.department);
+        assertScope(freshAccess, scopeOf(locked));
         if (
           freshAccess.role === "coordinator" ||
           (freshAccess.role === "observer" &&
@@ -321,7 +335,7 @@ export async function bookObservation(
           );
         await resolveObserver(
           observer.email,
-          locked.department,
+          scopeOf(locked),
           locked.canonicalKey,
           tx,
         );
@@ -371,6 +385,8 @@ export async function bookObservation(
           .set({
             status: "scheduled",
             reason: null,
+            readinessIssues: [],
+            suggestionError: null,
             suggestions: [],
             revision: locked.revision + 1,
             updatedAt: new Date(),
@@ -423,6 +439,11 @@ export async function assignmentCommand(
       409,
       "This assignment changed. Refresh and try again.",
     );
+  if (assignment.status === "superseded")
+    throw new SitInError(
+      409,
+      "This obligation has been superseded by corrected coverage.",
+    );
   if (assignment.status === "completed" && command.action !== "reopen")
     throw new SitInError(
       409,
@@ -431,7 +452,7 @@ export async function assignmentCommand(
   if (command.action === "reassign")
     await resolveObserver(
       command.email,
-      assignment.department,
+      scopeOf(assignment),
       assignment.canonicalKey,
       db,
     );
@@ -457,7 +478,7 @@ export async function assignmentCommand(
     if (command.action === "reassign")
       await resolveObserver(
         command.email,
-        locked.department,
+        scopeOf(locked),
         locked.canonicalKey,
         tx,
       );
@@ -545,6 +566,10 @@ export async function assignmentCommand(
               : command.action === "reassign"
                 ? "pending"
                 : "needs_rescheduling",
+          allocationMode:
+            command.action === "reassign" ? "manual" : locked.allocationMode,
+          readinessIssues: [],
+          suggestionError: null,
           observerEmail:
             command.action === "reassign"
               ? command.email
@@ -590,7 +615,7 @@ export async function saveReport(
       .where(eq(s.tutorSitInReports.id, reportId))
       .for("update");
     if (!report) throw new SitInError(404, "Report not found.");
-    assertDepartment(actor, assignment.department, true);
+    assertScope(actor, scopeOf(assignment), true);
     if (
       report.authorEmail !== actor.email ||
       assignment.observerEmail !== actor.email
@@ -775,6 +800,7 @@ export async function settings(
         email: s.tutorSitInGrants.email,
         role: s.tutorSitInGrants.role,
         departments: s.tutorSitInGrants.departments,
+        scopes: s.tutorSitInGrants.scopes,
         canonicalKey: s.tutorSitInGrants.canonicalKey,
         active: s.tutorSitInGrants.active,
         revision: s.tutorSitInGrants.revision,
@@ -789,34 +815,15 @@ export async function settings(
       .from(s.tutorContacts)
       .where(eq(s.tutorContacts.active, true)),
   ]);
-  let classes: Array<{
-      classId: string;
-      title: string;
-      tutorName: string;
-      departments: Department[];
-      unresolved: boolean;
-    }> = [],
+  let classes: ReturnType<typeof classSummaries> = [],
     sourceError: string | null = null;
   try {
     const sources = await loadSources(quarter, db);
-    classes = [
-      ...new Map(
-        sources.lessons.map((l) => [
-          l.classId,
-          {
-            classId: l.classId,
-            title: l.title,
-            tutorName: l.tutorName,
-            departments: l.departments,
-            unresolved:
-              !l.tutorKey ||
-              !l.participants.length ||
-              (!l.departments.length &&
-                !mappings.some((m) => m.classId === l.classId)),
-          },
-        ]),
-      ).values(),
-    ];
+    classes = classSummaries(sources.lessons).map((c) => ({
+      ...c,
+      unresolved:
+        c.unresolved && !mappings.some((m) => m.classId === c.classId),
+    }));
   } catch (e) {
     sourceError =
       e instanceof SitInError ? e.message : "Source data is unavailable.";
@@ -829,6 +836,30 @@ export async function updateSettings(
   db: Database = getDb(),
 ) {
   requireManager(await accessForEmail(access.email, db));
+  if (command.action !== "assignment") {
+    const departments = [
+      ...new Set(
+        coverageScopes(command).map(
+          (scope) => SCOPE_INFO.find((i) => i.scope === scope)!.department,
+        ),
+      ),
+    ].sort();
+    if (
+      JSON.stringify(departments) !==
+      JSON.stringify([...new Set(command.departments)].sort())
+    )
+      throw new SitInError(
+        400,
+        "Choose coverage scopes matching the selected departments.",
+      );
+  } else if (
+    SCOPE_INFO.find((i) => i.scope === scopeOf(command))?.department !==
+    command.department
+  )
+    throw new SitInError(
+      400,
+      "This coverage scope does not match the department.",
+    );
   await withDatabaseTransaction(db, async (tx) => {
     requireManager(await accessForEmail(access.email, tx));
     if (command.action === "grant") {
@@ -856,6 +887,7 @@ export async function updateSettings(
         email: command.email,
         role: command.role,
         departments: [...new Set(command.departments)],
+        scopes: coverageScopes(command),
         canonicalKey: command.canonicalKey,
         active: command.active,
         revision: (old?.revision ?? -1) + 1,
@@ -872,6 +904,7 @@ export async function updateSettings(
           ? {
               role: old.role,
               departments: old.departments,
+              scopes: old.scopes,
               active: old.active,
               canonicalKey: old.canonicalKey,
             }
@@ -890,6 +923,7 @@ export async function updateSettings(
       const values = {
         classId: command.classId,
         departments: [...new Set(command.departments)],
+        scopes: coverageScopes(command),
         revision: (old?.revision ?? -1) + 1,
         updatedBy: access.email,
         reason: command.reason,
@@ -903,6 +937,7 @@ export async function updateSettings(
       else await tx.insert(s.tutorSitInMappings).values(values);
       await audit(tx, access.email, "mapping_changed", command.classId, {
         departments: values.departments,
+        scopes: values.scopes,
         reason: command.reason,
       });
     } else {
@@ -916,22 +951,28 @@ export async function updateSettings(
           ),
         );
       if (!tutor) throw new SitInError(400, "Choose an active tutor.");
-      const head = HEADS.find((h) => h.department === command.department)!;
-      const [grant] = await tx
-        .select()
-        .from(s.tutorSitInGrants)
-        .where(eq(s.tutorSitInGrants.email, head.email));
+      const scope = scopeOf(command);
+      const info = SCOPE_INFO.find((i) => i.scope === scope)!;
+      let observerEmail: string | null = null;
+      for (const email of info.observers) {
+        try {
+          await resolveObserver(email, scope, command.canonicalKey, tx);
+          observerEmail = email;
+          break;
+        } catch (error) {
+          if (!(error instanceof SitInError)) throw error;
+        }
+      }
       const [row] = await tx
         .insert(s.tutorSitInAssignments)
         .values({
           quarter: command.quarter,
           department: command.department,
+          coverageScope: scope,
+          allocationMode: "manual",
           canonicalKey: command.canonicalKey,
           tutorName: tutor.displayName,
-          observerEmail:
-            grant?.active && grant.canonicalKey !== command.canonicalKey
-              ? head.email
-              : null,
+          observerEmail,
           reason: command.reason,
         })
         .onConflictDoNothing()

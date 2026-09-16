@@ -51,6 +51,7 @@ const statusNames: Record<string, string> = {
   scheduled: "Scheduled",
   completed: "Completed",
   exempt: "Exempt",
+  superseded: "Superseded by corrected coverage",
 };
 export function Status({ value }: { value: string }) {
   return (
