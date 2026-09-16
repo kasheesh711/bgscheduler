@@ -25,12 +25,19 @@ export function CalendarSettings() {
   useEffect(() => {
     void load();
   }, []);
-  async function action(kind: "connect" | "save" | "disconnect") {
+  async function action(
+    kind: "connect" | "save" | "disconnect",
+    provider: "google" | "microsoft" = data?.connected
+      ? data.provider
+      : "google",
+  ) {
     setBusy(true);
     setError("");
     try {
       if (kind === "connect") {
-        const result = await api<{ url: string }>("/calendar/connect", {});
+        const result = await api<{ url: string }>("/calendar/connect", {
+          provider,
+        });
         window.location.assign(result.url);
         return;
       }
@@ -56,11 +63,12 @@ export function CalendarSettings() {
     <section className={panel}>
       <h2 className="flex items-center gap-2 text-lg font-semibold">
         <CalendarDays className="size-5 text-primary" />
-        Your Google Calendar
+        Your calendar
       </h2>
       <p className="mt-2 text-sm text-muted-foreground">
-        Connect your calendar to protect your teaching and personal time.
-        Personal event details stay private.
+        Connect one Google or Outlook account and select the calendars to check.
+        Your teaching and personal time stay protected; personal event details
+        stay private.
       </p>
       {error && (
         <div className="mt-4">
@@ -70,7 +78,8 @@ export function CalendarSettings() {
       {data?.connected ? (
         <div className="mt-4 space-y-4">
           <p className="break-all text-sm">
-            Connected as <strong>{data.googleEmail}</strong>
+            {data.provider === "microsoft" ? "Outlook" : "Google"} connected as{" "}
+            <strong>{data.accountEmail}</strong>
           </p>
           {data.error && <Notice error>{data.error}</Notice>}
           {!!data.calendars.length && (
@@ -144,7 +153,7 @@ export function CalendarSettings() {
               disabled={busy}
               onClick={() => void action("connect")}
             >
-              Reconnect
+              Reconnect {data.provider === "microsoft" ? "Outlook" : "Google"}
             </Button>
             <Button
               variant="ghost"
@@ -156,13 +165,28 @@ export function CalendarSettings() {
           </div>
         </div>
       ) : (
-        <Button
-          className="mt-4"
-          disabled={busy || !data}
-          onClick={() => void action("connect")}
-        >
-          {busy ? "Opening Google…" : "Connect Google Calendar"}
-        </Button>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {(data?.availableProviders || ["google"]).map((provider) => (
+            <Button
+              key={provider}
+              variant={provider === "google" ? "default" : "outline"}
+              disabled={busy || !data}
+              onClick={() => void action("connect", provider)}
+            >
+              {busy
+                ? "Opening…"
+                : provider === "google"
+                  ? "Connect Google Calendar"
+                  : "Connect Outlook Calendar"}
+            </Button>
+          ))}
+          {data && !data.availableProviders.includes("microsoft") && (
+            <p className="w-full text-sm text-muted-foreground">
+              Outlook Calendar setup is in progress. Email sign-in is available
+              independently.
+            </p>
+          )}
+        </div>
       )}
     </section>
   );

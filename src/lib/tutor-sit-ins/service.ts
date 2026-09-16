@@ -11,7 +11,11 @@ import {
   resolveObserver,
   type SitInAccess,
 } from "./access";
-import { assertCalendarDelivery, calendarConnection } from "./calendar";
+import {
+  assertCalendarDelivery,
+  assertCalendarBooking,
+  calendarConnection,
+} from "./calendar";
 import {
   assignmentCommandSchema,
   bookingSchema,
@@ -302,6 +306,7 @@ export async function bookObservation(
         db,
       );
       const connection = await calendarConnection(observer.email, db);
+      assertCalendarBooking(connection.provider);
       const [tutorContact] = await db
         .select()
         .from(s.tutorContacts)
@@ -377,7 +382,10 @@ export async function bookObservation(
             startTime: new Date(lesson.start),
             endTime: new Date(lesson.end),
             calendarId: connection.calendarId,
-            eventId: id.replaceAll("-", ""),
+            calendarProvider: connection.provider,
+            calendarAccountId: connection.providerAccountId,
+            eventId:
+              connection.provider === "google" ? id.replaceAll("-", "") : null,
           })
           .returning();
         await tx

@@ -553,3 +553,5 @@ There is no test for the `src/app/api/auth/[...nextauth]` handler itself (nothin
   behavior was never affected. See [`../reference/crons.md`](../reference/crons.md).
 
 _Baseline feature inventory: main@0cd1e81, 2026-09-02. Owner/session/preview sections updated for the Aoeng access-controls release on 2026-09-07; live rollout evidence is recorded separately._
+
+Calendar consent is separate from website access. Tutor Sit-ins can connect one Google or Outlook account whose email may differ from the approved sign-in email. Changing that account never changes roles, scope or page grants. See [Outlook rollout](outlook-calendar-rollout.md).

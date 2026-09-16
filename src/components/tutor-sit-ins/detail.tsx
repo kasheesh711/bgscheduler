@@ -199,7 +199,7 @@ export function SitInDetail({ id }: { id: string }) {
                     rel="noreferrer"
                     className="inline-block py-2 text-sm text-primary underline"
                   >
-                    Open Google Calendar event
+                    Open Calendar event
                   </a>
                 )}
               </div>
@@ -208,7 +208,7 @@ export function SitInDetail({ id }: { id: string }) {
                 <p className="text-sm text-muted-foreground">
                   {assignment.status === "exempt"
                     ? "This obligation has a recorded exemption."
-                    : "Choose an entire lesson when the observer is free. Confirmation checks the live lesson, Wise schedule, leave and Google Calendar."}
+                    : "Choose an entire lesson when the observer is free. Confirmation checks the live lesson, Wise schedule, leave and Calendar."}
                 </p>
                 {assignment.suggestionError && (
                   <Notice>
@@ -264,8 +264,8 @@ export function SitInDetail({ id }: { id: string }) {
                             </span>
                             <span className="mt-1 block font-medium">
                               {s.verification === "verified"
-                                ? "Wise and Google Calendar checked"
-                                : "Provisional — Google Calendar check pending."}
+                                ? "Wise and Calendar checked"
+                                : "Provisional — Calendar check pending."}
                             </span>
                             {s.issues?.map((i) => (
                               <span
@@ -282,7 +282,7 @@ export function SitInDetail({ id }: { id: string }) {
                         <div className="space-y-3 rounded-lg border border-primary/30 bg-primary/5 p-4">
                           <p className="text-sm">
                             {chosen.verification !== "verified"
-                              ? "The observer must connect Google Calendar and refresh availability before confirming this lesson."
+                              ? "The observer must connect Calendar and refresh availability before confirming this lesson."
                               : !data.deliveryEnabled
                                 ? "Calendar delivery setup is still in progress. Confirmation will become available after validation."
                                 : "Confirm " +

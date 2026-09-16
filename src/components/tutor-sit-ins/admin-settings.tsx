@@ -271,7 +271,7 @@ export function AdminSettings({
             >
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="text-sm">
-                  Google sign-in email
+                  Sign-in email
                   <input
                     type="email"
                     required

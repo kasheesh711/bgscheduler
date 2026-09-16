@@ -9,7 +9,7 @@ Ten additive, snapshot-independent tables are declared in [`schema.ts`](../../..
 | `tutor_sit_in_assignments` | `tutorSitInAssignments` | One active tutor + coverage scope + quarter obligation; allocation mode, observer, state, suggestions, structured readiness issues and revision |
 | `tutor_sit_in_observations` | `tutorSitInObservations` | One scheduling attempt with frozen lesson/participants, current marker and separate Calendar delivery state |
 | `tutor_sit_in_reports` | `tutorSitInReports` | One report version per assignment, pinned rubric, observer attribution, draft/submission state and score |
-| `tutor_sit_in_calendar_connections` | `tutorSitInCalendarConnections` | One app account's separately consented Google identity, encrypted tokens and calendar selection |
+| `tutor_sit_in_calendar_connections` | `tutorSitInCalendarConnections` | One app account's separately consented Google or Microsoft identity, encrypted tokens and calendar selection |
 | `tutor_sit_in_communications` | `tutorSitInCommunications` | One observation + family + notice kind; two acknowledgement actors/times, resolution and supersession history |
 | `tutor_sit_in_jobs` | `tutorSitInJobs` | One idempotent Calendar/email delivery; lease, attempts, retry time, error and status |
 | `tutor_sit_in_audit` | `tutorSitInAudit` | Append-only action with actor, assignment, details and timestamp |
@@ -37,3 +37,5 @@ Grants, mappings and connections are looked up by durable natural keys, without 
 _Verified against `codex/tutor-sit-ins` on 2026-09-16._
 
 Migration `0090_sit_in_coverage_scopes.sql` adds scope, allocation mode and readiness fields and preserves manual provenance. `future_session_blocks.student_ids` stores the dated Wise roster independently of package joins: null means unknown, an empty array means known empty. No roster is backfilled from another occurrence.
+
+Migration `0092_sit_in_calendar_providers.sql` adds provider/account identity to connections and observations. Existing rows are backfilled as Google without changing ciphertext, selected calendars, event IDs or grants. Microsoft event IDs are nullable until creation or recovery succeeds. The original Google identity columns remain for rolling-release compatibility; Microsoft leaves them null. Provider values are constrained to `google` / `microsoft`.

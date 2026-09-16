@@ -8,7 +8,7 @@
     "url": "https://bgscheduler-bl5sz78th-kevins-projects-6ebb4efc.vercel.app",
     "outputItems": 362
   },
-  "minSourceRouteCount": 277,
+  "minSourceRouteCount": 278,
   "criticalRoutes": [
     "/leave-requests",
     "/line-review",
@@ -243,6 +243,7 @@
     "/api/tutor-sit-ins/calendar",
     "/api/tutor-sit-ins/calendar/callback",
     "/api/tutor-sit-ins/calendar/connect",
+    "/api/tutor-sit-ins/calendar/microsoft/callback",
     "/api/tutor-sit-ins/communications/[communicationId]",
     "/api/tutor-sit-ins/refresh",
     "/api/tutor-sit-ins/reports/[reportId]",

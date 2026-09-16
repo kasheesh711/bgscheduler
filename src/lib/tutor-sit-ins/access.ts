@@ -91,7 +91,7 @@ export async function requireSitInAccess() {
   if (!session?.user.email)
     throw new SitInError(
       401,
-      "Please sign in with your approved Google account.",
+      "Please sign in with your approved email address.",
     );
   return accessForEmail(session.user.email);
 }

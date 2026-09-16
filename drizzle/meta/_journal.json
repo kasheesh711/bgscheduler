@@ -645,6 +645,13 @@
       "when": 1789520995212,
       "tag": "0091_email_code_login",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1789520996212,
+      "tag": "0092_sit_in_calendar_providers",
+      "breakpoints": true
     }
   ]
 }
