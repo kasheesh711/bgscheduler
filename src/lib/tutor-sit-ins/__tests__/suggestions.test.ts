@@ -2,11 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Database } from "@/lib/db";
 import type { IndexedTutorGroup } from "@/lib/search/index";
 import type { Assignment } from "../repository";
-import { calendarBusy } from "../calendar";
 import { resolveObserver } from "../access";
 import { suggestionsFor, snapshotAvailable, type Sources } from "../sources";
-import { SitInError, type Lesson } from "../model";
-vi.mock("../calendar", () => ({ calendarBusy: vi.fn() }));
+import { type Lesson } from "../model";
+const calendarFetch = vi.fn();
 vi.mock("../access", () => ({ resolveObserver: vi.fn() }));
 const now = new Date("2026-09-30T00:00:00Z");
 const lesson: Lesson = {
@@ -41,6 +40,7 @@ let sources: Sources, db: Database, head: IndexedTutorGroup;
 let bookings: Array<{ startTime: Date; endTime: Date }>;
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.stubGlobal("fetch", calendarFetch);
   bookings = [];
   head = {
     id: "head",
@@ -97,9 +97,6 @@ beforeEach(() => {
     scopes: ["science"],
     name: "Head",
   });
-  vi.mocked(calendarBusy).mockRejectedValue(
-    new SitInError(409, "Connect Calendar first.", "CALENDAR_RECONNECT"),
-  );
 });
 const suggest = () => suggestionsFor(assignment, sources, db, now);
 describe("observation-specific availability", () => {
@@ -114,7 +111,7 @@ describe("observation-specific availability", () => {
   it("uses time evidence across verified accounts, independent of labels and qualifications", async () => {
     expect(snapshotAvailable(sources, "head", lesson)).toBe(true);
     expect(await suggest()).toMatchObject([
-      { verification: "wise_only", issues: [{ category: "calendar" }] },
+      { verification: "wise_verified", issues: [] },
     ]);
   });
   it("blocks the whole lesson for classes on either account, and releases only the cancelled occurrence", async () => {
@@ -162,7 +159,7 @@ describe("observation-specific availability", () => {
     await expect(suggest()).rejects.toMatchObject({
       code: "WISE_VERIFICATION_PENDING",
     });
-    expect(calendarBusy).not.toHaveBeenCalled();
+    expect(calendarFetch).not.toHaveBeenCalled();
   });
   it("rejects competing observations and less than 24 hours notice", async () => {
     bookings.push({
@@ -180,30 +177,24 @@ describe("observation-specific availability", () => {
       ),
     ).toEqual([]);
   });
-  it("distinguishes connected, busy, disconnected and temporarily unavailable Google calendars", async () => {
-    vi.mocked(calendarBusy).mockResolvedValue([]);
-    expect(await suggest()).toMatchObject([{ verification: "verified" }]);
-    vi.mocked(calendarBusy).mockResolvedValue([
-      { start: new Date(lesson.start), end: new Date(lesson.end) },
-    ]);
-    expect(await suggest()).toEqual([]);
-    vi.mocked(calendarBusy).mockRejectedValue(new Error("429"));
-    expect(await suggest()).toMatchObject([
-      { verification: "wise_only", issues: [{ code: "CALENDAR_UNAVAILABLE" }] },
-    ]);
-  });
+  it.each(["busy", "disconnected", "outage"])(
+    "ignores Calendar %s for Wise readiness",
+    async () => {
+      calendarFetch.mockRejectedValue(new Error("Calendar unavailable"));
+      expect(await suggest()).toMatchObject([
+        { verification: "wise_verified" },
+      ]);
+      expect(calendarFetch).not.toHaveBeenCalled();
+    },
+  );
   it("blocks only the affected incomplete lesson, with no borrowing of another roster", async () => {
     sources.lessons.push({ ...lesson, id: "incomplete", participants: [] });
     expect((await suggest()).map((s) => s.sessionId)).toEqual(["lesson"]);
     sources.lessons = [sources.lessons[1]];
     await expect(suggest()).rejects.toMatchObject({ code: "STUDENT_ROSTER" });
   });
-  it("caches Calendar availability across a refresh without changing the result", async () => {
-    const cache = new Map();
-    const a = await suggestionsFor(assignment, sources, db, now, cache);
-    expect(await suggestionsFor(assignment, sources, db, now, cache)).toEqual(
-      a,
-    );
-    expect(calendarBusy).toHaveBeenCalledTimes(1);
+  it("keeps repeated refreshes stable without reading personal calendars", async () => {
+    expect(await suggest()).toEqual(await suggest());
+    expect(calendarFetch).not.toHaveBeenCalled();
   });
 });

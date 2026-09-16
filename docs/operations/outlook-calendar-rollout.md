@@ -13,7 +13,7 @@ An owner must sign in to Microsoft Entra and register a **confidential Web appli
 - Apply additive migration `0092_sit_in_calendar_providers.sql` before deploying provider code. Existing Google tokens, calendars, event IDs and grants are preserved.
 - Set `TUTOR_SIT_INS_MICROSOFT_ENABLED=true` only for the recipient-scoped activation checks. Keep `TUTOR_SIT_INS_TEST_RECIPIENTS` limited to the verified calendar owner, test tutor and approved staff recipients. Existing delivery controls must also be enabled for invitations.
 
-The Microsoft account is verified through Graph `/me`. Its identity controls calendar operations only; existing website grants still control roles and accessible pages. Each observer consents to one account, then selects calendars within it. A reconnect to the same identity retains selection. A different provider/account resets selection only when no future bookings or unfinished calendar jobs depend on the previous connection.
+The Microsoft account is verified through Graph `/me`. Its identity controls calendar operations only; existing website grants still control roles and accessible pages. Each observer consents to one account, then chooses an owned event destination. Calendar is optional for scheduling. A reconnect to the same identity retains selection. A different provider/account resets selection only when no future bookings or unfinished calendar jobs depend on the previous connection.
 
 ## Required live acceptance
 
@@ -23,11 +23,11 @@ Record actual evidence; local fixtures do not establish any item below.
 |---|---|---|
 | Personal Hotmail connection | Observer consent, verified mailbox and owned primary calendar | Pending registration and observer consent |
 | Work/school connection | Organizational account and tenant consent behavior | Pending |
-| Conflicts | Recurrence, all-day, Bangkok midnight, overlapping personal event, secondary selected calendar | Pending |
+| Wise-only scheduling | Confirm without Calendar; personal events do not affect availability | Covered by the 0093 scheduling validation |
 | Invitation | Recipient-scoped tutor receives one private event; app records immutable ID after readback | Pending |
 | Retry | Simulated uncertain creation recovers marker without a second invitation | Pending |
 | Cancellation | Tutor receives cancellation; retry after deletion completes safely | Pending |
-| External edits/deletion | Existing booking becomes visible as needing rescheduling; history stays intact | Pending |
+| External edits/deletion | Calendar delivery discrepancy appears; Wise booking and history stay intact | Pending |
 | Refresh | Expired access token refreshes and rotated refresh token is persisted | Pending |
 
 Recipient evidence, permission consent and delivery cannot be manufactured by database tests. The Entra sign-in step currently needs the account owner.
@@ -42,7 +42,7 @@ Before each release, run targeted lint and `npm run verify:release`, and verify 
 
 ## Rollback and monitoring
 
-Set `TUTOR_SIT_INS_MICROSOFT_ENABLED=false` and redeploy to stop new Outlook connections/bookings. Keep Microsoft credentials and existing connection rows: refresh, reconciliation and cancellation of recorded Microsoft events must continue. Google stays available. Do not roll the database back or deploy the old Google-only worker once Microsoft observations exist.
+Set `TUTOR_SIT_INS_MICROSOFT_ENABLED=false` and redeploy to stop new Outlook connections/event exports. Keep Microsoft credentials and existing connection rows: refresh, reconciliation and cancellation of recorded Microsoft events must continue. Wise booking stays available regardless of provider rollout flags. Do not roll the database back or deploy the old Google-only worker once Microsoft observations exist.
 
 Provider errors are redacted to HTTP status or a safe generic message; delivery jobs retain retry count, last error and observation status. OAuth codes, access/refresh tokens, personal calendar event bodies and authentication codes must never be logged. Existing Data Health/cron supervision monitors the worker.
 
@@ -64,3 +64,5 @@ A newer approved Wise-only scheduling change follows this provider release. That
 - [Event transactionId and properties](https://learn.microsoft.com/en-us/graph/api/resources/event?view=graph-rest-1.0)
 - [Immutable Outlook IDs](https://learn.microsoft.com/en-us/graph/outlook-immutable-id)
 - [Authorization-code flow](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow)
+
+The 0093 Wise-scheduling change supersedes personal-availability tests: providers no longer implement busy lookup. See [Wise scheduling rollout](tutor-sit-ins-rollout.md#wise-only-availability-rollout--0093).

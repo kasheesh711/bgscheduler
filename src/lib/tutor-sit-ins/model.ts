@@ -304,7 +304,8 @@ export type Suggestion = {
   end: string;
   location: string | null;
   modality: string | null;
-  verification?: "wise_only" | "verified";
+  // Legacy states remain readable until suggestions are refreshed.
+  verification?: "wise_only" | "verified" | "wise_verified";
   issues?: ReadinessIssue[];
 };
 export const bookingSchema = z

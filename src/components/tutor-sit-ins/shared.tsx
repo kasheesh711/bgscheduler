@@ -48,7 +48,7 @@ export function Notice({
 const statusNames: Record<string, string> = {
   pending: "Awaiting a slot",
   needs_rescheduling: "Needs rescheduling",
-  scheduled: "Scheduled",
+  scheduled: "Confirmed",
   completed: "Completed",
   exempt: "Exempt",
   superseded: "Superseded by corrected coverage",
@@ -74,5 +74,22 @@ export function Loading() {
     <div className="p-8 text-sm text-muted-foreground" role="status">
       Loading Tutor Sit-ins…
     </div>
+  );
+}
+
+export function calendarDeliveryLabel(status: string) {
+  return (
+    (
+      {
+        pending: "Calendar queued",
+        connection_required: "Connection required",
+        synced: "Added",
+        error: "Delivery issue",
+        discrepancy: "Delivery issue",
+        missed: "Delivery issue",
+        cancel_pending: "Withdrawal queued",
+        cancelled: "Withdrawn",
+      } as Record<string, string>
+    )[status] || "Calendar queued"
   );
 }

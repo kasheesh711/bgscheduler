@@ -14,7 +14,7 @@ All workspace routes require Google or email-code sign-in, the feature flag, an 
 | PUT | `/api/tutor-sit-ins/reports/{reportId}` | `{expectedRevision,submit,data}`. Only the actual observer may write. `data`: `scores` and optional criterion `notes`, `strengths`, `priorities`, `nextSteps`, `occurred`. Returns the saved report with server score, revision and late/submission state. |
 | PATCH | `/api/tutor-sit-ins/communications/{communicationId}` | Staff `{expectedRevision,audience:"parent"\|"student"}` acknowledgement. Manager resolution: `{action:"resolve",expectedRevision,familyKey,parentName,reason}`. |
 | GET | `/api/tutor-sit-ins/calendar` | Connection status, `provider`, `accountEmail`, `availableProviders`, safe calendar list, selection, revision and errors; no tokens. |
-| PATCH | `/api/tutor-sit-ins/calendar` | `{calendarId,busyCalendarIds,expectedRevision}`; owned destination required. |
+| PATCH | `/api/tutor-sit-ins/calendar` | `{calendarId,expectedRevision} (legacy optional `busyCalendarIds` ignored)`; owned destination required. |
 | DELETE | `/api/tutor-sit-ins/calendar` | Disconnect current account after outstanding event withdrawals finish. |
 | POST | `/api/tutor-sit-ins/calendar/connect` | `{provider:"google"|"microsoft"}`; omitted provider defaults to Google. Sets encrypted HttpOnly OAuth state cookie; returns `{url}` for calendar consent. |
 | GET | `/api/tutor-sit-ins/calendar/callback` | Verifies session/state, exchanges code, stores encrypted credentials; redirects to dashboard with `calendar=connected` or `calendar=error`. Codes/provider bodies are not logged. |
@@ -38,13 +38,13 @@ Departments: `physics`, `maths`, `english`, `chemistry`, `iseb`, `science`. Cove
 
 ## Readiness payloads
 
-Assignments include `coverageScope`, `allocationMode` (`automatic` / `manual`) and `readinessIssues`. Each issue has `code`, `category`, `message`, `action`, and `retryable`. Suggestions include `verification: "wise_only" | "verified"` and their own `issues`. `wise_only` is provisional and cannot be confirmed without live Calendar and Wise checks. Detail includes `deliveryEnabled` for the confirmation control. Superseded obligations are omitted from active lists but their authorized detail and audit history remain available.
+Assignments include `coverageScope`, `allocationMode` (`automatic` / `manual`) and `readinessIssues`. Each issue has `code`, `category`, `message`, `action`, and `retryable`. New suggestions include `verification: "wise_verified"` and their own `issues`. Legacy `wise_only` / `verified` suggestions require refresh. Booking always performs live Wise checks and does not require Calendar. Detail includes `deliveryEnabled` for delivery messaging only; it never disables confirmation. Observation Calendar binding fields are nullable until delivery. `calendarAttemptedAt` and `calendarSyncedAt` preserve delivery evidence. Calendar states include `pending`, `connection_required`, `synced`, `error`, `discrepancy`, `missed`, `cancel_pending`, and `cancelled`; these are separate from the assignment state. Superseded obligations are omitted from active lists but their authorized detail and audit history remain available.
 
 Settings class summaries aggregate `students`, `scopes`, `sessionCount`, `rosterPending`, `familyPending`, and `identityPending`; `unresolved` refers only to missing subject mapping. Summary students are display evidence, never a replacement lesson roster.
 
 ## Failure behavior
 
-401 means no valid session; 403 means insufficient/revoked access or cross-origin mutation; 400 means invalid input; 404 means absent assignment/report; 409 means stale version, insufficient notice, incomplete availability, self-observation or another scheduling conflict. Disabled setup/delivery returns 503. Provider failures are visible and queued deliveries retry with persistent identifiers. Generic 500 responses disclose neither SQL nor credentials.
+401 means no valid session; 403 means insufficient/revoked access or cross-origin mutation; 400 means invalid input; 404 means absent assignment/report; 409 means stale version, insufficient notice, incomplete availability, self-observation or another scheduling conflict. Disabled feature setup returns 503. Disabled delivery pauses external jobs without blocking booking, reports or communication acknowledgements. Provider failures are visible and queued deliveries retry with persistent identifiers. Generic 500 responses disclose neither SQL nor credentials.
 
 The cron routes use the existing constant-time secret check and `withCronInvocationAudit` monitoring. Worker leases, per-observer operation leases and outbox leases are persisted separately.
 

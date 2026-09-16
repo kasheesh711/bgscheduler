@@ -23,6 +23,7 @@ import { CalendarSettings } from "./calendar-settings";
 import { CommunicationList } from "./communications";
 import {
   api,
+  calendarDeliveryLabel,
   control,
   Loading,
   Notice,
@@ -151,8 +152,8 @@ export function SitInDashboard({
         )}
         {calendarResult === "connected" && (
           <Notice>
-            Calendar connected. Review the calendars selected for conflict
-            checking below.
+            Calendar connected. Queued observation events will be added to your
+            selected destination.
           </Notice>
         )}
         {error && (
@@ -162,9 +163,9 @@ export function SitInDashboard({
         )}
         {data && !data.deliveryEnabled && (
           <Notice>
-            Setup mode: review access, connect calendars, and generate coverage.
-            An administrator must enable delivery before observations can be
-            confirmed.
+            Calendar and email delivery are paused. You can confirm Wise-checked
+            lessons, record family communication and submit reports.
+            Notifications stay queued.
           </Notice>
         )}
         {!!data?.deliveryIssues?.length && (
@@ -372,9 +373,16 @@ export function SitInDashboard({
                               ? "Report submitted"
                               : "Report due " + when(a.reportDue)}
                           </p>
-                          {a.observation.calendarStatus !== "synced" && (
+                          {
                             <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
-                              Calendar: {a.observation.calendarStatus}
+                              {calendarDeliveryLabel(
+                                a.observation.calendarStatus,
+                              )}
+                            </p>
+                          }
+                          {!!a.readinessIssues?.length && (
+                            <p className="text-xs text-destructive">
+                              {a.readinessIssues[0].message}
                             </p>
                           )}
                           {a.observation.calendarError && (
@@ -394,10 +402,10 @@ export function SitInDashboard({
                                   "Waiting for a suitable lesson"}
                           </p>
                           {a.suggestions.some(
-                            (s) => s.verification === "wise_only",
+                            (s) => s.verification === "wise_verified",
                           ) && (
                             <p className="mt-1 text-xs font-medium text-amber-800 dark:text-amber-300">
-                              Provisional — Calendar check pending.
+                              Wise schedule checked.
                             </p>
                           )}
                           {!!a.readinessIssues?.length && (
@@ -467,8 +475,9 @@ export function SitInDashboard({
             <CalendarSettings />
             <p className="mt-3 text-sm text-muted-foreground">
               Your calendar account can differ from your sign-in email. Your
-              assigned access stays the same. Finish or cancel upcoming
-              observations before switching accounts.
+              assigned access stays the same. Withdraw previously exported
+              events before switching accounts. Observations awaiting their
+              first event stay queued.
             </p>
           </div>
         )}

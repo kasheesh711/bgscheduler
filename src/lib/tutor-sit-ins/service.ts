@@ -12,11 +12,6 @@ import {
   type SitInAccess,
 } from "./access";
 import {
-  assertCalendarDelivery,
-  assertCalendarBooking,
-  calendarConnection,
-} from "./calendar";
-import {
   assignmentCommandSchema,
   bookingSchema,
   deliveryEnabled,
@@ -32,7 +27,6 @@ import {
   REPORT_WINDOW_MS,
   settingsSchema,
   SitInError,
-  tutorInvitationEmail,
 } from "./model";
 import {
   EMPTY_REPORT,
@@ -48,14 +42,10 @@ import {
   getAssignment,
   listAssignments,
   queueJob,
+  queueStaffEmail,
   withObserverOperation,
 } from "./repository";
-import {
-  loadSources,
-  suggestionsFor,
-  verifyLiveLesson,
-  type SuggestionCache,
-} from "./sources";
+import { loadSources, suggestionsFor, verifyLiveLesson } from "./sources";
 
 import { classSummaries } from "./readiness";
 
@@ -189,15 +179,10 @@ export async function refreshQuarter(
           eq(s.tutorSitInObservations.current, true),
         ),
       );
-    if (
-      deliveryEnabled() &&
-      observation?.calendarStatus === "synced" &&
-      observation.startTime > new Date()
-    )
+    if (observation?.current && observation.startTime > new Date())
       await reconcileObservation(db, assignment, observation, sources);
   }
   const refreshed = await listAssignments(fresh, quarter, db);
-  const cache: SuggestionCache = new Map();
   for (const assignment of refreshed.filter((a) =>
     ["pending", "needs_rescheduling"].includes(a.status),
   )) {
@@ -206,13 +191,7 @@ export async function refreshQuarter(
       error: string | null = null;
     let readinessIssues: ReadinessIssue[] = [];
     try {
-      suggestions = await suggestionsFor(
-        assignment,
-        sources,
-        db,
-        new Date(),
-        cache,
-      );
+      suggestions = await suggestionsFor(assignment, sources, db, new Date());
     } catch (e) {
       readinessIssues = [issueFromError(e)];
       error =
@@ -243,7 +222,6 @@ export async function bookObservation(
   input: z.infer<typeof bookingSchema>,
   db: Database = getDb(),
 ) {
-  assertCalendarDelivery();
   access = await accessForEmail(access.email, db);
   const assignment = await getAssignment(access, assignmentId, db);
   if (
@@ -305,18 +283,6 @@ export async function bookObservation(
         sources,
         db,
       );
-      const connection = await calendarConnection(observer.email, db);
-      assertCalendarBooking(connection.provider);
-      const [tutorContact] = await db
-        .select()
-        .from(s.tutorContacts)
-        .where(
-          and(
-            eq(s.tutorContacts.canonicalKey, assignment.canonicalKey),
-            eq(s.tutorContacts.active, true),
-          ),
-        );
-      lesson.tutorEmail = tutorInvitationEmail(tutorContact, lesson.modality);
       await assertLease();
       await withDatabaseTransaction(db, async (tx) => {
         await assertLease(tx);
@@ -381,11 +347,10 @@ export async function bookObservation(
             lesson,
             startTime: new Date(lesson.start),
             endTime: new Date(lesson.end),
-            calendarId: connection.calendarId,
-            calendarProvider: connection.provider,
-            calendarAccountId: connection.providerAccountId,
-            eventId:
-              connection.provider === "google" ? id.replaceAll("-", "") : null,
+            calendarId: null,
+            calendarProvider: null,
+            calendarAccountId: null,
+            eventId: null,
           })
           .returning();
         await tx
@@ -416,6 +381,7 @@ export async function bookObservation(
         });
         await createCommunications(tx, observation, "scheduled");
         await queueJob(tx, id + ":create", "calendar_upsert", id);
+        await queueStaffEmail(tx, observation, "confirmed");
         await audit(tx, access.email, "observation_booked", assignmentId, {
           observationId: id,
           sessionId: lesson.id,
@@ -647,10 +613,7 @@ export async function saveReport(
         "This report changed or was submitted. Refresh before editing.",
       );
     const score = reportScore(report.rubric, command.data, command.submit);
-    if (
-      command.submit &&
-      (observation.endTime > now || observation.calendarStatus !== "synced")
-    )
+    if (command.submit && observation.endTime > now)
       throw new SitInError(
         409,
         "Submit after the confirmed observation has finished.",
@@ -767,11 +730,11 @@ export async function acknowledgeCommunication(
       .where(eq(s.tutorSitInObservations.id, row.observationId));
     if (
       row.kind === "scheduled" &&
-      (!observation.current || observation.calendarStatus !== "synced")
+      (!observation.current || !!observation.invalidReason)
     )
       throw new SitInError(
         409,
-        "Wait for the Calendar invitation to be confirmed before informing this family.",
+        "This observation is no longer current. Use the latest communication task.",
       );
     if (
       command.audience === "parent"

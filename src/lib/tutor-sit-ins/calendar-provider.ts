@@ -34,22 +34,12 @@ export type CalendarEventInput = CalendarEventRef & {
   end: Date;
   tutorEmail: string;
 };
-export type CalendarBusyOptions = {
-  calendarId: string;
-  busyCalendarIds: string[];
-  exclude?: { calendarId: string; eventId: string };
-};
 export type CalendarRequest = <T>(
   path: string,
   init?: RequestInit,
 ) => Promise<T>;
 export interface CalendarProvider {
   list(): Promise<CalendarSummary[]>;
-  busy(
-    start: Date,
-    end: Date,
-    options: CalendarBusyOptions,
-  ): Promise<Array<{ start: Date; end: Date }>>;
   findEvent(ref: CalendarEventRef): Promise<CalendarEvent | null>;
   createEvent(input: CalendarEventInput): Promise<CalendarEvent>;
   cancelEvent(ref: CalendarEventRef): Promise<void>;
