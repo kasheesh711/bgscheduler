@@ -48,7 +48,15 @@ Provider errors are redacted to HTTP status or a safe generic message; delivery 
 
 ## Release record
 
-Implementation and local verification in progress. Production migration/deployment pending. Microsoft app registration, production credentials and recipient-scoped live acceptance are pending; Microsoft remains disabled.
+Provider implementation: commit `b61ac32`, [PR #79](https://github.com/kasheesh711/bgscheduler/pull/79). Email login is live independently via PR #78.
+
+- `npm run verify:release` passed: 452 unit files / 5,142 tests, production build, both TypeScript checks, diff check and 278-route guard.
+- Focused provider/feature tests: 97 unit tests and 31 PostgreSQL integration tests passed. Targeted lint passed.
+- The real local Next/Auth.js flow established Ek's synthetic Physics/General Science session. The provider chooser, connected Outlook identity and owned destination selection/save worked. Browser DOM checks at 390×844 and 1440×1000 showed no horizontal overflow. These checks used a fake relay and fake Graph responses, not a live Microsoft account.
+- Migration `0092_sit_in_calendar_providers` is applied to production. Existing ciphertext, selection and event-ID values compared unchanged. There were zero production calendar connections; populated historical Google backfill was exercised separately in PostgreSQL fixtures.
+- Microsoft app registration, production credentials and recipient-scoped live acceptance remain pending. Microsoft and external Calendar delivery remain disabled.
+
+A newer approved Wise-only scheduling change follows this provider release. That change removes personal-calendar availability reads and conflict selection from the workflow, and makes confirmation, staff communication and reports independent of Calendar delivery. Its integration record will supersede the availability-specific acceptance rows above.
 
 ## Protocol references
 
