@@ -3,6 +3,9 @@ import { z } from "zod";
 
 const envSchema = z.object({
   CREDIT_CONTROL_MODE: z.enum(["retired", "active"]).default("retired"),
+  TUTOR_SIT_INS_ENABLED: z.string().optional(),
+  TUTOR_SIT_INS_DELIVERY_ENABLED: z.string().optional(),
+  TUTOR_SIT_INS_TEST_RECIPIENTS: z.string().optional(),
   DATABASE_URL: z.string().url(),
   AUTH_GOOGLE_ID: z.string().min(1),
   AUTH_GOOGLE_SECRET: z.string().min(1),

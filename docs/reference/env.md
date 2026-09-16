@@ -452,3 +452,15 @@ Existing LINE credentials and `APP_BASE_URL` supply messaging and private mobile
 
 Uses existing Google authentication and Postgres. Office networks are configured in the
 administrator workspace. See [enablement and verification](../operations/tutor-attendance.md).
+
+
+## Tutor Sit-ins
+
+| Variable | Default and behavior |
+|---|---|
+| `TUTOR_SIT_INS_ENABLED` | Off unless exactly `true`; enables entry points, enrollment and background processing after migration 0089. Also enables half-hour shared student snapshot refresh in Credit Control retired mode. |
+| `TUTOR_SIT_INS_DELIVERY_ENABLED` | Off unless exactly `true`; additionally requires the feature on and a non-preview environment. Controls bookings, Calendar writes and email delivery. Calendar setup/read access can be tested while delivery is off. |
+| `TUTOR_SIT_INS_TEST_RECIPIENTS` | Optional comma-separated exact email allowlist for isolated tests. If set, all Calendar owner/tutor and email recipients must belong to it. Unknown recipients fail visibly; they are never redirected. |
+| `APP_BASE_URL` | Exact app origin for OAuth callback and authenticated links; falls back to `https://bgscheduler.vercel.app`. Register its `/api/tutor-sit-ins/calendar/callback` URI. |
+
+Reuses `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET` and the existing `AUTH_SECRET` token encryption helper, but stores Calendar tokens separately from Sheets. The existing `SCHEDULE_EMAIL_APPS_SCRIPT_URL` and `SCHEDULE_EMAIL_APPS_SCRIPT_SECRET` relay configuration is required for email. `VERCEL_ENV=preview` or `PREVIEW_SANDBOX_ENABLED=true` forbids Calendar consent and external delivery. See [rollout](../operations/tutor-sit-ins-rollout.md).

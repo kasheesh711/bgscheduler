@@ -7,6 +7,7 @@ export type NavSectionId =
   | "data-audit";
 
 export type NavToolId =
+  | "tutor-sit-ins"
   | "tutor-attendance"
   | "scheduler"
   | "search"
@@ -94,6 +95,7 @@ export const NAV_SECTIONS: NavSection[] = [
 ];
 
 export const NAV_TOOLS: NavTool[] = [
+  { id: "tutor-sit-ins", href: "/tutor-sit-ins", label: "Tutor Sit-ins", description: "Quarterly observations, rubric reports, and family communication.", section: "scheduling-tutors" },
   {
     id: "tutor-attendance", href: "/tutor-attendance", label: "Office Attendance",
     description: "Clock in and out, manage office hours, and review attendance.", section: "scheduling-tutors",

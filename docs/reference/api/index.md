@@ -1,5 +1,9 @@
 # API Reference — Master Index
 
+## Tutor Sit-ins addition (2026-09-16)
+
+The [Tutor Sit-ins API reference](tutor-sit-ins.md) adds 16 method/path endpoints: 14 authenticated workspace endpoints and two monitored cron endpoints. The historical totals below predate this addition and other recent features; the machine-checked [route surface](../production-route-surface.json) is the current route inventory.
+
 The canonical lookup of every HTTP endpoint in BGScheduler. This page carries **method + path + group + auth + a one-line purpose** and nothing else. Request and response bodies, query parameters, status codes, and error shapes live on the per-group detail pages linked from the Group column.
 
 The new [tutor room booking reference](./tutor-room-booking.md) covers the capability-protected `/api/room` endpoints, tutor LINE approval, admin reservations, and room refresh cron.

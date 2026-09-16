@@ -15,6 +15,8 @@ function loadVercelConfig(): VercelConfig {
  * timing, so the only place a stagger regression can be caught is here.
  */
 const EXPECTED_SCHEDULES: Record<string, string> = {
+  "/api/internal/tutor-sit-ins": "4,14,24,34,44,54 * * * *",
+  "/api/internal/tutor-sit-ins/digest": "0 1 * * *",
   "/api/internal/progress-tests/process": "* * * * *",
   "/api/internal/room-booking": "1,5,9,13,17,21,25,29,33,37,41,45,49,53,57 * * * *",
   "/api/internal/class-assignments/weekend-check": "0,16,31 2 * * 3-5",
@@ -103,10 +105,10 @@ function canCollide(left: FiringSet, right: FiringSet): boolean {
 }
 
 describe("vercel cron configuration", () => {
-  it("registers exactly the 23 known crons, each on its pinned schedule", () => {
+  it("registers exactly the 25 known crons, each on its pinned schedule", () => {
     const crons = loadVercelConfig().crons;
 
-    expect(crons).toHaveLength(23);
+    expect(crons).toHaveLength(25);
     expect(Object.fromEntries(crons.map((cron) => [cron.path, cron.schedule]))).toEqual(EXPECTED_SCHEDULES);
   });
 
@@ -146,8 +148,10 @@ describe("vercel cron configuration", () => {
         const publishRecoveryOverlap = pair.has("/api/internal/class-assignments/publish-recovery")
           && (pair.has("/api/internal/class-assignments/weekend-check") || pair.has("/api/internal/class-assignments/admin-email"));
         // Durable document jobs are idle without queued work; Wise publishing is bounded and paced.
+        // Exact 08:00 digest reads the outbox; it does not start a source sync.
+        const sitInDigestOverlap = pair.has("/api/internal/tutor-sit-ins/digest") && pair.has("/api/internal/sync-wise");
         const progressProcessingOverlap = pair.has("/api/internal/progress-tests/process");
-        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck && !nextDayClassroomOverlap && !roomAvailabilityOverlap && !publishRecoveryOverlap && !progressProcessingOverlap) {
+        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck && !nextDayClassroomOverlap && !roomAvailabilityOverlap && !publishRecoveryOverlap && !progressProcessingOverlap && !sitInDigestOverlap) {
           collisions.push(`${crons[i].path} vs ${crons[j].path}`);
         }
       }

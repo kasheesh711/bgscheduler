@@ -2,6 +2,8 @@ import { creditControlActive } from "@/lib/credit-control/mode";
 import type { CronJobStatus } from "./types";
 
 export type CronJobKey =
+  | "tutor_sit_ins"
+  | "tutor_sit_ins_digest"
   | "classroom_publish_recovery"
   | "room_booking"
   | "classroom_weekend_check"
@@ -56,6 +58,14 @@ export interface CronJobDefinition {
 }
 
 export const CRON_JOBS = [
+  { key: "tutor_sit_ins", label: "Tutor Sit-ins", feature: "Tutor Sit-ins",
+    path: "/api/internal/tutor-sit-ins", schedule: "4,14,24,34,44,54 * * * *", cadenceLabel: "Every 10 min",
+    cadenceMinutes: 10, lateAfterMinutes: 25, maxDurationSeconds: 300, manualOnly: false,
+    dangerous: true, confirmationLabel: "Rechecks observations and retries enabled Calendar and email delivery.", routeMethod: "GET" },
+  { key: "tutor_sit_ins_digest", label: "Tutor Sit-in Digest", feature: "Tutor Sit-ins",
+    path: "/api/internal/tutor-sit-ins/digest", schedule: "0 1 * * *", cadenceLabel: "Daily 08:00 Bangkok",
+    cadenceMinutes: 1440, expectedBangkokMinute: 480, lateAfterMinutes: 60, maxDurationSeconds: 300, manualOnly: false,
+    dangerous: true, confirmationLabel: "Queues heads' daily observations digest and retries enabled delivery.", routeMethod: "GET" },
   { key: "progress_tests_processing", label: "Progress Test Processing", feature: "Progress Tests",
     path: "/api/internal/progress-tests/process", schedule: "* * * * *", cadenceLabel: "Every minute; recovers document and publication jobs",
     cadenceMinutes: 1, lateAfterMinutes: 5, maxDurationSeconds: 300, manualOnly: false,
@@ -489,6 +499,8 @@ export function statusRank(status: CronJobStatus): number {
 
 /** Physical cron schedules remain registered; expected work follows feature mode. */
 export function effectiveCronJob(job: CronJobDefinition): CronJobDefinition {
+  if (job.key.startsWith("tutor_sit_ins") && process.env.TUTOR_SIT_INS_ENABLED !== "true") return { ...job, paused: true, cadenceLabel: "Tutor Sit-ins disabled" };
+  if (job.key === "credit_control" && process.env.TUTOR_SIT_INS_ENABLED === "true") return { ...job, label: "Shared Student Data", requiresSuccessfulRun: true, cadenceMinutes: 30, lateAfterMinutes: 90, cadenceLabel: "Every 30 min — observation source" };
   if (job.key === "line_credit_digest" && !creditControlActive()) return { ...job, paused: true, cadenceLabel: "Paused while Credit Control is retired" };
   if (job.key === "progress_tests" && process.env.PROGRESS_TEST_WORKSPACE_ENABLED === "true") return { ...job, requiresSuccessfulRun: true, cadenceMinutes: 30, lateAfterMinutes: 60, cadenceLabel: "Every 30 min — tutor workspace" };
   if (job.key === "progress_tests") return { ...job, requiresSuccessfulRun: true, cadenceMinutes: 1440, expectedBangkokMinute: 445, lateAfterMinutes: 90, cadenceLabel: "Daily 07:25 Bangkok; recovery 07:55 / 08:25" };

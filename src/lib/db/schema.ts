@@ -5738,3 +5738,273 @@ export const tutorAttendanceAudit = pgTable("tutor_attendance_audit", {
   requestKey: uuid("request_key"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, t => [uniqueIndex("ta_audit_request_idx").on(t.actor, t.requestKey).where(sql`${t.requestKey} IS NOT NULL`), index("ta_audit_key_date_idx").on(t.canonicalKey, t.date)]);
+// Quarterly QA records are independent of rotating Wise snapshots.
+export const tutorSitInGrants = pgTable(
+  "tutor_sit_in_grants",
+  {
+    email: text("email").primaryKey(),
+    role: text("role").notNull().default("observer"),
+    departments: jsonb("departments").$type<string[]>().notNull().default([]),
+    canonicalKey: text("canonical_key"),
+    active: boolean("active").notNull().default(true),
+    revision: integer("revision").notNull().default(0),
+    operationOwner: text("operation_owner"),
+    operationUntil: timestamp("operation_until", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    check(
+      "sit_in_grant_role",
+      sql`${t.role} in ('observer', 'coordinator', 'manager')`,
+    ),
+  ],
+);
+
+export const tutorSitInMappings = pgTable("tutor_sit_in_mappings", {
+  classId: text("class_id").primaryKey(),
+  departments: jsonb("departments").$type<string[]>().notNull().default([]),
+  revision: integer("revision").notNull().default(0),
+  updatedBy: text("updated_by").notNull(),
+  reason: text("reason").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const tutorSitInAssignments = pgTable(
+  "tutor_sit_in_assignments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    quarter: text("quarter").notNull(),
+    department: text("department").notNull(),
+    canonicalKey: text("canonical_key").notNull(),
+    tutorName: text("tutor_name").notNull(),
+    observerEmail: text("observer_email"),
+    status: text("status").notNull().default("pending"),
+    reason: text("reason"),
+    revision: integer("revision").notNull().default(0),
+    suggestions: jsonb("suggestions")
+      .$type<import("../tutor-sit-ins/model").Suggestion[]>()
+      .notNull()
+      .default([]),
+    suggestionError: text("suggestion_error"),
+    checkedAt: timestamp("checked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("sit_in_quarter_tutor_department").on(
+      t.quarter,
+      t.canonicalKey,
+      t.department,
+    ),
+    index("sit_in_assignment_observer").on(t.observerEmail, t.quarter),
+    check(
+      "sit_in_assignment_status",
+      sql`${t.status} in ('pending','scheduled','needs_rescheduling','completed','exempt')`,
+    ),
+    check(
+      "sit_in_quarter_check",
+      sql`${t.quarter} ~ '^[0-9]{4}-Q[1-4]$' AND ${t.quarter} >= '2026-Q4' AND ${t.quarter} <= '2100-Q4'`,
+    ),
+    check(
+      "sit_in_department_check",
+      sql`${t.department} IN ('physics','maths','english','chemistry','iseb')`,
+    ),
+  ],
+);
+
+export const tutorSitInObservations = pgTable(
+  "tutor_sit_in_observations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    assignmentId: uuid("assignment_id")
+      .notNull()
+      .references(() => tutorSitInAssignments.id),
+    observerEmail: text("observer_email").notNull(),
+    observerCanonicalKey: text("observer_canonical_key").notNull(),
+    lesson: jsonb("lesson")
+      .$type<import("../tutor-sit-ins/model").Lesson>()
+      .notNull(),
+    startTime: timestamp("start_time", { withTimezone: true }).notNull(),
+    endTime: timestamp("end_time", { withTimezone: true }).notNull(),
+    current: boolean("current").notNull().default(true),
+    invalidReason: text("invalid_reason"),
+    calendarId: text("calendar_id").notNull(),
+    eventId: text("event_id").notNull(),
+    eventEtag: text("event_etag"),
+    eventUrl: text("event_url"),
+    calendarStatus: text("calendar_status").notNull().default("pending"),
+    calendarError: text("calendar_error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("sit_in_one_current_observation")
+      .on(t.assignmentId)
+      .where(sql`${t.current} = true`),
+    uniqueIndex("sit_in_calendar_event").on(
+      t.observerEmail,
+      t.calendarId,
+      t.eventId,
+    ),
+    index("sit_in_observer_times").on(t.observerEmail, t.startTime),
+    check("sit_in_time_order", sql`${t.endTime} > ${t.startTime}`),
+  ],
+);
+
+export const tutorSitInReports = pgTable(
+  "tutor_sit_in_reports",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    assignmentId: uuid("assignment_id")
+      .notNull()
+      .references(() => tutorSitInAssignments.id),
+    observationId: uuid("observation_id")
+      .notNull()
+      .references(() => tutorSitInObservations.id),
+    authorEmail: text("author_email").notNull(),
+    reportVersion: integer("report_version").notNull(),
+    revision: integer("revision").notNull().default(0),
+    rubric: jsonb("rubric")
+      .$type<import("../tutor-sit-ins/rubric").Rubric>()
+      .notNull(),
+    data: jsonb("data")
+      .$type<import("../tutor-sit-ins/rubric").ReportData>()
+      .notNull(),
+    score: integer("score"),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    late: boolean("late").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("sit_in_report_version").on(t.assignmentId, t.reportVersion),
+    check(
+      "sit_in_score_check",
+      sql`${t.score} IS NULL OR ${t.score} BETWEEN 10 AND 100`,
+    ),
+  ],
+);
+
+export const tutorSitInCalendarConnections = pgTable(
+  "tutor_sit_in_calendar_connections",
+  {
+    email: text("email").primaryKey(),
+    googleEmail: text("google_email").notNull(),
+    googleSubject: text("google_subject").notNull(),
+    accessTokenCiphertext: text("access_token_ciphertext").notNull(),
+    refreshTokenCiphertext: text("refresh_token_ciphertext"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    scope: text("scope").notNull(),
+    calendarId: text("calendar_id").notNull().default("primary"),
+    busyCalendarIds: jsonb("busy_calendar_ids")
+      .$type<string[]>()
+      .notNull()
+      .default(["primary"]),
+    revision: integer("revision").notNull().default(0),
+    lastError: text("last_error"),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+);
+
+export const tutorSitInCommunications = pgTable(
+  "tutor_sit_in_communications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    observationId: uuid("observation_id")
+      .notNull()
+      .references(() => tutorSitInObservations.id),
+    familyKey: text("family_key").notNull(),
+    kind: text("kind").notNull(),
+    participants: jsonb("participants")
+      .$type<import("../tutor-sit-ins/model").Participant[]>()
+      .notNull(),
+    unresolved: boolean("unresolved").notNull().default(false),
+    parentInformedAt: timestamp("parent_informed_at", { withTimezone: true }),
+    parentInformedBy: text("parent_informed_by"),
+    studentInformedAt: timestamp("student_informed_at", { withTimezone: true }),
+    studentInformedBy: text("student_informed_by"),
+    supersededAt: timestamp("superseded_at", { withTimezone: true }),
+    revision: integer("revision").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("sit_in_communication_family").on(
+      t.observationId,
+      t.familyKey,
+      t.kind,
+    ),
+  ],
+);
+
+export const tutorSitInJobs = pgTable(
+  "tutor_sit_in_jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    key: text("key").notNull(),
+    kind: text("kind").notNull(),
+    observationId: uuid("observation_id").references(
+      () => tutorSitInObservations.id,
+    ),
+    recipient: text("recipient"),
+    payload: jsonb("payload")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    status: text("status").notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    retryAt: timestamp("retry_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    leaseOwner: text("lease_owner"),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("sit_in_job_key").on(t.key),
+    index("sit_in_job_pending").on(t.status, t.retryAt),
+  ],
+);
+
+export const tutorSitInAudit = pgTable("tutor_sit_in_audit", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  actor: text("actor").notNull(),
+  action: text("action").notNull(),
+  entityId: text("entity_id").notNull(),
+  detail: jsonb("detail")
+    .$type<Record<string, unknown>>()
+    .notNull()
+    .default({}),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const tutorSitInWorkerState = pgTable("tutor_sit_in_worker_state", {
+  key: text("key").primaryKey(),
+  owner: text("owner"),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+});

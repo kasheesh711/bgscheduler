@@ -60,6 +60,8 @@ SKILL.md @kasheesh711
 /src/lib/tutor-attendance/service.ts @kasheesh711
 /src/lib/tutor-attendance/network.ts @kasheesh711
 /src/app/api/tutor-attendance/settings/ @kasheesh711
+/src/lib/tutor-sit-ins/service.ts @kasheesh711
+/src/app/api/tutor-sit-ins/settings/ @kasheesh711
 
 # Preview isolation, credentials, cron authentication, and external-write flags.
 /src/lib/preview*.ts @kasheesh711
@@ -67,6 +69,9 @@ SKILL.md @kasheesh711
 /src/components/layout/preview-banner.tsx @kasheesh711
 /src/lib/env.ts @kasheesh711
 /src/lib/**/google-oauth.ts @kasheesh711
+/src/lib/tutor-sit-ins/calendar.ts @kasheesh711
+/src/lib/tutor-sit-ins/model.ts @kasheesh711
+/src/app/api/tutor-sit-ins/calendar/ @kasheesh711
 /src/lib/internal/ @kasheesh711
 /src/app/api/internal/ @kasheesh711
 /src/lib/data-health/cron-registry.ts @kasheesh711

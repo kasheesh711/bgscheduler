@@ -1,5 +1,7 @@
 # BGScheduler Documentation Handbook
 
+**New feature:** [Tutor Sit-ins](features/tutor-sit-ins.md) — quarterly observations, adaptive scheduling, Google Calendar consent, native rubrics and family communication. See the [rollout record](operations/tutor-sit-ins-rollout.md); delivery is opt-in.
+
 The entry point to the BGScheduler handbook. Start with the [reading order](#reading-order); use the
 [canonical-home table](#canonical-home-who-owns-what) to decide which page is authoritative when two
 pages mention the same thing; use the [table of contents](#table-of-contents) to jump.
