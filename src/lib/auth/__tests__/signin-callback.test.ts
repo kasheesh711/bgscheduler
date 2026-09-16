@@ -78,7 +78,7 @@ describe("Auth.js revocation and preview callbacks", () => {
   it("sets an admin version only at fresh sign-in and preserves stale/unversioned tokens", async () => {
     vi.mocked(resolveUserAccess).mockResolvedValue({ role: "admin", allowedPages: null, adminAccessVersion: 4 });
     const signedIn = await authConfig.callbacks.jwt({ token: {}, user: { email: "owner@example.com" } } as never);
-    expect(signedIn.adminAccessVersion).toBe(4);
+    expect(signedIn?.adminAccessVersion).toBe(4);
     vi.mocked(resolveUserAccess).mockClear();
     const old = { role: "admin", adminAccessVersion: 0 };
     expect(await authConfig.callbacks.jwt({ token: old } as never)).toEqual(old);
@@ -105,6 +105,13 @@ describe("Auth.js revocation and preview callbacks", () => {
     expect(await authConfig.callbacks.signIn({ user: { email: "aoeng@example.com" }, account: { access_token: "preview-identity-token" } } as never)).toBe(true);
     expect(storeGoogleOAuthTokenForUser).not.toHaveBeenCalled();
     vi.unstubAllEnvs();
+  });
+  it("never stores Google credentials for email login and denies access revoked before JWT issuance", async () => {
+    vi.mocked(resolveUserAccess).mockResolvedValue({ role: "teacher", allowedPages: ["/tutor-sit-ins"] });
+    expect(await authConfig.callbacks.signIn({ user: { email: "head@hotmail.com" }, account: { provider: "email-code" } } as never)).toBe(true);
+    expect(storeGoogleOAuthTokenForUser).not.toHaveBeenCalled();
+    vi.mocked(resolveUserAccess).mockResolvedValue(null);
+    expect(await authConfig.callbacks.jwt({ token: {}, user: { email: "head@hotmail.com" } } as never)).toBeNull();
   });
 });
 

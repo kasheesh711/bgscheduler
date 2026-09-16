@@ -40,6 +40,7 @@ Everything else — AI Scheduler, class assignments, classrooms, credit control,
 | POST | `/api/admin/sync-wise` | session | full Wise snapshot write + promotion, `cron_invocations` row | [`admin/sync-wise/route.ts:8-24`](../../../src/app/api/admin/sync-wise/route.ts) |
 | GET | `/api/auth/[...nextauth]` | public | Auth.js session cookies; Google OAuth token row at sign-in | [`auth/[...nextauth]/route.ts:3`](../../../src/app/api/auth/[...nextauth]/route.ts) |
 | POST | `/api/auth/[...nextauth]` | public | same | [`auth/[...nextauth]/route.ts:3`](../../../src/app/api/auth/[...nextauth]/route.ts) |
+| POST | `/api/auth/email-code/request` | public, exact Origin | browser-bound code challenge, rate counters and email | [`auth/email-code/request/route.ts`](../../../src/app/api/auth/email-code/request/route.ts) |
 
 Ten route files, eleven endpoints: the Auth.js catch-all exports **two** methods from a single three-line file by destructuring (`export const { GET, POST } = handlers`), so it matches no `export async function` grep — this is the pair that makes the repo-wide count 243 rather than 241.
 
@@ -342,3 +343,15 @@ Nine of the ten route files have a route test under a sibling `__tests__/` direc
 The engines behind them carry their own unit suites under `src/lib/search/__tests__/` (engine, compare, parser, recommend), and `src/__tests__/middleware.test.ts` covers the allowlist and `allowedPages` matching described above.
 
 _Verified against main@0cd1e81 (clean tree) on 2026-09-02._
+
+## Email-code request
+
+`POST /api/auth/email-code/request` accepts `{ "email": "approved@example.com" }`.
+It returns `202` with `challengeId`, `expiresIn` (600 seconds), `retryAfter` (60 seconds)
+and a generic acknowledgement, plus the HttpOnly browser-binding cookie. Unknown and
+ineligible emails receive the same shape. No code or binding secret is returned in JSON.
+
+Errors: `400` invalid JSON/email, `403` missing or foreign Origin, `413` oversized request,
+`429` throttled with `Retry-After`, and `503` disabled/unconfigured/failed infrastructure.
+The login form verifies `{ email, challengeId, code }` with Auth.js `signIn("email-code")`;
+Auth.js owns CSRF validation and JWT cookie creation. See [auth and access](../../operations/auth-and-access.md).

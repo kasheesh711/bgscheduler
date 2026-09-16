@@ -22,6 +22,25 @@ import {
 import { sql } from "drizzle-orm";
 import type { Week, OfficeNetwork } from "@/lib/tutor-attendance/model";
 
+// One outstanding browser-bound email challenge per approved-or-requested address.
+export const authEmailChallenges = pgTable("auth_email_challenges", {
+  email: text("email").primaryKey(),
+  id: uuid("id").notNull().unique(),
+  codeHash: text("code_hash").notNull(),
+  bindingHash: text("binding_hash").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  consumedAt: timestamp("consumed_at", { withTimezone: true }),
+  attempts: integer("attempts").notNull().default(0),
+  ready: boolean("ready").notNull().default(false),
+}, (t) => [index("auth_email_challenge_expiry").on(t.expiresAt)]);
+
+export const authEmailRateLimits = pgTable("auth_email_rate_limits", {
+  key: text("key").primaryKey(),
+  count: integer("count").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (t) => [index("auth_email_rate_expiry").on(t.expiresAt)]);
+
 // ── Enums ──────────────────────────────────────────────────────────────
 
 export const syncStatusEnum = pgEnum("sync_status", [

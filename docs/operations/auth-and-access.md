@@ -2,9 +2,35 @@
 
 How BGScheduler decides **who may sign in** and **what they may reach once signed in**.
 
-Identity comes from **Auth.js v5 (NextAuth)** with a single **Google** OAuth provider
-(`next-auth: 5.0.0-beta.30`, `package.json:53`). There is no password login, no second
-provider, and no database session adapter — the session is a JWT cookie.
+Identity comes from **Auth.js v5 (NextAuth)** with **Google** OAuth and an optional
+**email-code** provider (`AUTH_EMAIL_CODE_ENABLED=true`). Both use the same JWT cookies,
+access resolution and revocation checks. There is no password login or database session adapter.
+
+### Email codes
+
+An approved user can request a six-digit code on `/login`, including Hotmail users.
+`POST /api/auth/email-code/request` requires the site's exact Origin and returns the
+same acknowledgement for approved and unknown addresses. The existing branded Apps Script
+relay sends codes; a configured backup retries the same code. Delivery failures invalidate
+the challenge and log a redacted error. The response never includes the code.
+
+Migration `0091_email_code_login` adds one challenge per normalized email and shared
+rate counters. Codes and browser bindings are keyed hashes; codes expire after ten minutes,
+allow five attempts and are consumed atomically. Resending replaces the old challenge.
+The HttpOnly, SameSite browser cookie binds verification to the browser that requested it.
+Limits are 60 seconds between sends, five requests/email/15 minutes, 50 requests/IP/15
+minutes and 100 verification attempts/IP/15 minutes. IP limits trust Vercel's overwritten
+header only; missing/untrusted IPs share a conservative bucket. Expired rows are cleaned up
+after a day during requests.
+
+Pending admissions invitees can receive a code, but request-time checks never activate
+memberships. Successful verification runs the existing sign-in callback and fresh access
+checks before issuing a JWT. A disabled administrator cannot fall back to another role.
+Email login does not overwrite Google integration credentials or change website grants.
+
+Apply the migration, verify relay delivery, deploy, then enable `AUTH_EMAIL_CODE_ENABLED`.
+Setting it to false stops issuance and verification without invalidating existing valid
+sessions or changing Google login. Preview environments always disable email login/delivery.
 
 This page owns the *model*: the sign-in gate, the JWT claims, the Node Proxy, the fresh
 per-feature guards, the `admin_users` allowlist, and the non-session credentials that cron,
