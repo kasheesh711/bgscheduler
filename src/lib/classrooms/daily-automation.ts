@@ -1,3 +1,4 @@
+import { pausedWiseClassroomResult, wiseClassroomAutomationEnabled } from "./operations-policy";
 import type { Database } from "@/lib/db";
 import { getDb } from "@/lib/db";
 import { addBangkokDays, todayBangkok } from "@/lib/room-capacity/dates";
@@ -7,8 +8,9 @@ import { sendScheduleEmailsForRun, type ScheduleEmailSendResult } from "./schedu
 import { sendAdminClassroomScheduleEmail } from "./admin-schedule-email";
 
 /** The 17:00 Bangkok preparation shares the normal Wise sync's single-flight guard. */
-export async function prepareNextDayClassrooms(db: Database = getDb(), now = new Date()) {
-  return runClassroomMorningAutomation(db, {
+export async function prepareNextDayClassrooms(db: Database | undefined = undefined, now = new Date()) {
+  if (!wiseClassroomAutomationEnabled()) return pausedWiseClassroomResult();
+  return runClassroomMorningAutomation(db ?? getDb(), {
     startDate: addBangkokDays(todayBangkok(now), 1),
     sendEmails: false,
     maxSyncWaitMs: 10 * 60 * 1000,
@@ -16,7 +18,9 @@ export async function prepareNextDayClassrooms(db: Database = getDb(), now = new
 }
 
 /** Deliver the saved plan; never regenerate rooms during the evening delivery window. */
-export async function deliverNextDayClassroomSchedules(db: Database = getDb(), now = new Date()) {
+export async function deliverNextDayClassroomSchedules(db: Database | undefined = undefined, now = new Date()) {
+  if (!wiseClassroomAutomationEnabled()) return pausedWiseClassroomResult();
+  db ??= getDb();
   const today = todayBangkok(now);
   const assignmentDate = addBangkokDays(today, 1);
   const preparedAfter = new Date(`${today}T17:00:00+07:00`);

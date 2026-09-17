@@ -1,3 +1,12 @@
+vi.mock("server-only", () => ({}));
+// Existing behavior suites delegate current-account validation to the owner access suite.
+vi.mock("@/lib/admin-users/access", () => ({ requireSuperAdmin: async () => {
+  const { auth } = await import("@/lib/auth");
+  const { AdminUsersAccessError } = await import("@/lib/admin-users/types");
+  const session = await auth();
+  if (!session?.user?.email) throw new AdminUsersAccessError("Unauthorized", 401);
+  return { email: session.user.email, accessVersion: 0 };
+} }));
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { NextRequest } from "next/server";
 
@@ -138,7 +147,7 @@ describe("GET/POST /api/internal/sync-wise", () => {
   it("returns 200 when POST has a valid session and CRON_SECRET is missing", async () => {
     delete process.env.CRON_SECRET;
     vi.mocked(auth).mockResolvedValue({
-      user: { role: "admin", email: "kevinhsieh711@gmail.com" },
+      user: { role: "admin", email: "kevhsh7@gmail.com" },
       expires: "2026-05-06T00:00:00.000Z",
     } as never);
 
@@ -157,7 +166,7 @@ describe("GET/POST /api/internal/sync-wise", () => {
   it("keeps GET blocked when CRON_SECRET is missing even with a valid session", async () => {
     delete process.env.CRON_SECRET;
     vi.mocked(auth).mockResolvedValue({
-      user: { role: "admin", email: "kevinhsieh711@gmail.com" },
+      user: { role: "admin", email: "kevhsh7@gmail.com" },
       expires: "2026-05-06T00:00:00.000Z",
     } as never);
 
@@ -185,7 +194,7 @@ describe("GET/POST /api/internal/sync-wise", () => {
 
   it("returns 200 when POST has no Authorization header but has a valid session", async () => {
     vi.mocked(auth).mockResolvedValue({
-      user: { role: "admin", email: "kevinhsieh711@gmail.com" },
+      user: { role: "admin", email: "kevhsh7@gmail.com" },
       expires: "2026-05-06T00:00:00.000Z",
     } as never);
 
@@ -204,7 +213,7 @@ describe("GET/POST /api/internal/sync-wise", () => {
 
   it("returns 200 when POST has an invalid cron secret but has a valid session", async () => {
     vi.mocked(auth).mockResolvedValue({
-      user: { role: "admin", email: "kevinhsieh711@gmail.com" },
+      user: { role: "admin", email: "kevhsh7@gmail.com" },
       expires: "2026-05-06T00:00:00.000Z",
     } as never);
 
@@ -307,7 +316,7 @@ describe("GET/POST /api/internal/sync-wise", () => {
 
   it("returns 401 when GET has no Authorization header even with a valid session", async () => {
     vi.mocked(auth).mockResolvedValue({
-      user: { role: "admin", email: "kevinhsieh711@gmail.com" },
+      user: { role: "admin", email: "kevhsh7@gmail.com" },
       expires: "2026-05-06T00:00:00.000Z",
     } as never);
 

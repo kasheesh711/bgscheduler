@@ -1,3 +1,4 @@
+import { isClassroomOperationsOwner, isWiseClassroomJob, pausedWiseClassroomResult, wiseClassroomAutomationEnabled } from "@/lib/classrooms/operations-policy";
 import { runClassroomPublishRecovery } from "@/lib/classrooms/publish-worker";
 import { runRoomRefresh } from "@/lib/room-booking/refresh";
 import { NextResponse } from "next/server";
@@ -35,6 +36,10 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
     return NextResponse.json({ error: "Unknown job" }, { status: 404 });
   }
 
+  if (isWiseClassroomJob(jobKey) && !isClassroomOperationsOwner(actorEmail)) {
+    return NextResponse.json({ error: "Only Kevin can run this job." }, { status: 403 });
+  }
+
   return withCronInvocationAudit(
     {
       jobKey,
@@ -43,6 +48,9 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
       requestMethod: "POST",
     },
     async () => {
+      if (isWiseClassroomJob(jobKey) && jobKey !== "wise_snapshot" && !wiseClassroomAutomationEnabled()) {
+        return NextResponse.json(pausedWiseClassroomResult());
+      }
       if (jobKey === "progress_tests_processing") {
         const { processJobs } = await import("@/lib/progress-tests/workspace/jobs");
         return NextResponse.json(await processJobs());
@@ -60,7 +68,7 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
         }
       }
       if (jobKey === "wise_snapshot") {
-        return runWiseSyncRequest();
+        return runWiseSyncRequest({ manualOwner: actorEmail ?? undefined });
       }
 
       if (jobKey === "wise_activity") {

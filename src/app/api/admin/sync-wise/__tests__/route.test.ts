@@ -1,3 +1,12 @@
+vi.mock("server-only", () => ({}));
+// Existing behavior suites delegate current-account validation to the owner access suite.
+vi.mock("@/lib/admin-users/access", () => ({ requireSuperAdmin: async () => {
+  const { auth } = await import("@/lib/auth");
+  const { AdminUsersAccessError } = await import("@/lib/admin-users/types");
+  const session = await auth();
+  if (!session?.user?.email) throw new AdminUsersAccessError("Unauthorized", 401);
+  return { email: session.user.email, accessVersion: 0 };
+} }));
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 vi.mock("next/cache", () => ({ revalidateTag: vi.fn() }));
@@ -73,7 +82,7 @@ describe("POST /api/admin/sync-wise", () => {
     vi.resetAllMocks();
     process.env.WISE_INSTITUTE_ID = "institute-1";
     vi.mocked(auth).mockResolvedValue({
-      user: { email: "kevinhsieh711@gmail.com" },
+      user: { email: "kevhsh7@gmail.com" },
       expires: "2026-05-14T00:00:00.000Z",
     } as never);
     vi.mocked(getDb).mockReturnValue(makeDbMock() as never);

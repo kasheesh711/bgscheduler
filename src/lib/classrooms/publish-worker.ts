@@ -1,3 +1,4 @@
+import { pausedWiseClassroomResult, wiseClassroomAutomationEnabled } from "./operations-policy";
 import { and, asc, eq, lte, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import { classroomPublishJobs as jobs, classroomAssignmentRuns as runs } from "@/lib/db/schema";
@@ -5,6 +6,7 @@ import { runClassroomPublishJob } from "./data";
 
 /** One bounded attempt per invocation; idle ticks do not call Wise. */
 export async function runClassroomPublishRecovery(db: Database) {
+  if (!wiseClassroomAutomationEnabled()) return pausedWiseClassroomResult();
   const now = new Date();
   // Pre-recovery jobs have no lease/fence and cannot safely be resumed. Preserve
   // their row evidence and close only attempts long past the old function limit.

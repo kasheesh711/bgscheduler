@@ -1,3 +1,5 @@
+import { isClassroomOperationsOwner, wiseClassroomAutomationEnabled } from "./operations-policy";
+import { stopNonOwnerClassroomPublications } from "./operations-shutdown";
 import { withRoomDayOperation, lockRoomDay, assertRoomDayIdle } from "@/lib/room-booking/locking";
 import { reservationRoomBlocks } from "@/lib/room-booking/service";
 import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
@@ -1479,6 +1481,10 @@ async function moveCycleRowToTemporaryLocation(
 
 export async function runClassroomPublishJob(db: Database, jobId: string, client?: WiseClient) {
   const existing = await loadPublishJob(db, jobId);
+  if (!wiseClassroomAutomationEnabled() && !isClassroomOperationsOwner(existing.createdBy)) {
+    await stopNonOwnerClassroomPublications(db, jobId);
+    return getClassroomPublishJobProgress(db, existing.runId, jobId);
+  }
   const claim = await claimPublishAttempt(db, jobId);
   if (!claim) return getClassroomPublishJobProgress(db, existing.runId, jobId);
   try {

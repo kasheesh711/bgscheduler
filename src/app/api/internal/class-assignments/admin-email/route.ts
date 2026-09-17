@@ -1,3 +1,4 @@
+import { pausedWiseClassroomResult, wiseClassroomAutomationEnabled } from "@/lib/classrooms/operations-policy";
 import { NextRequest, NextResponse } from "next/server";
 import { deliverNextDayClassroomSchedules } from "@/lib/classrooms/daily-automation";
 import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
@@ -12,6 +13,7 @@ export async function GET(request: NextRequest) {
   return withCronInvocationAudit(
     { jobKey: "classroom_admin_email", triggerSource: "cron", requestMethod: request.method },
     async () => {
+      if (!wiseClassroomAutomationEnabled()) return NextResponse.json(pausedWiseClassroomResult());
       try {
         const result = await deliverNextDayClassroomSchedules();
         const status = result.ok ? 200 : 500;

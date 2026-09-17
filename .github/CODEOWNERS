@@ -77,3 +77,7 @@ SKILL.md @kasheesh711
 /src/lib/data-health/cron-registry.ts @kasheesh711
 /src/lib/post-class-feedback/payout-config.ts @kasheesh711
 /src/lib/post-class-feedback/notification-config.ts @kasheesh711
+
+# Emergency Wise/classroom operations policy and publication fencing.
+/src/lib/classrooms/operations-*.ts @kasheesh711
+/src/lib/classrooms/publish-queue.ts @kasheesh711

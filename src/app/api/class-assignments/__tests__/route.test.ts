@@ -1,3 +1,12 @@
+vi.mock("server-only", () => ({}));
+// Existing behavior suites delegate current-account validation to the owner access suite.
+vi.mock("@/lib/admin-users/access", () => ({ requireSuperAdmin: async () => {
+  const { auth } = await import("@/lib/auth");
+  const { AdminUsersAccessError } = await import("@/lib/admin-users/types");
+  const session = await auth();
+  if (!session?.user?.email) throw new AdminUsersAccessError("Unauthorized", 401);
+  return { email: session.user.email, accessVersion: 0 };
+} }));
 import { describe, expect, it, beforeEach, vi, type Mock } from "vitest";
 import { NextRequest } from "next/server";
 
@@ -108,7 +117,7 @@ const publishProgress = {
 describe("class assignment routes", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    authMock.mockResolvedValue({ user: { email: "admin@example.com" } });
+    authMock.mockResolvedValue({ user: { email: "kevhsh7@gmail.com" } });
     vi.mocked(getDb).mockReturnValue({ db: true } as never);
     vi.mocked(getClassroomAssignmentForDate).mockResolvedValue(detail as never);
     vi.mocked(runClassroomAssignment).mockResolvedValue(detail as never);
@@ -154,7 +163,7 @@ describe("class assignment routes", () => {
       {
         date: "2026-05-14",
         forceReassign: true,
-        createdBy: "admin@example.com",
+        createdBy: "kevhsh7@gmail.com",
       },
     );
   });
@@ -207,7 +216,7 @@ describe("class assignment routes", () => {
     expect(res.status).toBe(202);
     expect(createClassroomPublishJob).toHaveBeenCalledWith(
       { db: true },
-      { runId: "run-1", createdBy: "admin@example.com" },
+      { runId: "run-1", createdBy: "kevhsh7@gmail.com" },
     );
     await expect(res.json()).resolves.toEqual({
       jobId: "job-1",
@@ -249,7 +258,7 @@ describe("class assignment routes", () => {
     expect(sendScheduleEmailsForRun).toHaveBeenCalledWith(
       { db: true },
       "run-1",
-      "admin@example.com",
+      "kevhsh7@gmail.com",
       undefined,
       {},
     );
@@ -300,7 +309,7 @@ describe("class assignment routes", () => {
     expect(sendScheduleEmailsForRun).toHaveBeenCalledWith(
       { db: true },
       "run-1",
-      "admin@example.com",
+      "kevhsh7@gmail.com",
       undefined,
       {},
     );
@@ -320,7 +329,7 @@ describe("class assignment routes", () => {
     expect(sendScheduleEmailsForRun).toHaveBeenCalledWith(
       { db: true },
       "run-1",
-      "admin@example.com",
+      "kevhsh7@gmail.com",
       undefined,
       { recipientGroupIds: ["group-1", "group-2"] },
     );
@@ -343,7 +352,7 @@ describe("class assignment routes", () => {
     expect(sendScheduleEmailsForRun).toHaveBeenCalledWith(
       { db: true },
       "run-1",
-      "admin@example.com",
+      "kevhsh7@gmail.com",
       undefined,
       {
         recipientGroupIds: ["group-1", "group-2"],

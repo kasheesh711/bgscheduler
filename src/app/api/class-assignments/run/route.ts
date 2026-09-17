@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { auth } from "@/lib/auth";
+import { requireClassroomOperationsOwner, classroomOperationsAccessError } from "@/lib/classrooms/operations-access";
 import { getDb } from "@/lib/db";
 import {
   runClassroomAssignment,
@@ -15,10 +15,9 @@ const runRequestSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
-  const session = await auth();
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  let actor;
+  try { actor = await requireClassroomOperationsOwner(); }
+  catch (error) { return classroomOperationsAccessError(error); }
 
   let body: unknown;
   try {
@@ -39,7 +38,7 @@ export async function POST(request: NextRequest) {
     const detail = await runClassroomAssignment(getDb(), {
       date: parsed.data.date,
       forceReassign: parsed.data.forceReassign,
-      createdBy: session.user?.email ?? null,
+      createdBy: actor.email,
     });
     return NextResponse.json(detail);
   } catch (error) {

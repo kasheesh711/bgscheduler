@@ -474,3 +474,11 @@ and a verified Apps Script relay. Reuses `AUTH_SECRET` for keyed hashes and the 
 `SCHEDULE_EMAIL_*` primary/backup sender configuration. Neither codes nor browser bindings
 are logged. `VERCEL_ENV=preview` or `PREVIEW_SANDBOX_ENABLED=true` disables email login
 regardless of the flag. Turning the flag off preserves Google login and existing sessions.
+
+## Wise and classroom automation emergency control
+
+| Variable | Default | Behavior |
+|---|---|---|
+| `WISE_CLASSROOM_AUTOMATION_ENABLED` | disabled | Only exact `true` enables `wise_snapshot`, `classroom_morning`, `classroom_publish_recovery`, `classroom_admin_email`, and `classroom_weekend_check`. Missing, empty and all other values pause these jobs. Kevin's authenticated manual sync/run/publish remains available. |
+
+The manual operations owner is the exact normalized identity `kevhsh7@gmail.com`, further constrained by existing `SUPER_ADMIN_EMAILS` and enabled/current admin access. Adding a different website owner does not grant these operations. See [the shutdown runbook](../operations/classroom-owner-shutdown.md).

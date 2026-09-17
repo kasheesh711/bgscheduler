@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
-import { auth } from "@/lib/auth";
+import { requireClassroomOperationsOwner, classroomOperationsAccessError } from "@/lib/classrooms/operations-access";
+import { AdminUsersAccessError } from "@/lib/admin-users/types";
 import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import { runWiseSyncRequest } from "@/lib/sync/run-wise-sync";
 
@@ -43,18 +44,16 @@ async function handleSync(
   }
 
   if (options.allowSessionAuth) {
-    const session = await auth();
-
-    if (session?.user?.role === "admin") {
+    try {
+      const actor = await requireClassroomOperationsOwner();
       return withCronInvocationAudit(
-        {
-          jobKey: "wise_snapshot",
-          triggerSource: "admin",
-          actorEmail: session.user?.email ?? null,
-          requestMethod: request.method,
-        },
-        () => runWiseSyncRequest(),
+        { jobKey: "wise_snapshot", triggerSource: "admin", actorEmail: actor.email, requestMethod: request.method },
+        () => runWiseSyncRequest({ manualOwner: actor.email }),
       );
+    } catch (error) {
+      if (!(error instanceof AdminUsersAccessError) || error.status !== 401) {
+        return classroomOperationsAccessError(error);
+      }
     }
   }
 

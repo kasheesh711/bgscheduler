@@ -4,6 +4,8 @@ import path from "path";
 process.env.TZ = "Asia/Bangkok";
 // Existing suites exercise active feature behavior; retirement suites override explicitly.
 process.env.CREDIT_CONTROL_MODE = "active";
+// Legacy suites exercise enabled automation; shutdown suites explicitly test the default pause.
+process.env.WISE_CLASSROOM_AUTOMATION_ENABLED = "true";
 
 export default defineConfig({
   resolve: {

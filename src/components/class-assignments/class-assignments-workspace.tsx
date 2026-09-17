@@ -1,6 +1,7 @@
 "use client";
 import { AdminRoomReservations, useAdminRoomReservations, reservationDisplayRows } from "@/components/room-booking/admin-reservations";
 
+import { canRetryPausedPublish } from "./publish-controls";
 import { ClassroomReadiness } from "./readiness-notice";
 import { summarizeAssignmentReadiness } from "./readiness-summary";
 
@@ -217,7 +218,9 @@ function PublishBadge({ status }: { status: ClassroomRow["publishStatus"] }) {
   return <Badge variant="outline">Local only</Badge>;
 }
 
-export function ClassAssignmentsWorkspace() {
+export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused = false }: {
+  canOperate?: boolean; automationPaused?: boolean;
+} = {}) {
   const [date, setDate] = useState("");
   const [forceReassign, setForceReassign] = useState(false);
   const [detail, setDetail] = useState<AssignmentDetail | null>(null);
@@ -253,7 +256,7 @@ export function ClassAssignmentsWorkspace() {
       const loaded = await readAssignmentDetailResponse(response);
       setDetail(loaded);
       setPublishProgress(loaded.publishProgress ?? null);
-      setPublishing(Boolean(loaded.publishProgress && !isPublishJobTerminal(loaded.publishProgress.status)));
+      setPublishing(loaded.publishProgress?.status === "running");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load assignments");
     } finally {
@@ -384,6 +387,7 @@ export function ClassAssignmentsWorkspace() {
   }, [tutors]);
 
   async function runAssignments() {
+    if (!canOperate) return;
     setRunning(true);
     setRunStep("syncing");
     setError(null);
@@ -440,7 +444,7 @@ export function ClassAssignmentsWorkspace() {
   }
 
   async function publishToWise() {
-    if (!run) return;
+    if (!run || !canOperate) return;
     setPublishing(true);
     setPublishProgress(null);
     setError(null);
@@ -456,6 +460,7 @@ export function ClassAssignmentsWorkspace() {
       if ("progress" in body) {
         setPublishProgress(body.progress);
       }
+      setPublishing(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to publish to Wise");
       setPublishing(false);
@@ -470,6 +475,7 @@ export function ClassAssignmentsWorkspace() {
       if (!response.ok) throw new Error("error" in body ? body.error : `HTTP ${response.status}`);
       if ("progress" in body) {
         setPublishProgress(body.progress);
+        setPublishing(body.progress.status === "running");
         if (body.detail) setDetail(body.detail);
         if (isPublishJobTerminal(body.progress.status)) {
           setPublishing(false);
@@ -658,7 +664,7 @@ export function ClassAssignmentsWorkspace() {
         <div className="space-y-1">
           <h1 className="text-xl font-semibold tracking-tight">Class Assignments</h1>
           <p className="text-sm text-muted-foreground">
-            Sync Wise first, generate local room assignments, then publish eligible OFFLINE locations.
+            {canOperate ? "Sync Wise first, generate local room assignments, then publish eligible OFFLINE locations." : "View saved classroom plans. Running assignments and publishing to Wise are restricted to Kevin."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -671,19 +677,19 @@ export function ClassAssignmentsWorkspace() {
               className="w-[150px]"
             />
           </label>
-          <label className="flex h-8 items-center gap-2 rounded-lg border px-3 text-sm">
+          {canOperate && <label className="flex h-8 items-center gap-2 rounded-lg border px-3 text-sm">
             <input
               type="checkbox"
               checked={forceReassign}
               onChange={(event) => setForceReassign(event.target.checked)}
             />
             Force reassign
-          </label>
+          </label>}
           <Button variant="outline" onClick={() => loadAssignments(date, true)} disabled={loading || !date}>
             <RefreshCw />
             Refresh
           </Button>
-          <Button onClick={runAssignments} disabled={running || !date}>
+          {canOperate && <><Button onClick={runAssignments} disabled={running || !date}>
             <Play />
             {runButtonLabel}
           </Button>
@@ -694,7 +700,7 @@ export function ClassAssignmentsWorkspace() {
           >
             <UploadCloud />
             Publish to Wise
-          </Button>
+          </Button></>}
           <Button
             variant="secondary"
             onClick={openScheduleEmailPreview}
@@ -729,6 +735,7 @@ export function ClassAssignmentsWorkspace() {
         </div>
       )}
 
+      {automationPaused && <p className="text-sm text-muted-foreground">Automatic Wise sync, assignment preparation, publishing retries, and classroom emails are paused.</p>}
       <ClassroomReadiness detail={detail} date={date} day={readiness} loading={loading} />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-8">
@@ -994,7 +1001,7 @@ export function ClassAssignmentsWorkspace() {
         </TabsContent>
       </Tabs>
 
-      <Dialog open={publishOpen} onOpenChange={setPublishOpen}>
+      <Dialog open={canOperate && publishOpen} onOpenChange={setPublishOpen}>
         <DialogContent className="flex max-h-[82vh] flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>Publish locations to Wise?</DialogTitle>
@@ -1064,15 +1071,16 @@ export function ClassAssignmentsWorkspace() {
               </div>
             )}
           </div>
+          {automationPaused && publishProgress?.status === "pending" && <p className="text-sm text-muted-foreground">Automatic retries are paused. Retry publish becomes available after the Wise cooldown.</p>}
           <DialogFooter className="shrink-0">
             <Button variant="outline" onClick={() => setPublishOpen(false)}>
               Close
             </Button>
             <Button
               onClick={publishToWise}
-              disabled={publishing || publishCounts.eligible === 0 || Boolean(publishProgress && !isPublishJobTerminal(publishProgress.status))}
+              disabled={!canOperate || publishing || publishCounts.eligible === 0 || Boolean(publishProgress && !isPublishJobTerminal(publishProgress.status) && !(automationPaused && canRetryPausedPublish(publishProgress, operationTick)))}
             >
-              {publishing || publishActive ? "Publishing" : "Publish to Wise"}
+              {publishing || publishProgress?.status === "running" ? "Publishing" : publishProgress?.status === "pending" ? "Retry publish" : "Publish to Wise"}
             </Button>
           </DialogFooter>
         </DialogContent>

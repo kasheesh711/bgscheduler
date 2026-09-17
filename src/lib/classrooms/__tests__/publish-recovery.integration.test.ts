@@ -1,5 +1,7 @@
+import { stopNonOwnerClassroomPublications } from "../operations-shutdown";
+import { CLASSROOM_OPERATIONS_OWNER, CLASSROOM_SHUTDOWN_REASON } from "../operations-policy";
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { startTestDb, stopTestDb, truncateAll } from "@/tests/integration/db-helper";
 import type { Database } from "@/lib/db";
@@ -15,6 +17,7 @@ let handle: Awaited<ReturnType<typeof startTestDb>>, db: Database;
 beforeAll(async () => { handle = await startTestDb(); db = handle.db as unknown as Database; });
 afterAll(async () => { if (handle) await stopTestDb(handle); });
 beforeEach(async () => { await truncateAll(handle.db); await handle.db.execute(sql`truncate room_day_states cascade`); });
+afterEach(() => vi.unstubAllEnvs());
 const date = "2099-09-12";
 
 async function fixture(rooms = ["Cool", "Do It"], current = ["Do It", "Cool"]) {
@@ -175,5 +178,53 @@ describe("durable classroom publication", () => {
     await handle.db.update(s.classroomPublishJobs).set({ nextAttemptAt: new Date(Date.now() + 3600000) }).where(eq(s.classroomPublishJobs.id, retry.jobId));
     expect(await runClassroomPublishRecovery(db)).toEqual({ ok: true, idle: true });
     expect(f.get).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("owner shutdown publication fencing", () => {
+  it("closes non-owner work, preserves evidence and owner jobs, and invalidates an old claim", async () => {
+    const f = await fixture(["Cool"], ["Do It"]);
+    const job = await createClassroomPublishJob(db, { runId: f.run.id, createdBy: "other@example.com" });
+    const claim = (await claimPublishAttempt(db, job.jobId))!;
+    await handle.db.update(s.classroomPublishJobs).set({ successCount: 1, completedCount: 1 }).where(eq(s.classroomPublishJobs.id, job.jobId));
+    const [ownerJob] = await handle.db.insert(s.classroomPublishJobs).values({ runId: f.run.id, createdBy: CLASSROOM_OPERATIONS_OWNER }).returning();
+    const [completed] = await handle.db.insert(s.classroomPublishJobs).values({ runId: f.run.id, status: "succeeded", successCount: 1 }).returning();
+    vi.stubEnv("WISE_CLASSROOM_AUTOMATION_ENABLED", "false");
+    expect(await stopNonOwnerClassroomPublications(db)).toEqual([{ id: job.jobId, runId: f.run.id }]);
+    const [stopped] = await handle.db.select().from(s.classroomPublishJobs).where(eq(s.classroomPublishJobs.id, job.jobId));
+    expect(stopped).toMatchObject({ status: "failed", claimToken: null, leaseExpiresAt: null, successCount: 1, completedCount: 1, lastError: CLASSROOM_SHUTDOWN_REASON });
+    await withPublishClaim(claim, async () => {
+      const changed = await handle.db.update(s.classroomPublishJobs).set({ successCount: 999 }).where(publishFence()).returning();
+      expect(changed).toEqual([]);
+    });
+    expect((await handle.db.select().from(s.classroomPublishWorker))[0]).toMatchObject({ jobId: null, claimToken: null });
+    expect((await handle.db.select().from(s.classroomPublishJobs).where(eq(s.classroomPublishJobs.id, completed.id)))[0].status).toBe("succeeded");
+    expect((await handle.db.select().from(s.classroomPublishJobs).where(eq(s.classroomPublishJobs.id, ownerJob.id)))[0].status).toBe("pending");
+    expect(await stopNonOwnerClassroomPublications(db)).toEqual([]);
+    expect(f.put).not.toHaveBeenCalled();
+  });
+
+  it("pauses automatic retries but lets Kevin explicitly retry after the Wise cooldown", async () => {
+    const f = await fixture(["Cool"], ["Do It"]);
+    vi.stubEnv("WISE_CLASSROOM_AUTOMATION_ENABLED", "false");
+    const job = await createClassroomPublishJob(db, { runId: f.run.id, createdBy: CLASSROOM_OPERATIONS_OWNER });
+    f.get.mockRejectedValueOnce(new WiseApiError(429, "limited", "https://wise/test", 3_600_000));
+    expect((await runClassroomPublishJob(db, job.jobId, f.client)).progress.status).toBe("pending");
+    expect(await runClassroomPublishRecovery(db)).toMatchObject({ paused: true, skipped: true });
+    await runClassroomPublishJob(db, job.jobId, f.client);
+    expect(f.get).toHaveBeenCalledTimes(1);
+    await due(job.jobId);
+    expect((await runClassroomPublishJob(db, job.jobId, f.client)).progress.status).toBe("succeeded");
+    expect(f.put).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a legacy automatic job even through the direct publisher", async () => {
+    const f = await fixture(["Cool"], ["Do It"]);
+    const job = await createClassroomPublishJob(db, { runId: f.run.id });
+    vi.stubEnv("WISE_CLASSROOM_AUTOMATION_ENABLED", "false");
+    expect((await runClassroomPublishJob(db, job.jobId, f.client)).progress).toMatchObject({ status: "failed", lastError: CLASSROOM_SHUTDOWN_REASON });
+    expect(f.get).not.toHaveBeenCalled();
+    expect(f.put).not.toHaveBeenCalled();
   });
 });

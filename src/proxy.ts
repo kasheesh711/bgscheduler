@@ -1,4 +1,5 @@
 import { edgeAuth } from "@/lib/auth-edge";
+import { isClassroomOperationsApi } from "@/lib/classrooms/operations-policy";
 import { validateSessionAccess } from "@/lib/auth-session";
 import { isTeacherEmailAsset } from "@/lib/teacher-emails/brand";
 import { isProgressTestBrandAsset } from "@/lib/progress-tests/workspace/brand";
@@ -120,7 +121,7 @@ export default edgeAuth(async (req) => {
 
   // Require auth for everything else
   if (!session) {
-    if (req.auth && pathname.startsWith("/api/")) {
+    if ((req.auth && pathname.startsWith("/api/")) || isClassroomOperationsApi(pathname)) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const loginUrl = new URL("/login", req.url);

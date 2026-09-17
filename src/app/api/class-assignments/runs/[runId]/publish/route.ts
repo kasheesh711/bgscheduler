@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { after } from "next/server";
-import { auth } from "@/lib/auth";
+import { requireClassroomOperationsOwner, classroomOperationsAccessError } from "@/lib/classrooms/operations-access";
 import { getDb } from "@/lib/db";
 import {
   createClassroomPublishJob,
@@ -29,16 +29,15 @@ export async function POST(
   _request: Request,
   { params }: { params: Promise<{ runId: string }> },
 ) {
-  const session = await auth();
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  let actor;
+  try { actor = await requireClassroomOperationsOwner(); }
+  catch (error) { return classroomOperationsAccessError(error); }
 
   const { runId } = await params;
   try {
     const progress = await createClassroomPublishJob(getDb(), {
       runId,
-      createdBy: session.user?.email ?? null,
+      createdBy: actor.email,
     });
 
     schedulePublishJob(progress.jobId);
