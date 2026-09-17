@@ -1,4 +1,5 @@
 vi.mock("server-only", () => ({}));
+vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 vi.mock("@/lib/data-health/cron-audit", () => ({ withCronInvocationAudit: vi.fn((_input: unknown, fn: () => unknown) => fn()) }));
