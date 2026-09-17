@@ -430,3 +430,9 @@ Progress adds `nextAttemptAt`, `attemptCount` and `verifiedAt`; `pending` means 
 worker will retry without a browser. Assignment detail includes `publishProgress`
 for its latest job so a reloaded page can resume polling. `successCount` counts
 verified room destinations; successful HTTP writes still await Wise read-back.
+
+## Owner-only operations (17 September 2026)
+
+`POST /api/class-assignments/run` and `POST /api/class-assignments/runs/{runId}/publish` require Kevin's current enabled website-owner session. Handlers return 401 without authentication and 403 for other users, before parsing input or doing work. The same restriction applies to `POST /api/admin/sync-wise`, the session-authenticated fallback of `POST /api/internal/sync-wise`, and affected Data Health job triggers.
+
+While `WISE_CLASSROOM_AUTOMATION_ENABLED` is not exactly `true`, authenticated cron requests for the five paused jobs return HTTP 200 with `{ok:true, skipped:true, paused:true, reason:"AUTOMATION_PAUSED", message:"Wise and classroom automation is paused by the owner."}`. They are audited as skipped, not successful work. Owner-initiated manual Wise sync remains available. Data Health cannot start the other paused automation services even with confirmation. No existing assignment response shapes or publication history are removed.

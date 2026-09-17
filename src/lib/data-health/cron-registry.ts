@@ -1,3 +1,4 @@
+import { isWiseClassroomJob, wiseClassroomAutomationEnabled } from "@/lib/classrooms/operations-policy";
 import { creditControlActive } from "@/lib/credit-control/mode";
 import type { CronJobStatus } from "./types";
 
@@ -499,6 +500,7 @@ export function statusRank(status: CronJobStatus): number {
 
 /** Physical cron schedules remain registered; expected work follows feature mode. */
 export function effectiveCronJob(job: CronJobDefinition): CronJobDefinition {
+  if (isWiseClassroomJob(job.key) && !wiseClassroomAutomationEnabled()) return { ...job, paused: true, cadenceLabel: "Paused by owner" };
   if (job.key.startsWith("tutor_sit_ins") && process.env.TUTOR_SIT_INS_ENABLED !== "true") return { ...job, paused: true, cadenceLabel: "Tutor Sit-ins disabled" };
   if (job.key === "credit_control" && process.env.TUTOR_SIT_INS_ENABLED === "true") return { ...job, label: "Shared Student Data", requiresSuccessfulRun: true, cadenceMinutes: 30, lateAfterMinutes: 90, cadenceLabel: "Every 30 min — observation source" };
   if (job.key === "line_credit_digest" && !creditControlActive()) return { ...job, paused: true, cadenceLabel: "Paused while Credit Control is retired" };

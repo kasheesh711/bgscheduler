@@ -1,3 +1,4 @@
+import { pausedWiseClassroomResult, wiseClassroomAutomationEnabled } from "./operations-policy";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, isNotNull, or } from "drizzle-orm";
 import type { Database } from "@/lib/db";
@@ -52,6 +53,8 @@ export interface MorningAutomationDateResult {
 
 export interface MorningAutomationResult {
   ok: boolean;
+  skipped?: boolean;
+  paused?: boolean;
   noRoomCount?: number;
   needsReviewCount?: number;
   failedPublishCount?: number;
@@ -63,7 +66,7 @@ export interface MorningAutomationResult {
   startDate: string;
   endDate: string;
   sync: {
-    mode: "reused" | "waited" | "triggered";
+    mode: "reused" | "waited" | "triggered" | "paused";
     syncRunId: string | null;
     finishedAt: string | null;
     snapshotId?: string | null;
@@ -116,6 +119,7 @@ export async function ensureFreshWiseSyncForClassroomAutomation(
   db: Database,
   options: { maxWaitMs?: number; now?: Date } = {},
 ): Promise<MorningAutomationResult["sync"]> {
+  if (!wiseClassroomAutomationEnabled()) return { mode: "paused", syncRunId: null, finishedAt: null };
   const now = options.now ?? new Date();
   const initialSuccess = await latestPromotedSync(db);
   if (isFresh(initialSuccess, now)) {
@@ -189,7 +193,7 @@ function horizonDates(startDate: string): string[] {
 }
 
 export async function runClassroomMorningAutomation(
-  db: Database = getDb(),
+  db: Database | undefined = undefined,
   options: {
     startDate?: string;
     automationBatchId?: string;
@@ -201,6 +205,11 @@ export async function runClassroomMorningAutomation(
   const startDate = options.startDate ?? todayBangkok();
   const dates = horizonDates(startDate);
   const automationBatchId = options.automationBatchId ?? randomUUID();
+  if (!wiseClassroomAutomationEnabled()) return {
+    ...pausedWiseClassroomResult(), startDate, endDate: dates[6], automationBatchId,
+    sync: { mode: "paused", syncRunId: null, finishedAt: null }, dates: [],
+  };
+  db ??= getDb();
   const sync = await ensureFreshWiseSyncForClassroomAutomation(db, {
     maxWaitMs: options.maxSyncWaitMs,
   });

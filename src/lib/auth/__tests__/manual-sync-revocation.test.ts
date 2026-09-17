@@ -1,3 +1,4 @@
+vi.mock("server-only", () => ({}));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -21,9 +22,10 @@ describe("manual cron fallback with the real server session guard", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.stubEnv("CRON_SECRET", "test-cron-secret");
+    vi.stubEnv("SUPER_ADMIN_EMAILS", "kevhsh7@gmail.com");
     state.disabled = false;
     state.accessVersion = 0;
-    rawAuth.mockResolvedValue({ user: { email: "aoeng@example.com", role: "admin", adminAccessVersion: 0 }, expires: "2099-01-01" });
+    rawAuth.mockResolvedValue({ user: { email: "kevhsh7@gmail.com", role: "admin", adminAccessVersion: 0 }, expires: "2099-01-01" });
     const builder: Record<string, unknown> = {};
     for (const method of ["from", "where", "limit"]) builder[method] = () => builder;
     builder.then = (resolve: (rows: unknown[]) => unknown) => Promise.resolve([{ ...state }]).then(resolve);
@@ -43,7 +45,7 @@ describe("manual cron fallback with the real server session guard", () => {
     state.accessVersion = 2;
     expect((await POST(request())).status).toBe(401);
     expect(runSync).not.toHaveBeenCalled();
-    rawAuth.mockResolvedValue({ user: { email: "aoeng@example.com", role: "admin", adminAccessVersion: 2 }, expires: "2099-01-01" });
+    rawAuth.mockResolvedValue({ user: { email: "kevhsh7@gmail.com", role: "admin", adminAccessVersion: 2 }, expires: "2099-01-01" });
     expect((await POST(request())).status).toBe(200);
   });
 

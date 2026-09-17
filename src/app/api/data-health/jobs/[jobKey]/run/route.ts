@@ -1,3 +1,5 @@
+import { requireClassroomOperationsOwner, classroomOperationsAccessError } from "@/lib/classrooms/operations-access";
+import { isWiseClassroomJob } from "@/lib/classrooms/operations-policy";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getCronJobDefinition, type CronJobKey } from "@/lib/data-health/cron-registry";
@@ -20,6 +22,11 @@ export async function POST(request: NextRequest, context: RunRouteContext) {
   const job = getCronJobDefinition(jobKey);
   if (!job) {
     return NextResponse.json({ error: "Unknown job" }, { status: 404 });
+  }
+
+  if (isWiseClassroomJob(job.key)) {
+    try { await requireClassroomOperationsOwner(); }
+    catch (error) { return classroomOperationsAccessError(error); }
   }
 
   if (job.key.startsWith("post_class_feedback")) {

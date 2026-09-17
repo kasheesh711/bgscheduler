@@ -25,6 +25,12 @@ function makeReq(pathname: string, isAuth = false, search = "", allowedPages?: s
 }
 
 describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
+  it.each(["/api/admin/sync-wise", "/api/class-assignments/run", "/api/class-assignments/runs/run-1/publish",
+    "/api/data-health/jobs/wise_snapshot/run", "/api/data-health/jobs/classroom_morning/run"])("returns JSON 401 for a classroom operation without a cookie: %s", async pathname => {
+    const response = await middleware(makeReq(pathname) as never, {} as never) as Response;
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "Unauthorized" });
+  });
   it.each(["false", "true"])("serves the exact teacher-email logo without a session during maintenance=%s", async (maintenance) => {
     vi.stubEnv("MAINTENANCE_MODE", maintenance);
     try {

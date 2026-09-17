@@ -1,3 +1,4 @@
+import { pausedWiseClassroomResult, wiseClassroomAutomationEnabled } from "./operations-policy";
 import { and, desc, eq, lt, or, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { classroomWeekendChecks as checks, classroomWeekendNotifications as notifications } from "@/lib/db/schema";
@@ -37,11 +38,13 @@ export async function loadWeekendCheck(db: Database, options: { checkId?: string
     lastError: check.lastError, delivery: delivery ?? null };
 }
 
-export async function runWeekendClassroomCheck(db: Database = getDb(), options: {
+export async function runWeekendClassroomCheck(db: Database | undefined = undefined, options: {
   now?: Date;
   evaluate?: (db: Database, dates: [string, string]) => Promise<WeekendReport>;
   sender?: ScheduleEmailSender;
 } = {}) {
+  if (!wiseClassroomAutomationEnabled()) return pausedWiseClassroomResult();
+  db ??= getDb();
   const now = options.now ?? new Date();
   const started = Date.now();
   const clock = () => new Date(now.getTime() + Date.now() - started);

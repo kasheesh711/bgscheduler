@@ -305,3 +305,11 @@ Room-readiness checks prefer an active exact-name match, then an unambiguous act
 ## Tutor room self-service
 
 The `/room` command, private mobile timetable, tutor identity approval, and standalone reservations are documented in [Tutor room booking](tutor-room-booking.md). Room reservations participate in classroom occupancy and publish checks.
+
+## Owner restriction and automation pause (17 September 2026)
+
+Only `kevhsh7@gmail.com`, with current enabled website-owner access, may use **Sync Wise, then run**, **Force reassign**, or **Publish to Wise**. The server enforces the restriction on manual sync, run and publish routes and the corresponding Data Health triggers; hiding controls is not the authorization boundary. Viewing, printing, room overrides and manual schedule email permissions are unchanged.
+
+`WISE_CLASSROOM_AUTOMATION_ENABLED` must be exactly `true` to enable background operations. Its default is paused. The pause covers Wise snapshot sync, next-day classroom preparation, queued publication recovery, automatic classroom schedule emails, and weekend readiness checks/alerts. The registered schedules remain present, return audited skipped results, and show Paused in Data Health. Tutor room-availability collection and unrelated Wise integrations remain enabled under their own settings.
+
+Kevin can still sync, generate and publish manually. When Wise defers a manual publication, use **Retry publish** after its cooldown; background retries do not run while paused. The publisher rejects legacy or automatic jobs with no authorized owner creator during the pause. See the [shutdown runbook](../operations/classroom-owner-shutdown.md) for queue fencing, deployment verification and explicit re-enablement.

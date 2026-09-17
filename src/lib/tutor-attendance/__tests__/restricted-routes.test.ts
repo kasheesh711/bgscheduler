@@ -1,3 +1,4 @@
+vi.mock("server-only", () => ({}));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
@@ -36,7 +37,7 @@ describe("attendance-only sessions cannot enter public admin fallback routes", (
           method: "POST",
         }),
       );
-      expect(response.status).toBe(401);
+      expect(response.status).toBe(name === "sync-wise" ? 403 : 401);
     },
   );
   it("rejects the public scheduler assistant before accepting its input", async () => {

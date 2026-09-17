@@ -1,3 +1,12 @@
+vi.mock("server-only", () => ({}));
+// Existing behavior suites delegate current-account validation to the owner access suite.
+vi.mock("@/lib/admin-users/access", () => ({ requireSuperAdmin: async () => {
+  const { auth } = await import("@/lib/auth");
+  const { AdminUsersAccessError } = await import("@/lib/admin-users/types");
+  const session = await auth();
+  if (!session?.user?.email) throw new AdminUsersAccessError("Unauthorized", 401);
+  return { email: session.user.email, accessVersion: 0 };
+} }));
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -28,7 +37,7 @@ function context(jobKey: string) {
 describe("POST /api/data-health/jobs/[jobKey]/run", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    authMock.mockResolvedValue({ user: { email: "admin@example.com" } });
+    authMock.mockResolvedValue({ user: { email: "kevhsh7@gmail.com" } });
     vi.mocked(runDataHealthJob).mockResolvedValue(NextResponse.json({ ok: true }) as never);
     vi.mocked(getPostClassCapabilities).mockResolvedValue(["access_manager"]);
   });
@@ -46,7 +55,7 @@ describe("POST /api/data-health/jobs/[jobKey]/run", () => {
     const res = await POST(request(), context("wise_snapshot"));
 
     expect(res.status).toBe(200);
-    expect(runDataHealthJob).toHaveBeenCalledWith("wise_snapshot", "admin@example.com");
+    expect(runDataHealthJob).toHaveBeenCalledWith("wise_snapshot", "kevhsh7@gmail.com");
   });
 
   it("requires confirmation for dangerous jobs", async () => {
@@ -61,7 +70,7 @@ describe("POST /api/data-health/jobs/[jobKey]/run", () => {
     const res = await POST(request({ confirmed: true }), context("classroom_morning"));
 
     expect(res.status).toBe(200);
-    expect(runDataHealthJob).toHaveBeenCalledWith("classroom_morning", "admin@example.com");
+    expect(runDataHealthJob).toHaveBeenCalledWith("classroom_morning", "kevhsh7@gmail.com");
   });
 
   it("rejects unknown jobs", async () => {
@@ -89,7 +98,7 @@ describe("POST /api/data-health/jobs/[jobKey]/run", () => {
     expect(res.status).toBe(200);
     expect(runDataHealthJob).toHaveBeenCalledWith(
       "post_class_feedback_deadline",
-      "admin@example.com",
+      "kevhsh7@gmail.com",
     );
   });
 });

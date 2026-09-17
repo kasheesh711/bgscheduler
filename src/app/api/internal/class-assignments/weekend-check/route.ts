@@ -1,3 +1,4 @@
+import { pausedWiseClassroomResult, wiseClassroomAutomationEnabled } from "@/lib/classrooms/operations-policy";
 import { NextRequest, NextResponse } from "next/server";
 import { rejectInvalidCronSecret } from "@/lib/internal/cron-auth";
 import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
@@ -9,6 +10,7 @@ export async function GET(request: NextRequest) {
   const rejected = rejectInvalidCronSecret(request);
   if (rejected) return rejected;
   return withCronInvocationAudit({ jobKey: "classroom_weekend_check", triggerSource: "cron", requestMethod: request.method }, async () => {
+      if (!wiseClassroomAutomationEnabled()) return NextResponse.json(pausedWiseClassroomResult());
     try {
       const result = await runWeekendClassroomCheck();
       return NextResponse.json(result, { status: result.ok ? 200 : 500 });

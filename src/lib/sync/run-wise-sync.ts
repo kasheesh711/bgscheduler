@@ -1,3 +1,4 @@
+import { isClassroomOperationsOwner, pausedWiseClassroomResult, wiseClassroomAutomationEnabled } from "@/lib/classrooms/operations-policy";
 import { revalidateTag } from "next/cache";
 import { NextResponse } from "next/server";
 import { and, desc, eq, lt } from "drizzle-orm";
@@ -171,7 +172,11 @@ async function performWiseSyncRequest() {
   });
 }
 
-export async function runWiseSyncRequest() {
+/** manualOwner is supplied only by an authenticated owner route, never request input. */
+export async function runWiseSyncRequest(options: { manualOwner?: string } = {}) {
+  if (!wiseClassroomAutomationEnabled() && !isClassroomOperationsOwner(options.manualOwner)) {
+    return NextResponse.json(pausedWiseClassroomResult());
+  }
   try {
     return await performWiseSyncRequest();
   } catch (error) {
