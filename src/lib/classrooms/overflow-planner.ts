@@ -110,6 +110,14 @@ function choicesFor<T extends AssignmentResultRow>(input: PlannerInput<T>, allow
         elsewhere: Number(released && room === REMOTE_NO_ROOM_NEEDED),
         order: rooms.findIndex(candidate => candidate.name === room) + 1 });
     };
+    // A fixed override fixes the requested room, not an earlier allocator failure.
+    // Other lessons may move so an unallocated override can finally be satisfied.
+    if (row.overrideRoom && row.status === "no_room" && !frozen.has(row.wiseSessionId)) {
+      const target = rooms.find(room => room.name === row.overrideRoom);
+      if (target && roomPassesConstraints(target, row, row.minCapacity, row.needsTv)) add(target.name);
+      add(NO_ROOM_AVAILABLE);
+      return;
+    }
     if (locked) { add(row.assignedRoom); return; }
     if (row.status === "remote" && !row.overflowReleaseRoom) { add(REMOTE_NO_ROOM_NEEDED); return; }
     const online = isOnlineSession(row.sessionType);

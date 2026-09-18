@@ -120,6 +120,22 @@ describe("minimum-switch overflow optimizer", () => {
     expect(confirmedSuggestedRelease({ ...source, sessionType: "SCHEDULED", studentIds: ["replacement"] }, result.plan, new Set([source.wiseSessionId]))).toBeNull();
   });
 
+  it("carries a saved room when Wise only reorders an unchanged roster", () => {
+    const source = row("group", "A", { studentIds: ["s2", "s1"], studentCount: 2, classType: "GROUP" });
+    const previous: PreviousAssignmentRow = { ...source, id: "old", publishStatus: "success", publishError: null, publishedAt: new Date(), assignmentFingerprint: null };
+    const result = reconcileClassroomAssignments({ sessions: [{ ...source, studentIds: ["s1", "s2"] }], previousRows: [previous], rooms });
+    expect(result.events).toEqual([]);
+    expect(result.rows[0]).toMatchObject({ assignedRoom: "A", changeType: "carried", publishStatus: "success" });
+  });
+
+  it("moves blockers to satisfy an unallocated fixed override without changing its requested room", async () => {
+    const catalog = [rooms[0], { ...rooms[0], name: "B", sortOrder: 2 }];
+    const result = await planClassroomOverflow(input([row("movable"), row("override", NO_ROOM_AVAILABLE, { overrideRoom: "A" })], { rooms: catalog }));
+    expect(result.plan).toMatchObject({ minimumSwitches: 0, actualRemainingOverflow: 0 });
+    expect(result.actualRows.find(row => row.wiseSessionId === "override")).toMatchObject({ assignedRoom: "A", overrideRoom: "A" });
+    expect(result.actualRows.find(row => row.wiseSessionId === "movable")?.assignedRoom).toBe("B");
+  });
+
   it("matches exhaustive minimum conversion enumeration on small interval schedules", async () => {
     let seed = 41;
     const random = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32);

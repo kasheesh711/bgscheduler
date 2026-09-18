@@ -97,6 +97,7 @@ const FINGERPRINT_FIELDS: Array<keyof AssignmentSession> = [
 
 function stableValue(value: unknown): unknown {
   if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return [...value].sort();
   return value ?? null;
 }
 
