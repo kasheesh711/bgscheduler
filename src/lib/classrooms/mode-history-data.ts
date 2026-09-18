@@ -16,6 +16,7 @@ export function observationsFromWise(sessions: WiseSession[], observedAt: Date):
     const ids = sessionStudentIds(session);
     if (!ids?.length || !Number.isFinite(Date.parse(session.scheduledStartTime))
       || !Number.isFinite(Date.parse(session.scheduledEndTime))) return [];
+    if (typeof session.studentCount === "number" && session.studentCount !== ids.length) return [];
     const status = String(session.meetingStatus ?? "").toUpperCase();
     const ended = ["ENDED", "COMPLETED"].includes(status) && Date.parse(session.scheduledEndTime) < observedAt.getTime();
     const attendedIds = attendedWiseStudentIds(session);

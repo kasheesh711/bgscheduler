@@ -52,6 +52,7 @@ describe("student modality evidence", () => {
       scheduledEndTime: online.scheduledEndAt, students: ["s"], participants: [{ _id: "s", creditApplied: 1 }, { _id: "t", role: "teacher", creditsConsumed: 1 }] };
     expect(observationsFromWise([session], now)).toMatchObject([{ studentId: "s", attended: true, mode: "online" }]);
     expect(observationsFromWise([{ ...session, students: undefined }], now)).toEqual([]);
+    expect(observationsFromWise([{ ...session, studentCount: 2 }], now)).toEqual([]);
     expect(observationsFromWise([{ ...session, participants: [], creditsConsumed: 5 }], now)[0].attended).toBe(false);
   });
 });
