@@ -1807,6 +1807,8 @@ export const classroomAssignmentRows = pgTable("classroom_assignment_rows", {
   currentWiseLocation: text("current_wise_location"),
   studentName: text("student_name"),
   studentCount: integer("student_count"),
+  studentIds: jsonb("student_ids").$type<string[] | null>(),
+  overflowReleaseRoom: text("overflow_release_room"),
   subject: text("subject"),
   classType: text("class_type"),
   title: text("title"),
@@ -1832,6 +1834,28 @@ export const classroomAssignmentRows = pgTable("classroom_assignment_rows", {
   index("car_rows_source_row_idx").on(table.sourceRowId),
   index("car_rows_change_type_idx").on(table.changeType),
   uniqueIndex("car_rows_run_session_idx").on(table.runId, table.wiseSessionId),
+]);
+
+/** Durable dated modality/roster evidence, independent of snapshot retention. */
+export const classroomModeHistory = pgTable("classroom_mode_history", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  evidenceKey: text("evidence_key").notNull(),
+  wiseSessionId: text("wise_session_id").notNull(),
+  studentId: text("student_id").notNull(),
+  rosterKey: text("roster_key").notNull(),
+  mode: text("mode").notNull(),
+  scheduledStartAt: timestamp("scheduled_start_at", { withTimezone: true }).notNull(),
+  scheduledEndAt: timestamp("scheduled_end_at", { withTimezone: true }).notNull(),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  attended: boolean("attended").notNull(),
+  cancelled: boolean("cancelled").notNull(),
+  source: text("source").notNull(),
+  stateHash: text("state_hash").notNull(),
+}, (table) => [
+  uniqueIndex("classroom_mode_evidence_key_idx").on(table.evidenceKey),
+  index("classroom_mode_student_start_idx").on(table.studentId, table.scheduledStartAt),
+  index("classroom_mode_session_observed_idx").on(table.wiseSessionId, table.studentId, table.observedAt),
+  check("classroom_mode_history_mode_check", sql`${table.mode} IN ('onsite', 'online', 'unknown')`),
 ]);
 
 // ── Room Utilization Sessions ──────────────────────────────────────────

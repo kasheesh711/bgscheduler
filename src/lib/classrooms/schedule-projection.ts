@@ -9,6 +9,7 @@ export interface ScheduleSourceRow {
   startMinute: number;
   endMinute: number;
   assignedRoom: string;
+  overflowReleaseRoom?: string | null;
   status: string;
   publishStatus?: string;
   sessionType?: string | null;
@@ -42,6 +43,7 @@ export function buildTeacherSchedule(rows: ScheduleSourceRow[], date: string, me
       const shortGapChange = roomChange && row.startMinute - prior.endMinute <= CONTINUITY_GAP_MINUTES;
       const outsideUsualRooms = physical && usualRooms.length > 0 && !usualRooms.some(room => physicalRoom(room) === physicalRoom(row.assignedRoom));
       const exceptionReasons = [
+        ...(row.overflowReleaseRoom ? ["Overflow relief: vacate the onsite classroom for the full online lesson, including between adjacent onsite classes."] : []),
         ...(outsideUsualRooms ? ["Outside usual rooms for this class"] : []),
         ...(shortGapChange ? ["Room change between consecutive classes"] : []),
         ...(policy?.unavailableRooms?.length ? [`Usual room unavailable: ${policy.unavailableRooms.join(", ")}`] : []),
@@ -52,7 +54,7 @@ export function buildTeacherSchedule(rows: ScheduleSourceRow[], date: string, me
         : row.publishStatus === "failed" ? "failed" : isOnsiteSessionType(row.sessionType) && row.publishStatus !== "success" ? "draft" : "ready";
       return { rowId: row.id, date, startMinute: row.startMinute, endMinute: row.endMinute,
         startTime: formatScheduleMinute(row.startMinute), endTime: formatScheduleMinute(row.endMinute),
-        room: row.status === "remote" ? "Remote / no room needed" : row.status === "no_room" ? "Room TBC" : row.assignedRoom,
+        room: row.status === "remote" ? row.overflowReleaseRoom ? "Teach elsewhere — classroom released" : "Remote / no room needed" : row.status === "no_room" ? "Room TBC" : row.assignedRoom,
         status: row.status, publication, sessionType: row.sessionType ?? null,
         studentName: row.studentName ?? null, subject: row.subject ?? null, classType: row.classType ?? null, title: row.title ?? null,
         roomChange, shortGapChange, outsideUsualRooms, exceptionReasons };

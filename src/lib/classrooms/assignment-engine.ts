@@ -46,6 +46,9 @@ export interface AssignmentSession {
   currentWiseLocation?: string | null;
   studentName?: string | null;
   studentCount?: number | null;
+  studentIds?: string[] | null;
+  /** Verified online lesson released by the overflow planner; never a modality change. */
+  overflowReleaseRoom?: string | null;
   subject?: string | null;
   classType?: string | null;
   title?: string | null;
@@ -228,7 +231,7 @@ function roomPriorityScore(room: ClassroomRoomDefinition, minCapacity: number): 
   return 1_000;
 }
 
-function roomPassesConstraints(
+export function roomPassesConstraints(
   room: ClassroomRoomDefinition | undefined,
   session: AssignmentSession,
   minCapacity: number,
@@ -344,14 +347,15 @@ function buildSessionFacts(
   const tutorNorm = normalizeTutorName(session.tutorDisplayName);
   const { minCapacity, warnings } = inferCapacity(session);
   const overrideRoom = normalizeTutorName(overrideBySessionId.get(session.wiseSessionId) ?? "") || null;
+  const released = Boolean(session.overflowReleaseRoom) && isOnlineSession(session.sessionType) && !overrideRoom;
 
   return {
-    minCapacity,
+    minCapacity: released ? 1 : minCapacity,
     capacityWarnings: warnings,
-    needsTv: TV_REQUIRED_TUTORS.has(tutorNorm),
-    preferredRoom: getPreferredRoom(session.tutorDisplayName) ?? null,
-    isGift: isGiftTutor(session.tutorDisplayName),
-    priorityPreferredRoom: getPriorityPreferredRoom(session.tutorDisplayName) ?? null,
+    needsTv: !released && TV_REQUIRED_TUTORS.has(tutorNorm),
+    preferredRoom: released ? null : getPreferredRoom(session.tutorDisplayName) ?? null,
+    isGift: !released && isGiftTutor(session.tutorDisplayName),
+    priorityPreferredRoom: released ? null : getPriorityPreferredRoom(session.tutorDisplayName) ?? null,
     overrideRoom,
     requiresCenterRoom: Boolean(overrideRoom) || centerRoomRequiredBySessionId.get(session.wiseSessionId) !== false,
   };
@@ -528,7 +532,17 @@ export function assignClassrooms(
 
     let assignedRoom = "";
 
-    if (!requiresCenterRoom && isOnlineSession(session.sessionType)) {
+    // An explicit overflow release takes precedence over the ordinary <60-minute onsite chain.
+    // A stale or occupied booth falls back to teaching elsewhere, never an onsite classroom.
+    if (session.overflowReleaseRoom && isOnlineSession(session.sessionType) && !overrideRoom) {
+      const target = roomByName.get(session.overflowReleaseRoom);
+      assignedRoom = target?.active && target.category === "online_only" && target.capacity >= 1
+        && roomAvailable(target.name) ? target.name
+        : activeRooms.find(room => room.category === "online_only" && room.capacity >= 1 && roomAvailable(room.name))?.name ?? REMOTE_NO_ROOM_NEEDED;
+      ruleTrace.push("overflow relief: onsite classroom released for the whole lesson");
+    }
+
+    if (!assignedRoom && !requiresCenterRoom && isOnlineSession(session.sessionType)) {
       assignedRoom = REMOTE_NO_ROOM_NEEDED;
       ruleTrace.push("remote online class: no center room needed");
     }
@@ -695,6 +709,7 @@ export function assignClassrooms(
 
     rows.push({
       ...session,
+      overflowReleaseRoom: session.overflowReleaseRoom && isOnlineSession(session.sessionType) && !overrideRoom ? assignedRoom : null,
       minCapacity,
       needsTv,
       preferredRoom,
@@ -728,12 +743,14 @@ export function assignClassrooms(
 export function repairClassroomAssignmentRows(
   rows: AssignmentResultRow[], rooms: ClassroomRoomDefinition[], options: AssignmentOptions = {},
 ): AssignmentResultRow[] {
-  const locked = (row: AssignmentResultRow) => Boolean(row.overrideRoom) || isGiftTutor(row.tutorDisplayName)
+  const locked = (row: AssignmentResultRow) => Boolean(row.overrideRoom) || Boolean(row.overflowReleaseRoom) || isGiftTutor(row.tutorDisplayName)
     || Boolean(getPriorityPreferredRoom(row.tutorDisplayName));
   const repairInput = {
     rows, rooms: rooms.filter(room => room.active), externalBlocks: options.externalRoomBlocks ?? [],
     budget: options.repairBudget ?? { remaining: ROOM_REPAIR_MAX_NODES },
-    compatible: (row: AssignmentResultRow, room: ClassroomRoomDefinition) => roomPassesConstraints(room, row, row.minCapacity, row.needsTv)
+    compatible: (row: AssignmentResultRow, room: ClassroomRoomDefinition) => (row.overflowReleaseRoom && isOnlineSession(row.sessionType)
+      ? room.active && room.category === "online_only" && room.capacity >= 1 && room.name === row.assignedRoom
+      : roomPassesConstraints(room, row, row.minCapacity, row.needsTv))
       && (!locked(row) || room.name === (row.status !== "no_room" ? row.assignedRoom
         : row.overrideRoom || getPriorityPreferredRoom(row.tutorDisplayName) || ROOM_JOY)),
     locked,

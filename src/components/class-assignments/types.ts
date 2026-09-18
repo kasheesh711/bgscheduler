@@ -26,6 +26,8 @@ export interface ClassroomRoom {
 }
 
 export interface ClassroomRow {
+  studentIds?: string[] | null;
+  overflowReleaseRoom?: string | null;
   canonicalKey?: string | null;
   id: string;
   runId: string;
@@ -86,6 +88,7 @@ export interface AssignmentRoomConflictWarning {
 }
 
 export interface AssignmentDetail {
+  overflowPlan?: import("@/lib/classrooms/overflow-types").OverflowPlan | null;
   publishProgress?: import("@/lib/classrooms/data").PublishJobProgress | null;
   run: ClassroomRun | null;
   rows: ClassroomRow[];

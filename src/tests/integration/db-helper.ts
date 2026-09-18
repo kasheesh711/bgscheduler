@@ -67,6 +67,7 @@ export async function truncateAll(db: TestDb): Promise<void> {
       data_issues,
       snapshot_stats,
       classroom_assignment_rows,
+      classroom_mode_history,
       classroom_assignment_runs,
       classroom_rooms,
       future_session_blocks,

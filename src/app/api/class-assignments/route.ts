@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
+import { requireClassroomOperationsOwner, classroomOperationsAccessError } from "@/lib/classrooms/operations-access";
+import { checkOverflowSolver } from "@/lib/classrooms/overflow-planner";
 import {
   assertIsoDate,
   getClassroomAssignmentForDate,
@@ -10,6 +12,16 @@ export async function GET(request: NextRequest) {
   const session = await auth();
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (request.nextUrl.searchParams.get("optimizerCheck") === "1") {
+    try { await requireClassroomOperationsOwner(); }
+    catch (error) { return classroomOperationsAccessError(error); }
+    try { return NextResponse.json(await checkOverflowSolver(), { headers: { "Cache-Control": "no-store" } }); }
+    catch (error) {
+      console.error("Overflow optimizer runtime check failed", error);
+      return NextResponse.json({ ok: false, error: "Optimizer runtime unavailable" }, { status: 503 });
+    }
   }
 
   const date = request.nextUrl.searchParams.get("date");

@@ -48,10 +48,13 @@ import { ensureTutorRoomProfiles } from "./room-profiles";
 import { notifiedTutorKeys, preferenceFrozenSessionIds } from "./notification-state";
 import { CLASSROOM_ALGORITHM_VERSION, classroomContinuityEnabled, roomPolicySnapshot, roomQualityMetrics, type RoomQualityMetrics } from "./room-policy";
 import { classroomTimestampToWiseIso } from "./timestamps";
+import { improveOverflowAllocation, liveVerifiedOnlineIds } from "./overflow-service";
+import { confirmedSuggestedRelease } from "./overflow-release";
+import { readOverflowPlan, type OverflowPlan } from "./overflow-types";
 export { classroomTimestampToWiseIso } from "./timestamps";
 
 export type ClassroomRun = typeof schema.classroomAssignmentRuns.$inferSelect;
-export type ClassroomRow = Omit<typeof schema.classroomAssignmentRows.$inferSelect, "canonicalKey"> & { canonicalKey?: string | null };
+export type ClassroomRow = Omit<typeof schema.classroomAssignmentRows.$inferSelect, "canonicalKey" | "studentIds" | "overflowReleaseRoom"> & { canonicalKey?: string | null; studentIds?: string[] | null; overflowReleaseRoom?: string | null };
 export type ClassroomRoom = typeof schema.classroomRooms.$inferSelect;
 export type ClassroomPublishJob = typeof schema.classroomPublishJobs.$inferSelect;
 
@@ -64,6 +67,7 @@ export interface ClassroomAssignmentDetail {
   liveRoomBlocks: LiveRoomBlock[];
   roomConflictWarnings: RoomConflictWarning[];
   publishProgress?: PublishJobProgress | null;
+  overflowPlan?: OverflowPlan | null;
 }
 
 export interface ClassroomSnapshotMeta {
@@ -734,7 +738,7 @@ export async function getClassroomAssignmentForDate(
   const rows = await loadRowsForRun(db, run.id);
   const [job] = await db.select().from(schema.classroomPublishJobs).where(eq(schema.classroomPublishJobs.runId, run.id))
     .orderBy(desc(schema.classroomPublishJobs.createdAt)).limit(1);
-  return { run, rows, rooms, ...metas, liveRoomBlocks: [], roomConflictWarnings: [], publishProgress: job ? toPublishJobProgress(job) : null };
+  return { run, rows, rooms, ...metas, overflowPlan: readOverflowPlan(run.changeSummary), liveRoomBlocks: [], roomConflictWarnings: [], publishProgress: job ? toPublishJobProgress(job) : null };
 }
 
 async function loadAssignmentSessions(
@@ -762,6 +766,7 @@ async function loadAssignmentSessions(
       currentWiseLocation: schema.futureSessionBlocks.location,
       studentName: schema.futureSessionBlocks.studentName,
       studentCount: schema.futureSessionBlocks.studentCount,
+      studentIds: schema.futureSessionBlocks.studentIds,
       subject: schema.futureSessionBlocks.subject,
       classType: schema.futureSessionBlocks.classType,
       title: schema.futureSessionBlocks.title,
@@ -813,6 +818,8 @@ function toInsertRow(
     currentWiseLocation: row.currentWiseLocation ?? null,
     studentName: row.studentName ?? null,
     studentCount: row.studentCount ?? null,
+    studentIds: row.studentIds ?? null,
+    overflowReleaseRoom: row.overflowReleaseRoom ?? null,
     subject: row.subject ?? null,
     classType: row.classType ?? null,
     title: row.title ?? null,
@@ -982,14 +989,25 @@ async function runIncrementalClassroomAssignmentUnlocked(
   const notified = await notifiedTutorKeys(db, date);
   const frozenSessionIds = preferenceFrozenSessionIds(sessions, date, notified);
   const diagnostics: { quality?: RoomQualityMetrics } = {};
-  const reconciliation = reconcileClassroomAssignments({
+  const reservations = await reservationRoomBlocks(db, date);
+  const verifiedOnline = liveVerifiedOnlineIds(sessions, liveSessions);
+  const previousPlan = readOverflowPlan(previousRun?.changeSummary);
+  let reconciliation = reconcileClassroomAssignments({
     roomPolicies, frozenSessionIds, diagnostics, optimizeContinuity: enabled,
-    sessions: sessions.map(session => ({ ...session, currentWiseLocation: liveBlocks.find(block => block.wiseSessionId === session.wiseSessionId)?.location
+    sessions: sessions.map(session => ({ ...session, overflowReleaseRoom: confirmedSuggestedRelease(session, previousPlan, verifiedOnline), currentWiseLocation: liveBlocks.find(block => block.wiseSessionId === session.wiseSessionId)?.location
       ?? (startedIds.has(session.wiseSessionId) ? session.currentWiseLocation : null) })),
     previousRows: previousRows.map(row => classroomRowToPrevious(input.forceReassign ? { ...row, overrideRoom: null } : row)),
     rooms: rooms.map(toEngineRoom),
-    externalRoomBlocks: [...externalBlocks, ...await reservationRoomBlocks(db, date)],
+    externalRoomBlocks: [...externalBlocks, ...reservations],
   });
+
+  const overflow = await improveOverflowAllocation(db, { reconciliation, rooms: rooms.map(toEngineRoom), assignmentDate: date,
+    snapshotId: snapshot.id, snapshotFinishedAt: snapshotMeta.latestSyncFinishedAt, liveSessions,
+    externalRoomBlocks: [...externalBlocks, ...reservations], frozenSessionIds,
+    unverifiedReasons: [snapshotMeta.syncErrorSummary,
+      unmanagedWiseSessionIds.length ? "Live Wise lessons are missing from the snapshot; refresh or resolve their identities." : null].filter((value): value is string => Boolean(value)),
+  });
+  reconciliation = overflow.reconciliation;
 
   const run = await persistAssignmentRun(
     db,
@@ -1005,7 +1023,8 @@ async function runIncrementalClassroomAssignmentUnlocked(
       changeSummary: { ...reconciliation.summary,
         algorithmVersion: enabled ? CLASSROOM_ALGORITHM_VERSION : "legacy",
         roomPolicies: roomPolicySnapshot(roomPolicies),
-        quality: diagnostics.quality ?? roomQualityMetrics(reconciliation.rows, roomPolicies), ...(snapshotMeta.syncErrorSummary ? { syncErrorSummary: snapshotMeta.syncErrorSummary } : {}), unmanagedWiseSessionCount: unmanagedWiseSessionIds.length, unmanagedWiseSessionIds },
+        overflowPlan: overflow.plan,
+        quality: { ...diagnostics.quality, ...roomQualityMetrics(reconciliation.rows, roomPolicies) }, ...(snapshotMeta.syncErrorSummary ? { syncErrorSummary: snapshotMeta.syncErrorSummary } : {}), unmanagedWiseSessionCount: unmanagedWiseSessionIds.length, unmanagedWiseSessionIds },
     },
   );
 
@@ -1028,6 +1047,7 @@ async function runIncrementalClassroomAssignmentUnlocked(
     roomConflictWarnings: buildRoomConflictWarnings(rows, externalBlocks, (assignedRoom) => assignedRoom),
     events: reconciliation.events,
     changeSummary: reconciliation.summary,
+    overflowPlan: overflow.plan,
   };
 }
 
@@ -1050,6 +1070,8 @@ function rowToSession(row: ClassroomRow): AssignmentSession {
     currentWiseLocation: row.currentWiseLocation,
     studentName: row.studentName,
     studentCount: row.studentCount,
+    studentIds: row.studentIds ?? null,
+    overflowReleaseRoom: row.overflowReleaseRoom ?? null,
     subject: row.subject,
     classType: row.classType,
     title: row.title,
@@ -1092,6 +1114,7 @@ async function updateRunRowsFromAssignment(
           needsTv: row.needsTv,
           preferredRoom: row.preferredRoom,
           overrideRoom: row.overrideRoom,
+          overflowReleaseRoom: row.overflowReleaseRoom ?? null,
           assignedRoom: row.assignedRoom,
           status: row.status,
           warnings: row.warnings,
@@ -1115,7 +1138,7 @@ async function updateRunRowsFromAssignment(
         remoteCount: result.rows.filter(row => row.status === "remote").length,
         publishedCount: result.rows.filter(row => row.publishStatus === "success").length,
         failedPublishCount: result.rows.filter(row => row.publishStatus === "failed").length,
-        changeSummary: { ...run.changeSummary, algorithmVersion: enabled ? CLASSROOM_ALGORITHM_VERSION : "legacy", roomPolicies: roomPolicySnapshot(roomPolicies), quality: diagnostics.quality ?? roomQualityMetrics(result.rows, roomPolicies) },
+        changeSummary: { ...run.changeSummary, overflowPlan: null, algorithmVersion: enabled ? CLASSROOM_ALGORITHM_VERSION : "legacy", roomPolicies: roomPolicySnapshot(roomPolicies), quality: diagnostics.quality ?? roomQualityMetrics(result.rows, roomPolicies) },
         status: "completed",
         updatedAt: new Date(),
       })
@@ -1978,7 +2001,7 @@ export async function getClassroomAssignmentByRunId(
   const metas = await loadClassroomSnapshotMetas(db, run.snapshotId);
   const [job] = await db.select().from(schema.classroomPublishJobs).where(eq(schema.classroomPublishJobs.runId, runId))
     .orderBy(desc(schema.classroomPublishJobs.createdAt)).limit(1);
-  return { run, rows, rooms, ...metas, liveRoomBlocks: [], roomConflictWarnings: [], publishProgress: job ? toPublishJobProgress(job) : null };
+  return { run, rows, rooms, ...metas, overflowPlan: readOverflowPlan(run.changeSummary), liveRoomBlocks: [], roomConflictWarnings: [], publishProgress: job ? toPublishJobProgress(job) : null };
 }
 
 export async function getTeacherScheduleForRun(

@@ -31,7 +31,7 @@ const overlaps = (a: { startMinute: number; endMinute: number }, b: { startMinut
   a.startMinute < b.endMinute && b.startMinute < a.endMinute;
 
 export type ReadinessRow = Pick<AssignmentResultRow, "status" | "wiseSessionId" | "tutorDisplayName" | "studentName" | "title" | "subject"
-  | "startMinute" | "endMinute" | "currentWiseLocation" | "assignedRoom" | "minCapacity" | "needsTv" | "warnings" | "sessionType">;
+  | "startMinute" | "endMinute" | "currentWiseLocation" | "assignedRoom" | "minCapacity" | "needsTv" | "warnings" | "sessionType" | "overflowReleaseRoom">;
 
 /** Legacy non-TV aliases remain in the catalog as inactive rows. Never let them
  * shadow a current room, and never guess between multiple active aliases. */
@@ -64,6 +64,8 @@ export function assignmentReadinessFindings(input: {
       requiredCapacity: row.minCapacity, needsTv: row.needsTv };
     if (getClassroomSessionMode(row.sessionType) === "unknown") findings.push({ ...context, kind: "unverified",
       message: "Class modality is unknown; classroom coverage cannot be confirmed." });
+    if (row.overflowReleaseRoom) findings.push({ ...context, kind: "review",
+      message: `Overflow relief requires the tutor to vacate the onsite classroom and ${row.status === "remote" ? "teach elsewhere" : `teach in ${row.assignedRoom}`}. Staff must confirm this instruction is followed.` });
     if (row.status === "remote") continue;
     if (isOnsiteSessionType(row.sessionType) && row.currentWiseLocation) {
       const bookedRoom = roomByLocation.get(row.currentWiseLocation);

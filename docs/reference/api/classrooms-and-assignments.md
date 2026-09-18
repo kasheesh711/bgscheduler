@@ -1,5 +1,11 @@
 # Classrooms & Assignments API
 
+## Overflow planning additions (18 September 2026)
+
+The assignment detail envelope and `run.changeSummary` now expose optional `overflowPlan` version 1 (`algorithmVersion: "overflow-v1"`). It contains solver status, minimum/available lower bound, actual versus predicted remaining overflow, actual relocation actions, proposed conversion actions with student evidence, the full predicted room plan, accommodated lesson IDs, source/history timestamps and warnings. Actual rows retain actual modality and optionally carry `studentIds` and `overflowReleaseRoom`. A row override invalidates the saved recommendation.
+
+`GET /api/class-assignments?optimizerCheck=1` is a read-only integer/WASM diagnostic restricted to the current enabled operations owner. It returns `{ok, package, wasmLoaded, integerOptimum, elapsedMs}` or 503 when the runtime fails. It requires no date and performs no allocation or Wise writes. All ordinary read permissions remain unchanged. Generation/publishing remain owner-restricted under the existing pause controls; historical session-only descriptions below predate those restrictions.
+
 **Authoritative source:** the ten route handlers under [`src/app/api/class-assignments/`](../../../src/app/api/class-assignments/) and [`src/app/api/classrooms/`](../../../src/app/api/classrooms/), plus the two cron handlers under [`src/app/api/internal/class-assignments/`](../../../src/app/api/internal/class-assignments/).
 
 This page is the mechanical reference for those 12 endpoints: method, path, auth, request shape, response shape, side effects, and status codes. What the feature is *for* — the assignment rules, the publish policy, the morning-automation story — lives in [docs/features/classroom-assignments.md](../../features/classroom-assignments.md) (**Status: stable**), which this page does not restate. Table columns live in [docs/reference/database/erd-classrooms.md](../database/erd-classrooms.md); cron scheduling lives in [docs/reference/crons.md](../crons.md).

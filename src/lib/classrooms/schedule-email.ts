@@ -23,6 +23,7 @@ interface AssignmentEmailRow {
   endMinute: number;
   sessionType: string | null;
   assignedRoom: string;
+  overflowReleaseRoom?: string | null;
   status: "assigned" | "needs_review" | "no_room" | "remote";
   publishStatus?: string;
   publishPending?: boolean;
@@ -170,8 +171,9 @@ function studentOrClass(row: Pick<AssignmentEmailRow, "studentName" | "title">):
   return row.studentName || row.title || "Untitled class";
 }
 
-function roomLabel(row: Pick<AssignmentEmailRow, "status" | "assignedRoom">): string {
+function roomLabel(row: Pick<AssignmentEmailRow, "status" | "assignedRoom" | "overflowReleaseRoom">): string {
   if (row.status === "remote" || row.assignedRoom === REMOTE_NO_ROOM_NEEDED) {
+    if (row.overflowReleaseRoom) return "Teach elsewhere — classroom released";
     return "Remote / no room needed";
   }
   return row.assignedRoom;
@@ -257,6 +259,7 @@ async function loadRows(db: Database, runId: string): Promise<AssignmentEmailRow
       endMinute: schema.classroomAssignmentRows.endMinute,
       sessionType: schema.classroomAssignmentRows.sessionType,
       assignedRoom: schema.classroomAssignmentRows.assignedRoom,
+      overflowReleaseRoom: schema.classroomAssignmentRows.overflowReleaseRoom,
       status: schema.classroomAssignmentRows.status,
       publishStatus: schema.classroomAssignmentRows.publishStatus,
       publishPending: sql<boolean>`exists (select 1 from ${schema.classroomPublishJobs} where ${schema.classroomPublishJobs.runId} = ${schema.classroomAssignmentRows.runId}
