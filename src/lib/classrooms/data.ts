@@ -1,4 +1,5 @@
 import { isClassroomOperationsOwner, wiseClassroomAutomationEnabled } from "./operations-policy";
+import { createHash } from "node:crypto";
 import { stopNonOwnerClassroomPublications } from "./operations-shutdown";
 import { withRoomDayOperation, lockRoomDay, assertRoomDayIdle } from "@/lib/room-booking/locking";
 import { reservationRoomBlocks } from "@/lib/room-booking/service";
@@ -48,9 +49,11 @@ import { ensureTutorRoomProfiles } from "./room-profiles";
 import { notifiedTutorKeys, preferenceFrozenSessionIds } from "./notification-state";
 import { CLASSROOM_ALGORITHM_VERSION, classroomContinuityEnabled, roomPolicySnapshot, roomQualityMetrics, type RoomQualityMetrics } from "./room-policy";
 import { classroomTimestampToWiseIso } from "./timestamps";
-import { improveOverflowAllocation, liveVerifiedOnlineIds } from "./overflow-service";
+import { improveOverflowAllocation, liveVerifiedOnlineIds, sessionMatchesLive } from "./overflow-service";
 import { confirmedSuggestedRelease } from "./overflow-release";
 import { readOverflowPlan, type OverflowPlan } from "./overflow-types";
+import { loadClassroomRecoveryContext, prepareClassroomRecoveryDay } from "./recovery-data";
+import { WEEKEND_ALLOCATION_ACTOR, WEEKEND_CHECK_LEASE_MS, type WeekendAllocationCheckpoint } from "./weekend-config";
 export { classroomTimestampToWiseIso } from "./timestamps";
 
 export type ClassroomRun = typeof schema.classroomAssignmentRuns.$inferSelect;
@@ -852,6 +855,7 @@ async function persistAssignmentRun(
     automationBatchId?: string | null;
     reconciliationMode?: string | null;
     changeSummary?: Record<string, unknown>;
+    weekendCheckpoint?: WeekendAllocationCheckpoint;
   } = {},
 ) {
   const counts = {
@@ -865,6 +869,16 @@ async function persistAssignmentRun(
   };
 
   return withDatabaseTransaction(db, async tx => {
+    if (metadata.weekendCheckpoint) {
+      const checkpoint = metadata.weekendCheckpoint;
+      const [claim] = await tx.select({ id: schema.classroomWeekendChecks.id }).from(schema.classroomWeekendChecks)
+        .where(and(eq(schema.classroomWeekendChecks.id, checkpoint.id), eq(schema.classroomWeekendChecks.status, "running"),
+          eq(schema.classroomWeekendChecks.claimedAt, checkpoint.claimedAt))).for("update");
+      if (!claim || Date.now() - checkpoint.claimedAt.getTime() >= WEEKEND_CHECK_LEASE_MS - 30_000) {
+        throw new Error("Weekend allocation checkpoint is no longer active");
+      }
+      if (!wiseClassroomAutomationEnabled()) throw new Error("Classroom automation was paused before saving the weekend plan");
+    }
     const [run] = await tx
       .insert(schema.classroomAssignmentRuns)
       .values({
@@ -958,18 +972,23 @@ async function runIncrementalClassroomAssignmentUnlocked(
     liveSessions?: WiseSession[];
     snapshotId?: string;
     trustedSnapshotMeta?: ClassroomSnapshotMeta;
+    weekendCheckpoint?: WeekendAllocationCheckpoint;
   },
 ): Promise<ClassroomAssignmentDetail & {
   events: ClassroomAutomationEvent[];
   changeSummary: Record<string, number>;
+  allocationReused?: boolean;
 }> {
   const date = assertIsoDate(input.date);
+  const checkpoint = input.weekendCheckpoint;
+  if (checkpoint && !wiseClassroomAutomationEnabled()) throw new Error("Classroom automation is paused");
   const snapshot = input.snapshotId ? await loadSnapshotById(db, input.snapshotId) : await getActiveSnapshot(db);
   if (!snapshot) throw new Error("Wise snapshot not found for classroom assignment");
   const snapshotMeta =
     input.trustedSnapshotMeta?.snapshotId === snapshot.id
       ? input.trustedSnapshotMeta
       : await assertFreshClassroomSnapshot(db, snapshot.id);
+  if (checkpoint && snapshotMeta.syncErrorSummary) throw new Error(`Weekend allocation requires verified Wise data: ${snapshotMeta.syncErrorSummary}`);
   const rooms = await listClassroomRooms(db);
   const previousRun = await loadLatestRunForDate(db, date);
   const previousRows = previousRun ? await loadRowsForRun(db, previousRun.id) : [];
@@ -977,9 +996,21 @@ async function runIncrementalClassroomAssignmentUnlocked(
   const currentIds = new Set(snapshotSessions.map(row => row.wiseSessionId));
   const startedIds = preferenceFrozenSessionIds(previousRows.map(rowToSession), date, new Set());
   // Wise's FUTURE list stops returning classes as they finish; retain today's started rows.
-  const sessions = [...snapshotSessions, ...previousRows.filter(row => startedIds.has(row.wiseSessionId) && !currentIds.has(row.wiseSessionId)).map(rowToSession)];
+  let sessions = [...snapshotSessions, ...previousRows.filter(row => startedIds.has(row.wiseSessionId) && !currentIds.has(row.wiseSessionId)).map(rowToSession)];
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
   const liveSessions = input.liveSessions ?? await fetchWiseSessionsForBangkokDates(createWiseClientFromEnv(), instituteId, [input.date]);
+  if (checkpoint) {
+    // Verify old missing lessons before saving: absence is not cancellation.
+    const context = await loadClassroomRecoveryContext(db, [date], snapshot.id);
+    const prepared = await prepareClassroomRecoveryDay(context, liveSessions, date, createWiseClientFromEnv(), new Date(),
+      checkpoint.claimedAt.getTime() + WEEKEND_CHECK_LEASE_MS - 60_000);
+    if (prepared.findings.length) throw new Error(prepared.findings.map(finding => finding.message).join(" "));
+    sessions = sessions.filter(row => !prepared.confirmedInactiveSessionIds.has(row.wiseSessionId));
+    const liveById = new Map(prepared.day.map(row => [row._id, row]));
+    if (sessions.length !== prepared.day.length || sessions.some(row => !sessionMatchesLive(row, liveById.get(row.wiseSessionId)))) {
+      throw new Error("Wise lessons differ from the snapshot; refresh before saving the weekend allocation");
+    }
+  }
   const liveBlocks = liveRoomBlocksForDate(liveSessions, date);
   const localWiseSessionIds = new Set(sessions.map((session) => session.wiseSessionId));
   const unmanagedWiseSessionIds = unmanagedWiseSessionIdsForDate(liveSessions, date, localWiseSessionIds);
@@ -990,6 +1021,32 @@ async function runIncrementalClassroomAssignmentUnlocked(
   const frozenSessionIds = preferenceFrozenSessionIds(sessions, date, notified);
   const diagnostics: { quality?: RoomQualityMetrics } = {};
   const reservations = await reservationRoomBlocks(db, date);
+  // Stable source and constraint fingerprint deliberately excludes snapshot UUIDs
+  // and the resulting room choices. Retries must not silently reuse a changed plan.
+  const weekendInputFingerprint = checkpoint ? createHash("sha256").update(JSON.stringify({
+    sessions: sessions.map(row => [row.wiseSessionId, row.wiseClassId, row.canonicalKey, row.wiseTeacherId,
+      row.startTime.toISOString(), row.endTime.toISOString(), row.sessionType, row.studentCount,
+      row.studentIds?.slice().sort() ?? null, row.classType, row.subject, row.title]).sort(),
+    overrides: previousRows.filter(row => row.overrideRoom).map(row => [row.wiseSessionId, row.overrideRoom]).sort(),
+    rooms: rooms.map(row => [row.name, row.capacity, row.hasTv, row.category, row.active]).sort(),
+    blocks: [...externalBlocks, ...reservations].map(row => [row.wiseSessionId, row.location, row.startMinute, row.endMinute]).sort(),
+    frozen: [...frozenSessionIds].sort(), policies: roomPolicySnapshot(roomPolicies),
+  })).digest("hex") : null;
+  if (checkpoint) {
+    const [existing] = await db.select().from(schema.classroomAssignmentRuns).where(and(
+      eq(schema.classroomAssignmentRuns.automationBatchId, checkpoint.id), eq(schema.classroomAssignmentRuns.assignmentDate, date),
+      eq(schema.classroomAssignmentRuns.createdBy, WEEKEND_ALLOCATION_ACTOR))).limit(1);
+    if (existing) {
+      if (existing.changeSummary?.weekendInputFingerprint !== weekendInputFingerprint) {
+        throw new Error("Wednesday allocation was already saved, but its inputs have changed. Review the latest assignments and regenerate before acting on the old suggestions.");
+      }
+      const rows = await loadRowsForRun(db, existing.id);
+      return { run: existing, rows, rooms, ...await loadClassroomSnapshotMetas(db, existing.snapshotId),
+        overflowPlan: readOverflowPlan(existing.changeSummary), liveRoomBlocks: externalBlocks,
+        roomConflictWarnings: buildRoomConflictWarnings(rows, externalBlocks, room => room),
+        events: [], changeSummary: {}, allocationReused: true };
+    }
+  }
   const verifiedOnline = liveVerifiedOnlineIds(sessions, liveSessions);
   const previousPlan = readOverflowPlan(previousRun?.changeSummary);
   let reconciliation = reconcileClassroomAssignments({
@@ -1009,28 +1066,34 @@ async function runIncrementalClassroomAssignmentUnlocked(
   });
   reconciliation = overflow.reconciliation;
 
+  if (checkpoint && (!snapshotMeta.latestSyncFinishedAt || Date.now() - Date.parse(snapshotMeta.latestSyncFinishedAt) > CLASSROOM_ASSIGNMENT_FRESHNESS_MS)) {
+    throw new Error("Wise snapshot became stale before the weekend allocation could be saved");
+  }
+
   const run = await persistAssignmentRun(
     db,
     date,
     snapshot.id,
     input.forceReassign ?? false,
-    input.createdBy ?? null,
+    checkpoint ? WEEKEND_ALLOCATION_ACTOR : input.createdBy ?? null,
     reconciliation.rows,
     {
       sourceRunId: previousRun?.id ?? null,
-      automationBatchId: input.automationBatchId ?? null,
+      automationBatchId: checkpoint?.id ?? input.automationBatchId ?? null,
+      weekendCheckpoint: checkpoint,
       reconciliationMode: enabled ? "continuity" : "minimal_moves",
       changeSummary: { ...reconciliation.summary,
         algorithmVersion: enabled ? CLASSROOM_ALGORITHM_VERSION : "legacy",
         roomPolicies: roomPolicySnapshot(roomPolicies),
         overflowPlan: overflow.plan,
+        ...(checkpoint ? { weekendInputFingerprint } : {}),
         quality: { ...diagnostics.quality, ...roomQualityMetrics(reconciliation.rows, roomPolicies) }, ...(snapshotMeta.syncErrorSummary ? { syncErrorSummary: snapshotMeta.syncErrorSummary } : {}), unmanagedWiseSessionCount: unmanagedWiseSessionIds.length, unmanagedWiseSessionIds },
     },
   );
 
   const rows = await loadRowsForRun(db, run.id);
-  if (input.automationBatchId) await persistAutomationEvents(db, {
-    automationBatchId: input.automationBatchId,
+  if (checkpoint || input.automationBatchId) await persistAutomationEvents(db, {
+    automationBatchId: checkpoint?.id ?? input.automationBatchId!,
     assignmentRunId: run.id,
     assignmentDate: date,
     events: reconciliation.events,

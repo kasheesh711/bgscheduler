@@ -4,6 +4,8 @@ import { addBangkokDays, bangkokWeekday, todayBangkok } from "@/lib/room-capacit
 export const WEEKEND_CHECK_JOB_KEY = "classroom_weekend_check";
 export const WEEKEND_CHECK_WEEKDAYS = [3, 4, 5];
 export const WEEKEND_CHECK_LEASE_MS = 15 * 60_000;
+export const WEEKEND_ALLOCATION_ACTOR = "cron@classroom-weekend";
+export interface WeekendAllocationCheckpoint { id: string; claimedAt: Date }
 
 export function weekendDates(now: Date): [string, string] {
   const today = todayBangkok(now);

@@ -2,9 +2,9 @@ import { pausedWiseClassroomResult, wiseClassroomAutomationEnabled } from "./ope
 import { and, desc, eq, lt, or, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { classroomWeekendChecks as checks, classroomWeekendNotifications as notifications } from "@/lib/db/schema";
-import { todayBangkok } from "@/lib/room-capacity/dates";
+import { bangkokWeekday, todayBangkok } from "@/lib/room-capacity/dates";
 import { isWeekendCheckDue, weekendAlertRecipient, weekendDates, WEEKEND_CHECK_LEASE_MS } from "./weekend-config";
-import { previewWeekendReadiness } from "./weekend-preview";
+import { previewWeekendReadiness, type WeekendEvaluationOptions } from "./weekend-preview";
 import { notificationForReport, type WeekendReport } from "./weekend-readiness";
 import { buildWeekendEmail } from "./weekend-email";
 import { createAppsScriptScheduleEmailSender, type ScheduleEmailSender } from "./schedule-email";
@@ -40,7 +40,7 @@ export async function loadWeekendCheck(db: Database, options: { checkId?: string
 
 export async function runWeekendClassroomCheck(db: Database | undefined = undefined, options: {
   now?: Date;
-  evaluate?: (db: Database, dates: [string, string]) => Promise<WeekendReport>;
+  evaluate?: (db: Database, dates: [string, string], options: WeekendEvaluationOptions) => Promise<WeekendReport>;
   sender?: ScheduleEmailSender;
 } = {}) {
   if (!wiseClassroomAutomationEnabled()) return pausedWiseClassroomResult();
@@ -59,9 +59,12 @@ export async function runWeekendClassroomCheck(db: Database | undefined = undefi
     // Deliver an already-created notification before re-evaluating it. Once an unverified
     // notice is accepted, later retry ticks can improve the report without sending it twice.
     if (!report || (report.readiness === "unverified" && notification?.status === "sent")) {
-      try { report = await (options.evaluate ?? previewWeekendReadiness)(db, weekendDates(now)); }
+      try { report = await (options.evaluate ?? previewWeekendReadiness)(db, weekendDates(now), {
+        ...(bangkokWeekday(now) === 3 ? { checkpoint: { id: check.id, claimedAt: now } } : {}),
+        assertActive: () => assertWeekendClaim(db, check.id, now, clock()),
+      }); }
       catch (error) {
-        report = { checkedAt: clock().toISOString(), dates: weekendDates(now), snapshotId: null, snapshotFinishedAt: null,
+        report = { version: 2, checkedAt: clock().toISOString(), dates: weekendDates(now), snapshotId: null, snapshotFinishedAt: null,
           readiness: "unverified", days: [], findings: [{ date: weekendDates(now)[0], kind: "unverified",
             message: error instanceof Error ? error.message : "Weekend classroom verification failed" }] };
       }
@@ -72,7 +75,7 @@ export async function runWeekendClassroomCheck(db: Database | undefined = undefi
       const [previous] = await db.select({ kind: notifications.kind }).from(notifications)
         .where(and(eq(notifications.weekendDate, check.weekendDate), eq(notifications.recipient, recipient), eq(notifications.status, "sent")))
         .orderBy(desc(notifications.sentAt)).limit(1);
-      const kind = notificationForReport(report.readiness, previous?.kind ?? null);
+      const kind = notificationForReport(report.readiness, previous?.kind ?? null, bangkokWeekday(now) === 3);
       if (kind) {
         await assertWeekendClaim(db, check.id, now, clock());
         [notification] = await db.insert(notifications).values({ checkId: check.id, weekendDate: check.weekendDate, kind, recipient,

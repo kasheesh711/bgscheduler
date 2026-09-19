@@ -1,16 +1,22 @@
 # Weekend classroom alerts
 
-The Wednesday, Thursday and Friday checkpoint starts at **09:00 Asia/Bangkok** and checks the coming Saturday and Sunday. Only `kevhsh7@gmail.com` receives these warnings. Unchanged problems receive another warning on each check day; a subsequent primary check sends one resolved notice after the previous warning has cleared. Ordinary healthy weekends remain quiet.
+The Wednesday checkpoint starts at **09:00 Asia/Bangkok**, saves allocations for the coming Saturday and Sunday, and emails one report to **kevhsh7@gmail.com**, including when no student switches are needed. Thursday and Friday at 09:00 make fresh read-only assessments: unresolved problems receive another private warning, followed by one resolved notice after a verified recovery. Healthy Thursday/Friday checks remain quiet.
 
 ## Assessment and delivery
 
-The check waits up to six minutes for the normal Wise refresh to promote a snapshot, retaining the existing 15-minute freshness requirement. It then reads the complete live Wise session list and runs the recovery planner without changing rooms, assignments, tutor profiles, Wise bookings, or teacher emails. Reads share a pinned identity snapshot and a repeatable-read, read-only database transaction for the planning context. The full live read has a ten-minute overall budget.
+The check waits up to six minutes for the normal Wise refresh to promote a snapshot, retaining the existing 15-minute freshness requirement. It reads the complete live Wise sessions for both dates, sharing a pinned identity snapshot and a repeatable-read planning context. Wednesday verifies each date independently before using the existing day lock and incremental allocator. Explicit overrides, confirmed reservations, started/notified assignments and actual modalities are preserved. Unresolved source data withholds that date's save and remains visible; the other date can still complete. The full live read has a ten-minute overall budget.
+
+The full-day minimum-switch optimizer first rearranges rooms and releases already-online lessons from onsite classrooms. These improvements are saved as actual-modality allocations. Proposed onsite-to-online conversions and their conditional room plan stay in separate run metadata. An online release uses a dedicated online room when available, otherwise **Teach elsewhere — classroom released**, including when adjacent lessons are onsite. No Wise modality, family message or teacher email is changed by this checkpoint.
+
+Report version 2 extends the existing payload with per-day allocation state/run ID, save/source timestamps, overflow plan and Wise publication read-back. It lists students, tutors, full lesson times, actual history counts and observed periods, before/after rooms, accommodated lessons, solver proof/timeout status and source problems. Online attendance is explicitly fallback evidence. Failed dates have unverified capacity, not a zero-overflow claim. Old reports remain readable.
+
+Normal **17:00 seven-day allocation and publishing** and **19:00 next-day schedule delivery** remain independent. A Wednesday save is not Wise publication. Only matching fresh Wise lesson/roster/location evidence counts as confirmed publication. Suggestions never clear operational warnings.
 
 Room shortages, live double bookings, incompatible rooms and unverifiable data are actionable. A feasible preview does not mean a proposed correction has been applied. Solver exhaustion is reported as an unresolved assignment, not a proven number of missing rooms. Unknown identities, modality, cancellations, malformed pagination, stale snapshots and failed fetches never produce an all-clear.
 
 Delivery uses the existing primary Apps Script relay and a durable private outbox. A successful check has a readiness of `clear`, `attention` or `unverified`; execution success means assessment and any required notification were recorded, not that rooms are sufficient. The two new tables are `classroom_weekend_checks` and `classroom_weekend_notifications`, introduced by migration `0077_classroom_weekend_checks`.
 
-Retry ticks at 09:16 and 09:31 recover unfinished claims and failed delivery using a 15-minute lease and the same relay idempotency key. Verified assessments and accepted emails are not repeated that day. After an unverified warning is delivered, retries can refresh the saved assessment without duplicating the warning; any recovery notice follows at the next primary check day. Pending mail retains its original payload/key until accepted.
+Retry ticks at 09:16 and 09:31 recover unfinished claims and failed delivery using a 15-minute lease and the same relay idempotency key. Migration `0095_classroom_weekend_allocations` adds a database-unique checkpoint/date key for `cron@classroom-weekend` runs. A committed allocation is reused after a crash; source/constraint fingerprints reject stale reuse. The checkpoint claim is locked and checked in the allocation transaction so a superseded worker cannot save. After an unverified warning is delivered, retries can finish missing dates and refresh the stored report without duplicating the accepted email; any recovery notice follows at the next primary check day. Pending mail retains its original payload/key until accepted.
 
 ## Configuration and rollout
 
@@ -23,7 +29,9 @@ The 09:00 tick deliberately shares the Wise snapshot minute, waiting for that sy
 
 Run `npm run verify:release` and database integration tests against an isolated scratch Postgres. Validate the live evaluator without calling `runWeekendClassroomCheck` (which can send mail) and verify desktop/mobile warnings and email links with mocked data. Apply only the reviewed additive migration, configure the recipient/activation instant, and deploy the verified commit through the linked project.
 
-First expected checkpoint for this rollout: **Wednesday, 9 September 2026, 09:00 Bangkok**. Verify its cron invocation, persisted report and notification receipt after the retry window. Do not invoke morning automation to test this feature.
+First expected allocation checkpoint for this rollout: **Wednesday, 23 September 2026, 09:00 Bangkok**, covering **26–27 September**. Verify its cron invocation, both saved run IDs, stored report and provider receipt after the retry window. Provider acceptance is not confirmed inbox delivery.
+
+For this approved restoration, deploy and validate while `WISE_CLASSROOM_AUTOMATION_ENABLED=false`, apply migrations 0094/0095 and bootstrap available history, inspect pending publication jobs, then set the flag to `true` and redeploy. Previously stopped jobs remain stopped. Keep the Kevin-only manual controls. This restores the five existing Wise/classroom jobs; it does not add another scheduled job.
 
 Rollback: remove `CLASSROOM_WEEKEND_ALERTS_ENABLED_AT` and redeploy. Preserve the additive tables and delivery history.
 

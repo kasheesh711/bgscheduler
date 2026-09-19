@@ -81,7 +81,7 @@ export const CRON_JOBS = [
     dangerous: true, confirmationLabel: "Refreshes rooms, releases reservations superseded by Wise classes, and retries tutor notifications.", routeMethod: "GET" },
   {
     key: "classroom_weekend_check",
-    label: "Weekend Classroom Check",
+    label: "Weekend Classroom Allocation and Report",
     feature: "Class Assignments",
     path: "/api/internal/class-assignments/weekend-check",
     schedule: "0,16,31 2 * * 3-5",
@@ -91,7 +91,7 @@ export const CRON_JOBS = [
     maxDurationSeconds: 800,
     manualOnly: false,
     dangerous: true,
-    confirmationLabel: "Checks this weekend and may email the configured private recipient. Does not publish rooms or email tutors.",
+    confirmationLabel: "Saves Saturday and Sunday allocations on Wednesday and sends the private report. Thursday and Friday check for remaining issues. Publishing and tutor emails use their separate daily jobs.",
     expectedBangkokWeekdays: [3, 4, 5],
     expectedBangkokWindowStartMinute: 9 * 60,
     expectedBangkokWindowEndMinute: 9 * 60 + 31,

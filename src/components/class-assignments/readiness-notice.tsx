@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { formatBangkokShortDateTime } from "@/lib/bangkok-time";
 import { minuteToTimeLabel } from "@/lib/room-capacity/dates";
 import { SyncReviewNotice } from "./sync-review-notice";
+import { WeekendAllocationReport } from "./weekend-allocation-report";
 import { getSyncReview, summarizeWeekendReadiness, summarizeWiseReadiness,
   type FindingGroup, type ReadinessSeverity, type ReadinessSummary, type WeekendView } from "./readiness-summary";
 import type { AssignmentDetail } from "./types";
@@ -99,18 +100,19 @@ export function WeekendDetails({ view, summary }: { view: WeekendView; summary: 
   return <section aria-labelledby="classroom-weekend-title" className="space-y-3">
     <div><h3 id="classroom-weekend-title" className="font-semibold">Weekend</h3>
       <p className="mt-1 text-xs text-muted-foreground">{(report?.dates ?? view.dates).join(" / ")}</p></div>
-    <p className="text-xs text-muted-foreground">Checks Wednesday, Thursday and Friday at 09:00 Bangkok.</p>
+    <p className="text-xs text-muted-foreground">Allocates the weekend on Wednesday at 09:00 Bangkok. Follow-up checks run Thursday and Friday at 09:00.</p>
     {view.error && <p role="alert" className="text-sm text-amber-800 dark:text-amber-300">{view.error} Weekend coverage could not be verified.</p>}
     {report ? <>
       <p className={`text-sm ${severityColor[summary.severity]}`}>{report.readiness === "clear" ? "The saved check found no room blockers."
         : report.readiness === "unverified" ? "Weekend classroom coverage could not be fully verified." : "Weekend classrooms need attention."}</p>
       <p className="text-xs text-muted-foreground">Checked {formatBangkokShortDateTime(report.checkedAt)} Bangkok. This is a saved assessment; later booking changes may affect availability.</p>
       <div className="flex flex-wrap gap-3 text-sm">{report.dates.map(date => <a key={date} className="font-medium text-primary underline underline-offset-2" href={`/class-assignments?date=${date}&weekendCheck=${view.check!.id}`}>Review {date}</a>)}</div>
+      <WeekendAllocationReport report={report} />
       {summary.groups.length > 0 && <GroupedFindingList groups={summary.groups} />}
     </> : !view.error && <p className="text-sm text-muted-foreground">{view.loading ? "Loading the saved weekend check…"
       : view.check?.status === "running" ? "Weekend verification is in progress." : "This weekend has not been verified yet."}</p>}
     {view.check?.status === "failed" && <p role="alert" className="text-sm text-amber-800 dark:text-amber-300">The check or its email delivery failed. <a className="underline" href="/data-health">Review Data Health</a>. {view.check.lastError}</p>}
-    {view.check?.delivery && <p className="text-xs text-muted-foreground">Private notification: {view.check.delivery.status === "sent" ? "sent" : "awaiting delivery"}
+    {view.check?.delivery && <p className="text-xs text-muted-foreground">Private notification: {view.check.delivery.status === "sent" ? "accepted by email provider (inbox delivery not confirmed)" : "awaiting delivery"}
       {view.check.delivery.sentAt && ` · ${formatBangkokShortDateTime(view.check.delivery.sentAt)} Bangkok`}.</p>}
   </section>;
 }

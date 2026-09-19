@@ -71,8 +71,9 @@ function formatMinute(minute: number): string {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
-function roomLabel(row: Pick<ClassroomRow, "status" | "assignedRoom">): string {
+function roomLabel(row: Pick<ClassroomRow, "status" | "assignedRoom" | "overflowReleaseRoom">): string {
   if (row.status === "remote" || row.assignedRoom === REMOTE_NO_ROOM_NEEDED) {
+    if (row.overflowReleaseRoom) return "Teach elsewhere — classroom released";
     return "Remote / no room needed";
   }
   return row.assignedRoom;

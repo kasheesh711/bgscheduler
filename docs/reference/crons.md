@@ -699,6 +699,8 @@ _Verified against main@0cd1e81 (clean tree) on 2026-09-02._
 
 `classroom_weekend_check` → `/api/internal/class-assignments/weekend-check`, schedule `0,16,31 2 * * 3-5`, `maxDuration = 800`: Wednesday, Thursday and Friday at 09:00 Bangkok, retries 09:16 and 09:31. A unique Bangkok check-date row and a 15-minute fenced lease prevent concurrent sends; relay keys deduplicate retries. The 09:00 overlap with Wise snapshot sync is coordinated by waiting for its fresh snapshot rather than starting another sync.
 
+Wednesday now saves both coming weekend allocations and always sends a private report. The checkpoint/date uniqueness index and existing day locks prevent duplicate runs on retries. Thursday/Friday remain read-only warning/resolution checks. Room publishing and tutor email remain in their existing 17:00/19:00 workflows. The restored workflow's first Wednesday is 23 September 2026 for 26–27 September.
+
 `CLASSROOM_WEEKEND_ALERTS_ENABLED_AT` sets the first monitored activation instant. Multi-weekday health expectations avoid false alerts on Saturday–Tuesday and before activation. Watchdog mail for this job goes only to `CLASSROOM_WEEKEND_ALERT_EMAIL`, never the shared admin digest. [Operational details](../operations/weekend-classroom-alerts.md).
 
 ## Tutor room availability

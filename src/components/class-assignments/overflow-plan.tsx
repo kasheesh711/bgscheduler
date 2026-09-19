@@ -25,16 +25,16 @@ function ActionList({ actions }: { actions: OverflowAction[] }) {
   </li>)}</ul>;
 }
 
-export function OverflowPlanSection({ plan, stale = false }: { plan: OverflowPlan | null; stale?: boolean }) {
+export function OverflowPlanSection({ plan, stale = false, headingId = "overflow-plan-title" }: { plan: OverflowPlan | null; stale?: boolean; headingId?: string }) {
   if (!plan) return null;
   const actualOnline = plan.actualActions.filter(action => action.kind === "relocate_online");
   const conversions = plan.proposedActions.filter(action => action.kind === "switch_to_online");
   const proposedOther = plan.proposedActions.filter(action => action.kind !== "switch_to_online");
   const actualOther = plan.actualActions.filter(action => action.kind !== "relocate_online");
   const accommodated = plan.predictedAssignments.filter(row => plan.accommodatedSessionIds.includes(row.wiseSessionId));
-  return <section aria-labelledby="overflow-plan-title" className="shrink-0 rounded-xl border border-amber-300/70 bg-amber-50/40 p-4 dark:bg-amber-950/10">
+  return <section aria-labelledby={headingId} className="shrink-0 rounded-xl border border-amber-300/70 bg-amber-50/40 p-4 dark:bg-amber-950/10">
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <h2 id="overflow-plan-title" className="text-base font-semibold">Overflow plan</h2>
+      <h2 id={headingId} className="text-base font-semibold">Overflow plan</h2>
       <span className="rounded-full border bg-background px-2.5 py-1 text-xs font-medium">{stale ? "Stale — refresh required" : labels[plan.status]}</span>
     </div>
     <p className="mt-2 text-sm">{plan.baselineOverflow} {plan.baselineOverflow === 1 ? "class" : "classes"} initially without a room. {plan.actualRemainingOverflow} {plan.actualRemainingOverflow === 1 ? "remains" : "remain"} after room changes and existing-online relocations.</p>

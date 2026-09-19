@@ -180,6 +180,14 @@ describe("sendAdminClassroomScheduleEmail", () => {
     expect(sender.sendEmail.mock.calls[0][0].text).toContain("Kevin");
   });
 
+  it("includes actual classroom-release instructions in the admin schedule", async () => {
+    vi.mocked(getClassroomAssignmentForDate).mockResolvedValue(detail({ rows: [{ ...row, status: "remote",
+      assignedRoom: "REMOTE_NO_ROOM_NEEDED", overflowReleaseRoom: "REMOTE_NO_ROOM_NEEDED" }] }) as never);
+    const sender = { sendEmail: vi.fn().mockResolvedValue({ id: "sent" }) };
+    await sendAdminClassroomScheduleEmail(makeDb({ adminEmails: ["admin@example.com"] }) as never, { sender });
+    expect(sender.sendEmail.mock.calls[0][0].text).toContain("Teach elsewhere — classroom released");
+  });
+
   it("includes teacher schedule email counts in the admin summary", async () => {
     const db = makeDb({
       publishJobs: [],

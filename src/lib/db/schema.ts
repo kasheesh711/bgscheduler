@@ -1784,6 +1784,8 @@ export const classroomAssignmentRuns = pgTable("classroom_assignment_runs", {
   index("car_date_idx").on(table.assignmentDate),
   index("car_snapshot_idx").on(table.snapshotId),
   index("car_automation_batch_idx").on(table.automationBatchId),
+  uniqueIndex("car_weekend_checkpoint_date_idx").on(table.automationBatchId, table.assignmentDate)
+    .where(sql`${table.createdBy} = 'cron@classroom-weekend'`),
 ]);
 
 export const classroomAssignmentRows = pgTable("classroom_assignment_rows", {

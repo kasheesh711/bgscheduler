@@ -666,6 +666,13 @@
       "when": 1789690800000,
       "tag": "0094_classroom_overflow_history",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1789777200000,
+      "tag": "0095_classroom_weekend_allocations",
+      "breakpoints": true
     }
   ]
 }

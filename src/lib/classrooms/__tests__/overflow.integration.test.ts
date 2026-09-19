@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { startTestDb, stopTestDb, truncateAll } from "@/tests/integration/db-helper";
 import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
@@ -8,11 +8,19 @@ import { ensureDefaultClassroomRooms, getClassroomAssignmentForDate, runIncremen
 import { loadAttendanceObservations, loadBootstrapModeObservations, loadStudentModeEvidence, recordModeObservations } from "../mode-history-data";
 import type { ModeObservation } from "../mode-history";
 import { REMOTE_NO_ROOM_NEEDED } from "../assignment-engine";
+import { WEEKEND_ALLOCATION_ACTOR } from "../weekend-config";
 
 let handle: Awaited<ReturnType<typeof startTestDb>>, db: Database;
 beforeAll(async () => { handle = await startTestDb(); db = handle.db as unknown as Database; });
 afterAll(async () => { if (handle) await stopTestDb(handle); });
-beforeEach(async () => { await truncateAll(handle.db); vi.stubEnv("CLASSROOM_CONTINUITY_ENABLED", "false"); });
+beforeEach(async () => {
+  await truncateAll(handle.db);
+  await handle.db.execute(sql`TRUNCATE classroom_weekend_notifications, classroom_weekend_checks,
+    onsite_foot_traffic_sessions, onsite_foot_traffic_sync_runs, credit_control_snapshots, credit_control_sync_runs CASCADE`);
+  vi.stubEnv("CLASSROOM_CONTINUITY_ENABLED", "false");
+  vi.stubEnv("WISE_USER_ID", "test-user");
+  vi.stubEnv("WISE_API_KEY", "test-key");
+});
 afterEach(() => vi.unstubAllEnvs());
 const date = "2099-09-19";
 async function seed(online: boolean) {
@@ -25,7 +33,11 @@ async function seed(online: boolean) {
   for (const [id, type, start, end] of [["a", "OFFLINE", 540, 600], ["b", online ? "SCHEDULED" : "OFFLINE", 600, 720], ["c", "OFFLINE", 600, 660], ["d", "OFFLINE", 660, 720]] as const) {
     const teacher = id === "b" ? "a" : id;
     let [group] = await handle.db.select().from(s.tutorIdentityGroups).where(eq(s.tutorIdentityGroups.canonicalKey, teacher));
-    if (!group) [group] = await handle.db.insert(s.tutorIdentityGroups).values({ snapshotId: snapshot.id, canonicalKey: teacher, displayName: `Teacher ${teacher}` }).returning();
+    if (!group) {
+      [group] = await handle.db.insert(s.tutorIdentityGroups).values({ snapshotId: snapshot.id, canonicalKey: teacher, displayName: `Teacher ${teacher}` }).returning();
+      await handle.db.insert(s.tutorIdentityGroupMembers).values({ snapshotId: snapshot.id, groupId: group.id,
+        wiseTeacherId: teacher, wiseUserId: teacher, wiseDisplayName: `Teacher ${teacher}` });
+    }
     const wallTime = (minute: number) => new Date(`${date}T${String(Math.floor(minute / 60)).padStart(2, "0")}:00:00Z`);
     const startTime = wallTime(start), endTime = wallTime(end);
     await handle.db.insert(s.futureSessionBlocks).values({ snapshotId: snapshot.id, groupId: group.id, wiseTeacherId: teacher, wiseTeacherUserId: teacher,
@@ -37,6 +49,47 @@ async function seed(online: boolean) {
   return { snapshot, liveSessions };
 }
 describe("durable overflow planning", () => {
+  async function checkpoint() {
+    const [check] = await handle.db.insert(s.classroomWeekendChecks).values({ checkDate: "2099-09-16", weekendDate: date, claimedAt: new Date() }).returning();
+    return { id: check.id, claimedAt: check.claimedAt };
+  }
+  it("resumes a committed Wednesday allocation without a duplicate run, preserving an override and online release", async () => {
+    const { liveSessions } = await seed(true);
+    const original = await runIncrementalClassroomAssignment(db, { date, liveSessions });
+    await handle.db.update(s.classroomAssignmentRows).set({ overrideRoom: "Test classroom" })
+      .where(eq(s.classroomAssignmentRows.id, original.rows.find(row => row.wiseSessionId === "a")!.id));
+    const weekendCheckpoint = await checkpoint();
+    const first = await runIncrementalClassroomAssignment(db, { date, liveSessions, weekendCheckpoint });
+    const resumed = await runIncrementalClassroomAssignment(db, { date, liveSessions, weekendCheckpoint });
+    expect(resumed.allocationReused).toBe(true);
+    expect(resumed.run!.id).toBe(first.run!.id);
+    expect(resumed.rows.find(row => row.wiseSessionId === "a")?.overrideRoom).toBe("Test classroom");
+    expect(resumed.rows.find(row => row.wiseSessionId === "b")).toMatchObject({ sessionType: "SCHEDULED", overflowReleaseRoom: REMOTE_NO_ROOM_NEEDED });
+    expect(await handle.db.select().from(s.classroomAssignmentRuns).where(eq(s.classroomAssignmentRuns.automationBatchId, weekendCheckpoint.id))).toHaveLength(1);
+    expect(await handle.db.select().from(s.classroomPublishJobs)).toHaveLength(0);
+    expect(await handle.db.select().from(s.classroomScheduleEmailRuns)).toHaveLength(0);
+    await expect(handle.db.insert(s.classroomAssignmentRuns).values({ assignmentDate: date, snapshotId: first.run!.snapshotId,
+      automationBatchId: weekendCheckpoint.id, createdBy: WEEKEND_ALLOCATION_ACTOR })).rejects.toThrow();
+  });
+  it("refuses changed constraints when resuming a saved checkpoint", async () => {
+    const { liveSessions } = await seed(true), weekendCheckpoint = await checkpoint();
+    await runIncrementalClassroomAssignment(db, { date, liveSessions, weekendCheckpoint });
+    await handle.db.update(s.classroomRooms).set({ capacity: 5 }).where(eq(s.classroomRooms.name, "Test classroom"));
+    await expect(runIncrementalClassroomAssignment(db, { date, liveSessions, weekendCheckpoint })).rejects.toThrow("inputs have changed");
+    expect(await handle.db.select().from(s.classroomAssignmentRuns)).toHaveLength(1);
+  });
+  it("fences a replaced checkpoint before committing an allocation", async () => {
+    const { liveSessions } = await seed(true), weekendCheckpoint = await checkpoint();
+    await handle.db.update(s.classroomWeekendChecks).set({ claimedAt: new Date(weekendCheckpoint.claimedAt.getTime() + 1) });
+    await expect(runIncrementalClassroomAssignment(db, { date, liveSessions, weekendCheckpoint })).rejects.toThrow("no longer active");
+    expect(await handle.db.select().from(s.classroomAssignmentRuns)).toHaveLength(0);
+  });
+  it("refuses a live lesson changed since the verified snapshot", async () => {
+    const { liveSessions } = await seed(false), weekendCheckpoint = await checkpoint();
+    liveSessions[0].students = ["changed-roster"];
+    await expect(runIncrementalClassroomAssignment(db, { date, liveSessions, weekendCheckpoint })).rejects.toThrow("differ from the snapshot");
+    expect(await handle.db.select().from(s.classroomAssignmentRuns)).toHaveLength(0);
+  });
   it("saves zero-switch relief and keeps the release across regeneration adjacent to onsite teaching", async () => {
     const { liveSessions } = await seed(true);
     const first = await runIncrementalClassroomAssignment(db, { date, liveSessions });

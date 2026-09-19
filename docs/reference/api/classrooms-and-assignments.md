@@ -422,6 +422,8 @@ _Verified against main@0cd1e81 (clean tree) on 2026-09-02._
 - `GET /api/internal/class-assignments/weekend-check`: cron-secret authentication; 800-second limit, audited as `classroom_weekend_check`. Returns execution `ok`, check ID, readiness, finding count and notification kind; HTTP 500 for execution/delivery failure. Detected shortages or a delivered unverified warning remain separate from successful execution. The enabled Wednesday–Friday calendar applies to manual reruns too.
 - `/class-assignments?date=YYYY-MM-DD&weekendCheck=UUID` opens the affected date and saved report. Invalid date input falls back to today's Bangkok date.
 
+Weekend report `version: 2` is a backward-compatible extension: each `days[]` entry may include `allocation` (`saved | reused | not_requested | failed | blocked`), `runId`, `allocationCreatedAt`, `allocationError`, `sourceCheckedAt`, `overflowPlan` and `publication` (`state`, `verified`, `pending`, `failed`, `checkedAt`). The original counts/findings remain. Publication means matching live Wise read-back, not a saved publish-success flag. Wednesday uses the checkpoint as the allocation batch ID and returns an email `summary` even when clear; Thursday/Friday stay read-only. Delivery metadata still excludes the private address/body.
+
 
 ## Persistent publish recovery
 

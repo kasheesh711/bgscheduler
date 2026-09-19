@@ -1,6 +1,6 @@
 # Classroom overflow planner
 
-This change does not re-enable Wise publishing or automation. Owner checks and `WISE_CLASSROOM_AUTOMATION_ENABLED` remain unchanged.
+The optimizer preserves owner checks and `WISE_CLASSROOM_AUTOMATION_ENABLED`. The approved Wednesday-reporting release restores the existing automation only after paused deployment validation and pending-publication review; see [the weekend runbook](weekend-classroom-alerts.md).
 
 ## Release
 
@@ -10,7 +10,7 @@ This change does not re-enable Wise publishing or automation. Owner checks and `
 4. As the current operations owner, GET `/api/class-assignments?optimizerCheck=1`. Expect `ok: true`, `wasmLoaded: true`, `package: "highs@1.15.3"`, and `integerOptimum: 1`. This read-only diagnostic solves a tiny integer problem. It reads owner access but never loads/saves allocations or contacts Wise.
 5. Review the Overflow plan on a generated, freshly verified overbooked day. Compare actual rows with `predictedAssignments`; proposed switches must be absent from actual modalities. Unresolved source/room issues remain visible.
 
-The additive schema can remain in place if the application is rolled back. Existing classroom pause controls are the operational fallback. Do not enable automation as part of this rollout.
+The additive schema can remain in place if the application is rolled back. Existing classroom pause controls are the operational fallback. Wednesday allocation idempotency also requires `0095_classroom_weekend_allocations.sql`.
 
 ## Evidence and limitations
 

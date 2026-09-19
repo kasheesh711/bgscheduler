@@ -2,6 +2,7 @@ import type { AssignmentResultRow, ExternalRoomBlock } from "./assignment-engine
 import type { ClassroomRoomDefinition } from "./rooms";
 import { physicalRoom } from "./room-policy";
 import { getClassroomSessionMode, isOnsiteSessionType } from "./session-mode";
+import type { OverflowPlan } from "./overflow-types";
 
 export type WeekendReadiness = "clear" | "attention" | "unverified";
 export interface WeekendFinding {
@@ -17,13 +18,34 @@ export interface WeekendFinding {
   needsTv?: boolean;
   message: string;
 }
+export interface WeekendDayReport {
+  date: string;
+  liveSessions: number;
+  plannedSessions: number;
+  noRoomCount: number;
+  runId?: string | null;
+  allocation?: "saved" | "reused" | "not_requested" | "failed" | "blocked";
+  allocationCreatedAt?: string | null;
+  allocationError?: string;
+  sourceCheckedAt?: string;
+  overflowPlan?: OverflowPlan | null;
+  publication?: {
+    state: "verified" | "partial" | "not_published" | "not_applicable";
+    verified: number;
+    pending: number;
+    failed: number;
+    checkedAt: string;
+  };
+}
 export interface WeekendReport {
+  /** Absent on legacy read-only assessments. */
+  version?: 2;
   checkedAt: string;
   dates: [string, string];
   snapshotId: string | null;
   snapshotFinishedAt: string | null;
   readiness: WeekendReadiness;
-  days: Array<{ date: string; liveSessions: number; plannedSessions: number; noRoomCount: number }>;
+  days: WeekendDayReport[];
   findings: WeekendFinding[];
 }
 
@@ -115,6 +137,7 @@ export function readinessForFindings(findings: WeekendFinding[]): WeekendReadine
   return findings.some(finding => finding.kind === "unverified") ? "unverified" : findings.length ? "attention" : "clear";
 }
 
-export function notificationForReport(readiness: WeekendReadiness, previousSentKind: string | null): "warning" | "resolved" | null {
-  return readiness !== "clear" ? "warning" : previousSentKind === "warning" ? "resolved" : null;
+export type WeekendNotificationKind = "warning" | "resolved" | "summary";
+export function notificationForReport(readiness: WeekendReadiness, previousSentKind: string | null, wednesday = false): WeekendNotificationKind | null {
+  return readiness !== "clear" ? "warning" : previousSentKind === "warning" ? "resolved" : wednesday ? "summary" : null;
 }
