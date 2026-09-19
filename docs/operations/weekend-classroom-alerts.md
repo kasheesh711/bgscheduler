@@ -12,6 +12,8 @@ Report version 2 extends the existing payload with per-day allocation state/run 
 
 Normal **17:00 seven-day allocation and publishing** and **19:00 next-day schedule delivery** remain independent. A Wednesday save is not Wise publication. Only matching fresh Wise lesson/roster/location evidence counts as confirmed publication. Suggestions never clear operational warnings.
 
+Targeted publishing respects a saved already-online release only while fresh Wise data confirms the full lesson and complete roster. It retains Wise's original location as source evidence and does not edit the online lesson. If release evidence changes during publishing, affected onsite assignments remain unresolved after read-back. Hypothetical conversions never release publishing capacity.
+
 Room shortages, live double bookings, incompatible rooms and unverifiable data are actionable. A feasible preview does not mean a proposed correction has been applied. Solver exhaustion is reported as an unresolved assignment, not a proven number of missing rooms. Unknown identities, modality, cancellations, malformed pagination, stale snapshots and failed fetches never produce an all-clear.
 
 Delivery uses the existing primary Apps Script relay and a durable private outbox. A successful check has a readiness of `clear`, `attention` or `unverified`; execution success means assessment and any required notification were recorded, not that rooms are sufficient. The two new tables are `classroom_weekend_checks` and `classroom_weekend_notifications`, introduced by migration `0077_classroom_weekend_checks`.

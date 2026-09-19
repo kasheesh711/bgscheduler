@@ -1627,6 +1627,15 @@ async function runClassroomPublishJobUnlocked(
     const liveSessions = await fetchWiseSessionsForBangkokDates(client, instituteId, [run.assignmentDate], { deadlineAt: claim.deadlineAt });
     const liveBySessionId = new Map(liveSessions.map((session) => [session._id, session]));
     await refreshRowsCurrentWiseLocations(db, allRows, liveBySessionId);
+    // A saved, still-verified ONLINE release is an operational teaching-location
+    // instruction. Its stale Wise location must not block targeted onsite publishes.
+    // Keep the original read-back in the database; proposed conversions never enter here.
+    const releasedOnlineIds = liveVerifiedOnlineIds(allRows.filter(row => row.overflowReleaseRoom
+      && row.overflowReleaseRoom === row.assignedRoom && row.studentIds?.length
+      && row.studentIds.length === row.studentCount && new Set(row.studentIds).size === row.studentIds.length), liveSessions);
+    const occupancyRows = allRows.map(row => releasedOnlineIds.has(row.wiseSessionId)
+      ? { ...row, currentWiseLocation: row.overflowReleaseRoom === REMOTE_NO_ROOM_NEEDED ? null : row.overflowReleaseRoom ?? null }
+      : row);
 
     const localWiseSessionIds = new Set(allRows.map((row) => row.wiseSessionId));
     const externalBlocks = externalLiveRoomBlocks(
@@ -1749,7 +1758,7 @@ async function runClassroomPublishJobUnlocked(
       }
 
       const fixedLocalBlockers = targetRowIds
-        ? findPublishRoomBlockers(row, allRows).filter((blocker) => !targetRowIds.has(blocker.id))
+        ? findPublishRoomBlockers(row, occupancyRows).filter((blocker) => !targetRowIds.has(blocker.id))
         : [];
       if (fixedLocalBlockers.length > 0) {
         const blockerNames = fixedLocalBlockers.map((blocker) => blocker.tutorDisplayName).join(", ");
@@ -1802,7 +1811,7 @@ async function runClassroomPublishJobUnlocked(
           db,
           client,
           stillPending,
-          allRows,
+          occupancyRows,
           temporaryLocations,
           temporaryMovedRowIds,
           externalBlocks,
@@ -1876,12 +1885,17 @@ async function runClassroomPublishJobUnlocked(
     await assertPublishAttemptActive(db);
     const verified = await fetchWiseSessionsForBangkokDates(client, instituteId, [run.assignmentDate], { deadlineAt: claim.deadlineAt });
     const verifiedById = new Map(verified.map(session => [session._id, session]));
+    const changedOnlineReleases = allRows.filter(row => releasedOnlineIds.has(row.wiseSessionId)
+      && !sessionMatchesLive(row, verifiedById.get(row.wiseSessionId)));
     let mismatch = false;
     for (const row of eligibleRows) {
       if (failedRows.has(row.id)) continue;
       const live = verifiedById.get(row.wiseSessionId);
       const desired = publishLocationByRowId.get(row.id);
-      if (!live || getWiseSessionClassId(live) !== row.wiseClassId || !isOfflineSession(live.type)
+      if (findPublishRoomBlockers(row, changedOnlineReleases).length) {
+        await markPublishResult(db, row.id, "failed", "Online classroom-release evidence changed during publishing; review the assignment");
+        failedRows.set(row.id, row);
+      } else if (!live || getWiseSessionClassId(live) !== row.wiseClassId || !isOfflineSession(live.type)
         || !isBlockingStatus(live.meetingStatus) || getLocalMinuteOfDay(live.scheduledStartTime) !== row.startMinute
         || getLocalMinuteOfDay(live.scheduledEndTime) !== row.endMinute) {
         await markPublishResult(db, row.id, "failed", "Live Wise session changed during publishing; review the assignment");

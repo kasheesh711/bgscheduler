@@ -52,6 +52,51 @@ async function due(jobId: string) {
 }
 
 describe("durable classroom publication", () => {
+  async function releasedOnlineFixture(releaseRoom = "REMOTE_NO_ROOM_NEEDED") {
+    const f = await fixture(["Cool", releaseRoom], ["Do It", "Cool"]);
+    const online = f.rows[1];
+    await handle.db.update(s.classroomAssignmentRows).set({ sessionType: "SCHEDULED", status: releaseRoom === "REMOTE_NO_ROOM_NEEDED" ? "remote" : "assigned", studentCount: 1,
+      studentIds: ["online-student"], classType: "ONE_TO_ONE", overflowReleaseRoom: releaseRoom }).where(eq(s.classroomAssignmentRows.id, online.id));
+    Object.assign(f.live.get(online.wiseSessionId)!, { type: "SCHEDULED", userId: "teacher", students: ["online-student"], studentCount: 1,
+      classId: { _id: online.wiseClassId!, classType: "ONE_TO_ONE" } });
+    return f;
+  }
+  it.each(["REMOTE_NO_ROOM_NEEDED", "Hope (online)"])("publishes into an already-online released classroom without changing that lesson in Wise: %s", async releaseRoom => {
+    const f = await releasedOnlineFixture(releaseRoom);
+    const job = await createClassroomPublishJob(db, { runId: f.run.id, targetRowIds: [f.rows[0].id] });
+    expect((await runClassroomPublishJob(db, job.jobId, f.client)).progress).toMatchObject({ status: "succeeded", successCount: 1 });
+    expect(f.put).toHaveBeenCalledTimes(1);
+    expect(f.put.mock.calls[0][0]).toContain(f.rows[0].wiseSessionId);
+    expect(f.live.get(f.rows[1].wiseSessionId)).toMatchObject({ type: "SCHEDULED", location: "Cool" });
+    const [online] = await handle.db.select().from(s.classroomAssignmentRows).where(eq(s.classroomAssignmentRows.id, f.rows[1].id));
+    expect(online).toMatchObject({ currentWiseLocation: "Cool", sessionType: "SCHEDULED", overflowReleaseRoom: releaseRoom });
+  });
+  it("keeps publication unresolved if online-release evidence changes during the write", async () => {
+    const f = await releasedOnlineFixture(), original = f.put.getMockImplementation()!;
+    f.put.mockImplementationOnce(async (...args) => {
+      const result = await original(...args); f.live.get(f.rows[1].wiseSessionId)!.type = "OFFLINE"; return result;
+    });
+    const job = await createClassroomPublishJob(db, { runId: f.run.id, targetRowIds: [f.rows[0].id] });
+    expect((await runClassroomPublishJob(db, job.jobId, f.client)).progress).toMatchObject({ status: "failed", successCount: 0, failedCount: 1 });
+    const [row] = await handle.db.select().from(s.classroomAssignmentRows).where(eq(s.classroomAssignmentRows.id, f.rows[0].id));
+    expect(row.publishError).toContain("release evidence changed");
+  });
+  it.each(["onsite", "changed_roster", "missing_roster", "hypothetical"])("does not release an unverified or hypothetical online change: %s", async scenario => {
+    const f = await releasedOnlineFixture(), online = f.rows[1], live = f.live.get(online.wiseSessionId)!;
+    if (scenario === "onsite") live.type = "OFFLINE";
+    if (scenario === "changed_roster") live.students = ["other-student"];
+    if (scenario === "missing_roster") {
+      live.students = undefined;
+      await handle.db.update(s.classroomAssignmentRows).set({ studentIds: null }).where(eq(s.classroomAssignmentRows.id, online.id));
+    }
+    if (scenario === "hypothetical") {
+      await handle.db.update(s.classroomAssignmentRows).set({ overflowReleaseRoom: null }).where(eq(s.classroomAssignmentRows.id, online.id));
+      await handle.db.update(s.classroomAssignmentRuns).set({ changeSummary: { overflowPlan: { proposedActions: [{ wiseSessionId: online.wiseSessionId, room: "REMOTE_NO_ROOM_NEEDED" }] } } });
+    }
+    const job = await createClassroomPublishJob(db, { runId: f.run.id, targetRowIds: [f.rows[0].id] });
+    expect((await runClassroomPublishJob(db, job.jobId, f.client)).progress).toMatchObject({ status: "failed", failedCount: 1 });
+    expect(f.put).not.toHaveBeenCalled();
+  });
   it("deduplicates concurrent publish clicks and verifies a dependency-aware swap", async () => {
     const f = await fixture();
     const [one, two] = await Promise.all([createClassroomPublishJob(db, { runId: f.run.id }), createClassroomPublishJob(db, { runId: f.run.id })]);
