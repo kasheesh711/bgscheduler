@@ -37,6 +37,7 @@ import { pruneOldSnapshots } from "@/lib/sync/snapshot-pruning";
 
 import { onboardingEnabled, resolveOnboardingIdentities, unmanagedTeacherSessions } from "@/lib/tutor-onboarding/planner";
 import { loadAccountMappings, promoteWithTutorContacts } from "@/lib/tutor-onboarding/sync";
+import { observationsFromWise, recordModeObservations } from "@/lib/classrooms/mode-history-data";
 
 export interface SyncResult {
   contactSync?: { created: number; updated: number; blocked: number; sourceIssues?: number };
@@ -688,6 +689,15 @@ export async function runFullSync(
       })
       .where(eq(schema.syncRuns.id, syncRunId));
 
+    let modalityHistory: { stored?: number; error?: string } = {};
+    if (promotedSnapshotId && !onboardingError) {
+      try {
+        modalityHistory = { stored: await recordModeObservations(db, observationsFromWise(wiseSessions, new Date()), `wise-sync:${syncRunId}`) };
+      } catch (error) {
+        modalityHistory = { error: error instanceof Error ? error.message : String(error) };
+        console.error("[sync-orchestrator] modality history capture failed", modalityHistory.error);
+      }
+    }
     if (promotedSnapshotId) {
       let pruning:
         | Awaited<ReturnType<typeof pruneOldSnapshots>>
@@ -707,7 +717,7 @@ export async function runFullSync(
       try {
         await db
           .update(schema.syncRuns)
-          .set({ metadata: { ...successMetadata, pruning } })
+          .set({ metadata: { ...successMetadata, pruning, modalityHistory } })
           .where(eq(schema.syncRuns.id, syncRunId));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

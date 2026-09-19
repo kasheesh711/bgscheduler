@@ -17,6 +17,7 @@ import {
   type ClassroomRoomDefinition,
 } from "./rooms";
 import { assignmentTutorKey } from "./room-policy";
+import { carriedOverflowRelease } from "./overflow-release";
 
 export type AssignmentChangeType = "manual" | "carried" | "added" | "changed" | "rescheduled" | "moved";
 export type AutomationEventType = "added" | "changed" | "rescheduled" | "canceled" | "moved";
@@ -87,6 +88,8 @@ const FINGERPRINT_FIELDS: Array<keyof AssignmentSession> = [
   "sessionType",
   "studentName",
   "studentCount",
+  "studentIds",
+  "overflowReleaseRoom",
   "subject",
   "classType",
   "title",
@@ -94,6 +97,7 @@ const FINGERPRINT_FIELDS: Array<keyof AssignmentSession> = [
 
 function stableValue(value: unknown): unknown {
   if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return [...value].sort();
   return value ?? null;
 }
 
@@ -154,6 +158,8 @@ function rowToContextSession(row: ReconciledAssignmentRow): ContextSession {
 
 function previousRowToSession(row: PreviousAssignmentRow): AssignmentSession {
   return {
+    studentIds: row.studentIds,
+    overflowReleaseRoom: row.overflowReleaseRoom,
     canonicalKey: row.canonicalKey,
     groupId: row.groupId,
     tutorDisplayName: row.tutorDisplayName,
@@ -297,6 +303,12 @@ function changeMessage(type: AssignmentChangeType, session: AssignmentSession, p
 }
 
 export function reconcileClassroomAssignments(input: ReconcileInput): ReconciliationResult {
+  // Room-release intent is occurrence-scoped, and disappears on modality/roster/time changes.
+  const prior = new Map(input.previousRows.map(row => [row.wiseSessionId, row]));
+  input = { ...input, sessions: input.sessions.map(session => ({ ...session,
+    overflowReleaseRoom: input.overrideBySessionId?.get(session.wiseSessionId) || prior.get(session.wiseSessionId)?.overrideRoom
+      ? null : session.overflowReleaseRoom ?? carriedOverflowRelease(session, prior.get(session.wiseSessionId)),
+  })) };
   const externalRoomBlocks = input.externalRoomBlocks ?? [];
   const previousBySessionId = new Map(input.previousRows.map((row) => [row.wiseSessionId, row]));
   const sessionById = new Map(input.sessions.map((session) => [session.wiseSessionId, session]));

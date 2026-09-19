@@ -91,6 +91,14 @@ function uniqueParticipants(session: WiseSession): unknown[] {
   });
 }
 
+/** Positive per-student attendance only; aggregate class credits do not identify attendees. */
+export function attendedWiseStudentIds(session: WiseSession): Set<string> {
+  return new Set(uniqueParticipants(session).flatMap(participant => {
+    const id = participantId(participant);
+    return id && !participantIsTeacher(participant) && (participantCredits(participant) ?? 0) > 0 ? [id] : [];
+  }));
+}
+
 function subjectForSession(session: WiseSession): string | null {
   const sessionRecord = session as Record<string, unknown>;
   const classRecord = record(session.classId);

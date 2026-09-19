@@ -12,6 +12,7 @@ import type { WiseSession } from "@/lib/wise/types";
 import { addBangkokDays, assertFootTrafficDate, latestCompletedBangkokDate, validateFootTrafficRange } from "./dates";
 import { classifyWisePastSession, type FootTrafficRoomDefinition } from "./model";
 import { withOnsiteFootTrafficTransaction } from "./transaction";
+import { observationsFromWise, recordModeObservations } from "@/lib/classrooms/mode-history-data";
 import { FOOT_TRAFFIC_HISTORY_START, type FootTrafficSyncResult } from "./types";
 
 const INSERT_CHUNK_SIZE = 400;
@@ -259,6 +260,7 @@ export async function runOnsiteFootTrafficSync(
       );
       await insertChunks(sessionRows, (chunk) => tx.insert(schema.onsiteFootTrafficSessions).values(chunk));
       await insertChunks(visitRows, (chunk) => tx.insert(schema.onsiteFootTrafficVisits).values(chunk));
+      await recordModeObservations(tx, observationsFromWise(wiseSessions, now), `foot-traffic:${runId}`);
       await tx.update(schema.onsiteFootTrafficSyncRuns).set({
         status: "success",
         fetchedSessionCount: wiseSessions.length,

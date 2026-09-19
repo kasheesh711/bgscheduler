@@ -1,5 +1,11 @@
 # Classrooms & Assignments API
 
+## Overflow planning additions (18 September 2026)
+
+The assignment detail envelope and `run.changeSummary` now expose optional `overflowPlan` version 1 (`algorithmVersion: "overflow-v1"`). It contains solver status, minimum/available lower bound, actual versus predicted remaining overflow, actual relocation actions, proposed conversion actions with student evidence, the full predicted room plan, accommodated lesson IDs, source/history timestamps and warnings. Actual rows retain actual modality and optionally carry `studentIds` and `overflowReleaseRoom`. A row override invalidates the saved recommendation.
+
+`GET /api/class-assignments?optimizerCheck=1` is a read-only integer/WASM diagnostic restricted to the current enabled operations owner. It returns `{ok, package, wasmLoaded, integerOptimum, elapsedMs}` or 503 when the runtime fails. It requires no date and performs no allocation or Wise writes. All ordinary read permissions remain unchanged. Generation/publishing remain owner-restricted under the existing pause controls; historical session-only descriptions below predate those restrictions.
+
 **Authoritative source:** the ten route handlers under [`src/app/api/class-assignments/`](../../../src/app/api/class-assignments/) and [`src/app/api/classrooms/`](../../../src/app/api/classrooms/), plus the two cron handlers under [`src/app/api/internal/class-assignments/`](../../../src/app/api/internal/class-assignments/).
 
 This page is the mechanical reference for those 12 endpoints: method, path, auth, request shape, response shape, side effects, and status codes. What the feature is *for* — the assignment rules, the publish policy, the morning-automation story — lives in [docs/features/classroom-assignments.md](../../features/classroom-assignments.md) (**Status: stable**), which this page does not restate. Table columns live in [docs/reference/database/erd-classrooms.md](../database/erd-classrooms.md); cron scheduling lives in [docs/reference/crons.md](../crons.md).
@@ -415,6 +421,8 @@ _Verified against main@0cd1e81 (clean tree) on 2026-09-02._
 - `GET /api/class-assignments/weekend-readiness`: session required; optional UUID `checkId` selects a saved check, otherwise returns the latest check for the current/upcoming weekend. Response `{ check, dates }`; `check` contains ID, check date, execution status, report, last error and delivery status, excluding the recipient and rendered email. A report contains `checkedAt`, covered dates, snapshot lineage, `readiness` (`clear | attention | unverified`), daily counts and findings. Returns 400 for invalid IDs, 404 for an explicit missing check, 500 for read failure; no current check returns `check: null`. Private, no-store.
 - `GET /api/internal/class-assignments/weekend-check`: cron-secret authentication; 800-second limit, audited as `classroom_weekend_check`. Returns execution `ok`, check ID, readiness, finding count and notification kind; HTTP 500 for execution/delivery failure. Detected shortages or a delivered unverified warning remain separate from successful execution. The enabled Wednesday–Friday calendar applies to manual reruns too.
 - `/class-assignments?date=YYYY-MM-DD&weekendCheck=UUID` opens the affected date and saved report. Invalid date input falls back to today's Bangkok date.
+
+Weekend report `version: 2` is a backward-compatible extension: each `days[]` entry may include `allocation` (`saved | reused | not_requested | failed | blocked`), `runId`, `allocationCreatedAt`, `allocationError`, `sourceCheckedAt`, `overflowPlan` and `publication` (`state`, `verified`, `pending`, `failed`, `checkedAt`). The original counts/findings remain. Publication means matching live Wise read-back, not a saved publish-success flag. Wednesday uses the checkpoint as the allocation batch ID and returns an email `summary` even when clear; Thursday/Friday stay read-only. Delivery metadata still excludes the private address/body.
 
 
 ## Persistent publish recovery

@@ -3,6 +3,8 @@ import { AdminRoomReservations, useAdminRoomReservations, reservationDisplayRows
 
 import { canRetryPausedPublish } from "./publish-controls";
 import { ClassroomReadiness } from "./readiness-notice";
+import { OverflowPlanSection } from "./overflow-plan";
+import { readOverflowPlan } from "@/lib/classrooms/overflow-types";
 import { summarizeAssignmentReadiness } from "./readiness-summary";
 
 import { TeacherEmailPreview } from "./teacher-email-preview";
@@ -175,6 +177,7 @@ function classLabel(row: ClassroomRow): string {
 
 function roomLabel(row: ClassroomRow): string {
   if (row.status === "remote" || row.assignedRoom === REMOTE_NO_ROOM_NEEDED) {
+    if (row.overflowReleaseRoom) return "Teach elsewhere — classroom released";
     return "Remote / no room needed";
   }
   return row.assignedRoom;
@@ -737,6 +740,8 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
 
       {automationPaused && <p className="text-sm text-muted-foreground">Automatic Wise sync, assignment preparation, publishing retries, and classroom emails are paused.</p>}
       <ClassroomReadiness detail={detail} date={date} day={readiness} loading={loading} />
+      {!loading && run?.assignmentDate === date && <OverflowPlanSection plan={detail?.overflowPlan ?? readOverflowPlan(run.changeSummary)}
+        stale={!detail?.snapshotMeta.fresh || detail?.activeSnapshotMeta.snapshotId !== detail?.snapshotMeta.snapshotId} />}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-8">
         <div className="rounded-lg border bg-card p-3">

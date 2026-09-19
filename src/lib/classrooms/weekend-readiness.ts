@@ -2,6 +2,7 @@ import type { AssignmentResultRow, ExternalRoomBlock } from "./assignment-engine
 import type { ClassroomRoomDefinition } from "./rooms";
 import { physicalRoom } from "./room-policy";
 import { getClassroomSessionMode, isOnsiteSessionType } from "./session-mode";
+import type { OverflowPlan } from "./overflow-types";
 
 export type WeekendReadiness = "clear" | "attention" | "unverified";
 export interface WeekendFinding {
@@ -17,13 +18,34 @@ export interface WeekendFinding {
   needsTv?: boolean;
   message: string;
 }
+export interface WeekendDayReport {
+  date: string;
+  liveSessions: number;
+  plannedSessions: number;
+  noRoomCount: number;
+  runId?: string | null;
+  allocation?: "saved" | "reused" | "not_requested" | "failed" | "blocked";
+  allocationCreatedAt?: string | null;
+  allocationError?: string;
+  sourceCheckedAt?: string;
+  overflowPlan?: OverflowPlan | null;
+  publication?: {
+    state: "verified" | "partial" | "not_published" | "not_applicable";
+    verified: number;
+    pending: number;
+    failed: number;
+    checkedAt: string;
+  };
+}
 export interface WeekendReport {
+  /** Absent on legacy read-only assessments. */
+  version?: 2;
   checkedAt: string;
   dates: [string, string];
   snapshotId: string | null;
   snapshotFinishedAt: string | null;
   readiness: WeekendReadiness;
-  days: Array<{ date: string; liveSessions: number; plannedSessions: number; noRoomCount: number }>;
+  days: WeekendDayReport[];
   findings: WeekendFinding[];
 }
 
@@ -31,7 +53,7 @@ const overlaps = (a: { startMinute: number; endMinute: number }, b: { startMinut
   a.startMinute < b.endMinute && b.startMinute < a.endMinute;
 
 export type ReadinessRow = Pick<AssignmentResultRow, "status" | "wiseSessionId" | "tutorDisplayName" | "studentName" | "title" | "subject"
-  | "startMinute" | "endMinute" | "currentWiseLocation" | "assignedRoom" | "minCapacity" | "needsTv" | "warnings" | "sessionType">;
+  | "startMinute" | "endMinute" | "currentWiseLocation" | "assignedRoom" | "minCapacity" | "needsTv" | "warnings" | "sessionType" | "overflowReleaseRoom">;
 
 /** Legacy non-TV aliases remain in the catalog as inactive rows. Never let them
  * shadow a current room, and never guess between multiple active aliases. */
@@ -64,6 +86,8 @@ export function assignmentReadinessFindings(input: {
       requiredCapacity: row.minCapacity, needsTv: row.needsTv };
     if (getClassroomSessionMode(row.sessionType) === "unknown") findings.push({ ...context, kind: "unverified",
       message: "Class modality is unknown; classroom coverage cannot be confirmed." });
+    if (row.overflowReleaseRoom) findings.push({ ...context, kind: "review",
+      message: `Overflow relief requires the tutor to vacate the onsite classroom and ${row.status === "remote" ? "teach elsewhere" : `teach in ${row.assignedRoom}`}. Staff must confirm this instruction is followed.` });
     if (row.status === "remote") continue;
     if (isOnsiteSessionType(row.sessionType) && row.currentWiseLocation) {
       const bookedRoom = roomByLocation.get(row.currentWiseLocation);
@@ -113,6 +137,7 @@ export function readinessForFindings(findings: WeekendFinding[]): WeekendReadine
   return findings.some(finding => finding.kind === "unverified") ? "unverified" : findings.length ? "attention" : "clear";
 }
 
-export function notificationForReport(readiness: WeekendReadiness, previousSentKind: string | null): "warning" | "resolved" | null {
-  return readiness !== "clear" ? "warning" : previousSentKind === "warning" ? "resolved" : null;
+export type WeekendNotificationKind = "warning" | "resolved" | "summary";
+export function notificationForReport(readiness: WeekendReadiness, previousSentKind: string | null, wednesday = false): WeekendNotificationKind | null {
+  return readiness !== "clear" ? "warning" : previousSentKind === "warning" ? "resolved" : wednesday ? "summary" : null;
 }

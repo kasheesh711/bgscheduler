@@ -2,6 +2,7 @@ import { creditControlActive } from "@/lib/credit-control/mode";
 import { revalidateTag } from "next/cache";
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
+import { loadAttendanceObservations, recordModeObservations } from "@/lib/classrooms/mode-history-data";
 import * as schema from "@/lib/db/schema";
 import { topWisePaths, type WiseClient } from "@/lib/wise/client";
 import {
@@ -1088,6 +1089,25 @@ export async function runCreditControlSync(
         },
       })
       .where(sql`${schema.creditControlSyncRuns.id} = ${run.id}`);
+
+    // Preserve attendance evidence before ordinary Credit Control snapshot cleanup.
+    let modalityHistory: { stored?: number; error?: string } = {};
+    try {
+      const ids = [...new Set(sessionRows.map(row => row.wiseStudentId))];
+      let stored = 0;
+      for (let offset = 0; offset < ids.length; offset += 250) {
+        stored += await recordModeObservations(db, await loadAttendanceObservations(db, ids.slice(offset, offset + 250), now), `credit-sync:${run.id}`);
+      }
+      modalityHistory = { stored };
+    } catch (error) {
+      modalityHistory = { error: error instanceof Error ? error.message : String(error) };
+      console.error("[credit-control] modality history capture failed", modalityHistory.error);
+    }
+    await db.update(schema.creditControlSyncRuns).set({
+      metadata: sql`${schema.creditControlSyncRuns.metadata} || ${JSON.stringify({ modalityHistory })}::jsonb`,
+    }).where(eq(schema.creditControlSyncRuns.id, run.id)).catch(error => {
+      console.error("[credit-control] modality history metadata could not be saved", error);
+    });
 
     revalidateTag(CREDIT_CONTROL_CACHE_TAG, { expire: 0 });
     return {

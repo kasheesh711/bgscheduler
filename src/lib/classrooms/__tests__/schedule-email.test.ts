@@ -42,6 +42,7 @@ function row(overrides: Record<string, unknown> = {}) {
     subject: overrides.subject ?? "Math",
     classType: overrides.classType ?? "ONE_TO_ONE",
     title: overrides.title ?? "Math class",
+    overflowReleaseRoom: overrides.overflowReleaseRoom ?? null,
   };
 }
 
@@ -231,6 +232,16 @@ describe("schedule email preview", () => {
     const preview = await getScheduleEmailPreview(db as never, "run-1");
 
     expect(preview.previews[0].blocks[0].time).toBe("09:00-10:00");
+  });
+
+  it("shows actual online release instructions and ignores hypothetical conversions in metadata", async () => {
+    const db = makePreviewDb({ rows: [row(), row({ id: "online", sessionType: "SCHEDULED", status: "remote", assignedRoom: REMOTE_NO_ROOM_NEEDED,
+      overflowReleaseRoom: REMOTE_NO_ROOM_NEEDED, startMinute: 18 * 60, endMinute: 19 * 60 })],
+      contacts: [{ canonicalKey: "Kevin", onsiteEmail: "kevhsh7@gmail.com", active: true }],
+      metadata: { overflowPlan: { proposedActions: [{ wiseSessionId: "row-1", kind: "switch_to_online", room: REMOTE_NO_ROOM_NEEDED }] } } });
+    const preview = await getScheduleEmailPreview(db as never, "run-1");
+    expect(preview.previews[0].blocks.map(block => block.room)).toEqual(["Focus", "Teach elsewhere — classroom released"]);
+    expect(preview.previews[0].text).toContain("Teach elsewhere — classroom released");
   });
 
   it("blocks on missing Apps Script config without requiring Resend config", async () => {

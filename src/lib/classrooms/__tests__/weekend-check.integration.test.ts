@@ -6,6 +6,7 @@ import { classroomWeekendChecks as checks, classroomWeekendNotifications as noti
 import { claimWeekendCheck, assertWeekendClaim, weekendClaimPredicate, runWeekendClassroomCheck, loadWeekendCheck } from "../weekend-check";
 import { WEEKEND_CHECK_LEASE_MS } from "../weekend-config";
 import type { WeekendReport } from "../weekend-readiness";
+import type { WeekendEvaluationOptions } from "../weekend-preview";
 
 let handle: Awaited<ReturnType<typeof startTestDb>>;
 let db: Database;
@@ -63,11 +64,19 @@ describe("durable private weekend delivery", () => {
     expect(mail.sendEmail).toHaveBeenCalledTimes(2);
     expect(mail.sendEmail.mock.calls[1][0].subject).toContain("RESOLVED");
   });
-  it("keeps an ordinary healthy weekend quiet", async () => {
+  it("sends one healthy Wednesday report and keeps healthy follow-ups quiet", async () => {
     const mail = sender();
     for (const now of [wednesday, thursday, friday]) await runWeekendClassroomCheck(db, { now, sender: mail, evaluate: async () => report("clear") });
-    expect(mail.sendEmail).not.toHaveBeenCalled();
+    expect(mail.sendEmail).toHaveBeenCalledTimes(1);
+    expect(mail.sendEmail.mock.calls[0][0].subject).toContain("Wednesday weekend classroom allocation report");
     expect(await handle.db.select().from(checks)).toHaveLength(3);
+  });
+  it("allocates only on Wednesday, targeting September 26–27 on the first scheduled run", async () => {
+    const evaluate = vi.fn<(db: Database, dates: [string, string], options: WeekendEvaluationOptions) => Promise<WeekendReport>>().mockResolvedValue(report("clear")), mail = sender();
+    await runWeekendClassroomCheck(db, { now: new Date("2026-09-23T02:00:00Z"), evaluate, sender: mail });
+    expect(evaluate.mock.calls[0]).toMatchObject([expect.anything(), ["2026-09-26", "2026-09-27"], { checkpoint: { id: expect.any(String), claimedAt: new Date("2026-09-23T02:00:00Z") } }]);
+    await runWeekendClassroomCheck(db, { now: new Date("2026-09-24T02:00:00Z"), evaluate, sender: mail });
+    expect(evaluate.mock.calls[1][2]).not.toHaveProperty("checkpoint");
   });
   it("emails verification failures instead of recording an all-clear", async () => {
     const mail = sender();

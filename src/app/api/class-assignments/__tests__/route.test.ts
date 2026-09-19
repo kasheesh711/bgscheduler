@@ -149,6 +149,16 @@ describe("class assignment routes", () => {
     await expect(res.json()).resolves.toEqual({ error: "Invalid date. Expected YYYY-MM-DD." });
   });
 
+  it("checks the deployed integer runtime read-only for the owner", async () => {
+    const result = await getAssignments(new NextRequest("http://test.local/api/class-assignments?optimizerCheck=1"));
+    expect(result.status).toBe(200);
+    expect(await result.json()).toMatchObject({ ok: true, wasmLoaded: true, integerOptimum: 1 });
+    expect(runClassroomAssignment).not.toHaveBeenCalled();
+    expect(getClassroomAssignmentForDate).not.toHaveBeenCalled();
+    authMock.mockResolvedValue({ user: { email: "another-admin@example.com" } });
+    expect((await getAssignments(new NextRequest("http://test.local/api/class-assignments?optimizerCheck=1"))).status).toBe(403);
+  });
+
   it("creates a run with the requested override policy", async () => {
     const req = new NextRequest("http://test.local/api/class-assignments/run", {
       method: "POST",
