@@ -17,7 +17,7 @@ export function StudentEvidence({ evidence }: { evidence: StudentModeEvidence })
 }
 
 function ActionList({ actions }: { actions: OverflowAction[] }) {
-  return <ul className="grid gap-3 md:grid-cols-2">{actions.map(action => <li key={action.wiseSessionId} className="min-w-0 rounded-lg border bg-background p-3">
+  return <ul className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,18rem),1fr))] gap-3">{actions.map(action => <li key={action.wiseSessionId} className="min-w-0 rounded-lg border bg-background p-3">
     <div className="flex flex-wrap justify-between gap-1 text-sm font-medium"><span>{action.student || "Class"} · {action.tutor}</span><span className="font-mono text-xs">{time(action.startMinute)}–{time(action.endMinute)}</span></div>
     <p className="mt-1 break-words text-sm">{roomLabel(action.originalRoom)} → <strong>{action.teachingLocation === "elsewhere" ? "Teach elsewhere — classroom released" : roomLabel(action.room)}</strong></p>
     {action.released && action.teachingLocation !== "elsewhere" && <p className="mt-1 text-xs text-muted-foreground">Dedicated online room. The onsite classroom must be released for the full lesson.</p>}
