@@ -1,7 +1,7 @@
 import { isClassroomOperationsOwner, wiseClassroomAutomationEnabled } from "./operations-policy";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import { classroomPublishJobs as jobs, classroomPublishWorker as worker, syncRuns } from "@/lib/db/schema";
@@ -9,6 +9,17 @@ import { WiseApiError } from "@/lib/wise/client";
 
 export const PUBLISH_ATTEMPT_MS = 210_000;
 const LEASE_MS = 300_000;
+/**
+ * Must equal RUNNING_SYNC_STALE_MS in @/lib/sync/manual-wise-sync.ts (itself
+ * matching STALE_RUNNING_SYNC_MS in run-wise-sync.ts) -- a "running"
+ * sync_runs row past this age is abandoned, not live, so it must not defer
+ * every publish forever while automation is paused and nothing ever runs
+ * failStaleRunningSyncs() to clean it up. Kept as its own constant (rather
+ * than importing manual-wise-sync.ts) so this file -- reachable from every
+ * consumer of classrooms/data.ts -- does not pull in that module's
+ * "server-only" guard; a unit test cross-checks the two stay in sync.
+ */
+export const PUBLISH_QUEUE_RUNNING_SYNC_STALE_MS = 20 * 60 * 1000;
 export interface PublishClaim { jobId: string; token: string; attemptCount: number; deadlineAt: number }
 const attempt = new AsyncLocalStorage<PublishClaim>();
 export const withPublishClaim = <T>(claim: PublishClaim, work: () => Promise<T>) => attempt.run(claim, work);
@@ -62,7 +73,12 @@ export async function claimPublishAttempt(db: Database, jobId: string): Promise<
     if (!wiseClassroomAutomationEnabled() && !isClassroomOperationsOwner(job.createdBy)) return null;
     if (job.status === "running" && job.leaseExpiresAt && job.leaseExpiresAt > now) return null;
     if (job.status === "pending" && job.nextAttemptAt > now) return null;
-    const [runningSync] = await tx.select({ id: syncRuns.id }).from(syncRuns).where(eq(syncRuns.status, "running")).limit(1);
+    // Same staleness cutoff as the manual sync guard: an abandoned "running"
+    // row must not be able to defer every publish forever while automation
+    // is paused and no sync ever runs to clean it up.
+    const runningSyncCutoff = new Date(now.getTime() - PUBLISH_QUEUE_RUNNING_SYNC_STALE_MS);
+    const [runningSync] = await tx.select({ id: syncRuns.id }).from(syncRuns)
+      .where(and(eq(syncRuns.status, "running"), gt(syncRuns.startedAt, runningSyncCutoff))).limit(1);
     const syncDeferral = publishSyncDeferral(Boolean(runningSync), now);
     if (syncDeferral) {
       await tx.update(jobs).set({ status: "pending", nextAttemptAt: syncDeferral.nextAttemptAt, claimToken: null,

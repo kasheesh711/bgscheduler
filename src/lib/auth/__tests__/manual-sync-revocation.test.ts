@@ -27,7 +27,7 @@ describe("manual cron fallback with the real server session guard", () => {
     state.accessVersion = 0;
     rawAuth.mockResolvedValue({ user: { email: "kevhsh7@gmail.com", role: "admin", adminAccessVersion: 0 }, expires: "2099-01-01" });
     const builder: Record<string, unknown> = {};
-    for (const method of ["from", "where", "limit"]) builder[method] = () => builder;
+    for (const method of ["from", "where", "orderBy", "limit"]) builder[method] = () => builder;
     builder.then = (resolve: (rows: unknown[]) => unknown) => Promise.resolve([{ ...state }]).then(resolve);
     dbLookup.mockReturnValue({ select: () => builder });
     runSync.mockImplementation(async () => NextResponse.json({ ok: true }));
@@ -49,11 +49,13 @@ describe("manual cron fallback with the real server session guard", () => {
     expect((await POST(request())).status).toBe(200);
   });
 
-  it("never reads sessions or account tables for a valid cron secret", async () => {
+  it("never re-validates the admin session or account for a valid cron secret", async () => {
     const request = new NextRequest("http://localhost/api/internal/sync-wise", { headers: { authorization: "Bearer test-cron-secret" } });
     expect((await GET(request)).status).toBe(200);
     expect(rawAuth).not.toHaveBeenCalled();
-    expect(dbLookup).not.toHaveBeenCalled();
+    // dbLookup IS now called, for the sync-run freshness dedupe check
+    // (D-WISE-RATE-LIMIT-SAFETY) -- unrelated to the session/account
+    // revalidation this test protects against, which stays gated on rawAuth.
     expect(runSync).toHaveBeenCalledOnce();
   });
 });

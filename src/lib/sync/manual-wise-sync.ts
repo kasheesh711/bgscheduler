@@ -1,10 +1,21 @@
 import "server-only";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, gt } from "drizzle-orm";
 import * as schema from "@/lib/db/schema";
 import type { Database } from "@/lib/db";
 
 /** A manual sync request within this window of the last success is treated as already fresh. */
 export const MANUAL_WISE_SYNC_FRESH_MS = 12 * 60_000;
+
+/**
+ * Must equal STALE_RUNNING_SYNC_MS in src/lib/sync/run-wise-sync.ts. That is
+ * the age at which failStaleRunningSyncs() marks an abandoned "running"
+ * sync_runs row failed -- but only the next time a sync actually runs. While
+ * automation is paused, nothing ever triggers that cleanup, so a "running"
+ * row past this age must be treated as abandoned here too (not a live sync)
+ * -- otherwise one stale row could defer every publish, or block every
+ * manual sync, forever.
+ */
+export const RUNNING_SYNC_STALE_MS = 20 * 60 * 1000;
 
 /** How many completed syncs to sample when estimating a typical duration. */
 const TYPICAL_DURATION_SAMPLE_SIZE = 5;
@@ -55,11 +66,13 @@ export async function getLatestSuccessfulSyncFinishedAt(db: Database): Promise<D
   return row?.finishedAt ?? null;
 }
 
-export async function getRunningSyncStartedAt(db: Database): Promise<Date | null> {
+/** Ignores a "running" row older than RUNNING_SYNC_STALE_MS -- it is presumed abandoned, not live. */
+export async function getRunningSyncStartedAt(db: Database, now = new Date()): Promise<Date | null> {
+  const cutoff = new Date(now.getTime() - RUNNING_SYNC_STALE_MS);
   const [row] = await db
     .select({ startedAt: schema.syncRuns.startedAt })
     .from(schema.syncRuns)
-    .where(eq(schema.syncRuns.status, "running"))
+    .where(and(eq(schema.syncRuns.status, "running"), gt(schema.syncRuns.startedAt, cutoff)))
     .orderBy(desc(schema.syncRuns.startedAt))
     .limit(1);
   return row?.startedAt ?? null;

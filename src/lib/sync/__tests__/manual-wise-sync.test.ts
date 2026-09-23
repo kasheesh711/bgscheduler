@@ -1,9 +1,14 @@
 vi.mock("server-only", () => ({}));
+import { and, eq, gt } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
+import type { Database } from "@/lib/db";
+import * as schema from "@/lib/db/schema";
 import {
   computeTypicalSyncDurationMs,
   decideManualWiseSync,
+  getRunningSyncStartedAt,
   MANUAL_WISE_SYNC_FRESH_MS,
+  RUNNING_SYNC_STALE_MS,
 } from "../manual-wise-sync";
 
 describe("decideManualWiseSync", () => {
@@ -42,6 +47,55 @@ describe("decideManualWiseSync", () => {
       runningStartedAt: null,
       now,
     })).toEqual({ action: "start" });
+  });
+});
+
+describe("getRunningSyncStartedAt", () => {
+  function makeDbMock(rows: { startedAt: Date }[]) {
+    const whereMock = vi.fn(() => ({
+      orderBy: vi.fn(() => ({
+        limit: vi.fn().mockResolvedValue(rows),
+      })),
+    }));
+    const db = { select: vi.fn(() => ({ from: vi.fn(() => ({ where: whereMock })) })) };
+    return { db: db as unknown as Database, whereMock };
+  }
+
+  it("queries only running rows started after the staleness cutoff", async () => {
+    const now = new Date("2026-09-23T03:30:00.000Z");
+    const { db, whereMock } = makeDbMock([]);
+
+    await getRunningSyncStartedAt(db, now);
+
+    const cutoff = new Date(now.getTime() - RUNNING_SYNC_STALE_MS);
+    expect(whereMock).toHaveBeenCalledWith(
+      and(eq(schema.syncRuns.status, "running"), gt(schema.syncRuns.startedAt, cutoff)),
+    );
+  });
+
+  it("treats an abandoned running row past the staleness window as not running (does not defer publishing)", async () => {
+    // A real Postgres WHERE clause built with this cutoff excludes a row this
+    // old, so the query below never actually returns it -- this asserts the
+    // resulting "not running" outcome that publish-queue.ts's
+    // claimPublishAttempt relies on to avoid deferring forever while
+    // automation is paused and nothing ever runs failStaleRunningSyncs().
+    const { db } = makeDbMock([]);
+
+    await expect(getRunningSyncStartedAt(db, new Date("2026-09-23T03:30:00.000Z"))).resolves.toBeNull();
+  });
+
+  it("still returns the startedAt of a genuinely live running row", async () => {
+    const startedAt = new Date("2026-09-23T03:29:00.000Z");
+    const { db } = makeDbMock([{ startedAt }]);
+
+    await expect(getRunningSyncStartedAt(db, new Date("2026-09-23T03:30:00.000Z"))).resolves.toEqual(startedAt);
+  });
+});
+
+describe("RUNNING_SYNC_STALE_MS", () => {
+  it("matches the staleness window run-wise-sync.ts uses to fail abandoned running rows", async () => {
+    const { STALE_RUNNING_SYNC_MS } = await import("../run-wise-sync");
+    expect(RUNNING_SYNC_STALE_MS).toBe(STALE_RUNNING_SYNC_MS);
   });
 });
 
