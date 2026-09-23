@@ -21,7 +21,8 @@ export function isWiseClassroomJob(key: string): boolean {
 
 /** These action APIs return JSON 401 even when no browser cookie is present. */
 export function isClassroomOperationsApi(pathname: string): boolean {
-  if (pathname === "/api/admin/sync-wise" || pathname === "/api/class-assignments/run") return true;
+  if (pathname === "/api/admin/sync-wise" || pathname === "/api/class-assignments/run"
+    || pathname === "/api/class-assignments/sync-wise") return true;
   if (/^\/api\/class-assignments\/runs\/[^/]+\/publish$/.test(pathname)) return true;
   const job = /^\/api\/data-health\/jobs\/([^/]+)\/run$/.exec(pathname)?.[1];
   return Boolean(job && isWiseClassroomJob(job));

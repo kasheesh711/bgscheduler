@@ -108,6 +108,32 @@ describe("publish job progress", () => {
     }, now)).toBe(20_000);
   });
 
+  it("floors the remaining-time estimate before any Wise attempt has completed", () => {
+    const startedAt = new Date("2026-05-15T00:00:00.000Z");
+    const now = new Date("2026-05-15T00:00:05.000Z");
+
+    expect(estimatePublishRemainingMs({
+      startedAt,
+      finishedAt: null,
+      eligibleCount: 5,
+      successCount: 0,
+      failedCount: 0,
+    }, now)).toBe(15_000);
+  });
+
+  it("keeps the 3s/row floor even when observed attempts are running faster", () => {
+    const startedAt = new Date("2026-05-15T00:00:00.000Z");
+    const now = new Date("2026-05-15T00:00:02.000Z");
+
+    expect(estimatePublishRemainingMs({
+      startedAt,
+      finishedAt: null,
+      eligibleCount: 6,
+      successCount: 2,
+      failedCount: 0,
+    }, now)).toBe(12_000);
+  });
+
   it("reports remaining row counts and terminal elapsed time", () => {
     const progress = toPublishJobProgress({
       id: "job-1",

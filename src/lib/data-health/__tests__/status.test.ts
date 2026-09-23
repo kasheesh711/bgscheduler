@@ -169,6 +169,30 @@ describe("cron status evaluation", () => {
 
     expect(result.status).toBe("healthy");
   });
+
+  it("keeps wise_snapshot healthy through a recently-synced cron dedupe skip", () => {
+    // The manual/cron dedupe guard (D-WISE-RATE-LIMIT-SAFETY) returns the same
+    // {skipped:true} shape AUTOMATION_PAUSED already used, dated `now`, even
+    // though the underlying successful run is ~25 minutes old (well inside
+    // wise_snapshot's 45-minute lateAfterMinutes).
+    const success = run({
+      startedAt: new Date("2026-06-01T01:00:00.000Z"),
+      finishedAt: new Date("2026-06-01T01:00:30.000Z"),
+    });
+    const now = new Date("2026-06-01T01:25:30.000Z");
+    const result = evaluateCronJobStatus({
+      job: job("wise_snapshot"),
+      now,
+      latestInvocation: null,
+      latestCronInvocation: { receivedAt: now, finishedAt: now, outcome: "skipped", responseStatus: 200, durationMs: 1, errorSummary: null },
+      latestRun: success,
+      latestSuccessfulRun: success,
+      latestFailedRun: null,
+      runningRun: null,
+    });
+
+    expect(result.status).toBe("healthy");
+  });
 });
 
 

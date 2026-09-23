@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
-import { classroomPublishJobs as jobs, classroomPublishWorker as worker } from "@/lib/db/schema";
+import { classroomPublishJobs as jobs, classroomPublishWorker as worker, syncRuns } from "@/lib/db/schema";
 import { WiseApiError } from "@/lib/wise/client";
 
 export const PUBLISH_ATTEMPT_MS = 210_000;
@@ -15,6 +15,12 @@ export const withPublishClaim = <T>(claim: PublishClaim, work: () => Promise<T>)
 
 export class PublishDeferredError extends Error {
   constructor(message = "Publish attempt paused; live rooms will be checked again on retry") { super(message); }
+}
+
+/** A publish job started while a tutor Wise sync is running waits ~2 minutes and resumes automatically. */
+export function publishSyncDeferral(syncRunning: boolean, now: Date): { nextAttemptAt: Date; lastError: string } | null {
+  if (!syncRunning) return null;
+  return { nextAttemptAt: new Date(now.getTime() + 2 * 60_000), lastError: "Waiting for the Wise sync to finish" };
 }
 
 export function publishRetryDelay(attemptCount: number, retryAfterMs: number | null = null): number {
@@ -56,6 +62,13 @@ export async function claimPublishAttempt(db: Database, jobId: string): Promise<
     if (!wiseClassroomAutomationEnabled() && !isClassroomOperationsOwner(job.createdBy)) return null;
     if (job.status === "running" && job.leaseExpiresAt && job.leaseExpiresAt > now) return null;
     if (job.status === "pending" && job.nextAttemptAt > now) return null;
+    const [runningSync] = await tx.select({ id: syncRuns.id }).from(syncRuns).where(eq(syncRuns.status, "running")).limit(1);
+    const syncDeferral = publishSyncDeferral(Boolean(runningSync), now);
+    if (syncDeferral) {
+      await tx.update(jobs).set({ status: "pending", nextAttemptAt: syncDeferral.nextAttemptAt, claimToken: null,
+        leaseExpiresAt: null, updatedAt: now, lastError: syncDeferral.lastError }).where(eq(jobs.id, jobId));
+      return null;
+    }
     if (lock.cooldownUntil && lock.cooldownUntil > now) {
       await tx.update(jobs).set({ status: "pending", nextAttemptAt: lock.cooldownUntil, claimToken: null,
         leaseExpiresAt: null, updatedAt: now, lastError: "Waiting for Wise cooldown" }).where(eq(jobs.id, jobId));

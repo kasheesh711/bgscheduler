@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { requireClassroomOperationsOwner, classroomOperationsAccessError } from "@/lib/classrooms/operations-access";
+import { requireClassroomAdmin, classroomOperationsAccessError } from "@/lib/classrooms/operations-access";
+import { isClassroomOperationsOwner } from "@/lib/classrooms/operations-policy";
 import { getDb } from "@/lib/db";
 import {
   runClassroomAssignment,
@@ -16,7 +17,7 @@ const runRequestSchema = z.object({
 
 export async function POST(request: NextRequest) {
   let actor;
-  try { actor = await requireClassroomOperationsOwner(); }
+  try { actor = await requireClassroomAdmin(); }
   catch (error) { return classroomOperationsAccessError(error); }
 
   let body: unknown;
@@ -32,6 +33,10 @@ export async function POST(request: NextRequest) {
       { error: "Invalid request", details: parsed.error.flatten() },
       { status: 400 },
     );
+  }
+
+  if (parsed.data.forceReassign && !isClassroomOperationsOwner(actor.email)) {
+    return NextResponse.json({ error: "Only Kevin can force reassign." }, { status: 403 });
   }
 
   try {

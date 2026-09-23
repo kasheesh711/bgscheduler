@@ -15,12 +15,14 @@ vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
 vi.mock("@/lib/wise/client", () => ({ createWiseClient: vi.fn() }));
 vi.mock("@/lib/sync/orchestrator", () => ({ runFullSync: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
+vi.mock("@/lib/sync/manual-wise-sync", () => ({ getLatestSuccessfulSyncFinishedAt: vi.fn() }));
 
 import { revalidateTag } from "next/cache";
 import { getDb } from "@/lib/db";
 import { createWiseClient } from "@/lib/wise/client";
 import { runFullSync } from "@/lib/sync/orchestrator";
 import { auth } from "@/lib/auth";
+import { getLatestSuccessfulSyncFinishedAt } from "@/lib/sync/manual-wise-sync";
 import { GET, POST } from "@/app/api/internal/sync-wise/route";
 
 const successResult = {
@@ -97,6 +99,7 @@ describe("GET/POST /api/internal/sync-wise", () => {
     vi.mocked(createWiseClient).mockReturnValue({ client: true } as never);
     vi.mocked(runFullSync).mockResolvedValue(successResult as never);
     vi.mocked(auth).mockResolvedValue(null as never);
+    vi.mocked(getLatestSuccessfulSyncFinishedAt).mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -325,5 +328,35 @@ describe("GET/POST /api/internal/sync-wise", () => {
     expect(res.status).toBe(401);
     await expect(res.json()).resolves.toEqual({ error: "Unauthorized" });
     expect(runFullSync).not.toHaveBeenCalled();
+  });
+
+  it("skips the cron sync when the latest successful sync finished under 10 minutes ago", async () => {
+    vi.mocked(getLatestSuccessfulSyncFinishedAt).mockResolvedValue(
+      new Date(Date.now() - 9 * 60 * 1000),
+    );
+
+    const res = await GET(makeRequest("test-secret", "GET"));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      skipped: true,
+      reason: "RECENTLY_SYNCED",
+    });
+    expect(runFullSync).not.toHaveBeenCalled();
+  });
+
+  it("runs the cron sync normally when the latest successful sync finished over 10 minutes ago", async () => {
+    vi.mocked(getLatestSuccessfulSyncFinishedAt).mockResolvedValue(
+      new Date(Date.now() - 11 * 60 * 1000),
+    );
+
+    const res = await GET(makeRequest("test-secret", "GET"));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      success: true,
+      syncRunId: "run-1",
+    });
+    expect(runFullSync).toHaveBeenCalled();
   });
 });

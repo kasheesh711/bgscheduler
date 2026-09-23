@@ -4,8 +4,34 @@ import { requireClassroomOperationsOwner, classroomOperationsAccessError } from 
 import { AdminUsersAccessError } from "@/lib/admin-users/types";
 import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import { runWiseSyncRequest } from "@/lib/sync/run-wise-sync";
+import { getDb } from "@/lib/db";
+import { getLatestSuccessfulSyncFinishedAt } from "@/lib/sync/manual-wise-sync";
+import { wiseClassroomAutomationEnabled } from "@/lib/classrooms/operations-policy";
 
 export const maxDuration = 800; // Pro-plan headroom for full Wise syncs
+
+/** Skip a scheduled cron sync when a manual or cron run already succeeded this recently. */
+const CRON_SYNC_DEDUPE_MS = 10 * 60_000;
+
+async function runCronWiseSync(): Promise<Response> {
+  // Read the same pause flag runWiseSyncRequest() checks internally, purely to
+  // skip the DB-touching freshness pre-check while paused -- the actual pause
+  // decision still lives solely inside runWiseSyncRequest(), not here.
+  if (!wiseClassroomAutomationEnabled()) {
+    return runWiseSyncRequest();
+  }
+  const latestSuccessFinishedAt = await getLatestSuccessfulSyncFinishedAt(getDb());
+  if (latestSuccessFinishedAt && Date.now() - latestSuccessFinishedAt.getTime() < CRON_SYNC_DEDUPE_MS) {
+    return NextResponse.json({
+      ok: true,
+      skipped: true,
+      reason: "RECENTLY_SYNCED",
+      message: "Wise was already synced within the last 10 minutes; skipping this scheduled run.",
+      finishedAt: latestSuccessFinishedAt.toISOString(),
+    });
+  }
+  return runWiseSyncRequest();
+}
 
 type CronSecretStatus = "valid" | "invalid" | "missing-secret";
 
@@ -39,7 +65,7 @@ async function handleSync(
   if (cronSecretStatus === "valid") {
     return withCronInvocationAudit(
       { jobKey: "wise_snapshot", triggerSource: "cron", requestMethod: request.method },
-      () => runWiseSyncRequest(),
+      () => runCronWiseSync(),
     );
   }
 

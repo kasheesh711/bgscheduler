@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { after } from "next/server";
-import { requireClassroomOperationsOwner, classroomOperationsAccessError } from "@/lib/classrooms/operations-access";
+import { requireClassroomAdmin, classroomOperationsAccessError } from "@/lib/classrooms/operations-access";
 import { getDb } from "@/lib/db";
 import {
   createClassroomPublishJob,
@@ -30,7 +30,7 @@ export async function POST(
   { params }: { params: Promise<{ runId: string }> },
 ) {
   let actor;
-  try { actor = await requireClassroomOperationsOwner(); }
+  try { actor = await requireClassroomAdmin(); }
   catch (error) { return classroomOperationsAccessError(error); }
 
   const { runId } = await params;

@@ -117,7 +117,7 @@ const publishProgress = {
 describe("class assignment routes", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    authMock.mockResolvedValue({ user: { email: "kevhsh7@gmail.com" } });
+    authMock.mockResolvedValue({ user: { email: "kevhsh7@gmail.com", role: "admin" } });
     vi.mocked(getDb).mockReturnValue({ db: true } as never);
     vi.mocked(getClassroomAssignmentForDate).mockResolvedValue(detail as never);
     vi.mocked(runClassroomAssignment).mockResolvedValue(detail as never);

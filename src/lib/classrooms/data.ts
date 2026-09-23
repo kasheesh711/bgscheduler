@@ -642,6 +642,9 @@ export function isPublishJobTerminal(status: ClassroomPublishJob["status"]): boo
   return status === "succeeded" || status === "partial" || status === "failed";
 }
 
+/** Conservative floor from the known Wise 1-write/3s rate limit, used before any row has completed. */
+const MIN_PUBLISH_MS_PER_ROW = 3_000;
+
 export function estimatePublishRemainingMs(
   input: {
     startedAt: Date | null;
@@ -655,9 +658,11 @@ export function estimatePublishRemainingMs(
   if (!input.startedAt || input.finishedAt) return null;
   const attemptedDone = input.successCount + input.failedCount;
   const remainingAttempts = input.eligibleCount - attemptedDone;
-  if (attemptedDone <= 0 || remainingAttempts <= 0) return null;
+  if (remainingAttempts <= 0) return null;
+  if (attemptedDone <= 0) return remainingAttempts * MIN_PUBLISH_MS_PER_ROW;
   const elapsedMs = Math.max(0, now.getTime() - input.startedAt.getTime());
-  return Math.round((elapsedMs / attemptedDone) * remainingAttempts);
+  const observedAvgMs = elapsedMs / attemptedDone;
+  return Math.round(remainingAttempts * Math.max(MIN_PUBLISH_MS_PER_ROW, observedAvgMs));
 }
 
 export function toPublishJobProgress(
