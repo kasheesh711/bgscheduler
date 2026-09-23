@@ -42,7 +42,7 @@ describe("class assignment sync flow", () => {
     let clock = Date.parse("2026-05-25T05:30:00Z");
     let polls = 0;
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
-      if (String(url).endsWith("sync-wise")) return jsonResponse({ outcome: "running", skipped: true, alreadyRunning: true, runningStartedAt: new Date(clock).toISOString() }, 202);
+      if (String(url).endsWith("/class-assignments/sync-wise")) return jsonResponse({ outcome: "running", skipped: true, alreadyRunning: true, runningStartedAt: new Date(clock).toISOString() }, 202);
       const detail = assignmentDetail({ fresh: false, snapshotId: "old-saved", latestSyncFinishedAt: "2026-05-25T04:00:00Z" });
       if (++polls > 1) detail.activeSnapshotMeta = { snapshotId: "new-active", fresh: true, staleAgeMs: 0, latestSyncFinishedAt: new Date(clock).toISOString(), syncErrorSummary: "Teacher needs review" };
       return jsonResponse(detail);
@@ -51,7 +51,29 @@ describe("class assignment sync flow", () => {
     expect(result.latestDetail?.snapshotMeta.snapshotId).toBe("old-saved");
     expect(result.latestDetail?.activeSnapshotMeta).toMatchObject({ snapshotId: "new-active", syncErrorSummary: "Teacher needs review" });
     expect(polls).toBe(2);
-    expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith("sync-wise"))).toHaveLength(1);
+    expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith("/class-assignments/sync-wise"))).toHaveLength(1);
+  });
+
+  it("returns immediately without polling when the sync is skipped as already fresh", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({
+      success: true,
+      skipped: true,
+      reason: "fresh",
+      finishedAt: "2026-09-23T02:55:00.000Z",
+      typicalDurationMs: 240_000,
+    }));
+
+    const result = await syncWiseBeforeAssignment({
+      date: "2026-09-23",
+      fetcher: fetchMock as unknown as typeof fetch,
+    });
+
+    expect(result).toMatchObject({
+      waitedForRunningSync: false,
+      latestDetail: null,
+      sync: { skipped: true, reason: "fresh" },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -93,7 +115,7 @@ describe("class assignment sync flow", () => {
       sync: { promotedSnapshotId: "snap-new" },
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith("/api/admin/sync-wise", { method: "POST" });
+    expect(fetchMock).toHaveBeenCalledWith("/api/class-assignments/sync-wise", { method: "POST" });
   });
 
   it("waits for an already-running Wise sync to promote a fresh snapshot before continuing", async () => {
@@ -101,7 +123,7 @@ describe("class assignment sync flow", () => {
     const messages: string[] = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === "/api/admin/sync-wise") {
+      if (url === "/api/class-assignments/sync-wise") {
         return jsonResponse({
           success: true,
           skipped: true,

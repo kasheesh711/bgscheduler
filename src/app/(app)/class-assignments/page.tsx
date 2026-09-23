@@ -1,14 +1,17 @@
 import { Suspense } from "react";
 import { ClassAssignmentsWorkspace } from "@/components/class-assignments/class-assignments-workspace";
 import { auth } from "@/lib/auth";
-import { isSuperAdminEmail } from "@/lib/admin-users/policy";
 import { isClassroomOperationsOwner, wiseClassroomAutomationEnabled } from "@/lib/classrooms/operations-policy";
 
 async function ClassAssignmentsWithAccess() {
   const session = await auth();
-  const canOperate = session?.user?.role === "admin"
-    && isSuperAdminEmail(session.user.email) && isClassroomOperationsOwner(session.user.email);
-  return <ClassAssignmentsWorkspace canOperate={canOperate} automationPaused={!wiseClassroomAutomationEnabled()} />;
+  const canPublishAndRun = session?.user?.role === "admin";
+  const canForceReassign = isClassroomOperationsOwner(session?.user?.email);
+  return <ClassAssignmentsWorkspace
+    canPublishAndRun={canPublishAndRun}
+    canForceReassign={canForceReassign}
+    automationPaused={!wiseClassroomAutomationEnabled()}
+  />;
 }
 
 export default function ClassAssignmentsPage() {

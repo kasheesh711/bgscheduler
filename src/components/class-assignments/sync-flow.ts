@@ -13,6 +13,9 @@ export interface WiseSyncResult {
   errorSummary?: string | null;
   message?: string;
   runningStartedAt?: string;
+  reason?: string;
+  finishedAt?: string;
+  typicalDurationMs?: number | null;
 }
 
 interface SyncWiseBeforeAssignmentInput {
@@ -133,11 +136,15 @@ export async function syncWiseBeforeAssignment(
   input: SyncWiseBeforeAssignmentInput,
 ): Promise<SyncWiseBeforeAssignmentResult> {
   const fetcher = input.fetcher ?? fetch;
-  const syncResponse = await fetcher("/api/admin/sync-wise", { method: "POST" });
+  const syncResponse = await fetcher("/api/class-assignments/sync-wise", { method: "POST" });
   const syncBody = await parseJsonResponse(syncResponse) as WiseSyncResult;
 
   if (!syncResponse.ok) {
     throw syncError(syncBody, syncResponse);
+  }
+
+  if (syncBody.skipped && syncBody.reason === "fresh") {
+    return { sync: syncBody, waitedForRunningSync: false, latestDetail: null };
   }
 
   if (syncBody.skipped && syncBody.alreadyRunning) {

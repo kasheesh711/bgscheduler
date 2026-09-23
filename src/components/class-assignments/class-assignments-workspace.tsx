@@ -1,7 +1,8 @@
 "use client";
 import { AdminRoomReservations, useAdminRoomReservations, reservationDisplayRows } from "@/components/room-booking/admin-reservations";
 
-import { canRetryPausedPublish } from "./publish-controls";
+import { canRetryPausedPublish, isPublishActionDisabled, isPublishJobTerminal } from "./publish-controls";
+import { OperationProgress, type OperationStep } from "./operation-progress";
 import { ClassroomReadiness } from "./readiness-notice";
 import { OverflowPlanSection } from "./overflow-plan";
 import { readOverflowPlan } from "@/lib/classrooms/overflow-types";
@@ -183,8 +184,35 @@ function roomLabel(row: ClassroomRow): string {
   return row.assignedRoom;
 }
 
-function isPublishJobTerminal(status: PublishJobProgress["status"]): boolean {
-  return status === "succeeded" || status === "partial" || status === "failed";
+type RunStep = "idle" | "checking" | "syncing" | "assigning";
+const RUN_STEP_ORDER: RunStep[] = ["checking", "syncing", "assigning"];
+
+function typicalSyncLabel(typicalSyncDurationMs: number | null): string {
+  if (!typicalSyncDurationMs || typicalSyncDurationMs <= 0) return "Syncing from Wise";
+  const minutes = Math.max(1, Math.round(typicalSyncDurationMs / 60_000));
+  return `Syncing from Wise (usually ${minutes} min)`;
+}
+
+/** "Done" never actually renders active/done: runStep resets to "idle" the instant the run finishes. */
+function runOperationSteps(runStep: RunStep, typicalSyncDurationMs: number | null): OperationStep[] {
+  const currentIndex = RUN_STEP_ORDER.indexOf(runStep);
+  const labels = ["Checking data", typicalSyncLabel(typicalSyncDurationMs), "Assigning rooms (usually 20–60s)", "Done"];
+  return labels.map((label, index): OperationStep => ({
+    label,
+    status: index === currentIndex ? "active" : index < currentIndex ? "done" : "pending",
+  }));
+}
+
+function publishOperationSteps(progress: PublishJobProgress): OperationStep[] {
+  const terminal = isPublishJobTerminal(progress.status);
+  return [
+    { label: "Waiting for Wise", status: progress.status === "pending" ? "active" : "done" },
+    {
+      label: `Updating rooms (${progress.completedCount} of ${progress.totalCount})`,
+      status: progress.status === "running" ? "active" : progress.status === "pending" ? "pending" : "done",
+    },
+    { label: "Done", status: terminal ? "done" : "pending" },
+  ];
 }
 
 function formatDuration(ms: number | null | undefined): string {
@@ -221,15 +249,17 @@ function PublishBadge({ status }: { status: ClassroomRow["publishStatus"] }) {
   return <Badge variant="outline">Local only</Badge>;
 }
 
-export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused = false }: {
-  canOperate?: boolean; automationPaused?: boolean;
+export function ClassAssignmentsWorkspace({ canPublishAndRun = false, canForceReassign = false, automationPaused = false }: {
+  canPublishAndRun?: boolean; canForceReassign?: boolean; automationPaused?: boolean;
 } = {}) {
   const [date, setDate] = useState("");
   const [forceReassign, setForceReassign] = useState(false);
   const [detail, setDetail] = useState<AssignmentDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
-  const [runStep, setRunStep] = useState<"idle" | "syncing" | "assigning">("idle");
+  const [runStep, setRunStep] = useState<RunStep>("idle");
+  const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
+  const [typicalSyncDurationMs, setTypicalSyncDurationMs] = useState<number | null>(null);
   const [publishing, setPublishing] = useState(false);
   const [loadingSchedulePreview, setLoadingSchedulePreview] = useState(false);
   const [sendingScheduleEmails, setSendingScheduleEmails] = useState(false);
@@ -359,11 +389,11 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
 
   const publishActive = Boolean(publishProgress && !isPublishJobTerminal(publishProgress.status));
   useEffect(() => {
-    if (!publishActive && !sendingScheduleEmails) return;
+    if (!publishActive && !sendingScheduleEmails && runStep === "idle") return;
     setOperationTick(Date.now());
     const interval = window.setInterval(() => setOperationTick(Date.now()), 1000);
     return () => window.clearInterval(interval);
-  }, [publishActive, sendingScheduleEmails]);
+  }, [publishActive, sendingScheduleEmails, runStep]);
 
   const publishCounts = useMemo(() => {
     const eligible = rows.filter(isPublishEligible).length;
@@ -390,16 +420,24 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
   }, [tutors]);
 
   async function runAssignments() {
-    if (!canOperate) return;
+    if (!canPublishAndRun) return;
     setRunning(true);
-    setRunStep("syncing");
+    // "checking" has no separate network round trip -- decideManualWiseSync
+    // happens inside the same POST as the eventual sync -- so this renders
+    // as instantly-complete once "syncing" is set moments later.
+    setRunStep("checking");
+    setRunStartedAt(Date.now());
     setError(null);
     setMessage("Syncing Wise before assignment generation...");
     try {
+      setRunStep("syncing");
       const syncResult = await syncWiseBeforeAssignment({
         date,
         onMessage: setMessage,
       });
+      if (typeof syncResult.sync.typicalDurationMs === "number") {
+        setTypicalSyncDurationMs(syncResult.sync.typicalDurationMs);
+      }
       if (syncResult.latestDetail) {
         setDetail(syncResult.latestDetail);
       }
@@ -424,6 +462,7 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
     } finally {
       setRunning(false);
       setRunStep("idle");
+      setRunStartedAt(null);
     }
   }
 
@@ -447,7 +486,7 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
   }
 
   async function publishToWise() {
-    if (!run || !canOperate) return;
+    if (!run || !canPublishAndRun) return;
     setPublishing(true);
     setPublishProgress(null);
     setError(null);
@@ -626,6 +665,9 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
   const scheduleSendElapsedMs = sendingScheduleEmails && scheduleSendStartedAt
     ? operationTick - scheduleSendStartedAt
     : null;
+  const runElapsedMs = runStartedAt !== null
+    ? (operationTick > 0 ? operationTick - runStartedAt : 0)
+    : null;
   const scheduleReadyCount = scheduleEmailPreview?.readyCount ?? 0;
   const scheduleBlockedCount = scheduleEmailPreview?.blockedCount ?? 0;
   const selectedScheduleReadyCount = scheduleEmailPreview
@@ -643,11 +685,13 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
   const scheduleFailedCount = scheduleEmailResult?.summary.failed ?? 0;
   const scheduleSkippedCount = scheduleEmailResult?.summary.blocked ?? scheduleBlockedCount;
   const runButtonLabel =
-    runStep === "syncing"
-      ? "Syncing Wise"
-      : runStep === "assigning"
-        ? "Generating"
-        : "Sync Wise, then run";
+    runStep === "checking"
+      ? "Checking..."
+      : runStep === "syncing"
+        ? "Syncing Wise"
+        : runStep === "assigning"
+          ? "Generating"
+          : "Sync Wise, then run";
 
   function handleTimelineMinuteChange(minute: number) {
     const nextMinute = Math.min(timelineBounds.endMinute, Math.max(timelineBounds.startMinute, minute));
@@ -667,7 +711,11 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
         <div className="space-y-1">
           <h1 className="text-xl font-semibold tracking-tight">Class Assignments</h1>
           <p className="text-sm text-muted-foreground">
-            {canOperate ? "Sync Wise first, generate local room assignments, then publish eligible OFFLINE locations." : "View saved classroom plans. Running assignments and publishing to Wise are restricted to Kevin."}
+            {canPublishAndRun
+              ? canForceReassign
+                ? "Sync Wise first, generate local room assignments, then publish eligible OFFLINE locations."
+                : "Sync Wise first, generate local room assignments, then publish eligible OFFLINE locations. Force reassign is restricted to Kevin."
+              : "View saved classroom plans. Running assignments and publishing to Wise require admin access."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -680,7 +728,7 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
               className="w-[150px]"
             />
           </label>
-          {canOperate && <label className="flex h-8 items-center gap-2 rounded-lg border px-3 text-sm">
+          {canForceReassign && <label className="flex h-8 items-center gap-2 rounded-lg border px-3 text-sm">
             <input
               type="checkbox"
               checked={forceReassign}
@@ -692,7 +740,7 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
             <RefreshCw />
             Refresh
           </Button>
-          {canOperate && <><Button onClick={runAssignments} disabled={running || !date}>
+          {canPublishAndRun && <><Button onClick={runAssignments} disabled={running || !date}>
             <Play />
             {runButtonLabel}
           </Button>
@@ -719,6 +767,15 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
           <Button variant="outline" disabled={!date || preparingPrint} onClick={printSevenDays}>{preparingPrint ? "Preparing…" : "Print seven days"}</Button>
         </div>
       </div>
+      {runStep !== "idle" && (
+        <div className="rounded-lg border bg-card px-4 py-3">
+          <OperationProgress
+            steps={runOperationSteps(runStep, typicalSyncDurationMs)}
+            elapsedMs={runElapsedMs}
+            safeToClose={runStep !== "assigning"}
+          />
+        </div>
+      )}
       {run && <div className="flex flex-wrap gap-4 rounded-lg border bg-card px-4 py-3 text-sm">
         <span><strong>{projected.quality.roomChanges}</strong> consecutive-class room changes</span>
         <span>Usual-room coverage: <strong>{projected.quality.usualRoomCoverage === null ? "Sets not established" : `${Math.round(projected.quality.usualRoomCoverage * 100)}%`}</strong></span>
@@ -739,6 +796,9 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
       )}
 
       {automationPaused && <p className="text-sm text-muted-foreground">Automatic Wise sync, assignment preparation, publishing retries, and classroom emails are paused.</p>}
+      {automationPaused && canPublishAndRun && !canForceReassign && (
+        <p className="text-sm text-muted-foreground">Automation is paused — only Kevin can publish or sync while paused.</p>
+      )}
       <ClassroomReadiness detail={detail} date={date} day={readiness} loading={loading} />
       {!loading && run?.assignmentDate === date && <OverflowPlanSection plan={detail?.overflowPlan ?? readOverflowPlan(run.changeSummary)}
         stale={!detail?.snapshotMeta.fresh || detail?.activeSnapshotMeta.snapshotId !== detail?.snapshotMeta.snapshotId} />}
@@ -1006,7 +1066,7 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
         </TabsContent>
       </Tabs>
 
-      <Dialog open={canOperate && publishOpen} onOpenChange={setPublishOpen}>
+      <Dialog open={canPublishAndRun && publishOpen} onOpenChange={setPublishOpen}>
         <DialogContent className="flex max-h-[82vh] flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>Publish locations to Wise?</DialogTitle>
@@ -1025,21 +1085,14 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
 
             {publishProgress && (
               <div className="space-y-3 rounded-lg border bg-card p-3 text-sm">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <div className="text-xs text-muted-foreground">Publish status</div>
-                    <div className="font-medium capitalize">{publishProgress.status === "pending" ? "Waiting for Wise" : publishProgress.status}</div>
-                    {publishProgress.status === "pending" && publishProgress.nextAttemptAt && (
-                      <div className="text-xs text-muted-foreground">Next retry: {new Date(publishProgress.nextAttemptAt).toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })} Bangkok. You can close this page.</div>
-                    )}
-                  </div>
-                  <div className="text-right">
-                    <div className="text-xs text-muted-foreground">Elapsed</div>
-                    <div className="font-medium">
-                      {formatDuration(publishElapsedMs)}
-                    </div>
-                  </div>
-                </div>
+                <OperationProgress
+                  steps={publishOperationSteps(publishProgress)}
+                  elapsedMs={publishElapsedMs}
+                  etaMs={publishProgress.estimatedRemainingMs ?? null}
+                  pausedUntil={publishProgress.status === "pending" ? publishProgress.nextAttemptAt ?? null : null}
+                  pausedReason={publishProgress.lastError ?? null}
+                  now={operationTick > 0 ? new Date(operationTick) : new Date()}
+                />
                 <div className="h-2 overflow-hidden rounded-full bg-muted">
                   <div
                     className="h-full rounded-full bg-primary transition-all"
@@ -1083,7 +1136,13 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
             </Button>
             <Button
               onClick={publishToWise}
-              disabled={!canOperate || publishing || publishCounts.eligible === 0 || Boolean(publishProgress && !isPublishJobTerminal(publishProgress.status) && !(automationPaused && canRetryPausedPublish(publishProgress, operationTick)))}
+              disabled={isPublishActionDisabled({
+                hasEligibleRows: publishCounts.eligible > 0,
+                publishing,
+                progress: publishProgress,
+                automationPaused,
+                now: operationTick,
+              })}
             >
               {publishing || publishProgress?.status === "running" ? "Publishing" : publishProgress?.status === "pending" ? "Retry publish" : "Publish to Wise"}
             </Button>
