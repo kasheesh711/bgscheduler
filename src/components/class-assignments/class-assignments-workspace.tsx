@@ -1,7 +1,7 @@
 "use client";
 import { AdminRoomReservations, useAdminRoomReservations, reservationDisplayRows } from "@/components/room-booking/admin-reservations";
 
-import { canRetryPausedPublish, isPublishActionDisabled, isPublishJobTerminal } from "./publish-controls";
+import { isPublishActionDisabled, isPublishJobTerminal } from "./publish-controls";
 import { OperationProgress, type OperationStep } from "./operation-progress";
 import { ClassroomReadiness } from "./readiness-notice";
 import { OverflowPlanSection } from "./overflow-plan";
