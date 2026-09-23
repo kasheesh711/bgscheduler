@@ -7,14 +7,15 @@ import { addBangkokDays } from "@/lib/room-capacity/dates";
 import { buildTeacherSchedule, type ScheduleSourceRow } from "./schedule-projection";
 import { physicalRoom } from "./room-policy";
 import { loadPrintRosters, type PrintRoster, type PrintRosterSource } from "./print-roster";
+import { buildPrintGrid } from "./print-grid";
 
 export const printDateSchema = z.iso.date();
 export const printRunsSchema = z.array(z.uuid()).min(1).max(7).refine(ids => new Set(ids).size === ids.length);
-export const printViewSchema = z.enum(["tutors", "rooms"]);
+export const printViewSchema = z.enum(["tutors", "rooms", "grid"]);
 export type ClassroomPrintView = z.infer<typeof printViewSchema>;
 export class ClassroomPrintConflictError extends Error {}
 type PrintRow = ScheduleSourceRow & PrintRosterSource & { runId: string };
-type PrintRoom = { id: string; name: string; capacity: number; active: boolean; sortOrder: number };
+type PrintRoom = { id: string; name: string; capacity: number; active: boolean; sortOrder: number; hasTv?: boolean; category?: "standard" | "overflow_only" | "online_only" };
 
 export function buildClassroomPrintDay(run: { id: string; assignmentDate: string; changeSummary: Record<string, unknown> }, rows: PrintRow[], catalog: PrintRoom[], rosters: ReadonlyMap<string, PrintRoster>) {
   const schedule = buildTeacherSchedule(rows, run.assignmentDate, run.changeSummary);
@@ -38,15 +39,24 @@ export function buildClassroomPrintDay(run: { id: string; assignmentDate: string
   }));
   const blocks = tutors.flatMap(tutor => tutor.blocks).sort((a, b) => a.startMinute - b.startMinute || a.endMinute - b.endMinute || a.tutorDisplayName.localeCompare(b.tutorDisplayName) || a.rowId.localeCompare(b.rowId));
   const exceptions = blocks.filter(block => block.sessionState !== "current");
+  const cancelledCount = exceptions.filter(block => block.sessionState === "cancelled").length;
   const roomExceptions = blocks.filter(block => block.sessionState !== "current" || (block.status !== "remote"
     && (block.status !== "assigned" || !activeRooms.some(room => physicalRoom(room.name) === physicalRoom(block.room)))));
   const rooms = activeRooms.map(room => ({ id: room.id, name: room.name, capacity: room.capacity,
     blocks: blocks.filter(block => block.sessionState === "current" && block.status === "assigned" && physicalRoom(room.name) === physicalRoom(block.room)),
   }));
   const printedTutors = tutors.map(tutor => ({ ...tutor, blocks: tutor.blocks.filter(block => block.sessionState === "current") })).filter(tutor => tutor.blocks.length);
+  const grid = buildPrintGrid(
+    printedTutors.flatMap(tutor => tutor.blocks.map(block => ({
+      rowId: block.rowId, tutorDisplayName: tutor.tutorDisplayName,
+      startMinute: block.startMinute, endMinute: block.endMinute,
+      room: block.room, status: block.status, students: block.students,
+    }))),
+    activeRooms, cancelledCount,
+  );
   const revision = createHash("sha256").update(JSON.stringify({ tutors: printedTutors, rooms, exceptions, roomExceptions })).digest("hex").slice(0, 8);
   const draft = blocks.some(block => !["ready", "remote"].includes(block.publication) || block.rosterStatus !== "verified" || block.notes.length > 0);
-  return { runId: run.id, date: run.assignmentDate, revision, draft, tutors: printedTutors, rooms, exceptions, roomExceptions };
+  return { runId: run.id, date: run.assignmentDate, revision, draft, tutors: printedTutors, rooms, exceptions, roomExceptions, grid };
 }
 
 export async function listPrintRuns(db: Database, date: string) {
@@ -78,7 +88,8 @@ export async function loadClassroomPrintReport(db: Database, runIds: string[]) {
     startTime: schema.classroomAssignmentRows.startTime, endTime: schema.classroomAssignmentRows.endTime,
   }).from(schema.classroomAssignmentRows).where(inArray(schema.classroomAssignmentRows.runId, ids));
   const rooms = await db.select({ id: schema.classroomRooms.id, name: schema.classroomRooms.name, capacity: schema.classroomRooms.capacity,
-    active: schema.classroomRooms.active, sortOrder: schema.classroomRooms.sortOrder }).from(schema.classroomRooms);
+    active: schema.classroomRooms.active, sortOrder: schema.classroomRooms.sortOrder,
+    hasTv: schema.classroomRooms.hasTv, category: schema.classroomRooms.category }).from(schema.classroomRooms);
   const rosters = await loadPrintRosters(rows);
   // Detect in-place overrides/publishing during the multi-query read; a print must be coherent.
   const revisions = await db.select({ id: schema.classroomAssignmentRuns.id, updatedAt: schema.classroomAssignmentRuns.updatedAt })
