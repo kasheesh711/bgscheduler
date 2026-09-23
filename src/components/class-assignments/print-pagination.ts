@@ -15,14 +15,17 @@ export interface PrintPage { day: PrintDay; columns: PrintCard[][]; fullWidth: b
 export function buildPrintCards(report: ClassroomPrintReport, view: ClassroomPrintView) {
   const blocks = (rows: PrintDay["exceptions"]): PrintBlock[] => rows.map(row => ({ ...row, studentOffset: 0, continued: false }));
   return report.days.map(day => {
+    // "grid" renders PrintGrid directly (see print-grid-sheet.tsx), bypassing this card/measurement system entirely.
     const cards: PrintCard[] = view === "tutors"
       ? day.tutors.map(tutor => ({ id: `${day.runId}:tutor:${tutor.canonicalKey}`, kind: "tutor", title: tutor.tutorDisplayName,
         subtitle: `Usual rooms: ${tutor.usualRooms.map(room => `${room}${tutor.unavailableRooms.includes(room) ? " (unavailable)" : ""}`).join(" · ") || "Not yet established"}`,
         blocks: blocks(tutor.blocks), continued: false }))
-      : day.rooms.map(room => ({ id: `${day.runId}:room:${room.id}`, kind: "room", title: room.name,
-        subtitle: `Room schedule · ${room.capacity} places`, blocks: blocks(room.blocks), continued: false }));
+      : view === "rooms"
+      ? day.rooms.map(room => ({ id: `${day.runId}:room:${room.id}`, kind: "room", title: room.name,
+        subtitle: `Room schedule · ${room.capacity} places`, blocks: blocks(room.blocks), continued: false }))
+      : [];
     const exceptions = view === "rooms" ? day.roomExceptions : day.exceptions;
-    if (exceptions.length) cards.push({ id: `${day.runId}:exceptions`, kind: "exceptions", title: "Schedule exceptions",
+    if (view !== "grid" && exceptions.length) cards.push({ id: `${day.runId}:exceptions`, kind: "exceptions", title: "Schedule exceptions",
       subtitle: "Check these classes with the team and regenerate assignments where indicated.", blocks: blocks(exceptions), continued: false });
     return { day, cards };
   });
