@@ -6,9 +6,11 @@ import type { ClassroomPrintReport, ClassroomPrintView } from "@/lib/classrooms/
 import { Button } from "@/components/ui/button";
 import { formatBangkokDateTime } from "@/lib/bangkok-time";
 import { buildPrintCards, paginatePrintCards, type PrintCard, type PrintBlock, type PrintPage } from "./print-pagination";
+import { ClassroomPrintGridSheet } from "./print-grid-sheet";
+import { splitGridColumnsIntoPages } from "@/lib/classrooms/print-grid";
 import styles from "./classroom-print.module.css";
 
-function dateLabel(date: string) {
+export function dateLabel(date: string) {
   return new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Bangkok", weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(new Date(`${date}T12:00:00+07:00`));
 }
 
@@ -88,8 +90,10 @@ export function ClassroomPrintDocument({ report: initialReport, missingDates = [
   const [error, setError] = useState<string | null>(null);
   const [layout, setLayout] = useState<{ report: ClassroomPrintReport; view: ClassroomPrintView; pages: PrintPage[]; error?: string } | null>(null);
   const dayCards = useMemo(() => buildPrintCards(report, view), [report, view]);
-  const ready = layout?.report === report && layout.view === view && !layout.error;
-  const pages = ready ? layout.pages : [];
+  const gridPages = useMemo(() => view === "grid" ? report.days.map(day => ({ day, pages: splitGridColumnsIntoPages(day.grid.columns) })) : null, [report, view]);
+  const ready = view === "grid" ? true : (layout?.report === report && layout.view === view && !layout.error);
+  // For "grid", ready is true before the measurement effect ever runs (or resolves), so layout may still be null: never dereference it here.
+  const pages = ready && view !== "grid" ? layout!.pages : [];
 
   useEffect(() => {
     let canceled = false;
@@ -165,7 +169,7 @@ export function ClassroomPrintDocument({ report: initialReport, missingDates = [
         const next = event.target.value as ClassroomPrintView; setView(next);
         root.current?.removeAttribute("data-print-approved"); pendingPrint.current = null;
         const url = new URL(window.location.href); url.searchParams.set("view", next); window.history.replaceState(null, "", url);
-      }}><option value="tutors">By tutor</option><option value="rooms">By room</option></select></label>
+      }}><option value="tutors">By tutor</option><option value="rooms">By room</option><option value="grid">Full day (all rooms)</option></select></label>
       <span>A4 landscape · Rosters checked {formatBangkokDateTime(report.rosterCheckedAt)}</span>
       <Button disabled={!ready || refreshing} onClick={() => void refresh(true)}>{refreshing ? "Refreshing rosters…" : ready ? "Print / Save PDF" : "Preparing pages…"}</Button>
     </div>
@@ -173,16 +177,19 @@ export function ClassroomPrintDocument({ report: initialReport, missingDates = [
     {missingDates.length > 0 && <p className={styles.missing} role="status">No saved assignments for {missingDates.join(", ")}. These days are not included.</p>}
     <p className={styles.printNotice}>Use the Print / Save PDF button on this page to refresh student rosters before printing.</p>
     <div ref={measure} className={styles.measure} aria-hidden="true">{dayCards.flatMap(({ cards }) => cards.map(card => <div key={card.id} style={{ width: card.kind === "tutor" ? "134.5mm" : "277mm" }}><ClassroomPrintCard card={card} /></div>))}</div>
-    <div className={styles.sheets}>{pages.map((page, index) => <article key={`${page.day.runId}:${index}`} className={styles.sheet} data-print-sheet>
-      <header className={styles.pageHeader}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/brand/logo-horizontal.png" alt="BeGifted Education" width="130" height="51" />
-        <div><p className={styles.eyebrow}>DAILY CLASSROOMS · ตารางห้องเรียน</p><h1>{dateLabel(page.day.date)}</h1></div>
-        <span className={page.day.draft || report.refreshFailed ? styles.draft : styles.approved}>{page.day.draft || report.refreshFailed ? "DRAFT / CHECK ASSIGNMENTS" : "SAVED CLASSROOM PLAN"}</span>
-      </header>
-      {!page.columns.some(cards => cards.length) ? <p>No classes in this saved run.</p> : <div className={page.fullWidth ? styles.singleColumn : styles.columns}>{page.columns.map((cards, column) => <div key={column}>{cards.map((card, part) => <ClassroomPrintCard key={`${card.id}:${part}`} card={card} />)}</div>)}</div>}
-      <footer className={styles.footer}><span>BeGifted Education · All times Bangkok<br />Generated {formatBangkokDateTime(report.generatedAt)}<br />Rosters checked {formatBangkokDateTime(report.rosterCheckedAt)}</span>
-        <span>{page.day.date} · Revision {page.day.revision}<br />Page {index + 1} of {pages.length} · Check the date before use</span></footer>
-    </article>)}</div>
+    <div className={styles.sheets}>{view === "grid"
+      ? gridPages!.flatMap(({ day, pages: dayPages }) => dayPages.map((page, index) => <ClassroomPrintGridSheet key={`${day.runId}:${index}`}
+          day={day} page={page} pageIndex={index} pageCount={dayPages.length} generatedAt={report.generatedAt} rosterCheckedAt={report.rosterCheckedAt} />))
+      : pages.map((page, index) => <article key={`${page.day.runId}:${index}`} className={styles.sheet} data-print-sheet>
+        <header className={styles.pageHeader}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/brand/logo-horizontal.png" alt="BeGifted Education" width="130" height="51" />
+          <div><p className={styles.eyebrow}>DAILY CLASSROOMS · ตารางห้องเรียน</p><h1>{dateLabel(page.day.date)}</h1></div>
+          <span className={page.day.draft || report.refreshFailed ? styles.draft : styles.approved}>{page.day.draft || report.refreshFailed ? "DRAFT / CHECK ASSIGNMENTS" : "SAVED CLASSROOM PLAN"}</span>
+        </header>
+        {!page.columns.some(cards => cards.length) ? <p>No classes in this saved run.</p> : <div className={page.fullWidth ? styles.singleColumn : styles.columns}>{page.columns.map((cards, column) => <div key={column}>{cards.map((card, part) => <ClassroomPrintCard key={`${card.id}:${part}`} card={card} />)}</div>)}</div>}
+        <footer className={styles.footer}><span>BeGifted Education · All times Bangkok<br />Generated {formatBangkokDateTime(report.generatedAt)}<br />Rosters checked {formatBangkokDateTime(report.rosterCheckedAt)}</span>
+          <span>{page.day.date} · Revision {page.day.revision}<br />Page {index + 1} of {pages.length} · Check the date before use</span></footer>
+      </article>)}</div>
   </main>;
 }
