@@ -16,6 +16,7 @@ export interface WiseSyncResult {
   reason?: string;
   finishedAt?: string;
   typicalDurationMs?: number | null;
+  paused?: boolean;
 }
 
 interface SyncWiseBeforeAssignmentInput {
@@ -60,6 +61,10 @@ function syncError(syncBody: WiseSyncResult, response: Response): Error {
 
 function noPromotionError(syncBody: WiseSyncResult): Error {
   return responseError(syncBody, "Wise sync did not promote a fresh snapshot.");
+}
+
+function pausedError(syncBody: WiseSyncResult): Error {
+  return new Error(syncBody.message ?? "Wise and classroom automation is paused by the owner.");
 }
 
 function parseRequiredTimestamp(value: string | undefined): number {
@@ -141,6 +146,13 @@ export async function syncWiseBeforeAssignment(
 
   if (!syncResponse.ok) {
     throw syncError(syncBody, syncResponse);
+  }
+
+  // Must be checked before the generic no-promotion fallback below: a paused
+  // result has no promotedSnapshotId, so without this it would fall through
+  // to the confusing generic "did not promote a fresh snapshot" error.
+  if (syncBody.paused) {
+    throw pausedError(syncBody);
   }
 
   if (syncBody.skipped && syncBody.reason === "fresh") {

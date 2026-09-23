@@ -54,6 +54,7 @@ import type { AssignmentDetail, ClassroomRow } from "./types";
 
 const NO_ROOM_AVAILABLE = "NO_ROOM_AVAILABLE";
 const REMOTE_NO_ROOM_NEEDED = "REMOTE_NO_ROOM_NEEDED";
+const AUTOMATION_PAUSED_NON_OWNER_MESSAGE = "Automation is paused — only Kevin can publish or sync while paused.";
 
 interface ScheduleEmailPreview {
   ready: boolean;
@@ -654,6 +655,7 @@ export function ClassAssignmentsWorkspace({ canPublishAndRun = false, canForceRe
   }
 
   const hasRows = rows.length > 0;
+  const pausedForNonOwner = automationPaused && canPublishAndRun && !canForceReassign;
   const publishPercent = publishProgress?.totalCount
     ? Math.round((publishProgress.completedCount / publishProgress.totalCount) * 100)
     : 0;
@@ -740,14 +742,19 @@ export function ClassAssignmentsWorkspace({ canPublishAndRun = false, canForceRe
             <RefreshCw />
             Refresh
           </Button>
-          {canPublishAndRun && <><Button onClick={runAssignments} disabled={running || !date}>
+          {canPublishAndRun && <><Button
+            onClick={runAssignments}
+            disabled={running || !date || pausedForNonOwner}
+            title={pausedForNonOwner ? AUTOMATION_PAUSED_NON_OWNER_MESSAGE : undefined}
+          >
             <Play />
             {runButtonLabel}
           </Button>
           <Button
             variant="secondary"
             onClick={() => setPublishOpen(true)}
-            disabled={!run || rows.length === 0}
+            disabled={!run || rows.length === 0 || pausedForNonOwner}
+            title={pausedForNonOwner ? AUTOMATION_PAUSED_NON_OWNER_MESSAGE : undefined}
           >
             <UploadCloud />
             Publish to Wise
@@ -796,8 +803,8 @@ export function ClassAssignmentsWorkspace({ canPublishAndRun = false, canForceRe
       )}
 
       {automationPaused && <p className="text-sm text-muted-foreground">Automatic Wise sync, assignment preparation, publishing retries, and classroom emails are paused.</p>}
-      {automationPaused && canPublishAndRun && !canForceReassign && (
-        <p className="text-sm text-muted-foreground">Automation is paused — only Kevin can publish or sync while paused.</p>
+      {pausedForNonOwner && (
+        <p className="text-sm text-muted-foreground">{AUTOMATION_PAUSED_NON_OWNER_MESSAGE}</p>
       )}
       <ClassroomReadiness detail={detail} date={date} day={readiness} loading={loading} />
       {!loading && run?.assignmentDate === date && <OverflowPlanSection plan={detail?.overflowPlan ?? readOverflowPlan(run.changeSummary)}

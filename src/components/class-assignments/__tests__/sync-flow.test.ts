@@ -76,6 +76,22 @@ describe("class assignment sync flow", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("throws the server's paused message instead of falling through to the generic no-promotion error", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({
+      ok: true,
+      skipped: true,
+      paused: true,
+      reason: "AUTOMATION_PAUSED",
+      message: "Wise and classroom automation is paused by the owner.",
+    }));
+
+    await expect(syncWiseBeforeAssignment({
+      date: "2026-09-23",
+      fetcher: fetchMock as unknown as typeof fetch,
+    })).rejects.toThrow("Wise and classroom automation is paused by the owner.");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     [{ errorSummary: "Specific sync failure", error: "General error" }, "Specific sync failure"],
     [{ errorSummary: " ", error: "Sign in again" }, "Sign in again"],

@@ -43,6 +43,20 @@ describe("classroom operations controls", () => {
     expect(ownerMarkup).not.toContain("only Kevin can publish or sync while paused");
   });
 
+  it("disables Run and Publish (with a matching paused tooltip) for an ordinary admin while automation is paused", () => {
+    const markup = renderToStaticMarkup(<ClassAssignmentsWorkspace canPublishAndRun automationPaused />);
+
+    // Both toolbar buttons carry the same paused title, and thus the same disabled condition.
+    const pausedTitleMatches = markup.match(/title="Automation is paused — only Kevin can publish or sync while paused\."/g) ?? [];
+    expect(pausedTitleMatches).toHaveLength(2);
+  });
+
+  it("does not disable Run and Publish for the owner while automation is paused", () => {
+    const markup = renderToStaticMarkup(<ClassAssignmentsWorkspace canPublishAndRun canForceReassign automationPaused />);
+
+    expect(markup).not.toContain("Automation is paused");
+  });
+
   it("allows an explicit retry only after a pending job's cooldown, never during a running attempt", () => {
     const due = "2026-09-17T10:00:00Z", now = Date.parse(due);
     expect(canRetryPausedPublish({ status: "pending", nextAttemptAt: due }, now - 1)).toBe(false);

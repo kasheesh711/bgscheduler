@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireClassroomAdmin, classroomOperationsAccessError } from "@/lib/classrooms/operations-access";
+import { isClassroomOperationsOwner, pausedWiseClassroomResult, wiseClassroomAutomationEnabled } from "@/lib/classrooms/operations-policy";
 import { getDb } from "@/lib/db";
 import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import { runWiseSyncRequest } from "@/lib/sync/run-wise-sync";
@@ -17,6 +18,14 @@ export async function POST() {
   let actor;
   try { actor = await requireClassroomAdmin(); }
   catch (error) { return classroomOperationsAccessError(error); }
+
+  // Applies uniformly to every branch below, including skip_fresh: that
+  // branch never reaches runWiseSyncRequest()'s own internal pause check, so
+  // without this a non-owner's skip_fresh response would bypass the pause
+  // gate entirely.
+  if (!wiseClassroomAutomationEnabled() && !isClassroomOperationsOwner(actor.email)) {
+    return NextResponse.json(pausedWiseClassroomResult());
+  }
 
   const db = getDb();
   // Sequential (not Promise.all): keeps read order deterministic for tests

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireClassroomAdmin, classroomOperationsAccessError } from "@/lib/classrooms/operations-access";
-import { isClassroomOperationsOwner } from "@/lib/classrooms/operations-policy";
+import { isClassroomOperationsOwner, wiseClassroomAutomationEnabled } from "@/lib/classrooms/operations-policy";
 import { getDb } from "@/lib/db";
 import {
   runClassroomAssignment,
@@ -19,6 +19,15 @@ export async function POST(request: NextRequest) {
   let actor;
   try { actor = await requireClassroomAdmin(); }
   catch (error) { return classroomOperationsAccessError(error); }
+
+  // runClassroomAssignment does a live Wise day read; while automation is
+  // paused, only Kevin may trigger that, same as sync-wise and publish.
+  if (!wiseClassroomAutomationEnabled() && !isClassroomOperationsOwner(actor.email)) {
+    return NextResponse.json(
+      { error: "Automation is paused — only Kevin can run assignments while paused." },
+      { status: 403 },
+    );
+  }
 
   let body: unknown;
   try {

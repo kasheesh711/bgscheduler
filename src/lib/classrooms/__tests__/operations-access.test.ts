@@ -120,6 +120,10 @@ describe.each(adminEndpoints)("%s admin access", (label, invoke) => {
   });
 
   it("allows an ordinary admin through and performs the operation", async () => {
+    // This file's default beforeEach pauses automation (see the owner-only
+    // table above); test the normal/enabled condition here and cover the
+    // paused interaction separately below.
+    vi.stubEnv("WISE_CLASSROOM_AUTOMATION_ENABLED", "true");
     vi.mocked(auth).mockResolvedValue({ user: { email: "admin@example.com", role: "admin", adminAccessVersion: 3 } } as never);
     expect([200, 202]).toContain((await invoke()).status);
     adminEndpointCalled[label]();
@@ -143,5 +147,49 @@ describe("force reassign stays owner-only even though run is now admin-accessibl
 
     expect(response.status).toBe(200);
     expect(runClassroomAssignment).toHaveBeenCalled();
+  });
+});
+
+describe("automation pause additionally blocks non-owner admins from run and sync-wise", () => {
+  // beforeEach already stubs WISE_CLASSROOM_AUTOMATION_ENABLED to "false".
+
+  it("blocks an ordinary admin's run with a clear paused error, before touching runClassroomAssignment", async () => {
+    vi.mocked(auth).mockResolvedValue({ user: { email: "admin@example.com", role: "admin", adminAccessVersion: 3 } } as never);
+
+    const response = await run(request());
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Automation is paused — only Kevin can run assignments while paused.",
+    });
+    expect(runClassroomAssignment).not.toHaveBeenCalled();
+  });
+
+  it("returns the paused result for an ordinary admin's sync-wise guard call, without calling runWiseSyncRequest", async () => {
+    vi.mocked(auth).mockResolvedValue({ user: { email: "admin@example.com", role: "admin", adminAccessVersion: 3 } } as never);
+
+    const response = await syncWiseGuard();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ paused: true, skipped: true, reason: "AUTOMATION_PAUSED" });
+    expect(runWiseSyncRequest).not.toHaveBeenCalled();
+  });
+
+  it("still lets the owner run assignments while automation is paused", async () => {
+    vi.mocked(auth).mockResolvedValue(ownerSession as never);
+
+    const response = await run(request());
+
+    expect(response.status).toBe(200);
+    expect(runClassroomAssignment).toHaveBeenCalled();
+  });
+
+  it("still lets the owner trigger a sync via the guard route while automation is paused", async () => {
+    vi.mocked(auth).mockResolvedValue(ownerSession as never);
+
+    const response = await syncWiseGuard();
+
+    expect([200, 202]).toContain(response.status);
+    expect(runWiseSyncRequest).toHaveBeenCalled();
   });
 });

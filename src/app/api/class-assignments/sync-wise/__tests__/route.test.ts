@@ -1,5 +1,5 @@
 vi.mock("server-only", () => ({}));
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextResponse } from "next/server";
 
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
@@ -41,6 +41,7 @@ describe("POST /api/class-assignments/sync-wise", () => {
     vi.mocked(runWiseSyncRequest).mockImplementation(async () =>
       NextResponse.json({ success: true, promotedSnapshotId: "snap-1" }) as never);
   });
+  afterEach(() => vi.unstubAllEnvs());
 
   it("returns 401 with no session", async () => {
     vi.mocked(auth).mockResolvedValue(null as never);
@@ -110,5 +111,31 @@ describe("POST /api/class-assignments/sync-wise", () => {
 
     expect(res.status).toBe(202);
     expect(runWiseSyncRequest).toHaveBeenCalledWith({ manualOwner: "admin@example.com" });
+  });
+
+  it("returns the paused result for a non-owner admin without touching the DB when automation is paused", async () => {
+    vi.stubEnv("WISE_CLASSROOM_AUTOMATION_ENABLED", "false");
+    vi.mocked(auth).mockResolvedValue({ user: { email: "admin@example.com", role: "admin" } } as never);
+
+    const res = await POST();
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ paused: true, skipped: true, reason: "AUTOMATION_PAUSED" });
+    expect(runWiseSyncRequest).not.toHaveBeenCalled();
+    expect(getDb).not.toHaveBeenCalled();
+  });
+
+  it("still runs the sync for the owner while automation is paused", async () => {
+    vi.stubEnv("WISE_CLASSROOM_AUTOMATION_ENABLED", "false");
+    vi.mocked(auth).mockResolvedValue({ user: { email: "kevhsh7@gmail.com", role: "admin" } } as never);
+    vi.mocked(getDb).mockReturnValue(makeDbMock({
+      latestSuccessRows: [{ finishedAt: new Date(Date.now() - 20 * 60_000) }],
+      runningRows: [],
+    }) as never);
+
+    const res = await POST();
+
+    expect(res.status).toBe(200);
+    expect(runWiseSyncRequest).toHaveBeenCalledWith({ manualOwner: "kevhsh7@gmail.com" });
   });
 });
