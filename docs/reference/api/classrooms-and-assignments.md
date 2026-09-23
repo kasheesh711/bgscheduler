@@ -6,17 +6,18 @@ The assignment detail envelope and `run.changeSummary` now expose optional `over
 
 `GET /api/class-assignments?optimizerCheck=1` is a read-only integer/WASM diagnostic restricted to the current enabled operations owner. It returns `{ok, package, wasmLoaded, integerOptimum, elapsedMs}` or 503 when the runtime fails. It requires no date and performs no allocation or Wise writes. All ordinary read permissions remain unchanged. Generation/publishing remain owner-restricted under the existing pause controls; historical session-only descriptions below predate those restrictions.
 
-**Authoritative source:** the ten route handlers under [`src/app/api/class-assignments/`](../../../src/app/api/class-assignments/) and [`src/app/api/classrooms/`](../../../src/app/api/classrooms/), plus the two cron handlers under [`src/app/api/internal/class-assignments/`](../../../src/app/api/internal/class-assignments/).
+**Authoritative source:** the eleven route handlers under [`src/app/api/class-assignments/`](../../../src/app/api/class-assignments/) and [`src/app/api/classrooms/`](../../../src/app/api/classrooms/), plus the two cron handlers under [`src/app/api/internal/class-assignments/`](../../../src/app/api/internal/class-assignments/).
 
-This page is the mechanical reference for those 12 endpoints: method, path, auth, request shape, response shape, side effects, and status codes. What the feature is *for* — the assignment rules, the publish policy, the morning-automation story — lives in [docs/features/classroom-assignments.md](../../features/classroom-assignments.md) (**Status: stable**), which this page does not restate. Table columns live in [docs/reference/database/erd-classrooms.md](../database/erd-classrooms.md); cron scheduling lives in [docs/reference/crons.md](../crons.md).
+This page is the mechanical reference for those 13 endpoints: method, path, auth, request shape, response shape, side effects, and status codes. What the feature is *for* — the assignment rules, the publish policy, the morning-automation story — lives in [docs/features/classroom-assignments.md](../../features/classroom-assignments.md) (**Status: stable**), which this page does not restate. Table columns live in [docs/reference/database/erd-classrooms.md](../database/erd-classrooms.md); cron scheduling lives in [docs/reference/crons.md](../crons.md).
 
 ## Endpoints on this page
 
 | Method | Path | Auth |
 |--------|------|------|
 | GET | `/api/class-assignments` | session |
-| POST | `/api/class-assignments/run` | session |
-| POST | `/api/class-assignments/runs/[runId]/publish` | session |
+| POST | `/api/class-assignments/run` | admin |
+| POST | `/api/class-assignments/sync-wise` | admin |
+| POST | `/api/class-assignments/runs/[runId]/publish` | admin |
 | GET | `/api/class-assignments/runs/[runId]/publish/[jobId]` | session |
 | PATCH | `/api/class-assignments/runs/[runId]/rows/[rowId]` | session |
 | GET | `/api/class-assignments/runs/[runId]/schedule-email/preview` | session |
@@ -132,6 +133,31 @@ Nothing is written back to Wise here — publishing is a separate, explicit call
 | 401 | No session. |
 | 409 | `StaleClassroomAssignmentSnapshotError`; body `{ error, code: "STALE_ASSIGNMENT_SNAPSHOT", latestSyncFinishedAt, staleAgeMs }` ([`run/route.ts:46-56`](../../../src/app/api/class-assignments/run/route.ts)). |
 | 500 | Any other throw — missing active snapshot, Wise fetch failure, missing `WISE_USER_ID`/`WISE_API_KEY` ([`data.ts:1151-1159`](../../../src/lib/classrooms/data.ts)), DB error. |
+
+---
+
+### `POST /api/class-assignments/sync-wise`
+
+Rate-limit-guarded manual Wise sync, called by the workspace's "Sync Wise, then run" flow instead of the owner-only `POST /api/admin/sync-wise`. Handler: [`sync-wise/route.ts`](../../../src/app/api/class-assignments/sync-wise/route.ts). `export const maxDuration = 800`.
+
+**Auth:** any admin session (see [Owner-only operations](#owner-only-operations-17-september-2026-expanded-23-september-2026) below for the full split). **Request body:** none.
+
+**Side effects:** reads the latest successful `sync_runs.finishedAt`, any currently-`running` sync's `startedAt`, and the median duration of the last 5 successful syncs, then applies `decideManualWiseSync`: a success within the last 12 minutes short-circuits with no Wise call at all; otherwise it delegates to the same single-flight `runWiseSyncRequest` guard `POST /api/admin/sync-wise` uses, which atomically re-detects an already-running sync itself.
+
+**Response 200** (or the delegated call's own status — 202 for an already-running sync, 500 on sync failure):
+
+| Key | Type | Notes |
+|-----|------|-------|
+| `outcome` | `success \| partial \| failed \| running` | Present on every branch. |
+| `success` | boolean | |
+| `skipped` | boolean | `true` for the fresh-skip and already-running branches. |
+| `reason` | `"fresh"` \| `"AUTOMATION_PAUSED"` \| `undefined` | `"fresh"` on the 12-minute skip; `"AUTOMATION_PAUSED"` when a non-owner admin calls this while automation is paused (see below) — that response is `{ok:true, skipped:true, paused:true, reason:"AUTOMATION_PAUSED", message}`, not this table's other keys. |
+| `finishedAt` | ISO string \| `undefined` | The prior sync's finish time, only on the fresh-skip branch. |
+| `alreadyRunning`, `runningStartedAt` | boolean \| ISO string \| `undefined` | Only when delegating to an already-running sync. |
+| `promotedSnapshotId` | string \| `null` \| `undefined` | `null` on the fresh-skip branch; otherwise the delegated sync's own value. |
+| `typicalDurationMs` | number \| `null` | Median of the last 5 successful syncs' `finishedAt - startedAt`; `null` with no evidence yet. Present on every branch, including the paused response. |
+
+**Status codes:** 200 (including the fresh-skip and paused branches) · 202 (delegated already-running sync) · 401 (no session) · 403 (non-admin role) · 500 (delegated sync failure).
 
 ---
 
@@ -439,8 +465,18 @@ worker will retry without a browser. Assignment detail includes `publishProgress
 for its latest job so a reloaded page can resume polling. `successCount` counts
 verified room destinations; successful HTTP writes still await Wise read-back.
 
-## Owner-only operations (17 September 2026)
+## Owner-only operations (17 September 2026; expanded 23 September 2026)
 
-`POST /api/class-assignments/run` and `POST /api/class-assignments/runs/{runId}/publish` require Kevin's current enabled website-owner session. Handlers return 401 without authentication and 403 for other users, before parsing input or doing work. The same restriction applies to `POST /api/admin/sync-wise`, the session-authenticated fallback of `POST /api/internal/sync-wise`, and affected Data Health job triggers.
+`POST /api/class-assignments/run`, `POST /api/class-assignments/sync-wise` and `POST /api/class-assignments/runs/{runId}/publish` now require only an authenticated **admin** session (`requireClassroomAdmin()`, `session.user.role === "admin"`) — not Kevin specifically. Handlers return 401 without authentication and 403 for a non-admin role, before parsing input or doing work. `run` additionally 403s a non-owner admin's `forceReassign: true` body field with `{ error: "Only Kevin can force reassign." }`, checked after body validation and before the assignment engine runs.
 
-While `WISE_CLASSROOM_AUTOMATION_ENABLED` is not exactly `true`, authenticated cron requests for the five paused jobs return HTTP 200 with `{ok:true, skipped:true, paused:true, reason:"AUTOMATION_PAUSED", message:"Wise and classroom automation is paused by the owner."}`. They are audited as skipped, not successful work. Owner-initiated manual Wise sync remains available. Data Health cannot start the other paused automation services even with confirmation. No existing assignment response shapes or publication history are removed.
+Kevin's current enabled website-owner session (`requireClassroomOperationsOwner()`) remains required for `POST /api/admin/sync-wise` (the legacy manual-sync route, superseded for UI use by `POST /api/class-assignments/sync-wise` above but still callable directly), the session-authenticated fallback of `POST /api/internal/sync-wise`, and the five affected Data Health job triggers.
+
+While `WISE_CLASSROOM_AUTOMATION_ENABLED` is not exactly `true`, the pause additionally applies uniformly to a non-owner admin's use of the now-admin-accessible routes, not only the five owner-only cron jobs:
+
+- Authenticated cron requests for the five paused jobs return HTTP 200 with `{ok:true, skipped:true, paused:true, reason:"AUTOMATION_PAUSED", message:"Wise and classroom automation is paused by the owner."}`. They are audited as skipped, not successful work. Data Health cannot start these paused automation services even with confirmation.
+- `POST /api/class-assignments/run` returns `403 { error: "Automation is paused — only Kevin can run assignments while paused." }` for a non-owner admin, checked immediately after the admin-session check and before any Wise read.
+- `POST /api/class-assignments/sync-wise` returns the same paused JSON shape as the cron jobs above (200, `paused: true`) for a non-owner admin, checked before the freshness decision so it also covers what would otherwise be the `skip_fresh` branch.
+- `POST /api/class-assignments/runs/{runId}/publish` still accepts a non-owner admin's request and creates the job (202), but `claimPublishAttempt` refuses to claim a job whose creator is not Kevin while paused, so it stays pending until automation resumes or Kevin retries it; the workspace disables the **Publish to Wise** button for a non-owner admin while paused, so this in practice only happens via direct API use.
+- Owner-initiated manual Wise sync, run and publish remain available throughout the pause.
+
+No existing assignment response shapes or publication history are removed.
