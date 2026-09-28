@@ -14,7 +14,7 @@ import {
   resolveAutoApproveEnabled,
   resolveAutoApproveGraceHours,
 } from "./payout-config";
-import { hasWrittenPayoutDeduction } from "./payout-repository";
+import { hasWrittenPayoutDeduction, noLiveWrittenPayoutLine } from "./payout-repository";
 import { lastEndedPayoutRunWindow } from "./payout-window";
 
 // ── Continuous auto-approval and reopen sweep ───────────────────────────
@@ -99,7 +99,11 @@ export async function runPostClassAutoApprovals(
         action: "approve",
         note: "Automated approval after the grace period.",
         expectedVersion: candidate.version,
-        idempotencyKey: `auto-approve:${candidate.deductionId}`,
+        // Versioned like the reopen key (FU2). An unversioned key collides with
+        // its own earlier approval after any reopen ("already used with a
+        // different review payload") and would strand the deduction in
+        // pending_review forever; a replay of the same version stays idempotent.
+        idempotencyKey: `auto-approve:${candidate.deductionId}:v${candidate.version}`,
       }, db);
       approved += 1;
     } catch (error) {
@@ -171,15 +175,18 @@ export async function runPostClassIneligibleWaivers(
 }
 
 /**
- * Reopen unwritten approvals whose latest current-policy/current-mapping
- * evidence no longer supports a charge. Written rows belong to retirement;
- * human waivers are never selected. The review action keeps the finance lock,
- * active-publish fence, version check and immutable audit trail.
+ * Approvals the reopen sweep inspects (FU4): approved, un-offset deductions
+ * with no live written payout line (`noLiveWrittenPayoutLine`). Written rows
+ * belong to retirement, so scanning -- and loading evidence for -- every
+ * approval ever made would only grow with history on every collection and
+ * accrual tick. A retired line is off the ledger, so its deduction counts as
+ * unwritten again. Deliberately no date bound: human-window approvals still
+ * need reopen hygiene.
  */
-export async function runPostClassAutoReopens(
+export async function selectAutoReopenCandidates(
   db: Database = getDb(),
-): Promise<{ reopened: number; failed: number }> {
-  const candidates = await db.select({
+): Promise<Array<{ deductionId: string; sessionId: string; version: number }>> {
+  return db.select({
     deductionId: schema.postClassDeductions.id,
     sessionId: schema.postClassSessions.id,
     version: schema.postClassDeductions.version,
@@ -195,7 +202,21 @@ export async function runPostClassAutoReopens(
     .where(and(
       eq(schema.postClassDeductions.status, "approved"),
       isNull(schema.postClassDeductionOffsets.id),
+      noLiveWrittenPayoutLine(schema.postClassDeductions.id),
     ));
+}
+
+/**
+ * Reopen unwritten approvals whose latest current-policy/current-mapping
+ * evidence no longer supports a charge. Only approvals with no live written
+ * payout line are scanned (`selectAutoReopenCandidates`); written rows belong
+ * to retirement. Human waivers are never selected. The review action keeps the
+ * finance lock, active-publish fence, version check and immutable audit trail.
+ */
+export async function runPostClassAutoReopens(
+  db: Database = getDb(),
+): Promise<{ reopened: number; failed: number }> {
+  const candidates = await selectAutoReopenCandidates(db);
 
   const evidence = await loadCurrentDeductionEvidence(db, candidates.map(row => row.sessionId));
   let reopened = 0;
@@ -205,7 +226,8 @@ export async function runPostClassAutoReopens(
     if (!issue) continue;
     // A pre-filter only -- `applyPostClassReviewAction`'s reopen branch
     // already refuses a written deduction. Skipping here just avoids a
-    // guaranteed-failing call.
+    // guaranteed-failing call; it stays behind the SQL filter because a
+    // publish may write the line between the scan and this check.
     if (await hasWrittenPayoutDeduction(db, candidate.deductionId)) continue;
     try {
       await applyPostClassReviewAction(SYSTEM_ACTOR, {

@@ -29,11 +29,13 @@ import { seedPayoutAssessment } from "@/tests/integration/payout-fixtures";
 
 import { startTestDb, stopTestDb, truncateAll } from "@/tests/integration/db-helper";
 import {
+  payoutJobResponse,
   runPayoutAccrualPass,
   runPayoutFinalizePass,
 } from "@/lib/post-class-feedback/payout-accrual";
 import { upsertPayoutTutorName } from "@/lib/post-class-feedback/payout-repository";
 import { DEDUCTION_SESSION_NAME } from "@/lib/post-class-feedback/payout-master";
+import type { PayoutRetirementSheetOps } from "@/lib/post-class-feedback/payout-retirement";
 import { payoutBangkokDate } from "@/lib/post-class-feedback/payout-window";
 import type { PayoutRunView } from "@/lib/post-class-feedback/payout-run";
 import type { MasterLedgerGateway } from "@/lib/post-class-feedback/payout-writer";
@@ -406,6 +408,184 @@ describe("runPayoutAccrualPass", () => {
 
     expect(result).toMatchObject({ skipped: expect.stringMatching(/active until/iu) });
     expect(deductionRows(grid)).toHaveLength(0);
+  });
+});
+
+// FU3: one hand-edited sheet row used to abort the whole tick, so no tutor
+// was charged until an operator fixed it. A per-row retirement skip is now
+// loud but local; a tab the pass cannot trust at all still stops everything.
+describe("runPayoutAccrualPass retirement containment (FU3)", () => {
+  /** A prior-window class: inside the retirement scope, outside the current run. */
+  const PRIOR_CLASS_DAY = `${PRIOR_ANCHOR_YEAR_MONTH}-10`;
+  const PRIOR_MARKER = `BGS-PAYOUT ${PRIOR_ANCHOR_YEAR_MONTH} aaaaaaaaaaaa`;
+  const WAIVED_SESSION = "s-accrual-waived-edited";
+
+  /** payout-retirement's row shape, with an operator's edited amount. */
+  function editedDeductionRow(marker: string, amount: number): unknown[] {
+    return [
+      KEVIN,
+      `Feedback deduction — late submission ${marker}`,
+      "Math",
+      45_000,
+      0.5,
+      "60 mins",
+      0,
+      amount,
+    ];
+  }
+
+  function retirementSheet(
+    grid: unknown[][],
+    tabs = [{ sheetId: 11, title: TEST_TARGET.deductionsSheetName, index: 0 }],
+  ): PayoutRetirementSheetOps {
+    return {
+      async listSheetProperties() {
+        return tabs;
+      },
+      async fetchRows() {
+        return grid.map((row) => [...row]);
+      },
+      async batchUpdate(_email: string, _spreadsheetId: string, requests: unknown[]) {
+        for (const request of requests as {
+          deleteDimension: { range: { startIndex: number; endIndex: number } };
+        }[]) {
+          grid.splice(
+            request.deleteDimension.range.startIndex,
+            request.deleteDimension.range.endIndex - request.deleteDimension.range.startIndex,
+          );
+        }
+      },
+    } as unknown as PayoutRetirementSheetOps;
+  }
+
+  /** A waived deduction whose written row still sits on its prior-window run. */
+  async function seedWaivedWrittenDeduction(): Promise<string> {
+    const at = new Date(`${PRIOR_CLASS_DAY}T03:00:00.000Z`);
+    const [session] = await handle.db.insert(schema.postClassSessions).values({
+      wiseSessionId: WAIVED_SESSION,
+      wiseClassId: "class-1",
+      className: "Math",
+      canonicalTutorKey: "kevin",
+      canonicalTutorName: "Kevin",
+      scheduledStartAt: at,
+      scheduledEndAt: at,
+      deadlineAt: at,
+      finalStatus: "ENDED",
+      eligible: true,
+      sourceStatus: "ready",
+      enforcementMode: "live",
+    }).returning({ id: schema.postClassSessions.id });
+    const [deduction] = await handle.db.insert(schema.postClassDeductions).values({
+      sessionId: session.id,
+      status: "waived",
+      amountMinor: 10_000,
+      defaultFinanceMonth: `${PRIOR_ANCHOR_YEAR_MONTH}-01`,
+      decisionByEmail: "reviewer@example.com",
+      decisionAt: at,
+      waiverCategory: "other",
+      waiverNote: "Waived after its row was written.",
+    }).returning({ id: schema.postClassDeductions.id });
+    const [run] = await handle.db.insert(schema.postClassPayoutRuns).values({
+      anchorMonth: `${PRIOR_ANCHOR_YEAR_MONTH}-01`,
+      windowStart: `${addMonths(PRIOR_ANCHOR_YEAR_MONTH, -1)}-26`,
+      windowEnd: `${PRIOR_ANCHOR_YEAR_MONTH}-25`,
+      status: "partial",
+    }).returning({ id: schema.postClassPayoutRuns.id });
+    const [line] = await handle.db.insert(schema.postClassPayoutRunLines).values({
+      runId: run.id,
+      deductionId: deduction.id,
+      sessionId: session.id,
+      sourceIdentity: `deduction:${deduction.id}`,
+      rowSignature: PRIOR_MARKER,
+      canonicalTutorKey: "kevin",
+      tutorName: "Kevin",
+      wiseSessionId: WAIVED_SESSION,
+      scheduledStartAt: at,
+      scheduledEndAt: at,
+      deadlineAt: at,
+      amountMinor: -10_000,
+      matchStatus: "matched",
+      writeStatus: "written",
+      writtenAt: at,
+      insertedRowNumber: 4,
+      idempotencyKey: `line:${deduction.id}`,
+    }).returning({ id: schema.postClassPayoutRunLines.id });
+    return line.id;
+  }
+
+  async function seedContainmentFixtures(): Promise<{ grid: unknown[][]; lineId: string }> {
+    await seedKevinLedgerMapping();
+    await seedApprovedDeduction({
+      wiseSessionId: "s-accrual-unrelated",
+      endsAtDay: DAY_A,
+      student: "Grace Hopper",
+    });
+    const lineId = await seedWaivedWrittenDeduction();
+    // Someone hand-edited the waived row's amount from -100 to -50.
+    const grid = [...sheetGrid(), editedDeductionRow(PRIOR_MARKER, -50)];
+    return { grid, lineId };
+  }
+
+  async function lineRetiredAt(lineId: string): Promise<Date | null> {
+    const [row] = await handle.db.select({ retiredAt: schema.postClassPayoutRunLines.retiredAt })
+      .from(schema.postClassPayoutRunLines)
+      .where(eq(schema.postClassPayoutRunLines.id, lineId));
+    return row.retiredAt;
+  }
+
+  it("keeps charging unrelated tutors past a per-row skip, and still fails the job", async () => {
+    const { grid, lineId } = await seedContainmentFixtures();
+
+    process.env.POST_CLASS_AUTO_APPROVE_ENABLED = "true";
+    try {
+      const result = await runPayoutAccrualPass(appDb(), {
+        gateway: fakeGateway(grid).gateway,
+        retirementSheetOps: retirementSheet(grid),
+        resolveGoogleTarget: () => TEST_TARGET,
+        now: () => MID_WINDOW.getTime(),
+      }, MID_WINDOW);
+
+      // The unrelated approved deduction was appended in this same tick.
+      expect(deductionRows(grid)).toHaveLength(2);
+      expect(deductionRows(grid).some((row) =>
+        String(row[1]).includes(`BGS-PAYOUT ${ANCHOR_YEAR_MONTH} `))).toBe(true);
+      // The edited row is untouched and its line stays on the ledger.
+      const edited = grid.find((row) => String(row[1]).includes(PRIOR_MARKER));
+      expect(edited?.[7]).toBe(-50);
+      expect(await lineRetiredAt(lineId)).toBeNull();
+
+      expect(result.retirementSkips).toEqual([{
+        wiseSessionId: WAIVED_SESSION,
+        reason: expect.stringMatching(/sheet amount/u),
+      }]);
+      const response = payoutJobResponse(result, { skipped: "window-not-ended" });
+      expect(response.ok).toBe(false);
+      expect("error" in response ? response.error : "").toContain(WAIVED_SESSION);
+    } finally {
+      delete process.env.POST_CLASS_AUTO_APPROVE_ENABLED;
+    }
+  });
+
+  it("still aborts the tick when the deductions tab itself is untrustworthy", async () => {
+    const { grid, lineId } = await seedContainmentFixtures();
+
+    process.env.POST_CLASS_AUTO_APPROVE_ENABLED = "true";
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(runPayoutAccrualPass(appDb(), {
+        gateway: fakeGateway(grid).gateway,
+        retirementSheetOps: retirementSheet(grid, []),
+        resolveGoogleTarget: () => TEST_TARGET,
+        now: () => MID_WINDOW.getTime(),
+      }, MID_WINDOW)).rejects.toThrow(/Payout retirement incomplete: deductions tab ambiguous/u);
+
+      // Only the pre-existing edited row; nothing new was appended.
+      expect(deductionRows(grid)).toHaveLength(1);
+      expect(await lineRetiredAt(lineId)).toBeNull();
+    } finally {
+      errorSpy.mockRestore();
+      delete process.env.POST_CLASS_AUTO_APPROVE_ENABLED;
+    }
   });
 });
 
