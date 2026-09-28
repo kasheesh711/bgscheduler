@@ -374,7 +374,7 @@ Scope is bounded twice (`autoChargeLowerBoundUtc`, `auto-approval.ts:51`-`57`): 
 
 **Ledger retirement (auto-un-charge, `payout-retirement.ts`).** Because charging is instant, evidence that arrives later and clears a violation must take the written row back **off** the ledger — by marker-located row deletion plus `retired_at`, never by netting a +฿100 correction (`:28`-`43`). Each tick retires live written lines inside scope whose deduction was waived or reversed, whose session became ineligible, or whose latest assessment on a source-ready session no longer finds an objective violation (`:95`-`164`). Deletes run in descending 50-row chunks; deletion is proven by readback before any line is retired; pending corrections on a retired line are superseded and written ones leave with the negative row; a hand-edited sheet amount is left untouched for Verify sheet to flag (`:285`-`290`); the pass stands down for a tick rather than fight a live publish lease (`:194`-`202`); and affected runs' versions are bumped so stale operator previews fail closed (`:413`-`417`). Retiring first is what keeps the no-netting invariant — a subsequent waive sees no live written line, so `createPayoutAdjustment` is never reached.
 
-**Accrual and finalize passes (`payout-accrual.ts`).** The accrual pass runs the sweep, then retirement (per-target retirement skips are reported but non-fatal, while tab-level stand-downs and errors abort the tick), then publishes the current window with `mode: "accrual"`, which skips the window-ended guard, skips the CSV/Drive leg entirely, and forces `partial` so it can never mint `published` while the window is open (`payout-run.ts:689`-`700`, `:716`-`720`, `:903`, `:940`-`947`). The finalize pass targets the **oldest** un-finalized ended run at or after the automation floor (`payout-repository.ts:423`-`447`), so a window that fails to finalize keeps being retried however many months pass; only when none exists does it fall back to the window anchored to today's own calendar month — the only branch that can create a run row, which is what stops it minting an empty `published` run for a window the system never observed (`payout-accrual.ts:156`-`197`). Both branches see the clock shifted back by a **3-Bangkok-day settlement lag** (`:49`-`58`): the feedback deadline is 23:59:59 two days after the class date, so the last classes of a window can still produce brand-new proven violations through the 27th.
+**Accrual and finalize passes (`payout-accrual.ts`).** The accrual pass runs the sweep, then retirement (any per-row skip, tab-level stand-down or error aborts the tick loudly before anything is charged), then publishes the current window with `mode: "accrual"`, which skips the window-ended guard, skips the CSV/Drive leg entirely, and forces `partial` so it can never mint `published` while the window is open (`payout-run.ts:689`-`700`, `:716`-`720`, `:903`, `:940`-`947`). The finalize pass targets the **oldest** un-finalized ended run at or after the automation floor (`payout-repository.ts:423`-`447`), so a window that fails to finalize keeps being retried however many months pass; only when none exists does it fall back to the window anchored to today's own calendar month — the only branch that can create a run row, which is what stops it minting an empty `published` run for a window the system never observed (`payout-accrual.ts:156`-`197`). Both branches see the clock shifted back by a **3-Bangkok-day settlement lag** (`:49`-`58`): the feedback deadline is 23:59:59 two days after the class date, so the last classes of a window can still produce brand-new proven violations through the 27th.
 
 A window still un-finalized once its anchor month has passed — or with no run row at all for the most recently ended window — is surfaced by the cron watchdog as a synthetic `post_class_payout_window` job (`payout-window-health.ts:50`-`87`; `src/lib/internal/cron-watchdog.ts:91`-`103`). The check is gated on the accrual cron actually having a schedule and ignores pre-floor windows (`payout-window-health.ts:102`-`110`).
 
@@ -477,51 +477,67 @@ The original formula backup and exact readback checks still apply.
   history-wide recheck lane guaranteed an assessment after a class's feedback deadline,
   and a late or short submission is only charged by such an assessment. Each collection
   run now also lists (`listDeadlineCrossedCandidates`) eligible sessions that are not
-  deleted in Wise or abandoned as missing, whose `deadline_at` has passed and whose
-  `last_assessed_at` is NULL or ≤ `deadline_at`, bounded below by `autoChargeLowerBoundUtc`
-  and ordered oldest deadline first. Lane priority is event → deadline → recheck → rolling.
+  deleted in Wise or abandoned as missing, whose `deadline_at` has passed without a
+  **chargeable** post-deadline assessment: one the collector made after the deadline on
+  source-ready, assessed evidence (`source_ready = true`, not a `reassess:` verdict-only
+  rerun). `last_assessed_at` is deliberately not used, because a batch that hit a global
+  source issue and `reassess.ts` both stamp it without producing anything that can charge.
+  A session qualifies when it is ready on its own evidence: `source_status = 'ready'`, or
+  demoted from ready by a global source issue (`source_status_before = 'ready'`), so an
+  outage cannot hide owed sessions. Rows non-ready for their own reasons (identity review,
+  form drift) are left to the recheck lane, which already sorts them first (REC-04), and
+  sessions whose on-time compliance is locked are skipped because nothing later can charge
+  them. The lane is bounded below by `autoChargeLowerBoundUtc` and ordered oldest deadline
+  first. A session whose detail fetch failed within `DEADLINE_LANE_RETRY_COOL_DOWN_MS`
+  (4 h; an open session-scoped source issue seen that recently) is rested and retried
+  afterwards, so a failing fetch cannot pin the head of the lane. Linked `detail_retry`
+  issues stay open after a REC-01 restore until the next successful fetch, which is why
+  this is a cool-down, not an exclusion. Lane priority is event → deadline → recheck → rolling.
   `selectPostClassSyncCandidates` reserves up to `min(20, floor(2·cap / 5))` detail slots
   for it (20 of 50), clamped so the three reservations never exceed the cap; extra deadline
   candidates compete for the remaining priority slots ahead of rolling discovery. Reminder
-  checkpoints never list the lane. A session whose detail fetch keeps failing stays at the
-  front of the lane, and keeps the watchdog red, until it is assessed or leaves the
-  charging scope.
+  checkpoints never list the lane.
 - **Deadline coverage watchdog.** A synthetic `post_class_deadline_coverage` job
   ("Feedback Deadline Coverage", `deadline-coverage.ts`) fails when any such session is
   more than `FEEDBACK_DEADLINE_COVERAGE_THRESHOLD_HOURS` (12 h) past its deadline. It reads
-  the same predicate as the lane (`feedbackDeadlineUncoveredWhere`), so the two cannot
-  disagree, and it is armed only while the `post_class_feedback` collection cron has a
-  schedule. A failed read yields no entry rather than a failed sweep. Expect one alert and
-  one recovery right after deploy while any existing backlog in the charging scope drains.
+  the same base predicate as the lane (`feedbackDeadlineUncoveredWhere`), without the
+  lane's fetch-failure cool-down, so a session whose fetch keeps failing keeps counting as
+  owed. It is armed only while the `post_class_feedback` collection cron has a schedule. A
+  failed read yields no entry rather than a failed sweep.
 - **Versioned auto-approve key.** The approve sweep's idempotency key is
   `auto-approve:<id>:v<version>`, like the reopen key. A deduction that is auto-approved,
   reopened when its proof lapses, and proven again is approved again exactly once instead
   of colliding with its first approval and staying in `pending_review`.
-- **Contained retirement skips.** A per-row retirement skip (a hand-edited sheet amount, a
-  missing or edited correction row, a row still present after deletion) no longer aborts
-  the accrual tick. The row stays on the ledger for Verify sheet or an operator, and other
-  tutors keep accruing. A waived deduction's pending correction on that row is **held**:
-  while unattended charging is on, `publishPayoutRun` never appends a correction whose
-  source line is still a retirement target (`selectRetirementTargets`), so an edited row is
-  never netted against an unverified amount (−50 + 100 = +50). The held correction keeps
-  the run `partial` and the job `ok: false` until an operator resolves the row; human-only
-  mode, which runs no retirement, still nets as before. The pass returns the skips as
-  `retirementSkips`, and
-  `payoutJobResponse` reports `ok: false` naming each Wise session and reason (the first
-  ten, then a count). Tab-level stand-downs (target unresolved, tab ambiguous or
-  unparseable, duplicate markers, readback unparseable) and thrown errors still abort.
+- **Retirement skips stay fatal (unchanged).** Every per-row retirement skip (a
+  hand-edited sheet amount, a missing or changed correction row, a row still present after
+  deletion) means the ledger no longer agrees with the database, so the accrual tick still
+  aborts before charging anything, and the job fails loudly until an operator resolves the
+  row. A "contain the skip and keep charging" variant was reviewed and rejected: it lets a
+  waived deduction's pending +฿100 correction net against an edited row (−50 + 100 = +50).
+  **Known limitation (pre-existing):** retirement only targets rows inside
+  `autoChargeLowerBoundUtc`, and does nothing while `POST_CLASS_AUTO_APPROVE_ENABLED` is
+  off. If such a row is still unresolved when its window leaves that scope, or when the flag
+  is turned off, the finalize pass nets its pending correction. Resolve an edited row
+  (restore −100 or delete it) while the retirement alert is live. A durable hold needs an
+  operator resolution path for partial runs and is a follow-up.
 - **Evidence-exclusion visibility and reopen scope.** `countEvidenceExcludedApprovedDeductions`
   counts unwritten approvals on eligible, source-ready sessions whose current evidence no
   longer proves a violation: the rows `selectPayoutRunCandidates` drops without a trace.
   The accrual and finalize passes attach a non-zero count as `evidenceExcludedApproved`,
   and `payoutJobResponse` then reports `ok: false`. This is deliberately not a publish
   gate (`computePayoutRunCoverage` and `assertPayoutRunPublishable` are unchanged), so one
-  stuck approval cannot freeze other tutors' charges. The auto-reopen sweep scans only
-  approvals with no live written payout line (`noLiveWrittenPayoutLine`, shared with the
-  count); written rows belong to retirement.
-- **Exemption hardening.** After a status label, a hyphen separates only when spaced or
-  trailing (`LABEL_SEPARATOR`), so glued compounds such as "Absent-minded errors" or
-  "Cancelled-out terms" no longer exempt a class. `MEDICAL_LEAVE` rejects first-person and
-  teacher subjects ("I took sick leave", "My teacher took sick leave", "Kru Ann took sick
-  leave"), which report the tutor's own leave. Every previously recognised absence and
-  cancellation phrase still exempts.
+  stuck approval cannot freeze other tutors' charges. If the count itself fails, charging
+  continues and the job reports `ok: false` (`evidenceExclusionCheckFailed`), so a broken
+  check cannot quietly switch itself off. The auto-reopen sweep scans only approvals with
+  no live written payout line (`noLiveWrittenPayoutLine`, shared with the count); written
+  rows belong to retirement.
+- **Exemption hardening.** After a status label a hyphen (including unspaced en/em dashes,
+  which `normalize` folds to "-") is still a separator, as in "Absent-sick", "Absent-out
+  of town" and "Cancelled-parent request". Each label excludes only its own lesson-prose
+  compound: "absent-minded…" (`ABSENT_SEPARATOR`) and "cancelled-out"
+  (`CANCEL_SEPARATOR`). `MEDICAL_LEAVE` rejects first-person pronoun and teacher subjects
+  ("I took sick leave", "My teacher took sick leave", "Kru Ann took sick leave"), which
+  report the tutor's own leave. A possessive "My student took sick leave" still exempts.
+  Only phrases of those three shapes changed result.
+- **Versioned ineligible-waive key.** The ineligible-waive sweep's key is
+  `ineligible-waive:<id>:v<version>`, for the same reason as the approve key.

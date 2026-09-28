@@ -4,26 +4,31 @@ import type { SessionDeductionExemption, SessionEligibilityInput } from "./types
 const ABSENT = "(?:absent|absence|absense|abcent|abesent)";
 const STUDENT = "(?:(?:the\\s+)?(?:student|pupil|learner|child)|he|she|they)";
 /**
- * After a status label a hyphen separates only as a spaced dash ("Absent - left
- * early") or a trailing one ("Absent-"); glued to the next word it is a compound
- * ("absent-minded"), i.e. lesson prose. Note `normalize` folds en/em dashes to "-".
+ * After a status label a hyphen is a separator ("Absent - left early",
+ * "Absent-sick", "Absent-out of town", "Cancelled-parent request"; `normalize`
+ * folds the usually unspaced en/em dashes to "-") unless it forms that label's
+ * known lesson-prose compound: "absent-minded(ness/ly)" or "cancelled-out".
+ * Each label excludes only its own compound, so "Absent-out sick" still counts.
  */
-const LABEL_SEPARATOR = "(?:\\s*[:;(]|\\s+-|-(?=\\s|$))";
-const STATUS_END = `(?:$|${LABEL_SEPARATOR}|\\s+(?:student\\b|today\\b|this\\b|due\\b|because\\b|from (?:the )?(?:class|session|lesson)\\b))`;
+const ABSENT_SEPARATOR = "(?:\\s*[:;(]|\\s*-(?!minded))";
+const CANCEL_SEPARATOR = "(?:\\s*[:;(]|\\s*-(?!out\\b))";
+const STATUS_END = `(?:$|${ABSENT_SEPARATOR}|\\s+(?:student\\b|today\\b|this\\b|due\\b|because\\b|from (?:the )?(?:class|session|lesson)\\b))`;
 const ABSENT_LABEL = new RegExp(`^(?:${STUDENT}\\s+(?:(?:is|was|are|were)\\s+)?)?${ABSENT}${STATUS_END}`, "u");
 const NO_SHOW_LABEL = /^(?:(?:(?:the\s+)?(?:student|pupil|learner|child)|he|she|they)\s+(?:(?:is|was|a)\s+)*)?(?:no[\s-]*show\b|(?:did\s+not|didn't)\s+show\s+up\b|(?:did\s+not|didn't)\s+(?:attend|join)(?:$|\s+(?:(?:the|this)\s+)?(?:class|session|lesson|link|zoom|today)\b))/u;
 const CANCEL_LABEL = new RegExp(
-  `^(?:(?:last[ -]minute|late)\\s+)?(?:cancelled|canceled|cancellation)(?:$|${LABEL_SEPARATOR}|\\s+(?:by\\b|today\\b|last\\b|on\\b|due\\b|because\\b|class\\b|session\\b|lesson\\b))`,
+  `^(?:(?:last[ -]minute|late)\\s+)?(?:cancelled|canceled|cancellation)(?:$|${CANCEL_SEPARATOR}|\\s+(?:by\\b|today\\b|last\\b|on\\b|due\\b|because\\b|class\\b|session\\b|lesson\\b))`,
   "u",
 );
 const CLASS_CANCELLED = /^(?:the\s+)?(?:class|session|lesson)\s+(?:(?:is|was|has been|had been)\s+)?(?:cancelled|canceled)\b/u;
 const OTHER_TIME = /\b(?:(?:last|previous|next)\s+(?:week|class|session|lesson|month|time)|yesterday|tomorrow|upcoming|from school|at school)\b/u;
 /**
- * First-person and teacher subjects report the tutor's own leave ("I took sick
- * leave", "My teacher took sick leave", "Kru Ann took sick leave"), never the
- * student's absence. The teacher word may be any of the first three subject words.
+ * First-person pronoun and teacher subjects report the tutor's own leave ("I
+ * took sick leave", "My teacher took sick leave", "Kru Ann took sick leave"),
+ * never the student's absence. A possessive is not a pronoun subject: "My
+ * student took sick leave" is still the student. The teacher word may be any
+ * of the first three subject words.
  */
-const NOT_TUTOR_SUBJECT = "(?!(?:i|we|me|my|our|us)\\b)(?!(?:[a-z][a-z'-]*\\s+){0,2}(?:(?:teacher|tutor|instructor|kru)\\b|ครู))";
+const NOT_TUTOR_SUBJECT = "(?!(?:i|we|me|us)\\b)(?!(?:[a-z][a-z'-]*\\s+){0,2}(?:(?:teacher|tutor|instructor|kru)\\b|ครู))";
 const MEDICAL_LEAVE = new RegExp(
   `^(?:(?:the\\s+)?student|he|she|${NOT_TUTOR_SUBJECT}[a-z][a-z'-]*(?:\\s+[a-z][a-z'-]*){0,2})\\s+(?:take|takes|took|is on|was on)\\s+(?:medical|sick)\\s+leave(?:$|\\s+(?:today|due|because)\\b)`,
   "u",

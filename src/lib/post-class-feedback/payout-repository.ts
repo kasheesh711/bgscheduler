@@ -333,7 +333,8 @@ export async function computePayoutRunCoverage(
  *
  * The reopen sweep, which runs at the start of every accrual/finalize pass,
  * normally returns such an approval to review first, so a non-zero count means
- * it could not (e.g. a closed finance period refused the reopen). They are
+ * it could not (the reopen action refuses while a publish operation is active,
+ * while the run is closed, or when a write outcome is uncertain). They are
  * surfaced LOUDLY through `payoutJobResponse` rather than as a publish hard
  * gate, because one stuck approval must not freeze every other tutor's
  * charges -- the same containment principle as retirement skips. Written
