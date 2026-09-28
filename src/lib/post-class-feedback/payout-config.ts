@@ -203,3 +203,8 @@ export const PAYOUT_AUTO_APPROVE_ACTOR_EMAIL = "system:post-class-auto-approve";
  * human decision in the review UI.
  */
 export const PAYOUT_AUTO_CHARGE_FLOOR_BANGKOK = "2026-08-26";
+
+/** Pause unattended approvals, ledger retirement and publication during recovery. */
+export function payoutAutomationPaused(env: PayoutEnvironment = process.env): boolean {
+  return env.POST_CLASS_PAYOUT_AUTOMATION_PAUSED === "true";
+}

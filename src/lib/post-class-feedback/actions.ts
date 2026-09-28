@@ -1,7 +1,9 @@
 import "server-only";
 
-import { and, desc, eq, gt, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, eq, gt, isNotNull, isNull, or, sql } from "drizzle-orm";
 
+import { assertPostClassDeductionCandidateStillActionable, loadCurrentDeductionEvidence } from "./deduction-evidence";
+export { assertPostClassDeductionCandidateStillActionable } from "./deduction-evidence";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 
@@ -76,22 +78,6 @@ type FinancePeriodChangeInput = {
 
 type FinancePeriodStatus = "open" | "closed";
 
-interface DeductionCandidateEvidence {
-  sessionEligible: boolean;
-  sessionSourceStatus: string;
-  formMappingValid: boolean;
-  hasBlockingGlobalSourceIssue: boolean;
-  assessment: {
-    sourceReady: boolean;
-    sourceStatus: string;
-    enforcementMode: string;
-    objectiveViolation: boolean;
-    rawOnTime: boolean;
-    adjustedCompliant: boolean;
-    policyApplies: boolean;
-  } | null;
-}
-
 /** Pure invariant used by the approval path and focused concurrency tests. */
 export function assertPostClassApprovalPeriodInvariant(input: {
   financePeriodId: string | null;
@@ -149,38 +135,6 @@ export function assertPostClassProcessWriteInvariant(input: {
     throw new PostClassValidationError(
       "Publish and verify this deduction in the payout ledger before processing it.",
     );
-  }
-}
-
-export function assertPostClassDeductionCandidateStillActionable(
-  evidence: DeductionCandidateEvidence,
-): void {
-  if (!evidence.sessionEligible) {
-    throw new PostClassValidationError("The session is no longer eligible for a deduction.");
-  }
-  if (
-    evidence.sessionSourceStatus !== "ready" ||
-    !evidence.formMappingValid ||
-    evidence.hasBlockingGlobalSourceIssue ||
-    !evidence.assessment ||
-    !evidence.assessment.sourceReady ||
-    evidence.assessment.sourceStatus !== "ready"
-  ) {
-    throw new PostClassValidationError(
-      "Current Wise evidence is paused or ambiguous; resync before continuing.",
-    );
-  }
-  if (
-    evidence.assessment.enforcementMode !== "live" ||
-    !evidence.assessment.policyApplies
-  ) {
-    throw new PostClassValidationError("The current assessment is outside live enforcement.");
-  }
-  if (evidence.assessment.rawOnTime || evidence.assessment.adjustedCompliant) {
-    throw new PostClassValidationError("The session is compliant and cannot be deducted.");
-  }
-  if (!evidence.assessment.objectiveViolation) {
-    throw new PostClassValidationError("The current assessment is no longer an objective violation.");
   }
 }
 
@@ -327,15 +281,6 @@ async function assertApprovalPeriodOpen(
   });
 }
 
-function policyApplies(details: unknown): boolean {
-  return Boolean(
-    details &&
-    typeof details === "object" &&
-    !Array.isArray(details) &&
-    (details as Record<string, unknown>).policyApplies === true,
-  );
-}
-
 async function revalidateDeductionCandidate(
   db: Database,
   deduction: typeof schema.postClassDeductions.$inferSelect,
@@ -354,62 +299,9 @@ async function revalidateDeductionCandidate(
     where id = 'default'
     for share
   `);
-  const [[session], [settings], [blockingIssue]] = await Promise.all([
-    db.select({
-      eligible: schema.postClassSessions.eligible,
-      sourceStatus: schema.postClassSessions.sourceStatus,
-    }).from(schema.postClassSessions)
-      .where(eq(schema.postClassSessions.id, deduction.sessionId))
-      .limit(1),
-    db.select({
-      policyVersion: schema.postClassSettings.policyVersion,
-      mappingVersion: schema.postClassSettings.formMappingVersion,
-      formMappingValid: schema.postClassSettings.formMappingValid,
-    }).from(schema.postClassSettings).where(eq(schema.postClassSettings.id, "default")).limit(1),
-    db.select({ id: schema.postClassSourceIssues.id })
-      .from(schema.postClassSourceIssues)
-      .where(and(
-        eq(schema.postClassSourceIssues.scope, "global"),
-        eq(schema.postClassSourceIssues.status, "open"),
-        eq(schema.postClassSourceIssues.blocksEnforcement, true),
-      )).limit(1),
-  ]);
-  if (!session || !settings) {
-    throw new PostClassValidationError("Current deduction evidence could not be verified.");
-  }
-  const [assessment] = await db.select({
-    sourceReady: schema.postClassAssessments.sourceReady,
-    sourceStatus: schema.postClassAssessments.sourceStatus,
-    enforcementMode: schema.postClassAssessments.enforcementMode,
-    objectiveViolation: schema.postClassAssessments.objectiveViolation,
-    rawOnTime: schema.postClassAssessments.rawOnTime,
-    adjustedCompliant: schema.postClassAssessments.adjustedCompliant,
-    details: schema.postClassAssessments.details,
-  }).from(schema.postClassAssessments).where(and(
-    eq(schema.postClassAssessments.sessionId, deduction.sessionId),
-    eq(schema.postClassAssessments.policyVersion, settings.policyVersion),
-    eq(schema.postClassAssessments.mappingVersion, settings.mappingVersion),
-  )).orderBy(
-    desc(schema.postClassAssessments.assessedAt),
-    desc(schema.postClassAssessments.createdAt),
-  ).limit(1);
-  assertPostClassDeductionCandidateStillActionable({
-    sessionEligible: session.eligible,
-    sessionSourceStatus: session.sourceStatus,
-    formMappingValid: settings.formMappingValid,
-    hasBlockingGlobalSourceIssue: Boolean(blockingIssue),
-    assessment: assessment
-      ? {
-        sourceReady: assessment.sourceReady,
-        sourceStatus: assessment.sourceStatus,
-        enforcementMode: assessment.enforcementMode,
-        objectiveViolation: assessment.objectiveViolation,
-        rawOnTime: assessment.rawOnTime,
-        adjustedCompliant: assessment.adjustedCompliant,
-        policyApplies: policyApplies(assessment.details),
-      }
-      : null,
-  });
+  const evidence = (await loadCurrentDeductionEvidence(db, [deduction.sessionId])).get(deduction.sessionId);
+  if (!evidence) throw new PostClassValidationError("Current deduction evidence could not be verified.");
+  assertPostClassDeductionCandidateStillActionable(evidence);
 }
 
 async function existingActionByKey(db: Database, key: string) {

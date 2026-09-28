@@ -289,21 +289,16 @@ export function PostClassFeedbackWorkspace() {
             {refreshing ? "Refreshing…" : "Refresh"}
           </Button>
           {payload?.payoutGoogle
-          && (!payload.payoutGoogle.driveReady || !payload.payoutGoogle.sheetsWriteReady) ? (
+          && (payload.payoutGoogle.reconnectRequired || !payload.payoutGoogle.driveReady || !payload.payoutGoogle.sheetsWriteReady) ? (
             <Button
               variant="outline"
               className="border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100"
-              title={`${payload.payoutGoogle.connectedEmail} is missing ${
-                !payload.payoutGoogle.sheetsWriteReady && !payload.payoutGoogle.driveReady
-                  ? "Sheets write and Drive access"
-                  : !payload.payoutGoogle.sheetsWriteReady
-                    ? "Sheets write access"
-                    : "Drive access"
-              }. Payout publishing will stay unavailable until Google is reconnected.`}
+              title={`${payload.payoutGoogle.connectedEmail}: ${payload.payoutGoogle.connectionError ?? "Reconnect Sheets and Drive access before publishing payouts."}`}
               onClick={() => signIn("google", { callbackUrl: "/post-class-feedback" }, {
                 prompt: "consent",
                 access_type: "offline",
                 scope: PAYOUT_RECONSENT_SCOPE,
+                login_hint: payload.payoutGoogle!.connectedEmail,
               })}
             >
               <ShieldAlert />

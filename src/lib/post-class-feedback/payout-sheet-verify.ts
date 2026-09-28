@@ -1,6 +1,10 @@
 import "server-only";
 
-import { and, eq, gte, inArray, isNotNull, isNull, lt, notLike } from "drizzle-orm";
+import { selectPayoutRunCandidates } from "./payout-repository";
+import { selectRetirementTargets, type RetirementTarget } from "./payout-retirement";
+import { deductionEvidenceIssue, loadCurrentDeductionEvidence } from "./deduction-evidence";
+
+import { and, eq, gte, lt } from "drizzle-orm";
 
 import { type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -14,6 +18,7 @@ import {
 import { payoutRunRangeUtc, payoutRunWindow } from "./payout-window";
 import {
   createGoogleMasterLedgerGateway,
+  type MasterLedgerGateway,
   createPayoutMaintenanceRateGate,
 } from "./payout-writer";
 
@@ -50,8 +55,10 @@ export interface PayoutSheetTutorRollup {
   expectedTotal: number;
   /** Signed THB sum of this tutor's app rows actually on the sheet. */
   sheetTotal: number;
-  /** Approved (human-decided) deductions still awaiting a publish. */
+  /** Approved and currently proven deductions still awaiting a publish. */
   unwrittenApproved: number;
+  excludedDeductions: number;
+  retirementRows: number;
 }
 
 export interface PayoutSheetVerifyResult {
@@ -68,6 +75,9 @@ export interface PayoutSheetVerifyResult {
   rows: PayoutSheetVerifyRow[];
   attention: PayoutSheetVerifyRow[];
   perTutor: PayoutSheetTutorRollup[];
+  unexpectedMarkers: string[];
+  retirements: RetirementTarget[];
+  exclusions: { deductionId: string; wiseSessionId: string; tutorName: string | null; status: string; reason: string }[];
 }
 
 function sheetStatusFor(
@@ -76,7 +86,7 @@ function sheetStatusFor(
 ): { status: PayoutSheetVerifyRow["sheetStatus"]; amount: number | null; rowNumber: number | null } {
   if (!row) return { status: "absent", amount: null, rowNumber: null };
   const amount = row.payoutAmount;
-  if (expectedAmount !== null && amount !== null && amount !== expectedAmount) {
+  if (expectedAmount !== null && amount !== expectedAmount) {
     return { status: "amount-changed", amount, rowNumber: row.rowNumber };
   }
   return { status: "present", amount, rowNumber: row.rowNumber };
@@ -97,16 +107,19 @@ export function payoutSheetAttentionRows(rows: PayoutSheetVerifyRow[]): PayoutSh
 export async function verifyPayoutSheet(
   db: Database,
   anchorMonth: string,
+  suppliedGateway?: MasterLedgerGateway,
 ): Promise<PayoutSheetVerifyResult> {
-  const target = requirePayoutGoogleTarget({ forWrite: false });
-  const gateway = createGoogleMasterLedgerGateway({
-    email: target.connectedEmail,
-    spreadsheetId: target.masterSpreadsheetId,
-    sourceSheetName: target.sourceSheetName,
-    deductionsSheetName: target.deductionsSheetName,
-    // Health-read pacing: never contend with a concurrent publish.
-    pace: createPayoutMaintenanceRateGate(),
-  });
+  const gateway = suppliedGateway ?? (() => {
+    const target = requirePayoutGoogleTarget({ forWrite: false });
+    return createGoogleMasterLedgerGateway({
+      email: target.connectedEmail,
+      spreadsheetId: target.masterSpreadsheetId,
+      sourceSheetName: target.sourceSheetName,
+      deductionsSheetName: target.deductionsSheetName,
+      // Health-read pacing: never contend with a concurrent publish.
+      pace: createPayoutMaintenanceRateGate(),
+    });
+  })();
   const table = parseMasterPayoutSheet(await gateway.readDeductionGrid());
   if (!table) throw new Error("The deductions tab could not be parsed (no header row).");
   collectMasterMarkers(table); // throws loudly on duplicated markers
@@ -125,6 +138,10 @@ export async function verifyPayoutSheet(
     ? await db.select().from(schema.postClassPayoutAdjustments)
       .where(eq(schema.postClassPayoutAdjustments.runId, run.id))
     : [];
+  const knownMarkers = new Set([...lines, ...adjustments].map(row => row.rowSignature));
+  const unexpectedMarkers = [...markerRows.keys()].filter(marker =>
+    (marker.startsWith(`BGS-PAYOUT ${anchorMonth} `) || marker.startsWith(`BGS-PAYOUT-CORRECTION ${anchorMonth} `))
+    && !knownMarkers.has(marker));
   const retiredWrittenDeductionIds = new Set(
     lines
       .filter((line) => line.writeStatus === "written" && line.retiredAt !== null)
@@ -170,45 +187,36 @@ export async function verifyPayoutSheet(
     });
   }
 
-  // Human-approved, unwritten deductions still in the candidate set — the
-  // only rows a deliberate publish of this window would append today.
   const window = payoutRunWindow(anchorMonth);
   const { start, endExclusive } = payoutRunRangeUtc(window);
-  const liveWrittenDeductionIds = new Set(
-    lines
-      .filter((line) => line.writeStatus === "written" && line.retiredAt === null)
-      .map((line) => line.deductionId),
-  );
-  const candidates = await db.select({
-    deductionId: schema.postClassDeductions.id,
-    tutorName: schema.postClassSessions.canonicalTutorName,
-    wiseSessionId: schema.postClassSessions.wiseSessionId,
-  }).from(schema.postClassDeductions)
-    .innerJoin(
-      schema.postClassSessions,
-      eq(schema.postClassDeductions.sessionId, schema.postClassSessions.id),
-    )
-    .where(and(
-      gte(schema.postClassSessions.scheduledEndAt, start),
-      lt(schema.postClassSessions.scheduledEndAt, endExclusive),
-      eq(schema.postClassDeductions.status, "approved"),
-      isNotNull(schema.postClassDeductions.decisionByEmail),
-      notLike(schema.postClassDeductions.decisionByEmail, "system:%"),
-      eq(schema.postClassSessions.eligible, true),
-      eq(schema.postClassSessions.sourceStatus, "ready"),
-      isNull(schema.postClassSessions.wiseDeletedAt),
+  const liveWrittenDeductionIds = new Set(lines.filter(line => line.writeStatus === "written" && line.retiredAt === null).map(line => line.deductionId));
+  const candidates = await selectPayoutRunCandidates(db, window);
+  const retirements = await selectRetirementTargets(db, new Date(), anchorMonth);
+  const deductions = await db.select({
+    deductionId: schema.postClassDeductions.id, sessionId: schema.postClassSessions.id,
+    wiseSessionId: schema.postClassSessions.wiseSessionId, tutorName: schema.postClassSessions.canonicalTutorName,
+    status: schema.postClassDeductions.status,
+  }).from(schema.postClassDeductions).innerJoin(schema.postClassSessions,
+    eq(schema.postClassDeductions.sessionId, schema.postClassSessions.id)).where(and(
+      gte(schema.postClassSessions.scheduledEndAt, start), lt(schema.postClassSessions.scheduledEndAt, endExclusive),
     ));
+  const candidateIds = new Set(candidates.map(c => c.deductionId));
+  const excluded = deductions.filter(d => !candidateIds.has(d.deductionId) && !liveWrittenDeductionIds.has(d.deductionId));
+  const evidence = await loadCurrentDeductionEvidence(db, excluded.map(d => d.sessionId));
+  const exclusions = excluded.map(({ sessionId, ...d }) => ({ ...d,
+    reason: d.status !== "approved" ? d.status : deductionEvidenceIssue(evidence.get(sessionId)) ?? "Decision actor or reversal excludes this approval.",
+  }));
   for (const candidate of candidates) {
     if (liveWrittenDeductionIds.has(candidate.deductionId)) continue;
     rows.push({
       kind: "unwritten-candidate",
       tutorName: candidate.tutorName ?? "(unnamed)",
       wiseSessionId: candidate.wiseSessionId,
-      dbStatus: "approved (human), no ledger row yet",
+      dbStatus: "approved, no ledger row yet",
       sheetStatus: "n/a",
       sheetRowNumber: null,
       sheetAmount: null,
-      expectedAmount: null,
+      expectedAmount: candidate.amountMinor / 100,
       marker: "",
     });
   }
@@ -226,6 +234,8 @@ export async function verifyPayoutSheet(
       expectedTotal: 0,
       sheetTotal: 0,
       unwrittenApproved: 0,
+      excludedDeductions: 0,
+      retirementRows: 0,
     };
     perTutorMap.set(tutorName, created);
     return created;
@@ -246,8 +256,14 @@ export async function verifyPayoutSheet(
     }
   }
 
+  for (const row of exclusions) rollup(row.tutorName ?? "(unnamed)").excludedDeductions += 1;
+  for (const row of retirements) rollup(row.tutorName ?? "(unnamed)").retirementRows += 1;
+
   return {
+    unexpectedMarkers,
     anchorMonth,
+    retirements,
+    exclusions,
     checkedAt: new Date().toISOString(),
     sheetRowCount: table.rows.length,
     summary: {

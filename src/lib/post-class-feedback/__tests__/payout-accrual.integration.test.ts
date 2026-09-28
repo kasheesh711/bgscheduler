@@ -25,6 +25,8 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 
 vi.mock("server-only", () => ({}));
 
+import { seedPayoutAssessment } from "@/tests/integration/payout-fixtures";
+
 import { startTestDb, stopTestDb, truncateAll } from "@/tests/integration/db-helper";
 import {
   runPayoutAccrualPass,
@@ -183,6 +185,7 @@ async function seedApprovedDeduction(input: {
     decisionByEmail: "reviewer@example.com",
     decisionAt: at,
   }).returning({ id: schema.postClassDeductions.id });
+  await seedPayoutAssessment(appDb(), session.id);
   return deduction.id;
 }
 

@@ -11,7 +11,7 @@
 
 import fs from "node:fs";
 
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -52,7 +52,7 @@ async function main(): Promise<void> {
   if (process.argv.includes("--help") || process.argv.includes("-h")) {
     console.log(
       "Usage: npm run payout:repoint-workbooks --"
-      + " [--backup .payout-ops/formulas.json] [--commit]",
+      + " [--backup .payout-ops/formulas.json] [--spreadsheet-id ID] [--include-inactive] [--commit]",
     );
     return;
   }
@@ -62,9 +62,15 @@ async function main(): Promise<void> {
   const backupPath = optionValue("--backup");
   if (commit && !backupPath) throw new Error("--backup is required with --commit.");
 
+  const spreadsheetId = optionValue("--spreadsheet-id");
+  const includeInactive = process.argv.includes("--include-inactive");
+  if (includeInactive && !spreadsheetId) throw new Error("--include-inactive requires one --spreadsheet-id.");
   const db = getDb();
   const workbooks = await db.select().from(schema.postClassTutorPayoutSheets)
-    .where(eq(schema.postClassTutorPayoutSheets.active, true))
+    .where(and(
+      spreadsheetId ? eq(schema.postClassTutorPayoutSheets.spreadsheetId, spreadsheetId) : undefined,
+      includeInactive ? undefined : eq(schema.postClassTutorPayoutSheets.active, true),
+    ))
     .orderBy(asc(schema.postClassTutorPayoutSheets.canonicalKey));
   if (workbooks.length === 0) throw new Error("The active payout workbook registry is empty.");
   if (new Set(workbooks.map((row) => row.spreadsheetId)).size !== workbooks.length) {

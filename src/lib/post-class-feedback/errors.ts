@@ -1,5 +1,6 @@
 export class PostClassConflictError extends Error {
-  constructor(message = "This record changed. Refresh and try again.") {
+  constructor(message = "This record changed. Refresh and try again.",
+    readonly retryableReason?: "sync_active" | "lease_held" | "stale_preview") {
     super(message);
     this.name = "PostClassConflictError";
   }

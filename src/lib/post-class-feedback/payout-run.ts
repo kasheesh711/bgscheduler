@@ -939,13 +939,8 @@ export async function publishPayoutRun(
     csvError,
     now: operationNow,
     skipCsv: mode === "accrual",
-    // An in-window accrual pass can never mint `published`: forcing partial
-    // whenever the window has not yet ended makes that mathematically true
-    // regardless of how complete this pass's obligations are, so the run can
-    // never oscillate partial -> published -> partial as deductions accrue.
-    forcePartial: mode === "accrual" && payoutBangkokDate(operationNow) <= window.windowEnd
-      ? true
-      : (!acquired.selectionComplete || stoppedEarly),
+    // Recovery accrual against an ended window must also leave finalization open.
+    forcePartial: mode === "accrual" || !acquired.selectionComplete || stoppedEarly,
   });
   const snapshot = await readPayoutRunPreview(db, {
     window,

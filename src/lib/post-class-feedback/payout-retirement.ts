@@ -61,7 +61,7 @@ export interface PayoutRetirementResult {
   skippedReason: string | null;
 }
 
-interface RetirementTarget {
+export interface RetirementTarget {
   lineId: string;
   runId: string;
   deductionId: string;
@@ -92,15 +92,22 @@ function emptyResult(skippedReason: string | null): PayoutRetirementResult {
  * cleared arm keeps a source-health blip from un-charging anything — only a
  * trustworthy re-decision releases a written row.
  */
-async function selectRetirementTargets(
+export async function selectRetirementTargets(
   db: Database,
   now: Date,
+  anchorMonth?: string,
 ): Promise<RetirementTarget[]> {
   const latestAssessmentClear = sql<boolean>`coalesce((
-    select a.objective_violation = false
+    select a.objective_violation = false and a.source_ready = true and a.source_status = 'ready'
+      and a.enforcement_mode = 'live' and a.details->>'policyApplies' = 'true'
+      and settings.form_mapping_valid = true
+      and not exists (select 1 from post_class_source_issues i
+        where i.scope = 'global' and i.status = 'open' and i.blocks_enforcement = true)
     from post_class_assessments a
+    join post_class_settings settings on settings.id = 'default'
+      and a.policy_version = settings.policy_version and a.mapping_version = settings.form_mapping_version
     where a.session_id = ${schema.postClassSessions.id}
-    order by a.assessed_at desc
+    order by a.assessed_at desc, a.created_at desc, a.id desc
     limit 1
   ), false)`;
   const rows = await db.select({
@@ -125,6 +132,8 @@ async function selectRetirementTargets(
       eq(schema.postClassDeductions.sessionId, schema.postClassSessions.id),
     )
     .where(and(
+      anchorMonth ? sql`${schema.postClassPayoutRunLines.runId} in
+        (select id from post_class_payout_runs where anchor_month = ${anchorMonth + "-01"}::date)` : undefined,
       eq(schema.postClassPayoutRunLines.writeStatus, "written"),
       isNull(schema.postClassPayoutRunLines.retiredAt),
       gte(schema.postClassSessions.scheduledEndAt, autoChargeLowerBoundUtc(now)),
@@ -178,6 +187,7 @@ export async function runPayoutLedgerRetirement(
   db: Database = getDb(),
   options: {
     now?: Date;
+    anchorMonth?: string;
     sheetOps?: PayoutRetirementSheetOps;
     resolveGoogleTarget?: () => PayoutGoogleTarget;
   } = {},
@@ -186,7 +196,7 @@ export async function runPayoutLedgerRetirement(
     return emptyResult("auto-charge disabled");
   }
   const now = options.now ?? new Date();
-  const targets = await selectRetirementTargets(db, now);
+  const targets = await selectRetirementTargets(db, now, options.anchorMonth);
   if (targets.length === 0) return emptyResult(null);
 
   // Never delete under someone else's live publish lease; the lease is short

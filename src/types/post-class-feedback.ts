@@ -408,6 +408,8 @@ export interface FeedbackSetupItem {
  * write. Null unless the viewer has the finance capability.
  */
 export interface FeedbackPayoutGoogleStatus {
+  reconnectRequired: boolean;
+  connectionError: string | null;
   connectedEmail: string;
   sheetsWriteReady: boolean;
   driveReady: boolean;

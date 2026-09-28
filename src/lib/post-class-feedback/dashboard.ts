@@ -12,10 +12,7 @@ import {
   todayBangkok,
 } from "@/lib/room-capacity/dates";
 
-import {
-  hasDriveFileScope,
-  hasSheetsWriteScope,
-} from "@/lib/sales-dashboard/google-oauth";
+import { payoutGoogleHealth } from "./payout-google-health";
 
 import type { FeedbackSubmitter } from "@/types/post-class-feedback";
 
@@ -762,7 +759,10 @@ export async function getPostClassFeedbackDashboard(
   // of `setup` — the payout handoff is not part of activation.
   const payoutGoogleEmail = payoutConnectedEmail();
   const [payoutToken] = canFinance
-    ? await db.select({ scope: schema.googleOAuthTokens.scope })
+    ? await db.select({ scope: schema.googleOAuthTokens.scope,
+      accessTokenCiphertext: schema.googleOAuthTokens.accessTokenCiphertext,
+      refreshTokenCiphertext: schema.googleOAuthTokens.refreshTokenCiphertext,
+      lastError: schema.googleOAuthTokens.lastError })
       .from(schema.googleOAuthTokens)
       .where(eq(schema.googleOAuthTokens.email, payoutGoogleEmail))
       .limit(1)
@@ -778,8 +778,7 @@ export async function getPostClassFeedbackDashboard(
     payoutGoogle: canFinance
       ? {
         connectedEmail: payoutGoogleEmail,
-        sheetsWriteReady: hasSheetsWriteScope(payoutToken?.scope),
-        driveReady: hasDriveFileScope(payoutToken?.scope),
+        ...payoutGoogleHealth(payoutToken),
       }
       : null,
     settings: {
