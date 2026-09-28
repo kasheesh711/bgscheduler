@@ -275,10 +275,13 @@ export interface PostClassParticipant {
 export interface PostClassSessionCandidate {
   sessionId: string;
   classId: string;
-  reason: "feedback_event" | "incomplete_recheck" | "rolling_window";
+  reason: "feedback_event" | "deadline_crossed" | "incomplete_recheck" | "rolling_window";
   scheduledStartAt?: Date | null;
   scheduledEndAt?: Date | null;
-  /** Durable queue ordering for bounded historical canonical rechecks. */
+  /**
+   * Durable queue ordering for bounded historical canonical rechecks; for a
+   * `deadline_crossed` candidate, the feedback deadline it crossed.
+   */
   recheckPriorityAt?: Date | null;
   /** Checkpoint PAST enumeration omitted this persisted obligation. */
   forceDetailRefresh?: boolean;

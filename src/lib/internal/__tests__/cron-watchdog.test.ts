@@ -6,9 +6,11 @@ import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
 import type { CronJobHealth } from "@/lib/data-health/types";
+import type { FeedbackDeadlineCoverage } from "@/lib/post-class-feedback/deadline-coverage";
 import type { PayoutWindowStaleness } from "@/lib/post-class-feedback/payout-window-health";
 import {
   buildWatchdogEmail,
+  DEADLINE_COVERAGE_JOB_KEY,
   PAYOUT_WINDOW_JOB_KEY,
   runCronWatchdog,
   sweepCronJobs,
@@ -211,6 +213,21 @@ function payoutWindow(overrides: Partial<PayoutWindowStaleness> = {}): PayoutWin
 
 function loadPayoutWindow(staleness: PayoutWindowStaleness | null) {
   return async () => staleness;
+}
+
+function deadlineCoverage(overrides: Partial<FeedbackDeadlineCoverage> = {}): FeedbackDeadlineCoverage {
+  return {
+    stale: true,
+    overdueCount: 3,
+    oldestDeadlineAt: new Date("2026-06-07T16:59:59.999Z"),
+    thresholdHours: 12,
+    detail: "3 eligible session(s) passed the feedback deadline more than 12 h ago without a post-deadline assessment (oldest deadline 2026-06-07T16:59:59.999Z); the collector's deadline_crossed lane is not keeping up.",
+    ...overrides,
+  };
+}
+
+function loadDeadlineCoverage(coverage: FeedbackDeadlineCoverage | null) {
+  return async () => coverage;
 }
 
 // ── sweepCronJobs ─────────────────────────────────────────────────────────
@@ -689,6 +706,101 @@ describe("runCronWatchdog", () => {
 
       expect(result).toMatchObject({ checked: 1, unhealthy: 1, alertsSent: 1 });
       expect(state.upserts[0].values).toMatchObject({ jobKey: "wise_snapshot" });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  // ── feedback deadline coverage entry (FU1) ──────────────────────────────
+  //
+  // The collection cron firing on time proves nothing about whether classes
+  // that crossed their feedback deadline were ever re-observed afterwards,
+  // which is what charging a late or short submission depends on.
+
+  it("alerts when eligible sessions sit unassessed more than 12 h past their feedback deadline", async () => {
+    const state = freshState();
+    const sender = makeSender();
+    const result = await runCronWatchdog(makeFakeDb(state), {
+      now: NOW,
+      sender,
+      loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", status: "healthy" })]),
+      loadPayoutWindow: loadPayoutWindow(null),
+      loadDeadlineCoverage: loadDeadlineCoverage(deadlineCoverage()),
+    });
+
+    expect(result).toMatchObject({ checked: 2, unhealthy: 1, alertsSent: 1, recoveries: 0 });
+    expect(state.upserts).toHaveLength(1);
+    expect(state.upserts[0].values).toMatchObject({
+      jobKey: DEADLINE_COVERAGE_JOB_KEY,
+      lastStatus: "failing",
+      lastAlertOutcome: "alerted",
+    });
+    const email = vi.mocked(sender.sendEmail).mock.calls[0][0];
+    expect(email.text).toContain("Feedback Deadline Coverage [failing, new]");
+    expect(email.text).toContain(deadlineCoverage().detail);
+  });
+
+  it("sends a recovery once the deadline backlog drains", async () => {
+    const state = freshState({
+      alertStates: [alertState({ jobKey: DEADLINE_COVERAGE_JOB_KEY })],
+    });
+    const sender = makeSender();
+    const result = await runCronWatchdog(makeFakeDb(state), {
+      now: NOW,
+      sender,
+      loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", status: "healthy" })]),
+      loadPayoutWindow: loadPayoutWindow(null),
+      loadDeadlineCoverage: loadDeadlineCoverage(deadlineCoverage({
+        stale: false,
+        overdueCount: 0,
+        oldestDeadlineAt: null,
+        detail: "No eligible session in the charging scope is more than 12 h past its feedback deadline without a post-deadline assessment.",
+      })),
+    });
+
+    expect(result).toMatchObject({ checked: 2, unhealthy: 0, alertsSent: 0, recoveries: 1 });
+    expect(state.updates[0]).toMatchObject({
+      lastStatus: "healthy",
+      lastAlertOutcome: "recovered",
+    });
+  });
+
+  it("adds no deadline coverage entry when the loader yields nothing", async () => {
+    const state = freshState();
+    const sender = makeSender();
+    const result = await runCronWatchdog(makeFakeDb(state), {
+      now: NOW,
+      sender,
+      loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", status: "healthy" })]),
+      loadPayoutWindow: loadPayoutWindow(null),
+      loadDeadlineCoverage: loadDeadlineCoverage(null),
+    });
+
+    expect(result).toMatchObject({ checked: 1, unhealthy: 0, alertsSent: 0 });
+    expect(sender.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("still sweeps every cron job when the deadline coverage check throws", async () => {
+    const state = freshState();
+    const sender = makeSender();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await runCronWatchdog(makeFakeDb(state), {
+        now: NOW,
+        sender,
+        loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", status: "failing" })]),
+        loadPayoutWindow: loadPayoutWindow(null),
+        loadDeadlineCoverage: async () => {
+          throw new Error("Feedback deadline coverage query returned no aggregate row.");
+        },
+      });
+
+      expect(result).toMatchObject({ checked: 1, unhealthy: 1, alertsSent: 1 });
+      expect(state.upserts[0].values).toMatchObject({ jobKey: "wise_snapshot" });
+      expect(errorSpy).toHaveBeenCalledWith(
+        "Cron watchdog could not evaluate feedback deadline coverage",
+        expect.any(Error),
+      );
     } finally {
       errorSpy.mockRestore();
     }

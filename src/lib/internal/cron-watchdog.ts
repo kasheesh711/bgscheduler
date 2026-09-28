@@ -30,6 +30,11 @@ import { getCronJobsHealth } from "@/lib/data-health/dashboard";
 import type { CronJobHealth, CronJobStatus } from "@/lib/data-health/types";
 import { APP_BASE_URL } from "@/lib/leave-requests/config";
 import {
+  loadFeedbackDeadlineCoverage,
+  POST_CLASS_COLLECTION_JOB_KEY,
+  type FeedbackDeadlineCoverage,
+} from "@/lib/post-class-feedback/deadline-coverage";
+import {
   loadPayoutWindowStaleness,
   PAYOUT_ACCRUAL_JOB_KEY,
   type PayoutWindowStaleness,
@@ -79,6 +84,7 @@ export interface RunCronWatchdogOptions {
   sender?: ScheduleEmailSender;
   loadJobs?: (now: Date) => Promise<CronJobHealth[]>;
   loadPayoutWindow?: (db: Database, now: Date) => Promise<PayoutWindowStaleness | null>;
+  loadDeadlineCoverage?: (db: Database, now: Date) => Promise<FeedbackDeadlineCoverage | null>;
   pruneInvocations?: (db: Database, now: Date) => Promise<number>;
 }
 
@@ -139,6 +145,65 @@ async function loadPayoutWindowJob(
     return staleness ? payoutWindowJobHealth(staleness) : null;
   } catch (error) {
     console.error("Cron watchdog could not evaluate payout window staleness", error);
+    return null;
+  }
+}
+
+/**
+ * Synthetic swept entry for post-deadline assessment coverage (FU1). Not a
+ * cron route: the collection cron firing on time says nothing about whether
+ * classes that crossed their feedback deadline were ever re-observed after it,
+ * and without that assessment a late or short submission is never charged.
+ */
+export const DEADLINE_COVERAGE_JOB_KEY = "post_class_deadline_coverage";
+
+/** Project a coverage verdict onto the shape the sweep classifies. */
+export function deadlineCoverageJobHealth(coverage: FeedbackDeadlineCoverage): CronJobHealth {
+  const collection = getCronJobDefinition(POST_CLASS_COLLECTION_JOB_KEY);
+  return {
+    key: DEADLINE_COVERAGE_JOB_KEY,
+    label: "Feedback Deadline Coverage",
+    feature: "Class Feedback",
+    path: collection?.path ?? "/api/internal/sync-post-class-feedback",
+    schedule: collection?.schedule ?? null,
+    cadenceLabel: "Per feedback deadline",
+    maxDurationSeconds: collection?.maxDurationSeconds ?? 800,
+    manualOnly: false,
+    dangerous: false,
+    status: coverage.stale ? "failing" : "healthy",
+    proof: "inferred",
+    proofLabel: "Post-deadline assessment coverage",
+    lastSeenAt: null,
+    lastSuccessAt: null,
+    lastFailureAt: null,
+    nextExpectedAt: null,
+    lastExpectedAt: coverage.oldestDeadlineAt?.toISOString() ?? null,
+    lateAfterAt: null,
+    durationMs: null,
+    responseStatus: null,
+    errorSummary: coverage.stale ? coverage.detail : null,
+    healthDetail: coverage.detail,
+    latestInvocation: null,
+    recentInvocations: [],
+    canRunManually: collection?.manualOnly ?? true,
+  };
+}
+
+/**
+ * Same containment as the payout-window entry: a coverage-side failure (a
+ * query error, a missing aggregate row) degrades to "no entry this sweep"
+ * rather than a failed sweep.
+ */
+async function loadDeadlineCoverageJob(
+  db: Database,
+  now: Date,
+  options: RunCronWatchdogOptions,
+): Promise<CronJobHealth | null> {
+  try {
+    const coverage = await (options.loadDeadlineCoverage ?? loadFeedbackDeadlineCoverage)(db, now);
+    return coverage ? deadlineCoverageJobHealth(coverage) : null;
+  } catch (error) {
+    console.error("Cron watchdog could not evaluate feedback deadline coverage", error);
     return null;
   }
 }
@@ -353,8 +418,10 @@ async function releaseSweepLock(db: Database, now: Date): Promise<void> {
 /**
  * Run one watchdog sweep.
  *
- * 1. Load every job's health via the shared /data-health derivation, plus the
- *    synthetic payout-window entry when the accrual cron is scheduled.
+ * 1. Load every job's health via the shared /data-health derivation, plus two
+ *    synthetic entries: the payout-window entry when the accrual cron is
+ *    scheduled, and the feedback deadline coverage entry when the collection
+ *    cron is scheduled.
  * 2. Claim the single-flight sweep lock; if the cron_alert_state table is
  *    missing, fail safe with no alerting (un-deduped alerts every sweep
  *    would be spam); if another sweep holds the lock, skip this one.
@@ -396,7 +463,12 @@ async function runWatchdogSweep(
 ): Promise<CronWatchdogSweepSummary> {
   const registryJobs = await (options.loadJobs ?? getCronJobsHealth)(now);
   const payoutWindow = await loadPayoutWindowJob(db, now, options);
-  const jobs = payoutWindow ? [...registryJobs, payoutWindow] : registryJobs;
+  const deadlineCoverage = await loadDeadlineCoverageJob(db, now, options);
+  const jobs = [
+    ...registryJobs,
+    ...(payoutWindow ? [payoutWindow] : []),
+    ...(deadlineCoverage ? [deadlineCoverage] : []),
+  ];
 
   let lockClaimed: boolean;
   try {

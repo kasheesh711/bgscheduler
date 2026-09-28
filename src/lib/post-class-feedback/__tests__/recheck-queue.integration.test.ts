@@ -17,6 +17,8 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 vi.mock("server-only", () => ({}));
 
 import { startTestDb, stopTestDb, truncateAll } from "@/tests/integration/db-helper";
+import { autoChargeLowerBoundUtc } from "@/lib/post-class-feedback/auto-approval";
+import { loadFeedbackDeadlineCoverage } from "@/lib/post-class-feedback/deadline-coverage";
 import { createDrizzlePostClassFeedbackRepository } from "@/lib/post-class-feedback/repository";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -231,5 +233,169 @@ describe("REC-04 non-ready-first recheck ordering", () => {
     expect(queued).toHaveLength(3);
     expect(queued.every((id) => id.startsWith("unavail-"))).toBe(true);
     expect(queued.some((id) => id.startsWith("ready-"))).toBe(false);
+  });
+});
+
+/**
+ * FU1 — a class whose feedback deadline passed must be observed again after
+ * that deadline, or a late or short submission is never charged. The lane and
+ * the watchdog invariant share one predicate, so these fixtures exercise both.
+ */
+describe("deadline-crossed recheck lane (FU1)", () => {
+  // Bangkok 08:00 on 10 November: the last-ended payout window (26 Sep - 25 Oct)
+  // opens the unattended-charging scope.
+  const NOW = new Date("2026-11-10T01:00:00.000Z");
+
+  beforeEach(async () => {
+    // Outside the shared truncation helper; the deletion-evidence case writes one.
+    await handle.db.delete(schema.wiseActivityEvents);
+  });
+
+  async function seedDeadlineSession(input: {
+    wiseSessionId: string;
+    scheduledEndAt: string;
+    deadlineAt: string;
+    lastAssessedAt?: string | null;
+    eligible?: boolean;
+    wiseDeletedAt?: string | null;
+  }): Promise<void> {
+    const endAt = new Date(input.scheduledEndAt);
+    await handle.db.insert(schema.postClassSessions).values({
+      wiseSessionId: input.wiseSessionId,
+      wiseClassId: "class-1",
+      scheduledStartAt: endAt,
+      scheduledEndAt: endAt,
+      deadlineAt: new Date(input.deadlineAt),
+      lastAssessedAt: input.lastAssessedAt ? new Date(input.lastAssessedAt) : null,
+      wiseDeletedAt: input.wiseDeletedAt ? new Date(input.wiseDeletedAt) : null,
+      eligible: input.eligible ?? true,
+      sourceStatus: "ready",
+      finalStatus: "ENDED",
+    });
+  }
+
+  async function seedDeletionEvent(wiseSessionId: string, at: string): Promise<void> {
+    await handle.db.insert(schema.wiseActivityEvents).values({
+      eventId: `evt-deleted-${wiseSessionId}`,
+      eventType: "session",
+      eventName: "SessionDeletedEvent",
+      eventTimestamp: new Date(at),
+      sessionId: wiseSessionId,
+      classroomId: "class-1",
+      payload: { session: { id: wiseSessionId } },
+      raw: {},
+    });
+  }
+
+  /** Deadlines are Bangkok end-of-day, two days after the class. */
+  async function seedLaneFixtures(): Promise<void> {
+    // In the lane: assessed only before the deadline, exactly at it, or never.
+    await seedDeadlineSession({
+      wiseSessionId: "lane-recent",
+      scheduledEndAt: "2026-11-07T10:00:00.000Z",
+      deadlineAt: "2026-11-09T16:59:59.999Z",
+    });
+    await seedDeadlineSession({
+      wiseSessionId: "lane-never",
+      scheduledEndAt: "2026-11-05T10:00:00.000Z",
+      deadlineAt: "2026-11-07T16:59:59.999Z",
+    });
+    await seedDeadlineSession({
+      wiseSessionId: "lane-boundary",
+      scheduledEndAt: "2026-11-04T10:00:00.000Z",
+      deadlineAt: "2026-11-06T16:59:59.999Z",
+      lastAssessedAt: "2026-11-06T16:59:59.999Z",
+    });
+    await seedDeadlineSession({
+      wiseSessionId: "lane-old",
+      scheduledEndAt: "2026-11-02T10:00:00.000Z",
+      deadlineAt: "2026-11-04T16:59:59.999Z",
+      lastAssessedAt: "2026-11-03T02:00:00.000Z",
+    });
+    // Out of the lane.
+    await seedDeadlineSession({
+      wiseSessionId: "assessed-after",
+      scheduledEndAt: "2026-11-02T10:00:00.000Z",
+      deadlineAt: "2026-11-04T16:59:59.999Z",
+      lastAssessedAt: "2026-11-05T01:00:00.000Z",
+    });
+    await seedDeadlineSession({
+      wiseSessionId: "not-due",
+      scheduledEndAt: "2026-11-09T10:00:00.000Z",
+      deadlineAt: "2026-11-11T16:59:59.999Z",
+    });
+    await seedDeadlineSession({
+      wiseSessionId: "ineligible",
+      scheduledEndAt: "2026-11-02T10:00:00.000Z",
+      deadlineAt: "2026-11-04T16:59:59.999Z",
+      eligible: false,
+    });
+    await seedDeadlineSession({
+      wiseSessionId: "wise-deleted",
+      scheduledEndAt: "2026-11-02T10:00:00.000Z",
+      deadlineAt: "2026-11-04T16:59:59.999Z",
+      wiseDeletedAt: "2026-11-06T00:00:00.000Z",
+    });
+    await seedDeadlineSession({
+      wiseSessionId: "deletion-event",
+      scheduledEndAt: "2026-11-02T10:00:00.000Z",
+      deadlineAt: "2026-11-04T16:59:59.999Z",
+    });
+    await seedDeletionEvent("deletion-event", "2026-11-05T03:00:00.000Z");
+    await seedDeadlineSession({
+      wiseSessionId: "before-bound",
+      scheduledEndAt: "2026-09-20T10:00:00.000Z",
+      deadlineAt: "2026-09-22T16:59:59.999Z",
+    });
+  }
+
+  it("keeps the fixtures on the intended sides of the charging-scope bound", () => {
+    const bound = autoChargeLowerBoundUtc(NOW);
+    expect(new Date("2026-09-20T10:00:00.000Z") < bound).toBe(true);
+    expect(new Date("2026-11-02T10:00:00.000Z") >= bound).toBe(true);
+  });
+
+  it("proposes eligible live in-scope sessions not assessed after their deadline, oldest deadline first", async () => {
+    await seedLaneFixtures();
+    const repository = createDrizzlePostClassFeedbackRepository(appDb());
+
+    const candidates = await repository.listDeadlineCrossedCandidates!(50, NOW);
+
+    expect(candidates.map((candidate) => candidate.sessionId)).toEqual([
+      "lane-old",
+      "lane-boundary",
+      "lane-never",
+      "lane-recent",
+    ]);
+    expect(candidates.every((candidate) => candidate.reason === "deadline_crossed")).toBe(true);
+    expect(candidates.map((candidate) => candidate.recheckPriorityAt?.toISOString())).toEqual([
+      "2026-11-04T16:59:59.999Z",
+      "2026-11-06T16:59:59.999Z",
+      "2026-11-07T16:59:59.999Z",
+      "2026-11-09T16:59:59.999Z",
+    ]);
+    expect(candidates[0]).toMatchObject({
+      classId: "class-1",
+      scheduledEndAt: new Date("2026-11-02T10:00:00.000Z"),
+    });
+  });
+
+  it("honours the limit", async () => {
+    await seedLaneFixtures();
+    const repository = createDrizzlePostClassFeedbackRepository(appDb());
+
+    const candidates = await repository.listDeadlineCrossedCandidates!(1, NOW);
+
+    expect(candidates.map((candidate) => candidate.sessionId)).toEqual(["lane-old"]);
+  });
+
+  it("counts, for the watchdog, only the lane's sessions more than 12 h past deadline", async () => {
+    await seedLaneFixtures();
+
+    const coverage = await loadFeedbackDeadlineCoverage(appDb(), NOW);
+
+    // lane-recent's deadline passed only 8 h ago, so it is still within budget.
+    expect(coverage).toMatchObject({ stale: true, overdueCount: 3, thresholdHours: 12 });
+    expect(coverage?.oldestDeadlineAt?.toISOString()).toBe("2026-11-04T16:59:59.999Z");
   });
 });
