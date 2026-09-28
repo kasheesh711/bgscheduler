@@ -11,7 +11,7 @@ import {
 import { PostClassConflictError } from "./errors";
 import { PAYOUT_AUTO_CHARGE_FLOOR_BANGKOK, payoutAutomationPaused } from "./payout-config";
 import type { PayoutPublishAcknowledgements } from "./payout-plan";
-import { runPayoutLedgerRetirement, type PayoutRetirementResult } from "./payout-retirement";
+import { runPayoutLedgerRetirement } from "./payout-retirement";
 import {
   previewPayoutRun,
   publishPayoutRun,
@@ -60,23 +60,19 @@ const SYSTEM_ACTOR: PostClassUser = {
  */
 const PAYOUT_SETTLEMENT_LAG_BANGKOK_DAYS = 3;
 
-/** One live written row the retirement pass had to leave on the ledger. */
-export type PayoutRetirementSkip = PayoutRetirementResult["skippedTargets"][number];
-
 /**
- * Loud-but-local signals a pass carries alongside its outcome. Neither stops
- * the pass; `payoutJobResponse` turns either into `ok: false`.
+ * A loud-but-local signal a pass carries alongside its outcome. It never stops
+ * the pass; `payoutJobResponse` turns it into `ok: false`.
  */
 interface PayoutPassSignals {
-  /** FU3: per-row retirement skips (hand-edited amount, missing correction...). */
-  retirementSkips?: PayoutRetirementSkip[];
   /** FU4: unwritten approvals dropped from publishing for lost evidence. */
   evidenceExcludedApproved?: number;
+  /** FU4: the count itself failed, so the check did not run this tick. */
+  evidenceExclusionCheckFailed?: boolean;
 }
 
 export type PayoutAccrualResult = ({ skipped: string } | PayoutRunView) & PayoutPassSignals;
-export type PayoutFinalizeResult =
-  ({ skipped: string } | PayoutRunView) & Pick<PayoutPassSignals, "evidenceExcludedApproved">;
+export type PayoutFinalizeResult = ({ skipped: string } | PayoutRunView) & PayoutPassSignals;
 
 /** Attach only the signals that carry something, so a clean result is unchanged. */
 function withPassSignals<T extends { skipped: string } | PayoutRunView>(
@@ -85,11 +81,28 @@ function withPassSignals<T extends { skipped: string } | PayoutRunView>(
 ): T & PayoutPassSignals {
   return {
     ...result,
-    ...(signals.retirementSkips?.length ? { retirementSkips: signals.retirementSkips } : {}),
     ...(signals.evidenceExcludedApproved
       ? { evidenceExcludedApproved: signals.evidenceExcludedApproved }
       : {}),
+    ...(signals.evidenceExclusionCheckFailed ? { evidenceExclusionCheckFailed: true } : {}),
   };
+}
+
+/**
+ * The FU4 count is observability only: a failed count must never cancel a
+ * tick's charging. It is still reported, so a count that keeps failing cannot
+ * quietly switch the check off: `payoutJobResponse` turns it into `ok: false`.
+ */
+async function evidenceExclusionSignals(
+  db: Database,
+  window: PayoutRunWindow,
+): Promise<PayoutPassSignals> {
+  try {
+    return { evidenceExcludedApproved: await countEvidenceExcludedApprovedDeductions(db, window) };
+  } catch (error) {
+    console.error("[payout-accrual] evidence-exclusion count failed", error);
+    return { evidenceExclusionCheckFailed: true };
+  }
 }
 
 /** Every obligation this preview knows about is already durably written. */
@@ -126,16 +139,6 @@ function dependenciesWithClock(
  * `assertPayoutRunPublishable`'s hard `unprovenApprovedDeductions` gate at 0
  * every tick. Publishes in `mode: "accrual"`, so this can never mint
  * `published` and never touches the CSV/Drive leg.
- *
- * Retirement runs before any new charge. Per-target skips (a hand-edited
- * sheet amount, a missing or edited correction row, a row still present after
- * deletion) are loud but tutor-local (FU3): the row stays on the ledger
- * untouched for Verify sheet/an operator, a waived deduction's pending
- * correction still nets through the pre-retirement adjustment path, nothing is
- * deleted or double-written, and unrelated tutors keep accruing;
- * `payoutJobResponse` reports them as `ok: false` so the cron audit records
- * `failed` and the watchdog alerts. Tab-level stand-downs and thrown errors
- * stay fatal because the pass cannot trust the sheet at all.
  */
 export async function runPayoutAccrualPass(
   db: Database = getDb(),
@@ -144,9 +147,8 @@ export async function runPayoutAccrualPass(
 ): Promise<PayoutAccrualResult> {
   if (payoutAutomationPaused()) return { skipped: "automation-paused" };
   await runPostClassAutoApprovalSweep(db, now);
-  // Authentication failures or an untrustworthy tab must remain visible, never
-  // swallowed as a successful tick.
-  let retirementSkips: PayoutRetirementSkip[] = [];
+  // Retirement must finish before any new charge. Authentication failures or
+  // altered markers must remain visible, never swallowed as a successful tick.
   try {
     const retirement = await runPayoutLedgerRetirement(db, {
       now,
@@ -156,10 +158,10 @@ export async function runPayoutAccrualPass(
         : undefined,
     });
     if (retirement.skippedReason === "publish lease live") return { skipped: "lease-held" };
-    if (retirement.skippedReason && retirement.skippedReason !== "auto-charge disabled") {
-      throw new Error(`Payout retirement incomplete: ${retirement.skippedReason}`);
+    if (retirement.skippedTargets.length || (retirement.skippedReason
+      && retirement.skippedReason !== "auto-charge disabled")) {
+      throw new Error(`Payout retirement incomplete: ${retirement.skippedReason ?? retirement.skippedTargets.map(t => t.reason).join("; ")}`);
     }
-    retirementSkips = retirement.skippedTargets;
     if (retirement.retiredLines > 0) {
       // The freshly retired lines now read as unwritten, so the reopen and
       // ineligible-waive sweeps can finish those deductions' lifecycles in
@@ -175,10 +177,7 @@ export async function runPayoutAccrualPass(
     anchorMonth: window.anchorMonth,
     tutorFilter: null,
   }, db);
-  const signals: PayoutPassSignals = {
-    retirementSkips,
-    evidenceExcludedApproved: await countEvidenceExcludedApprovedDeductions(db, window),
-  };
+  const signals = await evidenceExclusionSignals(db, window);
   if (isEverythingAlreadyWritten(view)) {
     return withPassSignals({ skipped: "nothing-pending" }, signals);
   }
@@ -289,9 +288,7 @@ export async function runPayoutFinalizePass(
     anchorMonth: window.anchorMonth,
     tutorFilter: null,
   }, db);
-  const signals: PayoutPassSignals = {
-    evidenceExcludedApproved: await countEvidenceExcludedApprovedDeductions(db, window),
-  };
+  const signals = await evidenceExclusionSignals(db, window);
   const acknowledgements: PayoutPublishAcknowledgements = {
     confirmed: true,
     pendingReviewDeductions: view.coverage.pendingReviewDeductions,
@@ -314,16 +311,13 @@ export async function runPayoutFinalizePass(
   }
 }
 
-/** How many skipped rows the job error lists before summarising the rest. */
-const RETIREMENT_SKIPS_LISTED = 10;
-
 /**
  * Top-level fields are consumed by the cron auditor and watchdog.
  *
- * Retirement skips (FU3) and evidence-excluded approvals (FU4) never stop a
- * pass, so this is where they stay loud: either one makes the job `ok: false`,
- * which the cron audit records as `failed`. The error text must never contain
- * "already running" -- the auditor maps that phrase to `skipped`.
+ * Evidence-excluded approvals (FU4) never stop a pass, so this is where they
+ * stay loud: a non-zero count makes the job `ok: false`, which the cron audit
+ * records as `failed`. The error text must never contain "already running" --
+ * the auditor maps that phrase to `skipped`.
  */
 export function payoutJobResponse(
   accrual: PayoutAccrualResult,
@@ -335,22 +329,18 @@ export function payoutJobResponse(
     || view.adjustments.some(a => a.status !== "written" && a.status !== "superseded")
   ));
   const finalizeIncomplete = !("skipped" in finalize) && finalize.run.status !== "published";
-  const retirementSkips = accrual.retirementSkips ?? [];
   const excluded = (accrual.evidenceExcludedApproved ?? 0)
     + (finalize.evidenceExcludedApproved ?? 0);
-  if (retirementSkips.length > 0 || excluded > 0 || incomplete || finalizeIncomplete) {
+  const exclusionCheckFailed = Boolean(
+    accrual.evidenceExclusionCheckFailed || finalize.evidenceExclusionCheckFailed,
+  );
+  if (excluded > 0 || exclusionCheckFailed || incomplete || finalizeIncomplete) {
     const parts: string[] = [];
-    if (retirementSkips.length > 0) {
-      const listed = retirementSkips.slice(0, RETIREMENT_SKIPS_LISTED)
-        .map((skip) => `${skip.wiseSessionId} (${skip.reason})`)
-        .join("; ");
-      const more = retirementSkips.length > RETIREMENT_SKIPS_LISTED
-        ? ` (+${retirementSkips.length - RETIREMENT_SKIPS_LISTED} more)`
-        : "";
-      parts.push(`Payout retirement left ${retirementSkips.length} written row(s) on the ledger: ${listed}${more}.`);
-    }
     if (excluded > 0) {
       parts.push(`${excluded} approved deduction(s) are excluded from publishing because their current evidence no longer proves a violation, and the reopen sweep could not return them to review.`);
+    }
+    if (exclusionCheckFailed) {
+      parts.push("The evidence-exclusion check could not run this tick; see the payout-accrual logs.");
     }
     if (incomplete || finalizeIncomplete) {
       parts.push("Payout pass incomplete; inspect the run's exceptions and write outcomes.");

@@ -110,33 +110,102 @@ function issueWiseSessionId(): SQL {
 }
 
 /**
- * Eligible, live sessions inside the unattended-charging scope whose feedback
- * deadline passed before `deadlineBefore` and that were never assessed after
- * that deadline (`last_assessed_at` is only written by an observation that
- * carries an assessment). Shared by the collector's `deadline_crossed` lane
- * (deadlineBefore = now) and the watchdog invariant in deadline-coverage.ts
- * (deadlineBefore = now - 12 h). The scope bound keeps both off settled
- * historical windows.
+ * How long the `deadline_crossed` lane leaves a session alone after its detail
+ * fetch failed (an open session-scoped source issue last seen that recently).
+ * Without it a session whose fetch keeps failing would sit at the head of the
+ * oldest-deadline-first lane and be re-fetched on every run; with it the lane
+ * retries such a session at most every few hours. The watchdog applies no
+ * cool-down, so a session that keeps failing keeps counting as owed.
+ */
+export const DEADLINE_LANE_RETRY_COOL_DOWN_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * No open session-scoped source issue for this session was seen since
+ * `since`. Linked issues (`detail_retry:<sid>` on a session that has a row) stay
+ * open until that session's next successful fetch, even after a REC-01 restore
+ * returns the row to `ready` -- which is exactly when the lane must pick it up
+ * again -- so this is a time-bounded cool-down, never a permanent exclusion.
+ * Aliased like `notAbandonedMissingSession`.
+ */
+function noRecentSessionFetchFailure(wiseSessionId: SQL | AnyColumn, since: Date): SQL {
+  return sql`not exists (
+    select 1 from ${schema.postClassSourceIssues} as deadline_lane_issue
+    where deadline_lane_issue.scope = 'session'
+      and deadline_lane_issue.status = 'open'
+      and deadline_lane_issue.last_seen_at > ${since}
+      and ${aliasedIssueWiseSessionId("deadline_lane_issue")} = ${wiseSessionId}
+  )`;
+}
+
+/**
+ * Whether the session already has an assessment that could charge it: one the
+ * collector made after the deadline on source-ready, assessed evidence.
  *
- * One predicate on purpose: a synthetic watchdog entry that stayed failing on
- * rows the lane had stopped proposing would hold its alert episode open
- * forever, and the episode dedup would then swallow every later alert.
+ * `last_assessed_at` cannot answer this. It is also stamped by an observation
+ * whose batch hit a global source issue (`source_ready = false`, timing
+ * unknown, no deduction candidate) and by `reassess.ts` verdict-only reruns
+ * (`reassess:` keys, which never create deductions), so either would take a
+ * still-owed session out of the lane and the watchdog. Rides the
+ * `pc_assessments_session_time_idx (session_id, assessed_at)` index.
+ */
+function noChargeableAssessmentAfterDeadline(): SQL {
+  return sql`not exists (
+    select 1 from ${schema.postClassAssessments} as post_deadline_assessment
+    where post_deadline_assessment.session_id = ${schema.postClassSessions.id}
+      and post_deadline_assessment.assessed_at > ${schema.postClassSessions.deadlineAt}
+      and post_deadline_assessment.source_ready = true
+      and post_deadline_assessment.assessment_key not like 'reassess:%'
+  )`;
+}
+
+/**
+ * Eligible, live sessions inside the unattended-charging scope that are ready
+ * on their own evidence, whose feedback deadline passed before `deadlineBefore`
+ * without a chargeable post-deadline assessment
+ * (`noChargeableAssessmentAfterDeadline`). Shared by the collector's
+ * `deadline_crossed` lane (deadlineBefore = now, with a retry cool-down) and
+ * the watchdog invariant in deadline-coverage.ts (deadlineBefore = now - 12 h,
+ * no cool-down). The scope bound keeps both off settled historical windows.
+ *
+ * "Ready on its own evidence" is `source_status = 'ready'` OR a row a global
+ * source issue demoted from ready (`source_status_before = 'ready'`): a
+ * table-wide demotion must not make the watchdog report healthy while an
+ * outage keeps every owed session unassessed, and the lane may keep proposing
+ * them. Rows non-ready for a reason of their own (identity review, form drift)
+ * have no `source_status_before`; the recheck lane already sorts them first
+ * (REC-04). Sessions whose on-time compliance is locked are excluded because no
+ * later assessment can charge them.
+ *
+ * One base predicate on purpose: a synthetic watchdog entry that stayed
+ * failing on rows the lane had stopped proposing would hold its alert episode
+ * open, and the episode dedup would then swallow every later alert. The lane's
+ * only extra condition is the time-bounded `retryCoolDownMs`.
  */
 export function feedbackDeadlineUncoveredWhere(input: {
   now: Date;
   deadlineBefore: Date;
+  /** Lane only: skip sessions whose detail fetch failed this recently. */
+  retryCoolDownMs?: number;
 }): SQL | undefined {
   return and(
     eq(schema.postClassSessions.eligible, true),
+    or(
+      eq(schema.postClassSessions.sourceStatus, "ready"),
+      eq(schema.postClassSessions.sourceStatusBefore, "ready"),
+    ),
+    isNull(schema.postClassSessions.firstOnTimeCompliantVersionId),
     isNull(schema.postClassSessions.wiseDeletedAt),
     notDeletedInWise(schema.postClassSessions.wiseSessionId),
     notAbandonedMissingSession(schema.postClassSessions.wiseSessionId),
+    input.retryCoolDownMs
+      ? noRecentSessionFetchFailure(
+        schema.postClassSessions.wiseSessionId,
+        new Date(input.now.getTime() - input.retryCoolDownMs),
+      )
+      : undefined,
     lt(schema.postClassSessions.deadlineAt, input.deadlineBefore),
     gte(schema.postClassSessions.scheduledEndAt, autoChargeLowerBoundUtc(input.now)),
-    or(
-      isNull(schema.postClassSessions.lastAssessedAt),
-      lte(schema.postClassSessions.lastAssessedAt, schema.postClassSessions.deadlineAt),
-    ),
+    noChargeableAssessmentAfterDeadline(),
   );
 }
 import { withPostClassTransaction } from "./transaction";
@@ -1143,7 +1212,11 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
       scheduledEndAt: schema.postClassSessions.scheduledEndAt,
       deadlineAt: schema.postClassSessions.deadlineAt,
     }).from(schema.postClassSessions)
-      .where(feedbackDeadlineUncoveredWhere({ now, deadlineBefore: now }))
+      .where(feedbackDeadlineUncoveredWhere({
+        now,
+        deadlineBefore: now,
+        retryCoolDownMs: DEADLINE_LANE_RETRY_COOL_DOWN_MS,
+      }))
       .orderBy(
         asc(schema.postClassSessions.deadlineAt),
         asc(schema.postClassSessions.scheduledEndAt),

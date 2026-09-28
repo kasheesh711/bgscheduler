@@ -16,6 +16,13 @@ describe("feedback attendance exemptions", () => {
     "The student is on sick leave today", "Student forgot about class",
     "forgot he had class and that it was onsite and missed it",
     "Absent -", "Absent: sick", "Absent — didn’t join",
+    // Unspaced dashes stay separators (em/en dashes fold to "-"), and a
+    // possessive "my/our student" is still the student.
+    "Absent-sick", "Absent-no show", "Student absent-sick", "Absent—didn’t join", "Absent–sick",
+    "My student took sick leave", "My student is on sick leave today",
+    "Our student was on medical leave",
+    // Each label excludes only its own compound: "-out" is only cancel prose.
+    "Absent-out of town", "Absent-out sick", "Absent -out sick",
   ])("recognizes an explicit student attendance entry: %s", text => {
     expect(feedbackAttendanceExemption(text)).toBe("missed_or_no_show");
   });
@@ -24,7 +31,7 @@ describe("feedback attendance exemptions", () => {
     "Late cancellation", "Cancelled on the spot", "Cancelled by: Parent",
     "Date received: 9/5/2026\nCancelled by: Parent\nAction Resolution: Cancelled (no reschedule)",
     "ยกเลิกคลาสกะทันหัน", "ยกเลิกเรียน", "คลาสถูกยกเลิก",
-    "Cancelled - parent request",
+    "Cancelled - parent request", "Cancelled-parent request", "Cancelled—parent request",
   ])("recognizes explicit class cancellation: %s", text => {
     expect(feedbackAttendanceExemption(text)).toBe("cancelled");
   });
@@ -39,9 +46,11 @@ describe("feedback attendance exemptions", () => {
     "The student forgot the formula in class.", "We discussed medical leave.",
     "Bingo took medical leave last week.", "น้องลาคลาสเมื่อวาน", "น้องลาพรุ่งนี้",
     "We cancelled common factors.", "The x terms cancel.", "ยังขาดความมั่นใจ",
-    // Glued hyphens are compounds, and first-person/teacher subjects report the
-    // tutor's own leave, never the student's absence (FU5).
+    // The known lesson-prose compounds (absent-minded, cancelled-out) are not
+    // labels, and first-person pronoun or teacher subjects report the tutor's
+    // own leave, never the student's absence (FU5).
     "Absent-minded errors were discussed", "absent-mindedness",
+    "Absent-mindedly wrote the wrong sign",
     "I took sick leave today", "My teacher took sick leave", "Kru Ann took sick leave",
     "His tutor took sick leave", "Cancelled-out terms were simplified",
   ])("does not exempt unrelated, historical, future or negated prose: %s", text => {

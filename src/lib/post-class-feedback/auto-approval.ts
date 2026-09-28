@@ -163,7 +163,9 @@ export async function runPostClassIneligibleWaivers(
           + "a deduction cannot stand on an ineligible class.",
         waiverCategory: reason === "cancelled" ? "class_cancelled" : "other",
         expectedVersion: candidate.version,
-        idempotencyKey: `ineligible-waive:${candidate.deductionId}`,
+        // Versioned for the same reason as the approve key: after a reinstate,
+        // an unversioned key would collide with the first waiver's payload.
+        idempotencyKey: `ineligible-waive:${candidate.deductionId}:v${candidate.version}`,
       }, db);
       waived += 1;
     } catch (error) {

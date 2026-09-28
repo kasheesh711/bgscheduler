@@ -29,7 +29,6 @@ import { seedPayoutAssessment } from "@/tests/integration/payout-fixtures";
 
 import { startTestDb, stopTestDb, truncateAll } from "@/tests/integration/db-helper";
 import {
-  payoutJobResponse,
   runPayoutAccrualPass,
   runPayoutFinalizePass,
 } from "@/lib/post-class-feedback/payout-accrual";
@@ -411,10 +410,12 @@ describe("runPayoutAccrualPass", () => {
   });
 });
 
-// FU3: one hand-edited sheet row used to abort the whole tick, so no tutor
-// was charged until an operator fixed it. A per-row retirement skip is now
-// loud but local; a tab the pass cannot trust at all still stops everything.
-describe("runPayoutAccrualPass retirement containment (FU3)", () => {
+// Every per-row retirement skip (an edited amount, a missing or changed
+// correction row, a row still present after deletion) means the ledger no
+// longer agrees with the database and needs an operator. The pass stops before
+// charging anything else, and the job fails loudly, rather than netting a
+// correction against a row nobody verified (-50 + 100 = +50).
+describe("runPayoutAccrualPass retirement gate", () => {
   /** A prior-window class: inside the retirement scope, outside the current run. */
   const PRIOR_CLASS_DAY = `${PRIOR_ANCHOR_YEAR_MONTH}-10`;
   const PRIOR_MARKER = `BGS-PAYOUT ${PRIOR_ANCHOR_YEAR_MONTH} aaaaaaaaaaaa`;
@@ -533,35 +534,26 @@ describe("runPayoutAccrualPass retirement containment (FU3)", () => {
     return row.retiredAt;
   }
 
-  it("keeps charging unrelated tutors past a per-row skip, and still fails the job", async () => {
+  it("aborts the tick on a hand-edited row and appends nothing", async () => {
     const { grid, lineId } = await seedContainmentFixtures();
 
     process.env.POST_CLASS_AUTO_APPROVE_ENABLED = "true";
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      const result = await runPayoutAccrualPass(appDb(), {
+      await expect(runPayoutAccrualPass(appDb(), {
         gateway: fakeGateway(grid).gateway,
         retirementSheetOps: retirementSheet(grid),
         resolveGoogleTarget: () => TEST_TARGET,
         now: () => MID_WINDOW.getTime(),
-      }, MID_WINDOW);
+      }, MID_WINDOW)).rejects.toThrow(/Payout retirement incomplete: sheet amount -50 != expected -100/u);
 
-      // The unrelated approved deduction was appended in this same tick.
-      expect(deductionRows(grid)).toHaveLength(2);
-      expect(deductionRows(grid).some((row) =>
-        String(row[1]).includes(`BGS-PAYOUT ${ANCHOR_YEAR_MONTH} `))).toBe(true);
-      // The edited row is untouched and its line stays on the ledger.
+      // Only the pre-existing edited row: the unrelated deduction waits.
+      expect(deductionRows(grid)).toHaveLength(1);
       const edited = grid.find((row) => String(row[1]).includes(PRIOR_MARKER));
       expect(edited?.[7]).toBe(-50);
       expect(await lineRetiredAt(lineId)).toBeNull();
-
-      expect(result.retirementSkips).toEqual([{
-        wiseSessionId: WAIVED_SESSION,
-        reason: expect.stringMatching(/sheet amount/u),
-      }]);
-      const response = payoutJobResponse(result, { skipped: "window-not-ended" });
-      expect(response.ok).toBe(false);
-      expect("error" in response ? response.error : "").toContain(WAIVED_SESSION);
     } finally {
+      errorSpy.mockRestore();
       delete process.env.POST_CLASS_AUTO_APPROVE_ENABLED;
     }
   });

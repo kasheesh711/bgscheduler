@@ -16,7 +16,10 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 
 vi.mock("server-only", () => ({}));
 
+import { eq } from "drizzle-orm";
+
 import { startTestDb, stopTestDb, truncateAll } from "@/tests/integration/db-helper";
+import { seedPayoutAssessment } from "@/tests/integration/payout-fixtures";
 import { autoChargeLowerBoundUtc } from "@/lib/post-class-feedback/auto-approval";
 import { loadFeedbackDeadlineCoverage } from "@/lib/post-class-feedback/deadline-coverage";
 import { createDrizzlePostClassFeedbackRepository } from "@/lib/post-class-feedback/repository";
@@ -255,23 +258,71 @@ describe("deadline-crossed recheck lane (FU1)", () => {
     wiseSessionId: string;
     scheduledEndAt: string;
     deadlineAt: string;
-    lastAssessedAt?: string | null;
     eligible?: boolean;
     wiseDeletedAt?: string | null;
+    sourceStatus?: "ready" | "unavailable";
+    /** Set when a global source issue demoted the row from this status. */
+    sourceStatusBefore?: "ready";
+    onTimeCompliant?: boolean;
+    /** Assessments to record; a collector key and `source_ready` unless overridden. */
+    assessments?: Array<{ assessedAt: string; sourceReady?: boolean; reassess?: boolean }>;
+    /** An open, linked `detail_retry` issue last seen at this instant. */
+    openSessionIssueLastSeenAt?: string;
   }): Promise<void> {
     const endAt = new Date(input.scheduledEndAt);
-    await handle.db.insert(schema.postClassSessions).values({
+    const [session] = await handle.db.insert(schema.postClassSessions).values({
       wiseSessionId: input.wiseSessionId,
       wiseClassId: "class-1",
       scheduledStartAt: endAt,
       scheduledEndAt: endAt,
       deadlineAt: new Date(input.deadlineAt),
-      lastAssessedAt: input.lastAssessedAt ? new Date(input.lastAssessedAt) : null,
+      // Coverage is decided by assessment rows, never by this column: stamp it
+      // after the deadline everywhere so a regression to it would be caught.
+      lastAssessedAt: input.assessments?.length ? new Date("2026-11-09T23:00:00.000Z") : null,
       wiseDeletedAt: input.wiseDeletedAt ? new Date(input.wiseDeletedAt) : null,
       eligible: input.eligible ?? true,
-      sourceStatus: "ready",
+      sourceStatus: input.sourceStatus ?? "ready",
+      sourceStatusBefore: input.sourceStatusBefore ?? null,
       finalStatus: "ENDED",
-    });
+    }).returning({ id: schema.postClassSessions.id });
+    if (input.onTimeCompliant) {
+      // The column is FK-bound to a real version of this session.
+      const [version] = await handle.db.insert(schema.postClassFeedbackVersions).values({
+        sessionId: session.id,
+        versionKey: `on-time-${input.wiseSessionId}`,
+        contentHash: `on-time-${input.wiseSessionId}`,
+        observedAt: new Date(input.scheduledEndAt),
+      }).returning({ id: schema.postClassFeedbackVersions.id });
+      await handle.db.update(schema.postClassSessions)
+        .set({ firstOnTimeCompliantVersionId: version.id })
+        .where(eq(schema.postClassSessions.id, session.id));
+    }
+    for (const assessment of input.assessments ?? []) {
+      await seedPayoutAssessment(appDb(), session.id, {
+        assessedAt: new Date(assessment.assessedAt),
+        sourceReady: assessment.sourceReady ?? true,
+        sourceStatus: assessment.sourceReady === false ? "unavailable" : "ready",
+        ...(assessment.reassess
+          ? { assessmentKey: `reassess:${input.wiseSessionId}:${assessment.assessedAt}` }
+          : {}),
+      });
+    }
+    if (input.openSessionIssueLastSeenAt) {
+      const lastSeenAt = new Date(input.openSessionIssueLastSeenAt);
+      await handle.db.insert(schema.postClassSourceIssues).values({
+        sessionId: session.id,
+        scope: "session",
+        issueType: "detail_retry",
+        severity: "error",
+        status: "open",
+        blocksEnforcement: true,
+        fingerprint: `detail_retry:${input.wiseSessionId}`,
+        message: `Wise session ${input.wiseSessionId} could not be reconciled.`,
+        details: {},
+        firstSeenAt: lastSeenAt,
+        lastSeenAt,
+      });
+    }
   }
 
   async function seedDeletionEvent(wiseSessionId: string, at: string): Promise<void> {
@@ -289,7 +340,7 @@ describe("deadline-crossed recheck lane (FU1)", () => {
 
   /** Deadlines are Bangkok end-of-day, two days after the class. */
   async function seedLaneFixtures(): Promise<void> {
-    // In the lane: assessed only before the deadline, exactly at it, or never.
+    // In the lane: no chargeable assessment after the deadline.
     await seedDeadlineSession({
       wiseSessionId: "lane-recent",
       scheduledEndAt: "2026-11-07T10:00:00.000Z",
@@ -304,20 +355,76 @@ describe("deadline-crossed recheck lane (FU1)", () => {
       wiseSessionId: "lane-boundary",
       scheduledEndAt: "2026-11-04T10:00:00.000Z",
       deadlineAt: "2026-11-06T16:59:59.999Z",
-      lastAssessedAt: "2026-11-06T16:59:59.999Z",
+      // Exactly at the deadline is not after it.
+      assessments: [{ assessedAt: "2026-11-06T16:59:59.999Z" }],
+    });
+    // A post-deadline assessment from a batch that hit a global source issue
+    // is not source-ready, so it cannot have charged anything.
+    await seedDeadlineSession({
+      wiseSessionId: "lane-not-ready-assessment",
+      scheduledEndAt: "2026-11-03T10:00:00.000Z",
+      deadlineAt: "2026-11-05T16:59:59.999Z",
+      assessments: [{ assessedAt: "2026-11-06T01:00:00.000Z", sourceReady: false }],
+    });
+    // A reassess.ts verdict-only rerun never creates a deduction.
+    await seedDeadlineSession({
+      wiseSessionId: "lane-reassess-only",
+      scheduledEndAt: "2026-11-03T12:00:00.000Z",
+      deadlineAt: "2026-11-05T16:59:59.999Z",
+      assessments: [{ assessedAt: "2026-11-06T01:00:00.000Z", reassess: true }],
     });
     await seedDeadlineSession({
       wiseSessionId: "lane-old",
       scheduledEndAt: "2026-11-02T10:00:00.000Z",
       deadlineAt: "2026-11-04T16:59:59.999Z",
-      lastAssessedAt: "2026-11-03T02:00:00.000Z",
+      assessments: [{ assessedAt: "2026-11-03T02:00:00.000Z" }],
     });
     // Out of the lane.
     await seedDeadlineSession({
       wiseSessionId: "assessed-after",
       scheduledEndAt: "2026-11-02T10:00:00.000Z",
       deadlineAt: "2026-11-04T16:59:59.999Z",
-      lastAssessedAt: "2026-11-05T01:00:00.000Z",
+      assessments: [
+        { assessedAt: "2026-11-03T02:00:00.000Z" },
+        { assessedAt: "2026-11-05T01:00:00.000Z" },
+      ],
+    });
+    await seedDeadlineSession({
+      wiseSessionId: "not-ready-session",
+      scheduledEndAt: "2026-11-02T10:00:00.000Z",
+      deadlineAt: "2026-11-04T16:59:59.999Z",
+      sourceStatus: "unavailable",
+    });
+    await seedDeadlineSession({
+      wiseSessionId: "on-time-locked",
+      scheduledEndAt: "2026-11-02T10:00:00.000Z",
+      deadlineAt: "2026-11-04T16:59:59.999Z",
+      onTimeCompliant: true,
+    });
+    // Its detail fetch failed an hour ago: the lane cools down, but the
+    // watchdog still counts it as owed.
+    await seedDeadlineSession({
+      wiseSessionId: "open-session-issue",
+      scheduledEndAt: "2026-11-02T10:00:00.000Z",
+      deadlineAt: "2026-11-04T16:59:59.999Z",
+      openSessionIssueLastSeenAt: "2026-11-10T00:00:00.000Z",
+    });
+    // In the lane: a REC-01 restore left a linked detail_retry open, but it
+    // was last seen before the cool-down, so the lane retries it.
+    await seedDeadlineSession({
+      wiseSessionId: "stale-session-issue",
+      scheduledEndAt: "2026-11-02T12:00:00.000Z",
+      deadlineAt: "2026-11-04T16:59:59.999Z",
+      openSessionIssueLastSeenAt: "2026-11-09T20:00:00.000Z",
+    });
+    // In the lane: a global source issue demoted it from ready; an outage
+    // must not hide owed sessions from the lane or the watchdog.
+    await seedDeadlineSession({
+      wiseSessionId: "demoted-ready",
+      scheduledEndAt: "2026-11-02T11:00:00.000Z",
+      deadlineAt: "2026-11-04T16:59:59.999Z",
+      sourceStatus: "unavailable",
+      sourceStatusBefore: "ready",
     });
     await seedDeadlineSession({
       wiseSessionId: "not-due",
@@ -355,7 +462,7 @@ describe("deadline-crossed recheck lane (FU1)", () => {
     expect(new Date("2026-11-02T10:00:00.000Z") >= bound).toBe(true);
   });
 
-  it("proposes eligible live in-scope sessions not assessed after their deadline, oldest deadline first", async () => {
+  it("proposes eligible live in-scope sessions with no chargeable post-deadline assessment, oldest deadline first", async () => {
     await seedLaneFixtures();
     const repository = createDrizzlePostClassFeedbackRepository(appDb());
 
@@ -363,6 +470,10 @@ describe("deadline-crossed recheck lane (FU1)", () => {
 
     expect(candidates.map((candidate) => candidate.sessionId)).toEqual([
       "lane-old",
+      "demoted-ready",
+      "stale-session-issue",
+      "lane-not-ready-assessment",
+      "lane-reassess-only",
       "lane-boundary",
       "lane-never",
       "lane-recent",
@@ -370,6 +481,10 @@ describe("deadline-crossed recheck lane (FU1)", () => {
     expect(candidates.every((candidate) => candidate.reason === "deadline_crossed")).toBe(true);
     expect(candidates.map((candidate) => candidate.recheckPriorityAt?.toISOString())).toEqual([
       "2026-11-04T16:59:59.999Z",
+      "2026-11-04T16:59:59.999Z",
+      "2026-11-04T16:59:59.999Z",
+      "2026-11-05T16:59:59.999Z",
+      "2026-11-05T16:59:59.999Z",
       "2026-11-06T16:59:59.999Z",
       "2026-11-07T16:59:59.999Z",
       "2026-11-09T16:59:59.999Z",
@@ -395,7 +510,9 @@ describe("deadline-crossed recheck lane (FU1)", () => {
     const coverage = await loadFeedbackDeadlineCoverage(appDb(), NOW);
 
     // lane-recent's deadline passed only 8 h ago, so it is still within budget.
-    expect(coverage).toMatchObject({ stale: true, overdueCount: 3, thresholdHours: 12 });
+    // The watchdog applies no fetch-failure cool-down: open-session-issue,
+    // which the lane is resting, still counts as owed.
+    expect(coverage).toMatchObject({ stale: true, overdueCount: 8, thresholdHours: 12 });
     expect(coverage?.oldestDeadlineAt?.toISOString()).toBe("2026-11-04T16:59:59.999Z");
   });
 });
