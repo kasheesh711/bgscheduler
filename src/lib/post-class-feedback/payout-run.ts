@@ -369,7 +369,9 @@ async function planDedicatedAppends(input: {
   };
 
   for (const sourceLine of input.sourceLines.filter(
-    (line) => line.writeStatus === "written",
+    // Retired rows are audit history. They neither reserve a source row nor
+    // require an old export anchor to remain available for later publishing.
+    (line) => line.writeStatus === "written" && line.retiredAt === null,
   )) {
     if (sourceLine.sourceAnchorFingerprint) {
       // Durable fingerprint recorded when this line was written: an O(1)

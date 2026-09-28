@@ -104,6 +104,11 @@ Approval, publishing and verification also check current feedback so a stale
 approval cannot publish before the next collection. Historical/deleted feedback
 does not independently establish an exemption. Human waivers remain preserved.
 
+Retired ledger rows remain audit history but do not reserve raw source rows or
+quarantine a tutor when their former export anchor disappears. Active written
+rows still require their exact source anchors. A reinstated deduction claims
+its source under a new ledger generation.
+
 Payout source matching also distinguishes an exact-time paid row from a copy
 with both zero credits and zero payout. It requires one uniquely paid row;
 conflicting paid rows and unknown billing values remain ambiguous. A claimed

@@ -989,6 +989,47 @@ describe("publishPayoutRun", () => {
 });
 
 describe("source-anchor fingerprint quarantine", () => {
+  it.each([false, true])("ignores a retired missing anchor (legacy fingerprint: %s)", async (legacy) => {
+    await seedDeduction({ wiseSessionId: "retired", endsAt: "2026-07-10T03:00:00Z", tutorKey: "kevin", student: "Grace Hopper" });
+    await upsertPayoutTutorName(appDb(), { canonicalKey: "kevin", primaryLedgerName: KEVIN, alternateLedgerName: KEVIN_ONLINE, active: true, updatedByEmail: "admin@example.com" });
+    const grid = sheetGrid();
+    const gateway = fakeGateway(grid).gateway;
+    const first = await publish(ACTOR, { anchorMonth: "2026-07" }, appDb(), { gateway, uploadCsv: uploadOk });
+    const retired = first.lines[0];
+    await handle.db.update(schema.postClassPayoutRunLines).set({ retiredAt: new Date(), retiredReason: "Waived and deleted", ...(legacy ? { sourceAnchorFingerprint: null } : {}) }).where(eq(schema.postClassPayoutRunLines.id, retired.id));
+    await handle.db.update(schema.postClassDeductions).set({ status: "waived" }).where(eq(schema.postClassDeductions.id, retired.deductionId));
+    // The retired deduction and its old export anchor are both gone.
+    for (let i = grid.length - 1; i > 0; i -= 1) {
+      if (grid[i][0] === KEVIN) grid.splice(i, 1);
+    }
+    await seedDeduction({ wiseSessionId: "new-active", endsAt: "2026-07-11T03:00:00Z", tutorKey: "kevin", student: "Ada Lovelace" });
+    const second = await publish(ACTOR, { anchorMonth: "2026-07" }, appDb(), { gateway, uploadCsv: uploadOk });
+    expect(second.lines.find(line => line.wiseSessionId === "new-active")?.writeStatus).toBe("written");
+    expect(second.exceptions.filter(exception => exception.kind === "source_anchor_missing")).toHaveLength(0);
+    expect(deductionRows(grid)).toHaveLength(1);
+    expect(second.lines.find(line => line.id === retired.id)?.retiredAt).not.toBeNull();
+  });
+
+  it("releases a retired row's source claim for a reinstated deduction", async () => {
+    await seedDeduction({ wiseSessionId: "reinstated", endsAt: "2026-07-10T03:00:00Z", tutorKey: "kevin", student: "Grace Hopper" });
+    await upsertPayoutTutorName(appDb(), { canonicalKey: "kevin", primaryLedgerName: KEVIN, alternateLedgerName: KEVIN_ONLINE, active: true, updatedByEmail: "admin@example.com" });
+    const grid = sheetGrid();
+    const gateway = fakeGateway(grid).gateway;
+    const first = await publish(ACTOR, { anchorMonth: "2026-07" }, appDb(), { gateway, uploadCsv: uploadOk });
+    const retired = first.lines[0];
+    await handle.db.update(schema.postClassPayoutRunLines).set({ retiredAt: new Date(), retiredReason: "Previously waived and deleted" }).where(eq(schema.postClassPayoutRunLines.id, retired.id));
+    const deletedIndex = grid.findIndex(row => String(row[1]).includes(retired.rowSignature));
+    expect(deletedIndex).toBeGreaterThan(0);
+    grid.splice(deletedIndex, 1);
+    const second = await publish(ACTOR, { anchorMonth: "2026-07" }, appDb(), { gateway, uploadCsv: uploadOk });
+    const replacement = second.lines.find(line => line.deductionId === retired.deductionId && !line.retiredAt);
+    expect(replacement?.writeStatus).toBe("written");
+    expect(replacement?.rowSignature).not.toBe(retired.rowSignature);
+    expect(replacement?.sourceAnchorFingerprint).toBe(retired.sourceAnchorFingerprint);
+    expect(second.exceptions.filter(exception => exception.kind === "source_anchor_missing")).toHaveLength(0);
+    expect(deductionRows(grid)).toHaveLength(1);
+  });
+
   it("quarantines only the tutor whose written anchor drifted; other tutors keep appending", async () => {
     await seedDeduction({
       wiseSessionId: "s-kevin-first",
