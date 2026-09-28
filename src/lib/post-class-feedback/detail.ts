@@ -1,3 +1,4 @@
+import { nightlyReminderHistory } from "./nightly-reminder-health";
 import { and, asc, desc, eq, or } from "drizzle-orm";
 
 import { getDb, type Database } from "@/lib/db";
@@ -327,6 +328,7 @@ export async function getPostClassFeedbackSessionDetail(
       resolvedAt: iso(issue.resolvedAt),
       resolvedByEmail: issue.resolvedByEmail,
     })),
+    nightlyReminders: await nightlyReminderHistory(db, { sessionId }),
     reminders: notificationItems,
     ai: canReview ? aiRows : [],
     review: canReview && deduction ? {

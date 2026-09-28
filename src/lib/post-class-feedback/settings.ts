@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, sql } from "drizzle-orm";
 
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -19,6 +19,9 @@ interface Actor {
 
 export interface PostClassSettingsPatch {
   mode?: "shadow" | "live" | "paused";
+  reminderMode?: "off" | "shadow" | "live";
+  reminderActivationAt?: string;
+  legacyReminderDisabled?: boolean;
   effectiveAt?: string | null;
   mapping?: Partial<Record<FieldKey, string | null>>;
   digestRecipientEmails?: string[];
@@ -112,6 +115,8 @@ export async function updatePostClassSettings(
       .toSorted();
 
     const before = {
+      reminderMode: current.reminderMode,
+      reminderActivatedAt: current.reminderActivatedAt?.toISOString() ?? null,
       mode: current.enforcementMode,
       effectiveAt: current.policyEffectiveAt?.toISOString() ?? null,
       mappingVersion: current.formMappingVersion,
@@ -120,6 +125,38 @@ export async function updatePostClassSettings(
       version: current.version,
     };
     const now = new Date();
+    const reminderMode = patch.reminderMode ?? current.reminderMode;
+    let reminderStartedAt = current.reminderStartedAt;
+    let reminderActivatedAt = current.reminderActivatedAt;
+    let legacyReminderDisabledAt = current.legacyReminderDisabledAt;
+    if (reminderMode !== "off") reminderStartedAt ??= now;
+    if (patch.legacyReminderDisabled === true) legacyReminderDisabledAt = now;
+    if (reminderMode === "live" && !reminderActivatedAt) {
+      if (patch.mapping) throw new PostClassValidationError("Validate the updated mapping in shadow mode before live reminder activation.");
+      if (!legacyReminderDisabledAt) throw new PostClassValidationError("Verify that the legacy reminder trigger is disabled before live activation.");
+      const since = new Date(now.getTime() - 24 * 60 * 60_000);
+      const [shadow] = await tx.select({ id: schema.postClassNotificationRuns.id }).from(schema.postClassNotificationRuns).where(and(
+        eq(schema.postClassNotificationRuns.kind, "tutor_nightly"), gte(schema.postClassNotificationRuns.finishedAt, since),
+        sql`${schema.postClassNotificationRuns.metadata}->>'shadowComplete' = 'true'`,
+        sql`${schema.postClassNotificationRuns.metadata}->>'policyVersion' = ${String(current.policyVersion)}`,
+        sql`${schema.postClassNotificationRuns.metadata}->>'mappingVersion' = ${String(current.formMappingVersion)}`,
+      )).limit(1);
+      const tests = await tx.select({ evidence: schema.postClassConfigAuditLog.afterValue }).from(schema.postClassConfigAuditLog).where(and(
+        eq(schema.postClassConfigAuditLog.entityType, "email_delivery"), eq(schema.postClassConfigAuditLog.action, "test_succeeded"),
+        gte(schema.postClassConfigAuditLog.createdAt, since),
+      ));
+      const verified = new Set(tests.filter((row) => typeof row.evidence?.providerMessageId === "string" && row.evidence.providerMessageId)
+        .map((row) => row.evidence?.senderKey));
+      if (!shadow || !verified.has("primary") || !verified.has("backup")) {
+        throw new PostClassValidationError("Complete a current-policy shadow batch and verify primary and backup test receipts within 24 hours before activation.");
+      }
+      reminderActivatedAt = patch.reminderActivationAt ? new Date(patch.reminderActivationAt) : now;
+      if (!Number.isFinite(reminderActivatedAt.getTime()) || reminderActivatedAt.getTime() < now.getTime() - 60_000) {
+        throw new PostClassValidationError("Reminder activation must be prospective.");
+      }
+    } else if (patch.reminderActivationAt && reminderActivatedAt?.toISOString() !== new Date(patch.reminderActivationAt).toISOString()) {
+      throw new PostClassValidationError("The original reminder activation instant is immutable.");
+    }
     let mappingVersion = current.formMappingVersion;
     let mappingValid = current.formMappingValid;
 
@@ -238,6 +275,7 @@ export async function updatePostClassSettings(
       .set({
         enforcementMode: nextMode,
         currentWindowId,
+        reminderMode, reminderStartedAt, reminderActivatedAt, legacyReminderDisabledAt,
         policyEffectiveAt: effectiveAt,
         formMappingVersion: mappingVersion,
         formMappingValid: mappingValid,
@@ -263,6 +301,9 @@ export async function updatePostClassSettings(
       actorEmail: actor.email,
       beforeValue: before,
       afterValue: {
+        reminderMode: updated.reminderMode,
+        reminderActivatedAt: updated.reminderActivatedAt?.toISOString() ?? null,
+        legacyReminderDisabledAt: updated.legacyReminderDisabledAt?.toISOString() ?? null,
         mode: updated.enforcementMode,
         effectiveAt: updated.policyEffectiveAt?.toISOString() ?? null,
         mappingVersion: updated.formMappingVersion,

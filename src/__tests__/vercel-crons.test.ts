@@ -15,6 +15,7 @@ function loadVercelConfig(): VercelConfig {
  * timing, so the only place a stagger regression can be caught is here.
  */
 const EXPECTED_SCHEDULES: Record<string, string> = {
+  "/api/internal/post-class-feedback/reminder-nightly": "0,30 * * * *",
   "/api/internal/tutor-sit-ins": "4,14,24,34,44,54 * * * *",
   "/api/internal/tutor-sit-ins/digest": "0 1 * * *",
   "/api/internal/progress-tests/process": "* * * * *",
@@ -105,10 +106,10 @@ function canCollide(left: FiringSet, right: FiringSet): boolean {
 }
 
 describe("vercel cron configuration", () => {
-  it("registers exactly the 25 known crons, each on its pinned schedule", () => {
+  it("registers exactly the 26 known crons, each on its pinned schedule", () => {
     const crons = loadVercelConfig().crons;
 
-    expect(crons).toHaveLength(25);
+    expect(crons).toHaveLength(26);
     expect(Object.fromEntries(crons.map((cron) => [cron.path, cron.schedule]))).toEqual(EXPECTED_SCHEDULES);
   });
 
@@ -150,8 +151,15 @@ describe("vercel cron configuration", () => {
         // Durable document jobs are idle without queued work; Wise publishing is bounded and paced.
         // Exact 08:00 digest reads the outbox; it does not start a source sync.
         const sitInDigestOverlap = pair.has("/api/internal/tutor-sit-ins/digest") && pair.has("/api/internal/sync-wise");
+        // The approved 22:00 nightly checkpoint is clock-aligned. Its bounded,
+        // read-only detail refresh has its own lease; recovery ticks are idle
+        // without work and never start the general Wise snapshot sync.
+        const nightlyOverlap = pair.has("/api/internal/post-class-feedback/reminder-nightly") &&
+          [...pair].some(path => ["/api/internal/sync-wise", "/api/internal/sync-unearned-revenue",
+            "/api/internal/class-assignments/weekend-check", "/api/internal/class-assignments/morning",
+            "/api/internal/class-assignments/admin-email", "/api/internal/tutor-sit-ins/digest"].includes(path));
         const progressProcessingOverlap = pair.has("/api/internal/progress-tests/process");
-        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck && !nextDayClassroomOverlap && !roomAvailabilityOverlap && !publishRecoveryOverlap && !progressProcessingOverlap && !sitInDigestOverlap) {
+        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck && !nextDayClassroomOverlap && !roomAvailabilityOverlap && !publishRecoveryOverlap && !progressProcessingOverlap && !sitInDigestOverlap && !nightlyOverlap) {
           collisions.push(`${crons[i].path} vs ${crons[j].path}`);
         }
       }

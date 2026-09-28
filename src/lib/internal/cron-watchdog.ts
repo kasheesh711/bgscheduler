@@ -539,8 +539,19 @@ async function runRecipientSweep(db: Database, now: Date, jobs: CronJobHealth[],
     return { ...base, alertsSent: 0, recoveries: 0, emailRecipients: 0, skippedReason: null };
   }
 
+  async function recordDeliveryFailure(detail: string) {
+    for (const job of [...sweep.newAlerts, ...sweep.recoveries]) {
+      const prior = states.find((row) => row.jobKey === job.key);
+      const row = { episodeKey: prior?.episodeKey ?? `${job.key}:${now.toISOString()}`,
+        lastStatus: job.status, lastAlertOutcome: prior?.lastAlertOutcome ?? "delivery_failed",
+        errorSummary: `Alert delivery failure: ${detail}`, updatedAt: now };
+      await db.insert(schema.cronAlertState).values({ jobKey: job.key, ...row })
+        .onConflictDoUpdate({ target: schema.cronAlertState.jobKey, set: row });
+    }
+  }
   const recipients = privateRecipients ?? await loadAdminEmails(db);
   if (recipients.length === 0) {
+    await recordDeliveryFailure("No admin recipients are configured.");
     console.error("Cron watchdog found no admin recipients; episode state left unmarked for retry.");
     return { ...base, alertsSent: 0, recoveries: 0, emailRecipients: 0, skippedReason: "no admin recipients" };
   }
@@ -568,6 +579,7 @@ async function runRecipientSweep(db: Database, now: Date, jobs: CronJobHealth[],
   }
 
   if (sentCount === 0) {
+    await recordDeliveryFailure("No recipient accepted the alert. The next sweep will retry.");
     console.error("Cron watchdog could not deliver to any recipient; episode state left unmarked for retry.");
     return { ...base, alertsSent: 0, recoveries: 0, emailRecipients: 0, skippedReason: "email delivery failed" };
   }
@@ -585,7 +597,7 @@ async function runRecipientSweep(db: Database, now: Date, jobs: CronJobHealth[],
       lastStatus: job.status,
       lastAlertOutcome: "alerted",
       lastAlertedAt: now,
-      errorSummary: job.errorSummary ?? null,
+      errorSummary: sentCount < recipients.length ? `Alert delivery failure: ${recipients.length - sentCount} of ${recipients.length} recipients failed.` : job.errorSummary ?? null,
       updatedAt: now,
     };
     await db
@@ -601,6 +613,7 @@ async function runRecipientSweep(db: Database, now: Date, jobs: CronJobHealth[],
         lastStatus: job.status,
         lastAlertOutcome: "recovered",
         lastRecoveredAt: now,
+        errorSummary: sentCount < recipients.length ? `Alert delivery failure: ${recipients.length - sentCount} recovery recipients failed.` : null,
         updatedAt: now,
       })
       .where(eq(schema.cronAlertState.jobKey, job.key));

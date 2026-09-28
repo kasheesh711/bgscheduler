@@ -511,7 +511,7 @@ describe("runCronWatchdog", () => {
     expect(state.upserts).toEqual([]);
   });
 
-  it("leaves the episode unmarked when no recipient can be reached, so the next sweep retries", async () => {
+  it("persists failed alert delivery without marking the episode alerted, so the next sweep retries", async () => {
     const state = freshState();
     const sender = makeSender(async () => {
       throw new Error("Apps Script email send failed");
@@ -526,7 +526,8 @@ describe("runCronWatchdog", () => {
 
       expect(result).toMatchObject({ unhealthy: 1, alertsSent: 0, recoveries: 0 });
       expect(result.skippedReason).toBe("email delivery failed");
-      expect(state.upserts).toEqual([]);
+      expect(state.upserts).toHaveLength(1);
+      expect(state.upserts[0].values).toMatchObject({ lastAlertOutcome: "delivery_failed", errorSummary: expect.stringContaining("Alert delivery failure:") });
     } finally {
       errorSpy.mockRestore();
     }

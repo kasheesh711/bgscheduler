@@ -434,14 +434,20 @@ export async function getScheduleEmailPreview(
   };
 }
 
+/** A failure known to have happened before acceptance can safely use another relay. */
+export class ScheduleEmailRejection extends Error {
+  readonly definitelyNotAccepted = true;
+}
+
 export function createAppsScriptScheduleEmailSender(
   senderKey: ScheduleEmailSenderKey = "primary",
+  options: { strictOutcome?: boolean } = {},
 ): ScheduleEmailSender {
   return {
     async sendEmail(input) {
       const config = appsScriptSenderConfig(senderKey);
-      if (!config.url) throw new Error(`${config.urlEnvName} is not configured`);
-      if (!config.secret) throw new Error(`${config.secretEnvName} is not configured`);
+      if (!config.url) throw new ScheduleEmailRejection(`${config.urlEnvName} is not configured`);
+      if (!config.secret) throw new ScheduleEmailRejection(`${config.secretEnvName} is not configured`);
 
       const senderName = process.env.SCHEDULE_EMAIL_SENDER_NAME?.trim() || "BeGifted";
       const replyTo = process.env.SCHEDULE_EMAIL_REPLY_TO?.trim() || "kevhsh7@gmail.com";
@@ -464,11 +470,25 @@ export function createAppsScriptScheduleEmailSender(
       });
 
       const json = await response.json().catch(() => null) as AppsScriptEmailResponse | null;
+      // In strict mode a network error, invalid response or generic 5xx is an
+      // unknown outcome: the relay may already have sent the message. Never
+      // claim those are safe to fail over. Existing callers retain their API.
+      if (options.strictOutcome && (!response.ok || json?.ok !== true)) {
+        const message = json?.error ?? `Email relay returned HTTP ${response.status}`;
+        if ([400, 401, 403, 404, 429].includes(response.status) ||
+            /MailApp daily recipient quota is exhausted|unauthorized|invalid recipient/i.test(message)) {
+          throw new ScheduleEmailRejection("The email relay rejected the message before acceptance.");
+        }
+        throw new Error("Email acceptance could not be confirmed. Reconcile before resending.");
+      }
       if (!response.ok) {
         throw new Error(json?.error ?? `Apps Script returned HTTP ${response.status}`);
       }
       if (!json?.ok) {
         throw new Error(json?.error ?? "Apps Script email send failed");
+      }
+      if (options.strictOutcome && (typeof json.id !== "string" || !json.id.trim())) {
+        throw new Error("Email acceptance receipt is missing. Reconcile before resending.");
       }
       return { id: json.id ?? `apps-script:${input.idempotencyKey}` };
     },

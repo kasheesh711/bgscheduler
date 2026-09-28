@@ -102,6 +102,10 @@
     {
       "path": "/api/internal/tutor-sit-ins/digest",
       "schedule": "0 1 * * *"
+    },
+    {
+      "path": "/api/internal/post-class-feedback/reminder-nightly",
+      "schedule": "0,30 * * * *"
     }
   ]
 }

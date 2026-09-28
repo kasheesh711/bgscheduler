@@ -1,5 +1,7 @@
 # Wise Post-Class Feedback Tracking
 
+> Nightly reminder migration: see the [operator runbook](../operations/nightly-feedback-reminders.md) for the dedicated 22:00 Bangkok pipeline, shadow/live controls, receipts, reconciliation and cutover. The older day-after/deadline handlers remain unscheduled.
+
 **Status: stable** — the payout write path inside it is **stable (writes flag-gated by `POST_CLASS_PAYOUT_WRITES_ENABLED` / `POST_CLASS_AUTO_APPROVE_ENABLED`)**.
 
 ## Purpose

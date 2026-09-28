@@ -716,3 +716,8 @@ lease serializes publishers; the existing day lease excludes assignment and room
 booking mutations. A pending job is not a failed invocation. The worker honors
 persisted Wise cooldowns and prioritizes the earliest assignment date. Its cadence
 can overlap the existing daily review/email windows; idle ticks make no Wise calls.
+
+
+## Nightly feedback reminder worker
+
+`GET /api/internal/post-class-feedback/reminder-nightly` is scheduled at `0,30 * * * *`, authenticated by `CRON_SECRET`, with `maxDuration = 800`. Registry key: `post_class_feedback_nightly`. It creates the 22:00 Bangkok batch and resumes unfinished work on later passes. Its reminder-specific setting defaults to `off`; it does not enable the older reminder handlers or change payout scheduling. Health includes independent per-session coverage and persistent uncertain deliveries. See the [nightly reminder runbook](../operations/nightly-feedback-reminders.md).
