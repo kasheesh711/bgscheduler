@@ -15,6 +15,8 @@ import {
   type SessionEligibilityResult,
 } from "./types";
 
+import { postClassDeductionExemption } from "./deduction-exemption";
+
 export const POST_CLASS_MIN_COMBINED_CHARACTERS = 300;
 export const POST_CLASS_SHORT_FIELD_CHARACTERS = 50;
 
@@ -402,6 +404,8 @@ export function deriveEventTimingEvidence(input: {
 export function evaluateSessionEligibility(
   input: SessionEligibilityInput,
 ): SessionEligibilityResult {
+  const exemption = postClassDeductionExemption(input);
+  if (exemption) return { status: "ineligible", eligible: false, reason: exemption.reason, exemption };
   const normalizeStatus = (value: string | null | undefined) =>
     value?.trim().toUpperCase().replace(/[\s-]+/gu, "_") ?? "";
   const isMissedStatus = (value: string) =>

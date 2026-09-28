@@ -4,8 +4,11 @@ import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { PostClassValidationError } from "./errors";
+import { postClassDeductionExemption } from "./deduction-exemption";
+import type { SessionDeductionExemption } from "./types";
 
 export interface DeductionCandidateEvidence {
+  deductionExemption?: SessionDeductionExemption | null;
   sessionEligible: boolean;
   sessionSourceStatus: string;
   formMappingValid: boolean;
@@ -24,6 +27,9 @@ export interface DeductionCandidateEvidence {
 export function assertPostClassDeductionCandidateStillActionable(
   evidence: DeductionCandidateEvidence,
 ): void {
+  if (evidence.deductionExemption) {
+    throw new PostClassValidationError(`The session is exempt from deductions (${evidence.deductionExemption.reason}).`);
+  }
   if (!evidence.sessionEligible) {
     throw new PostClassValidationError("The session is no longer eligible for a deduction.");
   }
@@ -77,6 +83,12 @@ export async function loadCurrentDeductionEvidence(db: Database, sessionIds: str
     db.select().from(schema.postClassSessions).where(inArray(schema.postClassSessions.id, sessionIds)),
   ]);
   if (!settings) return result;
+  const latestVersionIds = sessions.flatMap(s => s.latestFeedbackVersionId ? [s.latestFeedbackVersionId] : []);
+  // Only the canonical current version may excuse a deduction. A deleted or
+  // superseded absence note in immutable history must not clear a later class.
+  const versions = latestVersionIds.length ? await db.select().from(schema.postClassFeedbackVersions)
+    .where(inArray(schema.postClassFeedbackVersions.id, latestVersionIds)) : [];
+  const versionById = new Map(versions.map(v => [v.id, v]));
   const assessments = await db.selectDistinctOn([schema.postClassAssessments.sessionId])
     .from(schema.postClassAssessments).where(and(
       inArray(schema.postClassAssessments.sessionId, sessionIds),
@@ -87,7 +99,13 @@ export async function loadCurrentDeductionEvidence(db: Database, sessionIds: str
   const bySession = new Map(assessments.map(a => [a.sessionId, a]));
   for (const session of sessions) {
     const a = bySession.get(session.id);
+    const v = session.latestFeedbackVersionId ? versionById.get(session.latestFeedbackVersionId) : null;
     result.set(session.id, {
+      deductionExemption: session.sourceStatus === "ready" && settings.formMappingValid && !blockingIssue ? postClassDeductionExemption({
+        canonicalTutorKey: session.canonicalTutorKey, className: session.className,
+        subject: typeof session.sourceMetadata.subject === "string" ? session.sourceMetadata.subject : null,
+        feedbackFields: v?.profile.trim().toLocaleLowerCase("en-US") === "teacher" ? [v] : [],
+      }) : null,
       sessionEligible: session.eligible && session.wiseDeletedAt === null,
       sessionSourceStatus: session.sourceStatus,
       formMappingValid: settings.formMappingValid,

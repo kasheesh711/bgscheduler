@@ -106,6 +106,13 @@ describe("post-class finance invariants", () => {
     })).toThrow(/is compliant/i);
   });
 
+  it("blocks an exempt current feedback projection despite an older violating assessment", () => {
+    expect(() => assertPostClassDeductionCandidateStillActionable({
+      ...actionableEvidence(),
+      deductionExemption: { reason: "missed_or_no_show", source: "feedback", field: "homework", evidence: "Absent" },
+    })).toThrow(/exempt from deductions/u);
+  });
+
   it("binds review idempotency to note, category, version, and target status", () => {
     const recorded = {
       deductionId: "deduction-1",

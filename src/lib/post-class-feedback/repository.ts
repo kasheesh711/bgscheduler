@@ -454,6 +454,7 @@ const KNOWN_INELIGIBLE_REASON_VALUES = [
   "excluded_session_type",
   "complimentary_or_trial",
   "non_billable",
+  "non_teaching_consultation",
 ] as const;
 const KNOWN_INELIGIBLE_REASONS = new Set<string>(KNOWN_INELIGIBLE_REASON_VALUES);
 
@@ -1448,6 +1449,7 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
         mappingVersion,
         settingsVersion: observation.settingsVersion,
         subject: observation.session.subject,
+        deductionExemption: observation.eligibility.exemption ?? null,
         questionIds: observation.session.questions.map((question) => question.id).filter(Boolean),
       };
 

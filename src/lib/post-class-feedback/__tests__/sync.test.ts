@@ -1437,7 +1437,7 @@ describe("post-class feedback event-derived timing", () => {
     meetingStatus: "ENDED",
   };
 
-  function clientWithFeedback(): WiseClient {
+  function clientWithFeedback(options: { topics?: string; className?: string } = {}): WiseClient {
     return {
       async get(path: string, params?: Record<string, string>) {
         if (params?.status === "PAST") {
@@ -1447,6 +1447,7 @@ describe("post-class feedback event-derived timing", () => {
         return {
           data: {
             ...endedSession,
+            classId: { _id: "class-1", name: options.className ?? "Math" },
             feedbackForm: {
               questions: [
                 { _id: "q1", questionText: "Topics covered" },
@@ -1462,7 +1463,7 @@ describe("post-class feedback event-derived timing", () => {
               // is exactly the gap the activity event closes.
               createdAt: "2026-07-21T04:00:00.000Z",
               answers: [
-                { questionId: "q1", answer: "Algebraic equations, worked examples, and checking strategies were covered in a structured sequence. ".repeat(2) },
+                { questionId: "q1", answer: options.topics ?? "Algebraic equations, worked examples, and checking strategies were covered in a structured sequence. ".repeat(2) },
                 { questionId: "q2", answer: "The student explained each method clearly, corrected calculation errors, and applied the final check independently. ".repeat(2) },
                 { questionId: "q3", answer: "Next, the student should practise mixed word problems because choosing the correct method will build confidence. ".repeat(2) },
               ],
@@ -1547,6 +1548,21 @@ describe("post-class feedback event-derived timing", () => {
     expect(observations).toHaveLength(1);
     return observations[0];
   }
+
+  it.each([
+    { tutor: "Teacher One", topics: "Absent", className: "Math", reason: "missed_or_no_show" },
+    { tutor: "Gift", topics: "Advice", className: "Consult Ken", reason: "non_teaching_consultation" },
+  ])("persists the current non-teaching exclusion without a deduction assessment: $reason", async ({ tutor, topics, className, reason }) => {
+    const observations: PostClassSessionObservation[] = [];
+    await syncPostClassFeedback({
+      repository: repositoryWith([], new Date("2026-03-31T00:00:00Z"), observations),
+      client: clientWithFeedback({ topics, className }), instituteId: "institute-1",
+      resolveTutor: async () => ({ status: "resolved", canonicalKey: tutor, displayName: tutor, wiseTeacherUserId: "teacher-1" }),
+    }, { now: new Date("2026-07-23T00:00:00Z") });
+    expect(observations).toHaveLength(1);
+    expect(observations[0].eligibility).toMatchObject({ eligible: false, reason });
+    expect(observations[0].assessment).toBeNull();
+  });
 
   it("keeps a Wise 400 'Session not found' session-scoped so one deleted session cannot suspend the feature", async () => {
     const issues: Array<Record<string, unknown>> = [];
