@@ -268,7 +268,7 @@ A policy change can invalidate verdicts already written against evidence the sys
 
 `DEFAULT_DETAIL_CAP = 50`, `BACKFILL_DETAIL_CAP = 400`, `DETAIL_CONCURRENCY = 4`, `ROLLING_WINDOW_DAYS = 4` (`sync.ts:40`-`49`). The larger cap is honoured **only** for a manual trigger that supplies both `startDate` and `endDate` and is not a reminder checkpoint (`sync.ts:572`-`577`); everything else is clamped to 50 so a routine run can never monopolise the Wise API.
 
-Candidate lanes merge in priority order `feedback_event` → `incomplete_recheck` → `rolling_window` (`sync.ts:204`-`208`). Selection reserves bounded capacity for both the recheck and rolling lanes — `min(10, floor(cap / 3))` each — so a persistent activity-event backlog can accelerate discovery without replacing canonical reconciliation, while at least thirty priority slots remain at cap 50 (`sync.ts:262`-`298`). The pool is filtered for already-reconciled rows *before* the hard cap, otherwise recent reconciled sessions occupy all 50 slots and starve older missing-feedback rows (`sync.ts:662`-`671`).
+Candidate lanes merge in priority order `feedback_event` → `deadline_crossed` → `incomplete_recheck` → `rolling_window` (`PRIORITY` in `sync.ts`). Selection (`selectPostClassSyncCandidates`) reserves bounded capacity for the deadline lane — `min(20, floor(2·cap / 5))`, clamped so the three reservations never exceed the cap — and for the recheck and rolling lanes — `min(10, floor(cap / 3))` each — so a persistent activity-event backlog can accelerate discovery without replacing canonical reconciliation. At cap 50 at least ten priority slots remain when every lane is saturated, and thirty when the deadline lane is empty (see *Deadline coverage and payout hardening* below). The pool is filtered for already-reconciled rows *before* the hard cap, otherwise recent reconciled sessions occupy all 50 slots and starve older missing-feedback rows (`sync.ts:662`-`671`).
 
 A run is `partial` only when a blocking global issue, form drift, or a widespread contract breach makes the whole run untrustworthy — not when one row had messy data (`sync.ts:952`-`962`). `sourceIssueCount` still records every per-session issue honestly. The run metadata carries `globalSourceHealthy` and `mappingObservedHealthy` (the two flags the activation gate keys on) plus `readySessionCount`, `rollingSelectedCount`, and `rollingSavedCount` for recent-window readability (`sync.ts:988`-`1003`).
 
@@ -370,11 +370,11 @@ INC-260829 was an armed accrual cron converting the entire `pending_review` back
 
 Scope is bounded twice (`autoChargeLowerBoundUtc`, `auto-approval.ts:51`-`57`): never before `PAYOUT_AUTO_CHARGE_FLOOR_BANGKOK` = `2026-08-26` (the start of the 2026-09 window; the INC-260829 backlog and the settled 2026-08 ledger stay human decisions, `payout-config.ts:199`-`205`), and never before the last-ended payout window's start, so months-late flags always fall back to the review UI.
 
-**Approve sweep.** A `pending_review` deduction whose deadline is at least `POST_CLASS_AUTO_APPROVE_GRACE_HOURS` in the past (default 24; blank, non-numeric, or negative values fall back to 24; an explicit `0` is the deliberate charge-at-deadline mode, `payout-config.ts:170`-`190`) on a `live`-enforced, source-`ready` session inside scope is approved through `applyPostClassReviewAction` — so the finance lock, revalidation, period check, idempotency, and audit row are exactly a human approval's (`auto-approval.ts:69`-`110`). **Reopen sweep.** An `approved`, unwritten deduction whose session lost eligibility or source readiness is reopened (`:183`-`229`); it is not flag-gated because it restores safety, and it is what keeps `assertPayoutRunPublishable`'s hard `unprovenApprovedDeductions` gate at zero. **Ineligible waive** runs alongside (see *Eligibility*). Order per tick is reopen → waive → approve (`:239`-`257`); the reopen+waive half also runs on every collection tick as the hygiene sweep (`:266`-`282`).
+**Approve sweep.** A `pending_review` deduction whose deadline is at least `POST_CLASS_AUTO_APPROVE_GRACE_HOURS` in the past (default 24; blank, non-numeric, or negative values fall back to 24; an explicit `0` is the deliberate charge-at-deadline mode, `payout-config.ts:170`-`190`) on a `live`-enforced, source-`ready` session inside scope is approved through `applyPostClassReviewAction` — so the finance lock, revalidation, period check, idempotency, and audit row are exactly a human approval's (`auto-approval.ts:69`-`110`). **Reopen sweep.** An `approved`, unwritten deduction whose session lost eligibility or source readiness is reopened (`runPostClassAutoReopens`); the sweep scans only approvals with no live written payout line (`selectAutoReopenCandidates`), because written rows belong to retirement. It is not flag-gated because it restores safety, and it is what keeps `assertPayoutRunPublishable`'s hard `unprovenApprovedDeductions` gate at zero. **Ineligible waive** runs alongside (see *Eligibility*). Order per tick is reopen → waive → approve (`:239`-`257`); the reopen+waive half also runs on every collection tick as the hygiene sweep (`:266`-`282`).
 
 **Ledger retirement (auto-un-charge, `payout-retirement.ts`).** Because charging is instant, evidence that arrives later and clears a violation must take the written row back **off** the ledger — by marker-located row deletion plus `retired_at`, never by netting a +฿100 correction (`:28`-`43`). Each tick retires live written lines inside scope whose deduction was waived or reversed, whose session became ineligible, or whose latest assessment on a source-ready session no longer finds an objective violation (`:95`-`164`). Deletes run in descending 50-row chunks; deletion is proven by readback before any line is retired; pending corrections on a retired line are superseded and written ones leave with the negative row; a hand-edited sheet amount is left untouched for Verify sheet to flag (`:285`-`290`); the pass stands down for a tick rather than fight a live publish lease (`:194`-`202`); and affected runs' versions are bumped so stale operator previews fail closed (`:413`-`417`). Retiring first is what keeps the no-netting invariant — a subsequent waive sees no live written line, so `createPayoutAdjustment` is never reached.
 
-**Accrual and finalize passes (`payout-accrual.ts`).** The accrual pass runs the sweep, then retirement (non-fatal on failure), then publishes the current window with `mode: "accrual"`, which skips the window-ended guard, skips the CSV/Drive leg entirely, and forces `partial` so it can never mint `published` while the window is open (`payout-run.ts:689`-`700`, `:716`-`720`, `:903`, `:940`-`947`). The finalize pass targets the **oldest** un-finalized ended run at or after the automation floor (`payout-repository.ts:423`-`447`), so a window that fails to finalize keeps being retried however many months pass; only when none exists does it fall back to the window anchored to today's own calendar month — the only branch that can create a run row, which is what stops it minting an empty `published` run for a window the system never observed (`payout-accrual.ts:156`-`197`). Both branches see the clock shifted back by a **3-Bangkok-day settlement lag** (`:49`-`58`): the feedback deadline is 23:59:59 two days after the class date, so the last classes of a window can still produce brand-new proven violations through the 27th.
+**Accrual and finalize passes (`payout-accrual.ts`).** The accrual pass runs the sweep, then retirement (per-target retirement skips are reported but non-fatal, while tab-level stand-downs and errors abort the tick), then publishes the current window with `mode: "accrual"`, which skips the window-ended guard, skips the CSV/Drive leg entirely, and forces `partial` so it can never mint `published` while the window is open (`payout-run.ts:689`-`700`, `:716`-`720`, `:903`, `:940`-`947`). The finalize pass targets the **oldest** un-finalized ended run at or after the automation floor (`payout-repository.ts:423`-`447`), so a window that fails to finalize keeps being retried however many months pass; only when none exists does it fall back to the window anchored to today's own calendar month — the only branch that can create a run row, which is what stops it minting an empty `published` run for a window the system never observed (`payout-accrual.ts:156`-`197`). Both branches see the clock shifted back by a **3-Bangkok-day settlement lag** (`:49`-`58`): the feedback deadline is 23:59:59 two days after the class date, so the last classes of a window can still produce brand-new proven violations through the 27th.
 
 A window still un-finalized once its anchor month has passed — or with no run row at all for the most recently ended window — is surfaced by the cron watchdog as a synthetic `post_class_payout_window` job (`payout-window-health.ts:50`-`87`; `src/lib/internal/cron-watchdog.ts:91`-`103`). The check is gated on the accrual cron actually having a schedule and ignores pre-floor windows (`payout-window-health.ts:102`-`110`).
 
@@ -411,11 +411,11 @@ Moving to `live` requires, in `updatePostClassSettings` (`settings.ts:173`-`194`
 
 ## Tests
 
-Thirty-eight suites under `src/lib/post-class-feedback/__tests__/` — ten of them `*.integration.test.ts` against ephemeral Postgres via `testcontainers` — plus six component suites under `src/components/post-class-feedback/__tests__/`, three route suites (`post-class-feedback/payout-runs`, `post-class-feedback/shadow-review`, and `internal/post-class-feedback-backfill`), and one Wise-fetcher suite. Highlights:
+Forty-two suites under `src/lib/post-class-feedback/__tests__/` — ten of them `*.integration.test.ts` against ephemeral Postgres via `testcontainers` — plus six component suites under `src/components/post-class-feedback/__tests__/`, three route suites (`post-class-feedback/payout-runs`, `post-class-feedback/shadow-review`, and `internal/post-class-feedback-backfill`), and one Wise-fetcher suite. Highlights:
 
 - **Policy** — `policy.test.ts`: eligibility precedence, English/Thai content rules, Unicode counts, placeholder and gibberish detection, the exact deadline boundary, timing-unknown, late remediation, the on-time lock, `feedbackSubmitterRole`, and `deriveEventTimingEvidence`.
 - **Wise contract** — `wise.test.ts` and `src/lib/wise/__tests__/post-class-feedback-fetchers.test.ts`: required-field mapping, teacher-profile filtering, auto/manual provenance, mutable submission observations, exact answer retention, `PAST` pagination and the canonical detail request shape.
-- **Collector** — `sync.test.ts` (planning and event-derived timing), `recheck-queue.integration.test.ts` (REC-02, REC-04), `backfill-job.test.ts`, `backfill-window.integration.test.ts`: four-date windowing, lane priority and reserved caps, source issues, form drift, contract-breach escalation, and idempotent resync.
+- **Collector** — `sync.test.ts` (planning and event-derived timing), `recheck-queue.integration.test.ts` (REC-02, REC-04, the `deadline_crossed` lane), `deadline-coverage.test.ts` (the 12 h post-deadline assessment invariant), `backfill-job.test.ts`, `backfill-window.integration.test.ts`: four-date windowing, lane priority and reserved caps, source issues, form drift, contract-breach escalation, and idempotent resync.
 - **Recovery** — `source-status-restore.integration.test.ts` (REC-01 run-wide demotion and one-statement recovery), `deleted-session-retirement.integration.test.ts` (REC-03), `recent-readiness.integration.test.ts`, `reassess.test.ts`.
 - **Evidence and AI** — `events.test.ts`, `detail.test.ts`, `similarity.test.ts`, `ai.test.ts`: event projection, proof outcome, name redaction, trigram cosine similarity, deterministic trigger boundaries, and idempotent concern review.
 - **Access, settings, gates** — `access.test.ts`, `settings.test.ts`, `shadow-review.test.ts` (including recent-window scoping and acknowledgement), plus the shadow-review route suite.
@@ -423,7 +423,7 @@ Thirty-eight suites under `src/lib/post-class-feedback/__tests__/` — ten of th
 - **Payout** — `payout-config.test.ts`, `payout-window.test.ts`, `payout-window-health.test.ts`, `payout-tutor-mapping.test.ts`, `payout-sheet.test.ts`, `payout-master.test.ts`, `payout-plan.test.ts`, `payout-writer.test.ts`, `payout-workbook-operations.test.ts`, plus `payout-run.integration.test.ts` (publish lifecycle, source-anchor quarantine), `payout-repository.integration.test.ts` (candidate selection, lease, tutor identity, compensation, strict close fencing, CSV retry, audited date rolls), `payout-retirement.integration.test.ts`, and `payout-accrual.integration.test.ts` (accrual and finalize passes).
 - **Migrations** — `migration.test.ts` asserts required tables, enums, indexes, append-only triggers, defaults, seeds, and each of `0055` and `0057`–`0062` in turn.
 - **Routes and UI** — `payout-runs/__tests__/route.test.ts` and `payouts-tab.test.tsx` (action schemas, kill-switch exposure, explicit confirmation, canary scope, CSV retry, exception resolution); `workspace-contract.test.ts` (required views, separate reviewer/finance endpoints, no synthetic comment generator); `operations-filter.test.ts`; `deductions-tab.test.ts` (payout lifecycle, CSV export); `session-detail-dialog.test.ts` (Wise-times-only timeline); `feedback-ui.test.tsx`.
-- **Cross-feature** — `src/lib/internal/__tests__/cron-watchdog.test.ts` covers the synthetic payout-window staleness entry; `src/__tests__/vercel-crons.test.ts` pins the three schedules; `src/app/api/data-health/jobs/[jobKey]/run/__tests__/route.test.ts` covers manual invocation and the `access_manager` gate; `src/components/layout/__tests__/app-nav.test.tsx` and `src/lib/navigation/__tests__/tools.test.ts` cover the nav entry.
+- **Cross-feature** — `src/lib/internal/__tests__/cron-watchdog.test.ts` covers the synthetic payout-window staleness and feedback deadline coverage entries; `src/__tests__/vercel-crons.test.ts` pins the three schedules; `src/app/api/data-health/jobs/[jobKey]/run/__tests__/route.test.ts` covers manual invocation and the `access_manager` gate; `src/components/layout/__tests__/app-nav.test.tsx` and `src/lib/navigation/__tests__/tools.test.ts` cover the nav entry.
 
 ## Open questions
 
@@ -470,3 +470,58 @@ separate finalization pass publishes the period, with its existing settlement de
 To repair one tutor workbook, `payout:repoint-workbooks` accepts `--spreadsheet-id ID`.
 `--include-inactive` requires that explicit ID and does not reactivate the registry entry.
 The original formula backup and exact readback checks still apply.
+
+#### Deadline coverage and payout hardening (2026-09-28 follow-ups)
+
+- **`deadline_crossed` recheck lane.** Neither the newest-first rolling window nor the
+  history-wide recheck lane guaranteed an assessment after a class's feedback deadline,
+  and a late or short submission is only charged by such an assessment. Each collection
+  run now also lists (`listDeadlineCrossedCandidates`) eligible sessions that are not
+  deleted in Wise or abandoned as missing, whose `deadline_at` has passed and whose
+  `last_assessed_at` is NULL or ≤ `deadline_at`, bounded below by `autoChargeLowerBoundUtc`
+  and ordered oldest deadline first. Lane priority is event → deadline → recheck → rolling.
+  `selectPostClassSyncCandidates` reserves up to `min(20, floor(2·cap / 5))` detail slots
+  for it (20 of 50), clamped so the three reservations never exceed the cap; extra deadline
+  candidates compete for the remaining priority slots ahead of rolling discovery. Reminder
+  checkpoints never list the lane. A session whose detail fetch keeps failing stays at the
+  front of the lane, and keeps the watchdog red, until it is assessed or leaves the
+  charging scope.
+- **Deadline coverage watchdog.** A synthetic `post_class_deadline_coverage` job
+  ("Feedback Deadline Coverage", `deadline-coverage.ts`) fails when any such session is
+  more than `FEEDBACK_DEADLINE_COVERAGE_THRESHOLD_HOURS` (12 h) past its deadline. It reads
+  the same predicate as the lane (`feedbackDeadlineUncoveredWhere`), so the two cannot
+  disagree, and it is armed only while the `post_class_feedback` collection cron has a
+  schedule. A failed read yields no entry rather than a failed sweep. Expect one alert and
+  one recovery right after deploy while any existing backlog in the charging scope drains.
+- **Versioned auto-approve key.** The approve sweep's idempotency key is
+  `auto-approve:<id>:v<version>`, like the reopen key. A deduction that is auto-approved,
+  reopened when its proof lapses, and proven again is approved again exactly once instead
+  of colliding with its first approval and staying in `pending_review`.
+- **Contained retirement skips.** A per-row retirement skip (a hand-edited sheet amount, a
+  missing or edited correction row, a row still present after deletion) no longer aborts
+  the accrual tick. The row stays on the ledger for Verify sheet or an operator, and other
+  tutors keep accruing. A waived deduction's pending correction on that row is **held**:
+  while unattended charging is on, `publishPayoutRun` never appends a correction whose
+  source line is still a retirement target (`selectRetirementTargets`), so an edited row is
+  never netted against an unverified amount (−50 + 100 = +50). The held correction keeps
+  the run `partial` and the job `ok: false` until an operator resolves the row; human-only
+  mode, which runs no retirement, still nets as before. The pass returns the skips as
+  `retirementSkips`, and
+  `payoutJobResponse` reports `ok: false` naming each Wise session and reason (the first
+  ten, then a count). Tab-level stand-downs (target unresolved, tab ambiguous or
+  unparseable, duplicate markers, readback unparseable) and thrown errors still abort.
+- **Evidence-exclusion visibility and reopen scope.** `countEvidenceExcludedApprovedDeductions`
+  counts unwritten approvals on eligible, source-ready sessions whose current evidence no
+  longer proves a violation: the rows `selectPayoutRunCandidates` drops without a trace.
+  The accrual and finalize passes attach a non-zero count as `evidenceExcludedApproved`,
+  and `payoutJobResponse` then reports `ok: false`. This is deliberately not a publish
+  gate (`computePayoutRunCoverage` and `assertPayoutRunPublishable` are unchanged), so one
+  stuck approval cannot freeze other tutors' charges. The auto-reopen sweep scans only
+  approvals with no live written payout line (`noLiveWrittenPayoutLine`, shared with the
+  count); written rows belong to retirement.
+- **Exemption hardening.** After a status label, a hyphen separates only when spaced or
+  trailing (`LABEL_SEPARATOR`), so glued compounds such as "Absent-minded errors" or
+  "Cancelled-out terms" no longer exempt a class. `MEDICAL_LEAVE` rejects first-person and
+  teacher subjects ("I took sick leave", "My teacher took sick leave", "Kru Ann took sick
+  leave"), which report the tutor's own leave. Every previously recognised absence and
+  cancellation phrase still exempts.

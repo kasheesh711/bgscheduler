@@ -203,12 +203,15 @@ function rollingCandidates(sessions: WiseSession[]): PostClassSessionCandidate[]
 
 const PRIORITY: Record<PostClassSessionCandidate["reason"], number> = {
   feedback_event: 0,
-  incomplete_recheck: 1,
-  rolling_window: 2,
+  deadline_crossed: 1,
+  incomplete_recheck: 2,
+  rolling_window: 3,
 };
 
 export function buildPostClassSyncCandidates(input: {
   eventCandidates: PostClassSessionCandidate[];
+  /** FU1 lane; optional so callers without it select exactly as before. */
+  deadlineCandidates?: PostClassSessionCandidate[];
   incompleteCandidates: PostClassSessionCandidate[];
   rollingCandidates: PostClassSessionCandidate[];
   cap?: number;
@@ -222,12 +225,14 @@ export function buildPostClassSyncCandidates(input: {
 
 function buildPostClassSyncCandidatePool(input: {
   eventCandidates: PostClassSessionCandidate[];
+  deadlineCandidates?: PostClassSessionCandidate[];
   incompleteCandidates: PostClassSessionCandidate[];
   rollingCandidates: PostClassSessionCandidate[];
 }): PostClassSessionCandidate[] {
   const bySession = new Map<string, PostClassSessionCandidate>();
   for (const candidate of [
     ...input.eventCandidates,
+    ...(input.deadlineCandidates ?? []),
     ...input.incompleteCandidates,
     ...input.rollingCandidates,
   ]) {
@@ -252,7 +257,9 @@ function buildPostClassSyncCandidatePool(input: {
     if (priority !== 0) return priority;
     const leftTime = left.scheduledEndAt?.getTime() ?? 0;
     const rightTime = right.scheduledEndAt?.getTime() ?? 0;
-    return left.reason === "incomplete_recheck"
+    // Queue lanes drain oldest first: rechecks by their durable queue instant,
+    // deadline crossings by the deadline they crossed.
+    return left.reason === "incomplete_recheck" || left.reason === "deadline_crossed"
       ? (left.recheckPriorityAt?.getTime() ?? leftTime) -
         (right.recheckPriorityAt?.getTime() ?? rightTime)
       : rightTime - leftTime;
@@ -266,16 +273,28 @@ function selectPostClassSyncCandidates(
   if (sorted.length <= cap) return sorted;
 
   // Activity events accelerate canonical reconciliation; they must never
-  // replace it. Keep bounded lanes for both old incomplete obligations and
-  // newly ENDED rolling-window sessions so a permanently failing event burst
-  // cannot consume every run. With the production cap of 50 this reserves up
-  // to ten calls for each lane while retaining at least thirty priority slots.
+  // replace it. Keep bounded lanes for sessions that crossed their feedback
+  // deadline without a post-deadline assessment (FU1), old incomplete
+  // obligations, and newly ENDED rolling-window sessions, so a permanently
+  // failing event burst cannot consume every run. With the production cap of
+  // 50 this reserves up to twenty calls for deadline crossings and up to ten
+  // each for rechecks and rolling, leaving at least ten priority slots when
+  // every lane is saturated (thirty when the deadline lane is empty). The
+  // deadline reservation is clamped so the three reservations together never
+  // exceed a smaller cap.
+  const reserveDeadline = Math.min(20, Math.floor((cap * 2) / 5));
   const reservePerLane = Math.min(10, Math.floor(cap / 3));
+  const deadlines = sorted.filter((candidate) => candidate.reason === "deadline_crossed");
   const rechecks = sorted.filter((candidate) => candidate.reason === "incomplete_recheck");
   const rolling = sorted.filter((candidate) => candidate.reason === "rolling_window");
   const reservedRechecks = rechecks.slice(0, Math.min(reservePerLane, rechecks.length));
   const reservedRolling = rolling.slice(0, Math.min(reservePerLane, rolling.length));
+  const reservedDeadlines = deadlines.slice(0, Math.max(0, Math.min(
+    reserveDeadline,
+    cap - reservedRechecks.length - reservedRolling.length,
+  )));
   const reserved = new Set([
+    ...reservedDeadlines.map((candidate) => candidate.sessionId),
     ...reservedRechecks.map((candidate) => candidate.sessionId),
     ...reservedRolling.map((candidate) => candidate.sessionId),
   ]);
@@ -611,6 +630,7 @@ export async function syncPostClassFeedback(
       eventCandidates,
       incompleteCandidates,
       persistedCheckpointCandidates,
+      deadlineCandidates,
     ] = await Promise.all([
       dependencies.repository.loadPolicyContext(),
       // Read once per run: sessions whose deadline predates the oldest
@@ -629,6 +649,12 @@ export async function syncPostClassFeedback(
       options.reminderCheckpoint && checkpointClassDate
         ? dependencies.repository.listReminderCheckpointPersistedCandidates(checkpointClassDate)
         : Promise.resolve([]),
+      // FU1. A reminder checkpoint targets one class date only, so the
+      // deadline lane (every in-scope class, oldest deadline first) stays out.
+      options.reminderCheckpoint
+        ? Promise.resolve([])
+        : dependencies.repository.listDeadlineCrossedCandidates?.(detailCap, now) ??
+          Promise.resolve([]),
     ]);
     const discovered = rollingCandidates(recentSessions);
     const discoveredIds = new Set(discovered.map((candidate) => candidate.sessionId));
@@ -640,6 +666,7 @@ export async function syncPostClassFeedback(
       eventCandidates: options.reminderCheckpoint
         ? eventCandidates.filter((event) => discoveredIds.has(event.sessionId))
         : eventCandidates,
+      deadlineCandidates,
       incompleteCandidates,
       rollingCandidates: [...checkpointPersisted, ...discovered],
     });

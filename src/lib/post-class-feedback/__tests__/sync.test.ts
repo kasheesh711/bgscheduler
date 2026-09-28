@@ -451,6 +451,317 @@ describe("post-class feedback sync planning", () => {
       .toBe(80);
   });
 
+  // FU1 — sessions that crossed their feedback deadline without a post-deadline
+  // assessment get their own lane, ranked after activity events and ahead of
+  // both rechecks and rolling discovery, oldest deadline first.
+  it("ranks deadline-crossed sessions after events and ahead of rechecks and rolling, oldest deadline first", () => {
+    const candidates = buildPostClassSyncCandidates({
+      cap: 50,
+      eventCandidates: [{ sessionId: "e1", classId: "class", reason: "feedback_event" }],
+      deadlineCandidates: [
+        {
+          sessionId: "d-late",
+          classId: "class",
+          reason: "deadline_crossed",
+          recheckPriorityAt: new Date("2026-10-04T16:59:59.999Z"),
+        },
+        {
+          sessionId: "w1",
+          classId: "class",
+          reason: "deadline_crossed",
+          recheckPriorityAt: new Date("2026-10-03T16:59:59.999Z"),
+        },
+        {
+          sessionId: "e1",
+          classId: "class",
+          reason: "deadline_crossed",
+          recheckPriorityAt: new Date("2026-09-30T16:59:59.999Z"),
+        },
+        {
+          sessionId: "r1",
+          classId: "class",
+          reason: "deadline_crossed",
+          recheckPriorityAt: new Date("2026-10-02T16:59:59.999Z"),
+        },
+        {
+          sessionId: "d-early",
+          classId: "class",
+          reason: "deadline_crossed",
+          recheckPriorityAt: new Date("2026-10-01T16:59:59.999Z"),
+        },
+      ],
+      incompleteCandidates: [
+        {
+          sessionId: "r1",
+          classId: "class",
+          reason: "incomplete_recheck",
+          recheckPriorityAt: new Date("2026-09-01T00:00:00.000Z"),
+        },
+        {
+          sessionId: "r2",
+          classId: "class",
+          reason: "incomplete_recheck",
+          recheckPriorityAt: new Date("2026-09-02T00:00:00.000Z"),
+        },
+      ],
+      rollingCandidates: [
+        { sessionId: "w1", classId: "class", reason: "rolling_window", rawSession: { _id: "w1" } },
+        { sessionId: "w2", classId: "class", reason: "rolling_window" },
+      ],
+    });
+    expect(candidates.map((candidate) => [candidate.sessionId, candidate.reason])).toEqual([
+      ["e1", "feedback_event"],
+      ["d-early", "deadline_crossed"],
+      ["r1", "deadline_crossed"],
+      ["w1", "deadline_crossed"],
+      ["d-late", "deadline_crossed"],
+      ["r2", "incomplete_recheck"],
+      ["w2", "rolling_window"],
+    ]);
+    // The deadline lane wins the reason, the rolling copy still supplies the
+    // Wise list payload the detail parser falls back on.
+    expect(candidates.find((candidate) => candidate.sessionId === "w1")?.rawSession)
+      .toEqual({ _id: "w1" });
+  });
+
+  it("reserves up to twenty deadline-crossed slots and never exceeds the cap", () => {
+    const events = (count: number) => Array.from({ length: count }, (_, index) => ({
+      sessionId: `event-${index}`,
+      classId: "class",
+      reason: "feedback_event" as const,
+    }));
+    // Built newest-first so the selection has to sort to find the oldest.
+    const deadlines = (count: number) => Array.from({ length: count }, (_, index) => ({
+      sessionId: `deadline-${String(index).padStart(2, "0")}`,
+      classId: "class",
+      reason: "deadline_crossed" as const,
+      recheckPriorityAt: new Date(Date.UTC(2026, 9, 1 + index, 16, 59, 59, 999)),
+    })).reverse();
+    const rechecks = Array.from({ length: 15 }, (_, index) => ({
+      sessionId: `recheck-${index}`,
+      classId: "class",
+      reason: "incomplete_recheck" as const,
+      recheckPriorityAt: new Date(2026, 6, 1, 0, index),
+    }));
+    const rolling = Array.from({ length: 12 }, (_, index) => ({
+      sessionId: `rolling-${index}`,
+      classId: "class",
+      reason: "rolling_window" as const,
+      scheduledEndAt: new Date(2026, 6, 21, 0, index),
+    }));
+    const countByReason = (candidates: ReturnType<typeof buildPostClassSyncCandidates>) => ({
+      feedback_event: candidates.filter((candidate) => candidate.reason === "feedback_event").length,
+      deadline_crossed: candidates.filter((candidate) => candidate.reason === "deadline_crossed").length,
+      incomplete_recheck: candidates.filter((candidate) => candidate.reason === "incomplete_recheck").length,
+      rolling_window: candidates.filter((candidate) => candidate.reason === "rolling_window").length,
+    });
+
+    // Every lane saturated: twenty reserved deadline slots, ten each for
+    // rechecks and rolling, and the remaining ten priority slots to events.
+    const saturated = buildPostClassSyncCandidates({
+      cap: 50,
+      eventCandidates: events(80),
+      deadlineCandidates: deadlines(30),
+      incompleteCandidates: rechecks,
+      rollingCandidates: rolling,
+    });
+    expect(saturated).toHaveLength(50);
+    expect(countByReason(saturated)).toEqual({
+      feedback_event: 10,
+      deadline_crossed: 20,
+      incomplete_recheck: 10,
+      rolling_window: 10,
+    });
+    expect(saturated
+      .filter((candidate) => candidate.reason === "deadline_crossed")
+      .map((candidate) => candidate.sessionId)
+      .toSorted()).toEqual(Array.from(
+      { length: 20 },
+      (_, index) => `deadline-${String(index).padStart(2, "0")}`,
+    ));
+
+    // Deadline candidates beyond the reserve compete for the priority slots
+    // the (few) events leave unused, ahead of rolling discovery.
+    const spill = buildPostClassSyncCandidates({
+      cap: 50,
+      eventCandidates: events(2),
+      deadlineCandidates: deadlines(40),
+      incompleteCandidates: rechecks,
+      rollingCandidates: rolling,
+    });
+    expect(spill).toHaveLength(50);
+    expect(countByReason(spill)).toEqual({
+      feedback_event: 2,
+      deadline_crossed: 28,
+      incomplete_recheck: 10,
+      rolling_window: 10,
+    });
+
+    // A smaller cap clamps the deadline reservation so the three reserved
+    // lanes together can never exceed it.
+    const clamped = buildPostClassSyncCandidates({
+      cap: 30,
+      eventCandidates: [],
+      deadlineCandidates: deadlines(30),
+      incompleteCandidates: rechecks,
+      rollingCandidates: rolling,
+    });
+    expect(clamped).toHaveLength(30);
+    expect(countByReason(clamped)).toEqual({
+      feedback_event: 0,
+      deadline_crossed: 10,
+      incomplete_recheck: 10,
+      rolling_window: 10,
+    });
+  });
+
+  it("selects exactly the same batch when the deadline lane is empty", () => {
+    const input = {
+      cap: 50,
+      eventCandidates: Array.from({ length: 80 }, (_, index) => ({
+        sessionId: `event-${index}`,
+        classId: "class",
+        reason: "feedback_event" as const,
+      })),
+      incompleteCandidates: [],
+      rollingCandidates: Array.from({ length: 12 }, (_, index) => ({
+        sessionId: `rolling-${index}`,
+        classId: "class",
+        reason: "rolling_window" as const,
+        scheduledEndAt: new Date(2026, 6, 21, 0, index),
+      })),
+    };
+    expect(buildPostClassSyncCandidates({ ...input, deadlineCandidates: [] }))
+      .toEqual(buildPostClassSyncCandidates(input));
+  });
+
+  it("fetches deadline-crossed sessions each collection run, but never lists them for a reminder checkpoint", async () => {
+    const now = new Date("2026-07-24T00:00:00.000Z");
+    const detailSessionIds: string[] = [];
+    const deadlineSession = {
+      _id: "deadline-old",
+      classId: { _id: "class-1", name: "Math" },
+      userId: "teacher-1",
+      scheduledStartTime: "2026-07-18T09:00:00.000Z",
+      scheduledEndTime: "2026-07-18T10:00:00.000Z",
+      meetingStatus: "ENDED",
+    };
+    const fakeClient = {
+      async get(path: string, params?: Record<string, string>) {
+        // Nothing in the rolling window: the deadline lane is the only source.
+        if (params?.status === "PAST") {
+          return { data: { sessions: [], page_count: 1 } };
+        }
+        const sessionId = path.split("/").at(-1) ?? "unknown";
+        detailSessionIds.push(sessionId);
+        return {
+          data: {
+            ...deadlineSession,
+            feedbackForm: {
+              questions: [
+                { _id: "q1", questionText: "Topics covered" },
+                { _id: "q2", questionText: "How the student did in class" },
+                { _id: "q3", questionText: "Need more work on" },
+                { _id: "q4", questionText: "Homework and due date" },
+              ],
+            },
+            feedbackSubmissions: [{
+              _id: "auto-deadline-old",
+              profile: "teacher",
+              creditsConsumed: 1,
+              createdAt: "2026-07-18T12:00:00.000Z",
+              answers: [],
+            }],
+          },
+        };
+      },
+    } as unknown as WiseClient;
+    const observations: PostClassSessionObservation[] = [];
+    const makeRepository = (
+      listDeadlineCrossedCandidates: PostClassFeedbackRepository["listDeadlineCrossedCandidates"],
+    ): PostClassFeedbackRepository => ({
+      beginSync: async () => "run-1",
+      completeSync: async () => undefined,
+      failSync: async () => undefined,
+      loadPolicyContext: async () => ({
+        settingsVersion: 1,
+        enforcementMode: "shadow",
+        policyEffectiveAt: null,
+        policyVersion: 1,
+        mappingVersion: 1,
+        mappings: [
+          { field: "topics", questionText: "Topics covered" },
+          { field: "performance", questionText: "How the student did in class" },
+          { field: "improvement", questionText: "Need more work on" },
+          { field: "homework", questionText: "Homework and due date" },
+        ],
+      }),
+      loadSessionEnforcementContext: async () => ({
+        enforcementMode: "shadow",
+        policyEffectiveAt: new Date("2026-07-19T00:00:00.000Z"),
+      }),
+      listFeedbackEventCandidates: async () => [],
+      listIncompleteRecheckCandidates: async () => [],
+      listDeadlineCrossedCandidates,
+      listReminderCheckpointPersistedCandidates: async () => [],
+      loadFeedbackEvents: async () => [],
+      loadFeedbackEventCoverageFloor: async () => null,
+      loadHistoricalFeedbackVersions: async () => [],
+      loadPreviousComplianceLock: async () => null,
+      saveObservation: async (_runId, observation) => {
+        observations.push(observation);
+        return { versionsInserted: 0, assessmentInserted: true };
+      },
+      recordSourceIssue: async () => undefined,
+      pauseForFormDrift: async () => undefined,
+    });
+    const dependencies = {
+      client: fakeClient,
+      instituteId: "institute-1",
+      resolveTutor: async () => ({
+        status: "resolved" as const,
+        canonicalKey: "Kevin",
+        displayName: "Kevin",
+        wiseTeacherUserId: "teacher-1",
+      }),
+    };
+
+    const listDeadline = vi.fn<NonNullable<PostClassFeedbackRepository["listDeadlineCrossedCandidates"]>>(
+      async () => [{
+        sessionId: "deadline-old",
+        classId: "class-1",
+        reason: "deadline_crossed",
+        recheckPriorityAt: new Date("2026-07-20T16:59:59.999Z"),
+      }],
+    );
+    const result = await syncPostClassFeedback({
+      ...dependencies,
+      repository: makeRepository(listDeadline),
+    }, { now });
+
+    expect(listDeadline).toHaveBeenCalledTimes(1);
+    expect(listDeadline).toHaveBeenCalledWith(50, now);
+    expect(detailSessionIds).toEqual(["deadline-old"]);
+    expect(result.detailFetchedCount).toBe(1);
+    expect(observations).toHaveLength(1);
+    expect(observations[0].candidate).toMatchObject({
+      sessionId: "deadline-old",
+      reason: "deadline_crossed",
+    });
+
+    // A reminder checkpoint targets one class date only; the lane stays out.
+    const checkpointListDeadline = vi.fn<NonNullable<PostClassFeedbackRepository["listDeadlineCrossedCandidates"]>>(
+      async () => [],
+    );
+    await syncPostClassFeedback({
+      ...dependencies,
+      repository: makeRepository(checkpointListDeadline),
+    }, { now, reminderCheckpoint: "deadline" });
+
+    expect(checkpointListDeadline).not.toHaveBeenCalled();
+    expect(detailSessionIds).toEqual(["deadline-old"]);
+  });
+
   it("rechecks current canonical details while avoiding hot-looping fresh completed rows", () => {
     const existing = {
       eligibilityReason: "ended_positive_credits",

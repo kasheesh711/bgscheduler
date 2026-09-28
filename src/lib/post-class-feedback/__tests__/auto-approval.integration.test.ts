@@ -21,6 +21,7 @@ import {
   runPostClassAutoApprovalSweep,
   runPostClassAutoReopens,
   runPostClassIneligibleWaivers,
+  selectAutoReopenCandidates,
 } from "@/lib/post-class-feedback/auto-approval";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -401,5 +402,123 @@ describe("cleared approval hygiene", () => {
     expect(row.status).toBe("pending_review");
     const [audit] = await handle.db.select().from(schema.postClassDeductionActions).where(eq(schema.postClassDeductionActions.deductionId, id));
     expect(audit.note).toContain("no longer an objective violation");
+  });
+});
+
+describe("versioned auto-approve key (FU2)", () => {
+  it("re-approves a reopened deduction once its proof returns", async () => {
+    const sessionId = await seedSession({
+      wiseSessionId: "s-reproven",
+      deadlineAt: hoursAgo(GRACE_HOURS + 1),
+    });
+    await seedActionableAssessment(sessionId);
+    const deductionId = await seedDeduction({ sessionId, status: "pending_review" });
+    const setSourceStatus = (sourceStatus: "ready" | "form_drift") =>
+      handle.db.update(schema.postClassSessions)
+        .set({ sourceStatus })
+        .where(eq(schema.postClassSessions.id, sessionId));
+
+    expect(await runPostClassAutoApprovals(appDb(), NOW)).toEqual({ approved: 1, failed: 0 });
+
+    // Proof lapses: the evidence-based reopen sweep returns it to review.
+    await setSourceStatus("form_drift");
+    expect(await runPostClassAutoReopens(appDb())).toEqual({ reopened: 1, failed: 0 });
+    expect(await deductionStatus(deductionId)).toBe("pending_review");
+
+    // Proof returns: an unversioned key would collide with the first approval
+    // ("already used with a different review payload") and strand it forever.
+    await setSourceStatus("ready");
+    expect(await runPostClassAutoApprovals(appDb(), NOW)).toEqual({ approved: 1, failed: 0 });
+    expect(await deductionStatus(deductionId)).toBe("approved");
+    expect(await runPostClassAutoApprovals(appDb(), NOW)).toEqual({ approved: 0, failed: 0 });
+
+    const actions = await handle.db.select({
+      idempotencyKey: schema.postClassDeductionActions.idempotencyKey,
+    }).from(schema.postClassDeductionActions)
+      .where(eq(schema.postClassDeductionActions.deductionId, deductionId));
+    expect(actions.map((action) => action.idempotencyKey).toSorted()).toEqual([
+      `auto-approve:${deductionId}:v1`,
+      `auto-approve:${deductionId}:v3`,
+      `auto-reopen:${deductionId}:v2`,
+    ]);
+  });
+});
+
+describe("reopen scan scope (FU4)", () => {
+  /** A written payout line in the first unattended window (2026-09). */
+  async function seedWrittenLine(input: {
+    runId: string;
+    sessionId: string;
+    deductionId: string;
+    wiseSessionId: string;
+    retiredAt: Date | null;
+  }): Promise<void> {
+    const at = hoursAgo(GRACE_HOURS + 1);
+    const compact = input.deductionId.replace(/-/gu, "").slice(0, 12);
+    await handle.db.insert(schema.postClassPayoutRunLines).values({
+      runId: input.runId,
+      deductionId: input.deductionId,
+      sessionId: input.sessionId,
+      sourceIdentity: `deduction:${input.deductionId}`,
+      rowSignature: `BGS-PAYOUT 2026-09 ${compact}`,
+      canonicalTutorKey: "kevin",
+      tutorName: "Kevin",
+      wiseSessionId: input.wiseSessionId,
+      scheduledStartAt: at,
+      scheduledEndAt: at,
+      deadlineAt: at,
+      amountMinor: -10_000,
+      matchStatus: "matched",
+      writeStatus: "written",
+      writtenAt: at,
+      insertedRowNumber: 2,
+      idempotencyKey: `line:${input.deductionId}`,
+      retiredAt: input.retiredAt,
+      retiredReason: input.retiredAt ? "Auto-retired: reassessment cleared the violation." : null,
+    });
+  }
+
+  it("scans only approvals with no live written payout line", async () => {
+    const [run] = await handle.db.insert(schema.postClassPayoutRuns).values({
+      anchorMonth: "2026-09-01",
+      windowStart: "2026-08-26",
+      windowEnd: "2026-09-25",
+      status: "partial",
+    }).returning({ id: schema.postClassPayoutRuns.id });
+    const seedApproval = async (wiseSessionId: string) => {
+      const sessionId = await seedSession({
+        wiseSessionId,
+        deadlineAt: hoursAgo(GRACE_HOURS + 1),
+        sourceStatus: "form_drift",
+      });
+      return { sessionId, deductionId: await seedDeduction({ sessionId, status: "approved" }) };
+    };
+    const unwritten = await seedApproval("s-scan-unwritten");
+    const liveWritten = await seedApproval("s-scan-live-written");
+    const retiredWritten = await seedApproval("s-scan-retired-written");
+    await seedWrittenLine({
+      runId: run.id,
+      ...liveWritten,
+      wiseSessionId: "s-scan-live-written",
+      retiredAt: null,
+    });
+    await seedWrittenLine({
+      runId: run.id,
+      ...retiredWritten,
+      wiseSessionId: "s-scan-retired-written",
+      retiredAt: hoursAgo(2),
+    });
+
+    // A retired line is off the ledger, so it no longer counts as written.
+    const candidates = await selectAutoReopenCandidates(appDb());
+    expect(candidates.map((candidate) => candidate.deductionId).toSorted()).toEqual(
+      [unwritten.deductionId, retiredWritten.deductionId].toSorted(),
+    );
+
+    expect(await runPostClassAutoReopens(appDb())).toEqual({ reopened: 2, failed: 0 });
+    expect(await deductionStatus(unwritten.deductionId)).toBe("pending_review");
+    expect(await deductionStatus(retiredWritten.deductionId)).toBe("pending_review");
+    // Written rows belong to retirement, never to the reopen sweep.
+    expect(await deductionStatus(liveWritten.deductionId)).toBe("approved");
   });
 });

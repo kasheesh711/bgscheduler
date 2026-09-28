@@ -22,6 +22,7 @@ import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { WiseSessionDetail } from "@/lib/wise/types";
 import { getWiseSessionTeacherUserId, getWiseUserId } from "@/lib/wise/types";
+import { autoChargeLowerBoundUtc } from "./auto-approval";
 import { toFeedbackEventEvidence } from "./events";
 import { lockPostClassFinance } from "./finance-lock";
 import { assessFeedbackContent, calculateFeedbackDeadline, compareVersions } from "./policy";
@@ -106,6 +107,37 @@ function aliasedIssueWiseSessionId(alias: string): SQL {
 /** The same expression bound to the outer `post_class_source_issues` row. */
 function issueWiseSessionId(): SQL {
   return aliasedIssueWiseSessionId("post_class_source_issues");
+}
+
+/**
+ * Eligible, live sessions inside the unattended-charging scope whose feedback
+ * deadline passed before `deadlineBefore` and that were never assessed after
+ * that deadline (`last_assessed_at` is only written by an observation that
+ * carries an assessment). Shared by the collector's `deadline_crossed` lane
+ * (deadlineBefore = now) and the watchdog invariant in deadline-coverage.ts
+ * (deadlineBefore = now - 12 h). The scope bound keeps both off settled
+ * historical windows.
+ *
+ * One predicate on purpose: a synthetic watchdog entry that stayed failing on
+ * rows the lane had stopped proposing would hold its alert episode open
+ * forever, and the episode dedup would then swallow every later alert.
+ */
+export function feedbackDeadlineUncoveredWhere(input: {
+  now: Date;
+  deadlineBefore: Date;
+}): SQL | undefined {
+  return and(
+    eq(schema.postClassSessions.eligible, true),
+    isNull(schema.postClassSessions.wiseDeletedAt),
+    notDeletedInWise(schema.postClassSessions.wiseSessionId),
+    notAbandonedMissingSession(schema.postClassSessions.wiseSessionId),
+    lt(schema.postClassSessions.deadlineAt, input.deadlineBefore),
+    gte(schema.postClassSessions.scheduledEndAt, autoChargeLowerBoundUtc(input.now)),
+    or(
+      isNull(schema.postClassSessions.lastAssessedAt),
+      lte(schema.postClassSessions.lastAssessedAt, schema.postClassSessions.deadlineAt),
+    ),
+  );
 }
 import { withPostClassTransaction } from "./transaction";
 import type {
@@ -207,6 +239,15 @@ export interface PostClassFeedbackRepository {
   ): Promise<PostClassSessionEnforcementContext>;
   listFeedbackEventCandidates(limit: number): Promise<PostClassSessionCandidate[]>;
   listIncompleteRecheckCandidates(limit: number): Promise<PostClassSessionCandidate[]>;
+  /**
+   * FU1: eligible sessions in the unattended-charging scope whose feedback
+   * deadline has passed without a post-deadline assessment
+   * (`feedbackDeadlineUncoveredWhere`), oldest deadline first, as
+   * `deadline_crossed` candidates carrying the deadline in `recheckPriorityAt`.
+   * Optional so the many hand-rolled test fakes of this interface keep
+   * compiling.
+   */
+  listDeadlineCrossedCandidates?(limit: number, now: Date): Promise<PostClassSessionCandidate[]>;
   listReminderCheckpointPersistedCandidates(
     classDate: string,
   ): Promise<PostClassSessionCandidate[]>;
@@ -1079,6 +1120,44 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
       }
     }
     return [...combined.values()].slice(0, boundedLimit);
+  }
+
+  /**
+   * FU1: the rolling window is newest-first and the recheck lane round-robins
+   * all history by `updated_at`, so neither guarantees a class is looked at
+   * again once its feedback deadline has passed — and a late or short
+   * submission is only charged by an assessment made after that deadline.
+   * This lane proposes exactly those sessions, oldest deadline first; the
+   * session id closes the order deterministically.
+   */
+  async listDeadlineCrossedCandidates(
+    limit: number,
+    now: Date,
+  ): Promise<PostClassSessionCandidate[]> {
+    const boundedLimit = Math.max(0, limit);
+    if (boundedLimit === 0) return [];
+    const rows = await this.db.select({
+      wiseSessionId: schema.postClassSessions.wiseSessionId,
+      wiseClassId: schema.postClassSessions.wiseClassId,
+      scheduledStartAt: schema.postClassSessions.scheduledStartAt,
+      scheduledEndAt: schema.postClassSessions.scheduledEndAt,
+      deadlineAt: schema.postClassSessions.deadlineAt,
+    }).from(schema.postClassSessions)
+      .where(feedbackDeadlineUncoveredWhere({ now, deadlineBefore: now }))
+      .orderBy(
+        asc(schema.postClassSessions.deadlineAt),
+        asc(schema.postClassSessions.scheduledEndAt),
+        asc(schema.postClassSessions.wiseSessionId),
+      )
+      .limit(boundedLimit);
+    return rows.map((row) => ({
+      sessionId: row.wiseSessionId,
+      classId: row.wiseClassId,
+      reason: "deadline_crossed",
+      scheduledStartAt: row.scheduledStartAt,
+      scheduledEndAt: row.scheduledEndAt,
+      recheckPriorityAt: row.deadlineAt,
+    }));
   }
 
   async listReminderCheckpointPersistedCandidates(

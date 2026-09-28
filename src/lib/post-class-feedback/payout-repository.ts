@@ -18,6 +18,7 @@ import {
   or,
   sql,
 } from "drizzle-orm";
+import type { AnyColumn, SQL } from "drizzle-orm";
 
 import { deductionEvidenceIssue, loadCurrentDeductionEvidence } from "./deduction-evidence";
 import { getDb, type Database } from "@/lib/db";
@@ -322,6 +323,51 @@ export async function computePayoutRunCoverage(
     nullTutorKeyLines,
     blockingGlobalSourceIssues: Number(issues?.count ?? 0),
   };
+}
+
+/**
+ * FU4: unwritten approvals on eligible, source-ready sessions whose current
+ * evidence no longer proves a violation -- exactly the approvals
+ * `selectPayoutRunCandidates` silently drops. `unprovenApprovedDeductions`
+ * cannot see them (it only counts ineligible or non-ready sessions).
+ *
+ * The reopen sweep, which runs at the start of every accrual/finalize pass,
+ * normally returns such an approval to review first, so a non-zero count means
+ * it could not (e.g. a closed finance period refused the reopen). They are
+ * surfaced LOUDLY through `payoutJobResponse` rather than as a publish hard
+ * gate, because one stuck approval must not freeze every other tutor's
+ * charges -- the same containment principle as retirement skips. Written
+ * approvals are excluded: they are retirement's business.
+ */
+export async function countEvidenceExcludedApprovedDeductions(
+  db: Database,
+  window: PayoutRunWindow,
+): Promise<number> {
+  const { start, endExclusive } = payoutRunRangeUtc(window);
+  const rows = await db.select({ sessionId: schema.postClassSessions.id })
+    .from(schema.postClassDeductions)
+    .innerJoin(
+      schema.postClassSessions,
+      eq(schema.postClassDeductions.sessionId, schema.postClassSessions.id),
+    )
+    .leftJoin(
+      schema.postClassDeductionOffsets,
+      eq(schema.postClassDeductionOffsets.deductionId, schema.postClassDeductions.id),
+    )
+    .where(and(
+      // The same in-window scope as `computePayoutRunCoverage`.
+      gte(schema.postClassSessions.scheduledEndAt, start),
+      lt(schema.postClassSessions.scheduledEndAt, endExclusive),
+      isNull(schema.postClassSessions.wiseDeletedAt),
+      eq(schema.postClassDeductions.status, "approved"),
+      isNull(schema.postClassDeductionOffsets.id),
+      eq(schema.postClassSessions.eligible, true),
+      eq(schema.postClassSessions.sourceStatus, "ready"),
+      noLiveWrittenPayoutLine(schema.postClassDeductions.id),
+    ));
+  if (rows.length === 0) return 0;
+  const evidence = await loadCurrentDeductionEvidence(db, rows.map((row) => row.sessionId));
+  return rows.filter((row) => deductionEvidenceIssue(evidence.get(row.sessionId)) !== null).length;
 }
 
 export async function loadPayoutTutorNames(
@@ -1446,6 +1492,21 @@ export async function hasWrittenPayoutDeduction(
   deductionId: string,
 ): Promise<boolean> {
   return Boolean(await findWrittenPayoutDeductionLine(db, deductionId));
+}
+
+/**
+ * SQL twin of `findWrittenPayoutDeductionLine`: the deduction has no `written`,
+ * un-retired payout line. One definition of "on the ledger" for the reopen scan
+ * and the evidence-exclusion count. Aliased so it stays correct inside a query
+ * that itself selects from the run-lines table.
+ */
+export function noLiveWrittenPayoutLine(deductionId: AnyColumn | SQL): SQL {
+  return sql`not exists (
+    select 1 from ${schema.postClassPayoutRunLines} as live_written_line
+    where live_written_line.deduction_id = ${deductionId}
+      and live_written_line.write_status = 'written'
+      and live_written_line.retired_at is null
+  )`;
 }
 
 export async function createPayoutAdjustment(db: Database, input: {

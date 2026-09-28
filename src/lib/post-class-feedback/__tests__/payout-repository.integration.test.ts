@@ -21,6 +21,7 @@ import {
   beginOrResumePayoutWorkbookRoll,
   claimPayoutCsvRetry,
   closePayoutRun,
+  countEvidenceExcludedApprovedDeductions,
   createPayoutAdjustment,
   finalizePayoutCsvRetry,
   finalizePayoutWorkbookRoll,
@@ -1309,6 +1310,53 @@ describe("acquirePayoutRunLease", () => {
       expectedVersion: expectedVersionFor(preview),
       acknowledgements: acknowledgementsFor(preview),
     }, appDb())).rejects.toThrow(/approved deduction no longer has proven eligible/iu);
+  });
+
+  // FU4: an approval on an eligible, ready session whose current evidence no
+  // longer proves a violation is silently dropped by the candidate selection.
+  // It is counted (so the payout job can report it) without becoming a new
+  // publish gate: one stuck approval must not freeze every other tutor.
+  it("counts unwritten approvals the current-evidence check drops, without blocking publish", async () => {
+    const clearedId = await seedDeduction({
+      id: "approved-cleared",
+      endsAt: "2026-07-12T03:00:00.000Z",
+      tutorKey: "kevin",
+      status: "approved",
+    });
+    await seedDeduction({
+      id: "approved-proven",
+      endsAt: "2026-07-13T03:00:00.000Z",
+      tutorKey: "kevin",
+      status: "approved",
+    });
+    const [cleared] = await handle.db.select({ sessionId: schema.postClassDeductions.sessionId })
+      .from(schema.postClassDeductions)
+      .where(eq(schema.postClassDeductions.id, clearedId));
+    await seedPayoutAssessment(appDb(), cleared.sessionId, {
+      objectiveViolation: false,
+      assessedAt: new Date(),
+    });
+
+    const candidates = await selectPayoutRunCandidates(appDb(), WINDOW);
+    expect(candidates.map((candidate) => candidate.wiseSessionId)).toEqual(["approved-proven"]);
+    expect(await countEvidenceExcludedApprovedDeductions(appDb(), WINDOW)).toBe(1);
+
+    const { coverage } = await readPayoutRunPreview(appDb(), { window: WINDOW });
+    expect(coverage.unprovenApprovedDeductions).toBe(0);
+    expect(() => assertPayoutRunPublishable(coverage)).not.toThrow();
+  });
+
+  it("leaves written approvals with lost proof to retirement, not the exclusion count", async () => {
+    const { deductionId } = await seedWrittenPayoutDeduction();
+    const [written] = await handle.db.select({ sessionId: schema.postClassDeductions.sessionId })
+      .from(schema.postClassDeductions)
+      .where(eq(schema.postClassDeductions.id, deductionId));
+    await seedPayoutAssessment(appDb(), written.sessionId, {
+      objectiveViolation: false,
+      assessedAt: new Date(),
+    });
+
+    expect(await countEvidenceExcludedApprovedDeductions(appDb(), WINDOW)).toBe(0);
   });
 
   it("counts an open blocking global source issue", async () => {
