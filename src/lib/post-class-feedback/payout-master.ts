@@ -369,6 +369,29 @@ export function matchMasterRow(input: MasterMatchInput): MasterMatchResult {
     return { status: "unmatched", row: null, candidates: [] };
   }
 
+  // Replaced/cancelled classes can leave an unpaid copy at the exact same
+  // start as the paid class. Only a fully evidenced paid-vs-zero tie is
+  // resolvable; two paid rows or unknown billing values remain ambiguous.
+  // Resolve before checking claims so a claimed paid row can never fall
+  // through to its unpaid copy and anchor a second deduction.
+  const nearestDistance = Math.min(...candidates.map((row) =>
+    Math.abs(row.startAt!.getTime() - input.scheduledStartAt.getTime())));
+  const nearest = candidates.filter((row) =>
+    Math.abs(row.startAt!.getTime() - input.scheduledStartAt.getTime()) === nearestDistance);
+  if (nearest.length > 1 && nearest.every((row) =>
+    row.startAt!.getTime() === nearest[0].startAt!.getTime())) {
+    const paid = nearest.filter((row) =>
+      (numberValue(row.rawCredits) ?? 0) > 0 && (row.payoutAmount ?? 0) > 0
+      && !/\(cancelled\)|\(canceled\)/iu.test(row.sessionName));
+    const zero = nearest.filter((row) =>
+      numberValue(row.rawCredits) === 0 && row.payoutAmount === 0);
+    if (paid.length === 1 && paid.length + zero.length === nearest.length) {
+      return input.claimedRows?.has(paid[0].rowNumber)
+        ? { status: "ambiguous", row: null, candidates }
+        : { status: "matched", row: paid[0], candidates };
+    }
+  }
+
   const unclaimed = input.claimedRows
     ? candidates.filter((row) => !input.claimedRows!.has(row.rowNumber))
     : candidates;

@@ -26,6 +26,7 @@ import { toFeedbackEventEvidence } from "./events";
 import { lockPostClassFinance } from "./finance-lock";
 import { assessFeedbackContent, calculateFeedbackDeadline, compareVersions } from "./policy";
 import { DEFAULT_FEEDBACK_FIELD_MAPPINGS } from "./wise";
+import { resolvePostClassParticipantName } from "./participant-name";
 
 /**
  * How long Wise gets to bring a session it reported missing back before the
@@ -1561,7 +1562,7 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
             inArray(schema.creditControlStudents.wiseStudentId, wiseStudentIds),
           ))
         : [];
-      const studentNameById = new Map(studentRows.map((row) => [row.wiseStudentId, row.studentName]));
+      const studentById = new Map(studentRows.map((row) => [row.wiseStudentId, row]));
 
       // Session detail is canonical. Remove participants that disappeared
       // from a later Wise observation instead of retaining a stale union.
@@ -1577,9 +1578,9 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
       }
       for (const participant of participants) {
         const soleParticipant = participants.length === 1;
-        const studentName = participant.studentName ??
-          studentNameById.get(participant.wiseStudentId) ??
-          participant.wiseStudentId;
+        const studentName = resolvePostClassParticipantName(
+          participant, studentById.get(participant.wiseStudentId),
+        );
         const participantCredits = creditsByStudentId.get(participant.wiseStudentId) ??
           (soleParticipant ? observation.session.creditsConsumed ?? 0 : 0);
         await tx.insert(schema.postClassSessionParticipants).values({
