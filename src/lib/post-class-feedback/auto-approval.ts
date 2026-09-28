@@ -1,7 +1,8 @@
 import "server-only";
 
-import { and, eq, gte, isNull, lte, ne, or } from "drizzle-orm";
+import { and, eq, gte, isNull, lte } from "drizzle-orm";
 
+import { deductionEvidenceIssue, loadCurrentDeductionEvidence } from "./deduction-evidence";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { bangkokDateStartUtc, todayBangkok } from "@/lib/room-capacity/dates";
@@ -170,21 +171,17 @@ export async function runPostClassIneligibleWaivers(
 }
 
 /**
- * Reopen every `approved`, not-yet-written deduction that has lost proof --
- * its session is no longer eligible, or its source is no longer `ready`.
- *
- * This is not optional housekeeping: `assertPayoutRunPublishable` hard-blocks
- * on `unprovenApprovedDeductions > 0` with no acknowledgement escape, so one
- * unproven approved deduction would otherwise stall all accrual. Mirrors the
- * exact predicate `computePayoutRunCoverage` uses for `unprovenApproved`
- * (`payout-repository.ts`), without its window filter -- this is a global
- * safety sweep, not scoped to one payout run.
+ * Reopen unwritten approvals whose latest current-policy/current-mapping
+ * evidence no longer supports a charge. Written rows belong to retirement;
+ * human waivers are never selected. The review action keeps the finance lock,
+ * active-publish fence, version check and immutable audit trail.
  */
 export async function runPostClassAutoReopens(
   db: Database = getDb(),
 ): Promise<{ reopened: number; failed: number }> {
   const candidates = await db.select({
     deductionId: schema.postClassDeductions.id,
+    sessionId: schema.postClassSessions.id,
     version: schema.postClassDeductions.version,
   }).from(schema.postClassDeductions)
     .innerJoin(
@@ -198,15 +195,14 @@ export async function runPostClassAutoReopens(
     .where(and(
       eq(schema.postClassDeductions.status, "approved"),
       isNull(schema.postClassDeductionOffsets.id),
-      or(
-        eq(schema.postClassSessions.eligible, false),
-        ne(schema.postClassSessions.sourceStatus, "ready"),
-      ),
     ));
 
+  const evidence = await loadCurrentDeductionEvidence(db, candidates.map(row => row.sessionId));
   let reopened = 0;
   let failed = 0;
   for (const candidate of candidates) {
+    const issue = deductionEvidenceIssue(evidence.get(candidate.sessionId));
+    if (!issue) continue;
     // A pre-filter only -- `applyPostClassReviewAction`'s reopen branch
     // already refuses a written deduction. Skipping here just avoids a
     // guaranteed-failing call.
@@ -215,9 +211,9 @@ export async function runPostClassAutoReopens(
       await applyPostClassReviewAction(SYSTEM_ACTOR, {
         deductionId: candidate.deductionId,
         action: "reopen",
-        note: "Automated reopen: proof lost before the payout write.",
+        note: `Automated reopen: proof lost before the payout write. ${issue}`,
         expectedVersion: candidate.version,
-        idempotencyKey: `auto-reopen:${candidate.deductionId}`,
+        idempotencyKey: `auto-reopen:${candidate.deductionId}:v${candidate.version}`,
       }, db);
       reopened += 1;
     } catch (error) {

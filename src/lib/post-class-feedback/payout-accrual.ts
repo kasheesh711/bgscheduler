@@ -9,7 +9,7 @@ import {
   runPostClassDeductionHygiene,
 } from "./auto-approval";
 import { PostClassConflictError } from "./errors";
-import { PAYOUT_AUTO_CHARGE_FLOOR_BANGKOK } from "./payout-config";
+import { PAYOUT_AUTO_CHARGE_FLOOR_BANGKOK, payoutAutomationPaused } from "./payout-config";
 import type { PayoutPublishAcknowledgements } from "./payout-plan";
 import { runPayoutLedgerRetirement } from "./payout-retirement";
 import {
@@ -97,12 +97,10 @@ export async function runPayoutAccrualPass(
   dependencies: PayoutRunDependencies = {},
   now: Date = new Date(),
 ): Promise<{ skipped: string } | PayoutRunView> {
+  if (payoutAutomationPaused()) return { skipped: "automation-paused" };
   await runPostClassAutoApprovalSweep(db, now);
-  // Auto-un-charge before planning: rows whose violation cleared (or whose
-  // class became ineligible) leave the ledger by deletion, so the publish
-  // below never nets a +฿100 correction against them. A retirement failure
-  // is deliberately non-fatal — the old netting path still self-corrects,
-  // and the deleted pair is cleaned up on a later tick.
+  // Retirement must finish before any new charge. Authentication failures or
+  // altered markers must remain visible, never swallowed as a successful tick.
   try {
     const retirement = await runPayoutLedgerRetirement(db, {
       now,
@@ -111,6 +109,11 @@ export async function runPayoutAccrualPass(
         ? () => dependencies.resolveGoogleTarget!({ forWrite: false })
         : undefined,
     });
+    if (retirement.skippedReason === "publish lease live") return { skipped: "lease-held" };
+    if (retirement.skippedTargets.length || (retirement.skippedReason
+      && retirement.skippedReason !== "auto-charge disabled")) {
+      throw new Error(`Payout retirement incomplete: ${retirement.skippedReason ?? retirement.skippedTargets.map(t => t.reason).join("; ")}`);
+    }
     if (retirement.retiredLines > 0) {
       // The freshly retired lines now read as unwritten, so the reopen and
       // ineligible-waive sweeps can finish those deductions' lifecycles in
@@ -119,6 +122,7 @@ export async function runPayoutAccrualPass(
     }
   } catch (error) {
     console.error("[payout-accrual] retirement pass failed", error);
+    throw error;
   }
   const window = payoutRunWindowForBangkokDate(payoutBangkokDate(now));
   const view = await previewPayoutRun(SYSTEM_ACTOR, {
@@ -145,7 +149,7 @@ export async function runPayoutAccrualPass(
   } catch (error) {
     // Source sync holding its lane, a lease already held, or a stale
     // token/version are all expected and simply retry next tick.
-    if (error instanceof PostClassConflictError) {
+    if (error instanceof PostClassConflictError && error.retryableReason) {
       console.error("[payout-accrual]", error.message);
       return { skipped: error.message };
     }
@@ -225,6 +229,7 @@ export async function runPayoutFinalizePass(
   dependencies: PayoutRunDependencies = {},
   now: Date = new Date(),
 ): Promise<{ skipped: string } | PayoutRunView> {
+  if (payoutAutomationPaused()) return { skipped: "automation-paused" };
   const window = await resolveFinalizeWindow(db, payoutBangkokDate(now));
   if (!window) {
     return { skipped: "window-not-ended" };
@@ -248,10 +253,31 @@ export async function runPayoutFinalizePass(
       expectedVersion: view.run.version,
     }, db, dependenciesWithClock(dependencies, now));
   } catch (error) {
-    if (error instanceof PostClassConflictError) {
+    if (error instanceof PostClassConflictError && error.retryableReason) {
       console.error("[payout-finalize]", error.message);
       return { skipped: error.message };
     }
     throw error;
   }
+}
+
+/** Top-level fields are consumed by the cron auditor and watchdog. */
+export function payoutJobResponse(
+  accrual: Awaited<ReturnType<typeof runPayoutAccrualPass>>,
+  finalize: Awaited<ReturnType<typeof runPayoutFinalizePass>>,
+) {
+  const incomplete = [accrual, finalize].find(view => !("skipped" in view) && (
+    view.stoppedEarly || view.csvError || view.exceptions.some(e => e.status === "open")
+    || view.lines.some(line => line.retiredAt === null && line.writeStatus !== "written")
+    || view.adjustments.some(a => a.status !== "written" && a.status !== "superseded")
+  ));
+  const finalizeIncomplete = !("skipped" in finalize) && finalize.run.status !== "published";
+  if (incomplete || finalizeIncomplete) return {
+    ok: false, error: "Payout pass incomplete; inspect the run's exceptions and write outcomes.", accrual, finalize,
+  };
+  return {
+    ok: true, skipped: "skipped" in accrual && "skipped" in finalize,
+    reason: "skipped" in accrual && "skipped" in finalize ? `${accrual.skipped}; ${finalize.skipped}` : null,
+    accrual, finalize,
+  };
 }

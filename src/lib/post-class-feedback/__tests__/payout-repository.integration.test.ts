@@ -12,6 +12,8 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 
 vi.mock("server-only", () => ({}));
 
+import { seedPayoutAssessment } from "@/tests/integration/payout-fixtures";
+
 import { and, eq } from "drizzle-orm";
 import { startTestDb, stopTestDb, truncateAll } from "@/tests/integration/db-helper";
 import {
@@ -32,6 +34,7 @@ import {
   selectPayoutRunCandidates,
   upsertPayoutTutorName,
 } from "@/lib/post-class-feedback/payout-repository";
+import { verifyPayoutSheet } from "../payout-sheet-verify";
 import { payoutRunWindow } from "@/lib/post-class-feedback/payout-window";
 import { assertPayoutRunPublishable } from "@/lib/post-class-feedback/payout-plan";
 import { PostClassConflictError } from "@/lib/post-class-feedback/errors";
@@ -54,6 +57,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await truncateAll(handle.db);
+  await handle.db.update(schema.postClassSettings).set({ policyVersion: 1, formMappingVersion: 1, formMappingValid: true });
   // These snapshot-independent audit/source stores are intentionally outside
   // the shared truncation helper, but this suite writes deterministic fixtures
   // into them and must remain repeatable against one external scratch DB.
@@ -197,6 +201,7 @@ async function seedDeduction(input: {
    * `system:*` actor to simulate an auto-approval (INC-260829).
    */
   decisionByEmail?: string | null;
+  assessment?: boolean;
 }): Promise<string> {
   const at = new Date(input.endsAt);
   const [session] = await handle.db.insert(schema.postClassSessions).values({
@@ -230,6 +235,7 @@ async function seedDeduction(input: {
     decisionAt: input.status === "pending_review" ? null : at,
   }).returning({ id: schema.postClassDeductions.id });
 
+  if (input.assessment !== false) await seedPayoutAssessment(appDb(), session.id);
   if (input.reversedIntoPeriodId) {
     await handle.db.insert(schema.postClassDeductionOffsets).values({
       deductionId: deduction.id,
@@ -326,6 +332,7 @@ describe("selectPayoutRunCandidates", () => {
       timingStatus: "late",
       enforcementMode: "live",
       fieldFailures: ["topics", "homework"],
+      objectiveViolation: true, sourceReady: true, details: { policyApplies: true },
     });
 
     const [candidate] = await selectPayoutRunCandidates(appDb(), WINDOW);
@@ -333,10 +340,32 @@ describe("selectPayoutRunCandidates", () => {
     expect(candidate.reason).toBe("topics, homework");
   });
 
-  it("falls back to a stated reason when nothing was assessed", async () => {
-    await seedDeduction({ id: "no-assessment", endsAt: "2026-07-10T03:00:00.000Z", tutorKey: "kevin", status: "approved" });
-    const [candidate] = await selectPayoutRunCandidates(appDb(), WINDOW);
-    expect(candidate.reason).toBe("Feedback was incomplete at the deadline");
+  it("excludes an old approval when no current assessment proves it", async () => {
+    await seedDeduction({ id: "no-assessment", endsAt: "2026-07-10T03:00:00.000Z", tutorKey: "kevin", status: "approved", assessment: false });
+    expect(await selectPayoutRunCandidates(appDb(), WINDOW)).toEqual([]);
+  });
+
+  it("requires current-policy and current-mapping proof and excludes cleared approvals", async () => {
+    await seedDeduction({ id: "cleared", endsAt: "2026-07-10T03:00:00.000Z", tutorKey: "kevin", status: "approved" });
+    const [session] = await handle.db.select().from(schema.postClassSessions);
+    await seedPayoutAssessment(appDb(), session.id, { objectiveViolation: false, assessedAt: new Date() });
+    expect(await selectPayoutRunCandidates(appDb(), WINDOW)).toEqual([]);
+    await handle.db.update(schema.postClassSettings).set({ policyVersion: 2 });
+    expect(await selectPayoutRunCandidates(appDb(), WINDOW)).toEqual([]);
+    await handle.db.update(schema.postClassSettings).set({ policyVersion: 1, formMappingVersion: 2 });
+    expect(await selectPayoutRunCandidates(appDb(), WINDOW)).toEqual([]);
+  });
+
+  it("preserves the written explanation and fingerprint when later feedback changes it", async () => {
+    const { line } = await seedWrittenPayoutDeduction();
+    const before = await readPayoutRunPreview(appDb(), { window: WINDOW });
+    await seedPayoutAssessment(appDb(), line.sessionId, { fieldFailures: ["combined_characters:189/300"], assessedAt: new Date() });
+    const after = await readPayoutRunPreview(appDb(), { window: WINDOW });
+    expect(after.sourceFingerprint).toBe(before.sourceFingerprint);
+    expect(after.candidates[0].reason).toBe(line.reason);
+    const acquired = await acquireRun();
+    expect(acquired.lines[0].reason).toBe(line.reason);
+    await releaseRun(acquired);
   });
 
   it("counts any non-auto human submission regardless of actor role (D-EVT-04)", async () => {
@@ -1107,6 +1136,7 @@ describe("acquirePayoutRunLease", () => {
       timingStatus: "late",
       enforcementMode: "live",
       fieldFailures: ["corrected topic"],
+      objectiveViolation: true, sourceReady: true, details: { policyApplies: true },
     });
 
     const second = await acquireRun();
@@ -1949,5 +1979,26 @@ describe("audited payout workbook date rolls", () => {
       error: null,
       attemptedAt: attemptedAt.toISOString(),
     });
+  });
+});
+
+describe("sheet verification candidate parity", () => {
+  it("counts proven auto-approvals and explains cleared and waived exclusions", async () => {
+    vi.stubEnv("POST_CLASS_AUTO_APPROVE_ENABLED", "true");
+    try {
+      await seedDeduction({ id: "auto-valid", endsAt: "2026-07-10T03:00:00Z", tutorKey: "kevin", status: "approved", decisionByEmail: "system:post-class-auto-approve" });
+      const cleared = await seedDeduction({ id: "auto-cleared", endsAt: "2026-07-11T03:00:00Z", tutorKey: "kevin", status: "approved" });
+      await seedDeduction({ id: "waived", endsAt: "2026-07-12T03:00:00Z", tutorKey: "kevin", status: "waived" });
+      const [deduction] = await handle.db.select().from(schema.postClassDeductions).where(eq(schema.postClassDeductions.id, cleared));
+      await seedPayoutAssessment(appDb(), deduction.sessionId, { objectiveViolation: false, assessedAt: new Date() });
+      const report = await verifyPayoutSheet(appDb(), "2026-07", {
+        readRawGrid: async () => [],
+        readDeductionGrid: async () => [["Teacher name", "Session name", "Course name", "Date", "Time", "Duration", "Credits deducted", "Payout amount"]],
+        appendDeductionRow: async () => { throw new Error("Verification must never write"); },
+      });
+      expect(report.summary.unwrittenApproved).toBe(1);
+      expect(report.rows.find(row => row.kind === "unwritten-candidate")?.wiseSessionId).toBe("auto-valid");
+      expect(report.exclusions.map(e => e.wiseSessionId).sort()).toEqual(["auto-cleared", "waived"]);
+    } finally { vi.unstubAllEnvs(); }
   });
 });

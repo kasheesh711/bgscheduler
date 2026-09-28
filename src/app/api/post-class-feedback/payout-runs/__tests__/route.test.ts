@@ -162,6 +162,7 @@ describe("POST /api/post-class-feedback/payout-runs", () => {
       rows: [],
       attention: [],
       perTutor: [],
+      retirements: [], exclusions: [], unexpectedMarkers: [],
     });
 
     const response = await POST(request({ action: "verify_sheet", anchorMonth: "2026-07" }));

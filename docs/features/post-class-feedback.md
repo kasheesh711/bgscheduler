@@ -411,3 +411,29 @@ Thirty-eight suites under `src/lib/post-class-feedback/__tests__/` — ten of th
 13. **The missing `verify_sheet` contract is closed.** This item used to record `misc.md` documenting only four of the payout-runs route's five actions. All five (`payout-runs/route.ts:30`-`69`) are now carried by the dedicated page, `verify_sheet` included — with its request field, its `{ok, verification, writeCapability}` response, and the note that `POST_CLASS_PAYOUT_WRITES_ENABLED` deliberately does **not** gate it because the flag gates money rows, not reads ([post-class-feedback.md § `POST /api/post-class-feedback/payout-runs`](../reference/api/post-class-feedback.md#post-apipost-class-feedbackpayout-runs)).
 
 _Verified against main@0cd1e81 (clean tree) on 2026-09-02._
+
+### Payout recovery controls
+
+`POST_CLASS_PAYOUT_AUTOMATION_PAUSED=true` stops both unattended passes before
+approval, ledger retirement, and publishing, including when invoked through Data Health.
+The normal source sync and audited safety hygiene continue. Explicit finance publication
+still requires `POST_CLASS_PAYOUT_WRITES_ENABLED=true`. Pause and verify that all earlier
+publish leases have ended before reconnecting Google during recovery: the existing
+retirement maintenance operation does not use the publication write flag.
+
+Written explanations and submission timestamps remain historical evidence. Later assessment
+text does not invalidate a written payload; financial amounts, class/tutor identity, timing,
+and ledger mappings still have drift guards. New deductions require the latest assessment
+for the current policy and field mapping. Cleared unwritten approvals reopen through the
+audited review workflow. Sheet verification uses the same candidate selection and reports
+exclusions and required retirements alongside the existing marker/amount comparison.
+
+Google reconnect is shown for missing renewable credentials or revoked tokens as well as
+missing scopes. Expected access-token expiry is handled by normal token refresh. Payout
+failures and incomplete passes are surfaced to the cron auditor instead of swallowed as
+successful skips. Recovery accrual remains partial even for an ended window; only the
+separate finalization pass publishes the period, with its existing settlement delay.
+
+To repair one tutor workbook, `payout:repoint-workbooks` accepts `--spreadsheet-id ID`.
+`--include-inactive` requires that explicit ID and does not reactivate the registry entry.
+The original formula backup and exact readback checks still apply.

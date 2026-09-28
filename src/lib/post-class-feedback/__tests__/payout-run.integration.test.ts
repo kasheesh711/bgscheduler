@@ -13,6 +13,8 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 
 vi.mock("server-only", () => ({}));
 
+import { seedPayoutAssessment } from "@/tests/integration/payout-fixtures";
+
 import { eq } from "drizzle-orm";
 import { startTestDb, stopTestDb, truncateAll } from "@/tests/integration/db-helper";
 import {
@@ -131,6 +133,7 @@ async function seedDeduction(input: {
     eligible: true,
     sourceStatus: "ready",
   }).returning({ id: schema.postClassSessions.id });
+  await seedPayoutAssessment(appDb(), session.id);
   await handle.db.insert(schema.postClassSessionParticipants).values({
     sessionId: session.id,
     participantKey: `${input.wiseSessionId}:1`,
@@ -198,6 +201,7 @@ async function publish(
   input: {
     anchorMonth: string;
     expectedVersion?: number;
+    mode?: "operator" | "accrual";
     acknowledgements?: PayoutPublishAcknowledgements;
   },
   _db: Database,
@@ -223,6 +227,19 @@ async function publish(
 }
 
 describe("publishPayoutRun", () => {
+  it("leaves recovery accrual partial even after the window ends and is idempotent", async () => {
+    await seedTwoDeductionsAndMapping();
+    const grid = sheetGrid();
+    const gateway = fakeGateway(grid).gateway;
+    const uploadCsv = vi.fn(uploadOk);
+    const first = await publish(ACTOR, { anchorMonth: "2026-07", mode: "accrual" }, appDb(), { gateway, uploadCsv });
+    expect(first.run.status).toBe("partial");
+    const length = grid.length;
+    const second = await publish(ACTOR, { anchorMonth: "2026-07", mode: "accrual" }, appDb(), { gateway, uploadCsv });
+    expect(second.run.status).toBe("partial");
+    expect(grid).toHaveLength(length);
+    expect(uploadCsv).not.toHaveBeenCalled();
+  });
   it("blocks publication through the last Bangkok day and allows it on the 26th", async () => {
     const before = await previewPayoutRun(ACTOR, { anchorMonth: "2026-08" }, appDb());
     await expect(publishPayoutRunService(ACTOR, {

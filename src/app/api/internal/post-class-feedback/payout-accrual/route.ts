@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import { rejectInvalidCronSecret } from "@/lib/internal/cron-auth";
 import {
+  payoutJobResponse,
   runPayoutAccrualPass,
   runPayoutFinalizePass,
 } from "@/lib/post-class-feedback/payout-accrual";
@@ -29,10 +30,11 @@ export async function GET(request: NextRequest) {
       try {
         const accrual = await runPayoutAccrualPass();
         const finalize = await runPayoutFinalizePass();
-        return NextResponse.json({ ok: true, accrual, finalize });
-      } catch {
+        const result = payoutJobResponse(accrual, finalize);
+        return NextResponse.json(result, { status: result.ok ? 200 : 503 });
+      } catch (error) {
         return NextResponse.json(
-          { error: "Post-class payout accrual failed" },
+          { ok: false, error: error instanceof Error ? error.message : "Post-class payout accrual failed" },
           { status: 500 },
         );
       }

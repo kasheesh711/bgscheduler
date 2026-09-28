@@ -18,7 +18,7 @@ import { getDb } from "@/lib/db";
 import { verifyPayoutSheet } from "@/lib/post-class-feedback/payout-sheet-verify";
 import { currentPayoutRunWindow } from "@/lib/post-class-feedback/payout-window";
 
-import { loadPayoutScriptEnvironment } from "./lib/payout-script";
+import { loadPayoutScriptEnvironment, optionValue } from "./lib/payout-script";
 
 function csvCell(value: string | number | null): string {
   const text = value === null ? "" : String(value);
@@ -55,10 +55,13 @@ async function main(): Promise<void> {
   );
 
   const csvPath = path.resolve(
-    ".payout-ops",
+    optionValue("--output-dir") ?? ".payout-ops",
     `inc-260829-sheet-reconciliation-${new Date().toISOString().replace(/[:.]/gu, "-")}.csv`,
   );
   mkdirSync(path.dirname(csvPath), { recursive: true });
+  const jsonPath = csvPath.replace(/\.csv$/u, ".json");
+  writeFileSync(jsonPath, `${JSON.stringify(result, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+  console.log(`JSON (includes retirements and exclusions): ${jsonPath}`);
   const header = [
     "kind", "tutor", "wise_session_or_deduction", "db_status", "sheet_status",
     "sheet_row", "sheet_amount", "expected_amount", "marker",

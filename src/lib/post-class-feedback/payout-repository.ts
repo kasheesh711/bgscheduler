@@ -19,6 +19,7 @@ import {
   sql,
 } from "drizzle-orm";
 
+import { deductionEvidenceIssue, loadCurrentDeductionEvidence } from "./deduction-evidence";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 
@@ -101,7 +102,7 @@ export async function selectPayoutRunCandidates(
   window: PayoutRunWindow,
 ): Promise<PayoutRunCandidate[]> {
   const { start, endExclusive } = payoutRunRangeUtc(window);
-  const rows = await db.select({
+  const approvedRows = await db.select({
     deductionId: schema.postClassDeductions.id,
     amountMinor: schema.postClassDeductions.amountMinor,
     currency: schema.postClassDeductions.currency,
@@ -158,6 +159,8 @@ export async function selectPayoutRunCandidates(
       asc(schema.postClassSessions.scheduledStartAt),
     );
 
+  const evidence = await loadCurrentDeductionEvidence(db, approvedRows.map(row => row.sessionId));
+  const rows = approvedRows.filter(row => deductionEvidenceIssue(evidence.get(row.sessionId)) === null);
   if (rows.length === 0) return [];
   const sessionIds = rows.map((row) => row.sessionId);
   const participants = await db.select({
@@ -187,13 +190,12 @@ export async function selectPayoutRunCandidates(
       sql`${schema.postClassFeedbackEventLinks.autoSubmitted} IS DISTINCT FROM true`,
     ))
     .groupBy(schema.postClassFeedbackEventLinks.sessionId);
-  const assessments = await db.select({
-    sessionId: schema.postClassAssessments.sessionId,
-    fieldFailures: schema.postClassAssessments.fieldFailures,
-    assessedAt: schema.postClassAssessments.assessedAt,
-  }).from(schema.postClassAssessments)
-    .where(inArray(schema.postClassAssessments.sessionId, sessionIds))
-    .orderBy(asc(schema.postClassAssessments.assessedAt));
+  const written = await db.select().from(schema.postClassPayoutRunLines).where(and(
+    inArray(schema.postClassPayoutRunLines.deductionId, rows.map(row => row.deductionId)),
+    eq(schema.postClassPayoutRunLines.writeStatus, "written"),
+    isNull(schema.postClassPayoutRunLines.retiredAt),
+  ));
+  const writtenByDeduction = new Map(written.map(line => [line.deductionId, line]));
   // A reinstated deduction (INC-260829 re-charge) has written lines that were
   // deliberately removed from the ledger; its fresh row plans under the next
   // generation's identity.
@@ -220,13 +222,6 @@ export async function selectPayoutRunCandidates(
   const submittedBySession = new Map(
     submissions.map((row) => [row.sessionId, row.submittedAt ? new Date(row.submittedAt) : null]),
   );
-  const reasonBySession = new Map<string, string>();
-  for (const row of assessments) {
-    reasonBySession.set(
-      row.sessionId,
-      row.fieldFailures.join(", ") || "Feedback was incomplete at the deadline",
-    );
-  }
 
   return rows.map((row) => ({
     ...row,
@@ -235,8 +230,12 @@ export async function selectPayoutRunCandidates(
       ...(studentsBySession.get(row.sessionId)
         ?? (row.className ? [row.className] : [])),
     ].toSorted(),
-    tutorSubmittedAt: submittedBySession.get(row.sessionId) ?? null,
-    reason: reasonBySession.get(row.sessionId) ?? "Feedback was incomplete at the deadline",
+    // Written explanation/timestamp describe the evidence at the time of the charge.
+    tutorSubmittedAt: writtenByDeduction.has(row.deductionId)
+      ? writtenByDeduction.get(row.deductionId)!.tutorSubmittedAt
+      : submittedBySession.get(row.sessionId) ?? null,
+    reason: writtenByDeduction.get(row.deductionId)?.reason
+      ?? (evidence.get(row.sessionId)?.fieldFailures.join(", ") || "Feedback was incomplete at the deadline"),
     generation: 1 + (removedByDeduction.get(row.deductionId) ?? 0),
   }));
 }
@@ -489,7 +488,7 @@ export async function loadPayoutExceptions(
  * Compare immutable, externally written line inputs with the current source.
  *
  * A later publish may add new obligations, but it must never "re-bless" a
- * written row whose tutor, timing, students, amount, reason, or ledger mapping
+ * written row whose tutor, timing, students, amount, or ledger mapping
  * changed after Google received the original signed row.
  */
 async function findWrittenPayoutLinePayloadDrift(
@@ -548,13 +547,6 @@ async function findWrittenPayoutLinePayloadDrift(
       sql`${schema.postClassFeedbackEventLinks.autoSubmitted} IS DISTINCT FROM true`,
     ))
     .groupBy(schema.postClassFeedbackEventLinks.sessionId);
-  const assessments = await db.select({
-    sessionId: schema.postClassAssessments.sessionId,
-    fieldFailures: schema.postClassAssessments.fieldFailures,
-    assessedAt: schema.postClassAssessments.assessedAt,
-  }).from(schema.postClassAssessments)
-    .where(inArray(schema.postClassAssessments.sessionId, sessionIds))
-    .orderBy(asc(schema.postClassAssessments.assessedAt));
 
   const studentsBySession = new Map<string, string[]>();
   for (const participant of participants) {
@@ -568,13 +560,6 @@ async function findWrittenPayoutLinePayloadDrift(
       submission.submittedAt ? new Date(submission.submittedAt) : null,
     ]),
   );
-  const reasonBySession = new Map<string, string>();
-  for (const assessment of assessments) {
-    reasonBySession.set(
-      assessment.sessionId,
-      assessment.fieldFailures.join(", ") || "Feedback was incomplete at the deadline",
-    );
-  }
   const currentByDeduction = new Map(rows.map((row) => {
     const students = [
       ...(studentsBySession.get(row.sessionId)
@@ -585,8 +570,6 @@ async function findWrittenPayoutLinePayloadDrift(
       amountMinor: -Math.abs(row.amountMinor),
       studentNames: students,
       tutorSubmittedAt: submittedBySession.get(row.sessionId) ?? null,
-      reason: reasonBySession.get(row.sessionId)
-        ?? "Feedback was incomplete at the deadline",
     }] as const;
   }));
   const sameInstant = (left: Date | null, right: Date | null) =>
@@ -623,8 +606,7 @@ async function findWrittenPayoutLinePayloadDrift(
         && !sameInstant(line.tutorSubmittedAt, current.tutorSubmittedAt))
       || line.amountMinor !== current.amountMinor
       || line.currency !== current.currency
-      || line.financeMonth !== current.financeMonth
-      || line.reason !== current.reason;
+      || line.financeMonth !== current.financeMonth;
   });
 }
 
@@ -799,7 +781,7 @@ export async function acquirePayoutRunLease(input: {
       .limit(1);
     if (runningSync) {
       throw new PostClassConflictError(
-        "A post-class source sync is active. Let it finish before publishing payouts.",
+        "A post-class source sync is active. Let it finish before publishing payouts.", "sync_active",
       );
     }
     const snapshot = await readPayoutRunPreview(tx, {
@@ -809,12 +791,12 @@ export async function acquirePayoutRunLease(input: {
     const currentVersion = snapshot.run?.version ?? 1;
     if (input.expectedVersion !== currentVersion) {
       throw new PostClassConflictError(
-        "This payout run version changed. Refresh it before publishing.",
+        "This payout run version changed. Refresh it before publishing.", "stale_preview",
       );
     }
     if (snapshot.previewToken !== input.previewToken) {
       throw new PostClassConflictError(
-        "This payout preview is stale. Refresh it before publishing.",
+        "This payout preview is stale. Refresh it before publishing.", "stale_preview",
       );
     }
     if (
@@ -832,7 +814,7 @@ export async function acquirePayoutRunLease(input: {
         !== snapshot.coverage.nonReadySessions
     ) {
       throw new PostClassConflictError(
-        "The payout acknowledgement counts do not match this preview. Refresh and confirm again.",
+        "The payout acknowledgement counts do not match this preview. Refresh and confirm again.", "stale_preview",
       );
     }
     assertPayoutRunPublishable(snapshot.coverage, input.acknowledgements);
@@ -861,7 +843,7 @@ export async function acquirePayoutRunLease(input: {
       && run.leaseExpiresAt.getTime() > now.getTime()
     ) {
       throw new PostClassConflictError(
-        `Another payout operation is active until ${run.leaseExpiresAt.toISOString()}.`,
+        `Another payout operation is active until ${run.leaseExpiresAt.toISOString()}.`, "lease_held",
       );
     }
     if (run?.status === "publishing") {
@@ -880,7 +862,7 @@ export async function acquirePayoutRunLease(input: {
       )).returning();
       if (!recovered) {
         throw new PostClassConflictError(
-          "The expired payout publish changed while it was being recovered.",
+          "The expired payout publish changed while it was being recovered.", "lease_held",
         );
       }
       await tx.insert(schema.postClassConfigAuditLog).values({
@@ -945,7 +927,7 @@ export async function acquirePayoutRunLease(input: {
       eq(schema.postClassPayoutRuns.version, run.version),
     )).returning();
     if (!claimed) {
-      throw new PostClassConflictError("Another payout operation acquired this run first.");
+      throw new PostClassConflictError("Another payout operation acquired this run first.", "lease_held");
     }
 
     if (snapshot.selectedCandidates.length > 0) {

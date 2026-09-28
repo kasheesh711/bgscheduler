@@ -12,6 +12,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
+import { seedPayoutAssessment } from "@/tests/integration/payout-fixtures";
 
 import { eq } from "drizzle-orm";
 import { startTestDb, stopTestDb, truncateAll } from "@/tests/integration/db-helper";
@@ -304,6 +305,7 @@ describe("runPostClassAutoReopens", () => {
       wiseSessionId: "s-proven",
       deadlineAt: hoursAgo(GRACE_HOURS + 1),
     });
+    await seedActionableAssessment(sessionId);
     const deductionId = await seedDeduction({ sessionId, status: "approved" });
 
     const result = await runPostClassAutoReopens(appDb());
@@ -384,5 +386,20 @@ describe("runPostClassAutoApprovalSweep", () => {
     const actionsAfterSecond = await handle.db.select()
       .from(schema.postClassDeductionActions);
     expect(actionsAfterSecond).toHaveLength(actionsAfterFirst.length);
+  });
+});
+
+describe("cleared approval hygiene", () => {
+  it("reopens a cleared unwritten approval exactly once and records its reason", async () => {
+    const sessionId = await seedSession({ wiseSessionId: "cleared-approval", deadlineAt: hoursAgo(48) });
+    await seedActionableAssessment(sessionId);
+    const id = await seedDeduction({ sessionId, status: "approved" });
+    await seedPayoutAssessment(appDb(), sessionId, { objectiveViolation: false, assessedAt: new Date(Date.now() + 1000) });
+    expect(await runPostClassAutoReopens(appDb())).toEqual({ reopened: 1, failed: 0 });
+    expect(await runPostClassAutoReopens(appDb())).toEqual({ reopened: 0, failed: 0 });
+    const [row] = await handle.db.select().from(schema.postClassDeductions).where(eq(schema.postClassDeductions.id, id));
+    expect(row.status).toBe("pending_review");
+    const [audit] = await handle.db.select().from(schema.postClassDeductionActions).where(eq(schema.postClassDeductionActions.deductionId, id));
+    expect(audit.note).toContain("no longer an objective violation");
   });
 });
