@@ -56,6 +56,43 @@ const MARKER = payoutRowMarker({
   deductionId: "3f1c9a2b-4d5e-6789-abcd-ef0123456789",
 });
 
+describe("paid and unpaid source copies", () => {
+  function match(copyCredits: unknown, copyPayout: unknown, claimedRows?: Set<number>) {
+    return matchMasterRow({
+      table: parseMasterPayoutSheet([
+        HEADER,
+        [KEVIN, "In-Person Session - Math", "Student", dateSerial("2026-09-20"), timeSerial(4, 0), "60 mins", 1, 600],
+        [KEVIN, "In-Person Session - Math", "Student", dateSerial("2026-09-20"), timeSerial(4, 0), "60 mins", copyCredits, copyPayout],
+      ])!,
+      teacherNames: [KEVIN],
+      scheduledStartAt: new Date("2026-09-20T04:00:00Z"),
+      studentNames: ["Student"],
+      claimedRows,
+    });
+  }
+  it("uses the unique paid row when an exact-time copy has zero credits and payout", () => {
+    expect(match(0, 0).row?.rowNumber).toBe(2);
+  });
+  it("cannot charge the zero copy once the paid anchor is already claimed", () => {
+    expect(match(0, 0, new Set([2])).status).toBe("ambiguous");
+  });
+  it("does not resolve an equal-distance tie between different class times", () => {
+    const result = matchMasterRow({
+      table: parseMasterPayoutSheet([
+        HEADER,
+        [KEVIN, "Session", "Student", dateSerial("2026-09-20"), timeSerial(3, 50), "60 mins", 1, 600],
+        [KEVIN, "Session", "Student", dateSerial("2026-09-20"), timeSerial(4, 10), "60 mins", 0, 0],
+      ])!,
+      teacherNames: [KEVIN], scheduledStartAt: new Date("2026-09-20T04:00:00Z"), studentNames: ["Student"],
+    });
+    expect(result.status).toBe("ambiguous");
+  });
+  it.each([[1, 600], [null, 0], [0, null], [1, 0], [0, 600]])(
+    "keeps conflicting or uncertain billing ambiguous (%s credits, %s payout)",
+    (credits, payout) => expect(match(credits, payout).status).toBe("ambiguous"),
+  );
+});
+
 describe("masterCellToUtc", () => {
   it("reads typed serial cells, which is how the app reads the tab", () => {
     expect(masterCellToUtc(dateSerial("2026-07-25"), timeSerial(6, 0))?.toISOString())

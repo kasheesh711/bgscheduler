@@ -91,6 +91,17 @@ A persistent "Setup required" banner stays until four items complete: Wise field
 
 ## Data flow
 
+Payout source matching also distinguishes an exact-time paid row from a copy
+with both zero credits and zero payout. It requires one uniquely paid row;
+conflicting paid rows and unknown billing values remain ambiguous. A claimed
+paid row cannot fall through to its unpaid copy. Stored source fingerprints
+still block later financial or identity changes.
+
+When session detail abbreviates a participant to a first name, collection can
+expand the nickname and surname from the active student mirror only through
+the same stable Wise student ID. A conflicting detail name is preserved; this
+does not introduce fuzzy name matching.
+
 A scheduled collection run:
 
 ```mermaid
