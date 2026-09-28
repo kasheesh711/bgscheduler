@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
     const actor = await requirePostClassCapability("access_manager");
     const input = Action.parse(await request.json());
     if (input.action === "shadow_preview") {
-      return withCronInvocationAudit({ jobKey: "post_class_feedback_nightly", triggerSource: "manual", actorEmail: actor.email, requestMethod: "POST" }, async () => {
+      return withCronInvocationAudit({ jobKey: "post_class_feedback_nightly", triggerSource: "admin", actorEmail: actor.email, requestMethod: "POST" }, async () => {
         const result = nightlyWorkerOutcome(await runNightlyReminders({ shadowPreview: true }));
         return NextResponse.json(result, { status: result.ok ? 200 : 503 });
       });
