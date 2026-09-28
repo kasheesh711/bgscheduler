@@ -7,6 +7,7 @@ import { requirePostClassCapability } from "@/lib/post-class-feedback/access";
 import { postClassFeedbackErrorResponse } from "@/lib/post-class-feedback/api";
 import { loadNightlyReminderHealth, nightlyReminderHistory } from "@/lib/post-class-feedback/nightly-reminder-health";
 import { nightlyWorkerOutcome, previewNightlyRun, resolveNightlyUnknown, runNightlyReminders } from "@/lib/post-class-feedback/nightly-reminders";
+import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import { runDataHealthJob } from "@/lib/data-health/run-job";
 
 export const maxDuration = 800;
@@ -39,8 +40,10 @@ export async function POST(request: NextRequest) {
     const actor = await requirePostClassCapability("access_manager");
     const input = Action.parse(await request.json());
     if (input.action === "shadow_preview") {
-      const result = nightlyWorkerOutcome(await runNightlyReminders({ shadowPreview: true }));
-      return NextResponse.json(result, { status: result.ok ? 200 : 503 });
+      return withCronInvocationAudit({ jobKey: "post_class_feedback_nightly", triggerSource: "manual", actorEmail: actor.email, requestMethod: "POST" }, async () => {
+        const result = nightlyWorkerOutcome(await runNightlyReminders({ shadowPreview: true }));
+        return NextResponse.json(result, { status: result.ok ? 200 : 503 });
+      });
     }
     if (input.action === "test") return NextResponse.json(await sendPostClassTestEmail(actor.email, actor.email, getDb(),
       createAppsScriptScheduleEmailSender(input.senderKey, { strictOutcome: true }), input.senderKey));
