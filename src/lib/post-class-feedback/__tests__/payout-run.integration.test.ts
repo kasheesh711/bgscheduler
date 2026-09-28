@@ -33,6 +33,10 @@ import {
   DEDUCTION_SESSION_NAME,
 } from "@/lib/post-class-feedback/payout-master";
 import type { MasterLedgerGateway } from "@/lib/post-class-feedback/payout-writer";
+import {
+  lastEndedPayoutRunWindow,
+  payoutBangkokDate,
+} from "@/lib/post-class-feedback/payout-window";
 import type { PostClassUser } from "@/lib/post-class-feedback/access";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -704,6 +708,97 @@ describe("publishPayoutRun", () => {
     const readiness = await inspectPayoutRunCloseReadiness(appDb(), { anchorMonth: "2026-07" });
     expect(readiness.blockers.map((blocker) => blocker.code))
       .not.toContain("incomplete_adjustments");
+  });
+
+  describe("corrections for rows ledger retirement owns", () => {
+    // The most recently ended window, derived from the real clock: an operator
+    // publish needs an ended window, the publish lease is checked against the
+    // database clock (so `now` cannot be injected into the past), and ledger
+    // retirement only owns rows inside `autoChargeLowerBoundUtc(now)`, which
+    // always includes the last-ended window.
+    const ended = lastEndedPayoutRunWindow(payoutBangkokDate(new Date()));
+    const classDay = new Date(Date.parse(`${ended.windowStart}T03:00:00.000Z`) + 5 * 86_400_000)
+      .toISOString().slice(0, 10);
+
+    async function seedWaivedWrittenSeptemberDeduction(grid: unknown[][]) {
+      await seedDeduction({
+        wiseSessionId: "s-september",
+        endsAt: `${classDay}T03:00:00.000Z`,
+        tutorKey: "kevin",
+        student: "Grace Hopper",
+      });
+      await upsertPayoutTutorName(appDb(), {
+        canonicalKey: "kevin",
+        primaryLedgerName: KEVIN,
+        alternateLedgerName: KEVIN_ONLINE,
+        active: true,
+        updatedByEmail: "admin@example.com",
+      });
+      const first = await publish(
+        ACTOR,
+        { anchorMonth: ended.anchorMonth },
+        appDb(),
+        { gateway: fakeGateway(grid).gateway, uploadCsv: uploadOk },
+      );
+      const sourceLine = first.lines.find((line) => line.wiseSessionId === "s-september")!;
+      expect(sourceLine.writeStatus).toBe("written");
+      await createPayoutAdjustment(appDb(), {
+        deductionId: sourceLine.deductionId,
+        kind: "waiver",
+        reason: "Waived after the payout row landed",
+        actorEmail: ACTOR.email,
+        actionIdentity: "waiver:s-september",
+      });
+      await handle.db.update(schema.postClassDeductions)
+        .set({ status: "waived" })
+        .where(eq(schema.postClassDeductions.id, sourceLine.deductionId));
+    }
+
+    function septemberGrid(): unknown[][] {
+      return [
+        [...HEADER],
+        [KEVIN, "On-site Session - Math", "Grace Hopper", dateSerial(classDay), timeSerial(3, 0), "60 mins", 1, 700],
+      ];
+    }
+
+    it("holds the correction while unattended charging is on, so a row retirement had to leave is never netted", async () => {
+      vi.stubEnv("POST_CLASS_AUTO_APPROVE_ENABLED", "true");
+      try {
+        const grid = septemberGrid();
+        await seedWaivedWrittenSeptemberDeduction(grid);
+
+        const second = await publish(
+          ACTOR,
+          { anchorMonth: ended.anchorMonth },
+          appDb(),
+          { gateway: fakeGateway(grid).gateway, uploadCsv: uploadOk },
+        );
+
+        expect(correctionRows(grid)).toHaveLength(0);
+        expect(second.adjustments).toHaveLength(1);
+        expect(second.adjustments[0].status).toBe("pending");
+        // The held correction keeps the window open and the job loud.
+        expect(second.run.status).toBe("partial");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it("still nets the correction in human-only mode, where no retirement runs", async () => {
+      const grid = septemberGrid();
+      await seedWaivedWrittenSeptemberDeduction(grid);
+
+      const second = await publish(
+        ACTOR,
+        { anchorMonth: ended.anchorMonth },
+        appDb(),
+        { gateway: fakeGateway(grid).gateway, uploadCsv: uploadOk },
+      );
+
+      expect(correctionRows(grid)).toHaveLength(1);
+      expect(second.adjustments[0].status).toBe("written");
+      expect(second.run.status).toBe("published");
+    });
   });
 
   it("keeps a transient correction failure retryable without creating an exception", async () => {

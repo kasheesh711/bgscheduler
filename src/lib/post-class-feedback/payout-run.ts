@@ -30,6 +30,7 @@ import {
 import {
   payoutCsvFilename,
   requirePayoutGoogleTarget,
+  resolveAutoApproveEnabled,
   type PayoutGoogleTarget,
 } from "./payout-config";
 import {
@@ -61,7 +62,7 @@ import {
   type MasterLedgerGateway,
   type PayoutAppendPlan,
 } from "./payout-writer";
-import type { PayoutRetirementSheetOps } from "./payout-retirement";
+import { selectRetirementTargets, type PayoutRetirementSheetOps } from "./payout-retirement";
 import {
   payoutBangkokDate,
   payoutRunWindow,
@@ -744,11 +745,25 @@ export async function publishPayoutRun(
   const sourceLineByDeduction = new Map(
     acquired.lines.map((line) => [line.deductionId, line]),
   );
-  const pendingAdjustments = acquired.adjustments.filter((adjustment) =>
+  const openAdjustments = acquired.adjustments.filter((adjustment) =>
     adjustment.status !== "written"
     // `superseded` is terminal: the correction already reached the ledger
     // outside the system (INC-260829 manual fix) and must never be appended.
-    && adjustment.status !== "superseded"
+    && adjustment.status !== "superseded");
+  // While unattended charging is on, ledger retirement owns the rows of
+  // waived, cleared or ineligible deductions: it deletes the row and
+  // supersedes its correction instead of netting. A correction for a row it
+  // still owns is therefore held, never appended -- otherwise a row that
+  // retirement had to leave in place (a hand-edited amount, reported as a
+  // retirement skip) would be netted against a value nobody verified
+  // (-50 + 100 = +50). The held correction keeps the run partial and the
+  // payout job `ok: false` until an operator resolves the row. Human-only mode
+  // runs no retirement, so its corrections still net as before.
+  const retirementOwnedLineIds = resolveAutoApproveEnabled() && openAdjustments.length > 0
+    ? new Set((await selectRetirementTargets(db, operationNow)).map((target) => target.lineId))
+    : new Set<string>();
+  const pendingAdjustments = openAdjustments.filter((adjustment) =>
+    !(adjustment.sourceLineId && retirementOwnedLineIds.has(adjustment.sourceLineId))
     && (!input.tutorFilter || (
       (adjustment.sourceLineId
         ? sourceLineById.get(adjustment.sourceLineId)

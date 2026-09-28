@@ -499,9 +499,14 @@ The original formula backup and exact readback checks still apply.
   of colliding with its first approval and staying in `pending_review`.
 - **Contained retirement skips.** A per-row retirement skip (a hand-edited sheet amount, a
   missing or edited correction row, a row still present after deletion) no longer aborts
-  the accrual tick. The row stays on the ledger for Verify sheet or an operator, a waived
-  deduction's pending correction on that row still nets through the adjustment path, and
-  other tutors keep accruing. The pass returns the skips as `retirementSkips`, and
+  the accrual tick. The row stays on the ledger for Verify sheet or an operator, and other
+  tutors keep accruing. A waived deduction's pending correction on that row is **held**:
+  while unattended charging is on, `publishPayoutRun` never appends a correction whose
+  source line is still a retirement target (`selectRetirementTargets`), so an edited row is
+  never netted against an unverified amount (−50 + 100 = +50). The held correction keeps
+  the run `partial` and the job `ok: false` until an operator resolves the row; human-only
+  mode, which runs no retirement, still nets as before. The pass returns the skips as
+  `retirementSkips`, and
   `payoutJobResponse` reports `ok: false` naming each Wise session and reason (the first
   ten, then a count). Tab-level stand-downs (target unresolved, tab ambiguous or
   unparseable, duplicate markers, readback unparseable) and thrown errors still abort.
