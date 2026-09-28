@@ -423,6 +423,16 @@ function DetailBody({
         </div>
       ) : null}
 
+      {Boolean(detail.nightlyReminders?.length) && <section className="rounded-lg border bg-card p-3">
+        <h3 className="text-xs font-semibold">Nightly reminder history</h3>
+        <ul className="mt-2 space-y-2 text-xs">{detail.nightlyReminders!.map((row) => <li key={row.id} className="rounded border p-2">
+          <div>{row.date} · {row.mode} · {row.status.replaceAll("_", " ")}</div>
+          <p className="mt-1 text-muted-foreground">{row.reason}</p>
+          {row.sentAt && <div>Accepted {formatBangkokDate(row.sentAt, true)}</div>}
+          {row.receipt && <div className="break-all">Receipt: {row.receipt}</div>}
+        </li>)}</ul>
+      </section>}
+
       <section className="rounded-lg border bg-card p-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>

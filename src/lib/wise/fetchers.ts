@@ -344,9 +344,13 @@ export async function fetchWisePastSessionsByBangkokDate(
   startDate: string,
   endDate: string,
   pageSize = 100,
+  verification?: { strict: boolean; onPage?: (page: number, pages: number) => void },
 ): Promise<WiseSession[]> {
   const all: WiseSession[] = [];
+  let advertisedPages: number | null = null;
+  const seen = new Set<string>();
   for (let pageNumber = 1; ; pageNumber += 1) {
+    if (pageNumber > 2_000) throw new Error("Wise past-session pagination exceeded its safety bound");
     const res = await client.get<WiseSessionsResponse>(
       `/institutes/${instituteId}/sessions`,
       {
@@ -359,8 +363,22 @@ export async function fetchWisePastSessionsByBangkokDate(
       },
     );
     const sessions = res.data?.sessions ?? [];
-    all.push(...sessions);
     const pageCount = res.data?.page_count;
+    if (verification?.strict) {
+      if (!Array.isArray(res.data?.sessions) || !Number.isInteger(pageCount) || pageCount! < 0 ||
+          (advertisedPages !== null && advertisedPages !== pageCount) ||
+          (sessions.length === 0 && (pageNumber > 1 || pageCount! > 1)) ||
+          (sessions.length > 0 && pageCount === 0)) {
+        throw new Error("Wise past-session discovery is incomplete or has inconsistent pagination");
+      }
+      advertisedPages = pageCount!;
+      for (const session of sessions) {
+        if (!session._id || seen.has(session._id)) throw new Error("Wise past-session discovery contains missing or duplicate identifiers");
+        seen.add(session._id);
+      }
+      verification.onPage?.(pageNumber, pageCount!);
+    }
+    all.push(...sessions);
     if (typeof pageCount === "number" ? pageNumber >= pageCount : sessions.length < pageSize) {
       break;
     }

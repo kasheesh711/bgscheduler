@@ -69,7 +69,7 @@ interface ReminderCandidate {
 }
 
 interface NotificationDeliveryState {
-  status: "pending" | "sending" | "sent" | "failed" | "cancelled";
+  status: "pending" | "sending" | "sent" | "failed" | "cancelled" | "unknown";
   attemptCount: number;
   nextAttemptAt: Date | null;
 }
@@ -346,6 +346,7 @@ async function remindersGloballyEnabled(db: Database): Promise<boolean> {
     db.select({
       mode: schema.postClassSettings.enforcementMode,
       mappingValid: schema.postClassSettings.formMappingValid,
+      reminderMode: schema.postClassSettings.reminderMode,
     }).from(schema.postClassSettings).limit(1).then((rows) => rows[0] ?? null),
     db.select({ id: schema.postClassSourceIssues.id })
       .from(schema.postClassSourceIssues)
@@ -355,7 +356,7 @@ async function remindersGloballyEnabled(db: Database): Promise<boolean> {
         eq(schema.postClassSourceIssues.blocksEnforcement, true),
       )).limit(1).then((rows) => rows[0] ?? null),
   ]);
-  return postClassRemindersEnabledForState({
+  return (settings?.reminderMode ?? "off") === "off" && postClassRemindersEnabledForState({
     mode: settings?.mode ?? null,
     mappingValid: settings?.mappingValid ?? false,
     hasBlockingGlobalIssue: Boolean(blockingGlobalIssue),
@@ -1080,7 +1081,9 @@ export async function processDuePostClassNotificationRetries(
   const limit = Math.max(1, Math.min(100, options.limit ?? 50));
   const rows = await db.select({ id: schema.postClassNotificationDeliveries.id })
     .from(schema.postClassNotificationDeliveries)
-    .where(or(
+    .where(and(
+      sql`not exists (select 1 from post_class_notification_runs r where r.id = ${schema.postClassNotificationDeliveries.runId} and r.kind = 'tutor_nightly')`,
+      or(
       and(
         eq(schema.postClassNotificationDeliveries.status, "pending"),
         or(
@@ -1097,7 +1100,7 @@ export async function processDuePostClassNotificationRetries(
         eq(schema.postClassNotificationDeliveries.status, "sending"),
         lte(schema.postClassNotificationDeliveries.updatedAt, new Date(now.getTime() - SENDING_STALE_MS)),
       ),
-    )).orderBy(asc(schema.postClassNotificationDeliveries.nextAttemptAt)).limit(limit);
+    ))).orderBy(asc(schema.postClassNotificationDeliveries.nextAttemptAt)).limit(limit);
   const senders = options.senders ?? defaultSenders();
   const outcomes = await Promise.all(rows.map((row) => attemptDelivery(db, row.id, senders, now)));
   return {
@@ -1207,6 +1210,7 @@ export async function sendPostClassTestEmail(
   recipientEmail: string,
   db: Database = getDb(),
   sender: ScheduleEmailSender = createAppsScriptScheduleEmailSender("primary"),
+  senderKey: "primary" | "backup" = "primary",
 ) {
   const recipient = normalizeEmail(recipientEmail);
   if (!recipient) throw new PostClassValidationError("A valid test recipient email is required.");
@@ -1232,7 +1236,7 @@ export async function sendPostClassTestEmail(
       entityKey: recipient,
       action: "test_succeeded",
       actorEmail,
-      afterValue: { recipient, providerMessageId: sent.id },
+      afterValue: { recipient, providerMessageId: sent.id, senderKey },
     }),
   ]);
   return { ok: true, recipient, providerMessageId: sent.id };

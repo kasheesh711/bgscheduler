@@ -1,3 +1,4 @@
+import { applyNightlyReminderHealth } from "@/lib/post-class-feedback/nightly-reminder-health";
 import { desc, eq, getTableColumns, gte, lte, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -955,7 +956,7 @@ export async function getCronJobsHealth(now = new Date()): Promise<CronJobHealth
   const db = getDb();
   const invocations = await fetchCronInvocations(db, now);
   const allRuns = await fetchAllRuns(db);
-  return buildCronJobs(invocations, allRuns, now);
+  return applyNightlyReminderHealth(buildCronJobs(invocations, allRuns, now), db, now);
 }
 
 export async function getDataHealthDashboardPayload(now = new Date()): Promise<DataHealthDashboardPayload> {
@@ -1024,7 +1025,7 @@ export async function getDataHealthDashboardPayload(now = new Date()): Promise<D
 
   const invocations = await fetchCronInvocations(db, now);
   const allRuns = await fetchAllRuns(db);
-  const cronJobs = buildCronJobs(invocations, allRuns, now);
+  const cronJobs = await applyNightlyReminderHealth(buildCronJobs(invocations, allRuns, now), db, now);
   const staleAgeMs = lastSuccess?.finishedAt
     ? now.getTime() - new Date(lastSuccess.finishedAt).getTime()
     : null;

@@ -1,3 +1,4 @@
+import { loadNightlyReminderHealth } from "./nightly-reminder-health";
 import "server-only";
 
 import { and, desc, eq, gte, inArray, isNotNull, lt, sql } from "drizzle-orm";
@@ -418,7 +419,7 @@ export async function getPostClassFeedbackDashboard(
     const improvement = latest?.improvement ?? "";
     const reminderKind = notification?.kind === "tutor_day_after"
       ? "day_after"
-      : notification?.kind === "tutor_deadline" ? "deadline_day" : null;
+      : notification?.kind === "tutor_deadline" ? "deadline_day" : notification?.kind === "tutor_nightly" ? "nightly" : null;
     return {
       id: session.id,
       wiseSessionId: session.wiseSessionId,
@@ -769,6 +770,7 @@ export async function getPostClassFeedbackDashboard(
     : [];
 
   return {
+    nightlyReminders: await loadNightlyReminderHealth(db),
     capabilities: {
       viewer: user.capabilities.includes("viewer"),
       reviewer: user.capabilities.includes("reviewer"),

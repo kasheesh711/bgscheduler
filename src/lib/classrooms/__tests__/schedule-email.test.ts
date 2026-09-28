@@ -727,3 +727,16 @@ describe("Apps Script schedule email sender", () => {
     })).rejects.toThrow("Bad secret");
   });
 });
+
+
+describe("strict reminder relay evidence", () => {
+  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+  it.each([{ ok: "false", id: "bad" }, { ok: true }, { ok: true, id: "" }])("treats malformed acknowledgement as unknown: %j", async (body) => {
+    vi.stubEnv("SCHEDULE_EMAIL_APPS_SCRIPT_URL", "https://example.test/relay");
+    vi.stubEnv("SCHEDULE_EMAIL_APPS_SCRIPT_SECRET", "test");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }));
+    const sender = createAppsScriptScheduleEmailSender("primary", { strictOutcome: true });
+    await expect(sender.sendEmail({ to: "admin@example.com", subject: "Test", text: "Test", html: "Test", idempotencyKey: "test" }))
+      .rejects.toThrow(/Reconcile/i);
+  });
+});

@@ -82,6 +82,8 @@ export interface SyncPostClassFeedbackOptions {
   reminderCheckpoint?: "day_after" | "deadline";
   /** Defaults to the reminder service's 20-minute freshness requirement. */
   checkpointFreshnessMinutes?: number;
+  /** Internal bounded refresh for the nightly outbox; never selects other queue lanes. */
+  reminderTargets?: PostClassSessionCandidate[];
 }
 
 export interface PostClassReminderCheckpointBacklog {
@@ -591,7 +593,7 @@ export async function syncPostClassFeedback(
   // Only an explicit manual date-range backfill may exceed the rolling cap.
   const isBackfill = triggerType === "manual" &&
     Boolean(options.startDate && options.endDate) &&
-    !options.reminderCheckpoint;
+    !options.reminderCheckpoint && !options.reminderTargets;
   const detailCeiling = isBackfill ? BACKFILL_DETAIL_CAP : DEFAULT_DETAIL_CAP;
   const detailCap = Math.max(1, Math.min(options.detailCap ?? DEFAULT_DETAIL_CAP, detailCeiling));
   if (options.reminderCheckpoint && (options.startDate || options.endDate)) {
@@ -619,7 +621,7 @@ export async function syncPostClassFeedback(
     // so the candidate lanes below and the issue table agree about what is dead.
     // Not counted into sourceIssueCount — a deletion is a Wise lifecycle
     // transition we have proof of, not a gap in our own source evidence.
-    const retired = await dependencies.repository.retireDeletedWiseSessions?.({
+    const retired = options.reminderTargets ? undefined : await dependencies.repository.retireDeletedWiseSessions?.({
       runId,
       observedAt: now,
     });
@@ -636,14 +638,14 @@ export async function syncPostClassFeedback(
       // Read once per run: sessions whose deadline predates the oldest
       // collected feedback event cannot be judged late from event absence.
       dependencies.repository.loadFeedbackEventCoverageFloor(),
-      fetchWisePastSessionsByBangkokDate(
+      options.reminderTargets ? Promise.resolve([]) : fetchWisePastSessionsByBangkokDate(
         dependencies.client,
         dependencies.instituteId,
         startDate,
         endDate,
       ),
-      dependencies.repository.listFeedbackEventCandidates(detailCap),
-      options.reminderCheckpoint
+      options.reminderTargets ? Promise.resolve([]) : dependencies.repository.listFeedbackEventCandidates(detailCap),
+      options.reminderCheckpoint || options.reminderTargets
         ? Promise.resolve([])
         : dependencies.repository.listIncompleteRecheckCandidates(detailCap),
       options.reminderCheckpoint && checkpointClassDate
@@ -651,12 +653,14 @@ export async function syncPostClassFeedback(
         : Promise.resolve([]),
       // FU1. A reminder checkpoint targets one class date only, so the
       // deadline lane (every in-scope class, oldest deadline first) stays out.
-      options.reminderCheckpoint
+      options.reminderCheckpoint || options.reminderTargets
         ? Promise.resolve([])
         : dependencies.repository.listDeadlineCrossedCandidates?.(detailCap, now) ??
           Promise.resolve([]),
     ]);
-    const discovered = rollingCandidates(recentSessions);
+    const discovered = options.reminderTargets
+      ? options.reminderTargets.map((candidate) => ({ ...candidate, forceDetailRefresh: true }))
+      : rollingCandidates(recentSessions);
     const discoveredIds = new Set(discovered.map((candidate) => candidate.sessionId));
     const checkpointPersisted = persistedCheckpointCandidates.map((candidate) =>
       discoveredIds.has(candidate.sessionId)
@@ -686,7 +690,7 @@ export async function syncPostClassFeedback(
       checkpointPendingCount = planned.totalPending;
     } else if (options.reminderCheckpoint) {
       checkpointPendingCount = candidatePool.length;
-    } else if (dependencies.repository.filterCandidatesForFetch) {
+    } else if (!options.reminderTargets && dependencies.repository.filterCandidatesForFetch) {
       // Filter the full candidate pool before the hard cap. Otherwise already
       // reconciled recent sessions can occupy all 50 slots and permanently
       // starve older missing-feedback sessions from the rolling window.

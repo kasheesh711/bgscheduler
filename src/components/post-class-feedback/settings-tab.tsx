@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { NightlyRemindersPanel } from "./nightly-reminders-panel";
 import {
   AlertTriangle,
   CalendarCheck,
@@ -560,6 +561,7 @@ export function SettingsTab({
   return (
     <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_300px]">
       <div className="space-y-3">
+        <NightlyRemindersPanel payload={payload} submitting={submitting} onRequest={onRequest} />
         <LaunchControl payload={payload} submitting={submitting} onRequest={onRequest} />
         <AccessRoles admins={payload.admins} canManage={payload.capabilities.accessManager} submitting={submitting} onRequest={onRequest} />
         <TutorEmails rows={payload.tutorEmails} canManage={payload.capabilities.accessManager} submitting={submitting} onRequest={onRequest} />

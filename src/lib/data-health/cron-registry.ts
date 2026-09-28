@@ -16,6 +16,7 @@ export type CronJobKey =
   | "progress_tests"
   | "progress_tests_digest"
   | "progress_tests_processing"
+  | "post_class_feedback_nightly"
   | "post_class_feedback"
   | "post_class_feedback_backfill"
   | "post_class_feedback_digest"
@@ -59,6 +60,11 @@ export interface CronJobDefinition {
 }
 
 export const CRON_JOBS = [
+  { key: "post_class_feedback_nightly", label: "Nightly Feedback Reminders", feature: "Class Feedback",
+    path: "/api/internal/post-class-feedback/reminder-nightly", schedule: "0,30 * * * *",
+    cadenceLabel: "22:00 Bangkok; recovery every 30 min", cadenceMinutes: 30, lateAfterMinutes: 50,
+    maxDurationSeconds: 800, manualOnly: false, dangerous: true,
+    confirmationLabel: "Refreshes the current nightly batch and sends due reminders when reminders are live.", routeMethod: "GET" },
   { key: "tutor_sit_ins", label: "Tutor Sit-ins", feature: "Tutor Sit-ins",
     path: "/api/internal/tutor-sit-ins", schedule: "4,14,24,34,44,54 * * * *", cadenceLabel: "Every 10 min",
     cadenceMinutes: 10, lateAfterMinutes: 25, maxDurationSeconds: 300, manualOnly: false,

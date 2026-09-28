@@ -1,3 +1,4 @@
+import { nightlyWorkerOutcome, runNightlyReminders } from "@/lib/post-class-feedback/nightly-reminders";
 import { isClassroomOperationsOwner, isWiseClassroomJob, pausedWiseClassroomResult, wiseClassroomAutomationEnabled } from "@/lib/classrooms/operations-policy";
 import { runClassroomPublishRecovery } from "@/lib/classrooms/publish-worker";
 import { runRoomRefresh } from "@/lib/room-booking/refresh";
@@ -50,6 +51,12 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
     async () => {
       if (isWiseClassroomJob(jobKey) && jobKey !== "wise_snapshot" && !wiseClassroomAutomationEnabled()) {
         return NextResponse.json(pausedWiseClassroomResult());
+      }
+      if (jobKey === "post_class_feedback_nightly") {
+        try {
+          const result = nightlyWorkerOutcome(await runNightlyReminders());
+          return NextResponse.json(result, { status: result.ok ? 200 : 503 });
+        } catch { return NextResponse.json({ ok: false, error: "Nightly reminder processing failed." }, { status: 503 }); }
       }
       if (jobKey === "progress_tests_processing") {
         const { processJobs } = await import("@/lib/progress-tests/workspace/jobs");

@@ -58,9 +58,9 @@ export interface FeedbackQuestionAnswer {
 export type FeedbackQuestionSummary = Omit<FeedbackQuestionAnswer, "text">;
 
 export interface FeedbackReminderSummary {
-  lastKind: "day_after" | "deadline_day" | null;
+  lastKind: "day_after" | "deadline_day" | "nightly" | null;
   lastSentAt: string | null;
-  status: "none" | "pending" | "sending" | "sent" | "failed" | "cancelled";
+  status: "none" | "pending" | "sending" | "sent" | "failed" | "cancelled" | "unknown";
   attempts: number;
 }
 
@@ -234,7 +234,15 @@ export interface FeedbackSessionSourceIssue {
   resolvedByEmail: string | null;
 }
 
+export interface FeedbackNightlyHistoryRow {
+  id: string; date: string; mode: string; status: string; reason: string | null;
+  tutorKey: string | null; sessionId: string | null; wiseSessionId: string; className: string | null;
+  scheduledEndAt: string; recipient: string | null; deliveryId: string | null;
+  sentAt: string | null; receipt: string | null; attemptCount: number | null;
+}
+
 export interface PostClassFeedbackSessionDetail {
+  nightlyReminders?: FeedbackNightlyHistoryRow[];
   session: {
     id: string;
     wiseSessionId: string;
@@ -416,6 +424,7 @@ export interface FeedbackPayoutGoogleStatus {
 }
 
 export interface PostClassFeedbackPayload {
+  nightlyReminders?: import("@/lib/post-class-feedback/nightly-reminder-health").NightlyReminderHealth;
   capabilities: FeedbackCapabilities;
   payoutGoogle: FeedbackPayoutGoogleStatus | null;
   settings: {

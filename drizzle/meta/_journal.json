@@ -673,6 +673,13 @@
       "when": 1789777200000,
       "tag": "0095_classroom_weekend_allocations",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1790612326581,
+      "tag": "0096_nightly_feedback_reminders",
+      "breakpoints": true
     }
   ]
 }

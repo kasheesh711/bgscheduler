@@ -306,11 +306,13 @@ export const postClassFeedbackProvenanceEnum = pgEnum("post_class_feedback_prove
 export const postClassNotificationKindEnum = pgEnum("post_class_notification_kind", [
   "tutor_day_after",
   "tutor_deadline",
+  "tutor_nightly",
   "admin_digest",
   "test",
 ]);
 
 export const postClassNotificationStatusEnum = pgEnum("post_class_notification_status", [
+  "unknown",
   "pending",
   "sending",
   "sent",
@@ -532,7 +534,7 @@ export const cronAlertState = pgTable("cron_alert_state", {
   episodeKey: text("episode_key").notNull(),
   lastStatus: text("last_status").notNull(),
   lastAlertOutcome: text("last_alert_outcome").notNull().default("alerted"),
-  lastAlertedAt: timestamp("last_alerted_at", { withTimezone: true }).notNull(),
+  lastAlertedAt: timestamp("last_alerted_at", { withTimezone: true }),
   lastRecoveredAt: timestamp("last_recovered_at", { withTimezone: true }),
   errorSummary: text("error_summary"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -3466,6 +3468,10 @@ export const postClassEnforcementWindows = pgTable("post_class_enforcement_windo
 ]);
 
 export const postClassSettings = pgTable("post_class_settings", {
+  reminderMode: text("reminder_mode").$type<"off" | "shadow" | "live">().notNull().default("off"),
+  reminderStartedAt: timestamp("reminder_started_at", { withTimezone: true }),
+  reminderActivatedAt: timestamp("reminder_activated_at", { withTimezone: true }),
+  legacyReminderDisabledAt: timestamp("legacy_reminder_disabled_at", { withTimezone: true }),
   id: text("id").primaryKey().default("default"),
   enforcementMode: postClassEnforcementModeEnum("enforcement_mode").notNull().default("shadow"),
   currentWindowId: uuid("current_window_id").references(() => postClassEnforcementWindows.id),
@@ -3761,6 +3767,7 @@ export const postClassNotificationRuns = pgTable("post_class_notification_runs",
 ]);
 
 export const postClassNotificationDeliveries = pgTable("post_class_notification_deliveries", {
+  frozenContent: jsonb("frozen_content").$type<{ text: string; html: string; sessionIds: string[]; frozenAt: string }>(),
   id: uuid("id").primaryKey().defaultRandom(),
   runId: uuid("run_id").notNull().references(() => postClassNotificationRuns.id, { onDelete: "cascade" }),
   canonicalTutorKey: text("canonical_tutor_key"),
@@ -3812,6 +3819,41 @@ export const postClassNotificationAttempts = pgTable("post_class_notification_at
   uniqueIndex("pc_notification_attempt_number_idx").on(table.deliveryId, table.attemptNumber),
   index("pc_notification_attempt_status_idx").on(table.status, table.startedAt),
 ]);
+
+/** One expected class per night, including classes not yet imported or resolved. */
+export const postClassReminderLedger = pgTable("post_class_reminder_ledger", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => postClassNotificationRuns.id),
+  reminderDate: date("reminder_date", { mode: "string" }).notNull(),
+  mode: text("mode").$type<"shadow" | "live">().notNull(),
+  wiseSessionId: text("wise_session_id").notNull(),
+  wiseClassId: text("wise_class_id").notNull(),
+  sessionId: uuid("session_id").references(() => postClassSessions.id),
+  canonicalTutorKey: text("canonical_tutor_key"),
+  scheduledEndAt: timestamp("scheduled_end_at", { withTimezone: true }).notNull(),
+  deadlineAt: timestamp("deadline_at", { withTimezone: true }).notNull(),
+  status: text("status").notNull().default("pending"),
+  reason: text("reason"),
+  deliveryId: uuid("delivery_id").references(() => postClassNotificationDeliveries.id),
+  lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+  sourceObservedAt: timestamp("source_observed_at", { withTimezone: true }),
+  inventoryChangedAt: timestamp("inventory_changed_at", { withTimezone: true }),
+  rawSession: jsonb("raw_session").$type<Record<string, unknown>>(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_reminder_ledger_night_session_idx").on(table.mode, table.reminderDate, table.wiseSessionId),
+  index("pc_reminder_ledger_run_status_idx").on(table.runId, table.status),
+  index("pc_reminder_ledger_session_idx").on(table.sessionId, table.reminderDate),
+]);
+
+/** A fenced worker lease; external sends stop before its expiry. */
+export const postClassReminderWorker = pgTable("post_class_reminder_worker", {
+  id: text("id").primaryKey().default("nightly"),
+  leaseToken: uuid("lease_token").notNull(),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const postClassAiRuns = pgTable("post_class_ai_runs", {
   id: uuid("id").primaryKey().defaultRandom(),
