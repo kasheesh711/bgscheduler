@@ -28,9 +28,9 @@ status: clean
 
 # Phase 16: Code Review Report
 
-**Reviewed:** 2026-09-28T16:37:10Z  
-**Depth:** standard  
-**Files reviewed:** 13  
+**Reviewed:** 2026-09-28T16:37:10Z
+**Depth:** standard
+**Files reviewed:** 13
 **Status:** clean
 
 ## Summary
@@ -84,7 +84,7 @@ No live database, Wise mutation, outbound email, deployment, or cutover was perf
 
 ---
 
-_Reviewer: Codex (gsd-code-reviewer)_  
+_Reviewer: Codex (gsd-code-reviewer)_
 _Depth: standard_
 
 ## Implementer release verification
@@ -94,3 +94,5 @@ _Depth: standard_
 - Final focused regression check after the last disposition change: 63/63 passed.
 - ESLint passed with pre-existing repository warnings; the new file's unused import was removed.
 - Migration 0096 applied to production with reminders still off and enforcement still live. Live delivery and the seven-night observation period remain rollout steps.
+
+- Existing financial/source regression suites: 50/50 Postgres integration tests passed.
