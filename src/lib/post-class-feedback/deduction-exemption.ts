@@ -9,6 +9,8 @@ const NO_SHOW_LABEL = /^(?:(?:(?:the\s+)?(?:student|pupil|learner|child)|he|she|
 const CANCEL_LABEL = /^(?:(?:last[ -]minute|late)\s+)?(?:cancelled|canceled|cancellation)(?:$|\s*[-:;(]|\s+(?:by\b|today\b|last\b|on\b|due\b|because\b|class\b|session\b|lesson\b))/u;
 const CLASS_CANCELLED = /^(?:the\s+)?(?:class|session|lesson)\s+(?:(?:is|was|has been|had been)\s+)?(?:cancelled|canceled)\b/u;
 const OTHER_TIME = /\b(?:(?:last|previous|next)\s+(?:week|class|session|lesson|month|time)|yesterday|tomorrow|upcoming|from school|at school)\b/u;
+const MEDICAL_LEAVE = /^(?:(?:the\s+)?student|he|she|[a-z][a-z'-]*(?:\s+[a-z][a-z'-]*){0,2})\s+(?:take|takes|took|is on|was on)\s+(?:medical|sick)\s+leave(?:$|\s+(?:today|due|because)\b)/u;
+const FORGOT_CLASS = /^(?:(?:the\s+)?student\s+)?forgot\s+(?:about\s+(?:the\s+)?(?:class|session|lesson)|(?:he|she|they)\s+had\s+(?:a\s+)?(?:class|session|lesson)\b.{0,100}\bmissed\s+it)(?:$|\s*[-:;(])/u;
 
 function normalize(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase("en-US")
@@ -20,8 +22,10 @@ export function feedbackAttendanceExemption(value: string): "missed_or_no_show" 
   for (const sentence of value.split(/\r?\n|[.!?](?:\s|$)/u)) {
     const text = normalize(sentence).replace(/^[\s*•-]+/u, "");
     if (!text || OTHER_TIME.test(text) || /^(?:the\s+)?(?:teacher|tutor|instructor)\b/u.test(text)) continue;
+    if (/(?:เมื่อวาน|ครั้งที่แล้ว|สัปดาห์ก่อน|พรุ่งนี้|ครั้งหน้า|สัปดาห์หน้า)/u.test(text)) continue;
     if (/\b(?:not|isn't|wasn't|weren't|aren't)\s+(?:absent|cancelled|canceled|a no[ -]?show)\b/u.test(text)) continue;
-    if (ABSENT_LABEL.test(text) || NO_SHOW_LABEL.test(text)
+    if (ABSENT_LABEL.test(text) || NO_SHOW_LABEL.test(text) || MEDICAL_LEAVE.test(text) || FORGOT_CLASS.test(text)
+      || /^(?:(?:นักเรียน|น้อง|เด็ก)(?:คนนี้)?\s*ลา(?:เรียน|คลาส|คาบ|ป่วย)?|ลา(?:เรียน|คลาส|คาบ|ป่วย))(?:\s|$|ครับ|ค่ะ|คะ|วันนี้|เนื่องจาก|เพราะ)/u.test(text)
       || /^(?:(?:นักเรียน|น้อง|เด็ก)(?:คนนี้)?\s*)?(?:ขาดเรียน|ไม่มา(?:เข้า)?เรียน|ไม่เข้าเรียน|ไม่เข้าคลาส)(?:\s|$|ครับ|ค่ะ|คะ|วันนี้|เนื่องจาก|เพราะ)/u.test(text)) {
       return "missed_or_no_show";
     }

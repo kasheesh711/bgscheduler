@@ -12,6 +12,9 @@ describe("feedback attendance exemptions", () => {
     "The student was a no-show", "Student did not show up", "Student didn't attend",
     "No show. The session started at 8:53; the student did not appear.",
     "ขาดเรียน", "นักเรียนไม่มาเรียน", "น้องขาดเรียนครับ",
+    "น้องลาค่ะ", "น้องลาคลาส", "ลาเรียน", "Bingo take medical leave",
+    "The student is on sick leave today", "Student forgot about class",
+    "forgot he had class and that it was onsite and missed it",
   ])("recognizes an explicit student attendance entry: %s", text => {
     expect(feedbackAttendanceExemption(text)).toBe("missed_or_no_show");
   });
@@ -31,6 +34,8 @@ describe("feedback attendance exemptions", () => {
     "The student will be absent tomorrow.", "We discussed an upcoming absence.",
     "The student did not show improvement.", "Cancellation of fractions",
     "The student did not join the discussion.", "He didn't attend school last week.",
+    "The student forgot the formula in class.", "We discussed medical leave.",
+    "Bingo took medical leave last week.", "น้องลาคลาสเมื่อวาน", "น้องลาพรุ่งนี้",
     "We cancelled common factors.", "The x terms cancel.", "ยังขาดความมั่นใจ",
   ])("does not exempt unrelated, historical, future or negated prose: %s", text => {
     expect(feedbackAttendanceExemption(text)).toBeNull();

@@ -254,7 +254,7 @@ describe("selectPayoutRunCandidates", () => {
     const id = await seedDeduction({ id: "attendance-exemption", endsAt: "2026-07-10T03:00:00Z", tutorKey: "kevin", status: "approved" });
     const [deduction] = await handle.db.select().from(schema.postClassDeductions).where(eq(schema.postClassDeductions.id, id));
     const [absent] = await handle.db.insert(schema.postClassFeedbackVersions).values({
-      sessionId: deduction.sessionId, versionKey: "absent", contentHash: "absent", observedAt: new Date(), topics: "Absent",
+      sessionId: deduction.sessionId, versionKey: "absent", contentHash: "absent", observedAt: new Date(), homework: "Absent",
     }).returning();
     await handle.db.update(schema.postClassSessions).set({ latestFeedbackVersionId: absent.id }).where(eq(schema.postClassSessions.id, deduction.sessionId));
     expect(await selectPayoutRunCandidates(appDb(), WINDOW)).toHaveLength(0);
