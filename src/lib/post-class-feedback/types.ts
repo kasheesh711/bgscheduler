@@ -174,6 +174,11 @@ export interface SessionComplianceAssessment {
 }
 
 export interface SessionEligibilityInput {
+  canonicalTutorKey?: string | null;
+  className?: string | null;
+  subject?: string | null;
+  /** Current teacher submissions only; never the union of historical versions. */
+  feedbackFields?: readonly Partial<FeedbackFieldAnswers>[];
   meetingStatus?: string | null;
   /** Wise classroom classType. This takes precedence over the session modality/type. */
   classType?: string | null;
@@ -196,6 +201,7 @@ export const SESSION_ELIGIBILITY_REASONS = [
   "excluded_session_type",
   "complimentary_or_trial",
   "non_billable",
+  "non_teaching_consultation",
   "billing_evidence_missing",
   /**
    * Wise deleted the session (REC-03). Deliberately absent from
@@ -212,6 +218,14 @@ export interface SessionEligibilityResult {
   status: "eligible" | "ineligible" | "ambiguous";
   eligible: boolean;
   reason: SessionEligibilityReason;
+  exemption?: SessionDeductionExemption;
+}
+
+export interface SessionDeductionExemption {
+  reason: "missed_or_no_show" | "cancelled" | "non_teaching_consultation";
+  source: "feedback" | "class_type";
+  field: PostClassFeedbackField | null;
+  evidence: string;
 }
 
 export type AiSuspectReason =

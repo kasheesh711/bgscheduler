@@ -250,6 +250,30 @@ async function seedDeduction(input: {
 }
 
 describe("selectPayoutRunCandidates", () => {
+  it("uses only the canonical current attendance text, never a superseded absence note", async () => {
+    const id = await seedDeduction({ id: "attendance-exemption", endsAt: "2026-07-10T03:00:00Z", tutorKey: "kevin", status: "approved" });
+    const [deduction] = await handle.db.select().from(schema.postClassDeductions).where(eq(schema.postClassDeductions.id, id));
+    const [absent] = await handle.db.insert(schema.postClassFeedbackVersions).values({
+      sessionId: deduction.sessionId, versionKey: "absent", contentHash: "absent", observedAt: new Date(), topics: "Absent",
+    }).returning();
+    await handle.db.update(schema.postClassSessions).set({ latestFeedbackVersionId: absent.id }).where(eq(schema.postClassSessions.id, deduction.sessionId));
+    expect(await selectPayoutRunCandidates(appDb(), WINDOW)).toHaveLength(0);
+    const [taught] = await handle.db.insert(schema.postClassFeedbackVersions).values({
+      sessionId: deduction.sessionId, versionKey: "taught", contentHash: "taught", observedAt: new Date(), topics: "Fractions",
+    }).returning();
+    await handle.db.update(schema.postClassSessions).set({ latestFeedbackVersionId: taught.id }).where(eq(schema.postClassSessions.id, deduction.sessionId));
+    expect(await selectPayoutRunCandidates(appDb(), WINDOW)).toHaveLength(1);
+    await handle.db.update(schema.postClassSessions).set({ latestFeedbackVersionId: null }).where(eq(schema.postClassSessions.id, deduction.sessionId));
+    expect(await selectPayoutRunCandidates(appDb(), WINDOW)).toHaveLength(1);
+  });
+
+  it("blocks Gift consultations before a stale approval can publish", async () => {
+    await seedDeduction({ id: "gift-consult", endsAt: "2026-07-10T03:00:00Z", tutorKey: "Gift", status: "approved" });
+    await seedDeduction({ id: "another-consult", endsAt: "2026-07-10T03:00:00Z", tutorKey: "Another", status: "approved" });
+    await handle.db.update(schema.postClassSessions).set({ className: "Consult Ken" });
+    expect((await selectPayoutRunCandidates(appDb(), WINDOW)).map(c => c.wiseSessionId)).toEqual(["another-consult"]);
+  });
+
   it("takes only approved, in-window, unreversed deductions", async () => {
     await seedDeduction({ id: "approved", endsAt: "2026-07-10T03:00:00.000Z", tutorKey: "kevin", status: "approved" });
     await seedDeduction({ id: "pending", endsAt: "2026-07-11T03:00:00.000Z", tutorKey: "kevin", status: "pending_review" });

@@ -91,6 +91,19 @@ A persistent "Setup required" banner stays until four items complete: Wise field
 
 ## Data flow
 
+Gift's classes classified or named `Consult` / `Consultation` are non-teaching
+and exempt from feedback deductions. Current teacher feedback in any of the
+four boxes can also establish student absence/no-show or class cancellation:
+explicit labels such as `Absent`, `Student absent`, `No-show`, `Cancelled`, and
+Thai attendance/cancellation entries qualify regardless of credits or feedback
+length. Ordinary lesson prose, negation, past/future absence, and a teacher
+no-show label do not create a student-absence exemption. The collector records
+the field and evidence in session metadata and makes the session ineligible;
+the normal audited hygiene and ledger-retirement workflows clear deductions.
+Approval, publishing and verification also check current feedback so a stale
+approval cannot publish before the next collection. Historical/deleted feedback
+does not independently establish an exemption. Human waivers remain preserved.
+
 Payout source matching also distinguishes an exact-time paid row from a copy
 with both zero credits and zero payout. It requires one uniquely paid row;
 conflicting paid rows and unknown billing values remain ambiguous. A claimed

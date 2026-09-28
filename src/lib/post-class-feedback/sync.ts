@@ -845,7 +845,15 @@ export async function syncPostClassFeedback(
           session: sessionWithCurrentProjection,
         })
         : null;
+      const exemptionSourceReady = !firstFormDrift && !blockingGlobalSourceIssue
+        && parsed.mapping.status === "ready" && tutor.status === "resolved";
       const eligibility = evaluateSessionEligibility({
+        canonicalTutorKey: exemptionSourceReady ? tutor.canonicalKey : null,
+        className: sessionWithCurrentProjection.className,
+        subject: sessionWithCurrentProjection.subject,
+        feedbackFields: exemptionSourceReady ? sessionWithCurrentProjection.feedbackVersions
+          .filter(version => version.profile?.trim().toLocaleLowerCase("en-US") === "teacher")
+          .map(version => version.fields) : [],
         meetingStatus: sessionWithCurrentProjection.meetingStatus,
         classType: sessionWithCurrentProjection.classType,
         sessionType: sessionWithCurrentProjection.sessionType,

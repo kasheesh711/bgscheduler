@@ -128,6 +128,7 @@ const ELIGIBILITY_REASON_LABELS: Record<FeedbackEligibilityReason, string> = {
   excluded_session_type: "Excluded session type",
   complimentary_or_trial: "Complimentary / trial",
   non_billable: "Zero-credit, non-payable",
+  non_teaching_consultation: "Non-teaching consultation",
   billing_evidence_missing: "Billing or payout evidence needs review",
   deleted_in_wise: "Deleted in Wise",
 };
