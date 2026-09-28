@@ -344,6 +344,9 @@ export function matchMasterRow(input: MasterMatchInput): MasterMatchResult {
     // A row a previous publish appended is never an anchor for another one.
     if (row.marker) return false;
     if (row.sessionName === DEDUCTION_SESSION_NAME) return false;
+    // A cancelled booking is not the ended class. Its replacement may be
+    // under the tutor's online identity and record a later actual start.
+    if (/\(cancelled\)|\(canceled\)/iu.test(row.sessionName)) return false;
     return teachers.has(row.teacherName.trim().toLocaleLowerCase("en-US"));
   });
 

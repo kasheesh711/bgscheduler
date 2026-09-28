@@ -96,6 +96,10 @@ with both zero credits and zero payout. It requires one uniquely paid row;
 conflicting paid rows and unknown billing values remain ambiguous. A claimed
 paid row cannot fall through to its unpaid copy. Stored source fingerprints
 still block later financial or identity changes.
+Rows explicitly labelled `(Cancelled)` or `(Canceled)` cannot be source
+anchors. An ended online replacement can still match within the existing
+15-minute actual-start tolerance, using the same tutor and student checks;
+a claimed replacement cannot fall back to the cancelled booking.
 
 When session detail abbreviates a participant to a first name, collection can
 expand the nickname and surname from the active student mirror only through

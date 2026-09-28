@@ -93,6 +93,47 @@ describe("paid and unpaid source copies", () => {
   );
 });
 
+describe("cancelled bookings and online replacements", () => {
+  function replacement(input: {
+    suffix?: string;
+    teacher?: string;
+    student?: string;
+    minutes?: number;
+    claimedRows?: Set<number>;
+    includeReplacement?: boolean;
+  } = {}) {
+    const rows = [
+      HEADER,
+      [KEVIN, `In-Person Session - Math (${input.suffix ?? "Cancelled"})`, "Student", dateSerial("2026-09-12"), timeSerial(7, 0), "60 mins", 0, 0],
+    ];
+    if (input.includeReplacement !== false) rows.push([
+      input.teacher ?? KEVIN_ONLINE, "Live Session - Math", input.student ?? "Student",
+      dateSerial("2026-09-12"), timeSerial(7, input.minutes ?? 5), "53 mins", 1, 500,
+    ]);
+    return matchMasterRow({
+      table: parseMasterPayoutSheet(rows)!,
+      teacherNames: [KEVIN, KEVIN_ONLINE],
+      scheduledStartAt: new Date("2026-09-12T07:00:00Z"),
+      studentNames: ["Student"],
+      claimedRows: input.claimedRows,
+    });
+  }
+  it.each(["Cancelled", "Canceled"])("matches the paid replacement instead of the nearer %s row", (suffix) => {
+    expect(replacement({ suffix }).row?.rowNumber).toBe(3);
+  });
+  it("does not fall back to a cancelled row when the replacement is claimed", () => {
+    expect(replacement({ claimedRows: new Set([3]) }).status).toBe("ambiguous");
+  });
+  it.each([
+    { includeReplacement: false },
+    { teacher: EK },
+    { student: "Another student" },
+    { minutes: 16 },
+  ])("requires an unclaimed replacement within the same identity and time boundaries: %j", (input) => {
+    expect(replacement(input).status).toBe("unmatched");
+  });
+});
+
 describe("masterCellToUtc", () => {
   it("reads typed serial cells, which is how the app reads the tab", () => {
     expect(masterCellToUtc(dateSerial("2026-07-25"), timeSerial(6, 0))?.toISOString())
