@@ -20,6 +20,8 @@ function isPublicRoute(pathname: string) {
     pathname === "/api/search/assistant" ||
     pathname === "/api/classrooms/floor-plan-map" ||
     pathname === "/api/line/webhook" ||
+    // Wise webhook: authenticated in-handler by its shared key (no session).
+    pathname === "/api/wise/webhook" ||
     // Parent schedule links are opened from a LINE message, so they carry no
     // session. Access is the capability token in the path and nothing else —
     // see src/lib/student-schedule/links.ts. Note the trailing slash: it keeps

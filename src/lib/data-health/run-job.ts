@@ -37,7 +37,7 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
     return NextResponse.json({ error: "Unknown job" }, { status: 404 });
   }
 
-  if (isWiseClassroomJob(jobKey) && !isClassroomOperationsOwner(actorEmail)) {
+  if ((isWiseClassroomJob(jobKey) || jobKey === "feedback_autowriter") && !isClassroomOperationsOwner(actorEmail)) {
     return NextResponse.json({ error: "Only Kevin can run this job." }, { status: 403 });
   }
 
@@ -51,6 +51,13 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
     async () => {
       if (isWiseClassroomJob(jobKey) && jobKey !== "wise_snapshot" && !wiseClassroomAutomationEnabled()) {
         return NextResponse.json(pausedWiseClassroomResult());
+      }
+      if (jobKey === "feedback_autowriter") {
+        try {
+          const { runAutowriterJob } = await import("@/lib/feedback-autowriter/dispatch");
+          const result = await runAutowriterJob();
+          return NextResponse.json(result, { status: result.ok ? 200 : 503 });
+        } catch { return NextResponse.json({ ok: false, error: "Feedback autowriter sweep could not complete." }, { status: 503 }); }
       }
       if (jobKey === "post_class_feedback_nightly") {
         try {

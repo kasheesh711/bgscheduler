@@ -6115,3 +6115,101 @@ export const tutorSitInWorkerState = pgTable("tutor_sit_in_worker_state", {
   leaseUntil: timestamp("lease_until", { withTimezone: true }),
   finishedAt: timestamp("finished_at", { withTimezone: true }),
 });
+
+// ---------------------------------------------------------------------------
+// Feedback autowriter (migration 0097). Drafts tutors' post-class feedback
+// from Wise's AI meeting summary and completes Wise's blank auto-submission.
+// ---------------------------------------------------------------------------
+
+/** The single control row: mode, global halt, per-tutor switches and the sweep lease. */
+export const feedbackAutowriterControl = pgTable("feedback_autowriter_control", {
+  id: text("id").primaryKey().default("default"),
+  mode: text("mode").$type<"off" | "shadow" | "live">().notNull().default("shadow"),
+  disabledTutors: jsonb("disabled_tutors").$type<string[]>().notNull().default([]),
+  haltedAt: timestamp("halted_at", { withTimezone: true }),
+  haltReason: text("halt_reason"),
+  leaseToken: uuid("lease_token"),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  updatedBy: text("updated_by"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** One row per Wise session the autowriter has looked at; the exactly-once POST ledger. */
+export const feedbackAutowriterSessions = pgTable("feedback_autowriter_sessions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  wiseSessionId: text("wise_session_id").notNull(),
+  wiseClassId: text("wise_class_id"),
+  wiseTeacherUserId: text("wise_teacher_user_id"),
+  scheduledEndAt: timestamp("scheduled_end_at", { withTimezone: true }),
+  deadlineAt: timestamp("deadline_at", { withTimezone: true }),
+  state: text("state").$type<
+    | "pending" | "generating" | "would_submit" | "posting" | "awaiting_event" | "verified" | "held"
+    | "skipped_human" | "skipped_scope" | "expired" | "rejected" | "unknown_outcome" | "verify_failed"
+  >().notNull().default("pending"),
+  reason: text("reason"),
+  attempts: integer("attempts").notNull().default(0),
+  retryCount: integer("retry_count").notNull().default(0),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+  leaseToken: uuid("lease_token"),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  arm: text("arm").$type<"glm" | "luna">(),
+  fields: jsonb("fields").$type<Record<string, string>>(),
+  fieldsSha256: text("fields_sha256"),
+  billing: jsonb("billing").$type<Record<string, unknown>>(),
+  bodyHash: text("body_hash"),
+  postStartedAt: timestamp("post_started_at", { withTimezone: true }),
+  verifiedEvent: jsonb("verified_event").$type<Record<string, unknown>>(),
+  alertsSent: jsonb("alerts_sent").$type<Record<string, string>>().notNull().default({}),
+  lastTrigger: text("last_trigger"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("feedback_autowriter_sessions_wise_session_idx").on(table.wiseSessionId),
+  index("feedback_autowriter_sessions_state_idx").on(table.state, table.nextAttemptAt),
+  // At most one feedback POST in flight at a time (see migration 0097).
+  uniqueIndex("feedback_autowriter_sessions_single_posting_idx")
+    .on(table.state)
+    .where(sql`${table.state} = 'posting'`),
+]);
+
+/** One row per OpenRouter call (writer or judge) with billed usage. */
+export const feedbackAutowriterCalls = pgTable("feedback_autowriter_calls", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  wiseSessionId: text("wise_session_id").notNull(),
+  role: text("role").$type<"writer" | "judge">().notNull(),
+  arm: text("arm").$type<"glm" | "luna">().notNull(),
+  requestedModel: text("requested_model").notNull(),
+  resolvedModel: text("resolved_model"),
+  provider: text("provider"),
+  ok: boolean("ok").notNull(),
+  error: text("error"),
+  finishReason: text("finish_reason"),
+  promptTokens: integer("prompt_tokens"),
+  completionTokens: integer("completion_tokens"),
+  reasoningTokens: integer("reasoning_tokens"),
+  cachedTokens: integer("cached_tokens"),
+  costUsd: numeric("cost_usd", { precision: 12, scale: 8 }),
+  latencyMs: integer("latency_ms"),
+  result: jsonb("result").$type<Record<string, unknown>>(),
+  promptVersion: integer("prompt_version").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("feedback_autowriter_calls_session_idx").on(table.wiseSessionId, table.createdAt),
+  index("feedback_autowriter_calls_created_idx").on(table.createdAt),
+]);
+
+/** Raw Wise webhook deliveries (Wise sends no event id; `dedupe_key` is synthesized). */
+export const wiseWebhookEvents = pgTable("wise_webhook_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  dedupeKey: text("dedupe_key").notNull(),
+  eventName: text("event_name"),
+  wiseSessionId: text("wise_session_id"),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+  receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+  processedAt: timestamp("processed_at", { withTimezone: true }),
+  outcome: text("outcome"),
+}, (table) => [
+  uniqueIndex("wise_webhook_events_dedupe_idx").on(table.dedupeKey),
+  index("wise_webhook_events_session_idx").on(table.wiseSessionId, table.receivedAt),
+]);
