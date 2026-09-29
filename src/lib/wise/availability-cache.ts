@@ -86,13 +86,26 @@ export function isFarCacheFresh(
  * message is `Failed query: <sql>` — it names this table on ANY failure, so
  * the message cannot tell a pending migration from an outage. Only SQLSTATE
  * 42P01 (undefined_table) is the migration case: `code` on a raw driver error,
- * `cause.code` under the drizzle wrapper. The read touches no other relation,
- * so 42P01 can only mean this table.
+ * `cause.code` under the drizzle wrapper. The read names no other relation, so
+ * here 42P01 means this table is missing.
  */
 function isMissingCacheTable(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
   const candidate = error as { code?: unknown; cause?: { code?: unknown } };
   return (candidate.code ?? candidate.cause?.code) === "42P01";
+}
+
+/**
+ * The driver's SQLSTATE and message, for logs. A DrizzleQueryError's own
+ * message is the failed SQL plus every param (hundreds of teacher ids on a
+ * read, the leave JSON on a write) and never says why the query failed.
+ */
+function describeDbFailure(error: unknown): string {
+  const cause = error instanceof Error ? error.cause : undefined;
+  const driverError = cause === undefined || cause === null ? error : cause;
+  if (typeof driverError !== "object" || driverError === null) return String(driverError);
+  const { code, message } = driverError as { code?: unknown; message?: unknown };
+  return [code, message].filter((part) => typeof part === "string" && part !== "").join(" ") || "unknown error";
 }
 
 /**
@@ -142,8 +155,7 @@ export async function loadFarLeaveCache(
         "wise_teacher_availability_cache is unavailable; every teacher will fetch far leaves live.",
       );
     } else {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error("[wise-availability-cache] far-leave cache read failed:", message);
+      console.error("[wise-availability-cache] far-leave cache read failed:", describeDbFailure(err));
     }
     return new Map();
   }
@@ -197,8 +209,7 @@ export async function saveFarLeaveCache(
     }
     return values.length;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[wise-availability-cache] far-leave cache write failed:", message);
+    console.error("[wise-availability-cache] far-leave cache write failed:", describeDbFailure(err));
     return 0;
   }
 }
