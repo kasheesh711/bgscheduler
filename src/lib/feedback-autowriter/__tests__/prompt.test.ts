@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildFeedbackMessages,
   chooseStudentDisplayName,
+  describeClass,
   parseStudentName,
   redactForModel,
   restoreStudentName,
@@ -46,13 +47,48 @@ describe("buildFeedbackMessages", () => {
     const [system, user] = buildFeedbackMessages({
       studentFullName: STUDENT_NAME,
       tutorNames,
-      subject: "Mathematics",
+      classDetails: describeClass({ programme: "11+/13+", title: "Live Session - NVR" }),
       scheduledMinutes: 60,
       summary: { text: "Overview: Kevin and Somchai practised fractions.", meetingUUIDs: [] },
     });
     expect(system.role).toBe("system");
     expect(user.content).toContain("[TUTOR] and [STUDENT_1] practised fractions");
     expect(user.content).toContain("Scheduled length: 60 minutes");
+    expect(user.content).toContain("- Programme: 11+/13+");
+    expect(user.content).toContain("- Class subject: NVR");
+    expect(system.content).toContain("Use them only to name the programme and subject correctly");
     expect(`${system.content}${user.content}`).not.toMatch(/Somchai|Kevin/u);
+  });
+});
+
+describe("describeClass", () => {
+  it("takes the programme from the Wise subject and the subject from the session title", () => {
+    expect(describeClass({ programme: "11+/13+", title: "Live Session - NVR" })).toEqual([
+      "Programme: 11+/13+",
+      "Class subject: NVR",
+      "Terms: 11+/13+ = the ISEB 11+/13+ entrance tests; NVR (Non VR) = Non-Verbal Reasoning",
+    ]);
+    expect(describeClass({ programme: "Y9-11 / G8-10 (Int.)", title: "Online Session - Chemistry (Cancelled)" })).toEqual([
+      "Programme: Y9-11 / G8-10 (Int.)",
+      "Class subject: Chemistry",
+    ]);
+  });
+
+  it("expands only confirmed terms, as whole words", () => {
+    expect(describeClass({ programme: "11+/13+", title: "Live Session-Non VR" }).at(-1))
+      .toBe("Terms: 11+/13+ = the ISEB 11+/13+ entrance tests; NVR (Non VR) = Non-Verbal Reasoning");
+    expect(describeClass({ programme: "11+/13+", title: "Live Session - Math VR" }).at(-1))
+      .toBe("Terms: 11+/13+ = the ISEB 11+/13+ entrance tests; VR = Verbal Reasoning");
+    expect(describeClass({ programme: "11+/13+ Master", title: "Live Session - NVR+Math" }).at(-1))
+      .toBe("Terms: 11+/13+ = the ISEB 11+/13+ entrance tests; NVR (Non VR) = Non-Verbal Reasoning");
+    expect(describeClass({ programme: "Y9-11 / G8-10 (Int.)", title: "Live Session-Sci" }).at(-1)).toBe("Terms: Sci = Science");
+    expect(describeClass({ programme: "University", title: "Live Session - Scientific Writing" }))
+      .toEqual(["Programme: University", "Class subject: Scientific Writing"]);
+  });
+
+  it("drops empty or bare titles and passes unknown wording through", () => {
+    expect(describeClass({ programme: "Y2-8 / G1-7 (Int.)", title: "Live Session" })).toEqual(["Programme: Y2-8 / G1-7 (Int.)"]);
+    expect(describeClass({ programme: null, title: undefined })).toEqual([]);
+    expect(describeClass({ programme: null, title: "Mock test ISEB" })).toEqual(["Class subject: Mock test ISEB"]);
   });
 });

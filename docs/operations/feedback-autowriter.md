@@ -37,6 +37,7 @@ Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowrite
 | `--pause --reason="…" --actor=<email>` | global halt: no POSTs until resumed |
 | `--resume --actor=<email>` | clear the halt (check why it halted first) |
 | `--tutor-off=<wiseUserId>` / `--tutor-on=…` | per-tutor switch |
+| `--retry=<wiseSessionId> --actor=<email>` | send a `held`/`expired` class back to `pending` (e.g. after a prompt fix); refused inside the 30-min deadline margin; its alert is re-armed |
 | `--sweep` / `--process=<wiseSessionId>` | run the same guarded path by hand |
 
 Outer gates needing a redeploy: `FEEDBACK_AUTOWRITER_ENABLED`, `WISE_WEBHOOKS_ENABLED`. Preview deployments never POST.

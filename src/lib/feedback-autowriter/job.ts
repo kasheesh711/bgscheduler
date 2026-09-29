@@ -18,7 +18,7 @@ import {
   AUTOWRITER_SWEEP_MIN_REMAINING_MS,
 } from "./config";
 import { runWritingPipeline, type PipelineResult } from "./pipeline";
-import { chooseStudentDisplayName } from "./prompt";
+import { chooseStudentDisplayName, describeClass } from "./prompt";
 import { AUTOWRITER_ROSTER, AUTOWRITER_TEACHER_ALLOWLIST, rosterTutor } from "./roster";
 import { loadCandidateShortlist, loadFieldMappings, loadPriorFeedback } from "./run";
 import {
@@ -317,7 +317,7 @@ async function processLeased(deps: AutowriterDeps, input: {
       wiseSessionId: row.wiseSessionId,
       studentFullName: student.name,
       studentDisplayName: chooseStudentDisplayName(summary.text, student.name),
-      subject: detail.classSubject ?? null,
+      classDetails: describeClass({ programme: detail.classSubject, title: detail.title }),
       scheduledMinutes: window.minutes,
       summary,
     },

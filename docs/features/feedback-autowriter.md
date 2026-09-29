@@ -40,7 +40,12 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
    billing plan. If Wise now shows a different teacher, the row follows it (and a switched-off tutor's class is
    not posted); a `pending` row also follows the teacher the backstop's shortlist reports.
 4. **Write.** `z-ai/glm-5.3-flash` pinned to Together with zero data retention, reasoning `max`; names are redacted
-   before anything leaves BGScheduler. Deterministic validation (300-char policy, placeholder, absence wording,
+   before anything leaves BGScheduler. The writer and the judge both get the **class details** from Wise
+   (`describeClass` in [`prompt.ts`](../../src/lib/feedback-autowriter/prompt.ts)): at BeGifted Wise's `classSubject`
+   is the programme or level band ("11+/13+", "Y9-11 / G8-10 (Int.)") and the subject is only in the session title
+   ("Live Session - NVR" → "NVR"). Confirmed terms are expanded — 11+/13+ = the ISEB 11+/13+ entrance tests,
+   NVR / Non VR = Non-Verbal Reasoning, VR = Verbal Reasoning, Sci = Science — and nothing else is guessed. The
+   judge treats the class details as true, so naming the programme or subject is never a "made-up" claim. Deterministic validation (300-char policy, placeholder, absence wording,
    copy-similarity against the tutor's 90 days of feedback and the autowriter's own posts).
 5. **Judge.** GLM (same ZDR route) checks every factual claim against the summary. Unfaithful or invalid →
    fallback writer `openai/gpt-6-luna`, validated and GLM-judged the same way. Both fail → **held** + alert.

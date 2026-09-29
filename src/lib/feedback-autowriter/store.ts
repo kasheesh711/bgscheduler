@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
@@ -379,6 +379,33 @@ export async function requeueShadowDrafts(db: Database, minDeadline: Date): Prom
     .where(and(eq(S.state, "would_submit"), gte(S.deadlineAt, minDeadline)))
     .returning({ id: S.id });
   return rows.length;
+}
+
+/**
+ * Owner retry of a `held` or `expired` class (e.g. after a prompt fix): back to
+ * `pending`, due now. Its alert is re-armed, so a new hold or expiry emails again.
+ * Refused for any other state and when the deadline is inside the margin.
+ */
+export async function retryHeldSession(db: Database, wiseSessionId: string, input: {
+  minDeadline: Date;
+  actor: string;
+}): Promise<boolean> {
+  const rows = await db.update(S).set({
+    state: "pending",
+    reason: "retry_requested",
+    nextAttemptAt: null,
+    leaseToken: null,
+    leaseUntil: null,
+    metadata: sql`(${S.metadata} - 'alertKind') || ${JSON.stringify({ retriedBy: input.actor })}::jsonb
+      || jsonb_build_object('retriedAt', now()::text, 'retriedFrom', ${S.state}::text)`,
+    alertsSent: sql`${S.alertsSent} - 'held' - 'expired'`,
+    updatedAt: nowSql,
+  }).where(and(
+    eq(S.wiseSessionId, wiseSessionId),
+    inArray(S.state, ["held", "expired"]),
+    gt(S.deadlineAt, input.minDeadline),
+  )).returning({ id: S.id });
+  return rows.length > 0;
 }
 
 /** The autowriter's own recent posts for a tutor — post-class compares new feedback against them. */

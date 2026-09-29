@@ -19,6 +19,7 @@ import {
   PROMPT_VERSION,
   buildFeedbackMessages,
   chooseStudentDisplayName,
+  describeClass,
   redactForModel,
 } from "./prompt";
 import {
@@ -335,7 +336,7 @@ export interface PreparedSession {
   scheduledMinutes: number;
   studentFullName: string;
   studentDisplayName: string;
-  subject: string | null;
+  classDetails: string[];
   summary: AiSummary;
   submission: SubmissionState;
   billing: BillingPlan | null;
@@ -398,7 +399,7 @@ export async function prepareSession(input: {
       scheduledMinutes: window.minutes,
       studentFullName,
       studentDisplayName: chooseStudentDisplayName(summary.text, studentFullName),
-      subject: detail.classSubject ?? null,
+      classDetails: describeClass({ programme: detail.classSubject, title: detail.title }),
       summary,
       submission,
       billing,
@@ -444,7 +445,7 @@ export async function generateDraft(input: {
     messages: buildFeedbackMessages({
       studentFullName: session.studentFullName,
       tutorNames: input.tutorNames,
-      subject: session.subject,
+      classDetails: session.classDetails,
       scheduledMinutes: session.scheduledMinutes,
       summary: session.summary,
     }),
