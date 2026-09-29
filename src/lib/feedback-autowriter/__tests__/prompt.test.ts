@@ -18,9 +18,14 @@ describe("student names", () => {
     expect(parseStudentName("Plain Name")).toEqual({ firstName: "Plain", nicknameCode: null, nickname: null });
   });
 
-  it("uses whichever name the summary uses more", () => {
-    expect(chooseStudentDisplayName("Somchai worked hard. Somchai asked questions. Tom smiled.", STUDENT_NAME)).toBe("Somchai");
-    expect(chooseStudentDisplayName("Tom worked hard and Tom asked questions.", STUDENT_NAME)).toBe("Tom");
+  it("calls the student by their nickname", () => {
+    // Always the nickname (before the dot in the brackets), however the summary names the student.
+    expect(chooseStudentDisplayName(STUDENT_NAME)).toBe("Tom");
+    expect(chooseStudentDisplayName("Worawut (Bas.Ho) Horburapa")).toBe("Bas");
+    expect(chooseStudentDisplayName("Avarin (Ava.Si) Sirithienthong")).toBe("Ava");
+    expect(chooseStudentDisplayName("Prannatee (Keene.Ka) Karnchanapoo")).toBe("Keene");
+    // No nickname in the Wise name: the first name.
+    expect(chooseStudentDisplayName("Somchai Jaidee")).toBe("Somchai");
   });
 });
 

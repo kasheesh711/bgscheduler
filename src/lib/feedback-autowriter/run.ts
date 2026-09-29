@@ -398,7 +398,7 @@ export async function prepareSession(input: {
       scheduledStartAt: window.start.toISOString(),
       scheduledMinutes: window.minutes,
       studentFullName,
-      studentDisplayName: chooseStudentDisplayName(summary.text, studentFullName),
+      studentDisplayName: chooseStudentDisplayName(studentFullName),
       classDetails: describeClass({ programme: detail.classSubject, title: detail.title }),
       summary,
       submission,
