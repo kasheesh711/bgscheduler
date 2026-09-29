@@ -428,7 +428,7 @@ async function processLeased(deps: AutowriterDeps, input: {
     session: {
       wiseSessionId: row.wiseSessionId,
       studentFullName: student.name,
-      studentDisplayName: chooseStudentDisplayName(summary.text, student.name),
+      studentDisplayName: chooseStudentDisplayName(student.name),
       classDetails: describeClass({ programme: detail.classSubject, title: detail.title }),
       scheduledMinutes: scheduledWindow(detail).minutes,
       summary,
@@ -835,7 +835,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
     session: {
       wiseSessionId: row.wiseSessionId,
       studentFullName: student.name,
-      studentDisplayName: chooseStudentDisplayName(transcript.text, student.name),
+      studentDisplayName: chooseStudentDisplayName(student.name),
       classDetails: describeClass({ programme: detail.classSubject, title: detail.title }),
       scheduledMinutes,
       summary: { text: rendered, meetingUUIDs: [] },

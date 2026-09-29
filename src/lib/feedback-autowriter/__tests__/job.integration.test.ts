@@ -167,6 +167,10 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     expect(row).toMatchObject({ state: "verified", arm: "glm", wiseTeacherUserId: KEVIN });
     expect(row?.leaseToken).toBeNull();
     expect(await db.select().from(schema.feedbackAutowriterCalls)).toHaveLength(2);
+    // "Somchai (Tom.Ja) Jaidee" is called Tom, never by the first name.
+    const posted = wise.posts[0].answers.map((answer) => answer.answer).join("\n");
+    expect(posted).toContain("Tom found");
+    expect(posted).not.toMatch(/Somchai/u);
   });
 
   it("does nothing at all while halted: no Wise read, no model call, no row", async () => {

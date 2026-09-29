@@ -33,18 +33,17 @@ function latinWord(value: string): RegExp {
   return new RegExp(`(?<!\\p{L})${escapeRegExp(value)}(?!\\p{L})`, "giu");
 }
 
-function countMatches(text: string, value: string): number {
-  return value ? (text.match(latinWord(value)) ?? []).length : 0;
-}
-
 /**
- * The summary names the student the way the lesson did. Use whichever of the
- * first name or nickname it uses more (the tutor's own feedback mixes both).
+ * The name the feedback calls the student by: always their nickname — the
+ * part before the dot in the Wise name's brackets, "Worawut (Bas.Ho)
+ * Horburapa" → "Bas" (owner decision, 29 Sep) — or the first name when the
+ * Wise name has none.
  */
-export function chooseStudentDisplayName(summaryText: string, fullName: string): string {
+export function chooseStudentDisplayName(fullName: string): string {
   const { firstName, nickname } = parseStudentName(fullName);
-  if (nickname && countMatches(summaryText, nickname) > countMatches(summaryText, firstName)) return nickname;
-  return firstName;
+  // Only a real one-word nickname ("Bas"); odd bracket contents ("(.Ja)", "(Tom Ja)", "(K.Ja)") use the first name.
+  const usable = nickname !== null && [...nickname].length >= 2 && /^\p{L}[\p{L}\p{M}'-]*$/u.test(nickname);
+  return usable ? nickname : firstName;
 }
 
 /**

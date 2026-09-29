@@ -42,7 +42,9 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
    billing plan. If Wise now shows a different teacher, the row follows it (and a switched-off tutor's class is
    not posted); a `pending` row also follows the teacher the backstop's shortlist reports.
 4. **Write.** `z-ai/glm-5.3-flash` pinned to Together with zero data retention, reasoning `max`; names are redacted
-   before anything leaves BGScheduler. The writer and the judge both get the **class details** from Wise
+   before anything leaves BGScheduler. The model writes `[STUDENT_1]`, which becomes the student's **nickname** — the
+   part before the dot in the Wise name's brackets ("Worawut (Bas.Ho) Horburapa" → "Bas"), or the first name when
+   there is none (owner decision, 29 Sep). The writer and the judge both get the **class details** from Wise
    (`describeClass` in [`prompt.ts`](../../src/lib/feedback-autowriter/prompt.ts)): at BeGifted Wise's `classSubject`
    is the programme or level band ("11+/13+", "Y9-11 / G8-10 (Int.)") and the subject is only in the session title
    ("Live Session - NVR" → "NVR"). Confirmed terms are expanded — 11+/13+ = the ISEB 11+/13+ entrance tests,
