@@ -16,15 +16,10 @@ import {
   importRefreshableSalesSources,
 } from "@/lib/sales-dashboard/data";
 import { runCronWatchdog } from "@/lib/internal/cron-watchdog";
-import { processPostClassAiReviews } from "@/lib/post-class-feedback/ai";
-import { runPostClassDeductionHygiene } from "@/lib/post-class-feedback/auto-approval";
-import {
-  processDuePostClassNotificationRetries,
-  sendPostClassAdminDigest,
-} from "@/lib/post-class-feedback/notifications";
+import { runPostClassCollectionTickRequest } from "@/lib/post-class-feedback/collection-tick";
+import { sendPostClassAdminDigest } from "@/lib/post-class-feedback/notifications";
 import { payoutJobResponse, runPayoutAccrualPass, runPayoutFinalizePass } from "@/lib/post-class-feedback/payout-accrual";
 import { runPostClassReminderJob } from "@/lib/post-class-feedback/reminder-job";
-import { runPostClassFeedbackSync } from "@/lib/post-class-feedback/sync";
 import { runWiseSyncRequest } from "@/lib/sync/run-wise-sync";
 import { createWiseClient } from "@/lib/wise/client";
 import { syncWiseActivityEvents, WiseActivitySyncAlreadyRunningError } from "@/lib/wise-activity/sync";
@@ -185,29 +180,8 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
       }
 
       if (jobKey === "post_class_feedback") {
-        try {
-          const result = await runPostClassFeedbackSync({ triggerType: "manual", actorEmail });
-          const [ai, retries, hygiene] = await Promise.allSettled([
-            processPostClassAiReviews(),
-            processDuePostClassNotificationRetries(),
-            // Reopen unproven approvals and waive deductions on sessions the
-            // sync just found ineligible (e.g. cancelled in Wise) — releases
-            // claims only, never approves.
-            runPostClassDeductionHygiene(),
-          ]);
-          return NextResponse.json({
-            ok: true,
-            result,
-            ai: ai.status === "fulfilled" ? ai.value : { failed: true },
-            retries: retries.status === "fulfilled" ? retries.value : { failed: true },
-            hygiene: hygiene.status === "fulfilled" ? hygiene.value : { failed: true },
-          });
-        } catch (error) {
-          if (error instanceof PostClassFeedbackSyncAlreadyRunningError) {
-            return NextResponse.json({ error: error.message }, { status: 409 });
-          }
-          return NextResponse.json({ error: "Post-class feedback sync failed" }, { status: 500 });
-        }
+        // The cron's own tick and HTTP mapping, attributed to the actor.
+        return runPostClassCollectionTickRequest({ triggerType: "manual", actorEmail });
       }
 
       if (jobKey === "post_class_feedback_digest") {

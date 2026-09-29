@@ -24,6 +24,12 @@ vi.mock("@/lib/post-class-feedback/sync", () => ({ runPostClassFeedbackSync: vi.
 vi.mock("@/lib/post-class-feedback/notifications", () => ({ processDuePostClassNotificationRetries: vi.fn(), sendPostClassAdminDigest: vi.fn() }));
 vi.mock("@/lib/post-class-feedback/ai", () => ({ processPostClassAiReviews: vi.fn() }));
 vi.mock("@/lib/post-class-feedback/auto-approval", () => ({ runPostClassDeductionHygiene: vi.fn() }));
+// A pass-through spy: the real shared tick runs over the mocked sync and passes above, so the
+// cron-parity cases below still exercise it end to end, and one case can assert the delegation.
+vi.mock("@/lib/post-class-feedback/collection-tick", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/post-class-feedback/collection-tick")>();
+  return { ...actual, runPostClassCollectionTickRequest: vi.fn(actual.runPostClassCollectionTickRequest) };
+});
 vi.mock("@/lib/post-class-feedback/reminder-job", () => ({ runPostClassReminderJob: vi.fn() }));
 vi.mock("@/lib/post-class-feedback/payout-accrual", () => ({ payoutJobResponse: vi.fn(), runPayoutAccrualPass: vi.fn(), runPayoutFinalizePass: vi.fn() }));
 vi.mock("@/lib/leave-requests/sync", () => ({ syncLeaveRequests: vi.fn() }));
@@ -68,6 +74,7 @@ import { processPostClassAiReviews } from "@/lib/post-class-feedback/ai";
 import { runPostClassDeductionHygiene } from "@/lib/post-class-feedback/auto-approval";
 import { runPostClassBackfillJob } from "@/lib/post-class-feedback/backfill-job";
 import { findOldestUnreconciledBackfillWindow } from "@/lib/post-class-feedback/backfill-window";
+import { runPostClassCollectionTickRequest } from "@/lib/post-class-feedback/collection-tick";
 import { nightlyWorkerOutcome, runNightlyReminders } from "@/lib/post-class-feedback/nightly-reminders";
 import { processDuePostClassNotificationRetries, sendPostClassAdminDigest } from "@/lib/post-class-feedback/notifications";
 import { payoutJobResponse, runPayoutAccrualPass, runPayoutFinalizePass } from "@/lib/post-class-feedback/payout-accrual";
@@ -109,7 +116,7 @@ const DISPATCH_TARGETS = {
   credit_control: runCreditControlSyncRequest,
   progress_tests: runProgressTestSyncRequest,
   progress_tests_digest: sendProgressTestAdminDigest,
-  post_class_feedback: runPostClassFeedbackSync,
+  post_class_feedback: runPostClassCollectionTickRequest,
   post_class_feedback_backfill: runPostClassBackfillJob,
   post_class_feedback_digest: sendPostClassAdminDigest,
   post_class_feedback_day_after: runPostClassReminderJob,
@@ -200,6 +207,8 @@ beforeEach(() => {
   vi.resetAllMocks();
   applyDefaults();
   vi.stubEnv("WISE_CLASSROOM_AUTOMATION_ENABLED", "true");
+  // The shared post-class tick logs rejected passes and generic sync failures by design.
+  vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
 
 afterEach(() => {
@@ -436,6 +445,20 @@ describe("runDataHealthJob", () => {
 
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: lease });
+    expect(runPostClassDeductionHygiene).not.toHaveBeenCalled();
+  });
+
+  it("delegates post_class_feedback to the shared collection tick as the actor's manual run, returning its response verbatim", async () => {
+    const upstream = NextResponse.json({ ok: true, from: "shared tick" });
+    vi.mocked(runPostClassCollectionTickRequest).mockResolvedValueOnce(upstream as never);
+
+    const response = await runDataHealthJob("post_class_feedback", OWNER);
+
+    expect(runPostClassCollectionTickRequest).toHaveBeenCalledTimes(1);
+    expect(runPostClassCollectionTickRequest).toHaveBeenCalledWith({ triggerType: "manual", actorEmail: OWNER });
+    expect(response).toBe(upstream);
+    // run-job keeps no copy of the tick: with the shared function stubbed, nothing else runs.
+    expect(runPostClassFeedbackSync).not.toHaveBeenCalled();
     expect(runPostClassDeductionHygiene).not.toHaveBeenCalled();
   });
 

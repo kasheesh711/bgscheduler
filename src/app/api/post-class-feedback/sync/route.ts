@@ -2,11 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { requirePostClassCapability } from "@/lib/post-class-feedback/access";
-import { processPostClassAiReviews } from "@/lib/post-class-feedback/ai";
 import { postClassFeedbackErrorResponse } from "@/lib/post-class-feedback/api";
-import { processDuePostClassNotificationRetries } from "@/lib/post-class-feedback/notifications";
+import { runPostClassCollectionTick } from "@/lib/post-class-feedback/collection-tick";
 import { reassessPostClassSessions } from "@/lib/post-class-feedback/reassess";
-import { runPostClassFeedbackSync } from "@/lib/post-class-feedback/sync";
 
 export const maxDuration = 800;
 
@@ -75,23 +73,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, mode: "reassess", applied: input.apply, result });
     }
 
-    const result = await runPostClassFeedbackSync({
+    // The cron's tick, deduction hygiene included; a sync error is mapped below by this route's own mapper.
+    return NextResponse.json(await runPostClassCollectionTick({
       triggerType: "manual",
       actorEmail: actor.email,
       detailCap: input.detailCap,
       startDate: input.startDate,
       endDate: input.endDate,
-    });
-    const [ai, retries] = await Promise.allSettled([
-      processPostClassAiReviews(),
-      processDuePostClassNotificationRetries(),
-    ]);
-    return NextResponse.json({
-      ok: true,
-      result,
-      ai: ai.status === "fulfilled" ? ai.value : { failed: true },
-      retries: retries.status === "fulfilled" ? retries.value : { failed: true },
-    });
+    }));
   } catch (error) {
     return postClassFeedbackErrorResponse(
       "POST /api/post-class-feedback/sync",
