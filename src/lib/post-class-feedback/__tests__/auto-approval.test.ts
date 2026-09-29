@@ -6,15 +6,33 @@
  * grace (immediate auto-approval) and a malformed value coercing to NaN.
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
 vi.mock("server-only", () => ({}));
+// Only the sweeps below use these; the resolver cases never reach them.
+vi.mock("@/lib/post-class-feedback/actions", () => ({ applyPostClassReviewAction: vi.fn() }));
+vi.mock("@/lib/post-class-feedback/deduction-evidence", () => ({
+  deductionEvidenceIssue: vi.fn(),
+  loadCurrentDeductionEvidence: vi.fn(),
+}));
+vi.mock("@/lib/post-class-feedback/payout-repository", () => ({
+  hasWrittenPayoutDeduction: vi.fn(),
+  noLiveWrittenPayoutLine: vi.fn(),
+}));
 
+import type { Database } from "@/lib/db";
+import { applyPostClassReviewAction } from "@/lib/post-class-feedback/actions";
 import {
   autoChargeLowerBoundUtc,
   resolveAutoApproveEnabled,
   resolveAutoApproveGraceHours,
+  runPostClassAutoApprovals,
+  runPostClassAutoReopens,
+  runPostClassIneligibleWaivers,
 } from "@/lib/post-class-feedback/auto-approval";
+import { deductionEvidenceIssue, loadCurrentDeductionEvidence } from "@/lib/post-class-feedback/deduction-evidence";
+import { PostClassConflictError, PostClassValidationError } from "@/lib/post-class-feedback/errors";
+import { hasWrittenPayoutDeduction } from "@/lib/post-class-feedback/payout-repository";
 
 describe("resolveAutoApproveEnabled", () => {
   it("is off when the variable is absent — approvals are human-only by default", () => {
@@ -85,5 +103,97 @@ describe("autoChargeLowerBoundUtc", () => {
     // flags fall out of the unattended scope and stay human decisions.
     expect(autoChargeLowerBoundUtc(new Date("2026-11-10T12:00:00.000Z")).toISOString())
       .toBe("2026-09-25T17:00:00.000Z");
+  });
+});
+
+/** Each sweep awaits one select chain; this resolves it with the given candidate rows. */
+function fakeDb(rows: unknown[]): Database {
+  const chain = {
+    from: () => chain,
+    innerJoin: () => chain,
+    leftJoin: () => chain,
+    where: () => chain,
+    then: (resolve: (value: unknown) => void) => resolve(rows),
+  };
+  return { select: () => chain } as unknown as Database;
+}
+
+/** A drizzle 0.45 failure: the SQL and its parameters in the message, the SQLSTATE on `cause`. */
+function driverError(): Error {
+  const error = new Error(
+    'Failed query: update "post_class_deductions" set "status" = $1 where "id" = $2\nparams: approved,ded-1',
+    { cause: Object.assign(new Error("could not serialize access due to concurrent update"), { code: "40001" }) },
+  );
+  error.name = "DrizzleQueryError";
+  return error;
+}
+
+describe("sweep failure logging", () => {
+  let consoleError: MockInstance<typeof console.error>;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    consoleError.mockRestore();
+    vi.unstubAllEnvs();
+  });
+
+  it("logs a failed auto-approval by deduction id, error class and SQLSTATE, never the SQL or its parameters", async () => {
+    vi.stubEnv("POST_CLASS_AUTO_APPROVE_ENABLED", "true");
+    vi.mocked(applyPostClassReviewAction).mockRejectedValueOnce(driverError());
+
+    const result = await runPostClassAutoApprovals(
+      fakeDb([{ deductionId: "ded-1", version: 3 }]),
+      new Date("2026-09-29T12:00:00.000Z"),
+    );
+
+    expect(result).toEqual({ approved: 0, failed: 1 });
+    expect(consoleError.mock.calls).toEqual([[
+      "[post-class-auto-approve]",
+      { deductionId: "ded-1", errorName: "DrizzleQueryError", code: "40001" },
+    ]]);
+  });
+
+  it("logs a failed ineligible waiver with the typed error's own message", async () => {
+    vi.mocked(applyPostClassReviewAction).mockRejectedValueOnce(
+      new PostClassConflictError("This record changed. Refresh and try again."),
+    );
+
+    const result = await runPostClassIneligibleWaivers(
+      fakeDb([{ deductionId: "ded-2", version: 1, eligibilityReason: "cancelled" }]),
+    );
+
+    expect(result).toEqual({ waived: 0, failed: 1 });
+    expect(consoleError.mock.calls).toEqual([[
+      "[post-class-ineligible-waive]",
+      { deductionId: "ded-2", errorName: "PostClassConflictError", message: "This record changed. Refresh and try again." },
+    ]]);
+  });
+
+  it("logs a failed auto-reopen by deduction id, and a non-Error rejection as UnknownError", async () => {
+    vi.mocked(loadCurrentDeductionEvidence).mockResolvedValueOnce(new Map() as never);
+    vi.mocked(deductionEvidenceIssue).mockReturnValue("The session is no longer eligible for a deduction.");
+    vi.mocked(hasWrittenPayoutDeduction).mockResolvedValue(false);
+    vi.mocked(applyPostClassReviewAction)
+      .mockRejectedValueOnce(new PostClassValidationError("Only approved deductions can be reopened."))
+      .mockRejectedValueOnce("reopen rejected with a string");
+
+    const result = await runPostClassAutoReopens(fakeDb([
+      { deductionId: "ded-3", sessionId: "session-3", version: 2 },
+      { deductionId: "ded-4", sessionId: "session-4", version: 5 },
+    ]));
+
+    expect(result).toEqual({ reopened: 0, failed: 2 });
+    expect(consoleError.mock.calls).toEqual([
+      ["[post-class-auto-reopen]", {
+        deductionId: "ded-3",
+        errorName: "PostClassValidationError",
+        message: "Only approved deductions can be reopened.",
+      }],
+      ["[post-class-auto-reopen]", { deductionId: "ded-4", errorName: "UnknownError" }],
+    ]);
   });
 });

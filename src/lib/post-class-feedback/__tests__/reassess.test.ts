@@ -158,6 +158,33 @@ describe("reassessPostClassSessions", () => {
     expect(result.outcomes[0]).toMatchObject({ from: "late", to: "late", changed: false });
   });
 
+  it("counts a session it cannot reassess and logs only its Wise id, error class and SQLSTATE", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const driverError = new Error(
+      'Failed query: select * from "post_class_feedback_versions" where "wise_session_id" = $1\nparams: 6a6b1450b03fafaaa1851041',
+      { cause: Object.assign(new Error("canceling statement due to statement timeout"), { code: "57014" }) },
+    );
+    driverError.name = "DrizzleQueryError";
+    const repository = {
+      ...fakeRepository({}),
+      loadHistoricalFeedbackVersions: async () => { throw driverError; },
+    } as unknown as PostClassFeedbackRepository;
+
+    const result = await reassessPostClassSessions({
+      apply: false,
+      now: new Date("2026-08-07T00:00:00.000Z"),
+      db: fakeDb([LATE_SESSION]),
+      repository,
+    });
+
+    expect(result).toMatchObject({ scanned: 1, changed: 0, failed: 1, outcomes: [] });
+    expect(consoleError.mock.calls).toEqual([[
+      "[post-class-reassess]",
+      { wiseSessionId: "6a6b1450b03fafaaa1851041", errorName: "DrizzleQueryError", code: "57014" },
+    ]]);
+    consoleError.mockRestore();
+  });
+
   it("never waives from a dry run", async () => {
     const result = await reassessPostClassSessions({
       apply: false,
