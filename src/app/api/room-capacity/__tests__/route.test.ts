@@ -214,13 +214,20 @@ describe("room capacity API routes", () => {
   });
 
   it("returns 500 when a forecast read fails for any other reason, though the drizzle message names the table", async () => {
-    const timeout = drizzleForecastError("57014");
-    vi.mocked(getRoomCapacityForecast).mockRejectedValue(timeout as never);
+    vi.mocked(getRoomCapacityForecast).mockRejectedValue(drizzleForecastError("57014") as never);
 
     const res = await getForecast(new NextRequest("http://test.local/api/room-capacity/forecast"));
 
     expect(res.status).toBe(500);
-    await expect(res.json()).resolves.toEqual({ error: timeout.message });
+    await expect(res.json()).resolves.toEqual({ error: expect.any(String) });
+  });
+
+  it("returns 500 for a missing column — schema drift, not a pending migration", async () => {
+    vi.mocked(getRoomCapacityForecast).mockRejectedValue(drizzleForecastError("42703") as never);
+
+    const res = await getForecast(new NextRequest("http://test.local/api/room-capacity/forecast"));
+
+    expect(res.status).toBe(500);
   });
 
   it("requires auth for utilization", async () => {

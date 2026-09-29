@@ -888,7 +888,10 @@ const INVOCATIONS_LOOKBACK_DAYS = 45;
  * (timeout, dropped connection, permission), so the message cannot tell a
  * missing table from an outage. Decide on SQLSTATE 42P01 (undefined_table):
  * `code` on a raw driver error, `cause.code` under the drizzle wrapper. The
- * read touches no other relation, so 42P01 can only mean this table.
+ * read names no other relation, so here 42P01 means this table is missing.
+ * Keep it that way: Postgres also raises 42P01 for a missing FROM-clause entry
+ * (e.g. an outer-query reference to cron_invocations instead of the ranked
+ * subquery), which would degrade just as quietly.
  */
 function isMissingCronInvocationsTable(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;

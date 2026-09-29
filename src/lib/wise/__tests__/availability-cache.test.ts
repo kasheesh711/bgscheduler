@@ -86,17 +86,16 @@ describe("currentFarCacheShape", () => {
   });
 });
 
+const CACHE_READ_SQL =
+  'select "teacher_user_id", "far_leaves", "far_horizon_days", "far_window_start_day", "fetched_at", "fetch_error" from "wise_teacher_availability_cache" where "wise_teacher_availability_cache"."teacher_user_id" in ($1)\nparams: u-1';
+
 /**
- * What drizzle-orm 0.45 throws for ANY failed cache read: the message is the
- * SQL text, so it always names the table; the SQLSTATE lives on `cause`.
+ * What drizzle-orm 0.45 throws for ANY failed cache query: the message is the
+ * SQL text plus params, so it always names the table; the driver error — with
+ * the SQLSTATE and the actual reason — lives on `cause`.
  */
-function drizzleCacheReadError(code: string): Error {
-  return Object.assign(
-    new Error(
-      'Failed query: select "teacher_user_id", "far_leaves", "far_horizon_days", "far_window_start_day", "fetched_at", "fetch_error" from "wise_teacher_availability_cache" where "wise_teacher_availability_cache"."teacher_user_id" in ($1)\nparams: u-1',
-    ),
-    { cause: { code } },
-  );
+function drizzleCacheError(code: string, driverMessage: string, query = CACHE_READ_SQL): Error {
+  return Object.assign(new Error(`Failed query: ${query}`), { cause: { code, message: driverMessage } });
 }
 
 function makeSelectDb(behaviour: () => Promise<unknown[]>): Database {
@@ -144,7 +143,7 @@ describe("loadFarLeaveCache", () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const db = makeSelectDb(async () => {
-      throw drizzleCacheReadError("42P01");
+      throw drizzleCacheError("42P01", 'relation "wise_teacher_availability_cache" does not exist');
     });
 
     expect(await loadFarLeaveCache(db, ["u-1"])).toEqual(new Map());
@@ -152,15 +151,45 @@ describe("loadFarLeaveCache", () => {
     expect(error).not.toHaveBeenCalled();
   });
 
-  it("logs a real outage as an error even though the drizzle message names the table", async () => {
+  it("also recognises an unwrapped driver error carrying 42P01 itself", async () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const db = makeSelectDb(async () => {
-      throw drizzleCacheReadError("57014");
+      throw Object.assign(new Error('relation "wise_teacher_availability_cache" does not exist'), { code: "42P01" });
     });
 
     expect(await loadFarLeaveCache(db, ["u-1"])).toEqual(new Map());
-    expect(error).toHaveBeenCalledTimes(1);
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("logs a real outage as an error with the driver's reason, not the SQL and teacher ids", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = makeSelectDb(async () => {
+      throw drizzleCacheError("57014", "canceling statement due to statement timeout");
+    });
+
+    expect(await loadFarLeaveCache(db, ["u-1"])).toEqual(new Map());
+    expect(error).toHaveBeenCalledWith(
+      "[wise-availability-cache] far-leave cache read failed:",
+      "57014 canceling statement due to statement timeout",
+    );
+    expect(info).not.toHaveBeenCalled();
+  });
+
+  it("logs a missing column as an error — schema drift, not a pending migration", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = makeSelectDb(async () => {
+      throw drizzleCacheError("42703", 'column "fetch_error" does not exist');
+    });
+
+    expect(await loadFarLeaveCache(db, ["u-1"])).toEqual(new Map());
+    expect(error).toHaveBeenCalledWith(
+      "[wise-availability-cache] far-leave cache read failed:",
+      '42703 column "fetch_error" does not exist',
+    );
     expect(info).not.toHaveBeenCalled();
   });
 
@@ -171,7 +200,18 @@ describe("loadFarLeaveCache", () => {
     });
 
     expect(await loadFarLeaveCache(db, ["u-1"])).toEqual(new Map());
-    expect(error).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledWith(
+      "[wise-availability-cache] far-leave cache read failed:",
+      "connection terminated unexpectedly",
+    );
+  });
+
+  it("treats a non-Error rejection as a read failure too", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = makeSelectDb(() => Promise.reject("socket hang up"));
+
+    expect(await loadFarLeaveCache(db, ["u-1"])).toEqual(new Map());
+    expect(error).toHaveBeenCalledWith("[wise-availability-cache] far-leave cache read failed:", "socket hang up");
   });
 });
 
@@ -218,5 +258,31 @@ describe("saveFarLeaveCache", () => {
         { teacherUserId: "u-1", farLeaves: [], farHorizonDays: 180, farWindowStartDay: 28 },
       ]),
     ).resolves.toBe(0);
+  });
+
+  it("logs the driver's reason, not the SQL and leave JSON, when a write fails", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const failure = drizzleCacheError(
+      "53300",
+      "sorry, too many clients already",
+      'insert into "wise_teacher_availability_cache" ("teacher_user_id", "far_leaves", "far_horizon_days", "far_window_start_day", "fetched_at", "fetch_error") values ($1, $2, $3, $4, $5, $6) on conflict ("teacher_user_id") do update set "far_leaves" = excluded.far_leaves\nparams: u-1,[{"startTime":"2026-11-01T02:00:00.000Z","endTime":"2026-11-01T10:00:00.000Z"}],180,28,2026-09-29T08:00:00.000Z,',
+    );
+    const db = {
+      insert: () => ({
+        values: () => ({
+          onConflictDoUpdate: () => Promise.reject(failure),
+        }),
+      }),
+    } as unknown as Database;
+
+    await expect(
+      saveFarLeaveCache(db, [
+        { teacherUserId: "u-1", farLeaves: [], farHorizonDays: 180, farWindowStartDay: 28 },
+      ]),
+    ).resolves.toBe(0);
+    expect(error).toHaveBeenCalledWith(
+      "[wise-availability-cache] far-leave cache write failed:",
+      "53300 sorry, too many clients already",
+    );
   });
 });
