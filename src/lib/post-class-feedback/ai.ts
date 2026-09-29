@@ -74,6 +74,14 @@ export function isTransientQualityModelError(error: unknown): boolean {
   return status === "429" || Boolean(status?.startsWith("5"));
 }
 
+/**
+ * OpenAI refused the key itself (401/403). That says nothing about the
+ * feedback, so the pass treats it like a missing key instead of a failure.
+ */
+function isRejectedKeyError(error: unknown): boolean {
+  return error instanceof Error && /^OpenAI HTTP (401|403)$/.test(error.message);
+}
+
 interface EarlierAiRun {
   status: string;
   metadata: Record<string, unknown>;
@@ -110,8 +118,11 @@ export interface PostClassAiReviewPassResult {
   skipped: number;
   /** Model calls that retried an earlier failed or killed run (also counted in processed or failed). */
   retried: number;
-  /** Why model calls ended early (`deadline`, `model_failures`) or never started (`not_configured`). */
-  stopped: "deadline" | "model_failures" | "not_configured" | null;
+  /**
+   * Why model calls ended early (`deadline`, `model_failures`), never started
+   * (`not_configured`), or stopped because OpenAI rejected the key (`key_rejected`).
+   */
+  stopped: "deadline" | "model_failures" | "not_configured" | "key_rejected" | null;
 }
 
 async function callQualityModel(input: {
@@ -193,13 +204,14 @@ async function callQualityModel(input: {
  * 2. A first look assesses the version deterministically; a clean version gets a
  *    `deterministic-only` run and no model call. A retry reuses the triggers
  *    recorded with its first attempt.
- * 3. Before each model call: without `OPENAI_API_KEY`, leave the version
- *    unclaimed and move on; stop once a call could not finish (30s timeout)
- *    before `deadlineAt`. Then claim the run exclusively, by insert on the unique
+ * 3. Before each model call: without a usable key (unset, or rejected by
+ *    OpenAI earlier in the pass), leave the version unclaimed and move on; stop
+ *    once a call could not finish (30s timeout) before `deadlineAt`. Then claim the run exclusively, by insert on the unique
  *    request hash or by a conditional update of the earlier row. A lost claim
  *    skips the version.
  * 4. A failed model call records whether it is retryable; three consecutive
- *    failures stop the pass for this tick. A successful call is saved in one
+ *    failures stop the pass for this tick. A rejected key (401/403) instead
+ *    releases the claim untouched, as if no key were set. A successful call is saved in one
  *    transaction, and only while this pass still holds its claim.
  */
 export async function processPostClassAiReviews(
@@ -306,7 +318,10 @@ export async function processPostClassAiReviews(
     namesBySession.set(participant.sessionId, names);
   }
 
-  const modelConfigured = Boolean(process.env.OPENAI_API_KEY?.trim());
+  // Without a usable key, versions that need no model still settle and suspect
+  // ones are left unclaimed for a later tick.
+  let modelBlocked: "not_configured" | "key_rejected" | null =
+    process.env.OPENAI_API_KEY?.trim() ? null : "not_configured";
   let processed = 0;
   let failed = 0;
   let skipped = 0;
@@ -319,8 +334,11 @@ export async function processPostClassAiReviews(
     const [earlier] = await db.select({
       id: runs.id,
       status: runs.status,
+      model: runs.model,
       triggerReasons: runs.triggerReasons,
       metadata: runs.metadata,
+      errorMessage: runs.errorMessage,
+      startedAt: runs.startedAt,
       finishedAt: runs.finishedAt,
       updatedAt: runs.updatedAt,
     })
@@ -443,10 +461,8 @@ export async function processPostClassAiReviews(
       suspect = assessment;
     }
 
-    if (!modelConfigured) {
-      // No key: keep settling versions that need no model, and leave this one
-      // unclaimed for when a key is set.
-      stopped = "not_configured";
+    if (modelBlocked) {
+      stopped = modelBlocked;
       skipped += 1;
       continue;
     }
@@ -511,6 +527,18 @@ export async function processPostClassAiReviews(
       eq(runs.status, "running"),
       sql`${attemptsSql} = ${attempts}`,
     );
+    // Undo this pass's claim, leaving the version exactly as it was before it.
+    const releaseClaim = () => earlier
+      ? db.update(runs).set({
+        status: earlier.status,
+        model: earlier.model,
+        startedAt: earlier.startedAt,
+        finishedAt: earlier.finishedAt,
+        errorMessage: earlier.errorMessage,
+        metadata: earlier.metadata,
+        updatedAt: earlier.updatedAt,
+      }).where(stillClaimed)
+      : db.delete(runs).where(stillClaimed);
     const recordFailure = (error: unknown, retryable: boolean) => db.update(runs).set({
       status: "failed",
       finishedAt: new Date(),
@@ -531,6 +559,16 @@ export async function processPostClassAiReviews(
         similarity: suspect.highestPriorSimilarity,
       });
     } catch (error) {
+      if (isRejectedKeyError(error)) {
+        // A revoked or invalid key: no version is to blame, so none is charged
+        // an attempt. Later suspect versions are left unclaimed this tick too.
+        await releaseClaim();
+        if (earlier) retried -= 1;
+        modelBlocked = "key_rejected";
+        stopped = "key_rejected";
+        skipped += 1;
+        continue;
+      }
       await recordFailure(error, isTransientQualityModelError(error));
       failed += 1;
       consecutiveFailures += 1;

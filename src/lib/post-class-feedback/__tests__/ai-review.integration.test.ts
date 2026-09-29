@@ -322,4 +322,29 @@ describe("processPostClassAiReviews retries (real Postgres)", () => {
     expect(await pass()).toEqual({ processed: 1, failed: 0, skipped: 0, retried: 1, stopped: null });
     expect((await runs())[0].metadata).toMatchObject({ attempts: 2 });
   });
+  it("releases a first attempt whose key OpenAI rejects, so the version runs once the key works", async () => {
+    await seedSuspectVersion();
+    vi.stubGlobal("fetch", modelFails(401));
+
+    expect(await pass()).toEqual({ processed: 0, failed: 0, skipped: 1, retried: 0, stopped: "key_rejected" });
+    expect(await runs()).toHaveLength(0);
+
+    const fetchMock = modelReplies();
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await pass()).toEqual({ processed: 1, failed: 0, skipped: 0, retried: 0, stopped: null });
+    expect((await runs())[0]).toMatchObject({ status: "succeeded", metadata: expect.objectContaining({ attempts: 1 }) });
+  });
+
+  it("leaves a due retry exactly as it was when OpenAI rejects the key", async () => {
+    await seedSuspectVersion();
+    vi.stubGlobal("fetch", modelFails(503));
+    await pass();
+    await age(61);
+    const [before] = await runs();
+    vi.stubGlobal("fetch", modelFails(403));
+
+    expect(await pass()).toEqual({ processed: 0, failed: 0, skipped: 1, retried: 0, stopped: "key_rejected" });
+    const [after] = await runs();
+    expect(after).toEqual(before);
+  });
 });

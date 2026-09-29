@@ -33,9 +33,11 @@ function fakeDb(results: unknown[]) {
       };
     },
   });
+  const deletes: unknown[] = [];
   const db: Record<string, unknown> = { select: () => chain(), insert: () => chain(), update: () => chain() };
+  db.delete = (table: unknown) => { deletes.push(table); return chain(); };
   db.transaction = (fn: (tx: unknown) => Promise<unknown>) => fn(db);
-  return { db: db as never, values, sets, results };
+  return { db: db as never, values, sets, deletes, results };
 }
 
 const NOW = new Date("2026-09-29T12:00:00.000Z");
@@ -68,6 +70,9 @@ function earlierRun(overrides: {
   return {
     id: "run-earlier",
     status: overrides.status,
+    model: "gpt-5.4-mini",
+    errorMessage: overrides.status === "failed" ? "OpenAI HTTP 503" : null,
+    startedAt: minutesBefore(121),
     triggerReasons: ["short_required_field"],
     metadata: { promptVersion: 1, highestPriorSimilarity: 0.25, matchingPriorKey: null, ...overrides.metadata },
     finishedAt: overrides.finishedAt === undefined ? minutesBefore(120) : overrides.finishedAt,
@@ -267,6 +272,60 @@ describe("processPostClassAiReviews", () => {
 
     expect(result).toMatchObject({ processed: 1, retried: 1 });
     expect(sets[0]).toEqual(expect.objectContaining({ status: "running", metadata: expect.objectContaining({ attempts: 2 }) }));
+  });
+
+  it("treats a rejected key like a missing one: the claim is released and later suspect versions wait", async () => {
+    fetchMock.mockResolvedValueOnce(modelStatus(401));
+    const { db, values, sets, deletes, results } = fakeDb([
+      [candidate(1), candidate(2), candidate(3, HEALTHY_FIELDS)],
+      [],
+      [], [{ id: "run-1" }], undefined, // first attempt claimed, rejected, released (deleted)
+      [], // the next suspect version is left unclaimed
+      [], undefined, // a healthy version still settles
+    ]);
+
+    const result = await processPostClassAiReviews({ now: NOW }, db);
+
+    expect(result).toEqual({ processed: 0, failed: 0, skipped: 3, retried: 0, stopped: "key_rejected" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(deletes).toHaveLength(1);
+    expect(sets).toEqual([]);
+    expect(values).toEqual([
+      expect.objectContaining({ feedbackVersionId: "version-1", status: "running" }),
+      expect.objectContaining({ feedbackVersionId: "version-3", model: "deterministic-only" }),
+    ]);
+    expect(results).toEqual([]);
+    expect(consoleError.mock.calls).toEqual([[
+      "[post-class-ai-review]",
+      { stopped: "key_rejected", processed: 0, failed: 0, retried: 0 },
+    ]]);
+  });
+
+  it("restores a retry's row exactly as it was when OpenAI rejects the key", async () => {
+    fetchMock.mockResolvedValueOnce(modelStatus(403));
+    const earlier = earlierRun({ status: "failed", metadata: { attempts: 1, retryable: true, lastErrorName: "Error" } });
+    const { db, sets, deletes, results } = fakeDb([
+      [candidate(1)],
+      [],
+      [earlier],
+      [{ id: "run-earlier" }], // the conditional claim
+      undefined, // the release
+    ]);
+
+    const result = await processPostClassAiReviews({ now: NOW }, db);
+
+    expect(result).toEqual({ processed: 0, failed: 0, skipped: 1, retried: 0, stopped: "key_rejected" });
+    expect(deletes).toEqual([]);
+    expect(sets[1]).toEqual({
+      status: earlier.status,
+      model: earlier.model,
+      startedAt: earlier.startedAt,
+      finishedAt: earlier.finishedAt,
+      errorMessage: earlier.errorMessage,
+      metadata: earlier.metadata,
+      updatedAt: earlier.updatedAt,
+    });
+    expect(results).toEqual([]);
   });
 
   it("closes a killed run that is out of attempts as failed, without calling the model", async () => {
