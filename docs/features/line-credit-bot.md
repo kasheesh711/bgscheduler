@@ -124,7 +124,7 @@ review queue ([`schedule-bot.ts:261`-`276`](../../src/lib/line/schedule-bot.ts),
 **Manual re-run.** While Credit Control is active, the Data Health job list dispatches
 `line_credit_digest` in-process (`sendLineCreditDigest()`, `500` only when the run `failed`, the
 cron route's mapping); while it is retired the job is paused and shows no button. A direct
-`CRON_SECRET` request still works. Either way a second run on a date that already has a digest run
+`CRON_SECRET` request reaches the same function, which itself skips while Credit Control is retired. Either way a second run on a date that already has a digest run
 row is skipped ("already recorded for this date") — see
 [`internal-crons.md` § The Data Health manual-run path](../reference/api/internal-crons.md#the-data-health-manual-run-path).
 
@@ -516,7 +516,7 @@ its own feature's suite. Its only real-code exercise in the repo is through
    `latestSuccessfulRun` — a scheduled job whose freshness can be masked by an unrelated table
    (recorded as open question 4 in [`crons.md`](../reference/crons.md)). Wire the ledger in?
 3. **Resolved — the digest's `dangerous: true` flag now guards a real run.** It is registered with a
-   confirmation label ([`cron-registry.ts:349`](../../src/lib/data-health/cron-registry.ts)), and the
+   confirmation label ([`cron-registry.ts`](../../src/lib/data-health/cron-registry.ts)), and the
    Data Health job list dispatches it while Credit Control is active (see **Manual re-run** above).
 4. **`/credit setup` cannot bootstrap a chat.** It is a bare `UPDATE`, so a staff group must first
    be registered through the schedule bot's `setup staff` flow. That is coherent, but the failure is

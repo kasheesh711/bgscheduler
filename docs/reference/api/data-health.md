@@ -107,28 +107,31 @@ Runs one registered job now, **in-process** — it calls the job's lib function 
 
 No other field is read. The client always sends `{ confirmed: action.dangerous }`, having already shown a `window.confirm` with the registry's `confirmationLabel` ([`data-health-dashboard.tsx:470-485`](../../../src/components/data-health/data-health-dashboard.tsx)).
 
-**Gate ladder,** in handler order — each gate returns before the next runs:
+**Gate ladder,** in handler order ([`run/route.ts`](../../../src/app/api/data-health/jobs/[jobKey]/run/route.ts)) — each gate returns before the next runs:
 
-1. `!session?.user?.email` → **401** `{"error":"Unauthorized"}` ([`:14-17`](../../../src/app/api/data-health/jobs/[jobKey]/run/route.ts)).
-2. `jobKey` not in the registry → **404** `{"error":"Unknown job"}` ([`:20-23`](../../../src/app/api/data-health/jobs/[jobKey]/run/route.ts)). This fires **before** the audit wrapper, so an unknown key writes no `cron_invocations` row.
-3. `job.key.startsWith("post_class_feedback")` and the caller's fresh capabilities do not include `access_manager` → **403** `{"error":"Access manager capability required"}` ([`:25-30`](../../../src/app/api/data-health/jobs/[jobKey]/run/route.ts)). Capabilities are read per request from `post_class_access_grants` joined to `admin_users` on a case- and whitespace-insensitive email match ([`access.ts:129-146`](../../../src/lib/post-class-feedback/access.ts)); the four capability values are `viewer`, `reviewer`, `finance`, `access_manager` ([`access.ts:11-16`](../../../src/lib/post-class-feedback/access.ts)). Six registry keys match this prefix: `post_class_feedback`, `_backfill`, `_digest`, `_day_after`, `_deadline`, `_payout_accrual`.
-4. `job.dangerous` and `confirmed !== true` → **409** `{"error":"Confirmation required","confirmationLabel": <registry label>}` ([`:33-41`](../../../src/app/api/data-health/jobs/[jobKey]/run/route.ts)).
-5. Otherwise `runDataHealthJob(job.key, session.user.email)` ([`:43`](../../../src/app/api/data-health/jobs/[jobKey]/run/route.ts)). The dispatcher first refuses a job whose registry entry carries `manualRunDisabledReason` (today only `student_promotions_july_1`) with **409** and that reason as `error`, *before* its audit wrapper, so the refusal writes no `cron_invocations` row ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)).
+1. `!session?.user?.email` → **401** `{"error":"Unauthorized"}`.
+2. `jobKey` not in the registry → **404** `{"error":"Unknown job"}`. This fires **before** the audit wrapper, so an unknown key writes no `cron_invocations` row.
+3. The registry entry carries `manualRunDisabledReason` (today only `student_promotions_july_1`) → **409** with that reason as `error`, before any confirmation is asked for. `runDataHealthJob` repeats the refusal before its audit wrapper, so a refused job never writes a `cron_invocations` row ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)).
+4. Wise/classroom jobs and `feedback_autowriter` → only the classroom-operations owner passes (`requireClassroomOperationsOwner`).
+5. `job.key.startsWith("post_class_feedback")` and the caller's fresh capabilities do not include `access_manager` → **403** `{"error":"Access manager capability required"}`. Capabilities are read per request from `post_class_access_grants` joined to `admin_users` on a case- and whitespace-insensitive email match ([`access.ts:129-146`](../../../src/lib/post-class-feedback/access.ts)); the four capability values are `viewer`, `reviewer`, `finance`, `access_manager` ([`access.ts:11-16`](../../../src/lib/post-class-feedback/access.ts)). Seven registry keys match this prefix: `post_class_feedback`, `_nightly`, `_backfill`, `_digest`, `_day_after`, `_deadline`, `_payout_accrual`.
+6. `jobKey === "unearned_revenue"` and the caller lacks the Unearned Revenue `access_manager` grant → **403** `{"error":"Access manager capability required"}` — the grant the feature's own `POST /api/unearned-revenue/sync` retry requires, read per request from `unearned_revenue_access_grants` joined to `admin_users` ([`access.ts`](../../../src/lib/unearned-revenue/access.ts)).
+7. `job.dangerous` and `confirmed !== true` → **409** `{"error":"Confirmation required","confirmationLabel": <registry label>}`.
+8. Otherwise `runDataHealthJob(job.key, session.user.email)`.
 
-Because the capability gate precedes the confirmation gate, a non-manager asking for a dangerous post-class job sees 403, never 409.
+Because the capability gates precede the confirmation gate, a non-manager asking for a dangerous post-class job sees 403, never 409; an excluded job is refused at gate 3, before either.
 
-**The registry, and which keys the runner implements.** Every registry key without a `manualRunDisabledReason` has a runner branch, so no reachable key falls through to the dispatcher's terminal `404 {"error":"Unknown job"}`, which remains only as a defensive default ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)). `student_promotions_july_1` is excluded on purpose (409 before audit; see gate 5). [`run-job.test.ts`](../../../src/lib/data-health/__tests__/run-job.test.ts) pins the pairing at compile time and at runtime. Keys added to the registry after this table was written (for example `tutor_sit_ins` and `tutor_sit_ins_digest`) are dispatched too.
+**The registry, and which keys the runner implements.** Every registry key without a `manualRunDisabledReason` has a runner branch, so no reachable key falls through to the dispatcher's terminal `404 {"error":"Unknown job"}`, which remains only as a defensive default ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)). `student_promotions_july_1` is excluded on purpose (409 before confirmation and audit; see gate 3). [`run-job.test.ts`](../../../src/lib/data-health/__tests__/run-job.test.ts) pins the pairing at compile time and at runtime. Keys added to the registry after this table was written (for example `tutor_sit_ins` and `tutor_sit_ins_digest`) are dispatched too.
 
 | Job key | Schedule | `dangerous` | Runner branch | Success body |
 |---|---|:---:|:---:|---|
 | `wise_snapshot` | `*/30 * * * *` | — | yes | full sync result + `staleRunningSyncsFailed`; `202` when a run is already in flight ([`run-wise-sync.ts:142-167`](../../../src/lib/sync/run-wise-sync.ts)) |
 | `wise_activity` | `2,17,32,47 * * * *` | — | yes | `{ok:true, result}`; `409` on `WiseActivitySyncAlreadyRunningError` ([`run-job.ts:47-63`](../../../src/lib/data-health/run-job.ts)) |
 | `sales_dashboard` | `10,40 * * * *` | — | yes | `{ok:true, results, projectionResult}` — refreshable sources **and** the active projection source ([`run-job.ts:65-80`](../../../src/lib/data-health/run-job.ts)) |
-| `unearned_revenue` | `30 18 * * *` | — | yes | the sync result; `202` when skipped by its single-flight guard, `502` when `ok: false` — the cron route's mapping |
+| `unearned_revenue` | `30 18 * * *` | — | yes | the sync result; `202` when skipped by its single-flight guard, `502` when `ok: false` — the cron route's mapping; needs the Unearned Revenue `access_manager` grant (gate 6) |
 | `competitor_intelligence` | `28 18 * * 0` | — | yes | `{ok, result}`; status `200`/`500` from `result.status`, `409` when the message contains `already running` ([`run-job.ts:82-98`](../../../src/lib/data-health/run-job.ts)) |
 | `credit_control` | `20,50 * * * *` | — | yes | sync result + `syncRunId` + `staleRunningSyncsFailed`; `202` when already running ([`run-sync-request.ts:138-160`](../../../src/lib/credit-control/run-sync-request.ts)) |
 | `progress_tests` | `25,55 * * * *` | — | yes | the `runProgressTestSyncRequest({ triggerType: "manual", actorEmail })` response verbatim; `202` when a run is already in flight ([`run-sync-request.ts`](../../../src/lib/progress-tests/run-sync-request.ts)) |
-| `progress_tests_digest` | `35 0 * * *` | — | yes | the digest result verbatim; `500` when `status: "failed"` |
+| `progress_tests_digest` | `35 0 * * *` | yes | yes | the digest result verbatim; `500` when `status: "failed"` |
 | `post_class_feedback` | `13,43 * * * *` | — | yes | `{ok:true, result, retries}` — the sync **plus** due notification retries ([`run-job.ts:104-119`](../../../src/lib/data-health/run-job.ts)) |
 | `post_class_feedback_backfill` | `23,53 * * * *` | — | yes | `{ok:true, window, result}` for the oldest unreconciled window (one 50-detail batch, as the cron); `{ok:true, skipped:"nothing-unreconciled"}` when none; `409` when a post-class sync is already running; generic `500` |
 | `post_class_feedback_digest` | manual-only | yes | yes | `{ok:true, result}` ([`run-job.ts:121-124`](../../../src/lib/data-health/run-job.ts)) |
@@ -144,24 +147,24 @@ Because the capability gate precedes the confirmation gate, a non-manager asking
 | `line_credit_digest` | `3 2 * * *` | yes | yes | the digest result verbatim; `500` when `status: "failed"` |
 | `cron_watchdog` | `7,37 * * * *` | — | yes | `{ok:true, ...CronWatchdogSummary}` ([`run-job.ts:186-195`](../../../src/lib/data-health/run-job.ts)) |
 | `room_utilization` | manual-only | — | yes | `{ok:true, ...result}` ([`run-job.ts:197-205`](../../../src/lib/data-health/run-job.ts)) |
-| `line_backlog_recovery` | manual-only | — | yes | `{ok:true, result}` from `runLineBacklogRecovery({ db, dryRun: false })` |
+| `line_backlog_recovery` | manual-only | yes | yes | `{ok:true, result}` from `runLineBacklogRecovery({ db, dryRun: false })` |
 
-`student_promotions_july_1` is `dangerous`, so a caller must still send `confirmed: true` to receive its 409 refusal — gate 4 runs before dispatch.
+`student_promotions_july_1` is refused at gate 3, before the confirmation gate, so even an unconfirmed request gets the refusal rather than a confirmation prompt.
 
 **Response shape is not uniform.** Each branch returns whatever its lib function produced; there is no envelope contract across jobs. Where a Data Health branch exists it can also differ from the cron route's own response — for example the post-class digest branch returns `{ok, result}` where the route returns `{ok, digest}`.
 
-**Side effects.** Beyond the dispatched job's own writes (Wise snapshot promotion, Google Sheets reads, outbound tutor/admin email, LINE pushes, payout ledger appends — see each job's entry in [crons.md](../crons.md)), every dispatch writes exactly one `cron_invocations` row with `triggerSource: "admin"` and `actorEmail` set to the caller ([`run-job.ts:35-41`](../../../src/lib/data-health/run-job.ts)), so manual runs are attributable and appear in the next dashboard load's `recentInvocations`. A job refused for `manualRunDisabledReason` is never dispatched and writes no row.
+**Side effects.** Beyond the dispatched job's own writes (Wise snapshot promotion, Google Sheets reads, outbound tutor/admin email, LINE pushes, payout ledger appends — see each job's entry in [crons.md](../crons.md)), every dispatch writes exactly one `cron_invocations` row with `triggerSource: "admin"` and `actorEmail` set to the caller ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)), so manual runs are attributable and appear in the next dashboard load's `recentInvocations`. A job refused for `manualRunDisabledReason` is never dispatched and writes no row.
 
 **Status codes:**
 
 | Code | Condition |
 |------|-----------|
 | 200 | Job dispatched and its branch returned a 2xx body. |
-| 202 | Single-flight skip on `wise_snapshot` / `credit_control` / `progress_tests` / `unearned_revenue`, or `admissions_notifications` when every pass was skipped — audited as `skipped`, not `failed` ([`cron-audit.ts:114`](../../../src/lib/data-health/cron-audit.ts)). |
+| 202 | Single-flight skip on `wise_snapshot` / `credit_control` / `progress_tests` / `unearned_revenue` / `onsite_foot_traffic`, or `admissions_notifications` when every pass was skipped — audited as `skipped`, not `failed` ([`cron-audit.ts:114`](../../../src/lib/data-health/cron-audit.ts)). |
 | 401 | No session, or a session without `user.email`. |
-| 403 | Post-class job without the `access_manager` capability. Also emitted by middleware for a restricted user outside `/data-health`. |
+| 403 | Post-class job without the post-class `access_manager` capability, or `unearned_revenue` without the Unearned Revenue `access_manager` grant; Wise/classroom and autowriter jobs for anyone but the classroom-operations owner. Also emitted by middleware for a restricted user outside `/data-health`. |
 | 404 | `jobKey` not in the registry (no audit row). The dispatcher's terminal `Unknown job` fallback is a defensive default that no registry key reaches. |
-| 409 | `dangerous` job without `confirmed: true`; a job carrying `manualRunDisabledReason` (`student_promotions_july_1`), refused before the audit wrapper with the reason as `error`; also the `already running` collisions on `wise_activity`, `competitor_intelligence` and `post_class_feedback_backfill`. |
+| 409 | `dangerous` job without `confirmed: true`; a job carrying `manualRunDisabledReason` (`student_promotions_july_1`), refused before the confirmation gate and the audit wrapper with the reason as `error`; also the `already running` collisions on `wise_activity`, `competitor_intelligence`, `post_class_feedback` and `post_class_feedback_backfill`, and a sit-in record conflict mapped by `sitInError`. |
 | 500 | Branch-level failure. Message fidelity varies by branch — several return a fixed generic string that discards the underlying error. |
 | 502 | `unearned_revenue` sync returned `ok: false` (the cron route's mapping). |
 | 503 | Reminder checkpoint not ready (`post_class_feedback_day_after`, `post_class_feedback_deadline`). |
@@ -227,14 +230,14 @@ The push half of Data Health: it re-runs the dashboard's own health derivation o
 | File | Cases | Covers |
 |---|---:|---|
 | [`src/app/api/data-health/__tests__/route.test.ts`](../../../src/app/api/data-health/__tests__/route.test.ts) | 3 | 401 unauthenticated, the v2 payload with the compatibility fields preserved, 500 JSON on aggregation failure |
-| [`src/app/api/data-health/jobs/[jobKey]/run/__tests__/route.test.ts`](../../../src/app/api/data-health/jobs/[jobKey]/run/__tests__/route.test.ts) | 7 | admin session required, known non-dangerous job, 409 without confirmation, confirmed dangerous job, unknown job, `access_manager` required for post-class jobs, access manager allowed |
-| [`src/lib/data-health/__tests__/run-job.test.ts`](../../../src/lib/data-health/__tests__/run-job.test.ts) | 46 | dispatch parity with the registry (compile-time `satisfies` + runtime set equality), every runnable key reaches its entry point, the 409 refusal before audit, and the nine newer branches mirroring their cron routes |
+| [`src/app/api/data-health/jobs/[jobKey]/run/__tests__/route.test.ts`](../../../src/app/api/data-health/jobs/[jobKey]/run/__tests__/route.test.ts) | 10 | admin session required, known non-dangerous job, 409 without confirmation, confirmed dangerous job, unknown job, `access_manager` required for post-class jobs, access manager allowed, excluded job refused before confirmation, Unearned Revenue `access_manager` required and allowed |
+| [`src/lib/data-health/__tests__/run-job.test.ts`](../../../src/lib/data-health/__tests__/run-job.test.ts) | 50 | dispatch parity with the registry (compile-time `satisfies` + runtime set equality), the Run buttons offered under both feature modes all dispatch, every runnable key reaches its entry point, each reminder key runs its own checkpoint, the 409 refusal before audit, and the nine newer branches mirroring their cron routes |
 | [`src/app/api/data-health/__tests__/modality-counter.test.ts`](../../../src/app/api/data-health/__tests__/modality-counter.test.ts) | 5 | the `modality` + `conflict_model` union |
 | [`src/lib/internal/__tests__/cron-watchdog.test.ts`](../../../src/lib/internal/__tests__/cron-watchdog.test.ts) | 25 | classification, episode dedup, recovery, lock claim/release, missing-table fail-safe, email content, payout-window entry |
 | [`src/lib/data-health/__tests__/status.test.ts`](../../../src/lib/data-health/__tests__/status.test.ts) | 7 | the status ladder and expected-window arithmetic |
-| [`src/lib/data-health/__tests__/cron-audit.test.ts`](../../../src/lib/data-health/__tests__/cron-audit.test.ts) | 6 | outcome derivation, response digest capping |
+| [`src/lib/data-health/__tests__/cron-audit.test.ts`](../../../src/lib/data-health/__tests__/cron-audit.test.ts) | 9 | outcome derivation, response digest capping, a thrown handler becomes a `500` and a `failed` invocation |
 | [`src/lib/data-health/__tests__/cron-retention.test.ts`](../../../src/lib/data-health/__tests__/cron-retention.test.ts) | 4 | both retention guards |
-| [`src/lib/data-health/__tests__/cron-registry.test.ts`](../../../src/lib/data-health/__tests__/cron-registry.test.ts) | 7 | registry mirrors `vercel.json`, every entry points at a real `route.ts`, and each entry's `maxDurationSeconds` mirrors that route's exported `maxDuration`, plus exactly one `manualRunDisabledReason` job and the `isManuallyRunnable` truth table |
+| [`src/lib/data-health/__tests__/cron-registry.test.ts`](../../../src/lib/data-health/__tests__/cron-registry.test.ts) | 9 | registry mirrors `vercel.json`, every entry points at a real `route.ts`, and each entry's `maxDurationSeconds` mirrors that route's exported `maxDuration`, plus exactly one `manualRunDisabledReason` job, the `isManuallyRunnable` truth table, and the Run-button list under both feature modes |
 
 The watchdog **route** has no route-level test; its behaviour is covered through the lib suite.
 

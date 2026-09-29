@@ -56,7 +56,7 @@ Nineteen paths are registered in [`vercel.json`](../../../vercel.json), and ever
 
 ### The Data Health manual-run path
 
-`POST /api/data-health/jobs/{jobKey}/run` re-runs a job **by calling the same lib function in-process**, not by issuing an HTTP request to the route ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)). It dispatches every registry key, including a manual Onsite Foot Traffic reconciliation, except `student_promotions_july_1`: that entry carries `manualRunDisabledReason`, so Data Health shows no button for it and `runDataHealthJob` refuses a direct call with `409` (the reason as `error`) before its audit wrapper. Student promotions are applied from the Student Promotions page.
+`POST /api/data-health/jobs/{jobKey}/run` re-runs a job **by calling the same lib function in-process**, not by issuing an HTTP request to the route ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)). It dispatches every registry key, including a manual Onsite Foot Traffic reconciliation, except `student_promotions_july_1`: that entry carries `manualRunDisabledReason`, so Data Health shows no button for it and `runDataHealthJob` refuses a direct call with `409` (the reason as `error`) before its audit wrapper. Student promotions are applied from the Student Promotions page. Post-class keys and `unearned_revenue` also require their feature's `access_manager` grant.
 
 Where a Data Health branch exists, its response can differ slightly from the route's — e.g. the post-class digest branch returns `{ok, result}` ([`run-job.ts:121-124`](../../../src/lib/data-health/run-job.ts)) where the route returns `{ok, digest}`.
 
@@ -442,7 +442,7 @@ Otherwise it reads the active snapshot's packages and upcoming future sessions, 
 
 ### `GET /api/internal/line-backlog-recovery`
 
-**Manual only — no `vercel.json` entry.** Run it with a direct `CRON_SECRET` call or from the Data Health job list, which calls the same `runLineBacklogRecovery({ db, dryRun: false })` in-process ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)). Registered `manualOnly: true`, `dangerous: false` ([`cron-registry.ts:384-398`](../../../src/lib/data-health/cron-registry.ts)). `maxDuration = 300`. **`GET` only** — there is no `POST` handler.
+**Manual only — no `vercel.json` entry.** Run it with a direct `CRON_SECRET` call or from the Data Health job list, which calls the same `runLineBacklogRecovery({ db, dryRun: false })` in-process ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)). Registered `manualOnly: true`, `dangerous: true` — Data Health asks for confirmation before the live write ([`cron-registry.ts`](../../../src/lib/data-health/cron-registry.ts)). `maxDuration = 300`. **`GET` only** — there is no `POST` handler.
 
 **Request.** None read. Note the route hard-codes `dryRun: false` ([`route.ts:19`](../../../src/app/api/internal/line-backlog-recovery/route.ts)); the lib's dry-run mode is not reachable over HTTP.
 

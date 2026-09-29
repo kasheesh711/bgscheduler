@@ -617,7 +617,7 @@ The registry comment states the intent plainly: outbound tutor reminders and the
 - **Day-after reminder** — "May email tutors whose post-class feedback is incomplete."
 - **Deadline reminder** — "May email tutors whose feedback is due tonight."
 
-Both reminder routes first drain their checkpoint through repeated 50-detail sync batches (default 8 batches / 9 minutes) and refuse to send while unreconciled Wise sessions remain, returning **`503`** with the result attached ([`reminder-job.ts:42-128`](../../src/lib/post-class-feedback/reminder-job.ts), [`reminder-day-after/route.ts:17-23`](../../src/app/api/internal/post-class-feedback/reminder-day-after/route.ts), [`reminder-deadline/route.ts:17-23`](../../src/app/api/internal/post-class-feedback/reminder-deadline/route.ts)) — a reminder built on incomplete data would email the wrong tutors. Like the two manual routes above, all three are dispatchable from Data Health — these behind the `access_manager` capability and a confirmation body ([`run-job.ts:121-139`](../../src/lib/data-health/run-job.ts)). Feature meaning: [Post-class Feedback → Parked tutor reminders and admin digest](../features/post-class-feedback.md#parked-tutor-reminders-and-admin-digest).
+Both reminder routes first drain their checkpoint through repeated 50-detail sync batches (default 8 batches / 9 minutes) and refuse to send while unreconciled Wise sessions remain, returning **`503`** with the result attached ([`reminder-job.ts:42-128`](../../src/lib/post-class-feedback/reminder-job.ts), [`reminder-day-after/route.ts:17-23`](../../src/app/api/internal/post-class-feedback/reminder-day-after/route.ts), [`reminder-deadline/route.ts:17-23`](../../src/app/api/internal/post-class-feedback/reminder-deadline/route.ts)) — a reminder built on incomplete data would email the wrong tutors. Like the two manual routes above, all three are dispatchable from Data Health — these behind the `access_manager` capability and a confirmation body ([`run-job.ts`](../../src/lib/data-health/run-job.ts)). Feature meaning: [Post-class Feedback → Parked tutor reminders and admin digest](../features/post-class-feedback.md#parked-tutor-reminders-and-admin-digest).
 
 ---
 
@@ -655,17 +655,19 @@ Manual invocations are audited exactly like scheduled ones, with `triggerSource`
 
 1. Auth.js session with an email required → else `401`.
 2. Unknown `jobKey` → `404`.
-3. Any `post_class_feedback*` key additionally requires the `access_manager` capability → else `403`.
-4. A `dangerous: true` job requires `{ "confirmed": true }` in the body → else `409` carrying the registry's `confirmationLabel`.
-5. Dispatch through `runDataHealthJob(jobKey, actorEmail)` with `triggerSource: "admin"` ([`run-job.ts:29-41`](../../src/lib/data-health/run-job.ts)). A job whose registry entry carries `manualRunDisabledReason` (`student_promotions_july_1`) is refused there with `409` and its reason, before the audit wrapper.
+3. A job whose registry entry carries `manualRunDisabledReason` (`student_promotions_july_1`) → `409` with its reason, before the confirmation gate; `runDataHealthJob` repeats the refusal before its audit wrapper.
+4. Wise/classroom jobs and `feedback_autowriter` are restricted to the classroom-operations owner.
+5. Any `post_class_feedback*` key additionally requires the post-class `access_manager` capability, and `unearned_revenue` the Unearned Revenue `access_manager` grant its own import retry requires → else `403`.
+6. A `dangerous: true` job requires `{ "confirmed": true }` in the body → else `409` carrying the registry's `confirmationLabel`.
+7. Dispatch through `runDataHealthJob(jobKey, actorEmail)` with `triggerSource: "admin"` ([`run-job.ts`](../../src/lib/data-health/run-job.ts)).
 
-**Coverage.** `runDataHealthJob` has a branch for every registry key except `student_promotions_july_1`, which carries `manualRunDisabledReason` and is refused with `409` before the audit wrapper; the dashboard offers a button only for jobs `isManuallyRunnable` accepts ([`run-job.ts`](../../src/lib/data-health/run-job.ts), [`cron-registry.ts`](../../src/lib/data-health/cron-registry.ts)). [`run-job.test.ts`](../../src/lib/data-health/__tests__/run-job.test.ts) pins the pairing.
+**Coverage.** `runDataHealthJob` has a branch for every registry key except `student_promotions_july_1`, which carries `manualRunDisabledReason` and is refused with `409` before the confirmation gate and the audit wrapper; the dashboard offers a button only for jobs `isManuallyRunnable` accepts ([`run-job.ts`](../../src/lib/data-health/run-job.ts), [`cron-registry.ts`](../../src/lib/data-health/cron-registry.ts)). [`run-job.test.ts`](../../src/lib/data-health/__tests__/run-job.test.ts) pins the pairing.
 
 | Runnable from Data Health | Refused → `409` before audit |
 |---|---|
 | every other registry key | `student_promotions_july_1` — annual Wise-writing job; apply promotions from the Student Promotions page |
 
-Three behavioural differences from the cron path when run this way: `post_class_feedback` runs the sync and notification retries but **not** the AI review or deduction hygiene passes ([`run-job.ts:104-119`](../../src/lib/data-health/run-job.ts)), `wise_activity` runs in `manual` mode — 30 days / 500 pages ([`run-job.ts:47-63`](../../src/lib/data-health/run-job.ts)), and `progress_tests` runs with `triggerType: "manual"`, so before the tutor-workspace launch it skips the cron's daily-window claim — as the route's admin-session path does — while still waiting for today's shared snapshot ([`run-sync-request.ts`](../../src/lib/progress-tests/run-sync-request.ts)).
+Three behavioural differences from the cron path when run this way: `post_class_feedback` runs the sync and notification retries but **not** the AI review or deduction hygiene passes ([`run-job.ts`](../../src/lib/data-health/run-job.ts)), `wise_activity` runs in `manual` mode — 30 days / 500 pages ([`run-job.ts`](../../src/lib/data-health/run-job.ts)), and `progress_tests` runs with `triggerType: "manual"`, so before the tutor-workspace launch it skips the cron's daily-window claim — as the route's admin-session path does — while still waiting for today's shared snapshot ([`run-sync-request.ts`](../../src/lib/progress-tests/run-sync-request.ts)); unlike that path, Data Health does not also require `/progress-tests` page access.
 
 ---
 

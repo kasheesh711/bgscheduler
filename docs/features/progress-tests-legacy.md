@@ -678,7 +678,8 @@ and the Learning Plans access-policy tests that use the same fixture.
 14. **Resolved — both cron keys now run from Data Health.** `progress_tests` and `progress_tests_digest`
     have [`run-job.ts`](../../src/lib/data-health/run-job.ts) branches that mirror their cron routes
     (`runProgressTestSyncRequest({ triggerType: "manual", actorEmail })` and
-    `sendProgressTestAdminDigest()`); the digest route itself is still `GET`-only behind the cron secret.
+    `sendProgressTestAdminDigest()`, now behind a confirmation prompt); the digest route itself is still
+    `GET`-only behind the cron secret.
 
 15. **The PAST-session fetch requests `page_size: 1000`** ([`sync.ts:66`, `148`](../../src/lib/progress-tests/sync.ts)).
     Whether Wise honours that or silently caps the page is a runtime fact the repo cannot attest;

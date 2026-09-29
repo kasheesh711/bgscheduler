@@ -54,8 +54,10 @@ Recorded so nobody re-opens them, and so any doc still asserting the old state c
   (`src/lib/data-health/run-job.ts`). The tenth, `student_promotions_july_1`, is excluded on purpose
   through the registry's `manualRunDisabledReason` and `isManuallyRunnable`
   (`src/lib/data-health/cron-registry.ts`): no button, and a direct call gets a `409` carrying the
-  reason before the audit wrapper, so no failed `cron_invocations` row. `run-job.test.ts` fails
-  typecheck and the unit suite if a registry key ever lacks a branch.
+  reason before the confirmation gate and the audit wrapper, so no failed `cron_invocations` row.
+  `unearned_revenue` also requires that feature's `access_manager` grant, as its own retry does, and
+  the newly reachable `line_backlog_recovery` and `progress_tests_digest` ask for confirmation.
+  `run-job.test.ts` fails typecheck and the unit suite if a registry key ever lacks a branch.
 - **DEF-24 (Student Schedule print report's back link) — FIXED.** `PrintToolbar` now takes
   `backHref`/`backLabel` (`src/components/learning-plan/print-toolbar.tsx:8-14`) and the report passes
   `/student-schedule` (`report/page.tsx:98`).
@@ -1385,7 +1387,8 @@ the repo-wide auth → JSON → Zod → try/catch convention, so a driver error 
 framework 500. `GET /api/leave-requests/[requestId]` (`route.ts:14-24`) has the same gap.
 
 **TEST-12 — `cron-registry.test.ts` now pins `maxDurationSeconds` parity for all 22 entries** (the fix
-for DEF-1), and `run-job.test.ts` now pins the `manualActions` / `run-job.ts` pairing (DEF-3, fixed), but
+for DEF-1), and `run-job.test.ts` now pins the registry / `run-job.ts` pairing and checks the Run-button list
+(`manuallyRunnableCronJobs`) against it (DEF-3, fixed), but
 nothing tests the six duplicated cron-secret copies (OPS-11). `migration.test.ts` pins post-class migrations `0055` and `0057`–`0062` but
 not `0068_payout_adjustment_superseded.sql`, whose `superseded` status is load-bearing for retirement,
 close readiness and the accrual planner.
