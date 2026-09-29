@@ -18,13 +18,26 @@ function activityEvent(input: {
 }
 
 describe("eventProofOutcome", () => {
-  it("counts a pre-deadline event whatever account role Wise stamped", () => {
+  it("counts a pre-deadline event whatever staff account role Wise stamped", () => {
     // The production case: a tutor who also holds an admin account submits
     // their own feedback and Wise records ADMIN.
-    for (const role of ["TEACHER", "ADMIN", "STUDENT", "OWNER", null]) {
+    for (const role of ["TEACHER", "ADMIN", "OWNER", null]) {
       expect(eventProofOutcome(activityEvent({ at: "2026-08-05T16:42:05.728Z", role }), DEADLINE))
         .toEqual({ countedAsProof: true, reason: null });
     }
+  });
+
+  // D-EVT-05: a student's own session feedback never proves the tutor's.
+  it("never counts a STUDENT event, even before the deadline", () => {
+    for (const role of ["STUDENT", "student"]) {
+      expect(eventProofOutcome(activityEvent({ at: "2026-08-05T10:00:00.000Z", role }), DEADLINE))
+        .toEqual({ countedAsProof: false, reason: "student_submitted" });
+    }
+  });
+
+  it("reports the student reason ahead of lateness when both apply", () => {
+    expect(eventProofOutcome(activityEvent({ at: "2026-08-09T10:00:00.000Z", role: "STUDENT" }), DEADLINE))
+      .toEqual({ countedAsProof: false, reason: "student_submitted" });
   });
 
   it("counts an event landing exactly on the deadline instant", () => {

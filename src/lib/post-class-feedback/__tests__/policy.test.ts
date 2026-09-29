@@ -4,6 +4,7 @@ import {
   calculateFeedbackDeadline,
   compareVersions,
   countUnicodeCodePoints,
+  countsAsTutorSubmission,
   deriveEventTimingEvidence,
   evaluateSessionCompliance,
   evaluateSessionEligibility,
@@ -634,17 +635,60 @@ describe("deriveEventTimingEvidence", () => {
     expect(result.submitterRoles).toEqual(["ADMIN"]);
   });
 
-  // Accepted consequence of the role-blind rule: a STUDENT-role actor also
-  // qualifies. Timing and content stay independent, so weak feedback still
-  // fails on the content bar.
-  it("proves on_time from a STUDENT-role event before the deadline", () => {
+  // D-EVT-05. A STUDENT actor is the student filling in their own session
+  // feedback form. It is never evidence that the tutor wrote theirs, so it
+  // cannot prove on_time and cannot be the tutor's submission instant.
+  it("never proves on_time from a STUDENT-role event alone", () => {
     const result = deriveEventTimingEvidence({
       events: [event({ at: "2026-06-02T01:00:00.000Z", role: "STUDENT" })],
       deadlineAt: DEADLINE,
       eventCoverageFrom: COVERAGE_FROM,
     });
-    expect(result.status).toBe("on_time");
+    expect(result.status).toBe("late");
+    expect(result.provenAt).toBeNull();
+    expect(result.source).toBe("activity_event");
     expect(result.submitterRoles).toEqual(["STUDENT"]);
+  });
+
+  it("proves late when only the student submitted before the deadline and the tutor after it", () => {
+    // Production shape (e.g. 6a7ecc48ce4887bb0e0db21e): Wise auto-submits at
+    // class end, the student rates the class seconds later, and the tutor
+    // writes their feedback after the deadline.
+    const result = deriveEventTimingEvidence({
+      events: [
+        event({ at: "2026-06-01T10:00:00.000Z", autoSubmitted: true, id: "auto" }),
+        event({ at: "2026-06-01T10:00:04.000Z", role: "STUDENT", id: "student" }),
+        event({ at: "2026-06-04T16:37:00.000Z", role: "TEACHER", id: "tutor" }),
+      ],
+      deadlineAt: DEADLINE,
+      eventCoverageFrom: COVERAGE_FROM,
+    });
+    expect(result.status).toBe("late");
+    expect(result.provenAt?.toISOString()).toBe("2026-06-04T16:37:00.000Z");
+    expect(result.submitterRoles).toEqual(["AUTO", "STUDENT", "TEACHER"]);
+  });
+
+  it("reports the tutor's instant, not an earlier student event, when both are on time", () => {
+    const result = deriveEventTimingEvidence({
+      events: [
+        event({ at: "2026-06-01T10:00:04.000Z", role: "student", id: "student" }),
+        event({ at: "2026-06-01T10:06:00.000Z", role: "OWNER", id: "staff" }),
+      ],
+      deadlineAt: DEADLINE,
+      eventCoverageFrom: COVERAGE_FROM,
+    });
+    expect(result.status).toBe("on_time");
+    expect(result.provenAt?.toISOString()).toBe("2026-06-01T10:06:00.000Z");
+  });
+
+  it("stays unknown for a student-only session whose deadline predates event coverage", () => {
+    const result = deriveEventTimingEvidence({
+      events: [event({ at: "2026-04-09T01:00:00.000Z", role: "STUDENT" })],
+      deadlineAt: new Date("2026-04-10T16:59:59.999Z"),
+      eventCoverageFrom: COVERAGE_FROM,
+    });
+    expect(result.status).toBe("unknown");
+    expect(result.provenAt).toBeNull();
   });
 
   it("proves on_time from an event whose actor role Wise did not record", () => {
@@ -742,5 +786,82 @@ describe("deriveEventTimingEvidence", () => {
       eventCoverageFrom: COVERAGE_FROM,
     });
     expect(result.status).toBe("on_time");
+  });
+});
+
+describe("countsAsTutorSubmission", () => {
+  it("counts staff roles and unrecorded roles, never auto-submissions or students", () => {
+    expect(countsAsTutorSubmission("TEACHER")).toBe(true);
+    expect(countsAsTutorSubmission("ADMIN")).toBe(true);
+    // OWNER (and any role Wise adds later) classifies as UNKNOWN; D-EVT-04
+    // keeps it qualifying because a staff account role is not an authorship gate.
+    expect(countsAsTutorSubmission("UNKNOWN")).toBe(true);
+    expect(countsAsTutorSubmission("AUTO")).toBe(false);
+    expect(countsAsTutorSubmission("STUDENT")).toBe(false);
+  });
+
+  it("classifies a lower-case student actor as STUDENT", () => {
+    expect(feedbackSubmitterRole(event({ at: "2026-06-02T01:00:00.000Z", role: " student " }))).toBe("STUDENT");
+  });
+});
+
+describe("evaluateSessionCompliance with a student-only pre-deadline event", () => {
+  // Session ends 2026-08-14T10:00Z; deadline 2026-08-16T16:59:59.999Z.
+  const scheduledEndAt = new Date("2026-08-14T10:00:00.000Z");
+  const deadlineAt = calculateFeedbackDeadline(scheduledEndAt);
+  const lateTutorVersion = version({
+    id: "tutor-late",
+    sourceCreatedAt: null,
+    observedAt: "2026-08-17T16:40:00.000Z",
+  });
+
+  it("scores a compliant but late tutor submission as a late violation, not on_time", () => {
+    const eventTiming = deriveEventTimingEvidence({
+      events: [
+        { ...event({ at: "2026-08-14T09:55:00.000Z", role: "STUDENT", id: "student" }), sessionId: "s" },
+        { ...event({ at: "2026-08-17T16:37:00.000Z", role: "TEACHER", id: "tutor" }), sessionId: "s" },
+      ],
+      deadlineAt,
+      eventCoverageFrom: COVERAGE_FROM,
+    });
+    const result = evaluateSessionCompliance({
+      sourceStatus: "ready",
+      scheduledEndAt,
+      now: new Date("2026-08-20T00:00:00.000Z"),
+      versions: [lateTutorVersion],
+      enforcementMode: "live",
+      policyEffectiveAt: new Date("2026-07-30T15:15:04.483Z"),
+      previousOnTimeLock: null,
+      eventTiming,
+    });
+    expect(result.timingStatus).toBe("late");
+    expect(result.timingEvidenceSource).toBe("activity_event");
+    expect(result.tutorSubmittedAt?.toISOString()).toBe("2026-08-17T16:37:00.000Z");
+    expect(result.onTimeComplianceLocked).toBe(false);
+    expect(result.violation).toBe(true);
+    expect(result.remediatedLate).toBe(true);
+    expect(result.deductionCandidate).toBe(true);
+  });
+
+  it("does not lock on_time before the deadline on the student's event alone", () => {
+    const eventTiming = deriveEventTimingEvidence({
+      events: [{ ...event({ at: "2026-08-14T09:55:00.000Z", role: "STUDENT" }), sessionId: "s" }],
+      deadlineAt,
+      eventCoverageFrom: COVERAGE_FROM,
+    });
+    const result = evaluateSessionCompliance({
+      sourceStatus: "ready",
+      scheduledEndAt,
+      now: new Date("2026-08-15T00:00:00.000Z"),
+      versions: [],
+      enforcementMode: "live",
+      policyEffectiveAt: new Date("2026-07-30T15:15:04.483Z"),
+      previousOnTimeLock: null,
+      eventTiming,
+    });
+    expect(result.timingStatus).toBe("not_due");
+    expect(result.onTimeComplianceLocked).toBe(false);
+    expect(result.tutorSubmittedAt).toBeNull();
+    expect(result.deductionCandidate).toBe(false);
   });
 });

@@ -6,7 +6,7 @@ import * as schema from "@/lib/db/schema";
 
 import type { PostClassUser } from "./access";
 import { PostClassNotFoundError } from "./errors";
-import { feedbackSubmitterRole } from "./policy";
+import { countsAsTutorSubmission, feedbackSubmitterRole } from "./policy";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -14,13 +14,14 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
  * Why a Wise feedback event did or did not prove the submission on time.
  *
  * Mirrors `deriveEventTimingEvidence` so the dialog and the policy cannot
- * drift: an auto-submission never qualifies, and a qualifying event only
- * proves compliance when it lands at or before the deadline.
+ * drift: an auto-submission or a student's own feedback never qualifies
+ * (D-EVT-05), and a qualifying event only proves compliance when it lands at
+ * or before the deadline.
  */
 export function eventProofOutcome(
   event: { eventTimestamp: Date; actorRole: string | null; payload: Record<string, unknown> },
   deadlineAt: Date,
-): { countedAsProof: boolean; reason: "auto_submitted" | "after_deadline" | null } {
+): { countedAsProof: boolean; reason: "auto_submitted" | "student_submitted" | "after_deadline" | null } {
   const autoSubmitted = autoSubmittedFlag(event.payload);
   const role = feedbackSubmitterRole({
     eventId: "",
@@ -32,6 +33,7 @@ export function eventProofOutcome(
     actorRole: event.actorRole,
   });
   if (role === "AUTO") return { countedAsProof: false, reason: "auto_submitted" };
+  if (!countsAsTutorSubmission(role)) return { countedAsProof: false, reason: "student_submitted" };
   if (event.eventTimestamp.getTime() > deadlineAt.getTime()) {
     return { countedAsProof: false, reason: "after_deadline" };
   }

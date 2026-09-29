@@ -835,7 +835,8 @@ export function timingEvidence(
   // `..._no_tutor_submission` is kept verbatim even though D-EVT-04 widened the
   // qualifying rule past the `TEACHER` role: the string is persisted on every
   // historical assessment row, and renaming it would split one fact across two
-  // codes. It now reads "no qualifying human submission before the deadline".
+  // codes. It now reads "no qualifying submission before the deadline", where
+  // qualifying excludes auto-submissions and a student's own feedback (D-EVT-05).
   if (assessment.timingEvidenceSource === "activity_event") {
     return assessment.timingStatus === "on_time"
       ? "wise_activity_event_before_deadline"

@@ -257,4 +257,53 @@ describe("reassessPostClassSessions", () => {
     expect(result.failed).toBe(1);
     expect(result.changed).toBe(0);
   });
+
+  // D-EVT-05. The recovery path for verdicts written before the student
+  // exclusion: a session proven on_time only by the student's own feedback
+  // event re-decides to late, and the dry run reports it without writing.
+  it("flips an on_time verdict proven only by a STUDENT event to late", async () => {
+    const result = await reassessPostClassSessions({
+      apply: false,
+      now: new Date("2026-08-07T00:00:00.000Z"),
+      timingStatuses: ["on_time"],
+      db: fakeDb([{ ...LATE_SESSION, timingStatus: "on_time" }]),
+      repository: fakeRepository({
+        versions: [version({ observedAt: "2026-08-06T02:00:00.000Z" })],
+        events: [
+          feedbackEvent({ at: new Date("2026-08-03T09:00:04.000Z"), role: "STUDENT" }),
+          feedbackEvent({ at: new Date("2026-08-06T01:55:00.000Z"), role: "TEACHER" }),
+        ],
+      }),
+    });
+
+    expect(result.changed).toBe(1);
+    expect(result.deductionsWaived).toBe(0);
+    expect(result.outcomes[0]).toMatchObject({
+      from: "on_time",
+      to: "late",
+      changed: true,
+      cleared: null,
+      deductionWaived: false,
+    });
+    expect(result.outcomes[0].provenAt?.toISOString()).toBe("2026-08-06T01:55:00.000Z");
+  });
+
+  it("does not clear an open deduction on the strength of a STUDENT event", async () => {
+    const result = await reassessPostClassSessions({
+      apply: false,
+      now: new Date("2026-08-07T00:00:00.000Z"),
+      timingStatuses: ["late"],
+      db: fakeDb([{ ...LATE_SESSION, deductionStatus: "pending_review" }]),
+      repository: fakeRepository({
+        versions: [version({ observedAt: "2026-08-06T02:00:00.000Z" })],
+        events: [
+          feedbackEvent({ at: ON_TIME_EVENT_AT, role: "STUDENT" }),
+          feedbackEvent({ at: new Date("2026-08-06T01:55:00.000Z"), role: "TEACHER" }),
+        ],
+      }),
+    });
+
+    expect(result.changed).toBe(0);
+    expect(result.outcomes[0]).toMatchObject({ from: "late", to: "late", cleared: null });
+  });
 });

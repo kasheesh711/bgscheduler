@@ -285,12 +285,13 @@ export async function getPostClassFeedbackDashboard(
     // Earliest non-auto submission per session, read straight from the
     // immutable event stream. Deriving here rather than reading a persisted
     // column means the column is correct for every historical session without
-    // re-observing any of them. The actor role is deliberately not filtered:
-    // Wise stamps it from the account's role, not from authorship, so a
-    // `TEACHER` predicate hid a tutor's own submission whenever that tutor also
-    // held an admin account (D-EVT-04). This matches the qualifying rule in
-    // `deriveEventTimingEvidence`, so the column never disagrees with the
-    // verdict beside it.
+    // re-observing any of them. Staff roles are deliberately not filtered:
+    // Wise stamps the account's role, not authorship, so a `TEACHER` predicate
+    // hid a tutor's own submission whenever that tutor also held an admin
+    // account (D-EVT-04). A STUDENT event is the student's own feedback and is
+    // excluded (D-EVT-05), NULL-safely so an unrecorded role still counts. This
+    // matches `countsAsTutorSubmission` in `deriveEventTimingEvidence`, so the
+    // column never disagrees with the verdict beside it.
     sessionQueriesEnabled
       ? db.select({
         wiseSessionId: schema.wiseActivityEvents.sessionId,
@@ -300,6 +301,7 @@ export async function getPostClassFeedbackDashboard(
           eq(schema.wiseActivityEvents.eventName, "SessionFeedbackSubmittedEvent"),
           inArray(schema.wiseActivityEvents.sessionId, wiseSessionIds),
           sql`coalesce(${schema.wiseActivityEvents.payload} -> 'session' ->> 'autoSubmitted', 'false') <> 'true'`,
+          sql`upper(btrim(coalesce(${schema.wiseActivityEvents.actorRole}, ''))) <> 'STUDENT'`,
         ))
         .groupBy(schema.wiseActivityEvents.sessionId)
       : Promise.resolve([]),

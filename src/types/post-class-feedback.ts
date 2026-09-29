@@ -217,7 +217,7 @@ export interface FeedbackSubmissionEvent {
   autoSubmitted: boolean | null;
   isSessionTutor: boolean;
   countedAsProof: boolean;
-  notCountedReason: "auto_submitted" | "after_deadline" | null;
+  notCountedReason: "auto_submitted" | "student_submitted" | "after_deadline" | null;
 }
 
 export interface FeedbackSessionSourceIssue {

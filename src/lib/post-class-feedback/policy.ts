@@ -334,6 +334,22 @@ export function feedbackSubmitterRole(event: FeedbackEventEvidence): FeedbackSub
 }
 
 /**
+ * Whether an event of this role can evidence the tutor's own submission.
+ *
+ * **D-EVT-05 — a student event is never the tutor's submission.** A `STUDENT`
+ * actor is the student filling in their own session feedback form (Wise emits
+ * the same `SessionFeedbackSubmittedEvent`), so it says nothing about when the
+ * tutor wrote theirs. Auto-submissions are Wise's placeholder, never a human.
+ * Every other role still qualifies: D-EVT-04 holds for staff accounts
+ * (`TEACHER`, `ADMIN`, `OWNER`, which classifies as `UNKNOWN`), whose account
+ * role does not reveal who wrote the text. Mirrors `classifySubmitEvents` in
+ * the feedback autowriter.
+ */
+export function countsAsTutorSubmission(role: FeedbackSubmitterRole): boolean {
+  return role !== "AUTO" && role !== "STUDENT";
+}
+
+/**
  * Derive timing from the immutable Wise activity-event stream.
  *
  * The event store is the only evidence of *when* feedback was written — session
@@ -344,12 +360,16 @@ export function feedbackSubmitterRole(event: FeedbackEventEvidence): FeedbackSub
  * `actorRole` from the *account's* role, not from who wrote the text: a tutor
  * who also holds an admin account submits their own feedback and Wise records
  * `ADMIN`. Gating on `TEACHER` therefore discarded genuine pre-deadline tutor
- * submissions and proved lateness against them. Any human-actor event now
+ * submissions and proved lateness against them. Any staff-actor event
  * qualifies; `submitterRoles` still records every role observed, so who
  * submitted stays fully auditable even though it no longer changes the verdict.
  *
+ * **D-EVT-05 — except a student.** A `STUDENT` event is the student's own
+ * session feedback and never proves the tutor submitted (`countsAsTutorSubmission`).
+ *
  * Steps:
- *  1. A qualifying event is any event Wise did not auto-submit.
+ *  1. A qualifying event is any event Wise did not auto-submit whose actor is
+ *     not a student.
  *  2. Earliest qualifying event at or before the deadline proves `on_time`.
  *  3. No qualifying event, with the deadline inside event coverage, proves `late`.
  *  4. A deadline predating the coverage floor proves nothing (fail closed to
@@ -365,7 +385,7 @@ export function deriveEventTimingEvidence(input: {
   const submitterRoles = [...new Set(events.map(feedbackSubmitterRole))].toSorted();
 
   const qualifying = events
-    .filter((event) => feedbackSubmitterRole(event) !== "AUTO")
+    .filter((event) => countsAsTutorSubmission(feedbackSubmitterRole(event)))
     .toSorted((left, right) => left.eventTimestamp.getTime() - right.eventTimestamp.getTime());
 
   const provenOnTime = qualifying.find((event) => event.eventTimestamp.getTime() <= deadlineAt.getTime());
