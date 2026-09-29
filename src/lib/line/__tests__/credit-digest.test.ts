@@ -386,6 +386,28 @@ describe("sendLineCreditDigest", () => {
     expect(push).not.toHaveBeenCalled();
   });
 
+  it("treats a DrizzleQueryError-wrapped lost concurrent-create race (cause.code 23505) as skipped", async () => {
+    // drizzle-orm 0.45 wraps every driver error: the SQLSTATE is on `.cause`, `.code` is undefined.
+    const push = okPush();
+    const wrapped = Object.assign(new Error("Failed query"), { cause: { code: "23505" } });
+    const { db } = makeDb(fullQueue(), { insertError: wrapped });
+
+    const result = await sendLineCreditDigest(db, NOW, { push });
+
+    expect(result.status).toBe("skipped");
+    expect(result.message).toContain("concurrently");
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("does not treat a wrapped non-unique run-insert failure (cause.code 23503) as a lost race", async () => {
+    const push = okPush();
+    const wrapped = Object.assign(new Error("Failed query"), { cause: { code: "23503" } });
+    const { db } = makeDb(fullQueue(), { insertError: wrapped });
+
+    await expect(sendLineCreditDigest(db, NOW, { push })).rejects.toBe(wrapped);
+    expect(push).not.toHaveBeenCalled();
+  });
+
   it("marks partial when one of two groups fails", async () => {
     const push = vi.fn()
       .mockResolvedValueOnce({ retryKey: "r", sentMessageId: "m", response: {} })

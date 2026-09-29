@@ -32,8 +32,10 @@ export interface RunFootTrafficSyncInput {
 }
 
 function isUniqueViolation(error: unknown): boolean {
-  return typeof error === "object" && error !== null &&
-    "code" in error && (error as { code?: unknown }).code === "23505";
+  if (typeof error !== "object" || error === null) return false;
+  // drizzle-orm wraps driver errors in DrizzleQueryError; the SQLSTATE is on `.cause`.
+  const candidate = error as { code?: unknown; cause?: { code?: unknown } };
+  return candidate.code === "23505" || candidate.cause?.code === "23505";
 }
 
 function errorMessage(error: unknown): string {
