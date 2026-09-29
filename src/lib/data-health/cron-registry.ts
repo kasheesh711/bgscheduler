@@ -48,6 +48,8 @@ export interface CronJobDefinition {
   maxDurationSeconds: number;
   manualOnly: boolean;
   paused?: boolean;
+  /** Data Health never offers or dispatches a one-click run; returned to callers as the refusal reason. Env-driven pauses stay in effectiveCronJob. */
+  manualRunDisabledReason?: string;
   requiresSuccessfulRun?: boolean;
   dangerous: boolean;
   confirmationLabel: string | null;
@@ -413,6 +415,7 @@ export const CRON_JOBS = [
     manualOnly: false,
     dangerous: true,
     confirmationLabel: "Applies verified Wise student grade and course promotion writes.",
+    manualRunDisabledReason: "Student promotions write to Wise once a year; review and apply them from the Student Promotions page.",
     expectedBangkokMinute: 5,
     routeMethod: "GET",
   },
@@ -521,4 +524,9 @@ export function effectiveCronJob(job: CronJobDefinition): CronJobDefinition {
   if (job.key === "progress_tests") return { ...job, requiresSuccessfulRun: true, cadenceMinutes: 1440, expectedBangkokMinute: 445, lateAfterMinutes: 90, cadenceLabel: "Daily 07:25 Bangkok; recovery 07:55 / 08:25" };
   if (job.key === "credit_control" && !creditControlActive()) return { ...job, label: "Shared Student Data", feature: "Student Data", requiresSuccessfulRun: true, cadenceMinutes: 1440, expectedBangkokMinute: 380, lateAfterMinutes: 90, cadenceLabel: "Daily 06:20 Bangkok; recovery 06:50 / 07:20" };
   return job;
+}
+
+/** Data Health shows a Run button only for jobs that are live and dispatchable. */
+export function isManuallyRunnable(job: CronJobDefinition): boolean {
+  return !job.paused && !job.manualRunDisabledReason;
 }

@@ -3,7 +3,7 @@ import { desc, eq, getTableColumns, gte, lte, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { isApiSnapshotStale } from "@/lib/ops/stale";
-import { effectiveCronJob, CRON_JOBS, statusRank, type CronJobDefinition } from "./cron-registry";
+import { effectiveCronJob, CRON_JOBS, isManuallyRunnable, statusRank, type CronJobDefinition } from "./cron-registry";
 import { evaluateCronJobStatus, type InvocationEvidence, type RunEvidence } from "./status";
 import type {
   CronInvocationSummary,
@@ -495,7 +495,7 @@ function buildCronJobs(
       healthDetail: status.healthDetail,
       latestInvocation: latestInvocation ? invocationSummary(latestInvocation) : null,
       recentInvocations: jobInvocations.slice(0, 4).map(invocationSummary),
-      canRunManually: !job.paused,
+      canRunManually: isManuallyRunnable(job),
     };
   });
 }
@@ -1049,7 +1049,7 @@ export async function getDataHealthDashboardPayload(now = new Date()): Promise<D
     issueSummary: issuesByType,
     issueDetails,
     recentRuns: buildRecentRuns(allRuns),
-    manualActions: CRON_JOBS.map(effectiveCronJob).filter(job => !job.paused).map((job) => ({
+    manualActions: CRON_JOBS.map(effectiveCronJob).filter(isManuallyRunnable).map((job) => ({
       key: job.key,
       label: job.label,
       dangerous: job.dangerous,

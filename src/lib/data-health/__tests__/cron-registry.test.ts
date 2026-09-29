@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { CRON_JOBS, SCHEDULED_CRON_JOBS } from "../cron-registry";
+import { CRON_JOBS, SCHEDULED_CRON_JOBS, getCronJobDefinition, isManuallyRunnable, type CronJobDefinition } from "../cron-registry";
 
 interface MaxDurationMismatch {
   path: string;
@@ -70,5 +70,21 @@ describe("data-health cron registry", () => {
     });
 
     expect(mismatches).toEqual([]);
+  });
+
+  it("excludes only the annual student promotions job from Data Health one-click runs", () => {
+    const registry: readonly CronJobDefinition[] = CRON_JOBS;
+    const excluded = registry.filter((job) => job.manualRunDisabledReason).map((job) => job.key);
+
+    expect(excluded).toEqual(["student_promotions_july_1"]);
+  });
+
+  it("offers a manual run only for live, dispatchable jobs", () => {
+    const job = getCronJobDefinition("cron_watchdog")!;
+
+    expect(isManuallyRunnable(job)).toBe(true);
+    expect(isManuallyRunnable({ ...job, paused: true })).toBe(false);
+    expect(isManuallyRunnable({ ...job, manualRunDisabledReason: "Owner-only workflow." })).toBe(false);
+    expect(isManuallyRunnable(getCronJobDefinition("student_promotions_july_1")!)).toBe(false);
   });
 });
