@@ -3,7 +3,7 @@ import "server-only";
 import { readValuesPublication } from "./publication-reader";
 import { statusFields, type PublicationMetadata } from "./publication";
 
-import { count, desc, eq, notInArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, lt, notInArray, sql } from "drizzle-orm";
 
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -32,6 +32,12 @@ const REQUIRED_TABS = [
 ] as const;
 const OPTIONAL_CONTRACT_TABS = ["SRC_Wise_Receipt", "CALC_Exact_Package_Overview"] as const;
 
+/** Lease on a `running` row; longer than the 800 s `maxDuration` of every route that starts a sync. */
+export const STALE_RUNNING_UNEARNED_REVENUE_SYNC_MS = 20 * 60 * 1000;
+
+const STALE_RUNNING_UNEARNED_REVENUE_SYNC_ERROR =
+  "Unearned revenue sync marked failed because it was still running after 20 minutes; likely timed out or the request was aborted.";
+
 export interface UnearnedRevenueSyncResult {
   ok: boolean;
   skipped: boolean;
@@ -47,6 +53,16 @@ export interface UnearnedRevenueSyncResult {
     exactPackages: number;
   } | null;
   errorSummary?: string;
+  /** Skipped results only: another run holds the single-flight slot and `syncRunId` names it. */
+  alreadyRunning?: true;
+  runningStartedAt?: string;
+  message?: string;
+  staleRunningSyncsFailed?: number;
+}
+
+interface RunningSyncRun {
+  id: string;
+  startedAt: Date;
 }
 
 interface SyncOptions {
@@ -524,9 +540,67 @@ export async function importUnearnedRevenueContract(input: {
   });
 }
 
+async function failStaleRunningSyncs(db: Database, now: Date): Promise<number> {
+  const cutoff = new Date(now.getTime() - STALE_RUNNING_UNEARNED_REVENUE_SYNC_MS);
+  const rows = await db
+    .update(schema.unearnedRevenueSyncRuns)
+    .set({
+      status: "failed",
+      finishedAt: now,
+      errorSummary: STALE_RUNNING_UNEARNED_REVENUE_SYNC_ERROR,
+    })
+    .where(
+      and(
+        eq(schema.unearnedRevenueSyncRuns.status, "running"),
+        lt(schema.unearnedRevenueSyncRuns.startedAt, cutoff),
+      ),
+    )
+    .returning({ id: schema.unearnedRevenueSyncRuns.id });
+
+  return rows.length;
+}
+
+async function findRunningSyncRun(db: Database): Promise<RunningSyncRun | null> {
+  const [running] = await db
+    .select({
+      id: schema.unearnedRevenueSyncRuns.id,
+      startedAt: schema.unearnedRevenueSyncRuns.startedAt,
+    })
+    .from(schema.unearnedRevenueSyncRuns)
+    .where(eq(schema.unearnedRevenueSyncRuns.status, "running"))
+    .orderBy(desc(schema.unearnedRevenueSyncRuns.startedAt))
+    .limit(1);
+
+  return running ?? null;
+}
+
+function skippedSyncResult(
+  running: RunningSyncRun,
+  staleRunningSyncsFailed: number,
+): UnearnedRevenueSyncResult {
+  return {
+    ok: true,
+    skipped: true,
+    idempotent: false,
+    syncRunId: running.id,
+    snapshotId: null,
+    cutoff: null,
+    counts: null,
+    alreadyRunning: true,
+    runningStartedAt: running.startedAt.toISOString(),
+    message: "Unearned revenue sync is already running. Data will refresh when that run finishes.",
+    staleRunningSyncsFailed,
+  };
+}
+
 export async function runUnearnedRevenueSync(options: SyncOptions): Promise<UnearnedRevenueSyncResult> {
   const db = options.db ?? getDb();
   const spreadsheetId = getUnearnedRevenueSpreadsheetId();
+  const now = new Date();
+  const staleRunningSyncsFailed = await failStaleRunningSyncs(db, now);
+  const currentRunning = await findRunningSyncRun(db);
+  if (currentRunning) return skippedSyncResult(currentRunning, staleRunningSyncsFailed);
+
   let syncRunId: string | null = null;
   try {
     const [run] = await db.insert(schema.unearnedRevenueSyncRuns).values({
@@ -534,13 +608,15 @@ export async function runUnearnedRevenueSync(options: SyncOptions): Promise<Unea
       triggerType: options.triggerType,
       actorEmail: options.actorEmail ?? null,
       spreadsheetId,
+      startedAt: now,
     }).returning({ id: schema.unearnedRevenueSyncRuns.id });
     syncRunId = run.id;
   } catch (error) {
-    if (sqlStateOf(error) === "23505") {
-      return { ok: true, skipped: true, idempotent: false, syncRunId: null, snapshotId: null, cutoff: null, counts: null };
-    }
-    throw error;
+    if (sqlStateOf(error) !== "23505") throw error;
+    // Lost the insert race: name the winner, or surface the original error if it already finished.
+    const running = await findRunningSyncRun(db);
+    if (!running) throw error;
+    return skippedSyncResult(running, staleRunningSyncsFailed);
   }
 
   try {
@@ -563,6 +639,7 @@ export async function runUnearnedRevenueSync(options: SyncOptions): Promise<Unea
         lots: contract.lots.length,
         exactPackages: contract.exactPackages.length,
       },
+      staleRunningSyncsFailed,
     };
   } catch (error) {
     const errorSummary = error instanceof Error ? error.message.slice(0, 2_000) : "Unknown import failure";
@@ -580,6 +657,7 @@ export async function runUnearnedRevenueSync(options: SyncOptions): Promise<Unea
       cutoff: null,
       counts: null,
       errorSummary,
+      staleRunningSyncsFailed,
     };
   }
 }
