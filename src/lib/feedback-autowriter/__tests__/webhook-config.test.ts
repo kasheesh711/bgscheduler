@@ -3,6 +3,7 @@ import { autowriterAlertEmails, autowriterEnabled, autowriterWritesAllowedHere, 
 import { parseJudgeOutput } from "../judge";
 import { classifyGateReason } from "../session";
 import {
+  findWiseWebhookAuthHeader,
   parseWiseWebhookBody,
   verifyWiseWebhookAuth,
   wiseWebhookAuthHeader,
@@ -21,8 +22,17 @@ describe("Wise webhook helpers", () => {
     expect(verifyWiseWebhookAuth("anything", undefined)).toBe(false);
   });
 
+  it("finds the key in whichever header Wise used, or only in the pinned one", () => {
+    const headers = (): Array<[string, string]> => [["content-type", "application/json"], ["X-Wise-Auth", "secret-key"]];
+    expect(findWiseWebhookAuthHeader(headers(), "secret-key", null)).toBe("x-wise-auth");
+    expect(findWiseWebhookAuthHeader(headers(), "secret-key", "x-wise-auth")).toBe("x-wise-auth");
+    expect(findWiseWebhookAuthHeader(headers(), "secret-key", "authorization")).toBeNull();
+    expect(findWiseWebhookAuthHeader(headers(), "other-key", null)).toBeNull();
+    expect(findWiseWebhookAuthHeader(headers(), undefined, null)).toBeNull();
+  });
+
   it("reads the header name and enable flag from the environment", () => {
-    expect(wiseWebhookAuthHeader({})).toBe("authorization");
+    expect(wiseWebhookAuthHeader({})).toBeNull();
     expect(wiseWebhookAuthHeader({ WISE_WEBHOOK_AUTH_HEADER: "X-Wise-Key" })).toBe("x-wise-key");
     expect(wiseWebhooksEnabled({ WISE_WEBHOOKS_ENABLED: "true" })).toBe(true);
     expect(wiseWebhooksEnabled({ WISE_WEBHOOKS_ENABLED: "yes" })).toBe(false);

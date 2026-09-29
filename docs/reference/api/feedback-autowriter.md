@@ -13,7 +13,7 @@ Four method/path endpoints. Meaning, rules and the state machine live in [the fe
 
 [`src/app/api/wise/webhook/route.ts`](../../../src/app/api/wise/webhook/route.ts), `maxDuration = 800`.
 
-1. **Auth.** The header named by `WISE_WEBHOOK_AUTH_HEADER` (default `authorization`) must equal `WISE_WEBHOOK_SECRET`, bare or as `Bearer <secret>`, compared in constant time. An unset secret rejects everything. A rejected delivery logs the request's header **names** only.
+1. **Auth.** A header must carry `WISE_WEBHOOK_SECRET`, bare or as `Bearer <secret>`, compared in constant time. Wise does not name its header: with `WISE_WEBHOOK_AUTH_HEADER` unset every header is checked and the first match logs `key arrived in header "<name>"` so it can be pinned; once pinned, only that header counts. An unset secret rejects everything. A rejected delivery logs the request's header **names** only.
 2. **Size.** Bodies over 1 MiB (`WISE_WEBHOOK_MAX_BODY_BYTES`) get `413`, checked on `content-length` and again on the bytes read.
 3. **Kill switch.** `WISE_WEBHOOKS_ENABLED !== "true"` answers `200 { ok: true, ignored: true }` after auth and stores nothing; the backstop sweep still covers every class.
 4. **Store.** Every authenticated delivery is inserted into `wise_webhook_events` keyed by the SHA-256 of the raw body (`ON CONFLICT DO NOTHING`), so a Wise retry of the same body is a duplicate.

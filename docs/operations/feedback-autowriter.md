@@ -19,8 +19,9 @@ Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowrite
    | `WISE_WEBHOOK_AUTH_HEADER` | only if Wise's header is not `authorization` |
 3. **Wise → Institute Settings → Developer options → Webhooks → Add Webhook.** Never edit the existing
    subscription (it feeds a Google Apps Script). URL `https://bgscheduler.vercel.app/api/wise/webhook`,
-   events `MeetingEndedEvent`, `AttendanceComputedEvent` and `RecordingCompletedEvent`. Send a test: if it is refused, Vercel logs
-   `[wise-webhook] unauthorized delivery; header names: …` — set `WISE_WEBHOOK_AUTH_HEADER` to the right one.
+   events `MeetingEndedEvent`, `AttendanceComputedEvent` and `RecordingCompletedEvent`, auth key = `WISE_WEBHOOK_SECRET`.
+   Send a test: Vercel logs `[wise-webhook] key arrived in header "<name>"` (optionally pin it with
+   `WISE_WEBHOOK_AUTH_HEADER`); a refused delivery logs `unauthorized delivery; header names: …` instead.
    Confirm read-only with `GET /institutes/{id}/webhooks` that both subscriptions exist and the original is unchanged.
 
 ## 2. Modes and switches (take effect immediately — no redeploy)

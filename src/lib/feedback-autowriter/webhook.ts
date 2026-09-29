@@ -17,9 +17,12 @@ export function wiseWebhooksEnabled(env: WebhookEnvironment = process.env): bool
   return env.WISE_WEBHOOKS_ENABLED === "true";
 }
 
-/** Wise documents "an authorisation key in the header" without naming the header. */
-export function wiseWebhookAuthHeader(env: WebhookEnvironment = process.env): string {
-  return (env.WISE_WEBHOOK_AUTH_HEADER?.trim() || "authorization").toLowerCase();
+/**
+ * Wise documents "an authorisation key in the header" without naming the
+ * header. `WISE_WEBHOOK_AUTH_HEADER` pins it; unset → null (any header).
+ */
+export function wiseWebhookAuthHeader(env: WebhookEnvironment = process.env): string | null {
+  return env.WISE_WEBHOOK_AUTH_HEADER?.trim().toLowerCase() || null;
 }
 
 function safeEqual(left: string, right: string): boolean {
@@ -34,6 +37,25 @@ export function verifyWiseWebhookAuth(headerValue: string | null, secret: string
   const received = headerValue?.trim();
   if (!expected || !received) return false;
   return safeEqual(received, expected) || safeEqual(received.replace(/^Bearer\s+/iu, ""), expected);
+}
+
+/**
+ * The name of the header that carried the shared key, or null. With a pinned
+ * name only that header counts; without one every header value is compared in
+ * constant time — the random key is what authenticates, not the header name —
+ * so the first real delivery works and reveals the name to pin.
+ */
+export function findWiseWebhookAuthHeader(
+  headers: Iterable<[string, string]>,
+  secret: string | null | undefined,
+  pinned: string | null,
+): string | null {
+  for (const [name, value] of headers) {
+    const header = name.toLowerCase();
+    if (pinned && header !== pinned) continue;
+    if (verifyWiseWebhookAuth(value, secret)) return header;
+  }
+  return null;
 }
 
 const OBJECT_ID = /^[0-9a-f]{24}$/iu;
