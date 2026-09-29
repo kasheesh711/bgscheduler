@@ -62,7 +62,7 @@ export function buildJudgeMessages(input: {
     `Homework and due date: ${input.placeholderFields.homework || "(empty)"}`,
   ].join("\n");
   return [
-    { role: "system", content: judgeSystemPrompt(evidence, input.speakerLabels ?? "verified") },
+    { role: "system", content: judgeSystemPrompt(evidence, input.speakerLabels ?? "inferred") },
     {
       role: "user",
       content: `Class details (from the school's system — true):\n${input.classDetails || "- (none)"}\n\n` +

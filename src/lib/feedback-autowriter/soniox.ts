@@ -3,8 +3,9 @@ import { z } from "zod";
 /**
  * Soniox async speech-to-text for the autowriter's second pass. Soniox fetches
  * Wise's recording itself (`audio_url`), handles Thai/English code-switching in
- * one model, and tags every token with a speaker. Jobs are deleted as soon as
- * the transcript has been fetched; nothing is stored on our side.
+ * one model, and tags every token with a speaker. A job is kept only until a
+ * judged draft is stored or the class is finished, then deleted; we never store
+ * the transcript itself.
  */
 export const SONIOX_API_BASE = "https://api.soniox.com/v1";
 export const SONIOX_MODEL = "stt-async-v5";

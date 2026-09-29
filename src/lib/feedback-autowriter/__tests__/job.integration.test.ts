@@ -439,24 +439,30 @@ function lessonTokens() {
 
 function fakeSoniox(options: {
   finishAfterPolls?: number;
+  /** Status per poll, the last one repeating; overrides `finishAfterPolls`. */
+  statuses?: Array<"processing" | "completed" | "throw">;
   error?: string;
   getThrows?: boolean;
   removeFails?: boolean;
+  audioDurationMs?: number;
   tokens?: ReturnType<typeof lessonTokens>;
   listed?: Array<{ id: string; createdAt: Date | null; clientReferenceId: string | null; status: string }>;
 } = {}) {
   const removed: string[] = [];
   const created: Array<{ audioUrl: string }> = [];
-  let polls = 0;
+  const polled: string[] = [];
   const tokens = options.tokens ?? lessonTokens();
   const client = {
     create: vi.fn(async (input: { audioUrl: string }) => { created.push(input); return { id: `job-${created.length}` }; }),
-    get: vi.fn(async () => {
-      polls += 1;
+    get: vi.fn(async (id: string) => {
+      polled.push(id);
       if (options.getThrows) throw new SonioxError("HTTP 500: upstream", 500);
       if (options.error) return { status: "error" as const, audioDurationMs: null, errorMessage: options.error };
-      return polls > (options.finishAfterPolls ?? 0)
-        ? { status: "completed" as const, audioDurationMs: 3_600_000, errorMessage: null }
+      const scripted = options.statuses ? options.statuses[Math.min(polled.length, options.statuses.length) - 1] : null;
+      if (scripted === "throw") throw new SonioxError("HTTP 502: bad gateway", 502);
+      const done = scripted ? scripted === "completed" : polled.length > (options.finishAfterPolls ?? 0);
+      return done
+        ? { status: "completed" as const, audioDurationMs: options.audioDurationMs ?? 3_600_000, errorMessage: null }
         : { status: "processing" as const, audioDurationMs: null, errorMessage: null };
     }),
     transcript: vi.fn(async () => ({ text: tokens.map((t) => t.text).join(""), tokens })),
@@ -467,7 +473,7 @@ function fakeSoniox(options: {
     }),
     list: vi.fn(async () => options.listed ?? []),
   };
-  return { client, removed, created };
+  return { client, removed, created, polled };
 }
 
 describe("second pass: Soniox transcript (Postgres + fakes)", () => {
@@ -637,7 +643,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     const sweepDeps = transcriptDeps(fakeWise().ops, fakeSoniox().client);
     const result = await runSweep(sweepDeps);
     expect(result.alertsSent).toBe(1);
-    expect(sweepDeps.emails[0].text).toContain("Waiting for Wise's recording");
+    expect(sweepDeps.emails[0].text).toContain("is still not ready 3 hours after class");
     expect((await readSessionRow(db, SESSION_ID))?.alertsSent).toHaveProperty("no_recording");
   });
 
@@ -660,5 +666,200 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     await runSweep(transcriptDeps(fakeWise().ops, soniox.client));
     expect(soniox.removed).toEqual(["job-9"]);
     expect((await readSessionRow(db, SESSION_ID))?.sonioxTranscriptionId).toBeNull();
+  });
+
+  it("holds a recording much shorter than the class, after one recheck, without sending it to Soniox", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    const soniox = fakeSoniox();
+    const short = { ...RECORDING, rawRecordings: [{ ...RECORDING.rawRecordings[0], duration: 1_200 }] }; // 20 of 60 min
+    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(short)] }).ops, soniox.client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "awaiting_recording", detail: "recording_too_short" });
+    const first = await readSessionRow(db, SESSION_ID);
+    expect(first).toMatchObject({ state: "awaiting_recording", metadata: { recordingShortSeen: true } });
+    expect(first?.nextAttemptAt?.getTime() ?? 0).toBeGreaterThan(Date.now() + 25 * 60_000);
+
+    await db.update(S).set({ nextAttemptAt: sql`now() - interval '1 second'` as never }).where(eq(S.wiseSessionId, SESSION_ID));
+    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(short)] }).ops, soniox.client), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+      .toMatchObject({ result: "held", detail: "recording_too_short" });
+    expect(soniox.created).toEqual([]);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "held", metadata: { alertKind: "held", recordingSeconds: 1_200 } });
+  });
+
+  it("holds when Soniox hears much less audio than the class, and deletes the job", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    const soniox = fakeSoniox({ audioDurationMs: 20 * 60_000 });
+    const model = fakeModel();
+    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, { callModel: model.callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "held", detail: "recording_too_short" });
+    expect(model.calls).toEqual([]);
+    expect(soniox.removed).toEqual(["job-1"]);
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ transcript: { audioMinutes: 20 } });
+  });
+
+  it("holds a recording in several parts rather than write up part of a lesson", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    const soniox = fakeSoniox();
+    const parts = { rawRecordings: [{ url: "https://files.wiseapp.live/a.mp4", partIndex: 1 }, { url: "https://files.wiseapp.live/b.mp4", partIndex: 2 }] };
+    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(parts)] }).ops, soniox.client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "held", detail: "recording_multiple_parts" });
+    expect(soniox.created).toEqual([]);
+  });
+
+  it("abandons a Soniox job still running an hour after it was submitted", async () => {
+    await seedRow({
+      state: "transcribing", evidence: "transcript", sonioxTranscriptionId: "job-7",
+      metadata: { sonioxSubmittedJob: "job-7", sonioxSubmittedAt: new Date(Date.now() - 2 * 3600_000).toISOString() },
+    });
+    const stuck = fakeSoniox({ finishAfterPolls: 100 });
+    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, stuck.client), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+      .toMatchObject({ result: "infra", detail: "soniox_timeout" });
+    expect(stuck.removed).toEqual(["job-7"]);
+    const row = await readSessionRow(db, SESSION_ID);
+    expect(row).toMatchObject({ state: "awaiting_recording", sonioxTranscriptionId: null, metadata: { transcribeErrors: 1 } });
+    expect(row?.metadata).not.toHaveProperty("sonioxSubmittedAt"); // cleared with the job
+  });
+
+  it("never times a job against another job's submit time", async () => {
+    // A stamp left from an earlier job must not kill the job this run creates …
+    const stale = { sonioxSubmittedJob: "job-old", sonioxSubmittedAt: new Date(Date.now() - 2 * 3600_000).toISOString() };
+    await seedRow({ state: "awaiting_recording", evidence: "transcript", metadata: stale });
+    const fresh = fakeSoniox({ finishAfterPolls: 100 });
+    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fresh.client), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+      .toMatchObject({ result: "transcribing", detail: "job-1" });
+    expect(fresh.removed).toEqual([]);
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ sonioxSubmittedJob: "job-1" });
+
+    // … nor a stored job it does not belong to.
+    await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
+    await seedRow({ state: "transcribing", evidence: "transcript", sonioxTranscriptionId: "job-7", metadata: stale });
+    const slow = fakeSoniox({ finishAfterPolls: 100 });
+    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, slow.client), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+      .toMatchObject({ result: "transcribing", detail: "job-7" });
+    expect(slow.removed).toEqual([]);
+  });
+
+  it("returns a row with a submitted job to transcribing when Wise cannot be read", async () => {
+    await seedRow({ state: "transcribing", evidence: "transcript", sonioxTranscriptionId: "job-7" });
+    expect(await processSession(transcriptDeps(fakeWise({ failReads: true }).ops, fakeSoniox().client), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+      .toMatchObject({ result: "infra", detail: "wise_read_failed" });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "transcribing", sonioxTranscriptionId: "job-7" });
+  });
+
+  it("stamps a new job's submit time, and does not count a failed status check once Soniox has answered", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    const flaky = fakeSoniox({ statuses: ["processing", "throw"] });
+    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, flaky.client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "transcribing", detail: "job-1" });
+    expect(flaky.polled.length).toBeGreaterThan(1);
+    const row = await readSessionRow(db, SESSION_ID);
+    expect(row).toMatchObject({ state: "transcribing", sonioxTranscriptionId: "job-1" });
+    expect(row?.metadata).not.toHaveProperty("transcribeErrors");
+    expect(row?.metadata).toMatchObject({ sonioxSubmittedJob: "job-1" });
+    const submittedAt = new Date(String((row?.metadata as { sonioxSubmittedAt?: unknown }).sonioxSubmittedAt));
+    expect(Math.abs(Date.now() - submittedAt.getTime())).toBeLessThan(60_000);
+  });
+
+  it("keeps the judged transcript draft when the pre-POST check says wait, and posts it next time without transcribing again", async () => {
+    const justEnded = new Date("2026-09-28T09:35:00.000Z");
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    const noStudentYet = sessionDetail({ ...RECORDING, participants: sessionDetail().participants.filter((participant) => participant.isTeacher) });
+    // Read 1: the transcript pass; read 2: submit's student read; read 3: the fresh pre-POST read.
+    const wise = fakeWise({ details: [sessionDetail(RECORDING), sessionDetail(RECORDING), noStudentYet] });
+    const soniox = fakeSoniox();
+    expect(await processSession(transcriptDeps(wise.ops, soniox.client, { now: () => justEnded }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "retry", detail: "student_count_0" });
+    expect(wise.posts).toHaveLength(0);
+    // Waiting for Wise, not for the recording: `pending`, so no `no_recording` alert.
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+      state: "pending",
+      evidence: "transcript",
+      arm: "glm",
+      fields: expect.objectContaining({ topics: GOOD_FIELDS.topics }),
+      metadata: { draftEvidence: "transcript", judge: { faithful: true } },
+    });
+
+    await db.update(S).set({ nextAttemptAt: sql`now() - interval '1 second'` as never }).where(eq(S.wiseSessionId, SESSION_ID));
+    const again = fakeSoniox();
+    const model = fakeModel();
+    const retry = fakeWise({ details: [sessionDetail(RECORDING)] });
+    expect(await processSession(transcriptDeps(retry.ops, again.client, { callModel: model.callModel as never }), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+      .toMatchObject({ result: "verified" });
+    expect(again.created).toEqual([]);
+    expect(model.calls).toEqual([]);
+    expect(retry.posts).toHaveLength(1);
+  });
+
+  it("works from the row as it is under the lease, not as first read", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    // Simulates another worker submitting a Soniox job between this worker's first read and its claim.
+    await db.execute(sql.raw(`CREATE OR REPLACE FUNCTION autowriter_test_race() RETURNS trigger AS $$
+      BEGIN IF NEW.state = 'generating' AND OLD.state <> 'generating' THEN NEW.soniox_transcription_id := 'job-other'; END IF; RETURN NEW; END
+      $$ LANGUAGE plpgsql`));
+    await db.execute(sql.raw(`CREATE TRIGGER autowriter_test_race BEFORE UPDATE ON feedback_autowriter_sessions
+      FOR EACH ROW EXECUTE FUNCTION autowriter_test_race()`));
+    try {
+      const soniox = fakeSoniox();
+      expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+        .toMatchObject({ result: "verified" });
+      expect(soniox.created).toEqual([]);
+      expect(soniox.polled[0]).toBe("job-other");
+      expect(soniox.removed).toEqual(["job-other"]);
+    } finally {
+      await db.execute(sql.raw("DROP TRIGGER IF EXISTS autowriter_test_race ON feedback_autowriter_sessions"));
+      await db.execute(sql.raw("DROP FUNCTION IF EXISTS autowriter_test_race()"));
+    }
+  });
+
+  it("deletes a shadow draft's Soniox job; the sweep retries a delete that failed", async () => {
+    await updateControl(db, { mode: "shadow" }, "t@x.com");
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    const refusing = fakeSoniox({ removeFails: true });
+    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, refusing.client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "would_submit" });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "would_submit", sonioxTranscriptionId: "job-1" });
+    const working = fakeSoniox();
+    await runSweep(transcriptDeps(fakeWise().ops, working.client));
+    expect(working.removed).toEqual(["job-1"]);
+    expect((await readSessionRow(db, SESSION_ID))?.sonioxTranscriptionId).toBeNull();
+  });
+
+  it("raises no no-recording alert for a tutor who is switched off", async () => {
+    await updateControl(db, { disabledTutors: [KEVIN] }, "t@x.com");
+    await seedRow({ state: "awaiting_recording", evidence: "transcript", scheduledEndAt: new Date(NOW.getTime() - 4 * 3600_000), nextAttemptAt: new Date(Date.now() + 3600_000) });
+    const result = await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client));
+    expect(result.alertsSent).toBe(0);
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).not.toHaveProperty("alertKind");
+  });
+
+  it("still alerts for a waiting class with no known teacher while another tutor is switched off", async () => {
+    await updateControl(db, { disabledTutors: [GIFT] }, "t@x.com");
+    await seedRow({
+      state: "awaiting_recording", evidence: "transcript", wiseTeacherUserId: null,
+      scheduledEndAt: new Date(NOW.getTime() - 4 * 3600_000), nextAttemptAt: new Date(Date.now() + 3600_000),
+    });
+    const result = await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client));
+    expect(result.alertsSent).toBe(1);
+  });
+
+  it("does no work on a row taken away between the claim and the re-read", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    // Simulates an owner action (or the rollback SQL) landing right after this worker's claim.
+    await db.execute(sql.raw(`CREATE OR REPLACE FUNCTION autowriter_test_takeover() RETURNS trigger AS $$
+      BEGIN UPDATE feedback_autowriter_sessions SET state = 'held', lease_token = NULL, lease_until = NULL WHERE id = NEW.id; RETURN NULL; END
+      $$ LANGUAGE plpgsql`));
+    await db.execute(sql.raw(`CREATE TRIGGER autowriter_test_takeover AFTER UPDATE ON feedback_autowriter_sessions
+      FOR EACH ROW WHEN (NEW.state = 'generating' AND OLD.state <> 'generating') EXECUTE FUNCTION autowriter_test_takeover()`));
+    try {
+      const soniox = fakeSoniox();
+      const wise = fakeWise({ details: [sessionDetail(RECORDING)] });
+      expect(await processSession(transcriptDeps(wise.ops, soniox.client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+        .toMatchObject({ result: "busy_or_not_due", detail: "lease_lost" });
+      expect(soniox.created).toEqual([]);
+      expect(wise.reads()).toBe(0);
+    } finally {
+      await db.execute(sql.raw("DROP TRIGGER IF EXISTS autowriter_test_takeover ON feedback_autowriter_sessions"));
+      await db.execute(sql.raw("DROP FUNCTION IF EXISTS autowriter_test_takeover()"));
+    }
+    expect((await readSessionRow(db, SESSION_ID))?.state).toBe("held");
   });
 });

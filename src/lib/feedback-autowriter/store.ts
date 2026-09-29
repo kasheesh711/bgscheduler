@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
@@ -337,9 +337,9 @@ export async function listRowsInState(db: Database, states: readonly AutowriterS
 }
 
 /**
- * Rows the sweep should work on, most urgent deadline first: due `pending`
- * rows, and `generating` rows whose worker died (expired lease) — those are
- * taken over by `claimGeneration`.
+ * Rows the sweep should work on, most urgent deadline first: due waiting rows
+ * (`pending`, `awaiting_recording`, `transcribing`), and `generating` rows whose
+ * worker died (expired lease) — those are taken over by `claimGeneration`.
  */
 export async function listDueRows(db: Database): Promise<AutowriterSessionRow[]> {
   return db.select().from(S).where(or(
@@ -348,25 +348,39 @@ export async function listDueRows(db: Database): Promise<AutowriterSessionRow[]>
   )).orderBy(sql`${S.deadlineAt} asc nulls last`);
 }
 
-/** Persist a submitted Soniox job while holding the lease, so a dead worker's job can be found again. */
+/**
+ * Persist a submitted Soniox job while holding the lease, so a dead worker's
+ * job can be found again. Its submit time bounds how long it may keep running.
+ */
 export async function setSonioxTranscription(db: Database, wiseSessionId: string, token: string, transcriptionId: string): Promise<boolean> {
-  const rows = await db.update(S).set({ sonioxTranscriptionId: transcriptionId, evidence: "transcript", updatedAt: nowSql })
-    .where(and(eq(S.wiseSessionId, wiseSessionId), eq(S.state, "generating"), eq(S.leaseToken, token)))
+  const rows = await db.update(S).set({
+    sonioxTranscriptionId: transcriptionId,
+    evidence: "transcript",
+    // App wall clock, as an ISO string, keyed to the job: the worker only times the job it is polling.
+    metadata: sql`${S.metadata} || ${JSON.stringify({ sonioxSubmittedJob: transcriptionId, sonioxSubmittedAt: new Date().toISOString() })}::jsonb`,
+    updatedAt: nowSql,
+  }).where(and(eq(S.wiseSessionId, wiseSessionId), eq(S.state, "generating"), eq(S.leaseToken, token)))
     .returning({ id: S.id });
   return rows.length > 0;
 }
 
-/** Rows that finished (or expired) with a Soniox job still recorded: the sweep deletes those jobs. */
+/**
+ * Rows whose Soniox job is no longer needed: finished rows, and shadow drafts
+ * (a judged draft is stored; the transcript is never read again).
+ */
+const SONIOX_DONE_STATES: readonly AutowriterState[] = [...TERMINAL_STATES, "would_submit"];
+
+/** Rows done with a Soniox job still recorded (a delete that failed): the sweep deletes those jobs. */
 export async function listSonioxCleanup(db: Database): Promise<Array<{ wiseSessionId: string; sonioxTranscriptionId: string }>> {
   const rows = await db.select({ wiseSessionId: S.wiseSessionId, sonioxTranscriptionId: S.sonioxTranscriptionId })
-    .from(S).where(and(isNotNull(S.sonioxTranscriptionId), inArray(S.state, [...TERMINAL_STATES])));
+    .from(S).where(and(isNotNull(S.sonioxTranscriptionId), inArray(S.state, [...SONIOX_DONE_STATES])));
   return rows.flatMap((row) => row.sonioxTranscriptionId ? [{ wiseSessionId: row.wiseSessionId, sonioxTranscriptionId: row.sonioxTranscriptionId }] : []);
 }
 
 /** Soniox job ids still needed by an unfinished row (the orphan reaper must not touch these). */
 export async function activeSonioxJobIds(db: Database): Promise<Set<string>> {
   const rows = await db.select({ id: S.sonioxTranscriptionId }).from(S)
-    .where(and(isNotNull(S.sonioxTranscriptionId), sql`${S.state} not in ${sql.raw(`(${TERMINAL_STATES.map((state) => `'${state}'`).join(",")})`)}`));
+    .where(and(isNotNull(S.sonioxTranscriptionId), notInArray(S.state, [...SONIOX_DONE_STATES])));
   return new Set(rows.flatMap((row) => row.id ? [row.id] : []));
 }
 
@@ -380,15 +394,19 @@ export async function noteSonioxRecorded(db: Database, wiseSessionId: string, tr
 
 /**
  * Classes still waiting for (or being transcribed from) the recording long
- * after class: raise a `no_recording` alert once, instead of only at the deadline.
+ * after class: raise a `no_recording` alert once, instead of only at the
+ * deadline. A switched-off tutor's classes are theirs to write: no alert.
  */
-export async function flagNoRecording(db: Database, endedBefore: Date): Promise<number> {
+export async function flagNoRecording(db: Database, endedBefore: Date, disabledTutors: readonly string[] = []): Promise<number> {
   const rows = await db.update(S).set({
     metadata: sql`${S.metadata} || '{"alertKind":"no_recording"}'::jsonb`,
     updatedAt: nowSql,
   }).where(and(
     inArray(S.state, ["awaiting_recording", "transcribing"]),
     lt(S.scheduledEndAt, endedBefore),
+    disabledTutors.length > 0
+      ? or(isNull(S.wiseTeacherUserId), notInArray(S.wiseTeacherUserId, [...disabledTutors]))
+      : undefined,
     sql`not (${S.alertsSent} ? 'no_recording')`,
     sql`coalesce(${S.metadata} ->> 'alertKind', '') <> 'no_recording'`,
   )).returning({ id: S.id });
@@ -396,8 +414,11 @@ export async function flagNoRecording(db: Database, endedBefore: Date): Promise<
 }
 
 export async function clearSonioxTranscription(db: Database, wiseSessionId: string, transcriptionId: string): Promise<void> {
-  await db.update(S).set({ sonioxTranscriptionId: null, updatedAt: nowSql })
-    .where(and(eq(S.wiseSessionId, wiseSessionId), eq(S.sonioxTranscriptionId, transcriptionId)));
+  await db.update(S).set({
+    sonioxTranscriptionId: null,
+    metadata: sql`${S.metadata} - 'sonioxSubmittedJob' - 'sonioxSubmittedAt'`,
+    updatedAt: nowSql,
+  }).where(and(eq(S.wiseSessionId, wiseSessionId), eq(S.sonioxTranscriptionId, transcriptionId)));
 }
 
 /** Wise now shows a different teacher: record it while holding the generation lease. */
@@ -461,8 +482,9 @@ export async function retryHeldSession(db: Database, wiseSessionId: string, inpu
     leaseUntil: null,
     // A retry starts again on the fast path; it may still hand over to the transcript pass.
     evidence: "summary",
-    // A clean slate: no stale alert, error count or judged draft carries over (a kept Soniox job may be re-fetched).
-    metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'judge' - 'draftEvidence' - 'transcript' - 'handover')
+    // A clean slate: no stale alert, error count, coverage recheck or judged draft carries over
+    // (a kept Soniox job, and its submit time, may be re-used).
+    metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'recordingShortSeen' - 'judge' - 'draftEvidence' - 'transcript' - 'handover')
       || ${JSON.stringify({ retriedBy: input.actor })}::jsonb
       || jsonb_build_object('retriedAt', now()::text, 'retriedFrom', ${S.state}::text)`,
     alertsSent: sql`${S.alertsSent} - 'held' - 'expired'`,

@@ -136,6 +136,8 @@ export const AUTOWRITER_RECORDING_RECHECK_MS = 30 * 60 * 1000;
 export const AUTOWRITER_TRANSCRIBING_RECHECK_MS = 5 * 60 * 1000;
 /** In-invocation wait for Soniox (an hour of audio took 2–7 min in the pilot). */
 export const AUTOWRITER_TRANSCRIBE_WAIT_MS = 180_000;
+/** A Soniox job still queued or processing this long after it was submitted is abandoned (deleted, counted as an error). */
+export const AUTOWRITER_TRANSCRIBE_TIMEOUT_MS = 60 * 60 * 1000;
 export const AUTOWRITER_TRANSCRIBE_POLL_MS = 10_000;
 /** Soniox failures on one class before it is held for a person. */
 export const AUTOWRITER_MAX_TRANSCRIBE_ERRORS = 3;

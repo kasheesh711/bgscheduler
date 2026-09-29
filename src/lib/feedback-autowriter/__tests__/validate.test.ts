@@ -51,6 +51,13 @@ describe("validateFeedbackDraft", () => {
     if (!result.ok) expect(result.reasons).toContain("thai_text:topics");
   });
 
+  it("allows the student's own Thai name, restored after the model wrote a placeholder", () => {
+    const fields = finalizeFields(goodOutput, "สมชาย");
+    expect(fields.performance.startsWith("สมชาย")).toBe(true);
+    const result = validateFeedbackDraft({ output: goodOutput, fields, studentFullName: STUDENT_NAME, tutorNames, priorFeedback: [] });
+    expect(result.ok ? [] : result.reasons.filter((reason) => reason.startsWith("thai_text"))).toEqual([]);
+  });
+
   it("rejects when the model reports no lesson or an absent student", () => {
     const result = check({ ...goodOutput, studentAttended: false, lessonHappened: false });
     expect(result.ok).toBe(false);

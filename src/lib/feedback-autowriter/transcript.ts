@@ -4,7 +4,8 @@ import type { SonioxToken } from "./soniox";
  * Turning a Soniox transcript into speaker turns the writer can use. Soniox
  * labels speakers "1", "2", …; who is the tutor comes from Zoom's own transcript
  * (Wise `rawTranscript`, whose cues carry display names) by time overlap, with
- * talk share as the fallback (tutors did 74–93% of the talking in the pilot).
+ * a clear talk-share split as the fallback (tutors did 74–93% of the talking in
+ * the pilot). Anything else is "unclear" and the class goes to a person.
  */
 
 export interface Segment {
@@ -79,17 +80,26 @@ function normalizeName(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase("en-US").replace(/\s+/gu, " ").trim();
 }
 
-function roleShares(segments: readonly Segment[], roles: Map<string, SpeakerRole>): Record<SpeakerRole, number> {
+/** Exact share (0–1) of all transcript characters spoken by each role. */
+function roleRatios(segments: readonly Segment[], roles: Map<string, SpeakerRole>): Record<SpeakerRole, number> {
   const chars: Record<SpeakerRole, number> = { tutor: 0, student: 0, other: 0 };
   for (const segment of segments) chars[roles.get(segment.speaker) ?? "other"] += segment.text.length;
   const total = chars.tutor + chars.student + chars.other || 1;
+  return { tutor: chars.tutor / total, student: chars.student / total, other: chars.other / total };
+}
+
+function percent(ratios: Record<SpeakerRole, number>): Record<SpeakerRole, number> {
   return {
-    tutor: Math.round((chars.tutor / total) * 100),
-    student: Math.round((chars.student / total) * 100),
-    other: Math.round((chars.other / total) * 100),
+    tutor: Math.round(ratios.tutor * 100),
+    student: Math.round(ratios.student * 100),
+    other: Math.round(ratios.other * 100),
   };
 }
 
+/** Zoom-aligned roles are only trusted when the tutor has at least this share of the talk … */
+const ALIGNED_MIN_TUTOR_SHARE = 0.5;
+/** … and the student at least this share. */
+const ALIGNED_MIN_STUDENT_SHARE = 0.05;
 /** A speaker with less than this share of the text is noise (a cough, a stray turn), not a participant. */
 const SUBSTANTIVE_SHARE = 0.05;
 /** Talk share alone only names the tutor when one of two main speakers clearly dominates. */
@@ -108,9 +118,12 @@ function byTalkShare(segments: readonly Segment[]): { roles: Map<string, Speaker
 }
 
 /**
- * Tutor = the Soniox speaker whose talk overlaps most with Zoom cues of the
- * teacher's display name; the other main speaker is the student. Falls back to
- * talk share when there are no usable cues or the alignment is not one-to-one.
+ * Tutor = every Soniox speaker whose talk overlaps Zoom cues of the teacher's
+ * display name more than anyone else's; student = those overlapping the other
+ * participant's cues. Trusted only when the result looks like a one-to-one
+ * lesson (tutor ≥ 50% of the talk, student ≥ 5%), else unclear. Falls back to
+ * talk share when Zoom has no cues under the teacher's name or only one side
+ * aligned, and calls it unclear when the split contradicts Zoom's cues.
  */
 export function assignSpeakerRoles(input: {
   segments: readonly Segment[];
@@ -119,7 +132,10 @@ export function assignSpeakerRoles(input: {
 }): RoleAssignment {
   const { segments } = input;
   const teacher = input.teacherName ? normalizeName(input.teacherName) : null;
-  if (teacher && input.zoomCues.length > 0) {
+  let zoomTutors = new Set<string>();
+  let zoomStudents = new Set<string>();
+  // Without a cue under the teacher's name, Zoom says nothing about who is who.
+  if (teacher && input.zoomCues.some((cue) => normalizeName(cue.speakerName) === teacher)) {
     const teacherOverlap = new Map<string, number>();
     const otherOverlap = new Map<string, number>();
     for (const segment of segments) {
@@ -135,14 +151,23 @@ export function assignSpeakerRoles(input: {
     // speaker that mostly overlaps the teacher's cues is the tutor.
     const tutorLike = new Set(speakers.filter((speaker) => (teacherOverlap.get(speaker) ?? 0) > (otherOverlap.get(speaker) ?? 0)));
     const studentLike = new Set(speakers.filter((speaker) => (otherOverlap.get(speaker) ?? 0) > (teacherOverlap.get(speaker) ?? 0)));
+    zoomTutors = tutorLike;
+    zoomStudents = studentLike;
     if (tutorLike.size >= 1 && studentLike.size >= 1) {
       const roles = new Map<string, SpeakerRole>(speakers.map((speaker): [string, SpeakerRole] =>
         [speaker, tutorLike.has(speaker) ? "tutor" : studentLike.has(speaker) ? "student" : "other"]));
-      return { roles, method: "zoom_alignment", shares: roleShares(segments, roles) };
+      const ratios = roleRatios(segments, roles);
+      // A plausible one-to-one lesson: the tutor carries a real share and the student is actually heard.
+      // Anything else (a rejoin under another name, noise aligned as "student") is not trusted.
+      const plausible = ratios.tutor >= ALIGNED_MIN_TUTOR_SHARE && ratios.student >= ALIGNED_MIN_STUDENT_SHARE;
+      return { roles, method: plausible ? "zoom_alignment" : "unclear", shares: percent(ratios) };
     }
   }
   const { roles, clear } = byTalkShare(segments);
-  return { roles, method: clear ? "talk_share" : "unclear", shares: roleShares(segments, roles) };
+  // Zoom's cues, where they place a speaker, must agree with the talk-share split.
+  const contradicts = [...roles].some(([speaker, role]) =>
+    (role === "tutor" && zoomStudents.has(speaker)) || (role === "student" && zoomTutors.has(speaker)));
+  return { roles, method: clear && !contradicts ? "talk_share" : "unclear", shares: percent(roleRatios(segments, roles)) };
 }
 
 function clock(ms: number): string {

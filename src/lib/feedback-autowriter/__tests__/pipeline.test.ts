@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenRouterCallResult } from "../openrouter";
 import { isInfraFailure, routeMismatch, runWritingPipeline, type CallRecord } from "../pipeline";
 import { AUTOWRITER_MODELS } from "../config";
+import { speakerLabelNote } from "../prompt";
 import { GOOD_FIELDS, STUDENT_NAME } from "./fixtures";
 
 const usage = { promptTokens: 1000, completionTokens: 2000, reasoningTokens: 1700, cachedTokens: 0, costUsd: 0.002 };
@@ -128,6 +129,8 @@ describe("runWritingPipeline", () => {
     expect(await promise).toMatchObject({ kind: "held" });
     expect(requests.map((request) => request.model)).toEqual(["z-ai/glm-5.3-flash", "z-ai/glm-5.3-flash"]);
     expect(requests[1].messages.map((message) => message.content).join("\n")).toContain("Lesson transcript:");
+    // Without Zoom's confirmation both writer and judge are told the labels are inferred.
+    for (const request of requests) expect(request.messages[0].content).toContain(speakerLabelNote("inferred"));
   });
 
   it("treats a response from an unpinned host as infra", async () => {

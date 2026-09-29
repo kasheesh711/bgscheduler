@@ -78,28 +78,42 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
 
 1. passes Wise's composite MP4 URL (`rawRecordings`, one part only) to **Soniox** `stt-async-v5`
    ([`soniox.ts`](../../src/lib/feedback-autowriter/soniox.ts)): Thai/English code-switching in one model, speaker
-   diarization, our terms as context; about **$0.10 per audio hour**. The job id is stored; a job not finished within
-   ~3 minutes leaves the row `transcribing` for the next run;
+   diarization, our terms as context; about **$0.10 per audio hour**. The job id and its submit time are stored; a
+   job not finished within ~3 minutes leaves the row `transcribing` for the next run, and one still running an hour
+   after it was submitted (the stamp belongs to that job) is deleted and counted as a Soniox failure. A recording
+   shorter than 70% of the scheduled class would be written up as the whole lesson, so it is held
+   (`recording_too_short`): Wise's `rawRecordings[].duration` (seconds) is checked before the job, twice 30 minutes
+   apart in case the first length was not final, and Soniox's audio length after it;
 2. fetches the transcript. BGScheduler never stores it; the Soniox job is kept only until a judged draft is stored
    or the class is finished (so a retry re-fetches instead of transcribing again), then deleted. A delete that fails
    keeps the job id so the sweep retries it, and the sweep also reaps jobs no row references after 2 hours;
 3. tells tutor from student by lining up Soniox's speakers with Zoom's name-labelled WEBVTT (`rawTranscript`) — every
    speaker that overlaps the teacher's cues is TUTOR, so a diarization split cannot turn the tutor into the student.
-   Without cues it falls back to talk share only when the split is clear (two main speakers, one with ≥ 60%);
-   otherwise the class is held (`speakers_unclear`). The models are told the labels are reliable only when Zoom
-   confirmed them ([`transcript.ts`](../../src/lib/feedback-autowriter/transcript.ts));
+   The alignment is trusted only when it looks like a one-to-one lesson (TUTOR ≥ 50% of the talk, STUDENT ≥ 5%,
+   exact shares). Otherwise it falls back to talk share, used only when the split is clear (two main speakers, one
+   with ≥ 60%) and — when Zoom has cues under the teacher's name — agrees with them; anything else is held
+   (`speakers_unclear`). The models are told the labels are reliable only when Zoom confirmed them, and are told they
+   are inferred by default ([`transcript.ts`](../../src/lib/feedback-autowriter/transcript.ts));
 4. writes and judges from the `[mm:ss] TUTOR/STUDENT` transcript with **GLM on the zero-retention route only** — no
    Luna fallback, because Thai-script names can slip past the Latin-name redaction. Extra rule: what the tutor
    explained is "covered", not "mastered", unless the student is shown doing it. A long transcript keeps its start
-   and end (homework is usually set last). Any Thai text in the written fields fails validation (English only);
+   and end (homework is usually set last). Any Thai text the model writes fails validation (English only; the
+   student's own name, restored afterwards, may be Thai);
 5. posts through the same guarded path (gates without the summary requirement).
 
 A webhook waits up to ~3 minutes for Soniox; the backstop only looks and comes back, so one slow job never starves
-the other classes. A transcript draft that was judged but whose POST did not go out is reused on the retry.
-Three Soniox failures (including status checks that keep failing), several recording parts, or a transcript under
-800 characters → `held` + alert. A class still waiting for its recording 3 hours after class raises a
-`no_recording` alert (live mode); rows still waiting at the deadline margin expire with an alert as before. Pilot (2026-09-29, 8 classes): on Thai/English lessons Soniox kept the English terms that Zoom's
-transcript lost and was preferred in 17 of 18 compared windows; no gain on English-only lessons.
+the other classes. A transcript draft that was judged but whose POST did not go out (another POST in flight, or a
+pre-POST gate that says "try later") is reused on the retry. While Wise itself is not ready (attendance, status, the
+POST slot) the class waits in `pending`, not `awaiting_recording`. Three Soniox failures (errors, a job running
+over an hour, or a run whose status checks never get an answer; within one run a failed check after a good answer
+does not count, and the backstop checks once per run), several recording parts, a recording too short for the
+class, or a transcript under 800 characters → `held` + alert. A
+class still waiting for its recording (or its transcript) 3 hours after class raises a `no_recording` alert (live
+mode; not for a switched-off tutor); rows still waiting at the deadline margin expire with an alert as before.
+Soniox jobs of finished rows and of shadow drafts are deleted by the sweep when an earlier delete failed.
+
+Pilot (2026-09-29, 8 classes): on Thai/English lessons Soniox kept the English terms that Zoom's transcript lost and
+was preferred in 17 of 18 compared windows; no gain on English-only lessons.
 
 Switch: `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED=true` plus `SONIOX_API_KEY`; off → the fast path behaves as before.
 

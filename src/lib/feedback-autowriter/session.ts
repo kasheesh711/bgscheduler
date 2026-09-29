@@ -139,12 +139,21 @@ export function detailTeacherName(detail: AutowriterSessionDetail): string | nul
  * restarted) are not stitched: the class is left to a person.
  */
 export function recordingForTranscription(detail: AutowriterSessionDetail):
-  | { ok: true; url: string }
+  | { ok: true; url: string; durationSeconds: number | null }
   | { ok: false; reason: "recording_not_ready" | "recording_multiple_parts" } {
   const parts = (detail.rawRecordings ?? []).filter((part) => part.url);
   if (parts.length === 0) return { ok: false, reason: "recording_not_ready" };
   if (parts.length > 1) return { ok: false, reason: "recording_multiple_parts" };
-  return { ok: true, url: parts[0].url! };
+  return { ok: true, url: parts[0].url!, durationSeconds: typeof parts[0].duration === "number" ? parts[0].duration : null };
+}
+
+/** Share of the scheduled lesson a recording must cover to stand for the whole lesson. */
+export const MIN_RECORDING_COVERAGE = 0.7;
+
+/** A recording that stopped early would be written up as the whole lesson. */
+export function recordingTooShort(durationSeconds: number | null, scheduledMinutes: number): boolean {
+  return durationSeconds !== null && durationSeconds > 0 && scheduledMinutes > 0 &&
+    durationSeconds < scheduledMinutes * 60 * MIN_RECORDING_COVERAGE;
 }
 
 /** Zoom's transcript file, used only to tell tutor from student (single part only). */

@@ -69,7 +69,8 @@ export function validateFeedbackDraft(input: {
     const value = fields[field];
     if (PLACEHOLDER_TOKEN.test(value)) reasons.push(`placeholder_token:${field}`);
     // Feedback is English for everyone; Thai text means the model copied from a Thai summary or transcript.
-    if (/[\u0e00-\u0e7f]/u.test(value)) reasons.push(`thai_text:${field}`);
+    // Checked on the model's own text: the student's Wise name, restored afterwards, may itself be Thai.
+    if (/[\u0e00-\u0e7f]/u.test(output[field])) reasons.push(`thai_text:${field}`);
     if ([...value].length > WISE_FEEDBACK_ANSWER_MAX_CHARACTERS) reasons.push(`too_long:${field}`);
     if (MARKDOWN.test(value)) reasons.push(`markdown:${field}`);
   }

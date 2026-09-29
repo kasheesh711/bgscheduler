@@ -152,7 +152,9 @@ function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels): string {
     "2. Never mention attendance, absence, lateness, cancellation, rescheduling, technical problems, recordings, transcripts, Zoom, AI or the summary itself.",
     "3. Warm, clear, professional English that a parent can read. Plain sentences in short paragraphs; no headings, no markdown, no bullet symbols.",
     "4. topics: the specific skills, sub-topics, question types, texts or papers covered.",
-    `5. performance: concrete observations of what ${STUDENT_TOKEN} did well and found difficult, with examples from this lesson.`,
+    `5. performance: concrete observations of what ${STUDENT_TOKEN} did well and found difficult, with examples from this lesson. ` +
+      `Every judgement of how well ${STUDENT_TOKEN} did (confidently, well, engaged, quickly, struggled) must be stated in ${record}; ` +
+      `when ${record} does not say how it went, describe what ${STUDENT_TOKEN} worked on and practised instead of judging it.`,
     "6. improvement: the specific weak areas and two or three concrete next steps or strategies to practise before the next lesson.",
     `7. homework: only homework or tasks ${record} says were set, with timing if stated. If ${record} mentions none, return an empty string.`,
     "8. Length: topics, performance and improvement are each between 120 and 600 characters, and together at least 450 characters.",
@@ -176,7 +178,7 @@ export interface PromptContext {
   /** The lesson record: Wise's AI summary, or a rendered transcript (`evidence: "transcript"`). */
   summary: AiSummary;
   evidence?: EvidenceKind;
-  /** Transcript mode only; default "verified". */
+  /** Transcript mode only; default "inferred". */
   speakerLabels?: SpeakerLabels;
 }
 
@@ -194,7 +196,8 @@ export function buildFeedbackMessages(context: PromptContext): Array<{ role: "sy
   const record = redactForModel(context.summary.text, context);
   const details = classDetailsBlock(context.classDetails, context, [`Scheduled length: ${context.scheduledMinutes} minutes`]);
   return [
-    { role: "system", content: systemPrompt(evidence, context.speakerLabels ?? "verified") },
+    // Fails closed: a transcript is only called reliable when Zoom confirmed the labels.
+    { role: "system", content: systemPrompt(evidence, context.speakerLabels ?? "inferred") },
     {
       role: "user",
       content: `Class details (from the school's system):\n${details}\n\n${evidence === "summary" ? "Lesson summary" : "Lesson transcript"}:\n${record}`,

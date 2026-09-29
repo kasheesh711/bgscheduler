@@ -51,15 +51,68 @@ describe("transcript segments", () => {
 
 describe("assignSpeakerRoles", () => {
   it("names the tutor from Zoom's cues by time overlap", () => {
-    // Speaker "2" talks more here, so talk share alone would get it wrong.
+    // 55 / 45: too close for talk share alone, but Zoom's cues say who is who.
     const segments: Segment[] = [
-      { speaker: "1", startMs: 0, endMs: 800, text: "Let's start" },
-      { speaker: "2", startMs: 900, endMs: 1_500, text: "Okay, I tried all of them and got most right I think" },
+      { speaker: "1", startMs: 0, endMs: 800, text: "t".repeat(55) },
+      { speaker: "2", startMs: 900, endMs: 1_500, text: "s".repeat(45) },
     ];
+    expect(assignSpeakerRoles({ segments, zoomCues: [], teacherName: null }).method).toBe("unclear");
     const result = assignSpeakerRoles({ segments, zoomCues: parseZoomVtt(VTT), teacherName: "Apivit (Ek) Sirithana Online" });
     expect(result.method).toBe("zoom_alignment");
     expect(result.roles.get("1")).toBe("tutor");
     expect(result.roles.get("2")).toBe("student");
+    expect(result.shares).toEqual({ tutor: 55, student: 45, other: 0 });
+  });
+
+  it("does not trust an alignment that does not look like a one-to-one lesson", () => {
+    // The "tutor" barely speaks: a mislabelled rejoin, or cues out of step with the audio.
+    const quietTutor: Segment[] = [
+      { speaker: "1", startMs: 0, endMs: 800, text: "Let's start" },
+      { speaker: "2", startMs: 900, endMs: 1_500, text: "Okay, I tried all of them and got most right I think" },
+    ];
+    expect(assignSpeakerRoles({ segments: quietTutor, zoomCues: parseZoomVtt(VTT), teacherName: "Apivit (Ek) Sirithana Online" }).method)
+      .toBe("unclear");
+    // The "student" is a cough.
+    const silentStudent: Segment[] = [
+      { speaker: "1", startMs: 0, endMs: 800, text: "t".repeat(400) },
+      { speaker: "2", startMs: 900, endMs: 1_500, text: "hm" },
+    ];
+    expect(assignSpeakerRoles({ segments: silentStudent, zoomCues: parseZoomVtt(VTT), teacherName: "Apivit (Ek) Sirithana Online" }).method)
+      .toBe("unclear");
+  });
+
+  it("compares exact shares at the 50% / 5% limits, not rounded percentages", () => {
+    const cues = parseZoomVtt(VTT);
+    const aligned = (tutorChars: number, studentChars: number) => assignSpeakerRoles({
+      segments: [
+        { speaker: "1", startMs: 0, endMs: 800, text: "t".repeat(tutorChars) },
+        { speaker: "2", startMs: 900, endMs: 1_500, text: "s".repeat(studentChars) },
+      ],
+      zoomCues: cues,
+      teacherName: "Apivit (Ek) Sirithana Online",
+    }).method;
+    expect(aligned(50, 50)).toBe("zoom_alignment"); // tutor exactly 50%
+    expect(aligned(99, 101)).toBe("unclear"); // 49.5% would round to 50
+    expect(aligned(95, 5)).toBe("zoom_alignment"); // student exactly 5%
+    expect(aligned(191, 9)).toBe("unclear"); // 4.5% would round to 5
+  });
+
+  it("calls a talk-share split that contradicts Zoom's cues unclear", () => {
+    const teacherOnly = parseZoomVtt(VTT).filter((cue) => cue.speakerName.startsWith("Apivit"));
+    // Zoom places speaker 1 on the teacher's lines, but speaker 2 talks most.
+    const contradicting: Segment[] = [
+      { speaker: "1", startMs: 0, endMs: 800, text: "t".repeat(30) },
+      { speaker: "2", startMs: 5_000, endMs: 9_000, text: "s".repeat(100) },
+    ];
+    expect(assignSpeakerRoles({ segments: contradicting, zoomCues: teacherOnly, teacherName: "Apivit (Ek) Sirithana Online" }).method)
+      .toBe("unclear");
+    const agreeing: Segment[] = [
+      { speaker: "1", startMs: 0, endMs: 800, text: "t".repeat(100) },
+      { speaker: "2", startMs: 5_000, endMs: 9_000, text: "s".repeat(30) },
+    ];
+    const result = assignSpeakerRoles({ segments: agreeing, zoomCues: teacherOnly, teacherName: "Apivit (Ek) Sirithana Online" });
+    expect(result.method).toBe("talk_share");
+    expect(result.roles.get("1")).toBe("tutor");
   });
 
   it("labels every speaker that overlaps the teacher's cues as the tutor (diarization split)", () => {

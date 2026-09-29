@@ -88,23 +88,35 @@ autowriter halts.
 
 Dashboard state "Waiting for recording" / "Transcribing" = the class was handed over (`reason` says why:
 `summary_draft_held`, `no_usable_summary`, `thai_summary`). Nothing to do: Wise's `RecordingCompletedEvent` (or the
-30-minute backstop) continues it. It ends posted, `held` (+ alert) after 3 Soniox failures, a multi-part recording or
-a transcript that is too short, or `expired` (+ alert) if the recording never comes before the deadline margin.
+30-minute backstop) continues it. It ends posted, `held` (+ alert) after 3 Soniox failures (a job still running an
+hour after it was submitted counts as one), a multi-part recording, a recording shorter than 70% of the class (seen
+twice, 30 minutes apart), a transcript that is too short or speakers it cannot tell apart, or `expired` (+ alert) if
+the recording never comes before the deadline margin. A second-pass class shown as `pending` has its transcript
+draft or is waiting for Wise (attendance, status, the POST slot), not for the recording.
 To turn the second pass off: `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED=false` + redeploy — classes already waiting are
 then held with an alert (`transcript_pass_unavailable`) so a person writes them.
 
-Alerts from the second pass: `no_recording` (still waiting 3 h after class — Wise may never publish a recording for
-it), `speakers_unclear`, `transcript_too_short`, `recording_multiple_parts`, or three Soniox failures.
+Alerts from the second pass: `no_recording` (recording or transcript still not ready 3 h after class — Wise may never
+publish a recording for it), `speakers_unclear`, `transcript_too_short`, `recording_too_short`,
+`recording_multiple_parts`, or three Soniox failures. The `reason` says which.
 
-Rolling back to code without the second pass (migration 0098 can stay — it is additive): first hand waiting classes to
-people, then deploy the older code; delete any leftover jobs in the Soniox Console.
+Rolling back to code without the second pass (migration 0098 can stay — it is additive). Older code does not know
+the two waiting states, so those classes would never be picked up or expire:
 
-```sql
-UPDATE feedback_autowriter_sessions
-SET state = 'held', reason = 'second_pass_rolled_back',
-    metadata = metadata || '{"alertKind":"held"}'::jsonb, updated_at = now()
-WHERE state IN ('awaiting_recording', 'transcribing');
-```
+1. **Pause** on the dashboard, so nothing new is handed over. A worker already running can still hand a class over
+   until it finishes: wait 15 minutes (longer than any run), or until no row is `generating`.
+2. Hand every class of the second pass to people (a worker mid-transcript loses its lease and cannot POST):
+
+   ```sql
+   UPDATE feedback_autowriter_sessions
+   SET state = 'held', reason = 'second_pass_rolled_back', lease_token = NULL, lease_until = NULL,
+       metadata = metadata || '{"alertKind":"held"}'::jsonb, updated_at = now()
+   WHERE state IN ('awaiting_recording', 'transcribing')
+      OR (evidence = 'transcript' AND state IN ('pending', 'generating'));
+   ```
+3. Deploy the older code, remove `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED`, run the UPDATE once more (it is
+   idempotent), then **Resume**.
+4. Delete any leftover jobs in the Soniox Console (they also expire there after 30 days).
 
 ## 6. Alerts
 
