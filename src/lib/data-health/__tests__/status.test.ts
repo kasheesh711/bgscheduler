@@ -190,5 +190,33 @@ describe("retired shared-data health", () => {
       latestInvocation: null, latestCronInvocation: null, latestRun: run({ status: "failed" }), latestSuccessfulRun: null,
       latestFailedRun: run({ status: "failed" }), runningRun: null });
     expect(result.status).toBe("paused"); expect(result.nextExpectedAt).toBeNull();
+    expect(result.healthDetail).toBe("Automatic credit alerts are paused; saved preferences are retained.");
+  });
+});
+
+describe("paused job health detail", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each([
+    ["wise_snapshot", "WISE_CLASSROOM_AUTOMATION_ENABLED", "Paused by owner"],
+    ["classroom_morning", "WISE_CLASSROOM_AUTOMATION_ENABLED", "Paused by owner"],
+    ["feedback_autowriter", "FEEDBACK_AUTOWRITER_ENABLED", "Feedback autowriter disabled"],
+    ["tutor_sit_ins", "TUTOR_SIT_INS_ENABLED", "Tutor Sit-ins disabled"],
+  ])("%s states its own pause reason instead of the credit-alert sentence", (key, envName, label) => {
+    vi.stubEnv(envName, undefined);
+    const result = evaluateCronJobStatus({
+      job: job(key),
+      now: new Date("2026-06-01T01:20:00.000Z"),
+      latestInvocation: null,
+      latestCronInvocation: null,
+      latestRun: null,
+      latestSuccessfulRun: null,
+      latestFailedRun: null,
+      runningRun: null,
+    });
+
+    expect(result.status).toBe("paused");
+    expect(result.healthDetail).toBe(`${label}; no run is expected until it is re-enabled.`);
+    expect(result.healthDetail.toLowerCase()).not.toContain("credit");
   });
 });
