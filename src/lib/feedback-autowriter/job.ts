@@ -9,6 +9,7 @@ import { resolveBilling } from "./billing";
 import {
   AUTOWRITER_EVENT_DEADLINE_MS,
   AUTOWRITER_GENERATION_LEASE_MS,
+  AUTOWRITER_MAX_GENERIC_ERRORS,
   AUTOWRITER_MAX_TRANSCRIBE_ERRORS,
   AUTOWRITER_MIN_POST_BUDGET_MS,
   AUTOWRITER_MIN_TRANSCRIPT_CHARACTERS,
@@ -21,6 +22,7 @@ import {
   AUTOWRITER_RETRY_DELAY_MS,
   AUTOWRITER_SONIOX_CLEANUP_MAX,
   AUTOWRITER_SONIOX_REAPER_AGE_MS,
+  AUTOWRITER_SONIOX_RETAIN_MS,
   AUTOWRITER_STALE_POSTING_MS,
   AUTOWRITER_SWEEP_MIN_REMAINING_MS,
   AUTOWRITER_THAI_SUMMARY_SHARE,
@@ -31,9 +33,9 @@ import {
   AUTOWRITER_ZOOM_TRANSCRIPT_RECHECK_MS,
   AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS,
 } from "./config";
-import type { JudgeOutput } from "./judge";
+import { JUDGE_PROMPT_VERSION, type JudgeOutput } from "./judge";
 import { runWritingPipeline, type PipelineResult } from "./pipeline";
-import { chooseStudentDisplayName, describeClass, parseStudentName, type EvidenceKind } from "./prompt";
+import { PROMPT_VERSION, chooseStudentDisplayName, describeClass, parseStudentName, type EvidenceKind } from "./prompt";
 import { AUTOWRITER_ROSTER, AUTOWRITER_TEACHER_ALLOWLIST, rosterAccountIds, rosterTutor } from "./roster";
 import { loadCandidateShortlist, loadFieldMappings, loadPriorFeedback } from "./run";
 import {
@@ -77,6 +79,7 @@ import {
   recordCall,
   recordTranscriptionCall,
   releaseGeneration,
+  retainSonioxTranscription,
   releaseShadowDraft,
   releaseSweepLease,
   sessionSubmitStore,
@@ -236,9 +239,31 @@ export async function processSession(deps: AutowriterDeps, input: {
       waitForReadyMs: input.waitForReadyMs ?? 0,
     });
   } catch (error) {
-    await release({ state: "pending", reason: `error:${error instanceof Error ? error.message.slice(0, 120) : "unknown"}`, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true });
+    const message = error instanceof Error ? error.message.slice(0, 120) : "unknown";
+    // Retried, but not until the deadline: the third unexpected error holds the class for a person.
+    const errors = (Number((row.metadata as { genericErrors?: unknown }).genericErrors ?? 0) || 0) + 1;
+    if (errors >= AUTOWRITER_MAX_GENERIC_ERRORS) {
+      await release({ state: "held", reason: `error:${message}`, alertKind: "held", countRetry: true, metadata: { genericErrors: errors } });
+      return out("held", `error:${message}`);
+    }
+    await release({ state: "pending", reason: `error:${message}`, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true, metadata: { genericErrors: errors } });
     return out("infra", error instanceof Error ? error.message.slice(0, 200) : "unknown error");
   }
+}
+
+/**
+ * What produced a draft, stored with it and with the POST claim: the deploy's commit, the prompt and judge
+ * versions, the model arm and the evidence. Changes that alter output without bumping a version (nicknames, the
+ * guest rule) are still traceable by commit.
+ */
+function pipelineStamp(evidence: EvidenceKind, arm: ModelArm): Record<string, unknown> {
+  return {
+    commitSha: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
+    promptVersion: PROMPT_VERSION,
+    judgeVersion: JUDGE_PROMPT_VERSION,
+    arm,
+    evidence,
+  };
 }
 
 type Release = (to: Parameters<typeof releaseGeneration>[3]) => Promise<boolean>;
@@ -491,12 +516,13 @@ async function postDraft(deps: AutowriterDeps, input: {
   const { row, release, out, draft, submission } = input;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   // The draft exists: a retry waits for Wise or the POST slot, not for the recording (no `no_recording` alert).
+  const pipeline = pipelineStamp(input.evidence, draft.arm);
   const draftPatch = {
     arm: draft.arm,
     fields: draft.fields,
     fieldsSha256: fieldsHash(draft.fields),
     billing: input.billing,
-    metadata: { judge: draft.judge, draftEvidence: input.evidence, ...(input.extraMetadata ?? {}) },
+    metadata: { judge: draft.judge, draftEvidence: input.evidence, pipeline, ...(input.extraMetadata ?? {}) },
   };
   if (input.control.mode !== "live") {
     // Atomic with the mode: a switch to live while this draft was being written
@@ -517,7 +543,7 @@ async function postDraft(deps: AutowriterDeps, input: {
     outcome = await submitFeedbackGuarded({
       ops,
       store: sessionSubmitStore(db, row.wiseSessionId, input.token, {
-        expected: submission, judge: draft.judge, draftEvidence: input.evidence, ...(input.extraMetadata ?? {}),
+        expected: submission, judge: draft.judge, draftEvidence: input.evidence, pipeline, ...(input.extraMetadata ?? {}),
       }),
       plan: {
         sessionId: row.wiseSessionId,
@@ -673,10 +699,12 @@ async function processTranscript(deps: AutowriterDeps, input: {
   }
 
   const soniox = deps.soniox;
-  /** Delete the job; forget its id only once Soniox confirms it is gone (else the sweep retries). */
+  /**
+   * The class is done with its transcript: keep the Soniox job for review (triage) for up to 72 h, then the
+   * sweep deletes it (owner decision, 29 Sep). Nothing is stored on our side; the job id stays on the row.
+   */
   const finishJob = async (jobId: string) => {
-    const gone = await soniox.remove(jobId).catch(() => null);
-    if (gone) await clearSonioxTranscription(db, row.wiseSessionId, jobId);
+    await retainSonioxTranscription(db, row.wiseSessionId, jobId, new Date(Date.now() + AUTOWRITER_SONIOX_RETAIN_MS));
   };
 
   const stored = reusableTranscriptDraft(row);

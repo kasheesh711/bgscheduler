@@ -370,17 +370,35 @@ export async function setSonioxTranscription(db: Database, wiseSessionId: string
  */
 const SONIOX_DONE_STATES: readonly AutowriterState[] = [...TERMINAL_STATES, "would_submit"];
 
-/** Rows done with a Soniox job still recorded (a delete that failed): the sweep deletes those jobs. */
+/**
+ * Rows done with their Soniox job, whose review window is over: kept for triage until
+ * `metadata.sonioxRetainUntil` (at most 72 h) or until the class is triaged (`metadata.triagedAt`), then the
+ * sweep deletes the job. Rows without a retention stamp (before it existed, or a delete that failed) go at once.
+ */
 export async function listSonioxCleanup(db: Database): Promise<Array<{ wiseSessionId: string; sonioxTranscriptionId: string }>> {
   const rows = await db.select({ wiseSessionId: S.wiseSessionId, sonioxTranscriptionId: S.sonioxTranscriptionId })
-    .from(S).where(and(isNotNull(S.sonioxTranscriptionId), inArray(S.state, [...SONIOX_DONE_STATES])));
+    .from(S).where(and(
+      isNotNull(S.sonioxTranscriptionId),
+      inArray(S.state, [...SONIOX_DONE_STATES]),
+      sql`(${S.metadata} ->> 'sonioxRetainUntil' is null or (${S.metadata} ->> 'sonioxRetainUntil')::timestamptz < now() or ${S.metadata} ? 'triagedAt')`,
+    ));
   return rows.flatMap((row) => row.sonioxTranscriptionId ? [{ wiseSessionId: row.wiseSessionId, sonioxTranscriptionId: row.sonioxTranscriptionId }] : []);
 }
 
-/** Soniox job ids still needed by an unfinished row (the orphan reaper must not touch these). */
+/** Keep a finished class's Soniox job for review until `until`; the job id stays on the row until the sweep deletes it. */
+export async function retainSonioxTranscription(db: Database, wiseSessionId: string, transcriptionId: string, until: Date): Promise<void> {
+  await db.update(S).set({
+    metadata: sql`${S.metadata} || ${JSON.stringify({ sonioxRetainUntil: until.toISOString() })}::jsonb`,
+    updatedAt: nowSql,
+  }).where(and(eq(S.wiseSessionId, wiseSessionId), eq(S.sonioxTranscriptionId, transcriptionId)));
+}
+
+/**
+ * Soniox job ids any row still records (the orphan reaper must not touch these): unfinished rows, and finished
+ * rows keeping theirs for review — the cleanup above deletes those and clears the id.
+ */
 export async function activeSonioxJobIds(db: Database): Promise<Set<string>> {
-  const rows = await db.select({ id: S.sonioxTranscriptionId }).from(S)
-    .where(and(isNotNull(S.sonioxTranscriptionId), notInArray(S.state, [...SONIOX_DONE_STATES])));
+  const rows = await db.select({ id: S.sonioxTranscriptionId }).from(S).where(isNotNull(S.sonioxTranscriptionId));
   return new Set(rows.flatMap((row) => row.id ? [row.id] : []));
 }
 

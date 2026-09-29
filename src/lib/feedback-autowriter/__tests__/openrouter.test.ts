@@ -65,4 +65,15 @@ describe("callOpenRouter", () => {
     expect(await callOpenRouter({ ...request, fetchImpl: timeout as unknown as typeof fetch }))
       .toMatchObject({ ok: false, error: "timeout" });
   });
+
+  it("reports a timeout while reading a slow reply as a timeout, not an unhandled error", async () => {
+    // Ek's 29 Sep class: the headers arrived, then the body read hit the timeout.
+    const slowBody = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => { throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }); },
+    }));
+    expect(await callOpenRouter({ ...request, fetchImpl: slowBody as unknown as typeof fetch }))
+      .toMatchObject({ ok: false, error: "timeout", httpStatus: 200 });
+  });
 });

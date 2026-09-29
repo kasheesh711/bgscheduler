@@ -87,7 +87,13 @@ export function createSonioxClient(apiKey: string, fetchImpl: typeof fetch = fet
       throw new SonioxError(`network_${error instanceof Error ? error.name : "Error"}`, null);
     }
     if (response.status === 204) return null;
-    const text = await response.text();
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (error) {
+      // The timeout also covers reading the body (a long transcript): a typed error, like a failed request.
+      throw new SonioxError(`network_${error instanceof Error ? error.name : "Error"}`, response.ok ? null : response.status);
+    }
     if (!response.ok) throw new SonioxError(`HTTP ${response.status}: ${text.slice(0, 200)}`, response.status);
     try {
       return text ? JSON.parse(text) : null;

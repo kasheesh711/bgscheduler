@@ -605,14 +605,19 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     const outcome = await processSession(transcriptDeps(wise.ops, soniox.client, { callModel: callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" });
     expect(outcome).toMatchObject({ result: "verified" });
     expect(soniox.created).toEqual([expect.objectContaining({ audioUrl: "https://files.wiseapp.live/rec.mp4" })]);
-    expect(soniox.removed).toEqual(["job-1"]);
+    expect(soniox.removed).toEqual([]); // kept for review (triage), at most 72 h
     expect(models).toEqual(["z-ai/glm-5.3-flash", "z-ai/glm-5.3-flash"]);
     expect(prompts[0]).toContain("Lesson transcript:");
     expect(prompts[0]).toContain("TUTOR: Today we add fractions");
     expect(prompts[0]).toContain("STUDENT: I got three quarters");
     expect(wise.posts).toHaveLength(1);
     const row = await readSessionRow(db, SESSION_ID);
-    expect(row).toMatchObject({ state: "verified", evidence: "transcript", sonioxTranscriptionId: null });
+    expect(row).toMatchObject({ state: "verified", evidence: "transcript", sonioxTranscriptionId: "job-1" });
+    const retainUntil = new Date(String((row?.metadata as { sonioxRetainUntil?: unknown }).sonioxRetainUntil)).getTime();
+    expect(retainUntil - Date.now()).toBeGreaterThan(71 * 3600_000);
+    expect(retainUntil - Date.now()).toBeLessThanOrEqual(72 * 3600_000);
+    // Stamped with what produced it.
+    expect(row?.metadata).toMatchObject({ pipeline: { promptVersion: expect.any(Number), judgeVersion: expect.any(Number), arm: "glm", evidence: "transcript" } });
     expect(row?.metadata).toMatchObject({ transcript: { speakerMethod: "zoom_alignment", audioMinutes: 60 } });
     const calls = await db.select().from(schema.feedbackAutowriterCalls).where(eq(schema.feedbackAutowriterCalls.role, "transcriber"));
     expect(calls).toHaveLength(1);
@@ -632,7 +637,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     const result = await runSweep(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, done.client));
     expect(result.processed).toEqual({ verified: 1 });
     expect(done.created).toEqual([]); // reused job-1, no second transcription
-    expect(done.removed).toEqual(["job-1"]);
+    expect(done.removed).toEqual([]); // kept for review
   });
 
   it("holds the class for a person after repeated Soniox errors", async () => {
@@ -659,7 +664,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(model.calls).toEqual([]);
     expect(soniox.created).toEqual([]);
     expect(soniox.client.get).not.toHaveBeenCalled();
-    expect(soniox.removed).toEqual(["job-5"]);
+    expect(soniox.removed).toEqual([]); // kept for review
     expect(wise.posts).toHaveLength(1);
   });
 
@@ -690,7 +695,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, { fetchText: async () => "WEBVTT\n" }),
       { wiseSessionId: SESSION_ID, trigger: "webhook" },
     )).toMatchObject({ result: "held", detail: "speakers_unclear" });
-    expect(soniox.removed).toEqual(["job-1"]);
+    expect(soniox.removed).toEqual([]); // kept so the hold can be reviewed
   });
 
   it("the backstop only looks at a running job, and counts Soniox status errors", async () => {
@@ -748,7 +753,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, second.client), { wiseSessionId: SESSION_ID, trigger: "cron" }))
       .toMatchObject({ result: "verified" });
     expect(second.created).toEqual([]);
-    expect(second.removed).toEqual(["job-1"]);
+    expect(second.removed).toEqual([]); // kept for review
     expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ transcript: { speakerMethod: "zoom_alignment" } });
     const transcribed = await db.select().from(schema.feedbackAutowriterCalls).where(eq(schema.feedbackAutowriterCalls.role, "transcriber"));
     expect(transcribed).toHaveLength(1); // the transcription is paid for once
@@ -822,7 +827,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, { callModel: model.callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
       .toMatchObject({ result: "held", detail: "recording_too_short" });
     expect(model.calls).toEqual([]);
-    expect(soniox.removed).toEqual(["job-1"]);
+    expect(soniox.removed).toEqual([]); // kept so the hold can be reviewed
     expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ transcript: { audioMinutes: 20 } });
   });
 
@@ -943,24 +948,58 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
         .toMatchObject({ result: "verified" });
       expect(soniox.created).toEqual([]);
       expect(soniox.polled[0]).toBe("job-other");
-      expect(soniox.removed).toEqual(["job-other"]);
+      expect(soniox.removed).toEqual([]); // kept for review
     } finally {
       await db.execute(sql.raw("DROP TRIGGER IF EXISTS autowriter_test_race ON feedback_autowriter_sessions"));
       await db.execute(sql.raw("DROP FUNCTION IF EXISTS autowriter_test_race()"));
     }
   });
 
-  it("deletes a shadow draft's Soniox job; the sweep retries a delete that failed", async () => {
+  it("keeps a finished class's Soniox job for review, and the sweep deletes it once triaged or after 72 h", async () => {
     await updateControl(db, { mode: "shadow" }, "t@x.com");
     await seedRow({ state: "awaiting_recording", evidence: "transcript" });
-    const refusing = fakeSoniox({ removeFails: true });
-    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, refusing.client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fakeSoniox().client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
       .toMatchObject({ result: "would_submit" });
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "would_submit", sonioxTranscriptionId: "job-1" });
+
+    // Inside the review window, and neither the reaper nor the cleanup touch it.
+    const early = fakeSoniox({ listed: [{ id: "job-1", createdAt: new Date(Date.now() - 5 * 3600_000), clientReferenceId: SESSION_ID, status: "completed" }] });
+    await runSweep(transcriptDeps(fakeWise().ops, early.client));
+    expect(early.removed).toEqual([]);
+
+    // Triaged: deleted at the next sweep, and the id is cleared.
+    await db.update(S).set({ metadata: sql`${S.metadata} || '{"triagedAt":"2026-09-29T15:00:00.000Z"}'::jsonb` as never }).where(eq(S.wiseSessionId, SESSION_ID));
+    const refusing = fakeSoniox({ removeFails: true });
+    await runSweep(transcriptDeps(fakeWise().ops, refusing.client));
+    expect((await readSessionRow(db, SESSION_ID))?.sonioxTranscriptionId).toBe("job-1"); // a refused delete is retried
     const working = fakeSoniox();
     await runSweep(transcriptDeps(fakeWise().ops, working.client));
     expect(working.removed).toEqual(["job-1"]);
     expect((await readSessionRow(db, SESSION_ID))?.sonioxTranscriptionId).toBeNull();
+
+    // A window that ran out without triage: deleted too.
+    await db.update(S).set({
+      sonioxTranscriptionId: "job-2",
+      metadata: sql`(${S.metadata} - 'triagedAt') || '{"sonioxRetainUntil":"2026-01-01T00:00:00.000Z"}'::jsonb` as never,
+    }).where(eq(S.wiseSessionId, SESSION_ID));
+    const expired = fakeSoniox();
+    await runSweep(transcriptDeps(fakeWise().ops, expired.client));
+    expect(expired.removed).toEqual(["job-2"]);
+  });
+
+  it("holds a class for a person after its third unexpected error instead of retrying to the deadline", async () => {
+    await seedRow({ metadata: { genericErrors: 2 } });
+    const wise = fakeWise();
+    const exploding = vi.fn(async () => { throw new Error("The operation was aborted due to timeout"); });
+    expect(await processSession(deps(wise.ops, { callModel: exploding as never }), { wiseSessionId: SESSION_ID, wiseClassId: CLASS_ID, trigger: "cron" }))
+      .toMatchObject({ result: "held", detail: "error:The operation was aborted due to timeout" });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "held", metadata: { genericErrors: 3, alertKind: "held" } });
+
+    await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
+    await seedRow();
+    expect(await processSession(deps(fakeWise().ops, { callModel: exploding as never }), { wiseSessionId: SESSION_ID, wiseClassId: CLASS_ID, trigger: "cron" }))
+      .toMatchObject({ result: "infra" });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "pending", metadata: { genericErrors: 1 } });
   });
 
   it("raises no no-recording alert for a tutor who is switched off", async () => {

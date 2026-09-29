@@ -89,9 +89,11 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
    (`recording_too_short`): Wise's `rawRecordings[].duration` (seconds) is checked before the job — held only when
    still short 30 minutes after it was first seen short, in case the first length was not final — and Soniox's audio
    length after it;
-2. fetches the transcript. BGScheduler never stores it; the Soniox job is kept only until a judged draft is stored
-   or the class is finished (so a retry re-fetches instead of transcribing again), then deleted. A delete that fails
-   keeps the job id so the sweep retries it, and the sweep also reaps jobs no row references after 2 hours;
+2. fetches the transcript. BGScheduler never stores it. The Soniox job is kept while the class is in progress (so a
+   retry re-fetches instead of transcribing again) and, once the class is finished, for review (triage) until the
+   class is triaged or at most 72 hours (owner decision, 29 Sep; `metadata.sonioxRetainUntil`), then the sweep
+   deletes it. A delete that fails keeps the job id so the sweep retries it, and the sweep also reaps jobs no row
+   references after 2 hours;
 3. tells tutor from student by lining up Soniox's speakers with Zoom's name-labelled WEBVTT (`rawTranscript`) — every
    speaker that overlaps the teacher's cues is TUTOR, so a diarization split cannot turn the tutor into the student;
    cues under any of the tutor's other names (their other account, a second device) count as the teacher's.
@@ -126,6 +128,13 @@ Pilot (2026-09-29, 8 classes): on Thai/English lessons Soniox kept the English t
 was preferred in 17 of 18 compared windows; no gain on English-only lessons.
 
 Switch: `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED=true` plus `SONIOX_API_KEY`; off → the fast path behaves as before.
+
+## Robustness and traceability
+- A timeout while reading a model or Soniox reply is an ordinary timeout (retried later), never an unhandled error.
+- Any unexpected error is retried, but the third one on the same class holds it for a person with an alert
+  (`metadata.genericErrors`), instead of retrying until the deadline.
+- Every draft and POST claim carries `metadata.pipeline`: the deploy's commit (`VERCEL_GIT_COMMIT_SHA`), the prompt
+  and judge versions, the model arm and the evidence, so any post can be traced to the code that wrote it.
 
 ## States (`feedback_autowriter_sessions.state`)
 

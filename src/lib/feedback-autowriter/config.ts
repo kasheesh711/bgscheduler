@@ -152,6 +152,10 @@ export const AUTOWRITER_TRANSCRIBE_TIMEOUT_MS = 60 * 60 * 1000;
 export const AUTOWRITER_TRANSCRIBE_POLL_MS = 10_000;
 /** Soniox failures on one class before it is held for a person. */
 export const AUTOWRITER_MAX_TRANSCRIBE_ERRORS = 3;
+/** Unexpected errors on one class before it is held for a person (instead of retrying until the deadline). */
+export const AUTOWRITER_MAX_GENERIC_ERRORS = 3;
+/** A finished class keeps its Soniox transcript this long for review (triage), then the sweep deletes it. */
+export const AUTOWRITER_SONIOX_RETAIN_MS = 72 * 60 * 60 * 1000;
 /** A rendered transcript shorter than this is not enough to write from. */
 export const AUTOWRITER_MIN_TRANSCRIPT_CHARACTERS = 800;
 /** Still waiting for the recording this long after class → `no_recording` alert (not only at the deadline). */
