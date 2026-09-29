@@ -32,7 +32,7 @@ import {
   studentParticipants,
 } from "./session";
 import type { WiseFeedbackOps } from "./submit";
-import { AUTOWRITER_MODELS, AUTOWRITER_WISE_READ_TIMEOUT_MS, type AutowriterModelConfig } from "./config";
+import { AUTOWRITER_MODELS, AUTOWRITER_POST_TIMEOUT_MS, AUTOWRITER_WISE_READ_TIMEOUT_MS, type AutowriterModelConfig } from "./config";
 import {
   AUTOWRITER_DEADLINE_MARGIN_MS,
   AUTOWRITER_MIN_SUMMARY_CHARACTERS,
@@ -277,7 +277,7 @@ export function createWiseFeedbackOps(input: { stopFile?: string } = {}): WiseFe
             "user-agent": `VendorIntegrations/${credentials.namespace}`,
           },
           body: JSON.stringify(body),
-          signal: AbortSignal.timeout(60_000),
+          signal: AbortSignal.timeout(AUTOWRITER_POST_TIMEOUT_MS),
         });
       } catch (error) {
         return { kind: "unknown", error: error instanceof Error ? error.name : "Error" };

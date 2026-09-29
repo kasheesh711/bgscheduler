@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { FeedbackFieldAnswers, FeedbackFieldMapping } from "@/lib/post-class-feedback/types";
 import { POST_CLASS_FEEDBACK_FIELDS } from "@/lib/post-class-feedback/types";
-import { AUTOWRITER_MIN_POST_BUDGET_MS } from "./config";
+import { AUTOWRITER_MIN_POST_BUDGET_MS, AUTOWRITER_POST_TIMEOUT_MS } from "./config";
 import {
   buildFeedbackPostBody,
   classifyTeacherSubmission,
@@ -154,8 +154,6 @@ export function isReadFailure(problem: string): boolean {
   return /^(verify_read_failed|credits_reread_failed):/u.test(problem);
 }
 
-/** Upper bound of one POST request (its client time-out), for rows whose response time was not recorded. */
-export const POST_REQUEST_MAX_MS = 60_000;
 
 /**
  * Classify SessionFeedbackSubmittedEvent rows around one POST.
@@ -173,7 +171,7 @@ export function classifySubmitEvents(events: readonly SubmitFeedbackEvent[], inp
   postFinishedAt?: Date | null;
 }): { ours: SubmitFeedbackEvent | undefined; foreign: SubmitFeedbackEvent[] } {
   const windowStart = input.freshReadAt.getTime() - 5_000;
-  const windowEnd = (input.postFinishedAt?.getTime() ?? input.postStartedAt.getTime() + POST_REQUEST_MAX_MS) + 5_000;
+  const windowEnd = (input.postFinishedAt?.getTime() ?? input.postStartedAt.getTime() + AUTOWRITER_POST_TIMEOUT_MS) + 5_000;
   const ours = events.find((event) => event.autoSubmitted !== true && event.actorId === input.apiActorId &&
     event.at.getTime() >= input.postStartedAt.getTime() - 5_000);
   const foreign = events.filter((event) => event.autoSubmitted !== true && event.actorId !== input.apiActorId &&

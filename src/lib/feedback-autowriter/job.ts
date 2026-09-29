@@ -378,6 +378,8 @@ async function processLeased(deps: AutowriterDeps, input: {
     const blockedByOtherPost = outcome.status === "not_claimed" && outcome.reason === "post_in_flight";
     if (!blockedByOtherPost || attempt >= AUTOWRITER_POST_IN_FLIGHT_ATTEMPTS ||
       remaining(deps) < AUTOWRITER_MIN_POST_BUDGET_MS + AUTOWRITER_POST_IN_FLIGHT_WAIT_MS + 60_000) break;
+    // The blocking POST now waits for the sweep: stop spending Wise reads on it.
+    if (await stuckPostInFlight(db, AUTOWRITER_STALE_POSTING_MS)) break;
     await sleep(AUTOWRITER_POST_IN_FLIGHT_WAIT_MS);
   }
 

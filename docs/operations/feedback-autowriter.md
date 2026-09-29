@@ -74,8 +74,9 @@ if needed (feedback text, credits), then `--resume`.
 While halted nothing is drafted (no model calls); rows still expire with alerts so a person can write them.
 The cron reports `ok:false` (503) while halted, so the cron watchdog emails admins.
 
-A POST whose read-back failed stays `posting` and blocks every other POST (one in flight at a time) until the
-sweep reconciles it, 6+ minutes later; meanwhile no session is drafted (no model calls). If Wise reads keep
+A POST whose read-back failed stays `posting`, and one whose Wise submit event has not appeared yet sits in
+`awaiting_event`; either blocks every other POST (one unsettled POST at a time) until the sweep reconciles it,
+6+ minutes later; meanwhile no session is drafted (no model calls). If Wise reads keep
 failing, Data Health shows the sweep's infrastructure errors; after 2 hours the row becomes `verify_failed` and the
 autowriter halts.
 

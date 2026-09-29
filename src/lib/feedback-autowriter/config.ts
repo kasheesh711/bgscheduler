@@ -93,6 +93,8 @@ export const AUTOWRITER_GENERATION_LEASE_MS = 14 * 60 * 1000;
  * is bounded by request time-outs (POST 60 s, reads 45 s each, event wait 20 s).
  */
 export const AUTOWRITER_STALE_POSTING_MS = 6 * 60 * 1000;
+/** The feedback POST request's time-out (also bounds the overwrite-check window when its end is unknown). */
+export const AUTOWRITER_POST_TIMEOUT_MS = 60_000;
 /** Every Wise read (including its paced retries) gives up after this long. */
 export const AUTOWRITER_WISE_READ_TIMEOUT_MS = 45_000;
 /**

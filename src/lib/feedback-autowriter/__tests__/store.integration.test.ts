@@ -143,6 +143,25 @@ describe("feedback autowriter store (Postgres)", () => {
     expect((await readSessionRow(db, loser))?.metadata).toMatchObject({ freshReadAt: claimInput.freshReadAt.toISOString() });
   });
 
+  it("keeps the lock while a POST awaits its confirming event (it can still become a halt)", async () => {
+    await updateControl(db, { mode: "live" }, "t@x.com");
+    await ensureSessionRow(db, {
+      wiseSessionId: OTHER_SESSION, wiseClassId: "6a0000000000000000000011", wiseTeacherUserId: TEACHER,
+      scheduledEndAt: new Date(Date.now() - 60 * 60 * 1000), deadlineAt: new Date(Date.now() + 24 * 60 * 60 * 1000), trigger: "test",
+    });
+    await db.update(schema.feedbackAutowriterSessions).set({ state: "awaiting_event", postStartedAt: sql`now() - interval '1 minute'` })
+      .where(eq(schema.feedbackAutowriterSessions.wiseSessionId, OTHER_SESSION));
+    const token = (await claimGeneration(db, SESSION, 60_000))!;
+    expect(await sessionSubmitStore(db, SESSION, token).claimPost(claimInput)).toEqual({ claimed: false, reason: "post_in_flight" });
+    expect(await stuckPostInFlight(db, 6 * 60 * 1000)).toBe(false);
+    await db.update(schema.feedbackAutowriterSessions).set({ postStartedAt: sql`now() - interval '10 minutes'` })
+      .where(eq(schema.feedbackAutowriterSessions.wiseSessionId, OTHER_SESSION));
+    expect(await stuckPostInFlight(db, 6 * 60 * 1000)).toBe(true);
+    await db.update(schema.feedbackAutowriterSessions).set({ state: "verified" })
+      .where(eq(schema.feedbackAutowriterSessions.wiseSessionId, OTHER_SESSION));
+    expect(await sessionSubmitStore(db, SESSION, token).claimPost(claimInput)).toEqual({ claimed: true });
+  });
+
   it("maps the unique-index race (23505, wrapped by drizzle) to post_in_flight", async () => {
     await updateControl(db, { mode: "live" }, "t@x.com");
     await ensureSessionRow(db, {

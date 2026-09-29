@@ -50,10 +50,11 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
    [`submitFeedbackGuarded`](../../src/lib/feedback-autowriter/submit.ts): credit baseline → fresh read (all gates
    again) → POST claim → one POST (never retried) → read-back of text, status, credits and the session's single
    credit entry → a non-auto submit event by the API owner (`WISE_USER_ID`). The claim needs a valid lease, mode
-   `live`, no halt, the teacher from the fresh read equal to the stored one and switched on, **no other POST in
-   flight** (a partial unique index allows one `posting` row institution-wide; a second session re-checks every
-   10 s for up to ~80 s, then leaves it to the next sweep), and at least 240 s of function time for the POST phase.
-   While a `posting` row is stuck waiting for reconciliation (older than 6 min), nothing is drafted at all.
+   `live`, no halt, the teacher from the fresh read equal to the stored one and switched on, **no other unsettled
+   POST** (`posting` or `awaiting_event` — the latter can still turn into a halt, so it keeps the lock; the claim
+   checks both and a partial unique index on `posting` settles simultaneous claims; a second session re-checks
+   every 10 s for up to ~80 s, then leaves it to the next sweep), and at least 240 s of function time for the POST
+   phase. While an unsettled POST is older than 6 min (waiting for the sweep), nothing is drafted at all.
    A shadow draft finished after the owner switched to `live` goes back to `pending` (atomically with the mode),
    so it is posted rather than stranded in `would_submit`.
 

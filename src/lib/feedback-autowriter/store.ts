@@ -172,15 +172,19 @@ function isUniqueViolation(error: unknown): boolean {
     (candidate.code === "23505" || candidate.cause?.code === "23505");
 }
 
-async function anotherPostInFlight(db: Database, wiseSessionId: string): Promise<boolean> {
-  const [row] = await db.select({ id: S.id }).from(S)
-    .where(and(eq(S.state, "posting"), sql`${S.wiseSessionId} <> ${wiseSessionId}`)).limit(1);
-  return Boolean(row);
-}
+/**
+ * States of a POST whose outcome is not settled yet. Only one may exist at a
+ * time: `awaiting_event` can still turn into a halt (a save found inside the
+ * POST window, or no event for 2 h), so it keeps the lock like `posting` does.
+ * The claim's NOT EXISTS enforces it; the partial unique index on `posting`
+ * settles two claims racing at the same instant.
+ */
+export const UNSETTLED_POST_STATES = ["posting", "awaiting_event"] as const;
+const unsettledPostSql = sql`p.state in ('posting', 'awaiting_event')`;
 
 /**
- * Why a POST claim updated nothing. `post_in_flight` only when every other
- * condition held, so a halt or pause is never retried as "busy".
+ * Why a POST claim updated nothing. When mode, halt, tutor, lease and teacher
+ * all hold, the only remaining cause is another unsettled POST.
  */
 async function claimRefusalReason(db: Database, wiseSessionId: string, token: string, teacherId: string): Promise<"post_in_flight" | "conditions"> {
   const control = await readControl(db);
@@ -192,17 +196,17 @@ async function claimRefusalReason(db: Database, wiseSessionId: string, token: st
     sql`${S.leaseUntil} > now()`,
     eq(S.wiseTeacherUserId, teacherId),
   )).limit(1);
-  if (!row) return "conditions";
-  return await anotherPostInFlight(db, wiseSessionId) ? "post_in_flight" : "conditions";
+  return row ? "post_in_flight" : "conditions";
 }
 
 /**
- * A POST that has been `posting` this long is not a live request any more (the
- * POST phase is bounded by its time-outs): it waits for reads-only reconciliation.
+ * An unsettled POST this old is not a live request any more (the POST phase is
+ * bounded by its time-outs): it waits for reads-only reconciliation by the sweep,
+ * and blocks every other POST until then.
  */
 export async function stuckPostInFlight(db: Database, olderThanMs: number): Promise<boolean> {
   const [row] = await db.select({ id: S.id }).from(S).where(and(
-    eq(S.state, "posting"),
+    inArray(S.state, [...UNSETTLED_POST_STATES]),
     sql`${S.postStartedAt} < now() - (${olderThanMs} * interval '1 millisecond')`,
   )).limit(1);
   return Boolean(row);
@@ -220,7 +224,9 @@ export async function releaseShadowDraft(db: Database, wiseSessionId: string, to
   billing: BillingPlan;
   metadata: Record<string, unknown>;
 }): Promise<"would_submit" | "pending" | null> {
-  const live = sql`exists (select 1 from feedback_autowriter_control c where c.id = 'default' and c.mode = 'live')`;
+  // FOR SHARE: a concurrent switch to live (and its re-queue) waits for this
+  // statement, so the draft is either re-queued by it or sent back to pending here.
+  const live = sql`(select c.mode from feedback_autowriter_control c where c.id = 'default' for share) = 'live'`;
   const rows = await db.update(S).set({
     state: sql`case when ${live} then 'pending' else 'would_submit' end`,
     reason: sql`case when ${live} then 'mode_switched_to_live' else 'shadow' end`,
@@ -270,8 +276,8 @@ export function sessionSubmitStore(
           eq(S.wiseTeacherUserId, input.teacherId),
           sql`exists (select 1 from feedback_autowriter_control c where c.id = 'default' and c.mode = 'live'
             and c.halted_at is null and not (c.disabled_tutors ? ${input.teacherId}))`,
-          // One POST in flight at a time; the partial unique index settles a race.
-          sql`not exists (select 1 from feedback_autowriter_sessions p where p.state = 'posting')`,
+          // One unsettled POST at a time; the partial unique index settles a race.
+          sql`not exists (select 1 from feedback_autowriter_sessions p where ${unsettledPostSql})`,
         )).returning({ id: S.id });
       } catch (error) {
         if (isUniqueViolation(error)) return { claimed: false, reason: "post_in_flight" };
