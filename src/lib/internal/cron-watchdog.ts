@@ -125,7 +125,8 @@ export function payoutWindowJobHealth(staleness: PayoutWindowStaleness): CronJob
     healthDetail: staleness.detail,
     latestInvocation: null,
     recentInvocations: [],
-    canRunManually: accrual?.manualOnly ?? true,
+    // A synthetic health row has no Run action of its own (fail-closed).
+    canRunManually: false,
   };
 }
 
@@ -185,7 +186,8 @@ export function deadlineCoverageJobHealth(coverage: FeedbackDeadlineCoverage): C
     healthDetail: coverage.detail,
     latestInvocation: null,
     recentInvocations: [],
-    canRunManually: collection?.manualOnly ?? true,
+    // A synthetic health row has no Run action of its own (fail-closed).
+    canRunManually: false,
   };
 }
 

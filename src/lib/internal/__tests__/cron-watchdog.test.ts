@@ -1,6 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
+
+// Both real source definitions are manualOnly: false; this switch makes them missing or manual-only to reach the fallback paths.
+const registry = vi.hoisted(() => ({ mode: "actual" as "actual" | "missing" | "manual-only" }));
+
+vi.mock("@/lib/data-health/cron-registry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/data-health/cron-registry")>();
+  return {
+    ...actual,
+    getCronJobDefinition: (key: string) => {
+      const definition = actual.getCronJobDefinition(key);
+      if (registry.mode === "missing") return null;
+      return registry.mode === "manual-only" && definition ? { ...definition, manualOnly: true } : definition;
+    },
+  };
+});
 
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -11,7 +26,9 @@ import type { PayoutWindowStaleness } from "@/lib/post-class-feedback/payout-win
 import {
   buildWatchdogEmail,
   DEADLINE_COVERAGE_JOB_KEY,
+  deadlineCoverageJobHealth,
   PAYOUT_WINDOW_JOB_KEY,
+  payoutWindowJobHealth,
   runCronWatchdog,
   sweepCronJobs,
   SWEEP_LOCK_KEY,
@@ -876,5 +893,15 @@ describe("private weekend watchdog routing", () => {
         loadJobs: loadJobs([jobHealth({ key: "classroom_weekend_check", status: "failing" })]) });
       expect(sender.sendEmail).not.toHaveBeenCalled();
     } finally { vi.unstubAllEnvs(); error.mockRestore(); }
+  });
+});
+
+describe("synthetic watchdog rows", () => {
+  afterEach(() => { registry.mode = "actual"; });
+
+  it.each(["actual", "missing", "manual-only"] as const)("never offer a Run action when the source definition is %s", (mode) => {
+    registry.mode = mode;
+    expect(payoutWindowJobHealth(payoutWindow()).canRunManually).toBe(false);
+    expect(deadlineCoverageJobHealth(deadlineCoverage()).canRunManually).toBe(false);
   });
 });
