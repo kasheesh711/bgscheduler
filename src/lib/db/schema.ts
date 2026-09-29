@@ -6145,7 +6145,11 @@ export const feedbackAutowriterSessions = pgTable("feedback_autowriter_sessions"
   state: text("state").$type<
     | "pending" | "generating" | "would_submit" | "posting" | "awaiting_event" | "verified" | "held"
     | "skipped_human" | "skipped_scope" | "expired" | "rejected" | "unknown_outcome" | "verify_failed"
+    | "awaiting_recording" | "transcribing"
   >().notNull().default("pending"),
+  /** What the draft is written from: Wise's AI summary, or the Soniox transcript (second pass, 0098). */
+  evidence: text("evidence").$type<"summary" | "transcript">().notNull().default("summary"),
+  sonioxTranscriptionId: text("soniox_transcription_id"),
   reason: text("reason"),
   attempts: integer("attempts").notNull().default(0),
   retryCount: integer("retry_count").notNull().default(0),
@@ -6173,12 +6177,12 @@ export const feedbackAutowriterSessions = pgTable("feedback_autowriter_sessions"
     .where(sql`${table.state} = 'posting'`),
 ]);
 
-/** One row per OpenRouter call (writer or judge) with billed usage. */
+/** One row per billed model call: OpenRouter writer/judge, or a Soniox transcription. */
 export const feedbackAutowriterCalls = pgTable("feedback_autowriter_calls", {
   id: uuid("id").primaryKey().defaultRandom(),
   wiseSessionId: text("wise_session_id").notNull(),
-  role: text("role").$type<"writer" | "judge">().notNull(),
-  arm: text("arm").$type<"glm" | "luna">().notNull(),
+  role: text("role").$type<"writer" | "judge" | "transcriber">().notNull(),
+  arm: text("arm").$type<"glm" | "luna" | "soniox">().notNull(),
   requestedModel: text("requested_model").notNull(),
   resolvedModel: text("resolved_model"),
   provider: text("provider"),

@@ -28,6 +28,8 @@ const STATE_LABEL: Record<string, string> = {
   verify_failed: "Verify failed",
   pending: "Waiting",
   generating: "Writing",
+  awaiting_recording: "Waiting for recording",
+  transcribing: "Transcribing",
 };
 
 const STATE_TONE: Record<string, string> = {
@@ -35,6 +37,8 @@ const STATE_TONE: Record<string, string> = {
   awaiting_event: "border-available/30 bg-available/10 text-available",
   posting: "border-sky-300 bg-sky-50 text-sky-800 dark:bg-sky-950 dark:text-sky-200",
   would_submit: "border-sky-300 bg-sky-50 text-sky-800 dark:bg-sky-950 dark:text-sky-200",
+  awaiting_recording: "border-violet-300 bg-violet-50 text-violet-800 dark:bg-violet-950 dark:text-violet-200",
+  transcribing: "border-violet-300 bg-violet-50 text-violet-800 dark:bg-violet-950 dark:text-violet-200",
   held: "border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
   expired: "border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
   rejected: "border-red-300 bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-200",
@@ -104,6 +108,7 @@ function Section({ title, count, children, action }: { title: string; count?: nu
 function modelLabel(model: string): string {
   if (model.startsWith("z-ai/glm")) return "GLM Flash";
   if (model.startsWith("openai/gpt-6-luna")) return "GPT-6 Luna";
+  if (model.startsWith("stt-async")) return "Soniox transcription";
   return model;
 }
 
@@ -255,9 +260,11 @@ export function FeedbackAutowriterDashboard({ initialData, canControl }: {
         </div>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-9">
         <Kpi label="Posted to Wise" value={String(totals.posted)} detail={`${totals.verified} confirmed`} tone="good" />
         <Kpi label="Shadow drafts" value={String(totals.shadowDrafts)} detail="written, not posted" />
+        <Kpi label="From recording" value={String(totals.awaitingRecording)}
+          detail={`waiting · ${totals.fromTranscript} posted from a transcript`} />
         <Kpi label="Held for a person" value={String(totals.held)} tone={totals.held > 0 ? "warning" : "default"} />
         <Kpi label="Tutor wrote first" value={String(totals.skippedHuman)} detail={`${totals.skippedScope} out of scope`} />
         <Kpi label="Expired / failed" value={`${totals.expired} / ${totals.failed}`} tone={totals.failed > 0 ? "danger" : totals.expired > 0 ? "warning" : "default"} />
@@ -343,7 +350,10 @@ export function FeedbackAutowriterDashboard({ initialData, canControl }: {
                   <TableCell>
                     <Badge variant="outline" className={cn("whitespace-nowrap", STATE_TONE[row.state])}>{STATE_LABEL[row.state] ?? row.state}</Badge>
                   </TableCell>
-                  <TableCell className="whitespace-nowrap">{row.arm === "luna" ? "GPT-6 Luna" : row.arm === "glm" ? "GLM Flash" : "—"}</TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    {row.arm === "luna" ? "GPT-6 Luna" : row.arm === "glm" ? "GLM Flash" : "—"}
+                    {row.evidence === "transcript" ? <span className="ml-1 text-[10px] uppercase text-muted-foreground">· transcript</span> : null}
+                  </TableCell>
                   <TableCell className="text-right whitespace-nowrap">{minutes(row.latencyMinutes)}</TableCell>
                   <TableCell className="text-right">{usd(row.costUsd)}</TableCell>
                   <TableCell className="min-w-64">

@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildFeedbackPostBody,
   classifyGateReason,
+  recordingForTranscription,
+  recordingTooShort,
+  zoomTranscriptUrl,
   classifyTeacherSubmission,
   evaluateSessionGates,
   extractAiSummary,
@@ -96,6 +99,34 @@ describe("evaluateSessionGates", () => {
     expect(evaluateSessionGates(parse({ participants }), gateInput)).toEqual({ ok: false, reason: "attendance_20pct" });
     const extra = [...sessionDetail().participants, { wiseUserId: "other", name: "Other", isTeacher: false, absolutePercentAttendance: 90 }];
     expect(evaluateSessionGates(parse({ participants: extra }), gateInput)).toEqual({ ok: false, reason: "student_count_2" });
+  });
+});
+
+describe("second-pass inputs", () => {
+  it("does not require a summary when writing from a transcript", () => {
+    expect(evaluateSessionGates(parse({ rawMeetingSummary: [] }), { ...gateInput, requireSummary: false })).toEqual({ ok: true });
+    expect(evaluateSessionGates(parse({ rawMeetingSummary: [] }), gateInput)).toEqual({ ok: false, reason: "no_ai_summary" });
+  });
+
+  it("finds the single composite recording and Zoom's transcript", () => {
+    expect(recordingForTranscription(parse())).toEqual({ ok: false, reason: "recording_not_ready" });
+    expect(recordingForTranscription(parse({ rawRecordings: [{ url: "https://files.wiseapp.live/a.mp4", partIndex: 1 }] })))
+      .toEqual({ ok: true, url: "https://files.wiseapp.live/a.mp4", durationSeconds: null });
+    expect(recordingForTranscription(parse({ rawRecordings: [{ url: "https://files.wiseapp.live/a.mp4", partIndex: 1, duration: 3520 }] })))
+      .toEqual({ ok: true, url: "https://files.wiseapp.live/a.mp4", durationSeconds: 3520 });
+    expect(recordingForTranscription(parse({ rawRecordings: [{ url: "https://x/1.mp4" }, { url: "https://x/2.mp4" }] })))
+      .toEqual({ ok: false, reason: "recording_multiple_parts" });
+    expect(zoomTranscriptUrl(parse({ rawTranscript: [{ url: "https://files.wiseapp.live/t.vtt" }] }))).toBe("https://files.wiseapp.live/t.vtt");
+    expect(zoomTranscriptUrl(parse({ rawTranscript: [{ file: { path: "https://x/p.vtt" } }] }))).toBe("https://x/p.vtt");
+    expect(zoomTranscriptUrl(parse())).toBeNull();
+  });
+
+  it("calls a recording under 70% of the scheduled class too short (Wise gives seconds)", () => {
+    expect(recordingTooShort(3520, 60)).toBe(false); // a normal 60-min class: 58.7 min
+    expect(recordingTooShort(2520, 60)).toBe(false); // 70% exactly
+    expect(recordingTooShort(2519, 60)).toBe(true);
+    expect(recordingTooShort(null, 60)).toBe(false); // unknown length: Soniox's own length is checked later
+    expect(recordingTooShort(0, 60)).toBe(false);
   });
 });
 

@@ -494,6 +494,8 @@ The manual operations owner is the exact normalized identity `kevhsh7@gmail.com`
 | `WISE_WEBHOOKS_ENABLED` | Receiver stores and dispatches deliveries | [`feedback-autowriter/webhook.ts`](../../src/lib/feedback-autowriter/webhook.ts) | Authenticated deliveries are acknowledged (200) and ignored |
 | `WISE_WEBHOOK_SECRET` | Shared key Wise sends with each delivery | [`api/wise/webhook/route.ts`](../../src/app/api/wise/webhook/route.ts) | Every delivery is refused (401) |
 | `WISE_WEBHOOK_AUTH_HEADER` | Pins the header carrying the key | same | Unset: the key is accepted from any header, and the first delivery logs the header's name to pin |
+| `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED` | Second pass: held / summary-less / Thai-summary classes are written from a Soniox transcript of the recording | [`feedback-autowriter/config.ts`](../../src/lib/feedback-autowriter/config.ts) | Off — exact `"true"` only |
+| `SONIOX_API_KEY` | Bearer key for Soniox async transcription | same | Second-pass classes are held with an alert (`transcript_pass_unavailable`) |
 
 Runtime modes (`off`/`shadow`/`live`), the halt and per-tutor switches live in the `feedback_autowriter_control`
 row, not in env ([runbook](../operations/feedback-autowriter.md)).

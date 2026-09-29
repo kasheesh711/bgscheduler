@@ -25,6 +25,7 @@ function session(id: string, patch: Partial<DashboardSessionRow>): DashboardSess
     state: "pending",
     reason: null,
     arm: null,
+    evidence: "summary",
     postStartedAt: null,
     fields: null,
     metadata: {},

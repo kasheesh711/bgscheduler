@@ -24,9 +24,12 @@ import { getDb } from "@/lib/db";
 import { assignModelArms } from "@/lib/feedback-autowriter/ab";
 import {
   autowriterAlertEmails,
+  autowriterTranscriptsEnabled,
   openRouterApiKey,
+  sonioxApiKey,
   wiseApiActorId,
 } from "@/lib/feedback-autowriter/config";
+import { createSonioxClient } from "@/lib/feedback-autowriter/soniox";
 import { processSession, runSweep, type AutowriterDeps } from "@/lib/feedback-autowriter/job";
 import { AUTOWRITER_ROSTER, AUTOWRITER_TEACHER_ALLOWLIST, KEVIN_ONLINE_WISE_USER_ID, rosterTutor } from "@/lib/feedback-autowriter/roster";
 import {
@@ -88,6 +91,8 @@ function cliDeps(budgetMs: number): AutowriterDeps {
     writesAllowedHere: true,
     deadlineMs: Date.now() + budgetMs,
     alertRecipients: autowriterAlertEmails(),
+    transcriptsEnabled: autowriterTranscriptsEnabled() && Boolean(sonioxApiKey()),
+    soniox: sonioxApiKey() ? createSonioxClient(sonioxApiKey()!) : null,
   };
 }
 

@@ -1,7 +1,7 @@
 import { redactKnownNames } from "@/lib/post-class-feedback/similarity";
 import type { AiSummary } from "./types";
 
-export const PROMPT_VERSION = 2;
+export const PROMPT_VERSION = 3;
 export const STUDENT_TOKEN = "[STUDENT_1]";
 export const TUTOR_TOKEN = "[TUTOR]";
 
@@ -124,23 +124,50 @@ export const FEEDBACK_JSON_SCHEMA = {
   },
 } as const;
 
-const SYSTEM_PROMPT = [
-  "You write the post-class feedback a tutor sends to a student's parents after a one-to-one online lesson.",
-  "You are given an automatically generated summary of the lesson. Write as the tutor, in the first person",
-  `("we" for work done together). Refer to the student only as ${STUDENT_TOKEN}. Never name the tutor or write ${TUTOR_TOKEN}.`,
-  "",
-  "Rules:",
-  "1. Use only facts stated or clearly implied by the summary. Never invent scores, topics, materials, homework, dates or events.",
-  "2. Never mention attendance, absence, lateness, cancellation, rescheduling, technical problems, recordings, transcripts, Zoom, AI or the summary itself.",
-  "3. Warm, clear, professional English that a parent can read. Plain sentences in short paragraphs; no headings, no markdown, no bullet symbols.",
-  "4. topics: the specific skills, sub-topics, question types, texts or papers covered.",
-  `5. performance: concrete observations of what ${STUDENT_TOKEN} did well and found difficult, with examples from this lesson.`,
-  "6. improvement: the specific weak areas and two or three concrete next steps or strategies to practise before the next lesson.",
-  "7. homework: only homework or tasks the summary says were set, with timing if stated. If the summary mentions none, return an empty string.",
-  "8. Length: topics, performance and improvement are each between 120 and 600 characters, and together at least 450 characters.",
-  "9. studentAttended is true only if the summary shows the student actively took part; lessonHappened is true only if a real lesson took place.",
-  "10. The class details come from the school's system and are accurate. Use them only to name the programme and subject correctly; everything about the lesson itself comes only from the summary.",
-].join("\n");
+/** What the draft is written from. */
+export type EvidenceKind = "summary" | "transcript";
+
+/** How trustworthy the TUTOR/STUDENT labels of a transcript are (see `assignSpeakerRoles`). */
+export type SpeakerLabels = "verified" | "inferred";
+
+export function speakerLabelNote(labels: SpeakerLabels): string {
+  return labels === "verified"
+    ? "The speaker labels TUTOR and STUDENT are reliable."
+    : "The speaker labels TUTOR and STUDENT were inferred from who talked most and may occasionally be wrong: " +
+      "only treat something as the student's own answer when it clearly is.";
+}
+
+function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels): string {
+  const record = evidence === "summary" ? "the summary" : "the transcript";
+  return [
+    "You write the post-class feedback a tutor sends to a student's parents after a one-to-one online lesson.",
+    evidence === "summary"
+      ? "You are given an automatically generated summary of the lesson. Write as the tutor, in the first person"
+      : "You are given an automatic transcript of the lesson. It may mix Thai and English; always write in English. " +
+        `${speakerLabelNote(labels)} Write as the tutor, in the first person`,
+    `("we" for work done together). Refer to the student only as ${STUDENT_TOKEN}. Never name the tutor or write ${TUTOR_TOKEN}.`,
+    "",
+    "Rules:",
+    `1. Use only facts stated or clearly implied by ${record}. Never invent scores, topics, materials, homework, dates or events.`,
+    "2. Never mention attendance, absence, lateness, cancellation, rescheduling, technical problems, recordings, transcripts, Zoom, AI or the summary itself.",
+    "3. Warm, clear, professional English that a parent can read. Plain sentences in short paragraphs; no headings, no markdown, no bullet symbols.",
+    "4. topics: the specific skills, sub-topics, question types, texts or papers covered.",
+    `5. performance: concrete observations of what ${STUDENT_TOKEN} did well and found difficult, with examples from this lesson. ` +
+      `Every judgement of how well ${STUDENT_TOKEN} did (confidently, well, engaged, quickly, struggled) must be stated in ${record}; ` +
+      `when ${record} does not say how it went, describe what ${STUDENT_TOKEN} worked on and practised instead of judging it.`,
+    "6. improvement: the specific weak areas and two or three concrete next steps or strategies to practise before the next lesson.",
+    `7. homework: only homework or tasks ${record} says were set, with timing if stated. If ${record} mentions none, return an empty string.`,
+    "8. Length: topics, performance and improvement are each between 120 and 600 characters, and together at least 450 characters.",
+    `9. studentAttended is true only if ${record} shows the student actively took part; lessonHappened is true only if a real lesson took place.`,
+    `10. The class details come from the school's system and are accurate. Use them only to name the programme and subject correctly; everything about the lesson itself comes only from ${record}.`,
+    ...(evidence === "transcript"
+      ? [
+        `11. Something the tutor explained was covered, not mastered: only say ${STUDENT_TOKEN} understood, solved or explained something when the transcript shows ${STUDENT_TOKEN} doing it.`,
+        `12. Names in the transcript may be written in Thai script; never repeat any name — write ${STUDENT_TOKEN} for the student.`,
+      ]
+      : []),
+  ].join("\n");
+}
 
 export interface PromptContext {
   studentFullName: string;
@@ -148,7 +175,11 @@ export interface PromptContext {
   /** `describeClass` lines (programme, class subject, confirmed terms). */
   classDetails: readonly string[];
   scheduledMinutes: number;
+  /** The lesson record: Wise's AI summary, or a rendered transcript (`evidence: "transcript"`). */
   summary: AiSummary;
+  evidence?: EvidenceKind;
+  /** Transcript mode only; default "inferred". */
+  speakerLabels?: SpeakerLabels;
 }
 
 /** Class-detail lines with names redacted, as a bullet block. */
@@ -161,10 +192,15 @@ export function classDetailsBlock(
 }
 
 export function buildFeedbackMessages(context: PromptContext): Array<{ role: "system" | "user"; content: string }> {
-  const summary = redactForModel(context.summary.text, context);
+  const evidence = context.evidence ?? "summary";
+  const record = redactForModel(context.summary.text, context);
   const details = classDetailsBlock(context.classDetails, context, [`Scheduled length: ${context.scheduledMinutes} minutes`]);
   return [
-    { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: `Class details (from the school's system):\n${details}\n\nLesson summary:\n${summary}` },
+    // Fails closed: a transcript is only called reliable when Zoom confirmed the labels.
+    { role: "system", content: systemPrompt(evidence, context.speakerLabels ?? "inferred") },
+    {
+      role: "user",
+      content: `Class details (from the school's system):\n${details}\n\n${evidence === "summary" ? "Lesson summary" : "Lesson transcript"}:\n${record}`,
+    },
   ];
 }

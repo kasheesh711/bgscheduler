@@ -6,6 +6,7 @@ import {
   parseStudentName,
   redactForModel,
   restoreStudentName,
+  speakerLabelNote,
 } from "../prompt";
 import { STUDENT_NAME } from "./fixtures";
 
@@ -57,7 +58,43 @@ describe("buildFeedbackMessages", () => {
     expect(user.content).toContain("- Programme: 11+/13+");
     expect(user.content).toContain("- Class subject: NVR");
     expect(system.content).toContain("Use them only to name the programme and subject correctly");
+    // Today's live drafts were rejected for unsupported praise ("engaged well", "handled confidently").
+    expect(system.content).toContain("Every judgement of how well [STUDENT_1] did");
     expect(`${system.content}${user.content}`).not.toMatch(/Somchai|Kevin/u);
+  });
+});
+
+describe("transcript mode", () => {
+  it("writes from a transcript in English and credits only what the student did", () => {
+    const [system, user] = buildFeedbackMessages({
+      studentFullName: STUDENT_NAME,
+      tutorNames,
+      classDetails: ["Programme: Y9-11 / G8-10 (Int.)", "Class subject: Math"],
+      scheduledMinutes: 60,
+      summary: { text: "[00:00] TUTOR: Somchai, let's try question 3\n[00:05] STUDENT: x equals 4", meetingUUIDs: [] },
+      evidence: "transcript",
+    });
+    expect(system.content).toContain("automatic transcript of the lesson");
+    expect(system.content).toContain("always write in English");
+    expect(system.content).toContain("covered, not mastered");
+    expect(user.content).toContain("Lesson transcript:");
+    expect(user.content).not.toContain("Somchai");
+    // Labels are only called reliable when Zoom confirmed them.
+    expect(system.content).toContain("were inferred from who talked most");
+  });
+
+  it("tells the writer the speaker labels are reliable only when Zoom confirmed them", () => {
+    const [system] = buildFeedbackMessages({
+      studentFullName: STUDENT_NAME,
+      tutorNames,
+      classDetails: [],
+      scheduledMinutes: 60,
+      summary: { text: "[00:00] TUTOR: let's try question 3", meetingUUIDs: [] },
+      evidence: "transcript",
+      speakerLabels: "verified",
+    });
+    expect(system.content).not.toContain("were inferred from who talked most");
+    expect(system.content).toContain(speakerLabelNote("verified"));
   });
 });
 

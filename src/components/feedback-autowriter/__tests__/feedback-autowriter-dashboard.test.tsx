@@ -10,7 +10,10 @@ function payload(overrides: Partial<AutowriterDashboard> = {}): AutowriterDashbo
     generatedAt: "2026-09-30T05:00:00.000Z",
     windowDays: 7,
     control: { mode: "shadow", haltedAt: null, haltReason: null, disabledTutors: [], updatedBy: "kevhsh7@gmail.com", updatedAt: "2026-09-30T01:00:00.000Z" },
-    totals: { seen: 5, posted: 2, verified: 2, awaitingEvent: 0, shadowDrafts: 1, held: 1, skippedHuman: 1, skippedScope: 0, expired: 0, failed: 0, inProgress: 0 },
+    totals: {
+      seen: 5, posted: 2, verified: 2, awaitingEvent: 0, shadowDrafts: 1, awaitingRecording: 1, fromTranscript: 1,
+      held: 1, skippedHuman: 1, skippedScope: 0, expired: 0, failed: 0, inProgress: 0,
+    },
     latency: { medianMinutes: 2.5, p90Minutes: 4, samples: 2 },
     cost: {
       totalUsd: 0.0076,
@@ -33,6 +36,7 @@ function payload(overrides: Partial<AutowriterDashboard> = {}): AutowriterDashbo
       state: "verified",
       reason: "verified",
       arm: "luna",
+      evidence: "transcript",
       postStartedAt: "2026-09-29T04:02:30.000Z",
       latencyMinutes: 2.5,
       costUsd: 0.0012,
@@ -55,6 +59,8 @@ describe("FeedbackAutowriterDashboard", () => {
     expect(html).toContain("GPT-6 Luna");
     expect(html).toContain("MeetingEndedEvent");
     expect(html).toContain("2.5 min");
+    expect(html).toContain("From recording");
+    expect(html).toContain("· transcript");
   });
 
   it("shows owner controls only to the owner", () => {

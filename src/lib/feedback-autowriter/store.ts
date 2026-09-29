@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
@@ -14,7 +14,7 @@ const S = schema.feedbackAutowriterSessions;
 export type AutowriterControl = typeof C.$inferSelect;
 export type AutowriterSessionRow = typeof S.$inferSelect;
 export type AutowriterState = AutowriterSessionRow["state"];
-export type AlertKind = "held" | "expired" | "no_summary" | "unknown_outcome" | "verify_failed" | "rejected";
+export type AlertKind = "held" | "expired" | "no_summary" | "no_recording" | "unknown_outcome" | "verify_failed" | "rejected";
 
 /** States a session never leaves automatically once reached (except via an owner action). */
 export const TERMINAL_STATES: readonly AutowriterState[] = [
@@ -110,8 +110,14 @@ export async function readSessionRow(db: Database, wiseSessionId: string): Promi
 }
 
 /**
- * `pending` (due) or an expired `generating` lease → `generating` with a fresh
- * token. One UPDATE, so concurrent webhook and cron workers cannot both win.
+ * States a worker may pick up when due: `pending` (fast path), and the second
+ * pass's `awaiting_recording` / `transcribing` (0098).
+ */
+export const WAITING_STATES = ["pending", "awaiting_recording", "transcribing"] as const;
+
+/**
+ * A due waiting state or an expired `generating` lease → `generating` with a
+ * fresh token. One UPDATE, so concurrent webhook and cron workers cannot both win.
  */
 export async function claimGeneration(
   db: Database,
@@ -121,9 +127,10 @@ export async function claimGeneration(
 ): Promise<string | null> {
   const token = randomUUID();
   // A webhook is new information from Wise, so it may skip the retry wait.
+  const waiting = inArray(S.state, [...WAITING_STATES]);
   const pendingDue = options.ignoreRetryWait
-    ? eq(S.state, "pending")
-    : and(eq(S.state, "pending"), or(isNull(S.nextAttemptAt), lte(S.nextAttemptAt, nowSql)));
+    ? waiting
+    : and(waiting, or(isNull(S.nextAttemptAt), lte(S.nextAttemptAt, nowSql)));
   const rows = await db.update(S).set({ state: "generating", leaseToken: token, leaseUntil: plusMs(ttlMs), updatedAt: nowSql })
     .where(and(eq(S.wiseSessionId, wiseSessionId), or(
       pendingDue,
@@ -146,11 +153,15 @@ export async function releaseGeneration(db: Database, wiseSessionId: string, tok
   billing?: BillingPlan | null;
   alertKind?: AlertKind | null;
   metadata?: Record<string, unknown>;
+  evidence?: "summary" | "transcript";
+  sonioxTranscriptionId?: string | null;
 }): Promise<boolean> {
   const rows = await db.update(S).set({
     state: to.state,
     reason: to.reason ?? null,
     nextAttemptAt: to.retryInMs !== undefined ? plusMs(to.retryInMs) : null,
+    ...(to.evidence !== undefined ? { evidence: to.evidence } : {}),
+    ...(to.sonioxTranscriptionId !== undefined ? { sonioxTranscriptionId: to.sonioxTranscriptionId } : {}),
     ...(to.countRetry ? { retryCount: sql`${S.retryCount} + 1` } : {}),
     ...(to.countAttempt ? { attempts: sql`${S.attempts} + 1` } : {}),
     ...(to.arm !== undefined ? { arm: to.arm } : {}),
@@ -326,15 +337,91 @@ export async function listRowsInState(db: Database, states: readonly AutowriterS
 }
 
 /**
- * Rows the sweep should work on, most urgent deadline first: due `pending`
- * rows, and `generating` rows whose worker died (expired lease) — those are
- * taken over by `claimGeneration`.
+ * Rows the sweep should work on, most urgent deadline first: due waiting rows
+ * (`pending`, `awaiting_recording`, `transcribing`), and `generating` rows whose
+ * worker died (expired lease) — those are taken over by `claimGeneration`.
  */
 export async function listDueRows(db: Database): Promise<AutowriterSessionRow[]> {
   return db.select().from(S).where(or(
-    and(eq(S.state, "pending"), or(isNull(S.nextAttemptAt), lte(S.nextAttemptAt, nowSql))),
+    and(inArray(S.state, [...WAITING_STATES]), or(isNull(S.nextAttemptAt), lte(S.nextAttemptAt, nowSql))),
     and(eq(S.state, "generating"), lte(S.leaseUntil, nowSql)),
   )).orderBy(sql`${S.deadlineAt} asc nulls last`);
+}
+
+/**
+ * Persist a submitted Soniox job while holding the lease, so a dead worker's
+ * job can be found again. Its submit time bounds how long it may keep running.
+ */
+export async function setSonioxTranscription(db: Database, wiseSessionId: string, token: string, transcriptionId: string): Promise<boolean> {
+  const rows = await db.update(S).set({
+    sonioxTranscriptionId: transcriptionId,
+    evidence: "transcript",
+    // App wall clock, as an ISO string, keyed to the job: the worker only times the job it is polling.
+    metadata: sql`${S.metadata} || ${JSON.stringify({ sonioxSubmittedJob: transcriptionId, sonioxSubmittedAt: new Date().toISOString() })}::jsonb`,
+    updatedAt: nowSql,
+  }).where(and(eq(S.wiseSessionId, wiseSessionId), eq(S.state, "generating"), eq(S.leaseToken, token)))
+    .returning({ id: S.id });
+  return rows.length > 0;
+}
+
+/**
+ * Rows whose Soniox job is no longer needed: finished rows, and shadow drafts
+ * (a judged draft is stored; the transcript is never read again).
+ */
+const SONIOX_DONE_STATES: readonly AutowriterState[] = [...TERMINAL_STATES, "would_submit"];
+
+/** Rows done with a Soniox job still recorded (a delete that failed): the sweep deletes those jobs. */
+export async function listSonioxCleanup(db: Database): Promise<Array<{ wiseSessionId: string; sonioxTranscriptionId: string }>> {
+  const rows = await db.select({ wiseSessionId: S.wiseSessionId, sonioxTranscriptionId: S.sonioxTranscriptionId })
+    .from(S).where(and(isNotNull(S.sonioxTranscriptionId), inArray(S.state, [...SONIOX_DONE_STATES])));
+  return rows.flatMap((row) => row.sonioxTranscriptionId ? [{ wiseSessionId: row.wiseSessionId, sonioxTranscriptionId: row.sonioxTranscriptionId }] : []);
+}
+
+/** Soniox job ids still needed by an unfinished row (the orphan reaper must not touch these). */
+export async function activeSonioxJobIds(db: Database): Promise<Set<string>> {
+  const rows = await db.select({ id: S.sonioxTranscriptionId }).from(S)
+    .where(and(isNotNull(S.sonioxTranscriptionId), notInArray(S.state, [...SONIOX_DONE_STATES])));
+  return new Set(rows.flatMap((row) => row.id ? [row.id] : []));
+}
+
+/** The transcription's cost is recorded once per job, however often its transcript is re-fetched. */
+export async function noteSonioxRecorded(db: Database, wiseSessionId: string, transcriptionId: string): Promise<void> {
+  await db.update(S).set({
+    metadata: sql`${S.metadata} || ${JSON.stringify({ sonioxRecordedJob: transcriptionId })}::jsonb`,
+    updatedAt: nowSql,
+  }).where(eq(S.wiseSessionId, wiseSessionId));
+}
+
+/**
+ * Classes still waiting for (or being transcribed from) the recording long
+ * after class: raise a `no_recording` alert once, instead of only at the
+ * deadline. Not for a switched-off tutor's classes (theirs to write), a
+ * recording waiting for its 30-min length recheck (held with its own alert
+ * next), or an infra retry (the recording may well be there).
+ */
+export async function flagNoRecording(db: Database, endedBefore: Date, disabledTutors: readonly string[] = []): Promise<number> {
+  const rows = await db.update(S).set({
+    metadata: sql`${S.metadata} || '{"alertKind":"no_recording"}'::jsonb`,
+    updatedAt: nowSql,
+  }).where(and(
+    inArray(S.state, ["awaiting_recording", "transcribing"]),
+    lt(S.scheduledEndAt, endedBefore),
+    sql`coalesce(${S.reason}, '') <> 'recording_too_short' and coalesce(${S.reason}, '') not like 'infra:%'`,
+    disabledTutors.length > 0
+      ? or(isNull(S.wiseTeacherUserId), notInArray(S.wiseTeacherUserId, [...disabledTutors]))
+      : undefined,
+    sql`not (${S.alertsSent} ? 'no_recording')`,
+    sql`coalesce(${S.metadata} ->> 'alertKind', '') <> 'no_recording'`,
+  )).returning({ id: S.id });
+  return rows.length;
+}
+
+export async function clearSonioxTranscription(db: Database, wiseSessionId: string, transcriptionId: string): Promise<void> {
+  await db.update(S).set({
+    sonioxTranscriptionId: null,
+    metadata: sql`${S.metadata} - 'sonioxSubmittedJob' - 'sonioxSubmittedAt'`,
+    updatedAt: nowSql,
+  }).where(and(eq(S.wiseSessionId, wiseSessionId), eq(S.sonioxTranscriptionId, transcriptionId)));
 }
 
 /** Wise now shows a different teacher: record it while holding the generation lease. */
@@ -355,7 +442,7 @@ export async function expireOverdueRows(db: Database, input: {
   disabledTutors: readonly string[];
 }): Promise<{ expired: number; handedBack: number }> {
   const overdue = and(
-    or(eq(S.state, "pending"), and(eq(S.state, "generating"), lte(S.leaseUntil, nowSql))),
+    or(inArray(S.state, [...WAITING_STATES]), and(eq(S.state, "generating"), lte(S.leaseUntil, nowSql))),
     lt(S.deadlineAt, input.cutoff),
   );
   const off = input.disabledTutors.length > 0 ? inArray(S.wiseTeacherUserId, [...input.disabledTutors]) : sql`false`;
@@ -396,7 +483,12 @@ export async function retryHeldSession(db: Database, wiseSessionId: string, inpu
     nextAttemptAt: null,
     leaseToken: null,
     leaseUntil: null,
-    metadata: sql`(${S.metadata} - 'alertKind') || ${JSON.stringify({ retriedBy: input.actor })}::jsonb
+    // A retry starts again on the fast path; it may still hand over to the transcript pass.
+    evidence: "summary",
+    // A clean slate: no stale alert, error count, coverage recheck or judged draft carries over
+    // (a kept Soniox job, and its submit time, may be re-used).
+    metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'recordingShortSeenAt' - 'judge' - 'draftEvidence' - 'transcript' - 'handover')
+      || ${JSON.stringify({ retriedBy: input.actor })}::jsonb
       || jsonb_build_object('retriedAt', now()::text, 'retriedFrom', ${S.state}::text)`,
     alertsSent: sql`${S.alertsSent} - 'held' - 'expired'`,
     updatedAt: nowSql,
@@ -443,6 +535,32 @@ export async function recordCall(db: Database, record: CallRecord): Promise<void
     latencyMs: record.call.latencyMs,
     result: record.result,
     promptVersion: record.promptVersion,
+  });
+}
+
+/** One Soniox transcription as a billed call (role `transcriber`, list-price cost). */
+export async function recordTranscriptionCall(db: Database, input: {
+  wiseSessionId: string;
+  ok: boolean;
+  audioDurationMs: number | null;
+  latencyMs: number;
+  costUsd: number | null;
+  error?: string | null;
+  result?: Record<string, unknown>;
+}): Promise<void> {
+  await db.insert(schema.feedbackAutowriterCalls).values({
+    wiseSessionId: input.wiseSessionId,
+    role: "transcriber",
+    arm: "soniox",
+    requestedModel: "stt-async-v5",
+    resolvedModel: "stt-async-v5",
+    provider: "Soniox",
+    ok: input.ok,
+    error: input.error ? input.error.slice(0, 300) : null,
+    costUsd: input.costUsd !== null ? input.costUsd.toFixed(8) : null,
+    latencyMs: input.latencyMs,
+    result: { audioDurationMs: input.audioDurationMs, ...(input.result ?? {}) },
+    promptVersion: 0,
   });
 }
 

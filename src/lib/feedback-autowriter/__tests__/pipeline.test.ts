@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenRouterCallResult } from "../openrouter";
 import { isInfraFailure, routeMismatch, runWritingPipeline, type CallRecord } from "../pipeline";
 import { AUTOWRITER_MODELS } from "../config";
+import { speakerLabelNote } from "../prompt";
 import { GOOD_FIELDS, STUDENT_NAME } from "./fixtures";
 
 const usage = { promptTokens: 1000, completionTokens: 2000, reasoningTokens: 1700, cachedTokens: 0, costUsd: 0.002 };
@@ -25,7 +26,7 @@ const LUNA = (content: string) => ok(content, "OpenAI", "openai/gpt-6-luna");
 const FAITHFUL = JSON.stringify({ faithful: true, unsupported: [] });
 const UNFAITHFUL = JSON.stringify({ faithful: false, unsupported: ["scored 95%"] });
 
-function run(replies: OpenRouterCallResult[]) {
+function run(replies: OpenRouterCallResult[], evidence: "summary" | "transcript" = "summary") {
   const records: CallRecord[] = [];
   const requests: Array<{ model: string; messages: Array<{ content: string }>; schemaName: string }> = [];
   const callModel = vi.fn(async (request: { model: string; messages: Array<{ role: string; content: string }>; schemaName: string }) => {
@@ -43,6 +44,7 @@ function run(replies: OpenRouterCallResult[]) {
       classDetails: ["Programme: 11+/13+", "Class subject: NVR", "Terms: 11+/13+ = the ISEB 11+/13+ entrance tests"],
       scheduledMinutes: 60,
       summary: { text: "Overview: Kevin and Somchai practised fractions; Somchai rushed simplification but corrected it.", meetingUUIDs: [] },
+      evidence,
     },
     tutorNames: ["Kevin Hsieh", "Kev"],
     priorFeedback: [],
@@ -120,6 +122,15 @@ describe("runWritingPipeline", () => {
     const twice = run([GLM(writerJson), GLM("not json"), GLM("{}")]);
     expect(await twice.promise).toEqual({ kind: "infra", error: "judge:judge_unparseable" });
     expect(twice.requests.map((request) => request.model)).not.toContain("openai/gpt-6-luna");
+  });
+
+  it("writes from a transcript on the zero-retention GLM route only — never the fallback host", async () => {
+    const { promise, requests } = run([GLM(writerJson), GLM(UNFAITHFUL)], "transcript");
+    expect(await promise).toMatchObject({ kind: "held" });
+    expect(requests.map((request) => request.model)).toEqual(["z-ai/glm-5.3-flash", "z-ai/glm-5.3-flash"]);
+    expect(requests[1].messages.map((message) => message.content).join("\n")).toContain("Lesson transcript:");
+    // Without Zoom's confirmation both writer and judge are told the labels are inferred.
+    for (const request of requests) expect(request.messages[0].content).toContain(speakerLabelNote("inferred"));
   });
 
   it("treats a response from an unpinned host as infra", async () => {
