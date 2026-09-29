@@ -41,7 +41,9 @@ function latinWord(value: string): RegExp {
  */
 export function chooseStudentDisplayName(fullName: string): string {
   const { firstName, nickname } = parseStudentName(fullName);
-  return nickname ?? firstName;
+  // Only a real one-word nickname ("Bas"); odd bracket contents ("(.Ja)", "(Tom Ja)", "(K.Ja)") use the first name.
+  const usable = nickname !== null && [...nickname].length >= 2 && /^\p{L}[\p{L}\p{M}'-]*$/u.test(nickname);
+  return usable ? nickname : firstName;
 }
 
 /**

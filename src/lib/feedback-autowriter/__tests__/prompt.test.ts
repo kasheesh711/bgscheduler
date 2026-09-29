@@ -24,8 +24,12 @@ describe("student names", () => {
     expect(chooseStudentDisplayName("Worawut (Bas.Ho) Horburapa")).toBe("Bas");
     expect(chooseStudentDisplayName("Avarin (Ava.Si) Sirithienthong")).toBe("Ava");
     expect(chooseStudentDisplayName("Prannatee (Keene.Ka) Karnchanapoo")).toBe("Keene");
-    // No nickname in the Wise name: the first name.
+    // No nickname in the Wise name, or odd bracket contents: the first name.
     expect(chooseStudentDisplayName("Somchai Jaidee")).toBe("Somchai");
+    expect(chooseStudentDisplayName("Somchai (.Ja) Jaidee")).toBe("Somchai");
+    expect(chooseStudentDisplayName("Somchai (Tom Ja) Jaidee")).toBe("Somchai");
+    expect(chooseStudentDisplayName("Somchai (K.Ja) Jaidee")).toBe("Somchai");
+    expect(chooseStudentDisplayName("Thanyapat (Baikao.Na) Natarue")).toBe("Baikao");
   });
 });
 
