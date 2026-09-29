@@ -21,6 +21,8 @@ vi.mock("@/lib/competitor-intelligence/sync", () => ({ runCompetitorIntelligence
 vi.mock("@/lib/credit-control/run-sync-request", () => ({ runCreditControlSyncRequest: vi.fn() }));
 vi.mock("@/lib/post-class-feedback/sync", () => ({ runPostClassFeedbackSync: vi.fn() }));
 vi.mock("@/lib/post-class-feedback/notifications", () => ({ processDuePostClassNotificationRetries: vi.fn(), sendPostClassAdminDigest: vi.fn() }));
+vi.mock("@/lib/post-class-feedback/ai", () => ({ processPostClassAiReviews: vi.fn() }));
+vi.mock("@/lib/post-class-feedback/auto-approval", () => ({ runPostClassDeductionHygiene: vi.fn() }));
 vi.mock("@/lib/post-class-feedback/reminder-job", () => ({ runPostClassReminderJob: vi.fn() }));
 vi.mock("@/lib/post-class-feedback/payout-accrual", () => ({ payoutJobResponse: vi.fn(), runPayoutAccrualPass: vi.fn(), runPayoutFinalizePass: vi.fn() }));
 vi.mock("@/lib/leave-requests/sync", () => ({ syncLeaveRequests: vi.fn() }));
@@ -60,6 +62,8 @@ import { syncLeaveRequests } from "@/lib/leave-requests/sync";
 import { runLineBacklogRecovery } from "@/lib/line/backlog-recovery";
 import { sendLineCreditDigest } from "@/lib/line/credit-digest";
 import { runOnsiteFootTrafficSync } from "@/lib/onsite-foot-traffic/sync";
+import { processPostClassAiReviews } from "@/lib/post-class-feedback/ai";
+import { runPostClassDeductionHygiene } from "@/lib/post-class-feedback/auto-approval";
 import { runPostClassBackfillJob } from "@/lib/post-class-feedback/backfill-job";
 import { findOldestUnreconciledBackfillWindow } from "@/lib/post-class-feedback/backfill-window";
 import { nightlyWorkerOutcome, runNightlyReminders } from "@/lib/post-class-feedback/nightly-reminders";
@@ -126,6 +130,12 @@ const SENTINEL_DB = { sentinel: "db" };
 const BACKFILL_WINDOW = { startDate: "2026-09-01", endDate: "2026-09-04" };
 const BANGKOK_THURSDAY = new Date("2026-07-09T01:12:00.000Z");
 const BANGKOK_SUNDAY = new Date("2026-07-12T01:12:00.000Z");
+// Distinct values per pass, so a swapped response key fails the equality checks.
+const PC_SYNC = { runId: "pc-run-1" };
+const PC_AI = { processed: 1, failed: 0, skipped: 2 };
+const PC_RETRIES = { considered: 3, sent: 3, failed: 0, cancelled: 0, deferred: 0 };
+const PC_HYGIENE = { reopened: 0, reopenFailed: 0, waived: 1, waiveFailed: 0 };
+const PC_BODY = { ok: true, result: PC_SYNC, ai: PC_AI, retries: PC_RETRIES, hygiene: PC_HYGIENE };
 
 function admissionsResult(runType: "daily" | "weekly", skipped = false): AdmissionsNotificationRunResult {
   return { skipped, runId: skipped ? null : `run-${runType}`, runType, sentCount: 0, skippedCount: 0, errorSummary: null };
@@ -153,8 +163,10 @@ function applyDefaults(): void {
   vi.mocked(importRefreshableSalesSources).mockResolvedValue([] as never);
   vi.mocked(importActiveSalesDashboardProjectionSource).mockResolvedValue(null as never);
   vi.mocked(runCompetitorIntelligenceSync).mockResolvedValue({ status: "success" } as never);
-  vi.mocked(runPostClassFeedbackSync).mockResolvedValue({} as never);
-  vi.mocked(processDuePostClassNotificationRetries).mockResolvedValue({} as never);
+  vi.mocked(runPostClassFeedbackSync).mockResolvedValue(PC_SYNC as never);
+  vi.mocked(processDuePostClassNotificationRetries).mockResolvedValue(PC_RETRIES);
+  vi.mocked(processPostClassAiReviews).mockResolvedValue(PC_AI);
+  vi.mocked(runPostClassDeductionHygiene).mockResolvedValue(PC_HYGIENE);
   vi.mocked(sendPostClassAdminDigest).mockResolvedValue({} as never);
   vi.mocked(runPostClassReminderJob).mockResolvedValue({ ready: true } as never);
   vi.mocked(runPayoutAccrualPass).mockResolvedValue({} as never);
@@ -347,6 +359,58 @@ describe("runDataHealthJob", () => {
     expect(failed.status).toBe(500);
     expect(body).toEqual({ error: "Post-class feedback backfill failed" });
     expect(JSON.stringify(body)).not.toContain("sensitive driver detail");
+  });
+
+  it("runs the cron's AI-review, retry and hygiene passes after the actor's manual post-class sync", async () => {
+    const response = await runDataHealthJob("post_class_feedback", OWNER);
+
+    expect(runPostClassFeedbackSync).toHaveBeenCalledWith({ triggerType: "manual", actorEmail: OWNER });
+    const syncOrder = vi.mocked(runPostClassFeedbackSync).mock.invocationCallOrder[0];
+    for (const pass of [processPostClassAiReviews, processDuePostClassNotificationRetries, runPostClassDeductionHygiene]) {
+      expect(pass).toHaveBeenCalledTimes(1);
+      expect(pass).toHaveBeenCalledWith();
+      expect(vi.mocked(pass).mock.invocationCallOrder[0]).toBeGreaterThan(syncOrder);
+    }
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(PC_BODY);
+  });
+
+  it.each([
+    ["ai", () => vi.mocked(processPostClassAiReviews).mockRejectedValueOnce(new Error("ai down"))],
+    ["retries", () => vi.mocked(processDuePostClassNotificationRetries).mockRejectedValueOnce(new Error("retries down"))],
+    ["hygiene", () => vi.mocked(runPostClassDeductionHygiene).mockRejectedValueOnce(new Error("hygiene down"))],
+  ] as const)("reports a rejected %s pass as { failed: true } in a 200, as the cron does", async (key, reject) => {
+    reject();
+
+    const response = await runDataHealthJob("post_class_feedback", OWNER);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ...PC_BODY, [key]: { failed: true } });
+  });
+
+  it("maps post-class sync failures like its cron route, without driver detail or post-sync passes", async () => {
+    vi.mocked(runPostClassFeedbackSync)
+      .mockRejectedValueOnce(new PostClassFeedbackSyncAlreadyRunningError("Post-class feedback sync is already running."))
+      .mockRejectedValueOnce(new Error("sensitive driver detail"))
+      // Says "already running" but is not the typed error, so it must still be a 500.
+      .mockRejectedValueOnce(new Error("advisory lock already running"));
+
+    const busy = await runDataHealthJob("post_class_feedback", OWNER);
+    expect(busy.status).toBe(409);
+    expect(await busy.json()).toEqual({ error: "Post-class feedback sync is already running." });
+
+    for (const thrown of ["sensitive driver detail", "advisory lock already running"]) {
+      const failed = await runDataHealthJob("post_class_feedback", OWNER);
+      const body = await failed.json();
+      expect(failed.status).toBe(500);
+      expect(body).toEqual({ error: "Post-class feedback sync failed" });
+      expect(JSON.stringify(body)).not.toContain(thrown);
+    }
+
+    expect(runPostClassFeedbackSync).toHaveBeenCalledTimes(3);
+    expect(processPostClassAiReviews).not.toHaveBeenCalled();
+    expect(processDuePostClassNotificationRetries).not.toHaveBeenCalled();
+    expect(runPostClassDeductionHygiene).not.toHaveBeenCalled();
   });
 
   it("runs only the daily admissions scan on a Bangkok weekday", async () => {
