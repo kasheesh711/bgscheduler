@@ -38,7 +38,7 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
    picks such rows up again. While halted, nothing is drafted at all (no model calls).
 3. **Fresh Wise read** (`GET /user/session/{id}` or the class-scoped detail, 45 s time-out per read) → gates →
    billing plan. If Wise now shows a different teacher, the row follows it (and a switched-off tutor's class is
-   not posted).
+   not posted); a `pending` row also follows the teacher the backstop's shortlist reports.
 4. **Write.** `z-ai/glm-5.3-flash` pinned to Together with zero data retention, reasoning `max`; names are redacted
    before anything leaves BGScheduler. Deterministic validation (300-char policy, placeholder, absence wording,
    copy-similarity against the tutor's 90 days of feedback and the autowriter's own posts).
@@ -50,9 +50,12 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
    [`submitFeedbackGuarded`](../../src/lib/feedback-autowriter/submit.ts): credit baseline → fresh read (all gates
    again) → POST claim → one POST (never retried) → read-back of text, status, credits and the session's single
    credit entry → a non-auto submit event by the API owner (`WISE_USER_ID`). The claim needs a valid lease, mode
-   `live`, no halt, the teacher from the fresh read equal to the stored one and switched on, and **no other POST in
+   `live`, no halt, the teacher from the fresh read equal to the stored one and switched on, **no other POST in
    flight** (a partial unique index allows one `posting` row institution-wide; a second session re-checks every
-   10 s for up to ~80 s, then leaves it to the next sweep).
+   10 s for up to ~80 s, then leaves it to the next sweep), and at least 240 s of function time for the POST phase.
+   While a `posting` row is stuck waiting for reconciliation (older than 6 min), nothing is drafted at all.
+   A shadow draft finished after the owner switched to `live` goes back to `pending` (atomically with the mode),
+   so it is posted rather than stranded in `would_submit`.
 
 ## States (`feedback_autowriter_sessions.state`)
 
@@ -60,8 +63,11 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
 Terminal: `held`, `skipped_human`, `skipped_scope`, `expired`, `rejected`, `unknown_outcome`, `verify_failed`.
 `posting` is never re-claimed. After 6 minutes a `posting` row is reconciled by reads only: stored text, status,
 credits and credit entry, then the submit events. A failed read-back right after the POST also leaves the row
-`posting` for this reconciliation (no halt for a read error alone). An `awaiting_event` row is only checked for
-our submit event — later admin edits are not treated as a mismatch. Reads that keep failing are reported as
+`posting` for this reconciliation (no halt for a read error alone). For both `posting` and `awaiting_event` rows
+the events are checked for a teacher/admin save between the fresh read and the POST's response (a save there was
+either overwritten by ours or overwrote it) and for our submit event; saves after that window are later edits and
+are never compared with our text. Every halt is written **before** the row leaves `posting`, so the single-POST
+lock never opens ahead of the halt. Reads that keep failing are reported as
 infrastructure errors; 2 hours after the POST an unverifiable row becomes `verify_failed`.
 Any `rejected`, `unknown_outcome`, `verify_failed`, second credit entry, or a teacher/admin submit event between
 the fresh read and the POST **halts** the autowriter (`feedback_autowriter_control.halted_at`) until an owner

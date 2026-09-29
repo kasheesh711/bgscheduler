@@ -121,6 +121,24 @@ async function seedRow(overrides: Partial<typeof S.$inferInsert> = {}) {
   if (Object.keys(overrides).length > 0) await db.update(S).set(overrides).where(eq(S.wiseSessionId, SESSION_ID));
 }
 
+const postedRow = (overrides: Partial<typeof S.$inferInsert> = {}): Partial<typeof S.$inferInsert> => ({
+  state: "posting",
+  postStartedAt: new Date(NOW.getTime() - 7 * 60 * 1000),
+  fields: GOOD_FIELDS,
+  billing: { sessionStatus: "COMPLETED", creditsConsumed: 1, source: "auto_blank_reuse", expectedConsumedDelta: 0 },
+  metadata: {
+    expected: { kind: "auto_blank", submissionId: "6a0000000000000000000004", sessionStatus: "COMPLETED", creditsConsumed: 1 },
+    freshReadAt: new Date(NOW.getTime() - 8 * 60 * 1000).toISOString(),
+  },
+  ...overrides,
+});
+const appliedDetail = () => sessionDetail({
+  feedbackSubmissions: [autoBlankSubmission({
+    metadata: null,
+    answers: answers([GOOD_FIELDS.topics, GOOD_FIELDS.performance, GOOD_FIELDS.improvement, ""]),
+  })],
+});
+
 beforeAll(async () => {
   handle = await startTestDb();
   db = handle.db as unknown as Database;
@@ -200,6 +218,37 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     expect(await processSession(deps(wise.ops, { now: () => justEnded }), { wiseSessionId: SESSION_ID, trigger: "cron" }))
       .toMatchObject({ result: "retry", detail: "student_count_0" });
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "pending", reason: "student_count_0" });
+  });
+
+  it("does not draft at all while another POST is stuck waiting for reconciliation", async () => {
+    await seedRow();
+    await ensureSessionRow(db, {
+      wiseSessionId: "6a0000000000000000000099", wiseClassId: "6a0000000000000000000098", wiseTeacherUserId: KEVIN,
+      scheduledEndAt: new Date("2026-09-28T09:30:00.000Z"), deadlineAt: new Date("2026-09-30T16:59:59.999Z"), trigger: "test",
+    });
+    await db.update(S).set({ state: "posting", postStartedAt: sql`now() - interval '10 minutes'` as never })
+      .where(eq(S.wiseSessionId, "6a0000000000000000000099"));
+    const wise = fakeWise();
+    const model = fakeModel();
+    expect(await processSession(deps(wise.ops, { callModel: model.callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "blocked_by_stuck_post" });
+    expect(model.calls).toEqual([]);
+    expect(wise.reads()).toBe(0);
+    expect((await readSessionRow(db, SESSION_ID))?.state).toBe("pending");
+  });
+
+  it("sends a shadow draft back to pending when the owner switches to live while it is being written", async () => {
+    await updateControl(db, { mode: "shadow" }, "t@x.com");
+    await seedRow();
+    const wise = fakeWise();
+    const callModel = vi.fn(async (request: { schemaName: string }) => {
+      if (request.schemaName === "post_class_feedback") await updateControl(db, { mode: "live" }, "owner@x.com");
+      return request.schemaName === "post_class_feedback" ? glm(writerJson) : glm(JSON.stringify({ faithful: true, unsupported: [] }));
+    });
+    expect(await processSession(deps(wise.ops, { callModel: callModel as never }), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+      .toMatchObject({ result: "retry", detail: "mode_switched_to_live" });
+    expect(wise.posts).toHaveLength(0);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "pending", reason: "mode_switched_to_live" });
   });
 
   it("waits for another session's POST in flight, then leaves the session for the next sweep", async () => {
@@ -283,24 +332,63 @@ describe("runSweep (Postgres + fake Wise and models)", () => {
     expect((await readControl(db)).haltReason).toContain("session_unreadable_2h_after_post");
   });
 
+  it("stops processing the moment a halt lands mid-sweep", async () => {
+    await seedRow();
+    await ensureSessionRow(db, {
+      wiseSessionId: "6a0000000000000000000077", wiseClassId: CLASS_ID, wiseTeacherUserId: KEVIN,
+      scheduledEndAt: new Date("2026-09-28T09:30:00.000Z"), deadlineAt: new Date("2026-09-30T17:30:00.000Z"), trigger: "test",
+    });
+    const wise = fakeWise();
+    const calls: string[] = [];
+    // Another worker halts while the first session is being written.
+    const callModel = vi.fn(async (request: { schemaName: string }) => {
+      calls.push(request.schemaName);
+      if (calls.length === 1) await updateControl(db, { haltedAt: new Date(), haltReason: "other worker" }, "system");
+      return request.schemaName === "post_class_feedback" ? glm(writerJson) : glm(JSON.stringify({ faithful: true, unsupported: [] }));
+    });
+    const result = await runSweep(deps(wise.ops, { callModel: callModel as never }));
+    expect(result.processed).toEqual({ not_claimed: 1 });
+    expect(calls).toHaveLength(2); // one draft (writer + judge), the second session never started
+    expect(wise.posts).toHaveLength(0);
+    expect((await readSessionRow(db, "6a0000000000000000000077"))?.state).toBe("pending");
+  });
+
+  it("halts on a save inside the POST window found while awaiting our event — halt written first", async () => {
+    await seedRow(postedRow({ state: "awaiting_event" }));
+    const wise = fakeWise({ details: [appliedDetail()] });
+    wise.ops.findFeedbackEvents = vi.fn(async () => [
+      { at: new Date(NOW.getTime() - 7 * 60 * 1000 + 1_000), autoSubmitted: null, actorId: "tutor", actorRole: "TEACHER" },
+    ]);
+    const result = await runSweep(deps(wise.ops));
+    expect(result.reconciled).toEqual({ verify_failed: 1 });
+    expect((await readSessionRow(db, SESSION_ID))?.state).toBe("verify_failed");
+    expect((await readControl(db)).haltReason).toContain("foreign_submit_event_in_post_window");
+  });
+
+  it("marks a stale posting row whose text is not in Wise as unknown and halts", async () => {
+    await seedRow(postedRow());
+    const wise = fakeWise(); // still Wise's blank auto-submission
+    const result = await runSweep(deps(wise.ops));
+    expect(result.reconciled).toEqual({ unknown_outcome: 1 });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "unknown_outcome" });
+    expect((await readControl(db)).haltReason).toContain("not found as sent");
+  });
+
+  it("still reconciles in mode off", async () => {
+    await updateControl(db, { mode: "off" }, "t@x.com");
+    await seedRow(postedRow({ state: "awaiting_event" }));
+    const wise = fakeWise({ details: [appliedDetail()] });
+    wise.ops.findFeedbackEvents = vi.fn(async () => [
+      { at: new Date(NOW.getTime() - 7 * 60 * 1000 + 2_000), autoSubmitted: null, actorId: API_ACTOR, actorRole: "OWNER" },
+    ]);
+    const result = await runSweep(deps(wise.ops));
+    expect(result).toMatchObject({ mode: "off", reconciled: { verified: 1 }, processed: {} });
+    expect((await readSessionRow(db, SESSION_ID))?.state).toBe("verified");
+  });
+
   it("verifies a stale posting row from Wise without posting again", async () => {
-    const applied = sessionDetail({
-      feedbackSubmissions: [autoBlankSubmission({
-        metadata: null,
-        answers: answers([GOOD_FIELDS.topics, GOOD_FIELDS.performance, GOOD_FIELDS.improvement, ""]),
-      })],
-    });
-    await seedRow({
-      state: "posting",
-      postStartedAt: new Date(NOW.getTime() - 7 * 60 * 1000),
-      fields: GOOD_FIELDS,
-      billing: { sessionStatus: "COMPLETED", creditsConsumed: 1, source: "auto_blank_reuse", expectedConsumedDelta: 0 },
-      metadata: {
-        expected: { kind: "auto_blank", submissionId: "6a0000000000000000000004", sessionStatus: "COMPLETED", creditsConsumed: 1 },
-        freshReadAt: new Date(NOW.getTime() - 8 * 60 * 1000).toISOString(),
-      },
-    });
-    const wise = fakeWise({ details: [applied] });
+    await seedRow(postedRow());
+    const wise = fakeWise({ details: [appliedDetail()] });
     wise.ops.findFeedbackEvents = vi.fn(async () => [
       { at: new Date(NOW.getTime() - 7 * 60 * 1000 + 2_000), autoSubmitted: null, actorId: API_ACTOR, actorRole: "OWNER" },
     ]);

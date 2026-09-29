@@ -50,8 +50,10 @@ import {
   reconcilePostedRow,
   recordCall,
   releaseGeneration,
+  releaseShadowDraft,
   releaseSweepLease,
   sessionSubmitStore,
+  stuckPostInFlight,
   updateLeasedTeacher,
   type AlertKind,
   type AutowriterControl,
@@ -88,6 +90,7 @@ export interface AutowriterDeps {
 
 export type ProcessResult =
   | "preview" | "mode_off" | "halted" | "tutor_off" | "not_roster" | "not_found" | "busy_or_not_due" | "already_handled"
+  | "blocked_by_stuck_post"
   | "retry" | "skipped_scope" | "skipped_human" | "held" | "expired" | "infra" | "would_submit"
   | "verified" | "awaiting_event" | "unverified" | "rate_limited" | "rejected" | "unknown_outcome" | "verify_failed"
   | "not_claimed" | "aborted";
@@ -177,6 +180,9 @@ export async function processSession(deps: AutowriterDeps, input: {
   }
   if (row.wiseTeacherUserId && control.disabledTutors.includes(row.wiseTeacherUserId)) return out("tutor_off");
   if (!row.wiseClassId) return out("not_found", "class id unknown");
+  // A POST stuck waiting for reconciliation blocks every other POST: drafting
+  // now would only spend model calls (and send the summary out) for nothing.
+  if (control.mode === "live" && await stuckPostInFlight(db, AUTOWRITER_STALE_POSTING_MS)) return out("blocked_by_stuck_post");
 
   const token = await claimGeneration(db, input.wiseSessionId, AUTOWRITER_GENERATION_LEASE_MS, {
     ignoreRetryWait: input.trigger === "webhook",
@@ -239,7 +245,7 @@ async function processLeased(deps: AutowriterDeps, input: {
   const { release, out } = input;
   let row = input.row;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const waitUntil = Date.now() + Math.min(input.waitForReadyMs, Math.max(0, remaining(deps) - 480_000));
+  const waitUntil = Date.now() + Math.min(input.waitForReadyMs, Math.max(0, remaining(deps) - AUTOWRITER_SWEEP_MIN_REMAINING_MS));
 
   let now = clock(deps);
   let detail: AutowriterSessionDetail | null = null;
@@ -338,8 +344,10 @@ async function processLeased(deps: AutowriterDeps, input: {
     metadata: { judge: result.judge },
   };
   if (input.control.mode !== "live") {
-    await release({ state: "would_submit", reason: "shadow", countAttempt: true, ...draftPatch });
-    return out("would_submit", result.arm);
+    // Atomic with the mode: a switch to live while this draft was being written
+    // sends the row back to `pending` instead of stranding it in `would_submit`.
+    const stored = await releaseShadowDraft(db, row.wiseSessionId, input.token, draftPatch);
+    return stored === "pending" ? out("retry", "mode_switched_to_live") : out("would_submit", result.arm);
   }
   if (!deps.apiActorId) {
     await release({ state: "pending", reason: "infra:WISE_USER_ID missing", retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true });
@@ -424,36 +432,47 @@ function expectedFromRow(row: AutowriterSessionRow): SubmissionState | null {
   return expected?.kind === "auto_blank" ? expected : null;
 }
 
-function freshReadAtFromRow(row: AutowriterSessionRow): Date | null {
-  const raw = (row.metadata as { freshReadAt?: unknown }).freshReadAt;
-  const at = typeof raw === "string" ? new Date(raw) : null;
+function metadataDate(value: unknown): Date | null {
+  const at = typeof value === "string" ? new Date(value) : null;
   return at && !Number.isNaN(at.getTime()) ? at : null;
+}
+
+function freshReadAtFromRow(row: AutowriterSessionRow): Date | null {
+  return metadataDate((row.metadata as { freshReadAt?: unknown }).freshReadAt);
+}
+
+function postFinishedAtFromRow(row: AutowriterSessionRow): Date | null {
+  return metadataDate((row.metadata as { post?: { postFinishedAt?: unknown } }).post?.postFinishedAt);
 }
 
 /**
  * Reads only, never a re-POST.
  * - `posting` (the worker died or its read-back failed): the stored submission,
- *   the credit entry and the post window's events are all checked again.
- * - `awaiting_event` (already verified at POST time): only our submit event is
- *   looked for — later admin edits are not re-checked against our text.
+ *   status, credits and the student's credit entry are checked again first.
+ * - both states: the events are checked for a teacher/admin save inside the
+ *   POST window (fresh read → POST response), then for our submit event. Later
+ *   admin edits are outside the window and never re-checked against our text.
+ * Every halt is written BEFORE the row leaves `posting`/`awaiting_event`, so the
+ * single-POST lock can never open ahead of the halt; if the halt write fails
+ * the row stays put and blocks every POST.
  * Reads that keep failing for 2 h after the POST → verify_failed + halt.
  * Returns `read_failed` when a read failed and there is still time.
  */
 async function reconcileRow(deps: AutowriterDeps, row: AutowriterSessionRow, from: "posting" | "awaiting_event"): Promise<string> {
   const { db, ops } = deps;
+  const settle = async (state: "unknown_outcome" | "verify_failed", haltReason: string, detail: Record<string, unknown>) => {
+    await haltAutowriter(db, haltReason);
+    await reconcilePostedRow(db, row.wiseSessionId, from, { state, detail });
+    return state;
+  };
   const expected = expectedFromRow(row);
   if (!row.wiseClassId || !row.fields || !row.billing || !expected || !row.postStartedAt || !deps.apiActorId) {
-    await reconcilePostedRow(db, row.wiseSessionId, from, { state: "unknown_outcome", detail: { error: "row incomplete for reconciliation" } });
-    await haltAutowriter(db, `cannot reconcile ${row.wiseSessionId}`);
-    return "unknown_outcome";
+    return settle("unknown_outcome", `cannot reconcile ${row.wiseSessionId}`, { error: "row incomplete for reconciliation" });
   }
   const postStartedAt = row.postStartedAt;
   const overdue = clock(deps).getTime() - postStartedAt.getTime() > AUTOWRITER_EVENT_DEADLINE_MS;
-  const giveUp = async (problems: string[]) => {
-    await reconcilePostedRow(db, row.wiseSessionId, from, { state: "verify_failed", detail: { problems } });
-    await haltAutowriter(db, `feedback POST on ${row.wiseSessionId} could not be verified: ${problems.join(", ")}`);
-    return "verify_failed";
-  };
+  const giveUp = (problems: string[]) =>
+    settle("verify_failed", `feedback POST on ${row.wiseSessionId} could not be verified: ${problems.join(", ")}`, { problems });
 
   if (from === "posting") {
     const detail = await readDetail(ops, row.wiseSessionId, row.wiseClassId);
@@ -476,9 +495,7 @@ async function reconcileRow(deps: AutowriterDeps, row: AutowriterSessionRow, fro
       }
     }
     if (problems.length > 0) {
-      await reconcilePostedRow(db, row.wiseSessionId, from, { state: "unknown_outcome", detail: { problems } });
-      await haltAutowriter(db, `post for ${row.wiseSessionId} not found as sent: ${problems.join(", ")}`);
-      return "unknown_outcome";
+      return settle("unknown_outcome", `post for ${row.wiseSessionId} not found as sent: ${problems.join(", ")}`, { problems });
     }
   }
 
@@ -488,12 +505,18 @@ async function reconcileRow(deps: AutowriterDeps, row: AutowriterSessionRow, fro
     events = await ops.findFeedbackEvents(row.wiseClassId, row.wiseSessionId, new Date(freshReadAt.getTime() - 5_000));
   } catch {
     if (overdue) return giveUp(["events_unreadable_2h_after_post"]);
-    // The stored submission is verified; only the event is still unknown.
+    // The stored submission is verified; the events (ours, and any save in the
+    // POST window) are checked again on every sweep while `awaiting_event`.
     if (from === "posting") await reconcilePostedRow(db, row.wiseSessionId, from, { state: "awaiting_event", detail: { eventsReadFailed: true } });
     return "read_failed";
   }
-  const found = classifySubmitEvents(events, { apiActorId: deps.apiActorId, freshReadAt, postStartedAt });
-  if (from === "posting" && found.foreign.length > 0) return giveUp(["foreign_submit_event_in_post_window"]);
+  const found = classifySubmitEvents(events, {
+    apiActorId: deps.apiActorId,
+    freshReadAt,
+    postStartedAt,
+    postFinishedAt: postFinishedAtFromRow(row),
+  });
+  if (found.foreign.length > 0) return giveUp(["foreign_submit_event_in_post_window"]);
   if (found.ours) {
     await reconcilePostedRow(db, row.wiseSessionId, from, { state: "verified", detail: { event: { ...found.ours, at: found.ours.at.toISOString() } } });
     return "verified";
@@ -589,7 +612,12 @@ export async function runSweep(deps: AutowriterDeps): Promise<SweepResult> {
         const mappings = await loadFieldMappings(db);
         for (const row of due) {
           if (remaining(deps) < AUTOWRITER_SWEEP_MIN_REMAINING_MS) break;
-          const outcome = await processSession(deps, { wiseSessionId: row.wiseSessionId, wiseClassId: row.wiseClassId, trigger: "cron", control, mappings });
+          // Re-read the switches per session: a halt, pause or mode change made
+          // while this sweep runs (e.g. by a webhook worker's POST) applies at once.
+          const current = await readControl(db);
+          if (current.haltedAt || current.mode === "off") break;
+          if (row.wiseTeacherUserId && current.disabledTutors.includes(row.wiseTeacherUserId)) continue;
+          const outcome = await processSession(deps, { wiseSessionId: row.wiseSessionId, wiseClassId: row.wiseClassId, trigger: "cron", control: current, mappings });
           tally(processed, outcome.result);
           if (outcome.result === "infra" && outcome.detail) infraErrors.push(`${row.wiseSessionId}: ${outcome.detail}`);
         }

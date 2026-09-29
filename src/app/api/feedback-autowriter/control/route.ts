@@ -4,7 +4,7 @@ import { AdminUsersAccessError } from "@/lib/admin-users/types";
 import { requireClassroomOperationsOwner } from "@/lib/classrooms/operations-access";
 import { getDb } from "@/lib/db";
 import { AUTOWRITER_TEACHER_ALLOWLIST } from "@/lib/feedback-autowriter/roster";
-import { readControl, requeueShadowDrafts, updateControl } from "@/lib/feedback-autowriter/store";
+import { haltAutowriter, readControl, requeueShadowDrafts, updateControl } from "@/lib/feedback-autowriter/store";
 import { AUTOWRITER_DEADLINE_MARGIN_MS } from "@/lib/feedback-autowriter/types";
 
 const ControlBody = z.discriminatedUnion("action", [
@@ -46,7 +46,8 @@ export async function POST(request: NextRequest) {
       await updateControl(db, { mode: body.mode }, actor.email);
       if (body.mode === "live") requeued = await requeueShadowDrafts(db, new Date(Date.now() + AUTOWRITER_DEADLINE_MARGIN_MS));
     } else if (body.action === "pause") {
-      await updateControl(db, { haltedAt: new Date(), haltReason: `paused by ${actor.email}: ${body.reason}` }, actor.email);
+      // Adds to (never replaces) an automatic halt reason already recorded.
+      await haltAutowriter(db, `paused by ${actor.email}: ${body.reason}`, actor.email);
     } else if (body.action === "resume") {
       await updateControl(db, { haltedAt: null, haltReason: null }, actor.email);
     } else {

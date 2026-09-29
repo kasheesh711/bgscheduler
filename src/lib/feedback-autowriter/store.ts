@@ -50,14 +50,14 @@ export async function updateControl(
  * appended (bounded) so a manual pause never hides an automatic halt that
  * follows it. Resuming clears everything, so read the full reason first.
  */
-export async function haltAutowriter(db: Database, reason: string): Promise<void> {
+export async function haltAutowriter(db: Database, reason: string, actor = "system:feedback-autowriter"): Promise<void> {
   const next = reason.slice(0, 500);
   await db.update(C).set({
     haltedAt: sql`coalesce(${C.haltedAt}, now())`,
     haltReason: sql`case when ${C.haltedAt} is null or ${C.haltReason} is null then ${next}
       when position(${next} in ${C.haltReason}) > 0 then ${C.haltReason}
       else left(${C.haltReason} || ' | then: ' || ${next}, 2000) end`,
-    updatedBy: "system:feedback-autowriter",
+    updatedBy: actor,
     updatedAt: nowSql,
   }).where(eq(C.id, "default"));
 }
@@ -92,7 +92,10 @@ export async function ensureSessionRow(db: Database, input: {
       target: S.wiseSessionId,
       set: {
         wiseClassId: sql`coalesce(${S.wiseClassId}, excluded.wise_class_id)`,
-        wiseTeacherUserId: sql`coalesce(${S.wiseTeacherUserId}, excluded.wise_teacher_user_id)`,
+        // Follow the latest teacher seen while nothing is in flight for the row;
+        // a leased or finished row keeps the teacher it was worked on with.
+        wiseTeacherUserId: sql`case when ${S.state} = 'pending' and excluded.wise_teacher_user_id is not null
+          then excluded.wise_teacher_user_id else coalesce(${S.wiseTeacherUserId}, excluded.wise_teacher_user_id) end`,
         scheduledEndAt: sql`coalesce(${S.scheduledEndAt}, excluded.scheduled_end_at)`,
         deadlineAt: sql`coalesce(${S.deadlineAt}, excluded.deadline_at)`,
         lastTrigger: input.trigger,
@@ -175,6 +178,68 @@ async function anotherPostInFlight(db: Database, wiseSessionId: string): Promise
   return Boolean(row);
 }
 
+/**
+ * Why a POST claim updated nothing. `post_in_flight` only when every other
+ * condition held, so a halt or pause is never retried as "busy".
+ */
+async function claimRefusalReason(db: Database, wiseSessionId: string, token: string, teacherId: string): Promise<"post_in_flight" | "conditions"> {
+  const control = await readControl(db);
+  if (control.mode !== "live" || control.haltedAt || control.disabledTutors.includes(teacherId)) return "conditions";
+  const [row] = await db.select({ id: S.id }).from(S).where(and(
+    eq(S.wiseSessionId, wiseSessionId),
+    eq(S.state, "generating"),
+    eq(S.leaseToken, token),
+    sql`${S.leaseUntil} > now()`,
+    eq(S.wiseTeacherUserId, teacherId),
+  )).limit(1);
+  if (!row) return "conditions";
+  return await anotherPostInFlight(db, wiseSessionId) ? "post_in_flight" : "conditions";
+}
+
+/**
+ * A POST that has been `posting` this long is not a live request any more (the
+ * POST phase is bounded by its time-outs): it waits for reads-only reconciliation.
+ */
+export async function stuckPostInFlight(db: Database, olderThanMs: number): Promise<boolean> {
+  const [row] = await db.select({ id: S.id }).from(S).where(and(
+    eq(S.state, "posting"),
+    sql`${S.postStartedAt} < now() - (${olderThanMs} * interval '1 millisecond')`,
+  )).limit(1);
+  return Boolean(row);
+}
+
+/**
+ * Store a shadow draft (`would_submit`) — unless the owner switched to live
+ * while it was being written: then the row goes back to `pending`, due now,
+ * so the next run posts it (the switch's re-queue has already run by then).
+ */
+export async function releaseShadowDraft(db: Database, wiseSessionId: string, token: string, draft: {
+  arm: ModelArm;
+  fields: FeedbackFieldAnswers;
+  fieldsSha256: string;
+  billing: BillingPlan;
+  metadata: Record<string, unknown>;
+}): Promise<"would_submit" | "pending" | null> {
+  const live = sql`exists (select 1 from feedback_autowriter_control c where c.id = 'default' and c.mode = 'live')`;
+  const rows = await db.update(S).set({
+    state: sql`case when ${live} then 'pending' else 'would_submit' end`,
+    reason: sql`case when ${live} then 'mode_switched_to_live' else 'shadow' end`,
+    nextAttemptAt: null,
+    attempts: sql`${S.attempts} + 1`,
+    arm: draft.arm,
+    fields: draft.fields as unknown as Record<string, string>,
+    fieldsSha256: draft.fieldsSha256,
+    billing: draft.billing as unknown as Record<string, unknown>,
+    metadata: sql`${S.metadata} || ${JSON.stringify(draft.metadata)}::jsonb`,
+    leaseToken: null,
+    leaseUntil: null,
+    updatedAt: nowSql,
+  }).where(and(eq(S.wiseSessionId, wiseSessionId), eq(S.state, "generating"), eq(S.leaseToken, token)))
+    .returning({ state: S.state });
+  const state = rows[0]?.state;
+  return state === "would_submit" || state === "pending" ? state : null;
+}
+
 /** The SubmitStore used by `submitFeedbackGuarded` for one leased session. */
 export function sessionSubmitStore(
   db: Database,
@@ -213,7 +278,7 @@ export function sessionSubmitStore(
         throw error;
       }
       if (rows.length > 0) return { claimed: true };
-      return { claimed: false, reason: await anotherPostInFlight(db, wiseSessionId) ? "post_in_flight" : "conditions" };
+      return { claimed: false, reason: await claimRefusalReason(db, wiseSessionId, token, input.teacherId) };
     },
     async finish(state: PostFinishState, detail) {
       const alertKind: AlertKind | null = state === "rejected" || state === "unknown_outcome" || state === "verify_failed" ? state : null;

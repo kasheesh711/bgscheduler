@@ -154,20 +154,26 @@ export function isReadFailure(problem: string): boolean {
   return /^(verify_read_failed|credits_reread_failed):/u.test(problem);
 }
 
+/** Upper bound of one POST request (its client time-out), for rows whose response time was not recorded. */
+export const POST_REQUEST_MAX_MS = 60_000;
+
 /**
  * Classify SessionFeedbackSubmittedEvent rows around one POST.
  * - ours: non-auto, by the API owner, at or after the POST started;
  * - foreign: non-auto, by anyone else except a student, between the fresh read
- *   and the POST (plus a few seconds of clock skew). Later edits are on top of
- *   ours and are not evidence of an overwrite.
+ *   and the POST's response (plus a few seconds of clock skew). A save inside
+ *   that window either was overwritten by ours or overwrote ours. Later edits
+ *   are on top of ours and are not evidence of an overwrite.
  */
 export function classifySubmitEvents(events: readonly SubmitFeedbackEvent[], input: {
   apiActorId: string;
   freshReadAt: Date;
   postStartedAt: Date;
+  /** When the POST response arrived; unknown → the POST's time-out bound. */
+  postFinishedAt?: Date | null;
 }): { ours: SubmitFeedbackEvent | undefined; foreign: SubmitFeedbackEvent[] } {
   const windowStart = input.freshReadAt.getTime() - 5_000;
-  const windowEnd = input.postStartedAt.getTime() + 5_000;
+  const windowEnd = (input.postFinishedAt?.getTime() ?? input.postStartedAt.getTime() + POST_REQUEST_MAX_MS) + 5_000;
   const ours = events.find((event) => event.autoSubmitted !== true && event.actorId === input.apiActorId &&
     event.at.getTime() >= input.postStartedAt.getTime() - 5_000);
   const foreign = events.filter((event) => event.autoSubmitted !== true && event.actorId !== input.apiActorId &&
@@ -183,6 +189,7 @@ export async function waitForSubmitEvents(ops: WiseFeedbackOps, input: {
   apiActorId: string;
   freshReadAt: Date;
   postStartedAt: Date;
+  postFinishedAt: Date;
   waitMs: number;
   sleep: (ms: number) => Promise<void>;
 }): Promise<{ ours: SubmitFeedbackEvent | undefined; foreign: SubmitFeedbackEvent[]; readFailed: boolean }> {
@@ -292,6 +299,7 @@ export async function submitFeedbackGuarded(input: {
   const postStartedAt = new Date();
 
   const result = await ops.postFeedback(plan.classId, plan.sessionId, body);
+  const postFinishedAt = new Date();
 
   const readBack = async (): Promise<{ problems: string[]; stillAutoBlank: boolean }> => {
     const problems: string[] = [];
@@ -321,8 +329,9 @@ export async function submitFeedbackGuarded(input: {
       await store.finish("pending", { reason: "wise_rate_limited_not_sent" });
       return { status: "rate_limited" };
     }
-    await store.finish("unknown_outcome", { error: "429 but submission changed", problems: check.problems });
+    // Halt before leaving `posting`: the row is what keeps every other POST waiting.
     await store.halt(`unknown outcome after HTTP 429 on ${plan.sessionId}`);
+    await store.finish("unknown_outcome", { error: "429 but submission changed", problems: check.problems });
     return { status: "unknown_outcome", error: "429 but submission changed", problems: check.problems };
   }
   // Not a clean 2xx: halt first so nothing else posts while we look.
@@ -353,7 +362,9 @@ export async function submitFeedbackGuarded(input: {
     apiActorId: input.apiActorId,
     freshReadAt,
     postStartedAt,
-    waitMs: input.eventWaitMs ?? 20_000,
+    postFinishedAt,
+    // Never wait into the function's last minute; the sweep reconciles instead.
+    waitMs: Math.min(input.eventWaitMs ?? 20_000, Math.max(0, input.remainingMs() - 60_000)),
     sleep,
   });
   if (found.foreign.length > 0) problems.push("foreign_submit_event_in_post_window");
@@ -362,15 +373,18 @@ export async function submitFeedbackGuarded(input: {
   // (which also keeps every other POST waiting) for the sweep to reconcile.
   if (problems.length > 0 && problems.every(isReadFailure)) return { status: "unverified", problems };
   if (problems.length > 0) {
-    await store.finish("verify_failed", { httpStatus: result.status, problems });
+    // Halt before leaving `posting`: the row is what keeps every other POST waiting.
     await store.halt(`feedback POST on ${plan.sessionId} did not verify: ${problems.join(", ")}`);
+    await store.finish("verify_failed", { httpStatus: result.status, problems });
     return { status: "verify_failed", problems };
   }
   const ours = found.ours;
+  const timing = { postStartedAt: postStartedAt.toISOString(), postFinishedAt: postFinishedAt.toISOString() };
   if (!ours) {
-    await store.finish("awaiting_event", { httpStatus: result.status, postStartedAt: postStartedAt.toISOString() });
+    // The sweep keeps looking for our event and for a save inside the POST window.
+    await store.finish("awaiting_event", { httpStatus: result.status, ...timing, eventsReadFailed: found.readFailed });
     return { status: "awaiting_event", bodyHash };
   }
-  await store.finish("verified", { httpStatus: result.status, event: { ...ours, at: ours.at.toISOString() } });
+  await store.finish("verified", { httpStatus: result.status, ...timing, event: { ...ours, at: ours.at.toISOString() } });
   return { status: "verified", bodyHash, event: ours };
 }

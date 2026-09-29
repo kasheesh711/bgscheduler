@@ -229,11 +229,29 @@ describe("submitFeedbackGuarded", () => {
     expect(store.halts).toEqual([]);
   });
 
-  it("fails verification (and halts) when Wise stores different text", async () => {
+  it("fails verification when Wise stores different text, halting before the row leaves posting", async () => {
     const ops = fakeWise({ storeAnswersAs: (body) => body.answers.map((answer, index) => index === 0 ? "changed" : answer.answer) });
     const store = memoryStore();
     expect(await submitFeedbackGuarded({ ...base, ops, store })).toEqual({ status: "verify_failed", problems: ["field_mismatch:topics"] });
-    expect(store.halts).toHaveLength(1);
+    // The posting row is the single-POST lock: the halt must land before it is released.
+    expect(store.log).toEqual(["claim", "halt", "finish:verify_failed"]);
+  });
+
+  it("halts before releasing the row when a 429 turns out to have changed the submission", async () => {
+    const ops = fakeWise({ postResult: { kind: "rate_limited", status: 429 } });
+    const store = memoryStore();
+    expect((await submitFeedbackGuarded({ ...base, ops, store })).status).toBe("unknown_outcome");
+    expect(store.log).toEqual(["claim", "halt", "finish:unknown_outcome"]);
+  });
+
+  it("never polls for events into the function's last minute", async () => {
+    const ops = fakeWise({ events: () => [] });
+    let calls = 0;
+    const remainingMs = () => (calls++ === 0 ? 300_000 : 50_000);
+    const store = memoryStore();
+    expect((await submitFeedbackGuarded({ ...base, ops, store, remainingMs, eventWaitMs: 20_000 })).status).toBe("awaiting_event");
+    expect(ops.findFeedbackEvents).toHaveBeenCalledTimes(1);
+    expect(store.finishes[0].detail).toMatchObject({ postStartedAt: expect.any(String), postFinishedAt: expect.any(String) });
   });
 
   it("fails verification on a second charge for the session", async () => {
@@ -252,7 +270,7 @@ describe("submitFeedbackGuarded", () => {
   });
 
   it("does not count an edit made after our POST as a possible overwrite", async () => {
-    const laterAdminEdit: SubmitFeedbackEvent = { at: new Date(Date.now() + 60_000), autoSubmitted: null, actorId: "admin", actorRole: "ADMIN" };
+    const laterAdminEdit: SubmitFeedbackEvent = { at: new Date(Date.now() + 5 * 60_000), autoSubmitted: null, actorId: "admin", actorRole: "ADMIN" };
     const ops = fakeWise({ events: () => [ourEvent(), laterAdminEdit] });
     expect((await submitFeedbackGuarded({ ...base, ops, store: memoryStore() })).status).toBe("verified");
   });
@@ -288,9 +306,17 @@ describe("classifySubmitEvents", () => {
     expect(classifySubmitEvents(events, input).foreign).toHaveLength(1);
   });
 
+  it("keeps the window open until the POST response arrived (a slow POST can overwrite a save made meanwhile)", () => {
+    const duringSlowPost: SubmitFeedbackEvent[] = [{ at: at(30_000), autoSubmitted: null, actorId: "t", actorRole: "TEACHER" }];
+    expect(classifySubmitEvents(duringSlowPost, { ...input, postFinishedAt: at(40_000) }).foreign).toHaveLength(1);
+    expect(classifySubmitEvents(duringSlowPost, { ...input, postFinishedAt: at(1_000) }).foreign).toEqual([]);
+    // Response time unknown (reconciling a stale row): bounded by the POST time-out.
+    expect(classifySubmitEvents(duringSlowPost, input).foreign).toHaveLength(1);
+  });
+
   it("ignores saves after the POST window, auto-submissions and students", () => {
     const events: SubmitFeedbackEvent[] = [
-      { at: at(30_000), autoSubmitted: null, actorId: "t", actorRole: "TEACHER" },
+      { at: at(120_000), autoSubmitted: null, actorId: "t", actorRole: "TEACHER" },
       { at: at(-1_000), autoSubmitted: true, actorId: "t", actorRole: "TEACHER" },
       { at: at(-1_000), autoSubmitted: null, actorId: "s", actorRole: "STUDENT" },
     ];

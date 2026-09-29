@@ -12,6 +12,7 @@ vi.mock("@/lib/classrooms/operations-access", () => ({ requireClassroomOperation
 vi.mock("@/lib/feedback-autowriter/store", () => ({
   readControl: vi.fn(async () => ({ mode: "live", haltedAt: null, haltReason: null, disabledTutors: [] })),
   updateControl: vi.fn(async () => undefined),
+  haltAutowriter: vi.fn(async () => undefined),
   requeueShadowDrafts: vi.fn(async () => 2),
 }));
 
@@ -19,7 +20,7 @@ import { auth } from "@/lib/auth";
 import { AdminUsersAccessError } from "@/lib/admin-users/types";
 import { requireClassroomOperationsOwner } from "@/lib/classrooms/operations-access";
 import { loadAutowriterDashboard } from "@/lib/feedback-autowriter/dashboard";
-import { requeueShadowDrafts, updateControl } from "@/lib/feedback-autowriter/store";
+import { haltAutowriter, requeueShadowDrafts, updateControl } from "@/lib/feedback-autowriter/store";
 import { GET } from "../route";
 import { POST } from "../control/route";
 
@@ -81,6 +82,13 @@ describe("POST /api/feedback-autowriter/control", () => {
     expect(await response.json()).toMatchObject({ ok: true, requeued: 2 });
     expect(updateControl).toHaveBeenCalledWith(expect.anything(), { mode: "live" }, "kevhsh7@gmail.com");
     expect(requeueShadowDrafts).toHaveBeenCalledTimes(1);
+  });
+
+  it("pauses by adding to the halt reason, never replacing an automatic one", async () => {
+    ownerMock.mockResolvedValue({ email: "kevhsh7@gmail.com", accessVersion: 1 } as never);
+    expect((await POST(post({ action: "pause", reason: "checking a class" }))).status).toBe(200);
+    expect(haltAutowriter).toHaveBeenCalledWith(expect.anything(), "paused by kevhsh7@gmail.com: checking a class", "kevhsh7@gmail.com");
+    expect(updateControl).not.toHaveBeenCalled();
   });
 
   it("refuses to toggle a tutor who is not on the roster", async () => {

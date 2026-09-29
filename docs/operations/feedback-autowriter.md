@@ -38,6 +38,11 @@ Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowrite
 
 Outer gates needing a redeploy: `FEEDBACK_AUTOWRITER_ENABLED`, `WISE_WEBHOOKS_ENABLED`. Preview deployments never POST.
 
+Which switch in an incident: `--pause` (or mode `off`) stops all drafting and posting at once and **keeps
+reconciling** POSTs already made, emailing their alerts. `FEEDBACK_AUTOWRITER_ENABLED=false` stops everything,
+reconciliation included — rows in `posting`/`awaiting_event` then wait, visible on the dashboard, until it is
+turned back on. Prefer `--pause` unless the code itself must not run.
+
 The owner has the same mode, pause/resume and per-tutor switches on the dashboard at `/feedback-autowriter`.
 
 ## 3. Rollout checklist
@@ -67,8 +72,9 @@ While halted nothing is drafted (no model calls); rows still expire with alerts 
 The cron reports `ok:false` (503) while halted, so the cron watchdog emails admins.
 
 A POST whose read-back failed stays `posting` and blocks every other POST (one in flight at a time) until the
-sweep reconciles it, 6+ minutes later. If Wise reads keep failing, Data Health shows the sweep's infrastructure
-errors; after 2 hours the row becomes `verify_failed` and the autowriter halts.
+sweep reconciles it, 6+ minutes later; meanwhile no session is drafted (no model calls). If Wise reads keep
+failing, Data Health shows the sweep's infrastructure errors; after 2 hours the row becomes `verify_failed` and the
+autowriter halts.
 
 ## 5. Alerts
 

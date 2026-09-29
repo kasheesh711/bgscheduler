@@ -46,7 +46,7 @@ import {
   type PreparedOrSkipped,
   type PreparedSession,
 } from "@/lib/feedback-autowriter/run";
-import { readControl, requeueShadowDrafts, updateControl } from "@/lib/feedback-autowriter/store";
+import { haltAutowriter, readControl, requeueShadowDrafts, updateControl } from "@/lib/feedback-autowriter/store";
 import { AUTOWRITER_DEADLINE_MARGIN_MS } from "@/lib/feedback-autowriter/types";
 import { loadPayoutScriptEnvironment } from "./lib/payout-script";
 
@@ -119,7 +119,7 @@ async function control(): Promise<void> {
       console.log(`Re-queued ${requeued} shadow draft(s) still before their deadline.`);
     }
   }
-  if (flag("pause")) await updateControl(db, { haltedAt: new Date(), haltReason: `paused by ${actor}: ${option("reason") ?? "no reason given"}` }, actor);
+  if (flag("pause")) await haltAutowriter(db, `paused by ${actor}: ${option("reason") ?? "no reason given"}`, actor);
   if (flag("resume")) await updateControl(db, { haltedAt: null, haltReason: null }, actor);
   const off = option("tutor-off");
   const on = option("tutor-on");

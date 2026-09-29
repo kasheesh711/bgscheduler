@@ -77,8 +77,12 @@ export const AUTOWRITER_MODELS = {
 export const AUTOWRITER_RETRY_DELAY_MS = 10 * 60 * 1000;
 /** … and alerted once when it still has none this long after the class ended. */
 export const AUTOWRITER_NO_SUMMARY_ALERT_MS = 3 * 60 * 60 * 1000;
-/** A POST is only claimed when at least this much function time remains. */
-export const AUTOWRITER_MIN_POST_BUDGET_MS = 150_000;
+/**
+ * A POST is only claimed when at least this much function time remains: the
+ * POST phase's worst case is ~220 s (POST 60 s, pause 3 s, two 45 s reads,
+ * event polling bounded by the remaining time).
+ */
+export const AUTOWRITER_MIN_POST_BUDGET_MS = 240_000;
 /**
  * Generation lease. Longer than a function may live (maxDuration 800 s), so a
  * live worker never loses its lease and an expired one always means a dead worker.
@@ -91,8 +95,12 @@ export const AUTOWRITER_GENERATION_LEASE_MS = 14 * 60 * 1000;
 export const AUTOWRITER_STALE_POSTING_MS = 6 * 60 * 1000;
 /** Every Wise read (including its paced retries) gives up after this long. */
 export const AUTOWRITER_WISE_READ_TIMEOUT_MS = 45_000;
-/** The sweep starts another session only with this much budget left (writer + judge + POST phase). */
-export const AUTOWRITER_SWEEP_MIN_REMAINING_MS = 510_000;
+/**
+ * One session's work after Wise is ready: writer (≤180 s) + judge (≤120 s) +
+ * the POST budget. The sweep starts a session only with this much time left,
+ * and a webhook's readiness wait never eats into it.
+ */
+export const AUTOWRITER_SWEEP_MIN_REMAINING_MS = 560_000;
 /** While another POST is in flight, re-try the guarded submit this often … */
 export const AUTOWRITER_POST_IN_FLIGHT_WAIT_MS = 10_000;
 /** … at most this many times before leaving the session for the next sweep. */

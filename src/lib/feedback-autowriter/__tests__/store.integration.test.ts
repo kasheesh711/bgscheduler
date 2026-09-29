@@ -15,9 +15,11 @@ import {
   readControl,
   readSessionRow,
   releaseGeneration,
+  releaseShadowDraft,
   releaseSweepLease,
   requeueShadowDrafts,
   sessionSubmitStore,
+  stuckPostInFlight,
   updateControl,
   updateLeasedTeacher,
 } from "../store";
@@ -141,6 +143,68 @@ describe("feedback autowriter store (Postgres)", () => {
     expect((await readSessionRow(db, loser))?.metadata).toMatchObject({ freshReadAt: claimInput.freshReadAt.toISOString() });
   });
 
+  it("maps the unique-index race (23505, wrapped by drizzle) to post_in_flight", async () => {
+    await updateControl(db, { mode: "live" }, "t@x.com");
+    await ensureSessionRow(db, {
+      wiseSessionId: OTHER_SESSION, wiseClassId: "6a0000000000000000000011", wiseTeacherUserId: TEACHER,
+      scheduledEndAt: new Date(Date.now() - 60 * 60 * 1000), deadlineAt: new Date(Date.now() + 24 * 60 * 60 * 1000), trigger: "test",
+    });
+    const token = (await claimGeneration(db, SESSION, 60_000))!;
+    // Another worker's claim, not committed yet: our NOT EXISTS cannot see it, the index can.
+    const other = await handle.pool.connect();
+    try {
+      await other.query("BEGIN");
+      await other.query("UPDATE feedback_autowriter_sessions SET state = 'posting', post_started_at = now() WHERE wise_session_id = $1", [OTHER_SESSION]);
+      const claim = sessionSubmitStore(db, SESSION, token).claimPost(claimInput);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await other.query("COMMIT");
+      expect(await claim).toEqual({ claimed: false, reason: "post_in_flight" });
+    } finally {
+      other.release();
+    }
+    expect((await readSessionRow(db, SESSION))?.state).toBe("generating");
+  });
+
+  it("reports a halt as 'conditions', not 'post_in_flight', even while another POST is in flight", async () => {
+    await updateControl(db, { mode: "live", haltedAt: new Date(), haltReason: "x" }, "t@x.com");
+    await ensureSessionRow(db, {
+      wiseSessionId: OTHER_SESSION, wiseClassId: "6a0000000000000000000011", wiseTeacherUserId: TEACHER,
+      scheduledEndAt: new Date(Date.now() - 60 * 60 * 1000), deadlineAt: new Date(Date.now() + 24 * 60 * 60 * 1000), trigger: "test",
+    });
+    await db.update(schema.feedbackAutowriterSessions).set({ state: "posting", postStartedAt: sql`now() - interval '10 minutes'` })
+      .where(eq(schema.feedbackAutowriterSessions.wiseSessionId, OTHER_SESSION));
+    const token = (await claimGeneration(db, SESSION, 60_000))!;
+    expect(await sessionSubmitStore(db, SESSION, token).claimPost(claimInput)).toEqual(refused);
+    expect(await stuckPostInFlight(db, 6 * 60 * 1000)).toBe(true);
+    expect(await stuckPostInFlight(db, 15 * 60 * 1000)).toBe(false);
+  });
+
+  it("follows the latest teacher while pending, never under a lease", async () => {
+    const upsert = (teacher: string) => ensureSessionRow(db, {
+      wiseSessionId: SESSION, wiseClassId: "6a0000000000000000000001", wiseTeacherUserId: teacher,
+      scheduledEndAt: null, deadlineAt: null, trigger: "cron",
+    });
+    await upsert("696f1eee43579bbadad472e5");
+    expect((await readSessionRow(db, SESSION))?.wiseTeacherUserId).toBe("696f1eee43579bbadad472e5");
+    await claimGeneration(db, SESSION, 60_000);
+    await upsert(TEACHER);
+    expect((await readSessionRow(db, SESSION))?.wiseTeacherUserId).toBe("696f1eee43579bbadad472e5");
+  });
+
+  it("stores a shadow draft, or sends it back to pending when the mode switched to live meanwhile", async () => {
+    const draft = { arm: "glm" as const, fields: claimInput.fields, fieldsSha256: "f", billing: claimInput.billing, metadata: { judge: { faithful: true } } };
+    const shadowToken = (await claimGeneration(db, SESSION, 60_000))!;
+    expect(await releaseShadowDraft(db, SESSION, shadowToken, draft)).toBe("would_submit");
+    expect(await readSessionRow(db, SESSION)).toMatchObject({ state: "would_submit", reason: "shadow", leaseToken: null });
+
+    await requeueShadowDrafts(db, new Date());
+    const token = (await claimGeneration(db, SESSION, 60_000))!;
+    await updateControl(db, { mode: "live" }, "t@x.com");
+    expect(await releaseShadowDraft(db, SESSION, token, draft)).toBe("pending");
+    expect(await readSessionRow(db, SESSION)).toMatchObject({ state: "pending", reason: "mode_switched_to_live", nextAttemptAt: null });
+    expect(await releaseShadowDraft(db, SESSION, token, draft)).toBeNull(); // lease already released
+  });
+
   it("only finishes rows that are posting, and keeps every halt reason until resumed", async () => {
     await updateControl(db, { mode: "live" }, "t@x.com");
     const token = (await claimGeneration(db, SESSION, 60_000))!;
@@ -156,6 +220,8 @@ describe("feedback autowriter store (Postgres)", () => {
     await store.finish("verified", {});
     expect((await readSessionRow(db, SESSION))?.state).toBe("unknown_outcome");
     expect((await readControl(db)).haltReason).toBe("first | then: second");
+    await haltAutowriter(db, "paused by k@x.com: look", "k@x.com");
+    expect(await readControl(db)).toMatchObject({ haltReason: "first | then: second | then: paused by k@x.com: look", updatedBy: "k@x.com" });
   });
 
   it("lists pending and dead-worker generating rows as due, most urgent deadline first", async () => {
@@ -178,8 +244,21 @@ describe("feedback autowriter store (Postgres)", () => {
     });
     await db.update(schema.feedbackAutowriterSessions).set({ deadlineAt: sql`now() + interval '10 minutes'` })
       .where(eq(schema.feedbackAutowriterSessions.wiseSessionId, SESSION));
+    // A dead worker's row expires too; a live lease is left alone.
+    const DEAD = "6a0000000000000000000013";
+    const LIVE = "6a0000000000000000000014";
+    for (const [id, leaseUntil] of [[DEAD, sql`now() - interval '1 minute'`], [LIVE, sql`now() + interval '5 minutes'`]] as const) {
+      await ensureSessionRow(db, {
+        wiseSessionId: id, wiseClassId: "6a0000000000000000000011", wiseTeacherUserId: TEACHER,
+        scheduledEndAt: null, deadlineAt: new Date(Date.now() + 10 * 60 * 1000), trigger: "test",
+      });
+      await db.update(schema.feedbackAutowriterSessions).set({ state: "generating", leaseToken: "00000000-0000-4000-8000-000000000009", leaseUntil })
+        .where(eq(schema.feedbackAutowriterSessions.wiseSessionId, id));
+    }
     const cutoff = new Date(Date.now() + 30 * 60 * 1000);
-    expect(await expireOverdueRows(db, { cutoff, disabledTutors: [OFF_TEACHER] })).toEqual({ expired: 1, handedBack: 1 });
+    expect(await expireOverdueRows(db, { cutoff, disabledTutors: [OFF_TEACHER] })).toEqual({ expired: 2, handedBack: 1 });
+    expect(await readSessionRow(db, DEAD)).toMatchObject({ state: "expired", leaseToken: null });
+    expect((await readSessionRow(db, LIVE))?.state).toBe("generating");
     expect(await readSessionRow(db, SESSION)).toMatchObject({ state: "expired", metadata: { alertKind: "expired" } });
     const handedBack = await readSessionRow(db, OTHER_SESSION);
     expect(handedBack).toMatchObject({ state: "skipped_scope", reason: "tutor_off_at_deadline" });
