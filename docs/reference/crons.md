@@ -373,7 +373,7 @@ The rolling collector covers a **four-day** Bangkok window ([`post-class-feedbac
 
 The three follow-on passes run under `Promise.allSettled`, so any one failing degrades to `{ failed: true }` in the response instead of failing the invocation, and is logged as `{ pass, errorName }` — the error class only ([`collection-tick.ts:50-58`](../../src/lib/post-class-feedback/collection-tick.ts), [`:77-88`](../../src/lib/post-class-feedback/collection-tick.ts)):
 
-- **AI review** — up to 10 pending reviews per tick, hard-capped at 25 ([`ai.ts:119-123`](../../src/lib/post-class-feedback/ai.ts)).
+- **AI review** — up to 10 pending reviews per tick, hard-capped at 25 ([`ai.ts:119-123`](../../src/lib/post-class-feedback/ai.ts)). Each model call times out after 30s ([`ai.ts:63`](../../src/lib/post-class-feedback/ai.ts)) and is then recorded as a failed review. Failed calls do not count toward the 10, so a sustained stall can still try every suspect version among the 40 the pass loads, 30s each.
 - **Notification retries** — up to 50 due `pending`/`failed`/stale-`sending` deliveries ([`notifications.ts:1090-1125`](../../src/lib/post-class-feedback/notifications.ts)).
 - **Deduction hygiene** — the safety-restoring half of the auto-approval sweep, with **no approve leg**: reopen `approved` deductions that lost proof, then waive `pending_review` deductions whose session is no longer eligible (e.g. cancelled in Wise). It releases claims only and never approves, which is why it is not behind the auto-approve flag ([`auto-approval.ts:259-282`](../../src/lib/post-class-feedback/auto-approval.ts), tick doc at [`collection-tick.ts:66-69`](../../src/lib/post-class-feedback/collection-tick.ts)).
 
