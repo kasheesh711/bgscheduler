@@ -809,7 +809,8 @@ describe("acquirePayoutRunLease", () => {
       .from(schema.postClassDeductions)
       .where(eq(schema.postClassDeductions.id, deductionId));
     await linkFeedbackEvents(deduction.sessionId, [
-      { eventId: "legacy-student-event", at: "2026-07-10T03:00:04.000Z", role: "STUDENT" },
+      // Tab/newline padding: SQL must trim like the TS `trim()` does.
+      { eventId: "legacy-student-event", at: "2026-07-10T03:00:04.000Z", role: "\tSTUDENT\n" },
       { eventId: "legacy-tutor-event", at: "2026-07-13T02:00:00.000Z", role: "TEACHER" },
     ]);
     const acquired = await acquireRun();

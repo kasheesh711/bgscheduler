@@ -3,11 +3,12 @@
 // Read-only: issues SELECTs only, never writes, never calls Wise.
 //
 // For every post_class_sessions row of one tutor it prints the full submission
-// trail: every SessionFeedbackSubmittedEvent (human vs auto), the FIRST human
+// trail: every SessionFeedbackSubmittedEvent (human vs auto), the FIRST tutor
 // submission (the instant the system and the payout sheet charge on — the
 // `min(event_timestamp)` rule shared by deriveEventTimingEvidence, the
-// dashboard Submitted column, and payout tutor_submitted_at, D-EVT-04), the
-// LATEST human submission (the tutor's most recent copy), every stored
+// dashboard Submitted column, and payout tutor_submitted_at: not auto, no
+// staff-role gate per D-EVT-04, never a student's own feedback per D-EVT-05),
+// the LATEST tutor submission (the tutor's most recent copy), every stored
 // feedback version, the deduction verdict, and the payout-sheet line values.
 //
 // The activity mirror (`wise_activity_events`) is also queried directly and
@@ -32,6 +33,7 @@ import { and, asc, eq, gte, ilike, inArray, lt, or } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { BANGKOK_TIME_ZONE } from "@/lib/bangkok-time";
+import { countsAsTutorSubmission, feedbackSubmitterRole } from "@/lib/post-class-feedback/policy";
 import { bangkokDateKey, bangkokDateStartUtc } from "@/lib/room-capacity/dates";
 
 loadEnvConfig(process.cwd());
@@ -92,6 +94,20 @@ function payoutWindowStartKey(todayKey: string): string {
  * top-level. Unknown shapes yield null (treated as human, matching the
  * NULL-safe `IS DISTINCT FROM true` rule).
  */
+function isTutorSubmission(
+  eventTimestamp: Date,
+  autoSubmitted: boolean | null,
+  actorRole: string | null,
+): boolean {
+  return countsAsTutorSubmission(feedbackSubmitterRole({
+    eventId: "",
+    sessionId: "",
+    eventTimestamp,
+    autoSubmitted,
+    actorRole,
+  }));
+}
+
 function payloadAutoSubmitted(payload: Record<string, unknown>): boolean | null {
   const nested = (payload.session as Record<string, unknown> | undefined)
     ?.autoSubmitted;
@@ -369,14 +385,15 @@ async function main(): Promise<void> {
     const sessionPayoutLines = payoutLinesBySession.get(session.id) ?? [];
     const mirror = mirrorByWiseSession.get(session.wiseSessionId) ?? [];
 
-    // Human submissions per D-EVT-04: anything not proven auto counts.
+    // Tutor submissions per D-EVT-04/05: anything not proven auto and not a
+    // student's own feedback counts, exactly as `countsAsTutorSubmission`.
     const humanLinkTimes = sessionLinks
-      .filter((l) => l.autoSubmitted !== true)
+      .filter((l) => isTutorSubmission(l.eventTimestamp, l.autoSubmitted, l.actorRole))
       .map((l) => l.eventTimestamp);
     const linkedEventIds = new Set(sessionLinks.map((l) => l.wiseEventId));
     const unlinked = mirror.filter((e) => !linkedEventIds.has(e.eventId));
     const unlinkedHumanTimes = unlinked
-      .filter((e) => payloadAutoSubmitted(e.payload) !== true)
+      .filter((e) => isTutorSubmission(e.eventTimestamp, payloadAutoSubmitted(e.payload), e.actorRole))
       .map((e) => e.eventTimestamp);
     // The link table drives the system's numbers; the mirror fills gaps only.
     const allHumanTimes = [...humanLinkTimes, ...unlinkedHumanTimes].sort(

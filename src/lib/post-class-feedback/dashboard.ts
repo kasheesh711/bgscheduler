@@ -301,7 +301,7 @@ export async function getPostClassFeedbackDashboard(
           eq(schema.wiseActivityEvents.eventName, "SessionFeedbackSubmittedEvent"),
           inArray(schema.wiseActivityEvents.sessionId, wiseSessionIds),
           sql`coalesce(${schema.wiseActivityEvents.payload} -> 'session' ->> 'autoSubmitted', 'false') <> 'true'`,
-          sql`upper(btrim(coalesce(${schema.wiseActivityEvents.actorRole}, ''))) <> 'STUDENT'`,
+          sql`upper(regexp_replace(coalesce(${schema.wiseActivityEvents.actorRole}, ''), '^\\s+|\\s+$', '', 'g')) <> 'STUDENT'`,
         ))
         .groupBy(schema.wiseActivityEvents.sessionId)
       : Promise.resolve([]),

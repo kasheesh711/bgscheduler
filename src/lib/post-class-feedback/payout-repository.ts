@@ -100,13 +100,14 @@ function anchorMonthDate(anchorMonth: string): string {
 /**
  * The actor filter for the ledger's "Tutor submitted" instant (D-EVT-05): a
  * `STUDENT` event is the student's own session feedback, never the tutor's
- * submission. NULL-safe, so an unrecorded role still counts — identical to
- * `countsAsTutorSubmission` in `policy.ts`, so a new row's instant matches the
- * verdict that charged it. Staff roles stay ungated (D-EVT-04). Shared by the
+ * submission. NULL-safe, so an unrecorded role still counts, and trimmed of
+ * any whitespace (not only spaces, which is all `btrim` removes) like the
+ * `trim()` in `feedbackSubmitterRole` — identical to `countsAsTutorSubmission`
+ * in `policy.ts`, so a new row's instant matches the verdict that charged it. Staff roles stay ungated (D-EVT-04). Shared by the
  * candidate query, the written-row drift query, and the backfill script.
  */
 export function notStudentFeedbackActor(): SQL {
-  return sql`upper(btrim(coalesce(${schema.wiseActivityEvents.actorRole}, ''))) <> 'STUDENT'`;
+  return sql`upper(regexp_replace(coalesce(${schema.wiseActivityEvents.actorRole}, ''), '^\\s+|\\s+$', '', 'g')) <> 'STUDENT'`;
 }
 
 /** Approved, in-window deductions which have not already been compensated. */
