@@ -88,12 +88,7 @@ function payoutWindowStartKey(todayKey: string): string {
   return `${prevYear}-${String(prevMonth).padStart(2, "0")}-26`;
 }
 
-/**
- * The auto-submission flag as recorded on a raw mirror event payload, with the
- * same defensive fallbacks as `toFeedbackEventEvidence`: nested first, then
- * top-level. Unknown shapes yield null (treated as human, matching the
- * NULL-safe `IS DISTINCT FROM true` rule).
- */
+/** D-EVT-04/05: not auto and not a student's own feedback (`countsAsTutorSubmission`). */
 function isTutorSubmission(
   eventTimestamp: Date,
   autoSubmitted: boolean | null,
@@ -108,6 +103,12 @@ function isTutorSubmission(
   }));
 }
 
+/**
+ * The auto-submission flag as recorded on a raw mirror event payload, with the
+ * same defensive fallbacks as `toFeedbackEventEvidence`: nested first, then
+ * top-level. Unknown shapes yield null (treated as human, matching the
+ * NULL-safe `IS DISTINCT FROM true` rule).
+ */
 function payloadAutoSubmitted(payload: Record<string, unknown>): boolean | null {
   const nested = (payload.session as Record<string, unknown> | undefined)
     ?.autoSubmitted;
