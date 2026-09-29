@@ -38,6 +38,8 @@ export interface PostClassCollectionTickResult {
 }
 
 const LOG_TAG = "[post-class-collection-tick]";
+/** Every caller runs with maxDuration 800s; the AI pass starts no model call after 10 minutes into the tick. */
+const AI_REVIEW_BUDGET_MS = 10 * 60 * 1_000;
 
 /**
  * The error's class only. Driver, Wise and OpenAI messages can carry SQL,
@@ -63,19 +65,21 @@ function settledPass<T>(
  * 1. Sync with `options`. A sync error propagates before any pass runs, and the
  *    caller maps it: the cron and Data Health through
  *    {@link runPostClassCollectionTickRequest}, the page through its own mapper.
- * 2. Once the sync resolves, run the AI quality review, due notification
- *    retries and deduction hygiene in one `Promise.allSettled`. Hygiene reopens
- *    unproven approvals and waives deductions on sessions the sync just found
- *    ineligible (e.g. cancelled in Wise); it releases claims only, never approves.
+ * 2. Once the sync resolves, run the AI quality review (with a deadline 10
+ *    minutes after the tick started), due notification retries and deduction
+ *    hygiene in one `Promise.allSettled`. Hygiene reopens unproven approvals and
+ *    waives deductions on sessions the sync just found ineligible (e.g.
+ *    cancelled in Wise); it releases claims only, never approves.
  * 3. A rejected pass becomes `{ failed: true }` and is logged by pass name and
  *    error class; the other passes still report.
  */
 export async function runPostClassCollectionTick(
   options: PostClassCollectionTickOptions,
 ): Promise<PostClassCollectionTickResult> {
+  const startedAt = Date.now();
   const result = await runPostClassFeedbackSync(options);
   const [ai, retries, hygiene] = await Promise.allSettled([
-    processPostClassAiReviews(),
+    processPostClassAiReviews({ deadlineAt: startedAt + AI_REVIEW_BUDGET_MS }),
     processDuePostClassNotificationRetries(),
     runPostClassDeductionHygiene(),
   ]);

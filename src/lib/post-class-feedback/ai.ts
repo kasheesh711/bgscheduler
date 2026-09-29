@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
-import { and, desc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { extractOutputText } from "@/lib/ai/scheduler";
@@ -9,11 +9,22 @@ import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 
 import { PostClassConflictError, PostClassNotFoundError, PostClassValidationError } from "./errors";
+import { safeErrorFields } from "./safe-error";
 import { assessAiSuspect, redactKnownNames, type PriorFeedbackComparison } from "./similarity";
 import { withPostClassTransaction } from "./transaction";
 
 const PROMPT_VERSION = 1;
 const REDACTION_VERSION = 1;
+/** One model call. Production p99 is about 6s (2026-09), so only a stalled call reaches this. */
+const QUALITY_MODEL_TIMEOUT_MS = 30_000;
+/** Consecutive model failures that end the pass for this tick: the model is likely down. */
+const MAX_CONSECUTIVE_MODEL_FAILURES = 3;
+/** Model attempts per feedback version, the first included. */
+const MAX_MODEL_ATTEMPTS = 3;
+/** A transient failure waits at least this long before its next attempt. */
+const RETRY_AFTER_MS = 60 * 60 * 1_000;
+/** No claim outlives one 800s tick, so a run still `running` after this was killed mid-call. */
+const STALE_RUNNING_MS = 15 * 60 * 1_000;
 const DIMENSIONS = [
   "vagueness",
   "actionable_detail",
@@ -48,6 +59,54 @@ function safeAiError(error: unknown): string {
   return "AI quality review failed";
 }
 
+/**
+ * Whether a failed model call is worth another attempt later: a timeout or
+ * abort, a network failure (`TypeError` from `fetch`), a rate limit or a
+ * server error. A bad request, a rejected key, unparseable or off-schema
+ * output, and anything else stay final.
+ */
+export function isTransientQualityModelError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.name === "TimeoutError" || error.name === "AbortError" || error instanceof TypeError) return true;
+  const status = /^OpenAI HTTP (\d{3})$/.exec(error.message)?.[1];
+  return status === "429" || Boolean(status?.startsWith("5"));
+}
+
+interface EarlierAiRun {
+  status: string;
+  metadata: Record<string, unknown>;
+  finishedAt: Date | null;
+  updatedAt: Date;
+}
+
+function modelAttempts(metadata: Record<string, unknown>): number {
+  return typeof metadata.attempts === "number" ? metadata.attempts : 1;
+}
+
+/** Whether an earlier run for the same request is due another model attempt (mirrors the candidate query). */
+function retryDue(run: EarlierAiRun, now: Date): boolean {
+  if (modelAttempts(run.metadata) >= MAX_MODEL_ATTEMPTS) return false;
+  if (run.status === "failed") {
+    return run.metadata.retryable === true
+      && run.finishedAt !== null
+      && now.getTime() - run.finishedAt.getTime() >= RETRY_AFTER_MS;
+  }
+  return run.status === "running" && now.getTime() - run.updatedAt.getTime() >= STALE_RUNNING_MS;
+}
+
+export interface PostClassAiReviewPassResult {
+  /** Model reviews that finished. */
+  processed: number;
+  /** Model calls that failed; each run row records why and whether it is retryable. */
+  failed: number;
+  /** Versions already settled, cleared without the model, not yet due a retry, or claimed by another pass. */
+  skipped: number;
+  /** Model calls that retried an earlier failed or killed run (also counted in processed or failed). */
+  retried: number;
+  /** Why the pass stopped before its batch ran out, if it did. */
+  stopped: "deadline" | "model_failures" | "not_configured" | null;
+}
+
 async function callQualityModel(input: {
   model: string;
   topics: string;
@@ -60,7 +119,7 @@ async function callQualityModel(input: {
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
 
   const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST", signal: AbortSignal.timeout(30_000),
+    method: "POST", signal: AbortSignal.timeout(QUALITY_MODEL_TIMEOUT_MS),
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
@@ -116,12 +175,31 @@ async function callQualityModel(input: {
   return AiOutputSchema.parse(JSON.parse(extractOutputText(json)));
 }
 
+/**
+ * Runs one bounded batch of AI quality reviews.
+ *
+ * 1. Load up to `limit * 4` substantive, source-ready versions that have no AI
+ *    run yet, or whose run is due a retry: a transient failure at least an hour
+ *    old, or a run killed mid-call (still `running` after 15 minutes). Either
+ *    retry is capped at three model attempts in total.
+ * 2. A first look assesses the version deterministically; a clean version gets a
+ *    `deterministic-only` run and no model call. A retry reuses the triggers
+ *    recorded with its first attempt.
+ * 3. Before each model call: stop when `OPENAI_API_KEY` is unset, or when the call
+ *    could not finish (30s timeout) before `deadlineAt`. Then claim the run
+ *    exclusively, by insert on the unique request hash or by a conditional update
+ *    of the earlier row. A lost claim skips the version.
+ * 4. A failed call records whether it is retryable. Three consecutive failures
+ *    stop the pass for this tick; unreached versions keep no run row and stay
+ *    eligible.
+ */
 export async function processPostClassAiReviews(
-  options: { limit?: number; now?: Date } = {},
+  options: { limit?: number; now?: Date; deadlineAt?: number } = {},
   db: Database = getDb(),
-) {
+): Promise<PostClassAiReviewPassResult> {
   const limit = Math.max(1, Math.min(25, options.limit ?? 10));
   const now = options.now ?? new Date();
+  const attemptsSql = sql`coalesce((${schema.postClassAiRuns.metadata}->>'attempts')::int, 1)`;
   const candidates = await db
     .select({
       session: schema.postClassSessions,
@@ -140,7 +218,23 @@ export async function processPostClassAiReviews(
       eq(schema.postClassSessions.eligible, true),
       eq(schema.postClassSessions.sourceStatus, "ready"),
       eq(schema.postClassFeedbackVersions.substantive, true),
-      isNull(schema.postClassAiRuns.id),
+      or(
+        isNull(schema.postClassAiRuns.id),
+        and(
+          sql`${attemptsSql} < ${MAX_MODEL_ATTEMPTS}`,
+          or(
+            and(
+              eq(schema.postClassAiRuns.status, "failed"),
+              sql`(${schema.postClassAiRuns.metadata}->>'retryable') = 'true'`,
+              lt(schema.postClassAiRuns.finishedAt, new Date(now.getTime() - RETRY_AFTER_MS)),
+            ),
+            and(
+              eq(schema.postClassAiRuns.status, "running"),
+              lt(schema.postClassAiRuns.updatedAt, new Date(now.getTime() - STALE_RUNNING_MS)),
+            ),
+          ),
+        ),
+      ),
     ))
     .orderBy(desc(schema.postClassSessions.lastAssessedAt))
     .limit(limit * 4);
@@ -200,64 +294,28 @@ export async function processPostClassAiReviews(
   let processed = 0;
   let failed = 0;
   let skipped = 0;
+  let retried = 0;
+  let consecutiveFailures = 0;
+  let stopped: PostClassAiReviewPassResult["stopped"] = null;
   for (const candidate of candidates) {
     if (processed >= limit) break;
     const key = requestHash(candidate.session.id, candidate.version.id, candidate.version.contentHash);
-    const [existing] = await db.select({ id: schema.postClassAiRuns.id })
+    const [earlier] = await db.select({
+      id: schema.postClassAiRuns.id,
+      status: schema.postClassAiRuns.status,
+      triggerReasons: schema.postClassAiRuns.triggerReasons,
+      metadata: schema.postClassAiRuns.metadata,
+      finishedAt: schema.postClassAiRuns.finishedAt,
+      updatedAt: schema.postClassAiRuns.updatedAt,
+    })
       .from(schema.postClassAiRuns)
       .where(eq(schema.postClassAiRuns.requestHash, key))
       .limit(1);
-    if (existing) {
+    if (earlier && !retryDue(earlier, now)) {
       skipped += 1;
       continue;
     }
 
-    const priorRows = candidate.session.canonicalTutorKey
-      ? await db.select({
-        sessionId: schema.postClassSessions.id,
-        wiseSessionId: schema.postClassSessions.wiseSessionId,
-        version: schema.postClassFeedbackVersions,
-      }).from(schema.postClassSessions)
-        .innerJoin(
-          schema.postClassFeedbackVersions,
-          eq(schema.postClassSessions.latestFeedbackVersionId, schema.postClassFeedbackVersions.id),
-        )
-        .where(and(
-          eq(schema.postClassSessions.canonicalTutorKey, candidate.session.canonicalTutorKey),
-          gte(
-            schema.postClassSessions.scheduledEndAt,
-            new Date(candidate.session.scheduledEndAt.getTime() - 90 * 86_400_000),
-          ),
-          lt(schema.postClassSessions.scheduledEndAt, candidate.session.scheduledEndAt),
-        ))
-      : [];
-    const priorParticipantRows = priorRows.length > 0
-      ? await db.select({
-        sessionId: schema.postClassSessionParticipants.sessionId,
-        studentName: schema.postClassSessionParticipants.studentName,
-      }).from(schema.postClassSessionParticipants).where(inArray(
-        schema.postClassSessionParticipants.sessionId,
-        priorRows.map((row) => row.sessionId),
-      ))
-      : [];
-    const priorNamesBySession = new Map<string, string[]>();
-    for (const participant of priorParticipantRows) {
-      const names = priorNamesBySession.get(participant.sessionId) ?? [];
-      names.push(participant.studentName);
-      priorNamesBySession.set(participant.sessionId, names);
-    }
-    const prior: PriorFeedbackComparison[] = priorRows
-      .filter((row) => row.sessionId !== candidate.session.id)
-      .map((row) => ({
-        key: row.wiseSessionId,
-        fields: {
-          topics: row.version.topics,
-          performance: row.version.performance,
-          improvement: row.version.improvement,
-          homework: row.version.homework,
-        },
-        studentNames: priorNamesBySession.get(row.sessionId) ?? [],
-      }));
     const studentNames = namesBySession.get(candidate.session.id) ?? [];
     const tutorNames = [...new Set([
       candidate.session.canonicalTutorName ?? "",
@@ -265,51 +323,149 @@ export async function processPostClassAiReviews(
         ? tutorNamesByKey.get(candidate.session.canonicalTutorKey) ?? []
         : []),
     ].filter(Boolean))];
-    const suspect = assessAiSuspect({
-      topics: candidate.version.topics,
-      performance: candidate.version.performance,
-      improvement: candidate.version.improvement,
-      homework: candidate.version.homework,
-    }, { studentNames, tutorNames, priorFeedback: prior });
-    if (!suspect.suspect) {
-      // Persist the deterministic decision so the same healthy version cannot
-      // occupy the head of every bounded cron batch. No model is invoked.
-      await db.insert(schema.postClassAiRuns).values({
-        sessionId: candidate.session.id,
-        feedbackVersionId: candidate.version.id,
-        status: "succeeded",
-        triggerReasons: [],
-        model: "deterministic-only",
-        requestHash: key,
-        redactionVersion: REDACTION_VERSION,
-        startedAt: now,
-        finishedAt: now,
-        metadata: {
-          promptVersion: PROMPT_VERSION,
-          modelInvoked: false,
-          highestPriorSimilarity: suspect.highestPriorSimilarity,
-        },
-      }).onConflictDoNothing({ target: schema.postClassAiRuns.requestHash });
-      skipped += 1;
-      continue;
+    let suspect: { reasons: string[]; highestPriorSimilarity: number; matchingPriorKey: string | null };
+    if (earlier) {
+      // A retry is the same request: keep the triggers its first attempt recorded.
+      suspect = {
+        reasons: earlier.triggerReasons,
+        highestPriorSimilarity: typeof earlier.metadata.highestPriorSimilarity === "number"
+          ? earlier.metadata.highestPriorSimilarity
+          : 0,
+        matchingPriorKey: typeof earlier.metadata.matchingPriorKey === "string"
+          ? earlier.metadata.matchingPriorKey
+          : null,
+      };
+    } else {
+      const priorRows = candidate.session.canonicalTutorKey
+        ? await db.select({
+          sessionId: schema.postClassSessions.id,
+          wiseSessionId: schema.postClassSessions.wiseSessionId,
+          version: schema.postClassFeedbackVersions,
+        }).from(schema.postClassSessions)
+          .innerJoin(
+            schema.postClassFeedbackVersions,
+            eq(schema.postClassSessions.latestFeedbackVersionId, schema.postClassFeedbackVersions.id),
+          )
+          .where(and(
+            eq(schema.postClassSessions.canonicalTutorKey, candidate.session.canonicalTutorKey),
+            gte(
+              schema.postClassSessions.scheduledEndAt,
+              new Date(candidate.session.scheduledEndAt.getTime() - 90 * 86_400_000),
+            ),
+            lt(schema.postClassSessions.scheduledEndAt, candidate.session.scheduledEndAt),
+          ))
+        : [];
+      const priorParticipantRows = priorRows.length > 0
+        ? await db.select({
+          sessionId: schema.postClassSessionParticipants.sessionId,
+          studentName: schema.postClassSessionParticipants.studentName,
+        }).from(schema.postClassSessionParticipants).where(inArray(
+          schema.postClassSessionParticipants.sessionId,
+          priorRows.map((row) => row.sessionId),
+        ))
+        : [];
+      const priorNamesBySession = new Map<string, string[]>();
+      for (const participant of priorParticipantRows) {
+        const names = priorNamesBySession.get(participant.sessionId) ?? [];
+        names.push(participant.studentName);
+        priorNamesBySession.set(participant.sessionId, names);
+      }
+      const prior: PriorFeedbackComparison[] = priorRows
+        .filter((row) => row.sessionId !== candidate.session.id)
+        .map((row) => ({
+          key: row.wiseSessionId,
+          fields: {
+            topics: row.version.topics,
+            performance: row.version.performance,
+            improvement: row.version.improvement,
+            homework: row.version.homework,
+          },
+          studentNames: priorNamesBySession.get(row.sessionId) ?? [],
+        }));
+      const assessment = assessAiSuspect({
+        topics: candidate.version.topics,
+        performance: candidate.version.performance,
+        improvement: candidate.version.improvement,
+        homework: candidate.version.homework,
+      }, { studentNames, tutorNames, priorFeedback: prior });
+      if (!assessment.suspect) {
+        // Persist the deterministic decision so the same healthy version cannot
+        // occupy the head of every bounded cron batch. No model is invoked.
+        await db.insert(schema.postClassAiRuns).values({
+          sessionId: candidate.session.id,
+          feedbackVersionId: candidate.version.id,
+          status: "succeeded",
+          triggerReasons: [],
+          model: "deterministic-only",
+          requestHash: key,
+          redactionVersion: REDACTION_VERSION,
+          startedAt: now,
+          finishedAt: now,
+          metadata: {
+            promptVersion: PROMPT_VERSION,
+            modelInvoked: false,
+            highestPriorSimilarity: assessment.highestPriorSimilarity,
+          },
+        }).onConflictDoNothing({ target: schema.postClassAiRuns.requestHash });
+        skipped += 1;
+        continue;
+      }
+      suspect = assessment;
+    }
+
+    if (!process.env.OPENAI_API_KEY?.trim()) {
+      stopped = "not_configured";
+      break;
+    }
+    if (options.deadlineAt !== undefined && Date.now() + QUALITY_MODEL_TIMEOUT_MS > options.deadlineAt) {
+      stopped = "deadline";
+      break;
     }
 
     const model = process.env.OPENAI_POST_CLASS_FEEDBACK_MODEL?.trim() || "gpt-5.4-mini";
-    const [run] = await db.insert(schema.postClassAiRuns).values({
-      sessionId: candidate.session.id,
-      feedbackVersionId: candidate.version.id,
-      status: "running",
-      triggerReasons: suspect.reasons,
-      model,
-      requestHash: key,
-      redactionVersion: REDACTION_VERSION,
-      startedAt: now,
-      metadata: {
+    const claimedAt = new Date();
+    const attempts = earlier ? modelAttempts(earlier.metadata) + 1 : 1;
+    const metadata: Record<string, unknown> = earlier
+      ? { ...earlier.metadata, attempts }
+      : {
         promptVersion: PROMPT_VERSION,
         highestPriorSimilarity: suspect.highestPriorSimilarity,
         matchingPriorKey: suspect.matchingPriorKey,
-      },
-    }).returning();
+        attempts,
+      };
+    // Two passes can overlap once the sync lock is released, so the claim is
+    // exclusive: only the pass whose write lands calls the model.
+    const [run] = earlier
+      ? await db.update(schema.postClassAiRuns).set({
+        status: "running",
+        model,
+        startedAt: claimedAt,
+        finishedAt: null,
+        errorMessage: null,
+        metadata,
+        updatedAt: claimedAt,
+      }).where(and(
+        eq(schema.postClassAiRuns.id, earlier.id),
+        eq(schema.postClassAiRuns.status, earlier.status),
+        sql`${attemptsSql} = ${modelAttempts(earlier.metadata)}`,
+      )).returning({ id: schema.postClassAiRuns.id })
+      : await db.insert(schema.postClassAiRuns).values({
+        sessionId: candidate.session.id,
+        feedbackVersionId: candidate.version.id,
+        status: "running",
+        triggerReasons: suspect.reasons,
+        model,
+        requestHash: key,
+        redactionVersion: REDACTION_VERSION,
+        startedAt: claimedAt,
+        metadata,
+      }).onConflictDoNothing({ target: schema.postClassAiRuns.requestHash })
+        .returning({ id: schema.postClassAiRuns.id });
+    if (!run) {
+      skipped += 1;
+      continue;
+    }
+    if (earlier) retried += 1;
 
     try {
       const redact = (value: string) => redactKnownNames(value, { studentNames, tutorNames });
@@ -335,17 +491,32 @@ export async function processPostClassAiReviews(
         updatedAt: new Date(),
       }).where(eq(schema.postClassAiRuns.id, run.id));
       processed += 1;
+      consecutiveFailures = 0;
     } catch (error) {
       await db.update(schema.postClassAiRuns).set({
         status: "failed",
         finishedAt: new Date(),
         errorMessage: safeAiError(error),
+        metadata: {
+          ...metadata,
+          retryable: isTransientQualityModelError(error),
+          lastErrorName: safeErrorFields(error).errorName,
+        },
         updatedAt: new Date(),
       }).where(eq(schema.postClassAiRuns.id, run.id));
       failed += 1;
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= MAX_CONSECUTIVE_MODEL_FAILURES) {
+        stopped = "model_failures";
+        break;
+      }
     }
   }
-  return { processed, failed, skipped };
+  if (stopped) {
+    // Counts only: each run row keeps its own failure cause.
+    console.error("[post-class-ai-review]", { stopped, processed, failed, retried });
+  }
+  return { processed, failed, skipped, retried, stopped };
 }
 
 function auditRecord(value: unknown): Record<string, unknown> {
