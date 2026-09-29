@@ -102,6 +102,21 @@ describe("evaluateSessionGates", () => {
     expect(evaluateSessionGates(parse({ participants: extra }), gateInput)).toEqual({ ok: false, reason: "student_count_2" });
   });
 
+  it("skips a class titled as in-person even when Wise's type says online", () => {
+    expect(evaluateSessionGates(parse({ title: "In-Person Session - Math" }), gateInput)).toEqual({ ok: false, reason: "session_type_in_person_title" });
+    expect(evaluateSessionGates(parse({ title: "On-site Session - Chemistry" }), gateInput)).toEqual({ ok: false, reason: "session_type_in_person_title" });
+    expect(evaluateSessionGates(parse({ title: "Live Session - Math" }), gateInput)).toEqual({ ok: true });
+    expect(classifyGateReason("session_type_in_person_title")).toBe("scope");
+  });
+
+  it("requires the one student to be a Wise user (the POST checks their credit)", () => {
+    const guestStudent = sessionDetail().participants.map((participant) =>
+      participant.isTeacher ? participant : { ...participant, wiseUserId: undefined });
+    expect(evaluateSessionGates(parse({ participants: guestStudent }), gateInput)).toEqual({ ok: false, reason: "student_not_wise_user" });
+    expect(classifyGateReason("student_not_wise_user", { minutesSinceEnd: 5 })).toBe("retry");
+    expect(classifyGateReason("student_not_wise_user", { minutesSinceEnd: 90 })).toBe("person");
+  });
+
   it("does not count the tutor joining their own class again as a student", () => {
     // Peat, 29 Sep: two guest devices under his own names beside his teacher account; a one-to-one class.
     const selfJoins = [

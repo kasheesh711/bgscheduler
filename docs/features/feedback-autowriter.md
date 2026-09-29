@@ -19,7 +19,7 @@ simply ingests what the autowriter posted like any other submission.
 | Rule | Where |
 |---|---|
 | Only the roster tutors (Kevin, Gift, Ek, Peat, Mimi — chosen by online-class volume to cover ≥20% of institution online classes), on both of their Wise accounts: the "… Online" one and their main one. Tutors teach online from either (all of Gift's online classes in September were on her main account); in-person classes on either are skipped by the session type below | [`roster.ts`](../../src/lib/feedback-autowriter/roster.ts) |
-| Session `type=SCHEDULED`, `classType=ONE_TO_ONE`, exactly one student who attended ≥50%, meeting `ENDED`. The tutor joining their own class again is not a student: their other Wise account, or a Zoom guest (no Wise account) under one of their names (Peat, 29 Sep, joined twice more as "Kasidej Jungrakangthong" and "Peat"). Any other extra participant still counts, so the class is skipped | `evaluateSessionGates`, `studentParticipants` in [`session.ts`](../../src/lib/feedback-autowriter/session.ts) |
+| Session `type=SCHEDULED`, `classType=ONE_TO_ONE`, exactly one student who attended ≥50%, meeting `ENDED`. The tutor joining their own class again is not a student: their other Wise account, or a Zoom guest (no Wise account) under one of their names (Peat, 29 Sep, joined twice more as "Kasidej Jungrakangthong" and "Peat"). Any other extra participant still counts, so the class is skipped. The one student must be a Wise user (`student_not_wise_user` otherwise: retried while attendance settles, then held). A title starting "In-Person Session" / "On-site Session" is out of scope even if Wise's type says online (`session_type_in_person_title`) | `evaluateSessionGates`, `studentParticipants` in [`session.ts`](../../src/lib/feedback-autowriter/session.ts) |
 | Before the post-class deadline (≥30 min margin) | same |
 | Only when the teacher submission is Wise's blank auto-submission (`metadata.autoSubmitted=true`, all answers empty); anything a person wrote is never touched | `classifyTeacherSubmission` |
 | Re-sends the auto-submission's own `sessionStatus` / `creditsConsumed` (credits must equal the scheduled hours) — no new charge | [`billing.ts`](../../src/lib/feedback-autowriter/billing.ts) |
@@ -91,7 +91,8 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
    or the class is finished (so a retry re-fetches instead of transcribing again), then deleted. A delete that fails
    keeps the job id so the sweep retries it, and the sweep also reaps jobs no row references after 2 hours;
 3. tells tutor from student by lining up Soniox's speakers with Zoom's name-labelled WEBVTT (`rawTranscript`) — every
-   speaker that overlaps the teacher's cues is TUTOR, so a diarization split cannot turn the tutor into the student.
+   speaker that overlaps the teacher's cues is TUTOR, so a diarization split cannot turn the tutor into the student;
+   cues under any of the tutor's other names (their other account, a second device) count as the teacher's.
    The alignment is trusted only when it looks like a one-to-one lesson (TUTOR ≥ 50% of the talk, STUDENT ≥ 5%,
    exact shares). Otherwise it falls back to talk share, used only when the split is clear (two main speakers, one
    with ≥ 60%) and — when Zoom has cues under the teacher's name — agrees with them; anything else is held

@@ -37,8 +37,8 @@ export interface DashboardWebhookRow {
 const POSTED = new Set(["posting", "awaiting_event", "verified"]);
 const FAILED = new Set(["rejected", "unknown_outcome", "verify_failed"]);
 
-/** Wise's session type for an in-person class. */
-const ONSITE_REASON = "session_type_OFFLINE";
+/** Skip reasons of an in-person class: Wise's session type, or its "In-Person/On-site Session" title. */
+const ONSITE_REASONS = ["session_type_OFFLINE", "session_type_in_person_title"];
 
 /**
  * In-person classes on a roster account are skipped at once and stay the
@@ -46,7 +46,7 @@ const ONSITE_REASON = "session_type_OFFLINE";
  * leaves them out entirely (no rows, no counts).
  */
 export function isOnsiteSkip(row: Pick<AutowriterSessionRow, "state" | "reason">): boolean {
-  return row.state === "skipped_scope" && row.reason === ONSITE_REASON;
+  return row.state === "skipped_scope" && row.reason !== null && ONSITE_REASONS.includes(row.reason);
 }
 
 function median(values: number[]): number | null {
@@ -326,7 +326,7 @@ export async function loadAutowriterDashboard(db: Database, input: { windowDays:
     }).from(S)
       .leftJoin(schema.postClassSessions, eq(schema.postClassSessions.wiseSessionId, S.wiseSessionId))
       // In-person classes never reach the page (see isOnsiteSkip); a NULL reason is kept.
-      .where(and(gte(S.createdAt, since), sql`not (${S.state} = 'skipped_scope' and coalesce(${S.reason}, '') = ${ONSITE_REASON})`))
+      .where(and(gte(S.createdAt, since), sql`not (${S.state} = 'skipped_scope' and coalesce(${S.reason}, '') in (${sql.join(ONSITE_REASONS.map((reason) => sql`${reason}`), sql`, `)}))`))
       .orderBy(desc(S.scheduledEndAt))
       .limit(2_000),
     db.select({

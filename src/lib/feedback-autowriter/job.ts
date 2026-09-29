@@ -50,6 +50,7 @@ import {
   recordingTooShort,
   scheduledWindow,
   studentParticipants,
+  tutorSelfNames,
   zoomTranscriptUrl,
   type AutowriterSessionDetail,
 } from "./session";
@@ -799,7 +800,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
       cues = [];
     }
   }
-  const speakers = assignSpeakerRoles({ segments, zoomCues: cues, teacherName: detailTeacherName(detail) });
+  const speakers = assignSpeakerRoles({ segments, zoomCues: cues, teacherName: detailTeacherName(detail), alsoTeacher: tutorSelfNames(detail) });
   const rendered = renderTranscript(segments, speakers.roles);
   const transcriptMeta = {
     audioMinutes: Math.round(audioDurationMs / 600) / 100,

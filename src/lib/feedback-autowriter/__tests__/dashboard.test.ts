@@ -65,6 +65,7 @@ describe("buildAutowriterDashboard", () => {
       // In-person classes (Wise type OFFLINE) on either account: not the autowriter's business, never shown.
       session("onsite-1", { state: "skipped_scope", reason: "session_type_OFFLINE" }),
       session("onsite-2", { state: "skipped_scope", reason: "session_type_OFFLINE", wiseTeacherUserId: "695369c028118f629edcb986" }),
+      session("onsite-3", { state: "skipped_scope", reason: "session_type_in_person_title" }),
       // Gift's online class on her main account.
       session("g", { state: "verified", arm: "glm", wiseTeacherUserId: "695369c028118f629edcb9cb", postStartedAt: new Date("2026-09-30T03:03:00.000Z") }),
       // Out of scope for another reason (a group class) is still shown.

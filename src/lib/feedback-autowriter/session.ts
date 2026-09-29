@@ -258,22 +258,33 @@ function normalizePersonName(value: string): string {
  * "Kasidej Jungrakangthong" and "Peat" beside his teacher account) — and are
  * not students.
  */
-function tutorSelf(detail: AutowriterSessionDetail): { accounts: Set<string>; names: Set<string> } {
+function tutorSelf(detail: AutowriterSessionDetail): { accounts: Set<string>; names: Set<string>; rawNames: string[] } {
   const teacherId = detailTeacherId(detail);
   const tutor = rosterTutor(teacherId);
   const accounts = new Set(tutor ? rosterAccountIds(tutor.canonicalKey) : []);
   if (teacherId) accounts.add(teacherId);
   const names = new Set<string>();
+  const rawNames: string[] = [];
   const add = (name: string | null | undefined) => {
-    if (name?.trim()) names.add(normalizePersonName(name));
+    if (!name?.trim() || names.has(normalizePersonName(name))) return;
+    names.add(normalizePersonName(name));
+    rawNames.push(name.trim());
   };
   add(detailTeacherName(detail));
   if (tutor) {
     for (const account of AUTOWRITER_ROSTER) if (account.canonicalKey === tutor.canonicalKey) add(account.displayName);
     for (const name of tutor.tutorNames) add(name);
   }
-  return { accounts, names };
+  return { accounts, names, rawNames };
 }
+
+/** Every name the session's tutor may appear under (their Wise names and roster name variants). */
+export function tutorSelfNames(detail: AutowriterSessionDetail): string[] {
+  return tutorSelf(detail).rawNames;
+}
+
+/** BeGifted titles in-person classes "In-Person Session - …" / "On-site Session - …". */
+const IN_PERSON_TITLE = /^\s*(?:in[\s-]?person|on[\s-]?site)\s+session\b/iu;
 
 /**
  * The session's students: every non-teacher participant except the tutor
@@ -418,6 +429,8 @@ export function evaluateSessionGates(
   const teacherId = detailTeacherId(detail);
   if (!teacherId || !input.allowlist.has(teacherId)) return { ok: false, reason: "teacher_not_allowlisted" };
   if (detail.type !== "SCHEDULED") return { ok: false, reason: `session_type_${detail.type ?? "unknown"}` };
+  // Second guard for in-person classes: the title, in case Wise's type disagrees (~0.5% of sessions).
+  if (IN_PERSON_TITLE.test(detail.title ?? "")) return { ok: false, reason: "session_type_in_person_title" };
   if (detail.classType !== "ONE_TO_ONE") return { ok: false, reason: `class_type_${detail.classType ?? "unknown"}` };
   if (detail.meetingStatus !== "ENDED") return { ok: false, reason: `meeting_${detail.meetingStatus ?? "unknown"}` };
 
@@ -435,6 +448,8 @@ export function evaluateSessionGates(
 
   const students = studentParticipants(detail);
   if (students.length !== 1) return { ok: false, reason: `student_count_${students.length}` };
+  // The one student must be the Wise user the session bills (the POST checks their credit): a guest join is not.
+  if (!students[0].wiseUserId) return { ok: false, reason: "student_not_wise_user" };
   const attendance = studentAttendancePercent(students[0], window.minutes);
   if (attendance === null) return { ok: false, reason: "attendance_unknown" };
   if (attendance < AUTOWRITER_MIN_ATTENDANCE_PERCENT) return { ok: false, reason: `attendance_${attendance}pct` };
@@ -461,7 +476,9 @@ export type GateDisposition = "retry" | "scope" | "human" | "person" | "expired"
 
 export function classifyGateReason(reason: string, context: { minutesSinceEnd?: number } = {}): GateDisposition {
   const settling = context.minutesSinceEnd !== undefined && context.minutesSinceEnd < AUTOWRITER_ATTENDANCE_SETTLE_MINUTES;
-  if (reason === "student_count_0" || /^attendance_\d+pct$/u.test(reason)) return settling ? "retry" : "person";
+  if (reason === "student_count_0" || reason === "student_not_wise_user" || /^attendance_\d+pct$/u.test(reason)) {
+    return settling ? "retry" : "person";
+  }
   if (reason === "deadline_passed_or_too_close") return "expired";
   if (reason === "human_submission" || reason === "human_blank_submission") return "human";
   if (reason === "teacher_not_allowlisted") return "scope";
