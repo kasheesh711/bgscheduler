@@ -9,6 +9,9 @@ export const STALE_RUNNING_SALES_IMPORT_MS = 20 * 60 * 1000;
 const STALE_RUNNING_SALES_IMPORT_ERROR =
   "Sales dashboard import marked failed because it was still running after 20 minutes; likely timed out or the request was aborted.";
 
+const STALE_RUNNING_SALES_PROJECTION_IMPORT_ERROR =
+  "Sales dashboard projection import marked failed because it was still running after 20 minutes; likely timed out or the request was aborted.";
+
 interface RunningSalesImportRun {
   id: string;
   startedAt: Date;
@@ -40,6 +43,32 @@ export type SalesDashboardImportOutcome =
   | SalesDashboardImportResult
   | SkippedSalesDashboardImportResult;
 
+export interface SalesDashboardProjectionImportResult {
+  sourceId: string;
+  runId: string;
+  projectionMonths: number;
+  targetMonthlyRevenue: number | null;
+  skipped?: false;
+  alreadyRunning?: false;
+  staleRunningImportsFailed?: number;
+}
+
+export interface SkippedSalesDashboardProjectionImportResult {
+  sourceId: string;
+  runId: string;
+  projectionMonths: 0;
+  targetMonthlyRevenue: null;
+  skipped: true;
+  alreadyRunning: true;
+  runningStartedAt: string;
+  message: string;
+  staleRunningImportsFailed: number;
+}
+
+export type SalesDashboardProjectionImportOutcome =
+  | SalesDashboardProjectionImportResult
+  | SkippedSalesDashboardProjectionImportResult;
+
 interface AcquireSalesImportRunInput {
   sourceId: string;
   sourceLabel: string;
@@ -54,6 +83,13 @@ interface AcquiredSalesImportRun {
   runId: string;
   staleRunningImportsFailed: number;
   skipped?: false;
+}
+
+interface AcquireSalesProjectionImportRunInput {
+  sourceId: string;
+  triggerType: SalesImportTrigger;
+  actorEmail: string;
+  now: Date;
 }
 
 function metadataStatus(value: unknown): "active" | "finalized" | "reopened" {
@@ -204,5 +240,117 @@ export async function acquireSalesImportRun(
       running,
       staleRunningImportsFailed,
     );
+  }
+}
+
+/**
+ * Projection imports share the monthly imports' 20-minute lease and entry routes
+ * (all `maxDuration = 800`), but never flip a source status, so there is no
+ * status to restore when a stale run is failed.
+ */
+export async function failStaleSalesDashboardProjectionImports(
+  db: Database,
+  sourceId: string,
+  now: Date,
+): Promise<number> {
+  const cutoff = new Date(now.getTime() - STALE_RUNNING_SALES_IMPORT_MS);
+  const rows = await db
+    .update(schema.salesDashboardProjectionImportRuns)
+    .set({
+      status: "failed",
+      finishedAt: now,
+      errorSummary: STALE_RUNNING_SALES_PROJECTION_IMPORT_ERROR,
+    })
+    .where(
+      and(
+        eq(schema.salesDashboardProjectionImportRuns.sourceId, sourceId),
+        eq(schema.salesDashboardProjectionImportRuns.status, "running"),
+        lt(schema.salesDashboardProjectionImportRuns.startedAt, cutoff),
+      ),
+    )
+    .returning({ id: schema.salesDashboardProjectionImportRuns.id });
+
+  return rows.length;
+}
+
+async function findRunningSalesProjectionImportRun(
+  db: Database,
+  sourceId: string,
+): Promise<RunningSalesImportRun | null> {
+  const [running] = await db
+    .select({
+      id: schema.salesDashboardProjectionImportRuns.id,
+      startedAt: schema.salesDashboardProjectionImportRuns.startedAt,
+    })
+    .from(schema.salesDashboardProjectionImportRuns)
+    .where(
+      and(
+        eq(schema.salesDashboardProjectionImportRuns.sourceId, sourceId),
+        eq(schema.salesDashboardProjectionImportRuns.status, "running"),
+      ),
+    )
+    .orderBy(desc(schema.salesDashboardProjectionImportRuns.startedAt))
+    .limit(1);
+
+  return running ?? null;
+}
+
+function skippedProjectionImportResult(
+  sourceId: string,
+  running: RunningSalesImportRun,
+  staleRunningImportsFailed: number,
+): SkippedSalesDashboardProjectionImportResult {
+  return {
+    sourceId,
+    runId: running.id,
+    projectionMonths: 0,
+    targetMonthlyRevenue: null,
+    skipped: true,
+    alreadyRunning: true,
+    runningStartedAt: running.startedAt.toISOString(),
+    staleRunningImportsFailed,
+    message: "Sales dashboard projection import is already running.",
+  };
+}
+
+export async function acquireSalesProjectionImportRun(
+  db: Database,
+  input: AcquireSalesProjectionImportRunInput,
+): Promise<AcquiredSalesImportRun | SkippedSalesDashboardProjectionImportResult> {
+  const staleRunningImportsFailed = await failStaleSalesDashboardProjectionImports(
+    db,
+    input.sourceId,
+    input.now,
+  );
+  const currentRunning = await findRunningSalesProjectionImportRun(db, input.sourceId);
+
+  if (currentRunning) {
+    return skippedProjectionImportResult(input.sourceId, currentRunning, staleRunningImportsFailed);
+  }
+
+  try {
+    const [run] = await db
+      .insert(schema.salesDashboardProjectionImportRuns)
+      .values({
+        sourceId: input.sourceId,
+        status: "running",
+        triggerType: input.triggerType,
+        actorEmail: input.actorEmail,
+        startedAt: input.now,
+      })
+      .returning({ id: schema.salesDashboardProjectionImportRuns.id });
+
+    return { runId: run.id, staleRunningImportsFailed };
+  } catch (err) {
+    if (sqlStateOf(err) !== "23505") {
+      throw err;
+    }
+
+    const running = await findRunningSalesProjectionImportRun(db, input.sourceId);
+    if (!running) {
+      throw err;
+    }
+
+    return skippedProjectionImportResult(input.sourceId, running, staleRunningImportsFailed);
   }
 }
