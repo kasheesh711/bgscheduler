@@ -74,12 +74,17 @@ describe("buildFeedbackMessages", () => {
 });
 
 describe("redacting a guest name that stood in for the student", () => {
-  it("hides the guest name like the student's own", () => {
-    const text = "Pete Thanasatitkul joined late. Thanasatitkul answered well; Pete asked about ratios.";
-    const redacted = redactForModel(text, { studentFullName: "Pawin (Pete.Th) Thanasatitkul", studentAliases: ["Pete Thanasatitkul"], tutorNames: [] });
-    expect(redacted).not.toMatch(/Pete|Thanasatitkul/u);
-    const sibling = redactForModel("Mali Jaidee answered.", { studentFullName: "Pawin (Pete.Th) Thanasatitkul", studentAliases: ["Mali Jaidee"], tutorNames: [] });
-    expect(sibling).not.toMatch(/Mali|Jaidee/u);
+  it("hides the guest name as the same student, [STUDENT_1]", () => {
+    const names = { studentFullName: "Pawin (Pete.Th) Thanasatitkul", studentAliases: ["Pete Thanasatitkul"], tutorNames: [] };
+    expect(redactForModel("Pete Thanasatitkul joined late. Thanasatitkul answered well; Pete asked about ratios.", names))
+      .toBe("[STUDENT_1] joined late. [STUDENT_1] answered well; [STUDENT_1] asked about ratios.");
+    // A guest name unrelated to the Wise name is the same student too — never [STUDENT_2].
+    const sibling = redactForModel("Mali Jaidee answered, and Mali checked the ratio.",
+      { studentFullName: "Pawin (Pete.Th) Thanasatitkul", studentAliases: ["Mali Jaidee"], tutorNames: [] });
+    expect(sibling).toBe("[STUDENT_1] answered, and [STUDENT_1] checked the ratio.");
+    // Device words and one-letter words in a guest name leave the lesson text alone.
+    expect(redactForModel("We used a Zoom whiteboard on the iPad.", { ...names, studentAliases: ["Zoom user", "A"] }))
+      .toBe("We used a Zoom whiteboard on the iPad.");
   });
 });
 

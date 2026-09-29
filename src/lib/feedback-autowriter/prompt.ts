@@ -55,17 +55,34 @@ export function redactForModel(
   text: string,
   input: { studentFullName: string; tutorNames: readonly string[]; studentAliases?: readonly string[] },
 ): string {
-  let result = redactKnownNames(text, {
-    // Aliases: the name the student joined under as a guest, when that stood in for their account.
-    studentNames: [input.studentFullName, ...(input.studentAliases ?? []).filter((name) => name.trim() !== "")],
+  // Aliases (the name the student joined under as a guest) are the same student: the same [STUDENT_1].
+  // Whole names first, so "Pete Thanasatitkul" is one mention; single words last.
+  const aliases = (input.studentAliases ?? []).map((alias) => alias.trim()).filter((alias) => [...alias].length >= 2);
+  let result = text;
+  for (const alias of aliases) result = result.replace(latinWord(alias), STUDENT_TOKEN);
+  result = redactKnownNames(result, {
+    studentNames: [input.studentFullName],
     tutorNames: [...input.tutorNames],
   });
   const { nicknameCode, nickname } = parseStudentName(input.studentFullName);
   for (const token of [nicknameCode, nickname].filter((value): value is string => Boolean(value && [...value].length >= 2))) {
     result = result.replace(latinWord(token), STUDENT_TOKEN);
   }
+  // Each name-like word of an alias — never a generic device word ("Zoom", "iPad", "user").
+  for (const phrase of aliases) {
+    for (const word of phrase.split(/\s+/u)) {
+      if ([...word].length < 2 || !/^\p{L}[\p{L}\p{M}'-]*$/u.test(word) || GENERIC_GUEST_WORDS.has(word.toLocaleLowerCase("en-US"))) continue;
+      result = result.replace(latinWord(word), STUDENT_TOKEN);
+    }
+  }
   return result;
 }
+
+/** Words Zoom guest names are often made of that are not a person's name. */
+const GENERIC_GUEST_WORDS = new Set([
+  "zoom", "user", "guest", "iphone", "ipad", "android", "phone", "tablet", "laptop", "desktop", "pc", "mac",
+  "macbook", "samsung", "galaxy", "huawei", "oppo", "vivo", "xiaomi", "redmi", "pixel", "windows", "my", "the", "of",
+]);
 
 // Same prefix pattern as student-schedule `deriveDisplaySubject` (copied for the
 // same reason as parseStudentName): "Live Session-Non VR" → "Non VR".

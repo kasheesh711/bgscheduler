@@ -130,11 +130,19 @@ describe("evaluateSessionGates", () => {
     expect(evaluateSessionGates(parse({ participants: [account, guest, teacher] }), gateInput)).toEqual({ ok: true });
 
     const gate = (participants: unknown[]) => evaluateSessionGates(parse({ participants }), gateInput);
-    // The guest left early, or the tutor did: no stand-in.
-    expect(gate([account, { ...guest, absolutePercentAttendance: 79, inMeetingDuration: 2844 }, teacher])).toEqual({ ok: false, reason: "student_count_2" });
-    expect(gate([account, guest, { ...teacher, inMeetingDuration: 2800 }])).toEqual({ ok: false, reason: "student_count_2" });
-    // The Wise account attended too: two people, out of scope.
-    expect(gate([{ ...account, inMeetingDuration: 3300, absolutePercentAttendance: 92 }, guest, teacher])).toEqual({ ok: false, reason: "student_count_2" });
+    // The guest left early, or the tutor did: no stand-in (an account plus a guest: retried while attendance
+    // settles, then out of scope).
+    expect(gate([account, { ...guest, absolutePercentAttendance: 79, inMeetingDuration: 2844 }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
+    expect(gate([account, guest, { ...teacher, inMeetingDuration: 2800 }])).toEqual({ ok: false, reason: "student_count_2_guest" });
+    // The Wise account attended too: two people.
+    expect(gate([{ ...account, inMeetingDuration: 3300, absolutePercentAttendance: 92 }, guest, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
+    expect(classifyGateReason("student_count_2_guest", { minutesSinceEnd: 5 })).toBe("retry");
+    expect(classifyGateReason("student_count_2_guest", { minutesSinceEnd: 90 })).toBe("scope");
+    // The tutor listed twice, or only as a percentage: their best entry counts.
+    const tutorAsPercent = { ...teacher, inMeetingDuration: undefined, absolutePercentAttendance: 96 };
+    expect(gate([account, guest, { ...teacher, inMeetingDuration: 600 }, tutorAsPercent])).toEqual({ ok: true });
+    // A nameless guest still stands in; nothing to redact.
+    expect(studentParticipants(parse({ participants: [account, { ...guest, name: "" }, teacher] }))[0]?.joinedAsGuest).toBe("");
     // Two guests, or a group class: no stand-in.
     expect(gate([account, guest, { ...guest, name: "Mum" }, teacher])).toEqual({ ok: false, reason: "student_count_3" });
     expect(evaluateSessionGates(parse({ participants: [account, guest, teacher], classType: "GROUP" }), gateInput))
@@ -154,15 +162,16 @@ describe("evaluateSessionGates", () => {
     expect(studentParticipants(parse({ participants: selfJoins })).map((student) => student.name)).toEqual([STUDENT_NAME]);
     expect(evaluateSessionGates(parse({ participants: selfJoins }), gateInput)).toEqual({ ok: true });
 
-    // Anyone else still counts: an unknown guest, a nameless guest, or a Wise account that only shares a name.
-    const others = [
-      { name: "Mum", isTeacher: false, absolutePercentAttendance: 80 },
-      { name: "", isTeacher: false, absolutePercentAttendance: 80 },
-      { wiseUserId: "6a0000000000000000000abc", name: "Kev", isTeacher: false, absolutePercentAttendance: 80 },
+    // Anyone else still counts: an unknown guest, a nameless guest (the student attended: no stand-in), or a
+    // Wise account that only shares a name.
+    const others: Array<[Record<string, unknown>, string]> = [
+      [{ name: "Mum", isTeacher: false, absolutePercentAttendance: 80 }, "student_count_2_guest"],
+      [{ name: "", isTeacher: false, absolutePercentAttendance: 80 }, "student_count_2_guest"],
+      [{ wiseUserId: "6a0000000000000000000abc", name: "Kev", isTeacher: false, absolutePercentAttendance: 80 }, "student_count_2"],
     ];
-    for (const other of others) {
+    for (const [other, reason] of others) {
       expect(evaluateSessionGates(parse({ participants: [...sessionDetail().participants, other] }), gateInput))
-        .toEqual({ ok: false, reason: "student_count_2" });
+        .toEqual({ ok: false, reason });
     }
   });
 });
