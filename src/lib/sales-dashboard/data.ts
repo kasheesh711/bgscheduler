@@ -39,8 +39,10 @@ import {
 } from "./lifecycle";
 import {
   acquireSalesImportRun,
+  acquireSalesProjectionImportRun,
   failStaleSalesDashboardImports,
   type SalesDashboardImportOutcome,
+  type SalesDashboardProjectionImportOutcome,
 } from "./import-guard";
 import type {
   ParsedAdditionalSaleRow,
@@ -634,20 +636,23 @@ export async function importSalesDashboardProjectionSource(
   sourceId: string,
   options: ImportOptions,
   db: Database = getDb(),
-) {
+): Promise<SalesDashboardProjectionImportOutcome> {
   const source = await getActiveSalesDashboardProjectionSource(db);
   if (!source || source.id !== sourceId) throw new Error("Sales dashboard projection source not found");
   const now = options.now ?? new Date();
-  const [run] = await db
-    .insert(schema.salesDashboardProjectionImportRuns)
-    .values({
-      sourceId: source.id,
-      status: "running",
-      triggerType: options.triggerType,
-      actorEmail: options.actorEmail,
-      startedAt: now,
-    })
-    .returning();
+  const guard = await acquireSalesProjectionImportRun(db, {
+    sourceId: source.id,
+    triggerType: options.triggerType,
+    actorEmail: options.actorEmail,
+    now,
+  });
+
+  // A skipped request must not touch the source row (the running import owns lastImportError).
+  if (guard.skipped) {
+    return guard;
+  }
+
+  const run = { id: guard.runId };
 
   await db
     .update(schema.salesDashboardProjectionSources)
@@ -709,6 +714,7 @@ export async function importSalesDashboardProjectionSource(
       runId: run.id,
       projectionMonths: parsed.months.length,
       targetMonthlyRevenue: parsed.targetMonthlyRevenue,
+      staleRunningImportsFailed: guard.staleRunningImportsFailed,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Sales dashboard projection import failed";
@@ -728,7 +734,7 @@ export async function importSalesDashboardProjectionSource(
 export async function importActiveSalesDashboardProjectionSource(
   options: ImportOptions,
   db: Database = getDb(),
-) {
+): Promise<SalesDashboardProjectionImportOutcome | null> {
   const source = await getActiveSalesDashboardProjectionSource(db);
   if (!source) return null;
   return importSalesDashboardProjectionSource(source.id, options, db);
