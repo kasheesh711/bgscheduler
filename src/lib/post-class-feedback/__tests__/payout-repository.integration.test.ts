@@ -123,6 +123,31 @@ async function schemaCountLines(): Promise<number> {
     .from(schema.postClassPayoutRunLines)).length;
 }
 
+/** Insert human feedback events for a session and link them, as the collector does. */
+async function linkFeedbackEvents(
+  sessionId: string,
+  events: Array<{ eventId: string; at: string; role: string | null }>,
+) {
+  const inserted = await handle.db.insert(schema.wiseActivityEvents).values(events.map((event) => ({
+    eventId: event.eventId,
+    eventName: "SessionFeedbackSubmittedEvent",
+    eventTimestamp: new Date(event.at),
+    actorRole: event.role,
+  }))).returning({
+    id: schema.wiseActivityEvents.id,
+    eventId: schema.wiseActivityEvents.eventId,
+    eventTimestamp: schema.wiseActivityEvents.eventTimestamp,
+  });
+  await handle.db.insert(schema.postClassFeedbackEventLinks).values(inserted.map((event) => ({
+    sessionId,
+    wiseActivityEventId: event.id,
+    wiseEventId: event.eventId,
+    eventTimestamp: event.eventTimestamp,
+    // Production human links carry NULL autoSubmitted.
+    autoSubmitted: null,
+  })));
+}
+
 async function seedWrittenPayoutDeduction() {
   await upsertPayoutTutorName(appDb(), {
     canonicalKey: "kevin",
@@ -497,6 +522,46 @@ describe("selectPayoutRunCandidates", () => {
     expect(candidate.tutorSubmittedAt?.toISOString())
       .toBe("2026-07-10T02:00:00.000Z");
   });
+
+  it("never reports a STUDENT event as the tutor's submission (D-EVT-05)", async () => {
+    // The student rates the class seconds after it ends; the tutor writes
+    // their feedback later. Only the tutor's instant belongs in the ledger.
+    const deductionId = await seedDeduction({
+      id: "student-before-tutor",
+      endsAt: "2026-07-10T03:00:00.000Z",
+      tutorKey: "kevin",
+      status: "approved",
+    });
+    const [deduction] = await handle.db.select()
+      .from(schema.postClassDeductions)
+      .where(eq(schema.postClassDeductions.id, deductionId));
+    await linkFeedbackEvents(deduction.sessionId, [
+      { eventId: "student-rating-event", at: "2026-07-10T03:00:04.000Z", role: " student " },
+      { eventId: "tutor-feedback-event", at: "2026-07-13T02:00:00.000Z", role: "TEACHER" },
+    ]);
+
+    const [candidate] = await selectPayoutRunCandidates(appDb(), WINDOW);
+    expect(candidate.tutorSubmittedAt?.toISOString())
+      .toBe("2026-07-13T02:00:00.000Z");
+  });
+
+  it("reports no submission time when only the student submitted", async () => {
+    const deductionId = await seedDeduction({
+      id: "student-only",
+      endsAt: "2026-07-10T03:00:00.000Z",
+      tutorKey: "kevin",
+      status: "approved",
+    });
+    const [deduction] = await handle.db.select()
+      .from(schema.postClassDeductions)
+      .where(eq(schema.postClassDeductions.id, deductionId));
+    await linkFeedbackEvents(deduction.sessionId, [
+      { eventId: "student-only-event", at: "2026-07-10T03:00:04.000Z", role: "STUDENT" },
+    ]);
+
+    const [candidate] = await selectPayoutRunCandidates(appDb(), WINDOW);
+    expect(candidate.tutorSubmittedAt).toBeNull();
+  });
 });
 
 describe("acquirePayoutRunLease", () => {
@@ -718,6 +783,102 @@ describe("acquirePayoutRunLease", () => {
     await handle.db.update(schema.postClassFeedbackEventLinks).set({
       eventTimestamp: new Date("2026-07-11T04:00:00.000Z"),
     }).where(eq(schema.postClassFeedbackEventLinks.wiseActivityEventId, event.id));
+
+    await expect(acquireRun()).rejects.toBeInstanceOf(PostClassConflictError);
+  });
+
+  it("keeps a row written with the pre-D-EVT-05 student instant stable", async () => {
+    // Rows written before the student exclusion stored the student's rating
+    // time as "Tutor submitted". The new derivation differs, but Google
+    // received the legacy value; re-flagging those rows as drift would throw
+    // on every publish and block close.
+    await upsertPayoutTutorName(appDb(), {
+      canonicalKey: "kevin",
+      primaryLedgerName: "Kevin (Kev) Y. Hsieh",
+      alternateLedgerName: "Kevin (Kev) Y. Hsieh Online",
+      active: true,
+      updatedByEmail: "admin@example.com",
+    });
+    const deductionId = await seedDeduction({
+      id: "legacy-student-instant",
+      endsAt: "2026-07-10T03:00:00.000Z",
+      tutorKey: "kevin",
+      status: "approved",
+    });
+    const [deduction] = await handle.db.select()
+      .from(schema.postClassDeductions)
+      .where(eq(schema.postClassDeductions.id, deductionId));
+    await linkFeedbackEvents(deduction.sessionId, [
+      { eventId: "legacy-student-event", at: "2026-07-10T03:00:04.000Z", role: "STUDENT" },
+      { eventId: "legacy-tutor-event", at: "2026-07-13T02:00:00.000Z", role: "TEACHER" },
+    ]);
+    const acquired = await acquireRun();
+    const [line] = acquired.lines;
+    expect(line.tutorSubmittedAt?.toISOString()).toBe("2026-07-13T02:00:00.000Z");
+    await markPayoutLine(appDb(), {
+      runId: acquired.run.id,
+      lineId: line.id,
+      leaseToken: acquired.leaseToken,
+      patch: {
+        matchStatus: "matched",
+        writeStatus: "written",
+        insertedRowNumber: 42,
+        writtenAt: new Date(),
+      },
+    });
+    expect((await releaseRun(acquired, false)).status).toBe("published");
+    // What the pre-fix candidate query stored for this row, as though an
+    // earlier deployment had written it.
+    await handle.db.update(schema.postClassPayoutRunLines).set({
+      tutorSubmittedAt: new Date("2026-07-10T03:00:04.000Z"),
+    }).where(eq(schema.postClassPayoutRunLines.id, line.id));
+
+    const again = await acquireRun();
+    expect(again.lines).toHaveLength(1);
+    expect(again.lines[0].tutorSubmittedAt?.toISOString()).toBe("2026-07-10T03:00:04.000Z");
+    expect((await releaseRun(again, false)).status).toBe("published");
+  });
+
+  it("still flags a written row whose stored instant matches neither derivation", async () => {
+    await upsertPayoutTutorName(appDb(), {
+      canonicalKey: "kevin",
+      primaryLedgerName: "Kevin (Kev) Y. Hsieh",
+      alternateLedgerName: "Kevin (Kev) Y. Hsieh Online",
+      active: true,
+      updatedByEmail: "admin@example.com",
+    });
+    const deductionId = await seedDeduction({
+      id: "student-instant-drift",
+      endsAt: "2026-07-10T03:00:00.000Z",
+      tutorKey: "kevin",
+      status: "approved",
+    });
+    const [deduction] = await handle.db.select()
+      .from(schema.postClassDeductions)
+      .where(eq(schema.postClassDeductions.id, deductionId));
+    await linkFeedbackEvents(deduction.sessionId, [
+      { eventId: "drift-student-event", at: "2026-07-10T03:00:04.000Z", role: "STUDENT" },
+      { eventId: "drift-tutor-event", at: "2026-07-13T02:00:00.000Z", role: "TEACHER" },
+    ]);
+    const acquired = await acquireRun();
+    const [line] = acquired.lines;
+    await markPayoutLine(appDb(), {
+      runId: acquired.run.id,
+      lineId: line.id,
+      leaseToken: acquired.leaseToken,
+      patch: {
+        matchStatus: "matched",
+        writeStatus: "written",
+        insertedRowNumber: 42,
+        writtenAt: new Date(),
+      },
+    });
+    expect((await releaseRun(acquired, false)).status).toBe("published");
+    // Control: the untouched row re-publishes cleanly.
+    expect((await releaseRun(await acquireRun(), false)).status).toBe("published");
+    await handle.db.update(schema.postClassPayoutRunLines).set({
+      tutorSubmittedAt: new Date("2026-07-11T09:00:00.000Z"),
+    }).where(eq(schema.postClassPayoutRunLines.id, line.id));
 
     await expect(acquireRun()).rejects.toBeInstanceOf(PostClassConflictError);
   });

@@ -97,6 +97,18 @@ function anchorMonthDate(anchorMonth: string): string {
   return `${anchorMonth}-01`;
 }
 
+/**
+ * The actor filter for the ledger's "Tutor submitted" instant (D-EVT-05): a
+ * `STUDENT` event is the student's own session feedback, never the tutor's
+ * submission. NULL-safe, so an unrecorded role still counts — identical to
+ * `countsAsTutorSubmission` in `policy.ts`, so a new row's instant matches the
+ * verdict that charged it. Staff roles stay ungated (D-EVT-04). Shared by the
+ * candidate query, the written-row drift query, and the backfill script.
+ */
+export function notStudentFeedbackActor(): SQL {
+  return sql`upper(btrim(coalesce(${schema.wiseActivityEvents.actorRole}, ''))) <> 'STUDENT'`;
+}
+
 /** Approved, in-window deductions which have not already been compensated. */
 export async function selectPayoutRunCandidates(
   db: Database,
@@ -184,11 +196,12 @@ export async function selectPayoutRunCandidates(
       inArray(schema.postClassFeedbackEventLinks.sessionId, sessionIds),
       // Genuine human submissions carry a NULL autoSubmitted; `<> true`
       // would drop them under three-valued logic, so the predicate must be
-      // NULL-safe. No actor-role gate: Wise stamps the account's role, not
-      // authorship, so any non-auto event qualifies (D-EVT-04) — matching
-      // `deriveEventTimingEvidence` and the dashboard's Submitted column.
-      // Must stay identical to the drift query's predicate below.
+      // NULL-safe. No staff-role gate: Wise stamps the account's role, not
+      // authorship (D-EVT-04); only a student's own feedback is excluded
+      // (D-EVT-05) — matching `deriveEventTimingEvidence` and the dashboard's
+      // Submitted column. The drift query below derives this same instant.
       sql`${schema.postClassFeedbackEventLinks.autoSubmitted} IS DISTINCT FROM true`,
+      notStudentFeedbackActor(),
     ))
     .groupBy(schema.postClassFeedbackEventLinks.sessionId);
   const written = await db.select().from(schema.postClassPayoutRunLines).where(and(
@@ -576,7 +589,13 @@ async function findWrittenPayoutLinePayloadDrift(
     .where(inArray(schema.postClassSessionParticipants.sessionId, sessionIds));
   const submissions = await db.select({
     sessionId: schema.postClassFeedbackEventLinks.sessionId,
-    submittedAt: sql<string | null>`min(${schema.postClassFeedbackEventLinks.eventTimestamp})`,
+    // The candidate query's instant (D-EVT-05 student exclusion). Any
+    // divergence from it makes freshly written lines register as payload
+    // drift on the very next pass.
+    submittedAt: sql<string | null>`min(${schema.postClassFeedbackEventLinks.eventTimestamp}) filter (where ${notStudentFeedbackActor()})`,
+    // The instant rows written before D-EVT-05 stored: any non-auto event,
+    // a student's included. Google received that value, so it is not drift.
+    legacySubmittedAt: sql<string | null>`min(${schema.postClassFeedbackEventLinks.eventTimestamp})`,
   }).from(schema.postClassFeedbackEventLinks)
     .innerJoin(
       schema.wiseActivityEvents,
@@ -587,10 +606,7 @@ async function findWrittenPayoutLinePayloadDrift(
     )
     .where(and(
       inArray(schema.postClassFeedbackEventLinks.sessionId, sessionIds),
-      // Identical to the candidate query's predicate above: NULL means "not
-      // proven auto" and the actor role is deliberately not gated (D-EVT-04).
-      // Any divergence between the two queries makes freshly written lines
-      // register as payload drift on the very next pass.
+      // NULL means "not proven auto", as in the candidate query.
       sql`${schema.postClassFeedbackEventLinks.autoSubmitted} IS DISTINCT FROM true`,
     ))
     .groupBy(schema.postClassFeedbackEventLinks.sessionId);
@@ -607,6 +623,12 @@ async function findWrittenPayoutLinePayloadDrift(
       submission.submittedAt ? new Date(submission.submittedAt) : null,
     ]),
   );
+  const legacySubmittedBySession = new Map(
+    submissions.map((submission) => [
+      submission.sessionId,
+      submission.legacySubmittedAt ? new Date(submission.legacySubmittedAt) : null,
+    ]),
+  );
   const currentByDeduction = new Map(rows.map((row) => {
     const students = [
       ...(studentsBySession.get(row.sessionId)
@@ -617,6 +639,7 @@ async function findWrittenPayoutLinePayloadDrift(
       amountMinor: -Math.abs(row.amountMinor),
       studentNames: students,
       tutorSubmittedAt: submittedBySession.get(row.sessionId) ?? null,
+      legacyTutorSubmittedAt: legacySubmittedBySession.get(row.sessionId) ?? null,
     }] as const;
   }));
   const sameInstant = (left: Date | null, right: Date | null) =>
@@ -648,9 +671,11 @@ async function findWrittenPayoutLinePayloadDrift(
       || !sameInstant(line.deadlineAt, current.deadlineAt)
       // Rows written while the submission subquery dropped NULL-autoSubmitted
       // links stored no timestamp; a newly derivable value does not contradict
-      // the blank cell Google received, so only a stored value can drift.
+      // the blank cell Google received, so only a stored value can drift. A
+      // row written before D-EVT-05 may carry the student-inclusive instant.
       || (line.tutorSubmittedAt !== null
-        && !sameInstant(line.tutorSubmittedAt, current.tutorSubmittedAt))
+        && !sameInstant(line.tutorSubmittedAt, current.tutorSubmittedAt)
+        && !sameInstant(line.tutorSubmittedAt, current.legacyTutorSubmittedAt))
       || line.amountMinor !== current.amountMinor
       || line.currency !== current.currency
       || line.financeMonth !== current.financeMonth;

@@ -5,9 +5,11 @@
  * Every human (non-auto) `SessionFeedbackSubmittedEvent` link in production
  * carries `auto_submitted = NULL`, so the pre-fix SQL (`<> true` / `= false`)
  * derived nothing and every written line stored a NULL submission time. The
- * derivation below is byte-identical to the corrected subquery in
- * `payout-repository.ts` (`IS DISTINCT FROM true`, no actor-role gate per
- * D-EVT-04), so backfilled values can never register as payload drift.
+ * derivation below is identical to the candidate subquery in
+ * `payout-repository.ts` (`IS DISTINCT FROM true`, no staff-role gate per
+ * D-EVT-04, a student's own feedback excluded per D-EVT-05 through the shared
+ * `notStudentFeedbackActor`), so backfilled values can never register as
+ * payload drift.
  *
  * Only NULL columns are filled — the script never overwrites a stored value
  * and is safe to re-run after new lines land.
@@ -26,6 +28,7 @@ import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { lockPostClassFinance } from "@/lib/post-class-feedback/finance-lock";
+import { notStudentFeedbackActor } from "@/lib/post-class-feedback/payout-repository";
 import { withPostClassTransaction } from "@/lib/post-class-feedback/transaction";
 
 import {
@@ -78,6 +81,7 @@ async function planBackfill(db: Database): Promise<BackfillPlan> {
     .where(and(
       inArray(schema.postClassFeedbackEventLinks.sessionId, sessionIds),
       sql`${schema.postClassFeedbackEventLinks.autoSubmitted} IS DISTINCT FROM true`,
+      notStudentFeedbackActor(),
     ))
     .groupBy(schema.postClassFeedbackEventLinks.sessionId);
   const derivedBySession = new Map(
