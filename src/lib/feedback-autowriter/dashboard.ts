@@ -1,6 +1,7 @@
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { wiseSessionLink } from "@/lib/wise/links";
 import { AUTOWRITER_ROSTER, rosterTutor } from "./roster";
 import { readControl, type AutowriterSessionRow } from "./store";
 
@@ -236,7 +237,7 @@ export function buildAutowriterDashboard(input: {
         const judge = (row.metadata as { judge?: { unsupported?: unknown } } | null)?.judge;
         return {
           wiseSessionId: row.wiseSessionId,
-          wiseUrl: row.wiseClassId ? `https://app.wise.live/classes/${row.wiseClassId}/sessions/${row.wiseSessionId}` : null,
+          wiseUrl: row.wiseClassId ? wiseSessionLink({ wiseClassId: row.wiseClassId, wiseSessionId: row.wiseSessionId }) : null,
           className: row.className,
           tutor: rosterTutor(row.wiseTeacherUserId)?.displayName ?? row.wiseTeacherUserId ?? "unknown",
           scheduledEndAt: row.scheduledEndAt?.toISOString() ?? null,

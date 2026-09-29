@@ -227,12 +227,17 @@ describe("post-class notification lifecycle", () => {
   });
 
   it("allows only HTTPS Wise hosts in emailed session links", () => {
-    const fallback = "https://app.wise.live/classes/class-1/sessions/session-1";
+    const fallback = "https://learn.begiftededucation.com/links?type=classroom_entity&entityType=session&entityId=session-1&classId=class-1&profile=teacher";
     expect(safePostClassWiseSessionUrl({
       configuredUrl: "https://app.wise.live/classes/class-1/sessions/session-1?tab=feedback",
       wiseClassId: "class-1",
       wiseSessionId: "session-1",
     })).toContain("app.wise.live");
+    expect(safePostClassWiseSessionUrl({
+      configuredUrl: "https://learn.begiftededucation.com/links?entityId=session-1",
+      wiseClassId: "class-1",
+      wiseSessionId: "session-1",
+    })).toBe("https://learn.begiftededucation.com/links?entityId=session-1");
     expect(safePostClassWiseSessionUrl({
       configuredUrl: "javascript:alert(1)",
       wiseClassId: "class-1",

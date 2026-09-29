@@ -100,7 +100,7 @@ describe("buildAutowriterDashboard", () => {
     expect(kevin).toMatchObject({ seen: 6, posted: 2, held: 1 });
     const held = dashboard.recent.find((row) => row.wiseSessionId === "c");
     expect(held?.judgeUnsupported).toEqual(["scored 95%"]);
-    expect(held?.wiseUrl).toBe("https://app.wise.live/classes/6a0000000000000000000001/sessions/c");
+    expect(held?.wiseUrl).toBe("https://learn.begiftededucation.com/links?type=classroom_entity&entityType=session&entityId=c&classId=6a0000000000000000000001&profile=teacher");
   });
 
   it("summarises webhook deliveries by event and outcome", () => {

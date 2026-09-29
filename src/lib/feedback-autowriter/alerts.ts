@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { createAppsScriptScheduleEmailSender, type ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
+import { wiseSessionLink } from "@/lib/wise/links";
 import { rosterTutor } from "./roster";
 import type { AlertKind, PendingAlert } from "./store";
 
@@ -26,7 +27,7 @@ function escapeHtml(value: string): string {
 export function buildAlertDigest(alerts: readonly PendingAlert[], halt: { haltedAt: Date | null; haltReason: string | null }) {
   const lines = alerts.map((alert) => {
     const tutor = rosterTutor(alert.wiseTeacherUserId)?.displayName ?? alert.wiseTeacherUserId ?? "unknown tutor";
-    const link = alert.wiseClassId ? `https://app.wise.live/classes/${alert.wiseClassId}/sessions/${alert.wiseSessionId}` : alert.wiseSessionId;
+    const link = alert.wiseClassId ? wiseSessionLink({ wiseClassId: alert.wiseClassId, wiseSessionId: alert.wiseSessionId }) : alert.wiseSessionId;
     return {
       text: `- ${tutor} · deadline ${bangkok(alert.deadlineAt)} (Bangkok) · ${KIND_TEXT[alert.kind]}${alert.reason ? ` [${alert.reason.slice(0, 200)}]` : ""}\n  ${link}`,
       html: `<li><b>${escapeHtml(tutor)}</b> · deadline ${escapeHtml(bangkok(alert.deadlineAt))} (Bangkok)<br>${escapeHtml(KIND_TEXT[alert.kind])}${alert.reason ? `<br><small>${escapeHtml(alert.reason.slice(0, 200))}</small>` : ""}<br><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></li>`,

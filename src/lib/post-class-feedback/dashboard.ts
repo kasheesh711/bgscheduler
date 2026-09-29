@@ -5,6 +5,7 @@ import { and, desc, eq, gte, inArray, isNotNull, lt, sql } from "drizzle-orm";
 
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { wiseSessionLink } from "@/lib/wise/links";
 import {
   addBangkokDays,
   bangkokDateStartUtc,
@@ -110,7 +111,7 @@ function fieldMeaningful(failures: string[], key: string, text: string): boolean
 function wiseSessionUrl(classId: string, sessionId: string, metadata: Record<string, unknown>): string {
   const configured = metadata.wiseUrl;
   if (typeof configured === "string" && /^https:\/\//.test(configured)) return configured;
-  return `https://app.wise.live/classes/${encodeURIComponent(classId)}/sessions/${encodeURIComponent(sessionId)}`;
+  return wiseSessionLink({ wiseClassId: classId, wiseSessionId: sessionId });
 }
 
 export async function getPostClassFeedbackDashboard(
