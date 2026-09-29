@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { DrizzleQueryError, type SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import {
   acquireSalesImportRun,
   acquireSalesProjectionImportRun,
@@ -30,6 +32,7 @@ function makeDbMock(options: {
   return {
     insertValues,
     updateSet,
+    updateWhere,
     db: {
       update: vi.fn(() => ({ set: updateSet })),
       select: vi.fn(() => ({
@@ -202,12 +205,17 @@ describe("sales dashboard projection import guard", () => {
   it.each([
     ["raw driver error", () => Object.assign(new Error("duplicate"), { code: "23505" })],
     ["DrizzleQueryError-wrapped driver error", () => Object.assign(new Error("Failed query"), { cause: { code: "23505" } })],
+    ["real DrizzleQueryError", () => new DrizzleQueryError(
+      'insert into "sales_dashboard_projection_import_runs" ("source_id") values ($1)',
+      ["projection-1"],
+      Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505" }),
+    )],
   ])("skips naming the winning run when the insert loses the unique race (%s)", async (_label, makeError) => {
     const { db } = makeDbMock({ insertError: makeError(), duplicateRaceRows: [projectionWinner] });
 
     const result = await acquireSalesProjectionImportRun(db as never, projectionInput);
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       sourceId: "projection-1",
       runId: "running-after-race",
       projectionMonths: 0,
@@ -215,6 +223,8 @@ describe("sales dashboard projection import guard", () => {
       skipped: true,
       alreadyRunning: true,
       runningStartedAt: "2026-05-26T04:59:00.000Z",
+      staleRunningImportsFailed: 0,
+      message: "Sales dashboard projection import is already running.",
     });
   });
 
@@ -234,7 +244,7 @@ describe("sales dashboard projection import guard", () => {
   });
 
   it("fails a stale running projection import, then acquires a fresh run", async () => {
-    const { db, updateSet } = makeDbMock({
+    const { db, updateSet, updateWhere } = makeDbMock({
       staleRows: [{ id: "stale-1", sourceId: "projection-1", metadata: {} }],
     });
 
@@ -248,6 +258,18 @@ describe("sales dashboard projection import guard", () => {
       errorSummary: expect.stringContaining("Sales dashboard projection import marked failed because it was still running after 20 minutes"),
     }));
     expect(db.insert).toHaveBeenCalledTimes(1);
+
+    // The sweep is scoped to this source and reclaims only RUNNING rows older than the lease
+    // (the timestamp column encodes the Date parameter as an ISO string).
+    const sweepFilter = new PgDialect().sqlToQuery((updateWhere.mock.calls as unknown as Array<[SQL]>)[0][0]);
+    expect(sweepFilter.sql).toBe(
+      '("sales_dashboard_projection_import_runs"."source_id" = $1 and "sales_dashboard_projection_import_runs"."status" = $2 and "sales_dashboard_projection_import_runs"."started_at" < $3)',
+    );
+    expect(sweepFilter.params).toEqual([
+      "projection-1",
+      "running",
+      new Date(projectionInput.now.getTime() - STALE_RUNNING_SALES_IMPORT_MS).toISOString(),
+    ]);
   });
 
   it("counts failed stale projection imports for the source", async () => {

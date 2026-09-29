@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DrizzleQueryError } from "drizzle-orm";
+import { DrizzleQueryError, type SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/sales-dashboard/sheets", () => ({
@@ -69,6 +70,7 @@ function makeDb(options: {
     select,
     set,
     values,
+    where,
   };
 }
 
@@ -119,7 +121,7 @@ describe("runUnearnedRevenueSync single-flight guard", () => {
 
   it("fails a stale running row, then proceeds under a fresh run id", async () => {
     vi.mocked(listGoogleSheetProperties).mockRejectedValueOnce(new Error("sheets unavailable"));
-    const { db, set, values } = makeDb({ selects: [[]], staleRows: [{ id: "stale-run" }] });
+    const { db, set, values, where } = makeDb({ selects: [[]], staleRows: [{ id: "stale-run" }] });
 
     const result = await runUnearnedRevenueSync({ triggerType: "cron", db });
 
@@ -142,6 +144,18 @@ describe("runUnearnedRevenueSync single-flight guard", () => {
     expect(valuesCalls[0][0]).toMatchObject({ status: "running", triggerType: "cron" });
     expect(valuesCalls[0][0].startedAt).toBeInstanceOf(Date);
     expect(valuesCalls[0][0].startedAt).toBe(setCalls[0][0].finishedAt);
+
+    // The sweep reclaims only RUNNING rows older than the lease, cut off from that same `now`
+    // (the timestamp column encodes the Date parameter as an ISO string).
+    const now = setCalls[0][0].finishedAt as Date;
+    const sweepFilter = new PgDialect().sqlToQuery((where.mock.calls as unknown as Array<[SQL]>)[0][0]);
+    expect(sweepFilter.sql).toBe(
+      '("unearned_revenue_sync_runs"."status" = $1 and "unearned_revenue_sync_runs"."started_at" < $2)',
+    );
+    expect(sweepFilter.params).toEqual([
+      "running",
+      new Date(now.getTime() - STALE_RUNNING_UNEARNED_REVENUE_SYNC_MS).toISOString(),
+    ]);
   });
 
   it("rethrows the original unique violation when the winning run has already finished", async () => {
