@@ -1,3 +1,4 @@
+import { DrizzleQueryError } from "drizzle-orm/errors";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -9,30 +10,42 @@ import { safeErrorFields } from "@/lib/post-class-feedback/safe-error";
 
 const SQL_MESSAGE = 'Failed query: update "post_class_deductions" set "status" = $1 where "id" = $2\nparams: approved,ded-1';
 
-/** The shape drizzle 0.45 throws: its own message carries the SQL, the driver's SQLSTATE sits on `cause`. */
+/** What drizzle 0.45 throws: its message carries the SQL and params; the driver error, with its SQLSTATE, is `cause`. */
 function drizzleError(code: unknown): Error {
-  const cause = Object.assign(new Error('duplicate key value violates unique constraint "x"'), { code });
-  const error = new Error(SQL_MESSAGE, { cause });
-  error.name = "DrizzleQueryError";
-  return error;
+  const cause = Object.assign(new Error('duplicate key value violates unique constraint "x"'), { name: "NeonDbError", code });
+  return new DrizzleQueryError('update "post_class_deductions" set "status" = $1 where "id" = $2', ["approved", "ded-1"], cause);
 }
 
 describe("safeErrorFields", () => {
   it("names the error class and drops a driver message that carries SQL and parameters", () => {
-    expect(safeErrorFields(drizzleError("40001"))).toEqual({ errorName: "DrizzleQueryError", code: "40001" });
+    const error = drizzleError("40001");
+    // drizzle 0.45 never sets the name, so the class has to be recognised by instanceof.
+    expect(error.name).toBe("Error");
+    expect(error.message).toContain("params: approved,ded-1");
+
+    expect(safeErrorFields(error)).toEqual({ errorName: "DrizzleQueryError", causeName: "NeonDbError", code: "40001" });
   });
 
   it("reads the error's own code before its cause's", () => {
     const network = Object.assign(new TypeError("connect ECONNRESET 10.0.0.1:5432"), { code: "ECONNRESET" });
     expect(safeErrorFields(network)).toEqual({ errorName: "TypeError", code: "ECONNRESET" });
 
-    const fetchFailed = new TypeError("fetch failed", { cause: Object.assign(new Error("timeout"), { code: "UND_ERR_CONNECT_TIMEOUT" }) });
-    expect(safeErrorFields(fetchFailed)).toEqual({ errorName: "TypeError", code: "UND_ERR_CONNECT_TIMEOUT" });
+    const fetchFailed = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("Connect Timeout Error (attempted address: api.openai.com:443)"), {
+        name: "ConnectTimeoutError",
+        code: "UND_ERR_CONNECT_TIMEOUT",
+      }),
+    });
+    expect(safeErrorFields(fetchFailed)).toEqual({
+      errorName: "TypeError",
+      causeName: "ConnectTimeoutError",
+      code: "UND_ERR_CONNECT_TIMEOUT",
+    });
   });
 
   it("falls back to the cause's code when the error's own code is not an identifier", () => {
     const error = Object.assign(drizzleError("23505"), { code: 23 });
-    expect(safeErrorFields(error)).toEqual({ errorName: "DrizzleQueryError", code: "23505" });
+    expect(safeErrorFields(error)).toEqual({ errorName: "DrizzleQueryError", causeName: "NeonDbError", code: "23505" });
   });
 
   it.each([
@@ -42,7 +55,7 @@ describe("safeErrorFields", () => {
     ["an over-long string", "X".repeat(41)],
     ["an empty string", ""],
   ])("never logs a code that is %s", (_label, code) => {
-    expect(safeErrorFields(drizzleError(code))).toEqual({ errorName: "DrizzleQueryError" });
+    expect(safeErrorFields(drizzleError(code))).toEqual({ errorName: "DrizzleQueryError", causeName: "NeonDbError" });
   });
 
   it.each([

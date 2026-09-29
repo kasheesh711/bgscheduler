@@ -284,7 +284,7 @@ the tab`, and `readback unparseable`
 The whole unattended pipeline is one opt-in. `resolveAutoApproveEnabled` keys on
 `raw?.trim() === "true"` ([`payout-config.ts:164`-`168`](../../src/lib/post-class-feedback/payout-config.ts)),
 and three separate places consult it: the approve sweep
-([`auto-approval.ts:74`](../../src/lib/post-class-feedback/auto-approval.ts)), the payout-candidate
+([`auto-approval.ts:75`](../../src/lib/post-class-feedback/auto-approval.ts)), the payout-candidate
 carve-out that admits exactly one system actor as a decision-maker
 (`payout-repository.ts:142`-`147`), and the ledger-retirement pass
 (`payout-retirement.ts:185`-`187`). Flipping it off instantly restores human-only money movement.

@@ -490,7 +490,7 @@ has no `error_summary`, so that `pass: "sync"` line is its only log. The class i
 `Error`, so the line shows that the sync failed, not why: check `WISE_INSTITUTE_ID` and the database
 first, then look for a `post_class_sync_runs` row started at that time. The deduction sweeps log one line
 per failed deduction — `[post-class-auto-approve]`, `[post-class-ineligible-waive]` or
-`[post-class-auto-reopen]` with `{ deductionId, errorName, code?, message? }` (reassessment:
+`[post-class-auto-reopen]` with `{ deductionId, errorName, causeName?, code?, message? }` (reassessment:
 `[post-class-reassess]` with `wiseSessionId`). `code` is the SQLSTATE or network code; `message`
 appears only for the domain's typed errors (for example "This record changed. Refresh and try again."),
 never for a driver error, whose text can carry SQL and parameters.
