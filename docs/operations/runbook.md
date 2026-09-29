@@ -344,7 +344,7 @@ maxDuration`). "Manual auth" is what a hand-triggered call may present.
 | `/api/internal/sync-sales-dashboard` | `10,40 * * * *` | :10 / :40 | `sales_dashboard` | 800 ([`:11`](../../src/app/api/internal/sync-sales-dashboard/route.ts)) | GET, POST | bearer; POST also accepts a session carrying an email ([`:28-36`](../../src/app/api/internal/sync-sales-dashboard/route.ts)) |
 | `/api/internal/sync-onsite-foot-traffic` | `18 18 * * *` | 01:18 daily | `onsite_foot_traffic` | 800 | GET | bearer; reconciles the rolling 35 completed Bangkok days after the initial backfill |
 | `/api/internal/sync-unearned-revenue` | `30 18 * * *` | 01:30 daily | `unearned_revenue` | 800 | GET | bearer; imports a stable published accounting snapshot |
-| `/api/internal/sync-post-class-feedback` | `13,43 * * * *` | :13 / :43 | `post_class_feedback` | 800 ([`:13`](../../src/app/api/internal/sync-post-class-feedback/route.ts)) | GET | bearer |
+| `/api/internal/sync-post-class-feedback` | `13,43 * * * *` | :13 / :43 | `post_class_feedback` | 800 ([`:7`](../../src/app/api/internal/sync-post-class-feedback/route.ts)) | GET | bearer |
 | `/api/internal/sync-leave-requests` | `15,45 * * * *` | :15 / :45 | `leave_requests` | 800 ([`:7`](../../src/app/api/internal/sync-leave-requests/route.ts)) | GET, POST | bearer on **both** verbs — no session fallback ([`:9-11, :30-36`](../../src/app/api/internal/sync-leave-requests/route.ts)) |
 | `/api/internal/sync-credit-control` | `20,50 * * * *` | :20 / :50 | `credit_control` | 800 ([`:14`](../../src/app/api/internal/sync-credit-control/route.ts)) | GET, POST | bearer; POST also accepts any session ([`:43-56`](../../src/app/api/internal/sync-credit-control/route.ts)) |
 | `/api/internal/post-class-feedback-backfill` | `23,53 * * * *` | :23 / :53 | `post_class_feedback_backfill` | 800 ([`:12`](../../src/app/api/internal/post-class-feedback-backfill/route.ts)) | GET (query params) | bearer |
@@ -470,7 +470,7 @@ Two in-app paths exist, both behind an Auth.js session and both audited with
 |---|---|---|
 | `200` | Ran; body is the job result. Wise sync returns 200 when a snapshot was promoted, with `outcome: "success"` or `"partial"`. A partial refresh retains review warnings and operational alerts but permits classroom generation. | [`run-wise-sync.ts`](../../src/lib/sync/run-wise-sync.ts) |
 | `202` | **Skipped — another run is in flight.** Body carries `skipped: true, alreadyRunning: true, runningStartedAt`. Audited as `skipped`, not failed. | Wise ([`run-wise-sync.ts:148-150`](../../src/lib/sync/run-wise-sync.ts)); credit control; progress tests; admissions when every pass skipped ([`route.ts:62-63`](../../src/app/api/internal/admissions-notifications/route.ts)) |
-| `409` | Also "already running", on routes that throw a typed error instead: Wise activity ([`:28-30`](../../src/app/api/internal/sync-wise-activity/route.ts)), leave requests ([`:20-22`](../../src/app/api/internal/sync-leave-requests/route.ts)), post-class sync/backfill ([`:39-42`](../../src/app/api/internal/sync-post-class-feedback/route.ts), [`:72-74`](../../src/app/api/internal/post-class-feedback-backfill/route.ts)), competitor ([`:55-61`](../../src/app/api/internal/sync-competitor-intelligence/route.ts)). **Different 409s:** sales dashboard → the connected Google account has no Sheets token ([`:62-66`](../../src/app/api/internal/sync-sales-dashboard/route.ts)); student promotions → not the target date; Data Health run → confirmation missing. | |
+| `409` | Also "already running", on routes that throw a typed error instead: Wise activity ([`:28-30`](../../src/app/api/internal/sync-wise-activity/route.ts)), leave requests ([`:20-22`](../../src/app/api/internal/sync-leave-requests/route.ts)), post-class sync/backfill ([`collection-tick.ts:106-108`](../../src/lib/post-class-feedback/collection-tick.ts), [`:72-74`](../../src/app/api/internal/post-class-feedback-backfill/route.ts)), competitor ([`:55-61`](../../src/app/api/internal/sync-competitor-intelligence/route.ts)). **Different 409s:** sales dashboard → the connected Google account has no Sheets token ([`:62-66`](../../src/app/api/internal/sync-sales-dashboard/route.ts)); student promotions → not the target date; Data Health run → confirmation missing. | |
 | `400` | Bad query/body — backfill date/cap rules, admissions `runType`. | [`backfill/route.ts:36-41`](../../src/app/api/internal/post-class-feedback-backfill/route.ts), [`admissions-notifications/route.ts:77-86`](../../src/app/api/internal/admissions-notifications/route.ts) |
 | `401` | Bearer wrong or missing (and, on POST routes with a session fallback, no session either). | [`cron-auth.ts:25`](../../src/lib/internal/cron-auth.ts) |
 | `403` | Data Health run of a `post_class_feedback*` job without `access_manager`. | [`run/route.ts:25-30`](../../src/app/api/data-health/jobs/%5BjobKey%5D/run/route.ts) |
@@ -478,11 +478,15 @@ Two in-app paths exist, both behind an Auth.js session and both audited with
 | `503` | Post-class reminder checkpoint not ready (manual-only routes), or maintenance mode on a non-exempt path. | [`reminder-day-after/route.ts:17-23`](../../src/app/api/internal/post-class-feedback/reminder-day-after/route.ts), [`maintenance.ts:120-134`](../../src/lib/maintenance.ts) |
 
 Three post-class routes return a **generic** error string and discard the underlying message —
-`"Post-class feedback sync failed"` ([`route.ts:42`](../../src/app/api/internal/sync-post-class-feedback/route.ts)),
+`"Post-class feedback sync failed"` ([`collection-tick.ts:110`](../../src/lib/post-class-feedback/collection-tick.ts)),
 `"Post-class feedback backfill failed"` ([`route.ts:75-78`](../../src/app/api/internal/post-class-feedback-backfill/route.ts)),
 `"Post-class payout accrual failed"` ([`route.ts:33-37`](../../src/app/api/internal/post-class-feedback/payout-accrual/route.ts)).
 For those the real reason is in `post_class_sync_runs.error_summary` or the Vercel function log,
-never in the HTTP body (§7.5).
+never in the HTTP body (§7.5). The collection tick logs `[post-class-collection-tick] { pass, errorName }`
+— the error class only — for a sync failure and for each post-sync pass that rejects (`ai`, `retries`,
+`hygiene`); a rejected pass still returns 200 with `{ failed: true }` and audits as `success`. A sync
+that fails before its run row exists (an unset `WISE_INSTITUTE_ID`, a database error in `beginSync`)
+has no `error_summary`, so that `pass: "sync"` line is its only trace.
 
 ---
 
