@@ -253,4 +253,73 @@ describe("processPostClassAiReviews retries (real Postgres)", () => {
     expect(results.map((result) => [result.retried, result.skipped]).sort()).toEqual([[0, 1], [1, 0]]);
     expect((await runs())[0]).toMatchObject({ status: "succeeded", metadata: expect.objectContaining({ attempts: 2 }) });
   });
+  it("lets exactly one of two overlapping passes reclaim a run killed mid-call", async () => {
+    await seedSuspectVersion();
+    vi.stubGlobal("fetch", modelFails(503));
+    await pass();
+    // running -> running: only the attempts condition stops a second claimer.
+    await handle.db.execute(sql`update post_class_ai_runs set status = 'running', finished_at = null, updated_at = now() - interval '20 minutes'`);
+    const fetchMock = modelReplies();
+    vi.stubGlobal("fetch", fetchMock);
+    const db = racingDb(2);
+
+    const results = await Promise.all([
+      processPostClassAiReviews({}, db),
+      processPostClassAiReviews({}, db),
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(results.map((result) => [result.retried, result.skipped]).sort()).toEqual([[0, 1], [1, 0]]);
+    expect((await runs())[0]).toMatchObject({ status: "succeeded", metadata: expect.objectContaining({ attempts: 2 }) });
+  });
+
+  it("closes a run killed mid-call on its last attempt instead of leaving it running", async () => {
+    await seedSuspectVersion();
+    vi.stubGlobal("fetch", modelFails(503));
+    await pass();
+    await handle.db.execute(sql`
+      update post_class_ai_runs
+      set status = 'running', finished_at = null, updated_at = now() - interval '20 minutes',
+          metadata = jsonb_set(metadata, '{attempts}', '3')
+    `);
+    const fetchMock = modelReplies();
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await pass()).toEqual({ processed: 0, failed: 0, skipped: 1, retried: 0, stopped: null });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await runs())[0]).toMatchObject({
+      status: "failed",
+      errorMessage: "AI quality review abandoned after its last attempt was interrupted",
+      metadata: expect.objectContaining({ attempts: 3, retryable: false }),
+    });
+    // Closed for good: never selected again.
+    await age(120);
+    expect(await pass()).toEqual({ processed: 0, failed: 0, skipped: 0, retried: 0, stopped: null });
+  });
+
+  it("does not retry a failure recorded under an older prompt", async () => {
+    await seedSuspectVersion();
+    vi.stubGlobal("fetch", modelFails(503));
+    await pass();
+    await handle.db.execute(sql`update post_class_ai_runs set metadata = jsonb_set(metadata, '{promptVersion}', '0')`);
+    await age(61);
+    const fetchMock = modelReplies();
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await pass()).toEqual({ processed: 0, failed: 0, skipped: 0, retried: 0, stopped: null });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reads a hand-edited non-number attempts as one attempt instead of failing the query", async () => {
+    await seedSuspectVersion();
+    vi.stubGlobal("fetch", modelFails(503));
+    await pass();
+    await handle.db.execute(sql`update post_class_ai_runs set metadata = jsonb_set(metadata, '{attempts}', '"1.5x"')`);
+    await age(61);
+    const fetchMock = modelReplies();
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await pass()).toEqual({ processed: 1, failed: 0, skipped: 0, retried: 1, stopped: null });
+    expect((await runs())[0].metadata).toMatchObject({ attempts: 2 });
+  });
 });
