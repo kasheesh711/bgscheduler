@@ -96,3 +96,25 @@ stacked on `fix/post-class-collection-tick` (884bcda) → #100 → #99. Not push
   `DuplicatePayoutSignatureError` names the duplicate signature. A typed-only allowlist would drop both, so that
   change needs its own decision.
 - **`api.ts` and `collection-tick.ts` logging** is unchanged.
+
+## Review and follow-ups (orchestrator, after execution)
+
+Independent code review by code-reviewer (opus, read-only, joint with 260929-ueh): **APPROVE WITH NITS** for
+this branch. All five helper and site mutations were killed.
+
+**Applied in `4e4b1bc`:**
+- **MEDIUM:** drizzle 0.45 never sets `DrizzleQueryError.name`, so real query failures logged `errorName:
+  "Error"`. The fixtures had set the name by hand. Now:
+  - `instanceof DrizzleQueryError` names the class, and `causeName` (for example `NeonDbError`) is added.
+  - The fixtures use the real constructor.
+  - Removing the instanceof branch fails 9 cases.
+- **NIT:** the doc comment warns that the message allowlist is per class, not per call site. Elsewhere the same
+  typed classes can carry an email (`settings.ts:34`) or a tutor key.
+- **NIT, docs:** `crons.md` sweep span `:61-116`; flag check `auto-approval.ts:75` in three docs.
+
+**Not applied (noted):**
+- Logging the top stack frames and the pg `constraint` for unexpected errors. That is outside the owner's chosen
+  field set, so it is offered as a follow-up.
+- The `[post-class-reassess]` tag is shared with the page route's actor-email audit line, which is deliberate.
+
+**Final (on this branch):** typecheck 0; safe-error, auto-approval and reassess suites 40/40.
