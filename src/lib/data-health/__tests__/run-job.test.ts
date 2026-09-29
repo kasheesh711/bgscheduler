@@ -361,15 +361,23 @@ describe("runDataHealthJob", () => {
     expect(JSON.stringify(body)).not.toContain("sensitive driver detail");
   });
 
-  it("runs the cron's AI-review, retry and hygiene passes after the actor's manual post-class sync", async () => {
-    const response = await runDataHealthJob("post_class_feedback", OWNER);
+  it("runs the cron's AI-review, retry and hygiene passes only after the actor's manual post-class sync resolves", async () => {
+    let finishSync!: (result: unknown) => void;
+    vi.mocked(runPostClassFeedbackSync).mockReturnValueOnce(new Promise<unknown>((resolve) => { finishSync = resolve; }) as never);
+    const passes = [processPostClassAiReviews, processDuePostClassNotificationRetries, runPostClassDeductionHygiene];
+
+    const pending = runDataHealthJob("post_class_feedback", OWNER);
+    // Give an eagerly started pass the chance to run while the sync is still pending.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    for (const pass of passes) expect(pass).not.toHaveBeenCalled();
+
+    finishSync(PC_SYNC);
+    const response = await pending;
 
     expect(runPostClassFeedbackSync).toHaveBeenCalledWith({ triggerType: "manual", actorEmail: OWNER });
-    const syncOrder = vi.mocked(runPostClassFeedbackSync).mock.invocationCallOrder[0];
-    for (const pass of [processPostClassAiReviews, processDuePostClassNotificationRetries, runPostClassDeductionHygiene]) {
+    for (const pass of passes) {
       expect(pass).toHaveBeenCalledTimes(1);
       expect(pass).toHaveBeenCalledWith();
-      expect(vi.mocked(pass).mock.invocationCallOrder[0]).toBeGreaterThan(syncOrder);
     }
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(PC_BODY);
@@ -410,6 +418,17 @@ describe("runDataHealthJob", () => {
     expect(runPostClassFeedbackSync).toHaveBeenCalledTimes(3);
     expect(processPostClassAiReviews).not.toHaveBeenCalled();
     expect(processDuePostClassNotificationRetries).not.toHaveBeenCalled();
+    expect(runPostClassDeductionHygiene).not.toHaveBeenCalled();
+  });
+
+  it("returns a sync deferred by a live payout lease as a 409 with the lease message, as the cron does", async () => {
+    const lease = "Post-class feedback sync is deferred while a payout operation holds a live lease.";
+    vi.mocked(runPostClassFeedbackSync).mockRejectedValueOnce(new PostClassFeedbackSyncAlreadyRunningError(lease));
+
+    const response = await runDataHealthJob("post_class_feedback", OWNER);
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: lease });
     expect(runPostClassDeductionHygiene).not.toHaveBeenCalled();
   });
 
