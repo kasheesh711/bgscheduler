@@ -493,7 +493,11 @@ per failed deduction — `[post-class-auto-approve]`, `[post-class-ineligible-wa
 `[post-class-auto-reopen]` with `{ deductionId, errorName, causeName?, code?, message? }` (reassessment:
 `[post-class-reassess]` with `wiseSessionId`). `code` is the SQLSTATE or network code; `message`
 appears only for the domain's typed errors (for example "This record changed. Refresh and try again."),
-never for a driver error, whose text can carry SQL and parameters.
+never for a driver error, whose text can carry SQL and parameters. The AI review pass logs
+`[post-class-ai-review] { stopped, processed, failed, retried }` when its model calls end early: `deadline`
+(10 minutes into the tick), `model_failures` (three in a row, so OpenAI is likely down; failures that are
+transient are retried after an hour) or `not_configured` (no `OPENAI_API_KEY`). Each failed run row keeps its
+own `error_message` and `metadata.lastErrorName`.
 
 ---
 

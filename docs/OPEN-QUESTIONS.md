@@ -673,7 +673,7 @@ and is referenced by nobody; rows store the room *name* in `preferred_room` / `o
 Writers are the classroom schedule-email path and post-class feedback settings; readers include
 post-class dashboard/AI/tutor-emails, progress tests, learning plans and leave-request matching.
 *Re-home it in the reference docs, or grow a contacts editor under Tutor Profiles?* Related:
-`src/lib/post-class-feedback/ai.ts:252-256` is the only `tutor_contacts` read that does **not** filter
+`src/lib/post-class-feedback/ai.ts:267-271` is the only `tutor_contacts` read that does **not** filter
 `active = true`, and `src/lib/learning-plans/access.ts:47-57` matches only `onsiteEmail`/`onlineEmail`
 and ignores `primaryEmail`.
 
