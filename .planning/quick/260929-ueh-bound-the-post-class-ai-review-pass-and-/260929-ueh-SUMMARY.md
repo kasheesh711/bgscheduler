@@ -158,3 +158,21 @@ mutations in a `git archive` copy.
 - `npm test`: **488 files / 5707 tests**.
 - `ai-review.integration.test.ts` 10/10.
 - Full `npm run test:integration` (Docker): **38 files / 517 tests**.
+
+## Owner decisions after the review (2026-09-29)
+
+- **A rejected key (401/403) is treated like a missing key.**
+  - Implemented in `58c10d2`, docs in `bdcf409`.
+  - The claim it hit is released: a first attempt's row is deleted, and a retry's row is restored exactly.
+  - The rest of the tick leaves suspect versions unclaimed and settles deterministic ones, and the pass reports
+    `stopped: "key_rejected"`.
+  - No version is charged an attempt for a revoked key. Before this, about 3 versions per tick (~144 a day) would
+    have failed permanently.
+  - Tests: 2 unit and 2 integration cases. Three mutations each fail a test.
+- **The 7,460 pre-2026-09-08 OpenAI 429 failures stay final.** Open question 14 is resolved in the feature doc.
+
+**Final at `bdcf409`:**
+- typecheck 0; lint 0 errors.
+- `npm test`: **488 files / 5709 tests**.
+- `ai-review.integration.test.ts`: 12/12.
+- Full integration (Docker): **38 files / 519 tests**.
