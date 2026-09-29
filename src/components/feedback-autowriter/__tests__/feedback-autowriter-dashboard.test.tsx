@@ -26,7 +26,7 @@ function payload(overrides: Partial<AutowriterDashboard> = {}): AutowriterDashbo
     }],
     recent: [{
       wiseSessionId: "6a9fbc9c617dfedd88a0471e",
-      wiseUrl: "https://app.wise.live/classes/6a9a54f7ab2211cca56eaf5c/sessions/6a9fbc9c617dfedd88a0471e",
+      wiseUrl: "https://learn.begiftededucation.com/links?type=classroom_entity&entityType=session&entityId=6a9fbc9c617dfedd88a0471e&classId=6a9a54f7ab2211cca56eaf5c&profile=teacher",
       className: "Ranada (Dada.Pu) Purdue",
       tutor: "Kevin (Kev) Y. Hsieh Online",
       scheduledEndAt: "2026-09-29T04:00:00.000Z",
