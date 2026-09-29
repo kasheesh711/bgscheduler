@@ -40,6 +40,8 @@ type KeywordRow = typeof schema.competitorSerpKeywords.$inferSelect;
 export const STALE_RUNNING_COMPETITOR_SYNC_MS = 20 * 60 * 1000;
 const STALE_RUNNING_COMPETITOR_SYNC_ERROR =
   "Competitor intelligence sync marked failed because it was still running after 20 minutes; likely timed out or the request was aborted.";
+// Callers map any message containing "already running" to HTTP 409 / a skipped cron audit outcome.
+const COMPETITOR_SYNC_ALREADY_RUNNING_ERROR = "Competitor intelligence sync is already running";
 
 interface RunCounts {
   sourceCount: number;
@@ -77,6 +79,13 @@ function bangkokDateIso(now = new Date()): string {
 function compactError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.length > 500 ? `${message.slice(0, 500)}...` : message;
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  // drizzle-orm wraps driver errors in DrizzleQueryError; the SQLSTATE is on `.cause`.
+  const candidate = err as { code?: unknown; cause?: { code?: unknown } };
+  return candidate.code === "23505" || candidate.cause?.code === "23505";
 }
 
 export async function failStaleRunningCompetitorSyncs(db: Database, now: Date): Promise<number> {
@@ -505,14 +514,22 @@ export async function runCompetitorIntelligenceSync(input: {
     .where(eq(schema.competitorSyncRuns.status, "running"))
     .limit(1);
   if (running) {
-    throw new Error("Competitor intelligence sync is already running");
+    throw new Error(COMPETITOR_SYNC_ALREADY_RUNNING_ERROR);
   }
-  const [run] = await db.insert(schema.competitorSyncRuns)
-    .values({
-      triggerType: input.triggerType,
-      actorEmail,
-    })
-    .returning();
+  let run: typeof schema.competitorSyncRuns.$inferSelect;
+  try {
+    [run] = await db.insert(schema.competitorSyncRuns)
+      .values({
+        triggerType: input.triggerType,
+        actorEmail,
+      })
+      .returning();
+  } catch (error) {
+    // Lost the insert race to a concurrent run (competitor_sync_runs_single_running_idx):
+    // same outcome as the pre-check above, so every caller keeps mapping it to 409 / skipped.
+    if (isUniqueViolation(error)) throw new Error(COMPETITOR_SYNC_ALREADY_RUNNING_ERROR);
+    throw error;
+  }
 
   const counts: RunCounts = {
     sourceCount: 0,
