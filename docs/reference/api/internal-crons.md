@@ -75,7 +75,7 @@ Where a Data Health branch exists, its response can differ slightly from the rou
 | 7 | GET | `/api/internal/sync-progress-tests` | cron secret | `25,55 * * * *` | [`sync-progress-tests/route.ts:41-43`](../../../src/app/api/internal/sync-progress-tests/route.ts) |
 | 8 | POST | `/api/internal/sync-progress-tests` | cron secret **or** any session | — | [`sync-progress-tests/route.ts:45-47`](../../../src/app/api/internal/sync-progress-tests/route.ts) |
 | 9 | GET | `/api/internal/progress-tests/admin-digest` | cron secret | `35 0 * * *` | [`progress-tests/admin-digest/route.ts:8-24`](../../../src/app/api/internal/progress-tests/admin-digest/route.ts) |
-| 10 | GET | `/api/internal/sync-post-class-feedback` | cron secret | `13,43 * * * *` | [`sync-post-class-feedback/route.ts:15-45`](../../../src/app/api/internal/sync-post-class-feedback/route.ts) |
+| 10 | GET | `/api/internal/sync-post-class-feedback` | cron secret | `13,43 * * * *` | [`sync-post-class-feedback/route.ts:9-17`](../../../src/app/api/internal/sync-post-class-feedback/route.ts) |
 | 11 | GET | `/api/internal/post-class-feedback-backfill` | cron secret | `23,53 * * * *` | [`post-class-feedback-backfill/route.ts:32-81`](../../../src/app/api/internal/post-class-feedback-backfill/route.ts) |
 | 12 | GET | `/api/internal/post-class-feedback/payout-accrual` | cron secret | `33 * * * *` | [`payout-accrual/route.ts:18-40`](../../../src/app/api/internal/post-class-feedback/payout-accrual/route.ts) |
 | 13 | GET | `/api/internal/post-class-feedback/admin-digest` | cron secret | — (parked) | [`admin-digest/route.ts:9-22`](../../../src/app/api/internal/post-class-feedback/admin-digest/route.ts) |
@@ -223,17 +223,17 @@ All six endpoints are cron-secret-only — none has a session fallback. All six 
 
 ### `GET /api/internal/sync-post-class-feedback`
 
-The rolling evidence collector, `13,43 * * * *`. `maxDuration = 800` ([`route.ts:13`](../../../src/app/api/internal/sync-post-class-feedback/route.ts)).
+The rolling evidence collector, `13,43 * * * *`. `maxDuration = 800` ([`route.ts:7`](../../../src/app/api/internal/sync-post-class-feedback/route.ts)).
 
 **Request.** None read.
 
-**Side effects.** One sequential sync, then three independent passes run under `Promise.allSettled` ([`route.ts:22-30`](../../../src/app/api/internal/sync-post-class-feedback/route.ts)):
+**Side effects.** The handler returns the shared collection tick, `runPostClassCollectionTickRequest({ triggerType: "cron" })` ([`route.ts:12-16`](../../../src/app/api/internal/sync-post-class-feedback/route.ts), [`collection-tick.ts:102-112`](../../../src/lib/post-class-feedback/collection-tick.ts)). Data Health's `post_class_feedback` Run (as `manual`, attributed to the actor) and the Post-Class Feedback page's collect mode run the same tick. One sequential sync, then — only once it resolves — three independent passes under `Promise.allSettled` ([`collection-tick.ts:73-89`](../../../src/lib/post-class-feedback/collection-tick.ts)):
 1. `runPostClassFeedbackSync({ triggerType: "cron" })` — reconciles Wise teacher-feedback evidence over the rolling window.
 2. `processPostClassAiReviews()` — AI quality review of 10 feedback versions per run by default, capped at 25 ([`ai.ts:123`](../../../src/lib/post-class-feedback/ai.ts)).
 3. `processDuePostClassNotificationRetries()` — retries 50 due deliveries per run by default, capped at 100 ([`notifications.ts:1095`](../../../src/lib/post-class-feedback/notifications.ts)).
-4. `runPostClassDeductionHygiene()` — reopens unproven approvals and waives deductions on newly ineligible sessions. **Releases claims only; never approves** ([`route.ts:26-29`](../../../src/app/api/internal/sync-post-class-feedback/route.ts), [`auto-approval.ts:266-282`](../../../src/lib/post-class-feedback/auto-approval.ts)).
+4. `runPostClassDeductionHygiene()` — reopens unproven approvals and waives deductions on newly ineligible sessions. **Releases claims only; never approves** ([`collection-tick.ts:66-69`](../../../src/lib/post-class-feedback/collection-tick.ts), [`auto-approval.ts:266-282`](../../../src/lib/post-class-feedback/auto-approval.ts)).
 
-Because the three follow-ups are settled rather than awaited serially, any of them can fail without failing the request.
+Because the three follow-ups are settled rather than awaited serially, any of them can fail without failing the request. A rejected pass is logged as `console.error("[post-class-collection-tick]", { pass, errorName })` — the pass name and error class only, never the message ([`collection-tick.ts:50-58`](../../../src/lib/post-class-feedback/collection-tick.ts)).
 
 **Response `200`:**
 
@@ -245,9 +245,9 @@ Because the three follow-ups are settled rather than awaited serially, any of th
   hygiene: { reopened, reopenFailed, waived, waiveFailed } | { failed: true } }
 ```
 
-A rejected settled pass collapses to the literal `{ failed: true }` ([`route.ts:34-36`](../../../src/app/api/internal/sync-post-class-feedback/route.ts)). `SyncPostClassFeedbackResult` is at [`sync.ts:97-116`](../../../src/lib/post-class-feedback/sync.ts): `runId`, `status` (`success` | `partial`), `windowStart`, `windowEnd`, `discoveredCount`, `candidateCount`, `windowCandidateCount`, `detailFetchedCount`, `sessionSavedCount`, `sourceIssueCount`, `checkpoint`. The retries shape is at [`notifications.ts:1118-1124`](../../../src/lib/post-class-feedback/notifications.ts), the AI shape at [`ai.ts:348`](../../../src/lib/post-class-feedback/ai.ts).
+A rejected settled pass collapses to the literal `{ failed: true }` ([`collection-tick.ts:54-57`](../../../src/lib/post-class-feedback/collection-tick.ts)), and the audit still records the invocation as `success`. `SyncPostClassFeedbackResult` is at [`sync.ts:97-116`](../../../src/lib/post-class-feedback/sync.ts): `runId`, `status` (`success` | `partial`), `windowStart`, `windowEnd`, `discoveredCount`, `candidateCount`, `windowCandidateCount`, `detailFetchedCount`, `sessionSavedCount`, `sourceIssueCount`, `checkpoint`. The retries shape is at [`notifications.ts:1118-1124`](../../../src/lib/post-class-feedback/notifications.ts), the AI shape at [`ai.ts:348`](../../../src/lib/post-class-feedback/ai.ts).
 
-**Status codes:** `200` · `401` · **`409`** when `PostClassFeedbackSyncAlreadyRunningError` is thrown, body `{"error":"Post-class feedback sync is already running."}` ([`route.ts:39-41`](../../../src/app/api/internal/sync-post-class-feedback/route.ts), [`repository.ts:266-271`](../../../src/lib/post-class-feedback/repository.ts)) — the audit reads the `already running` substring and records `skipped`, not `failed`; the same error class, with body `{"error":"Post-class feedback sync is deferred while a payout operation holds a live lease."}`, is thrown when a live payout lease defers the sync, and that 409 audits as `failed` ([`repository.ts`](../../../src/lib/post-class-feedback/repository.ts)) · `500` for anything else, with the underlying message **discarded** in favour of the fixed string `"Post-class feedback sync failed"` ([`route.ts:42`](../../../src/app/api/internal/sync-post-class-feedback/route.ts)).
+**Status codes:** `200` · `401` · **`409`** when `PostClassFeedbackSyncAlreadyRunningError` is thrown, body `{"error":"Post-class feedback sync is already running."}` ([`collection-tick.ts:106-108`](../../../src/lib/post-class-feedback/collection-tick.ts), [`repository.ts:266-271`](../../../src/lib/post-class-feedback/repository.ts)) — the audit reads the `already running` substring and records `skipped`, not `failed`; the same error class, with body `{"error":"Post-class feedback sync is deferred while a payout operation holds a live lease."}`, is thrown when a live payout lease defers the sync, and that 409 audits as `failed` ([`repository.ts`](../../../src/lib/post-class-feedback/repository.ts)) · `500` for anything else, with the underlying message **discarded** in favour of the fixed string `"Post-class feedback sync failed"`; the failure is logged as `{ pass: "sync", errorName }`, which is the only trace of one thrown before the sync run row exists, such as an unset `WISE_INSTITUTE_ID` or a database error in `beginSync` ([`collection-tick.ts:109-110`](../../../src/lib/post-class-feedback/collection-tick.ts)).
 
 ### `GET /api/internal/post-class-feedback-backfill`
 
