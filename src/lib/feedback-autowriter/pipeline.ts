@@ -24,6 +24,8 @@ import { finalizeFields, parseModelOutput, validateFeedbackDraft, type ModelOutp
 export interface PipelineSession {
   wiseSessionId: string;
   studentFullName: string;
+  /** Other names the student appeared under (a guest join); redacted like the full name. */
+  studentAliases?: readonly string[];
   studentDisplayName: string;
   /** `describeClass` lines; the writer and the judge both get them. */
   classDetails: readonly string[];
@@ -100,7 +102,7 @@ export async function runWritingPipeline(input: {
   const callModel = input.callModel ?? callOpenRouter;
   const { session } = input;
   const reasons: string[] = [];
-  const names = { studentFullName: session.studentFullName, tutorNames: input.tutorNames };
+  const names = { studentFullName: session.studentFullName, studentAliases: session.studentAliases, tutorNames: input.tutorNames };
   const redactedSummary = redactForModel(session.summary.text, names);
   const redactedClassDetails = classDetailsBlock(session.classDetails, names);
 
@@ -128,6 +130,7 @@ export async function runWritingPipeline(input: {
   for (const writer of writers) {
     const written = await run(writer, "writer", buildFeedbackMessages({
       studentFullName: session.studentFullName,
+      studentAliases: session.studentAliases,
       tutorNames: input.tutorNames,
       classDetails: session.classDetails,
       scheduledMinutes: session.scheduledMinutes,

@@ -348,6 +348,17 @@ async function planPost(deps: AutowriterDeps, input: {
   return { mappings, billing: billing.plan };
 }
 
+/**
+ * Stored with the POST claim: the student whose credit is checked (reconciliation re-uses it rather than
+ * re-deriving it from a later read), and the guest name when a guest join stood in for their account.
+ */
+function guestMetadata(student: { wiseUserId: string | null; joinedAsGuest?: string | null }): Record<string, unknown> {
+  return {
+    ...(student.wiseUserId ? { studentWiseUserId: student.wiseUserId } : {}),
+    ...(typeof student.joinedAsGuest === "string" ? { studentJoinedAsGuest: student.joinedAsGuest || "(unnamed guest)" } : {}),
+  };
+}
+
 async function priorFeedback(deps: AutowriterDeps, tutor: NonNullable<ReturnType<typeof rosterTutor>>, now: Date) {
   return [
     ...(await loadPriorFeedback(deps.db, { canonicalTutorKey: tutor.canonicalKey, now })),
@@ -428,6 +439,7 @@ async function processLeased(deps: AutowriterDeps, input: {
     session: {
       wiseSessionId: row.wiseSessionId,
       studentFullName: student.name,
+      studentAliases: student.joinedAsGuest ? [student.joinedAsGuest] : [],
       studentDisplayName: chooseStudentDisplayName(student.name),
       classDetails: describeClass({ programme: detail.classSubject, title: detail.title }),
       scheduledMinutes: scheduledWindow(detail).minutes,
@@ -452,7 +464,8 @@ async function processLeased(deps: AutowriterDeps, input: {
   }
   return postDraft(deps, {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
-    draft: { arm: result.arm, fields: result.fields, judge: result.judge }, evidence: "summary", release, out,
+    draft: { arm: result.arm, fields: result.fields, judge: result.judge }, evidence: "summary",
+    extraMetadata: guestMetadata(student), release, out,
   });
 }
 
@@ -670,7 +683,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
   if (stored) {
     const outcome = await postDraft(deps, {
       row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
-      draft: stored, evidence: "transcript", release, out,
+      draft: stored, evidence: "transcript", extraMetadata: guestMetadata(student), release, out,
     });
     if (row.sonioxTranscriptionId) await finishJob(row.sonioxTranscriptionId);
     return outcome;
@@ -835,6 +848,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
     session: {
       wiseSessionId: row.wiseSessionId,
       studentFullName: student.name,
+      studentAliases: student.joinedAsGuest ? [student.joinedAsGuest] : [],
       studentDisplayName: chooseStudentDisplayName(student.name),
       classDetails: describeClass({ programme: detail.classSubject, title: detail.title }),
       scheduledMinutes,
@@ -860,7 +874,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
   const outcome = await postDraft(deps, {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
     draft: { arm: result.arm, fields: result.fields, judge: result.judge }, evidence: "transcript",
-    extraMetadata: { transcript: transcriptMeta }, release, out,
+    extraMetadata: { transcript: transcriptMeta, ...guestMetadata(student) }, release, out,
   });
   // The judged draft is stored (or the class is finished): the transcript is no longer needed.
   await finishJob(jobId);
@@ -934,12 +948,14 @@ async function reconcileRow(deps: AutowriterDeps, row: AutowriterSessionRow, fro
       expected,
       mappings: await loadFieldMappings(db),
     });
-    const [student] = studentParticipants(detail);
-    if (!student?.wiseUserId) {
+    // The student credit-checked when the POST was claimed; a later read may pick participants differently.
+    const claimedStudent = (row.metadata as { studentWiseUserId?: unknown }).studentWiseUserId;
+    const studentId = typeof claimedStudent === "string" ? claimedStudent : studentParticipants(detail)[0]?.wiseUserId ?? null;
+    if (!studentId) {
       problems.push("student_id_missing");
     } else {
       try {
-        problems.push(...creditProblems(await ops.getSessionCreditEntries(row.wiseClassId, student.wiseUserId, row.wiseSessionId), billing));
+        problems.push(...creditProblems(await ops.getSessionCreditEntries(row.wiseClassId, studentId, row.wiseSessionId), billing));
       } catch {
         return overdue ? giveUp(["credits_unreadable_2h_after_post"]) : "read_failed";
       }

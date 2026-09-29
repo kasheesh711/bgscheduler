@@ -53,9 +53,14 @@ export function chooseStudentDisplayName(fullName: string): string {
  */
 export function redactForModel(
   text: string,
-  input: { studentFullName: string; tutorNames: readonly string[] },
+  input: { studentFullName: string; tutorNames: readonly string[]; studentAliases?: readonly string[] },
 ): string {
-  let result = redactKnownNames(text, {
+  // Aliases (the name the student joined under as a guest) are the same student: the same [STUDENT_1].
+  // Whole names first, so "Pete Thanasatitkul" is one mention; single words last.
+  const aliases = (input.studentAliases ?? []).map((alias) => alias.trim()).filter((alias) => [...alias].length >= 2);
+  let result = text;
+  for (const alias of aliases) result = result.replace(latinWord(alias), STUDENT_TOKEN);
+  result = redactKnownNames(result, {
     studentNames: [input.studentFullName],
     tutorNames: [...input.tutorNames],
   });
@@ -63,8 +68,22 @@ export function redactForModel(
   for (const token of [nicknameCode, nickname].filter((value): value is string => Boolean(value && [...value].length >= 2))) {
     result = result.replace(latinWord(token), STUDENT_TOKEN);
   }
+  // Each name-like word of an alias, only where it is written as a name (capitalised, case-sensitive: a guest
+  // "May Win" must not turn "may need … a win" into placeholders) — never a generic device word ("Zoom", "iPad").
+  for (const phrase of aliases) {
+    for (const word of phrase.split(/\s+/u)) {
+      if ([...word].length < 2 || !/^\p{Lu}[\p{L}\p{M}'-]*$/u.test(word) || GENERIC_GUEST_WORDS.has(word.toLocaleLowerCase("en-US"))) continue;
+      result = result.replace(new RegExp(`(?<!\\p{L})${escapeRegExp(word)}(?!\\p{L})`, "gu"), STUDENT_TOKEN);
+    }
+  }
   return result;
 }
+
+/** Words Zoom guest names are often made of that are not a person's name. */
+const GENERIC_GUEST_WORDS = new Set([
+  "zoom", "user", "guest", "iphone", "ipad", "android", "phone", "tablet", "laptop", "desktop", "pc", "mac",
+  "macbook", "samsung", "galaxy", "huawei", "oppo", "vivo", "xiaomi", "redmi", "pixel", "windows", "my", "the", "of",
+]);
 
 // Same prefix pattern as student-schedule `deriveDisplaySubject` (copied for the
 // same reason as parseStudentName): "Live Session-Non VR" → "Non VR".
@@ -170,6 +189,8 @@ function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels): string {
 
 export interface PromptContext {
   studentFullName: string;
+  /** Other names the student appeared under (a guest join); redacted like the full name. */
+  studentAliases?: readonly string[];
   tutorNames: readonly string[];
   /** `describeClass` lines (programme, class subject, confirmed terms). */
   classDetails: readonly string[];
@@ -184,7 +205,7 @@ export interface PromptContext {
 /** Class-detail lines with names redacted, as a bullet block. */
 export function classDetailsBlock(
   classDetails: readonly string[],
-  names: { studentFullName: string; tutorNames: readonly string[] },
+  names: { studentFullName: string; tutorNames: readonly string[]; studentAliases?: readonly string[] },
   extra: readonly string[] = [],
 ): string {
   return [...classDetails.map((line) => redactForModel(line, names)), ...extra].map((line) => `- ${line}`).join("\n");

@@ -14,6 +14,7 @@ import { AUTOWRITER_ROSTER, rosterAccountIds, rosterTutor } from "./roster";
 import {
   AUTOWRITER_DEADLINE_MARGIN_MS,
   AUTOWRITER_ATTENDANCE_SETTLE_MINUTES,
+  AUTOWRITER_GUEST_STUDENT_MIN_PERCENT,
   AUTOWRITER_MIN_ATTENDANCE_PERCENT,
   AUTOWRITER_MIN_SUMMARY_CHARACTERS,
   type AiSummary,
@@ -290,11 +291,12 @@ const IN_PERSON_TITLE = /^\s*(?:in[\s-]?person|on[\s-]?site)\s+session\b/iu;
  * The session's students: every non-teacher participant except the tutor
  * themselves — their other Wise account, or a guest (no Wise account) under
  * one of their names. Anyone else, named or not, still counts (fail closed:
- * an unknown guest makes a one-to-one class look like two students).
+ * an unknown guest makes a one-to-one class look like two students) — except
+ * the guest standing in for the student (`guestStandsInForStudent`).
  */
 export function studentParticipants(detail: AutowriterSessionDetail): AutowriterStudent[] {
   const self = tutorSelf(detail);
-  return detail.participants
+  const students = detail.participants
     .filter((participant) => participant.isTeacher !== true)
     .filter((participant) => !(participant.wiseUserId && self.accounts.has(participant.wiseUserId)))
     .filter((participant) => Boolean(participant.wiseUserId) || !participant.name?.trim() ||
@@ -305,6 +307,53 @@ export function studentParticipants(detail: AutowriterSessionDetail): Autowriter
       inMeetingSeconds: participant.inMeetingDuration ?? participant.duration ?? null,
       absolutePercentAttendance: participant.absolutePercentAttendance ?? null,
     }));
+  return guestStandsInForStudent(detail, students) ?? students;
+}
+
+/**
+ * A one-to-one student who joined through a Zoom link as a guest instead of
+ * their Wise account (Mimi, 29 Sep: "Pete Thanasatitkul" 94% while "Pawin
+ * (Pete.Th) Thanasatitkul" shows 0 minutes). Owner rule: when the only other
+ * participant besides the Wise account is one guest, the Wise account attended
+ * under the minimum, and the guest and the tutor both stayed at least
+ * `AUTOWRITER_GUEST_STUDENT_MIN_PERCENT` of the class, the guest is the student.
+ * The Wise account stays the student billed, credit-checked and named; the
+ * guest's attendance counts. Anything else: null (no stand-in).
+ */
+function guestStandsInForStudent(detail: AutowriterSessionDetail, students: readonly AutowriterStudent[]): AutowriterStudent[] | null {
+  if (detail.classType !== "ONE_TO_ONE" || students.length !== 2) return null;
+  const account = students.find((student) => student.wiseUserId);
+  const guest = students.find((student) => !student.wiseUserId);
+  if (!account || !guest) return null;
+  const minutes = scheduledWindow(detail).minutes;
+  const accountPercent = studentAttendancePercent(account, minutes);
+  const guestPercent = studentAttendancePercent(guest, minutes);
+  // The tutor's best entry (Wise may list them twice), read like a student's attendance.
+  const teacherPercents = detail.participants
+    .filter((participant) => participant.isTeacher === true)
+    .map((participant) => studentAttendancePercent({
+      wiseUserId: participant.wiseUserId ?? null,
+      name: participant.name ?? "",
+      inMeetingSeconds: participant.inMeetingDuration ?? participant.duration ?? null,
+      absolutePercentAttendance: participant.absolutePercentAttendance ?? null,
+    }, minutes))
+    .filter((value): value is number => value !== null);
+  const teacherPercent = teacherPercents.length > 0 ? Math.max(...teacherPercents) : null;
+  if (accountPercent === null || accountPercent >= AUTOWRITER_MIN_ATTENDANCE_PERCENT) return null;
+  if (guestPercent === null || guestPercent < AUTOWRITER_GUEST_STUDENT_MIN_PERCENT) return null;
+  if (teacherPercent === null || teacherPercent < AUTOWRITER_GUEST_STUDENT_MIN_PERCENT) return null;
+  return [{
+    ...account,
+    inMeetingSeconds: guest.inMeetingSeconds,
+    absolutePercentAttendance: guestPercent,
+    // "" for a nameless guest: still the stand-in, but nothing to redact.
+    joinedAsGuest: guest.name.trim(),
+  }];
+}
+
+/** One Wise account and one guest, not (yet) a stand-in: attendance may still be arriving. */
+function accountAndGuest(students: readonly AutowriterStudent[]): boolean {
+  return students.length === 2 && students.filter((student) => student.wiseUserId).length === 1;
 }
 
 export function studentAttendancePercent(student: AutowriterStudent, scheduledMinutes: number): number | null {
@@ -447,6 +496,8 @@ export function evaluateSessionGates(
   if (nonTeacherBillingEvidence(detail)) return { ok: false, reason: "non_teacher_submission_with_billing" };
 
   const students = studentParticipants(detail);
+  // A guest may yet turn out to stand in for the student once Wise has computed attendance: not final yet.
+  if (accountAndGuest(students)) return { ok: false, reason: "student_count_2_guest" };
   if (students.length !== 1) return { ok: false, reason: `student_count_${students.length}` };
   // The one student must be the Wise user the session bills (the POST checks their credit): a guest join is not.
   if (!students[0].wiseUserId) return { ok: false, reason: "student_not_wise_user" };
@@ -479,6 +530,8 @@ export function classifyGateReason(reason: string, context: { minutesSinceEnd?: 
   if (reason === "student_count_0" || reason === "student_not_wise_user" || /^attendance_\d+pct$/u.test(reason)) {
     return settling ? "retry" : "person";
   }
+  // Settled and still an account plus a guest who did not stand in: a class for two, out of scope as before.
+  if (reason === "student_count_2_guest") return settling ? "retry" : "scope";
   if (reason === "deadline_passed_or_too_close") return "expired";
   if (reason === "human_submission" || reason === "human_blank_submission") return "human";
   if (reason === "teacher_not_allowlisted") return "scope";
