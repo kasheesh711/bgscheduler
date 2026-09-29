@@ -12,8 +12,9 @@ import {
 
 /**
  * A stand-in for the drizzle query builder: every chained call returns the chain, and awaiting it
- * resolves the next queued result, in query order. `values(...)` and `set(...)` payloads are kept
- * for assertions. A test that queues exactly the queries it expects fails loudly on any extra query.
+ * resolves the next queued result, in query order (a queued Error rejects instead). `values(...)`
+ * and `set(...)` payloads are kept for assertions, and `transaction(fn)` runs `fn` on the same fake.
+ * A test that queues exactly the queries it expects fails loudly on any extra query.
  */
 function fakeDb(results: unknown[]) {
   const values: Record<string, unknown>[] = [];
@@ -23,7 +24,7 @@ function fakeDb(results: unknown[]) {
       if (property === "then") {
         const value = results.shift();
         return (resolve: (value: unknown) => void, reject: (reason: unknown) => void) =>
-          Promise.resolve(value).then(resolve, reject);
+          (value instanceof Error ? Promise.reject(value) : Promise.resolve(value)).then(resolve, reject);
       }
       return (...args: unknown[]) => {
         if (property === "values") values.push(args[0] as Record<string, unknown>);
@@ -32,7 +33,9 @@ function fakeDb(results: unknown[]) {
       };
     },
   });
-  return { db: { select: () => chain(), insert: () => chain(), update: () => chain() } as never, values, sets, results };
+  const db: Record<string, unknown> = { select: () => chain(), insert: () => chain(), update: () => chain() };
+  db.transaction = (fn: (tx: unknown) => Promise<unknown>) => fn(db);
+  return { db: db as never, values, sets, results };
 }
 
 const NOW = new Date("2026-09-29T12:00:00.000Z");
@@ -72,8 +75,8 @@ function earlierRun(overrides: {
   };
 }
 
-function modelReply(): Response {
-  return new Response(JSON.stringify({ output_text: JSON.stringify({ concerns: [] }) }), { status: 200 });
+function modelReply(concerns: unknown[] = []): Response {
+  return new Response(JSON.stringify({ output_text: JSON.stringify({ concerns }) }), { status: 200 });
 }
 
 function modelStatus(status: number): Response {
@@ -185,7 +188,7 @@ describe("processPostClassAiReviews", () => {
       [candidate(1), candidate(2), candidate(3), candidate(4)],
       [],
       [], [{ id: "run-1" }], undefined,
-      [], [{ id: "run-2" }], undefined,
+      [], [{ id: "run-2" }], [{ id: "run-2" }], // the success settles in one transaction
       [], [{ id: "run-3" }], undefined,
       [], [{ id: "run-4" }], undefined,
     ]);
@@ -196,45 +199,57 @@ describe("processPostClassAiReviews", () => {
     expect(results).toEqual([]);
   });
 
-  it("stops before claiming a model call when OPENAI_API_KEY is unset, after settling earlier healthy versions", async () => {
+  it("leaves suspect versions unclaimed without OPENAI_API_KEY, and keeps settling healthy ones", async () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     const { db, values, results } = fakeDb([
-      [candidate(1, HEALTHY_FIELDS), candidate(2)],
+      [candidate(1, HEALTHY_FIELDS), candidate(2), candidate(3, HEALTHY_FIELDS)],
       [],
       [], undefined, // healthy: no earlier run, deterministic-only row
-      [], // suspect: no earlier run, then stop
+      [], // suspect: no earlier run, left unclaimed
+      [], undefined, // healthy again, after the suspect one
     ]);
 
     const result = await processPostClassAiReviews({ now: NOW }, db);
 
-    expect(result).toEqual({ processed: 0, failed: 0, skipped: 1, retried: 0, stopped: "not_configured" });
+    expect(result).toEqual({ processed: 0, failed: 0, skipped: 3, retried: 0, stopped: "not_configured" });
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(values).toEqual([expect.objectContaining({ model: "deterministic-only", status: "succeeded" })]);
+    expect(values).toEqual([
+      expect.objectContaining({ feedbackVersionId: "version-1", model: "deterministic-only", status: "succeeded" }),
+      expect.objectContaining({ feedbackVersionId: "version-3", model: "deterministic-only", status: "succeeded" }),
+    ]);
     expect(results).toEqual([]);
+    expect(consoleError.mock.calls).toEqual([[
+      "[post-class-ai-review]",
+      { stopped: "not_configured", processed: 0, failed: 0, retried: 0 },
+    ]]);
   });
 
   it("retries a transient failure an hour later on the same row, from its recorded triggers", async () => {
-    fetchMock.mockResolvedValueOnce(modelReply());
+    fetchMock.mockResolvedValueOnce(modelReply([{ dimension: "vagueness", summary: "Generic praise only.", confidence: 0.8 }]));
     const { db, values, sets, results } = fakeDb([
       [candidate(1)],
       [],
-      [earlierRun({ status: "failed", metadata: { attempts: 1, retryable: true } })],
+      [earlierRun({ status: "failed", metadata: { attempts: 1, retryable: true, lastErrorName: "TimeoutError" } })],
       [{ id: "run-earlier" }], // the conditional claim won
-      undefined, // the succeeded update
+      [{ id: "run-earlier" }], // the succeeded update, still holding the claim
+      undefined, // the concerns insert, in the same transaction
     ]);
 
     const result = await processPostClassAiReviews({ now: NOW }, db);
 
     expect(result).toEqual({ processed: 1, failed: 0, skipped: 0, retried: 1, stopped: null });
-    expect(values).toEqual([]);
     expect(sets[0]).toEqual(expect.objectContaining({
       status: "running",
       finishedAt: null,
       errorMessage: null,
-      metadata: expect.objectContaining({ promptVersion: 1, highestPriorSimilarity: 0.25, attempts: 2 }),
+      startedAt: expect.any(Date),
+      metadata: { promptVersion: 1, highestPriorSimilarity: 0.25, matchingPriorKey: null, attempts: 2 },
     }));
     expect(sets[1]).toEqual(expect.objectContaining({ status: "succeeded" }));
-    expect(String(fetchMock.mock.calls[0][1]?.body)).toContain("Deterministic triggers: short_required_field");
+    expect(values).toEqual([[expect.objectContaining({ runId: "run-earlier", dimension: "vagueness" })]]);
+    // The stored triggers and similarity, not a fresh assessment (which would add placeholder_pattern).
+    const prompt = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).input as string;
+    expect(prompt).toContain("Deterministic triggers: short_required_field\n\nPrior-text similarity: 25.0%");
     expect(results).toEqual([]);
   });
 
@@ -245,13 +260,67 @@ describe("processPostClassAiReviews", () => {
       [],
       [earlierRun({ status: "running", metadata: {}, finishedAt: null, updatedAt: minutesBefore(20) })],
       [{ id: "run-earlier" }],
-      undefined,
+      [{ id: "run-earlier" }],
     ]);
 
     const result = await processPostClassAiReviews({ now: NOW }, db);
 
     expect(result).toMatchObject({ processed: 1, retried: 1 });
     expect(sets[0]).toEqual(expect.objectContaining({ status: "running", metadata: expect.objectContaining({ attempts: 2 }) }));
+  });
+
+  it("closes a killed run that is out of attempts as failed, without calling the model", async () => {
+    const { db, sets, results } = fakeDb([
+      [candidate(1)],
+      [],
+      [earlierRun({ status: "running", metadata: { attempts: 3 }, finishedAt: null, updatedAt: minutesBefore(20) })],
+      undefined, // the conditional close
+    ]);
+
+    const result = await processPostClassAiReviews({ now: NOW }, db);
+
+    expect(result).toEqual({ processed: 0, failed: 0, skipped: 1, retried: 0, stopped: null });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(sets).toEqual([expect.objectContaining({
+      status: "failed",
+      errorMessage: "AI quality review abandoned after its last attempt was interrupted",
+      metadata: expect.objectContaining({ attempts: 3, retryable: false }),
+    })]);
+    expect(results).toEqual([]);
+  });
+
+  it("writes nothing when the pass lost its claim before saving an answer", async () => {
+    fetchMock.mockResolvedValueOnce(modelReply([{ dimension: "vagueness", summary: "Generic praise only.", confidence: 0.8 }]));
+    const { db, values, results } = fakeDb([[candidate(1)], [], [], [{ id: "run-1" }], []]);
+
+    const result = await processPostClassAiReviews({ now: NOW }, db);
+
+    expect(result).toEqual({ processed: 0, failed: 0, skipped: 1, retried: 0, stopped: null });
+    expect(values).toHaveLength(1); // the claim only; no concerns without the claim
+    expect(results).toEqual([]);
+  });
+
+  it("records a failed save as a retryable failure that does not count toward the stop", async () => {
+    fetchMock.mockImplementation(async () => modelReply());
+    const saveError = new Error("Connection terminated unexpectedly");
+    const { db, sets, results } = fakeDb([
+      [candidate(1), candidate(2), candidate(3)],
+      [],
+      [], [{ id: "run-1" }], saveError, undefined,
+      [], [{ id: "run-2" }], saveError, undefined,
+      [], [{ id: "run-3" }], saveError, undefined,
+    ]);
+
+    const result = await processPostClassAiReviews({ now: NOW }, db);
+
+    expect(result).toEqual({ processed: 0, failed: 3, skipped: 0, retried: 0, stopped: null });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const failures = sets.filter((set) => set.status === "failed");
+    expect(failures).toHaveLength(3);
+    for (const failure of failures) {
+      expect(failure.metadata).toEqual(expect.objectContaining({ retryable: true, lastErrorName: "Error" }));
+    }
+    expect(results).toEqual([]);
   });
 
   it.each([
@@ -292,6 +361,7 @@ describe("isTransientQualityModelError", () => {
     ["a timeout", new DOMException("The operation was aborted due to timeout", "TimeoutError")],
     ["an abort", new DOMException("This operation was aborted", "AbortError")],
     ["a network failure", new TypeError("fetch failed")],
+    ["a socket dropped mid-body", new TypeError("terminated")],
     ["a rate limit", new Error("OpenAI HTTP 429")],
     ["a server error", new Error("OpenAI HTTP 500")],
     ["an unavailable service", new Error("OpenAI HTTP 503")],
@@ -309,6 +379,7 @@ describe("isTransientQualityModelError", () => {
       throw new Error("unreachable");
     })()],
     ["a reply without output text", new Error("OpenAI response did not include output text")],
+    ["a code bug", new TypeError("Cannot read properties of undefined (reading 'text')")],
     ["a thrown string", "fetch failed"],
   ])("does not retry %s", (_label, error) => {
     expect(isTransientQualityModelError(error)).toBe(false);

@@ -48,6 +48,7 @@ beforeEach(() => {
 
 afterEach(() => {
   consoleError.mockRestore();
+  vi.useRealTimers();
 });
 
 describe("runPostClassCollectionTick", () => {
@@ -64,24 +65,24 @@ describe("runPostClassCollectionTick", () => {
       endDate: "2026-09-04",
     } as const;
 
-    const before = Date.now();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const tickStart = new Date("2026-09-29T12:00:00.000Z");
+    vi.setSystemTime(tickStart);
     const pending = runPostClassCollectionTick(options);
     // Give an eagerly started pass the chance to run while the sync is still pending.
     await new Promise((resolve) => setTimeout(resolve, 0));
     for (const pass of PASSES) expect(pass).not.toHaveBeenCalled();
 
+    // The sync takes five minutes; the AI pass's budget still counts from the tick's start.
+    vi.setSystemTime(new Date(tickStart.getTime() + 5 * 60_000));
     finishSync(SYNC);
 
     expect(await pending).toEqual(BODY);
-    const after = Date.now();
     expect(runPostClassFeedbackSync).toHaveBeenCalledTimes(1);
     expect(runPostClassFeedbackSync).toHaveBeenCalledWith(options);
     for (const pass of PASSES) expect(pass).toHaveBeenCalledTimes(1);
     // The AI pass gets a deadline 10 minutes after the tick started; the other passes take no arguments.
-    const aiOptions = vi.mocked(processPostClassAiReviews).mock.calls[0][0];
-    expect(aiOptions).toEqual({ deadlineAt: expect.any(Number) });
-    expect(aiOptions?.deadlineAt).toBeGreaterThanOrEqual(before + 600_000);
-    expect(aiOptions?.deadlineAt).toBeLessThanOrEqual(after + 600_000);
+    expect(processPostClassAiReviews).toHaveBeenCalledWith({ deadlineAt: tickStart.getTime() + 600_000 });
     expect(processDuePostClassNotificationRetries).toHaveBeenCalledWith();
     expect(runPostClassDeductionHygiene).toHaveBeenCalledWith();
     expect(consoleError).not.toHaveBeenCalled();
