@@ -154,6 +154,7 @@ None blocking roadmap execution.
 | 260811-evt | Reconciler carried-row fixes: needs_review rows hold rooms + seed continuity + unlockable; online center-room chains see carried sessions (contextSessions) | 2026-08-11 | ec7d31d | [260811-evt-reconciler-carried-row-fixes-needs-revie](./quick/260811-evt-reconciler-carried-row-fixes-needs-revie/) |
 | 260907-qg5 | Aoeng viewer grants, immediate owner revocation, scoped publishing and Windows/Claude setup; browser sharing handoff pending | 2026-09-07 | 44f7190 | [260907-qg5](./quick/260907-qg5-implement-aoeng-editing-access-owner-con/) |
 | 260928-j77 | Post-class payout follow-ups: deadline recheck lane, versioned auto-approve key, contained retirement skips, coverage parity, exemption hardening | 2026-09-28 | e8127e2 | [260928-j77-post-class-payout-follow-ups-deadline-re](./quick/260928-j77-post-class-payout-follow-ups-deadline-re/) |
+| 260929-gvd | Feedback autowriter: GLM (ZDR) online-class feedback from Wise AI summaries for 5 roster tutors, webhook + backstop cron, single-POST state machine, monitoring dashboard | 2026-09-29 | de9be21 | [260929-gvd-feedback-autowriter-pilot-for-kevin-onli](./quick/260929-gvd-feedback-autowriter-pilot-for-kevin-onli/) |
 | Phase 10-vpol-01-view-transitions P01 | 216 | 2 tasks | 2 files |
 | Phase 10-vpol-01-view-transitions P02 | 4min | 2 tasks | 2 files |
 | Phase 11 P03 | 31515093 | 2 tasks | 3 files |
