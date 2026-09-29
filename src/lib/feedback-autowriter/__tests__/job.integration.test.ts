@@ -617,8 +617,9 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     await seedRow({ state: "awaiting_recording", evidence: "transcript" });
     const even = lessonTokens().map((token, index) => ({ ...token, speaker: String((index % 3) + 1) }));
     const soniox = fakeSoniox({ tokens: even });
+    // Zoom's transcript is published but names nobody: nothing to wait for.
     expect(await processSession(
-      transcriptDeps(fakeWise({ details: [sessionDetail({ rawRecordings: RECORDING.rawRecordings })] }).ops, soniox.client, { fetchText: async () => "WEBVTT\n" }),
+      transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, { fetchText: async () => "WEBVTT\n" }),
       { wiseSessionId: SESSION_ID, trigger: "webhook" },
     )).toMatchObject({ result: "held", detail: "speakers_unclear" });
     expect(soniox.removed).toEqual(["job-1"]);
@@ -658,6 +659,59 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     ] });
     await runSweep(transcriptDeps(fakeWise().ops, soniox.client));
     expect(soniox.removed).toEqual(["job-orphan"]);
+  });
+
+  it("waits for Zoom's named transcript when the recording's comes first, then writes with confirmed labels", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    const recordingOnly = sessionDetail({ rawRecordings: RECORDING.rawRecordings });
+    const model = fakeModel();
+    const first = fakeSoniox();
+    expect(await processSession(transcriptDeps(fakeWise({ details: [recordingOnly] }).ops, first.client, { callModel: model.callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "transcribing", detail: "zoom_transcript_pending" });
+    expect(model.calls).toEqual([]);
+    expect(first.removed).toEqual([]);
+    const waiting = await readSessionRow(db, SESSION_ID);
+    expect(waiting).toMatchObject({ state: "transcribing", reason: "zoom_transcript_pending", sonioxTranscriptionId: "job-1" });
+    expect(waiting?.nextAttemptAt?.getTime() ?? 0).toBeGreaterThan(Date.now() + 4 * 60_000);
+
+    // Zoom's transcript is out by the next look: the same job is re-fetched and the labels are confirmed.
+    await db.update(S).set({ nextAttemptAt: sql`now() - interval '1 second'` as never }).where(eq(S.wiseSessionId, SESSION_ID));
+    const second = fakeSoniox();
+    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, second.client), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+      .toMatchObject({ result: "verified" });
+    expect(second.created).toEqual([]);
+    expect(second.removed).toEqual(["job-1"]);
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ transcript: { speakerMethod: "zoom_alignment" } });
+    const transcribed = await db.select().from(schema.feedbackAutowriterCalls).where(eq(schema.feedbackAutowriterCalls.role, "transcriber"));
+    expect(transcribed).toHaveLength(1); // the transcription is paid for once
+  });
+
+  it("stops waiting for Zoom 20 minutes after the job was submitted and falls back to a clear talk share", async () => {
+    await seedRow({
+      state: "transcribing", evidence: "transcript", sonioxTranscriptionId: "job-7",
+      metadata: { sonioxSubmittedJob: "job-7", sonioxSubmittedAt: new Date(Date.now() - 25 * 60_000).toISOString() },
+    });
+    // The tutor clearly does most of the talking.
+    const tokens = lessonTokens().map((token) => token.speaker === "2" ? { ...token, text: " Three quarters." } : token);
+    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail({ rawRecordings: RECORDING.rawRecordings })] }).ops, fakeSoniox({ tokens }).client), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+      .toMatchObject({ result: "verified" });
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ transcript: { speakerMethod: "talk_share" } });
+  });
+
+  it("does not wait for Zoom when Wise gives no teacher name to match its cues", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    const tokens = lessonTokens().map((token) => token.speaker === "2" ? { ...token, text: " Three quarters." } : token);
+    const nameless = sessionDetail({ rawRecordings: RECORDING.rawRecordings, userId: { _id: KEVIN } });
+    expect(await processSession(transcriptDeps(fakeWise({ details: [nameless] }).ops, fakeSoniox({ tokens }).client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "verified" });
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ transcript: { speakerMethod: "talk_share" } });
+  });
+
+  it("treats a Zoom transcript that cannot be read right now like one not published yet", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    const failing = async () => { throw new Error("HTTP 503"); };
+    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fakeSoniox().client, { fetchText: failing }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "transcribing", detail: "zoom_transcript_pending" });
   });
 
   it("deletes a finished class's leftover Soniox job during the sweep", async () => {
@@ -855,6 +909,9 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect((await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client))).alertsSent).toBe(0);
     await db.update(S).set({ reason: "infra:OPENROUTER_API_KEY missing" }).where(eq(S.wiseSessionId, SESSION_ID));
     expect((await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client))).alertsSent).toBe(0);
+    await db.update(S).set({ state: "transcribing", reason: "zoom_transcript_pending" }).where(eq(S.wiseSessionId, SESSION_ID));
+    expect((await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client))).alertsSent).toBe(0);
+    await db.update(S).set({ state: "awaiting_recording" }).where(eq(S.wiseSessionId, SESSION_ID));
     await db.update(S).set({ reason: "recording_not_ready" }).where(eq(S.wiseSessionId, SESSION_ID));
     expect((await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client))).alertsSent).toBe(1);
   });

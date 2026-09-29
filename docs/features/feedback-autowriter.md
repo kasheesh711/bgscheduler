@@ -93,7 +93,10 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
    The alignment is trusted only when it looks like a one-to-one lesson (TUTOR ≥ 50% of the talk, STUDENT ≥ 5%,
    exact shares). Otherwise it falls back to talk share, used only when the split is clear (two main speakers, one
    with ≥ 60%) and — when Zoom has cues under the teacher's name — agrees with them; anything else is held
-   (`speakers_unclear`). The models are told the labels are reliable only when Zoom confirmed them, and are told they
+   (`speakers_unclear`). Zoom's transcript is published a few minutes after the recording (5.5 minutes on the first
+   live class), so while it is missing or unreadable — and Wise gives the teacher's name to match — the row waits in
+   `transcribing` (`zoom_transcript_pending`, job kept, due again after 5 minutes, i.e. the next sweep) until 20
+   minutes after the Soniox job was submitted, then goes ahead on talk share (worst case ~35 minutes after submit). The models are told the labels are reliable only when Zoom confirmed them, and are told they
    are inferred by default ([`transcript.ts`](../../src/lib/feedback-autowriter/transcript.ts));
 4. writes and judges from the `[mm:ss] TUTOR/STUDENT` transcript with **GLM on the zero-retention route only** — no
    Luna fallback, because Thai-script names can slip past the Latin-name redaction. Extra rule: what the tutor

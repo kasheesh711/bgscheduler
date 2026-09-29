@@ -93,7 +93,10 @@ hour after it was submitted counts as one), a multi-part recording, a recording 
 short 30 minutes after first seen), a transcript that is too short or speakers it cannot tell apart, or `expired`
 (+ alert) if
 the recording never comes before the deadline margin. A second-pass class shown as `pending` has its transcript
-draft or is waiting for Wise (attendance, status, the POST slot), not for the recording.
+draft or is waiting for Wise (attendance, status, the POST slot), not for the recording. "Transcribing" with
+`zoom_transcript_pending` is normal: the Soniox transcript is ready and the class waits for Zoom's name-labelled
+transcript, which confirms who is the tutor — until 20 minutes after the Soniox job was submitted (the last look is
+the next sweep after that, so at most ~35 minutes). No `no_recording` alert is raised for it.
 To turn the second pass off: `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED=false` + redeploy — classes already waiting are
 then held with an alert (`transcript_pass_unavailable`) so a person writes them.
 
