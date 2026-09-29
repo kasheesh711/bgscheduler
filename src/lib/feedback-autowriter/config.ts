@@ -138,11 +138,14 @@ export const AUTOWRITER_TRANSCRIBING_RECHECK_MS = 5 * 60 * 1000;
 export const AUTOWRITER_TRANSCRIBE_WAIT_MS = 180_000;
 /**
  * Zoom's name-labelled transcript is published a few minutes after the recording (5.5 min on the first live
- * class): wait this long after the Soniox job was submitted for it, so TUTOR/STUDENT are confirmed, before
- * falling back to talk share …
+ * class): keep waiting for it until this long after the Soniox job was submitted, so TUTOR/STUDENT are
+ * confirmed, before falling back to talk share …
  */
 export const AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS = 20 * 60 * 1000;
-/** … looking again this often (the job is kept; re-fetching its transcript is free). */
+/**
+ * … due again after this long (the job is kept; re-fetching its transcript is free). Without a webhook the
+ * next backstop sweep (~every 15 min) is the next look, so the last look can land up to ~35 min after submit.
+ */
 export const AUTOWRITER_ZOOM_TRANSCRIPT_RECHECK_MS = 5 * 60 * 1000;
 /** A Soniox job still queued or processing this long after it was submitted is abandoned (deleted, counted as an error). */
 export const AUTOWRITER_TRANSCRIBE_TIMEOUT_MS = 60 * 60 * 1000;

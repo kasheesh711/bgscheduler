@@ -698,6 +698,15 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ transcript: { speakerMethod: "talk_share" } });
   });
 
+  it("does not wait for Zoom when Wise gives no teacher name to match its cues", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    const tokens = lessonTokens().map((token) => token.speaker === "2" ? { ...token, text: " Three quarters." } : token);
+    const nameless = sessionDetail({ rawRecordings: RECORDING.rawRecordings, userId: { _id: KEVIN } });
+    expect(await processSession(transcriptDeps(fakeWise({ details: [nameless] }).ops, fakeSoniox({ tokens }).client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "verified" });
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ transcript: { speakerMethod: "talk_share" } });
+  });
+
   it("treats a Zoom transcript that cannot be read right now like one not published yet", async () => {
     await seedRow({ state: "awaiting_recording", evidence: "transcript" });
     const failing = async () => { throw new Error("HTTP 503"); };
@@ -900,6 +909,9 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect((await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client))).alertsSent).toBe(0);
     await db.update(S).set({ reason: "infra:OPENROUTER_API_KEY missing" }).where(eq(S.wiseSessionId, SESSION_ID));
     expect((await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client))).alertsSent).toBe(0);
+    await db.update(S).set({ state: "transcribing", reason: "zoom_transcript_pending" }).where(eq(S.wiseSessionId, SESSION_ID));
+    expect((await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client))).alertsSent).toBe(0);
+    await db.update(S).set({ state: "awaiting_recording" }).where(eq(S.wiseSessionId, SESSION_ID));
     await db.update(S).set({ reason: "recording_not_ready" }).where(eq(S.wiseSessionId, SESSION_ID));
     expect((await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client))).alertsSent).toBe(1);
   });

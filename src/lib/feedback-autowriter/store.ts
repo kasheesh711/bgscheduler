@@ -397,7 +397,8 @@ export async function noteSonioxRecorded(db: Database, wiseSessionId: string, tr
  * after class: raise a `no_recording` alert once, instead of only at the
  * deadline. Not for a switched-off tutor's classes (theirs to write), a
  * recording waiting for its 30-min length recheck (held with its own alert
- * next), or an infra retry (the recording may well be there).
+ * next), a transcript waiting briefly for Zoom's names (it goes ahead on its
+ * own), or an infra retry (the recording may well be there).
  */
 export async function flagNoRecording(db: Database, endedBefore: Date, disabledTutors: readonly string[] = []): Promise<number> {
   const rows = await db.update(S).set({
@@ -406,7 +407,7 @@ export async function flagNoRecording(db: Database, endedBefore: Date, disabledT
   }).where(and(
     inArray(S.state, ["awaiting_recording", "transcribing"]),
     lt(S.scheduledEndAt, endedBefore),
-    sql`coalesce(${S.reason}, '') <> 'recording_too_short' and coalesce(${S.reason}, '') not like 'infra:%'`,
+    sql`coalesce(${S.reason}, '') not in ('recording_too_short', 'zoom_transcript_pending') and coalesce(${S.reason}, '') not like 'infra:%'`,
     disabledTutors.length > 0
       ? or(isNull(S.wiseTeacherUserId), notInArray(S.wiseTeacherUserId, [...disabledTutors]))
       : undefined,

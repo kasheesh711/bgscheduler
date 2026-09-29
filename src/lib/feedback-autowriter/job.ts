@@ -814,9 +814,12 @@ async function processTranscript(deps: AutowriterDeps, input: {
   };
   // Soniox's own audio length catches a recording Wise gave no length for.
   if (status.audioDurationMs !== null && recordingTooShort(status.audioDurationMs / 1000, scheduledMinutes)) return holdFor("recording_too_short");
+  if (rendered.length < AUTOWRITER_MIN_TRANSCRIPT_CHARACTERS) return holdFor("transcript_too_short");
   // Zoom's named transcript follows the recording by a few minutes: wait for it (keeping the job) so the
-  // labels are confirmed, but only for a job this row stamped, and only up to the wait from its submit time.
-  if (zoomPending && submittedAt && Date.now() - submittedAt.getTime() < AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS) {
+  // labels are confirmed — only when it could name the tutor (Wise gives the teacher's name), only for a job
+  // this row stamped, and only up to the wait from its submit time.
+  const teacherName = detailTeacherName(detail);
+  if (zoomPending && teacherName && submittedAt && Date.now() - submittedAt.getTime() < AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS) {
     await release({
       state: "transcribing", reason: "zoom_transcript_pending", retryInMs: AUTOWRITER_ZOOM_TRANSCRIPT_RECHECK_MS,
       sonioxTranscriptionId: jobId, metadata: { transcript: transcriptMeta },
@@ -824,7 +827,6 @@ async function processTranscript(deps: AutowriterDeps, input: {
     return out("transcribing", "zoom_transcript_pending");
   }
   if (speakers.method === "unclear") return holdFor("speakers_unclear");
-  if (rendered.length < AUTOWRITER_MIN_TRANSCRIPT_CHARACTERS) return holdFor("transcript_too_short");
 
   // 5. Write and judge from the transcript (GLM on the zero-retention route only).
   const result = await runWritingPipeline({
