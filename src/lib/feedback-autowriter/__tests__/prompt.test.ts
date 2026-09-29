@@ -61,6 +61,24 @@ describe("buildFeedbackMessages", () => {
   });
 });
 
+describe("transcript mode", () => {
+  it("writes from a transcript in English and credits only what the student did", () => {
+    const [system, user] = buildFeedbackMessages({
+      studentFullName: STUDENT_NAME,
+      tutorNames,
+      classDetails: ["Programme: Y9-11 / G8-10 (Int.)", "Class subject: Math"],
+      scheduledMinutes: 60,
+      summary: { text: "[00:00] TUTOR: Somchai, let's try question 3\n[00:05] STUDENT: x equals 4", meetingUUIDs: [] },
+      evidence: "transcript",
+    });
+    expect(system.content).toContain("automatic transcript of the lesson");
+    expect(system.content).toContain("always write in English");
+    expect(system.content).toContain("covered, not mastered");
+    expect(user.content).toContain("Lesson transcript:");
+    expect(user.content).not.toContain("Somchai");
+  });
+});
+
 describe("describeClass", () => {
   it("takes the programme from the Wise subject and the subject from the session title", () => {
     expect(describeClass({ programme: "11+/13+", title: "Live Session - NVR" })).toEqual([

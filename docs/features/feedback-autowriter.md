@@ -63,9 +63,50 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
    A shadow draft finished after the owner switched to `live` goes back to `pending` (atomically with the mode),
    so it is posted rather than stranded in `would_submit`.
 
+## Second pass: writing from the recording (Soniox, migration 0098)
+
+When the AI summary cannot carry the feedback, the class is handed to a second pass instead of being held:
+
+| Handover | When |
+|---|---|
+| `summary_draft_held` | both summary drafts failed validation or the faithfulness judge |
+| `no_usable_summary` | still no summary (or too short) 30 minutes after the class end |
+| `thai_summary` | the summary is at least half Thai: Wise builds it from Zoom's Thai transcript, which loses the English terms |
+
+The row goes to `awaiting_recording` (`evidence = 'transcript'`). Wise publishes the lesson recording hours after
+class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) picks the row up and:
+
+1. passes Wise's composite MP4 URL (`rawRecordings`, one part only) to **Soniox** `stt-async-v5`
+   ([`soniox.ts`](../../src/lib/feedback-autowriter/soniox.ts)): Thai/English code-switching in one model, speaker
+   diarization, our terms as context; about **$0.10 per audio hour**. The job id is stored; a job not finished within
+   ~3 minutes leaves the row `transcribing` for the next run;
+2. fetches the transcript. BGScheduler never stores it; the Soniox job is kept only until a judged draft is stored
+   or the class is finished (so a retry re-fetches instead of transcribing again), then deleted. A delete that fails
+   keeps the job id so the sweep retries it, and the sweep also reaps jobs no row references after 2 hours;
+3. tells tutor from student by lining up Soniox's speakers with Zoom's name-labelled WEBVTT (`rawTranscript`) — every
+   speaker that overlaps the teacher's cues is TUTOR, so a diarization split cannot turn the tutor into the student.
+   Without cues it falls back to talk share only when the split is clear (two main speakers, one with ≥ 60%);
+   otherwise the class is held (`speakers_unclear`). The models are told the labels are reliable only when Zoom
+   confirmed them ([`transcript.ts`](../../src/lib/feedback-autowriter/transcript.ts));
+4. writes and judges from the `[mm:ss] TUTOR/STUDENT` transcript with **GLM on the zero-retention route only** — no
+   Luna fallback, because Thai-script names can slip past the Latin-name redaction. Extra rule: what the tutor
+   explained is "covered", not "mastered", unless the student is shown doing it. A long transcript keeps its start
+   and end (homework is usually set last). Any Thai text in the written fields fails validation (English only);
+5. posts through the same guarded path (gates without the summary requirement).
+
+A webhook waits up to ~3 minutes for Soniox; the backstop only looks and comes back, so one slow job never starves
+the other classes. A transcript draft that was judged but whose POST did not go out is reused on the retry.
+Three Soniox failures (including status checks that keep failing), several recording parts, or a transcript under
+800 characters → `held` + alert. A class still waiting for its recording 3 hours after class raises a
+`no_recording` alert (live mode); rows still waiting at the deadline margin expire with an alert as before. Pilot (2026-09-29, 8 classes): on Thai/English lessons Soniox kept the English terms that Zoom's
+transcript lost and was preferred in 17 of 18 compared windows; no gain on English-only lessons.
+
+Switch: `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED=true` plus `SONIOX_API_KEY`; off → the fast path behaves as before.
+
 ## States (`feedback_autowriter_sessions.state`)
 
 `pending → generating → would_submit` (shadow) or `→ posting → awaiting_event → verified`.
+Second pass: `→ awaiting_recording → (transcribing →) generating → …` (same ending).
 Terminal: `held`, `skipped_human`, `skipped_scope`, `expired`, `rejected`, `unknown_outcome`, `verify_failed`.
 `posting` is never re-claimed. After 6 minutes a `posting` row is reconciled by reads only: stored text, status,
 credits and credit entry, then the submit events. A failed read-back right after the POST also leaves the row

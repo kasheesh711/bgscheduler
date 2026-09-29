@@ -64,6 +64,8 @@ export interface AiSummary {
 export interface GateInput {
   now: Date;
   allowlist: ReadonlySet<string>;
+  /** False for the transcript second pass (it does not write from the summary). Default true. */
+  requireSummary?: boolean;
 }
 
 export type GateResult = { ok: true } | { ok: false; reason: string };

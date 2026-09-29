@@ -17,6 +17,9 @@ Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowrite
    | `WISE_WEBHOOKS_ENABLED` | `true` (otherwise the receiver acknowledges and ignores) |
    | `WISE_WEBHOOK_SECRET` | the auth key of the BGScheduler webhook in Wise (step 3) — same value on both sides |
    | `WISE_WEBHOOK_AUTH_HEADER` | optional: pin the header named in the first delivery's log line |
+   | `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED` | `true` to hand held / summary-less / Thai-summary classes to the Soniox second pass |
+   | `SONIOX_API_KEY` | Soniox project key (set a spend limit in the Soniox Console) |
+   Migration **0098** must be applied before deploying code that knows the second pass (it adds the `evidence` column).
 3. **Wise → Institute Settings → Developer options → Webhooks → Add Webhook.** Never edit the existing
    subscription (it feeds a Google Apps Script). URL `https://bgscheduler.vercel.app/api/wise/webhook`,
    events `MeetingEndedEvent`, `AttendanceComputedEvent` and `RecordingCompletedEvent`; its auth key (shown or chosen
@@ -81,7 +84,29 @@ A POST whose read-back failed stays `posting`, and one whose Wise submit event h
 failing, Data Health shows the sweep's infrastructure errors; after 2 hours the row becomes `verify_failed` and the
 autowriter halts.
 
-## 5. Alerts
+## 5. Second pass (Soniox)
+
+Dashboard state "Waiting for recording" / "Transcribing" = the class was handed over (`reason` says why:
+`summary_draft_held`, `no_usable_summary`, `thai_summary`). Nothing to do: Wise's `RecordingCompletedEvent` (or the
+30-minute backstop) continues it. It ends posted, `held` (+ alert) after 3 Soniox failures, a multi-part recording or
+a transcript that is too short, or `expired` (+ alert) if the recording never comes before the deadline margin.
+To turn the second pass off: `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED=false` + redeploy — classes already waiting are
+then held with an alert (`transcript_pass_unavailable`) so a person writes them.
+
+Alerts from the second pass: `no_recording` (still waiting 3 h after class — Wise may never publish a recording for
+it), `speakers_unclear`, `transcript_too_short`, `recording_multiple_parts`, or three Soniox failures.
+
+Rolling back to code without the second pass (migration 0098 can stay — it is additive): first hand waiting classes to
+people, then deploy the older code; delete any leftover jobs in the Soniox Console.
+
+```sql
+UPDATE feedback_autowriter_sessions
+SET state = 'held', reason = 'second_pass_rolled_back',
+    metadata = metadata || '{"alertKind":"held"}'::jsonb, updated_at = now()
+WHERE state IN ('awaiting_recording', 'transcribing');
+```
+
+## 6. Alerts
 
 One digest per sweep to `FEEDBACK_AUTOWRITER_ALERT_EMAILS` for classes that need a person: held (draft failed
 checks, absence, form/billing drift), expired, no summary 3 h after class, and any halt-causing outcome.

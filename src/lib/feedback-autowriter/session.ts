@@ -103,6 +103,17 @@ export const AutowriterSessionDetailSchema = z.object({
   }).passthrough().nullable().optional(),
   feedbackSubmissions: z.array(SubmissionSchema).default([]),
   rawMeetingSummary: z.array(SummarySchema).nullable().optional(),
+  /** Composite MP4 per recording part; appears hours after class (needs `showSessionFiles`). */
+  rawRecordings: z.array(z.object({
+    url: z.string().optional(),
+    partIndex: z.number().optional(),
+    duration: z.number().optional(),
+  }).passthrough()).nullable().optional(),
+  /** Zoom WEBVTT transcript per part; cues carry speaker display names. */
+  rawTranscript: z.array(z.object({
+    url: z.string().optional(),
+    file: z.object({ path: z.string().optional() }).passthrough().nullable().optional(),
+  }).passthrough()).nullable().optional(),
 }).passthrough();
 
 export type AutowriterSessionDetail = z.infer<typeof AutowriterSessionDetailSchema>;
@@ -117,6 +128,30 @@ export function parseAutowriterSessionDetail(response: unknown): AutowriterSessi
 function refId(value: z.infer<typeof UserRefSchema> | null | undefined): string | null {
   if (!value) return null;
   return typeof value === "string" ? value : value._id;
+}
+
+export function detailTeacherName(detail: AutowriterSessionDetail): string | null {
+  return typeof detail.userId === "string" ? null : detail.userId.name?.trim() || null;
+}
+
+/**
+ * The one composite recording Soniox can fetch. Several parts (the meeting was
+ * restarted) are not stitched: the class is left to a person.
+ */
+export function recordingForTranscription(detail: AutowriterSessionDetail):
+  | { ok: true; url: string }
+  | { ok: false; reason: "recording_not_ready" | "recording_multiple_parts" } {
+  const parts = (detail.rawRecordings ?? []).filter((part) => part.url);
+  if (parts.length === 0) return { ok: false, reason: "recording_not_ready" };
+  if (parts.length > 1) return { ok: false, reason: "recording_multiple_parts" };
+  return { ok: true, url: parts[0].url! };
+}
+
+/** Zoom's transcript file, used only to tell tutor from student (single part only). */
+export function zoomTranscriptUrl(detail: AutowriterSessionDetail): string | null {
+  const parts = detail.rawTranscript ?? [];
+  if (parts.length !== 1) return null;
+  return parts[0].url ?? parts[0].file?.path ?? null;
 }
 
 export function detailClassId(detail: AutowriterSessionDetail): string {
@@ -356,6 +391,8 @@ export function evaluateSessionGates(
   if (attendance === null) return { ok: false, reason: "attendance_unknown" };
   if (attendance < AUTOWRITER_MIN_ATTENDANCE_PERCENT) return { ok: false, reason: `attendance_${attendance}pct` };
 
+  // The second pass writes from a transcript instead, so the summary is not required there.
+  if (input.requireSummary === false) return { ok: true };
   const summary = extractAiSummary(detail);
   if (!summary) return { ok: false, reason: "no_ai_summary" };
   if ([...summary.text].length < AUTOWRITER_MIN_SUMMARY_CHARACTERS) return { ok: false, reason: "ai_summary_too_short" };

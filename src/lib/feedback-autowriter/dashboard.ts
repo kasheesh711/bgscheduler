@@ -12,8 +12,8 @@ export type DashboardWindowDays = (typeof DASHBOARD_WINDOWS)[number];
 
 export interface DashboardCallRow {
   wiseSessionId: string;
-  role: "writer" | "judge";
-  arm: "glm" | "luna";
+  role: "writer" | "judge" | "transcriber";
+  arm: "glm" | "luna" | "soniox";
   requestedModel: string;
   ok: boolean;
   costUsd: number;
@@ -23,7 +23,7 @@ export interface DashboardCallRow {
 
 export interface DashboardSessionRow extends Pick<AutowriterSessionRow,
   "wiseSessionId" | "wiseClassId" | "wiseTeacherUserId" | "scheduledEndAt" | "deadlineAt" | "state" | "reason" |
-  "arm" | "postStartedAt" | "fields" | "metadata" | "createdAt" | "updatedAt"> {
+  "arm" | "postStartedAt" | "fields" | "metadata" | "createdAt" | "updatedAt" | "evidence"> {
   className: string | null;
 }
 
@@ -82,6 +82,10 @@ export interface AutowriterDashboard {
     verified: number;
     awaitingEvent: number;
     shadowDrafts: number;
+    /** Second pass: waiting for Wise's recording or being transcribed. */
+    awaitingRecording: number;
+    /** Posted drafts written from a transcript. */
+    fromTranscript: number;
     held: number;
     skippedHuman: number;
     skippedScope: number;
@@ -121,6 +125,7 @@ export interface AutowriterDashboard {
     state: string;
     reason: string | null;
     arm: string | null;
+    evidence: "summary" | "transcript";
     postStartedAt: string | null;
     latencyMinutes: number | null;
     costUsd: number;
@@ -193,6 +198,8 @@ export function buildAutowriterDashboard(input: {
       verified: count((row) => row.state === "verified"),
       awaitingEvent: count((row) => row.state === "awaiting_event" || row.state === "posting"),
       shadowDrafts: count((row) => row.state === "would_submit"),
+      awaitingRecording: count((row) => row.state === "awaiting_recording" || row.state === "transcribing"),
+      fromTranscript: count((row) => POSTED.has(row.state) && row.evidence === "transcript"),
       held: count((row) => row.state === "held"),
       skippedHuman: count((row) => row.state === "skipped_human"),
       skippedScope: count((row) => row.state === "skipped_scope"),
@@ -243,6 +250,7 @@ export function buildAutowriterDashboard(input: {
           state: row.state,
           reason: row.reason,
           arm: row.arm,
+          evidence: row.evidence,
           postStartedAt: row.postStartedAt?.toISOString() ?? null,
           latencyMinutes: round(latencyMinutes(row)),
           costUsd: round(costBySession.get(row.wiseSessionId) ?? 0, 4) ?? 0,
@@ -282,6 +290,7 @@ export async function loadAutowriterDashboard(db: Database, input: { windowDays:
       state: S.state,
       reason: S.reason,
       arm: S.arm,
+      evidence: S.evidence,
       postStartedAt: S.postStartedAt,
       fields: S.fields,
       metadata: S.metadata,

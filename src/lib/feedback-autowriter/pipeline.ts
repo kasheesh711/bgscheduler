@@ -9,7 +9,15 @@ import {
   type JudgeOutput,
 } from "./judge";
 import { callOpenRouter, type OpenRouterCallResult } from "./openrouter";
-import { FEEDBACK_JSON_SCHEMA, PROMPT_VERSION, buildFeedbackMessages, classDetailsBlock, redactForModel } from "./prompt";
+import {
+  FEEDBACK_JSON_SCHEMA,
+  PROMPT_VERSION,
+  buildFeedbackMessages,
+  classDetailsBlock,
+  redactForModel,
+  type EvidenceKind,
+  type SpeakerLabels,
+} from "./prompt";
 import type { AiSummary, ModelArm } from "./types";
 import { finalizeFields, parseModelOutput, validateFeedbackDraft, type ModelOutput } from "./validate";
 
@@ -19,6 +27,14 @@ export interface PipelineSession {
   studentDisplayName: string;
   /** `describeClass` lines; the writer and the judge both get them. */
   classDetails: readonly string[];
+  /**
+   * What `summary.text` holds: Wise's AI summary, or a rendered Soniox transcript.
+   * Transcripts can carry Thai-script names our redaction cannot see, so they
+   * only ever go to the zero-retention GLM route: no fallback writer.
+   */
+  evidence?: EvidenceKind;
+  /** Transcript mode: whether Zoom confirmed the TUTOR/STUDENT labels. */
+  speakerLabels?: SpeakerLabels;
   scheduledMinutes: number;
   summary: AiSummary;
 }
@@ -105,19 +121,25 @@ export async function runWritingPipeline(input: {
     return { kind: "call" as const, call };
   };
 
-  for (const writer of [AUTOWRITER_MODELS.writer, AUTOWRITER_MODELS.fallbackWriter] as AutowriterModelConfig[]) {
+  const evidence: EvidenceKind = session.evidence ?? "summary";
+  const writers = (evidence === "transcript"
+    ? [AUTOWRITER_MODELS.writer]
+    : [AUTOWRITER_MODELS.writer, AUTOWRITER_MODELS.fallbackWriter]) as AutowriterModelConfig[];
+  for (const writer of writers) {
     const written = await run(writer, "writer", buildFeedbackMessages({
       studentFullName: session.studentFullName,
       tutorNames: input.tutorNames,
       classDetails: session.classDetails,
       scheduledMinutes: session.scheduledMinutes,
       summary: session.summary,
+      evidence,
+      speakerLabels: session.speakerLabels,
     }), 180_000);
     if (written.kind === "budget") return { kind: "infra", error: "function_budget_exhausted" };
     const writeCall = written.call;
     const recordWriter = (result: Record<string, unknown>) => input.record({
       wiseSessionId: session.wiseSessionId, role: "writer", arm: writer.arm, requestedModel: writer.model,
-      promptVersion: PROMPT_VERSION, call: writeCall, result,
+      promptVersion: PROMPT_VERSION, call: writeCall, result: { ...result, evidence },
     });
 
     if (!writeCall.ok) {
@@ -159,6 +181,8 @@ export async function runWritingPipeline(input: {
     for (let attempt = 0; attempt < JUDGE_ATTEMPTS && !verdict; attempt += 1) {
       const judged = await run(judgeConfig, "judge", buildJudgeMessages({
         redactedSummary,
+        evidence,
+        speakerLabels: session.speakerLabels,
         classDetails: redactedClassDetails,
         placeholderFields: {
           topics: parsed.output.topics,
@@ -171,7 +195,7 @@ export async function runWritingPipeline(input: {
       const judgeCall = judged.call;
       const recordJudge = (result: Record<string, unknown>) => input.record({
         wiseSessionId: session.wiseSessionId, role: "judge", arm: judgeConfig.arm, requestedModel: judgeConfig.model,
-        promptVersion: JUDGE_PROMPT_VERSION, call: judgeCall, result: { ...result, judgedArm: writer.arm },
+        promptVersion: JUDGE_PROMPT_VERSION, call: judgeCall, result: { ...result, judgedArm: writer.arm, evidence },
       });
       if (!judgeCall.ok) {
         await recordJudge({ error: judgeCall.error });

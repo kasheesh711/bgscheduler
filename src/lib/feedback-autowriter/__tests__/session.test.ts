@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildFeedbackPostBody,
   classifyGateReason,
+  recordingForTranscription,
+  zoomTranscriptUrl,
   classifyTeacherSubmission,
   evaluateSessionGates,
   extractAiSummary,
@@ -96,6 +98,24 @@ describe("evaluateSessionGates", () => {
     expect(evaluateSessionGates(parse({ participants }), gateInput)).toEqual({ ok: false, reason: "attendance_20pct" });
     const extra = [...sessionDetail().participants, { wiseUserId: "other", name: "Other", isTeacher: false, absolutePercentAttendance: 90 }];
     expect(evaluateSessionGates(parse({ participants: extra }), gateInput)).toEqual({ ok: false, reason: "student_count_2" });
+  });
+});
+
+describe("second-pass inputs", () => {
+  it("does not require a summary when writing from a transcript", () => {
+    expect(evaluateSessionGates(parse({ rawMeetingSummary: [] }), { ...gateInput, requireSummary: false })).toEqual({ ok: true });
+    expect(evaluateSessionGates(parse({ rawMeetingSummary: [] }), gateInput)).toEqual({ ok: false, reason: "no_ai_summary" });
+  });
+
+  it("finds the single composite recording and Zoom's transcript", () => {
+    expect(recordingForTranscription(parse())).toEqual({ ok: false, reason: "recording_not_ready" });
+    expect(recordingForTranscription(parse({ rawRecordings: [{ url: "https://files.wiseapp.live/a.mp4", partIndex: 1 }] })))
+      .toEqual({ ok: true, url: "https://files.wiseapp.live/a.mp4" });
+    expect(recordingForTranscription(parse({ rawRecordings: [{ url: "https://x/1.mp4" }, { url: "https://x/2.mp4" }] })))
+      .toEqual({ ok: false, reason: "recording_multiple_parts" });
+    expect(zoomTranscriptUrl(parse({ rawTranscript: [{ url: "https://files.wiseapp.live/t.vtt" }] }))).toBe("https://files.wiseapp.live/t.vtt");
+    expect(zoomTranscriptUrl(parse({ rawTranscript: [{ file: { path: "https://x/p.vtt" } }] }))).toBe("https://x/p.vtt");
+    expect(zoomTranscriptUrl(parse())).toBeNull();
   });
 });
 

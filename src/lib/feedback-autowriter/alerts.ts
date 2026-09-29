@@ -7,6 +7,7 @@ const KIND_TEXT: Record<AlertKind, string> = {
   held: "Not written — the draft failed checks. Please write this feedback.",
   expired: "Not written before the deadline window. Please write this feedback now.",
   no_summary: "Wise has no AI summary 3 hours after class. The autowriter keeps trying; write it yourself if it stays blank.",
+  no_recording: "Waiting for Wise's recording 3 hours after class (second pass). The autowriter keeps trying until the deadline; write it yourself if you can.",
   unknown_outcome: "The Wise POST outcome is unclear. Autowriter halted — check this class in Wise before resuming.",
   verify_failed: "The Wise POST did not verify. Autowriter halted — check this class in Wise before resuming.",
   rejected: "Wise rejected the POST. Autowriter halted — check this class before resuming.",

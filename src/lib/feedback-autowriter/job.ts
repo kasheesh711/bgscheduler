@@ -9,16 +9,28 @@ import { resolveBilling } from "./billing";
 import {
   AUTOWRITER_EVENT_DEADLINE_MS,
   AUTOWRITER_GENERATION_LEASE_MS,
+  AUTOWRITER_MAX_TRANSCRIBE_ERRORS,
   AUTOWRITER_MIN_POST_BUDGET_MS,
+  AUTOWRITER_MIN_TRANSCRIPT_CHARACTERS,
+  AUTOWRITER_NO_RECORDING_ALERT_MS,
   AUTOWRITER_NO_SUMMARY_ALERT_MS,
+  AUTOWRITER_NO_SUMMARY_HANDOVER_MINUTES,
   AUTOWRITER_POST_IN_FLIGHT_ATTEMPTS,
   AUTOWRITER_POST_IN_FLIGHT_WAIT_MS,
+  AUTOWRITER_RECORDING_RECHECK_MS,
   AUTOWRITER_RETRY_DELAY_MS,
+  AUTOWRITER_SONIOX_CLEANUP_MAX,
+  AUTOWRITER_SONIOX_REAPER_AGE_MS,
   AUTOWRITER_STALE_POSTING_MS,
   AUTOWRITER_SWEEP_MIN_REMAINING_MS,
+  AUTOWRITER_THAI_SUMMARY_SHARE,
+  AUTOWRITER_TRANSCRIBE_POLL_MS,
+  AUTOWRITER_TRANSCRIBE_WAIT_MS,
+  AUTOWRITER_TRANSCRIBING_RECHECK_MS,
 } from "./config";
+import type { JudgeOutput } from "./judge";
 import { runWritingPipeline, type PipelineResult } from "./pipeline";
-import { chooseStudentDisplayName, describeClass } from "./prompt";
+import { chooseStudentDisplayName, describeClass, parseStudentName, type EvidenceKind } from "./prompt";
 import { AUTOWRITER_ROSTER, AUTOWRITER_TEACHER_ALLOWLIST, rosterTutor } from "./roster";
 import { loadCandidateShortlist, loadFieldMappings, loadPriorFeedback } from "./run";
 import {
@@ -26,33 +38,44 @@ import {
   classifyTeacherSubmission,
   detailClassId,
   detailTeacherId,
+  detailTeacherName,
   evaluateSessionGates,
   extractAiSummary,
   parseAutowriterSessionDetail,
   planFeedbackForm,
+  recordingForTranscription,
   scheduledWindow,
   studentParticipants,
+  zoomTranscriptUrl,
   type AutowriterSessionDetail,
 } from "./session";
 import {
+  WAITING_STATES,
   acquireSweepLease,
+  activeSonioxJobIds,
   claimGeneration,
+  clearSonioxTranscription,
   ensureSessionRow,
   expireOverdueRows,
+  flagNoRecording,
   haltAutowriter,
   listDueRows,
   listPendingAlerts,
   listRowsInState,
+  listSonioxCleanup,
   markAlertsSent,
+  noteSonioxRecorded,
   readControl,
   readSessionRow,
   recentAutowriterPosts,
   reconcilePostedRow,
   recordCall,
+  recordTranscriptionCall,
   releaseGeneration,
   releaseShadowDraft,
   releaseSweepLease,
   sessionSubmitStore,
+  setSonioxTranscription,
   stuckPostInFlight,
   updateLeasedTeacher,
   type AlertKind,
@@ -68,7 +91,9 @@ import {
   type SubmitOutcome,
   type WiseFeedbackOps,
 } from "./submit";
-import { AUTOWRITER_DEADLINE_MARGIN_MS, type BillingPlan, type SubmissionState } from "./types";
+import { SonioxError, sonioxCostUsd, type SonioxClient } from "./soniox";
+import { assignSpeakerRoles, parseZoomVtt, renderTranscript, segmentsFromTokens, thaiShare, type ZoomCue } from "./transcript";
+import { AUTOWRITER_DEADLINE_MARGIN_MS, type BillingPlan, type ModelArm, type SubmissionState } from "./types";
 
 export interface AutowriterDeps {
   db: Database;
@@ -83,6 +108,11 @@ export interface AutowriterDeps {
   alertRecipients?: readonly string[];
   /** Email relay for the alert digest (tests inject a fake). */
   alertSender?: ScheduleEmailSender;
+  /** Second pass (Soniox transcript) switched on (`FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED`). */
+  transcriptsEnabled?: boolean;
+  soniox?: SonioxClient | null;
+  /** Fetches Zoom's WEBVTT (tests inject a fake). */
+  fetchText?: (url: string) => Promise<string>;
   now?: () => Date;
   callModel?: Parameters<typeof runWritingPipeline>[0]["callModel"];
   sleep?: (ms: number) => Promise<void>;
@@ -90,7 +120,7 @@ export interface AutowriterDeps {
 
 export type ProcessResult =
   | "preview" | "mode_off" | "halted" | "tutor_off" | "not_roster" | "not_found" | "busy_or_not_due" | "already_handled"
-  | "blocked_by_stuck_post"
+  | "blocked_by_stuck_post" | "awaiting_recording" | "transcribing"
   | "retry" | "skipped_scope" | "skipped_human" | "held" | "expired" | "infra" | "would_submit"
   | "verified" | "awaiting_event" | "unverified" | "rate_limited" | "rejected" | "unknown_outcome" | "verify_failed"
   | "not_claimed" | "aborted";
@@ -153,7 +183,7 @@ export async function processSession(deps: AutowriterDeps, input: {
   if (control.haltedAt) return out("halted");
 
   let row = await readSessionRow(db, input.wiseSessionId);
-  if (row && row.state !== "pending" && row.state !== "generating") return out("already_handled", row.state);
+  if (row && row.state !== "generating" && !(WAITING_STATES as readonly string[]).includes(row.state)) return out("already_handled", row.state);
   if (!row) {
     // Most webhook deliveries are other tutors' classes: answer from the
     // Class Feedback mirror when it already knows the teacher, without a Wise read.
@@ -203,10 +233,27 @@ export async function processSession(deps: AutowriterDeps, input: {
 
 type Release = (to: Parameters<typeof releaseGeneration>[3]) => Promise<boolean>;
 type Out = (result: ProcessResult, detail?: string) => ProcessOutcome;
+type DraftPatch = Partial<Parameters<Release>[0]>;
+/** Where "try again later" goes: the fast path's `pending`, or back to waiting for the recording. */
+type RetryState = "pending" | "awaiting_recording";
+
+/** Hand a class to the second pass: wait for Wise's recording, then write from its transcript. */
+async function handOverToTranscript(release: Release, out: Out, reason: string, metadata: Record<string, unknown> = {}): Promise<ProcessOutcome> {
+  await release({
+    state: "awaiting_recording",
+    evidence: "transcript",
+    reason,
+    retryInMs: AUTOWRITER_RECORDING_RECHECK_MS,
+    metadata: { handover: reason, ...metadata },
+  });
+  return out("awaiting_recording", reason);
+}
 
 /**
  * Settle a failed gate (from the first read or the pre-POST fresh read):
- * retry later, hand back to the tutor, or hold / expire with an alert.
+ * retry later, hand back to the tutor, or hold / expire with an alert. With the
+ * second pass on, a summary that still has not arrived 30 min after class hands
+ * the class over to the transcript pass instead of retrying.
  */
 async function settleGate(input: {
   reason: string;
@@ -215,20 +262,86 @@ async function settleGate(input: {
   now: Date;
   release: Release;
   out: Out;
-  draftPatch?: Partial<Parameters<Release>[0]>;
+  draftPatch?: DraftPatch;
+  retryState?: RetryState;
+  transcriptsEnabled?: boolean;
 }): Promise<ProcessOutcome> {
   const { reason, detail, row, now, release, out } = input;
-  const disposition = classifyGateReason(reason, { minutesSinceEnd: minutesSinceEnd(detail, now) });
+  const minutes = minutesSinceEnd(detail, now);
+  const disposition = classifyGateReason(reason, { minutesSinceEnd: minutes });
   if (disposition === "retry") {
+    if (input.transcriptsEnabled && NO_SUMMARY_REASONS.has(reason) && minutes >= AUTOWRITER_NO_SUMMARY_HANDOVER_MINUTES) {
+      return handOverToTranscript(release, out, "no_usable_summary", { summaryGate: reason });
+    }
+    const retryState = input.retryState ?? "pending";
     const endedAt = row.scheduledEndAt ?? scheduledWindow(detail).end;
-    const noSummaryLate = NO_SUMMARY_REASONS.has(reason) && now.getTime() - endedAt.getTime() >= AUTOWRITER_NO_SUMMARY_ALERT_MS;
-    await release({ state: "pending", reason, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true, alertKind: noSummaryLate ? "no_summary" : null });
+    const noSummaryLate = retryState === "pending" && NO_SUMMARY_REASONS.has(reason) &&
+      now.getTime() - endedAt.getTime() >= AUTOWRITER_NO_SUMMARY_ALERT_MS;
+    await release({
+      state: retryState,
+      reason,
+      retryInMs: retryState === "pending" ? AUTOWRITER_RETRY_DELAY_MS : AUTOWRITER_RECORDING_RECHECK_MS,
+      countRetry: true,
+      alertKind: noSummaryLate ? "no_summary" : null,
+    });
     return out("retry", reason);
   }
   const state = disposition === "scope" ? "skipped_scope" : disposition === "human" ? "skipped_human" : disposition === "expired" ? "expired" : "held";
   const alertKind: AlertKind | null = state === "held" ? "held" : state === "expired" ? "expired" : null;
   await release({ state, reason, alertKind, ...(state === "held" ? input.draftPatch ?? {} : {}) });
   return out(state, reason);
+}
+
+/**
+ * Wise may have moved the class to another teacher since the row was made: the
+ * stored teacher is what the per-tutor switch and the POST claim check.
+ */
+async function followTeacher(deps: AutowriterDeps, input: {
+  row: AutowriterSessionRow;
+  token: string;
+  control: AutowriterControl;
+  detail: AutowriterSessionDetail;
+  release: Release;
+  out: Out;
+  retryState: RetryState;
+}): Promise<{ row: AutowriterSessionRow } | { outcome: ProcessOutcome }> {
+  const fresh = detailTeacherId(input.detail);
+  if (!fresh || fresh === input.row.wiseTeacherUserId) return { row: input.row };
+  await updateLeasedTeacher(deps.db, input.row.wiseSessionId, input.token, fresh);
+  if (input.control.disabledTutors.includes(fresh)) {
+    await input.release({ state: input.retryState, reason: "tutor_off", retryInMs: AUTOWRITER_RETRY_DELAY_MS });
+    return { outcome: input.out("tutor_off", "teacher changed to a switched-off tutor") };
+  }
+  return { row: { ...input.row, wiseTeacherUserId: fresh } };
+}
+
+/** Form plan and billing: deterministic, so a failure is final for either pass. */
+async function planPost(deps: AutowriterDeps, input: {
+  detail: AutowriterSessionDetail;
+  submission: SubmissionState;
+  mappings?: readonly FeedbackFieldMapping[];
+  release: Release;
+  out: Out;
+}): Promise<{ mappings: readonly FeedbackFieldMapping[]; billing: BillingPlan } | { outcome: ProcessOutcome }> {
+  const mappings = input.mappings ?? await loadFieldMappings(deps.db);
+  const form = planFeedbackForm(input.detail, mappings);
+  if (!form.ok) {
+    await input.release({ state: "held", reason: form.reason, alertKind: "held" });
+    return { outcome: input.out("held", form.reason) };
+  }
+  const billing = resolveBilling({ submission: input.submission, scheduledMinutes: scheduledWindow(input.detail).minutes });
+  if (!billing.ok) {
+    await input.release({ state: "held", reason: `billing:${billing.reason}`, alertKind: "held" });
+    return { outcome: input.out("held", billing.reason) };
+  }
+  return { mappings, billing: billing.plan };
+}
+
+async function priorFeedback(deps: AutowriterDeps, tutor: NonNullable<ReturnType<typeof rosterTutor>>, now: Date) {
+  return [
+    ...(await loadPriorFeedback(deps.db, { canonicalTutorKey: tutor.canonicalKey, now })),
+    ...(await recentAutowriterPosts(deps.db, tutor.wiseUserId, new Date(now.getTime() - NINETY_DAYS_MS))),
+  ];
 }
 
 async function processLeased(deps: AutowriterDeps, input: {
@@ -241,6 +354,8 @@ async function processLeased(deps: AutowriterDeps, input: {
   out: Out;
   waitForReadyMs: number;
 }): Promise<ProcessOutcome> {
+  if (input.row.evidence === "transcript") return processTranscript(deps, input);
+  const secondPass = Boolean(deps.transcriptsEnabled && deps.soniox);
   const { db, ops } = deps;
   const { release, out } = input;
   let row = input.row;
@@ -269,48 +384,34 @@ async function processLeased(deps: AutowriterDeps, input: {
     await sleep(20_000);
   }
 
-  // Wise may have moved the class to another teacher since the row was made:
-  // the stored teacher is what the per-tutor switch and the POST claim check.
-  const freshTeacher = detailTeacherId(detail);
-  if (freshTeacher && freshTeacher !== row.wiseTeacherUserId) {
-    await updateLeasedTeacher(db, row.wiseSessionId, input.token, freshTeacher);
-    row = { ...row, wiseTeacherUserId: freshTeacher };
-    if (input.control.disabledTutors.includes(freshTeacher)) {
-      await release({ state: "pending", reason: "tutor_off", retryInMs: AUTOWRITER_RETRY_DELAY_MS });
-      return out("tutor_off", "teacher changed to a switched-off tutor");
-    }
+  const followed = await followTeacher(deps, { row, token: input.token, control: input.control, detail, release, out, retryState: "pending" });
+  if ("outcome" in followed) return followed.outcome;
+  row = followed.row;
+
+  if (gateReason) {
+    return settleGate({ reason: gateReason, detail, row, now, release, out, transcriptsEnabled: secondPass });
   }
 
-  if (gateReason) return settleGate({ reason: gateReason, detail, row, now, release, out });
-
-  const mappings = input.mappings ?? await loadFieldMappings(db);
-  const form = planFeedbackForm(detail, mappings);
-  if (!form.ok) {
-    await release({ state: "held", reason: form.reason, alertKind: "held" });
-    return out("held", form.reason);
-  }
-  const window = scheduledWindow(detail);
-  const billing = resolveBilling({ submission, scheduledMinutes: window.minutes });
-  if (!billing.ok) {
-    await release({ state: "held", reason: `billing:${billing.reason}`, alertKind: "held" });
-    return out("held", billing.reason);
-  }
+  const planned = await planPost(deps, { detail, submission, mappings: input.mappings, release, out });
+  if ("outcome" in planned) return planned.outcome;
   const summary = extractAiSummary(detail);
   const [student] = studentParticipants(detail);
-  const tutor = rosterTutor(freshTeacher);
+  const tutor = rosterTutor(detailTeacherId(detail));
   if (!summary || !student?.name || !tutor) {
     await release({ state: "held", reason: "missing_summary_student_or_tutor", alertKind: "held" });
     return out("held", "missing_summary_student_or_tutor");
+  }
+  // Wise's summary of a mostly-Thai lesson is built from Zoom's Thai transcript,
+  // which loses the English terms: write from a Soniox transcript instead.
+  const summaryThai = thaiShare(summary.text);
+  if (secondPass && summaryThai >= AUTOWRITER_THAI_SUMMARY_SHARE) {
+    return handOverToTranscript(release, out, "thai_summary", { summaryThaiShare: Math.round(summaryThai * 100) / 100 });
   }
   if (!deps.apiKey) {
     await release({ state: "pending", reason: "infra:OPENROUTER_API_KEY missing", retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true });
     return out("infra", "OPENROUTER_API_KEY missing");
   }
 
-  const priors = [
-    ...(await loadPriorFeedback(db, { canonicalTutorKey: tutor.canonicalKey, now })),
-    ...(await recentAutowriterPosts(db, tutor.wiseUserId, new Date(now.getTime() - NINETY_DAYS_MS))),
-  ];
   const result: PipelineResult = await runWritingPipeline({
     apiKey: deps.apiKey,
     session: {
@@ -318,11 +419,11 @@ async function processLeased(deps: AutowriterDeps, input: {
       studentFullName: student.name,
       studentDisplayName: chooseStudentDisplayName(summary.text, student.name),
       classDetails: describeClass({ programme: detail.classSubject, title: detail.title }),
-      scheduledMinutes: window.minutes,
+      scheduledMinutes: scheduledWindow(detail).minutes,
       summary,
     },
     tutorNames: tutor.tutorNames,
-    priorFeedback: priors,
+    priorFeedback: await priorFeedback(deps, tutor, now),
     record: (record) => recordCall(db, record),
     remainingMs: () => remaining(deps),
     callModel: deps.callModel,
@@ -332,27 +433,58 @@ async function processLeased(deps: AutowriterDeps, input: {
     return out("infra", result.error);
   }
   if (result.kind === "held") {
-    await release({ state: "held", reason: result.reasons.join("; ").slice(0, 900), countAttempt: true, alertKind: "held" });
+    const reasons = result.reasons.join("; ").slice(0, 900);
+    // The summary could not carry a faithful draft: the transcript usually can.
+    if (secondPass) return handOverToTranscript(release, out, "summary_draft_held", { summaryHold: reasons });
+    await release({ state: "held", reason: reasons, countAttempt: true, alertKind: "held" });
     return out("held", result.reasons.join("; "));
   }
+  return postDraft(deps, {
+    row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
+    draft: { arm: result.arm, fields: result.fields, judge: result.judge }, evidence: "summary", release, out,
+  });
+}
 
+/**
+ * Shadow: store the judged draft. Live: the guarded POST, waiting briefly while
+ * another session's POST is unsettled. Shared by both passes.
+ */
+async function postDraft(deps: AutowriterDeps, input: {
+  row: AutowriterSessionRow;
+  token: string;
+  control: AutowriterControl;
+  detail: AutowriterSessionDetail;
+  submission: SubmissionState;
+  billing: BillingPlan;
+  mappings: readonly FeedbackFieldMapping[];
+  draft: { arm: ModelArm; fields: FeedbackFieldAnswers; judge: JudgeOutput };
+  evidence: EvidenceKind;
+  extraMetadata?: Record<string, unknown>;
+  release: Release;
+  out: Out;
+}): Promise<ProcessOutcome> {
+  const { db, ops } = deps;
+  const { row, release, out, draft, submission } = input;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const retryState: RetryState = input.evidence === "transcript" ? "awaiting_recording" : "pending";
   const draftPatch = {
-    arm: result.arm,
-    fields: result.fields,
-    fieldsSha256: fieldsHash(result.fields),
-    billing: billing.plan,
-    metadata: { judge: result.judge },
+    arm: draft.arm,
+    fields: draft.fields,
+    fieldsSha256: fieldsHash(draft.fields),
+    billing: input.billing,
+    metadata: { judge: draft.judge, draftEvidence: input.evidence, ...(input.extraMetadata ?? {}) },
   };
   if (input.control.mode !== "live") {
     // Atomic with the mode: a switch to live while this draft was being written
     // sends the row back to `pending` instead of stranding it in `would_submit`.
     const stored = await releaseShadowDraft(db, row.wiseSessionId, input.token, draftPatch);
-    return stored === "pending" ? out("retry", "mode_switched_to_live") : out("would_submit", result.arm);
+    return stored === "pending" ? out("retry", "mode_switched_to_live") : out("would_submit", draft.arm);
   }
   if (!deps.apiActorId) {
-    await release({ state: "pending", reason: "infra:WISE_USER_ID missing", retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true });
+    await release({ state: retryState, reason: "infra:WISE_USER_ID missing", retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true, ...draftPatch });
     return out("infra", "WISE_USER_ID missing");
   }
+  const requireSummary = input.evidence === "summary";
 
   // Only one POST may be in flight institution-wide; wait briefly for another
   // session's POST to settle, redoing every pre-POST read each time.
@@ -360,17 +492,19 @@ async function processLeased(deps: AutowriterDeps, input: {
   for (let attempt = 1; ; attempt += 1) {
     outcome = await submitFeedbackGuarded({
       ops,
-      store: sessionSubmitStore(db, row.wiseSessionId, input.token, { expected: submission, judge: result.judge }),
+      store: sessionSubmitStore(db, row.wiseSessionId, input.token, {
+        expected: submission, judge: draft.judge, draftEvidence: input.evidence, ...(input.extraMetadata ?? {}),
+      }),
       plan: {
         sessionId: row.wiseSessionId,
         classId: row.wiseClassId!,
-        arm: result.arm,
-        fields: result.fields,
-        billing: billing.plan,
+        arm: draft.arm,
+        fields: draft.fields,
+        billing: input.billing,
         expected: submission,
-        mappings,
+        mappings: input.mappings,
       },
-      gateInput: { now: clock(deps), allowlist: AUTOWRITER_TEACHER_ALLOWLIST },
+      gateInput: { now: clock(deps), allowlist: AUTOWRITER_TEACHER_ALLOWLIST, requireSummary },
       apiActorId: deps.apiActorId,
       remainingMs: () => remaining(deps),
       sleep: deps.sleep,
@@ -396,9 +530,9 @@ async function processLeased(deps: AutowriterDeps, input: {
       return out("unverified", outcome.problems.join(", "));
     case "not_claimed":
       // Another POST still in flight, or paused / halted / not live / tutor off /
-      // teacher changed / lease lost: nothing was sent.
+      // teacher changed / lease lost: nothing was sent. The judged draft is kept.
       await release({
-        state: "pending",
+        state: retryState,
         reason: outcome.reason === "post_in_flight" ? "post_in_flight" : "post_not_claimed",
         retryInMs: outcome.reason === "post_in_flight" ? 60_000 : AUTOWRITER_RETRY_DELAY_MS,
         ...draftPatch,
@@ -409,10 +543,10 @@ async function processLeased(deps: AutowriterDeps, input: {
     case "aborted_precheck": {
       const reason = outcome.reason;
       if (outcome.gate) {
-        return settleGate({ reason, detail, row, now: clock(deps), release, out, draftPatch });
+        return settleGate({ reason, detail: input.detail, row, now: clock(deps), release, out, draftPatch, retryState });
       }
       if (/^(detail_read_failed|credits_read_failed|function_budget)/u.test(reason)) {
-        await release({ state: "pending", reason, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true });
+        await release({ state: retryState, reason, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true, ...draftPatch });
         return out("retry", reason);
       }
       if (reason === "submission_changed_to_human") {
@@ -423,6 +557,265 @@ async function processLeased(deps: AutowriterDeps, input: {
       return out("held", reason);
     }
   }
+}
+
+/** A judged transcript draft kept from an attempt whose POST did not go out. */
+function reusableTranscriptDraft(row: AutowriterSessionRow): { arm: ModelArm; fields: FeedbackFieldAnswers; judge: JudgeOutput } | null {
+  const metadata = row.metadata as { draftEvidence?: unknown; judge?: JudgeOutput };
+  if (metadata.draftEvidence !== "transcript" || metadata.judge?.faithful !== true) return null;
+  if (!row.fields || !row.arm) return null;
+  return { arm: row.arm, fields: row.fields as unknown as FeedbackFieldAnswers, judge: metadata.judge };
+}
+
+const SONIOX_TERMS = ["ISEB", "11+", "13+", "NVR", "Non-Verbal Reasoning", "Verbal Reasoning", "IGCSE", "IB", "SAT", "A-level"];
+
+/**
+ * Second pass: write from a Soniox transcript of Wise's recording. The lease is
+ * held throughout. The Soniox job id is stored as soon as it exists and the job
+ * is kept until a judged draft is stored or the class is finished, so a retry
+ * re-fetches instead of re-transcribing; it is then deleted (the sweep retries
+ * a failed delete, and reaps jobs nothing references).
+ */
+async function processTranscript(deps: AutowriterDeps, input: {
+  row: AutowriterSessionRow;
+  token: string;
+  control: AutowriterControl;
+  trigger: string;
+  mappings?: readonly FeedbackFieldMapping[];
+  release: Release;
+  out: Out;
+}): Promise<ProcessOutcome> {
+  const { db, ops } = deps;
+  const { release, out } = input;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let row = input.row;
+  const backTo = row.state === "transcribing" ? "transcribing" as const : "awaiting_recording" as const;
+
+  const detail = await readDetail(ops, row.wiseSessionId, row.wiseClassId);
+  if (!detail) {
+    await release({ state: backTo, reason: "wise_read_failed", retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true });
+    return out("infra", "wise_read_failed");
+  }
+  const now = clock(deps);
+  const followed = await followTeacher(deps, { row, token: input.token, control: input.control, detail, release, out, retryState: "awaiting_recording" });
+  if ("outcome" in followed) return followed.outcome;
+  row = followed.row;
+
+  const gates = evaluateSessionGates(detail, { now, allowlist: AUTOWRITER_TEACHER_ALLOWLIST, requireSummary: false });
+  const submission = classifyTeacherSubmission(detail);
+  const gateReason = !gates.ok ? gates.reason : submission.kind === "none" ? "submission_none_not_enabled_in_pilot" : null;
+  if (gateReason) return settleGate({ reason: gateReason, detail, row, now, release, out, retryState: "awaiting_recording" });
+
+  if (!deps.transcriptsEnabled || !deps.soniox) {
+    await release({ state: "held", reason: "transcript_pass_unavailable", alertKind: "held" });
+    return out("held", "transcript_pass_unavailable");
+  }
+  const planned = await planPost(deps, { detail, submission, mappings: input.mappings, release, out });
+  if ("outcome" in planned) return planned.outcome;
+  const [student] = studentParticipants(detail);
+  const tutor = rosterTutor(detailTeacherId(detail));
+  if (!student?.name || !tutor) {
+    await release({ state: "held", reason: "missing_student_or_tutor", alertKind: "held" });
+    return out("held", "missing_student_or_tutor");
+  }
+  // Re-checked on every attempt: a recording that gained a second part would be half the lesson.
+  const recording = recordingForTranscription(detail);
+  if (!recording.ok && recording.reason === "recording_multiple_parts") {
+    await release({ state: "held", reason: recording.reason, alertKind: "held" });
+    return out("held", recording.reason);
+  }
+  if (!deps.apiKey) {
+    await release({ state: backTo, reason: "infra:OPENROUTER_API_KEY missing", retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true });
+    return out("infra", "OPENROUTER_API_KEY missing");
+  }
+
+  const soniox = deps.soniox;
+  /** Delete the job; forget its id only once Soniox confirms it is gone (else the sweep retries). */
+  const finishJob = async (jobId: string) => {
+    const gone = await soniox.remove(jobId).catch(() => null);
+    if (gone) await clearSonioxTranscription(db, row.wiseSessionId, jobId);
+  };
+
+  const stored = reusableTranscriptDraft(row);
+  if (stored) {
+    const outcome = await postDraft(deps, {
+      row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
+      draft: stored, evidence: "transcript", release, out,
+    });
+    if (row.sonioxTranscriptionId) await finishJob(row.sonioxTranscriptionId);
+    return outcome;
+  }
+
+  const transcribeErrors = Number((row.metadata as { transcribeErrors?: unknown }).transcribeErrors ?? 0) || 0;
+  const transcribeFailed = async (reason: string, options: { infra: boolean; keepJob: string | null }): Promise<ProcessOutcome> => {
+    const errors = transcribeErrors + 1;
+    if (errors >= AUTOWRITER_MAX_TRANSCRIBE_ERRORS) {
+      // A job id kept here is deleted by the sweep once the row is finished.
+      await release({ state: "held", reason, alertKind: "held", metadata: { transcribeErrors: errors } });
+      return out("held", reason);
+    }
+    await release({
+      state: options.keepJob ? "transcribing" : "awaiting_recording",
+      reason,
+      retryInMs: options.keepJob ? AUTOWRITER_TRANSCRIBING_RECHECK_MS : AUTOWRITER_RECORDING_RECHECK_MS,
+      countRetry: true,
+      sonioxTranscriptionId: options.keepJob,
+      metadata: { transcribeErrors: errors },
+    });
+    return out(options.infra ? "infra" : "retry", reason);
+  };
+
+  // 1. The Soniox job: the one already submitted, or a new one on Wise's recording.
+  let jobId = row.sonioxTranscriptionId;
+  if (!jobId) {
+    if (!recording.ok) {
+      await release({ state: "awaiting_recording", reason: recording.reason, retryInMs: AUTOWRITER_RECORDING_RECHECK_MS });
+      return out("awaiting_recording", recording.reason);
+    }
+    const classLines = describeClass({ programme: detail.classSubject, title: detail.title });
+    try {
+      jobId = (await soniox.create({
+        audioUrl: recording.url,
+        terms: [...SONIOX_TERMS, ...tutor.tutorNames, parseStudentName(student.name).firstName, parseStudentName(student.name).nickname ?? ""]
+          .filter((term) => term.trim() !== ""),
+        general: [{ key: "domain", value: "one-to-one online tutoring lesson between a tutor and a student" },
+          ...classLines.map((line) => ({ key: "class", value: line }))],
+        clientReferenceId: row.wiseSessionId,
+      })).id;
+    } catch (error) {
+      return transcribeFailed(`soniox_create:${error instanceof Error ? error.message.slice(0, 120) : "error"}`, { infra: true, keepJob: null });
+    }
+    await setSonioxTranscription(db, row.wiseSessionId, input.token, jobId);
+  }
+
+  // 2. Wait for it — webhooks wait up to ~3 min; the backstop only looks, so it never starves other classes.
+  const started = Date.now();
+  const waitMs = input.trigger === "cron"
+    ? 0
+    : Math.min(AUTOWRITER_TRANSCRIBE_WAIT_MS, Math.max(0, remaining(deps) - AUTOWRITER_SWEEP_MIN_REMAINING_MS));
+  const maxPolls = Math.max(1, Math.ceil(waitMs / AUTOWRITER_TRANSCRIBE_POLL_MS));
+  let status: Awaited<ReturnType<typeof soniox.get>> | null = null;
+  let lastGetError: string | null = null;
+  for (let polls = 1; ; polls += 1) {
+    try {
+      status = await soniox.get(jobId);
+      lastGetError = null;
+    } catch (error) {
+      // An unknown job (deleted, expired) cannot finish: start over on a new one.
+      if (error instanceof SonioxError && error.status === 404) {
+        await clearSonioxTranscription(db, row.wiseSessionId, jobId);
+        return transcribeFailed("soniox_job_missing", { infra: false, keepJob: null });
+      }
+      status = null;
+      lastGetError = error instanceof Error ? error.message.slice(0, 120) : "error";
+    }
+    if (status?.status === "completed" || status?.status === "error") break;
+    if (polls >= maxPolls || Date.now() - started + AUTOWRITER_TRANSCRIBE_POLL_MS > waitMs) break;
+    await sleep(AUTOWRITER_TRANSCRIBE_POLL_MS);
+  }
+  if (!status) {
+    // Soniox could not be asked (key, credit, outage): an error, counted toward the hold.
+    return transcribeFailed(`soniox_status:${lastGetError ?? "unknown"}`, { infra: true, keepJob: jobId });
+  }
+  if (status.status === "queued" || status.status === "processing") {
+    await release({ state: "transcribing", reason: "transcription_in_progress", retryInMs: AUTOWRITER_TRANSCRIBING_RECHECK_MS, sonioxTranscriptionId: jobId });
+    return out("transcribing", jobId);
+  }
+  if (status.status === "error") {
+    const gone = await soniox.remove(jobId).catch(() => null);
+    if (gone) await clearSonioxTranscription(db, row.wiseSessionId, jobId);
+    await recordTranscriptionCall(db, {
+      wiseSessionId: row.wiseSessionId, ok: false, audioDurationMs: status.audioDurationMs, latencyMs: Date.now() - started,
+      costUsd: null, error: status.errorMessage ?? "error",
+    });
+    return transcribeFailed(`soniox_error:${(status.errorMessage ?? "unknown").slice(0, 120)}`, { infra: false, keepJob: gone ? null : jobId });
+  }
+
+  // 3. Fetch (kept at Soniox until a judged draft is stored; re-fetching is free).
+  let transcript: Awaited<ReturnType<typeof soniox.transcript>>;
+  try {
+    transcript = await soniox.transcript(jobId);
+  } catch (error) {
+    return transcribeFailed(`soniox_fetch:${error instanceof Error ? error.message.slice(0, 120) : "error"}`, { infra: true, keepJob: jobId });
+  }
+  const audioDurationMs = status.audioDurationMs ?? 0;
+  if ((row.metadata as { sonioxRecordedJob?: unknown }).sonioxRecordedJob !== jobId) {
+    await recordTranscriptionCall(db, {
+      wiseSessionId: row.wiseSessionId, ok: true, audioDurationMs, latencyMs: Date.now() - started,
+      costUsd: sonioxCostUsd(audioDurationMs),
+    });
+    await noteSonioxRecorded(db, row.wiseSessionId, jobId);
+  }
+
+  // 4. Who is who: Zoom's named cues when available, a clear talk-share split otherwise.
+  const segments = segmentsFromTokens(transcript.tokens);
+  let cues: ZoomCue[] = [];
+  const vttUrl = zoomTranscriptUrl(detail);
+  if (vttUrl) {
+    try {
+      cues = parseZoomVtt(await (deps.fetchText ?? fetchText)(vttUrl));
+    } catch {
+      cues = [];
+    }
+  }
+  const speakers = assignSpeakerRoles({ segments, zoomCues: cues, teacherName: detailTeacherName(detail) });
+  const rendered = renderTranscript(segments, speakers.roles);
+  const transcriptMeta = {
+    audioMinutes: Math.round(audioDurationMs / 600) / 100,
+    speakerMethod: speakers.method,
+    shares: speakers.shares,
+    thaiShare: Math.round(thaiShare(transcript.text) * 100) / 100,
+  };
+  const holdFor = async (reason: string) => {
+    await release({ state: "held", reason, alertKind: "held", metadata: { transcript: transcriptMeta } });
+    await finishJob(jobId);
+    return out("held", reason);
+  };
+  if (speakers.method === "unclear") return holdFor("speakers_unclear");
+  if (rendered.length < AUTOWRITER_MIN_TRANSCRIPT_CHARACTERS) return holdFor("transcript_too_short");
+
+  // 5. Write and judge from the transcript (GLM on the zero-retention route only).
+  const result = await runWritingPipeline({
+    apiKey: deps.apiKey,
+    session: {
+      wiseSessionId: row.wiseSessionId,
+      studentFullName: student.name,
+      studentDisplayName: chooseStudentDisplayName(transcript.text, student.name),
+      classDetails: describeClass({ programme: detail.classSubject, title: detail.title }),
+      scheduledMinutes: scheduledWindow(detail).minutes,
+      summary: { text: rendered, meetingUUIDs: [] },
+      evidence: "transcript",
+      speakerLabels: speakers.method === "zoom_alignment" ? "verified" : "inferred",
+    },
+    tutorNames: tutor.tutorNames,
+    priorFeedback: await priorFeedback(deps, tutor, now),
+    record: (record) => recordCall(db, record),
+    remainingMs: () => remaining(deps),
+    callModel: deps.callModel,
+  });
+  if (result.kind === "infra") {
+    // The job is kept: the next attempt re-fetches the same transcript.
+    await release({
+      state: "transcribing", reason: `infra:${result.error}`, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true,
+      sonioxTranscriptionId: jobId, metadata: { transcript: transcriptMeta },
+    });
+    return out("infra", result.error);
+  }
+  if (result.kind === "held") return holdFor(result.reasons.join("; ").slice(0, 900));
+  const outcome = await postDraft(deps, {
+    row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
+    draft: { arm: result.arm, fields: result.fields, judge: result.judge }, evidence: "transcript",
+    extraMetadata: { transcript: transcriptMeta }, release, out,
+  });
+  // The judged draft is stored (or the class is finished): the transcript is no longer needed.
+  await finishJob(jobId);
+  return outcome;
+}
+
+async function fetchText(url: string): Promise<string> {
+  const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.text();
 }
 
 // ---------------------------------------------------------------------------
@@ -626,6 +1019,11 @@ export async function runSweep(deps: AutowriterDeps): Promise<SweepResult> {
       }
     }
 
+    // 3b. Second pass housekeeping, within what is left of the budget.
+    if (deps.soniox) await cleanUpSonioxJobs(deps, deps.soniox);
+    // Still waiting for a recording 3 h after class: tell a person now, not at the deadline.
+    await flagNoRecording(db, new Date(now.getTime() - AUTOWRITER_NO_RECORDING_ALERT_MS));
+
     // 4. One alert digest for everything that needs a person.
     const alerts = await listPendingAlerts(db);
     if (alerts.length > 0) {
@@ -674,6 +1072,35 @@ export async function runSweep(deps: AutowriterDeps): Promise<SweepResult> {
     alertsSuppressed,
     infraErrors,
   };
+}
+
+/**
+ * Delete Soniox jobs that are no longer needed: those recorded on finished rows
+ * (a delete that failed earlier), and orphans no row references (a create that
+ * timed out after Soniox accepted it, or a worker that died before storing the
+ * id). Bounded per sweep; failures are retried next time.
+ */
+async function cleanUpSonioxJobs(deps: AutowriterDeps, soniox: SonioxClient): Promise<void> {
+  const { db } = deps;
+  let budget = AUTOWRITER_SONIOX_CLEANUP_MAX;
+  for (const job of await listSonioxCleanup(db)) {
+    if (budget <= 0 || remaining(deps) < 60_000) return;
+    budget -= 1;
+    const gone = await soniox.remove(job.sonioxTranscriptionId).catch(() => null);
+    if (gone) await clearSonioxTranscription(db, job.wiseSessionId, job.sonioxTranscriptionId);
+  }
+  if (budget <= 0 || remaining(deps) < 60_000) return;
+  const referenced = await activeSonioxJobIds(db);
+  const listed = await soniox.list(100).catch(() => []);
+  for (const job of listed) {
+    if (budget <= 0 || remaining(deps) < 60_000) return;
+    const ours = job.clientReferenceId !== null && /^[0-9a-f]{24}$/iu.test(job.clientReferenceId);
+    // Wall clock: compared with Soniox's own creation time.
+    const old = job.createdAt !== null && Date.now() - job.createdAt.getTime() > AUTOWRITER_SONIOX_REAPER_AGE_MS;
+    if (!ours || !old || referenced.has(job.id)) continue;
+    budget -= 1;
+    await soniox.remove(job.id).catch(() => null);
+  }
 }
 
 /** Mark a stored webhook delivery processed (best effort). */

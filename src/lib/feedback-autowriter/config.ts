@@ -17,6 +17,18 @@ export function autowriterWritesAllowedHere(env: AutowriterEnvironment = process
   return !isPreviewEnvironment(env);
 }
 
+/**
+ * Second pass: write from a Soniox transcript of Wise's recording when the AI
+ * summary cannot carry the feedback. Only the exact string `true` enables it.
+ */
+export function autowriterTranscriptsEnabled(env: AutowriterEnvironment = process.env): boolean {
+  return env.FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED === "true";
+}
+
+export function sonioxApiKey(env: AutowriterEnvironment = process.env): string | null {
+  return value(env, "SONIOX_API_KEY") || null;
+}
+
 export function openRouterApiKey(env: AutowriterEnvironment = process.env): string | null {
   return value(env, "OPENROUTER_API_KEY") || null;
 }
@@ -109,3 +121,29 @@ export const AUTOWRITER_POST_IN_FLIGHT_WAIT_MS = 10_000;
 export const AUTOWRITER_POST_IN_FLIGHT_ATTEMPTS = 8;
 /** No confirming Wise event this long after the POST → verify_failed + halt. */
 export const AUTOWRITER_EVENT_DEADLINE_MS = 2 * 60 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
+// Second pass (Soniox transcript)
+// ---------------------------------------------------------------------------
+
+/** A summary at least this Thai (share of Thai among Thai + Latin letters) goes to the transcript pass. */
+export const AUTOWRITER_THAI_SUMMARY_SHARE = 0.5;
+/** Still no usable summary this long after the class end → wait for the recording instead. */
+export const AUTOWRITER_NO_SUMMARY_HANDOVER_MINUTES = 30;
+/** How often a class waiting for Wise's recording is re-checked (a RecordingCompletedEvent skips the wait). */
+export const AUTOWRITER_RECORDING_RECHECK_MS = 30 * 60 * 1000;
+/** A submitted Soniox job is checked again after this long when it was not done in-invocation. */
+export const AUTOWRITER_TRANSCRIBING_RECHECK_MS = 5 * 60 * 1000;
+/** In-invocation wait for Soniox (an hour of audio took 2–7 min in the pilot). */
+export const AUTOWRITER_TRANSCRIBE_WAIT_MS = 180_000;
+export const AUTOWRITER_TRANSCRIBE_POLL_MS = 10_000;
+/** Soniox failures on one class before it is held for a person. */
+export const AUTOWRITER_MAX_TRANSCRIBE_ERRORS = 3;
+/** A rendered transcript shorter than this is not enough to write from. */
+export const AUTOWRITER_MIN_TRANSCRIPT_CHARACTERS = 800;
+/** Still waiting for the recording this long after class → `no_recording` alert (not only at the deadline). */
+export const AUTOWRITER_NO_RECORDING_ALERT_MS = 3 * 60 * 60 * 1000;
+/** Soniox jobs no row references are deleted once they are this old (orphans). */
+export const AUTOWRITER_SONIOX_REAPER_AGE_MS = 2 * 60 * 60 * 1000;
+/** Soniox deletes per sweep (each bounded by a 15 s time-out). */
+export const AUTOWRITER_SONIOX_CLEANUP_MAX = 10;

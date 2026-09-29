@@ -8,6 +8,7 @@ import { processSession, runSweep, type AutowriterDeps } from "../job";
 import type { OpenRouterCallResult } from "../openrouter";
 import { ensureSessionRow, readControl, readSessionRow, updateControl } from "../store";
 import type { PostResult, SubmitFeedbackEvent, WiseFeedbackOps } from "../submit";
+import { SonioxError } from "../soniox";
 import type { WiseFeedbackPostBody } from "../types";
 import { CLASS_ID, GOOD_FIELDS, NOW, SESSION_ID, answers, autoBlankSubmission, sessionDetail } from "./fixtures";
 
@@ -396,5 +397,268 @@ describe("runSweep (Postgres + fake Wise and models)", () => {
     expect(result.reconciled).toEqual({ verified: 1 });
     expect(wise.posts).toHaveLength(0);
     expect((await readSessionRow(db, SESSION_ID))?.state).toBe("verified");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Second pass: Soniox transcript
+// ---------------------------------------------------------------------------
+
+const THAI_SUMMARY = [{
+  summaryTitle: "Meeting Summary",
+  summaryOverview: "นักเรียนและครูทบทวนเรื่องเศษส่วน การบวกเศษส่วนที่มีตัวส่วนต่างกัน และการทำให้เป็นเศษส่วนอย่างต่ำ " +
+    "นักเรียนตอบคำถามได้ถูกต้องเกือบทั้งหมด แต่ยังลืมทำให้เป็นอย่างต่ำในบางข้อ ครูให้ฝึกเพิ่มเติมเรื่องการหา ห.ร.ม. " +
+    "และทบทวนโจทย์ปัญหาเกี่ยวกับการแบ่งพิซซ่า นักเรียนอธิบายวิธีคิดได้ชัดเจน",
+  summaryDetails: [{ label: "เศษส่วน", summary: "ฝึกโจทย์หกข้อ แก้ไขข้อผิดพลาดสองข้อหลังจากครูให้ตรวจสอบ ห.ร.ม." }],
+  meetingUUID: "uuid-th",
+}];
+
+const RECORDING = { rawRecordings: [{ url: "https://files.wiseapp.live/rec.mp4", partIndex: 1 }], rawTranscript: [{ url: "https://files.wiseapp.live/rec.vtt" }] };
+
+const ZOOM_VTT = `WEBVTT
+
+1
+00:00:00.000 --> 00:00:30.000
+Kevin (Kev) Y. Hsieh Online: Today we look at fractions
+
+2
+00:00:31.000 --> 00:01:00.000
+Somchai (Tom.Ja) Jaidee: I think the answer is three quarters
+`;
+
+/** Tutor (speaker 1) explains; the student (speaker 2) answers — a long enough lesson to write from. */
+function lessonTokens() {
+  const tokens: Array<{ text: string; start_ms: number; end_ms: number; speaker: string }> = [];
+  for (let i = 0; i < 12; i += 1) {
+    const at = i * 60_000;
+    tokens.push({ text: " Today we add fractions with unlike denominators and simplify the answer to its lowest terms, step by step.", start_ms: at, end_ms: at + 25_000, speaker: "1" });
+    tokens.push({ text: " I got three quarters because I found the common denominator first and then simplified.", start_ms: at + 31_000, end_ms: at + 55_000, speaker: "2" });
+  }
+  return tokens;
+}
+
+function fakeSoniox(options: {
+  finishAfterPolls?: number;
+  error?: string;
+  getThrows?: boolean;
+  removeFails?: boolean;
+  tokens?: ReturnType<typeof lessonTokens>;
+  listed?: Array<{ id: string; createdAt: Date | null; clientReferenceId: string | null; status: string }>;
+} = {}) {
+  const removed: string[] = [];
+  const created: Array<{ audioUrl: string }> = [];
+  let polls = 0;
+  const tokens = options.tokens ?? lessonTokens();
+  const client = {
+    create: vi.fn(async (input: { audioUrl: string }) => { created.push(input); return { id: `job-${created.length}` }; }),
+    get: vi.fn(async () => {
+      polls += 1;
+      if (options.getThrows) throw new SonioxError("HTTP 500: upstream", 500);
+      if (options.error) return { status: "error" as const, audioDurationMs: null, errorMessage: options.error };
+      return polls > (options.finishAfterPolls ?? 0)
+        ? { status: "completed" as const, audioDurationMs: 3_600_000, errorMessage: null }
+        : { status: "processing" as const, audioDurationMs: null, errorMessage: null };
+    }),
+    transcript: vi.fn(async () => ({ text: tokens.map((t) => t.text).join(""), tokens })),
+    remove: vi.fn(async (id: string) => {
+      if (options.removeFails) throw new SonioxError("HTTP 503: busy", 503);
+      removed.push(id);
+      return "deleted" as const;
+    }),
+    list: vi.fn(async () => options.listed ?? []),
+  };
+  return { client, removed, created };
+}
+
+describe("second pass: Soniox transcript (Postgres + fakes)", () => {
+  const transcriptDeps = (ops: WiseFeedbackOps, soniox: ReturnType<typeof fakeSoniox>["client"], overrides: Partial<AutowriterDeps> = {}) =>
+    deps(ops, { transcriptsEnabled: true, soniox, fetchText: async () => ZOOM_VTT, ...overrides });
+
+  it("hands a mostly-Thai summary to the transcript pass without calling a model", async () => {
+    await seedRow();
+    const wise = fakeWise({ details: [sessionDetail({ rawMeetingSummary: THAI_SUMMARY })] });
+    const model = fakeModel();
+    const outcome = await processSession(transcriptDeps(wise.ops, fakeSoniox().client, { callModel: model.callModel as never }), { wiseSessionId: SESSION_ID, trigger: "cron" });
+    expect(outcome).toMatchObject({ result: "awaiting_recording", detail: "thai_summary" });
+    expect(model.calls).toEqual([]);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "awaiting_recording", evidence: "transcript" });
+  });
+
+  it("with the second pass off, still writes a Thai summary the old way", async () => {
+    await updateControl(db, { mode: "shadow" }, "t@x.com");
+    await seedRow();
+    const wise = fakeWise({ details: [sessionDetail({ rawMeetingSummary: THAI_SUMMARY })] });
+    expect(await processSession(deps(wise.ops), { wiseSessionId: SESSION_ID, trigger: "cron" })).toMatchObject({ result: "would_submit" });
+  });
+
+  it("hands a class over when the summary draft is held, and when no summary came within 30 min", async () => {
+    await seedRow();
+    const unfaithful = vi.fn(async (request: { schemaName: string }) => request.schemaName === "post_class_feedback"
+      ? glm(writerJson)
+      : glm(JSON.stringify({ faithful: false, unsupported: ["scored 95%"] })));
+    const held = await processSession(transcriptDeps(fakeWise().ops, fakeSoniox().client, { callModel: unfaithful as never }), { wiseSessionId: SESSION_ID, trigger: "cron" });
+    expect(held).toMatchObject({ result: "awaiting_recording", detail: "summary_draft_held" });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "awaiting_recording", evidence: "transcript" });
+
+    await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
+    await seedRow();
+    const noSummary = fakeWise({ details: [sessionDetail({ rawMeetingSummary: [] })] });
+    const at45 = new Date("2026-09-28T10:15:00.000Z");
+    expect(await processSession(transcriptDeps(noSummary.ops, fakeSoniox().client, { now: () => at45 }), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+      .toMatchObject({ result: "awaiting_recording", detail: "no_usable_summary" });
+  });
+
+  it("waits while Wise has no recording yet", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    const soniox = fakeSoniox();
+    expect(await processSession(transcriptDeps(fakeWise().ops, soniox.client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "awaiting_recording", detail: "recording_not_ready" });
+    expect(soniox.created).toEqual([]);
+    expect((await readSessionRow(db, SESSION_ID))?.state).toBe("awaiting_recording");
+  });
+
+  it("transcribes the recording, writes from it on GLM only, posts, and deletes the Soniox job", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    const wise = fakeWise({ details: [sessionDetail(RECORDING)] });
+    const soniox = fakeSoniox();
+    const models: string[] = [];
+    const prompts: string[] = [];
+    const callModel = vi.fn(async (request: { model: string; schemaName: string; messages: Array<{ content: string }> }) => {
+      models.push(request.model);
+      prompts.push(request.messages.map((message) => message.content).join("\n"));
+      return request.schemaName === "post_class_feedback" ? glm(writerJson) : glm(JSON.stringify({ faithful: true, unsupported: [] }));
+    });
+    const outcome = await processSession(transcriptDeps(wise.ops, soniox.client, { callModel: callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" });
+    expect(outcome).toMatchObject({ result: "verified" });
+    expect(soniox.created).toEqual([expect.objectContaining({ audioUrl: "https://files.wiseapp.live/rec.mp4" })]);
+    expect(soniox.removed).toEqual(["job-1"]);
+    expect(models).toEqual(["z-ai/glm-5.3-flash", "z-ai/glm-5.3-flash"]);
+    expect(prompts[0]).toContain("Lesson transcript:");
+    expect(prompts[0]).toContain("TUTOR: Today we add fractions");
+    expect(prompts[0]).toContain("STUDENT: I got three quarters");
+    expect(wise.posts).toHaveLength(1);
+    const row = await readSessionRow(db, SESSION_ID);
+    expect(row).toMatchObject({ state: "verified", evidence: "transcript", sonioxTranscriptionId: null });
+    expect(row?.metadata).toMatchObject({ transcript: { speakerMethod: "zoom_alignment", audioMinutes: 60 } });
+    const calls = await db.select().from(schema.feedbackAutowriterCalls).where(eq(schema.feedbackAutowriterCalls.role, "transcriber"));
+    expect(calls).toHaveLength(1);
+    expect(Number(calls[0].costUsd)).toBeCloseTo(0.1);
+  });
+
+  it("leaves a slow transcription for the next run, which finishes it", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    const wise = fakeWise({ details: [sessionDetail(RECORDING)] });
+    const soniox = fakeSoniox({ finishAfterPolls: 100 });
+    const first = await processSession(transcriptDeps(wise.ops, soniox.client, { deadlineMs: Date.now() + 600_000 }), { wiseSessionId: SESSION_ID, trigger: "webhook" });
+    expect(first).toMatchObject({ result: "transcribing", detail: "job-1" });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "transcribing", sonioxTranscriptionId: "job-1" });
+
+    const done = fakeSoniox();
+    await db.update(S).set({ nextAttemptAt: sql`now() - interval '1 second'` as never }).where(eq(S.wiseSessionId, SESSION_ID));
+    const result = await runSweep(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, done.client));
+    expect(result.processed).toEqual({ verified: 1 });
+    expect(done.created).toEqual([]); // reused job-1, no second transcription
+    expect(done.removed).toEqual(["job-1"]);
+  });
+
+  it("holds the class for a person after repeated Soniox errors", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript", metadata: { transcribeErrors: 2 } });
+    const soniox = fakeSoniox({ error: "audio_url could not be fetched" });
+    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+      .toMatchObject({ result: "held" });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "held", metadata: { alertKind: "held", transcribeErrors: 3 } });
+    expect(soniox.removed).toEqual(["job-1"]);
+  });
+
+  it("reuses a judged transcript draft whose POST did not go out — no second transcription or model call", async () => {
+    await seedRow({
+      state: "awaiting_recording", evidence: "transcript", sonioxTranscriptionId: "job-5",
+      arm: "glm", fields: GOOD_FIELDS,
+      billing: { sessionStatus: "COMPLETED", creditsConsumed: 1, source: "auto_blank_reuse", expectedConsumedDelta: 0 },
+      metadata: { draftEvidence: "transcript", judge: { faithful: true, unsupported: [] } },
+    });
+    const soniox = fakeSoniox();
+    const model = fakeModel();
+    const wise = fakeWise({ details: [sessionDetail(RECORDING)] });
+    expect(await processSession(transcriptDeps(wise.ops, soniox.client, { callModel: model.callModel as never }), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+      .toMatchObject({ result: "verified" });
+    expect(model.calls).toEqual([]);
+    expect(soniox.created).toEqual([]);
+    expect(soniox.client.get).not.toHaveBeenCalled();
+    expect(soniox.removed).toEqual(["job-5"]);
+    expect(wise.posts).toHaveLength(1);
+  });
+
+  it("never reuses a draft written from the summary", async () => {
+    await seedRow({
+      state: "awaiting_recording", evidence: "transcript", arm: "glm", fields: GOOD_FIELDS,
+      metadata: { draftEvidence: "summary", judge: { faithful: true, unsupported: [] } },
+    });
+    const soniox = fakeSoniox();
+    await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client), { wiseSessionId: SESSION_ID, trigger: "cron" });
+    expect(soniox.created).toHaveLength(1);
+  });
+
+  it("keeps the job id when Soniox refuses the delete, so the sweep can retry it", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    const soniox = fakeSoniox({ removeFails: true });
+    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "verified" });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "verified", sonioxTranscriptionId: "job-1" });
+  });
+
+  it("holds the class when it cannot tell tutor from student", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    const even = lessonTokens().map((token, index) => ({ ...token, speaker: String((index % 3) + 1) }));
+    const soniox = fakeSoniox({ tokens: even });
+    expect(await processSession(
+      transcriptDeps(fakeWise({ details: [sessionDetail({ rawRecordings: RECORDING.rawRecordings })] }).ops, soniox.client, { fetchText: async () => "WEBVTT\n" }),
+      { wiseSessionId: SESSION_ID, trigger: "webhook" },
+    )).toMatchObject({ result: "held", detail: "speakers_unclear" });
+    expect(soniox.removed).toEqual(["job-1"]);
+  });
+
+  it("the backstop only looks at a running job, and counts Soniox status errors", async () => {
+    await seedRow({ state: "transcribing", evidence: "transcript", sonioxTranscriptionId: "job-7" });
+    const slow = fakeSoniox({ finishAfterPolls: 5 });
+    const result = await runSweep(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, slow.client));
+    expect(result.processed).toEqual({ transcribing: 1 });
+    expect(slow.client.get).toHaveBeenCalledTimes(1);
+
+    await db.update(S).set({ nextAttemptAt: sql`now() - interval '1 second'` as never }).where(eq(S.wiseSessionId, SESSION_ID));
+    const down = fakeSoniox({ getThrows: true });
+    const failed = await runSweep(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, down.client));
+    expect(failed.processed).toEqual({ infra: 1 });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "transcribing", sonioxTranscriptionId: "job-7", metadata: { transcribeErrors: 1 } });
+  });
+
+  it("alerts when a class is still waiting for its recording 3 h after class", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript", scheduledEndAt: new Date(NOW.getTime() - 4 * 3600_000), nextAttemptAt: new Date(Date.now() + 3600_000) });
+    const sweepDeps = transcriptDeps(fakeWise().ops, fakeSoniox().client);
+    const result = await runSweep(sweepDeps);
+    expect(result.alertsSent).toBe(1);
+    expect(sweepDeps.emails[0].text).toContain("Waiting for Wise's recording");
+    expect((await readSessionRow(db, SESSION_ID))?.alertsSent).toHaveProperty("no_recording");
+  });
+
+  it("reaps old Soniox jobs nothing references, and leaves referenced ones", async () => {
+    await seedRow({ state: "transcribing", evidence: "transcript", sonioxTranscriptionId: "job-live", nextAttemptAt: new Date(Date.now() + 3600_000) });
+    const old = new Date(Date.now() - 3 * 3600_000);
+    const soniox = fakeSoniox({ listed: [
+      { id: "job-orphan", createdAt: old, clientReferenceId: "6a0000000000000000000abc", status: "completed" },
+      { id: "job-live", createdAt: old, clientReferenceId: SESSION_ID, status: "completed" },
+      { id: "job-fresh", createdAt: new Date(), clientReferenceId: "6a0000000000000000000abd", status: "processing" },
+      { id: "job-other", createdAt: old, clientReferenceId: "someone-else", status: "completed" },
+    ] });
+    await runSweep(transcriptDeps(fakeWise().ops, soniox.client));
+    expect(soniox.removed).toEqual(["job-orphan"]);
+  });
+
+  it("deletes a finished class's leftover Soniox job during the sweep", async () => {
+    await seedRow({ state: "expired", sonioxTranscriptionId: "job-9" });
+    const soniox = fakeSoniox();
+    await runSweep(transcriptDeps(fakeWise().ops, soniox.client));
+    expect(soniox.removed).toEqual(["job-9"]);
+    expect((await readSessionRow(db, SESSION_ID))?.sonioxTranscriptionId).toBeNull();
   });
 });

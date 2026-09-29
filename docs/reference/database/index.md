@@ -488,4 +488,8 @@ accompany the [feature](../../features/tutor-attendance.md).
 | `feedback_autowriter_calls` | `feedbackAutowriterCalls` | One OpenRouter call (writer or judge) with billed usage |
 | `wise_webhook_events` | `wiseWebhookEvents` | One Wise webhook delivery (unique synthesized `dedupe_key`) |
 
+Migration **0098** (second pass) adds `feedback_autowriter_sessions.evidence` (`summary` | `transcript`) and
+`soniox_transcription_id`, the states `awaiting_recording` and `transcribing`, and the call role `transcriber` /
+arm `soniox` (one row per Soniox transcription, list-price cost).
+
 See [the feature page](../../features/feedback-autowriter.md).
