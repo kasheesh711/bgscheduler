@@ -82,6 +82,20 @@ export function isFarCacheFresh(
 }
 
 /**
+ * drizzle-orm 0.45 wraps every driver error in a DrizzleQueryError whose
+ * message is `Failed query: <sql>` — it names this table on ANY failure, so
+ * the message cannot tell a pending migration from an outage. Only SQLSTATE
+ * 42P01 (undefined_table) is the migration case: `code` on a raw driver error,
+ * `cause.code` under the drizzle wrapper. The read touches no other relation,
+ * so 42P01 can only mean this table.
+ */
+function isMissingCacheTable(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as { code?: unknown; cause?: { code?: unknown } };
+  return (candidate.code ?? candidate.cause?.code) === "42P01";
+}
+
+/**
  * Load cached far-leave rows for the given Wise teacher user ids.
  *
  * Returns an EMPTY map on any read failure — a missing table (migration not yet
@@ -123,12 +137,12 @@ export async function loadFarLeaveCache(
     }
     return cache;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (message.includes("wise_teacher_availability_cache") || message.includes("does not exist")) {
+    if (isMissingCacheTable(err)) {
       console.info(
         "wise_teacher_availability_cache is unavailable; every teacher will fetch far leaves live.",
       );
     } else {
+      const message = err instanceof Error ? err.message : String(err);
       console.error("[wise-availability-cache] far-leave cache read failed:", message);
     }
     return new Map();

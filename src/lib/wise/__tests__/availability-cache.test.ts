@@ -86,6 +86,19 @@ describe("currentFarCacheShape", () => {
   });
 });
 
+/**
+ * What drizzle-orm 0.45 throws for ANY failed cache read: the message is the
+ * SQL text, so it always names the table; the SQLSTATE lives on `cause`.
+ */
+function drizzleCacheReadError(code: string): Error {
+  return Object.assign(
+    new Error(
+      'Failed query: select "teacher_user_id", "far_leaves", "far_horizon_days", "far_window_start_day", "fetched_at", "fetch_error" from "wise_teacher_availability_cache" where "wise_teacher_availability_cache"."teacher_user_id" in ($1)\nparams: u-1',
+    ),
+    { cause: { code } },
+  );
+}
+
 function makeSelectDb(behaviour: () => Promise<unknown[]>): Database {
   return {
     select: () => ({
@@ -128,21 +141,37 @@ describe("loadFarLeaveCache", () => {
   });
 
   it("returns an empty map when the table does not exist, so every teacher fetches live", async () => {
-    vi.spyOn(console, "info").mockImplementation(() => {});
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const db = makeSelectDb(async () => {
-      throw new Error('relation "wise_teacher_availability_cache" does not exist');
+      throw drizzleCacheReadError("42P01");
     });
 
     expect(await loadFarLeaveCache(db, ["u-1"])).toEqual(new Map());
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("logs a real outage as an error even though the drizzle message names the table", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = makeSelectDb(async () => {
+      throw drizzleCacheReadError("57014");
+    });
+
+    expect(await loadFarLeaveCache(db, ["u-1"])).toEqual(new Map());
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(info).not.toHaveBeenCalled();
   });
 
   it("returns an empty map on any other read failure — never a stale or partial set", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const db = makeSelectDb(async () => {
       throw new Error("connection terminated unexpectedly");
     });
 
     expect(await loadFarLeaveCache(db, ["u-1"])).toEqual(new Map());
+    expect(error).toHaveBeenCalledTimes(1);
   });
 });
 
