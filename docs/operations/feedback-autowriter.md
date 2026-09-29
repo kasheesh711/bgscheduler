@@ -15,11 +15,13 @@ Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowrite
    | `FEEDBACK_AUTOWRITER_ENABLED` | `true` (anything else: cron and webhook do nothing) |
    | `FEEDBACK_AUTOWRITER_ALERT_EMAILS` | comma-separated recipients of the held-class digest |
    | `WISE_WEBHOOKS_ENABLED` | `true` (otherwise the receiver acknowledges and ignores) |
-   | `WISE_WEBHOOK_SECRET` | the auth key Wise shows for the BGScheduler webhook |
-   | `WISE_WEBHOOK_AUTH_HEADER` | only if Wise's header is not `authorization` |
+   | `WISE_WEBHOOK_SECRET` | the auth key of the BGScheduler webhook in Wise (step 3) — same value on both sides |
+   | `WISE_WEBHOOK_AUTH_HEADER` | optional: pin the header named in the first delivery's log line |
 3. **Wise → Institute Settings → Developer options → Webhooks → Add Webhook.** Never edit the existing
    subscription (it feeds a Google Apps Script). URL `https://bgscheduler.vercel.app/api/wise/webhook`,
-   events `MeetingEndedEvent`, `AttendanceComputedEvent` and `RecordingCompletedEvent`, auth key = `WISE_WEBHOOK_SECRET`.
+   events `MeetingEndedEvent`, `AttendanceComputedEvent` and `RecordingCompletedEvent`; its auth key (shown or chosen
+   in Wise) is `WISE_WEBHOOK_SECRET`. Deliveries before the deploy fail harmlessly (Wise retries for ~4 h; the
+   backstop cron covers every class anyway).
    Send a test: Vercel logs `[wise-webhook] key arrived in header "<name>"` (optionally pin it with
    `WISE_WEBHOOK_AUTH_HEADER`); a refused delivery logs `unauthorized delivery; header names: …` instead.
    Confirm read-only with `GET /institutes/{id}/webhooks` that both subscriptions exist and the original is unchanged.
