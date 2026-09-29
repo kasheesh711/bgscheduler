@@ -117,6 +117,30 @@ describe("evaluateSessionGates", () => {
     expect(classifyGateReason("student_not_wise_user", { minutesSinceEnd: 90 })).toBe("person");
   });
 
+  it("lets a guest who stayed the whole class stand in for a Wise account that shows absent (owner rule)", () => {
+    // Mimi, 29 Sep: the student joined by Zoom link as "Pete Thanasatitkul"; his Wise account shows 0 minutes.
+    const teacher = { ...sessionDetail().participants[0], inMeetingDuration: 3461 };
+    const account = { wiseUserId: "698c1edeb0e4b23fd5316dfe", name: "Pawin (Pete.Th) Thanasatitkul", isTeacher: false, inMeetingDuration: 0 };
+    const guest = { name: "Pete Thanasatitkul", isTeacher: false, inMeetingDuration: 3246, absolutePercentAttendance: 94 };
+    const standIn = studentParticipants(parse({ participants: [account, guest, teacher] }));
+    expect(standIn).toEqual([{
+      wiseUserId: "698c1edeb0e4b23fd5316dfe", name: "Pawin (Pete.Th) Thanasatitkul",
+      inMeetingSeconds: 3246, absolutePercentAttendance: 94, joinedAsGuest: "Pete Thanasatitkul",
+    }]);
+    expect(evaluateSessionGates(parse({ participants: [account, guest, teacher] }), gateInput)).toEqual({ ok: true });
+
+    const gate = (participants: unknown[]) => evaluateSessionGates(parse({ participants }), gateInput);
+    // The guest left early, or the tutor did: no stand-in.
+    expect(gate([account, { ...guest, absolutePercentAttendance: 79, inMeetingDuration: 2844 }, teacher])).toEqual({ ok: false, reason: "student_count_2" });
+    expect(gate([account, guest, { ...teacher, inMeetingDuration: 2800 }])).toEqual({ ok: false, reason: "student_count_2" });
+    // The Wise account attended too: two people, out of scope.
+    expect(gate([{ ...account, inMeetingDuration: 3300, absolutePercentAttendance: 92 }, guest, teacher])).toEqual({ ok: false, reason: "student_count_2" });
+    // Two guests, or a group class: no stand-in.
+    expect(gate([account, guest, { ...guest, name: "Mum" }, teacher])).toEqual({ ok: false, reason: "student_count_3" });
+    expect(evaluateSessionGates(parse({ participants: [account, guest, teacher], classType: "GROUP" }), gateInput))
+      .toEqual({ ok: false, reason: "class_type_GROUP" });
+  });
+
   it("does not count the tutor joining their own class again as a student", () => {
     // Peat, 29 Sep: two guest devices under his own names beside his teacher account; a one-to-one class.
     const selfJoins = [

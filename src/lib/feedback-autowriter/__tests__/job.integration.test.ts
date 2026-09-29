@@ -237,6 +237,23 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     expect(wise.posts).toHaveLength(1);
   });
 
+  it("writes for a student who joined by Zoom link as a guest for the whole class (owner rule)", async () => {
+    const [teacher, student] = sessionDetail().participants;
+    const participants = [
+      { ...teacher, inMeetingDuration: 3461 },
+      { ...student, inMeetingDuration: 0, absolutePercentAttendance: 0 },
+      { name: "Tom Jaidee", isTeacher: false, inMeetingDuration: 3246, absolutePercentAttendance: 94 },
+    ];
+    const wise = fakeWise({ details: [sessionDetail({ participants })] });
+    expect(await processSession(deps(wise.ops), { wiseSessionId: SESSION_ID, wiseClassId: CLASS_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "verified" });
+    expect(wise.posts).toHaveLength(1);
+    expect(wise.posts[0].answers.map((answer) => answer.answer).join("\n")).toContain("Tom found");
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ studentJoinedAsGuest: "Tom Jaidee" });
+    // Billing and the credit check stay on the Wise account.
+    expect(vi.mocked(wise.ops.getSessionCreditEntries).mock.calls[0][1]).toBe(student.wiseUserId);
+  });
+
   it("skips an in-person class on a main account at once, before any model call", async () => {
     const kevinMain = { _id: "695369c028118f629edcb986", name: "Kevin (Kev) Y. Hsieh" };
     const model = fakeModel();

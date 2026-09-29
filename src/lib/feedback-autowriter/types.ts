@@ -16,6 +16,12 @@ export const AUTOWRITER_DEADLINE_MARGIN_MS = 30 * 60 * 1000;
 
 /** Minimum share of the scheduled time the student must have been in the meeting. */
 export const AUTOWRITER_MIN_ATTENDANCE_PERCENT = 50;
+/**
+ * A guest (no Wise account) stands in for an absent Wise account only when they
+ * — and the tutor — stayed at least this share of the class (owner rule, 29 Sep:
+ * a class that runs its full length with one guest was taught to the student).
+ */
+export const AUTOWRITER_GUEST_STUDENT_MIN_PERCENT = 80;
 
 /**
  * Wise may still be computing participants and attendance when the meeting
@@ -53,6 +59,8 @@ export interface AutowriterStudent {
   name: string;
   inMeetingSeconds: number | null;
   absolutePercentAttendance: number | null;
+  /** Set when the student attended through a Zoom guest join under this name (see `studentParticipants`). */
+  joinedAsGuest?: string | null;
 }
 
 export interface AiSummary {

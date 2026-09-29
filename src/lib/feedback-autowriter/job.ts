@@ -348,6 +348,11 @@ async function planPost(deps: AutowriterDeps, input: {
   return { mappings, billing: billing.plan };
 }
 
+/** Audit trail when a guest join stood in for the student's Wise account (see `studentParticipants`). */
+function guestMetadata(student: { joinedAsGuest?: string | null }): Record<string, unknown> {
+  return student.joinedAsGuest ? { studentJoinedAsGuest: student.joinedAsGuest } : {};
+}
+
 async function priorFeedback(deps: AutowriterDeps, tutor: NonNullable<ReturnType<typeof rosterTutor>>, now: Date) {
   return [
     ...(await loadPriorFeedback(deps.db, { canonicalTutorKey: tutor.canonicalKey, now })),
@@ -428,6 +433,7 @@ async function processLeased(deps: AutowriterDeps, input: {
     session: {
       wiseSessionId: row.wiseSessionId,
       studentFullName: student.name,
+      studentAliases: student.joinedAsGuest ? [student.joinedAsGuest] : [],
       studentDisplayName: chooseStudentDisplayName(student.name),
       classDetails: describeClass({ programme: detail.classSubject, title: detail.title }),
       scheduledMinutes: scheduledWindow(detail).minutes,
@@ -452,7 +458,8 @@ async function processLeased(deps: AutowriterDeps, input: {
   }
   return postDraft(deps, {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
-    draft: { arm: result.arm, fields: result.fields, judge: result.judge }, evidence: "summary", release, out,
+    draft: { arm: result.arm, fields: result.fields, judge: result.judge }, evidence: "summary",
+    extraMetadata: guestMetadata(student), release, out,
   });
 }
 
@@ -835,6 +842,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
     session: {
       wiseSessionId: row.wiseSessionId,
       studentFullName: student.name,
+      studentAliases: student.joinedAsGuest ? [student.joinedAsGuest] : [],
       studentDisplayName: chooseStudentDisplayName(student.name),
       classDetails: describeClass({ programme: detail.classSubject, title: detail.title }),
       scheduledMinutes,
@@ -860,7 +868,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
   const outcome = await postDraft(deps, {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
     draft: { arm: result.arm, fields: result.fields, judge: result.judge }, evidence: "transcript",
-    extraMetadata: { transcript: transcriptMeta }, release, out,
+    extraMetadata: { transcript: transcriptMeta, ...guestMetadata(student) }, release, out,
   });
   // The judged draft is stored (or the class is finished): the transcript is no longer needed.
   await finishJob(jobId);

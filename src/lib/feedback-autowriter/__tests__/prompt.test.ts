@@ -73,6 +73,16 @@ describe("buildFeedbackMessages", () => {
   });
 });
 
+describe("redacting a guest name that stood in for the student", () => {
+  it("hides the guest name like the student's own", () => {
+    const text = "Pete Thanasatitkul joined late. Thanasatitkul answered well; Pete asked about ratios.";
+    const redacted = redactForModel(text, { studentFullName: "Pawin (Pete.Th) Thanasatitkul", studentAliases: ["Pete Thanasatitkul"], tutorNames: [] });
+    expect(redacted).not.toMatch(/Pete|Thanasatitkul/u);
+    const sibling = redactForModel("Mali Jaidee answered.", { studentFullName: "Pawin (Pete.Th) Thanasatitkul", studentAliases: ["Mali Jaidee"], tutorNames: [] });
+    expect(sibling).not.toMatch(/Mali|Jaidee/u);
+  });
+});
+
 describe("transcript mode", () => {
   it("writes from a transcript in English and credits only what the student did", () => {
     const [system, user] = buildFeedbackMessages({

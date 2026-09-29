@@ -53,10 +53,11 @@ export function chooseStudentDisplayName(fullName: string): string {
  */
 export function redactForModel(
   text: string,
-  input: { studentFullName: string; tutorNames: readonly string[] },
+  input: { studentFullName: string; tutorNames: readonly string[]; studentAliases?: readonly string[] },
 ): string {
   let result = redactKnownNames(text, {
-    studentNames: [input.studentFullName],
+    // Aliases: the name the student joined under as a guest, when that stood in for their account.
+    studentNames: [input.studentFullName, ...(input.studentAliases ?? []).filter((name) => name.trim() !== "")],
     tutorNames: [...input.tutorNames],
   });
   const { nicknameCode, nickname } = parseStudentName(input.studentFullName);
@@ -170,6 +171,8 @@ function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels): string {
 
 export interface PromptContext {
   studentFullName: string;
+  /** Other names the student appeared under (a guest join); redacted like the full name. */
+  studentAliases?: readonly string[];
   tutorNames: readonly string[];
   /** `describeClass` lines (programme, class subject, confirmed terms). */
   classDetails: readonly string[];
@@ -184,7 +187,7 @@ export interface PromptContext {
 /** Class-detail lines with names redacted, as a bullet block. */
 export function classDetailsBlock(
   classDetails: readonly string[],
-  names: { studentFullName: string; tutorNames: readonly string[] },
+  names: { studentFullName: string; tutorNames: readonly string[]; studentAliases?: readonly string[] },
   extra: readonly string[] = [],
 ): string {
   return [...classDetails.map((line) => redactForModel(line, names)), ...extra].map((line) => `- ${line}`).join("\n");
