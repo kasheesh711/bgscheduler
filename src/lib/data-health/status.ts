@@ -193,14 +193,14 @@ function runIsRunning(run: RunEvidence | null): boolean {
 
 /**
  * Health detail for a paused job. The reason is the effective job's
- * cadenceLabel, which effectiveCronJob sets when it pauses a job, so the
- * registry stays the single source of truth for why each job is paused. The
- * LINE credit digest keeps its original sentence because pausing it retains
- * the saved alert preferences.
+ * cadenceLabel, which effectiveCronJob sets when it pauses a job; the one
+ * exception is the LINE credit digest, which keeps its own sentence because
+ * pausing it retains the saved alert preferences. A paused job's cron still
+ * fires and is audited as skipped, so the detail says runs are skipped.
  */
 function pausedHealthDetail(job: CronJobDefinition): string {
   if (job.key === "line_credit_digest") return "Automatic credit alerts are paused; saved preferences are retained.";
-  return `${job.cadenceLabel}; no run is expected until it is re-enabled.`;
+  return `${job.cadenceLabel}; scheduled runs are skipped until it is enabled.`;
 }
 
 export function evaluateCronJobStatus(input: CronStatusInput): CronStatusResult {

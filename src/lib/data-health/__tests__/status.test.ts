@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getCronJobDefinition } from "../cron-registry";
+import { CRON_JOBS, effectiveCronJob, getCronJobDefinition } from "../cron-registry";
 import { evaluateCronJobStatus, type RunEvidence } from "../status";
 
 function job(key: string) {
@@ -216,7 +216,36 @@ describe("paused job health detail", () => {
     });
 
     expect(result.status).toBe("paused");
-    expect(result.healthDetail).toBe(`${label}; no run is expected until it is re-enabled.`);
+    expect(result.healthDetail).toBe(`${label}; scheduled runs are skipped until it is enabled.`);
     expect(result.healthDetail.toLowerCase()).not.toContain("credit");
+  });
+});
+
+describe("every paused job states a reason", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("never falls back to a paused job's schedule text", () => {
+    for (const name of ["WISE_CLASSROOM_AUTOMATION_ENABLED", "FEEDBACK_AUTOWRITER_ENABLED", "TUTOR_SIT_INS_ENABLED", "CREDIT_CONTROL_MODE"]) {
+      vi.stubEnv(name, undefined);
+    }
+    const paused = CRON_JOBS.filter((definition) => effectiveCronJob(definition).paused);
+
+    expect(paused.length).toBeGreaterThan(0);
+    for (const definition of paused) {
+      const result = evaluateCronJobStatus({
+        job: definition,
+        now: new Date("2026-06-01T01:20:00.000Z"),
+        latestInvocation: null,
+        latestCronInvocation: null,
+        latestRun: null,
+        latestSuccessfulRun: null,
+        latestFailedRun: null,
+        runningRun: null,
+      });
+      // A pause must set its own reason label; the schedule text is not a reason.
+      expect(effectiveCronJob(definition).cadenceLabel, definition.key).not.toBe(definition.cadenceLabel);
+      expect(result.status, definition.key).toBe("paused");
+      expect(result.healthDetail.startsWith(definition.cadenceLabel), definition.key).toBe(false);
+    }
   });
 });
