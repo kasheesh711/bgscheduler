@@ -27,6 +27,8 @@ interface FakeDbState {
   terminalDigestRows: Array<{ id: string }>;
   digestRunId: string;
   digestRunInsertConflict: boolean;
+  /** When set, the run insert rejects with exactly this error (e.g. a DrizzleQueryError-wrapped 23505). */
+  digestRunInsertError?: unknown;
   digestRunUpdates: Array<Record<string, unknown>>;
   recipientInserts: Array<Record<string, unknown>>;
 }
@@ -64,6 +66,9 @@ function makeFakeDb(state: FakeDbState): Database {
       return {
         values(values: Record<string, unknown>) {
           if (table === schema.progressTestAdminDigestRuns) {
+            if (state.digestRunInsertError !== undefined) {
+              return { returning: () => Promise.reject(state.digestRunInsertError) };
+            }
             if (state.digestRunInsertConflict) {
               const conflict = Object.assign(new Error("duplicate key"), { code: "23505" });
               return { returning: () => Promise.reject(conflict) };
@@ -314,6 +319,51 @@ describe("sendProgressTestAdminDigest", () => {
     const result = await sendProgressTestAdminDigest(makeFakeDb(state), NOW, { sender });
 
     expect(result.status).toBe("skipped");
+    expect(sender.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("treats a DrizzleQueryError-wrapped unique-key conflict (cause.code 23505) as already-created (skipped)", async () => {
+    // drizzle-orm 0.45 wraps every driver error: the SQLSTATE is on `.cause`, `.code` is undefined.
+    const state = freshState({
+      digestRunInsertError: Object.assign(new Error("Failed query"), { cause: { code: "23505" } }),
+      cycleRows: [
+        {
+          studentName: "Ada",
+          subject: "Math",
+          currentCount: 6,
+          status: "approaching",
+          bookedTestWiseSessionId: null,
+          tutorDisplayName: "Alice",
+        },
+      ],
+    });
+    const sender = makeSender();
+
+    const result = await sendProgressTestAdminDigest(makeFakeDb(state), NOW, { sender });
+
+    expect(result.status).toBe("skipped");
+    expect(result.message).toContain("concurrently");
+    expect(sender.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("does not treat a wrapped non-unique run-insert failure (cause.code 23503) as already-created", async () => {
+    const wrapped = Object.assign(new Error("Failed query"), { cause: { code: "23503" } });
+    const state = freshState({
+      digestRunInsertError: wrapped,
+      cycleRows: [
+        {
+          studentName: "Ada",
+          subject: "Math",
+          currentCount: 6,
+          status: "approaching",
+          bookedTestWiseSessionId: null,
+          tutorDisplayName: "Alice",
+        },
+      ],
+    });
+    const sender = makeSender();
+
+    await expect(sendProgressTestAdminDigest(makeFakeDb(state), NOW, { sender })).rejects.toBe(wrapped);
     expect(sender.sendEmail).not.toHaveBeenCalled();
   });
 });
