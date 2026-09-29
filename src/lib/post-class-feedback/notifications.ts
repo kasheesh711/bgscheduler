@@ -25,6 +25,7 @@ import {
 } from "@/lib/classrooms/schedule-email";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { WISE_LEARN_ORIGIN, wiseSessionLink } from "@/lib/wise/links";
 import {
   addBangkokDays,
   bangkokDateStartUtc,
@@ -260,13 +261,14 @@ export function safePostClassWiseSessionUrl(input: {
   wiseClassId: string;
   wiseSessionId: string;
 }): string {
-  const fallback = `https://app.wise.live/classes/${encodeURIComponent(input.wiseClassId)}/sessions/${encodeURIComponent(input.wiseSessionId)}`;
+  const fallback = wiseSessionLink({ wiseClassId: input.wiseClassId, wiseSessionId: input.wiseSessionId });
   if (typeof input.configuredUrl !== "string") return fallback;
   try {
     const url = new URL(input.configuredUrl);
     const host = url.hostname.toLowerCase();
     const allowedHost = host === "wise.live" || host.endsWith(".wise.live") ||
-      host === "wiseapp.live" || host.endsWith(".wiseapp.live");
+      host === "wiseapp.live" || host.endsWith(".wiseapp.live") ||
+      host === new URL(WISE_LEARN_ORIGIN).hostname;
     return url.protocol === "https:" && allowedHost ? url.toString() : fallback;
   } catch {
     return fallback;
