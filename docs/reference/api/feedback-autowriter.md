@@ -1,6 +1,6 @@
 # API — Feedback Autowriter
 
-Four method/path endpoints. Meaning, rules and the state machine live in [the feature page](../../features/feedback-autowriter.md); day-to-day operation in [the runbook](../../operations/feedback-autowriter.md).
+Seven method/path endpoints. Meaning, rules and the state machine live in [the feature page](../../features/feedback-autowriter.md); day-to-day operation in [the runbook](../../operations/feedback-autowriter.md).
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
@@ -8,6 +8,9 @@ Four method/path endpoints. Meaning, rules and the state machine live in [the fe
 | `GET` | `/api/internal/feedback-autowriter` | cron secret | Backstop sweep, `8,22,38,52 * * * *`. Also runnable by the owner from Data Health. |
 | `GET` | `/api/feedback-autowriter` | admin session (page scope via the proxy) | Dashboard payload. |
 | `POST` | `/api/feedback-autowriter/control` | owner only (`requireClassroomOperationsOwner`) | Mode, pause/resume and per-tutor switches. |
+| `GET` | `/api/internal/feedback-autowriter/review` | cron secret | Operating-loop review job, `27 * * * *`. Also runnable by the owner from Data Health. |
+| `GET` | `/api/feedback-autowriter/review` | admin session (page scope via the proxy) | Quality and Review tabs payload. |
+| `POST` | `/api/feedback-autowriter/verdicts` | owner only (`requireClassroomOperationsOwner`) | Records a verdict on a class's first shot. |
 
 ## `POST /api/wise/webhook`
 
@@ -47,3 +50,34 @@ Runs `runAutowriterJob()` with a 740-second budget: reconcile `posting`/`awaitin
 | `{ "action": "tutor", "wiseUserId": "<24 hex>", "enabled": boolean }` | Adds or removes a roster tutor from `disabled_tutors`; non-roster ids get `400`. |
 
 **Responses:** `200 { ok: true, requeued, control }` · `400` (bad JSON, bad body, non-roster tutor) · `401` · `403 "Only Kevin can change the feedback autowriter."` · `500`.
+
+## `GET /api/internal/feedback-autowriter/review`
+
+[`src/app/api/internal/feedback-autowriter/review/route.ts`](../../../src/app/api/internal/feedback-autowriter/review/route.ts), `maxDuration = 300`, wrapped in `withCronInvocationAudit({ jobKey: "feedback_autowriter_review" })`.
+
+Runs `runAutowriterReviewJob()` ([`review-job.ts`](../../../src/lib/feedback-autowriter/review-job.ts)): first-shot snapshots, fix events, review rows, flags, daily metrics, the daily gate row and the incident outbox. Reads our database only; never calls Wise.
+
+**Responses:** `200` with a `ReviewJobResult` (`ok`, `syncRunId`, `firstShots`, `fixEvents`, `reviewsCreated`, `flags`, `metricRows`, `dailyGate`, `incidents`, `stepErrors`) · `200 { ok: true, skipped: true, reason }` when disabled, on a preview deployment, or while another run holds the lock · `401` · `503` when a step failed or a critical incident could not be pushed.
+
+## `GET /api/feedback-autowriter/review`
+
+[`src/app/api/feedback-autowriter/review/route.ts`](../../../src/app/api/feedback-autowriter/review/route.ts). Returns the `AutowriterReview` built by [`loadAutowriterReview`](../../../src/lib/feedback-autowriter/review-data.ts): the live gate evaluation over the rolling 14 Bangkok days, coverage breakdown, fix-round histogram, daily and per-tutor rows, the review queue (first shot, current text, word diff, measured saves, corrections, verdict log, open flags) and recent incidents. In-person classes are left out.
+
+**Responses:** `200` · `401` · `403` (not an admin) · `500 { error }`.
+
+## `POST /api/feedback-autowriter/verdicts`
+
+[`src/app/api/feedback-autowriter/verdicts/route.ts`](../../../src/app/api/feedback-autowriter/verdicts/route.ts). Strict body:
+
+| Field | Rule |
+|---|---|
+| `wiseSessionId` | 24 hex characters; the class must have a review row |
+| `fieldsSha256` | 64 hex characters: the first shot's `fields_sha256` the owner was shown (a mismatch is `409`) |
+| `verdict` | `approve` or `needs_fix` |
+| `severity` | `cosmetic` \| `factual` \| `critical` — required for `needs_fix`, absent for `approve` |
+| `criticalCategory` | `wrong_person` \| `billing_status` \| `invented_content` \| `should_not_have_posted` — required exactly when `severity` is `critical` |
+| `note` | optional, up to 2,000 characters |
+
+One transaction appends the verdict (superseding the current one), sets `reviews.current_verdict_id`, resolves the class's open flags, stamps `metadata.triagedAt` on its `verified` session row (ending the Soniox review window) and, for a critical verdict, queues a critical incident.
+
+**Responses:** `200 { ok: true, verdictId, supersedesId, resolvedFlags, criticalIncident }` · `400` (bad JSON, body or shape) · `401` · `403 "Only Kevin can record autowriter verdicts."` · `404` (no review row) · `409` (stale pin) · `500`.

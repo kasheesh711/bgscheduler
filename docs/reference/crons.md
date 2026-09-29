@@ -12,6 +12,18 @@ shows paused) unless `FEEDBACK_AUTOWRITER_ENABLED=true`. Single-flight is a leas
 `ok:false` (503) only for infrastructure errors, an undelivered alert digest, or a halt. Manual runs from Data Health
 are owner-only. See the [feature page](../features/feedback-autowriter.md) and [runbook](../operations/feedback-autowriter.md).
 
+| Path | UTC schedule | Bangkok | Registry key | Maximum |
+|---|---|---|---|---|
+| `/api/internal/feedback-autowriter/review` | `27 * * * *` | Hourly at :27 | `feedback_autowriter_review` | 300s |
+
+Operating-loop review job (migration 0099): snapshots first shots, derives fix events from the Wise activity mirror
+(it runs ten minutes after the `:17` activity sync), assigns review inclusion, raises flags, recomputes daily quality
+metrics and writes one daily gate evaluation, then pushes pending critical incidents. Reads our database only — no
+Wise calls. Paused with the autowriter (`FEEDBACK_AUTOWRITER_ENABLED`). Single-flight through
+`feedback_autowriter_review_runs` (partial unique index on `running`; a run older than 15 minutes is failed). Returns
+`ok:false` (503) when a step failed or a critical incident could not be pushed. Manual runs from Data Health are
+owner-only and need confirmation.
+
 ## Tutor Sit-ins jobs
 
 | Path | UTC schedule | Bangkok | Registry key | Maximum |

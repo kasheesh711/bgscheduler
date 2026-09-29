@@ -2,6 +2,7 @@ import { getDb, type Database } from "@/lib/db";
 import {
   autowriterAlertEmails,
   autowriterEnabled,
+  autowriterLineTo,
   autowriterTranscriptsEnabled,
   autowriterWritesAllowedHere,
   openRouterApiKey,
@@ -9,7 +10,9 @@ import {
   wiseApiActorId,
 } from "./config";
 import { cleanUpSonioxJobs, markWebhookProcessed, processSession, runSweep, type AutowriterDeps, type SweepResult } from "./job";
+import { runReviewJob, type ReviewJobResult } from "./review-job";
 import { createWiseFeedbackOps } from "./run";
+import { readControl } from "./store";
 import { createSonioxClient } from "./soniox";
 
 function productionDeps(db: Database, budgetMs: number): AutowriterDeps {
@@ -41,6 +44,32 @@ export async function runAutowriterJob(): Promise<SweepResult | { ok: true; skip
     return { ok: true, skipped: true, reason: "FEEDBACK_AUTOWRITER_ENABLED is not true." };
   }
   return runSweep(productionDeps(getDb(), 740_000));
+}
+
+/**
+ * Hourly review job of the operating loop (cron / Data Health). Reads our database only and never writes to Wise;
+ * paused with the autowriter itself.
+ */
+export async function runAutowriterReviewJob(
+  triggerSource: "cron" | "admin" = "cron",
+): Promise<ReviewJobResult | { ok: true; skipped: true; reason: string }> {
+  if (!autowriterEnabled()) {
+    return { ok: true, skipped: true, reason: "FEEDBACK_AUTOWRITER_ENABLED is not true." };
+  }
+  if (!autowriterWritesAllowedHere()) {
+    return { ok: true, skipped: true, reason: "Preview deployment: the review job never runs here." };
+  }
+  const db = getDb();
+  const control = await readControl(db);
+  return runReviewJob({
+    db,
+    apiActorId: wiseApiActorId(),
+    writesAllowedHere: true,
+    triggerSource,
+    liveNow: control.mode === "live",
+    disabledTutors: control.disabledTutors,
+    channels: { emailRecipients: autowriterAlertEmails(), lineTo: autowriterLineTo() },
+  });
 }
 
 /** Runs inside the webhook's `after()`: one session, same guarded path as the cron. */

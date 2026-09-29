@@ -6,7 +6,8 @@
 and holds with the written text, class-end-to-post latency, model cost and webhook deliveries; only the owner sees the
 mode, pause/resume and per-tutor switches (one per tutor, covering both of their Wise accounts). In-person classes on a
 roster account are skipped at once (Wise type `OFFLINE`) and left out of the dashboard entirely — they stay the
-tutor's to write.
+tutor's to write. The **Quality** and **Review** tabs measure first-shot accuracy, coverage and the expansion gate
+(see [Operating loop: measurement](#operating-loop-measurement-phase-1-migration-0099)); only the owner records verdicts.
 
 Writes a tutor's post-class feedback for **online one-to-one classes** from Wise's AI meeting summary and
 completes Wise's own **blank auto-submission** through the same endpoint the Wise web app uses
@@ -96,9 +97,10 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
    starts within one sweep of the class finishing). A class left unfinished past its deadline (mode `off` skips the
    expiry) counts as done, and the job's cleanup still runs when `FEEDBACK_AUTOWRITER_ENABLED` is off. An owner retry
    clears the stamp, and so does going live for a draft that may transcribe again (a judged transcript draft keeps
-   its window); the window starts again when the class is next done. A reviewer finds the job by the row's `soniox_transcription_id` (Soniox
-   Console). `metadata.triagedAt` ends the window early; nothing writes it yet — it is reserved for the review
-   surface of the operating loop. A delete that fails keeps the job id so the sweep retries it, and the sweep also
+   its window); the window starts again when the class is next done. A reviewer finds the job by the row's
+   `soniox_transcription_id` (Soniox Console). `metadata.triagedAt` ends the window early: the owner's first verdict
+   on the posted class writes it (Review tab), and the next sweep deletes the job. A delete that fails keeps the job
+   id so the sweep retries it, and the sweep also
    reaps jobs no row references after 2 hours;
 3. tells tutor from student by lining up Soniox's speakers with Zoom's name-labelled WEBVTT (`rawTranscript`) — every
    speaker that overlaps the teacher's cues is TUTOR, so a diarization split cannot turn the tutor into the student;
@@ -180,6 +182,66 @@ Alerts go out as one digest per sweep to `FEEDBACK_AUTOWRITER_ALERT_EMAILS` thro
 emailed (`alerts_sent` = `suppressed:<mode>`) — tutors still write their own then. Alerts about an actual Wise write
 (`rejected`, `unknown_outcome`, `verify_failed`) are emailed in every mode. Mode `off` still reconciles posted rows.
 Preview deployments never touch autowriter state.
+
+## Operating loop: measurement (Phase 1, migration 0099)
+
+Measures every post against the owner's goal — **first-shot accuracy of at least 80% before adding tutors** — and
+never writes to Wise; the POST path is unchanged (plan: `.planning/quick/260929-lop-autowriter-operating-loop/`).
+
+**Immutable post log** (`feedback_autowriter_posts`). One row per text we put in Wise: the first shot of each class
+and every re-post. Content cannot change and rows cannot be deleted (triggers, SQLSTATE `55000`). First shots are
+*proven*, not copied: the POST claim pinned `body_hash` (the exact POST body), so a candidate text is accepted only
+when the body rebuilt from it — in one of the 64 possible form orders, with the stored billing — hashes to it. The
+hourly review job snapshots every settled posted class this way; a class edited after posting (the one-time
+nickname fix of 29 Sep) no longer proves itself and gets an info incident until the backfill script proves it from
+Class Feedback's first stored version or by reversing the rename. The six nickname re-posts are recorded as
+correction rows by `script:nickname-fix (kevhsh7@gmail.com)` ("owner naming policy: nickname").
+
+**Verdicts** (`feedback_autowriter_verdicts`, append-only, Review tab, owner only). Approve, or Needs fix with a
+severity — `cosmetic` (still counts as accurate), `factual`, `critical` (with a category: wrong person,
+billing/status, invented content, should not have posted). Each verdict is pinned to the first shot's
+`fields_sha256`; a newer verdict supersedes the older one and becomes `reviews.current_verdict_id` in the same
+transaction. A critical verdict queues a critical incident, pushed to the owner at any hour.
+
+**Review inclusion** (`feedback_autowriter_reviews`). Every posted class gets one review row when the job first sees
+it, with the inclusion reason, probability and a crypto-random draw stored once and never changed by a flag. Until a
+tutor's cohort has passed a gate every post is required (`new_tutor`, 100%) — in Phase 1 that is every tutor; a
+proven tutor would drop to a 30% random sample plus flagged posts.
+
+**Measured fixes** (`feedback_autowriter_fix_events`). Every `SessionFeedbackSubmittedEvent` on an autowriter class,
+from the Wise activity mirror, classified by who saved it: our API user (`WISE_USER_ID`) matched to the first shot or
+a correction; an API save no recorded post explains (`api_actor_unmatched` — a script outside the lock, or the key
+owner's own web save) raises a critical incident; Kevin's web user `695369c0…986` is `owner_web` (also his main roster
+account, so on his classes an owner fix and a tutor edit look the same — both count); roster accounts are `tutor`;
+anyone else `other_staff`; students and Wise's auto-submissions are ignored. A save after our first post counts as a
+fix and flags the class for review (`measured_fix`); every correction counts as a fix.
+
+**Numbers** (`quality.ts`, pure). Accuracy = accurate ÷ owner-reviewed required posts (a voluntary review of an
+unsampled post never counts), judged on the two-sided 95% Wilson lower bound (z = 1.959964; with no errors 9 reviews
+reach 70% and 16 reach 80%; 20/20 → 83.9%). Coverage = posted ÷ (posted + held + expired + failed + never seen) on
+live-mode days; classes the tutor wrote first, absences, a switched-off tutor, out-of-scope and in-progress classes
+count on neither side, and in-person classes not at all. A roster class the autowriter never saw counts as a miss only
+when proven online one-to-one (past-session mirror or the Wise title in Credit Control). Holds all count as misses
+until interview decision D-03 says which holds were correct.
+
+**Gate** (rolling 14 Bangkok days). `pass` = lower bound ≥ 80%, zero critical verdicts, no unresolved critical flag,
+coverage ≥ 70% and no flagged post waiting for review; `head_start` = lower bound ≥ 70%; otherwise
+`below_head_start`, `insufficient_data` (nothing reviewed) or `blocked_critical`. The Quality tab evaluates it live;
+the job writes one append-only `daily` row per Bangkok date (from 22:00 Bangkok, else for yesterday). Expansion grows
+the roster by half, rounded up (5 → 8 → 12 → 18), after the owner confirms — Phase 6.
+
+**The review job** (`/api/internal/feedback-autowriter/review`, hourly at :27 UTC, after the :17 activity sync):
+snapshot first shots → derive fix events → create review rows → raise flags → recompute daily metrics (the last three
+Bangkok days plus any day with a fresh verdict) and the daily gate row → push pending critical incidents (email to
+`FEEDBACK_AUTOWRITER_ALERT_EMAILS`, LINE to `FEEDBACK_AUTOWRITER_LINE_TO` when set; each channel once, retried up to 5
+times). Single-flight through `feedback_autowriter_review_runs`; paused with the autowriter.
+
+**Dashboard.** *Overview* is the existing view. *Quality*: the gate badge, each criterion against its threshold, the
+lower-bound bar marked at 70% and 80%, the coverage breakdown, fix rounds per post, daily and per-tutor tables,
+incidents and the job's last run. *Review*: filters (needs review / flagged / all); each class shows the immutable
+first shot ("recorded at post" or "reconstructed · hash-verified") next to the current text (the last verified
+correction, or what Class Feedback last read from Wise if newer) with a word diff, the saves measured in Wise by
+actor, corrections, open flags and the verdict log. Owner-only Approve / Needs fix controls; other admins read.
 
 ## Costs (measured in the 2026-09-29 pilot)
 

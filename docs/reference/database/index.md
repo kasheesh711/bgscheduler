@@ -492,4 +492,18 @@ Migration **0098** (second pass) adds `feedback_autowriter_sessions.evidence` (`
 `soniox_transcription_id`, the states `awaiting_recording` and `transcribing`, and the call role `transcriber` /
 arm `soniox` (one row per Soniox transcription, list-price cost).
 
+Migration **0099** (operating loop, Phase 1 — measurement) adds nine tables. Guards raise SQLSTATE `55000`.
+
+| SQL table | Drizzle export | Grain |
+|---|---|---|
+| `feedback_autowriter_posts` | `feedbackAutowriterPosts` | One text put in Wise for a class: the first shot (unique per session) or a correction. Content immutable; outcome settles once; no deletes |
+| `feedback_autowriter_verdicts` | `feedbackAutowriterVerdicts` | One owner verdict (approve / needs fix, severity, critical category, note), pinned to the judged `fields_sha256`. Append-only |
+| `feedback_autowriter_reviews` | `feedbackAutowriterReviews` | One per posted class: review inclusion (reason, probability, crypto draw — set once), flags, current verdict, measured fix count |
+| `feedback_autowriter_flags` | `feedbackAutowriterFlags` | A reason a class needs review (measured fix, unmatched API save); resolved once by the next verdict |
+| `feedback_autowriter_fix_events` | `feedbackAutowriterFixEvents` | One `SessionFeedbackSubmittedEvent` on an autowriter class, classified by actor (re-derivable, keyed by Wise event id) |
+| `feedback_autowriter_incidents` | `feedbackAutowriterIncidents` | Outbox (unique `dedupe_key`); critical rows are pushed by email / LINE and retried up to 5 times |
+| `feedback_autowriter_daily_metrics` | `feedbackAutowriterDailyMetrics` | Quality and coverage per Bangkok date and tutor (`*` = all); recomputed by the review job |
+| `feedback_autowriter_gate_evaluations` | `feedbackAutowriterGateEvaluations` | Expansion-gate evaluations; one `daily` row per Bangkok date. Append-only |
+| `feedback_autowriter_review_runs` | `feedbackAutowriterReviewRuns` | Run ledger of the hourly review job; single-flight partial unique index on `running` |
+
 See [the feature page](../../features/feedback-autowriter.md).

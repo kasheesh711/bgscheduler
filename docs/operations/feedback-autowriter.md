@@ -29,6 +29,21 @@ Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowrite
    `WISE_WEBHOOK_AUTH_HEADER`); a refused delivery logs `unauthorized delivery; header names: …` instead.
    Confirm read-only with `GET /institutes/{id}/webhooks` that both subscriptions exist and the original is unchanged.
 
+### Operating loop, Phase 1 (migration 0099) — in this order
+
+1. **Apply migration 0099** on production Neon (`DATABASE_URL=… npm run db:migrate`). It only adds tables; the
+   autowriter keeps running meanwhile.
+2. **Day-one backfill**, dry run first (reads only, never writes to Wise, prints metadata only):
+   `npx tsx --tsconfig scripts/tsconfig.json scripts/feedback-autowriter-backfill-review.ts`
+   Expect every posted class `first shot PROVEN` (29 Sep: 2 unchanged, 5 from Class Feedback's first version, Gift's
+   by reverse rename) and six nickname correction rows. Then the same command with `--apply`. It writes no verdicts.
+3. **Deploy** the code. Doing step 2 first matters: otherwise the review job's first run sees the six nickname
+   re-posts as API saves no post explains and raises six critical incidents (re-classified once the backfill runs,
+   but the pushes will have gone).
+4. Optional: `FEEDBACK_AUTOWRITER_LINE_TO` (a LINE user or group id) to receive critical incidents on LINE as well
+   as by email; set `FEEDBACK_AUTOWRITER_ALERT_EMAILS` if it is still empty — with no channel a critical incident
+   stays pending and the review job reports `ok:false` (Data Health shows it).
+
 ## 2. Modes and switches (take effect immediately — no redeploy)
 
 | Command | Effect |
@@ -130,3 +145,18 @@ checks, absence, form/billing drift), expired, no summary 3 h after class, and a
 In `shadow` (and `off`) only the halt-causing outcomes are emailed; draft alerts stay on the dashboard.
 A switched-off tutor's classes are handed back to them silently when they reach the deadline window.
 Nightly tutor reminders are separate (Class Feedback).
+
+## 7. Reviewing posts (operating loop)
+
+`/feedback-autowriter` → **Review**. "Needs review" lists every required post without a verdict (every post while
+the tutor's cohort has not passed a gate). Judge the **first shot** (left), not the current text: Approve, or Needs
+fix with a severity — cosmetic still counts as accurate; factual is a real fix; critical needs a category, blocks
+the gate and pushes an alert. A verdict can be replaced by recording a new one (the log keeps both). A class flagged
+by a measured fix (someone saved it in Wise after our post) stays in "Flagged" until a verdict answers it; the gate
+cannot pass while one waits. Recording the first verdict on a class also ends its Soniox review window.
+
+**Quality** shows the gate. The review job runs hourly at :27 (Data Health → Feedback Autowriter Review; manual run
+owner-only); the daily gate row is written from 22:00 Bangkok. Incidents: `critical_verdict` and
+`api_actor_unmatched` (an API save no recorded post explains — check who wrote to Wise with the API key) are pushed;
+`first_shot_unverified` (a class edited before its first shot was recorded) is shown only — run the backfill script
+to prove it, or confirm by hand what was posted.
