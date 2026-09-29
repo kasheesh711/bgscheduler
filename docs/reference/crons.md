@@ -667,7 +667,7 @@ Manual invocations are audited exactly like scheduled ones, with `triggerSource`
 |---|---|
 | every other registry key | `student_promotions_july_1` — annual Wise-writing job; apply promotions from the Student Promotions page |
 
-Three behavioural differences from the cron path when run this way: `post_class_feedback` runs the sync and notification retries but **not** the AI review or deduction hygiene passes ([`run-job.ts`](../../src/lib/data-health/run-job.ts)), `wise_activity` runs in `manual` mode — 30 days / 500 pages ([`run-job.ts`](../../src/lib/data-health/run-job.ts)), and `progress_tests` runs with `triggerType: "manual"`, so before the tutor-workspace launch it skips the cron's daily-window claim — as the route's admin-session path does — while still waiting for today's shared snapshot ([`run-sync-request.ts`](../../src/lib/progress-tests/run-sync-request.ts)); unlike that path, Data Health does not also require `/progress-tests` page access.
+Two behavioural differences from the cron path when run this way: `wise_activity` runs in `manual` mode — 30 days / 500 pages ([`run-job.ts`](../../src/lib/data-health/run-job.ts)), and `progress_tests` runs with `triggerType: "manual"`, so before the tutor-workspace launch it skips the cron's daily-window claim — as the route's admin-session path does — while still waiting for today's shared snapshot ([`run-sync-request.ts`](../../src/lib/progress-tests/run-sync-request.ts)); unlike that path, Data Health does not also require `/progress-tests` page access.
 
 ---
 
