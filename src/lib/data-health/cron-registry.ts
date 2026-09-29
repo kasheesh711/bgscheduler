@@ -250,8 +250,8 @@ export const CRON_JOBS = [
     lateAfterMinutes: 60,
     maxDurationSeconds: 300,
     manualOnly: false,
-    dangerous: false,
-    confirmationLabel: null,
+    dangerous: true,
+    confirmationLabel: "Emails today's progress-test digest to admins with Progress Tests access, unless it was already sent today.",
     expectedBangkokMinute: 7 * 60 + 35,
     routeMethod: "GET",
   },
@@ -492,8 +492,8 @@ export const CRON_JOBS = [
     lateAfterMinutes: 0,
     maxDurationSeconds: 300,
     manualOnly: true,
-    dangerous: false,
-    confirmationLabel: null,
+    dangerous: true,
+    confirmationLabel: "Fetches the full LINE follower roster and inserts suggested student links for review.",
     routeMethod: "GET",
   },
 ] as const satisfies readonly CronJobDefinition[];
@@ -526,7 +526,15 @@ export function effectiveCronJob(job: CronJobDefinition): CronJobDefinition {
   return job;
 }
 
-/** Data Health shows a Run button only for jobs that are live and dispatchable. */
+/**
+ * Data Health shows a Run button only for jobs that are live and dispatchable.
+ * Pass the `effectiveCronJob` view: env-driven pauses exist only there.
+ */
 export function isManuallyRunnable(job: CronJobDefinition): boolean {
-  return !job.paused && !job.manualRunDisabledReason;
+  return !job.paused && job.manualRunDisabledReason === undefined;
+}
+
+/** The jobs Data Health offers a Run button for under the current feature mode, in registry order. */
+export function manuallyRunnableCronJobs(): CronJobDefinition[] {
+  return CRON_JOBS.map(effectiveCronJob).filter(isManuallyRunnable);
 }

@@ -50,7 +50,8 @@ const DEFAULT_INSTITUTE_ID = "696e1f4d90102225641cc413";
  *    Both return before the audit wrapper, so neither writes a `cron_invocations` row.
  * 2. Wise/classroom jobs and the feedback autowriter are owner-only (403).
  * 3. Otherwise the job's branch runs inside `withCronInvocationAudit` as `triggerSource: "admin"`,
- *    mirroring its `/api/internal/*` cron route.
+ *    mirroring its `/api/internal/*` cron route. The terminal `Unknown job` 404 inside the wrapper
+ *    is a defensive default (audited as failed); run-job.test.ts keeps every runnable key off it.
  */
 export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | null) {
   const job = getCronJobDefinition(jobKey);
@@ -58,7 +59,7 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
     return NextResponse.json({ error: "Unknown job" }, { status: 404 });
   }
 
-  if (job.manualRunDisabledReason) {
+  if (job.manualRunDisabledReason !== undefined) {
     return NextResponse.json({ error: job.manualRunDisabledReason }, { status: 409 });
   }
 

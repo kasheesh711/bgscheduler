@@ -51,7 +51,7 @@ import { runWeekendClassroomCheck } from "@/lib/classrooms/weekend-check";
 import { runCompetitorIntelligenceSync } from "@/lib/competitor-intelligence/sync";
 import { runCreditControlSyncRequest } from "@/lib/credit-control/run-sync-request";
 import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
-import { CRON_JOBS, getCronJobDefinition, type CronJobDefinition } from "@/lib/data-health/cron-registry";
+import { CRON_JOBS, getCronJobDefinition, manuallyRunnableCronJobs, type CronJobDefinition } from "@/lib/data-health/cron-registry";
 import { runDataHealthJob } from "@/lib/data-health/run-job";
 import { getDb } from "@/lib/db";
 import { runAutowriterJob } from "@/lib/feedback-autowriter/dispatch";
@@ -119,8 +119,8 @@ const DISPATCH_TARGETS = {
 
 // Widened view: on the as-const tuple only one member declares manualRunDisabledReason (TS2339).
 const REGISTRY: readonly CronJobDefinition[] = CRON_JOBS;
-const MANUAL_KEYS = REGISTRY.filter((job) => !job.manualRunDisabledReason).map((job) => job.key).sort();
-const EXCLUDED_KEYS = REGISTRY.filter((job) => job.manualRunDisabledReason).map((job) => job.key);
+const MANUAL_KEYS = REGISTRY.filter((job) => job.manualRunDisabledReason === undefined).map((job) => job.key).sort();
+const EXCLUDED_KEYS = REGISTRY.filter((job) => job.manualRunDisabledReason !== undefined).map((job) => job.key);
 const OWNER = CLASSROOM_OPERATIONS_OWNER;
 const SENTINEL_DB = { sentinel: "db" };
 const BACKFILL_WINDOW = { startDate: "2026-09-01", endDate: "2026-09-04" };
@@ -194,6 +194,22 @@ describe("runDataHealthJob", () => {
     expect(Object.keys(DISPATCH_TARGETS).sort()).toEqual(MANUAL_KEYS);
   });
 
+  it.each([
+    ["every feature on", "true", "active"],
+    ["every feature off", undefined, undefined],
+  ])("offers only Run buttons it can dispatch with %s", (_mode, flag, creditControlMode) => {
+    vi.stubEnv("WISE_CLASSROOM_AUTOMATION_ENABLED", flag);
+    vi.stubEnv("FEEDBACK_AUTOWRITER_ENABLED", flag);
+    vi.stubEnv("TUTOR_SIT_INS_ENABLED", flag);
+    vi.stubEnv("CREDIT_CONTROL_MODE", creditControlMode);
+
+    const offered = manuallyRunnableCronJobs().map((job) => job.key);
+
+    expect(offered.length).toBeGreaterThan(0);
+    expect(offered.filter((key) => !(key in DISPATCH_TARGETS))).toEqual([]);
+    expect(offered).not.toContain("student_promotions_july_1");
+  });
+
   it.each(MANUAL_KEYS)("dispatches %s", async (key) => {
     const response = await runDataHealthJob(key, OWNER);
     const target = (DISPATCH_TARGETS as Record<string, unknown>)[key];
@@ -216,6 +232,16 @@ describe("runDataHealthJob", () => {
     expect(await response.json()).toEqual({ error: getCronJobDefinition(key)!.manualRunDisabledReason });
     expect(withCronInvocationAudit).not.toHaveBeenCalled();
     expect(getDb).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["post_class_feedback_day_after", "day_after"],
+    ["post_class_feedback_deadline", "deadline"],
+  ] as const)("runs %s at its own reminder checkpoint", async (key, checkpoint) => {
+    await runDataHealthJob(key, OWNER);
+
+    expect(runPostClassReminderJob).toHaveBeenCalledTimes(1);
+    expect(runPostClassReminderJob).toHaveBeenCalledWith(checkpoint, { triggerType: "manual", actorEmail: OWNER });
   });
 
   it("runs the sit-in worker with its cron route's status mapping", async () => {
