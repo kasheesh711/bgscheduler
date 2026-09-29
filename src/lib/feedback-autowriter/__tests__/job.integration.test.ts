@@ -675,10 +675,18 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(short)] }).ops, soniox.client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
       .toMatchObject({ result: "awaiting_recording", detail: "recording_too_short" });
     const first = await readSessionRow(db, SESSION_ID);
-    expect(first).toMatchObject({ state: "awaiting_recording", metadata: { recordingShortSeen: true } });
+    expect(first).toMatchObject({ state: "awaiting_recording", metadata: { recordingShortSeenAt: expect.any(String) } });
     expect(first?.nextAttemptAt?.getTime() ?? 0).toBeGreaterThan(Date.now() + 25 * 60_000);
 
-    await db.update(S).set({ nextAttemptAt: sql`now() - interval '1 second'` as never }).where(eq(S.wiseSessionId, SESSION_ID));
+    // A repeated RecordingCompleted webhook seconds later cannot shorten the 30-min wait.
+    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(short)] }).ops, soniox.client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "awaiting_recording", detail: "recording_too_short" });
+
+    const firstSeen = new Date(Date.now() - 31 * 60_000).toISOString();
+    await db.update(S).set({
+      nextAttemptAt: sql`now() - interval '1 second'` as never,
+      metadata: sql`${S.metadata} || ${JSON.stringify({ recordingShortSeenAt: firstSeen })}::jsonb` as never,
+    }).where(eq(S.wiseSessionId, SESSION_ID));
     expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(short)] }).ops, soniox.client), { wiseSessionId: SESSION_ID, trigger: "cron" }))
       .toMatchObject({ result: "held", detail: "recording_too_short" });
     expect(soniox.created).toEqual([]);
@@ -743,6 +751,16 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(await processSession(transcriptDeps(fakeWise({ failReads: true }).ops, fakeSoniox().client), { wiseSessionId: SESSION_ID, trigger: "cron" }))
       .toMatchObject({ result: "infra", detail: "wise_read_failed" });
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "transcribing", sonioxTranscriptionId: "job-7" });
+  });
+
+  it("returns a row with a judged transcript draft to pending, not to waiting for the recording, when Wise cannot be read", async () => {
+    await seedRow({
+      state: "pending", evidence: "transcript", arm: "glm", fields: GOOD_FIELDS,
+      metadata: { draftEvidence: "transcript", judge: { faithful: true, unsupported: [] } },
+    });
+    expect(await processSession(transcriptDeps(fakeWise({ failReads: true }).ops, fakeSoniox().client), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+      .toMatchObject({ result: "infra", detail: "wise_read_failed" });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "pending", evidence: "transcript" });
   });
 
   it("stamps a new job's submit time, and does not count a failed status check once Soniox has answered", async () => {
@@ -829,6 +847,16 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     const result = await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client));
     expect(result.alertsSent).toBe(0);
     expect((await readSessionRow(db, SESSION_ID))?.metadata).not.toHaveProperty("alertKind");
+  });
+
+  it("raises no no-recording alert while a short recording waits for its recheck, or on an infra retry", async () => {
+    const longAgo = { scheduledEndAt: new Date(NOW.getTime() - 4 * 3600_000), nextAttemptAt: new Date(Date.now() + 3600_000) };
+    await seedRow({ state: "awaiting_recording", evidence: "transcript", reason: "recording_too_short", ...longAgo });
+    expect((await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client))).alertsSent).toBe(0);
+    await db.update(S).set({ reason: "infra:OPENROUTER_API_KEY missing" }).where(eq(S.wiseSessionId, SESSION_ID));
+    expect((await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client))).alertsSent).toBe(0);
+    await db.update(S).set({ reason: "recording_not_ready" }).where(eq(S.wiseSessionId, SESSION_ID));
+    expect((await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client))).alertsSent).toBe(1);
   });
 
   it("still alerts for a waiting class with no known teacher while another tutor is switched off", async () => {

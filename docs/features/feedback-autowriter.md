@@ -82,8 +82,9 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
    job not finished within ~3 minutes leaves the row `transcribing` for the next run, and one still running an hour
    after it was submitted (the stamp belongs to that job) is deleted and counted as a Soniox failure. A recording
    shorter than 70% of the scheduled class would be written up as the whole lesson, so it is held
-   (`recording_too_short`): Wise's `rawRecordings[].duration` (seconds) is checked before the job, twice 30 minutes
-   apart in case the first length was not final, and Soniox's audio length after it;
+   (`recording_too_short`): Wise's `rawRecordings[].duration` (seconds) is checked before the job — held only when
+   still short 30 minutes after it was first seen short, in case the first length was not final — and Soniox's audio
+   length after it;
 2. fetches the transcript. BGScheduler never stores it; the Soniox job is kept only until a judged draft is stored
    or the class is finished (so a retry re-fetches instead of transcribing again), then deleted. A delete that fails
    keeps the job id so the sweep retries it, and the sweep also reaps jobs no row references after 2 hours;
@@ -104,12 +105,13 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
 A webhook waits up to ~3 minutes for Soniox; the backstop only looks and comes back, so one slow job never starves
 the other classes. A transcript draft that was judged but whose POST did not go out (another POST in flight, or a
 pre-POST gate that says "try later") is reused on the retry. While Wise itself is not ready (attendance, status, the
-POST slot) the class waits in `pending`, not `awaiting_recording`. Three Soniox failures (errors, a job running
+POST slot, a failed read once a draft exists) the class waits in `pending`, not `awaiting_recording`. Three Soniox failures (errors, a job running
 over an hour, or a run whose status checks never get an answer; within one run a failed check after a good answer
 does not count, and the backstop checks once per run), several recording parts, a recording too short for the
 class, or a transcript under 800 characters → `held` + alert. A
 class still waiting for its recording (or its transcript) 3 hours after class raises a `no_recording` alert (live
-mode; not for a switched-off tutor); rows still waiting at the deadline margin expire with an alert as before.
+mode; not for a switched-off tutor, a short recording waiting for its recheck, or an infra retry); rows still
+waiting at the deadline margin expire with an alert as before.
 Soniox jobs of finished rows and of shadow drafts are deleted by the sweep when an earlier delete failed.
 
 Pilot (2026-09-29, 8 classes): on Thai/English lessons Soniox kept the English terms that Zoom's transcript lost and

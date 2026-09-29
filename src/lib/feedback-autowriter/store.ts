@@ -395,7 +395,9 @@ export async function noteSonioxRecorded(db: Database, wiseSessionId: string, tr
 /**
  * Classes still waiting for (or being transcribed from) the recording long
  * after class: raise a `no_recording` alert once, instead of only at the
- * deadline. A switched-off tutor's classes are theirs to write: no alert.
+ * deadline. Not for a switched-off tutor's classes (theirs to write), a
+ * recording waiting for its 30-min length recheck (held with its own alert
+ * next), or an infra retry (the recording may well be there).
  */
 export async function flagNoRecording(db: Database, endedBefore: Date, disabledTutors: readonly string[] = []): Promise<number> {
   const rows = await db.update(S).set({
@@ -404,6 +406,7 @@ export async function flagNoRecording(db: Database, endedBefore: Date, disabledT
   }).where(and(
     inArray(S.state, ["awaiting_recording", "transcribing"]),
     lt(S.scheduledEndAt, endedBefore),
+    sql`coalesce(${S.reason}, '') <> 'recording_too_short' and coalesce(${S.reason}, '') not like 'infra:%'`,
     disabledTutors.length > 0
       ? or(isNull(S.wiseTeacherUserId), notInArray(S.wiseTeacherUserId, [...disabledTutors]))
       : undefined,
@@ -484,7 +487,7 @@ export async function retryHeldSession(db: Database, wiseSessionId: string, inpu
     evidence: "summary",
     // A clean slate: no stale alert, error count, coverage recheck or judged draft carries over
     // (a kept Soniox job, and its submit time, may be re-used).
-    metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'recordingShortSeen' - 'judge' - 'draftEvidence' - 'transcript' - 'handover')
+    metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'recordingShortSeenAt' - 'judge' - 'draftEvidence' - 'transcript' - 'handover')
       || ${JSON.stringify({ retriedBy: input.actor })}::jsonb
       || jsonb_build_object('retriedAt', now()::text, 'retriedFrom', ${S.state}::text)`,
     alertsSent: sql`${S.alertsSent} - 'held' - 'expired'`,

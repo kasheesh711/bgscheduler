@@ -89,8 +89,9 @@ autowriter halts.
 Dashboard state "Waiting for recording" / "Transcribing" = the class was handed over (`reason` says why:
 `summary_draft_held`, `no_usable_summary`, `thai_summary`). Nothing to do: Wise's `RecordingCompletedEvent` (or the
 30-minute backstop) continues it. It ends posted, `held` (+ alert) after 3 Soniox failures (a job still running an
-hour after it was submitted counts as one), a multi-part recording, a recording shorter than 70% of the class (seen
-twice, 30 minutes apart), a transcript that is too short or speakers it cannot tell apart, or `expired` (+ alert) if
+hour after it was submitted counts as one), a multi-part recording, a recording shorter than 70% of the class (still
+short 30 minutes after first seen), a transcript that is too short or speakers it cannot tell apart, or `expired`
+(+ alert) if
 the recording never comes before the deadline margin. A second-pass class shown as `pending` has its transcript
 draft or is waiting for Wise (attendance, status, the POST slot), not for the recording.
 To turn the second pass off: `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED=false` + redeploy — classes already waiting are

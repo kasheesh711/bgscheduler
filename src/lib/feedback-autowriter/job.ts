@@ -597,8 +597,10 @@ async function processTranscript(deps: AutowriterDeps, input: {
   const { release, out } = input;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   let row = input.row;
-  // A submitted job is followed up sooner than a recording that has not appeared yet.
-  const backTo = row.sonioxTranscriptionId ? "transcribing" as const : "awaiting_recording" as const;
+  // Where an infra retry waits: a stored judged draft needs only Wise (no `no_recording` alert); a submitted
+  // job is followed up sooner than a recording that has not appeared yet.
+  const backTo = reusableTranscriptDraft(row) ? "pending" as const
+    : row.sonioxTranscriptionId ? "transcribing" as const : "awaiting_recording" as const;
 
   const detail = await readDetail(ops, row.wiseSessionId, row.wiseClassId);
   if (!detail) {
@@ -634,13 +636,16 @@ async function processTranscript(deps: AutowriterDeps, input: {
     await release({ state: "held", reason: recording.reason, alertKind: "held" });
     return out("held", recording.reason);
   }
-  // A recording that stopped early would be written up as the whole lesson. Checked
-  // twice, 30 min apart, in case Wise's length was not final at the first read.
+  // A recording that stopped early would be written up as the whole lesson. Held only
+  // when still short 30 min after it was first seen short (wall clock), in case Wise's
+  // length was not final at the first read — a repeated webhook cannot shorten the wait.
   const scheduledMinutes = scheduledWindow(detail).minutes;
   if (recording.ok && recordingTooShort(recording.durationSeconds, scheduledMinutes)) {
-    const metadata = { recordingSeconds: recording.durationSeconds, recordingShortSeen: true };
-    if ((row.metadata as { recordingShortSeen?: unknown }).recordingShortSeen !== true) {
-      await release({ state: "awaiting_recording", reason: "recording_too_short", retryInMs: AUTOWRITER_RECORDING_RECHECK_MS, metadata });
+    const seenAt = metadataDate((row.metadata as { recordingShortSeenAt?: unknown }).recordingShortSeenAt) ?? new Date();
+    const waited = Date.now() - seenAt.getTime();
+    const metadata = { recordingSeconds: recording.durationSeconds, recordingShortSeenAt: seenAt.toISOString() };
+    if (waited < AUTOWRITER_RECORDING_RECHECK_MS) {
+      await release({ state: "awaiting_recording", reason: "recording_too_short", retryInMs: AUTOWRITER_RECORDING_RECHECK_MS - waited, metadata });
       return out("awaiting_recording", "recording_too_short");
     }
     await release({ state: "held", reason: "recording_too_short", alertKind: "held", metadata });
