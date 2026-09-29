@@ -1,6 +1,6 @@
 ---
 quick_id: 260929-snx
-status: executed
+status: complete
 source_plan: ~/.claude/plans/for-online-classes-i-inherited-moonbeam.md (Soniox evaluation + pilot, approved 2026-09-29)
 ---
 
