@@ -6,6 +6,7 @@
  * grace (immediate auto-approval) and a malformed value coercing to NaN.
  */
 
+import { DrizzleQueryError } from "drizzle-orm/errors";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
 vi.mock("server-only", () => ({}));
@@ -118,14 +119,13 @@ function fakeDb(rows: unknown[]): Database {
   return { select: () => chain } as unknown as Database;
 }
 
-/** A drizzle 0.45 failure: the SQL and its parameters in the message, the SQLSTATE on `cause`. */
+/** A real drizzle 0.45 failure: the SQL and its parameters in the message, the driver's SQLSTATE on `cause`. */
 function driverError(): Error {
-  const error = new Error(
-    'Failed query: update "post_class_deductions" set "status" = $1 where "id" = $2\nparams: approved,ded-1',
-    { cause: Object.assign(new Error("could not serialize access due to concurrent update"), { code: "40001" }) },
-  );
-  error.name = "DrizzleQueryError";
-  return error;
+  const cause = Object.assign(new Error("could not serialize access due to concurrent update"), {
+    name: "NeonDbError",
+    code: "40001",
+  });
+  return new DrizzleQueryError('update "post_class_deductions" set "status" = $1 where "id" = $2', ["approved", "ded-1"], cause);
 }
 
 describe("sweep failure logging", () => {
@@ -153,7 +153,7 @@ describe("sweep failure logging", () => {
     expect(result).toEqual({ approved: 0, failed: 1 });
     expect(consoleError.mock.calls).toEqual([[
       "[post-class-auto-approve]",
-      { deductionId: "ded-1", errorName: "DrizzleQueryError", code: "40001" },
+      { deductionId: "ded-1", errorName: "DrizzleQueryError", causeName: "NeonDbError", code: "40001" },
     ]]);
   });
 
