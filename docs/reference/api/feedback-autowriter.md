@@ -17,7 +17,7 @@ Four method/path endpoints. Meaning, rules and the state machine live in [the fe
 2. **Size.** Bodies over 1 MiB (`WISE_WEBHOOK_MAX_BODY_BYTES`) get `413`, checked on `content-length` and again on the bytes read.
 3. **Kill switch.** `WISE_WEBHOOKS_ENABLED !== "true"` answers `200 { ok: true, ignored: true }` after auth and stores nothing; the backstop sweep still covers every class.
 4. **Store.** Every authenticated delivery is inserted into `wise_webhook_events` keyed by the SHA-256 of the raw body (`ON CONFLICT DO NOTHING`), so a Wise retry of the same body is a duplicate.
-5. **Dispatch.** A first-seen `MeetingEndedEvent`, `AttendanceComputedEvent` or `RecordingCompletedEvent` carrying a session id runs `processWebhookTrigger` inside `after()`: the session is re-read from Wise (the body is only a hint), the readiness gates are re-checked every 20 s for up to 3 minutes while the AI summary is still missing, and the webhook bypasses the 10-minute retry wait. The outcome is written back to the event row (`outcome`, `processed_at`).
+5. **Dispatch.** A first-seen `MeetingEndedEvent`, `AttendanceComputedEvent` or `RecordingCompletedEvent` carrying a session id runs `processWebhookTrigger` inside `after()` (740 s budget): the session is re-read from Wise (the body is only a hint), the readiness gates are re-checked every 20 s for up to 3 minutes while the AI summary is still missing, and the webhook bypasses the 10-minute retry wait. The outcome is written back to the event row (`outcome`, `processed_at`).
 
 **Responses:** `200 { ok: true, duplicate: boolean }` · `200 { ok: true, ignored: true }` · `401` · `413`. A database failure surfaces as `500`, which Wise retries.
 

@@ -35,7 +35,8 @@ export async function processWebhookTrigger(db: Database, webhookEventId: string
     await markWebhookProcessed(db, webhookEventId, "autowriter_disabled");
     return;
   }
-  const outcome = await processSession(productionDeps(db, 720_000), {
+  // 740 s = the 180 s readiness wait + one session's work (AUTOWRITER_SWEEP_MIN_REMAINING_MS), under maxDuration 800.
+  const outcome = await processSession(productionDeps(db, 740_000), {
     wiseSessionId,
     trigger: "webhook",
     waitForReadyMs: 180_000,
