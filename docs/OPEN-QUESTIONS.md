@@ -673,7 +673,7 @@ and is referenced by nobody; rows store the room *name* in `preferred_room` / `o
 Writers are the classroom schedule-email path and post-class feedback settings; readers include
 post-class dashboard/AI/tutor-emails, progress tests, learning plans and leave-request matching.
 *Re-home it in the reference docs, or grow a contacts editor under Tutor Profiles?* Related:
-`src/lib/post-class-feedback/ai.ts:158-162` is the only `tutor_contacts` read that does **not** filter
+`src/lib/post-class-feedback/ai.ts:252-256` is the only `tutor_contacts` read that does **not** filter
 `active = true`, and `src/lib/learning-plans/access.ts:47-57` matches only `onsiteEmail`/`onlineEmail`
 and ignores `primaryEmail`.
 
@@ -857,7 +857,7 @@ can come from the workspace buttons (unaudited) or the Data Health job (audited)
 distinguish them.
 
 **OPS-13 — Error detail is discarded for six post-class routes.** `sync-post-class-feedback` (via the
-shared tick, `post-class-feedback/collection-tick.ts:109-110`),
+shared tick, `post-class-feedback/collection-tick.ts:113-114`),
 `post-class-feedback-backfill/route.ts:75-78`, `payout-accrual/route.ts:33-37`, both reminders and the
 admin digest return fixed generic 500 strings, so `cron_invocations.errorSummary` carries no
 diagnostic detail. The collection tick now logs the failure's error class (never its message), but

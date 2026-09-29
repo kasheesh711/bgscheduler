@@ -566,7 +566,7 @@ The AI tables are strictly advisory. `postClassAiConcerns` has no path into `pos
 
 **Grain:** one AI review call for one feedback version — `pc_ai_runs_request_hash_idx` unique on `requestHash`.
 
-`requestHash` is a SHA-256 over session id, feedback version id, content hash, prompt version, and redaction version (`ai.ts:39-42`), so identical input never re-bills and a prompt bump deliberately produces a fresh run. `redactionVersion` is stored on the row, making it possible to tell which scrubbing rules the outbound payload used. `triggerReasons` records why the run was queued at all.
+`requestHash` is a SHA-256 over session id, feedback version id, content hash, prompt version, and redaction version (`ai.ts:50-53`), so identical input never re-bills and a prompt bump deliberately produces a fresh run. `redactionVersion` is stored on the row, making it possible to tell which scrubbing rules the outbound payload used. `triggerReasons` records why the run was queued at all.
 
 #### `postClassAiConcerns` (`post_class_ai_concerns`, lines 3524–3537)
 
