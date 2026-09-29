@@ -123,7 +123,7 @@ describe("POST /api/data-health/jobs/[jobKey]/run", () => {
     const res = await POST(request(), context("unearned_revenue"));
 
     expect(res.status).toBe(403);
-    await expect(res.json()).resolves.toEqual({ error: "Access manager capability required" });
+    await expect(res.json()).resolves.toEqual({ error: "Unearned Revenue access manager capability required" });
     expect(getUnearnedRevenueCapabilities).toHaveBeenCalledWith("kevhsh7@gmail.com");
     expect(runDataHealthJob).not.toHaveBeenCalled();
   });

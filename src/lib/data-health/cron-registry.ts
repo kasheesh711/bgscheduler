@@ -251,7 +251,7 @@ export const CRON_JOBS = [
     maxDurationSeconds: 300,
     manualOnly: false,
     dangerous: true,
-    confirmationLabel: "Emails today's progress-test digest to admins with Progress Tests access, unless it was already sent today.",
+    confirmationLabel: "Emails today's progress-test digest to admins with Progress Tests access once today's refresh has finished, unless today's digest has already run.",
     expectedBangkokMinute: 7 * 60 + 35,
     routeMethod: "GET",
   },
@@ -493,7 +493,7 @@ export const CRON_JOBS = [
     maxDurationSeconds: 300,
     manualOnly: true,
     dangerous: true,
-    confirmationLabel: "Fetches the full LINE follower roster and inserts suggested student links for review.",
+    confirmationLabel: "Fetches the full LINE follower roster, adds contacts for matched followers, and inserts suggested student links for review.",
     routeMethod: "GET",
   },
 ] as const satisfies readonly CronJobDefinition[];

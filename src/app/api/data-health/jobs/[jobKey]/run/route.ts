@@ -46,7 +46,7 @@ export async function POST(request: NextRequest, context: RunRouteContext) {
   if (job.key === "unearned_revenue") {
     const capabilities = await getUnearnedRevenueCapabilities(session.user.email);
     if (!capabilities.includes("access_manager")) {
-      return NextResponse.json({ error: "Access manager capability required" }, { status: 403 });
+      return NextResponse.json({ error: "Unearned Revenue access manager capability required" }, { status: 403 });
     }
   }
 
