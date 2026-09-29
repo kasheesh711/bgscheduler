@@ -478,3 +478,14 @@ date exceptions, office-network configuration, daily attendance, correction requ
 immutable audit evidence. They use durable tutor keys and survive Wise snapshot rotation.
 The complete [table inventory and transaction contract](../api/tutor-attendance.md#persistence)
 accompany the [feature](../../features/tutor-attendance.md).
+
+## Feedback autowriter — migration 0097
+
+| SQL table | Drizzle export | Grain |
+|---|---|---|
+| `feedback_autowriter_control` | `feedbackAutowriterControl` | The single control row: mode, halt, per-tutor switches, sweep lease |
+| `feedback_autowriter_sessions` | `feedbackAutowriterSessions` | One Wise session the autowriter looked at; the exactly-once POST ledger (unique `wise_session_id`) |
+| `feedback_autowriter_calls` | `feedbackAutowriterCalls` | One OpenRouter call (writer or judge) with billed usage |
+| `wise_webhook_events` | `wiseWebhookEvents` | One Wise webhook delivery (unique synthesized `dedupe_key`) |
+
+See [the feature page](../../features/feedback-autowriter.md).

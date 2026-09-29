@@ -483,3 +483,17 @@ regardless of the flag. Turning the flag off preserves Google login and existing
 | `WISE_CLASSROOM_AUTOMATION_ENABLED` | disabled | Only exact `true` enables `wise_snapshot`, `classroom_morning`, `classroom_publish_recovery`, `classroom_admin_email`, and `classroom_weekend_check`. Missing, empty and all other values pause these jobs. Kevin's authenticated manual sync/run/publish remains available. |
 
 The manual operations owner is the exact normalized identity `kevhsh7@gmail.com`, further constrained by existing `SUPER_ADMIN_EMAILS` and enabled/current admin access. Adding a different website owner does not grant these operations. See [the shutdown runbook](../operations/classroom-owner-shutdown.md).
+
+## Feedback autowriter and Wise webhook (migration 0097)
+
+| Variable | Purpose | Consumed at | If unset |
+|---|---|---|---|
+| `OPENROUTER_API_KEY` | Bearer key for OpenRouter (writer, fallback writer, judge) | [`feedback-autowriter/config.ts`](../../src/lib/feedback-autowriter/config.ts) | Sessions stay `pending` and the run reports an infrastructure error |
+| `FEEDBACK_AUTOWRITER_ENABLED` | Outer gate for the cron and the webhook dispatch | same | Off — exact `"true"` only |
+| `FEEDBACK_AUTOWRITER_ALERT_EMAILS` | Comma-separated recipients of the held-class digest | same | Digest not delivered → run reports `ok:false` |
+| `WISE_WEBHOOKS_ENABLED` | Receiver stores and dispatches deliveries | [`feedback-autowriter/webhook.ts`](../../src/lib/feedback-autowriter/webhook.ts) | Authenticated deliveries are acknowledged (200) and ignored |
+| `WISE_WEBHOOK_SECRET` | Shared key Wise sends with each delivery | [`api/wise/webhook/route.ts`](../../src/app/api/wise/webhook/route.ts) | Every delivery is refused (401) |
+| `WISE_WEBHOOK_AUTH_HEADER` | Header carrying the key | same | `authorization` |
+
+Runtime modes (`off`/`shadow`/`live`), the halt and per-tutor switches live in the `feedback_autowriter_control`
+row, not in env ([runbook](../operations/feedback-autowriter.md)).

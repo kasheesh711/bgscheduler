@@ -591,7 +591,10 @@ zero-decimal currencies, wrong for two-decimal ones, and unexercised today.
 ## Writeback operations
 
 BGScheduler is **read-mostly**. Four helpers mutate Wise; each is narrow in field
-scope, and three of the four are additionally flag-gated.
+scope, and three of the four are additionally flag-gated. A fifth write — teacher
+feedback — is the [feedback autowriter](../features/feedback-autowriter.md), run by the
+Wise webhook, a backstop cron and its CLI, and gated by `FEEDBACK_AUTOWRITER_ENABLED`
+plus the database control row.
 
 | Helper | Endpoint | Fields written | Gate |
 |---|---|---|---|
@@ -600,6 +603,7 @@ scope, and three of the four are additionally flag-gated.
 | `updateWiseCourseSubject` | `PUT /teacher/editClass` | `classId`, `subject` | Verified plan + roster/subject re-read before write |
 | `updateSessionSubject` | `PUT /teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE` | `subject` | `WISE_SESSION_SUBJECT_UPDATE_VERIFIED=true` **and** typed confirmation |
 | `scheduleWiseSession` | `POST /teacher/classes/{classId}/sessions` | one `SINGLE` session | `WISE_SESSION_CREATE_VERIFIED=true` **and** a passing availability pre-check |
+| `createWiseFeedbackOps().postFeedback` ([feedback-autowriter](../../src/lib/feedback-autowriter/run.ts)) | `POST /teacher/classes/{classId}/session/{sessionId}/feedback` | teacher feedback `answers` (positional, form order), `sessionStatus`, `creditsConsumed` | `FEEDBACK_AUTOWRITER_ENABLED=true` **and** control row `mode = live`, not halted, tutor switched on: roster tutors only, not-yet-due sessions, only Wise's own blank auto-submission, generation lease + single POST claim (one POST in flight), no-retry client, GET + credit + submit-event verification |
 
 ### Session location update — `updateSessionLocation`
 
@@ -792,6 +796,7 @@ subsystem plus trigger that drives it. Cron expressions are UTC, from
 | PUT | `/teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE` | `updateSessionSubject` | **write** | Student Promotions → gated `WISE_SESSION_SUBJECT_UPDATE_VERIFIED` + typed confirm |
 | PUT | `/institutes/{id}/students/{studentId}/registration` | `updateWiseStudentRegistrationAnswers` | **write** | Student Promotions → `5 17 30 6 *` / verified apply |
 | PUT | `/teacher/editClass` | `updateWiseCourseSubject` | **write** | Student Promotions → verified apply |
+| POST | `/teacher/classes/{classId}/session/{sessionId}/feedback` | feedback autowriter `postFeedback` | **write** | Feedback autowriter (Wise webhook, `8,22,38,52 * * * *` backstop, CLI); same endpoint the Wise web app uses to submit and to edit teacher feedback |
 | — | *(none — dry run only)* | `confirmLineWiseAction` ([operations](../../src/lib/wise/operations.ts)) | none | LINE scheduler review → admin; never sends a request |
 
 ## Open items
