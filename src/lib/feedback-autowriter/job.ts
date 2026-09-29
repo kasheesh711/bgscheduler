@@ -1184,7 +1184,7 @@ export async function runSweep(deps: AutowriterDeps): Promise<SweepResult> {
  * Soniox accepted it, or a worker that died before storing the id) are reaped
  * too. Bounded per sweep; failures are retried next time.
  */
-async function cleanUpSonioxJobs(deps: AutowriterDeps, soniox: SonioxClient): Promise<void> {
+export async function cleanUpSonioxJobs(deps: AutowriterDeps, soniox: SonioxClient): Promise<void> {
   const { db } = deps;
   let budget = AUTOWRITER_SONIOX_CLEANUP_MAX;
   await stampSonioxRetention(db, AUTOWRITER_SONIOX_RETAIN_MS);

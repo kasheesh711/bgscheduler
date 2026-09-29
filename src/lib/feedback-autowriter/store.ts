@@ -372,32 +372,40 @@ export async function setSonioxTranscription(db: Database, wiseSessionId: string
 const SONIOX_DONE_STATES: readonly AutowriterState[] = [...TERMINAL_STATES, "would_submit"];
 
 /**
+ * Rows done with their Soniox job: those above, and rows past their deadline that were never finished (mode
+ * `off` skips the expiry step, so they would otherwise keep their job indefinitely) — never a POST in flight or a
+ * row being worked on.
+ */
+const doneWithSonioxJob = () => and(
+  isNotNull(S.sonioxTranscriptionId),
+  or(
+    inArray(S.state, [...SONIOX_DONE_STATES]),
+    and(lt(S.deadlineAt, nowSql), notInArray(S.state, ["posting", "awaiting_event", "generating"])),
+  ),
+);
+
+/**
  * Start the review window of rows that became done with their Soniox job since the last sweep, however they
  * got there (posted, shadow draft, a hold, an error cap, an expiry): `metadata.sonioxRetainUntil` = now +
- * `retainMs`, on the database clock. Set once; a row sent back to work (owner retry, going live) loses it.
+ * `retainMs`, on the database clock. Set once; an owner retry clears it, and so does going live for a draft that
+ * may transcribe again. Housekeeping only: `updated_at` is left alone.
  */
 export async function stampSonioxRetention(db: Database, retainMs: number): Promise<number> {
   const retainSeconds = Math.round(retainMs / 1000);
   const rows = await db.update(S).set({
     metadata: sql`${S.metadata} || jsonb_build_object('sonioxRetainUntil', now() + make_interval(secs => ${retainSeconds}::double precision))`,
-    updatedAt: nowSql,
-  }).where(and(
-    isNotNull(S.sonioxTranscriptionId),
-    inArray(S.state, [...SONIOX_DONE_STATES]),
-    sql`not ${S.metadata} ? 'sonioxRetainUntil'`,
-  )).returning({ id: S.id });
+  }).where(and(doneWithSonioxJob(), sql`not ${S.metadata} ? 'sonioxRetainUntil'`)).returning({ id: S.id });
   return rows.length;
 }
 
 /**
- * Rows done with their Soniox job whose review window is over (`metadata.sonioxRetainUntil`, see above) or that
- * were triaged (`metadata.triagedAt`): the sweep deletes the job. A row not yet stamped is never listed.
+ * Rows done with their Soniox job whose review window is over (`metadata.sonioxRetainUntil`, see above), or that
+ * were triaged (`metadata.triagedAt`, stamped or not): the sweep deletes the job.
  */
 export async function listSonioxCleanup(db: Database): Promise<Array<{ wiseSessionId: string; sonioxTranscriptionId: string }>> {
   const rows = await db.select({ wiseSessionId: S.wiseSessionId, sonioxTranscriptionId: S.sonioxTranscriptionId })
     .from(S).where(and(
-      isNotNull(S.sonioxTranscriptionId),
-      inArray(S.state, [...SONIOX_DONE_STATES]),
+      doneWithSonioxJob(),
       sql`(${S.metadata} ? 'triagedAt' or (${S.metadata} ->> 'sonioxRetainUntil')::timestamptz < now())`,
     ));
   return rows.flatMap((row) => row.sonioxTranscriptionId ? [{ wiseSessionId: row.wiseSessionId, sonioxTranscriptionId: row.sonioxTranscriptionId }] : []);
@@ -446,10 +454,10 @@ export async function flagNoRecording(db: Database, endedBefore: Date, disabledT
 }
 
 export async function clearSonioxTranscription(db: Database, wiseSessionId: string, transcriptionId: string): Promise<void> {
+  // Housekeeping: `updated_at` is left alone (the dashboard dates shadow drafts by it).
   await db.update(S).set({
     sonioxTranscriptionId: null,
     metadata: sql`${S.metadata} - 'sonioxSubmittedJob' - 'sonioxSubmittedAt'`,
-    updatedAt: nowSql,
   }).where(and(eq(S.wiseSessionId, wiseSessionId), eq(S.sonioxTranscriptionId, transcriptionId)));
 }
 
@@ -491,9 +499,14 @@ export async function expireOverdueRows(db: Database, input: {
 
 /** Shadow drafts become eligible again when the owner switches to live. */
 export async function requeueShadowDrafts(db: Database, minDeadline: Date): Promise<number> {
-  // Back to work: its transcript's review window starts again when it is done.
+  // Back to work. A judged transcript draft is posted as it is, never re-read: its transcript's review window
+  // keeps running. Any other draft may transcribe again, so its window starts again when it is next done.
   const rows = await db.update(S).set({
-    state: "pending", nextAttemptAt: null, metadata: sql`${S.metadata} - 'sonioxRetainUntil' - 'triagedAt'`, updatedAt: nowSql,
+    state: "pending",
+    nextAttemptAt: null,
+    metadata: sql`case when ${S.metadata} ->> 'draftEvidence' = 'transcript' and ${S.metadata} -> 'judge' ->> 'faithful' = 'true'
+      then ${S.metadata} - 'triagedAt' else ${S.metadata} - 'sonioxRetainUntil' - 'triagedAt' end`,
+    updatedAt: nowSql,
   })
     .where(and(eq(S.state, "would_submit"), gte(S.deadlineAt, minDeadline)))
     .returning({ id: S.id });

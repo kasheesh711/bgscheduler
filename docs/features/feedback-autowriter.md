@@ -93,8 +93,10 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
    retry re-fetches instead of transcribing again) and, once the class is done with it (posted, shadow draft, held,
    expired or skipped, however it got there), for review for 72 hours (owner decision, 29 Sep), then the sweep
    deletes it. The first sweep to see the class done stamps `metadata.sonioxRetainUntil` = now + 72 h (so the window
-   starts within one sweep of the class finishing); an owner retry or going live clears it, and the window starts
-   again when the class is next done. A reviewer finds the job by the row's `soniox_transcription_id` (Soniox
+   starts within one sweep of the class finishing). A class left unfinished past its deadline (mode `off` skips the
+   expiry) counts as done, and the job's cleanup still runs when `FEEDBACK_AUTOWRITER_ENABLED` is off. An owner retry
+   clears the stamp, and so does going live for a draft that may transcribe again (a judged transcript draft keeps
+   its window); the window starts again when the class is next done. A reviewer finds the job by the row's `soniox_transcription_id` (Soniox
    Console). `metadata.triagedAt` ends the window early; nothing writes it yet — it is reserved for the review
    surface of the operating loop. A delete that fails keeps the job id so the sweep retries it, and the sweep also
    reaps jobs no row references after 2 hours;

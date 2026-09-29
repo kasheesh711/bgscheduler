@@ -366,10 +366,19 @@ describe("feedback autowriter store (Postgres)", () => {
     expect(await requeueShadowDrafts(db, new Date())).toBe(1);
     const row = await readSessionRow(db, SESSION);
     expect(row?.state).toBe("pending");
-    // Back to work: the review window restarts when it is done again; the judged draft is kept for the POST.
+    // Back to work: a summary draft may transcribe again, so its review window restarts when it is done again.
     expect(row?.metadata).not.toHaveProperty("sonioxRetainUntil");
     expect(row?.metadata).not.toHaveProperty("triagedAt");
     expect(row?.metadata).toMatchObject({ judge: { faithful: true } });
+
+    // A judged transcript draft is posted as it is: its window keeps running.
+    const next = (await claimGeneration(db, SESSION, 60_000))!;
+    await releaseGeneration(db, SESSION, next, {
+      state: "would_submit", reason: "shadow",
+      metadata: { sonioxRetainUntil: "2026-10-01T00:00:00.000Z", draftEvidence: "transcript", judge: { faithful: true } },
+    });
+    expect(await requeueShadowDrafts(db, new Date())).toBe(1);
+    expect((await readSessionRow(db, SESSION))?.metadata).toMatchObject({ sonioxRetainUntil: "2026-10-01T00:00:00.000Z" });
     await haltAutowriter(db, "noop");
   });
 

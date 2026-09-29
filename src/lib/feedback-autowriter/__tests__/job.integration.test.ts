@@ -4,7 +4,7 @@ import type { ScheduleEmailSendInput } from "@/lib/classrooms/schedule-email";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
-import { processSession, runSweep, type AutowriterDeps } from "../job";
+import { cleanUpSonioxJobs, processSession, runSweep, type AutowriterDeps } from "../job";
 import type { OpenRouterCallResult } from "../openrouter";
 import { JUDGE_PROMPT_VERSION } from "../judge";
 import { PROMPT_VERSION } from "../prompt";
@@ -921,6 +921,8 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       fields: expect.objectContaining({ topics: GOOD_FIELDS.topics }),
       metadata: { draftEvidence: "transcript", judge: { faithful: true } },
     });
+    // Not done yet: its transcript's review window has not started.
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).not.toHaveProperty("sonioxRetainUntil");
 
     await db.update(S).set({ nextAttemptAt: sql`now() - interval '1 second'` as never }).where(eq(S.wiseSessionId, SESSION_ID));
     const again = fakeSoniox();
@@ -931,6 +933,48 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(again.created).toEqual([]);
     expect(model.calls).toEqual([]);
     expect(retry.posts).toHaveLength(1);
+    // The window starts at the first sweep after the POST, not at the attempt that had to wait.
+    await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client));
+    const retainUntil = new Date(String(((await readSessionRow(db, SESSION_ID))?.metadata as { sonioxRetainUntil?: unknown }).sonioxRetainUntil)).getTime();
+    expect(retainUntil - Date.now()).toBeGreaterThan(71.9 * 3600_000);
+  });
+
+  it("never starts the review window of a class still being worked on", async () => {
+    await seedRow({
+      state: "transcribing", reason: "zoom_transcript_pending", evidence: "transcript", sonioxTranscriptionId: "job-3",
+      nextAttemptAt: new Date(Date.now() + 3600_000),
+    });
+    const soniox = fakeSoniox();
+    await runSweep(transcriptDeps(fakeWise().ops, soniox.client));
+    expect(soniox.removed).toEqual([]);
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).not.toHaveProperty("sonioxRetainUntil");
+
+    await db.update(S).set({ state: "held", reason: "speakers_unclear" }).where(eq(S.wiseSessionId, SESSION_ID));
+    await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client));
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).toHaveProperty("sonioxRetainUntil");
+  });
+
+  it("with the autowriter off, still starts and ends the window of a class left unfinished past its deadline", async () => {
+    await updateControl(db, { mode: "off" }, "t@x.com");
+    await seedRow({
+      state: "transcribing", reason: "zoom_transcript_pending", evidence: "transcript", sonioxTranscriptionId: "job-4",
+      deadlineAt: new Date(Date.now() - 3600_000), nextAttemptAt: new Date(Date.now() + 3600_000),
+    });
+    await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client));
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).toHaveProperty("sonioxRetainUntil");
+
+    await db.update(S).set({ metadata: sql`${S.metadata} || jsonb_build_object('sonioxRetainUntil', now() - interval '1 minute')` as never })
+      .where(eq(S.wiseSessionId, SESSION_ID));
+    const over = fakeSoniox();
+    await runSweep(transcriptDeps(fakeWise().ops, over.client));
+    expect(over.removed).toEqual(["job-4"]);
+  });
+
+  it("cleans up Soniox jobs on their own, as the job does when the autowriter is switched off", async () => {
+    await seedRow({ state: "held", evidence: "transcript", sonioxTranscriptionId: "job-8", metadata: { sonioxRetainUntil: "2026-01-01T00:00:00.000Z" } });
+    const soniox = fakeSoniox();
+    await cleanUpSonioxJobs(transcriptDeps(fakeWise().ops, soniox.client), soniox.client as never);
+    expect(soniox.removed).toEqual(["job-8"]);
   });
 
   it("works from the row as it is under the lease, not as first read", async () => {
