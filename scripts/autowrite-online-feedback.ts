@@ -19,6 +19,7 @@
  *
  * Run with: npx tsx --tsconfig scripts/tsconfig.json scripts/autowrite-online-feedback.ts …
  */
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { getDb } from "@/lib/db";
 import { assignModelArms } from "@/lib/feedback-autowriter/ab";
@@ -55,6 +56,19 @@ import { AUTOWRITER_DEADLINE_MARGIN_MS } from "@/lib/feedback-autowriter/types";
 import { loadPayoutScriptEnvironment } from "./lib/payout-script";
 
 loadPayoutScriptEnvironment();
+stampLocalCommit();
+
+/** Drafts and POSTs made from this checkout are stamped with its commit (plus "+dirty"), as a deploy's are with its own. */
+function stampLocalCommit(): void {
+  if (process.env.VERCEL_GIT_COMMIT_SHA) return;
+  try {
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    const dirty = execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { encoding: "utf8" }).trim() !== "";
+    process.env.AUTOWRITER_LOCAL_COMMIT = `local:${sha}${dirty ? "+dirty" : ""}`;
+  } catch {
+    process.env.AUTOWRITER_LOCAL_COMMIT = "local:unknown";
+  }
+}
 
 function flag(name: string): boolean {
   return process.argv.includes(`--${name}`);

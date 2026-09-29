@@ -365,22 +365,27 @@ export async function setSonioxTranscription(db: Database, wiseSessionId: string
 }
 
 /**
- * Rows whose Soniox job is no longer needed: finished rows, and shadow drafts
- * (a judged draft is stored; the transcript is never read again).
+ * Rows done with their Soniox job: finished rows, and shadow drafts (a judged
+ * draft is stored; the writer never reads the transcript again). Their job is
+ * kept only for review, then deleted by the sweep.
  */
 const SONIOX_DONE_STATES: readonly AutowriterState[] = [...TERMINAL_STATES, "would_submit"];
 
 /**
- * Rows done with their Soniox job, whose review window is over: kept for triage until
- * `metadata.sonioxRetainUntil` (at most 72 h) or until the class is triaged (`metadata.triagedAt`), then the
- * sweep deletes the job. Rows without a retention stamp (before it existed, or a delete that failed) go at once.
+ * Rows done with their Soniox job whose review window is over: kept for triage until
+ * `metadata.sonioxRetainUntil` (stamped 72 h ahead when the class finishes with its transcript) or until the
+ * class is triaged (`metadata.triagedAt`), then the sweep deletes the job. A row that reached a done state
+ * any other way (an error cap, an expiry, a gate hold) or whose stamp failed has no stamp: its window runs
+ * `retainMs` from the row's last update, so no path deletes a transcript before it can be reviewed.
  */
-export async function listSonioxCleanup(db: Database): Promise<Array<{ wiseSessionId: string; sonioxTranscriptionId: string }>> {
+export async function listSonioxCleanup(db: Database, retainMs: number): Promise<Array<{ wiseSessionId: string; sonioxTranscriptionId: string }>> {
+  const retainSeconds = Math.round(retainMs / 1000);
   const rows = await db.select({ wiseSessionId: S.wiseSessionId, sonioxTranscriptionId: S.sonioxTranscriptionId })
     .from(S).where(and(
       isNotNull(S.sonioxTranscriptionId),
       inArray(S.state, [...SONIOX_DONE_STATES]),
-      sql`(${S.metadata} ->> 'sonioxRetainUntil' is null or (${S.metadata} ->> 'sonioxRetainUntil')::timestamptz < now() or ${S.metadata} ? 'triagedAt')`,
+      sql`(coalesce((${S.metadata} ->> 'sonioxRetainUntil')::timestamptz, ${S.updatedAt} + make_interval(secs => ${retainSeconds}::double precision)) < now()
+        or ${S.metadata} ? 'triagedAt')`,
     ));
   return rows.flatMap((row) => row.sonioxTranscriptionId ? [{ wiseSessionId: row.wiseSessionId, sonioxTranscriptionId: row.sonioxTranscriptionId }] : []);
 }
@@ -506,9 +511,10 @@ export async function retryHeldSession(db: Database, wiseSessionId: string, inpu
     leaseUntil: null,
     // A retry starts again on the fast path; it may still hand over to the transcript pass.
     evidence: "summary",
-    // A clean slate: no stale alert, error count, coverage recheck or judged draft carries over
-    // (a kept Soniox job, and its submit time, may be re-used).
-    metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'recordingShortSeenAt' - 'judge' - 'draftEvidence' - 'transcript' - 'handover')
+    // A clean slate: no stale alert, error count, coverage recheck, judged draft (nor its stamp) or review
+    // window carries over (a kept Soniox job, and its submit time, may be re-used).
+    metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'genericErrors' - 'recordingShortSeenAt' - 'judge' - 'draftEvidence'
+      - 'pipeline' - 'transcript' - 'handover' - 'sonioxRetainUntil' - 'triagedAt')
       || ${JSON.stringify({ retriedBy: input.actor })}::jsonb
       || jsonb_build_object('retriedAt', now()::text, 'retriedFrom', ${S.state}::text)`,
     alertsSent: sql`${S.alertsSent} - 'held' - 'expired'`,

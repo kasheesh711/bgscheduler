@@ -228,10 +228,11 @@ export async function processSession(deps: AutowriterDeps, input: {
   if (!token) return out("busy_or_not_due");
   const release = (to: Parameters<typeof releaseGeneration>[3]) => releaseGeneration(db, input.wiseSessionId, token, to);
 
+  let leased: AutowriterSessionRow | null = null;
   try {
     // Re-read under the lease: another worker may have moved the row since it
     // was first read (a new Soniox job, a stored draft, the second pass).
-    const leased = await readSessionRow(db, input.wiseSessionId);
+    leased = await readSessionRow(db, input.wiseSessionId);
     // Taken from us in between (an owner action, the rollback SQL): not ours to work on.
     if (!leased || leased.state !== "generating" || leased.leaseToken !== token) return out("busy_or_not_due", "lease_lost");
     return await processLeased(deps, {
@@ -240,25 +241,34 @@ export async function processSession(deps: AutowriterDeps, input: {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 120) : "unknown";
-    // Retried, but not until the deadline: the third unexpected error holds the class for a person.
-    const errors = (Number((row.metadata as { genericErrors?: unknown }).genericErrors ?? 0) || 0) + 1;
-    if (errors >= AUTOWRITER_MAX_GENERIC_ERRORS) {
-      await release({ state: "held", reason: `error:${message}`, alertKind: "held", countRetry: true, metadata: { genericErrors: errors } });
+    // Retried, but not until the deadline: the third unexpected error holds the class for a person. Counted from
+    // the row as read under the lease (the first read may predate another worker's count).
+    const counted = leased ?? row;
+    const errors = (Number((counted.metadata as { genericErrors?: unknown }).genericErrors ?? 0) || 0) + 1;
+    if (errors >= AUTOWRITER_MAX_GENERIC_ERRORS
+      && await release({ state: "held", reason: `error:${message}`, alertKind: "held", countRetry: true, metadata: { genericErrors: errors } })) {
       return out("held", `error:${message}`);
     }
+    // Below the cap, or the row had already left `generating` (the error came after a POST claim or a hold):
+    // then neither release writes anything, and the error is reported as infra rather than as a hold.
     await release({ state: "pending", reason: `error:${message}`, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true, metadata: { genericErrors: errors } });
     return out("infra", error instanceof Error ? error.message.slice(0, 200) : "unknown error");
   }
 }
 
+/** The code running now: the Vercel deploy's commit, or the CLI's local checkout (`local:<sha>[+dirty]`). */
+function currentCommit(): string | null {
+  return process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.AUTOWRITER_LOCAL_COMMIT ?? null;
+}
+
 /**
- * What produced a draft, stored with it and with the POST claim: the deploy's commit, the prompt and judge
- * versions, the model arm and the evidence. Changes that alter output without bumping a version (nicknames, the
- * guest rule) are still traceable by commit.
+ * What produced a draft, stored with it and with the POST claim: the commit, the prompt and judge versions, the
+ * model arm and the evidence. Changes that alter output without bumping a version (nicknames, the guest rule) are
+ * still traceable by commit. A reused draft keeps the stamp of the attempt that wrote it.
  */
 function pipelineStamp(evidence: EvidenceKind, arm: ModelArm): Record<string, unknown> {
   return {
-    commitSha: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
+    commitSha: currentCommit(),
     promptVersion: PROMPT_VERSION,
     judgeVersion: JUDGE_PROMPT_VERSION,
     arm,
@@ -506,7 +516,7 @@ async function postDraft(deps: AutowriterDeps, input: {
   submission: SubmissionState;
   billing: BillingPlan;
   mappings: readonly FeedbackFieldMapping[];
-  draft: { arm: ModelArm; fields: FeedbackFieldAnswers; judge: JudgeOutput };
+  draft: StoredDraft;
   evidence: EvidenceKind;
   extraMetadata?: Record<string, unknown>;
   release: Release;
@@ -516,7 +526,7 @@ async function postDraft(deps: AutowriterDeps, input: {
   const { row, release, out, draft, submission } = input;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   // The draft exists: a retry waits for Wise or the POST slot, not for the recording (no `no_recording` alert).
-  const pipeline = pipelineStamp(input.evidence, draft.arm);
+  const pipeline = draft.pipeline ?? pipelineStamp(input.evidence, draft.arm);
   const draftPatch = {
     arm: draft.arm,
     fields: draft.fields,
@@ -543,7 +553,8 @@ async function postDraft(deps: AutowriterDeps, input: {
     outcome = await submitFeedbackGuarded({
       ops,
       store: sessionSubmitStore(db, row.wiseSessionId, input.token, {
-        expected: submission, judge: draft.judge, draftEvidence: input.evidence, pipeline, ...(input.extraMetadata ?? {}),
+        expected: submission, judge: draft.judge, draftEvidence: input.evidence, pipeline, postedFromCommit: currentCommit(),
+        ...(input.extraMetadata ?? {}),
       }),
       plan: {
         sessionId: row.wiseSessionId,
@@ -609,22 +620,26 @@ async function postDraft(deps: AutowriterDeps, input: {
   }
 }
 
+/** A judged draft on its way to a POST; `pipeline` is the stamp of the attempt that wrote it, when reused. */
+type StoredDraft = { arm: ModelArm; fields: FeedbackFieldAnswers; judge: JudgeOutput; pipeline?: Record<string, unknown> };
+
 /** A judged transcript draft kept from an attempt whose POST did not go out. */
-function reusableTranscriptDraft(row: AutowriterSessionRow): { arm: ModelArm; fields: FeedbackFieldAnswers; judge: JudgeOutput } | null {
-  const metadata = row.metadata as { draftEvidence?: unknown; judge?: JudgeOutput };
+function reusableTranscriptDraft(row: AutowriterSessionRow): StoredDraft | null {
+  const metadata = row.metadata as { draftEvidence?: unknown; judge?: JudgeOutput; pipeline?: unknown };
   if (metadata.draftEvidence !== "transcript" || metadata.judge?.faithful !== true) return null;
   if (!row.fields || !row.arm) return null;
-  return { arm: row.arm, fields: row.fields as unknown as FeedbackFieldAnswers, judge: metadata.judge };
+  const pipeline = metadata.pipeline && typeof metadata.pipeline === "object" ? metadata.pipeline as Record<string, unknown> : undefined;
+  return { arm: row.arm, fields: row.fields as unknown as FeedbackFieldAnswers, judge: metadata.judge, pipeline };
 }
 
 const SONIOX_TERMS = ["ISEB", "11+", "13+", "NVR", "Non-Verbal Reasoning", "Verbal Reasoning", "IGCSE", "IB", "SAT", "A-level"];
 
 /**
  * Second pass: write from a Soniox transcript of Wise's recording. The lease is
- * held throughout. The Soniox job id is stored as soon as it exists and the job
- * is kept until a judged draft is stored or the class is finished, so a retry
- * re-fetches instead of re-transcribing; it is then deleted (the sweep retries
- * a failed delete, and reaps jobs nothing references).
+ * held throughout. The Soniox job id is stored as soon as it exists, so a retry
+ * re-fetches instead of re-transcribing. Once the class is done with it the job
+ * is kept for review for at most 72 h, then the sweep deletes it (and reaps jobs
+ * nothing references).
  */
 async function processTranscript(deps: AutowriterDeps, input: {
   row: AutowriterSessionRow;
@@ -704,7 +719,10 @@ async function processTranscript(deps: AutowriterDeps, input: {
    * sweep deletes it (owner decision, 29 Sep). Nothing is stored on our side; the job id stays on the row.
    */
   const finishJob = async (jobId: string) => {
-    await retainSonioxTranscription(db, row.wiseSessionId, jobId, new Date(Date.now() + AUTOWRITER_SONIOX_RETAIN_MS));
+    // Best effort: without the stamp the sweep keeps the job for 72 h from the row's last update instead, and a
+    // failed stamp must not replace the class's real outcome.
+    await retainSonioxTranscription(db, row.wiseSessionId, jobId, new Date(Date.now() + AUTOWRITER_SONIOX_RETAIN_MS))
+      .catch((error: unknown) => console.error("[feedback-autowriter] retention stamp failed", error instanceof Error ? error.name : "unknown"));
   };
 
   const stored = reusableTranscriptDraft(row);
@@ -721,7 +739,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
   const transcribeFailed = async (reason: string, options: { infra: boolean; keepJob: string | null }): Promise<ProcessOutcome> => {
     const errors = transcribeErrors + 1;
     if (errors >= AUTOWRITER_MAX_TRANSCRIBE_ERRORS) {
-      // A job id kept here is deleted by the sweep once the row is finished.
+      // A job id kept here is kept for review like any finished class's, then deleted by the sweep.
       await release({ state: "held", reason, alertKind: "held", metadata: { transcribeErrors: errors } });
       return out("held", reason);
     }
@@ -811,7 +829,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
     return transcribeFailed(`soniox_error:${(status.errorMessage ?? "unknown").slice(0, 120)}`, { infra: false, keepJob: gone ? null : jobId });
   }
 
-  // 3. Fetch (kept at Soniox until a judged draft is stored; re-fetching is free).
+  // 3. Fetch (the job stays at Soniox until the review window ends; re-fetching is free).
   let transcript: Awaited<ReturnType<typeof soniox.transcript>>;
   try {
     transcript = await soniox.transcript(jobId);
@@ -904,7 +922,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
     draft: { arm: result.arm, fields: result.fields, judge: result.judge }, evidence: "transcript",
     extraMetadata: { transcript: transcriptMeta, ...guestMetadata(student) }, release, out,
   });
-  // The judged draft is stored (or the class is finished): the transcript is no longer needed.
+  // The judged draft is stored (or the class is finished): keep the transcript for review only.
   await finishJob(jobId);
   return outcome;
 }
@@ -1174,15 +1192,15 @@ export async function runSweep(deps: AutowriterDeps): Promise<SweepResult> {
 }
 
 /**
- * Delete Soniox jobs that are no longer needed: those recorded on finished rows
- * (a delete that failed earlier), and orphans no row references (a create that
- * timed out after Soniox accepted it, or a worker that died before storing the
- * id). Bounded per sweep; failures are retried next time.
+ * Delete Soniox jobs that are no longer needed: those of finished rows whose
+ * review window is over (or that were triaged), and orphans no row references
+ * (a create that timed out after Soniox accepted it, or a worker that died
+ * before storing the id). Bounded per sweep; failures are retried next time.
  */
 async function cleanUpSonioxJobs(deps: AutowriterDeps, soniox: SonioxClient): Promise<void> {
   const { db } = deps;
   let budget = AUTOWRITER_SONIOX_CLEANUP_MAX;
-  for (const job of await listSonioxCleanup(db)) {
+  for (const job of await listSonioxCleanup(db, AUTOWRITER_SONIOX_RETAIN_MS)) {
     if (budget <= 0 || remaining(deps) < 60_000) return;
     budget -= 1;
     const gone = await soniox.remove(job.sonioxTranscriptionId).catch(() => null);
