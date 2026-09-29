@@ -40,7 +40,7 @@ function run(replies: OpenRouterCallResult[]) {
       wiseSessionId: "6a0000000000000000000002",
       studentFullName: STUDENT_NAME,
       studentDisplayName: "Somchai",
-      subject: "Mathematics",
+      classDetails: ["Programme: 11+/13+", "Class subject: NVR", "Terms: 11+/13+ = the ISEB 11+/13+ entrance tests"],
       scheduledMinutes: 60,
       summary: { text: "Overview: Kevin and Somchai practised fractions; Somchai rushed simplification but corrected it.", meetingUUIDs: [] },
     },
@@ -68,6 +68,18 @@ describe("runWritingPipeline", () => {
     const judgeText = requests[1].messages.map((message) => message.content).join("\n");
     expect(judgeText).not.toMatch(/Somchai|Kevin/u);
     expect(judgeText).toContain("[STUDENT_1]");
+  });
+
+  it("gives the judge the same trusted class details the writer had", async () => {
+    const { promise, requests } = run([GLM(writerJson), GLM(FAITHFUL)]);
+    await promise;
+    const writerText = requests[0].messages.map((message) => message.content).join("\n");
+    const judgeText = requests[1].messages.map((message) => message.content).join("\n");
+    for (const text of [writerText, judgeText]) {
+      expect(text).toContain("- Programme: 11+/13+");
+      expect(text).toContain("- Class subject: NVR");
+    }
+    expect(judgeText).toContain("naming the programme, exam or subject they give is supported");
   });
 
   it("falls back to Luna when the GLM draft is unfaithful, and has GLM judge it", async () => {

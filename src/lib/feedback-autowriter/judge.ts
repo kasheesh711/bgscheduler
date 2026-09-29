@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
 
-export const JUDGE_PROMPT_VERSION = 1;
+export const JUDGE_PROMPT_VERSION = 2;
 
 export const JUDGE_JSON_SCHEMA = {
   type: "object",
@@ -29,16 +29,21 @@ const JUDGE_SYSTEM_PROMPT = [
   "List every factual claim about THIS lesson in the feedback — topics, what the student did or got wrong, scores,",
   "materials, homework, dates — that the summary does not state or clearly imply.",
   "General advice, encouragement and suggested practice are fine and must not be listed.",
+  "The class details come from the school's system and are true: naming the programme, exam or subject they give is supported.",
+  "Every other claim about this lesson must be supported by the summary.",
   "Names are replaced by [STUDENT_1] and [TUTOR]; that is expected.",
   "faithful is true only when the list is empty.",
 ].join("\n");
 
 /**
- * Judge input is the REDACTED summary and the model's placeholder output —
- * never the name-restored fields — so no student name reaches the judge host.
+ * Judge input is the REDACTED summary, the redacted class details and the
+ * model's placeholder output — never the name-restored fields — so no student
+ * name reaches the judge host.
  */
 export function buildJudgeMessages(input: {
   redactedSummary: string;
+  /** Already redacted `classDetailsBlock` text (may be empty). */
+  classDetails: string;
   placeholderFields: FeedbackFieldAnswers;
 }): Array<{ role: "system" | "user"; content: string }> {
   const feedback = [
@@ -49,7 +54,11 @@ export function buildJudgeMessages(input: {
   ].join("\n");
   return [
     { role: "system", content: JUDGE_SYSTEM_PROMPT },
-    { role: "user", content: `Lesson summary:\n${input.redactedSummary}\n\nFeedback:\n${feedback}` },
+    {
+      role: "user",
+      content: `Class details (from the school's system — true):\n${input.classDetails || "- (none)"}\n\n` +
+        `Lesson summary:\n${input.redactedSummary}\n\nFeedback:\n${feedback}`,
+    },
   ];
 }
 

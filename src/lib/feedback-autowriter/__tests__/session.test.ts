@@ -99,6 +99,13 @@ describe("evaluateSessionGates", () => {
   });
 });
 
+describe("session title", () => {
+  it("is parsed from the Wise detail (it names the subject at BeGifted)", () => {
+    expect(parse({ title: "Live Session - NVR" }).title).toBe("Live Session - NVR");
+    expect(parse().title).toBeUndefined();
+  });
+});
+
 describe("classifyGateReason", () => {
   it("waits for Wise to settle attendance before holding for absence or low attendance", () => {
     expect(classifyGateReason("student_count_0", { minutesSinceEnd: 1 })).toBe("retry");

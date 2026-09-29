@@ -51,7 +51,9 @@ citations.
 - **Subscription is UI-only.** Institute Settings → Developer options → Webhooks. No registration
   API, so subscriptions cannot be created, listed, or diffed from code or from a test.
 - **Auth is a shared secret in an undocumented header.** Wise sends "an authorisation key in the
-  header"; the header *name* is not published and is learned by test-firing after enabling. There
+  header"; the header *name* is not published and is learned by test-firing after enabling — observed
+  2026-09-29: the key arrives in `authorization`, and is the subscription's 32-character `auth` value from
+  `GET /institutes/{id}/webhooks` (Wise generates it; the UI does not show it). There
   is **no HMAC signature**, so a receiver cannot verify that a body was not tampered with — only
   that the caller knew the key.
 - **Delivery is HTTP 200 within 5 seconds**, then 8 retries over ≈ 4 h 15 min.

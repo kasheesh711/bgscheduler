@@ -8,6 +8,7 @@
  *   … --pause --reason="…" --actor=<email>        (global halt: no POSTs until --resume)
  *   … --resume --actor=<email>
  *   … --tutor-off=<wiseUserId> --actor=<email>  /  --tutor-on=<wiseUserId> --actor=<email>
+ *   … --retry=<wiseSessionId> --actor=<email>     (held/expired class → pending; the next sweep writes it again)
  * Runs (same guarded path as production; honours mode, halt and per-tutor switches):
  *   … --sweep
  *   … --process=<wiseSessionId>
@@ -46,7 +47,7 @@ import {
   type PreparedOrSkipped,
   type PreparedSession,
 } from "@/lib/feedback-autowriter/run";
-import { haltAutowriter, readControl, requeueShadowDrafts, updateControl } from "@/lib/feedback-autowriter/store";
+import { haltAutowriter, readControl, requeueShadowDrafts, retryHeldSession, updateControl } from "@/lib/feedback-autowriter/store";
 import { AUTOWRITER_DEADLINE_MARGIN_MS } from "@/lib/feedback-autowriter/types";
 import { loadPayoutScriptEnvironment } from "./lib/payout-script";
 
@@ -121,6 +122,13 @@ async function control(): Promise<void> {
   }
   if (flag("pause")) await haltAutowriter(db, `paused by ${actor}: ${option("reason") ?? "no reason given"}`, actor);
   if (flag("resume")) await updateControl(db, { haltedAt: null, haltReason: null }, actor);
+  const retry = option("retry");
+  if (retry) {
+    const ok = await retryHeldSession(db, retry, { minDeadline: new Date(Date.now() + AUTOWRITER_DEADLINE_MARGIN_MS), actor });
+    console.log(ok
+      ? `Re-queued ${retry}; the next sweep (or webhook) writes it again.`
+      : `Not re-queued: ${retry} is not held/expired, or its deadline is too close.`);
+  }
   const off = option("tutor-off");
   const on = option("tutor-on");
   if (off || on) {
@@ -210,7 +218,7 @@ function exportGrading(runDir: string, out: string, tutorNames: readonly string[
 
 async function main(): Promise<void> {
   if (flag("status")) return status();
-  if (option("mode") || flag("pause") || flag("resume") || option("tutor-off") || option("tutor-on")) return control();
+  if (option("mode") || flag("pause") || flag("resume") || option("tutor-off") || option("tutor-on") || option("retry")) return control();
   if (flag("sweep")) {
     const result = await runSweep(cliDeps(740_000));
     console.log(JSON.stringify(result, null, 2));

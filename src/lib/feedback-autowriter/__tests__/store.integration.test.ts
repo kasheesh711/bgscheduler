@@ -17,6 +17,7 @@ import {
   releaseGeneration,
   releaseShadowDraft,
   releaseSweepLease,
+  retryHeldSession,
   requeueShadowDrafts,
   sessionSubmitStore,
   stuckPostInFlight,
@@ -317,6 +318,23 @@ describe("feedback autowriter store (Postgres)", () => {
     await markAlertsSent(db, alerts, "suppressed:shadow");
     expect(await listPendingAlerts(db)).toHaveLength(0);
     expect((await readSessionRow(db, SESSION))?.alertsSent).toEqual({ held: "suppressed:shadow" });
+  });
+
+  it("retries a held class on request, re-arming its alert, but never near the deadline or from other states", async () => {
+    const token = (await claimGeneration(db, SESSION, 60_000))!;
+    await releaseGeneration(db, SESSION, token, { state: "held", reason: "glm:unfaithful", alertKind: "held" });
+    await markAlertsSent(db, await listPendingAlerts(db));
+    expect(await retryHeldSession(db, SESSION, { minDeadline: new Date(Date.now() + 48 * 60 * 60 * 1000), actor: "k@x.com" })).toBe(false);
+    expect(await retryHeldSession(db, SESSION, { minDeadline: new Date(), actor: "k@x.com" })).toBe(true);
+    const row = await readSessionRow(db, SESSION);
+    expect(row).toMatchObject({ state: "pending", reason: "retry_requested", nextAttemptAt: null, alertsSent: {} });
+    expect(row?.metadata).toMatchObject({ retriedBy: "k@x.com", retriedFrom: "held" });
+    expect(row?.metadata).not.toHaveProperty("alertKind");
+    expect(await retryHeldSession(db, SESSION, { minDeadline: new Date(), actor: "k@x.com" })).toBe(false); // already pending
+    // Held again → alerts again.
+    const again = (await claimGeneration(db, SESSION, 60_000))!;
+    await releaseGeneration(db, SESSION, again, { state: "held", reason: "still unfaithful", alertKind: "held" });
+    expect(await listPendingAlerts(db)).toHaveLength(1);
   });
 
   it("re-queues shadow drafts still before their deadline when going live", async () => {

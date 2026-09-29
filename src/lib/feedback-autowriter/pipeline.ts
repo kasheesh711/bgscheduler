@@ -9,7 +9,7 @@ import {
   type JudgeOutput,
 } from "./judge";
 import { callOpenRouter, type OpenRouterCallResult } from "./openrouter";
-import { FEEDBACK_JSON_SCHEMA, PROMPT_VERSION, buildFeedbackMessages, redactForModel } from "./prompt";
+import { FEEDBACK_JSON_SCHEMA, PROMPT_VERSION, buildFeedbackMessages, classDetailsBlock, redactForModel } from "./prompt";
 import type { AiSummary, ModelArm } from "./types";
 import { finalizeFields, parseModelOutput, validateFeedbackDraft, type ModelOutput } from "./validate";
 
@@ -17,7 +17,8 @@ export interface PipelineSession {
   wiseSessionId: string;
   studentFullName: string;
   studentDisplayName: string;
-  subject: string | null;
+  /** `describeClass` lines; the writer and the judge both get them. */
+  classDetails: readonly string[];
   scheduledMinutes: number;
   summary: AiSummary;
 }
@@ -83,10 +84,9 @@ export async function runWritingPipeline(input: {
   const callModel = input.callModel ?? callOpenRouter;
   const { session } = input;
   const reasons: string[] = [];
-  const redactedSummary = redactForModel(session.summary.text, {
-    studentFullName: session.studentFullName,
-    tutorNames: input.tutorNames,
-  });
+  const names = { studentFullName: session.studentFullName, tutorNames: input.tutorNames };
+  const redactedSummary = redactForModel(session.summary.text, names);
+  const redactedClassDetails = classDetailsBlock(session.classDetails, names);
 
   const run = async (config: AutowriterModelConfig, role: "writer" | "judge", messages: Array<{ role: "system" | "user"; content: string }>, preferredTimeoutMs: number) => {
     const timeoutMs = Math.min(preferredTimeoutMs, input.remainingMs() - 45_000);
@@ -109,7 +109,7 @@ export async function runWritingPipeline(input: {
     const written = await run(writer, "writer", buildFeedbackMessages({
       studentFullName: session.studentFullName,
       tutorNames: input.tutorNames,
-      subject: session.subject,
+      classDetails: session.classDetails,
       scheduledMinutes: session.scheduledMinutes,
       summary: session.summary,
     }), 180_000);
@@ -159,6 +159,7 @@ export async function runWritingPipeline(input: {
     for (let attempt = 0; attempt < JUDGE_ATTEMPTS && !verdict; attempt += 1) {
       const judged = await run(judgeConfig, "judge", buildJudgeMessages({
         redactedSummary,
+        classDetails: redactedClassDetails,
         placeholderFields: {
           topics: parsed.output.topics,
           performance: parsed.output.performance,

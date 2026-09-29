@@ -1,7 +1,7 @@
 import { redactKnownNames } from "@/lib/post-class-feedback/similarity";
 import type { AiSummary } from "./types";
 
-export const PROMPT_VERSION = 1;
+export const PROMPT_VERSION = 2;
 export const STUDENT_TOKEN = "[STUDENT_1]";
 export const TUTOR_TOKEN = "[TUTOR]";
 
@@ -67,6 +67,45 @@ export function redactForModel(
   return result;
 }
 
+// Same prefix pattern as student-schedule `deriveDisplaySubject` (copied for the
+// same reason as parseStudentName): "Live Session-Non VR" → "Non VR".
+const SESSION_TITLE_PREFIX = /^\s*(?:in[- ]?person|on[- ]?site|online|live)\s+session\s*[-–—:]\s*/iu;
+const BARE_SESSION_TITLE = /^\s*(?:in[- ]?person|on[- ]?site|online|live)\s+session\s*$/iu;
+const CANCELLED_SUFFIX = /\s*\((?:cancelled|canceled)\)\s*$/iu;
+
+/**
+ * BeGifted's class terms, as confirmed by the owner (2026-09-29). Only these are
+ * expanded; any other wording reaches the models verbatim and is never guessed.
+ */
+const CLASS_TERMS: ReadonlyArray<{ pattern: RegExp; meaning: string }> = [
+  { pattern: /(?<![\p{L}\p{N}])11\+\s*\/\s*13\+/u, meaning: "11+/13+ = the ISEB 11+/13+ entrance tests" },
+  { pattern: /(?<!\p{L})(?:NVR|Non[- ]?VR)(?!\p{L})/iu, meaning: "NVR (Non VR) = Non-Verbal Reasoning" },
+  // "VR" on its own: not the tail of "NVR" and not "Non VR".
+  { pattern: /(?<!\p{L})(?<!Non[- ]?)VR(?!\p{L})/u, meaning: "VR = Verbal Reasoning" },
+  { pattern: /(?<!\p{L})Sci(?!\p{L})/u, meaning: "Sci = Science" },
+];
+
+/**
+ * Class details from Wise that both the writer and the judge may rely on.
+ * At BeGifted, Wise's `classSubject` holds the programme or level band
+ * ("Y9-11 / G8-10 (Int.)", "11+/13+"); the subject itself is only in the
+ * session title ("Live Session - Chemistry", "Live Session-Non VR").
+ */
+export function describeClass(input: { programme: string | null | undefined; title: string | null | undefined }): string[] {
+  const programme = input.programme?.trim() || null;
+  const title = input.title?.trim() ?? "";
+  const stripped = title.replace(SESSION_TITLE_PREFIX, "").replace(CANCELLED_SUFFIX, "").trim();
+  const subject = stripped && !BARE_SESSION_TITLE.test(stripped) ? stripped : null;
+  const lines = [
+    ...(programme ? [`Programme: ${programme}`] : []),
+    ...(subject ? [`Class subject: ${subject}`] : []),
+  ];
+  const text = [programme, subject].filter(Boolean).join(" ");
+  const terms = CLASS_TERMS.filter((term) => term.pattern.test(text)).map((term) => term.meaning);
+  if (terms.length > 0) lines.push(`Terms: ${terms.join("; ")}`);
+  return lines;
+}
+
 export function restoreStudentName(text: string, displayName: string): string {
   return text.replaceAll(STUDENT_TOKEN, displayName);
 }
@@ -100,24 +139,32 @@ const SYSTEM_PROMPT = [
   "7. homework: only homework or tasks the summary says were set, with timing if stated. If the summary mentions none, return an empty string.",
   "8. Length: topics, performance and improvement are each between 120 and 600 characters, and together at least 450 characters.",
   "9. studentAttended is true only if the summary shows the student actively took part; lessonHappened is true only if a real lesson took place.",
+  "10. The class details come from the school's system and are accurate. Use them only to name the programme and subject correctly; everything about the lesson itself comes only from the summary.",
 ].join("\n");
 
 export interface PromptContext {
   studentFullName: string;
   tutorNames: readonly string[];
-  subject: string | null;
+  /** `describeClass` lines (programme, class subject, confirmed terms). */
+  classDetails: readonly string[];
   scheduledMinutes: number;
   summary: AiSummary;
 }
 
+/** Class-detail lines with names redacted, as a bullet block. */
+export function classDetailsBlock(
+  classDetails: readonly string[],
+  names: { studentFullName: string; tutorNames: readonly string[] },
+  extra: readonly string[] = [],
+): string {
+  return [...classDetails.map((line) => redactForModel(line, names)), ...extra].map((line) => `- ${line}`).join("\n");
+}
+
 export function buildFeedbackMessages(context: PromptContext): Array<{ role: "system" | "user"; content: string }> {
   const summary = redactForModel(context.summary.text, context);
-  const details = [
-    context.subject ? `- Subject: ${redactForModel(context.subject, context)}` : null,
-    `- Scheduled length: ${context.scheduledMinutes} minutes`,
-  ].filter(Boolean).join("\n");
+  const details = classDetailsBlock(context.classDetails, context, [`Scheduled length: ${context.scheduledMinutes} minutes`]);
   return [
     { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: `Lesson details:\n${details}\n\nLesson summary:\n${summary}` },
+    { role: "user", content: `Class details (from the school's system):\n${details}\n\nLesson summary:\n${summary}` },
   ];
 }

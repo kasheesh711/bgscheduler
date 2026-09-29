@@ -86,6 +86,8 @@ export const AutowriterSessionDetailSchema = z.object({
   classId: z.union([z.string(), z.object({ _id: z.string() }).passthrough()]),
   className: z.string().optional(),
   classSubject: z.string().nullable().optional(),
+  /** Session title, e.g. "Live Session - NVR": at BeGifted the only field naming the subject. */
+  title: z.string().nullable().optional(),
   type: z.string().optional(),
   classType: z.string().optional(),
   meetingStatus: z.string().optional(),
