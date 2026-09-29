@@ -39,12 +39,10 @@ interface SkippedProgressTestSyncResult {
 }
 
 function isUniqueViolation(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: unknown }).code === "23505"
-  );
+  if (typeof err !== "object" || err === null) return false;
+  // drizzle-orm wraps driver errors in DrizzleQueryError; the SQLSTATE is on `.cause`.
+  const candidate = err as { code?: unknown; cause?: { code?: unknown } };
+  return candidate.code === "23505" || candidate.cause?.code === "23505";
 }
 
 async function failStaleRunningSyncs(db: Database, now: Date): Promise<number> {

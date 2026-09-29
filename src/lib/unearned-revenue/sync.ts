@@ -198,7 +198,9 @@ export async function readUnearnedRevenueWorkbook(
 
 function isUniqueViolation(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
-  return "code" in error && (error as { code?: unknown }).code === "23505";
+  // drizzle-orm wraps driver errors in DrizzleQueryError; the SQLSTATE is on `.cause`.
+  const candidate = error as { code?: unknown; cause?: { code?: unknown } };
+  return candidate.code === "23505" || candidate.cause?.code === "23505";
 }
 
 async function insertChunks<T>(
