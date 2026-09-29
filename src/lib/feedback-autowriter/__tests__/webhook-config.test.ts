@@ -17,6 +17,8 @@ describe("Wise webhook helpers", () => {
   it("accepts the shared key bare or as a Bearer token, constant-time", () => {
     expect(verifyWiseWebhookAuth("secret-key", "secret-key")).toBe(true);
     expect(verifyWiseWebhookAuth("Bearer secret-key", "secret-key")).toBe(true);
+    expect(verifyWiseWebhookAuth("Basic secret-key", "secret-key")).toBe(true);
+    expect(verifyWiseWebhookAuth("Bearer other secret-key", "secret-key")).toBe(false);
     expect(verifyWiseWebhookAuth("wrong", "secret-key")).toBe(false);
     expect(verifyWiseWebhookAuth(null, "secret-key")).toBe(false);
     expect(verifyWiseWebhookAuth("anything", undefined)).toBe(false);

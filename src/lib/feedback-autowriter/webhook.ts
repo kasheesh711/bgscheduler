@@ -31,12 +31,12 @@ function safeEqual(left: string, right: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** Constant-time comparison of the shared key, bare or as a Bearer token. */
+/** Constant-time comparison of the shared key, bare or after one auth scheme word (`Bearer …`, `Basic …`). */
 export function verifyWiseWebhookAuth(headerValue: string | null, secret: string | null | undefined): boolean {
   const expected = secret?.trim();
   const received = headerValue?.trim();
   if (!expected || !received) return false;
-  return safeEqual(received, expected) || safeEqual(received.replace(/^Bearer\s+/iu, ""), expected);
+  return safeEqual(received, expected) || safeEqual(received.replace(/^[A-Za-z]+\s+/u, ""), expected);
 }
 
 /**
