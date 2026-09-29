@@ -14,6 +14,7 @@ import {
   feedbackVersionKey,
 } from "./policy";
 import { createDrizzlePostClassFeedbackRepository, timingEvidence } from "./repository";
+import { safeErrorFields } from "./safe-error";
 import type { PostClassFeedbackRepository } from "./repository";
 import type { FeedbackVersion, TimingStatus } from "./types";
 
@@ -213,7 +214,7 @@ export async function reassessPostClassSessions(options: {
       });
     } catch (error) {
       result.failed += 1;
-      console.error("[post-class-reassess]", row.wiseSessionId, error);
+      console.error("[post-class-reassess]", { wiseSessionId: row.wiseSessionId, ...safeErrorFields(error) });
     }
   }
 

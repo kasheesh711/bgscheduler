@@ -16,6 +16,7 @@ import {
 } from "./payout-config";
 import { hasWrittenPayoutDeduction, noLiveWrittenPayoutLine } from "./payout-repository";
 import { lastEndedPayoutRunWindow } from "./payout-window";
+import { safeErrorFields } from "./safe-error";
 
 // ── Continuous auto-approval and reopen sweep ───────────────────────────
 //
@@ -107,7 +108,7 @@ export async function runPostClassAutoApprovals(
       }, db);
       approved += 1;
     } catch (error) {
-      console.error("[post-class-auto-approve]", error);
+      console.error("[post-class-auto-approve]", { deductionId: candidate.deductionId, ...safeErrorFields(error) });
       failed += 1;
     }
   }
@@ -169,7 +170,7 @@ export async function runPostClassIneligibleWaivers(
       }, db);
       waived += 1;
     } catch (error) {
-      console.error("[post-class-ineligible-waive]", error);
+      console.error("[post-class-ineligible-waive]", { deductionId: candidate.deductionId, ...safeErrorFields(error) });
       failed += 1;
     }
   }
@@ -241,7 +242,7 @@ export async function runPostClassAutoReopens(
       }, db);
       reopened += 1;
     } catch (error) {
-      console.error("[post-class-auto-reopen]", error);
+      console.error("[post-class-auto-reopen]", { deductionId: candidate.deductionId, ...safeErrorFields(error) });
       failed += 1;
     }
   }
