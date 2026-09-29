@@ -332,7 +332,8 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
           if (!window) {
             return NextResponse.json({ ok: true, skipped: "nothing-unreconciled" });
           }
-          // Same single 50-detail batch as the cron; explicit dates and caps stay a CRON_SECRET-only re-drain.
+          // Same single 50-detail batch as the cron. A chosen date range is one batch from the
+          // Post-Class Feedback settings Backfill dialog, or a multi-batch CRON_SECRET re-drain.
           const result = await runPostClassBackfillJob({
             startDate: window.startDate,
             endDate: window.endDate,
