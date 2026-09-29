@@ -1,10 +1,12 @@
 # Feedback Autowriter
 
-**Status:** constrained rollout (5 tutors, ≈24% of institution online classes), shadow by default. **Code:** [`src/lib/feedback-autowriter/`](../../src/lib/feedback-autowriter/).
+**Status:** live since 2026-09-29, constrained rollout (5 tutors, both of each tutor's Wise accounts). **Code:** [`src/lib/feedback-autowriter/`](../../src/lib/feedback-autowriter/).
 **Runbook:** [`operations/feedback-autowriter.md`](../operations/feedback-autowriter.md). **API:** [`reference/api/feedback-autowriter.md`](../reference/api/feedback-autowriter.md).
 **Dashboard:** `/feedback-autowriter` (nav: Scheduling & Tutors → Feedback Autowriter). Admins see posts, shadow drafts
 and holds with the written text, class-end-to-post latency, model cost and webhook deliveries; only the owner sees the
-mode, pause/resume and per-tutor switches.
+mode, pause/resume and per-tutor switches (one per tutor, covering both of their Wise accounts). In-person classes on a
+roster account are skipped at once (Wise type `OFFLINE`) and left out of the dashboard entirely — they stay the
+tutor's to write.
 
 Writes a tutor's post-class feedback for **online one-to-one classes** from Wise's AI meeting summary and
 completes Wise's own **blank auto-submission** through the same endpoint the Wise web app uses
@@ -16,8 +18,8 @@ simply ingests what the autowriter posted like any other submission.
 
 | Rule | Where |
 |---|---|
-| Only the roster's "… Online" Wise accounts (Kevin, Gift, Ek, Peat, Mimi — chosen by online-class volume to cover ≥20% of institution online classes) | [`roster.ts`](../../src/lib/feedback-autowriter/roster.ts) |
-| Session `type=SCHEDULED`, `classType=ONE_TO_ONE`, exactly one student who attended ≥50%, meeting `ENDED` | `evaluateSessionGates` in [`session.ts`](../../src/lib/feedback-autowriter/session.ts) |
+| Only the roster tutors (Kevin, Gift, Ek, Peat, Mimi — chosen by online-class volume to cover ≥20% of institution online classes), on both of their Wise accounts: the "… Online" one and their main one. Tutors teach online from either (all of Gift's online classes in September were on her main account); in-person classes on either are skipped by the session type below | [`roster.ts`](../../src/lib/feedback-autowriter/roster.ts) |
+| Session `type=SCHEDULED`, `classType=ONE_TO_ONE`, exactly one student who attended ≥50%, meeting `ENDED`. The tutor joining their own class again is not a student: their other Wise account, or a Zoom guest (no Wise account) under one of their names (Peat, 29 Sep, joined twice more as "Kasidej Jungrakangthong" and "Peat"). Any other extra participant still counts, so the class is skipped | `evaluateSessionGates`, `studentParticipants` in [`session.ts`](../../src/lib/feedback-autowriter/session.ts) |
 | Before the post-class deadline (≥30 min margin) | same |
 | Only when the teacher submission is Wise's blank auto-submission (`metadata.autoSubmitted=true`, all answers empty); anything a person wrote is never touched | `classifyTeacherSubmission` |
 | Re-sends the auto-submission's own `sessionStatus` / `creditsConsumed` (credits must equal the scheduled hours) — no new charge | [`billing.ts`](../../src/lib/feedback-autowriter/billing.ts) |

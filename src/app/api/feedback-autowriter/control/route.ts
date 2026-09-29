@@ -11,7 +11,8 @@ const ControlBody = z.discriminatedUnion("action", [
   z.object({ action: z.literal("mode"), mode: z.enum(["off", "shadow", "live"]) }),
   z.object({ action: z.literal("pause"), reason: z.string().trim().min(1).max(300) }),
   z.object({ action: z.literal("resume") }),
-  z.object({ action: z.literal("tutor"), wiseUserId: z.string().regex(/^[0-9a-f]{24}$/iu), enabled: z.boolean() }),
+  // A tutor's switch covers every account they teach from (the dashboard sends all of them).
+  z.object({ action: z.literal("tutor"), wiseUserIds: z.array(z.string().regex(/^[0-9a-f]{24}$/iu)).min(1).max(20), enabled: z.boolean() }),
 ]);
 
 /** Owner-only switches on the autowriter control row (same effect as the CLI). */
@@ -51,11 +52,13 @@ export async function POST(request: NextRequest) {
     } else if (body.action === "resume") {
       await updateControl(db, { haltedAt: null, haltReason: null }, actor.email);
     } else {
-      if (!AUTOWRITER_TEACHER_ALLOWLIST.has(body.wiseUserId)) {
+      if (!body.wiseUserIds.every((id) => AUTOWRITER_TEACHER_ALLOWLIST.has(id))) {
         return NextResponse.json({ error: "Not a roster tutor." }, { status: 400 });
       }
       const disabled = new Set((await readControl(db)).disabledTutors);
-      if (body.enabled) disabled.delete(body.wiseUserId); else disabled.add(body.wiseUserId);
+      for (const id of body.wiseUserIds) {
+        if (body.enabled) disabled.delete(id); else disabled.add(id);
+      }
       await updateControl(db, { disabledTutors: [...disabled] }, actor.email);
     }
     const control = await readControl(db);

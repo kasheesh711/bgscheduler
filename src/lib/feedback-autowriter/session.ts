@@ -10,6 +10,7 @@ import {
   resolveFeedbackFieldMapping,
 } from "@/lib/post-class-feedback/wise";
 import type { WiseFeedbackAnswer, WiseFeedbackQuestion } from "@/lib/wise/types";
+import { AUTOWRITER_ROSTER, rosterAccountIds, rosterTutor } from "./roster";
 import {
   AUTOWRITER_DEADLINE_MARGIN_MS,
   AUTOWRITER_ATTENDANCE_SETTLE_MINUTES,
@@ -246,9 +247,47 @@ export function nonTeacherBillingEvidence(detail: AutowriterSessionDetail): bool
     (submission.sessionStatus != null || submission.creditsConsumed != null));
 }
 
+function normalizePersonName(value: string): string {
+  return value.normalize("NFKC").toLocaleLowerCase("en-US").replace(/\s+/gu, " ").trim();
+}
+
+/**
+ * The session's tutor as they may appear among the participants. Tutors
+ * sometimes join their own class again — from their other Wise account, or
+ * from another device as a Zoom guest under their own name (Peat, 29 Sep:
+ * "Kasidej Jungrakangthong" and "Peat" beside his teacher account) — and are
+ * not students.
+ */
+function tutorSelf(detail: AutowriterSessionDetail): { accounts: Set<string>; names: Set<string> } {
+  const teacherId = detailTeacherId(detail);
+  const tutor = rosterTutor(teacherId);
+  const accounts = new Set(tutor ? rosterAccountIds(tutor.canonicalKey) : []);
+  if (teacherId) accounts.add(teacherId);
+  const names = new Set<string>();
+  const add = (name: string | null | undefined) => {
+    if (name?.trim()) names.add(normalizePersonName(name));
+  };
+  add(detailTeacherName(detail));
+  if (tutor) {
+    for (const account of AUTOWRITER_ROSTER) if (account.canonicalKey === tutor.canonicalKey) add(account.displayName);
+    for (const name of tutor.tutorNames) add(name);
+  }
+  return { accounts, names };
+}
+
+/**
+ * The session's students: every non-teacher participant except the tutor
+ * themselves — their other Wise account, or a guest (no Wise account) under
+ * one of their names. Anyone else, named or not, still counts (fail closed:
+ * an unknown guest makes a one-to-one class look like two students).
+ */
 export function studentParticipants(detail: AutowriterSessionDetail): AutowriterStudent[] {
+  const self = tutorSelf(detail);
   return detail.participants
     .filter((participant) => participant.isTeacher !== true)
+    .filter((participant) => !(participant.wiseUserId && self.accounts.has(participant.wiseUserId)))
+    .filter((participant) => Boolean(participant.wiseUserId) || !participant.name?.trim() ||
+      !self.names.has(normalizePersonName(participant.name)))
     .map((participant) => ({
       wiseUserId: participant.wiseUserId ?? null,
       name: participant.name?.trim() ?? "",

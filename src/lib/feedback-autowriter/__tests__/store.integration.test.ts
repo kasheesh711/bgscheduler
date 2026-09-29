@@ -14,6 +14,7 @@ import {
   markAlertsSent,
   readControl,
   readSessionRow,
+  recentAutowriterPosts,
   releaseGeneration,
   releaseShadowDraft,
   releaseSweepLease,
@@ -337,11 +338,36 @@ describe("feedback autowriter store (Postgres)", () => {
     expect(await listPendingAlerts(db)).toHaveLength(1);
   });
 
+  it("retries a class skipped as out of scope on request, but never one a person wrote", async () => {
+    const token = (await claimGeneration(db, SESSION, 60_000))!;
+    await releaseGeneration(db, SESSION, token, { state: "skipped_scope", reason: "student_count_3" });
+    expect(await retryHeldSession(db, SESSION, { minDeadline: new Date(), actor: "k@x.com" })).toBe(true);
+    expect(await readSessionRow(db, SESSION)).toMatchObject({ state: "pending", metadata: { retriedFrom: "skipped_scope" } });
+    const again = (await claimGeneration(db, SESSION, 60_000))!;
+    await releaseGeneration(db, SESSION, again, { state: "skipped_human", reason: "human_submission" });
+    expect(await retryHeldSession(db, SESSION, { minDeadline: new Date(), actor: "k@x.com" })).toBe(false);
+  });
+
   it("re-queues shadow drafts still before their deadline when going live", async () => {
     const token = (await claimGeneration(db, SESSION, 60_000))!;
     await releaseGeneration(db, SESSION, token, { state: "would_submit", reason: "shadow" });
     expect(await requeueShadowDrafts(db, new Date())).toBe(1);
     expect((await readSessionRow(db, SESSION))?.state).toBe("pending");
     await haltAutowriter(db, "noop");
+  });
+
+  it("compares new feedback with the tutor's own posts from both of their Wise accounts", async () => {
+    const MAIN = "695369c028118f629edcb986";
+    const posted = { state: "verified" as const, fields: claimInput.fields };
+    await db.update(schema.feedbackAutowriterSessions).set(posted).where(eq(schema.feedbackAutowriterSessions.wiseSessionId, SESSION));
+    await ensureSessionRow(db, {
+      wiseSessionId: OTHER_SESSION, wiseClassId: "6a0000000000000000000001", wiseTeacherUserId: MAIN,
+      scheduledEndAt: new Date(), deadlineAt: new Date(Date.now() + 86_400_000), trigger: "test",
+    });
+    await db.update(schema.feedbackAutowriterSessions).set(posted).where(eq(schema.feedbackAutowriterSessions.wiseSessionId, OTHER_SESSION));
+    const since = new Date(Date.now() - 86_400_000);
+    expect((await recentAutowriterPosts(db, [TEACHER, MAIN], since)).map((post) => post.key).sort()).toEqual([SESSION, OTHER_SESSION].sort());
+    expect((await recentAutowriterPosts(db, [TEACHER], since)).map((post) => post.key)).toEqual([SESSION]);
+    expect(await recentAutowriterPosts(db, [], since)).toEqual([]);
   });
 });

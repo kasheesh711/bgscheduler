@@ -8,7 +8,7 @@
  *   … --pause --reason="…" --actor=<email>        (global halt: no POSTs until --resume)
  *   … --resume --actor=<email>
  *   … --tutor-off=<wiseUserId> --actor=<email>  /  --tutor-on=<wiseUserId> --actor=<email>
- *   … --retry=<wiseSessionId> --actor=<email>     (held/expired class → pending; the next sweep writes it again)
+ *   … --retry=<wiseSessionId> --actor=<email>     (held/expired/skipped_scope class → pending; the next sweep writes it again)
  * Runs (same guarded path as production; honours mode, halt and per-tutor switches):
  *   … --sweep
  *   … --process=<wiseSessionId>
@@ -132,7 +132,7 @@ async function control(): Promise<void> {
     const ok = await retryHeldSession(db, retry, { minDeadline: new Date(Date.now() + AUTOWRITER_DEADLINE_MARGIN_MS), actor });
     console.log(ok
       ? `Re-queued ${retry}; the next sweep (or webhook) writes it again.`
-      : `Not re-queued: ${retry} is not held/expired, or its deadline is too close.`);
+      : `Not re-queued: ${retry} is not held/expired/skipped_scope, or its deadline is too close.`);
   }
   const off = option("tutor-off");
   const on = option("tutor-on");
