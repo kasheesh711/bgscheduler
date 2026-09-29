@@ -57,7 +57,7 @@ Returns the whole ops payload in one object. Read-only: no writes, no Wise calls
 | `issueSummary` | `Record<string, number>` | `snapshot_stats.issuesByType` for the active snapshot, `{}` when absent. |
 | `issueDetails` | object | `unresolvedAliases`, `unresolvedModality`, `unmappedTags` — every `data_issues` row for the active snapshot, partitioned by `type` ([`dashboard.ts:413-430`](../../../src/lib/data-health/dashboard.ts)). Not paginated or capped. |
 | `recentRuns` | `RunHistoryItem[]` | Thirteen domain run sources flattened into one list, sorted by `startedAt` desc and **sliced to 30** ([`dashboard.ts`](../../../src/lib/data-health/dashboard.ts)). |
-| `manualActions` | array | `{ key, label, dangerous, confirmationLabel }` for all 24 registry jobs ([`dashboard.ts`](../../../src/lib/data-health/dashboard.ts)) — the client uses this to decide whether to prompt before calling the job runner. |
+| `manualActions` | array | `{ key, label, dangerous, confirmationLabel }` for every registry job `isManuallyRunnable` accepts — not paused by feature mode and without a `manualRunDisabledReason` (so never `student_promotions_july_1`) ([`dashboard.ts`](../../../src/lib/data-health/dashboard.ts)) — the client uses this to decide whether to prompt before calling the job runner. |
 | *compatibility block* | — | `lastSuccessfulSync`, `lastFailedSync`, `lastFailureError`, `staleAgeMs`, `staleMinutes`, `activeSnapshotId`, `stats`, `issuesByType`, `unresolvedAliases`, `unresolvedModality`, `unmappedTags`, `recentSyncs` are duplicated at the top level for the stale banner and older callers ([`types.ts:132-151`](../../../src/lib/data-health/types.ts)). `recentSyncs` is the last 8 `sync_runs` rows. |
 
 **`unresolvedModality` includes two issue types.** Both the payload builder and the route's re-exported helper filter `type === "modality" || type === "conflict_model"` — group-level modality issues from `deriveModality` plus session-level conflicts from `detectSessionModalityConflict`, surfaced as one admin-facing number (MOD-03 / D-10, [`modality-counter.ts:1-31`](../../../src/app/api/data-health/modality-counter.ts)). The helper lives in its own module so Vitest can import it without pulling the Next/`next-auth` route graph; `route.ts:6-12` re-exports it as `selectModalityIssues`.
@@ -113,24 +113,24 @@ No other field is read. The client always sends `{ confirmed: action.dangerous }
 2. `jobKey` not in the registry → **404** `{"error":"Unknown job"}` ([`:20-23`](../../../src/app/api/data-health/jobs/[jobKey]/run/route.ts)). This fires **before** the audit wrapper, so an unknown key writes no `cron_invocations` row.
 3. `job.key.startsWith("post_class_feedback")` and the caller's fresh capabilities do not include `access_manager` → **403** `{"error":"Access manager capability required"}` ([`:25-30`](../../../src/app/api/data-health/jobs/[jobKey]/run/route.ts)). Capabilities are read per request from `post_class_access_grants` joined to `admin_users` on a case- and whitespace-insensitive email match ([`access.ts:129-146`](../../../src/lib/post-class-feedback/access.ts)); the four capability values are `viewer`, `reviewer`, `finance`, `access_manager` ([`access.ts:11-16`](../../../src/lib/post-class-feedback/access.ts)). Six registry keys match this prefix: `post_class_feedback`, `_backfill`, `_digest`, `_day_after`, `_deadline`, `_payout_accrual`.
 4. `job.dangerous` and `confirmed !== true` → **409** `{"error":"Confirmation required","confirmationLabel": <registry label>}` ([`:33-41`](../../../src/app/api/data-health/jobs/[jobKey]/run/route.ts)).
-5. Otherwise `runDataHealthJob(job.key, session.user.email)` ([`:43`](../../../src/app/api/data-health/jobs/[jobKey]/run/route.ts)).
+5. Otherwise `runDataHealthJob(job.key, session.user.email)` ([`:43`](../../../src/app/api/data-health/jobs/[jobKey]/run/route.ts)). The dispatcher first refuses a job whose registry entry carries `manualRunDisabledReason` (today only `student_promotions_july_1`) with **409** and that reason as `error`, *before* its audit wrapper, so the refusal writes no `cron_invocations` row ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)).
 
 Because the capability gate precedes the confirmation gate, a non-manager asking for a dangerous post-class job sees 403, never 409.
 
-**The registry, and which keys the runner actually implements.** All 24 keys pass gate 2 and reach `runDataHealthJob`, but the dispatcher implements **16**; the other **8** fall through to a terminal `404 {"error":"Unknown job"}` ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)) — *inside* the audit wrapper, so those attempts do leave a failed `cron_invocations` row. For those eight, a direct `CRON_SECRET` call or a feature-specific manual route is required.
+**The registry, and which keys the runner implements.** Every registry key without a `manualRunDisabledReason` has a runner branch, so no reachable key falls through to the dispatcher's terminal `404 {"error":"Unknown job"}`, which remains only as a defensive default ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)). `student_promotions_july_1` is excluded on purpose (409 before audit; see gate 5). [`run-job.test.ts`](../../../src/lib/data-health/__tests__/run-job.test.ts) pins the pairing at compile time and at runtime. Keys added to the registry after this table was written (for example `tutor_sit_ins` and `tutor_sit_ins_digest`) are dispatched too.
 
 | Job key | Schedule | `dangerous` | Runner branch | Success body |
 |---|---|:---:|:---:|---|
 | `wise_snapshot` | `*/30 * * * *` | — | yes | full sync result + `staleRunningSyncsFailed`; `202` when a run is already in flight ([`run-wise-sync.ts:142-167`](../../../src/lib/sync/run-wise-sync.ts)) |
 | `wise_activity` | `2,17,32,47 * * * *` | — | yes | `{ok:true, result}`; `409` on `WiseActivitySyncAlreadyRunningError` ([`run-job.ts:47-63`](../../../src/lib/data-health/run-job.ts)) |
 | `sales_dashboard` | `10,40 * * * *` | — | yes | `{ok:true, results, projectionResult}` — refreshable sources **and** the active projection source ([`run-job.ts:65-80`](../../../src/lib/data-health/run-job.ts)) |
-| `unearned_revenue` | `30 18 * * *` | — | **no → 404** | — |
+| `unearned_revenue` | `30 18 * * *` | — | yes | the sync result; `202` when skipped by its single-flight guard, `502` when `ok: false` — the cron route's mapping |
 | `competitor_intelligence` | `28 18 * * 0` | — | yes | `{ok, result}`; status `200`/`500` from `result.status`, `409` when the message contains `already running` ([`run-job.ts:82-98`](../../../src/lib/data-health/run-job.ts)) |
 | `credit_control` | `20,50 * * * *` | — | yes | sync result + `syncRunId` + `staleRunningSyncsFailed`; `202` when already running ([`run-sync-request.ts:138-160`](../../../src/lib/credit-control/run-sync-request.ts)) |
-| `progress_tests` | `25,55 * * * *` | — | **no → 404** | — |
-| `progress_tests_digest` | `35 0 * * *` | — | **no → 404** | — |
+| `progress_tests` | `25,55 * * * *` | — | yes | the `runProgressTestSyncRequest({ triggerType: "manual", actorEmail })` response verbatim; `202` when a run is already in flight ([`run-sync-request.ts`](../../../src/lib/progress-tests/run-sync-request.ts)) |
+| `progress_tests_digest` | `35 0 * * *` | — | yes | the digest result verbatim; `500` when `status: "failed"` |
 | `post_class_feedback` | `13,43 * * * *` | — | yes | `{ok:true, result, retries}` — the sync **plus** due notification retries ([`run-job.ts:104-119`](../../../src/lib/data-health/run-job.ts)) |
-| `post_class_feedback_backfill` | `23,53 * * * *` | — | **no → 404** | — |
+| `post_class_feedback_backfill` | `23,53 * * * *` | — | yes | `{ok:true, window, result}` for the oldest unreconciled window (one 50-detail batch, as the cron); `{ok:true, skipped:"nothing-unreconciled"}` when none; `409` when a post-class sync is already running; generic `500` |
 | `post_class_feedback_digest` | manual-only | yes | yes | `{ok:true, result}` ([`run-job.ts:121-124`](../../../src/lib/data-health/run-job.ts)) |
 | `post_class_feedback_day_after` | manual-only | yes | yes | `{ok:true, result}`, or **503** `{ok:false, error, result}` when the checkpoint still has unreconciled Wise sessions ([`run-job.ts:126-139`](../../../src/lib/data-health/run-job.ts)) |
 | `post_class_feedback_deadline` | manual-only | yes | yes | same as above |
@@ -139,30 +139,31 @@ Because the capability gate precedes the confirmation gate, a non-manager asking
 | `onsite_foot_traffic` | `18 18 * * *` | — | yes | Sync result; `202` when a single-flight run is already active. |
 | `classroom_morning` | `41 23 * * *` | yes | yes | the automation result verbatim; `500 {ok:false, error}` on throw ([`run-job.ts:165-173`](../../../src/lib/data-health/run-job.ts)) |
 | `classroom_admin_email` | `4,14,24,36 0 * * *` | yes | yes | the email-run result verbatim, status `500` when `result.status === "failed"` ([`run-job.ts:175-184`](../../../src/lib/data-health/run-job.ts)) |
-| `student_promotions_july_1` | `5 17 30 6 *` | yes | **no → 404** | — |
-| `admissions_notifications` | `12 1 * * *` | yes | **no → 404** | — |
-| `line_credit_digest` | `3 2 * * *` | yes | **no → 404** | — |
+| `student_promotions_july_1` | `5 17 30 6 *` | yes | **excluded → 409 before audit** | `error` is the registry's `manualRunDisabledReason`; no `cron_invocations` row |
+| `admissions_notifications` | `12 1 * * *` | yes | yes | `{ok:true, skipped, results}` — the daily scan, plus the weekly digest on Bangkok Sundays; `202` when every pass was skipped |
+| `line_credit_digest` | `3 2 * * *` | yes | yes | the digest result verbatim; `500` when `status: "failed"` |
 | `cron_watchdog` | `7,37 * * * *` | — | yes | `{ok:true, ...CronWatchdogSummary}` ([`run-job.ts:186-195`](../../../src/lib/data-health/run-job.ts)) |
 | `room_utilization` | manual-only | — | yes | `{ok:true, ...result}` ([`run-job.ts:197-205`](../../../src/lib/data-health/run-job.ts)) |
-| `line_backlog_recovery` | manual-only | — | **no → 404** | — |
+| `line_backlog_recovery` | manual-only | — | yes | `{ok:true, result}` from `runLineBacklogRecovery({ db, dryRun: false })` |
 
-Three of the eight unimplemented keys are `dangerous`, so a caller must still send `confirmed: true` to receive the 404 — gate 4 runs before dispatch.
+`student_promotions_july_1` is `dangerous`, so a caller must still send `confirmed: true` to receive its 409 refusal — gate 4 runs before dispatch.
 
 **Response shape is not uniform.** Each branch returns whatever its lib function produced; there is no envelope contract across jobs. Where a Data Health branch exists it can also differ from the cron route's own response — for example the post-class digest branch returns `{ok, result}` where the route returns `{ok, digest}`.
 
-**Side effects.** Beyond the dispatched job's own writes (Wise snapshot promotion, Google Sheets reads, outbound tutor/admin email, LINE pushes, payout ledger appends — see each job's entry in [crons.md](../crons.md)), every dispatch writes exactly one `cron_invocations` row with `triggerSource: "admin"` and `actorEmail` set to the caller ([`run-job.ts:35-41`](../../../src/lib/data-health/run-job.ts)), so manual runs are attributable and appear in the next dashboard load's `recentInvocations`.
+**Side effects.** Beyond the dispatched job's own writes (Wise snapshot promotion, Google Sheets reads, outbound tutor/admin email, LINE pushes, payout ledger appends — see each job's entry in [crons.md](../crons.md)), every dispatch writes exactly one `cron_invocations` row with `triggerSource: "admin"` and `actorEmail` set to the caller ([`run-job.ts:35-41`](../../../src/lib/data-health/run-job.ts)), so manual runs are attributable and appear in the next dashboard load's `recentInvocations`. A job refused for `manualRunDisabledReason` is never dispatched and writes no row.
 
 **Status codes:**
 
 | Code | Condition |
 |------|-----------|
 | 200 | Job dispatched and its branch returned a 2xx body. |
-| 202 | Single-flight skip on `wise_snapshot` / `credit_control` — audited as `skipped`, not `failed` ([`cron-audit.ts:114`](../../../src/lib/data-health/cron-audit.ts)). |
+| 202 | Single-flight skip on `wise_snapshot` / `credit_control` / `progress_tests` / `unearned_revenue`, or `admissions_notifications` when every pass was skipped — audited as `skipped`, not `failed` ([`cron-audit.ts:114`](../../../src/lib/data-health/cron-audit.ts)). |
 | 401 | No session, or a session without `user.email`. |
 | 403 | Post-class job without the `access_manager` capability. Also emitted by middleware for a restricted user outside `/data-health`. |
-| 404 | `jobKey` not in the registry (no audit row), **or** registered but with no runner branch (audit row written). |
-| 409 | `dangerous` job without `confirmed: true`; also the `already running` collisions on `wise_activity` and `competitor_intelligence`. |
+| 404 | `jobKey` not in the registry (no audit row). The dispatcher's terminal `Unknown job` fallback is a defensive default that no registry key reaches. |
+| 409 | `dangerous` job without `confirmed: true`; a job carrying `manualRunDisabledReason` (`student_promotions_july_1`), refused before the audit wrapper with the reason as `error`; also the `already running` collisions on `wise_activity`, `competitor_intelligence` and `post_class_feedback_backfill`. |
 | 500 | Branch-level failure. Message fidelity varies by branch — several return a fixed generic string that discards the underlying error. |
+| 502 | `unearned_revenue` sync returned `ok: false` (the cron route's mapping). |
 | 503 | Reminder checkpoint not ready (`post_class_feedback_day_after`, `post_class_feedback_deadline`). |
 
 ---
@@ -227,12 +228,13 @@ The push half of Data Health: it re-runs the dashboard's own health derivation o
 |---|---:|---|
 | [`src/app/api/data-health/__tests__/route.test.ts`](../../../src/app/api/data-health/__tests__/route.test.ts) | 3 | 401 unauthenticated, the v2 payload with the compatibility fields preserved, 500 JSON on aggregation failure |
 | [`src/app/api/data-health/jobs/[jobKey]/run/__tests__/route.test.ts`](../../../src/app/api/data-health/jobs/[jobKey]/run/__tests__/route.test.ts) | 7 | admin session required, known non-dangerous job, 409 without confirmation, confirmed dangerous job, unknown job, `access_manager` required for post-class jobs, access manager allowed |
+| [`src/lib/data-health/__tests__/run-job.test.ts`](../../../src/lib/data-health/__tests__/run-job.test.ts) | 46 | dispatch parity with the registry (compile-time `satisfies` + runtime set equality), every runnable key reaches its entry point, the 409 refusal before audit, and the nine newer branches mirroring their cron routes |
 | [`src/app/api/data-health/__tests__/modality-counter.test.ts`](../../../src/app/api/data-health/__tests__/modality-counter.test.ts) | 5 | the `modality` + `conflict_model` union |
 | [`src/lib/internal/__tests__/cron-watchdog.test.ts`](../../../src/lib/internal/__tests__/cron-watchdog.test.ts) | 25 | classification, episode dedup, recovery, lock claim/release, missing-table fail-safe, email content, payout-window entry |
 | [`src/lib/data-health/__tests__/status.test.ts`](../../../src/lib/data-health/__tests__/status.test.ts) | 7 | the status ladder and expected-window arithmetic |
 | [`src/lib/data-health/__tests__/cron-audit.test.ts`](../../../src/lib/data-health/__tests__/cron-audit.test.ts) | 6 | outcome derivation, response digest capping |
 | [`src/lib/data-health/__tests__/cron-retention.test.ts`](../../../src/lib/data-health/__tests__/cron-retention.test.ts) | 4 | both retention guards |
-| [`src/lib/data-health/__tests__/cron-registry.test.ts`](../../../src/lib/data-health/__tests__/cron-registry.test.ts) | 5 | registry mirrors `vercel.json`, every entry points at a real `route.ts`, and each entry's `maxDurationSeconds` mirrors that route's exported `maxDuration` |
+| [`src/lib/data-health/__tests__/cron-registry.test.ts`](../../../src/lib/data-health/__tests__/cron-registry.test.ts) | 7 | registry mirrors `vercel.json`, every entry points at a real `route.ts`, and each entry's `maxDurationSeconds` mirrors that route's exported `maxDuration`, plus exactly one `manualRunDisabledReason` job and the `isManuallyRunnable` truth table |
 
 The watchdog **route** has no route-level test; its behaviour is covered through the lib suite.
 

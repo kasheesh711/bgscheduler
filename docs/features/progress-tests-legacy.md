@@ -675,11 +675,10 @@ and the Learning Plans access-policy tests that use the same fixture.
     ([`middleware.ts:24`](../../src/middleware.ts)). Since teachers are real sessions now, a
     teacher can trigger a full sync. Intended blast radius?
 
-14. **Neither cron key can be run from Data Health.** `progress_tests` and `progress_tests_digest`
-    are registered and show run evidence ([`dashboard.ts:216`-`232`](../../src/lib/data-health/dashboard.ts))
-    but have no branch in [`run-job.ts`](../../src/lib/data-health/run-job.ts), so the job runner
-    returns `404 Unknown job`; the digest is additionally `GET`-only behind the cron secret, so a
-    bearer `curl` is its only manual path. Wire them up, or leave cron-only?
+14. **Resolved — both cron keys now run from Data Health.** `progress_tests` and `progress_tests_digest`
+    have [`run-job.ts`](../../src/lib/data-health/run-job.ts) branches that mirror their cron routes
+    (`runProgressTestSyncRequest({ triggerType: "manual", actorEmail })` and
+    `sendProgressTestAdminDigest()`); the digest route itself is still `GET`-only behind the cron secret.
 
 15. **The PAST-session fetch requests `page_size: 1000`** ([`sync.ts:66`, `148`](../../src/lib/progress-tests/sync.ts)).
     Whether Wise honours that or silently caps the page is a runtime fact the repo cannot attest;

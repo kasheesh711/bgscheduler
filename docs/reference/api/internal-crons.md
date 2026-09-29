@@ -56,7 +56,7 @@ Nineteen paths are registered in [`vercel.json`](../../../vercel.json), and ever
 
 ### The Data Health manual-run path
 
-`POST /api/data-health/jobs/{jobKey}/run` re-runs a job **by calling the same lib function in-process**, not by issuing an HTTP request to the route ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)). It handles 16 job keys, including a manual Onsite Foot Traffic reconciliation. **Eight registry keys have no branch and therefore return `404 {"error":"Unknown job"}`**: `unearned_revenue`, `progress_tests`, `progress_tests_digest`, `post_class_feedback_backfill`, `student_promotions_july_1`, `admissions_notifications`, `line_backlog_recovery`, `line_credit_digest`. For those eight, a direct `CRON_SECRET` call or a feature-specific manual route is required.
+`POST /api/data-health/jobs/{jobKey}/run` re-runs a job **by calling the same lib function in-process**, not by issuing an HTTP request to the route ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)). It dispatches every registry key, including a manual Onsite Foot Traffic reconciliation, except `student_promotions_july_1`: that entry carries `manualRunDisabledReason`, so Data Health shows no button for it and `runDataHealthJob` refuses a direct call with `409` (the reason as `error`) before its audit wrapper. Student promotions are applied from the Student Promotions page.
 
 Where a Data Health branch exists, its response can differ slightly from the route's — e.g. the post-class digest branch returns `{ok, result}` ([`run-job.ts:121-124`](../../../src/lib/data-health/run-job.ts)) where the route returns `{ok, digest}`.
 
@@ -442,7 +442,7 @@ Otherwise it reads the active snapshot's packages and upcoming future sessions, 
 
 ### `GET /api/internal/line-backlog-recovery`
 
-**Manual only — no `vercel.json` entry, and no Data Health branch either**, so a direct `CRON_SECRET` call is the sole way to run it. Registered `manualOnly: true`, `dangerous: false` ([`cron-registry.ts:384-398`](../../../src/lib/data-health/cron-registry.ts)). `maxDuration = 300`. **`GET` only** — there is no `POST` handler.
+**Manual only — no `vercel.json` entry.** Run it with a direct `CRON_SECRET` call or from the Data Health job list, which calls the same `runLineBacklogRecovery({ db, dryRun: false })` in-process ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)). Registered `manualOnly: true`, `dangerous: false` ([`cron-registry.ts:384-398`](../../../src/lib/data-health/cron-registry.ts)). `maxDuration = 300`. **`GET` only** — there is no `POST` handler.
 
 **Request.** None read. Note the route hard-codes `dryRun: false` ([`route.ts:19`](../../../src/app/api/internal/line-backlog-recovery/route.ts)); the lib's dry-run mode is not reachable over HTTP.
 
