@@ -496,7 +496,8 @@ appears only for the domain's typed errors (for example "This record changed. Re
 never for a driver error, whose text can carry SQL and parameters. The AI review pass logs
 `[post-class-ai-review] { stopped, processed, failed, retried }` when its model calls end early: `deadline`
 (10 minutes into the tick), `model_failures` (three in a row, so OpenAI is likely down; failures that are
-transient are retried after an hour) or `not_configured` (no `OPENAI_API_KEY`). Each failed run row keeps its
+transient are retried after an hour), `not_configured` (no `OPENAI_API_KEY`) or `key_rejected` (OpenAI
+answered 401/403: rotate the key; the review that hit it is left untouched). Each failed run row keeps its
 own `error_message` and `metadata.lastErrorName`.
 
 ---
