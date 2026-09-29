@@ -201,13 +201,13 @@ beforeEach(() => {
   vi.resetAllMocks();
   applyDefaults();
   vi.stubEnv("WISE_CLASSROOM_AUTOMATION_ENABLED", "true");
-  // The shared post-class tick logs rejected passes and generic sync failures by design.
-  vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.useRealTimers();
+  // Only vi.spyOn spies (the console spies below); the module mocks keep their implementations.
+  vi.restoreAllMocks();
 });
 
 describe("runDataHealthJob", () => {
@@ -397,15 +397,18 @@ describe("runDataHealthJob", () => {
     ["retries", () => vi.mocked(processDuePostClassNotificationRetries).mockRejectedValueOnce(new Error("retries down"))],
     ["hygiene", () => vi.mocked(runPostClassDeductionHygiene).mockRejectedValueOnce(new Error("hygiene down"))],
   ] as const)("reports a rejected %s pass as { failed: true } in a 200, as the cron does", async (key, reject) => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     reject();
 
     const response = await runDataHealthJob("post_class_feedback", OWNER);
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ...PC_BODY, [key]: { failed: true } });
+    expect(consoleError.mock.calls).toEqual([["[post-class-collection-tick]", { pass: key, errorName: "Error" }]]);
   });
 
   it("maps post-class sync failures like its cron route, without driver detail or post-sync passes", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.mocked(runPostClassFeedbackSync)
       .mockRejectedValueOnce(new PostClassFeedbackSyncAlreadyRunningError("Post-class feedback sync is already running."))
       .mockRejectedValueOnce(new Error("sensitive driver detail"))
@@ -428,6 +431,11 @@ describe("runDataHealthJob", () => {
     expect(processPostClassAiReviews).not.toHaveBeenCalled();
     expect(processDuePostClassNotificationRetries).not.toHaveBeenCalled();
     expect(runPostClassDeductionHygiene).not.toHaveBeenCalled();
+    // The two generic 500s are logged by error class only; the typed 409 is not logged.
+    expect(consoleError.mock.calls).toEqual([
+      ["[post-class-collection-tick]", { pass: "sync", errorName: "Error" }],
+      ["[post-class-collection-tick]", { pass: "sync", errorName: "Error" }],
+    ]);
   });
 
   it("returns a sync deferred by a live payout lease as a 409 with the lease message, as the cron does", async () => {

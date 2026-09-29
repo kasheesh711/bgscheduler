@@ -52,7 +52,7 @@ function settledPass<T>(
   outcome: PromiseSettledResult<T>,
 ): SettledPass<T> {
   if (outcome.status === "fulfilled") return outcome.value;
-  // The tick still answers 200, so this line is the only record that the pass failed.
+  // The tick still answers 200, so without this line a rejected pass leaves no log.
   console.error(LOG_TAG, { pass, errorName: errorName(outcome.reason) });
   return { failed: true };
 }
@@ -96,8 +96,8 @@ export async function runPostClassCollectionTick(
  *   is deferred by a live payout lease;
  * - otherwise a fixed `500` that never echoes the thrown message. The failure is
  *   logged by error class, including one thrown before the sync run row exists
- *   (an unset `WISE_INSTITUTE_ID`, a database error in `beginSync`), which
- *   leaves no other trace.
+ *   (an unset `WISE_INSTITUTE_ID`, a database error in `beginSync`), which has
+ *   no `post_class_sync_runs` row to explain it.
  */
 export async function runPostClassCollectionTickRequest(options: PostClassCollectionTickOptions) {
   try {
