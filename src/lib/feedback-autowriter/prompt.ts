@@ -68,11 +68,12 @@ export function redactForModel(
   for (const token of [nicknameCode, nickname].filter((value): value is string => Boolean(value && [...value].length >= 2))) {
     result = result.replace(latinWord(token), STUDENT_TOKEN);
   }
-  // Each name-like word of an alias — never a generic device word ("Zoom", "iPad", "user").
+  // Each name-like word of an alias, only where it is written as a name (capitalised, case-sensitive: a guest
+  // "May Win" must not turn "may need … a win" into placeholders) — never a generic device word ("Zoom", "iPad").
   for (const phrase of aliases) {
     for (const word of phrase.split(/\s+/u)) {
-      if ([...word].length < 2 || !/^\p{L}[\p{L}\p{M}'-]*$/u.test(word) || GENERIC_GUEST_WORDS.has(word.toLocaleLowerCase("en-US"))) continue;
-      result = result.replace(latinWord(word), STUDENT_TOKEN);
+      if ([...word].length < 2 || !/^\p{Lu}[\p{L}\p{M}'-]*$/u.test(word) || GENERIC_GUEST_WORDS.has(word.toLocaleLowerCase("en-US"))) continue;
+      result = result.replace(new RegExp(`(?<!\\p{L})${escapeRegExp(word)}(?!\\p{L})`, "gu"), STUDENT_TOKEN);
     }
   }
   return result;

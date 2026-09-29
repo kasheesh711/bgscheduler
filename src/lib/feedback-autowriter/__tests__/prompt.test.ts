@@ -85,6 +85,9 @@ describe("redacting a guest name that stood in for the student", () => {
     // Device words and one-letter words in a guest name leave the lesson text alone.
     expect(redactForModel("We used a Zoom whiteboard on the iPad.", { ...names, studentAliases: ["Zoom user", "A"] }))
       .toBe("We used a Zoom whiteboard on the iPad.");
+    // Words of a guest name match only where written as a name.
+    expect(redactForModel("May said she may need practice; it was a win for Win.", { ...names, studentAliases: ["May Win"] }))
+      .toBe("[STUDENT_1] said she may need practice; it was a win for [STUDENT_1].");
   });
 });
 
