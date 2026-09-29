@@ -2,7 +2,8 @@
 -- Records every text the autowriter put in Wise, the owner's verdicts on it, the fixes measured from Wise
 -- activity events, quality metrics and the expansion gate. Nothing here writes to Wise, and the POST path is
 -- unchanged: first shots are snapshotted from settled `feedback_autowriter_sessions` rows and proven against
--- the `body_hash` pinned by the POST claim.
+-- the `body_hash` pinned by the POST claim. The only change to an existing table is an AFTER trigger on
+-- `feedback_autowriter_control` that logs mode and tutor-switch changes (coverage judges each class by them).
 
 CREATE FUNCTION feedback_autowriter_reject_mutation() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -36,12 +37,16 @@ CREATE TABLE feedback_autowriter_posts (
   verification jsonb NOT NULL DEFAULT '{}'::jsonb,
   provenance text NOT NULL CHECK (provenance IN ('snapshot','live','backfill')),
   reconstruction jsonb,
+  -- A writer's own idempotency key (e.g. 'nickname-fix:<session>'): the same re-post is never recorded twice.
+  dedupe_key text,
   recorded_at timestamptz NOT NULL DEFAULT now(),
   settled_at timestamptz,
   CHECK (kind = 'first_shot' OR reason IS NOT NULL)
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX feedback_autowriter_posts_first_shot_idx ON feedback_autowriter_posts (wise_session_id) WHERE kind = 'first_shot';
+--> statement-breakpoint
+CREATE UNIQUE INDEX feedback_autowriter_posts_dedupe_idx ON feedback_autowriter_posts (dedupe_key) WHERE dedupe_key IS NOT NULL;
 --> statement-breakpoint
 CREATE INDEX feedback_autowriter_posts_session_idx ON feedback_autowriter_posts (wise_session_id, recorded_at);
 --> statement-breakpoint
@@ -55,12 +60,12 @@ BEGIN
   IF ROW(OLD.id, OLD.wise_session_id, OLD.wise_class_id, OLD.wise_teacher_user_id, OLD.kind, OLD.correction_id,
          OLD.fields, OLD.fields_sha256, OLD.body_hash, OLD.billing, OLD.arm, OLD.evidence, OLD.pipeline,
          OLD.actor_kind, OLD.actor, OLD.reason, OLD.post_started_at, OLD.post_finished_at, OLD.provenance,
-         OLD.reconstruction, OLD.recorded_at)
+         OLD.reconstruction, OLD.dedupe_key, OLD.recorded_at)
      IS DISTINCT FROM
      ROW(NEW.id, NEW.wise_session_id, NEW.wise_class_id, NEW.wise_teacher_user_id, NEW.kind, NEW.correction_id,
          NEW.fields, NEW.fields_sha256, NEW.body_hash, NEW.billing, NEW.arm, NEW.evidence, NEW.pipeline,
          NEW.actor_kind, NEW.actor, NEW.reason, NEW.post_started_at, NEW.post_finished_at, NEW.provenance,
-         NEW.reconstruction, NEW.recorded_at)
+         NEW.reconstruction, NEW.dedupe_key, NEW.recorded_at)
   THEN
     RAISE EXCEPTION 'post content in % is immutable', TG_TABLE_NAME USING ERRCODE = '55000';
   END IF;
@@ -92,10 +97,14 @@ CREATE TABLE feedback_autowriter_verdicts (
   reviewer text NOT NULL,
   source text NOT NULL CHECK (source IN ('dashboard','backfill')),
   supersedes_id uuid REFERENCES feedback_autowriter_verdicts(id),
+  -- Set when this verdict replaced a critical judgement (verdict or critical flag) with a non-critical one: always
+  -- a deliberate owner act with a note.
+  downgrades_critical boolean NOT NULL DEFAULT false,
   created_at timestamptz NOT NULL DEFAULT now(),
   CHECK ((verdict = 'approve') = (severity IS NULL)),
   CHECK ((coalesce(severity, '') = 'critical') = (critical_category IS NOT NULL)),
-  CHECK ((target_kind = 'post') = (post_id IS NOT NULL))
+  CHECK ((target_kind = 'post') = (post_id IS NOT NULL)),
+  CHECK (NOT downgrades_critical OR (coalesce(severity, '') <> 'critical' AND btrim(coalesce(note, '')) <> ''))
 );
 --> statement-breakpoint
 CREATE INDEX feedback_autowriter_verdicts_session_idx ON feedback_autowriter_verdicts (wise_session_id, created_at);
@@ -120,7 +129,9 @@ CREATE TABLE feedback_autowriter_reviews (
   flag_sources text[] NOT NULL DEFAULT '{}',
   current_verdict_id uuid REFERENCES feedback_autowriter_verdicts(id),
   reviewed_at timestamptz,
+  -- Saves after our first post, up to the current Approve (all of them while there is none), and per actor kind.
   measured_fix_count integer NOT NULL DEFAULT 0,
+  measured_fixes_by_actor jsonb NOT NULL DEFAULT '{}'::jsonb,
   corrections_verified integer NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
@@ -156,7 +167,8 @@ CREATE TRIGGER feedback_autowriter_reviews_protect
   BEFORE UPDATE OR DELETE ON feedback_autowriter_reviews
   FOR EACH ROW EXECUTE FUNCTION feedback_autowriter_protect_review();
 --> statement-breakpoint
--- Reasons a post needs the owner's eyes (a measured fix, an unmatched API write, later: agent and owner flags).
+-- Reasons a post needs the owner's eyes (a measured fix, an unmatched API write, a first shot that landed without
+-- verifying; later: agent and owner flags).
 CREATE TABLE feedback_autowriter_flags (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   wise_session_id text NOT NULL,
@@ -215,6 +227,7 @@ CREATE TABLE feedback_autowriter_fix_events (
 CREATE INDEX feedback_autowriter_fix_events_session_idx ON feedback_autowriter_fix_events (wise_session_id, event_at);
 --> statement-breakpoint
 -- Outbox of things a person must know; critical ones are pushed (email, optional LINE) and retried.
+-- `pushed_channels` lists every delivered target (`email:<address>`, `line:<to>`), so a retry never re-sends one.
 CREATE TABLE feedback_autowriter_incidents (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   dedupe_key text NOT NULL UNIQUE,
@@ -237,10 +250,11 @@ CREATE TABLE feedback_autowriter_incidents (
 --> statement-breakpoint
 CREATE INDEX feedback_autowriter_incidents_pending_idx ON feedback_autowriter_incidents (next_push_at) WHERE push_status = 'pending';
 --> statement-breakpoint
--- Per Bangkok date and tutor ('*' = all): a cache recomputed by the review job.
+-- Per Bangkok date and tutor ('*' = all): a cache recomputed by the review job for every date of the gate window.
 CREATE TABLE feedback_autowriter_daily_metrics (
   metric_date date NOT NULL,
   tutor_key text NOT NULL,
+  -- Some class of the day could be written live (mode live, tutor on, during its posting window) or was posted.
   live_mode boolean NOT NULL DEFAULT false,
   posted integer NOT NULL DEFAULT 0,
   required integer NOT NULL DEFAULT 0,
@@ -255,11 +269,16 @@ CREATE TABLE feedback_autowriter_daily_metrics (
   excluded_tutor_first integer NOT NULL DEFAULT 0,
   excluded_absent integer NOT NULL DEFAULT 0,
   excluded_tutor_off integer NOT NULL DEFAULT 0,
+  excluded_not_live integer NOT NULL DEFAULT 0,
   pending integer NOT NULL DEFAULT 0,
   unseen integer NOT NULL DEFAULT 0,
   held integer NOT NULL DEFAULT 0,
+  -- Of `held`: holds for absence or partial attendance (still misses until interview decision D-03).
+  held_absence integer NOT NULL DEFAULT 0,
   expired integer NOT NULL DEFAULT 0,
   failed integer NOT NULL DEFAULT 0,
+  -- A person wrote the class after our judged draft was ready (a miss, unlike a tutor who wrote first).
+  late integer NOT NULL DEFAULT 0,
   measured_fix_classes integer NOT NULL DEFAULT 0,
   corrections_verified integer NOT NULL DEFAULT 0,
   policy_version integer NOT NULL,
@@ -277,10 +296,13 @@ CREATE TABLE feedback_autowriter_gate_evaluations (
   roster_tutors text[] NOT NULL,
   reviewed integer NOT NULL,
   accurate integer NOT NULL,
-  wilson_lower numeric(5,4) NOT NULL,
+  -- Unrounded: a rounded bound could read as meeting a threshold the status says it missed.
+  wilson_lower double precision NOT NULL CHECK (wilson_lower >= 0 AND wilson_lower <= 1),
   critical integer NOT NULL,
   pending_critical_flags integer NOT NULL,
   pending_flagged_reviews integer NOT NULL,
+  required_pending integer NOT NULL,
+  unrecorded_posts integer NOT NULL,
   coverage_num integer NOT NULL,
   coverage_den integer NOT NULL,
   status text NOT NULL CHECK (status IN ('insufficient_data','below_head_start','head_start','pass','blocked_critical')),
@@ -310,3 +332,66 @@ CREATE TABLE feedback_autowriter_review_runs (
 CREATE UNIQUE INDEX feedback_autowriter_review_runs_single_running_idx ON feedback_autowriter_review_runs (status) WHERE status = 'running';
 --> statement-breakpoint
 CREATE INDEX feedback_autowriter_review_runs_started_idx ON feedback_autowriter_review_runs (started_at);
+--> statement-breakpoint
+-- Every change of the control row's mode or tutor switches, append-only. Coverage judges each class by the switches
+-- during its own posting window, never by today's. Seeded with the row's state as of its last change
+-- (`updated_at`; lease writes never bump it); before the first row every class counts as live and every tutor on.
+CREATE TABLE feedback_autowriter_control_history (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  changed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  mode text NOT NULL CHECK (mode IN ('off','shadow','live')),
+  disabled_tutors jsonb NOT NULL,
+  source text NOT NULL CHECK (source IN ('seed','change')),
+  updated_by text
+);
+--> statement-breakpoint
+CREATE INDEX feedback_autowriter_control_history_changed_idx ON feedback_autowriter_control_history (changed_at);
+--> statement-breakpoint
+CREATE TRIGGER feedback_autowriter_control_history_immutable
+  BEFORE UPDATE OR DELETE ON feedback_autowriter_control_history
+  FOR EACH ROW EXECUTE FUNCTION feedback_autowriter_reject_mutation();
+--> statement-breakpoint
+INSERT INTO feedback_autowriter_control_history (changed_at, mode, disabled_tutors, source, updated_by)
+SELECT updated_at, mode, disabled_tutors, 'seed', updated_by FROM feedback_autowriter_control;
+--> statement-breakpoint
+CREATE FUNCTION feedback_autowriter_record_control_change() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO feedback_autowriter_control_history (changed_at, mode, disabled_tutors, source, updated_by)
+  VALUES (clock_timestamp(), NEW.mode, NEW.disabled_tutors, 'change', NEW.updated_by);
+  RETURN NEW;
+END;
+$$;
+--> statement-breakpoint
+CREATE TRIGGER feedback_autowriter_control_history_on_insert
+  AFTER INSERT ON feedback_autowriter_control
+  FOR EACH ROW EXECUTE FUNCTION feedback_autowriter_record_control_change();
+--> statement-breakpoint
+CREATE TRIGGER feedback_autowriter_control_history_on_update
+  AFTER UPDATE ON feedback_autowriter_control
+  FOR EACH ROW WHEN (OLD.mode IS DISTINCT FROM NEW.mode OR OLD.disabled_tutors IS DISTINCT FROM NEW.disabled_tutors)
+  EXECUTE FUNCTION feedback_autowriter_record_control_change();
+--> statement-breakpoint
+-- Roster accounts as the review job saw them: a class the autowriter never saw is judged only while its account was
+-- on the roster. `first_seen_at` is the account's earliest autowriter row, else the job's first sight of it.
+CREATE TABLE feedback_autowriter_roster_accounts (
+  wise_teacher_user_id text PRIMARY KEY,
+  tutor_key text NOT NULL,
+  first_seen_at timestamptz NOT NULL,
+  last_seen_at timestamptz NOT NULL,
+  CHECK (last_seen_at >= first_seen_at)
+);
+--> statement-breakpoint
+-- One row, set once by this migration: API saves no post explains are pushed as critical from this instant (earlier
+-- ones — the 29 Sep prototype saves — are recorded as info). Set before the backfill's go/no-go dry run.
+CREATE TABLE feedback_autowriter_review_settings (
+  id text PRIMARY KEY DEFAULT 'default' CHECK (id = 'default'),
+  unmatched_api_critical_from timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+--> statement-breakpoint
+CREATE TRIGGER feedback_autowriter_review_settings_immutable
+  BEFORE UPDATE OR DELETE ON feedback_autowriter_review_settings
+  FOR EACH ROW EXECUTE FUNCTION feedback_autowriter_reject_mutation();
+--> statement-breakpoint
+INSERT INTO feedback_autowriter_review_settings (id) VALUES ('default');
