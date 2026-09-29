@@ -359,9 +359,17 @@ describe("feedback autowriter store (Postgres)", () => {
 
   it("re-queues shadow drafts still before their deadline when going live", async () => {
     const token = (await claimGeneration(db, SESSION, 60_000))!;
-    await releaseGeneration(db, SESSION, token, { state: "would_submit", reason: "shadow" });
+    await releaseGeneration(db, SESSION, token, {
+      state: "would_submit", reason: "shadow",
+      metadata: { sonioxRetainUntil: "2026-10-01T00:00:00.000Z", triagedAt: "2026-09-29T15:00:00.000Z", judge: { faithful: true } },
+    });
     expect(await requeueShadowDrafts(db, new Date())).toBe(1);
-    expect((await readSessionRow(db, SESSION))?.state).toBe("pending");
+    const row = await readSessionRow(db, SESSION);
+    expect(row?.state).toBe("pending");
+    // Back to work: the review window restarts when it is done again; the judged draft is kept for the POST.
+    expect(row?.metadata).not.toHaveProperty("sonioxRetainUntil");
+    expect(row?.metadata).not.toHaveProperty("triagedAt");
+    expect(row?.metadata).toMatchObject({ judge: { faithful: true } });
     await haltAutowriter(db, "noop");
   });
 

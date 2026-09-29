@@ -615,9 +615,6 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(wise.posts).toHaveLength(1);
     const row = await readSessionRow(db, SESSION_ID);
     expect(row).toMatchObject({ state: "verified", evidence: "transcript", sonioxTranscriptionId: "job-1" });
-    const retainUntil = new Date(String((row?.metadata as { sonioxRetainUntil?: unknown }).sonioxRetainUntil)).getTime();
-    expect(retainUntil - Date.now()).toBeGreaterThan(71 * 3600_000);
-    expect(retainUntil - Date.now()).toBeLessThanOrEqual(72 * 3600_000);
     // Stamped with what produced it.
     expect(row?.metadata).toMatchObject({ pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION, arm: "glm", evidence: "transcript" } });
     expect(row?.metadata).toMatchObject({ transcript: { speakerMethod: "zoom_alignment", audioMinutes: 60 } });
@@ -790,7 +787,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
   });
 
   it("deletes a finished class's leftover Soniox job during the sweep once its review window is over", async () => {
-    await seedRow({ state: "expired", sonioxTranscriptionId: "job-9", updatedAt: sql`now() - interval '73 hours'` as never });
+    await seedRow({ state: "expired", sonioxTranscriptionId: "job-9", metadata: { sonioxRetainUntil: "2026-01-01T00:00:00.000Z" } });
     const soniox = fakeSoniox();
     await runSweep(transcriptDeps(fakeWise().ops, soniox.client));
     expect(soniox.removed).toEqual(["job-9"]);
@@ -964,10 +961,13 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       .toMatchObject({ result: "would_submit" });
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "would_submit", sonioxTranscriptionId: "job-1" });
 
-    // Inside the review window, and neither the reaper nor the cleanup touch it.
+    // The first sweep to see it done starts its 72 h window; neither the reaper nor the cleanup touch it.
     const early = fakeSoniox({ listed: [{ id: "job-1", createdAt: new Date(Date.now() - 5 * 3600_000), clientReferenceId: SESSION_ID, status: "completed" }] });
     await runSweep(transcriptDeps(fakeWise().ops, early.client));
     expect(early.removed).toEqual([]);
+    const retainUntil = new Date(String(((await readSessionRow(db, SESSION_ID))?.metadata as { sonioxRetainUntil?: unknown }).sonioxRetainUntil)).getTime();
+    expect(retainUntil - Date.now()).toBeGreaterThan(71.9 * 3600_000);
+    expect(retainUntil - Date.now()).toBeLessThanOrEqual(72.1 * 3600_000);
 
     // Triaged: deleted at the next sweep, and the id is cleared.
     await db.update(S).set({ metadata: sql`${S.metadata} || '{"triagedAt":"2026-09-29T15:00:00.000Z"}'::jsonb` as never }).where(eq(S.wiseSessionId, SESSION_ID));
@@ -989,19 +989,39 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(expired.removed).toEqual(["job-2"]);
   });
 
-  it("keeps the job of a class that ended without a retention stamp for 72 h from its last update", async () => {
-    // An error cap, an expiry or a gate hold ends a class without the stamp: its transcript is still reviewable.
+  it("starts the 72 h review window however a class ended, and a later sweep never extends it", async () => {
+    // An error cap ends the class without ever reaching the posting code: its transcript is still reviewable.
     await seedRow({ state: "held", reason: "error:boom", evidence: "transcript", sonioxTranscriptionId: "job-9" });
-    const recent = fakeSoniox();
-    await runSweep(transcriptDeps(fakeWise().ops, recent.client));
-    expect(recent.removed).toEqual([]);
-    expect((await readSessionRow(db, SESSION_ID))?.sonioxTranscriptionId).toBe("job-9");
+    const first = fakeSoniox();
+    await runSweep(transcriptDeps(fakeWise().ops, first.client));
+    expect(first.removed).toEqual([]);
+    const stamped = ((await readSessionRow(db, SESSION_ID))?.metadata as { sonioxRetainUntil?: string }).sonioxRetainUntil;
+    expect(new Date(String(stamped)).getTime() - Date.now()).toBeGreaterThan(71.9 * 3600_000);
 
-    await db.update(S).set({ updatedAt: sql`now() - interval '73 hours'` as never }).where(eq(S.wiseSessionId, SESSION_ID));
-    const old = fakeSoniox();
-    await runSweep(transcriptDeps(fakeWise().ops, old.client));
-    expect(old.removed).toEqual(["job-9"]);
+    // Later sweeps (which touch the row's other columns) leave the window where it was.
+    await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client));
+    expect(((await readSessionRow(db, SESSION_ID))?.metadata as { sonioxRetainUntil?: string }).sonioxRetainUntil).toBe(stamped);
+
+    await db.update(S).set({ metadata: sql`${S.metadata} || jsonb_build_object('sonioxRetainUntil', now() - interval '1 minute')` as never })
+      .where(eq(S.wiseSessionId, SESSION_ID));
+    const over = fakeSoniox();
+    await runSweep(transcriptDeps(fakeWise().ops, over.client));
+    expect(over.removed).toEqual(["job-9"]);
     expect((await readSessionRow(db, SESSION_ID))?.sonioxTranscriptionId).toBeNull();
+  });
+
+  it("stamps CLI runs with the local checkout's commit", async () => {
+    await updateControl(db, { mode: "shadow" }, "t@x.com");
+    await seedRow();
+    // `vercel env pull` writes an empty VERCEL_GIT_COMMIT_SHA; it must not hide the local stamp.
+    vi.stubEnv("VERCEL_GIT_COMMIT_SHA", "");
+    vi.stubEnv("AUTOWRITER_LOCAL_COMMIT", "local:abc+dirty");
+    try {
+      expect(await processSession(deps(fakeWise().ops), { wiseSessionId: SESSION_ID, trigger: "cron" })).toMatchObject({ result: "would_submit" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ pipeline: { commitSha: "local:abc+dirty" } });
   });
 
   it("stamps a shadow draft with the commit, prompt and judge versions that wrote it", async () => {

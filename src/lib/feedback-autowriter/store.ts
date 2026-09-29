@@ -372,30 +372,35 @@ export async function setSonioxTranscription(db: Database, wiseSessionId: string
 const SONIOX_DONE_STATES: readonly AutowriterState[] = [...TERMINAL_STATES, "would_submit"];
 
 /**
- * Rows done with their Soniox job whose review window is over: kept for triage until
- * `metadata.sonioxRetainUntil` (stamped 72 h ahead when the class finishes with its transcript) or until the
- * class is triaged (`metadata.triagedAt`), then the sweep deletes the job. A row that reached a done state
- * any other way (an error cap, an expiry, a gate hold) or whose stamp failed has no stamp: its window runs
- * `retainMs` from the row's last update, so no path deletes a transcript before it can be reviewed.
+ * Start the review window of rows that became done with their Soniox job since the last sweep, however they
+ * got there (posted, shadow draft, a hold, an error cap, an expiry): `metadata.sonioxRetainUntil` = now +
+ * `retainMs`, on the database clock. Set once; a row sent back to work (owner retry, going live) loses it.
  */
-export async function listSonioxCleanup(db: Database, retainMs: number): Promise<Array<{ wiseSessionId: string; sonioxTranscriptionId: string }>> {
+export async function stampSonioxRetention(db: Database, retainMs: number): Promise<number> {
   const retainSeconds = Math.round(retainMs / 1000);
+  const rows = await db.update(S).set({
+    metadata: sql`${S.metadata} || jsonb_build_object('sonioxRetainUntil', now() + make_interval(secs => ${retainSeconds}::double precision))`,
+    updatedAt: nowSql,
+  }).where(and(
+    isNotNull(S.sonioxTranscriptionId),
+    inArray(S.state, [...SONIOX_DONE_STATES]),
+    sql`not ${S.metadata} ? 'sonioxRetainUntil'`,
+  )).returning({ id: S.id });
+  return rows.length;
+}
+
+/**
+ * Rows done with their Soniox job whose review window is over (`metadata.sonioxRetainUntil`, see above) or that
+ * were triaged (`metadata.triagedAt`): the sweep deletes the job. A row not yet stamped is never listed.
+ */
+export async function listSonioxCleanup(db: Database): Promise<Array<{ wiseSessionId: string; sonioxTranscriptionId: string }>> {
   const rows = await db.select({ wiseSessionId: S.wiseSessionId, sonioxTranscriptionId: S.sonioxTranscriptionId })
     .from(S).where(and(
       isNotNull(S.sonioxTranscriptionId),
       inArray(S.state, [...SONIOX_DONE_STATES]),
-      sql`(coalesce((${S.metadata} ->> 'sonioxRetainUntil')::timestamptz, ${S.updatedAt} + make_interval(secs => ${retainSeconds}::double precision)) < now()
-        or ${S.metadata} ? 'triagedAt')`,
+      sql`(${S.metadata} ? 'triagedAt' or (${S.metadata} ->> 'sonioxRetainUntil')::timestamptz < now())`,
     ));
   return rows.flatMap((row) => row.sonioxTranscriptionId ? [{ wiseSessionId: row.wiseSessionId, sonioxTranscriptionId: row.sonioxTranscriptionId }] : []);
-}
-
-/** Keep a finished class's Soniox job for review until `until`; the job id stays on the row until the sweep deletes it. */
-export async function retainSonioxTranscription(db: Database, wiseSessionId: string, transcriptionId: string, until: Date): Promise<void> {
-  await db.update(S).set({
-    metadata: sql`${S.metadata} || ${JSON.stringify({ sonioxRetainUntil: until.toISOString() })}::jsonb`,
-    updatedAt: nowSql,
-  }).where(and(eq(S.wiseSessionId, wiseSessionId), eq(S.sonioxTranscriptionId, transcriptionId)));
 }
 
 /**
@@ -486,7 +491,10 @@ export async function expireOverdueRows(db: Database, input: {
 
 /** Shadow drafts become eligible again when the owner switches to live. */
 export async function requeueShadowDrafts(db: Database, minDeadline: Date): Promise<number> {
-  const rows = await db.update(S).set({ state: "pending", nextAttemptAt: null, updatedAt: nowSql })
+  // Back to work: its transcript's review window starts again when it is done.
+  const rows = await db.update(S).set({
+    state: "pending", nextAttemptAt: null, metadata: sql`${S.metadata} - 'sonioxRetainUntil' - 'triagedAt'`, updatedAt: nowSql,
+  })
     .where(and(eq(S.state, "would_submit"), gte(S.deadlineAt, minDeadline)))
     .returning({ id: S.id });
   return rows.length;

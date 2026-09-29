@@ -70,6 +70,7 @@ import {
   listPendingAlerts,
   listRowsInState,
   listSonioxCleanup,
+  stampSonioxRetention,
   markAlertsSent,
   noteSonioxRecorded,
   readControl,
@@ -79,7 +80,6 @@ import {
   recordCall,
   recordTranscriptionCall,
   releaseGeneration,
-  retainSonioxTranscription,
   releaseShadowDraft,
   releaseSweepLease,
   sessionSubmitStore,
@@ -258,7 +258,7 @@ export async function processSession(deps: AutowriterDeps, input: {
 
 /** The code running now: the Vercel deploy's commit, or the CLI's local checkout (`local:<sha>[+dirty]`). */
 function currentCommit(): string | null {
-  return process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.AUTOWRITER_LOCAL_COMMIT ?? null;
+  return process.env.VERCEL_GIT_COMMIT_SHA || process.env.AUTOWRITER_LOCAL_COMMIT || null;
 }
 
 /**
@@ -714,25 +714,13 @@ async function processTranscript(deps: AutowriterDeps, input: {
   }
 
   const soniox = deps.soniox;
-  /**
-   * The class is done with its transcript: keep the Soniox job for review (triage) for up to 72 h, then the
-   * sweep deletes it (owner decision, 29 Sep). Nothing is stored on our side; the job id stays on the row.
-   */
-  const finishJob = async (jobId: string) => {
-    // Best effort: without the stamp the sweep keeps the job for 72 h from the row's last update instead, and a
-    // failed stamp must not replace the class's real outcome.
-    await retainSonioxTranscription(db, row.wiseSessionId, jobId, new Date(Date.now() + AUTOWRITER_SONIOX_RETAIN_MS))
-      .catch((error: unknown) => console.error("[feedback-autowriter] retention stamp failed", error instanceof Error ? error.name : "unknown"));
-  };
-
   const stored = reusableTranscriptDraft(row);
   if (stored) {
-    const outcome = await postDraft(deps, {
+    // The job id stays on the row: the sweep keeps it for review once the class is done with it.
+    return postDraft(deps, {
       row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
       draft: stored, evidence: "transcript", extraMetadata: guestMetadata(student), release, out,
     });
-    if (row.sonioxTranscriptionId) await finishJob(row.sonioxTranscriptionId);
-    return outcome;
   }
 
   const transcribeErrors = Number((row.metadata as { transcribeErrors?: unknown }).transcribeErrors ?? 0) || 0;
@@ -829,7 +817,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
     return transcribeFailed(`soniox_error:${(status.errorMessage ?? "unknown").slice(0, 120)}`, { infra: false, keepJob: gone ? null : jobId });
   }
 
-  // 3. Fetch (the job stays at Soniox until the review window ends; re-fetching is free).
+  // 3. Fetch (the job stays at Soniox until the class's review window ends; re-fetching is free).
   let transcript: Awaited<ReturnType<typeof soniox.transcript>>;
   try {
     transcript = await soniox.transcript(jobId);
@@ -869,7 +857,6 @@ async function processTranscript(deps: AutowriterDeps, input: {
   };
   const holdFor = async (reason: string) => {
     await release({ state: "held", reason, alertKind: "held", metadata: { transcript: transcriptMeta } });
-    await finishJob(jobId);
     return out("held", reason);
   };
   // Soniox's own audio length catches a recording Wise gave no length for.
@@ -917,14 +904,12 @@ async function processTranscript(deps: AutowriterDeps, input: {
     return out("infra", result.error);
   }
   if (result.kind === "held") return holdFor(result.reasons.join("; ").slice(0, 900));
-  const outcome = await postDraft(deps, {
+  // The judged draft is stored with the job id; once the class is done, the sweep keeps the job for review only.
+  return postDraft(deps, {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
     draft: { arm: result.arm, fields: result.fields, judge: result.judge }, evidence: "transcript",
     extraMetadata: { transcript: transcriptMeta, ...guestMetadata(student) }, release, out,
   });
-  // The judged draft is stored (or the class is finished): keep the transcript for review only.
-  await finishJob(jobId);
-  return outcome;
 }
 
 async function fetchText(url: string): Promise<string> {
@@ -1192,15 +1177,18 @@ export async function runSweep(deps: AutowriterDeps): Promise<SweepResult> {
 }
 
 /**
- * Delete Soniox jobs that are no longer needed: those of finished rows whose
- * review window is over (or that were triaged), and orphans no row references
- * (a create that timed out after Soniox accepted it, or a worker that died
- * before storing the id). Bounded per sweep; failures are retried next time.
+ * Keep finished classes' Soniox jobs for review, then delete them: the first
+ * sweep to see a class done with its job starts a 72 h window (owner decision,
+ * 29 Sep), and a later sweep deletes the job once the window is over or the
+ * class is triaged. Orphans no row references (a create that timed out after
+ * Soniox accepted it, or a worker that died before storing the id) are reaped
+ * too. Bounded per sweep; failures are retried next time.
  */
 async function cleanUpSonioxJobs(deps: AutowriterDeps, soniox: SonioxClient): Promise<void> {
   const { db } = deps;
   let budget = AUTOWRITER_SONIOX_CLEANUP_MAX;
-  for (const job of await listSonioxCleanup(db, AUTOWRITER_SONIOX_RETAIN_MS)) {
+  await stampSonioxRetention(db, AUTOWRITER_SONIOX_RETAIN_MS);
+  for (const job of await listSonioxCleanup(db)) {
     if (budget <= 0 || remaining(deps) < 60_000) return;
     budget -= 1;
     const gone = await soniox.remove(job.sonioxTranscriptionId).catch(() => null);

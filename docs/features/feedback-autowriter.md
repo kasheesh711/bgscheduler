@@ -91,12 +91,13 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
    length after it;
 2. fetches the transcript. BGScheduler never stores it. The Soniox job is kept while the class is in progress (so a
    retry re-fetches instead of transcribing again) and, once the class is done with it (posted, shadow draft, held,
-   expired or skipped), for review for at most 72 hours (owner decision, 29 Sep), then the sweep deletes it. The
-   window runs to `metadata.sonioxRetainUntil`, stamped when the class finishes with its transcript; a class that
-   ended any other way (an error cap, an expiry, a gate hold) runs 72 hours from the row's last update. A reviewer
-   finds the job by the row's `soniox_transcription_id` (Soniox Console). `metadata.triagedAt` ends the window early;
-   nothing writes it yet — it is reserved for the review surface of the operating loop. A delete that fails keeps the
-   job id so the sweep retries it, and the sweep also reaps jobs no row references after 2 hours;
+   expired or skipped, however it got there), for review for 72 hours (owner decision, 29 Sep), then the sweep
+   deletes it. The first sweep to see the class done stamps `metadata.sonioxRetainUntil` = now + 72 h (so the window
+   starts within one sweep of the class finishing); an owner retry or going live clears it, and the window starts
+   again when the class is next done. A reviewer finds the job by the row's `soniox_transcription_id` (Soniox
+   Console). `metadata.triagedAt` ends the window early; nothing writes it yet — it is reserved for the review
+   surface of the operating loop. A delete that fails keeps the job id so the sweep retries it, and the sweep also
+   reaps jobs no row references after 2 hours;
 3. tells tutor from student by lining up Soniox's speakers with Zoom's name-labelled WEBVTT (`rawTranscript`) — every
    speaker that overlaps the teacher's cues is TUTOR, so a diarization split cannot turn the tutor into the student;
    cues under any of the tutor's other names (their other account, a second device) count as the teacher's.
