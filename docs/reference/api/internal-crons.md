@@ -354,7 +354,7 @@ The actor email defaults to the literal `cron@begifted.local` and is overwritten
 
 **Request.** None read.
 
-**Side effects.** `runCompetitorIntelligenceSync` ([`sync.ts:494`](../../../src/lib/competitor-intelligence/sync.ts)) fails stale `running` rows, throws `"Competitor intelligence sync is already running"` if one survives ([`:507-509`](../../../src/lib/competitor-intelligence/sync.ts)), inserts a `competitor_sync_runs` row, then pulls website/social/SERP evidence through Apify and DataForSEO under the monthly USD budget cap and regenerates the daily brief.
+**Side effects.** `runCompetitorIntelligenceSync` ([`sync.ts:503`](../../../src/lib/competitor-intelligence/sync.ts)) fails stale `running` rows, throws `"Competitor intelligence sync is already running"` if one survives ([`:516-518`](../../../src/lib/competitor-intelligence/sync.ts)), inserts a `competitor_sync_runs` row (a request that loses that insert race throws the same error, [`:519-532`](../../../src/lib/competitor-intelligence/sync.ts)), then pulls website/social/SERP evidence through Apify and DataForSEO under the monthly USD budget cap and regenerates the daily brief.
 
 **Response** — `{ ok: result.status === "success", result }` with `CompetitorSyncResult` ([`sync.ts:57-66`](../../../src/lib/competitor-intelligence/sync.ts)): `runId`, `status` (`success` | `failed`), `seeded: { entities, sources, keywords }`, `errorSummary`, plus the inlined `RunCounts` fields.
 
