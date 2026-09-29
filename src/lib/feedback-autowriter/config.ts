@@ -49,7 +49,7 @@ export interface AutowriterModelConfig {
   arm: ModelArm;
   model: string;
   provider: OpenRouterProviderPreferences;
-  effort: "max" | "medium";
+  effort: "max" | "high" | "medium";
   /** When set, the response must come from this host and model or the call is an infra failure. */
   expectProvider?: string;
   expectModel?: string;
@@ -67,7 +67,9 @@ const GLM_ZDR_ROUTE: OpenRouterProviderPreferences = {
  * Writer: GLM 5.3 Flash pinned to Together with zero data retention.
  * Fallback writer: GPT-6 Luna (OpenAI has no ZDR route on OpenRouter).
  * Judge: GLM on the same ZDR route, so a successful GLM path never sends a
- * lesson summary to a retaining host.
+ * lesson summary to a retaining host. Reasoning `high` since v4 (30 Sep): at
+ * `medium` it passed a draft that gave another student's words to ours after
+ * ~100 reasoning tokens.
  */
 export const AUTOWRITER_MODELS = {
   writer: {
@@ -80,7 +82,7 @@ export const AUTOWRITER_MODELS = {
     effort: "max",
   },
   judge: {
-    arm: "glm", model: "z-ai/glm-5.3-flash", provider: GLM_ZDR_ROUTE, effort: "medium",
+    arm: "glm", model: "z-ai/glm-5.3-flash", provider: GLM_ZDR_ROUTE, effort: "high",
     expectProvider: "Together", expectModel: "z-ai/glm-5.3-flash",
   },
 } as const satisfies Record<string, AutowriterModelConfig>;

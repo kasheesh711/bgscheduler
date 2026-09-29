@@ -51,7 +51,8 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
    NVR / Non VR = Non-Verbal Reasoning, VR = Verbal Reasoning, Sci = Science — and nothing else is guessed. The
    judge treats the class details as true, so naming the programme or subject is never a "made-up" claim. Deterministic validation (300-char policy, placeholder, absence wording,
    copy-similarity against the tutor's 90 days of feedback and the autowriter's own posts).
-5. **Judge.** GLM (same ZDR route) checks every factual claim against the summary. Unfaithful or invalid →
+5. **Judge.** GLM (same ZDR route, reasoning `high`) checks the draft against the summary: unsupported claims,
+   things given to the wrong person, homework the tutor never set (v4, below). Unfaithful or invalid →
    fallback writer `openai/gpt-6-luna`, validated and GLM-judged the same way. Both fail → **held** + alert.
    Service failures (credit, outage, time-out, a provider-side generation error, a judge that gives no verdict
    twice) never go to the fallback: the session retries in 10 minutes and the run reports an infrastructure error.
@@ -66,6 +67,42 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
    phase. While an unsettled POST is older than 6 min (waiting for the sweep), nothing is drafted at all.
    A shadow draft finished after the owner switched to `live` goes back to `pending` (atomically with the mode),
    so it is posted rather than stranded in `would_submit`.
+
+### Writer and judge v4 (30 Sep)
+
+Two 29 Sep posts went wrong in ways the v3 prompts allowed. A summary named another student next to ours ("…
+noting that <another student> mentioned only 8 pages …"): redaction replaces only the student's and the tutor's
+names, so that name was the only real one left, the writer took it for our student and added a homework line, and
+the judge (reasoning `medium`, ~100 reasoning tokens) passed it. Another summary ended "…had three remaining homework
+problems to complete" (a mis-hearing); the writer posted it as homework and repeated it under "Need more work on".
+Prompt and judge versions are now 4 ([`prompt.ts`](../../src/lib/feedback-autowriter/prompt.ts),
+[`judge.ts`](../../src/lib/feedback-autowriter/judge.ts)):
+
+- **Writer rules.** Improvement is written as suggestions — never as homework the tutor set, never repeating the
+  homework. Homework is only work the record shows the tutor clearly setting for after this lesson; work described
+  as remaining or unfinished is not homework, an unclear record gives an empty field, and the homework is never
+  restated in another field (the JSON schema says the same). New rule 11, *who did what*: in a summary the student is
+  always `[STUDENT_1]` and the tutor `[TUTOR]`, and any other name is someone else (another student, family, a
+  friend, a character in the lesson material); in a transcript only STUDENT lines are the student's, and anyone
+  clearly not the student is never `[STUDENT_1]` — hedged, because a Thai-script or mis-heard name of the student is
+  not redacted. The transcript's "covered, not mastered" and Thai-name rules are now 12 and 13.
+- **Other-people hint (summary mode).** `otherPeopleNamed` lists up to 8 capitalised words that come right before a
+  person verb ("said", "mentioned", "finished", "was" …), leaving out common words, days and months, the class
+  details, the Soniox terms, and names that start with the student's first name or nickname. When there are any,
+  the writer and the judge both get "Other people named in the summary (never [STUDENT_1]): …" before the summary.
+  It is a hint, never a gate: a missed name or a harmless extra (a character, a subject) changes nothing else.
+- **Judge.** Reasoning `high` (was `medium`; the writer stays `max`). It returns three lists — `unsupported` (claims
+  the record does not state or clearly imply), `misattributed` (something given to `[STUDENT_1]` that the record
+  says about the tutor or someone else) and `homeworkNotSet` (homework, tasks or due dates the tutor did not
+  clearly set) — and `faithful` only when all three are empty. A reply missing a list is unparseable, so it fails
+  closed (one more try, then the session retries later). Hold reasons and the dashboard's "Judge flagged" line use
+  `judgeProblems`: unsupported quotes as they are, then `wrong person: …` and `homework not set: …`; judge call
+  records keep the three lists plus that flat `problems` list. Verdicts stored before v4 (`{ faithful, unsupported }`)
+  still show their unsupported quotes. The judge still gets no style guide or examples.
+- **Stored drafts.** A judged transcript draft is reused on a retry only when the current prompt and judge versions
+  wrote and passed it (`metadata.pipeline`, a complete v4 verdict). An older one — for example parked at deploy time
+  — is written and judged again from its kept Soniox job, and a shadow draft re-queued by going live restarts its
+  transcript's review window instead of keeping it.
 
 ## Second pass: writing from the recording (Soniox, migration 0098)
 
@@ -120,7 +157,8 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
 
 A webhook waits up to ~3 minutes for Soniox; the backstop only looks and comes back, so one slow job never starves
 the other classes. A transcript draft that was judged but whose POST did not go out (another POST in flight, or a
-pre-POST gate that says "try later") is reused on the retry. While Wise itself is not ready (attendance, status, the
+pre-POST gate that says "try later") is reused on the retry, as long as the current prompt and judge versions wrote
+it (v4, above). While Wise itself is not ready (attendance, status, the
 POST slot, a failed read once a draft exists) the class waits in `pending`, not `awaiting_recording`. Three Soniox failures (errors, a job running
 over an hour, or a run whose status checks never get an answer; within one run a failed check after a good answer
 does not count, and the backstop checks once per run), several recording parts, a recording too short for the
@@ -183,7 +221,8 @@ Preview deployments never touch autowriter state.
 
 ## Costs (measured in the 2026-09-29 pilot)
 
-GLM ≈ $0.0024 per class (writer) + ≈ $0.0008 (judge); Luna fallback ≈ $0.0012. ~200 online classes/month across
+GLM ≈ $0.0024 per class (writer) + ≈ $0.0008 (judge, measured at reasoning `medium`; `high` since v4 is not
+re-measured yet); Luna fallback ≈ $0.0012. ~200 online classes/month across
 the five tutors → under $1/month. Each call's tokens and billed cost are in `feedback_autowriter_calls`.
 
 ## Side effects to know

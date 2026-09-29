@@ -122,6 +122,39 @@ describe("buildAutowriterDashboard", () => {
     expect(held?.wiseUrl).toBe("https://learn.begiftededucation.com/links?type=classroom_entity&entityType=session&entityId=c&classId=6a0000000000000000000001&profile=teacher");
   });
 
+  it("shows every problem of a stored v4 verdict, and only the unsupported quotes of a v3 one", () => {
+    const board = buildAutowriterDashboard({
+      now: NOW,
+      windowDays: 7,
+      control,
+      calls: [],
+      webhooks: [],
+      sessions: [
+        session("v3", { state: "held", metadata: { judge: { faithful: false, unsupported: ["scored 95%"] } } }),
+        session("v4", {
+          state: "held",
+          metadata: {
+            judge: {
+              faithful: false,
+              unsupported: ["scored 95%"],
+              misattributed: ["[STUDENT_1] said 8 of the 10 pages"],
+              homeworkNotSet: ["three problems by Friday"],
+            },
+          },
+        }),
+        session("none", { state: "pending", metadata: { judge: null } }),
+      ],
+    });
+    const problems = (id: string) => board.recent.find((row) => row.wiseSessionId === id)?.judgeUnsupported;
+    expect(problems("v3")).toEqual(["scored 95%"]);
+    expect(problems("v4")).toEqual([
+      "scored 95%",
+      "wrong person: [STUDENT_1] said 8 of the 10 pages",
+      "homework not set: three problems by Friday",
+    ]);
+    expect(problems("none")).toEqual([]);
+  });
+
   it("summarises webhook deliveries by event and outcome", () => {
     expect(dashboard.webhooks.byEvent).toEqual(expect.arrayContaining([{ eventName: "unparsed", count: 1 }]));
     expect(dashboard.webhooks.byOutcome).toEqual(expect.arrayContaining([{ outcome: "already_handled", count: 1 }]));

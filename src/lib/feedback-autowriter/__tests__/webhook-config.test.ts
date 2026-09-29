@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { autowriterAlertEmails, autowriterEnabled, autowriterWritesAllowedHere, openRouterApiKey } from "../config";
-import { parseJudgeOutput } from "../judge";
 import { classifyGateReason } from "../session";
 import {
   findWiseWebhookAuthHeader,
@@ -75,14 +74,6 @@ describe("config", () => {
   it("parses the alert list and the API key", () => {
     expect(autowriterAlertEmails({ FEEDBACK_AUTOWRITER_ALERT_EMAILS: "a@x.com, B@X.com;not-an-email a@x.com" })).toEqual(["a@x.com", "b@x.com"]);
     expect(openRouterApiKey({ OPENROUTER_API_KEY: "  " })).toBeNull();
-  });
-});
-
-describe("judge output", () => {
-  it("treats a self-contradicting verdict as unfaithful", () => {
-    expect(parseJudgeOutput(JSON.stringify({ faithful: true, unsupported: ["x"] }))).toEqual({ faithful: false, unsupported: ["x"] });
-    expect(parseJudgeOutput(JSON.stringify({ faithful: true, unsupported: [] }))).toEqual({ faithful: true, unsupported: [] });
-    expect(parseJudgeOutput("nope")).toBeNull();
   });
 });
 
