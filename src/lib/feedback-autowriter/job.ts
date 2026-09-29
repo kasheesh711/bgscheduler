@@ -34,7 +34,7 @@ import {
 import type { JudgeOutput } from "./judge";
 import { runWritingPipeline, type PipelineResult } from "./pipeline";
 import { chooseStudentDisplayName, describeClass, parseStudentName, type EvidenceKind } from "./prompt";
-import { AUTOWRITER_ROSTER, AUTOWRITER_TEACHER_ALLOWLIST, rosterTutor } from "./roster";
+import { AUTOWRITER_ROSTER, AUTOWRITER_TEACHER_ALLOWLIST, rosterAccountIds, rosterTutor } from "./roster";
 import { loadCandidateShortlist, loadFieldMappings, loadPriorFeedback } from "./run";
 import {
   classifyGateReason,
@@ -50,6 +50,7 @@ import {
   recordingTooShort,
   scheduledWindow,
   studentParticipants,
+  tutorSelfNames,
   zoomTranscriptUrl,
   type AutowriterSessionDetail,
 } from "./session";
@@ -350,7 +351,7 @@ async function planPost(deps: AutowriterDeps, input: {
 async function priorFeedback(deps: AutowriterDeps, tutor: NonNullable<ReturnType<typeof rosterTutor>>, now: Date) {
   return [
     ...(await loadPriorFeedback(deps.db, { canonicalTutorKey: tutor.canonicalKey, now })),
-    ...(await recentAutowriterPosts(deps.db, tutor.wiseUserId, new Date(now.getTime() - NINETY_DAYS_MS))),
+    ...(await recentAutowriterPosts(deps.db, rosterAccountIds(tutor.canonicalKey), new Date(now.getTime() - NINETY_DAYS_MS))),
   ];
 }
 
@@ -799,7 +800,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
       cues = [];
     }
   }
-  const speakers = assignSpeakerRoles({ segments, zoomCues: cues, teacherName: detailTeacherName(detail) });
+  const speakers = assignSpeakerRoles({ segments, zoomCues: cues, teacherName: detailTeacherName(detail), alsoTeacher: tutorSelfNames(detail) });
   const rendered = renderTranscript(segments, speakers.roles);
   const transcriptMeta = {
     audioMinutes: Math.round(audioDurationMs / 600) / 100,

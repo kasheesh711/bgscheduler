@@ -201,7 +201,8 @@ export function FeedbackAutowriterDashboard({ initialData, canControl }: {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Feedback Autowriter</h1>
           <p className="text-sm text-muted-foreground">
-            AI-written post-class feedback for roster tutors&apos; online one-to-one classes, from Wise&apos;s meeting summary.
+            AI-written post-class feedback for roster tutors&apos; online one-to-one classes, from Wise&apos;s meeting summary
+            or a transcript of the recording. In-person classes stay with the tutor and are not shown here.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -293,7 +294,7 @@ export function FeedbackAutowriterDashboard({ initialData, canControl }: {
           </TableHeader>
           <TableBody>
             {data.tutors.map((tutor) => (
-              <TableRow key={tutor.wiseUserId}>
+              <TableRow key={tutor.tutorKey}>
                 <TableCell className="font-medium">{tutor.displayName}</TableCell>
                 <TableCell className="text-right">{tutor.seen}</TableCell>
                 <TableCell className="text-right">{tutor.posted}</TableCell>
@@ -307,12 +308,12 @@ export function FeedbackAutowriterDashboard({ initialData, canControl }: {
                 <TableCell>
                   <div className="flex items-center gap-2">
                     <Badge variant="outline" className={tutor.enabled ? "border-available/30 text-available" : "text-muted-foreground"}>
-                      {tutor.enabled ? "On" : "Off"}
+                      {tutor.enabled ? "On" : tutor.partlyEnabled ? "Partly on" : "Off"}
                     </Badge>
                     {canControl ? (
                       <Button size="xs" variant="ghost" disabled={busy}
-                        onClick={() => void sendControl({ action: "tutor", wiseUserId: tutor.wiseUserId, enabled: !tutor.enabled },
-                          `${tutor.enabled ? "Turn off" : "Turn on"} the autowriter for ${tutor.displayName}?`)}>
+                        onClick={() => void sendControl({ action: "tutor", wiseUserIds: tutor.wiseUserIds, enabled: !tutor.enabled },
+                          `${tutor.enabled ? "Turn off" : "Turn on"} the autowriter for ${tutor.displayName} (both Wise accounts)?`)}>
                         {tutor.enabled ? "Turn off" : "Turn on"}
                       </Button>
                     ) : null}

@@ -211,6 +211,38 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     expect(row?.metadata).not.toHaveProperty("alertKind");
   });
 
+  it("writes an online class taught from a tutor's main Wise account (Gift teaches online there)", async () => {
+    const giftMain = { _id: "695369c028118f629edcb9cb", name: "Wanwisa (Gift) Montrikittiphant" };
+    const detail = sessionDetail({ userId: giftMain, feedbackSubmissions: [autoBlankSubmission({ userId: giftMain })] });
+    const wise = fakeWise({ details: [detail] });
+    expect(await processSession(deps(wise.ops), { wiseSessionId: SESSION_ID, wiseClassId: CLASS_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "verified" });
+    expect(wise.posts).toHaveLength(1);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ wiseTeacherUserId: "695369c028118f629edcb9cb", state: "verified" });
+  });
+
+  it("writes a one-to-one class the tutor also joined from two other devices", async () => {
+    const participants = [
+      ...sessionDetail().participants,
+      { name: "Kevin Hsieh", isTeacher: false, inMeetingDuration: 3248, absolutePercentAttendance: 97 },
+      { name: "Kev", isTeacher: false, inMeetingDuration: 3151, absolutePercentAttendance: 94 },
+    ];
+    const wise = fakeWise({ details: [sessionDetail({ participants })] });
+    expect(await processSession(deps(wise.ops), { wiseSessionId: SESSION_ID, wiseClassId: CLASS_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "verified" });
+    expect(wise.posts).toHaveLength(1);
+  });
+
+  it("skips an in-person class on a main account at once, before any model call", async () => {
+    const kevinMain = { _id: "695369c028118f629edcb986", name: "Kevin (Kev) Y. Hsieh" };
+    const model = fakeModel();
+    const wise = fakeWise({ details: [sessionDetail({ type: "OFFLINE", userId: kevinMain, feedbackSubmissions: [autoBlankSubmission({ userId: kevinMain })] })] });
+    expect(await processSession(deps(wise.ops, { callModel: model.callModel as never }), { wiseSessionId: SESSION_ID, wiseClassId: CLASS_ID, trigger: "cron" }))
+      .toMatchObject({ result: "skipped_scope", detail: "session_type_OFFLINE" });
+    expect(model.calls).toEqual([]);
+    expect(wise.posts).toHaveLength(0);
+  });
+
   it("treats 'no student yet' right after class as a retry, not a hold", async () => {
     const justEnded = new Date("2026-09-28T09:35:00.000Z");
     await seedRow();

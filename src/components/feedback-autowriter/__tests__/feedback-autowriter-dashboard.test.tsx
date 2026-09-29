@@ -24,8 +24,13 @@ function payload(overrides: Partial<AutowriterDashboard> = {}): AutowriterDashbo
     fallbackShare: 0.333,
     judgeRejections: 1,
     tutors: [{
-      wiseUserId: "696e2c4343579bbada2340ed", displayName: "Kevin (Kev) Y. Hsieh Online", enabled: true,
+      tutorKey: "Kevin", displayName: "Kevin (Kev) Y. Hsieh", wiseUserIds: ["696e2c4343579bbada2340ed", "695369c028118f629edcb986"],
+      enabled: true, partlyEnabled: false,
       seen: 5, posted: 2, shadowDrafts: 1, held: 1, skippedHuman: 1, expired: 0, failed: 0, medianLatencyMinutes: 2.5, costUsd: 0.0076,
+    }, {
+      tutorKey: "Ek", displayName: "Apivit (Ek) Sirithana", wiseUserIds: ["6976680baf7fbc5ac88c3ea9", "695369c028118f629edcba05"],
+      enabled: false, partlyEnabled: true,
+      seen: 0, posted: 0, shadowDrafts: 0, held: 0, skippedHuman: 0, expired: 0, failed: 0, medianLatencyMinutes: null, costUsd: 0,
     }],
     recent: [{
       wiseSessionId: "6a9fbc9c617dfedd88a0471e",
@@ -53,7 +58,9 @@ describe("FeedbackAutowriterDashboard", () => {
     const html = renderToStaticMarkup(<FeedbackAutowriterDashboard initialData={payload()} canControl={false} />);
     expect(html).toContain("Feedback Autowriter");
     expect(html).toContain("Posted to Wise");
-    expect(html).toContain("Kevin (Kev) Y. Hsieh Online");
+    expect(html).toContain("Kevin (Kev) Y. Hsieh");
+    expect(html).toContain("Partly on");
+    expect(html).toContain("In-person classes stay with the tutor and are not shown here.");
     expect(html).toContain("Ranada (Dada.Pu) Purdue");
     expect(html).toContain("Rearranging equations");
     expect(html).toContain("GPT-6 Luna");

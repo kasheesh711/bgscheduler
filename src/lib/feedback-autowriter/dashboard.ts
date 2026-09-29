@@ -2,7 +2,7 @@ import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { wiseSessionLink } from "@/lib/wise/links";
-import { AUTOWRITER_ROSTER, rosterTutor } from "./roster";
+import { AUTOWRITER_TUTORS, rosterTutor, tutorLabel } from "./roster";
 import { readControl, type AutowriterSessionRow } from "./store";
 
 const S = schema.feedbackAutowriterSessions;
@@ -36,6 +36,18 @@ export interface DashboardWebhookRow {
 
 const POSTED = new Set(["posting", "awaiting_event", "verified"]);
 const FAILED = new Set(["rejected", "unknown_outcome", "verify_failed"]);
+
+/** Skip reasons of an in-person class: Wise's session type, or its "In-Person/On-site Session" title. */
+const ONSITE_REASONS = ["session_type_OFFLINE", "session_type_in_person_title"];
+
+/**
+ * In-person classes on a roster account are skipped at once and stay the
+ * tutor's to write: they are not the autowriter's business, so the dashboard
+ * leaves them out entirely (no rows, no counts).
+ */
+export function isOnsiteSkip(row: Pick<AutowriterSessionRow, "state" | "reason">): boolean {
+  return row.state === "skipped_scope" && row.reason !== null && ONSITE_REASONS.includes(row.reason);
+}
 
 function median(values: number[]): number | null {
   if (values.length === 0) return null;
@@ -103,10 +115,15 @@ export interface AutowriterDashboard {
   };
   fallbackShare: number | null;
   judgeRejections: number;
+  /** One row per tutor, covering both of their Wise accounts. */
   tutors: Array<{
-    wiseUserId: string;
+    tutorKey: string;
     displayName: string;
+    wiseUserIds: string[];
+    /** On for every account. */
     enabled: boolean;
+    /** On for some accounts only (set per account from the CLI). */
+    partlyEnabled: boolean;
     seen: number;
     posted: number;
     shadowDrafts: number;
@@ -150,7 +167,8 @@ export function buildAutowriterDashboard(input: {
   webhooks: readonly DashboardWebhookRow[];
   recentLimit?: number;
 }): AutowriterDashboard {
-  const { sessions, calls } = input;
+  const { calls } = input;
+  const sessions = input.sessions.filter((row) => !isOnsiteSkip(row));
   const costBySession = new Map<string, number>();
   for (const call of calls) costBySession.set(call.wiseSessionId, (costBySession.get(call.wiseSessionId) ?? 0) + call.costUsd);
   const count = (predicate: (row: DashboardSessionRow) => boolean, rows = sessions) => rows.filter(predicate).length;
@@ -219,13 +237,17 @@ export function buildAutowriterDashboard(input: {
     },
     fallbackShare: armed.length > 0 ? round(armed.filter((row) => row.arm === "luna").length / armed.length, 3) : null,
     judgeRejections,
-    tutors: AUTOWRITER_ROSTER.map((tutor) => {
-      const rows = sessions.filter((row) => row.wiseTeacherUserId === tutor.wiseUserId);
+    tutors: AUTOWRITER_TUTORS.map((tutor) => {
+      const accounts = new Set(tutor.wiseUserIds);
+      const rows = sessions.filter((row) => row.wiseTeacherUserId !== null && accounts.has(row.wiseTeacherUserId));
       const tutorPosted = rows.filter((row) => POSTED.has(row.state));
+      const accountsOn = tutor.wiseUserIds.filter((id) => !input.control.disabledTutors.includes(id)).length;
       return {
-        wiseUserId: tutor.wiseUserId,
-        displayName: tutor.displayName,
-        enabled: !input.control.disabledTutors.includes(tutor.wiseUserId),
+        tutorKey: tutor.canonicalKey,
+        displayName: tutor.label,
+        wiseUserIds: [...tutor.wiseUserIds],
+        enabled: accountsOn === tutor.wiseUserIds.length,
+        partlyEnabled: accountsOn > 0 && accountsOn < tutor.wiseUserIds.length,
         seen: rows.length,
         posted: tutorPosted.length,
         shadowDrafts: count((row) => row.state === "would_submit", rows),
@@ -246,7 +268,10 @@ export function buildAutowriterDashboard(input: {
           wiseSessionId: row.wiseSessionId,
           wiseUrl: row.wiseClassId ? wiseSessionLink({ wiseClassId: row.wiseClassId, wiseSessionId: row.wiseSessionId }) : null,
           className: row.className,
-          tutor: rosterTutor(row.wiseTeacherUserId)?.displayName ?? row.wiseTeacherUserId ?? "unknown",
+          tutor: (() => {
+            const tutor = rosterTutor(row.wiseTeacherUserId);
+            return tutor ? tutorLabel(tutor) : row.wiseTeacherUserId ?? "unknown";
+          })(),
           scheduledEndAt: row.scheduledEndAt?.toISOString() ?? null,
           state: row.state,
           reason: row.reason,
@@ -300,7 +325,8 @@ export async function loadAutowriterDashboard(db: Database, input: { windowDays:
       className: schema.postClassSessions.className,
     }).from(S)
       .leftJoin(schema.postClassSessions, eq(schema.postClassSessions.wiseSessionId, S.wiseSessionId))
-      .where(gte(S.createdAt, since))
+      // In-person classes never reach the page (see isOnsiteSkip); a NULL reason is kept.
+      .where(and(gte(S.createdAt, since), sql`not (${S.state} = 'skipped_scope' and coalesce(${S.reason}, '') in (${sql.join(ONSITE_REASONS.map((reason) => sql`${reason}`), sql`, `)}))`))
       .orderBy(desc(S.scheduledEndAt))
       .limit(2_000),
     db.select({

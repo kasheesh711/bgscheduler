@@ -39,8 +39,8 @@ Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowrite
 | `--mode=off --actor=<email>` | do nothing |
 | `--pause --reason="…" --actor=<email>` | global halt: no POSTs until resumed |
 | `--resume --actor=<email>` | clear the halt (check why it halted first) |
-| `--tutor-off=<wiseUserId>` / `--tutor-on=…` | per-tutor switch |
-| `--retry=<wiseSessionId> --actor=<email>` | send a `held`/`expired` class back to `pending` (e.g. after a prompt fix); refused inside the 30-min deadline margin; its alert is re-armed |
+| `--tutor-off=<wiseUserId>` / `--tutor-on=…` | per-account switch (a tutor has two accounts; the dashboard switches both together) |
+| `--retry=<wiseSessionId> --actor=<email>` | send a `held`/`expired`/`skipped_scope` class back to `pending` (e.g. after a prompt or scope fix); never a class a person wrote; refused inside the 30-min deadline margin; its alert is re-armed |
 | `--sweep` / `--process=<wiseSessionId>` | run the same guarded path by hand |
 
 Outer gates needing a redeploy: `FEEDBACK_AUTOWRITER_ENABLED`, `WISE_WEBHOOKS_ENABLED`. Preview deployments never POST.
@@ -50,7 +50,8 @@ reconciling** POSTs already made, emailing their alerts. `FEEDBACK_AUTOWRITER_EN
 reconciliation included — rows in `posting`/`awaiting_event` then wait, visible on the dashboard, until it is
 turned back on. Prefer `--pause` unless the code itself must not run.
 
-The owner has the same mode, pause/resume and per-tutor switches on the dashboard at `/feedback-autowriter`.
+The owner has the same mode, pause/resume and per-tutor switches on the dashboard at `/feedback-autowriter`. A tutor's
+switch there covers both of their Wise accounts; "Partly on" means the CLI switched only one of them.
 
 ## 3. Rollout checklist
 

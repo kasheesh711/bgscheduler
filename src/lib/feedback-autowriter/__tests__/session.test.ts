@@ -12,9 +12,10 @@ import {
   parseAutowriterSessionDetail,
   planFeedbackForm,
   storedTeacherFields,
+  studentParticipants,
 } from "../session";
 import { AUTOWRITER_TEACHER_ALLOWLIST } from "../roster";
-import { GOOD_FIELDS, NOW, QUESTIONS, answers, autoBlankSubmission, sessionDetail } from "./fixtures";
+import { GOOD_FIELDS, NOW, QUESTIONS, STUDENT_NAME, answers, autoBlankSubmission, sessionDetail } from "./fixtures";
 
 const gateInput = { now: NOW, allowlist: AUTOWRITER_TEACHER_ALLOWLIST };
 const parse = (overrides: Record<string, unknown> = {}) =>
@@ -99,6 +100,46 @@ describe("evaluateSessionGates", () => {
     expect(evaluateSessionGates(parse({ participants }), gateInput)).toEqual({ ok: false, reason: "attendance_20pct" });
     const extra = [...sessionDetail().participants, { wiseUserId: "other", name: "Other", isTeacher: false, absolutePercentAttendance: 90 }];
     expect(evaluateSessionGates(parse({ participants: extra }), gateInput)).toEqual({ ok: false, reason: "student_count_2" });
+  });
+
+  it("skips a class titled as in-person even when Wise's type says online", () => {
+    expect(evaluateSessionGates(parse({ title: "In-Person Session - Math" }), gateInput)).toEqual({ ok: false, reason: "session_type_in_person_title" });
+    expect(evaluateSessionGates(parse({ title: "On-site Session - Chemistry" }), gateInput)).toEqual({ ok: false, reason: "session_type_in_person_title" });
+    expect(evaluateSessionGates(parse({ title: "Live Session - Math" }), gateInput)).toEqual({ ok: true });
+    expect(classifyGateReason("session_type_in_person_title")).toBe("scope");
+  });
+
+  it("requires the one student to be a Wise user (the POST checks their credit)", () => {
+    const guestStudent = sessionDetail().participants.map((participant) =>
+      participant.isTeacher ? participant : { ...participant, wiseUserId: undefined });
+    expect(evaluateSessionGates(parse({ participants: guestStudent }), gateInput)).toEqual({ ok: false, reason: "student_not_wise_user" });
+    expect(classifyGateReason("student_not_wise_user", { minutesSinceEnd: 5 })).toBe("retry");
+    expect(classifyGateReason("student_not_wise_user", { minutesSinceEnd: 90 })).toBe("person");
+  });
+
+  it("does not count the tutor joining their own class again as a student", () => {
+    // Peat, 29 Sep: two guest devices under his own names beside his teacher account; a one-to-one class.
+    const selfJoins = [
+      ...sessionDetail().participants,
+      { name: "Kevin Hsieh", isTeacher: false, inMeetingDuration: 3248, absolutePercentAttendance: 97 },
+      { name: "  kev ", isTeacher: false, inMeetingDuration: 3151, absolutePercentAttendance: 94 },
+      { name: "Kevin (Kev) Y. Hsieh", isTeacher: false, absolutePercentAttendance: 90 },
+      // The tutor's other Wise account.
+      { wiseUserId: "695369c028118f629edcb986", name: "Kevin (Kev) Y. Hsieh", isTeacher: false, absolutePercentAttendance: 95 },
+    ];
+    expect(studentParticipants(parse({ participants: selfJoins })).map((student) => student.name)).toEqual([STUDENT_NAME]);
+    expect(evaluateSessionGates(parse({ participants: selfJoins }), gateInput)).toEqual({ ok: true });
+
+    // Anyone else still counts: an unknown guest, a nameless guest, or a Wise account that only shares a name.
+    const others = [
+      { name: "Mum", isTeacher: false, absolutePercentAttendance: 80 },
+      { name: "", isTeacher: false, absolutePercentAttendance: 80 },
+      { wiseUserId: "6a0000000000000000000abc", name: "Kev", isTeacher: false, absolutePercentAttendance: 80 },
+    ];
+    for (const other of others) {
+      expect(evaluateSessionGates(parse({ participants: [...sessionDetail().participants, other] }), gateInput))
+        .toEqual({ ok: false, reason: "student_count_2" });
+    }
   });
 });
 

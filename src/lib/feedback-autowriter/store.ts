@@ -470,9 +470,11 @@ export async function requeueShadowDrafts(db: Database, minDeadline: Date): Prom
 }
 
 /**
- * Owner retry of a `held` or `expired` class (e.g. after a prompt fix): back to
- * `pending`, due now. Its alert is re-armed, so a new hold or expiry emails again.
- * Refused for any other state and when the deadline is inside the margin.
+ * Owner retry of a `held`, `expired` or `skipped_scope` class (e.g. after a
+ * prompt fix, or a scope check that was wrong for it): back to `pending`, due
+ * now. Its alert is re-armed, so a new hold or expiry emails again. Never a
+ * class a person wrote (`skipped_human`) or anything posted; refused when the
+ * deadline is inside the margin.
  */
 export async function retryHeldSession(db: Database, wiseSessionId: string, input: {
   minDeadline: Date;
@@ -495,16 +497,17 @@ export async function retryHeldSession(db: Database, wiseSessionId: string, inpu
     updatedAt: nowSql,
   }).where(and(
     eq(S.wiseSessionId, wiseSessionId),
-    inArray(S.state, ["held", "expired"]),
+    inArray(S.state, ["held", "expired", "skipped_scope"]),
     gt(S.deadlineAt, input.minDeadline),
   )).returning({ id: S.id });
   return rows.length > 0;
 }
 
-/** The autowriter's own recent posts for a tutor — post-class compares new feedback against them. */
-export async function recentAutowriterPosts(db: Database, wiseTeacherUserId: string, since: Date): Promise<PriorFeedbackComparison[]> {
+/** The autowriter's own recent posts for a tutor (all their accounts) — post-class compares new feedback against them. */
+export async function recentAutowriterPosts(db: Database, wiseTeacherUserIds: readonly string[], since: Date): Promise<PriorFeedbackComparison[]> {
+  if (wiseTeacherUserIds.length === 0) return [];
   const rows = await db.select({ wiseSessionId: S.wiseSessionId, fields: S.fields }).from(S).where(and(
-    eq(S.wiseTeacherUserId, wiseTeacherUserId),
+    inArray(S.wiseTeacherUserId, [...wiseTeacherUserIds]),
     inArray(S.state, ["posting", "awaiting_event", "verified"]),
     isNotNull(S.fields),
     gte(S.updatedAt, since),

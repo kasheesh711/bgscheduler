@@ -72,7 +72,10 @@ describe("POST /api/feedback-autowriter/control", () => {
     ownerMock.mockResolvedValue({ email: "kevhsh7@gmail.com", accessVersion: 1 } as never);
     expect((await POST(post("not json"))).status).toBe(400);
     expect((await POST(post({ action: "mode", mode: "turbo" }))).status).toBe(400);
-    expect((await POST(post({ action: "tutor", wiseUserId: "../x", enabled: true }))).status).toBe(400);
+    expect((await POST(post({ action: "tutor", wiseUserIds: ["../x"], enabled: true }))).status).toBe(400);
+    expect((await POST(post({ action: "tutor", wiseUserIds: [], enabled: true }))).status).toBe(400);
+    // The old single-account body is no longer accepted.
+    expect((await POST(post({ action: "tutor", wiseUserId: "696e2c4343579bbada2340ed", enabled: true }))).status).toBe(400);
   });
 
   it("switches to live and re-queues shadow drafts", async () => {
@@ -91,9 +94,19 @@ describe("POST /api/feedback-autowriter/control", () => {
     expect(updateControl).not.toHaveBeenCalled();
   });
 
-  it("refuses to toggle a tutor who is not on the roster", async () => {
+  it("refuses to toggle an account that is not on the roster, even alongside roster ones", async () => {
     ownerMock.mockResolvedValue({ email: "kevhsh7@gmail.com", accessVersion: 1 } as never);
-    const response = await POST(post({ action: "tutor", wiseUserId: "6a0000000000000000000009", enabled: false }));
-    expect(response.status).toBe(400);
+    expect((await POST(post({ action: "tutor", wiseUserIds: ["6a0000000000000000000009"], enabled: false }))).status).toBe(400);
+    expect((await POST(post({ action: "tutor", wiseUserIds: ["696e2c4343579bbada2340ed", "6a0000000000000000000009"], enabled: false }))).status).toBe(400);
+    expect(updateControl).not.toHaveBeenCalled();
+  });
+
+  it("switches a tutor off and on across both of their Wise accounts", async () => {
+    ownerMock.mockResolvedValue({ email: "kevhsh7@gmail.com", accessVersion: 1 } as never);
+    const kevin = ["696e2c4343579bbada2340ed", "695369c028118f629edcb986"];
+    expect((await POST(post({ action: "tutor", wiseUserIds: kevin, enabled: false }))).status).toBe(200);
+    expect(updateControl).toHaveBeenLastCalledWith(expect.anything(), { disabledTutors: kevin }, "kevhsh7@gmail.com");
+    expect((await POST(post({ action: "tutor", wiseUserIds: kevin, enabled: true }))).status).toBe(200);
+    expect(updateControl).toHaveBeenLastCalledWith(expect.anything(), { disabledTutors: [] }, "kevhsh7@gmail.com");
   });
 });
