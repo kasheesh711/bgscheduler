@@ -248,7 +248,7 @@ erDiagram
         uuid id PK
         uuid session_id FK
         uuid feedback_version_id FK
-        text request_hash UK "identical input never re-bills"
+        text request_hash UK "one row per request, up to 3 attempts"
         post_class_ai_status status
         text model
     }
@@ -564,9 +564,9 @@ The AI tables are strictly advisory. `postClassAiConcerns` has no path into `pos
 
 #### `postClassAiRuns` (`post_class_ai_runs`, lines 3503–3522)
 
-**Grain:** one AI review call for one feedback version — `pc_ai_runs_request_hash_idx` unique on `requestHash`.
+**Grain:** one AI review request for one feedback version, holding up to three model attempts — `pc_ai_runs_request_hash_idx` unique on `requestHash`.
 
-`requestHash` is a SHA-256 over session id, feedback version id, content hash, prompt version, and redaction version (`ai.ts:50-53`), so identical input never re-bills and a prompt bump deliberately produces a fresh run. `redactionVersion` is stored on the row, making it possible to tell which scrubbing rules the outbound payload used. `triggerReasons` records why the run was queued at all.
+`requestHash` is a SHA-256 over session id, feedback version id, content hash, prompt version, and redaction version (`ai.ts:50-53`), so identical input shares one row and a prompt bump deliberately produces a fresh run. A transient failure (timeout, network error, OpenAI 429/5xx) or a run killed mid-call is retried on that same row, so one row can carry up to three billed model attempts. `metadata` records `promptVersion`, `highestPriorSimilarity`, `matchingPriorKey` and `attempts`, and after a failure `retryable` and `lastErrorName` (the error class). `redactionVersion` is stored on the row, making it possible to tell which scrubbing rules the outbound payload used. `triggerReasons` records why the run was queued at all.
 
 #### `postClassAiConcerns` (`post_class_ai_concerns`, lines 3524–3537)
 
