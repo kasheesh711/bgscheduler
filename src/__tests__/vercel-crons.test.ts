@@ -41,6 +41,7 @@ const EXPECTED_SCHEDULES: Record<string, string> = {
   "/api/internal/cron-watchdog": "7,37 * * * *",
   "/api/internal/admissions-notifications": "12 1 * * *",
   "/api/internal/line-credit-digest": "3 2 * * *",
+  "/api/internal/feedback-autowriter": "8,22,38,52 * * * *",
 };
 
 function range(from: number, to: number): number[] {
@@ -106,10 +107,10 @@ function canCollide(left: FiringSet, right: FiringSet): boolean {
 }
 
 describe("vercel cron configuration", () => {
-  it("registers exactly the 26 known crons, each on its pinned schedule", () => {
+  it("registers exactly the 27 known crons, each on its pinned schedule", () => {
     const crons = loadVercelConfig().crons;
 
-    expect(crons).toHaveLength(26);
+    expect(crons).toHaveLength(27);
     expect(Object.fromEntries(crons.map((cron) => [cron.path, cron.schedule]))).toEqual(EXPECTED_SCHEDULES);
   });
 

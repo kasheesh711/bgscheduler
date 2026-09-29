@@ -1,6 +1,14 @@
 # Wise Webhooks Reference
 
-**Status: not implemented — this page documents an external contract the app does not consume.**
+**Status: partly implemented.** Since migration 0097 the [feedback autowriter](../features/feedback-autowriter.md)
+consumes `MeetingEndedEvent`, `AttendanceComputedEvent` and `RecordingCompletedEvent` through `POST /api/wise/webhook`
+([`route.ts`](../../src/app/api/wise/webhook/route.ts)), stores every delivery in `wise_webhook_events`, and uses a
+**second** Wise subscription. The institute's existing subscription (a Google Apps Script receiving
+`StudentAddedToClassroomEvent`, `StudentRegistrationFormUpdatedEvent`, `TeacherSessionFeedbackFormSubmittedEvent`,
+`AttendanceComputedEvent`, `MeetingEndedEvent`, `SessionsUpdatedEvent`, `SessionNotStartedEvent`, read 2026-09-29)
+must not be edited. `TeacherSessionFeedbackFormSubmittedEvent` and `SessionNotStartedEvent` are not in the catalogue
+below. The rest of this page still documents the contract as first surveyed; the paragraphs saying no receiver
+exists predate 0097.
 
 **BGScheduler has no Wise webhook receiver.** `grep -rn "wise/webhook" src/` returns nothing, and
 the only webhook route in the repository belongs to LINE
@@ -232,8 +240,8 @@ Mapping each event onto them:
 |---|---|---|
 | `SessionsCreatedEvent`, `SessionsDeletedEvent` | Tutor snapshot ETL (a real run, not a patch); credit-control FUTURE window; student schedule | The payload has no `location`, no `studentCount`, no `metadata.recurrenceId` — all three are columns `normalizeSessions` writes into `future_session_blocks` ([`normalization/sessions.ts:25`, `:27`, `:30`, `:84`-`89`](../../src/lib/normalization/sessions.ts); insert at [`orchestrator.ts:282`-`304`](../../src/lib/sync/orchestrator.ts)). The event can only say *fetch now*. |
 | `SessionsUpdatedEvent` | Cancellation and title-change detection; a hint for the PAST-01 diff hook ([`past-sessions-diff-hook.ts`](../../src/lib/sync/past-sessions-diff-hook.ts)) | Sparse delta: a missing `meetingStatus` is not "unchanged status", and an unknown status stays **blocking** by `isBlockingStatus` ([`normalization/sessions.ts:46`-`51`](../../src/lib/normalization/sessions.ts)). Full session state still comes from the FUTURE feed. |
-| `AttendanceComputedEvent`, `MeetingEndedEvent` | Post-class-feedback candidate discovery; a credit-control refresh scoped to that class | The event carries only ids ([§4.2](#42-in-meeting-8)). Attendance values, credits and **feedback content** still require `GET /user/classes/{classId}/sessions/{sessionId}` ([`fetchers.ts:189`](../../src/lib/wise/fetchers.ts), [`credit-control/wise.ts:276`](../../src/lib/credit-control/wise.ts)). Onsite sessions emit no meeting events at all, so this lane is online-only. |
-| `MeetingStartedEvent`, `ParticipantJoined/LeftMeetingEvent`, `SharingStared/EndedInMeetingEvent`, `RecordingCompletedEvent` | Nothing today — these are a **new capability** (real attendance duration, screen-share evidence, recording links), not a replacement for a fetch | n/a — no current code consumes them |
+| `AttendanceComputedEvent`, `MeetingEndedEvent` | Post-class-feedback candidate discovery; a credit-control refresh scoped to that class. **In use:** both trigger the feedback autowriter (`POST /api/wise/webhook`) | The event carries only ids ([§4.2](#42-in-meeting-8)). Attendance values, credits and **feedback content** still require `GET /user/classes/{classId}/sessions/{sessionId}` ([`fetchers.ts:189`](../../src/lib/wise/fetchers.ts), [`credit-control/wise.ts:276`](../../src/lib/credit-control/wise.ts)). Onsite sessions emit no meeting events at all, so this lane is online-only. |
+| `MeetingStartedEvent`, `ParticipantJoined/LeftMeetingEvent`, `SharingStared/EndedInMeetingEvent`, `RecordingCompletedEvent` | Nothing today — these are a **new capability** (real attendance duration, screen-share evidence, recording links), not a replacement for a fetch | n/a — only the feedback autowriter consumes `RecordingCompletedEvent`, as a late trigger to re-read the session |
 | `FeePaymentCompletedEvent`, `FeeInvoiceChargedEvent` | Wise-activity package-sales reconciliation ([`wise-activity/reconciliation.ts`](../../src/lib/wise-activity/reconciliation.ts)) | No event for refunds, disbursals, or a `PENDING → CHARGED` transition; instalment fan-out ([§4.4](#44-fees-2)) means the count of events is not the count of changes. Whether these fire for credit **packages** is unverified. |
 | `StudentAdded/RemovedFromClassroomEvent`, `StudentSuspensionUpdatedEvent` | Credit-control pair discovery and churn signals | No credit balance in any payload — the per-pair `sessionCredits` GET ([`credit-control/wise.ts:263`](../../src/lib/credit-control/wise.ts)) is unavoidable |
 | `TeacherAdded/RemovedFromClassroomEvent` | A partial roster signal for the tutor snapshot | Carries **no tags**, so qualifications, tier and modality still need `fetchAllTeachers` ([`orchestrator.ts:84`](../../src/lib/sync/orchestrator.ts)); and no event exists for a tag *edit* |

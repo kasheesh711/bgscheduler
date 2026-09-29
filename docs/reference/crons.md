@@ -1,5 +1,17 @@
 # Cron Schedule
 
+## Feedback autowriter job
+
+| Path | UTC schedule | Bangkok | Registry key | Maximum |
+|---|---|---|---|---|
+| `/api/internal/feedback-autowriter` | `8,22,38,52 * * * *` | About every 15 minutes | `feedback_autowriter` | 800s |
+
+Backstop for the Wise webhook receiver (`POST /api/wise/webhook`, not a cron). Requires `CRON_SECRET`; skips (and
+shows paused) unless `FEEDBACK_AUTOWRITER_ENABLED=true`. Single-flight is a lease on
+`feedback_autowriter_control`; each session has its own generation lease and create-once POST claim. Returns
+`ok:false` (503) only for infrastructure errors, an undelivered alert digest, or a halt. Manual runs from Data Health
+are owner-only. See the [feature page](../features/feedback-autowriter.md) and [runbook](../operations/feedback-autowriter.md).
+
 ## Tutor Sit-ins jobs
 
 | Path | UTC schedule | Bangkok | Registry key | Maximum |

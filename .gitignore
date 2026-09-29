@@ -76,3 +76,6 @@ graphify-out/
 
 # Private paper inputs, benchmark responses and generated document previews
 /output/progress-tests-pdf/
+
+# Feedback autowriter pilot artifacts (student data, submit ledger)
+.feedback-autowriter/

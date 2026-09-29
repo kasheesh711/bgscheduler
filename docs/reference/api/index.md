@@ -8,6 +8,8 @@ The canonical lookup of every HTTP endpoint in BGScheduler. This page carries **
 
 The new [tutor room booking reference](./tutor-room-booking.md) covers the capability-protected `/api/room` endpoints, tutor LINE approval, admin reservations, and room refresh cron.
 
+The [Feedback Autowriter reference](./feedback-autowriter.md) (2026-09-29) adds four method/path endpoints: the public, secret-checked `POST /api/wise/webhook`, the `GET /api/internal/feedback-autowriter` backstop cron, the `GET /api/feedback-autowriter` dashboard read and the owner-only `POST /api/feedback-autowriter/control`.
+
 The [Office Attendance reference](./tutor-attendance.md) covers seven new method/path endpoints for `/api/tutor-attendance`: clocking, reviewed corrections, setup, reads and CSV export.
 
 > **Canonical-home rule:** `docs/reference/*` owns mechanical detail; `docs/features/*` owns meaning — purpose, rules, and flows. This index is the mechanical inventory. It does not restate business rules, and feature docs link here rather than reproduce endpoint signatures.

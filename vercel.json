@@ -106,6 +106,10 @@
     {
       "path": "/api/internal/post-class-feedback/reminder-nightly",
       "schedule": "0,30 * * * *"
+    },
+    {
+      "path": "/api/internal/feedback-autowriter",
+      "schedule": "8,22,38,52 * * * *"
     }
   ]
 }
