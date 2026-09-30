@@ -1,7 +1,7 @@
 ---
 phase: quick-260930-rlr
 plan: "01"
-status: complete (draft PR against main; nothing deployed, no switch changed)
+status: complete (draft PR #114 against main; nothing deployed, no switch changed)
 subsystem: feedback-autowriter (model-call layer, pipeline, job and replay wiring)
 tags: [feedback-autowriter, openrouter, rate-limit, retries, vitest, testcontainers]
 
@@ -18,7 +18,7 @@ provides:
 # Summary — autowriter: a rate-limited model call is tried again in the same run
 
 **Branch:** `feat/autowriter-rate-limit-retries`, from PR #113's head (`1e9c8f8`); merged with `main` once #113 was
-merged (`46b95a2`, same tree). **PR:** draft, base `main`.
+merged (`46b95a2`, same tree). **PR:** #114 (draft, base `main`).
 **Commits:** `cce96c4` plan · `77a664b` the retries and the wider rate-limit reading · `729ca1e` docs · `f504c92`
 merge of `main` · `d61c584` test · this summary.
 
