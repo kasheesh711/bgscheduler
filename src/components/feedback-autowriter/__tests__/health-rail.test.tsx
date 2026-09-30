@@ -69,8 +69,9 @@ describe("HealthRail", () => {
     expect(html).toContain("86 / 112");
     expect(html).toContain("6.7 pp above floor");
     expect(html.match(/7-day average \d/gu)).toHaveLength(2);
-    // Two charts, each named for a screen reader.
+    // Two charts, each named for a screen reader, and each saying it reads the counts stored each hour (the figures are live).
     expect(html.match(/<canvas/gu)).toHaveLength(2);
+    expect(html.match(/title="Drawn from the daily counts the review job stores each hour"/gu)).toHaveLength(2);
     expect(html).toContain("with the 80% bar and any day with a critical verdict");
     expect(render({ coverage: 0.629, coverageNum: 17, coverageDen: 27 })).toContain("7.1 pp below floor");
     expect(render({ coverage: null, coverageNum: 0, coverageDen: 0 })).toContain("No eligible classes yet");

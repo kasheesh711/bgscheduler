@@ -193,6 +193,15 @@ export interface QualityDailyRow {
   correctionsVerified: number;
 }
 
+/**
+ * Dates read before the gate window so that a 7-day value of the window's first dates pools a full seven days (the
+ * date and the six before it, as the trend series do).
+ */
+export const REVIEW_LOOKBACK_DAYS = 6;
+
+/** The all-tutors counts of a date before the window: what a pooled 7-day rate needs of it, and nothing else. */
+export type QualityLookbackRow = Pick<QualityDailyRow, "date" | "reviewed" | "accurate" | "posted" | "eligible">;
+
 export interface QualityTutorRow {
   tutorKey: string;
   displayName: string;
@@ -249,6 +258,12 @@ export interface AutowriterReview {
   coverage: CoverageCounts;
   fixRounds: { zero: number; one: number; two: number; threePlus: number; unresolved: number };
   daily: QualityDailyRow[];
+  /**
+   * The stored all-tutors counts of the `REVIEW_LOOKBACK_DAYS` dates before the window, oldest first (a date without
+   * a stored row is absent), as the review job last computed them. Only for the 7-day values of the window's first
+   * dates (the health rail's charts): never part of the gate, of `daily` or of any total.
+   */
+  lookback: QualityLookbackRow[];
   tutors: QualityTutorRow[];
   queue: ReviewQueueItem[];
   /** Exact counts behind the filters (the queue itself may be a subset: `shown`). */
@@ -295,6 +310,7 @@ export interface ReviewSourceRows {
     className: string | null;
   }>;
   currentVersions: ReadonlyArray<{ wiseSessionId: string; observedAt: Date; fields: FeedbackFieldAnswers }>;
+  /** The stored metrics of the window's dates and of the `REVIEW_LOOKBACK_DAYS` before it; rows of other dates are ignored. */
   metrics: readonly MetricRow[];
   lastDailyGate: typeof G.$inferSelect | null;
   incidents: ReadonlyArray<typeof I.$inferSelect>;
@@ -387,6 +403,12 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
       measuredFixClasses: row.measuredFixClasses,
       correctionsVerified: row.correctionsVerified,
     }));
+
+  const lookbackStart = addDays(window.start, -REVIEW_LOOKBACK_DAYS);
+  const lookback: QualityLookbackRow[] = input.metrics
+    .filter((row) => row.tutorKey === "*" && row.metricDate >= lookbackStart && row.metricDate < window.start)
+    .toSorted((a, b) => a.metricDate.localeCompare(b.metricDate))
+    .map((row) => ({ date: row.metricDate, reviewed: row.reviewed, accurate: row.accurate, posted: row.posted, eligible: row.eligible }));
 
   const tutors: QualityTutorRow[] = AUTOWRITER_TUTORS.map((tutor) => {
     const tutorReviews = windowReviews.filter((review) => review.tutorKey === tutor.canonicalKey);
@@ -533,6 +555,7 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
     coverage,
     fixRounds,
     daily,
+    lookback,
     tutors,
     queue,
     queueTotals: { ...input.queueTotals, shown: queue.length },
@@ -606,7 +629,8 @@ async function loadAvailableReview(db: Database, now: Date, queueLimit: number):
     }).from(PCV).innerJoin(PC, eq(PC.id, PCV.sessionId))
       .where(and(inArray(PC.wiseSessionId, ids), eq(PCV.profile, "teacher")))
       .orderBy(PC.wiseSessionId, desc(PCV.observedAt))),
-    db.select().from(M).where(gte(M.metricDate, window.start)),
+    // The window's rows, and those of the dates just before it for the 7-day values of its first dates (`lookback`).
+    db.select().from(M).where(gte(M.metricDate, addDays(window.start, -REVIEW_LOOKBACK_DAYS))),
     db.select().from(G).where(eq(G.evalKind, "daily")).orderBy(desc(G.bangkokDate)).limit(1),
     // The latest 50, plus every critical incident still waiting for the owner.
     db.select().from(I).where(or(

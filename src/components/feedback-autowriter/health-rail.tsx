@@ -150,7 +150,8 @@ function HealthBlock({ label, value, counts, chart, foot }: { label: string; val
           {value} <small className="text-[10px] font-normal tracking-normal text-muted-foreground">{counts}</small>
         </div>
       </div>
-      <div className="mt-2.5">{chart}</div>
+      {/* The figure above is counted now; the chart reads the daily counts the review job stores each hour. */}
+      <div className="mt-2.5" title="Drawn from the daily counts the review job stores each hour">{chart}</div>
       <div className="mt-1 flex items-center justify-between gap-3 text-[10px] text-muted-foreground">{foot}</div>
     </div>
   );

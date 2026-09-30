@@ -387,6 +387,8 @@ export function reviewFixture(overrides: Partial<AutowriterReview> = {}): Autowr
       factual: REVIEWED[index] - ACCURATE[index] - CRITICAL_VERDICTS[index], critical: CRITICAL_VERDICTS[index], eligible: ELIGIBLE[index],
       coverage: POSTED[index] / ELIGIBLE[index], measuredFixClasses: REVIEWED[index] - ACCURATE[index], correctionsVerified: REVIEWED[index] - ACCURATE[index],
     })).toReversed(),
+    // The pilot's first class was on the window's first date: nothing before it.
+    lookback: [],
     tutors: [
       { tutorKey: "Anna", displayName: "Anna", phase: "full_review", textsInWise: 21, reviewed: 20, accurate: 19, critical: 0, wilsonLower: 0.7639, requiredPending: 1, coverage: 33 / 39, coverageNum: 33, coverageDen: 39, measuredFixClasses: 2 },
       { tutorKey: "Ben", displayName: "Ben", phase: "full_review", textsInWise: 19, reviewed: 17, accurate: 14, critical: 1, wilsonLower: 0.5897, requiredPending: 1, coverage: 26 / 38, coverageNum: 26, coverageDen: 38, measuredFixClasses: 4 },
@@ -462,7 +464,8 @@ export function trendsFixture(rangeDays: TrendRangeDays = 14, overrides: Partial
     generatedAt: FIXTURE_NOW,
     range: { start, end: FIXTURE_TODAY, days: rangeDays },
     tutorKey: "*",
-    since: rangeDays === 14 ? addDays(start, -13) : WINDOW_DATES[0],
+    // The first date with data, whatever the range: the pilot's first class.
+    since: WINDOW_DATES[0],
     days: [...empty, ...busy],
     totals: {
       reviewed: sum(REVIEWED), accurate: sum(ACCURATE), critical: 1, posted: sum(POSTED), eligible: sum(ELIGIBLE),

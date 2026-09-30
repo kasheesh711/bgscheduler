@@ -381,29 +381,38 @@ function pooled(numerators: readonly number[], denominators: readonly number[], 
   return denominator > 0 ? numerator / denominator : null;
 }
 
+/** A 7-day value pools a date and the six before it, as the trend series do (`TREND_POOL_DAYS`). */
+const POOL_DAYS = 7;
+
 /**
  * The review payload's daily rows as series over every date of its window. A date without a row, or without reviews
- * (or eligible classes), is a gap. The 7-day values pool the date and the six before it inside the window.
+ * (or eligible classes), is a gap. The 7-day values pool the date and the six before it: the dates before the window
+ * come from the payload's `lookback` rows, so the window's first dates pool seven days too, as the trend charts do.
  */
-export function railSeries(review: Pick<AutowriterReview, "window" | "daily">): RailSeries {
+export function railSeries(review: Pick<AutowriterReview, "window" | "daily" | "lookback">): RailSeries {
+  const lead: string[] = [];
+  for (let date = addDays(review.window.start, -(POOL_DAYS - 1)); date < review.window.start; date = addDays(date, 1)) lead.push(date);
   const dates: string[] = [];
   for (let date = review.window.start; date <= review.window.end; date = addDays(date, 1)) dates.push(date);
-  const rows = new Map(review.daily.map((row) => [row.date, row]));
-  const column = (pick: (row: AutowriterReview["daily"][number]) => number) => dates.map((date) => {
-    const row = rows.get(date);
+  const daily = new Map(review.daily.map((row) => [row.date, row]));
+  const counts = new Map<string, AutowriterReview["lookback"][number]>([...review.lookback, ...review.daily].map((row) => [row.date, row]));
+  const column = (pick: (row: AutowriterReview["lookback"][number]) => number) => [...lead, ...dates].map((date) => {
+    const row = counts.get(date);
     return row ? pick(row) : 0;
   });
   const reviewed = column((row) => row.reviewed);
   const accurate = column((row) => row.accurate);
   const posted = column((row) => row.posted);
   const eligible = column((row) => row.eligible);
+  // The columns start `lead.length` dates before the window.
+  const at = (index: number) => index + lead.length;
   return {
     labels: dates.map(dayMonth),
-    accuracy: dates.map((_, index) => pooled(accurate, reviewed, index, 1)),
-    accuracy7d: dates.map((_, index) => pooled(accurate, reviewed, index, 7)),
-    coverage: dates.map((_, index) => pooled(posted, eligible, index, 1)),
-    coverage7d: dates.map((_, index) => pooled(posted, eligible, index, 7)),
-    critical: column((row) => row.critical).map((count) => count > 0),
+    accuracy: dates.map((_, index) => pooled(accurate, reviewed, at(index), 1)),
+    accuracy7d: dates.map((_, index) => pooled(accurate, reviewed, at(index), POOL_DAYS)),
+    coverage: dates.map((_, index) => pooled(posted, eligible, at(index), 1)),
+    coverage7d: dates.map((_, index) => pooled(posted, eligible, at(index), POOL_DAYS)),
+    critical: dates.map((date) => (daily.get(date)?.critical ?? 0) > 0),
   };
 }
 

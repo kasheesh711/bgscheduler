@@ -1219,6 +1219,28 @@ describe("loadAutowriterReview", () => {
     expect(review.gate).toMatchObject(facts);
   });
 
+  it("loads the stored counts of the six dates before the window for the 7-day values, apart from the window's own", async () => {
+    const stored = { liveMode: true, policyVersion: 1, tutorKey: "*" };
+    await db.insert(M).values([
+      // The window of 30 Sep is 17–30 Sep.
+      { ...stored, metricDate: "2026-09-17", posted: 2, eligible: 4, reviewed: 2, accurate: 2 },
+      { ...stored, metricDate: "2026-09-16", posted: 3, eligible: 5, reviewed: 2, accurate: 1 },
+      { ...stored, metricDate: "2026-09-11", posted: 1, eligible: 2, reviewed: 1, accurate: 1 },
+      { ...stored, metricDate: "2026-09-16", tutorKey: "Mimi", posted: 9, eligible: 9 },
+      // Older than the look-back: not read at all.
+      { ...stored, metricDate: "2026-09-10", posted: 7, eligible: 7, reviewed: 7, accurate: 7 },
+    ]);
+    const review = await loadAutowriterReview(db, { now: NOW });
+    if (!review.available) throw new Error("review unavailable");
+    expect(review.window).toMatchObject({ start: "2026-09-17", end: "2026-09-30" });
+    expect(review.lookback).toEqual([
+      { date: "2026-09-11", reviewed: 1, accurate: 1, posted: 1, eligible: 2 },
+      { date: "2026-09-16", reviewed: 2, accurate: 1, posted: 3, eligible: 5 },
+    ]);
+    expect(review.daily.map((row) => [row.date, row.posted, row.eligible])).toEqual([["2026-09-17", 2, 4]]);
+    expect(review.coverage.posted).toBe(2);
+  });
+
   it("says the review tables are missing as a typed payload, and lets any other error through", async () => {
     await db.execute(sql`ALTER TABLE feedback_autowriter_reviews RENAME TO feedback_autowriter_reviews_hidden`);
     try {

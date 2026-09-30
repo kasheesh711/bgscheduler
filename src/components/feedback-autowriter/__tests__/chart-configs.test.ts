@@ -222,7 +222,7 @@ describe("the rail's mini charts", () => {
     expect(series.accuracy[0]).toBe(1);
     expect(series.accuracy[6]).toBe(0.5);
     expect(series.critical).toEqual([false, false, false, false, false, false, true, false, false, false, false, false, false, false]);
-    // The first 7-day value pools the one day there is; the last pools the last seven.
+    // Nothing before the window here: the first 7-day value pools the one day there is; the last pools the last seven.
     expect(series.accuracy7d[0]).toBe(1);
     expect(series.accuracy7d.at(-1)).toBeCloseTo((3 + 4 + 3 + 4 + 4 + 4 + 1) / (3 + 4 + 4 + 4 + 4 + 4 + 2), 10);
     expect(series.coverage7d.at(-1)).toBeCloseTo((6 + 7 + 6 + 7 + 6 + 7 + 7) / (8 + 9 + 8 + 8 + 8 + 8 + 8), 10);
@@ -237,6 +237,7 @@ describe("the rail's mini charts", () => {
         { ...review.daily[0], date: "2026-10-06", reviewed: 0, accurate: 0, posted: 2, eligible: 4, critical: 0 },
         { ...review.daily[0], date: "2026-10-04", reviewed: 2, accurate: 1, posted: 0, eligible: 0, critical: 0 },
       ],
+      lookback: [],
     });
     expect(series.labels).toEqual(["3 Oct", "4 Oct", "5 Oct", "6 Oct"]);
     expect(series.accuracy).toEqual([null, 0.5, null, null]);
@@ -245,7 +246,30 @@ describe("the rail's mini charts", () => {
     expect(series.coverage7d).toEqual([null, null, null, 0.5]);
     expect(lastValue(series.accuracy)).toBe(0.5);
     expect(lastValue([null, null])).toBeNull();
-    expect(railSeries({ window: { start: "2026-10-05", end: "2026-10-06", days: 2 }, daily: [] }).accuracy7d).toEqual([null, null]);
+    expect(railSeries({ window: { start: "2026-10-05", end: "2026-10-06", days: 2 }, daily: [], lookback: [] }).accuracy7d).toEqual([null, null]);
+  });
+
+  it("pools the window's first dates with the six dates before it, as the trend charts do", () => {
+    const review = reviewFixture();
+    const row = (date: string, reviewed: number, accurate: number, posted: number, eligible: number) => ({ ...review.daily[0], date, reviewed, accurate, posted, eligible, critical: 0 });
+    const series = railSeries({
+      window: { start: "2026-10-05", end: "2026-10-06", days: 2 },
+      daily: [row("2026-10-06", 2, 1, 3, 4), row("2026-10-05", 4, 4, 2, 4)],
+      lookback: [
+        // Seven days before 5 Oct: no part of its 7-day value (29 Sep – 5 Oct), nor of anything else.
+        { date: "2026-09-28", reviewed: 100, accurate: 0, posted: 0, eligible: 100 },
+        { date: "2026-09-29", reviewed: 4, accurate: 2, posted: 1, eligible: 4 },
+        { date: "2026-10-02", reviewed: 2, accurate: 2, posted: 4, eligible: 4 },
+      ],
+    });
+    // Only the window's dates are drawn, with their own daily values.
+    expect(series.labels).toEqual(["5 Oct", "6 Oct"]);
+    expect(series.accuracy).toEqual([1, 0.5]);
+    expect(series.coverage).toEqual([0.5, 0.75]);
+    // 5 Oct pools 29 Sep – 5 Oct; 6 Oct pools 30 Sep – 6 Oct (29 Sep has left it).
+    expect(series.accuracy7d).toEqual([(2 + 2 + 4) / (4 + 2 + 4), (2 + 4 + 1) / (2 + 4 + 2)]);
+    expect(series.coverage7d).toEqual([(1 + 4 + 2) / (4 + 4 + 4), (4 + 2 + 3) / (4 + 4 + 4)]);
+    expect(series.critical).toEqual([false, false]);
   });
 
   it("draws a mini chart with only its first and last date, its target and its critical days", () => {

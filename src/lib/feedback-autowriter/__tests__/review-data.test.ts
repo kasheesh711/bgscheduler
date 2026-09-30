@@ -228,6 +228,28 @@ describe("buildAutowriterReview", () => {
     expect(payload.fixRounds).toEqual({ zero: 1, one: 0, two: 0, threePlus: 0, unresolved: 1 });
   });
 
+  it("hands over the all-tutors counts of the six dates before the window, and counts them nowhere else", () => {
+    const base = source();
+    // The window of 30 Sep is 17–30 Sep: its look-back is 11–16 Sep.
+    const before = [
+      metric({ metricDate: "2026-09-16", posted: 3, eligible: 5, reviewed: 2, accurate: 1, held: 9, critical: 4 }),
+      metric({ metricDate: "2026-09-11", posted: 1, eligible: 2, reviewed: 1, accurate: 1 }),
+      // A tutor's own row, and a date before the look-back: neither is handed over.
+      metric({ metricDate: "2026-09-16", tutorKey: "Mimi", posted: 50, eligible: 50 }),
+      metric({ metricDate: "2026-09-10", posted: 70, eligible: 70 }),
+    ];
+    const payload = buildAutowriterReview({ now: NOW, ...base, metrics: [...base.metrics, ...before] });
+    expect(payload.window).toMatchObject({ start: "2026-09-17", end: "2026-09-30" });
+    expect(payload.lookback).toEqual([
+      { date: "2026-09-11", reviewed: 1, accurate: 1, posted: 1, eligible: 2 },
+      { date: "2026-09-16", reviewed: 2, accurate: 1, posted: 3, eligible: 5 },
+    ]);
+    // Everything else reads the window alone, as without those rows.
+    const without = buildAutowriterReview({ now: NOW, ...base });
+    expect(without.lookback).toEqual([]);
+    expect({ ...payload, lookback: [] }).toEqual(without);
+  });
+
   it("counts a tutor's critical verdicts in the window, sampled or not, and no other tutor's", () => {
     const base = source();
     const critical = (id: string, sessionId: string) => verdict({
