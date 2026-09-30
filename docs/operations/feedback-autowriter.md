@@ -157,8 +157,9 @@ redeploy, then message the tutors:
 **What to expect.** A class shows "Waiting for the recording" from its end until Wise publishes the recording
 (measured over 14 days: median 34 minutes after the scheduled end, 95% within about 70 minutes), then
 "Transcribing", then posted — about an hour after class, up to about 4 h if the recording is late. With no recording
-3 h after class, a recording in several parts, speakers that cannot be told apart, three Soniox failures, or the
-transcript pass switched off, the class goes back to the summary once: the dashboard shows the cause under its state
+3 h after class, a recording in several parts, speakers that cannot be told apart, three Soniox failures, the
+transcript pass switched off, or the writer or its judge failing three times in a row on the transcript draft
+(time-outs, replies that are not JSON), the class goes back to the summary once: the dashboard shows the cause under its state
 ("No recording after 3 h — from summary", …) and counts them in "Back to the summary". A class still waiting for its
 recording raises no `no_recording` alert (it falls back instead); one still being transcribed 3 h after class
 does. What still needs a person is `held` with its alert as before, including
@@ -166,10 +167,12 @@ does. What still needs a person is `held` with its alert as before, including
 `RecordingCompletedEvent` webhook; if the sweep queues up, the lever is a 5-minute cron. Soniox runs for every class:
 about $22 a month.
 
-**For 48 h after.** Class end → posted "From the transcript" about an hour; fallbacks by cause; no `no_recording`
-alerts; cost per draft about $0.11.
+**For 48 h after.** Class end → posted "From the transcript" about an hour; fallbacks by cause (several
+"Writer or judge failed 3 times on the transcript" in a day means the model route is failing: look at
+`metadata.writerFailure` and the calls); no `no_recording` alerts; cost per draft about $0.11.
 
-**Retrying.** `--retry=<wiseSessionId>` clears the fallback, so a retried class goes to the transcript again.
+**Retrying.** `--retry=<wiseSessionId>` clears the fallback and the error counts, so a retried class goes to the
+transcript again.
 
 **Rollback.** Unset `FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST` and redeploy: new classes take the summary path again,
 and classes already waiting finish from the transcript or fall back as above. No SQL is needed. (To turn the whole

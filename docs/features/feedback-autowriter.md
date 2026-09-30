@@ -239,8 +239,12 @@ pass is on. Off (the default), nothing changes.
   picks it up); otherwise the usual 30-minute recheck, never later than the fallback time. Wise's
   `RecordingCompletedEvent` webhook continues it, as for any second-pass class.
 - **Fallback to the summary** (`fallBackToSummary`, once): no recording **3 h after the scheduled end**, a recording
-  in several parts, speakers it cannot tell apart, three Soniox failures, or the transcript pass switched off while
-  the class waited. The row goes back to `pending` with `evidence = summary`, due at once, reason
+  in several parts, speakers it cannot tell apart, three Soniox failures, the transcript pass switched off while
+  the class waited, or the models failing on the transcript draft three times in a row (`writer_failed`: the writer
+  or its judge timing out, answering with something that is not JSON or from the wrong route — counted in
+  `metadata.writerErrors`, the last one in `writerFailure`; Wise and Soniox errors and the function's own time
+  budget do not count; owner default, 30 Sep). Until then such a failure is retried every 10 minutes on the kept
+  transcript, as before. The row goes back to `pending` with `evidence = summary`, due at once, reason
   `summary_fallback:<cause>` and `metadata.summaryFallback {cause, at}` (the run reports `summary_fallback`), and the
   summary path writes it as before. A transcript draft kept on the row (only possible for a recording that gained a
   second part, or the pass switched off) is dropped with its verdict and stamp. Measured before choosing 3 h (first `RecordingCompletedEvent` − scheduled end,
@@ -250,8 +254,8 @@ pass is on. Off (the default), nothing changes.
   rejects: the better evidence could not support a draft, so a person writes it.
 - **After a fallback.** A mostly-Thai summary is held (`thai_summary_no_transcript`); a held summary draft stays
   held; no summary retries, alerts `no_summary` and expires as before. Nothing hands over again, so there is no loop;
-  an owner `--retry` clears `summaryFallback`, `summaryAtHandover` and `handover`, and the class may go to the
-  transcript again.
+  an owner `--retry` clears `summaryFallback`, `summaryAtHandover`, `handover` and the error counts, and the class
+  may go to the transcript again.
 - **Alerts and retention** ([`store.ts`](../../src/lib/feedback-autowriter/store.ts)). A transcript-first class still
   waiting for its recording raises no `no_recording` alert — it falls back at that point instead; one whose
   transcription is still running 3 h after class has no time-based fallback, so it alerts as before. A class that
@@ -266,7 +270,9 @@ pass is on. Off (the default), nothing changes.
   or fallback), Soniox minutes, cost and turnaround, the speaker method, the v4 transcript draft with its judge at
   `high` and — on the same messages — at `medium`, a v4 summary draft, and a v4 `high` judge of the draft actually
   posted (the original, when a one-time correction replaced it) against the transcript — only on a transcript
-  production would write from. Writer models are whatever `AUTOWRITER_MODELS` names, shown per draft. It is typed so
+  production would write from. Writer models are whatever `AUTOWRITER_MODELS` names, shown per draft, with their
+  calls, failures and latency (p50/p90). A transcript draft whose models fail is tried up to three times (30 s
+  apart, where production waits 10 minutes) before it counts as a `writer_failed` fallback. It is typed so
   it cannot post (`Pick<WiseFeedbackOps, "getSessionDetailById">`), and no database handle is passed in: the CLI
   SELECTs the sample (including when Wise announced each recording) and the tutor's prior feedback. A class whose
   published recording Wise no longer lists (Wise drops recordings about a day after class) is skipped
