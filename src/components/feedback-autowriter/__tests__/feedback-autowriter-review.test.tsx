@@ -138,6 +138,15 @@ describe("VerdictForm", () => {
     // The drawer closes only after a recorded verdict; a stale page reloads the item and stays open.
     const drawer = fs.readFileSync(path.join(__dirname, "../item-drawer.tsx"), "utf8");
     expect(drawer).toContain('if (outcome === "recorded") await done(); else await onChanged();');
+    // It closes first and reloads after: the end of the reload must not close a sheet opened meanwhile.
+    expect(drawer).toMatch(/const done = async \(\) => \{\s*onClose\(\);\s*await onChanged\(\);\s*\};/u);
+  });
+
+  it("never opens with the focus on Approve: the sheet's scrolling body takes it", () => {
+    // Approve records at once, and a dialog focuses its first control by default: a Space meant to scroll would approve.
+    const drawer = fs.readFileSync(path.join(__dirname, "../item-drawer.tsx"), "utf8");
+    expect(drawer).toContain("<DialogContent initialFocus={bodyRef}");
+    expect(drawer).toContain("<div ref={bodyRef} tabIndex={-1}");
   });
 });
 

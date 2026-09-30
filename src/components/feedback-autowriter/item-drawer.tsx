@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { AutowriterDashboard } from "@/lib/feedback-autowriter/dashboard";
@@ -387,8 +387,12 @@ function headline(content: DrawerContent): { title: string; description: string 
 const SHEET = "top-0 right-0 left-auto flex h-dvh w-full max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-l p-0 data-open:zoom-in-100 data-closed:zoom-out-100";
 
 /**
- * The right-hand sheet. `onChanged` reloads the page data; after a verdict or an acknowledgement went through, the
- * data reloads and the sheet closes. A stale page (HTTP 409) reloads the item and leaves the sheet open on its error.
+ * The right-hand sheet. `onChanged` reloads the page data. After a verdict or an acknowledgement went through, the
+ * sheet closes and the data reloads, in that order: a sheet the owner opens meanwhile is not closed by the reload's
+ * end. A stale page (HTTP 409) reloads the item and leaves the sheet open on its error.
+ *
+ * Opening the sheet puts the focus on its scrolling body, never on a control: the first one of a review is Approve,
+ * which records at once, so a Space meant to scroll would approve the post.
  */
 export function ItemDrawer({ target, dashboard, review, now, canControl, onChanged, onOpen, onClose }: {
   target: DrawerTarget | null;
@@ -400,20 +404,26 @@ export function ItemDrawer({ target, dashboard, review, now, canControl, onChang
   onOpen: (target: DrawerTarget) => void;
   onClose: () => void;
 }) {
-  const content = target ? resolveDrawer(target, dashboard, review) : null;
+  // The sheet fades out after `target` is cleared: it keeps what it showed until it is gone, instead of going blank.
+  const [held, setHeld] = useState(target);
+  if (target !== null && target !== held) setHeld(target);
+  const shown = target ?? held;
+  const content = shown ? resolveDrawer(shown, dashboard, review) : null;
   const { title, description } = content ? headline(content) : { title: "", description: "" };
+  const bodyRef = useRef<HTMLDivElement | null>(null);
   const done = async () => {
-    await onChanged();
     onClose();
+    await onChanged();
   };
   return (
     <Dialog open={target !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className={cn(SHEET, content?.kind === "review" ? "sm:max-w-[min(960px,calc(100vw-2rem))]" : "sm:max-w-[560px]")}>
+      <DialogContent initialFocus={bodyRef}
+        className={cn(SHEET, content?.kind === "review" ? "sm:max-w-[min(960px,calc(100vw-2rem))]" : "sm:max-w-[560px]")}>
         <DialogHeader className="shrink-0 gap-1 border-b px-5 py-4 pr-12">
           <DialogTitle className="text-[15px] font-semibold tracking-tight">{title}</DialogTitle>
           <DialogDescription className="text-xs">{description}</DialogDescription>
         </DialogHeader>
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
+        <div ref={bodyRef} tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 outline-none">
           {content?.kind === "review" ? (
             <ReviewBody item={content.item} canControl={canControl}
               onRecorded={async (outcome) => { if (outcome === "recorded") await done(); else await onChanged(); }} />
