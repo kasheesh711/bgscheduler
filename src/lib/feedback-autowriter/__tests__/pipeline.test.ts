@@ -235,11 +235,11 @@ describe("runWritingPipeline", () => {
       misattributed: ["[STUDENT_1] mentioned only 8 pages"],
       homeworkNotSet,
     });
-    const { promise } = run([GLM(writerJson), GLM(verdict([])), LUNA(writerJson), GLM(verdict(["finish the three remaining problems"]))]);
+    const { promise } = run([SOL(writerJson), GLM(verdict([])), LUNA(writerJson), GLM(verdict(["finish the three remaining problems"]))]);
     expect(await promise).toEqual({
       kind: "held",
       reasons: [
-        "glm:unfaithful:wrong person: [STUDENT_1] mentioned only 8 pages | scored 95% on the test | read chapter four aloud",
+        "sol:unfaithful:wrong person: [STUDENT_1] mentioned only 8 pages | scored 95% on the test | read chapter four aloud",
         "luna:unfaithful:wrong person: [STUDENT_1] mentioned only 8 pages | homework not set: finish the three remaining problems | " +
           "scored 95% on the test",
       ],
