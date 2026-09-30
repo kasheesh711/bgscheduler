@@ -198,6 +198,8 @@ the class waited 10 minutes or more for its next run.
   still claimed only with its 240 s, and a run that no longer has them keeps the judged transcript draft for the
   next run, as before. Worst case: 45 s more for one call; in a run, each step — the writer, the two judge levels
   (they wait at the same time), and for a rejected draft the fallback writer and its judges — can add up to that.
+  A sweep runs its classes one after another, so one class's waits are time the classes after it do not get in that
+  sweep (it starts a class only while 560 s remain); a webhook run is one class on its own.
 - **What it still means.** Unchanged: a rate limit is never the writer's failure (it does not count toward
   `writer_failed`) and never a reason for the fallback writer. A call still rate limited after its retries ends the
   run with the same `infra:…` reason as before, and the class retries in 10 minutes.
