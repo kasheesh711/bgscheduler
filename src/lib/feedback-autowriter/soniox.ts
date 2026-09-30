@@ -3,8 +3,8 @@ import { z } from "zod";
 /**
  * Soniox async speech-to-text for the autowriter's second pass. Soniox fetches
  * Wise's recording itself (`audio_url`), handles Thai/English code-switching in
- * one model, and tags every token with a speaker. A job is kept only until a
- * judged draft is stored or the class is finished, then deleted; we never store
+ * one model, and tags every token with a speaker. Once the class is done with
+ * it, a job is kept for review for at most 72 h, then deleted; we never store
  * the transcript itself.
  */
 export const SONIOX_API_BASE = "https://api.soniox.com/v1";
@@ -87,7 +87,13 @@ export function createSonioxClient(apiKey: string, fetchImpl: typeof fetch = fet
       throw new SonioxError(`network_${error instanceof Error ? error.name : "Error"}`, null);
     }
     if (response.status === 204) return null;
-    const text = await response.text();
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (error) {
+      // The timeout also covers reading the body (a long transcript): a typed error, like a failed request.
+      throw new SonioxError(`network_${error instanceof Error ? error.name : "Error"}`, response.ok ? null : response.status);
+    }
     if (!response.ok) throw new SonioxError(`HTTP ${response.status}: ${text.slice(0, 200)}`, response.status);
     try {
       return text ? JSON.parse(text) : null;

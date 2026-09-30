@@ -4,9 +4,11 @@ import type { ScheduleEmailSendInput } from "@/lib/classrooms/schedule-email";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
-import { processSession, runSweep, type AutowriterDeps } from "../job";
+import { cleanUpSonioxJobs, processSession, runSweep, type AutowriterDeps } from "../job";
 import type { OpenRouterCallResult } from "../openrouter";
-import { ensureSessionRow, readControl, readSessionRow, updateControl } from "../store";
+import { JUDGE_PROMPT_VERSION } from "../judge";
+import { PROMPT_VERSION } from "../prompt";
+import { ensureSessionRow, readControl, readSessionRow, retryHeldSession, updateControl } from "../store";
 import type { PostResult, SubmitFeedbackEvent, WiseFeedbackOps } from "../submit";
 import { SonioxError } from "../soniox";
 import type { WiseFeedbackPostBody } from "../types";
@@ -605,14 +607,16 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     const outcome = await processSession(transcriptDeps(wise.ops, soniox.client, { callModel: callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" });
     expect(outcome).toMatchObject({ result: "verified" });
     expect(soniox.created).toEqual([expect.objectContaining({ audioUrl: "https://files.wiseapp.live/rec.mp4" })]);
-    expect(soniox.removed).toEqual(["job-1"]);
+    expect(soniox.removed).toEqual([]); // kept for review (triage), at most 72 h
     expect(models).toEqual(["z-ai/glm-5.3-flash", "z-ai/glm-5.3-flash"]);
     expect(prompts[0]).toContain("Lesson transcript:");
     expect(prompts[0]).toContain("TUTOR: Today we add fractions");
     expect(prompts[0]).toContain("STUDENT: I got three quarters");
     expect(wise.posts).toHaveLength(1);
     const row = await readSessionRow(db, SESSION_ID);
-    expect(row).toMatchObject({ state: "verified", evidence: "transcript", sonioxTranscriptionId: null });
+    expect(row).toMatchObject({ state: "verified", evidence: "transcript", sonioxTranscriptionId: "job-1" });
+    // Stamped with what produced it.
+    expect(row?.metadata).toMatchObject({ pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION, arm: "glm", evidence: "transcript" } });
     expect(row?.metadata).toMatchObject({ transcript: { speakerMethod: "zoom_alignment", audioMinutes: 60 } });
     const calls = await db.select().from(schema.feedbackAutowriterCalls).where(eq(schema.feedbackAutowriterCalls.role, "transcriber"));
     expect(calls).toHaveLength(1);
@@ -632,7 +636,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     const result = await runSweep(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, done.client));
     expect(result.processed).toEqual({ verified: 1 });
     expect(done.created).toEqual([]); // reused job-1, no second transcription
-    expect(done.removed).toEqual(["job-1"]);
+    expect(done.removed).toEqual([]); // kept for review
   });
 
   it("holds the class for a person after repeated Soniox errors", async () => {
@@ -645,22 +649,30 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
   });
 
   it("reuses a judged transcript draft whose POST did not go out — no second transcription or model call", async () => {
+    const written = { commitSha: "commit-that-wrote-it", promptVersion: 2, judgeVersion: 2, arm: "glm", evidence: "transcript" };
     await seedRow({
       state: "awaiting_recording", evidence: "transcript", sonioxTranscriptionId: "job-5",
       arm: "glm", fields: GOOD_FIELDS,
       billing: { sessionStatus: "COMPLETED", creditsConsumed: 1, source: "auto_blank_reuse", expectedConsumedDelta: 0 },
-      metadata: { draftEvidence: "transcript", judge: { faithful: true, unsupported: [] } },
+      metadata: { draftEvidence: "transcript", judge: { faithful: true, unsupported: [] }, pipeline: written },
     });
     const soniox = fakeSoniox();
     const model = fakeModel();
     const wise = fakeWise({ details: [sessionDetail(RECORDING)] });
-    expect(await processSession(transcriptDeps(wise.ops, soniox.client, { callModel: model.callModel as never }), { wiseSessionId: SESSION_ID, trigger: "cron" }))
-      .toMatchObject({ result: "verified" });
+    vi.stubEnv("VERCEL_GIT_COMMIT_SHA", "commit-that-posted-it");
+    try {
+      expect(await processSession(transcriptDeps(wise.ops, soniox.client, { callModel: model.callModel as never }), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+        .toMatchObject({ result: "verified" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
     expect(model.calls).toEqual([]);
     expect(soniox.created).toEqual([]);
     expect(soniox.client.get).not.toHaveBeenCalled();
-    expect(soniox.removed).toEqual(["job-5"]);
+    expect(soniox.removed).toEqual([]); // kept for review
     expect(wise.posts).toHaveLength(1);
+    // Credited to the code that wrote and judged the text, not the deploy that happened to send it.
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ pipeline: written, postedFromCommit: "commit-that-posted-it" });
   });
 
   it("never reuses a draft written from the summary", async () => {
@@ -673,14 +685,6 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(soniox.created).toHaveLength(1);
   });
 
-  it("keeps the job id when Soniox refuses the delete, so the sweep can retry it", async () => {
-    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
-    const soniox = fakeSoniox({ removeFails: true });
-    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
-      .toMatchObject({ result: "verified" });
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "verified", sonioxTranscriptionId: "job-1" });
-  });
-
   it("holds the class when it cannot tell tutor from student", async () => {
     await seedRow({ state: "awaiting_recording", evidence: "transcript" });
     const even = lessonTokens().map((token, index) => ({ ...token, speaker: String((index % 3) + 1) }));
@@ -690,7 +694,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, { fetchText: async () => "WEBVTT\n" }),
       { wiseSessionId: SESSION_ID, trigger: "webhook" },
     )).toMatchObject({ result: "held", detail: "speakers_unclear" });
-    expect(soniox.removed).toEqual(["job-1"]);
+    expect(soniox.removed).toEqual([]); // kept so the hold can be reviewed
   });
 
   it("the backstop only looks at a running job, and counts Soniox status errors", async () => {
@@ -748,7 +752,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, second.client), { wiseSessionId: SESSION_ID, trigger: "cron" }))
       .toMatchObject({ result: "verified" });
     expect(second.created).toEqual([]);
-    expect(second.removed).toEqual(["job-1"]);
+    expect(second.removed).toEqual([]); // kept for review
     expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ transcript: { speakerMethod: "zoom_alignment" } });
     const transcribed = await db.select().from(schema.feedbackAutowriterCalls).where(eq(schema.feedbackAutowriterCalls.role, "transcriber"));
     expect(transcribed).toHaveLength(1); // the transcription is paid for once
@@ -782,8 +786,8 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       .toMatchObject({ result: "transcribing", detail: "zoom_transcript_pending" });
   });
 
-  it("deletes a finished class's leftover Soniox job during the sweep", async () => {
-    await seedRow({ state: "expired", sonioxTranscriptionId: "job-9" });
+  it("deletes a finished class's leftover Soniox job during the sweep once its review window is over", async () => {
+    await seedRow({ state: "expired", sonioxTranscriptionId: "job-9", metadata: { sonioxRetainUntil: "2026-01-01T00:00:00.000Z" } });
     const soniox = fakeSoniox();
     await runSweep(transcriptDeps(fakeWise().ops, soniox.client));
     expect(soniox.removed).toEqual(["job-9"]);
@@ -822,7 +826,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, { callModel: model.callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
       .toMatchObject({ result: "held", detail: "recording_too_short" });
     expect(model.calls).toEqual([]);
-    expect(soniox.removed).toEqual(["job-1"]);
+    expect(soniox.removed).toEqual([]); // kept so the hold can be reviewed
     expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ transcript: { audioMinutes: 20 } });
   });
 
@@ -917,6 +921,8 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       fields: expect.objectContaining({ topics: GOOD_FIELDS.topics }),
       metadata: { draftEvidence: "transcript", judge: { faithful: true } },
     });
+    // Not done yet: its transcript's review window has not started.
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).not.toHaveProperty("sonioxRetainUntil");
 
     await db.update(S).set({ nextAttemptAt: sql`now() - interval '1 second'` as never }).where(eq(S.wiseSessionId, SESSION_ID));
     const again = fakeSoniox();
@@ -927,6 +933,48 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(again.created).toEqual([]);
     expect(model.calls).toEqual([]);
     expect(retry.posts).toHaveLength(1);
+    // The window starts at the first sweep after the POST, not at the attempt that had to wait.
+    await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client));
+    const retainUntil = new Date(String(((await readSessionRow(db, SESSION_ID))?.metadata as { sonioxRetainUntil?: unknown }).sonioxRetainUntil)).getTime();
+    expect(retainUntil - Date.now()).toBeGreaterThan(71.9 * 3600_000);
+  });
+
+  it("never starts the review window of a class still being worked on", async () => {
+    await seedRow({
+      state: "transcribing", reason: "zoom_transcript_pending", evidence: "transcript", sonioxTranscriptionId: "job-3",
+      nextAttemptAt: new Date(Date.now() + 3600_000),
+    });
+    const soniox = fakeSoniox();
+    await runSweep(transcriptDeps(fakeWise().ops, soniox.client));
+    expect(soniox.removed).toEqual([]);
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).not.toHaveProperty("sonioxRetainUntil");
+
+    await db.update(S).set({ state: "held", reason: "speakers_unclear" }).where(eq(S.wiseSessionId, SESSION_ID));
+    await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client));
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).toHaveProperty("sonioxRetainUntil");
+  });
+
+  it("with the autowriter off, still starts and ends the window of a class left unfinished past its deadline", async () => {
+    await updateControl(db, { mode: "off" }, "t@x.com");
+    await seedRow({
+      state: "transcribing", reason: "zoom_transcript_pending", evidence: "transcript", sonioxTranscriptionId: "job-4",
+      deadlineAt: new Date(Date.now() - 3600_000), nextAttemptAt: new Date(Date.now() + 3600_000),
+    });
+    await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client));
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).toHaveProperty("sonioxRetainUntil");
+
+    await db.update(S).set({ metadata: sql`${S.metadata} || jsonb_build_object('sonioxRetainUntil', now() - interval '1 minute')` as never })
+      .where(eq(S.wiseSessionId, SESSION_ID));
+    const over = fakeSoniox();
+    await runSweep(transcriptDeps(fakeWise().ops, over.client));
+    expect(over.removed).toEqual(["job-4"]);
+  });
+
+  it("cleans up Soniox jobs on their own, as the job does when the autowriter is switched off", async () => {
+    await seedRow({ state: "held", evidence: "transcript", sonioxTranscriptionId: "job-8", metadata: { sonioxRetainUntil: "2026-01-01T00:00:00.000Z" } });
+    const soniox = fakeSoniox();
+    await cleanUpSonioxJobs(transcriptDeps(fakeWise().ops, soniox.client), soniox.client as never);
+    expect(soniox.removed).toEqual(["job-8"]);
   });
 
   it("works from the row as it is under the lease, not as first read", async () => {
@@ -943,24 +991,144 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
         .toMatchObject({ result: "verified" });
       expect(soniox.created).toEqual([]);
       expect(soniox.polled[0]).toBe("job-other");
-      expect(soniox.removed).toEqual(["job-other"]);
+      expect(soniox.removed).toEqual([]); // kept for review
     } finally {
       await db.execute(sql.raw("DROP TRIGGER IF EXISTS autowriter_test_race ON feedback_autowriter_sessions"));
       await db.execute(sql.raw("DROP FUNCTION IF EXISTS autowriter_test_race()"));
     }
   });
 
-  it("deletes a shadow draft's Soniox job; the sweep retries a delete that failed", async () => {
+  it("keeps a finished class's Soniox job for review, and the sweep deletes it once triaged or after 72 h", async () => {
     await updateControl(db, { mode: "shadow" }, "t@x.com");
     await seedRow({ state: "awaiting_recording", evidence: "transcript" });
-    const refusing = fakeSoniox({ removeFails: true });
-    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, refusing.client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+    expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fakeSoniox().client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
       .toMatchObject({ result: "would_submit" });
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "would_submit", sonioxTranscriptionId: "job-1" });
+
+    // The first sweep to see it done starts its 72 h window; neither the reaper nor the cleanup touch it.
+    const early = fakeSoniox({ listed: [{ id: "job-1", createdAt: new Date(Date.now() - 5 * 3600_000), clientReferenceId: SESSION_ID, status: "completed" }] });
+    await runSweep(transcriptDeps(fakeWise().ops, early.client));
+    expect(early.removed).toEqual([]);
+    const retainUntil = new Date(String(((await readSessionRow(db, SESSION_ID))?.metadata as { sonioxRetainUntil?: unknown }).sonioxRetainUntil)).getTime();
+    expect(retainUntil - Date.now()).toBeGreaterThan(71.9 * 3600_000);
+    expect(retainUntil - Date.now()).toBeLessThanOrEqual(72.1 * 3600_000);
+
+    // Triaged: deleted at the next sweep, and the id is cleared.
+    await db.update(S).set({ metadata: sql`${S.metadata} || '{"triagedAt":"2026-09-29T15:00:00.000Z"}'::jsonb` as never }).where(eq(S.wiseSessionId, SESSION_ID));
+    const refusing = fakeSoniox({ removeFails: true });
+    await runSweep(transcriptDeps(fakeWise().ops, refusing.client));
+    expect((await readSessionRow(db, SESSION_ID))?.sonioxTranscriptionId).toBe("job-1"); // a refused delete is retried
     const working = fakeSoniox();
     await runSweep(transcriptDeps(fakeWise().ops, working.client));
     expect(working.removed).toEqual(["job-1"]);
     expect((await readSessionRow(db, SESSION_ID))?.sonioxTranscriptionId).toBeNull();
+
+    // A window that ran out without triage: deleted too.
+    await db.update(S).set({
+      sonioxTranscriptionId: "job-2",
+      metadata: sql`(${S.metadata} - 'triagedAt') || '{"sonioxRetainUntil":"2026-01-01T00:00:00.000Z"}'::jsonb` as never,
+    }).where(eq(S.wiseSessionId, SESSION_ID));
+    const expired = fakeSoniox();
+    await runSweep(transcriptDeps(fakeWise().ops, expired.client));
+    expect(expired.removed).toEqual(["job-2"]);
+  });
+
+  it("starts the 72 h review window however a class ended, and a later sweep never extends it", async () => {
+    // An error cap ends the class without ever reaching the posting code: its transcript is still reviewable.
+    await seedRow({ state: "held", reason: "error:boom", evidence: "transcript", sonioxTranscriptionId: "job-9" });
+    const first = fakeSoniox();
+    await runSweep(transcriptDeps(fakeWise().ops, first.client));
+    expect(first.removed).toEqual([]);
+    const stamped = ((await readSessionRow(db, SESSION_ID))?.metadata as { sonioxRetainUntil?: string }).sonioxRetainUntil;
+    expect(new Date(String(stamped)).getTime() - Date.now()).toBeGreaterThan(71.9 * 3600_000);
+
+    // Later sweeps (which touch the row's other columns) leave the window where it was.
+    await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client));
+    expect(((await readSessionRow(db, SESSION_ID))?.metadata as { sonioxRetainUntil?: string }).sonioxRetainUntil).toBe(stamped);
+
+    await db.update(S).set({ metadata: sql`${S.metadata} || jsonb_build_object('sonioxRetainUntil', now() - interval '1 minute')` as never })
+      .where(eq(S.wiseSessionId, SESSION_ID));
+    const over = fakeSoniox();
+    await runSweep(transcriptDeps(fakeWise().ops, over.client));
+    expect(over.removed).toEqual(["job-9"]);
+    expect((await readSessionRow(db, SESSION_ID))?.sonioxTranscriptionId).toBeNull();
+  });
+
+  it("stamps CLI runs with the local checkout's commit", async () => {
+    await updateControl(db, { mode: "shadow" }, "t@x.com");
+    await seedRow();
+    // `vercel env pull` writes an empty VERCEL_GIT_COMMIT_SHA; it must not hide the local stamp.
+    vi.stubEnv("VERCEL_GIT_COMMIT_SHA", "");
+    vi.stubEnv("AUTOWRITER_LOCAL_COMMIT", "local:abc+dirty");
+    try {
+      expect(await processSession(deps(fakeWise().ops), { wiseSessionId: SESSION_ID, trigger: "cron" })).toMatchObject({ result: "would_submit" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ pipeline: { commitSha: "local:abc+dirty" } });
+  });
+
+  it("stamps a shadow draft with the commit, prompt and judge versions that wrote it", async () => {
+    await updateControl(db, { mode: "shadow" }, "t@x.com");
+    await seedRow();
+    vi.stubEnv("VERCEL_GIT_COMMIT_SHA", "abc123");
+    try {
+      expect(await processSession(deps(fakeWise().ops), { wiseSessionId: SESSION_ID, trigger: "cron" })).toMatchObject({ result: "would_submit" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({
+      pipeline: { commitSha: "abc123", promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION, arm: "glm", evidence: "summary" },
+    });
+  });
+
+  it("holds a class for a person after its third unexpected error instead of retrying to the deadline", async () => {
+    await seedRow({ metadata: { genericErrors: 2 } });
+    const wise = fakeWise();
+    const exploding = vi.fn(async () => { throw new Error("The operation was aborted due to timeout"); });
+    expect(await processSession(deps(wise.ops, { callModel: exploding as never }), { wiseSessionId: SESSION_ID, wiseClassId: CLASS_ID, trigger: "cron" }))
+      .toMatchObject({ result: "held", detail: "error:The operation was aborted due to timeout" });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "held", metadata: { genericErrors: 3, alertKind: "held" } });
+
+    // An owner retry starts the count again: one more error is retried, not held.
+    expect(await retryHeldSession(db, SESSION_ID, { minDeadline: new Date(NOW.getTime()), actor: "k@x.com" })).toBe(true);
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).not.toHaveProperty("genericErrors");
+    expect(await processSession(deps(fakeWise().ops, { callModel: exploding as never }), { wiseSessionId: SESSION_ID, wiseClassId: CLASS_ID, trigger: "cron" }))
+      .toMatchObject({ result: "infra" });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "pending", metadata: { genericErrors: 1 } });
+  });
+
+  it("counts errors from the row read under the lease, so another worker's count is not lost", async () => {
+    await seedRow();
+    // Another worker's two errors land between this worker's first read and its claim.
+    await db.execute(sql.raw(`CREATE OR REPLACE FUNCTION autowriter_test_count() RETURNS trigger AS $$
+      BEGIN IF NEW.state = 'generating' AND OLD.state <> 'generating' THEN NEW.metadata := NEW.metadata || '{"genericErrors":2}'::jsonb; END IF; RETURN NEW; END
+      $$ LANGUAGE plpgsql`));
+    await db.execute(sql.raw(`CREATE TRIGGER autowriter_test_count BEFORE UPDATE ON feedback_autowriter_sessions
+      FOR EACH ROW EXECUTE FUNCTION autowriter_test_count()`));
+    try {
+      const exploding = vi.fn(async () => { throw new Error("boom"); });
+      expect(await processSession(deps(fakeWise().ops, { callModel: exploding as never }), { wiseSessionId: SESSION_ID, wiseClassId: CLASS_ID, trigger: "cron" }))
+        .toMatchObject({ result: "held", detail: "error:boom" });
+      expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "held", metadata: { genericErrors: 3 } });
+    } finally {
+      await db.execute(sql.raw("DROP TRIGGER IF EXISTS autowriter_test_count ON feedback_autowriter_sessions"));
+      await db.execute(sql.raw("DROP FUNCTION IF EXISTS autowriter_test_count()"));
+    }
+  });
+
+  it("reports an error after the row left generating as infra, never as a hold it did not write", async () => {
+    await seedRow({ metadata: { genericErrors: 2 } });
+    // The row moves on (as after a POST claim) before the error surfaces: neither release applies.
+    const late = vi.fn(async () => {
+      await db.update(S).set({ state: "verified", leaseToken: null }).where(eq(S.wiseSessionId, SESSION_ID));
+      throw new Error("store write failed");
+    });
+    expect(await processSession(deps(fakeWise().ops, { callModel: late as never }), { wiseSessionId: SESSION_ID, wiseClassId: CLASS_ID, trigger: "cron" }))
+      .toMatchObject({ result: "infra" });
+    const row = await readSessionRow(db, SESSION_ID);
+    expect(row).toMatchObject({ state: "verified", metadata: { genericErrors: 2 } });
+    expect(row?.metadata).not.toHaveProperty("alertKind");
   });
 
   it("raises no no-recording alert for a tutor who is switched off", async () => {
