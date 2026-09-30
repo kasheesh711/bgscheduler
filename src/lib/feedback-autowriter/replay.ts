@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte, min } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
@@ -59,6 +59,12 @@ export interface ReplaySample {
   postedFields: FeedbackFieldAnswers | null;
   /** `pre_correction_version`: a one-time correction replaced the post; this is the original, from Class Feedback. */
   postedSource: "row" | "pre_correction_version" | "corrected_row" | null;
+  /**
+   * When Wise announced the class's recording (its first `RecordingCompletedEvent`, from the activity feed or a
+   * webhook delivery), if it did. Wise stops listing a recording about a day after class (seen 30 Sep): a class whose
+   * recording was published and is gone now cannot be replayed, and is not a fallback production would make.
+   */
+  recordingPublishedAt?: string | null;
 }
 
 export interface ReplayDeps {
@@ -398,6 +404,11 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
   // 1. The transcript route, in production's order.
   let fallback: SummaryFallbackCause | null = null;
   const recording = recordingForTranscription(detail);
+  if (!recording.ok && recording.reason === "recording_not_ready" && sample.recordingPublishedAt) {
+    // Published (production transcribes within the hour) but no longer listed by Wise: not replayable.
+    record.outcome = "skip:recording_gone";
+    return;
+  }
   if (!recording.ok) {
     fallback = recording.reason === "recording_multiple_parts" ? "recording_multiple_parts" : "no_recording";
   } else if (recordingTooShort(recording.durationSeconds, window.minutes)) {
@@ -523,6 +534,7 @@ export async function loadReplaySample(db: Database, input: {
       for (const row of recent) if (!rows.has(row.wiseSessionId)) rows.set(row.wiseSessionId, row);
     }
   }
+  const published = await recordingsPublished(db, [...rows.keys()]);
   const samples: ReplaySample[] = [];
   for (const [wiseSessionId, row] of rows) {
     const draft = row && row.fields && DRAFT_ROW_STATES.has(row.state) ? row.fields as unknown as FeedbackFieldAnswers : null;
@@ -532,9 +544,30 @@ export async function loadReplaySample(db: Database, input: {
       rowState: row?.state ?? null,
       postedFields: original?.fields ?? null,
       postedSource: original?.source ?? null,
+      recordingPublishedAt: published.get(wiseSessionId)?.toISOString() ?? null,
     });
   }
   return samples;
+}
+
+/** The first `RecordingCompletedEvent` per session, from Wise's activity feed and our webhook deliveries (SELECT only). */
+async function recordingsPublished(db: Database, sessionIds: readonly string[]): Promise<Map<string, Date>> {
+  const first = new Map<string, Date>();
+  if (sessionIds.length === 0) return first;
+  const note = (sessionId: string | null, at: Date | null) => {
+    if (!sessionId || !at) return;
+    const known = first.get(sessionId);
+    if (!known || at < known) first.set(sessionId, at);
+  };
+  const A = schema.wiseActivityEvents;
+  for (const row of await db.select({ sessionId: A.sessionId, at: min(A.eventTimestamp) }).from(A)
+    .where(and(eq(A.eventName, "RecordingCompletedEvent"), inArray(A.sessionId, [...sessionIds])))
+    .groupBy(A.sessionId)) note(row.sessionId, row.at);
+  const W = schema.wiseWebhookEvents;
+  for (const row of await db.select({ sessionId: W.wiseSessionId, at: min(W.receivedAt) }).from(W)
+    .where(and(eq(W.eventName, "RecordingCompletedEvent"), inArray(W.wiseSessionId, [...sessionIds])))
+    .groupBy(W.wiseSessionId)) note(row.sessionId, row.at);
+  return first;
 }
 
 /**
@@ -608,6 +641,8 @@ export interface ReplaySummary {
   fallbackRate: number | null;
   holds: Array<{ reason: string; count: number }>;
   fallbacks: Array<{ cause: string; count: number; afterFallback: string[] }>;
+  /** Classes not replayed, by reason (gates, a recording Wise no longer lists, a failed read). */
+  skips: Array<{ reason: string; count: number }>;
   judge: {
     high: { calls: number; parseFailures: number; errors: number; p50LatencyMs: number | null; p90LatencyMs: number | null; meanReasoningTokens: number | null; costUsd: number };
     medium: { calls: number; parseFailures: number; errors: number; p50LatencyMs: number | null; p90LatencyMs: number | null; meanReasoningTokens: number | null; costUsd: number };
@@ -689,6 +724,8 @@ export function summarizeReplay(records: readonly ReplayRecord[]): ReplaySummary
         count,
         afterFallback: records.filter((record) => record.outcome === `fallback:${cause}`).map((record) => reasonCategory(record.afterFallback ?? "—")),
       })),
+    skips: tally(records.filter((record) => kind(record) === "skip").map((record) => reasonCategory(record.outcome.slice("skip:".length))))
+      .map(([reason, count]) => ({ reason, count })),
     judge: {
       high,
       medium,
@@ -754,6 +791,7 @@ export function renderReplayMarkdown(input: { summary: ReplaySummary; records: r
     ...Object.entries(summary.outcomes).map(([key, count]) => `| ${key} | ${count} |`),
     "",
     `- Decided (not skipped, no error): ${summary.decided} of ${summary.classes}.`,
+    ...summary.skips.map((skip) => `  - skipped, ${skip.reason}: ${skip.count}`),
     `- Transcript holds: ${summary.outcomes.hold} (${pct(summary.holdRate)}) — acceptance ≤ 15%: **${yes(summary.acceptance.transcriptHoldsAtMost15Percent)}**`,
     ...summary.holds.map((hold) => `  - ${hold.reason}: ${hold.count}`),
     `- Fallbacks to the summary: ${summary.outcomes.fallback} (${pct(summary.fallbackRate)}) — acceptance ≤ 20%: **${yes(summary.acceptance.fallbacksAtMost20Percent)}**`,

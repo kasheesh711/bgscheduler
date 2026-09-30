@@ -268,6 +268,23 @@ describe("replay: the same evidence and decisions as production", () => {
     }
   });
 
+  it("skips a class whose published recording Wise no longer lists, instead of calling it a fallback", async () => {
+    // Wise stops listing a recording about a day after class; production would have transcribed it within the hour.
+    const soniox = fakeSoniox();
+    const model = fakeModel();
+    const gone = await replayClass(
+      replayDeps({ wise: readOnlyWise(sessionDetail()).wise, soniox: soniox.client, callModel: model.callModel as never }),
+      { ...SAMPLE, recordingPublishedAt: "2026-09-28T10:05:00.000Z" },
+    );
+    expect(gone).toMatchObject({ outcome: "skip:recording_gone", afterFallback: null, summaryDraft: null });
+    expect(soniox.created).toEqual([]);
+    expect(model.requests).toEqual([]);
+    // Never published: the real fallback.
+    const never = await replayClass(replayDeps({ wise: readOnlyWise(sessionDetail()).wise, soniox: fakeSoniox().client }), { ...SAMPLE, recordingPublishedAt: null });
+    expect(never.outcome).toBe("fallback:no_recording");
+    expect(summarizeReplay([gone, never]).skips).toEqual([{ reason: "recording_gone", count: 1 }]);
+  });
+
   it("keeps a held transcript draft's text and both verdicts for review", async () => {
     const model = fakeModel({ judge: (request) => request.messages[1].content.includes("Lesson transcript:") ? UNFAITHFUL : PASSING });
     const record = await replayClass(
