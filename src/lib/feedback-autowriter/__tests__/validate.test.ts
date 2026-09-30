@@ -81,6 +81,24 @@ describe("validateFeedbackDraft", () => {
   it("rejects markdown formatting", () => {
     const result = check({ ...goodOutput, topics: `**Topics**\n${goodOutput.topics}` });
     expect(result.ok).toBe(false);
+    for (const [label, improvement] of [
+      ["heading", `## Next steps\n${goodOutput.improvement}`],
+      ["bold with underscores", `${goodOutput.improvement} Practise __common denominators__ daily.`],
+      ["bold with asterisks", `${goodOutput.improvement} Practise **common denominators** daily.`],
+      ["bold italic with underscores", `${goodOutput.improvement} Practise ___common denominators___ daily.`],
+      ["bold over a line break", `${goodOutput.improvement} Practise __common\ndenominators__ daily.`],
+    ]) {
+      const marked = check({ ...goodOutput, improvement });
+      expect(marked.ok, label).toBe(false);
+      if (!marked.ok) expect(marked.reasons, label).toContain("markdown:improvement");
+    }
+  });
+
+  it("accepts a fill-in blank, which is not markdown (30 Sep replay)", () => {
+    for (const blank of ["I am ___ for adjectives", "She __ to school", "___ and ___", "a gap (____) to fill"]) {
+      const result = check({ ...goodOutput, improvement: `${goodOutput.improvement} Quick checks such as ${blank} help.` });
+      expect(result, blank).toEqual({ ok: true });
+    }
   });
 
   it("rejects near-copies of the tutor's recent feedback", () => {

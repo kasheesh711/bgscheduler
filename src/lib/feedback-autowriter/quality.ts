@@ -168,6 +168,9 @@ const ONSITE_REASONS = new Set(["session_type_OFFLINE", "session_type_in_person_
  * fixed it — which leave the coverage denominator. Exactly these: a hold where the judge found our draft unfaithful,
  * the validator or the form rejected it, billing drifted or the pipeline failed, and any reason not listed here, is
  * a miss (fail-closed). Reasons are matched whole.
+ * Transcript first adds none: a class that fell back to the summary is judged by where it ends, so its fallback cause
+ * (`summary_fallback:<cause>`, even a recording in several parts or unclear speakers) never leaves it out, and a
+ * mostly-Thai summary held after a fallback (`thai_summary_no_transcript`) is a miss.
  */
 export const DATA_QUALITY_REASONS: ReadonlyArray<{
   match: RegExp;
@@ -343,6 +346,8 @@ export function classifyCoverage(input: CoverageInput): CoverageClass | null {
     default:
       // pending, generating, awaiting_recording, transcribing, would_submit: still in the works — or, once the
       // posting window is over, a class that can no longer be posted (the sweep may not have expired it yet).
+      // Transcript first: a class waiting for its recording (`transcript_first`) and one back on the summary after a
+      // fallback (`summary_fallback:<cause>`) are in the works like any other.
       return input.windowClosed ? "miss_expired" : "pending";
   }
 }

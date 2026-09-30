@@ -14,7 +14,15 @@ function payload(overrides: Partial<AutowriterDashboard> = {}): AutowriterDashbo
       seen: 5, posted: 2, verified: 2, awaitingEvent: 0, shadowDrafts: 1, awaitingRecording: 1, fromTranscript: 1,
       held: 1, skippedHuman: 1, skippedScope: 0, expired: 0, failed: 0, inProgress: 0,
     },
-    latency: { medianMinutes: 2.5, p90Minutes: 4, samples: 2 },
+    latency: {
+      medianMinutes: 2.5, p90Minutes: 4, samples: 2,
+      byRoute: [
+        { route: "transcript", label: "From the transcript", medianMinutes: 55, p90Minutes: 72, samples: 1 },
+        { route: "summary_fallback", label: "From the summary (fallback)", medianMinutes: null, p90Minutes: null, samples: 0 },
+        { route: "summary", label: "From the summary", medianMinutes: 2.5, p90Minutes: 2.5, samples: 1 },
+      ],
+    },
+    summaryFallbacks: [],
     cost: {
       totalUsd: 0.0076,
       perDraftUsd: 0.0025,
@@ -47,6 +55,7 @@ function payload(overrides: Partial<AutowriterDashboard> = {}): AutowriterDashbo
       costUsd: 0.0012,
       fields: { topics: "Rearranging equations", performance: "Ratana did well", improvement: "nth term", homework: "" },
       judgeUnsupported: [],
+      summaryFallback: null,
     }],
     webhooks: { lastReceivedAt: "2026-09-29T04:00:05.000Z", byEvent: [{ eventName: "MeetingEndedEvent", count: 3 }], byOutcome: [{ outcome: "verified", count: 1 }] },
     ...overrides,
@@ -68,6 +77,29 @@ describe("FeedbackAutowriterDashboard", () => {
     expect(html).toContain("2.5 min");
     expect(html).toContain("From recording");
     expect(html).toContain("· transcript");
+  });
+
+  it("shows transcript first: waiting for the recording, fallbacks by cause and latency by evidence", () => {
+    const base = payload();
+    const html = renderToStaticMarkup(<FeedbackAutowriterDashboard canControl={false} initialData={payload({
+      summaryFallbacks: [{ cause: "no_recording", label: "No recording after 3 h — from summary", count: 2 }],
+      recent: [
+        { ...base.recent[0], wiseSessionId: "6a0000000000000000000011", className: "Somchai (Tom.Ja) Jaidee", state: "awaiting_recording",
+          reason: "transcript_first", postStartedAt: null, latencyMinutes: null, fields: null },
+        { ...base.recent[0], wiseSessionId: "6a0000000000000000000012", className: "Somchai (Tom.Ja) Jaidee", evidence: "summary",
+          summaryFallback: { cause: "no_recording", label: "No recording after 3 h — from summary" } },
+      ],
+    })} />);
+    expect(html).toContain("Waiting for the recording");
+    expect(html).toContain("No recording after 3 h — from summary");
+    expect(html).toContain("Back to the summary (transcript first)");
+    expect(html).toContain("Class end → posted, by evidence");
+    expect(html).toContain("From the transcript");
+    expect(html).toContain("55.0 min");
+    expect(html).toContain("1.2 h");
+
+    const quiet = renderToStaticMarkup(<FeedbackAutowriterDashboard initialData={payload()} canControl={false} />);
+    expect(quiet).toContain("No class fell back to the summary in this window.");
   });
 
   it("labels Sol drafts and Sol's cost", () => {

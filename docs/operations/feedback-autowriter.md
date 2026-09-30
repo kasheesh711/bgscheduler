@@ -19,8 +19,9 @@ Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowrite
    | `WISE_WEBHOOK_AUTH_HEADER` | optional: pin the header named in the first delivery's log line |
    | `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED` | `true` to hand held / summary-less / Thai-summary classes to the Soniox second pass |
    | `SONIOX_API_KEY` | Soniox project key (set a spend limit in the Soniox Console) |
+   | `FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST` | `true` to write every class from the transcript, the summary only as the fallback (§6); needs the two above |
    Migration **0098** must be applied before deploying code that knows the second pass (it adds the `evidence` column),
-   and **0100** before deploying the Sol writer (it lets `arm` be `sol`; see [section 7](#7-writer-model-gpt-61-sol-since-2026-09-30)).
+   and **0100** before deploying the Sol writer (it lets `arm` be `sol`; see [section 8](#8-writer-model-gpt-61-sol-since-2026-09-30)).
 3. **Wise → Institute Settings → Developer options → Webhooks → Add Webhook.** Never edit the existing
    subscription (it feeds a Google Apps Script). URL `https://bgscheduler.vercel.app/api/wise/webhook`,
    events `MeetingEndedEvent`, `AttendanceComputedEvent` and `RecordingCompletedEvent`; its auth key (shown or chosen
@@ -129,8 +130,8 @@ autowriter halts.
 
 ## 5. Second pass (Soniox)
 
-Dashboard state "Waiting for recording" / "Transcribing" = the class was handed over (`reason` says why:
-`summary_draft_held`, `no_usable_summary`, `thai_summary`). Nothing to do: Wise's `RecordingCompletedEvent` (or the
+Dashboard state "Waiting for the recording" / "Transcribing" = the class was handed over (`reason` says why:
+`transcript_first` (§6), `summary_draft_held`, `no_usable_summary`, `thai_summary`). Nothing to do: Wise's `RecordingCompletedEvent` (or the
 30-minute backstop) continues it. It ends posted, `held` (+ alert) after 3 Soniox failures (a job still running an
 hour after it was submitted counts as one), a multi-part recording, a recording shorter than 70% of the class (still
 short 30 minutes after first seen), a transcript that is too short or speakers it cannot tell apart, or `expired`
@@ -141,10 +142,11 @@ draft or is waiting for Wise (attendance, status, the POST slot), not for the re
 transcript, which confirms who is the tutor — until 20 minutes after the Soniox job was submitted (the last look is
 the next sweep after that, so at most ~35 minutes). No `no_recording` alert is raised for it.
 To turn the second pass off: `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED=false` + redeploy — classes already waiting are
-then held with an alert (`transcript_pass_unavailable`) so a person writes them.
+then held with an alert (`transcript_pass_unavailable`) so a person writes them; a transcript-first class falls back
+to the summary instead (§6).
 
 Alerts from the second pass: `no_recording` (recording or transcript still not ready 3 h after class — Wise may never
-publish a recording for it), `speakers_unclear`, `transcript_too_short`, `recording_too_short`,
+publish a recording for it; not for a transcript-first class, which falls back to the summary at that point), `speakers_unclear`, `transcript_too_short`, `recording_too_short`,
 `recording_multiple_parts`, or three Soniox failures. The `reason` says which.
 
 Rolling back to code without the second pass (migration 0098 can stay — it is additive). Older code does not know
@@ -165,7 +167,59 @@ the two waiting states, so those classes would never be picked up or expire:
    idempotent), then **Resume**.
 4. Delete any leftover jobs in the Soniox Console (they also expire there after 30 days).
 
-## 6. Alerts
+## 6. Transcript first
+
+`FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST=true` (exact string; only together with the second pass) hands every class that
+passes the gates to the transcript, and uses Wise's summary only as the fallback. What it does and why:
+[feature page](../features/feedback-autowriter.md#transcript-first-switch-30-sep).
+
+**Before switching on — replay (read-only).** Shows what it would do with recent classes; it never posts or writes
+to the database (Wise session-detail GETs, SELECTs, Soniox jobs deleted right after each transcript, ≈ $0.10 of
+Soniox per class):
+
+```bash
+npx tsx --tsconfig scripts/tsconfig.json scripts/autowrite-online-feedback.ts --replay [--sessions=<id>,<id>] [--per-tutor=4] [--days=7]
+```
+
+Read `.feedback-autowriter/replay/<ts>/summary.md` (drafts and verdicts are in `records.json` next to it; both 0600,
+gitignored). Go ahead when transcript holds are ≤ 15% and fallbacks ≤ 20% of the classes decided, no judge reply
+fails to parse, the judge's 90th-percentile latency is ≤ 90 s, and Soniox is about $0.10 a class. Replay recent
+classes: Wise drops a recording about a day after class, and such a class is skipped (`skip:recording_gone`). Use
+the production Soniox project's key. Each job is deleted right after its transcript, and Ctrl-C deletes the jobs
+still in flight; a line "SONIOX JOB NOT DELETED" means a job to delete in the Soniox Console (the sweep's reaper
+also removes jobs of the production project that no row references, after 2 h).
+
+**Switching on.** Set the variable in Vercel production on a Bangkok morning (before the afternoon classes) and
+redeploy, then message the tutors:
+> From today the feedback for your online one-to-one classes is written from the lesson recording, so it appears
+> about an hour after class instead of a few minutes. If it is still blank 4 hours after class, tell an admin.
+
+**What to expect.** A class shows "Waiting for the recording" from its end until Wise publishes the recording
+(measured over 14 days: median 34 minutes after the scheduled end, 95% within about 70 minutes), then
+"Transcribing", then posted — about an hour after class, up to about 4 h if the recording is late. With no recording
+3 h after class, a recording in several parts, speakers that cannot be told apart, three Soniox failures, the
+transcript pass switched off, or the writer or its judge failing three times in a row on the transcript draft
+(time-outs, replies that are not JSON — not our OpenRouter account's or the network's errors, which keep retrying),
+the class goes back to the summary once: the dashboard shows the cause under its state
+("No recording after 3 h — from summary", …) and counts them in "Back to the summary". A class still waiting for its
+recording raises no `no_recording` alert (it falls back instead); one still being transcribed 3 h after class
+does. What still needs a person is `held` with its alert as before, including
+`thai_summary_no_transcript` (a mostly-Thai summary after a fallback). Evening classes are driven mostly by the
+`RecordingCompletedEvent` webhook; if the sweep queues up, the lever is a 5-minute cron. Soniox runs for every class:
+about $22 a month.
+
+**For 48 h after.** Class end → posted "From the transcript" about an hour; fallbacks by cause (several
+"Writer or judge failed 3 times on the transcript" in a day means the model route is failing: look at
+`metadata.writerFailure` and the calls); no `no_recording` alerts; cost per draft about $0.11.
+
+**Retrying.** `--retry=<wiseSessionId>` clears the fallback and the error counts, so a retried class goes to the
+transcript again.
+
+**Rollback.** Unset `FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST` and redeploy: new classes take the summary path again,
+and classes already waiting finish from the transcript or fall back as above. No SQL is needed. (To turn the whole
+second pass off, see §5: a transcript-first class waiting then falls back to the summary instead of being held.)
+
+## 7. Alerts
 
 One digest per sweep to `FEEDBACK_AUTOWRITER_ALERT_EMAILS` for classes that need a person: held (draft failed
 checks, absence, form/billing drift), expired, no summary 3 h after class, and any halt-causing outcome.
@@ -173,7 +227,7 @@ In `shadow` (and `off`) only the halt-causing outcomes are emailed; draft alerts
 A switched-off tutor's classes are handed back to them silently when they reach the deadline window.
 Nightly tutor reminders are separate (Class Feedback).
 
-## 7. Writer model (GPT-6.1 Sol since 2026-09-30)
+## 8. Writer model (GPT-6.1 Sol since 2026-09-30)
 
 Sol writes (reasoning `low`), Luna is the fallback writer and GLM the judge, all on zero-data-retention routes, for
 summaries and transcripts alike ([feature page](../features/feedback-autowriter.md#models)). Deploy order: apply
@@ -205,7 +259,7 @@ prompt nor the judge version, so the older code reuses it), and its row keeps `a
 would reject. Rows Sol already wrote keep `arm = 'sol'` (the older dashboard shows no model name for them); anything
 else is written again by GLM. No data change is needed.
 
-## 8. Reviewing posts (operating loop)
+## 9. Reviewing posts (operating loop)
 
 `/feedback-autowriter` → **Review**. "Needs review" lists every required post without a verdict (every post while
 the tutor's cohort has not passed a gate); the counts are exact, and every flagged or unreviewed class is always in

@@ -33,7 +33,7 @@ const STATE_LABEL: Record<string, string> = {
   verify_failed: "Verify failed",
   pending: "Waiting",
   generating: "Writing",
-  awaiting_recording: "Waiting for recording",
+  awaiting_recording: "Waiting for the recording",
   transcribing: "Transcribing",
 };
 
@@ -410,6 +410,35 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
             </Table>
           </Section>
 
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Section title="Class end → posted, by evidence">
+              <Table>
+                <TableHeader><TableRow><TableHead>Written from</TableHead><TableHead className="text-right">Posts</TableHead><TableHead className="text-right">Median</TableHead><TableHead className="text-right">p90</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {data.latency.byRoute.map((entry) => (
+                    <TableRow key={entry.route}>
+                      <TableCell>{entry.label}</TableCell>
+                      <TableCell className="text-right">{entry.samples}</TableCell>
+                      <TableCell className="text-right">{minutes(entry.medianMinutes)}</TableCell>
+                      <TableCell className="text-right">{minutes(entry.p90Minutes)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </Section>
+            <Section title="Back to the summary (transcript first)" count={data.summaryFallbacks.reduce((sum, entry) => sum + entry.count, 0)}>
+              {data.summaryFallbacks.length === 0 ? (
+                <p className="px-4 py-6 text-center text-sm text-muted-foreground">No class fell back to the summary in this window.</p>
+              ) : (
+                <ul className="space-y-1 px-4 py-3 text-sm">
+                  {data.summaryFallbacks.map((entry) => (
+                    <li key={entry.cause} className="flex justify-between gap-3"><span>{entry.label}</span><span>{entry.count}</span></li>
+                  ))}
+                </ul>
+              )}
+            </Section>
+          </div>
+
           <Section title="Recent classes" count={data.recent.length}>
             {data.recent.length === 0 ? (
               <p className="px-4 py-8 text-center text-sm text-muted-foreground">No classes handled in this window yet.</p>
@@ -435,6 +464,9 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
                       <TableCell className="max-w-48 truncate" title={row.className ?? undefined}>{row.className ?? "—"}</TableCell>
                       <TableCell>
                         <Badge variant="outline" className={cn("whitespace-nowrap", STATE_TONE[row.state])}>{STATE_LABEL[row.state] ?? row.state}</Badge>
+                        {row.summaryFallback ? (
+                          <div className="mt-1 whitespace-nowrap text-[10px] text-amber-700 dark:text-amber-400">{row.summaryFallback.label}</div>
+                        ) : null}
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
                         {(row.arm && ARM_LABEL[row.arm]) ?? "—"}

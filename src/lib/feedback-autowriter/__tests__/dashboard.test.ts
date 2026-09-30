@@ -95,7 +95,52 @@ describe("buildAutowriterDashboard", () => {
   });
 
   it("measures latency from class end to the POST", () => {
-    expect(dashboard.latency).toEqual({ medianMinutes: 3, p90Minutes: 4, samples: 3 });
+    expect(dashboard.latency).toMatchObject({ medianMinutes: 3, p90Minutes: 4, samples: 3 });
+    expect(dashboard.latency.byRoute).toEqual([
+      { route: "transcript", label: "From the transcript", medianMinutes: null, p90Minutes: null, samples: 0 },
+      { route: "summary_fallback", label: "From the summary (fallback)", medianMinutes: null, p90Minutes: null, samples: 0 },
+      { route: "summary", label: "From the summary", medianMinutes: 3, p90Minutes: 4, samples: 3 },
+    ]);
+    expect(dashboard.summaryFallbacks).toEqual([]);
+  });
+
+  it("shows transcript first: fallbacks by cause, each row's fallback, and class end → post by evidence", () => {
+    const at = (minutes: number) => new Date(new Date("2026-09-30T03:00:00.000Z").getTime() + minutes * 60_000);
+    const fallback = (cause: string) => ({ summaryFallback: { cause, at: "2026-09-30T06:00:00.000Z" } });
+    const board = buildAutowriterDashboard({
+      now: NOW,
+      windowDays: 7,
+      control,
+      calls: [],
+      webhooks: [],
+      sessions: [
+        session("t1", { state: "verified", evidence: "transcript", postStartedAt: at(40) }),
+        session("t2", { state: "verified", evidence: "transcript", postStartedAt: at(70) }),
+        session("t3", { state: "awaiting_recording", evidence: "transcript", reason: "transcript_first", metadata: { handover: "transcript_first" } }),
+        session("f1", { state: "verified", postStartedAt: at(200), metadata: { handover: "transcript_first", ...fallback("no_recording") } }),
+        session("f2", { state: "held", reason: "thai_summary_no_transcript", metadata: fallback("speakers_unclear") }),
+        session("f3", { state: "pending", metadata: fallback("no_recording") }),
+        session("f4", { state: "pending", metadata: fallback("something_new") }),
+        session("f5", { state: "pending", metadata: { handover: "transcript_first", writerErrors: 3, ...fallback("writer_failed") } }),
+        session("s1", { state: "verified", postStartedAt: at(3) }),
+      ],
+    });
+    expect(board.summaryFallbacks).toEqual([
+      { cause: "no_recording", label: "No recording after 3 h — from summary", count: 2 },
+      { cause: "speakers_unclear", label: "Speakers unclear — from summary", count: 1 },
+      { cause: "something_new", label: "something_new — from summary", count: 1 },
+      { cause: "writer_failed", label: "Writer or judge failed 3 times on the transcript — from summary", count: 1 },
+    ]);
+    expect(board.latency.byRoute).toEqual([
+      { route: "transcript", label: "From the transcript", medianMinutes: 55, p90Minutes: 70, samples: 2 },
+      { route: "summary_fallback", label: "From the summary (fallback)", medianMinutes: 200, p90Minutes: 200, samples: 1 },
+      { route: "summary", label: "From the summary", medianMinutes: 3, p90Minutes: 3, samples: 1 },
+    ]);
+    const row = (id: string) => board.recent.find((entry) => entry.wiseSessionId === id);
+    expect(row("f1")?.summaryFallback).toEqual({ cause: "no_recording", label: "No recording after 3 h — from summary" });
+    expect(row("t3")?.summaryFallback).toBeNull();
+    expect(row("f5")?.summaryFallback).toEqual({ cause: "writer_failed", label: "Writer or judge failed 3 times on the transcript — from summary" });
+    expect(board.totals.awaitingRecording).toBe(1);
   });
 
   it("totals billed cost by model and per draft", () => {

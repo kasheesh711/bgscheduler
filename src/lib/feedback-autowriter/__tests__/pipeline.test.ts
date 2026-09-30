@@ -39,7 +39,7 @@ interface Request {
   schemaName: string;
 }
 
-function run(replies: OpenRouterCallResult[], evidence: "summary" | "transcript" = "summary", summaryText = SUMMARY, studentAliases?: string[]) {
+function run(replies: OpenRouterCallResult[], evidence: "summary" | "transcript" = "summary", summaryText = SUMMARY, studentAliases?: string[], remainingMs = 700_000) {
   const records: CallRecord[] = [];
   const requests: Request[] = [];
   const callModel = vi.fn(async (request: Request) => {
@@ -63,7 +63,7 @@ function run(replies: OpenRouterCallResult[], evidence: "summary" | "transcript"
     tutorNames: ["Kevin Hsieh", "Kev"],
     priorFeedback: [],
     record: async (record) => { records.push(record); },
-    remainingMs: () => 700_000,
+    remainingMs: () => remainingMs,
     callModel: callModel as never,
   });
   return { promise, records, requests };
@@ -130,14 +130,35 @@ describe("runWritingPipeline", () => {
   });
 
   it("treats an OpenRouter outage or missing credit as infra, not a hold", async () => {
-    expect(await run([fail("Insufficient credits", 402)]).promise).toEqual({ kind: "infra", error: "sol:Insufficient credits" });
-    expect(await run([fail("timeout", null)]).promise).toEqual({ kind: "infra", error: "sol:timeout" });
+    expect(await run([fail("Insufficient credits", 402)]).promise).toEqual({ kind: "infra", error: "sol:Insufficient credits", modelFailure: false });
+    expect(await run([fail("timeout", null)]).promise).toEqual({ kind: "infra", error: "sol:timeout", modelFailure: true });
+  });
+
+  it("tells the models' failures from our account's, our connection's and our function's time (transcript first counts only the models')", async () => {
+    const infra = async (replies: OpenRouterCallResult[], remainingMs = 700_000) => {
+      const result = await run(replies, "transcript", SUMMARY, undefined, remainingMs).promise;
+      return result.kind === "infra" ? [result.error, result.modelFailure] : result.kind;
+    };
+    // The models: a time-out, a reply that is not JSON, a provider error, the wrong model, a judge with no verdict.
+    expect(await infra([fail("timeout", null)])).toEqual(["sol:timeout", true]);
+    expect(await infra([fail("invalid_json_response", 502)])).toEqual(["sol:invalid_json_response", true]);
+    expect(await infra([fail("Provider returned error", 500)])).toEqual(["sol:Provider returned error", true]);
+    expect(await infra([ok(writerJson, "Azure", "openai/gpt-6-luna")])).toEqual(["sol:model_mismatch:openai/gpt-6-luna", true]);
+    expect(await infra([SOL(writerJson), fail("timeout", null)])).toEqual(["judge:timeout", true]);
+    expect(await infra([SOL(writerJson), GLM("not json"), GLM("{}")])).toEqual(["judge:judge_unparseable", true]);
+    // Ours: a bad key, no credit, rate limited, the connection, and a time-out on a call our remaining time cut short.
+    expect(await infra([fail("User not found", 401)])).toEqual(["sol:User not found", false]);
+    expect(await infra([SOL(writerJson), fail("Insufficient credits", 402)])).toEqual(["judge:Insufficient credits", false]);
+    expect(await infra([fail("Rate limit exceeded", 429)])).toEqual(["sol:Rate limit exceeded", false]);
+    expect(await infra([fail("network_TypeError", null)])).toEqual(["sol:network_TypeError", false]);
+    expect(await infra([fail("timeout", null)], 150_000)).toEqual(["sol:timeout", false]);
+    expect(await infra([], 60_000)).toEqual(["function_budget_exhausted", false]);
   });
 
   it("never sends the summary to the fallback host after a provider-side generation error", async () => {
     const errored: OpenRouterCallResult = { ...fail("finish_reason_error", 200), finishReason: "error" };
     const { promise, requests } = run([errored]);
-    expect(await promise).toEqual({ kind: "infra", error: "sol:finish_reason_error" });
+    expect(await promise).toEqual({ kind: "infra", error: "sol:finish_reason_error", modelFailure: true });
     expect(requests).toHaveLength(1);
   });
 
@@ -152,7 +173,7 @@ describe("runWritingPipeline", () => {
     expect(await once.promise).toMatchObject({ kind: "draft", arm: "sol" });
 
     const twice = run([SOL(writerJson), GLM("not json"), GLM("{}")]);
-    expect(await twice.promise).toEqual({ kind: "infra", error: "judge:judge_unparseable" });
+    expect(await twice.promise).toEqual({ kind: "infra", error: "judge:judge_unparseable", modelFailure: true });
     expect(twice.requests.map((request) => request.model)).not.toContain("openai/gpt-6-luna");
   });
 
@@ -249,18 +270,18 @@ describe("runWritingPipeline", () => {
   it("fails closed on a judge reply without the v4 lists: no draft, retried later", async () => {
     const v3 = JSON.stringify({ faithful: true, unsupported: [] });
     const { promise } = run([SOL(writerJson), GLM(v3), GLM(v3)]);
-    expect(await promise).toEqual({ kind: "infra", error: "judge:judge_unparseable" });
+    expect(await promise).toEqual({ kind: "infra", error: "judge:judge_unparseable", modelFailure: true });
   });
 
   it("treats a writer response from another model as infra — never the fallback", async () => {
     const { promise, requests } = run([ok(writerJson, "Azure", "openai/gpt-6-luna")]);
-    expect(await promise).toEqual({ kind: "infra", error: "sol:model_mismatch:openai/gpt-6-luna" });
+    expect(await promise).toEqual({ kind: "infra", error: "sol:model_mismatch:openai/gpt-6-luna", modelFailure: true });
     expect(requests).toHaveLength(1);
   });
 
   it("treats a judge response from an unpinned host as infra", async () => {
     const { promise } = run([SOL(writerJson), ok(FAITHFUL, "SomeOtherHost", "z-ai/glm-5.3-flash")]);
-    expect(await promise).toEqual({ kind: "infra", error: "judge:provider_mismatch:SomeOtherHost" });
+    expect(await promise).toEqual({ kind: "infra", error: "judge:provider_mismatch:SomeOtherHost", modelFailure: true });
   });
 });
 

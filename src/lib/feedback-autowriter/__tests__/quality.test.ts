@@ -29,6 +29,7 @@ import {
   type ControlStateChange,
   type GateInput,
 } from "../quality";
+import { SUMMARY_FALLBACK_CAUSES } from "../types";
 
 const gate = (overrides: Partial<GateInput> = {}): GateInput => ({
   reviewed: 20, accurate: 20, criticalVerdicts: 0, unresolvedCriticalFlags: 0, pendingFlaggedReviews: 0,
@@ -84,6 +85,11 @@ describe("classifyCoverage", () => {
     ["pending", null, "pending"],
     ["posting", null, "pending"],
     ["awaiting_recording", "thai_summary", "pending"],
+    // Transcript first: waiting for the recording, being transcribed, or back on the summary after a fallback is
+    // still in the works — never a miss while the posting window is open.
+    ["awaiting_recording", "transcript_first", "pending"],
+    ["transcribing", "zoom_transcript_pending", "pending"],
+    ["pending", "summary_fallback:no_recording", "pending"],
     ["would_submit", "shadow", "pending"],
   ] as const)("%s (%s) → %s", (state, reason, expected) => {
     expect(classifyCoverage({ state, reason })).toBe(expected);
@@ -161,18 +167,54 @@ describe("classifyCoverage", () => {
     ["transcript_pass_unavailable", "miss_held"],
     ["soniox_timeout", "miss_held"],
     ["soniox_error:bad audio", "miss_held"],
+    // Also what the transcript-first handover holds a class for (no student name, or a tutor off the roster).
     ["missing_student_or_tutor", "miss_held"],
     ["missing_summary_student_or_tutor", "miss_held"],
+    // Transcript first: after a fallback, a mostly-Thai summary is held for a person. We chose not to write from it,
+    // whatever sent the class back, so it is a miss — not in the owner's list.
+    ["thai_summary_no_transcript", "miss_held"],
     ["submission_ambiguous:two_teacher_submissions", "miss_held"],
     ["non_teacher_submission_with_billing", "miss_held"],
     // Not whole matches of a data-quality reason, and no reason at all. (The gate names a fractional attendance by
     // its whole percent, so "attendance_42.5pct" is never produced: session.test.ts.)
     ["recording_too_short_maybe", "miss_held"],
     ["glm:speakers_unclear", "miss_held"],
+    // A fallback's reason names its cause, and is never a hold reason of its own: not a data-quality match either.
+    ["summary_fallback:speakers_unclear", "miss_held"],
+    ["summary_fallback:recording_multiple_parts", "miss_held"],
     ["attendance_42.5pct", "miss_held"],
     [null, "miss_held"],
   ] as const)("a hold for %s → %s", (reason, expected) => {
     expect(classifyCoverage({ state: "held", reason })).toBe(expected);
+  });
+
+  // Transcript first: the handover and the fallback are steps on the way, so a class is judged by where it ends. The
+  // fallback's cause never leaves it out — not even one that is a data-quality hold on the second pass (a recording in
+  // several parts, speakers unclear): the summary was still there to write from.
+  it.each(SUMMARY_FALLBACK_CAUSES)("keeps a class that fell back to the summary (%s) in the works until its window closes", (cause) => {
+    const reason = `summary_fallback:${cause}`;
+    expect(dataQualityReason(reason)).toBeNull();
+    expect(classifyCoverage({ state: "pending", reason })).toBe("pending");
+    expect(classifyCoverage({ state: "generating", reason })).toBe("pending");
+    expect(classifyCoverage({ state: "pending", reason, windowClosed: true })).toBe("miss_expired");
+  });
+
+  it("judges a class that fell back by its final outcome", () => {
+    expect(classifyCoverage({ state: "verified", reason: "verified" })).toBe("posted");
+    expect(classifyCoverage({ state: "held", reason: "thai_summary_no_transcript" })).toBe("miss_held");
+    expect(classifyCoverage({ state: "held", reason: "sol:unfaithful:homework not set: …" })).toBe("miss_held");
+    expect(classifyCoverage({ state: "expired", reason: "deadline_passed_or_too_close" })).toBe("miss_expired");
+  });
+
+  it("counts a transcript-first class still waiting for its recording as a miss only once its window has closed", () => {
+    expect(classifyCoverage({ state: "awaiting_recording", reason: "transcript_first" })).toBe("pending");
+    expect(classifyCoverage({ state: "transcribing", reason: "infra:sol:timeout", windowClosed: false })).toBe("pending");
+    expect(classifyCoverage({ state: "awaiting_recording", reason: "transcript_first", windowClosed: true })).toBe("miss_expired");
+    // The tutor wrote it while we waited for the recording (no writer call yet): left out, as on the summary path.
+    expect(classifyCoverage({ state: "skipped_human", reason: "human_submission", tutorWroteFirst: true })).toBe("excluded_tutor_first");
+    // What still holds a transcript-first class for its own data (it never falls back on these) stays left out.
+    expect(classifyCoverage({ state: "held", reason: "recording_too_short" })).toBe("excluded_data_quality");
+    expect(classifyCoverage({ state: "held", reason: "transcript_too_short" })).toBe("excluded_data_quality");
   });
 
   it("lists exactly the owner's data-quality reasons, each with a label", () => {

@@ -695,14 +695,22 @@ describe("daily metrics", () => {
     for (const reason of [
       "glm:unfaithful:homework not in the lesson", "glm:markdown:improvement; luna:output_not_json", "feedback_form_question_unmapped",
       "billing:insufficient_student_credits", "error:fetch failed",
+      // Transcript first: neither of its own holds is about the class's data.
+      "thai_summary_no_transcript", "missing_student_or_tutor",
     ]) await seedRow(n++, { state: "held", reason, endAt });
+    // Transcript first: waiting for the recording, or back on the summary after a fallback (whatever its cause), is
+    // still in the works while the posting window is open — on neither side.
+    await seedRow(n++, { state: "awaiting_recording", reason: "transcript_first", endAt });
+    await seedRow(n++, { state: "pending", reason: "summary_fallback:speakers_unclear", endAt });
     // Both handed back by the sweep because Ek was switched off when it ran. The class of the 27th was workable, then
     // switched off before its window closed (23:29:59 Bangkok on the 29th): the owner's switch, not our miss. For the
     // class of the 26th Ek was still on when its window closed (23:29:59 on the 28th): ours to post, a miss.
     await seedRow(n++, { state: "skipped_scope", reason: "tutor_off_at_deadline", endAt: at("2026-09-27T12:00:00Z"), teacher: EK });
     await seedRow(n++, { state: "skipped_scope", reason: "tutor_off_at_deadline", endAt: at("2026-09-26T12:00:00Z"), teacher: EK });
     await refreshDailyMetrics(db, { dates: metricDates(NOW), now: NOW });
-    expect(await starRow(DAY)).toMatchObject({ posted: 0, excludedDataQuality: 8, held: 5, excludedTutorOff: 0, excludedScope: 0, eligible: 5 });
+    expect(await starRow(DAY)).toMatchObject({
+      posted: 0, excludedDataQuality: 8, held: 7, pending: 2, excludedTutorOff: 0, excludedScope: 0, eligible: 7,
+    });
     expect(await starRow("2026-09-27")).toMatchObject({ excludedTutorOff: 1, expired: 0, excludedScope: 0, eligible: 0 });
     expect(await starRow("2026-09-26")).toMatchObject({ excludedTutorOff: 0, expired: 1, excludedScope: 0, eligible: 1 });
   });

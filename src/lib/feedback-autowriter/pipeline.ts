@@ -56,7 +56,13 @@ export interface CallRecord {
 export type PipelineResult =
   | { kind: "draft"; arm: ModelArm; output: ModelOutput; fields: FeedbackFieldAnswers; judge: JudgeOutput }
   | { kind: "held"; reasons: string[] }
-  | { kind: "infra"; error: string };
+  /**
+   * Retried later. `modelFailure`: the models failed on this evidence (a time-out, a reply that is not JSON, a
+   * provider error, an unusable route, a judge that gives no verdict) — not our function's time, our OpenRouter
+   * account (a bad key, no credit, rate limited) or our connection. Transcript first counts only these
+   * (`writer_failed`).
+   */
+  | { kind: "infra"; error: string; modelFailure: boolean };
 
 /**
  * A failure of the service rather than of the text: missing key, credit limit,
@@ -76,6 +82,22 @@ export function isInfraFailure(call: Extract<OpenRouterCallResult, { ok: false }
 
 /** The judge gets one immediate second try per draft before the session is retried later. */
 const JUDGE_ATTEMPTS = 2;
+
+/** The infra error for our own function running out of time before a model call: not a failure of the models. */
+export const FUNCTION_BUDGET_EXHAUSTED = "function_budget_exhausted";
+
+/** OpenRouter statuses about our account rather than the model: a bad key, no credit, rate limited. */
+const ACCOUNT_STATUSES = new Set([401, 402, 429]);
+
+/**
+ * An infra failure of a model call → a retry. It is the model's (`modelFailure`) unless it is about our account or
+ * our connection, or it is a time-out on a call our function's remaining time had cut short.
+ */
+function callFailure(who: string, call: Extract<OpenRouterCallResult, { ok: false }>, shortened: boolean): PipelineResult {
+  const ours = (call.httpStatus !== null && ACCOUNT_STATUSES.has(call.httpStatus)) || call.error.startsWith("network_")
+    || (call.error === "timeout" && shortened);
+  return { kind: "infra", error: `${who}:${call.error}`, modelFailure: !ours };
+}
 
 /** Pinned routes must be served exactly as pinned; anything else is an infra failure. */
 export function routeMismatch(config: AutowriterModelConfig, call: OpenRouterCallResult): string | null {
@@ -128,7 +150,7 @@ export async function runWritingPipeline(input: {
       maxTokens: 32_000,
       timeoutMs,
     });
-    return { kind: "call" as const, call };
+    return { kind: "call" as const, call, shortened: timeoutMs < preferredTimeoutMs };
   };
 
   // Every writer is on a zero-retention route, so transcripts get the fallback too.
@@ -145,7 +167,7 @@ export async function runWritingPipeline(input: {
       speakerLabels: session.speakerLabels,
       otherPeople,
     }), 180_000);
-    if (written.kind === "budget") return { kind: "infra", error: "function_budget_exhausted" };
+    if (written.kind === "budget") return { kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false };
     const writeCall = written.call;
     const recordWriter = (result: Record<string, unknown>) => input.record({
       wiseSessionId: session.wiseSessionId, role: "writer", arm: writer.arm, requestedModel: writer.model,
@@ -154,14 +176,14 @@ export async function runWritingPipeline(input: {
 
     if (!writeCall.ok) {
       await recordWriter({ error: writeCall.error });
-      if (isInfraFailure(writeCall)) return { kind: "infra", error: `${writer.arm}:${writeCall.error}` };
+      if (isInfraFailure(writeCall)) return callFailure(writer.arm, writeCall, written.shortened);
       reasons.push(`${writer.arm}:${writeCall.error}`);
       continue;
     }
     const writerMismatch = routeMismatch(writer, writeCall);
     if (writerMismatch) {
       await recordWriter({ error: writerMismatch });
-      return { kind: "infra", error: `${writer.arm}:${writerMismatch}` };
+      return { kind: "infra", error: `${writer.arm}:${writerMismatch}`, modelFailure: true };
     }
     const parsed = parseModelOutput(writeCall.content);
     if (!parsed.ok) {
@@ -202,7 +224,7 @@ export async function runWritingPipeline(input: {
           homework: parsed.output.homework,
         },
       }), 120_000);
-      if (judged.kind === "budget") return { kind: "infra", error: "function_budget_exhausted" };
+      if (judged.kind === "budget") return { kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false };
       const judgeCall = judged.call;
       const recordJudge = (result: Record<string, unknown>) => input.record({
         wiseSessionId: session.wiseSessionId, role: "judge", arm: judgeConfig.arm, requestedModel: judgeConfig.model,
@@ -210,21 +232,21 @@ export async function runWritingPipeline(input: {
       });
       if (!judgeCall.ok) {
         await recordJudge({ error: judgeCall.error });
-        if (isInfraFailure(judgeCall)) return { kind: "infra", error: `judge:${judgeCall.error}` };
+        if (isInfraFailure(judgeCall)) return callFailure("judge", judgeCall, judged.shortened);
         judgeFailure = `judge_${judgeCall.error}`;
         continue;
       }
       const judgeMismatch = routeMismatch(judgeConfig, judgeCall);
       if (judgeMismatch) {
         await recordJudge({ error: judgeMismatch });
-        return { kind: "infra", error: `judge:${judgeMismatch}` };
+        return { kind: "infra", error: `judge:${judgeMismatch}`, modelFailure: true };
       }
       verdict = parseJudgeOutput(judgeCall.content);
       // The three lists as returned, plus the flat `judgeProblems` list the hold reason and the dashboard use.
       await recordJudge(verdict ? { ...verdict, problems: judgeProblems(verdict) } : { error: "judge_unparseable" });
       if (!verdict) judgeFailure = "judge_unparseable";
     }
-    if (!verdict) return { kind: "infra", error: `judge:${judgeFailure || "no_verdict"}` };
+    if (!verdict) return { kind: "infra", error: `judge:${judgeFailure || "no_verdict"}`, modelFailure: true };
     if (!verdict.faithful) {
       reasons.push(`${writer.arm}:unfaithful:${judgeProblems(verdict).slice(0, 3).join(" | ").slice(0, 300)}`);
       continue;
