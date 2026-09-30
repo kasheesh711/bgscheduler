@@ -214,6 +214,24 @@ describe("loadAutowriterDashboard", () => {
     expect(board.holds).toMatchObject([{ wiseSessionId: otherProfile, resolvedBy: null }]);
   });
 
+  it("keeps every hold that may still wait when there are more holds than the cap: only old ones are left out", async () => {
+    // NOW is 30 Sep, 05:00 UTC. A class with no deadline keeps waiting; one whose deadline passed 10 hours ago is listed
+    // for 14 hours more; one whose deadline passed 3 days ago is not listed any more; one is due in two days.
+    const noDeadline = await seedRow(1, { endAt: "2026-09-10T03:00:00Z", deadlineAt: null });
+    const passedLately = await seedRow(2, { endAt: "2026-09-27T03:00:00Z", deadlineAt: new Date("2026-09-29T19:00:00Z") });
+    const passedLongAgo = await seedRow(3, { endAt: "2026-09-24T03:00:00Z", deadlineAt: new Date("2026-09-27T05:00:00Z") });
+    const ahead = await seedRow(4, { endAt: "2026-09-30T03:00:00Z" });
+
+    // A cap of three (500 in production): the one hold that no longer waits is the one left out, never the one
+    // without a deadline (the latest deadlines alone would have kept the old hold and dropped it).
+    const capped = await loadAutowriterDashboard(db, { windowDays: 7, now: NOW, holdsLimit: 3 });
+    expect(capped.holds.map((row) => row.wiseSessionId).toSorted()).toEqual([noDeadline, passedLately, ahead].toSorted());
+    // Shown soonest deadline first, as always; a class without one last.
+    expect(capped.holds.map((row) => row.wiseSessionId)).toEqual([passedLately, ahead, noDeadline]);
+    const all = await loadAutowriterDashboard(db, { windowDays: 7, now: NOW });
+    expect(all.holds.map((row) => row.wiseSessionId)).toEqual([passedLongAgo, passedLately, ahead, noDeadline]);
+  });
+
   it("has no holds and no failed posts when there are none", async () => {
     await seedRow(1, { endAt: "2026-09-30T01:00:00Z", state: "verified", reason: "verified", arm: "sol", postStartedAt: new Date("2026-09-30T01:30:00Z") });
     const board = await loadAutowriterDashboard(db, { windowDays: 7, now: NOW });

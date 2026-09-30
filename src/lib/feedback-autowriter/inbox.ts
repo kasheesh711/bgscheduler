@@ -61,7 +61,7 @@ export const INBOX_GROUPS: ReadonlyArray<{ kind: InboxItemKind; label: string }>
 const HOLD_CRITICAL_MS = 6 * 60 * 60 * 1000;
 const HOLD_SOON_MS = 24 * 60 * 60 * 1000;
 /** A held class nobody wrote leaves the list this long after its deadline: by then nothing can be done in time. */
-const HOLD_LISTED_AFTER_DEADLINE_MS = 24 * 60 * 60 * 1000;
+export const HOLD_LISTED_AFTER_DEADLINE_MS = 24 * 60 * 60 * 1000;
 
 const INCIDENT_TITLES: Record<string, string> = {
   halt: "Posting was halted",

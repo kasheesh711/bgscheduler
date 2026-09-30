@@ -3,6 +3,7 @@ import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { wiseSessionLink } from "@/lib/wise/links";
 import { AUTOWRITER_MAX_TRANSCRIBE_ERRORS, AUTOWRITER_MAX_WRITER_ERRORS, AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS } from "./config";
+import { HOLD_LISTED_AFTER_DEADLINE_MS } from "./inbox";
 import { judgeProblems } from "./judge";
 import { tutorKeyFor } from "./review-job";
 import { AUTOWRITER_TUTORS, rosterTutor, tutorLabel } from "./roster";
@@ -45,7 +46,11 @@ export interface DashboardHoldRow extends Pick<AutowriterSessionRow,
   personWrote: boolean;
 }
 
-/** Held classes loaded at most (the latest deadlines are kept). */
+/**
+ * Held classes loaded at most. The ones that may still wait for someone come first (no deadline, or one ahead or
+ * passed less than a day ago: the deadline side of `isOpenHold`), so the cap can only leave out old ones; then the
+ * latest deadlines.
+ */
 export const DASHBOARD_HOLDS_LIMIT = 500;
 
 export interface DashboardWebhookRow {
@@ -531,11 +536,16 @@ async function loadHeldClassesAPersonWrote(db: Database): Promise<Set<string>> {
   return new Set(rows.map((row) => row.wiseSessionId));
 }
 
-/** Read-only loader for the page and its API route. */
-export async function loadAutowriterDashboard(db: Database, input: { windowDays: number; now?: Date }): Promise<AutowriterDashboard> {
+/** Read-only loader for the page and its API route. `holdsLimit` defaults to `DASHBOARD_HOLDS_LIMIT` (tests set a small one). */
+export async function loadAutowriterDashboard(
+  db: Database,
+  input: { windowDays: number; now?: Date; holdsLimit?: number },
+): Promise<AutowriterDashboard> {
   const now = input.now ?? new Date();
   const since = new Date(now.getTime() - input.windowDays * 24 * 60 * 60 * 1000);
   const webhookSince = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  // A deadline after this may still be listed as waiting (`isOpenHold`).
+  const holdsOpenAfter = new Date(now.getTime() - HOLD_LISTED_AFTER_DEADLINE_MS);
   const [control, sessionRows, holdRows, personWrote, callRows, webhookRows] = await Promise.all([
     readControl(db),
     db.select({
@@ -560,7 +570,8 @@ export async function loadAutowriterDashboard(db: Database, input: { windowDays:
       .where(and(gte(S.createdAt, since), sql`not (${S.state} = 'skipped_scope' and coalesce(${S.reason}, '') in (${sql.join(ONSITE_REASONS.map((reason) => sql`${reason}`), sql`, `)}))`))
       .orderBy(desc(S.scheduledEndAt))
       .limit(2_000),
-    // Every held class, whatever its age: it stays on the to-do list until someone deals with it.
+    // Every held class, whatever its age (up to the cap, the ones that may still wait first): it stays on the to-do
+    // list until someone deals with it.
     db.select({
       wiseSessionId: S.wiseSessionId,
       wiseClassId: S.wiseClassId,
@@ -574,8 +585,8 @@ export async function loadAutowriterDashboard(db: Database, input: { windowDays:
     }).from(S)
       .leftJoin(schema.postClassSessions, eq(schema.postClassSessions.wiseSessionId, S.wiseSessionId))
       .where(eq(S.state, "held"))
-      .orderBy(sql`${S.deadlineAt} desc nulls last`)
-      .limit(DASHBOARD_HOLDS_LIMIT),
+      .orderBy(sql`(${S.deadlineAt} is null or ${S.deadlineAt} > ${holdsOpenAfter}) desc`, sql`${S.deadlineAt} desc nulls first`)
+      .limit(input.holdsLimit ?? DASHBOARD_HOLDS_LIMIT),
     loadHeldClassesAPersonWrote(db),
     db.select({
       wiseSessionId: CALLS.wiseSessionId,
