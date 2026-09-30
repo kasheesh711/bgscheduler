@@ -214,7 +214,8 @@ about $22 a month.
 `metadata.writerFailure` and the calls); no `no_recording` alerts; cost per draft about $0.11. A class that keeps
 showing "Transcribing" with a reason `infra:judge:medium:…` or `infra:judge:high:…` has a transcript draft whose
 judge keeps failing at that level: it retries every 10 minutes until its deadline (then expires with an alert) and
-never falls back for that — if several classes show it, the judge's route (GLM on Together) is the problem.
+never falls back for that. After its third failure in a row the digest carries one `judge_failing` alert for the
+class (§7) — if several classes show it, the judge's route (GLM on Together) is the problem.
 
 **Retrying.** `--retry=<wiseSessionId>` clears the fallback and the error counts, so a retried class goes to the
 transcript again.
@@ -226,8 +227,26 @@ second pass off, see §5: a transcript-first class waiting then falls back to th
 ## 7. Alerts
 
 One digest per sweep to `FEEDBACK_AUTOWRITER_ALERT_EMAILS` for classes that need a person: held (draft failed
-checks, absence, form/billing drift), expired, no summary 3 h after class, and any halt-causing outcome.
+checks, absence, form/billing drift), expired, no summary 3 h after class, no recording 3 h after class (§5), a
+judge that keeps failing, and any halt-causing outcome.
 In `shadow` (and `off`) only the halt-causing outcomes are emailed; draft alerts stay on the dashboard.
+
+**`judge_failing`** ("The draft could not be checked 3 runs in a row …"): the class's draft was written, but the
+judge (GLM on Together) failed three runs in a row — timed out, gave no verdict, was rate limited, answered from
+another host, or the run had no time left to start it; the reason in the alert says which
+(`infra:judge:high:timeout`). Nothing is wrong with the class
+itself and nothing has been posted: it keeps retrying every 10 minutes until its deadline and never falls back to
+the summary for this. One alert per run of failures — none for the fourth or fifth; a new one only if the judge
+answers in between and then fails three times again. What to do: if it is one class, wait or write it yourself
+before the deadline; if several classes alert together, the judge's route is down — check OpenRouter's status for
+the model, and pause (§2) if the tutors should write their own meanwhile. To see which classes are in it now:
+
+```sql
+select wise_session_id, state, reason, metadata ->> 'judgeErrors' as judge_failures, deadline_at
+from feedback_autowriter_sessions
+where state in ('pending', 'awaiting_recording', 'transcribing', 'generating') and (metadata ->> 'judgeErrors')::int >= 3
+order by deadline_at;
+```
 A switched-off tutor's classes are handed back to them silently when they reach the deadline window.
 Nightly tutor reminders are separate (Class Feedback).
 
@@ -272,11 +291,17 @@ zero-retention route, not a failure of the draft (30 Sep afternoon: 6 of 10 writ
 replayed at once, 7 of 8 one-word requests sent together). The error never counts toward `writer_failed`.
 
 **On a rate limit** (30 Sep evening, [feature page](../features/feedback-autowriter.md#rate-limits-tried-again-in-the-same-run-30-sep-evening)):
-the same request is sent again in the same run — up to three more times, after about 4 s, 10 s and 25 s (each ±30%),
-or after the wait OpenRouter asks for (at most 30 s) — for the writer, the fallback writer and both judge levels. It
+the same request is sent again in the same run — up to three more times, after about 4 s, 10 s and 25 s (each ±30%)
+— for the writer, the fallback writer and both judge levels. When OpenRouter says how long to wait, that wait is
+kept: never a retry before it, never a wait shorter than the schedule's; if it asks for more than 30 s (or more
+than is left of the call's 45 s of waiting), the call is not tried again in that run. It
 never waits past the run's time: with too little left for the wait and the call's time-out, the rate limit stands at
 once. Only when the call is still rate limited after that does the class go back to retrying every 10 minutes, with
-the same `infra:…` reason as before. Each attempt is its own row, a rate-limited one at no cost, and every attempt
+the same `infra:…` reason as before. In a sweep, the first class to end still rate limited switches the in-run
+retries off for the classes after it (the limit lasts; they are asked once each and retried in 10 minutes), and the
+sweep starts the rows that call no model — a stored draft to post, a recording to wait for, a Soniox job to look at
+— before the rows that need the writer, so a rate limit never holds those up. A webhook run always retries.
+Each attempt is its own row, a rate-limited one at no cost, and every attempt
 after the first carries `result.rateLimitRetry` (1–3). To see what the retries did:
 
 ```sql
@@ -287,10 +312,27 @@ group by 1, 2, 3, 4
 order by 1, 2, 3, 4;
 ```
 
-A row with `ok = true` is a retry that went through (the class was written or judged in the same run); `retry = 1`
-rows count the calls that were rate limited at all; `retry = 3` with `ok = false` is a call still failing at its last
-retry, so that class waited for its next run. The rows of one call are written together when the call ends. If
-rate limits keep classes from posting all the same, the error text itself points to adding an own
+These rows are retries only: a call's first attempt never carries the mark. So `retry = 1` rows count the calls
+that were tried again at least once — not every rate-limited call. One that was not tried again (no time left for
+the wait and the time-out, a sweep with its retries off, a wait OpenRouter asked for that did not fit) has a single
+row without the mark; every rate-limited attempt, tried again or not, carries `result.attemptAt` (the second query
+below lists them all). `ok = true` is a retry that was answered: that call went through
+in the same run (whether the class then posted depends on the rest of the run). `ok = false` on a call's last row is
+a call that still failed — look at its `error`: still rate limited, or failed another way (a time-out after a rate
+limit is `retry = 1`, `error = timeout`); its class waited for its next run. A call can end before `retry = 3`:
+the next wait no longer fitted the run's time or the call's 45 s. The rows of one call are written together when the
+call ends, so a rate-limited attempt carries its own times: `result.attemptAt` (when its request was sent),
+`retryAfterMs` (the wait OpenRouter asked for, when it named one) and `waitedMs` (the wait that followed):
+
+```sql
+select wise_session_id, role, result ->> 'rateLimitRetry' as retry, result ->> 'attemptAt' as sent_at,
+       result ->> 'retryAfterMs' as asked_ms, result ->> 'waitedMs' as waited_ms, error
+from feedback_autowriter_calls
+where created_at > now() - interval '1 day' and result ? 'attemptAt'
+order by wise_session_id, sent_at;
+```
+
+If rate limits keep classes from posting all the same, the error text itself points to adding an own
 provider key for that model in OpenRouter (Settings → Integrations); before doing so, check that the key's endpoint
 keeps zero data retention, as every autowriter route must. A `sol:model_mismatch:…` reason means
 OpenRouter answered Sol's request with another model id: the run reports an infrastructure error and the class
