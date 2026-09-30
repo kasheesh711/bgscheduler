@@ -1482,9 +1482,10 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
   });
 
   it("never starts the review window of a class still being worked on", async () => {
+    // The sweep runs on the real clock here, so the deadline must be relative to it, not the fixture's fixed date.
     await seedRow({
       state: "transcribing", reason: "zoom_transcript_pending", evidence: "transcript", sonioxTranscriptionId: "job-3",
-      nextAttemptAt: new Date(Date.now() + 3600_000),
+      nextAttemptAt: new Date(Date.now() + 3600_000), deadlineAt: new Date(Date.now() + 48 * 3600_000),
     });
     const soniox = fakeSoniox();
     await runSweep(transcriptDeps(fakeWise().ops, soniox.client));
