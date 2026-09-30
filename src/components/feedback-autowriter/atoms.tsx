@@ -1,4 +1,5 @@
 import type { ComponentProps, ReactNode } from "react";
+import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -46,5 +47,22 @@ export function Tag({ tone = "neutral", className, children }: { tone?: Tone; cl
     <span className={cn("inline-flex items-center gap-1 rounded border px-[5px] py-[3px] text-[10px] font-medium leading-none whitespace-nowrap", TAG_TONE[tone], className)}>
       {children}
     </span>
+  );
+}
+
+/** A panel that opens on a click: the page's detail sections, collapsed by default. */
+export function Disclosure({ title, count, hint, children }: { title: string; count?: number; hint?: string; children: ReactNode }) {
+  return (
+    <details className="group overflow-hidden rounded-[10px] border bg-card shadow-[0_2px_3px_rgb(37_52_65/0.02)]">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-3.5 outline-none hover:bg-muted/30 focus-visible:bg-muted/40 [&::-webkit-details-marker]:hidden">
+        <span className="flex items-center gap-[9px]">
+          <ChevronRight aria-hidden className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" />
+          <span className="text-[13px] font-semibold">{title}</span>
+          {count !== undefined ? <CountChip>{count}</CountChip> : null}
+        </span>
+        {hint ? <span className="text-[10px] text-muted-foreground">{hint}</span> : null}
+      </summary>
+      <div className="border-t">{children}</div>
+    </details>
   );
 }
