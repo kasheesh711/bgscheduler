@@ -16,7 +16,8 @@
 //    every detail section open (`&details=open`), and the drawer on the first item of each group of the to-do list
 //    (`&open=review|hold|incident|failed_post`). `&theme=dark` shows any of them in the dark theme.
 //
-// Chrome is taken from CHROME_BIN, or the usual macOS location.
+// Chrome is taken from CHROME_BIN, or the usual macOS location. The preview page loads Inter from Google Fonts: without
+// a network the text falls back to the system's sans-serif and the screenshots differ slightly.
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -129,39 +130,66 @@ async function styles() {
   return result.css;
 }
 
+/** The headless Chromes still running and their profile directories: stopped and removed when the script ends, however it ends. */
+const running = new Set();
+const profiles = new Set();
+
+function removeProfile(profile) {
+  // Chrome's helpers may still be letting go of the profile: removing it is best effort (a leftover one is harmless).
+  try {
+    rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    profiles.delete(profile);
+  } catch {
+    // Tried again when the script ends.
+  }
+}
+
+process.on("exit", () => {
+  for (const child of running) child.kill("SIGKILL");
+  for (const profile of profiles) removeProfile(profile);
+});
+for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => process.exit(1));
+
 /**
- * Runs headless Chrome until `done(stdout)` says its work is there, then stops it: on some machines a headless Chrome
- * that has written its output never exits on its own. Its own profile directory keeps it apart from a running Chrome.
+ * Runs headless Chrome until `ready(stdout)` says its work is there, then stops it: on some machines a headless Chrome
+ * that has written its output never exits on its own. Where it does exit by itself, `present(stdout)` says whether the
+ * work is there (`ready` may need two looks, and an exit leaves time for one). Its own profile directory (in the
+ * system's temporary folder) keeps it apart from a running Chrome.
  */
-function chrome(args, url, done) {
+function chrome(args, url, ready, present = ready) {
   const profile = mkdtempSync(path.join(os.tmpdir(), "autowriter-preview-"));
+  profiles.add(profile);
   return new Promise((resolve, reject) => {
     const child = spawn(CHROME, [
       "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check", "--force-device-scale-factor=1",
       `--user-data-dir=${profile}`, "--virtual-time-budget=8000", ...args, url,
     ], { stdio: ["ignore", "pipe", "ignore"] });
+    running.add(child);
     let stdout = "";
-    let failure = null;
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    const poll = setInterval(() => { if (done(stdout)) child.kill("SIGKILL"); }, 250);
-    const limit = setTimeout(() => {
-      failure = new Error(`Chrome did not finish within 60 s (${args.join(" ")}).`);
-      child.kill("SIGKILL");
-    }, 60_000);
-    child.on("error", (error) => { failure = error; });
-    child.on("close", () => {
+    let finished = false;
+    const finish = (failure) => {
+      if (finished) return;
+      finished = true;
       clearInterval(poll);
       clearTimeout(limit);
-      // Chrome's helpers may still be letting go of the profile: removing it is best effort.
-      try {
-        rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-      } catch {
-        // A leftover temporary profile is harmless.
-      }
+      clearTimeout(afterExit);
+      child.kill("SIGKILL");
+      // A helper process may hold the pipe open after the browser is gone: do not wait for it.
+      child.stdout.destroy();
+      running.delete(child);
+      removeProfile(profile);
       if (failure) reject(failure);
-      else if (done(stdout)) resolve(stdout);
-      else reject(new Error(`Chrome exited without its output (${args.join(" ")}).`));
-    });
+      else resolve(stdout);
+    };
+    const ended = () => finish(present(stdout) ? undefined : new Error(`Chrome exited without its output (${args.join(" ")}).`));
+    let afterExit;
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    const poll = setInterval(() => { if (ready(stdout)) finish(); }, 250);
+    const limit = setTimeout(() => finish(new Error(`Chrome did not finish within 60 s (${args.join(" ")}).`)), 60_000);
+    child.on("error", finish);
+    // `close` comes once the output has been read to its end; after an exit it is given a second, no more.
+    child.on("close", ended);
+    child.on("exit", () => { afterExit = setTimeout(ended, 1_000); });
   });
 }
 
@@ -176,6 +204,9 @@ function settled(file) {
     return same;
   };
 }
+
+/** True when a file is there with something in it: what is asked of a Chrome that has exited by itself. */
+const written = (file) => () => existsSync(file) && statSync(file).size > 0;
 
 const pageUrl = (query) => `${pathToFileURL(path.join(OUT, "index.html")).href}?${query}`;
 
@@ -193,7 +224,7 @@ async function screenshot(name, query) {
   windowExtra = Math.max(0, PROBE_HEIGHT - viewport);
   const file = path.join(OUT, `dashboard-${name}.png`);
   rmSync(file, { force: true });
-  await chrome([`--window-size=${WIDTH},${height}`, `--screenshot=${file}`], url, settled(file));
+  await chrome([`--window-size=${WIDTH},${height}`, `--screenshot=${file}`], url, settled(file), written(file));
   return { file, height };
 }
 
@@ -239,7 +270,7 @@ function cropPngHeight(file, height) {
 async function drawerScreenshot(group) {
   const file = path.join(OUT, `drawer-${group}.png`);
   rmSync(file, { force: true });
-  await chrome([`--window-size=${WIDTH},${DRAWER_HEIGHT + windowExtra}`, `--screenshot=${file}`], pageUrl(`view=owner&open=${group}`), settled(file));
+  await chrome([`--window-size=${WIDTH},${DRAWER_HEIGHT + windowExtra}`, `--screenshot=${file}`], pageUrl(`view=owner&open=${group}`), settled(file), written(file));
   cropPngHeight(file, DRAWER_HEIGHT);
   return file;
 }
