@@ -1,109 +1,85 @@
 import fs from "node:fs";
 import path from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
-import type { AutowriterDashboard } from "@/lib/feedback-autowriter/dashboard";
-import { FeedbackAutowriterDashboard } from "../feedback-autowriter-dashboard";
+import type React from "react";
+import { describe, expect, it, vi } from "vitest";
 
-function payload(overrides: Partial<AutowriterDashboard> = {}): AutowriterDashboard {
-  return {
-    generatedAt: "2026-09-30T05:00:00.000Z",
-    windowDays: 7,
-    control: { mode: "shadow", haltedAt: null, haltReason: null, disabledTutors: [], updatedBy: "kevhsh7@gmail.com", updatedAt: "2026-09-30T01:00:00.000Z" },
-    system: {
-      writer: { model: "openai/gpt-6.1-sol", effort: "low" },
-      fallbackWriter: { model: "openai/gpt-6-luna", effort: "max" },
-      judge: { model: "z-ai/glm-5.3-flash", efforts: ["medium", "high"] },
-      transcriptFirst: true,
-      secondPass: true,
-      promptVersion: 5,
-      judgeVersion: 5,
-      commit: null,
-    },
-    today: { date: "2026-09-30", posted: 0, awaitingRecording: 0, held: 0, skippedHuman: 0, skippedScope: 0 },
-    holds: [],
-    failedPosts: [],
-    totals: {
-      seen: 5, posted: 2, verified: 2, awaitingEvent: 0, shadowDrafts: 1, awaitingRecording: 1, fromTranscript: 1,
-      held: 1, skippedHuman: 1, skippedScope: 0, expired: 0, failed: 0, inProgress: 0,
-    },
-    latency: {
-      medianMinutes: 2.5, p90Minutes: 4, samples: 2,
-      byRoute: [
-        { route: "transcript", label: "From the transcript", medianMinutes: 55, p90Minutes: 72, samples: 1 },
-        { route: "summary_fallback", label: "From the summary (fallback)", medianMinutes: null, p90Minutes: null, samples: 0 },
-        { route: "summary", label: "From the summary", medianMinutes: 2.5, p90Minutes: 2.5, samples: 1 },
-      ],
-    },
-    summaryFallbacks: [],
-    cost: {
-      totalUsd: 0.0076,
-      perDraftUsd: 0.0025,
-      byModel: [{ model: "z-ai/glm-5.3-flash", role: "writer", calls: 2, costUsd: 0.0048 }],
-      byDay: [{ date: "2026-09-30", costUsd: 0.0076, drafts: 3, posted: 2 }],
-    },
-    fallbackShare: 0.333,
-    judgeRejections: 1,
-    tutors: [{
-      tutorKey: "Kevin", displayName: "Kevin (Kev) Y. Hsieh", wiseUserIds: ["696e2c4343579bbada2340ed", "695369c028118f629edcb986"],
-      enabled: true, partlyEnabled: false,
-      seen: 5, posted: 2, shadowDrafts: 1, held: 1, skippedHuman: 1, expired: 0, failed: 0, medianLatencyMinutes: 2.5, costUsd: 0.0076,
-    }, {
-      tutorKey: "Ek", displayName: "Apivit (Ek) Sirithana", wiseUserIds: ["6976680baf7fbc5ac88c3ea9", "695369c028118f629edcba05"],
-      enabled: false, partlyEnabled: true,
-      seen: 0, posted: 0, shadowDrafts: 0, held: 0, skippedHuman: 0, expired: 0, failed: 0, medianLatencyMinutes: null, costUsd: 0,
-    }],
-    recent: [{
-      wiseSessionId: "6a9fbc9c617dfedd88a0471e",
-      wiseUrl: "https://learn.begiftededucation.com/links?type=classroom_entity&entityType=session&entityId=6a9fbc9c617dfedd88a0471e&classId=6a9a54f7ab2211cca56eaf5c&profile=teacher",
-      className: "Ratana (Fah.Me) Meesuk",
-      tutor: "Kevin (Kev) Y. Hsieh Online",
-      tutorKey: "Kevin",
-      scheduledEndAt: "2026-09-29T04:00:00.000Z",
-      state: "verified",
-      reason: "verified",
-      arm: "luna",
-      evidence: "transcript",
-      postStartedAt: "2026-09-29T04:02:30.000Z",
-      latencyMinutes: 2.5,
-      costUsd: 0.0012,
-      fields: { topics: "Rearranging equations", performance: "Ratana did well", improvement: "nth term", homework: "" },
-      judgeUnsupported: [],
-      summaryFallback: null,
-    }],
-    webhooks: { lastReceivedAt: "2026-09-29T04:00:05.000Z", byEvent: [{ eventName: "MeetingEndedEvent", count: 3 }], byOutcome: [{ outcome: "verified", count: 1 }] },
-    ...overrides,
-  };
+// A closed popover renders nothing on the server: show the Controls menu's content inline.
+vi.mock("@/components/ui/popover", () => ({
+  Popover: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  PopoverTrigger: ({ render }: { render: (props: Record<string, unknown>) => React.ReactNode }) => <>{render({})}</>,
+  PopoverContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
+
+import type { AutowriterDashboard } from "@/lib/feedback-autowriter/dashboard";
+import type { AutowriterReview, AutowriterReviewUnavailable } from "@/lib/feedback-autowriter/review-data";
+import type { AutowriterTrends } from "@/lib/feedback-autowriter/trends";
+import { FeedbackAutowriterDashboard } from "../feedback-autowriter-dashboard";
+import { dashboardFixture, quietDashboardFixture, quietReviewFixture, reviewFixture, shortHistoryTrendsFixture, trendsFixture } from "./fixtures";
+
+function render(options: {
+  data?: AutowriterDashboard;
+  review?: AutowriterReview | AutowriterReviewUnavailable | null;
+  trends?: AutowriterTrends | null;
+  canControl?: boolean;
+} = {}): string {
+  return renderToStaticMarkup(
+    <FeedbackAutowriterDashboard
+      initialData={options.data ?? dashboardFixture()}
+      initialReview={options.review === undefined ? reviewFixture() : options.review}
+      initialTrends={options.trends === undefined ? trendsFixture() : options.trends}
+      canControl={options.canControl ?? false}
+    />,
+  );
 }
 
+const SOURCE = fs.readFileSync(path.join(__dirname, "../feedback-autowriter-dashboard.tsx"), "utf8");
+
 describe("FeedbackAutowriterDashboard", () => {
-  it("renders KPIs, tutors, recent classes with the posted text, cost and webhooks", () => {
-    const html = renderToStaticMarkup(<FeedbackAutowriterDashboard initialData={payload()} canControl={false} />);
-    expect(html).toContain("Feedback Autowriter");
-    expect(html).toContain("Posted to Wise");
-    expect(html).toContain("Kevin (Kev) Y. Hsieh");
-    expect(html).toContain("Partly on");
+  it("lays the page out as the mockup: system line, the to-do list beside the health rail, trends, tutors, details", () => {
+    const html = render();
+    const order = ["Feedback Autowriter", "Mode LIVE", "What needs you", "Pilot health", "How the pilot is trending", "Click a tutor to filter", "All classes", "The gate in full"]
+      .map((text) => html.indexOf(text));
+    expect(order.every((at) => at >= 0)).toBe(true);
+    expect(order).toEqual(order.toSorted((a, b) => a - b));
+    expect(html).toContain("A little attention. Then back to teaching.");
+    expect(html).toContain("Tuesday, 6 October 2026");
     expect(html).toContain("In-person classes stay with the tutor and are not shown here.");
-    expect(html).toContain("Ratana (Fah.Me) Meesuk");
-    expect(html).toContain("Rearranging equations");
-    expect(html).toContain("GPT-6 Luna");
-    expect(html).toContain("MeetingEndedEvent");
-    expect(html).toContain("2.5 min");
-    expect(html).toContain("From recording");
-    expect(html).toContain("· transcript");
+    expect(html).toContain("Updated 15:35");
+    expect(html).toContain(">Refresh<");
+    // The to-do list has two thirds of the width, the rail one.
+    expect(html).toMatch(/lg:grid-cols-3[^>]*><section[^>]*lg:col-span-2/u);
   });
 
-  it("shows transcript first: waiting for the recording, fallbacks by cause and latency by evidence", () => {
-    const base = payload();
-    const html = renderToStaticMarkup(<FeedbackAutowriterDashboard canControl={false} initialData={payload({
-      summaryFallbacks: [{ cause: "no_recording", label: "No recording after 3 h — from summary", count: 2 }],
-      recent: [
-        { ...base.recent[0], wiseSessionId: "6a0000000000000000000011", className: "Somchai (Tom.Ja) Jaidee", state: "awaiting_recording",
-          reason: "transcript_first", postStartedAt: null, latencyMinutes: null, fields: null },
-        { ...base.recent[0], wiseSessionId: "6a0000000000000000000012", className: "Somchai (Tom.Ja) Jaidee", evidence: "summary",
-          summaryFallback: { cause: "no_recording", label: "No recording after 3 h — from summary" } },
-      ],
-    })} />);
+  it("has no row of number cards and no tabs", () => {
+    const html = render({ canControl: true });
+    expect(html).not.toContain("Posted to Wise");
+    expect(html).not.toMatch(/grid-cols-9\b/u);
+    expect(html).not.toContain('role="tablist"');
+    expect(html).not.toContain('role="tab"');
+    expect(html).not.toContain("From recording");
+    // What the cards said is on the Today line and in the details.
+    expect(html).toContain("Waiting for a recording");
+    expect(html).toContain("Tutor wrote first");
+  });
+
+  it("shows the tutors, the classes with their writers and evidence, the cost and the Wise webhooks", () => {
+    const html = render();
+    for (const tutor of ["Anna", "Ben", "Chai", "Dao", "Emma"]) expect(html).toContain(tutor);
+    expect(html).toContain("Partly on");
+    expect(html).toContain("Year 9 Maths");
+    expect(html).toContain("GPT-6.1 Sol");
+    expect(html).toContain("GPT-6 Luna");
+    expect(html).toContain("· transcript");
+    expect(html).toContain("2.5 min");
+    expect(html).toContain("MeetingEndedEvent");
+    expect(html).toContain("Cost by model");
+    // A class's text is read in the drawer: the page itself never prints it.
+    expect(html).not.toContain("Rotations and reflections on the coordinate grid");
+  });
+
+  it("shows transcript first: waiting for the recording, fallbacks by cause and time to post by evidence", () => {
+    const html = render();
     expect(html).toContain("Waiting for the recording");
     expect(html).toContain("No recording after 3 h — from summary");
     expect(html).toContain("Back to the summary (transcript first)");
@@ -111,51 +87,110 @@ describe("FeedbackAutowriterDashboard", () => {
     expect(html).toContain("From the transcript");
     expect(html).toContain("55.0 min");
     expect(html).toContain("1.2 h");
-
-    const quiet = renderToStaticMarkup(<FeedbackAutowriterDashboard initialData={payload()} canControl={false} />);
+    expect(html).toContain("Transcript first: on");
+    const quiet = render({ data: quietDashboardFixture({ summaryFallbacks: [] }), review: quietReviewFixture(), trends: shortHistoryTrendsFixture() });
     expect(quiet).toContain("No class fell back to the summary in this window.");
   });
 
-  it("labels Sol drafts and Sol's cost", () => {
-    const base = payload();
-    const html = renderToStaticMarkup(<FeedbackAutowriterDashboard canControl={false} initialData={payload({
-      recent: [{ ...base.recent[0], arm: "sol", evidence: "summary" }],
-      cost: { ...base.cost, byModel: [{ model: "openai/gpt-6.1-sol", role: "writer", calls: 3, costUsd: 0.12 }] },
-    })} />);
-    expect(html.match(/GPT-6\.1 Sol/gu)).toHaveLength(2); // recent row + cost by model
-    expect(html).not.toContain("GPT-6 Luna");
+  it("shows owner controls only to the owner", () => {
+    const shadow = dashboardFixture({ control: { ...dashboardFixture().control, mode: "shadow" } });
+    const viewer = render({ data: shadow });
+    const owner = render({ data: shadow, canControl: true });
+    expect(viewer).not.toContain("Go live");
+    expect(viewer).not.toContain("Controls");
+    expect(viewer).not.toContain(">Pause<");
+    expect(viewer).not.toContain(">Turn off<");
+    expect(viewer).not.toContain(">Turn on<");
+    expect(owner).toContain("Controls");
+    expect(owner).toContain("Go live");
+    expect(owner).toContain(">Pause<");
+    expect(owner).toContain(">Turn on<");
   });
 
-  it("shows owner controls only to the owner", () => {
-    const viewer = renderToStaticMarkup(<FeedbackAutowriterDashboard initialData={payload()} canControl={false} />);
-    const owner = renderToStaticMarkup(<FeedbackAutowriterDashboard initialData={payload()} canControl />);
-    expect(viewer).not.toContain("Go live");
-    expect(owner).toContain("Go live");
-    expect(owner).toContain("Pause");
+  it("is read-only for an admin who is not the owner: nothing to switch, record or acknowledge", () => {
+    const html = render();
+    expect(html).not.toContain("verdict-controls");
+    expect(html).not.toContain(">Approve<");
+    expect(html).not.toContain(">Acknowledge<");
+    expect(html).not.toContain("Controls");
+    // Everything is still there to read and to open.
+    expect(html).toContain("What needs you");
+    expect(html.match(/>Review<\/button>/gu)?.length).toBeGreaterThan(0);
+    expect(html).toContain("Expansion gate");
   });
 
   it("makes a halt impossible to miss", () => {
-    const html = renderToStaticMarkup(<FeedbackAutowriterDashboard
-      initialData={payload({ control: { ...payload().control, mode: "live", haltedAt: "2026-09-30T02:00:00.000Z", haltReason: "unknown outcome for the feedback POST on x" } })}
-      canControl />);
+    const halted = dashboardFixture({ control: { ...dashboardFixture().control, haltedAt: "2026-10-06T02:00:00.000Z", haltReason: "unknown outcome for the feedback POST on x" } });
+    const html = render({ data: halted, canControl: true });
     expect(html).toContain("Posting is halted");
     expect(html).toContain("unknown outcome for the feedback POST on x");
-    expect(html).toContain("Resume");
+    expect(html).toContain(">Resume<");
+    expect(html).toContain("Posting is halted. That needs you first.");
+    // The banner sits directly under the system line, above the to-do list.
+    expect(html.indexOf("Mode LIVE")).toBeLessThan(html.indexOf('role="alert"'));
+    expect(html.indexOf('role="alert"')).toBeLessThan(html.indexOf("What needs you"));
+    expect(render({ data: halted })).not.toContain(">Resume<");
   });
 
-  it("keeps today's view as the Overview tab next to Quality and Review, even without review data", () => {
-    const html = renderToStaticMarkup(<FeedbackAutowriterDashboard initialData={payload()} canControl initialReview={null} />);
-    expect(html).toContain(">Overview<");
-    expect(html).toContain("Quality");
-    expect(html).toContain("Review");
-    // The overview is the default tab and renders in full.
-    expect(html).toContain("Posted to Wise");
+  it("says when nothing needs the owner", () => {
+    const html = render({ data: quietDashboardFixture(), review: quietReviewFixture(), trends: shortHistoryTrendsFixture() });
+    expect(html).toContain("Nothing needs you. Back to teaching.");
+    expect(html).toContain("Nothing needs you.");
+    expect(html).toContain("0 open");
+    expect(html).toContain("Not enough reviews yet");
+    expect(html).toContain("since 5 Oct");
   });
 
-  it("polls with the house pattern (abortable, sequenced, 60 s)", () => {
-    const source = fs.readFileSync(path.join(__dirname, "../feedback-autowriter-dashboard.tsx"), "utf8");
-    expect(source).toContain("AbortController");
-    expect(source).toContain("requestSequence");
-    expect(source).toContain("60_000");
+  it("keeps the to-do list to holds and failed posts, and says why there is no quality data, before migration 0101", () => {
+    const html = render({ review: { available: false, reason: "review_tables_missing" }, trends: null });
+    expect(html).toContain("What needs you");
+    expect(html).toContain("4 open");
+    expect(html).toContain("Recording too short");
+    expect(html).toContain("A post did not verify in Wise");
+    expect(html).not.toContain("To review");
+    // The rail and the trends say what is missing; the page is not blank.
+    expect(html.match(/Quality data is not available yet \(the review tables are created by migration 0101\)\./gu)).toHaveLength(2);
+    expect(html).not.toContain("<canvas");
+    expect(html).toContain("Last review run: unknown");
+    expect(html).toContain("All classes");
+    expect(html).toContain("Cost by model");
+  });
+
+  it("says a load failure apart from a missing migration, and renders without any review data", () => {
+    const failed = render({ review: { available: false, reason: "load_failed" }, trends: null });
+    expect(failed.match(/The quality data could not load\./gu)).toHaveLength(2);
+    expect(failed).not.toContain("migration 0101");
+    const none = render({ review: null, trends: null });
+    expect(none).toContain("What needs you");
+    expect(none).toContain("The quality data could not load.");
+  });
+
+  it("says so in the trends area when only the trends could not load", () => {
+    const html = render({ trends: null });
+    expect(html).toContain("The trend charts could not load.");
+    // The rail's two charts still draw from the review data.
+    expect(html.match(/<canvas/gu)).toHaveLength(2);
+    expect(html).toContain("Expansion gate");
+    expect(render().match(/<canvas/gu)).toHaveLength(6);
+  });
+
+  it("polls with the house pattern (abortable, sequenced): the dashboard every 60 s, the review data every 5 min", () => {
+    expect(SOURCE).toContain("AbortController");
+    expect(SOURCE).toContain("requestSequence");
+    expect(SOURCE).toContain("60_000");
+    expect(SOURCE).toContain("const REVIEW_POLL_MS = 5 * 60_000;");
+    expect(SOURCE).toContain("window.setInterval(() => void load(), DASHBOARD_POLL_MS)");
+    expect(SOURCE).toContain("window.setInterval(() => void loadReview(), REVIEW_POLL_MS)");
+  });
+
+  it("filters the to-do list on the client and reloads the trends when the tutor or the range changes", () => {
+    expect(SOURCE).toContain("filterInbox(inbox, tutorKey)");
+    expect(SOURCE).toContain("void loadTrends(rangeDays, key);");
+    expect(SOURCE).toContain("void loadTrends(days, tutorKey);");
+    expect(SOURCE).toContain("/api/feedback-autowriter/trends?");
+    // After an action everything the page shows is loaded again.
+    expect(SOURCE).toContain("await Promise.all([load(), loadReview(), loadTrends(rangeDays, tutorKey)]);");
+    // No trends request on mount: the first series come with the page.
+    expect(SOURCE).not.toMatch(/useEffect\(\(\) => \{\s*void loadTrends/u);
   });
 });

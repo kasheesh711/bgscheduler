@@ -182,15 +182,16 @@ function TodayBlock({ today }: { today: AutowriterDashboard["today"] }) {
   );
 }
 
-export function HealthRail({ dashboard, review, unavailableReason }: {
+export function HealthRail({ dashboard, review, unavailableReason, className }: {
   dashboard: Pick<AutowriterDashboard, "today">;
   /** The review data, or null while it is unavailable. */
   review: AutowriterReview | null;
   unavailableReason: AutowriterReviewUnavailable["reason"] | null;
+  className?: string;
 }) {
   const series = useMemo(() => review ? railSeries(review) : null, [review]);
   return (
-    <Panel aria-labelledby="autowriter-health-title" className="flex flex-col px-5 pt-5 pb-[15px]">
+    <Panel aria-labelledby="autowriter-health-title" className={cn("flex flex-col px-5 pt-5 pb-[15px]", className)}>
       <div className="mb-[17px] flex items-center justify-between">
         <h2 id="autowriter-health-title" className="text-sm font-[650] tracking-[-0.02em]">Pilot health</h2>
         <span className="text-[11px] text-muted-foreground">

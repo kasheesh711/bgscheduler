@@ -121,7 +121,7 @@ function rowView(item: InboxItem, dashboard: AutowriterDashboard, review: Autowr
   return { tile: "blue", action: "neutral", title: item.title, tags: null, sub: item.detail };
 }
 
-export function Inbox({ items, dashboard, review, now, filteredTo, reviewUnavailable, onOpen }: {
+export function Inbox({ items, dashboard, review, now, filteredTo, reviewUnavailable, onOpen, className }: {
   /** The to-do list in display order (`buildInbox`), already narrowed to the tutor filter. */
   items: readonly InboxItem[];
   dashboard: AutowriterDashboard;
@@ -133,10 +133,11 @@ export function Inbox({ items, dashboard, review, now, filteredTo, reviewUnavail
   filteredTo: string | null;
   reviewUnavailable: boolean;
   onOpen: (target: DrawerTarget) => void;
+  className?: string;
 }) {
   const groups = INBOX_GROUPS.map((group) => ({ ...group, items: items.filter((item) => item.kind === group.kind) })).filter((group) => group.items.length > 0);
   return (
-    <Panel aria-labelledby="autowriter-inbox-title" className="flex flex-col">
+    <Panel aria-labelledby="autowriter-inbox-title" className={cn("flex flex-col", className)}>
       <div className="flex items-center justify-between gap-3 border-b px-5 py-[19px]">
         <div className="flex items-center gap-[9px]">
           <h2 id="autowriter-inbox-title" className="text-sm font-[650] tracking-[-0.02em]">What needs you</h2>
