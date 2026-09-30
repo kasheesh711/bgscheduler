@@ -155,9 +155,35 @@ describe("buildAutowriterReview", () => {
   it("prefers the text Class Feedback read from Wise when it is newer than our last post", () => {
     const edited = { ...RENAMED, homework: "Worksheet 3" };
     const payload = buildAutowriterReview({ now: NOW, ...source({
-      currentVersions: [{ wiseSessionId: "s1", observedAt: new Date("2026-09-29T14:00:00Z"), fields: edited }],
+      currentVersions: [{ wiseSessionId: "s1", lastObservedAt: new Date("2026-09-29T14:00:00Z"), fields: edited }],
     }) });
-    expect(payload.queue.find((entry) => entry.wiseSessionId === "s1")!.current).toMatchObject({ source: "wise_feedback_version", fields: edited });
+    expect(payload.queue.find((entry) => entry.wiseSessionId === "s1")!.current).toMatchObject({
+      source: "wise_feedback_version", fields: edited, at: "2026-09-29T14:00:00.000Z",
+    });
+  });
+
+  it("says Wise holds no text when Class Feedback read none there after our last post, the first shot's text all removed", () => {
+    const payload = buildAutowriterReview({ now: NOW, ...source({
+      currentVersions: [{ wiseSessionId: "s1", lastObservedAt: new Date("2026-09-29T14:00:00Z"), fields: null }],
+    }) });
+    const item = payload.queue.find((entry) => entry.wiseSessionId === "s1")!;
+    expect(item.current).toEqual({
+      source: "wise_no_text", fields: { topics: "", performance: "", improvement: "", homework: "" }, at: "2026-09-29T14:00:00.000Z",
+    });
+    expect(item.changed).toBe(true);
+    expect(item.diff).toEqual([
+      { field: "topics", segments: [{ kind: "removed", text: FIRST.topics }] },
+      { field: "performance", segments: [{ kind: "removed", text: FIRST.performance }] },
+      { field: "improvement", segments: [{ kind: "removed", text: FIRST.improvement }] },
+    ]);
+  });
+
+  it("keeps our last verified post when Class Feedback last read the class before it, whatever that read found", () => {
+    const readBefore = new Date("2026-09-29T13:00:00Z");
+    for (const fields of [{ ...FIRST, homework: "Worksheet 3" }, null]) {
+      const payload = buildAutowriterReview({ now: NOW, ...source({ currentVersions: [{ wiseSessionId: "s1", lastObservedAt: readBefore, fields }] }) });
+      expect(payload.queue.find((entry) => entry.wiseSessionId === "s1")!.current).toMatchObject({ source: "correction", fields: RENAMED });
+    }
   });
 
   it("keeps in-person classes out of the queue", () => {

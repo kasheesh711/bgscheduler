@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
-import { calculateFeedbackDeadline } from "@/lib/post-class-feedback/policy";
+import { assessFeedbackContent, calculateFeedbackDeadline } from "@/lib/post-class-feedback/policy";
 import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
 import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
 import { applyOwnerVerdicts, applyReviewBackfillPlan, planReviewBackfill, type OwnerVerdicts } from "../backfill";
@@ -44,6 +44,8 @@ const G = schema.feedbackAutowriterGateEvaluations;
 const M = schema.feedbackAutowriterDailyMetrics;
 const RUNS = schema.feedbackAutowriterReviewRuns;
 const CH = schema.feedbackAutowriterControlHistory;
+const PC = schema.postClassSessions;
+const PCV = schema.postClassFeedbackVersions;
 
 // Roster account ids are the code roster's (the metrics join on them); everything else is synthetic.
 const API = "69366668c05630afe5d8a2a4";
@@ -189,6 +191,41 @@ async function seedMirror(finishedAt: Date) {
 
 async function starRow(date: string) {
   return (await db.select().from(M).where(and(eq(M.metricDate, date), eq(M.tutorKey, "*"))))[0];
+}
+
+/**
+ * One read of the class by the Class Feedback collection, stored the way its `saveObservation` stores it: one version
+ * row per submission and content (the time it was first seen stays its `observed_at`), and on the class's row the
+ * read's time (`last_observed_at`) and the pointer at the teacher's version when its topics, performance or
+ * improvement hold text, at nothing otherwise. `fields: null` is a read that finds no teacher submission.
+ */
+async function collect(wiseSessionId: string, readAt: Date, fields: Partial<FeedbackFieldAnswers> | null) {
+  const endAt = at("2026-09-29T08:00:00Z");
+  const [session] = await db.insert(PC).values({
+    wiseSessionId, wiseClassId: "class-1", scheduledStartAt: minutes(endAt, -60), scheduledEndAt: endAt,
+    deadlineAt: calculateFeedbackDeadline(endAt), finalStatus: "ENDED", lastObservedAt: readAt,
+  }).onConflictDoUpdate({ target: PC.wiseSessionId, set: { lastObservedAt: readAt } }).returning({ id: PC.id });
+  let pointer: string | null = null;
+  if (fields) {
+    const text = { topics: "", performance: "", improvement: "", homework: "", ...fields };
+    const versionKey = `submission-1:${fieldsHash(text)}`;
+    await db.insert(PCV).values({
+      sessionId: session.id, versionKey, wiseSubmissionId: "submission-1", contentHash: fieldsHash(text), profile: "teacher",
+      observedAt: readAt, ...text,
+    }).onConflictDoNothing({ target: [PCV.sessionId, PCV.versionKey] });
+    const [version] = await db.select({ id: PCV.id }).from(PCV).where(and(eq(PCV.sessionId, session.id), eq(PCV.versionKey, versionKey)));
+    if (assessFeedbackContent(text).contentStatus === "substantive") pointer = version.id;
+  }
+  await db.update(PC).set({ latestFeedbackVersionId: pointer }).where(eq(PC.id, session.id));
+}
+
+/** The class as the Review tab shows it. */
+async function reviewItem(wiseSessionId: string) {
+  const review = await loadAutowriterReview(db, { now: NOW });
+  if (!review.available) throw new Error("review unavailable");
+  const item = review.queue.find((entry) => entry.wiseSessionId === wiseSessionId);
+  if (!item) throw new Error(`${wiseSessionId} is not in the queue`);
+  return item;
 }
 
 function channels(overrides: Partial<ReviewJobDeps["channels"]> = {}): ReviewJobDeps["channels"] {
@@ -1229,5 +1266,76 @@ describe("loadAutowriterReview", () => {
     } finally {
       await db.execute(sql`ALTER TABLE feedback_autowriter_reviews RENAME COLUMN tutor_key_hidden TO tutor_key`);
     }
+  });
+
+  it("shows the text Wise holds now as Class Feedback last read it: a text changed back, then cleared", async () => {
+    const { wiseSessionId, postStartedAt } = await seedPosted(170);
+    await snapshotFirstShots(db);
+    await assignReviews(db, { now: NOW });
+    const read = (count: number) => minutes(postStartedAt, count);
+    const edited = { ...FIELDS, performance: "Alex spotted reflections quickly." };
+
+    // Wise's blank auto-submission, read before our post: the post is newer.
+    await collect(wiseSessionId, read(-30), {});
+    expect((await reviewItem(wiseSessionId)).current).toMatchObject({ source: "first_shot", fields: FIELDS });
+    // Our text (A), a tutor's edit (B), then A again.
+    await collect(wiseSessionId, read(30), FIELDS);
+    await collect(wiseSessionId, read(60), edited);
+    expect((await reviewItem(wiseSessionId)).current).toMatchObject({ source: "wise_feedback_version", fields: edited });
+    await collect(wiseSessionId, read(90), FIELDS);
+    // A is the version first seen at 30 minutes: no new row, so B is still the version observed last.
+    const [observedLast] = await db.select({ performance: PCV.performance }).from(PCV).orderBy(desc(PCV.observedAt)).limit(1);
+    expect(observedLast.performance).toBe(edited.performance);
+    const back = await reviewItem(wiseSessionId);
+    expect(back.current).toEqual({ source: "wise_feedback_version", fields: FIELDS, at: read(90).toISOString() });
+    expect(back.changed).toBe(false);
+
+    // Cleared again: the blank version of the first read, again no new row. Wise holds no text now.
+    await collect(wiseSessionId, read(120), {});
+    expect(await db.select({ id: PCV.id }).from(PCV)).toHaveLength(3);
+    const cleared = await reviewItem(wiseSessionId);
+    expect(cleared.current).toEqual({
+      source: "wise_no_text", fields: { topics: "", performance: "", improvement: "", homework: "" }, at: read(120).toISOString(),
+    });
+    expect(cleared.diff.map((entry) => entry.field)).toEqual(["topics", "performance", "improvement"]);
+  });
+
+  it("compares our last verified post with Class Feedback's last read, not with when the text it found was first seen", async () => {
+    const { wiseSessionId, postStartedAt } = await seedPosted(171);
+    await snapshotFirstShots(db);
+    await assignReviews(db, { now: NOW });
+    const read = (count: number) => minutes(postStartedAt, count);
+    const corrected = { ...FIELDS, improvement: "Colour sequences." };
+
+    await collect(wiseSessionId, read(30), FIELDS);
+    await db.insert(P).values({
+      wiseSessionId, kind: "correction", fields: corrected, fieldsSha256: fieldsHash(corrected), billing: BILLING,
+      actorKind: "script", actor: "script:test", reason: "test", postFinishedAt: read(45), outcome: "verified", provenance: "backfill",
+    });
+    // Not read since the correction: the correction is the current text.
+    expect((await reviewItem(wiseSessionId)).current).toMatchObject({ source: "correction", fields: corrected });
+    await collect(wiseSessionId, read(60), corrected);
+    expect((await reviewItem(wiseSessionId)).current).toMatchObject({ source: "wise_feedback_version", fields: corrected });
+    // The first text put back: its version was first seen before the correction, the read that found it is after.
+    await collect(wiseSessionId, read(90), FIELDS);
+    expect((await reviewItem(wiseSessionId)).current).toEqual({ source: "wise_feedback_version", fields: FIELDS, at: read(90).toISOString() });
+    // The submission removed: no version row is written at all.
+    await collect(wiseSessionId, read(120), null);
+    expect((await reviewItem(wiseSessionId)).current).toMatchObject({ source: "wise_no_text", at: read(120).toISOString() });
+  });
+
+  it("reads only a teacher's version through the pointer", async () => {
+    const { wiseSessionId, postStartedAt } = await seedPosted(172);
+    await snapshotFirstShots(db);
+    await assignReviews(db, { now: NOW });
+    await collect(wiseSessionId, minutes(postStartedAt, 30), null);
+    // The collection never points at a version that is not the teacher's; if a pointer ever did, it is no teacher text.
+    const [session] = await db.select({ id: PC.id }).from(PC).where(eq(PC.wiseSessionId, wiseSessionId));
+    const [student] = await db.insert(PCV).values({
+      sessionId: session.id, versionKey: "submission-2:student", contentHash: "student", profile: "student",
+      observedAt: minutes(postStartedAt, 30), ...FIELDS,
+    }).returning({ id: PCV.id });
+    await db.update(PC).set({ latestFeedbackVersionId: student.id }).where(eq(PC.id, session.id));
+    expect((await reviewItem(wiseSessionId)).current).toMatchObject({ source: "wise_no_text" });
   });
 });
