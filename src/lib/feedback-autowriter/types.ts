@@ -33,6 +33,16 @@ export const AUTOWRITER_ATTENDANCE_SETTLE_MINUTES = 60;
 /** A summary shorter than this is not enough evidence to write from. */
 export const AUTOWRITER_MIN_SUMMARY_CHARACTERS = 200;
 
+/**
+ * Transcript first: why a class handed to the transcript went back to Wise's summary
+ * (`metadata.summaryFallback.cause`) — no recording in time, a recording in several parts, speakers that cannot be
+ * told apart, Soniox failing three times, or the transcript pass switched off while the class waited.
+ */
+export const SUMMARY_FALLBACK_CAUSES = [
+  "no_recording", "recording_multiple_parts", "speakers_unclear", "soniox_failed", "transcript_pass_off",
+] as const;
+export type SummaryFallbackCause = (typeof SUMMARY_FALLBACK_CAUSES)[number];
+
 export type ModelArm = "glm" | "luna";
 
 export interface OpenRouterProviderPreferences {

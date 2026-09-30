@@ -3,6 +3,7 @@ import type { ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { calculateFeedbackDeadline } from "@/lib/post-class-feedback/policy";
+import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
 import type { FeedbackFieldAnswers, FeedbackFieldMapping } from "@/lib/post-class-feedback/types";
 import { sendAlertDigest } from "./alerts";
 import { resolveBilling } from "./billing";
@@ -29,13 +30,14 @@ import {
   AUTOWRITER_TRANSCRIBE_TIMEOUT_MS,
   AUTOWRITER_TRANSCRIBE_WAIT_MS,
   AUTOWRITER_TRANSCRIBING_RECHECK_MS,
+  AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS,
   AUTOWRITER_ZOOM_TRANSCRIPT_RECHECK_MS,
   AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS,
 } from "./config";
 import { JUDGE_PROMPT_VERSION, JudgeOutputSchema, judgeProblems, type JudgeOutput } from "./judge";
 import { runWritingPipeline, type PipelineResult } from "./pipeline";
 import { PROMPT_VERSION, chooseStudentDisplayName, describeClass, type EvidenceKind } from "./prompt";
-import { AUTOWRITER_ROSTER, AUTOWRITER_TEACHER_ALLOWLIST, rosterAccountIds, rosterTutor } from "./roster";
+import { AUTOWRITER_ROSTER, AUTOWRITER_TEACHER_ALLOWLIST, rosterAccountIds, rosterTutor, type AutowriterTutor } from "./roster";
 import { loadCandidateShortlist, loadFieldMappings, loadPriorFeedback } from "./run";
 import {
   classifyGateReason,
@@ -100,7 +102,7 @@ import {
 } from "./submit";
 import { SonioxError, sonioxCostUsd, type SonioxClient } from "./soniox";
 import { buildTranscriptEvidence, parseZoomVtt, sonioxJobInput, thaiShare, type ZoomCue } from "./transcript";
-import { AUTOWRITER_DEADLINE_MARGIN_MS, type BillingPlan, type ModelArm, type SubmissionState } from "./types";
+import { AUTOWRITER_DEADLINE_MARGIN_MS, type BillingPlan, type ModelArm, type SubmissionState, type SummaryFallbackCause } from "./types";
 
 export interface AutowriterDeps {
   db: Database;
@@ -118,6 +120,12 @@ export interface AutowriterDeps {
   /** Second pass (Soniox transcript) switched on (`FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED`). */
   transcriptsEnabled?: boolean;
   soniox?: SonioxClient | null;
+  /**
+   * Transcript first (`FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST`): every class that passes the gates is handed to the
+   * second pass, and the summary is only the fallback. Acts only while the second pass is on (`transcriptsEnabled`
+   * and `soniox`).
+   */
+  transcriptFirst?: boolean;
   /** Fetches Zoom's WEBVTT (tests inject a fake). */
   fetchText?: (url: string) => Promise<string>;
   now?: () => Date;
@@ -127,7 +135,7 @@ export interface AutowriterDeps {
 
 export type ProcessResult =
   | "preview" | "mode_off" | "halted" | "tutor_off" | "not_roster" | "not_found" | "busy_or_not_due" | "already_handled"
-  | "blocked_by_stuck_post" | "awaiting_recording" | "transcribing"
+  | "blocked_by_stuck_post" | "awaiting_recording" | "transcribing" | "summary_fallback"
   | "retry" | "skipped_scope" | "skipped_human" | "held" | "expired" | "infra" | "would_submit"
   | "verified" | "awaiting_event" | "unverified" | "rate_limited" | "rejected" | "unknown_outcome" | "verify_failed"
   | "not_claimed" | "aborted";
@@ -281,15 +289,65 @@ type Out = (result: ProcessResult, detail?: string) => ProcessOutcome;
 type DraftPatch = Pick<Parameters<Release>[0], "arm" | "fields" | "fieldsSha256" | "billing" | "metadata">;
 
 /** Hand a class to the second pass: wait for Wise's recording, then write from its transcript. */
-async function handOverToTranscript(release: Release, out: Out, reason: string, metadata: Record<string, unknown> = {}): Promise<ProcessOutcome> {
+async function handOverToTranscript(
+  release: Release,
+  out: Out,
+  reason: string,
+  metadata: Record<string, unknown> = {},
+  /** When to look again: the usual recording recheck unless given (0 = due now). */
+  retryInMs: number = AUTOWRITER_RECORDING_RECHECK_MS,
+): Promise<ProcessOutcome> {
   await release({
     state: "awaiting_recording",
     evidence: "transcript",
     reason,
-    retryInMs: AUTOWRITER_RECORDING_RECHECK_MS,
+    retryInMs,
     metadata: { handover: reason, ...metadata },
   });
   return out("awaiting_recording", reason);
+}
+
+/** Transcript first: the moment a class still without a recording falls back to the summary (epoch ms). */
+function transcriptFirstFallbackAt(detail: AutowriterSessionDetail): number {
+  return scheduledWindow(detail).end.getTime() + AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS;
+}
+
+/**
+ * Transcript first: when a class still waiting for its recording is looked at again — the usual recheck, but never
+ * after its fallback time, so a recording that never comes falls back on time. A `RecordingCompletedEvent` webhook
+ * skips the wait either way.
+ */
+function recordingRecheckMs(detail: AutowriterSessionDetail, now: Date): number {
+  return Math.max(0, Math.min(AUTOWRITER_RECORDING_RECHECK_MS, transcriptFirstFallbackAt(detail) - now.getTime()));
+}
+
+/** Handed over by transcript first and not fallen back yet: its transcript's failures go back to the summary. */
+function mayFallBackToSummary(row: AutowriterSessionRow): boolean {
+  const metadata = row.metadata as { handover?: unknown; summaryFallback?: unknown };
+  return metadata.handover === "transcript_first" && !metadata.summaryFallback;
+}
+
+/**
+ * Transcript first: the transcript cannot carry this class (no recording in time, a recording in several parts,
+ * speakers that cannot be told apart, Soniox failing three times, the pass switched off), so it goes back to Wise's
+ * summary: `pending`, `evidence = summary`, due now, `metadata.summaryFallback {cause, at}`. Once only — a class that
+ * fell back never hands over again (`mayHandOver` in processLeased) until an owner retry clears the flags. Any Soniox
+ * job stays on the row; the sweep treats the class as done with it (review window, then deletion).
+ */
+async function fallBackToSummary(input: {
+  release: Release;
+  out: Out;
+  cause: SummaryFallbackCause;
+  now: Date;
+  metadata?: Record<string, unknown>;
+}): Promise<ProcessOutcome> {
+  await input.release({
+    state: "pending",
+    evidence: "summary",
+    reason: `summary_fallback:${input.cause}`,
+    metadata: { ...(input.metadata ?? {}), summaryFallback: { cause: input.cause, at: input.now.toISOString() } },
+  });
+  return input.out("summary_fallback", input.cause);
 }
 
 /**
@@ -393,10 +451,14 @@ function guestMetadata(student: { wiseUserId: string | null; joinedAsGuest?: str
   };
 }
 
-async function priorFeedback(deps: AutowriterDeps, tutor: NonNullable<ReturnType<typeof rosterTutor>>, now: Date) {
+/**
+ * What a new draft must not copy: the tutor's last 90 days of feedback on all their accounts, and the autowriter's
+ * own posts for them. Reads only; the replay validates its drafts against the same list.
+ */
+export async function loadTutorPriorFeedback(db: Database, tutor: Pick<AutowriterTutor, "canonicalKey">, now: Date): Promise<PriorFeedbackComparison[]> {
   return [
-    ...(await loadPriorFeedback(deps.db, { canonicalTutorKey: tutor.canonicalKey, now })),
-    ...(await recentAutowriterPosts(deps.db, rosterAccountIds(tutor.canonicalKey), new Date(now.getTime() - NINETY_DAYS_MS))),
+    ...(await loadPriorFeedback(db, { canonicalTutorKey: tutor.canonicalKey, now })),
+    ...(await recentAutowriterPosts(db, rosterAccountIds(tutor.canonicalKey), new Date(now.getTime() - NINETY_DAYS_MS))),
   ];
 }
 
@@ -412,6 +474,11 @@ async function processLeased(deps: AutowriterDeps, input: {
 }): Promise<ProcessOutcome> {
   if (input.row.evidence === "transcript") return processTranscript(deps, input);
   const secondPass = Boolean(deps.transcriptsEnabled && deps.soniox);
+  // A class that fell back from the transcript stays on the summary (no loops) until an owner retry clears the flag.
+  const fellBack = Boolean((input.row.metadata as { summaryFallback?: unknown }).summaryFallback);
+  const mayHandOver = secondPass && !fellBack;
+  // Transcript first: every class that passes the gates is handed over before the summary is used at all.
+  const transcriptFirst = mayHandOver && Boolean(deps.transcriptFirst);
   const { db, ops } = deps;
   const { release, out } = input;
   let row = input.row;
@@ -424,7 +491,7 @@ async function processLeased(deps: AutowriterDeps, input: {
   let gateReason: string | null = null;
   // Webhook fast path: while Wise is merely not ready yet (summary, attendance,
   // auto-blank), keep the lease and re-read every 20 s instead of waiting for
-  // the next cron tick.
+  // the next cron tick. Transcript first never waits for the summary.
   for (;;) {
     detail = await readDetail(ops, row.wiseSessionId, row.wiseClassId);
     if (!detail) {
@@ -432,7 +499,7 @@ async function processLeased(deps: AutowriterDeps, input: {
       return out("infra", "wise_read_failed");
     }
     now = clock(deps);
-    const gates = evaluateSessionGates(detail, { now, allowlist: AUTOWRITER_TEACHER_ALLOWLIST });
+    const gates = evaluateSessionGates(detail, { now, allowlist: AUTOWRITER_TEACHER_ALLOWLIST, requireSummary: !transcriptFirst });
     submission = classifyTeacherSubmission(detail);
     gateReason = !gates.ok ? gates.reason : submission.kind === "none" ? "submission_none_not_enabled_in_pilot" : null;
     const retrying = gateReason !== null && classifyGateReason(gateReason, { minutesSinceEnd: minutesSinceEnd(detail, now) }) === "retry";
@@ -445,7 +512,7 @@ async function processLeased(deps: AutowriterDeps, input: {
   row = followed.row;
 
   if (gateReason) {
-    return settleGate({ reason: gateReason, detail, row, now, release, out, transcriptsEnabled: secondPass });
+    return settleGate({ reason: gateReason, detail, row, now, release, out, transcriptsEnabled: mayHandOver });
   }
 
   const planned = await planPost(deps, { detail, submission, mappings: input.mappings, release, out });
@@ -453,6 +520,23 @@ async function processLeased(deps: AutowriterDeps, input: {
   const summary = extractAiSummary(detail);
   const [student] = studentParticipants(detail);
   const tutor = rosterTutor(detailTeacherId(detail));
+  if (transcriptFirst) {
+    // After every gate (a class the tutor already wrote is skipped_human before any Soniox spend) and before
+    // anything uses the summary.
+    if (!student?.name || !tutor) {
+      await release({ state: "held", reason: "missing_student_or_tutor", alertKind: "held" });
+      return out("held", "missing_student_or_tutor");
+    }
+    // Due now when Wise already has the recording (in one part or several: the transcript pass decides);
+    // otherwise the usual recheck, never later than the fallback time.
+    const recording = recordingForTranscription(detail);
+    return handOverToTranscript(release, out, "transcript_first", {
+      // For analysis only: how much summary Wise had when the class was handed over.
+      summaryAtHandover: summary
+        ? { characters: [...summary.text].length, thaiShare: Math.round(thaiShare(summary.text) * 100) / 100 }
+        : { characters: 0, thaiShare: null },
+    }, recording.ok || recording.reason === "recording_multiple_parts" ? 0 : recordingRecheckMs(detail, now));
+  }
   if (!summary || !student?.name || !tutor) {
     await release({ state: "held", reason: "missing_summary_student_or_tutor", alertKind: "held" });
     return out("held", "missing_summary_student_or_tutor");
@@ -460,8 +544,16 @@ async function processLeased(deps: AutowriterDeps, input: {
   // Wise's summary of a mostly-Thai lesson is built from Zoom's Thai transcript,
   // which loses the English terms: write from a Soniox transcript instead.
   const summaryThai = thaiShare(summary.text);
-  if (secondPass && summaryThai >= AUTOWRITER_THAI_SUMMARY_SHARE) {
-    return handOverToTranscript(release, out, "thai_summary", { summaryThaiShare: Math.round(summaryThai * 100) / 100 });
+  if (summaryThai >= AUTOWRITER_THAI_SUMMARY_SHARE) {
+    if (mayHandOver) return handOverToTranscript(release, out, "thai_summary", { summaryThaiShare: Math.round(summaryThai * 100) / 100 });
+    // Back from the transcript, a mostly-Thai summary is still not good enough to write from: a person writes it.
+    if (fellBack) {
+      await release({
+        state: "held", reason: "thai_summary_no_transcript", alertKind: "held",
+        metadata: { summaryThaiShare: Math.round(summaryThai * 100) / 100 },
+      });
+      return out("held", "thai_summary_no_transcript");
+    }
   }
   if (!deps.apiKey) {
     await release({ state: "pending", reason: "infra:OPENROUTER_API_KEY missing", retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true });
@@ -480,7 +572,7 @@ async function processLeased(deps: AutowriterDeps, input: {
       summary,
     },
     tutorNames: tutor.tutorNames,
-    priorFeedback: await priorFeedback(deps, tutor, now),
+    priorFeedback: await loadTutorPriorFeedback(deps.db, tutor, now),
     record: (record) => recordCall(db, record),
     remainingMs: () => remaining(deps),
     callModel: deps.callModel,
@@ -491,8 +583,8 @@ async function processLeased(deps: AutowriterDeps, input: {
   }
   if (result.kind === "held") {
     const reasons = result.reasons.join("; ").slice(0, 900);
-    // The summary could not carry a faithful draft: the transcript usually can.
-    if (secondPass) return handOverToTranscript(release, out, "summary_draft_held", { summaryHold: reasons });
+    // The summary could not carry a faithful draft: the transcript usually can (never again after a fallback).
+    if (mayHandOver) return handOverToTranscript(release, out, "summary_draft_held", { summaryHold: reasons });
     await release({ state: "held", reason: reasons, countAttempt: true, alertKind: "held" });
     return out("held", result.reasons.join("; "));
   }
@@ -644,6 +736,12 @@ function reusableTranscriptDraft(row: AutowriterSessionRow): StoredDraft | null 
  * re-fetches instead of re-transcribing. Once the class is done with it the job
  * is kept for review for at most 72 h, then the sweep deletes it (and reaps jobs
  * nothing references).
+ * Transcript first (`handover = transcript_first`): what the transcript cannot
+ * carry — no recording by the fallback time, a recording in several parts,
+ * speakers it cannot tell apart, three Soniox failures, the pass switched off —
+ * goes back to the summary once (`fallBackToSummary`). A recording or transcript
+ * too short for the class, and a draft the validator or judge rejects, stay holds:
+ * the better evidence could not support a draft.
  */
 async function processTranscript(deps: AutowriterDeps, input: {
   row: AutowriterSessionRow;
@@ -658,6 +756,8 @@ async function processTranscript(deps: AutowriterDeps, input: {
   const { release, out } = input;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   let row = input.row;
+  // Transcript first: what the transcript cannot carry goes back to the summary instead of to a person.
+  const canFallBack = mayFallBackToSummary(row);
   // Where an infra retry waits: a stored judged draft needs only Wise (no `no_recording` alert); a submitted
   // job is followed up sooner than a recording that has not appeared yet.
   const backTo = reusableTranscriptDraft(row) ? "pending" as const
@@ -680,6 +780,8 @@ async function processTranscript(deps: AutowriterDeps, input: {
   if (gateReason) return settleGate({ reason: gateReason, detail, row, now, release, out });
 
   if (!deps.transcriptsEnabled || !deps.soniox) {
+    // Switched off while the class waited: a transcript-first class is written from the summary after all.
+    if (canFallBack) return fallBackToSummary({ release, out, cause: "transcript_pass_off", now });
     await release({ state: "held", reason: "transcript_pass_unavailable", alertKind: "held" });
     return out("held", "transcript_pass_unavailable");
   }
@@ -694,6 +796,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
   // Re-checked on every attempt: a recording that gained a second part would be half the lesson.
   const recording = recordingForTranscription(detail);
   if (!recording.ok && recording.reason === "recording_multiple_parts") {
+    if (canFallBack) return fallBackToSummary({ release, out, cause: "recording_multiple_parts", now });
     await release({ state: "held", reason: recording.reason, alertKind: "held" });
     return out("held", recording.reason);
   }
@@ -732,6 +835,9 @@ async function processTranscript(deps: AutowriterDeps, input: {
     const errors = transcribeErrors + 1;
     if (errors >= AUTOWRITER_MAX_TRANSCRIBE_ERRORS) {
       // A job id kept here is kept for review like any finished class's, then deleted by the sweep.
+      if (canFallBack) {
+        return fallBackToSummary({ release, out, cause: "soniox_failed", now, metadata: { transcribeErrors: errors, sonioxFailure: reason } });
+      }
       await release({ state: "held", reason, alertKind: "held", metadata: { transcribeErrors: errors } });
       return out("held", reason);
     }
@@ -753,7 +859,15 @@ async function processTranscript(deps: AutowriterDeps, input: {
   let submittedAt = jobId && stamp.sonioxSubmittedJob === jobId ? metadataDate(stamp.sonioxSubmittedAt) : null;
   if (!jobId) {
     if (!recording.ok) {
-      await release({ state: "awaiting_recording", reason: recording.reason, retryInMs: AUTOWRITER_RECORDING_RECHECK_MS });
+      // Transcript first: still no recording at the fallback time → the summary (no `no_recording` alert);
+      // until then the recheck never lands after that time.
+      if (canFallBack && now.getTime() >= transcriptFirstFallbackAt(detail)) {
+        return fallBackToSummary({ release, out, cause: "no_recording", now });
+      }
+      await release({
+        state: "awaiting_recording", reason: recording.reason,
+        retryInMs: canFallBack ? recordingRecheckMs(detail, now) : AUTOWRITER_RECORDING_RECHECK_MS,
+      });
       return out("awaiting_recording", recording.reason);
     }
     try {
@@ -866,7 +980,11 @@ async function processTranscript(deps: AutowriterDeps, input: {
     });
     return out("transcribing", "zoom_transcript_pending");
   }
-  if (speakers.method === "unclear") return holdFor("speakers_unclear");
+  if (speakers.method === "unclear") {
+    // Transcript first: without knowing who said what the summary is the better evidence.
+    if (canFallBack) return fallBackToSummary({ release, out, cause: "speakers_unclear", now, metadata: { transcript: transcriptMeta } });
+    return holdFor("speakers_unclear");
+  }
 
   // 5. Write and judge from the transcript (GLM on the zero-retention route only).
   const result = await runWritingPipeline({
@@ -883,7 +1001,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
       speakerLabels: evidence.speakerLabels,
     },
     tutorNames: tutor.tutorNames,
-    priorFeedback: await priorFeedback(deps, tutor, now),
+    priorFeedback: await loadTutorPriorFeedback(deps.db, tutor, now),
     record: (record) => recordCall(db, record),
     remainingMs: () => remaining(deps),
     callModel: deps.callModel,

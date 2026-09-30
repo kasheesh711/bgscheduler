@@ -25,6 +25,15 @@ export function autowriterTranscriptsEnabled(env: AutowriterEnvironment = proces
   return env.FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED === "true";
 }
 
+/**
+ * Transcript first (owner decision, 30 Sep): every class that passes the gates waits for Wise's recording and is
+ * written from its Soniox transcript; Wise's AI summary is only the fallback. Only the exact string `true` enables
+ * it, and it acts only while the second pass is on (`autowriterTranscriptsEnabled` plus a Soniox key).
+ */
+export function autowriterTranscriptFirst(env: AutowriterEnvironment = process.env): boolean {
+  return env.FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST === "true";
+}
+
 export function sonioxApiKey(env: AutowriterEnvironment = process.env): string | null {
   return value(env, "SONIOX_API_KEY") || null;
 }
@@ -162,6 +171,12 @@ export const AUTOWRITER_SONIOX_RETAIN_MS = 72 * 60 * 60 * 1000;
 export const AUTOWRITER_MIN_TRANSCRIPT_CHARACTERS = 800;
 /** Still waiting for the recording this long after class → `no_recording` alert (not only at the deadline). */
 export const AUTOWRITER_NO_RECORDING_ALERT_MS = 3 * 60 * 60 * 1000;
+/**
+ * Transcript first: a class still without a recording this long after its scheduled end is written from the
+ * summary instead (`summaryFallback`, cause `no_recording`), rather than alerted. Measured 30 Sep (first Wise
+ * `RecordingCompletedEvent` − scheduled end, 16–29 Sep, 453 classes): median 34 min, p95 71 min, 1 class over 3 h.
+ */
+export const AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS = 3 * 60 * 60 * 1000;
 /** Soniox jobs no row references are deleted once they are this old (orphans). */
 export const AUTOWRITER_SONIOX_REAPER_AGE_MS = 2 * 60 * 60 * 1000;
 /** Soniox deletes per sweep (each bounded by a 15 s time-out). */

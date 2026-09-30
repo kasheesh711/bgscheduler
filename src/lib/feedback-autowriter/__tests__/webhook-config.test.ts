@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { autowriterAlertEmails, autowriterEnabled, autowriterWritesAllowedHere, openRouterApiKey } from "../config";
+import {
+  autowriterAlertEmails,
+  autowriterEnabled,
+  autowriterTranscriptFirst,
+  autowriterWritesAllowedHere,
+  openRouterApiKey,
+} from "../config";
 import { classifyGateReason } from "../session";
 import {
   findWiseWebhookAuthHeader,
@@ -64,6 +70,13 @@ describe("config", () => {
     expect(autowriterEnabled({ FEEDBACK_AUTOWRITER_ENABLED: "true" })).toBe(true);
     expect(autowriterEnabled({ FEEDBACK_AUTOWRITER_ENABLED: "TRUE" })).toBe(false);
     expect(autowriterEnabled({})).toBe(false);
+  });
+
+  it("turns transcript first on only with the exact string true", () => {
+    expect(autowriterTranscriptFirst({ FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST: "true" })).toBe(true);
+    expect(autowriterTranscriptFirst({ FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST: "True" })).toBe(false);
+    expect(autowriterTranscriptFirst({ FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST: "1" })).toBe(false);
+    expect(autowriterTranscriptFirst({})).toBe(false);
   });
 
   it("never writes from a preview deployment", () => {

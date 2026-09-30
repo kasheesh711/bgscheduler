@@ -1232,3 +1232,307 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect((await readSessionRow(db, SESSION_ID))?.state).toBe("held");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Transcript first (30 Sep): every class waits for the recording; the summary is only the fallback
+// ---------------------------------------------------------------------------
+
+describe("transcript first (Postgres + fakes)", () => {
+  const CLASS_END = new Date("2026-09-28T09:30:00.000Z");
+  const after = (minutes: number) => new Date(CLASS_END.getTime() + minutes * 60_000);
+  const cron = { wiseSessionId: SESSION_ID, trigger: "cron" as const };
+  const webhook = { wiseSessionId: SESSION_ID, trigger: "webhook" as const };
+  const firstDeps = (ops: WiseFeedbackOps, soniox: ReturnType<typeof fakeSoniox>["client"], overrides: Partial<AutowriterDeps> = {}) =>
+    deps(ops, { transcriptsEnabled: true, soniox, transcriptFirst: true, fetchText: async () => ZOOM_VTT, ...overrides });
+  const HANDED_OVER = { handover: "transcript_first", summaryAtHandover: { characters: 420, thaiShare: 0 } };
+  /** A class transcript first handed over, waiting for its recording. */
+  const handedOver = (overrides: Partial<typeof S.$inferInsert> = {}) =>
+    seedRow({ state: "awaiting_recording", evidence: "transcript", reason: "transcript_first", metadata: HANDED_OVER, ...overrides });
+  /** A class that already fell back to the summary. */
+  const FELL_BACK = { ...HANDED_OVER, summaryFallback: { cause: "no_recording", at: "2026-09-28T12:31:00.000Z" } };
+  const dueInMs = async () => ((await readSessionRow(db, SESSION_ID))?.nextAttemptAt?.getTime() ?? Number.NaN) - Date.now();
+  const unfaithfulModel = () => vi.fn(async (request: { schemaName: string }) => request.schemaName === "post_class_feedback"
+    ? glm(writerJson)
+    : glm(JSON.stringify({ faithful: false, unsupported: ["scored 95%"], misattributed: [], homeworkNotSet: [] })));
+  const promptRecorder = () => {
+    const prompts: string[] = [];
+    const callModel = vi.fn(async (request: { schemaName: string; messages: Array<{ content: string }> }) => {
+      prompts.push(request.messages.map((message) => message.content).join("\n"));
+      return request.schemaName === "post_class_feedback" ? glm(writerJson) : glm(FAITHFUL_VERDICT);
+    });
+    return { prompts, callModel };
+  };
+
+  it("hands a class that passes every gate to the transcript before the summary is used: no model call, no Soniox job yet", async () => {
+    await seedRow();
+    const model = fakeModel();
+    const soniox = fakeSoniox();
+    expect(await processSession(firstDeps(fakeWise().ops, soniox.client, { callModel: model.callModel as never, now: () => after(45) }), cron))
+      .toMatchObject({ result: "awaiting_recording", detail: "transcript_first" });
+    expect(model.calls).toEqual([]);
+    expect(soniox.created).toEqual([]);
+    const row = await readSessionRow(db, SESSION_ID);
+    expect(row).toMatchObject({
+      state: "awaiting_recording", evidence: "transcript", reason: "transcript_first",
+      metadata: { handover: "transcript_first", summaryAtHandover: { characters: expect.any(Number), thaiShare: 0 } },
+    });
+    expect((row?.metadata as { summaryAtHandover: { characters: number } }).summaryAtHandover.characters).toBeGreaterThan(200);
+    // No recording yet: looked at again after the usual 30 minutes (Wise's RecordingCompletedEvent usually comes first).
+    expect(await dueInMs()).toBeGreaterThan(28 * 60_000);
+    expect(await dueInMs()).toBeLessThan(31 * 60_000);
+  });
+
+  it("runs every gate first: a class the tutor wrote, out of scope, with form or billing drift, or still settling is never handed over", async () => {
+    const teacherOnly = sessionDetail().participants.filter((participant) => participant.isTeacher);
+    const cases: Array<[string, Detail, string, string]> = [
+      ["tutor wrote it", sessionDetail({ feedbackSubmissions: [autoBlankSubmission({ metadata: null, answers: answers(["Fractions", "Did well", "Practise", ""]) })] }), "skipped_human", "human_submission"],
+      ["in person", sessionDetail({ type: "OFFLINE" }), "skipped_scope", "session_type_OFFLINE"],
+      ["form switched off", sessionDetail({ feedbackForm: { _id: "form1", profile: "teacher", enabled: false, questions: [] } }), "held", "feedback_form_missing_or_disabled"],
+      ["billing drift", sessionDetail({ feedbackSubmissions: [autoBlankSubmission({ creditsConsumed: 3 })] }), "held", "billing:auto_credits_3_vs_scheduled_1"],
+      ["no student yet", sessionDetail({ participants: teacherOnly }), "pending", "student_count_0"],
+    ];
+    for (const [label, detail, state, reason] of cases) {
+      await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
+      await seedRow();
+      const soniox = fakeSoniox();
+      const model = fakeModel();
+      await processSession(firstDeps(fakeWise({ details: [detail] }).ops, soniox.client, { callModel: model.callModel as never, now: () => after(45) }), cron);
+      const row = await readSessionRow(db, SESSION_ID);
+      expect(row, label).toMatchObject({ state, reason, evidence: "summary" });
+      expect(row?.metadata, label).not.toHaveProperty("handover");
+      expect(soniox.created, label).toEqual([]);
+      expect(model.calls, label).toEqual([]);
+    }
+  });
+
+  it("never waits for the summary: a webhook hands over at once, even before Wise has one", async () => {
+    await seedRow();
+    const wise = fakeWise({ details: [sessionDetail({ rawMeetingSummary: [] })] });
+    // Any wait would be for the summary: fail fast instead of looping on a fake clock.
+    const sleep = vi.fn(async () => { throw new Error("waited for the summary"); });
+    expect(await processSession(firstDeps(wise.ops, fakeSoniox().client, { sleep, now: () => after(2) }), { ...webhook, waitForReadyMs: 180_000 }))
+      .toMatchObject({ result: "awaiting_recording", detail: "transcript_first" });
+    expect(sleep).not.toHaveBeenCalled();
+    expect(wise.reads()).toBe(1);
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ summaryAtHandover: { characters: 0, thaiShare: null } });
+  });
+
+  it("is due at once when Wise already has the recording, and never looks again after the fallback time", async () => {
+    await seedRow();
+    await processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fakeSoniox().client, { now: () => after(45) }), cron);
+    expect(await dueInMs()).toBeLessThan(2_000);
+
+    await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
+    await seedRow();
+    // 2 h 50 min after class and no recording yet: looked at again in 10 minutes, at the fallback time — not in 30.
+    await processSession(firstDeps(fakeWise().ops, fakeSoniox().client, { now: () => after(170) }), cron);
+    expect(await dueInMs()).toBeGreaterThan(8 * 60_000);
+    expect(await dueInMs()).toBeLessThan(11 * 60_000);
+  });
+
+  it("writes the class from its transcript once the recording arrives, and posts it", async () => {
+    await seedRow();
+    expect(await processSession(firstDeps(fakeWise().ops, fakeSoniox().client, { now: () => after(1) }), webhook))
+      .toMatchObject({ result: "awaiting_recording", detail: "transcript_first" });
+    // Wise's RecordingCompletedEvent: a webhook skips the recheck wait.
+    const wise = fakeWise({ details: [sessionDetail(RECORDING)] });
+    const soniox = fakeSoniox();
+    const { prompts, callModel } = promptRecorder();
+    expect(await processSession(firstDeps(wise.ops, soniox.client, { callModel: callModel as never, now: () => after(40) }), webhook))
+      .toMatchObject({ result: "verified" });
+    expect(soniox.created).toHaveLength(1);
+    expect(prompts[0]).toContain("Lesson transcript:");
+    expect(prompts[0]).not.toContain("Lesson summary:");
+    expect(wise.posts).toHaveLength(1);
+    const row = await readSessionRow(db, SESSION_ID);
+    expect(row).toMatchObject({
+      state: "verified", evidence: "transcript",
+      metadata: { handover: "transcript_first", draftEvidence: "transcript", pipeline: { evidence: "transcript" } },
+    });
+    expect(row?.metadata).not.toHaveProperty("summaryFallback");
+  });
+
+  it("falls back to the summary with no recording 3 h after class, then writes and posts from it without handing over again", async () => {
+    await handedOver();
+    const soniox = fakeSoniox();
+    expect(await processSession(firstDeps(fakeWise().ops, soniox.client, { now: () => after(181) }), cron))
+      .toMatchObject({ result: "summary_fallback", detail: "no_recording" });
+    expect(soniox.created).toEqual([]);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+      state: "pending", evidence: "summary", reason: "summary_fallback:no_recording", nextAttemptAt: null,
+      metadata: { handover: "transcript_first", summaryFallback: { cause: "no_recording", at: after(181).toISOString() } },
+    });
+
+    // The next run writes from the summary although transcript first is still on: no loop back to the transcript.
+    const wise = fakeWise();
+    const { prompts, callModel } = promptRecorder();
+    expect(await processSession(firstDeps(wise.ops, fakeSoniox().client, { callModel: callModel as never, now: () => after(190) }), cron))
+      .toMatchObject({ result: "verified" });
+    expect(prompts[0]).toContain("Lesson summary:");
+    expect(wise.posts).toHaveLength(1);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+      state: "verified", evidence: "summary",
+      metadata: { draftEvidence: "summary", pipeline: { evidence: "summary" }, summaryFallback: { cause: "no_recording" } },
+    });
+  });
+
+  it("keeps waiting for the recording until the fallback time; a class handed over for another reason keeps the 30-minute recheck", async () => {
+    await handedOver();
+    expect(await processSession(firstDeps(fakeWise().ops, fakeSoniox().client, { now: () => after(170) }), cron))
+      .toMatchObject({ result: "awaiting_recording", detail: "recording_not_ready" });
+    expect(await dueInMs()).toBeGreaterThan(8 * 60_000);
+    expect(await dueInMs()).toBeLessThan(11 * 60_000);
+
+    await db.update(S).set({ metadata: { handover: "thai_summary" }, nextAttemptAt: null }).where(eq(S.wiseSessionId, SESSION_ID));
+    expect(await processSession(firstDeps(fakeWise().ops, fakeSoniox().client, { now: () => after(181) }), cron))
+      .toMatchObject({ result: "awaiting_recording", detail: "recording_not_ready" });
+    expect(await dueInMs()).toBeGreaterThan(28 * 60_000);
+  });
+
+  it("falls back on a recording in several parts, without sending any of it to Soniox", async () => {
+    await handedOver();
+    const soniox = fakeSoniox();
+    const parts = { rawRecordings: [{ url: "https://files.wiseapp.live/a.mp4", partIndex: 1 }, { url: "https://files.wiseapp.live/b.mp4", partIndex: 2 }] };
+    expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail(parts)] }).ops, soniox.client), webhook))
+      .toMatchObject({ result: "summary_fallback", detail: "recording_multiple_parts" });
+    expect(soniox.created).toEqual([]);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+      state: "pending", evidence: "summary", metadata: { summaryFallback: { cause: "recording_multiple_parts" } },
+    });
+  });
+
+  it("falls back when it cannot tell tutor from student, keeping the transcript's job for review", async () => {
+    await handedOver();
+    const even = lessonTokens().map((token, index) => ({ ...token, speaker: String((index % 3) + 1) }));
+    const soniox = fakeSoniox({ tokens: even });
+    const model = fakeModel();
+    expect(await processSession(
+      firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, { callModel: model.callModel as never, fetchText: async () => "WEBVTT\n" }),
+      webhook,
+    )).toMatchObject({ result: "summary_fallback", detail: "speakers_unclear" });
+    expect(model.calls).toEqual([]);
+    expect(soniox.removed).toEqual([]);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+      state: "pending", evidence: "summary", sonioxTranscriptionId: "job-1",
+      metadata: { transcript: { speakerMethod: "unclear" }, summaryFallback: { cause: "speakers_unclear" } },
+    });
+  });
+
+  it("falls back after the third Soniox failure", async () => {
+    await handedOver({ metadata: { ...HANDED_OVER, transcribeErrors: 2 } });
+    const soniox = fakeSoniox({ error: "audio_url could not be fetched" });
+    expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client), cron))
+      .toMatchObject({ result: "summary_fallback", detail: "soniox_failed" });
+    expect(soniox.removed).toEqual(["job-1"]);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+      state: "pending", evidence: "summary", sonioxTranscriptionId: null,
+      metadata: {
+        transcribeErrors: 3, sonioxFailure: "soniox_error:audio_url could not be fetched",
+        summaryFallback: { cause: "soniox_failed" },
+      },
+    });
+  });
+
+  it("falls back when the transcript pass is switched off while the class waits; any other handed-over class is still held", async () => {
+    await handedOver();
+    expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fakeSoniox().client, { transcriptsEnabled: false }), cron))
+      .toMatchObject({ result: "summary_fallback", detail: "transcript_pass_off" });
+
+    await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
+    await handedOver({ reason: "thai_summary", metadata: { handover: "thai_summary" } });
+    expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fakeSoniox().client, { transcriptsEnabled: false }), cron))
+      .toMatchObject({ result: "held", detail: "transcript_pass_unavailable" });
+  });
+
+  it("still holds what the transcript shows: a recording or transcript too short for the class, a draft the judge rejects", async () => {
+    const cases: Array<[string, Parameters<typeof fakeSoniox>[0], Partial<AutowriterDeps>, string]> = [
+      ["recording too short", { audioDurationMs: 20 * 60_000 }, {}, "recording_too_short"],
+      ["transcript too short", { tokens: lessonTokens().slice(0, 4) }, {}, "transcript_too_short"],
+      ["judge rejects the draft", {}, { callModel: unfaithfulModel() as never }, "glm:unfaithful:scored 95%"],
+    ];
+    for (const [label, sonioxOptions, overrides, reason] of cases) {
+      await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
+      await handedOver();
+      expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fakeSoniox(sonioxOptions).client, overrides), webhook), label)
+        .toMatchObject({ result: "held", detail: reason });
+      const row = await readSessionRow(db, SESSION_ID);
+      expect(row, label).toMatchObject({ state: "held", metadata: { alertKind: "held" } });
+      expect(row?.metadata, label).not.toHaveProperty("summaryFallback");
+    }
+  });
+
+  it("never goes back to the transcript after a fallback: a Thai summary or a held summary draft is held, a missing summary retries and alerts", async () => {
+    await seedRow({ metadata: FELL_BACK });
+    const model = fakeModel();
+    expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail({ rawMeetingSummary: THAI_SUMMARY })] }).ops, fakeSoniox().client,
+      { callModel: model.callModel as never, now: () => after(190) }), cron))
+      .toMatchObject({ result: "held", detail: "thai_summary_no_transcript" });
+    expect(model.calls).toEqual([]);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "held", evidence: "summary", metadata: { alertKind: "held" } });
+
+    await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
+    await seedRow({ metadata: FELL_BACK });
+    const held = await processSession(firstDeps(fakeWise().ops, fakeSoniox().client, { callModel: unfaithfulModel() as never, now: () => after(190) }), cron);
+    expect(held).toMatchObject({ result: "held" });
+    expect(held.detail).toContain("unfaithful");
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "held", evidence: "summary" });
+
+    await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
+    await seedRow({ metadata: FELL_BACK });
+    expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail({ rawMeetingSummary: [] })] }).ops, fakeSoniox().client, { now: () => after(240) }), cron))
+      .toMatchObject({ result: "retry", detail: "no_ai_summary" });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "pending", evidence: "summary", metadata: { alertKind: "no_summary" } });
+  });
+
+  it("raises no no-recording alert for a transcript-first class: it falls back to the summary at that point instead", async () => {
+    await handedOver({ scheduledEndAt: new Date(NOW.getTime() - 4 * 3600_000), nextAttemptAt: new Date(Date.now() + 3600_000) });
+    const result = await runSweep(firstDeps(fakeWise().ops, fakeSoniox().client));
+    expect(result.alertsSent).toBe(0);
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).not.toHaveProperty("alertKind");
+  });
+
+  it("treats a fallback's Soniox job as done: kept for review, then deleted, while the class itself still waits on the summary", async () => {
+    await seedRow({
+      state: "pending", reason: "no_ai_summary", sonioxTranscriptionId: "job-3", nextAttemptAt: new Date(Date.now() + 3600_000),
+      metadata: { ...FELL_BACK, summaryFallback: { cause: "speakers_unclear", at: "2026-09-28T11:00:00.000Z" } },
+    });
+    const first = fakeSoniox();
+    await runSweep(firstDeps(fakeWise().ops, first.client));
+    expect(first.removed).toEqual([]);
+    const retainUntil = new Date(String(((await readSessionRow(db, SESSION_ID))?.metadata as { sonioxRetainUntil?: unknown }).sonioxRetainUntil)).getTime();
+    expect(retainUntil - Date.now()).toBeGreaterThan(71.9 * 3600_000);
+
+    await db.update(S).set({ metadata: sql`${S.metadata} || jsonb_build_object('sonioxRetainUntil', now() - interval '1 minute')` as never })
+      .where(eq(S.wiseSessionId, SESSION_ID));
+    const later = fakeSoniox();
+    await runSweep(firstDeps(fakeWise().ops, later.client));
+    expect(later.removed).toEqual(["job-3"]);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "pending", sonioxTranscriptionId: null });
+  });
+
+  it("an owner retry clears the fallback, so the class may go to the transcript again", async () => {
+    await seedRow({
+      state: "held", reason: "thai_summary_no_transcript",
+      metadata: { ...FELL_BACK, sonioxFailure: "soniox_error:x", alertKind: "held" },
+    });
+    expect(await retryHeldSession(db, SESSION_ID, { minDeadline: NOW, actor: "k@x.com" })).toBe(true);
+    const row = await readSessionRow(db, SESSION_ID);
+    expect(row).toMatchObject({ state: "pending", evidence: "summary" });
+    for (const key of ["handover", "summaryAtHandover", "summaryFallback", "sonioxFailure", "alertKind"]) {
+      expect(row?.metadata).not.toHaveProperty(key);
+    }
+    expect(await processSession(firstDeps(fakeWise().ops, fakeSoniox().client, { now: () => after(45) }), cron))
+      .toMatchObject({ result: "awaiting_recording", detail: "transcript_first" });
+  });
+
+  it("acts only together with the second pass", async () => {
+    await updateControl(db, { mode: "shadow" }, "t@x.com");
+    for (const overrides of [{ transcriptsEnabled: false }, { soniox: null }] as Array<Partial<AutowriterDeps>>) {
+      await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
+      await seedRow();
+      expect(await processSession(firstDeps(fakeWise().ops, fakeSoniox().client, { now: () => after(45), ...overrides }), cron), JSON.stringify(overrides))
+        .toMatchObject({ result: "would_submit" });
+      expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "would_submit", evidence: "summary" });
+    }
+  });
+});

@@ -2,9 +2,11 @@ import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { wiseSessionLink } from "@/lib/wise/links";
+import { AUTOWRITER_MAX_TRANSCRIBE_ERRORS, AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS } from "./config";
 import { judgeProblems } from "./judge";
 import { AUTOWRITER_TUTORS, rosterTutor, tutorLabel } from "./roster";
 import { readControl, type AutowriterSessionRow } from "./store";
+import { SUMMARY_FALLBACK_CAUSES, type SummaryFallbackCause } from "./types";
 
 const S = schema.feedbackAutowriterSessions;
 const CALLS = schema.feedbackAutowriterCalls;
@@ -79,6 +81,42 @@ function latencyMinutes(row: Pick<DashboardSessionRow, "scheduledEndAt" | "postS
   return (row.postStartedAt.getTime() - row.scheduledEndAt.getTime()) / 60_000;
 }
 
+/** How a transcript-first class that went back to the summary is shown (`metadata.summaryFallback.cause`). */
+export const SUMMARY_FALLBACK_LABELS: Record<SummaryFallbackCause, string> = {
+  no_recording: `No recording after ${AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS / 3_600_000} h — from summary`,
+  recording_multiple_parts: "Recording in several parts — from summary",
+  speakers_unclear: "Speakers unclear — from summary",
+  soniox_failed: `Transcription failed ${AUTOWRITER_MAX_TRANSCRIBE_ERRORS} times — from summary`,
+  transcript_pass_off: "Transcript pass switched off — from summary",
+};
+
+function fallbackLabel(cause: string): string {
+  return (SUMMARY_FALLBACK_CAUSES as readonly string[]).includes(cause)
+    ? SUMMARY_FALLBACK_LABELS[cause as SummaryFallbackCause]
+    : `${cause} — from summary`;
+}
+
+/** A row's transcript-first fallback, if it has one. */
+function summaryFallback(metadata: unknown): { cause: string; label: string } | null {
+  const fallback = (metadata as { summaryFallback?: { cause?: unknown } | null } | null)?.summaryFallback;
+  if (!fallback || typeof fallback !== "object") return null;
+  const cause = typeof fallback.cause === "string" ? fallback.cause : "unknown";
+  return { cause, label: fallbackLabel(cause) };
+}
+
+/** What a posted class was written from: the transcript, the summary after a transcript-first fallback, or the summary. */
+export type PostRoute = "transcript" | "summary_fallback" | "summary";
+const POST_ROUTES: ReadonlyArray<{ route: PostRoute; label: string }> = [
+  { route: "transcript", label: "From the transcript" },
+  { route: "summary_fallback", label: "From the summary (fallback)" },
+  { route: "summary", label: "From the summary" },
+];
+
+function postRoute(row: Pick<DashboardSessionRow, "evidence" | "metadata">): PostRoute {
+  if (row.evidence === "transcript") return "transcript";
+  return summaryFallback(row.metadata) ? "summary_fallback" : "summary";
+}
+
 export interface AutowriterDashboard {
   generatedAt: string;
   windowDays: number;
@@ -107,7 +145,15 @@ export interface AutowriterDashboard {
     failed: number;
     inProgress: number;
   };
-  latency: { medianMinutes: number | null; p90Minutes: number | null; samples: number };
+  latency: {
+    medianMinutes: number | null;
+    p90Minutes: number | null;
+    samples: number;
+    /** Class end → POST claim for each evidence route, so transcript-first's wait for the recording shows on its own. */
+    byRoute: Array<{ route: PostRoute; label: string; medianMinutes: number | null; p90Minutes: number | null; samples: number }>;
+  };
+  /** Transcript-first classes that went back to the summary in the window, by cause (most first). */
+  summaryFallbacks: Array<{ cause: string; label: string; count: number }>;
   cost: {
     totalUsd: number;
     perDraftUsd: number | null;
@@ -151,6 +197,8 @@ export interface AutowriterDashboard {
     fields: Record<string, string> | null;
     /** Every problem the stored judge verdict lists (`judgeProblems`); a v3 verdict has only its unsupported quotes. */
     judgeUnsupported: string[];
+    /** Set when transcript first sent the class back to the summary. */
+    summaryFallback: { cause: string; label: string } | null;
   }>;
   webhooks: {
     lastReceivedAt: string | null;
@@ -228,7 +276,18 @@ export function buildAutowriterDashboard(input: {
       failed: count((row) => FAILED.has(row.state)),
       inProgress: count((row) => row.state === "pending" || row.state === "generating"),
     },
-    latency: { medianMinutes: round(median(latencies)), p90Minutes: round(percentile(latencies, 90)), samples: latencies.length },
+    latency: {
+      medianMinutes: round(median(latencies)),
+      p90Minutes: round(percentile(latencies, 90)),
+      samples: latencies.length,
+      byRoute: POST_ROUTES.map(({ route, label }) => {
+        const values = posted.filter((row) => postRoute(row) === route).map(latencyMinutes)
+          .filter((value): value is number => value !== null);
+        return { route, label, medianMinutes: round(median(values)), p90Minutes: round(percentile(values, 90)), samples: values.length };
+      }),
+    },
+    summaryFallbacks: tallyBy(sessions.flatMap((row) => summaryFallback(row.metadata) ?? []), (fallback) => fallback.cause)
+      .map(([cause, count]) => ({ cause, label: fallbackLabel(cause), count })),
     cost: {
       totalUsd: round(totalCost, 4) ?? 0,
       perDraftUsd: drafts.length > 0 ? round(totalCost / drafts.length, 4) : null,
@@ -283,6 +342,7 @@ export function buildAutowriterDashboard(input: {
           costUsd: round(costBySession.get(row.wiseSessionId) ?? 0, 4) ?? 0,
           fields: row.fields,
           judgeUnsupported: storedJudgeProblems(row.metadata),
+          summaryFallback: summaryFallback(row.metadata),
         };
       }),
     webhooks: {

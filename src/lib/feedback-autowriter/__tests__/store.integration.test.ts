@@ -10,9 +10,11 @@ import {
   claimGeneration,
   ensureSessionRow,
   expireOverdueRows,
+  flagNoRecording,
   haltAutowriter,
   listDueRows,
   listPendingAlerts,
+  listSonioxCleanup,
   markAlertsSent,
   readControl,
   readSessionRow,
@@ -23,6 +25,7 @@ import {
   retryHeldSession,
   requeueShadowDrafts,
   sessionSubmitStore,
+  stampSonioxRetention,
   stuckPostInFlight,
   updateControl,
   updateLeasedTeacher,
@@ -396,6 +399,53 @@ describe("feedback autowriter store (Postgres)", () => {
       expect((await readSessionRow(db, SESSION))?.metadata, JSON.stringify(pipeline)).not.toHaveProperty("sonioxRetainUntil");
     }
     await haltAutowriter(db, "noop");
+  });
+
+  it("transcript first: keeps a fallback's review window when going live, and an owner retry clears the fallback", async () => {
+    const fellBack = {
+      handover: "transcript_first", summaryAtHandover: { characters: 0, thaiShare: null },
+      summaryFallback: { cause: "speakers_unclear", at: "2026-09-29T12:00:00.000Z" }, sonioxFailure: "x",
+    };
+    const token = (await claimGeneration(db, SESSION, 60_000))!;
+    await releaseGeneration(db, SESSION, token, {
+      state: "would_submit", reason: "shadow",
+      metadata: { ...fellBack, sonioxRetainUntil: "2026-10-01T00:00:00.000Z", draftEvidence: "summary", judge: { faithful: true } },
+    });
+    // It never reads its transcript again, so going live does not restart the window.
+    expect(await requeueShadowDrafts(db, new Date())).toBe(1);
+    expect((await readSessionRow(db, SESSION))?.metadata).toMatchObject({ sonioxRetainUntil: "2026-10-01T00:00:00.000Z" });
+
+    const again = (await claimGeneration(db, SESSION, 60_000))!;
+    await releaseGeneration(db, SESSION, again, { state: "held", reason: "thai_summary_no_transcript", alertKind: "held" });
+    expect(await retryHeldSession(db, SESSION, { minDeadline: new Date(), actor: "k@x.com" })).toBe(true);
+    const row = await readSessionRow(db, SESSION);
+    expect(row).toMatchObject({ state: "pending", evidence: "summary" });
+    for (const key of ["handover", "summaryAtHandover", "summaryFallback", "sonioxFailure", "sonioxRetainUntil"]) {
+      expect(row?.metadata).not.toHaveProperty(key);
+    }
+  });
+
+  it("transcript first: a fallback is done with its Soniox job in any state, and raises no no-recording alert", async () => {
+    const S = schema.feedbackAutowriterSessions;
+    const longAgo = new Date(Date.now() - 4 * 60 * 60 * 1000);
+    // Still waiting on the summary (pending), with the transcript's job on the row.
+    await db.update(S).set({
+      state: "pending", sonioxTranscriptionId: "job-9", scheduledEndAt: longAgo,
+      metadata: { handover: "transcript_first", summaryFallback: { cause: "speakers_unclear", at: longAgo.toISOString() } },
+    }).where(eq(S.wiseSessionId, SESSION));
+    expect(await stampSonioxRetention(db, 60_000)).toBe(1);
+    expect(await listSonioxCleanup(db)).toEqual([]);
+    await db.update(S).set({ metadata: sql`${S.metadata} || jsonb_build_object('sonioxRetainUntil', now() - interval '1 minute')` as never })
+      .where(eq(S.wiseSessionId, SESSION));
+    expect(await listSonioxCleanup(db)).toEqual([{ wiseSessionId: SESSION, sonioxTranscriptionId: "job-9" }]);
+
+    // A transcript-first class still waiting for its recording 3 h after class falls back instead of alerting;
+    // a class handed over for another reason still alerts.
+    await db.update(S).set({ state: "awaiting_recording", reason: "recording_not_ready", metadata: { handover: "transcript_first" } })
+      .where(eq(S.wiseSessionId, SESSION));
+    expect(await flagNoRecording(db, new Date(Date.now() - 3 * 60 * 60 * 1000))).toBe(0);
+    await db.update(S).set({ metadata: { handover: "thai_summary" } }).where(eq(S.wiseSessionId, SESSION));
+    expect(await flagNoRecording(db, new Date(Date.now() - 3 * 60 * 60 * 1000))).toBe(1);
   });
 
   it("compares new feedback with the tutor's own posts from both of their Wise accounts", async () => {

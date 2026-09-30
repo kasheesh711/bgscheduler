@@ -2,6 +2,7 @@ import { getDb, type Database } from "@/lib/db";
 import {
   autowriterAlertEmails,
   autowriterEnabled,
+  autowriterTranscriptFirst,
   autowriterTranscriptsEnabled,
   autowriterWritesAllowedHere,
   openRouterApiKey,
@@ -24,6 +25,8 @@ function productionDeps(db: Database, budgetMs: number): AutowriterDeps {
     // The second pass needs both the switch and a Soniox key; with either missing, nothing is handed over.
     transcriptsEnabled: autowriterTranscriptsEnabled() && Boolean(sonioxApiKey()),
     soniox: sonioxClient(),
+    // Acts only together with the second pass (job.ts checks both).
+    transcriptFirst: autowriterTranscriptFirst(),
   };
 }
 

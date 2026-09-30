@@ -374,15 +374,18 @@ export async function setSonioxTranscription(db: Database, wiseSessionId: string
 const SONIOX_DONE_STATES: readonly AutowriterState[] = [...TERMINAL_STATES, "would_submit"];
 
 /**
- * Rows done with their Soniox job: those above, and rows past their deadline that were never finished (mode
- * `off` skips the expiry step, so they would otherwise keep their job indefinitely) — never a POST in flight or a
- * row being worked on.
+ * Rows done with their Soniox job: those above, rows past their deadline that were never finished (mode `off`
+ * skips the expiry step, so they would otherwise keep their job indefinitely) — never a POST in flight or a row
+ * being worked on — and transcript-first classes that fell back to the summary (`metadata.summaryFallback`), in any
+ * state: the summary path never reads the transcript again, and they cannot hand over again until an owner retry,
+ * which clears the flag.
  */
 const doneWithSonioxJob = () => and(
   isNotNull(S.sonioxTranscriptionId),
   or(
     inArray(S.state, [...SONIOX_DONE_STATES]),
     and(lt(S.deadlineAt, nowSql), notInArray(S.state, ["posting", "awaiting_event", "generating"])),
+    sql`${S.metadata} ? 'summaryFallback'`,
   ),
 );
 
@@ -438,7 +441,8 @@ export async function noteSonioxRecorded(db: Database, wiseSessionId: string, tr
  * next), a transcript waiting briefly for Zoom's names (it goes ahead on its
  * own), or an infra retry (the recording may well be there) — including a failed
  * Wise read, which since v4 also sends an older version's transcript draft back
- * to wait here while it is written again.
+ * to wait here while it is written again. Nor for a class handed over by
+ * transcript first: it falls back to the summary at the same point instead.
  */
 export async function flagNoRecording(db: Database, endedBefore: Date, disabledTutors: readonly string[] = []): Promise<number> {
   const rows = await db.update(S).set({
@@ -448,6 +452,7 @@ export async function flagNoRecording(db: Database, endedBefore: Date, disabledT
     inArray(S.state, ["awaiting_recording", "transcribing"]),
     lt(S.scheduledEndAt, endedBefore),
     sql`coalesce(${S.reason}, '') not in ('recording_too_short', 'zoom_transcript_pending', 'wise_read_failed') and coalesce(${S.reason}, '') not like 'infra:%'`,
+    sql`coalesce(${S.metadata} ->> 'handover', '') <> 'transcript_first'`,
     disabledTutors.length > 0
       ? or(isNull(S.wiseTeacherUserId), notInArray(S.wiseTeacherUserId, [...disabledTutors]))
       : undefined,
@@ -504,14 +509,15 @@ export async function expireOverdueRows(db: Database, input: {
 /** Shadow drafts become eligible again when the owner switches to live. */
 export async function requeueShadowDrafts(db: Database, minDeadline: Date): Promise<number> {
   // Back to work. A judged transcript draft of the current prompt and judge versions is posted as it is, never
-  // re-read: its transcript's review window keeps running. Any other draft may transcribe again (an older version's
-  // is written and judged again: `reusableTranscriptDraft` in job.ts), so its window starts again when it is next done.
+  // re-read: its transcript's review window keeps running, as does a class that fell back to the summary (it never
+  // reads its transcript again). Any other draft may transcribe again (an older version's is written and judged
+  // again: `reusableTranscriptDraft` in job.ts), so its window starts again when it is next done.
   const rows = await db.update(S).set({
     state: "pending",
     nextAttemptAt: null,
-    metadata: sql`case when ${S.metadata} ->> 'draftEvidence' = 'transcript' and ${S.metadata} -> 'judge' ->> 'faithful' = 'true'
+    metadata: sql`case when (${S.metadata} ->> 'draftEvidence' = 'transcript' and ${S.metadata} -> 'judge' ->> 'faithful' = 'true'
         and ${S.metadata} -> 'pipeline' ->> 'promptVersion' = ${String(PROMPT_VERSION)}
-        and ${S.metadata} -> 'pipeline' ->> 'judgeVersion' = ${String(JUDGE_PROMPT_VERSION)}
+        and ${S.metadata} -> 'pipeline' ->> 'judgeVersion' = ${String(JUDGE_PROMPT_VERSION)}) or ${S.metadata} ? 'summaryFallback'
       then ${S.metadata} - 'triagedAt' else ${S.metadata} - 'sonioxRetainUntil' - 'triagedAt' end`,
     updatedAt: nowSql,
   })
@@ -539,10 +545,12 @@ export async function retryHeldSession(db: Database, wiseSessionId: string, inpu
     leaseUntil: null,
     // A retry starts again on the fast path; it may still hand over to the transcript pass.
     evidence: "summary",
-    // A clean slate: no stale alert, error count, coverage recheck, judged draft (nor its stamp) or review
-    // window carries over (a kept Soniox job, and its submit time, may be re-used).
+    // A clean slate: no stale alert, error count, coverage recheck, judged draft (nor its stamp), review window or
+    // handover — a transcript-first fallback included, so the class may go to the transcript again (a kept Soniox
+    // job, and its submit time, may be re-used).
     metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'genericErrors' - 'recordingShortSeenAt' - 'judge' - 'draftEvidence'
-      - 'pipeline' - 'transcript' - 'handover' - 'sonioxRetainUntil' - 'triagedAt')
+      - 'pipeline' - 'transcript' - 'handover' - 'summaryAtHandover' - 'summaryFallback' - 'sonioxFailure' - 'sonioxRetainUntil'
+      - 'triagedAt')
       || ${JSON.stringify({ retriedBy: input.actor })}::jsonb
       || jsonb_build_object('retriedAt', now()::text, 'retriedFrom', ${S.state}::text)`,
     alertsSent: sql`${S.alertsSent} - 'held' - 'expired'`,
