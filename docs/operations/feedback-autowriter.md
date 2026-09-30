@@ -159,7 +159,8 @@ redeploy, then message the tutors:
 "Transcribing", then posted — about an hour after class, up to about 4 h if the recording is late. With no recording
 3 h after class, a recording in several parts, speakers that cannot be told apart, three Soniox failures, the
 transcript pass switched off, or the writer or its judge failing three times in a row on the transcript draft
-(time-outs, replies that are not JSON), the class goes back to the summary once: the dashboard shows the cause under its state
+(time-outs, replies that are not JSON — not our OpenRouter account's or the network's errors, which keep retrying),
+the class goes back to the summary once: the dashboard shows the cause under its state
 ("No recording after 3 h — from summary", …) and counts them in "Back to the summary". A class still waiting for its
 recording raises no `no_recording` alert (it falls back instead); one still being transcribed 3 h after class
 does. What still needs a person is `held` with its alert as before, including

@@ -242,9 +242,9 @@ pass is on. Off (the default), nothing changes.
   in several parts, speakers it cannot tell apart, three Soniox failures, the transcript pass switched off while
   the class waited, or the models failing on the transcript draft three times in a row (`writer_failed`: the writer
   or its judge timing out, answering with something that is not JSON or from the wrong route — counted in
-  `metadata.writerErrors`, the last one in `writerFailure`; Wise and Soniox errors and the function's own time
-  budget do not count; owner default, 30 Sep). Until then such a failure is retried every 10 minutes on the kept
-  transcript, as before. The row goes back to `pending` with `evidence = summary`, due at once, reason
+  `metadata.writerErrors`, the last one in `writerFailure`, and reset when the models deliver a draft; owner default,
+  30 Sep). Not counted, and retried every 10 minutes as before: Wise and Soniox errors, the function's own time, and
+  our OpenRouter account or connection (a bad key, no credit, rate limited, the network). The row goes back to `pending` with `evidence = summary`, due at once, reason
   `summary_fallback:<cause>` and `metadata.summaryFallback {cause, at}` (the run reports `summary_fallback`), and the
   summary path writes it as before. A transcript draft kept on the row (only possible for a recording that gained a
   second part, or the pass switched off) is dropped with its verdict and stamp. Measured before choosing 3 h (first `RecordingCompletedEvent` − scheduled end,
