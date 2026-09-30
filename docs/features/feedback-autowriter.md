@@ -213,8 +213,9 @@ the class waited 10 minutes or more for its next run.
   used all three retries waits 27–45 s), a summary's worst case no longer posts in the same run either: 215 s are
   left after one such call, 170 s after two.
   A sweep runs its classes one after another and starts a class only while 560 s remain, so one class's waits are
-  time the classes after it do not get. Once a class of a sweep ends still rate limited, the classes after it make
-  no in-run retries in that sweep, and the rows that call no model are started first
+  time the classes after it do not get. Once a class of a sweep ends still rate limited at a stage (the writers'
+  route, or the judge's), the classes after it make no in-run retries at that stage in that sweep, and the rows
+  close to their deadline and those that call no model are started first
   ([below](#hardening-follow-ups-30-sep-night)). A webhook run is one class on its own and always keeps its retries.
 - **What it still means.** Unchanged: a rate limit is never the writer's failure (it does not count toward
   `writer_failed`) and never a reason for the fallback writer. A call still rate limited after its retries ends the
@@ -225,7 +226,9 @@ the class waited 10 minutes or more for its next run.
   of a call are written when the call ends, after the waits, so each rate-limited attempt says itself when its
   request was sent (`result.attemptAt`), the wait OpenRouter asked for when it named one (`retryAfterMs`) and the
   wait that followed (`waitedMs`). Coverage reads "when we started writing" from `attemptAt` before `created_at`, so
-  a tutor's save during the waits is not taken for "the tutor wrote first".
+  a tutor's save during the waits is not taken for "the tutor wrote first". The query casts `attemptAt` only when it
+  is a time in the form we write (`ATTEMPT_AT_PATTERN` in `quality.ts`): a malformed value dates the call by its row
+  instead of failing the day's metrics.
 
 ### Hardening follow-ups (30 Sep, night)
 
@@ -235,34 +238,68 @@ first is switched on. No prompt changed: writer and judge versions stay 5.
 - **A sweep under a lasting rate limit** (`runSweep` in [`job.ts`](../../src/lib/feedback-autowriter/job.ts)). A
   sweep starts a class only in its first 180 s, so waits spent on a limit that does not clear would keep its other
   classes out. Two rules:
-  - *Order.* The rows that call no model are started first: a stored judged transcript draft to post, a class
-    waiting for its recording (or about to submit it to Soniox), a Soniox job that was still running at the last
-    look. Then the rows that may need the writer: a summary to write, a transcript that is ready, a draft whose
-    model call failed. Within each group the most urgent deadline comes first, and a row whose last attempt ended
-    in a model or service failure (reason `infra:…`) comes after every row that has not failed — so one class that
-    keeps failing never takes the front of every sweep. The order is read from the row (its evidence, stored draft,
-    Soniox job and last reason); it is a guess about the next step, not a promise: a job that has finished
-    meanwhile goes on to the writer in the same run.
+  - *Order* (`sweepOrder`). Three groups, in this order:
+    1. **The rows close to their deadline**, whatever they need: the feedback deadline (`deadline_at`) is no more
+       than 3 hours away (`AUTOWRITER_SWEEP_NEAR_DEADLINE_MS`), soonest deadline first. The sweep expires a class 30
+       minutes before its deadline, so these are the classes with at most 2.5 hours of tries left.
+    2. **The rows that call no model**: a stored judged transcript draft to post, a class waiting for its recording
+       or about to submit it to Soniox (no job yet).
+    3. **The rows that may need the writer**: a summary to write, a transcript whose Soniox job exists — ready, or
+       still running at the last look — a draft whose model call failed. A job that was still running may have
+       finished since; its row then calls the writer and both judges in the same run, so it is not in group 2
+       (review fix, 30 Sep night: there it could fill the start window ahead of rows near their deadline).
+
+    Within groups 2 and 3 the most urgent deadline comes first, and a row whose last attempt ended in a model or
+    service failure (reason `infra:…`) comes after every row that has not failed — so one class that keeps failing
+    never takes the front of its group. Rows of group 1 with the same deadline keep that order too, the rows that
+    call no model first; every class's deadline is 23:59 Bangkok, so tonight's classes all share one. The order is
+    read from the row (its deadline, evidence, stored draft and Soniox job); what a row needs is a guess about its
+    next step, not a promise. It decides what is started, not how long each takes: the time the rows in front use
+    is time the rows behind them do not get, so a rate limit or a slow call in group 1 can still delay groups 2 and 3.
   - *Retries.* Once a class ends still rate limited (its call gave up on the limit — after its retries, or at
-    once when the wait did not fit), the classes after it in that sweep make no in-run retries: a rate limit is
-    returned at once, as before the retries existed, and the class retries in 10 minutes. The next sweep starts
-    with retries on again. A webhook run is one class per function and always keeps its retries.
+    once when the wait did not fit), the classes after it in that sweep make no in-run retries **at that stage**: a
+    rate limit there is returned at once, as before the retries existed, and the class retries in 10 minutes. There
+    is one switch per stage (review fix, 30 Sep night): the writers (Sol and the Luna fallback) and the judge are on
+    different routes with limits of their own, so a limit on the writers' route leaves the judge's retries on, and
+    the other way round. The next sweep starts with retries on again. A webhook run is one class per function and
+    always keeps its retries.
 - **A judge that keeps failing on a class.** Judge failures never count toward `writer_failed`; the class retries
   every 10 minutes until its deadline, and an infra retry raises no `no_recording` alert — so it could fail unseen
-  until it expired. Runs in a row that end at the judge stage are now counted (`metadata.judgeErrors`: a judge
-  level timing out, giving no verdict in two tries, rate limited or answering from the wrong route, or no time left
-  to start it), on the summary path and the transcript path alike. The third raises one **`judge_failing`** alert in
-  the digest (the row's reason says what failed, e.g. `infra:judge:high:timeout`). The class retries exactly as
-  before. The alert is sent once per run of failures: the count goes back to zero when the judge answers (a run
-  that ends with a judged draft, posted or kept for the next run), and a later run of three failures alerts again.
-  An alert not yet sent is dropped when the judge answers or the class settles (posted, held, written by the tutor,
-  expired). A failure of the writer says nothing about the judge and leaves the count where it was; an owner
-  `--retry` clears it.
+  until it expired. Runs in a row that end at the judge stage, with no answer of the judge in between, are now
+  counted, on the summary path and the transcript path alike, in two counts with a mark each (review fix, 30 Sep
+  night):
+  - `metadata.judgeErrors` — **the judge's own failures**: a level timing out, giving no verdict in two tries,
+    answering from the wrong route or model, a provider error. **The third** alerts
+    (`AUTOWRITER_JUDGE_ERRORS_ALERT`).
+  - `metadata.judgeUnreached` — **the runs in which the judge could not be asked**: its route rate limited (after
+    the in-run retries), no time left in our own function to start it, or our OpenRouter account or connection
+    refusing the call (no credit, a bad key, the network); `metadata.judgeUnreachedCause` keeps which it was the
+    last time (`rate_limited`, `out_of_time`, `account_or_connection`). They are not the judge's failures and
+    usually pass on their own — a rate limit hits every class at once — so alone they alert only when **both
+    counts together reach six** (`AUTOWRITER_JUDGE_STAGE_ERRORS_ALERT`).
+
+  Either mark raises one **`judge_failing`** alert in the digest. Its text says how many runs and why, and blames
+  the judge model only for its own failures: "not a failure of the judge model: OpenRouter rate limited the judge's
+  route", "… our own function ran out of time before the judge could start", or for a mix "failures of the judge
+  model: 2; not its failure: 4 — the last time, …". The row's reason follows in
+  brackets (e.g. `infra:judge:high:timeout`). The class retries exactly as before.
+  The alert is sent once per run of failures. Both counts go back to zero when the judge answers: a run that ends
+  with a judged draft (posted or kept for the next run), and also a run in which the judges gave their verdict on
+  Sol's draft and the run then failed another way — the Luna fallback failed, or its judge did (the pipeline result
+  says `judgeAnswered`). So "in a row" never spans an answer. A later run of failures that reaches a mark alerts
+  again: `metadata.judgeFailingSince` records when it did, and the digest's relay key carries it for this kind, so
+  the relay does not take the second alert on a class for a repeat of the first (the keys of the other kinds are
+  unchanged). An alert raised outside `live` is recorded, not emailed (`alerts_sent.judge_failing` =
+  `suppressed:<mode>`); if the class is still failing once the autowriter is live, its next failure arms the alert
+  again and it is emailed. An alert not yet sent is dropped when the judge answers or the class settles (posted,
+  held, written by the tutor, expired). A failure of the writer with no verdict in the run says nothing about the
+  judge and leaves the counts where they were; an owner `--retry` clears them.
 - **A wait OpenRouter asks for** ([`openrouter.ts`](../../src/lib/feedback-autowriter/openrouter.ts)): kept as
   described [above](#rate-limits-tried-again-in-the-same-run-30-sep-evening) — never a retry before it, never a
   wait shorter than the schedule's (a `Retry-After` of a second would otherwise spend all three retries at once).
   `Retry-After` is also read on an HTTP 429 whose body is not JSON; a `Retry-After` header that names no time ahead
-  (empty, `0`, a past date) does not hide the one listed with the error; and `X-RateLimit-Reset` is read only from
+  (empty, `0`, a past date) does not hide the one listed with the error; a header sent more than once (it reaches us
+  as one list, `60, 120`) asks for the longest of its waits; and `X-RateLimit-Reset` is read only from
   the error's own header list (`error.metadata.headers`), since a response header of that name may describe another
   limit.
 - **The POST budget comes before the pre-POST reads** ([`submit.ts`](../../src/lib/feedback-autowriter/submit.ts)).
@@ -273,7 +310,9 @@ first is switched on. No prompt changed: writer and judge versions stay 5.
   an unfaithful verdict or stopped the run, the other makes no second try after an unusable reply and no further
   in-run retry of a rate limit. What it holds then is not a failure of its own: if the other level rejected the
   draft, the draft is rejected on that verdict and the fallback writer goes on; if the other level stopped, that
-  stop is the outcome. A call already in flight is not cut off, and a call that fails on its own after the other
+  stop is the outcome. The level is asked before each wait and again after it, so a retry is not sent either when
+  the other level decided while this one was waiting (its record then keeps the wait it made, `waitedMs`). A call
+  already in flight is not cut off, and a call that fails on its own after the other
   level's verdict (a time-out) is still a judge failure, as before. A draft still passes only on a complete verdict
   from both levels.
 
@@ -401,8 +440,8 @@ pass is on. Off (the default), nothing changes.
   provider error — counted in `metadata.writerErrors`, the last one in `writerFailure`; owner decisions, 30 Sep). The
   count starts again when a run ends in a judge failure or with a stored draft — not whenever a writer delivers one:
   a run in which a judge rejects Sol's draft and the Luna fallback then fails ends in a writer failure and counts
-  (owner decision, 30 Sep 17:00). Not counted, and retried every 10 minutes as before: a judge failure (the third in
-  a row on a class raises one `judge_failing` alert, [above](#hardening-follow-ups-30-sep-night)), Wise and Soniox
+  (owner decision, 30 Sep 17:00). Not counted, and retried every 10 minutes as before: a judge failure (a run of
+  them on a class raises one `judge_failing` alert, [above](#hardening-follow-ups-30-sep-night)), Wise and Soniox
   errors, the function's own time, and our OpenRouter account or connection (a bad key, no credit, rate limited, the
   network). The row goes back to `pending` with `evidence = summary`, due at once, reason
   `summary_fallback:<cause>` and `metadata.summaryFallback {cause, at}` (the run reports `summary_fallback`), and the
