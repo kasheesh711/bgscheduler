@@ -118,14 +118,14 @@ describe("evaluateSessionGates", () => {
   });
 
   it("lets a guest who stayed the whole class stand in for a Wise account that shows absent (owner rule)", () => {
-    // Mimi, 29 Sep: the student joined by Zoom link as "Pete Thanasatitkul"; his Wise account shows 0 minutes.
+    // Mimi, 29 Sep: the student joined by Zoom link as a guest under his nickname and surname; his Wise account shows 0 minutes.
     const teacher = { ...sessionDetail().participants[0], inMeetingDuration: 3461 };
-    const account = { wiseUserId: "698c1edeb0e4b23fd5316dfe", name: "Pawin (Pete.Th) Thanasatitkul", isTeacher: false, inMeetingDuration: 0 };
-    const guest = { name: "Pete Thanasatitkul", isTeacher: false, inMeetingDuration: 3246, absolutePercentAttendance: 94 };
+    const account = { wiseUserId: "6a00000000000000000000a1", name: "Wichai (Krit.Ka) Kaewmanee", isTeacher: false, inMeetingDuration: 0 };
+    const guest = { name: "Krit Kaewmanee", isTeacher: false, inMeetingDuration: 3246, absolutePercentAttendance: 94 };
     const standIn = studentParticipants(parse({ participants: [account, guest, teacher] }));
     expect(standIn).toEqual([{
-      wiseUserId: "698c1edeb0e4b23fd5316dfe", name: "Pawin (Pete.Th) Thanasatitkul",
-      inMeetingSeconds: 3246, absolutePercentAttendance: 94, joinedAsGuest: "Pete Thanasatitkul",
+      wiseUserId: "6a00000000000000000000a1", name: "Wichai (Krit.Ka) Kaewmanee",
+      inMeetingSeconds: 3246, absolutePercentAttendance: 94, joinedAsGuest: "Krit Kaewmanee",
     }]);
     expect(evaluateSessionGates(parse({ participants: [account, guest, teacher] }), gateInput)).toEqual({ ok: true });
 

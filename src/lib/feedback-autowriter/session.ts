@@ -312,8 +312,8 @@ export function studentParticipants(detail: AutowriterSessionDetail): Autowriter
 
 /**
  * A one-to-one student who joined through a Zoom link as a guest instead of
- * their Wise account (Mimi, 29 Sep: "Pete Thanasatitkul" 94% while "Pawin
- * (Pete.Th) Thanasatitkul" shows 0 minutes). Owner rule: when the only other
+ * their Wise account (Mimi, 29 Sep: a guest under the student's nickname and
+ * surname at 94% while their Wise account shows 0 minutes). Owner rule: when the only other
  * participant besides the Wise account is one guest, the Wise account attended
  * under the minimum, and the guest and the tutor both stayed at least
  * `AUTOWRITER_GUEST_STUDENT_MIN_PERCENT` of the class, the guest is the student.
