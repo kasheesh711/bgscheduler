@@ -2,12 +2,13 @@
 
 **Status:** live since 2026-09-29, constrained rollout (5 tutors, both of each tutor's Wise accounts). **Code:** [`src/lib/feedback-autowriter/`](../../src/lib/feedback-autowriter/).
 **Runbook:** [`operations/feedback-autowriter.md`](../operations/feedback-autowriter.md). **API:** [`reference/api/feedback-autowriter.md`](../reference/api/feedback-autowriter.md).
-**Dashboard:** `/feedback-autowriter` (nav: Scheduling & Tutors → Feedback Autowriter). Admins see posts, shadow drafts
-and holds with the written text, class-end-to-post latency, model cost and webhook deliveries; only the owner sees the
-mode, pause/resume and per-tutor switches (one per tutor, covering both of their Wise accounts). In-person classes on a
-roster account are skipped at once (Wise type `OFFLINE`) and left out of the dashboard entirely — they stay the
-tutor's to write. The **Quality** and **Review** tabs measure first-shot accuracy, coverage and the expansion gate
-(see [Operating loop: measurement](#operating-loop-measurement-phase-1-migration-0101)); only the owner records verdicts.
+**Dashboard:** `/feedback-autowriter` (nav: Scheduling & Tutors → Feedback Autowriter), described in
+[Dashboard](#dashboard-feedback-autowriter): a to-do list for the owner, the expansion gate and its trends, one row per
+tutor, and every class with its written text in a side drawer. Every admin reads it; only the owner records verdicts,
+acknowledges incidents and sees the mode, pause/resume and per-tutor switches (one per tutor, covering both of their
+Wise accounts). In-person classes on a roster account are skipped at once (Wise type `OFFLINE`) and left out of the
+dashboard entirely — they stay the tutor's to write. What the page measures — first-shot accuracy, coverage and the
+expansion gate — is defined in [Operating loop: measurement](#operating-loop-measurement-phase-1-migration-0101).
 
 Writes a tutor's post-class feedback for **online one-to-one classes** from Wise's AI meeting summary — or, with
 [transcript first](#transcript-first-switch-30-sep) on, from a Soniox transcript of the lesson recording, with the
@@ -262,7 +263,7 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
    clears the stamp, and so does going live for a draft that may transcribe again (a judged transcript draft keeps
    its window); the window starts again when the class is next done. A reviewer finds the job by the row's
    `soniox_transcription_id` (Soniox Console). `metadata.triagedAt` ends the window early: the owner's first
-   accurate verdict on the posted class (Approve, or Needs fix · cosmetic) writes it (Review tab), and the next sweep
+   accurate verdict on the posted class (Approve, or Needs fix · cosmetic) writes it (the review drawer), and the next sweep
    deletes the job. A major or critical verdict does not end triage — and re-opens it when it replaces an earlier
    Approve: the transcript stays for the root-cause work until the 72 h window closes. A delete that fails keeps the job
    id so the sweep retries it, and the sweep also
@@ -434,7 +435,7 @@ policy: nickname") as **`policy`** posts — a naming rule made after the post, 
 — and the owner-approved corrections of 30 Sep (`metadata.corrections[]` = `{fields, reason, fromSha256, toSha256, at,
 by}`, by `script:correct-posts (kevhsh7@gmail.com)`) as **`correction`** posts, which are fixes.
 
-**Verdicts** (`feedback_autowriter_verdicts`, append-only, Review tab, owner only). Approve, or Needs fix with a
+**Verdicts** (`feedback_autowriter_verdicts`, append-only, the review drawer, owner only). Approve, or Needs fix with a
 severity the owner must choose (there is no default) — `cosmetic` (still counts as accurate), **major** (stored as
 `factual`; a real fix), `critical` (with a category: wrong person, billing/status, invented content, should not have
 posted). A verdict is pinned to what the page showed — the first shot's `fields_sha256`, the class's current verdict
@@ -520,7 +521,7 @@ name or tutor (`missing_student_or_tutor`) are misses. The job recomputes every 
 70%, no flagged post waiting for review, **no required post still unreviewed** (the gate never counts a hand-picked
 subset) and every posted first shot recorded (a POST still settling counts as not recorded yet); `head_start` =
 lower bound ≥ 70%; otherwise `below_head_start`, `insufficient_data` (nothing reviewed) or `blocked_critical`. The
-Quality tab evaluates it live with the same SQL as the job; the job writes one append-only `daily` row per Bangkok
+dashboard evaluates it live with the same SQL as the job; the job writes one append-only `daily` row per Bangkok
 date (from 22:00 Bangkok, else for yesterday), but only from a run in which every earlier step succeeded and whose
 Wise activity mirror — checked before the run read it — synced within 30 minutes and reached known events (not its
 page cap); otherwise the date waits for a later run (it stays due until 21:59 the next day) and the run records why
@@ -534,18 +535,79 @@ gate window → write the daily gate row (see above) → push the incidents this
 `FEEDBACK_AUTOWRITER_ALERT_EMAILS`, LINE to `FEEDBACK_AUTOWRITER_LINE_TO` when set, with a 10 s timeout; delivery
 tracked per recipient, retried up to 5 times, and never started when the 300 s function could be cut off mid-push).
 An undelivered critical incident — one whose pushes gave up, or one that is due and never got its turn — keeps the
-run red until the owner acknowledges it on the Quality tab. Single-flight through
+run red until the owner acknowledges it on the dashboard (What needs you → Incidents → Open). Single-flight through
 `feedback_autowriter_review_runs`; paused with the autowriter.
 
-**Dashboard.** *Overview* is the existing view. *Quality*: the gate badge, each criterion against its threshold, the
-lower-bound bar marked at 70% and 80%, the coverage breakdown, fix rounds per post, daily and per-tutor tables
-("Texts in Wise" per tutor), incidents with an owner-only Acknowledge, and the job's last run. *Review*: filters (needs
-review / flagged / all, counted exactly; every flagged and unreviewed class is always listed, then the latest reviewed
-ones); each class shows the immutable first shot ("recorded at post" or "reconstructed · hash-verified", and a warning
-when it landed without verifying) next to the current text (the last verified correction, or what Class Feedback last
-read from Wise if newer) with a word diff, the saves measured in Wise by actor, corrections, open flags and the
-verdict log. Owner-only Approve / Needs fix controls; other admins read. Before migration 0101 the tabs say the review
-tables are missing; any other load failure says so (and is logged by name and SQLSTATE).
+## Dashboard (`/feedback-autowriter`)
+
+One scrolling page that answers, in this order: **what needs the owner**, **are we getting better**, **who is next**.
+It replaces the nine number cards and the Overview / Quality / Review tabs (redesign PR 1; design of 30 Sep in
+[`docs/superpowers/specs/2026-09-30-autowriter-dashboard-redesign-design.md`](../superpowers/specs/2026-09-30-autowriter-dashboard-redesign-design.md),
+mockup A beside it). Nothing the tabs showed was dropped; the last table below says where each item went. The hold
+tracker, the forward-scan decisions and the expansion candidates (PRs 2–4 of that design) add their parts when their
+data exists: until then there is no "tutor told" time, no Decisions group and no "Next in line" section.
+
+| Part | What it shows | Read from |
+|---|---|---|
+| **System line** | Mode (and Halted); writer, fallback writer and judge with their reasoning efforts; "Transcript first" and "Second pass" on/off as they act; prompt and judge versions (the commit as a tooltip); the review job's last run and its status; the last Wise webhook. The owner's **Controls** menu (mode, Pause, Resume) sits at its end, and the red "Posting is halted" banner directly under it, with Resume on it | `dashboard.control`, `dashboard.system` ([`system-status.ts`](../../src/lib/feedback-autowriter/system-status.ts)), `review.lastRun`, `dashboard.webhooks` |
+| **What needs you** (left, two thirds) | The to-do list, in groups that appear only when they have items: **Incidents** (critical, not acknowledged) → **Held** → **To review** (flagged posts first, then required posts without a verdict) → **Failed posts**. One action per row: Review or Open. A row never carries the feedback itself | [`buildInbox`](../../src/lib/feedback-autowriter/inbox.ts), run in the browser on the two payloads the page already has |
+| **Pilot health** (right, one third) | The gate as one sentence ([`gateSentence`](../../src/lib/feedback-autowriter/gate-sentence.ts): "Gate blocked until 13 Oct: critical on 29 Sep."), only the criteria that are not met, the lower-bound bar marked at 70% and 80%; accuracy and coverage over the gate's 14 days (daily points, 7-day line, current figure with its counts); and the **Today** line: posted · waiting for a recording · held · tutor wrote first · out of scope, for the classes ending today in Bangkok | `review.gate`, `review.daily`, `dashboard.today` |
+| **Trends** (2 × 2) | Accuracy and the gate (daily points, 7-day average, rolling 14-day Wilson lower bound, the 80% bar, a red marker on a day with a critical verdict) · Coverage (with the 70% floor) · Speed and cost (median minutes from class end to the post on the left axis, cost per posted class on the right) · Evidence and models (classes posted from the transcript and from the summary, the 7-day transcript share; writer share and holds by reason category below). A day without data is a gap, never a zero | `GET /api/feedback-autowriter/trends` ([`trends.ts`](../../src/lib/feedback-autowriter/trends.ts)) |
+| **Tutors** | One row per roster tutor: accuracy (accurate / reviewed), Wilson lower bound, coverage (posted / eligible), holds (held in the window / still open), real fixes and critical verdicts, review phase, and the status with the owner's On/Off switch | `dashboard.tutors` joined to `review.tutors` by `tutorKey` |
+| **Details** (collapsed) | **All classes** (the recent classes, every held class, and the review data's older posts; filters for review status, state, tutor and evidence) · By day · The gate in full (every criterion against its threshold) · By tutor (raw counts) · Totals, cost and speed · Wise webhooks · Incidents and the review job's last run | both payloads |
+| **Drawer** | Whatever a row opens, in a right-hand sheet: a **review** (the immutable first shot — "recorded at post" or "reconstructed · hash-verified", with a warning when it landed without verifying — next to the current text with a word diff, the saves measured in Wise by actor, corrections, open flags, the verdict log, and the owner's Approve / Needs fix form), a **hold** (the reason in plain words from [`hold-reasons.ts`](../../src/lib/feedback-autowriter/hold-reasons.ts), the deadline countdown, the stored draft and the judge's problems when the page has them, when the alert was emailed), a **failed post**, an **incident** (with the owner's Acknowledge), or any other class of the log | the page's current payloads |
+
+**Who can do what.** Every admin sees the whole page. Only the owner gets the Controls menu, the tutor switches, the
+verdict form and Acknowledge; everyone else reads, and is told so ("Only the owner records verdicts.").
+
+**Held classes.** `dashboard.holds[]` lists every class in state `held`, whatever its age. `resolvedBy` is
+`"tutor_wrote"` once the fix events hold a person's feedback save on the class — by the class's tutor, the owner in
+the Wise web app, or other staff; never a student, Wise's auto-submission, or a save by our API user
+(`loadHeldClassesAPersonWrote` in [`dashboard.ts`](../../src/lib/feedback-autowriter/dashboard.ts); the hourly review
+job derives those events, so a save shows up within the hour). The to-do list shows a hold only while it still waits
+for someone (`isOpenHold`): nobody has written it, and its deadline is ahead or passed less than 24 hours ago. It is
+amber with under 24 hours to the deadline and red with under 6 (or past it). The row stays `held` either way, so
+every hold remains in All classes.
+
+**Ranges.** The 14 / 30 / 90-day selector drives the four charts and their totals only. Everything that comes from
+the review payload — the health rail, the tutor table, and the chart footers for fix rounds, review counts, misses and
+exclusions — covers the gate's 14 days and says so. Every 7-day value is pooled (numerators and denominators summed
+over the date and the six before it, then divided). The review job recomputes only the last 15 dates each hour, so
+for longer ranges the trends loader recomputes accuracy from the review rows and their current verdicts; coverage for
+older dates comes from the stored rows. While history is shorter than the range the section says since when, and
+under 7 days that the 7-day lines cover only the days there are.
+
+**The tutor filter.** A click on a tutor's row narrows the to-do list (in the browser) and the All classes log, reloads
+the trends for that tutor, and highlights the row; the "Showing <tutor> ×" chip clears it. An item that belongs to no
+tutor (a halt, an incident on a class the page does not hold) stays in every tutor's list. The health rail, and the
+chart footers that come from the review payload, stay the whole pilot's and say "all tutors".
+
+**Loading and polling.** The page's server component loads the dashboard (last 7 days), the review data and the
+trends (14 days, all tutors) in parallel. In the browser the dashboard is polled every 60 seconds (abortable,
+sequenced), the review data every 5 minutes and after each action, and the trends when the range or the tutor filter
+changes. After a verdict or an acknowledgement goes through, the page reloads and the drawer closes; a stale page
+(HTTP 409) reloads the item and keeps the drawer open on its error.
+
+**When data is missing.** Before migration 0101, or when the review data fails to load, the to-do list keeps the held
+classes and the failed posts, and the health rail and the trends say why (the two cases read differently; a failure is
+logged by error name and SQLSTATE). When only the trends fail, the trends area says so and the rest of the page is
+unaffected.
+
+**Visual check.** `node scripts/dev/render-autowriter-dashboard.mjs` bundles the page with the made-up fixtures of
+`src/components/feedback-autowriter/__tests__/fixtures.ts`, compiles the stylesheet, and screenshots it with headless
+Chrome into the git-ignored `.feedback-autowriter/preview/` (`dashboard-owner.png`, `dashboard-admin.png`,
+`dashboard-empty.png`, and the drawer on each kind of item), for comparing with the mockup. It needs no server and no
+database.
+
+| Before the redesign | Now |
+|---|---|
+| Nine number cards | The Today line; the speed-and-cost and evidence-and-models charts; Details → Totals, cost and speed |
+| Tutors table (Overview) and By tutor (Quality) | The tutor table; Details → By tutor for the raw counts |
+| Expansion gate card and its criteria | The gate card and the accuracy chart; Details → The gate in full |
+| Coverage and fix-round chips | The chart footers |
+| Review tab | The To review group and the review drawer; older reviewed posts through Details → All classes |
+| Incidents list | The Incidents group (open ones); Details → Incidents and the review job (all of them) |
+| Recent classes, cost, webhooks, daily tables | Details |
 
 ## Costs
 

@@ -311,9 +311,10 @@ else is written again by GLM. No data change is needed.
 
 ## 9. Reviewing posts (operating loop)
 
-`/feedback-autowriter` → **Review**. "Needs review" lists every required post without a verdict (every post while
-the tutor's cohort has not passed a gate); the counts are exact, and every flagged or unreviewed class is always in
-the list. Judge the **first shot** (left), not the current text: Approve, or Needs fix with a severity you must pick —
+`/feedback-autowriter` → **What needs you → To review** → Review. The group lists every flagged post, then every
+required post without a verdict (every post while the tutor's cohort has not passed a gate); posts already reviewed
+are under Details → All classes, where the "Needs review" and "Flagged" counts are exact. The post opens in a drawer.
+Judge the **first shot** (left), not the current text: Approve, or Needs fix with a severity you must pick —
 cosmetic still counts as accurate; **major** is a real fix; critical needs a category, blocks the gate and pushes an
 alert. A verdict can be replaced by recording a new one (the log keeps both). A verdict judges the first shot as
 posted: replacing a harsher judgement with a milder one (critical → anything else, major → cosmetic or Approve) is a
@@ -321,22 +322,24 @@ downgrade — confirm it and write why in the note. After a fix on a class you j
 recording major again, not Approve. If the page says "New activity since you loaded this class", a verdict or a flag
 arrived meanwhile — the class reloads; look again before recording.
 
-A class flagged by a measured fix (someone saved it in Wise after our post, before your Approve) stays in "Flagged"
-until a verdict answers it; the gate cannot pass while one waits, nor while a required post is unreviewed. A save
+A class flagged by a measured fix (someone saved it in Wise after our post, before your Approve) stays in "To review",
+marked Flagged, until a verdict answers it; the gate cannot pass while one waits, nor while a required post is unreviewed. A save
 after your Approve is listed ("after approval — not counted") and raises no flag. A first shot that landed without
 verifying (credits or status changed, text mismatch, unknown outcome) is flagged critical: open the class in Wise and
 judge what is there. An Approve or a cosmetic fix ends the class's Soniox review window; a major or critical verdict
 keeps the transcript (and re-opens a window an earlier Approve ended, if the sweep has not deleted it yet) until the
 72 h window closes.
 
-**Quality** shows the gate, computed exactly as the nightly row. The review job runs hourly at :27 (Data Health →
-Feedback Autowriter Review; manual run owner-only). The daily gate row is written from 22:00 Bangkok by the first run
-in which every step succeeded and the Wise activity sync is fresh (≤ 30 min, and not stopped at its page cap);
-otherwise the Quality tab says why ("nightly gate not recorded yet") and a later run writes it. An unexplained API
+**Pilot health** (the rail on the right) shows the gate as one sentence, computed exactly as the nightly row, with the
+criteria that are not met; every criterion is under Details → The gate in full. The review job runs hourly at :27
+(Data Health → Feedback Autowriter Review; manual run owner-only). The daily gate row is written from 22:00 Bangkok by
+the first run in which every step succeeded and the Wise activity sync is fresh (≤ 30 min, and not stopped at its page
+cap); otherwise Details → Incidents and the review job says why ("nightly gate not recorded yet") and a later run
+writes it. An unexplained API
 write (`api_actor_unmatched`, critical) blocks the gate until you acknowledge it — find out who wrote to Wise with
 the API key first. Incidents: `critical_verdict`, `critical_flag` /
 `credit_entries_changed` (a post landed without verifying) and `api_actor_unmatched` (an API save no recorded post
 explains — check who wrote to Wise with the API key) are pushed; `first_shot_unverified` is shown only (critical when
 the post did not verify) — run the backfill script to prove it, or confirm by hand what was posted. A critical
-incident that was not delivered keeps the review job red (Data Health) until you **Acknowledge** it on the Quality tab
-(its pushes stop too).
+incident that was not delivered keeps the review job red (Data Health) until you **Acknowledge** it (What needs you →
+Incidents → Open; its pushes stop too).

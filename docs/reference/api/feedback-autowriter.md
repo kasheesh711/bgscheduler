@@ -1,6 +1,6 @@
 # API — Feedback Autowriter
 
-Eight method/path endpoints. Meaning, rules and the state machine live in [the feature page](../../features/feedback-autowriter.md); day-to-day operation in [the runbook](../../operations/feedback-autowriter.md).
+Nine method/path endpoints. Meaning, rules and the state machine live in [the feature page](../../features/feedback-autowriter.md); day-to-day operation in [the runbook](../../operations/feedback-autowriter.md).
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
@@ -9,7 +9,8 @@ Eight method/path endpoints. Meaning, rules and the state machine live in [the f
 | `GET` | `/api/feedback-autowriter` | admin session (page scope via the proxy) | Dashboard payload. |
 | `POST` | `/api/feedback-autowriter/control` | owner only (`requireClassroomOperationsOwner`) | Mode, pause/resume and per-tutor switches. |
 | `GET` | `/api/internal/feedback-autowriter/review` | cron secret | Operating-loop review job, `27 * * * *`. Also runnable by the owner from Data Health. |
-| `GET` | `/api/feedback-autowriter/review` | admin session (page scope via the proxy) | Quality and Review tabs payload. |
+| `GET` | `/api/feedback-autowriter/review` | admin session (page scope via the proxy) | Quality and review payload: the gate, coverage, daily and per-tutor rows, the review queue, incidents. |
+| `GET` | `/api/feedback-autowriter/trends` | admin session (page scope via the proxy) | Daily trend series for a range and a tutor. |
 | `POST` | `/api/feedback-autowriter/verdicts` | owner only (`requireClassroomOperationsOwner`) | Records a verdict on a class's first shot. |
 | `POST` | `/api/feedback-autowriter/incidents` | owner only (`requireClassroomOperationsOwner`) | Acknowledges an incident (stops its pushes; an undelivered critical one stops keeping the review job red). |
 
@@ -35,7 +36,16 @@ Runs `runAutowriterJob()` with a 740-second budget: reconcile `posting`/`awaitin
 
 ## `GET /api/feedback-autowriter`
 
-[`src/app/api/feedback-autowriter/route.ts`](../../../src/app/api/feedback-autowriter/route.ts). Query `days` = `1`, `7` or `30` (anything else falls back to `7`). Returns the `AutowriterDashboard` built by [`loadAutowriterDashboard`](../../../src/lib/feedback-autowriter/dashboard.ts): control row, totals by state, class-end-to-POST latency, cost by model and by Bangkok day, per-tutor rows, the 60 most recent classes with the written fields, and the last 24 hours of webhook deliveries.
+[`src/app/api/feedback-autowriter/route.ts`](../../../src/app/api/feedback-autowriter/route.ts). Query `days` = `1`, `7` or `30` (anything else falls back to `7`; the page asks for `7`). Returns the `AutowriterDashboard` built by [`loadAutowriterDashboard`](../../../src/lib/feedback-autowriter/dashboard.ts):
+
+- `control` (mode, halt, switched-off accounts) and `system` (writer, fallback writer and judge with their efforts, the evidence switches as they act, prompt and judge versions, commit);
+- `today`: the classes ending today in Bangkok by where they stand;
+- `holds`: every class in state `held`, whatever its age (up to 500, soonest deadline first), each with its reason, deadline, alert time, whether a draft is stored, and `resolvedBy` — `"tutor_wrote"` once `feedback_autowriter_fix_events` holds a person's save on the class (`tutor`, `owner_web` or `other_staff`), else `null` (always `null` before migration 0101). The draft's text is not in this list;
+- `failedPosts`: the window's classes in `verify_failed`, `unknown_outcome` or `rejected`;
+- for the window: totals by state, class-end-to-POST latency (overall and by evidence route), transcript-first fallbacks by cause, cost by model and by Bangkok day, per-tutor rows, and the 60 most recent classes with the written fields and the judge's problems;
+- the last 24 hours of webhook deliveries.
+
+In-person classes are left out everywhere.
 
 **Responses:** `200` · `401` · `500 { error }`.
 
@@ -48,7 +58,7 @@ Runs `runAutowriterJob()` with a 740-second budget: reconcile `posting`/`awaitin
 | `{ "action": "mode", "mode": "off" \| "shadow" \| "live" }` | Sets the mode. Going `live` re-queues shadow drafts whose deadline is still outside the margin and returns their count as `requeued`. |
 | `{ "action": "pause", "reason": "…" }` | Sets the global halt (`halt_reason` = `paused by <email>: <reason>`). |
 | `{ "action": "resume" }` | Clears the halt. |
-| `{ "action": "tutor", "wiseUserId": "<24 hex>", "enabled": boolean }` | Adds or removes a roster tutor from `disabled_tutors`; non-roster ids get `400`. |
+| `{ "action": "tutor", "wiseUserIds": ["<24 hex>", …], "enabled": boolean }` | Adds or removes roster accounts (1 to 20; the dashboard sends every account of one tutor) from `disabled_tutors`; a non-roster id gets `400`. |
 
 **Responses:** `200 { ok: true, requeued, control }` · `400` (bad JSON, bad body, non-roster tutor) · `401` · `403 "Only Kevin can change the feedback autowriter."` · `500`.
 
@@ -62,9 +72,22 @@ Runs `runAutowriterReviewJob()` ([`review-job.ts`](../../../src/lib/feedback-aut
 
 ## `GET /api/feedback-autowriter/review`
 
-[`src/app/api/feedback-autowriter/review/route.ts`](../../../src/app/api/feedback-autowriter/review/route.ts). Returns the `AutowriterReview` built by [`loadAutowriterReview`](../../../src/lib/feedback-autowriter/review-data.ts) (`available: true`): the live gate over the rolling 14 Bangkok days, computed by the same SQL as the nightly row (`loadGateFacts`); coverage breakdown; fix-round histogram; daily and per-tutor rows; the review queue — every flagged and every unreviewed required class, then the latest others up to 300 — with exact `queueTotals`, each item carrying the first shot (and its outcome), current text, word diff, measured saves (`counted` or listed after the Approve), corrections, verdict log and open flags (with ids, for the verdict's pins); and incidents (recent ones plus every unacknowledged undelivered critical one). In-person classes are left out.
+[`src/app/api/feedback-autowriter/review/route.ts`](../../../src/app/api/feedback-autowriter/review/route.ts). Returns the `AutowriterReview` built by [`loadAutowriterReview`](../../../src/lib/feedback-autowriter/review-data.ts) (`available: true`): the live gate over the rolling 14 Bangkok days, computed by the same SQL as the nightly row (`loadGateFacts`), with `blockedUntil` (the latest critical class's Bangkok date plus 14 days, or `null`); coverage breakdown; fix-round histogram; daily rows; per-tutor rows (with each tutor's critical verdicts in the window); the review queue — every flagged and every unreviewed required class, then the latest others up to 300 — with exact `queueTotals`, each item carrying the first shot (and its outcome), current text, word diff, measured saves (`counted` or listed after the Approve), corrections, verdict log and open flags (with ids, for the verdict's pins); and incidents (recent ones plus every unacknowledged undelivered critical one). In-person classes are left out.
 
 **Responses:** `200` · `200 { available: false, reason: "review_tables_missing" }` before migration 0101 (an optional table, not a failure) · `401` · `403` (not an admin) · `500 { error }` for any other failure (logged by error name and SQLSTATE only).
+
+## `GET /api/feedback-autowriter/trends`
+
+[`src/app/api/feedback-autowriter/trends/route.ts`](../../../src/app/api/feedback-autowriter/trends/route.ts). Query:
+
+| Parameter | Rule |
+|---|---|
+| `days` | `14`, `30` or `90`; default `14` |
+| `tutor` | `*` for all tutors (the default), or a roster tutor's key (the `tutorKey` of the dashboard's tutor rows) |
+
+Returns the `AutowriterTrends` built by [`loadAutowriterTrends`](../../../src/lib/feedback-autowriter/trends.ts): the `range` (Bangkok dates, ending today), `since` (the first date with any data among those read, or `null`), one entry per date in `days` — reviewed and accurate counts, accuracy, its pooled 7-day value and the rolling 14-day Wilson lower bound, critical verdicts, posted and eligible counts with coverage and its 7-day value, the median minutes from class end to the POST claim and its 7-day value, cost and cost per posted class, classes posted from the summary and from the transcript with the 7-day transcript share, and posts by writer — and `totals` over the range (with p90 minutes and the held classes by reason category). A date without data has `null` ratios, never zeros. Every date is the Bangkok date of the class's scheduled end. Coverage comes from the stored daily metrics; accuracy is recomputed from the review rows and their current verdicts. Reads our database only.
+
+**Responses:** `200` · `400` (a range other than 14, 30 or 90, or a key that is not a roster tutor's) · `401` · `403` (not an admin) · `500 { error }` (any load failure, the review tables of migration 0101 missing included; logged by error name and SQLSTATE only).
 
 ## `POST /api/feedback-autowriter/verdicts`
 
