@@ -24,15 +24,15 @@ describe("student names", () => {
   it("calls the student by their nickname", () => {
     // Always the nickname (before the dot in the brackets), however the summary names the student.
     expect(chooseStudentDisplayName(STUDENT_NAME)).toBe("Tom");
-    expect(chooseStudentDisplayName("Worawut (Bas.Ho) Horburapa")).toBe("Bas");
-    expect(chooseStudentDisplayName("Avarin (Ava.Si) Sirithienthong")).toBe("Ava");
-    expect(chooseStudentDisplayName("Prannatee (Keene.Ka) Karnchanapoo")).toBe("Keene");
+    expect(chooseStudentDisplayName("Narong (Tae.Sr) Srisuk")).toBe("Tae");
+    expect(chooseStudentDisplayName("Kanya (Kan.Su) Suksai")).toBe("Kan");
+    expect(chooseStudentDisplayName("Siriporn (Nicky.Wo) Wongsa")).toBe("Nicky");
     // No nickname in the Wise name, or odd bracket contents: the first name.
     expect(chooseStudentDisplayName("Somchai Jaidee")).toBe("Somchai");
     expect(chooseStudentDisplayName("Somchai (.Ja) Jaidee")).toBe("Somchai");
     expect(chooseStudentDisplayName("Somchai (Tom Ja) Jaidee")).toBe("Somchai");
     expect(chooseStudentDisplayName("Somchai (K.Ja) Jaidee")).toBe("Somchai");
-    expect(chooseStudentDisplayName("Thanyapat (Baikao.Na) Natarue")).toBe("Baikao");
+    expect(chooseStudentDisplayName("Kanokwan (Namwan.Ja) Jaidee")).toBe("Namwan");
   });
 });
 
@@ -87,12 +87,12 @@ describe("buildFeedbackMessages", () => {
 
 describe("redacting a guest name that stood in for the student", () => {
   it("hides the guest name as the same student, [STUDENT_1]", () => {
-    const names = { studentFullName: "Pawin (Pete.Th) Thanasatitkul", studentAliases: ["Pete Thanasatitkul"], tutorNames: [] };
-    expect(redactForModel("Pete Thanasatitkul joined late. Thanasatitkul answered well; Pete asked about ratios.", names))
+    const names = { studentFullName: "Wichai (Krit.Ka) Kaewmanee", studentAliases: ["Krit Kaewmanee"], tutorNames: [] };
+    expect(redactForModel("Krit Kaewmanee joined late. Kaewmanee answered well; Krit asked about ratios.", names))
       .toBe("[STUDENT_1] joined late. [STUDENT_1] answered well; [STUDENT_1] asked about ratios.");
     // A guest name unrelated to the Wise name is the same student too — never [STUDENT_2].
     const sibling = redactForModel("Mali Jaidee answered, and Mali checked the ratio.",
-      { studentFullName: "Pawin (Pete.Th) Thanasatitkul", studentAliases: ["Mali Jaidee"], tutorNames: [] });
+      { studentFullName: "Wichai (Krit.Ka) Kaewmanee", studentAliases: ["Mali Jaidee"], tutorNames: [] });
     expect(sibling).toBe("[STUDENT_1] answered, and [STUDENT_1] checked the ratio.");
     // Device words and one-letter words in a guest name leave the lesson text alone.
     expect(redactForModel("We used a Zoom whiteboard on the iPad.", { ...names, studentAliases: ["Zoom user", "A"] }))
@@ -352,7 +352,7 @@ describe("otherPeopleNamed", () => {
 
   it("leaves out a two-letter nickname only as itself: a longer name starting with it is someone else", () => {
     // Shaped like the 29 Sep summary, for a student called "Ma" and another student whose name starts with "Ma".
-    const student = "Pawin (Ma.Pr) Jaidee";
+    const student = "Chai (Ma.Pr) Jaidee";
     const summary = redact("Kevin expressed concerns about incomplete exam preparation, noting that Marco mentioned only 8 pages " +
       "when there were 10 pages total.", student);
     expect(otherPeopleNamed(summary, student)).toEqual(["Marco"]);

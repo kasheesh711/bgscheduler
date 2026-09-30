@@ -4,9 +4,14 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatBangkokShortDateTime } from "@/lib/bangkok-time";
 import type { AutowriterDashboard } from "@/lib/feedback-autowriter/dashboard";
+import type { AutowriterReview, AutowriterReviewUnavailable } from "@/lib/feedback-autowriter/review-data";
 import { cn } from "@/lib/utils";
+import { FeedbackAutowriterQualityPanel, GATE_STATUS_LABEL } from "./feedback-autowriter-quality-panel";
+import { FeedbackAutowriterReviewQueue } from "./feedback-autowriter-review-queue";
+import { ARM_LABEL } from "./model-labels";
 
 const WINDOWS = [
   { days: 1, label: "24 h" },
@@ -57,6 +62,15 @@ function isDashboard(value: unknown): value is AutowriterDashboard {
   return typeof value === "object" && value !== null && "totals" in value && "control" in value && "recent" in value;
 }
 
+function isReview(value: unknown): value is AutowriterReview {
+  return typeof value === "object" && value !== null && (value as { available?: unknown }).available === true
+    && "gate" in value && "queue" in value && "daily" in value;
+}
+
+function isUnavailable(value: unknown): value is AutowriterReviewUnavailable {
+  return typeof value === "object" && value !== null && (value as { available?: unknown }).available === false;
+}
+
 function usd(value: number | null | undefined): string {
   if (value === null || value === undefined) return "—";
   return value < 0.01 && value > 0 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`;
@@ -105,11 +119,30 @@ function Section({ title, count, children, action }: { title: string; count?: nu
   );
 }
 
-const ARM_LABEL: Record<string, string> = {
-  sol: "GPT-6.1 Sol",
-  luna: "GPT-6 Luna",
-  glm: "GLM Flash",
-};
+function ReviewToolbar({ loading, error, review, onRefresh }: {
+  loading: boolean;
+  error: string | null;
+  review: AutowriterReview | AutowriterReviewUnavailable | null;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading}>{loading ? "Refreshing…" : "Refresh"}</Button>
+      {review?.available ? <span className="text-xs text-muted-foreground">Updated {when(review.generatedAt)}</span> : null}
+      {error ? <span role="status" className="text-xs text-red-700">{error}</span> : null}
+    </div>
+  );
+}
+
+export function ReviewUnavailable({ reason }: { reason: AutowriterReviewUnavailable["reason"] | null }) {
+  return (
+    <p className="rounded-lg border bg-card px-4 py-8 text-center text-sm text-muted-foreground">
+      {reason === "review_tables_missing"
+        ? "Quality data is not available yet (the review tables are created by migration 0101)."
+        : "The quality data could not load. Refresh to try again; if it keeps failing, check the server logs."}
+    </p>
+  );
+}
 
 function modelLabel(model: string): string {
   if (model.startsWith("z-ai/glm")) return "GLM Flash";
@@ -119,11 +152,16 @@ function modelLabel(model: string): string {
   return model;
 }
 
-export function FeedbackAutowriterDashboard({ initialData, canControl }: {
+export function FeedbackAutowriterDashboard({ initialData, canControl, initialReview = null }: {
   initialData: AutowriterDashboard;
   canControl: boolean;
+  /** Quality and Review tabs, or why their data is unavailable (migration 0101 not applied, or a load failure). */
+  initialReview?: AutowriterReview | AutowriterReviewUnavailable | null;
 }) {
   const [data, setData] = useState(initialData);
+  const [review, setReview] = useState<AutowriterReview | AutowriterReviewUnavailable | null>(initialReview);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
   const [windowDays, setWindowDays] = useState<number>(initialData.windowDays);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -161,6 +199,29 @@ export function FeedbackAutowriterDashboard({ initialData, canControl }: {
     return () => window.clearInterval(interval);
   }, [load, windowDays]);
 
+  const loadReview = useCallback(async () => {
+    setReviewLoading(true);
+    try {
+      const response = await fetch("/api/feedback-autowriter/review", { cache: "no-store" });
+      const json: unknown = await response.json().catch(() => null);
+      if (response.ok && isUnavailable(json)) {
+        setReview(json);
+        setReviewError(null);
+        return;
+      }
+      if (!response.ok || !isReview(json)) {
+        setReviewError((json as { error?: string } | null)?.error ?? `HTTP ${response.status}`);
+        return;
+      }
+      setReview(json);
+      setReviewError(null);
+    } catch {
+      setReviewError("Could not refresh the review data.");
+    } finally {
+      setReviewLoading(false);
+    }
+  }, []);
+
   const changeWindow = (days: number) => {
     setWindowDays(days);
     void load(days);
@@ -196,6 +257,9 @@ export function FeedbackAutowriterDashboard({ initialData, canControl }: {
 
   const { control, totals } = data;
   const halted = Boolean(control.haltedAt);
+  const loaded = review?.available ? review : null;
+  const unavailableReason = review && !review.available ? review.reason : null;
+  const reviewWaiting = loaded ? loaded.queueTotals.needsReview : 0;
   const modeTone = control.mode === "live"
     ? "border-available/30 bg-available/10 text-available"
     : control.mode === "shadow"
@@ -268,207 +332,237 @@ export function FeedbackAutowriterDashboard({ initialData, canControl }: {
         </div>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-9">
-        <Kpi label="Posted to Wise" value={String(totals.posted)} detail={`${totals.verified} confirmed`} tone="good" />
-        <Kpi label="Shadow drafts" value={String(totals.shadowDrafts)} detail="written, not posted" />
-        <Kpi label="From recording" value={String(totals.awaitingRecording)}
-          detail={`waiting · ${totals.fromTranscript} posted from a transcript`} />
-        <Kpi label="Held for a person" value={String(totals.held)} tone={totals.held > 0 ? "warning" : "default"} />
-        <Kpi label="Tutor wrote first" value={String(totals.skippedHuman)} detail={`${totals.skippedScope} out of scope`} />
-        <Kpi label="Expired / failed" value={`${totals.expired} / ${totals.failed}`} tone={totals.failed > 0 ? "danger" : totals.expired > 0 ? "warning" : "default"} />
-        <Kpi label="Class end → posted" value={minutes(data.latency.medianMinutes)} detail={`p90 ${minutes(data.latency.p90Minutes)} · ${data.latency.samples} posts`} />
-        <Kpi label="Model cost" value={usd(data.cost.totalUsd)} detail={`${usd(data.cost.perDraftUsd)} per draft`} />
-        <Kpi label="Checks" value={`${data.judgeRejections} judged unfaithful`}
-          detail={data.fallbackShare === null ? "no drafts yet" : `${Math.round(data.fallbackShare * 100)}% written by Luna fallback`} />
-      </div>
+      <Tabs defaultValue="overview" className="gap-3">
+        <TabsList variant="line" className="border-b pb-1">
+          <TabsTrigger value="overview" className="px-2.5">Overview</TabsTrigger>
+          <TabsTrigger value="quality" className="px-2.5">
+            Quality
+            {loaded ? <span className="text-[10px] text-muted-foreground">· {GATE_STATUS_LABEL[loaded.gate.status]}</span> : null}
+          </TabsTrigger>
+          <TabsTrigger value="review" className="px-2.5">
+            Review
+            {reviewWaiting > 0 ? <Badge variant="outline" className="ml-1">{reviewWaiting}</Badge> : null}
+          </TabsTrigger>
+        </TabsList>
 
-      <Section title="Tutors" count={data.tutors.length}>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Tutor</TableHead>
-              <TableHead className="text-right">Classes</TableHead>
-              <TableHead className="text-right">Posted</TableHead>
-              <TableHead className="text-right">Shadow</TableHead>
-              <TableHead className="text-right">Held</TableHead>
-              <TableHead className="text-right">Tutor wrote</TableHead>
-              <TableHead className="text-right">Expired</TableHead>
-              <TableHead className="text-right">Failed</TableHead>
-              <TableHead className="text-right">Median to post</TableHead>
-              <TableHead className="text-right">Cost</TableHead>
-              <TableHead>Status</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {data.tutors.map((tutor) => (
-              <TableRow key={tutor.tutorKey}>
-                <TableCell className="font-medium">{tutor.displayName}</TableCell>
-                <TableCell className="text-right">{tutor.seen}</TableCell>
-                <TableCell className="text-right">{tutor.posted}</TableCell>
-                <TableCell className="text-right">{tutor.shadowDrafts}</TableCell>
-                <TableCell className="text-right">{tutor.held}</TableCell>
-                <TableCell className="text-right">{tutor.skippedHuman}</TableCell>
-                <TableCell className="text-right">{tutor.expired}</TableCell>
-                <TableCell className="text-right">{tutor.failed}</TableCell>
-                <TableCell className="text-right">{minutes(tutor.medianLatencyMinutes)}</TableCell>
-                <TableCell className="text-right">{usd(tutor.costUsd)}</TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline" className={tutor.enabled ? "border-available/30 text-available" : "text-muted-foreground"}>
-                      {tutor.enabled ? "On" : tutor.partlyEnabled ? "Partly on" : "Off"}
-                    </Badge>
-                    {canControl ? (
-                      <Button size="xs" variant="ghost" disabled={busy}
-                        onClick={() => void sendControl({ action: "tutor", wiseUserIds: tutor.wiseUserIds, enabled: !tutor.enabled },
-                          `${tutor.enabled ? "Turn off" : "Turn on"} the autowriter for ${tutor.displayName} (both Wise accounts)?`)}>
-                        {tutor.enabled ? "Turn off" : "Turn on"}
-                      </Button>
-                    ) : null}
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Section>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Section title="Class end → posted, by evidence">
-          <Table>
-            <TableHeader><TableRow><TableHead>Written from</TableHead><TableHead className="text-right">Posts</TableHead><TableHead className="text-right">Median</TableHead><TableHead className="text-right">p90</TableHead></TableRow></TableHeader>
-            <TableBody>
-              {data.latency.byRoute.map((entry) => (
-                <TableRow key={entry.route}>
-                  <TableCell>{entry.label}</TableCell>
-                  <TableCell className="text-right">{entry.samples}</TableCell>
-                  <TableCell className="text-right">{minutes(entry.medianMinutes)}</TableCell>
-                  <TableCell className="text-right">{minutes(entry.p90Minutes)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Section>
-        <Section title="Back to the summary (transcript first)" count={data.summaryFallbacks.reduce((sum, entry) => sum + entry.count, 0)}>
-          {data.summaryFallbacks.length === 0 ? (
-            <p className="px-4 py-6 text-center text-sm text-muted-foreground">No class fell back to the summary in this window.</p>
-          ) : (
-            <ul className="space-y-1 px-4 py-3 text-sm">
-              {data.summaryFallbacks.map((entry) => (
-                <li key={entry.cause} className="flex justify-between gap-3"><span>{entry.label}</span><span>{entry.count}</span></li>
-              ))}
-            </ul>
-          )}
-        </Section>
-      </div>
-
-      <Section title="Recent classes" count={data.recent.length}>
-        {data.recent.length === 0 ? (
-          <p className="px-4 py-8 text-center text-sm text-muted-foreground">No classes handled in this window yet.</p>
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Class ended (Bangkok)</TableHead>
-                <TableHead>Tutor</TableHead>
-                <TableHead>Class</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Model</TableHead>
-                <TableHead className="text-right">To post</TableHead>
-                <TableHead className="text-right">Cost</TableHead>
-                <TableHead>Detail</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.recent.map((row) => (
-                <TableRow key={row.wiseSessionId} className="align-top">
-                  <TableCell className="whitespace-nowrap">{when(row.scheduledEndAt)}</TableCell>
-                  <TableCell className="whitespace-nowrap">{row.tutor.replace(/ Online$/u, "")}</TableCell>
-                  <TableCell className="max-w-48 truncate" title={row.className ?? undefined}>{row.className ?? "—"}</TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className={cn("whitespace-nowrap", STATE_TONE[row.state])}>{STATE_LABEL[row.state] ?? row.state}</Badge>
-                    {row.summaryFallback ? (
-                      <div className="mt-1 whitespace-nowrap text-[10px] text-amber-700 dark:text-amber-400">{row.summaryFallback.label}</div>
-                    ) : null}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    {(row.arm && ARM_LABEL[row.arm]) ?? "—"}
-                    {row.evidence === "transcript" ? <span className="ml-1 text-[10px] uppercase text-muted-foreground">· transcript</span> : null}
-                  </TableCell>
-                  <TableCell className="text-right whitespace-nowrap">{minutes(row.latencyMinutes)}</TableCell>
-                  <TableCell className="text-right">{usd(row.costUsd)}</TableCell>
-                  <TableCell className="min-w-64">
-                    <details>
-                      <summary className="cursor-pointer text-xs text-muted-foreground">
-                        {row.reason && !["shadow", "verified"].includes(row.reason) ? row.reason.slice(0, 80) : "View"}
-                      </summary>
-                      <div className="mt-2 space-y-2 text-xs">
-                        {row.fields ? FIELD_LABELS.map(([key, label]) => (
-                          <div key={key}>
-                            <div className="font-medium">{label}</div>
-                            <p className="whitespace-pre-wrap text-muted-foreground">{row.fields?.[key] || "—"}</p>
-                          </div>
-                        )) : <p className="text-muted-foreground">No draft stored.</p>}
-                        {row.judgeUnsupported.length > 0 ? (
-                          <p className="text-amber-700">Judge flagged: {row.judgeUnsupported.join(" · ")}</p>
-                        ) : null}
-                        {row.reason ? <p className="text-muted-foreground">Reason: {row.reason}</p> : null}
-                        {row.wiseUrl ? <a className="text-primary underline" href={row.wiseUrl} target="_blank" rel="noreferrer">Open in Wise</a> : null}
-                      </div>
-                    </details>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </Section>
-
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Section title="Cost by model">
-          <Table>
-            <TableHeader><TableRow><TableHead>Model</TableHead><TableHead>Role</TableHead><TableHead className="text-right">Calls</TableHead><TableHead className="text-right">Cost</TableHead></TableRow></TableHeader>
-            <TableBody>
-              {data.cost.byModel.map((entry) => (
-                <TableRow key={`${entry.role}-${entry.model}`}>
-                  <TableCell title={entry.model}>{modelLabel(entry.model)}</TableCell>
-                  <TableCell className="capitalize">{entry.role}</TableCell>
-                  <TableCell className="text-right">{entry.calls}</TableCell>
-                  <TableCell className="text-right">{usd(entry.costUsd)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Section>
-        <Section title="By day (Bangkok)">
-          <Table>
-            <TableHeader><TableRow><TableHead>Date</TableHead><TableHead className="text-right">Drafts</TableHead><TableHead className="text-right">Posted</TableHead><TableHead className="text-right">Cost</TableHead></TableRow></TableHeader>
-            <TableBody>
-              {data.cost.byDay.map((entry) => (
-                <TableRow key={entry.date}>
-                  <TableCell>{entry.date}</TableCell>
-                  <TableCell className="text-right">{entry.drafts}</TableCell>
-                  <TableCell className="text-right">{entry.posted}</TableCell>
-                  <TableCell className="text-right">{usd(entry.costUsd)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Section>
-        <Section title="Wise webhooks (24 h)">
-          <div className="space-y-3 px-4 py-3 text-sm">
-            <p className="text-muted-foreground">Last delivery: {when(data.webhooks.lastReceivedAt)}</p>
-            <ul className="space-y-1">
-              {data.webhooks.byEvent.map((entry) => <li key={entry.eventName} className="flex justify-between"><span>{entry.eventName}</span><span>{entry.count}</span></li>)}
-            </ul>
-            <div className="border-t pt-2">
-              <div className="mb-1 text-[10px] font-semibold uppercase text-muted-foreground">Outcomes</div>
-              <ul className="space-y-1">
-                {data.webhooks.byOutcome.map((entry) => <li key={entry.outcome} className="flex justify-between"><span>{entry.outcome}</span><span>{entry.count}</span></li>)}
-              </ul>
-            </div>
+        <TabsContent value="overview" className="flex flex-col gap-4">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-9">
+            <Kpi label="Posted to Wise" value={String(totals.posted)} detail={`${totals.verified} confirmed`} tone="good" />
+            <Kpi label="Shadow drafts" value={String(totals.shadowDrafts)} detail="written, not posted" />
+            <Kpi label="From recording" value={String(totals.awaitingRecording)}
+              detail={`waiting · ${totals.fromTranscript} posted from a transcript`} />
+            <Kpi label="Held for a person" value={String(totals.held)} tone={totals.held > 0 ? "warning" : "default"} />
+            <Kpi label="Tutor wrote first" value={String(totals.skippedHuman)} detail={`${totals.skippedScope} out of scope`} />
+            <Kpi label="Expired / failed" value={`${totals.expired} / ${totals.failed}`} tone={totals.failed > 0 ? "danger" : totals.expired > 0 ? "warning" : "default"} />
+            <Kpi label="Class end → posted" value={minutes(data.latency.medianMinutes)} detail={`p90 ${minutes(data.latency.p90Minutes)} · ${data.latency.samples} posts`} />
+            <Kpi label="Model cost" value={usd(data.cost.totalUsd)} detail={`${usd(data.cost.perDraftUsd)} per draft`} />
+            <Kpi label="Checks" value={`${data.judgeRejections} judged unfaithful`}
+              detail={data.fallbackShare === null ? "no drafts yet" : `${Math.round(data.fallbackShare * 100)}% written by Luna fallback`} />
           </div>
-        </Section>
-      </div>
+
+          <Section title="Tutors" count={data.tutors.length}>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Tutor</TableHead>
+                  <TableHead className="text-right">Classes</TableHead>
+                  <TableHead className="text-right">Posted</TableHead>
+                  <TableHead className="text-right">Shadow</TableHead>
+                  <TableHead className="text-right">Held</TableHead>
+                  <TableHead className="text-right">Tutor wrote</TableHead>
+                  <TableHead className="text-right">Expired</TableHead>
+                  <TableHead className="text-right">Failed</TableHead>
+                  <TableHead className="text-right">Median to post</TableHead>
+                  <TableHead className="text-right">Cost</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.tutors.map((tutor) => (
+                  <TableRow key={tutor.tutorKey}>
+                    <TableCell className="font-medium">{tutor.displayName}</TableCell>
+                    <TableCell className="text-right">{tutor.seen}</TableCell>
+                    <TableCell className="text-right">{tutor.posted}</TableCell>
+                    <TableCell className="text-right">{tutor.shadowDrafts}</TableCell>
+                    <TableCell className="text-right">{tutor.held}</TableCell>
+                    <TableCell className="text-right">{tutor.skippedHuman}</TableCell>
+                    <TableCell className="text-right">{tutor.expired}</TableCell>
+                    <TableCell className="text-right">{tutor.failed}</TableCell>
+                    <TableCell className="text-right">{minutes(tutor.medianLatencyMinutes)}</TableCell>
+                    <TableCell className="text-right">{usd(tutor.costUsd)}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className={tutor.enabled ? "border-available/30 text-available" : "text-muted-foreground"}>
+                          {tutor.enabled ? "On" : tutor.partlyEnabled ? "Partly on" : "Off"}
+                        </Badge>
+                        {canControl ? (
+                          <Button size="xs" variant="ghost" disabled={busy}
+                            onClick={() => void sendControl({ action: "tutor", wiseUserIds: tutor.wiseUserIds, enabled: !tutor.enabled },
+                              `${tutor.enabled ? "Turn off" : "Turn on"} the autowriter for ${tutor.displayName} (both Wise accounts)?`)}>
+                            {tutor.enabled ? "Turn off" : "Turn on"}
+                          </Button>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Section>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Section title="Class end → posted, by evidence">
+              <Table>
+                <TableHeader><TableRow><TableHead>Written from</TableHead><TableHead className="text-right">Posts</TableHead><TableHead className="text-right">Median</TableHead><TableHead className="text-right">p90</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {data.latency.byRoute.map((entry) => (
+                    <TableRow key={entry.route}>
+                      <TableCell>{entry.label}</TableCell>
+                      <TableCell className="text-right">{entry.samples}</TableCell>
+                      <TableCell className="text-right">{minutes(entry.medianMinutes)}</TableCell>
+                      <TableCell className="text-right">{minutes(entry.p90Minutes)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </Section>
+            <Section title="Back to the summary (transcript first)" count={data.summaryFallbacks.reduce((sum, entry) => sum + entry.count, 0)}>
+              {data.summaryFallbacks.length === 0 ? (
+                <p className="px-4 py-6 text-center text-sm text-muted-foreground">No class fell back to the summary in this window.</p>
+              ) : (
+                <ul className="space-y-1 px-4 py-3 text-sm">
+                  {data.summaryFallbacks.map((entry) => (
+                    <li key={entry.cause} className="flex justify-between gap-3"><span>{entry.label}</span><span>{entry.count}</span></li>
+                  ))}
+                </ul>
+              )}
+            </Section>
+          </div>
+
+          <Section title="Recent classes" count={data.recent.length}>
+            {data.recent.length === 0 ? (
+              <p className="px-4 py-8 text-center text-sm text-muted-foreground">No classes handled in this window yet.</p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Class ended (Bangkok)</TableHead>
+                    <TableHead>Tutor</TableHead>
+                    <TableHead>Class</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Model</TableHead>
+                    <TableHead className="text-right">To post</TableHead>
+                    <TableHead className="text-right">Cost</TableHead>
+                    <TableHead>Detail</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.recent.map((row) => (
+                    <TableRow key={row.wiseSessionId} className="align-top">
+                      <TableCell className="whitespace-nowrap">{when(row.scheduledEndAt)}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.tutor.replace(/ Online$/u, "")}</TableCell>
+                      <TableCell className="max-w-48 truncate" title={row.className ?? undefined}>{row.className ?? "—"}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className={cn("whitespace-nowrap", STATE_TONE[row.state])}>{STATE_LABEL[row.state] ?? row.state}</Badge>
+                        {row.summaryFallback ? (
+                          <div className="mt-1 whitespace-nowrap text-[10px] text-amber-700 dark:text-amber-400">{row.summaryFallback.label}</div>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {(row.arm && ARM_LABEL[row.arm]) ?? "—"}
+                        {row.evidence === "transcript" ? <span className="ml-1 text-[10px] uppercase text-muted-foreground">· transcript</span> : null}
+                      </TableCell>
+                      <TableCell className="text-right whitespace-nowrap">{minutes(row.latencyMinutes)}</TableCell>
+                      <TableCell className="text-right">{usd(row.costUsd)}</TableCell>
+                      <TableCell className="min-w-64">
+                        <details>
+                          <summary className="cursor-pointer text-xs text-muted-foreground">
+                            {row.reason && !["shadow", "verified"].includes(row.reason) ? row.reason.slice(0, 80) : "View"}
+                          </summary>
+                          <div className="mt-2 space-y-2 text-xs">
+                            {row.fields ? FIELD_LABELS.map(([key, label]) => (
+                              <div key={key}>
+                                <div className="font-medium">{label}</div>
+                                <p className="whitespace-pre-wrap text-muted-foreground">{row.fields?.[key] || "—"}</p>
+                              </div>
+                            )) : <p className="text-muted-foreground">No draft stored.</p>}
+                            {row.judgeUnsupported.length > 0 ? (
+                              <p className="text-amber-700">Judge flagged: {row.judgeUnsupported.join(" · ")}</p>
+                            ) : null}
+                            {row.reason ? <p className="text-muted-foreground">Reason: {row.reason}</p> : null}
+                            {row.wiseUrl ? <a className="text-primary underline" href={row.wiseUrl} target="_blank" rel="noreferrer">Open in Wise</a> : null}
+                          </div>
+                        </details>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </Section>
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            <Section title="Cost by model">
+              <Table>
+                <TableHeader><TableRow><TableHead>Model</TableHead><TableHead>Role</TableHead><TableHead className="text-right">Calls</TableHead><TableHead className="text-right">Cost</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {data.cost.byModel.map((entry) => (
+                    <TableRow key={`${entry.role}-${entry.model}`}>
+                      <TableCell title={entry.model}>{modelLabel(entry.model)}</TableCell>
+                      <TableCell className="capitalize">{entry.role}</TableCell>
+                      <TableCell className="text-right">{entry.calls}</TableCell>
+                      <TableCell className="text-right">{usd(entry.costUsd)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </Section>
+            <Section title="By day (Bangkok)">
+              <Table>
+                <TableHeader><TableRow><TableHead>Date</TableHead><TableHead className="text-right">Drafts</TableHead><TableHead className="text-right">Posted</TableHead><TableHead className="text-right">Cost</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {data.cost.byDay.map((entry) => (
+                    <TableRow key={entry.date}>
+                      <TableCell>{entry.date}</TableCell>
+                      <TableCell className="text-right">{entry.drafts}</TableCell>
+                      <TableCell className="text-right">{entry.posted}</TableCell>
+                      <TableCell className="text-right">{usd(entry.costUsd)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </Section>
+            <Section title="Wise webhooks (24 h)">
+              <div className="space-y-3 px-4 py-3 text-sm">
+                <p className="text-muted-foreground">Last delivery: {when(data.webhooks.lastReceivedAt)}</p>
+                <ul className="space-y-1">
+                  {data.webhooks.byEvent.map((entry) => <li key={entry.eventName} className="flex justify-between"><span>{entry.eventName}</span><span>{entry.count}</span></li>)}
+                </ul>
+                <div className="border-t pt-2">
+                  <div className="mb-1 text-[10px] font-semibold uppercase text-muted-foreground">Outcomes</div>
+                  <ul className="space-y-1">
+                    {data.webhooks.byOutcome.map((entry) => <li key={entry.outcome} className="flex justify-between"><span>{entry.outcome}</span><span>{entry.count}</span></li>)}
+                  </ul>
+                </div>
+              </div>
+            </Section>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="quality" className="flex flex-col gap-3">
+          <ReviewToolbar loading={reviewLoading} error={reviewError} review={review} onRefresh={() => void loadReview()} />
+          {loaded
+            ? <FeedbackAutowriterQualityPanel review={loaded} canControl={canControl} onChanged={loadReview} />
+            : <ReviewUnavailable reason={unavailableReason} />}
+        </TabsContent>
+
+        <TabsContent value="review" className="flex flex-col gap-3">
+          <ReviewToolbar loading={reviewLoading} error={reviewError} review={review} onRefresh={() => void loadReview()} />
+          {loaded
+            ? <FeedbackAutowriterReviewQueue review={loaded} canControl={canControl} onRecorded={loadReview} />
+            : <ReviewUnavailable reason={unavailableReason} />}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

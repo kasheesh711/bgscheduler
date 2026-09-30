@@ -7,7 +7,7 @@ export const STUDENT_TOKEN = "[STUDENT_1]";
 export const TUTOR_TOKEN = "[TUTOR]";
 
 /**
- * Wise student names look like "Kittipat (Sean.As) Assaratnanon". Copied from
+ * Wise student names look like "Somchai (Tom.Ja) Jaidee". Copied from
  * student-schedule/data.ts `parseStudentDisplay` (importing it would pull the
  * DB and live fetchers into this module).
  */
@@ -41,13 +41,13 @@ function exactWord(value: string): RegExp {
 
 /**
  * The name the feedback calls the student by: always their nickname — the
- * part before the dot in the Wise name's brackets, "Worawut (Bas.Ho)
- * Horburapa" → "Bas" (owner decision, 29 Sep) — or the first name when the
+ * part before the dot in the Wise name's brackets, "Somchai (Tom.Ja)
+ * Jaidee" → "Tom" (owner decision, 29 Sep) — or the first name when the
  * Wise name has none.
  */
 export function chooseStudentDisplayName(fullName: string): string {
   const { firstName, nickname } = parseStudentName(fullName);
-  // Only a real one-word nickname ("Bas"); odd bracket contents ("(.Ja)", "(Tom Ja)", "(K.Ja)") use the first name.
+  // Only a real one-word nickname ("Tom"); odd bracket contents ("(.Ja)", "(Tom Ja)", "(K.Ja)") use the first name.
   const usable = nickname !== null && [...nickname].length >= 2 && /^\p{L}[\p{L}\p{M}'-]*$/u.test(nickname);
   return usable ? nickname : firstName;
 }
@@ -62,7 +62,7 @@ export function redactForModel(
   input: { studentFullName: string; tutorNames: readonly string[]; studentAliases?: readonly string[] },
 ): string {
   // Aliases (the name the student joined under as a guest) are the same student: the same [STUDENT_1].
-  // Whole names first, so "Pete Thanasatitkul" is one mention; single words last.
+  // Whole names first, so "Krit Kaewmanee" is one mention; single words last.
   const aliases = (input.studentAliases ?? []).map((alias) => alias.trim()).filter((alias) => [...alias].length >= 2);
   let result = text;
   for (const alias of aliases) result = result.replace(latinWord(alias), STUDENT_TOKEN);

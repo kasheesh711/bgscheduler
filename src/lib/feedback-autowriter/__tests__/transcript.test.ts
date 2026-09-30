@@ -28,7 +28,7 @@ Apivit (Ek) Sirithana Online: Let's start
 
 2
 00:00:00.900 --> 00:00:01.500
-Silpakorn (Gino.Ti) Tiyachate: Okay
+Anucha (Nont.Bo) Boonmee: Okay
 
 3
 00:01.600 --> 00:03.000
@@ -47,7 +47,7 @@ describe("transcript segments", () => {
   it("parses Zoom WEBVTT cues with and without hours", () => {
     expect(parseZoomVtt(VTT)).toEqual([
       { speakerName: "Apivit (Ek) Sirithana Online", startMs: 0, endMs: 800 },
-      { speakerName: "Silpakorn (Gino.Ti) Tiyachate", startMs: 900, endMs: 1_500 },
+      { speakerName: "Anucha (Nont.Bo) Boonmee", startMs: 900, endMs: 1_500 },
       { speakerName: "Apivit (Ek) Sirithana Online", startMs: 1_600, endMs: 3_000 },
     ]);
   });

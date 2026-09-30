@@ -224,3 +224,48 @@ classes plus up to 4 per tutor from the last 2 days (`--per-tutor=4 --days=2 --c
 - A single judge call misses some wrong details (2 of 9 only at `medium` today, 1 of 5 only at `high` this morning):
   judging transcript drafts at both efforts and holding on either flag costs ≈ $0.004 and 5–17 s per class.
 - Review lows from the first round are unchanged (listed above).
+
+## Update, 30 Sep evening: merged with main again (#105 operating loop, #112 synthetic names)
+
+Merge of `origin/main` (`a393e64`) into this branch, so PR #109 can merge. Both features kept whole; no behaviour
+of either changed.
+
+### Merge
+- Conflicts: `docs/reference/env.md` (both new rows, `FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST` then
+  `FEEDBACK_AUTOWRITER_LINE_TO`; this branch's Soniox row), `dispatch.ts` (both config imports) and the dashboard
+  component: main's Overview / Quality / Review tabs and `ARM_LABEL` (`model-labels.ts`), with this branch's
+  "Class end → posted, by evidence" and "Back to the summary (transcript first)" sections between Tutors and Recent
+  classes in Overview, the fallback label under a class's state, and "Waiting for the recording".
+- Merged by git, then checked: the runbook (main's "Reviewing posts" is now section 9; 6 Transcript first, 7 Alerts,
+  8 Writer model and their anchors unchanged), the feature page, `config.ts`, the dashboard and transcript tests
+  (main's synthetic names; none of the names #112 removed is back).
+- Journal as on main: idx 99, 100, 101 in that order. This branch adds no migration.
+
+### Coverage of transcript-first classes (#105's `quality.ts`, owner decision D-03)
+No rule changed, so `QUALITY_POLICY_VERSION` stays 1; comments, the feature page and tests now say it:
+
+| Class | Coverage |
+|---|---|
+| `awaiting_recording` / `transcript_first`, `transcribing` | in progress; a miss (`expired`) only once its posting window has closed |
+| `pending` / `summary_fallback:<cause>` (any of the six causes) | in progress, same rule; the cause never matches a D-03 reason |
+| fell back, then posted from the summary | posted |
+| fell back, then held (`thai_summary_no_transcript`, or the summary drafts rejected) or expired | miss |
+| `missing_student_or_tutor` at the handover | miss (as on the second pass) |
+| `recording_too_short`, `transcript_too_short` (still holds with transcript first) | left out (D-03), as before |
+| the tutor wrote it while we waited for the recording (no writer call yet) | left out (`tutor wrote first`), as on the summary path |
+
+Tests: `quality.test.ts` (the state table, the D-03 hold table with `thai_summary_no_transcript` and the
+`summary_fallback:` reasons, one case per fallback cause, final outcome, waiting for the recording) and the D-03
+case of `review.integration.test.ts` (two transcript-first holds as misses, two in-progress rows on neither side).
+
+### Verification (fresh, Node 22)
+- `npm run typecheck`: pass. `npx eslint src/lib/feedback-autowriter src/components/feedback-autowriter`: clean.
+  `git diff --check`: clean.
+- `npx vitest run --project unit`: 492 files, 5819 tests pass.
+- `npx vitest run --project integration src/lib/feedback-autowriter` (OrbStack): 4 files, 158 tests pass.
+
+### Open for the owner
+- With transcript first on, a recording in several parts or unclear speakers sends the class to the summary instead
+  of holding it. If the summary then cannot carry it either (held or expired), the class is a miss; on the second
+  pass the same recording was a data-quality hold, left out of coverage. Leaving such a class out would need the
+  fallback cause in the coverage input and a D-03 decision.
