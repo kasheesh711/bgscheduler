@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_FEEDBACK_FIELD_MAPPINGS } from "@/lib/post-class-feedback/wise";
+import { AUTOWRITER_MIN_POST_BUDGET_MS } from "../config";
 import { AUTOWRITER_TEACHER_ALLOWLIST } from "../roster";
 import {
   classifySubmitEvents,
@@ -161,12 +162,37 @@ describe("submitFeedbackGuarded", () => {
     expect(ops.posts).toHaveLength(0);
   });
 
-  it("does not claim without enough function time left for the POST and its checks", async () => {
+  it("does not claim without enough function time left for the POST and its checks — and then makes none of the pre-POST reads", async () => {
     const ops = fakeWise();
     const store = memoryStore();
-    expect(await submitFeedbackGuarded({ ...base, ops, store, remainingMs: () => 60_000 }))
+    // One millisecond under the 240 s the POST phase needs.
+    expect(await submitFeedbackGuarded({ ...base, ops, store, remainingMs: () => AUTOWRITER_MIN_POST_BUDGET_MS - 1 }))
       .toEqual({ status: "aborted_precheck", reason: "function_budget_too_small_for_post" });
     expect(store.claims).toBe(0);
+    // Each of the three reads may take 45 s: a POST that cannot be claimed spends none of them.
+    expect(ops.getSessionDetail).not.toHaveBeenCalled();
+    expect(ops.getSessionCreditEntries).not.toHaveBeenCalled();
+    expect(ops.posts).toHaveLength(0);
+  });
+
+  it("checks the time left again right before the claim: slow pre-POST reads must not start a POST that no longer fits", async () => {
+    const ops = fakeWise();
+    const store = memoryStore();
+    // Enough when the reads start, too little once they are done.
+    let checks = 0;
+    const remainingMs = () => (checks++ === 0 ? AUTOWRITER_MIN_POST_BUDGET_MS : AUTOWRITER_MIN_POST_BUDGET_MS - 1);
+    expect(await submitFeedbackGuarded({ ...base, ops, store, remainingMs }))
+      .toEqual({ status: "aborted_precheck", reason: "function_budget_too_small_for_post" });
+    expect(ops.getSessionDetail).toHaveBeenCalledTimes(2);
+    expect(ops.getSessionCreditEntries).toHaveBeenCalledTimes(1);
+    expect(store.claims).toBe(0);
+    expect(ops.posts).toHaveLength(0);
+  });
+
+  it("runs a preflight (dry run) whatever time is left: it never posts", async () => {
+    const ops = fakeWise();
+    expect((await submitFeedbackGuarded({ ...base, ops, store: memoryStore(), dryRun: true, remainingMs: () => 1_000 })).status).toBe("preflight_ok");
+    expect(ops.posts).toHaveLength(0);
   });
 
   it("refuses when the credit history does not show exactly the auto-submission's charge", async () => {
@@ -247,7 +273,8 @@ describe("submitFeedbackGuarded", () => {
   it("never polls for events into the function's last minute", async () => {
     const ops = fakeWise({ events: () => [] });
     let calls = 0;
-    const remainingMs = () => (calls++ === 0 ? 300_000 : 50_000);
+    // The two budget checks (before the pre-POST reads, before the claim) see 300 s; the event wait sees 50 s.
+    const remainingMs = () => (calls++ < 2 ? 300_000 : 50_000);
     const store = memoryStore();
     expect((await submitFeedbackGuarded({ ...base, ops, store, remainingMs, eventWaitMs: 20_000 })).status).toBe("awaiting_event");
     expect(ops.findFeedbackEvents).toHaveBeenCalledTimes(1);

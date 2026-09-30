@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import { AUTOWRITER_MODELS, type AutowriterModelConfig } from "../config";
+import { AUTOWRITER_MODELS, type AutowriterModelRoute } from "../config";
 import type { OpenRouterCallResult } from "../openrouter";
 import {
   reasonCategory,
@@ -18,7 +18,7 @@ import { GOOD_FIELDS, SESSION_ID, STUDENT_NAME, sessionDetail } from "./fixtures
 const usage = { promptTokens: 1000, completionTokens: 2000, reasoningTokens: 1700, cachedTokens: 0, costUsd: 0.002 };
 /** A reply served exactly as the requested model is pinned in `AUTOWRITER_MODELS` (the writer may change model). */
 const reply = (request: { model: string }, content: string, latencyMs = 5): OpenRouterCallResult => {
-  const config = (Object.values(AUTOWRITER_MODELS) as AutowriterModelConfig[]).find((entry) => entry.model === request.model);
+  const config = (Object.values(AUTOWRITER_MODELS) as AutowriterModelRoute[]).find((entry) => entry.model === request.model);
   return {
     ok: true, content, model: config?.expectModel ?? request.model, provider: config?.expectProvider ?? "Provider",
     generationId: "g", finishReason: "stop", usage, latencyMs,

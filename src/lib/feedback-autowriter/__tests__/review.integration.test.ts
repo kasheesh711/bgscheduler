@@ -157,10 +157,11 @@ async function seedEvent(sessionId: string, when: Date, actor: { id: string | nu
   return eventId;
 }
 
-async function seedWriterCall(sessionId: string, when: Date, ok: boolean) {
+/** A writer call whose row was written at `when`; `result` is what the pipeline recorded with it. */
+async function seedWriterCall(sessionId: string, when: Date, ok: boolean, result?: Record<string, unknown>) {
   await db.insert(schema.feedbackAutowriterCalls).values({
     wiseSessionId: sessionId, role: "writer", arm: "glm", requestedModel: "writer-model", ok,
-    error: ok ? null : "provider_timeout", promptVersion: 4, createdAt: when,
+    error: ok ? null : "provider_timeout", promptVersion: 4, createdAt: when, ...(result ? { result } : {}),
   });
 }
 
@@ -807,6 +808,54 @@ describe("daily metrics", () => {
     await ingestFixEvents(db, { apiActorId: API, since: at("2026-09-01T00:00:00Z") });
     await refreshDailyMetrics(db, { dates: metricDates(NOW), now: NOW });
     expect(await starRow(DAY)).toMatchObject({ late: 3, excludedTutorFirst: 2, eligible: 3 });
+  });
+
+  it("dates our first writer call by when its request was sent, not by when a rate-limited attempt's row was written", async () => {
+    const endAt = at("2026-09-29T12:00:00Z");
+    const duringWaits = await seedRow(105, { state: "skipped_human", reason: "submission_changed_to_human", endAt });
+    const beforeUs = await seedRow(106, { state: "skipped_human", reason: "human_submission", endAt });
+    const unmarked = await seedRow(107, { state: "skipped_human", reason: "human_submission", endAt });
+    // We sent the writer's request at 12:40:00 and were rate limited; its rows were written when the call ended, after
+    // the waits (12:40:45). The tutor saved at 12:40:20, while we waited: we had started, so it is our miss.
+    const limited = { error: "rate limited upstream", evidence: "summary" };
+    await seedWriterCall(duringWaits, at("2026-09-29T12:40:45Z"), false, { ...limited, attemptAt: "2026-09-29T12:40:00.000Z", retryAfterMs: 20_000, waitedMs: 20_000 });
+    await seedWriterCall(duringWaits, at("2026-09-29T12:40:45Z"), false, { ...limited, rateLimitRetry: 1, attemptAt: "2026-09-29T12:40:21.000Z", waitedMs: 10_000 });
+    await seedWriterCall(duringWaits, at("2026-09-29T12:40:45Z"), true, { validation: "ok", evidence: "summary", rateLimitRetry: 2 });
+    await seedEvent(duringWaits, at("2026-09-29T12:40:20Z"), { id: MIMI, role: "TEACHER" });
+    // The same rows, the tutor's save a minute before our request went out: theirs.
+    await seedWriterCall(beforeUs, at("2026-09-29T12:40:45Z"), false, { ...limited, attemptAt: "2026-09-29T12:40:00.000Z", waitedMs: 4_000 });
+    await seedWriterCall(beforeUs, at("2026-09-29T12:40:45Z"), true, { validation: "ok", evidence: "summary", rateLimitRetry: 1 });
+    await seedEvent(beforeUs, at("2026-09-29T12:39:00Z"), { id: MIMI, role: "TEACHER" });
+    // A call that was never rate limited carries no such time: dated by its row, as before.
+    await seedWriterCall(unmarked, at("2026-09-29T12:40:45Z"), true, { validation: "ok", evidence: "summary" });
+    await seedEvent(unmarked, at("2026-09-29T12:40:20Z"), { id: MIMI, role: "TEACHER" });
+    await ingestFixEvents(db, { apiActorId: API, since: at("2026-09-01T00:00:00Z") });
+    await refreshDailyMetrics(db, { dates: metricDates(NOW), now: NOW });
+    expect(await starRow(DAY)).toMatchObject({ late: 1, excludedTutorFirst: 2, eligible: 1 });
+  });
+
+  it("never lets an attemptAt that is no time fail the day's metrics: that call is dated by its row", async () => {
+    const endAt = at("2026-09-29T12:00:00Z");
+    const limited = { error: "rate limited upstream", evidence: "summary" };
+    // The same class each time: one rate-limited writer call whose row was written at 12:40:45, and the tutor's save
+    // at 12:40:20. Its `attemptAt` cannot be read as a time — wrong form, a day or an hour that does not exist, or no
+    // text at all — so the call is dated by its row, and the save came before it: the tutor's.
+    const unreadable = [
+      "not a time", "", "2026-13-45T99:99:99.000Z", "2026-02-30T12:40:00.000Z", "2027-02-29T12:40:00.000Z", "2026-09-29T24:00:00.000Z",
+      "2026-09-29 12:40:00", "2026-09-29T12:40:00.000+07:00", 1_790_685_600_000, null, true, { at: "2026-09-29T12:40:00.000Z" }, ["2026-09-29T12:40:00.000Z"],
+    ];
+    for (const [index, attemptAt] of unreadable.entries()) {
+      const session = await seedRow(200 + index, { state: "skipped_human", reason: "human_submission", endAt });
+      await seedWriterCall(session, at("2026-09-29T12:40:45Z"), false, { ...limited, attemptAt });
+      await seedEvent(session, at("2026-09-29T12:40:20Z"), { id: MIMI, role: "TEACHER" });
+    }
+    // A time that can be read still counts: sent at 12:40:00, so the save at 12:40:20 came after we had started.
+    const readable = await seedRow(250, { state: "skipped_human", reason: "submission_changed_to_human", endAt });
+    await seedWriterCall(readable, at("2026-09-29T12:40:45Z"), false, { ...limited, attemptAt: "2026-09-29T12:40:00.000Z" });
+    await seedEvent(readable, at("2026-09-29T12:40:20Z"), { id: MIMI, role: "TEACHER" });
+    await ingestFixEvents(db, { apiActorId: API, since: at("2026-09-01T00:00:00Z") });
+    await refreshDailyMetrics(db, { dates: metricDates(NOW), now: NOW });
+    expect(await starRow(DAY)).toMatchObject({ late: 1, excludedTutorFirst: unreadable.length, eligible: 1 });
   });
 });
 

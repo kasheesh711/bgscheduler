@@ -262,6 +262,30 @@ describe("feedback autowriter store (Postgres)", () => {
     expect((await listDueRows(db)).map((row) => row.wiseSessionId)).toEqual([OTHER_SESSION, SESSION]);
   });
 
+  it("lists a row whose last attempt failed (`infra:…`) after every row that has not, so a stuck class never leads the sweep", async () => {
+    const S = schema.feedbackAutowriterSessions;
+    const hours = (n: number) => new Date(Date.now() + n * 60 * 60 * 1000);
+    // In deadline order: a judge that keeps failing, a writer that was rate limited, then three rows that have not failed.
+    const rows: Array<[string, Date, string | null]> = [
+      ["6a0000000000000000000021", hours(1), "infra:judge:high:timeout"],
+      ["6a0000000000000000000022", hours(2), "infra:sol:openai/gpt-6.1-sol is temporarily rate-limited upstream."],
+      ["6a0000000000000000000023", hours(3), null],
+      ["6a0000000000000000000024", hours(4), "transcript_first"],
+      // Not an `infra:` failure: Wise was not ready, or an error of another kind.
+      ["6a0000000000000000000025", hours(5), "wise_read_failed"],
+    ];
+    await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
+    for (const [wiseSessionId, deadlineAt, reason] of rows) {
+      await ensureSessionRow(db, { wiseSessionId, wiseClassId: "6a0000000000000000000011", wiseTeacherUserId: TEACHER, scheduledEndAt: null, deadlineAt, trigger: "test" });
+      await db.update(S).set({ reason }).where(eq(S.wiseSessionId, wiseSessionId));
+    }
+    // The rows that have not failed, most urgent first; then the failed ones, most urgent first.
+    expect((await listDueRows(db)).map((row) => row.wiseSessionId.slice(-2))).toEqual(["23", "24", "25", "21", "22"]);
+    // Once its failure is behind it (any other reason), a row is back in deadline order.
+    await db.update(S).set({ reason: "post_in_flight" }).where(eq(S.wiseSessionId, "6a0000000000000000000021"));
+    expect((await listDueRows(db)).map((row) => row.wiseSessionId.slice(-2))).toEqual(["21", "23", "24", "25", "22"]);
+  });
+
   it("expires overdue rows with an alert, but hands a switched-off tutor's class back silently", async () => {
     const OFF_TEACHER = "696f1eee43579bbadad472e5";
     await ensureSessionRow(db, {
@@ -326,12 +350,114 @@ describe("feedback autowriter store (Postgres)", () => {
     expect((await readSessionRow(db, SESSION))?.alertsSent).toEqual({ held: "suppressed:shadow" });
   });
 
+  it("lists a judge_failing alert only while the class still retries with its judge failing, and sends it again for a new run of failures", async () => {
+    const S = schema.feedbackAutowriterSessions;
+    const failing = (judgeErrors: number, alert: boolean) => ({
+      state: "transcribing" as const, reason: "infra:judge:high:timeout", retryInMs: 0, countRetry: true,
+      metadata: { judgeErrors }, ...(alert ? { alertKind: "judge_failing" as const, rearmAlert: true } : {}),
+    });
+    const kinds = async () => (await listPendingAlerts(db)).map((alert) => alert.kind);
+    // The third failure in a row asks for the alert; it is sent once.
+    await releaseGeneration(db, SESSION, (await claimGeneration(db, SESSION, 60_000))!, failing(3, true));
+    expect(await listPendingAlerts(db)).toMatchObject([{ wiseSessionId: SESSION, kind: "judge_failing", state: "transcribing", reason: "infra:judge:high:timeout" }]);
+    await markAlertsSent(db, await listPendingAlerts(db));
+    expect(await kinds()).toEqual([]);
+    // The fourth and fifth failures ask for nothing new.
+    await releaseGeneration(db, SESSION, (await claimGeneration(db, SESSION, 60_000))!, failing(4, false));
+    expect(await kinds()).toEqual([]);
+    expect((await readSessionRow(db, SESSION))?.alertsSent).toHaveProperty("judge_failing");
+
+    // The judge answers (the count starts again), then fails three more times: a new episode, alerted again.
+    await releaseGeneration(db, SESSION, (await claimGeneration(db, SESSION, 60_000))!, { state: "pending", reason: "post_in_flight", retryInMs: 0, metadata: { judgeErrors: 0 } });
+    expect(await kinds()).toEqual([]);
+    await releaseGeneration(db, SESSION, (await claimGeneration(db, SESSION, 60_000))!, failing(2, false));
+    expect(await kinds()).toEqual([]);
+    await releaseGeneration(db, SESSION, (await claimGeneration(db, SESSION, 60_000))!, failing(3, true));
+    expect(await kinds()).toEqual(["judge_failing"]);
+    expect((await readSessionRow(db, SESSION))?.alertsSent).not.toHaveProperty("judge_failing");
+
+    // Not sent yet, and the judge answers before the digest goes out: the alert is dropped.
+    await releaseGeneration(db, SESSION, (await claimGeneration(db, SESSION, 60_000))!, { state: "pending", reason: "post_in_flight", retryInMs: 0, metadata: { judgeErrors: 0 } });
+    expect(await kinds()).toEqual([]);
+    // Nor once the class has settled, whatever its count says: a person wrote it, it was posted, it expired unseen.
+    for (const state of ["skipped_human", "skipped_scope", "verified", "would_submit", "posting", "awaiting_event", "rejected"] as const) {
+      await db.update(S).set({ state, metadata: { alertKind: "judge_failing", judgeErrors: 3 } }).where(eq(S.wiseSessionId, SESSION));
+      expect(await kinds(), state).toEqual([]);
+    }
+    // Still in the works with the count at the mark: listed, in every state a class retries from.
+    for (const state of ["pending", "awaiting_recording", "transcribing", "generating"] as const) {
+      await db.update(S).set({ state, metadata: { alertKind: "judge_failing", judgeErrors: 3 } }).where(eq(S.wiseSessionId, SESSION));
+      expect(await kinds(), state).toEqual(["judge_failing"]);
+    }
+    // A count that is missing or not a number counts as none; other kinds are listed as before.
+    for (const metadata of [{ alertKind: "judge_failing" }, { alertKind: "judge_failing", judgeErrors: "3" }, { alertKind: "judge_failing", judgeErrors: 2 }]) {
+      await db.update(S).set({ state: "transcribing", metadata }).where(eq(S.wiseSessionId, SESSION));
+      expect(await kinds(), JSON.stringify(metadata)).toEqual([]);
+    }
+    await db.update(S).set({ state: "held", metadata: { alertKind: "held", judgeErrors: 3 } }).where(eq(S.wiseSessionId, SESSION));
+    expect(await kinds()).toEqual(["held"]);
+    // Another kind carries nothing about the judge.
+    expect((await listPendingAlerts(db))[0]).not.toHaveProperty("judge");
+  });
+
+  it("lists a judge_failing alert at either mark: three failures of the judge itself, or six judge-stage runs of any kind together", async () => {
+    const S = schema.feedbackAutowriterSessions;
+    const listed = async (metadata: Record<string, unknown>) => {
+      await db.update(S).set({ state: "transcribing", metadata: { alertKind: "judge_failing", ...metadata } }).where(eq(S.wiseSessionId, SESSION));
+      return (await listPendingAlerts(db)).map((alert) => alert.kind);
+    };
+    // The runs in which the judge could not be asked (a rate limit, our function's time, our account): six alone.
+    expect(await listed({ judgeUnreached: 3 })).toEqual([]);
+    expect(await listed({ judgeUnreached: 5 })).toEqual([]);
+    expect(await listed({ judgeUnreached: 6 })).toEqual(["judge_failing"]);
+    // Both kinds together.
+    expect(await listed({ judgeErrors: 2, judgeUnreached: 3 })).toEqual([]);
+    expect(await listed({ judgeErrors: 2, judgeUnreached: 4 })).toEqual(["judge_failing"]);
+    expect(await listed({ judgeErrors: 1, judgeUnreached: 5 })).toEqual(["judge_failing"]);
+    // The judge's own failures: three, whatever else is counted.
+    expect(await listed({ judgeErrors: 3, judgeUnreached: 0 })).toEqual(["judge_failing"]);
+    expect(await listed({ judgeErrors: 3 })).toEqual(["judge_failing"]);
+    // Both back at zero (the judge answered): dropped.
+    expect(await listed({ judgeErrors: 0, judgeUnreached: 0 })).toEqual([]);
+    // A count that is not a number counts as none, in either place, and never fails the query.
+    expect(await listed({ judgeUnreached: "6" })).toEqual([]);
+    expect(await listed({ judgeErrors: 2, judgeUnreached: "4" })).toEqual([]);
+    expect(await listed({ judgeErrors: { n: 3 }, judgeUnreached: [6] })).toEqual([]);
+    expect(await listed({ judgeErrors: null, judgeUnreached: 6 })).toEqual(["judge_failing"]);
+
+    // What the digest needs to say why: both counts, what last kept the judge from being asked, and the episode.
+    await listed({ judgeErrors: 2, judgeUnreached: 4, judgeUnreachedCause: "rate_limited", judgeFailingSince: "2026-09-30T05:10:00.000Z" });
+    expect(await listPendingAlerts(db)).toMatchObject([{
+      wiseSessionId: SESSION, kind: "judge_failing",
+      judge: { errors: 2, unreached: 4, unreachedCause: "rate_limited", since: "2026-09-30T05:10:00.000Z" },
+    }]);
+    for (const cause of ["out_of_time", "account_or_connection"]) {
+      await listed({ judgeUnreached: 6, judgeUnreachedCause: cause });
+      expect((await listPendingAlerts(db))[0].judge).toEqual({ errors: 0, unreached: 6, unreachedCause: cause, since: null });
+    }
+    // A cause it does not know, or none: no cause (the digest then blames nobody in particular).
+    await listed({ judgeErrors: 3, judgeUnreachedCause: "the moon" });
+    expect((await listPendingAlerts(db))[0].judge).toEqual({ errors: 3, unreached: 0, unreachedCause: null, since: null });
+  });
+
+  it("re-arms an alert only when asked to, and only the kind it raises", async () => {
+    const S = schema.feedbackAutowriterSessions;
+    await db.update(S).set({ alertsSent: { held: "2026-09-30 01:00:00+00", judge_failing: "2026-09-30 02:00:00+00" } }).where(eq(S.wiseSessionId, SESSION));
+    await releaseGeneration(db, SESSION, (await claimGeneration(db, SESSION, 60_000))!, { state: "pending", retryInMs: 0, alertKind: "judge_failing" });
+    expect((await readSessionRow(db, SESSION))?.alertsSent).toEqual({ held: "2026-09-30 01:00:00+00", judge_failing: "2026-09-30 02:00:00+00" });
+    await releaseGeneration(db, SESSION, (await claimGeneration(db, SESSION, 60_000))!, { state: "pending", retryInMs: 0, rearmAlert: true });
+    expect((await readSessionRow(db, SESSION))?.alertsSent).toHaveProperty("judge_failing");
+    await releaseGeneration(db, SESSION, (await claimGeneration(db, SESSION, 60_000))!, { state: "pending", retryInMs: 0, alertKind: "judge_failing", rearmAlert: true });
+    expect((await readSessionRow(db, SESSION))?.alertsSent).toEqual({ held: "2026-09-30 01:00:00+00" });
+  });
+
   it("retries a held class on request, re-arming its alert, but never near the deadline or from other states", async () => {
     const token = (await claimGeneration(db, SESSION, 60_000))!;
     await releaseGeneration(db, SESSION, token, {
       state: "held", reason: "glm:unfaithful", alertKind: "held",
       metadata: {
-        genericErrors: 3, transcribeErrors: 2, pipeline: { commitSha: "a" }, judge: { faithful: false },
+        genericErrors: 3, transcribeErrors: 2, judgeErrors: 4, judgeUnreached: 2, judgeUnreachedCause: "rate_limited",
+        judgeFailingSince: "2026-09-30T05:10:00.000Z", pipeline: { commitSha: "a" }, judge: { faithful: false },
         sonioxRetainUntil: "2026-10-01T00:00:00.000Z", triagedAt: "2026-09-29T15:00:00.000Z",
       },
     });
@@ -342,7 +468,10 @@ describe("feedback autowriter store (Postgres)", () => {
     expect(row).toMatchObject({ state: "pending", reason: "retry_requested", nextAttemptAt: null, alertsSent: {} });
     expect(row?.metadata).toMatchObject({ retriedBy: "k@x.com", retriedFrom: "held" });
     // A clean slate: counters, the old draft's stamp and its review window are gone.
-    for (const key of ["alertKind", "genericErrors", "transcribeErrors", "pipeline", "judge", "sonioxRetainUntil", "triagedAt"]) {
+    for (const key of [
+      "alertKind", "genericErrors", "transcribeErrors", "judgeErrors", "judgeUnreached", "judgeUnreachedCause", "judgeFailingSince", "pipeline", "judge",
+      "sonioxRetainUntil", "triagedAt",
+    ]) {
       expect(row?.metadata).not.toHaveProperty(key);
     }
     expect(await retryHeldSession(db, SESSION, { minDeadline: new Date(), actor: "k@x.com" })).toBe(false); // already pending

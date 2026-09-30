@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildAutowriterDashboard, type DashboardCallRow } from "../dashboard";
 import { callOpenRouter, type OpenRouterCallResult } from "../openrouter";
-import { isInfraFailure, routeMismatch, runWritingPipeline, type CallRecord } from "../pipeline";
+import { isInfraFailure, routeMismatch, runWritingPipeline, type CallRecord, type RateLimitRetries } from "../pipeline";
 import {
   AUTOWRITER_CALL_DEADLINE_MARGIN_MS,
   AUTOWRITER_JUDGE_TIMEOUT_MS,
@@ -70,6 +71,8 @@ interface Options {
   latencyMs?: (request: Request) => number;
   /** The spread of a rate-limit retry's wait (default 0.5: exactly the schedule's 4 s, 10 s and 25 s). */
   random?: () => number;
+  /** False for a stage: a sweep that has met a lasting rate limit there — no in-run retries of that stage's calls. */
+  rateLimitRetries?: RateLimitRetries;
 }
 
 function run(script: Script, options: Options = {}) {
@@ -118,6 +121,7 @@ function run(script: Script, options: Options = {}) {
       elapsedMs = Math.max(elapsedMs, startedAt + ms);
     },
     random: options.random ?? (() => 0.5),
+    rateLimitRetries: options.rateLimitRetries,
   });
   return { promise, records, requests, waits };
 }
@@ -244,7 +248,7 @@ describe("runWritingPipeline", () => {
       sleep: async () => {},
     });
     // Retried later, never counted toward `writer_failed` and never sent on to the fallback writer.
-    expect(result).toEqual({ kind: "infra", error: `sol:${message}`, modelFailure: false, stage: "writer" });
+    expect(result).toEqual({ kind: "infra", error: `sol:${message}`, modelFailure: false, stage: "writer", rateLimited: true });
     // The first request and its three retries in this run, all to the writer's own model.
     expect(fetchImpl).toHaveBeenCalledTimes(4);
     const models = (fetchImpl.mock.calls as unknown as Array<[string, RequestInit]>).map(([, init]) => JSON.parse(init.body as string).model);
@@ -275,7 +279,7 @@ describe("runWritingPipeline", () => {
       });
       // Not the writer's failure (`modelFailure: false`), tried again in the run, and never sent on to the fallback
       // writer — a generation error carried on the choice would otherwise count as the model's (`finish_reason_error`).
-      expect(result, label).toEqual({ kind: "infra", error: `sol:${message}`, modelFailure: false, stage: "writer" });
+      expect(result, label).toEqual({ kind: "infra", error: `sol:${message}`, modelFailure: false, stage: "writer", rateLimited: true });
       expect(fetchImpl, label).toHaveBeenCalledTimes(4);
     }
     // Any other error on the choice is still the model's own generation error: not retried here, counted as before.
@@ -296,6 +300,26 @@ describe("runWritingPipeline", () => {
       sleep: async () => {},
     })).toEqual({ kind: "infra", error: "sol:finish_reason_error", modelFailure: true, stage: "writer" });
     expect(other).toHaveBeenCalledTimes(1);
+  });
+
+  it("never takes an HTTP 429 for the writer's failure when its body is not JSON (a proxy's error page)", async () => {
+    const fetchImpl = vi.fn(async () => new Response("<html>Too Many Requests</html>", { status: 429 }));
+    const result = await runWritingPipeline({
+      apiKey: "k",
+      session: {
+        wiseSessionId: "6a0000000000000000000002", studentFullName: STUDENT_NAME, studentDisplayName: "Somchai",
+        classDetails: [], scheduledMinutes: 60, summary: { text: SUMMARY, meetingUUIDs: [] }, evidence: "transcript",
+      },
+      tutorNames: ["Kevin Hsieh", "Kev"],
+      priorFeedback: [],
+      record: async () => {},
+      remainingMs: () => 700_000,
+      callModel: (request) => callOpenRouter({ ...request, fetchImpl: fetchImpl as unknown as typeof fetch }),
+      sleep: async () => {},
+    });
+    // A reply that is not JSON counts as the writer's own failure on any other status; on a 429 it is the rate limit.
+    expect(result).toEqual({ kind: "infra", error: "sol:invalid_json_response", modelFailure: false, stage: "writer", rateLimited: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
   });
 
   it("never sends the summary to the fallback host after a provider-side generation error", async () => {
@@ -646,6 +670,8 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
   const timeouts = (requests: Request[]) => requests.map((request) => request.timeoutMs);
   const written = (records: CallRecord[], role: "writer" | "judge" = "writer") => records.filter((record) => record.role === role)
     .map((record) => [record.call.ok, record.call.usage?.costUsd ?? 0, record.result]);
+  /** What a rate-limited attempt records besides its error: when its request was sent, and the wait that followed (if any). */
+  const sent = (waitedMs?: number) => ({ attemptAt: expect.any(String), ...(waitedMs === undefined ? {} : { waitedMs }) });
 
   it("writes and judges the draft in the same run when the writer is rate limited once or twice", async () => {
     for (const times of [1, 2]) {
@@ -661,8 +687,8 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
       expect(waits, `${times}`).toEqual([4_000, 10_000].slice(0, times));
       // One call record per attempt: a rate-limited one cost nothing, and every retry says which retry it was.
       expect(written(records), `${times}`).toEqual([
-        [false, 0, { error: LIMITED, evidence: "summary" }],
-        ...(times === 2 ? [[false, 0, { error: LIMITED, evidence: "summary", rateLimitRetry: 1 }]] : []),
+        [false, 0, { error: LIMITED, evidence: "summary", ...sent(4_000) }],
+        ...(times === 2 ? [[false, 0, { error: LIMITED, evidence: "summary", rateLimitRetry: 1, ...sent(10_000) }]] : []),
         [true, usage.costUsd, { validation: "ok", evidence: "summary", rateLimitRetry: times }],
       ]);
       // A call that was never rate limited carries no mark.
@@ -674,14 +700,15 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
     for (const evidence of ["summary", "transcript"] as const) {
       const { promise, records, requests, waits } = run({ writers: Array(4).fill(limited()) }, { evidence });
       // `modelFailure: false`: transcript first never counts it toward `writer_failed`.
-      expect(await promise, evidence).toEqual({ kind: "infra", error: `sol:${LIMITED}`, modelFailure: false, stage: "writer" });
+      expect(await promise, evidence).toEqual({ kind: "infra", error: `sol:${LIMITED}`, modelFailure: false, stage: "writer", rateLimited: true });
       expect(requests.map((request) => request.model), evidence).toEqual(Array(4).fill("openai/gpt-6.1-sol"));
       expect(waits, evidence).toEqual([4_000, 10_000, 25_000]);
+      // No wait follows the last attempt.
       expect(written(records), evidence).toEqual([
-        [false, 0, { error: LIMITED, evidence }],
-        [false, 0, { error: LIMITED, evidence, rateLimitRetry: 1 }],
-        [false, 0, { error: LIMITED, evidence, rateLimitRetry: 2 }],
-        [false, 0, { error: LIMITED, evidence, rateLimitRetry: 3 }],
+        [false, 0, { error: LIMITED, evidence, ...sent(4_000) }],
+        [false, 0, { error: LIMITED, evidence, rateLimitRetry: 1, ...sent(10_000) }],
+        [false, 0, { error: LIMITED, evidence, rateLimitRetry: 2, ...sent(25_000) }],
+        [false, 0, { error: LIMITED, evidence, rateLimitRetry: 3, ...sent() }],
       ]);
     }
   });
@@ -713,29 +740,47 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
     expect(seen.size).toBeGreaterThan(20);
   });
 
-  it("waits as long as OpenRouter asks when it says, never less, and at most 30 s", async () => {
+  it("waits as long as OpenRouter asks when it says: never less than it, nor than the schedule's wait, and up to 30 s", async () => {
     const attempt = async (retryAfterMs: number, random?: () => number) => {
-      const { promise, waits } = run({ writers: [limited(retryAfterMs), SOL(writerJson)], judge: [GLM(FAITHFUL)] }, { random });
+      const { promise, waits, records } = run({ writers: [limited(retryAfterMs), SOL(writerJson)], judge: [GLM(FAITHFUL)] }, { random });
       expect(await promise).toMatchObject({ kind: "draft" });
+      // The record of the rate-limited attempt keeps what was asked and what was waited.
+      expect(written(records)[0]).toEqual([false, 0, { error: LIMITED, evidence: "summary", retryAfterMs, ...sent(waits[0]) }]);
       return waits;
     };
     expect(await attempt(7_000, () => 0)).toEqual([7_000]);
     // The spread only adds to it: trying before the time OpenRouter named would be rate limited again.
     expect(await attempt(7_000)).toEqual([8_050]);
-    expect(await attempt(1_500, () => 0)).toEqual([1_500]);
-    expect(await attempt(120_000)).toEqual([30_000]);
+    // A wait shorter than the schedule's is not taken: the schedule's first wait (4 s − 30% here) stands.
+    expect(await attempt(1_500, () => 0)).toEqual([2_800]);
+    expect(await attempt(200)).toEqual([4_000]);
     expect(await attempt(29_000, () => 0.999_999)).toEqual([30_000]);
+    expect(await attempt(30_000)).toEqual([30_000]);
+  });
+
+  it("does not try again when OpenRouter asks for a wait that does not fit: the rate limit stands, as without retries", async () => {
+    // Over 30 s: a retry after 30 s would come before the time it named.
+    const { promise, waits, requests, records } = run({ writers: [limited(120_000)] });
+    expect(await promise).toEqual({ kind: "infra", error: `sol:${LIMITED}`, modelFailure: false, stage: "writer", rateLimited: true });
+    expect(waits).toEqual([]);
+    expect(requests).toHaveLength(1);
+    expect(written(records)).toEqual([[false, 0, { error: LIMITED, evidence: "summary", retryAfterMs: 120_000, ...sent() }]]);
+    // Asked 20 s three times: two waits as asked; the third would need 20 s of the 5 s left of the call's 45 s.
+    const thrice = run({ writers: Array(3).fill(limited(20_000)) }, { random: () => 0 });
+    expect(await thrice.promise).toMatchObject({ kind: "infra", rateLimited: true });
+    expect(thrice.waits).toEqual([20_000, 20_000]);
+    expect(thrice.requests).toHaveLength(3);
   });
 
   it("never waits past the run's time: without room for the wait and the call's time-out, the rate limit stands at once", async () => {
     const margin = AUTOWRITER_CALL_DEADLINE_MARGIN_MS;
-    const stands = { kind: "infra", error: `sol:${LIMITED}`, modelFailure: false, stage: "writer" };
+    const stands = { kind: "infra", error: `sol:${LIMITED}`, modelFailure: false, stage: "writer", rateLimited: true };
     // The writer's 180 s fit; the 4 s wait on top of them does not, by one millisecond.
     const noRoom = run({ writers: [limited()] }, { remainingMs: 4_000 + AUTOWRITER_WRITER_TIMEOUT_MS + margin - 1 });
     expect(await noRoom.promise).toEqual(stands);
     expect(noRoom.waits).toEqual([]);
     expect(timeouts(noRoom.requests)).toEqual([180_000]);
-    expect(written(noRoom.records)).toEqual([[false, 0, { error: LIMITED, evidence: "summary" }]]);
+    expect(written(noRoom.records)).toEqual([[false, 0, { error: LIMITED, evidence: "summary", ...sent() }]]);
     // Exactly enough: tried again with the same, full time-out — and the judges still get theirs.
     const room = run({ writers: [limited(), SOL(writerJson)], judge: [GLM(FAITHFUL)] }, { remainingMs: 4_000 + AUTOWRITER_WRITER_TIMEOUT_MS + margin });
     expect(await room.promise).toMatchObject({ kind: "draft" });
@@ -746,7 +791,7 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
     expect(await halfway.promise).toEqual(stands);
     expect(halfway.waits).toEqual([4_000]);
     expect(written(halfway.records)).toEqual([
-      [false, 0, { error: LIMITED, evidence: "summary" }], [false, 0, { error: LIMITED, evidence: "summary", rateLimitRetry: 1 }],
+      [false, 0, { error: LIMITED, evidence: "summary", ...sent(4_000) }], [false, 0, { error: LIMITED, evidence: "summary", rateLimitRetry: 1, ...sent() }],
     ]);
     // A writer call already cut to what is left cannot be sent again with that time-out: no wait.
     const cut = run({ writers: [limited()] }, { remainingMs: 100_000 });
@@ -764,7 +809,7 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
     const script = () => ({ writers: [SOL(writerJson)], medium: [limited(), GLM(FAITHFUL)], high: [GLM(FAITHFUL)] });
     // The transcript judges' 240 s fit, the 4 s wait on top does not: the class retries with a fresh function.
     const noRoom = run(script(), { evidence: "transcript", remainingMs: 4_000 + 240_000 + margin - 1 });
-    expect(await noRoom.promise).toEqual({ kind: "infra", error: `judge:medium:${LIMITED}`, modelFailure: false, stage: "judge" });
+    expect(await noRoom.promise).toEqual({ kind: "infra", error: `judge:medium:${LIMITED}`, modelFailure: false, stage: "judge", rateLimited: true });
     expect(noRoom.waits).toEqual([]);
     expect(timeouts(judgeRequests(noRoom.requests))).toEqual([240_000, 240_000]);
     const room = run(script(), { evidence: "transcript", remainingMs: 4_000 + 240_000 + margin });
@@ -786,7 +831,7 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
     expect(passed.waits).toEqual([4_000]);
     const judgeResult = { ...PASSING, problems: [], judgedArm: "sol", judgedGeneration: "g", evidence: "summary" };
     expect(written(passed.records, "judge")).toEqual(expect.arrayContaining([
-      [false, 0, { effort: "medium", error: LIMITED, judgedArm: "sol", judgedGeneration: "g", evidence: "summary" }],
+      [false, 0, { effort: "medium", error: LIMITED, judgedArm: "sol", judgedGeneration: "g", evidence: "summary", ...sent(4_000) }],
       [true, usage.costUsd, { ...judgeResult, effort: "medium", rateLimitRetry: 1 }],
       [true, usage.costUsd, { ...judgeResult, effort: "high" }],
     ]));
@@ -807,7 +852,7 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
     // Still rate limited after its retries: no verdict from that level, so no draft — the class retries later, the
     // writer having delivered (`stage: "judge"`), and the fallback writer is not asked.
     const stuck = run({ writers: [SOL(writerJson)], medium: [GLM(FAITHFUL)], high: Array(4).fill(limited()) });
-    expect(await stuck.promise).toEqual({ kind: "infra", error: `judge:high:${LIMITED}`, modelFailure: false, stage: "judge" });
+    expect(await stuck.promise).toEqual({ kind: "infra", error: `judge:high:${LIMITED}`, modelFailure: false, stage: "judge", rateLimited: true });
     expect(stuck.requests.map((request) => request.model)).not.toContain("openai/gpt-6-luna");
     expect(stuck.waits).toEqual([4_000, 10_000, 25_000]);
   });
@@ -841,7 +886,7 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
     expect(await thenTimeout.promise).toEqual({ kind: "infra", error: "sol:timeout", modelFailure: true, stage: "writer" });
     expect(thenTimeout.waits).toEqual([4_000]);
     expect(written(thenTimeout.records)).toEqual([
-      [false, 0, { error: LIMITED, evidence: "summary" }], [false, 0, { error: "timeout", evidence: "summary", rateLimitRetry: 1 }],
+      [false, 0, { error: LIMITED, evidence: "summary", ...sent(4_000) }], [false, 0, { error: "timeout", evidence: "summary", rateLimitRetry: 1 }],
     ]);
   });
 
@@ -881,6 +926,317 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
     expect(waits).toEqual([4_000, 10_000]);
     expect(records.filter((record) => record.role === "writer").map((record) => [record.call.ok, record.call.usage?.costUsd ?? 0, record.result.rateLimitRetry]))
       .toEqual([[false, 0, undefined], [false, 0, 1], [true, 0.04, 2]]);
+  });
+});
+
+describe("hardening follow-ups (30 Sep reviews of #113 and #114)", () => {
+  const LIMITED = "openai/gpt-6.1-sol is temporarily rate-limited upstream. Please retry shortly.";
+  const limited = (retryAfterMs?: number): OpenRouterCallResult => ({ ...fail(LIMITED, 429), ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("makes no in-run retries at a stage the sweep has switched them off for: a rate limit stands at once, as before them", async () => {
+    const NONE = { writer: false, judge: false };
+    const writer = run({ writers: [limited()] }, { rateLimitRetries: NONE });
+    expect(await writer.promise).toEqual({ kind: "infra", error: `sol:${LIMITED}`, modelFailure: false, stage: "writer", rateLimited: true });
+    expect(writer.requests).toHaveLength(1);
+    expect(writer.waits).toEqual([]);
+    expect(writer.records.map((record) => record.result)).toEqual([{ error: LIMITED, evidence: "summary", attemptAt: expect.any(String) }]);
+    // A judge level too: no wait, and the run stops on it (the fallback writer is not asked).
+    const judge = run({ writers: [SOL(writerJson)], medium: [GLM(FAITHFUL)], high: [limited()] }, { rateLimitRetries: NONE });
+    expect(await judge.promise).toEqual({ kind: "infra", error: `judge:high:${LIMITED}`, modelFailure: false, stage: "judge", rateLimited: true });
+    expect(judge.waits).toEqual([]);
+    expect(judgeRequests(judge.requests)).toHaveLength(2);
+    // Everything else is as with retries on: a call that answers is a draft.
+    expect(await run({ writers: [SOL(writerJson)], judge: [GLM(FAITHFUL)] }, { rateLimitRetries: NONE }).promise).toMatchObject({ kind: "draft", arm: "sol" });
+  });
+
+  it("switches the retries off one stage at a time: the writers' route and the judge's are limited apart", async () => {
+    // Off for the writers (a sweep met a lasting limit on their route): a rate-limited writer stands at once …
+    const writerOff = { writer: false, judge: true };
+    const stands = run({ writers: [limited()] }, { rateLimitRetries: writerOff });
+    expect(await stands.promise).toMatchObject({ kind: "infra", stage: "writer", rateLimited: true });
+    expect(stands.waits).toEqual([]);
+    // … the fallback writer's too …
+    const fallback = run({ writers: [SOL(writerJson), limited()], judge: [GLM(UNFAITHFUL)] }, { rateLimitRetries: writerOff });
+    expect(await fallback.promise).toMatchObject({ kind: "infra", error: `luna:${LIMITED}`, stage: "writer", rateLimited: true });
+    expect(fallback.waits).toEqual([]);
+    // … while a rate-limited judge level is still tried again, and the draft passes in the same run.
+    const judged = run({ writers: [SOL(writerJson)], medium: [limited(), GLM(FAITHFUL)], high: [GLM(FAITHFUL)] }, { rateLimitRetries: writerOff });
+    expect(await judged.promise).toMatchObject({ kind: "draft", arm: "sol" });
+    expect(judged.waits).toEqual([4_000]);
+
+    // Off for the judge: a rate-limited writer is still tried again, and the judge level that is rate limited is not.
+    const judgeOff = { writer: true, judge: false };
+    const written = run({ writers: [limited(), SOL(writerJson)], medium: [GLM(FAITHFUL)], high: [limited()] }, { rateLimitRetries: judgeOff });
+    expect(await written.promise).toEqual({ kind: "infra", error: `judge:high:${LIMITED}`, modelFailure: false, stage: "judge", rateLimited: true });
+    expect(written.waits).toEqual([4_000]);
+    expect(writerRequests(written.requests)).toHaveLength(2);
+    expect(judgeRequests(written.requests)).toHaveLength(2);
+  });
+
+  it("says when the judges had given their verdict on a draft before the run failed: the judge's failures in a row ended there", async () => {
+    const answered = async (script: Script) => {
+      const result = await run(script).promise;
+      return result.kind === "infra" ? [result.error, result.stage, result.judgeAnswered ?? false] : result.kind;
+    };
+    const rejectedAtOneLevel = { medium: [GLM(UNFAITHFUL)], high: [GLM(FAITHFUL)] };
+    // Sol's draft was judged and rejected; then the Luna fallback failed at the writer stage: a time-out, the wrong
+    // model, or no time left to call it.
+    expect(await answered({ writers: [SOL(writerJson), fail("timeout", null)], ...rejectedAtOneLevel })).toEqual(["luna:timeout", "writer", true]);
+    expect(await answered({ writers: [SOL(writerJson), fail("Insufficient credits", 402)], judge: [GLM(UNFAITHFUL)] }))
+      .toEqual(["luna:Insufficient credits", "writer", true]);
+    const outOfTime = await run(
+      { writers: [SOL(writerJson)], judge: [GLM(UNFAITHFUL)] },
+      { remainingMs: 200_000, latencyMs: (request) => request.schemaName === "feedback_faithfulness" ? 150_000 : 0 },
+    ).promise;
+    expect(outOfTime).toEqual({ kind: "infra", error: "function_budget_exhausted", modelFailure: false, stage: "writer", judgeAnswered: true });
+    // Luna's draft was written, and its judge then failed: a failure after an answer, in the same run.
+    expect(await answered({
+      writers: [SOL(writerJson), LUNA(writerJson)], medium: [GLM(UNFAITHFUL), fail("timeout", null)], high: [GLM(FAITHFUL), GLM(FAITHFUL)],
+    })).toEqual(["judge:medium:timeout", "judge", true]);
+    // One level rejecting the draft is an answer even when the other gave none it could use (it then left off).
+    expect(await answered({ writers: [SOL(writerJson), fail("timeout", null)], medium: [GLM(UNFAITHFUL)], high: [GLM("not json")] }))
+      .toEqual(["luna:timeout", "writer", true]);
+
+    // No verdict on any draft in the run: nothing is said. The first writer failed; or a level failed on the first
+    // draft — also when the other level had passed it (the draft was not checked: both levels are required).
+    expect(await answered({ writers: [fail("timeout", null)] })).toEqual(["sol:timeout", "writer", false]);
+    expect(await answered({ writers: [SOL(writerJson)], medium: [GLM(FAITHFUL)], high: [fail("timeout", null)] })).toEqual(["judge:high:timeout", "judge", false]);
+    expect(await answered({ writers: [SOL(writerJson)], medium: [GLM("not json"), GLM("{}")], high: [GLM(FAITHFUL)] }))
+      .toEqual(["judge:medium:judge_unparseable", "judge", false]);
+    // A draft and a hold carry no such flag: the job knows the judges answered (or that the class is settled).
+    expect(await run({ writers: [SOL(writerJson)], judge: [GLM(FAITHFUL)] }).promise).not.toHaveProperty("judgeAnswered");
+    expect(await run({ writers: [SOL(writerJson), LUNA("not json")], judge: [GLM(UNFAITHFUL)] }).promise).toEqual({ kind: "held", reasons: expect.any(Array) });
+  });
+
+  it("says a run ended on a rate limit only when its last call was still rate limited", async () => {
+    const flag = async (script: Script) => {
+      const result = await run(script).promise;
+      return result.kind === "infra" ? result.rateLimited ?? false : result.kind;
+    };
+    expect(await flag({ writers: Array(4).fill(limited()) })).toBe(true);
+    expect(await flag({ writers: [SOL(writerJson)], medium: [GLM(FAITHFUL)], high: Array(4).fill(limited()) })).toBe(true);
+    // Rate limited, then a time-out: the run ended on the time-out.
+    expect(await flag({ writers: [limited(), fail("timeout", null)] })).toBe(false);
+    expect(await flag({ writers: [fail("Insufficient credits", 402)] })).toBe(false);
+    expect(await flag({ writers: [fail("timeout", null)] })).toBe(false);
+    expect(await flag({ writers: [limited(), SOL(writerJson)], judge: [GLM(FAITHFUL)] })).toBe("draft");
+  });
+
+  it("records when each rate-limited request was really sent, though its record is written after the waits", async () => {
+    const NOW = Date.parse("2026-09-30T13:00:00.000Z");
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    const replies = [limited(7_000), limited(), SOL(writerJson)];
+    const records: CallRecord[] = [];
+    const writtenAt: number[] = [];
+    const result = await runWritingPipeline({
+      apiKey: "k",
+      session: {
+        wiseSessionId: "6a0000000000000000000002", studentFullName: STUDENT_NAME, studentDisplayName: "Somchai",
+        classDetails: [], scheduledMinutes: 60, summary: { text: SUMMARY, meetingUUIDs: [] },
+      },
+      tutorNames: ["Kevin Hsieh", "Kev"],
+      priorFeedback: [],
+      record: async (record) => { records.push(record); writtenAt.push(Date.now() - NOW); },
+      remainingMs: () => 700_000,
+      // A request takes 1 s, a wait its own time, on the clock the attempts are timed by.
+      callModel: (async (request: Request) => {
+        vi.setSystemTime(Date.now() + 1_000);
+        return request.schemaName === "post_class_feedback" ? replies.shift()! : GLM(FAITHFUL);
+      }) as never,
+      sleep: async (ms) => { vi.setSystemTime(Date.now() + ms); },
+      random: () => 0.5,
+    });
+    expect(result.kind).toBe("draft");
+    const at = (ms: number) => new Date(NOW + ms).toISOString();
+    const writer = records.filter((record) => record.role === "writer");
+    // Sent at 0 s and at 9.05 s (1 s for the reply, then the 8.05 s asked for with its spread); the answer at 20.05 s.
+    expect(writer.map((record) => record.result)).toEqual([
+      { error: LIMITED, evidence: "summary", attemptAt: at(0), retryAfterMs: 7_000, waitedMs: 8_050 },
+      { error: LIMITED, evidence: "summary", rateLimitRetry: 1, attemptAt: at(9_050), waitedMs: 10_000 },
+      { validation: "ok", evidence: "summary", rateLimitRetry: 2 },
+    ]);
+    // All three were written when the call ended (21.05 s): without `attemptAt` the first would be dated 21 s late.
+    expect(writtenAt.slice(0, 3)).toEqual([21_050, 21_050, 21_050]);
+    // The extra fields stay in `result`: the recorded call is the reply as OpenRouter gave it.
+    expect(writer[0].call).toEqual(limited(7_000));
+    for (const record of records.filter((entry) => entry.role === "judge")) expect(record.result).not.toHaveProperty("attemptAt");
+  });
+
+  it("gives each draft a key of its own when the writer's reply has no generation id, so a rejected draft counts once", async () => {
+    const noId = (reply: OpenRouterCallResult): OpenRouterCallResult => reply.ok ? { ...reply, generationId: null } : reply;
+    const { promise, records } = run({ writers: [noId(SOL(writerJson)), noId(LUNA(writerJson))], judge: [GLM(UNFAITHFUL), GLM(UNFAITHFUL)] });
+    expect((await promise).kind).toBe("held");
+    const judged = records.filter((record) => record.role === "judge");
+    const keys = judged.map((record) => [record.result.judgedArm, record.result.judgedGeneration]);
+    // Both levels' calls on a draft carry that draft's key; the two drafts have different ones.
+    expect(keys).toEqual([["sol", keys[0][1]], ["sol", keys[0][1]], ["luna", keys[2][1]], ["luna", keys[2][1]]]);
+    expect(keys[0][1]).toEqual(expect.stringMatching(/^draft:[0-9a-f-]{36}$/u));
+    expect(keys[2][1]).toEqual(expect.stringMatching(/^draft:[0-9a-f-]{36}$/u));
+    expect(keys[2][1]).not.toBe(keys[0][1]);
+    // Four rejecting judge calls, two rejected drafts on the dashboard.
+    const calls: DashboardCallRow[] = judged.map((record) => ({
+      wiseSessionId: record.wiseSessionId, role: "judge", arm: "glm", requestedModel: record.requestedModel, ok: true, costUsd: 0,
+      createdAt: new Date("2026-09-30T03:02:00.000Z"), result: record.result,
+    }));
+    const control = {
+      id: "default", mode: "live" as const, disabledTutors: [], haltedAt: null, haltReason: null, leaseToken: null, leaseUntil: null,
+      updatedBy: null, updatedAt: new Date("2026-09-30T01:00:00.000Z"),
+    };
+    expect(buildAutowriterDashboard({ now: new Date("2026-09-30T05:00:00.000Z"), windowDays: 7, control, sessions: [], calls, webhooks: [] }).judgeRejections).toBe(2);
+    // A reply with a generation id keeps it as the key.
+    const withId = run({ writers: [SOL(writerJson)], judge: [GLM(FAITHFUL)] });
+    await withId.promise;
+    expect(withId.records.filter((record) => record.role === "judge").map((record) => record.result.judgedGeneration)).toEqual(["g", "g"]);
+  });
+
+  describe("a judge level leaves off once the other level has rejected the draft or stopped the run", () => {
+    /**
+     * Like `run`, with the order of the judges' first replies under control: the level `first` answers first, and the
+     * other level's first reply arrives only once that call is on record (so `first` has decided by then).
+     */
+    function ordered(script: Script, first: "medium" | "high", options: Options = {}) {
+      const records: CallRecord[] = [];
+      const requests: Request[] = [];
+      const waits: number[] = [];
+      let open = () => {};
+      const firstRecorded = new Promise<void>((resolve) => { open = resolve; });
+      const queues = { writer: [...script.writers], medium: [...(script.medium ?? [])], high: [...(script.high ?? [])] };
+      const heldBack = new Set<string>();
+      const callModel = async (request: Request) => {
+        requests.push(request);
+        if (request.schemaName === "post_class_feedback") return queues.writer.shift()!;
+        const level = request.effort as "medium" | "high";
+        if (level !== first && !heldBack.has(level)) {
+          heldBack.add(level);
+          await firstRecorded;
+        }
+        const reply = queues[level].shift();
+        if (!reply) throw new Error(`unexpected judge call at ${level}`);
+        return reply;
+      };
+      const promise = runWritingPipeline({
+        apiKey: "k",
+        session: {
+          wiseSessionId: "6a0000000000000000000002", studentFullName: STUDENT_NAME, studentDisplayName: "Somchai",
+          classDetails: [], scheduledMinutes: 60, summary: { text: SUMMARY, meetingUUIDs: [] },
+        },
+        tutorNames: ["Kevin Hsieh", "Kev"],
+        priorFeedback: [],
+        record: async (record) => {
+          records.push(record);
+          if (record.role === "judge" && record.result.effort === first) open();
+        },
+        remainingMs: () => 700_000,
+        callModel: callModel as never,
+        sleep: async (ms) => { waits.push(ms); },
+        random: () => 0.5,
+        rateLimitRetries: options.rateLimitRetries,
+      });
+      return { promise, records, requests, waits };
+    }
+    const efforts = (requests: Request[]) => judgeRequests(requests).map((request) => request.effort);
+    /** Sol's draft is judged; the Luna fallback's reply is not JSON, so a rejected Sol draft ends in a hold. */
+    const writers = () => [SOL(writerJson), LUNA("not json")];
+    const rejected = { kind: "held", reasons: ["sol:unfaithful:scored 95%", "luna:output_not_json"] };
+
+    it("makes no second try after an unusable reply: the draft is rejected on the other level's verdict", async () => {
+      const { promise, requests, records } = ordered({ writers: writers(), high: [GLM(UNFAITHFUL)], medium: [GLM("not json"), GLM(FAITHFUL)] }, "high");
+      expect(await promise).toEqual(rejected);
+      // Medium's one reply was unusable; its second try (which would have passed) is not made.
+      expect(efforts(requests)).toEqual(["medium", "high"]);
+      expect(records.filter((record) => record.role === "judge").map((record) => [record.result.effort, record.result.error ?? record.result.faithful]))
+        .toEqual([["high", false], ["medium", "judge_unparseable"]]);
+      // The same the other way round.
+      const mirrored = ordered({ writers: writers(), medium: [GLM(UNFAITHFUL)], high: [GLM("{}"), GLM(FAITHFUL)] }, "medium");
+      expect(await mirrored.promise).toEqual(rejected);
+      expect(efforts(mirrored.requests)).toEqual(["medium", "high"]);
+    });
+
+    it("makes no second try once the other level has stopped the run: that stop is the outcome", async () => {
+      const { promise, requests } = ordered({ writers: writers(), high: [fail("timeout", null)], medium: [GLM("not json"), GLM(FAITHFUL)] }, "high");
+      expect(await promise).toEqual({ kind: "infra", error: "judge:high:timeout", modelFailure: true, stage: "judge" });
+      expect(efforts(requests)).toEqual(["medium", "high"]);
+      expect(requests.map((request) => request.model)).not.toContain("openai/gpt-6-luna");
+    });
+
+    it("makes no in-run retry of a rate-limited level: no wait, and its rate limit is not a failure of its own", async () => {
+      // The other level rejected the draft: rejected on that verdict, and the fallback writer goes on.
+      const afterVerdict = ordered({ writers: writers(), high: [GLM(UNFAITHFUL)], medium: [limited(), GLM(FAITHFUL)] }, "high");
+      expect(await afterVerdict.promise).toEqual(rejected);
+      expect(afterVerdict.waits).toEqual([]);
+      expect(efforts(afterVerdict.requests)).toEqual(["medium", "high"]);
+      // The request was made, so it is on record — with when it was sent, and no wait after it.
+      expect(afterVerdict.records.find((record) => record.result.effort === "medium")?.result)
+        .toEqual({ effort: "medium", error: LIMITED, attemptAt: expect.any(String), judgedArm: "sol", judgedGeneration: "g", evidence: "summary" });
+      // The other level stopped the run: its stop is the outcome, not this level's rate limit.
+      const afterStop = ordered({ writers: writers(), high: [fail("timeout", null)], medium: [limited(), GLM(FAITHFUL)] }, "high");
+      expect(await afterStop.promise).toEqual({ kind: "infra", error: "judge:high:timeout", modelFailure: true, stage: "judge" });
+      expect(afterStop.waits).toEqual([]);
+      expect(efforts(afterStop.requests)).toEqual(["medium", "high"]);
+    });
+
+    it("still tries again while the other level has only passed the draft, and still stops on a level's own failure", async () => {
+      // High passed it: medium's verdict is still needed, so its second try and its retry are made.
+      const secondTry = ordered({ writers: writers(), high: [GLM(FAITHFUL)], medium: [GLM("not json"), GLM(FAITHFUL)] }, "high");
+      expect(await secondTry.promise).toMatchObject({ kind: "draft", arm: "sol" });
+      expect(efforts(secondTry.requests)).toEqual(["medium", "high", "medium"]);
+      const retried = ordered({ writers: writers(), high: [GLM(FAITHFUL)], medium: [limited(), GLM(FAITHFUL)] }, "high");
+      expect(await retried.promise).toMatchObject({ kind: "draft", arm: "sol" });
+      expect(retried.waits).toEqual([4_000]);
+      // A call that fails on its own (a time-out) after the other level's verdict is a judge failure, as before.
+      const failed = ordered({ writers: writers(), high: [GLM(UNFAITHFUL)], medium: [fail("timeout", null)] }, "high");
+      expect(await failed.promise).toEqual({ kind: "infra", error: "judge:medium:timeout", modelFailure: true, stage: "judge" });
+      // So is a rate limit in a sweep whose judge retries are off: nothing was left off on the other level's account.
+      const retriesOff = ordered({ writers: writers(), high: [GLM(UNFAITHFUL)], medium: [limited()] }, "high", { rateLimitRetries: { writer: true, judge: false } });
+      expect(await retriesOff.promise).toEqual({ kind: "infra", error: `judge:medium:${LIMITED}`, modelFailure: false, stage: "judge", rateLimited: true });
+    });
+
+    it("sends no retry when the other level decided while this one waited: asked again after the wait", async () => {
+      // Medium is rate limited and waits; high's verdict (unfaithful) arrives during that wait.
+      const records: CallRecord[] = [];
+      const requests: Request[] = [];
+      const waits: number[] = [];
+      let mediumWaits = () => {};
+      const mediumWaiting = new Promise<void>((resolve) => { mediumWaits = resolve; });
+      let highRecorded = () => {};
+      const highOnRecord = new Promise<void>((resolve) => { highRecorded = resolve; });
+      const queues = { writer: writers(), medium: [limited(), GLM(FAITHFUL)], high: [GLM(UNFAITHFUL)] };
+      const result = await runWritingPipeline({
+        apiKey: "k",
+        session: {
+          wiseSessionId: "6a0000000000000000000002", studentFullName: STUDENT_NAME, studentDisplayName: "Somchai",
+          classDetails: [], scheduledMinutes: 60, summary: { text: SUMMARY, meetingUUIDs: [] },
+        },
+        tutorNames: ["Kevin Hsieh", "Kev"],
+        priorFeedback: [],
+        record: async (record) => {
+          records.push(record);
+          if (record.role === "judge" && record.result.effort === "high") highRecorded();
+        },
+        remainingMs: () => 700_000,
+        callModel: (async (request: Request) => {
+          requests.push(request);
+          if (request.schemaName === "post_class_feedback") return queues.writer.shift()!;
+          const level = request.effort as "medium" | "high";
+          if (level === "high") await mediumWaiting;
+          const reply = queues[level].shift();
+          if (!reply) throw new Error(`unexpected judge call at ${level}`);
+          return reply;
+        }) as never,
+        // The wait ends only once high's verdict is on record.
+        sleep: async (ms) => { waits.push(ms); mediumWaits(); await highOnRecord; },
+        random: () => 0.5,
+      });
+      // Rejected on high's verdict, and the fallback writer went on. Medium's retry (which would have passed) was never
+      // sent: by the end of its wait it could change nothing.
+      expect(result).toEqual(rejected);
+      expect(waits).toEqual([4_000]);
+      expect(efforts(requests)).toEqual(["medium", "high"]);
+      // Its one request is on record with when it was sent and the wait it made — not as a failure of its own.
+      expect(records.find((record) => record.result.effort === "medium")?.result)
+        .toEqual({ effort: "medium", error: LIMITED, attemptAt: expect.any(String), waitedMs: 4_000, judgedArm: "sol", judgedGeneration: "g", evidence: "summary" });
+    });
   });
 });
 
