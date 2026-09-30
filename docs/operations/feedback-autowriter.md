@@ -231,7 +231,7 @@ In `shadow` (and `off`) only the halt-causing outcomes are emailed; draft alerts
 A switched-off tutor's classes are handed back to them silently when they reach the deadline window.
 Nightly tutor reminders are separate (Class Feedback).
 
-## 8. Writer model (GPT-6.1 Sol since 2026-09-30) and judge levels
+## 8. Writer model (GPT-6.1 Sol since 2026-09-30)
 
 Sol writes (reasoning `low`), Luna is the fallback writer and GLM the judge, all on zero-data-retention routes, for
 summaries and transcripts alike ([feature page](../features/feedback-autowriter.md#models)). Deploy order: apply
