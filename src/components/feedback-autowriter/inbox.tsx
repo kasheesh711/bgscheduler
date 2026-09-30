@@ -156,7 +156,9 @@ export function Inbox({ items, dashboard, review, now, filteredTo, reviewUnavail
           <h2 id="autowriter-inbox-title" className="text-sm font-[650] tracking-[-0.02em]">What needs you</h2>
           <CountChip>{openCount(items)} open</CountChip>
         </div>
-        <span className="text-[11px] text-muted-foreground">{filteredTo ? `filtered to ${filteredTo}` : "Nothing urgent is hidden below."}</span>
+        <span className="text-[11px] text-muted-foreground">
+          {filteredTo ? `filtered to ${filteredTo}` : reviewUnavailable ? "Held classes and failed posts only." : "Nothing urgent is hidden below."}
+        </span>
       </div>
 
       {groups.length === 0 && reviewUnavailable ? (

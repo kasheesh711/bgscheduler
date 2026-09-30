@@ -147,8 +147,10 @@ describe("Inbox", () => {
     expect(failed).toContain("Held classes and failed posts did load: there are none.");
     expect(failed).toContain("0 open");
     expect(failed).not.toContain("Nothing needs you");
-    // The empty state says it once: no footer repeating it.
+    // The empty state says it once: no footer repeating it, and no "nothing urgent is hidden" while incidents are missing.
     expect(failed).not.toContain("so this list has the held classes and the failed posts only");
+    expect(failed).not.toContain("Nothing urgent is hidden below.");
+    expect(failed).toContain("Held classes and failed posts only.");
     const missing = render({ dashboard: quiet, review: null, reason: "review_tables_missing" });
     expect(missing).toContain("Posts to review and incidents are not available yet — migration 0101 creates their tables.");
     expect(missing).not.toContain("Nothing needs you");
