@@ -45,7 +45,7 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
 4. **Write.** `openai/gpt-6.1-sol` (GPT-6.1 Sol) on a zero-data-retention route, reasoning `low` (see
    [Models](#models)); names are redacted before anything leaves BGScheduler. The model writes `[STUDENT_1]`,
    which becomes the student's **nickname** — the
-   part before the dot in the Wise name's brackets ("Worawut (Bas.Ho) Horburapa" → "Bas"), or the first name when
+   part before the dot in the Wise name's brackets ("Somchai (Tom.Ja) Jaidee" → "Tom"), or the first name when
    there is none (owner decision, 29 Sep). The writer and the judge both get the **class details** from Wise
    (`describeClass` in [`prompt.ts`](../../src/lib/feedback-autowriter/prompt.ts)): at BeGifted Wise's `classSubject`
    is the programme or level band ("11+/13+", "Y9-11 / G8-10 (Int.)") and the subject is only in the session title
