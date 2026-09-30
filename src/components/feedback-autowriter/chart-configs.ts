@@ -166,14 +166,16 @@ const labelsOf = (days: readonly TrendDay[]) => days.map((day) => dayMonth(day.d
 
 /**
  * Accuracy and the gate: daily accuracy points, the 7-day average, the rolling 14-day Wilson lower bound, the dashed
- * pass bar, and a red marker on every day with a critical verdict (at that day's accuracy, or on the average when
- * the day has none of its own).
+ * pass bar, and a red marker on every day with a critical verdict: at that day's accuracy, on the average when the
+ * day has none of its own, and on the axis's floor when it has neither (a critical verdict on a post that was not
+ * sampled, in a week without a required review) — never at a value below the axis, where it would not be drawn.
  */
 export function buildAccuracyChartConfig(days: readonly TrendDay[], colors: AutowriterChartColors): ChartConfiguration {
   const daily = days.map((day) => day.accuracy);
   const average = days.map((day) => day.accuracy7d);
   const wilson = days.map((day) => day.wilson14d);
-  const critical = days.map((day) => day.critical > 0 ? day.accuracy ?? day.accuracy7d ?? 0 : null);
+  const axis = percentAxis(colors, percentAxisMin([daily, average, wilson], 0.6));
+  const critical = days.map((day) => day.critical > 0 ? day.accuracy ?? day.accuracy7d ?? axis.min : null);
   return {
     type: "line",
     data: {
@@ -193,7 +195,7 @@ export function buildAccuracyChartConfig(days: readonly TrendDay[], colors: Auto
     options: {
       ...COMMON,
       interaction: { mode: "index", intersect: false },
-      scales: { x: dateAxis(colors, labelsOf(days)), y: percentAxis(colors, percentAxisMin([daily, average, wilson], 0.6)) },
+      scales: { x: dateAxis(colors, labelsOf(days)), y: axis },
       plugins: {
         legend: { display: false },
         tooltip: tooltip((item) => {
@@ -412,14 +414,16 @@ export function lastValue(series: Series): number | null {
 
 /**
  * A rail mini chart: daily points, the 7-day line and the dashed target, with only the first and last date on the
- * axis. `critical` marks days in red (the accuracy chart).
+ * axis. `critical` marks days in red (the accuracy chart): at the day's value, on the 7-day line, or on the axis's
+ * floor when the day has neither.
  */
 export function buildMiniRateChartConfig(
   input: { labels: readonly string[]; daily: Series; average: Series; target: number; critical?: readonly boolean[] },
   colors: AutowriterChartColors,
 ): ChartConfiguration {
   const last = input.labels.length - 1;
-  const marked = input.critical ? input.daily.map((value, index) => input.critical?.[index] ? value ?? input.average[index] ?? 0 : null) : null;
+  const floor = percentAxisMin([input.daily, input.average, [input.target - 0.1]], 1);
+  const marked = input.critical ? input.daily.map((value, index) => input.critical?.[index] ? value ?? input.average[index] ?? floor : null) : null;
   return {
     type: "line",
     data: {
@@ -448,7 +452,7 @@ export function buildMiniRateChartConfig(
           },
         },
         y: {
-          min: percentAxisMin([input.daily, input.average, [input.target - 0.1]], 1),
+          min: floor,
           max: 1,
           border: { display: false },
           grid: { color: colors.grid },

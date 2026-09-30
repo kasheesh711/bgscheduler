@@ -127,6 +127,26 @@ describe("buildAccuracyChartConfig", () => {
     expect(dataset(buildAccuracyChartConfig(DAYS.slice(0, 2), COLORS), SERIES.critical).data).toEqual([null, null]);
   });
 
+  it("keeps the marker on the chart when its day has neither an accuracy nor an average: on the axis's floor", () => {
+    // A critical verdict on a post that was not sampled, in a week without a required review: nothing to sit on.
+    const days = [
+      day("2026-10-01", { reviewed: 5, accurate: 5, accuracy: 1, accuracy7d: 1, wilson14d: 0.9 }),
+      day("2026-10-09", { critical: 1, wilson14d: 0.9 }),
+    ];
+    const lonely = buildAccuracyChartConfig(days, COLORS);
+    const floor = scales(lonely).y.min;
+    // The axis does not reach down for the marker (zero is not an accuracy), and the marker is not below the axis.
+    expect(floor).toBe(0.6);
+    expect(dataset(lonely, SERIES.critical).data).toEqual([null, floor]);
+    // The floor follows the axis when the values pull it down, in the twenty-point steps of a long axis too.
+    const low = buildAccuracyChartConfig([day("2026-10-01", { reviewed: 4, accurate: 1, accuracy: 0.25, accuracy7d: 0.25, wilson14d: 0.1 }), days[1]], COLORS);
+    expect(scales(low).y.min).toBe(0);
+    expect(dataset(low, SERIES.critical).data).toEqual([null, 0]);
+    const mid = buildAccuracyChartConfig([day("2026-10-01", { reviewed: 2, accurate: 1, accuracy: 0.5, accuracy7d: 0.5, wilson14d: 0.35 }), days[1]], COLORS);
+    expect(dataset(mid, SERIES.critical).data).toEqual([null, scales(mid).y.min]);
+    expect(scales(mid).y.min).toBeCloseTo(0.2);
+  });
+
   it("reaches down to the lowest value shown and says what a day's numbers are", () => {
     expect(scales(config).y).toMatchObject({ min: 0.2, max: 1 });
     expect(scales(config).y.ticks.callback?.(0.8, 0)).toBe("80%");
@@ -235,6 +255,10 @@ describe("the rail's mini charts", () => {
     expect(dataset(config, SERIES.critical).data.filter((value) => value !== null)).toEqual([0.5]);
     const tick = scales(config).x.ticks.callback!;
     expect([tick(0, 0), tick(5, 5), tick(13, 13)]).toEqual(["23 Sep", "", "6 Oct"]);
+    // A critical day with no value and no average sits on the axis's floor, never below it.
+    const lonely = buildMiniRateChartConfig({ labels: ["5 Oct", "6 Oct"], daily: [0.9, null], average: [0.9, null], target: 0.8, critical: [false, true] }, COLORS);
+    expect(scales(lonely).y.min).toBe(0.7);
+    expect(dataset(lonely, SERIES.critical).data).toEqual([null, 0.7]);
     // The coverage chart marks nothing.
     const coverage = buildMiniRateChartConfig({ labels: series.labels, daily: series.coverage, average: series.coverage7d, target: 0.7 }, COLORS);
     expect(datasets(coverage).map((entry) => entry.label)).toEqual(["7-day average", "Daily value", "Target"]);
