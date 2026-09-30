@@ -926,7 +926,8 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       ["v3 verdict, no stamp", { judge: { faithful: true, unsupported: [] } }, "awaiting_recording"],
       ["current stamp, incomplete verdict", { judge: { faithful: true, unsupported: [] }, pipeline: current }, "awaiting_recording"],
       ["current stamp, a problem listed", { judge: { ...PASSING_VERDICT, misattributed: ["x"] }, pipeline: current }, "awaiting_recording"],
-      ["mixed versions", { judge: PASSING_VERDICT, pipeline: { ...current, judgeVersion: 3 } }, "awaiting_recording"],
+      ["current prompt, previous judge", { judge: PASSING_VERDICT, pipeline: { ...current, judgeVersion: 3 } }, "awaiting_recording"],
+      ["previous prompt, current judge", { judge: PASSING_VERDICT, pipeline: { ...current, promptVersion: 3 } }, "awaiting_recording"],
     ];
     for (const [label, draft, state] of cases) {
       await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);

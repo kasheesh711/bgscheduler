@@ -19,7 +19,7 @@ simply ingests what the autowriter posted like any other submission.
 | Rule | Where |
 |---|---|
 | Only the roster tutors (Kevin, Gift, Ek, Peat, Mimi — chosen by online-class volume to cover ≥20% of institution online classes), on both of their Wise accounts: the "… Online" one and their main one. Tutors teach online from either (all of Gift's online classes in September were on her main account); in-person classes on either are skipped by the session type below | [`roster.ts`](../../src/lib/feedback-autowriter/roster.ts) |
-| Session `type=SCHEDULED`, `classType=ONE_TO_ONE`, exactly one student who attended ≥50%, meeting `ENDED`. The tutor joining their own class again is not a student: their other Wise account, or a Zoom guest (no Wise account) under one of their names (Peat, 29 Sep, joined twice more as "Kasidej Jungrakangthong" and "Peat"). Any other extra participant still counts, so the class is skipped — except a student who joined by Zoom link as a guest: when the Wise account attended under 50% and exactly one guest and the tutor both stayed ≥ 80% of the class, the guest is the student (owner rule, 29 Sep); the Wise account stays the one billed, credit-checked and named, the guest's name is redacted as the same `[STUDENT_1]` (device words like "Zoom" or "iPad" are left alone), and the row records `studentJoinedAsGuest`. While attendance settles (60 min), an account plus a guest is retried, not skipped for good. The student whose credit is checked is stored with the POST claim and re-used by reconciliation. The one student must be a Wise user (`student_not_wise_user` otherwise: retried while attendance settles, then held). A title starting "In-Person Session" / "On-site Session" is out of scope even if Wise's type says online (`session_type_in_person_title`) | `evaluateSessionGates`, `studentParticipants` in [`session.ts`](../../src/lib/feedback-autowriter/session.ts) |
+| Session `type=SCHEDULED`, `classType=ONE_TO_ONE`, exactly one student who attended ≥50%, meeting `ENDED`. The tutor joining their own class again is not a student: their other Wise account, or a Zoom guest (no Wise account) under one of their names (Peat, 29 Sep, joined twice more as "Kasidej Jungrakangthong" and "Peat"). Any other extra participant still counts, so the class is skipped — except a student who joined by Zoom link as a guest: when the Wise account attended under 50% and exactly one guest and the tutor both stayed ≥ 80% of the class, the guest is the student (owner rule, 29 Sep); the Wise account stays the one billed, credit-checked and named, the guest's name is redacted as the same `[STUDENT_1]` (device, family and place words like "Zoom", "iPad", "Mom" or "Office" are left alone), and the row records `studentJoinedAsGuest`. While attendance settles (60 min), an account plus a guest is retried, not skipped for good. The student whose credit is checked is stored with the POST claim and re-used by reconciliation. The one student must be a Wise user (`student_not_wise_user` otherwise: retried while attendance settles, then held). A title starting "In-Person Session" / "On-site Session" is out of scope even if Wise's type says online (`session_type_in_person_title`) | `evaluateSessionGates`, `studentParticipants` in [`session.ts`](../../src/lib/feedback-autowriter/session.ts) |
 | Before the post-class deadline (≥30 min margin) | same |
 | Only when the teacher submission is Wise's blank auto-submission (`metadata.autoSubmitted=true`, all answers empty); anything a person wrote is never touched | `classifyTeacherSubmission` |
 | Re-sends the auto-submission's own `sessionStatus` / `creditsConsumed` (credits must equal the scheduled hours) — no new charge | [`billing.ts`](../../src/lib/feedback-autowriter/billing.ts) |
@@ -81,24 +81,40 @@ Prompt and judge versions are now 4 ([`prompt.ts`](../../src/lib/feedback-autowr
 - **Writer rules.** Improvement is written as suggestions — never as homework the tutor set, never repeating the
   homework. Homework is only work the record shows the tutor clearly setting for after this lesson; work described
   as remaining or unfinished is not homework, an unclear record gives an empty field, and the homework is never
-  restated in another field (the JSON schema says the same). New rule 11, *who did what*: in a summary the student is
+  restated in another field (the JSON schema says the same). In summary mode rule 7 adds that a "Next steps" line
+  in the summary is the summary's own suggestion, not homework the tutor set (owner decision, 30 Sep; the
+  transcript prompt is unchanged). New rule 11, *who did what*: in a summary the student is
   always `[STUDENT_1]` and the tutor `[TUTOR]`, and any other name is someone else (another student, family, a
   friend, a character in the lesson material); in a transcript only STUDENT lines are the student's, and anyone
   clearly not the student is never `[STUDENT_1]` — hedged, because a Thai-script or mis-heard name of the student is
   not redacted. The transcript's "covered, not mastered" and Thai-name rules are now 12 and 13.
 - **Other-people hint (summary mode).** `otherPeopleNamed` lists up to 8 capitalised words that come right before a
-  person verb ("said", "mentioned", "finished", "was" …), leaving out common words, days and months, the class
-  details, the Soniox terms, and names that start with the student's first name or nickname. When there are any,
-  the writer and the judge both get "Other people named in the summary (never [STUDENT_1]): …" before the summary.
-  It is a hint, never a gate: a missed name or a harmless extra (a character, a subject) changes nothing else.
+  person verb ("said", "reported", "finished", "didn't", "was" …; contractions with either apostrophe), leaving
+  out common words, days and months (except right before a speech verb: "May said" — May, June and April are
+  nicknames too), the class details, the Soniox terms, the name words of the student's guest names, and the
+  student's own names: any name starting with their first name or nickname, or only that name itself when it has
+  two letters (a student "Ma" does not hide a "Marco"). Names seen before a speech or action verb come first, then
+  those only seen before a state verb ("was", "has": sentence-initial nouns like "Progress was steady" take those
+  too), and the cap applies after that ranking. When there are any, the writer and the judge both get "Other people
+  named in the summary (never [STUDENT_1]): …" before the summary. It is a hint, never a gate: a missed name or a
+  harmless extra (a character, a subject) changes nothing else.
+- **Redaction gaps closed.** Rule 11 says any other name in a summary is someone else, so the student's own names
+  must not survive redaction. An odd bracket code "(Tom Ja)" is replaced whole and its first word "Tom" too, where
+  written capitalised. A possessive guest name ("Nathan’s iPad") hides the bare "Nathan" and keeps possessives
+  natural (`[STUDENT_1]’s`). Family and place words in a guest name ("Mom's iPad", "Mae iPad", "Office PC") are
+  never taken for the student: the student joined on someone else's device, and the whole guest name is still
+  redacted as the student.
 - **Judge.** Reasoning `high` (was `medium`; the writer stays `max`). It returns three lists — `unsupported` (claims
   the record does not state or clearly imply), `misattributed` (something given to `[STUDENT_1]` that the record
   says about the tutor or someone else) and `homeworkNotSet` (homework, tasks or due dates the tutor did not
-  clearly set) — and `faithful` only when all three are empty. A reply missing a list is unparseable, so it fails
-  closed (one more try, then the session retries later). Hold reasons and the dashboard's "Judge flagged" line use
-  `judgeProblems`: unsupported quotes as they are, then `wrong person: …` and `homework not set: …`; judge call
-  records keep the three lists plus that flat `problems` list. Verdicts stored before v4 (`{ faithful, unsupported }`)
-  still show their unsupported quotes. The judge still gets no style guide or examples.
+  clearly set; in summary mode a "Next steps" line is not homework the tutor set) — and `faithful` only when all
+  three are empty. The schema's list descriptions say "the lesson record", since both modes send them. A reply
+  missing a list is unparseable, so it fails closed (one more try, then the session retries later). Hold reasons and
+  the dashboard's "Judge flagged" line use `judgeProblems`: `wrong person: …` first, then `homework not set: …`, then
+  the unsupported quotes as they are — a hold reason keeps only its first three problems (300 characters) and an
+  alert shows 200 characters, so the two v4 kinds are never hidden behind unsupported claims. Judge call records
+  keep the three lists plus that flat `problems` list. Verdicts stored before v4 (`{ faithful, unsupported }`) still
+  show their unsupported quotes. The judge still gets no style guide or examples.
 - **Stored drafts.** A judged transcript draft is reused on a retry only when the current prompt and judge versions
   wrote and passed it (`metadata.pipeline`, a complete v4 verdict). An older one — for example parked at deploy time
   — is written and judged again from its kept Soniox job, and a shadow draft re-queued by going live restarts its

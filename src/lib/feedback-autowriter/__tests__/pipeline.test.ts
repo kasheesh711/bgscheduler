@@ -30,7 +30,7 @@ const MISATTRIBUTED = JSON.stringify({
 });
 const SUMMARY = "Overview: Kevin and Somchai practised fractions; Somchai rushed simplification but corrected it.";
 
-function run(replies: OpenRouterCallResult[], evidence: "summary" | "transcript" = "summary", summaryText = SUMMARY) {
+function run(replies: OpenRouterCallResult[], evidence: "summary" | "transcript" = "summary", summaryText = SUMMARY, studentAliases?: string[]) {
   const records: CallRecord[] = [];
   const requests: Array<{ model: string; messages: Array<{ content: string }>; schemaName: string; effort: string }> = [];
   const callModel = vi.fn(async (request: { model: string; messages: Array<{ role: string; content: string }>; schemaName: string; effort: string }) => {
@@ -44,6 +44,7 @@ function run(replies: OpenRouterCallResult[], evidence: "summary" | "transcript"
     session: {
       wiseSessionId: "6a0000000000000000000002",
       studentFullName: STUDENT_NAME,
+      studentAliases,
       studentDisplayName: "Somchai",
       classDetails: ["Programme: 11+/13+", "Class subject: NVR", "Terms: 11+/13+ = the ISEB 11+/13+ entrance tests"],
       scheduledMinutes: 60,
@@ -151,6 +152,14 @@ describe("runWritingPipeline", () => {
     for (const request of requests) expect(request.messages[1].content).toContain(`${line}\n\nLesson summary:`);
   });
 
+  it("never lists the student's own guest name among the other people", async () => {
+    // A lower-case guest name survives redaction where the summary capitalises it, but it is still the student.
+    const summary = "Overview: Kevin checked the essay. Nathan said he finished it. Ploy said she did not.";
+    const { promise, requests } = run([GLM(writerJson), GLM(FAITHFUL)], "summary", summary, ["nathan ipad"]);
+    await promise;
+    for (const request of requests) expect(request.messages[1].content).toContain("Other people named in the summary (never [STUDENT_1]): Ploy\n");
+  });
+
   it("never gives the other-people line in transcript mode", async () => {
     const { promise, requests } = run([GLM(writerJson), GLM(FAITHFUL)], "transcript", "[00:00] TUTOR: Nathan said he read 8 pages\n[00:05] STUDENT: I read 6");
     await promise;
@@ -179,6 +188,25 @@ describe("runWritingPipeline", () => {
       { ...recorded, judgedArm: "glm", evidence: "summary" },
       { ...recorded, judgedArm: "luna", evidence: "summary" },
     ]);
+  });
+
+  it("names wrong-person and homework problems in the held reason ahead of three unsupported claims", async () => {
+    // The reason keeps three problems (300 characters) and an alert shows 200: the v4 kinds must come first.
+    const verdict = (homeworkNotSet: string[]) => JSON.stringify({
+      faithful: false,
+      unsupported: ["scored 95% on the test", "read chapter four aloud", "used a timer for every section"],
+      misattributed: ["[STUDENT_1] mentioned only 8 pages"],
+      homeworkNotSet,
+    });
+    const { promise } = run([GLM(writerJson), GLM(verdict([])), LUNA(writerJson), GLM(verdict(["finish the three remaining problems"]))]);
+    expect(await promise).toEqual({
+      kind: "held",
+      reasons: [
+        "glm:unfaithful:wrong person: [STUDENT_1] mentioned only 8 pages | scored 95% on the test | read chapter four aloud",
+        "luna:unfaithful:wrong person: [STUDENT_1] mentioned only 8 pages | homework not set: finish the three remaining problems | " +
+          "scored 95% on the test",
+      ],
+    });
   });
 
   it("fails closed on a judge reply without the v4 lists: no draft, retried later", async () => {

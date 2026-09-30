@@ -109,7 +109,9 @@ export async function runWritingPipeline(input: {
   const redactedClassDetails = classDetailsBlock(session.classDetails, names);
   const evidence: EvidenceKind = session.evidence ?? "summary";
   // One list for both models: the writer is told these people are never [STUDENT_1], the judge checks it.
-  const otherPeople = evidence === "summary" ? otherPeopleNamed(redactedSummary, session.studentFullName, session.classDetails) : [];
+  const otherPeople = evidence === "summary"
+    ? otherPeopleNamed(redactedSummary, session.studentFullName, session.classDetails, session.studentAliases)
+    : [];
 
   const run = async (config: AutowriterModelConfig, role: "writer" | "judge", messages: Array<{ role: "system" | "user"; content: string }>, preferredTimeoutMs: number) => {
     const timeoutMs = Math.min(preferredTimeoutMs, input.remainingMs() - 45_000);

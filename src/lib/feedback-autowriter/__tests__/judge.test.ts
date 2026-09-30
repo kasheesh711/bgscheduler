@@ -40,18 +40,28 @@ describe("judge output (v4)", () => {
     expect(parseJudgeOutput(verdict({ homeworkNotSet: ["z"] }))).toEqual({ ...CLEAN, faithful: false, homeworkNotSet: ["z"] });
   });
 
-  it("lists every problem, marking the wrong-person and homework ones", () => {
+  it("lists every problem, wrong-person ones first, then homework ones, then unsupported claims", () => {
+    // First, so a hold reason cut to three problems or an alert cut to 200 characters still names them.
     expect(judgeProblems({
-      unsupported: ["scored 95%"],
+      unsupported: ["scored 95%", "read chapter four aloud", "used a timer"],
       misattributed: ["[STUDENT_1] said 8 of the 10 pages have been covered"],
       homeworkNotSet: ["finish the three remaining problems"],
     })).toEqual([
-      "scored 95%",
       "wrong person: [STUDENT_1] said 8 of the 10 pages have been covered",
       "homework not set: finish the three remaining problems",
+      "scored 95%",
+      "read chapter four aloud",
+      "used a timer",
     ]);
     // A stored v3 verdict read with empty new lists keeps its unsupported quotes as they were.
-    expect(judgeProblems({ unsupported: ["scored 95%"], misattributed: [], homeworkNotSet: [] })).toEqual(["scored 95%"]);
+    expect(judgeProblems({ unsupported: ["scored 95%", "used a timer"], misattributed: [], homeworkNotSet: [] }))
+      .toEqual(["scored 95%", "used a timer"]);
+  });
+
+  it("describes the lists by the lesson record, not the summary: transcript mode sends the same schema", () => {
+    expect(JUDGE_JSON_SCHEMA.properties.unsupported.description)
+      .toBe("Short quotes of claims about this lesson that the lesson record does not support.");
+    expect(JSON.stringify(JUDGE_JSON_SCHEMA)).not.toContain("summary");
   });
 });
 
@@ -75,13 +85,14 @@ describe("buildJudgeMessages", () => {
       "- unsupported: a factual claim about THIS lesson — topics, what the student did or got wrong, scores, materials, dates — that the summary does not state or clearly imply.",
       "- misattributed: something the feedback says [STUDENT_1] did, said, finished, got wrong or did not finish, when the summary says it about [TUTOR] or about another person.",
       "- homeworkNotSet: homework, a task or a due date the feedback says was set — everything under \"Homework and due date\", and any such statement in another field — " +
-        "unless the summary clearly shows the tutor setting it for [STUDENT_1] to do after this lesson. Work only described as remaining, unfinished or still to complete was not set.",
+        "unless the summary clearly shows the tutor setting it for [STUDENT_1] to do after this lesson. Work only described as remaining, unfinished or still to complete was not set. " +
+        "A \"Next steps\" line in the summary is the summary's own suggestion, not homework the tutor set.",
       "General advice, encouragement and suggested practice (including practice before the next lesson) are fine and must not be listed, unless they are presented as homework the tutor set.",
       "faithful is true only when all three lists are empty.",
     ].join("\n"));
   });
 
-  it("is the same prompt for a transcript, with the transcript's wording and sentences, and no absolute other-name rule", () => {
+  it("is the same prompt for a transcript, with the transcript's wording and sentences, and no absolute other-name or Next-steps rule", () => {
     expect(build("transcript")[0].content).toBe([
       `You check a tutor's post-class feedback against an automatic transcript of the same lesson (it may mix Thai and English). ${speakerLabelNote("inferred")}`,
       "The student's and the tutor's names are replaced by [STUDENT_1] and [TUTOR]; that is expected.",
@@ -115,6 +126,8 @@ describe("buildJudgeMessages", () => {
       "unless the summary clearly shows the tutor setting it for [STUDENT_1] to do after this lesson. " +
       "Work only described as remaining, unfinished or still to complete was not set.",
     );
+    // Owner decision (30 Sep): Wise's "Next steps: …" line is not homework the tutor set.
+    expect(system.content).toContain("A \"Next steps\" line in the summary is the summary's own suggestion, not homework the tutor set.");
     expect(system.content).toContain("(including practice before the next lesson) are fine and must not be listed, unless they are presented as homework the tutor set.");
     expect(system.content).toContain("faithful is true only when all three lists are empty.");
     expect(system.content).not.toContain("Only lines labelled STUDENT");
@@ -137,6 +150,8 @@ describe("buildJudgeMessages", () => {
     expect(system.content).toContain("unless the transcript clearly shows the tutor setting it for [STUDENT_1]");
     // A transcript can still hold the student's own name in Thai script: no absolute rule about other names.
     expect(system.content).not.toContain("Any other name in the");
+    // A transcript has no Wise "Next steps" line.
+    expect(system.content).not.toContain("Next steps");
   });
 
   it("gives the judge the other-people line before the summary, only in summary mode and only when there are any", () => {

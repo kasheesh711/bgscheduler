@@ -148,9 +148,9 @@ describe("buildAutowriterDashboard", () => {
     const problems = (id: string) => board.recent.find((row) => row.wiseSessionId === id)?.judgeUnsupported;
     expect(problems("v3")).toEqual(["scored 95%"]);
     expect(problems("v4")).toEqual([
-      "scored 95%",
       "wrong person: [STUDENT_1] said 8 of the 10 pages",
       "homework not set: three problems by Friday",
+      "scored 95%",
     ]);
     expect(problems("none")).toEqual([]);
   });
