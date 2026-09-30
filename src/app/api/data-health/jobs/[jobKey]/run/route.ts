@@ -30,7 +30,7 @@ export async function POST(request: NextRequest, context: RunRouteContext) {
     return NextResponse.json({ error: job.manualRunDisabledReason }, { status: 409 });
   }
 
-  if (isWiseClassroomJob(job.key) || job.key === "feedback_autowriter") {
+  if (isWiseClassroomJob(job.key) || job.key.startsWith("feedback_autowriter")) {
     try { await requireClassroomOperationsOwner(); }
     catch (error) { return classroomOperationsAccessError(error); }
   }

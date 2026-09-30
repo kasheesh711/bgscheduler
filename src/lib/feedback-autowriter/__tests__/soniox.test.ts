@@ -61,6 +61,16 @@ describe("Soniox client", () => {
     expect(await client.list(100)).toEqual([{ id: "a", status: "completed", createdAt: new Date("2026-09-29T08:00:00Z"), clientReferenceId: "6a0000000000000000000002" }]);
   });
 
+  it("turns a timeout while reading a long transcript into a typed error", async () => {
+    const slowBody = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => { throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }); },
+    }));
+    await expect(createSonioxClient("k", slowBody as unknown as typeof fetch).transcript("job-1"))
+      .rejects.toMatchObject({ name: "SonioxError", message: "network_TimeoutError", status: null });
+  });
+
   it("surfaces HTTP errors with their status", async () => {
     const { impl } = fakeFetch([{ status: 404, body: { error: "not found" } }]);
     await expect(createSonioxClient("k", impl).get("gone")).rejects.toMatchObject({ name: "SonioxError", status: 404 });

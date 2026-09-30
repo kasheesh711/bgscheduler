@@ -8,7 +8,7 @@ The canonical lookup of every HTTP endpoint in BGScheduler. This page carries **
 
 The new [tutor room booking reference](./tutor-room-booking.md) covers the capability-protected `/api/room` endpoints, tutor LINE approval, admin reservations, and room refresh cron.
 
-The [Feedback Autowriter reference](./feedback-autowriter.md) (2026-09-29) adds four method/path endpoints: the public, secret-checked `POST /api/wise/webhook`, the `GET /api/internal/feedback-autowriter` backstop cron, the `GET /api/feedback-autowriter` dashboard read and the owner-only `POST /api/feedback-autowriter/control`.
+The [Feedback Autowriter reference](./feedback-autowriter.md) (2026-09-29) adds four method/path endpoints: the public, secret-checked `POST /api/wise/webhook`, the `GET /api/internal/feedback-autowriter` backstop cron, the `GET /api/feedback-autowriter` dashboard read and the owner-only `POST /api/feedback-autowriter/control`. Its operating-loop Phase 1 (migration 0101) adds four more: the `GET /api/internal/feedback-autowriter/review` hourly cron, the admin `GET /api/feedback-autowriter/review` read, and the owner-only `POST /api/feedback-autowriter/verdicts` and `POST /api/feedback-autowriter/incidents` (acknowledge).
 
 The [Office Attendance reference](./tutor-attendance.md) covers seven new method/path endpoints for `/api/tutor-attendance`: clocking, reviewed corrections, setup, reads and CSV export.
 

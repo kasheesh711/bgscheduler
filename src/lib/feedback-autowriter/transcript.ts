@@ -129,20 +129,27 @@ export function assignSpeakerRoles(input: {
   segments: readonly Segment[];
   zoomCues: readonly ZoomCue[];
   teacherName: string | null;
+  /**
+   * Other names the same tutor may appear under in Zoom's cues (their other Wise
+   * account, a second device joined as a guest under their own name): their
+   * lines are the tutor's, never the student's.
+   */
+  alsoTeacher?: readonly string[];
 }): RoleAssignment {
   const { segments } = input;
   const teacher = input.teacherName ? normalizeName(input.teacherName) : null;
+  const teacherNames = new Set([...(teacher ? [teacher] : []), ...(input.alsoTeacher ?? []).map(normalizeName)]);
   let zoomTutors = new Set<string>();
   let zoomStudents = new Set<string>();
   // Without a cue under the teacher's name, Zoom says nothing about who is who.
-  if (teacher && input.zoomCues.some((cue) => normalizeName(cue.speakerName) === teacher)) {
+  if (teacher && input.zoomCues.some((cue) => teacherNames.has(normalizeName(cue.speakerName)))) {
     const teacherOverlap = new Map<string, number>();
     const otherOverlap = new Map<string, number>();
     for (const segment of segments) {
       for (const cue of input.zoomCues) {
         const overlap = Math.min(segment.endMs, cue.endMs) - Math.max(segment.startMs, cue.startMs);
         if (overlap <= 0) continue;
-        const target = normalizeName(cue.speakerName) === teacher ? teacherOverlap : otherOverlap;
+        const target = teacherNames.has(normalizeName(cue.speakerName)) ? teacherOverlap : otherOverlap;
         target.set(segment.speaker, (target.get(segment.speaker) ?? 0) + overlap);
       }
     }

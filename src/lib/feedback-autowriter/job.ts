@@ -9,6 +9,7 @@ import { resolveBilling } from "./billing";
 import {
   AUTOWRITER_EVENT_DEADLINE_MS,
   AUTOWRITER_GENERATION_LEASE_MS,
+  AUTOWRITER_MAX_GENERIC_ERRORS,
   AUTOWRITER_MAX_TRANSCRIBE_ERRORS,
   AUTOWRITER_MIN_POST_BUDGET_MS,
   AUTOWRITER_MIN_TRANSCRIPT_CHARACTERS,
@@ -21,6 +22,7 @@ import {
   AUTOWRITER_RETRY_DELAY_MS,
   AUTOWRITER_SONIOX_CLEANUP_MAX,
   AUTOWRITER_SONIOX_REAPER_AGE_MS,
+  AUTOWRITER_SONIOX_RETAIN_MS,
   AUTOWRITER_STALE_POSTING_MS,
   AUTOWRITER_SWEEP_MIN_REMAINING_MS,
   AUTOWRITER_THAI_SUMMARY_SHARE,
@@ -28,11 +30,13 @@ import {
   AUTOWRITER_TRANSCRIBE_TIMEOUT_MS,
   AUTOWRITER_TRANSCRIBE_WAIT_MS,
   AUTOWRITER_TRANSCRIBING_RECHECK_MS,
+  AUTOWRITER_ZOOM_TRANSCRIPT_RECHECK_MS,
+  AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS,
 } from "./config";
-import type { JudgeOutput } from "./judge";
+import { JUDGE_PROMPT_VERSION, JudgeOutputSchema, judgeProblems, type JudgeOutput } from "./judge";
 import { runWritingPipeline, type PipelineResult } from "./pipeline";
-import { chooseStudentDisplayName, describeClass, parseStudentName, type EvidenceKind } from "./prompt";
-import { AUTOWRITER_ROSTER, AUTOWRITER_TEACHER_ALLOWLIST, rosterTutor } from "./roster";
+import { PROMPT_VERSION, SONIOX_TERMS, chooseStudentDisplayName, describeClass, parseStudentName, type EvidenceKind } from "./prompt";
+import { AUTOWRITER_ROSTER, AUTOWRITER_TEACHER_ALLOWLIST, rosterAccountIds, rosterTutor } from "./roster";
 import { loadCandidateShortlist, loadFieldMappings, loadPriorFeedback } from "./run";
 import {
   classifyGateReason,
@@ -48,6 +52,7 @@ import {
   recordingTooShort,
   scheduledWindow,
   studentParticipants,
+  tutorSelfNames,
   zoomTranscriptUrl,
   type AutowriterSessionDetail,
 } from "./session";
@@ -65,6 +70,7 @@ import {
   listPendingAlerts,
   listRowsInState,
   listSonioxCleanup,
+  stampSonioxRetention,
   markAlertsSent,
   noteSonioxRecorded,
   readControl,
@@ -222,10 +228,11 @@ export async function processSession(deps: AutowriterDeps, input: {
   if (!token) return out("busy_or_not_due");
   const release = (to: Parameters<typeof releaseGeneration>[3]) => releaseGeneration(db, input.wiseSessionId, token, to);
 
+  let leased: AutowriterSessionRow | null = null;
   try {
     // Re-read under the lease: another worker may have moved the row since it
     // was first read (a new Soniox job, a stored draft, the second pass).
-    const leased = await readSessionRow(db, input.wiseSessionId);
+    leased = await readSessionRow(db, input.wiseSessionId);
     // Taken from us in between (an owner action, the rollback SQL): not ours to work on.
     if (!leased || leased.state !== "generating" || leased.leaseToken !== token) return out("busy_or_not_due", "lease_lost");
     return await processLeased(deps, {
@@ -233,9 +240,40 @@ export async function processSession(deps: AutowriterDeps, input: {
       waitForReadyMs: input.waitForReadyMs ?? 0,
     });
   } catch (error) {
-    await release({ state: "pending", reason: `error:${error instanceof Error ? error.message.slice(0, 120) : "unknown"}`, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true });
+    const message = error instanceof Error ? error.message.slice(0, 120) : "unknown";
+    // Retried, but not until the deadline: the third unexpected error holds the class for a person. Counted from
+    // the row as read under the lease (the first read may predate another worker's count).
+    const counted = leased ?? row;
+    const errors = (Number((counted.metadata as { genericErrors?: unknown }).genericErrors ?? 0) || 0) + 1;
+    if (errors >= AUTOWRITER_MAX_GENERIC_ERRORS
+      && await release({ state: "held", reason: `error:${message}`, alertKind: "held", countRetry: true, metadata: { genericErrors: errors } })) {
+      return out("held", `error:${message}`);
+    }
+    // Below the cap, or the row had already left `generating` (the error came after a POST claim or a hold):
+    // then neither release writes anything, and the error is reported as infra rather than as a hold.
+    await release({ state: "pending", reason: `error:${message}`, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true, metadata: { genericErrors: errors } });
     return out("infra", error instanceof Error ? error.message.slice(0, 200) : "unknown error");
   }
+}
+
+/** The code running now: the Vercel deploy's commit, or the CLI's local checkout (`local:<sha>[+dirty]`). */
+function currentCommit(): string | null {
+  return process.env.VERCEL_GIT_COMMIT_SHA || process.env.AUTOWRITER_LOCAL_COMMIT || null;
+}
+
+/**
+ * What produced a draft, stored with it and with the POST claim: the commit, the prompt and judge versions, the
+ * model arm and the evidence. Changes that alter output without bumping a version (nicknames, the guest rule) are
+ * still traceable by commit. A reused draft keeps the stamp of the attempt that wrote it.
+ */
+function pipelineStamp(evidence: EvidenceKind, arm: ModelArm): Record<string, unknown> {
+  return {
+    commitSha: currentCommit(),
+    promptVersion: PROMPT_VERSION,
+    judgeVersion: JUDGE_PROMPT_VERSION,
+    arm,
+    evidence,
+  };
 }
 
 type Release = (to: Parameters<typeof releaseGeneration>[3]) => Promise<boolean>;
@@ -345,10 +383,21 @@ async function planPost(deps: AutowriterDeps, input: {
   return { mappings, billing: billing.plan };
 }
 
+/**
+ * Stored with the POST claim: the student whose credit is checked (reconciliation re-uses it rather than
+ * re-deriving it from a later read), and the guest name when a guest join stood in for their account.
+ */
+function guestMetadata(student: { wiseUserId: string | null; joinedAsGuest?: string | null }): Record<string, unknown> {
+  return {
+    ...(student.wiseUserId ? { studentWiseUserId: student.wiseUserId } : {}),
+    ...(typeof student.joinedAsGuest === "string" ? { studentJoinedAsGuest: student.joinedAsGuest || "(unnamed guest)" } : {}),
+  };
+}
+
 async function priorFeedback(deps: AutowriterDeps, tutor: NonNullable<ReturnType<typeof rosterTutor>>, now: Date) {
   return [
     ...(await loadPriorFeedback(deps.db, { canonicalTutorKey: tutor.canonicalKey, now })),
-    ...(await recentAutowriterPosts(deps.db, tutor.wiseUserId, new Date(now.getTime() - NINETY_DAYS_MS))),
+    ...(await recentAutowriterPosts(deps.db, rosterAccountIds(tutor.canonicalKey), new Date(now.getTime() - NINETY_DAYS_MS))),
   ];
 }
 
@@ -425,7 +474,8 @@ async function processLeased(deps: AutowriterDeps, input: {
     session: {
       wiseSessionId: row.wiseSessionId,
       studentFullName: student.name,
-      studentDisplayName: chooseStudentDisplayName(summary.text, student.name),
+      studentAliases: student.joinedAsGuest ? [student.joinedAsGuest] : [],
+      studentDisplayName: chooseStudentDisplayName(student.name),
       classDetails: describeClass({ programme: detail.classSubject, title: detail.title }),
       scheduledMinutes: scheduledWindow(detail).minutes,
       summary,
@@ -449,7 +499,8 @@ async function processLeased(deps: AutowriterDeps, input: {
   }
   return postDraft(deps, {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
-    draft: { arm: result.arm, fields: result.fields, judge: result.judge }, evidence: "summary", release, out,
+    draft: { arm: result.arm, fields: result.fields, judge: result.judge }, evidence: "summary",
+    extraMetadata: guestMetadata(student), release, out,
   });
 }
 
@@ -465,7 +516,7 @@ async function postDraft(deps: AutowriterDeps, input: {
   submission: SubmissionState;
   billing: BillingPlan;
   mappings: readonly FeedbackFieldMapping[];
-  draft: { arm: ModelArm; fields: FeedbackFieldAnswers; judge: JudgeOutput };
+  draft: StoredDraft;
   evidence: EvidenceKind;
   extraMetadata?: Record<string, unknown>;
   release: Release;
@@ -475,12 +526,13 @@ async function postDraft(deps: AutowriterDeps, input: {
   const { row, release, out, draft, submission } = input;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   // The draft exists: a retry waits for Wise or the POST slot, not for the recording (no `no_recording` alert).
+  const pipeline = draft.pipeline ?? pipelineStamp(input.evidence, draft.arm);
   const draftPatch = {
     arm: draft.arm,
     fields: draft.fields,
     fieldsSha256: fieldsHash(draft.fields),
     billing: input.billing,
-    metadata: { judge: draft.judge, draftEvidence: input.evidence, ...(input.extraMetadata ?? {}) },
+    metadata: { judge: draft.judge, draftEvidence: input.evidence, pipeline, ...(input.extraMetadata ?? {}) },
   };
   if (input.control.mode !== "live") {
     // Atomic with the mode: a switch to live while this draft was being written
@@ -501,7 +553,8 @@ async function postDraft(deps: AutowriterDeps, input: {
     outcome = await submitFeedbackGuarded({
       ops,
       store: sessionSubmitStore(db, row.wiseSessionId, input.token, {
-        expected: submission, judge: draft.judge, draftEvidence: input.evidence, ...(input.extraMetadata ?? {}),
+        expected: submission, judge: draft.judge, draftEvidence: input.evidence, pipeline, postedFromCommit: currentCommit(),
+        ...(input.extraMetadata ?? {}),
       }),
       plan: {
         sessionId: row.wiseSessionId,
@@ -567,22 +620,31 @@ async function postDraft(deps: AutowriterDeps, input: {
   }
 }
 
-/** A judged transcript draft kept from an attempt whose POST did not go out. */
-function reusableTranscriptDraft(row: AutowriterSessionRow): { arm: ModelArm; fields: FeedbackFieldAnswers; judge: JudgeOutput } | null {
-  const metadata = row.metadata as { draftEvidence?: unknown; judge?: JudgeOutput };
-  if (metadata.draftEvidence !== "transcript" || metadata.judge?.faithful !== true) return null;
-  if (!row.fields || !row.arm) return null;
-  return { arm: row.arm, fields: row.fields as unknown as FeedbackFieldAnswers, judge: metadata.judge };
-}
+/** A judged draft on its way to a POST; `pipeline` is the stamp of the attempt that wrote it, when reused. */
+type StoredDraft = { arm: ModelArm; fields: FeedbackFieldAnswers; judge: JudgeOutput; pipeline?: Record<string, unknown> };
 
-const SONIOX_TERMS = ["ISEB", "11+", "13+", "NVR", "Non-Verbal Reasoning", "Verbal Reasoning", "IGCSE", "IB", "SAT", "A-level"];
+/**
+ * A judged transcript draft kept from an attempt whose POST did not go out — only when the current prompt and judge
+ * wrote and passed it. v4 (30 Sep): a draft from an older version (or with no stamp) would skip the newer rules and
+ * checks, so the class is written and judged again from its kept transcript instead. `requeueShadowDrafts` (store.ts)
+ * applies the same test when it decides which drafts keep their transcript's review window.
+ */
+function reusableTranscriptDraft(row: AutowriterSessionRow): StoredDraft | null {
+  const metadata = row.metadata as { draftEvidence?: unknown; judge?: unknown; pipeline?: unknown };
+  if (metadata.draftEvidence !== "transcript" || !row.fields || !row.arm) return null;
+  const judge = JudgeOutputSchema.safeParse(metadata.judge);
+  if (!judge.success || !judge.data.faithful || judgeProblems(judge.data).length > 0) return null;
+  const pipeline = metadata.pipeline && typeof metadata.pipeline === "object" ? metadata.pipeline as Record<string, unknown> : null;
+  if (pipeline?.promptVersion !== PROMPT_VERSION || pipeline.judgeVersion !== JUDGE_PROMPT_VERSION) return null;
+  return { arm: row.arm, fields: row.fields as unknown as FeedbackFieldAnswers, judge: judge.data, pipeline };
+}
 
 /**
  * Second pass: write from a Soniox transcript of Wise's recording. The lease is
- * held throughout. The Soniox job id is stored as soon as it exists and the job
- * is kept until a judged draft is stored or the class is finished, so a retry
- * re-fetches instead of re-transcribing; it is then deleted (the sweep retries
- * a failed delete, and reaps jobs nothing references).
+ * held throughout. The Soniox job id is stored as soon as it exists, so a retry
+ * re-fetches instead of re-transcribing. Once the class is done with it the job
+ * is kept for review for at most 72 h, then the sweep deletes it (and reaps jobs
+ * nothing references).
  */
 async function processTranscript(deps: AutowriterDeps, input: {
   row: AutowriterSessionRow;
@@ -657,27 +719,20 @@ async function processTranscript(deps: AutowriterDeps, input: {
   }
 
   const soniox = deps.soniox;
-  /** Delete the job; forget its id only once Soniox confirms it is gone (else the sweep retries). */
-  const finishJob = async (jobId: string) => {
-    const gone = await soniox.remove(jobId).catch(() => null);
-    if (gone) await clearSonioxTranscription(db, row.wiseSessionId, jobId);
-  };
-
   const stored = reusableTranscriptDraft(row);
   if (stored) {
-    const outcome = await postDraft(deps, {
+    // The job id stays on the row: the sweep keeps it for review once the class is done with it.
+    return postDraft(deps, {
       row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
-      draft: stored, evidence: "transcript", release, out,
+      draft: stored, evidence: "transcript", extraMetadata: guestMetadata(student), release, out,
     });
-    if (row.sonioxTranscriptionId) await finishJob(row.sonioxTranscriptionId);
-    return outcome;
   }
 
   const transcribeErrors = Number((row.metadata as { transcribeErrors?: unknown }).transcribeErrors ?? 0) || 0;
   const transcribeFailed = async (reason: string, options: { infra: boolean; keepJob: string | null }): Promise<ProcessOutcome> => {
     const errors = transcribeErrors + 1;
     if (errors >= AUTOWRITER_MAX_TRANSCRIBE_ERRORS) {
-      // A job id kept here is deleted by the sweep once the row is finished.
+      // A job id kept here is kept for review like any finished class's, then deleted by the sweep.
       await release({ state: "held", reason, alertKind: "held", metadata: { transcribeErrors: errors } });
       return out("held", reason);
     }
@@ -767,7 +822,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
     return transcribeFailed(`soniox_error:${(status.errorMessage ?? "unknown").slice(0, 120)}`, { infra: false, keepJob: gone ? null : jobId });
   }
 
-  // 3. Fetch (kept at Soniox until a judged draft is stored; re-fetching is free).
+  // 3. Fetch (the job stays at Soniox until the class's review window ends; re-fetching is free).
   let transcript: Awaited<ReturnType<typeof soniox.transcript>>;
   try {
     transcript = await soniox.transcript(jobId);
@@ -786,15 +841,18 @@ async function processTranscript(deps: AutowriterDeps, input: {
   // 4. Who is who: Zoom's named cues when available, a clear talk-share split otherwise.
   const segments = segmentsFromTokens(transcript.tokens);
   let cues: ZoomCue[] = [];
+  // Not published yet (or not readable right now) — as opposed to published without the teacher's name.
+  let zoomPending = true;
   const vttUrl = zoomTranscriptUrl(detail);
   if (vttUrl) {
     try {
       cues = parseZoomVtt(await (deps.fetchText ?? fetchText)(vttUrl));
+      zoomPending = false;
     } catch {
       cues = [];
     }
   }
-  const speakers = assignSpeakerRoles({ segments, zoomCues: cues, teacherName: detailTeacherName(detail) });
+  const speakers = assignSpeakerRoles({ segments, zoomCues: cues, teacherName: detailTeacherName(detail), alsoTeacher: tutorSelfNames(detail) });
   const rendered = renderTranscript(segments, speakers.roles);
   const transcriptMeta = {
     audioMinutes: Math.round(audioDurationMs / 600) / 100,
@@ -804,21 +862,32 @@ async function processTranscript(deps: AutowriterDeps, input: {
   };
   const holdFor = async (reason: string) => {
     await release({ state: "held", reason, alertKind: "held", metadata: { transcript: transcriptMeta } });
-    await finishJob(jobId);
     return out("held", reason);
   };
   // Soniox's own audio length catches a recording Wise gave no length for.
   if (status.audioDurationMs !== null && recordingTooShort(status.audioDurationMs / 1000, scheduledMinutes)) return holdFor("recording_too_short");
-  if (speakers.method === "unclear") return holdFor("speakers_unclear");
   if (rendered.length < AUTOWRITER_MIN_TRANSCRIPT_CHARACTERS) return holdFor("transcript_too_short");
+  // Zoom's named transcript follows the recording by a few minutes: wait for it (keeping the job) so the
+  // labels are confirmed — only when it could name the tutor (Wise gives the teacher's name), only for a job
+  // this row stamped, and only up to the wait from its submit time.
+  const teacherName = detailTeacherName(detail);
+  if (zoomPending && teacherName && submittedAt && Date.now() - submittedAt.getTime() < AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS) {
+    await release({
+      state: "transcribing", reason: "zoom_transcript_pending", retryInMs: AUTOWRITER_ZOOM_TRANSCRIPT_RECHECK_MS,
+      sonioxTranscriptionId: jobId, metadata: { transcript: transcriptMeta },
+    });
+    return out("transcribing", "zoom_transcript_pending");
+  }
+  if (speakers.method === "unclear") return holdFor("speakers_unclear");
 
-  // 5. Write and judge from the transcript (GLM on the zero-retention route only).
+  // 5. Write and judge from the transcript (Sol, Luna fallback, GLM judge — zero-retention routes only).
   const result = await runWritingPipeline({
     apiKey: deps.apiKey,
     session: {
       wiseSessionId: row.wiseSessionId,
       studentFullName: student.name,
-      studentDisplayName: chooseStudentDisplayName(transcript.text, student.name),
+      studentAliases: student.joinedAsGuest ? [student.joinedAsGuest] : [],
+      studentDisplayName: chooseStudentDisplayName(student.name),
       classDetails: describeClass({ programme: detail.classSubject, title: detail.title }),
       scheduledMinutes,
       summary: { text: rendered, meetingUUIDs: [] },
@@ -840,14 +909,12 @@ async function processTranscript(deps: AutowriterDeps, input: {
     return out("infra", result.error);
   }
   if (result.kind === "held") return holdFor(result.reasons.join("; ").slice(0, 900));
-  const outcome = await postDraft(deps, {
+  // The judged draft is stored with the job id; once the class is done, the sweep keeps the job for review only.
+  return postDraft(deps, {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
     draft: { arm: result.arm, fields: result.fields, judge: result.judge }, evidence: "transcript",
-    extraMetadata: { transcript: transcriptMeta }, release, out,
+    extraMetadata: { transcript: transcriptMeta, ...guestMetadata(student) }, release, out,
   });
-  // The judged draft is stored (or the class is finished): the transcript is no longer needed.
-  await finishJob(jobId);
-  return outcome;
 }
 
 async function fetchText(url: string): Promise<string> {
@@ -917,12 +984,14 @@ async function reconcileRow(deps: AutowriterDeps, row: AutowriterSessionRow, fro
       expected,
       mappings: await loadFieldMappings(db),
     });
-    const [student] = studentParticipants(detail);
-    if (!student?.wiseUserId) {
+    // The student credit-checked when the POST was claimed; a later read may pick participants differently.
+    const claimedStudent = (row.metadata as { studentWiseUserId?: unknown }).studentWiseUserId;
+    const studentId = typeof claimedStudent === "string" ? claimedStudent : studentParticipants(detail)[0]?.wiseUserId ?? null;
+    if (!studentId) {
       problems.push("student_id_missing");
     } else {
       try {
-        problems.push(...creditProblems(await ops.getSessionCreditEntries(row.wiseClassId, student.wiseUserId, row.wiseSessionId), billing));
+        problems.push(...creditProblems(await ops.getSessionCreditEntries(row.wiseClassId, studentId, row.wiseSessionId), billing));
       } catch {
         return overdue ? giveUp(["credits_unreadable_2h_after_post"]) : "read_failed";
       }
@@ -1113,14 +1182,17 @@ export async function runSweep(deps: AutowriterDeps): Promise<SweepResult> {
 }
 
 /**
- * Delete Soniox jobs that are no longer needed: those recorded on finished rows
- * (a delete that failed earlier), and orphans no row references (a create that
- * timed out after Soniox accepted it, or a worker that died before storing the
- * id). Bounded per sweep; failures are retried next time.
+ * Keep finished classes' Soniox jobs for review, then delete them: the first
+ * sweep to see a class done with its job starts a 72 h window (owner decision,
+ * 29 Sep), and a later sweep deletes the job once the window is over or the
+ * class is triaged. Orphans no row references (a create that timed out after
+ * Soniox accepted it, or a worker that died before storing the id) are reaped
+ * too. Bounded per sweep; failures are retried next time.
  */
-async function cleanUpSonioxJobs(deps: AutowriterDeps, soniox: SonioxClient): Promise<void> {
+export async function cleanUpSonioxJobs(deps: AutowriterDeps, soniox: SonioxClient): Promise<void> {
   const { db } = deps;
   let budget = AUTOWRITER_SONIOX_CLEANUP_MAX;
+  await stampSonioxRetention(db, AUTOWRITER_SONIOX_RETAIN_MS);
   for (const job of await listSonioxCleanup(db)) {
     if (budget <= 0 || remaining(deps) < 60_000) return;
     budget -= 1;

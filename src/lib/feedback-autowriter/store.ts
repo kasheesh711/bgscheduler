@@ -4,7 +4,9 @@ import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
 import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
+import { JUDGE_PROMPT_VERSION } from "./judge";
 import type { CallRecord } from "./pipeline";
+import { PROMPT_VERSION } from "./prompt";
 import type { PostFinishState, SubmitStore } from "./submit";
 import type { BillingPlan, ModelArm } from "./types";
 
@@ -365,22 +367,58 @@ export async function setSonioxTranscription(db: Database, wiseSessionId: string
 }
 
 /**
- * Rows whose Soniox job is no longer needed: finished rows, and shadow drafts
- * (a judged draft is stored; the transcript is never read again).
+ * Rows done with their Soniox job: finished rows, and shadow drafts (a judged
+ * draft is stored; the writer never reads the transcript again). Their job is
+ * kept only for review, then deleted by the sweep.
  */
 const SONIOX_DONE_STATES: readonly AutowriterState[] = [...TERMINAL_STATES, "would_submit"];
 
-/** Rows done with a Soniox job still recorded (a delete that failed): the sweep deletes those jobs. */
+/**
+ * Rows done with their Soniox job: those above, and rows past their deadline that were never finished (mode
+ * `off` skips the expiry step, so they would otherwise keep their job indefinitely) — never a POST in flight or a
+ * row being worked on.
+ */
+const doneWithSonioxJob = () => and(
+  isNotNull(S.sonioxTranscriptionId),
+  or(
+    inArray(S.state, [...SONIOX_DONE_STATES]),
+    and(lt(S.deadlineAt, nowSql), notInArray(S.state, ["posting", "awaiting_event", "generating"])),
+  ),
+);
+
+/**
+ * Start the review window of rows that became done with their Soniox job since the last sweep, however they
+ * got there (posted, shadow draft, a hold, an error cap, an expiry): `metadata.sonioxRetainUntil` = now +
+ * `retainMs`, on the database clock. Set once; an owner retry clears it, and so does going live for a draft that
+ * may transcribe again. Housekeeping only: `updated_at` is left alone.
+ */
+export async function stampSonioxRetention(db: Database, retainMs: number): Promise<number> {
+  const retainSeconds = Math.round(retainMs / 1000);
+  const rows = await db.update(S).set({
+    metadata: sql`${S.metadata} || jsonb_build_object('sonioxRetainUntil', now() + make_interval(secs => ${retainSeconds}::double precision))`,
+  }).where(and(doneWithSonioxJob(), sql`not ${S.metadata} ? 'sonioxRetainUntil'`)).returning({ id: S.id });
+  return rows.length;
+}
+
+/**
+ * Rows done with their Soniox job whose review window is over (`metadata.sonioxRetainUntil`, see above), or that
+ * were triaged (`metadata.triagedAt`, stamped or not): the sweep deletes the job.
+ */
 export async function listSonioxCleanup(db: Database): Promise<Array<{ wiseSessionId: string; sonioxTranscriptionId: string }>> {
   const rows = await db.select({ wiseSessionId: S.wiseSessionId, sonioxTranscriptionId: S.sonioxTranscriptionId })
-    .from(S).where(and(isNotNull(S.sonioxTranscriptionId), inArray(S.state, [...SONIOX_DONE_STATES])));
+    .from(S).where(and(
+      doneWithSonioxJob(),
+      sql`(${S.metadata} ? 'triagedAt' or (${S.metadata} ->> 'sonioxRetainUntil')::timestamptz < now())`,
+    ));
   return rows.flatMap((row) => row.sonioxTranscriptionId ? [{ wiseSessionId: row.wiseSessionId, sonioxTranscriptionId: row.sonioxTranscriptionId }] : []);
 }
 
-/** Soniox job ids still needed by an unfinished row (the orphan reaper must not touch these). */
+/**
+ * Soniox job ids any row still records (the orphan reaper must not touch these): unfinished rows, and finished
+ * rows keeping theirs for review — the cleanup above deletes those and clears the id.
+ */
 export async function activeSonioxJobIds(db: Database): Promise<Set<string>> {
-  const rows = await db.select({ id: S.sonioxTranscriptionId }).from(S)
-    .where(and(isNotNull(S.sonioxTranscriptionId), notInArray(S.state, [...SONIOX_DONE_STATES])));
+  const rows = await db.select({ id: S.sonioxTranscriptionId }).from(S).where(isNotNull(S.sonioxTranscriptionId));
   return new Set(rows.flatMap((row) => row.id ? [row.id] : []));
 }
 
@@ -397,7 +435,10 @@ export async function noteSonioxRecorded(db: Database, wiseSessionId: string, tr
  * after class: raise a `no_recording` alert once, instead of only at the
  * deadline. Not for a switched-off tutor's classes (theirs to write), a
  * recording waiting for its 30-min length recheck (held with its own alert
- * next), or an infra retry (the recording may well be there).
+ * next), a transcript waiting briefly for Zoom's names (it goes ahead on its
+ * own), or an infra retry (the recording may well be there) — including a failed
+ * Wise read, which since v4 also sends an older version's transcript draft back
+ * to wait here while it is written again.
  */
 export async function flagNoRecording(db: Database, endedBefore: Date, disabledTutors: readonly string[] = []): Promise<number> {
   const rows = await db.update(S).set({
@@ -406,7 +447,7 @@ export async function flagNoRecording(db: Database, endedBefore: Date, disabledT
   }).where(and(
     inArray(S.state, ["awaiting_recording", "transcribing"]),
     lt(S.scheduledEndAt, endedBefore),
-    sql`coalesce(${S.reason}, '') <> 'recording_too_short' and coalesce(${S.reason}, '') not like 'infra:%'`,
+    sql`coalesce(${S.reason}, '') not in ('recording_too_short', 'zoom_transcript_pending', 'wise_read_failed') and coalesce(${S.reason}, '') not like 'infra:%'`,
     disabledTutors.length > 0
       ? or(isNull(S.wiseTeacherUserId), notInArray(S.wiseTeacherUserId, [...disabledTutors]))
       : undefined,
@@ -417,10 +458,10 @@ export async function flagNoRecording(db: Database, endedBefore: Date, disabledT
 }
 
 export async function clearSonioxTranscription(db: Database, wiseSessionId: string, transcriptionId: string): Promise<void> {
+  // Housekeeping: `updated_at` is left alone (the dashboard dates shadow drafts by it).
   await db.update(S).set({
     sonioxTranscriptionId: null,
     metadata: sql`${S.metadata} - 'sonioxSubmittedJob' - 'sonioxSubmittedAt'`,
-    updatedAt: nowSql,
   }).where(and(eq(S.wiseSessionId, wiseSessionId), eq(S.sonioxTranscriptionId, transcriptionId)));
 }
 
@@ -462,16 +503,29 @@ export async function expireOverdueRows(db: Database, input: {
 
 /** Shadow drafts become eligible again when the owner switches to live. */
 export async function requeueShadowDrafts(db: Database, minDeadline: Date): Promise<number> {
-  const rows = await db.update(S).set({ state: "pending", nextAttemptAt: null, updatedAt: nowSql })
+  // Back to work. A judged transcript draft of the current prompt and judge versions is posted as it is, never
+  // re-read: its transcript's review window keeps running. Any other draft may transcribe again (an older version's
+  // is written and judged again: `reusableTranscriptDraft` in job.ts), so its window starts again when it is next done.
+  const rows = await db.update(S).set({
+    state: "pending",
+    nextAttemptAt: null,
+    metadata: sql`case when ${S.metadata} ->> 'draftEvidence' = 'transcript' and ${S.metadata} -> 'judge' ->> 'faithful' = 'true'
+        and ${S.metadata} -> 'pipeline' ->> 'promptVersion' = ${String(PROMPT_VERSION)}
+        and ${S.metadata} -> 'pipeline' ->> 'judgeVersion' = ${String(JUDGE_PROMPT_VERSION)}
+      then ${S.metadata} - 'triagedAt' else ${S.metadata} - 'sonioxRetainUntil' - 'triagedAt' end`,
+    updatedAt: nowSql,
+  })
     .where(and(eq(S.state, "would_submit"), gte(S.deadlineAt, minDeadline)))
     .returning({ id: S.id });
   return rows.length;
 }
 
 /**
- * Owner retry of a `held` or `expired` class (e.g. after a prompt fix): back to
- * `pending`, due now. Its alert is re-armed, so a new hold or expiry emails again.
- * Refused for any other state and when the deadline is inside the margin.
+ * Owner retry of a `held`, `expired` or `skipped_scope` class (e.g. after a
+ * prompt fix, or a scope check that was wrong for it): back to `pending`, due
+ * now. Its alert is re-armed, so a new hold or expiry emails again. Never a
+ * class a person wrote (`skipped_human`) or anything posted; refused when the
+ * deadline is inside the margin.
  */
 export async function retryHeldSession(db: Database, wiseSessionId: string, input: {
   minDeadline: Date;
@@ -485,25 +539,27 @@ export async function retryHeldSession(db: Database, wiseSessionId: string, inpu
     leaseUntil: null,
     // A retry starts again on the fast path; it may still hand over to the transcript pass.
     evidence: "summary",
-    // A clean slate: no stale alert, error count, coverage recheck or judged draft carries over
-    // (a kept Soniox job, and its submit time, may be re-used).
-    metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'recordingShortSeenAt' - 'judge' - 'draftEvidence' - 'transcript' - 'handover')
+    // A clean slate: no stale alert, error count, coverage recheck, judged draft (nor its stamp) or review
+    // window carries over (a kept Soniox job, and its submit time, may be re-used).
+    metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'genericErrors' - 'recordingShortSeenAt' - 'judge' - 'draftEvidence'
+      - 'pipeline' - 'transcript' - 'handover' - 'sonioxRetainUntil' - 'triagedAt')
       || ${JSON.stringify({ retriedBy: input.actor })}::jsonb
       || jsonb_build_object('retriedAt', now()::text, 'retriedFrom', ${S.state}::text)`,
     alertsSent: sql`${S.alertsSent} - 'held' - 'expired'`,
     updatedAt: nowSql,
   }).where(and(
     eq(S.wiseSessionId, wiseSessionId),
-    inArray(S.state, ["held", "expired"]),
+    inArray(S.state, ["held", "expired", "skipped_scope"]),
     gt(S.deadlineAt, input.minDeadline),
   )).returning({ id: S.id });
   return rows.length > 0;
 }
 
-/** The autowriter's own recent posts for a tutor — post-class compares new feedback against them. */
-export async function recentAutowriterPosts(db: Database, wiseTeacherUserId: string, since: Date): Promise<PriorFeedbackComparison[]> {
+/** The autowriter's own recent posts for a tutor (all their accounts) — post-class compares new feedback against them. */
+export async function recentAutowriterPosts(db: Database, wiseTeacherUserIds: readonly string[], since: Date): Promise<PriorFeedbackComparison[]> {
+  if (wiseTeacherUserIds.length === 0) return [];
   const rows = await db.select({ wiseSessionId: S.wiseSessionId, fields: S.fields }).from(S).where(and(
-    eq(S.wiseTeacherUserId, wiseTeacherUserId),
+    inArray(S.wiseTeacherUserId, [...wiseTeacherUserIds]),
     inArray(S.state, ["posting", "awaiting_event", "verified"]),
     isNotNull(S.fields),
     gte(S.updatedAt, since),

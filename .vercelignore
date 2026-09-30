@@ -3,3 +3,5 @@
 .superpowers
 coverage
 *.xlsx
+# Local finance evidence and operational credentials stay on the operator host.
+.payout-ops/

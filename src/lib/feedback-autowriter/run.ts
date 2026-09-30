@@ -33,7 +33,7 @@ import {
   studentParticipants,
 } from "./session";
 import type { WiseFeedbackOps } from "./submit";
-import { AUTOWRITER_MODELS, AUTOWRITER_POST_TIMEOUT_MS, AUTOWRITER_WISE_READ_TIMEOUT_MS, type AutowriterModelConfig } from "./config";
+import { AUTOWRITER_POST_TIMEOUT_MS, AUTOWRITER_WISE_READ_TIMEOUT_MS, AUTOWRITER_WRITER_BY_ARM } from "./config";
 import {
   AUTOWRITER_DEADLINE_MARGIN_MS,
   AUTOWRITER_MIN_SUMMARY_CHARACTERS,
@@ -398,7 +398,7 @@ export async function prepareSession(input: {
       scheduledStartAt: window.start.toISOString(),
       scheduledMinutes: window.minutes,
       studentFullName,
-      studentDisplayName: chooseStudentDisplayName(summary.text, studentFullName),
+      studentDisplayName: chooseStudentDisplayName(studentFullName),
       classDetails: describeClass({ programme: detail.classSubject, title: detail.title }),
       summary,
       submission,
@@ -436,7 +436,7 @@ export async function generateDraft(input: {
   maxTokens?: number;
   timeoutMs?: number;
 }): Promise<DraftRecord> {
-  const config: AutowriterModelConfig = input.arm === "glm" ? AUTOWRITER_MODELS.writer : AUTOWRITER_MODELS.fallbackWriter;
+  const config = AUTOWRITER_WRITER_BY_ARM[input.arm];
   const { session } = input;
   const call = await callOpenRouter({
     apiKey: input.apiKey,
@@ -580,7 +580,7 @@ function mean(values: number[]): number | null {
 }
 
 export function summarizeCosts(drafts: readonly DraftRecord[]) {
-  const arms: ModelArm[] = ["glm", "luna"];
+  const arms: ModelArm[] = ["sol", "glm", "luna"];
   return Object.fromEntries(arms.map((arm) => {
     const rows = drafts.filter((draft) => draft.arm === arm);
     const withUsage = rows.flatMap((draft) => "usage" in draft.call && draft.call.usage ? [{ draft, usage: draft.call.usage }] : []);

@@ -3,6 +3,8 @@ import { eq, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
+import { JUDGE_PROMPT_VERSION } from "../judge";
+import { PROMPT_VERSION } from "../prompt";
 import {
   acquireSweepLease,
   claimGeneration,
@@ -14,6 +16,7 @@ import {
   markAlertsSent,
   readControl,
   readSessionRow,
+  recentAutowriterPosts,
   releaseGeneration,
   releaseShadowDraft,
   releaseSweepLease,
@@ -322,14 +325,23 @@ describe("feedback autowriter store (Postgres)", () => {
 
   it("retries a held class on request, re-arming its alert, but never near the deadline or from other states", async () => {
     const token = (await claimGeneration(db, SESSION, 60_000))!;
-    await releaseGeneration(db, SESSION, token, { state: "held", reason: "glm:unfaithful", alertKind: "held" });
+    await releaseGeneration(db, SESSION, token, {
+      state: "held", reason: "glm:unfaithful", alertKind: "held",
+      metadata: {
+        genericErrors: 3, transcribeErrors: 2, pipeline: { commitSha: "a" }, judge: { faithful: false },
+        sonioxRetainUntil: "2026-10-01T00:00:00.000Z", triagedAt: "2026-09-29T15:00:00.000Z",
+      },
+    });
     await markAlertsSent(db, await listPendingAlerts(db));
     expect(await retryHeldSession(db, SESSION, { minDeadline: new Date(Date.now() + 48 * 60 * 60 * 1000), actor: "k@x.com" })).toBe(false);
     expect(await retryHeldSession(db, SESSION, { minDeadline: new Date(), actor: "k@x.com" })).toBe(true);
     const row = await readSessionRow(db, SESSION);
     expect(row).toMatchObject({ state: "pending", reason: "retry_requested", nextAttemptAt: null, alertsSent: {} });
     expect(row?.metadata).toMatchObject({ retriedBy: "k@x.com", retriedFrom: "held" });
-    expect(row?.metadata).not.toHaveProperty("alertKind");
+    // A clean slate: counters, the old draft's stamp and its review window are gone.
+    for (const key of ["alertKind", "genericErrors", "transcribeErrors", "pipeline", "judge", "sonioxRetainUntil", "triagedAt"]) {
+      expect(row?.metadata).not.toHaveProperty(key);
+    }
     expect(await retryHeldSession(db, SESSION, { minDeadline: new Date(), actor: "k@x.com" })).toBe(false); // already pending
     // Held again → alerts again.
     const again = (await claimGeneration(db, SESSION, 60_000))!;
@@ -337,11 +349,67 @@ describe("feedback autowriter store (Postgres)", () => {
     expect(await listPendingAlerts(db)).toHaveLength(1);
   });
 
+  it("retries a class skipped as out of scope on request, but never one a person wrote", async () => {
+    const token = (await claimGeneration(db, SESSION, 60_000))!;
+    await releaseGeneration(db, SESSION, token, { state: "skipped_scope", reason: "student_count_3" });
+    expect(await retryHeldSession(db, SESSION, { minDeadline: new Date(), actor: "k@x.com" })).toBe(true);
+    expect(await readSessionRow(db, SESSION)).toMatchObject({ state: "pending", metadata: { retriedFrom: "skipped_scope" } });
+    const again = (await claimGeneration(db, SESSION, 60_000))!;
+    await releaseGeneration(db, SESSION, again, { state: "skipped_human", reason: "human_submission" });
+    expect(await retryHeldSession(db, SESSION, { minDeadline: new Date(), actor: "k@x.com" })).toBe(false);
+  });
+
   it("re-queues shadow drafts still before their deadline when going live", async () => {
     const token = (await claimGeneration(db, SESSION, 60_000))!;
-    await releaseGeneration(db, SESSION, token, { state: "would_submit", reason: "shadow" });
+    await releaseGeneration(db, SESSION, token, {
+      state: "would_submit", reason: "shadow",
+      metadata: { sonioxRetainUntil: "2026-10-01T00:00:00.000Z", triagedAt: "2026-09-29T15:00:00.000Z", judge: { faithful: true } },
+    });
     expect(await requeueShadowDrafts(db, new Date())).toBe(1);
-    expect((await readSessionRow(db, SESSION))?.state).toBe("pending");
+    const row = await readSessionRow(db, SESSION);
+    expect(row?.state).toBe("pending");
+    // Back to work: a summary draft may transcribe again, so its review window restarts when it is done again.
+    expect(row?.metadata).not.toHaveProperty("sonioxRetainUntil");
+    expect(row?.metadata).not.toHaveProperty("triagedAt");
+    expect(row?.metadata).toMatchObject({ judge: { faithful: true } });
+
+    // A judged transcript draft of the current prompt and judge is posted as it is: its window keeps running.
+    const current = { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION };
+    const passing = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
+    const next = (await claimGeneration(db, SESSION, 60_000))!;
+    await releaseGeneration(db, SESSION, next, {
+      state: "would_submit", reason: "shadow",
+      metadata: { sonioxRetainUntil: "2026-10-01T00:00:00.000Z", draftEvidence: "transcript", judge: passing, pipeline: current },
+    });
+    expect(await requeueShadowDrafts(db, new Date())).toBe(1);
+    expect((await readSessionRow(db, SESSION))?.metadata).toMatchObject({ sonioxRetainUntil: "2026-10-01T00:00:00.000Z" });
+
+    // An older version's transcript draft, or one with no stamp at all, is written again (v4, 30 Sep): its window
+    // restarts like any other draft's.
+    for (const pipeline of [{ promptVersion: 3, judgeVersion: 3 }, { ...current, judgeVersion: 3 }, { ...current, promptVersion: 3 }, null]) {
+      const older = (await claimGeneration(db, SESSION, 60_000))!;
+      await releaseGeneration(db, SESSION, older, {
+        state: "would_submit", reason: "shadow",
+        metadata: { sonioxRetainUntil: "2026-10-01T00:00:00.000Z", draftEvidence: "transcript", judge: passing, pipeline },
+      });
+      expect(await requeueShadowDrafts(db, new Date())).toBe(1);
+      expect((await readSessionRow(db, SESSION))?.metadata, JSON.stringify(pipeline)).not.toHaveProperty("sonioxRetainUntil");
+    }
     await haltAutowriter(db, "noop");
+  });
+
+  it("compares new feedback with the tutor's own posts from both of their Wise accounts", async () => {
+    const MAIN = "695369c028118f629edcb986";
+    const posted = { state: "verified" as const, fields: claimInput.fields };
+    await db.update(schema.feedbackAutowriterSessions).set(posted).where(eq(schema.feedbackAutowriterSessions.wiseSessionId, SESSION));
+    await ensureSessionRow(db, {
+      wiseSessionId: OTHER_SESSION, wiseClassId: "6a0000000000000000000001", wiseTeacherUserId: MAIN,
+      scheduledEndAt: new Date(), deadlineAt: new Date(Date.now() + 86_400_000), trigger: "test",
+    });
+    await db.update(schema.feedbackAutowriterSessions).set(posted).where(eq(schema.feedbackAutowriterSessions.wiseSessionId, OTHER_SESSION));
+    const since = new Date(Date.now() - 86_400_000);
+    expect((await recentAutowriterPosts(db, [TEACHER, MAIN], since)).map((post) => post.key).sort()).toEqual([SESSION, OTHER_SESSION].sort());
+    expect((await recentAutowriterPosts(db, [TEACHER], since)).map((post) => post.key)).toEqual([SESSION]);
+    expect(await recentAutowriterPosts(db, [], since)).toEqual([]);
   });
 });

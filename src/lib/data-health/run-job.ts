@@ -65,7 +65,7 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
     return NextResponse.json({ error: job.manualRunDisabledReason }, { status: 409 });
   }
 
-  if ((isWiseClassroomJob(jobKey) || jobKey === "feedback_autowriter") && !isClassroomOperationsOwner(actorEmail)) {
+  if ((isWiseClassroomJob(jobKey) || jobKey.startsWith("feedback_autowriter")) && !isClassroomOperationsOwner(actorEmail)) {
     return NextResponse.json({ error: "Only Kevin can run this job." }, { status: 403 });
   }
 
@@ -86,6 +86,13 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
           const result = await runAutowriterJob();
           return NextResponse.json(result, { status: result.ok ? 200 : 503 });
         } catch { return NextResponse.json({ ok: false, error: "Feedback autowriter sweep could not complete." }, { status: 503 }); }
+      }
+      if (jobKey === "feedback_autowriter_review") {
+        try {
+          const { runAutowriterReviewJob } = await import("@/lib/feedback-autowriter/dispatch");
+          const result = await runAutowriterReviewJob("admin");
+          return NextResponse.json(result, { status: result.ok ? 200 : 503 });
+        } catch { return NextResponse.json({ ok: false, error: "Feedback autowriter review job could not complete." }, { status: 503 }); }
       }
       if (jobKey === "post_class_feedback_nightly") {
         try {

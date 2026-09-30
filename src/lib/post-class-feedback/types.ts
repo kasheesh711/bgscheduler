@@ -132,6 +132,8 @@ export interface EventTimingEvidence {
   source: Extract<TimingEvidenceSource, "activity_event" | "none">;
   /** Coverage floor consulted, echoed for audit reproducibility. */
   coverageFrom: Date | null;
+  /** Unclassified pre-deadline feedback suspends compliance and deductions. */
+  reviewRequired?: boolean;
 }
 
 export interface SessionComplianceInput {
@@ -158,6 +160,7 @@ export interface SessionComplianceAssessment {
   submitterRoles: FeedbackSubmitterRole[];
   /** Earliest tutor-authored submission, i.e. the instant that decided the verdict. */
   tutorSubmittedAt: Date | null;
+  timingReviewRequired?: boolean;
   deadlineAt: Date;
   governingVersionKey: string | null;
   onTimeVersionKey: string | null;

@@ -158,8 +158,9 @@ function EvidenceMetadata({ version }: { version: FeedbackSessionDetailVersion }
 }
 
 const TIMING_EVIDENCE_EXPLANATIONS: Record<string, string> = {
-  wise_activity_event_before_deadline: "A Wise submission event landed at or before the deadline, which proves the feedback existed in time.",
-  wise_activity_event_no_tutor_submission: "Wise recorded no human submission event at or before the deadline, and the event store covers that deadline — so the absence is itself proof of lateness.",
+  wise_activity_event_before_deadline: "A teacher or admin submission event landed at or before the deadline, which proves staff feedback existed in time.",
+  wise_activity_event_no_tutor_submission: "Wise recorded no teacher or admin submission event at or before the deadline, and the event store covers that deadline — so the absence proves lateness.",
+  wise_activity_event_unverified_actor: "An event before the deadline has an unverified actor. Staff review is required before deciding compliance or a deduction.",
   proven_before_deadline: "A compliant version was already locked on time by an earlier assessment; later edits cannot undo that lock.",
   wise_timestamp_unavailable: "Wise supplied no trustworthy timestamp and the deadline predates event coverage, so timing is unprovable either way. Fails open — no deduction.",
   wise_created_at_late_lower_bound: "The submission's own creation time is after the deadline, so it cannot have held on-time content.",
@@ -169,6 +170,8 @@ const TIMING_EVIDENCE_EXPLANATIONS: Record<string, string> = {
 
 const NOT_COUNTED_REASONS: Record<string, string> = {
   auto_submitted: "Wise auto-submitted this — never proof of a human submission",
+  student_feedback: "Student feedback — does not prove tutor submission",
+  unverified_actor: "Actor is unverified — requires review",
   after_deadline: "Landed after the deadline",
 };
 
