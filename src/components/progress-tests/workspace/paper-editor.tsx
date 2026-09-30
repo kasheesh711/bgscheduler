@@ -7,10 +7,12 @@ import { API, Button, UploadField, command, fileUrl, formatDate, readApi, useSav
 import { PdfViewer } from "./pdf-viewer";
 import { JobProgress } from "./job-progress";
 import css from "./workspace.module.css";
+import tutorCss from "./tutor-workspace.module.css";
 
 type Capabilities = Serialized<Overview>["capabilities"];
 type PaperData = Serialized<PaperDetail>;
-export function PaperPreparation({ initial, capabilities, onSaved, onReady, onPreview, onError }: { initial: PaperData; capabilities: Capabilities; onSaved: () => Promise<void>; onReady?: (versionId: string) => void; onPreview?: (fileId: string) => void; onError: (message: string) => void }) {
+export function PaperPreparation({ initial, capabilities, onSaved, onReady, onPreview, onError, onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void; initial: PaperData; capabilities: Capabilities; onSaved: () => Promise<void>; onReady?: (versionId: string) => void; onPreview?: (fileId: string) => void; onError: (message: string) => void }) {
+  const [showAI, setShowAI] = useState(!onDirtyChange);
   const [data, setData] = useState(initial);
   useEffect(() => { setData(initial); }, [initial]);
   const original = data.versions.find(v => isOriginalPaper(v.paper));
@@ -31,6 +33,8 @@ export function PaperPreparation({ initial, capabilities, onSaved, onReady, onPr
   const conversion = data.jobs.find(j => j.kind === "convert-paper" && j.input.sourceFileId === sourceId);
   const formatting = !!job && ["queued", "running"].includes(job.status);
   const pendingUpload = !!sourceId && (sourceVersion?.sourceFileId !== sourceId || sourceVersion?.keyFileId !== keyId);
+  const dirty = uploading || pendingUpload || reviewed && !selected?.approved || rubricReviewed && !selected?.rubricApproved;
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   const content = selected && !isOriginalPaper(selected.paper) ? selected.paper : null;
   const reload = useCallback(async () => { const next = await readApi<PaperData>(`${API}/papers/${initial.id}`); setData(next); return next; }, [initial.id]);
   const selectPreview = (id: string) => { setChosenPreview(id); onPreview?.(id); };
@@ -52,7 +56,9 @@ export function PaperPreparation({ initial, capabilities, onSaved, onReady, onPr
     finally { setBusy(false); }
   };
   return <div className={css.paperPreparation}>
+    {onDirtyChange && <div className={tutorCss.draftState} role="status" data-unsaved={dirty}>{busy || uploading ? "Processing…" : dirty ? "Unsaved changes" : "All changes saved"}</div>}
     <p className={css.hint}>Use your own paper as uploaded. PDF pages stay exactly as you supplied them. DOCX files are converted visually to PDF for your review.</p>
+    {onDirtyChange && <h3>{sourceId ? "Replace your original paper" : "Upload your original paper"}</h3>}
     <UploadField ownerKey={data.ownerKey} assessmentId={data.assessmentId ?? undefined} purpose="paper" onBusy={setUploading} disabled={!capabilities.uploads || busy} onUploaded={files => { void attach(files[0].id, keyId); }}/>
     {sourceId && <a className={css.fileLink} href={`${fileUrl(sourceId)}?download=1`}>Download original upload</a>}
     <UploadField ownerKey={data.ownerKey} assessmentId={data.assessmentId ?? undefined} purpose="key" onBusy={setUploading} disabled={!capabilities.uploads || busy || !sourceId} onUploaded={files => { if (sourceId) void attach(sourceId, files[0].id); }}/>
@@ -64,7 +70,8 @@ export function PaperPreparation({ initial, capabilities, onSaved, onReady, onPr
       <Button variant={!content ? "primary" : "quiet"} onClick={() => selectVersion(sourceVersion.id)}>{original ? "Use my uploaded paper" : "Previously reviewed paper"}</Button>
       {formatted && original && <Button onClick={() => selectVersion(formatted.id)}>Review BeGifted draft</Button>}
     </div>}
-    <div className={css.notice}><div><strong>Format with BeGifted — Beta</strong><p>Optional formatting of your existing questions. Check all marks, diagrams and working space before adopting the result. Your original remains available throughout.</p>
+    {onDirtyChange && <Button variant="quiet" aria-expanded={showAI} onClick={() => setShowAI(!showAI)}>Optional AI formatting · Beta</Button>}
+    <div hidden={!showAI} className={css.notice}><div><strong>Format with BeGifted — Beta</strong><p>Optional formatting of your existing questions. Check all marks, diagrams and working space before adopting the result. Your original remains available throughout.</p>
       <Button disabled={busy || uploading || formatting || !sourceId || pendingUpload || !capabilities.ai || !capabilities.formatting} onClick={async () => {
         setBusy(true); onError("");
         try {
@@ -110,15 +117,24 @@ export function PaperPreparation({ initial, capabilities, onSaved, onReady, onPr
     {data.versions.length > 0 && <details className={css.versionList}><summary>Paper history · {data.versions.length} version(s)</summary>{data.versions.map(v => <div key={v.id}><strong>Version {v.revision} · {isOriginalPaper(v.paper) ? "Original" : "Formatted"} · {v.approved ? "Ready" : "Draft"}</strong><p>{formatDate(v.createdAt)}</p><Button variant="quiet" onClick={() => selectVersion(v.id)}>Review this version</Button>{v.sourceFileId && <a href={`${fileUrl(v.sourceFileId)}?download=1`}>Original upload</a>}</div>)}</details>}
   </div>;
 }
-export function PaperEditor({ data, overview, onBack, onSaved, onError }: { data: PaperData; overview: Serialized<Overview>; onBack: () => void; onSaved: () => Promise<void>; onError: (message: string) => void }) {
-  return <><div className={css.detailHeader}><div><Button variant="quiet" onClick={onBack}><ArrowLeft size={15}/>Test library</Button><h2>{data.title}</h2><p>Upload, review and reuse your paper. BeGifted formatting is optional.</p></div><FileText size={28}/></div><section className={css.panel}><PaperPreparation initial={data} capabilities={overview.capabilities} onSaved={onSaved} onError={onError}/></section></>;
+export function PaperEditor({ data, overview, onBack, onSaved, onError, guided = false, onDirtyChange }: { guided?: boolean; onDirtyChange?: (dirty: boolean) => void; data: PaperData; overview: Serialized<Overview>; onBack: () => void; onSaved: () => Promise<void>; onError: (message: string) => void }) {
+  const [preview, setPreview] = useState<string | null>(null);
+  const [pane, setPane] = useState("details");
+  const shown = preview ?? data.artifacts.find(a => a.versionId === data.versions[0]?.id && a.kind === "paper")?.fileId;
+  const preparation = <PaperPreparation initial={data} capabilities={overview.capabilities} onSaved={onSaved} onError={onError} onDirtyChange={onDirtyChange} onPreview={guided ? id => { setPreview(id); setPane("preview"); } : undefined}/>;
+  return <><div className={css.detailHeader}><div><Button variant="quiet" onClick={onBack}><ArrowLeft size={15}/>Test library</Button><h2>{data.title}</h2><p>Upload, review and reuse your paper. BeGifted formatting is optional.</p></div><FileText size={28}/></div>
+    {guided ? <>
+      <div className={css.mobilePanes} aria-label="Paper editor view"><Button variant={pane === "details" ? "primary" : "quiet"} aria-pressed={pane === "details"} onClick={() => setPane("details")}>Details</Button><Button variant={pane === "preview" ? "primary" : "quiet"} aria-pressed={pane === "preview"} onClick={() => setPane("preview")}>PDF preview</Button></div>
+      <div className={`${css.detailGrid} ${css.assessmentGrid}`} data-mobile-pane={pane}><section className={`${css.panel} ${css.assessmentControls}`}>{preparation}</section><aside className={`${css.panel} ${css.assessmentPreview}`}><h3>Document preview</h3>{shown ? <PdfViewer fileId={shown} title="Selected paper preview"/> : <p className={css.hint}>Upload your original paper. Its PDF preview will appear here.</p>}</aside></div>
+    </> : <section className={css.panel}>{preparation}</section>}
+  </>;
 }
-export function AssessmentPaperPreparation({ assessment, capabilities, onSaved, onReady, onPreview, onError }: { assessment: Serialized<AssessmentDetail>; capabilities: Capabilities; onSaved: () => Promise<void>; onReady: (versionId: string) => void; onPreview: (fileId: string) => void; onError: (message: string) => void }) {
+export function AssessmentPaperPreparation({ assessment, capabilities, onSaved, onReady, onPreview, onError, onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void; assessment: Serialized<AssessmentDetail>; capabilities: Capabilities; onSaved: () => Promise<void>; onReady: (versionId: string) => void; onPreview: (fileId: string) => void; onError: (message: string) => void }) {
   const [paper, setPaper] = useState<PaperData | null>(null), [busy, setBusy] = useState(false);
   const paperId = assessment.preparingPapers[0]?.id;
   useEffect(() => { let stopped = false; if (paperId) void readApi<PaperData>(`${API}/papers/${paperId}`).then(p => { if (!stopped) setPaper(p); }).catch(e => { if (!stopped) onError(e.message); }); return () => { stopped = true; }; }, [paperId, onError]);
   const load = async () => { if (paper) setPaper(await readApi<PaperData>(`${API}/papers/${paper.id}`)); await onSaved(); };
-  if (paper) return <PaperPreparation initial={paper} capabilities={capabilities} onSaved={load} onReady={onReady} onPreview={onPreview} onError={onError}/>;
+  if (paper) return <PaperPreparation onDirtyChange={onDirtyChange} initial={paper} capabilities={capabilities} onSaved={load} onReady={onReady} onPreview={onPreview} onError={onError}/>;
   return <Button disabled={busy || !capabilities.uploads} onClick={async () => {
     setBusy(true); onError("");
     try { const created = await command({ action: "create-paper", title: `${assessment.series.courseName} — Progress test ${assessment.cycle}`.slice(0, 300), assessmentId: assessment.id }); setPaper(await readApi<PaperData>(`${API}/papers/${created.id}`)); await onSaved(); }
