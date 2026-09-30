@@ -117,12 +117,21 @@ export function filterClassesLog(rows: readonly ClassLogRow[], filter: ClassLogF
     && (filter.evidence === null || row.evidence === filter.evidence));
 }
 
+/**
+ * The states the State filter offers: those the log's rows have, by their label — and the chosen one even when no row
+ * has it any more (a reload may have moved its last class on), so the filter in force is never an invisible one.
+ */
+export function stateOptions(rows: readonly ClassLogRow[], selected: string | null): string[] {
+  return [...new Set([...rows.map((row) => row.state), ...(selected ? [selected] : [])])]
+    .toSorted((a, b) => stateLabel(a).localeCompare(stateLabel(b)));
+}
+
 const HEAD = "h-auto bg-muted/40 px-3 py-2.5 text-[10px] font-medium text-muted-foreground first:pl-5 last:pr-5";
 const CELL = "px-3 py-2.5 align-top text-[11px] first:pl-5 last:pr-5";
 const SELECT = "h-7 rounded-md border bg-background px-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
 
 export function ClassesLog({ dashboard, review, tutorKey, onTutorChange, onOpen }: {
-  dashboard: Pick<AutowriterDashboard, "recent" | "holds" | "failedPosts" | "tutors" | "windowDays">;
+  dashboard: Pick<AutowriterDashboard, "recent" | "holds" | "failedPosts" | "tutors" | "windowDays" | "totals">;
   /** The review data, or null while it is unavailable. */
   review: AutowriterReview | null;
   /** The page's tutor filter: the log follows it, and its own tutor choice sets it. */
@@ -135,7 +144,11 @@ export function ClassesLog({ dashboard, review, tutorKey, onTutorChange, onOpen 
   const [evidence, setEvidence] = useState<"summary" | "transcript" | null>(null);
   const rows = useMemo(() => buildClassesLog(dashboard, review), [dashboard, review]);
   const shown = filterClassesLog(rows, { review: reviewFilter, state, tutorKey, evidence });
-  const states = [...new Set(rows.map((row) => row.state))].toSorted((a, b) => stateLabel(a).localeCompare(stateLabel(b)));
+  const states = stateOptions(rows, state);
+  // The dashboard loads the text of the latest classes only: an older class of the window is in the log when it is
+  // held or has a review row, and not otherwise.
+  const latest = dashboard.recent.length;
+  const capped = latest < dashboard.totals.seen;
   // Exact counts from the database: the review data itself may hold a subset (every flagged and unreviewed class is in it).
   const reviewOptions: Array<{ key: ReviewFilter; label: string }> = [
     { key: "all", label: "All classes" },
@@ -143,7 +156,8 @@ export function ClassesLog({ dashboard, review, tutorKey, onTutorChange, onOpen 
     { key: "flagged", label: `Flagged (${review?.queueTotals.flagged ?? 0})` },
   ];
   return (
-    <Disclosure title="All classes" count={rows.length} hint={`the last ${dashboard.windowDays} days, every held class, and the posts of the review data`}>
+    <Disclosure title="All classes" count={rows.length}
+      hint={`${capped ? `the latest ${latest} of ${dashboard.totals.seen} classes of the last ${dashboard.windowDays} days` : `the last ${dashboard.windowDays} days`}, every held class, and the posts of the review data`}>
       <div className="flex flex-wrap items-center gap-2 border-b px-5 py-3">
         {review ? (
           <div className="flex rounded-md border p-0.5" role="group" aria-label="Review filter">
@@ -172,6 +186,12 @@ export function ClassesLog({ dashboard, review, tutorKey, onTutorChange, onOpen 
         </select>
         <span className="ml-auto text-[10px] text-muted-foreground">{shown.length} of {rows.length} shown</span>
       </div>
+      {capped ? (
+        <p className="border-b px-5 py-2 text-[10px] text-muted-foreground">
+          Showing the latest {latest} of the {dashboard.totals.seen} classes of the last {dashboard.windowDays} days. An older one is listed only when
+          it is held or has a review row, so the filters count the classes shown, not the whole window.
+        </p>
+      ) : null}
       {review && review.queueTotals.shown < review.queueTotals.all ? (
         <p className="border-b px-5 py-2 text-[10px] text-muted-foreground">
           Showing {review.queueTotals.shown} of {review.queueTotals.all} posts with a review row: every flagged and unreviewed class, then the latest reviewed ones.

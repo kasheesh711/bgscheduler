@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ClassesLog, buildClassesLog, filterClassesLog, type ClassLogFilter } from "../classes-log";
+import { ClassesLog, buildClassesLog, filterClassesLog, stateOptions, type ClassLogFilter } from "../classes-log";
 import { APPROVED, SESSION, dashboardFixture, queueItem, reviewFixture } from "./fixtures";
 
 const ANY: ClassLogFilter = { review: "all", state: null, tutorKey: null, evidence: null };
@@ -82,6 +82,29 @@ describe("filterClassesLog", () => {
   });
 });
 
+describe("stateOptions", () => {
+  const rows = buildClassesLog(dashboardFixture(), reviewFixture());
+
+  it("offers the states the rows have, once each, in the order of their labels", () => {
+    const options = stateOptions(rows, null);
+    expect(new Set(options).size).toBe(options.length);
+    expect(new Set(options)).toEqual(new Set(rows.map((row) => row.state)));
+    // Held, Out of scope, Posted, …: by the label the owner reads, not by the state's own name.
+    expect(options.indexOf("held")).toBeLessThan(options.indexOf("skipped_scope"));
+    expect(options.indexOf("skipped_scope")).toBeLessThan(options.indexOf("verified"));
+  });
+
+  it("keeps the chosen state when a reload leaves no class in it, so the filter in force stays visible", () => {
+    expect(rows.some((row) => row.state === "generating")).toBe(false);
+    expect(stateOptions(rows, null)).not.toContain("generating");
+    expect(stateOptions(rows, "generating")).toContain("generating");
+    // The table is empty under it, and the select still says why.
+    expect(filterClassesLog(rows, { ...ANY, state: "generating" })).toEqual([]);
+    // A state the rows do have is not listed twice.
+    expect(stateOptions(rows, "held").filter((state) => state === "held")).toHaveLength(1);
+  });
+});
+
 describe("ClassesLog", () => {
   it("is collapsed by default and lists each class with its state, review, writer, time to post and cost", () => {
     const html = render();
@@ -136,10 +159,24 @@ describe("ClassesLog", () => {
     expect(html).toContain(">Open</button>");
   });
 
-  it("says when there is no class, and when no class matches", () => {
+  it("says when the page holds only the latest classes of the window, and is silent when it holds them all", () => {
     const dashboard = dashboardFixture();
+    // The fixture's 15 recent rows are the latest of 58 classes.
+    const capped = render();
+    expect(capped).toContain("the latest 15 of 58 classes of the last 7 days, every held class, and the posts of the review data");
+    expect(capped).toContain("Showing the latest 15 of the 58 classes of the last 7 days.");
+    const whole = render({ dashboard: { ...dashboard, totals: { ...dashboard.totals, seen: dashboard.recent.length } } });
+    expect(whole).toContain("the last 7 days, every held class, and the posts of the review data");
+    expect(whole).not.toContain("the latest 15 of");
+    expect(whole).not.toContain("Showing the latest");
+  });
+
+  it("says when there is no class, and when no class matches", () => {
+    const fixture = dashboardFixture();
+    const dashboard = { ...fixture, totals: { ...fixture.totals, seen: 0 } };
     const empty = render({ dashboard: { ...dashboard, holds: [], failedPosts: [], recent: [] }, review: null });
     expect(empty).toContain("No classes handled in this window yet.");
+    expect(empty).not.toContain("Showing the latest");
     const review = reviewFixture();
     const onlyReviewed = { ...review, queue: [queueItem(SESSION.chaiReviewed, "Chai", "2026-10-04", "17:00", { status: "reviewed", currentVerdict: APPROVED })] };
     expect(render({ tutorKey: "Emma", dashboard: { ...dashboard, holds: [], failedPosts: [], recent: [] }, review: onlyReviewed })).toContain("No class matches these filters.");
