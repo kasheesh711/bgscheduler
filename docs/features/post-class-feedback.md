@@ -2,7 +2,7 @@
 
 > **Related:** the separate [Feedback Autowriter](./feedback-autowriter.md) can complete Wise's blank
 > auto-submissions for roster tutors' online classes. This subsystem stays read-only toward Wise and ingests those
-> submissions like any other (actor = the API key owner; timing is role-blind, D-EVT-04).
+> submissions like any other. Timing accepts only non-automatic TEACHER or ADMIN events.
 
 > Nightly reminder migration: see the [operator runbook](../operations/nightly-feedback-reminders.md) for the dedicated 22:00 Bangkok pipeline, shadow/live controls, receipts, reconciliation and cutover. The older day-after/deadline handlers remain unscheduled.
 
@@ -221,14 +221,14 @@ The parser does still attempt an event→submission match, but only to derive *p
 
 `deriveEventTimingEvidence` (`policy.ts:357`-`400`) applies four steps:
 
-1. A qualifying event is any event Wise did **not** auto-submit. `autoSubmitted` wins over the actor role, since an auto event carries no actor (`policy.ts:327`-`333`). **D-EVT-04 — the actor role is not an authorship gate** (`:341`-`350`): Wise stamps `actorRole` from the *account's* role, not from who wrote the text, so a tutor who also holds an admin account is recorded as `ADMIN`; gating on `TEACHER` discarded genuine pre-deadline submissions and proved lateness against them. `submitterRoles` still records every role observed, so authorship stays auditable without changing the verdict.
+1. **Staff timing rule (D-EVT-05)**: only non-automatic `TEACHER` or `ADMIN` events qualify, including `autoSubmitted = null`. Student feedback never proves tutor submission. An unclassified non-automatic event at or before the deadline requires review, unless valid staff proof establishes on-time submission; it cannot create compliance or an automatic deduction. Every role remains visible in the evidence trail. `feedback-proof.ts` supplies the shared classifier and SQL predicates used by assessment, detail explanations, dashboard dates, and payout timestamps.
 2. The earliest qualifying event at or before the deadline proves `on_time`.
 3. No qualifying event, with the deadline inside event coverage, proves `late`.
 4. **Coverage floor (D-EVT-01)** — if the deadline predates the oldest persisted feedback event, absence proves nothing and timing stays `unknown` (`policy.ts:381`-`382`, floor read once per run at `repository.ts:1121`-`1128`). Without this a historical backfill would manufacture universal non-compliance for every session predating the event store.
 
 Event evidence outranks the mutable submission timestamps and, like any newly discovered pre-deadline proof, can clear a prior violation lock (**D-EVT-02**, `policy.ts:601`-`606`). Timing and content stay independent: proving the tutor submitted on time does not excuse content that fails the objective bar (`:612`-`641`). The verdict's basis is persisted as a `timingEvidence` code — `wise_activity_event_before_deadline`, `wise_activity_event_no_tutor_submission` (kept verbatim after D-EVT-04 because it is on historical rows), `proven_before_deadline`, `wise_timestamp_unavailable`, `wise_created_at_late_lower_bound`, `wise_source_created_at`, `observed_state` (`repository.ts:714`-`741`) — plus the observed `submitterRoles`. The session detail dialog renders the same events with `countedAsProof` / `notCountedReason` from `eventProofOutcome` (`detail.ts:19`-`38`, applied at `:275`-`291`), which mirrors the policy so the two cannot drift.
 
-The same `min(event_timestamp)` over non-auto events (`autoSubmitted IS DISTINCT FROM true`, NULL-safe) is what the payout line stores as `tutor_submitted_at` (`payout-repository.ts:184`-`190`), so the dashboard's Submitted column, the policy, and the sheet agree.
+New payout lines record staff-only evidence version 2. Existing lines are migrated to version 1 and retain their recorded timestamp and amount; their drift checks use the recorded rule. Current displays and regenerated exports show staff submission timestamps without rewriting historical financial evidence. Mapping `updated_at` records every edit, while `identity_changed_at` advances only for removal, replacement, or activation changes: adding a verified alias preserves existing written rows, while identity changes still fail the drift guard.
 
 ### Observation versus enforcement (D-EVT-03)
 
