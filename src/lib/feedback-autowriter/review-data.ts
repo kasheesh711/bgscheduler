@@ -663,7 +663,9 @@ async function loadAvailableReview(db: Database, now: Date, queueLimit: number):
     })),
     metrics,
     lastDailyGate: lastDaily[0] ?? null,
-    incidents: [...openIncidents, ...otherIncidents],
+    // The two reads are separate requests: an incident acknowledged between them comes back from both. Keep one row
+    // per id (the later read's copy, which is the fresher state) in first-seen order, so open criticals stay first.
+    incidents: [...new Map([...openIncidents, ...otherIncidents].map((row) => [row.id, row] as const)).values()],
     lastRun: lastRun[0] ?? null,
   });
 }

@@ -585,7 +585,13 @@ export async function loadAutowriterDashboard(
     }).from(S)
       .leftJoin(schema.postClassSessions, eq(schema.postClassSessions.wiseSessionId, S.wiseSessionId))
       .where(eq(S.state, "held"))
-      .orderBy(sql`(${S.deadlineAt} is null or ${S.deadlineAt} > ${holdsOpenAfter}) desc`, sql`${S.deadlineAt} desc nulls first`)
+      // Open holds first, soonest deadline first (a hold with no deadline stays open, so it leads); past the cap it is
+      // the least urgent open holds that are cut, then the settled ones by latest deadline.
+      .orderBy(
+        sql`(${S.deadlineAt} is null or ${S.deadlineAt} > ${holdsOpenAfter}) desc`,
+        sql`case when ${S.deadlineAt} is null or ${S.deadlineAt} > ${holdsOpenAfter} then ${S.deadlineAt} end asc nulls first`,
+        sql`${S.deadlineAt} desc nulls first`,
+      )
       .limit(input.holdsLimit ?? DASHBOARD_HOLDS_LIMIT),
     loadHeldClassesAPersonWrote(db),
     db.select({
