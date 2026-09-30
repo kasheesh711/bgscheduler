@@ -76,7 +76,7 @@ export function LowerBoundBar({ value, headStart, pass }: { value: number; headS
           <div key={mark} className="absolute -top-1 h-4 w-px bg-foreground/60" style={{ left: `${mark * 100}%` }} />
         ))}
       </div>
-      <div className="relative h-4 text-[10px] text-muted-foreground">
+      <div className="relative h-4 text-[10px] whitespace-nowrap text-muted-foreground">
         <span className="absolute -translate-x-full pr-1" style={{ left: `${headStart * 100}%` }}>{threshold(headStart)} head start</span>
         <span className="absolute pl-1" style={{ left: `${pass * 100}%` }}>{threshold(pass)} pass</span>
       </div>
@@ -107,9 +107,9 @@ function GateCard({ gate }: { gate: Gate }) {
       <h3 className="mt-2.5 text-base font-semibold tracking-[-0.03em]">{headline}</h3>
       <p className="mt-1.5 text-[11px] leading-[1.6] text-foreground/60">{detail ? `${detail} ` : ""}{GATE_MEANING[gate.status]}</p>
       {gate.reasons.length > 0 ? (
-        <div className={cn("mt-3 border-t pt-2.5 text-[10px] leading-[1.6]", tone.rule, TONE_TEXT[tone.tone])}>
-          <span className="font-semibold">Not met</span>
-          <ul className="mt-0.5 list-disc space-y-0.5 pl-3.5">
+        <div className={cn("mt-3 border-t pt-2.5 text-[10px] leading-[1.6]", tone.rule)}>
+          <span className={cn("font-semibold", TONE_TEXT[tone.tone])}>Not met</span>
+          <ul className="mt-0.5 list-disc space-y-0.5 pl-3.5 text-foreground/65">
             {gate.reasons.map((reason) => <li key={reason}>{reason}</li>)}
           </ul>
         </div>

@@ -75,6 +75,7 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
   const [busy, setBusy] = useState(false);
   const requestSequence = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
+  const reviewSequence = useRef(0);
   const trendsSequence = useRef(0);
   const trendsControllerRef = useRef<AbortController | null>(null);
   const windowDays = initialData.windowDays;
@@ -104,16 +105,19 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
   }, [windowDays]);
 
   const loadReview = useCallback(async () => {
+    // The reload after an action and the 5-minute poll can overlap: only the latest request's answer is kept.
+    const sequence = ++reviewSequence.current;
     try {
       const response = await fetch("/api/feedback-autowriter/review", { cache: "no-store" });
       const json: unknown = await response.json().catch(() => null);
+      if (sequence !== reviewSequence.current) return;
       if (response.ok && (isUnavailable(json) || isReview(json))) {
         setReview(json);
         return;
       }
       setError(errorOf(json, response.status));
     } catch {
-      setError("Could not refresh the review data.");
+      if (sequence === reviewSequence.current) setError("Could not refresh the review data.");
     }
   }, []);
 

@@ -145,7 +145,7 @@ export function TutorTable({ dashboard, review, now, selectedTutorKey, onSelect,
               const belowBar = (row.accuracy !== null && row.accuracy < GATE_THRESHOLDS.passLowerBound) || (quality?.critical ?? 0) > 0;
               const belowFloor = quality?.coverage !== null && quality?.coverage !== undefined && quality.coverage < GATE_THRESHOLDS.minCoverage;
               return (
-                <TableRow key={row.tutorKey} aria-selected={selected} data-tutor-row={row.tutorKey}
+                <TableRow key={row.tutorKey} data-state={selected ? "selected" : undefined} data-tutor-row={row.tutorKey}
                   onClick={() => onSelect(selected ? null : row.tutorKey)}
                   className={cn("cursor-pointer", selected ? "bg-sky-50 hover:bg-sky-50 dark:bg-sky-950 dark:hover:bg-sky-950" : "hover:bg-muted/40")}>
                   <TableCell className={CELL}>

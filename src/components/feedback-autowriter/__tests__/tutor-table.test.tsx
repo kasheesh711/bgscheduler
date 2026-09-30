@@ -83,10 +83,12 @@ describe("TutorTable", () => {
 
   it("highlights the tutor the page is filtered to", () => {
     const html = render({ selected: "Chai" });
-    expect(html).toMatch(/<tr[^>]*aria-selected="true"[^>]*data-tutor-row="Chai"/u);
-    expect(html.match(/aria-selected="true"/gu)).toHaveLength(1);
+    expect(html).toMatch(/<tr[^>]*data-state="selected"[^>]*data-tutor-row="Chai"/u);
+    expect(html.match(/data-state="selected"/gu)).toHaveLength(1);
+    // The tutor's button says so to a screen reader.
     expect(html.match(/aria-pressed="true"/gu)).toHaveLength(1);
-    expect(render().match(/aria-selected="true"/gu)).toBeNull();
+    expect(render()).not.toContain('data-state="selected"');
+    expect(render()).not.toContain('aria-pressed="true"');
   });
 
   it("keeps the status and the holds when the review data is unavailable", () => {

@@ -91,7 +91,7 @@ function Figure({ value, unit, caption }: { value: string; unit?: string; captio
       <div className="text-[23px] leading-[1.1] font-semibold tracking-[-0.035em] tabular-nums">
         {value}{unit ? <small className="ml-1 text-[10px] font-normal tracking-normal text-muted-foreground">{unit}</small> : null}
       </div>
-      <div className="mt-1.5 text-[10px] text-muted-foreground">{caption}</div>
+      <div className="mt-1.5 text-[10px] whitespace-nowrap text-muted-foreground">{caption}</div>
     </div>
   );
 }
