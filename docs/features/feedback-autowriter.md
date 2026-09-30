@@ -53,12 +53,13 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
    NVR / Non VR = Non-Verbal Reasoning, VR = Verbal Reasoning, Sci = Science — and nothing else is guessed. The
    judge treats the class details as true, so naming the programme or subject is never a "made-up" claim. Deterministic validation (300-char policy, placeholder, absence wording,
    copy-similarity against the tutor's 90 days of feedback and the autowriter's own posts).
-5. **Judge.** GLM (Together, zero data retention, reasoning `high`) checks the draft against the summary:
+5. **Judge.** GLM (Together, zero data retention) checks the draft against the summary at reasoning `medium` and
+   `high`, in parallel on the same messages, and the draft passes only when both do ([v5](#judge-v5-and-writer-v5-30-sep-afternoon)):
    unsupported claims, things given to the wrong person, homework the tutor never set (v4, below). Unfaithful or
    invalid → fallback writer `openai/gpt-6-luna` (zero data retention), validated and GLM-judged the same way. Both
    fail → **held** + alert. An answer to the primary writer's request from any model other than Sol is an
    infrastructure failure, never a reason to fall back; the Luna fallback has no such model check.
-   Service failures (credit, outage, time-out, a provider-side generation error, a judge that gives no verdict
+   Service failures (credit, outage, time-out, a provider-side generation error, a judge level that gives no verdict
    twice) never go to the fallback: the session retries in 10 minutes and the run reports an infrastructure error.
 6. **Shadow or live.** Shadow stores the draft (`would_submit`). Live runs
    [`submitFeedbackGuarded`](../../src/lib/feedback-autowriter/submit.ts): credit baseline → fresh read (all gates
@@ -124,6 +125,47 @@ Prompt and judge versions are now 4 ([`prompt.ts`](../../src/lib/feedback-autowr
   — is written and judged again from its kept Soniox job, and a shadow draft re-queued by going live restarts its
   transcript's review window instead of keeping it.
 
+### Judge v5 and writer v5 (30 Sep, afternoon)
+
+Four owner decisions from the 30 Sep interview, before transcript first is switched on. Prompt and judge versions
+are now 5.
+
+- **Both judge levels must pass.** The judge prompt is unchanged (v4); it now runs at reasoning `medium` and `high`
+  (`AUTOWRITER_JUDGE_EFFORTS` in [`config.ts`](../../src/lib/feedback-autowriter/config.ts)), in parallel, on
+  byte-identical messages, for every draft — summary and transcript. A draft passes only when both levels return a
+  complete v4 verdict with `faithful: true`. In the 30 Sep replays each level caught a wrong detail the other passed
+  (1 of 5 transcript drafts only at `high`, 2 of 9 only at `medium`). The problems of a rejected draft are the union
+  of both verdicts, each once, in the usual order (wrong person, homework not set, unsupported). Each level is the
+  single judge of before: a failed call (time-out, outage, wrong route) retries the class in 10 minutes, and a reply
+  it cannot use gets one more try at that level; the error names the level (`judge:high:timeout`,
+  `judge:medium:judge_unparseable`). Both calls are in `feedback_autowriter_calls` with `result.effort` and
+  `prompt_version = 5`, plus `result.judgedGeneration` (the writer reply they judged), so the dashboard counts a
+  rejected draft once.
+- **Stored verdicts and reuse.** `metadata.judge` holds the union at its top level (what hold reasons and the
+  dashboard read, so v3 and v4 verdicts still show as before) and each level's own verdict under `levels`. A kept
+  transcript draft is reused only when it is stamped prompt 5 and judge 5 **and** its stored verdict shows both
+  levels passing (`passingStoredVerdict` in [`judge.ts`](../../src/lib/feedback-autowriter/judge.ts); the requeue
+  SQL applies the same test). A draft the single judge passed (v4) is written and judged again from its kept Soniox
+  job — never posted on its old verdict.
+- **Judge time-out.** 240 s for a transcript (the `high` judge once timed out at 120 s on an hour-long one; its p90
+  was 63 s), 120 s for a summary. A judge is never started without its full time-out: if less is left before the
+  function's deadline (minus 45 s), the class retries with a fresh function, and that is not counted as a model
+  failure. The budget: every entry point (webhook, cron, Data Health run) runs under `maxDuration` 800 with a 740 s
+  deadline and reaches the models with at least 560 s left; after the slowest writer call (180 s) 335 s remain, so
+  the first judge attempt always gets its full 240 s unless the reads before the writer took over 95 s, and every
+  model call ends at least 105 s before Vercel would stop the function. Worst case for a transcript (writer 180 s,
+  then both judges 240 s) about 140 s remain, under the 240 s the POST needs: the judged draft is kept and the next
+  run posts it without calling a model. A summary's worst case still posts in the same run (260 s left).
+- **`writer_failed` counts the writer only** ([transcript first](#transcript-first-switch-30-sep)). A judge failure
+  just retries every 10 minutes, as before; and because the writer delivered a draft on that attempt, its count
+  starts again.
+- **No other names.** Summary rule 12: "Never name anyone but `[STUDENT_1]`: refer to any other person generically —
+  "another student", "a classmate", "a family member" — never by name." Transcript rule 13, which already said never
+  to repeat any name, now ends "… and refer to anyone else generically ("another student", "a classmate", "a family
+  member")". The tutor is never named either (unchanged). A prompt rule only: nothing holds a draft for a name, and
+  the judge is not asked about it. It is absolute — authors and characters in the lesson material are not an
+  exception.
+
 ## Models
 
 Since 2026-09-30 (owner decision: "Switch the writer to Sol for everyone today"; migration 0100 adds the arm `sol`).
@@ -134,7 +176,7 @@ a summary nor a transcript ever reaches a host that retains it ([`config.ts`](..
 |---|---|---|---|---|
 | Writer (`sol`) | `openai/gpt-6.1-sol` | any zero-data-retention host (Azure today) | `low` | the answer must come from `openai/gpt-6.1-sol` |
 | Fallback writer (`luna`) | `openai/gpt-6-luna` | same | `max` | — |
-| Judge (`glm`) | `z-ai/glm-5.3-flash` | pinned to Together, no host fallback | `high` (v4; was `medium`) | host `Together` and that model |
+| Judge (`glm`) | `z-ai/glm-5.3-flash` | pinned to Together, no host fallback | `medium` and `high`, in parallel — both must pass (v5; one call at `high` in v4, at `medium` before) | host `Together` and that model |
 
 Why Sol: a blind comparison on 11 classes (the same Soniox transcripts for every writer, v4 rules) found 82% of
 Sol-low drafts needed no real fix (no critical errors, 0.9 real errors per 100 claims), against 64% for Luna and 30%
@@ -191,8 +233,8 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
    `transcribing` (`zoom_transcript_pending`, job kept, due again after 5 minutes, i.e. the next sweep) until 20
    minutes after the Soniox job was submitted, then goes ahead on talk share (worst case ~35 minutes after submit). The models are told the labels are reliable only when Zoom confirmed them, and are told they
    are inferred by default ([`transcript.ts`](../../src/lib/feedback-autowriter/transcript.ts));
-4. writes (Sol, Luna fallback) and judges (GLM) from the `[mm:ss] TUTOR/STUDENT` transcript, exactly like the
-   summary path. Thai-script names can slip past the Latin-name redaction, so a transcript may only go to
+4. writes (Sol, Luna fallback) and judges (GLM at both levels, 240 s time-out) from the `[mm:ss] TUTOR/STUDENT`
+   transcript, exactly like the summary path. Thai-script names can slip past the Latin-name redaction, so a transcript may only go to
    **zero-data-retention routes** — which every model now is (until 30 Sep only GLM had one, so transcripts were
    written by GLM alone, with no fallback). Extra rule: what the tutor
    explained is "covered", not "mastered", unless the student is shown doing it. A long transcript keeps its start
@@ -203,7 +245,7 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
 A webhook waits up to ~3 minutes for Soniox; the backstop only looks and comes back, so one slow job never starves
 the other classes. A transcript draft that was judged but whose POST did not go out (another POST in flight, or a
 pre-POST gate that says "try later") is reused on the retry, as long as the current prompt and judge versions wrote
-it (v4, above). While Wise itself is not ready (attendance, status, the
+it and both judge levels passed it (v4 and v5, above). While Wise itself is not ready (attendance, status, the
 POST slot, a failed read once a draft exists) the class waits in `pending`, not `awaiting_recording`. Three Soniox failures (errors, a job running
 over an hour, or a run whose status checks never get an answer; within one run a failed check after a good answer
 does not count, and the backstop checks once per run), several recording parts, a recording too short for the
@@ -240,11 +282,12 @@ pass is on. Off (the default), nothing changes.
   `RecordingCompletedEvent` webhook continues it, as for any second-pass class.
 - **Fallback to the summary** (`fallBackToSummary`, once): no recording **3 h after the scheduled end**, a recording
   in several parts, speakers it cannot tell apart, three Soniox failures, the transcript pass switched off while
-  the class waited, or the models failing on the transcript draft three times in a row (`writer_failed`: the writer
-  or its judge timing out, answering with something that is not JSON or from the wrong route — counted in
-  `metadata.writerErrors`, the last one in `writerFailure`, and reset when the models deliver a draft; owner default,
-  30 Sep). Not counted, and retried every 10 minutes as before: Wise and Soniox errors, the function's own time, and
-  our OpenRouter account or connection (a bad key, no credit, rate limited, the network). The row goes back to `pending` with `evidence = summary`, due at once, reason
+  the class waited, or the writer failing on the transcript draft three times in a row (`writer_failed`: the writer
+  timing out, answering with something that is not JSON or from the wrong route, or a provider error — counted in
+  `metadata.writerErrors`, the last one in `writerFailure`, and reset whenever the writer delivers a draft; owner
+  decisions, 30 Sep). Not counted, and retried every 10 minutes as before: a judge failure (the writer delivered, so
+  the count starts again), Wise and Soniox errors, the function's own time, and our OpenRouter account or connection
+  (a bad key, no credit, rate limited, the network). The row goes back to `pending` with `evidence = summary`, due at once, reason
   `summary_fallback:<cause>` and `metadata.summaryFallback {cause, at}` (the run reports `summary_fallback`), and the
   summary path writes it as before. A transcript draft kept on the row (only possible for a recording that gained a
   second part, or the pass switched off) is dropped with its verdict and stamp. Measured before choosing 3 h (first `RecordingCompletedEvent` − scheduled end,
@@ -267,12 +310,13 @@ pass is on. Off (the default), nothing changes.
 - **Replay** (read-only, [`replay.ts`](../../src/lib/feedback-autowriter/replay.ts); CLI `--replay`). What transcript
   first would do with recent classes, before the switch is turned on: Wise session-detail GETs, database SELECTs,
   Soniox jobs deleted right after each transcript, model calls kept in memory. Per class: the outcome (draft, hold
-  or fallback), Soniox minutes, cost and turnaround, the speaker method, the v4 transcript draft with its judge at
-  `high` and — on the same messages — at `medium`, a v4 summary draft, and a v4 `high` judge of the draft actually
-  posted (the original, when a one-time correction replaced it) against the transcript — only on a transcript
-  production would write from. Writer models are whatever `AUTOWRITER_MODELS` names, shown per draft, with their
+  or fallback), Soniox minutes, cost and turnaround, the speaker method, the transcript draft with both judge
+  levels' verdicts, latency and tokens (the pipeline's own two calls), a summary draft judged the same way, and both
+  levels on the draft actually posted (the original, when a one-time correction replaced it) against the transcript —
+  only on a transcript production would write from. Writer models are whatever `AUTOWRITER_MODELS` names, shown per draft, with their
   calls, failures and latency (p50/p90). A transcript draft whose models fail is tried up to three times (30 s
-  apart, where production waits 10 minutes) before it counts as a `writer_failed` fallback. It is typed so
+  apart, where production waits 10 minutes): three writer failures in a row count as a `writer_failed` fallback, a
+  judge still failing on the last try ends as `error:judge:<level>:…` (production would keep retrying). It is typed so
   it cannot post (`Pick<WiseFeedbackOps, "getSessionDetailById">`), and no database handle is passed in: the CLI
   SELECTs the sample (including when Wise announced each recording) and the tutor's prior feedback. A class whose
   published recording Wise no longer lists (Wise drops recordings about a day after class) is skipped
@@ -329,8 +373,9 @@ Preview deployments never touch autowriter state.
 ## Costs
 
 Writer (Sol, reasoning `low`) ≈ $0.04 per draft (mean of the 30 Sep comparison's transcript drafts). The GLM judge
-cost ≈ $0.0008 per check (at reasoning `medium`; `high` since v4 is not re-measured yet) and a Luna fallback draft
-≈ $0.0012 in the 2026-09-29 pilot (summaries), when GLM also wrote for ≈ $0.0024. ~200 online classes/month across
+cost ≈ $0.0008 per check at reasoning `medium` on a summary in the 2026-09-29 pilot; since v5 every draft is checked
+twice (`medium` and `high`), about $0.004 more per transcript draft than one `high` call. A Luna fallback draft cost
+≈ $0.0012 in the pilot (summaries), when GLM also wrote for ≈ $0.0024. ~200 online classes/month across
 the five tutors → roughly $8–10/month, plus Soniox for the second pass (≈ $0.10 per audio hour). Transcript first
 sends every class to Soniox: about $0.10 per class-hour of recording, ~$22/month. Each call's tokens and billed cost
 are in `feedback_autowriter_calls`.
