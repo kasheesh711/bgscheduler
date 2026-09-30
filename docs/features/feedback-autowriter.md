@@ -159,7 +159,10 @@ are now 5.
   run posts it without calling a model. A summary's worst case still posts in the same run (260 s left).
 - **`writer_failed` counts the writer only** ([transcript first](#transcript-first-switch-30-sep)). A judge failure
   just retries every 10 minutes, as before; and because the writer delivered a draft on that attempt, its count
-  starts again.
+  starts again. A rate limit never counts either — including the writer route's upstream rate limit, which OpenRouter
+  reports inside a 200 response with the status (429) in the body ([`openrouter.ts`](../../src/lib/feedback-autowriter/openrouter.ts)
+  reads it from there): in the 30 Sep replay that error was taken for the writer's own failure and sent a class back
+  to the summary.
 - **No other names.** Summary rule 12: "Never name anyone but `[STUDENT_1]`: refer to any other person generically —
   "another student", "a classmate", "a family member" — never by name." Transcript rule 13, which already said never
   to repeat any name, now ends "… and refer to anyone else generically ("another student", "a classmate", "a family

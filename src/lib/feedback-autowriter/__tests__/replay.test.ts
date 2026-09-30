@@ -327,6 +327,32 @@ describe("replay: the same evidence and decisions as production", () => {
     }
   });
 
+  it("tries a rate-limited writer again without counting it: a rate limit never sends a class back to the summary", async () => {
+    const rateLimited = { ok: false, error: "openai/gpt-6.1-sol is temporarily rate-limited upstream.", httpStatus: 429, model: null, provider: null, finishReason: null, usage: null, latencyMs: 900 } as OpenRouterCallResult;
+    const attempt = async (limited: number) => {
+      let transcriptWrites = 0;
+      const pauses: number[] = [];
+      const callModel = vi.fn(async (request: ModelRequest) => {
+        if (request.schemaName !== "post_class_feedback") return reply(request, PASSING);
+        if (!request.messages[1].content.includes("Lesson transcript:")) return reply(request, WRITER_JSON);
+        transcriptWrites += 1;
+        return transcriptWrites <= limited ? rateLimited : reply(request, WRITER_JSON);
+      });
+      const record = await replayClass(replayDeps({
+        wise: readOnlyWise(sessionDetail(RECORDING)).wise, soniox: fakeSoniox().client, callModel: callModel as never,
+        sleep: async (ms) => { pauses.push(ms); },
+      }), SAMPLE);
+      return { record, transcriptWrites, pauses: pauses.filter((ms) => ms === 30_000).length };
+    };
+    // Twice rate-limited, then written: a draft (production would have retried 10 minutes apart).
+    expect(await attempt(2)).toMatchObject({ record: { outcome: "draft", afterFallback: null }, transcriptWrites: 3, pauses: 2 });
+    // Still rate-limited on the last try: not decided — never `writer_failed`.
+    const stuck = await attempt(3);
+    expect(stuck).toMatchObject({ transcriptWrites: 3, pauses: 2 });
+    expect(stuck.record).toMatchObject({ outcome: `error:${AUTOWRITER_MODELS.writer.arm}:openai/gpt-6.1-sol is temporarily rate-limited upstream.`, afterFallback: null });
+    expect(summarizeReplay([stuck.record]).outcomes).toMatchObject({ error: 1, fallback: 0 });
+  });
+
   it("never falls back for a judge that keeps failing: the last try stands, with only its own verdicts", async () => {
     let transcriptJudgeCalls = 0;
     const timedOut = { ok: false, error: "timeout", httpStatus: null, model: null, provider: null, finishReason: null, usage: null, latencyMs: 240_000 } as OpenRouterCallResult;

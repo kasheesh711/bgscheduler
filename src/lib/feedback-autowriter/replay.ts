@@ -170,7 +170,7 @@ export interface ReplayRecord {
 const REPLAY_BUDGET_MS = 15 * 60 * 1000;
 /** Tries of one transcript draft: enough for the writer to fail three times in a row (`writer_failed`). */
 const REPLAY_TRANSCRIPT_TRIES = AUTOWRITER_MAX_WRITER_ERRORS;
-/** Between tries of a transcript draft whose writer or judge failed (production waits 10 minutes; the replay cannot). */
+/** Between tries of a transcript draft whose model call failed (production waits 10 minutes; the replay cannot). */
 const REPLAY_WRITER_RETRY_PAUSE_MS = 30_000;
 
 function message(error: unknown): string {
@@ -478,17 +478,18 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
           remainingMs: () => REPLAY_BUDGET_MS,
           callModel: recordingCaller(deps, record, "transcript_draft", { writerContents }),
         });
-        // Production retries the models' failures on a transcript draft every 10 minutes. After the writer's third
+        // Production retries a transcript draft whose model call failed every 10 minutes. After the writer's third
         // failure in a row it writes the class from the summary (`writer_failed`); a judge failure just retries and,
-        // the writer having delivered, starts that count again. The replay tries up to three times, a short pause
-        // apart, and a judge still failing on the last try ends as `error:judge:<effort>:…`.
+        // the writer having delivered, starts that count again; our account's failures (a rate limit, no credit)
+        // never count. The replay tries up to three times, a short pause apart, and a call still failing on the last
+        // try ends as `error:<who>:…`.
         let writerFailures = 0;
         let tryFrom = record.calls.length;
         let result = await write();
         for (let tries = 1; ; tries += 1) {
           if (result.kind === "infra" && result.stage === "writer" && result.modelFailure) writerFailures += 1;
           else if (result.kind === "infra" && result.stage === "judge") writerFailures = 0;
-          if (!(result.kind === "infra" && result.modelFailure) || tries >= REPLAY_TRANSCRIPT_TRIES) break;
+          if (result.kind !== "infra" || tries >= REPLAY_TRANSCRIPT_TRIES) break;
           await sleep(REPLAY_WRITER_RETRY_PAUSE_MS);
           // The draft, its verdicts and its writer are the last try's.
           tryFrom = record.calls.length;

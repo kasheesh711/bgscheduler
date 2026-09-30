@@ -97,7 +97,10 @@ const JUDGE_ATTEMPTS = 2;
 /** The infra error for our own function running out of time before a model call: not a failure of the models. */
 export const FUNCTION_BUDGET_EXHAUSTED = "function_budget_exhausted";
 
-/** OpenRouter statuses about our account rather than the model: a bad key, no credit, rate limited. */
+/**
+ * OpenRouter statuses about our account or its capacity rather than the model's answer: a bad key, no credit, rate
+ * limited (our own limit, or the model's upstream one — which OpenRouter reports inside a 200 response).
+ */
 const ACCOUNT_STATUSES = new Set([401, 402, 429]);
 
 /**

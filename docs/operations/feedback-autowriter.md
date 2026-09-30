@@ -265,7 +265,14 @@ order by 1, 2;
 ```
 
 A judge call has 240 s on a transcript and 120 s on a summary; `timeout` rows near those numbers mean the level
-could not finish, and the class retried 10 minutes later. A `sol:model_mismatch:…` reason means
+could not finish, and the class retried 10 minutes later.
+
+Writer rows with the error `… is temporarily rate-limited upstream` are OpenRouter's rate limit on the writer's
+zero-retention route, not a failure of the draft (30 Sep afternoon: 6 of 10 writer calls while three classes were
+replayed at once, 7 of 8 one-word requests sent together). The class retries every 10 minutes and the error never
+counts toward `writer_failed`. If it keeps classes from posting, the error text itself points to adding an own
+provider key for that model in OpenRouter (Settings → Integrations); before doing so, check that the key's endpoint
+keeps zero data retention, as every autowriter route must. A `sol:model_mismatch:…` reason means
 OpenRouter answered Sol's request with another model id: the run reports an infrastructure error and the class
 retries, so that answer is never posted. Only the primary writer has this check; a Luna fallback answer is not
 checked for its model (its `resolved_model` is in the query above).

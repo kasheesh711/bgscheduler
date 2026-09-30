@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenRouterCallResult } from "../openrouter";
+import { callOpenRouter, type OpenRouterCallResult } from "../openrouter";
 import { isInfraFailure, routeMismatch, runWritingPipeline, type CallRecord } from "../pipeline";
 import {
   AUTOWRITER_CALL_DEADLINE_MARGIN_MS,
@@ -210,6 +210,27 @@ describe("runWritingPipeline", () => {
     expect(await infra({ writers: [fail("network_TypeError", null)] })).toEqual(["sol:network_TypeError", false, "writer"]);
     expect(await infra({ writers: [fail("timeout", null)] }, 150_000)).toEqual(["sol:timeout", false, "writer"]);
     expect(await infra({ writers: [] }, 60_000)).toEqual(["function_budget_exhausted", false, "writer"]);
+  });
+
+  it("never takes an upstream rate limit for the writer's failure, though OpenRouter reports it inside a 200 response", async () => {
+    // 30 Sep replay: Sol's route was rate-limited upstream; the error came as HTTP 200 with code 429 in the body.
+    const message = "openai/gpt-6.1-sol is temporarily rate-limited upstream. Please retry shortly.";
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ error: { message, code: 429 } }), { status: 200 }));
+    const result = await runWritingPipeline({
+      apiKey: "k",
+      session: {
+        wiseSessionId: "6a0000000000000000000002", studentFullName: STUDENT_NAME, studentDisplayName: "Somchai",
+        classDetails: [], scheduledMinutes: 60, summary: { text: SUMMARY, meetingUUIDs: [] }, evidence: "transcript",
+      },
+      tutorNames: ["Kevin Hsieh", "Kev"],
+      priorFeedback: [],
+      record: async () => {},
+      remainingMs: () => 700_000,
+      callModel: (request) => callOpenRouter({ ...request, fetchImpl: fetchImpl as unknown as typeof fetch }),
+    });
+    // Retried later, never counted toward `writer_failed` and never sent on to the fallback writer.
+    expect(result).toEqual({ kind: "infra", error: `sol:${message}`, modelFailure: false, stage: "writer" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("never sends the summary to the fallback host after a provider-side generation error", async () => {
