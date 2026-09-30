@@ -6,7 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import type { AutowriterDashboard } from "@/lib/feedback-autowriter/dashboard";
 import type { AutowriterReview, ReviewQueueItem } from "@/lib/feedback-autowriter/review-data";
 import { cn } from "@/lib/utils";
-import { Disclosure, Tag } from "./atoms";
+import { Disclosure, Tag, TONE_TEXT } from "./atoms";
 import { STATE_TONE, stateLabel } from "./class-states";
 import { minutes, usd, when } from "./format";
 import { targetForClass, type DrawerTarget } from "./item-drawer";
@@ -226,7 +226,8 @@ export function ClassesLog({ dashboard, review, tutorKey, onTutorChange, onOpen 
                   <TableCell className={cn(CELL, "max-w-48 truncate")} title={row.className ?? undefined}>{row.className ?? "—"}</TableCell>
                   <TableCell className={CELL}>
                     <Tag tone={STATE_TONE[row.state] ?? "neutral"}>{stateLabel(row.state)}</Tag>
-                    {row.note ? <div className="mt-1 text-[10px] text-amber-700 dark:text-amber-400">{row.note}</div> : null}
+                    {/* A fallback is a caution; a held class a person has written is settled. */}
+                    {row.note ? <div className={cn("mt-1 text-[10px]", row.note === WRITTEN ? TONE_TEXT.green : "text-amber-700 dark:text-amber-400")}>{row.note}</div> : null}
                   </TableCell>
                   <TableCell className={cn(CELL, "whitespace-normal")}>
                     {row.review ? (

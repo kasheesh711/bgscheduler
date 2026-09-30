@@ -360,7 +360,9 @@ export function reviewFixture(overrides: Partial<AutowriterReview> = {}): Autowr
     }),
     flagged,
     queueItem(SESSION.chaiReviewed, "Chai", "2026-10-04", "17:00", { className: "A-level Chemistry", status: "reviewed", currentVerdict: APPROVED, verdicts: [APPROVED] }),
-    queueItem(SESSION.annaReviewed, "Anna", "2026-10-02", "11:00", { status: "reviewed", currentVerdict: APPROVED, verdicts: [APPROVED] }),
+    queueItem(SESSION.annaReviewed, "Anna", "2026-10-02", "11:00", {
+      status: "reviewed", currentVerdict: APPROVED, verdicts: [APPROVED], firstShot: firstShot(SESSION.annaReviewed, at("2026-10-02", "12:06")),
+    }),
     critical,
   ];
   return {
@@ -494,7 +496,9 @@ export function quietReviewFixture(overrides: Partial<AutowriterReview> = {}): A
   const busy = reviewFixture();
   const queue = [
     queueItem(SESSION.chaiReviewed, "Chai", "2026-10-05", "17:00", { className: "A-level Chemistry", status: "reviewed", currentVerdict: APPROVED, verdicts: [APPROVED] }),
-    queueItem(SESSION.annaReviewed, "Anna", "2026-10-05", "11:00", { status: "reviewed", currentVerdict: APPROVED, verdicts: [APPROVED] }),
+    queueItem(SESSION.annaReviewed, "Anna", "2026-10-05", "11:00", {
+      status: "reviewed", currentVerdict: APPROVED, verdicts: [APPROVED], firstShot: firstShot(SESSION.annaReviewed, at("2026-10-05", "12:02")),
+    }),
   ];
   return reviewFixture({
     gate: {

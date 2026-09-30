@@ -118,6 +118,9 @@ describe("ClassesLog", () => {
     expect(rowOf(html, SESSION.benFlagged)).toContain("Posted No recording after 3 h — from summary Flagged · Approved GPT-6 Luna 3.1 h");
     expect(rowOf(html, SESSION.chaiHeldJudge)).toContain("Held — GPT-6.1 Sol · transcript");
     expect(rowOf(html, SESSION.daoHeldWritten)).toContain("Held Written by a person since");
+    // Settled, so not in the amber of a caution (the fallback note below is).
+    expect(html).toMatch(/<div class="mt-1 text-\[10px\] (?![^"]*amber)[^"]*">Written by a person since<\/div>/u);
+    expect(html).toMatch(/<div class="mt-1 text-\[10px\] text-amber-700[^"]*">No recording after 3 h — from summary<\/div>/u);
     expect(rowOf(html, SESSION.benCritical)).toContain("Reviewed · Needs fix · critical · Wrong person GLM Flash 4.0 min — Review");
     expect(rowOf(html, SESSION.annaTutorFirst)).toContain("Tutor wrote it");
     expect(rowOf(html, SESSION.emmaOutOfScope)).toContain("Out of scope");
