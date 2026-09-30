@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAutowriterDashboard, type DashboardCallRow, type DashboardSessionRow } from "../dashboard";
+import { buildAutowriterDashboard, type DashboardCallRow, type DashboardHoldRow, type DashboardSessionRow } from "../dashboard";
 import { KEVIN_ONLINE_WISE_USER_ID } from "../roster";
 import type { AutowriterSystemStatus } from "../system-status";
 
@@ -67,6 +67,7 @@ describe("buildAutowriterDashboard", () => {
     windowDays: 7,
     control,
     system,
+    holds: [],
     sessions: [
       session("a", { state: "verified", arm: "sol", postStartedAt: new Date("2026-09-30T03:02:00.000Z"), fields: { topics: "t" } }),
       session("b", { state: "verified", arm: "luna", postStartedAt: new Date("2026-09-30T03:04:00.000Z") }),
@@ -124,6 +125,7 @@ describe("buildAutowriterDashboard", () => {
       windowDays: 7,
       control,
       system,
+      holds: [],
       calls: [],
       webhooks: [],
       sessions: [
@@ -192,6 +194,7 @@ describe("buildAutowriterDashboard", () => {
       windowDays: 7,
       control,
       system,
+      holds: [],
       sessions: [session("a", { state: "held" }), session("b", { state: "verified" })],
       webhooks: [],
       calls: [
@@ -219,6 +222,7 @@ describe("buildAutowriterDashboard", () => {
       windowDays: 7,
       control,
       system,
+      holds: [],
       calls: [],
       webhooks: [],
       sessions: [
@@ -251,6 +255,7 @@ describe("buildAutowriterDashboard", () => {
       windowDays: 7,
       control,
       system,
+      holds: [],
       calls: [],
       webhooks: [],
       sessions: [
@@ -284,5 +289,139 @@ describe("buildAutowriterDashboard", () => {
     expect(dashboard.webhooks.byOutcome).toEqual(expect.arrayContaining([{ outcome: "already_handled", count: 1 }]));
     expect(dashboard.webhooks.lastReceivedAt).toBe("2026-09-30T03:03:00.000Z");
     expect(dashboard.control).toMatchObject({ mode: "live", disabledTutors: ["6976680baf7fbc5ac88c3ea9"] });
+  });
+});
+
+describe("buildAutowriterDashboard: what needs the owner", () => {
+  const GIFT_MAIN = "695369c028118f629edcb9cb";
+  const STRANGER = "6a00000000000000000000aa";
+  const build = (input: { sessions?: DashboardSessionRow[]; holds?: DashboardHoldRow[] }) => buildAutowriterDashboard({
+    now: NOW, windowDays: 7, control, system, calls: [], webhooks: [], sessions: input.sessions ?? [], holds: input.holds ?? [],
+  });
+  function hold(id: string, patch: Partial<DashboardHoldRow>): DashboardHoldRow {
+    return {
+      wiseSessionId: id,
+      wiseClassId: "6a0000000000000000000001",
+      wiseTeacherUserId: KEVIN_ONLINE_WISE_USER_ID,
+      scheduledEndAt: new Date("2026-09-30T03:00:00.000Z"),
+      deadlineAt: new Date("2026-10-02T16:59:59.999Z"),
+      reason: "sol:unfaithful:x",
+      alertsSent: {},
+      hasDraft: false,
+      className: "Somchai (Tom.Ja) Jaidee",
+      ...patch,
+    };
+  }
+
+  it("passes the system status through", () => {
+    expect(build({}).system).toEqual(system);
+  });
+
+  it("counts the classes that end today in Bangkok for the Today line", () => {
+    const yesterday = new Date("2026-09-29T10:00:00.000Z");
+    const board = build({ sessions: [
+      session("p1", { state: "verified" }),
+      session("p2", { state: "awaiting_event" }),
+      session("r1", { state: "awaiting_recording" }),
+      session("r2", { state: "transcribing" }),
+      session("h1", { state: "held", reason: "speakers_unclear" }),
+      // 00:30 on the 30th in Bangkok: today.
+      session("h2", { state: "held", reason: "sol:unfaithful:x", scheduledEndAt: new Date("2026-09-29T17:30:00.000Z") }),
+      session("t1", { state: "skipped_human" }),
+      session("g1", { state: "skipped_scope", reason: "class_type_GROUP" }),
+      // In-person: never counted.
+      session("o1", { state: "skipped_scope", reason: "session_type_OFFLINE" }),
+      // Neither today's: yesterday's classes, and a class without an end time.
+      session("y1", { state: "verified", scheduledEndAt: yesterday }),
+      session("y2", { state: "held", scheduledEndAt: yesterday }),
+      session("n1", { state: "verified", scheduledEndAt: null }),
+      // Still being written, expired or failed: not on the line.
+      session("w1", { state: "pending" }),
+      session("e1", { state: "expired" }),
+      session("f1", { state: "verify_failed" }),
+    ] });
+    expect(board.today).toEqual({ date: "2026-09-30", posted: 2, awaitingRecording: 2, held: 2, skippedHuman: 1, skippedScope: 1 });
+    // Just after midnight in Bangkok it is a new day with nothing on it yet.
+    const next = buildAutowriterDashboard({
+      now: new Date("2026-09-30T17:05:00.000Z"), windowDays: 7, control, system, calls: [], webhooks: [], holds: [],
+      sessions: [session("p1", { state: "verified" })],
+    });
+    expect(next.today).toEqual({ date: "2026-10-01", posted: 0, awaitingRecording: 0, held: 0, skippedHuman: 0, skippedScope: 0 });
+  });
+
+  it("lists every held class, soonest deadline first, with its tutor, alert time and whether a draft is stored", () => {
+    const board = build({ holds: [
+      hold("later", { deadlineAt: new Date("2026-10-02T16:59:59.999Z"), alertsSent: { held: "2026-09-30 03:20:05.123456+00" }, hasDraft: true }),
+      // Older than any window, its deadline long gone: still a held class.
+      hold("old", {
+        scheduledEndAt: new Date("2026-08-01T03:00:00.000Z"), deadlineAt: new Date("2026-08-03T16:59:59.999Z"), reason: "recording_too_short",
+        wiseTeacherUserId: GIFT_MAIN, alertsSent: { held: "suppressed:shadow" },
+      }),
+      hold("no-deadline", { deadlineAt: null, scheduledEndAt: null, wiseClassId: null, className: null, reason: null, wiseTeacherUserId: STRANGER }),
+      hold("sooner", { deadlineAt: new Date("2026-09-30T16:59:59.999Z"), alertsSent: { held: "2026-09-30 10:20:05.5+07", expired: "2026-09-29 01:00:00+00" } }),
+      hold("nobody", { deadlineAt: new Date("2026-10-01T16:59:59.999Z"), wiseTeacherUserId: null }),
+    ] });
+    expect(board.holds.map((row) => row.wiseSessionId)).toEqual(["old", "sooner", "nobody", "later", "no-deadline"]);
+    expect(board.holds[0]).toEqual({
+      wiseSessionId: "old",
+      tutor: "Wanwisa (Gift) Montrikittiphant",
+      tutorKey: "Gift",
+      className: "Somchai (Tom.Ja) Jaidee",
+      classEndedAt: "2026-08-01T03:00:00.000Z",
+      deadlineAt: "2026-08-03T16:59:59.999Z",
+      reason: "recording_too_short",
+      // The digest was not emailed in shadow mode.
+      alertSentAt: null,
+      hasDraft: false,
+      wiseUrl: "https://learn.begiftededucation.com/links?type=classroom_entity&entityType=session&entityId=old&classId=6a0000000000000000000001&profile=teacher",
+    });
+    // Postgres writes the time as text, in the session's time zone.
+    expect(board.holds.find((row) => row.wiseSessionId === "later")).toMatchObject({ tutorKey: "Kevin", alertSentAt: "2026-09-30T03:20:05.123Z", hasDraft: true });
+    expect(board.holds.find((row) => row.wiseSessionId === "sooner")?.alertSentAt).toBe("2026-09-30T03:20:05.500Z");
+    expect(board.holds.find((row) => row.wiseSessionId === "no-deadline")).toEqual({
+      wiseSessionId: "no-deadline", tutor: STRANGER, tutorKey: STRANGER, className: null, classEndedAt: null, deadlineAt: null, reason: null,
+      alertSentAt: null, hasDraft: false, wiseUrl: null,
+    });
+    expect(board.holds.find((row) => row.wiseSessionId === "nobody")).toMatchObject({ tutor: "unknown", tutorKey: "unknown" });
+    // The window's own counts are untouched by holds from outside it.
+    expect(board.totals.held).toBe(0);
+  });
+
+  it("lists the window's failed posts, latest class first", () => {
+    const at = (hours: number) => new Date(new Date("2026-09-30T00:00:00.000Z").getTime() + hours * 3_600_000);
+    const board = build({ sessions: [
+      session("ok", { state: "verified" }),
+      session("v", { state: "verify_failed", reason: "verify_failed", scheduledEndAt: at(1) }),
+      session("u", { state: "unknown_outcome", reason: "unknown_outcome", scheduledEndAt: at(3), wiseTeacherUserId: GIFT_MAIN }),
+      session("r", { state: "rejected", reason: "rejected", scheduledEndAt: at(2), wiseClassId: null }),
+      session("held", { state: "held" }),
+      session("expired", { state: "expired" }),
+    ] });
+    expect(board.failedPosts).toEqual([
+      {
+        wiseSessionId: "u", tutor: "Wanwisa (Gift) Montrikittiphant", tutorKey: "Gift", className: "Somchai (Tom.Ja) Jaidee",
+        classEndedAt: "2026-09-30T03:00:00.000Z", state: "unknown_outcome", reason: "unknown_outcome",
+        wiseUrl: "https://learn.begiftededucation.com/links?type=classroom_entity&entityType=session&entityId=u&classId=6a0000000000000000000001&profile=teacher",
+      },
+      {
+        wiseSessionId: "r", tutor: "Kevin (Kev) Y. Hsieh", tutorKey: "Kevin", className: "Somchai (Tom.Ja) Jaidee",
+        classEndedAt: "2026-09-30T02:00:00.000Z", state: "rejected", reason: "rejected", wiseUrl: null,
+      },
+      expect.objectContaining({ wiseSessionId: "v", state: "verify_failed", classEndedAt: "2026-09-30T01:00:00.000Z" }),
+    ]);
+    expect(board.totals.failed).toBe(3);
+    expect(build({}).failedPosts).toEqual([]);
+  });
+
+  it("gives every recent class the tutor key the tutor table and the review queue use", () => {
+    const board = build({ sessions: [
+      session("k", { state: "verified" }),
+      session("g", { state: "verified", wiseTeacherUserId: GIFT_MAIN }),
+      session("s", { state: "held", wiseTeacherUserId: STRANGER }),
+      session("n", { state: "pending", wiseTeacherUserId: null }),
+    ] });
+    const keyOf = (id: string) => board.recent.find((row) => row.wiseSessionId === id)?.tutorKey;
+    expect([keyOf("k"), keyOf("g"), keyOf("s"), keyOf("n")]).toEqual(["Kevin", "Gift", STRANGER, "unknown"]);
+    expect(board.tutors.map((tutor) => tutor.tutorKey)).toEqual(expect.arrayContaining(["Kevin", "Gift"]));
   });
 });

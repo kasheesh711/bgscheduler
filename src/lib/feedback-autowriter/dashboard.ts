@@ -33,6 +33,17 @@ export interface DashboardSessionRow extends Pick<AutowriterSessionRow,
   className: string | null;
 }
 
+/** A class in state `held`, whatever its age: what the Held group of the to-do list shows. */
+export interface DashboardHoldRow extends Pick<AutowriterSessionRow,
+  "wiseSessionId" | "wiseClassId" | "wiseTeacherUserId" | "scheduledEndAt" | "deadlineAt" | "reason" | "alertsSent"> {
+  className: string | null;
+  /** The row stores a judged draft (`fields`). */
+  hasDraft: boolean;
+}
+
+/** Held classes loaded at most (the latest deadlines are kept). */
+export const DASHBOARD_HOLDS_LIMIT = 500;
+
 export interface DashboardWebhookRow {
   eventName: string | null;
   outcome: string | null;
@@ -81,6 +92,30 @@ function bangkokDate(date: Date): string {
 function latencyMinutes(row: Pick<DashboardSessionRow, "scheduledEndAt" | "postStartedAt">): number | null {
   if (!row.scheduledEndAt || !row.postStartedAt) return null;
   return (row.postStartedAt.getTime() - row.scheduledEndAt.getTime()) / 60_000;
+}
+
+/** A tutor's name and the key their rows join on: the roster's, or the Wise account id of someone not on it. */
+function tutorOf(wiseTeacherUserId: string | null): { tutor: string; tutorKey: string } {
+  const tutor = rosterTutor(wiseTeacherUserId);
+  return { tutor: tutor ? tutorLabel(tutor) : wiseTeacherUserId ?? "unknown", tutorKey: tutorKeyFor(wiseTeacherUserId) };
+}
+
+function wiseUrlOf(row: Pick<AutowriterSessionRow, "wiseClassId" | "wiseSessionId">): string | null {
+  return row.wiseClassId ? wiseSessionLink({ wiseClassId: row.wiseClassId, wiseSessionId: row.wiseSessionId }) : null;
+}
+
+/** `now()::text` as Postgres prints it: "2026-09-30 03:20:05.123456+00" (the offset is the session's time zone). */
+const POSTGRES_TIMESTAMP = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)([+-]\d{2})(?::?(\d{2}))?$/u;
+
+/**
+ * When an alert was emailed, from its `alerts_sent` entry (`markAlertsSent`): the send time, or null for a note such
+ * as `suppressed:shadow` (the digest was deliberately not emailed) and for no entry at all.
+ */
+function alertSentAt(value: unknown): string | null {
+  const match = typeof value === "string" ? POSTGRES_TIMESTAMP.exec(value) : null;
+  if (!match) return null;
+  const sent = new Date(`${match[1]}T${match[2]}${match[3]}:${match[4] ?? "00"}`);
+  return Number.isNaN(sent.getTime()) ? null : sent.toISOString();
 }
 
 /** How a transcript-first class that went back to the summary is shown (`metadata.summaryFallback.cause`). */
@@ -133,7 +168,7 @@ export interface AutowriterDashboard {
   };
   /** Models, versions, evidence switches and commit the autowriter runs with (the system line). */
   system: AutowriterSystemStatus;
-  /** Classes ending today in Bangkok (`date`), whatever the window: the Today line. */
+  /** The classes that end today in Bangkok (`date`), by where they stand: the Today line. */
   today: { date: string; posted: number; awaitingRecording: number; held: number; skippedHuman: number; skippedScope: number };
   /** Every class in state `held` now (not limited to the window), soonest deadline first. */
   holds: Array<{
@@ -253,6 +288,8 @@ export function buildAutowriterDashboard(input: {
   control: Awaited<ReturnType<typeof readControl>>;
   system: AutowriterSystemStatus;
   sessions: readonly DashboardSessionRow[];
+  /** Every class in state `held`, in or out of the window. */
+  holds: readonly DashboardHoldRow[];
   calls: readonly DashboardCallRow[];
   webhooks: readonly DashboardWebhookRow[];
   recentLimit?: number;
@@ -293,6 +330,9 @@ export function buildAutowriterDashboard(input: {
     ? [`${call.wiseSessionId}|${typeof call.result.judgedGeneration === "string" ? call.result.judgedGeneration : `call-${index}`}`]
     : [])).size;
   const armed = drafts.filter((row) => row.arm);
+  const today = bangkokDate(input.now);
+  const endsToday = sessions.filter((row) => row.scheduledEndAt !== null && bangkokDate(row.scheduledEndAt) === today);
+  const time = (value: Date | null) => value?.getTime() ?? Number.POSITIVE_INFINITY;
 
   return {
     generatedAt: input.now.toISOString(),
@@ -306,9 +346,41 @@ export function buildAutowriterDashboard(input: {
       updatedAt: input.control.updatedAt?.toISOString() ?? null,
     },
     system: input.system,
-    today: { date: bangkokDate(input.now), posted: 0, awaitingRecording: 0, held: 0, skippedHuman: 0, skippedScope: 0 },
-    holds: [],
-    failedPosts: [],
+    today: {
+      date: today,
+      posted: count((row) => POSTED.has(row.state), endsToday),
+      awaitingRecording: count((row) => row.state === "awaiting_recording" || row.state === "transcribing", endsToday),
+      held: count((row) => row.state === "held", endsToday),
+      skippedHuman: count((row) => row.state === "skipped_human", endsToday),
+      skippedScope: count((row) => row.state === "skipped_scope", endsToday),
+    },
+    holds: input.holds
+      // Soonest deadline first (one that has passed comes before one still ahead); a class without a deadline last.
+      .toSorted((a, b) => time(a.deadlineAt) - time(b.deadlineAt) || time(a.scheduledEndAt) - time(b.scheduledEndAt)
+        || a.wiseSessionId.localeCompare(b.wiseSessionId))
+      .map((row) => ({
+        wiseSessionId: row.wiseSessionId,
+        ...tutorOf(row.wiseTeacherUserId),
+        className: row.className,
+        classEndedAt: row.scheduledEndAt?.toISOString() ?? null,
+        deadlineAt: row.deadlineAt?.toISOString() ?? null,
+        reason: row.reason,
+        alertSentAt: alertSentAt(row.alertsSent?.held),
+        hasDraft: row.hasDraft,
+        wiseUrl: wiseUrlOf(row),
+      })),
+    failedPosts: sessions
+      .flatMap((row) => row.state === "verify_failed" || row.state === "unknown_outcome" || row.state === "rejected" ? [{ row, state: row.state }] : [])
+      .toSorted((a, b) => (b.row.scheduledEndAt?.getTime() ?? 0) - (a.row.scheduledEndAt?.getTime() ?? 0))
+      .map(({ row, state }) => ({
+        wiseSessionId: row.wiseSessionId,
+        ...tutorOf(row.wiseTeacherUserId),
+        className: row.className,
+        classEndedAt: row.scheduledEndAt?.toISOString() ?? null,
+        state,
+        reason: row.reason,
+        wiseUrl: wiseUrlOf(row),
+      })),
     totals: {
       seen: sessions.length,
       posted: posted.length,
@@ -374,13 +446,9 @@ export function buildAutowriterDashboard(input: {
       .map((row) => {
         return {
           wiseSessionId: row.wiseSessionId,
-          wiseUrl: row.wiseClassId ? wiseSessionLink({ wiseClassId: row.wiseClassId, wiseSessionId: row.wiseSessionId }) : null,
+          wiseUrl: wiseUrlOf(row),
           className: row.className,
-          tutor: (() => {
-            const tutor = rosterTutor(row.wiseTeacherUserId);
-            return tutor ? tutorLabel(tutor) : row.wiseTeacherUserId ?? "unknown";
-          })(),
-          tutorKey: tutorKeyFor(row.wiseTeacherUserId),
+          ...tutorOf(row.wiseTeacherUserId),
           scheduledEndAt: row.scheduledEndAt?.toISOString() ?? null,
           state: row.state,
           reason: row.reason,
@@ -433,7 +501,7 @@ export async function loadAutowriterDashboard(db: Database, input: { windowDays:
   const now = input.now ?? new Date();
   const since = new Date(now.getTime() - input.windowDays * 24 * 60 * 60 * 1000);
   const webhookSince = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  const [control, sessionRows, callRows, webhookRows] = await Promise.all([
+  const [control, sessionRows, holdRows, callRows, webhookRows] = await Promise.all([
     readControl(db),
     db.select({
       wiseSessionId: S.wiseSessionId,
@@ -457,6 +525,22 @@ export async function loadAutowriterDashboard(db: Database, input: { windowDays:
       .where(and(gte(S.createdAt, since), sql`not (${S.state} = 'skipped_scope' and coalesce(${S.reason}, '') in (${sql.join(ONSITE_REASONS.map((reason) => sql`${reason}`), sql`, `)}))`))
       .orderBy(desc(S.scheduledEndAt))
       .limit(2_000),
+    // Every held class, whatever its age: it stays on the to-do list until someone deals with it.
+    db.select({
+      wiseSessionId: S.wiseSessionId,
+      wiseClassId: S.wiseClassId,
+      wiseTeacherUserId: S.wiseTeacherUserId,
+      scheduledEndAt: S.scheduledEndAt,
+      deadlineAt: S.deadlineAt,
+      reason: S.reason,
+      alertsSent: S.alertsSent,
+      hasDraft: sql<boolean>`${S.fields} is not null`,
+      className: schema.postClassSessions.className,
+    }).from(S)
+      .leftJoin(schema.postClassSessions, eq(schema.postClassSessions.wiseSessionId, S.wiseSessionId))
+      .where(eq(S.state, "held"))
+      .orderBy(sql`${S.deadlineAt} desc nulls last`)
+      .limit(DASHBOARD_HOLDS_LIMIT),
     db.select({
       wiseSessionId: CALLS.wiseSessionId,
       role: CALLS.role,
@@ -479,6 +563,7 @@ export async function loadAutowriterDashboard(db: Database, input: { windowDays:
     control,
     system: buildSystemStatus(),
     sessions: sessionRows,
+    holds: holdRows.map((row) => ({ ...row, hasDraft: row.hasDraft === true })),
     calls: callRows.map((row) => ({ ...row, costUsd: Number(row.costUsd ?? 0) || 0 })),
     webhooks: webhookRows,
   });
