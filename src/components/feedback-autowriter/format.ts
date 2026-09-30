@@ -38,6 +38,23 @@ export function when(value: string | null): string {
   return parts ? `${parts.day} ${MONTHS[parts.month - 1]}, ${parts.hour}:${parts.minute}` : "—";
 }
 
+/** An instant's Bangkok date as "30 Sep"; "—" when there is none. */
+export function dayOf(value: string | null): string {
+  const parts = bangkokParts(value);
+  return parts ? `${parts.day} ${MONTHS[parts.month - 1]}` : "—";
+}
+
+/**
+ * An instant next to another one already shown: the time of day alone ("14:12") when both fall on the same Bangkok
+ * date, the date and time otherwise.
+ */
+export function whenAfter(reference: string | null, value: string | null): string {
+  const from = bangkokParts(reference);
+  const to = bangkokParts(value);
+  if (!to) return "—";
+  return from && from.month === to.month && from.day === to.day ? `${to.hour}:${to.minute}` : when(value);
+}
+
 /** An instant's Bangkok time of day as "12:00"; "—" when there is none. */
 export function clock(value: string | null): string {
   const parts = bangkokParts(value);

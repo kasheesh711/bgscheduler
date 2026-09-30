@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FIELD_LABELS, clock, count, dayMonth, deadlineCountdown, longDate, minutes, percent, threshold, usd, when } from "../format";
+import { FIELD_LABELS, clock, count, dayMonth, dayOf, deadlineCountdown, longDate, minutes, percent, threshold, usd, when, whenAfter } from "../format";
 import { ARM_LABEL, effortsLabel, modelLabel } from "../model-labels";
 
 describe("times and dates", () => {
@@ -11,6 +11,17 @@ describe("times and dates", () => {
     expect(when("2026-09-30T17:00:00.000Z")).toBe("1 Oct, 00:00");
     expect(when("2026-12-31T18:05:00.000Z")).toBe("1 Jan, 01:05");
     expect(clock("2026-09-30T01:07:00.000Z")).toBe("08:07");
+    // The Bangkok date, not the UTC one.
+    expect(dayOf("2026-09-30T17:00:00.000Z")).toBe("1 Oct");
+    expect(dayOf(null)).toBe("—");
+  });
+
+  it("drops the date of a time shown next to another one of the same Bangkok day", () => {
+    expect(whenAfter("2026-10-06T06:00:00.000Z", "2026-10-06T07:12:00.000Z")).toBe("14:12");
+    // 23:30 and 00:30 Bangkok time are different days, whatever the UTC date.
+    expect(whenAfter("2026-10-06T16:30:00.000Z", "2026-10-06T17:30:00.000Z")).toBe("7 Oct, 00:30");
+    expect(whenAfter(null, "2026-10-06T07:12:00.000Z")).toBe("6 Oct, 14:12");
+    expect(whenAfter("2026-10-06T06:00:00.000Z", null)).toBe("—");
   });
 
   it("shows a dash for a missing or unreadable time", () => {

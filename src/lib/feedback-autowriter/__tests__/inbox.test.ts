@@ -6,6 +6,7 @@ import {
   buildInbox,
   failedPostTitle,
   filterInbox,
+  flagReasons,
   holdUrgency,
   incidentTitle,
   isOpenHold,
@@ -304,6 +305,13 @@ describe("the words and colours the drawer shares with the list", () => {
     expect(failedPostTitle("verify_failed")).toBe("A post did not verify in Wise");
     expect(failedPostTitle("unknown_outcome")).toBe("A post's outcome in Wise is unknown");
     expect(failedPostTitle("rejected")).toBe("Wise rejected a post");
+  });
+
+  it("says why a post is flagged from its flags' sources, each once, never from a flag's note", () => {
+    expect(flagReasons([flag("system"), flag("measured_fix"), flag("measured_fix")])).toBe("did not verify in Wise; changed in Wise after posting");
+    expect(flagReasons([flag("agent"), flag("owner"), flag("api_unmatched")])).toBe("flagged by the agent; flagged by the owner; an API save no post explains");
+    expect(flagReasons([flag("something_new")])).toBe("flagged");
+    expect(flagReasons([])).toBe("");
   });
 
   it("rates a hold by the time left to its deadline", () => {

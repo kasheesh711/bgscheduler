@@ -99,6 +99,11 @@ const FLAG_SOURCES: Record<string, string> = {
   owner: "flagged by the owner",
 };
 
+/** Why a post is flagged, from its open flags' sources: each reason once, "; "-joined. Never a flag's own note. */
+export function flagReasons(flags: ReadonlyArray<{ source: string }>): string {
+  return [...new Set(flags.map((flag) => FLAG_SOURCES[flag.source] ?? "flagged"))].join("; ");
+}
+
 const SEPARATOR = " · ";
 
 function parts(...values: Array<string | null | false>): string {
@@ -199,7 +204,7 @@ export function buildInbox(
       || timeOf(a.classEndedAt) - timeOf(b.classEndedAt) || a.wiseSessionId.localeCompare(b.wiseSessionId))
     .map((item): InboxItem => {
       const flagged = item.status === "flagged";
-      const why = [...new Set(item.openFlags.map((flag) => FLAG_SOURCES[flag.source] ?? "flagged"))].join("; ");
+      const why = flagReasons(item.openFlags);
       return {
         id: `review:${item.wiseSessionId}`,
         kind: "review",
