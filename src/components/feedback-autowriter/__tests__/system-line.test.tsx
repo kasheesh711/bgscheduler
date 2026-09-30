@@ -59,6 +59,9 @@ describe("SystemLine", () => {
     expect(owner).not.toContain("Go live");
     expect(owner).toContain(">Pause<");
     expect(owner).toContain("Last changed by owner@example.com");
+    // Who last changed the mode is for everyone to read, on the mode itself.
+    expect(viewer).toMatch(/title="Last changed by owner@example\.com · [^"]+"[^>]*>.*?Mode LIVE/u);
+    expect(render({ control: { updatedBy: null } })).not.toContain("Last changed by");
     const shadow = render({ canControl: true, control: { mode: "shadow" } });
     expect(shadow).toContain("Go live");
     expect(shadow).toContain(">Turn off<");

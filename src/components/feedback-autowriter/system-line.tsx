@@ -95,6 +95,7 @@ export function SystemLine({ dashboard, lastRun, canControl, busy, onControl }: 
   const { control, system, webhooks } = dashboard;
   const halted = Boolean(control.haltedAt);
   const tone = MODE_TONE[control.mode];
+  const lastChange = control.updatedBy ? `Last changed by ${control.updatedBy} · ${when(control.updatedAt)}` : null;
   const facts: Array<{ key: string; content: ReactNode; title?: string }> = [
     { key: "writer", content: <>Writer {modelLabel(system.writer.model)} ({system.writer.effort})</>, title: system.writer.model },
     { key: "fallback", content: <>Fallback {modelLabel(system.fallbackWriter.model)} ({system.fallbackWriter.effort})</>, title: system.fallbackWriter.model },
@@ -117,7 +118,8 @@ export function SystemLine({ dashboard, lastRun, canControl, busy, onControl }: 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-x-[9px] gap-y-1.5 text-[10px] text-muted-foreground" aria-label="System">
-        <span className={cn("flex items-center gap-[5px] font-semibold", tone.text)}>
+        {/* Who last changed the mode, for everyone (the owner's menu says it too). */}
+        <span className={cn("flex items-center gap-[5px] font-semibold", tone.text)} title={lastChange ?? undefined}>
           <span aria-hidden className={cn("size-1.5 rounded-full", tone.dot)} />
           Mode {control.mode.toUpperCase()}
         </span>
