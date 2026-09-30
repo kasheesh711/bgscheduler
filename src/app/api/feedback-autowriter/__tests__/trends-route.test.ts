@@ -80,12 +80,33 @@ describe("GET /api/feedback-autowriter/trends", () => {
 
   it("answers a failed load with a plain 500 and logs only the error's name and SQLSTATE", async () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    loadMock.mockRejectedValue(Object.assign(new Error("select … where performance = 'the lesson text'"), { code: "42P01" }));
+    loadMock.mockRejectedValue(Object.assign(new Error("select … where performance = 'the lesson text'"), { code: "42703" }));
     const response = await get("?days=14&tutor=*");
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: "The autowriter trends could not load." });
-    expect(logged).toHaveBeenCalledWith("[feedback-autowriter] trends load failed", { errorName: "Error", sqlState: "42P01" });
+    expect(logged).toHaveBeenCalledWith("[feedback-autowriter] trends load failed", { errorName: "Error", sqlState: "42703" });
     expect(JSON.stringify(logged.mock.calls)).not.toContain("lesson text");
+  });
+
+  it("answers missing review tables (migration 0101 not applied) with the typed payload and HTTP 200, as the review route", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    // The driver's error, and the same error as drizzle 0.45 wraps it (its SQLSTATE on `cause`).
+    const missing = Object.assign(new Error('relation "feedback_autowriter_reviews" does not exist'), { code: "42P01" });
+    for (const error of [missing, Object.assign(new Error("Failed query: select …"), { cause: missing })]) {
+      loadMock.mockRejectedValueOnce(error);
+      const response = await get("?days=30&tutor=Mimi");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ available: false, reason: "review_tables_missing" });
+    }
+    // An optional table, not a failure: nothing is logged.
+    expect(logged).not.toHaveBeenCalled();
+  });
+
+  it("still refuses a signed-out caller before it reads anything, missing tables or not", async () => {
+    authMock.mockResolvedValue(null);
+    loadMock.mockRejectedValue(Object.assign(new Error("missing"), { code: "42P01" }));
+    expect((await get("?days=14&tutor=*")).status).toBe(401);
+    expect(loadMock).not.toHaveBeenCalled();
   });
 
   it("lets Next's hanging-promise rejection through", async () => {

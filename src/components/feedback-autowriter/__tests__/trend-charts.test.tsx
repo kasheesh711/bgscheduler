@@ -1,10 +1,17 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import type { AutowriterReviewUnavailable } from "@/lib/feedback-autowriter/review-data";
 import type { AutowriterTrends } from "@/lib/feedback-autowriter/trends";
 import { TrendCharts, daysAtFloor, trendSinceNote } from "../trend-charts";
 import { reviewFixture, shortHistoryTrendsFixture, trendsFixture } from "./fixtures";
 
-function render(options: { trends?: AutowriterTrends | null; review?: ReturnType<typeof reviewFixture> | null; rangeDays?: 14 | 30 | 90; filteredTo?: string | null; loading?: boolean } = {}): string {
+function render(options: {
+  trends?: AutowriterTrends | AutowriterReviewUnavailable | null;
+  review?: ReturnType<typeof reviewFixture> | null;
+  rangeDays?: 14 | 30 | 90;
+  filteredTo?: string | null;
+  loading?: boolean;
+} = {}): string {
   return renderToStaticMarkup(
     <TrendCharts trends={options.trends === undefined ? trendsFixture() : options.trends} review={options.review === undefined ? reviewFixture() : options.review}
       unavailableReason={options.review === null ? "load_failed" : null} rangeDays={options.rangeDays ?? 14} onRangeChange={() => undefined}
@@ -115,6 +122,16 @@ describe("TrendCharts", () => {
     const noReview = render({ review: null });
     expect(noReview).toContain("The quality data could not load.");
     expect(noReview).not.toContain("<canvas");
+  });
+
+  it("says the quality data is not available yet when the trends route answers that the review tables are missing", () => {
+    const html = render({ trends: { available: false, reason: "review_tables_missing" } });
+    expect(html).toContain("Quality data is not available yet (the review tables are created by migration 0101).");
+    expect(html).not.toContain("The trend charts could not load.");
+    expect(html).not.toContain("<canvas");
+    // No range is known: the heading names none, and the range buttons stay.
+    expect(html).not.toContain("Bangkok dates");
+    expect(html).toContain("14 days");
   });
 });
 

@@ -3,6 +3,8 @@ import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { AutowriterReviewError, feedbackAutowriterErrorResponse } from "@/lib/feedback-autowriter/api";
+import { isMissingRelationError } from "@/lib/feedback-autowriter/db-errors";
+import type { AutowriterReviewUnavailable } from "@/lib/feedback-autowriter/review-data";
 import { AUTOWRITER_TUTORS } from "@/lib/feedback-autowriter/roster";
 import { ALL_TUTORS, TREND_RANGES, loadAutowriterTrends } from "@/lib/feedback-autowriter/trends";
 
@@ -16,7 +18,10 @@ const TrendsQuery = z.object({
 
 /**
  * Daily trend series of the autowriter dashboard (read-only): `?days=14|30|90&tutor=<tutorKey|*>`. Admin role only,
- * as the dashboard route; page scope is enforced by the proxy. An invalid range or an unknown tutor is a 400.
+ * as the dashboard route; page scope is enforced by the proxy. An invalid range or an unknown tutor is a 400. Before
+ * migration 0101 (a review table missing, SQLSTATE 42P01) the payload is `{ available: false, reason:
+ * "review_tables_missing" }` with HTTP 200, as the review route's (an optional table, not a failure); any other error
+ * is a 500.
  */
 export async function GET(request: NextRequest) {
   try {
@@ -25,7 +30,13 @@ export async function GET(request: NextRequest) {
     if (session.user.role !== "admin") throw new AutowriterReviewError("Forbidden", 403);
     const parsed = TrendsQuery.safeParse(Object.fromEntries(request.nextUrl.searchParams));
     if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
-    return NextResponse.json(await loadAutowriterTrends(getDb(), { days: parsed.data.days, tutorKey: parsed.data.tutor }));
+    try {
+      return NextResponse.json(await loadAutowriterTrends(getDb(), { days: parsed.data.days, tutorKey: parsed.data.tutor }));
+    } catch (error) {
+      if (!isMissingRelationError(error)) throw error;
+      const missing: AutowriterReviewUnavailable = { available: false, reason: "review_tables_missing" };
+      return NextResponse.json(missing);
+    }
   } catch (error) {
     return feedbackAutowriterErrorResponse("[feedback-autowriter] trends load failed", error, "The autowriter trends could not load.");
   }

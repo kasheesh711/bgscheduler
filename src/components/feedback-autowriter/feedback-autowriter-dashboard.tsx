@@ -63,7 +63,7 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
 }) {
   const [data, setData] = useState(initialData);
   const [review, setReview] = useState<AutowriterReview | AutowriterReviewUnavailable | null>(initialReview);
-  const [trends, setTrends] = useState<AutowriterTrends | null>(initialTrends);
+  const [trends, setTrends] = useState<AutowriterTrends | AutowriterReviewUnavailable | null>(initialTrends);
   const [rangeDays, setRangeDays] = useState<TrendRangeDays>(initialTrends?.range.days ?? 14);
   const [tutorKey, setTutorKey] = useState<string | null>(null);
   const [target, setTarget] = useState<DrawerTarget | null>(null);
@@ -136,8 +136,9 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
       const response = await fetch(`/api/feedback-autowriter/trends?${query}`, { cache: "no-store", signal: controller.signal });
       const json: unknown = await response.json().catch(() => null);
       if (sequence !== trendsSequence.current) return;
-      // Charts of another range or tutor would be mislabelled: a failed load shows the message instead.
-      setTrends(response.ok && isTrends(json) ? json : null);
+      // Charts of another range or tutor would be mislabelled: a failed load shows the message instead. Missing review
+      // tables (migration 0101) are a typed answer, not a failure: the charts then say the quality data is not there.
+      setTrends(response.ok && (isTrends(json) || isUnavailable(json)) ? json : null);
     } catch (caught) {
       if (caught instanceof Error && caught.name === "AbortError") return;
       if (sequence === trendsSequence.current) setTrends(null);

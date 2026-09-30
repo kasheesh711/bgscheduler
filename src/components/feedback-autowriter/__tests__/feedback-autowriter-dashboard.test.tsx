@@ -272,5 +272,7 @@ describe("FeedbackAutowriterDashboard", () => {
     expect(SOURCE).toContain("await Promise.all([load(), loadReview(), loadTrends(rangeDays, tutorKey)]);");
     // No trends request on mount: the first series come with the page.
     expect(SOURCE).not.toMatch(/useEffect\(\(\) => \{\s*void loadTrends/u);
+    // The route's typed answer for missing review tables is kept (the charts then say why), not taken for a failure.
+    expect(SOURCE).toContain("setTrends(response.ok && (isTrends(json) || isUnavailable(json)) ? json : null);");
   });
 });

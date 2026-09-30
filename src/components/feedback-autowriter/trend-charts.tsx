@@ -307,9 +307,12 @@ function EvidenceCard({ trends }: { trends: AutowriterTrends }) {
   );
 }
 
-export function TrendCharts({ trends, review, unavailableReason, rangeDays, onRangeChange, loading, filteredTo }: {
-  /** The series of the range and the tutor filter; null when they could not load. */
-  trends: AutowriterTrends | null;
+export function TrendCharts({ trends: answer, review, unavailableReason, rangeDays, onRangeChange, loading, filteredTo }: {
+  /**
+   * The series of the range and the tutor filter; the trends route's typed answer when the review tables are missing
+   * (migration 0101 not applied); null when they could not load.
+   */
+  trends: AutowriterTrends | AutowriterReviewUnavailable | null;
   /** The review data (the footers read it), or null while it is unavailable. */
   review: AutowriterReview | null;
   unavailableReason: AutowriterReviewUnavailable["reason"] | null;
@@ -319,6 +322,8 @@ export function TrendCharts({ trends, review, unavailableReason, rangeDays, onRa
   /** The name of the tutor the page is filtered to: the series are theirs. */
   filteredTo: string | null;
 }) {
+  const trends = answer && !("available" in answer) ? answer : null;
+  const missing = answer && "available" in answer ? answer.reason : null;
   const since = trends ? trendSinceNote(trends) : null;
   return (
     <section id="autowriter-trends" aria-labelledby="autowriter-trends-title" className="scroll-mt-4">
@@ -348,7 +353,7 @@ export function TrendCharts({ trends, review, unavailableReason, rangeDays, onRa
           </div>
         </div>
       </div>
-      {!review ? <ReviewUnavailable reason={unavailableReason} /> : !trends ? (
+      {!review || missing ? <ReviewUnavailable reason={review ? missing : unavailableReason} /> : !trends ? (
         <p role="status" className="rounded-[10px] border bg-card px-4 py-8 text-center text-xs text-muted-foreground">
           The trend charts could not load. Refresh to try again; if it keeps failing, check the server logs.
         </p>
