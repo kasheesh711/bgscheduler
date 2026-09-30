@@ -1,3 +1,4 @@
+import { activeStyleGuide, styleGuideStamp, type FeedbackStyleGuide, type StyleGuideStamp } from "./style";
 import { randomUUID } from "node:crypto";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
 import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
@@ -36,6 +37,7 @@ import type { AiSummary, ModelArm } from "./types";
 import { finalizeFields, parseModelOutput, validateFeedbackDraft, type ModelOutput } from "./validate";
 
 export interface PipelineSession {
+  canonicalTutorKey?: string;
   wiseSessionId: string;
   studentFullName: string;
   /** Other names the student appeared under (a guest join); redacted like the full name. */
@@ -73,7 +75,7 @@ export interface CallRecord {
 }
 
 export type PipelineResult =
-  | { kind: "draft"; arm: ModelArm; output: ModelOutput; fields: FeedbackFieldAnswers; judge: StoredJudgeVerdict }
+  | { kind: "draft"; arm: ModelArm; output: ModelOutput; fields: FeedbackFieldAnswers; judge: StoredJudgeVerdict; styleGuide?: StyleGuideStamp }
   | { kind: "held"; reasons: string[] }
   /**
    * Retried later. `stage`: whose call failed or could not start — the writer's, or the judge's (the writer had
@@ -152,6 +154,8 @@ type CallModel = typeof callOpenRouter;
 export async function runWritingPipeline(input: {
   apiKey: string;
   session: PipelineSession;
+  /** Explicit override for offline replay only; production resolves the disabled-by-default switch. */
+  styleGuide?: FeedbackStyleGuide | null;
   tutorNames: readonly string[];
   priorFeedback: readonly PriorFeedbackComparison[];
   record: (record: CallRecord) => Promise<void>;
@@ -168,6 +172,9 @@ export async function runWritingPipeline(input: {
 }): Promise<PipelineResult> {
   const callModel = input.callModel ?? callOpenRouter;
   const { session } = input;
+  const styleGuide = input.styleGuide === undefined ? activeStyleGuide(session.canonicalTutorKey) : input.styleGuide;
+  if (styleGuide && styleGuide.canonicalTutorKey !== session.canonicalTutorKey) throw new Error("style_guide_tutor_mismatch");
+  const styleStamp = styleGuideStamp(styleGuide);
   const reasons: string[] = [];
   const names = { studentFullName: session.studentFullName, studentAliases: session.studentAliases, tutorNames: input.tutorNames };
   const redactedSummary = redactForModel(session.summary.text, names);
@@ -206,7 +213,9 @@ export async function runWritingPipeline(input: {
         provider: config.provider,
         messages,
         schemaName: role === "writer" ? "post_class_feedback" : "feedback_faithfulness",
-        schema: role === "writer" ? FEEDBACK_JSON_SCHEMA : JUDGE_JSON_SCHEMA,
+        schema: role === "writer" ? (styleGuide ? { ...FEEDBACK_JSON_SCHEMA, properties: { ...FEEDBACK_JSON_SCHEMA.properties,
+          improvement: { type: "string", description: "A short numbered list of specific skills to practise; one item is enough." },
+        } } : FEEDBACK_JSON_SCHEMA) : JUDGE_JSON_SCHEMA,
         effort: config.effort,
         maxTokens: 32_000,
         timeoutMs,
@@ -252,9 +261,10 @@ export async function runWritingPipeline(input: {
       evidence,
       speakerLabels: session.speakerLabels,
       otherPeople,
+      styleGuide,
     }), AUTOWRITER_WRITER_TIMEOUT_MS, (call, result) => input.record({
       wiseSessionId: session.wiseSessionId, role: "writer", arm: writer.arm, requestedModel: writer.model,
-      promptVersion: PROMPT_VERSION, call, result: { ...result, evidence },
+      promptVersion: PROMPT_VERSION, call, result: { ...result, evidence, ...(styleStamp ? { styleGuide: styleStamp } : {}) },
     }));
     if (written.kind === "budget") return { kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false, stage: "writer" };
     const writeCall = written.call;
@@ -274,7 +284,7 @@ export async function runWritingPipeline(input: {
     const parsed = parseModelOutput(writeCall.content);
     if (!parsed.ok) {
       await recordWriter({ error: parsed.reason });
-      reasons.push(`${writer.arm}:${parsed.reason}`);
+      reasons.push(`${writer.arm}:${styleGuide ? "style:" : ""}${parsed.reason}`);
       continue;
     }
     const fields = finalizeFields(parsed.output, session.studentDisplayName);
@@ -283,6 +293,8 @@ export async function runWritingPipeline(input: {
       fields,
       studentFullName: session.studentFullName,
       tutorNames: input.tutorNames,
+      styleGuide,
+      lessonRecord: session.summary.text,
       priorFeedback: input.priorFeedback.filter((prior) => prior.key !== session.wiseSessionId),
     });
     await recordWriter(validation.ok ? { validation: "ok" } : { validation: validation.reasons });
@@ -381,7 +393,7 @@ export async function runWritingPipeline(input: {
       reasons.push(`${writer.arm}:unfaithful:${problems.slice(0, 3).join(" | ").slice(0, 300)}`);
       continue;
     }
-    return { kind: "draft", arm: writer.arm, output: parsed.output, fields, judge: verdict };
+    return { kind: "draft", arm: writer.arm, output: parsed.output, fields, judge: verdict, ...(styleStamp ? { styleGuide: styleStamp } : {}) };
   }
   return { kind: "held", reasons };
 }

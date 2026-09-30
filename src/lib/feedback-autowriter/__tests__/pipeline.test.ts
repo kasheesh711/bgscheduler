@@ -11,6 +11,7 @@ import {
 } from "../config";
 import { JUDGE_PROMPT_VERSION } from "../judge";
 import { speakerLabelNote } from "../prompt";
+import { MIMI_STYLE_GUIDE, type FeedbackStyleGuide } from "../style";
 import { GOOD_FIELDS, STUDENT_NAME } from "./fixtures";
 
 const usage = { promptTokens: 1000, completionTokens: 2000, reasoningTokens: 1700, cachedTokens: 0, costUsd: 0.002 };
@@ -62,6 +63,8 @@ interface Script {
 }
 
 interface Options {
+  canonicalTutorKey?: string;
+  styleGuide?: FeedbackStyleGuide | null;
   evidence?: "summary" | "transcript";
   summaryText?: string;
   studentAliases?: string[];
@@ -98,7 +101,9 @@ function run(script: Script, options: Options = {}) {
   });
   const promise = runWritingPipeline({
     apiKey: "k",
+    styleGuide: options.styleGuide,
     session: {
+      canonicalTutorKey: options.canonicalTutorKey,
       wiseSessionId: "6a0000000000000000000002",
       studentFullName: STUDENT_NAME,
       studentAliases: options.studentAliases,
@@ -1160,5 +1165,50 @@ describe("helpers", () => {
     expect(routeMismatch(AUTOWRITER_MODELS.writer, GLM("x"))).toBe("model_mismatch:z-ai/glm-5.3-flash");
     expect(routeMismatch(AUTOWRITER_MODELS.writer, ok("x", "Azure", "openai/gpt-6.1-sol-mini"))).toBe("model_mismatch:openai/gpt-6.1-sol-mini");
     expect(routeMismatch(AUTOWRITER_MODELS.writer, ok("x", "Azure", null))).toBe("model_mismatch:none");
+  });
+});
+
+
+describe("Mimi presentation guide in the production pipeline", () => {
+  const options = { canonicalTutorKey: "Mimi", styleGuide: MIMI_STYLE_GUIDE };
+  const numbered = JSON.stringify({ ...JSON.parse(writerJson), performance: JSON.parse(writerJson).performance + " We reviewed the errors together and practised checking each denominator before combining terms. The next step is to keep the same careful checking routine when working independently.", topics: "1. Adding fractions\n2. Mixed numbers", improvement: "1. Check simplification" });
+  it("gives both writers the same guide and keeps the examples out of both factual judges", async () => {
+    const { promise, requests, records } = run({ writers: [SOL(writerJson), LUNA(numbered)], judge: [GLM(FAITHFUL)] }, options);
+    expect(await promise).toMatchObject({ kind: "draft", arm: "luna", styleGuide: { id: "mimi", version: 1 } });
+    const writers = writerRequests(requests);
+    expect(writers).toHaveLength(2);
+    expect(writers[0].messages).toEqual(writers[1].messages);
+    expect(writers[0].messages[0].content).toContain("Historical presentation example 1");
+    expect(writers[0].messages[0].content).not.toContain("between 120 and 600");
+    for (const request of judgeRequests(requests)) expect(JSON.stringify(request.messages)).not.toContain("Historical presentation");
+    expect(records[0].result).toMatchObject({ styleGuide: { id: "mimi", version: 1 } });
+  });
+  it("holds for a human when both writers fail the format check, without asking a factual judge to waive it", async () => {
+    const { promise, requests } = run({ writers: [SOL(writerJson), LUNA(writerJson)] }, options);
+    expect(await promise).toMatchObject({ kind: "held", reasons: expect.arrayContaining(["sol:style:list_structure:topics", "luna:style:list_structure:topics"]) });
+    expect(judgeRequests(requests)).toHaveLength(0);
+  });
+  it.each(["not JSON", JSON.stringify({ ...JSON.parse(numbered), topics: undefined })])("classifies missing fields and malformed JSON as format failures", async content => {
+    const { promise, requests } = run({ writers: [SOL(content), LUNA(content)] }, options);
+    expect(await promise).toMatchObject({ kind: "held", reasons: [expect.stringContaining("sol:style:"), expect.stringContaining("luna:style:")] });
+    expect(judgeRequests(requests)).toHaveLength(0);
+  });
+  it("does not let good formatting bypass an invented score or homework verdict", async () => {
+    const verdict = JSON.stringify({ faithful: false, unsupported: ["scored 95%"], misattributed: [], homeworkNotSet: ["Complete worksheet 8"] });
+    const invented = JSON.stringify({ ...JSON.parse(numbered), topics: "1. Fractions; scored 95%", homework: "1. Complete worksheet 8" });
+    const { promise } = run({ writers: [SOL(invented), LUNA(invented)], judge: [GLM(verdict), GLM(verdict)] }, options);
+    expect(await promise).toMatchObject({ kind: "held" });
+  });
+  it("holds historical facts that are not supported by the current lesson, even in the correct layout", async () => {
+    const copiedFact = JSON.stringify({ ...JSON.parse(numbered), topics: "1. Fractions; scored 19/27" });
+    const verdict = JSON.stringify({ faithful: false, unsupported: ["19/27 is from a historical example, not this lesson"], misattributed: [], homeworkNotSet: [] });
+    const { promise } = run({ writers: [SOL(copiedFact), LUNA(copiedFact)], judge: [GLM(verdict), GLM(verdict)] }, options);
+    expect(await promise).toMatchObject({ kind: "held", reasons: expect.arrayContaining([expect.stringContaining("unfaithful:")]) });
+  });
+  it("never accepts a malformed primary draft when the fallback service fails", async () => {
+    const { promise, requests } = run({ writers: [SOL(writerJson), fail("timeout", null)] }, options);
+    expect(await promise).toMatchObject({ kind: "infra", error: "luna:timeout", stage: "writer" });
+    expect(writerRequests(requests)).toHaveLength(2);
+    expect(judgeRequests(requests)).toHaveLength(0);
   });
 });
