@@ -27,12 +27,34 @@ describe("gateSentence", () => {
 
   it("names what blocks the gate when it is not a verdict", () => {
     expect(gateSentence(gate({ status: "blocked_critical", unresolvedCriticalFlags: 2 }))).toBe("Gate blocked: 2 critical flags to be judged.");
-    expect(gateSentence(gate({ status: "blocked_critical", unresolvedCriticalFlags: 1, unexplainedApiWrites: 3 }))).toBe("Gate blocked: 1 critical flag to be judged.");
-    expect(gateSentence(gate({ status: "blocked_critical", unexplainedApiWrites: 1 }))).toBe("Gate blocked: 1 API write to Wise that no post explains.");
-    expect(gateSentence(gate({ status: "blocked_critical", unexplainedApiWrites: 2 }))).toBe("Gate blocked: 2 API writes to Wise that no post explains.");
+    expect(gateSentence(gate({ status: "blocked_critical", unexplainedApiWrites: 1 }))).toBe("Gate blocked: 1 unacknowledged API save.");
+    expect(gateSentence(gate({ status: "blocked_critical", unexplainedApiWrites: 2 }))).toBe("Gate blocked: 2 unacknowledged API saves.");
+    // Every blocker is named: either one keeps the gate shut on its own.
+    expect(gateSentence(gate({ status: "blocked_critical", unresolvedCriticalFlags: 1, unexplainedApiWrites: 3 })))
+      .toBe("Gate blocked: 1 critical flag to be judged and 3 unacknowledged API saves.");
     // A verdict the page could not date, and a block with nothing to name: still a sentence.
     expect(gateSentence(gate({ status: "blocked_critical", criticalVerdicts: 1 }))).toBe("Gate blocked: 1 critical verdict in the window.");
     expect(gateSentence(gate({ status: "blocked_critical" }))).toBe("Gate blocked by a critical error.");
+  });
+
+  it("gives no date when something besides a critical verdict blocks the gate: that lasts until someone acts", () => {
+    const verdict = { status: "blocked_critical" as const, criticalVerdicts: 1, blockedUntil: "2026-10-13" };
+    // The verdict alone: the gate opens by itself on the date.
+    expect(gateSentence(gate(verdict))).toBe("Gate blocked until 13 Oct: critical on 29 Sep.");
+    // With a critical flag, or an API save nobody acknowledged: led by what needs a person, the verdict's date after it.
+    expect(gateSentence(gate({ ...verdict, unresolvedCriticalFlags: 1 }))).toBe("Gate blocked: 1 critical flag to be judged and a critical verdict (29 Sep).");
+    expect(gateSentence(gate({ ...verdict, unexplainedApiWrites: 1 }))).toBe("Gate blocked: 1 unacknowledged API save and a critical verdict (29 Sep).");
+    expect(gateSentence(gate({ ...verdict, unresolvedCriticalFlags: 2, unexplainedApiWrites: 1 })))
+      .toBe("Gate blocked: 2 critical flags to be judged, 1 unacknowledged API save and a critical verdict (29 Sep).");
+    expect(gateSentence(gate({ ...verdict, criticalVerdicts: 2, unexplainedApiWrites: 1 }))).toBe("Gate blocked: 1 unacknowledged API save and 2 critical verdicts (latest 29 Sep).");
+    // A verdict the page could not date keeps its place, without a date.
+    expect(gateSentence(gate({ ...verdict, blockedUntil: null, unresolvedCriticalFlags: 1 }))).toBe("Gate blocked: 1 critical flag to be judged and a critical verdict.");
+    // One sentence, whatever blocks it: the gate card splits it at its first colon.
+    for (const sentence of [gate({ ...verdict, unexplainedApiWrites: 1 }), gate({ ...verdict, unresolvedCriticalFlags: 1, unexplainedApiWrites: 2 })].map(gateSentence)) {
+      expect(sentence.match(/\./gu)).toHaveLength(1);
+      expect(sentence.endsWith(".")).toBe(true);
+      expect(sentence).not.toContain("until");
+    }
   });
 
   it("gives the lower bound against the bar it has not reached, rounded down", () => {
@@ -76,5 +98,8 @@ describe("gateSentence", () => {
     expect(sentence(facts({ reviewed: 8, accurate: 8 }))).toEqual(["below_head_start", "Below head start: lower bound 67%, needs 70%."]);
     expect(sentence(facts({ coverageNum: 6 }))).toEqual(["head_start", "Head start: lower bound 83%; the gate still waits for coverage of 70% (now 60%)."]);
     expect(sentence(facts({ criticalVerdicts: 1 }), "2026-10-13")).toEqual(["blocked_critical", "Gate blocked until 13 Oct: critical on 29 Sep."]);
+    expect(sentence(facts({ criticalVerdicts: 1, unexplainedApiWrites: 1 }), "2026-10-13"))
+      .toEqual(["blocked_critical", "Gate blocked: 1 unacknowledged API save and a critical verdict (29 Sep)."]);
+    expect(sentence(facts({ unexplainedApiWrites: 1 }))).toEqual(["blocked_critical", "Gate blocked: 1 unacknowledged API save."]);
   });
 });
