@@ -239,8 +239,8 @@ export interface AutowriterReview {
     currentTutors: number;
     nextExpansionSize: number;
     /**
-     * The first Bangkok date whose window no longer holds a critical verdict: the latest critical class's date plus the
-     * window's 14 days. Null when no critical verdict is in the window.
+     * The first Bangkok date whose window no longer holds today's critical verdicts: the latest critical class's date
+     * plus the window's 14 days (the rule the backfill prints). Null when no critical verdict is in the window.
      */
     blockedUntil: string | null;
   };
@@ -360,6 +360,10 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
   }
 
   const windowReviews = input.windowReviews.filter((review) => inWindow(review.bangkokDate) && notInPerson(review));
+  // A critical verdict blocks every window that holds its class date: the first clear window ends 14 days later.
+  const latestCritical = windowReviews
+    .flatMap((review) => currentVerdictOf(review)?.severity === "critical" ? [review.bangkokDate] : [])
+    .toSorted().at(-1);
   const fixRounds = { zero: 0, one: 0, two: 0, threePlus: 0, unresolved: 0 };
   for (const review of windowReviews) fixRounds[fixRoundBucket(currentVerdictOf(review), review.measuredFixCount)] += 1;
 
@@ -521,7 +525,7 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
       } : null,
       currentTutors: AUTOWRITER_TUTORS.length,
       nextExpansionSize: nextExpansionSize(AUTOWRITER_TUTORS.length),
-      blockedUntil: null,
+      blockedUntil: latestCritical ? addDays(latestCritical, GATE_THRESHOLDS.windowDays) : null,
     },
     coverage,
     fixRounds,

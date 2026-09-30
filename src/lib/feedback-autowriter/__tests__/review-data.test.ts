@@ -177,6 +177,38 @@ describe("buildAutowriterReview", () => {
     expect(buildAutowriterReview({ now: NOW, ...source({ gateFacts: { ...GATE_FACTS, criticalVerdicts: 1 } }) }).gate.status).toBe("blocked_critical");
   });
 
+  it("says until when a critical verdict blocks the gate: the latest critical class's date plus the window's 14 days", () => {
+    const critical = (id: string, sessionId: string) => verdict({
+      id, wiseSessionId: sessionId, verdict: "needs_fix", severity: "critical", criticalCategory: "wrong_person", note: "synthetic",
+    });
+    const blockedUntil = (overrides: Partial<ReviewSourceRows>) => buildAutowriterReview({ now: NOW, ...source(overrides) }).gate.blockedUntil;
+    const base = source();
+    // No critical verdict in the window: nothing to wait for (s2 is approved, s1 has no verdict).
+    expect(blockedUntil({})).toBeNull();
+
+    // s1 (a class of 29 Sep) is judged critical: every window holding 29 Sep is blocked, so the first clear one ends on 13 Oct.
+    const s1Critical = base.windowReviews.map((row) => row.wiseSessionId === "s1" ? { ...row, currentVerdictId: "c1" } : row);
+    expect(blockedUntil({ windowReviews: s1Critical, verdicts: [...base.verdicts, critical("c1", "s1")] })).toBe("2026-10-13");
+
+    // The latest critical class decides; a critical verdict counts whatever the sampling.
+    const earlier = review({ wiseSessionId: "s4", firstPostId: "post-4", bangkokDate: "2026-09-20", inclusionReason: "not_sampled", currentVerdictId: "c2" });
+    const later = review({ wiseSessionId: "s5", firstPostId: "post-5", bangkokDate: "2026-09-30", inclusionReason: "not_sampled", currentVerdictId: "c3" });
+    expect(blockedUntil({ windowReviews: [...base.windowReviews, earlier], verdicts: [...base.verdicts, critical("c2", "s4")] })).toBe("2026-10-04");
+    expect(blockedUntil({
+      windowReviews: [...s1Critical, earlier, later], verdicts: [...base.verdicts, critical("c1", "s1"), critical("c2", "s4"), critical("c3", "s5")],
+    })).toBe("2026-10-14");
+
+    // Not the current verdict any more (the owner downgraded it), outside the window, or an in-person class: no block.
+    expect(blockedUntil({ verdicts: [...base.verdicts, critical("c1", "s1")] })).toBeNull();
+    const outside = review({ wiseSessionId: "s6", firstPostId: "post-6", bangkokDate: "2026-09-16", currentVerdictId: "c4" });
+    expect(blockedUntil({ windowReviews: [...base.windowReviews, outside], verdicts: [...base.verdicts, critical("c4", "s6")] })).toBeNull();
+    const inPerson = base.windowReviews.map((row) => row.wiseSessionId === "s3" ? { ...row, currentVerdictId: "c5" } : row);
+    expect(blockedUntil({ windowReviews: inPerson, verdicts: [...base.verdicts, critical("c5", "s3")] })).toBeNull();
+    // A major verdict is not a block.
+    const major = base.windowReviews.map((row) => row.wiseSessionId === "s1" ? { ...row, currentVerdictId: "m1" } : row);
+    expect(blockedUntil({ windowReviews: major, verdicts: [...base.verdicts, verdict({ id: "m1", wiseSessionId: "s1", verdict: "needs_fix", severity: "factual" })] })).toBeNull();
+  });
+
   it("lists a save after the current Approve without counting it, and shows open flags with their ids", () => {
     const payload = buildAutowriterReview({ now: NOW, ...source() });
     const item = payload.queue.find((entry) => entry.wiseSessionId === "s2")!;

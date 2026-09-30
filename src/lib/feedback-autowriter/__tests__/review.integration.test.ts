@@ -1140,6 +1140,10 @@ describe("owner verdicts from the 30 Sep interview", () => {
     const clear = await gateOn("2026-10-13");
     expect(clear.status).not.toBe("blocked_critical");
     expect(clear.reasons.join(" ")).not.toContain("critical");
+    // The page names the same date: the first gate date whose window has left the critical class behind.
+    const shown = await loadAutowriterReview(db, { now: NOW });
+    if (!shown.available) throw new Error("review unavailable");
+    expect(shown.gate).toMatchObject({ status: "blocked_critical", blockedUntil: "2026-10-13" });
     // The nightly rows say the same.
     expect(await recordDailyGate(db, "2026-10-12")).toEqual({ date: "2026-10-12", status: "blocked_critical" });
     expect((await recordDailyGate(db, "2026-10-13"))?.status).not.toBe("blocked_critical");
