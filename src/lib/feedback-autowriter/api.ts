@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { AdminUsersAccessError } from "@/lib/admin-users/types";
+import { sqlStateOf } from "./db-errors";
 
 /** A request the review API refuses on purpose (unknown class, a stale pin, an invalid verdict). */
 export class AutowriterReviewError extends Error {
@@ -21,7 +22,7 @@ export function feedbackAutowriterErrorResponse(route: string, error: unknown, f
   }
   if (error instanceof AdminUsersAccessError) {
     return NextResponse.json(
-      { error: error.status === 403 ? "Only Kevin can record autowriter verdicts." : error.message },
+      { error: error.status === 403 ? "Only Kevin can record autowriter verdicts or acknowledge incidents." : error.message },
       { status: error.status },
     );
   }
@@ -31,6 +32,6 @@ export function feedbackAutowriterErrorResponse(route: string, error: unknown, f
   if (error instanceof ZodError) {
     return NextResponse.json({ error: "The request payload is invalid.", issues: error.issues }, { status: 400 });
   }
-  console.error(route, { errorName: error instanceof Error ? error.name : "UnknownError" });
+  console.error(route, { errorName: error instanceof Error ? error.name : "UnknownError", sqlState: sqlStateOf(error) });
   return NextResponse.json({ error: fallback }, { status: 500 });
 }

@@ -29,20 +29,32 @@ Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowrite
    `WISE_WEBHOOK_AUTH_HEADER`); a refused delivery logs `unauthorized delivery; header names: …` instead.
    Confirm read-only with `GET /institutes/{id}/webhooks` that both subscriptions exist and the original is unchanged.
 
-### Operating loop, Phase 1 (migration 0099) — in this order
+### Operating loop, Phase 1 (migration 0100) — in this order
 
-1. **Apply migration 0099** on production Neon (`DATABASE_URL=… npm run db:migrate`). It only adds tables; the
-   autowriter keeps running meanwhile.
-2. **Day-one backfill**, dry run first (reads only, never writes to Wise, prints metadata only):
+1. **Apply migration 0100** on production Neon (`DATABASE_URL=… npm run db:migrate`). It is numbered after main's 0099
+   (`0099_feedback_autowriter_sol`, which widens the arm CHECKs); `db:migrate` applies them in order. It adds tables, and one AFTER
+   trigger on `feedback_autowriter_control` that logs mode and tutor-switch changes (lease and halt writes do not fire
+   it); the history is seeded with the row's state as of its last change. The autowriter keeps running meanwhile.
+2. **Day-one backfill — dry run, then the go/no-go check** (reads only, never writes to Wise, prints metadata only):
    `npx tsx --tsconfig scripts/tsconfig.json scripts/feedback-autowriter-backfill-review.ts`
-   Expect every posted class `first shot PROVEN` (29 Sep: 2 unchanged, 5 from Class Feedback's first version, Gift's
-   by reverse rename) and six nickname correction rows. Then the same command with `--apply`. It writes no verdicts.
-3. **Deploy** the code. Doing step 2 first matters: otherwise the review job's first run sees the six nickname
-   re-posts as API saves no post explains and raises six critical incidents (re-classified once the backfill runs,
-   but the pushes will have gone).
+   Expect every posted class `first shot PROVEN` and one correction row per one-time re-post the rows record: the six
+   nickname fixes of 29 Sep (`metadata.nicknameFix`) and the two owner-approved corrections of 30 Sep
+   (`metadata.corrections`), none "TEXT NOT FOUND". The script refuses to run without `WISE_USER_ID`.
+   **Go/no-go:** the line "API saves no post explains" must list **no critical one** (a save after the autowriter
+   went live at 2026-09-29 08:07:30 UTC). Each info one must be a known pre-launch save — on 29 Sep the prototype's
+   four saves at 05:06–05:07 UTC. A critical one means someone wrote to Wise with the API key outside the lock:
+   find out who before continuing (it will page the owner on the review job's first run whatever the order).
+   The preview uses the job's own classification over the same classes, so it can be re-run at any time (also
+   after `--apply`) and still says exactly what the job stores.
+3. **`--apply`**, then **deploy**. Either order is safe: until the backfill records them, the job explains our first
+   posts from the rows themselves and the one-time re-posts from the `metadata` the scripts wrote, so none of them is
+   reported as an unmatched API save; an edited class only shows an info `first_shot_unverified` incident until the
+   backfill proves its first shot. Applying twice, or twice at once, records each post once (`dedupe_key`). It writes
+   no verdicts.
 4. Optional: `FEEDBACK_AUTOWRITER_LINE_TO` (a LINE user or group id) to receive critical incidents on LINE as well
    as by email; set `FEEDBACK_AUTOWRITER_ALERT_EMAILS` if it is still empty — with no channel a critical incident
-   stays pending and the review job reports `ok:false` (Data Health shows it).
+   stays pending and the review job reports `ok:false` (Data Health shows it). `WISE_USER_ID` must be set on the
+   deployment: without it the job derives no fix events and reports `ok:false`.
 
 ## 2. Modes and switches (take effect immediately — no redeploy)
 
@@ -149,14 +161,31 @@ Nightly tutor reminders are separate (Class Feedback).
 ## 7. Reviewing posts (operating loop)
 
 `/feedback-autowriter` → **Review**. "Needs review" lists every required post without a verdict (every post while
-the tutor's cohort has not passed a gate). Judge the **first shot** (left), not the current text: Approve, or Needs
-fix with a severity — cosmetic still counts as accurate; factual is a real fix; critical needs a category, blocks
-the gate and pushes an alert. A verdict can be replaced by recording a new one (the log keeps both). A class flagged
-by a measured fix (someone saved it in Wise after our post) stays in "Flagged" until a verdict answers it; the gate
-cannot pass while one waits. Recording the first verdict on a class also ends its Soniox review window.
+the tutor's cohort has not passed a gate); the counts are exact, and every flagged or unreviewed class is always in
+the list. Judge the **first shot** (left), not the current text: Approve, or Needs fix with a severity you must pick —
+cosmetic still counts as accurate; **major** is a real fix; critical needs a category, blocks the gate and pushes an
+alert. A verdict can be replaced by recording a new one (the log keeps both). A verdict judges the first shot as
+posted: replacing a harsher judgement with a milder one (critical → anything else, major → cosmetic or Approve) is a
+downgrade — confirm it and write why in the note. After a fix on a class you judged major, answer its new flag by
+recording major again, not Approve. If the page says "New activity since you loaded this class", a verdict or a flag
+arrived meanwhile — the class reloads; look again before recording.
 
-**Quality** shows the gate. The review job runs hourly at :27 (Data Health → Feedback Autowriter Review; manual run
-owner-only); the daily gate row is written from 22:00 Bangkok. Incidents: `critical_verdict` and
-`api_actor_unmatched` (an API save no recorded post explains — check who wrote to Wise with the API key) are pushed;
-`first_shot_unverified` (a class edited before its first shot was recorded) is shown only — run the backfill script
-to prove it, or confirm by hand what was posted.
+A class flagged by a measured fix (someone saved it in Wise after our post, before your Approve) stays in "Flagged"
+until a verdict answers it; the gate cannot pass while one waits, nor while a required post is unreviewed. A save
+after your Approve is listed ("after approval — not counted") and raises no flag. A first shot that landed without
+verifying (credits or status changed, text mismatch, unknown outcome) is flagged critical: open the class in Wise and
+judge what is there. An Approve or a cosmetic fix ends the class's Soniox review window; a major or critical verdict
+keeps the transcript (and re-opens a window an earlier Approve ended, if the sweep has not deleted it yet) until the
+72 h window closes.
+
+**Quality** shows the gate, computed exactly as the nightly row. The review job runs hourly at :27 (Data Health →
+Feedback Autowriter Review; manual run owner-only). The daily gate row is written from 22:00 Bangkok by the first run
+in which every step succeeded and the Wise activity sync is fresh (≤ 30 min, and not stopped at its page cap);
+otherwise the Quality tab says why ("nightly gate not recorded yet") and a later run writes it. An unexplained API
+write (`api_actor_unmatched`, critical) blocks the gate until you acknowledge it — find out who wrote to Wise with
+the API key first. Incidents: `critical_verdict`, `critical_flag` /
+`credit_entries_changed` (a post landed without verifying) and `api_actor_unmatched` (an API save no recorded post
+explains — check who wrote to Wise with the API key) are pushed; `first_shot_unverified` is shown only (critical when
+the post did not verify) — run the backfill script to prove it, or confirm by hand what was posted. A critical
+incident that was not delivered keeps the review job red (Data Health) until you **Acknowledge** it on the Quality tab
+(its pushes stop too).

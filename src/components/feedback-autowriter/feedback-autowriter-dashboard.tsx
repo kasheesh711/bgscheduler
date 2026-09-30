@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatBangkokShortDateTime } from "@/lib/bangkok-time";
 import type { AutowriterDashboard } from "@/lib/feedback-autowriter/dashboard";
-import type { AutowriterReview } from "@/lib/feedback-autowriter/review-data";
+import type { AutowriterReview, AutowriterReviewUnavailable } from "@/lib/feedback-autowriter/review-data";
 import { cn } from "@/lib/utils";
 import { FeedbackAutowriterQualityPanel, GATE_STATUS_LABEL } from "./feedback-autowriter-quality-panel";
 import { FeedbackAutowriterReviewQueue } from "./feedback-autowriter-review-queue";
@@ -62,7 +62,12 @@ function isDashboard(value: unknown): value is AutowriterDashboard {
 }
 
 function isReview(value: unknown): value is AutowriterReview {
-  return typeof value === "object" && value !== null && "gate" in value && "queue" in value && "daily" in value;
+  return typeof value === "object" && value !== null && (value as { available?: unknown }).available === true
+    && "gate" in value && "queue" in value && "daily" in value;
+}
+
+function isUnavailable(value: unknown): value is AutowriterReviewUnavailable {
+  return typeof value === "object" && value !== null && (value as { available?: unknown }).available === false;
 }
 
 function usd(value: number | null | undefined): string {
@@ -116,22 +121,24 @@ function Section({ title, count, children, action }: { title: string; count?: nu
 function ReviewToolbar({ loading, error, review, onRefresh }: {
   loading: boolean;
   error: string | null;
-  review: AutowriterReview | null;
+  review: AutowriterReview | AutowriterReviewUnavailable | null;
   onRefresh: () => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading}>{loading ? "Refreshing…" : "Refresh"}</Button>
-      {review ? <span className="text-xs text-muted-foreground">Updated {when(review.generatedAt)}</span> : null}
+      {review?.available ? <span className="text-xs text-muted-foreground">Updated {when(review.generatedAt)}</span> : null}
       {error ? <span role="status" className="text-xs text-red-700">{error}</span> : null}
     </div>
   );
 }
 
-function ReviewUnavailable() {
+export function ReviewUnavailable({ reason }: { reason: AutowriterReviewUnavailable["reason"] | null }) {
   return (
     <p className="rounded-lg border bg-card px-4 py-8 text-center text-sm text-muted-foreground">
-      Quality data is not available yet (the review tables are created by migration 0099).
+      {reason === "review_tables_missing"
+        ? "Quality data is not available yet (the review tables are created by migration 0100)."
+        : "The quality data could not load. Refresh to try again; if it keeps failing, check the server logs."}
     </p>
   );
 }
@@ -146,11 +153,11 @@ function modelLabel(model: string): string {
 export function FeedbackAutowriterDashboard({ initialData, canControl, initialReview = null }: {
   initialData: AutowriterDashboard;
   canControl: boolean;
-  /** Quality and Review tabs; null when their data could not load (e.g. migration 0099 not applied yet). */
-  initialReview?: AutowriterReview | null;
+  /** Quality and Review tabs, or why their data is unavailable (migration 0100 not applied, or a load failure). */
+  initialReview?: AutowriterReview | AutowriterReviewUnavailable | null;
 }) {
   const [data, setData] = useState(initialData);
-  const [review, setReview] = useState<AutowriterReview | null>(initialReview);
+  const [review, setReview] = useState<AutowriterReview | AutowriterReviewUnavailable | null>(initialReview);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [windowDays, setWindowDays] = useState<number>(initialData.windowDays);
@@ -195,6 +202,11 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
     try {
       const response = await fetch("/api/feedback-autowriter/review", { cache: "no-store" });
       const json: unknown = await response.json().catch(() => null);
+      if (response.ok && isUnavailable(json)) {
+        setReview(json);
+        setReviewError(null);
+        return;
+      }
       if (!response.ok || !isReview(json)) {
         setReviewError((json as { error?: string } | null)?.error ?? `HTTP ${response.status}`);
         return;
@@ -243,7 +255,9 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
 
   const { control, totals } = data;
   const halted = Boolean(control.haltedAt);
-  const reviewWaiting = review ? review.queue.filter((item) => item.required && item.currentVerdict === null).length : 0;
+  const loaded = review?.available ? review : null;
+  const unavailableReason = review && !review.available ? review.reason : null;
+  const reviewWaiting = loaded ? loaded.queueTotals.needsReview : 0;
   const modeTone = control.mode === "live"
     ? "border-available/30 bg-available/10 text-available"
     : control.mode === "shadow"
@@ -321,7 +335,7 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
           <TabsTrigger value="overview" className="px-2.5">Overview</TabsTrigger>
           <TabsTrigger value="quality" className="px-2.5">
             Quality
-            {review ? <span className="text-[10px] text-muted-foreground">· {GATE_STATUS_LABEL[review.gate.status]}</span> : null}
+            {loaded ? <span className="text-[10px] text-muted-foreground">· {GATE_STATUS_LABEL[loaded.gate.status]}</span> : null}
           </TabsTrigger>
           <TabsTrigger value="review" className="px-2.5">
             Review
@@ -503,14 +517,16 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
 
         <TabsContent value="quality" className="flex flex-col gap-3">
           <ReviewToolbar loading={reviewLoading} error={reviewError} review={review} onRefresh={() => void loadReview()} />
-          {review ? <FeedbackAutowriterQualityPanel review={review} /> : <ReviewUnavailable />}
+          {loaded
+            ? <FeedbackAutowriterQualityPanel review={loaded} canControl={canControl} onChanged={loadReview} />
+            : <ReviewUnavailable reason={unavailableReason} />}
         </TabsContent>
 
         <TabsContent value="review" className="flex flex-col gap-3">
           <ReviewToolbar loading={reviewLoading} error={reviewError} review={review} onRefresh={() => void loadReview()} />
-          {review
-            ? <FeedbackAutowriterReviewQueue review={review} canControl={canControl} onRecorded={loadReview} />
-            : <ReviewUnavailable />}
+          {loaded
+            ? <FeedbackAutowriterReviewQueue review={loaded} canControl={canControl} onRecorded={loadReview} />
+            : <ReviewUnavailable reason={unavailableReason} />}
         </TabsContent>
       </Tabs>
     </div>

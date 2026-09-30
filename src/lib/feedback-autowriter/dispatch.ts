@@ -12,7 +12,6 @@ import {
 import { cleanUpSonioxJobs, markWebhookProcessed, processSession, runSweep, type AutowriterDeps, type SweepResult } from "./job";
 import { runReviewJob, type ReviewJobResult } from "./review-job";
 import { createWiseFeedbackOps } from "./run";
-import { readControl } from "./store";
 import { createSonioxClient } from "./soniox";
 
 function productionDeps(db: Database, budgetMs: number): AutowriterDeps {
@@ -46,9 +45,12 @@ export async function runAutowriterJob(): Promise<SweepResult | { ok: true; skip
   return runSweep(productionDeps(getDb(), 740_000));
 }
 
+/** The review job stops starting incident pushes this long before maxDuration (300 s) could cut one off. */
+const REVIEW_JOB_BUDGET_MS = 270_000;
+
 /**
  * Hourly review job of the operating loop (cron / Data Health). Reads our database only and never writes to Wise;
- * paused with the autowriter itself.
+ * paused with the autowriter itself. Coverage reads the recorded control history, never today's switches.
  */
 export async function runAutowriterReviewJob(
   triggerSource: "cron" | "admin" = "cron",
@@ -59,15 +61,12 @@ export async function runAutowriterReviewJob(
   if (!autowriterWritesAllowedHere()) {
     return { ok: true, skipped: true, reason: "Preview deployment: the review job never runs here." };
   }
-  const db = getDb();
-  const control = await readControl(db);
   return runReviewJob({
-    db,
+    db: getDb(),
     apiActorId: wiseApiActorId(),
     writesAllowedHere: true,
     triggerSource,
-    liveNow: control.mode === "live",
-    disabledTutors: control.disabledTutors,
+    deadlineMs: Date.now() + REVIEW_JOB_BUDGET_MS,
     channels: { emailRecipients: autowriterAlertEmails(), lineTo: autowriterLineTo() },
   });
 }

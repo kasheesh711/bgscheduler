@@ -6,7 +6,7 @@ import { auth } from "@/lib/auth";
 import { isClassroomOperationsOwner } from "@/lib/classrooms/operations-policy";
 import { getDb } from "@/lib/db";
 import { loadAutowriterDashboard } from "@/lib/feedback-autowriter/dashboard";
-import { loadAutowriterReview } from "@/lib/feedback-autowriter/review-data";
+import { loadAutowriterReview, reviewLoadErrorSummary, type AutowriterReviewUnavailable } from "@/lib/feedback-autowriter/review-data";
 
 export const metadata = { title: "Feedback Autowriter | BeGifted Ops" };
 
@@ -19,10 +19,12 @@ async function FeedbackAutowriterBody() {
   const db = getDb();
   const [initialData, initialReview] = await Promise.all([
     loadAutowriterDashboard(db, { windowDays: 7 }),
-    // The overview must render even when the review tables are missing (migration 0099 not applied yet).
-    loadAutowriterReview(db).catch((error: unknown) => {
-      console.error("[feedback-autowriter] review data unavailable", error instanceof Error ? error.name : "Error");
-      return null;
+    // The overview must render whatever happens to the review data. Missing tables (migration 0100 not applied
+    // yet) come back as a typed payload; any other failure is logged (name and SQLSTATE only) and shown as such.
+    loadAutowriterReview(db).catch((error: unknown): AutowriterReviewUnavailable => {
+      if (typeof error === "object" && error !== null && (error as { digest?: unknown }).digest === "HANGING_PROMISE_REJECTION") throw error;
+      console.error("[feedback-autowriter] review data could not load", reviewLoadErrorSummary(error));
+      return { available: false, reason: "load_failed" };
     }),
   ]);
   return <FeedbackAutowriterDashboard initialData={initialData} canControl={canControl} initialReview={initialReview} />;

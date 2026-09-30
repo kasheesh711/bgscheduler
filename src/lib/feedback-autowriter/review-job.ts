@@ -1,42 +1,54 @@
 import { randomBytes } from "node:crypto";
-import { and, between, count, eq, gte, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
+import { and, between, count, desc, eq, getTableColumns, gte, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
-import { ingestFixEvents, type FixEventIngestResult } from "./fix-events";
-import { normalizeFields, postedBilling, proveFirstShot, type FirstShotProof } from "./first-shot";
-import { drainIncidentOutbox, recordIncident, type DrainResult, type IncidentPushChannels } from "./incidents";
+import { sqlStateOf } from "./db-errors";
+import { UNMATCHED_API_CRITICAL_FROM, ingestFixEvents, type FixEventIngestResult } from "./fix-events";
+import { landedProblemCategory, normalizeFields, postMayHaveLanded, postedBilling, problemCodes, proveFirstShot, type FirstShotProof } from "./first-shot";
+import { countUndeliveredCritical, drainIncidentOutbox, recordIncident, type DrainResult, type IncidentPushChannels } from "./incidents";
 import {
   GATE_THRESHOLDS,
   PROVEN_TUTOR_KEYS,
   SAMPLING_POLICY,
   QUALITY_POLICY_VERSION,
-  addDays,
   bangkokDateKey,
   bangkokDayBounds,
   buildDailyMetrics,
   classifyCoverage,
   computeGateFacts,
+  countsTowardFix,
   dailyGateDate,
   evaluateGate,
   gateWindow,
+  isAbsenceHold,
+  metricDates,
+  postingWindowEligibility,
   reviewInclusion,
+  tutorWroteFirst,
+  type ControlStateChange,
+  type DailyClassFact,
   type GateInput,
   type GateStatus,
   type InclusionReason,
+  type RosterSpan,
 } from "./quality";
 import { AUTOWRITER_TEACHER_ALLOWLIST, AUTOWRITER_TUTORS, rosterTutor } from "./roster";
 import type { AutowriterSessionRow } from "./store";
 import { fieldsHash } from "./submit";
+import { AUTOWRITER_DEADLINE_MARGIN_MS } from "./types";
 
 /**
  * The hourly review job of the operating loop (Phase 1, UTC minute 27 — after the :17 Wise activity sync).
  * Reads our own database only and never writes to Wise:
  *   a. snapshot the first shot of every settled posted class, proven against the POST claim's `body_hash`;
- *   b. derive fix events from Wise activity events;
- *   c. give each posted class its review row (inclusion drawn once, before any flag);
- *   d. flag classes a person fixed, and raise incidents for API writes no post explains;
- *   e. recompute daily metrics (last 3 Bangkok days plus days with fresh verdicts) and the daily gate row;
- *   f. push pending critical incidents.
+ *   b. derive fix events from Wise activity events (every autowriter class; refused without our API user's id);
+ *   c. give each class whose first shot may be in Wise its review row (inclusion drawn once, before any flag);
+ *   d. flag landed-but-unverified first shots (critical), classes a person fixed, and API writes no post explains;
+ *   e. recompute the daily metrics of every date in the gate window, each class judged by its own posting window;
+ *   f. record the daily gate row — only when every step above succeeded and the activity mirror was fresh when
+ *      the run began;
+ *   g. push critical incidents (waiting ones first, this run's last) within the time budget; an undelivered one
+ *      keeps the run red until the owner acknowledges it.
  * Single-flight through `feedback_autowriter_review_runs` (partial unique index on `running`).
  */
 
@@ -49,19 +61,32 @@ const FX = schema.feedbackAutowriterFixEvents;
 const M = schema.feedbackAutowriterDailyMetrics;
 const G = schema.feedbackAutowriterGateEvaluations;
 const RUNS = schema.feedbackAutowriterReviewRuns;
+const CH = schema.feedbackAutowriterControlHistory;
+const RA = schema.feedbackAutowriterRosterAccounts;
+const CALLS = schema.feedbackAutowriterCalls;
 const PC = schema.postClassSessions;
+const WAR = schema.wiseActivitySyncRuns;
+const INC = schema.feedbackAutowriterIncidents;
 
 export const REVIEW_SYSTEM_ACTOR = "system:feedback-autowriter-review";
 /** A `running` review run older than this is abandoned (maxDuration is 300 s). */
 export const REVIEW_RUN_STALE_MS = 15 * 60 * 1000;
+/** The daily gate row is written only from a Wise activity mirror refreshed this recently (the sync runs every 15 min). */
+export const GATE_ACTIVITY_MAX_AGE_MS = 30 * 60 * 1000;
 const FIX_EVENT_LOOKBACK_MS = 45 * 24 * 60 * 60 * 1000;
-const METRIC_RECOMPUTE_DAYS = 3;
 /** A roster class is "unseen" only this long after it ended: by then the sweep or the webhook has made its row. */
 const UNSEEN_AFTER_END_MS = 2 * 60 * 60 * 1000;
 const SETTLED_POST_STATES = ["verified", "rejected", "unknown_outcome", "verify_failed"] as const;
 const HUMAN_FIX_KINDS = ["owner_web", "tutor", "other_staff"] as const;
+/** Saves by a person (or by our API user outside any post) that can make a class "written by the tutor first". */
+const PERSON_SAVE_KINDS = [...HUMAN_FIX_KINDS, "api_actor_unmatched"] as const;
+const ONSITE_REASONS = ["session_type_OFFLINE", "session_type_in_person_title"] as const;
 const ONLINE_TITLE_SQL = "^\\s*(online|live)\\y";
 const IN_PERSON_TITLE_SQL = "^\\s*(in[\\s-]?person|on[\\s-]?site)\\y";
+
+/** SQL: a first shot whose text may be in Wise (mirror of `postMayHaveLanded`). */
+const landedPostSql = sql`(${P.outcome} in ('verified', 'verify_failed', 'unknown_outcome')
+  or (${P.outcome} = 'rejected' and coalesce(${P.verification} ->> 'stillAutoBlank', 'false') <> 'true'))`;
 
 /** Uniform in [0, 1) from the crypto RNG (48 bits). */
 export function uniformDraw(): number {
@@ -69,8 +94,10 @@ export function uniformDraw(): number {
 }
 
 /** A tutor's canonical key (both Wise accounts), or the account id for someone no longer on the roster. */
-export function tutorKeyFor(wiseTeacherUserId: string | null): string {
-  return rosterTutor(wiseTeacherUserId)?.canonicalKey ?? wiseTeacherUserId ?? "unknown";
+export function tutorKeyFor(wiseTeacherUserId: string | null, recorded?: ReadonlyMap<string, string>): string {
+  return rosterTutor(wiseTeacherUserId)?.canonicalKey
+    ?? (wiseTeacherUserId ? recorded?.get(wiseTeacherUserId) : undefined)
+    ?? wiseTeacherUserId ?? "unknown";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -83,19 +110,14 @@ function validDate(value: unknown): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function isUniqueViolation(error: unknown): boolean {
-  const candidate = error as { code?: unknown; cause?: { code?: unknown } } | null;
-  return typeof candidate === "object" && candidate !== null &&
-    (candidate.code === "23505" || candidate.cause?.code === "23505");
-}
-
 // ---------------------------------------------------------------------------
 // a. First shots
 // ---------------------------------------------------------------------------
 
 /**
  * The posts row for a proven first shot. Its pipeline stamp is the POST claim's (`metadata.pipeline` plus
- * `postedFromCommit`); rows posted before Phase 0 have none.
+ * `postedFromCommit`); rows posted before Phase 0 have none. The verification keeps the read-back's problem codes
+ * and whether a refused POST left the submission unchanged — never Wise's response body.
  */
 export function firstShotPostValues(
   row: AutowriterSessionRow,
@@ -104,6 +126,7 @@ export function firstShotPostValues(
 ): typeof P.$inferInsert {
   const metadata = isRecord(row.metadata) ? row.metadata : {};
   const post = isRecord(metadata.post) ? metadata.post : {};
+  const reconcile = isRecord(metadata.reconcile) ? metadata.reconcile : {};
   const expected = isRecord(metadata.expected) ? metadata.expected : {};
   const stamp = isRecord(metadata.pipeline) ? metadata.pipeline : null;
   const postedFromCommit = typeof metadata.postedFromCommit === "string" ? metadata.postedFromCommit : null;
@@ -111,6 +134,7 @@ export function firstShotPostValues(
   const outcome = (SETTLED_POST_STATES as readonly string[]).includes(row.state)
     ? row.state as (typeof SETTLED_POST_STATES)[number]
     : "unknown_outcome";
+  const problems = [...new Set([...problemCodes(post.problems), ...problemCodes(reconcile.problems)])];
   return {
     wiseSessionId: row.wiseSessionId,
     wiseClassId: row.wiseClassId,
@@ -134,6 +158,9 @@ export function firstShotPostValues(
       event: row.verifiedEvent ?? null,
       submissionId: typeof expected.submissionId === "string" ? expected.submissionId : null,
       fieldOrder: proof.fieldOrder,
+      ...(problems.length > 0 ? { problems } : {}),
+      ...(typeof post.stillAutoBlank === "boolean" ? { stillAutoBlank: post.stillAutoBlank } : {}),
+      ...(typeof post.httpStatus === "number" ? { httpStatus: post.httpStatus } : {}),
     },
     provenance,
     reconstruction: { method: proof.method, fieldOrder: proof.fieldOrder, bodyHash: proof.bodyHash, source: proof.source },
@@ -153,7 +180,8 @@ export async function listUnrecordedPostedRows(db: Database): Promise<Autowriter
 
 /**
  * Record the first shot of every settled posted class whose stored text still proves the POST body. A row edited
- * after posting (the one-time nickname fix) no longer does: it is left for the backfill script, with an info incident.
+ * after posting (a one-time script's re-post) no longer does: it is left for the backfill script, with an info
+ * incident — or a critical one when the post did not verify, since then nobody knows what is in Wise.
  */
 export async function snapshotFirstShots(db: Database): Promise<{ recorded: number; unverified: string[] }> {
   let recorded = 0;
@@ -165,13 +193,18 @@ export async function snapshotFirstShots(db: Database): Promise<{ recorded: numb
       : null;
     if (!proof) {
       unverified.push(row.wiseSessionId);
+      const metadata = isRecord(row.metadata) ? row.metadata : {};
+      const post = isRecord(metadata.post) ? metadata.post : {};
+      const landedUnverified = row.state !== "verified" && postMayHaveLanded(row.state, { stillAutoBlank: post.stillAutoBlank });
       await recordIncident(db, {
         dedupeKey: `first_shot_unverified:${row.wiseSessionId}`,
         kind: "first_shot_unverified",
-        severity: "info",
+        severity: landedUnverified ? "critical" : "info",
         wiseSessionId: row.wiseSessionId,
-        summary: "The stored text no longer proves the posted body (edited after posting): run the review backfill.",
-        detail: { state: row.state, nicknameFix: isRecord(row.metadata) && "nicknameFix" in row.metadata },
+        summary: landedUnverified
+          ? `A post that may be in Wise (${row.state}) cannot be proven against its POST body: check the class in Wise.`
+          : "The stored text no longer proves the posted body (edited after posting): run the review backfill.",
+        detail: { state: row.state, nicknameFix: "nicknameFix" in metadata, corrections: Array.isArray(metadata.corrections) },
       });
       continue;
     }
@@ -185,7 +218,11 @@ export async function snapshotFirstShots(db: Database): Promise<{ recorded: numb
 // c. Review rows
 // ---------------------------------------------------------------------------
 
-/** One review row per verified first shot; inclusion is drawn here, once, before any flag can exist. */
+/**
+ * One review row per first shot whose text may be in Wise (verified, and landed-but-unverified: the owner must be
+ * able to judge those, critical errors included). Inclusion is drawn here, once, before any flag can count; flags
+ * raised before the row existed are carried onto it.
+ */
 export async function assignReviews(db: Database, input: {
   draw?: () => number;
   provenTutorKeys?: ReadonlySet<string>;
@@ -203,7 +240,7 @@ export async function assignReviews(db: Database, input: {
     .leftJoin(S, eq(S.wiseSessionId, P.wiseSessionId))
     .where(and(
       eq(P.kind, "first_shot"),
-      eq(P.outcome, "verified"),
+      landedPostSql,
       sql`not exists (select 1 from feedback_autowriter_reviews r where r.wise_session_id = feedback_autowriter_posts.wise_session_id)`,
     ));
   let created = 0;
@@ -223,6 +260,10 @@ export async function assignReviews(db: Database, input: {
       inclusionProbability: inclusion.probability.toFixed(3),
       sampleDraw: sample,
       samplingPolicy: SAMPLING_POLICY,
+      flaggedAt: sql`(select min(f.created_at) from feedback_autowriter_flags f
+        where f.wise_session_id = ${row.wiseSessionId} and f.resolved_by_verdict_id is null)`,
+      flagSources: sql`array(select distinct f.source from feedback_autowriter_flags f
+        where f.wise_session_id = ${row.wiseSessionId} and f.resolved_by_verdict_id is null order by 1)`,
     }).onConflictDoNothing().returning({ id: R.wiseSessionId });
     created += inserted.length;
   }
@@ -240,61 +281,141 @@ const ACTOR_LABEL: Record<string, string> = {
   api_actor_unmatched: "Wise API user (no recorded post)",
 };
 
+async function insertFlag(db: Database, input: {
+  wiseSessionId: string;
+  source: "measured_fix" | "api_unmatched" | "system";
+  idempotencyKey: string;
+  note: string;
+  suggestedSeverity?: "critical" | null;
+  suggestedCategory?: "billing_status" | "should_not_have_posted" | null;
+}): Promise<boolean> {
+  const inserted = await db.insert(FL).values({
+    wiseSessionId: input.wiseSessionId,
+    source: input.source,
+    suggestedSeverity: input.suggestedSeverity ?? null,
+    suggestedCategory: input.suggestedCategory ?? null,
+    note: input.note.slice(0, 500),
+    createdBy: REVIEW_SYSTEM_ACTOR,
+    idempotencyKey: input.idempotencyKey,
+  }).onConflictDoNothing().returning({ id: FL.id });
+  if (inserted.length === 0) return false;
+  await db.update(R).set({
+    flaggedAt: sql`coalesce(feedback_autowriter_reviews.flagged_at, now())`,
+    flagSources: sql`array(select distinct unnest(feedback_autowriter_reviews.flag_sources || array[${input.source}]::text[]) order by 1)`,
+    updatedAt: sql`now()`,
+  }).where(eq(R.wiseSessionId, input.wiseSessionId));
+  return true;
+}
+
 /**
- * Idempotent over every fix event in the look-back: a person's save after our first post flags the class
- * (`measured_fix`); an API save no post explains raises a critical incident and, after our first post, a flag.
+ * A first shot that landed in Wise without verifying (read-back mismatch, changed credits or status, a stranger's
+ * save in our POST window, an unknown outcome) is flagged critical and pushed: the gate stays blocked until the
+ * owner has judged it (a non-critical verdict then is an explicit, noted downgrade). Idempotent per class.
  */
-export async function raiseFixFlags(db: Database, input: { since: Date }): Promise<{ flags: number; incidents: number }> {
-  const events = await db.select().from(FX).where(and(
-    gte(FX.eventAt, input.since),
-    or(
-      eq(FX.actorKind, "api_actor_unmatched"),
-      and(eq(FX.countsAsFix, true), inArray(FX.actorKind, [...HUMAN_FIX_KINDS])),
-    ),
-  ));
+export async function raiseVerificationFlags(db: Database): Promise<{ flags: number; incidents: number }> {
+  const rows = await db.select({ wiseSessionId: P.wiseSessionId, outcome: P.outcome, verification: P.verification }).from(P)
+    .where(and(eq(P.kind, "first_shot"), sql`${P.outcome} <> 'verified'`, landedPostSql));
   let flags = 0;
   let incidents = 0;
-  for (const event of events) {
-    const unmatched = event.actorKind === "api_actor_unmatched";
-    if (unmatched && await recordIncident(db, {
-      dedupeKey: `api_actor_unmatched:${event.wiseEventId}`,
-      kind: "api_actor_unmatched",
+  for (const row of rows) {
+    const problems = problemCodes((row.verification as { problems?: unknown }).problems);
+    const category = landedProblemCategory(problems);
+    const codes = problems.length > 0 ? problems.join(", ") : "no read-back";
+    if (await insertFlag(db, {
+      wiseSessionId: row.wiseSessionId,
+      source: "system",
+      idempotencyKey: `verification:${row.wiseSessionId}`,
+      suggestedSeverity: "critical",
+      suggestedCategory: category,
+      note: `The first shot may be in Wise but did not verify (${row.outcome}: ${codes}). Check the class in Wise.`,
+    })) flags += 1;
+    if (await recordIncident(db, {
+      dedupeKey: `verification:${row.wiseSessionId}`,
+      kind: problems.some((code) => code.startsWith("session_credit")) ? "credit_entries_changed" : "critical_flag",
       severity: "critical",
-      wiseSessionId: event.wiseSessionId,
-      summary: `A feedback save by the Wise API user at ${event.eventAt.toISOString()} matches no recorded autowriter post`,
-      detail: { wiseEventId: event.wiseEventId, eventAt: event.eventAt.toISOString() },
+      wiseSessionId: row.wiseSessionId,
+      summary: `A post landed in Wise without verifying (${row.outcome}: ${codes.slice(0, 200)})`,
+      detail: { outcome: row.outcome, problems, category },
     })) incidents += 1;
-    if (!event.countsAsFix) continue;
-    const source = unmatched ? "api_unmatched" : "measured_fix";
-    const inserted = await db.insert(FL).values({
-      wiseSessionId: event.wiseSessionId,
-      source,
-      note: `${ACTOR_LABEL[event.actorKind] ?? event.actorKind} saved the feedback at ${event.eventAt.toISOString()}`,
-      createdBy: REVIEW_SYSTEM_ACTOR,
-      idempotencyKey: `${source}:${event.wiseEventId}`,
-    }).onConflictDoNothing().returning({ id: FL.id });
-    if (inserted.length === 0) continue;
-    flags += 1;
-    await db.update(R).set({
-      flaggedAt: sql`coalesce(feedback_autowriter_reviews.flagged_at, now())`,
-      flagSources: sql`array(select distinct unnest(feedback_autowriter_reviews.flag_sources || array[${source}]::text[]) order by 1)`,
-      updatedAt: sql`now()`,
-    }).where(eq(R.wiseSessionId, event.wiseSessionId));
   }
   return { flags, incidents };
 }
 
-/** Measured fixes (every counted save, corrections included) and verified corrections per review. */
+/**
+ * Idempotent over every fix event in the look-back:
+ * - an API save no post explains raises an incident (critical — pushed — from `criticalFrom`, the autowriter's
+ *   go-live; info before) and, after our first post, a gate-blocking flag, whatever the verdicts say;
+ * - a person's save after our first post flags the class (`measured_fix`) unless it came after the owner's current
+ *   Approve (then it is listed, not counted: "fixes until satisfied").
+ */
+export async function raiseFixFlags(db: Database, input: { since: Date; criticalFrom?: Date }): Promise<{ flags: number; incidents: number }> {
+  const criticalFrom = input.criticalFrom ?? UNMATCHED_API_CRITICAL_FROM;
+  const events = await db.select({
+    wiseEventId: FX.wiseEventId,
+    wiseSessionId: FX.wiseSessionId,
+    eventAt: FX.eventAt,
+    actorKind: FX.actorKind,
+    countsAsFix: FX.countsAsFix,
+    verdict: V.verdict,
+    verdictAt: V.createdAt,
+  }).from(FX)
+    .leftJoin(R, eq(R.wiseSessionId, FX.wiseSessionId))
+    .leftJoin(V, eq(V.id, R.currentVerdictId))
+    .where(and(
+      gte(FX.eventAt, input.since),
+      or(
+        eq(FX.actorKind, "api_actor_unmatched"),
+        and(eq(FX.countsAsFix, true), inArray(FX.actorKind, [...HUMAN_FIX_KINDS])),
+      ),
+    ));
+  let flags = 0;
+  let incidents = 0;
+  for (const event of events) {
+    const unmatched = event.actorKind === "api_actor_unmatched";
+    if (unmatched) {
+      const critical = event.eventAt.getTime() >= criticalFrom.getTime();
+      if (await recordIncident(db, {
+        dedupeKey: `api_actor_unmatched:${event.wiseEventId}`,
+        kind: "api_actor_unmatched",
+        severity: critical ? "critical" : "info",
+        wiseSessionId: event.wiseSessionId,
+        summary: `A feedback save by the Wise API user at ${event.eventAt.toISOString()} matches no recorded autowriter post`
+          + (critical ? "" : " (before the autowriter went live)"),
+        detail: { wiseEventId: event.wiseEventId, eventAt: event.eventAt.toISOString() },
+      })) incidents += 1;
+      if (!event.countsAsFix) continue;
+    } else if (!countsTowardFix(event, event.verdict && event.verdictAt ? { verdict: event.verdict, createdAt: event.verdictAt } : null)) {
+      continue;
+    }
+    const source = unmatched ? "api_unmatched" : "measured_fix";
+    if (await insertFlag(db, {
+      wiseSessionId: event.wiseSessionId,
+      source,
+      idempotencyKey: `${source}:${event.wiseEventId}`,
+      note: `${ACTOR_LABEL[event.actorKind] ?? event.actorKind} saved the feedback at ${event.eventAt.toISOString()}`,
+    })) flags += 1;
+  }
+  return { flags, incidents };
+}
+
+/**
+ * Measured fixes up to the owner's current Approve (all of them while there is none), in total and per actor kind,
+ * and verified corrections, per review.
+ */
 export async function refreshReviewCounts(db: Database, input: { sinceDate: string }): Promise<number> {
-  const fixes = sql`(select count(*)::int from feedback_autowriter_fix_events f
-    where f.wise_session_id = feedback_autowriter_reviews.wise_session_id and f.counts_as_fix)`;
+  const counted = sql`f.wise_session_id = feedback_autowriter_reviews.wise_session_id and f.counts_as_fix
+    and not exists (select 1 from feedback_autowriter_verdicts v
+      where v.id = feedback_autowriter_reviews.current_verdict_id and v.verdict = 'approve' and f.event_at > v.created_at)`;
+  const fixes = sql`(select count(*)::int from feedback_autowriter_fix_events f where ${counted})`;
+  const byActor = sql`(select coalesce(jsonb_object_agg(x.actor_kind, x.n), '{}'::jsonb) from (
+    select f.actor_kind, count(*)::int as n from feedback_autowriter_fix_events f where ${counted} group by f.actor_kind) x)`;
   const corrections = sql`(select count(*)::int from feedback_autowriter_posts p
     where p.wise_session_id = feedback_autowriter_reviews.wise_session_id and p.kind = 'correction' and p.outcome = 'verified')`;
-  const rows = await db.update(R).set({ measuredFixCount: fixes, correctionsVerified: corrections, updatedAt: sql`now()` })
+  const rows = await db.update(R).set({ measuredFixCount: fixes, measuredFixesByActor: byActor, correctionsVerified: corrections, updatedAt: sql`now()` })
     .where(and(
       gte(R.bangkokDate, input.sinceDate),
-      sql`(feedback_autowriter_reviews.measured_fix_count, feedback_autowriter_reviews.corrections_verified)
-        is distinct from (${fixes}, ${corrections})`,
+      sql`(feedback_autowriter_reviews.measured_fix_count, feedback_autowriter_reviews.measured_fixes_by_actor,
+        feedback_autowriter_reviews.corrections_verified) is distinct from (${fixes}, ${byActor}, ${corrections})`,
     )).returning({ id: R.wiseSessionId });
   return rows.length;
 }
@@ -304,68 +425,185 @@ export async function refreshReviewCounts(db: Database, input: { sinceDate: stri
 // ---------------------------------------------------------------------------
 
 /**
- * Recompute the metric rows of the given Bangkok dates. A date counts as live when the autowriter posted on it,
- * when the job saw mode `live` during it, or when an earlier run already said so (sticky). A roster class the
- * autowriter never saw is a miss only when proven online one-to-one, and not while its tutor is switched off (the
- * sweep does not shortlist their classes; the recomputed days are recent, so today's switches stand in for then).
+ * Record every code-roster account as seen now. `first_seen_at` is the account's earliest autowriter row (evidence
+ * it was on the roster then), else now; a removed account keeps its last sighting.
  */
-export async function refreshDailyMetrics(db: Database, input: {
-  dates: readonly string[];
-  now: Date;
-  liveNow: boolean;
-  disabledTutors?: readonly string[];
-}): Promise<number> {
-  const disabled = new Set(input.disabledTutors ?? []);
-  const today = bangkokDateKey(input.now);
-  const rosterIds = [...AUTOWRITER_TEACHER_ALLOWLIST];
-  let written = 0;
-  for (const date of [...new Set(input.dates)]) {
+export async function recordRosterAccounts(db: Database, now: Date): Promise<number> {
+  const accounts = [...AUTOWRITER_TEACHER_ALLOWLIST];
+  if (accounts.length === 0) return 0;
+  const earliest = await db.select({ wiseTeacherUserId: S.wiseTeacherUserId, first: sql<Date>`min(${S.createdAt})` }).from(S)
+    .where(inArray(S.wiseTeacherUserId, accounts)).groupBy(S.wiseTeacherUserId);
+  const firstRow = new Map(earliest.map((row) => [row.wiseTeacherUserId, validDate(row.first)]));
+  await db.insert(RA).values(accounts.map((id) => {
+    const first = firstRow.get(id) ?? null;
+    return {
+      wiseTeacherUserId: id,
+      tutorKey: tutorKeyFor(id),
+      firstSeenAt: first && first.getTime() < now.getTime() ? first : now,
+      lastSeenAt: now,
+    };
+  })).onConflictDoUpdate({
+    target: RA.wiseTeacherUserId,
+    set: {
+      tutorKey: sql`excluded.tutor_key`,
+      firstSeenAt: sql`least(${RA.firstSeenAt}, excluded.first_seen_at)`,
+      lastSeenAt: sql`greatest(${RA.lastSeenAt}, excluded.last_seen_at)`,
+    },
+  });
+  return accounts.length;
+}
+
+/** The control row's recorded changes, oldest first. */
+export async function loadControlHistory(db: Database): Promise<ControlStateChange[]> {
+  const rows = await db.select({ changedAt: CH.changedAt, mode: CH.mode, disabledTutors: CH.disabledTutors }).from(CH).orderBy(CH.changedAt);
+  return rows.map((row) => ({
+    changedAt: row.changedAt,
+    mode: row.mode,
+    disabledTutors: Array.isArray(row.disabledTutors) ? row.disabledTutors.filter((id): id is string => typeof id === "string") : [],
+  }));
+}
+
+/** Whether a recorded change says the mode was live at some point of [start, end) (never assumed before the history). */
+function recordedLiveDuring(history: readonly ControlStateChange[], start: Date, end: Date): boolean {
+  const before = history.findLast((change) => change.changedAt.getTime() <= start.getTime());
+  if (before?.mode === "live") return true;
+  return history.some((change) => change.mode === "live" && change.changedAt.getTime() > start.getTime() && change.changedAt.getTime() < end.getTime());
+}
+
+/** The posting window of a class: from its end to its deadline less the margin, and never past now. */
+function postingWindow(endedAt: Date, deadlineAt: Date | null, now: Date): { window: { start: Date; end: Date }; closed: boolean } {
+  const close = deadlineAt ? deadlineAt.getTime() - AUTOWRITER_DEADLINE_MARGIN_MS : null;
+  const closed = close !== null && close <= now.getTime();
+  const end = Math.max(endedAt.getTime(), close !== null ? Math.min(close, now.getTime()) : now.getTime());
+  return { window: { start: endedAt, end: new Date(end) }, closed };
+}
+
+const metricColumnNames = Object.fromEntries(Object.entries(getTableColumns(M)).map(([key, column]) => [key, column.name]));
+
+/**
+ * Recompute the metric rows of the given Bangkok dates (all of the gate window on every run). Every class is judged
+ * by the switches, the roster and its own state over its posting window: a posted class counts; a class the switches
+ * never let us write is excluded (not live, or its tutor switched off); a class still unsettled once its window is
+ * over is a miss (the sweep may not have expired it yet); an unseen roster class is a miss only when proven online
+ * one-to-one and its account was on the roster during the window. `skipped_human` is "the tutor wrote first" only
+ * when a person's save is recorded before our first writer call.
+ */
+export async function refreshDailyMetrics(db: Database, input: { dates: readonly string[]; now: Date }): Promise<number> {
+  const dates = [...new Set(input.dates)].toSorted();
+  if (dates.length === 0) return 0;
+  const { now } = input;
+  const rangeStart = bangkokDayBounds(dates[0]).start;
+  const rangeEnd = bangkokDayBounds(dates.at(-1)!).end;
+  const unseenBefore = new Date(Math.min(rangeEnd.getTime(), now.getTime() - UNSEEN_AFTER_END_MS));
+  await recordRosterAccounts(db, now);
+  const rosterRows = await db.select().from(RA);
+  const rosterIds = [...new Set([...AUTOWRITER_TEACHER_ALLOWLIST, ...rosterRows.map((row) => row.wiseTeacherUserId)])];
+  const skippedHumanInRange = sql`(select s.wise_session_id from feedback_autowriter_sessions s where s.state = 'skipped_human'
+    and s.scheduled_end_at >= ${rangeStart} and s.scheduled_end_at < ${rangeEnd})`;
+  // Unseen classes first, then the rows: a row the sweep makes in between shows up in both reads, and is counted
+  // once, as the row (read the other way round, it could be missed by both).
+  const unseenRead = await db.select({
+    wiseSessionId: PC.wiseSessionId,
+    wiseTeacherUserId: PC.wiseTeacherUserId,
+    scheduledEndAt: PC.scheduledEndAt,
+    deadlineAt: PC.deadlineAt,
+    proven: sql<boolean>`(
+      exists (select 1 from past_session_blocks b where b.wise_session_id = post_class_sessions.wise_session_id
+        and b.session_type = 'SCHEDULED' and b.class_type = 'ONE_TO_ONE' and coalesce(b.title, '') !~* ${IN_PERSON_TITLE_SQL})
+      or (select count(distinct c.wise_student_id) from credit_control_sessions c
+        where c.snapshot_id = (select s.id from credit_control_snapshots s where s.active order by s.generated_at desc limit 1)
+          and c.wise_session_id = post_class_sessions.wise_session_id and c.title ~* ${ONLINE_TITLE_SQL}) = 1
+    )`,
+  }).from(PC).where(and(
+    inArray(PC.wiseTeacherUserId, rosterIds),
+    gte(PC.scheduledEndAt, rangeStart),
+    lt(PC.scheduledEndAt, unseenBefore),
+    or(isNull(PC.finalStatus), notInArray(PC.finalStatus, ["CANCELLED", "CANCELED", "NO_SHOW", "DELETED"])),
+    isNull(PC.wiseDeletedAt),
+    sql`not exists (select 1 from feedback_autowriter_sessions a where a.wise_session_id = post_class_sessions.wise_session_id)`,
+  ));
+  const [sessions, reviews, history, writerCalls, personSaves] = await Promise.all([
+    db.select({
+      wiseSessionId: S.wiseSessionId, wiseTeacherUserId: S.wiseTeacherUserId, state: S.state, reason: S.reason,
+      scheduledEndAt: S.scheduledEndAt, deadlineAt: S.deadlineAt,
+    }).from(S).where(and(gte(S.scheduledEndAt, rangeStart), lt(S.scheduledEndAt, rangeEnd))),
+    db.select({
+      bangkokDate: R.bangkokDate,
+      tutorKey: R.tutorKey,
+      inclusionReason: R.inclusionReason,
+      measuredFixCount: R.measuredFixCount,
+      correctionsVerified: R.correctionsVerified,
+      verdict: V.verdict,
+      severity: V.severity,
+    }).from(R).leftJoin(V, eq(V.id, R.currentVerdictId)).where(between(R.bangkokDate, dates[0], dates.at(-1)!)),
+    loadControlHistory(db),
+    // Our first writer call, successful or not: from then on a person's save is a miss (late), not "wrote first".
+    db.select({ wiseSessionId: CALLS.wiseSessionId, at: sql<Date>`min(${CALLS.createdAt})` }).from(CALLS).where(and(
+      eq(CALLS.role, "writer"), sql`${CALLS.wiseSessionId} in ${skippedHumanInRange}`,
+    )).groupBy(CALLS.wiseSessionId),
+    db.select({ wiseSessionId: FX.wiseSessionId, at: sql<Date>`min(${FX.eventAt})` }).from(FX).where(and(
+      inArray(FX.actorKind, [...PERSON_SAVE_KINDS]),
+      sql`${FX.wiseSessionId} in ${skippedHumanInRange}`,
+    )).groupBy(FX.wiseSessionId),
+  ]);
+
+  const rosterKeys = new Map(rosterRows.map((row) => [row.wiseTeacherUserId, row.tutorKey]));
+  const rosterSpans = new Map<string, RosterSpan>(rosterRows.map((row) => [row.wiseTeacherUserId, { firstSeenAt: row.firstSeenAt, lastSeenAt: row.lastSeenAt }]));
+  const rowIds = new Set(sessions.map((row) => row.wiseSessionId));
+  const unseen = unseenRead.filter((row) => !rowIds.has(row.wiseSessionId));
+  const firstWriterCall = new Map(writerCalls.map((row) => [row.wiseSessionId, validDate(row.at)]));
+  const firstPersonSave = new Map(personSaves.map((row) => [row.wiseSessionId, validDate(row.at)]));
+  const classes = new Map<string, Array<DailyClassFact & { workable: boolean }>>();
+  const add = (endedAt: Date, fact: DailyClassFact & { workable: boolean }) => {
+    const date = bangkokDateKey(endedAt);
+    const day = classes.get(date);
+    if (day) day.push(fact); else classes.set(date, [fact]);
+  };
+  for (const row of sessions) {
+    if (!row.scheduledEndAt) continue;
+    const { window, closed } = postingWindow(row.scheduledEndAt, row.deadlineAt, now);
+    const eligibility = postingWindowEligibility({ teacherId: row.wiseTeacherUserId, window, history });
+    const coverage = classifyCoverage({
+      state: row.state,
+      reason: row.reason,
+      eligibility,
+      windowClosed: closed,
+      tutorWroteFirst: row.state === "skipped_human"
+        ? tutorWroteFirst({ firstWriterCallAt: firstWriterCall.get(row.wiseSessionId) ?? null, firstHumanSaveAt: firstPersonSave.get(row.wiseSessionId) ?? null })
+        : undefined,
+    });
+    add(row.scheduledEndAt, {
+      tutorKey: tutorKeyFor(row.wiseTeacherUserId, rosterKeys),
+      coverage,
+      absenceHold: row.state === "held" && isAbsenceHold(row.reason),
+      workable: eligibility.workable,
+    });
+  }
+  for (const row of unseen) {
+    if (!row.scheduledEndAt) continue;
+    const { window } = postingWindow(row.scheduledEndAt, row.deadlineAt, now);
+    const eligibility = postingWindowEligibility({
+      teacherId: row.wiseTeacherUserId,
+      window,
+      history,
+      roster: row.wiseTeacherUserId ? rosterSpans.get(row.wiseTeacherUserId) ?? null : null,
+    });
+    const coverage = classifyCoverage({ state: null, reason: null, provenOnlineOneToOne: row.proven === true, eligibility });
+    if (coverage === null) continue;
+    add(row.scheduledEndAt, { tutorKey: tutorKeyFor(row.wiseTeacherUserId, rosterKeys), coverage, workable: eligibility.workable });
+  }
+
+  const tutorKeys = AUTOWRITER_TUTORS.map((tutor) => tutor.canonicalKey);
+  const values: Array<typeof M.$inferInsert> = [];
+  for (const date of dates) {
+    const facts = classes.get(date) ?? [];
     const { start, end } = bangkokDayBounds(date);
-    const unseenBefore = new Date(Math.min(end.getTime(), input.now.getTime() - UNSEEN_AFTER_END_MS));
-    const [sessions, unseen, reviews, posted, previous] = await Promise.all([
-      db.select({ wiseTeacherUserId: S.wiseTeacherUserId, state: S.state, reason: S.reason }).from(S)
-        .where(and(gte(S.scheduledEndAt, start), lt(S.scheduledEndAt, end))),
-      db.select({
-        wiseTeacherUserId: PC.wiseTeacherUserId,
-        proven: sql<boolean>`(
-          exists (select 1 from past_session_blocks b where b.wise_session_id = post_class_sessions.wise_session_id
-            and b.session_type = 'SCHEDULED' and b.class_type = 'ONE_TO_ONE' and coalesce(b.title, '') !~* ${IN_PERSON_TITLE_SQL})
-          or (select count(distinct c.wise_student_id) from credit_control_sessions c
-            where c.snapshot_id = (select s.id from credit_control_snapshots s where s.active order by s.generated_at desc limit 1)
-              and c.wise_session_id = post_class_sessions.wise_session_id and c.title ~* ${ONLINE_TITLE_SQL}) = 1
-        )`,
-      }).from(PC).where(and(
-        inArray(PC.wiseTeacherUserId, rosterIds),
-        gte(PC.scheduledEndAt, start),
-        lt(PC.scheduledEndAt, unseenBefore),
-        or(isNull(PC.finalStatus), notInArray(PC.finalStatus, ["CANCELLED", "CANCELED", "NO_SHOW", "DELETED"])),
-        isNull(PC.wiseDeletedAt),
-        sql`not exists (select 1 from feedback_autowriter_sessions a where a.wise_session_id = post_class_sessions.wise_session_id)`,
-      )),
-      db.select({
-        tutorKey: R.tutorKey,
-        inclusionReason: R.inclusionReason,
-        measuredFixCount: R.measuredFixCount,
-        correctionsVerified: R.correctionsVerified,
-        verdict: V.verdict,
-        severity: V.severity,
-      }).from(R).leftJoin(V, eq(V.id, R.currentVerdictId)).where(eq(R.bangkokDate, date)),
-      db.select({ total: count() }).from(P).where(and(eq(P.kind, "first_shot"), gte(P.postStartedAt, start), lt(P.postStartedAt, end))),
-      db.select({ liveMode: M.liveMode }).from(M).where(and(eq(M.metricDate, date), eq(M.tutorKey, "*"))).limit(1),
-    ]);
-    const liveMode = Boolean(previous[0]?.liveMode) || (posted[0]?.total ?? 0) > 0 || (input.liveNow && date === today);
+    const counted = facts.some((fact) => fact.coverage === "posted" || (fact.coverage !== null && fact.workable && !fact.coverage.startsWith("excluded")));
+    const liveMode = counted || recordedLiveDuring(history, start, end);
     const rows = buildDailyMetrics({
-      tutorKeys: AUTOWRITER_TUTORS.map((tutor) => tutor.canonicalKey),
-      classes: [
-        ...sessions.map((row) => ({ tutorKey: tutorKeyFor(row.wiseTeacherUserId), coverage: classifyCoverage({ state: row.state, reason: row.reason }) })),
-        ...unseen.map((row) => ({
-          tutorKey: tutorKeyFor(row.wiseTeacherUserId),
-          coverage: row.wiseTeacherUserId && disabled.has(row.wiseTeacherUserId) && row.proven === true
-            ? "excluded_tutor_off" as const
-            : classifyCoverage({ state: null, reason: null, provenOnlineOneToOne: row.proven === true }),
-        })),
-      ],
-      reviews: reviews.map((row) => ({
+      tutorKeys,
+      classes: facts,
+      reviews: reviews.filter((row) => row.bangkokDate === date).map((row) => ({
         tutorKey: row.tutorKey,
         inclusionReason: row.inclusionReason as InclusionReason,
         measuredFixCount: row.measuredFixCount,
@@ -373,21 +611,37 @@ export async function refreshDailyMetrics(db: Database, input: {
         verdict: row.verdict ? { verdict: row.verdict, severity: row.severity } : null,
       })),
     });
-    for (const row of rows) {
-      const values = { metricDate: date, liveMode, policyVersion: QUALITY_POLICY_VERSION, ...row };
-      await db.insert(M).values(values).onConflictDoUpdate({
-        target: [M.metricDate, M.tutorKey],
-        set: { ...Object.fromEntries(Object.entries(values).filter(([key]) => key !== "metricDate" && key !== "tutorKey")), computedAt: sql`now()` },
-      });
-      written += 1;
-    }
+    for (const row of rows) values.push({ metricDate: date, liveMode, policyVersion: QUALITY_POLICY_VERSION, ...row });
   }
-  return written;
+  const updatable = Object.keys(values[0]).filter((key) => key !== "metricDate" && key !== "tutorKey");
+  await db.insert(M).values(values).onConflictDoUpdate({
+    target: [M.metricDate, M.tutorKey],
+    set: {
+      ...Object.fromEntries(updatable.map((key) => [key, sql.raw(`excluded.${metricColumnNames[key]}`)])),
+      computedAt: sql`now()`,
+    },
+  });
+  // A tutor key that no longer appears on a recomputed date (e.g. a class moved to another account) is dropped.
+  const written = values.map((row) => `${row.metricDate}|${row.tutorKey}`);
+  await db.delete(M).where(and(
+    inArray(M.metricDate, dates),
+    sql`(${M.metricDate}::text || '|' || ${M.tutorKey}) not in ${written}`,
+  ));
+  return values.length;
 }
 
-/** Gate inputs for an inclusive window, straight from the review rows (current verdicts, open flags) and metrics. */
+/** SQL: the autowriter row (if any) is not an in-person class (those are left out everywhere). */
+const notInPersonSql = sql`not (coalesce(${S.state}, '') = 'skipped_scope' and coalesce(${S.reason}, '') in (${sql.join(ONSITE_REASONS.map((reason) => sql`${reason}`), sql`, `)}))`;
+
+/**
+ * Gate inputs for an inclusive window, straight from SQL (never a truncated page): the review rows with their
+ * current verdicts and open flags, unresolved critical flags, posted classes whose first shot is not recorded, and
+ * the all-tutor metrics. The dashboard shows exactly what the nightly row records.
+ */
 export async function loadGateFacts(db: Database, window: { start: string; end: string }): Promise<GateInput> {
-  const [reviews, criticalFlags, metrics] = await Promise.all([
+  const from = bangkokDayBounds(window.start).start;
+  const to = bangkokDayBounds(window.end).end;
+  const [reviews, criticalFlags, unrecorded, unexplained, metrics] = await Promise.all([
     db.select({
       bangkokDate: R.bangkokDate,
       inclusionReason: R.inclusionReason,
@@ -395,9 +649,25 @@ export async function loadGateFacts(db: Database, window: { start: string; end: 
       severity: V.severity,
       hasOpenFlag: sql<boolean>`exists (select 1 from feedback_autowriter_flags f
         where f.wise_session_id = feedback_autowriter_reviews.wise_session_id and f.resolved_by_verdict_id is null)`,
-    }).from(R).leftJoin(V, eq(V.id, R.currentVerdictId)).where(between(R.bangkokDate, window.start, window.end)),
+    }).from(R)
+      .leftJoin(V, eq(V.id, R.currentVerdictId))
+      .leftJoin(S, eq(S.wiseSessionId, R.wiseSessionId))
+      .where(and(between(R.bangkokDate, window.start, window.end), notInPersonSql)),
     db.select({ total: count() }).from(FL).where(and(eq(FL.suggestedSeverity, "critical"), isNull(FL.resolvedByVerdictId))),
-    db.select({ metricDate: M.metricDate, tutorKey: M.tutorKey, liveMode: M.liveMode, posted: M.posted, eligible: M.eligible })
+    db.select({ total: count() }).from(S).where(and(
+      isNotNull(S.postStartedAt),
+      sql`coalesce(${S.scheduledEndAt}, ${S.postStartedAt}) >= ${from} and coalesce(${S.scheduledEndAt}, ${S.postStartedAt}) < ${to}`,
+      // Settled posts that may be in Wise, and POSTs still settling (their review row does not exist yet either).
+      sql`(${S.state} in ('verified', 'verify_failed', 'unknown_outcome', 'posting', 'awaiting_event')
+        or (${S.state} = 'rejected' and coalesce(${S.metadata} -> 'post' ->> 'stillAutoBlank', 'false') <> 'true'))`,
+      sql`not exists (select 1 from feedback_autowriter_posts p
+        where p.wise_session_id = feedback_autowriter_sessions.wise_session_id and p.kind = 'first_shot')`,
+    )),
+    // An API write no post explains blocks expansion until the owner has looked into it and acknowledged it.
+    db.select({ total: count() }).from(INC).where(and(
+      eq(INC.kind, "api_actor_unmatched"), eq(INC.severity, "critical"), isNull(INC.acknowledgedAt),
+    )),
+    db.select({ metricDate: M.metricDate, tutorKey: M.tutorKey, posted: M.posted, eligible: M.eligible })
       .from(M).where(and(eq(M.tutorKey, "*"), between(M.metricDate, window.start, window.end))),
   ]);
   return computeGateFacts({
@@ -409,14 +679,20 @@ export async function loadGateFacts(db: Database, window: { start: string; end: 
       hasOpenFlag: row.hasOpenFlag === true,
     })),
     unresolvedCriticalFlags: criticalFlags[0]?.total ?? 0,
+    unrecordedPosts: unrecorded[0]?.total ?? 0,
+    unexplainedApiWrites: unexplained[0]?.total ?? 0,
     metrics,
   });
 }
 
+export async function dailyGateRecorded(db: Database, date: string): Promise<boolean> {
+  const [existing] = await db.select({ id: G.id }).from(G).where(and(eq(G.evalKind, "daily"), eq(G.bangkokDate, date))).limit(1);
+  return Boolean(existing);
+}
+
 /** The daily gate row for `date` (append-only, one per date); null when it already exists. */
 export async function recordDailyGate(db: Database, date: string): Promise<{ date: string; status: GateStatus } | null> {
-  const [existing] = await db.select({ id: G.id }).from(G).where(and(eq(G.evalKind, "daily"), eq(G.bangkokDate, date))).limit(1);
-  if (existing) return null;
+  if (await dailyGateRecorded(db, date)) return null;
   const window = gateWindow(date);
   const facts = await loadGateFacts(db, window);
   const result = evaluateGate(facts);
@@ -428,10 +704,13 @@ export async function recordDailyGate(db: Database, date: string): Promise<{ dat
     rosterTutors: AUTOWRITER_TUTORS.map((tutor) => tutor.canonicalKey),
     reviewed: facts.reviewed,
     accurate: facts.accurate,
-    wilsonLower: result.wilsonLower.toFixed(4),
+    wilsonLower: result.wilsonLower,
     critical: facts.criticalVerdicts,
     pendingCriticalFlags: facts.unresolvedCriticalFlags,
     pendingFlaggedReviews: facts.pendingFlaggedReviews,
+    requiredPending: facts.requiredPending,
+    unrecordedPosts: facts.unrecordedPosts,
+    unexplainedApiWrites: facts.unexplainedApiWrites,
     coverageNum: facts.coverageNum,
     coverageDen: facts.coverageDen,
     status: result.status,
@@ -442,15 +721,29 @@ export async function recordDailyGate(db: Database, date: string): Promise<{ dat
   return inserted.length > 0 ? { date, status: result.status } : null;
 }
 
-/** Dates to recompute: the last three Bangkok days, plus any day in the gate window with a verdict since yesterday. */
-export async function metricDatesToRefresh(db: Database, now: Date): Promise<string[]> {
-  const today = bangkokDateKey(now);
-  const recent = Array.from({ length: METRIC_RECOMPUTE_DAYS }, (_, index) => addDays(today, -index));
-  const reviewed = await db.selectDistinct({ date: R.bangkokDate }).from(R).where(and(
-    gte(R.reviewedAt, new Date(now.getTime() - 26 * 60 * 60 * 1000)),
-    gte(R.bangkokDate, gateWindow(today).start),
-  ));
-  return [...new Set([...recent, ...reviewed.map((row) => row.date)])].toSorted();
+/**
+ * The Wise activity mirror the gate reads fixes from: fresh when the latest full (first-page, all-event or
+ * feedback-event) sync succeeded within GATE_ACTIVITY_MAX_AGE_MS and reached known events (a sync that stopped at
+ * its page cap left older events unread). A stale mirror would hide a fix saved since. Read before the fix events
+ * are derived, so a sync that finishes during the run cannot vouch for data the run did not read.
+ */
+export async function activityMirrorStatus(db: Database, now: Date): Promise<{ fresh: boolean; lastSuccessAt: string | null; reason: string | null }> {
+  const [row] = await db.select({ finishedAt: WAR.finishedAt, stoppedReason: sql<string | null>`${WAR.metadata} ->> 'stoppedReason'` })
+    .from(WAR).where(and(
+      eq(WAR.status, "success"),
+      isNotNull(WAR.finishedAt),
+      sql`coalesce(${WAR.metadata} ->> 'startPage', '1') = '1'`,
+      sql`coalesce(${WAR.metadata} ->> 'eventName', '') in ('', 'SessionFeedbackSubmittedEvent')`,
+    )).orderBy(desc(WAR.finishedAt)).limit(1);
+  const last = row?.finishedAt ?? null;
+  const lastSuccessAt = last?.toISOString() ?? null;
+  if (last === null || now.getTime() - last.getTime() > GATE_ACTIVITY_MAX_AGE_MS) {
+    return { fresh: false, lastSuccessAt, reason: `activity_mirror_stale: last successful Wise activity sync ${lastSuccessAt ?? "never"}` };
+  }
+  if (row?.stoppedReason === "max_pages") {
+    return { fresh: false, lastSuccessAt, reason: "activity_mirror_incomplete: the last Wise activity sync stopped at its page cap" };
+  }
+  return { fresh: true, lastSuccessAt, reason: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -459,16 +752,16 @@ export async function metricDatesToRefresh(db: Database, now: Date): Promise<str
 
 export interface ReviewJobDeps {
   db: Database;
-  /** The Wise user behind the API key (`WISE_USER_ID`): its saves are ours. */
+  /** The Wise user behind the API key (`WISE_USER_ID`): its saves are ours. Missing → fix events are not derived. */
   apiActorId: string | null;
   /** False on preview deployments: the job never touches state there. */
   writesAllowedHere: boolean;
   triggerSource: "cron" | "admin" | "cli";
   channels: IncidentPushChannels;
-  /** The control row's mode right now (a date seen live counts for coverage). */
-  liveNow: boolean;
-  /** Roster accounts switched off right now (their unseen classes are not misses). */
-  disabledTutors?: readonly string[];
+  /** Wall-clock epoch ms the run must finish by (maxDuration headroom): incident pushes that cannot fit wait. */
+  deadlineMs?: number;
+  /** When an API save no post explains becomes critical (default: the autowriter's go-live). */
+  unmatchedCriticalFrom?: Date;
   now?: () => Date;
   draw?: () => number;
   provenTutorKeys?: ReadonlySet<string>;
@@ -483,11 +776,15 @@ export interface ReviewJobResult {
   firstShots?: { recorded: number; unverified: number };
   fixEvents?: Omit<FixEventIngestResult, "changed">;
   reviewsCreated?: number;
+  verificationFlags?: { flags: number; incidents: number };
   flags?: { flags: number; incidents: number };
   reviewCountsUpdated?: number;
   metricRows?: number;
   dailyGate?: { date: string; status: GateStatus } | null;
+  /** Why the due daily gate row was not written this run (a later run of the day writes it). */
+  dailyGateSkipped?: string;
   incidents?: DrainResult;
+  undeliveredCritical?: number;
   stepErrors?: string[];
 }
 
@@ -502,15 +799,14 @@ async function startRun(db: Database, triggerSource: string): Promise<string | n
     const [row] = await db.insert(RUNS).values({ triggerSource }).returning({ id: RUNS.id });
     return row.id;
   } catch (error) {
-    if (isUniqueViolation(error)) return null;
+    if (sqlStateOf(error) === "23505") return null;
     throw error;
   }
 }
 
 function stepError(step: string, error: unknown): string {
   // Only the error's name and SQLSTATE: messages of database errors can carry lesson text in their parameters.
-  const code = (error as { code?: unknown; cause?: { code?: unknown } } | null);
-  const sqlState = typeof code?.code === "string" ? code.code : typeof code?.cause?.code === "string" ? code.cause.code : null;
+  const sqlState = sqlStateOf(error);
   return `${step}: ${error instanceof Error ? error.name : "Error"}${sqlState ? ` (${sqlState})` : ""}`;
 }
 
@@ -523,35 +819,83 @@ export async function runReviewJob(deps: ReviewJobDeps): Promise<ReviewJobResult
 
   const result: ReviewJobResult = { ok: true, syncRunId: runId };
   const errors: string[] = [];
+  const failedSteps: string[] = [];
   const step = async <T>(name: string, work: () => Promise<T>): Promise<T | undefined> => {
     try {
       return await work();
     } catch (error) {
       errors.push(stepError(name, error));
+      failedSteps.push(name);
       return undefined;
     }
+  };
+  const drains: DrainResult[] = [];
+  const drain = async (name: string, now: Date) => {
+    const drained = await step(name, () => drainIncidentOutbox(db, deps.channels, now, { deadlineMs: deps.deadlineMs }));
+    if (drained) drains.push(drained);
   };
   try {
     const now = clock();
     const since = new Date(now.getTime() - FIX_EVENT_LOOKBACK_MS);
+    // Pushes already waiting go out first, whatever the rest of the run costs.
+    await drain("incidents_waiting", now);
+    // The mirror's state before any fix event is read from it (it vouches for this run's data only).
+    const mirror = await step("activity_mirror", () => activityMirrorStatus(db, now));
     const shots = await step("first_shots", () => snapshotFirstShots(db));
     if (shots) result.firstShots = { recorded: shots.recorded, unverified: shots.unverified.length };
-    const fixes = await step("fix_events", () => ingestFixEvents(db, { apiActorId: deps.apiActorId, since }));
-    if (fixes) result.fixEvents = { sessions: fixes.sessions, inserted: fixes.inserted, updated: fixes.updated };
-    result.reviewsCreated = await step("reviews", () => assignReviews(db, { draw: deps.draw, provenTutorKeys: deps.provenTutorKeys, now }));
-    result.flags = await step("flags", () => raiseFixFlags(db, { since }));
-    result.reviewCountsUpdated = await step("review_counts", () => refreshReviewCounts(db, { sinceDate: bangkokDateKey(since) }));
-    const dates = await step("metric_dates", () => metricDatesToRefresh(db, now));
-    if (dates) {
-      result.metricRows = await step("metrics", () => refreshDailyMetrics(db, { dates, now, liveNow: deps.liveNow, disabledTutors: deps.disabledTutors }));
-    }
-    result.dailyGate = (await step("gate", () => recordDailyGate(db, dailyGateDate(now)))) ?? null;
-    const drained = await step("incidents", () => drainIncidentOutbox(db, deps.channels, now));
-    if (drained) {
-      result.incidents = drained;
-      if (drained.stillPending > 0 || drained.failed > 0) {
-        errors.push(`Critical incident push not delivered: ${drained.errors.slice(0, 2).join(" | ") || "retrying"}`);
+    const apiActorId = deps.apiActorId;
+    if (!apiActorId) {
+      // Fail closed: without our API user's id every save of ours would read as a stranger's (and a stranger's API
+      // write as staff), so nothing is classified and the run is red until WISE_USER_ID is set.
+      errors.push("fix_events: WISE_USER_ID is missing, so our API saves cannot be told apart (no fix events derived)");
+      failedSteps.push("fix_events");
+    } else {
+      const fixes = await step("fix_events", () => ingestFixEvents(db, { apiActorId, since }));
+      if (fixes) {
+        result.fixEvents = { sessions: fixes.sessions, inserted: fixes.inserted, updated: fixes.updated, skippedInFlight: fixes.skippedInFlight };
       }
+    }
+    result.reviewsCreated = await step("reviews", () => assignReviews(db, { draw: deps.draw, provenTutorKeys: deps.provenTutorKeys, now }));
+    result.verificationFlags = await step("verification_flags", () => raiseVerificationFlags(db));
+    result.flags = await step("flags", () => raiseFixFlags(db, { since, criticalFrom: deps.unmatchedCriticalFrom }));
+    result.reviewCountsUpdated = await step("review_counts", () => refreshReviewCounts(db, { sinceDate: bangkokDateKey(since) }));
+    result.metricRows = await step("metrics", () => refreshDailyMetrics(db, { dates: metricDates(now), now }));
+
+    // The daily row is append-only: record it only from a complete pass over a fresh mirror. Otherwise leave the
+    // date for a later run (the same date is due until 21:59 the next day).
+    const gateDate = dailyGateDate(now);
+    result.dailyGate = null;
+    const due = await step("gate_due", async () => !(await dailyGateRecorded(db, gateDate)));
+    if (due) {
+      if (failedSteps.length > 0) {
+        result.dailyGateSkipped = `step_errors: ${failedSteps.join(", ")}`;
+      } else if (mirror && !mirror.fresh) {
+        result.dailyGateSkipped = mirror.reason ?? "activity_mirror_stale";
+      } else if (mirror) {
+        result.dailyGate = (await step("gate", () => recordDailyGate(db, gateDate))) ?? null;
+      }
+    }
+
+    // Incidents this run raised.
+    await drain("incidents", now);
+    if (drains.length > 0) {
+      result.incidents = drains.reduce((total, next) => ({
+        attempted: total.attempted + next.attempted,
+        sent: total.sent + next.sent,
+        failed: total.failed + next.failed,
+        stillPending: total.stillPending + next.stillPending,
+        deferred: total.deferred + next.deferred,
+        errors: [...total.errors, ...next.errors],
+      }));
+    }
+    // Red until every critical incident reached the owner or was acknowledged — a push that gave up, or one that
+    // never got its turn, included.
+    const undelivered = await step("incident_delivery", () => countUndeliveredCritical(db, now));
+    if (undelivered !== undefined) result.undeliveredCritical = undelivered;
+    const deferred = result.incidents?.deferred ?? 0;
+    if ((undelivered ?? 0) > 0 || deferred > 0 || (result.incidents?.stillPending ?? 0) > 0) {
+      errors.push(`Critical incident push not delivered: ${undelivered ?? "?"} undelivered, ${deferred} deferred `
+        + `(acknowledge on the Quality tab once handled): ${result.incidents?.errors.slice(0, 2).join(" | ") || "retrying"}`);
     }
   } finally {
     result.stepErrors = errors;

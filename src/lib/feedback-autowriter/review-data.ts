@@ -4,29 +4,35 @@ import * as schema from "@/lib/db/schema";
 import { POST_CLASS_FEEDBACK_FIELDS, type FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
 import { wiseSessionLink } from "@/lib/wise/links";
 import { isOnsiteSkip } from "./dashboard";
+import { isMissingRelationError, sqlStateOf } from "./db-errors";
+import { problemCodes } from "./first-shot";
 import {
   GATE_THRESHOLDS,
   PROVEN_TUTOR_KEYS,
   addDays,
   bangkokDateKey,
-  computeGateFacts,
+  countsTowardFix,
   emptyCoverageCounts,
   evaluateGate,
+  fixRoundBucket,
   gateWindow,
   isAccurate,
   isRequiredReview,
   nextExpansionSize,
   wilsonLowerBound,
   type CoverageCounts,
+  type GateInput,
   type GateStatus,
   type InclusionReason,
 } from "./quality";
+import { loadGateFacts } from "./review-job";
 import { AUTOWRITER_TUTORS, rosterTutor, tutorLabel } from "./roster";
 import type { AutowriterSessionRow } from "./store";
 
 /**
  * The Quality and Review tabs of the autowriter dashboard (Phase 1 of the operating loop). Read-only; the pure
- * `buildAutowriterReview` shapes rows loaded by `loadAutowriterReview`. In-person classes stay hidden, as on the
+ * `buildAutowriterReview` shapes rows loaded by `loadAutowriterReview`. The gate shown is computed by the same SQL
+ * as the nightly row (`loadGateFacts`), never from the page's rows. In-person classes stay hidden, as on the
  * overview (`isOnsiteSkip`).
  */
 
@@ -45,7 +51,10 @@ const PCV = schema.postClassFeedbackVersions;
 
 /** Classes older than this leave the queue once reviewed and unflagged. */
 export const REVIEW_QUEUE_DAYS = 30;
-const QUEUE_LIMIT = 300;
+/** Reviewed, unflagged classes shown (every flagged and every unreviewed required class is always shown). */
+export const QUEUE_LIMIT = 300;
+/** Unreviewed required classes loaded at most (far above a day's posts; the count is exact regardless). */
+const UNREVIEWED_LIMIT = 500;
 
 type Field = (typeof POST_CLASS_FEEDBACK_FIELDS)[number];
 
@@ -116,6 +125,8 @@ export interface ReviewVerdictView {
   note: string | null;
   reviewer: string;
   source: "dashboard" | "backfill";
+  /** The judgement this verdict downgraded (a noted, confirmed owner act), or null. */
+  downgradedFrom: "critical" | "factual" | null;
   createdAt: string;
   current: boolean;
 }
@@ -131,7 +142,14 @@ export interface ReviewQueueItem {
   inclusionReason: InclusionReason;
   required: boolean;
   status: "needs_review" | "flagged" | "reviewed" | "optional";
-  openFlags: Array<{ source: string; note: string | null; createdAt: string }>;
+  openFlags: Array<{
+    id: string;
+    source: string;
+    note: string | null;
+    suggestedSeverity: schema.AutowriterVerdictSeverity | null;
+    suggestedCategory: schema.AutowriterCriticalCategory | null;
+    createdAt: string;
+  }>;
   firstShot: {
     postId: string;
     fields: FeedbackFieldAnswers;
@@ -141,13 +159,18 @@ export interface ReviewQueueItem {
     postStartedAt: string | null;
     arm: string | null;
     evidence: string | null;
+    /** `verified`, or a landed-but-unverified outcome the owner must judge. */
+    outcome: string;
+    problems: string[];
   };
   current: { fields: FeedbackFieldAnswers; source: "first_shot" | "correction" | "wise_feedback_version"; at: string | null };
   changed: boolean;
   diff: Array<{ field: Field; segments: DiffSegment[] }>;
   corrections: Array<{ actor: string; reason: string | null; outcome: string; at: string | null; provenance: string }>;
-  fixEvents: Array<{ wiseEventId: string; at: string; actorKind: string; countsAsFix: boolean }>;
+  /** Every save in Wise; `counted` = a measured fix now (a save after the current Approve is listed, not counted). */
+  fixEvents: Array<{ wiseEventId: string; at: string; actorKind: string; countsAsFix: boolean; counted: boolean }>;
   measuredFixCount: number;
+  measuredFixesByActor: Record<string, number>;
   verdicts: ReviewVerdictView[];
   currentVerdict: ReviewVerdictView | null;
 }
@@ -173,7 +196,8 @@ export interface QualityTutorRow {
   tutorKey: string;
   displayName: string;
   phase: "full_review" | "sampled";
-  posted: number;
+  /** Review rows in the window: every first shot whose text may be in Wise. */
+  textsInWise: number;
   reviewed: number;
   accurate: number;
   wilsonLower: number;
@@ -184,7 +208,14 @@ export interface QualityTutorRow {
   measuredFixClasses: number;
 }
 
+/** The review tables cannot be read: not created yet (migration 0100), or a load failure (not the same thing). */
+export interface AutowriterReviewUnavailable {
+  available: false;
+  reason: "review_tables_missing" | "load_failed";
+}
+
 export interface AutowriterReview {
+  available: true;
   generatedAt: string;
   window: { start: string; end: string; days: number };
   gate: {
@@ -197,6 +228,9 @@ export interface AutowriterReview {
     criticalVerdicts: number;
     unresolvedCriticalFlags: number;
     pendingFlaggedReviews: number;
+    requiredPending: number;
+    unrecordedPosts: number;
+    unexplainedApiWrites: number;
     coverageNum: number;
     coverageDen: number;
     thresholds: { passLowerBound: number; headStartLowerBound: number; minCoverage: number };
@@ -204,11 +238,13 @@ export interface AutowriterReview {
     currentTutors: number;
     nextExpansionSize: number;
   };
-  coverage: CoverageCounts;
+  coverage: CoverageCounts & { heldAbsence: number };
   fixRounds: { zero: number; one: number; two: number; threePlus: number; unresolved: number };
   daily: QualityDailyRow[];
   tutors: QualityTutorRow[];
   queue: ReviewQueueItem[];
+  /** Exact counts behind the filters (the queue itself may be a subset: `shown`). */
+  queueTotals: { needsReview: number; flagged: number; all: number; shown: number };
   incidents: Array<{
     id: string;
     kind: string;
@@ -217,9 +253,11 @@ export interface AutowriterReview {
     wiseSessionId: string | null;
     pushStatus: string;
     lastPushError: string | null;
+    acknowledgedAt: string | null;
+    acknowledgedBy: string | null;
     createdAt: string;
   }>;
-  lastRun: { status: string; startedAt: string; finishedAt: string | null; errorSummary: string | null } | null;
+  lastRun: { status: string; startedAt: string; finishedAt: string | null; errorSummary: string | null; dailyGateSkipped: string | null } | null;
 }
 
 type ReviewRow = typeof R.$inferSelect;
@@ -229,7 +267,13 @@ type FlagRow = typeof FL.$inferSelect;
 type MetricRow = typeof M.$inferSelect;
 
 export interface ReviewSourceRows {
-  reviews: readonly ReviewRow[];
+  /** The gate as the nightly job computes it (`loadGateFacts` over the dashboard window). */
+  gateFacts: GateInput;
+  /** Every review row in the window (unbounded): per-tutor rows and fix rounds. */
+  windowReviews: readonly ReviewRow[];
+  /** The queue's rows: every flagged and unreviewed required class, then the latest others up to the limit. */
+  queueReviews: readonly ReviewRow[];
+  queueTotals: { needsReview: number; flagged: number; all: number };
   posts: readonly PostRow[];
   verdicts: readonly VerdictRow[];
   flags: readonly FlagRow[];
@@ -247,7 +291,6 @@ export interface ReviewSourceRows {
   lastDailyGate: typeof G.$inferSelect | null;
   incidents: ReadonlyArray<typeof I.$inferSelect>;
   lastRun: typeof RUNS.$inferSelect | null;
-  unresolvedCriticalFlags: number;
 }
 
 function asFields(value: unknown): FeedbackFieldAnswers {
@@ -272,6 +315,7 @@ function verdictView(row: VerdictRow, currentId: string | null): ReviewVerdictVi
     note: row.note,
     reviewer: row.reviewer,
     source: row.source,
+    downgradedFrom: row.downgradedFrom,
     createdAt: row.createdAt.toISOString(),
     current: row.id === currentId,
   };
@@ -285,52 +329,33 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
   const sessions = new Map(input.sessions.map((row) => [row.wiseSessionId, row]));
   const verdictsById = new Map(input.verdicts.map((row) => [row.id, row]));
   const openFlags = input.flags.filter((flag) => flag.resolvedByVerdictId === null);
-  const reviews = input.reviews.filter((review) => {
+  const notInPerson = (review: ReviewRow) => {
     const session = sessions.get(review.wiseSessionId);
     return !session || !isOnsiteSkip(session);
-  });
-
-  const gateFacts = computeGateFacts({
-    window,
-    reviews: reviews.map((review) => {
-      const verdict = review.currentVerdictId ? verdictsById.get(review.currentVerdictId) ?? null : null;
-      return {
-        bangkokDate: review.bangkokDate,
-        inclusionReason: review.inclusionReason,
-        verdict: verdict ? { verdict: verdict.verdict, severity: verdict.severity } : null,
-        hasOpenFlag: openFlags.some((flag) => flag.wiseSessionId === review.wiseSessionId),
-      };
-    }),
-    unresolvedCriticalFlags: input.unresolvedCriticalFlags,
-    metrics: input.metrics,
-  });
-  const gate = evaluateGate(gateFacts);
+  };
+  const currentVerdictOf = (review: ReviewRow) => review.currentVerdictId ? verdictsById.get(review.currentVerdictId) ?? null : null;
+  const gate = evaluateGate(input.gateFacts);
 
   const windowMetrics = input.metrics.filter((row) => inWindow(row.metricDate));
-  const liveAll = windowMetrics.filter((row) => row.tutorKey === "*" && row.liveMode);
-  const coverage = emptyCoverageCounts();
-  for (const row of liveAll) {
+  const coverage = { ...emptyCoverageCounts(), heldAbsence: 0 };
+  for (const row of windowMetrics.filter((metric) => metric.tutorKey === "*")) {
     coverage.posted += row.posted;
     coverage.miss_held += row.held;
+    coverage.heldAbsence += row.heldAbsence;
+    coverage.miss_late += row.late;
     coverage.miss_expired += row.expired;
     coverage.miss_failed += row.failed;
     coverage.miss_unseen += row.unseen;
     coverage.excluded_tutor_first += row.excludedTutorFirst;
-    coverage.excluded_absent += row.excludedAbsent;
     coverage.excluded_tutor_off += row.excludedTutorOff;
+    coverage.excluded_not_live += row.excludedNotLive;
     coverage.excluded_scope += row.excludedScope;
     coverage.pending += row.pending;
   }
 
+  const windowReviews = input.windowReviews.filter((review) => inWindow(review.bangkokDate) && notInPerson(review));
   const fixRounds = { zero: 0, one: 0, two: 0, threePlus: 0, unresolved: 0 };
-  for (const review of reviews.filter((row) => inWindow(row.bangkokDate))) {
-    const verdict = review.currentVerdictId ? verdictsById.get(review.currentVerdictId) : undefined;
-    if (verdict && verdict.verdict === "needs_fix" && review.measuredFixCount === 0) fixRounds.unresolved += 1;
-    else if (review.measuredFixCount === 0) fixRounds.zero += 1;
-    else if (review.measuredFixCount === 1) fixRounds.one += 1;
-    else if (review.measuredFixCount === 2) fixRounds.two += 1;
-    else fixRounds.threePlus += 1;
-  }
+  for (const review of windowReviews) fixRounds[fixRoundBucket(currentVerdictOf(review), review.measuredFixCount)] += 1;
 
   const daily: QualityDailyRow[] = windowMetrics.filter((row) => row.tutorKey === "*")
     .toSorted((a, b) => b.metricDate.localeCompare(a.metricDate))
@@ -352,20 +377,20 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
     }));
 
   const tutors: QualityTutorRow[] = AUTOWRITER_TUTORS.map((tutor) => {
-    const tutorReviews = reviews.filter((review) => review.tutorKey === tutor.canonicalKey && inWindow(review.bangkokDate));
+    const tutorReviews = windowReviews.filter((review) => review.tutorKey === tutor.canonicalKey);
     const counted = tutorReviews.flatMap((review) => {
-      const verdict = review.currentVerdictId ? verdictsById.get(review.currentVerdictId) : undefined;
+      const verdict = currentVerdictOf(review);
       return isRequiredReview(review.inclusionReason) && verdict ? [verdict] : [];
     });
     const accurate = counted.filter((verdict) => isAccurate(verdict)).length;
-    const live = windowMetrics.filter((row) => row.tutorKey === tutor.canonicalKey && row.liveMode);
-    const coverageNum = live.reduce((sum, row) => sum + row.posted, 0);
-    const coverageDen = live.reduce((sum, row) => sum + row.eligible, 0);
+    const rows = windowMetrics.filter((row) => row.tutorKey === tutor.canonicalKey);
+    const coverageNum = rows.reduce((sum, row) => sum + row.posted, 0);
+    const coverageDen = rows.reduce((sum, row) => sum + row.eligible, 0);
     return {
       tutorKey: tutor.canonicalKey,
       displayName: tutor.label,
       phase: PROVEN_TUTOR_KEYS.has(tutor.canonicalKey) ? "sampled" : "full_review",
-      posted: tutorReviews.length,
+      textsInWise: tutorReviews.length,
       reviewed: counted.length,
       accurate,
       wilsonLower: wilsonLowerBound(accurate, counted.length),
@@ -377,7 +402,8 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
     };
   });
 
-  const queue = reviews
+  const queue = input.queueReviews
+    .filter(notInPerson)
     .toSorted((a, b) => (b.classEndedAt?.getTime() ?? 0) - (a.classEndedAt?.getTime() ?? 0))
     .flatMap((review): ReviewQueueItem[] => {
       const posts = input.posts.filter((post) => post.wiseSessionId === review.wiseSessionId);
@@ -398,12 +424,14 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
       const diff = POST_CLASS_FEEDBACK_FIELDS
         .filter((field) => firstFields[field] !== current.fields[field])
         .map((field) => ({ field, segments: diffWords(firstFields[field], current.fields[field]) }));
+      const currentVerdict = currentVerdictOf(review);
       const verdicts = input.verdicts.filter((row) => row.wiseSessionId === review.wiseSessionId)
         .toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
         .map((row) => verdictView(row, review.currentVerdictId));
       const flags = openFlags.filter((flag) => flag.wiseSessionId === review.wiseSessionId);
       const required = isRequiredReview(review.inclusionReason);
       const tutor = rosterTutor(review.wiseTeacherUserId);
+      const cutoff = currentVerdict ? { verdict: currentVerdict.verdict, createdAt: currentVerdict.createdAt } : null;
       return [{
         wiseSessionId: review.wiseSessionId,
         wiseUrl: session?.wiseClassId ? wiseSessionLink({ wiseClassId: session.wiseClassId, wiseSessionId: review.wiseSessionId }) : null,
@@ -415,7 +443,14 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
         inclusionReason: review.inclusionReason,
         required,
         status: flags.length > 0 ? "flagged" : review.currentVerdictId ? "reviewed" : required ? "needs_review" : "optional",
-        openFlags: flags.map((flag) => ({ source: flag.source, note: flag.note, createdAt: flag.createdAt.toISOString() })),
+        openFlags: flags.map((flag) => ({
+          id: flag.id,
+          source: flag.source,
+          note: flag.note,
+          suggestedSeverity: flag.suggestedSeverity,
+          suggestedCategory: flag.suggestedCategory,
+          createdAt: flag.createdAt.toISOString(),
+        })),
         firstShot: {
           postId: firstShot.id,
           fields: firstFields,
@@ -425,6 +460,8 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
           postStartedAt: iso(firstShot.postStartedAt),
           arm: firstShot.arm,
           evidence: firstShot.evidence,
+          outcome: firstShot.outcome,
+          problems: problemCodes((firstShot.verification as { problems?: unknown }).problems),
         },
         current,
         changed: diff.length > 0,
@@ -438,15 +475,24 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
         })),
         fixEvents: input.fixEvents.filter((event) => event.wiseSessionId === review.wiseSessionId)
           .toSorted((a, b) => a.eventAt.getTime() - b.eventAt.getTime())
-          .map((event) => ({ wiseEventId: event.wiseEventId, at: event.eventAt.toISOString(), actorKind: event.actorKind, countsAsFix: event.countsAsFix })),
+          .map((event) => ({
+            wiseEventId: event.wiseEventId,
+            at: event.eventAt.toISOString(),
+            actorKind: event.actorKind,
+            countsAsFix: event.countsAsFix,
+            counted: countsTowardFix(event, cutoff),
+          })),
         measuredFixCount: review.measuredFixCount,
+        measuredFixesByActor: review.measuredFixesByActor ?? {},
         verdicts,
         currentVerdict: verdicts.find((verdict) => verdict.current) ?? null,
       }];
     });
 
   const recordedFirstShots = new Set(input.posts.filter((post) => post.kind === "first_shot").map((post) => post.wiseSessionId));
+  const skipped = (input.lastRun?.counts as { dailyGateSkipped?: unknown } | undefined)?.dailyGateSkipped;
   return {
+    available: true,
     generatedAt: input.now.toISOString(),
     window: { ...window, days: GATE_THRESHOLDS.windowDays },
     gate: {
@@ -454,7 +500,7 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
       wilsonLower: gate.wilsonLower,
       coverage: gate.coverage,
       reasons: gate.reasons,
-      ...gateFacts,
+      ...input.gateFacts,
       thresholds: {
         passLowerBound: GATE_THRESHOLDS.passLowerBound,
         headStartLowerBound: GATE_THRESHOLDS.headStartLowerBound,
@@ -474,9 +520,11 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
     daily,
     tutors,
     queue,
+    queueTotals: { ...input.queueTotals, shown: queue.length },
     incidents: input.incidents
       // A first shot the backfill proved later is no longer an open question.
-      .filter((incident) => !(incident.kind === "first_shot_unverified" && incident.wiseSessionId && recordedFirstShots.has(incident.wiseSessionId)))
+      .filter((incident) => !(incident.kind === "first_shot_unverified" && incident.severity === "info"
+        && incident.wiseSessionId && recordedFirstShots.has(incident.wiseSessionId)))
       .map((incident) => ({
         id: incident.id,
         kind: incident.kind,
@@ -485,6 +533,8 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
         wiseSessionId: incident.wiseSessionId,
         pushStatus: incident.pushStatus,
         lastPushError: incident.lastPushError,
+        acknowledgedAt: iso(incident.acknowledgedAt),
+        acknowledgedBy: incident.acknowledgedBy,
         createdAt: incident.createdAt.toISOString(),
       })),
     lastRun: input.lastRun ? {
@@ -492,27 +542,39 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
       startedAt: input.lastRun.startedAt.toISOString(),
       finishedAt: iso(input.lastRun.finishedAt),
       errorSummary: input.lastRun.errorSummary,
+      dailyGateSkipped: typeof skipped === "string" ? skipped : null,
     } : null,
   };
 }
 
-/** Read-only loader for the page and `GET /api/feedback-autowriter/review`. */
-export async function loadAutowriterReview(db: Database, input: { now?: Date } = {}): Promise<AutowriterReview> {
-  const now = input.now ?? new Date();
+/** SQL: the class is not an in-person one (a review row's session, when the autowriter has a row for it). */
+const notInPersonReviewSql = sql`not exists (select 1 from feedback_autowriter_sessions s
+  where s.wise_session_id = feedback_autowriter_reviews.wise_session_id and s.state = 'skipped_scope'
+    and s.reason in ('session_type_OFFLINE', 'session_type_in_person_title'))`;
+const openFlagSql = sql`exists (select 1 from feedback_autowriter_flags f
+  where f.wise_session_id = feedback_autowriter_reviews.wise_session_id and f.resolved_by_verdict_id is null)`;
+const requiredUnreviewedSql = sql`(${R.inclusionReason} in ('new_tutor', 'random_sample') and ${R.currentVerdictId} is null)`;
+
+async function loadAvailableReview(db: Database, now: Date, queueLimit: number): Promise<AutowriterReview> {
   const today = bangkokDateKey(now);
   const window = gateWindow(today);
   const queueSince = addDays(today, -(REVIEW_QUEUE_DAYS - 1));
-  const openFlagSql = sql`exists (select 1 from feedback_autowriter_flags f
-    where f.wise_session_id = feedback_autowriter_reviews.wise_session_id and f.resolved_by_verdict_id is null)`;
-  const reviews = await db.select().from(R).where(or(
-    gte(R.bangkokDate, queueSince),
-    isNull(R.currentVerdictId),
-    openFlagSql,
-  )).orderBy(desc(R.classEndedAt)).limit(QUEUE_LIMIT);
-  const ids = reviews.map((review) => review.wiseSessionId);
+  const [gateFacts, windowReviews, flagged, unreviewed, recent, totals] = await Promise.all([
+    loadGateFacts(db, window),
+    db.select().from(R).where(and(gte(R.bangkokDate, window.start), notInPersonReviewSql)),
+    db.select().from(R).where(and(openFlagSql, notInPersonReviewSql)),
+    db.select().from(R).where(and(requiredUnreviewedSql, notInPersonReviewSql)).orderBy(desc(R.classEndedAt)).limit(UNREVIEWED_LIMIT),
+    db.select().from(R).where(and(gte(R.bangkokDate, queueSince), notInPersonReviewSql)).orderBy(desc(R.classEndedAt)).limit(queueLimit),
+    db.select({
+      needsReview: sql<number>`count(*) filter (where ${requiredUnreviewedSql})`.mapWith(Number),
+      flagged: sql<number>`count(*) filter (where ${openFlagSql})`.mapWith(Number),
+      all: count(),
+    }).from(R).where(and(or(gte(R.bangkokDate, queueSince), requiredUnreviewedSql, openFlagSql), notInPersonReviewSql)),
+  ]);
+  const queueReviews = [...new Map([...flagged, ...unreviewed, ...recent].map((row) => [row.wiseSessionId, row])).values()];
+  const ids = [...new Set([...queueReviews, ...windowReviews].map((review) => review.wiseSessionId))];
   const byIds = <T>(load: () => Promise<T[]>) => ids.length > 0 ? load() : Promise.resolve([] as T[]);
-
-  const [posts, verdicts, flags, fixEvents, sessions, versions, metrics, lastDaily, incidents, lastRun, criticalFlags] = await Promise.all([
+  const [posts, verdicts, flags, fixEvents, sessions, versions, metrics, lastDaily, incidents, lastRun] = await Promise.all([
     byIds(() => db.select().from(P).where(inArray(P.wiseSessionId, ids))),
     byIds(() => db.select().from(V).where(inArray(V.wiseSessionId, ids))),
     byIds(() => db.select().from(FL).where(inArray(FL.wiseSessionId, ids))),
@@ -531,16 +593,19 @@ export async function loadAutowriterReview(db: Database, input: { now?: Date } =
       .orderBy(PC.wiseSessionId, desc(PCV.observedAt))),
     db.select().from(M).where(gte(M.metricDate, window.start)),
     db.select().from(G).where(eq(G.evalKind, "daily")).orderBy(desc(G.bangkokDate)).limit(1),
+    // The latest 50, plus every critical incident still waiting for the owner.
     db.select().from(I).where(or(
       gte(I.createdAt, new Date(now.getTime() - REVIEW_QUEUE_DAYS * 24 * 60 * 60 * 1000)),
-      isNull(I.acknowledgedAt),
-    )).orderBy(desc(I.createdAt)).limit(50),
+      and(eq(I.severity, "critical"), isNull(I.acknowledgedAt), sql`${I.pushStatus} <> 'sent'`),
+    )).orderBy(desc(I.createdAt)).limit(100),
     db.select().from(RUNS).orderBy(desc(RUNS.startedAt)).limit(1),
-    db.select({ total: count() }).from(FL).where(and(eq(FL.suggestedSeverity, "critical"), isNull(FL.resolvedByVerdictId))),
   ]);
   return buildAutowriterReview({
     now,
-    reviews,
+    gateFacts,
+    windowReviews,
+    queueReviews,
+    queueTotals: totals[0] ?? { needsReview: 0, flagged: 0, all: 0 },
     posts,
     verdicts,
     flags,
@@ -555,6 +620,27 @@ export async function loadAutowriterReview(db: Database, input: { now?: Date } =
     lastDailyGate: lastDaily[0] ?? null,
     incidents,
     lastRun: lastRun[0] ?? null,
-    unresolvedCriticalFlags: criticalFlags[0]?.total ?? 0,
   });
+}
+
+/**
+ * Read-only loader for the page and `GET /api/feedback-autowriter/review`. A missing review table (SQLSTATE 42P01:
+ * migration 0100 not applied) is a typed "unavailable" payload; any other failure propagates — it is not the same
+ * thing and must not look like it.
+ */
+export async function loadAutowriterReview(
+  db: Database,
+  input: { now?: Date; queueLimit?: number } = {},
+): Promise<AutowriterReview | AutowriterReviewUnavailable> {
+  try {
+    return await loadAvailableReview(db, input.now ?? new Date(), input.queueLimit ?? QUEUE_LIMIT);
+  } catch (error) {
+    if (isMissingRelationError(error)) return { available: false, reason: "review_tables_missing" };
+    throw error;
+  }
+}
+
+/** For logs: an error's name and SQLSTATE only (database errors can carry lesson text in their parameters). */
+export function reviewLoadErrorSummary(error: unknown): { errorName: string; sqlState: string | null } {
+  return { errorName: error instanceof Error ? error.name : "UnknownError", sqlState: sqlStateOf(error) };
 }

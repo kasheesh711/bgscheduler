@@ -1,9 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { OWNER_WEB_WISE_USER_ID, classifySessionFixEvents, postEventWindow, type FixEventInput, type PostForMatching } from "../fix-events";
+import {
+  OWNER_WEB_WISE_USER_ID,
+  UNMATCHED_API_CRITICAL_FROM,
+  classifySessionFixEvents,
+  matchingPostsForSession,
+  postEventWindow,
+  type FixEventInput,
+  type PostForMatching,
+  type SessionForMatching,
+} from "../fix-events";
 
 const API = "69366668c05630afe5d8a2a4";
 const TUTOR = "696e2c4343579bbada2340f8";
-const SESSION = "6aba47d069f1f327513ac027";
+const SESSION = "6a0000000000000000000a01";
 
 let counter = 0;
 function event(at: string, overrides: Partial<FixEventInput> = {}): FixEventInput {
@@ -94,9 +103,86 @@ describe("classifySessionFixEvents", () => {
     expect(ours).toMatchObject({ actorKind: "autowriter_first", postId: "post-first" });
   });
 
-  it("without a known API user, nothing is ours", () => {
-    const [save] = classifySessionFixEvents([event("2026-09-29T08:39:45.495Z")], { posts: [firstShot], apiActorId: null });
-    expect(save.actorKind).toBe("other_staff");
+  it("trusts a recorded event time only inside the post's own window", () => {
+    // The POST path's read-back took a later API save for ours: that save stays a stranger's, ours matches by window.
+    const [ours, later] = classifySessionFixEvents([event("2026-09-29T08:39:45.495Z"), event("2026-09-29T09:30:00Z")], {
+      posts: [{ ...firstShot, eventAt: new Date("2026-09-29T09:30:00Z") }], apiActorId: API,
+    });
+    expect([ours.actorKind, later.actorKind]).toEqual(["autowriter_first", "api_actor_unmatched"]);
+  });
+
+  it("refuses to classify without the API user's id (it would read our own saves as staff fixes)", () => {
+    expect(() => classifySessionFixEvents([event("2026-09-29T08:39:45.495Z")], { posts: [firstShot], apiActorId: "" })).toThrow(/WISE_USER_ID/u);
+  });
+
+  it("reports an API save on a class we never posted, without counting it as a fix", () => {
+    const classified = classifySessionFixEvents([
+      event("2026-09-29T09:00:00Z", { actorWiseUserId: TUTOR, actorRole: "TEACHER" }),
+      event("2026-09-29T09:10:00Z"),
+    ], { posts: [], apiActorId: API });
+    expect(classified.map((row) => [row.actorKind, row.countsAsFix])).toEqual([["tutor", false], ["api_actor_unmatched", false]]);
+  });
+});
+
+describe("matchingPostsForSession", () => {
+  const session = (overrides: Partial<SessionForMatching> = {}): SessionForMatching => ({
+    wiseSessionId: SESSION,
+    state: "verified",
+    postStartedAt: new Date("2026-09-29T14:09:17.797Z"),
+    verifiedEventAt: new Date("2026-09-29T14:09:17.871Z"),
+    metadata: { post: { postFinishedAt: "2026-09-29T14:09:17.911Z" } },
+    ...overrides,
+  });
+  // As `.feedback-autowriter/correct-posts.ts` records an owner-approved correction.
+  const corrected = {
+    post: { postFinishedAt: "2026-09-29T14:09:17.911Z" },
+    corrections: [{
+      fields: ["improvement", "homework"], reason: "synthetic reason", fromSha256: "a".repeat(64), toSha256: "b".repeat(64),
+      at: "2026-09-29T18:07:12.757Z", by: "owner@example.com (one-time correction, owner-approved)",
+    }],
+  };
+
+  it("leaves a class whose POST is in flight for the next run", () => {
+    expect(matchingPostsForSession(session({ state: "posting" }), [])).toBeNull();
+    expect(matchingPostsForSession(session({ state: "awaiting_event" }), [])).toBeNull();
+  });
+
+  it("explains our settled POST from the row until its first shot is recorded", () => {
+    const posts = matchingPostsForSession(session(), [])!;
+    expect(posts).toMatchObject([{ kind: "first_shot", synthetic: true, eventAt: new Date("2026-09-29T14:09:17.871Z") }]);
+    const [ours] = classifySessionFixEvents([event("2026-09-29T14:09:17.871Z")], { posts, apiActorId: API });
+    expect(ours).toMatchObject({ actorKind: "autowriter_first", postId: null });
+    // Never for a class that was not posted.
+    expect(matchingPostsForSession(session({ state: "held", postStartedAt: null }), [])).toEqual([]);
+  });
+
+  it("treats every metadata.corrections entry like the nickname fix: the correction's API save is ours, not unmatched", () => {
+    const posts = matchingPostsForSession(session({ metadata: corrected }), [])!;
+    expect(posts.map((post) => [post.kind, post.dedupeKey ?? null])).toEqual([
+      ["first_shot", null],
+      ["correction", `correction:${SESSION}:2026-09-29T18:07:12.757Z`],
+    ]);
+    const classified = classifySessionFixEvents([
+      event("2026-09-29T14:09:17.871Z"),
+      // The re-post, 4 s before the script stamped its read-back.
+      event("2026-09-29T18:07:08.506Z"),
+    ], { posts, apiActorId: API });
+    expect(classified.map((row) => [row.actorKind, row.countsAsFix])).toEqual([["autowriter_first", false], ["autowriter_correction", true]]);
+    // Without the entry the same save is an unmatched API write (after go-live: a critical page).
+    const bare = classifySessionFixEvents([event("2026-09-29T14:09:17.871Z"), event("2026-09-29T18:07:08.506Z")], {
+      posts: matchingPostsForSession(session(), [])!, apiActorId: API,
+    });
+    expect(bare[1]).toMatchObject({ actorKind: "api_actor_unmatched", countsAsFix: true });
+    expect(bare[1].eventAt.getTime()).toBeGreaterThan(UNMATCHED_API_CRITICAL_FROM.getTime());
+  });
+
+  it("does not add a one-time re-post twice once the backfill recorded it", () => {
+    const recorded: PostForMatching[] = [
+      { id: "first", kind: "first_shot", postStartedAt: new Date("2026-09-29T14:09:17.797Z"), postFinishedAt: null, eventAt: null },
+      { id: "fix", kind: "correction", postStartedAt: null, postFinishedAt: new Date("2026-09-29T18:07:12.757Z"), eventAt: null,
+        dedupeKey: `correction:${SESSION}:2026-09-29T18:07:12.757Z` },
+    ];
+    expect(matchingPostsForSession(session({ metadata: corrected }), recorded)!.map((post) => post.id)).toEqual(["first", "fix"]);
   });
 });
 

@@ -1,27 +1,36 @@
 import { describe, expect, it } from "vitest";
 import {
   PROVEN_TUTOR_KEYS,
+  ROSTER_SIGHTING_SLACK_MS,
   addDays,
   bangkokDateKey,
   bangkokDayBounds,
   buildDailyMetrics,
   classifyCoverage,
   computeGateFacts,
+  countsTowardFix,
   coverageRatio,
+  downgradeOf,
   dailyGateDate,
   emptyCoverageCounts,
   evaluateGate,
+  fixRoundBucket,
+  floorPercent,
   gateWindow,
   isAccurate,
+  metricDates,
   nextExpansionSize,
+  postingWindowEligibility,
   reviewInclusion,
+  tutorWroteFirst,
   wilsonLowerBound,
+  type ControlStateChange,
   type GateInput,
 } from "../quality";
 
 const gate = (overrides: Partial<GateInput> = {}): GateInput => ({
   reviewed: 20, accurate: 20, criticalVerdicts: 0, unresolvedCriticalFlags: 0, pendingFlaggedReviews: 0,
-  coverageNum: 8, coverageDen: 10, ...overrides,
+  requiredPending: 0, unrecordedPosts: 0, unexplainedApiWrites: 0, coverageNum: 8, coverageDen: 10, ...overrides,
 });
 
 describe("wilsonLowerBound (two-sided 95%)", () => {
@@ -55,12 +64,13 @@ describe("classifyCoverage", () => {
   it.each([
     ["verified", "verified", "posted"],
     ["awaiting_event", null, "posted"],
-    ["skipped_human", "human_submission", "excluded_tutor_first"],
-    ["skipped_scope", "tutor_off_at_deadline", "excluded_tutor_off"],
+    // Handed back at the deadline: without window facts the class counts (fail-closed).
+    ["skipped_scope", "tutor_off_at_deadline", "miss_expired"],
     ["skipped_scope", "class_type_GROUP", "excluded_scope"],
-    ["held", "student_count_0", "excluded_absent"],
-    ["held", "attendance_30pct", "excluded_absent"],
-    ["held", "student_not_wise_user", "excluded_absent"],
+    // Open decision D-03, taken fail-closed: an absence hold is still a miss until the owner rules it correct.
+    ["held", "student_count_0", "miss_held"],
+    ["held", "attendance_30pct", "miss_held"],
+    ["held", "student_not_wise_user", "miss_held"],
     ["held", "glm:unfaithful:…", "miss_held"],
     ["expired", "deadline_passed_or_too_close", "miss_expired"],
     ["rejected", null, "miss_failed"],
@@ -79,15 +89,149 @@ describe("classifyCoverage", () => {
     expect(classifyCoverage({ state: "skipped_scope", reason: "session_type_in_person_title" })).toBeNull();
   });
 
-  it("counts a class the autowriter never saw only when proven online one-to-one", () => {
-    expect(classifyCoverage({ state: null, reason: null, provenOnlineOneToOne: true })).toBe("miss_unseen");
-    expect(classifyCoverage({ state: null, reason: null, provenOnlineOneToOne: false })).toBeNull();
+  it("counts a class the autowriter never saw only when proven online one-to-one and on the roster", () => {
+    const workable = { onRoster: true, workable: true, tutorOffThroughout: false };
+    expect(classifyCoverage({ state: null, reason: null, provenOnlineOneToOne: true, eligibility: workable })).toBe("miss_unseen");
+    expect(classifyCoverage({ state: null, reason: null, provenOnlineOneToOne: false, eligibility: workable })).toBeNull();
+    expect(classifyCoverage({ state: null, reason: null, provenOnlineOneToOne: true, eligibility: { ...workable, onRoster: false, workable: false } })).toBeNull();
+  });
+
+  it("excludes a class the switches never let us write, whatever its state — but never a posted one", () => {
+    const notLive = { onRoster: true, workable: false, tutorOffThroughout: false };
+    const tutorOff = { onRoster: true, workable: false, tutorOffThroughout: true };
+    expect(classifyCoverage({ state: null, reason: null, provenOnlineOneToOne: true, eligibility: notLive })).toBe("excluded_not_live");
+    expect(classifyCoverage({ state: null, reason: null, provenOnlineOneToOne: true, eligibility: tutorOff })).toBe("excluded_tutor_off");
+    expect(classifyCoverage({ state: "held", reason: "glm:unfaithful", eligibility: notLive })).toBe("excluded_not_live");
+    expect(classifyCoverage({ state: "expired", reason: null, eligibility: tutorOff })).toBe("excluded_tutor_off");
+    expect(classifyCoverage({ state: "verified", reason: null, eligibility: notLive })).toBe("posted");
+  });
+
+  it("counts a class handed back at the deadline as the tutor's only when they were switched off the whole window", () => {
+    const workable = { onRoster: true, workable: true, tutorOffThroughout: false };
+    const tutorOff = { onRoster: true, workable: false, tutorOffThroughout: true };
+    expect(classifyCoverage({ state: "skipped_scope", reason: "tutor_off_at_deadline", eligibility: tutorOff })).toBe("excluded_tutor_off");
+    // Workable for hours, then switched off: the autowriter could have written it — a miss.
+    expect(classifyCoverage({ state: "skipped_scope", reason: "tutor_off_at_deadline", eligibility: workable })).toBe("miss_expired");
+  });
+
+  it("counts a skipped class as the tutor's only when they wrote before we started writing", () => {
+    expect(classifyCoverage({ state: "skipped_human", reason: "human_submission", tutorWroteFirst: true })).toBe("excluded_tutor_first");
+    expect(classifyCoverage({ state: "skipped_human", reason: "submission_changed_to_human", tutorWroteFirst: false })).toBe("miss_late");
+    // Not proven either way → a miss (fail-closed).
+    expect(classifyCoverage({ state: "skipped_human", reason: "human_submission" })).toBe("miss_late");
+  });
+
+  it("counts a class still unsettled after its posting window as expired, even before the sweep expires it", () => {
+    expect(classifyCoverage({ state: "pending", reason: "attendance_unknown", windowClosed: true })).toBe("miss_expired");
+    expect(classifyCoverage({ state: "awaiting_recording", reason: null, windowClosed: true })).toBe("miss_expired");
+    expect(classifyCoverage({ state: "posting", reason: null, windowClosed: true })).toBe("pending");
+    expect(classifyCoverage({ state: "pending", reason: null, windowClosed: false })).toBe("pending");
   });
 
   it("coverage is posted over posted plus misses", () => {
-    const counts = { ...emptyCoverageCounts(), posted: 7, miss_held: 2, miss_unseen: 1, excluded_tutor_first: 5, pending: 3 };
+    const counts = { ...emptyCoverageCounts(), posted: 7, miss_held: 1, miss_late: 1, miss_unseen: 1, excluded_tutor_first: 5, pending: 3 };
     expect(coverageRatio(counts)).toEqual({ num: 7, den: 10, ratio: 0.7 });
     expect(coverageRatio(emptyCoverageCounts()).ratio).toBeNull();
+  });
+});
+
+describe("postingWindowEligibility", () => {
+  const TUTOR = "tutor-a";
+  const at = (iso: string) => new Date(iso);
+  const window = { start: at("2026-09-29T03:00:00Z"), end: at("2026-10-01T16:29:59Z") };
+  const change = (iso: string, mode: ControlStateChange["mode"], disabledTutors: string[] = []): ControlStateChange =>
+    ({ changedAt: at(iso), mode, disabledTutors });
+
+  it("assumes live and every tutor on before the history starts (fail-closed)", () => {
+    expect(postingWindowEligibility({ teacherId: TUTOR, window, history: [] })).toEqual({ onRoster: true, workable: true, tutorOffThroughout: false });
+    expect(postingWindowEligibility({ teacherId: TUTOR, window, history: [change("2026-09-30T00:00:00Z", "off")] }).workable).toBe(true);
+  });
+
+  it("judges by the switches during the class's own window, not today's", () => {
+    // Off for the whole window, switched live only afterwards: not workable.
+    const offThenLive = [change("2026-09-28T00:00:00Z", "off"), change("2026-10-02T00:00:00Z", "live")];
+    expect(postingWindowEligibility({ teacherId: TUTOR, window, history: offThenLive })).toMatchObject({ workable: false, tutorOffThroughout: false });
+    // Live at some point of the window: workable, even if off since.
+    const liveThenOff = [change("2026-09-28T00:00:00Z", "live"), change("2026-09-29T02:00:00Z", "off"), change("2026-09-30T00:00:00Z", "live"), change("2026-09-30T01:00:00Z", "off")];
+    expect(postingWindowEligibility({ teacherId: TUTOR, window, history: liveThenOff }).workable).toBe(true);
+    // The tutor was switched off whenever the mode was live.
+    const tutorOff = [change("2026-09-28T00:00:00Z", "live", [TUTOR])];
+    expect(postingWindowEligibility({ teacherId: TUTOR, window, history: tutorOff })).toMatchObject({ workable: false, tutorOffThroughout: true });
+    // Switched off only after the window: still workable.
+    const offLater = [change("2026-09-28T00:00:00Z", "live"), change("2026-10-05T00:00:00Z", "live", [TUTOR])];
+    expect(postingWindowEligibility({ teacherId: TUTOR, window, history: offLater }).workable).toBe(true);
+  });
+
+  it("counts an unseen class only while its account was on the roster", () => {
+    const history = [change("2026-09-28T00:00:00Z", "live")];
+    const joinedLater = { firstSeenAt: at("2026-10-03T00:00:00Z"), lastSeenAt: at("2026-10-05T00:00:00Z") };
+    expect(postingWindowEligibility({ teacherId: TUTOR, window, history, roster: joinedLater })).toMatchObject({ onRoster: false, workable: false });
+    const joinedMidWindow = { firstSeenAt: at("2026-09-30T00:00:00Z"), lastSeenAt: at("2026-10-05T00:00:00Z") };
+    expect(postingWindowEligibility({ teacherId: TUTOR, window, history, roster: joinedMidWindow })).toMatchObject({ onRoster: true, workable: true });
+    const leftBefore = { firstSeenAt: at("2026-09-01T00:00:00Z"), lastSeenAt: new Date(window.start.getTime() - ROSTER_SIGHTING_SLACK_MS - 1) };
+    expect(postingWindowEligibility({ teacherId: TUTOR, window, history, roster: leftBefore }).onRoster).toBe(false);
+    expect(postingWindowEligibility({ teacherId: TUTOR, window, history, roster: null }).onRoster).toBe(false);
+  });
+});
+
+describe("tutorWroteFirst", () => {
+  it("needs a recorded save before our first writer call (successful or not)", () => {
+    const started = new Date("2026-09-29T13:40:00Z");
+    // The tutor wrote while we were still waiting for the evidence.
+    expect(tutorWroteFirst({ firstWriterCallAt: null, firstHumanSaveAt: new Date("2026-09-29T13:30:00Z") })).toBe(true);
+    expect(tutorWroteFirst({ firstWriterCallAt: started, firstHumanSaveAt: new Date("2026-09-29T13:30:00Z") })).toBe(true);
+    // We had started (a draft, or a writer outage): the tutor's later save is our miss.
+    expect(tutorWroteFirst({ firstWriterCallAt: started, firstHumanSaveAt: new Date("2026-09-29T14:30:00Z") })).toBe(false);
+    // A save not mirrored yet cannot prove anything: a miss until it is.
+    expect(tutorWroteFirst({ firstWriterCallAt: started, firstHumanSaveAt: null })).toBe(false);
+    expect(tutorWroteFirst({ firstWriterCallAt: null, firstHumanSaveAt: null })).toBe(false);
+  });
+});
+
+describe("downgradeOf", () => {
+  const approve = { verdict: "approve" as const, severity: null };
+  const needsFix = (severity: "cosmetic" | "factual" | "critical") => ({ verdict: "needs_fix" as const, severity });
+  it("calls any milder verdict on a major or critical judgement a downgrade, and nothing else", () => {
+    expect(downgradeOf({ current: needsFix("critical"), openCriticalFlag: false, next: approve })).toBe("critical");
+    expect(downgradeOf({ current: needsFix("critical"), openCriticalFlag: false, next: needsFix("factual") })).toBe("critical");
+    expect(downgradeOf({ current: needsFix("critical"), openCriticalFlag: false, next: needsFix("critical") })).toBeNull();
+    expect(downgradeOf({ current: needsFix("factual"), openCriticalFlag: false, next: approve })).toBe("factual");
+    expect(downgradeOf({ current: needsFix("factual"), openCriticalFlag: false, next: needsFix("cosmetic") })).toBe("factual");
+    expect(downgradeOf({ current: needsFix("factual"), openCriticalFlag: false, next: needsFix("factual") })).toBeNull();
+    expect(downgradeOf({ current: needsFix("cosmetic"), openCriticalFlag: false, next: approve })).toBeNull();
+    expect(downgradeOf({ current: null, openCriticalFlag: true, next: needsFix("factual") })).toBe("critical");
+    expect(downgradeOf({ current: null, openCriticalFlag: false, next: approve })).toBeNull();
+  });
+});
+
+describe("measured fixes", () => {
+  const approvedAt = new Date("2026-09-30T10:00:00Z");
+  it("count saves after our first post up to the owner's current Approve", () => {
+    const before = { countsAsFix: true, eventAt: new Date("2026-09-30T09:00:00Z") };
+    const after = { countsAsFix: true, eventAt: new Date("2026-10-02T09:00:00Z") };
+    expect(countsTowardFix(before, { verdict: "approve", createdAt: approvedAt })).toBe(true);
+    expect(countsTowardFix(after, { verdict: "approve", createdAt: approvedAt })).toBe(false);
+    expect(countsTowardFix(after, { verdict: "needs_fix", createdAt: approvedAt })).toBe(true);
+    expect(countsTowardFix(after, null)).toBe(true);
+    expect(countsTowardFix({ countsAsFix: false, eventAt: before.eventAt }, null)).toBe(false);
+  });
+
+  it("put a class in a fix-round bucket only once the owner approved it", () => {
+    expect(fixRoundBucket({ verdict: "approve" }, 0)).toBe("zero");
+    expect(fixRoundBucket({ verdict: "approve" }, 1)).toBe("one");
+    expect(fixRoundBucket({ verdict: "approve" }, 2)).toBe("two");
+    expect(fixRoundBucket({ verdict: "approve" }, 5)).toBe("threePlus");
+    expect(fixRoundBucket({ verdict: "needs_fix" }, 1)).toBe("unresolved");
+    expect(fixRoundBucket(null, 0)).toBe("unresolved");
+  });
+});
+
+describe("floorPercent", () => {
+  it("rounds a measured ratio down, so it never reads as a threshold it missed", () => {
+    expect(floorPercent(wilsonLowerBound(87, 99))).toBe("79.9%");
+    expect(floorPercent(0.8)).toBe("80%");
+    expect(floorPercent(0.7225)).toBe("72.2%");
+    expect(floorPercent(0.29)).toBe("29%");
   });
 });
 
@@ -119,14 +263,42 @@ describe("evaluateGate", () => {
     expect(evaluateGate(gate({ coverageNum: 6, coverageDen: 10 })).status).toBe("head_start");
     expect(evaluateGate(gate({ coverageNum: 0, coverageDen: 0 })).status).toBe("head_start");
   });
+
+  it("does not pass on a hand-picked subset: 16/16 reviewed with one required post still unreviewed is a head start", () => {
+    expect(evaluateGate(gate({ reviewed: 16, accurate: 16 })).status).toBe("pass");
+    const pending = evaluateGate(gate({ reviewed: 16, accurate: 16, requiredPending: 1 }));
+    expect(pending.status).toBe("head_start");
+    expect(pending.reasons).toContain("1 required post(s) not yet reviewed");
+  });
+
+  it("does not pass while a posted class's first shot is not recorded", () => {
+    const result = evaluateGate(gate({ unrecordedPosts: 2 }));
+    expect(result.status).toBe("head_start");
+    expect(result.reasons).toContain("2 posted class(es) whose first shot is not recorded yet");
+  });
+
+  it("blocks on an API write to Wise no post explains until the owner acknowledges it", () => {
+    const result = evaluateGate(gate({ unexplainedApiWrites: 1 }));
+    expect(result.status).toBe("blocked_critical");
+    expect(result.reasons).toContain("1 API write(s) to Wise no post explains, not acknowledged");
+  });
+
+  it("reports a bound just under the threshold as under it (87/99 → 79.9%, head start)", () => {
+    const result = evaluateGate(gate({ reviewed: 99, accurate: 87 }));
+    expect(result.wilsonLower).toBeLessThan(0.8);
+    expect(result.status).toBe("head_start");
+    expect(result.reasons).toContain("accuracy lower bound 79.9% < 80% (87/99)");
+  });
 });
 
 describe("computeGateFacts", () => {
   const window = { start: "2026-09-17", end: "2026-09-30" };
-  it("counts required reviews with verdicts only, criticals whatever the sampling, and live coverage", () => {
+  it("counts required reviews with verdicts only, criticals whatever the sampling, pending required posts, and coverage", () => {
     const facts = computeGateFacts({
       window,
       unresolvedCriticalFlags: 0,
+      unrecordedPosts: 1,
+      unexplainedApiWrites: 2,
       reviews: [
         { bangkokDate: "2026-09-29", inclusionReason: "new_tutor", verdict: { verdict: "approve", severity: null }, hasOpenFlag: false },
         { bangkokDate: "2026-09-29", inclusionReason: "new_tutor", verdict: { verdict: "needs_fix", severity: "factual" }, hasOpenFlag: false },
@@ -138,14 +310,16 @@ describe("computeGateFacts", () => {
         { bangkokDate: "2026-09-01", inclusionReason: "new_tutor", verdict: { verdict: "approve", severity: null }, hasOpenFlag: true },
       ],
       metrics: [
-        { metricDate: "2026-09-29", tutorKey: "*", liveMode: true, posted: 8, eligible: 9 },
-        { metricDate: "2026-09-28", tutorKey: "*", liveMode: false, posted: 0, eligible: 4 },
-        { metricDate: "2026-09-29", tutorKey: "Mimi", liveMode: true, posted: 6, eligible: 6 },
+        { metricDate: "2026-09-29", tutorKey: "*", posted: 8, eligible: 9 },
+        // Every class was judged by its own window, so a day's all-tutor row counts whatever the mode today.
+        { metricDate: "2026-09-28", tutorKey: "*", posted: 1, eligible: 4 },
+        { metricDate: "2026-09-29", tutorKey: "Mimi", posted: 6, eligible: 6 },
+        { metricDate: "2026-09-01", tutorKey: "*", posted: 1, eligible: 9 },
       ],
     });
     expect(facts).toEqual({
       reviewed: 2, accurate: 1, criticalVerdicts: 1, unresolvedCriticalFlags: 0, pendingFlaggedReviews: 1,
-      coverageNum: 8, coverageDen: 9,
+      requiredPending: 1, unrecordedPosts: 1, unexplainedApiWrites: 2, coverageNum: 9, coverageDen: 13,
     });
   });
 });
@@ -184,6 +358,17 @@ describe("Bangkok dates", () => {
     expect(dailyGateDate(new Date("2026-09-29T15:27:00Z"))).toBe("2026-09-29");
     expect(dailyGateDate(new Date("2026-09-29T14:27:00Z"))).toBe("2026-09-28");
   });
+
+  it("recomputes every date of the next gate window and the dashboard window, never just the last few days", () => {
+    // 00:27 Bangkok on D+3: the class of D expired at 23:38 on D+2 must still be recomputed.
+    const afterExpiry = metricDates(new Date("2026-10-01T17:27:00Z"));
+    expect(afterExpiry).toContain("2026-09-29");
+    expect(afterExpiry).toHaveLength(15);
+    expect(afterExpiry[0]).toBe("2026-09-18");
+    expect(afterExpiry.at(-1)).toBe("2026-10-02");
+    // From 22:00 the gate window ends today: 14 dates.
+    expect(metricDates(new Date("2026-10-01T15:27:00Z"))).toEqual(Array.from({ length: 14 }, (_, index) => addDays("2026-09-18", index)));
+  });
 });
 
 describe("buildDailyMetrics", () => {
@@ -197,6 +382,9 @@ describe("buildDailyMetrics", () => {
         { tutorKey: "Ek", coverage: "miss_held" },
         { tutorKey: "Ek", coverage: "excluded_tutor_first" },
         { tutorKey: "Ek", coverage: null },
+        { tutorKey: "Mimi", coverage: "miss_held", absenceHold: true },
+        { tutorKey: "Mimi", coverage: "miss_late" },
+        { tutorKey: "Ek", coverage: "excluded_not_live" },
       ],
       reviews: [
         { tutorKey: "Mimi", inclusionReason: "new_tutor", verdict: { verdict: "needs_fix", severity: "cosmetic" }, measuredFixCount: 1, correctionsVerified: 1 },
@@ -207,9 +395,9 @@ describe("buildDailyMetrics", () => {
     const all = rows.find((row) => row.tutorKey === "*")!;
     expect(all).toMatchObject({
       posted: 3, required: 3, reviewed: 2, requiredPending: 1, accurate: 1, cosmetic: 1, factual: 1, critical: 0,
-      eligible: 4, held: 1, excludedTutorFirst: 1, measuredFixClasses: 1, correctionsVerified: 1,
+      eligible: 6, held: 2, heldAbsence: 1, late: 1, excludedTutorFirst: 1, excludedNotLive: 1, measuredFixClasses: 1, correctionsVerified: 1,
     });
-    expect(rows.find((row) => row.tutorKey === "Ek")).toMatchObject({ posted: 1, eligible: 2, held: 1 });
+    expect(rows.find((row) => row.tutorKey === "Ek")).toMatchObject({ posted: 1, eligible: 2, held: 1, excludedNotLive: 1 });
     expect(rows.map((row) => row.tutorKey)).toEqual(["Mimi", "Ek", "*"]);
   });
 });

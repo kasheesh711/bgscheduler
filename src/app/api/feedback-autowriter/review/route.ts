@@ -6,7 +6,9 @@ import { loadAutowriterReview } from "@/lib/feedback-autowriter/review-data";
 
 /**
  * Quality and Review tabs of the autowriter dashboard (read-only). Admin role only: the payload carries the
- * posted feedback text. Page scope is enforced by the proxy as for the dashboard route.
+ * posted feedback text. Page scope is enforced by the proxy as for the dashboard route. Before migration 0100 the
+ * payload is `{ available: false, reason: "review_tables_missing" }` with HTTP 200 (an optional table, not a
+ * failure); any other error is a 500.
  */
 export async function GET() {
   try {

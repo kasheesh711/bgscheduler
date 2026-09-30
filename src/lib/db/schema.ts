@@ -6219,7 +6219,7 @@ export const wiseWebhookEvents = pgTable("wise_webhook_events", {
 ]);
 
 // ---------------------------------------------------------------------------
-// Feedback autowriter operating loop, Phase 1 (migration 0099): measurement.
+// Feedback autowriter operating loop, Phase 1 (migration 0100): measurement.
 // Immutable post log, owner verdicts, fixes measured from Wise activity events,
 // quality metrics and the expansion gate. Nothing here writes to Wise.
 // ---------------------------------------------------------------------------
@@ -6253,10 +6253,13 @@ export const feedbackAutowriterPosts = pgTable("feedback_autowriter_posts", {
   verification: jsonb("verification").$type<Record<string, unknown>>().notNull().default({}),
   provenance: text("provenance").$type<"snapshot" | "live" | "backfill">().notNull(),
   reconstruction: jsonb("reconstruction").$type<Record<string, unknown>>(),
+  /** A writer's own idempotency key (e.g. `nickname-fix:<session>`): the same re-post is never recorded twice. */
+  dedupeKey: text("dedupe_key"),
   recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
   settledAt: timestamp("settled_at", { withTimezone: true }),
 }, (table) => [
   uniqueIndex("feedback_autowriter_posts_first_shot_idx").on(table.wiseSessionId).where(sql`${table.kind} = 'first_shot'`),
+  uniqueIndex("feedback_autowriter_posts_dedupe_idx").on(table.dedupeKey).where(sql`${table.dedupeKey} IS NOT NULL`),
   index("feedback_autowriter_posts_session_idx").on(table.wiseSessionId, table.recordedAt),
 ]);
 
@@ -6275,9 +6278,14 @@ export const feedbackAutowriterVerdicts = pgTable("feedback_autowriter_verdicts"
   reviewer: text("reviewer").notNull(),
   source: text("source").$type<"dashboard" | "backfill">().notNull(),
   supersedesId: uuid("supersedes_id").references((): AnyPgColumn => feedbackAutowriterVerdicts.id),
+  /** This verdict replaced a harsher judgement (critical verdict or flag, or a major verdict) with a milder one, with a note. */
+  downgradedFrom: text("downgraded_from").$type<"critical" | "factual">(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("feedback_autowriter_verdicts_session_idx").on(table.wiseSessionId, table.createdAt),
+  check("feedback_autowriter_verdicts_downgrade_check", sql`${table.downgradedFrom} IS NULL OR (btrim(coalesce(${table.note}, '')) <> '' AND (
+    (${table.downgradedFrom} = 'critical' AND coalesce(${table.severity}, '') <> 'critical')
+    OR (${table.downgradedFrom} = 'factual' AND coalesce(${table.severity}, '') NOT IN ('critical', 'factual'))))`),
 ]);
 
 /** One per posted class: review inclusion (drawn once, before any flag) and the current verdict. */
@@ -6296,7 +6304,10 @@ export const feedbackAutowriterReviews = pgTable("feedback_autowriter_reviews", 
   flagSources: text("flag_sources").array().notNull().default(sql`'{}'::text[]`),
   currentVerdictId: uuid("current_verdict_id").references(() => feedbackAutowriterVerdicts.id),
   reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+  /** Saves after our first post, up to the current Approve (all of them while there is none) … */
   measuredFixCount: integer("measured_fix_count").notNull().default(0),
+  /** … and the same saves per actor kind. */
+  measuredFixesByActor: jsonb("measured_fixes_by_actor").$type<Record<string, number>>().notNull().default({}),
   correctionsVerified: integer("corrections_verified").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -6383,13 +6394,17 @@ export const feedbackAutowriterDailyMetrics = pgTable("feedback_autowriter_daily
   eligible: integer("eligible").notNull().default(0),
   excludedScope: integer("excluded_scope").notNull().default(0),
   excludedTutorFirst: integer("excluded_tutor_first").notNull().default(0),
-  excludedAbsent: integer("excluded_absent").notNull().default(0),
   excludedTutorOff: integer("excluded_tutor_off").notNull().default(0),
+  excludedNotLive: integer("excluded_not_live").notNull().default(0),
   pending: integer("pending").notNull().default(0),
   unseen: integer("unseen").notNull().default(0),
   held: integer("held").notNull().default(0),
+  /** Of `held`: absence or partial-attendance holds (still misses until interview decision D-03). */
+  heldAbsence: integer("held_absence").notNull().default(0),
   expired: integer("expired").notNull().default(0),
   failed: integer("failed").notNull().default(0),
+  /** A person wrote the class after our judged draft was ready. */
+  late: integer("late").notNull().default(0),
   measuredFixClasses: integer("measured_fix_classes").notNull().default(0),
   correctionsVerified: integer("corrections_verified").notNull().default(0),
   policyVersion: integer("policy_version").notNull(),
@@ -6408,10 +6423,14 @@ export const feedbackAutowriterGateEvaluations = pgTable("feedback_autowriter_ga
   rosterTutors: text("roster_tutors").array().notNull(),
   reviewed: integer("reviewed").notNull(),
   accurate: integer("accurate").notNull(),
-  wilsonLower: numeric("wilson_lower", { precision: 5, scale: 4 }).notNull(),
+  /** Unrounded (a rounded bound could read as meeting a threshold the status says it missed). */
+  wilsonLower: doublePrecision("wilson_lower").notNull(),
   critical: integer("critical").notNull(),
   pendingCriticalFlags: integer("pending_critical_flags").notNull(),
   pendingFlaggedReviews: integer("pending_flagged_reviews").notNull(),
+  requiredPending: integer("required_pending").notNull(),
+  unrecordedPosts: integer("unrecorded_posts").notNull(),
+  unexplainedApiWrites: integer("unexplained_api_writes").notNull(),
   coverageNum: integer("coverage_num").notNull(),
   coverageDen: integer("coverage_den").notNull(),
   status: text("status").$type<"insufficient_data" | "below_head_start" | "head_start" | "pass" | "blocked_critical">().notNull(),
@@ -6421,6 +6440,7 @@ export const feedbackAutowriterGateEvaluations = pgTable("feedback_autowriter_ga
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("feedback_autowriter_gate_evaluations_daily_idx").on(table.bangkokDate).where(sql`${table.evalKind} = 'daily'`),
+  check("feedback_autowriter_gate_evaluations_wilson_lower_check", sql`${table.wilsonLower} >= 0 AND ${table.wilsonLower} <= 1`),
 ]);
 
 /** Run ledger of the hourly review job; single-flight through the partial unique index on `running`. */
@@ -6435,4 +6455,29 @@ export const feedbackAutowriterReviewRuns = pgTable("feedback_autowriter_review_
 }, (table) => [
   uniqueIndex("feedback_autowriter_review_runs_single_running_idx").on(table.status).where(sql`${table.status} = 'running'`),
   index("feedback_autowriter_review_runs_started_idx").on(table.startedAt),
+]);
+
+/**
+ * Every change of the control row's mode or tutor switches (trigger on `feedback_autowriter_control`), append-only.
+ * Coverage judges each class by the switches during its own posting window.
+ */
+export const feedbackAutowriterControlHistory = pgTable("feedback_autowriter_control_history", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  changedAt: timestamp("changed_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  mode: text("mode").$type<"off" | "shadow" | "live">().notNull(),
+  disabledTutors: jsonb("disabled_tutors").$type<string[]>().notNull(),
+  source: text("source").$type<"seed" | "change">().notNull(),
+  updatedBy: text("updated_by"),
+}, (table) => [
+  index("feedback_autowriter_control_history_changed_idx").on(table.changedAt),
+]);
+
+/** Roster accounts as the review job saw them (a class the autowriter never saw is judged only while on the roster). */
+export const feedbackAutowriterRosterAccounts = pgTable("feedback_autowriter_roster_accounts", {
+  wiseTeacherUserId: text("wise_teacher_user_id").primaryKey(),
+  tutorKey: text("tutor_key").notNull(),
+  firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+}, (table) => [
+  check("feedback_autowriter_roster_accounts_seen_check", sql`${table.lastSeenAt} >= ${table.firstSeenAt}`),
 ]);

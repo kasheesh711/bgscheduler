@@ -9,10 +9,16 @@ const VerdictBody = z.object({
   wiseSessionId: z.string().regex(/^[0-9a-f]{24}$/iu),
   /** The first shot's fields_sha256 the owner was shown. */
   fieldsSha256: z.string().regex(/^[0-9a-f]{64}$/u),
+  /** The current verdict the page showed (null: none) — a newer one makes the page stale (409). */
+  currentVerdictId: z.uuid().nullable(),
+  /** The open flags the page showed — only these are resolved; any other open flag makes the page stale (409). */
+  seenFlagIds: z.array(z.uuid()).max(100),
   verdict: z.enum(["approve", "needs_fix"]),
   severity: z.enum(["cosmetic", "factual", "critical"]).nullish(),
   criticalCategory: z.enum(["wrong_person", "billing_status", "invented_content", "should_not_have_posted"]).nullish(),
   note: z.string().trim().max(2_000).nullish(),
+  /** The owner confirmed replacing a harsher judgement (critical, or major) with a milder verdict (a note is then required). */
+  confirmDowngrade: z.boolean().optional(),
 }).strict();
 
 /**

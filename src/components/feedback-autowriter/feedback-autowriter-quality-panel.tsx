@@ -1,9 +1,11 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatBangkokIsoDate, formatBangkokShortDateTime } from "@/lib/bangkok-time";
+import { floorPercent } from "@/lib/feedback-autowriter/quality";
 import type { AutowriterReview } from "@/lib/feedback-autowriter/review-data";
 import { cn } from "@/lib/utils";
 
@@ -23,8 +25,14 @@ const GATE_STATUS_TONE: Record<AutowriterReview["gate"]["status"], string> = {
   blocked_critical: "border-red-300 bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-200",
 };
 
-function percent(value: number | null, digits = 1): string {
-  return value === null ? "—" : `${(value * 100).toFixed(digits)}%`;
+/** A measured ratio, rounded down (79.99…% never reads as the 80% it missed). */
+function percent(value: number | null): string {
+  return value === null ? "—" : floorPercent(value);
+}
+
+/** A threshold (round by definition). */
+function threshold(value: number): string {
+  return `${Math.round(value * 100)}%`;
 }
 
 function Criterion({ ok, label, value }: { ok: boolean; label: string; value: string }) {
@@ -74,16 +82,54 @@ export function LowerBoundBar({ value, headStart, pass }: { value: number; headS
         ))}
       </div>
       <div className="relative h-4 text-[10px] text-muted-foreground">
-        <span className="absolute -translate-x-1/2" style={{ left: `${headStart * 100}%` }}>{Math.round(headStart * 100)}% head start</span>
-        <span className="absolute translate-x-1" style={{ left: `${pass * 100}%` }}>{Math.round(pass * 100)}% pass</span>
+        <span className="absolute -translate-x-1/2" style={{ left: `${headStart * 100}%` }}>{threshold(headStart)} head start</span>
+        <span className="absolute translate-x-1" style={{ left: `${pass * 100}%` }}>{threshold(pass)} pass</span>
       </div>
     </div>
   );
 }
 
-export function FeedbackAutowriterQualityPanel({ review }: { review: AutowriterReview }) {
+function AcknowledgeButton({ incidentId, onChanged }: { incidentId: string; onChanged: () => Promise<void> | void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const acknowledge = async () => {
+    if (!window.confirm("Acknowledge this incident? Its pushes stop and it no longer keeps the review job red.")) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/feedback-autowriter/incidents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "acknowledge", incidentId }),
+      });
+      if (!response.ok) {
+        const json = await response.json().catch(() => null) as { error?: unknown } | null;
+        setError(typeof json?.error === "string" ? json.error : `HTTP ${response.status}`);
+        return;
+      }
+      await onChanged();
+    } catch {
+      setError("Could not acknowledge.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <span className="inline-flex items-center gap-1">
+      <Button size="xs" variant="outline" disabled={busy} onClick={() => void acknowledge()}>Acknowledge</Button>
+      {error ? <span role="status" className="text-xs text-red-700">{error}</span> : null}
+    </span>
+  );
+}
+
+export function FeedbackAutowriterQualityPanel({ review, canControl = false, onChanged = () => undefined }: {
+  review: AutowriterReview;
+  /** The owner may acknowledge incidents. */
+  canControl?: boolean;
+  onChanged?: () => Promise<void> | void;
+}) {
   const { gate, coverage } = review;
-  const misses = coverage.miss_held + coverage.miss_expired + coverage.miss_failed + coverage.miss_unseen;
+  const misses = coverage.miss_held + coverage.miss_late + coverage.miss_expired + coverage.miss_failed + coverage.miss_unseen;
   return (
     <div className="flex flex-col gap-4">
       <div className="grid gap-4 lg:grid-cols-3">
@@ -104,24 +150,27 @@ export function FeedbackAutowriterQualityPanel({ review }: { review: AutowriterR
           </div>
           <ul className="mt-3 divide-y text-sm">
             <Criterion ok={gate.reviewed > 0 && gate.wilsonLower >= gate.thresholds.passLowerBound}
-              label={`Accuracy lower bound ≥ ${percent(gate.thresholds.passLowerBound, 0)}`}
+              label={`Accuracy lower bound ≥ ${threshold(gate.thresholds.passLowerBound)}`}
               value={`${percent(gate.wilsonLower)} (${gate.accurate}/${gate.reviewed} accurate)`} />
             <Criterion ok={gate.criticalVerdicts === 0} label="No critical verdicts" value={String(gate.criticalVerdicts)} />
             <Criterion ok={gate.unresolvedCriticalFlags === 0} label="No unresolved critical flags" value={String(gate.unresolvedCriticalFlags)} />
+            <Criterion ok={gate.unexplainedApiWrites === 0} label="No unexplained API write to Wise" value={`${gate.unexplainedApiWrites} not acknowledged`} />
             <Criterion ok={gate.coverage !== null && gate.coverage >= gate.thresholds.minCoverage}
-              label={`Coverage ≥ ${percent(gate.thresholds.minCoverage, 0)}`}
+              label={`Coverage ≥ ${threshold(gate.thresholds.minCoverage)}`}
               value={`${percent(gate.coverage)} (${gate.coverageNum}/${gate.coverageDen})`} />
             <Criterion ok={gate.pendingFlaggedReviews === 0} label="No flagged post waiting for review" value={String(gate.pendingFlaggedReviews)} />
+            <Criterion ok={gate.requiredPending === 0} label="Every required post reviewed" value={`${gate.requiredPending} waiting`} />
+            <Criterion ok={gate.unrecordedPosts === 0} label="Every posted first shot recorded" value={`${gate.unrecordedPosts} missing`} />
           </ul>
           {gate.reasons.length > 0 ? (
             <p className="mt-2 text-xs text-muted-foreground">{gate.reasons.join(" · ")}</p>
           ) : null}
           <p className="mt-2 text-xs text-muted-foreground">
             Roster: {gate.currentTutors} tutors → next step {gate.nextExpansionSize} (+50%, rounded up) once the gate passes and
-            you confirm. A lower bound of {percent(gate.thresholds.headStartLowerBound, 0)} starts the head start for the next tutors.
+            you confirm. A lower bound of {threshold(gate.thresholds.headStartLowerBound)} starts the head start for the next tutors.
           </p>
         </Card>
-        <Card title="Coverage (live days in the window)">
+        <Card title="Coverage (window)">
           <p className="text-sm">
             <strong className="text-lg tabular-nums">{percent(gate.coverage)}</strong>
             <span className="text-muted-foreground"> posted of eligible ({gate.coverageNum}/{gate.coverageDen})</span>
@@ -129,19 +178,23 @@ export function FeedbackAutowriterQualityPanel({ review }: { review: AutowriterR
           <div className="mt-3 flex flex-wrap gap-1.5">
             <Chip label="Posted" value={coverage.posted} tone="good" />
             <Chip label="Held" value={coverage.miss_held} tone="miss" />
+            <Chip label="of which absence" value={coverage.heldAbsence} tone="miss" />
+            <Chip label="Written after our draft" value={coverage.miss_late} tone="miss" />
             <Chip label="Expired" value={coverage.miss_expired} tone="miss" />
             <Chip label="Failed" value={coverage.miss_failed} tone="miss" />
             <Chip label="Never seen" value={coverage.miss_unseen} tone="miss" />
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">
             <Chip label="Tutor wrote first" value={coverage.excluded_tutor_first} tone="muted" />
-            <Chip label="Student absent" value={coverage.excluded_absent} tone="muted" />
             <Chip label="Tutor switched off" value={coverage.excluded_tutor_off} tone="muted" />
+            <Chip label="Not live (shadow/off)" value={coverage.excluded_not_live} tone="muted" />
             <Chip label="Out of scope" value={coverage.excluded_scope} tone="muted" />
             <Chip label="Still in progress" value={coverage.pending} tone="muted" />
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            Misses: {misses}. Excluded and in-progress classes count on neither side; in-person classes are not counted.
+            Misses: {misses}. Each class is judged by the mode and its tutor&apos;s switch during its own posting window.
+            Excluded and in-progress classes count on neither side; in-person classes are not counted. Absence holds
+            count as misses until interview decision D-03.
           </p>
           <div className="mt-4 border-t pt-3">
             <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Fix rounds per post</div>
@@ -168,7 +221,7 @@ export function FeedbackAutowriterQualityPanel({ review }: { review: AutowriterR
                 <TableHead className="text-right">Posted</TableHead>
                 <TableHead className="text-right">Reviewed</TableHead>
                 <TableHead className="text-right">Accurate</TableHead>
-                <TableHead className="text-right">Cosmetic / factual / critical</TableHead>
+                <TableHead className="text-right">Cosmetic / major / critical</TableHead>
                 <TableHead className="text-right">Coverage</TableHead>
                 <TableHead className="text-right">Classes fixed</TableHead>
               </TableRow>
@@ -197,7 +250,7 @@ export function FeedbackAutowriterQualityPanel({ review }: { review: AutowriterR
             <TableRow>
               <TableHead>Tutor</TableHead>
               <TableHead>Review</TableHead>
-              <TableHead className="text-right">Posts</TableHead>
+              <TableHead className="text-right">Texts in Wise</TableHead>
               <TableHead className="text-right">Reviewed</TableHead>
               <TableHead className="text-right">Accurate</TableHead>
               <TableHead className="text-right">Lower bound</TableHead>
@@ -211,7 +264,7 @@ export function FeedbackAutowriterQualityPanel({ review }: { review: AutowriterR
               <TableRow key={tutor.tutorKey}>
                 <TableCell className="font-medium">{tutor.displayName}</TableCell>
                 <TableCell>{tutor.phase === "full_review" ? "Every post (new)" : "30% sample + flagged"}</TableCell>
-                <TableCell className="text-right">{tutor.posted}</TableCell>
+                <TableCell className="text-right">{tutor.textsInWise}</TableCell>
                 <TableCell className="text-right">{tutor.reviewed}</TableCell>
                 <TableCell className="text-right">{tutor.accurate}</TableCell>
                 <TableCell className="text-right">{tutor.reviewed > 0 ? percent(tutor.wilsonLower) : "—"}</TableCell>
@@ -235,16 +288,19 @@ export function FeedbackAutowriterQualityPanel({ review }: { review: AutowriterR
                 <span className="flex-1">{incident.summary}</span>
                 <span className="text-xs text-muted-foreground">
                   {formatBangkokShortDateTime(incident.createdAt)}
-                  {incident.severity === "critical" ? ` · push ${incident.pushStatus}` : ""}
+                  {incident.severity === "critical" ? ` · push ${incident.pushStatus === "failed" ? "FAILED — not delivered" : incident.pushStatus}` : ""}
                   {incident.lastPushError ? ` · ${incident.lastPushError}` : ""}
+                  {incident.acknowledgedAt ? ` · acknowledged by ${incident.acknowledgedBy ?? "—"} ${formatBangkokShortDateTime(incident.acknowledgedAt)}` : ""}
                 </span>
+                {canControl && incident.severity === "critical" && !incident.acknowledgedAt
+                  ? <AcknowledgeButton incidentId={incident.id} onChanged={onChanged} /> : null}
               </li>
             ))}
           </ul>
         )}
         <p className="mt-3 text-xs text-muted-foreground">
           Review job: {review.lastRun
-            ? `${review.lastRun.status} · started ${formatBangkokShortDateTime(review.lastRun.startedAt)}${review.lastRun.errorSummary ? ` · ${review.lastRun.errorSummary}` : ""}`
+            ? `${review.lastRun.status} · started ${formatBangkokShortDateTime(review.lastRun.startedAt)}${review.lastRun.errorSummary ? ` · ${review.lastRun.errorSummary}` : ""}${review.lastRun.dailyGateSkipped ? ` · nightly gate not recorded yet (${review.lastRun.dailyGateSkipped})` : ""}`
             : "has not run yet"}
         </p>
       </Card>

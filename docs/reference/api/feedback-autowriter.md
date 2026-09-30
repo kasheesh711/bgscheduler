@@ -1,6 +1,6 @@
 # API — Feedback Autowriter
 
-Seven method/path endpoints. Meaning, rules and the state machine live in [the feature page](../../features/feedback-autowriter.md); day-to-day operation in [the runbook](../../operations/feedback-autowriter.md).
+Eight method/path endpoints. Meaning, rules and the state machine live in [the feature page](../../features/feedback-autowriter.md); day-to-day operation in [the runbook](../../operations/feedback-autowriter.md).
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
@@ -11,6 +11,7 @@ Seven method/path endpoints. Meaning, rules and the state machine live in [the f
 | `GET` | `/api/internal/feedback-autowriter/review` | cron secret | Operating-loop review job, `27 * * * *`. Also runnable by the owner from Data Health. |
 | `GET` | `/api/feedback-autowriter/review` | admin session (page scope via the proxy) | Quality and Review tabs payload. |
 | `POST` | `/api/feedback-autowriter/verdicts` | owner only (`requireClassroomOperationsOwner`) | Records a verdict on a class's first shot. |
+| `POST` | `/api/feedback-autowriter/incidents` | owner only (`requireClassroomOperationsOwner`) | Acknowledges an incident (stops its pushes; an undelivered critical one stops keeping the review job red). |
 
 ## `POST /api/wise/webhook`
 
@@ -55,15 +56,15 @@ Runs `runAutowriterJob()` with a 740-second budget: reconcile `posting`/`awaitin
 
 [`src/app/api/internal/feedback-autowriter/review/route.ts`](../../../src/app/api/internal/feedback-autowriter/review/route.ts), `maxDuration = 300`, wrapped in `withCronInvocationAudit({ jobKey: "feedback_autowriter_review" })`.
 
-Runs `runAutowriterReviewJob()` ([`review-job.ts`](../../../src/lib/feedback-autowriter/review-job.ts)): first-shot snapshots, fix events, review rows, flags, daily metrics, the daily gate row and the incident outbox. Reads our database only; never calls Wise.
+Runs `runAutowriterReviewJob()` ([`review-job.ts`](../../../src/lib/feedback-autowriter/review-job.ts)): pushes of incidents already waiting, the activity-mirror check, first-shot snapshots, fix events (every autowriter class; none without `WISE_USER_ID`), review rows, verification and fix flags, review counts, the metrics of every date in the gate window, the daily gate row (only when every earlier step succeeded and the Wise activity mirror, checked before the run read it, synced within 30 minutes without stopping at its page cap) and the pushes of this run's incidents (no push is started that the 300 s budget could cut off). Reads our database only; never calls Wise.
 
-**Responses:** `200` with a `ReviewJobResult` (`ok`, `syncRunId`, `firstShots`, `fixEvents`, `reviewsCreated`, `flags`, `metricRows`, `dailyGate`, `incidents`, `stepErrors`) · `200 { ok: true, skipped: true, reason }` when disabled, on a preview deployment, or while another run holds the lock · `401` · `503` when a step failed or a critical incident could not be pushed.
+**Responses:** `200` with a `ReviewJobResult` (`ok`, `syncRunId`, `firstShots`, `fixEvents`, `reviewsCreated`, `verificationFlags`, `flags`, `reviewCountsUpdated`, `metricRows`, `dailyGate`, `dailyGateSkipped` — why a due daily row was not written, `incidents`, `undeliveredCritical`, `stepErrors`) · `200 { ok: true, skipped: true, reason }` when disabled, on a preview deployment, or while another run holds the lock · `401` · `503` when a step failed, `WISE_USER_ID` is missing, or a critical incident is undelivered and not acknowledged.
 
 ## `GET /api/feedback-autowriter/review`
 
-[`src/app/api/feedback-autowriter/review/route.ts`](../../../src/app/api/feedback-autowriter/review/route.ts). Returns the `AutowriterReview` built by [`loadAutowriterReview`](../../../src/lib/feedback-autowriter/review-data.ts): the live gate evaluation over the rolling 14 Bangkok days, coverage breakdown, fix-round histogram, daily and per-tutor rows, the review queue (first shot, current text, word diff, measured saves, corrections, verdict log, open flags) and recent incidents. In-person classes are left out.
+[`src/app/api/feedback-autowriter/review/route.ts`](../../../src/app/api/feedback-autowriter/review/route.ts). Returns the `AutowriterReview` built by [`loadAutowriterReview`](../../../src/lib/feedback-autowriter/review-data.ts) (`available: true`): the live gate over the rolling 14 Bangkok days, computed by the same SQL as the nightly row (`loadGateFacts`); coverage breakdown; fix-round histogram; daily and per-tutor rows; the review queue — every flagged and every unreviewed required class, then the latest others up to 300 — with exact `queueTotals`, each item carrying the first shot (and its outcome), current text, word diff, measured saves (`counted` or listed after the Approve), corrections, verdict log and open flags (with ids, for the verdict's pins); and incidents (recent ones plus every unacknowledged undelivered critical one). In-person classes are left out.
 
-**Responses:** `200` · `401` · `403` (not an admin) · `500 { error }`.
+**Responses:** `200` · `200 { available: false, reason: "review_tables_missing" }` before migration 0100 (an optional table, not a failure) · `401` · `403` (not an admin) · `500 { error }` for any other failure (logged by error name and SQLSTATE only).
 
 ## `POST /api/feedback-autowriter/verdicts`
 
@@ -73,11 +74,20 @@ Runs `runAutowriterReviewJob()` ([`review-job.ts`](../../../src/lib/feedback-aut
 |---|---|
 | `wiseSessionId` | 24 hex characters; the class must have a review row |
 | `fieldsSha256` | 64 hex characters: the first shot's `fields_sha256` the owner was shown (a mismatch is `409`) |
+| `currentVerdictId` | UUID or `null`: the class's current verdict as the page showed it (another one now is `409`) |
+| `seenFlagIds` | up to 100 UUIDs: the class's open flags as the page showed them (any other open flag now is `409`); only these are resolved |
 | `verdict` | `approve` or `needs_fix` |
-| `severity` | `cosmetic` \| `factual` \| `critical` — required for `needs_fix`, absent for `approve` |
+| `severity` | `cosmetic` \| `factual` (the owner's "major": a real fix) \| `critical` — required for `needs_fix`, absent for `approve` |
 | `criticalCategory` | `wrong_person` \| `billing_status` \| `invented_content` \| `should_not_have_posted` — required exactly when `severity` is `critical` |
-| `note` | optional, up to 2,000 characters |
+| `note` | optional, up to 2,000 characters; required for a downgrade |
+| `confirmDowngrade` | optional `true`: the owner confirms replacing a harsher judgement with a milder verdict — a critical current verdict or open critical flag with anything non-critical, or a major (`factual`) verdict with cosmetic or Approve |
 
-One transaction appends the verdict (superseding the current one), sets `reviews.current_verdict_id`, resolves the class's open flags, stamps `metadata.triagedAt` on its `verified` session row (ending the Soniox review window) and, for a critical verdict, queues a critical incident.
+One transaction appends the verdict (superseding the current one), sets `reviews.current_verdict_id`, resolves the flags the page showed, stamps `metadata.triagedAt` on the `verified` session row for an accurate verdict only (Approve or cosmetic — ending the Soniox review window; a major or critical verdict removes it again; `updated_at` is left alone), records `downgraded_from`, and, for a critical verdict, queues a critical incident.
 
-**Responses:** `200 { ok: true, verdictId, supersedesId, resolvedFlags, criticalIncident }` · `400` (bad JSON, body or shape) · `401` · `403 "Only Kevin can record autowriter verdicts."` · `404` (no review row) · `409` (stale pin) · `500`.
+**Responses:** `200 { ok: true, verdictId, supersedesId, resolvedFlags, criticalIncident, downgradedFrom }` · `400` (bad JSON, body or shape; a downgrade without a note) · `401` · `403 "Only Kevin can record autowriter verdicts or acknowledge incidents."` · `404` (no review row) · `409` (stale page: another first shot, current verdict or set of open flags; or a downgrade not confirmed) · `500`.
+
+## `POST /api/feedback-autowriter/incidents`
+
+[`src/app/api/feedback-autowriter/incidents/route.ts`](../../../src/app/api/feedback-autowriter/incidents/route.ts). Strict body `{ "action": "acknowledge", "incidentId": "<uuid>" }`. Sets `acknowledged_at` / `acknowledged_by` once (idempotent): the outbox stops pushing it, and an undelivered critical incident no longer keeps the review job red.
+
+**Responses:** `200 { ok: true, id, acknowledgedAt, acknowledgedBy }` · `400` · `401` · `403` · `404` (no such incident) · `500`.

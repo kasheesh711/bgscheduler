@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
-import { NICKNAME_FIX_ACTOR, NICKNAME_FIX_REASON, planReviewBackfill } from "../backfill";
-import { FORM_FIELD_ORDERS, proveFirstShot, reverseRenameVariants } from "../first-shot";
+import { NICKNAME_FIX_ACTOR, NICKNAME_FIX_REASON, ONE_TIME_CORRECTION_ACTOR, planReviewBackfill, type BackfillSessionInput } from "../backfill";
+import {
+  FORM_FIELD_ORDERS,
+  landedProblemCategory,
+  postMayHaveLanded,
+  proveFirstShot,
+  readOneTimeCorrections,
+  reverseRenameVariants,
+} from "../first-shot";
 import { buildFeedbackPostBody } from "../session";
 import type { AutowriterSessionRow } from "../store";
 import { feedbackBodyHash, fieldsHash } from "../submit";
@@ -10,8 +17,8 @@ const BILLING = { sessionStatus: "COMPLETED", creditsConsumed: 1 };
 
 const ORIGINAL: FeedbackFieldAnswers = {
   topics: "Vocabulary building: synonyms and word classes.",
-  performance: "Worawut matched most words quickly; Worawut hesitated on adverbs.",
-  improvement: "Worawut should review adverbs of frequency.",
+  performance: "Alexander matched most words quickly; Alexander hesitated on adverbs.",
+  improvement: "Alexander should review adverbs of frequency.",
   homework: "",
 };
 
@@ -27,8 +34,8 @@ function renamed(fields: FeedbackFieldAnswers, from: string, to: string): Feedba
 function row(overrides: Partial<AutowriterSessionRow>): AutowriterSessionRow {
   return {
     id: "00000000-0000-4000-8000-000000000001",
-    wiseSessionId: "6aba30a97d4c21cce9b574d1",
-    wiseClassId: "698ec3c7444ac4ea909bbb02",
+    wiseSessionId: "6a0000000000000000000b01",
+    wiseClassId: "690000000000000000000b02",
     wiseTeacherUserId: "695369c028118f629edcb9cb",
     scheduledEndAt: new Date("2026-09-29T12:30:00Z"),
     deadlineAt: new Date("2026-09-30T16:59:59Z"),
@@ -77,12 +84,12 @@ describe("first-shot proof", () => {
   });
 
   it("undoes a nickname rename even when the original already used the nickname somewhere", () => {
-    // The first shot already said "Bas" once; the rename then turned every "Worawut" into "Bas".
-    const original = { ...ORIGINAL, homework: "Bas: finish worksheet 4." };
-    const current = renamed(original, "Worawut", "Bas");
-    const variants = reverseRenameVariants(current, { from: "Worawut", to: "Bas" });
+    // The first shot already said "Alex" once; the rename then turned every "Alexander" into "Alex".
+    const original = { ...ORIGINAL, homework: "Alex: finish worksheet 4." };
+    const current = renamed(original, "Alexander", "Alex");
+    const variants = reverseRenameVariants(current, { from: "Alexander", to: "Alex" });
     expect(variants).toHaveLength(2 ** 4 - 1);
-    // Reversing every "Bas" is wrong here (the homework one was original); the proof finds the right subset.
+    // Reversing every "Alex" is wrong here (the homework one was original); the proof finds the right subset.
     const proof = proveFirstShot({
       bodyHash: hashFor(original),
       billing: BILLING,
@@ -92,16 +99,17 @@ describe("first-shot proof", () => {
   });
 
   it("leaves words that merely contain the nickname alone", () => {
-    const variants = reverseRenameVariants({ topics: "Basic Bas", performance: "", improvement: "", homework: "" }, { from: "Worawut", to: "Bas" });
-    expect(variants).toEqual([{ topics: "Basic Worawut", performance: "", improvement: "", homework: "" }]);
+    const variants = reverseRenameVariants({ topics: "Alexis Alex", performance: "", improvement: "", homework: "" }, { from: "Alexander", to: "Alex" });
+    expect(variants).toEqual([{ topics: "Alexis Alexander", performance: "", improvement: "", homework: "" }]);
   });
 });
 
 describe("planReviewBackfill", () => {
   const fixAt = "2026-09-29T13:25:26.402Z";
+  const none: ReadonlySet<string> = new Set();
 
   it("records the unchanged first shot of a row nobody edited", () => {
-    const plan = planReviewBackfill([{ row: row({}), pcFirstVersion: null, hasFirstShot: false, hasNicknameCorrection: false }]);
+    const plan = planReviewBackfill([{ row: row({}), pcFirstVersion: null, hasFirstShot: false, recordedDedupeKeys: none }]);
     expect(plan.firstShots).toHaveLength(1);
     expect(plan.firstShots[0].method).toBe("unchanged");
     expect(plan.firstShots[0].values).toMatchObject({
@@ -112,12 +120,12 @@ describe("planReviewBackfill", () => {
   });
 
   it("proves a renamed row from Class Feedback's first version, and records the rename as a correction", () => {
-    const current = renamed(ORIGINAL, "Worawut", "Bas");
+    const current = renamed(ORIGINAL, "Alexander", "Alex");
     const plan = planReviewBackfill([{
-      row: row({ fields: current, fieldsSha256: fieldsHash(current), metadata: { nicknameFix: { from: "Worawut", to: "Bas", at: fixAt, by: "kevhsh7@gmail.com (one-time fix)" } } }),
+      row: row({ fields: current, fieldsSha256: fieldsHash(current), metadata: { nicknameFix: { from: "Alexander", to: "Alex", at: fixAt, by: "owner@example.com (one-time fix)" } } }),
       pcFirstVersion: { id: "v1", observedAt: new Date("2026-09-29T13:43:37Z"), fields: ORIGINAL },
       hasFirstShot: false,
-      hasNicknameCorrection: false,
+      recordedDedupeKeys: none,
     }]);
     expect(plan.firstShots[0]).toMatchObject({ method: "pc_first_version" });
     expect(plan.firstShots[0].values.fields).toEqual(ORIGINAL);
@@ -127,13 +135,13 @@ describe("planReviewBackfill", () => {
     });
   });
 
-  it("falls back to the reverse rename when Class Feedback only saw the renamed text (Gift's class)", () => {
-    const current = renamed(ORIGINAL, "Worawut", "Bas");
+  it("falls back to the reverse rename when Class Feedback only saw the renamed text (a class Class Feedback first read after the rename)", () => {
+    const current = renamed(ORIGINAL, "Alexander", "Alex");
     const plan = planReviewBackfill([{
-      row: row({ fields: current, metadata: { nicknameFix: { from: "Worawut", to: "Bas", at: fixAt } } }),
+      row: row({ fields: current, metadata: { nicknameFix: { from: "Alexander", to: "Alex", at: fixAt } } }),
       pcFirstVersion: { id: "v2", observedAt: new Date("2026-09-29T13:43:37Z"), fields: current },
       hasFirstShot: false,
-      hasNicknameCorrection: false,
+      recordedDedupeKeys: none,
     }]);
     expect(plan.firstShots[0].method).toBe("reverse_rename");
     expect(plan.firstShots[0].values.fields).toEqual(ORIGINAL);
@@ -141,11 +149,120 @@ describe("planReviewBackfill", () => {
 
   it("reports a row it cannot prove, and never re-plans what is already recorded", () => {
     const plan = planReviewBackfill([
-      { row: row({ wiseSessionId: "a".repeat(24), fields: { ...ORIGINAL, topics: "edited by hand" } }), pcFirstVersion: null, hasFirstShot: false, hasNicknameCorrection: false },
-      { row: row({ wiseSessionId: "b".repeat(24), metadata: { nicknameFix: { from: "X", to: "Y", at: fixAt } } }), pcFirstVersion: null, hasFirstShot: true, hasNicknameCorrection: true },
+      { row: row({ wiseSessionId: "a".repeat(24), fields: { ...ORIGINAL, topics: "edited by hand" } }), pcFirstVersion: null, hasFirstShot: false, recordedDedupeKeys: none },
+      { row: row({ wiseSessionId: "b".repeat(24), metadata: { nicknameFix: { from: "X", to: "Y", at: fixAt } } }), pcFirstVersion: null, hasFirstShot: true, recordedDedupeKeys: new Set([`nickname-fix:${"b".repeat(24)}`]) },
     ]);
-    expect(plan.unverified).toEqual([{ wiseSessionId: "a".repeat(24), reason: "no candidate hashes to body_hash", candidates: 1 }]);
+    expect(plan.unverified).toEqual([{ wiseSessionId: "a".repeat(24), reason: "no candidate hashes to body_hash", candidates: 1, landedUnverified: false }]);
     expect(plan.alreadyRecorded).toEqual(["b".repeat(24)]);
     expect(plan.corrections).toEqual([]);
+  });
+
+  // As `.feedback-autowriter/correct-posts.ts` records an owner-approved correction (synthetic ids and text).
+  function correctedInput(overrides: Partial<BackfillSessionInput> = {}): BackfillSessionInput {
+    const corrected = { ...ORIGINAL, homework: "", improvement: "Adverbs of frequency." };
+    return {
+      row: row({
+        wiseSessionId: "6a0000000000000000000c01",
+        fields: corrected,
+        fieldsSha256: fieldsHash(corrected),
+        metadata: {
+          corrections: [{
+            fields: ["improvement"], reason: "synthetic: the summary invented a task", fromSha256: fieldsHash(ORIGINAL),
+            toSha256: fieldsHash(corrected), at: "2026-09-29T18:07:12.757Z", by: "owner@example.com (one-time correction, owner-approved)",
+          }],
+        },
+      }),
+      pcFirstVersion: { id: "v3", observedAt: new Date("2026-09-29T14:30:00Z"), fields: ORIGINAL },
+      hasFirstShot: false,
+      recordedDedupeKeys: none,
+      ...overrides,
+    };
+  }
+
+  it("records each metadata.corrections entry as a one-time correction post, exactly like the nickname fix", () => {
+    const plan = planReviewBackfill([correctedInput()]);
+    expect(plan.firstShots[0]).toMatchObject({ method: "pc_first_version" });
+    expect(plan.firstShots[0].values.fields).toEqual(ORIGINAL);
+    expect(plan.corrections).toHaveLength(1);
+    expect(plan.corrections[0]).toMatchObject({ source: "corrections", dedupeKey: "correction:6a0000000000000000000c01:2026-09-29T18:07:12.757Z" });
+    expect(plan.corrections[0].values).toMatchObject({
+      kind: "correction", actorKind: "script", actor: ONE_TIME_CORRECTION_ACTOR, provenance: "backfill", outcome: "verified",
+      postStartedAt: null, postFinishedAt: new Date("2026-09-29T18:07:12.757Z"), bodyHash: null,
+      reason: "synthetic: the summary invented a task", dedupeKey: "correction:6a0000000000000000000c01:2026-09-29T18:07:12.757Z",
+      verification: { fields: ["improvement"], fromSha256: fieldsHash(ORIGINAL) },
+    });
+    // The text is the one the correction put in Wise, proven by its hash.
+    expect(plan.corrections[0].values.fieldsSha256).toBe(fieldsHash(correctedInput().row.fields as never));
+    // Recorded once: a second run with the key recorded plans nothing.
+    const again = planReviewBackfill([correctedInput({ hasFirstShot: true, recordedDedupeKeys: new Set([plan.corrections[0].dedupeKey]) })]);
+    expect(again.corrections).toEqual([]);
+  });
+
+  it("does not record a re-post whose text no stored text proves", () => {
+    const input = correctedInput();
+    const metadata = input.row.metadata as { corrections: Array<Record<string, unknown>> };
+    const plan = planReviewBackfill([{ ...input, row: { ...input.row, metadata: { corrections: [{ ...metadata.corrections[0], toSha256: "f".repeat(64) }] } } }]);
+    expect(plan.corrections).toEqual([]);
+    expect(plan.unprovenCorrections).toEqual([{
+      wiseSessionId: "6a0000000000000000000c01", dedupeKey: "correction:6a0000000000000000000c01:2026-09-29T18:07:12.757Z",
+      reason: "no stored text has the re-post's hash",
+    }]);
+  });
+
+  it("finds a nickname fix's text by the next correction's fromSha256 when both happened", () => {
+    const renamedText = renamed(ORIGINAL, "Alexander", "Alex");
+    const corrected = { ...renamedText, homework: "" , improvement: "Alex should review adverbs." };
+    const plan = planReviewBackfill([{
+      row: row({
+        wiseSessionId: "6a0000000000000000000d01",
+        fields: corrected,
+        metadata: {
+          nicknameFix: { from: "Alexander", to: "Alex", at: fixAt, by: "owner@example.com (one-time fix)" },
+          corrections: [{ fields: ["improvement"], reason: "r", fromSha256: fieldsHash(renamedText), toSha256: fieldsHash(corrected), at: "2026-09-29T18:00:00Z", by: "o" }],
+        },
+      }),
+      pcFirstVersion: { id: "v4", observedAt: new Date("2026-09-29T13:00:00Z"), fields: ORIGINAL },
+      pcVersions: [
+        { id: "v4", observedAt: new Date("2026-09-29T13:00:00Z"), fields: ORIGINAL },
+        { id: "v5", observedAt: new Date("2026-09-29T14:00:00Z"), fields: renamedText },
+      ],
+      hasFirstShot: false,
+      recordedDedupeKeys: none,
+    }]);
+    expect(plan.corrections.map((entry) => [entry.source, entry.values.fieldsSha256])).toEqual([
+      ["nicknameFix", fieldsHash(renamedText)],
+      ["corrections", fieldsHash(corrected)],
+    ]);
+  });
+});
+
+describe("one-time re-posts and landed posts", () => {
+  it("reads nickname fixes and corrections from the row, oldest first, ignoring malformed entries", () => {
+    const corrections = readOneTimeCorrections("s1", {
+      corrections: [
+        { fields: ["homework"], toSha256: "b".repeat(64), fromSha256: "a".repeat(64), at: "2026-09-29T18:07:04.491Z", by: "o", reason: "r" },
+        { toSha256: "c".repeat(64), at: "not a date" },
+        { at: "2026-09-29T18:07:05Z" },
+      ],
+      nicknameFix: { from: "Alexander", to: "Alex", at: "2026-09-29T13:25:26.402Z", by: "o" },
+    });
+    expect(corrections.map((entry) => [entry.source, entry.dedupeKey])).toEqual([
+      ["nicknameFix", "nickname-fix:s1"],
+      ["corrections", "correction:s1:2026-09-29T18:07:04.491Z"],
+    ]);
+    expect(readOneTimeCorrections("s1", null)).toEqual([]);
+  });
+
+  it("says which first shots may be in Wise, and which critical category their read-back suggests", () => {
+    expect(postMayHaveLanded("verified", {})).toBe(true);
+    expect(postMayHaveLanded("verify_failed", {})).toBe(true);
+    expect(postMayHaveLanded("unknown_outcome", {})).toBe(true);
+    expect(postMayHaveLanded("rejected", { stillAutoBlank: true })).toBe(false);
+    expect(postMayHaveLanded("rejected", { stillAutoBlank: false })).toBe(true);
+    expect(postMayHaveLanded("not_sent", {})).toBe(false);
+    expect(landedProblemCategory(["field_mismatch:topics", "session_credit_entries_2"])).toBe("billing_status");
+    expect(landedProblemCategory(["status_CANCELLED"])).toBe("billing_status");
+    expect(landedProblemCategory(["foreign_submit_event_in_post_window"])).toBe("should_not_have_posted");
+    expect(landedProblemCategory(["field_mismatch:topics"])).toBeNull();
   });
 });

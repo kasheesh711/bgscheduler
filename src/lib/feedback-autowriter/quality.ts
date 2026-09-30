@@ -4,12 +4,17 @@
  * Owner decisions (29 Sep 2026, quick 260929-lop):
  * - A post is accurate when it needed no real fix: approved, or "needs fix" with cosmetic severity.
  * - Accuracy = accurate ÷ owner-reviewed posts, judged on the two-sided 95% Wilson lower bound.
- * - Coverage = posted ÷ (eligible − classes the tutor wrote first), counted on live-mode days only.
- * - Gate (rolling 14 days): lower bound ≥ 80%, zero critical verdicts, no unresolved critical flag, coverage ≥ 70%
- *   and no flagged post waiting for review. A lower bound ≥ 70% starts the head start for the next tutors.
+ * - Coverage = posted ÷ (eligible − classes the tutor wrote first). Each class is judged by the mode, its tutor's
+ *   switch and the roster during its own posting window (class end → deadline − margin), never by today's.
+ * - Gate (rolling 14 days): lower bound ≥ 80%, zero critical verdicts, no unresolved critical flag, no unexplained API
+ *   write, coverage ≥ 70%, no flagged post and no required post waiting for review, and every posted first shot
+ *   recorded. A lower bound ≥ 70% starts the head start for the next tutors.
  * - Every tutor is reviewed at 100% until their cohort has passed a gate; proven tutors drop to a random 30%
  *   sample (drawn once, before any flag) plus flagged posts.
+ * - Measured fixes: saves after our first post, per actor, up to the owner's current Approve.
  * - Expansion grows the roster by half, rounded up: 5 → 8 → 12 → 18.
+ * Open decision D-03 (which holds are correct) is taken fail-closed: every hold is a miss; absence holds are shown
+ * as a sub-count.
  */
 
 import type { AutowriterVerdictSeverity } from "@/lib/db/schema";
@@ -50,6 +55,16 @@ export function wilsonLowerBound(successes: number, trials: number, z = WILSON_Z
   return Math.max(0, (centre - margin) / (1 + z2 / trials));
 }
 
+/**
+ * A measured ratio as a percentage, rounded DOWN to `digits` decimals: 0.79999 reads "79.9%", never "80%", so a
+ * shown value never appears to meet a threshold the status says it missed. Thresholds themselves are round.
+ */
+export function floorPercent(value: number, digits = 1): string {
+  const scale = 10 ** digits;
+  const floored = Math.floor(value * 100 * scale + 1e-9) / scale;
+  return `${floored.toFixed(digits).replace(/\.0+$/u, "")}%`;
+}
+
 export interface VerdictLike {
   verdict: "approve" | "needs_fix";
   severity: AutowriterVerdictSeverity | null;
@@ -60,6 +75,56 @@ export function isAccurate(verdict: VerdictLike): boolean {
   return verdict.verdict === "approve" || (verdict.verdict === "needs_fix" && verdict.severity === "cosmetic");
 }
 
+/** How harsh a judgement is: approve 0, cosmetic 1, major (`factual`) 2, critical 3. */
+export function judgementRank(verdict: VerdictLike): number {
+  if (verdict.verdict === "approve") return 0;
+  return verdict.severity === "critical" ? 3 : verdict.severity === "factual" ? 2 : 1;
+}
+
+/**
+ * Replacing a major or critical judgement (the current verdict, or a critical flag being answered) with a milder
+ * verdict is a downgrade the owner must confirm and explain: a verdict judges the first shot as posted, so an
+ * Approve after a fix must never quietly turn an inaccurate first shot into an accurate one. Returns what is
+ * downgraded, or null.
+ */
+export function downgradeOf(input: {
+  current: VerdictLike | null;
+  openCriticalFlag: boolean;
+  next: VerdictLike;
+}): "critical" | "factual" | null {
+  const replaced = Math.max(input.current ? judgementRank(input.current) : 0, input.openCriticalFlag ? 3 : 0);
+  if (replaced < 2 || judgementRank(input.next) >= replaced) return null;
+  return replaced === 3 ? "critical" : "factual";
+}
+
+// ---------------------------------------------------------------------------
+// Measured fixes
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a classified save counts as a fix now: saves after our first post count "until satisfied", i.e. up to
+ * the owner's current Approve. A save after that Approve is listed but not counted; if a later verdict replaces
+ * the Approve, it counts again.
+ */
+export function countsTowardFix(
+  event: { countsAsFix: boolean; eventAt: Date },
+  current: { verdict: "approve" | "needs_fix"; createdAt: Date } | null,
+): boolean {
+  if (!event.countsAsFix) return false;
+  return !(current?.verdict === "approve" && event.eventAt.getTime() > current.createdAt.getTime());
+}
+
+export type FixRoundBucket = "zero" | "one" | "two" | "threePlus" | "unresolved";
+
+/** Fix rounds are final only once the owner approved the class; before that it is unresolved. */
+export function fixRoundBucket(current: { verdict: "approve" | "needs_fix" } | null, measuredFixCount: number): FixRoundBucket {
+  if (current?.verdict !== "approve") return "unresolved";
+  if (measuredFixCount === 0) return "zero";
+  if (measuredFixCount === 1) return "one";
+  if (measuredFixCount === 2) return "two";
+  return "threePlus";
+}
+
 // ---------------------------------------------------------------------------
 // Coverage
 // ---------------------------------------------------------------------------
@@ -67,29 +132,115 @@ export function isAccurate(verdict: VerdictLike): boolean {
 export type CoverageClass =
   | "posted"
   | "excluded_scope"
-  | "excluded_absent"
   | "excluded_tutor_off"
+  | "excluded_not_live"
   | "excluded_tutor_first"
   | "pending"
   | "miss_held"
+  | "miss_late"
   | "miss_expired"
   | "miss_failed"
   | "miss_unseen";
 
 export const COVERAGE_CLASSES: readonly CoverageClass[] = [
-  "posted", "miss_held", "miss_expired", "miss_failed", "miss_unseen",
-  "excluded_tutor_first", "excluded_absent", "excluded_tutor_off", "excluded_scope", "pending",
+  "posted", "miss_held", "miss_late", "miss_expired", "miss_failed", "miss_unseen",
+  "excluded_tutor_first", "excluded_tutor_off", "excluded_not_live", "excluded_scope", "pending",
 ];
 
-const MISSES = new Set<CoverageClass>(["miss_held", "miss_expired", "miss_failed", "miss_unseen"]);
+const MISSES = new Set<CoverageClass>(["miss_held", "miss_late", "miss_expired", "miss_failed", "miss_unseen"]);
+
+export function isCoverageMiss(value: CoverageClass): boolean {
+  return MISSES.has(value);
+}
 
 /** Skip reasons of an in-person class; such classes are the tutor's and are left out everywhere. */
 const ONSITE_REASONS = new Set(["session_type_OFFLINE", "session_type_in_person_title"]);
 
-/** Held because the student was absent or barely there: not the autowriter's class to write. */
+/** Held because the student was absent or barely there (open decision D-03: still a miss, shown as a sub-count). */
 export function isAbsenceHold(reason: string | null): boolean {
   if (!reason) return false;
   return reason === "student_count_0" || reason === "student_not_wise_user" || /^attendance_\d+pct$/u.test(reason);
+}
+
+/** One change of the control row's mode or tutor switches (`feedback_autowriter_control_history`). */
+export interface ControlStateChange {
+  changedAt: Date;
+  mode: "off" | "shadow" | "live";
+  disabledTutors: readonly string[];
+}
+
+/** When the review job saw an account on the code roster. */
+export interface RosterSpan {
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+}
+
+/** The job records roster sightings hourly; an account counts as on the roster this long after its last sighting. */
+export const ROSTER_SIGHTING_SLACK_MS = 2 * 60 * 60 * 1000;
+
+export interface ClassEligibility {
+  /** The account was on the roster at some point of the posting window. */
+  onRoster: boolean;
+  /** At some point of the window: on the roster, mode `live` and the tutor switched on. */
+  workable: boolean;
+  /** Whenever the window was live and on the roster, the tutor was switched off. */
+  tutorOffThroughout: boolean;
+}
+
+/**
+ * Judge a class by the switches during its own posting window. The switches are piecewise constant, so they are
+ * read at the window's start and at every change inside it. Before the first recorded change the history knows
+ * nothing: the mode counts as live and every tutor as on (fail-closed — such a class counts, as a miss if unposted).
+ * `roster` undefined means the roster is not in question (the autowriter made a row for the class); null means
+ * the account was never seen on the roster.
+ */
+export function postingWindowEligibility(input: {
+  teacherId: string | null;
+  window: { start: Date; end: Date };
+  history: readonly ControlStateChange[];
+  roster?: RosterSpan | null;
+}): ClassEligibility {
+  const start = input.window.start.getTime();
+  const end = Math.max(start, input.window.end.getTime());
+  const history = [...input.history].toSorted((a, b) => a.changedAt.getTime() - b.changedAt.getTime());
+  const roster = input.roster;
+  const rosterEnd = roster ? roster.lastSeenAt.getTime() + ROSTER_SIGHTING_SLACK_MS : null;
+  const instants = new Set<number>([start]);
+  for (const change of history) {
+    const at = change.changedAt.getTime();
+    if (at > start && at <= end) instants.add(at);
+  }
+  if (roster) {
+    const first = roster.firstSeenAt.getTime();
+    if (first > start && first <= end) instants.add(first);
+  }
+  let onRoster = false;
+  let workable = false;
+  let liveOnRoster = false;
+  for (const at of instants) {
+    const inRoster = roster === undefined || (roster !== null && at >= roster.firstSeenAt.getTime() && at <= rosterEnd!);
+    if (!inRoster) continue;
+    onRoster = true;
+    const state = history.findLast((change) => change.changedAt.getTime() <= at);
+    const mode = state?.mode ?? "live";
+    const disabled = state?.disabledTutors ?? [];
+    if (mode !== "live") continue;
+    liveOnRoster = true;
+    if (!input.teacherId || !disabled.includes(input.teacherId)) workable = true;
+  }
+  return { onRoster, workable, tutorOffThroughout: liveOnRoster && !workable };
+}
+
+/**
+ * Whether the tutor (or any person) wrote the class before we started writing it — before our first writer call,
+ * successful or not (waiting for the evidence is not a miss; a writer outage is). A person's save we have not seen
+ * (activity not mirrored yet) proves nothing: the class counts as a miss until the event arrives (the metrics are
+ * recomputed hourly).
+ */
+export function tutorWroteFirst(input: { firstWriterCallAt: Date | null; firstHumanSaveAt: Date | null }): boolean {
+  if (!input.firstHumanSaveAt) return false;
+  if (!input.firstWriterCallAt) return true;
+  return input.firstHumanSaveAt.getTime() < input.firstWriterCallAt.getTime();
 }
 
 export interface CoverageInput {
@@ -98,35 +249,54 @@ export interface CoverageInput {
   reason: string | null;
   /** For a class the autowriter never saw: proven online one-to-one (past session blocks or Wise title/type). */
   provenOnlineOneToOne?: boolean;
+  /** Mode, tutor switch and roster over the posting window; absent → workable (fail-closed). */
+  eligibility?: ClassEligibility;
+  /** The posting window (class end → deadline − margin) is over. */
+  windowClosed?: boolean;
+  /** For `skipped_human`: a person wrote before we started writing. Absent → not proven (a miss). */
+  tutorWroteFirst?: boolean;
 }
 
 /**
- * Where one roster class stands for coverage; null when it does not count at all (in-person, or an unseen class
- * not proven to be online one-to-one).
+ * Where one roster class stands for coverage; null when it does not count at all (in-person, an unseen class not
+ * proven to be online one-to-one, or one whose account was never on the roster during its window).
+ * A POST proves the class was workable; every other class the switches never let us write is excluded.
  */
 export function classifyCoverage(input: CoverageInput): CoverageClass | null {
-  const { state, reason } = input;
-  if (state === null) return input.provenOnlineOneToOne ? "miss_unseen" : null;
+  const { state, reason, eligibility } = input;
+  const notWorkable = (): CoverageClass => eligibility?.tutorOffThroughout ? "excluded_tutor_off" : "excluded_not_live";
+  if (state === null) {
+    if (!input.provenOnlineOneToOne) return null;
+    if (eligibility && !eligibility.onRoster) return null;
+    if (eligibility && !eligibility.workable) return notWorkable();
+    return "miss_unseen";
+  }
   if (state === "skipped_scope" && reason !== null && ONSITE_REASONS.has(reason)) return null;
+  if (state === "verified" || state === "awaiting_event") return "posted";
+  if (state === "skipped_scope" && reason === "tutor_off_at_deadline") {
+    // Handed back unposted because the tutor was switched off at the deadline: excluded only if they were off (or the
+    // mode not live) for the whole window; a class the autowriter could have written first is a miss.
+    return eligibility && !eligibility.workable ? notWorkable() : "miss_expired";
+  }
+  if (state === "skipped_scope") return "excluded_scope";
+  if (eligibility && !eligibility.workable) return notWorkable();
   switch (state) {
-    case "verified":
-    case "awaiting_event":
-      return "posted";
     case "skipped_human":
-      return "excluded_tutor_first";
-    case "skipped_scope":
-      return reason === "tutor_off_at_deadline" ? "excluded_tutor_off" : "excluded_scope";
+      return input.tutorWroteFirst === true ? "excluded_tutor_first" : "miss_late";
     case "held":
-      return isAbsenceHold(reason) ? "excluded_absent" : "miss_held";
+      return "miss_held";
     case "expired":
       return "miss_expired";
     case "rejected":
     case "unknown_outcome":
     case "verify_failed":
       return "miss_failed";
-    default:
-      // pending, generating, posting, awaiting_recording, transcribing, would_submit: not settled yet.
+    case "posting":
       return "pending";
+    default:
+      // pending, generating, awaiting_recording, transcribing, would_submit: still in the works — or, once the
+      // posting window is over, a class that can no longer be posted (the sweep may not have expired it yet).
+      return input.windowClosed ? "miss_expired" : "pending";
   }
 }
 
@@ -158,6 +328,12 @@ export interface GateInput {
   unresolvedCriticalFlags: number;
   /** Posts in the window with a flag no verdict has answered yet. */
   pendingFlaggedReviews: number;
+  /** Required posts in the window with no verdict yet: the gate never counts a hand-picked subset. */
+  requiredPending: number;
+  /** Posted classes in the window whose first shot is not recorded yet — still settling, or unprovable. */
+  unrecordedPosts: number;
+  /** API writes to Wise no post explains, since go-live, not yet acknowledged by the owner (critical: block). */
+  unexplainedApiWrites: number;
   coverageNum: number;
   coverageDen: number;
 }
@@ -172,31 +348,31 @@ export interface GateResult {
 export function evaluateGate(input: GateInput, thresholds = GATE_THRESHOLDS): GateResult {
   const wilsonLower = wilsonLowerBound(input.accurate, input.reviewed, thresholds.z);
   const coverage = input.coverageDen > 0 ? input.coverageNum / input.coverageDen : null;
+  const threshold = (value: number) => `${Math.round(value * 100)}%`;
   const reasons: string[] = [];
   if (input.criticalVerdicts > 0) reasons.push(`${input.criticalVerdicts} critical verdict(s) in the window`);
   if (input.unresolvedCriticalFlags > 0) reasons.push(`${input.unresolvedCriticalFlags} unresolved critical flag(s)`);
+  if (input.unexplainedApiWrites > 0) reasons.push(`${input.unexplainedApiWrites} API write(s) to Wise no post explains, not acknowledged`);
   if (input.reviewed === 0) reasons.push("no owner-reviewed posts in the window");
   else if (wilsonLower < thresholds.passLowerBound) {
-    reasons.push(`accuracy lower bound ${pct(wilsonLower)} < ${pct(thresholds.passLowerBound)} (${input.accurate}/${input.reviewed})`);
+    reasons.push(`accuracy lower bound ${floorPercent(wilsonLower)} < ${threshold(thresholds.passLowerBound)} (${input.accurate}/${input.reviewed})`);
   }
-  if (coverage === null) reasons.push("no eligible classes on live days in the window");
+  if (coverage === null) reasons.push("no eligible classes in the window");
   else if (coverage < thresholds.minCoverage) {
-    reasons.push(`coverage ${pct(coverage)} < ${pct(thresholds.minCoverage)} (${input.coverageNum}/${input.coverageDen})`);
+    reasons.push(`coverage ${floorPercent(coverage)} < ${threshold(thresholds.minCoverage)} (${input.coverageNum}/${input.coverageDen})`);
   }
   if (input.pendingFlaggedReviews > 0) reasons.push(`${input.pendingFlaggedReviews} flagged post(s) waiting for review`);
+  if (input.requiredPending > 0) reasons.push(`${input.requiredPending} required post(s) not yet reviewed`);
+  if (input.unrecordedPosts > 0) reasons.push(`${input.unrecordedPosts} posted class(es) whose first shot is not recorded yet`);
 
   let status: GateStatus;
-  if (input.criticalVerdicts > 0 || input.unresolvedCriticalFlags > 0) status = "blocked_critical";
+  if (input.criticalVerdicts > 0 || input.unresolvedCriticalFlags > 0 || input.unexplainedApiWrites > 0) status = "blocked_critical";
   else if (input.reviewed === 0) status = "insufficient_data";
   else if (wilsonLower >= thresholds.passLowerBound && coverage !== null && coverage >= thresholds.minCoverage
-    && input.pendingFlaggedReviews === 0) status = "pass";
+    && input.pendingFlaggedReviews === 0 && input.requiredPending === 0 && input.unrecordedPosts === 0) status = "pass";
   else if (wilsonLower >= thresholds.headStartLowerBound) status = "head_start";
   else status = "below_head_start";
   return { status, wilsonLower, coverage, reasons };
-}
-
-function pct(value: number): string {
-  return `${Math.round(value * 1000) / 10}%`;
 }
 
 export interface GateReviewFact {
@@ -209,7 +385,6 @@ export interface GateReviewFact {
 export interface GateMetricFact {
   metricDate: string;
   tutorKey: string;
-  liveMode: boolean;
   posted: number;
   eligible: number;
 }
@@ -217,24 +392,30 @@ export interface GateMetricFact {
 /**
  * Gate inputs for an inclusive window of Bangkok dates. Accuracy counts only required reviews that have a
  * verdict (a voluntary review of a post that was not sampled never counts); critical verdicts count whatever the
- * sampling; coverage sums the all-tutor metric rows of live-mode days.
+ * sampling; coverage sums the all-tutor metric rows (each class was already judged by its own window).
  */
 export function computeGateFacts(input: {
   window: { start: string; end: string };
   reviews: readonly GateReviewFact[];
   unresolvedCriticalFlags: number;
+  unrecordedPosts: number;
+  unexplainedApiWrites: number;
   metrics: readonly GateMetricFact[];
 }): GateInput {
   const inWindow = (date: string) => date >= input.window.start && date <= input.window.end;
   const reviews = input.reviews.filter((review) => inWindow(review.bangkokDate));
-  const counted = reviews.filter((review) => isRequiredReview(review.inclusionReason) && review.verdict !== null);
-  const coverage = input.metrics.filter((row) => row.tutorKey === "*" && row.liveMode && inWindow(row.metricDate));
+  const required = reviews.filter((review) => isRequiredReview(review.inclusionReason));
+  const counted = required.filter((review) => review.verdict !== null);
+  const coverage = input.metrics.filter((row) => row.tutorKey === "*" && inWindow(row.metricDate));
   return {
     reviewed: counted.length,
     accurate: counted.filter((review) => isAccurate(review.verdict!)).length,
     criticalVerdicts: reviews.filter((review) => review.verdict?.severity === "critical").length,
     unresolvedCriticalFlags: input.unresolvedCriticalFlags,
     pendingFlaggedReviews: reviews.filter((review) => review.hasOpenFlag).length,
+    requiredPending: required.length - counted.length,
+    unrecordedPosts: input.unrecordedPosts,
+    unexplainedApiWrites: input.unexplainedApiWrites,
     coverageNum: coverage.reduce((sum, row) => sum + row.posted, 0),
     coverageDen: coverage.reduce((sum, row) => sum + row.eligible, 0),
   };
@@ -247,6 +428,8 @@ export function computeGateFacts(input: {
 export interface DailyClassFact {
   tutorKey: string;
   coverage: CoverageClass | null;
+  /** A hold for absence or partial attendance (a miss; also counted in `heldAbsence`). */
+  absenceHold?: boolean;
 }
 
 export interface DailyReviewFact {
@@ -270,11 +453,13 @@ export interface DailyMetricValues {
   eligible: number;
   excludedScope: number;
   excludedTutorFirst: number;
-  excludedAbsent: number;
   excludedTutorOff: number;
+  excludedNotLive: number;
   pending: number;
   unseen: number;
   held: number;
+  heldAbsence: number;
+  late: number;
   expired: number;
   failed: number;
   measuredFixClasses: number;
@@ -306,11 +491,13 @@ export function buildDailyMetrics(input: {
       eligible: coverageRatio(counts).den,
       excludedScope: counts.excluded_scope,
       excludedTutorFirst: counts.excluded_tutor_first,
-      excludedAbsent: counts.excluded_absent,
       excludedTutorOff: counts.excluded_tutor_off,
+      excludedNotLive: counts.excluded_not_live,
       pending: counts.pending,
       unseen: counts.miss_unseen,
       held: counts.miss_held,
+      heldAbsence: classes.filter((row) => row.coverage === "miss_held" && row.absenceHold === true).length,
+      late: counts.miss_late,
       expired: counts.miss_expired,
       failed: counts.miss_failed,
       measuredFixClasses: reviews.filter((review) => review.measuredFixCount > 0).length,
@@ -396,4 +583,16 @@ export function bangkokDayBounds(dateKey: string): { start: Date; end: Date } {
 /** Inclusive 14-day window ending on `endDate`. */
 export function gateWindow(endDate: string, days = GATE_WINDOW_DAYS): { start: string; end: string } {
   return { start: addDays(endDate, -(days - 1)), end: endDate };
+}
+
+/**
+ * Every Bangkok date the metrics must be current for: the window of the next daily gate row and the dashboard's
+ * window (≤ 15 dates, oldest first). A class settles up to two days after it ends (expiry at the deadline) and a
+ * verdict can land any time, so the whole window is recomputed on every run — never only the last few days.
+ */
+export function metricDates(now: Date): string[] {
+  const today = bangkokDateKey(now);
+  const dates: string[] = [];
+  for (let date = gateWindow(dailyGateDate(now)).start; date <= today; date = addDays(date, 1)) dates.push(date);
+  return dates;
 }

@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { formatBangkokShortDateTime } from "@/lib/bangkok-time";
+import { downgradeOf } from "@/lib/feedback-autowriter/quality";
 import type { AutowriterReview, ReviewQueueItem } from "@/lib/feedback-autowriter/review-data";
 import { cn } from "@/lib/utils";
 
@@ -47,11 +48,13 @@ const ACTOR_LABEL: Record<string, string> = {
   auto: "Wise auto-submission",
 };
 
+// The stored severity "factual" is the owner's "major": a real fix, not accurate.
 const SEVERITIES = [
   { value: "cosmetic", label: "Cosmetic (still accurate)" },
-  { value: "factual", label: "Factual (real fix)" },
+  { value: "factual", label: "Major (real fix)" },
   { value: "critical", label: "Critical" },
 ] as const;
+type Severity = (typeof SEVERITIES)[number]["value"];
 
 const CATEGORIES = [
   { value: "wrong_person", label: "Wrong person" },
@@ -59,6 +62,21 @@ const CATEGORIES = [
   { value: "invented_content", label: "Invented content" },
   { value: "should_not_have_posted", label: "Should not have posted" },
 ] as const;
+type Category = (typeof CATEGORIES)[number]["value"];
+
+const SEVERITY_SHORT: Record<Severity, string> = { cosmetic: "cosmetic", factual: "Major (real fix)", critical: "critical" };
+
+const OUTCOME_LABEL: Record<string, string> = {
+  verify_failed: "Landed but did not verify — Wise may differ",
+  unknown_outcome: "Outcome unknown — may be in Wise",
+  rejected: "Refused by Wise, but the submission changed",
+};
+
+/** Measured fixes per actor, e.g. "Tutor 1, Autowriter — correction 1". */
+export function measuredFixesLabel(byActor: Record<string, number>): string {
+  return Object.entries(byActor).filter(([, count]) => count > 0).toSorted(([a], [b]) => a.localeCompare(b))
+    .map(([kind, count]) => `${ACTOR_LABEL[kind] ?? kind} ${count}`).join(", ");
+}
 
 export function matchesFilter(item: ReviewQueueItem, filter: Filter): boolean {
   if (filter === "required") return item.required && item.currentVerdict === null;
@@ -70,10 +88,70 @@ function when(value: string | null): string {
   return value ? formatBangkokShortDateTime(value) : "—";
 }
 
-function verdictLabel(verdict: NonNullable<ReviewQueueItem["currentVerdict"]>): string {
-  if (verdict.verdict === "approve") return "Approved";
+const DOWNGRADE_LABEL = { critical: "critical", factual: "major" } as const;
+
+export function verdictLabel(verdict: NonNullable<ReviewQueueItem["currentVerdict"]>): string {
+  const downgraded = verdict.downgradedFrom ? ` (downgraded from ${DOWNGRADE_LABEL[verdict.downgradedFrom]})` : "";
+  if (verdict.verdict === "approve") return `Approved${downgraded}`;
   const category = verdict.criticalCategory ? ` · ${CATEGORIES.find((option) => option.value === verdict.criticalCategory)?.label}` : "";
-  return `Needs fix · ${verdict.severity}${category}`;
+  const severity = verdict.severity ? SEVERITY_SHORT[verdict.severity] : "—";
+  return `Needs fix · ${severity}${category}${downgraded}`;
+}
+
+/** What a new verdict would downgrade on this class (a harsher current verdict or a critical flag), or null. */
+export function downgradeFor(
+  item: Pick<ReviewQueueItem, "currentVerdict" | "openFlags">,
+  verdict: "approve" | "needs_fix",
+  severity: Severity | null,
+): "critical" | "factual" | null {
+  return downgradeOf({
+    current: item.currentVerdict ? { verdict: item.currentVerdict.verdict, severity: item.currentVerdict.severity } : null,
+    openCriticalFlag: item.openFlags.some((flag) => flag.suggestedSeverity === "critical"),
+    next: { verdict, severity: verdict === "approve" ? null : severity ?? "cosmetic" },
+  });
+}
+
+/** The class carries a major or critical judgement a milder verdict would downgrade. */
+export function hasHarshJudgement(item: Pick<ReviewQueueItem, "currentVerdict" | "openFlags">): boolean {
+  return downgradeFor(item, "approve", null) !== null;
+}
+
+export interface VerdictFormState {
+  severity: Severity | null;
+  category: Category | null;
+  note: string;
+  downgradeConfirmed: boolean;
+}
+
+/**
+ * The verdict request for the owner's choice, pinned to what the page shows (first shot, current verdict, open
+ * flags), or why it cannot be sent yet. Needs fix never defaults to a severity.
+ */
+export function buildVerdictRequest(
+  item: Pick<ReviewQueueItem, "wiseSessionId" | "firstShot" | "currentVerdict" | "openFlags">,
+  verdict: "approve" | "needs_fix",
+  form: VerdictFormState,
+): { ok: true; body: Record<string, unknown> } | { ok: false; error: string } {
+  if (verdict === "needs_fix" && form.severity === null) return { ok: false, error: "Choose a severity." };
+  if (verdict === "needs_fix" && form.severity === "critical" && form.category === null) return { ok: false, error: "Choose the critical category." };
+  const severity = verdict === "needs_fix" ? form.severity : null;
+  const downgrade = downgradeFor(item, verdict, severity);
+  if (downgrade && !form.note.trim()) return { ok: false, error: `A downgrade from ${DOWNGRADE_LABEL[downgrade]} needs a note saying why.` };
+  if (downgrade && !form.downgradeConfirmed) return { ok: false, error: `Confirm the downgrade from ${DOWNGRADE_LABEL[downgrade]}.` };
+  return {
+    ok: true,
+    body: {
+      wiseSessionId: item.wiseSessionId,
+      fieldsSha256: item.firstShot.fieldsSha256,
+      currentVerdictId: item.currentVerdict?.id ?? null,
+      seenFlagIds: item.openFlags.map((flag) => flag.id),
+      verdict,
+      severity,
+      criticalCategory: severity === "critical" ? form.category : null,
+      note: form.note.trim() || null,
+      ...(downgrade ? { confirmDowngrade: true } : {}),
+    },
+  };
 }
 
 function Fields({ fields }: { fields: Record<string, string> }) {
@@ -89,40 +167,60 @@ function Fields({ fields }: { fields: Record<string, string> }) {
   );
 }
 
-function VerdictForm({ item, onRecorded }: { item: ReviewQueueItem; onRecorded: () => Promise<void> | void }) {
-  const [mode, setMode] = useState<"idle" | "needs_fix">("idle");
-  const [severity, setSeverity] = useState<(typeof SEVERITIES)[number]["value"]>("cosmetic");
-  const [category, setCategory] = useState<(typeof CATEGORIES)[number]["value"]>("wrong_person");
+export function VerdictForm({ item, onRecorded, initialMode = "idle" }: {
+  item: ReviewQueueItem;
+  onRecorded: () => Promise<void> | void;
+  initialMode?: "idle" | "needs_fix";
+}) {
+  const [mode, setMode] = useState<"idle" | "needs_fix">(initialMode);
+  const [severity, setSeverity] = useState<Severity | null>(null);
+  const [category, setCategory] = useState<Category | null>(null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ error: boolean; text: string } | null>(null);
+  const reset = () => {
+    setMode("idle");
+    setSeverity(null);
+    setCategory(null);
+    setNote("");
+  };
 
   const submit = async (verdict: "approve" | "needs_fix") => {
-    if (verdict === "needs_fix" && severity === "critical"
+    const chosenSeverity = verdict === "needs_fix" ? severity : null;
+    const downgrade = verdict === "needs_fix" && chosenSeverity === null ? null : downgradeFor(item, verdict, chosenSeverity);
+    if (downgrade && !note.trim()) {
+      setMessage({ error: true, text: `This class has a ${DOWNGRADE_LABEL[downgrade]} judgement: say in the note why you are downgrading it.` });
+      return;
+    }
+    const downgradeConfirmed = Boolean(downgrade) && window.confirm(
+      `Downgrade a ${DOWNGRADE_LABEL[downgrade ?? "critical"].toUpperCase()} judgement? A verdict judges the first shot as posted, `
+        + "not the corrected text. This is recorded with your note.",
+    );
+    if (downgrade && !downgradeConfirmed) return;
+    if (verdict === "needs_fix" && chosenSeverity === "critical"
       && !window.confirm("Record a CRITICAL verdict? It blocks expansion and pushes an alert.")) return;
+    const request = buildVerdictRequest(item, verdict, { severity, category, note, downgradeConfirmed });
+    if (!request.ok) {
+      setMessage({ error: true, text: request.error });
+      return;
+    }
     setBusy(true);
     setMessage(null);
     try {
       const response = await fetch("/api/feedback-autowriter/verdicts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          wiseSessionId: item.wiseSessionId,
-          fieldsSha256: item.firstShot.fieldsSha256,
-          verdict,
-          severity: verdict === "needs_fix" ? severity : null,
-          criticalCategory: verdict === "needs_fix" && severity === "critical" ? category : null,
-          note: note.trim() || null,
-        }),
+        body: JSON.stringify(request.body),
       });
       const json = await response.json().catch(() => null) as { error?: unknown } | null;
       if (!response.ok) {
         setMessage({ error: true, text: typeof json?.error === "string" ? json.error : `HTTP ${response.status}` });
+        // A stale page (a new verdict or flag since it loaded): show the class as it is now.
+        if (response.status === 409) await onRecorded();
         return;
       }
       setMessage({ error: false, text: "Verdict recorded." });
-      setMode("idle");
-      setNote("");
+      reset();
       await onRecorded();
     } catch {
       setMessage({ error: true, text: "Could not record the verdict." });
@@ -131,6 +229,15 @@ function VerdictForm({ item, onRecorded }: { item: ReviewQueueItem; onRecorded: 
     }
   };
 
+  const needsFixReady = severity !== null && (severity !== "critical" || category !== null);
+  const harsh = hasHarshJudgement(item);
+  const noteField = (
+    <label className="text-xs sm:col-span-2">
+      Note{harsh ? " (required for a milder verdict)" : ""}
+      <Textarea aria-label="Verdict note" className="mt-1" value={note} maxLength={2000} onChange={(event) => setNote(event.target.value)}
+        placeholder={harsh ? "Why the first shot was not that bad after all" : "What was wrong, in a sentence"} />
+    </label>
+  );
   return (
     <div className="space-y-2 rounded-md border bg-muted/30 p-3" data-testid="verdict-controls">
       <div className="flex flex-wrap items-center gap-2">
@@ -140,31 +247,36 @@ function VerdictForm({ item, onRecorded }: { item: ReviewQueueItem; onRecorded: 
         </Button>
         {message ? <span role="status" className={cn("text-xs", message.error ? "text-red-700" : "text-available")}>{message.text}</span> : null}
       </div>
+      {harsh ? (
+        <p className="text-xs text-red-700 dark:text-red-300">
+          This class has a major or critical judgement of its first shot. A milder verdict downgrades it: it needs a note and
+          your confirmation. To answer a new flag without changing the judgement, record the same severity again.
+        </p>
+      ) : null}
+      {harsh && mode !== "needs_fix" ? <div className="grid gap-2 sm:grid-cols-2">{noteField}</div> : null}
       {mode === "needs_fix" ? (
         <div className="grid gap-2 sm:grid-cols-2">
           <label className="text-xs">
             Severity
-            <select aria-label="Severity" className="mt-1 h-8 w-full rounded-md border bg-background px-2 text-sm" value={severity}
-              onChange={(event) => setSeverity(event.target.value as typeof severity)}>
+            <select aria-label="Severity" className="mt-1 h-8 w-full rounded-md border bg-background px-2 text-sm" value={severity ?? ""}
+              onChange={(event) => setSeverity(event.target.value ? event.target.value as Severity : null)}>
+              <option value="" disabled>Choose a severity…</option>
               {SEVERITIES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
           {severity === "critical" ? (
             <label className="text-xs">
               Category
-              <select aria-label="Critical category" className="mt-1 h-8 w-full rounded-md border bg-background px-2 text-sm" value={category}
-                onChange={(event) => setCategory(event.target.value as typeof category)}>
+              <select aria-label="Critical category" className="mt-1 h-8 w-full rounded-md border bg-background px-2 text-sm" value={category ?? ""}
+                onChange={(event) => setCategory(event.target.value ? event.target.value as Category : null)}>
+                <option value="" disabled>Choose a category…</option>
                 {CATEGORIES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </label>
           ) : null}
-          <label className="text-xs sm:col-span-2">
-            Note
-            <Textarea aria-label="Verdict note" className="mt-1" value={note} maxLength={2000} onChange={(event) => setNote(event.target.value)}
-              placeholder="What was wrong, in a sentence" />
-          </label>
+          {noteField}
           <div className="sm:col-span-2">
-            <Button size="sm" variant="destructive" disabled={busy} onClick={() => void submit("needs_fix")}>Record needs fix</Button>
+            <Button size="sm" variant="destructive" disabled={busy || !needsFixReady} onClick={() => void submit("needs_fix")}>Record needs fix</Button>
           </div>
         </div>
       ) : null}
@@ -183,13 +295,27 @@ function QueueItem({ item, canControl, onRecorded }: { item: ReviewQueueItem; ca
         <Badge variant="outline" className={STATUS_TONE[item.status]}>{STATUS_LABEL[item.status]}</Badge>
         {item.currentVerdict ? <Badge variant="outline">{verdictLabel(item.currentVerdict)}</Badge> : null}
         {item.changed ? <Badge variant="outline" className="border-violet-300 text-violet-800 dark:text-violet-200">Changed since first post</Badge> : null}
-        {item.measuredFixCount > 0 ? <span className="text-xs text-muted-foreground">{item.measuredFixCount} measured fix{item.measuredFixCount === 1 ? "" : "es"}</span> : null}
+        {item.measuredFixCount > 0 ? (
+          <span className="text-xs text-muted-foreground">
+            {item.measuredFixCount} measured fix{item.measuredFixCount === 1 ? "" : "es"} ({measuredFixesLabel(item.measuredFixesByActor)})
+          </span>
+        ) : null}
       </summary>
       <div className="space-y-4 border-t px-4 py-3">
         {item.openFlags.length > 0 ? (
           <ul className="space-y-1 text-xs text-red-700 dark:text-red-300">
-            {item.openFlags.map((flag, index) => <li key={index}>Flag ({flag.source}): {flag.note ?? "—"}</li>)}
+            {item.openFlags.map((flag) => (
+              <li key={flag.id}>
+                Flag ({flag.source}{flag.suggestedSeverity ? `, suggested ${flag.suggestedSeverity}` : ""}): {flag.note ?? "—"}
+              </li>
+            ))}
           </ul>
+        ) : null}
+        {item.firstShot.outcome !== "verified" ? (
+          <p className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800 dark:bg-red-950 dark:text-red-200">
+            {OUTCOME_LABEL[item.firstShot.outcome] ?? item.firstShot.outcome}
+            {item.firstShot.problems.length > 0 ? ` (${item.firstShot.problems.join(", ")})` : ""}. Open the class in Wise and judge what is there.
+          </p>
         ) : null}
         <div className="grid gap-4 lg:grid-cols-2">
           <div>
@@ -241,7 +367,11 @@ function QueueItem({ item, canControl, onRecorded }: { item: ReviewQueueItem; ca
               <ul className="space-y-0.5 text-xs">
                 {item.fixEvents.map((event) => (
                   <li key={event.wiseEventId} className="flex justify-between gap-2">
-                    <span>{ACTOR_LABEL[event.actorKind] ?? event.actorKind}{event.countsAsFix ? <strong className="ml-1 text-amber-700">· fix</strong> : null}</span>
+                    <span>
+                      {ACTOR_LABEL[event.actorKind] ?? event.actorKind}
+                      {event.counted ? <strong className="ml-1 text-amber-700">· fix</strong> : null}
+                      {event.countsAsFix && !event.counted ? <span className="ml-1 text-muted-foreground">· after approval — not counted</span> : null}
+                    </span>
                     <span className="text-muted-foreground">{when(event.at)}</span>
                   </li>
                 ))}
@@ -284,7 +414,12 @@ export function FeedbackAutowriterReviewQueue({ review, canControl, onRecorded }
   onRecorded: () => Promise<void> | void;
 }) {
   const [filter, setFilter] = useState<Filter>("required");
-  const counts = Object.fromEntries(FILTERS.map((option) => [option.key, review.queue.filter((item) => matchesFilter(item, option.key)).length])) as Record<Filter, number>;
+  // Exact counts from the database: the queue itself may be a subset (every flagged and unreviewed class is in it).
+  const counts: Record<Filter, number> = {
+    required: review.queueTotals.needsReview,
+    flagged: review.queueTotals.flagged,
+    all: review.queueTotals.all,
+  };
   const items = review.queue.filter((item) => matchesFilter(item, filter));
   return (
     <div className="flex flex-col gap-3">
@@ -300,6 +435,11 @@ export function FeedbackAutowriterReviewQueue({ review, canControl, onRecorded }
           Every post is reviewed until the tutor&apos;s cohort passes a gate. Judge the first shot: cosmetic fixes still count as accurate.
         </p>
       </div>
+      {review.queueTotals.shown < review.queueTotals.all ? (
+        <p className="text-xs text-muted-foreground">
+          Showing {review.queueTotals.shown} of {review.queueTotals.all}: every flagged and unreviewed class, then the latest reviewed ones.
+        </p>
+      ) : null}
       {items.length === 0 ? (
         <p className="rounded-lg border bg-card px-4 py-8 text-center text-sm text-muted-foreground">Nothing here.</p>
       ) : items.map((item) => <QueueItem key={item.wiseSessionId} item={item} canControl={canControl} onRecorded={onRecorded} />)}
