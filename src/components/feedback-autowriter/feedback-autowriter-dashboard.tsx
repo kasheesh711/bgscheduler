@@ -298,8 +298,8 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
         </section>
       </div>
 
-      <ItemDrawer target={target} dashboard={data} review={loaded} now={now} canControl={canControl} onChanged={reloadAll} onOpen={setTarget}
-        onClose={() => setTarget(null)} />
+      <ItemDrawer target={target} dashboard={data} review={loaded} now={now} canControl={canControl} onChanged={reloadAll} onSaved={setNote}
+        onOpen={setTarget} onClose={() => setTarget(null)} />
     </div>
   );
 }

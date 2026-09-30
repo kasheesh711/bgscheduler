@@ -135,11 +135,13 @@ describe("VerdictForm", () => {
     expect(form).toContain('if (response.status === 409) await onRecorded("stale");');
     expect(form).toContain('await onRecorded("recorded");');
     expect(form).toContain('fetch("/api/feedback-autowriter/verdicts"');
-    // The drawer closes only after a recorded verdict; a stale page reloads the item and stays open.
+    // The drawer closes only after a recorded verdict; a stale page reloads the data and stays open (the newer version
+    // of the class then waits behind its Reload: item-drawer.test.tsx).
     const drawer = fs.readFileSync(path.join(__dirname, "../item-drawer.tsx"), "utf8");
-    expect(drawer).toContain('if (outcome === "recorded") await done(); else await onChanged();');
-    // It closes first and reloads after: the end of the reload must not close a sheet opened meanwhile.
-    expect(drawer).toMatch(/const done = async \(\) => \{\s*onClose\(\);\s*await onChanged\(\);\s*\};/u);
+    expect(drawer).toContain('if (outcome === "recorded") await done("Verdict recorded."); else await onChanged();');
+    // It closes first, has the page say so, and reloads after: the end of the reload must not close a sheet opened meanwhile.
+    expect(drawer).toMatch(/const done = async \(note: string\) => \{\s*onClose\(\);\s*onSaved\(note\);\s*await onChanged\(\);\s*\};/u);
+    expect(drawer).toContain('onAcknowledged={() => done("Incident acknowledged.")}');
   });
 
   it("never opens with the focus on Approve: the sheet's scrolling body takes it", () => {

@@ -15,6 +15,7 @@ import type { AutowriterDashboard } from "@/lib/feedback-autowriter/dashboard";
 import type { AutowriterReview, AutowriterReviewUnavailable } from "@/lib/feedback-autowriter/review-data";
 import type { AutowriterTrends } from "@/lib/feedback-autowriter/trends";
 import { FeedbackAutowriterDashboard } from "../feedback-autowriter-dashboard";
+import { StatusLines } from "../page-status";
 import { dashboardFixture, quietDashboardFixture, quietReviewFixture, reviewFixture, shortHistoryTrendsFixture, trendsFixture } from "./fixtures";
 
 function render(options: {
@@ -240,6 +241,17 @@ describe("FeedbackAutowriterDashboard", () => {
     expect(SOURCE).toContain("onClick={() => { setControlError(null); void reloadAll(); }}");
     expect(SOURCE).not.toMatch(/setError\((?!null|errorOf\(json, response\.status\)\)|"Could not refresh the dashboard\.")/u);
     expect(SOURCE).toContain("<StatusLines problems={[controlError, error, reviewStale]} note={note} />");
+  });
+
+  it("says a verdict was recorded, or an incident acknowledged, in the page's status: the drawer is closed by then", () => {
+    // The drawer hands its line ("Verdict recorded." / "Incident acknowledged.") to the note the status lines show.
+    expect(SOURCE).toContain("onSaved={setNote}");
+    const drawer = fs.readFileSync(path.join(__dirname, "../item-drawer.tsx"), "utf8");
+    expect(drawer).toContain('await done("Verdict recorded.")');
+    expect(drawer).toContain('done("Incident acknowledged.")');
+    const status = renderToStaticMarkup(<StatusLines problems={[null, null, null]} note="Verdict recorded." />);
+    expect(status).toContain('data-status="note"');
+    expect(status).toContain("Verdict recorded.");
   });
 
   it("reloads everything when the page is shown again after a visit to another page", () => {

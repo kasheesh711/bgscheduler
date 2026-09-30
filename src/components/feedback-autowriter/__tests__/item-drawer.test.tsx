@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
@@ -7,10 +9,15 @@ import {
   IncidentBody,
   ReviewBody,
   drawerTargetFor,
+  newerReview,
+  nextReviewPin,
   resolveDrawer,
+  reviewVersion,
   targetForClass,
+  type DrawerTarget,
 } from "../item-drawer";
-import { FIXTURE_NOW, INCIDENT, SESSION, correctedQueueItem, dashboardFixture, reviewFixture } from "./fixtures";
+import { buildVerdictRequest } from "../review-helpers";
+import { APPROVED, FIXTURE_NOW, FLAG_ID, INCIDENT, SESSION, correctedQueueItem, dashboardFixture, reviewFixture } from "./fixtures";
 
 const NOW = new Date(FIXTURE_NOW);
 const dashboard = dashboardFixture();
@@ -79,6 +86,79 @@ describe("ReviewBody", () => {
       expect(html).toContain("first-shot-diff");
       expect(html).toContain("Open in Wise");
     }
+  });
+});
+
+describe("a post to review stays as it was opened", () => {
+  const FORM = { severity: null, category: null, note: "", downgradeConfirmed: false };
+  const target: DrawerTarget = { kind: "review", wiseSessionId: SESSION.benFlagged };
+  // What the owner opened: approved once, no open flag.
+  const opened = correctedQueueItem({ status: "reviewed", currentVerdict: APPROVED, verdicts: [APPROVED] });
+  // What the 5-minute poll brings a little later: a flag raised on the class meanwhile.
+  const raised = { id: FLAG_ID, source: "measured_fix", note: "Saved again in Wise after the approval", suggestedSeverity: null, suggestedCategory: null, createdAt: "2026-10-06T08:40:00.000Z" };
+  const polled = correctedQueueItem({ status: "flagged", currentVerdict: APPROVED, verdicts: [APPROVED], openFlags: [raised] });
+
+  it("keeps the version it opened while the poll brings a newer one, so the verdict is checked against what was read", () => {
+    const pin = nextReviewPin(null, target, opened);
+    expect(pin).toEqual({ target, item: opened, reloads: 0 });
+    // The poll: same drawer, newer class. The pin is kept, and the page's version is only offered.
+    const kept = nextReviewPin(pin, target, polled);
+    expect(kept).toBe(pin);
+    expect(newerReview(kept.item, polled)).toBe(polled);
+    // The request carries the pinned first shot, current verdict and open flags: the server answers the new flag with
+    // its 409 ("New activity since you loaded this class"), never records a verdict that silently resolves it.
+    const body = (item: typeof opened) => {
+      const request = buildVerdictRequest(item, "approve", FORM);
+      if (!request.ok) throw new Error(request.error);
+      return request.body;
+    };
+    expect(body(kept.item)).toEqual(body(opened));
+    expect(body(kept.item)).toMatchObject({ currentVerdictId: APPROVED.id, seenFlagIds: [] });
+    expect(body(polled)).toMatchObject({ seenFlagIds: [FLAG_ID] });
+  });
+
+  it("shows a notice with Reload instead of swapping the class under the form", () => {
+    const html = renderToStaticMarkup(<ReviewBody item={opened} newer={polled} canControl onRecorded={() => undefined} onReload={() => undefined} />);
+    expect(html).toContain("data-review-changed");
+    expect(html).toContain("This class changed since you opened it — reload it before recording a verdict.");
+    expect(html).toContain(">Reload</button>");
+    // Still the class as it was opened: the new flag is not shown until the owner reloads, and the form is there.
+    expect(html).not.toContain("Saved again in Wise after the approval");
+    expect(html).toContain("verdict-controls");
+    // Nothing newer: no notice. Someone who only reads is told to reload to see it.
+    expect(renderToStaticMarkup(<ReviewBody item={opened} canControl onRecorded={() => undefined} />)).not.toContain("data-review-changed");
+    expect(renderToStaticMarkup(<ReviewBody item={opened} newer={polled} canControl={false} onRecorded={() => undefined} onReload={() => undefined} />))
+      .toContain("This class changed since you opened it — reload it to see it as it is now.");
+  });
+
+  it("re-pins the page's version on Reload, and starts the form afresh", () => {
+    const pin = nextReviewPin(null, target, opened);
+    const reloaded = nextReviewPin(pin, target, polled, true);
+    expect(reloaded).toEqual({ target, item: polled, reloads: 1 });
+    expect(newerReview(reloaded.item, polled)).toBeNull();
+    expect(buildVerdictRequest(reloaded.item, "needs_fix", { ...FORM, severity: "factual" })).toMatchObject({ ok: true, body: { seenFlagIds: [FLAG_ID] } });
+    const html = renderToStaticMarkup(<ReviewBody item={reloaded.item} newer={newerReview(reloaded.item, polled)} canControl onRecorded={() => undefined} />);
+    expect(html).not.toContain("data-review-changed");
+    expect(html).toContain("Saved again in Wise after the approval");
+    // Another class, or the same one opened again later, is pinned as the page has it then.
+    const other: DrawerTarget = { kind: "review", wiseSessionId: SESSION.benFlagged };
+    expect(nextReviewPin(reloaded, other, polled)).toEqual({ target: other, item: polled, reloads: 0 });
+    // The drawer wires it so: the pinned version into the form, Reload re-pins, and a new pin remounts the body.
+    const drawer = fs.readFileSync(path.join(__dirname, "../item-drawer.tsx"), "utf8");
+    expect(drawer).toContain("const pinned = shown && content?.kind === \"review\" ? nextReviewPin(pin, shown, content.item) : null;");
+    expect(drawer).toContain("key={`${pinned.item.wiseSessionId}:${pinned.reloads}`} item={pinned.item} newer={newerReview(pinned.item, content.item)}");
+    expect(drawer).toContain("onReload={() => setPin(nextReviewPin(pinned, shown, content.item, true))}");
+  });
+
+  it("takes a reload that brings nothing new for the same version, whatever order the rows come in", () => {
+    const twoFlags = correctedQueueItem({ openFlags: [raised, { ...raised, id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" }] });
+    const reordered = JSON.parse(JSON.stringify({ ...twoFlags, openFlags: twoFlags.openFlags.toReversed(), fixEvents: twoFlags.fixEvents.toReversed() }));
+    expect(reviewVersion(reordered)).toBe(reviewVersion(twoFlags));
+    expect(newerReview(twoFlags, reordered)).toBeNull();
+    // A new save in Wise, a new verdict or a new flag is a new version.
+    expect(newerReview(twoFlags, { ...twoFlags, fixEvents: [...twoFlags.fixEvents, { ...twoFlags.fixEvents[0], wiseEventId: "e4" }] })).not.toBeNull();
+    expect(newerReview(opened, { ...opened, currentVerdict: null })).not.toBeNull();
+    expect(newerReview(opened, polled)).not.toBeNull();
   });
 });
 

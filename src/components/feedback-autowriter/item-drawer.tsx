@@ -18,7 +18,9 @@ import { VerdictForm } from "./verdict-form";
 // ----------------------------------------------------------------------------
 // The detail drawer: one right-hand sheet for whatever the owner opened (a post
 // to review, a held class, a failed post, an incident, or any class of the log).
-// It reads the page's current payloads, so a reload shows the item as it is now.
+// It reads the page's current payloads, so a reload shows the item as it is now
+// — except a post to review, which stays as it was when it opened (see
+// `nextReviewPin`): its verdict is checked against what the owner read.
 // ----------------------------------------------------------------------------
 
 type Hold = AutowriterDashboard["holds"][number];
@@ -94,6 +96,42 @@ export function resolveDrawer(target: DrawerTarget, dashboard: AutowriterDashboa
   return row ? { kind: "class", row } : { kind: "missing" };
 }
 
+/**
+ * A post to review as a comparable version: everything the drawer shows of it, the first shot, the current verdict and
+ * the open flags a verdict is checked against among them. The lists the database returns in no fixed order are sorted
+ * by id, so a reload that brings nothing new is the same version.
+ */
+export function reviewVersion(item: ReviewQueueItem): string {
+  return JSON.stringify({
+    ...item,
+    openFlags: item.openFlags.toSorted((a, b) => a.id.localeCompare(b.id)),
+    fixEvents: item.fixEvents.toSorted((a, b) => a.wiseEventId.localeCompare(b.wiseEventId)),
+  });
+}
+
+/** A post to review as the drawer holds it: the version it pinned, and how many times the owner reloaded it. */
+export interface ReviewPin {
+  target: DrawerTarget;
+  item: ReviewQueueItem;
+  reloads: number;
+}
+
+/**
+ * The version of a post to review the drawer shows. A target it did not show before is pinned as the page has it now;
+ * the same target keeps its pin while the polling brings newer versions (the verdict is checked against what the
+ * owner read, as the server's 409 expects), until the owner reloads it (`reload`): then the version the page has now
+ * is pinned, and the form starts afresh.
+ */
+export function nextReviewPin(pin: ReviewPin | null, target: DrawerTarget, current: ReviewQueueItem, reload = false): ReviewPin {
+  if (reload) return { target, item: current, reloads: (pin?.target === target ? pin.reloads : 0) + 1 };
+  return pin?.target === target ? pin : { target, item: current, reloads: 0 };
+}
+
+/** The version the page has now, when it is not the pinned one: the drawer says so instead of swapping it in. */
+export function newerReview(pinned: ReviewQueueItem, current: ReviewQueueItem): ReviewQueueItem | null {
+  return current === pinned || reviewVersion(current) === reviewVersion(pinned) ? null : current;
+}
+
 /** "Anna · Year 9 Maths · 6 Oct, 13:00" for the class a target points at. */
 function classLabel(target: DrawerTarget, dashboard: AutowriterDashboard, review: AutowriterReview | null): string {
   if (target.kind === "incident") return "";
@@ -149,14 +187,31 @@ function StoredDraft({ row, label }: { row: Pick<ClassRow, "fields" | "judgeUnsu
   );
 }
 
-/** A posted class to judge: the detail, then the owner's verdict form (everyone else reads). */
-export function ReviewBody({ item, canControl, onRecorded }: {
+/**
+ * A posted class to judge: the detail, then the owner's verdict form (everyone else reads). `item` is the version the
+ * drawer pinned; `newer`, the page's newer version of it: then a notice (kept in view while the body scrolls) offers
+ * `onReload`, and nothing is swapped under the form.
+ */
+export function ReviewBody({ item, newer = null, canControl, onRecorded, onReload }: {
   item: ReviewQueueItem;
+  newer?: ReviewQueueItem | null;
   canControl: boolean;
   onRecorded: (outcome: "recorded" | "stale") => Promise<void> | void;
+  onReload?: () => void;
 }) {
   return (
     <div className="space-y-4">
+      {newer ? (
+        <div role="status" data-review-changed=""
+          className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
+          <span>
+            {canControl
+              ? "This class changed since you opened it — reload it before recording a verdict."
+              : "This class changed since you opened it — reload it to see it as it is now."}
+          </span>
+          {onReload ? <Button size="sm" variant="outline" className="h-7 bg-background" onClick={onReload}>Reload</Button> : null}
+        </div>
+      ) : null}
       <ReviewDetail item={item} />
       {canControl
         ? <VerdictForm key={item.wiseSessionId} item={item} onRecorded={onRecorded} />
@@ -388,19 +443,25 @@ const SHEET = "top-0 right-0 left-auto flex h-dvh w-full max-w-none translate-x-
 
 /**
  * The right-hand sheet. `onChanged` reloads the page data. After a verdict or an acknowledgement went through, the
- * sheet closes and the data reloads, in that order: a sheet the owner opens meanwhile is not closed by the reload's
- * end. A stale page (HTTP 409) reloads the item and leaves the sheet open on its error.
+ * sheet closes, the page says so (`onSaved`) and the data reloads, in that order: a sheet the owner opens meanwhile is
+ * not closed by the reload's end. A stale page (HTTP 409) reloads the data and leaves the sheet open on its error,
+ * with the newer version of the class behind Reload.
+ *
+ * A post to review is pinned as it was when it opened (`nextReviewPin`): the 5-minute poll never swaps it under the
+ * verdict form, whose request carries the pinned first shot, current verdict and open flags.
  *
  * Opening the sheet puts the focus on its scrolling body, never on a control: the first one of a review is Approve,
  * which records at once, so a Space meant to scroll would approve the post.
  */
-export function ItemDrawer({ target, dashboard, review, now, canControl, onChanged, onOpen, onClose }: {
+export function ItemDrawer({ target, dashboard, review, now, canControl, onChanged, onSaved, onOpen, onClose }: {
   target: DrawerTarget | null;
   dashboard: AutowriterDashboard;
   review: AutowriterReview | null;
   now: Date;
   canControl: boolean;
   onChanged: () => Promise<void> | void;
+  /** What the page says once a verdict or an acknowledgement went through: the sheet itself is closed by then. */
+  onSaved: (note: string) => void;
   onOpen: (target: DrawerTarget) => void;
   onClose: () => void;
 }) {
@@ -409,10 +470,14 @@ export function ItemDrawer({ target, dashboard, review, now, canControl, onChang
   if (target !== null && target !== held) setHeld(target);
   const shown = target ?? held;
   const content = shown ? resolveDrawer(shown, dashboard, review) : null;
+  const [pin, setPin] = useState<ReviewPin | null>(null);
+  const pinned = shown && content?.kind === "review" ? nextReviewPin(pin, shown, content.item) : null;
+  if (pinned && pinned !== pin) setPin(pinned);
   const { title, description } = content ? headline(content) : { title: "", description: "" };
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  const done = async () => {
+  const done = async (note: string) => {
     onClose();
+    onSaved(note);
     await onChanged();
   };
   return (
@@ -424,16 +489,18 @@ export function ItemDrawer({ target, dashboard, review, now, canControl, onChang
           <DialogDescription className="text-xs">{description}</DialogDescription>
         </DialogHeader>
         <div ref={bodyRef} tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 outline-none">
-          {content?.kind === "review" ? (
-            <ReviewBody item={content.item} canControl={canControl}
-              onRecorded={async (outcome) => { if (outcome === "recorded") await done(); else await onChanged(); }} />
+          {content?.kind === "review" && shown && pinned ? (
+            <ReviewBody key={`${pinned.item.wiseSessionId}:${pinned.reloads}`} item={pinned.item} newer={newerReview(pinned.item, content.item)}
+              canControl={canControl} onReload={() => setPin(nextReviewPin(pinned, shown, content.item, true))}
+              onRecorded={async (outcome) => { if (outcome === "recorded") await done("Verdict recorded."); else await onChanged(); }} />
           ) : null}
           {content?.kind === "hold" ? <HoldBody hold={content.hold} row={content.row} now={now} /> : null}
           {content?.kind === "failed_post"
             ? <FailedPostBody post={content.post} row={content.row} reviewable={content.reviewable} onOpen={onOpen} /> : null}
           {content?.kind === "class" ? <ClassBody row={content.row} /> : null}
           {content?.kind === "incident" ? (
-            <IncidentBody incident={content.incident} about={content.about} canControl={canControl} onAcknowledged={done} onOpen={onOpen} />
+            <IncidentBody incident={content.incident} about={content.about} canControl={canControl} onAcknowledged={() => done("Incident acknowledged.")}
+              onOpen={onOpen} />
           ) : null}
           {content?.kind === "missing" ? <p className="text-xs text-muted-foreground">Close this and look at the list again.</p> : null}
         </div>

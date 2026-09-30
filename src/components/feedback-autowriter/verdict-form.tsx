@@ -17,9 +17,10 @@ import {
 } from "./review-helpers";
 
 /**
- * The owner's Approve / Needs fix controls for one posted class. `onRecorded` runs after a verdict was stored
- * (`recorded`) and after the server refused a stale page (`stale`, HTTP 409): both reload the class, and the form
- * keeps its error in the second case.
+ * The owner's Approve / Needs fix controls for one posted class, as the drawer pinned it when it opened: the request
+ * carries that version's first shot, current verdict and open flags. `onRecorded` runs after a verdict was stored
+ * (`recorded`) and after the server refused a stale page (`stale`, HTTP 409): both reload the page's data, and the
+ * form keeps its error in the second case while the drawer offers the newer version of the class (Reload).
  */
 export function VerdictForm({ item, onRecorded, initialMode = "idle" }: {
   item: ReviewQueueItem;
@@ -69,7 +70,7 @@ export function VerdictForm({ item, onRecorded, initialMode = "idle" }: {
       const json = await response.json().catch(() => null) as { error?: unknown } | null;
       if (!response.ok) {
         setMessage({ error: true, text: typeof json?.error === "string" ? json.error : `HTTP ${response.status}` });
-        // A stale page (a new verdict or flag since it loaded): show the class as it is now.
+        // A stale page (a new verdict or flag since it opened): reload, so that the drawer can offer the class as it is now.
         if (response.status === 409) await onRecorded("stale");
         return;
       }
