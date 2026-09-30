@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNull, or, sql, count } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, or, sql, count } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { POST_CLASS_FEEDBACK_FIELDS, type FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
@@ -56,6 +56,8 @@ export const REVIEW_QUEUE_DAYS = 30;
 export const QUEUE_LIMIT = 300;
 /** Unreviewed required classes loaded at most (far above a day's posts; the count is exact regardless). */
 const UNREVIEWED_LIMIT = 500;
+/** Incidents of the queue's days loaded at most, besides the critical ones still waiting for the owner (never capped). */
+const INCIDENT_LIMIT = 100;
 
 type Field = (typeof POST_CLASS_FEEDBACK_FIELDS)[number];
 
@@ -593,6 +595,8 @@ const notInPersonReviewSql = sql`not exists (select 1 from feedback_autowriter_s
 const openFlagSql = sql`exists (select 1 from feedback_autowriter_flags f
   where f.wise_session_id = feedback_autowriter_reviews.wise_session_id and f.resolved_by_verdict_id is null)`;
 const requiredUnreviewedSql = sql`(${R.inclusionReason} in ('new_tutor', 'random_sample') and ${R.currentVerdictId} is null)`;
+/** SQL: a critical incident the owner has not acknowledged (it blocks the gate, and the to-do list shows it). */
+const openCriticalIncidentSql = sql`(${I.severity} = 'critical' and ${I.acknowledgedAt} is null)`;
 
 async function loadAvailableReview(db: Database, now: Date, queueLimit: number): Promise<AutowriterReview> {
   const today = bangkokDateKey(now);
@@ -613,7 +617,7 @@ async function loadAvailableReview(db: Database, now: Date, queueLimit: number):
   const queueReviews = [...new Map([...flagged, ...unreviewed, ...recent].map((row) => [row.wiseSessionId, row])).values()];
   const ids = [...new Set([...queueReviews, ...windowReviews].map((review) => review.wiseSessionId))];
   const byIds = <T>(load: () => Promise<T[]>) => ids.length > 0 ? load() : Promise.resolve([] as T[]);
-  const [posts, verdicts, flags, fixEvents, sessions, versions, metrics, lastDaily, incidents, lastRun] = await Promise.all([
+  const [posts, verdicts, flags, fixEvents, sessions, versions, metrics, lastDaily, openIncidents, otherIncidents, lastRun] = await Promise.all([
     byIds(() => db.select().from(P).where(inArray(P.wiseSessionId, ids))),
     byIds(() => db.select().from(V).where(inArray(V.wiseSessionId, ids))),
     byIds(() => db.select().from(FL).where(inArray(FL.wiseSessionId, ids))),
@@ -633,11 +637,12 @@ async function loadAvailableReview(db: Database, now: Date, queueLimit: number):
     // The window's rows, and those of the dates just before it for the 7-day values of its first dates (`lookback`).
     db.select().from(M).where(gte(M.metricDate, addDays(window.start, -REVIEW_LOOKBACK_DAYS))),
     db.select().from(G).where(eq(G.evalKind, "daily")).orderBy(desc(G.bangkokDate)).limit(1),
-    // The latest 50, plus every critical incident still waiting for the owner.
-    db.select().from(I).where(or(
-      gte(I.createdAt, new Date(now.getTime() - REVIEW_QUEUE_DAYS * 24 * 60 * 60 * 1000)),
-      and(eq(I.severity, "critical"), isNull(I.acknowledgedAt), sql`${I.pushStatus} <> 'sent'`),
-    )).orderBy(desc(I.createdAt)).limit(100),
+    // Every critical incident still waiting for the owner, whatever its age and whether its alert went out: it blocks
+    // the gate, so it comes first and no cap may hide it. Then the latest others of the queue's days.
+    db.select().from(I).where(openCriticalIncidentSql).orderBy(desc(I.createdAt)),
+    db.select().from(I)
+      .where(and(gte(I.createdAt, new Date(now.getTime() - REVIEW_QUEUE_DAYS * 24 * 60 * 60 * 1000)), sql`not ${openCriticalIncidentSql}`))
+      .orderBy(desc(I.createdAt)).limit(INCIDENT_LIMIT),
     db.select().from(RUNS).orderBy(desc(RUNS.startedAt)).limit(1),
   ]);
   return buildAutowriterReview({
@@ -658,7 +663,7 @@ async function loadAvailableReview(db: Database, now: Date, queueLimit: number):
     })),
     metrics,
     lastDailyGate: lastDaily[0] ?? null,
-    incidents,
+    incidents: [...openIncidents, ...otherIncidents],
     lastRun: lastRun[0] ?? null,
   });
 }

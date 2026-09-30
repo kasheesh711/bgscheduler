@@ -1241,6 +1241,40 @@ describe("loadAutowriterReview", () => {
     expect(review.coverage.posted).toBe(2);
   });
 
+  it("lists every critical incident still waiting for the owner first, however old and whether its alert went out", async () => {
+    const DAY = 24 * 60 * 60_000;
+    const daysAgo = (days: number) => new Date(NOW.getTime() - days * DAY);
+    const incident = (dedupeKey: string, patch: Partial<typeof I.$inferInsert> = {}): typeof I.$inferInsert => ({
+      dedupeKey, kind: "first_shot_unverified", severity: "info", summary: `synthetic ${dedupeKey}`, pushStatus: "not_required", ...patch,
+    });
+    // An API save no post explains, raised 40 days ago: its alert went out, and nobody has acknowledged it.
+    await db.insert(I).values(incident("old-critical", { kind: "api_actor_unmatched", severity: "critical", pushStatus: "sent", createdAt: daysAgo(40) }));
+    // Old ones that wait for nobody: a critical the owner acknowledged, and an info incident.
+    await db.insert(I).values([
+      incident("old-acknowledged", {
+        kind: "critical_verdict", severity: "critical", pushStatus: "sent", acknowledgedAt: daysAgo(39), acknowledgedBy: OWNER, createdAt: daysAgo(40),
+      }),
+      incident("old-info", { createdAt: daysAgo(40) }),
+    ]);
+    // More incidents in the queue's days than the cap.
+    await db.insert(I).values(Array.from({ length: 105 }, (_, n) => incident(`recent-${n}`, { createdAt: minutes(NOW, -(n + 1)) })));
+
+    const review = await loadAutowriterReview(db, { now: NOW });
+    if (!review.available) throw new Error("review unavailable");
+    expect(review.incidents[0]).toMatchObject({
+      summary: "synthetic old-critical", kind: "api_actor_unmatched", severity: "critical", pushStatus: "sent", acknowledgedAt: null,
+    });
+    // The cap is the others': the 100 latest of the queue's days, after it.
+    expect(review.incidents).toHaveLength(101);
+    expect(review.incidents.slice(1).map((row) => row.summary)).toEqual(Array.from({ length: 100 }, (_, n) => `synthetic recent-${n}`));
+    const summaries = review.incidents.map((row) => row.summary);
+    expect(summaries).not.toContain("synthetic old-acknowledged");
+    expect(summaries).not.toContain("synthetic old-info");
+    // The gate counts the same incident: the page never shows a blocker it cannot open.
+    expect(review.gate.unexplainedApiWrites).toBe(1);
+    expect(review.gate.status).toBe("blocked_critical");
+  });
+
   it("says the review tables are missing as a typed payload, and lets any other error through", async () => {
     await db.execute(sql`ALTER TABLE feedback_autowriter_reviews RENAME TO feedback_autowriter_reviews_hidden`);
     try {
