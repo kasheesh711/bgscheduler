@@ -23,6 +23,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { crc32, deflateSync, inflateSync } from "node:zlib";
 import tailwind from "@tailwindcss/postcss";
 import { build } from "esbuild";
 import postcss from "postcss";
@@ -71,8 +72,12 @@ if (open) window.setTimeout(() => document.querySelector('[data-group="' + open 
 if (params.get("details") === "open") {
   window.setTimeout(() => document.querySelectorAll("details").forEach((section) => { section.open = true; }), 500);
 }
-// The page's height once the charts are drawn, for a screenshot of all of it.
-window.setTimeout(() => { document.documentElement.dataset.pageHeight = String(document.documentElement.scrollHeight); }, 1500);
+// The page's height once the charts are drawn, for a screenshot of all of it; and the viewport's, which headless Chrome
+// makes a little shorter than its window.
+window.setTimeout(() => {
+  document.documentElement.dataset.pageHeight = String(document.documentElement.scrollHeight);
+  document.documentElement.dataset.viewportHeight = String(window.innerHeight);
+}, 1500);
 `;
 
 /** The preview page: the app's fonts and shell paddings around the dashboard, everything inline. */
@@ -174,23 +179,68 @@ function settled(file) {
 
 const pageUrl = (query) => `${pathToFileURL(path.join(OUT, "index.html")).href}?${query}`;
 
+const PROBE_HEIGHT = 2400;
+/** How much shorter than its window headless Chrome's viewport is (it screenshots the window's full height). */
+let windowExtra = 0;
+
 /** The whole page of a view: first the page's own height, then a window that tall. */
 async function screenshot(name, query) {
   const url = pageUrl(query);
-  const dom = await chrome([`--window-size=${WIDTH},2400`, "--dump-dom"], url, (stdout) => stdout.includes("</html>"));
+  const dom = await chrome([`--window-size=${WIDTH},${PROBE_HEIGHT}`, "--dump-dom"], url, (stdout) => stdout.includes("</html>"));
   const height = Number(/data-page-height="(\d+)"/u.exec(dom)?.[1] ?? 0);
   if (!height) throw new Error(`The ${name} view did not render (no page height in the DOM).`);
+  const viewport = Number(/data-viewport-height="(\d+)"/u.exec(dom)?.[1] ?? PROBE_HEIGHT);
+  windowExtra = Math.max(0, PROBE_HEIGHT - viewport);
   const file = path.join(OUT, `dashboard-${name}.png`);
   rmSync(file, { force: true });
   await chrome([`--window-size=${WIDTH},${height}`, `--screenshot=${file}`], url, settled(file));
   return { file, height };
 }
 
-/** The owner's drawer on the first item of a group, in a window of a laptop's height. */
+/**
+ * Cuts a PNG down to its top `height` rows. A row of a PNG refers only to the row above it, so the rows kept are
+ * written back as they are.
+ */
+function cropPngHeight(file, height) {
+  const png = readFileSync(file);
+  const chunks = [];
+  for (let at = 8; at < png.length;) {
+    const length = png.readUInt32BE(at);
+    chunks.push({ type: png.toString("latin1", at + 4, at + 8), data: png.subarray(at + 8, at + 8 + length) });
+    at += 12 + length;
+  }
+  const header = chunks.find((chunk) => chunk.type === "IHDR")?.data;
+  if (!header) throw new Error(`${file} is not a PNG.`);
+  const [width, fullHeight, depth, colour, interlace] = [header.readUInt32BE(0), header.readUInt32BE(4), header[8], header[9], header[12]];
+  if (height >= fullHeight) return;
+  if (depth !== 8 || interlace !== 0 || (colour !== 2 && colour !== 6)) throw new Error(`Cannot crop ${file}: not an 8-bit RGB(A) PNG.`);
+  const rowBytes = 1 + width * (colour === 6 ? 4 : 3);
+  const rows = inflateSync(Buffer.concat(chunks.filter((chunk) => chunk.type === "IDAT").map((chunk) => chunk.data)));
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type, "latin1"), data]);
+    const size = Buffer.alloc(4);
+    size.writeUInt32BE(data.length);
+    const check = Buffer.alloc(4);
+    check.writeUInt32BE(crc32(body));
+    return Buffer.concat([size, body, check]);
+  };
+  const cropped = Buffer.from(header);
+  cropped.writeUInt32BE(height, 4);
+  writeFileSync(file, Buffer.concat([
+    png.subarray(0, 8), chunk("IHDR", cropped), chunk("IDAT", deflateSync(rows.subarray(0, rowBytes * height))), chunk("IEND", Buffer.alloc(0)),
+  ]));
+}
+
+/**
+ * The owner's drawer on the first item of a group, in a viewport of a laptop's height. The window is taller by what
+ * headless Chrome takes off the viewport, and the picture is cut back to the viewport: otherwise the sheet, as tall as
+ * the viewport, would stop short of the picture's bottom edge.
+ */
 async function drawerScreenshot(group) {
   const file = path.join(OUT, `drawer-${group}.png`);
   rmSync(file, { force: true });
-  await chrome([`--window-size=${WIDTH},${DRAWER_HEIGHT}`, `--screenshot=${file}`], pageUrl(`view=owner&open=${group}`), settled(file));
+  await chrome([`--window-size=${WIDTH},${DRAWER_HEIGHT + windowExtra}`, `--screenshot=${file}`], pageUrl(`view=owner&open=${group}`), settled(file));
+  cropPngHeight(file, DRAWER_HEIGHT);
   return file;
 }
 
