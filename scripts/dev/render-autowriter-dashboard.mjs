@@ -9,7 +9,8 @@
 //
 // 1. Bundles a small entry that mounts <FeedbackAutowriterDashboard> with the fixtures (esbuild, tsconfig paths).
 // 2. Compiles src/app/globals.css with @tailwindcss/postcss, scanning the repository as the app's build does.
-// 3. Writes index.html, app.js and app.css to the git-ignored .feedback-autowriter/preview/.
+// 3. Writes one self-contained index.html (script and styles inline, so no stray .js for ESLint to find) to the
+//    git-ignored .feedback-autowriter/preview/.
 // 4. Screenshots three views with headless Chrome: the owner's, an admin's (read-only), and an empty to-do list
 //    early in the pilot (`index.html?view=owner|admin|empty` shows each one in a browser), and the drawer on the
 //    first item of each group of the to-do list (`&open=review|hold|incident|failed_post`).
@@ -66,7 +67,9 @@ if (open) window.setTimeout(() => document.querySelector('[data-group="' + open 
 window.setTimeout(() => { document.documentElement.dataset.pageHeight = String(document.documentElement.scrollHeight); }, 1500);
 `;
 
-const HTML = `<!doctype html>
+/** The preview page: the app's fonts and shell paddings around the dashboard, everything inline. */
+function html(script, css) {
+  return `<!doctype html>
 <html lang="en" class="h-full antialiased">
 <head>
 <meta charset="utf-8">
@@ -76,19 +79,20 @@ const HTML = `<!doctype html>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">
 <style>:root{--font-inter:"Inter",ui-sans-serif,system-ui,sans-serif;--font-jetbrains-mono:ui-monospace,monospace}</style>
-<link rel="stylesheet" href="./app.css">
+<style>${css.replaceAll("</style", "<\\/style")}</style>
 </head>
 <body class="flex min-h-full flex-col">
 <main class="flex flex-1 flex-col px-4 py-3 lg:px-6"><div id="root" class="flex flex-1 flex-col"></div></main>
-<script src="./app.js"></script>
+<script>${script.replaceAll("</script", "<\\/script")}</script>
 </body>
 </html>
 `;
+}
 
 async function bundle() {
-  await build({
+  const result = await build({
     stdin: { contents: ENTRY, resolveDir: ROOT, loader: "tsx", sourcefile: "autowriter-preview-entry.tsx" },
-    outfile: path.join(OUT, "app.js"),
+    write: false,
     bundle: true,
     format: "iife",
     platform: "browser",
@@ -101,14 +105,15 @@ async function bundle() {
     logOverride: { "module-level-directive": "silent" },
     logLevel: "warning",
   });
+  return result.outputFiles[0].text;
 }
 
 async function styles() {
   const from = path.join(ROOT, "src", "app", "globals.css");
   // Tailwind 4 finds its classes by scanning `base` (the working directory by default), as the app's build does from
   // the repository root; git-ignored files, this preview among them, are left out.
-  const result = await postcss([tailwind({ base: ROOT, optimize: false })]).process(readFileSync(from, "utf8"), { from, to: path.join(OUT, "app.css") });
-  writeFileSync(path.join(OUT, "app.css"), result.css);
+  const result = await postcss([tailwind({ base: ROOT, optimize: false })]).process(readFileSync(from, "utf8"), { from });
+  return result.css;
 }
 
 /**
@@ -182,8 +187,8 @@ async function drawerScreenshot(group) {
 }
 
 mkdirSync(OUT, { recursive: true });
-await Promise.all([bundle(), styles()]);
-writeFileSync(path.join(OUT, "index.html"), HTML);
+const [script, css] = await Promise.all([bundle(), styles()]);
+writeFileSync(path.join(OUT, "index.html"), html(script, css));
 console.log(`Preview written to ${path.relative(ROOT, OUT)}/ (index.html?view=${VIEWS.join("|")})`);
 
 if (!process.argv.includes("--no-shot")) {
