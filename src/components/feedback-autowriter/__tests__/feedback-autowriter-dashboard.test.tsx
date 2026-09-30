@@ -199,6 +199,26 @@ describe("FeedbackAutowriterDashboard", () => {
     expect(SOURCE).toContain("window.setInterval(() => void loadReview(), REVIEW_POLL_MS)");
   });
 
+  it("keeps a failed review refresh on the page until a review refresh succeeds", () => {
+    // The dashboard poll runs five times as often: its success must not wipe the message of a review refresh that failed.
+    expect(SOURCE).toContain("setReviewError(errorOf(json, response.status));");
+    expect(SOURCE).toContain('if (sequence === reviewSequence.current) setReviewError("no answer");');
+    expect(SOURCE.match(/setReviewError\(null\)/gu)).toHaveLength(1);
+    expect(SOURCE).toMatch(/setReview\(json\);\s*setReviewError\(null\);/u);
+    // The message says as of when the review data on the page is.
+    expect(SOURCE).toContain("The posts to review, the incidents and the pilot health are as of ${clock(loaded.generatedAt)}.");
+    expect(SOURCE).toContain("{reviewStale ? <p>{reviewStale}</p> : null}");
+  });
+
+  it("reloads everything when the page is shown again after a visit to another page", () => {
+    // The app keeps the page hidden with its state (cacheComponents): effects stop and run again, and the polls restart.
+    expect(SOURCE).toContain("const RESHOWN_RELOAD_MS = 1_000;");
+    expect(SOURCE).toContain("if (hiddenAt.current !== null && Date.now() - hiddenAt.current >= RESHOWN_RELOAD_MS) void reloadAllRef.current();");
+    expect(SOURCE).toMatch(/return \(\) => \{\s*hiddenAt\.current = Date\.now\(\);\s*\};\s*\}, \[\]\);/u);
+    // The reload uses the range and the tutor the page has now, not those of its first render.
+    expect(SOURCE).toMatch(/useEffect\(\(\) => \{\s*reloadAllRef\.current = reloadAll;\s*\}, \[reloadAll\]\);/u);
+  });
+
   it("filters the to-do list on the client and reloads the trends when the tutor or the range changes", () => {
     expect(SOURCE).toContain("filterInbox(inbox, tutorKey)");
     expect(SOURCE).toContain("void loadTrends(rangeDays, key);");

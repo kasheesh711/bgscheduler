@@ -29,6 +29,8 @@ import { TutorFilterChip, TutorTable } from "./tutor-table";
 const ALL_TUTORS = "*";
 const DASHBOARD_POLL_MS = 60_000;
 const REVIEW_POLL_MS = 5 * 60_000;
+/** Hidden for at least this long (a visit to another page), the page reloads everything when it is shown again. */
+const RESHOWN_RELOAD_MS = 1_000;
 
 function isDashboard(value: unknown): value is AutowriterDashboard {
   return typeof value === "object" && value !== null
@@ -71,6 +73,8 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
   const [refreshing, setRefreshing] = useState(false);
   const [trendsLoading, setTrendsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Its own message: a dashboard refresh that succeeds a moment later must not wipe a review refresh that failed.
+  const [reviewError, setReviewError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const requestSequence = useRef(0);
@@ -113,11 +117,12 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
       if (sequence !== reviewSequence.current) return;
       if (response.ok && (isUnavailable(json) || isReview(json))) {
         setReview(json);
+        setReviewError(null);
         return;
       }
-      setError(errorOf(json, response.status));
+      setReviewError(errorOf(json, response.status));
     } catch {
-      if (sequence === reviewSequence.current) setError("Could not refresh the review data.");
+      if (sequence === reviewSequence.current) setReviewError("no answer");
     }
   }, []);
 
@@ -152,10 +157,26 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
     return () => window.clearInterval(interval);
   }, [loadReview]);
 
-  /** Everything the page shows, again: after an action, and on Refresh. */
+  /** Everything the page shows, again: after an action, on Refresh, and when the page is shown again. */
   const reloadAll = useCallback(async () => {
     await Promise.all([load(), loadReview(), loadTrends(rangeDays, tutorKey)]);
   }, [load, loadReview, loadTrends, rangeDays, tutorKey]);
+
+  // The app keeps the page, hidden, while the owner is on another one (`cacheComponents`): its state survives, its
+  // effects stop, and they run again when it is shown. By then what it shows is as old as the visit, and both polls
+  // start from zero (short visits would starve the 5-minute one for good): so it reloads everything at once.
+  const reloadAllRef = useRef(reloadAll);
+  const hiddenAt = useRef<number | null>(null);
+  useEffect(() => {
+    reloadAllRef.current = reloadAll;
+  }, [reloadAll]);
+  useEffect(() => {
+    if (hiddenAt.current !== null && Date.now() - hiddenAt.current >= RESHOWN_RELOAD_MS) void reloadAllRef.current();
+    hiddenAt.current = null;
+    return () => {
+      hiddenAt.current = Date.now();
+    };
+  }, []);
 
   const changeRange = (days: TrendRangeDays) => {
     setRangeDays(days);
@@ -193,6 +214,11 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
 
   const loaded = review?.available ? review : null;
   const unavailableReason = review && !review.available ? review.reason : null;
+  // What the page still shows of the review data is then older than its "Updated" time: say as of when.
+  const reviewStale = reviewError
+    ? `Review data not refreshed (${reviewError.replace(/\.$/u, "")}).${loaded
+      ? ` The posts to review, the incidents and the pilot health are as of ${clock(loaded.generatedAt)}.` : ""}`
+    : null;
   // The payload's own clock: the same on the server and in the browser, and a minute old at most.
   const now = useMemo(() => new Date(data.generatedAt), [data.generatedAt]);
   const inbox = useMemo(() => buildInbox(data, loaded, { now }), [data, loaded, now]);
@@ -233,10 +259,13 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
           <SystemLine dashboard={data} lastRun={loaded ? loaded.lastRun : undefined} canControl={canControl} busy={busy}
             onControl={(body, confirmText) => void sendControl(body, confirmText)} />
         </div>
-        {error || note ? (
-          <div role="status" className={cn("mt-3 rounded-md border px-3 py-2 text-xs", error ? "border-red-300 text-red-700" : cn("border-available/30", TONE_TEXT.green))}>
-            {error ?? note}
+        {error || reviewStale ? (
+          <div role="status" className="mt-3 space-y-1 rounded-md border border-red-300 px-3 py-2 text-xs text-red-700">
+            {error ? <p>{error}</p> : null}
+            {reviewStale ? <p>{reviewStale}</p> : null}
           </div>
+        ) : note ? (
+          <div role="status" className={cn("mt-3 rounded-md border border-available/30 px-3 py-2 text-xs", TONE_TEXT.green)}>{note}</div>
         ) : null}
 
         <section id="autowriter-overview" className="mt-7 mb-[23px] flex scroll-mt-4 flex-wrap items-end justify-between gap-4">

@@ -42,6 +42,14 @@ describe("Inbox", () => {
     expect(html).toContain("Synced at 15:35");
   });
 
+  it("says when the review data is older than the classes: it is polled less often", () => {
+    // Loaded in the same minute: one time is enough.
+    expect(render()).not.toContain("reviews at");
+    const html = render({ review: { ...reviewFixture(), generatedAt: "2026-10-06T08:31:10.000Z" } });
+    expect(html).toContain("Synced at 15:35 · reviews at 15:31");
+    expect(render({ review: null })).not.toContain("reviews at");
+  });
+
   it("gives every row one action: Review for a post, Open for the rest", () => {
     const html = render();
     expect(html.match(/>Review<\/button>/gu)).toHaveLength(4);

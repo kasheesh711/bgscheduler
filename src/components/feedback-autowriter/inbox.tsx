@@ -138,6 +138,8 @@ export function Inbox({ items, dashboard, review, now, filteredTo, reviewUnavail
   className?: string;
 }) {
   const groups = INBOX_GROUPS.map((group) => ({ ...group, items: items.filter((item) => item.kind === group.kind) })).filter((group) => group.items.length > 0);
+  // The review data (the posts to review, the incidents) is polled less often than the classes: its own time, when it differs.
+  const reviewClock = review && clock(review.generatedAt) !== clock(dashboard.generatedAt) ? clock(review.generatedAt) : null;
   return (
     <Panel aria-labelledby="autowriter-inbox-title" className={cn("flex flex-col", className)}>
       <div className="flex items-center justify-between gap-3 border-b px-5 py-[19px]">
@@ -213,7 +215,9 @@ export function Inbox({ items, dashboard, review, now, filteredTo, reviewUnavail
       ) : null}
       <div className="flex items-center justify-between gap-3 px-5 py-3 text-[10px] text-muted-foreground">
         <span>Sorted by action type, then deadline{canControl ? "" : " · Only the owner records verdicts."}</span>
-        <span className="flex items-center gap-[5px]"><Check aria-hidden className="size-3" /> Synced at {clock(dashboard.generatedAt)}</span>
+        <span className="flex items-center gap-[5px]">
+          <Check aria-hidden className="size-3" /> Synced at {clock(dashboard.generatedAt)}{reviewClock ? ` · reviews at ${reviewClock}` : ""}
+        </span>
       </div>
     </Panel>
   );
