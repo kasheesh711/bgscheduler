@@ -178,7 +178,7 @@ function wiseForMany(detailFor: (sessionId: string) => Detail = () => sessionDet
   return { ops, started, current: () => current };
 }
 
-/** One more class of Kevin's, due now; `hoursToDeadline` orders it among the others. */
+/** One more class of the same tutor, due now; `hoursToDeadline` orders it among the others. */
 async function seedClass(wiseSessionId: string, hoursToDeadline: number, overrides: Partial<typeof S.$inferInsert> = {}) {
   await ensureSessionRow(db, {
     wiseSessionId, wiseClassId: CLASS_ID, wiseTeacherUserId: KEVIN,
