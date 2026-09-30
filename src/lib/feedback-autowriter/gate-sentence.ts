@@ -39,7 +39,7 @@ function waitingFor(gate: Gate): string {
  * needs 80%.", "Not enough reviews yet." Dates are Bangkok dates, shown as "D Mon"; measured percentages are rounded
  * down. `gate.blockedUntil` is the latest critical class's date plus the window's 14 days.
  */
-export function gateSentence(gate: Gate): string {
+export function gateSentence(gate: AutowriterReview["gate"]): string {
   switch (gate.status) {
     case "blocked_critical":
       if (gate.blockedUntil) {
