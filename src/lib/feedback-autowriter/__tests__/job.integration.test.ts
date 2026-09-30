@@ -1613,10 +1613,13 @@ describe("transcript first (Postgres + fakes)", () => {
     expect(await attempt([failedCall("Insufficient credits", 402)]).run())
       .toMatchObject({ result: "infra", detail: `${arm}:Insufficient credits` });
     const rateLimit = "openai/gpt-6.1-sol is temporarily rate-limited upstream.";
-    const rateLimited = attempt(Array<OpenRouterCallResult>(4).fill(failedCall(rateLimit, 429)));
+    const waits: number[] = [];
+    const rateLimited = attempt(Array<OpenRouterCallResult>(4).fill(failedCall(rateLimit, 429)), { sleep: async (ms) => { waits.push(ms); }, random: () => 0 });
     expect(await rateLimited.run()).toMatchObject({ result: "infra", detail: `${arm}:${rateLimit}` });
-    // The request and its three retries, all to the writer's own model: never the fallback writer.
+    // The request and its three retries, all to the writer's own model: never the fallback writer. The waits between
+    // them (4 s, 10 s and 25 s, here at the low end of their ±30%) went through the injected wait.
     expect(rateLimited.model.seen).toEqual([writer, writer, writer, writer]);
+    expect(waits.filter((ms) => [2_800, 7_000, 17_500].includes(ms))).toEqual([2_800, 7_000, 17_500]);
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
       state: "transcribing", reason: `infra:${arm}:${rateLimit}`, sonioxTranscriptionId: "job-1", metadata: { writerErrors: 2 },
     });
