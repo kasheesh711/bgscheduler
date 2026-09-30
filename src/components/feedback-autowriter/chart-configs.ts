@@ -111,12 +111,22 @@ function targetLine(label: string, value: number, length: number, colors: Autowr
 
 const COMMON = { responsive: true, maintainAspectRatio: false, animation: false } as const;
 
-function dateAxis(colors: AutowriterChartColors, stacked = false) {
+/**
+ * Which dates of an axis are named: about five, counted back from the last one, so the latest date always is
+ * (the first may not be; the section's heading gives the range).
+ */
+export function namedDates(labels: readonly string[]): (value: string | number, index: number) => string {
+  const last = labels.length - 1;
+  const step = Math.max(1, Math.ceil(last / 5));
+  return (_value, index) => (last - index) % step === 0 ? labels[index] ?? "" : "";
+}
+
+function dateAxis(colors: AutowriterChartColors, labels: readonly string[], stacked = false) {
   return {
     stacked,
     border: { display: false },
     grid: { display: false },
-    ticks: { color: colors.text, font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 6 },
+    ticks: { color: colors.text, font: { size: 10 }, maxRotation: 0, autoSkip: false, callback: namedDates(labels) },
   };
 }
 
@@ -183,7 +193,7 @@ export function buildAccuracyChartConfig(days: readonly TrendDay[], colors: Auto
     options: {
       ...COMMON,
       interaction: { mode: "index", intersect: false },
-      scales: { x: dateAxis(colors), y: percentAxis(colors, percentAxisMin([daily, average, wilson], 0.6)) },
+      scales: { x: dateAxis(colors, labelsOf(days)), y: percentAxis(colors, percentAxisMin([daily, average, wilson], 0.6)) },
       plugins: {
         legend: { display: false },
         tooltip: tooltip((item) => {
@@ -218,7 +228,7 @@ export function buildCoverageChartConfig(days: readonly TrendDay[], colors: Auto
     options: {
       ...COMMON,
       interaction: { mode: "index", intersect: false },
-      scales: { x: dateAxis(colors), y: percentAxis(colors, percentAxisMin([daily, average], 0.6)) },
+      scales: { x: dateAxis(colors, labelsOf(days)), y: percentAxis(colors, percentAxisMin([daily, average], 0.6)) },
       plugins: {
         legend: { display: false },
         tooltip: tooltip((item) => {
@@ -251,7 +261,7 @@ export function buildSpeedCostChartConfig(days: readonly TrendDay[], colors: Aut
       ...COMMON,
       interaction: { mode: "index", intersect: false },
       scales: {
-        x: dateAxis(colors),
+        x: dateAxis(colors, labelsOf(days)),
         y: {
           position: "left",
           beginAtZero: true,
@@ -308,7 +318,7 @@ export function buildEvidenceChartConfig(days: readonly TrendDay[], colors: Auto
       ...COMMON,
       interaction: { mode: "index", intersect: false },
       scales: {
-        x: dateAxis(colors, true),
+        x: dateAxis(colors, labelsOf(days), true),
         y: {
           stacked: true,
           position: "left",

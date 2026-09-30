@@ -121,7 +121,7 @@ function rowView(item: InboxItem, dashboard: AutowriterDashboard, review: Autowr
   return { tile: "blue", action: "neutral", title: item.title, tags: null, sub: item.detail };
 }
 
-export function Inbox({ items, dashboard, review, now, filteredTo, reviewUnavailable, onOpen, className }: {
+export function Inbox({ items, dashboard, review, now, filteredTo, reviewUnavailable, canControl, onOpen, className }: {
   /** The to-do list in display order (`buildInbox`), already narrowed to the tutor filter. */
   items: readonly InboxItem[];
   dashboard: AutowriterDashboard;
@@ -132,6 +132,8 @@ export function Inbox({ items, dashboard, review, now, filteredTo, reviewUnavail
   /** The name of the tutor the page is filtered to. */
   filteredTo: string | null;
   reviewUnavailable: boolean;
+  /** The owner; every other admin reads, and the list says so. */
+  canControl: boolean;
   onOpen: (target: DrawerTarget) => void;
   className?: string;
 }) {
@@ -210,7 +212,7 @@ export function Inbox({ items, dashboard, review, now, filteredTo, reviewUnavail
         </p>
       ) : null}
       <div className="flex items-center justify-between gap-3 px-5 py-3 text-[10px] text-muted-foreground">
-        <span>Sorted by action type, then deadline</span>
+        <span>Sorted by action type, then deadline{canControl ? "" : " · Only the owner records verdicts."}</span>
         <span className="flex items-center gap-[5px]"><Check aria-hidden className="size-3" /> Synced at {clock(dashboard.generatedAt)}</span>
       </div>
     </Panel>

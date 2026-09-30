@@ -10,6 +10,7 @@ import {
   buildSpeedCostChartConfig,
   chartPalette,
   lastValue,
+  namedDates,
   percentAxisMin,
   railSeries,
   withAlpha,
@@ -85,6 +86,21 @@ describe("percentAxisMin", () => {
   });
 });
 
+describe("namedDates", () => {
+  it("names about five dates of an axis, always the last one", () => {
+    const named = (count: number) => {
+      const labels = Array.from({ length: count }, (_, index) => `d${index}`);
+      return labels.map((label, index) => namedDates(labels)(label, index)).filter(Boolean);
+    };
+    expect(named(14)).toEqual(["d1", "d4", "d7", "d10", "d13"]);
+    expect(named(30)).toEqual(["d5", "d11", "d17", "d23", "d29"]);
+    expect(named(90)).toEqual(["d17", "d35", "d53", "d71", "d89"]);
+    expect(named(3)).toEqual(["d0", "d1", "d2"]);
+    expect(named(1)).toEqual(["d0"]);
+    expect(named(0)).toEqual([]);
+  });
+});
+
 describe("buildAccuracyChartConfig", () => {
   const config = buildAccuracyChartConfig(DAYS, COLORS);
 
@@ -114,6 +130,8 @@ describe("buildAccuracyChartConfig", () => {
   it("reaches down to the lowest value shown and says what a day's numbers are", () => {
     expect(scales(config).y).toMatchObject({ min: 0.2, max: 1 });
     expect(scales(config).y.ticks.callback?.(0.8, 0)).toBe("80%");
+    // Four days: every date is named, the last one for sure.
+    expect([0, 1, 2, 3].map((index) => scales(config).x.ticks.callback?.(index, index))).toEqual(["1 Oct", "2 Oct", "3 Oct", "4 Oct"]);
     expect(scales(buildAccuracyChartConfig([day("2026-10-01", { accuracy: 0.9, accuracy7d: 0.9, wilson14d: 0.75 })], COLORS)).y).toMatchObject({ min: 0.6, max: 1 });
     expect(tip(config, SERIES.dailyAccuracy, 0)).toBe(" Daily accuracy: 75% (3 of 4 reviewed)");
     expect(tip(config, SERIES.dailyAccuracy, 1)).toBe(" Daily accuracy: — (0 of 0 reviewed)");

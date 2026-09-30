@@ -62,6 +62,10 @@ describe("TutorTable", () => {
     expect(rowOf(html, "Dao")).toBe("D Dao 0 posts in Wise · 0 to review — — — 1 0 open 0 Every post (new) Partly on");
     expect(rowOf(html, "Emma")).toContain("Off");
     expect(html).toContain("23 Sep – 6 Oct");
+    // In the green only at the pass bar and without a critical verdict: Ben's 82.3% has one.
+    expect(html).toMatch(/text-amber-700[^>]*>82\.3%</u);
+    expect(html).toMatch(/color-mix[^>]*>95%</u);
+    expect(html).toMatch(/text-amber-700[^>]*>68\.4%</u);
     // The old tables' columns of raw counts are gone from this table.
     expect(html).not.toContain("Median to post");
   });

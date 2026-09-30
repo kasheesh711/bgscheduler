@@ -113,6 +113,8 @@ describe("FeedbackAutowriterDashboard", () => {
     expect(html).not.toContain(">Approve<");
     expect(html).not.toContain(">Acknowledge<");
     expect(html).not.toContain("Controls");
+    expect(html).toContain("Only the owner records verdicts.");
+    expect(render({ canControl: true })).not.toContain("Only the owner records verdicts.");
     // Everything is still there to read and to open.
     expect(html).toContain("What needs you");
     expect(html.match(/>Review<\/button>/gu)?.length).toBeGreaterThan(0);

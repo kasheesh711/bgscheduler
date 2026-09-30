@@ -89,6 +89,7 @@ describe("HoldBody", () => {
     expect(html).toContain(">Judge<");
     // Class of 5 Oct: due at the end of 7 Oct, 32 hours from 15:35 on the 6th.
     expect(html).toContain("Deadline in 32 h");
+    expect(html).toContain("The class needs a person to write it before the deadline.");
     expect(html).toContain("7 Oct, 23:59");
     expect(html).toContain("5 Oct, 15:18");
     expect(html).toContain("Stored draft (not posted)");
@@ -108,6 +109,8 @@ describe("HoldBody", () => {
     const passed = renderToStaticMarkup(<HoldBody hold={hold(SESSION.annaHeldAbsent)} row={row(SESSION.annaHeldAbsent)} now={NOW} />);
     expect(passed).toContain("The student&#x27;s attendance shows 0%");
     expect(passed).toMatch(/text-conflict[^>]*>Deadline passed 15 h ago</u);
+    expect(passed).toContain("the feedback deadline has passed. The class still needs a person to write it.");
+    expect(passed).not.toContain("before the deadline");
     const stale = renderToStaticMarkup(<HoldBody hold={hold(SESSION.emmaHeldStale)} row={null} now={NOW} />);
     expect(stale).toContain("Not emailed");
   });

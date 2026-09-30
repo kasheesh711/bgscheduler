@@ -141,7 +141,8 @@ export function TutorTable({ dashboard, review, now, selectedTutorKey, onSelect,
             {rows.map((row, index) => {
               const selected = row.tutorKey === selectedTutorKey;
               const quality = row.quality;
-              const belowBar = row.accuracy !== null && row.accuracy < GATE_THRESHOLDS.passLowerBound;
+              // In the green only at the pass bar and without a critical verdict.
+              const belowBar = (row.accuracy !== null && row.accuracy < GATE_THRESHOLDS.passLowerBound) || (quality?.critical ?? 0) > 0;
               const belowFloor = quality?.coverage !== null && quality?.coverage !== undefined && quality.coverage < GATE_THRESHOLDS.minCoverage;
               return (
                 <TableRow key={row.tutorKey} aria-selected={selected} data-tutor-row={row.tutorKey}

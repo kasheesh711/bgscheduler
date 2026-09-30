@@ -9,11 +9,17 @@ import { cn } from "@/lib/utils";
 
 export type Tone = "neutral" | "blue" | "amber" | "green" | "red";
 
+/**
+ * The `available` token is a fill colour: as small text on a light card it is too pale to read, so text takes it
+ * darkened (and as it is on a dark card).
+ */
+const GREEN_TEXT = "text-[color:color-mix(in_oklch,var(--available),black_32%)] dark:text-available";
+
 const TAG_TONE: Record<Tone, string> = {
   neutral: "border-border bg-muted/40 text-muted-foreground",
   blue: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950 dark:text-sky-200",
   amber: "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200",
-  green: "border-available/30 bg-available/10 text-available",
+  green: `border-available/30 bg-available/10 ${GREEN_TEXT}`,
   red: "border-conflict/30 bg-conflict/10 text-conflict",
 };
 
@@ -22,7 +28,7 @@ export const TONE_TEXT: Record<Tone, string> = {
   neutral: "text-muted-foreground",
   blue: "text-sky-700 dark:text-sky-300",
   amber: "text-amber-700 dark:text-amber-400",
-  green: "text-available",
+  green: GREEN_TEXT,
   red: "text-conflict",
 };
 

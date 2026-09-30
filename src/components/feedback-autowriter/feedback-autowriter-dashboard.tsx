@@ -8,6 +8,7 @@ import { buildInbox, filterInbox } from "@/lib/feedback-autowriter/inbox";
 import type { AutowriterReview, AutowriterReviewUnavailable } from "@/lib/feedback-autowriter/review-data";
 import type { AutowriterTrends, TrendRangeDays } from "@/lib/feedback-autowriter/trends";
 import { cn } from "@/lib/utils";
+import { TONE_TEXT } from "./atoms";
 import { ClassesLog } from "./classes-log";
 import { clock, longDate } from "./format";
 import { HealthRail } from "./health-rail";
@@ -229,7 +230,7 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
             onControl={(body, confirmText) => void sendControl(body, confirmText)} />
         </div>
         {error || note ? (
-          <div role="status" className={cn("mt-3 rounded-md border px-3 py-2 text-xs", error ? "border-red-300 text-red-700" : "border-available/30 text-available")}>
+          <div role="status" className={cn("mt-3 rounded-md border px-3 py-2 text-xs", error ? "border-red-300 text-red-700" : cn("border-available/30", TONE_TEXT.green))}>
             {error ?? note}
           </div>
         ) : null}
@@ -247,7 +248,7 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
 
         <div className="grid items-stretch gap-5 lg:grid-cols-3">
           <Inbox className="lg:col-span-2" items={shown} dashboard={data} review={loaded} now={now} filteredTo={filteredTo}
-            reviewUnavailable={loaded === null} onOpen={setTarget} />
+            reviewUnavailable={loaded === null} canControl={canControl} onOpen={setTarget} />
           <HealthRail dashboard={data} review={loaded} unavailableReason={unavailableReason} />
         </div>
 

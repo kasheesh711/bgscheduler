@@ -6,13 +6,18 @@ import { FIXTURE_NOW, SESSION, dashboardFixture, quietDashboardFixture, quietRev
 
 const NOW = new Date(FIXTURE_NOW);
 
-function render(options: { tutorKey?: string | null; review?: ReturnType<typeof reviewFixture> | null; dashboard?: ReturnType<typeof dashboardFixture> } = {}): string {
+function render(options: {
+  tutorKey?: string | null;
+  review?: ReturnType<typeof reviewFixture> | null;
+  dashboard?: ReturnType<typeof dashboardFixture>;
+  canControl?: boolean;
+} = {}): string {
   const dashboard = options.dashboard ?? dashboardFixture();
   const review = options.review === undefined ? reviewFixture() : options.review;
   const items = filterInbox(buildInbox(dashboard, review, { now: NOW }), options.tutorKey ?? null);
   return renderToStaticMarkup(
     <Inbox items={items} dashboard={dashboard} review={review} now={NOW} filteredTo={options.tutorKey ?? null}
-      reviewUnavailable={review === null} onOpen={() => undefined} />,
+      reviewUnavailable={review === null} canControl={options.canControl ?? true} onOpen={() => undefined} />,
   );
 }
 
@@ -110,6 +115,14 @@ describe("Inbox", () => {
     expect(html).toContain("4 open");
     expect(html).toContain("could not load");
     expect(render()).not.toContain("could not load");
+  });
+
+  it("tells an admin who is not the owner that the list is read-only, with the same items to open", () => {
+    const viewer = render({ canControl: false });
+    expect(viewer).toContain("Only the owner records verdicts.");
+    expect(viewer).toContain("9 open");
+    expect(viewer.match(/>Review<\/button>/gu)).toHaveLength(4);
+    expect(render()).not.toContain("Only the owner records verdicts.");
   });
 
   it("names a tutor who is not on the roster by their label", () => {

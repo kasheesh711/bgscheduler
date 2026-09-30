@@ -96,10 +96,10 @@ function Figure({ value, unit, caption }: { value: string; unit?: string; captio
   );
 }
 
-/** A small bordered count: a fix-round bucket, a kind of miss, a writer. */
+/** A small bordered count: a fix-round bucket, a kind of miss, a writer. A count of zero is never coloured. */
 function Pill({ label, value, tone = "neutral" }: { label: string; value: ReactNode; tone?: Tone }) {
   return (
-    <span className={cn("inline-flex items-center gap-1 rounded border bg-muted/30 px-1.5 py-1 text-[10px] leading-none", tone !== "neutral" && TONE_TEXT[tone])}>
+    <span className={cn("inline-flex items-center gap-1 rounded border bg-muted/30 px-1.5 py-1 text-[10px] leading-none", tone !== "neutral" && value !== 0 && TONE_TEXT[tone])}>
       {label} <strong className="font-[550] tabular-nums text-foreground">{value}</strong>
     </span>
   );
@@ -135,7 +135,12 @@ function Footer({ children }: { children: ReactNode }) {
   return <div className="mt-auto pt-3"><div className="space-y-2 border-t pt-3 text-[10px] leading-[1.6] text-muted-foreground">{children}</div></div>;
 }
 
-function AccuracyCard({ trends, review }: { trends: AutowriterTrends; review: AutowriterReview }) {
+/** "last 14 days", and that the figures are everyone's while the charts above them are one tutor's. */
+function windowLabel(review: AutowriterReview, filtered: boolean): string {
+  return `${filtered ? "all tutors · " : ""}last ${review.window.days} days`;
+}
+
+function AccuracyCard({ trends, review, filtered }: { trends: AutowriterTrends; review: AutowriterReview; filtered: boolean }) {
   const { totals, days } = trends;
   const { fixRounds, gate } = review;
   return (
@@ -154,15 +159,22 @@ function AccuracyCard({ trends, review }: { trends: AutowriterTrends; review: Au
       <Footer>
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
           <span className={cn("flex items-center gap-[5px]", TONE_TEXT[GATE_NOTE_TONE[gate.status]])}>
-            <Shield aria-hidden className="size-3" strokeWidth={1.6} />{gateSentence(gate)}
+            <Shield aria-hidden className="size-3" strokeWidth={1.6} />{filtered ? "The pilot's gate: " : ""}{gateSentence(gate)}
           </span>
           <span>A cosmetic fix still counts as accurate.</span>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
-          <Upper className="mr-1 text-[9px]">Fix rounds per post · last {review.window.days} days</Upper>
-          <Pill label="0" value={fixRounds.zero} tone="green" />
-          <Pill label="1" value={fixRounds.one} />
-          <Pill label="2" value={fixRounds.two} />
+          <Upper className="mr-1 text-[9px]">Reviews · {windowLabel(review, filtered)}</Upper>
+          <Pill label="Reviewed" value={gate.reviewed} />
+          <Pill label="Waiting" value={gate.requiredPending} tone="amber" />
+          <Pill label="Flagged" value={gate.pendingFlaggedReviews} tone="amber" />
+          <Pill label="Critical" value={gate.criticalVerdicts} tone="red" />
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Upper className="mr-1 text-[9px]">Fix rounds per post · {windowLabel(review, filtered)}</Upper>
+          <Pill label="None" value={fixRounds.zero} tone="green" />
+          <Pill label="One" value={fixRounds.one} />
+          <Pill label="Two" value={fixRounds.two} />
           <Pill label="3+" value={fixRounds.threePlus} tone="amber" />
           <Pill label="Unresolved" value={fixRounds.unresolved} tone="amber" />
         </div>
@@ -171,7 +183,7 @@ function AccuracyCard({ trends, review }: { trends: AutowriterTrends; review: Au
   );
 }
 
-function CoverageCard({ trends, review }: { trends: AutowriterTrends; review: AutowriterReview }) {
+function CoverageCard({ trends, review, filtered }: { trends: AutowriterTrends; review: AutowriterReview; filtered: boolean }) {
   const { totals, days } = trends;
   const { coverage } = review;
   const floor = GATE_THRESHOLDS.minCoverage;
@@ -191,7 +203,7 @@ function CoverageCard({ trends, review }: { trends: AutowriterTrends; review: Au
           </div>
         ) : null}
         <div className="flex flex-wrap items-center gap-1.5">
-          <Upper className="mr-1 text-[9px]">Misses · last {review.window.days} days</Upper>
+          <Upper className="mr-1 text-[9px]">Misses · {windowLabel(review, filtered)}</Upper>
           <Pill label="Held" value={coverage.miss_held} tone="amber" />
           <Pill label="Written after our draft" value={coverage.miss_late} tone="amber" />
           <Pill label="Expired" value={coverage.miss_expired} tone="amber" />
@@ -342,8 +354,8 @@ export function TrendCharts({ trends, review, unavailableReason, rangeDays, onRa
         </p>
       ) : (
         <div className={cn("grid gap-[18px] lg:grid-cols-2", loading && "opacity-60")}>
-          <AccuracyCard trends={trends} review={review} />
-          <CoverageCard trends={trends} review={review} />
+          <AccuracyCard trends={trends} review={review} filtered={filteredTo !== null} />
+          <CoverageCard trends={trends} review={review} filtered={filteredTo !== null} />
           <SpeedCostCard trends={trends} />
           <EvidenceCard trends={trends} />
         </div>

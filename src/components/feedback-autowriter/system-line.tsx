@@ -7,7 +7,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import type { AutowriterDashboard } from "@/lib/feedback-autowriter/dashboard";
 import type { AutowriterReview } from "@/lib/feedback-autowriter/review-data";
 import { cn } from "@/lib/utils";
-import { Tag, Upper } from "./atoms";
+import { Tag, TONE_TEXT, Upper } from "./atoms";
 import { when } from "./format";
 import { effortsLabel, modelLabel } from "./model-labels";
 
@@ -19,8 +19,8 @@ import { effortsLabel, modelLabel } from "./model-labels";
 type Mode = AutowriterDashboard["control"]["mode"];
 
 const MODE_TONE: Record<Mode, { text: string; dot: string }> = {
-  live: { text: "text-available", dot: "bg-available" },
-  shadow: { text: "text-sky-700 dark:text-sky-300", dot: "bg-sky-500" },
+  live: { text: TONE_TEXT.green, dot: "bg-available" },
+  shadow: { text: TONE_TEXT.blue, dot: "bg-sky-500" },
   off: { text: "text-muted-foreground", dot: "bg-muted-foreground/50" },
 };
 

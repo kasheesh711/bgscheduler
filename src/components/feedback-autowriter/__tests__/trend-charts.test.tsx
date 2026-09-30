@@ -47,7 +47,14 @@ describe("TrendCharts", () => {
     const html = render();
     expect(html).toContain("Gate blocked until 13 Oct: critical on 29 Sep.");
     // From the review payload: the gate's 14 days, whatever the range.
+    expect(html).toContain("Reviews · last 14 days");
+    expect(html).toMatch(/Reviewed <strong[^>]*>51<\/strong>/u);
+    expect(html).toMatch(/Waiting <strong[^>]*>3<\/strong>/u);
+    expect(html).toMatch(/Flagged <strong[^>]*>1<\/strong>/u);
+    expect(html).toMatch(/Critical <strong[^>]*>1<\/strong>/u);
     expect(html).toContain("Fix rounds per post · last 14 days");
+    expect(html).toMatch(/None <strong[^>]*>38<\/strong>/u);
+    expect(html).toMatch(/Unresolved <strong[^>]*>8<\/strong>/u);
     expect(html).toContain("Misses · last 14 days");
     for (const label of ["Held", "Written after our draft", "Expired", "Failed", "Never seen", "Tutor wrote first", "Data quality", "Tutor switched off", "Not live (shadow/off)", "Out of scope", "Still in progress"]) {
       expect(html).toContain(label);
@@ -89,7 +96,14 @@ describe("TrendCharts", () => {
   });
 
   it("says whose series these are when the page is filtered to a tutor, and when they are reloading", () => {
-    expect(render({ filteredTo: "Anna" })).toContain("Anna only");
+    const anna = render({ filteredTo: "Anna" });
+    expect(anna).toContain("Anna only");
+    // The footers from the review payload stay the whole pilot's, and say so.
+    expect(anna).toContain("Reviews · all tutors · last 14 days");
+    expect(anna).toContain("Fix rounds per post · all tutors · last 14 days");
+    expect(anna).toContain("Misses · all tutors · last 14 days");
+    expect(anna).toContain("The pilot&#x27;s gate: Gate blocked until 13 Oct: critical on 29 Sep.");
+    expect(render()).not.toContain("all tutors · last");
     expect(render({ loading: true })).toContain("loading…");
   });
 

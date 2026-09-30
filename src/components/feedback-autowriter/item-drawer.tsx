@@ -169,6 +169,7 @@ export function ReviewBody({ item, canControl, onRecorded }: {
 /** A held class: why, until when, what is stored, and what the judge said. */
 export function HoldBody({ hold, row, now }: { hold: Hold; row: ClassRow | null; now: Date }) {
   const written = hold.resolvedBy === "tutor_wrote";
+  const overdue = hold.deadlineAt !== null && new Date(hold.deadlineAt).getTime() <= now.getTime();
   return (
     <div className="space-y-4">
       <div className="space-y-2">
@@ -183,7 +184,9 @@ export function HoldBody({ hold, row, now }: { hold: Hold; row: ClassRow | null;
         <p className="text-xs text-muted-foreground">
           {written
             ? "A person has saved feedback on this class in Wise, so it no longer waits for anyone. The autowriter does not touch a held class again."
-            : "Nothing was posted. The class needs a person to write it before the deadline."}
+            : overdue
+              ? "Nothing was posted, and the feedback deadline has passed. The class still needs a person to write it."
+              : "Nothing was posted. The class needs a person to write it before the deadline."}
         </p>
       </div>
       <Block label="The class">
