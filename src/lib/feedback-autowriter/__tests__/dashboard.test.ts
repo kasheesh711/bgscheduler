@@ -1,8 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { buildAutowriterDashboard, type DashboardCallRow, type DashboardSessionRow } from "../dashboard";
 import { KEVIN_ONLINE_WISE_USER_ID } from "../roster";
+import type { AutowriterSystemStatus } from "../system-status";
 
 const NOW = new Date("2026-09-30T05:00:00.000Z");
+const system: AutowriterSystemStatus = {
+  writer: { model: "openai/gpt-6.1-sol", effort: "low" },
+  fallbackWriter: { model: "openai/gpt-6-luna", effort: "max" },
+  judge: { model: "z-ai/glm-5.3-flash", efforts: ["medium", "high"] },
+  transcriptFirst: true,
+  secondPass: true,
+  promptVersion: 5,
+  judgeVersion: 5,
+  commit: "abc1234",
+};
 const control = {
   id: "default",
   mode: "live" as const,
@@ -55,6 +66,7 @@ describe("buildAutowriterDashboard", () => {
     now: NOW,
     windowDays: 7,
     control,
+    system,
     sessions: [
       session("a", { state: "verified", arm: "sol", postStartedAt: new Date("2026-09-30T03:02:00.000Z"), fields: { topics: "t" } }),
       session("b", { state: "verified", arm: "luna", postStartedAt: new Date("2026-09-30T03:04:00.000Z") }),
@@ -111,6 +123,7 @@ describe("buildAutowriterDashboard", () => {
       now: NOW,
       windowDays: 7,
       control,
+      system,
       calls: [],
       webhooks: [],
       sessions: [
@@ -178,6 +191,7 @@ describe("buildAutowriterDashboard", () => {
       now: NOW,
       windowDays: 7,
       control,
+      system,
       sessions: [session("a", { state: "held" }), session("b", { state: "verified" })],
       webhooks: [],
       calls: [
@@ -204,6 +218,7 @@ describe("buildAutowriterDashboard", () => {
       now: NOW,
       windowDays: 7,
       control,
+      system,
       calls: [],
       webhooks: [],
       sessions: [
@@ -235,6 +250,7 @@ describe("buildAutowriterDashboard", () => {
       now: NOW,
       windowDays: 7,
       control,
+      system,
       calls: [],
       webhooks: [],
       sessions: [

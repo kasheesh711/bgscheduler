@@ -74,7 +74,7 @@ function review(overrides: Partial<AutowriterReview> = {}): AutowriterReview {
       unrecordedPosts: 0, unexplainedApiWrites: 0, coverageNum: 8, coverageDen: 9,
       thresholds: { passLowerBound: 0.8, headStartLowerBound: 0.7, minCoverage: 0.7 },
       lastDaily: { date: "2026-09-29", status: "insufficient_data", wilsonLower: 0, createdAt: "2026-09-29T17:27:00.000Z" },
-      currentTutors: 5, nextExpansionSize: 8,
+      currentTutors: 5, nextExpansionSize: 8, blockedUntil: null,
     },
     coverage: {
       posted: 8, miss_held: 1, miss_late: 1, miss_expired: 0, miss_failed: 0, miss_unseen: 0, excluded_tutor_first: 5,

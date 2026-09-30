@@ -4,8 +4,10 @@ import * as schema from "@/lib/db/schema";
 import { wiseSessionLink } from "@/lib/wise/links";
 import { AUTOWRITER_MAX_TRANSCRIBE_ERRORS, AUTOWRITER_MAX_WRITER_ERRORS, AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS } from "./config";
 import { judgeProblems } from "./judge";
+import { tutorKeyFor } from "./review-job";
 import { AUTOWRITER_TUTORS, rosterTutor, tutorLabel } from "./roster";
 import { readControl, type AutowriterSessionRow } from "./store";
+import { buildSystemStatus, type AutowriterSystemStatus } from "./system-status";
 import { SUMMARY_FALLBACK_CAUSES, type SummaryFallbackCause } from "./types";
 
 const S = schema.feedbackAutowriterSessions;
@@ -129,6 +131,37 @@ export interface AutowriterDashboard {
     updatedBy: string | null;
     updatedAt: string | null;
   };
+  /** Models, versions, evidence switches and commit the autowriter runs with (the system line). */
+  system: AutowriterSystemStatus;
+  /** Classes ending today in Bangkok (`date`), whatever the window: the Today line. */
+  today: { date: string; posted: number; awaitingRecording: number; held: number; skippedHuman: number; skippedScope: number };
+  /** Every class in state `held` now (not limited to the window), soonest deadline first. */
+  holds: Array<{
+    wiseSessionId: string;
+    tutor: string;
+    /** Joins with `tutors[].tutorKey`, `QualityTutorRow.tutorKey` and `ReviewQueueItem.tutorKey`. */
+    tutorKey: string;
+    className: string | null;
+    classEndedAt: string | null;
+    deadlineAt: string | null;
+    reason: string | null;
+    /** When the hold's alert digest was emailed (`alerts_sent.held`); null when it was not (yet), or was suppressed. */
+    alertSentAt: string | null;
+    /** A judged draft is stored on the row. */
+    hasDraft: boolean;
+    wiseUrl: string | null;
+  }>;
+  /** Classes of the window whose POST did not end well, latest class first. */
+  failedPosts: Array<{
+    wiseSessionId: string;
+    tutor: string;
+    tutorKey: string;
+    className: string | null;
+    classEndedAt: string | null;
+    state: "verify_failed" | "unknown_outcome" | "rejected";
+    reason: string | null;
+    wiseUrl: string | null;
+  }>;
   totals: {
     seen: number;
     posted: number;
@@ -187,6 +220,8 @@ export interface AutowriterDashboard {
     wiseUrl: string | null;
     className: string | null;
     tutor: string;
+    /** Joins with `tutors[].tutorKey`, `QualityTutorRow.tutorKey` and `ReviewQueueItem.tutorKey`. */
+    tutorKey: string;
     scheduledEndAt: string | null;
     state: string;
     reason: string | null;
@@ -216,6 +251,7 @@ export function buildAutowriterDashboard(input: {
   now: Date;
   windowDays: number;
   control: Awaited<ReturnType<typeof readControl>>;
+  system: AutowriterSystemStatus;
   sessions: readonly DashboardSessionRow[];
   calls: readonly DashboardCallRow[];
   webhooks: readonly DashboardWebhookRow[];
@@ -269,6 +305,10 @@ export function buildAutowriterDashboard(input: {
       updatedBy: input.control.updatedBy,
       updatedAt: input.control.updatedAt?.toISOString() ?? null,
     },
+    system: input.system,
+    today: { date: bangkokDate(input.now), posted: 0, awaitingRecording: 0, held: 0, skippedHuman: 0, skippedScope: 0 },
+    holds: [],
+    failedPosts: [],
     totals: {
       seen: sessions.length,
       posted: posted.length,
@@ -340,6 +380,7 @@ export function buildAutowriterDashboard(input: {
             const tutor = rosterTutor(row.wiseTeacherUserId);
             return tutor ? tutorLabel(tutor) : row.wiseTeacherUserId ?? "unknown";
           })(),
+          tutorKey: tutorKeyFor(row.wiseTeacherUserId),
           scheduledEndAt: row.scheduledEndAt?.toISOString() ?? null,
           state: row.state,
           reason: row.reason,
@@ -436,6 +477,7 @@ export async function loadAutowriterDashboard(db: Database, input: { windowDays:
     now,
     windowDays: input.windowDays,
     control,
+    system: buildSystemStatus(),
     sessions: sessionRows,
     calls: callRows.map((row) => ({ ...row, costUsd: Number(row.costUsd ?? 0) || 0 })),
     webhooks: webhookRows,

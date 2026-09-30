@@ -238,6 +238,11 @@ export interface AutowriterReview {
     lastDaily: { date: string; status: GateStatus; wilsonLower: number; createdAt: string } | null;
     currentTutors: number;
     nextExpansionSize: number;
+    /**
+     * The first Bangkok date whose window no longer holds a critical verdict: the latest critical class's date plus the
+     * window's 14 days. Null when no critical verdict is in the window.
+     */
+    blockedUntil: string | null;
   };
   coverage: CoverageCounts;
   fixRounds: { zero: number; one: number; two: number; threePlus: number; unresolved: number };
@@ -516,6 +521,7 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
       } : null,
       currentTutors: AUTOWRITER_TUTORS.length,
       nextExpansionSize: nextExpansionSize(AUTOWRITER_TUTORS.length),
+      blockedUntil: null,
     },
     coverage,
     fixRounds,
