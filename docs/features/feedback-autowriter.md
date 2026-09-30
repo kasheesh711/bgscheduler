@@ -41,8 +41,9 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
 3. **Fresh Wise read** (`GET /user/session/{id}` or the class-scoped detail, 45 s time-out per read) → gates →
    billing plan. If Wise now shows a different teacher, the row follows it (and a switched-off tutor's class is
    not posted); a `pending` row also follows the teacher the backstop's shortlist reports.
-4. **Write.** `z-ai/glm-5.3-flash` pinned to Together with zero data retention, reasoning `max`; names are redacted
-   before anything leaves BGScheduler. The model writes `[STUDENT_1]`, which becomes the student's **nickname** — the
+4. **Write.** `openai/gpt-6.1-sol` (GPT-6.1 Sol) on a zero-data-retention route, reasoning `low` (see
+   [Models](#models)); names are redacted before anything leaves BGScheduler. The model writes `[STUDENT_1]`,
+   which becomes the student's **nickname** — the
    part before the dot in the Wise name's brackets ("Worawut (Bas.Ho) Horburapa" → "Bas"), or the first name when
    there is none (owner decision, 29 Sep). The writer and the judge both get the **class details** from Wise
    (`describeClass` in [`prompt.ts`](../../src/lib/feedback-autowriter/prompt.ts)): at BeGifted Wise's `classSubject`
@@ -51,9 +52,11 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
    NVR / Non VR = Non-Verbal Reasoning, VR = Verbal Reasoning, Sci = Science — and nothing else is guessed. The
    judge treats the class details as true, so naming the programme or subject is never a "made-up" claim. Deterministic validation (300-char policy, placeholder, absence wording,
    copy-similarity against the tutor's 90 days of feedback and the autowriter's own posts).
-5. **Judge.** GLM (same ZDR route, reasoning `high`) checks the draft against the summary: unsupported claims,
-   things given to the wrong person, homework the tutor never set (v4, below). Unfaithful or invalid →
-   fallback writer `openai/gpt-6-luna`, validated and GLM-judged the same way. Both fail → **held** + alert.
+5. **Judge.** GLM (Together, zero data retention, reasoning `high`) checks the draft against the summary:
+   unsupported claims, things given to the wrong person, homework the tutor never set (v4, below). Unfaithful or
+   invalid → fallback writer `openai/gpt-6-luna` (zero data retention), validated and GLM-judged the same way. Both
+   fail → **held** + alert. An answer to the primary writer's request from any model other than Sol is an
+   infrastructure failure, never a reason to fall back; the Luna fallback has no such model check.
    Service failures (credit, outage, time-out, a provider-side generation error, a judge that gives no verdict
    twice) never go to the fallback: the session retries in 10 minutes and the run reports an infrastructure error.
 6. **Shadow or live.** Shadow stores the draft (`would_submit`). Live runs
@@ -104,7 +107,7 @@ Prompt and judge versions are now 4 ([`prompt.ts`](../../src/lib/feedback-autowr
   natural (`[STUDENT_1]’s`). Family and place words in a guest name ("Mom's iPad", "Mae iPad", "Office PC") are
   never taken for the student: the student joined on someone else's device, and the whole guest name is still
   redacted as the student.
-- **Judge.** Reasoning `high` (was `medium`; the writer stays `max`). It returns three lists — `unsupported` (claims
+- **Judge.** Reasoning `high` (was `medium`). It returns three lists — `unsupported` (claims
   the record does not state or clearly imply), `misattributed` (something given to `[STUDENT_1]` that the record
   says about the tutor or someone else) and `homeworkNotSet` (homework, tasks or due dates the tutor did not
   clearly set; in summary mode a "Next steps" line is not homework the tutor set) — and `faithful` only when all
@@ -119,6 +122,28 @@ Prompt and judge versions are now 4 ([`prompt.ts`](../../src/lib/feedback-autowr
   wrote and passed it (`metadata.pipeline`, a complete v4 verdict). An older one — for example parked at deploy time
   — is written and judged again from its kept Soniox job, and a shadow draft re-queued by going live restarts its
   transcript's review window instead of keeping it.
+
+## Models
+
+Since 2026-09-30 (owner decision: "Switch the writer to Sol for everyone today"; migration 0100 adds the arm `sol`).
+All three go through OpenRouter with `zdr: true`, `data_collection: "deny"` and `require_parameters: true`, so neither
+a summary nor a transcript ever reaches a host that retains it ([`config.ts`](../../src/lib/feedback-autowriter/config.ts)).
+
+| Role | Model | Route | Reasoning | Route check |
+|---|---|---|---|---|
+| Writer (`sol`) | `openai/gpt-6.1-sol` | any zero-data-retention host (Azure today) | `low` | the answer must come from `openai/gpt-6.1-sol` |
+| Fallback writer (`luna`) | `openai/gpt-6-luna` | same | `max` | — |
+| Judge (`glm`) | `z-ai/glm-5.3-flash` | pinned to Together, no host fallback | `high` (v4; was `medium`) | host `Together` and that model |
+
+Why Sol: a blind comparison on 11 classes (the same Soniox transcripts for every writer, v4 rules) found 82% of
+Sol-low drafts needed no real fix (no critical errors, 0.9 real errors per 100 claims), against 64% for Luna and 30%
+for GLM (4.1 real errors per 100 claims). Sol also answered faster there: a median of ~6 s per draft against ~3
+minutes for GLM.
+
+From the 29 Sep pilot until the switch GLM (Together, reasoning `max`) was the writer, and Luna the fallback on a
+route without zero data retention; drafts written then keep the arm `glm` (or `luna`). The evaluation
+CLI (`--generate`) drafts every class with all three writers, GLM with its old writer settings (Together, reasoning
+`max`); the pilot's half/half A/B assignment (`ab.ts`) is still GLM/Luna.
 
 ## Second pass: writing from the recording (Soniox, migration 0098)
 
@@ -164,8 +189,10 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
    `transcribing` (`zoom_transcript_pending`, job kept, due again after 5 minutes, i.e. the next sweep) until 20
    minutes after the Soniox job was submitted, then goes ahead on talk share (worst case ~35 minutes after submit). The models are told the labels are reliable only when Zoom confirmed them, and are told they
    are inferred by default ([`transcript.ts`](../../src/lib/feedback-autowriter/transcript.ts));
-4. writes and judges from the `[mm:ss] TUTOR/STUDENT` transcript with **GLM on the zero-retention route only** — no
-   Luna fallback, because Thai-script names can slip past the Latin-name redaction. Extra rule: what the tutor
+4. writes (Sol, Luna fallback) and judges (GLM) from the `[mm:ss] TUTOR/STUDENT` transcript, exactly like the
+   summary path. Thai-script names can slip past the Latin-name redaction, so a transcript may only go to
+   **zero-data-retention routes** — which every model now is (until 30 Sep only GLM had one, so transcripts were
+   written by GLM alone, with no fallback). Extra rule: what the tutor
    explained is "covered", not "mastered", unless the student is shown doing it. A long transcript keeps its start
    and end (homework is usually set last). Any Thai text the model writes fails validation (English only; the
    student's own name, restored afterwards, may be Thai);
@@ -235,11 +262,13 @@ emailed (`alerts_sent` = `suppressed:<mode>`) — tutors still write their own t
 (`rejected`, `unknown_outcome`, `verify_failed`) are emailed in every mode. Mode `off` still reconciles posted rows.
 Preview deployments never touch autowriter state.
 
-## Costs (measured in the 2026-09-29 pilot)
+## Costs
 
-GLM ≈ $0.0024 per class (writer) + ≈ $0.0008 (judge, measured at reasoning `medium`; `high` since v4 is not
-re-measured yet); Luna fallback ≈ $0.0012. ~200 online classes/month across
-the five tutors → under $1/month. Each call's tokens and billed cost are in `feedback_autowriter_calls`.
+Writer (Sol, reasoning `low`) ≈ $0.04 per draft (mean of the 30 Sep comparison's transcript drafts). The GLM judge
+cost ≈ $0.0008 per check (at reasoning `medium`; `high` since v4 is not re-measured yet) and a Luna fallback draft
+≈ $0.0012 in the 2026-09-29 pilot (summaries), when GLM also wrote for ≈ $0.0024. ~200 online classes/month across
+the five tutors → roughly $8–10/month, plus Soniox for the second pass (≈ $0.10 per audio hour). Each call's tokens
+and billed cost are in `feedback_autowriter_calls`.
 
 ## Side effects to know
 
