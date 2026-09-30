@@ -376,27 +376,41 @@ describe("feedback autowriter store (Postgres)", () => {
     expect(row?.metadata).not.toHaveProperty("triagedAt");
     expect(row?.metadata).toMatchObject({ judge: { faithful: true } });
 
-    // A judged transcript draft of the current prompt and judge is posted as it is: its window keeps running.
+    // A transcript draft of the current prompt and judge that both judge levels passed (v5) is posted as it is: its
+    // window keeps running.
     const current = { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION };
     const passing = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
+    const both = { ...passing, levels: { medium: passing, high: passing } };
     const next = (await claimGeneration(db, SESSION, 60_000))!;
     await releaseGeneration(db, SESSION, next, {
       state: "would_submit", reason: "shadow",
-      metadata: { sonioxRetainUntil: "2026-10-01T00:00:00.000Z", draftEvidence: "transcript", judge: passing, pipeline: current },
+      metadata: { sonioxRetainUntil: "2026-10-01T00:00:00.000Z", draftEvidence: "transcript", judge: both, pipeline: current },
     });
     expect(await requeueShadowDrafts(db, new Date())).toBe(1);
     expect((await readSessionRow(db, SESSION))?.metadata).toMatchObject({ sonioxRetainUntil: "2026-10-01T00:00:00.000Z" });
 
-    // An older version's transcript draft, or one with no stamp at all, is written again (v4, 30 Sep): its window
-    // restarts like any other draft's.
-    for (const pipeline of [{ promptVersion: 3, judgeVersion: 3 }, { ...current, judgeVersion: 3 }, { ...current, promptVersion: 3 }, null]) {
+    // An older version's transcript draft, one with no stamp at all (v4, 30 Sep), or one not passed by both judge
+    // levels (v5, 30 Sep) is written and judged again: its window restarts like any other draft's.
+    const flagged = { ...passing, faithful: false, unsupported: ["x"] };
+    const rewritten: Array<[string, unknown, unknown]> = [
+      ["a v3 stamp", both, { promptVersion: 3, judgeVersion: 3 }],
+      ["the previous judge version", both, { ...current, judgeVersion: 4 }],
+      ["the previous prompt version", both, { ...current, promptVersion: 4 }],
+      ["no stamp", both, null],
+      ["a v4 draft as the single judge stored it", passing, { promptVersion: 4, judgeVersion: 4 }],
+      ["a current stamp on a single-level verdict", passing, current],
+      ["medium did not pass", { ...passing, levels: { medium: flagged, high: passing } }, current],
+      ["high did not pass", { ...passing, levels: { medium: passing, high: flagged } }, current],
+      ["high is missing", { ...passing, levels: { medium: passing } }, current],
+    ];
+    for (const [label, judge, pipeline] of rewritten) {
       const older = (await claimGeneration(db, SESSION, 60_000))!;
       await releaseGeneration(db, SESSION, older, {
         state: "would_submit", reason: "shadow",
-        metadata: { sonioxRetainUntil: "2026-10-01T00:00:00.000Z", draftEvidence: "transcript", judge: passing, pipeline },
+        metadata: { sonioxRetainUntil: "2026-10-01T00:00:00.000Z", draftEvidence: "transcript", judge, pipeline },
       });
-      expect(await requeueShadowDrafts(db, new Date())).toBe(1);
-      expect((await readSessionRow(db, SESSION))?.metadata, JSON.stringify(pipeline)).not.toHaveProperty("sonioxRetainUntil");
+      expect(await requeueShadowDrafts(db, new Date()), label).toBe(1);
+      expect((await readSessionRow(db, SESSION))?.metadata, label).not.toHaveProperty("sonioxRetainUntil");
     }
     await haltAutowriter(db, "noop");
   });

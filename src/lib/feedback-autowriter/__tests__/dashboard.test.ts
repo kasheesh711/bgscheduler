@@ -129,7 +129,7 @@ describe("buildAutowriterDashboard", () => {
       { cause: "no_recording", label: "No recording after 3 h — from summary", count: 2 },
       { cause: "speakers_unclear", label: "Speakers unclear — from summary", count: 1 },
       { cause: "something_new", label: "something_new — from summary", count: 1 },
-      { cause: "writer_failed", label: "Writer or judge failed 3 times on the transcript — from summary", count: 1 },
+      { cause: "writer_failed", label: "Writer failed 3 times on the transcript — from summary", count: 1 },
     ]);
     expect(board.latency.byRoute).toEqual([
       { route: "transcript", label: "From the transcript", medianMinutes: 55, p90Minutes: 70, samples: 2 },
@@ -139,7 +139,7 @@ describe("buildAutowriterDashboard", () => {
     const row = (id: string) => board.recent.find((entry) => entry.wiseSessionId === id);
     expect(row("f1")?.summaryFallback).toEqual({ cause: "no_recording", label: "No recording after 3 h — from summary" });
     expect(row("t3")?.summaryFallback).toBeNull();
-    expect(row("f5")?.summaryFallback).toEqual({ cause: "writer_failed", label: "Writer or judge failed 3 times on the transcript — from summary" });
+    expect(row("f5")?.summaryFallback).toEqual({ cause: "writer_failed", label: "Writer failed 3 times on the transcript — from summary" });
     expect(board.totals.awaitingRecording).toBe(1);
   });
 
@@ -169,6 +169,65 @@ describe("buildAutowriterDashboard", () => {
     const held = dashboard.recent.find((row) => row.wiseSessionId === "c");
     expect(held?.judgeUnsupported).toEqual(["scored 95%"]);
     expect(held?.wiseUrl).toBe("https://learn.begiftededucation.com/links?type=classroom_entity&entityType=session&entityId=c&classId=6a0000000000000000000001&profile=teacher");
+  });
+
+  it("counts a draft the judge rejected once, however many of its levels rejected it", () => {
+    const judge = (patch: Partial<DashboardCallRow>): DashboardCallRow =>
+      call("a", { role: "judge", arm: "glm", requestedModel: "z-ai/glm-5.3-flash", costUsd: 0.0008, ...patch });
+    const board = buildAutowriterDashboard({
+      now: NOW,
+      windowDays: 7,
+      control,
+      sessions: [session("a", { state: "held" }), session("b", { state: "verified" })],
+      webhooks: [],
+      calls: [
+        // v5: Sol's draft rejected at both levels, Luna's only at medium — two drafts.
+        judge({ result: { effort: "medium", faithful: false, judgedArm: "sol", judgedGeneration: "gen-1" } }),
+        judge({ result: { effort: "high", faithful: false, judgedArm: "sol", judgedGeneration: "gen-1" } }),
+        judge({ result: { effort: "medium", faithful: false, judgedArm: "luna", judgedGeneration: "gen-2" } }),
+        judge({ result: { effort: "high", faithful: true, judgedArm: "luna", judgedGeneration: "gen-2" } }),
+        // Another class's draft that happens to share a generation id is still its own draft.
+        judge({ wiseSessionId: "b", result: { effort: "high", faithful: false, judgedArm: "sol", judgedGeneration: "gen-1" } }),
+        // Calls from before v5 carry no generation: one draft each, as before.
+        judge({ wiseSessionId: "b", result: { faithful: false, judgedArm: "sol" } }),
+        judge({ wiseSessionId: "b", result: { faithful: false, judgedArm: "luna" } }),
+        judge({ wiseSessionId: "b", result: { faithful: true, judgedArm: "sol" } }),
+        judge({ wiseSessionId: "b", result: { error: "judge_unparseable" } }),
+      ],
+    });
+    expect(board.judgeRejections).toBe(5);
+  });
+
+  it("shows the union of a stored v5 verdict's two levels, once each", () => {
+    const clean = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
+    const board = buildAutowriterDashboard({
+      now: NOW,
+      windowDays: 7,
+      control,
+      calls: [],
+      webhooks: [],
+      sessions: [
+        session("v5", {
+          state: "would_submit",
+          metadata: {
+            judge: {
+              faithful: false,
+              unsupported: ["scored 95%"],
+              misattributed: ["[STUDENT_1] said 8 of the 10 pages"],
+              homeworkNotSet: [],
+              levels: {
+                medium: { ...clean, faithful: false, unsupported: ["scored 95%"] },
+                high: { ...clean, faithful: false, unsupported: ["scored 95%"], misattributed: ["[STUDENT_1] said 8 of the 10 pages"] },
+              },
+            },
+          },
+        }),
+        session("v5-passed", { state: "verified", metadata: { judge: { ...clean, levels: { medium: clean, high: clean } } } }),
+      ],
+    });
+    const problems = (id: string) => board.recent.find((row) => row.wiseSessionId === id)?.judgeUnsupported;
+    expect(problems("v5")).toEqual(["wrong person: [STUDENT_1] said 8 of the 10 pages", "scored 95%"]);
+    expect(problems("v5-passed")).toEqual([]);
   });
 
   it("shows every problem of a stored v4 verdict, and only the unsupported quotes of a v3 one", () => {

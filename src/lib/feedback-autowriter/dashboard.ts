@@ -88,7 +88,7 @@ export const SUMMARY_FALLBACK_LABELS: Record<SummaryFallbackCause, string> = {
   speakers_unclear: "Speakers unclear — from summary",
   soniox_failed: `Transcription failed ${AUTOWRITER_MAX_TRANSCRIBE_ERRORS} times — from summary`,
   transcript_pass_off: "Transcript pass switched off — from summary",
-  writer_failed: `Writer or judge failed ${AUTOWRITER_MAX_WRITER_ERRORS} times on the transcript — from summary`,
+  writer_failed: `Writer failed ${AUTOWRITER_MAX_WRITER_ERRORS} times on the transcript — from summary`,
 };
 
 function fallbackLabel(cause: string): string {
@@ -196,7 +196,10 @@ export interface AutowriterDashboard {
     latencyMinutes: number | null;
     costUsd: number;
     fields: Record<string, string> | null;
-    /** Every problem the stored judge verdict lists (`judgeProblems`); a v3 verdict has only its unsupported quotes. */
+    /**
+     * Every problem the stored judge verdict lists (`judgeProblems`): since v5 the union of both judge levels; a v3
+     * verdict has only its unsupported quotes.
+     */
     judgeUnsupported: string[];
     /** Set when transcript first sent the class back to the summary. */
     summaryFallback: { cause: string; label: string } | null;
@@ -248,7 +251,11 @@ export function buildAutowriterDashboard(input: {
   for (const row of drafts) day(bangkokDate(row.postStartedAt ?? row.updatedAt)).drafts += 1;
   for (const row of posted) if (row.postStartedAt) day(bangkokDate(row.postStartedAt)).posted += 1;
 
-  const judgeRejections = calls.filter((call) => call.role === "judge" && call.result?.faithful === false).length;
+  // Drafts the judge rejected. Since v5 two calls judge each draft (one per effort), so a draft counts once, by the
+  // writer generation its calls judged; an older call (no `judgedGeneration`) counts on its own.
+  const judgeRejections = new Set(calls.flatMap((call, index) => call.role === "judge" && call.result?.faithful === false
+    ? [`${call.wiseSessionId}|${typeof call.result.judgedGeneration === "string" ? call.result.judgedGeneration : `call-${index}`}`]
+    : [])).size;
   const armed = drafts.filter((row) => row.arm);
 
   return {
@@ -360,7 +367,10 @@ function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
-/** A stored verdict of any version: v4 lists all three kinds, v3 (`{ faithful, unsupported }`) only unsupported claims. */
+/**
+ * A stored verdict of any version: v5 holds the union of both judge levels at its top level (read here) next to each
+ * level's own lists, v4 lists all three kinds, v3 (`{ faithful, unsupported }`) only unsupported claims.
+ */
 function storedJudgeProblems(metadata: unknown): string[] {
   const judge = (metadata as { judge?: Record<string, unknown> | null } | null)?.judge;
   if (!judge || typeof judge !== "object") return [];

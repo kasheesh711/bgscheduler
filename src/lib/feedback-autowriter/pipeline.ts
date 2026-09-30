@@ -1,13 +1,23 @@
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
 import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
-import { AUTOWRITER_MODELS, type AutowriterModelConfig } from "./config";
+import {
+  AUTOWRITER_CALL_DEADLINE_MARGIN_MS,
+  AUTOWRITER_JUDGE_EFFORTS,
+  AUTOWRITER_JUDGE_TIMEOUT_MS,
+  AUTOWRITER_MODELS,
+  AUTOWRITER_WRITER_TIMEOUT_MS,
+  type AutowriterModelConfig,
+} from "./config";
 import {
   JUDGE_JSON_SCHEMA,
   JUDGE_PROMPT_VERSION,
   buildJudgeMessages,
+  combineJudgeVerdicts,
   judgeProblems,
   parseJudgeOutput,
+  type JudgeEffort,
   type JudgeOutput,
+  type StoredJudgeVerdict,
 } from "./judge";
 import { callOpenRouter, type OpenRouterCallResult } from "./openrouter";
 import {
@@ -54,15 +64,16 @@ export interface CallRecord {
 }
 
 export type PipelineResult =
-  | { kind: "draft"; arm: ModelArm; output: ModelOutput; fields: FeedbackFieldAnswers; judge: JudgeOutput }
+  | { kind: "draft"; arm: ModelArm; output: ModelOutput; fields: FeedbackFieldAnswers; judge: StoredJudgeVerdict }
   | { kind: "held"; reasons: string[] }
   /**
-   * Retried later. `modelFailure`: the models failed on this evidence (a time-out, a reply that is not JSON, a
-   * provider error, an unusable route, a judge that gives no verdict) — not our function's time, our OpenRouter
-   * account (a bad key, no credit, rate limited) or our connection. Transcript first counts only these
-   * (`writer_failed`).
+   * Retried later. `stage`: whose call failed or could not start — the writer's, or the judge's (the writer had
+   * then delivered a draft that passed validation). `modelFailure`: the model failed on this evidence (a time-out,
+   * a reply that is not JSON, a provider error, an unusable route, a judge that gives no verdict) — not our
+   * function's time, our OpenRouter account (a bad key, no credit, rate limited) or our connection. Transcript
+   * first counts only the writer's model failures (`writer_failed`, owner decision 30 Sep).
    */
-  | { kind: "infra"; error: string; modelFailure: boolean };
+  | { kind: "infra"; error: string; modelFailure: boolean; stage: "writer" | "judge" };
 
 /**
  * A failure of the service rather than of the text: missing key, credit limit,
@@ -80,24 +91,34 @@ export function isInfraFailure(call: Extract<OpenRouterCallResult, { ok: false }
   return true;
 }
 
-/** The judge gets one immediate second try per draft before the session is retried later. */
+/** Each judge level gets one immediate second try per draft before the session is retried later. */
 const JUDGE_ATTEMPTS = 2;
 
 /** The infra error for our own function running out of time before a model call: not a failure of the models. */
 export const FUNCTION_BUDGET_EXHAUSTED = "function_budget_exhausted";
 
-/** OpenRouter statuses about our account rather than the model: a bad key, no credit, rate limited. */
+/**
+ * OpenRouter statuses about our account or its capacity rather than the model's answer: a bad key, no credit, rate
+ * limited (our own limit, or the model's upstream one — which OpenRouter reports inside a 200 response).
+ */
 const ACCOUNT_STATUSES = new Set([401, 402, 429]);
 
 /**
  * An infra failure of a model call → a retry. It is the model's (`modelFailure`) unless it is about our account or
  * our connection, or it is a time-out on a call our function's remaining time had cut short.
  */
-function callFailure(who: string, call: Extract<OpenRouterCallResult, { ok: false }>, shortened: boolean): PipelineResult {
+function callFailure(
+  who: string,
+  call: Extract<OpenRouterCallResult, { ok: false }>,
+  shortened: boolean,
+  stage: "writer" | "judge",
+): PipelineResult {
   const ours = (call.httpStatus !== null && ACCOUNT_STATUSES.has(call.httpStatus)) || call.error.startsWith("network_")
     || (call.error === "timeout" && shortened);
-  return { kind: "infra", error: `${who}:${call.error}`, modelFailure: !ours };
+  return { kind: "infra", error: `${who}:${call.error}`, modelFailure: !ours, stage };
 }
+
+type Stop = { stop: PipelineResult };
 
 /** Pinned routes must be served exactly as pinned; anything else is an infra failure. */
 export function routeMismatch(config: AutowriterModelConfig, call: OpenRouterCallResult): string | null {
@@ -110,8 +131,8 @@ export function routeMismatch(config: AutowriterModelConfig, call: OpenRouterCal
 type CallModel = typeof callOpenRouter;
 
 /**
- * Sol writes → deterministic validation → GLM judge (faithfulness) → accepted.
- * Any content failure falls back to Luna (validated and GLM-judged the same
+ * Sol writes → deterministic validation → GLM judge (faithfulness) at `medium` and `high` → accepted.
+ * Any content failure falls back to Luna (validated and judged the same
  * way), for a summary and a transcript alike: every route has zero data
  * retention. Infra failures stop immediately so the session is retried later.
  */
@@ -137,8 +158,11 @@ export async function runWritingPipeline(input: {
     : [];
 
   const run = async (config: AutowriterModelConfig, role: "writer" | "judge", messages: Array<{ role: "system" | "user"; content: string }>, preferredTimeoutMs: number) => {
-    const timeoutMs = Math.min(preferredTimeoutMs, input.remainingMs() - 45_000);
-    if (timeoutMs < 30_000) return { kind: "budget" as const };
+    const availableMs = input.remainingMs() - AUTOWRITER_CALL_DEADLINE_MARGIN_MS;
+    // A judge never starts without its full time-out: cut short by our deadline it could not finish (owner decision,
+    // 30 Sep). A writer may start with less (at least 30 s).
+    if (role === "judge" ? availableMs < preferredTimeoutMs : availableMs < 30_000) return { kind: "budget" as const };
+    const timeoutMs = Math.min(preferredTimeoutMs, availableMs);
     const call = await callModel({
       apiKey: input.apiKey,
       model: config.model,
@@ -166,8 +190,8 @@ export async function runWritingPipeline(input: {
       evidence,
       speakerLabels: session.speakerLabels,
       otherPeople,
-    }), 180_000);
-    if (written.kind === "budget") return { kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false };
+    }), AUTOWRITER_WRITER_TIMEOUT_MS);
+    if (written.kind === "budget") return { kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false, stage: "writer" };
     const writeCall = written.call;
     const recordWriter = (result: Record<string, unknown>) => input.record({
       wiseSessionId: session.wiseSessionId, role: "writer", arm: writer.arm, requestedModel: writer.model,
@@ -176,14 +200,14 @@ export async function runWritingPipeline(input: {
 
     if (!writeCall.ok) {
       await recordWriter({ error: writeCall.error });
-      if (isInfraFailure(writeCall)) return callFailure(writer.arm, writeCall, written.shortened);
+      if (isInfraFailure(writeCall)) return callFailure(writer.arm, writeCall, written.shortened, "writer");
       reasons.push(`${writer.arm}:${writeCall.error}`);
       continue;
     }
     const writerMismatch = routeMismatch(writer, writeCall);
     if (writerMismatch) {
       await recordWriter({ error: writerMismatch });
-      return { kind: "infra", error: `${writer.arm}:${writerMismatch}`, modelFailure: true };
+      return { kind: "infra", error: `${writer.arm}:${writerMismatch}`, modelFailure: true, stage: "writer" };
     }
     const parsed = parseModelOutput(writeCall.content);
     if (!parsed.ok) {
@@ -205,48 +229,68 @@ export async function runWritingPipeline(input: {
       continue;
     }
 
-    // A judge that fails to give a verdict says nothing about the draft, so it
-    // never triggers the fallback writer: one more try, then retry later.
-    const judgeConfig = AUTOWRITER_MODELS.judge as AutowriterModelConfig;
-    let verdict: JudgeOutput | null = null;
-    let judgeFailure = "";
-    for (let attempt = 0; attempt < JUDGE_ATTEMPTS && !verdict; attempt += 1) {
-      const judged = await run(judgeConfig, "judge", buildJudgeMessages({
-        redactedSummary,
-        evidence,
-        speakerLabels: session.speakerLabels,
-        otherPeople,
-        classDetails: redactedClassDetails,
-        placeholderFields: {
-          topics: parsed.output.topics,
-          performance: parsed.output.performance,
-          improvement: parsed.output.improvement,
-          homework: parsed.output.homework,
-        },
-      }), 120_000);
-      if (judged.kind === "budget") return { kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false };
-      const judgeCall = judged.call;
-      const recordJudge = (result: Record<string, unknown>) => input.record({
-        wiseSessionId: session.wiseSessionId, role: "judge", arm: judgeConfig.arm, requestedModel: judgeConfig.model,
-        promptVersion: JUDGE_PROMPT_VERSION, call: judgeCall, result: { ...result, judgedArm: writer.arm, evidence },
-      });
-      if (!judgeCall.ok) {
-        await recordJudge({ error: judgeCall.error });
-        if (isInfraFailure(judgeCall)) return callFailure("judge", judgeCall, judged.shortened);
-        judgeFailure = `judge_${judgeCall.error}`;
-        continue;
+    // Judge v5 (owner decision, 30 Sep): every level in AUTOWRITER_JUDGE_EFFORTS judges the draft in parallel, on the
+    // same messages, and the draft passes only when every level passes it. Each level is today's single judge: a
+    // failed call retries the class later, a reply it cannot use gets one more try at that level. A judge that fails
+    // to give a verdict says nothing about the draft, so it never triggers the fallback writer.
+    const judgeMessages = buildJudgeMessages({
+      redactedSummary,
+      evidence,
+      speakerLabels: session.speakerLabels,
+      otherPeople,
+      classDetails: redactedClassDetails,
+      placeholderFields: {
+        topics: parsed.output.topics,
+        performance: parsed.output.performance,
+        improvement: parsed.output.improvement,
+        homework: parsed.output.homework,
+      },
+    });
+    // The writer generation both levels judged, so the dashboard counts a rejected draft once.
+    const judgedGeneration = writeCall.generationId;
+    const judgeLevel = async (effort: JudgeEffort): Promise<{ verdict: JudgeOutput } | Stop> => {
+      const config: AutowriterModelConfig = { ...AUTOWRITER_MODELS.judge, effort };
+      let failure = "";
+      for (let attempt = 0; attempt < JUDGE_ATTEMPTS; attempt += 1) {
+        const judged = await run(config, "judge", judgeMessages, AUTOWRITER_JUDGE_TIMEOUT_MS[evidence]);
+        if (judged.kind === "budget") return { stop: { kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false, stage: "judge" } };
+        const judgeCall = judged.call;
+        const recordJudge = (result: Record<string, unknown>) => input.record({
+          wiseSessionId: session.wiseSessionId, role: "judge", arm: config.arm, requestedModel: config.model,
+          promptVersion: JUDGE_PROMPT_VERSION, call: judgeCall,
+          result: { effort, ...result, judgedArm: writer.arm, judgedGeneration, evidence },
+        });
+        if (!judgeCall.ok) {
+          await recordJudge({ error: judgeCall.error });
+          if (isInfraFailure(judgeCall)) return { stop: callFailure(`judge:${effort}`, judgeCall, judged.shortened, "judge") };
+          failure = `judge_${judgeCall.error}`;
+          continue;
+        }
+        const judgeMismatch = routeMismatch(config, judgeCall);
+        if (judgeMismatch) {
+          await recordJudge({ error: judgeMismatch });
+          return { stop: { kind: "infra", error: `judge:${effort}:${judgeMismatch}`, modelFailure: true, stage: "judge" } };
+        }
+        const verdict = parseJudgeOutput(judgeCall.content);
+        // The three lists as returned, plus the flat `judgeProblems` list the hold reason and the dashboard use.
+        await recordJudge(verdict ? { ...verdict, problems: judgeProblems(verdict) } : { error: "judge_unparseable" });
+        if (verdict) return { verdict };
+        failure = "judge_unparseable";
       }
-      const judgeMismatch = routeMismatch(judgeConfig, judgeCall);
-      if (judgeMismatch) {
-        await recordJudge({ error: judgeMismatch });
-        return { kind: "infra", error: `judge:${judgeMismatch}`, modelFailure: true };
-      }
-      verdict = parseJudgeOutput(judgeCall.content);
-      // The three lists as returned, plus the flat `judgeProblems` list the hold reason and the dashboard use.
-      await recordJudge(verdict ? { ...verdict, problems: judgeProblems(verdict) } : { error: "judge_unparseable" });
-      if (!verdict) judgeFailure = "judge_unparseable";
+      return { stop: { kind: "infra", error: `judge:${effort}:${failure || "no_verdict"}`, modelFailure: true, stage: "judge" } };
+    };
+    // Both levels settle before anything is decided. A thrown error (the model client never throws) propagates as
+    // before; otherwise the first level (in effort order) that stopped decides the retry.
+    const settled = await Promise.allSettled(AUTOWRITER_JUDGE_EFFORTS.map(judgeLevel));
+    const levels: Partial<Record<JudgeEffort, JudgeOutput>> = {};
+    let stopped: PipelineResult | null = null;
+    for (const [index, level] of settled.entries()) {
+      if (level.status === "rejected") throw level.reason;
+      if ("stop" in level.value) stopped ??= level.value.stop;
+      else levels[AUTOWRITER_JUDGE_EFFORTS[index]] = level.value.verdict;
     }
-    if (!verdict) return { kind: "infra", error: `judge:${judgeFailure || "no_verdict"}`, modelFailure: true };
+    if (stopped) return stopped;
+    const verdict = combineJudgeVerdicts(levels as Record<JudgeEffort, JudgeOutput>);
     if (!verdict.faithful) {
       reasons.push(`${writer.arm}:unfaithful:${judgeProblems(verdict).slice(0, 3).join(" | ").slice(0, 300)}`);
       continue;

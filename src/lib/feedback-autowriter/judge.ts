@@ -1,8 +1,16 @@
 import { z } from "zod";
 import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
+import { AUTOWRITER_JUDGE_EFFORTS } from "./config";
 import { otherPeopleLine, speakerLabelNote, type EvidenceKind, type SpeakerLabels } from "./prompt";
 
-export const JUDGE_PROMPT_VERSION = 4;
+/**
+ * v5 (owner decision, 30 Sep): the v4 prompt below, unchanged, run at every effort in `AUTOWRITER_JUDGE_EFFORTS` on
+ * byte-identical messages; a draft passes only when every level passes it. Stored drafts and call records carry this
+ * number, so a draft judged at one level (v4 and before) is never reused as if both had passed it.
+ */
+export const JUDGE_PROMPT_VERSION = 5;
+
+export type JudgeEffort = (typeof AUTOWRITER_JUDGE_EFFORTS)[number];
 
 export const JUDGE_JSON_SCHEMA = {
   type: "object",
@@ -37,6 +45,17 @@ export const JudgeOutputSchema = z.object({
 }).strict();
 
 export type JudgeOutput = z.infer<typeof JudgeOutputSchema>;
+
+/**
+ * The verdict stored with a draft since v5 (`metadata.judge`): every level's complete v4 verdict as returned
+ * (`levels`), and at the top level their union — what hold reasons and the dashboard read, as they read a single
+ * v4 verdict. Strict: a single-judge verdict (no `levels`) does not parse.
+ */
+export const StoredJudgeVerdictSchema = JudgeOutputSchema.extend({
+  levels: z.object({ medium: JudgeOutputSchema, high: JudgeOutputSchema }).strict(),
+}).strict();
+
+export type StoredJudgeVerdict = z.infer<typeof StoredJudgeVerdictSchema>;
 
 /**
  * v4 (30 Sep): a judge that only looked for unsupported claims passed a draft that gave another student's words to
@@ -133,4 +152,43 @@ export function judgeProblems(verdict: Pick<JudgeOutput, "unsupported" | "misatt
     ...verdict.homeworkNotSet.map((quote) => `homework not set: ${quote}`),
     ...verdict.unsupported,
   ];
+}
+
+/**
+ * v5: one verdict from every level's. Each list is the union of the levels' lists in effort order, without repeats
+ * (quotes that differ only in surrounding or repeated whitespace are one); `faithful` only when every level said so
+ * and the union is empty.
+ */
+export function combineJudgeVerdicts(levels: Record<JudgeEffort, JudgeOutput>): StoredJudgeVerdict {
+  const union = (list: (verdict: JudgeOutput) => string[]) => {
+    const seen = new Set<string>();
+    return AUTOWRITER_JUDGE_EFFORTS.flatMap((effort) => list(levels[effort])).filter((quote) => {
+      const key = quote.trim().replace(/\s+/gu, " ");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+  const lists = {
+    unsupported: union((verdict) => verdict.unsupported),
+    misattributed: union((verdict) => verdict.misattributed),
+    homeworkNotSet: union((verdict) => verdict.homeworkNotSet),
+  };
+  return {
+    faithful: AUTOWRITER_JUDGE_EFFORTS.every((effort) => levels[effort].faithful) && judgeProblems(lists).length === 0,
+    ...lists,
+    levels: { medium: levels.medium, high: levels.high },
+  };
+}
+
+/**
+ * A stored verdict that passed its draft at every level, or null — fail closed: a single-judge verdict (v4 and
+ * before, no `levels`), an incomplete one, or one that lists any problem at any level. The one test a stored draft
+ * must pass before it is reused (with the version stamps; `requeueShadowDrafts` in store.ts applies the same test).
+ */
+export function passingStoredVerdict(value: unknown): StoredJudgeVerdict | null {
+  const parsed = StoredJudgeVerdictSchema.safeParse(value);
+  if (!parsed.success) return null;
+  const verdicts = [parsed.data, ...AUTOWRITER_JUDGE_EFFORTS.map((effort) => parsed.data.levels[effort])];
+  return verdicts.every((verdict) => verdict.faithful && judgeProblems(verdict).length === 0) ? parsed.data : null;
 }
