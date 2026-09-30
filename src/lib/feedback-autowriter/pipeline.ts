@@ -34,7 +34,7 @@ export interface PipelineSession {
   /**
    * What `summary.text` holds: Wise's AI summary, or a rendered Soniox transcript.
    * Transcripts can carry Thai-script names our redaction cannot see, so they
-   * only ever go to the zero-retention GLM route: no fallback writer.
+   * only ever go to zero-retention routes — as every writer and the judge are.
    */
   evidence?: EvidenceKind;
   /** Transcript mode: whether Zoom confirmed the TUTOR/STUDENT labels. */
@@ -88,9 +88,10 @@ export function routeMismatch(config: AutowriterModelConfig, call: OpenRouterCal
 type CallModel = typeof callOpenRouter;
 
 /**
- * GLM writes → deterministic validation → GLM judge (faithfulness) → accepted.
+ * Sol writes → deterministic validation → GLM judge (faithfulness) → accepted.
  * Any content failure falls back to Luna (validated and GLM-judged the same
- * way). Infra failures stop immediately so the session is retried later.
+ * way), for a summary and a transcript alike: every route has zero data
+ * retention. Infra failures stop immediately so the session is retried later.
  */
 export async function runWritingPipeline(input: {
   apiKey: string;
@@ -130,9 +131,8 @@ export async function runWritingPipeline(input: {
     return { kind: "call" as const, call };
   };
 
-  const writers = (evidence === "transcript"
-    ? [AUTOWRITER_MODELS.writer]
-    : [AUTOWRITER_MODELS.writer, AUTOWRITER_MODELS.fallbackWriter]) as AutowriterModelConfig[];
+  // Every writer is on a zero-retention route, so transcripts get the fallback too.
+  const writers: AutowriterModelConfig[] = [AUTOWRITER_MODELS.writer, AUTOWRITER_MODELS.fallbackWriter];
   for (const writer of writers) {
     const written = await run(writer, "writer", buildFeedbackMessages({
       studentFullName: session.studentFullName,

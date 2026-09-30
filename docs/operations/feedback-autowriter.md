@@ -19,7 +19,8 @@ Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowrite
    | `WISE_WEBHOOK_AUTH_HEADER` | optional: pin the header named in the first delivery's log line |
    | `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED` | `true` to hand held / summary-less / Thai-summary classes to the Soniox second pass |
    | `SONIOX_API_KEY` | Soniox project key (set a spend limit in the Soniox Console) |
-   Migration **0098** must be applied before deploying code that knows the second pass (it adds the `evidence` column).
+   Migration **0098** must be applied before deploying code that knows the second pass (it adds the `evidence` column),
+   and **0100** before deploying the Sol writer (it lets `arm` be `sol`; see [section 7](#7-writer-model-gpt-61-sol-since-2026-09-30)).
 3. **Wise → Institute Settings → Developer options → Webhooks → Add Webhook.** Never edit the existing
    subscription (it feeds a Google Apps Script). URL `https://bgscheduler.vercel.app/api/wise/webhook`,
    events `MeetingEndedEvent`, `AttendanceComputedEvent` and `RecordingCompletedEvent`; its auth key (shown or chosen
@@ -57,7 +58,8 @@ switch there covers both of their Wise accounts; "Partly on" means the CLI switc
 
 1. Shadow for 2–3 days. Exit criteria:
    - every `would_submit` draft reviewed next to what the tutor wrote themselves;
-   - `feedback_autowriter_calls`: 100% of GLM calls with `provider = 'Together'`;
+   - `feedback_autowriter_calls`: 100% of judge calls (`arm = 'glm'`) with `provider = 'Together'`, and writer calls
+     resolved to `openai/gpt-6.1-sol` (or `openai/gpt-6-luna` for a fallback draft);
    - gate reasons per tutor look right (`select wise_teacher_user_id, state, reason, count(*) from feedback_autowriter_sessions group by 1,2,3`);
    - webhook deliveries arriving (`select event_name, count(*) from wise_webhook_events group by 1`) and their
      session ids parsed (`wise_session_id is not null`).
@@ -130,3 +132,35 @@ checks, absence, form/billing drift), expired, no summary 3 h after class, and a
 In `shadow` (and `off`) only the halt-causing outcomes are emailed; draft alerts stay on the dashboard.
 A switched-off tutor's classes are handed back to them silently when they reach the deadline window.
 Nightly tutor reminders are separate (Class Feedback).
+
+## 7. Writer model (GPT-6.1 Sol since 2026-09-30)
+
+Sol writes (reasoning `low`), Luna is the fallback writer and GLM the judge, all on zero-data-retention routes, for
+summaries and transcripts alike ([feature page](../features/feedback-autowriter.md#models)). Deploy order: apply
+migration **0100** first (applied in production on 2026-09-30 under the number 0099, before Codex's
+`0099_staff_feedback_timing` took that number; the journal keeps its original `when`, so it never runs again). It
+only widens the two `arm` checks to allow `sol`; code that writes `sol` against the old
+checks cannot record its model calls, so every class would retry until its deadline.
+
+After the deploy, look at the first drafts:
+
+```sql
+select role, arm, resolved_model, provider, ok, error, count(*), round(avg(cost_usd), 4) as avg_cost_usd
+from feedback_autowriter_calls
+where created_at > now() - interval '1 day' and role <> 'transcriber'
+group by 1, 2, 3, 4, 5, 6
+order by 1, 2;
+```
+
+Writer rows should be `sol` / `openai/gpt-6.1-sol` at about $0.04 each. A `sol:model_mismatch:…` reason means
+OpenRouter answered Sol's request with another model id: the run reports an infrastructure error and the class
+retries, so that answer is never posted. Only the primary writer has this check; a Luna fallback answer is not
+checked for its model (its `resolved_model` is in the query above).
+
+**Rollback to the GLM writer:** revert the PR that made the switch and redeploy. That restores GLM on Together
+(reasoning `max`) as the writer, Luna as a summary-only fallback on its old route, and transcripts written by GLM
+alone. Keep migration 0100: every existing row passes the wider checks, and the older code still writes `sol`. A
+judged transcript draft of Sol's that is still waiting to post is posted as it is (the switch changed neither the
+prompt nor the judge version, so the older code reuses it), and its row keeps `arm = 'sol'`, which the old checks
+would reject. Rows Sol already wrote keep `arm = 'sol'` (the older dashboard shows no model name for them); anything
+else is written again by GLM. No data change is needed.

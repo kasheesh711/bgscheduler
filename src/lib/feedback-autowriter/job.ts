@@ -880,7 +880,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
   }
   if (speakers.method === "unclear") return holdFor("speakers_unclear");
 
-  // 5. Write and judge from the transcript (GLM on the zero-retention route only).
+  // 5. Write and judge from the transcript (Sol, Luna fallback, GLM judge — zero-retention routes only).
   const result = await runWritingPipeline({
     apiKey: deps.apiKey,
     session: {
