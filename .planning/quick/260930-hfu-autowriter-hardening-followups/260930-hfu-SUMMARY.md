@@ -18,6 +18,9 @@ provides:
   - result.attemptAt / retryAfterMs / waitedMs on rate-limited call records; coverage reads attemptAt first
   - the POST budget checked before the pre-POST reads
   - a judge level that leaves off once the other level has decided
+  - review fixes: a sweep starts the rows close to their deadline first, and a running Soniox job is a writer's row
+  - review fixes: judge_failing counts the judge's own failures (3) apart from the runs in which it could not be asked (6 together)
+  - review fixes: one "retries off" switch per stage; a guarded attemptAt cast; a relay key per run of judge failures
 ---
 
 # Summary — autowriter: hardening follow-ups to #113 and #114
@@ -209,3 +212,176 @@ writer's failure (`pipeline.test.ts:305`).
   reused. With transcript first on, that is the fallback classes only.
 - **`judge_failing` also fires for three rate-limited or out-of-time judge runs in a row**, not only for model
   failures. Say so if it should be narrower.
+
+## Review fixes (30 Sep, late evening)
+
+The independent review of this PR at `7f60461` came back CLEAR with two MEDIUM design points and six LOW findings.
+All are closed here. **Commits:** `a1473a4` code and tests · `c4f3d87` docs · `41be66a` a test's date format · this
+section. No prompt text changed (`PROMPT_VERSION` and `JUDGE_PROMPT_VERSION` stay 5). No migration, no schema or env
+change. Fakes only: no live OpenRouter or Soniox call, nothing written to Wise or to the production database. The PR
+stays a draft. The reviewer's "judge block complexity" refactor is not done, as instructed.
+
+These fixes replace parts of what is written above: item A's order and its "retries off" rule, item B's single
+count, deviations 1–4 and 8, and the third point of "Open for the owner" (closed by fix 2). The PR description
+still has the earlier wording.
+
+### 1. [MEDIUM] The order a sweep starts its rows in
+- `job.ts:1306` `worksWithoutModel`: a row whose last reason is `transcription_in_progress` is no longer a "row
+  without a model call". Its Soniox job may have finished, and it then calls the writer and both judges in the same
+  run. Left in the group: a stored judged transcript draft (post only), and a transcript row with no Soniox job yet.
+- `job.ts:1323` `sweepOrder(due, now)`, used at `:1402`: (1) the rows whose `deadline_at` is no more than 3 hours
+  after the sweep's `now`, soonest deadline first, whatever they need; (2) the rows that call no model; (3) the rows
+  that may need the writer. Groups 2 and 3 keep `listDueRows`' order, and so do rows of group 1 with the same
+  deadline. `config.ts:227` `AUTOWRITER_SWEEP_NEAR_DEADLINE_MS = 3 h`.
+- Tests, `job.integration.test.ts`: `:696` six rows beyond the 3 hours — the running job now among the writer rows,
+  a stored draft still ahead of them (c); `:727` a `transcription_in_progress` row whose job has finished starts
+  after an earlier-deadline summary row and is written and judged in that sweep (a); `:750` three rows within 3
+  hours (one failed last time, one a ready transcript exactly at the mark) start before the rows that call no model,
+  and a row at 3 h 36 s does not (b); `:779` rows close to the same deadline keep the usual order.
+
+### 2. [MEDIUM] `judge_failing`: two counts, two marks
+- `job.ts:308-365` (`judgeFailed` at `:345`): a run that ends at the judge stage counts in `metadata.judgeErrors`
+  when the judge itself failed (the pipeline's `modelFailure`: a time-out, no verdict in two tries, the wrong route
+  or model, a provider error) and in `metadata.judgeUnreached` when it could not be asked (rate limited after its
+  retries, no time left in our function to start it, our account or connection: no credit, a bad key, the network).
+  `metadata.judgeUnreachedCause` keeps the last such cause (`rate_limited`, `out_of_time`,
+  `account_or_connection`). The alert is raised by the run that takes the counts to a mark (`:317`):
+  `judgeErrors ≥ 3` (`AUTOWRITER_JUDGE_ERRORS_ALERT`, `config.ts:296`) or `judgeErrors + judgeUnreached ≥ 6`
+  (`AUTOWRITER_JUDGE_STAGE_ERRORS_ALERT`, `config.ts:304`). `job.ts:372` `judgeAnswered` resets both.
+- `store.ts:671-723` `listPendingAlerts`: the same two marks in SQL (each count read only when it is a JSON
+  number), and a `judge_failing` alert carries `judge {errors, unreached, unreachedCause, since}` (`:668`).
+  `store.ts:573-574`: an owner retry clears the new keys too.
+- `alerts.ts:17-41`: the text is built from the counts. It blames the judge model only for its own failures and
+  names the cause otherwise: "not a failure of the judge model: OpenRouter rate limited the judge's route", "… our
+  own function ran out of time before the judge could start", "… our OpenRouter account or connection refused the
+  call (no credit, a bad key or a network error)"; for a mix, "failures of the judge model: 2; not its failure: 4 —
+  the last time, …".
+- Tests: `job.integration.test.ts:2186` (three rate-limited runs raise nothing; an out-of-time and a no-credit run
+  are counted with their cause; the sixth alerts with a text that does not blame the judge; a seventh raises
+  nothing; both counts are zero after an answer), `:2227` (the judge's third failure alerts at five runs in all;
+  two failures plus four other runs alert; no second alert in the same run of failures), `:304` (the summary path);
+  `store.integration.test.ts:403` (both marks, counts that are not numbers, what the digest is given), `:454` (the
+  retry); `alerts.test.ts:48-84` (every text).
+
+### 3. [LOW] An alert recorded in shadow is sent once live
+`job.ts:362-364`: with the counts already at a mark, a failure in `live` mode whose `alerts_sent.judge_failing`
+starts with `suppressed:` arms the alert again. Test `job.integration.test.ts:2304`: recorded in shadow; a fourth
+failure in shadow changes nothing; the fifth, live, sends one email; the sixth none.
+
+### 4. [LOW] "In a row" never spans an answer of the judge
+- `pipeline.ts:89`, `:256-258`, `:393`: an infra result says `judgeAnswered: true` when the judges had decided a
+  draft earlier in the run (no level stopped) — they rejected Sol's draft and the run went on to Luna.
+- `job.ts:350-351`: such a run resets both counts, whether it then ended at the writer stage (Luna failed) or at
+  the judge stage (Luna's draft could not be checked: that failure is the first of a new run of them).
+  `job.ts:1137-1143`: also on the way to a `writer_failed` fallback.
+- Tests: `pipeline.test.ts:977` (which results carry the flag), `job.integration.test.ts:2260` (two failures, then
+  an answer followed by a Luna time-out, then a failure: no alert; the same when Luna's judge fails).
+
+### 5. [LOW] One "retries off" switch per stage
+`pipeline.ts:95` `RateLimitRetries = Record<"writer" | "judge", boolean>`, `:225` `retries:
+input.rateLimitRetries?.[role]`; `job.ts:158` `ProcessOutcome.rateLimited` is the stage; `job.ts:1401`, `:1416` the
+sweep keeps one flag per stage. Tests: `job.integration.test.ts:798` (a judge-route limit leaves the next class's
+writer retry on), `:824` (a writer-route limit leaves a later class's judge retry on), `pipeline.test.ts:937`,
+`:953`.
+
+### 6. [LOW] `abandon` asked again after the wait; a repeated `Retry-After`
+- `openrouter.ts:325-330`: asked before the wait and again after it, before the retry is sent. An attempt given up
+  after its wait stays the last one, and the result carries that wait (`waitedMs`), which `pipeline.ts:247-250`
+  puts on its call record.
+- `openrouter.ts:93-105` `retryAfterValues`, `:125-130`: a header sent more than once (`60, 120`) gives the longest
+  wait it names; an HTTP date keeps its own comma. The header listed with the error is read the same way.
+- Tests: `openrouter.test.ts:202`, `:481`, and `:458` changed (`abandon` is now asked three times around one retry);
+  `pipeline.test.ts:1195` (the other level decides during the wait: no retry is sent, the record keeps `waitedMs`).
+
+### 7. [LOW] A malformed `attemptAt` cannot fail the daily metrics
+`quality.ts:276-285` `ATTEMPT_AT_PATTERN`: the ISO form our records write, with a real day and time of this century,
+so a value that matches always casts. `review-job.ts:605-606` casts `attemptAt` only when it matches; otherwise the
+call is dated by `created_at`. Tests: `quality.test.ts:386-412` (every day of four years matches; 26 malformed
+values do not), `review.integration.test.ts:837` (13 unreadable values, among them 30 February and `24:00`: the
+query runs and dates those calls by their rows; a readable one still counts).
+
+### 8. [LOW, open question] The relay key of a re-armed alert
+`job.ts:361`: the run that reaches a mark stores `metadata.judgeFailingSince`. `alerts.ts:68-73`: a
+`judge_failing` alert's part of the digest key is `id:kind:since`; every other kind's is `id:kind`, as before.
+Tests: `alerts.test.ts:85-109`, `job.integration.test.ts:2285` (two runs of failures on one class: two emails,
+two keys).
+
+### 9. Docs
+Feature page, "Hardening follow-ups": the three groups of the order and what it does not promise, one switch per
+stage, the two counts and marks, the alert's text, `judgeAnswered`, the episode in the relay key, the shadow alert
+sent once live, the repeated `Retry-After`, `abandon` after the wait, the guarded cast. Runbook: §6 and §7
+(`judge_failing`: both marks, what each text means, what to do, the query), §8 (the sentence that a rate limit
+"never holds those up" is gone; the order is described with what it does not guarantee, and a query for the rows of
+the first group).
+
+### Verification (fresh, Node 22, on `41be66a`, clean tree)
+- `npm run typecheck`: pass. `npx eslint src/lib/feedback-autowriter src/components/feedback-autowriter`: clean.
+  `git diff --check origin/main...HEAD`: clean.
+- `npx vitest run --project unit`: 493 files, 5905 tests pass (16 more than at `443058b`: 9 in the new
+  `alerts.test.ts`, 3 in `pipeline.test.ts`, 2 each in `openrouter.test.ts` and `quality.test.ts`). An earlier full
+  run of the same code timed out two classroom tests (`assignment-repair`, `continuity`: 30 s) while other agents'
+  test runs held the machine at a load of 40; both files passed alone at once, and the run counted here is clean.
+- `npx vitest run --project integration src/lib/feedback-autowriter` (OrbStack): 4 files, 185 tests pass (13 more:
+  11 in `job.integration.test.ts`, 1 each in `store.integration.test.ts` and `review.integration.test.ts`).
+
+### Mutation checks
+26 mutations, one at a time, each file restored afterwards (`src` clean at the end). A test fails every time; the
+lines are the tests that failed (`job.integration.test.ts` unless named).
+- **1, the order (5):** a running job back among the no-model rows (`:727`, `:696`); no near-deadline group
+  (`:750`, `:779`); near-deadline rows not by deadline (`:750`); near-deadline rows without the no-model rows first
+  (`:779`); a window of 30 minutes instead of 3 hours (`:750`, `:779`).
+- **2, the counts and marks (6):** one count for every judge-stage run (`:2186`, `:2227`, `:304`); no second mark
+  when the alert is raised (`:2186`, `:2227`); none when it is listed, in SQL (`store.integration.test.ts:403`,
+  `:2186`, `:2227`); an answer that resets the judge's own count only (`:2186`, `:2260`); a text that blames the
+  judge for a rate limit (`alerts.test.ts`, two tests); the second mark at 3, which is the rule before these fixes
+  (`:2186`, `:2227`, `store.integration.test.ts:403`).
+- **3, the shadow alert (2):** never armed again; armed again in any mode (`:2304` both times).
+- **4, the answer (3):** the pipeline never saying the judges answered (`pipeline.test.ts:977`, `:2260`, `:2285`);
+  the job ignoring it before a writer-stage failure (`:2260`, `:2285`) and before a judge-stage failure (`:2260`).
+- **5, per stage (3):** one rate limit switching both stages off (`:798`, `:824`); the pipeline reading the
+  writers' switch for every call (`pipeline.test.ts:953` and one more); the outcome always naming the writer stage
+  (`:798`, `:2186`, `:304`).
+- **6 (3):** `abandon` not asked again (`openrouter.test.ts:458`, `:481`, `pipeline.test.ts:1195`); the first wait
+  of a repeated header (`openrouter.test.ts:202`); no `waitedMs` on the record (`pipeline.test.ts:1195`).
+- **7 (2):** the cast without its guard (`review.integration.test.ts:837`); a pattern that checks the form only
+  (`quality.test.ts:401`, and `review.integration.test.ts:837`: the cast fails on a day that does not exist).
+- **8 (2):** no episode in the relay key (`alerts.test.ts:97`, `:2285`); no time recorded when a mark is reached
+  (`:2285` and three more).
+
+### Judgement calls
+1. **"Within 3 hours" is measured to the feedback deadline** (`deadline_at ≤ now + 3 h`, with the `now` the expiry
+   step uses), as the finding words it. The expiry takes a class 30 minutes before that, so the window is the last
+   2.5 hours in which a class can still be written. Measuring to the expiry instead is a change of one constant.
+2. **Rows close to the same deadline keep the old order**: the rows that call no model first, a failed row last.
+   Every class's deadline is 23:59:59.999 Bangkok, so the rows of one night always have the same deadline;
+   "soonest deadline first" alone would leave their order to the database. Between different deadlines the sooner
+   one goes first, also when it failed last time.
+3. **What is "the judge's own failure"** is the pipeline's existing `modelFailure`. So a provider error (HTTP 5xx,
+   `finish_reason: error`) counts toward 3, and a bad key (401) or a network error counts toward 6, with the rate
+   limit, no credit and out of time. The text has three causes for the second kind: rate limited, out of time,
+   account or connection. "No credit" is named inside the third, and the row's reason in brackets carries
+   OpenRouter's own message.
+4. **The judge's count is not reset by a run in which it could not be asked.** Both counts run until the judge
+   answers, as asked. So failure, rate limit, failure, rate limit, failure alerts at the fifth run.
+5. **One alert per run of failures**, raised by the run that first reaches either mark. A run of failures that
+   reached 6 and later holds three failures of the judge itself does not alert a second time.
+6. **`judgeAnswered` means the judges decided a draft**: no level stopped. One level passing a draft while the
+   other fails is not an answer (the draft was not checked). One level rejecting it while the other left off is.
+7. **A suppressed alert is armed again by the next judge-stage failure in live mode**, not at the moment of the
+   switch to live: a class that stops failing after the switch never sends it.
+8. **The record of an attempt given up after its wait keeps `waitedMs`**: the wait was made, so it is on record.
+9. **The ISO pattern checks the day of the month and leap years** (years 2000–2099). A pattern of digits alone
+   lets `2026-02-30` through, and the cast still fails (the second mutation under 7). It lives in `quality.ts`,
+   where a unit test checks it against every day of a year.
+10. **Types changed**: `rateLimitRetries` is `{ writer, judge }`, and `ProcessOutcome.rateLimited` is a stage.
+    Existing tests changed with them, and the six-row order test now uses deadlines beyond the 3 hours.
+11. **The PR description is not edited.** Its sections A and B, judgement calls 2–4 and 8, the test counts and the
+    third open point describe the code before these fixes.
+
+### Open for the owner
+- **Tonight's rows come first, so a slow one can use a sweep's start window.** A sweep starts classes in its first
+  180 s, and a judge time-out on a transcript takes 240 s. Among the rows of one night a row that failed last time
+  still comes after the others, so they are tried first; the rows with later deadlines wait for the next sweep.
+  Webhook runs are not affected.
+- The two points left open above still stand: a deferred POST waits at least 10 minutes, and a deferred summary
+  draft is written again.
