@@ -680,3 +680,33 @@ are in `feedback_autowriter_calls`.
   writing tutor feedback for roster tutors' online classes.
 - Wise's `allowTeacherFeedbackUpdate=false`: once filled, tutors can't edit in Wise; admins can.
 - Progress Tests ignores versions not authored by the session teacher, so autowritten feedback is not used as its AI context.
+
+
+## Mimi format and voice guide (prepared; activation awaits owner review)
+
+`style.ts` selects the frozen `mimi` v1 guide by canonical tutor key, covering both Wise accounts, only when
+`FEEDBACK_AUTOWRITER_MIMI_STYLE_ENABLED` is exactly `true`. It defaults to disabled. Other tutors use the existing
+shared prompt. The four-field Wise interface, billing, eligibility, English and nickname rules are unchanged.
+
+Mimi's topics, improvement and assigned homework are numbered lists; performance is warm, specific prose, usually
+one or two paragraphs (at most three). Topics may have `Atom learning` or `Worksheets` labels only when the current
+lesson record supports them. Plain hyphen sub-items are permitted beneath numbered topics and improvement items.
+The guide drops the writer's 120-character per-field target and forced two or three improvement strategies. The
+300-character combined policy and all other validators remain; only `short_required_field`, an autowriter
+presentation heuristic, is replaced by guide structure checks. The Class Feedback collector and finance policy
+are unchanged; their advisory short-field flags can still appear.
+
+Three anonymised pre-rollout examples are frozen in `style-examples/mimi-v1.json`, with verification notes and
+anonymous content hashes. Detailed source version/hash and non-auto Wise event/actor references are retained in
+the private replay receipt, because the repository is public. Those events are by Mimi's roster accounts. Wise does not bind
+an event to a content version, so the evidence is explicitly session-level. Historical content guides presentation
+only, never lesson facts. Both writers get the same examples and guide; neither factual judge receives them.
+Numbering, list/prose structure, labels and prohibited formatting are checked locally. Format failure tries the
+fallback writer, then holds for human feedback (no summary-to-transcript escape for a format failure). Existing
+copy detection, invented-score/homework checks and both factual judges still apply.
+
+Drafts and writer call records carry guide id/version. Transcript reuse and shadow requeueing require the current
+guide; disabling or changing it invalidates guided drafts. A check before storing/posting also prevents a draft
+from crossing a guide switch. No database migration is required; stamps use existing JSON metadata.
+
+See the [activation and replay procedure](../operations/feedback-autowriter.md#mimi-style-guide-review-and-activation).

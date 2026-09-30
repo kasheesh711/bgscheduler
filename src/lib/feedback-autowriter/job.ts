@@ -1,3 +1,4 @@
+import { activeStyleGuide, matchingStoredStyle, type StyleGuideStamp } from "./style";
 import { eq, sql } from "drizzle-orm";
 import type { ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
 import type { Database } from "@/lib/db";
@@ -290,8 +291,9 @@ function currentCommit(): string | null {
  * model arm and the evidence. Changes that alter output without bumping a version (nicknames, the guest rule) are
  * still traceable by commit. A reused draft keeps the stamp of the attempt that wrote it.
  */
-function pipelineStamp(evidence: EvidenceKind, arm: ModelArm): Record<string, unknown> {
+function pipelineStamp(evidence: EvidenceKind, arm: ModelArm, styleGuide: StyleGuideStamp | null = null): Record<string, unknown> {
   return {
+    styleGuide,
     commitSha: currentCommit(),
     promptVersion: PROMPT_VERSION,
     judgeVersion: JUDGE_PROMPT_VERSION,
@@ -663,6 +665,7 @@ async function processLeased(deps: AutowriterDeps, input: {
     apiKey: deps.apiKey,
     session: {
       wiseSessionId: row.wiseSessionId,
+      canonicalTutorKey: tutor.canonicalKey,
       studentFullName: student.name,
       studentAliases: student.joinedAsGuest ? [student.joinedAsGuest] : [],
       studentDisplayName: chooseStudentDisplayName(student.name),
@@ -690,13 +693,13 @@ async function processLeased(deps: AutowriterDeps, input: {
   if (result.kind === "held") {
     const reasons = result.reasons.join("; ").slice(0, 900);
     // The summary could not carry a faithful draft: the transcript usually can (never again after a fallback).
-    if (mayHandOver) return handOverToTranscript(release, out, "summary_draft_held", { summaryHold: reasons, ...judgeAnswered(row) });
+    if (mayHandOver && !result.reasons.some(reason => reason.includes(":style:"))) return handOverToTranscript(release, out, "summary_draft_held", { summaryHold: reasons, ...judgeAnswered(row) });
     await release({ state: "held", reason: reasons, countAttempt: true, alertKind: "held" });
     return out("held", result.reasons.join("; "));
   }
   return postDraft(deps, {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
-    draft: { arm: result.arm, fields: result.fields, judge: result.judge }, evidence: "summary",
+    draft: { arm: result.arm, fields: result.fields, judge: result.judge, pipeline: pipelineStamp("summary", result.arm, result.styleGuide) }, evidence: "summary",
     extraMetadata: { ...guestMetadata(student), ...judgeAnswered(row) }, release, out,
   });
 }
@@ -724,6 +727,11 @@ async function postDraft(deps: AutowriterDeps, input: {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   // The draft exists: a retry waits for Wise or the POST slot, not for the recording (no `no_recording` alert).
   const pipeline = draft.pipeline ?? pipelineStamp(input.evidence, draft.arm);
+  const expectedStyle = activeStyleGuide(rosterTutor(detailTeacherId(input.detail))?.canonicalKey);
+  if (!matchingStoredStyle(pipeline.styleGuide, expectedStyle)) {
+    await release({ state: "pending", reason: "style_guide_changed", retryInMs: 0 });
+    return out("retry", "style_guide_changed");
+  }
   const draftPatch = {
     arm: draft.arm,
     fields: draft.fields,
@@ -835,6 +843,7 @@ function reusableTranscriptDraft(row: AutowriterSessionRow): StoredDraft | null 
   if (!judge) return null;
   const pipeline = metadata.pipeline && typeof metadata.pipeline === "object" ? metadata.pipeline as Record<string, unknown> : null;
   if (pipeline?.promptVersion !== PROMPT_VERSION || pipeline.judgeVersion !== JUDGE_PROMPT_VERSION) return null;
+  if (!matchingStoredStyle(pipeline.styleGuide, activeStyleGuide(rosterTutor(row.wiseTeacherUserId)?.canonicalKey))) return null;
   return { arm: row.arm, fields: row.fields as unknown as FeedbackFieldAnswers, judge, pipeline };
 }
 
@@ -1101,6 +1110,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
     apiKey: deps.apiKey,
     session: {
       wiseSessionId: row.wiseSessionId,
+      canonicalTutorKey: tutor.canonicalKey,
       studentFullName: student.name,
       studentAliases: student.joinedAsGuest ? [student.joinedAsGuest] : [],
       studentDisplayName: chooseStudentDisplayName(student.name),
@@ -1154,7 +1164,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
   // The judged draft is stored with the job id; once the class is done, the sweep keeps the job for review only.
   return postDraft(deps, {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
-    draft: { arm: result.arm, fields: result.fields, judge: result.judge }, evidence: "transcript",
+    draft: { arm: result.arm, fields: result.fields, judge: result.judge, pipeline: pipelineStamp("transcript", result.arm, result.styleGuide) }, evidence: "transcript",
     // A stored draft: a later failure (a requeued shadow draft written again) starts a new count, of the writer's
     // failures and of the judge's.
     extraMetadata: { transcript: transcriptMeta, ...guestMetadata(student), ...(canFallBack ? { writerErrors: 0 } : {}), ...judgeAnswered(row) },

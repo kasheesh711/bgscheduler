@@ -1,3 +1,5 @@
+import { activeStyleGuide, styleGuideStamp } from "./style";
+import { rosterAccountIds } from "./roster";
 import { randomUUID } from "node:crypto";
 import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
@@ -532,6 +534,10 @@ export async function requeueShadowDrafts(db: Database, minDeadline: Date): Prom
   // back to the summary (it never reads its transcript again). Any other draft may transcribe again (an older
   // version's, or one judged at a single level, is written and judged again: `reusableTranscriptDraft` in job.ts),
   // so its window starts again when it is next done. The levels are `AUTOWRITER_JUDGE_EFFORTS` (judge.ts schema).
+  const guide = activeStyleGuide("Mimi");
+  const matchingStyle = sql`case when ${Boolean(guide)} and ${inArray(S.wiseTeacherUserId, rosterAccountIds("Mimi"))}
+    then ${S.metadata} -> 'pipeline' -> 'styleGuide' = ${JSON.stringify(styleGuideStamp(guide))}::jsonb
+    else coalesce(${S.metadata} -> 'pipeline' -> 'styleGuide', 'null'::jsonb) = 'null'::jsonb end`;
   const rows = await db.update(S).set({
     state: "pending",
     nextAttemptAt: null,
@@ -539,7 +545,8 @@ export async function requeueShadowDrafts(db: Database, minDeadline: Date): Prom
         and ${S.metadata} -> 'judge' -> 'levels' -> 'medium' ->> 'faithful' = 'true'
         and ${S.metadata} -> 'judge' -> 'levels' -> 'high' ->> 'faithful' = 'true'
         and ${S.metadata} -> 'pipeline' ->> 'promptVersion' = ${String(PROMPT_VERSION)}
-        and ${S.metadata} -> 'pipeline' ->> 'judgeVersion' = ${String(JUDGE_PROMPT_VERSION)}) or ${S.metadata} ? 'summaryFallback'
+        and ${S.metadata} -> 'pipeline' ->> 'judgeVersion' = ${String(JUDGE_PROMPT_VERSION)}
+        and ${matchingStyle}) or ${S.metadata} ? 'summaryFallback'
       then ${S.metadata} - 'triagedAt' else ${S.metadata} - 'sonioxRetainUntil' - 'triagedAt' end`,
     updatedAt: nowSql,
   })
