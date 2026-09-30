@@ -219,6 +219,12 @@ export const AUTOWRITER_WISE_READ_TIMEOUT_MS = 45_000;
  * run writes a summary again.
  */
 export const AUTOWRITER_SWEEP_MIN_REMAINING_MS = 560_000;
+/**
+ * A due class whose feedback deadline (`deadline_at`) is this close is started first in a sweep, whatever it needs,
+ * soonest deadline first. The sweep expires a class `AUTOWRITER_DEADLINE_MARGIN_MS` (30 min) before that deadline, so
+ * these are the classes with at most 2.5 h of tries left.
+ */
+export const AUTOWRITER_SWEEP_NEAR_DEADLINE_MS = 3 * 60 * 60 * 1000;
 /** While another POST is in flight, re-try the guarded submit this often … */
 export const AUTOWRITER_POST_IN_FLIGHT_WAIT_MS = 10_000;
 /** … at most this many times before leaving the session for the next sweep. */
@@ -281,12 +287,21 @@ export const AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS = 3 * 60 * 60 * 1000;
  */
 export const AUTOWRITER_MAX_WRITER_ERRORS = 3;
 /**
- * Runs in a row that end at the judge stage on one class (a judge level timing out, giving no verdict, rate limited
- * or answering from the wrong route; no time left to start it) before one `judge_failing` alert tells a person. The
- * class keeps retrying every 10 min, as decided (judge failures never fall back); the alert is dropped once the judge
- * answers or the class settles, and a later run of failures alerts again.
+ * A run of failures is the runs in a row that end at the judge stage on one class, with no answer of the judge in
+ * between. This many failures of the judge itself in it (a judge level timing out, giving no verdict in two tries,
+ * answering from the wrong route or model, a provider error) raise one `judge_failing` alert. The class keeps
+ * retrying every 10 min, as decided (judge failures never fall back); the alert is dropped once the judge answers or
+ * the class settles, and a later run of failures alerts again.
  */
 export const AUTOWRITER_JUDGE_ERRORS_ALERT = 3;
+/**
+ * The higher mark, for all of a run of failures: the judge's own together with the runs in which it could not be
+ * asked — its route rate limited, our OpenRouter account out of credit (or its key refused), our connection, or no
+ * time left in our function to start it. Those are not the judge's failures and usually pass on their own (a rate
+ * limit hits every class at once and clears within minutes), so without three failures of the judge itself a class
+ * alerts only at this many runs.
+ */
+export const AUTOWRITER_JUDGE_STAGE_ERRORS_ALERT = 6;
 /** Soniox jobs no row references are deleted once they are this old (orphans). */
 export const AUTOWRITER_SONIOX_REAPER_AGE_MS = 2 * 60 * 60 * 1000;
 /** Soniox deletes per sweep (each bounded by a 15 s time-out). */

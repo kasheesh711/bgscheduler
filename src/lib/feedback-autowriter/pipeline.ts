@@ -60,7 +60,7 @@ export interface PipelineSession {
  * is one record per attempt: the attempts after the first carry `result.rateLimitRetry` (1, 2 or 3). The records of
  * a call are written when it ends, so each rate-limited attempt also says when its request was really sent
  * (`result.attemptAt`, ISO), the wait OpenRouter asked for when it named one (`retryAfterMs`) and the wait that
- * followed (`waitedMs`; none after the last attempt).
+ * followed (`waitedMs`; none after the last attempt, unless its retry was given up only after the wait).
  */
 export interface CallRecord {
   wiseSessionId: string;
@@ -81,9 +81,18 @@ export type PipelineResult =
    * a reply that is not JSON, a provider error, an unusable route, a judge that gives no verdict) — not our
    * function's time, our OpenRouter account (a bad key, no credit, rate limited) or our connection. Transcript
    * first counts only the writer's model failures (`writer_failed`, owner decision 30 Sep). `rateLimited`: the call
-   * was still rate limited when the run gave up on it — a sweep then makes no in-run retries for its other classes.
+   * was still rate limited when the run gave up on it — a sweep then makes no in-run retries at that stage for its
+   * other classes. `judgeAnswered`: earlier in this run the judges gave their verdict on a draft (they rejected the
+   * first writer's, and the run went on to the fallback writer) — so the judge's failures in a row ended there, however
+   * the run then ended (`judgeFailed` in job.ts).
    */
-  | { kind: "infra"; error: string; modelFailure: boolean; stage: "writer" | "judge"; rateLimited?: true };
+  | { kind: "infra"; error: string; modelFailure: boolean; stage: "writer" | "judge"; rateLimited?: true; judgeAnswered?: true };
+
+/**
+ * In-run retries of a rate-limited call, per stage: the writers' route and the judge's are limited apart, so a sweep
+ * that met a lasting limit at one stage keeps its retries at the other.
+ */
+export type RateLimitRetries = Record<"writer" | "judge", boolean>;
 
 /**
  * A failure of the service rather than of the text: missing key, credit limit,
@@ -161,10 +170,11 @@ export async function runWritingPipeline(input: {
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
   /**
-   * False: no in-run retries — a rate-limited call is returned at once, as before them. A sweep passes it once one
-   * of its classes has ended still rate limited (the limit lasts; the waits would only keep its other classes out).
+   * False for a stage: no in-run retries of its calls — a rate-limited one is returned at once, as before them. A
+   * sweep passes it once one of its classes has ended still rate limited at that stage (the limit lasts; the waits
+   * would only keep its other classes out).
    */
-  rateLimitRetries?: boolean;
+  rateLimitRetries?: RateLimitRetries;
 }): Promise<PipelineResult> {
   const callModel = input.callModel ?? callOpenRouter;
   const { session } = input;
@@ -181,7 +191,7 @@ export async function runWritingPipeline(input: {
   /**
    * The one place a model is called — writer, fallback writer and each judge level alike. `record` stores one
    * attempt; the returned `record` stores the last one, with what the pipeline made of its reply. `abandon` (a judge
-   * level): asked before each retry wait; true once a retry can no longer change the outcome.
+   * level): asked before each retry wait and again after it; true once a retry can no longer change the outcome.
    */
   const run = async (
     config: AutowriterModelConfig,
@@ -198,7 +208,7 @@ export async function runWritingPipeline(input: {
     const timeoutMs = Math.min(preferredTimeoutMs, availableMs);
     // A rate limit is tried again here, in this run, with the same request and time-out — while the wait and that
     // time-out still fit our deadline (owner decision, 30 Sep).
-    const { call, startedAt, rateLimited, abandoned } = await callWithRateLimitRetries({
+    const { call, startedAt, rateLimited, abandoned, waitedMs: lastWaitedMs } = await callWithRateLimitRetries({
       call: callModel,
       request: {
         apiKey: input.apiKey,
@@ -212,7 +222,7 @@ export async function runWritingPipeline(input: {
         timeoutMs,
       },
       remainingMs: input.remainingMs,
-      retries: input.rateLimitRetries,
+      retries: input.rateLimitRetries?.[role],
       abandon,
       sleep: input.sleep,
       random: input.random,
@@ -234,10 +244,18 @@ export async function runWritingPipeline(input: {
       call,
       shortened: timeoutMs < preferredTimeoutMs,
       abandoned,
-      record: (result: Record<string, unknown>) =>
-        record(call, marked(rateLimited.length, isRateLimited(call) ? { ...result, ...limit(call, startedAt) } : result)),
+      // The last attempt waited too when its retry was given up only after the wait (`abandon`, asked again then).
+      record: (result: Record<string, unknown>) => record(call, marked(rateLimited.length, isRateLimited(call)
+        ? { ...result, ...limit(call, startedAt), ...(lastWaitedMs !== undefined ? { waitedMs: lastWaitedMs } : {}) }
+        : result)),
     };
   };
+
+  // The judges have given their verdict on a draft in this run (they rejected it, and the fallback writer went on):
+  // a failure that ends the run after that says so, for the count of the judge's failures in a row.
+  let judgeAnswered = false;
+  const ended = (result: PipelineResult): PipelineResult =>
+    judgeAnswered && result.kind === "infra" ? { ...result, judgeAnswered: true } : result;
 
   // Every writer is on a zero-retention route, so transcripts get the fallback too.
   const writers: AutowriterModelConfig[] = [AUTOWRITER_MODELS.writer, AUTOWRITER_MODELS.fallbackWriter];
@@ -256,20 +274,20 @@ export async function runWritingPipeline(input: {
       wiseSessionId: session.wiseSessionId, role: "writer", arm: writer.arm, requestedModel: writer.model,
       promptVersion: PROMPT_VERSION, call, result: { ...result, evidence },
     }));
-    if (written.kind === "budget") return { kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false, stage: "writer" };
+    if (written.kind === "budget") return ended({ kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false, stage: "writer" });
     const writeCall = written.call;
     const recordWriter = written.record;
 
     if (!writeCall.ok) {
       await recordWriter({ error: writeCall.error });
-      if (isInfraFailure(writeCall)) return callFailure(writer.arm, writeCall, written.shortened, "writer");
+      if (isInfraFailure(writeCall)) return ended(callFailure(writer.arm, writeCall, written.shortened, "writer"));
       reasons.push(`${writer.arm}:${writeCall.error}`);
       continue;
     }
     const writerMismatch = routeMismatch(writer, writeCall);
     if (writerMismatch) {
       await recordWriter({ error: writerMismatch });
-      return { kind: "infra", error: `${writer.arm}:${writerMismatch}`, modelFailure: true, stage: "writer" };
+      return ended({ kind: "infra", error: `${writer.arm}:${writerMismatch}`, modelFailure: true, stage: "writer" });
     }
     const parsed = parseModelOutput(writeCall.content);
     if (!parsed.ok) {
@@ -370,7 +388,9 @@ export async function runWritingPipeline(input: {
       if ("stop" in level.value) stopped ??= level.value.stop;
       else if ("verdict" in level.value) levels[AUTOWRITER_JUDGE_EFFORTS[index]] = level.value.verdict;
     }
-    if (stopped) return stopped;
+    if (stopped) return ended(stopped);
+    // No level stopped: the judges decided this draft, passing or rejecting it.
+    judgeAnswered = true;
     // Fail closed: a draft passes only on a verdict from every level (no cast: a level without one cannot be combined).
     // A level that left off gave none — it left off because another level had rejected the draft (had that one
     // stopped, the stop was returned above) — so the draft is rejected on the verdicts given.

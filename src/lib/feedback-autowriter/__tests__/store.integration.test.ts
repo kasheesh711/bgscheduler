@@ -396,6 +396,48 @@ describe("feedback autowriter store (Postgres)", () => {
     }
     await db.update(S).set({ state: "held", metadata: { alertKind: "held", judgeErrors: 3 } }).where(eq(S.wiseSessionId, SESSION));
     expect(await kinds()).toEqual(["held"]);
+    // Another kind carries nothing about the judge.
+    expect((await listPendingAlerts(db))[0]).not.toHaveProperty("judge");
+  });
+
+  it("lists a judge_failing alert at either mark: three failures of the judge itself, or six judge-stage runs of any kind together", async () => {
+    const S = schema.feedbackAutowriterSessions;
+    const listed = async (metadata: Record<string, unknown>) => {
+      await db.update(S).set({ state: "transcribing", metadata: { alertKind: "judge_failing", ...metadata } }).where(eq(S.wiseSessionId, SESSION));
+      return (await listPendingAlerts(db)).map((alert) => alert.kind);
+    };
+    // The runs in which the judge could not be asked (a rate limit, our function's time, our account): six alone.
+    expect(await listed({ judgeUnreached: 3 })).toEqual([]);
+    expect(await listed({ judgeUnreached: 5 })).toEqual([]);
+    expect(await listed({ judgeUnreached: 6 })).toEqual(["judge_failing"]);
+    // Both kinds together.
+    expect(await listed({ judgeErrors: 2, judgeUnreached: 3 })).toEqual([]);
+    expect(await listed({ judgeErrors: 2, judgeUnreached: 4 })).toEqual(["judge_failing"]);
+    expect(await listed({ judgeErrors: 1, judgeUnreached: 5 })).toEqual(["judge_failing"]);
+    // The judge's own failures: three, whatever else is counted.
+    expect(await listed({ judgeErrors: 3, judgeUnreached: 0 })).toEqual(["judge_failing"]);
+    expect(await listed({ judgeErrors: 3 })).toEqual(["judge_failing"]);
+    // Both back at zero (the judge answered): dropped.
+    expect(await listed({ judgeErrors: 0, judgeUnreached: 0 })).toEqual([]);
+    // A count that is not a number counts as none, in either place, and never fails the query.
+    expect(await listed({ judgeUnreached: "6" })).toEqual([]);
+    expect(await listed({ judgeErrors: 2, judgeUnreached: "4" })).toEqual([]);
+    expect(await listed({ judgeErrors: { n: 3 }, judgeUnreached: [6] })).toEqual([]);
+    expect(await listed({ judgeErrors: null, judgeUnreached: 6 })).toEqual(["judge_failing"]);
+
+    // What the digest needs to say why: both counts, what last kept the judge from being asked, and the episode.
+    await listed({ judgeErrors: 2, judgeUnreached: 4, judgeUnreachedCause: "rate_limited", judgeFailingSince: "2026-09-30T05:10:00.000Z" });
+    expect(await listPendingAlerts(db)).toMatchObject([{
+      wiseSessionId: SESSION, kind: "judge_failing",
+      judge: { errors: 2, unreached: 4, unreachedCause: "rate_limited", since: "2026-09-30T05:10:00.000Z" },
+    }]);
+    for (const cause of ["out_of_time", "account_or_connection"]) {
+      await listed({ judgeUnreached: 6, judgeUnreachedCause: cause });
+      expect((await listPendingAlerts(db))[0].judge).toEqual({ errors: 0, unreached: 6, unreachedCause: cause, since: null });
+    }
+    // A cause it does not know, or none: no cause (the digest then blames nobody in particular).
+    await listed({ judgeErrors: 3, judgeUnreachedCause: "the moon" });
+    expect((await listPendingAlerts(db))[0].judge).toEqual({ errors: 3, unreached: 0, unreachedCause: null, since: null });
   });
 
   it("re-arms an alert only when asked to, and only the kind it raises", async () => {
@@ -414,7 +456,8 @@ describe("feedback autowriter store (Postgres)", () => {
     await releaseGeneration(db, SESSION, token, {
       state: "held", reason: "glm:unfaithful", alertKind: "held",
       metadata: {
-        genericErrors: 3, transcribeErrors: 2, judgeErrors: 4, pipeline: { commitSha: "a" }, judge: { faithful: false },
+        genericErrors: 3, transcribeErrors: 2, judgeErrors: 4, judgeUnreached: 2, judgeUnreachedCause: "rate_limited",
+        judgeFailingSince: "2026-09-30T05:10:00.000Z", pipeline: { commitSha: "a" }, judge: { faithful: false },
         sonioxRetainUntil: "2026-10-01T00:00:00.000Z", triagedAt: "2026-09-29T15:00:00.000Z",
       },
     });
@@ -425,7 +468,10 @@ describe("feedback autowriter store (Postgres)", () => {
     expect(row).toMatchObject({ state: "pending", reason: "retry_requested", nextAttemptAt: null, alertsSent: {} });
     expect(row?.metadata).toMatchObject({ retriedBy: "k@x.com", retriedFrom: "held" });
     // A clean slate: counters, the old draft's stamp and its review window are gone.
-    for (const key of ["alertKind", "genericErrors", "transcribeErrors", "judgeErrors", "pipeline", "judge", "sonioxRetainUntil", "triagedAt"]) {
+    for (const key of [
+      "alertKind", "genericErrors", "transcribeErrors", "judgeErrors", "judgeUnreached", "judgeUnreachedCause", "judgeFailingSince", "pipeline", "judge",
+      "sonioxRetainUntil", "triagedAt",
+    ]) {
       expect(row?.metadata).not.toHaveProperty(key);
     }
     expect(await retryHeldSession(db, SESSION, { minDeadline: new Date(), actor: "k@x.com" })).toBe(false); // already pending

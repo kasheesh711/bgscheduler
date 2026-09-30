@@ -11,6 +11,7 @@ import {
   AUTOWRITER_EVENT_DEADLINE_MS,
   AUTOWRITER_GENERATION_LEASE_MS,
   AUTOWRITER_JUDGE_ERRORS_ALERT,
+  AUTOWRITER_JUDGE_STAGE_ERRORS_ALERT,
   AUTOWRITER_MAX_GENERIC_ERRORS,
   AUTOWRITER_MAX_TRANSCRIBE_ERRORS,
   AUTOWRITER_MAX_WRITER_ERRORS,
@@ -27,6 +28,7 @@ import {
   AUTOWRITER_SONIOX_RETAIN_MS,
   AUTOWRITER_STALE_POSTING_MS,
   AUTOWRITER_SWEEP_MIN_REMAINING_MS,
+  AUTOWRITER_SWEEP_NEAR_DEADLINE_MS,
   AUTOWRITER_THAI_SUMMARY_SHARE,
   AUTOWRITER_TRANSCRIBE_POLL_MS,
   AUTOWRITER_TRANSCRIBE_TIMEOUT_MS,
@@ -37,7 +39,7 @@ import {
   AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS,
 } from "./config";
 import { JUDGE_PROMPT_VERSION, passingStoredVerdict, type StoredJudgeVerdict } from "./judge";
-import { runWritingPipeline, type PipelineResult } from "./pipeline";
+import { FUNCTION_BUDGET_EXHAUSTED, runWritingPipeline, type PipelineResult, type RateLimitRetries } from "./pipeline";
 import { PROMPT_VERSION, chooseStudentDisplayName, describeClass, type EvidenceKind } from "./prompt";
 import { AUTOWRITER_ROSTER, AUTOWRITER_TEACHER_ALLOWLIST, rosterAccountIds, rosterTutor, type AutowriterTutor } from "./roster";
 import { loadCandidateShortlist, loadFieldMappings, loadPriorFeedback } from "./run";
@@ -92,6 +94,7 @@ import {
   type AlertKind,
   type AutowriterControl,
   type AutowriterSessionRow,
+  type JudgeUnreachedCause,
 } from "./store";
 import {
   classifySubmitEvents,
@@ -148,8 +151,11 @@ export interface ProcessOutcome {
   wiseSessionId: string;
   result: ProcessResult;
   detail?: string;
-  /** `infra`: the run ended on a model call that was still rate limited (after its in-run retries, when it had any). */
-  rateLimited?: true;
+  /**
+   * `infra`: the run ended on a model call that was still rate limited (after its in-run retries, when it had any) —
+   * the stage of that call: the writers' route and the judge's are limited apart.
+   */
+  rateLimited?: "writer" | "judge";
 }
 
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
@@ -193,8 +199,11 @@ export async function processSession(deps: AutowriterDeps, input: {
   mappings?: readonly FeedbackFieldMapping[];
   /** Webhooks: keep re-reading Wise this long while it is not ready yet (summary lags the meeting end by ~20–80 s). */
   waitForReadyMs?: number;
-  /** Sweeps: false once a class of the sweep has ended still rate limited — no in-run retries for the rest of it. */
-  rateLimitRetries?: boolean;
+  /**
+   * Sweeps: false for a stage once a class of the sweep has ended still rate limited at it — no in-run retries of
+   * that stage's calls for the rest of the sweep.
+   */
+  rateLimitRetries?: RateLimitRetries;
 }): Promise<ProcessOutcome> {
   const { db } = deps;
   const out = (result: ProcessResult, detail?: string): ProcessOutcome => ({ wiseSessionId: input.wiseSessionId, result, detail });
@@ -296,36 +305,73 @@ type Out = (result: ProcessResult, detail?: string) => ProcessOutcome;
 /** A judged draft carried through a retry or hold; never the state decision itself. */
 type DraftPatch = Pick<Parameters<Release>[0], "arm" | "fields" | "fieldsSha256" | "billing" | "metadata">;
 
-function judgeErrorCount(row: AutowriterSessionRow): number {
-  return Number((row.metadata as { judgeErrors?: unknown }).judgeErrors ?? 0) || 0;
+type JudgeFailureCounts = { errors: number; unreached: number };
+
+/** The judge-stage failures in a row on a class so far: the judge's own, and the runs in which it could not be asked. */
+function judgeFailureCounts(row: AutowriterSessionRow): JudgeFailureCounts {
+  const metadata = row.metadata as { judgeErrors?: unknown; judgeUnreached?: unknown };
+  return { errors: Number(metadata.judgeErrors ?? 0) || 0, unreached: Number(metadata.judgeUnreached ?? 0) || 0 };
+}
+
+/** A run of judge-stage failures is at a mark: three failures of the judge itself, or six runs of any kind (`listPendingAlerts` asks the same). */
+function atJudgeAlertMark(counts: JudgeFailureCounts): boolean {
+  return counts.errors >= AUTOWRITER_JUDGE_ERRORS_ALERT || counts.errors + counts.unreached >= AUTOWRITER_JUDGE_STAGE_ERRORS_ALERT;
+}
+
+/** What kept the judge from being asked in a run that ended at its stage without the judge failing. */
+function judgeUnreachedCause(result: Extract<PipelineResult, { kind: "infra" }>): JudgeUnreachedCause {
+  if (result.rateLimited) return "rate_limited";
+  return result.error === FUNCTION_BUDGET_EXHAUSTED ? "out_of_time" : "account_or_connection";
 }
 
 /**
  * A class whose judge keeps failing retries every 10 minutes until its deadline, as decided (30 Sep) — unseen until it
  * expires: it never falls back, and an infra retry raises no `no_recording` alert. So the runs in a row that end at
- * the judge stage are counted (`metadata.judgeErrors`), and the third raises one `judge_failing` alert. Once per
- * run of failures: the count starts again when the judge answers (`judgeAnswered`), and the alert is re-armed when
- * a later run of failures reaches the mark. A failure at the writer stage says nothing about the judge and leaves
- * the count as it is. The class itself retries exactly as before.
+ * the judge stage are counted, in two counts, and a run of them raises one `judge_failing` alert:
+ * - `metadata.judgeErrors`: the judge's own failures (a time-out, no verdict in two tries, the wrong route or model,
+ *   a provider error). The third alerts.
+ * - `metadata.judgeUnreached`: the runs in which the judge could not be asked — its route rate limited, no time left
+ *   in our function to start it, our OpenRouter account or connection (`judgeUnreachedCause`: which, the last time).
+ *   They are not the judge's failures and usually pass on their own, so they alert only when both counts together
+ *   reach six.
+ * Once per run of failures: both counts start again when the judge answers (`judgeAnswered` — also for a verdict
+ * given earlier in the run that then failed, `result.judgeAnswered`: "in a row" never spans an answer), and the alert
+ * is re-armed when a later run of failures reaches a mark. `metadata.judgeFailingSince` is when it did: a new time
+ * for each such run, which the digest's relay key carries (alerts.ts). An alert raised outside `live` is recorded but
+ * not emailed (`suppressed:<mode>`); the next failure re-arms it once the autowriter is live, while the counts are
+ * still at a mark. A failure at the writer stage says nothing about the judge and leaves the counts as they are.
+ * The class itself retries exactly as before.
  */
 function judgeFailed(
   row: AutowriterSessionRow,
   result: Extract<PipelineResult, { kind: "infra" }>,
+  at: { control: AutowriterControl; now: Date },
 ): Pick<Parameters<Release>[0], "alertKind" | "rearmAlert"> & { metadata: Record<string, unknown> } {
-  if (result.stage !== "judge") return { metadata: {} };
-  const judgeErrors = judgeErrorCount(row) + 1;
-  return {
-    metadata: { judgeErrors },
-    ...(judgeErrors === AUTOWRITER_JUDGE_ERRORS_ALERT ? { alertKind: "judge_failing" as const, rearmAlert: true } : {}),
+  if (result.stage !== "judge") return { metadata: result.judgeAnswered ? judgeAnswered(row) : {} };
+  const before = result.judgeAnswered ? { errors: 0, unreached: 0 } : judgeFailureCounts(row);
+  const counts = result.modelFailure ? { ...before, errors: before.errors + 1 } : { ...before, unreached: before.unreached + 1 };
+  const metadata = {
+    judgeErrors: counts.errors,
+    judgeUnreached: counts.unreached,
+    ...(result.modelFailure ? {} : { judgeUnreachedCause: judgeUnreachedCause(result) }),
   };
+  if (!atJudgeAlertMark(counts)) return { metadata };
+  const alert = { alertKind: "judge_failing" as const, rearmAlert: true };
+  // This run took the counts to a mark: one alert for this run of failures.
+  if (!atJudgeAlertMark(before)) return { ...alert, metadata: { ...metadata, judgeFailingSince: at.now.toISOString() } };
+  // Already at a mark, and its alert was recorded but not emailed: sent now that the autowriter is live.
+  const sent: string | undefined = row.alertsSent.judge_failing;
+  return at.control.mode === "live" && sent?.startsWith("suppressed:") ? { ...alert, metadata } : { metadata };
 }
 
 /**
- * A run that ended with a draft or a hold, not at the judge stage: the judge's failures in a row are over and are
- * counted from zero again (a `judge_failing` alert not sent yet is then dropped, `listPendingAlerts`).
+ * A run that ended with a draft or a hold, not at the judge stage — or in which the judges gave their verdict on a
+ * draft before it ended another way: the judge's failures in a row are over and both counts start from zero again (a
+ * `judge_failing` alert not sent yet is then dropped, `listPendingAlerts`).
  */
 function judgeAnswered(row: AutowriterSessionRow): Record<string, unknown> {
-  return judgeErrorCount(row) > 0 ? { judgeErrors: 0 } : {};
+  const { errors, unreached } = judgeFailureCounts(row);
+  return errors > 0 || unreached > 0 ? { judgeErrors: 0, judgeUnreached: 0 } : {};
 }
 
 /** Hand a class to the second pass: wait for Wise's recording, then write from its transcript. */
@@ -523,7 +569,7 @@ async function processLeased(deps: AutowriterDeps, input: {
   release: Release;
   out: Out;
   waitForReadyMs: number;
-  rateLimitRetries?: boolean;
+  rateLimitRetries?: RateLimitRetries;
 }): Promise<ProcessOutcome> {
   if (input.row.evidence === "transcript") return processTranscript(deps, input);
   const secondPass = Boolean(deps.transcriptsEnabled && deps.soniox);
@@ -634,12 +680,12 @@ async function processLeased(deps: AutowriterDeps, input: {
     rateLimitRetries: input.rateLimitRetries,
   });
   if (result.kind === "infra") {
-    // A judge failure is counted, and the third in a row alerts (`judgeFailed`); the class retries as before.
+    // A run that ends at the judge stage is counted, and a run of them alerts (`judgeFailed`); the class retries as before.
     await release({
       state: "pending", reason: `infra:${result.error}`, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true,
-      ...judgeFailed(row, result),
+      ...judgeFailed(row, result, { control: input.control, now }),
     });
-    return { ...out("infra", result.error), ...(result.rateLimited ? { rateLimited: true as const } : {}) };
+    return { ...out("infra", result.error), ...(result.rateLimited ? { rateLimited: result.stage } : {}) };
   }
   if (result.kind === "held") {
     const reasons = result.reasons.join("; ").slice(0, 900);
@@ -814,7 +860,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
   mappings?: readonly FeedbackFieldMapping[];
   release: Release;
   out: Out;
-  rateLimitRetries?: boolean;
+  rateLimitRetries?: RateLimitRetries;
 }): Promise<ProcessOutcome> {
   const { db, ops } = deps;
   const { release, out } = input;
@@ -1086,21 +1132,23 @@ async function processTranscript(deps: AutowriterDeps, input: {
     const writerDelivered = canFallBack && result.stage === "judge";
     const previousErrors = Number((row.metadata as { writerErrors?: unknown }).writerErrors ?? 0) || 0;
     const writerErrors = writerFailed ? previousErrors + 1 : writerDelivered ? 0 : previousErrors;
+    // A run that ends at the judge stage is counted, and a run of them alerts (`judgeFailed`); the class retries as
+    // before. A verdict the judges gave before the run failed starts their counts again, also on the way to the summary.
+    const judge = judgeFailed(row, result, { control: input.control, now });
     if (writerFailed && writerErrors >= AUTOWRITER_MAX_WRITER_ERRORS) {
       return fallBackToSummary({
-        release, out, cause: "writer_failed", now, metadata: { transcript: transcriptMeta, writerErrors, writerFailure: result.error },
+        release, out, cause: "writer_failed", now,
+        metadata: { transcript: transcriptMeta, writerErrors, writerFailure: result.error, ...judge.metadata },
       });
     }
-    // The job is kept: the next attempt re-fetches the same transcript. A judge failure is counted, and the third
-    // in a row alerts (`judgeFailed`); the class retries as before.
-    const judge = judgeFailed(row, result);
+    // The job is kept: the next attempt re-fetches the same transcript.
     await release({
       state: "transcribing", reason: `infra:${result.error}`, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true,
       sonioxTranscriptionId: jobId,
       ...judge,
       metadata: { transcript: transcriptMeta, ...(writerFailed || writerDelivered ? { writerErrors } : {}), ...judge.metadata },
     });
-    return { ...out("infra", result.error), ...(result.rateLimited ? { rateLimited: true as const } : {}) };
+    return { ...out("infra", result.error), ...(result.rateLimited ? { rateLimited: result.stage } : {}) };
   }
   if (result.kind === "held") return holdFor(result.reasons.join("; ").slice(0, 900));
   // The judged draft is stored with the job id; once the class is done, the sweep keeps the job for review only.
@@ -1250,25 +1298,49 @@ function tally(target: Record<string, number>, key: string) {
 
 /**
  * A due row the sweep can work on without calling a model, as far as the row shows: it posts its stored judged
- * draft, waits for its recording or submits it to Soniox (no job yet), or looks at a Soniox job that was still
- * running. Any other row may reach the writer: a summary to write, a transcript that is ready (or whose job's state
- * is not known), a draft whose model call failed last time.
+ * draft, or waits for its recording or submits it to Soniox (no job yet). Any other row may reach the writer: a
+ * summary to write, a transcript whose Soniox job exists — ready, or still running at the last look
+ * (`transcription_in_progress`: it may have finished since, and the row then calls the writer and both judges in the
+ * same run) — a draft whose model call failed last time.
  */
 function worksWithoutModel(row: AutowriterSessionRow): boolean {
   if (row.evidence !== "transcript") return false;
-  return Boolean(reusableTranscriptDraft(row)) || !row.sonioxTranscriptionId || row.reason === "transcription_in_progress";
+  return Boolean(reusableTranscriptDraft(row)) || !row.sonioxTranscriptionId;
+}
+
+/**
+ * The order a sweep starts its due rows in (`due` as `listDueRows` gave them). A sweep starts a class only in its
+ * first 180 s, so what comes first is what gets done:
+ * 1. the rows close to their deadline, whatever they need, soonest deadline first: `deadline_at` is no more than
+ *    `AUTOWRITER_SWEEP_NEAR_DEADLINE_MS` after `now` — the field and the clock of the expiry that ran just before,
+ *    which takes a row `AUTOWRITER_DEADLINE_MARGIN_MS` before that deadline;
+ * 2. the rows that call no model (`worksWithoutModel`);
+ * 3. the rows that may need the writer.
+ * Groups 2 and 3 keep the order `listDueRows` gave them: most urgent first, a row whose last attempt failed
+ * (`infra:…`) after the others. So do rows of group 1 with the same deadline — every class's deadline is 23:59
+ * Bangkok, so those of one night all have the same — and among them the rows that call no model still come first.
+ */
+function sweepOrder(due: readonly AutowriterSessionRow[], now: Date): AutowriterSessionRow[] {
+  const nearBy = now.getTime() + AUTOWRITER_SWEEP_NEAR_DEADLINE_MS;
+  const deadline = (row: AutowriterSessionRow) => row.deadlineAt?.getTime() ?? Number.POSITIVE_INFINITY;
+  const byGroup = [...due.filter(worksWithoutModel), ...due.filter((row) => !worksWithoutModel(row))];
+  return [
+    ...byGroup.filter((row) => deadline(row) <= nearBy).toSorted((a, b) => deadline(a) - deadline(b)),
+    ...byGroup.filter((row) => deadline(row) > nearBy),
+  ];
 }
 
 /**
  * 1. Reconcile POSTs whose outcome is not final (every mode, reads only).
  * 2. Expire what can no longer land before its deadline (not in `off`).
- * 3. Queue and process due sessions (not in `off`, not while halted): first the rows that call no model
- *    (`worksWithoutModel`), then the rows that may need the writer — each group most urgent first, a row whose
- *    last attempt failed (`infra:…`) after the others (`listDueRows`). So a rate limit that holds up the writer's
- *    rows never keeps a stored draft from being posted or a recording from being transcribed. Once a class ends
- *    still rate limited, the rest of the sweep makes no in-run retries: the limit lasts, and every class would
- *    otherwise spend its waits on it (a sweep starts a class only in its first 180 s). A webhook run is one class
- *    per function and always keeps its retries.
+ * 3. Queue and process due sessions (not in `off`, not while halted), in `sweepOrder`: the rows close to their
+ *    deadline, then the rows that call no model, then the rows that may need the writer. So the classes about to
+ *    expire get the sweep's start window first; after them, the rows that call no model are not kept waiting by a
+ *    rate limit that holds up the writer's rows (it can still delay them: what the rows before them take is time
+ *    they do not get). Once a class ends still rate limited at a stage (the writers' route, or the judge's), the
+ *    rest of the sweep makes no in-run retries of that stage's calls: the limit lasts, and every class would
+ *    otherwise spend its waits on it. The other stage keeps its retries. A webhook run is one class per function
+ *    and always keeps its retries.
  * 4. One alert digest. Outside `live`, alerts about drafts (held / expired /
  *    no summary / a judge that keeps failing) are recorded but not emailed — tutors still write their own.
  */
@@ -1326,9 +1398,8 @@ export async function runSweep(deps: AutowriterDeps): Promise<SweepResult> {
         const due = (await listDueRows(db))
           .filter((row) => !row.wiseTeacherUserId || !control.disabledTutors.includes(row.wiseTeacherUserId));
         const mappings = await loadFieldMappings(db);
-        let rateLimitRetries = true;
-        // Rows that call no model first; each group keeps the order `listDueRows` gave it.
-        for (const row of [...due.filter(worksWithoutModel), ...due.filter((row) => !worksWithoutModel(row))]) {
+        const rateLimitRetries: RateLimitRetries = { writer: true, judge: true };
+        for (const row of sweepOrder(due, now)) {
           if (remaining(deps) < AUTOWRITER_SWEEP_MIN_REMAINING_MS) break;
           // Re-read the switches per session: a halt, pause or mode change made
           // while this sweep runs (e.g. by a webhook worker's POST) applies at once.
@@ -1336,12 +1407,13 @@ export async function runSweep(deps: AutowriterDeps): Promise<SweepResult> {
           if (current.haltedAt || current.mode === "off") break;
           if (row.wiseTeacherUserId && current.disabledTutors.includes(row.wiseTeacherUserId)) continue;
           const outcome = await processSession(deps, {
-            wiseSessionId: row.wiseSessionId, wiseClassId: row.wiseClassId, trigger: "cron", control: current, mappings, rateLimitRetries,
+            wiseSessionId: row.wiseSessionId, wiseClassId: row.wiseClassId, trigger: "cron", control: current, mappings,
+            rateLimitRetries: { ...rateLimitRetries },
           });
           tally(processed, outcome.result);
           if (outcome.result === "infra" && outcome.detail) infraErrors.push(`${row.wiseSessionId}: ${outcome.detail}`);
-          // Still rate limited after its retries: the limit lasts, so the classes after it make none.
-          if (outcome.rateLimited) rateLimitRetries = false;
+          // Still rate limited after its retries: that stage's limit lasts, so the classes after it make none there.
+          if (outcome.rateLimited) rateLimitRetries[outcome.rateLimited] = false;
         }
       }
     }

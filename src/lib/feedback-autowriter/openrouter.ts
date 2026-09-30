@@ -87,10 +87,29 @@ function isRateLimitCode(code: ReportedError["code"]): boolean {
 }
 
 /**
+ * The values of a `Retry-After` header. A header sent more than once reaches us as one list ("60, 120"); an HTTP
+ * date has a comma of its own, after its weekday ("Wed, 30 Sep 2026 09:20:12 GMT"), which stays with what follows it.
+ */
+function retryAfterValues(header: string): string[] {
+  const parts = header.split(",").map((part) => part.trim());
+  const values: string[] = [];
+  for (let index = 0; index < parts.length; index += 1) {
+    if (/^(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*$/iu.test(parts[index]) && index + 1 < parts.length) {
+      values.push(`${parts[index]}, ${parts[index + 1]}`);
+      index += 1;
+    } else {
+      values.push(parts[index]);
+    }
+  }
+  return values;
+}
+
+/**
  * How long OpenRouter asks us to wait after a rate limit, when it says. Null when it names no time still ahead.
  * - `Retry-After` (seconds, or an HTTP date): the response's own header, or the one listed with the reported error
  *   (`metadata.headers` in the body). A header that names no time ahead (empty, `0`, a past date) does not hide the
- *   error's.
+ *   error's. A header sent more than once ("60, 120") asks for the longest of its waits: a retry before it would
+ *   only be rate limited again.
  * - The reset time of OpenRouter's own limit (`X-RateLimit-Reset`, epoch milliseconds or seconds): only as listed
  *   with the error. A response header of that name describes whichever limit the response carries, not
  *   necessarily the one that refused this request.
@@ -103,11 +122,11 @@ function retryAfterMs(response: Response, error: ReportedError | undefined, now:
     return typeof value === "string" || typeof value === "number" ? String(value) : null;
   };
   const ahead = (waitMs: number) => Number.isFinite(waitMs) && Math.round(waitMs) > 0 ? Math.round(waitMs) : null;
-  for (const value of [response.headers.get("retry-after"), ofError("retry-after")]) {
-    const retryAfter = value?.trim();
-    if (!retryAfter) continue;
-    const waitMs = ahead(/^\d+(?:\.\d+)?$/u.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - now);
-    if (waitMs !== null) return waitMs;
+  for (const header of [response.headers.get("retry-after"), ofError("retry-after")]) {
+    const waits = retryAfterValues(header ?? "")
+      .map((retryAfter) => ahead(/^\d+(?:\.\d+)?$/u.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - now))
+      .filter((waitMs) => waitMs !== null);
+    if (waits.length > 0) return Math.max(...waits);
   }
   const reset = Number(ofError("x-ratelimit-reset")?.trim() || Number.NaN);
   return Number.isFinite(reset) && reset > 0 ? ahead((reset < 1e12 ? reset * 1000 : reset) - now) : null;
@@ -257,7 +276,8 @@ export type RateLimitedAttempt = OpenRouterCallFailure & { startedAt: number; wa
  * up to three more times, after about 4 s, 10 s and 25 s — each ±30% at random. A wait OpenRouter asks for is kept
  * (`retryWaitMs`): never a retry before it, and one it asks for that does not fit ends the retries. One call's waits
  * never add up to more than 45 s. Any other result — an answer, a time-out, a provider error, a reply that is not
- * JSON — is returned as it is: this retries rate limits only.
+ * JSON — is returned as it is: this retries rate limits only. `abandon` is asked before each wait and again after it,
+ * so a retry that can no longer change anything is neither waited for nor sent.
  *
  * Never past the run's time: a retry is made only when its wait and the request's whole time-out still end before
  * the function's deadline margin (`remainingMs` − 45 s), the rule every model call starts under. Otherwise the rate
@@ -273,7 +293,10 @@ export async function callWithRateLimitRetries<ModelRequest extends { timeoutMs:
   remainingMs: () => number;
   /** False: one request only — a rate limit is returned at once, as before the retries (a sweep that met a lasting one). */
   retries?: boolean;
-  /** Asked before each wait: true when a retry can no longer change anything, so none is made. */
+  /**
+   * Asked before each wait, and again after it (before the retry is sent): true when a retry can no longer change
+   * anything, so none is made.
+   */
   abandon?: () => boolean;
   sleep?: (ms: number) => Promise<void>;
   /** A number in [0, 1), like `Math.random`. */
@@ -285,6 +308,8 @@ export async function callWithRateLimitRetries<ModelRequest extends { timeoutMs:
   rateLimited: RateLimitedAttempt[];
   /** The call is still rate limited and would have been tried again, had `abandon` not said otherwise. */
   abandoned: boolean;
+  /** The wait made after the last attempt, when `abandon` said so only after it: waited, then not tried again. */
+  waitedMs?: number;
 }> {
   const sleep = input.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const random = input.random ?? Math.random;
@@ -298,8 +323,11 @@ export async function callWithRateLimitRetries<ModelRequest extends { timeoutMs:
     const waitMs = retryWaitMs(call.retryAfterMs, rateLimited.length, waitedMs, random());
     if (waitMs === null || waitMs + input.request.timeoutMs > input.remainingMs() - AUTOWRITER_CALL_DEADLINE_MARGIN_MS) return last;
     if (input.abandon?.()) return { ...last, abandoned: true };
-    rateLimited.push({ ...call, startedAt, waitedMs: waitMs });
     await sleep(waitMs);
+    // Asked again: what makes a retry pointless may have happened during the wait (the other judge level decided the
+    // draft). The retry is then not sent, and this attempt stays the last one.
+    if (input.abandon?.()) return { ...last, abandoned: true, waitedMs: waitMs };
+    rateLimited.push({ ...call, startedAt, waitedMs: waitMs });
     waitedMs += waitMs;
   }
 }

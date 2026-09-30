@@ -4,7 +4,7 @@ import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
 import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
-import { AUTOWRITER_JUDGE_ERRORS_ALERT } from "./config";
+import { AUTOWRITER_JUDGE_ERRORS_ALERT, AUTOWRITER_JUDGE_STAGE_ERRORS_ALERT } from "./config";
 import { JUDGE_PROMPT_VERSION } from "./judge";
 import type { CallRecord } from "./pipeline";
 import { PROMPT_VERSION } from "./prompt";
@@ -19,6 +19,13 @@ export type AutowriterSessionRow = typeof S.$inferSelect;
 export type AutowriterState = AutowriterSessionRow["state"];
 export type AlertKind =
   | "held" | "expired" | "no_summary" | "no_recording" | "judge_failing" | "unknown_outcome" | "verify_failed" | "rejected";
+/**
+ * Why a run ended at the judge stage when the judge itself did not fail (`metadata.judgeUnreachedCause`): its route
+ * was rate limited, our function had no time left to start it, or our OpenRouter account or connection refused the
+ * call (no credit, a bad key, the network).
+ */
+export const JUDGE_UNREACHED_CAUSES = ["rate_limited", "out_of_time", "account_or_connection"] as const;
+export type JudgeUnreachedCause = (typeof JUDGE_UNREACHED_CAUSES)[number];
 
 /** States a session never leaves automatically once reached (except via an owner action). */
 export const TERMINAL_STATES: readonly AutowriterState[] = [
@@ -563,7 +570,8 @@ export async function retryHeldSession(db: Database, wiseSessionId: string, inpu
     // A clean slate: no stale alert, error count, coverage recheck, judged draft (nor its stamp), review window or
     // handover — a transcript-first fallback included, so the class may go to the transcript again (a kept Soniox
     // job, and its submit time, may be re-used).
-    metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'genericErrors' - 'writerErrors' - 'judgeErrors' - 'recordingShortSeenAt' - 'judge'
+    metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'genericErrors' - 'writerErrors' - 'judgeErrors' - 'judgeUnreached'
+      - 'judgeUnreachedCause' - 'judgeFailingSince' - 'recordingShortSeenAt' - 'judge'
       - 'draftEvidence' - 'pipeline' - 'transcript' - 'handover' - 'summaryAtHandover' - 'summaryFallback' - 'sonioxFailure'
       - 'writerFailure' - 'sonioxRetainUntil' - 'triagedAt')
       || ${JSON.stringify({ retriedBy: input.actor })}::jsonb
@@ -652,14 +660,29 @@ export interface PendingAlert {
   state: AutowriterState;
   reason: string | null;
   deadlineAt: Date | null;
+  /**
+   * `judge_failing` only — its run of failures: the judge's own (`errors`), the runs in which the judge could not be
+   * asked (`unreached`) and what kept it from being asked the last time, and when the run reached its mark (`since`:
+   * one alert per such time, the alert's episode).
+   */
+  judge?: { errors: number; unreached: number; unreachedCause: JudgeUnreachedCause | null; since: string | null };
+}
+
+/** A count of judge-stage failures in a row kept in `metadata`: a JSON number, anything else counts as none. */
+function judgeCountSql(key: "judgeErrors" | "judgeUnreached") {
+  const name = sql.raw(`'${key}'`);
+  return sql<string>`case when jsonb_typeof(${S.metadata} -> ${name}) = 'number' then (${S.metadata} ->> ${name})::numeric else 0 end`;
 }
 
 /**
  * Rows asking for an alert kind they have not been alerted for yet. A `judge_failing` alert is only about a class
- * still retrying with its judge failing: once the judge has answered (`metadata.judgeErrors` is back under the mark)
+ * still retrying with its draft unchecked: once the judge has answered (`metadata.judgeErrors` and
+ * `metadata.judgeUnreached` are back under their marks: the judge's own failures, or all judge-stage failures together)
  * or the class has settled, it is not listed any more.
  */
 export async function listPendingAlerts(db: Database): Promise<PendingAlert[]> {
+  const errors = judgeCountSql("judgeErrors");
+  const unreached = judgeCountSql("judgeUnreached");
   const rows = await db.select({
     id: S.id,
     wiseSessionId: S.wiseSessionId,
@@ -669,6 +692,10 @@ export async function listPendingAlerts(db: Database): Promise<PendingAlert[]> {
     state: S.state,
     reason: S.reason,
     deadlineAt: S.deadlineAt,
+    judgeErrors: errors,
+    judgeUnreached: unreached,
+    judgeUnreachedCause: sql<string | null>`${S.metadata} ->> 'judgeUnreachedCause'`,
+    judgeFailingSince: sql<string | null>`${S.metadata} ->> 'judgeFailingSince'`,
   }).from(S).where(and(
     sql`${S.metadata} ? 'alertKind'`,
     sql`not (${S.alertsSent} ? (${S.metadata} ->> 'alertKind'))`,
@@ -676,12 +703,24 @@ export async function listPendingAlerts(db: Database): Promise<PendingAlert[]> {
       sql`${S.metadata} ->> 'alertKind' <> 'judge_failing'`,
       and(
         inArray(S.state, [...WAITING_STATES, "generating"]),
-        sql`case when jsonb_typeof(${S.metadata} -> 'judgeErrors') = 'number'
-          then (${S.metadata} ->> 'judgeErrors')::numeric else 0 end >= ${AUTOWRITER_JUDGE_ERRORS_ALERT}`,
+        sql`(${errors} >= ${AUTOWRITER_JUDGE_ERRORS_ALERT} or ${errors} + ${unreached} >= ${AUTOWRITER_JUDGE_STAGE_ERRORS_ALERT})`,
       ),
     ),
   ));
-  return rows.map((row) => ({ ...row, kind: row.kind as AlertKind }));
+  // Postgres returns a numeric as text.
+  const count = (value: string) => Number.isFinite(Number(value)) ? Number(value) : 0;
+  return rows.map(({ judgeErrors, judgeUnreached, judgeUnreachedCause, judgeFailingSince, ...row }) => ({
+    ...row,
+    kind: row.kind as AlertKind,
+    ...(row.kind === "judge_failing" ? {
+      judge: {
+        errors: count(judgeErrors),
+        unreached: count(judgeUnreached),
+        unreachedCause: JUDGE_UNREACHED_CAUSES.find((cause) => cause === judgeUnreachedCause) ?? null,
+        since: judgeFailingSince,
+      },
+    } : {}),
+  }));
 }
 
 /**

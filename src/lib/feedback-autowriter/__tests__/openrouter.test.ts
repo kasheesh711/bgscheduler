@@ -199,6 +199,32 @@ describe("callOpenRouter: how long OpenRouter asks us to wait after a rate limit
     expect(await hint(429, own(String(NOW + 40_000)), { "X-RateLimit-Reset": String(NOW + 5_000) })).toBe(40_000);
   });
 
+  it("reads the longest wait of a Retry-After header sent more than once", async () => {
+    // Two headers of the same name reach us as one list.
+    const twice = new Headers();
+    twice.append("Retry-After", "60");
+    twice.append("Retry-After", "120");
+    expect(twice.get("retry-after")).toBe("60, 120");
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    const repeated = await callOpenRouter({
+      ...request, fetchImpl: vi.fn(async () => new Response(JSON.stringify(UPSTREAM_LIMIT), { status: 429, headers: twice })) as unknown as typeof fetch,
+    });
+    expect(repeated).toMatchObject({ ok: false, httpStatus: 429, retryAfterMs: 120_000 });
+    // In any order, in seconds or as dates (a date has a comma of its own), and whatever else the list holds.
+    expect(await hint(429, UPSTREAM_LIMIT, { "Retry-After": "120, 60" })).toBe(120_000);
+    expect(await hint(200, UPSTREAM_LIMIT, { "Retry-After": "7,9.5, 3" })).toBe(9_500);
+    const date = (aheadMs: number) => new Date(NOW + aheadMs).toUTCString();
+    expect(await hint(429, UPSTREAM_LIMIT, { "Retry-After": `${date(12_000)}, ${date(20_000)}` })).toBe(20_000);
+    expect(await hint(429, UPSTREAM_LIMIT, { "Retry-After": `30, ${date(12_000)}` })).toBe(30_000);
+    expect(await hint(429, UPSTREAM_LIMIT, { "Retry-After": `${date(40_000)}, 5` })).toBe(40_000);
+    expect(await hint(429, UPSTREAM_LIMIT, { "Retry-After": `0, soon, ${date(-60_000)}, 8` })).toBe(8_000);
+    // The header listed with the error is read the same way.
+    expect(await hint(200, { error: { message: "x", code: 429, metadata: { headers: { "Retry-After": "5, 15" } } } })).toBe(15_000);
+    // A list that names no time ahead names none, and does not hide the error's.
+    expect(await hint(429, UPSTREAM_LIMIT, { "Retry-After": "0, 0" })).toBeUndefined();
+    expect(await hint(429, { error: { message: "x", code: 429, metadata: { headers: { "Retry-After": 9 } } } }, { "Retry-After": "0, soon" })).toBe(9_000);
+  });
+
   it("reads Retry-After on an HTTP 429 whose body is not JSON", async () => {
     // A proxy's error page: still a rate limit (HTTP 429), and the header still says how long to wait.
     expect(await rawHint(429, "<html>Too Many Requests</html>", { "Retry-After": "7" })).toEqual([429, "invalid_json_response", 7_000]);
@@ -434,18 +460,45 @@ describe("callWithRateLimitRetries", () => {
     const moot = attempt([limited()], { abandon: () => true });
     expect(await moot.promise).toMatchObject({ call: { ok: false, httpStatus: 429 }, rateLimited: [], abandoned: true });
     expect(moot.waits).toEqual([]);
-    // Moot after the first retry: that retry is made, the second is not.
+    expect(moot.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(await moot.promise).not.toHaveProperty("waitedMs");
+    // Moot after the first retry (asked before its wait, after it, and before the second wait): that retry is made,
+    // the second is not.
     let asked = 0;
-    const later = attempt([limited(), limited()], { abandon: () => (asked += 1) > 1 });
+    const later = attempt([limited(), limited()], { abandon: () => (asked += 1) > 2 });
     expect(await later.promise).toMatchObject({ call: { ok: false, httpStatus: 429 }, rateLimited: [{ waitedMs: 4_000 }], abandoned: true });
     expect(later.waits).toEqual([4_000]);
     expect(later.fetchImpl).toHaveBeenCalledTimes(2);
+    expect(asked).toBe(3);
     // Only a retry that would otherwise be made is "abandoned": an answer, a last retry used up, no time left, are not.
     expect(await attempt([json(200, ANSWER)], { abandon: () => true }).promise).toMatchObject({ call: { ok: true }, abandoned: false });
     expect(await attempt([limited()], { abandon: () => true, remainingMs: 1_000 }).promise).toMatchObject({ abandoned: false });
     expect(await attempt([limited({ "Retry-After": "120" })], { abandon: () => true }).promise).toMatchObject({ abandoned: false });
     const used = attempt([limited(), limited(), limited(), limited()], { abandon: () => false });
     expect(await used.promise).toMatchObject({ call: { ok: false }, rateLimited: [{}, {}, {}], abandoned: false });
+  });
+
+  it("asks again after the wait, before the retry is sent: what made it moot may have happened meanwhile", async () => {
+    // Not moot before the wait, moot after it (the other judge level decided the draft while this one waited): the
+    // wait was made, the retry is not sent — an extra request would fail this test.
+    let asked = 0;
+    const during = attempt([limited({ "Retry-After": "7" })], { abandon: () => (asked += 1) > 1 });
+    const made = await during.promise;
+    // The rate-limited attempt stays the last one — not among those that were tried again — with the wait it made.
+    expect(made).toMatchObject({ call: { ok: false, httpStatus: 429, retryAfterMs: 7_000 }, rateLimited: [], abandoned: true, waitedMs: 8_050 });
+    expect(during.waits).toEqual([8_050]);
+    expect(during.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(asked).toBe(2);
+    // Moot during the second wait: the first retry was sent, the second is not.
+    let again = 0;
+    const second = attempt([limited(), limited()], { abandon: () => (again += 1) > 3 });
+    expect(await second.promise).toMatchObject({ call: { ok: false, httpStatus: 429 }, rateLimited: [{ waitedMs: 4_000 }], abandoned: true, waitedMs: 10_000 });
+    expect(second.waits).toEqual([4_000, 10_000]);
+    expect(second.fetchImpl).toHaveBeenCalledTimes(2);
+    // Never moot: every retry is sent, and the last attempt carries no wait of its own.
+    const never = attempt([limited(), json(200, ANSWER)], { abandon: () => false });
+    expect(await never.promise).not.toHaveProperty("waitedMs");
+    expect(never.fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it("never waits past the run's time: the wait and the request's whole time-out must end before the deadline margin", async () => {

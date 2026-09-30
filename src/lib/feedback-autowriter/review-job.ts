@@ -7,6 +7,7 @@ import { UNMATCHED_API_CRITICAL_FROM, ingestFixEvents, type FixActorKind, type F
 import { landedProblemCategory, normalizeFields, postMayHaveLanded, postedBilling, problemCodes, proveFirstShot, type FirstShotProof } from "./first-shot";
 import { countUndeliveredCritical, drainIncidentOutbox, recordIncident, type DrainResult, type IncidentPushChannels } from "./incidents";
 import {
+  ATTEMPT_AT_PATTERN,
   GATE_THRESHOLDS,
   PROVEN_TUTOR_KEYS,
   SAMPLING_POLICY,
@@ -597,10 +598,12 @@ export async function computeDailyMetrics(db: Database, input: {
     // Our first writer call, successful or not: from then on a person's save is a miss (late), not "wrote first".
     // A rate-limited attempt's row is written only when its call ends, after the waits, so it says itself when its
     // request was sent (`result.attemptAt`): that time comes before `created_at`, or a save during the waits would
-    // pass for "the tutor wrote first".
+    // pass for "the tutor wrote first". Cast only when it is a time (`ATTEMPT_AT_PATTERN`): a malformed value must
+    // not fail the day's metrics, so its row is dated by `created_at` like any other.
     db.select({
       wiseSessionId: CALLS.wiseSessionId,
-      at: sql<Date>`min(coalesce((${CALLS.result} ->> 'attemptAt')::timestamptz, ${CALLS.createdAt}))`,
+      at: sql<Date>`min(coalesce(case when ${CALLS.result} ->> 'attemptAt' ~ ${ATTEMPT_AT_PATTERN}
+        then (${CALLS.result} ->> 'attemptAt')::timestamptz end, ${CALLS.createdAt}))`,
     }).from(CALLS).where(and(
       eq(CALLS.role, "writer"), sql`${CALLS.wiseSessionId} in ${skippedHumanInRange}`,
     )).groupBy(CALLS.wiseSessionId),
