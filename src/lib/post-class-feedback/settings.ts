@@ -8,6 +8,7 @@ import { bangkokDateStartUtc, todayBangkok } from "@/lib/room-capacity/dates";
 
 import { PostClassConflictError, PostClassNotFoundError, PostClassValidationError } from "./errors";
 import { withPostClassTransaction } from "./transaction";
+import { lockPostClassFinance } from "./finance-lock";
 
 const FIELD_KEYS = ["topics", "performance", "improvement", "homework"] as const;
 type FieldKey = (typeof FIELD_KEYS)[number];
@@ -15,6 +16,40 @@ type FieldKey = (typeof FIELD_KEYS)[number];
 interface Actor {
   email: string;
   name?: string;
+}
+
+/** Audited, idempotent policy advance for the persisted-evidence recovery. */
+export async function advancePostClassTimingPolicy(
+  actor: Actor,
+  expectedPolicyVersion: number,
+  db: Database = getDb(),
+) {
+  return withPostClassTransaction(db, async tx => {
+    await lockPostClassFinance(tx);
+    const [current] = await tx.select().from(schema.postClassSettings)
+      .where(eq(schema.postClassSettings.id, "default")).for("update");
+    if (!current) throw new PostClassNotFoundError("Post-class settings are not initialized.");
+    const [prior] = await tx.select().from(schema.postClassConfigAuditLog).where(and(
+      eq(schema.postClassConfigAuditLog.entityType, "settings"),
+      eq(schema.postClassConfigAuditLog.entityKey, "default"),
+      eq(schema.postClassConfigAuditLog.action, "staff_timing_rule_v2"),
+    )).limit(1);
+    if (prior) return current;
+    if (current.policyVersion !== expectedPolicyVersion) throw new PostClassConflictError();
+    const [updated] = await tx.update(schema.postClassSettings).set({
+      policyVersion: current.policyVersion + 1, version: current.version + 1,
+      updatedByEmail: actor.email, updatedAt: new Date(),
+    }).where(and(eq(schema.postClassSettings.id, current.id), eq(schema.postClassSettings.version, current.version))).returning();
+    if (!updated) throw new PostClassConflictError();
+    await tx.insert(schema.postClassConfigAuditLog).values({
+      entityType: "settings", entityKey: current.id, action: "staff_timing_rule_v2",
+      actorEmail: actor.email,
+      beforeValue: { policyVersion: current.policyVersion, version: current.version },
+      afterValue: { policyVersion: updated.policyVersion, version: updated.version, submissionEvidenceVersion: 2 },
+      note: "Only non-automatic TEACHER/ADMIN events prove tutor submission. Student evidence excluded; unverified pre-deadline actors require review. Recovery scope begins 2026-08-26.",
+    });
+    return updated;
+  });
 }
 
 export interface PostClassSettingsPatch {

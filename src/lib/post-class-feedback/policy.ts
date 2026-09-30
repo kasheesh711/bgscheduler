@@ -5,7 +5,6 @@ import {
   type FeedbackContentAssessment,
   type FeedbackEventEvidence,
   type FeedbackFieldAnswers,
-  type FeedbackSubmitterRole,
   type FeedbackVersion,
   type FieldAssessment,
   type PostClassRequiredField,
@@ -16,6 +15,8 @@ import {
 } from "./types";
 
 import { postClassDeductionExemption } from "./deduction-exemption";
+import { feedbackProofExclusion, feedbackSubmitterRole } from "./feedback-proof";
+export { feedbackSubmitterRole } from "./feedback-proof";
 
 export const POST_CLASS_MIN_COMBINED_CHARACTERS = 300;
 export const POST_CLASS_SHORT_FIELD_CHARACTERS = 50;
@@ -326,13 +327,6 @@ export function calculateFeedbackDeadline(scheduledEndAt: Date): Date {
  * `autoSubmitted` wins over the actor role: Wise emits auto-submissions with
  * no actor object at all, so an auto event can never be tutor-authored.
  */
-export function feedbackSubmitterRole(event: FeedbackEventEvidence): FeedbackSubmitterRole {
-  if (event.autoSubmitted === true) return "AUTO";
-  const role = event.actorRole?.trim().toUpperCase();
-  if (role === "TEACHER" || role === "ADMIN" || role === "STUDENT") return role;
-  return "UNKNOWN";
-}
-
 /**
  * Derive timing from the immutable Wise activity-event stream.
  *
@@ -340,16 +334,12 @@ export function feedbackSubmitterRole(event: FeedbackEventEvidence): FeedbackSub
  * detail records a tutor, an admin, and a Wise auto-submission all alike as
  * `profile: "teacher"`, and Wise rarely returns a trustworthy `updatedAt`.
  *
- * **D-EVT-04 — the actor role is not an authorship gate.** Wise stamps
- * `actorRole` from the *account's* role, not from who wrote the text: a tutor
- * who also holds an admin account submits their own feedback and Wise records
- * `ADMIN`. Gating on `TEACHER` therefore discarded genuine pre-deadline tutor
- * submissions and proved lateness against them. Any human-actor event now
- * qualifies; `submitterRoles` still records every role observed, so who
- * submitted stays fully auditable even though it no longer changes the verdict.
+ * D-EVT-05: a non-automatic TEACHER or ADMIN event proves staff submission.
+ * Student events are excluded. Unverified actors before the deadline require
+ * review; only valid on-time staff proof can resolve that ambiguity here.
  *
  * Steps:
- *  1. A qualifying event is any event Wise did not auto-submit.
+ *  1. A qualifying event is non-automatic staff feedback (NULL is accepted).
  *  2. Earliest qualifying event at or before the deadline proves `on_time`.
  *  3. No qualifying event, with the deadline inside event coverage, proves `late`.
  *  4. A deadline predating the coverage floor proves nothing (fail closed to
@@ -365,7 +355,7 @@ export function deriveEventTimingEvidence(input: {
   const submitterRoles = [...new Set(events.map(feedbackSubmitterRole))].toSorted();
 
   const qualifying = events
-    .filter((event) => feedbackSubmitterRole(event) !== "AUTO")
+    .filter((event) => feedbackProofExclusion(event) === null)
     .toSorted((left, right) => left.eventTimestamp.getTime() - right.eventTimestamp.getTime());
 
   const provenOnTime = qualifying.find((event) => event.eventTimestamp.getTime() <= deadlineAt.getTime());
@@ -376,6 +366,15 @@ export function deriveEventTimingEvidence(input: {
       submitterRoles,
       source: "activity_event",
       coverageFrom: eventCoverageFrom,
+    };
+  }
+
+  if (events.some((event) => feedbackProofExclusion(event) === "unverified_actor"
+    && event.eventTimestamp.getTime() <= deadlineAt.getTime())) {
+    return {
+      status: "unknown", provenAt: qualifying[0]?.eventTimestamp ?? null,
+      submitterRoles, source: "none", coverageFrom: eventCoverageFrom,
+      reviewRequired: true,
     };
   }
 
@@ -566,6 +565,7 @@ export function evaluateSessionCompliance(
     timingEvidenceSource: "none" as TimingEvidenceSource,
     submitterRoles: eventTiming?.submitterRoles ?? [],
     tutorSubmittedAt: eventTiming?.provenAt ?? null,
+    timingReviewRequired: eventTiming?.reviewRequired ?? false,
   };
 
   // A broken source or a paused feature suspends assessment outright. Being
@@ -584,6 +584,17 @@ export function evaluateSessionCompliance(
       violation: false,
       remediatedLate: false,
       deductionCandidate: false,
+    };
+  }
+
+  // An unverified pre-deadline actor must not inherit compliance or a money
+  // decision from a lock or mutable timestamp. Valid staff proof wins above.
+  if (eventTiming?.reviewRequired) {
+    return {
+      ...assessmentBase, timingStatus: due ? "unknown" : "not_due",
+      onTimeVersionKey: null, onTimeComplianceLocked: false,
+      assessed: false, rawOnTimeCompliant: false, adjustedCompliant: false,
+      violation: false, remediatedLate: false, deductionCandidate: false,
     };
   }
 
