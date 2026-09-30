@@ -99,8 +99,9 @@ switch there covers both of their Wise accounts; "Partly on" means the CLI switc
 
 1. Shadow for 2–3 days. Exit criteria:
    - every `would_submit` draft reviewed next to what the tutor wrote themselves;
-   - `feedback_autowriter_calls`: 100% of judge calls (`arm = 'glm'`) with `provider = 'Together'`, and writer calls
-     resolved to `openai/gpt-6.1-sol` (or `openai/gpt-6-luna` for a fallback draft);
+   - `feedback_autowriter_calls`: 100% of judge calls (`arm = 'glm'`) with `provider = 'Together'` — two per draft
+     since v5, `result ->> 'effort'` = `medium` and `high` — and writer calls resolved to `openai/gpt-6.1-sol` (or
+     `openai/gpt-6-luna` for a fallback draft);
    - gate reasons per tutor look right (`select wise_teacher_user_id, state, reason, count(*) from feedback_autowriter_sessions group by 1,2,3`);
    - webhook deliveries arriving (`select event_name, count(*) from wise_webhook_events group by 1`) and their
      session ids parsed (`wise_session_id is not null`).
@@ -198,9 +199,9 @@ redeploy, then message the tutors:
 (measured over 14 days: median 34 minutes after the scheduled end, 95% within about 70 minutes), then
 "Transcribing", then posted — about an hour after class, up to about 4 h if the recording is late. With no recording
 3 h after class, a recording in several parts, speakers that cannot be told apart, three Soniox failures, the
-transcript pass switched off, or the writer or its judge failing three times in a row on the transcript draft
-(time-outs, replies that are not JSON — not our OpenRouter account's or the network's errors, which keep retrying),
-the class goes back to the summary once: the dashboard shows the cause under its state
+transcript pass switched off, or the writer failing three times in a row on the transcript draft (time-outs, replies
+that are not JSON — not a judge failure, nor our OpenRouter account's or the network's errors, which all keep
+retrying every 10 minutes), the class goes back to the summary once: the dashboard shows the cause under its state
 ("No recording after 3 h — from summary", …) and counts them in "Back to the summary". A class still waiting for its
 recording raises no `no_recording` alert (it falls back instead); one still being transcribed 3 h after class
 does. What still needs a person is `held` with its alert as before, including
@@ -209,8 +210,11 @@ does. What still needs a person is `held` with its alert as before, including
 about $22 a month.
 
 **For 48 h after.** Class end → posted "From the transcript" about an hour; fallbacks by cause (several
-"Writer or judge failed 3 times on the transcript" in a day means the model route is failing: look at
-`metadata.writerFailure` and the calls); no `no_recording` alerts; cost per draft about $0.11.
+"Writer failed 3 times on the transcript" in a day means the writer's route is failing: look at
+`metadata.writerFailure` and the calls); no `no_recording` alerts; cost per draft about $0.11. A class that keeps
+showing "Transcribing" with a reason `infra:judge:medium:…` or `infra:judge:high:…` has a transcript draft whose
+judge keeps failing at that level: it retries every 10 minutes until its deadline (then expires with an alert) and
+never falls back for that — if several classes show it, the judge's route (GLM on Together) is the problem.
 
 **Retrying.** `--retry=<wiseSessionId>` clears the fallback and the error counts, so a retried class goes to the
 transcript again.
@@ -246,17 +250,43 @@ group by 1, 2, 3, 4, 5, 6
 order by 1, 2;
 ```
 
-Writer rows should be `sol` / `openai/gpt-6.1-sol` at about $0.04 each. A `sol:model_mismatch:…` reason means
+Writer rows should be `sol` / `openai/gpt-6.1-sol` at about $0.04 each. Judge rows come in pairs since v5 (30 Sep):
+every draft is judged at `medium` and at `high` on the same messages and passes only when both do
+([feature page](../features/feedback-autowriter.md#judge-v5-and-writer-v5-30-sep-afternoon)). To see each level:
+
+```sql
+select result ->> 'effort' as effort, ok, error, count(*),
+       count(*) filter (where result ->> 'faithful' = 'false') as flagged,
+       round(percentile_cont(0.9) within group (order by latency_ms)::numeric / 1000, 1) as p90_seconds
+from feedback_autowriter_calls
+where created_at > now() - interval '1 day' and role = 'judge' and prompt_version >= 5
+group by 1, 2, 3
+order by 1, 2;
+```
+
+A judge call has 240 s on a transcript and 120 s on a summary; `timeout` rows near those numbers mean the level
+could not finish, and the class retried 10 minutes later.
+
+Writer rows with the error `… is temporarily rate-limited upstream` are OpenRouter's rate limit on the writer's
+zero-retention route, not a failure of the draft (30 Sep afternoon: 6 of 10 writer calls while three classes were
+replayed at once, 7 of 8 one-word requests sent together). The class retries every 10 minutes and the error never
+counts toward `writer_failed`. If it keeps classes from posting, the error text itself points to adding an own
+provider key for that model in OpenRouter (Settings → Integrations); before doing so, check that the key's endpoint
+keeps zero data retention, as every autowriter route must. A `sol:model_mismatch:…` reason means
 OpenRouter answered Sol's request with another model id: the run reports an infrastructure error and the class
 retries, so that answer is never posted. Only the primary writer has this check; a Luna fallback answer is not
 checked for its model (its `resolved_model` is in the query above).
 
+**Rollback of the two judge levels (v5):** revert that PR and redeploy. The older code judges once at `high`; a
+transcript draft waiting to post that v5 stamped is written and judged again by it (its versions and its stored
+verdict differ), so nothing is posted on a verdict the running code does not recognise. No data change is needed.
+
 **Rollback to the GLM writer:** revert the PR that made the switch and redeploy. That restores GLM on Together
 (reasoning `max`) as the writer, Luna as a summary-only fallback on its old route, and transcripts written by GLM
 alone. Keep migration 0100: every existing row passes the wider checks, and the older code still writes `sol`. A
-judged transcript draft of Sol's that is still waiting to post is posted as it is (the switch changed neither the
-prompt nor the judge version, so the older code reuses it), and its row keeps `arm = 'sol'`, which the old checks
-would reject. Rows Sol already wrote keep `arm = 'sol'` (the older dashboard shows no model name for them); anything
+judged transcript draft of Sol's that is still waiting to post is posted as it is only if the older code's prompt
+and judge versions wrote it (the switch itself changed neither; v5 since changed both, so a v5 draft is written
+again), and its row keeps `arm = 'sol'`, which the old checks would reject. Rows Sol already wrote keep `arm = 'sol'` (the older dashboard shows no model name for them); anything
 else is written again by GLM. No data change is needed.
 
 ## 9. Reviewing posts (operating loop)

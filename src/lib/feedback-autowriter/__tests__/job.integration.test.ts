@@ -42,8 +42,13 @@ const luna = (content: string): OpenRouterCallResult => ({ ...sol(content), mode
 /** A v4 judge verdict that passes the draft, and the model reply carrying it. Rows seeded with `{ faithful, unsupported }` hold stored v3 verdicts. */
 const PASSING_VERDICT = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
 const FAITHFUL_VERDICT = JSON.stringify(PASSING_VERDICT);
+/** What a draft both judge levels passed stores since v5; a bare `PASSING_VERDICT` on a row is a single-judge (v4) verdict. */
+const PASSING_STORED = { ...PASSING_VERDICT, levels: { medium: PASSING_VERDICT, high: PASSING_VERDICT } };
+/** One draft's model calls: the writer, then the judge at both levels. */
+const DRAFT_CALLS = ["post_class_feedback", "feedback_faithfulness", "feedback_faithfulness"];
+const GLM_MODEL = "z-ai/glm-5.3-flash";
 
-/** Writer (Sol) + judge (GLM) replies for as many drafts as a test needs. */
+/** Writer (Sol) + judge (GLM, both levels) replies for as many drafts as a test needs. */
 function fakeModel() {
   const calls: string[] = [];
   const models: string[] = [];
@@ -174,15 +179,21 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     const outcome = await processSession(deps(wise.ops, { callModel: model.callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" });
     expect(outcome).toMatchObject({ result: "verified" });
     expect(wise.posts).toHaveLength(1);
-    expect(model.calls).toEqual(["post_class_feedback", "feedback_faithfulness"]);
-    expect(model.models).toEqual(["openai/gpt-6.1-sol", "z-ai/glm-5.3-flash"]);
+    expect(model.calls).toEqual(DRAFT_CALLS);
+    expect(model.models).toEqual(["openai/gpt-6.1-sol", GLM_MODEL, GLM_MODEL]);
     const row = await readSessionRow(db, SESSION_ID);
     // Arm `sol` passes the widened CHECK constraints (migration 0100) on both tables.
     expect(row).toMatchObject({ state: "verified", arm: "sol", wiseTeacherUserId: KEVIN });
     expect(row?.leaseToken).toBeNull();
+    // Both judge levels passed the draft (v5), and the row says so.
+    expect(row?.metadata).toMatchObject({ judge: PASSING_STORED, pipeline: { judgeVersion: JUDGE_PROMPT_VERSION } });
     const calls = await db.select().from(schema.feedbackAutowriterCalls);
     expect(calls.map((call) => `${call.role}:${call.arm}:${call.requestedModel}`).toSorted())
-      .toEqual(["judge:glm:z-ai/glm-5.3-flash", "writer:sol:openai/gpt-6.1-sol"]);
+      .toEqual([`judge:glm:${GLM_MODEL}`, `judge:glm:${GLM_MODEL}`, "writer:sol:openai/gpt-6.1-sol"]);
+    // Each judge call is recorded with its effort, as judge v5.
+    const judged = calls.filter((call) => call.role === "judge");
+    expect(judged.map((call) => (call.result as { effort?: unknown }).effort).toSorted()).toEqual(["high", "medium"]);
+    expect(judged.map((call) => call.promptVersion)).toEqual([JUDGE_PROMPT_VERSION, JUDGE_PROMPT_VERSION]);
     // "Somchai (Tom.Ja) Jaidee" is called Tom, never by the first name.
     const posted = wise.posts[0].answers.map((answer) => answer.answer).join("\n");
     expect(posted).toContain("Tom found");
@@ -433,7 +444,7 @@ describe("runSweep (Postgres + fake Wise and models)", () => {
     });
     const result = await runSweep(deps(wise.ops, { callModel: callModel as never }));
     expect(result.processed).toEqual({ not_claimed: 1 });
-    expect(calls).toHaveLength(2); // one draft (writer + judge), the second session never started
+    expect(calls).toHaveLength(3); // one draft (writer + both judge levels), the second session never started
     expect(wise.posts).toHaveLength(0);
     expect((await readSessionRow(db, "6a0000000000000000000077"))?.state).toBe("pending");
   });
@@ -591,8 +602,8 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     });
     const held = await processSession(transcriptDeps(fakeWise().ops, fakeSoniox().client, { callModel: unfaithful as never }), { wiseSessionId: SESSION_ID, trigger: "cron" });
     expect(held).toMatchObject({ result: "awaiting_recording", detail: "summary_draft_held" });
-    // Both summary drafts were tried (Sol, then the Luna fallback) before the handover.
-    expect(models).toEqual(["openai/gpt-6.1-sol", "z-ai/glm-5.3-flash", "openai/gpt-6-luna", "z-ai/glm-5.3-flash"]);
+    // Both summary drafts were tried (Sol, then the Luna fallback), each judged at both levels, before the handover.
+    expect(models).toEqual(["openai/gpt-6.1-sol", GLM_MODEL, GLM_MODEL, "openai/gpt-6-luna", GLM_MODEL, GLM_MODEL]);
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "awaiting_recording", evidence: "transcript" });
 
     await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
@@ -627,7 +638,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(outcome).toMatchObject({ result: "verified" });
     expect(soniox.created).toEqual([expect.objectContaining({ audioUrl: "https://files.wiseapp.live/rec.mp4" })]);
     expect(soniox.removed).toEqual([]); // kept for review (triage), at most 72 h
-    expect(models).toEqual(["openai/gpt-6.1-sol", "z-ai/glm-5.3-flash"]);
+    expect(models).toEqual(["openai/gpt-6.1-sol", GLM_MODEL, GLM_MODEL]);
     expect(prompts[0]).toContain("Lesson transcript:");
     expect(prompts[0]).toContain("TUTOR: Today we add fractions");
     expect(prompts[0]).toContain("STUDENT: I got three quarters");
@@ -642,7 +653,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(Number(calls[0].costUsd)).toBeCloseTo(0.1);
   });
 
-  it("falls back to Luna when the judge rejects Sol's transcript draft, instead of holding the class", async () => {
+  it("falls back to Luna when one judge level rejects Sol's transcript draft, instead of holding the class", async () => {
     await seedRow({ state: "awaiting_recording", evidence: "transcript" });
     const wise = fakeWise({ details: [sessionDetail(RECORDING)] });
     const soniox = fakeSoniox();
@@ -652,11 +663,12 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       models.push(request.model);
       if (request.schemaName === "post_class_feedback") return request.model === "openai/gpt-6-luna" ? luna(writerJson) : sol(writerJson);
       judged += 1;
+      // Only the first judge call (Sol's draft at one level) flags it: the other level's pass does not save the draft.
       return glm(JSON.stringify(judged === 1 ? { ...PASSING_VERDICT, faithful: false, unsupported: ["scored 95%"] } : PASSING_VERDICT));
     });
     expect(await processSession(transcriptDeps(wise.ops, soniox.client, { callModel: callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
       .toMatchObject({ result: "verified" });
-    expect(models).toEqual(["openai/gpt-6.1-sol", "z-ai/glm-5.3-flash", "openai/gpt-6-luna", "z-ai/glm-5.3-flash"]);
+    expect(models).toEqual(["openai/gpt-6.1-sol", GLM_MODEL, GLM_MODEL, "openai/gpt-6-luna", GLM_MODEL, GLM_MODEL]);
     expect(wise.posts).toHaveLength(1);
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
       state: "verified", evidence: "transcript", arm: "luna", metadata: { pipeline: { arm: "luna", evidence: "transcript" } },
@@ -691,13 +703,13 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
   });
 
   it("reuses a judged transcript draft whose POST did not go out — no second transcription or model call", async () => {
-    // A GLM draft the current prompt and judge wrote before the switch to Sol is still posted as it is.
+    // A draft the current prompt wrote and both judge levels passed is posted as it is, whichever model wrote it.
     const written = { commitSha: "commit-that-wrote-it", promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION, arm: "glm", evidence: "transcript" };
     await seedRow({
       state: "awaiting_recording", evidence: "transcript", sonioxTranscriptionId: "job-5",
       arm: "glm", fields: GOOD_FIELDS,
       billing: { sessionStatus: "COMPLETED", creditsConsumed: 1, source: "auto_blank_reuse", expectedConsumedDelta: 0 },
-      metadata: { draftEvidence: "transcript", judge: PASSING_VERDICT, pipeline: written },
+      metadata: { draftEvidence: "transcript", judge: PASSING_STORED, pipeline: written },
     });
     const soniox = fakeSoniox();
     const model = fakeModel();
@@ -718,32 +730,44 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ pipeline: written, postedFromCommit: "commit-that-posted-it" });
   });
 
-  it("never reuses a transcript draft an older prompt or judge wrote: writes and judges it again from the kept job", async () => {
-    // v4 (30 Sep): a v3 draft would skip the who-did-what and homework checks.
-    const written = { commitSha: "commit-that-wrote-it", promptVersion: 3, judgeVersion: 3, arm: "glm", evidence: "transcript" };
-    await seedRow({
-      state: "awaiting_recording", evidence: "transcript", sonioxTranscriptionId: "job-5",
-      arm: "glm", fields: GOOD_FIELDS,
-      billing: { sessionStatus: "COMPLETED", creditsConsumed: 1, source: "auto_blank_reuse", expectedConsumedDelta: 0 },
-      metadata: { draftEvidence: "transcript", judge: { faithful: true, unsupported: [] }, pipeline: written },
-    });
-    const soniox = fakeSoniox();
-    const model = fakeModel();
-    const wise = fakeWise({ details: [sessionDetail(RECORDING)] });
-    expect(await processSession(transcriptDeps(wise.ops, soniox.client, { callModel: model.callModel as never }), { wiseSessionId: SESSION_ID, trigger: "cron" }))
-      .toMatchObject({ result: "verified" });
-    expect(soniox.created).toEqual([]); // the kept job is read again, not transcribed again
-    expect(soniox.polled).toEqual(["job-5"]);
-    expect(model.calls).toEqual(["post_class_feedback", "feedback_faithfulness"]);
-    expect(wise.posts).toHaveLength(1);
-    // The older GLM draft is replaced by one Sol writes now.
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
-      arm: "sol",
-      metadata: {
-        judge: PASSING_VERDICT,
-        pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION, arm: "sol", evidence: "transcript" },
-      },
-    });
+  it("never reuses a transcript draft an older prompt or judge wrote, or one judged at a single level: writes and judges it again from the kept job", async () => {
+    const stamp = (versions: { promptVersion: number; judgeVersion: number }) =>
+      ({ commitSha: "commit-that-wrote-it", ...versions, arm: "glm", evidence: "transcript" });
+    const cases: Array<[string, Record<string, unknown>]> = [
+      // v4 (30 Sep): a v3 draft would skip the who-did-what and homework checks.
+      ["a v3 draft", { judge: { faithful: true, unsupported: [] }, pipeline: stamp({ promptVersion: 3, judgeVersion: 3 }) }],
+      // v5 (30 Sep): a draft the single judge passed is judged again at both levels, never posted on its old verdict.
+      ["a v4 draft, judged at one level", { judge: PASSING_VERDICT, pipeline: stamp({ promptVersion: 4, judgeVersion: 4 }) }],
+      // Whatever its stamp says: a verdict without both levels was not judged by both.
+      ["a current stamp on a single-level verdict", { judge: PASSING_VERDICT, pipeline: stamp({ promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION }) }],
+    ];
+    for (const [label, draft] of cases) {
+      await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions, feedback_autowriter_calls`);
+      await seedRow({
+        state: "awaiting_recording", evidence: "transcript", sonioxTranscriptionId: "job-5",
+        arm: "glm", fields: { ...GOOD_FIELDS, topics: "The older draft's topics, which must never be posted." },
+        billing: { sessionStatus: "COMPLETED", creditsConsumed: 1, source: "auto_blank_reuse", expectedConsumedDelta: 0 },
+        metadata: { draftEvidence: "transcript", ...draft },
+      });
+      const soniox = fakeSoniox();
+      const model = fakeModel();
+      const wise = fakeWise({ details: [sessionDetail(RECORDING)] });
+      expect(await processSession(transcriptDeps(wise.ops, soniox.client, { callModel: model.callModel as never }), { wiseSessionId: SESSION_ID, trigger: "cron" }), label)
+        .toMatchObject({ result: "verified" });
+      expect(soniox.created, label).toEqual([]); // the kept job is read again, not transcribed again
+      expect(soniox.polled, label).toEqual(["job-5"]);
+      expect(model.calls, label).toEqual(DRAFT_CALLS);
+      expect(wise.posts, label).toHaveLength(1);
+      expect(wise.posts[0].answers.map((answer) => answer.answer).join("\n"), label).not.toContain("The older draft");
+      // The older GLM draft is replaced by one Sol writes now, judged at both levels.
+      expect(await readSessionRow(db, SESSION_ID), label).toMatchObject({
+        arm: "sol",
+        metadata: {
+          judge: PASSING_STORED,
+          pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION, arm: "sol", evidence: "transcript" },
+        },
+      });
+    }
   });
 
   it("never reuses a draft written from the summary", async () => {
@@ -962,16 +986,22 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
   });
 
   it("returns a row with a judged transcript draft to pending, not to waiting for the recording, when Wise cannot be read", async () => {
-    // Only a complete, passing verdict from the current prompt and judge is reused (v4, 30 Sep). Any other draft is
-    // written again, so it waits for the recording like a class with no draft.
+    // Only a complete verdict that both judge levels passed, from the current prompt and judge, is reused (v4 and v5,
+    // 30 Sep). Any other draft is written again, so it waits for the recording like a class with no draft.
     const current = { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION };
+    const flagged = { ...PASSING_VERDICT, faithful: false, misattributed: ["x"] };
     const cases: Array<[string, Record<string, unknown>, "pending" | "awaiting_recording"]> = [
-      ["current draft", { judge: PASSING_VERDICT, pipeline: current }, "pending"],
+      ["current draft", { judge: PASSING_STORED, pipeline: current }, "pending"],
       ["v3 verdict, no stamp", { judge: { faithful: true, unsupported: [] } }, "awaiting_recording"],
       ["current stamp, incomplete verdict", { judge: { faithful: true, unsupported: [] }, pipeline: current }, "awaiting_recording"],
-      ["current stamp, a problem listed", { judge: { ...PASSING_VERDICT, misattributed: ["x"] }, pipeline: current }, "awaiting_recording"],
-      ["current prompt, previous judge", { judge: PASSING_VERDICT, pipeline: { ...current, judgeVersion: 3 } }, "awaiting_recording"],
-      ["previous prompt, current judge", { judge: PASSING_VERDICT, pipeline: { ...current, promptVersion: 3 } }, "awaiting_recording"],
+      ["a v4 draft as the single judge stored it", { judge: PASSING_VERDICT, pipeline: { promptVersion: 4, judgeVersion: 4 } }, "awaiting_recording"],
+      ["current stamp, judged at one level only", { judge: PASSING_VERDICT, pipeline: current }, "awaiting_recording"],
+      ["current stamp, one level missing", { judge: { ...PASSING_VERDICT, levels: { high: PASSING_VERDICT } }, pipeline: current }, "awaiting_recording"],
+      ["current stamp, medium flagged it", { judge: { ...PASSING_VERDICT, levels: { medium: flagged, high: PASSING_VERDICT } }, pipeline: current }, "awaiting_recording"],
+      ["current stamp, high flagged it", { judge: { ...PASSING_VERDICT, levels: { medium: PASSING_VERDICT, high: flagged } }, pipeline: current }, "awaiting_recording"],
+      ["current stamp, a problem listed", { judge: { ...PASSING_STORED, misattributed: ["x"] }, pipeline: current }, "awaiting_recording"],
+      ["both levels, previous judge version", { judge: PASSING_STORED, pipeline: { ...current, judgeVersion: 4 } }, "awaiting_recording"],
+      ["both levels, previous prompt version", { judge: PASSING_STORED, pipeline: { ...current, promptVersion: 4 } }, "awaiting_recording"],
     ];
     for (const [label, draft, state] of cases) {
       await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
@@ -1498,7 +1528,7 @@ describe("transcript first (Postgres + fakes)", () => {
     return { callModel, seen };
   };
 
-  it("falls back after the third model failure in a row on the transcript draft (writer or judge); Wise errors, our account and our time do not count", async () => {
+  it("falls back after the writer's third failure in a row on the transcript draft; judge failures, Wise errors, our account and our time do not count", async () => {
     await handedOver();
     const soniox = fakeSoniox();
     const attempt = (replies: Array<OpenRouterCallResult | null>, overrides: Partial<AutowriterDeps> = {}, wise = fakeWise({ details: [sessionDetail(RECORDING)] })) => {
@@ -1510,33 +1540,41 @@ describe("transcript first (Postgres + fakes)", () => {
     };
     const writer = `writer:${AUTOWRITER_MODELS.writer.model}`;
     const judge = `judge:${AUTOWRITER_MODELS.judge.model}`;
+    const arm = AUTOWRITER_MODELS.writer.arm;
+    const counted = async () => ((await readSessionRow(db, SESSION_ID))?.metadata as { writerErrors?: unknown }).writerErrors;
 
     // 1. The writer times out: retried on the kept job (an infra failure never goes to the fallback writer).
     const first = attempt([failedCall("timeout")]);
-    expect(await first.run()).toMatchObject({ result: "infra", detail: `${AUTOWRITER_MODELS.writer.arm}:timeout` });
+    expect(await first.run()).toMatchObject({ result: "infra", detail: `${arm}:timeout` });
     expect(first.model.seen).toEqual([writer]);
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
       state: "transcribing", evidence: "transcript", sonioxTranscriptionId: "job-1", metadata: { writerErrors: 1 },
     });
 
-    // 2. The writer answers, its judge times out: a model failure on the transcript draft too.
+    // 2. The writer answers and a judge level times out: a judge failure just retries (owner decision, 30 Sep) —
+    // and, the writer having delivered, its count starts again.
     const second = attempt([null, failedCall("timeout")]);
-    expect(await second.run()).toMatchObject({ result: "infra", detail: "judge:timeout" });
-    expect(second.model.seen).toEqual([writer, judge]);
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "transcribing", metadata: { writerErrors: 2 } });
+    expect(await second.run()).toMatchObject({ result: "infra", detail: "judge:medium:timeout" });
+    expect(second.model.seen).toEqual([writer, judge, judge]);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "transcribing", reason: "infra:judge:medium:timeout", metadata: { writerErrors: 0 } });
 
-    // 3. Wise cannot be read, 4. the function runs out of time before a model call, and 5. OpenRouter says our
-    // credit ran out: none of them is the models' failure.
+    // 3. Two writer failures in a row (a time-out, a provider error).
+    expect(await attempt([failedCall("timeout")]).run()).toMatchObject({ result: "infra", detail: `${arm}:timeout` });
+    expect(await attempt([failedCall("Provider returned error", 500)]).run()).toMatchObject({ result: "infra", detail: `${arm}:Provider returned error` });
+    expect(await counted()).toBe(2);
+
+    // 4. Wise cannot be read, 5. the function runs out of time before a model call, and 6. OpenRouter says our
+    // credit ran out: none of them is the writer's failure, and none starts the count again.
     expect(await attempt([], {}, fakeWise({ failReads: true })).run()).toMatchObject({ result: "infra", detail: "wise_read_failed" });
     const outOfTime = attempt([], { deadlineMs: Date.now() + 60_000 });
     expect(await outOfTime.run()).toMatchObject({ result: "infra", detail: "function_budget_exhausted" });
     expect(outOfTime.model.seen).toEqual([]);
     expect(await attempt([failedCall("Insufficient credits", 402)]).run())
-      .toMatchObject({ result: "infra", detail: `${AUTOWRITER_MODELS.writer.arm}:Insufficient credits` });
+      .toMatchObject({ result: "infra", detail: `${arm}:Insufficient credits` });
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "transcribing", metadata: { writerErrors: 2 } });
 
-    // 6. The third model failure (a reply that is not JSON): the class is written from the summary instead of
-    // retried until the deadline. The job stays on the row for the review window, like any fallback's.
+    // 7. The writer's third failure in a row (a reply that is not JSON): the class is written from the summary
+    // instead of retried until the deadline. The job stays on the row for the review window, like any fallback's.
     const third = attempt([failedCall("invalid_json_response")]);
     expect(await third.run()).toMatchObject({ result: "summary_fallback", detail: "writer_failed" });
     expect(soniox.created).toHaveLength(1);
@@ -1545,7 +1583,7 @@ describe("transcript first (Postgres + fakes)", () => {
       state: "pending", evidence: "summary", reason: "summary_fallback:writer_failed", nextAttemptAt: null,
       sonioxTranscriptionId: "job-1", arm: null, fields: null,
       metadata: {
-        handover: "transcript_first", writerErrors: 3, writerFailure: `${AUTOWRITER_MODELS.writer.arm}:invalid_json_response`,
+        handover: "transcript_first", writerErrors: 3, writerFailure: `${arm}:invalid_json_response`,
         transcript: { speakerMethod: "zoom_alignment" }, summaryFallback: { cause: "writer_failed", at: after(40).toISOString() },
       },
     });
@@ -1564,7 +1602,39 @@ describe("transcript first (Postgres + fakes)", () => {
     });
   });
 
-  it("starts a new count once the models deliver a transcript draft", async () => {
+  it("never falls back for a judge failure, however often the judge fails: only the writer's failures count", async () => {
+    // Two writer failures already counted: under the first rule (writer or judge) the next failure fell back.
+    await handedOver({ metadata: { ...HANDED_OVER, writerErrors: 2 } });
+    const soniox = fakeSoniox();
+    const judgeReply = (content: string) => routed({ model: AUTOWRITER_MODELS.judge.model }, content);
+    // Model calls in order: the writer, then the judge at medium and at high (a level's second try comes last).
+    const failures: Array<[string, Array<OpenRouterCallResult | null>, string]> = [
+      ["medium times out", [null, failedCall("timeout")], "judge:medium:timeout"],
+      ["high times out", [null, null, failedCall("timeout")], "judge:high:timeout"],
+      ["high gives no verdict in two tries", [null, null, judgeReply("not json"), judgeReply("{}")], "judge:high:judge_unparseable"],
+      ["medium answers from another host", [null, { ...judgeReply(FAITHFUL_VERDICT), provider: "SomeOtherHost" } as OpenRouterCallResult], "judge:medium:provider_mismatch:SomeOtherHost"],
+      ["both time out", [null, failedCall("timeout"), failedCall("timeout")], "judge:medium:timeout"],
+    ];
+    for (const [label, replies, detail] of failures) {
+      const model = scriptedModel(replies);
+      expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, {
+        callModel: model.callModel as never, now: () => after(40),
+      }), webhook), label).toMatchObject({ result: "infra", detail });
+      const row = await readSessionRow(db, SESSION_ID);
+      // Retried on the kept job in 10 minutes; the writer delivered each time, so its count is back to zero.
+      expect(row, label).toMatchObject({ state: "transcribing", evidence: "transcript", sonioxTranscriptionId: "job-1", metadata: { writerErrors: 0 } });
+      expect(row?.metadata, label).not.toHaveProperty("summaryFallback");
+    }
+    expect((await readSessionRow(db, SESSION_ID))?.retryCount).toBe(failures.length);
+    expect(soniox.created).toHaveLength(1);
+
+    // Once the judge answers, the class is posted from its transcript.
+    const wise = fakeWise({ details: [sessionDetail(RECORDING)] });
+    expect(await processSession(firstDeps(wise.ops, soniox.client, { now: () => after(90) }), webhook)).toMatchObject({ result: "verified" });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "verified", evidence: "transcript", metadata: { judge: PASSING_STORED } });
+  });
+
+  it("starts a new count once the writer delivers a transcript draft", async () => {
     await updateControl(db, { mode: "shadow" }, "t@x.com");
     await handedOver({ metadata: { ...HANDED_OVER, writerErrors: 2 } });
     expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fakeSoniox().client, { now: () => after(40) }), webhook))
@@ -1593,7 +1663,7 @@ describe("transcript first (Postgres + fakes)", () => {
     // With a judged transcript draft kept for the POST slot: dropped with its verdict and stamp, the summary writes its own.
     await handedOver({
       state: "pending", sonioxTranscriptionId: "job-5", arm: "glm", fields: GOOD_FIELDS, fieldsSha256: "sha",
-      metadata: { ...HANDED_OVER, draftEvidence: "transcript", judge: PASSING_VERDICT, pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION } },
+      metadata: { ...HANDED_OVER, draftEvidence: "transcript", judge: PASSING_STORED, pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION } },
     });
     expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fakeSoniox().client, { transcriptsEnabled: false }), cron))
       .toMatchObject({ result: "summary_fallback", detail: "transcript_pass_off" });

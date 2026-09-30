@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { AUTOWRITER_JUDGE_EFFORTS } from "../config";
 import {
   JUDGE_JSON_SCHEMA,
   JUDGE_PROMPT_VERSION,
+  StoredJudgeVerdictSchema,
   buildJudgeMessages,
+  combineJudgeVerdicts,
   judgeProblems,
   parseJudgeOutput,
+  passingStoredVerdict,
 } from "../judge";
 import { speakerLabelNote } from "../prompt";
 
@@ -18,9 +22,8 @@ const FIELDS = {
   homework: "",
 };
 
-describe("judge output (v4)", () => {
+describe("judge output (the v4 verdict each level returns)", () => {
   it("parses a complete four-field verdict", () => {
-    expect(JUDGE_PROMPT_VERSION).toBe(4);
     expect(JUDGE_JSON_SCHEMA.required).toEqual(["faithful", "unsupported", "misattributed", "homeworkNotSet"]);
     expect(parseJudgeOutput(JSON.stringify(CLEAN))).toEqual(CLEAN);
     expect(parseJudgeOutput(`\`\`\`json\n${JSON.stringify(CLEAN)}\n\`\`\``)).toEqual(CLEAN);
@@ -62,6 +65,73 @@ describe("judge output (v4)", () => {
     expect(JUDGE_JSON_SCHEMA.properties.unsupported.description)
       .toBe("Short quotes of claims about this lesson that the lesson record does not support.");
     expect(JSON.stringify(JUDGE_JSON_SCHEMA)).not.toContain("summary");
+  });
+});
+
+describe("judge v5: both levels must pass", () => {
+  const flagged = (patch: Record<string, unknown>) => ({ ...CLEAN, faithful: false, ...patch });
+
+  it("is version 5: the v4 prompt at medium and at high", () => {
+    expect(JUDGE_PROMPT_VERSION).toBe(5);
+    expect(AUTOWRITER_JUDGE_EFFORTS).toEqual(["medium", "high"]);
+    // The stored verdict names exactly the levels that judge.
+    expect(Object.keys(StoredJudgeVerdictSchema.shape.levels.shape)).toEqual([...AUTOWRITER_JUDGE_EFFORTS]);
+  });
+
+  it("passes a draft only when both levels do, and keeps each level's verdict", () => {
+    expect(combineJudgeVerdicts({ medium: CLEAN, high: CLEAN })).toEqual({ ...CLEAN, levels: { medium: CLEAN, high: CLEAN } });
+    const onlyHigh = flagged({ misattributed: ["[STUDENT_1] said 8 pages"] });
+    expect(combineJudgeVerdicts({ medium: CLEAN, high: onlyHigh }))
+      .toEqual({ ...onlyHigh, levels: { medium: CLEAN, high: onlyHigh } });
+    const onlyMedium = flagged({ unsupported: ["scored 95%"] });
+    expect(combineJudgeVerdicts({ medium: onlyMedium, high: CLEAN }))
+      .toEqual({ ...onlyMedium, levels: { medium: onlyMedium, high: CLEAN } });
+    // A level that says unfaithful without listing anything still fails the draft.
+    expect(combineJudgeVerdicts({ medium: CLEAN, high: { ...CLEAN, faithful: false } }).faithful).toBe(false);
+  });
+
+  it("lists the union of both verdicts once each, wrong-person problems first", () => {
+    const medium = flagged({ unsupported: ["scored 95%", "used a timer"], homeworkNotSet: ["three problems by Friday"] });
+    const high = flagged({
+      unsupported: ["used a timer", "  scored   95% ", "read chapter four"],
+      misattributed: ["[STUDENT_1] said 8 pages"],
+      homeworkNotSet: ["three problems by Friday"],
+    });
+    const combined = combineJudgeVerdicts({ medium, high });
+    expect(combined).toMatchObject({
+      faithful: false,
+      unsupported: ["scored 95%", "used a timer", "read chapter four"],
+      misattributed: ["[STUDENT_1] said 8 pages"],
+      homeworkNotSet: ["three problems by Friday"],
+    });
+    expect(judgeProblems(combined)).toEqual([
+      "wrong person: [STUDENT_1] said 8 pages",
+      "homework not set: three problems by Friday",
+      "scored 95%",
+      "used a timer",
+      "read chapter four",
+    ]);
+    // Each level's lists stay as returned.
+    expect(combined.levels).toEqual({ medium, high });
+  });
+
+  it("reuses a stored verdict only when both levels passed it: a single-judge verdict never", () => {
+    const passing = combineJudgeVerdicts({ medium: CLEAN, high: CLEAN });
+    expect(passingStoredVerdict(passing)).toEqual(passing);
+    // v4 and v3 verdicts were judged at one level: no `levels`.
+    expect(passingStoredVerdict(CLEAN)).toBeNull();
+    expect(passingStoredVerdict({ faithful: true, unsupported: [] })).toBeNull();
+    // One level missing, incomplete or not passing.
+    expect(passingStoredVerdict({ ...CLEAN, levels: { high: CLEAN } })).toBeNull();
+    expect(passingStoredVerdict({ ...CLEAN, levels: { medium: { faithful: true, unsupported: [] }, high: CLEAN } })).toBeNull();
+    expect(passingStoredVerdict({ ...CLEAN, levels: { medium: flagged({ unsupported: ["x"] }), high: CLEAN } })).toBeNull();
+    expect(passingStoredVerdict({ ...CLEAN, levels: { medium: CLEAN, high: { ...CLEAN, faithful: false } } })).toBeNull();
+    expect(passingStoredVerdict({ ...CLEAN, levels: { medium: CLEAN, high: { ...CLEAN, homeworkNotSet: ["y"] } } })).toBeNull();
+    // A verdict that failed, or anything else.
+    expect(passingStoredVerdict(combineJudgeVerdicts({ medium: CLEAN, high: flagged({ misattributed: ["z"] }) }))).toBeNull();
+    expect(passingStoredVerdict({ ...passing, extra: true })).toBeNull();
+    expect(passingStoredVerdict(null)).toBeNull();
+    expect(passingStoredVerdict("faithful")).toBeNull();
   });
 });
 

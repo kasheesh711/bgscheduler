@@ -1,7 +1,8 @@
 import { redactKnownNames } from "@/lib/post-class-feedback/similarity";
 import type { AiSummary } from "./types";
 
-export const PROMPT_VERSION = 4;
+/** v5 (owner decision, 30 Sep): the feedback names no one but the student (summary rule 12, transcript rule 13). */
+export const PROMPT_VERSION = 5;
 export const STUDENT_TOKEN = "[STUDENT_1]";
 export const TUTOR_TOKEN = "[TUTOR]";
 
@@ -312,6 +313,9 @@ function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels): string {
           "Any other name belongs to someone else — another student, a family member, a friend, or a person or character in the lesson material — " +
           `never to ${STUDENT_TOKEN}, even when the summary seems to be about them. ` +
           `Never give ${STUDENT_TOKEN} anything the summary says ${TUTOR_TOKEN} or another named person did, said, finished or did not finish.`,
+        // v5 (owner decision, 30 Sep): a prompt rule only, no gate. The tutor is never named either (above).
+        `12. Never name anyone but ${STUDENT_TOKEN}: refer to any other person generically — ` +
+          "\"another student\", \"a classmate\", \"a family member\" — never by name.",
       ]
       : [
         // Hedged ("clearly not the student"): Thai-script or mis-heard names of the student are not redacted in a transcript.
@@ -319,7 +323,9 @@ function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels): string {
           "Anyone named in the lesson who is clearly not the student — another student, a family member, a friend, or a person or character in the lesson material — " +
           `is never ${STUDENT_TOKEN}: never give ${STUDENT_TOKEN} what is said about them.`,
         `12. Something the tutor explained was covered, not mastered: only say ${STUDENT_TOKEN} understood, solved or explained something when the transcript shows ${STUDENT_TOKEN} doing it.`,
-        `13. Names in the transcript may be written in Thai script; never repeat any name — write ${STUDENT_TOKEN} for the student.`,
+        // v5 (owner decision, 30 Sep): other people too, referred to generically.
+        `13. Names in the transcript may be written in Thai script; never repeat any name — write ${STUDENT_TOKEN} for the student ` +
+          "and refer to anyone else generically (\"another student\", \"a classmate\", \"a family member\").",
       ]),
   ].join("\n");
 }

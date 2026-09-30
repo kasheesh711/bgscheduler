@@ -66,6 +66,23 @@ describe("callOpenRouter", () => {
       .toMatchObject({ ok: false, error: "timeout" });
   });
 
+  it("takes the status from the body when OpenRouter reports the failure inside a 200 response", async () => {
+    // 30 Sep: an upstream rate limit on the writer's route came as HTTP 200 with the status in the body.
+    const rateLimited = reply(200, {
+      error: { message: "openai/gpt-6-luna is temporarily rate-limited upstream. Please retry shortly.", code: 429, metadata: { error_type: "rate_limit" } },
+    });
+    expect(await callOpenRouter({ ...request, fetchImpl: rateLimited as unknown as typeof fetch })).toMatchObject({
+      ok: false, httpStatus: 429, error: "openai/gpt-6-luna is temporarily rate-limited upstream. Please retry shortly.",
+    });
+    // A code that is not a status (or none) leaves the response's own status; an HTTP error keeps its status.
+    const textCode = reply(200, { error: { message: "Provider returned error", code: "provider_error" } });
+    expect(await callOpenRouter({ ...request, fetchImpl: textCode as unknown as typeof fetch })).toMatchObject({ ok: false, httpStatus: 200 });
+    const noCode = reply(200, { error: { message: "Provider returned error" } });
+    expect(await callOpenRouter({ ...request, fetchImpl: noCode as unknown as typeof fetch })).toMatchObject({ ok: false, httpStatus: 200 });
+    const gateway = reply(502, { error: { message: "Provider returned error", code: 429 } });
+    expect(await callOpenRouter({ ...request, fetchImpl: gateway as unknown as typeof fetch })).toMatchObject({ ok: false, httpStatus: 502 });
+  });
+
   it("reports a timeout while reading a slow reply as a timeout, not an unhandled error", async () => {
     // Ek's 29 Sep class: the headers arrived, then the body read hit the timeout.
     const slowBody = vi.fn(async () => ({

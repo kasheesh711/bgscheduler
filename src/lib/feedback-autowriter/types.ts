@@ -36,8 +36,8 @@ export const AUTOWRITER_MIN_SUMMARY_CHARACTERS = 200;
 /**
  * Transcript first: why a class handed to the transcript went back to Wise's summary
  * (`metadata.summaryFallback.cause`) — no recording in time, a recording in several parts, speakers that cannot be
- * told apart, Soniox failing three times, the transcript pass switched off while the class waited, or the writer or
- * its judge failing three times in a row on the transcript draft.
+ * told apart, Soniox failing three times, the transcript pass switched off while the class waited, or the writer
+ * failing three times in a row on the transcript draft.
  */
 export const SUMMARY_FALLBACK_CAUSES = [
   "no_recording", "recording_multiple_parts", "speakers_unclear", "soniox_failed", "transcript_pass_off", "writer_failed",

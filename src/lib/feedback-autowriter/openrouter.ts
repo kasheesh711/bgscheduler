@@ -138,7 +138,11 @@ export async function callOpenRouter(input: {
   const common = { model: body.model ?? null, provider: body.provider ?? null, finishReason, latencyMs };
   if (!response.ok || body.error) {
     const message = (body.error?.message ?? `HTTP ${response.status}`).slice(0, 300);
-    return { ok: false, error: message, httpStatus: response.status, usage, ...common };
+    // OpenRouter reports some failures inside a 200 response, with the status in the body: an upstream rate limit
+    // comes as HTTP 200 with `error.code` 429 (seen 30 Sep). The failure's status is then the body's, so a rate
+    // limit is never taken for the model's own failure (pipeline.ts `callFailure`).
+    const httpStatus = response.ok && typeof body.error?.code === "number" ? body.error.code : response.status;
+    return { ok: false, error: message, httpStatus, usage, ...common };
   }
   const content = choice?.message?.content ?? "";
   if (finishReason !== "stop") {

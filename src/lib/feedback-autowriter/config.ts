@@ -100,9 +100,9 @@ const OPENAI_ZDR_ROUTE: OpenRouterProviderPreferences = {
  * drafts needed no real fix (0 critical, 0.9 real errors per 100 claims), vs
  * Luna 64% and GLM 30% (4.1 per 100). ≈ $0.04 per draft, ~6 s per call.
  * Fallback writer: GPT-6 Luna, reasoning `max`, on the same route.
- * Judge: GLM 5.3 Flash pinned to Together. Reasoning `high` since v4 (30 Sep): at
- * `medium` it passed a draft that gave another student's words to ours after
- * ~100 reasoning tokens.
+ * Judge: GLM 5.3 Flash pinned to Together, at every effort in `AUTOWRITER_JUDGE_EFFORTS` (its `effort` below is
+ * not used). v4 (30 Sep) moved it from `medium` to `high`: at `medium` it passed a draft that gave another student's
+ * words to ours after ~100 reasoning tokens.
  */
 export const AUTOWRITER_MODELS = {
   writer: {
@@ -117,6 +117,26 @@ export const AUTOWRITER_MODELS = {
     expectProvider: "Together", expectModel: "z-ai/glm-5.3-flash",
   },
 } as const satisfies Record<string, AutowriterModelConfig>;
+
+/**
+ * Judge v5 (owner decision, 30 Sep): every draft is judged at each of these efforts, in parallel on byte-identical
+ * messages, and passes only when every level gives a complete verdict with `faithful: true`. In the 30 Sep replays
+ * each level caught a wrong detail the other passed (1 of 5 drafts only at `high`, 2 of 9 only at `medium`).
+ */
+export const AUTOWRITER_JUDGE_EFFORTS = ["medium", "high"] as const satisfies ReadonlyArray<AutowriterModelConfig["effort"]>;
+
+/** A writer call's time-out: Sol answers in ~6 s; the Luna fallback at reasoning `max` can take minutes. */
+export const AUTOWRITER_WRITER_TIMEOUT_MS = 180_000;
+/**
+ * A judge call's time-out, by what the draft is judged against (owner decision, 30 Sep). A summary is short; on
+ * hour-long transcripts the `high` judge's p90 was 63 s in the 30 Sep replay, and it once timed out at 120 s.
+ */
+export const AUTOWRITER_JUDGE_TIMEOUT_MS = { summary: 120_000, transcript: 240_000 } as const;
+/**
+ * Every model call ends at least this long before the function's deadline (its time-out is cut to fit). A judge is
+ * never started without its full time-out: cut short, it could not finish.
+ */
+export const AUTOWRITER_CALL_DEADLINE_MARGIN_MS = 45_000;
 
 /**
  * The writer config behind each arm, for the offline evaluation CLI
@@ -157,9 +177,14 @@ export const AUTOWRITER_POST_TIMEOUT_MS = 60_000;
 /** Every Wise read (including its paced retries) gives up after this long. */
 export const AUTOWRITER_WISE_READ_TIMEOUT_MS = 45_000;
 /**
- * One session's work after Wise is ready: writer (≤180 s) + judge (≤120 s) +
- * the POST budget. The sweep starts a session only with this much time left,
- * and a webhook's readiness wait never eats into it.
+ * One session's work after Wise is ready. The sweep starts a session only with this much time left, and a webhook's
+ * waits (Wise's summary, Soniox) never eat into it. Every entry point (webhook, cron, Data Health run) has a 740 s
+ * budget under `maxDuration` 800, and every model call ends by the deadline − 45 s, so no call outlives the function.
+ * After the slowest writer call (180 s) at least 335 s are left, so the judges (in parallel) always get their full
+ * time-out — 240 s on a transcript, 120 s on a summary — unless the reads before the writer took over 95 s; the
+ * pipeline never starts a judge without it (the class then retries with a fresh function). Worst case, the POST
+ * phase (240 s) no longer fits after a transcript draft: the judged draft is kept and the next run posts it without
+ * calling a model. After a summary draft it still fits (560 − 180 − 120 = 260 s).
  */
 export const AUTOWRITER_SWEEP_MIN_REMAINING_MS = 560_000;
 /** While another POST is in flight, re-try the guarded submit this often … */
@@ -214,10 +239,11 @@ export const AUTOWRITER_NO_RECORDING_ALERT_MS = 3 * 60 * 60 * 1000;
  */
 export const AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS = 3 * 60 * 60 * 1000;
 /**
- * Transcript first: failures in a row of the models writing a class's transcript draft — the writer or its judge
- * (a time-out, a reply that is not JSON, an unusable route) — before the class is written from the summary instead
- * (`summaryFallback`, cause `writer_failed`; owner default, 30 Sep) rather than retried every 10 min until its
- * deadline. Wise and Soniox errors are counted apart.
+ * Transcript first: failures in a row of the writer on a class's transcript draft (a time-out, a reply that is not
+ * JSON, a provider error, an unusable route) before the class is written from the summary instead (`summaryFallback`,
+ * cause `writer_failed`; owner default, 30 Sep) rather than retried every 10 min until its deadline. Only the writer's
+ * failures count (owner decision, 30 Sep): a judge failure just retries, and a writer call that delivered a draft
+ * starts the count again. Wise and Soniox errors are counted apart.
  */
 export const AUTOWRITER_MAX_WRITER_ERRORS = 3;
 /** Soniox jobs no row references are deleted once they are this old (orphans). */

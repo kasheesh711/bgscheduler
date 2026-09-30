@@ -35,7 +35,7 @@ import {
   AUTOWRITER_ZOOM_TRANSCRIPT_RECHECK_MS,
   AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS,
 } from "./config";
-import { JUDGE_PROMPT_VERSION, JudgeOutputSchema, judgeProblems, type JudgeOutput } from "./judge";
+import { JUDGE_PROMPT_VERSION, passingStoredVerdict, type StoredJudgeVerdict } from "./judge";
 import { runWritingPipeline, type PipelineResult } from "./pipeline";
 import { PROMPT_VERSION, chooseStudentDisplayName, describeClass, type EvidenceKind } from "./prompt";
 import { AUTOWRITER_ROSTER, AUTOWRITER_TEACHER_ALLOWLIST, rosterAccountIds, rosterTutor, type AutowriterTutor } from "./roster";
@@ -330,8 +330,8 @@ function mayFallBackToSummary(row: AutowriterSessionRow): boolean {
 
 /**
  * Transcript first: the transcript cannot carry this class (no recording in time, a recording in several parts,
- * speakers that cannot be told apart, Soniox failing three times, the pass switched off, the writer or its judge
- * failing three times in a row on the transcript draft), so it goes back to Wise's summary: `pending`,
+ * speakers that cannot be told apart, Soniox failing three times, the pass switched off, the writer failing three
+ * times in a row on the transcript draft), so it goes back to Wise's summary: `pending`,
  * `evidence = summary`, due now, `metadata.summaryFallback {cause, at}`. Once only — a class that
  * fell back never hands over again (`mayHandOver` in processLeased) until an owner retry clears the flags. Any Soniox
  * job stays on the row; the sweep treats the class as done with it (review window, then deletion). A transcript
@@ -725,22 +725,24 @@ async function postDraft(deps: AutowriterDeps, input: {
 }
 
 /** A judged draft on its way to a POST; `pipeline` is the stamp of the attempt that wrote it, when reused. */
-type StoredDraft = { arm: ModelArm; fields: FeedbackFieldAnswers; judge: JudgeOutput; pipeline?: Record<string, unknown> };
+type StoredDraft = { arm: ModelArm; fields: FeedbackFieldAnswers; judge: StoredJudgeVerdict; pipeline?: Record<string, unknown> };
 
 /**
  * A judged transcript draft kept from an attempt whose POST did not go out — only when the current prompt and judge
  * wrote and passed it. v4 (30 Sep): a draft from an older version (or with no stamp) would skip the newer rules and
- * checks, so the class is written and judged again from its kept transcript instead. `requeueShadowDrafts` (store.ts)
- * applies the same test when it decides which drafts keep their transcript's review window.
+ * checks, so the class is written and judged again from its kept transcript instead. v5 (30 Sep): only a draft both
+ * judge levels passed (`passingStoredVerdict`) — one judged at a single level is judged again, never posted on its
+ * old verdict. `requeueShadowDrafts` (store.ts) applies the same test when it decides which drafts keep their
+ * transcript's review window.
  */
 function reusableTranscriptDraft(row: AutowriterSessionRow): StoredDraft | null {
   const metadata = row.metadata as { draftEvidence?: unknown; judge?: unknown; pipeline?: unknown };
   if (metadata.draftEvidence !== "transcript" || !row.fields || !row.arm) return null;
-  const judge = JudgeOutputSchema.safeParse(metadata.judge);
-  if (!judge.success || !judge.data.faithful || judgeProblems(judge.data).length > 0) return null;
+  const judge = passingStoredVerdict(metadata.judge);
+  if (!judge) return null;
   const pipeline = metadata.pipeline && typeof metadata.pipeline === "object" ? metadata.pipeline as Record<string, unknown> : null;
   if (pipeline?.promptVersion !== PROMPT_VERSION || pipeline.judgeVersion !== JUDGE_PROMPT_VERSION) return null;
-  return { arm: row.arm, fields: row.fields as unknown as FeedbackFieldAnswers, judge: judge.data, pipeline };
+  return { arm: row.arm, fields: row.fields as unknown as FeedbackFieldAnswers, judge, pipeline };
 }
 
 /**
@@ -752,7 +754,7 @@ function reusableTranscriptDraft(row: AutowriterSessionRow): StoredDraft | null 
  * Transcript first (`handover = transcript_first`): what the transcript cannot
  * carry — no recording by the fallback time, a recording in several parts,
  * speakers it cannot tell apart, three Soniox failures, the pass switched off,
- * three model failures in a row on the transcript draft — goes back to the
+ * three writer failures in a row on the transcript draft — goes back to the
  * summary once (`fallBackToSummary`). A recording or transcript
  * too short for the class, and a draft the validator or judge rejects, stay holds:
  * the better evidence could not support a draft.
@@ -1021,13 +1023,17 @@ async function processTranscript(deps: AutowriterDeps, input: {
     callModel: deps.callModel,
   });
   if (result.kind === "infra") {
-    // Transcript first (owner default, 30 Sep): the writer or its judge failing on the transcript draft (a time-out,
-    // a reply that is not JSON, an unusable route) is retried, but the third failure in a row writes the class from
-    // the summary instead of retrying until the deadline. Wise and Soniox errors count apart (above); our function's
-    // time, our OpenRouter account and our connection are not the models' failure (`modelFailure`).
-    const modelFailed = canFallBack && result.modelFailure;
-    const writerErrors = (Number((row.metadata as { writerErrors?: unknown }).writerErrors ?? 0) || 0) + 1;
-    if (modelFailed && writerErrors >= AUTOWRITER_MAX_WRITER_ERRORS) {
+    // Transcript first (owner decisions, 30 Sep): the writer failing on the transcript draft (a time-out, a reply
+    // that is not JSON, a provider error, an unusable route) is retried, but the third failure in a row writes the
+    // class from the summary instead of retrying until the deadline. Only the writer's failures count: a judge
+    // failure just retries, and since the writer then delivered a draft the count starts again. Wise and Soniox
+    // errors count apart (above); our function's time, our OpenRouter account and our connection are not the
+    // writer's failure (`modelFailure`) and leave the count as it is.
+    const writerFailed = canFallBack && result.stage === "writer" && result.modelFailure;
+    const writerDelivered = canFallBack && result.stage === "judge";
+    const previousErrors = Number((row.metadata as { writerErrors?: unknown }).writerErrors ?? 0) || 0;
+    const writerErrors = writerFailed ? previousErrors + 1 : writerDelivered ? 0 : previousErrors;
+    if (writerFailed && writerErrors >= AUTOWRITER_MAX_WRITER_ERRORS) {
       return fallBackToSummary({
         release, out, cause: "writer_failed", now, metadata: { transcript: transcriptMeta, writerErrors, writerFailure: result.error },
       });
@@ -1035,7 +1041,8 @@ async function processTranscript(deps: AutowriterDeps, input: {
     // The job is kept: the next attempt re-fetches the same transcript.
     await release({
       state: "transcribing", reason: `infra:${result.error}`, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true,
-      sonioxTranscriptionId: jobId, metadata: { transcript: transcriptMeta, ...(modelFailed ? { writerErrors } : {}) },
+      sonioxTranscriptionId: jobId,
+      metadata: { transcript: transcriptMeta, ...(writerFailed || writerDelivered ? { writerErrors } : {}) },
     });
     return out("infra", result.error);
   }
@@ -1044,7 +1051,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
   return postDraft(deps, {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
     draft: { arm: result.arm, fields: result.fields, judge: result.judge }, evidence: "transcript",
-    // The models delivered: a later failure (a requeued shadow draft written again) starts a new count.
+    // The writer delivered: a later failure (a requeued shadow draft written again) starts a new count.
     extraMetadata: { transcript: transcriptMeta, ...guestMetadata(student), ...(canFallBack ? { writerErrors: 0 } : {}) },
     release, out,
   });
