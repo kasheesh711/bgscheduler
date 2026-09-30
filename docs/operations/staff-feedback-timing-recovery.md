@@ -12,3 +12,5 @@ Recovery scope begins 26 August 2026 in Bangkok. Older assessments and written f
 8. Restore the original project finance configuration through a fresh production deployment without recovery overrides. Verify the live configuration and resulting cron behavior. Keep the daily schedule inactive and perform no reminder delivery or WISE mutation as part of this recovery.
 
 Current payout previews and regenerated exports show staff submission dates. Persisted written lines retain their recorded timestamp; drift checks consult `submission_evidence_version`. Genuine amount, identity, participant, schedule, and source-anchor drift remains blocked. The policy version must advance before replay, so historical contaminated assessment locks cannot be reloaded by a later collector sync.
+
+Private recovery reports and pulled configuration in `.payout-ops/` must be excluded from both Git and Vercel uploads. Vercel CLI applies `.vercelignore`, independently of `.gitignore`. Inspect a recovery deployment's source and output trees to confirm this directory is absent before declaring the upload boundary verified.
