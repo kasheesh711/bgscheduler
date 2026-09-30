@@ -22,6 +22,9 @@ function render(options: { canControl?: boolean; control?: Partial<ReturnType<ty
   );
 }
 
+/** The Controls menu's button: the word alone also names who last changed the controls, in a title. */
+const CONTROLS_MENU = />Controls\s*<svg/u;
+
 describe("SystemLine", () => {
   it("states what the autowriter runs with: mode, models and efforts, evidence switches, versions, last run and last webhook", () => {
     const html = render();
@@ -49,19 +52,19 @@ describe("SystemLine", () => {
   it("shows the owner's Controls only to the owner: the other modes, and Pause", () => {
     const viewer = render();
     const owner = render({ canControl: true });
-    expect(viewer).not.toContain("Controls");
+    expect(viewer).not.toMatch(CONTROLS_MENU);
     expect(viewer).not.toContain("Go live");
     expect(viewer).not.toContain(">Pause<");
-    expect(owner).toContain("Controls");
+    expect(owner).toMatch(CONTROLS_MENU);
     // Live now: the menu offers the two other modes.
     expect(owner).toContain(">Shadow<");
     expect(owner).toContain(">Turn off<");
     expect(owner).not.toContain("Go live");
     expect(owner).toContain(">Pause<");
-    expect(owner).toContain("Last changed by owner@example.com");
-    // Who last changed the mode is for everyone to read, on the mode itself.
-    expect(viewer).toMatch(/title="Last changed by owner@example\.com · [^"]+"[^>]*>.*?Mode LIVE/u);
-    expect(render({ control: { updatedBy: null } })).not.toContain("Last changed by");
+    expect(owner).toContain("Controls last changed by owner@example.com");
+    // Who last changed the controls (a mode, a pause, a tutor switch, a halt) is for everyone to read, on the mode.
+    expect(viewer).toMatch(/title="Controls last changed by owner@example\.com · [^"]+"[^>]*>.*?Mode LIVE/u);
+    expect(render({ control: { updatedBy: null } })).not.toContain("last changed by");
     const shadow = render({ canControl: true, control: { mode: "shadow" } });
     expect(shadow).toContain("Go live");
     expect(shadow).toContain(">Turn off<");

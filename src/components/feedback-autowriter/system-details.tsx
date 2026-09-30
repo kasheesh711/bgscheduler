@@ -283,6 +283,11 @@ function CostAndSpeed({ dashboard }: { dashboard: AutowriterDashboard }) {
           )}
         </div>
       </div>
+      {dashboard.control.updatedBy ? (
+        <p className="border-t px-5 py-3 text-[11px] text-muted-foreground">
+          Controls (mode, pause, tutor switches) last changed by {dashboard.control.updatedBy} · {when(dashboard.control.updatedAt)}
+        </p>
+      ) : null}
     </Disclosure>
   );
 }

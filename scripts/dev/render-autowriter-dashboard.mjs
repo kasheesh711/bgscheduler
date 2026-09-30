@@ -189,7 +189,9 @@ function chrome(args, url, ready, present = ready) {
     child.on("error", finish);
     // `close` comes once the output has been read to its end; after an exit it is given a second, no more.
     child.on("close", ended);
-    child.on("exit", () => { afterExit = setTimeout(ended, 1_000); });
+    child.on("exit", () => {
+      if (!finished) afterExit = setTimeout(ended, 1_000);
+    });
   });
 }
 

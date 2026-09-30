@@ -273,6 +273,13 @@ export function postingWindowEligibility(input: {
   return { onRoster, workable, tutorOffThroughout: liveOnRoster && !workable, tutorOffAtWindowEnd };
 }
 
+/**
+ * Every 7-day rate of the dashboard pools this many days: the date and the six before it (numerators and denominators
+ * summed, then divided). The trend series, the review payload's look-back and the health rail's charts all derive
+ * from it, so they cannot drift apart.
+ */
+export const RATE_POOL_DAYS = 7;
+
 const ISO_DAY = String.raw`(?:20\d\d-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|02-(?:0[1-9]|1\d|2[0-8]))|20(?:[02468][048]|[13579][26])-02-29)`;
 const ISO_TIME = String.raw`(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,6})?`;
 /**

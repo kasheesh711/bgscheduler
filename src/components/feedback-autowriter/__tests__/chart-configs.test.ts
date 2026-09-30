@@ -247,6 +247,8 @@ describe("the rail's mini charts", () => {
     expect(lastValue(series.accuracy)).toBe(0.5);
     expect(lastValue([null, null])).toBeNull();
     expect(railSeries({ window: { start: "2026-10-05", end: "2026-10-06", days: 2 }, daily: [], lookback: [] }).accuracy7d).toEqual([null, null]);
+    // A payload from a server older than the page (around a deploy) has no look-back: it pools inside the window.
+    expect(railSeries({ window: { start: "2026-10-05", end: "2026-10-06", days: 2 }, daily: [] }).accuracy7d).toEqual([null, null]);
   });
 
   it("pools the window's first dates with the six dates before it, as the trend charts do", () => {

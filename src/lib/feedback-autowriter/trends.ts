@@ -5,6 +5,7 @@ import { isOnsiteSkip } from "./dashboard";
 import { HOLD_REASON_CATEGORIES, holdReasonCategory, type HoldReasonCategory } from "./hold-reasons";
 import {
   GATE_WINDOW_DAYS,
+  RATE_POOL_DAYS,
   addDays,
   bangkokDateKey,
   bangkokDayBounds,
@@ -41,7 +42,7 @@ export type TrendRangeDays = 14 | 30 | 90;
 export const ALL_TUTORS = "*";
 
 /** Every ratio's moving average pools this many days: the date and the six before it. */
-export const TREND_POOL_DAYS = 7;
+export const TREND_POOL_DAYS = RATE_POOL_DAYS;
 
 /** Days read before the range so the rolling values of its first date are complete (the 14-day lower bound). */
 export const TREND_LOOKBACK_DAYS = GATE_WINDOW_DAYS - 1;

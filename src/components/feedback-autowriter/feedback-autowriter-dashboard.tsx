@@ -7,13 +7,12 @@ import type { AutowriterDashboard } from "@/lib/feedback-autowriter/dashboard";
 import { buildInbox, filterInbox } from "@/lib/feedback-autowriter/inbox";
 import type { AutowriterReview, AutowriterReviewUnavailable } from "@/lib/feedback-autowriter/review-data";
 import type { AutowriterTrends, TrendRangeDays } from "@/lib/feedback-autowriter/trends";
-import { cn } from "@/lib/utils";
-import { TONE_TEXT } from "./atoms";
 import { ClassesLog } from "./classes-log";
 import { clock, longDate } from "./format";
 import { HealthRail } from "./health-rail";
 import { Inbox } from "./inbox";
 import { ItemDrawer, type DrawerTarget } from "./item-drawer";
+import { StatusLines, reloadsWhenShown, staleReviewMessage } from "./page-status";
 import { SystemDetails } from "./system-details";
 import { SystemLine } from "./system-line";
 import { TrendCharts } from "./trend-charts";
@@ -29,8 +28,6 @@ import { TutorFilterChip, TutorTable } from "./tutor-table";
 const ALL_TUTORS = "*";
 const DASHBOARD_POLL_MS = 60_000;
 const REVIEW_POLL_MS = 5 * 60_000;
-/** Hidden for at least this long (a visit to another page), the page reloads everything when it is shown again. */
-const RESHOWN_RELOAD_MS = 1_000;
 
 function isDashboard(value: unknown): value is AutowriterDashboard {
   return typeof value === "object" && value !== null
@@ -73,8 +70,10 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
   const [refreshing, setRefreshing] = useState(false);
   const [trendsLoading, setTrendsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Its own message: a dashboard refresh that succeeds a moment later must not wipe a review refresh that failed.
+  // Their own messages: a dashboard refresh that succeeds a moment later must not wipe a review refresh that failed,
+  // nor a Pause (or any other change) that was not saved.
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const [controlError, setControlError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const requestSequence = useRef(0);
@@ -171,7 +170,7 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
     reloadAllRef.current = reloadAll;
   }, [reloadAll]);
   useEffect(() => {
-    if (hiddenAt.current !== null && Date.now() - hiddenAt.current >= RESHOWN_RELOAD_MS) void reloadAllRef.current();
+    if (reloadsWhenShown(hiddenAt.current, Date.now())) void reloadAllRef.current();
     hiddenAt.current = null;
     return () => {
       hiddenAt.current = Date.now();
@@ -192,6 +191,7 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
     if (!window.confirm(confirmText)) return;
     setBusy(true);
     setNote(null);
+    setControlError(null);
     try {
       const response = await fetch("/api/feedback-autowriter/control", {
         method: "POST",
@@ -199,14 +199,15 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
         body: JSON.stringify(body),
       });
       const json = await response.json().catch(() => null) as { error?: unknown; requeued?: number } | null;
+      // Said until the next change or a Refresh: nobody must take a Pause that failed for one that went through.
       if (!response.ok) {
-        setError(errorOf(json, response.status));
+        setControlError(`Not saved (${errorOf(json, response.status).replace(/\.$/u, "")}). The controls are as they were.`);
         return;
       }
       setNote(json?.requeued ? `Saved. ${json.requeued} shadow draft(s) queued for posting.` : "Saved.");
       await load();
     } catch {
-      setError("Could not reach the control route.");
+      setControlError("Not saved (the server could not be reached). The controls are as they were.");
     } finally {
       setBusy(false);
     }
@@ -215,10 +216,7 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
   const loaded = review?.available ? review : null;
   const unavailableReason = review && !review.available ? review.reason : null;
   // What the page still shows of the review data is then older than its "Updated" time: say as of when.
-  const reviewStale = reviewError
-    ? `Review data not refreshed (${reviewError.replace(/\.$/u, "")}).${loaded
-      ? ` The posts to review, the incidents and the pilot health are as of ${clock(loaded.generatedAt)}.` : ""}`
-    : null;
+  const reviewStale = staleReviewMessage(reviewError, loaded?.generatedAt ?? null, data.generatedAt);
   // The payload's own clock: the same on the server and in the browser, and a minute old at most.
   const now = useMemo(() => new Date(data.generatedAt), [data.generatedAt]);
   const inbox = useMemo(() => buildInbox(data, loaded, { now }), [data, loaded, now]);
@@ -249,7 +247,8 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
           </div>
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             <span>Updated {clock(data.generatedAt)}</span>
-            <Button size="sm" variant="outline" className="h-7 rounded-md px-2.5 text-[11px] font-[550]" onClick={() => void reloadAll()} disabled={refreshing}>
+            <Button size="sm" variant="outline" className="h-7 rounded-md px-2.5 text-[11px] font-[550]" disabled={refreshing}
+              onClick={() => { setControlError(null); void reloadAll(); }}>
               {refreshing ? "Refreshing…" : "Refresh"}
             </Button>
           </div>
@@ -259,14 +258,7 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
           <SystemLine dashboard={data} lastRun={loaded ? loaded.lastRun : undefined} canControl={canControl} busy={busy}
             onControl={(body, confirmText) => void sendControl(body, confirmText)} />
         </div>
-        {error || reviewStale ? (
-          <div role="status" className="mt-3 space-y-1 rounded-md border border-red-300 px-3 py-2 text-xs text-red-700">
-            {error ? <p>{error}</p> : null}
-            {reviewStale ? <p>{reviewStale}</p> : null}
-          </div>
-        ) : note ? (
-          <div role="status" className={cn("mt-3 rounded-md border border-available/30 px-3 py-2 text-xs", TONE_TEXT.green)}>{note}</div>
-        ) : null}
+        <StatusLines problems={[controlError, error, reviewStale]} note={note} />
 
         <section id="autowriter-overview" className="mt-7 mb-[23px] flex scroll-mt-4 flex-wrap items-end justify-between gap-4">
           <div>

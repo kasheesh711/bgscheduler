@@ -9,6 +9,7 @@ import { problemCodes } from "./first-shot";
 import {
   GATE_THRESHOLDS,
   PROVEN_TUTOR_KEYS,
+  RATE_POOL_DAYS,
   addDays,
   bangkokDateKey,
   countsTowardFix,
@@ -197,7 +198,7 @@ export interface QualityDailyRow {
  * Dates read before the gate window so that a 7-day value of the window's first dates pools a full seven days (the
  * date and the six before it, as the trend series do).
  */
-export const REVIEW_LOOKBACK_DAYS = 6;
+export const REVIEW_LOOKBACK_DAYS = RATE_POOL_DAYS - 1;
 
 /** The all-tutors counts of a date before the window: what a pooled 7-day rate needs of it, and nothing else. */
 export type QualityLookbackRow = Pick<QualityDailyRow, "date" | "reviewed" | "accurate" | "posted" | "eligible">;

@@ -35,6 +35,9 @@ function render(options: {
 
 const SOURCE = fs.readFileSync(path.join(__dirname, "../feedback-autowriter-dashboard.tsx"), "utf8");
 
+/** The Controls menu's button: the word alone also names who last changed the controls, in a title. */
+const CONTROLS_MENU = />Controls\s*<svg/u;
+
 describe("FeedbackAutowriterDashboard", () => {
   it("lays the page out as the mockup: system line, the to-do list beside the health rail, trends, tutors, details", () => {
     const html = render();
@@ -97,11 +100,11 @@ describe("FeedbackAutowriterDashboard", () => {
     const viewer = render({ data: shadow });
     const owner = render({ data: shadow, canControl: true });
     expect(viewer).not.toContain("Go live");
-    expect(viewer).not.toContain("Controls");
+    expect(viewer).not.toMatch(CONTROLS_MENU);
     expect(viewer).not.toContain(">Pause<");
     expect(viewer).not.toContain(">Turn off<");
     expect(viewer).not.toContain(">Turn on<");
-    expect(owner).toContain("Controls");
+    expect(owner).toMatch(CONTROLS_MENU);
     expect(owner).toContain("Go live");
     expect(owner).toContain(">Pause<");
     expect(owner).toContain(">Turn on<");
@@ -112,7 +115,7 @@ describe("FeedbackAutowriterDashboard", () => {
     expect(html).not.toContain("verdict-controls");
     expect(html).not.toContain(">Approve<");
     expect(html).not.toContain(">Acknowledge<");
-    expect(html).not.toContain("Controls");
+    expect(html).not.toMatch(CONTROLS_MENU);
     expect(html).toContain("Only the owner records verdicts.");
     expect(render({ canControl: true })).not.toContain("Only the owner records verdicts.");
     // Everything is still there to read and to open.
@@ -199,21 +202,25 @@ describe("FeedbackAutowriterDashboard", () => {
     expect(SOURCE).toContain("window.setInterval(() => void loadReview(), REVIEW_POLL_MS)");
   });
 
-  it("keeps a failed review refresh on the page until a review refresh succeeds", () => {
+  it("keeps a failed review refresh, and a change that was not saved, on the page until they are settled", () => {
     // The dashboard poll runs five times as often: its success must not wipe the message of a review refresh that failed.
     expect(SOURCE).toContain("setReviewError(errorOf(json, response.status));");
     expect(SOURCE).toContain('if (sequence === reviewSequence.current) setReviewError("no answer");');
     expect(SOURCE.match(/setReviewError\(null\)/gu)).toHaveLength(1);
     expect(SOURCE).toMatch(/setReview\(json\);\s*setReviewError\(null\);/u);
-    // The message says as of when the review data on the page is.
-    expect(SOURCE).toContain("The posts to review, the incidents and the pilot health are as of ${clock(loaded.generatedAt)}.");
-    expect(SOURCE).toContain("{reviewStale ? <p>{reviewStale}</p> : null}");
+    expect(SOURCE).toContain("const reviewStale = staleReviewMessage(reviewError, loaded?.generatedAt ?? null, data.generatedAt);");
+    // Nor the message of a Pause that failed: it stays until the next change, or a Refresh.
+    expect(SOURCE.match(/setControlError\(`Not saved|setControlError\("Not saved/gu)).toHaveLength(2);
+    expect(SOURCE).toMatch(/setNote\(null\);\s*setControlError\(null\);/u);
+    expect(SOURCE).toContain("onClick={() => { setControlError(null); void reloadAll(); }}");
+    expect(SOURCE).not.toMatch(/setError\((?!null|errorOf\(json, response\.status\)\)|"Could not refresh the dashboard\.")/u);
+    expect(SOURCE).toContain("<StatusLines problems={[controlError, error, reviewStale]} note={note} />");
   });
 
   it("reloads everything when the page is shown again after a visit to another page", () => {
     // The app keeps the page hidden with its state (cacheComponents): effects stop and run again, and the polls restart.
-    expect(SOURCE).toContain("const RESHOWN_RELOAD_MS = 1_000;");
-    expect(SOURCE).toContain("if (hiddenAt.current !== null && Date.now() - hiddenAt.current >= RESHOWN_RELOAD_MS) void reloadAllRef.current();");
+    // When it reloads is `reloadsWhenShown` (page-status.test.tsx); here, that the shell asks it at every show.
+    expect(SOURCE).toContain("if (reloadsWhenShown(hiddenAt.current, Date.now())) void reloadAllRef.current();");
     expect(SOURCE).toMatch(/return \(\) => \{\s*hiddenAt\.current = Date\.now\(\);\s*\};\s*\}, \[\]\);/u);
     // The reload uses the range and the tutor the page has now, not those of its first render.
     expect(SOURCE).toMatch(/useEffect\(\(\) => \{\s*reloadAllRef\.current = reloadAll;\s*\}, \[reloadAll\]\);/u);

@@ -138,8 +138,10 @@ export function Inbox({ items, dashboard, review, now, filteredTo, reviewUnavail
   className?: string;
 }) {
   const groups = INBOX_GROUPS.map((group) => ({ ...group, items: items.filter((item) => item.kind === group.kind) })).filter((group) => group.items.length > 0);
-  // The review data (the posts to review, the incidents) is polled less often than the classes: its own time, when it differs.
-  const reviewClock = review && clock(review.generatedAt) !== clock(dashboard.generatedAt) ? clock(review.generatedAt) : null;
+  // The review data (the posts to review, the incidents) is polled less often than the classes: its own time, when it
+  // differs (with its date when it is not from today).
+  const reviewAt = review ? whenAfter(dashboard.generatedAt, review.generatedAt) : null;
+  const reviewClock = reviewAt !== null && reviewAt !== clock(dashboard.generatedAt) ? reviewAt : null;
   return (
     <Panel aria-labelledby="autowriter-inbox-title" className={cn("flex flex-col", className)}>
       <div className="flex items-center justify-between gap-3 border-b px-5 py-[19px]">

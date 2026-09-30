@@ -48,6 +48,8 @@ describe("Inbox", () => {
     const html = render({ review: { ...reviewFixture(), generatedAt: "2026-10-06T08:31:10.000Z" } });
     expect(html).toContain("Synced at 15:35 · reviews at 15:31");
     expect(render({ review: null })).not.toContain("reviews at");
+    // From another day: with its date, even at the same time of day.
+    expect(render({ review: { ...reviewFixture(), generatedAt: "2026-10-05T08:35:00.000Z" } })).toContain("Synced at 15:35 · reviews at 5 Oct, 15:35");
   });
 
   it("gives every row one action: Review for a post, Open for the rest", () => {

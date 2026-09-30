@@ -79,6 +79,10 @@ describe("SystemDetails", () => {
     expect(quiet).toContain("no drafts yet");
     // The old row of number cards is gone.
     expect(html).not.toContain("Posted to Wise");
+    // Who last changed the controls, for every admin to read (the system line has it on hover only).
+    expect(html).toContain("Controls (mode, pause, tutor switches) last changed by owner@example.com · 29 Sep, 15:07");
+    const never = dashboardFixture();
+    expect(render({ dashboard: { ...never, control: { ...never.control, updatedBy: null } } })).not.toContain("last changed by");
   });
 
   it("labels Sol's cost as Sol", () => {
