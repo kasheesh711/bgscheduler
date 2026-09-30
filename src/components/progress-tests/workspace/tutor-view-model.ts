@@ -37,8 +37,10 @@ export function publicationLabel(a: TutorAssessment, ready: boolean) {
   if (prep.status === "published") return "Paper in Wise";
   return ready ? "Paper upload queued" : "Paper upload paused";
 }
-export function initialAssessmentStep(stage: TutorAssessment["stage"]) {
-  return stage === "approved" ? 3 : stage === "tutor_review" ? 2 : stage === "awaiting_submission" ? 1 : 0;
+export function initialAssessmentStep(a: Pick<TutorAssessment, "stage" | "publicationStatus" | "preparationPublication">) {
+  if (["failed", "uncertain", "needs_review"].includes(a.publicationStatus)) return 3;
+  if (["failed", "needs_review"].includes(a.preparationPublication?.status ?? "")) return 0;
+  return a.stage === "approved" ? 3 : a.stage === "tutor_review" ? 2 : a.stage === "awaiting_submission" ? 1 : 0;
 }
 export function milestoneSession(a: TutorAssessment) {
   // Upcoming sessions start after the attended count. Never substitute a future date for overdue work.

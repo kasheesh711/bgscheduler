@@ -11,10 +11,10 @@
 
 ## Automated verification
 
-- 50 focused workspace unit tests pass, including task membership, overdue ordering, distinct cycles, missing dates, empty results and publication waiting/failure distinctions.
+- 54 focused workspace unit tests pass, including task membership, overdue ordering, distinct cycles, missing dates, empty results, publication waiting/failure distinctions and the relevant recovery step for paper/report upload failures.
 - 48 workspace integration tests pass in disposable PostgreSQL containers. These cover immutable originals, manual marked-PDF reviews, private marking keys, revision conflicts, publication and paused preparation uploads; AI, Blob and Wise are mocked.
 - TypeScript and the production build pass.
-- `npm run verify:release` was run twice. Both runs report 5,880 passing unit tests and one timeout in the existing classroom-continuity historical fixture (`src/lib/classrooms/__tests__/continuity.test.ts:109`, 30-second limit). The same test also times out alone with one worker. No classroom code or test was changed. This release gate is **not green**.
+- `npm run verify:release` was run twice. Both local runs report 5,880 passing unit tests and one timeout in the existing classroom-continuity historical fixture (`src/lib/classrooms/__tests__/continuity.test.ts:109`, 30-second limit). The same test also times out alone with one worker. No classroom code or test was changed. The local full command did not pass; GitHub CI, including that unit-test suite, passed on the original implementation commit.
 
 ## Browser verification
 
@@ -29,6 +29,8 @@ Verified:
 - Report edits, private PDF generation, page navigation, zoom, review confirmation and queued approval.
 - Submitted papers remain locked; ordinary publication queues leave Tasks after approval, while failed publication exposes recovery.
 - Drafts survive step navigation, refresh and job polling. Stale-revision errors retain edits. Discard dialogs, Escape and keyboard activation work.
+- Discarding a new library-paper title before opening an existing paper clears the title and form. Leaving that unchanged paper no longer raises a second unsaved-changes warning.
+- A failed preparation upload on a submitted assessment opens Prepare with its retry control; switching to Review still permits manual marked-PDF grading.
 - Replacement paper versions, readiness, history, private key controls and availability of originals after optional AI failure.
 - Desktop (1440px), tablet (820px) and phone (390px) in light, dark and system themes; system preference changes; no page-wide horizontal overflow. Phone Details/PDF controls, native dialog focus and scoped control colors inspected.
 - The admin preview retains My students, Grading queue, tutor filters and administration controls.

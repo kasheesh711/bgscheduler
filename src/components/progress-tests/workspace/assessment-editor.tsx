@@ -13,7 +13,7 @@ import { AssessmentPaperPreparation } from "./paper-editor";
 
 export const STAGE_LABELS = { prepare: "Prepare", ready: "Ready", awaiting_submission: "Awaiting submission", tutor_review: "Tutor review", approved: "Approved" };
 export function AssessmentEditor({ data, overview, onBack, onSaved, onError, guided = false, onDirtyChange }: { guided?: boolean; onDirtyChange?: (dirty: boolean) => void; data: Serialized<AssessmentDetail>; overview: Serialized<Overview>; onBack: () => void; onSaved: () => Promise<void>; onError: (message: string) => void }) {
-  const [step, setStep] = useState(() => initialAssessmentStep(data.stage));
+  const [step, setStep] = useState(() => initialAssessmentStep(data));
   const [uploadBusy, setUploadBusy] = useState(false);
   const [paperDirty, setPaperDirty] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);

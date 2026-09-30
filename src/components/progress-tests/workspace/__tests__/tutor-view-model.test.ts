@@ -56,6 +56,20 @@ describe("tutor task queue", () => {
     expect(milestoneSession(assessment({ series: { ...assessment().series, upcomingSessions: [] } }))).toBeUndefined();
   });
   it("opens the relevant assessment step", () => {
-    expect(["prepare", "ready", "awaiting_submission", "tutor_review", "approved"].map(stage => initialAssessmentStep(stage as TutorAssessment["stage"]))).toEqual([0, 0, 1, 2, 3]);
+    expect(["prepare", "ready", "awaiting_submission", "tutor_review", "approved"].map(stage => initialAssessmentStep(assessment({ stage: stage as TutorAssessment["stage"] })))).toEqual([0, 0, 1, 2, 3]);
+  });
+  it.each(["failed", "needs_review"] as const)("opens preparation recovery for a %s paper upload after submission", status => {
+    const row = assessment({ stage: "tutor_review", preparationPublication: { status } as NonNullable<TutorAssessment["preparationPublication"]> });
+    expect(taskKind(row)).toBe("upload");
+    expect(initialAssessmentStep(row)).toBe(0);
+  });
+  it("prioritizes report upload recovery when both publication stages have issues", () => {
+    const row = assessment({ stage: "approved", publicationStatus: "uncertain", preparationPublication: { status: "failed" } as NonNullable<TutorAssessment["preparationPublication"]> });
+    expect(publicationLabel(row, true)).toBe("Report upload needs attention");
+    expect(initialAssessmentStep(row)).toBe(3);
+  });
+  it("keeps paused preparation uploads from changing the grading step", () => {
+    const row = assessment({ stage: "tutor_review", preparationPublication: { status: "queued" } as NonNullable<TutorAssessment["preparationPublication"]> });
+    expect(initialAssessmentStep(row)).toBe(2);
   });
 });
