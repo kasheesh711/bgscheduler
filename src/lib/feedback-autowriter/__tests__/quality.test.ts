@@ -66,13 +66,15 @@ describe("classifyCoverage", () => {
   it.each([
     ["verified", "verified", "posted"],
     ["awaiting_event", null, "posted"],
-    // Handed back at the deadline because the tutor was switched off: the owner's switch (D-03), left out.
-    ["skipped_scope", "tutor_off_at_deadline", "excluded_tutor_off"],
+    // Handed back at the deadline with nothing showing its tutor off as the window closed (no history here): judged
+    // like the expiry it replaced (fail-closed). With the tutor off then, it is left out (D-03, below).
+    ["skipped_scope", "tutor_off_at_deadline", "miss_expired"],
     ["skipped_scope", "class_type_GROUP", "excluded_scope"],
     // D-03: a hold for the class's own data is left out; a hold on our drafts is a miss.
     ["held", "student_count_0", "excluded_data_quality"],
     ["held", "attendance_30pct", "excluded_data_quality"],
     ["held", "student_not_wise_user", "excluded_data_quality"],
+    ["held", "student_id_missing", "excluded_data_quality"],
     ["held", "recording_too_short", "excluded_data_quality"],
     ["held", "glm:unfaithful:…", "miss_held"],
     ["expired", "deadline_passed_or_too_close", "miss_expired"],
@@ -93,15 +95,15 @@ describe("classifyCoverage", () => {
   });
 
   it("counts a class the autowriter never saw only when proven online one-to-one and on the roster", () => {
-    const workable = { onRoster: true, workable: true, tutorOffThroughout: false };
+    const workable = { onRoster: true, workable: true, tutorOffThroughout: false, tutorOffAtWindowEnd: false };
     expect(classifyCoverage({ state: null, reason: null, provenOnlineOneToOne: true, eligibility: workable })).toBe("miss_unseen");
     expect(classifyCoverage({ state: null, reason: null, provenOnlineOneToOne: false, eligibility: workable })).toBeNull();
     expect(classifyCoverage({ state: null, reason: null, provenOnlineOneToOne: true, eligibility: { ...workable, onRoster: false, workable: false } })).toBeNull();
   });
 
   it("excludes a class the switches never let us write, whatever its state — but never a posted one", () => {
-    const notLive = { onRoster: true, workable: false, tutorOffThroughout: false };
-    const tutorOff = { onRoster: true, workable: false, tutorOffThroughout: true };
+    const notLive = { onRoster: true, workable: false, tutorOffThroughout: false, tutorOffAtWindowEnd: false };
+    const tutorOff = { onRoster: true, workable: false, tutorOffThroughout: true, tutorOffAtWindowEnd: true };
     expect(classifyCoverage({ state: null, reason: null, provenOnlineOneToOne: true, eligibility: notLive })).toBe("excluded_not_live");
     expect(classifyCoverage({ state: null, reason: null, provenOnlineOneToOne: true, eligibility: tutorOff })).toBe("excluded_tutor_off");
     expect(classifyCoverage({ state: "held", reason: "glm:unfaithful", eligibility: notLive })).toBe("excluded_not_live");
@@ -110,10 +112,21 @@ describe("classifyCoverage", () => {
   });
 
   it("leaves out a class handed back at the deadline because its tutor was switched off (D-03), however long it was workable", () => {
-    const workable = { onRoster: true, workable: true, tutorOffThroughout: false };
-    const tutorOff = { onRoster: true, workable: false, tutorOffThroughout: true };
+    const workableThenOff = { onRoster: true, workable: true, tutorOffThroughout: false, tutorOffAtWindowEnd: true };
+    const tutorOff = { onRoster: true, workable: false, tutorOffThroughout: true, tutorOffAtWindowEnd: true };
     expect(classifyCoverage({ state: "skipped_scope", reason: "tutor_off_at_deadline", eligibility: tutorOff })).toBe("excluded_tutor_off");
-    expect(classifyCoverage({ state: "skipped_scope", reason: "tutor_off_at_deadline", eligibility: workable })).toBe("excluded_tutor_off");
+    expect(classifyCoverage({ state: "skipped_scope", reason: "tutor_off_at_deadline", eligibility: workableThenOff })).toBe("excluded_tutor_off");
+  });
+
+  it("judges a hand-back whose tutor was still on as its window closed like the expiry it replaced", () => {
+    const workable = { onRoster: true, workable: true, tutorOffThroughout: false, tutorOffAtWindowEnd: false };
+    const notLive = { onRoster: true, workable: false, tutorOffThroughout: false, tutorOffAtWindowEnd: false };
+    expect(classifyCoverage({ state: "skipped_scope", reason: "tutor_off_at_deadline", eligibility: workable })).toBe("miss_expired");
+    expect(classifyCoverage({ state: "expired", reason: "deadline_passed_or_too_close", eligibility: workable })).toBe("miss_expired");
+    expect(classifyCoverage({ state: "skipped_scope", reason: "tutor_off_at_deadline", eligibility: notLive })).toBe("excluded_not_live");
+    expect(classifyCoverage({ state: "expired", reason: "deadline_passed_or_too_close", eligibility: notLive })).toBe("excluded_not_live");
+    // Only the hand-back reason is judged by the history; any other scope skip stays out of scope.
+    expect(classifyCoverage({ state: "skipped_scope", reason: "class_type_GROUP", eligibility: workable })).toBe("excluded_scope");
   });
 
   // D-03 (owner, 30 Sep): every reason the autowriter holds a class for (job.ts, session.ts gates, pipeline.ts), and the
@@ -129,6 +142,8 @@ describe("classifyCoverage", () => {
     ["attendance_0pct", "excluded_data_quality"],
     ["attendance_45pct", "excluded_data_quality"],
     ["student_not_wise_user", "excluded_data_quality"],
+    // The same fact found only by the POST's fresh read (submit.ts precheck).
+    ["student_id_missing", "excluded_data_quality"],
     // The judge or the validator rejected our drafts (one reason per writer arm, "; "-joined).
     ["glm:unfaithful:homework not in the summary", "miss_held"],
     ["glm:unfaithful:a | b; luna:unfaithful:c", "miss_held"],
@@ -150,9 +165,11 @@ describe("classifyCoverage", () => {
     ["missing_summary_student_or_tutor", "miss_held"],
     ["submission_ambiguous:two_teacher_submissions", "miss_held"],
     ["non_teacher_submission_with_billing", "miss_held"],
-    // Not whole matches of a data-quality reason, and no reason at all.
+    // Not whole matches of a data-quality reason, and no reason at all. (The gate names a fractional attendance by
+    // its whole percent, so "attendance_42.5pct" is never produced: session.test.ts.)
     ["recording_too_short_maybe", "miss_held"],
     ["glm:speakers_unclear", "miss_held"],
+    ["attendance_42.5pct", "miss_held"],
     [null, "miss_held"],
   ] as const)("a hold for %s → %s", (reason, expected) => {
     expect(classifyCoverage({ state: "held", reason })).toBe(expected);
@@ -167,6 +184,7 @@ describe("classifyCoverage", () => {
       ["No student", "excluded_data_quality"],
       ["Student absent (attendance below the minimum)", "excluded_data_quality"],
       ["Student not a Wise user", "excluded_data_quality"],
+      ["Student not a Wise user (POST check)", "excluded_data_quality"],
       ["Tutor switched off", "excluded_tutor_off"],
     ]);
     expect(dataQualityReason("tutor_off_at_deadline")?.label).toBe("Tutor switched off");
@@ -175,8 +193,9 @@ describe("classifyCoverage", () => {
     expect([1, 2, 3].map(() => dataQualityReason("speakers_unclear")?.label)).toEqual(["Speakers unclear", "Speakers unclear", "Speakers unclear"]);
     // A data-quality hold of a class the switches never let us write stays "not live"; a tutor-off reason never excuses a hold.
     expect(classifyCoverage({ state: "held", reason: "tutor_off_at_deadline" })).toBe("miss_held");
-    expect(classifyCoverage({ state: "held", reason: "speakers_unclear", eligibility: { onRoster: true, workable: false, tutorOffThroughout: false } }))
-      .toBe("excluded_not_live");
+    expect(classifyCoverage({
+      state: "held", reason: "speakers_unclear", eligibility: { onRoster: true, workable: false, tutorOffThroughout: false, tutorOffAtWindowEnd: false },
+    })).toBe("excluded_not_live");
   });
 
   it("counts a skipped class as the tutor's only when they wrote before we started writing", () => {
@@ -208,8 +227,23 @@ describe("postingWindowEligibility", () => {
     ({ changedAt: at(iso), mode, disabledTutors });
 
   it("assumes live and every tutor on before the history starts (fail-closed)", () => {
-    expect(postingWindowEligibility({ teacherId: TUTOR, window, history: [] })).toEqual({ onRoster: true, workable: true, tutorOffThroughout: false });
+    expect(postingWindowEligibility({ teacherId: TUTOR, window, history: [] }))
+      .toEqual({ onRoster: true, workable: true, tutorOffThroughout: false, tutorOffAtWindowEnd: false });
     expect(postingWindowEligibility({ teacherId: TUTOR, window, history: [change("2026-09-30T00:00:00Z", "off")] }).workable).toBe(true);
+  });
+
+  it("reads the tutor's switch in effect at the window's end, whatever the mode", () => {
+    const off = (history: ControlStateChange[]) => postingWindowEligibility({ teacherId: TUTOR, window, history }).tutorOffAtWindowEnd;
+    expect(off([change("2026-09-28T00:00:00Z", "live"), change("2026-10-01T10:00:00Z", "live", [TUTOR])])).toBe(true);
+    expect(off([change("2026-09-28T00:00:00Z", "live"), change("2026-10-01T10:00:00Z", "off", [TUTOR])])).toBe(true);
+    // A change at the window's last instant counts; one a millisecond later does not.
+    expect(off([change("2026-09-28T00:00:00Z", "live"), change("2026-10-01T16:29:59.000Z", "live", [TUTOR])])).toBe(true);
+    expect(off([change("2026-09-28T00:00:00Z", "live"), change("2026-10-01T16:29:59.001Z", "live", [TUTOR])])).toBe(false);
+    // Off during the window but back on before it closed; another tutor off; nothing recorded yet (fail-closed).
+    expect(off([change("2026-09-28T00:00:00Z", "live", [TUTOR]), change("2026-10-01T00:00:00Z", "live")])).toBe(false);
+    expect(off([change("2026-09-28T00:00:00Z", "live", ["tutor-b"])])).toBe(false);
+    expect(off([change("2026-10-02T00:00:00Z", "live", [TUTOR])])).toBe(false);
+    expect(postingWindowEligibility({ teacherId: null, window, history: [change("2026-09-28T00:00:00Z", "live", [TUTOR])] }).tutorOffAtWindowEnd).toBe(false);
   });
 
   it("judges by the switches during the class's own window, not today's", () => {
@@ -236,6 +270,59 @@ describe("postingWindowEligibility", () => {
     const leftBefore = { firstSeenAt: at("2026-09-01T00:00:00Z"), lastSeenAt: new Date(window.start.getTime() - ROSTER_SIGHTING_SLACK_MS - 1) };
     expect(postingWindowEligibility({ teacherId: TUTOR, window, history, roster: leftBefore }).onRoster).toBe(false);
     expect(postingWindowEligibility({ teacherId: TUTOR, window, history, roster: null }).onRoster).toBe(false);
+  });
+});
+
+// The sweep (:08/:22/:38/:52, skipped while the mode is `off`) stamps `tutor_off_at_deadline` from the switches when it
+// runs; coverage must judge the hand-back by the control history as the class's window closed, never by a later switch.
+describe("a deadline hand-back (tutor_off_at_deadline)", () => {
+  const TUTOR = "tutor-a";
+  const at = (iso: string) => new Date(iso);
+  // A class ending 19:00 Bangkok on 29 Sep: its posting window closes at 23:29:59.999 Bangkok on 1 Oct.
+  const window = { start: at("2026-09-29T12:00:00Z"), end: at("2026-10-01T16:29:59.999Z") };
+  const change = (iso: string, mode: ControlStateChange["mode"], disabledTutors: string[] = []): ControlStateChange =>
+    ({ changedAt: at(iso), mode, disabledTutors });
+  const handBack = (history: ControlStateChange[]) => classifyCoverage({
+    state: "skipped_scope",
+    reason: "tutor_off_at_deadline",
+    eligibility: postingWindowEligibility({ teacherId: TUTOR, window, history }),
+    windowClosed: true,
+  });
+
+  it("is a miss when the tutor was switched off only after the window closed", () => {
+    // Live and on all window; switched off five minutes after it closed, handed back by the :38 sweep.
+    expect(handBack([change("2026-09-20T00:00:00Z", "live"), change("2026-10-01T16:35:00Z", "live", [TUTOR])])).toBe("miss_expired");
+    // The mode set off after the window (the sweep waits), the tutor switched off, then live again.
+    expect(handBack([
+      change("2026-09-20T00:00:00Z", "live"), change("2026-10-01T17:00:00Z", "off"),
+      change("2026-10-02T01:00:00Z", "off", [TUTOR]), change("2026-10-02T02:00:00Z", "live", [TUTOR]),
+    ])).toBe("miss_expired");
+    // Nothing recorded before the window closed: nothing shows the tutor off then (fail-closed).
+    expect(handBack([change("2026-10-02T00:00:00Z", "live", [TUTOR])])).toBe("miss_expired");
+  });
+
+  it("is left out when the tutor was switched off before the window closed, however long it was workable (D-03)", () => {
+    expect(handBack([change("2026-09-20T00:00:00Z", "live"), change("2026-10-01T16:00:00Z", "live", [TUTOR])])).toBe("excluded_tutor_off");
+    // Switched off at the window's last instant.
+    expect(handBack([change("2026-09-20T00:00:00Z", "live"), change("2026-10-01T16:29:59.999Z", "live", [TUTOR])])).toBe("excluded_tutor_off");
+    // Switched off, then the mode set off too, before the window closed.
+    expect(handBack([
+      change("2026-09-20T00:00:00Z", "live"), change("2026-10-01T10:00:00Z", "live", [TUTOR]), change("2026-10-01T12:00:00Z", "off", [TUTOR]),
+    ])).toBe("excluded_tutor_off");
+  });
+
+  it("with the mode not live as the window closed and the tutor on, is judged like the expiry it replaced", () => {
+    // Never live during the window: the switches never let us write it — left out, like any such class.
+    expect(handBack([change("2026-09-20T00:00:00Z", "off"), change("2026-10-02T00:00:00Z", "live", [TUTOR])])).toBe("excluded_not_live");
+    expect(handBack([change("2026-09-20T00:00:00Z", "shadow"), change("2026-10-01T16:35:00Z", "shadow", [TUTOR])])).toBe("excluded_not_live");
+    // Live and on for part of the window, mode off before it closed: workable, and the same class left to expire is a
+    // miss — a tutor switch made after the window closed never turns it into an exclusion.
+    const liveThenOff = [change("2026-09-20T00:00:00Z", "live"), change("2026-10-01T10:00:00Z", "off")];
+    expect(handBack([...liveThenOff, change("2026-10-02T00:00:00Z", "live", [TUTOR])])).toBe("miss_expired");
+    expect(classifyCoverage({
+      state: "expired", reason: "deadline_passed_or_too_close", windowClosed: true,
+      eligibility: postingWindowEligibility({ teacherId: TUTOR, window, history: liveThenOff }),
+    })).toBe("miss_expired");
   });
 });
 

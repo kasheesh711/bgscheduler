@@ -201,6 +201,15 @@ describe("FeedbackAutowriterReviewQueue", () => {
     expect(html).toContain("Showing 2 of 350");
   });
 
+  it("names the first shot's writer by its arm: a Sol draft as Sol, never GLM", () => {
+    const html = (arm: string) => renderToStaticMarkup(<FeedbackAutowriterReviewQueue
+      review={review({ queue: [item({ firstShot: { ...item().firstShot, arm } })] })} canControl={false} onRecorded={() => undefined} />);
+    expect(html("sol")).toContain("· GPT-6.1 Sol");
+    expect(html("sol")).not.toContain("GLM Flash");
+    expect(html("luna")).toContain("· GPT-6 Luna");
+    expect(html("glm")).toContain("· GLM Flash");
+  });
+
   it("warns when a first shot landed in Wise without verifying", () => {
     const landed = item({ firstShot: { ...item().firstShot, outcome: "verify_failed", problems: ["session_credit_entries_2"] } });
     const html = renderToStaticMarkup(<FeedbackAutowriterReviewQueue review={review({ queue: [landed] })} canControl={false} onRecorded={() => undefined} />);

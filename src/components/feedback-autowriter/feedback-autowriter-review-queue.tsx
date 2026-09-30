@@ -8,6 +8,7 @@ import { formatBangkokShortDateTime } from "@/lib/bangkok-time";
 import { downgradeOf } from "@/lib/feedback-autowriter/quality";
 import type { AutowriterReview, ReviewQueueItem } from "@/lib/feedback-autowriter/review-data";
 import { cn } from "@/lib/utils";
+import { ARM_LABEL } from "./model-labels";
 
 export const REVIEW_FIELD_LABELS: Record<string, string> = {
   topics: "Topics covered",
@@ -327,7 +328,7 @@ function QueueItem({ item, canControl, onRecorded }: { item: ReviewQueueItem; ca
               </Badge>
               <span className="text-[11px] text-muted-foreground">
                 posted {when(item.firstShot.postStartedAt)}
-                {item.firstShot.arm ? ` · ${item.firstShot.arm === "luna" ? "GPT-6 Luna" : "GLM Flash"}` : ""}
+                {item.firstShot.arm ? ` · ${ARM_LABEL[item.firstShot.arm] ?? item.firstShot.arm}` : ""}
                 {item.firstShot.evidence === "transcript" ? " · transcript" : ""}
               </span>
             </div>

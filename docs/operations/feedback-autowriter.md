@@ -32,11 +32,16 @@ Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowrite
 
 ### Operating loop, Phase 1 (migration 0101) — in this order
 
-1. **Apply migration 0101** on production Neon (`DATABASE_URL=… npm run db:migrate`). It is numbered, and timestamped, after
-   main's `0099_staff_feedback_timing` and the Sol arm-check migration (`0100_feedback_autowriter_sol`), both already applied
-   in production, so `db:migrate` applies only this one. It adds tables, and one AFTER
+1. **Apply migration 0101** on production Neon (`DATABASE_URL=… npm run db:migrate`). It adds tables, and one AFTER
    trigger on `feedback_autowriter_control` that logs mode and tutor-switch changes (lease and halt writes do not fire
    it); the history is seeded with the row's state as of its last change. The autowriter keeps running meanwhile.
+   **Numbering.** 0101 comes after main's `0099_staff_feedback_timing` and the Sol arm-check migration, both already
+   applied in production. The Sol migration is `0100_feedback_autowriter_sol` (PR #108; journal idx 100, `when`
+   1790735838903): it was applied in production as "0099", so its `when` stays deliberately below idx 99's
+   1790738705641. Drizzle's migrator applies only the journal entries whose `when` is later than the newest
+   `created_at` it has recorded; 0101 keeps `when` 1790740000000, later than every applied entry, so a production
+   `db:migrate` applies only 0101. `db:generate` numbers the next migration from the **last** journal entry's `idx`, so
+   the journal must stay sorted by `idx`: its last entries read 99, 100, 101, in that order.
 2. **Day-one backfill — dry run, then the go/no-go check** (reads only, never writes to Wise, prints metadata only):
    `npx tsx --tsconfig scripts/tsconfig.json scripts/feedback-autowriter-backfill-review.ts`
    Expect every posted class `first shot PROVEN` and one row per one-time re-post the rows record: the six nickname
@@ -56,8 +61,10 @@ Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowrite
    backfill proves its first shot. Applying twice, or twice at once, records each post once (`dedupe_key`). It records
    the owner's committed verdicts once each through the dashboard's path (reviewer `kevhsh7@gmail.com (owner interview
    2026-09-30)`); one whose class meanwhile got another verdict, or a flag raised after the decision, is reported and
-   left for the dashboard. The 29 Sep critical keeps the gate `blocked_critical` through the 12 Oct row (the 13 Oct
-   window is the first without it); the critical verdict's incident is pushed to the owner like any other.
+   left for the dashboard. The critical verdict keeps the gate `blocked_critical` through the critical class's Bangkok
+   date + 13 days (the dry run prints the date); daily gate rows recorded before `--apply` stay as written: not a pass
+   (unrecorded posts / required pending) rather than `blocked_critical`. The critical verdict's incident is pushed to
+   the owner like any other.
 4. Optional: `FEEDBACK_AUTOWRITER_LINE_TO` (a LINE user or group id) to receive critical incidents on LINE as well
    as by email; set `FEEDBACK_AUTOWRITER_ALERT_EMAILS` if it is still empty — with no channel a critical incident
    stays pending and the review job reports `ok:false` (Data Health shows it). `WISE_USER_ID` must be set on the

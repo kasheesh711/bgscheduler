@@ -7,7 +7,8 @@
  * - Coverage = posted ÷ (eligible − classes the tutor wrote first − data-quality holds). Each class is judged by the
  *   mode, its tutor's switch and the roster during its own posting window (class end → deadline − margin), never by
  *   today's. D-03: a hold leaves the denominator only when the class's own data made a faithful write-up impossible
- *   (`DATA_QUALITY_REASONS`); a hold where the judge or the validator rejected our drafts is a miss.
+ *   (`DATA_QUALITY_REASONS`); a hold where the judge or the validator rejected our drafts is a miss. A deadline
+ *   hand-back leaves it only when its tutor was switched off as its window closed, never by a later switch.
  * - Gate (rolling 14 days): lower bound ≥ 80%, zero critical verdicts, no unresolved critical flag, no unexplained API
  *   write, coverage ≥ 70%, no flagged post and no required post waiting for review, and every posted first shot
  *   recorded. A lower bound ≥ 70% starts the head start for the next tutors.
@@ -21,7 +22,10 @@
 
 import type { AutowriterVerdictSeverity } from "@/lib/db/schema";
 
-/** Bumped whenever a definition below changes, so persisted metrics say which rules produced them. */
+/**
+ * Bumped whenever a definition below changes, so persisted metrics say which rules produced them.
+ * v1 = the rules as decided by the owner on 30 Sep (D-01/D-03); nothing was stored under earlier drafts.
+ */
 export const QUALITY_POLICY_VERSION = 1;
 
 export const WILSON_Z_95 = 1.959964;
@@ -178,6 +182,8 @@ export const DATA_QUALITY_REASONS: ReadonlyArray<{
   { match: /^student_count_0$/u, label: "No student", coverage: "excluded_data_quality" },
   { match: /^attendance_\d+pct$/u, label: "Student absent (attendance below the minimum)", coverage: "excluded_data_quality" },
   { match: /^student_not_wise_user$/u, label: "Student not a Wise user", coverage: "excluded_data_quality" },
+  // The same fact when only the POST's fresh read finds it (`submit.ts` precheck): no student with a Wise user id.
+  { match: /^student_id_missing$/u, label: "Student not a Wise user (POST check)", coverage: "excluded_data_quality" },
   { match: /^tutor_off_at_deadline$/u, label: "Tutor switched off", coverage: "excluded_tutor_off" },
 ];
 
@@ -210,12 +216,18 @@ export interface ClassEligibility {
   workable: boolean;
   /** Whenever the window was live and on the roster, the tutor was switched off. */
   tutorOffThroughout: boolean;
+  /**
+   * The recorded switches had the tutor switched off at the window's end, whatever the mode: what a deadline hand-back
+   * must show to be the owner's switch (D-03). False before the history starts (fail-closed).
+   */
+  tutorOffAtWindowEnd: boolean;
 }
 
 /**
  * Judge a class by the switches during its own posting window. The switches are piecewise constant, so they are
  * read at the window's start and at every change inside it. Before the first recorded change the history knows
  * nothing: the mode counts as live and every tutor as on (fail-closed — such a class counts, as a miss if unposted).
+ * `tutorOffAtWindowEnd` reads the switches in effect at the window's end (a change at that very instant counts).
  * `roster` undefined means the roster is not in question (the autowriter made a row for the class); null means
  * the account was never seen on the roster.
  */
@@ -253,7 +265,9 @@ export function postingWindowEligibility(input: {
     liveOnRoster = true;
     if (!input.teacherId || !disabled.includes(input.teacherId)) workable = true;
   }
-  return { onRoster, workable, tutorOffThroughout: liveOnRoster && !workable };
+  const atEnd = history.findLast((change) => change.changedAt.getTime() <= end);
+  const tutorOffAtWindowEnd = Boolean(input.teacherId && atEnd?.disabledTutors.includes(input.teacherId));
+  return { onRoster, workable, tutorOffThroughout: liveOnRoster && !workable, tutorOffAtWindowEnd };
 }
 
 /**
@@ -286,7 +300,8 @@ export interface CoverageInput {
  * Where one roster class stands for coverage; null when it does not count at all (in-person, an unseen class not
  * proven to be online one-to-one, or one whose account was never on the roster during its window).
  * A POST proves the class was workable; every other class the switches never let us write is excluded, and so is a
- * class held (or handed back) for a data-quality reason (D-03).
+ * class held for a data-quality reason, or handed back at the deadline while its tutor was switched off as its window
+ * closed (D-03).
  */
 export function classifyCoverage(input: CoverageInput): CoverageClass | null {
   const { state, reason, eligibility } = input;
@@ -300,8 +315,14 @@ export function classifyCoverage(input: CoverageInput): CoverageClass | null {
   if (state === "skipped_scope" && reason !== null && ONSITE_REASONS.has(reason)) return null;
   if (state === "verified" || state === "awaiting_event") return "posted";
   const dataQuality = dataQualityReason(reason);
-  // Handed back unposted at the deadline because its tutor was switched off: the owner's switch, never our miss (D-03).
-  if (state === "skipped_scope") return dataQuality?.coverage === "excluded_tutor_off" ? "excluded_tutor_off" : "excluded_scope";
+  if (state === "skipped_scope") {
+    if (dataQuality?.coverage !== "excluded_tutor_off") return "excluded_scope";
+    // Handed back unposted at the deadline because its tutor was switched off: the owner's switch, never our miss
+    // (D-03) — when the history shows the tutor off as the window closed. The sweep stamps the reason from the switches
+    // when it runs (up to 15 minutes later, or once the mode is back from `off`), so a hand-back whose tutor was still
+    // on then is judged like the expiry it replaced.
+    if (eligibility?.tutorOffAtWindowEnd) return "excluded_tutor_off";
+  }
   if (eligibility && !eligibility.workable) return notWorkable();
   switch (state) {
     case "skipped_human":
@@ -310,6 +331,7 @@ export function classifyCoverage(input: CoverageInput): CoverageClass | null {
       // D-03: the class's own data (recording, speakers, transcript, absence, not a Wise user) is left out; a hold on
       // our drafts (unfaithful, validation, form), billing drift or an error is a miss.
       return dataQuality?.coverage === "excluded_data_quality" ? "excluded_data_quality" : "miss_held";
+    case "skipped_scope": // a hand-back the switches did not make when the window closed (above)
     case "expired":
       return "miss_expired";
     case "rejected":

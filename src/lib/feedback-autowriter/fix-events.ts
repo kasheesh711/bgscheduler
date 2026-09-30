@@ -18,6 +18,7 @@ import { AUTOWRITER_TEACHER_ALLOWLIST } from "./roster";
  * `post_class_feedback_versions` is not used for this: it collapses saves and names the tutor as the actor.
  */
 
+/** v1 = the rules as decided by the owner on 30 Sep (D-01/D-03); nothing was stored under earlier drafts. */
 export const FIX_EVENT_CLASSIFIER_VERSION = 1;
 
 /**

@@ -256,7 +256,7 @@ resumes. Halt reasons accumulate (`first | then: second`), so a manual pause nev
 | scope | offline, group, cancelled | `skipped_scope`, no alert (tutor's own) |
 | human | someone already wrote feedback | `skipped_human` |
 | person | absence or partial attendance after the 60-minute settle window, form or billing drift, draft failed checks | `held` + alert |
-| expired | deadline too close | `expired` + alert; a switched-off tutor's class is handed back instead (`skipped_scope`, `tutor_off_at_deadline`, no alert) |
+| expired | deadline too close | `expired` + alert; a class whose tutor is switched off when the sweep runs is handed back instead (`skipped_scope`, `tutor_off_at_deadline`, no alert) |
 
 The same dispositions apply when a gate fails on the fresh read just before the POST.
 
@@ -301,8 +301,10 @@ to the owner at any hour. Verdicts the owner gave outside the dashboard are comm
 the two decisions of the 30 Sep interview: `699477ce…` critical, wrong person; `6ab89191…` major) and recorded once by
 the backfill's `--apply` through the same path (`source: backfill`, reviewer `kevhsh7@gmail.com (owner interview
 2026-09-30)`, pinned to the first shot); a class that meanwhile has another verdict, or a flag raised after the
-decision, is left for the dashboard. The 29 Sep critical keeps every gate window holding 29 Sep `blocked_critical`:
-through the 12 Oct gate row; the 13 Oct window is the first without it.
+decision, is left for the dashboard. The critical verdict keeps every gate window that holds its class
+`blocked_critical`: blocked through the critical class's Bangkok date + 13 days (the dry run prints the date). Daily
+gate rows recorded before `--apply` (the job ran first) stay as written: not a pass (unrecorded posts / required
+pending) rather than `blocked_critical`.
 
 **Review inclusion** (`feedback_autowriter_reviews`). Every first shot whose text may be in Wise gets one review row
 when the job first sees it — verified posts, and also posts that landed without verifying (`verify_failed`,
@@ -344,11 +346,18 @@ one whose person save is not mirrored yet, and a class still unsettled once its 
 saw counts as a miss only when proven online one-to-one (past-session mirror or the Wise title in Credit Control) and
 its account was on the roster during the window. Out-of-scope and in-progress classes count on neither side, and
 in-person classes not at all. **Holds (owner decision D-03, 30 Sep)**: a hold for the class's own data — recording too
-short or in several parts, speakers unclear, transcript too short, no student or attendance below the minimum, the
-student not a Wise user — is left out (`excluded_data_quality`), and so is a class handed back at the deadline because
-its tutor was switched off (`excluded_tutor_off`); every other hold — the judge found the draft unfaithful, the
-validator or the form rejected it, billing drifted, an error — is a miss, as is any reason not in the table
-(`DATA_QUALITY_REASONS` in `quality.ts`, fail-closed). The job recomputes every date of the gate window on every run.
+short or in several parts, speakers unclear, transcript too short, no student or attendance below the minimum (a
+fractional percentage is named by its whole percent, rounded down: 42.5 → `attendance_42pct`), the student not a Wise
+user (`student_not_wise_user`, or `student_id_missing` when only the POST's fresh read finds it) — is left out
+(`excluded_data_quality`), and so is a class handed back at the deadline because its tutor was switched off
+(`excluded_tutor_off`). The sweep stamps a hand-back from the switches when it runs — up to 15 minutes after the window
+closed, or only once the mode is back from `off` — so coverage reads the control history instead: the hand-back is left
+out only when its tutor was switched off at the moment its window closed (however long it was workable before). One
+whose tutor was switched off only afterwards is judged like the expiry it replaced: a miss (`expired`), unless the
+switches never let us write it at any point of its window (then excluded, as any such class). Every other hold — the
+judge found the draft unfaithful, the validator or the form rejected it, billing drifted, an error — is a miss, as is
+any reason not in the table (`DATA_QUALITY_REASONS` in `quality.ts`, fail-closed). The job recomputes every date of
+the gate window on every run.
 
 **Gate** (rolling 14 Bangkok days). `pass` = lower bound ≥ 80%, zero critical verdicts, no unresolved critical flag,
 **no unexplained API write** (a critical `api_actor_unmatched` incident the owner has not acknowledged), coverage ≥

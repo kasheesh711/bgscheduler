@@ -11,6 +11,7 @@ import type { AutowriterReview, AutowriterReviewUnavailable } from "@/lib/feedba
 import { cn } from "@/lib/utils";
 import { FeedbackAutowriterQualityPanel, GATE_STATUS_LABEL } from "./feedback-autowriter-quality-panel";
 import { FeedbackAutowriterReviewQueue } from "./feedback-autowriter-review-queue";
+import { ARM_LABEL } from "./model-labels";
 
 const WINDOWS = [
   { days: 1, label: "24 h" },
@@ -142,12 +143,6 @@ export function ReviewUnavailable({ reason }: { reason: AutowriterReviewUnavaila
     </p>
   );
 }
-
-const ARM_LABEL: Record<string, string> = {
-  sol: "GPT-6.1 Sol",
-  luna: "GPT-6 Luna",
-  glm: "GLM Flash",
-};
 
 function modelLabel(model: string): string {
   if (model.startsWith("z-ai/glm")) return "GLM Flash";
