@@ -4,17 +4,18 @@
 // (docs/superpowers/specs/assets/2026-09-30-autowriter-dashboard-mockup-a.png). Dev only: not an app route, no
 // server, no database, nothing but the made-up fixtures of src/components/feedback-autowriter/__tests__/fixtures.ts.
 //
-//   node scripts/dev/render-autowriter-dashboard.mjs            build the preview and take the three screenshots
+//   node scripts/dev/render-autowriter-dashboard.mjs            build the preview and take the screenshots
 //   node scripts/dev/render-autowriter-dashboard.mjs --no-shot  build the preview only (open index.html yourself)
 //
 // 1. Bundles a small entry that mounts <FeedbackAutowriterDashboard> with the fixtures (esbuild, tsconfig paths).
 // 2. Compiles src/app/globals.css with @tailwindcss/postcss, scanning the repository as the app's build does.
 // 3. Writes one self-contained index.html (script and styles inline, so no stray .js for ESLint to find) to the
 //    git-ignored .feedback-autowriter/preview/.
-// 4. Screenshots three views with headless Chrome: the owner's, an admin's (read-only), and an empty to-do list
-//    early in the pilot (`index.html?view=owner|admin|empty` shows each one in a browser), the owner's view with
-//    every detail section open (`&details=open`), and the drawer on the first item of each group of the to-do list
-//    (`&open=review|hold|incident|failed_post`). `&theme=dark` shows any of them in the dark theme.
+// 4. Screenshots four views with headless Chrome: the owner's, an admin's (read-only), an empty to-do list early in
+//    the pilot, and a quiet day whose review data failed to load (`index.html?view=owner|admin|empty|review-failed`
+//    shows each one in a browser); then the owner's view with every detail section open (`&details=open`), and the
+//    drawer on the first item of each group of the to-do list (`&open=review|hold|incident|failed_post`).
+//    `&theme=dark` shows any of them in the dark theme.
 //
 // Chrome is taken from CHROME_BIN, or the usual macOS location. The preview page loads Inter from Google Fonts: without
 // a network the text falls back to the system's sans-serif and the screenshots differ slightly.
@@ -32,7 +33,7 @@ import postcss from "postcss";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const OUT = path.join(ROOT, ".feedback-autowriter", "preview");
 const CHROME = process.env.CHROME_BIN || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const VIEWS = ["owner", "admin", "empty"];
+const VIEWS = ["owner", "admin", "empty", "review-failed"];
 const DRAWERS = ["review", "hold", "incident", "failed_post"];
 const WIDTH = 1440;
 const DRAWER_HEIGHT = 900;
@@ -53,6 +54,8 @@ const VIEWS = {
   owner: () => ({ data: dashboardFixture(), review: reviewFixture(), trends: trendsFixture(), canControl: true }),
   admin: () => ({ data: dashboardFixture(), review: reviewFixture(), trends: trendsFixture(), canControl: false }),
   empty: () => ({ data: quietDashboardFixture(), review: quietReviewFixture(), trends: shortHistoryTrendsFixture(), canControl: true }),
+  // Nothing held and no failed post, and the review data did not load: the list must not say that nothing needs you.
+  "review-failed": () => ({ data: quietDashboardFixture(), review: { available: false, reason: "load_failed" }, trends: null, canControl: true }),
 };
 
 // A preview has no server: a request the page makes (its polling, a click) waits forever instead of failing.
