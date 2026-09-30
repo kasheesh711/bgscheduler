@@ -40,6 +40,8 @@ import {
   finalizePayoutRunPass,
   loadPayoutAdjustments,
   loadPayoutRunLines,
+  loadPayoutSubmissionTimes,
+  type PayoutSubmissionTimes,
   markPayoutAdjustment,
   markPayoutLine,
   payoutTutorNameStrings,
@@ -68,6 +70,8 @@ import {
   type PayoutRunWindow,
 } from "./payout-window";
 
+import { STAFF_SUBMISSION_EVIDENCE_VERSION } from "./feedback-proof";
+
 const PUBLISH_TIME_BUDGET_MS = 10 * 60 * 1_000;
 /**
  * Stop starting irreversible Google writes before the durable lease can be
@@ -89,6 +93,7 @@ export function payoutExternalWriteDeadline(input: {
 
 export type PayoutRunLineView = PayoutRunLine & {
   persisted: boolean;
+  recordedTutorSubmittedAt?: Date | null;
   /** Backward-compatible UI alias; the row now lives in the dedicated tab. */
   masterRowNumber: number | null;
 };
@@ -210,6 +215,7 @@ function candidateLineView(
     scheduledEndAt: candidate.scheduledEndAt,
     deadlineAt: candidate.deadlineAt,
     tutorSubmittedAt: candidate.tutorSubmittedAt,
+    submissionEvidenceVersion: STAFF_SUBMISSION_EVIDENCE_VERSION,
     amountMinor: candidate.amountMinor,
     currency: candidate.currency,
     financeMonth: candidate.defaultFinanceMonth,
@@ -243,6 +249,8 @@ function viewFromSnapshot(
   const lines: PayoutRunLineView[] = [
     ...snapshot.lines.map((line) => ({
       ...line,
+      recordedTutorSubmittedAt: line.tutorSubmittedAt,
+      tutorSubmittedAt: snapshot.submissionTimes.get(line.sessionId)?.staffSubmittedAt ?? null,
       persisted: true,
       masterRowNumber: line.insertedRowNumber,
     })),
@@ -585,6 +593,7 @@ function payoutCsv(
   window: PayoutRunWindow,
   lines: PayoutRunLine[],
   adjustments: PayoutAdjustment[],
+  submissionTimes: Map<string, PayoutSubmissionTimes>,
 ): string {
   const sourceLines = new Map(lines.map((line) => [line.id, line]));
   return buildPayoutRunCsv(
@@ -606,7 +615,7 @@ function payoutCsv(
         scheduledStartAt: line.scheduledStartAt,
         scheduledEndAt: line.scheduledEndAt,
         deadlineAt: line.deadlineAt,
-        tutorSubmittedAt: line.tutorSubmittedAt,
+        tutorSubmittedAt: submissionTimes.get(line.sessionId)?.staffSubmittedAt ?? null,
         amountMinor: line.amountMinor,
         currency: line.currency,
         financeMonth: line.financeMonth,
@@ -636,7 +645,7 @@ function payoutCsv(
           scheduledStartAt: source?.scheduledStartAt ?? null,
           scheduledEndAt: source?.scheduledEndAt ?? null,
           deadlineAt: source?.deadlineAt ?? null,
-          tutorSubmittedAt: source?.tutorSubmittedAt ?? null,
+          tutorSubmittedAt: source ? submissionTimes.get(source.sessionId)?.staffSubmittedAt ?? null : null,
           amountMinor: adjustment.amountMinor,
           currency: adjustment.currency,
           financeMonth: source?.financeMonth ?? null,
@@ -907,7 +916,7 @@ export async function publishPayoutRun(
     // Drive write for nothing -- an in-window pass can never reach
     // `published` (see `forcePartial` below), so it skips this whole leg via
     // `skipCsv` instead of paying for an artifact no one can look at yet.
-    const csv = payoutCsv(window, finalLines, finalAdjustments);
+    const csv = payoutCsv(window, finalLines, finalAdjustments, await loadPayoutSubmissionTimes(db, finalLines.map(line => line.sessionId)));
     try {
       if (!dependencies.uploadCsv && (pendingLines.length > 0 || pendingAdjustments.length > 0)
         && dependencies.gateway) {
@@ -982,7 +991,7 @@ export async function retryPayoutRunCsv(
       target,
       window,
       runVersion: claimed.run.version,
-      csv: payoutCsv(window, lines, adjustments),
+      csv: payoutCsv(window, lines, adjustments, await loadPayoutSubmissionTimes(db, lines.map(line => line.sessionId))),
       upload: dependencies.uploadCsv ?? uploadCsvToDrive,
     });
     csvFileId = uploaded.fileId;

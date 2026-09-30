@@ -316,7 +316,9 @@ describe("replay: the same evidence and decisions as production", () => {
       replayDeps({ wise: readOnlyWise(sessionDetail(RECORDING)).wise, soniox: fakeSoniox().client, callModel: model.callModel as never }),
       SAMPLE,
     );
-    expect(record.outcome).toMatch(/^hold:glm:unfaithful:/u);
+    // Both writers are on zero-retention routes, so a transcript draft the judge rejects goes to the fallback writer too.
+    const [writer, fallback] = [AUTOWRITER_MODELS.writer.arm, AUTOWRITER_MODELS.fallbackWriter.arm];
+    expect(record.outcome).toMatch(new RegExp(`^hold:${writer}:unfaithful:.*; ${fallback}:unfaithful:`, "u"));
     expect(record.transcriptDraft).toMatchObject({
       judgeHigh: { faithful: false }, judgeMedium: { faithful: false },
       fields: { topics: GOOD_FIELDS.topics, performance: expect.stringContaining("Tom found common denominators") },

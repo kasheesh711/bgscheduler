@@ -224,7 +224,7 @@ async function generate(): Promise<void> {
   const arms = Object.fromEntries(assignModelArms(sessions.filter((session) => session.purpose === "candidate").map((session) => ({
     sessionId: session.sessionId, classId: session.classId, scheduledStartAt: new Date(session.scheduledStartAt),
   }))));
-  const jobs = sessions.flatMap((session) => (["glm", "luna"] as const).map((arm) => ({ session, arm })));
+  const jobs = sessions.flatMap((session) => (["sol", "glm", "luna"] as const).map((arm) => ({ session, arm })));
   const drafts = await mapWithConcurrency(jobs, 4, async ({ session, arm }) => {
     const draft = await generateDraft({ apiKey, arm, session, tutorNames: tutor.tutorNames, priorFeedback });
     const usage = "usage" in draft.call ? draft.call.usage : null;

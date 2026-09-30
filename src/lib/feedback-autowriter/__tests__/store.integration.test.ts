@@ -389,7 +389,7 @@ describe("feedback autowriter store (Postgres)", () => {
 
     // An older version's transcript draft, or one with no stamp at all, is written again (v4, 30 Sep): its window
     // restarts like any other draft's.
-    for (const pipeline of [{ promptVersion: 3, judgeVersion: 3 }, { ...current, judgeVersion: 3 }, null]) {
+    for (const pipeline of [{ promptVersion: 3, judgeVersion: 3 }, { ...current, judgeVersion: 3 }, { ...current, promptVersion: 3 }, null]) {
       const older = (await claimGeneration(db, SESSION, 60_000))!;
       await releaseGeneration(db, SESSION, older, {
         state: "would_submit", reason: "shadow",

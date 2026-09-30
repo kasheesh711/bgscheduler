@@ -4084,6 +4084,8 @@ export const postClassPayoutTutorNames = pgTable("post_class_payout_tutor_names"
   updatedByEmail: text("updated_by_email").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  /** Removal/replacement/activation guard; adding an alias only advances updatedAt. */
+  identityChangedAt: timestamp("identity_changed_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("pc_payout_tutor_names_key_idx").on(table.canonicalKey),
   uniqueIndex("pc_payout_tutor_names_primary_idx").on(table.primaryLedgerName),
@@ -4137,6 +4139,8 @@ export const postClassPayoutRunLines = pgTable("post_class_payout_run_lines", {
   scheduledEndAt: timestamp("scheduled_end_at", { withTimezone: true }).notNull(),
   deadlineAt: timestamp("deadline_at", { withTimezone: true }).notNull(),
   tutorSubmittedAt: timestamp("tutor_submitted_at", { withTimezone: true }),
+  /** 1 = historical non-auto events; 2 = non-auto TEACHER/ADMIN events. */
+  submissionEvidenceVersion: integer("submission_evidence_version").notNull().default(2),
   /** Signed minor units: deductions are negative; corrections are separate positive rows. */
   amountMinor: integer("amount_minor").notNull(),
   currency: text("currency").notNull().default("THB"),
@@ -4173,6 +4177,7 @@ export const postClassPayoutRunLines = pgTable("post_class_payout_run_lines", {
   index("pc_payout_run_lines_tutor_idx").on(table.runId, table.canonicalTutorKey),
   check("pc_payout_run_lines_kind_check", sql`${table.lineKind} = 'deduction'`),
   check("pc_payout_run_lines_signed_check", sql`${table.amountMinor} < 0`),
+  check("pc_payout_run_lines_evidence_check", sql`${table.submissionEvidenceVersion} in (1, 2)`),
 ]);
 
 /**
@@ -6156,7 +6161,7 @@ export const feedbackAutowriterSessions = pgTable("feedback_autowriter_sessions"
   nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
   leaseToken: uuid("lease_token"),
   leaseUntil: timestamp("lease_until", { withTimezone: true }),
-  arm: text("arm").$type<"glm" | "luna">(),
+  arm: text("arm").$type<"glm" | "luna" | "sol">(),
   fields: jsonb("fields").$type<Record<string, string>>(),
   fieldsSha256: text("fields_sha256"),
   billing: jsonb("billing").$type<Record<string, unknown>>(),
@@ -6182,7 +6187,7 @@ export const feedbackAutowriterCalls = pgTable("feedback_autowriter_calls", {
   id: uuid("id").primaryKey().defaultRandom(),
   wiseSessionId: text("wise_session_id").notNull(),
   role: text("role").$type<"writer" | "judge" | "transcriber">().notNull(),
-  arm: text("arm").$type<"glm" | "luna" | "soniox">().notNull(),
+  arm: text("arm").$type<"glm" | "luna" | "sol" | "soniox">().notNull(),
   requestedModel: text("requested_model").notNull(),
   resolvedModel: text("resolved_model"),
   provider: text("provider"),

@@ -102,6 +102,16 @@ describe("FeedbackAutowriterDashboard", () => {
     expect(quiet).toContain("No class fell back to the summary in this window.");
   });
 
+  it("labels Sol drafts and Sol's cost", () => {
+    const base = payload();
+    const html = renderToStaticMarkup(<FeedbackAutowriterDashboard canControl={false} initialData={payload({
+      recent: [{ ...base.recent[0], arm: "sol", evidence: "summary" }],
+      cost: { ...base.cost, byModel: [{ model: "openai/gpt-6.1-sol", role: "writer", calls: 3, costUsd: 0.12 }] },
+    })} />);
+    expect(html.match(/GPT-6\.1 Sol/gu)).toHaveLength(2); // recent row + cost by model
+    expect(html).not.toContain("GPT-6 Luna");
+  });
+
   it("shows owner controls only to the owner", () => {
     const viewer = renderToStaticMarkup(<FeedbackAutowriterDashboard initialData={payload()} canControl={false} />);
     const owner = renderToStaticMarkup(<FeedbackAutowriterDashboard initialData={payload()} canControl />);

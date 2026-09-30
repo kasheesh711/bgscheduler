@@ -33,6 +33,11 @@ function latinWord(value: string): RegExp {
   return new RegExp(`(?<!\\p{L})${escapeRegExp(value)}(?!\\p{L})`, "giu");
 }
 
+/** A word only where it is written exactly so (case-sensitive): "May" the name, not "may" the verb. */
+function exactWord(value: string): RegExp {
+  return new RegExp(`(?<!\\p{L})${escapeRegExp(value)}(?!\\p{L})`, "gu");
+}
+
 /**
  * The name the feedback calls the student by: always their nickname — the
  * part before the dot in the Wise name's brackets, "Worawut (Bas.Ho)
@@ -68,21 +73,39 @@ export function redactForModel(
   for (const token of [nicknameCode, nickname].filter((value): value is string => Boolean(value && [...value].length >= 2))) {
     result = result.replace(latinWord(token), STUDENT_TOKEN);
   }
+  // An odd code "(Tom Ja)" is replaced whole above, but a summary also writes "Tom" alone: its first word as well,
+  // letters only and only where written as a name (capitalised, case-sensitive, like the guest-name words below).
+  const codeWords = nicknameCode?.split(/\s+/u) ?? [];
+  const firstCodeWord = codeWords.length > 1 ? codeWords[0].charAt(0).toLocaleUpperCase("en-US") + codeWords[0].slice(1) : "";
+  if (/^\p{Lu}\p{L}+$/u.test(firstCodeWord)) result = result.replace(exactWord(firstCodeWord), STUDENT_TOKEN);
   // Each name-like word of an alias, only where it is written as a name (capitalised, case-sensitive: a guest
-  // "May Win" must not turn "may need … a win" into placeholders) — never a generic device word ("Zoom", "iPad").
-  for (const phrase of aliases) {
-    for (const word of phrase.split(/\s+/u)) {
-      if ([...word].length < 2 || !/^\p{Lu}[\p{L}\p{M}'-]*$/u.test(word) || GENERIC_GUEST_WORDS.has(word.toLocaleLowerCase("en-US"))) continue;
-      result = result.replace(new RegExp(`(?<!\\p{L})${escapeRegExp(word)}(?!\\p{L})`, "gu"), STUDENT_TOKEN);
-    }
+  // "May Win" must not turn "may need … a win" into placeholders). A possessive word stands for the bare name
+  // ("Nathan’s iPad" → "Nathan", so "Nathan’s notes" → "[STUDENT_1]’s notes").
+  for (const word of aliases.flatMap(guestNameWords)) {
+    if (/^\p{Lu}[\p{L}\p{M}'’-]*$/u.test(word)) result = result.replace(exactWord(word), STUDENT_TOKEN);
   }
   return result;
 }
 
-/** Words Zoom guest names are often made of that are not a person's name. */
+/**
+ * The words of a guest name that may be the student's own name, a possessive as the bare name ("Nathan’s iPad" →
+ * "Nathan"). Never a device word ("Zoom", "iPad"), nor a family or place word: "Mom's iPad" or "Mae iPad" (Thai for
+ * mother) means the student joined on someone else's device, and that someone is not the student.
+ */
+function guestNameWords(alias: string): string[] {
+  return alias.split(/\s+/u)
+    .map((word) => word.replace(/['’]s?$/u, ""))
+    .filter((word) => [...word].length >= 2 && !GENERIC_GUEST_WORDS.has(word.toLocaleLowerCase("en-US")));
+}
+
+/** Words Zoom guest names are often made of that are not the student's name. */
 const GENERIC_GUEST_WORDS = new Set([
   "zoom", "user", "guest", "iphone", "ipad", "android", "phone", "tablet", "laptop", "desktop", "pc", "mac",
   "macbook", "samsung", "galaxy", "huawei", "oppo", "vivo", "xiaomi", "redmi", "pixel", "windows", "my", "the", "of",
+  // Whose device it is, or where it is.
+  "mom", "mum", "mommy", "mummy", "mother", "mama", "mae", "dad", "daddy", "father", "papa", "pa", "ma", "family",
+  "home", "house", "sister", "sis", "brother", "bro", "aunt", "auntie", "uncle", "grandma", "grandpa", "granny",
+  "nanny", "son", "daughter", "kid", "kids", "child", "office", "school", "work", "room", "teacher",
 ]);
 
 // Same prefix pattern as student-schedule `deriveDisplaySubject` (copied for the
@@ -131,18 +154,26 @@ export function restoreStudentName(text: string, displayName: string): string {
   return text.replaceAll(STUDENT_TOKEN, displayName);
 }
 
-/** What a person in a summary does: "Nathan mentioned …", "Ploy also finished …". */
-const PERSON_VERBS = [
-  "said", "says", "mentioned", "asked", "answered", "told", "explained", "noted", "completed", "finished", "did", "does",
-  "worked", "struggled", "solved", "wrote", "got", "scored", "submitted", "had", "has", "was", "is",
+/** What a person in a summary says: "Nathan mentioned …". A month or day before one is a nickname ("May said …"). */
+const SPEECH_VERBS = [
+  "said", "says", "mentioned", "asked", "answered", "told", "explained", "noted", "reported", "shared", "stated",
+  "indicated", "confirmed",
 ];
+/** What a person in a summary does: "Ploy also finished …". */
+const ACTION_VERBS = ["completed", "finished", "did", "didn't", "worked", "struggled", "solved", "wrote", "got", "scored", "submitted"];
+/**
+ * What a person is or has — but a sentence-initial noun takes these too ("Progress was steady", "Accuracy has
+ * improved"), so their matches rank after the speech and action ones.
+ */
+const STATE_VERBS = ["is", "was", "has", "had", "does", "hadn't", "hasn't", "wasn't"];
 
 /**
  * A capitalised word ("Nathan", not "NVR" or "[STUDENT_1]": the second letter must be lower case) directly before a
- * person verb, optionally with also/only/just/then/still in between.
+ * person verb, optionally with also/only/just/then/still in between. A contraction takes either apostrophe.
  */
 const NAME_BEFORE_PERSON_VERB = new RegExp(
-  `(?<![\\p{L}\\p{M}\\p{N}_-])(\\p{Lu}[\\p{Ll}\\p{M}][\\p{L}\\p{M}'’-]*)\\s+(?:(?:also|only|just|then|still)\\s+)?(?:${PERSON_VERBS.join("|")})(?![\\p{L}\\p{M}])`,
+  `(?<![\\p{L}\\p{M}\\p{N}_-])(\\p{Lu}[\\p{Ll}\\p{M}][\\p{L}\\p{M}'’-]*)\\s+(?:(?:also|only|just|then|still)\\s+)?` +
+    `(${[...SPEECH_VERBS, ...ACTION_VERBS, ...STATE_VERBS].map((verb) => verb.replace("'", "['’]")).join("|")})(?![\\p{L}\\p{M}])`,
   "gu",
 );
 
@@ -160,6 +191,10 @@ const NOT_A_NAME = new Set([
   "section", "page", "chapter", "unit", "topic", "task", "zoom",
   // Thai forms of address ("Nong said …" is the student, not someone else).
   "nong", "khun", "kru", "khru", "phi", "pee", "ajarn",
+]);
+
+/** Days and months: not a name ("April is exam month"), except right before a speech verb — "May", "June" and "April" are nicknames too. */
+const DAYS_AND_MONTHS = new Set([
   "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
   "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december",
 ]);
@@ -174,30 +209,38 @@ function lowerWords(lines: readonly string[]): Set<string> {
  * Summary mode: the other people a redacted summary names, so the writer and the judge are told they are never
  * [STUDENT_1] (29 Sep: a summary said another student "mentioned only 8 pages"; that name was the only real one
  * left after redaction, and the draft gave those words to our student). A hint, never a gate: a capitalised word
- * directly before a person verb, minus common words, the class details and our terms, and any name that starts
- * with the student's first name or nickname (a summary may write "Tommy" for a student called Tom).
- * Deduplicated, at most 8.
+ * directly before a person verb, minus common words, days and months (unless one reports speech: "May said"), the
+ * class details and our terms, the name words of the student's guest aliases, and the student's own names — any
+ * name that starts with their first name or nickname (a summary may write "Tommy" for a student called Tom), or
+ * only that name itself when it has two letters (a student "Ma" is not "Marco").
+ * Deduplicated; names seen before a speech or action verb come first, then those only seen before a state verb
+ * ("was", "has": sentence-initial nouns like "Progress was steady" take those too), each in first-seen order; at most 8.
  */
 export function otherPeopleNamed(
   redactedSummary: string,
   studentFullName: string,
   classDetails: readonly string[] = [],
+  studentAliases: readonly string[] = [],
 ): string[] {
   const known = lowerWords([...classDetails, ...SONIOX_TERMS]);
+  const aliasWords = new Set(studentAliases.flatMap(guestNameWords).map((word) => word.normalize("NFC").toLocaleLowerCase("en-US")));
   const { firstName, nickname } = parseStudentName(studentFullName);
   // The first word only: an odd bracket code "(Tom Ja)" still means "Tom".
   const studentPrefixes = [firstName, nickname?.split(/\s+/u)[0]]
     .filter((value): value is string => Boolean(value && [...value].length >= 2))
     .map((value) => value.toLocaleLowerCase("en-US"));
-  const people: string[] = [];
+  const isStudent = (lower: string) => studentPrefixes.some((prefix) => ([...prefix].length >= 3 ? lower.startsWith(prefix) : lower === prefix));
+  const active: string[] = [];
+  const stated: string[] = [];
   for (const match of redactedSummary.normalize("NFC").matchAll(NAME_BEFORE_PERSON_VERB)) {
     const name = match[1].replace(/['’]s$/u, "");
+    const verb = match[2].replace("’", "'");
     const lower = name.toLocaleLowerCase("en-US");
-    if (NOT_A_NAME.has(lower) || known.has(lower) || studentPrefixes.some((prefix) => lower.startsWith(prefix))) continue;
-    if (!people.includes(name)) people.push(name);
-    if (people.length === 8) break;
+    if (NOT_A_NAME.has(lower) || known.has(lower) || aliasWords.has(lower) || isStudent(lower)) continue;
+    if (DAYS_AND_MONTHS.has(lower) && !SPEECH_VERBS.includes(verb)) continue;
+    (STATE_VERBS.includes(verb) ? stated : active).push(name);
   }
-  return people;
+  return [...new Set([...active, ...stated])].slice(0, 8);
 }
 
 /** The line both the writer and the judge get before the lesson summary when it names other people. */
@@ -255,6 +298,8 @@ function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels): string {
       "written as suggestions — never as homework the tutor set, and never repeating the homework.",
     `7. homework: only work ${record} shows the tutor clearly setting ${STUDENT_TOKEN} to do after this lesson, with its timing if stated. ` +
       "Work only described as remaining, unfinished, left over or still to complete is not homework unless the tutor set it. " +
+      // Owner decision (30 Sep): Wise's "Next steps: …" line (`extractAiSummary`) is the summary's advice, not the tutor's.
+      (evidence === "summary" ? "A \"Next steps\" line in the summary is the summary's own suggestion, not homework the tutor set. " : "") +
       `If ${record} does not clearly show the tutor setting homework, return an empty string. ` +
       "Never repeat or restate the homework in topics, performance or improvement.",
     "8. Length: topics, performance and improvement are each between 120 and 600 characters, and together at least 450 characters.",
@@ -314,7 +359,7 @@ export function buildFeedbackMessages(context: PromptContext): Array<{ role: "sy
   const record = redactForModel(context.summary.text, context);
   const details = classDetailsBlock(context.classDetails, context, [`Scheduled length: ${context.scheduledMinutes} minutes`]);
   const people = evidence === "summary"
-    ? otherPeopleLine(context.otherPeople ?? otherPeopleNamed(record, context.studentFullName, context.classDetails))
+    ? otherPeopleLine(context.otherPeople ?? otherPeopleNamed(record, context.studentFullName, context.classDetails, context.studentAliases))
     : null;
   return [
     // Fails closed: a transcript is only called reliable when Zoom confirmed the labels.

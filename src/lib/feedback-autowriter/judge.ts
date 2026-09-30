@@ -13,7 +13,7 @@ export const JUDGE_JSON_SCHEMA = {
     unsupported: {
       type: "array",
       items: { type: "string" },
-      description: "Short quotes of claims about this lesson that the summary does not support.",
+      description: "Short quotes of claims about this lesson that the lesson record does not support.",
     },
     misattributed: {
       type: "array",
@@ -62,7 +62,9 @@ const judgeSystemPrompt = (evidence: EvidenceKind, labels: SpeakerLabels) => [
     `when the ${evidence} says it about [TUTOR] or about another person.`,
   "- homeworkNotSet: homework, a task or a due date the feedback says was set — everything under \"Homework and due date\", " +
     `and any such statement in another field — unless the ${evidence} clearly shows the tutor setting it for [STUDENT_1] to do after this lesson. ` +
-    "Work only described as remaining, unfinished or still to complete was not set.",
+    "Work only described as remaining, unfinished or still to complete was not set." +
+    // Owner decision (30 Sep): Wise's "Next steps: …" line (`extractAiSummary`) is the summary's advice, not the tutor's.
+    (evidence === "summary" ? " A \"Next steps\" line in the summary is the summary's own suggestion, not homework the tutor set." : ""),
   "General advice, encouragement and suggested practice (including practice before the next lesson) are fine and must not be listed, " +
     "unless they are presented as homework the tutor set.",
   "faithful is true only when all three lists are empty.",
@@ -119,14 +121,16 @@ export function parseJudgeOutput(content: string): JudgeOutput | null {
 }
 
 /**
- * Every problem a verdict lists, as one list for hold reasons, call records and the dashboard: unsupported claims
- * as quoted, then "wrong person: …" and "homework not set: …". A stored v3 verdict has no misattributed or
- * homeworkNotSet list: pass empty ones and its unsupported quotes come back unchanged.
+ * Every problem a verdict lists, as one list for hold reasons, call records and the dashboard: "wrong person: …"
+ * first, then "homework not set: …", then the unsupported claims as quoted — so a hold reason cut to its first
+ * three problems (pipeline.ts) or an alert cut to 200 characters (alerts.ts) never hides the two v4 kinds behind
+ * unsupported claims. A stored v3 verdict has no misattributed or homeworkNotSet list: pass empty ones and its
+ * unsupported quotes come back unchanged.
  */
 export function judgeProblems(verdict: Pick<JudgeOutput, "unsupported" | "misattributed" | "homeworkNotSet">): string[] {
   return [
-    ...verdict.unsupported,
     ...verdict.misattributed.map((quote) => `wrong person: ${quote}`),
     ...verdict.homeworkNotSet.map((quote) => `homework not set: ${quote}`),
+    ...verdict.unsupported,
   ];
 }

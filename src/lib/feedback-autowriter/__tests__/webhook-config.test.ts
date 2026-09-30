@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  AUTOWRITER_MODELS,
+  AUTOWRITER_WRITER_BY_ARM,
   autowriterAlertEmails,
   autowriterEnabled,
   autowriterTranscriptFirst,
@@ -87,6 +89,22 @@ describe("config", () => {
   it("parses the alert list and the API key", () => {
     expect(autowriterAlertEmails({ FEEDBACK_AUTOWRITER_ALERT_EMAILS: "a@x.com, B@X.com;not-an-email a@x.com" })).toEqual(["a@x.com", "b@x.com"]);
     expect(openRouterApiKey({ OPENROUTER_API_KEY: "  " })).toBeNull();
+  });
+
+  it("writes with Sol at reasoning low, falls back to Luna and judges with GLM — all with zero data retention", () => {
+    expect(AUTOWRITER_MODELS.writer).toMatchObject({ arm: "sol", model: "openai/gpt-6.1-sol", effort: "low", expectModel: "openai/gpt-6.1-sol" });
+    expect(AUTOWRITER_MODELS.fallbackWriter).toMatchObject({ arm: "luna", model: "openai/gpt-6-luna", effort: "max" });
+    expect(AUTOWRITER_MODELS.judge).toMatchObject({ arm: "glm", model: "z-ai/glm-5.3-flash", effort: "high", expectProvider: "Together" });
+    for (const config of Object.values(AUTOWRITER_MODELS)) {
+      expect(config.provider).toMatchObject({ zdr: true, data_collection: "deny", require_parameters: true });
+    }
+  });
+
+  it("keeps a writer per arm for the evaluation CLI", () => {
+    expect(AUTOWRITER_WRITER_BY_ARM.sol).toBe(AUTOWRITER_MODELS.writer);
+    expect(AUTOWRITER_WRITER_BY_ARM.luna).toBe(AUTOWRITER_MODELS.fallbackWriter);
+    // GLM evaluates with the config it wrote with until 30 Sep, not the judge's.
+    expect(AUTOWRITER_WRITER_BY_ARM.glm).toMatchObject({ arm: "glm", model: "z-ai/glm-5.3-flash", effort: "max", provider: { order: ["together"], zdr: true } });
   });
 });
 
