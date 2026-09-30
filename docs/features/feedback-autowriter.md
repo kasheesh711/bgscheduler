@@ -62,6 +62,8 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
    infrastructure failure, never a reason to fall back; the Luna fallback has no such model check.
    Service failures (credit, outage, time-out, a provider-side generation error, a judge level that gives no verdict
    twice) never go to the fallback: the session retries in 10 minutes and the run reports an infrastructure error.
+   A rate limit is first tried again in the same run, a few seconds apart
+   ([below](#rate-limits-tried-again-in-the-same-run-30-sep-evening)).
 6. **Shadow or live.** Shadow stores the draft (`would_submit`). Live runs
    [`submitFeedbackGuarded`](../../src/lib/feedback-autowriter/submit.ts): credit baseline → fresh read (all gates
    again) → POST claim → one POST (never retried) → read-back of text, status, credits and the session's single
@@ -169,6 +171,40 @@ are now 5.
   member")". The tutor is never named either (unchanged). A prompt rule only: nothing holds a draft for a name, and
   the judge is not asked about it. It is absolute — authors and characters in the lesson material are not an
   exception.
+
+### Rate limits: tried again in the same run (30 Sep, evening)
+
+Owner decision: "add quick in-run retries on a rate limit so posts don't wait a whole sweep". The writer's route was
+rate-limited upstream on and off that afternoon, and a second request a few seconds later usually went through, while
+the class waited 10 minutes or more for its next run.
+
+- **What counts as a rate limit.** OpenRouter's own limit (HTTP 429), or the model's upstream one, which OpenRouter
+  reports inside a 200 response. It is read in every form it takes there
+  ([`openrouter.ts`](../../src/lib/feedback-autowriter/openrouter.ts)): the code 429 as a number or as text (`"429"`),
+  on the response (`error.code`) or carried on the choice (`choices[0].error.code`, as when a generation ends with
+  `finish_reason: "error"`). Only a 429 is read this way — any other error on a choice is still the model's own
+  generation error, and any other code given as text keeps the response's status.
+- **What happens.** The same request is sent again in the same run, up to three more times, after about 4 s, 10 s and
+  25 s — each ±30% at random, so classes that end at the same time do not retry at the same time. When OpenRouter
+  says how long to wait (`Retry-After`, or the reset time of its own limit), that wait is used instead: never less,
+  and at most 30 s. One call's waits never add up to more than 45 s. Every model call of the pipeline goes through
+  this (`callWithRateLimitRetries`) — the writer, the fallback writer and each judge level — and so does the replay,
+  including its judging of posted drafts. Nothing else is tried again this way: a time-out, a provider error, a reply
+  that is not JSON or an answer from another model are handled at once, as before.
+- **Time.** A retry is made only when its wait and the call's whole time-out still end before the function's deadline
+  minus 45 s — the rule every model call starts under. Otherwise the rate limit stands at once and the class retries
+  later, as before. So a judge is still never started without its full time-out, and every model call still ends at
+  least 105 s before Vercel would stop the function. The waiting comes out of what is left for the POST; the POST is
+  still claimed only with its 240 s, and a run that no longer has them keeps the judged transcript draft for the
+  next run, as before. Worst case: 45 s more for one call; in a run, each step — the writer, the two judge levels
+  (they wait at the same time), and for a rejected draft the fallback writer and its judges — can add up to that.
+- **What it still means.** Unchanged: a rate limit is never the writer's failure (it does not count toward
+  `writer_failed`) and never a reason for the fallback writer. A call still rate limited after its retries ends the
+  run with the same `infra:…` reason as before, and the class retries in 10 minutes.
+- **Call records.** Every attempt is a row in `feedback_autowriter_calls`: a rate-limited one has `ok = false`, its
+  error and no cost, and each attempt after the first carries `result.rateLimitRetry` (1, 2 or 3), so retries can
+  be counted ([runbook](../operations/feedback-autowriter.md#8-writer-model-gpt-61-sol-since-2026-09-30)). The rows
+  of a call's rate-limited attempts are written when the call ends, a few seconds after they happened.
 
 ## Models
 
