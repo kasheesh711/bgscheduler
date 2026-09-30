@@ -32,7 +32,7 @@ const REVIEW_POLL_MS = 5 * 60_000;
 
 function isDashboard(value: unknown): value is AutowriterDashboard {
   return typeof value === "object" && value !== null
-    && "totals" in value && "control" in value && "recent" in value && "holds" in value && "system" in value;
+    && "totals" in value && "control" in value && "recent" in value && "holds" in value && "system" in value && "today" in value;
 }
 
 function isReview(value: unknown): value is AutowriterReview {

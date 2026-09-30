@@ -176,6 +176,20 @@ describe("FeedbackAutowriterDashboard", () => {
     expect(render().match(/<canvas/gu)).toHaveLength(6);
   });
 
+  it("loads nothing server-only in the browser: values come only from the lib modules that are safe there", () => {
+    // `trends.ts`, `dashboard.ts` and `review-data.ts` read the database: a component may import their types, never a value.
+    const SAFE = new Set(["inbox", "quality", "gate-sentence", "hold-reasons"]);
+    const directory = path.join(__dirname, "..");
+    const files = fs.readdirSync(directory).filter((file) => /\.tsx?$/u.test(file));
+    expect(files.length).toBeGreaterThan(15);
+    const loaded = files.flatMap((file) => {
+      const source = fs.readFileSync(path.join(directory, file), "utf8");
+      return [...source.matchAll(/^import\s+(?!type\b)[^;]*?from\s+"@\/lib\/feedback-autowriter\/([^"]+)";/gmu)].map((match) => `${file} → ${match[1]}`);
+    });
+    expect(loaded.length).toBeGreaterThan(5);
+    expect(loaded.filter((entry) => !SAFE.has(entry.split(" → ")[1]))).toEqual([]);
+  });
+
   it("polls with the house pattern (abortable, sequenced): the dashboard every 60 s, the review data every 5 min", () => {
     expect(SOURCE).toContain("AbortController");
     expect(SOURCE).toContain("requestSequence");

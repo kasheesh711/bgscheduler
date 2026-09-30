@@ -14,7 +14,7 @@
 // 4. Screenshots three views with headless Chrome: the owner's, an admin's (read-only), and an empty to-do list
 //    early in the pilot (`index.html?view=owner|admin|empty` shows each one in a browser), the owner's view with
 //    every detail section open (`&details=open`), and the drawer on the first item of each group of the to-do list
-//    (`&open=review|hold|incident|failed_post`).
+//    (`&open=review|hold|incident|failed_post`). `&theme=dark` shows any of them in the dark theme.
 //
 // Chrome is taken from CHROME_BIN, or the usual macOS location.
 
@@ -56,16 +56,19 @@ const VIEWS = {
 // A preview has no server: a request the page makes (its polling, a click) waits forever instead of failing.
 window.fetch = () => new Promise(() => undefined);
 
-const name = new URLSearchParams(window.location.search).get("view") ?? "owner";
+const params = new URLSearchParams(window.location.search);
+// ?theme=dark: the dark theme, as the app's theme switch sets it.
+if (params.get("theme") === "dark") document.documentElement.classList.add("dark");
+const name = params.get("view") ?? "owner";
 const view = (VIEWS[name] ?? VIEWS.owner)();
 createRoot(document.getElementById("root")).render(
   <FeedbackAutowriterDashboard initialData={view.data} initialReview={view.review} initialTrends={view.trends} canControl={view.canControl} />,
 );
 // ?open=<group>: the drawer on that group's first item, as a click on its button opens it.
-const open = new URLSearchParams(window.location.search).get("open");
+const open = params.get("open");
 if (open) window.setTimeout(() => document.querySelector('[data-group="' + open + '"] button')?.click(), 500);
 // ?details=open: every collapsed section opened.
-if (new URLSearchParams(window.location.search).get("details") === "open") {
+if (params.get("details") === "open") {
   window.setTimeout(() => document.querySelectorAll("details").forEach((section) => { section.open = true; }), 500);
 }
 // The page's height once the charts are drawn, for a screenshot of all of it.
