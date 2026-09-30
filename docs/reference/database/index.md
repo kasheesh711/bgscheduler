@@ -490,7 +490,9 @@ accompany the [feature](../../features/tutor-attendance.md).
 
 Migration **0098** (second pass) adds `feedback_autowriter_sessions.evidence` (`summary` | `transcript`) and
 `soniox_transcription_id`, the states `awaiting_recording` and `transcribing`, and the call role `transcriber` /
-arm `soniox` (one row per Soniox transcription, list-price cost).
+arm `soniox` (one row per Soniox transcription, list-price cost). Migration **0100** adds the arm `sol` (the
+GPT-6.1 Sol writer, 2026-09-30) to the `arm` checks of both `feedback_autowriter_sessions` and
+`feedback_autowriter_calls`.
 
 Migration **0101** (operating loop, Phase 1 — measurement) adds eleven tables and one trigger on an existing table
 (`feedback_autowriter_control`: an AFTER INSERT/UPDATE trigger logs every mode or tutor-switch change into

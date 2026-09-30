@@ -4,7 +4,9 @@ import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
 import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
+import { JUDGE_PROMPT_VERSION } from "./judge";
 import type { CallRecord } from "./pipeline";
+import { PROMPT_VERSION } from "./prompt";
 import type { PostFinishState, SubmitStore } from "./submit";
 import type { BillingPlan, ModelArm } from "./types";
 
@@ -434,7 +436,9 @@ export async function noteSonioxRecorded(db: Database, wiseSessionId: string, tr
  * deadline. Not for a switched-off tutor's classes (theirs to write), a
  * recording waiting for its 30-min length recheck (held with its own alert
  * next), a transcript waiting briefly for Zoom's names (it goes ahead on its
- * own), or an infra retry (the recording may well be there).
+ * own), or an infra retry (the recording may well be there) — including a failed
+ * Wise read, which since v4 also sends an older version's transcript draft back
+ * to wait here while it is written again.
  */
 export async function flagNoRecording(db: Database, endedBefore: Date, disabledTutors: readonly string[] = []): Promise<number> {
   const rows = await db.update(S).set({
@@ -443,7 +447,7 @@ export async function flagNoRecording(db: Database, endedBefore: Date, disabledT
   }).where(and(
     inArray(S.state, ["awaiting_recording", "transcribing"]),
     lt(S.scheduledEndAt, endedBefore),
-    sql`coalesce(${S.reason}, '') not in ('recording_too_short', 'zoom_transcript_pending') and coalesce(${S.reason}, '') not like 'infra:%'`,
+    sql`coalesce(${S.reason}, '') not in ('recording_too_short', 'zoom_transcript_pending', 'wise_read_failed') and coalesce(${S.reason}, '') not like 'infra:%'`,
     disabledTutors.length > 0
       ? or(isNull(S.wiseTeacherUserId), notInArray(S.wiseTeacherUserId, [...disabledTutors]))
       : undefined,
@@ -499,12 +503,15 @@ export async function expireOverdueRows(db: Database, input: {
 
 /** Shadow drafts become eligible again when the owner switches to live. */
 export async function requeueShadowDrafts(db: Database, minDeadline: Date): Promise<number> {
-  // Back to work. A judged transcript draft is posted as it is, never re-read: its transcript's review window
-  // keeps running. Any other draft may transcribe again, so its window starts again when it is next done.
+  // Back to work. A judged transcript draft of the current prompt and judge versions is posted as it is, never
+  // re-read: its transcript's review window keeps running. Any other draft may transcribe again (an older version's
+  // is written and judged again: `reusableTranscriptDraft` in job.ts), so its window starts again when it is next done.
   const rows = await db.update(S).set({
     state: "pending",
     nextAttemptAt: null,
     metadata: sql`case when ${S.metadata} ->> 'draftEvidence' = 'transcript' and ${S.metadata} -> 'judge' ->> 'faithful' = 'true'
+        and ${S.metadata} -> 'pipeline' ->> 'promptVersion' = ${String(PROMPT_VERSION)}
+        and ${S.metadata} -> 'pipeline' ->> 'judgeVersion' = ${String(JUDGE_PROMPT_VERSION)}
       then ${S.metadata} - 'triagedAt' else ${S.metadata} - 'sonioxRetainUntil' - 'triagedAt' end`,
     updatedAt: nowSql,
   })

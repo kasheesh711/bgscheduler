@@ -57,7 +57,7 @@ export interface AutowriterModelConfig {
   arm: ModelArm;
   model: string;
   provider: OpenRouterProviderPreferences;
-  effort: "max" | "medium";
+  effort: "max" | "high" | "medium" | "low";
   /** When set, the response must come from this host and model or the call is an infra failure. */
   expectProvider?: string;
   expectModel?: string;
@@ -72,26 +72,56 @@ const GLM_ZDR_ROUTE: OpenRouterProviderPreferences = {
 };
 
 /**
- * Writer: GLM 5.3 Flash pinned to Together with zero data retention.
- * Fallback writer: GPT-6 Luna (OpenAI has no ZDR route on OpenRouter).
- * Judge: GLM on the same ZDR route, so a successful GLM path never sends a
- * lesson summary to a retaining host.
+ * OpenAI models on zero-data-retention endpoints only (OpenRouter serves Sol
+ * and Luna this way through Azure, verified 30 Sep). Not pinned to a host:
+ * `zdr` itself restricts routing to hosts that retain nothing.
+ */
+const OPENAI_ZDR_ROUTE: OpenRouterProviderPreferences = {
+  zdr: true,
+  data_collection: "deny",
+  require_parameters: true,
+};
+
+/**
+ * Every route has zero data retention, so a summary or transcript never
+ * reaches a retaining host, whichever model handles it.
+ *
+ * Writer: GPT-6.1 Sol, reasoning `low` (owner decision, 30 Sep). In a blind
+ * comparison on 11 classes (same Soniox transcripts, v4 rules) 82% of Sol-low
+ * drafts needed no real fix (0 critical, 0.9 real errors per 100 claims), vs
+ * Luna 64% and GLM 30% (4.1 per 100). ≈ $0.04 per draft, ~6 s per call.
+ * Fallback writer: GPT-6 Luna, reasoning `max`, on the same route.
+ * Judge: GLM 5.3 Flash pinned to Together. Reasoning `high` since v4 (30 Sep): at
+ * `medium` it passed a draft that gave another student's words to ours after
+ * ~100 reasoning tokens.
  */
 export const AUTOWRITER_MODELS = {
   writer: {
-    arm: "glm", model: "z-ai/glm-5.3-flash", provider: GLM_ZDR_ROUTE, effort: "max",
-    expectProvider: "Together", expectModel: "z-ai/glm-5.3-flash",
+    arm: "sol", model: "openai/gpt-6.1-sol", provider: OPENAI_ZDR_ROUTE, effort: "low",
+    expectModel: "openai/gpt-6.1-sol",
   },
   fallbackWriter: {
-    arm: "luna", model: "openai/gpt-6-luna",
-    provider: { order: ["openai"], allow_fallbacks: false, data_collection: "deny", require_parameters: true },
-    effort: "max",
+    arm: "luna", model: "openai/gpt-6-luna", provider: OPENAI_ZDR_ROUTE, effort: "max",
   },
   judge: {
-    arm: "glm", model: "z-ai/glm-5.3-flash", provider: GLM_ZDR_ROUTE, effort: "medium",
+    arm: "glm", model: "z-ai/glm-5.3-flash", provider: GLM_ZDR_ROUTE, effort: "high",
     expectProvider: "Together", expectModel: "z-ai/glm-5.3-flash",
   },
 } as const satisfies Record<string, AutowriterModelConfig>;
+
+/**
+ * The writer config behind each arm, for the offline evaluation CLI
+ * (`generateDraft`). GLM keeps the config it wrote with until 30 Sep; the
+ * autowriter itself only uses `AUTOWRITER_MODELS`.
+ */
+export const AUTOWRITER_WRITER_BY_ARM: Record<ModelArm, AutowriterModelConfig> = {
+  sol: AUTOWRITER_MODELS.writer,
+  luna: AUTOWRITER_MODELS.fallbackWriter,
+  glm: {
+    arm: "glm", model: "z-ai/glm-5.3-flash", provider: GLM_ZDR_ROUTE, effort: "max",
+    expectProvider: "Together", expectModel: "z-ai/glm-5.3-flash",
+  },
+};
 
 /** A session with no summary yet is retried this often … */
 export const AUTOWRITER_RETRY_DELAY_MS = 10 * 60 * 1000;

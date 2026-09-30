@@ -143,8 +143,15 @@ export function ReviewUnavailable({ reason }: { reason: AutowriterReviewUnavaila
   );
 }
 
+const ARM_LABEL: Record<string, string> = {
+  sol: "GPT-6.1 Sol",
+  luna: "GPT-6 Luna",
+  glm: "GLM Flash",
+};
+
 function modelLabel(model: string): string {
   if (model.startsWith("z-ai/glm")) return "GLM Flash";
+  if (model.startsWith("openai/gpt-6.1-sol")) return "GPT-6.1 Sol";
   if (model.startsWith("openai/gpt-6-luna")) return "GPT-6 Luna";
   if (model.startsWith("stt-async")) return "Soniox transcription";
   return model;
@@ -435,7 +442,7 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
                         <Badge variant="outline" className={cn("whitespace-nowrap", STATE_TONE[row.state])}>{STATE_LABEL[row.state] ?? row.state}</Badge>
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
-                        {row.arm === "luna" ? "GPT-6 Luna" : row.arm === "glm" ? "GLM Flash" : "—"}
+                        {(row.arm && ARM_LABEL[row.arm]) ?? "—"}
                         {row.evidence === "transcript" ? <span className="ml-1 text-[10px] uppercase text-muted-foreground">· transcript</span> : null}
                       </TableCell>
                       <TableCell className="text-right whitespace-nowrap">{minutes(row.latencyMinutes)}</TableCell>

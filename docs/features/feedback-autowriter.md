@@ -20,7 +20,7 @@ simply ingests what the autowriter posted like any other submission.
 | Rule | Where |
 |---|---|
 | Only the roster tutors (Kevin, Gift, Ek, Peat, Mimi — chosen by online-class volume to cover ≥20% of institution online classes), on both of their Wise accounts: the "… Online" one and their main one. Tutors teach online from either (all of Gift's online classes in September were on her main account); in-person classes on either are skipped by the session type below | [`roster.ts`](../../src/lib/feedback-autowriter/roster.ts) |
-| Session `type=SCHEDULED`, `classType=ONE_TO_ONE`, exactly one student who attended ≥50%, meeting `ENDED`. The tutor joining their own class again is not a student: their other Wise account, or a Zoom guest (no Wise account) under one of their names (Peat, 29 Sep, joined twice more as "Kasidej Jungrakangthong" and "Peat"). Any other extra participant still counts, so the class is skipped — except a student who joined by Zoom link as a guest: when the Wise account attended under 50% and exactly one guest and the tutor both stayed ≥ 80% of the class, the guest is the student (owner rule, 29 Sep); the Wise account stays the one billed, credit-checked and named, the guest's name is redacted as the same `[STUDENT_1]` (device words like "Zoom" or "iPad" are left alone), and the row records `studentJoinedAsGuest`. While attendance settles (60 min), an account plus a guest is retried, not skipped for good. The student whose credit is checked is stored with the POST claim and re-used by reconciliation. The one student must be a Wise user (`student_not_wise_user` otherwise: retried while attendance settles, then held). A title starting "In-Person Session" / "On-site Session" is out of scope even if Wise's type says online (`session_type_in_person_title`) | `evaluateSessionGates`, `studentParticipants` in [`session.ts`](../../src/lib/feedback-autowriter/session.ts) |
+| Session `type=SCHEDULED`, `classType=ONE_TO_ONE`, exactly one student who attended ≥50%, meeting `ENDED`. The tutor joining their own class again is not a student: their other Wise account, or a Zoom guest (no Wise account) under one of their names (Peat, 29 Sep, joined twice more as "Kasidej Jungrakangthong" and "Peat"). Any other extra participant still counts, so the class is skipped — except a student who joined by Zoom link as a guest: when the Wise account attended under 50% and exactly one guest and the tutor both stayed ≥ 80% of the class, the guest is the student (owner rule, 29 Sep); the Wise account stays the one billed, credit-checked and named, the guest's name is redacted as the same `[STUDENT_1]` (device, family and place words like "Zoom", "iPad", "Mom" or "Office" are left alone), and the row records `studentJoinedAsGuest`. While attendance settles (60 min), an account plus a guest is retried, not skipped for good. The student whose credit is checked is stored with the POST claim and re-used by reconciliation. The one student must be a Wise user (`student_not_wise_user` otherwise: retried while attendance settles, then held). A title starting "In-Person Session" / "On-site Session" is out of scope even if Wise's type says online (`session_type_in_person_title`) | `evaluateSessionGates`, `studentParticipants` in [`session.ts`](../../src/lib/feedback-autowriter/session.ts) |
 | Before the post-class deadline (≥30 min margin) | same |
 | Only when the teacher submission is Wise's blank auto-submission (`metadata.autoSubmitted=true`, all answers empty); anything a person wrote is never touched | `classifyTeacherSubmission` |
 | Re-sends the auto-submission's own `sessionStatus` / `creditsConsumed` (credits must equal the scheduled hours) — no new charge | [`billing.ts`](../../src/lib/feedback-autowriter/billing.ts) |
@@ -42,8 +42,9 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
 3. **Fresh Wise read** (`GET /user/session/{id}` or the class-scoped detail, 45 s time-out per read) → gates →
    billing plan. If Wise now shows a different teacher, the row follows it (and a switched-off tutor's class is
    not posted); a `pending` row also follows the teacher the backstop's shortlist reports.
-4. **Write.** `z-ai/glm-5.3-flash` pinned to Together with zero data retention, reasoning `max`; names are redacted
-   before anything leaves BGScheduler. The model writes `[STUDENT_1]`, which becomes the student's **nickname** — the
+4. **Write.** `openai/gpt-6.1-sol` (GPT-6.1 Sol) on a zero-data-retention route, reasoning `low` (see
+   [Models](#models)); names are redacted before anything leaves BGScheduler. The model writes `[STUDENT_1]`,
+   which becomes the student's **nickname** — the
    part before the dot in the Wise name's brackets ("Worawut (Bas.Ho) Horburapa" → "Bas"), or the first name when
    there is none (owner decision, 29 Sep). The writer and the judge both get the **class details** from Wise
    (`describeClass` in [`prompt.ts`](../../src/lib/feedback-autowriter/prompt.ts)): at BeGifted Wise's `classSubject`
@@ -52,8 +53,11 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
    NVR / Non VR = Non-Verbal Reasoning, VR = Verbal Reasoning, Sci = Science — and nothing else is guessed. The
    judge treats the class details as true, so naming the programme or subject is never a "made-up" claim. Deterministic validation (300-char policy, placeholder, absence wording,
    copy-similarity against the tutor's 90 days of feedback and the autowriter's own posts).
-5. **Judge.** GLM (same ZDR route) checks every factual claim against the summary. Unfaithful or invalid →
-   fallback writer `openai/gpt-6-luna`, validated and GLM-judged the same way. Both fail → **held** + alert.
+5. **Judge.** GLM (Together, zero data retention, reasoning `high`) checks the draft against the summary:
+   unsupported claims, things given to the wrong person, homework the tutor never set (v4, below). Unfaithful or
+   invalid → fallback writer `openai/gpt-6-luna` (zero data retention), validated and GLM-judged the same way. Both
+   fail → **held** + alert. An answer to the primary writer's request from any model other than Sol is an
+   infrastructure failure, never a reason to fall back; the Luna fallback has no such model check.
    Service failures (credit, outage, time-out, a provider-side generation error, a judge that gives no verdict
    twice) never go to the fallback: the session retries in 10 minutes and the run reports an infrastructure error.
 6. **Shadow or live.** Shadow stores the draft (`would_submit`). Live runs
@@ -67,6 +71,80 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
    phase. While an unsettled POST is older than 6 min (waiting for the sweep), nothing is drafted at all.
    A shadow draft finished after the owner switched to `live` goes back to `pending` (atomically with the mode),
    so it is posted rather than stranded in `would_submit`.
+
+### Writer and judge v4 (30 Sep)
+
+Two 29 Sep posts went wrong in ways the v3 prompts allowed. A summary named another student next to ours ("…
+noting that <another student> mentioned only 8 pages …"): redaction replaces only the student's and the tutor's
+names, so that name was the only real one left, the writer took it for our student and added a homework line, and
+the judge (reasoning `medium`, ~100 reasoning tokens) passed it. Another summary ended "…had three remaining homework
+problems to complete" (a mis-hearing); the writer posted it as homework and repeated it under "Need more work on".
+Prompt and judge versions are now 4 ([`prompt.ts`](../../src/lib/feedback-autowriter/prompt.ts),
+[`judge.ts`](../../src/lib/feedback-autowriter/judge.ts)):
+
+- **Writer rules.** Improvement is written as suggestions — never as homework the tutor set, never repeating the
+  homework. Homework is only work the record shows the tutor clearly setting for after this lesson; work described
+  as remaining or unfinished is not homework, an unclear record gives an empty field, and the homework is never
+  restated in another field (the JSON schema says the same). In summary mode rule 7 adds that a "Next steps" line
+  in the summary is the summary's own suggestion, not homework the tutor set (owner decision, 30 Sep; the
+  transcript prompt is unchanged). New rule 11, *who did what*: in a summary the student is
+  always `[STUDENT_1]` and the tutor `[TUTOR]`, and any other name is someone else (another student, family, a
+  friend, a character in the lesson material); in a transcript only STUDENT lines are the student's, and anyone
+  clearly not the student is never `[STUDENT_1]` — hedged, because a Thai-script or mis-heard name of the student is
+  not redacted. The transcript's "covered, not mastered" and Thai-name rules are now 12 and 13.
+- **Other-people hint (summary mode).** `otherPeopleNamed` lists up to 8 capitalised words that come right before a
+  person verb ("said", "reported", "finished", "didn't", "was" …; contractions with either apostrophe), leaving
+  out common words, days and months (except right before a speech verb: "May said" — May, June and April are
+  nicknames too), the class details, the Soniox terms, the name words of the student's guest names, and the
+  student's own names: any name starting with their first name or nickname, or only that name itself when it has
+  two letters (a student "Ma" does not hide a "Marco"). Names seen before a speech or action verb come first, then
+  those only seen before a state verb ("was", "has": sentence-initial nouns like "Progress was steady" take those
+  too), and the cap applies after that ranking. When there are any, the writer and the judge both get "Other people
+  named in the summary (never [STUDENT_1]): …" before the summary. It is a hint, never a gate: a missed name or a
+  harmless extra (a character, a subject) changes nothing else.
+- **Redaction gaps closed.** Rule 11 says any other name in a summary is someone else, so the student's own names
+  must not survive redaction. An odd bracket code "(Tom Ja)" is replaced whole and its first word "Tom" too, where
+  written capitalised. A possessive guest name ("Nathan’s iPad") hides the bare "Nathan" and keeps possessives
+  natural (`[STUDENT_1]’s`). Family and place words in a guest name ("Mom's iPad", "Mae iPad", "Office PC") are
+  never taken for the student: the student joined on someone else's device, and the whole guest name is still
+  redacted as the student.
+- **Judge.** Reasoning `high` (was `medium`). It returns three lists — `unsupported` (claims
+  the record does not state or clearly imply), `misattributed` (something given to `[STUDENT_1]` that the record
+  says about the tutor or someone else) and `homeworkNotSet` (homework, tasks or due dates the tutor did not
+  clearly set; in summary mode a "Next steps" line is not homework the tutor set) — and `faithful` only when all
+  three are empty. The schema's list descriptions say "the lesson record", since both modes send them. A reply
+  missing a list is unparseable, so it fails closed (one more try, then the session retries later). Hold reasons and
+  the dashboard's "Judge flagged" line use `judgeProblems`: `wrong person: …` first, then `homework not set: …`, then
+  the unsupported quotes as they are — a hold reason keeps only its first three problems (300 characters) and an
+  alert shows 200 characters, so the two v4 kinds are never hidden behind unsupported claims. Judge call records
+  keep the three lists plus that flat `problems` list. Verdicts stored before v4 (`{ faithful, unsupported }`) still
+  show their unsupported quotes. The judge still gets no style guide or examples.
+- **Stored drafts.** A judged transcript draft is reused on a retry only when the current prompt and judge versions
+  wrote and passed it (`metadata.pipeline`, a complete v4 verdict). An older one — for example parked at deploy time
+  — is written and judged again from its kept Soniox job, and a shadow draft re-queued by going live restarts its
+  transcript's review window instead of keeping it.
+
+## Models
+
+Since 2026-09-30 (owner decision: "Switch the writer to Sol for everyone today"; migration 0100 adds the arm `sol`).
+All three go through OpenRouter with `zdr: true`, `data_collection: "deny"` and `require_parameters: true`, so neither
+a summary nor a transcript ever reaches a host that retains it ([`config.ts`](../../src/lib/feedback-autowriter/config.ts)).
+
+| Role | Model | Route | Reasoning | Route check |
+|---|---|---|---|---|
+| Writer (`sol`) | `openai/gpt-6.1-sol` | any zero-data-retention host (Azure today) | `low` | the answer must come from `openai/gpt-6.1-sol` |
+| Fallback writer (`luna`) | `openai/gpt-6-luna` | same | `max` | — |
+| Judge (`glm`) | `z-ai/glm-5.3-flash` | pinned to Together, no host fallback | `high` (v4; was `medium`) | host `Together` and that model |
+
+Why Sol: a blind comparison on 11 classes (the same Soniox transcripts for every writer, v4 rules) found 82% of
+Sol-low drafts needed no real fix (no critical errors, 0.9 real errors per 100 claims), against 64% for Luna and 30%
+for GLM (4.1 real errors per 100 claims). Sol also answered faster there: a median of ~6 s per draft against ~3
+minutes for GLM.
+
+From the 29 Sep pilot until the switch GLM (Together, reasoning `max`) was the writer, and Luna the fallback on a
+route without zero data retention; drafts written then keep the arm `glm` (or `luna`). The evaluation
+CLI (`--generate`) drafts every class with all three writers, GLM with its old writer settings (Together, reasoning
+`max`); the pilot's half/half A/B assignment (`ab.ts`) is still GLM/Luna.
 
 ## Second pass: writing from the recording (Soniox, migration 0098)
 
@@ -115,8 +193,10 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
    `transcribing` (`zoom_transcript_pending`, job kept, due again after 5 minutes, i.e. the next sweep) until 20
    minutes after the Soniox job was submitted, then goes ahead on talk share (worst case ~35 minutes after submit). The models are told the labels are reliable only when Zoom confirmed them, and are told they
    are inferred by default ([`transcript.ts`](../../src/lib/feedback-autowriter/transcript.ts));
-4. writes and judges from the `[mm:ss] TUTOR/STUDENT` transcript with **GLM on the zero-retention route only** — no
-   Luna fallback, because Thai-script names can slip past the Latin-name redaction. Extra rule: what the tutor
+4. writes (Sol, Luna fallback) and judges (GLM) from the `[mm:ss] TUTOR/STUDENT` transcript, exactly like the
+   summary path. Thai-script names can slip past the Latin-name redaction, so a transcript may only go to
+   **zero-data-retention routes** — which every model now is (until 30 Sep only GLM had one, so transcripts were
+   written by GLM alone, with no fallback). Extra rule: what the tutor
    explained is "covered", not "mastered", unless the student is shown doing it. A long transcript keeps its start
    and end (homework is usually set last). Any Thai text the model writes fails validation (English only; the
    student's own name, restored afterwards, may be Thai);
@@ -124,7 +204,8 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
 
 A webhook waits up to ~3 minutes for Soniox; the backstop only looks and comes back, so one slow job never starves
 the other classes. A transcript draft that was judged but whose POST did not go out (another POST in flight, or a
-pre-POST gate that says "try later") is reused on the retry. While Wise itself is not ready (attendance, status, the
+pre-POST gate that says "try later") is reused on the retry, as long as the current prompt and judge versions wrote
+it (v4, above). While Wise itself is not ready (attendance, status, the
 POST slot, a failed read once a draft exists) the class waits in `pending`, not `awaiting_recording`. Three Soniox failures (errors, a job running
 over an hour, or a run whose status checks never get an answer; within one run a failed check after a good answer
 does not count, and the backstop checks once per run), several recording parts, a recording too short for the
@@ -301,10 +382,13 @@ read from Wise if newer) with a word diff, the saves measured in Wise by actor, 
 verdict log. Owner-only Approve / Needs fix controls; other admins read. Before migration 0101 the tabs say the review
 tables are missing; any other load failure says so (and is logged by name and SQLSTATE).
 
-## Costs (measured in the 2026-09-29 pilot)
+## Costs
 
-GLM ≈ $0.0024 per class (writer) + ≈ $0.0008 (judge); Luna fallback ≈ $0.0012. ~200 online classes/month across
-the five tutors → under $1/month. Each call's tokens and billed cost are in `feedback_autowriter_calls`.
+Writer (Sol, reasoning `low`) ≈ $0.04 per draft (mean of the 30 Sep comparison's transcript drafts). The GLM judge
+cost ≈ $0.0008 per check (at reasoning `medium`; `high` since v4 is not re-measured yet) and a Luna fallback draft
+≈ $0.0012 in the 2026-09-29 pilot (summaries), when GLM also wrote for ≈ $0.0024. ~200 online classes/month across
+the five tutors → roughly $8–10/month, plus Soniox for the second pass (≈ $0.10 per audio hour). Each call's tokens
+and billed cost are in `feedback_autowriter_calls`.
 
 ## Side effects to know
 

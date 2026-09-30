@@ -3,6 +3,8 @@ import { eq, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
+import { JUDGE_PROMPT_VERSION } from "../judge";
+import { PROMPT_VERSION } from "../prompt";
 import {
   acquireSweepLease,
   claimGeneration,
@@ -371,14 +373,28 @@ describe("feedback autowriter store (Postgres)", () => {
     expect(row?.metadata).not.toHaveProperty("triagedAt");
     expect(row?.metadata).toMatchObject({ judge: { faithful: true } });
 
-    // A judged transcript draft is posted as it is: its window keeps running.
+    // A judged transcript draft of the current prompt and judge is posted as it is: its window keeps running.
+    const current = { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION };
+    const passing = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
     const next = (await claimGeneration(db, SESSION, 60_000))!;
     await releaseGeneration(db, SESSION, next, {
       state: "would_submit", reason: "shadow",
-      metadata: { sonioxRetainUntil: "2026-10-01T00:00:00.000Z", draftEvidence: "transcript", judge: { faithful: true } },
+      metadata: { sonioxRetainUntil: "2026-10-01T00:00:00.000Z", draftEvidence: "transcript", judge: passing, pipeline: current },
     });
     expect(await requeueShadowDrafts(db, new Date())).toBe(1);
     expect((await readSessionRow(db, SESSION))?.metadata).toMatchObject({ sonioxRetainUntil: "2026-10-01T00:00:00.000Z" });
+
+    // An older version's transcript draft, or one with no stamp at all, is written again (v4, 30 Sep): its window
+    // restarts like any other draft's.
+    for (const pipeline of [{ promptVersion: 3, judgeVersion: 3 }, { ...current, judgeVersion: 3 }, { ...current, promptVersion: 3 }, null]) {
+      const older = (await claimGeneration(db, SESSION, 60_000))!;
+      await releaseGeneration(db, SESSION, older, {
+        state: "would_submit", reason: "shadow",
+        metadata: { sonioxRetainUntil: "2026-10-01T00:00:00.000Z", draftEvidence: "transcript", judge: passing, pipeline },
+      });
+      expect(await requeueShadowDrafts(db, new Date())).toBe(1);
+      expect((await readSessionRow(db, SESSION))?.metadata, JSON.stringify(pipeline)).not.toHaveProperty("sonioxRetainUntil");
+    }
     await haltAutowriter(db, "noop");
   });
 
