@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ATTEMPT_AT_PATTERN,
   PROVEN_TUTOR_KEYS,
   ROSTER_SIGHTING_SLACK_MS,
   addDays,
@@ -379,6 +380,34 @@ describe("tutorWroteFirst", () => {
     // A save not mirrored yet cannot prove anything: a miss until it is.
     expect(tutorWroteFirst({ firstWriterCallAt: started, firstHumanSaveAt: null })).toBe(false);
     expect(tutorWroteFirst({ firstWriterCallAt: null, firstHumanSaveAt: null })).toBe(false);
+  });
+});
+
+describe("ATTEMPT_AT_PATTERN (the `attemptAt` of a call record that may be cast to a time)", () => {
+  const pattern = new RegExp(ATTEMPT_AT_PATTERN);
+
+  it("matches the time our records write (Date#toISOString) on every day of a year, leap or not", () => {
+    for (const year of [2000, 2024, 2026, 2099]) {
+      for (let day = Date.UTC(year, 0, 1); day < Date.UTC(year + 1, 0, 1); day += 86_400_000) {
+        const written = new Date(day + 45_296_789).toISOString();
+        if (!pattern.test(written)) throw new Error(`not matched: ${written}`);
+      }
+    }
+    expect(pattern.test("2026-09-30T00:00:00.000Z")).toBe(true);
+    expect(pattern.test("2026-09-30T23:59:59.999Z")).toBe(true);
+    expect(pattern.test("2028-02-29T12:40:00Z")).toBe(true);
+  });
+
+  it("matches nothing else: no other form, and no day or time that does not exist (the cast would fail)", () => {
+    const malformed = [
+      "", "not a time", "null", "12345", "{}", "2026-09-30", "2026-09-30 12:40:00+00", "2026-09-30T12:40:00.000+07:00",
+      "2026-09-30T12:40:00.000", " 2026-09-30T12:40:00.000Z", "2026-09-30T12:40:00.000Z ", "2026-09-30T12:40:00.000Z; select 1",
+      "2026-13-01T00:00:00.000Z", "2026-00-10T00:00:00.000Z", "2026-09-00T00:00:00.000Z", "2026-02-30T10:00:00.000Z",
+      "2026-04-31T10:00:00.000Z", "2026-09-31T10:00:00.000Z", "2027-02-29T10:00:00.000Z", "2026-09-30T24:00:00.000Z",
+      "2026-09-30T12:60:00.000Z", "2026-09-30T12:40:60.000Z", "1999-12-31T23:59:59.000Z", "0000-01-01T00:00:00.000Z",
+      "2100-02-29T00:00:00.000Z", "99999-01-01T00:00:00.000Z",
+    ];
+    for (const value of malformed) expect(pattern.test(value), JSON.stringify(value)).toBe(false);
   });
 });
 

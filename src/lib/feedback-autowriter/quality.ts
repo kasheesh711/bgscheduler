@@ -273,9 +273,22 @@ export function postingWindowEligibility(input: {
   return { onRoster, workable, tutorOffThroughout: liveOnRoster && !workable, tutorOffAtWindowEnd };
 }
 
+const ISO_DAY = String.raw`(?:20\d\d-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|02-(?:0[1-9]|1\d|2[0-8]))|20(?:[02468][048]|[13579][26])-02-29)`;
+const ISO_TIME = String.raw`(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,6})?`;
+/**
+ * A call record's `result.attemptAt` that can be read as a time: the form our own code writes (`Date#toISOString`,
+ * `2026-09-30T12:40:00.000Z`), and a real day and time of this century — so a value that matches always casts to a
+ * timestamp. The daily-metrics query casts `attemptAt` only when it matches (review-job.ts): a malformed value
+ * (edited by hand, or a later bug's) dates the call by its row instead of failing the whole query. Written to be a
+ * Postgres and a JavaScript regular expression alike.
+ */
+export const ATTEMPT_AT_PATTERN = `^${ISO_DAY}T${ISO_TIME}Z$`;
+
 /**
  * Whether the tutor (or any person) wrote the class before we started writing it — before our first writer call,
- * successful or not (waiting for the evidence is not a miss; a writer outage is). A person's save we have not seen
+ * successful or not (waiting for the evidence is not a miss; a writer outage is). `firstWriterCallAt` is when that
+ * call's request was sent: a rate-limited attempt records it (`result.attemptAt`), since its row is only written
+ * after the waits; any other call's row is dated when it ended (`created_at`). A person's save we have not seen
  * (activity not mirrored yet) proves nothing: the class counts as a miss until the event arrives (the metrics are
  * recomputed hourly).
  */

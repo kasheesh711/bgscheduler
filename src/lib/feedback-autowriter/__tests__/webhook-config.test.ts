@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AUTOWRITER_JUDGE_EFFORTS,
   AUTOWRITER_MODELS,
   AUTOWRITER_WRITER_BY_ARM,
   autowriterAlertEmails,
@@ -94,7 +95,10 @@ describe("config", () => {
   it("writes with Sol at reasoning low, falls back to Luna and judges with GLM — all with zero data retention", () => {
     expect(AUTOWRITER_MODELS.writer).toMatchObject({ arm: "sol", model: "openai/gpt-6.1-sol", effort: "low", expectModel: "openai/gpt-6.1-sol" });
     expect(AUTOWRITER_MODELS.fallbackWriter).toMatchObject({ arm: "luna", model: "openai/gpt-6-luna", effort: "max" });
-    expect(AUTOWRITER_MODELS.judge).toMatchObject({ arm: "glm", model: "z-ai/glm-5.3-flash", effort: "high", expectProvider: "Together" });
+    expect(AUTOWRITER_MODELS.judge).toMatchObject({ arm: "glm", model: "z-ai/glm-5.3-flash", expectProvider: "Together" });
+    // The judge has no effort of its own: it runs at every level in AUTOWRITER_JUDGE_EFFORTS.
+    expect(AUTOWRITER_MODELS.judge).not.toHaveProperty("effort");
+    expect(AUTOWRITER_JUDGE_EFFORTS).toEqual(["medium", "high"]);
     for (const config of Object.values(AUTOWRITER_MODELS)) {
       expect(config.provider).toMatchObject({ zdr: true, data_collection: "deny", require_parameters: true });
     }

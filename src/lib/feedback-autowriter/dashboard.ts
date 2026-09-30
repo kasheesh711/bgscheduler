@@ -341,7 +341,8 @@ export function buildAutowriterDashboard(input: {
   for (const row of posted) if (row.postStartedAt) day(bangkokDate(row.postStartedAt)).posted += 1;
 
   // Drafts the judge rejected. Since v5 two calls judge each draft (one per effort), so a draft counts once, by the
-  // writer generation its calls judged; an older call (no `judgedGeneration`) counts on its own.
+  // key its calls carry (`judgedGeneration`: the writer's generation id, or the pipeline's own key for a reply that
+  // had none); an older call (no `judgedGeneration`) counts on its own.
   const judgeRejections = new Set(calls.flatMap((call, index) => call.role === "judge" && call.result?.faithful === false
     ? [`${call.wiseSessionId}|${typeof call.result.judgedGeneration === "string" ? call.result.judgedGeneration : `call-${index}`}`]
     : [])).size;

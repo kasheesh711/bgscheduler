@@ -73,7 +73,9 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
    POST** (`posting` or `awaiting_event` — the latter can still turn into a halt, so it keeps the lock; the claim
    checks both and a partial unique index on `posting` settles simultaneous claims; a second session re-checks
    every 10 s for up to ~80 s, then leaves it to the next sweep), and at least 240 s of function time for the POST
-   phase. While an unsettled POST is older than 6 min (waiting for the sweep), nothing is drafted at all.
+   phase — checked before the three pre-POST reads (up to 45 s each; none is made for a POST that could not be
+   claimed) and again right before the claim. While an unsettled POST is older than 6 min (waiting for the sweep),
+   nothing is drafted at all.
    A shadow draft finished after the owner switched to `live` goes back to `pending` (atomically with the mode),
    so it is posted rather than stranded in `would_submit`.
 
@@ -84,7 +86,7 @@ noting that <another student> mentioned only 8 pages …"): redaction replaces o
 names, so that name was the only real one left, the writer took it for our student and added a homework line, and
 the judge (reasoning `medium`, ~100 reasoning tokens) passed it. Another summary ended "…had three remaining homework
 problems to complete" (a mis-hearing); the writer posted it as homework and repeated it under "Need more work on".
-Prompt and judge versions are now 4 ([`prompt.ts`](../../src/lib/feedback-autowriter/prompt.ts),
+Prompt and judge versions became 4 ([`prompt.ts`](../../src/lib/feedback-autowriter/prompt.ts),
 [`judge.ts`](../../src/lib/feedback-autowriter/judge.ts)):
 
 - **Writer rules.** Improvement is written as suggestions — never as homework the tutor set, never repeating the
@@ -142,9 +144,11 @@ are now 5.
   of both verdicts, each once, in the usual order (wrong person, homework not set, unsupported). Each level is the
   single judge of before: a failed call (time-out, outage, wrong route) retries the class in 10 minutes, and a reply
   it cannot use gets one more try at that level; the error names the level (`judge:high:timeout`,
-  `judge:medium:judge_unparseable`). Both calls are in `feedback_autowriter_calls` with `result.effort` and
-  `prompt_version = 5`, plus `result.judgedGeneration` (the writer reply they judged), so the dashboard counts a
-  rejected draft once.
+  `judge:medium:judge_unparseable`). Once one level has rejected the draft or stopped the run, the other makes no
+  second try and no further in-run retry ([below](#hardening-follow-ups-30-sep-night)). Both calls are in
+  `feedback_autowriter_calls` with `result.effort` and `prompt_version = 5`, plus `result.judgedGeneration` — the
+  draft they judged: the writer reply's generation id, or a key of the pipeline's own when the reply carries none —
+  so the dashboard counts a rejected draft once.
 - **Stored verdicts and reuse.** `metadata.judge` holds the union at its top level (what hold reasons and the
   dashboard read, so v3 and v4 verdicts still show as before) and each level's own verdict under `levels`. A kept
   transcript draft is reused only when it is stamped prompt 5 and judge 5 **and** its stored verdict shows both
@@ -159,10 +163,14 @@ are now 5.
   the first judge attempt always gets its full 240 s unless the reads before the writer took over 95 s, and every
   model call ends at least 105 s before Vercel would stop the function. Worst case for a transcript (writer 180 s,
   then both judges 240 s) about 140 s remain, under the 240 s the POST needs: the judged draft is kept and the next
-  run posts it without calling a model. A summary's worst case still posts in the same run (260 s left).
+  run posts it without calling a model. A summary's worst case posts in the same run with 20 s to spare (560 − 180 −
+  120 = 260 s left) — when no call was rate limited; with waits of more than those 20 s it does not
+  ([below](#rate-limits-tried-again-in-the-same-run-30-sep-evening)).
 - **`writer_failed` counts the writer only** ([transcript first](#transcript-first-switch-30-sep)). A judge failure
-  just retries every 10 minutes, as before; and because the writer delivered a draft on that attempt, its count
-  starts again. A rate limit never counts either — including the writer route's upstream rate limit, which OpenRouter
+  just retries every 10 minutes, as before, and a run that ends in one starts the writer's count again — as does a
+  run that stores a draft. The count is not reset merely because a writer delivered a draft: a run in which a judge
+  rejects Sol's draft and the Luna fallback then fails ends in a writer failure and counts (owner decision, 30 Sep
+  17:00). A rate limit never counts either — including the writer route's upstream rate limit, which OpenRouter
   reports inside a 200 response with the status (429) in the body ([`openrouter.ts`](../../src/lib/feedback-autowriter/openrouter.ts)
   reads it from there): in the 30 Sep replay that error was taken for the writer's own failure and sent a class back
   to the summary.
@@ -187,8 +195,11 @@ the class waited 10 minutes or more for its next run.
   generation error, and any other code given as text keeps the response's status.
 - **What happens.** The same request is sent again in the same run, up to three more times, after about 4 s, 10 s and
   25 s — each ±30% at random, so classes that end at the same time do not retry at the same time. When OpenRouter
-  says how long to wait (`Retry-After`, or the reset time of its own limit), that wait is used instead: never less,
-  and at most 30 s. One call's waits never add up to more than 45 s. Every model call of the pipeline goes through
+  says how long to wait (`Retry-After`, or the reset time of its own limit as listed with the error), we wait at
+  least that long and at least the schedule's wait, with the spread on top, up to 30 s. A wait it asks for is never
+  cut short: one longer than 30 s, or than what is left of the call's 45 s, means the call is not tried again in this
+  run — a retry before the time it named would only be rate limited again — and the rate limit stands. One call's
+  waits never add up to more than 45 s. Every model call of the pipeline goes through
   this (`callWithRateLimitRetries`) — the writer, the fallback writer and each judge level — and so does the replay,
   including its judging of posted drafts. Nothing else is tried again this way: a time-out, a provider error, a reply
   that is not JSON or an answer from another model are handled at once, as before.
@@ -196,18 +207,115 @@ the class waited 10 minutes or more for its next run.
   minus 45 s — the rule every model call starts under. Otherwise the rate limit stands at once and the class retries
   later, as before. So a judge is still never started without its full time-out, and every model call still ends at
   least 105 s before Vercel would stop the function. The waiting comes out of what is left for the POST; the POST is
-  still claimed only with its 240 s, and a run that no longer has them keeps the judged transcript draft for the
-  next run, as before. Worst case: 45 s more for one call; in a run, each step — the writer, the two judge levels
-  (they wait at the same time), and for a rejected draft the fallback writer and its judges — can add up to that.
-  A sweep runs its classes one after another, so one class's waits are time the classes after it do not get in that
-  sweep (it starts a class only while 560 s remain); a webhook run is one class on its own.
+  still started only with its 240 s, and a run that no longer has them keeps the judged draft: the next run posts a
+  transcript draft as stored, without a model call, and writes a summary again. Worst case: 45 s more for one call;
+  in a run, each step — the writer, the two judge levels (they wait at the same time), and for a rejected draft the
+  fallback writer and its judges — can add up to that. So once the waits add up to more than 20 s (one call that
+  used all three retries waits 27–45 s), a summary's worst case no longer posts in the same run either: 215 s are
+  left after one such call, 170 s after two.
+  A sweep runs its classes one after another and starts a class only while 560 s remain, so one class's waits are
+  time the classes after it do not get. Once a class of a sweep ends still rate limited at a stage (the writers'
+  route, or the judge's), the classes after it make no in-run retries at that stage in that sweep, and the rows
+  close to their deadline and those that call no model are started first
+  ([below](#hardening-follow-ups-30-sep-night)). A webhook run is one class on its own and always keeps its retries.
 - **What it still means.** Unchanged: a rate limit is never the writer's failure (it does not count toward
   `writer_failed`) and never a reason for the fallback writer. A call still rate limited after its retries ends the
   run with the same `infra:…` reason as before, and the class retries in 10 minutes.
 - **Call records.** Every attempt is a row in `feedback_autowriter_calls`: a rate-limited one has `ok = false`, its
   error and no cost, and each attempt after the first carries `result.rateLimitRetry` (1, 2 or 3), so retries can
   be counted ([runbook](../operations/feedback-autowriter.md#8-writer-model-gpt-61-sol-since-2026-09-30)). The rows
-  of a call's rate-limited attempts are written when the call ends, a few seconds after they happened.
+  of a call are written when the call ends, after the waits, so each rate-limited attempt says itself when its
+  request was sent (`result.attemptAt`), the wait OpenRouter asked for when it named one (`retryAfterMs`) and the
+  wait that followed (`waitedMs`). Coverage reads "when we started writing" from `attemptAt` before `created_at`, so
+  a tutor's save during the waits is not taken for "the tutor wrote first". The query casts `attemptAt` only when it
+  is a time in the form we write (`ATTEMPT_AT_PATTERN` in `quality.ts`): a malformed value dates the call by its row
+  instead of failing the day's metrics.
+
+### Hardening follow-ups (30 Sep, night)
+
+The non-blocking findings of the two reviews of the day (judge v5, the in-run retries), closed before transcript
+first is switched on. No prompt changed: writer and judge versions stay 5.
+
+- **A sweep under a lasting rate limit** (`runSweep` in [`job.ts`](../../src/lib/feedback-autowriter/job.ts)). A
+  sweep starts a class only in its first 180 s, so waits spent on a limit that does not clear would keep its other
+  classes out. Two rules:
+  - *Order* (`sweepOrder`). Three groups, in this order:
+    1. **The rows close to their deadline**, whatever they need: the feedback deadline (`deadline_at`) is no more
+       than 3 hours away (`AUTOWRITER_SWEEP_NEAR_DEADLINE_MS`), soonest deadline first. The sweep expires a class 30
+       minutes before its deadline, so these are the classes with at most 2.5 hours of tries left.
+    2. **The rows that call no model**: a stored judged transcript draft to post, a class waiting for its recording
+       or about to submit it to Soniox (no job yet).
+    3. **The rows that may need the writer**: a summary to write, a transcript whose Soniox job exists — ready, or
+       still running at the last look — a draft whose model call failed. A job that was still running may have
+       finished since; its row then calls the writer and both judges in the same run, so it is not in group 2
+       (review fix, 30 Sep night: there it could fill the start window ahead of rows near their deadline).
+
+    Within groups 2 and 3 the most urgent deadline comes first, and a row whose last attempt ended in a model or
+    service failure (reason `infra:…`) comes after every row that has not failed — so one class that keeps failing
+    never takes the front of its group. Rows of group 1 with the same deadline keep that order too, the rows that
+    call no model first; every class's deadline is 23:59 Bangkok, so tonight's classes all share one. The order is
+    read from the row (its deadline, evidence, stored draft and Soniox job); what a row needs is a guess about its
+    next step, not a promise. It decides what is started, not how long each takes: the time the rows in front use
+    is time the rows behind them do not get, so a rate limit or a slow call in group 1 can still delay groups 2 and 3.
+  - *Retries.* Once a class ends still rate limited (its call gave up on the limit — after its retries, or at
+    once when the wait did not fit), the classes after it in that sweep make no in-run retries **at that stage**: a
+    rate limit there is returned at once, as before the retries existed, and the class retries in 10 minutes. There
+    is one switch per stage (review fix, 30 Sep night): the writers (Sol and the Luna fallback) and the judge are on
+    different routes with limits of their own, so a limit on the writers' route leaves the judge's retries on, and
+    the other way round. The next sweep starts with retries on again. A webhook run is one class per function and
+    always keeps its retries.
+- **A judge that keeps failing on a class.** Judge failures never count toward `writer_failed`; the class retries
+  every 10 minutes until its deadline, and an infra retry raises no `no_recording` alert — so it could fail unseen
+  until it expired. Runs in a row that end at the judge stage, with no answer of the judge in between, are now
+  counted, on the summary path and the transcript path alike, in two counts with a mark each (review fix, 30 Sep
+  night):
+  - `metadata.judgeErrors` — **the judge's own failures**: a level timing out, giving no verdict in two tries,
+    answering from the wrong route or model, a provider error. **The third** alerts
+    (`AUTOWRITER_JUDGE_ERRORS_ALERT`).
+  - `metadata.judgeUnreached` — **the runs in which the judge could not be asked**: its route rate limited (after
+    the in-run retries), no time left in our own function to start it, or our OpenRouter account or connection
+    refusing the call (no credit, a bad key, the network); `metadata.judgeUnreachedCause` keeps which it was the
+    last time (`rate_limited`, `out_of_time`, `account_or_connection`). They are not the judge's failures and
+    usually pass on their own — a rate limit hits every class at once — so alone they alert only when **both
+    counts together reach six** (`AUTOWRITER_JUDGE_STAGE_ERRORS_ALERT`).
+
+  Either mark raises one **`judge_failing`** alert in the digest. Its text says how many runs and why, and blames
+  the judge model only for its own failures: "not a failure of the judge model: OpenRouter rate limited the judge's
+  route", "… our own function ran out of time before the judge could start", or for a mix "failures of the judge
+  model: 2; not its failure: 4 — the last time, …". The row's reason follows in
+  brackets (e.g. `infra:judge:high:timeout`). The class retries exactly as before.
+  The alert is sent once per run of failures. Both counts go back to zero when the judge answers: a run that ends
+  with a judged draft (posted or kept for the next run), and also a run in which the judges gave their verdict on
+  Sol's draft and the run then failed another way — the Luna fallback failed, or its judge did (the pipeline result
+  says `judgeAnswered`). So "in a row" never spans an answer. A later run of failures that reaches a mark alerts
+  again: `metadata.judgeFailingSince` records when it did, and the digest's relay key carries it for this kind, so
+  the relay does not take the second alert on a class for a repeat of the first (the keys of the other kinds are
+  unchanged). An alert raised outside `live` is recorded, not emailed (`alerts_sent.judge_failing` =
+  `suppressed:<mode>`); if the class is still failing once the autowriter is live, its next failure arms the alert
+  again and it is emailed. An alert not yet sent is dropped when the judge answers or the class settles (posted,
+  held, written by the tutor, expired). A failure of the writer with no verdict in the run says nothing about the
+  judge and leaves the counts where they were; an owner `--retry` clears them.
+- **A wait OpenRouter asks for** ([`openrouter.ts`](../../src/lib/feedback-autowriter/openrouter.ts)): kept as
+  described [above](#rate-limits-tried-again-in-the-same-run-30-sep-evening) — never a retry before it, never a
+  wait shorter than the schedule's (a `Retry-After` of a second would otherwise spend all three retries at once).
+  `Retry-After` is also read on an HTTP 429 whose body is not JSON; a `Retry-After` header that names no time ahead
+  (empty, `0`, a past date) does not hide the one listed with the error; a header sent more than once (it reaches us
+  as one list, `60, 120`) asks for the longest of its waits; and `X-RateLimit-Reset` is read only from
+  the error's own header list (`error.metadata.headers`), since a response header of that name may describe another
+  limit.
+- **The POST budget comes before the pre-POST reads** ([`submit.ts`](../../src/lib/feedback-autowriter/submit.ts)).
+  With less than 240 s of function time left, none of the three reads (up to 45 s each) is made: the judged draft is
+  kept (`function_budget_too_small_for_post`, due again in 10 minutes) and the next run posts a transcript draft as
+  stored. The check before the claim stays, for reads that were slow.
+- **A judge level that can no longer change the outcome leaves off** (`pipeline.ts`). Once one level has returned
+  an unfaithful verdict or stopped the run, the other makes no second try after an unusable reply and no further
+  in-run retry of a rate limit. What it holds then is not a failure of its own: if the other level rejected the
+  draft, the draft is rejected on that verdict and the fallback writer goes on; if the other level stopped, that
+  stop is the outcome. The level is asked before each wait and again after it, so a retry is not sent either when
+  the other level decided while this one was waiting (its record then keeps the wait it made, `waitedMs`). A call
+  already in flight is not cut off, and a call that fails on its own after the other
+  level's verdict (a time-out) is still a judge failure, as before. A draft still passes only on a complete verdict
+  from both levels.
 
 ## Models
 
@@ -289,9 +397,9 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
 5. posts through the same guarded path (gates without the summary requirement).
 
 A webhook waits up to ~3 minutes for Soniox; the backstop only looks and comes back, so one slow job never starves
-the other classes. A transcript draft that was judged but whose POST did not go out (another POST in flight, or a
-pre-POST gate that says "try later") is reused on the retry, as long as the current prompt and judge versions wrote
-it and both judge levels passed it (v4 and v5, above). While Wise itself is not ready (attendance, status, the
+the other classes. A transcript draft that was judged but whose POST did not go out (another POST in flight, a
+pre-POST gate that says "try later", or too little function time left for the POST) is reused on the retry, as long
+as the current prompt and judge versions wrote it and both judge levels passed it (v4 and v5, above). While Wise itself is not ready (attendance, status, the
 POST slot, a failed read once a draft exists) the class waits in `pending`, not `awaiting_recording`. Three Soniox failures (errors, a job running
 over an hour, or a run whose status checks never get an answer; within one run a failed check after a good answer
 does not count, and the backstop checks once per run), several recording parts, a recording too short for the
@@ -328,12 +436,15 @@ pass is on. Off (the default), nothing changes.
   `RecordingCompletedEvent` webhook continues it, as for any second-pass class.
 - **Fallback to the summary** (`fallBackToSummary`, once): no recording **3 h after the scheduled end**, a recording
   in several parts, speakers it cannot tell apart, three Soniox failures, the transcript pass switched off while
-  the class waited, or the writer failing on the transcript draft three times in a row (`writer_failed`: the writer
-  timing out, answering with something that is not JSON or from the wrong route, or a provider error — counted in
-  `metadata.writerErrors`, the last one in `writerFailure`, and reset whenever the writer delivers a draft; owner
-  decisions, 30 Sep). Not counted, and retried every 10 minutes as before: a judge failure (the writer delivered, so
-  the count starts again), Wise and Soniox errors, the function's own time, and our OpenRouter account or connection
-  (a bad key, no credit, rate limited, the network). The row goes back to `pending` with `evidence = summary`, due at once, reason
+  the class waited, or three runs in a row that end in a failure of the writer on the transcript draft
+  (`writer_failed`: a writer timing out, answering with something that is not JSON or from the wrong route, or a
+  provider error — counted in `metadata.writerErrors`, the last one in `writerFailure`; owner decisions, 30 Sep). The
+  count starts again when a run ends in a judge failure or with a stored draft — not whenever a writer delivers one:
+  a run in which a judge rejects Sol's draft and the Luna fallback then fails ends in a writer failure and counts
+  (owner decision, 30 Sep 17:00). Not counted, and retried every 10 minutes as before: a judge failure (a run of
+  them on a class raises one `judge_failing` alert, [above](#hardening-follow-ups-30-sep-night)), Wise and Soniox
+  errors, the function's own time, and our OpenRouter account or connection (a bad key, no credit, rate limited, the
+  network). The row goes back to `pending` with `evidence = summary`, due at once, reason
   `summary_fallback:<cause>` and `metadata.summaryFallback {cause, at}` (the run reports `summary_fallback`), and the
   summary path writes it as before. A transcript draft kept on the row (only possible for a recording that gained a
   second part, or the pass switched off) is dropped with its verdict and stamp. Measured before choosing 3 h (first `RecordingCompletedEvent` − scheduled end,
@@ -373,6 +484,8 @@ pass is on. Off (the default), nothing changes.
 
 ## Robustness and traceability
 - A timeout while reading a model or Soniox reply is an ordinary timeout (retried later), never an unhandled error.
+- A model reply that is JSON but no object (`null`, a bare string) is an `invalid_json_response`, like one that is
+  not JSON at all — a model failure that is retried, never an unexpected error.
 - Any unexpected error is retried, but the third one on the same class holds it for a person with an alert
   (`metadata.genericErrors`), instead of retrying until the deadline.
 - Every draft and POST claim carries `metadata.pipeline`: the commit (`VERCEL_GIT_COMMIT_SHA` on Vercel;
@@ -411,8 +524,8 @@ resumes. Halt reasons accumulate (`first | then: second`), so a manual pause nev
 The same dispositions apply when a gate fails on the fresh read just before the POST.
 
 Alerts go out as one digest per sweep to `FEEDBACK_AUTOWRITER_ALERT_EMAILS` through the Apps Script relay. Outside
-`live` mode, draft alerts (`held`, `expired`, `no_summary`) are recorded on the row and the dashboard but not
-emailed (`alerts_sent` = `suppressed:<mode>`) — tutors still write their own then. Alerts about an actual Wise write
+`live` mode, draft alerts (`held`, `expired`, `no_summary`, `no_recording`, `judge_failing`) are recorded on the row
+and the dashboard but not emailed (`alerts_sent` = `suppressed:<mode>`) — tutors still write their own then. Alerts about an actual Wise write
 (`rejected`, `unknown_outcome`, `verify_failed`) are emailed in every mode. Mode `off` still reconciles posted rows.
 Preview deployments never touch autowriter state.
 
@@ -629,3 +742,33 @@ are in `feedback_autowriter_calls`.
   writing tutor feedback for roster tutors' online classes.
 - Wise's `allowTeacherFeedbackUpdate=false`: once filled, tutors can't edit in Wise; admins can.
 - Progress Tests ignores versions not authored by the session teacher, so autowritten feedback is not used as its AI context.
+
+
+## Mimi format and voice guide (prepared; activation awaits owner review)
+
+`style.ts` selects the frozen `mimi` v1 guide by canonical tutor key, covering both Wise accounts, only when
+`FEEDBACK_AUTOWRITER_MIMI_STYLE_ENABLED` is exactly `true`. It defaults to disabled. Other tutors use the existing
+shared prompt. The four-field Wise interface, billing, eligibility, English and nickname rules are unchanged.
+
+Mimi's topics, improvement and assigned homework are numbered lists; performance is warm, specific prose, usually
+one or two paragraphs (at most three). Topics may have `Atom learning` or `Worksheets` labels only when the current
+lesson record supports them. Plain hyphen sub-items are permitted beneath numbered topics and improvement items.
+The guide drops the writer's 120-character per-field target and forced two or three improvement strategies. The
+300-character combined policy and all other validators remain; only `short_required_field`, an autowriter
+presentation heuristic, is replaced by guide structure checks. The Class Feedback collector and finance policy
+are unchanged; their advisory short-field flags can still appear.
+
+Three anonymised pre-rollout examples are frozen in `style-examples/mimi-v1.json`, with verification notes and
+anonymous content hashes. Detailed source version/hash and non-auto Wise event/actor references are retained in
+the private replay receipt, because the repository is public. Those events are by Mimi's roster accounts. Wise does not bind
+an event to a content version, so the evidence is explicitly session-level. Historical content guides presentation
+only, never lesson facts. Both writers get the same examples and guide; neither factual judge receives them.
+Numbering, list/prose structure, labels and prohibited formatting are checked locally. Format failure tries the
+fallback writer, then holds for human feedback (no summary-to-transcript escape for a format failure). Existing
+copy detection, invented-score/homework checks and both factual judges still apply.
+
+Drafts and writer call records carry guide id/version. Transcript reuse and shadow requeueing require the current
+guide; disabling or changing it invalidates guided drafts. A check before storing/posting also prevents a draft
+from crossing a guide switch. No database migration is required; stamps use existing JSON metadata.
+
+See the [activation and replay procedure](../operations/feedback-autowriter.md#mimi-style-guide-review-and-activation).

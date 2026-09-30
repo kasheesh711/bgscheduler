@@ -7,6 +7,7 @@ import { UNMATCHED_API_CRITICAL_FROM, ingestFixEvents, type FixActorKind, type F
 import { landedProblemCategory, normalizeFields, postMayHaveLanded, postedBilling, problemCodes, proveFirstShot, type FirstShotProof } from "./first-shot";
 import { countUndeliveredCritical, drainIncidentOutbox, recordIncident, type DrainResult, type IncidentPushChannels } from "./incidents";
 import {
+  ATTEMPT_AT_PATTERN,
   GATE_THRESHOLDS,
   PROVEN_TUTOR_KEYS,
   SAMPLING_POLICY,
@@ -548,7 +549,7 @@ export interface DailyMetricOverrides {
  * switched off), and so is one held for its own data (D-03); a class still unsettled once its window is over is a miss
  * (the sweep may not have expired it yet); an unseen roster class is a miss only when proven online one-to-one and its
  * account was on the roster during the window. `skipped_human` is "the tutor wrote first" only when a person's save is
- * recorded before our first writer call.
+ * recorded before our first writer call — before its request was sent, as the call records have it.
  */
 export async function computeDailyMetrics(db: Database, input: {
   dates: readonly string[];
@@ -595,7 +596,15 @@ export async function computeDailyMetrics(db: Database, input: {
     overrides.reviews ?? loadDailyReviewRows(db, dates[0], dates.at(-1)!),
     overrides.history ?? loadControlHistory(db),
     // Our first writer call, successful or not: from then on a person's save is a miss (late), not "wrote first".
-    db.select({ wiseSessionId: CALLS.wiseSessionId, at: sql<Date>`min(${CALLS.createdAt})` }).from(CALLS).where(and(
+    // A rate-limited attempt's row is written only when its call ends, after the waits, so it says itself when its
+    // request was sent (`result.attemptAt`): that time comes before `created_at`, or a save during the waits would
+    // pass for "the tutor wrote first". Cast only when it is a time (`ATTEMPT_AT_PATTERN`): a malformed value must
+    // not fail the day's metrics, so its row is dated by `created_at` like any other.
+    db.select({
+      wiseSessionId: CALLS.wiseSessionId,
+      at: sql<Date>`min(coalesce(case when ${CALLS.result} ->> 'attemptAt' ~ ${ATTEMPT_AT_PATTERN}
+        then (${CALLS.result} ->> 'attemptAt')::timestamptz end, ${CALLS.createdAt}))`,
+    }).from(CALLS).where(and(
       eq(CALLS.role, "writer"), sql`${CALLS.wiseSessionId} in ${skippedHumanInRange}`,
     )).groupBy(CALLS.wiseSessionId),
     overrides.firstPersonSave ?? loadFirstPersonSaves(db, skippedHumanInRange),

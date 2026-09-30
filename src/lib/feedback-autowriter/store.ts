@@ -1,9 +1,12 @@
+import { activeStyleGuide, styleGuideStamp } from "./style";
+import { rosterAccountIds } from "./roster";
 import { randomUUID } from "node:crypto";
 import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
 import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
+import { AUTOWRITER_JUDGE_ERRORS_ALERT, AUTOWRITER_JUDGE_STAGE_ERRORS_ALERT } from "./config";
 import { JUDGE_PROMPT_VERSION } from "./judge";
 import type { CallRecord } from "./pipeline";
 import { PROMPT_VERSION } from "./prompt";
@@ -16,7 +19,15 @@ const S = schema.feedbackAutowriterSessions;
 export type AutowriterControl = typeof C.$inferSelect;
 export type AutowriterSessionRow = typeof S.$inferSelect;
 export type AutowriterState = AutowriterSessionRow["state"];
-export type AlertKind = "held" | "expired" | "no_summary" | "no_recording" | "unknown_outcome" | "verify_failed" | "rejected";
+export type AlertKind =
+  | "held" | "expired" | "no_summary" | "no_recording" | "judge_failing" | "unknown_outcome" | "verify_failed" | "rejected";
+/**
+ * Why a run ended at the judge stage when the judge itself did not fail (`metadata.judgeUnreachedCause`): its route
+ * was rate limited, our function had no time left to start it, or our OpenRouter account or connection refused the
+ * call (no credit, a bad key, the network).
+ */
+export const JUDGE_UNREACHED_CAUSES = ["rate_limited", "out_of_time", "account_or_connection"] as const;
+export type JudgeUnreachedCause = (typeof JUDGE_UNREACHED_CAUSES)[number];
 
 /** States a session never leaves automatically once reached (except via an owner action). */
 export const TERMINAL_STATES: readonly AutowriterState[] = [
@@ -154,6 +165,8 @@ export async function releaseGeneration(db: Database, wiseSessionId: string, tok
   fieldsSha256?: string | null;
   billing?: BillingPlan | null;
   alertKind?: AlertKind | null;
+  /** With `alertKind`: forget that this kind was sent for the class before, so it is sent again (a new episode). */
+  rearmAlert?: boolean;
   metadata?: Record<string, unknown>;
   evidence?: "summary" | "transcript";
   sonioxTranscriptionId?: string | null;
@@ -171,6 +184,7 @@ export async function releaseGeneration(db: Database, wiseSessionId: string, tok
     ...(to.fieldsSha256 !== undefined ? { fieldsSha256: to.fieldsSha256 } : {}),
     ...(to.billing !== undefined ? { billing: to.billing as Record<string, unknown> | null } : {}),
     metadata: sql`${S.metadata} || ${JSON.stringify({ ...(to.metadata ?? {}), ...(to.alertKind ? { alertKind: to.alertKind } : {}) })}::jsonb`,
+    ...(to.alertKind && to.rearmAlert ? { alertsSent: sql`${S.alertsSent} - ${to.alertKind}::text` } : {}),
     leaseToken: null,
     leaseUntil: null,
     updatedAt: nowSql,
@@ -342,12 +356,15 @@ export async function listRowsInState(db: Database, states: readonly AutowriterS
  * Rows the sweep should work on, most urgent deadline first: due waiting rows
  * (`pending`, `awaiting_recording`, `transcribing`), and `generating` rows whose
  * worker died (expired lease) — those are taken over by `claimGeneration`.
+ * A row whose last attempt ended in a model or service failure (reason
+ * `infra:…`) comes after every row that has not failed, so a class that keeps
+ * failing cannot take the front of every sweep.
  */
 export async function listDueRows(db: Database): Promise<AutowriterSessionRow[]> {
   return db.select().from(S).where(or(
     and(inArray(S.state, [...WAITING_STATES]), or(isNull(S.nextAttemptAt), lte(S.nextAttemptAt, nowSql))),
     and(eq(S.state, "generating"), lte(S.leaseUntil, nowSql)),
-  )).orderBy(sql`${S.deadlineAt} asc nulls last`);
+  )).orderBy(sql`(coalesce(${S.reason}, '') like 'infra:%') asc`, sql`${S.deadlineAt} asc nulls last`);
 }
 
 /**
@@ -517,6 +534,10 @@ export async function requeueShadowDrafts(db: Database, minDeadline: Date): Prom
   // back to the summary (it never reads its transcript again). Any other draft may transcribe again (an older
   // version's, or one judged at a single level, is written and judged again: `reusableTranscriptDraft` in job.ts),
   // so its window starts again when it is next done. The levels are `AUTOWRITER_JUDGE_EFFORTS` (judge.ts schema).
+  const guide = activeStyleGuide("Mimi");
+  const matchingStyle = sql`case when ${Boolean(guide)} and ${inArray(S.wiseTeacherUserId, rosterAccountIds("Mimi"))}
+    then ${S.metadata} -> 'pipeline' -> 'styleGuide' = ${JSON.stringify(styleGuideStamp(guide))}::jsonb
+    else coalesce(${S.metadata} -> 'pipeline' -> 'styleGuide', 'null'::jsonb) = 'null'::jsonb end`;
   const rows = await db.update(S).set({
     state: "pending",
     nextAttemptAt: null,
@@ -524,7 +545,8 @@ export async function requeueShadowDrafts(db: Database, minDeadline: Date): Prom
         and ${S.metadata} -> 'judge' -> 'levels' -> 'medium' ->> 'faithful' = 'true'
         and ${S.metadata} -> 'judge' -> 'levels' -> 'high' ->> 'faithful' = 'true'
         and ${S.metadata} -> 'pipeline' ->> 'promptVersion' = ${String(PROMPT_VERSION)}
-        and ${S.metadata} -> 'pipeline' ->> 'judgeVersion' = ${String(JUDGE_PROMPT_VERSION)}) or ${S.metadata} ? 'summaryFallback'
+        and ${S.metadata} -> 'pipeline' ->> 'judgeVersion' = ${String(JUDGE_PROMPT_VERSION)}
+        and ${matchingStyle}) or ${S.metadata} ? 'summaryFallback'
       then ${S.metadata} - 'triagedAt' else ${S.metadata} - 'sonioxRetainUntil' - 'triagedAt' end`,
     updatedAt: nowSql,
   })
@@ -555,7 +577,8 @@ export async function retryHeldSession(db: Database, wiseSessionId: string, inpu
     // A clean slate: no stale alert, error count, coverage recheck, judged draft (nor its stamp), review window or
     // handover — a transcript-first fallback included, so the class may go to the transcript again (a kept Soniox
     // job, and its submit time, may be re-used).
-    metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'genericErrors' - 'writerErrors' - 'recordingShortSeenAt' - 'judge'
+    metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'genericErrors' - 'writerErrors' - 'judgeErrors' - 'judgeUnreached'
+      - 'judgeUnreachedCause' - 'judgeFailingSince' - 'recordingShortSeenAt' - 'judge'
       - 'draftEvidence' - 'pipeline' - 'transcript' - 'handover' - 'summaryAtHandover' - 'summaryFallback' - 'sonioxFailure'
       - 'writerFailure' - 'sonioxRetainUntil' - 'triagedAt')
       || ${JSON.stringify({ retriedBy: input.actor })}::jsonb
@@ -644,10 +667,29 @@ export interface PendingAlert {
   state: AutowriterState;
   reason: string | null;
   deadlineAt: Date | null;
+  /**
+   * `judge_failing` only — its run of failures: the judge's own (`errors`), the runs in which the judge could not be
+   * asked (`unreached`) and what kept it from being asked the last time, and when the run reached its mark (`since`:
+   * one alert per such time, the alert's episode).
+   */
+  judge?: { errors: number; unreached: number; unreachedCause: JudgeUnreachedCause | null; since: string | null };
 }
 
-/** Rows asking for an alert kind they have not been alerted for yet. */
+/** A count of judge-stage failures in a row kept in `metadata`: a JSON number, anything else counts as none. */
+function judgeCountSql(key: "judgeErrors" | "judgeUnreached") {
+  const name = sql.raw(`'${key}'`);
+  return sql<string>`case when jsonb_typeof(${S.metadata} -> ${name}) = 'number' then (${S.metadata} ->> ${name})::numeric else 0 end`;
+}
+
+/**
+ * Rows asking for an alert kind they have not been alerted for yet. A `judge_failing` alert is only about a class
+ * still retrying with its draft unchecked: once the judge has answered (`metadata.judgeErrors` and
+ * `metadata.judgeUnreached` are back under their marks: the judge's own failures, or all judge-stage failures together)
+ * or the class has settled, it is not listed any more.
+ */
 export async function listPendingAlerts(db: Database): Promise<PendingAlert[]> {
+  const errors = judgeCountSql("judgeErrors");
+  const unreached = judgeCountSql("judgeUnreached");
   const rows = await db.select({
     id: S.id,
     wiseSessionId: S.wiseSessionId,
@@ -657,11 +699,35 @@ export async function listPendingAlerts(db: Database): Promise<PendingAlert[]> {
     state: S.state,
     reason: S.reason,
     deadlineAt: S.deadlineAt,
+    judgeErrors: errors,
+    judgeUnreached: unreached,
+    judgeUnreachedCause: sql<string | null>`${S.metadata} ->> 'judgeUnreachedCause'`,
+    judgeFailingSince: sql<string | null>`${S.metadata} ->> 'judgeFailingSince'`,
   }).from(S).where(and(
     sql`${S.metadata} ? 'alertKind'`,
     sql`not (${S.alertsSent} ? (${S.metadata} ->> 'alertKind'))`,
+    or(
+      sql`${S.metadata} ->> 'alertKind' <> 'judge_failing'`,
+      and(
+        inArray(S.state, [...WAITING_STATES, "generating"]),
+        sql`(${errors} >= ${AUTOWRITER_JUDGE_ERRORS_ALERT} or ${errors} + ${unreached} >= ${AUTOWRITER_JUDGE_STAGE_ERRORS_ALERT})`,
+      ),
+    ),
   ));
-  return rows.map((row) => ({ ...row, kind: row.kind as AlertKind }));
+  // Postgres returns a numeric as text.
+  const count = (value: string) => Number.isFinite(Number(value)) ? Number(value) : 0;
+  return rows.map(({ judgeErrors, judgeUnreached, judgeUnreachedCause, judgeFailingSince, ...row }) => ({
+    ...row,
+    kind: row.kind as AlertKind,
+    ...(row.kind === "judge_failing" ? {
+      judge: {
+        errors: count(judgeErrors),
+        unreached: count(judgeUnreached),
+        unreachedCause: JUDGE_UNREACHED_CAUSES.find((cause) => cause === judgeUnreachedCause) ?? null,
+        since: judgeFailingSince,
+      },
+    } : {}),
+  }));
 }
 
 /**
