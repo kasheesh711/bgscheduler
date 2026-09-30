@@ -5,7 +5,9 @@
  * Every human (non-auto) `SessionFeedbackSubmittedEvent` link in production
  * carries `auto_submitted = NULL`, so the pre-fix SQL (`<> true` / `= false`)
  * derived nothing and every written line stored a NULL submission time. The
- * derivation below is byte-identical to the corrected subquery in
+ * Written rows are now immutable audit evidence and are excluded. New unwritten
+ * version-2 lines use the shared staff timestamp query. The former
+ * derivation was byte-identical to the corrected subquery in
  * `payout-repository.ts` (`IS DISTINCT FROM true`, no actor-role gate per
  * D-EVT-04), so backfilled values can never register as payload drift.
  *
@@ -21,10 +23,11 @@
 
 import path from "node:path";
 
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { loadPayoutSubmissionTimes } from "@/lib/post-class-feedback/payout-repository";
 import { lockPostClassFinance } from "@/lib/post-class-feedback/finance-lock";
 import { withPostClassTransaction } from "@/lib/post-class-feedback/transaction";
 
@@ -59,32 +62,14 @@ async function planBackfill(db: Database): Promise<BackfillPlan> {
     wiseSessionId: schema.postClassPayoutRunLines.wiseSessionId,
     tutorName: schema.postClassPayoutRunLines.tutorName,
   }).from(schema.postClassPayoutRunLines)
-    .where(isNull(schema.postClassPayoutRunLines.tutorSubmittedAt))
+    .where(and(isNull(schema.postClassPayoutRunLines.tutorSubmittedAt), ne(schema.postClassPayoutRunLines.writeStatus, "written"), eq(schema.postClassPayoutRunLines.submissionEvidenceVersion, 2)))
     .orderBy(schema.postClassPayoutRunLines.createdAt);
   if (lines.length === 0) return { updates: [], skipped: [] };
 
   const sessionIds = [...new Set(lines.map((line) => line.sessionId))];
-  const derived = await db.select({
-    sessionId: schema.postClassFeedbackEventLinks.sessionId,
-    submittedAt: sql<string | null>`min(${schema.postClassFeedbackEventLinks.eventTimestamp})`,
-  }).from(schema.postClassFeedbackEventLinks)
-    .innerJoin(
-      schema.wiseActivityEvents,
-      eq(
-        schema.postClassFeedbackEventLinks.wiseActivityEventId,
-        schema.wiseActivityEvents.id,
-      ),
-    )
-    .where(and(
-      inArray(schema.postClassFeedbackEventLinks.sessionId, sessionIds),
-      sql`${schema.postClassFeedbackEventLinks.autoSubmitted} IS DISTINCT FROM true`,
-    ))
-    .groupBy(schema.postClassFeedbackEventLinks.sessionId);
-  const derivedBySession = new Map(
-    derived
-      .filter((row) => row.submittedAt !== null)
-      .map((row) => [row.sessionId, new Date(row.submittedAt as string)]),
-  );
+  const derived = await loadPayoutSubmissionTimes(db, sessionIds);
+  const derivedBySession = new Map([...derived.entries()].flatMap(([sessionId, times]) =>
+    times.staffSubmittedAt ? [[sessionId, times.staffSubmittedAt] as const] : []));
 
   // Link totals distinguish "only the Wise auto-submission exists" from a
   // session with no linked events at all when reporting the skips.

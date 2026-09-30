@@ -6,7 +6,7 @@ import * as schema from "@/lib/db/schema";
 
 import type { PostClassUser } from "./access";
 import { PostClassNotFoundError } from "./errors";
-import { feedbackSubmitterRole } from "./policy";
+import { feedbackAutoSubmittedFlag, feedbackProofExclusion, type FeedbackProofExclusion } from "./feedback-proof";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -20,29 +20,16 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 export function eventProofOutcome(
   event: { eventTimestamp: Date; actorRole: string | null; payload: Record<string, unknown> },
   deadlineAt: Date,
-): { countedAsProof: boolean; reason: "auto_submitted" | "after_deadline" | null } {
-  const autoSubmitted = autoSubmittedFlag(event.payload);
-  const role = feedbackSubmitterRole({
-    eventId: "",
-    sessionId: "",
-    eventTimestamp: event.eventTimestamp,
-    autoSubmitted,
-    actorWiseUserId: null,
-    actorName: null,
+): { countedAsProof: boolean; reason: FeedbackProofExclusion | "after_deadline" | null } {
+  const excluded = feedbackProofExclusion({
+    autoSubmitted: feedbackAutoSubmittedFlag(event.payload),
     actorRole: event.actorRole,
   });
-  if (role === "AUTO") return { countedAsProof: false, reason: "auto_submitted" };
+  if (excluded) return { countedAsProof: false, reason: excluded };
   if (event.eventTimestamp.getTime() > deadlineAt.getTime()) {
     return { countedAsProof: false, reason: "after_deadline" };
   }
   return { countedAsProof: true, reason: null };
-}
-
-/** Wise carries the auto-submission flag at `payload.session.autoSubmitted`. */
-function autoSubmittedFlag(payload: Record<string, unknown>): boolean | null {
-  const session = asRecord(payload.session);
-  const value = session.autoSubmitted;
-  return typeof value === "boolean" ? value : null;
 }
 
 function iso(value: Date | null | undefined): string | null {
@@ -282,7 +269,7 @@ export async function getPostClassFeedbackSessionDetail(
           actorWiseUserId: event.actorWiseUserId,
           actorName: event.actorName,
           actorRole: event.actorRole,
-          autoSubmitted: autoSubmittedFlag(event.payload),
+          autoSubmitted: feedbackAutoSubmittedFlag(event.payload),
           isSessionTutor: Boolean(
             event.actorWiseUserId &&
             session.wiseTeacherUserId &&

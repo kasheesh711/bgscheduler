@@ -826,7 +826,7 @@ function latestTeacherVersion(versions: FeedbackVersion[]): FeedbackVersion | nu
 export function timingEvidence(
   assessment: Pick<
     NonNullable<PostClassSessionObservation["assessment"]>,
-    "timingEvidenceSource" | "timingStatus" | "onTimeComplianceLocked" | "deadlineAt"
+    "timingEvidenceSource" | "timingStatus" | "onTimeComplianceLocked" | "deadlineAt" | "timingReviewRequired"
   >,
   governing: FeedbackVersion | null,
 ): string {
@@ -836,6 +836,7 @@ export function timingEvidence(
   // qualifying rule past the `TEACHER` role: the string is persisted on every
   // historical assessment row, and renaming it would split one fact across two
   // codes. It now reads "no qualifying human submission before the deadline".
+  if (assessment.timingReviewRequired) return "wise_activity_event_unverified_actor";
   if (assessment.timingEvidenceSource === "activity_event") {
     return assessment.timingStatus === "on_time"
       ? "wise_activity_event_before_deadline"
@@ -2002,6 +2003,7 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
             timingEvidenceSource: assessment.timingEvidenceSource,
             submitterRoles: assessment.submitterRoles,
             tutorSubmittedAt: assessment.tutorSubmittedAt?.toISOString() ?? null,
+            timingReviewRequired: assessment.timingReviewRequired ?? false,
           },
         }).onConflictDoNothing({ target: schema.postClassAssessments.assessmentKey }).returning({
           id: schema.postClassAssessments.id,
@@ -2047,7 +2049,11 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
       await tx.update(schema.postClassSessions).set({
         latestFeedbackVersionId: latestStored?.id ?? null,
         firstOnTimeCompliantVersionId:
-          session.firstOnTimeCompliantVersionId ?? onTimeStored?.id ?? null,
+          assessment
+            ? assessment.onTimeComplianceLocked
+              ? onTimeStored?.id ?? session.firstOnTimeCompliantVersionId ?? null
+              : null
+            : session.firstOnTimeCompliantVersionId,
         deductionStatus: projectPostClassDeductionStatus(
           deduction?.status,
           Boolean(deduction?.reversalOffsetId),
