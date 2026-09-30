@@ -26,7 +26,8 @@ const M = schema.feedbackAutowriterDailyMetrics;
 /**
  * Daily trend series of the autowriter dashboard (redesign, section 4.2): accuracy and the gate, coverage, speed and
  * cost, evidence and models. Read-only. `buildAutowriterTrends` is pure; `loadAutowriterTrends` reads our database.
- * Client components import the types only (the loader pulls in the database layer).
+ * A server module, like `dashboard.ts`: client components import its types only (`import type`), never a value —
+ * that would pull the database layer into the browser bundle.
  *
  * Every date is the Bangkok date of the class's scheduled end — the date `feedback_autowriter_daily_metrics` uses.
  * Every 7-day value is pooled: the numerators and the denominators are summed over the date and the six days before
