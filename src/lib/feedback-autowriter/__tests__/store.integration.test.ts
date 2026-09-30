@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -612,4 +612,27 @@ describe("feedback autowriter store (Postgres)", () => {
     expect((await recentAutowriterPosts(db, [TEACHER], since)).map((post) => post.key)).toEqual([SESSION]);
     expect(await recentAutowriterPosts(db, [], since)).toEqual([]);
   });
+});
+
+
+it("requeueing Mimi shadow drafts preserves the transcript window only for the active guide", async () => {
+  const passing = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
+  const judge = { ...passing, levels: { medium: passing, high: passing } };
+  for (const [enabled, styleGuide, retained] of [
+    ["true", { id: "mimi", version: 1 }, true],
+    ["true", { id: "mimi", version: 0 }, false],
+    ["true", null, false],
+    ["false", { id: "mimi", version: 1 }, false],
+  ] as const) {
+    vi.stubEnv("FEEDBACK_AUTOWRITER_MIMI_STYLE_ENABLED", enabled);
+    try {
+      await db.update(schema.feedbackAutowriterSessions).set({
+        state: "would_submit", wiseTeacherUserId: "695369c028118f629edcbaf3",
+        metadata: { sonioxRetainUntil: "2026-10-01T00:00:00.000Z", draftEvidence: "transcript", judge,
+          pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION, styleGuide } },
+      }).where(eq(schema.feedbackAutowriterSessions.wiseSessionId, SESSION));
+      expect(await requeueShadowDrafts(db, new Date())).toBe(1);
+      expect(Object.hasOwn((await readSessionRow(db, SESSION))!.metadata, "sonioxRetainUntil")).toBe(retained);
+    } finally { vi.unstubAllEnvs(); }
+  }
 });

@@ -1,0 +1,55 @@
+{
+  "profileId": "mimi",
+  "version": 1,
+  "verifiedOn": "2026-09-30",
+  "examples": [
+    {
+      "fields": {
+        "topics": "1. Revise: Pressure\n2. Newton Law of motion\n3. Worksheets: Force and force diagram\n4. Speed - Calculate and graph\n5. Relative motion",
+        "performance": "[STUDENT_1] initially had difficulty recalling the concepts of pressure and the laws of motion, so we spent the beginning of the lesson reviewing these topics before moving on to speed. After the revision, he was able to follow the lesson more confidently.\n\n[STUDENT_1] demonstrates a good understanding of relative motion. However, he still needs to revise the formula for calculating speed and practise finding the slope of a graph, as he is not yet fully confident applying these skills independently.",
+        "improvement": "1. Speed formula",
+        "homework": "1. Speed"
+      },
+      "sha256": "07f5e1beed8705328c2af7d1a62ea6b6e9daad6a7da273e44d9b81e357dcd48d",
+      "authorship": {
+        "canonicalTutorKey": "Mimi",
+        "checkedAgainst": "Wise feedback activity",
+        "beforeAutowriter": true,
+        "provenance": "unknown",
+        "verification": "Mimi submission event predates her first autowriter post. Wise events do not bind a content version; evidence is session-level. Detailed source references are retained privately."
+      }
+    },
+    {
+      "fields": {
+        "topics": "1. Naming compounds\n- Ionic and covalent compounds\n2. Type of chemical reaction \n3. Physical and chemical change \n4. State of matter",
+        "performance": "[STUDENT_1] demonstrates a good understanding of physical and chemical changes. However, she is still developing confidence in naming compounds, identifying different types of chemical reactions, and recalling the properties of the different states of matter. She would benefit from further practice in these areas to strengthen her understanding and improve her confidence when applying these concepts independently.",
+        "improvement": "1. Balance equation\n2. Properties of solid, liquid, gas",
+        "homework": "1. MCQ State of matter"
+      },
+      "sha256": "e8b2e4791904330942e7c4025c83819b1a577f169c18c22a18feae21d4bfd2ac",
+      "authorship": {
+        "canonicalTutorKey": "Mimi",
+        "checkedAgainst": "Wise feedback activity",
+        "beforeAutowriter": true,
+        "provenance": "unknown",
+        "verification": "Mimi submission event predates her first autowriter post. Wise events do not bind a content version; evidence is session-level. Detailed source references are retained privately."
+      }
+    },
+    {
+      "fields": {
+        "topics": "1. All types of questions 30 questions in 25 mins (scored 19/27)\n2. Quest admission 11+ NVR 15 questions in 10 mins",
+        "performance": "[STUDENT_1] submitted her homework and completed the questions very quickly, demonstrating good time management. However, working too quickly affected her accuracy, as she sometimes selected answers without checking the details carefully. I encouraged her to slow down slightly and think through each question before making her final choice.\n\nWe also reviewed the questions she answered incorrectly and discussed the details she had overlooked. With a better balance between speed and careful checking, [STUDENT_1] should be able to improve her overall accuracy.",
+        "improvement": "1. Consider symmethry\n2. Cubes and nets: Dud, opposite, Direction",
+        "homework": "1. Quest admission 11+ NVR"
+      },
+      "sha256": "0bf3b504dd3715c4e039bf20c988e4e300dee4e91f7d81f5148b952421d1b51a",
+      "authorship": {
+        "canonicalTutorKey": "Mimi",
+        "checkedAgainst": "Wise feedback activity",
+        "beforeAutowriter": true,
+        "provenance": "unknown",
+        "verification": "Mimi submission event predates her first autowriter post. Wise events do not bind a content version; evidence is session-level. Detailed source references are retained privately."
+      }
+    }
+  ]
+}

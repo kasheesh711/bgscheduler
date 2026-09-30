@@ -432,3 +432,67 @@ explains — check who wrote to Wise with the API key) are pushed; `first_shot_u
 the post did not verify) — run the backfill script to prove it, or confirm by hand what was posted. A critical
 incident that was not delivered keeps the review job red (Data Health) until you **Acknowledge** it on the Quality tab
 (its pushes stop too).
+
+
+## Mimi style guide review and activation
+
+Keep `FEEDBACK_AUTOWRITER_MIMI_STYLE_ENABLED=false` until the owner has approved ten successful comparison drafts.
+The new read-only replay is separate from the production CLI: it issues only database SELECTs and Wise GETs, makes
+model calls, and writes local files with private permissions. It never posts feedback, changes modes or writes any
+production table. Examples and guide are passed explicitly to replay; production's switch stays disabled.
+
+```sh
+npx tsx --tsconfig scripts/tsconfig.json scripts/replay-mimi-feedback-style.ts \
+  --out=.feedback-autowriter/mimi-style-review-v1 \
+  --source-manifest=/absolute/private/path/source-provenance.json \
+  --transcript-dir=/absolute/path/to/archived-soniox-pilot
+```
+
+`--env-dir=/absolute/path/to/checkout` optionally loads the operator's existing environment from another checkout.
+`--source-manifest` names the private provenance receipt prepared when freezing the examples; it defaults to
+`source-provenance.json` in the output directory. It carries guide id/version and each example's anonymous SHA-256
+plus source version id, Wise session/event ids and original content hash. The replay checks this against the
+public guide and rechecks the source rows. Keep this file and review outputs private; do not commit them.
+Archived transcript filenames are `Mimi-<sessionId>.soniox.txt` and matching `.zoom.txt`; speaker labels are inferred
+from the saved time-aligned text and never represented as freshly verified diarization. Unclear/too-short archived
+transcripts use the session's Wise summary. The replay seeks ten distinct accepted drafts, with transcript evidence
+where usable. Missing summaries, unavailable reads and scope failures are skipped. Drafts held by the pipeline
+remain visible as additional attempts; the replay never weakens a guard to fill the sample. Raw lesson records and
+participant names are not written to the report; it retains anonymous feedback, hashes, model costs and verdicts.
+Historical events must precede Mimi's earliest recorded autowriter first-shot attempt; `historical-cutoff.json`
+records that timestamp. This uses the actual rollout time, including human submissions made after midnight on
+rollout day. Frozen source version/event/hash pairs are rechecked and preferred if current feedback was later
+edited. Missing frozen source evidence fails the replay rather than silently replacing the guide's examples.
+
+The replay checkpoints each comparison and resumes in the same directory. `--retry-failed` retries infrastructure
+failures while retaining the earlier failed attempt; held drafts are never retried by that option. Use a new output
+directory after a prompt/guide or evidence-processing change. Report-only presentation changes may reuse the saved
+drafts. `summary.json` must show `total:10`, `passed:10`, and both evidence modes when archived transcripts were
+available; `attempted` includes the held comparisons. `comparison.html` shows each draft beside prior human
+feedback. An insufficient accepted sample makes the script exit nonzero. Do not interpret a successful model
+verdict as owner approval.
+
+After the owner approves layout, voice and length on all ten drafts, record approval against the report and guide
+version, set the production environment switch to exact `true`, and redeploy the reviewed implementation through
+the normal release process. Review the first ten new Mimi posts for format drift in the existing Review tab and
+retain their session ids/verdicts in the rollout receipt. Any guide-format failure stays held after the fallback;
+factual failures follow the existing checks. If drift requires rollback, set the switch to `false` and redeploy;
+pending guided drafts will be regenerated under the shared prompt. Previously posted human or generated feedback
+is not rewritten by this release. No first-ten live review is claimed until activation and those posts exist.
+
+The first-shot ledger copies the guide stamp from the draft. This read-only query identifies the first ten recorded
+Mimi v1 posts for review, including uncertain outcomes (which must be resolved, never treated as verified posts):
+
+```sql
+select wise_session_id, post_started_at, outcome, fields_sha256, pipeline
+from feedback_autowriter_posts
+where kind = 'first_shot'
+  and pipeline -> 'styleGuide' = '{"id":"mimi","version":1}'::jsonb
+  and outcome <> 'not_sent'
+order by coalesce(post_started_at, recorded_at), id
+limit 10;
+```
+
+Freeze the approved guide text and examples with their reviewed commit and `summary.json` instruction hash.
+Every later guide/example change requires a new guide version and a new comparison; the production writer never
+updates examples from its own posts.

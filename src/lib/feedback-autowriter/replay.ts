@@ -435,6 +435,7 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
   const displayName = chooseStudentDisplayName(student.name);
   const session = {
     wiseSessionId: sample.wiseSessionId,
+    canonicalTutorKey: tutor.canonicalKey,
     studentFullName: student.name,
     studentAliases: names.studentAliases,
     studentDisplayName: displayName,

@@ -7,6 +7,7 @@ import {
   POST_CLASS_REQUIRED_FIELDS,
   type FeedbackFieldAnswers,
 } from "@/lib/post-class-feedback/types";
+import { validateStyleFormat, type FeedbackStyleGuide } from "./style";
 import { restoreStudentName } from "./prompt";
 import { WISE_FEEDBACK_ANSWER_MAX_CHARACTERS } from "./types";
 
@@ -63,6 +64,8 @@ export function validateFeedbackDraft(input: {
   studentFullName: string;
   tutorNames: readonly string[];
   priorFeedback: readonly PriorFeedbackComparison[];
+  styleGuide?: FeedbackStyleGuide | null;
+  lessonRecord?: string;
 }): { ok: true } | { ok: false; reasons: string[] } {
   const reasons: string[] = [];
   const { output, fields } = input;
@@ -76,11 +79,13 @@ export function validateFeedbackDraft(input: {
     // Checked on the model's own text: the student's Wise name, restored afterwards, may itself be Thai.
     if (/[\u0e00-\u0e7f]/u.test(output[field])) reasons.push(`thai_text:${field}`);
     if ([...value].length > WISE_FEEDBACK_ANSWER_MAX_CHARACTERS) reasons.push(`too_long:${field}`);
-    if (MARKDOWN.test(value)) reasons.push(`markdown:${field}`);
+    if (MARKDOWN.test(value)) reasons.push(input.styleGuide ? `style:prohibited_format:${field}` : `markdown:${field}`);
   }
   for (const field of POST_CLASS_REQUIRED_FIELDS) {
     if (isPlaceholderFeedback(fields[field])) reasons.push(`placeholder_text:${field}`);
   }
+
+  if (input.styleGuide) reasons.push(...validateStyleFormat(fields, input.lessonRecord ?? ""));
 
   const content = assessFeedbackContent(fields);
   if (!content.compliant) reasons.push(...content.violationReasons.map((reason) => `policy:${reason}`));
@@ -94,7 +99,11 @@ export function validateFeedbackDraft(input: {
     tutorNames: [...input.tutorNames],
     priorFeedback: [...input.priorFeedback],
   });
-  if (suspect.suspect) reasons.push(...suspect.reasons.map((reason) => `ai_suspect:${reason}`));
+  // Mimi's approved format has short numbered fields. Only this presentation heuristic is replaced
+  // by the guide's structural checks; placeholders, padding and copy detection still reject the draft.
+  if (suspect.suspect) reasons.push(...suspect.reasons
+    .filter((reason) => !(input.styleGuide && reason === "short_required_field"))
+    .map((reason) => `ai_suspect:${reason}`));
 
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons: [...new Set(reasons)] };
 }

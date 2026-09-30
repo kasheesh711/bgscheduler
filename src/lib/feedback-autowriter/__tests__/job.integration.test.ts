@@ -2475,3 +2475,59 @@ describe("transcript first (Postgres + fakes)", () => {
     }
   });
 });
+
+
+describe("Mimi style rollout (Postgres + fake Wise and models)", () => {
+  const mimi = "696e2c4343579bbada2340f8";
+  const mimiDetail = () => sessionDetail({
+    userId: { _id: mimi, name: "Thanit (Mimi) Montrikittiphant Online" },
+    participants: [
+      { ...sessionDetail().participants[0], wiseUserId: mimi, name: "Thanit (Mimi) Montrikittiphant Online" },
+      sessionDetail().participants[1],
+    ],
+  });
+  it("stores the guide version on a shadow draft without posting", async () => {
+    vi.stubEnv("FEEDBACK_AUTOWRITER_MIMI_STYLE_ENABLED", "true");
+    try {
+      await updateControl(db, { mode: "shadow" }, "t@x.com");
+      const wise = fakeWise({ details: [mimiDetail()] });
+      const fields = { ...JSON.parse(writerJson), topics: "1. Adding fractions\n2. Mixed numbers", improvement: "1. Check simplification", performance: JSON.parse(writerJson).performance + " We reviewed the errors together and practised checking each denominator before combining terms. The next step is to keep the same careful checking routine when working independently." };
+      const model = vi.fn(async (request: { schemaName: string }) => request.schemaName === "post_class_feedback" ? sol(JSON.stringify(fields)) : glm(FAITHFUL_VERDICT));
+      expect(await processSession(deps(wise.ops, { callModel: model as never }), { wiseSessionId: SESSION_ID, trigger: "cron" })).toMatchObject({ result: "would_submit" });
+      expect(wise.posts).toHaveLength(0);
+      expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ pipeline: { styleGuide: { id: "mimi", version: 1 } } });
+    } finally { vi.unstubAllEnvs(); }
+  });
+  it.each([
+    ["paragraph fields", writerJson],
+    ["missing topics", JSON.stringify({ ...JSON.parse(writerJson), topics: undefined })],
+  ])("holds %s after the fallback, even when the transcript handover is available", async (_label, content) => {
+    vi.stubEnv("FEEDBACK_AUTOWRITER_MIMI_STYLE_ENABLED", "true");
+    try {
+      const wise = fakeWise({ details: [mimiDetail()] });
+      const model = vi.fn(async (request: { model: string }) => request.model.includes("luna") ? luna(content) : sol(content));
+      const result = await processSession(deps(wise.ops, { transcriptsEnabled: true, soniox: fakeSoniox().client, callModel: model as never }), { wiseSessionId: SESSION_ID, trigger: "cron" });
+      expect(result).toMatchObject({ result: "held" });
+      expect(model).toHaveBeenCalledTimes(2);
+      expect(wise.posts).toHaveLength(0);
+      expect((await readSessionRow(db, SESSION_ID))?.reason).toContain("style:");
+    } finally { vi.unstubAllEnvs(); }
+  });
+  it("cannot reuse an old guide draft, or a guided draft after disabling the guide", async () => {
+    const stamp = { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION };
+    for (const [enabled, styleGuide, state] of [
+      ["true", { id: "mimi", version: 1 }, "pending"],
+      ["true", { id: "mimi", version: 0 }, "awaiting_recording"],
+      ["true", null, "awaiting_recording"],
+      ["false", { id: "mimi", version: 1 }, "awaiting_recording"],
+    ] as const) {
+      vi.stubEnv("FEEDBACK_AUTOWRITER_MIMI_STYLE_ENABLED", enabled);
+      try {
+        await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
+        await seedRow({ wiseTeacherUserId: mimi, state: "pending", evidence: "transcript", arm: "sol", fields: GOOD_FIELDS, metadata: { draftEvidence: "transcript", judge: PASSING_STORED, pipeline: { ...stamp, styleGuide } } });
+        expect(await processSession(deps(fakeWise({ failReads: true }).ops, { transcriptsEnabled: true, soniox: fakeSoniox().client }), { wiseSessionId: SESSION_ID, trigger: "cron" })).toMatchObject({ result: "infra" });
+        expect((await readSessionRow(db, SESSION_ID))?.state).toBe(state);
+      } finally { vi.unstubAllEnvs(); }
+    }
+  });
+});
