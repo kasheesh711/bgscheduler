@@ -1,9 +1,8 @@
-import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { wiseSessionLink } from "@/lib/wise/links";
 import { AUTOWRITER_MAX_TRANSCRIBE_ERRORS, AUTOWRITER_MAX_WRITER_ERRORS, AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS } from "./config";
-import { isMissingRelationError } from "./db-errors";
 import { judgeProblems } from "./judge";
 import { tutorKeyFor } from "./review-job";
 import { AUTOWRITER_TUTORS, rosterTutor, tutorLabel } from "./roster";
@@ -13,7 +12,8 @@ import { SUMMARY_FALLBACK_CAUSES, type SummaryFallbackCause } from "./types";
 
 const S = schema.feedbackAutowriterSessions;
 const CALLS = schema.feedbackAutowriterCalls;
-const FX = schema.feedbackAutowriterFixEvents;
+const PC = schema.postClassSessions;
+const PCV = schema.postClassFeedbackVersions;
 
 export const DASHBOARD_WINDOWS = [1, 7, 30] as const;
 export type DashboardWindowDays = (typeof DASHBOARD_WINDOWS)[number];
@@ -41,19 +41,12 @@ export interface DashboardHoldRow extends Pick<AutowriterSessionRow,
   className: string | null;
   /** The row stores a judged draft (`fields`). */
   hasDraft: boolean;
-  /** A person has saved feedback on the class in Wise (`loadHeldClassesAPersonWrote`). */
+  /** The class has a person's feedback text in Wise now (`loadHeldClassesAPersonWrote`). */
   personWrote: boolean;
 }
 
 /** Held classes loaded at most (the latest deadlines are kept). */
 export const DASHBOARD_HOLDS_LIMIT = 500;
-
-/**
- * A person's own save in Wise, as the fix events classify it (`classifySessionFixEvents`): the class's tutor, the
- * owner in the Wise web app, or other staff. Never a student, Wise's auto-submission, or a save by our API user
- * (a post of ours, or one no post explains — that is an incident, not a person's write-up).
- */
-export const PERSON_SAVE_KINDS = ["tutor", "owner_web", "other_staff"] as const;
 
 export interface DashboardWebhookRow {
   eventName: string | null;
@@ -196,8 +189,9 @@ export interface AutowriterDashboard {
     /** A judged draft is stored on the row. */
     hasDraft: boolean;
     /**
-     * `tutor_wrote`: a person has saved feedback on the class in Wise, so it no longer waits for anyone (the row stays
-     * `held`: the autowriter never touches a held class again). Null while nobody has.
+     * `tutor_wrote`: the class has a person's feedback text in Wise now, so it no longer waits for anyone (the row
+     * stays `held`: the autowriter never touches a held class again). Null while it has none — a form saved blank, or
+     * staff correcting its status or credits, is not a write-up.
      */
     resolvedBy: "tutor_wrote" | null;
     wiseUrl: string | null;
@@ -515,23 +509,25 @@ function tallyBy<T>(rows: readonly T[], key: (row: T) => string): Array<[string,
 }
 
 /**
- * The held classes a person has written: those with a person's feedback save among the fix events the hourly review
- * job derives from Wise's activity feed (it classifies every save on every class the autowriter has a row for, held
- * ones included). The save needs no cut-off in time. Nearly always it came after we last looked: the submission gate
- * runs before every other gate that holds, and a POST that finds a person's submission hands the class back as
- * `skipped_human`. Where it came before (a hold for an ambiguous submission, or for repeated errors), a person's
- * feedback is in Wise all the same. Before migration 0101 there are no fix events, and no hold is known to be written.
+ * The held classes a person has written since: those whose latest teacher feedback, as our evidence of Wise has it
+ * (`post_class_feedback_versions`; the collection runs every half hour and takes a class with a new save first),
+ * holds text. The autowriter never posts to a held class, so that text is a person's.
+ *
+ * A person's save alone (the fix events) does not say so: staff correcting the status or the credits of a class held
+ * for its billing, and a form submitted blank, are saves too, and the class would leave the to-do list with no
+ * feedback in Wise. The price is a hold someone settled without writing (a student marked absent): it stays listed
+ * until a day after its deadline.
  */
 async function loadHeldClassesAPersonWrote(db: Database): Promise<Set<string>> {
-  try {
-    const rows = await db.selectDistinct({ wiseSessionId: FX.wiseSessionId }).from(FX)
-      .innerJoin(S, eq(S.wiseSessionId, FX.wiseSessionId))
-      .where(and(eq(S.state, "held"), inArray(FX.actorKind, [...PERSON_SAVE_KINDS])));
-    return new Set(rows.map((row) => row.wiseSessionId));
-  } catch (error) {
-    if (isMissingRelationError(error)) return new Set();
-    throw error;
-  }
+  const latest = await db.selectDistinctOn([S.wiseSessionId], {
+    wiseSessionId: S.wiseSessionId,
+    written: sql<boolean>`(${PCV.topics} || ${PCV.performance} || ${PCV.improvement} || ${PCV.homework}) ~ '\\S'`,
+  }).from(S)
+    .innerJoin(PC, eq(PC.wiseSessionId, S.wiseSessionId))
+    .innerJoin(PCV, eq(PCV.sessionId, PC.id))
+    .where(and(eq(S.state, "held"), eq(PCV.profile, "teacher")))
+    .orderBy(S.wiseSessionId, desc(PCV.observedAt), desc(PCV.createdAt));
+  return new Set(latest.filter((row) => row.written).map((row) => row.wiseSessionId));
 }
 
 /** Read-only loader for the page and its API route. */

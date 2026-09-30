@@ -183,7 +183,7 @@ export function HoldBody({ hold, row, now }: { hold: Hold; row: ClassRow | null;
         </div>
         <p className="text-xs text-muted-foreground">
           {written
-            ? "A person has saved feedback on this class in Wise, so it no longer waits for anyone. The autowriter does not touch a held class again."
+            ? "The class has feedback in Wise now, written by a person, so it no longer waits for anyone. The autowriter does not touch a held class again."
             : overdue
               ? "Nothing was posted, and the feedback deadline has passed. The class still needs a person to write it."
               : "Nothing was posted. The class needs a person to write it before the deadline."}

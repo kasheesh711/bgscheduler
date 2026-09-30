@@ -118,7 +118,7 @@ describe("HoldBody", () => {
   it("says a person wrote the class since, and that a stored draft is out of the page's reach", () => {
     const written = renderToStaticMarkup(<HoldBody hold={hold(SESSION.daoHeldWritten)} row={row(SESSION.daoHeldWritten)} now={NOW} />);
     expect(written).toContain("Written by a person since");
-    expect(written).toContain("no longer waits for anyone");
+    expect(written).toContain("The class has feedback in Wise now, written by a person, so it no longer waits for anyone.");
     expect(written).not.toContain("Deadline in");
     const old = renderToStaticMarkup(<HoldBody hold={{ ...hold(SESSION.chaiHeldJudge), hasDraft: true }} row={null} now={NOW} />);
     expect(old).toContain("this page loads the text of recent classes only");

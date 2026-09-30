@@ -12,6 +12,8 @@ let db: Database;
 
 const S = schema.feedbackAutowriterSessions;
 const FX = schema.feedbackAutowriterFixEvents;
+const PC = schema.postClassSessions;
+const PCV = schema.postClassFeedbackVersions;
 
 // Roster account ids are the code roster's (the tutor names and keys come from it); everything else is synthetic.
 const MIMI = "696e2c4343579bbada2340f8";
@@ -44,6 +46,20 @@ async function seedSave(wiseSessionId: string, actorKind: typeof FX.$inferInsert
   await db.insert(FX).values({
     wiseEventId: `event-${wiseSessionId}-${actorKind}-${at}`, wiseSessionId, eventAt: new Date(at), actorKind, countsAsFix: false,
     classifierVersion: 1,
+  });
+}
+
+/**
+ * A version of the class's feedback as the Class Feedback collection observed it in Wise
+ * (`post_class_feedback_versions`); the class needs its `post_class_sessions` row (`className` in `seedRow`).
+ */
+async function seedFeedback(wiseSessionId: string, observedAt: string, fields: Partial<typeof FIELDS> = {}, profile = "teacher"): Promise<void> {
+  const [session] = await db.select({ id: PC.id }).from(PC).where(eq(PC.wiseSessionId, wiseSessionId));
+  if (!session) throw new Error(`no post_class_sessions row for ${wiseSessionId}`);
+  const text = { topics: "", performance: "", improvement: "", homework: "", ...fields };
+  await db.insert(PCV).values({
+    sessionId: session.id, versionKey: `${profile}-${observedAt}`, contentHash: `hash-${profile}-${observedAt}`, profile,
+    observedAt: new Date(observedAt), ...text,
   });
 }
 
@@ -108,47 +124,57 @@ describe("loadAutowriterDashboard", () => {
     expect(board.system).toMatchObject({ promptVersion: expect.any(Number), writer: { model: expect.any(String) } });
   });
 
-  it("marks a held class a person has saved feedback on as written, and no other", async () => {
-    const byTutor = await seedRow(1, { endAt: "2026-09-29T03:00:00Z" });
-    const byOwner = await seedRow(2, { endAt: "2026-09-29T04:00:00Z", reason: "recording_too_short" });
-    const byStaff = await seedRow(3, { endAt: "2026-09-29T05:00:00Z", wiseTeacherUserId: EK_MAIN });
-    const notAPerson = await seedRow(4, { endAt: "2026-09-29T06:00:00Z" });
-    const untouched = await seedRow(5, { endAt: "2026-09-29T07:00:00Z" });
-    // A class the tutor wrote before we could: never a hold, whatever its saves.
-    const tutorFirst = await seedRow(6, { endAt: "2026-09-29T08:00:00Z", state: "skipped_human", reason: "human_submission" });
+  it("marks a held class as written once it has a person's feedback text in Wise, and no other", async () => {
+    const written = await seedRow(1, { endAt: "2026-09-29T03:00:00Z", className: "Class one" });
+    const blankSave = await seedRow(2, { endAt: "2026-09-29T04:00:00Z", reason: "attendance_0pct", className: "Class two" });
+    const billingFix = await seedRow(3, { endAt: "2026-09-29T05:00:00Z", reason: "billing_differs_from_current_submission", className: "Class three" });
+    const erased = await seedRow(4, { endAt: "2026-09-29T06:00:00Z", className: "Class four" });
+    const whitespace = await seedRow(5, { endAt: "2026-09-29T07:00:00Z", className: "Class five" });
+    const studentForm = await seedRow(6, { endAt: "2026-09-29T08:00:00Z", className: "Class six" });
+    const notCollected = await seedRow(7, { endAt: "2026-09-29T09:00:00Z" });
+    const oneField = await seedRow(8, { endAt: "2026-09-29T10:00:00Z", wiseTeacherUserId: EK_MAIN, className: "Class eight" });
+    // A class the tutor wrote before we could: never a hold, whatever is in Wise.
+    const tutorFirst = await seedRow(9, { endAt: "2026-09-29T11:00:00Z", state: "skipped_human", reason: "human_submission", className: "Class nine" });
 
-    await seedSave(byTutor, "auto", "2026-09-29T03:00:30Z");
-    await seedSave(byTutor, "tutor", "2026-09-29T09:00:00Z");
-    await seedSave(byOwner, "owner_web", "2026-09-29T10:00:00Z");
-    // Two people saved: still one hold.
-    await seedSave(byStaff, "other_staff", "2026-09-29T11:00:00Z");
-    await seedSave(byStaff, "tutor", "2026-09-29T12:00:00Z");
-    // Wise's blank auto-submission, a student's form and a save by our API user that no post explains: nobody wrote it.
-    await seedSave(notAPerson, "auto", "2026-09-29T06:00:30Z");
-    await seedSave(notAPerson, "student", "2026-09-29T06:30:00Z");
-    await seedSave(notAPerson, "api_actor_unmatched", "2026-09-29T07:00:00Z");
-    await seedSave(tutorFirst, "tutor", "2026-09-29T08:05:00Z");
+    // Wise's blank auto-submission, then the tutor's text: the latest version counts.
+    await seedFeedback(written, "2026-09-29T03:00:30Z");
+    await seedFeedback(written, "2026-09-29T09:00:00Z", FIELDS);
+    // The tutor submitted the form blank (the student was absent): a save, and nothing written.
+    await seedFeedback(blankSave, "2026-09-29T04:00:30Z");
+    await seedFeedback(blankSave, "2026-09-29T10:00:00Z");
+    await seedSave(blankSave, "tutor", "2026-09-29T10:00:00Z");
+    // Staff corrected the credits of a class held for its billing: a person's save, and the form is still blank.
+    await seedFeedback(billingFix, "2026-09-29T05:00:30Z");
+    await seedSave(billingFix, "other_staff", "2026-09-29T11:00:00Z");
+    await seedSave(billingFix, "owner_web", "2026-09-29T11:30:00Z");
+    // Text that was taken out again: the class is as unwritten as before.
+    await seedFeedback(erased, "2026-09-29T12:00:00Z", FIELDS);
+    await seedFeedback(erased, "2026-09-29T13:00:00Z");
+    await seedFeedback(whitespace, "2026-09-29T12:00:00Z", { topics: "  \n", performance: "\t", improvement: " ", homework: "" });
+    // A student's own form is not the teacher's feedback.
+    await seedFeedback(studentForm, "2026-09-29T12:00:00Z", FIELDS, "student");
+    await seedSave(notCollected, "tutor", "2026-09-29T12:00:00Z");
+    // One field is a write-up too.
+    await seedFeedback(oneField, "2026-09-29T12:00:00Z", { homework: "Page 12" });
+    await seedFeedback(tutorFirst, "2026-09-29T11:05:00Z", FIELDS);
 
     const board = await loadAutowriterDashboard(db, { windowDays: 7, now: NOW });
 
     expect(Object.fromEntries(board.holds.map((row) => [row.wiseSessionId, row.resolvedBy]))).toEqual({
-      [byTutor]: "tutor_wrote", [byOwner]: "tutor_wrote", [byStaff]: "tutor_wrote", [notAPerson]: null, [untouched]: null,
+      [written]: "tutor_wrote", [oneField]: "tutor_wrote",
+      [blankSave]: null, [billingFix]: null, [erased]: null, [whitespace]: null, [studentForm]: null, [notCollected]: null,
     });
     // The class stays a hold: the row is still `held`, and the window still counts it.
-    expect(board.totals.held).toBe(5);
-    expect(board.recent.find((row) => row.wiseSessionId === byTutor)?.state).toBe("held");
+    expect(board.totals.held).toBe(8);
+    expect(board.recent.find((row) => row.wiseSessionId === written)?.state).toBe("held");
+    expect(board.holds.some((row) => row.wiseSessionId === tutorFirst)).toBe(false);
   });
 
-  it("knows of no written hold before the fix events exist (migration 0101), and still loads", async () => {
-    const held = await seedRow(1, { endAt: "2026-09-29T03:00:00Z" });
-    await seedSave(held, "tutor", "2026-09-29T09:00:00Z");
-    await db.execute(sql`ALTER TABLE feedback_autowriter_fix_events RENAME TO feedback_autowriter_fix_events_absent`);
-    try {
-      const board = await loadAutowriterDashboard(db, { windowDays: 7, now: NOW });
-      expect(board.holds).toMatchObject([{ wiseSessionId: held, resolvedBy: null }]);
-    } finally {
-      await db.execute(sql`ALTER TABLE feedback_autowriter_fix_events_absent RENAME TO feedback_autowriter_fix_events`);
-    }
+  it("takes the latest version by when it was observed, whatever the order the rows were written in", async () => {
+    const held = await seedRow(1, { endAt: "2026-09-29T03:00:00Z", className: "Class one" });
+    // Written last, observed first: the blank version is the older one.
+    await seedFeedback(held, "2026-09-29T09:00:00Z", FIELDS);
+    await seedFeedback(held, "2026-09-29T03:00:30Z");
     expect((await loadAutowriterDashboard(db, { windowDays: 7, now: NOW })).holds).toMatchObject([{ wiseSessionId: held, resolvedBy: "tutor_wrote" }]);
   });
 

@@ -674,13 +674,16 @@ data exists: until then there is no "tutor told" time, no Decisions group and no
 verdict form and Acknowledge; everyone else reads, and is told so ("Only the owner records verdicts.").
 
 **Held classes.** `dashboard.holds[]` lists every class in state `held`, whatever its age. `resolvedBy` is
-`"tutor_wrote"` once the fix events hold a person's feedback save on the class — by the class's tutor, the owner in
-the Wise web app, or other staff; never a student, Wise's auto-submission, or a save by our API user
-(`loadHeldClassesAPersonWrote` in [`dashboard.ts`](../../src/lib/feedback-autowriter/dashboard.ts); the hourly review
-job derives those events, so a save shows up within the hour). The to-do list shows a hold only while it still waits
-for someone (`isOpenHold`): nobody has written it, and its deadline is ahead or passed less than 24 hours ago. It is
-amber with under 24 hours to the deadline and red with under 6 (or past it). The row stays `held` either way, so
-every hold remains in All classes.
+`"tutor_wrote"` once the class has a person's feedback text in Wise: its latest teacher feedback in the Class Feedback
+evidence (`post_class_feedback_versions`) holds text, and the autowriter never posts to a held class
+(`loadHeldClassesAPersonWrote` in [`dashboard.ts`](../../src/lib/feedback-autowriter/dashboard.ts); the collection
+runs every half hour and takes a class with a new save first). A save alone does not count: staff correcting the
+status or the credits of a class held for its billing, and a form submitted blank, are saves too, and the class would
+leave the list with no feedback in Wise. So a hold someone settled without writing (a student marked absent) stays
+listed until a day after its deadline; the hold tracker of PR 2 records how each hold ended. The to-do list shows a
+hold only while it still waits for someone (`isOpenHold`): nobody has written it, and its deadline is ahead or passed
+less than 24 hours ago. It is amber with under 24 hours to the deadline and red with under 6 (or past it). The row
+stays `held` either way, so every hold remains in All classes.
 
 **Ranges.** The 14 / 30 / 90-day selector drives the four charts and their totals only. Everything that comes from
 the review payload — the health rail, the tutor table, and the chart footers for fix rounds, review counts, misses and
