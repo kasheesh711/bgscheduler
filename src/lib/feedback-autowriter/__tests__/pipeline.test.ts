@@ -23,13 +23,17 @@ function fail(error: string, httpStatus: number | null): OpenRouterCallResult {
 }
 const GLM = (content: string) => ok(content, "Together", "z-ai/glm-5.3-flash");
 const LUNA = (content: string) => ok(content, "OpenAI", "openai/gpt-6-luna");
-const FAITHFUL = JSON.stringify({ faithful: true, unsupported: [] });
-const UNFAITHFUL = JSON.stringify({ faithful: false, unsupported: ["scored 95%"] });
+const FAITHFUL = JSON.stringify({ faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] });
+const UNFAITHFUL = JSON.stringify({ faithful: false, unsupported: ["scored 95%"], misattributed: [], homeworkNotSet: [] });
+const MISATTRIBUTED = JSON.stringify({
+  faithful: false, unsupported: [], misattributed: ["[STUDENT_1] said 8 of the 10 pages have been covered"], homeworkNotSet: [],
+});
+const SUMMARY = "Overview: Kevin and Somchai practised fractions; Somchai rushed simplification but corrected it.";
 
-function run(replies: OpenRouterCallResult[], evidence: "summary" | "transcript" = "summary") {
+function run(replies: OpenRouterCallResult[], evidence: "summary" | "transcript" = "summary", summaryText = SUMMARY, studentAliases?: string[]) {
   const records: CallRecord[] = [];
-  const requests: Array<{ model: string; messages: Array<{ content: string }>; schemaName: string }> = [];
-  const callModel = vi.fn(async (request: { model: string; messages: Array<{ role: string; content: string }>; schemaName: string }) => {
+  const requests: Array<{ model: string; messages: Array<{ content: string }>; schemaName: string; effort: string }> = [];
+  const callModel = vi.fn(async (request: { model: string; messages: Array<{ role: string; content: string }>; schemaName: string; effort: string }) => {
     requests.push(request);
     const reply = replies.shift();
     if (!reply) throw new Error("unexpected call");
@@ -40,10 +44,11 @@ function run(replies: OpenRouterCallResult[], evidence: "summary" | "transcript"
     session: {
       wiseSessionId: "6a0000000000000000000002",
       studentFullName: STUDENT_NAME,
+      studentAliases,
       studentDisplayName: "Somchai",
       classDetails: ["Programme: 11+/13+", "Class subject: NVR", "Terms: 11+/13+ = the ISEB 11+/13+ entrance tests"],
       scheduledMinutes: 60,
-      summary: { text: "Overview: Kevin and Somchai practised fractions; Somchai rushed simplification but corrected it.", meetingUUIDs: [] },
+      summary: { text: summaryText, meetingUUIDs: [] },
       evidence,
     },
     tutorNames: ["Kevin Hsieh", "Kev"],
@@ -131,6 +136,83 @@ describe("runWritingPipeline", () => {
     expect(requests[1].messages.map((message) => message.content).join("\n")).toContain("Lesson transcript:");
     // Without Zoom's confirmation both writer and judge are told the labels are inferred.
     for (const request of requests) expect(request.messages[0].content).toContain(speakerLabelNote("inferred"));
+  });
+
+  it("writes at max effort and judges at high effort (v4)", async () => {
+    const { promise, requests } = run([GLM(writerJson), GLM(FAITHFUL)]);
+    await promise;
+    expect(requests.map((request) => request.effort)).toEqual(["max", "high"]);
+  });
+
+  it("tells the writer and the judge which other people the summary names", async () => {
+    const summary = "Overview: Kevin was worried the exam preparation was incomplete; Nathan mentioned only 8 pages. Somchai practised fractions.";
+    const { promise, requests } = run([GLM(writerJson), GLM(FAITHFUL)], "summary", summary);
+    await promise;
+    const line = "Other people named in the summary (never [STUDENT_1]): Nathan";
+    for (const request of requests) expect(request.messages[1].content).toContain(`${line}\n\nLesson summary:`);
+  });
+
+  it("never lists the student's own guest name among the other people", async () => {
+    // A lower-case guest name survives redaction where the summary capitalises it, but it is still the student.
+    const summary = "Overview: Kevin checked the essay. Nathan said he finished it. Ploy said she did not.";
+    const { promise, requests } = run([GLM(writerJson), GLM(FAITHFUL)], "summary", summary, ["nathan ipad"]);
+    await promise;
+    for (const request of requests) expect(request.messages[1].content).toContain("Other people named in the summary (never [STUDENT_1]): Ploy\n");
+  });
+
+  it("never gives the other-people line in transcript mode", async () => {
+    const { promise, requests } = run([GLM(writerJson), GLM(FAITHFUL)], "transcript", "[00:00] TUTOR: Nathan said he read 8 pages\n[00:05] STUDENT: I read 6");
+    await promise;
+    for (const request of requests) expect(request.messages[1].content).not.toContain("Other people named");
+  });
+
+  it("holds a draft that gives another person's words to the student, as a wrong-person problem", async () => {
+    const { promise, records } = run([GLM(writerJson), GLM(MISATTRIBUTED), LUNA(writerJson), GLM(MISATTRIBUTED)]);
+    const result = await promise;
+    expect(result).toEqual({
+      kind: "held",
+      reasons: [
+        "glm:unfaithful:wrong person: [STUDENT_1] said 8 of the 10 pages have been covered",
+        "luna:unfaithful:wrong person: [STUDENT_1] said 8 of the 10 pages have been covered",
+      ],
+    });
+    // Call records keep the three lists as returned, plus the flat list the hold reason uses.
+    const recorded = {
+      faithful: false,
+      unsupported: [],
+      misattributed: ["[STUDENT_1] said 8 of the 10 pages have been covered"],
+      homeworkNotSet: [],
+      problems: ["wrong person: [STUDENT_1] said 8 of the 10 pages have been covered"],
+    };
+    expect(records.filter((record) => record.role === "judge").map((record) => record.result)).toEqual([
+      { ...recorded, judgedArm: "glm", evidence: "summary" },
+      { ...recorded, judgedArm: "luna", evidence: "summary" },
+    ]);
+  });
+
+  it("names wrong-person and homework problems in the held reason ahead of three unsupported claims", async () => {
+    // The reason keeps three problems (300 characters) and an alert shows 200: the v4 kinds must come first.
+    const verdict = (homeworkNotSet: string[]) => JSON.stringify({
+      faithful: false,
+      unsupported: ["scored 95% on the test", "read chapter four aloud", "used a timer for every section"],
+      misattributed: ["[STUDENT_1] mentioned only 8 pages"],
+      homeworkNotSet,
+    });
+    const { promise } = run([GLM(writerJson), GLM(verdict([])), LUNA(writerJson), GLM(verdict(["finish the three remaining problems"]))]);
+    expect(await promise).toEqual({
+      kind: "held",
+      reasons: [
+        "glm:unfaithful:wrong person: [STUDENT_1] mentioned only 8 pages | scored 95% on the test | read chapter four aloud",
+        "luna:unfaithful:wrong person: [STUDENT_1] mentioned only 8 pages | homework not set: finish the three remaining problems | " +
+          "scored 95% on the test",
+      ],
+    });
+  });
+
+  it("fails closed on a judge reply without the v4 lists: no draft, retried later", async () => {
+    const v3 = JSON.stringify({ faithful: true, unsupported: [] });
+    const { promise } = run([GLM(writerJson), GLM(v3), GLM(v3)]);
+    expect(await promise).toEqual({ kind: "infra", error: "judge:judge_unparseable" });
   });
 
   it("treats a response from an unpinned host as infra", async () => {

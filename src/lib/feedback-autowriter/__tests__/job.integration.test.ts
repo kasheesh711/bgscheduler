@@ -34,13 +34,16 @@ const writerJson = JSON.stringify({
 const glm = (content: string): OpenRouterCallResult => ({
   ok: true, content, model: "z-ai/glm-5.3-flash", provider: "Together", generationId: "g", finishReason: "stop", usage, latencyMs: 5,
 });
+/** A v4 judge verdict that passes the draft, and the model reply carrying it. Rows seeded with `{ faithful, unsupported }` hold stored v3 verdicts. */
+const PASSING_VERDICT = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
+const FAITHFUL_VERDICT = JSON.stringify(PASSING_VERDICT);
 
 /** Writer + judge replies for as many drafts as a test needs. */
 function fakeModel() {
   const calls: string[] = [];
   const callModel = vi.fn(async (request: { schemaName: string }) => {
     calls.push(request.schemaName);
-    return request.schemaName === "post_class_feedback" ? glm(writerJson) : glm(JSON.stringify({ faithful: true, unsupported: [] }));
+    return request.schemaName === "post_class_feedback" ? glm(writerJson) : glm(FAITHFUL_VERDICT);
   });
   return { callModel, calls };
 }
@@ -314,7 +317,7 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     const wise = fakeWise();
     const callModel = vi.fn(async (request: { schemaName: string }) => {
       if (request.schemaName === "post_class_feedback") await updateControl(db, { mode: "live" }, "owner@x.com");
-      return request.schemaName === "post_class_feedback" ? glm(writerJson) : glm(JSON.stringify({ faithful: true, unsupported: [] }));
+      return request.schemaName === "post_class_feedback" ? glm(writerJson) : glm(FAITHFUL_VERDICT);
     });
     expect(await processSession(deps(wise.ops, { callModel: callModel as never }), { wiseSessionId: SESSION_ID, trigger: "cron" }))
       .toMatchObject({ result: "retry", detail: "mode_switched_to_live" });
@@ -415,7 +418,7 @@ describe("runSweep (Postgres + fake Wise and models)", () => {
     const callModel = vi.fn(async (request: { schemaName: string }) => {
       calls.push(request.schemaName);
       if (calls.length === 1) await updateControl(db, { haltedAt: new Date(), haltReason: "other worker" }, "system");
-      return request.schemaName === "post_class_feedback" ? glm(writerJson) : glm(JSON.stringify({ faithful: true, unsupported: [] }));
+      return request.schemaName === "post_class_feedback" ? glm(writerJson) : glm(FAITHFUL_VERDICT);
     });
     const result = await runSweep(deps(wise.ops, { callModel: callModel as never }));
     expect(result.processed).toEqual({ not_claimed: 1 });
@@ -571,7 +574,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     await seedRow();
     const unfaithful = vi.fn(async (request: { schemaName: string }) => request.schemaName === "post_class_feedback"
       ? glm(writerJson)
-      : glm(JSON.stringify({ faithful: false, unsupported: ["scored 95%"] })));
+      : glm(JSON.stringify({ faithful: false, unsupported: ["scored 95%"], misattributed: [], homeworkNotSet: [] })));
     const held = await processSession(transcriptDeps(fakeWise().ops, fakeSoniox().client, { callModel: unfaithful as never }), { wiseSessionId: SESSION_ID, trigger: "cron" });
     expect(held).toMatchObject({ result: "awaiting_recording", detail: "summary_draft_held" });
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "awaiting_recording", evidence: "transcript" });
@@ -602,7 +605,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     const callModel = vi.fn(async (request: { model: string; schemaName: string; messages: Array<{ content: string }> }) => {
       models.push(request.model);
       prompts.push(request.messages.map((message) => message.content).join("\n"));
-      return request.schemaName === "post_class_feedback" ? glm(writerJson) : glm(JSON.stringify({ faithful: true, unsupported: [] }));
+      return request.schemaName === "post_class_feedback" ? glm(writerJson) : glm(FAITHFUL_VERDICT);
     });
     const outcome = await processSession(transcriptDeps(wise.ops, soniox.client, { callModel: callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" });
     expect(outcome).toMatchObject({ result: "verified" });
@@ -649,12 +652,12 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
   });
 
   it("reuses a judged transcript draft whose POST did not go out — no second transcription or model call", async () => {
-    const written = { commitSha: "commit-that-wrote-it", promptVersion: 2, judgeVersion: 2, arm: "glm", evidence: "transcript" };
+    const written = { commitSha: "commit-that-wrote-it", promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION, arm: "glm", evidence: "transcript" };
     await seedRow({
       state: "awaiting_recording", evidence: "transcript", sonioxTranscriptionId: "job-5",
       arm: "glm", fields: GOOD_FIELDS,
       billing: { sessionStatus: "COMPLETED", creditsConsumed: 1, source: "auto_blank_reuse", expectedConsumedDelta: 0 },
-      metadata: { draftEvidence: "transcript", judge: { faithful: true, unsupported: [] }, pipeline: written },
+      metadata: { draftEvidence: "transcript", judge: PASSING_VERDICT, pipeline: written },
     });
     const soniox = fakeSoniox();
     const model = fakeModel();
@@ -673,6 +676,30 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(wise.posts).toHaveLength(1);
     // Credited to the code that wrote and judged the text, not the deploy that happened to send it.
     expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ pipeline: written, postedFromCommit: "commit-that-posted-it" });
+  });
+
+  it("never reuses a transcript draft an older prompt or judge wrote: writes and judges it again from the kept job", async () => {
+    // v4 (30 Sep): a v3 draft would skip the who-did-what and homework checks.
+    const written = { commitSha: "commit-that-wrote-it", promptVersion: 3, judgeVersion: 3, arm: "glm", evidence: "transcript" };
+    await seedRow({
+      state: "awaiting_recording", evidence: "transcript", sonioxTranscriptionId: "job-5",
+      arm: "glm", fields: GOOD_FIELDS,
+      billing: { sessionStatus: "COMPLETED", creditsConsumed: 1, source: "auto_blank_reuse", expectedConsumedDelta: 0 },
+      metadata: { draftEvidence: "transcript", judge: { faithful: true, unsupported: [] }, pipeline: written },
+    });
+    const soniox = fakeSoniox();
+    const model = fakeModel();
+    const wise = fakeWise({ details: [sessionDetail(RECORDING)] });
+    expect(await processSession(transcriptDeps(wise.ops, soniox.client, { callModel: model.callModel as never }), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+      .toMatchObject({ result: "verified" });
+    expect(soniox.created).toEqual([]); // the kept job is read again, not transcribed again
+    expect(soniox.polled).toEqual(["job-5"]);
+    expect(model.calls).toEqual(["post_class_feedback", "feedback_faithfulness"]);
+    expect(wise.posts).toHaveLength(1);
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({
+      judge: PASSING_VERDICT,
+      pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION, evidence: "transcript" },
+    });
   });
 
   it("never reuses a draft written from the summary", async () => {
@@ -718,6 +745,17 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(result.alertsSent).toBe(1);
     expect(sweepDeps.emails[0].text).toContain("is still not ready 3 hours after class");
     expect((await readSessionRow(db, SESSION_ID))?.alertsSent).toHaveProperty("no_recording");
+  });
+
+  it("does not alert while a class only waits to read Wise again", async () => {
+    // Since v4 a failed read also sends an older version's transcript draft back to wait for its (existing) recording.
+    await seedRow({
+      state: "awaiting_recording", evidence: "transcript", reason: "wise_read_failed",
+      scheduledEndAt: new Date(NOW.getTime() - 4 * 3600_000), nextAttemptAt: new Date(Date.now() + 3600_000),
+    });
+    const sweepDeps = transcriptDeps(fakeWise().ops, fakeSoniox().client);
+    expect((await runSweep(sweepDeps)).alertsSent).toBe(0);
+    expect((await readSessionRow(db, SESSION_ID))?.alertsSent).not.toHaveProperty("no_recording");
   });
 
   it("reaps old Soniox jobs nothing references, and leaves referenced ones", async () => {
@@ -880,13 +918,24 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
   });
 
   it("returns a row with a judged transcript draft to pending, not to waiting for the recording, when Wise cannot be read", async () => {
-    await seedRow({
-      state: "pending", evidence: "transcript", arm: "glm", fields: GOOD_FIELDS,
-      metadata: { draftEvidence: "transcript", judge: { faithful: true, unsupported: [] } },
-    });
-    expect(await processSession(transcriptDeps(fakeWise({ failReads: true }).ops, fakeSoniox().client), { wiseSessionId: SESSION_ID, trigger: "cron" }))
-      .toMatchObject({ result: "infra", detail: "wise_read_failed" });
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "pending", evidence: "transcript" });
+    // Only a complete, passing verdict from the current prompt and judge is reused (v4, 30 Sep). Any other draft is
+    // written again, so it waits for the recording like a class with no draft.
+    const current = { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION };
+    const cases: Array<[string, Record<string, unknown>, "pending" | "awaiting_recording"]> = [
+      ["current draft", { judge: PASSING_VERDICT, pipeline: current }, "pending"],
+      ["v3 verdict, no stamp", { judge: { faithful: true, unsupported: [] } }, "awaiting_recording"],
+      ["current stamp, incomplete verdict", { judge: { faithful: true, unsupported: [] }, pipeline: current }, "awaiting_recording"],
+      ["current stamp, a problem listed", { judge: { ...PASSING_VERDICT, misattributed: ["x"] }, pipeline: current }, "awaiting_recording"],
+      ["current prompt, previous judge", { judge: PASSING_VERDICT, pipeline: { ...current, judgeVersion: 3 } }, "awaiting_recording"],
+      ["previous prompt, current judge", { judge: PASSING_VERDICT, pipeline: { ...current, promptVersion: 3 } }, "awaiting_recording"],
+    ];
+    for (const [label, draft, state] of cases) {
+      await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
+      await seedRow({ state: "pending", evidence: "transcript", arm: "glm", fields: GOOD_FIELDS, metadata: { draftEvidence: "transcript", ...draft } });
+      expect(await processSession(transcriptDeps(fakeWise({ failReads: true }).ops, fakeSoniox().client), { wiseSessionId: SESSION_ID, trigger: "cron" }), label)
+        .toMatchObject({ result: "infra", detail: "wise_read_failed" });
+      expect((await readSessionRow(db, SESSION_ID))?.state, label).toBe(state);
+    }
   });
 
   it("stamps a new job's submit time, and does not count a failed status check once Soniox has answered", async () => {
