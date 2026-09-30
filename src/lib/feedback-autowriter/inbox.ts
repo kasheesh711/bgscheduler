@@ -80,6 +80,16 @@ const FAILED_POST_TITLES: Record<InboxDashboard["failedPosts"][number]["state"],
   rejected: "Wise rejected a post",
 };
 
+/** What an incident of a kind is, as a short plain sentence; a kind nobody listed gets a general one. */
+export function incidentTitle(kind: string): string {
+  return INCIDENT_TITLES[kind] ?? "An incident needs a look";
+}
+
+/** What happened to a post that did not end well, as a short plain sentence. */
+export function failedPostTitle(state: InboxDashboard["failedPosts"][number]["state"]): string {
+  return FAILED_POST_TITLES[state];
+}
+
 /** Why a post is flagged, by the flag's source. A flag's own note is never shown here: an agent's may quote the lesson. */
 const FLAG_SOURCES: Record<string, string> = {
   measured_fix: "changed in Wise after posting",
@@ -101,7 +111,8 @@ function timeOf(value: string | null, missing = Number.POSITIVE_INFINITY): numbe
   return Number.isNaN(time) ? missing : time;
 }
 
-function holdUrgency(deadlineAt: string | null, now: Date): InboxItem["urgency"] {
+/** How urgent a held class is: red with under 6 hours to its deadline (or past it), amber under 24 hours. */
+export function holdUrgency(deadlineAt: string | null, now: Date): InboxItem["urgency"] {
   const left = timeOf(deadlineAt) - now.getTime();
   return left < HOLD_CRITICAL_MS ? "critical" : left < HOLD_SOON_MS ? "soon" : "normal";
 }
@@ -152,7 +163,7 @@ export function buildInbox(
         id: `incident:${incident.id}`,
         kind: "incident",
         urgency: "critical",
-        title: INCIDENT_TITLES[incident.kind] ?? "An incident needs a look",
+        title: incidentTitle(incident.kind),
         detail: incident.summary,
         tutorKey: about?.tutorKey ?? null,
         wiseSessionId: incident.wiseSessionId,
@@ -210,7 +221,7 @@ export function buildInbox(
       id: `failed_post:${row.wiseSessionId}`,
       kind: "failed_post",
       urgency: "normal",
-      title: FAILED_POST_TITLES[row.state],
+      title: failedPostTitle(row.state),
       detail: parts(row.tutor, row.className),
       tutorKey: row.tutorKey,
       wiseSessionId: row.wiseSessionId,

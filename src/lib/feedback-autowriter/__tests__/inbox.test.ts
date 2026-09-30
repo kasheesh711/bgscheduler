@@ -1,7 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { INBOX_GROUPS, buildInbox, filterInbox, isOpenHold, type InboxDashboard, type InboxItem, type InboxReview } from "../inbox";
+import {
+  INBOX_GROUPS,
+  buildInbox,
+  failedPostTitle,
+  filterInbox,
+  holdUrgency,
+  incidentTitle,
+  isOpenHold,
+  type InboxDashboard,
+  type InboxItem,
+  type InboxReview,
+} from "../inbox";
 import type { ReviewQueueItem } from "../review-data";
 
 // Made-up tutors and ids; the student is the fixtures' one.
@@ -282,6 +293,25 @@ describe("buildInbox", () => {
     expect(ids(items)).toEqual(["hold:h1", "failed_post:f1"]);
     // Without a clock given, the list is built for now.
     expect(buildInbox(dashboard({ holds: [hold("h1", { deadlineAt: new Date(Date.now() - HOUR).toISOString() })] }), null)[0].urgency).toBe("critical");
+  });
+});
+
+describe("the words and colours the drawer shares with the list", () => {
+  it("names an incident and a failed post as the list does", () => {
+    expect(incidentTitle("halt")).toBe("Posting was halted");
+    expect(incidentTitle("critical_verdict")).toBe("A critical error was found in a post");
+    expect(incidentTitle("something_new")).toBe("An incident needs a look");
+    expect(failedPostTitle("verify_failed")).toBe("A post did not verify in Wise");
+    expect(failedPostTitle("unknown_outcome")).toBe("A post's outcome in Wise is unknown");
+    expect(failedPostTitle("rejected")).toBe("Wise rejected a post");
+  });
+
+  it("rates a hold by the time left to its deadline", () => {
+    expect(holdUrgency(inHours(30), NOW)).toBe("normal");
+    expect(holdUrgency(inHours(10), NOW)).toBe("soon");
+    expect(holdUrgency(inHours(2), NOW)).toBe("critical");
+    expect(holdUrgency(inHours(-2), NOW)).toBe("critical");
+    expect(holdUrgency(null, NOW)).toBe("normal");
   });
 });
 
