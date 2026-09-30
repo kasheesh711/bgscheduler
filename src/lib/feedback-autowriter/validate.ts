@@ -47,7 +47,11 @@ export function finalizeFields(output: ModelOutput, studentDisplayName: string):
 }
 
 const PLACEHOLDER_TOKEN = /\[(?:STUDENT_\d+|TUTOR)\]/u;
-const MARKDOWN = /(?:^|\n)\s*#{1,6}\s|\*\*|__/u;
+/**
+ * Markdown the writer is told not to use: a heading, `**…**`, or `__…__` around text. A fill-in blank is plain text
+ * ("quick checks such as I am ___ for adjectives"): the 30 Sep replay held a sound transcript draft over one.
+ */
+const MARKDOWN = /(?:^|\n)\s*#{1,6}\s|\*\*|(?<![_\p{L}\p{N}])__(?=[^\s_])[^\n]*?[^\s_]__(?![_\p{L}\p{N}])/u;
 
 /**
  * Everything the post-class policy would object to, plus the autowriter's own
