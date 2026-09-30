@@ -3,15 +3,9 @@ import { describe, expect, it } from "vitest";
 import type { AutowriterReview, ReviewQueueItem } from "@/lib/feedback-autowriter/review-data";
 import { ReviewUnavailable } from "../feedback-autowriter-dashboard";
 import { FeedbackAutowriterQualityPanel, LowerBoundBar } from "../feedback-autowriter-quality-panel";
-import {
-  FeedbackAutowriterReviewQueue,
-  VerdictForm,
-  buildVerdictRequest,
-  downgradeFor,
-  hasHarshJudgement,
-  matchesFilter,
-  verdictLabel,
-} from "../feedback-autowriter-review-queue";
+import { FeedbackAutowriterReviewQueue } from "../feedback-autowriter-review-queue";
+import { buildVerdictRequest, downgradeFor, hasHarshJudgement, matchesFilter, verdictLabel } from "../review-helpers";
+import { VerdictForm } from "../verdict-form";
 
 // Synthetic names and ids only.
 const FIELDS = { topics: "Rotation patterns", performance: "Alexander spotted symmetry fast.", improvement: "Colour sequences", homework: "" };
