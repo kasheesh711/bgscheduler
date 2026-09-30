@@ -193,6 +193,17 @@ describe("FeedbackAutowriterReviewQueue", () => {
     expect(html).not.toContain("Correction by");
   });
 
+  it("says Wise holds no text when Class Feedback last read none there, the first shot's text struck out", () => {
+    const cleared = item({
+      current: { fields: { topics: "", performance: "", improvement: "", homework: "" }, source: "wise_no_text", at: "2026-09-30T02:13:00.000Z" },
+      diff: [{ field: "topics", segments: [{ kind: "removed", text: FIELDS.topics }] }],
+    });
+    const html = renderToStaticMarkup(<FeedbackAutowriterReviewQueue review={review({ queue: [cleared] })} canControl={false} onRecorded={() => undefined} />);
+    expect(html).toContain("none in Wise, as Class Feedback last read it");
+    expect(html).toContain(`${FIELDS.topics}</del>`);
+    expect(html).not.toContain("unchanged since the first post");
+  });
+
   it("counts the filters from the database totals and says when the queue is a subset", () => {
     const html = renderToStaticMarkup(<FeedbackAutowriterReviewQueue review={review({ queueTotals: { needsReview: 40, flagged: 3, all: 350, shown: 2 } })}
       canControl={false} onRecorded={() => undefined} />);

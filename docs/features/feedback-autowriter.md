@@ -655,8 +655,9 @@ lower-bound bar marked at 70% and 80%, the coverage breakdown, fix rounds per po
 ("Texts in Wise" per tutor), incidents with an owner-only Acknowledge, and the job's last run. *Review*: filters (needs
 review / flagged / all, counted exactly; every flagged and unreviewed class is always listed, then the latest reviewed
 ones); each class shows the immutable first shot ("recorded at post" or "reconstructed · hash-verified", and a warning
-when it landed without verifying) next to the current text (the last verified correction, or what Class Feedback last
-read from Wise if newer) with a word diff, the saves measured in Wise by actor, corrections, open flags and the
+when it landed without verifying) next to the current text (the last verified correction, or, when Class Feedback read
+the class after it, what that read found in Wise: the teacher feedback `post_class_sessions.latest_feedback_version_id`
+points at, or none) with a word diff, the saves measured in Wise by actor, corrections, open flags and the
 verdict log. Owner-only Approve / Needs fix controls; other admins read. Before migration 0101 the tabs say the review
 tables are missing; any other load failure says so (and is logged by name and SQLSTATE).
 

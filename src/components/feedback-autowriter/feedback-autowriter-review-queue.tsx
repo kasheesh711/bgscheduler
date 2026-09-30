@@ -74,6 +74,14 @@ const OUTCOME_LABEL: Record<string, string> = {
   rejected: "Refused by Wise, but the submission changed",
 };
 
+const CURRENT_SOURCE_LABEL: Record<ReviewQueueItem["current"]["source"], string> = {
+  wise_feedback_version: "as Class Feedback last read it from Wise",
+  wise_no_text: "none in Wise, as Class Feedback last read it",
+  correction: "the last verified correction",
+  policy: "the owner's policy re-post (not a fix)",
+  first_shot: "unchanged since the first post",
+};
+
 /** Measured fixes per actor, e.g. "Tutor 1, Autowriter — correction 1". */
 export function measuredFixesLabel(byActor: Record<string, number>): string {
   return Object.entries(byActor).filter(([, count]) => count > 0).toSorted(([a], [b]) => a.localeCompare(b))
@@ -338,9 +346,7 @@ function QueueItem({ item, canControl, onRecorded }: { item: ReviewQueueItem; ca
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <h3 className="text-sm font-semibold">Current text</h3>
               <span className="text-[11px] text-muted-foreground">
-                {item.current.source === "wise_feedback_version" ? "as Class Feedback last read it from Wise"
-                  : item.current.source === "correction" ? "the last verified correction"
-                    : item.current.source === "policy" ? "the owner's policy re-post (not a fix)" : "unchanged since the first post"}
+                {CURRENT_SOURCE_LABEL[item.current.source]}
                 {item.current.at ? ` · ${when(item.current.at)}` : ""}
               </span>
             </div>

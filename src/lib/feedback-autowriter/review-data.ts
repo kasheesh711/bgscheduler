@@ -163,7 +163,12 @@ export interface ReviewQueueItem {
     outcome: string;
     problems: string[];
   };
-  current: { fields: FeedbackFieldAnswers; source: "first_shot" | "correction" | "policy" | "wise_feedback_version"; at: string | null };
+  /**
+   * Our last verified post (`first_shot`, `correction`, `policy`), or, when Class Feedback read the class after it, what
+   * that read found in Wise: the teacher feedback (`wise_feedback_version`), or none (`wise_no_text`, empty `fields`:
+   * a form left or cleared blank, or a submission gone). `at` is the post's time, or the read's.
+   */
+  current: { fields: FeedbackFieldAnswers; source: "first_shot" | "correction" | "policy" | "wise_feedback_version" | "wise_no_text"; at: string | null };
   changed: boolean;
   diff: Array<{ field: Field; segments: DiffSegment[] }>;
   /** Every re-post after the first shot: a `correction` (a fix) or a `policy` re-post (an owner rule change, never a fix). */
@@ -287,7 +292,11 @@ export interface ReviewSourceRows {
     reason: string | null;
     className: string | null;
   }>;
-  currentVersions: ReadonlyArray<{ wiseSessionId: string; observedAt: Date; fields: FeedbackFieldAnswers }>;
+  /**
+   * Class Feedback's last read of each class it has read (`post_class_sessions.last_observed_at`) and the teacher
+   * feedback it found (`latest_feedback_version_id`), null when it found no text.
+   */
+  currentVersions: ReadonlyArray<{ wiseSessionId: string; lastObservedAt: Date; fields: FeedbackFieldAnswers | null }>;
   metrics: readonly MetricRow[];
   lastDailyGate: typeof G.$inferSelect | null;
   incidents: ReadonlyArray<typeof I.$inferSelect>;
@@ -413,10 +422,17 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
       const session = sessions.get(review.wiseSessionId);
       const corrections = posts.filter((post) => post.kind !== "first_shot").toSorted((a, b) => postTime(a) - postTime(b));
       const latestPost = corrections.filter((post) => post.outcome === "verified").at(-1) ?? firstShot;
-      const version = input.currentVersions.find((row) => row.wiseSessionId === review.wiseSessionId);
+      // Class Feedback's last read of the class, when it came after our last post, is what Wise holds now: its text, or
+      // none. The read's time is compared, not its version's: a version keeps the time it was first seen, and a text
+      // changed back to an earlier one is that older version again.
+      const read = input.currentVersions.find((row) => row.wiseSessionId === review.wiseSessionId);
       const firstFields = asFields(firstShot.fields);
-      const current = version && version.observedAt.getTime() > postTime(latestPost)
-        ? { fields: version.fields, source: "wise_feedback_version" as const, at: version.observedAt.toISOString() }
+      const current = read && read.lastObservedAt.getTime() > postTime(latestPost)
+        ? {
+          fields: read.fields ?? asFields(null),
+          source: read.fields ? "wise_feedback_version" as const : "wise_no_text" as const,
+          at: read.lastObservedAt.toISOString(),
+        }
         : {
           fields: asFields(latestPost.fields),
           source: latestPost === firstShot ? "first_shot" as const : latestPost.kind === "policy" ? "policy" as const : "correction" as const,
@@ -587,12 +603,15 @@ async function loadAvailableReview(db: Database, now: Date, queueLimit: number):
       wiseSessionId: S.wiseSessionId, wiseClassId: S.wiseClassId, wiseTeacherUserId: S.wiseTeacherUserId, state: S.state,
       reason: S.reason, className: PC.className,
     }).from(S).leftJoin(PC, eq(PC.wiseSessionId, S.wiseSessionId)).where(inArray(S.wiseSessionId, ids))),
-    byIds(() => db.selectDistinctOn([PC.wiseSessionId], {
-      wiseSessionId: PC.wiseSessionId, observedAt: PCV.observedAt, topics: PCV.topics, performance: PCV.performance,
-      improvement: PCV.improvement, homework: PCV.homework,
-    }).from(PCV).innerJoin(PC, eq(PC.id, PCV.sessionId))
-      .where(and(inArray(PC.wiseSessionId, ids), eq(PCV.profile, "teacher")))
-      .orderBy(PC.wiseSessionId, desc(PCV.observedAt))),
+    // Class Feedback's last read of each class, and the version it pointed the class at: on every read,
+    // `latest_feedback_version_id` is set to the current teacher submission when its topics, performance or improvement
+    // hold text, and to null otherwise. Not the version observed last: a version is stored once per content, first
+    // seen, so a text changed back or cleared again writes no new row, and a removed submission writes none at all.
+    byIds(() => db.select({
+      wiseSessionId: PC.wiseSessionId, lastObservedAt: PC.lastObservedAt, versionId: PCV.id, topics: PCV.topics,
+      performance: PCV.performance, improvement: PCV.improvement, homework: PCV.homework,
+    }).from(PC).leftJoin(PCV, and(eq(PCV.id, PC.latestFeedbackVersionId), eq(PCV.profile, "teacher")))
+      .where(inArray(PC.wiseSessionId, ids))),
     db.select().from(M).where(gte(M.metricDate, window.start)),
     db.select().from(G).where(eq(G.evalKind, "daily")).orderBy(desc(G.bangkokDate)).limit(1),
     // The latest 50, plus every critical incident still waiting for the owner.
@@ -613,11 +632,11 @@ async function loadAvailableReview(db: Database, now: Date, queueLimit: number):
     flags,
     fixEvents,
     sessions,
-    currentVersions: versions.map((row) => ({
+    currentVersions: versions.flatMap((row) => row.lastObservedAt ? [{
       wiseSessionId: row.wiseSessionId,
-      observedAt: row.observedAt,
-      fields: { topics: row.topics, performance: row.performance, improvement: row.improvement, homework: row.homework },
-    })),
+      lastObservedAt: row.lastObservedAt,
+      fields: row.versionId ? asFields(row) : null,
+    }] : []),
     metrics,
     lastDailyGate: lastDaily[0] ?? null,
     incidents,
