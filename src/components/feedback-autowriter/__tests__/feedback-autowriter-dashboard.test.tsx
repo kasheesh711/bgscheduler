@@ -35,7 +35,7 @@ function payload(overrides: Partial<AutowriterDashboard> = {}): AutowriterDashbo
     recent: [{
       wiseSessionId: "6a9fbc9c617dfedd88a0471e",
       wiseUrl: "https://learn.begiftededucation.com/links?type=classroom_entity&entityType=session&entityId=6a9fbc9c617dfedd88a0471e&classId=6a9a54f7ab2211cca56eaf5c&profile=teacher",
-      className: "Ranada (Dada.Pu) Purdue",
+      className: "Ratana (Fah.Me) Meesuk",
       tutor: "Kevin (Kev) Y. Hsieh Online",
       scheduledEndAt: "2026-09-29T04:00:00.000Z",
       state: "verified",
@@ -45,7 +45,7 @@ function payload(overrides: Partial<AutowriterDashboard> = {}): AutowriterDashbo
       postStartedAt: "2026-09-29T04:02:30.000Z",
       latencyMinutes: 2.5,
       costUsd: 0.0012,
-      fields: { topics: "Rearranging equations", performance: "Ranada did well", improvement: "nth term", homework: "" },
+      fields: { topics: "Rearranging equations", performance: "Ratana did well", improvement: "nth term", homework: "" },
       judgeUnsupported: [],
     }],
     webhooks: { lastReceivedAt: "2026-09-29T04:00:05.000Z", byEvent: [{ eventName: "MeetingEndedEvent", count: 3 }], byOutcome: [{ outcome: "verified", count: 1 }] },
@@ -61,7 +61,7 @@ describe("FeedbackAutowriterDashboard", () => {
     expect(html).toContain("Kevin (Kev) Y. Hsieh");
     expect(html).toContain("Partly on");
     expect(html).toContain("In-person classes stay with the tutor and are not shown here.");
-    expect(html).toContain("Ranada (Dada.Pu) Purdue");
+    expect(html).toContain("Ratana (Fah.Me) Meesuk");
     expect(html).toContain("Rearranging equations");
     expect(html).toContain("GPT-6 Luna");
     expect(html).toContain("MeetingEndedEvent");

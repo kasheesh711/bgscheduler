@@ -86,7 +86,7 @@ This plan comes from a six-round owner interview, three code explorations and th
   - expansion candidates (Phase 6).
   In-person classes stay hidden, as now.
 - **Backfill day 1:**
-  - First-shot text for 5 of the 6 renamed posts comes from their first stored Class Feedback version. Gift's (`6aba30a9`) is rebuilt by reversing the Bas→Worawut rename.
+  - First-shot text for 5 of the 6 renamed posts comes from their first stored Class Feedback version. Gift's (`6aba30a9`) is rebuilt by reversing its nickname rename (nickname back to first name).
   - The one-time renames are logged as origin `one-time`. Whether they count as fixes is interview decision D-01.
 
 ## Phase 2: guarded correction path (productises `.feedback-autowriter/nickname-fix.ts`)
