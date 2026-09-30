@@ -200,6 +200,46 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     expect(posted).not.toMatch(/Somchai/u);
   });
 
+  it("posts in the same run when the writer is rate limited first: tried again within seconds, one call record per attempt", async () => {
+    const wise = fakeWise();
+    // As OpenRouter reported the writer route's upstream limit on 30 Sep (HTTP 200, code 429 in the body).
+    const limited: OpenRouterCallResult = {
+      ok: false, error: "openai/gpt-6.1-sol is temporarily rate-limited upstream. Please retry shortly.", httpStatus: 429,
+      model: null, provider: null, finishReason: null, usage: null, latencyMs: 900,
+    };
+    const writerReplies = [limited, limited];
+    const models: string[] = [];
+    const callModel = vi.fn(async (request: { schemaName: string; model: string }) => {
+      models.push(request.model);
+      return request.schemaName === "post_class_feedback" ? writerReplies.shift() ?? sol(writerJson) : glm(FAITHFUL_VERDICT);
+    });
+    const waits: number[] = [];
+    const outcome = await processSession(
+      deps(wise.ops, { callModel: callModel as never, sleep: async (ms) => { waits.push(ms); }, random: () => 0 }),
+      { wiseSessionId: SESSION_ID, trigger: "webhook" },
+    );
+    // Written, judged at both levels and posted by this run — not left for the next sweep.
+    expect(outcome).toMatchObject({ result: "verified" });
+    expect(wise.posts).toHaveLength(1);
+    // The writer's own model each time: a rate limit never sends the class on to the fallback writer.
+    expect(models).toEqual(["openai/gpt-6.1-sol", "openai/gpt-6.1-sol", "openai/gpt-6.1-sol", GLM_MODEL, GLM_MODEL]);
+    // The two waits (4 s and 10 s, here at the low end of their ±30%) went through the injected wait.
+    expect(waits.filter((ms) => ms === 2_800 || ms === 7_000)).toEqual([2_800, 7_000]);
+    const row = await readSessionRow(db, SESSION_ID);
+    expect(row).toMatchObject({ state: "verified", arm: "sol", retryCount: 0 });
+    const calls = await db.select().from(schema.feedbackAutowriterCalls);
+    const writes = calls.filter((call) => call.role === "writer")
+      .map((call) => ({ ok: call.ok, costUsd: call.costUsd, retry: (call.result as { rateLimitRetry?: unknown }).rateLimitRetry ?? null }));
+    // Both rate-limited attempts are recorded, at no cost; each attempt after the first says which retry it was.
+    expect(writes.toSorted((a, b) => Number(a.retry) - Number(b.retry))).toEqual([
+      { ok: false, costUsd: null, retry: null },
+      { ok: false, costUsd: null, retry: 1 },
+      { ok: true, costUsd: "0.00200000", retry: 2 },
+    ]);
+    expect(calls.filter((call) => call.role === "writer" && !call.ok).map((call) => call.error)).toEqual(Array(2).fill(limited.error));
+    expect(calls.filter((call) => call.role === "judge")).toHaveLength(2);
+  });
+
   it("does nothing at all while halted: no Wise read, no model call, no row", async () => {
     await updateControl(db, { haltedAt: new Date(), haltReason: "test halt" }, "t@x.com");
     const wise = fakeWise();
@@ -1563,17 +1603,25 @@ describe("transcript first (Postgres + fakes)", () => {
     expect(await attempt([failedCall("Provider returned error", 500)]).run()).toMatchObject({ result: "infra", detail: `${arm}:Provider returned error` });
     expect(await counted()).toBe(2);
 
-    // 4. Wise cannot be read, 5. the function runs out of time before a model call, and 6. OpenRouter says our
-    // credit ran out: none of them is the writer's failure, and none starts the count again.
+    // 4. Wise cannot be read, 5. the function runs out of time before a model call, 6. OpenRouter says our
+    // credit ran out, and 7. it rate limits the writer's route through all three retries of the run: none of them is
+    // the writer's failure, and none starts the count again.
     expect(await attempt([], {}, fakeWise({ failReads: true })).run()).toMatchObject({ result: "infra", detail: "wise_read_failed" });
     const outOfTime = attempt([], { deadlineMs: Date.now() + 60_000 });
     expect(await outOfTime.run()).toMatchObject({ result: "infra", detail: "function_budget_exhausted" });
     expect(outOfTime.model.seen).toEqual([]);
     expect(await attempt([failedCall("Insufficient credits", 402)]).run())
       .toMatchObject({ result: "infra", detail: `${arm}:Insufficient credits` });
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "transcribing", metadata: { writerErrors: 2 } });
+    const rateLimit = "openai/gpt-6.1-sol is temporarily rate-limited upstream.";
+    const rateLimited = attempt(Array<OpenRouterCallResult>(4).fill(failedCall(rateLimit, 429)));
+    expect(await rateLimited.run()).toMatchObject({ result: "infra", detail: `${arm}:${rateLimit}` });
+    // The request and its three retries, all to the writer's own model: never the fallback writer.
+    expect(rateLimited.model.seen).toEqual([writer, writer, writer, writer]);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+      state: "transcribing", reason: `infra:${arm}:${rateLimit}`, sonioxTranscriptionId: "job-1", metadata: { writerErrors: 2 },
+    });
 
-    // 7. The writer's third failure in a row (a reply that is not JSON): the class is written from the summary
+    // 8. The writer's third failure in a row (a reply that is not JSON): the class is written from the summary
     // instead of retried until the deadline. The job stays on the row for the review window, like any fallback's.
     const third = attempt([failedCall("invalid_json_response")]);
     expect(await third.run()).toMatchObject({ result: "summary_fallback", detail: "writer_failed" });

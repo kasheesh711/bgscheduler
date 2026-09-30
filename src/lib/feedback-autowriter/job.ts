@@ -132,6 +132,8 @@ export interface AutowriterDeps {
   now?: () => Date;
   callModel?: Parameters<typeof runWritingPipeline>[0]["callModel"];
   sleep?: (ms: number) => Promise<void>;
+  /** The spread of the wait before a rate-limited model call is tried again (tests inject a fixed one). */
+  random?: () => number;
 }
 
 export type ProcessResult =
@@ -589,6 +591,8 @@ async function processLeased(deps: AutowriterDeps, input: {
     record: (record) => recordCall(db, record),
     remainingMs: () => remaining(deps),
     callModel: deps.callModel,
+    sleep: deps.sleep,
+    random: deps.random,
   });
   if (result.kind === "infra") {
     await release({ state: "pending", reason: `infra:${result.error}`, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true });
@@ -1021,6 +1025,8 @@ async function processTranscript(deps: AutowriterDeps, input: {
     record: (record) => recordCall(db, record),
     remainingMs: () => remaining(deps),
     callModel: deps.callModel,
+    sleep: deps.sleep,
+    random: deps.random,
   });
   if (result.kind === "infra") {
     // Transcript first (owner decisions, 30 Sep): the writer failing on the transcript draft (a time-out, a reply

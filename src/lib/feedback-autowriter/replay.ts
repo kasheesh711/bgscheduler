@@ -26,7 +26,7 @@ import {
   type JudgeOutput,
   type StoredJudgeVerdict,
 } from "./judge";
-import { callOpenRouter, type OpenRouterCallResult } from "./openrouter";
+import { callOpenRouter, callWithRateLimitRetries, type OpenRouterCallResult } from "./openrouter";
 import { runWritingPipeline, type PipelineResult } from "./pipeline";
 import { PROMPT_VERSION, chooseStudentDisplayName, classDetailsBlock, describeClass, redactForModel } from "./prompt";
 import { AUTOWRITER_TEACHER_ALLOWLIST, AUTOWRITER_TUTORS, rosterTutor, type AutowriterTutor } from "./roster";
@@ -93,6 +93,8 @@ export interface ReplayDeps {
   fetchText?: (url: string) => Promise<string>;
   callModel?: CallModel;
   sleep?: (ms: number) => Promise<void>;
+  /** The spread of the wait before a rate-limited model call is tried again (tests inject a fixed one). */
+  random?: () => number;
   /** Keep the rendered transcript in the record. Off by default: lesson text stays out of the files. */
   keepTranscripts?: boolean;
   /** Longest wait for one Soniox job (default: production's, `AUTOWRITER_TRANSCRIBE_TIMEOUT_MS`). */
@@ -198,6 +200,7 @@ async function fetchText(url: string): Promise<string> {
 /**
  * Every model call, kept in memory with its tokens, latency and (judge) verdict. The pipeline itself judges every
  * draft at both efforts on the same messages (v5), so the two can be compared on the same draft from its own calls.
+ * A rate-limited call tried again in the same run (production's retries) is one entry per attempt.
  * `writerContents` keeps the writer's replies to show a held draft.
  */
 function recordingCaller(deps: ReplayDeps, record: ReplayRecord, purpose: ReplayCall["purpose"], options: {
@@ -322,7 +325,8 @@ async function zoomCues(deps: ReplayDeps, detail: AutowriterSessionDetail): Prom
 
 /**
  * The posted draft, judged as production judges a transcript draft — at every effort, on the same messages, passing
- * only when all do — against the transcript; names redacted as for any judge call. One try per level.
+ * only when all do — against the transcript; names redacted as for any judge call. One try per level (a rate-limited
+ * call is tried again first, as in production).
  */
 async function judgePostedDraft(deps: ReplayDeps, record: ReplayRecord, input: {
   fields: FeedbackFieldAnswers;
@@ -348,17 +352,23 @@ async function judgePostedDraft(deps: ReplayDeps, record: ReplayRecord, input: {
     speakerLabels: input.speakerLabels,
     otherPeople: [],
   });
-  const replies = await Promise.all(AUTOWRITER_JUDGE_EFFORTS.map((effort) => call({
-    apiKey: deps.apiKey,
-    model: judge.model,
-    provider: judge.provider,
-    messages,
-    schemaName: "feedback_faithfulness",
-    schema: JUDGE_JSON_SCHEMA,
-    effort,
-    maxTokens: 32_000,
-    timeoutMs: AUTOWRITER_JUDGE_TIMEOUT_MS.transcript,
-  })));
+  const replies = (await Promise.all(AUTOWRITER_JUDGE_EFFORTS.map((effort) => callWithRateLimitRetries({
+    call,
+    request: {
+      apiKey: deps.apiKey,
+      model: judge.model,
+      provider: judge.provider,
+      messages,
+      schemaName: "feedback_faithfulness",
+      schema: JUDGE_JSON_SCHEMA,
+      effort,
+      maxTokens: 32_000,
+      timeoutMs: AUTOWRITER_JUDGE_TIMEOUT_MS.transcript,
+    },
+    remainingMs: () => REPLAY_BUDGET_MS,
+    sleep: deps.sleep,
+    random: deps.random,
+  })))).map((made) => made.call);
   const verdicts = replies.map((reply) => reply.ok ? parseJudgeOutput(reply.content) : null);
   const failed = verdicts.findIndex((verdict) => !verdict);
   if (failed >= 0) {
@@ -477,6 +487,8 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
           record: async () => {},
           remainingMs: () => REPLAY_BUDGET_MS,
           callModel: recordingCaller(deps, record, "transcript_draft", { writerContents }),
+          sleep: deps.sleep,
+          random: deps.random,
         });
         // Production retries a transcript draft whose model call failed every 10 minutes. After the writer's third
         // failure in a row it writes the class from the summary (`writer_failed`); a judge failure just retries and,
@@ -525,6 +537,8 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
       record: async () => {},
       remainingMs: () => REPLAY_BUDGET_MS,
       callModel: recordingCaller(deps, record, "summary_draft", { writerContents }),
+      sleep: deps.sleep,
+      random: deps.random,
     });
     record.summaryDraft = draftOf(result, record, "summary_draft", writerContents, displayName);
   }

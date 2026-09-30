@@ -19,7 +19,7 @@ import {
   type JudgeOutput,
   type StoredJudgeVerdict,
 } from "./judge";
-import { callOpenRouter, type OpenRouterCallResult } from "./openrouter";
+import { callOpenRouter, callWithRateLimitRetries, type OpenRouterCallResult } from "./openrouter";
 import {
   FEEDBACK_JSON_SCHEMA,
   PROMPT_VERSION,
@@ -53,6 +53,10 @@ export interface PipelineSession {
   summary: AiSummary;
 }
 
+/**
+ * One request to a model. A call that was rate limited and tried again in the same run (`callWithRateLimitRetries`)
+ * is one record per attempt: the attempts after the first carry `result.rateLimitRetry` (1, 2 or 3).
+ */
 export interface CallRecord {
   wiseSessionId: string;
   role: "writer" | "judge";
@@ -134,7 +138,10 @@ type CallModel = typeof callOpenRouter;
  * Sol writes → deterministic validation → GLM judge (faithfulness) at `medium` and `high` → accepted.
  * Any content failure falls back to Luna (validated and judged the same
  * way), for a summary and a transcript alike: every route has zero data
- * retention. Infra failures stop immediately so the session is retried later.
+ * retention. Infra failures stop immediately so the session is retried later —
+ * except that a rate-limited call is first tried again in this run (a few
+ * seconds apart, while the function's time allows): still rate limited after
+ * that, it is the same infra failure as before.
  */
 export async function runWritingPipeline(input: {
   apiKey: string;
@@ -144,6 +151,9 @@ export async function runWritingPipeline(input: {
   record: (record: CallRecord) => Promise<void>;
   remainingMs: () => number;
   callModel?: CallModel;
+  /** The wait before a rate-limited call is tried again, and its random spread (tests inject both). */
+  sleep?: (ms: number) => Promise<void>;
+  random?: () => number;
 }): Promise<PipelineResult> {
   const callModel = input.callModel ?? callOpenRouter;
   const { session } = input;
@@ -157,24 +167,50 @@ export async function runWritingPipeline(input: {
     ? otherPeopleNamed(redactedSummary, session.studentFullName, session.classDetails, session.studentAliases)
     : [];
 
-  const run = async (config: AutowriterModelConfig, role: "writer" | "judge", messages: Array<{ role: "system" | "user"; content: string }>, preferredTimeoutMs: number) => {
+  /**
+   * The one place a model is called — writer, fallback writer and each judge level alike. `record` stores one
+   * attempt; the returned `record` stores the last one, with what the pipeline made of its reply.
+   */
+  const run = async (
+    config: AutowriterModelConfig,
+    role: "writer" | "judge",
+    messages: Array<{ role: "system" | "user"; content: string }>,
+    preferredTimeoutMs: number,
+    record: (call: OpenRouterCallResult, result: Record<string, unknown>) => Promise<void>,
+  ) => {
     const availableMs = input.remainingMs() - AUTOWRITER_CALL_DEADLINE_MARGIN_MS;
     // A judge never starts without its full time-out: cut short by our deadline it could not finish (owner decision,
     // 30 Sep). A writer may start with less (at least 30 s).
     if (role === "judge" ? availableMs < preferredTimeoutMs : availableMs < 30_000) return { kind: "budget" as const };
     const timeoutMs = Math.min(preferredTimeoutMs, availableMs);
-    const call = await callModel({
-      apiKey: input.apiKey,
-      model: config.model,
-      provider: config.provider,
-      messages,
-      schemaName: role === "writer" ? "post_class_feedback" : "feedback_faithfulness",
-      schema: role === "writer" ? FEEDBACK_JSON_SCHEMA : JUDGE_JSON_SCHEMA,
-      effort: config.effort,
-      maxTokens: 32_000,
-      timeoutMs,
+    // A rate limit is tried again here, in this run, with the same request and time-out — while the wait and that
+    // time-out still fit our deadline (owner decision, 30 Sep).
+    const { call, rateLimited } = await callWithRateLimitRetries({
+      call: callModel,
+      request: {
+        apiKey: input.apiKey,
+        model: config.model,
+        provider: config.provider,
+        messages,
+        schemaName: role === "writer" ? "post_class_feedback" : "feedback_faithfulness",
+        schema: role === "writer" ? FEEDBACK_JSON_SCHEMA : JUDGE_JSON_SCHEMA,
+        effort: config.effort,
+        maxTokens: 32_000,
+        timeoutMs,
+      },
+      remainingMs: input.remainingMs,
+      sleep: input.sleep,
+      random: input.random,
     });
-    return { kind: "call" as const, call, shortened: timeoutMs < preferredTimeoutMs };
+    // Every attempt was a request: each is its own call record, and a retry says which retry it was.
+    const marked = (retry: number, result: Record<string, unknown>) => retry > 0 ? { ...result, rateLimitRetry: retry } : result;
+    for (const [retry, limited] of rateLimited.entries()) await record(limited, marked(retry, { error: limited.error }));
+    return {
+      kind: "call" as const,
+      call,
+      shortened: timeoutMs < preferredTimeoutMs,
+      record: (result: Record<string, unknown>) => record(call, marked(rateLimited.length, result)),
+    };
   };
 
   // Every writer is on a zero-retention route, so transcripts get the fallback too.
@@ -190,13 +226,13 @@ export async function runWritingPipeline(input: {
       evidence,
       speakerLabels: session.speakerLabels,
       otherPeople,
-    }), AUTOWRITER_WRITER_TIMEOUT_MS);
+    }), AUTOWRITER_WRITER_TIMEOUT_MS, (call, result) => input.record({
+      wiseSessionId: session.wiseSessionId, role: "writer", arm: writer.arm, requestedModel: writer.model,
+      promptVersion: PROMPT_VERSION, call, result: { ...result, evidence },
+    }));
     if (written.kind === "budget") return { kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false, stage: "writer" };
     const writeCall = written.call;
-    const recordWriter = (result: Record<string, unknown>) => input.record({
-      wiseSessionId: session.wiseSessionId, role: "writer", arm: writer.arm, requestedModel: writer.model,
-      promptVersion: PROMPT_VERSION, call: writeCall, result: { ...result, evidence },
-    });
+    const recordWriter = written.record;
 
     if (!writeCall.ok) {
       await recordWriter({ error: writeCall.error });
@@ -252,14 +288,14 @@ export async function runWritingPipeline(input: {
       const config: AutowriterModelConfig = { ...AUTOWRITER_MODELS.judge, effort };
       let failure = "";
       for (let attempt = 0; attempt < JUDGE_ATTEMPTS; attempt += 1) {
-        const judged = await run(config, "judge", judgeMessages, AUTOWRITER_JUDGE_TIMEOUT_MS[evidence]);
+        const judged = await run(config, "judge", judgeMessages, AUTOWRITER_JUDGE_TIMEOUT_MS[evidence], (call, result) => input.record({
+          wiseSessionId: session.wiseSessionId, role: "judge", arm: config.arm, requestedModel: config.model,
+          promptVersion: JUDGE_PROMPT_VERSION, call,
+          result: { effort, ...result, judgedArm: writer.arm, judgedGeneration, evidence },
+        }));
         if (judged.kind === "budget") return { stop: { kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false, stage: "judge" } };
         const judgeCall = judged.call;
-        const recordJudge = (result: Record<string, unknown>) => input.record({
-          wiseSessionId: session.wiseSessionId, role: "judge", arm: config.arm, requestedModel: config.model,
-          promptVersion: JUDGE_PROMPT_VERSION, call: judgeCall,
-          result: { effort, ...result, judgedArm: writer.arm, judgedGeneration, evidence },
-        });
+        const recordJudge = judged.record;
         if (!judgeCall.ok) {
           await recordJudge({ error: judgeCall.error });
           if (isInfraFailure(judgeCall)) return { stop: callFailure(`judge:${effort}`, judgeCall, judged.shortened, "judge") };
