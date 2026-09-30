@@ -16,10 +16,15 @@
  *   … --generate [--teacher-id=<id>] [--eval-limit=20]
  *   … --export-grading --run=<runDir> --out=<file> [--teacher-id=<id>]
  *   … --report --run=<runDir>
+ *   … --replay [--sessions=<id>,<id>] [--per-tutor=4] [--days=7] [--concurrency=3] [--keep-transcripts]
+ *       What transcript first would do with recent classes: Wise session-detail GETs, database SELECTs, Soniox jobs
+ *       deleted after each transcript, model calls kept in memory. Writes .feedback-autowriter/replay/<ts>/
+ *       (records.json, summary.json, summary.md; 0600). --per-tutor defaults to 4, or 0 when --sessions is given.
  *
  * Run with: npx tsx --tsconfig scripts/tsconfig.json scripts/autowrite-online-feedback.ts …
  */
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { getDb } from "@/lib/db";
 import { assignModelArms } from "@/lib/feedback-autowriter/ab";
@@ -32,7 +37,14 @@ import {
   wiseApiActorId,
 } from "@/lib/feedback-autowriter/config";
 import { createSonioxClient } from "@/lib/feedback-autowriter/soniox";
-import { processSession, runSweep, type AutowriterDeps } from "@/lib/feedback-autowriter/job";
+import { loadTutorPriorFeedback, processSession, runSweep, type AutowriterDeps } from "@/lib/feedback-autowriter/job";
+import {
+  loadReplaySample,
+  renderReplayMarkdown,
+  runReplay,
+  summarizeReplay,
+  type ReplayWiseReads,
+} from "@/lib/feedback-autowriter/replay";
 import { AUTOWRITER_ROSTER, AUTOWRITER_TEACHER_ALLOWLIST, KEVIN_ONLINE_WISE_USER_ID, rosterTutor } from "@/lib/feedback-autowriter/roster";
 import {
   AUTOWRITER_ROOT,
@@ -228,6 +240,62 @@ async function generate(): Promise<void> {
   console.log(`Run written to ${runDir}`);
 }
 
+/**
+ * Read-only replay of transcript first (see replay.ts). Refuses to run together with any write mode, and hands the
+ * replay only Wise's session-detail GET — the POST is not reachable from it.
+ */
+async function replay(): Promise<void> {
+  const writeModes = [
+    ...["sweep", "pause", "resume"].filter((name) => flag(name)),
+    ...["process", "mode", "retry", "tutor-on", "tutor-off"].filter((name) => option(name) !== undefined),
+  ];
+  if (writeModes.length > 0) throw new Error(`--replay never runs with a write mode (${writeModes.map((name) => `--${name}`).join(", ")})`);
+  const apiKey = openRouterApiKey();
+  const sonioxKey = sonioxApiKey();
+  if (!apiKey || !sonioxKey) throw new Error("--replay needs OPENROUTER_API_KEY and SONIOX_API_KEY");
+  const sessionIds = (option("sessions") ?? "").split(",").map((id) => id.trim()).filter(Boolean);
+  const invalid = sessionIds.filter((id) => !/^[0-9a-f]{24}$/iu.test(id));
+  if (invalid.length > 0) throw new Error(`Not Wise session ids: ${invalid.join(", ")}`);
+  const count = (name: string, fallback: number, max: number) => {
+    const value = Number(option(name) ?? fallback);
+    if (!Number.isInteger(value) || value < 0 || value > max) throw new Error(`--${name} must be a whole number from 0 to ${max}`);
+    return value;
+  };
+  const perTutor = count("per-tutor", sessionIds.length > 0 ? 0 : 4, 20);
+  const days = count("days", 7, 30);
+  const concurrency = Math.max(1, count("concurrency", 3, 6));
+  const db = getDb();
+  const now = new Date();
+  const samples = await loadReplaySample(db, { sessionIds, perTutor, days, now });
+  console.log(`Replaying ${samples.length} class(es): ${perTutor} per tutor over ${days} days${sessionIds.length ? ` + ${sessionIds.length} named` : ""}.`);
+  const ops = createWiseFeedbackOps();
+  // Only the GET crosses over: nothing the replay holds can POST.
+  const wise: ReplayWiseReads = { getSessionDetailById: (sessionId) => ops.getSessionDetailById(sessionId) };
+  const records = await runReplay({
+    wise,
+    soniox: createSonioxClient(sonioxKey),
+    apiKey,
+    priorFeedback: (tutor) => loadTutorPriorFeedback(db, tutor, now),
+    keepTranscripts: flag("keep-transcripts"),
+  }, samples, {
+    concurrency,
+    onRecord: (record, index) => console.log(`${index + 1}/${samples.length} ${record.wiseSessionId} ${record.tutor ?? "?"}: ` +
+      `${record.outcome.split(":").slice(0, 2).join(":")}${record.soniox?.undeletedJobs.length ? " (SONIOX JOB NOT DELETED)" : ""}`),
+  });
+  const summary = summarizeReplay(records);
+  const runDir = path.join(AUTOWRITER_ROOT, "replay", now.toISOString().replace(/[:.]/gu, "-"));
+  writeArtifact(path.join(runDir, "records.json"), records);
+  writeArtifact(path.join(runDir, "summary.json"), summary);
+  fs.writeFileSync(path.join(runDir, "summary.md"), renderReplayMarkdown({
+    summary, records, commit: process.env.AUTOWRITER_LOCAL_COMMIT ?? null, generatedAt: now,
+  }), { encoding: "utf8", mode: 0o600 });
+  console.log(`Replay written to ${runDir}`);
+  if (summary.soniox.undeletedJobs.length > 0) {
+    console.error(`Soniox jobs not deleted (the production reaper removes them after 2 h): ${summary.soniox.undeletedJobs.join(", ")}`);
+    process.exitCode = 1;
+  }
+}
+
 function exportGrading(runDir: string, out: string, tutorNames: readonly string[]): void {
   const run = loadRun(runDir);
   const { groups, map } = buildGradingExport({ sessions: run.sessions, drafts: run.drafts, tutorNames, random: seededRandom(runDir) });
@@ -239,6 +307,8 @@ function exportGrading(runDir: string, out: string, tutorNames: readonly string[
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  // First, so a replay can never fall through to a write mode.
+  if (flag("replay")) return replay();
   if (flag("status")) return status();
   if (option("mode") || flag("pause") || flag("resume") || option("tutor-off") || option("tutor-on") || option("retry")) return control();
   if (flag("sweep")) {
