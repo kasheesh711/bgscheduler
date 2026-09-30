@@ -428,8 +428,7 @@ function round(value: number, digits: number): number {
 }
 
 /** The 14 days of the busy fixture as the trends route returns them; a longer range starts with days without data. */
-export function trendsFixture(overrides: Partial<AutowriterTrends> & { days?: TrendRangeDays } = {}): AutowriterTrends {
-  const { days: rangeDays = 14, ...rest } = overrides;
+export function trendsFixture(rangeDays: TrendRangeDays = 14, overrides: Partial<AutowriterTrends> = {}): AutowriterTrends {
   const cost = POSTED.map((posted, index) => round(posted * COST_PER_CLASS[index], 4));
   const busy = WINDOW_DATES.map((date, index): TrendDay => ({
     date,
@@ -472,7 +471,7 @@ export function trendsFixture(overrides: Partial<AutowriterTrends> & { days?: Tr
       writers: { sol: sum(POSTED) - sum(BY_LUNA) - sum(BY_GLM), luna: sum(BY_LUNA), glm: sum(BY_GLM) },
       holdsByCategory: { data_quality: 5, judge: 3, validation: 1, billing_or_form: 0, error: 0, other: 0 },
     },
-    ...rest,
+    ...overrides,
   };
 }
 

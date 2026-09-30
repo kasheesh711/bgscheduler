@@ -86,6 +86,11 @@ export function usd(value: number | null | undefined): string {
   return value < 0.01 && value > 0 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`;
 }
 
+/** A few cents to a tenth of a cent ("$0.041"): the cost of one class; "—" when there is no amount. */
+export function usdPerClass(value: number | null | undefined): string {
+  return value === null || value === undefined ? "—" : `$${value.toFixed(3)}`;
+}
+
 /** Minutes as "2.5 min", or as hours from an hour up ("1.2 h"); "—" when there are none. */
 export function minutes(value: number | null): string {
   if (value === null) return "—";

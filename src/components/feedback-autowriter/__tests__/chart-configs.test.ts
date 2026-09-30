@@ -149,7 +149,7 @@ describe("buildSpeedCostChartConfig", () => {
     expect(scales(config).y.ticks.callback?.(12, 0)).toBe("12m");
     expect(scales(config).y1.ticks.callback?.(0.04, 0)).toBe("$0.040");
     expect(tip(config, SERIES.minutes, 2)).toBe(" Minutes to post: 1.3 h (median)");
-    expect(tip(config, SERIES.cost7d, 2)).toBe(" Cost per class · 7-day: $0.04");
+    expect(tip(config, SERIES.cost7d, 2)).toBe(" Cost per class · 7-day: $0.044");
   });
 });
 

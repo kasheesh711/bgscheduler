@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { FIELD_LABELS, clock, count, dayMonth, dayOf, deadlineCountdown, longDate, minutes, percent, threshold, usd, when, whenAfter } from "../format";
+import {
+  FIELD_LABELS,
+  clock,
+  count,
+  dayMonth,
+  dayOf,
+  deadlineCountdown,
+  longDate,
+  minutes,
+  percent,
+  threshold,
+  usd,
+  usdPerClass,
+  when,
+  whenAfter,
+} from "../format";
 import { ARM_LABEL, effortsLabel, modelLabel } from "../model-labels";
 
 describe("times and dates", () => {
@@ -63,6 +78,10 @@ describe("numbers", () => {
     expect(usd(0)).toBe("$0.00");
     expect(usd(null)).toBe("—");
     expect(usd(undefined)).toBe("—");
+    // The cost of one class is a few cents: a tenth of a cent matters.
+    expect(usdPerClass(0.0412)).toBe("$0.041");
+    expect(usdPerClass(0.0376)).toBe("$0.038");
+    expect(usdPerClass(null)).toBe("—");
   });
 
   it("writes minutes, and hours from an hour up", () => {

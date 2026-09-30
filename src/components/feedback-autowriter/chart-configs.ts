@@ -3,7 +3,7 @@ import type { ChartThemeColors } from "@/components/sales-dashboard/chart-canvas
 import { GATE_THRESHOLDS, addDays } from "@/lib/feedback-autowriter/quality";
 import type { AutowriterReview } from "@/lib/feedback-autowriter/review-data";
 import type { TrendDay } from "@/lib/feedback-autowriter/trends";
-import { dayMonth, minutes as minutesText, percent, threshold, usd } from "./format";
+import { dayMonth, minutes as minutesText, percent, threshold, usdPerClass } from "./format";
 
 /**
  * The Chart.js configurations of the autowriter dashboard: the four trend charts and the rail's two mini charts.
@@ -236,7 +236,6 @@ export function buildCoverageChartConfig(days: readonly TrendDay[], colors: Auto
 
 /** Speed and cost: the median minutes from class end to the post on the left axis, the cost per posted class on the right. */
 export function buildSpeedCostChartConfig(days: readonly TrendDay[], colors: AutowriterChartColors): ChartConfiguration {
-  const money = (value: string | number) => `$${Number(value).toFixed(3)}`;
   return {
     type: "line",
     data: {
@@ -265,7 +264,7 @@ export function buildSpeedCostChartConfig(days: readonly TrendDay[], colors: Aut
           beginAtZero: true,
           border: { display: false },
           grid: { drawOnChartArea: false },
-          ticks: { color: colors.text, font: { size: 10 }, maxTicksLimit: 6, callback: money },
+          ticks: { color: colors.text, font: { size: 10 }, maxTicksLimit: 6, callback: (value: string | number) => usdPerClass(Number(value)) },
         },
       },
       plugins: {
@@ -275,8 +274,8 @@ export function buildSpeedCostChartConfig(days: readonly TrendDay[], colors: Aut
           switch (item.dataset.label) {
             case SERIES.minutes: return `${SERIES.minutes}: ${minutesText(day.minutesToPost)} (median)`;
             case SERIES.minutes7d: return `${SERIES.minutes7d}: ${minutesText(day.minutesToPost7d)}`;
-            case SERIES.cost: return `${SERIES.cost}: ${usd(day.costPerClass)}`;
-            case SERIES.cost7d: return `${SERIES.cost7d}: ${usd(day.costPerClass7d)}`;
+            case SERIES.cost: return `${SERIES.cost}: ${usdPerClass(day.costPerClass)}`;
+            case SERIES.cost7d: return `${SERIES.cost7d}: ${usdPerClass(day.costPerClass7d)}`;
             default: return null;
           }
         }),
