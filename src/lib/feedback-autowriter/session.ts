@@ -503,7 +503,9 @@ export function evaluateSessionGates(
   if (!students[0].wiseUserId) return { ok: false, reason: "student_not_wise_user" };
   const attendance = studentAttendancePercent(students[0], window.minutes);
   if (attendance === null) return { ok: false, reason: "attendance_unknown" };
-  if (attendance < AUTOWRITER_MIN_ATTENDANCE_PERCENT) return { ok: false, reason: `attendance_${attendance}pct` };
+  // Wise may report a fractional percentage: the reason names the whole percent, rounded down (42.5 → attendance_42pct),
+  // so `classifyGateReason` and the coverage table (`^attendance_\d+pct$`) see it; the threshold compares the raw value.
+  if (attendance < AUTOWRITER_MIN_ATTENDANCE_PERCENT) return { ok: false, reason: `attendance_${Math.floor(attendance)}pct` };
 
   // The second pass writes from a transcript instead, so the summary is not required there.
   if (input.requireSummary === false) return { ok: true };

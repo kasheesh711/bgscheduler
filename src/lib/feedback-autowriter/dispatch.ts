@@ -2,6 +2,7 @@ import { getDb, type Database } from "@/lib/db";
 import {
   autowriterAlertEmails,
   autowriterEnabled,
+  autowriterLineTo,
   autowriterTranscriptsEnabled,
   autowriterWritesAllowedHere,
   openRouterApiKey,
@@ -9,6 +10,7 @@ import {
   wiseApiActorId,
 } from "./config";
 import { cleanUpSonioxJobs, markWebhookProcessed, processSession, runSweep, type AutowriterDeps, type SweepResult } from "./job";
+import { runReviewJob, type ReviewJobResult } from "./review-job";
 import { createWiseFeedbackOps } from "./run";
 import { createSonioxClient } from "./soniox";
 
@@ -41,6 +43,32 @@ export async function runAutowriterJob(): Promise<SweepResult | { ok: true; skip
     return { ok: true, skipped: true, reason: "FEEDBACK_AUTOWRITER_ENABLED is not true." };
   }
   return runSweep(productionDeps(getDb(), 740_000));
+}
+
+/** The review job stops starting incident pushes this long before maxDuration (300 s) could cut one off. */
+const REVIEW_JOB_BUDGET_MS = 270_000;
+
+/**
+ * Hourly review job of the operating loop (cron / Data Health). Reads our database only and never writes to Wise;
+ * paused with the autowriter itself. Coverage reads the recorded control history, never today's switches.
+ */
+export async function runAutowriterReviewJob(
+  triggerSource: "cron" | "admin" = "cron",
+): Promise<ReviewJobResult | { ok: true; skipped: true; reason: string }> {
+  if (!autowriterEnabled()) {
+    return { ok: true, skipped: true, reason: "FEEDBACK_AUTOWRITER_ENABLED is not true." };
+  }
+  if (!autowriterWritesAllowedHere()) {
+    return { ok: true, skipped: true, reason: "Preview deployment: the review job never runs here." };
+  }
+  return runReviewJob({
+    db: getDb(),
+    apiActorId: wiseApiActorId(),
+    writesAllowedHere: true,
+    triggerSource,
+    deadlineMs: Date.now() + REVIEW_JOB_BUDGET_MS,
+    channels: { emailRecipients: autowriterAlertEmails(), lineTo: autowriterLineTo() },
+  });
 }
 
 /** Runs inside the webhook's `after()`: one session, same guarded path as the cron. */

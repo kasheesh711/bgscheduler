@@ -110,6 +110,10 @@
     {
       "path": "/api/internal/feedback-autowriter",
       "schedule": "8,22,38,52 * * * *"
+    },
+    {
+      "path": "/api/internal/feedback-autowriter/review",
+      "schedule": "27 * * * *"
     }
   ]
 }

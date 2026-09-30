@@ -494,4 +494,22 @@ arm `soniox` (one row per Soniox transcription, list-price cost). Migration **01
 GPT-6.1 Sol writer, 2026-09-30) to the `arm` checks of both `feedback_autowriter_sessions` and
 `feedback_autowriter_calls`.
 
+Migration **0101** (operating loop, Phase 1 — measurement) adds eleven tables and one trigger on an existing table
+(`feedback_autowriter_control`: an AFTER INSERT/UPDATE trigger logs every mode or tutor-switch change into
+`feedback_autowriter_control_history`; lease and halt writes do not fire it). Guards raise SQLSTATE `55000`.
+
+| SQL table | Drizzle export | Grain |
+|---|---|---|
+| `feedback_autowriter_posts` | `feedbackAutowriterPosts` | One text put in Wise for a class: the first shot (unique per session), a `correction` (a fix) or a `policy` re-post (an owner rule change, never a fix); a writer's `dedupe_key` (unique when set, e.g. `nickname-fix:<session>`, `correction:<session>:<at>`) records a re-post once. Content immutable; outcome settles once; no deletes |
+| `feedback_autowriter_verdicts` | `feedbackAutowriterVerdicts` | One owner verdict (approve / needs fix, severity — `factual` is the owner's "major" —, critical category, note), pinned to the judged `fields_sha256`; `downgraded_from` (`critical` / `factual`) marks a noted downgrade of a harsher judgement. Append-only |
+| `feedback_autowriter_reviews` | `feedbackAutowriterReviews` | One per first shot whose text may be in Wise: review inclusion (reason, probability, crypto draw — set once), flags, current verdict, measured fixes up to the current Approve (total and `measured_fixes_by_actor`) |
+| `feedback_autowriter_flags` | `feedbackAutowriterFlags` | A reason a class needs review (measured fix, unmatched API save, a first shot that landed without verifying — `system`, suggested critical); resolved once by the verdict that showed it |
+| `feedback_autowriter_fix_events` | `feedbackAutowriterFixEvents` | One `SessionFeedbackSubmittedEvent` on any autowriter class, classified by actor (`autowriter_first`, `autowriter_correction`, `autowriter_policy`, `api_actor_unmatched`, `owner_web`, `tutor`, `other_staff`, `student`, `auto`; re-derivable, keyed by Wise event id) |
+| `feedback_autowriter_incidents` | `feedbackAutowriterIncidents` | Outbox (unique `dedupe_key`); critical rows are pushed by email / LINE, delivery tracked per target in `pushed_channels` (`email:<address>`, `line:<to>`), retried up to 5 times; `acknowledged_at` stops them |
+| `feedback_autowriter_daily_metrics` | `feedbackAutowriterDailyMetrics` | Quality and coverage per Bangkok date and tutor (`*` = all), each class judged by its own posting window (`excluded_not_live`, `excluded_data_quality`, `late` among the counts); every date of the gate window recomputed each run |
+| `feedback_autowriter_gate_evaluations` | `feedbackAutowriterGateEvaluations` | Expansion-gate evaluations (unrounded `wilson_lower` double precision, `required_pending`, `unrecorded_posts`, `unexplained_api_writes`); one `daily` row per Bangkok date. Append-only |
+| `feedback_autowriter_review_runs` | `feedbackAutowriterReviewRuns` | Run ledger of the hourly review job; single-flight partial unique index on `running` |
+| `feedback_autowriter_control_history` | `feedbackAutowriterControlHistory` | One change of the control row's mode or tutor switches (trigger-written; seeded with the row's state as of its last change). Append-only |
+| `feedback_autowriter_roster_accounts` | `feedbackAutowriterRosterAccounts` | One code-roster account as the review job saw it (first and last sighting): a class the autowriter never saw is judged only while its account was on the roster |
+
 See [the feature page](../../features/feedback-autowriter.md).

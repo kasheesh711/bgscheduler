@@ -14,6 +14,7 @@ import {
   storedTeacherFields,
   studentParticipants,
 } from "../session";
+import { classifyCoverage } from "../quality";
 import { AUTOWRITER_TEACHER_ALLOWLIST } from "../roster";
 import { GOOD_FIELDS, NOW, QUESTIONS, STUDENT_NAME, answers, autoBlankSubmission, sessionDetail } from "./fixtures";
 
@@ -100,6 +101,19 @@ describe("evaluateSessionGates", () => {
     expect(evaluateSessionGates(parse({ participants }), gateInput)).toEqual({ ok: false, reason: "attendance_20pct" });
     const extra = [...sessionDetail().participants, { wiseUserId: "other", name: "Other", isTeacher: false, absolutePercentAttendance: 90 }];
     expect(evaluateSessionGates(parse({ participants: extra }), gateInput)).toEqual({ ok: false, reason: "student_count_2" });
+  });
+
+  it("names a fractional attendance by its whole percent, rounded down, so it is classified like any other", () => {
+    const attended = (percent: number) => parse({ participants: sessionDetail().participants.map((participant) =>
+      participant.isTeacher ? participant : { ...participant, absolutePercentAttendance: percent }) });
+    expect(evaluateSessionGates(attended(42.5), gateInput)).toEqual({ ok: false, reason: "attendance_42pct" });
+    // The threshold still compares the raw value: 49.9 is under 50; 50 passes.
+    expect(evaluateSessionGates(attended(49.9), gateInput)).toEqual({ ok: false, reason: "attendance_49pct" });
+    expect(evaluateSessionGates(attended(50), gateInput)).toEqual({ ok: true });
+    // Retried while attendance settles, then held for a person; and left out of coverage as the class's own data (D-03).
+    expect(classifyGateReason("attendance_42pct", { minutesSinceEnd: 30 })).toBe("retry");
+    expect(classifyGateReason("attendance_42pct", { minutesSinceEnd: 90 })).toBe("person");
+    expect(classifyCoverage({ state: "held", reason: "attendance_42pct" })).toBe("excluded_data_quality");
   });
 
   it("skips a class titled as in-person even when Wise's type says online", () => {

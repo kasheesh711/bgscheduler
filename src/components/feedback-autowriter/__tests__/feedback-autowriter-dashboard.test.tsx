@@ -97,6 +97,15 @@ describe("FeedbackAutowriterDashboard", () => {
     expect(html).toContain("Resume");
   });
 
+  it("keeps today's view as the Overview tab next to Quality and Review, even without review data", () => {
+    const html = renderToStaticMarkup(<FeedbackAutowriterDashboard initialData={payload()} canControl initialReview={null} />);
+    expect(html).toContain(">Overview<");
+    expect(html).toContain("Quality");
+    expect(html).toContain("Review");
+    // The overview is the default tab and renders in full.
+    expect(html).toContain("Posted to Wise");
+  });
+
   it("polls with the house pattern (abortable, sequenced, 60 s)", () => {
     const source = fs.readFileSync(path.join(__dirname, "../feedback-autowriter-dashboard.tsx"), "utf8");
     expect(source).toContain("AbortController");
