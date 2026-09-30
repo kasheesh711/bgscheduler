@@ -12,8 +12,9 @@
 // 3. Writes one self-contained index.html (script and styles inline, so no stray .js for ESLint to find) to the
 //    git-ignored .feedback-autowriter/preview/.
 // 4. Screenshots three views with headless Chrome: the owner's, an admin's (read-only), and an empty to-do list
-//    early in the pilot (`index.html?view=owner|admin|empty` shows each one in a browser), and the drawer on the
-//    first item of each group of the to-do list (`&open=review|hold|incident|failed_post`).
+//    early in the pilot (`index.html?view=owner|admin|empty` shows each one in a browser), the owner's view with
+//    every detail section open (`&details=open`), and the drawer on the first item of each group of the to-do list
+//    (`&open=review|hold|incident|failed_post`).
 //
 // Chrome is taken from CHROME_BIN, or the usual macOS location.
 
@@ -63,6 +64,10 @@ createRoot(document.getElementById("root")).render(
 // ?open=<group>: the drawer on that group's first item, as a click on its button opens it.
 const open = new URLSearchParams(window.location.search).get("open");
 if (open) window.setTimeout(() => document.querySelector('[data-group="' + open + '"] button')?.click(), 500);
+// ?details=open: every collapsed section opened.
+if (new URLSearchParams(window.location.search).get("details") === "open") {
+  window.setTimeout(() => document.querySelectorAll("details").forEach((section) => { section.open = true; }), 500);
+}
 // The page's height once the charts are drawn, for a screenshot of all of it.
 window.setTimeout(() => { document.documentElement.dataset.pageHeight = String(document.documentElement.scrollHeight); }, 1500);
 `;
@@ -167,12 +172,12 @@ function settled(file) {
 const pageUrl = (query) => `${pathToFileURL(path.join(OUT, "index.html")).href}?${query}`;
 
 /** The whole page of a view: first the page's own height, then a window that tall. */
-async function screenshot(view) {
-  const url = pageUrl(`view=${view}`);
+async function screenshot(name, query) {
+  const url = pageUrl(query);
   const dom = await chrome([`--window-size=${WIDTH},2400`, "--dump-dom"], url, (stdout) => stdout.includes("</html>"));
   const height = Number(/data-page-height="(\d+)"/u.exec(dom)?.[1] ?? 0);
-  if (!height) throw new Error(`The ${view} view did not render (no page height in the DOM).`);
-  const file = path.join(OUT, `dashboard-${view}.png`);
+  if (!height) throw new Error(`The ${name} view did not render (no page height in the DOM).`);
+  const file = path.join(OUT, `dashboard-${name}.png`);
   rmSync(file, { force: true });
   await chrome([`--window-size=${WIDTH},${height}`, `--screenshot=${file}`], url, settled(file));
   return { file, height };
@@ -192,8 +197,8 @@ writeFileSync(path.join(OUT, "index.html"), html(script, css));
 console.log(`Preview written to ${path.relative(ROOT, OUT)}/ (index.html?view=${VIEWS.join("|")})`);
 
 if (!process.argv.includes("--no-shot")) {
-  for (const view of VIEWS) {
-    const { file, height } = await screenshot(view);
+  for (const [name, query] of [...VIEWS.map((view) => [view, `view=${view}`]), ["details", "view=owner&details=open"]]) {
+    const { file, height } = await screenshot(name, query);
     console.log(`${path.relative(ROOT, file)}  ${WIDTH}x${height}`);
   }
   for (const group of DRAWERS) {
