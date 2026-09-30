@@ -4,18 +4,11 @@ import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { formatBangkokShortDateTime } from "@/lib/bangkok-time";
 import { downgradeOf } from "@/lib/feedback-autowriter/quality";
 import type { AutowriterReview, ReviewQueueItem } from "@/lib/feedback-autowriter/review-data";
 import { cn } from "@/lib/utils";
+import { FIELD_LABELS, when } from "./format";
 import { ARM_LABEL } from "./model-labels";
-
-export const REVIEW_FIELD_LABELS: Record<string, string> = {
-  topics: "Topics covered",
-  performance: "How the student did in class",
-  improvement: "Need more work on",
-  homework: "Homework and due date",
-};
 
 const FILTERS = [
   { key: "required", label: "Needs review" },
@@ -84,10 +77,6 @@ export function matchesFilter(item: ReviewQueueItem, filter: Filter): boolean {
   if (filter === "required") return item.required && item.currentVerdict === null;
   if (filter === "flagged") return item.openFlags.length > 0;
   return true;
-}
-
-function when(value: string | null): string {
-  return value ? formatBangkokShortDateTime(value) : "—";
 }
 
 const DOWNGRADE_LABEL = { critical: "critical", factual: "major" } as const;
@@ -159,7 +148,7 @@ export function buildVerdictRequest(
 function Fields({ fields }: { fields: Record<string, string> }) {
   return (
     <div className="space-y-2">
-      {Object.entries(REVIEW_FIELD_LABELS).map(([key, label]) => (
+      {Object.entries(FIELD_LABELS).map(([key, label]) => (
         <div key={key}>
           <div className="text-[11px] font-medium">{label}</div>
           <p className="whitespace-pre-wrap text-xs text-muted-foreground">{fields[key] || "—"}</p>
@@ -348,7 +337,7 @@ function QueueItem({ item, canControl, onRecorded }: { item: ReviewQueueItem; ca
               <div className="space-y-2" data-testid="first-shot-diff">
                 {item.diff.map((entry) => (
                   <div key={entry.field}>
-                    <div className="text-[11px] font-medium">{REVIEW_FIELD_LABELS[entry.field]}</div>
+                    <div className="text-[11px] font-medium">{FIELD_LABELS[entry.field]}</div>
                     <p className="whitespace-pre-wrap text-xs">
                       {entry.segments.map((segment, index) => segment.kind === "same"
                         ? <span key={index} className="text-muted-foreground">{segment.text}</span>

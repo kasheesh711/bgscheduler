@@ -5,13 +5,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatBangkokShortDateTime } from "@/lib/bangkok-time";
 import type { AutowriterDashboard } from "@/lib/feedback-autowriter/dashboard";
 import type { AutowriterReview, AutowriterReviewUnavailable } from "@/lib/feedback-autowriter/review-data";
 import { cn } from "@/lib/utils";
 import { FeedbackAutowriterQualityPanel, GATE_STATUS_LABEL } from "./feedback-autowriter-quality-panel";
 import { FeedbackAutowriterReviewQueue } from "./feedback-autowriter-review-queue";
-import { ARM_LABEL } from "./model-labels";
+import { FIELD_LABELS, minutes, usd, when } from "./format";
+import { ARM_LABEL, modelLabel } from "./model-labels";
 
 const WINDOWS = [
   { days: 1, label: "24 h" },
@@ -51,13 +51,6 @@ const STATE_TONE: Record<string, string> = {
   verify_failed: "border-red-300 bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-200",
 };
 
-const FIELD_LABELS: Array<[string, string]> = [
-  ["topics", "Topics covered"],
-  ["performance", "How the student did in class"],
-  ["improvement", "Need more work on"],
-  ["homework", "Homework and due date"],
-];
-
 function isDashboard(value: unknown): value is AutowriterDashboard {
   return typeof value === "object" && value !== null && "totals" in value && "control" in value && "recent" in value;
 }
@@ -69,20 +62,6 @@ function isReview(value: unknown): value is AutowriterReview {
 
 function isUnavailable(value: unknown): value is AutowriterReviewUnavailable {
   return typeof value === "object" && value !== null && (value as { available?: unknown }).available === false;
-}
-
-function usd(value: number | null | undefined): string {
-  if (value === null || value === undefined) return "—";
-  return value < 0.01 && value > 0 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`;
-}
-
-function minutes(value: number | null): string {
-  if (value === null) return "—";
-  return value < 60 ? `${value.toFixed(1)} min` : `${(value / 60).toFixed(1)} h`;
-}
-
-function when(value: string | null): string {
-  return value ? formatBangkokShortDateTime(value) : "—";
 }
 
 function Kpi({ label, value, detail, tone = "default" }: {
@@ -142,14 +121,6 @@ export function ReviewUnavailable({ reason }: { reason: AutowriterReviewUnavaila
         : "The quality data could not load. Refresh to try again; if it keeps failing, check the server logs."}
     </p>
   );
-}
-
-function modelLabel(model: string): string {
-  if (model.startsWith("z-ai/glm")) return "GLM Flash";
-  if (model.startsWith("openai/gpt-6.1-sol")) return "GPT-6.1 Sol";
-  if (model.startsWith("openai/gpt-6-luna")) return "GPT-6 Luna";
-  if (model.startsWith("stt-async")) return "Soniox transcription";
-  return model;
 }
 
 export function FeedbackAutowriterDashboard({ initialData, canControl, initialReview = null }: {
@@ -480,7 +451,7 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
                             {row.reason && !["shadow", "verified"].includes(row.reason) ? row.reason.slice(0, 80) : "View"}
                           </summary>
                           <div className="mt-2 space-y-2 text-xs">
-                            {row.fields ? FIELD_LABELS.map(([key, label]) => (
+                            {row.fields ? Object.entries(FIELD_LABELS).map(([key, label]) => (
                               <div key={key}>
                                 <div className="font-medium">{label}</div>
                                 <p className="whitespace-pre-wrap text-muted-foreground">{row.fields?.[key] || "—"}</p>

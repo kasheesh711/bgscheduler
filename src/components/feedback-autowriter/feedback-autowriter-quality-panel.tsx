@@ -4,10 +4,9 @@ import { useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { formatBangkokIsoDate, formatBangkokShortDateTime } from "@/lib/bangkok-time";
-import { floorPercent } from "@/lib/feedback-autowriter/quality";
 import type { AutowriterReview } from "@/lib/feedback-autowriter/review-data";
 import { cn } from "@/lib/utils";
+import { dayMonth, percent, threshold, when } from "./format";
 
 export const GATE_STATUS_LABEL: Record<AutowriterReview["gate"]["status"], string> = {
   pass: "Expansion ready",
@@ -24,16 +23,6 @@ const GATE_STATUS_TONE: Record<AutowriterReview["gate"]["status"], string> = {
   insufficient_data: "border-muted-foreground/30 text-muted-foreground",
   blocked_critical: "border-red-300 bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-200",
 };
-
-/** A measured ratio, rounded down (79.99…% never reads as the 80% it missed). */
-function percent(value: number | null): string {
-  return value === null ? "—" : floorPercent(value);
-}
-
-/** A threshold (round by definition). */
-function threshold(value: number): string {
-  return `${Math.round(value * 100)}%`;
-}
 
 function Criterion({ ok, label, value }: { ok: boolean; label: string; value: string }) {
   return (
@@ -137,7 +126,7 @@ export function FeedbackAutowriterQualityPanel({ review, canControl = false, onC
           <div className="flex flex-wrap items-center gap-3">
             <Badge variant="outline" className={cn("text-sm", GATE_STATUS_TONE[gate.status])}>{GATE_STATUS_LABEL[gate.status]}</Badge>
             <span className="text-xs text-muted-foreground">
-              Rolling {review.window.days} days · {formatBangkokIsoDate(review.window.start)} – {formatBangkokIsoDate(review.window.end)} (Bangkok)
+              Rolling {review.window.days} days · {dayMonth(review.window.start)} – {dayMonth(review.window.end)} (Bangkok)
               {gate.lastDaily ? ` · last nightly evaluation ${gate.lastDaily.date}: ${GATE_STATUS_LABEL[gate.lastDaily.status]}` : " · no nightly evaluation yet"}
             </span>
           </div>
@@ -288,10 +277,10 @@ export function FeedbackAutowriterQualityPanel({ review, canControl = false, onC
                 <Badge variant={incident.severity === "critical" ? "destructive" : "outline"}>{incident.severity}</Badge>
                 <span className="flex-1">{incident.summary}</span>
                 <span className="text-xs text-muted-foreground">
-                  {formatBangkokShortDateTime(incident.createdAt)}
+                  {when(incident.createdAt)}
                   {incident.severity === "critical" ? ` · push ${incident.pushStatus === "failed" ? "FAILED — not delivered" : incident.pushStatus}` : ""}
                   {incident.lastPushError ? ` · ${incident.lastPushError}` : ""}
-                  {incident.acknowledgedAt ? ` · acknowledged by ${incident.acknowledgedBy ?? "—"} ${formatBangkokShortDateTime(incident.acknowledgedAt)}` : ""}
+                  {incident.acknowledgedAt ? ` · acknowledged by ${incident.acknowledgedBy ?? "—"} ${when(incident.acknowledgedAt)}` : ""}
                 </span>
                 {canControl && incident.severity === "critical" && !incident.acknowledgedAt
                   ? <AcknowledgeButton incidentId={incident.id} onChanged={onChanged} /> : null}
@@ -301,7 +290,7 @@ export function FeedbackAutowriterQualityPanel({ review, canControl = false, onC
         )}
         <p className="mt-3 text-xs text-muted-foreground">
           Review job: {review.lastRun
-            ? `${review.lastRun.status} · started ${formatBangkokShortDateTime(review.lastRun.startedAt)}${review.lastRun.errorSummary ? ` · ${review.lastRun.errorSummary}` : ""}${review.lastRun.dailyGateSkipped ? ` · nightly gate not recorded yet (${review.lastRun.dailyGateSkipped})` : ""}`
+            ? `${review.lastRun.status} · started ${when(review.lastRun.startedAt)}${review.lastRun.errorSummary ? ` · ${review.lastRun.errorSummary}` : ""}${review.lastRun.dailyGateSkipped ? ` · nightly gate not recorded yet (${review.lastRun.dailyGateSkipped})` : ""}`
             : "has not run yet"}
         </p>
       </Card>
