@@ -703,8 +703,17 @@ chart footers that come from the review payload, stay the whole pilot's and say 
 **Loading and polling.** The page's server component loads the dashboard (last 7 days), the review data and the
 trends (14 days, all tutors) in parallel. In the browser the dashboard is polled every 60 seconds (abortable,
 sequenced), the review data every 5 minutes and after each action, and the trends when the range or the tutor filter
-changes. After a verdict or an acknowledgement goes through, the page reloads and the drawer closes; a stale page
-(HTTP 409) reloads the item and keeps the drawer open on its error.
+changes. The app keeps the page, hidden and with its state, while you are on another page (`cacheComponents`): its
+polls stop, and when it is shown again after a second or more it reloads all three at once. A review refresh that
+fails keeps its own message until one succeeds, with the time the review data on the page is from (a dashboard
+refresh does not clear it); the to-do list's footer names the review data's time whenever it differs from the
+classes'. After a verdict or an acknowledgement goes through, the drawer closes and the page reloads; a stale page
+(HTTP 409) reloads the item and keeps the drawer open on its error. The drawer opens with the focus on its scrolling
+body, never on Approve (which records at once).
+
+**All classes.** The dashboard loads the text of the latest 60 classes of its 7 days, so the log says "the latest 60
+of N classes" when the window holds more: an older class is listed only when it is held or has a review row, and the
+filters count the classes shown.
 
 **When data is missing.** Before migration 0101, or when the review data fails to load, the to-do list keeps the held
 classes and the failed posts, and the health rail and the trends say why (the two cases read differently; a failure is
@@ -726,6 +735,7 @@ database.
 | Review tab | The To review group and the review drawer; older reviewed posts through Details → All classes |
 | Incidents list | The Incidents group (open ones); Details → Incidents and the review job (all of them) |
 | Recent classes, cost, webhooks, daily tables | Details |
+| The 24 h / 7 d / 30 d window selector | Gone: the page's own numbers cover the last 7 days, the gate's 14, and the charts 14, 30 or 90 |
 
 ## Costs
 
