@@ -24,7 +24,7 @@ Apivit (Ek) Sirithana Online: Let's start
 
 2
 00:00:00.900 --> 00:00:01.500
-Silpakorn (Gino.Ti) Tiyachate: Okay
+Anucha (Nont.Bo) Boonmee: Okay
 
 3
 00:01.600 --> 00:03.000
@@ -43,7 +43,7 @@ describe("transcript segments", () => {
   it("parses Zoom WEBVTT cues with and without hours", () => {
     expect(parseZoomVtt(VTT)).toEqual([
       { speakerName: "Apivit (Ek) Sirithana Online", startMs: 0, endMs: 800 },
-      { speakerName: "Silpakorn (Gino.Ti) Tiyachate", startMs: 900, endMs: 1_500 },
+      { speakerName: "Anucha (Nont.Bo) Boonmee", startMs: 900, endMs: 1_500 },
       { speakerName: "Apivit (Ek) Sirithana Online", startMs: 1_600, endMs: 3_000 },
     ]);
   });
@@ -62,6 +62,26 @@ describe("assignSpeakerRoles", () => {
     expect(result.roles.get("1")).toBe("tutor");
     expect(result.roles.get("2")).toBe("student");
     expect(result.shares).toEqual({ tutor: 55, student: 45, other: 0 });
+  });
+
+  it("counts Zoom lines under the tutor's other names (a second device) as the tutor's", () => {
+    const vtt = `${VTT}
+4
+00:00:04.000 --> 00:00:06.000
+Ek: Can you hear me on the tablet?
+`;
+    const segments: Segment[] = [
+      { speaker: "1", startMs: 0, endMs: 800, text: "t".repeat(60) },
+      { speaker: "2", startMs: 900, endMs: 1_500, text: "s".repeat(25) },
+      // The tutor's tablet, picked up as a third voice.
+      { speaker: "3", startMs: 4_000, endMs: 6_000, text: "e".repeat(15) },
+    ];
+    const cues = parseZoomVtt(vtt);
+    const without = assignSpeakerRoles({ segments, zoomCues: cues, teacherName: "Apivit (Ek) Sirithana Online" });
+    expect(without.roles.get("3")).toBe("student");
+    const withNames = assignSpeakerRoles({ segments, zoomCues: cues, teacherName: "Apivit (Ek) Sirithana Online", alsoTeacher: ["Ek", "Apivit Sirithana"] });
+    expect(withNames.method).toBe("zoom_alignment");
+    expect([...withNames.roles.entries()]).toEqual([["1", "tutor"], ["2", "student"], ["3", "tutor"]]);
   });
 
   it("does not trust an alignment that does not look like a one-to-one lesson", () => {

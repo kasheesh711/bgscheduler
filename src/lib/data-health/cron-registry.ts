@@ -34,7 +34,8 @@ export type CronJobKey =
   | "line_backlog_recovery"
   | "line_credit_digest"
   | "competitor_intelligence"
-  | "feedback_autowriter";
+  | "feedback_autowriter"
+  | "feedback_autowriter_review";
 
 export interface CronJobDefinition {
   key: CronJobKey;
@@ -68,6 +69,11 @@ export const CRON_JOBS = [
     cadenceLabel: "Every ~15 min backstop; Wise webhook is the fast path", cadenceMinutes: 15, lateAfterMinutes: 30,
     maxDurationSeconds: 800, manualOnly: false, dangerous: true,
     confirmationLabel: "Drafts and, in live mode, submits AI feedback to Wise for roster tutors' online classes.", routeMethod: "GET" },
+  { key: "feedback_autowriter_review", label: "Feedback Autowriter Review", feature: "Class Feedback",
+    path: "/api/internal/feedback-autowriter/review", schedule: "27 * * * *",
+    cadenceLabel: "Hourly at :27, after the :17 Wise activity sync", cadenceMinutes: 60, lateAfterMinutes: 90,
+    maxDurationSeconds: 300, manualOnly: false, dangerous: true,
+    confirmationLabel: "Records first shots, measured fixes and quality metrics, and pushes critical incidents to the owner. Never writes to Wise.", routeMethod: "GET" },
   { key: "post_class_feedback_nightly", label: "Nightly Feedback Reminders", feature: "Class Feedback",
     path: "/api/internal/post-class-feedback/reminder-nightly", schedule: "0,30 * * * *",
     cadenceLabel: "22:00 Bangkok; recovery every 30 min", cadenceMinutes: 30, lateAfterMinutes: 50,
@@ -516,7 +522,7 @@ export function statusRank(status: CronJobStatus): number {
 /** Physical cron schedules remain registered; expected work follows feature mode. */
 export function effectiveCronJob(job: CronJobDefinition): CronJobDefinition {
   if (isWiseClassroomJob(job.key) && !wiseClassroomAutomationEnabled()) return { ...job, paused: true, cadenceLabel: "Paused by owner" };
-  if (job.key === "feedback_autowriter" && process.env.FEEDBACK_AUTOWRITER_ENABLED !== "true") return { ...job, paused: true, cadenceLabel: "Feedback autowriter disabled" };
+  if (job.key.startsWith("feedback_autowriter") && process.env.FEEDBACK_AUTOWRITER_ENABLED !== "true") return { ...job, paused: true, cadenceLabel: "Feedback autowriter disabled" };
   if (job.key.startsWith("tutor_sit_ins") && process.env.TUTOR_SIT_INS_ENABLED !== "true") return { ...job, paused: true, cadenceLabel: "Tutor Sit-ins disabled" };
   if (job.key === "credit_control" && process.env.TUTOR_SIT_INS_ENABLED === "true") return { ...job, label: "Shared Student Data", requiresSuccessfulRun: true, cadenceMinutes: 30, lateAfterMinutes: 90, cadenceLabel: "Every 30 min — observation source" };
   if (job.key === "line_credit_digest" && !creditControlActive()) return { ...job, paused: true, cadenceLabel: "Paused while Credit Control is retired" };

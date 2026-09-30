@@ -1,0 +1,20 @@
+{
+  "decidedAt": "2026-09-30T09:30:00+07:00",
+  "reviewer": "kevhsh7@gmail.com (owner interview 2026-09-30)",
+  "verdicts": [
+    {
+      "wiseSessionId": "699477ceb50e50f4cc219904",
+      "verdict": "needs_fix",
+      "severity": "critical",
+      "criticalCategory": "wrong_person",
+      "note": "another student's unfinished exam written as the student's; invented homework — owner, 30 Sep interview"
+    },
+    {
+      "wiseSessionId": "6ab89191c10615490d43a8cf",
+      "verdict": "needs_fix",
+      "severity": "factual",
+      "criticalCategory": null,
+      "note": "false homework claim from Wise's summary — owner, 30 Sep interview"
+    }
+  ]
+}

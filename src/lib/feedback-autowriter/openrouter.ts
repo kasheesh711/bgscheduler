@@ -111,7 +111,17 @@ export async function callOpenRouter(input: {
     };
   }
 
-  const text = await response.text();
+  let text: string;
+  try {
+    text = await response.text();
+  } catch (error) {
+    // The timeout also covers reading the body: a slow reply ends here as a timeout, not an unhandled error.
+    const name = error instanceof Error ? error.name : "Error";
+    return {
+      ok: false, error: name === "TimeoutError" ? "timeout" : `network_${name}`, httpStatus: response.status,
+      model: null, provider: null, finishReason: null, usage: null, latencyMs: Date.now() - started,
+    };
+  }
   const latencyMs = Date.now() - started;
   let body: ChatCompletionResponse;
   try {

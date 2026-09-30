@@ -19,7 +19,8 @@ Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowrite
    | `WISE_WEBHOOK_AUTH_HEADER` | optional: pin the header named in the first delivery's log line |
    | `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED` | `true` to hand held / summary-less / Thai-summary classes to the Soniox second pass |
    | `SONIOX_API_KEY` | Soniox project key (set a spend limit in the Soniox Console) |
-   Migration **0098** must be applied before deploying code that knows the second pass (it adds the `evidence` column).
+   Migration **0098** must be applied before deploying code that knows the second pass (it adds the `evidence` column),
+   and **0100** before deploying the Sol writer (it lets `arm` be `sol`; see [section 7](#7-writer-model-gpt-61-sol-since-2026-09-30)).
 3. **Wise → Institute Settings → Developer options → Webhooks → Add Webhook.** Never edit the existing
    subscription (it feeds a Google Apps Script). URL `https://bgscheduler.vercel.app/api/wise/webhook`,
    events `MeetingEndedEvent`, `AttendanceComputedEvent` and `RecordingCompletedEvent`; its auth key (shown or chosen
@@ -28,6 +29,46 @@ Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowrite
    Send a test: Vercel logs `[wise-webhook] key arrived in header "<name>"` (optionally pin it with
    `WISE_WEBHOOK_AUTH_HEADER`); a refused delivery logs `unauthorized delivery; header names: …` instead.
    Confirm read-only with `GET /institutes/{id}/webhooks` that both subscriptions exist and the original is unchanged.
+
+### Operating loop, Phase 1 (migration 0101) — in this order
+
+1. **Apply migration 0101** on production Neon (`DATABASE_URL=… npm run db:migrate`). It adds tables, and one AFTER
+   trigger on `feedback_autowriter_control` that logs mode and tutor-switch changes (lease and halt writes do not fire
+   it); the history is seeded with the row's state as of its last change. The autowriter keeps running meanwhile.
+   **Numbering.** 0101 comes after main's `0099_staff_feedback_timing` and the Sol arm-check migration, both already
+   applied in production. The Sol migration is `0100_feedback_autowriter_sol` (PR #108; journal idx 100, `when`
+   1790735838903): it was applied in production as "0099", so its `when` stays deliberately below idx 99's
+   1790738705641. Drizzle's migrator applies only the journal entries whose `when` is later than the newest
+   `created_at` it has recorded; 0101 keeps `when` 1790740000000, later than every applied entry, so a production
+   `db:migrate` applies only 0101. `db:generate` numbers the next migration from the **last** journal entry's `idx`, so
+   the journal must stay sorted by `idx`: its last entries read 99, 100, 101, in that order.
+2. **Day-one backfill — dry run, then the go/no-go check** (reads only, never writes to Wise, prints metadata only):
+   `npx tsx --tsconfig scripts/tsconfig.json scripts/feedback-autowriter-backfill-review.ts`
+   Expect every posted class `first shot PROVEN` and one row per one-time re-post the rows record: the six nickname
+   fixes of 29 Sep (`metadata.nicknameFix`) as `policy` posts (never a fix, owner decision D-01) and the two
+   owner-approved corrections of 30 Sep (`metadata.corrections`) as `correction` posts (fixes), none "TEXT NOT FOUND".
+   The script refuses to run without `WISE_USER_ID`. It also prints the coverage of every day of the gate window and
+   the owner verdicts it will record (`scripts/feedback-autowriter-owner-verdicts.json`), each pinned to its first shot.
+   **Go/no-go:** the line "API saves no post explains" must list **no critical one** (a save after the autowriter
+   went live at 2026-09-29 08:07:30 UTC). Each info one must be a known pre-launch save — on 29 Sep the owner's four
+   pilot posts at 05:06–05:07 UTC on his own classes, confirmed by the owner on 30 Sep (GO). A critical one means someone
+   wrote to Wise with the API key outside the lock: find out who before continuing (it will page the owner on the
+   review job's first run whatever the order). The preview uses the job's own code over the same classes, so it can be
+   re-run at any time (also after `--apply`) and still says exactly what the job stores.
+3. **`--apply`**, then **deploy**. Either order is safe: until the backfill records them, the job explains our first
+   posts from the rows themselves and the one-time re-posts from the `metadata` the scripts wrote, so none of them is
+   reported as an unmatched API save; an edited class only shows an info `first_shot_unverified` incident until the
+   backfill proves its first shot. Applying twice, or twice at once, records each post once (`dedupe_key`). It records
+   the owner's committed verdicts once each through the dashboard's path (reviewer `kevhsh7@gmail.com (owner interview
+   2026-09-30)`); one whose class meanwhile got another verdict, or a flag raised after the decision, is reported and
+   left for the dashboard. The critical verdict keeps the gate `blocked_critical` through the critical class's Bangkok
+   date + 13 days (the dry run prints the date); daily gate rows recorded before `--apply` stay as written: not a pass
+   (unrecorded posts / required pending) rather than `blocked_critical`. The critical verdict's incident is pushed to
+   the owner like any other.
+4. Optional: `FEEDBACK_AUTOWRITER_LINE_TO` (a LINE user or group id) to receive critical incidents on LINE as well
+   as by email; set `FEEDBACK_AUTOWRITER_ALERT_EMAILS` if it is still empty — with no channel a critical incident
+   stays pending and the review job reports `ok:false` (Data Health shows it). `WISE_USER_ID` must be set on the
+   deployment: without it the job derives no fix events and reports `ok:false`.
 
 ## 2. Modes and switches (take effect immediately — no redeploy)
 
@@ -39,8 +80,8 @@ Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowrite
 | `--mode=off --actor=<email>` | do nothing |
 | `--pause --reason="…" --actor=<email>` | global halt: no POSTs until resumed |
 | `--resume --actor=<email>` | clear the halt (check why it halted first) |
-| `--tutor-off=<wiseUserId>` / `--tutor-on=…` | per-tutor switch |
-| `--retry=<wiseSessionId> --actor=<email>` | send a `held`/`expired` class back to `pending` (e.g. after a prompt fix); refused inside the 30-min deadline margin; its alert is re-armed |
+| `--tutor-off=<wiseUserId>` / `--tutor-on=…` | per-account switch (a tutor has two accounts; the dashboard switches both together) |
+| `--retry=<wiseSessionId> --actor=<email>` | send a `held`/`expired`/`skipped_scope` class back to `pending` (e.g. after a prompt or scope fix); never a class a person wrote; refused inside the 30-min deadline margin; its alert is re-armed |
 | `--sweep` / `--process=<wiseSessionId>` | run the same guarded path by hand |
 
 Outer gates needing a redeploy: `FEEDBACK_AUTOWRITER_ENABLED`, `WISE_WEBHOOKS_ENABLED`. Preview deployments never POST.
@@ -50,13 +91,15 @@ reconciling** POSTs already made, emailing their alerts. `FEEDBACK_AUTOWRITER_EN
 reconciliation included — rows in `posting`/`awaiting_event` then wait, visible on the dashboard, until it is
 turned back on. Prefer `--pause` unless the code itself must not run.
 
-The owner has the same mode, pause/resume and per-tutor switches on the dashboard at `/feedback-autowriter`.
+The owner has the same mode, pause/resume and per-tutor switches on the dashboard at `/feedback-autowriter`. A tutor's
+switch there covers both of their Wise accounts; "Partly on" means the CLI switched only one of them.
 
 ## 3. Rollout checklist
 
 1. Shadow for 2–3 days. Exit criteria:
    - every `would_submit` draft reviewed next to what the tutor wrote themselves;
-   - `feedback_autowriter_calls`: 100% of GLM calls with `provider = 'Together'`;
+   - `feedback_autowriter_calls`: 100% of judge calls (`arm = 'glm'`) with `provider = 'Together'`, and writer calls
+     resolved to `openai/gpt-6.1-sol` (or `openai/gpt-6-luna` for a fallback draft);
    - gate reasons per tutor look right (`select wise_teacher_user_id, state, reason, count(*) from feedback_autowriter_sessions group by 1,2,3`);
    - webhook deliveries arriving (`select event_name, count(*) from wise_webhook_events group by 1`) and their
      session ids parsed (`wise_session_id is not null`).
@@ -93,7 +136,10 @@ hour after it was submitted counts as one), a multi-part recording, a recording 
 short 30 minutes after first seen), a transcript that is too short or speakers it cannot tell apart, or `expired`
 (+ alert) if
 the recording never comes before the deadline margin. A second-pass class shown as `pending` has its transcript
-draft or is waiting for Wise (attendance, status, the POST slot), not for the recording.
+draft or is waiting for Wise (attendance, status, the POST slot), not for the recording. "Transcribing" with
+`zoom_transcript_pending` is normal: the Soniox transcript is ready and the class waits for Zoom's name-labelled
+transcript, which confirms who is the tutor — until 20 minutes after the Soniox job was submitted (the last look is
+the next sweep after that, so at most ~35 minutes). No `no_recording` alert is raised for it.
 To turn the second pass off: `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED=false` + redeploy — classes already waiting are
 then held with an alert (`transcript_pass_unavailable`) so a person writes them.
 
@@ -126,3 +172,67 @@ checks, absence, form/billing drift), expired, no summary 3 h after class, and a
 In `shadow` (and `off`) only the halt-causing outcomes are emailed; draft alerts stay on the dashboard.
 A switched-off tutor's classes are handed back to them silently when they reach the deadline window.
 Nightly tutor reminders are separate (Class Feedback).
+
+## 7. Writer model (GPT-6.1 Sol since 2026-09-30)
+
+Sol writes (reasoning `low`), Luna is the fallback writer and GLM the judge, all on zero-data-retention routes, for
+summaries and transcripts alike ([feature page](../features/feedback-autowriter.md#models)). Deploy order: apply
+migration **0100** first (applied in production on 2026-09-30 under the number 0099, before Codex's
+`0099_staff_feedback_timing` took that number; the journal keeps its original `when`, so it never runs again). It
+only widens the two `arm` checks to allow `sol`; code that writes `sol` against the old
+checks cannot record its model calls, so every class would retry until its deadline.
+
+After the deploy, look at the first drafts:
+
+```sql
+select role, arm, resolved_model, provider, ok, error, count(*), round(avg(cost_usd), 4) as avg_cost_usd
+from feedback_autowriter_calls
+where created_at > now() - interval '1 day' and role <> 'transcriber'
+group by 1, 2, 3, 4, 5, 6
+order by 1, 2;
+```
+
+Writer rows should be `sol` / `openai/gpt-6.1-sol` at about $0.04 each. A `sol:model_mismatch:…` reason means
+OpenRouter answered Sol's request with another model id: the run reports an infrastructure error and the class
+retries, so that answer is never posted. Only the primary writer has this check; a Luna fallback answer is not
+checked for its model (its `resolved_model` is in the query above).
+
+**Rollback to the GLM writer:** revert the PR that made the switch and redeploy. That restores GLM on Together
+(reasoning `max`) as the writer, Luna as a summary-only fallback on its old route, and transcripts written by GLM
+alone. Keep migration 0100: every existing row passes the wider checks, and the older code still writes `sol`. A
+judged transcript draft of Sol's that is still waiting to post is posted as it is (the switch changed neither the
+prompt nor the judge version, so the older code reuses it), and its row keeps `arm = 'sol'`, which the old checks
+would reject. Rows Sol already wrote keep `arm = 'sol'` (the older dashboard shows no model name for them); anything
+else is written again by GLM. No data change is needed.
+
+## 8. Reviewing posts (operating loop)
+
+`/feedback-autowriter` → **Review**. "Needs review" lists every required post without a verdict (every post while
+the tutor's cohort has not passed a gate); the counts are exact, and every flagged or unreviewed class is always in
+the list. Judge the **first shot** (left), not the current text: Approve, or Needs fix with a severity you must pick —
+cosmetic still counts as accurate; **major** is a real fix; critical needs a category, blocks the gate and pushes an
+alert. A verdict can be replaced by recording a new one (the log keeps both). A verdict judges the first shot as
+posted: replacing a harsher judgement with a milder one (critical → anything else, major → cosmetic or Approve) is a
+downgrade — confirm it and write why in the note. After a fix on a class you judged major, answer its new flag by
+recording major again, not Approve. If the page says "New activity since you loaded this class", a verdict or a flag
+arrived meanwhile — the class reloads; look again before recording.
+
+A class flagged by a measured fix (someone saved it in Wise after our post, before your Approve) stays in "Flagged"
+until a verdict answers it; the gate cannot pass while one waits, nor while a required post is unreviewed. A save
+after your Approve is listed ("after approval — not counted") and raises no flag. A first shot that landed without
+verifying (credits or status changed, text mismatch, unknown outcome) is flagged critical: open the class in Wise and
+judge what is there. An Approve or a cosmetic fix ends the class's Soniox review window; a major or critical verdict
+keeps the transcript (and re-opens a window an earlier Approve ended, if the sweep has not deleted it yet) until the
+72 h window closes.
+
+**Quality** shows the gate, computed exactly as the nightly row. The review job runs hourly at :27 (Data Health →
+Feedback Autowriter Review; manual run owner-only). The daily gate row is written from 22:00 Bangkok by the first run
+in which every step succeeded and the Wise activity sync is fresh (≤ 30 min, and not stopped at its page cap);
+otherwise the Quality tab says why ("nightly gate not recorded yet") and a later run writes it. An unexplained API
+write (`api_actor_unmatched`, critical) blocks the gate until you acknowledge it — find out who wrote to Wise with
+the API key first. Incidents: `critical_verdict`, `critical_flag` /
+`credit_entries_changed` (a post landed without verifying) and `api_actor_unmatched` (an API save no recorded post
+explains — check who wrote to Wise with the API key) are pushed; `first_shot_unverified` is shown only (critical when
+the post did not verify) — run the backfill script to prove it, or confirm by hand what was posted. A critical
+incident that was not delivered keeps the review job red (Data Health) until you **Acknowledge** it on the Quality tab
+(its pushes stop too).

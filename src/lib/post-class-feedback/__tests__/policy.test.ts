@@ -637,23 +637,24 @@ describe("deriveEventTimingEvidence", () => {
   // Accepted consequence of the role-blind rule: a STUDENT-role actor also
   // qualifies. Timing and content stay independent, so weak feedback still
   // fails on the content bar.
-  it("proves on_time from a STUDENT-role event before the deadline", () => {
+  it("excludes student feedback before the deadline", () => {
     const result = deriveEventTimingEvidence({
       events: [event({ at: "2026-06-02T01:00:00.000Z", role: "STUDENT" })],
       deadlineAt: DEADLINE,
       eventCoverageFrom: COVERAGE_FROM,
     });
-    expect(result.status).toBe("on_time");
+    expect(result.status).toBe("late");
     expect(result.submitterRoles).toEqual(["STUDENT"]);
   });
 
-  it("proves on_time from an event whose actor role Wise did not record", () => {
+  it("requires review when the pre-deadline actor was not recorded", () => {
     const result = deriveEventTimingEvidence({
       events: [event({ at: "2026-06-02T01:00:00.000Z", role: null })],
       deadlineAt: DEADLINE,
       eventCoverageFrom: COVERAGE_FROM,
     });
-    expect(result.status).toBe("on_time");
+    expect(result.status).toBe("unknown");
+    expect(result.reviewRequired).toBe(true);
     expect(result.submitterRoles).toEqual(["UNKNOWN"]);
   });
 
@@ -742,5 +743,46 @@ describe("deriveEventTimingEvidence", () => {
       eventCoverageFrom: COVERAGE_FROM,
     });
     expect(result.status).toBe("on_time");
+  });
+});
+
+describe("staff timing recovery", () => {
+  const end = new Date("2026-09-26T06:00:00Z");
+  const deadlineAt = calculateFeedbackDeadline(end);
+  const staffAt = new Date("2026-09-29T18:40:13.034Z");
+  const base = {
+    sourceStatus: "ready" as const, scheduledEndAt: end,
+    now: new Date("2026-09-30T03:00:00Z"), enforcementMode: "live" as const,
+    policyEffectiveAt: new Date("2026-08-25T17:00:00Z"), policyVersion: 2, mappingVersion: 1,
+    versions: [version({ observedAt: staffAt.toISOString(), sourceCreatedAt: null })],
+  };
+  const prior = { locked: true, versionKey: "submission-1:hash-1", policyVersion: 1, mappingVersion: 1, scheduledEndAt: end, deadlineAt };
+
+  it("student-before plus tutor-after is late at the recorded tutor instant, despite the old lock", () => {
+    const evidence = deriveEventTimingEvidence({ deadlineAt, eventCoverageFrom: new Date("2026-08-01T00:00:00Z"), events: [
+      event({ at: "2026-09-26T06:08:16.158Z", role: "STUDENT" }),
+      event({ at: staffAt.toISOString(), role: "TEACHER" }),
+    ] });
+    const result = evaluateSessionCompliance({ ...base, previousOnTimeLock: prior, eventTiming: evidence });
+    expect(result).toMatchObject({ timingStatus: "late", tutorSubmittedAt: staffAt, onTimeComplianceLocked: false, violation: true, deductionCandidate: true });
+  });
+
+  it("an unclassified pre-deadline event suspends locks, source timestamps, and automatic money decisions", () => {
+    const eventTiming = deriveEventTimingEvidence({ deadlineAt, eventCoverageFrom: new Date("2026-08-01T00:00:00Z"), events: [
+      event({ at: "2026-09-26T06:08:16.158Z", role: null }),
+      event({ at: staffAt.toISOString(), role: "TEACHER" }),
+    ] });
+    const result = evaluateSessionCompliance({ ...base, previousOnTimeLock: { ...prior, policyVersion: 2 }, eventTiming,
+      versions: [version({ observedAt: staffAt.toISOString(), sourceCreatedAt: "2026-09-26T06:00:00Z" })] });
+    expect(result).toMatchObject({ timingStatus: "unknown", timingReviewRequired: true, onTimeComplianceLocked: false, rawOnTimeCompliant: false, adjustedCompliant: false, assessed: false, violation: false, deductionCandidate: false });
+  });
+
+  it("valid on-time staff proof resolves an unverified earlier actor", () => {
+    const evidence = deriveEventTimingEvidence({ deadlineAt, eventCoverageFrom: new Date("2026-08-01T00:00:00Z"), events: [
+      event({ at: "2026-09-26T06:08:16.158Z", role: "OWNER" }),
+      event({ at: deadlineAt.toISOString(), role: "ADMIN", autoSubmitted: null }),
+    ] });
+    expect(evidence).toMatchObject({ status: "on_time", provenAt: deadlineAt });
+    expect(evidence.reviewRequired).not.toBe(true);
   });
 });

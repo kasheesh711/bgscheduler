@@ -8,7 +8,7 @@
  *   … --pause --reason="…" --actor=<email>        (global halt: no POSTs until --resume)
  *   … --resume --actor=<email>
  *   … --tutor-off=<wiseUserId> --actor=<email>  /  --tutor-on=<wiseUserId> --actor=<email>
- *   … --retry=<wiseSessionId> --actor=<email>     (held/expired class → pending; the next sweep writes it again)
+ *   … --retry=<wiseSessionId> --actor=<email>     (held/expired/skipped_scope class → pending; the next sweep writes it again)
  * Runs (same guarded path as production; honours mode, halt and per-tutor switches):
  *   … --sweep
  *   … --process=<wiseSessionId>
@@ -19,6 +19,7 @@
  *
  * Run with: npx tsx --tsconfig scripts/tsconfig.json scripts/autowrite-online-feedback.ts …
  */
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { getDb } from "@/lib/db";
 import { assignModelArms } from "@/lib/feedback-autowriter/ab";
@@ -55,6 +56,19 @@ import { AUTOWRITER_DEADLINE_MARGIN_MS } from "@/lib/feedback-autowriter/types";
 import { loadPayoutScriptEnvironment } from "./lib/payout-script";
 
 loadPayoutScriptEnvironment();
+stampLocalCommit();
+
+/** Drafts and POSTs made from this checkout are stamped with its commit (plus "+dirty"), as a deploy's are with its own. */
+function stampLocalCommit(): void {
+  if (process.env.VERCEL_GIT_COMMIT_SHA) return;
+  try {
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    const dirty = execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { encoding: "utf8" }).trim() !== "";
+    process.env.AUTOWRITER_LOCAL_COMMIT = `local:${sha}${dirty ? "+dirty" : ""}`;
+  } catch {
+    process.env.AUTOWRITER_LOCAL_COMMIT = "local:unknown";
+  }
+}
 
 function flag(name: string): boolean {
   return process.argv.includes(`--${name}`);
@@ -132,7 +146,7 @@ async function control(): Promise<void> {
     const ok = await retryHeldSession(db, retry, { minDeadline: new Date(Date.now() + AUTOWRITER_DEADLINE_MARGIN_MS), actor });
     console.log(ok
       ? `Re-queued ${retry}; the next sweep (or webhook) writes it again.`
-      : `Not re-queued: ${retry} is not held/expired, or its deadline is too close.`);
+      : `Not re-queued: ${retry} is not held/expired/skipped_scope, or its deadline is too close.`);
   }
   const off = option("tutor-off");
   const on = option("tutor-on");
@@ -195,7 +209,7 @@ async function generate(): Promise<void> {
   const arms = Object.fromEntries(assignModelArms(sessions.filter((session) => session.purpose === "candidate").map((session) => ({
     sessionId: session.sessionId, classId: session.classId, scheduledStartAt: new Date(session.scheduledStartAt),
   }))));
-  const jobs = sessions.flatMap((session) => (["glm", "luna"] as const).map((arm) => ({ session, arm })));
+  const jobs = sessions.flatMap((session) => (["sol", "glm", "luna"] as const).map((arm) => ({ session, arm })));
   const drafts = await mapWithConcurrency(jobs, 4, async ({ session, arm }) => {
     const draft = await generateDraft({ apiKey, arm, session, tutorNames: tutor.tutorNames, priorFeedback });
     const usage = "usage" in draft.call ? draft.call.usage : null;

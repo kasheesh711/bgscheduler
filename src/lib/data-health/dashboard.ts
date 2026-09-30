@@ -326,9 +326,9 @@ function pickJobRuns(
     };
   }
 
-  if (job.key === "cron_watchdog" || job.key === "feedback_autowriter") {
-    // Neither job has a domain run table; health comes solely from direct
-    // cron_invocations proof (both routes are audit-wrapped).
+  if (job.key === "cron_watchdog" || job.key === "feedback_autowriter" || job.key === "feedback_autowriter_review") {
+    // No domain run table is read for these; health comes solely from direct
+    // cron_invocations proof (every route is audit-wrapped).
     return {
       latestRun: null,
       latestSuccessfulRun: null,
