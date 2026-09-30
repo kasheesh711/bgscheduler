@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { createAppsScriptScheduleEmailSender, type ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
 import { wiseSessionLink } from "@/lib/wise/links";
+import { AUTOWRITER_JUDGE_ERRORS_ALERT } from "./config";
 import { rosterTutor } from "./roster";
 import type { AlertKind, PendingAlert } from "./store";
 
@@ -9,6 +10,7 @@ const KIND_TEXT: Record<AlertKind, string> = {
   expired: "Not written before the deadline window. Please write this feedback now.",
   no_summary: "Wise has no AI summary 3 hours after class. The autowriter keeps trying; write it yourself if it stays blank.",
   no_recording: "Wise's recording, or its transcript, is still not ready 3 hours after class (second pass). The autowriter keeps trying until the deadline; write it yourself if you can.",
+  judge_failing: `The draft could not be checked ${AUTOWRITER_JUDGE_ERRORS_ALERT} runs in a row (the judge model failed or could not be reached), so nothing has been posted. The autowriter keeps retrying every 10 minutes until the deadline; write it yourself if it stays blank.`,
   unknown_outcome: "The Wise POST outcome is unclear. Autowriter halted — check this class in Wise before resuming.",
   verify_failed: "The Wise POST did not verify. Autowriter halted — check this class in Wise before resuming.",
   rejected: "Wise rejected the POST. Autowriter halted — check this class before resuming.",

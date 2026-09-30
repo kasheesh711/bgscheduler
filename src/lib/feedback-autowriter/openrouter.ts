@@ -87,30 +87,30 @@ function isRateLimitCode(code: ReportedError["code"]): boolean {
 }
 
 /**
- * How long OpenRouter asks us to wait after a rate limit, when it says: `Retry-After` (seconds, or an HTTP date) or
- * the reset time of its own limit (`X-RateLimit-Reset`, epoch milliseconds or seconds) — a header of the response,
- * or listed under the reported error's `metadata.headers` in its body. Null when it names no time still ahead.
+ * How long OpenRouter asks us to wait after a rate limit, when it says. Null when it names no time still ahead.
+ * - `Retry-After` (seconds, or an HTTP date): the response's own header, or the one listed with the reported error
+ *   (`metadata.headers` in the body). A header that names no time ahead (empty, `0`, a past date) does not hide the
+ *   error's.
+ * - The reset time of OpenRouter's own limit (`X-RateLimit-Reset`, epoch milliseconds or seconds): only as listed
+ *   with the error. A response header of that name describes whichever limit the response carries, not
+ *   necessarily the one that refused this request.
  */
 function retryAfterMs(response: Response, error: ReportedError | undefined, now: number): number | null {
   const listed = error?.metadata?.headers;
   const inBody = listed && typeof listed === "object" ? Object.entries(listed) : [];
-  const read = (name: string): string | null => {
-    const header = response.headers.get(name);
-    if (header !== null) return header;
+  const ofError = (name: string): string | null => {
     const [, value] = inBody.find(([key]) => key.toLowerCase() === name) ?? [];
     return typeof value === "string" || typeof value === "number" ? String(value) : null;
   };
-  const retryAfter = read("retry-after")?.trim();
-  if (retryAfter) {
-    const waitMs = /^\d+(?:\.\d+)?$/u.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - now;
-    if (Number.isFinite(waitMs) && waitMs > 0) return Math.round(waitMs);
+  const ahead = (waitMs: number) => Number.isFinite(waitMs) && Math.round(waitMs) > 0 ? Math.round(waitMs) : null;
+  for (const value of [response.headers.get("retry-after"), ofError("retry-after")]) {
+    const retryAfter = value?.trim();
+    if (!retryAfter) continue;
+    const waitMs = ahead(/^\d+(?:\.\d+)?$/u.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - now);
+    if (waitMs !== null) return waitMs;
   }
-  const reset = Number(read("x-ratelimit-reset")?.trim() || Number.NaN);
-  if (Number.isFinite(reset) && reset > 0) {
-    const waitMs = (reset < 1e12 ? reset * 1000 : reset) - now;
-    if (waitMs > 0) return Math.round(waitMs);
-  }
-  return null;
+  const reset = Number(ofError("x-ratelimit-reset")?.trim() || Number.NaN);
+  return Number.isFinite(reset) && reset > 0 ? ahead((reset < 1e12 ? reset * 1000 : reset) - now) : null;
 }
 
 /**
@@ -173,13 +173,19 @@ export async function callOpenRouter(input: {
     };
   }
   const latencyMs = Date.now() - started;
-  let body: ChatCompletionResponse;
+  let body: ChatCompletionResponse | null = null;
   try {
-    body = JSON.parse(text) as ChatCompletionResponse;
+    const parsed: unknown = JSON.parse(text);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) body = parsed as ChatCompletionResponse;
   } catch {
+    // Not JSON: handled with a reply that is JSON but no object (`null`, a bare string), below.
+  }
+  if (!body) {
+    // An HTTP 429 is a rate limit whatever its body (a proxy's error page), and may still say how long to wait.
+    const waitMs = response.status === 429 ? retryAfterMs(response, undefined, Date.now()) : null;
     return {
       ok: false, error: "invalid_json_response", httpStatus: response.status,
-      model: null, provider: null, finishReason: null, usage: null, latencyMs,
+      model: null, provider: null, finishReason: null, usage: null, latencyMs, ...(waitMs !== null ? { retryAfterMs: waitMs } : {}),
     };
   }
   const usage = parseOpenRouterUsage(body.usage);
@@ -223,44 +229,76 @@ export function isRateLimited(call: OpenRouterCallResult): call is OpenRouterCal
 }
 
 /**
+ * The wait before retry number `retry` (from 0) of a rate-limited call, or null when it is not tried again.
+ * - The schedule's wait, anywhere within ±30% (`random` in [0, 1)); one call's waits never add up to more than 45 s,
+ *   so the schedule's last wait is cut to what is left of them.
+ * - When OpenRouter named a wait (`askedMs`): never before it, and never less than the schedule's wait — a wait of a
+ *   second or less would otherwise spend every retry at once. The spread only adds to what it asked, up to 30 s.
+ * - A wait it asks for is never cut short (a retry before the time it named would only be rate limited again): one
+ *   longer than 30 s, or than what is left of the call's 45 s, ends the retries.
+ */
+function retryWaitMs(askedMs: number | undefined, retry: number, waitedMs: number, random: number): number | null {
+  const leftMs = AUTOWRITER_RATE_LIMIT_RETRY_MAX_TOTAL_WAIT_MS - waitedMs;
+  const spread = AUTOWRITER_RATE_LIMIT_RETRY_JITTER * random;
+  let waitMs = AUTOWRITER_RATE_LIMIT_RETRY_WAITS_MS[retry] * (1 - AUTOWRITER_RATE_LIMIT_RETRY_JITTER + 2 * spread);
+  if (askedMs !== undefined) {
+    if (askedMs > Math.min(AUTOWRITER_RATE_LIMIT_RETRY_AFTER_MAX_MS, leftMs)) return null;
+    waitMs = Math.max(waitMs, Math.min(AUTOWRITER_RATE_LIMIT_RETRY_AFTER_MAX_MS, askedMs * (1 + spread)));
+  }
+  waitMs = Math.round(Math.min(waitMs, leftMs));
+  return waitMs > 0 ? waitMs : null;
+}
+
+/** A rate-limited attempt that was tried again: its reply, when its request was sent (epoch ms) and the wait that followed. */
+export type RateLimitedAttempt = OpenRouterCallFailure & { startedAt: number; waitedMs: number };
+
+/**
  * One model call, tried again in the same run while it is rate limited (owner decision, 30 Sep): the same request,
- * up to three more times, after about 4 s, 10 s and 25 s — each ±30% at random — or after the wait OpenRouter asks
- * for (never before it, up to 30 s); one call's waits never add up to more than 45 s. Any other result — an answer,
- * a time-out, a provider error, a reply that is not JSON — is returned as it is: this retries rate limits only.
+ * up to three more times, after about 4 s, 10 s and 25 s — each ±30% at random. A wait OpenRouter asks for is kept
+ * (`retryWaitMs`): never a retry before it, and one it asks for that does not fit ends the retries. One call's waits
+ * never add up to more than 45 s. Any other result — an answer, a time-out, a provider error, a reply that is not
+ * JSON — is returned as it is: this retries rate limits only.
  *
  * Never past the run's time: a retry is made only when its wait and the request's whole time-out still end before
  * the function's deadline margin (`remainingMs` − 45 s), the rule every model call starts under. Otherwise the rate
  * limit is returned at once, as before: the class is retried at the next sweep.
  *
- * Returns the last attempt, and before it every attempt that was rate limited and tried again (oldest first): each
- * was a real request, so the caller records each as its own call.
+ * Returns the last attempt and when its request was sent, and before it every attempt that was rate limited and
+ * tried again (oldest first): each was a real request, so the caller records each as its own call.
  */
-export async function callWithRateLimitRetries<Request extends { timeoutMs: number }>(input: {
-  call: (request: Request) => Promise<OpenRouterCallResult>;
-  request: Request;
+export async function callWithRateLimitRetries<ModelRequest extends { timeoutMs: number }>(input: {
+  call: (request: ModelRequest) => Promise<OpenRouterCallResult>;
+  request: ModelRequest;
   /** The function's time left. */
   remainingMs: () => number;
+  /** False: one request only — a rate limit is returned at once, as before the retries (a sweep that met a lasting one). */
+  retries?: boolean;
+  /** Asked before each wait: true when a retry can no longer change anything, so none is made. */
+  abandon?: () => boolean;
   sleep?: (ms: number) => Promise<void>;
   /** A number in [0, 1), like `Math.random`. */
   random?: () => number;
-}): Promise<{ call: OpenRouterCallResult; rateLimited: OpenRouterCallFailure[] }> {
+}): Promise<{
+  call: OpenRouterCallResult;
+  /** When the last attempt's request was sent (epoch ms). */
+  startedAt: number;
+  rateLimited: RateLimitedAttempt[];
+  /** The call is still rate limited and would have been tried again, had `abandon` not said otherwise. */
+  abandoned: boolean;
+}> {
   const sleep = input.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const random = input.random ?? Math.random;
-  const rateLimited: OpenRouterCallFailure[] = [];
+  const rateLimited: RateLimitedAttempt[] = [];
   let waitedMs = 0;
   for (;;) {
+    const startedAt = Date.now();
     const call = await input.call(input.request);
-    if (!isRateLimited(call) || rateLimited.length >= AUTOWRITER_RATE_LIMIT_RETRY_WAITS_MS.length) return { call, rateLimited };
-    const spread = AUTOWRITER_RATE_LIMIT_RETRY_JITTER * random();
-    const askedMs = call.retryAfterMs === undefined
-      // The schedule's wait, anywhere within ±30%.
-      ? AUTOWRITER_RATE_LIMIT_RETRY_WAITS_MS[rateLimited.length] * (1 - AUTOWRITER_RATE_LIMIT_RETRY_JITTER + 2 * spread)
-      // The wait OpenRouter asked for: the spread only adds to it, and it is cut at the cap.
-      : Math.min(AUTOWRITER_RATE_LIMIT_RETRY_AFTER_MAX_MS, call.retryAfterMs * (1 + spread));
-    const waitMs = Math.round(Math.min(askedMs, AUTOWRITER_RATE_LIMIT_RETRY_MAX_TOTAL_WAIT_MS - waitedMs));
-    const fits = waitMs + input.request.timeoutMs <= input.remainingMs() - AUTOWRITER_CALL_DEADLINE_MARGIN_MS;
-    if (waitMs <= 0 || !fits) return { call, rateLimited };
-    rateLimited.push(call);
+    const last = { call, startedAt, rateLimited, abandoned: false };
+    if (!isRateLimited(call) || input.retries === false || rateLimited.length >= AUTOWRITER_RATE_LIMIT_RETRY_WAITS_MS.length) return last;
+    const waitMs = retryWaitMs(call.retryAfterMs, rateLimited.length, waitedMs, random());
+    if (waitMs === null || waitMs + input.request.timeoutMs > input.remainingMs() - AUTOWRITER_CALL_DEADLINE_MARGIN_MS) return last;
+    if (input.abandon?.()) return { ...last, abandoned: true };
+    rateLimited.push({ ...call, startedAt, waitedMs: waitMs });
     await sleep(waitMs);
     waitedMs += waitMs;
   }

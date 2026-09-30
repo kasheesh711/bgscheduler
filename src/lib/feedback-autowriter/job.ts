@@ -10,6 +10,7 @@ import { resolveBilling } from "./billing";
 import {
   AUTOWRITER_EVENT_DEADLINE_MS,
   AUTOWRITER_GENERATION_LEASE_MS,
+  AUTOWRITER_JUDGE_ERRORS_ALERT,
   AUTOWRITER_MAX_GENERIC_ERRORS,
   AUTOWRITER_MAX_TRANSCRIBE_ERRORS,
   AUTOWRITER_MAX_WRITER_ERRORS,
@@ -147,6 +148,8 @@ export interface ProcessOutcome {
   wiseSessionId: string;
   result: ProcessResult;
   detail?: string;
+  /** `infra`: the run ended on a model call that was still rate limited (after its in-run retries, when it had any). */
+  rateLimited?: true;
 }
 
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
@@ -190,6 +193,8 @@ export async function processSession(deps: AutowriterDeps, input: {
   mappings?: readonly FeedbackFieldMapping[];
   /** Webhooks: keep re-reading Wise this long while it is not ready yet (summary lags the meeting end by ~20–80 s). */
   waitForReadyMs?: number;
+  /** Sweeps: false once a class of the sweep has ended still rate limited — no in-run retries for the rest of it. */
+  rateLimitRetries?: boolean;
 }): Promise<ProcessOutcome> {
   const { db } = deps;
   const out = (result: ProcessResult, detail?: string): ProcessOutcome => ({ wiseSessionId: input.wiseSessionId, result, detail });
@@ -247,7 +252,7 @@ export async function processSession(deps: AutowriterDeps, input: {
     if (!leased || leased.state !== "generating" || leased.leaseToken !== token) return out("busy_or_not_due", "lease_lost");
     return await processLeased(deps, {
       row: leased, token, control, trigger: input.trigger, mappings: input.mappings, release, out,
-      waitForReadyMs: input.waitForReadyMs ?? 0,
+      waitForReadyMs: input.waitForReadyMs ?? 0, rateLimitRetries: input.rateLimitRetries,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 120) : "unknown";
@@ -290,6 +295,38 @@ type Release = (to: Parameters<typeof releaseGeneration>[3]) => Promise<boolean>
 type Out = (result: ProcessResult, detail?: string) => ProcessOutcome;
 /** A judged draft carried through a retry or hold; never the state decision itself. */
 type DraftPatch = Pick<Parameters<Release>[0], "arm" | "fields" | "fieldsSha256" | "billing" | "metadata">;
+
+function judgeErrorCount(row: AutowriterSessionRow): number {
+  return Number((row.metadata as { judgeErrors?: unknown }).judgeErrors ?? 0) || 0;
+}
+
+/**
+ * A class whose judge keeps failing retries every 10 minutes until its deadline, as decided (30 Sep) — unseen until it
+ * expires: it never falls back, and an infra retry raises no `no_recording` alert. So the runs in a row that end at
+ * the judge stage are counted (`metadata.judgeErrors`), and the third raises one `judge_failing` alert. Once per
+ * run of failures: the count starts again when the judge answers (`judgeAnswered`), and the alert is re-armed when
+ * a later run of failures reaches the mark. A failure at the writer stage says nothing about the judge and leaves
+ * the count as it is. The class itself retries exactly as before.
+ */
+function judgeFailed(
+  row: AutowriterSessionRow,
+  result: Extract<PipelineResult, { kind: "infra" }>,
+): Pick<Parameters<Release>[0], "alertKind" | "rearmAlert"> & { metadata: Record<string, unknown> } {
+  if (result.stage !== "judge") return { metadata: {} };
+  const judgeErrors = judgeErrorCount(row) + 1;
+  return {
+    metadata: { judgeErrors },
+    ...(judgeErrors === AUTOWRITER_JUDGE_ERRORS_ALERT ? { alertKind: "judge_failing" as const, rearmAlert: true } : {}),
+  };
+}
+
+/**
+ * A run that ended with a draft or a hold, not at the judge stage: the judge's failures in a row are over and are
+ * counted from zero again (a `judge_failing` alert not sent yet is then dropped, `listPendingAlerts`).
+ */
+function judgeAnswered(row: AutowriterSessionRow): Record<string, unknown> {
+  return judgeErrorCount(row) > 0 ? { judgeErrors: 0 } : {};
+}
 
 /** Hand a class to the second pass: wait for Wise's recording, then write from its transcript. */
 async function handOverToTranscript(
@@ -486,6 +523,7 @@ async function processLeased(deps: AutowriterDeps, input: {
   release: Release;
   out: Out;
   waitForReadyMs: number;
+  rateLimitRetries?: boolean;
 }): Promise<ProcessOutcome> {
   if (input.row.evidence === "transcript") return processTranscript(deps, input);
   const secondPass = Boolean(deps.transcriptsEnabled && deps.soniox);
@@ -593,22 +631,27 @@ async function processLeased(deps: AutowriterDeps, input: {
     callModel: deps.callModel,
     sleep: deps.sleep,
     random: deps.random,
+    rateLimitRetries: input.rateLimitRetries,
   });
   if (result.kind === "infra") {
-    await release({ state: "pending", reason: `infra:${result.error}`, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true });
-    return out("infra", result.error);
+    // A judge failure is counted, and the third in a row alerts (`judgeFailed`); the class retries as before.
+    await release({
+      state: "pending", reason: `infra:${result.error}`, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true,
+      ...judgeFailed(row, result),
+    });
+    return { ...out("infra", result.error), ...(result.rateLimited ? { rateLimited: true as const } : {}) };
   }
   if (result.kind === "held") {
     const reasons = result.reasons.join("; ").slice(0, 900);
     // The summary could not carry a faithful draft: the transcript usually can (never again after a fallback).
-    if (mayHandOver) return handOverToTranscript(release, out, "summary_draft_held", { summaryHold: reasons });
+    if (mayHandOver) return handOverToTranscript(release, out, "summary_draft_held", { summaryHold: reasons, ...judgeAnswered(row) });
     await release({ state: "held", reason: reasons, countAttempt: true, alertKind: "held" });
     return out("held", result.reasons.join("; "));
   }
   return postDraft(deps, {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
     draft: { arm: result.arm, fields: result.fields, judge: result.judge }, evidence: "summary",
-    extraMetadata: guestMetadata(student), release, out,
+    extraMetadata: { ...guestMetadata(student), ...judgeAnswered(row) }, release, out,
   });
 }
 
@@ -771,6 +814,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
   mappings?: readonly FeedbackFieldMapping[];
   release: Release;
   out: Out;
+  rateLimitRetries?: boolean;
 }): Promise<ProcessOutcome> {
   const { db, ops } = deps;
   const { release, out } = input;
@@ -1027,14 +1071,17 @@ async function processTranscript(deps: AutowriterDeps, input: {
     callModel: deps.callModel,
     sleep: deps.sleep,
     random: deps.random,
+    rateLimitRetries: input.rateLimitRetries,
   });
   if (result.kind === "infra") {
     // Transcript first (owner decisions, 30 Sep): the writer failing on the transcript draft (a time-out, a reply
     // that is not JSON, a provider error, an unusable route) is retried, but the third failure in a row writes the
     // class from the summary instead of retrying until the deadline. Only the writer's failures count: a judge
-    // failure just retries, and since the writer then delivered a draft the count starts again. Wise and Soniox
-    // errors count apart (above); our function's time, our OpenRouter account and our connection are not the
-    // writer's failure (`modelFailure`) and leave the count as it is.
+    // failure just retries, and a run that ends in one starts the count again (as does a stored draft, below) — not
+    // any run in which a writer delivered: when a judge rejects Sol's draft and the Luna fallback then fails, the
+    // run ends in a writer failure and counts (owner decision, 30 Sep 17:00). Wise and Soniox errors count apart
+    // (above); our function's time, our OpenRouter account and our connection are not the writer's failure
+    // (`modelFailure`) and leave the count as it is.
     const writerFailed = canFallBack && result.stage === "writer" && result.modelFailure;
     const writerDelivered = canFallBack && result.stage === "judge";
     const previousErrors = Number((row.metadata as { writerErrors?: unknown }).writerErrors ?? 0) || 0;
@@ -1044,21 +1091,25 @@ async function processTranscript(deps: AutowriterDeps, input: {
         release, out, cause: "writer_failed", now, metadata: { transcript: transcriptMeta, writerErrors, writerFailure: result.error },
       });
     }
-    // The job is kept: the next attempt re-fetches the same transcript.
+    // The job is kept: the next attempt re-fetches the same transcript. A judge failure is counted, and the third
+    // in a row alerts (`judgeFailed`); the class retries as before.
+    const judge = judgeFailed(row, result);
     await release({
       state: "transcribing", reason: `infra:${result.error}`, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true,
       sonioxTranscriptionId: jobId,
-      metadata: { transcript: transcriptMeta, ...(writerFailed || writerDelivered ? { writerErrors } : {}) },
+      ...judge,
+      metadata: { transcript: transcriptMeta, ...(writerFailed || writerDelivered ? { writerErrors } : {}), ...judge.metadata },
     });
-    return out("infra", result.error);
+    return { ...out("infra", result.error), ...(result.rateLimited ? { rateLimited: true as const } : {}) };
   }
   if (result.kind === "held") return holdFor(result.reasons.join("; ").slice(0, 900));
   // The judged draft is stored with the job id; once the class is done, the sweep keeps the job for review only.
   return postDraft(deps, {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
     draft: { arm: result.arm, fields: result.fields, judge: result.judge }, evidence: "transcript",
-    // The writer delivered: a later failure (a requeued shadow draft written again) starts a new count.
-    extraMetadata: { transcript: transcriptMeta, ...guestMetadata(student), ...(canFallBack ? { writerErrors: 0 } : {}) },
+    // A stored draft: a later failure (a requeued shadow draft written again) starts a new count, of the writer's
+    // failures and of the judge's.
+    extraMetadata: { transcript: transcriptMeta, ...guestMetadata(student), ...(canFallBack ? { writerErrors: 0 } : {}), ...judgeAnswered(row) },
     release, out,
   });
 }
@@ -1198,11 +1249,28 @@ function tally(target: Record<string, number>, key: string) {
 }
 
 /**
+ * A due row the sweep can work on without calling a model, as far as the row shows: it posts its stored judged
+ * draft, waits for its recording or submits it to Soniox (no job yet), or looks at a Soniox job that was still
+ * running. Any other row may reach the writer: a summary to write, a transcript that is ready (or whose job's state
+ * is not known), a draft whose model call failed last time.
+ */
+function worksWithoutModel(row: AutowriterSessionRow): boolean {
+  if (row.evidence !== "transcript") return false;
+  return Boolean(reusableTranscriptDraft(row)) || !row.sonioxTranscriptionId || row.reason === "transcription_in_progress";
+}
+
+/**
  * 1. Reconcile POSTs whose outcome is not final (every mode, reads only).
  * 2. Expire what can no longer land before its deadline (not in `off`).
- * 3. Queue and process due sessions, most urgent first (not in `off`, not while halted).
+ * 3. Queue and process due sessions (not in `off`, not while halted): first the rows that call no model
+ *    (`worksWithoutModel`), then the rows that may need the writer — each group most urgent first, a row whose
+ *    last attempt failed (`infra:…`) after the others (`listDueRows`). So a rate limit that holds up the writer's
+ *    rows never keeps a stored draft from being posted or a recording from being transcribed. Once a class ends
+ *    still rate limited, the rest of the sweep makes no in-run retries: the limit lasts, and every class would
+ *    otherwise spend its waits on it (a sweep starts a class only in its first 180 s). A webhook run is one class
+ *    per function and always keeps its retries.
  * 4. One alert digest. Outside `live`, alerts about drafts (held / expired /
- *    no summary) are recorded but not emailed — tutors still write their own.
+ *    no summary / a judge that keeps failing) are recorded but not emailed — tutors still write their own.
  */
 export async function runSweep(deps: AutowriterDeps): Promise<SweepResult> {
   const { db } = deps;
@@ -1258,16 +1326,22 @@ export async function runSweep(deps: AutowriterDeps): Promise<SweepResult> {
         const due = (await listDueRows(db))
           .filter((row) => !row.wiseTeacherUserId || !control.disabledTutors.includes(row.wiseTeacherUserId));
         const mappings = await loadFieldMappings(db);
-        for (const row of due) {
+        let rateLimitRetries = true;
+        // Rows that call no model first; each group keeps the order `listDueRows` gave it.
+        for (const row of [...due.filter(worksWithoutModel), ...due.filter((row) => !worksWithoutModel(row))]) {
           if (remaining(deps) < AUTOWRITER_SWEEP_MIN_REMAINING_MS) break;
           // Re-read the switches per session: a halt, pause or mode change made
           // while this sweep runs (e.g. by a webhook worker's POST) applies at once.
           const current = await readControl(db);
           if (current.haltedAt || current.mode === "off") break;
           if (row.wiseTeacherUserId && current.disabledTutors.includes(row.wiseTeacherUserId)) continue;
-          const outcome = await processSession(deps, { wiseSessionId: row.wiseSessionId, wiseClassId: row.wiseClassId, trigger: "cron", control: current, mappings });
+          const outcome = await processSession(deps, {
+            wiseSessionId: row.wiseSessionId, wiseClassId: row.wiseClassId, trigger: "cron", control: current, mappings, rateLimitRetries,
+          });
           tally(processed, outcome.result);
           if (outcome.result === "infra" && outcome.detail) infraErrors.push(`${row.wiseSessionId}: ${outcome.detail}`);
+          // Still rate limited after its retries: the limit lasts, so the classes after it make none.
+          if (outcome.rateLimited) rateLimitRetries = false;
         }
       }
     }

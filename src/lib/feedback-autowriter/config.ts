@@ -62,14 +62,19 @@ export function wiseApiActorId(env: AutowriterEnvironment = process.env): string
   return value(env, "WISE_USER_ID") || null;
 }
 
-export interface AutowriterModelConfig {
+/** A model and the route it is asked for on. */
+export interface AutowriterModelRoute {
   arm: ModelArm;
   model: string;
   provider: OpenRouterProviderPreferences;
-  effort: "max" | "high" | "medium" | "low";
   /** When set, the response must come from this host and model or the call is an infra failure. */
   expectProvider?: string;
   expectModel?: string;
+}
+
+/** A model, its route and the reasoning effort it is called at. */
+export interface AutowriterModelConfig extends AutowriterModelRoute {
+  effort: "max" | "high" | "medium" | "low";
 }
 
 const GLM_ZDR_ROUTE: OpenRouterProviderPreferences = {
@@ -100,9 +105,9 @@ const OPENAI_ZDR_ROUTE: OpenRouterProviderPreferences = {
  * drafts needed no real fix (0 critical, 0.9 real errors per 100 claims), vs
  * Luna 64% and GLM 30% (4.1 per 100). ≈ $0.04 per draft, ~6 s per call.
  * Fallback writer: GPT-6 Luna, reasoning `max`, on the same route.
- * Judge: GLM 5.3 Flash pinned to Together, at every effort in `AUTOWRITER_JUDGE_EFFORTS` (its `effort` below is
- * not used). v4 (30 Sep) moved it from `medium` to `high`: at `medium` it passed a draft that gave another student's
- * words to ours after ~100 reasoning tokens.
+ * Judge: GLM 5.3 Flash pinned to Together. It has no effort of its own here: it runs at every effort in
+ * `AUTOWRITER_JUDGE_EFFORTS` (v5). v4 (30 Sep) had moved it from `medium` to `high`: at `medium` it passed a draft
+ * that gave another student's words to ours after ~100 reasoning tokens.
  */
 export const AUTOWRITER_MODELS = {
   writer: {
@@ -113,10 +118,10 @@ export const AUTOWRITER_MODELS = {
     arm: "luna", model: "openai/gpt-6-luna", provider: OPENAI_ZDR_ROUTE, effort: "max",
   },
   judge: {
-    arm: "glm", model: "z-ai/glm-5.3-flash", provider: GLM_ZDR_ROUTE, effort: "high",
+    arm: "glm", model: "z-ai/glm-5.3-flash", provider: GLM_ZDR_ROUTE,
     expectProvider: "Together", expectModel: "z-ai/glm-5.3-flash",
   },
-} as const satisfies Record<string, AutowriterModelConfig>;
+} as const satisfies { writer: AutowriterModelConfig; fallbackWriter: AutowriterModelConfig; judge: AutowriterModelRoute };
 
 /**
  * Judge v5 (owner decision, 30 Sep): every draft is judged at each of these efforts, in parallel on byte-identical
@@ -145,9 +150,13 @@ export const AUTOWRITER_CALL_DEADLINE_MARGIN_MS = 45_000;
 export const AUTOWRITER_RATE_LIMIT_RETRY_WAITS_MS = [4_000, 10_000, 25_000] as const;
 /** Each wait is spread ±30% at random, so classes that end at the same time do not retry at the same time. */
 export const AUTOWRITER_RATE_LIMIT_RETRY_JITTER = 0.3;
-/** A wait OpenRouter itself asks for (`Retry-After`, its rate limit's reset time) replaces the schedule's — up to this long. */
+/**
+ * A wait OpenRouter itself asks for (`Retry-After`, its rate limit's reset time) is kept, up to this long: never a
+ * retry before it, and never a wait shorter than the schedule's. A longer one — or one longer than what is left of
+ * the call's total below — is not cut short: the call is not tried again in this run.
+ */
 export const AUTOWRITER_RATE_LIMIT_RETRY_AFTER_MAX_MS = 30_000;
-/** One call's waits never add up to more than this: the last one is cut to fit. */
+/** One call's waits never add up to more than this: the schedule's last wait is cut to fit. */
 export const AUTOWRITER_RATE_LIMIT_RETRY_MAX_TOTAL_WAIT_MS = 45_000;
 
 /**
@@ -171,7 +180,9 @@ export const AUTOWRITER_NO_SUMMARY_ALERT_MS = 3 * 60 * 60 * 1000;
 /**
  * A POST is only claimed when at least this much function time remains: the
  * POST phase's worst case is ~220 s (POST 60 s, pause 3 s, two 45 s reads,
- * event polling bounded by the remaining time).
+ * event polling bounded by the remaining time). Checked twice: before the
+ * three pre-POST Wise reads (up to 45 s each — none is made for a POST that
+ * could not be claimed) and again right before the claim.
  */
 export const AUTOWRITER_MIN_POST_BUDGET_MS = 240_000;
 /**
@@ -195,12 +206,17 @@ export const AUTOWRITER_WISE_READ_TIMEOUT_MS = 45_000;
  * After the slowest writer call (180 s) at least 335 s are left, so the judges (in parallel) always get their full
  * time-out — 240 s on a transcript, 120 s on a summary — unless the reads before the writer took over 95 s; the
  * pipeline never starts a judge without it (the class then retries with a fresh function). Worst case, the POST
- * phase (240 s) no longer fits after a transcript draft: the judged draft is kept and the next run posts it without
- * calling a model. After a summary draft it still fits (560 − 180 − 120 = 260 s).
+ * phase (240 s) no longer fits after a transcript draft (560 − 180 − 240 = 140 s): the judged draft is kept and the
+ * next run posts it without calling a model. After a summary draft it fits with 20 s to spare (560 − 180 − 120 =
+ * 260 s) — when no call was rate limited, see below.
  * A rate-limited call's in-run retries (`AUTOWRITER_RATE_LIMIT_RETRY_WAITS_MS`) keep to the same rule: a retry is made
  * only when its wait and the call's whole time-out still end by the deadline − 45 s, so they add at most 45 s of
  * waiting to a call, never start a judge without its full time-out and never let a call outlive the function. The
- * time they take comes out of what is left for the POST, which is claimed only with its 240 s (as above).
+ * time they take comes out of what is left for the POST, which is claimed only with its 240 s (as above). Once the
+ * waits add up to more than those 20 s — one call that used all three retries waits 27–45 s — a summary's worst
+ * case no longer posts in the same run either: 260 − 45 = 215 s are left after one such call, 170 s after two (the
+ * writer, then the judges). Its draft is kept on the row, but only a transcript draft is posted as stored: the next
+ * run writes a summary again.
  */
 export const AUTOWRITER_SWEEP_MIN_REMAINING_MS = 560_000;
 /** While another POST is in flight, re-try the guarded submit this often … */
@@ -255,13 +271,22 @@ export const AUTOWRITER_NO_RECORDING_ALERT_MS = 3 * 60 * 60 * 1000;
  */
 export const AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS = 3 * 60 * 60 * 1000;
 /**
- * Transcript first: failures in a row of the writer on a class's transcript draft (a time-out, a reply that is not
- * JSON, a provider error, an unusable route) before the class is written from the summary instead (`summaryFallback`,
- * cause `writer_failed`; owner default, 30 Sep) rather than retried every 10 min until its deadline. Only the writer's
- * failures count (owner decision, 30 Sep): a judge failure just retries, and a writer call that delivered a draft
- * starts the count again. Wise and Soniox errors are counted apart.
+ * Transcript first: runs in a row that end in a failure of the writer on a class's transcript draft (a time-out, a
+ * reply that is not JSON, a provider error, an unusable route) before the class is written from the summary instead
+ * (`summaryFallback`, cause `writer_failed`; owner default, 30 Sep) rather than retried every 10 min until its
+ * deadline. Only the writer's failures count (owner decision, 30 Sep): a judge failure just retries. The count starts
+ * again when a run ends in a judge failure or with a stored draft — not whenever a writer delivers one: a run in
+ * which a judge rejects Sol's draft and the Luna fallback then fails is a writer failure and counts (owner decision,
+ * 30 Sep 17:00). Wise and Soniox errors are counted apart.
  */
 export const AUTOWRITER_MAX_WRITER_ERRORS = 3;
+/**
+ * Runs in a row that end at the judge stage on one class (a judge level timing out, giving no verdict, rate limited
+ * or answering from the wrong route; no time left to start it) before one `judge_failing` alert tells a person. The
+ * class keeps retrying every 10 min, as decided (judge failures never fall back); the alert is dropped once the judge
+ * answers or the class settles, and a later run of failures alerts again.
+ */
+export const AUTOWRITER_JUDGE_ERRORS_ALERT = 3;
 /** Soniox jobs no row references are deleted once they are this old (orphans). */
 export const AUTOWRITER_SONIOX_REAPER_AGE_MS = 2 * 60 * 60 * 1000;
 /** Soniox deletes per sweep (each bounded by a 15 s time-out). */

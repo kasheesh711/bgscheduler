@@ -118,6 +118,18 @@ describe("callOpenRouter", () => {
     expect(await call({ error: { message: limit, code: "429" } }, 503)).toMatchObject({ ok: false, httpStatus: 503 });
   });
 
+  it("reports a reply that is JSON but no object as invalid_json_response, never as an unhandled error", async () => {
+    // `null` parses, and reading a property of it would throw: the run would count an unexpected error instead.
+    for (const text of ["null", "\"Bad gateway\"", "[]", "42", "true"]) {
+      const fetchImpl = vi.fn(async () => new Response(text, { status: 200 }));
+      expect(await callOpenRouter({ ...request, fetchImpl: fetchImpl as unknown as typeof fetch }), text).toMatchObject({
+        ok: false, error: "invalid_json_response", httpStatus: 200, model: null, provider: null, usage: null,
+      });
+    }
+    const gateway = vi.fn(async () => new Response("null", { status: 502 }));
+    expect(await callOpenRouter({ ...request, fetchImpl: gateway as unknown as typeof fetch })).toMatchObject({ ok: false, error: "invalid_json_response", httpStatus: 502 });
+  });
+
   it("reports a timeout while reading a slow reply as a timeout, not an unhandled error", async () => {
     // Ek's 29 Sep class: the headers arrived, then the body read hit the timeout.
     const slowBody = vi.fn(async () => ({
@@ -149,6 +161,12 @@ describe("callOpenRouter: how long OpenRouter asks us to wait after a rate limit
     const result = await callOpenRouter({ ...request, fetchImpl: vi.fn(async () => json(status, body, headers)()) as unknown as typeof fetch });
     return result.ok ? "answered" : result.retryAfterMs;
   };
+  /** The same for a reply whose body is sent as it is (not JSON, or JSON that is no object). */
+  const rawHint = async (status: number, text: string, headers: Record<string, string> = {}) => {
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    const result = await callOpenRouter({ ...request, fetchImpl: vi.fn(async () => new Response(text, { status, headers })) as unknown as typeof fetch });
+    return result.ok ? "answered" : [result.httpStatus, result.error, result.retryAfterMs];
+  };
 
   it("names no wait when OpenRouter gives none (the upstream limit of 30 Sep)", async () => {
     expect(await hint(200, UPSTREAM_LIMIT)).toBeUndefined();
@@ -167,13 +185,42 @@ describe("callOpenRouter: how long OpenRouter asks us to wait after a rate limit
     expect(await hint(429, { error: { message: "x", code: 429, metadata: { headers: { "retry-after": "20" } } } }, { "Retry-After": "3" })).toBe(3_000);
   });
 
-  it("reads the reset time of OpenRouter's own limit (X-RateLimit-Reset, epoch milliseconds or seconds)", async () => {
+  it("reads the reset time of OpenRouter's own limit (X-RateLimit-Reset, epoch milliseconds or seconds) — only as listed with the error", async () => {
     const own = (reset: string) => ({
       error: { message: "Rate limit exceeded: limit_rpm", code: 429, metadata: { headers: { "X-RateLimit-Limit": "20", "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": reset } } },
     });
     expect(await hint(429, own(String(NOW + 40_000)))).toBe(40_000);
     expect(await hint(429, own(String((NOW + 8_000) / 1000)))).toBe(8_000);
-    expect(await hint(429, { error: { message: "x", code: 429 } }, { "X-RateLimit-Reset": String(NOW + 5_000) })).toBe(5_000);
+    // A response header of that name is whichever limit the response carries (the account's, say), not necessarily
+    // the one that refused this request: it names no wait …
+    expect(await hint(429, { error: { message: "x", code: 429 } }, { "X-RateLimit-Reset": String(NOW + 5_000) })).toBeUndefined();
+    expect(await hint(200, UPSTREAM_LIMIT, { "X-RateLimit-Reset": String(NOW + 5_000) })).toBeUndefined();
+    // … and never replaces the error's own.
+    expect(await hint(429, own(String(NOW + 40_000)), { "X-RateLimit-Reset": String(NOW + 5_000) })).toBe(40_000);
+  });
+
+  it("reads Retry-After on an HTTP 429 whose body is not JSON", async () => {
+    // A proxy's error page: still a rate limit (HTTP 429), and the header still says how long to wait.
+    expect(await rawHint(429, "<html>Too Many Requests</html>", { "Retry-After": "7" })).toEqual([429, "invalid_json_response", 7_000]);
+    expect(await rawHint(429, "", { "Retry-After": new Date(NOW + 12_000).toUTCString() })).toEqual([429, "invalid_json_response", 12_000]);
+    expect(await rawHint(429, "null", { "Retry-After": "3" })).toEqual([429, "invalid_json_response", 3_000]);
+    expect(await rawHint(429, "<html>Too Many Requests</html>")).toEqual([429, "invalid_json_response", undefined]);
+    // Only a rate limit carries a wait: another status with the same header names none.
+    expect(await rawHint(502, "<html>Bad gateway</html>", { "Retry-After": "7" })).toEqual([502, "invalid_json_response", undefined]);
+    expect(await rawHint(200, "<html></html>", { "Retry-After": "7" })).toEqual([200, "invalid_json_response", undefined]);
+  });
+
+  it("never lets an HTTP Retry-After that names no time ahead hide the one listed with the error", async () => {
+    const listed = (value: unknown) => ({ error: { message: "x", code: 429, metadata: { headers: { "Retry-After": value } } } });
+    for (const header of ["", "0", "0.0", " ", "soon", new Date(NOW - 60_000).toUTCString()]) {
+      expect(await hint(429, listed(9), { "Retry-After": header }), JSON.stringify(header)).toBe(9_000);
+      expect(await hint(200, listed("6"), { "Retry-After": header }), JSON.stringify(header)).toBe(6_000);
+    }
+    // Neither names a time ahead: the error's reset time is the next to be read.
+    const reset = { error: { message: "x", code: 429, metadata: { headers: { "Retry-After": "0", "X-RateLimit-Reset": String(NOW + 11_000) } } } };
+    expect(await hint(429, reset, { "Retry-After": "0" })).toBe(11_000);
+    // A wait that rounds to no time at all names none.
+    expect(await hint(429, listed("0.0004"))).toBeUndefined();
   });
 
   it("ignores a wait that is not ahead or cannot be read, and any such header on another failure", async () => {
@@ -191,7 +238,9 @@ describe("callOpenRouter: how long OpenRouter asks us to wait after a rate limit
 
 describe("callWithRateLimitRetries", () => {
   /** Replies per request, in order; an extra request fails the test. */
-  function attempt(replies: Array<() => Response | Promise<Response>>, options: { remainingMs?: number; random?: () => number } = {}) {
+  function attempt(replies: Array<() => Response | Promise<Response>>, options: {
+    remainingMs?: number; random?: () => number; retries?: boolean; abandon?: () => boolean;
+  } = {}) {
     const waits: number[] = [];
     const fetchImpl = vi.fn(async (...args: [string, RequestInit]) => {
       void args;
@@ -203,6 +252,8 @@ describe("callWithRateLimitRetries", () => {
       call: (input: typeof request) => callOpenRouter({ ...input, fetchImpl: fetchImpl as unknown as typeof fetch }),
       request,
       remainingMs: () => options.remainingMs ?? 700_000,
+      retries: options.retries,
+      abandon: options.abandon,
       sleep: async (ms) => { waits.push(ms); },
       random: options.random ?? (() => 0.5),
     });
@@ -236,6 +287,17 @@ describe("callWithRateLimitRetries", () => {
     expect(await promise).toMatchObject({ call: { ok: true }, rateLimited: [{ httpStatus: 429, error: message }, { httpStatus: 429, error: message }, { httpStatus: 429, error: message }] });
     expect(waits).toEqual([4_000, 10_000, 25_000]);
     expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it("retries an HTTP 429 whose body is not JSON, after the wait its header asks for", async () => {
+    const page = (headers: Record<string, string> = {}) => () => new Response("<html>Too Many Requests</html>", { status: 429, headers });
+    const { promise, waits, fetchImpl } = attempt([page({ "Retry-After": "7" }), page(), json(200, ANSWER)]);
+    expect(await promise).toMatchObject({
+      call: { ok: true },
+      rateLimited: [{ httpStatus: 429, error: "invalid_json_response", retryAfterMs: 7_000 }, { httpStatus: 429, error: "invalid_json_response" }],
+    });
+    expect(waits).toEqual([8_050, 10_000]);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
   it("makes at most three retries, then returns the rate limit", async () => {
@@ -285,18 +347,105 @@ describe("callWithRateLimitRetries", () => {
     expect(longest.waits).toEqual([5_200, 13_000, 26_800]);
   });
 
-  it("waits what OpenRouter asks — never less, at most 30 s at a time and 45 s in all", async () => {
+  it("waits what OpenRouter asks: never less, and the spread only adds to it", async () => {
     const asked = attempt([limited({ "Retry-After": "7" }), json(200, ANSWER)], { random: () => 0 });
     await asked.promise;
     expect(asked.waits).toEqual([7_000]);
     const spread = attempt([limited({ "Retry-After": "7" }), json(200, ANSWER)]);
     await spread.promise;
     expect(spread.waits).toEqual([8_050]);
-    // Two minutes asked: 30 s, then what is left of the 45 s, then no more — two retries instead of three.
-    const long = attempt([limited({ "Retry-After": "120" }), limited({ "Retry-After": "120" }), limited({ "Retry-After": "120" })]);
-    expect(await long.promise).toMatchObject({ call: { ok: false, httpStatus: 429, retryAfterMs: 120_000 }, rateLimited: [{}, {}] });
-    expect(long.waits).toEqual([30_000, 15_000]);
-    expect(long.fetchImpl).toHaveBeenCalledTimes(3);
+    // Up to 30 s: the spread on top of 29 s stops there, and 30 s asked is waited as asked.
+    const nearCap = attempt([limited({ "Retry-After": "29" }), json(200, ANSWER)], { random: () => 0.999_999 });
+    await nearCap.promise;
+    expect(nearCap.waits).toEqual([30_000]);
+    const atCap = attempt([limited({ "Retry-After": "30" }), json(200, ANSWER)]);
+    await atCap.promise;
+    expect(atCap.waits).toEqual([30_000]);
+  });
+
+  it("never retries before the time OpenRouter asked for: a wait that does not fit ends the retries", async () => {
+    // More than 30 s asked: a retry after 30 s would only be rate limited again, so none is made in this run.
+    for (const seconds of ["31", "120"]) {
+      const long = attempt([limited({ "Retry-After": seconds })]);
+      expect(await long.promise, seconds).toMatchObject({ call: { ok: false, httpStatus: 429, retryAfterMs: Number(seconds) * 1000 }, rateLimited: [] });
+      expect(long.waits, seconds).toEqual([]);
+      expect(long.fetchImpl, seconds).toHaveBeenCalledTimes(1);
+    }
+    // 20 s asked each time: two waits as asked, and the third (5 s are left of the call's 45 s) is not cut to fit.
+    const thrice = attempt([limited({ "Retry-After": "20" }), limited({ "Retry-After": "20" }), limited({ "Retry-After": "20" })], { random: () => 0 });
+    expect(await thrice.promise).toMatchObject({ call: { ok: false, httpStatus: 429 }, rateLimited: [{ waitedMs: 20_000 }, { waitedMs: 20_000 }] });
+    expect(thrice.waits).toEqual([20_000, 20_000]);
+    expect(thrice.fetchImpl).toHaveBeenCalledTimes(3);
+    // A wait asked for after the schedule's first: 30 s no longer fit what is left (45 − 4 = 41 s would; 45 − 4 − 30 not).
+    const later = attempt([limited(), limited({ "Retry-After": "30" }), limited({ "Retry-After": "12" })]);
+    expect(await later.promise).toMatchObject({ call: { ok: false, retryAfterMs: 12_000 }, rateLimited: [{}, {}] });
+    expect(later.waits).toEqual([4_000, 30_000]);
+  });
+
+  it("never waits less than the schedule's wait: a wait of a second or less does not spend every retry at once", async () => {
+    const four = (seconds: string) => [limited({ "Retry-After": seconds }), limited({ "Retry-After": seconds }), limited({ "Retry-After": seconds }), limited({ "Retry-After": seconds })];
+    const tiny = attempt(four("0.2"));
+    await tiny.promise;
+    expect(tiny.waits).toEqual([4_000, 10_000, 25_000]);
+    const shortest = attempt(four("1"), { random: () => 0 });
+    await shortest.promise;
+    expect(shortest.waits).toEqual([2_800, 7_000, 17_500]);
+    // Between the two: the longer of the schedule's wait and the one asked for, retry by retry.
+    const mixed = attempt(four("7"));
+    await mixed.promise;
+    expect(mixed.waits).toEqual([8_050, 10_000, 25_000]);
+  });
+
+  it("says when each request was sent and how long it then waited", async () => {
+    const NOW = Date.parse("2026-09-30T13:00:00.000Z");
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    try {
+      const replies = [limited({ "Retry-After": "7" }), limited(), json(200, ANSWER)];
+      const made = await callWithRateLimitRetries({
+        call: (input: typeof request) => callOpenRouter({ ...input, fetchImpl: vi.fn(async () => replies.shift()!()) as unknown as typeof fetch }),
+        request,
+        remainingMs: () => 700_000,
+        // The wait passes on the clock the requests are timed by.
+        sleep: async (ms) => { vi.setSystemTime(Date.now() + ms); },
+        random: () => 0.5,
+      });
+      expect(made.call).toMatchObject({ ok: true });
+      expect(made.rateLimited.map((limit) => [limit.startedAt - NOW, limit.retryAfterMs, limit.waitedMs])).toEqual([
+        [0, 7_000, 8_050], [8_050, undefined, 10_000],
+      ]);
+      expect(made.startedAt - NOW).toBe(18_050);
+      expect(made.abandoned).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("makes one request only when retries are off: a rate limit is returned at once, as before them", async () => {
+    const off = attempt([limited()], { retries: false });
+    expect(await off.promise).toMatchObject({ call: { ok: false, httpStatus: 429 }, rateLimited: [], abandoned: false });
+    expect(off.waits).toEqual([]);
+    expect(off.fetchImpl).toHaveBeenCalledTimes(1);
+    const answered = attempt([json(200, ANSWER)], { retries: false });
+    expect(await answered.promise).toMatchObject({ call: { ok: true }, rateLimited: [] });
+  });
+
+  it("asks before each wait whether a retry can still change anything, and makes none when it cannot", async () => {
+    // Already moot at the first rate limit: no wait, no second request.
+    const moot = attempt([limited()], { abandon: () => true });
+    expect(await moot.promise).toMatchObject({ call: { ok: false, httpStatus: 429 }, rateLimited: [], abandoned: true });
+    expect(moot.waits).toEqual([]);
+    // Moot after the first retry: that retry is made, the second is not.
+    let asked = 0;
+    const later = attempt([limited(), limited()], { abandon: () => (asked += 1) > 1 });
+    expect(await later.promise).toMatchObject({ call: { ok: false, httpStatus: 429 }, rateLimited: [{ waitedMs: 4_000 }], abandoned: true });
+    expect(later.waits).toEqual([4_000]);
+    expect(later.fetchImpl).toHaveBeenCalledTimes(2);
+    // Only a retry that would otherwise be made is "abandoned": an answer, a last retry used up, no time left, are not.
+    expect(await attempt([json(200, ANSWER)], { abandon: () => true }).promise).toMatchObject({ call: { ok: true }, abandoned: false });
+    expect(await attempt([limited()], { abandon: () => true, remainingMs: 1_000 }).promise).toMatchObject({ abandoned: false });
+    expect(await attempt([limited({ "Retry-After": "120" })], { abandon: () => true }).promise).toMatchObject({ abandoned: false });
+    const used = attempt([limited(), limited(), limited(), limited()], { abandon: () => false });
+    expect(await used.promise).toMatchObject({ call: { ok: false }, rateLimited: [{}, {}, {}], abandoned: false });
   });
 
   it("never waits past the run's time: the wait and the request's whole time-out must end before the deadline margin", async () => {

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
 import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
 import {
@@ -7,6 +8,7 @@ import {
   AUTOWRITER_MODELS,
   AUTOWRITER_WRITER_TIMEOUT_MS,
   type AutowriterModelConfig,
+  type AutowriterModelRoute,
 } from "./config";
 import {
   JUDGE_JSON_SCHEMA,
@@ -19,7 +21,7 @@ import {
   type JudgeOutput,
   type StoredJudgeVerdict,
 } from "./judge";
-import { callOpenRouter, callWithRateLimitRetries, type OpenRouterCallResult } from "./openrouter";
+import { callOpenRouter, callWithRateLimitRetries, isRateLimited, type OpenRouterCallResult } from "./openrouter";
 import {
   FEEDBACK_JSON_SCHEMA,
   PROMPT_VERSION,
@@ -55,7 +57,10 @@ export interface PipelineSession {
 
 /**
  * One request to a model. A call that was rate limited and tried again in the same run (`callWithRateLimitRetries`)
- * is one record per attempt: the attempts after the first carry `result.rateLimitRetry` (1, 2 or 3).
+ * is one record per attempt: the attempts after the first carry `result.rateLimitRetry` (1, 2 or 3). The records of
+ * a call are written when it ends, so each rate-limited attempt also says when its request was really sent
+ * (`result.attemptAt`, ISO), the wait OpenRouter asked for when it named one (`retryAfterMs`) and the wait that
+ * followed (`waitedMs`; none after the last attempt).
  */
 export interface CallRecord {
   wiseSessionId: string;
@@ -75,9 +80,10 @@ export type PipelineResult =
    * then delivered a draft that passed validation). `modelFailure`: the model failed on this evidence (a time-out,
    * a reply that is not JSON, a provider error, an unusable route, a judge that gives no verdict) — not our
    * function's time, our OpenRouter account (a bad key, no credit, rate limited) or our connection. Transcript
-   * first counts only the writer's model failures (`writer_failed`, owner decision 30 Sep).
+   * first counts only the writer's model failures (`writer_failed`, owner decision 30 Sep). `rateLimited`: the call
+   * was still rate limited when the run gave up on it — a sweep then makes no in-run retries for its other classes.
    */
-  | { kind: "infra"; error: string; modelFailure: boolean; stage: "writer" | "judge" };
+  | { kind: "infra"; error: string; modelFailure: boolean; stage: "writer" | "judge"; rateLimited?: true };
 
 /**
  * A failure of the service rather than of the text: missing key, credit limit,
@@ -119,13 +125,13 @@ function callFailure(
 ): PipelineResult {
   const ours = (call.httpStatus !== null && ACCOUNT_STATUSES.has(call.httpStatus)) || call.error.startsWith("network_")
     || (call.error === "timeout" && shortened);
-  return { kind: "infra", error: `${who}:${call.error}`, modelFailure: !ours, stage };
+  return { kind: "infra", error: `${who}:${call.error}`, modelFailure: !ours, stage, ...(isRateLimited(call) ? { rateLimited: true as const } : {}) };
 }
 
 type Stop = { stop: PipelineResult };
 
 /** Pinned routes must be served exactly as pinned; anything else is an infra failure. */
-export function routeMismatch(config: AutowriterModelConfig, call: OpenRouterCallResult): string | null {
+export function routeMismatch(config: AutowriterModelRoute, call: OpenRouterCallResult): string | null {
   if (!config.expectProvider && !config.expectModel) return null;
   if (config.expectProvider && call.provider !== config.expectProvider) return `provider_mismatch:${call.provider ?? "none"}`;
   if (config.expectModel && call.model !== config.expectModel) return `model_mismatch:${call.model ?? "none"}`;
@@ -154,6 +160,11 @@ export async function runWritingPipeline(input: {
   /** The wait before a rate-limited call is tried again, and its random spread (tests inject both). */
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
+  /**
+   * False: no in-run retries — a rate-limited call is returned at once, as before them. A sweep passes it once one
+   * of its classes has ended still rate limited (the limit lasts; the waits would only keep its other classes out).
+   */
+  rateLimitRetries?: boolean;
 }): Promise<PipelineResult> {
   const callModel = input.callModel ?? callOpenRouter;
   const { session } = input;
@@ -169,7 +180,8 @@ export async function runWritingPipeline(input: {
 
   /**
    * The one place a model is called — writer, fallback writer and each judge level alike. `record` stores one
-   * attempt; the returned `record` stores the last one, with what the pipeline made of its reply.
+   * attempt; the returned `record` stores the last one, with what the pipeline made of its reply. `abandon` (a judge
+   * level): asked before each retry wait; true once a retry can no longer change the outcome.
    */
   const run = async (
     config: AutowriterModelConfig,
@@ -177,6 +189,7 @@ export async function runWritingPipeline(input: {
     messages: Array<{ role: "system" | "user"; content: string }>,
     preferredTimeoutMs: number,
     record: (call: OpenRouterCallResult, result: Record<string, unknown>) => Promise<void>,
+    abandon?: () => boolean,
   ) => {
     const availableMs = input.remainingMs() - AUTOWRITER_CALL_DEADLINE_MARGIN_MS;
     // A judge never starts without its full time-out: cut short by our deadline it could not finish (owner decision,
@@ -185,7 +198,7 @@ export async function runWritingPipeline(input: {
     const timeoutMs = Math.min(preferredTimeoutMs, availableMs);
     // A rate limit is tried again here, in this run, with the same request and time-out — while the wait and that
     // time-out still fit our deadline (owner decision, 30 Sep).
-    const { call, rateLimited } = await callWithRateLimitRetries({
+    const { call, startedAt, rateLimited, abandoned } = await callWithRateLimitRetries({
       call: callModel,
       request: {
         apiKey: input.apiKey,
@@ -199,17 +212,30 @@ export async function runWritingPipeline(input: {
         timeoutMs,
       },
       remainingMs: input.remainingMs,
+      retries: input.rateLimitRetries,
+      abandon,
       sleep: input.sleep,
       random: input.random,
     });
-    // Every attempt was a request: each is its own call record, and a retry says which retry it was.
+    // Every attempt was a request: each is its own call record, and a retry says which retry it was. These records
+    // are written now, after the waits, so a rate-limited attempt says itself when its request was sent — the
+    // coverage figures read "when we started writing" from it — and what was waited.
     const marked = (retry: number, result: Record<string, unknown>) => retry > 0 ? { ...result, rateLimitRetry: retry } : result;
-    for (const [retry, limited] of rateLimited.entries()) await record(limited, marked(retry, { error: limited.error }));
+    const limit = (limited: { error: string; retryAfterMs?: number }, sentAt: number) => ({
+      error: limited.error,
+      attemptAt: new Date(sentAt).toISOString(),
+      ...(limited.retryAfterMs !== undefined ? { retryAfterMs: limited.retryAfterMs } : {}),
+    });
+    for (const [retry, { startedAt: sentAt, waitedMs, ...limited }] of rateLimited.entries()) {
+      await record(limited, marked(retry, { ...limit(limited, sentAt), waitedMs }));
+    }
     return {
       kind: "call" as const,
       call,
       shortened: timeoutMs < preferredTimeoutMs,
-      record: (result: Record<string, unknown>) => record(call, marked(rateLimited.length, result)),
+      abandoned,
+      record: (result: Record<string, unknown>) =>
+        record(call, marked(rateLimited.length, isRateLimited(call) ? { ...result, ...limit(call, startedAt) } : result)),
     };
   };
 
@@ -269,6 +295,8 @@ export async function runWritingPipeline(input: {
     // same messages, and the draft passes only when every level passes it. Each level is today's single judge: a
     // failed call retries the class later, a reply it cannot use gets one more try at that level. A judge that fails
     // to give a verdict says nothing about the draft, so it never triggers the fallback writer.
+    // Once one level has rejected the draft or stopped the run, nothing the other level does can let the draft pass:
+    // it then makes no second try and no further in-run retry (`decided`, below).
     const judgeMessages = buildJudgeMessages({
       redactedSummary,
       evidence,
@@ -282,53 +310,74 @@ export async function runWritingPipeline(input: {
         homework: parsed.output.homework,
       },
     });
-    // The writer generation both levels judged, so the dashboard counts a rejected draft once.
-    const judgedGeneration = writeCall.generationId;
-    const judgeLevel = async (effort: JudgeEffort): Promise<{ verdict: JudgeOutput } | Stop> => {
+    // The draft every level judged, so the dashboard counts a rejected draft once: the writer's generation id, or a
+    // key of our own when the reply carries none (each level's call would otherwise count as a draft of its own).
+    const judgedGeneration = writeCall.generationId ?? `draft:${randomUUID()}`;
+    // A level has rejected this draft (an unfaithful verdict) or stopped the run. Set before that level's call is
+    // recorded, so the other level finds it however the two replies interleave.
+    let decided = false;
+    const stop = (result: PipelineResult): Stop => {
+      decided = true;
+      return { stop: result };
+    };
+    const judgeLevel = async (effort: JudgeEffort): Promise<{ verdict: JudgeOutput } | Stop | { leftOff: true }> => {
       const config: AutowriterModelConfig = { ...AUTOWRITER_MODELS.judge, effort };
       let failure = "";
       for (let attempt = 0; attempt < JUDGE_ATTEMPTS; attempt += 1) {
+        // No second try once the other level has decided: whatever it gave, the draft would not pass.
+        if (attempt > 0 && decided) return { leftOff: true };
         const judged = await run(config, "judge", judgeMessages, AUTOWRITER_JUDGE_TIMEOUT_MS[evidence], (call, result) => input.record({
           wiseSessionId: session.wiseSessionId, role: "judge", arm: config.arm, requestedModel: config.model,
           promptVersion: JUDGE_PROMPT_VERSION, call,
           result: { effort, ...result, judgedArm: writer.arm, judgedGeneration, evidence },
-        }));
-        if (judged.kind === "budget") return { stop: { kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false, stage: "judge" } };
+        }), () => decided);
+        if (judged.kind === "budget") return stop({ kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false, stage: "judge" });
         const judgeCall = judged.call;
         const recordJudge = judged.record;
         if (!judgeCall.ok) {
+          // A rate limit that was not tried again only because the other level had decided is no failure of this level.
+          const failed = !judged.abandoned && isInfraFailure(judgeCall)
+            ? stop(callFailure(`judge:${effort}`, judgeCall, judged.shortened, "judge"))
+            : null;
           await recordJudge({ error: judgeCall.error });
-          if (isInfraFailure(judgeCall)) return { stop: callFailure(`judge:${effort}`, judgeCall, judged.shortened, "judge") };
+          if (failed) return failed;
+          if (judged.abandoned) return { leftOff: true };
           failure = `judge_${judgeCall.error}`;
           continue;
         }
         const judgeMismatch = routeMismatch(config, judgeCall);
         if (judgeMismatch) {
+          const stopped = stop({ kind: "infra", error: `judge:${effort}:${judgeMismatch}`, modelFailure: true, stage: "judge" });
           await recordJudge({ error: judgeMismatch });
-          return { stop: { kind: "infra", error: `judge:${effort}:${judgeMismatch}`, modelFailure: true, stage: "judge" } };
+          return stopped;
         }
         const verdict = parseJudgeOutput(judgeCall.content);
+        if (verdict && !verdict.faithful) decided = true;
         // The three lists as returned, plus the flat `judgeProblems` list the hold reason and the dashboard use.
         await recordJudge(verdict ? { ...verdict, problems: judgeProblems(verdict) } : { error: "judge_unparseable" });
         if (verdict) return { verdict };
         failure = "judge_unparseable";
       }
-      return { stop: { kind: "infra", error: `judge:${effort}:${failure || "no_verdict"}`, modelFailure: true, stage: "judge" } };
+      return stop({ kind: "infra", error: `judge:${effort}:${failure || "no_verdict"}`, modelFailure: true, stage: "judge" });
     };
-    // Both levels settle before anything is decided. A thrown error (the model client never throws) propagates as
+    // Every level settles before anything is returned. A thrown error (the model client never throws) propagates as
     // before; otherwise the first level (in effort order) that stopped decides the retry.
-    const settled = await Promise.allSettled(AUTOWRITER_JUDGE_EFFORTS.map(judgeLevel));
+    const outcomes = await Promise.allSettled(AUTOWRITER_JUDGE_EFFORTS.map(judgeLevel));
     const levels: Partial<Record<JudgeEffort, JudgeOutput>> = {};
     let stopped: PipelineResult | null = null;
-    for (const [index, level] of settled.entries()) {
+    for (const [index, level] of outcomes.entries()) {
       if (level.status === "rejected") throw level.reason;
       if ("stop" in level.value) stopped ??= level.value.stop;
-      else levels[AUTOWRITER_JUDGE_EFFORTS[index]] = level.value.verdict;
+      else if ("verdict" in level.value) levels[AUTOWRITER_JUDGE_EFFORTS[index]] = level.value.verdict;
     }
     if (stopped) return stopped;
-    const verdict = combineJudgeVerdicts(levels as Record<JudgeEffort, JudgeOutput>);
-    if (!verdict.faithful) {
-      reasons.push(`${writer.arm}:unfaithful:${judgeProblems(verdict).slice(0, 3).join(" | ").slice(0, 300)}`);
+    // Fail closed: a draft passes only on a complete verdict from every level. A level that left off gave none — it
+    // left off because another level had rejected the draft (had that one stopped, the stop was returned above).
+    const given = AUTOWRITER_JUDGE_EFFORTS.flatMap((effort) => levels[effort] ?? []);
+    const verdict = given.length === AUTOWRITER_JUDGE_EFFORTS.length ? combineJudgeVerdicts(levels as Record<JudgeEffort, JudgeOutput>) : null;
+    if (!verdict?.faithful) {
+      const problems = verdict ? judgeProblems(verdict) : [...new Set(given.flatMap(judgeProblems))];
+      reasons.push(`${writer.arm}:unfaithful:${problems.slice(0, 3).join(" | ").slice(0, 300)}`);
       continue;
     }
     return { kind: "draft", arm: writer.arm, output: parsed.output, fields, judge: verdict };

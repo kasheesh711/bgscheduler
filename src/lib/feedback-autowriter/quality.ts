@@ -275,7 +275,9 @@ export function postingWindowEligibility(input: {
 
 /**
  * Whether the tutor (or any person) wrote the class before we started writing it — before our first writer call,
- * successful or not (waiting for the evidence is not a miss; a writer outage is). A person's save we have not seen
+ * successful or not (waiting for the evidence is not a miss; a writer outage is). `firstWriterCallAt` is when that
+ * call's request was sent: a rate-limited attempt records it (`result.attemptAt`), since its row is only written
+ * after the waits; any other call's row is dated when it ended (`created_at`). A person's save we have not seen
  * (activity not mirrored yet) proves nothing: the class counts as a miss until the event arrives (the metrics are
  * recomputed hourly).
  */

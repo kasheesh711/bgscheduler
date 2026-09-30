@@ -13,7 +13,7 @@ import {
   AUTOWRITER_TRANSCRIBE_POLL_MS,
   AUTOWRITER_TRANSCRIBE_TIMEOUT_MS,
   AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS,
-  type AutowriterModelConfig,
+  type AutowriterModelRoute,
 } from "./config";
 import {
   JUDGE_JSON_SCHEMA,
@@ -490,11 +490,11 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
           sleep: deps.sleep,
           random: deps.random,
         });
-        // Production retries a transcript draft whose model call failed every 10 minutes. After the writer's third
-        // failure in a row it writes the class from the summary (`writer_failed`); a judge failure just retries and,
-        // the writer having delivered, starts that count again; our account's failures (a rate limit, no credit)
-        // never count. The replay tries up to three times, a short pause apart, and a call still failing on the last
-        // try ends as `error:<who>:…`.
+        // Production retries a transcript draft whose model call failed every 10 minutes. After the third run in a
+        // row that ends in a writer failure it writes the class from the summary (`writer_failed`); a judge failure
+        // just retries, and a run that ends in one starts that count again; our account's failures (a rate limit,
+        // no credit) never count. The replay tries up to three times, a short pause apart, and a call still failing
+        // on the last try ends as `error:<who>:…`.
         let writerFailures = 0;
         let tryFrom = record.calls.length;
         let result = await write();
@@ -682,7 +682,7 @@ function sum(values: ReadonlyArray<number | null>): number {
 
 /** The arms a hold reason can start a part with: every model `AUTOWRITER_MODELS` names (the writer may change). */
 const WRITER_ARM_PART = new RegExp(
-  `; (?:${[...new Set((Object.values(AUTOWRITER_MODELS) as AutowriterModelConfig[]).map((config) => config.arm))].join("|")}):`,
+  `; (?:${[...new Set((Object.values(AUTOWRITER_MODELS) as AutowriterModelRoute[]).map((config) => config.arm))].join("|")}):`,
   "u",
 );
 
