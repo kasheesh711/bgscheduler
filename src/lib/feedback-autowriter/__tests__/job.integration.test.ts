@@ -602,39 +602,48 @@ describe("runSweep under a rate limit (Postgres + fakes)", () => {
 
   it("makes no more in-run retries once a class ends still rate limited; a webhook run keeps its retries", async () => {
     await updateControl(db, { mode: "shadow" }, "t@x.com");
-    for (const [index, id] of [FIRST, SECOND, THIRD].entries()) await seedClass(id, 10 + index);
-    const wise = wiseForMany();
+    // Two classes written from their transcript (its Soniox job is done) around one written from the summary.
+    const ready = { state: "transcribing" as const, evidence: "transcript" as const, reason: "zoom_transcript_pending" };
+    await seedClass(FIRST, 10, { ...ready, sonioxTranscriptionId: "job-41" });
+    await seedClass(SECOND, 11);
+    await seedClass(THIRD, 12, { ...ready, sonioxTranscriptionId: "job-43" });
+    const wise = wiseForMany((sessionId) => sessionId === SECOND ? sessionDetail() : sessionDetail(RECORDING));
     const log: string[] = [];
     const callModel = vi.fn(async (request: { schemaName: string }) => {
       log.push(`${request.schemaName === "post_class_feedback" ? "writer" : "judge"}:${wise.current().slice(-2)}`);
       return RATE_LIMITED;
     });
     const waits: number[] = [];
-    const sweepDeps = deps(wise.ops, { callModel: callModel as never, sleep: async (ms) => { waits.push(ms); }, random: () => 0.5 });
+    const sweepDeps = deps(wise.ops, {
+      callModel: callModel as never, sleep: async (ms) => { waits.push(ms); }, random: () => 0.5,
+      transcriptsEnabled: true, soniox: fakeSoniox().client, fetchText: async () => ZOOM_VTT,
+    });
     const result = await runSweep(sweepDeps);
     // The first class spends its three retries on the limit; the two after it are asked once each and move on.
     expect(log).toEqual(["writer:41", "writer:41", "writer:41", "writer:41", "writer:42", "writer:43"]);
     expect(waits.filter((ms) => RETRY_WAITS.includes(ms))).toEqual(RETRY_WAITS);
     expect(result.processed).toEqual({ infra: 3 });
     expect(result.infraErrors).toHaveLength(3);
-    for (const id of [FIRST, SECOND, THIRD]) {
-      expect(await readSessionRow(db, id), id).toMatchObject({ state: "pending", reason: `infra:sol:${RATE_LIMITED.error}`, retryCount: 1 });
+    for (const [id, state] of [[FIRST, "transcribing"], [SECOND, "pending"], [THIRD, "transcribing"]] as const) {
+      expect(await readSessionRow(db, id), id).toMatchObject({ state, reason: `infra:sol:${RATE_LIMITED.error}`, retryCount: 1 });
     }
-    const calls = await db.select().from(schema.feedbackAutowriterCalls);
-    expect(calls.filter((call) => call.wiseSessionId === FIRST)).toHaveLength(4);
+    const writes = (await db.select().from(schema.feedbackAutowriterCalls)).filter((call) => call.role === "writer");
+    expect(writes.filter((call) => call.wiseSessionId === FIRST)).toHaveLength(4);
     // One attempt, no retry mark: as a rate limit was recorded before the retries existed.
     for (const id of [SECOND, THIRD]) {
-      const own = calls.filter((call) => call.wiseSessionId === id);
+      const own = writes.filter((call) => call.wiseSessionId === id);
       expect(own, id).toHaveLength(1);
       expect(own[0].result, id).not.toHaveProperty("rateLimitRetry");
     }
 
     // A webhook for one of them, minutes later: one class per function, so its retries are on.
-    log.length = 0;
-    waits.length = 0;
-    expect(await processSession(sweepDeps, { wiseSessionId: SECOND, trigger: "webhook" })).toMatchObject({ result: "infra", rateLimited: true });
-    expect(log).toEqual(["writer:42", "writer:42", "writer:42", "writer:42"]);
-    expect(waits.filter((ms) => RETRY_WAITS.includes(ms))).toEqual(RETRY_WAITS);
+    for (const id of [SECOND, THIRD]) {
+      log.length = 0;
+      waits.length = 0;
+      expect(await processSession(sweepDeps, { wiseSessionId: id, trigger: "webhook" }), id).toMatchObject({ result: "infra", rateLimited: true });
+      expect(log, id).toEqual(Array(4).fill(`writer:${id.slice(-2)}`));
+      expect(waits.filter((ms) => RETRY_WAITS.includes(ms)), id).toEqual(RETRY_WAITS);
+    }
   });
 
   it("keeps the retries for the next class when a rate limit cleared within the run", async () => {
