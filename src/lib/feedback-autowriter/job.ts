@@ -12,7 +12,6 @@ import {
   AUTOWRITER_MAX_GENERIC_ERRORS,
   AUTOWRITER_MAX_TRANSCRIBE_ERRORS,
   AUTOWRITER_MIN_POST_BUDGET_MS,
-  AUTOWRITER_MIN_TRANSCRIPT_CHARACTERS,
   AUTOWRITER_NO_RECORDING_ALERT_MS,
   AUTOWRITER_NO_SUMMARY_ALERT_MS,
   AUTOWRITER_NO_SUMMARY_HANDOVER_MINUTES,
@@ -35,7 +34,7 @@ import {
 } from "./config";
 import { JUDGE_PROMPT_VERSION, JudgeOutputSchema, judgeProblems, type JudgeOutput } from "./judge";
 import { runWritingPipeline, type PipelineResult } from "./pipeline";
-import { PROMPT_VERSION, SONIOX_TERMS, chooseStudentDisplayName, describeClass, parseStudentName, type EvidenceKind } from "./prompt";
+import { PROMPT_VERSION, chooseStudentDisplayName, describeClass, type EvidenceKind } from "./prompt";
 import { AUTOWRITER_ROSTER, AUTOWRITER_TEACHER_ALLOWLIST, rosterAccountIds, rosterTutor } from "./roster";
 import { loadCandidateShortlist, loadFieldMappings, loadPriorFeedback } from "./run";
 import {
@@ -100,7 +99,7 @@ import {
   type WiseFeedbackOps,
 } from "./submit";
 import { SonioxError, sonioxCostUsd, type SonioxClient } from "./soniox";
-import { assignSpeakerRoles, parseZoomVtt, renderTranscript, segmentsFromTokens, thaiShare, type ZoomCue } from "./transcript";
+import { buildTranscriptEvidence, parseZoomVtt, sonioxJobInput, thaiShare, type ZoomCue } from "./transcript";
 import { AUTOWRITER_DEADLINE_MARGIN_MS, type BillingPlan, type ModelArm, type SubmissionState } from "./types";
 
 export interface AutowriterDeps {
@@ -757,16 +756,10 @@ async function processTranscript(deps: AutowriterDeps, input: {
       await release({ state: "awaiting_recording", reason: recording.reason, retryInMs: AUTOWRITER_RECORDING_RECHECK_MS });
       return out("awaiting_recording", recording.reason);
     }
-    const classLines = describeClass({ programme: detail.classSubject, title: detail.title });
     try {
-      jobId = (await soniox.create({
-        audioUrl: recording.url,
-        terms: [...SONIOX_TERMS, ...tutor.tutorNames, parseStudentName(student.name).firstName, parseStudentName(student.name).nickname ?? ""]
-          .filter((term) => term.trim() !== ""),
-        general: [{ key: "domain", value: "one-to-one online tutoring lesson between a tutor and a student" },
-          ...classLines.map((line) => ({ key: "class", value: line }))],
-        clientReferenceId: row.wiseSessionId,
-      })).id;
+      jobId = (await soniox.create(sonioxJobInput({
+        wiseSessionId: row.wiseSessionId, audioUrl: recording.url, detail, tutorNames: tutor.tutorNames, studentName: student.name,
+      }))).id;
     } catch (error) {
       return transcribeFailed(`soniox_create:${error instanceof Error ? error.message.slice(0, 120) : "error"}`, { infra: true, keepJob: null });
     }
@@ -839,7 +832,6 @@ async function processTranscript(deps: AutowriterDeps, input: {
   }
 
   // 4. Who is who: Zoom's named cues when available, a clear talk-share split otherwise.
-  const segments = segmentsFromTokens(transcript.tokens);
   let cues: ZoomCue[] = [];
   // Not published yet (or not readable right now) — as opposed to published without the teacher's name.
   let zoomPending = true;
@@ -852,21 +844,17 @@ async function processTranscript(deps: AutowriterDeps, input: {
       cues = [];
     }
   }
-  const speakers = assignSpeakerRoles({ segments, zoomCues: cues, teacherName: detailTeacherName(detail), alsoTeacher: tutorSelfNames(detail) });
-  const rendered = renderTranscript(segments, speakers.roles);
-  const transcriptMeta = {
-    audioMinutes: Math.round(audioDurationMs / 600) / 100,
-    speakerMethod: speakers.method,
-    shares: speakers.shares,
-    thaiShare: Math.round(thaiShare(transcript.text) * 100) / 100,
-  };
+  const evidence = buildTranscriptEvidence({
+    transcript, audioDurationMs: status.audioDurationMs, scheduledMinutes,
+    zoomCues: cues, teacherName: detailTeacherName(detail), alsoTeacher: tutorSelfNames(detail),
+  });
+  const { speakers, rendered, meta: transcriptMeta } = evidence;
   const holdFor = async (reason: string) => {
     await release({ state: "held", reason, alertKind: "held", metadata: { transcript: transcriptMeta } });
     return out("held", reason);
   };
-  // Soniox's own audio length catches a recording Wise gave no length for.
-  if (status.audioDurationMs !== null && recordingTooShort(status.audioDurationMs / 1000, scheduledMinutes)) return holdFor("recording_too_short");
-  if (rendered.length < AUTOWRITER_MIN_TRANSCRIPT_CHARACTERS) return holdFor("transcript_too_short");
+  // Soniox's own audio length catches a recording Wise gave no length for; then the transcript's own length.
+  if (evidence.tooShort) return holdFor(evidence.tooShort);
   // Zoom's named transcript follows the recording by a few minutes: wait for it (keeping the job) so the
   // labels are confirmed — only when it could name the tutor (Wise gives the teacher's name), only for a job
   // this row stamped, and only up to the wait from its submit time.
@@ -892,7 +880,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
       scheduledMinutes,
       summary: { text: rendered, meetingUUIDs: [] },
       evidence: "transcript",
-      speakerLabels: speakers.method === "zoom_alignment" ? "verified" : "inferred",
+      speakerLabels: evidence.speakerLabels,
     },
     tutorNames: tutor.tutorNames,
     priorFeedback: await priorFeedback(deps, tutor, now),
