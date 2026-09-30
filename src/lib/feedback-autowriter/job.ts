@@ -33,9 +33,9 @@ import {
   AUTOWRITER_ZOOM_TRANSCRIPT_RECHECK_MS,
   AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS,
 } from "./config";
-import { JUDGE_PROMPT_VERSION, type JudgeOutput } from "./judge";
+import { JUDGE_PROMPT_VERSION, JudgeOutputSchema, judgeProblems, type JudgeOutput } from "./judge";
 import { runWritingPipeline, type PipelineResult } from "./pipeline";
-import { PROMPT_VERSION, chooseStudentDisplayName, describeClass, parseStudentName, type EvidenceKind } from "./prompt";
+import { PROMPT_VERSION, SONIOX_TERMS, chooseStudentDisplayName, describeClass, parseStudentName, type EvidenceKind } from "./prompt";
 import { AUTOWRITER_ROSTER, AUTOWRITER_TEACHER_ALLOWLIST, rosterAccountIds, rosterTutor } from "./roster";
 import { loadCandidateShortlist, loadFieldMappings, loadPriorFeedback } from "./run";
 import {
@@ -623,16 +623,21 @@ async function postDraft(deps: AutowriterDeps, input: {
 /** A judged draft on its way to a POST; `pipeline` is the stamp of the attempt that wrote it, when reused. */
 type StoredDraft = { arm: ModelArm; fields: FeedbackFieldAnswers; judge: JudgeOutput; pipeline?: Record<string, unknown> };
 
-/** A judged transcript draft kept from an attempt whose POST did not go out. */
+/**
+ * A judged transcript draft kept from an attempt whose POST did not go out — only when the current prompt and judge
+ * wrote and passed it. v4 (30 Sep): a draft from an older version (or with no stamp) would skip the newer rules and
+ * checks, so the class is written and judged again from its kept transcript instead. `requeueShadowDrafts` (store.ts)
+ * applies the same test when it decides which drafts keep their transcript's review window.
+ */
 function reusableTranscriptDraft(row: AutowriterSessionRow): StoredDraft | null {
-  const metadata = row.metadata as { draftEvidence?: unknown; judge?: JudgeOutput; pipeline?: unknown };
-  if (metadata.draftEvidence !== "transcript" || metadata.judge?.faithful !== true) return null;
-  if (!row.fields || !row.arm) return null;
-  const pipeline = metadata.pipeline && typeof metadata.pipeline === "object" ? metadata.pipeline as Record<string, unknown> : undefined;
-  return { arm: row.arm, fields: row.fields as unknown as FeedbackFieldAnswers, judge: metadata.judge, pipeline };
+  const metadata = row.metadata as { draftEvidence?: unknown; judge?: unknown; pipeline?: unknown };
+  if (metadata.draftEvidence !== "transcript" || !row.fields || !row.arm) return null;
+  const judge = JudgeOutputSchema.safeParse(metadata.judge);
+  if (!judge.success || !judge.data.faithful || judgeProblems(judge.data).length > 0) return null;
+  const pipeline = metadata.pipeline && typeof metadata.pipeline === "object" ? metadata.pipeline as Record<string, unknown> : null;
+  if (pipeline?.promptVersion !== PROMPT_VERSION || pipeline.judgeVersion !== JUDGE_PROMPT_VERSION) return null;
+  return { arm: row.arm, fields: row.fields as unknown as FeedbackFieldAnswers, judge: judge.data, pipeline };
 }
-
-const SONIOX_TERMS = ["ISEB", "11+", "13+", "NVR", "Non-Verbal Reasoning", "Verbal Reasoning", "IGCSE", "IB", "SAT", "A-level"];
 
 /**
  * Second pass: write from a Soniox transcript of Wise's recording. The lease is
@@ -875,7 +880,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
   }
   if (speakers.method === "unclear") return holdFor("speakers_unclear");
 
-  // 5. Write and judge from the transcript (GLM on the zero-retention route only).
+  // 5. Write and judge from the transcript (Sol, Luna fallback, GLM judge — zero-retention routes only).
   const result = await runWritingPipeline({
     apiKey: deps.apiKey,
     session: {

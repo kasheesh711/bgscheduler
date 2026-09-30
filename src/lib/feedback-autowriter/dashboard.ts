@@ -2,6 +2,7 @@ import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { wiseSessionLink } from "@/lib/wise/links";
+import { judgeProblems } from "./judge";
 import { AUTOWRITER_TUTORS, rosterTutor, tutorLabel } from "./roster";
 import { readControl, type AutowriterSessionRow } from "./store";
 
@@ -14,7 +15,7 @@ export type DashboardWindowDays = (typeof DASHBOARD_WINDOWS)[number];
 export interface DashboardCallRow {
   wiseSessionId: string;
   role: "writer" | "judge" | "transcriber";
-  arm: "glm" | "luna" | "soniox";
+  arm: "glm" | "luna" | "sol" | "soniox";
   requestedModel: string;
   ok: boolean;
   costUsd: number;
@@ -148,6 +149,7 @@ export interface AutowriterDashboard {
     latencyMinutes: number | null;
     costUsd: number;
     fields: Record<string, string> | null;
+    /** Every problem the stored judge verdict lists (`judgeProblems`); a v3 verdict has only its unsupported quotes. */
     judgeUnsupported: string[];
   }>;
   webhooks: {
@@ -263,7 +265,6 @@ export function buildAutowriterDashboard(input: {
       .toSorted((a, b) => (b.scheduledEndAt?.getTime() ?? 0) - (a.scheduledEndAt?.getTime() ?? 0))
       .slice(0, input.recentLimit ?? 60)
       .map((row) => {
-        const judge = (row.metadata as { judge?: { unsupported?: unknown } } | null)?.judge;
         return {
           wiseSessionId: row.wiseSessionId,
           wiseUrl: row.wiseClassId ? wiseSessionLink({ wiseClassId: row.wiseClassId, wiseSessionId: row.wiseSessionId }) : null,
@@ -281,7 +282,7 @@ export function buildAutowriterDashboard(input: {
           latencyMinutes: round(latencyMinutes(row)),
           costUsd: round(costBySession.get(row.wiseSessionId) ?? 0, 4) ?? 0,
           fields: row.fields,
-          judgeUnsupported: Array.isArray(judge?.unsupported) ? judge.unsupported.filter((item): item is string => typeof item === "string") : [],
+          judgeUnsupported: storedJudgeProblems(row.metadata),
         };
       }),
     webhooks: {
@@ -292,6 +293,21 @@ export function buildAutowriterDashboard(input: {
       byOutcome: tallyBy(input.webhooks, (row) => (row.outcome ?? "not processed").split(":")[0]).map(([outcome, count]) => ({ outcome, count })),
     },
   };
+}
+
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+/** A stored verdict of any version: v4 lists all three kinds, v3 (`{ faithful, unsupported }`) only unsupported claims. */
+function storedJudgeProblems(metadata: unknown): string[] {
+  const judge = (metadata as { judge?: Record<string, unknown> | null } | null)?.judge;
+  if (!judge || typeof judge !== "object") return [];
+  return judgeProblems({
+    unsupported: strings(judge.unsupported),
+    misattributed: strings(judge.misattributed),
+    homeworkNotSet: strings(judge.homeworkNotSet),
+  });
 }
 
 function tallyBy<T>(rows: readonly T[], key: (row: T) => string): Array<[string, number]> {

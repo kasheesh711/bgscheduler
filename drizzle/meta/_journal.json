@@ -701,6 +701,13 @@
       "when": 1790738705641,
       "tag": "0099_staff_feedback_timing",
       "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1790735838903,
+      "tag": "0100_feedback_autowriter_sol",
+      "breakpoints": true
     }
   ]
 }

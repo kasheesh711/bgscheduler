@@ -33,7 +33,7 @@ export const AUTOWRITER_ATTENDANCE_SETTLE_MINUTES = 60;
 /** A summary shorter than this is not enough evidence to write from. */
 export const AUTOWRITER_MIN_SUMMARY_CHARACTERS = 200;
 
-export type ModelArm = "glm" | "luna";
+export type ModelArm = "glm" | "luna" | "sol";
 
 export interface OpenRouterProviderPreferences {
   order?: string[];

@@ -5,6 +5,7 @@ import {
   JUDGE_JSON_SCHEMA,
   JUDGE_PROMPT_VERSION,
   buildJudgeMessages,
+  judgeProblems,
   parseJudgeOutput,
   type JudgeOutput,
 } from "./judge";
@@ -14,6 +15,7 @@ import {
   PROMPT_VERSION,
   buildFeedbackMessages,
   classDetailsBlock,
+  otherPeopleNamed,
   redactForModel,
   type EvidenceKind,
   type SpeakerLabels,
@@ -32,7 +34,7 @@ export interface PipelineSession {
   /**
    * What `summary.text` holds: Wise's AI summary, or a rendered Soniox transcript.
    * Transcripts can carry Thai-script names our redaction cannot see, so they
-   * only ever go to the zero-retention GLM route: no fallback writer.
+   * only ever go to zero-retention routes — as every writer and the judge are.
    */
   evidence?: EvidenceKind;
   /** Transcript mode: whether Zoom confirmed the TUTOR/STUDENT labels. */
@@ -86,9 +88,10 @@ export function routeMismatch(config: AutowriterModelConfig, call: OpenRouterCal
 type CallModel = typeof callOpenRouter;
 
 /**
- * GLM writes → deterministic validation → GLM judge (faithfulness) → accepted.
+ * Sol writes → deterministic validation → GLM judge (faithfulness) → accepted.
  * Any content failure falls back to Luna (validated and GLM-judged the same
- * way). Infra failures stop immediately so the session is retried later.
+ * way), for a summary and a transcript alike: every route has zero data
+ * retention. Infra failures stop immediately so the session is retried later.
  */
 export async function runWritingPipeline(input: {
   apiKey: string;
@@ -105,6 +108,11 @@ export async function runWritingPipeline(input: {
   const names = { studentFullName: session.studentFullName, studentAliases: session.studentAliases, tutorNames: input.tutorNames };
   const redactedSummary = redactForModel(session.summary.text, names);
   const redactedClassDetails = classDetailsBlock(session.classDetails, names);
+  const evidence: EvidenceKind = session.evidence ?? "summary";
+  // One list for both models: the writer is told these people are never [STUDENT_1], the judge checks it.
+  const otherPeople = evidence === "summary"
+    ? otherPeopleNamed(redactedSummary, session.studentFullName, session.classDetails, session.studentAliases)
+    : [];
 
   const run = async (config: AutowriterModelConfig, role: "writer" | "judge", messages: Array<{ role: "system" | "user"; content: string }>, preferredTimeoutMs: number) => {
     const timeoutMs = Math.min(preferredTimeoutMs, input.remainingMs() - 45_000);
@@ -123,10 +131,8 @@ export async function runWritingPipeline(input: {
     return { kind: "call" as const, call };
   };
 
-  const evidence: EvidenceKind = session.evidence ?? "summary";
-  const writers = (evidence === "transcript"
-    ? [AUTOWRITER_MODELS.writer]
-    : [AUTOWRITER_MODELS.writer, AUTOWRITER_MODELS.fallbackWriter]) as AutowriterModelConfig[];
+  // Every writer is on a zero-retention route, so transcripts get the fallback too.
+  const writers: AutowriterModelConfig[] = [AUTOWRITER_MODELS.writer, AUTOWRITER_MODELS.fallbackWriter];
   for (const writer of writers) {
     const written = await run(writer, "writer", buildFeedbackMessages({
       studentFullName: session.studentFullName,
@@ -137,6 +143,7 @@ export async function runWritingPipeline(input: {
       summary: session.summary,
       evidence,
       speakerLabels: session.speakerLabels,
+      otherPeople,
     }), 180_000);
     if (written.kind === "budget") return { kind: "infra", error: "function_budget_exhausted" };
     const writeCall = written.call;
@@ -186,6 +193,7 @@ export async function runWritingPipeline(input: {
         redactedSummary,
         evidence,
         speakerLabels: session.speakerLabels,
+        otherPeople,
         classDetails: redactedClassDetails,
         placeholderFields: {
           topics: parsed.output.topics,
@@ -212,12 +220,13 @@ export async function runWritingPipeline(input: {
         return { kind: "infra", error: `judge:${judgeMismatch}` };
       }
       verdict = parseJudgeOutput(judgeCall.content);
-      await recordJudge(verdict ? { faithful: verdict.faithful, unsupported: verdict.unsupported } : { error: "judge_unparseable" });
+      // The three lists as returned, plus the flat `judgeProblems` list the hold reason and the dashboard use.
+      await recordJudge(verdict ? { ...verdict, problems: judgeProblems(verdict) } : { error: "judge_unparseable" });
       if (!verdict) judgeFailure = "judge_unparseable";
     }
     if (!verdict) return { kind: "infra", error: `judge:${judgeFailure || "no_verdict"}` };
     if (!verdict.faithful) {
-      reasons.push(`${writer.arm}:unfaithful:${verdict.unsupported.slice(0, 3).join(" | ").slice(0, 300)}`);
+      reasons.push(`${writer.arm}:unfaithful:${judgeProblems(verdict).slice(0, 3).join(" | ").slice(0, 300)}`);
       continue;
     }
     return { kind: "draft", arm: writer.arm, output: parsed.output, fields, judge: verdict };
