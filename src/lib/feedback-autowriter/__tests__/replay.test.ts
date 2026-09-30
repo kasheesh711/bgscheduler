@@ -1,4 +1,5 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { AUTOWRITER_MODELS, type AutowriterModelConfig } from "../config";
 import type { OpenRouterCallResult } from "../openrouter";
 import {
   reasonCategory,
@@ -15,9 +16,14 @@ import { sonioxJobInput } from "../transcript";
 import { GOOD_FIELDS, SESSION_ID, STUDENT_NAME, sessionDetail } from "./fixtures";
 
 const usage = { promptTokens: 1000, completionTokens: 2000, reasoningTokens: 1700, cachedTokens: 0, costUsd: 0.002 };
-const glm = (content: string, latencyMs = 5): OpenRouterCallResult => ({
-  ok: true, content, model: "z-ai/glm-5.3-flash", provider: "Together", generationId: "g", finishReason: "stop", usage, latencyMs,
-});
+/** A reply served exactly as the requested model is pinned in `AUTOWRITER_MODELS` (the writer may change model). */
+const reply = (request: { model: string }, content: string, latencyMs = 5): OpenRouterCallResult => {
+  const config = (Object.values(AUTOWRITER_MODELS) as AutowriterModelConfig[]).find((entry) => entry.model === request.model);
+  return {
+    ok: true, content, model: config?.expectModel ?? request.model, provider: config?.expectProvider ?? "Provider",
+    generationId: "g", finishReason: "stop", usage, latencyMs,
+  };
+};
 const WRITER_JSON = JSON.stringify({
   topics: GOOD_FIELDS.topics,
   performance: GOOD_FIELDS.performance.replaceAll("Somchai", "[STUDENT_1]"),
@@ -107,7 +113,7 @@ function readOnlyWise(detail: ReturnType<typeof sessionDetail>) {
   return { wise, touched };
 }
 
-type ModelRequest = { schemaName: string; effort: string; messages: Array<{ role: string; content: string }> };
+type ModelRequest = { model: string; schemaName: string; effort: string; messages: Array<{ role: string; content: string }> };
 
 function fakeModel(options: { judge?: (request: ModelRequest) => string; writerThrows?: boolean } = {}) {
   const requests: ModelRequest[] = [];
@@ -115,9 +121,9 @@ function fakeModel(options: { judge?: (request: ModelRequest) => string; writerT
     requests.push(request);
     if (request.schemaName === "post_class_feedback") {
       if (options.writerThrows) throw new Error("socket hang up");
-      return glm(WRITER_JSON, 60_000);
+      return reply(request, WRITER_JSON, 60_000);
     }
-    return glm(options.judge ? options.judge(request) : PASSING, request.effort === "medium" ? 20_000 : 45_000);
+    return reply(request, options.judge ? options.judge(request) : PASSING, request.effort === "medium" ? 20_000 : 45_000);
   });
   return { callModel, requests };
 }
@@ -194,10 +200,16 @@ describe("replay: the same evidence and decisions as production", () => {
       outcome: "draft", tutor: "Kevin", scheduledMinutes: 60,
       soniox: { audioMinutes: 60, costUsd: expect.closeTo(0.1, 6), jobIds: ["job-1"], undeletedJobs: [] },
       speakers: { method: "zoom_alignment", labels: "verified" },
-      transcriptDraft: { outcome: "draft", arm: "glm", judgeHigh: { faithful: true }, judgeMedium: { faithful: true } },
-      summaryDraft: { outcome: "draft" },
+      transcriptDraft: {
+        outcome: "draft", arm: AUTOWRITER_MODELS.writer.arm, writerModel: AUTOWRITER_MODELS.writer.model,
+        judgeHigh: { faithful: true }, judgeMedium: { faithful: true },
+      },
+      summaryDraft: { outcome: "draft", writerModel: AUTOWRITER_MODELS.writer.model },
     });
     expect(record.transcript).toBeUndefined();
+    // Every judge call (transcript at high and medium, summary at high) goes to the judge model, whatever the writer is.
+    expect(model.requests.filter((request) => request.schemaName === "feedback_faithfulness").map((request) => request.model))
+      .toEqual(Array(3).fill(AUTOWRITER_MODELS.judge.model));
     const judges = model.requests.filter((request) => request.schemaName === "feedback_faithfulness");
     const transcriptJudges = judges.filter((request) => request.messages[1].content.includes("Lesson transcript:"));
     expect(transcriptJudges.map((request) => request.effort)).toEqual(["high", "medium"]);
@@ -224,6 +236,19 @@ describe("replay: the same evidence and decisions as production", () => {
       problems: ["wrong person: [STUDENT_1] finished; then left early", "homework not set: the last two pages"],
       error: null,
     });
+  });
+
+  it("does not judge the posted draft against a transcript production would not write from", async () => {
+    const even = lessonTokens().map((token, index) => ({ ...token, speaker: String((index % 3) + 1) }));
+    const model = fakeModel();
+    const record = await replayClass(
+      replayDeps({ wise: readOnlyWise(sessionDetail(RECORDING)).wise, soniox: fakeSoniox({ tokens: even }).client, callModel: model.callModel as never, fetchText: async () => "WEBVTT\n" }),
+      { ...SAMPLE, postedFields: GOOD_FIELDS, postedSource: "row" },
+    );
+    expect(record.outcome).toBe("fallback:speakers_unclear");
+    expect(record.posted).toEqual({ source: "row", verdict: null, problems: [], error: "transcript_not_usable:speakers_unclear" });
+    expect(record.calls.filter((call) => call.purpose === "posted_draft")).toEqual([]);
+    expect(summarizeReplay([record]).posted).toMatchObject({ judged: 0, notJudged: 1, parseFailures: 0 });
   });
 
   it("falls back where production would, and records what the summary path then gives", async () => {
@@ -346,8 +371,9 @@ describe("replay summary", () => {
   });
 
   it("drops the judge's quotes from hold reasons, even quotes with semicolons in them", () => {
-    expect(reasonCategory("hold:glm:unfaithful:he finished; then left | the last pages; luna:unfaithful:it was late"))
-      .toBe("hold:glm:unfaithful; luna:unfaithful");
+    const [writer, fallback] = [AUTOWRITER_MODELS.writer.arm, AUTOWRITER_MODELS.fallbackWriter.arm];
+    expect(reasonCategory(`hold:${writer}:unfaithful:he finished; then left | the last pages; ${fallback}:unfaithful:it was late`))
+      .toBe(`hold:${writer}:unfaithful; ${fallback}:unfaithful`);
     expect(reasonCategory("hold:glm:placeholder_token:topics; luna:unfaithful:x; y")).toBe("hold:glm:placeholder_token:topics; luna:unfaithful");
     expect(reasonCategory("fallback:no_recording")).toBe("fallback:no_recording");
   });

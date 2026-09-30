@@ -8,7 +8,9 @@ import {
   AUTOWRITER_MODELS,
   AUTOWRITER_THAI_SUMMARY_SHARE,
   AUTOWRITER_TRANSCRIBE_POLL_MS,
+  AUTOWRITER_TRANSCRIBE_TIMEOUT_MS,
   AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS,
+  type AutowriterModelConfig,
 } from "./config";
 import { JUDGE_JSON_SCHEMA, buildJudgeMessages, judgeProblems, parseJudgeOutput, type JudgeOutput } from "./judge";
 import { callOpenRouter, type OpenRouterCallResult } from "./openrouter";
@@ -79,7 +81,7 @@ export interface ReplayDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Keep the rendered transcript in the record. Off by default: lesson text stays out of the files. */
   keepTranscripts?: boolean;
-  /** Longest wait for one Soniox job (default 20 min). */
+  /** Longest wait for one Soniox job (default: production's, `AUTOWRITER_TRANSCRIBE_TIMEOUT_MS`). */
   transcribeTimeoutMs?: number;
   pollMs?: number;
 }
@@ -107,6 +109,12 @@ export interface ReplayDraft {
   /** `draft`, `hold:<reasons>` or `error:<message>`. */
   outcome: string;
   arm: string | null;
+  /**
+   * The writer model (and the host that served it) of the draft — or, for a hold or an error, of the last writer
+   * call. Whatever `AUTOWRITER_MODELS` names; never assumed.
+   */
+  writerModel: string | null;
+  writerProvider: string | null;
   /** The draft (name restored), also when it was held. Stays in the local run files, never in the summary. */
   fields: FeedbackFieldAnswers | null;
   judgeHigh: JudgeOutput | null;
@@ -147,7 +155,6 @@ export interface ReplayRecord {
 
 /** Budget the pipeline sees: generous, so every call gets its production time-out (writer 180 s, judge 120 s). */
 const REPLAY_BUDGET_MS = 15 * 60 * 1000;
-const DEFAULT_TRANSCRIBE_TIMEOUT_MS = 20 * 60 * 1000;
 
 function message(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 200);
@@ -211,12 +218,20 @@ function lastVerdict(record: ReplayRecord, purpose: ReplayCall["purpose"], shado
 function draftOf(result: PipelineResult, record: ReplayRecord, purpose: ReplayCall["purpose"], writerContents: string[], displayName: string): ReplayDraft {
   const judgeHigh = result.kind === "draft" ? result.judge : lastVerdict(record, purpose, false);
   const judgeMedium = lastVerdict(record, purpose, true);
-  if (result.kind === "draft") return { outcome: "draft", arm: result.arm, fields: result.fields, judgeHigh, judgeMedium };
+  // The pipeline returns the first draft that passes, so the last writer call wrote it (or was the last to try).
+  const writer = record.calls.filter((call) => call.purpose === purpose && call.role === "writer").at(-1);
+  const writerModel = writer?.model ?? null;
+  const writerProvider = writer?.provider ?? null;
+  if (result.kind === "draft") {
+    return { outcome: "draft", arm: result.arm, writerModel, writerProvider, fields: result.fields, judgeHigh, judgeMedium };
+  }
   // A held draft is still worth reading: the last writer reply, name restored.
   const parsed = writerContents.length > 0 ? parseModelOutput(writerContents.at(-1)!) : null;
   return {
     outcome: result.kind === "held" ? `hold:${result.reasons.join("; ").slice(0, 600)}` : `error:${result.error}`,
     arm: null,
+    writerModel,
+    writerProvider,
     fields: parsed?.ok ? finalizeFields(parsed.output, displayName) : null,
     judgeHigh,
     judgeMedium,
@@ -245,7 +260,7 @@ async function transcribe(deps: ReplayDeps, input: Parameters<SonioxClient["crea
   soniox: NonNullable<ReplayRecord["soniox"]>;
 }> {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const timeoutMs = deps.transcribeTimeoutMs ?? DEFAULT_TRANSCRIBE_TIMEOUT_MS;
+  const timeoutMs = deps.transcribeTimeoutMs ?? AUTOWRITER_TRANSCRIBE_TIMEOUT_MS;
   const stat: NonNullable<ReplayRecord["soniox"]> = {
     jobIds: [], attempts: 0, audioMinutes: null, costUsd: null, turnaroundSeconds: null, undeletedJobs: [], error: null,
   };
@@ -446,12 +461,16 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
         record.transcriptDraft = draftOf(result, record, "transcript_draft", writerContents, displayName);
         record.outcome = record.transcriptDraft.outcome;
       }
-      // The draft actually posted for this class, judged against what was said.
+      // The draft actually posted for this class, judged against what was said — only on a transcript production
+      // would write from (a short one, or one without clear speakers, could flag a sound draft).
       if (sample.postedFields) {
-        record.posted = await judgePostedDraft(deps, record, {
-          fields: sample.postedFields, source: sample.postedSource ?? "row", rendered: evidence.rendered,
-          speakerLabels: evidence.speakerLabels, names, classDetails,
-        });
+        const unusable = evidence.tooShort ?? (evidence.speakers.method === "unclear" ? "speakers_unclear" : null);
+        record.posted = unusable
+          ? { source: sample.postedSource ?? "row", verdict: null, problems: [], error: `transcript_not_usable:${unusable}` }
+          : await judgePostedDraft(deps, record, {
+            fields: sample.postedFields, source: sample.postedSource ?? "row", rendered: evidence.rendered,
+            speakerLabels: evidence.speakerLabels, names, classDetails,
+          });
       }
     }
   }
@@ -608,10 +627,16 @@ function sum(values: ReadonlyArray<number | null>): number {
   return values.reduce<number>((total, value) => total + (value ?? 0), 0);
 }
 
+/** The arms a hold reason can start a part with: every model `AUTOWRITER_MODELS` names (the writer may change). */
+const WRITER_ARM_PART = new RegExp(
+  `; (?:${[...new Set((Object.values(AUTOWRITER_MODELS) as AutowriterModelConfig[]).map((config) => config.arm))].join("|")}):`,
+  "u",
+);
+
 /**
- * A hold or error reason without the judge's quotes (lesson text): `hold:glm:unfaithful:<quotes>; luna:unfaithful:<quotes>`
- * → `hold:glm:unfaithful; luna:unfaithful`. The quotes may contain "; " themselves, so everything after an
- * `:unfaithful:` is dropped up to the next writer's part (`; glm:` / `; luna:`).
+ * A hold or error reason without the judge's quotes (lesson text): `hold:<arm>:unfaithful:<quotes>; <arm>:unfaithful:<quotes>`
+ * → `hold:<arm>:unfaithful; <arm>:unfaithful`. The quotes may contain "; " themselves, so everything after an
+ * `:unfaithful:` is dropped up to the next writer's part (`; <arm>:`, for any arm in `AUTOWRITER_MODELS`).
  */
 export function reasonCategory(reason: string): string {
   let kept = "";
@@ -620,7 +645,7 @@ export function reasonCategory(reason: string): string {
     const at = rest.indexOf(":unfaithful:");
     if (at < 0) return (kept + rest).slice(0, 160);
     kept += `${rest.slice(0, at)}:unfaithful`;
-    const next = rest.slice(at).search(/; (?:glm|luna):/u);
+    const next = rest.slice(at).search(WRITER_ARM_PART);
     if (next < 0) return kept.slice(0, 160);
     rest = rest.slice(at + next);
   }
@@ -662,7 +687,17 @@ export interface ReplaySummary {
     undeletedJobs: string[];
   };
   modelCostUsd: number;
-  posted: { judged: number; flagged: number; misattributed: number; homeworkNotSet: number; unsupported: number; parseFailures: number };
+  posted: {
+    judged: number;
+    flagged: number;
+    misattributed: number;
+    homeworkNotSet: number;
+    unsupported: number;
+    /** Not judged: the transcript was too short or its speakers unclear. */
+    notJudged: number;
+    /** A judge call that failed or did not parse. */
+    parseFailures: number;
+  };
   acceptance: {
     transcriptHoldsAtMost15Percent: boolean | null;
     fallbacksAtMost20Percent: boolean | null;
@@ -745,12 +780,13 @@ export function summarizeReplay(records: readonly ReplayRecord[]): ReplaySummary
     },
     modelCostUsd: sum(calls.map((call) => call.costUsd)),
     posted: {
-      judged: posted.length,
+      judged: posted.filter((entry) => !(entry.error?.startsWith("transcript_not_usable") ?? false)).length,
       flagged: posted.filter((entry) => entry.verdict && !entry.verdict.faithful).length,
       misattributed: posted.filter((entry) => (entry.verdict?.misattributed.length ?? 0) > 0).length,
       homeworkNotSet: posted.filter((entry) => (entry.verdict?.homeworkNotSet.length ?? 0) > 0).length,
       unsupported: posted.filter((entry) => (entry.verdict?.unsupported.length ?? 0) > 0).length,
-      parseFailures: posted.filter((entry) => !entry.verdict).length,
+      notJudged: posted.filter((entry) => entry.error?.startsWith("transcript_not_usable") ?? false).length,
+      parseFailures: posted.filter((entry) => !entry.verdict && !(entry.error?.startsWith("transcript_not_usable") ?? false)).length,
     },
     acceptance: {
       transcriptHoldsAtMost15Percent: holdRate === null ? null : holdRate <= 0.15,
@@ -781,7 +817,8 @@ export function renderReplayMarkdown(input: { summary: ReplaySummary; records: r
   const lines = [
     `# Transcript-first replay — ${input.generatedAt.toISOString()}`,
     "",
-    `Code \`${input.commit ?? "unknown"}\`; writer and judge v4 (judge \`high\`, with a \`medium\` re-run of each transcript-draft judge call).`,
+    `Code \`${input.commit ?? "unknown"}\`; writer and judge v4 — writer \`${AUTOWRITER_MODELS.writer.model}\` (fallback \`${AUTOWRITER_MODELS.fallbackWriter.model}\`), ` +
+      `judge \`${AUTOWRITER_MODELS.judge.model}\` at \`${AUTOWRITER_MODELS.judge.effort}\`, with a \`medium\` re-run of each transcript-draft judge call.`,
     `Read-only: Wise session-detail GETs, database SELECTs, Soniox jobs deleted after each transcript; nothing was posted.`,
     "",
     "## Outcomes (what transcript first would do)",
@@ -816,7 +853,8 @@ export function renderReplayMarkdown(input: { summary: ReplaySummary; records: r
     "## Posted drafts judged against the transcript (v4, high)",
     "",
     `Judged ${summary.posted.judged}; flagged ${summary.posted.flagged} (misattributed ${summary.posted.misattributed}, ` +
-      `homework not set ${summary.posted.homeworkNotSet}, unsupported ${summary.posted.unsupported}); no verdict ${summary.posted.parseFailures}.`,
+      `homework not set ${summary.posted.homeworkNotSet}, unsupported ${summary.posted.unsupported}); not judged (transcript not usable) ` +
+      `${summary.posted.notJudged}; judge failed ${summary.posted.parseFailures}.`,
     "",
     "## Costs",
     "",
@@ -827,8 +865,8 @@ export function renderReplayMarkdown(input: { summary: ReplaySummary; records: r
     "",
     "## Per class",
     "",
-    "| Session | Tutor | Ended | Row | Outcome | Then | Audio min | Soniox $ | Turnaround | Speakers (T/S %) | Judge high | Judge medium | Summary draft | Posted (source) |",
-    "|---|---|---|---|---|---|---:|---:|---:|---|---|---|---|---|",
+    "| Session | Tutor | Ended | Row | Outcome | Then | Audio min | Soniox $ | Turnaround | Speakers (T/S %) | Transcript writer | Judge high | Judge medium | Summary draft (writer) | Posted (source) |",
+    "|---|---|---|---|---|---|---:|---:|---:|---|---|---|---|---|---|",
     ...records.map((record) => [
       record.wiseSessionId,
       record.tutor ?? "—",
@@ -840,10 +878,11 @@ export function renderReplayMarkdown(input: { summary: ReplaySummary; records: r
       record.soniox?.costUsd === null || record.soniox?.costUsd === undefined ? "—" : record.soniox.costUsd.toFixed(3),
       fmt(record.soniox?.turnaroundSeconds ?? null, 0, " s"),
       record.speakers ? `${record.speakers.method} (${record.speakers.shares.tutor}/${record.speakers.shares.student})` : "—",
+      record.transcriptDraft?.writerModel ?? "—",
       verdictFlags(record.transcriptDraft?.judgeHigh ?? null),
       verdictFlags(record.transcriptDraft?.judgeMedium ?? null),
-      record.summaryDraft ? reasonCategory(record.summaryDraft.outcome) : "—",
-      record.posted ? `${verdictFlags(record.posted.verdict)} (${record.posted.source})` : "—",
+      record.summaryDraft ? `${reasonCategory(record.summaryDraft.outcome)} (${record.summaryDraft.writerModel ?? "—"})` : "—",
+      record.posted ? `${record.posted.verdict ? verdictFlags(record.posted.verdict) : reasonCategory(record.posted.error ?? "—")} (${record.posted.source})` : "—",
     ].map((cell) => String(cell).replaceAll("|", "/")).join(" | ")).map((row) => `| ${row} |`),
     "",
     "Drafts, verdicts with their quotes and call records are in `records.json` next to this file (local, 0600); " +

@@ -332,7 +332,9 @@ function mayFallBackToSummary(row: AutowriterSessionRow): boolean {
  * speakers that cannot be told apart, Soniox failing three times, the pass switched off), so it goes back to Wise's
  * summary: `pending`, `evidence = summary`, due now, `metadata.summaryFallback {cause, at}`. Once only — a class that
  * fell back never hands over again (`mayHandOver` in processLeased) until an owner retry clears the flags. Any Soniox
- * job stays on the row; the sweep treats the class as done with it (review window, then deletion).
+ * job stays on the row; the sweep treats the class as done with it (review window, then deletion). A transcript
+ * draft kept on the row (a recording that gained a second part, the pass switched off) is dropped with its verdict
+ * and stamp: the summary path writes its own.
  */
 async function fallBackToSummary(input: {
   release: Release;
@@ -345,7 +347,16 @@ async function fallBackToSummary(input: {
     state: "pending",
     evidence: "summary",
     reason: `summary_fallback:${input.cause}`,
-    metadata: { ...(input.metadata ?? {}), summaryFallback: { cause: input.cause, at: input.now.toISOString() } },
+    arm: null,
+    fields: null,
+    fieldsSha256: null,
+    metadata: {
+      ...(input.metadata ?? {}),
+      judge: null,
+      draftEvidence: null,
+      pipeline: null,
+      summaryFallback: { cause: input.cause, at: input.now.toISOString() },
+    },
   });
   return input.out("summary_fallback", input.cause);
 }

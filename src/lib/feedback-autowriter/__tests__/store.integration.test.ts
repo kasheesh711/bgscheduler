@@ -425,14 +425,17 @@ describe("feedback autowriter store (Postgres)", () => {
     }
   });
 
-  it("transcript first: a fallback is done with its Soniox job in any state, and raises no no-recording alert", async () => {
+  it("transcript first: a fallback is done with its Soniox job (never mid-POST or mid-work), and raises no no-recording alert", async () => {
     const S = schema.feedbackAutowriterSessions;
     const longAgo = new Date(Date.now() - 4 * 60 * 60 * 1000);
+    const fellBack = { handover: "transcript_first", summaryFallback: { cause: "speakers_unclear", at: longAgo.toISOString() } };
+    // Mid-POST or being worked on: not yet.
+    for (const state of ["posting", "awaiting_event", "generating"] as const) {
+      await db.update(S).set({ state, sonioxTranscriptionId: "job-9", scheduledEndAt: longAgo, metadata: fellBack }).where(eq(S.wiseSessionId, SESSION));
+      expect(await stampSonioxRetention(db, 60_000), state).toBe(0);
+    }
     // Still waiting on the summary (pending), with the transcript's job on the row.
-    await db.update(S).set({
-      state: "pending", sonioxTranscriptionId: "job-9", scheduledEndAt: longAgo,
-      metadata: { handover: "transcript_first", summaryFallback: { cause: "speakers_unclear", at: longAgo.toISOString() } },
-    }).where(eq(S.wiseSessionId, SESSION));
+    await db.update(S).set({ state: "pending", metadata: fellBack }).where(eq(S.wiseSessionId, SESSION));
     expect(await stampSonioxRetention(db, 60_000)).toBe(1);
     expect(await listSonioxCleanup(db)).toEqual([]);
     await db.update(S).set({ metadata: sql`${S.metadata} || jsonb_build_object('sonioxRetainUntil', now() - interval '1 minute')` as never })
@@ -440,12 +443,16 @@ describe("feedback autowriter store (Postgres)", () => {
     expect(await listSonioxCleanup(db)).toEqual([{ wiseSessionId: SESSION, sonioxTranscriptionId: "job-9" }]);
 
     // A transcript-first class still waiting for its recording 3 h after class falls back instead of alerting;
-    // a class handed over for another reason still alerts.
+    // one stuck transcribing, and a class handed over for another reason, still alert.
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
     await db.update(S).set({ state: "awaiting_recording", reason: "recording_not_ready", metadata: { handover: "transcript_first" } })
       .where(eq(S.wiseSessionId, SESSION));
-    expect(await flagNoRecording(db, new Date(Date.now() - 3 * 60 * 60 * 1000))).toBe(0);
-    await db.update(S).set({ metadata: { handover: "thai_summary" } }).where(eq(S.wiseSessionId, SESSION));
-    expect(await flagNoRecording(db, new Date(Date.now() - 3 * 60 * 60 * 1000))).toBe(1);
+    expect(await flagNoRecording(db, threeHoursAgo)).toBe(0);
+    await db.update(S).set({ state: "transcribing", reason: "transcription_in_progress" }).where(eq(S.wiseSessionId, SESSION));
+    expect(await flagNoRecording(db, threeHoursAgo)).toBe(1);
+    await db.update(S).set({ state: "awaiting_recording", reason: "recording_not_ready", metadata: { handover: "thai_summary" } })
+      .where(eq(S.wiseSessionId, SESSION));
+    expect(await flagNoRecording(db, threeHoursAgo)).toBe(1);
   });
 
   it("compares new feedback with the tutor's own posts from both of their Wise accounts", async () => {

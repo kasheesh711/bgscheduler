@@ -36,7 +36,7 @@ import {
   sonioxApiKey,
   wiseApiActorId,
 } from "@/lib/feedback-autowriter/config";
-import { createSonioxClient } from "@/lib/feedback-autowriter/soniox";
+import { createSonioxClient, type SonioxClient } from "@/lib/feedback-autowriter/soniox";
 import { loadTutorPriorFeedback, processSession, runSweep, type AutowriterDeps } from "@/lib/feedback-autowriter/job";
 import {
   loadReplaySample,
@@ -271,9 +271,36 @@ async function replay(): Promise<void> {
   const ops = createWiseFeedbackOps();
   // Only the GET crosses over: nothing the replay holds can POST.
   const wise: ReplayWiseReads = { getSessionDetailById: (sessionId) => ops.getSessionDetailById(sessionId) };
+  // The replay deletes each job in `finally`; a Ctrl-C skips those, so jobs still in flight are deleted here.
+  const soniox = createSonioxClient(sonioxKey);
+  const inFlight = new Set<string>();
+  const tracked: SonioxClient = {
+    ...soniox,
+    async create(input) {
+      const job = await soniox.create(input);
+      inFlight.add(job.id);
+      return job;
+    },
+    async remove(id) {
+      const gone = await soniox.remove(id);
+      inFlight.delete(id);
+      return gone;
+    },
+  };
+  const onSignal = (signal: NodeJS.Signals) => {
+    const pending = [...inFlight];
+    console.error(`${signal}: deleting ${pending.length} Soniox job(s) still in flight…`);
+    void Promise.allSettled(pending.map((id) => soniox.remove(id))).then((results) => {
+      const left = pending.filter((_, index) => results[index].status === "rejected");
+      if (left.length > 0) console.error(`Not deleted — delete them in the Soniox Console: ${left.join(", ")}`);
+      process.exit(130);
+    });
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
   const records = await runReplay({
     wise,
-    soniox: createSonioxClient(sonioxKey),
+    soniox: tracked,
     apiKey,
     priorFeedback: (tutor) => loadTutorPriorFeedback(db, tutor, now),
     keepTranscripts: flag("keep-transcripts"),

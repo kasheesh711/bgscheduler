@@ -375,17 +375,19 @@ const SONIOX_DONE_STATES: readonly AutowriterState[] = [...TERMINAL_STATES, "wou
 
 /**
  * Rows done with their Soniox job: those above, rows past their deadline that were never finished (mode `off`
- * skips the expiry step, so they would otherwise keep their job indefinitely) — never a POST in flight or a row
- * being worked on — and transcript-first classes that fell back to the summary (`metadata.summaryFallback`), in any
- * state: the summary path never reads the transcript again, and they cannot hand over again until an owner retry,
- * which clears the flag.
+ * skips the expiry step, so they would otherwise keep their job indefinitely), and transcript-first classes that
+ * fell back to the summary (`metadata.summaryFallback`: the summary path never reads the transcript again, and they
+ * cannot hand over again until an owner retry, which clears the flag) — never a POST in flight or a row being
+ * worked on.
  */
 const doneWithSonioxJob = () => and(
   isNotNull(S.sonioxTranscriptionId),
   or(
     inArray(S.state, [...SONIOX_DONE_STATES]),
-    and(lt(S.deadlineAt, nowSql), notInArray(S.state, ["posting", "awaiting_event", "generating"])),
-    sql`${S.metadata} ? 'summaryFallback'`,
+    and(
+      or(lt(S.deadlineAt, nowSql), sql`${S.metadata} ? 'summaryFallback'`),
+      notInArray(S.state, ["posting", "awaiting_event", "generating"]),
+    ),
   ),
 );
 
@@ -441,8 +443,9 @@ export async function noteSonioxRecorded(db: Database, wiseSessionId: string, tr
  * next), a transcript waiting briefly for Zoom's names (it goes ahead on its
  * own), or an infra retry (the recording may well be there) — including a failed
  * Wise read, which since v4 also sends an older version's transcript draft back
- * to wait here while it is written again. Nor for a class handed over by
- * transcript first: it falls back to the summary at the same point instead.
+ * to wait here while it is written again. Nor for a transcript-first class still
+ * waiting for its recording: it falls back to the summary at the same point
+ * instead. One already being transcribed has no such fallback, so it alerts.
  */
 export async function flagNoRecording(db: Database, endedBefore: Date, disabledTutors: readonly string[] = []): Promise<number> {
   const rows = await db.update(S).set({
@@ -452,7 +455,7 @@ export async function flagNoRecording(db: Database, endedBefore: Date, disabledT
     inArray(S.state, ["awaiting_recording", "transcribing"]),
     lt(S.scheduledEndAt, endedBefore),
     sql`coalesce(${S.reason}, '') not in ('recording_too_short', 'zoom_transcript_pending', 'wise_read_failed') and coalesce(${S.reason}, '') not like 'infra:%'`,
-    sql`coalesce(${S.metadata} ->> 'handover', '') <> 'transcript_first'`,
+    sql`not (${S.state} = 'awaiting_recording' and coalesce(${S.metadata} ->> 'handover', '') = 'transcript_first')`,
     disabledTutors.length > 0
       ? or(isNull(S.wiseTeacherUserId), notInArray(S.wiseTeacherUserId, [...disabledTutors]))
       : undefined,

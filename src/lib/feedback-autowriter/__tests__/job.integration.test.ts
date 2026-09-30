@@ -4,6 +4,7 @@ import type { ScheduleEmailSendInput } from "@/lib/classrooms/schedule-email";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
+import { AUTOWRITER_MODELS, type AutowriterModelConfig } from "../config";
 import { cleanUpSonioxJobs, processSession, runSweep, type AutowriterDeps } from "../job";
 import type { OpenRouterCallResult } from "../openrouter";
 import { JUDGE_PROMPT_VERSION } from "../judge";
@@ -1251,14 +1252,20 @@ describe("transcript first (Postgres + fakes)", () => {
   /** A class that already fell back to the summary. */
   const FELL_BACK = { ...HANDED_OVER, summaryFallback: { cause: "no_recording", at: "2026-09-28T12:31:00.000Z" } };
   const dueInMs = async () => ((await readSessionRow(db, SESSION_ID))?.nextAttemptAt?.getTime() ?? Number.NaN) - Date.now();
-  const unfaithfulModel = () => vi.fn(async (request: { schemaName: string }) => request.schemaName === "post_class_feedback"
-    ? glm(writerJson)
-    : glm(JSON.stringify({ faithful: false, unsupported: ["scored 95%"], misattributed: [], homeworkNotSet: [] })));
+  /** A reply served exactly as the requested model is pinned in `AUTOWRITER_MODELS` (the writer may change model). */
+  const routed = (request: { model: string }, content: string): OpenRouterCallResult => {
+    const config = (Object.values(AUTOWRITER_MODELS) as AutowriterModelConfig[]).find((entry) => entry.model === request.model);
+    const base = glm(content);
+    return base.ok ? { ...base, model: config?.expectModel ?? request.model, provider: config?.expectProvider ?? base.provider } : base;
+  };
+  const unfaithfulModel = () => vi.fn(async (request: { model: string; schemaName: string }) => request.schemaName === "post_class_feedback"
+    ? routed(request, writerJson)
+    : routed(request, JSON.stringify({ faithful: false, unsupported: ["scored 95%"], misattributed: [], homeworkNotSet: [] })));
   const promptRecorder = () => {
     const prompts: string[] = [];
-    const callModel = vi.fn(async (request: { schemaName: string; messages: Array<{ content: string }> }) => {
+    const callModel = vi.fn(async (request: { model: string; schemaName: string; messages: Array<{ content: string }> }) => {
       prompts.push(request.messages.map((message) => message.content).join("\n"));
-      return request.schemaName === "post_class_feedback" ? glm(writerJson) : glm(FAITHFUL_VERDICT);
+      return routed(request, request.schemaName === "post_class_feedback" ? writerJson : FAITHFUL_VERDICT);
     });
     return { prompts, callModel };
   };
@@ -1434,9 +1441,17 @@ describe("transcript first (Postgres + fakes)", () => {
   });
 
   it("falls back when the transcript pass is switched off while the class waits; any other handed-over class is still held", async () => {
-    await handedOver();
+    // With a judged transcript draft kept for the POST slot: dropped with its verdict and stamp, the summary writes its own.
+    await handedOver({
+      state: "pending", sonioxTranscriptionId: "job-5", arm: "glm", fields: GOOD_FIELDS, fieldsSha256: "sha",
+      metadata: { ...HANDED_OVER, draftEvidence: "transcript", judge: PASSING_VERDICT, pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION } },
+    });
     expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fakeSoniox().client, { transcriptsEnabled: false }), cron))
       .toMatchObject({ result: "summary_fallback", detail: "transcript_pass_off" });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+      state: "pending", evidence: "summary", arm: null, fields: null, fieldsSha256: null, sonioxTranscriptionId: "job-5",
+      metadata: { judge: null, draftEvidence: null, pipeline: null, summaryFallback: { cause: "transcript_pass_off" } },
+    });
 
     await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
     await handedOver({ reason: "thai_summary", metadata: { handover: "thai_summary" } });
@@ -1445,16 +1460,17 @@ describe("transcript first (Postgres + fakes)", () => {
   });
 
   it("still holds what the transcript shows: a recording or transcript too short for the class, a draft the judge rejects", async () => {
-    const cases: Array<[string, Parameters<typeof fakeSoniox>[0], Partial<AutowriterDeps>, string]> = [
-      ["recording too short", { audioDurationMs: 20 * 60_000 }, {}, "recording_too_short"],
-      ["transcript too short", { tokens: lessonTokens().slice(0, 4) }, {}, "transcript_too_short"],
-      ["judge rejects the draft", {}, { callModel: unfaithfulModel() as never }, "glm:unfaithful:scored 95%"],
+    const cases: Array<[string, Parameters<typeof fakeSoniox>[0], Partial<AutowriterDeps>, RegExp]> = [
+      ["recording too short", { audioDurationMs: 20 * 60_000 }, {}, /^recording_too_short$/u],
+      ["transcript too short", { tokens: lessonTokens().slice(0, 4) }, {}, /^transcript_too_short$/u],
+      // Whatever writes transcripts (and any fallback writer) had its draft rejected.
+      ["judge rejects the draft", {}, { callModel: unfaithfulModel() as never }, new RegExp(`^${AUTOWRITER_MODELS.writer.arm}:unfaithful:scored 95%`, "u")],
     ];
     for (const [label, sonioxOptions, overrides, reason] of cases) {
       await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
       await handedOver();
       expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fakeSoniox(sonioxOptions).client, overrides), webhook), label)
-        .toMatchObject({ result: "held", detail: reason });
+        .toMatchObject({ result: "held", detail: expect.stringMatching(reason) });
       const row = await readSessionRow(db, SESSION_ID);
       expect(row, label).toMatchObject({ state: "held", metadata: { alertKind: "held" } });
       expect(row?.metadata, label).not.toHaveProperty("summaryFallback");
@@ -1484,11 +1500,18 @@ describe("transcript first (Postgres + fakes)", () => {
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "pending", evidence: "summary", metadata: { alertKind: "no_summary" } });
   });
 
-  it("raises no no-recording alert for a transcript-first class: it falls back to the summary at that point instead", async () => {
-    await handedOver({ scheduledEndAt: new Date(NOW.getTime() - 4 * 3600_000), nextAttemptAt: new Date(Date.now() + 3600_000) });
+  it("raises no no-recording alert for a transcript-first class waiting for its recording (it falls back instead), but does for one stuck transcribing", async () => {
+    const longAgo = { scheduledEndAt: new Date(NOW.getTime() - 4 * 3600_000), nextAttemptAt: new Date(Date.now() + 3600_000) };
+    await handedOver(longAgo);
     const result = await runSweep(firstDeps(fakeWise().ops, fakeSoniox().client));
     expect(result.alertsSent).toBe(0);
     expect((await readSessionRow(db, SESSION_ID))?.metadata).not.toHaveProperty("alertKind");
+
+    // A transcription still running 3 h after class has no time-based fallback: a person hears about it.
+    await db.update(S).set({ state: "transcribing", reason: "transcription_in_progress", sonioxTranscriptionId: "job-2" })
+      .where(eq(S.wiseSessionId, SESSION_ID));
+    expect((await runSweep(firstDeps(fakeWise().ops, fakeSoniox().client))).alertsSent).toBe(1);
+    expect((await readSessionRow(db, SESSION_ID))?.alertsSent).toHaveProperty("no_recording");
   });
 
   it("treats a fallback's Soniox job as done: kept for review, then deleted, while the class itself still waits on the summary", async () => {
