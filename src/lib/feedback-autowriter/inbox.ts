@@ -60,6 +60,8 @@ export const INBOX_GROUPS: ReadonlyArray<{ kind: InboxItemKind; label: string }>
 /** A held class turns red this long before its deadline, and amber this long before it. */
 const HOLD_CRITICAL_MS = 6 * 60 * 60 * 1000;
 const HOLD_SOON_MS = 24 * 60 * 60 * 1000;
+/** A held class nobody wrote leaves the list this long after its deadline: by then nothing can be done in time. */
+const HOLD_LISTED_AFTER_DEADLINE_MS = 24 * 60 * 60 * 1000;
 
 const INCIDENT_TITLES: Record<string, string> = {
   halt: "Posting was halted",
@@ -105,9 +107,19 @@ function holdUrgency(deadlineAt: string | null, now: Date): InboxItem["urgency"]
 }
 
 /**
+ * Whether a held class still waits for someone: nobody has written it (`resolvedBy`), and its deadline is ahead or
+ * passed less than 24 hours ago. A class without a deadline keeps waiting. The row itself stays `held` either way, so
+ * every hold is still in the All classes log.
+ */
+export function isOpenHold(hold: Pick<InboxDashboard["holds"][number], "resolvedBy" | "deadlineAt">, now: Date): boolean {
+  return hold.resolvedBy === null && now.getTime() - timeOf(hold.deadlineAt) < HOLD_LISTED_AFTER_DEADLINE_MS;
+}
+
+/**
  * The to-do list, in display order:
  * 1. incidents: critical and not acknowledged, newest first;
- * 2. holds: soonest deadline first — red with under 6 hours left (or the deadline passed), amber under 24 hours;
+ * 2. holds still waiting for someone (`isOpenHold`): soonest deadline first — red with under 6 hours left (or the
+ *    deadline passed), amber under 24 hours;
  * 3. reviews: posts with an open flag first (amber), then the required ones without a verdict, oldest class first;
  * 4. decisions (`extras`);
  * 5. failed posts, latest class first;
@@ -152,6 +164,7 @@ export function buildInbox(
     });
 
   const holds = dashboard.holds
+    .filter((row) => isOpenHold(row, now))
     .toSorted((a, b) => timeOf(a.deadlineAt) - timeOf(b.deadlineAt) || timeOf(a.classEndedAt) - timeOf(b.classEndedAt)
       || a.wiseSessionId.localeCompare(b.wiseSessionId))
     .map((row): InboxItem => ({

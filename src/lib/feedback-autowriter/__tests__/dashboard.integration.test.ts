@@ -11,6 +11,7 @@ let handle: Awaited<ReturnType<typeof startTestDb>>;
 let db: Database;
 
 const S = schema.feedbackAutowriterSessions;
+const FX = schema.feedbackAutowriterFixEvents;
 
 // Roster account ids are the code roster's (the tutor names and keys come from it); everything else is synthetic.
 const MIMI = "696e2c4343579bbada2340f8";
@@ -38,6 +39,14 @@ async function seedRow(n: number, options: Partial<SessionInsert> & { endAt: str
   return id24(n);
 }
 
+/** A feedback save in Wise as the review job stores it (`feedback_autowriter_fix_events`). */
+async function seedSave(wiseSessionId: string, actorKind: typeof FX.$inferInsert["actorKind"], at: string): Promise<void> {
+  await db.insert(FX).values({
+    wiseEventId: `event-${wiseSessionId}-${actorKind}-${at}`, wiseSessionId, eventAt: new Date(at), actorKind, countsAsFix: false,
+    classifierVersion: 1,
+  });
+}
+
 beforeAll(async () => {
   handle = await startTestDb();
   db = handle.db as unknown as Database;
@@ -48,8 +57,8 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions, feedback_autowriter_calls, post_class_sessions, wise_webhook_events
-    RESTART IDENTITY CASCADE`);
+  await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions, feedback_autowriter_calls, feedback_autowriter_fix_events,
+    post_class_sessions, wise_webhook_events RESTART IDENTITY CASCADE`);
 });
 
 describe("loadAutowriterDashboard", () => {
@@ -77,7 +86,7 @@ describe("loadAutowriterDashboard", () => {
       tutor: "Apivit (Ek) Sirithana", tutorKey: "Ek", className: null, classEndedAt: "2026-07-30T03:00:00.000Z",
       reason: "recording_too_short", alertSentAt: null, hasDraft: false,
     });
-    expect(board.holds[1]).toMatchObject({ tutorKey: "Mimi", reason: "sol:unfaithful:a claim", alertSentAt: null, hasDraft: false });
+    expect(board.holds[1]).toMatchObject({ tutorKey: "Mimi", reason: "sol:unfaithful:a claim", alertSentAt: null, hasDraft: false, resolvedBy: null });
     const [stored] = await db.select({ alertsSent: S.alertsSent }).from(S).where(eq(S.wiseSessionId, emailed));
     expect(board.holds[2]).toMatchObject({
       tutor: "Thanit (Mimi) Montrikittiphant", tutorKey: "Mimi", className: "Somchai (Tom.Ja) Jaidee", reason: "student_id_missing", hasDraft: true,
@@ -97,6 +106,50 @@ describe("loadAutowriterDashboard", () => {
     expect(board.totals).toMatchObject({ seen: 4, held: 2, failed: 1, posted: 1 });
     expect(board.recent.every((row) => row.tutorKey === "Mimi")).toBe(true);
     expect(board.system).toMatchObject({ promptVersion: expect.any(Number), writer: { model: expect.any(String) } });
+  });
+
+  it("marks a held class a person has saved feedback on as written, and no other", async () => {
+    const byTutor = await seedRow(1, { endAt: "2026-09-29T03:00:00Z" });
+    const byOwner = await seedRow(2, { endAt: "2026-09-29T04:00:00Z", reason: "recording_too_short" });
+    const byStaff = await seedRow(3, { endAt: "2026-09-29T05:00:00Z", wiseTeacherUserId: EK_MAIN });
+    const notAPerson = await seedRow(4, { endAt: "2026-09-29T06:00:00Z" });
+    const untouched = await seedRow(5, { endAt: "2026-09-29T07:00:00Z" });
+    // A class the tutor wrote before we could: never a hold, whatever its saves.
+    const tutorFirst = await seedRow(6, { endAt: "2026-09-29T08:00:00Z", state: "skipped_human", reason: "human_submission" });
+
+    await seedSave(byTutor, "auto", "2026-09-29T03:00:30Z");
+    await seedSave(byTutor, "tutor", "2026-09-29T09:00:00Z");
+    await seedSave(byOwner, "owner_web", "2026-09-29T10:00:00Z");
+    // Two people saved: still one hold.
+    await seedSave(byStaff, "other_staff", "2026-09-29T11:00:00Z");
+    await seedSave(byStaff, "tutor", "2026-09-29T12:00:00Z");
+    // Wise's blank auto-submission, a student's form and a save by our API user that no post explains: nobody wrote it.
+    await seedSave(notAPerson, "auto", "2026-09-29T06:00:30Z");
+    await seedSave(notAPerson, "student", "2026-09-29T06:30:00Z");
+    await seedSave(notAPerson, "api_actor_unmatched", "2026-09-29T07:00:00Z");
+    await seedSave(tutorFirst, "tutor", "2026-09-29T08:05:00Z");
+
+    const board = await loadAutowriterDashboard(db, { windowDays: 7, now: NOW });
+
+    expect(Object.fromEntries(board.holds.map((row) => [row.wiseSessionId, row.resolvedBy]))).toEqual({
+      [byTutor]: "tutor_wrote", [byOwner]: "tutor_wrote", [byStaff]: "tutor_wrote", [notAPerson]: null, [untouched]: null,
+    });
+    // The class stays a hold: the row is still `held`, and the window still counts it.
+    expect(board.totals.held).toBe(5);
+    expect(board.recent.find((row) => row.wiseSessionId === byTutor)?.state).toBe("held");
+  });
+
+  it("knows of no written hold before the fix events exist (migration 0101), and still loads", async () => {
+    const held = await seedRow(1, { endAt: "2026-09-29T03:00:00Z" });
+    await seedSave(held, "tutor", "2026-09-29T09:00:00Z");
+    await db.execute(sql`ALTER TABLE feedback_autowriter_fix_events RENAME TO feedback_autowriter_fix_events_absent`);
+    try {
+      const board = await loadAutowriterDashboard(db, { windowDays: 7, now: NOW });
+      expect(board.holds).toMatchObject([{ wiseSessionId: held, resolvedBy: null }]);
+    } finally {
+      await db.execute(sql`ALTER TABLE feedback_autowriter_fix_events_absent RENAME TO feedback_autowriter_fix_events`);
+    }
+    expect((await loadAutowriterDashboard(db, { windowDays: 7, now: NOW })).holds).toMatchObject([{ wiseSessionId: held, resolvedBy: "tutor_wrote" }]);
   });
 
   it("has no holds and no failed posts when there are none", async () => {

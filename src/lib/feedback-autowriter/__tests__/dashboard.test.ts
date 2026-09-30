@@ -308,6 +308,7 @@ describe("buildAutowriterDashboard: what needs the owner", () => {
       reason: "sol:unfaithful:x",
       alertsSent: {},
       hasDraft: false,
+      personWrote: false,
       className: "Somchai (Tom.Ja) Jaidee",
       ...patch,
     };
@@ -373,6 +374,7 @@ describe("buildAutowriterDashboard: what needs the owner", () => {
       // The digest was not emailed in shadow mode.
       alertSentAt: null,
       hasDraft: false,
+      resolvedBy: null,
       wiseUrl: "https://learn.begiftededucation.com/links?type=classroom_entity&entityType=session&entityId=old&classId=6a0000000000000000000001&profile=teacher",
     });
     // Postgres writes the time as text, in the session's time zone.
@@ -380,11 +382,19 @@ describe("buildAutowriterDashboard: what needs the owner", () => {
     expect(board.holds.find((row) => row.wiseSessionId === "sooner")?.alertSentAt).toBe("2026-09-30T03:20:05.500Z");
     expect(board.holds.find((row) => row.wiseSessionId === "no-deadline")).toEqual({
       wiseSessionId: "no-deadline", tutor: STRANGER, tutorKey: STRANGER, className: null, classEndedAt: null, deadlineAt: null, reason: null,
-      alertSentAt: null, hasDraft: false, wiseUrl: null,
+      alertSentAt: null, hasDraft: false, resolvedBy: null, wiseUrl: null,
     });
     expect(board.holds.find((row) => row.wiseSessionId === "nobody")).toMatchObject({ tutor: "unknown", tutorKey: "unknown" });
     // The window's own counts are untouched by holds from outside it.
     expect(board.totals.held).toBe(0);
+  });
+
+  it("marks a held class a person has written since, and leaves it in the list", () => {
+    const board = build({ holds: [hold("written", { personWrote: true }), hold("waiting", {})] });
+    expect(board.holds.map((row) => [row.wiseSessionId, row.resolvedBy])).toEqual(
+      expect.arrayContaining([["written", "tutor_wrote"], ["waiting", null]]),
+    );
+    expect(board.holds).toHaveLength(2);
   });
 
   it("lists the window's failed posts, latest class first", () => {

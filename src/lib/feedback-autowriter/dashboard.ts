@@ -1,8 +1,9 @@
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { wiseSessionLink } from "@/lib/wise/links";
 import { AUTOWRITER_MAX_TRANSCRIBE_ERRORS, AUTOWRITER_MAX_WRITER_ERRORS, AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS } from "./config";
+import { isMissingRelationError } from "./db-errors";
 import { judgeProblems } from "./judge";
 import { tutorKeyFor } from "./review-job";
 import { AUTOWRITER_TUTORS, rosterTutor, tutorLabel } from "./roster";
@@ -12,6 +13,7 @@ import { SUMMARY_FALLBACK_CAUSES, type SummaryFallbackCause } from "./types";
 
 const S = schema.feedbackAutowriterSessions;
 const CALLS = schema.feedbackAutowriterCalls;
+const FX = schema.feedbackAutowriterFixEvents;
 
 export const DASHBOARD_WINDOWS = [1, 7, 30] as const;
 export type DashboardWindowDays = (typeof DASHBOARD_WINDOWS)[number];
@@ -39,10 +41,19 @@ export interface DashboardHoldRow extends Pick<AutowriterSessionRow,
   className: string | null;
   /** The row stores a judged draft (`fields`). */
   hasDraft: boolean;
+  /** A person has saved feedback on the class in Wise (`loadHeldClassesAPersonWrote`). */
+  personWrote: boolean;
 }
 
 /** Held classes loaded at most (the latest deadlines are kept). */
 export const DASHBOARD_HOLDS_LIMIT = 500;
+
+/**
+ * A person's own save in Wise, as the fix events classify it (`classifySessionFixEvents`): the class's tutor, the
+ * owner in the Wise web app, or other staff. Never a student, Wise's auto-submission, or a save by our API user
+ * (a post of ours, or one no post explains — that is an incident, not a person's write-up).
+ */
+export const PERSON_SAVE_KINDS = ["tutor", "owner_web", "other_staff"] as const;
 
 export interface DashboardWebhookRow {
   eventName: string | null;
@@ -184,6 +195,11 @@ export interface AutowriterDashboard {
     alertSentAt: string | null;
     /** A judged draft is stored on the row. */
     hasDraft: boolean;
+    /**
+     * `tutor_wrote`: a person has saved feedback on the class in Wise, so it no longer waits for anyone (the row stays
+     * `held`: the autowriter never touches a held class again). Null while nobody has.
+     */
+    resolvedBy: "tutor_wrote" | null;
     wiseUrl: string | null;
   }>;
   /** Classes of the window whose POST did not end well, latest class first. */
@@ -367,6 +383,7 @@ export function buildAutowriterDashboard(input: {
         reason: row.reason,
         alertSentAt: alertSentAt(row.alertsSent?.held),
         hasDraft: row.hasDraft,
+        resolvedBy: row.personWrote ? "tutor_wrote" as const : null,
         wiseUrl: wiseUrlOf(row),
       })),
     failedPosts: sessions
@@ -496,12 +513,32 @@ function tallyBy<T>(rows: readonly T[], key: (row: T) => string): Array<[string,
   return [...counts.entries()].toSorted((a, b) => b[1] - a[1]);
 }
 
+/**
+ * The held classes a person has written: those with a person's feedback save among the fix events the hourly review
+ * job derives from Wise's activity feed (it classifies every save on every class the autowriter has a row for, held
+ * ones included). The save needs no cut-off in time. Nearly always it came after we last looked: the submission gate
+ * runs before every other gate that holds, and a POST that finds a person's submission hands the class back as
+ * `skipped_human`. Where it came before (a hold for an ambiguous submission, or for repeated errors), a person's
+ * feedback is in Wise all the same. Before migration 0101 there are no fix events, and no hold is known to be written.
+ */
+async function loadHeldClassesAPersonWrote(db: Database): Promise<Set<string>> {
+  try {
+    const rows = await db.selectDistinct({ wiseSessionId: FX.wiseSessionId }).from(FX)
+      .innerJoin(S, eq(S.wiseSessionId, FX.wiseSessionId))
+      .where(and(eq(S.state, "held"), inArray(FX.actorKind, [...PERSON_SAVE_KINDS])));
+    return new Set(rows.map((row) => row.wiseSessionId));
+  } catch (error) {
+    if (isMissingRelationError(error)) return new Set();
+    throw error;
+  }
+}
+
 /** Read-only loader for the page and its API route. */
 export async function loadAutowriterDashboard(db: Database, input: { windowDays: number; now?: Date }): Promise<AutowriterDashboard> {
   const now = input.now ?? new Date();
   const since = new Date(now.getTime() - input.windowDays * 24 * 60 * 60 * 1000);
   const webhookSince = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  const [control, sessionRows, holdRows, callRows, webhookRows] = await Promise.all([
+  const [control, sessionRows, holdRows, personWrote, callRows, webhookRows] = await Promise.all([
     readControl(db),
     db.select({
       wiseSessionId: S.wiseSessionId,
@@ -541,6 +578,7 @@ export async function loadAutowriterDashboard(db: Database, input: { windowDays:
       .where(eq(S.state, "held"))
       .orderBy(sql`${S.deadlineAt} desc nulls last`)
       .limit(DASHBOARD_HOLDS_LIMIT),
+    loadHeldClassesAPersonWrote(db),
     db.select({
       wiseSessionId: CALLS.wiseSessionId,
       role: CALLS.role,
@@ -563,7 +601,7 @@ export async function loadAutowriterDashboard(db: Database, input: { windowDays:
     control,
     system: buildSystemStatus(),
     sessions: sessionRows,
-    holds: holdRows.map((row) => ({ ...row, hasDraft: row.hasDraft === true })),
+    holds: holdRows.map((row) => ({ ...row, hasDraft: row.hasDraft === true, personWrote: personWrote.has(row.wiseSessionId) })),
     calls: callRows.map((row) => ({ ...row, costUsd: Number(row.costUsd ?? 0) || 0 })),
     webhooks: webhookRows,
   });

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { INBOX_GROUPS, buildInbox, filterInbox, type InboxDashboard, type InboxItem, type InboxReview } from "../inbox";
+import { INBOX_GROUPS, buildInbox, filterInbox, isOpenHold, type InboxDashboard, type InboxItem, type InboxReview } from "../inbox";
 import type { ReviewQueueItem } from "../review-data";
 
 // Made-up tutors and ids; the student is the fixtures' one.
@@ -19,7 +19,7 @@ type Incident = InboxReview["incidents"][number];
 function hold(id: string, patch: Partial<Hold> = {}): Hold {
   return {
     wiseSessionId: id, tutor: "Anna Example", tutorKey: "Anna", className: STUDENT, classEndedAt: inHours(-20), deadlineAt: inHours(40),
-    reason: "sol:unfaithful:scored 95% on the mock paper", alertSentAt: null, hasDraft: false, wiseUrl: null, ...patch,
+    reason: "sol:unfaithful:scored 95% on the mock paper", alertSentAt: null, hasDraft: false, resolvedBy: null, wiseUrl: null, ...patch,
   };
 }
 
@@ -182,11 +182,47 @@ describe("buildInbox", () => {
     expect(urgencyAt(6 * HOUR)).toBe("soon");
     expect(urgencyAt(6 * HOUR - 1)).toBe("critical");
     expect(urgencyAt(0)).toBe("critical");
-    expect(urgencyAt(-72 * HOUR)).toBe("critical");
+    expect(urgencyAt(-23 * HOUR)).toBe("critical");
     // The clock is the caller's: the same hold is further along an hour later.
     const items = (now: Date) => buildInbox(dashboard({ holds: [hold("h", { deadlineAt: inHours(6.5) })] }), null, { now });
     expect(items(NOW)[0].urgency).toBe("soon");
     expect(items(new Date(NOW.getTime() + HOUR))[0].urgency).toBe("critical");
+  });
+
+  it("leaves out a hold a person has written, and one whose deadline passed a day ago", () => {
+    const listed = (patch: Partial<Hold>) => buildInbox(dashboard({ holds: [hold("h", patch)] }), null, { now: NOW }).length === 1;
+    const deadlineIn = (msLeft: number) => new Date(NOW.getTime() + msLeft).toISOString();
+    // Still waiting: nobody wrote it, and the deadline is ahead, unknown, or passed less than 24 hours ago.
+    expect(listed({ deadlineAt: deadlineIn(40 * HOUR) })).toBe(true);
+    expect(listed({ deadlineAt: null })).toBe(true);
+    expect(listed({ deadlineAt: deadlineIn(-1) })).toBe(true);
+    expect(listed({ deadlineAt: deadlineIn(-24 * HOUR + 1) })).toBe(true);
+    // Nothing can be done in time any more.
+    expect(listed({ deadlineAt: deadlineIn(-24 * HOUR) })).toBe(false);
+    expect(listed({ deadlineAt: deadlineIn(-72 * HOUR) })).toBe(false);
+    // A person wrote it: off the list at once, however far the deadline.
+    expect(listed({ deadlineAt: deadlineIn(40 * HOUR), resolvedBy: "tutor_wrote" })).toBe(false);
+    expect(listed({ deadlineAt: deadlineIn(-1), resolvedBy: "tutor_wrote" })).toBe(false);
+    expect(listed({ deadlineAt: null, resolvedBy: "tutor_wrote" })).toBe(false);
+
+    const items = buildInbox(dashboard({ holds: [
+      hold("written", { deadlineAt: inHours(2), resolvedBy: "tutor_wrote" }),
+      hold("stale", { deadlineAt: inHours(-30) }),
+      hold("open", { deadlineAt: inHours(30) }),
+      hold("just-passed", { deadlineAt: inHours(-2) }),
+    ] }), null, { now: NOW });
+    expect(ids(items)).toEqual(["hold:just-passed", "hold:open"]);
+    // The same rule, for the tutor table's count of open holds.
+    expect(isOpenHold({ resolvedBy: null, deadlineAt: inHours(30) }, NOW)).toBe(true);
+    expect(isOpenHold({ resolvedBy: "tutor_wrote", deadlineAt: inHours(30) }, NOW)).toBe(false);
+    expect(isOpenHold({ resolvedBy: null, deadlineAt: inHours(-30) }, NOW)).toBe(false);
+    // A hold that left the list still names its class for an incident about it.
+    const about = buildInbox(
+      dashboard({ holds: [hold("written", { tutorKey: "Ben", resolvedBy: "tutor_wrote" })] }),
+      review({ incidents: [incident("i1", { wiseSessionId: "written" })] }),
+      { now: NOW },
+    );
+    expect(about).toMatchObject([{ id: "incident:i1", tutorKey: "Ben" }]);
   });
 
   it("lists what is left to review: flagged posts first, then the oldest class first", () => {
