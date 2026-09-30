@@ -49,6 +49,14 @@ export function autowriterAlertEmails(env: AutowriterEnvironment = process.env):
     .filter((email) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/u.test(email)))];
 }
 
+/**
+ * Optional LINE destination (user or group id) for the operating loop's critical incidents, pushed with the
+ * existing LINE channel token. Unset: incidents go by email only.
+ */
+export function autowriterLineTo(env: AutowriterEnvironment = process.env): string | null {
+  return value(env, "FEEDBACK_AUTOWRITER_LINE_TO") || null;
+}
+
 /** The Wise user the API key belongs to — the actor on every submit event we cause. */
 export function wiseApiActorId(env: AutowriterEnvironment = process.env): string | null {
   return value(env, "WISE_USER_ID") || null;

@@ -312,8 +312,8 @@ export function studentParticipants(detail: AutowriterSessionDetail): Autowriter
 
 /**
  * A one-to-one student who joined through a Zoom link as a guest instead of
- * their Wise account (Mimi, 29 Sep: "Pete Thanasatitkul" 94% while "Pawin
- * (Pete.Th) Thanasatitkul" shows 0 minutes). Owner rule: when the only other
+ * their Wise account (Mimi, 29 Sep: a guest under the student's nickname and
+ * surname at 94% while their Wise account shows 0 minutes). Owner rule: when the only other
  * participant besides the Wise account is one guest, the Wise account attended
  * under the minimum, and the guest and the tutor both stayed at least
  * `AUTOWRITER_GUEST_STUDENT_MIN_PERCENT` of the class, the guest is the student.
@@ -503,7 +503,9 @@ export function evaluateSessionGates(
   if (!students[0].wiseUserId) return { ok: false, reason: "student_not_wise_user" };
   const attendance = studentAttendancePercent(students[0], window.minutes);
   if (attendance === null) return { ok: false, reason: "attendance_unknown" };
-  if (attendance < AUTOWRITER_MIN_ATTENDANCE_PERCENT) return { ok: false, reason: `attendance_${attendance}pct` };
+  // Wise may report a fractional percentage: the reason names the whole percent, rounded down (42.5 → attendance_42pct),
+  // so `classifyGateReason` and the coverage table (`^attendance_\d+pct$`) see it; the threshold compares the raw value.
+  if (attendance < AUTOWRITER_MIN_ATTENDANCE_PERCENT) return { ok: false, reason: `attendance_${Math.floor(attendance)}pct` };
 
   // The second pass writes from a transcript instead, so the summary is not required there.
   if (input.requireSummary === false) return { ok: true };
