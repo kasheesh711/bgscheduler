@@ -1,7 +1,7 @@
 ---
 phase: quick-260930-hfu
 plan: "01"
-status: complete (draft PR against main; nothing deployed, no switch changed)
+status: complete (draft PR #115 against main; nothing deployed, no switch changed)
 subsystem: feedback-autowriter (model-call layer, pipeline, job state machine, store, submit, review job)
 tags: [feedback-autowriter, openrouter, rate-limit, judge, alerts, sweep, vitest, testcontainers]
 
@@ -22,7 +22,7 @@ provides:
 
 # Summary — autowriter: hardening follow-ups to #113 and #114
 
-**Branch:** `fix/autowriter-hardening-followups`, from `main` at `1096f33` (#113 and #114 merged). **PR:** draft, base `main`.
+**Branch:** `fix/autowriter-hardening-followups`, from `main` at `1096f33` (#113 and #114 merged). **PR:** #115 (draft, base `main`).
 **Commits:** `f028076` plan · `f6452b2` code and tests (items A–F) · `7bb2951` docs · `79ee3f0` test (the sweep rule on
 the transcript path) · `e3dca9c` the judges' combination type-checked · `443058b` test comment · this summary.
 
