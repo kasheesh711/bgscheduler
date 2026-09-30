@@ -58,6 +58,16 @@ curl -X POST https://bgscheduler.vercel.app/api/internal/sync-wise \
   -H "Authorization: Bearer $CRON_SECRET"
 ```
 
+## Worktrees (agents)
+
+On 2026-09-30 the disk filled up: 17 worktrees had been created as `~/Developer/Scheduling-*`, each holding its own ~1 GB `npm ci`. Rules:
+
+- Agent worktrees live **only** in the main checkout's git-ignored `.claude/worktrees/<slot>`, never as `~/Developer/Scheduling-*` folders.
+- **At most 2 slots** (`slot-a`, `slot-b`). Reuse a slot by switching branches: a task is a branch, not a folder.
+- Create one with `scripts/dev/worktrees.sh new <slot> <branch> [base]`. It makes `node_modules` a copy-on-write APFS clone of any checkout with the same `package-lock.json` (≈0 GB, seconds). `npm ci` runs only when no checkout has that lockfile yet. After switching branches, `scripts/dev/worktrees.sh deps <slot>` does the same.
+- Don't run `npm run build` locally unless the change needs it (CI runs it); delete `.next` afterwards.
+- After merges, run `scripts/dev/worktrees.sh status` and `prune --yes`. Prune removes only worktrees that are clean, pushed, and whose PR merged or closed. It keeps any worktree holding local tools (`.feedback-autowriter/` or `.keep-worktree`).
+
 <!-- GSD:project-start source:PROJECT.md -->
 ## Project
 

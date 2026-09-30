@@ -8,7 +8,7 @@ import {
   sonioxApiKey,
   wiseApiActorId,
 } from "./config";
-import { markWebhookProcessed, processSession, runSweep, type AutowriterDeps, type SweepResult } from "./job";
+import { cleanUpSonioxJobs, markWebhookProcessed, processSession, runSweep, type AutowriterDeps, type SweepResult } from "./job";
 import { createWiseFeedbackOps } from "./run";
 import { createSonioxClient } from "./soniox";
 
@@ -35,6 +35,9 @@ function sonioxClient() {
 /** Backstop cron / Data Health run. Budget leaves headroom under maxDuration = 800. */
 export async function runAutowriterJob(): Promise<SweepResult | { ok: true; skipped: true; reason: string }> {
   if (!autowriterEnabled()) {
+    // Switched off, transcripts still leave Soniox on time (72 h review window, then deleted).
+    const deps = productionDeps(getDb(), 740_000);
+    if (deps.soniox) await cleanUpSonioxJobs(deps, deps.soniox);
     return { ok: true, skipped: true, reason: "FEEDBACK_AUTOWRITER_ENABLED is not true." };
   }
   return runSweep(productionDeps(getDb(), 740_000));

@@ -89,9 +89,17 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
    (`recording_too_short`): Wise's `rawRecordings[].duration` (seconds) is checked before the job — held only when
    still short 30 minutes after it was first seen short, in case the first length was not final — and Soniox's audio
    length after it;
-2. fetches the transcript. BGScheduler never stores it; the Soniox job is kept only until a judged draft is stored
-   or the class is finished (so a retry re-fetches instead of transcribing again), then deleted. A delete that fails
-   keeps the job id so the sweep retries it, and the sweep also reaps jobs no row references after 2 hours;
+2. fetches the transcript. BGScheduler never stores it. The Soniox job is kept while the class is in progress (so a
+   retry re-fetches instead of transcribing again) and, once the class is done with it (posted, shadow draft, held,
+   expired or skipped, however it got there), for review for 72 hours (owner decision, 29 Sep), then the sweep
+   deletes it. The first sweep to see the class done stamps `metadata.sonioxRetainUntil` = now + 72 h (so the window
+   starts within one sweep of the class finishing). A class left unfinished past its deadline (mode `off` skips the
+   expiry) counts as done, and the job's cleanup still runs when `FEEDBACK_AUTOWRITER_ENABLED` is off. An owner retry
+   clears the stamp, and so does going live for a draft that may transcribe again (a judged transcript draft keeps
+   its window); the window starts again when the class is next done. A reviewer finds the job by the row's `soniox_transcription_id` (Soniox
+   Console). `metadata.triagedAt` ends the window early; nothing writes it yet — it is reserved for the review
+   surface of the operating loop. A delete that fails keeps the job id so the sweep retries it, and the sweep also
+   reaps jobs no row references after 2 hours;
 3. tells tutor from student by lining up Soniox's speakers with Zoom's name-labelled WEBVTT (`rawTranscript`) — every
    speaker that overlaps the teacher's cues is TUTOR, so a diarization split cannot turn the tutor into the student;
    cues under any of the tutor's other names (their other account, a second device) count as the teacher's.
@@ -120,12 +128,23 @@ class, or a transcript under 800 characters → `held` + alert. A
 class still waiting for its recording (or its transcript) 3 hours after class raises a `no_recording` alert (live
 mode; not for a switched-off tutor, a short recording waiting for its recheck, or an infra retry); rows still
 waiting at the deadline margin expire with an alert as before.
-Soniox jobs of finished rows and of shadow drafts are deleted by the sweep when an earlier delete failed.
+Soniox jobs of finished rows and of shadow drafts are deleted by the sweep once their review window is over or the
+class is triaged; a refused delete is retried at the next sweep.
 
 Pilot (2026-09-29, 8 classes): on Thai/English lessons Soniox kept the English terms that Zoom's transcript lost and
 was preferred in 17 of 18 compared windows; no gain on English-only lessons.
 
 Switch: `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED=true` plus `SONIOX_API_KEY`; off → the fast path behaves as before.
+
+## Robustness and traceability
+- A timeout while reading a model or Soniox reply is an ordinary timeout (retried later), never an unhandled error.
+- Any unexpected error is retried, but the third one on the same class holds it for a person with an alert
+  (`metadata.genericErrors`), instead of retrying until the deadline.
+- Every draft and POST claim carries `metadata.pipeline`: the commit (`VERCEL_GIT_COMMIT_SHA` on Vercel;
+  `local:<sha>[+dirty]` from the CLI), the prompt and judge versions, the model arm and the evidence, so any post can
+  be traced to the code that wrote it. A reused transcript draft keeps the stamp of the attempt that wrote it; the
+  POST claim adds `postedFromCommit`, the code that sent it. An owner retry clears the stamp with the draft, and
+  resets the error counters.
 
 ## States (`feedback_autowriter_sessions.state`)
 
