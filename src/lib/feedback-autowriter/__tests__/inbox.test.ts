@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { INBOX_GROUPS, buildInbox, filterInbox, type InboxDashboard, type InboxItem, type InboxReview } from "../inbox";
 import type { ReviewQueueItem } from "../review-data";
@@ -265,5 +267,34 @@ describe("filterInbox", () => {
     // A tutor with nothing open still sees what concerns everyone.
     expect(ids(filterInbox(items, "Dao"))).toEqual(["incident:i-halt"]);
     expect(filterInbox([], "Anna")).toEqual([]);
+  });
+});
+
+describe("the modules the page runs in the browser", () => {
+  const DIRECTORY = path.resolve(__dirname, "..");
+  /** What a module loads when it runs: every import that is not `import type`. */
+  function runtimeImports(file: string): string[] {
+    const source = fs.readFileSync(path.join(DIRECTORY, file), "utf8");
+    return [...source.matchAll(/^import\s+(?!type\b)[^;]*?from\s+"([^"]+)";/gmu)].map((match) => match[1]);
+  }
+
+  it("load nothing but each other: no database layer, no server-only module, no package", () => {
+    const loaded = new Set<string>();
+    const outside = new Set<string>();
+    const visit = (file: string) => {
+      if (loaded.has(file)) return;
+      loaded.add(file);
+      for (const specifier of runtimeImports(file)) {
+        if (specifier.startsWith("./")) visit(`${specifier.slice(2)}.ts`);
+        else outside.add(`${file} → ${specifier}`);
+      }
+    };
+    // The to-do list and the gate sentence are built on the client, from the payloads the page already has.
+    visit("inbox.ts");
+    visit("gate-sentence.ts");
+    expect([...loaded].toSorted()).toEqual(["gate-sentence.ts", "hold-reasons.ts", "inbox.ts", "quality.ts"]);
+    expect([...outside]).toEqual([]);
+    // The check itself sees a server module's imports.
+    expect(runtimeImports("trends.ts")).toEqual(expect.arrayContaining(["drizzle-orm", "@/lib/db/schema", "./dashboard"]));
   });
 });
