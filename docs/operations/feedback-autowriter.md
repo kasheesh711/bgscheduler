@@ -477,8 +477,9 @@ verdict as owner approval.
 
 After the owner approves layout, voice and length on all ten drafts, record approval against the report and guide
 version, set the production environment switch to exact `true`, and redeploy the reviewed implementation through
-the normal release process. Review the first ten new Mimi posts for format drift in the existing Review tab and
-retain their session ids/verdicts in the rollout receipt. Any guide-format failure stays held after the fallback;
+the normal release process. Review the first ten new Mimi posts for format drift on the dashboard (What needs you →
+To review; a post that was not sampled opens from Details → All classes) and retain their session ids/verdicts in the
+rollout receipt. Any guide-format failure stays held after the fallback;
 factual failures follow the existing checks. If drift requires rollback, set the switch to `false` and redeploy;
 pending guided drafts will be regenerated under the shared prompt. Previously posted human or generated feedback
 is not rewritten by this release. No first-ten live review is claimed until activation and those posts exist.
