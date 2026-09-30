@@ -221,9 +221,27 @@ describe("buildAutowriterReview", () => {
     const payload = buildAutowriterReview({ now: NOW, ...source() });
     expect(payload.coverage).toMatchObject({ posted: 8, miss_held: 1, excluded_data_quality: 1, excluded_tutor_first: 5, excluded_not_live: 4 });
     expect(payload.daily.map((row) => row.date)).toEqual(["2026-09-29", "2026-09-28"]);
-    expect(payload.tutors.find((row) => row.tutorKey === "Mimi")).toMatchObject({ textsInWise: 2, reviewed: 1, coverageNum: 6, coverageDen: 6, phase: "full_review" });
+    expect(payload.tutors.find((row) => row.tutorKey === "Mimi")).toMatchObject({
+      textsInWise: 2, reviewed: 1, accurate: 1, critical: 0, coverageNum: 6, coverageDen: 6, phase: "full_review",
+    });
     // s1 has no verdict yet; s2 is approved with no counted fix.
     expect(payload.fixRounds).toEqual({ zero: 1, one: 0, two: 0, threePlus: 0, unresolved: 1 });
+  });
+
+  it("counts a tutor's critical verdicts in the window, sampled or not, and no other tutor's", () => {
+    const base = source();
+    const critical = (id: string, sessionId: string) => verdict({
+      id, wiseSessionId: sessionId, verdict: "needs_fix", severity: "critical", criticalCategory: "wrong_person", note: "synthetic",
+    });
+    const unsampled = review({ wiseSessionId: "s4", firstPostId: "post-4", inclusionReason: "not_sampled", currentVerdictId: "c2" });
+    const outside = review({ wiseSessionId: "s5", firstPostId: "post-5", bangkokDate: "2026-09-16", currentVerdictId: "c3" });
+    const payload = buildAutowriterReview({ now: NOW, ...source({
+      windowReviews: [...base.windowReviews.map((row) => row.wiseSessionId === "s1" ? { ...row, currentVerdictId: "c1" } : row), unsampled, outside],
+      verdicts: [...base.verdicts, critical("c1", "s1"), critical("c2", "s4"), critical("c3", "s5")],
+    }) });
+    // s1 (required, judged critical) is reviewed and not accurate; s4 was never sampled, so it counts as critical only.
+    expect(payload.tutors.find((row) => row.tutorKey === "Mimi")).toMatchObject({ reviewed: 2, accurate: 1, critical: 2 });
+    expect(payload.tutors.filter((row) => row.tutorKey !== "Mimi").every((row) => row.critical === 0)).toBe(true);
   });
 
   it("reports exact queue totals even when the queue shows fewer classes", () => {

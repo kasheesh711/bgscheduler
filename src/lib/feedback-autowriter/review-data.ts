@@ -30,7 +30,7 @@ import { AUTOWRITER_TUTORS, rosterTutor, tutorLabel } from "./roster";
 import type { AutowriterSessionRow } from "./store";
 
 /**
- * The Quality and Review tabs of the autowriter dashboard (Phase 1 of the operating loop). Read-only; the pure
+ * The quality and review data of the autowriter dashboard (Phase 1 of the operating loop). Read-only; the pure
  * `buildAutowriterReview` shapes rows loaded by `loadAutowriterReview`. The gate shown is computed by the same SQL
  * as the nightly row (`loadGateFacts`), never from the page's rows. In-person classes stay hidden, as on the
  * overview (`isOnsiteSkip`).
@@ -201,6 +201,8 @@ export interface QualityTutorRow {
   textsInWise: number;
   reviewed: number;
   accurate: number;
+  /** Classes in the window whose current verdict is critical, sampled or not (as the gate counts them). */
+  critical: number;
   wilsonLower: number;
   requiredPending: number;
   coverage: number | null;
@@ -327,7 +329,7 @@ function verdictView(row: VerdictRow, currentId: string | null): ReviewVerdictVi
   };
 }
 
-/** Pure shaping of the Quality and Review tabs. */
+/** Pure shaping of the quality and review data. */
 export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): AutowriterReview {
   const today = bangkokDateKey(input.now);
   const window = gateWindow(today);
@@ -403,6 +405,7 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
       textsInWise: tutorReviews.length,
       reviewed: counted.length,
       accurate,
+      critical: tutorReviews.filter((review) => currentVerdictOf(review)?.severity === "critical").length,
       wilsonLower: wilsonLowerBound(accurate, counted.length),
       requiredPending: tutorReviews.filter((review) => isRequiredReview(review.inclusionReason) && !review.currentVerdictId).length,
       coverage: coverageDen > 0 ? coverageNum / coverageDen : null,

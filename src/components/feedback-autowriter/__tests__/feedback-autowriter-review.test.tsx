@@ -86,7 +86,7 @@ function review(overrides: Partial<AutowriterReview> = {}): AutowriterReview {
       critical: 0, eligible: 9, coverage: 8 / 9, measuredFixClasses: 6, correctionsVerified: 6,
     }],
     tutors: [{
-      tutorKey: "Mimi", displayName: "Thanit (Mimi) Montrikittiphant", phase: "full_review", textsInWise: 6, reviewed: 0, accurate: 0,
+      tutorKey: "Mimi", displayName: "Thanit (Mimi) Montrikittiphant", phase: "full_review", textsInWise: 6, reviewed: 0, accurate: 0, critical: 0,
       wilsonLower: 0, requiredPending: 6, coverage: 1, coverageNum: 6, coverageDen: 6, measuredFixClasses: 4,
     }],
     queue: [item(), item({ wiseSessionId: "6a0000000000000000000f02", status: "reviewed", changed: false, diff: [], currentVerdict: APPROVED })],
