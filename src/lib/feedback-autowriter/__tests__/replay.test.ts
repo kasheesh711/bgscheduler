@@ -327,7 +327,7 @@ describe("replay: the same evidence and decisions as production", () => {
     }
   });
 
-  it("tries a rate-limited writer again without counting it: a rate limit never sends a class back to the summary", async () => {
+  it("tries a rate-limited writer again in the same run, like production, without counting it: a rate limit never sends a class back to the summary", async () => {
     const rateLimited = { ok: false, error: "openai/gpt-6.1-sol is temporarily rate-limited upstream.", httpStatus: 429, model: null, provider: null, finishReason: null, usage: null, latencyMs: 900 } as OpenRouterCallResult;
     const attempt = async (limited: number) => {
       let transcriptWrites = 0;
@@ -341,16 +341,57 @@ describe("replay: the same evidence and decisions as production", () => {
       const record = await replayClass(replayDeps({
         wise: readOnlyWise(sessionDetail(RECORDING)).wise, soniox: fakeSoniox().client, callModel: callModel as never,
         sleep: async (ms) => { pauses.push(ms); },
+        random: () => 0.5,
       }), SAMPLE);
-      return { record, transcriptWrites, pauses: pauses.filter((ms) => ms === 30_000).length };
+      return {
+        record, transcriptWrites,
+        // The pipeline's own waits before it sends a rate-limited request again, and the replay's pause between tries.
+        retryWaits: pauses.filter((ms) => [4_000, 10_000, 25_000].includes(ms)),
+        pauses: pauses.filter((ms) => ms === 30_000).length,
+      };
     };
-    // Twice rate-limited, then written: a draft (production would have retried 10 minutes apart).
-    expect(await attempt(2)).toMatchObject({ record: { outcome: "draft", afterFallback: null }, transcriptWrites: 3, pauses: 2 });
-    // Still rate-limited on the last try: not decided — never `writer_failed`.
-    const stuck = await attempt(3);
-    expect(stuck).toMatchObject({ transcriptWrites: 3, pauses: 2 });
+    // Twice rate-limited, then written: a draft in the first try, as in production's one run.
+    const written = await attempt(2);
+    expect(written).toMatchObject({ record: { outcome: "draft", afterFallback: null }, transcriptWrites: 3, retryWaits: [4_000, 10_000], pauses: 0 });
+    // Every attempt is one of the record's calls: the two rate-limited ones, then the draft's.
+    expect(written.record.calls.filter((call) => call.purpose === "transcript_draft" && call.role === "writer").map((call) => call.ok)).toEqual([false, false, true]);
+    expect(summarizeReplay([written.record]).writers.find((writer) => writer.purpose === "transcript_draft"))
+      .toMatchObject({ calls: 3, errors: 2, failures: [{ error: "openai/gpt-6.1-sol is temporarily rate-limited upstream.", count: 2 }] });
+    // Still rate-limited after three retries in each of the three tries: not decided — never `writer_failed`.
+    const stuck = await attempt(12);
+    expect(stuck).toMatchObject({ transcriptWrites: 12, pauses: 2, retryWaits: [4_000, 10_000, 25_000, 4_000, 10_000, 25_000, 4_000, 10_000, 25_000] });
     expect(stuck.record).toMatchObject({ outcome: `error:${AUTOWRITER_MODELS.writer.arm}:openai/gpt-6.1-sol is temporarily rate-limited upstream.`, afterFallback: null });
     expect(summarizeReplay([stuck.record]).outcomes).toMatchObject({ error: 1, fallback: 0 });
+  });
+
+  it("tries a rate-limited judge of the posted draft again, like any model call", async () => {
+    const rateLimited = { ok: false, error: "z-ai/glm-5.3-flash is temporarily rate-limited upstream.", httpStatus: 429, model: null, provider: null, finishReason: null, usage: null, latencyMs: 700 } as OpenRouterCallResult;
+    const posted = { ...GOOD_FIELDS, homework: "Finish the last two pages." };
+    const judged = async (limited: number) => {
+      let highCalls = 0;
+      const waits: number[] = [];
+      const callModel = vi.fn(async (request: ModelRequest) => {
+        if (request.schemaName === "post_class_feedback") return reply(request, WRITER_JSON);
+        if (!request.messages[1].content.includes("the last two pages") || request.effort !== "high") return reply(request, PASSING);
+        highCalls += 1;
+        return highCalls <= limited ? rateLimited : reply(request, PASSING);
+      });
+      const record = await replayClass(replayDeps({
+        wise: readOnlyWise(sessionDetail(RECORDING)).wise, soniox: fakeSoniox().client, callModel: callModel as never,
+        sleep: async (ms) => { waits.push(ms); },
+        random: () => 0.5,
+      }), { ...SAMPLE, postedFields: posted, postedSource: "row" });
+      return { record, highCalls, waits: waits.filter((ms) => [4_000, 10_000, 25_000].includes(ms)) };
+    };
+    const once = await judged(1);
+    expect(once).toMatchObject({ highCalls: 2, waits: [4_000] });
+    expect(once.record.posted).toMatchObject({ verdict: { faithful: true, levels: { medium: { faithful: true }, high: { faithful: true } } }, error: null });
+    expect(once.record.calls.filter((call) => call.purpose === "posted_draft").map((call) => `${call.effort}:${call.ok}`).toSorted())
+      .toEqual(["high:false", "high:true", "medium:true"]);
+    // Still rate limited after three retries: that level gave no verdict, as before.
+    const stuck = await judged(4);
+    expect(stuck).toMatchObject({ highCalls: 4, waits: [4_000, 10_000, 25_000] });
+    expect(stuck.record.posted).toEqual({ source: "row", verdict: null, problems: [], error: "judge:high:z-ai/glm-5.3-flash is temporarily rate-limited upstream." });
   });
 
   it("never falls back for a judge that keeps failing: the last try stands, with only its own verdicts", async () => {

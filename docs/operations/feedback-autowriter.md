@@ -269,8 +269,28 @@ could not finish, and the class retried 10 minutes later.
 
 Writer rows with the error `… is temporarily rate-limited upstream` are OpenRouter's rate limit on the writer's
 zero-retention route, not a failure of the draft (30 Sep afternoon: 6 of 10 writer calls while three classes were
-replayed at once, 7 of 8 one-word requests sent together). The class retries every 10 minutes and the error never
-counts toward `writer_failed`. If it keeps classes from posting, the error text itself points to adding an own
+replayed at once, 7 of 8 one-word requests sent together). The error never counts toward `writer_failed`.
+
+**On a rate limit** (30 Sep evening, [feature page](../features/feedback-autowriter.md#rate-limits-tried-again-in-the-same-run-30-sep-evening)):
+the same request is sent again in the same run — up to three more times, after about 4 s, 10 s and 25 s (each ±30%),
+or after the wait OpenRouter asks for (at most 30 s) — for the writer, the fallback writer and both judge levels. It
+never waits past the run's time: with too little left for the wait and the call's time-out, the rate limit stands at
+once. Only when the call is still rate limited after that does the class go back to retrying every 10 minutes, with
+the same `infra:…` reason as before. Each attempt is its own row, a rate-limited one at no cost, and every attempt
+after the first carries `result.rateLimitRetry` (1–3). To see what the retries did:
+
+```sql
+select role, arm, result ->> 'rateLimitRetry' as retry, ok, count(*)
+from feedback_autowriter_calls
+where created_at > now() - interval '1 day' and result ? 'rateLimitRetry'
+group by 1, 2, 3, 4
+order by 1, 2, 3, 4;
+```
+
+A row with `ok = true` is a retry that went through (the class was written or judged in the same run); `retry = 1`
+rows count the calls that were rate limited at all; `retry = 3` with `ok = false` is a call still failing at its last
+retry, so that class waited for its next run. The rows of one call are written together when the call ends. If
+rate limits keep classes from posting all the same, the error text itself points to adding an own
 provider key for that model in OpenRouter (Settings → Integrations); before doing so, check that the key's endpoint
 keeps zero data retention, as every autowriter route must. A `sol:model_mismatch:…` reason means
 OpenRouter answered Sol's request with another model id: the run reports an infrastructure error and the class

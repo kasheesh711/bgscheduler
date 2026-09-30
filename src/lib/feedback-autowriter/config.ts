@@ -137,6 +137,18 @@ export const AUTOWRITER_JUDGE_TIMEOUT_MS = { summary: 120_000, transcript: 240_0
  * never started without its full time-out: cut short, it could not finish.
  */
 export const AUTOWRITER_CALL_DEADLINE_MARGIN_MS = 45_000;
+/**
+ * In-run retries of a rate-limited model call (owner decision, 30 Sep). A rate limit on a route usually clears within
+ * seconds (the writer's came as HTTP 200 with code 429 in the body), so the same request is sent again after each of
+ * these waits instead of the class waiting for the next sweep: up to three retries per call.
+ */
+export const AUTOWRITER_RATE_LIMIT_RETRY_WAITS_MS = [4_000, 10_000, 25_000] as const;
+/** Each wait is spread ±30% at random, so classes that end at the same time do not retry at the same time. */
+export const AUTOWRITER_RATE_LIMIT_RETRY_JITTER = 0.3;
+/** A wait OpenRouter itself asks for (`Retry-After`, its rate limit's reset time) replaces the schedule's — up to this long. */
+export const AUTOWRITER_RATE_LIMIT_RETRY_AFTER_MAX_MS = 30_000;
+/** One call's waits never add up to more than this: the last one is cut to fit. */
+export const AUTOWRITER_RATE_LIMIT_RETRY_MAX_TOTAL_WAIT_MS = 45_000;
 
 /**
  * The writer config behind each arm, for the offline evaluation CLI
@@ -185,6 +197,10 @@ export const AUTOWRITER_WISE_READ_TIMEOUT_MS = 45_000;
  * pipeline never starts a judge without it (the class then retries with a fresh function). Worst case, the POST
  * phase (240 s) no longer fits after a transcript draft: the judged draft is kept and the next run posts it without
  * calling a model. After a summary draft it still fits (560 − 180 − 120 = 260 s).
+ * A rate-limited call's in-run retries (`AUTOWRITER_RATE_LIMIT_RETRY_WAITS_MS`) keep to the same rule: a retry is made
+ * only when its wait and the call's whole time-out still end by the deadline − 45 s, so they add at most 45 s of
+ * waiting to a call, never start a judge without its full time-out and never let a call outlive the function. The
+ * time they take comes out of what is left for the POST, which is claimed only with its 240 s (as above).
  */
 export const AUTOWRITER_SWEEP_MIN_REMAINING_MS = 560_000;
 /** While another POST is in flight, re-try the guarded submit this often … */
