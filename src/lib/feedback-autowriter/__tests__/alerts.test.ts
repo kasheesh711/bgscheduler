@@ -37,11 +37,12 @@ describe("buildAlertDigest", () => {
   it("names the tutor, the deadline in Bangkok time, what to do and the class's reason", () => {
     const digest = buildAlertDigest([alert()], NOT_HALTED);
     expect(digest.subject).toBe("Feedback autowriter: 1 class needs attention");
-    expect(digest.text).toContain("Kevin (Kev) Y. Hsieh Online · deadline 30 Sept, 23:59 (Bangkok) · Not written — the draft failed checks.");
+    // The month's short form is ICU's ("Sept" or "Sep", by version): not pinned here.
+    expect(digest.text).toMatch(/Kevin \(Kev\) Y\. Hsieh Online · deadline 30 Sept?,? 23:59 \(Bangkok\) · Not written — the draft failed checks\./u);
     expect(digest.text).toContain("[sol:unfaithful:scored 95%]");
     expect(digest.html).toContain("<li><b>Kevin (Kev) Y. Hsieh Online</b>");
     expect(buildAlertDigest([alert(), alert({ id: "00000000-0000-4000-8000-000000000002", kind: "expired" })], { haltedAt: new Date("2026-09-30T04:00:00.000Z"), haltReason: "POST not verified" }))
-      .toMatchObject({ subject: "Feedback autowriter: 2 classes need attention", text: expect.stringContaining("Autowriter is HALTED since 30 Sept, 11:00: POST not verified") });
+      .toMatchObject({ subject: "Feedback autowriter: 2 classes need attention", text: expect.stringMatching(/Autowriter is HALTED since 30 Sept?,? 11:00: POST not verified/u) });
   });
 
   describe("judge_failing: says why the draft could not be checked, and blames the judge model only for its own failures", () => {
