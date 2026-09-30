@@ -121,6 +121,7 @@ describe("buildAutowriterDashboard", () => {
         session("f2", { state: "held", reason: "thai_summary_no_transcript", metadata: fallback("speakers_unclear") }),
         session("f3", { state: "pending", metadata: fallback("no_recording") }),
         session("f4", { state: "pending", metadata: fallback("something_new") }),
+        session("f5", { state: "pending", metadata: { handover: "transcript_first", writerErrors: 3, ...fallback("writer_failed") } }),
         session("s1", { state: "verified", postStartedAt: at(3) }),
       ],
     });
@@ -128,6 +129,7 @@ describe("buildAutowriterDashboard", () => {
       { cause: "no_recording", label: "No recording after 3 h — from summary", count: 2 },
       { cause: "speakers_unclear", label: "Speakers unclear — from summary", count: 1 },
       { cause: "something_new", label: "something_new — from summary", count: 1 },
+      { cause: "writer_failed", label: "Writer or judge failed 3 times on the transcript — from summary", count: 1 },
     ]);
     expect(board.latency.byRoute).toEqual([
       { route: "transcript", label: "From the transcript", medianMinutes: 55, p90Minutes: 70, samples: 2 },
@@ -137,6 +139,7 @@ describe("buildAutowriterDashboard", () => {
     const row = (id: string) => board.recent.find((entry) => entry.wiseSessionId === id);
     expect(row("f1")?.summaryFallback).toEqual({ cause: "no_recording", label: "No recording after 3 h — from summary" });
     expect(row("t3")?.summaryFallback).toBeNull();
+    expect(row("f5")?.summaryFallback).toEqual({ cause: "writer_failed", label: "Writer or judge failed 3 times on the transcript — from summary" });
     expect(board.totals.awaitingRecording).toBe(1);
   });
 

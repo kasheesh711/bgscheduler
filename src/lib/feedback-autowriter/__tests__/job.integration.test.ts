@@ -1484,6 +1484,98 @@ describe("transcript first (Postgres + fakes)", () => {
     });
   });
 
+  /** A model call that failed as a service (time-out, a reply that is not JSON): the pipeline's infra failures. */
+  const failedCall = (error: string): OpenRouterCallResult => ({
+    ok: false, error, httpStatus: null, model: null, provider: null, finishReason: null, usage: null, latencyMs: 5,
+  });
+  /** Model replies in call order; `null` is a good one (a draft for a writer, a passing verdict for the judge). */
+  const scriptedModel = (replies: Array<OpenRouterCallResult | null>) => {
+    const seen: string[] = [];
+    const callModel = vi.fn(async (request: { model: string; schemaName: string }) => {
+      seen.push(`${request.schemaName === "post_class_feedback" ? "writer" : "judge"}:${request.model}`);
+      return replies.shift() ?? routed(request, request.schemaName === "post_class_feedback" ? writerJson : FAITHFUL_VERDICT);
+    });
+    return { callModel, seen };
+  };
+
+  it("falls back after the third model failure in a row on the transcript draft (writer or judge); Wise errors and its own time budget do not count", async () => {
+    await handedOver();
+    const soniox = fakeSoniox();
+    const attempt = (replies: Array<OpenRouterCallResult | null>, overrides: Partial<AutowriterDeps> = {}, wise = fakeWise({ details: [sessionDetail(RECORDING)] })) => {
+      const model = scriptedModel(replies);
+      return {
+        model,
+        run: () => processSession(firstDeps(wise.ops, soniox.client, { callModel: model.callModel as never, now: () => after(40), ...overrides }), webhook),
+      };
+    };
+    const writer = `writer:${AUTOWRITER_MODELS.writer.model}`;
+    const judge = `judge:${AUTOWRITER_MODELS.judge.model}`;
+
+    // 1. The writer times out: retried on the kept job (an infra failure never goes to the fallback writer).
+    const first = attempt([failedCall("timeout")]);
+    expect(await first.run()).toMatchObject({ result: "infra", detail: `${AUTOWRITER_MODELS.writer.arm}:timeout` });
+    expect(first.model.seen).toEqual([writer]);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+      state: "transcribing", evidence: "transcript", sonioxTranscriptionId: "job-1", metadata: { writerErrors: 1 },
+    });
+
+    // 2. The writer answers, its judge times out: a model failure on the transcript draft too.
+    const second = attempt([null, failedCall("timeout")]);
+    expect(await second.run()).toMatchObject({ result: "infra", detail: "judge:timeout" });
+    expect(second.model.seen).toEqual([writer, judge]);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "transcribing", metadata: { writerErrors: 2 } });
+
+    // 3. Wise cannot be read, and 4. the function runs out of time before a model call: neither is the models' failure.
+    expect(await attempt([], {}, fakeWise({ failReads: true })).run()).toMatchObject({ result: "infra", detail: "wise_read_failed" });
+    const outOfTime = attempt([], { deadlineMs: Date.now() + 60_000 });
+    expect(await outOfTime.run()).toMatchObject({ result: "infra", detail: "function_budget_exhausted" });
+    expect(outOfTime.model.seen).toEqual([]);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "transcribing", metadata: { writerErrors: 2 } });
+
+    // 5. The third model failure (a reply that is not JSON): the class is written from the summary instead of
+    // retried until the deadline. The job stays on the row for the review window, like any fallback's.
+    const third = attempt([failedCall("invalid_json_response")]);
+    expect(await third.run()).toMatchObject({ result: "summary_fallback", detail: "writer_failed" });
+    expect(soniox.created).toHaveLength(1);
+    expect(soniox.removed).toEqual([]);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+      state: "pending", evidence: "summary", reason: "summary_fallback:writer_failed", nextAttemptAt: null,
+      sonioxTranscriptionId: "job-1", arm: null, fields: null,
+      metadata: {
+        handover: "transcript_first", writerErrors: 3, writerFailure: `${AUTOWRITER_MODELS.writer.arm}:invalid_json_response`,
+        transcript: { speakerMethod: "zoom_alignment" }, summaryFallback: { cause: "writer_failed", at: after(40).toISOString() },
+      },
+    });
+
+    // Then the summary path writes and posts it, and never hands it back to the transcript (no loop).
+    const wise = fakeWise();
+    const { prompts, callModel } = promptRecorder();
+    expect(await processSession(firstDeps(wise.ops, soniox.client, { callModel: callModel as never, now: () => after(45) }), cron))
+      .toMatchObject({ result: "verified" });
+    expect(prompts[0]).toContain("Lesson summary:");
+    expect(prompts.join("\n")).not.toContain("Lesson transcript:");
+    expect(soniox.created).toHaveLength(1);
+    expect(wise.posts).toHaveLength(1);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+      state: "verified", evidence: "summary", metadata: { draftEvidence: "summary", summaryFallback: { cause: "writer_failed" } },
+    });
+  });
+
+  it("keeps retrying model failures on a class handed over for another reason: only transcript first falls back", async () => {
+    await handedOver({ reason: "thai_summary", metadata: { handover: "thai_summary" } });
+    const soniox = fakeSoniox();
+    for (let run = 1; run <= 4; run += 1) {
+      const model = scriptedModel([failedCall("timeout")]);
+      expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, {
+        callModel: model.callModel as never, now: () => after(40),
+      }), webhook), `run ${run}`).toMatchObject({ result: "infra", detail: `${AUTOWRITER_MODELS.writer.arm}:timeout` });
+    }
+    const row = await readSessionRow(db, SESSION_ID);
+    expect(row).toMatchObject({ state: "transcribing", evidence: "transcript", retryCount: 4 });
+    expect(row?.metadata).not.toHaveProperty("summaryFallback");
+    expect(row?.metadata).not.toHaveProperty("writerErrors");
+  });
+
   it("falls back when the transcript pass is switched off while the class waits; any other handed-over class is still held", async () => {
     // With a judged transcript draft kept for the POST slot: dropped with its verdict and stamp, the summary writes its own.
     await handedOver({
@@ -1580,12 +1672,12 @@ describe("transcript first (Postgres + fakes)", () => {
   it("an owner retry clears the fallback, so the class may go to the transcript again", async () => {
     await seedRow({
       state: "held", reason: "thai_summary_no_transcript",
-      metadata: { ...FELL_BACK, sonioxFailure: "soniox_error:x", alertKind: "held" },
+      metadata: { ...FELL_BACK, sonioxFailure: "soniox_error:x", writerErrors: 3, writerFailure: "sol:timeout", alertKind: "held" },
     });
     expect(await retryHeldSession(db, SESSION_ID, { minDeadline: NOW, actor: "k@x.com" })).toBe(true);
     const row = await readSessionRow(db, SESSION_ID);
     expect(row).toMatchObject({ state: "pending", evidence: "summary" });
-    for (const key of ["handover", "summaryAtHandover", "summaryFallback", "sonioxFailure", "alertKind"]) {
+    for (const key of ["handover", "summaryAtHandover", "summaryFallback", "sonioxFailure", "writerErrors", "writerFailure", "alertKind"]) {
       expect(row?.metadata).not.toHaveProperty(key);
     }
     expect(await processSession(firstDeps(fakeWise().ops, fakeSoniox().client, { now: () => after(45) }), cron))

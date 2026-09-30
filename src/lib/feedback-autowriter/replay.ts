@@ -5,6 +5,7 @@ import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similari
 import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
 import {
   AUTOWRITER_MAX_TRANSCRIBE_ERRORS,
+  AUTOWRITER_MAX_WRITER_ERRORS,
   AUTOWRITER_MODELS,
   AUTOWRITER_THAI_SUMMARY_SHARE,
   AUTOWRITER_TRANSCRIBE_POLL_MS,
@@ -14,7 +15,7 @@ import {
 } from "./config";
 import { JUDGE_JSON_SCHEMA, buildJudgeMessages, judgeProblems, parseJudgeOutput, type JudgeOutput } from "./judge";
 import { callOpenRouter, type OpenRouterCallResult } from "./openrouter";
-import { runWritingPipeline, type PipelineResult } from "./pipeline";
+import { FUNCTION_BUDGET_EXHAUSTED, runWritingPipeline, type PipelineResult } from "./pipeline";
 import { chooseStudentDisplayName, classDetailsBlock, describeClass, redactForModel } from "./prompt";
 import { AUTOWRITER_TEACHER_ALLOWLIST, AUTOWRITER_TUTORS, rosterTutor, type AutowriterTutor } from "./roster";
 import { mapWithConcurrency } from "./run";
@@ -155,6 +156,8 @@ export interface ReplayRecord {
 
 /** Budget the pipeline sees: generous, so every call gets its production time-out (writer 180 s, judge 120 s). */
 const REPLAY_BUDGET_MS = 15 * 60 * 1000;
+/** Between tries of a transcript draft whose writer or judge failed (production waits 10 minutes; the replay cannot). */
+const REPLAY_WRITER_RETRY_PAUSE_MS = 30_000;
 
 function message(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 200);
@@ -370,6 +373,7 @@ export async function replayClass(deps: ReplayDeps, sample: ReplaySample): Promi
 }
 
 async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: ReplayRecord): Promise<void> {
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   let detail: AutowriterSessionDetail;
   try {
     detail = parseAutowriterSessionDetail(await deps.wise.getSessionDetailById(sample.wiseSessionId));
@@ -449,7 +453,7 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
         fallback = "speakers_unclear";
       } else {
         const writerContents: string[] = [];
-        const result = await runWritingPipeline({
+        const write = () => runWritingPipeline({
           apiKey: deps.apiKey,
           session: { ...session, summary: { text: evidence.rendered, meetingUUIDs: [] }, evidence: "transcript", speakerLabels: evidence.speakerLabels },
           tutorNames: tutor.tutorNames,
@@ -458,8 +462,17 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
           remainingMs: () => REPLAY_BUDGET_MS,
           callModel: recordingCaller(deps, record, "transcript_draft", { mediumShadow: true, writerContents }),
         });
+        // Production retries the models' failures on a transcript draft and, after the third in a row, writes the
+        // class from the summary (`writer_failed`); the replay retries after a short pause instead of 10 minutes.
+        const modelFailed = (result: PipelineResult) => result.kind === "infra" && result.error !== FUNCTION_BUDGET_EXHAUSTED;
+        let result = await write();
+        for (let failures = 1; modelFailed(result) && failures < AUTOWRITER_MAX_WRITER_ERRORS; failures += 1) {
+          await sleep(REPLAY_WRITER_RETRY_PAUSE_MS);
+          result = await write();
+        }
         record.transcriptDraft = draftOf(result, record, "transcript_draft", writerContents, displayName);
-        record.outcome = record.transcriptDraft.outcome;
+        if (modelFailed(result)) fallback = "writer_failed";
+        else record.outcome = record.transcriptDraft.outcome;
       }
       // The draft actually posted for this class, judged against what was said — only on a transcript production
       // would write from (a short one, or one without clear speakers, could flag a sound draft).
@@ -686,6 +699,17 @@ export interface ReplaySummary {
     p90TurnaroundSeconds: number | null;
     undeletedJobs: string[];
   };
+  /** Writer calls per draft and model: latency of the answered calls, and each failure (error codes only). */
+  writers: Array<{
+    purpose: ReplayCall["purpose"];
+    model: string;
+    calls: number;
+    errors: number;
+    p50LatencyMs: number | null;
+    p90LatencyMs: number | null;
+    costUsd: number;
+    failures: Array<{ error: string; count: number }>;
+  }>;
   modelCostUsd: number;
   posted: {
     judged: number;
@@ -778,6 +802,21 @@ export function summarizeReplay(records: readonly ReplayRecord[]): ReplaySummary
       p90TurnaroundSeconds: percentile(turnarounds, 90),
       undeletedJobs: records.flatMap((record) => record.soniox?.undeletedJobs ?? []),
     },
+    writers: [...new Set(calls.filter((call) => call.role === "writer").map((call) => `${call.purpose} ${call.model}`))].map((key) => {
+      const [purpose, model] = key.split(" ") as [ReplayCall["purpose"], string];
+      const made = calls.filter((call) => call.role === "writer" && call.purpose === purpose && call.model === model);
+      const answered = made.filter((call) => call.ok);
+      return {
+        purpose,
+        model,
+        calls: made.length,
+        errors: made.length - answered.length,
+        p50LatencyMs: percentile(answered.map((call) => call.latencyMs), 50),
+        p90LatencyMs: percentile(answered.map((call) => call.latencyMs), 90),
+        costUsd: sum(made.map((call) => call.costUsd)),
+        failures: tally(made.flatMap((call) => call.ok ? [] : [call.error ?? "unknown"])).map(([error, count]) => ({ error, count })),
+      };
+    }),
     modelCostUsd: sum(calls.map((call) => call.costUsd)),
     posted: {
       judged: posted.filter((entry) => !(entry.error?.startsWith("transcript_not_usable") ?? false)).length,
@@ -849,6 +888,15 @@ export function renderReplayMarkdown(input: { summary: ReplaySummary; records: r
     "",
     `Pairs: ${summary.judge.pairs}; same verdict ${summary.judge.agree}; unfaithful at high only ${summary.judge.onlyHighUnfaithful}; ` +
       `unfaithful at medium only ${summary.judge.onlyMediumUnfaithful}. (High covers every judge call: transcript, summary and posted drafts.)`,
+    "",
+    "## Writers",
+    "",
+    "| Draft | Model | Calls | Failed | p50 latency | p90 latency | Cost | Failures |",
+    "|---|---|---:|---:|---:|---:|---:|---|",
+    ...summary.writers.map((writer) => `| ${writer.purpose} | ${writer.model} | ${writer.calls} | ${writer.errors} | ` +
+      `${fmt(writer.p50LatencyMs === null ? null : writer.p50LatencyMs / 1000, 1, " s")} | ` +
+      `${fmt(writer.p90LatencyMs === null ? null : writer.p90LatencyMs / 1000, 1, " s")} | $${writer.costUsd.toFixed(4)} | ` +
+      `${writer.failures.map((failure) => `${failure.error.replaceAll("|", "/")} ×${failure.count}`).join(", ") || "—"} |`),
     "",
     "## Posted drafts judged against the transcript (v4, high)",
     "",

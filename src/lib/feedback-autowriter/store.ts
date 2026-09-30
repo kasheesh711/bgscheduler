@@ -551,9 +551,9 @@ export async function retryHeldSession(db: Database, wiseSessionId: string, inpu
     // A clean slate: no stale alert, error count, coverage recheck, judged draft (nor its stamp), review window or
     // handover — a transcript-first fallback included, so the class may go to the transcript again (a kept Soniox
     // job, and its submit time, may be re-used).
-    metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'genericErrors' - 'recordingShortSeenAt' - 'judge' - 'draftEvidence'
-      - 'pipeline' - 'transcript' - 'handover' - 'summaryAtHandover' - 'summaryFallback' - 'sonioxFailure' - 'sonioxRetainUntil'
-      - 'triagedAt')
+    metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'genericErrors' - 'writerErrors' - 'recordingShortSeenAt' - 'judge'
+      - 'draftEvidence' - 'pipeline' - 'transcript' - 'handover' - 'summaryAtHandover' - 'summaryFallback' - 'sonioxFailure'
+      - 'writerFailure' - 'sonioxRetainUntil' - 'triagedAt')
       || ${JSON.stringify({ retriedBy: input.actor })}::jsonb
       || jsonb_build_object('retriedAt', now()::text, 'retriedFrom', ${S.state}::text)`,
     alertsSent: sql`${S.alertsSent} - 'held' - 'expired'`,

@@ -2,7 +2,7 @@ import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { wiseSessionLink } from "@/lib/wise/links";
-import { AUTOWRITER_MAX_TRANSCRIBE_ERRORS, AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS } from "./config";
+import { AUTOWRITER_MAX_TRANSCRIBE_ERRORS, AUTOWRITER_MAX_WRITER_ERRORS, AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS } from "./config";
 import { judgeProblems } from "./judge";
 import { AUTOWRITER_TUTORS, rosterTutor, tutorLabel } from "./roster";
 import { readControl, type AutowriterSessionRow } from "./store";
@@ -88,6 +88,7 @@ export const SUMMARY_FALLBACK_LABELS: Record<SummaryFallbackCause, string> = {
   speakers_unclear: "Speakers unclear — from summary",
   soniox_failed: `Transcription failed ${AUTOWRITER_MAX_TRANSCRIBE_ERRORS} times — from summary`,
   transcript_pass_off: "Transcript pass switched off — from summary",
+  writer_failed: `Writer or judge failed ${AUTOWRITER_MAX_WRITER_ERRORS} times on the transcript — from summary`,
 };
 
 function fallbackLabel(cause: string): string {

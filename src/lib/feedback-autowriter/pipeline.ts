@@ -77,6 +77,9 @@ export function isInfraFailure(call: Extract<OpenRouterCallResult, { ok: false }
 /** The judge gets one immediate second try per draft before the session is retried later. */
 const JUDGE_ATTEMPTS = 2;
 
+/** The infra error for our own function running out of time before a model call: not a failure of the models. */
+export const FUNCTION_BUDGET_EXHAUSTED = "function_budget_exhausted";
+
 /** Pinned routes must be served exactly as pinned; anything else is an infra failure. */
 export function routeMismatch(config: AutowriterModelConfig, call: OpenRouterCallResult): string | null {
   if (!config.expectProvider && !config.expectModel) return null;
@@ -145,7 +148,7 @@ export async function runWritingPipeline(input: {
       speakerLabels: session.speakerLabels,
       otherPeople,
     }), 180_000);
-    if (written.kind === "budget") return { kind: "infra", error: "function_budget_exhausted" };
+    if (written.kind === "budget") return { kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED };
     const writeCall = written.call;
     const recordWriter = (result: Record<string, unknown>) => input.record({
       wiseSessionId: session.wiseSessionId, role: "writer", arm: writer.arm, requestedModel: writer.model,
@@ -202,7 +205,7 @@ export async function runWritingPipeline(input: {
           homework: parsed.output.homework,
         },
       }), 120_000);
-      if (judged.kind === "budget") return { kind: "infra", error: "function_budget_exhausted" };
+      if (judged.kind === "budget") return { kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED };
       const judgeCall = judged.call;
       const recordJudge = (result: Record<string, unknown>) => input.record({
         wiseSessionId: session.wiseSessionId, role: "judge", arm: judgeConfig.arm, requestedModel: judgeConfig.model,

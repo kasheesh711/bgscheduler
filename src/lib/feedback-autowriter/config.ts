@@ -205,6 +205,13 @@ export const AUTOWRITER_NO_RECORDING_ALERT_MS = 3 * 60 * 60 * 1000;
  * `RecordingCompletedEvent` − scheduled end, 16–29 Sep, 453 classes): median 34 min, p95 71 min, 1 class over 3 h.
  */
 export const AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS = 3 * 60 * 60 * 1000;
+/**
+ * Transcript first: failures in a row of the models writing a class's transcript draft — the writer or its judge
+ * (a time-out, a reply that is not JSON, an unusable route) — before the class is written from the summary instead
+ * (`summaryFallback`, cause `writer_failed`; owner default, 30 Sep) rather than retried every 10 min until its
+ * deadline. Wise and Soniox errors are counted apart.
+ */
+export const AUTOWRITER_MAX_WRITER_ERRORS = 3;
 /** Soniox jobs no row references are deleted once they are this old (orphans). */
 export const AUTOWRITER_SONIOX_REAPER_AGE_MS = 2 * 60 * 60 * 1000;
 /** Soniox deletes per sweep (each bounded by a 15 s time-out). */

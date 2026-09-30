@@ -12,6 +12,7 @@ import {
   AUTOWRITER_GENERATION_LEASE_MS,
   AUTOWRITER_MAX_GENERIC_ERRORS,
   AUTOWRITER_MAX_TRANSCRIBE_ERRORS,
+  AUTOWRITER_MAX_WRITER_ERRORS,
   AUTOWRITER_MIN_POST_BUDGET_MS,
   AUTOWRITER_NO_RECORDING_ALERT_MS,
   AUTOWRITER_NO_SUMMARY_ALERT_MS,
@@ -35,7 +36,7 @@ import {
   AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS,
 } from "./config";
 import { JUDGE_PROMPT_VERSION, JudgeOutputSchema, judgeProblems, type JudgeOutput } from "./judge";
-import { runWritingPipeline, type PipelineResult } from "./pipeline";
+import { FUNCTION_BUDGET_EXHAUSTED, runWritingPipeline, type PipelineResult } from "./pipeline";
 import { PROMPT_VERSION, chooseStudentDisplayName, describeClass, type EvidenceKind } from "./prompt";
 import { AUTOWRITER_ROSTER, AUTOWRITER_TEACHER_ALLOWLIST, rosterAccountIds, rosterTutor, type AutowriterTutor } from "./roster";
 import { loadCandidateShortlist, loadFieldMappings, loadPriorFeedback } from "./run";
@@ -329,8 +330,8 @@ function mayFallBackToSummary(row: AutowriterSessionRow): boolean {
 
 /**
  * Transcript first: the transcript cannot carry this class (no recording in time, a recording in several parts,
- * speakers that cannot be told apart, Soniox failing three times, the pass switched off), so it goes back to Wise's
- * summary: `pending`, `evidence = summary`, due now, `metadata.summaryFallback {cause, at}`. Once only — a class that
+ * speakers that cannot be told apart, Soniox failing three times, the pass switched off, the writer or its judge
+ * failing three times in a row on the transcript draft), so it goes back to Wise's summary: `pending`, `evidence = summary`, due now, `metadata.summaryFallback {cause, at}`. Once only — a class that
  * fell back never hands over again (`mayHandOver` in processLeased) until an owner retry clears the flags. Any Soniox
  * job stays on the row; the sweep treats the class as done with it (review window, then deletion). A transcript
  * draft kept on the row (a recording that gained a second part, the pass switched off) is dropped with its verdict
@@ -749,8 +750,9 @@ function reusableTranscriptDraft(row: AutowriterSessionRow): StoredDraft | null 
  * nothing references).
  * Transcript first (`handover = transcript_first`): what the transcript cannot
  * carry — no recording by the fallback time, a recording in several parts,
- * speakers it cannot tell apart, three Soniox failures, the pass switched off —
- * goes back to the summary once (`fallBackToSummary`). A recording or transcript
+ * speakers it cannot tell apart, three Soniox failures, the pass switched off,
+ * three model failures in a row on the transcript draft — goes back to the
+ * summary once (`fallBackToSummary`). A recording or transcript
  * too short for the class, and a draft the validator or judge rejects, stay holds:
  * the better evidence could not support a draft.
  */
@@ -1018,10 +1020,21 @@ async function processTranscript(deps: AutowriterDeps, input: {
     callModel: deps.callModel,
   });
   if (result.kind === "infra") {
+    // Transcript first (owner default, 30 Sep): the writer or its judge failing on the transcript draft (a time-out,
+    // a reply that is not JSON, an unusable route) is retried, but the third failure in a row writes the class from
+    // the summary instead of retrying until the deadline. Wise and Soniox errors count apart (above), and our own
+    // function running out of time is not the models' failure.
+    const modelFailed = canFallBack && result.error !== FUNCTION_BUDGET_EXHAUSTED;
+    const writerErrors = (Number((row.metadata as { writerErrors?: unknown }).writerErrors ?? 0) || 0) + 1;
+    if (modelFailed && writerErrors >= AUTOWRITER_MAX_WRITER_ERRORS) {
+      return fallBackToSummary({
+        release, out, cause: "writer_failed", now, metadata: { transcript: transcriptMeta, writerErrors, writerFailure: result.error },
+      });
+    }
     // The job is kept: the next attempt re-fetches the same transcript.
     await release({
       state: "transcribing", reason: `infra:${result.error}`, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true,
-      sonioxTranscriptionId: jobId, metadata: { transcript: transcriptMeta },
+      sonioxTranscriptionId: jobId, metadata: { transcript: transcriptMeta, ...(modelFailed ? { writerErrors } : {}) },
     });
     return out("infra", result.error);
   }

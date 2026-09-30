@@ -115,12 +115,17 @@ function readOnlyWise(detail: ReturnType<typeof sessionDetail>) {
 
 type ModelRequest = { model: string; schemaName: string; effort: string; messages: Array<{ role: string; content: string }> };
 
-function fakeModel(options: { judge?: (request: ModelRequest) => string; writerThrows?: boolean } = {}) {
+function fakeModel(options: { judge?: (request: ModelRequest) => string; writerThrows?: boolean; writerFailures?: number } = {}) {
   const requests: ModelRequest[] = [];
+  let writerFailures = options.writerFailures ?? 0;
   const callModel = vi.fn(async (request: ModelRequest) => {
     requests.push(request);
     if (request.schemaName === "post_class_feedback") {
       if (options.writerThrows) throw new Error("socket hang up");
+      if (writerFailures > 0) {
+        writerFailures -= 1;
+        return { ok: false, error: "timeout", httpStatus: null, model: null, provider: null, finishReason: null, usage: null, latencyMs: 180_000 } as OpenRouterCallResult;
+      }
       return reply(request, WRITER_JSON, 60_000);
     }
     return reply(request, options.judge ? options.judge(request) : PASSING, request.effort === "medium" ? 20_000 : 45_000);
@@ -271,6 +276,30 @@ describe("replay: the same evidence and decisions as production", () => {
     }
   });
 
+  it("retries a transcript draft whose writer failed, and falls back after the third failure in a row like production", async () => {
+    const pauses: number[] = [];
+    const cases: Array<[number, string, string | null, number]> = [
+      // Writer failures on the transcript draft, the record's outcome, then what the summary path gives, writer calls.
+      [2, "draft", null, 3 + 1],
+      [3, "fallback:writer_failed", "draft", 3 + 1],
+    ];
+    for (const [failures, outcome, afterFallback, writerCalls] of cases) {
+      const soniox = fakeSoniox();
+      const model = fakeModel({ writerFailures: failures });
+      pauses.length = 0;
+      const record = await replayClass(replayDeps({
+        wise: readOnlyWise(sessionDetail(RECORDING)).wise, soniox: soniox.client, callModel: model.callModel as never,
+        sleep: async (ms) => { pauses.push(ms); },
+      }), SAMPLE);
+      expect(record.outcome, outcome).toBe(outcome);
+      expect(record.afterFallback, outcome).toBe(afterFallback);
+      // An infra failure never goes to the fallback writer: one writer call per try, then the summary draft's.
+      expect(model.requests.filter((request) => request.schemaName === "post_class_feedback"), outcome).toHaveLength(writerCalls);
+      expect(pauses.filter((ms) => ms === 30_000), outcome).toHaveLength(Math.min(failures, 2));
+      expect(soniox.removed, outcome).toEqual(["job-1"]);
+    }
+  });
+
   it("holds a recording or transcript too short for the class, and skips a class that would not have passed the gates", async () => {
     const short = { ...RECORDING, rawRecordings: [{ ...RECORDING.rawRecordings[0], duration: 1_200 }] };
     const absent = sessionDetail({
@@ -363,10 +392,16 @@ describe("replay summary", () => {
       },
     });
     expect(summary.fallbackRate).toBeCloseTo(1 / 3, 6);
+    // Writer latency and failures per draft and model (the fourth class never reached a writer).
+    expect(summary.writers).toMatchObject([
+      { purpose: "transcript_draft", model: AUTOWRITER_MODELS.writer.model, calls: 2, errors: 0, p50LatencyMs: 60_000, p90LatencyMs: 60_000, failures: [] },
+      { purpose: "summary_draft", model: AUTOWRITER_MODELS.writer.model, calls: 3, errors: 0, failures: [] },
+    ]);
 
     const markdown = renderReplayMarkdown({ summary, records, commit: "local:abc", generatedAt: new Date("2026-09-30T05:00:00.000Z") });
     expect(markdown).toContain("| fallback | 1 |");
     expect(markdown).toContain("acceptance ≤ 20%: **NO**");
+    expect(markdown).toContain(`| transcript_draft | ${AUTOWRITER_MODELS.writer.model} | 2 | 0 | 60.0 s | 60.0 s |`);
     for (const text of [GOOD_FIELDS.topics, GOOD_FIELDS.performance.slice(0, 40), "Tom", "Somchai", "three quarters"]) {
       expect(markdown).not.toContain(text);
     }
