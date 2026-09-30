@@ -371,12 +371,13 @@ export async function runWritingPipeline(input: {
       else if ("verdict" in level.value) levels[AUTOWRITER_JUDGE_EFFORTS[index]] = level.value.verdict;
     }
     if (stopped) return stopped;
-    // Fail closed: a draft passes only on a complete verdict from every level. A level that left off gave none — it
-    // left off because another level had rejected the draft (had that one stopped, the stop was returned above).
-    const given = AUTOWRITER_JUDGE_EFFORTS.flatMap((effort) => levels[effort] ?? []);
-    const verdict = given.length === AUTOWRITER_JUDGE_EFFORTS.length ? combineJudgeVerdicts(levels as Record<JudgeEffort, JudgeOutput>) : null;
+    // Fail closed: a draft passes only on a verdict from every level (no cast: a level without one cannot be combined).
+    // A level that left off gave none — it left off because another level had rejected the draft (had that one
+    // stopped, the stop was returned above) — so the draft is rejected on the verdicts given.
+    const { medium, high } = levels;
+    const verdict = medium && high ? combineJudgeVerdicts({ medium, high }) : null;
     if (!verdict?.faithful) {
-      const problems = verdict ? judgeProblems(verdict) : [...new Set(given.flatMap(judgeProblems))];
+      const problems = verdict ? judgeProblems(verdict) : [...new Set([medium, high].flatMap((given) => given ? judgeProblems(given) : []))];
       reasons.push(`${writer.arm}:unfaithful:${problems.slice(0, 3).join(" | ").slice(0, 300)}`);
       continue;
     }
