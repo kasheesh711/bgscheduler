@@ -1,17 +1,27 @@
+import { and, between, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
+import * as schema from "@/lib/db/schema";
+import { isOnsiteSkip } from "./dashboard";
 import { HOLD_REASON_CATEGORIES, holdReasonCategory, type HoldReasonCategory } from "./hold-reasons";
 import {
   GATE_WINDOW_DAYS,
   addDays,
   bangkokDateKey,
+  bangkokDayBounds,
   isAccurate,
   isRequiredReview,
   wilsonLowerBound,
   type InclusionReason,
   type VerdictLike,
 } from "./quality";
+import { rosterAccountIds } from "./roster";
 import type { AutowriterState } from "./store";
 import type { ModelArm } from "./types";
+
+const S = schema.feedbackAutowriterSessions;
+const R = schema.feedbackAutowriterReviews;
+const V = schema.feedbackAutowriterVerdicts;
+const M = schema.feedbackAutowriterDailyMetrics;
 
 /**
  * Daily trend series of the autowriter dashboard (redesign, section 4.2): accuracy and the gate, coverage, speed and
@@ -317,13 +327,76 @@ export function buildAutowriterTrends(input: TrendSourceRows): AutowriterTrends 
 /**
  * Read-only loader for the page and `GET /api/feedback-autowriter/trends`. Coverage comes from the stored daily
  * metrics; accuracy is recomputed from the review rows and their current verdicts (the review job recomputes only the
- * last 15 dates, so an older stored row does not show a verdict recorded since).
+ * last 15 dates, so an older stored row does not show a verdict recorded since). Every query is bounded to the range
+ * and its look-back. `tutorKey` is `ALL_TUTORS` or a roster tutor's key: their classes are those of all their Wise
+ * accounts, and a key the roster does not know has none.
  */
 export async function loadAutowriterTrends(
   db: Database,
   input: { days: TrendRangeDays; tutorKey: string; now?: Date },
 ): Promise<AutowriterTrends> {
-  void db;
-  void input;
-  throw new Error("not implemented");
+  const now = input.now ?? new Date();
+  const last = bangkokDateKey(now);
+  const first = addDays(last, -(input.days - 1) - TREND_LOOKBACK_DAYS);
+  const from = bangkokDayBounds(first).start;
+  const to = bangkokDayBounds(last).end;
+  const allTutors = input.tutorKey === ALL_TUTORS;
+  const accounts = allTutors ? [] : rosterAccountIds(input.tutorKey);
+
+  const [metrics, reviews, classes] = await Promise.all([
+    db.select({ date: M.metricDate, posted: M.posted, eligible: M.eligible }).from(M)
+      .where(and(eq(M.tutorKey, input.tutorKey), between(M.metricDate, first, last))),
+    // The reviews as the gate reads them (`loadGateFacts`): each with its current verdict, in-person classes left out.
+    db.select({
+      date: R.bangkokDate,
+      inclusionReason: R.inclusionReason,
+      verdict: V.verdict,
+      severity: V.severity,
+      state: S.state,
+      reason: S.reason,
+    }).from(R)
+      .leftJoin(V, eq(V.id, R.currentVerdictId))
+      .leftJoin(S, eq(S.wiseSessionId, R.wiseSessionId))
+      .where(and(between(R.bangkokDate, first, last), allTutors ? undefined : eq(R.tutorKey, input.tutorKey))),
+    allTutors || accounts.length > 0
+      ? db.select({
+        scheduledEndAt: S.scheduledEndAt,
+        postStartedAt: S.postStartedAt,
+        state: S.state,
+        reason: S.reason,
+        arm: S.arm,
+        evidence: S.evidence,
+        // Every call of the class, whenever it ran: cost is dated by the class.
+        costUsd: sql<string | null>`(select sum(c.cost_usd) from feedback_autowriter_calls c
+          where c.wise_session_id = feedback_autowriter_sessions.wise_session_id)`,
+      }).from(S)
+        .where(and(gte(S.scheduledEndAt, from), lt(S.scheduledEndAt, to), allTutors ? undefined : inArray(S.wiseTeacherUserId, accounts)))
+      : [],
+  ]);
+
+  return buildAutowriterTrends({
+    now,
+    days: input.days,
+    tutorKey: input.tutorKey,
+    metrics,
+    reviews: reviews
+      .filter((row) => !(row.state !== null && isOnsiteSkip({ state: row.state, reason: row.reason })))
+      .map((row) => ({
+        date: row.date,
+        inclusionReason: row.inclusionReason,
+        verdict: row.verdict ? { verdict: row.verdict, severity: row.severity } : null,
+      })),
+    classes: classes.flatMap((row) => {
+      if (!row.scheduledEndAt || isOnsiteSkip(row)) return [];
+      return [{
+        date: bangkokDateKey(row.scheduledEndAt),
+        state: row.state,
+        reason: row.reason,
+        arm: row.arm,
+        evidence: row.evidence,
+        minutesToPost: row.postStartedAt ? (row.postStartedAt.getTime() - row.scheduledEndAt.getTime()) / 60_000 : null,
+        costUsd: Number(row.costUsd ?? 0) || 0,
+      }];
+    }),
+  });
 }
