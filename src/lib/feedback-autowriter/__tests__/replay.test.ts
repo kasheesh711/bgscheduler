@@ -300,6 +300,26 @@ describe("replay: the same evidence and decisions as production", () => {
     }
   });
 
+  it("keeps only the last try's verdicts for a transcript draft that was tried again", async () => {
+    let transcriptJudgeCalls = 0;
+    const timedOut = { ok: false, error: "timeout", httpStatus: null, model: null, provider: null, finishReason: null, usage: null, latencyMs: 120_000 } as OpenRouterCallResult;
+    const callModel = vi.fn(async (request: ModelRequest) => {
+      if (request.schemaName === "post_class_feedback") return reply(request, WRITER_JSON);
+      if (!request.messages[1].content.includes("Lesson transcript:")) return reply(request, PASSING);
+      transcriptJudgeCalls += 1;
+      // Try 1: the high judge times out and its medium re-run flags the draft; tries 2 and 3: both time out.
+      return transcriptJudgeCalls === 2 ? reply(request, UNFAITHFUL) : timedOut;
+    });
+    const record = await replayClass(
+      replayDeps({ wise: readOnlyWise(sessionDetail(RECORDING)).wise, soniox: fakeSoniox().client, callModel: callModel as never }),
+      SAMPLE,
+    );
+    expect(transcriptJudgeCalls).toBe(6);
+    expect(record.outcome).toBe("fallback:writer_failed");
+    expect(record.transcriptDraft).toMatchObject({ outcome: "error:judge:timeout", judgeHigh: null, judgeMedium: null });
+    expect(summarizeReplay([record]).judge.pairs).toBe(0);
+  });
+
   it("holds a recording or transcript too short for the class, and skips a class that would not have passed the gates", async () => {
     const short = { ...RECORDING, rawRecordings: [{ ...RECORDING.rawRecordings[0], duration: 1_200 }] };
     const absent = sessionDetail({

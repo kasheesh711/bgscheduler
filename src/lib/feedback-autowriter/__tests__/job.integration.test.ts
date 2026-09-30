@@ -1485,8 +1485,8 @@ describe("transcript first (Postgres + fakes)", () => {
   });
 
   /** A model call that failed as a service (time-out, a reply that is not JSON): the pipeline's infra failures. */
-  const failedCall = (error: string): OpenRouterCallResult => ({
-    ok: false, error, httpStatus: null, model: null, provider: null, finishReason: null, usage: null, latencyMs: 5,
+  const failedCall = (error: string, httpStatus: number | null = null): OpenRouterCallResult => ({
+    ok: false, error, httpStatus, model: null, provider: null, finishReason: null, usage: null, latencyMs: 5,
   });
   /** Model replies in call order; `null` is a good one (a draft for a writer, a passing verdict for the judge). */
   const scriptedModel = (replies: Array<OpenRouterCallResult | null>) => {
@@ -1498,7 +1498,7 @@ describe("transcript first (Postgres + fakes)", () => {
     return { callModel, seen };
   };
 
-  it("falls back after the third model failure in a row on the transcript draft (writer or judge); Wise errors and its own time budget do not count", async () => {
+  it("falls back after the third model failure in a row on the transcript draft (writer or judge); Wise errors, our account and our time do not count", async () => {
     await handedOver();
     const soniox = fakeSoniox();
     const attempt = (replies: Array<OpenRouterCallResult | null>, overrides: Partial<AutowriterDeps> = {}, wise = fakeWise({ details: [sessionDetail(RECORDING)] })) => {
@@ -1525,14 +1525,17 @@ describe("transcript first (Postgres + fakes)", () => {
     expect(second.model.seen).toEqual([writer, judge]);
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "transcribing", metadata: { writerErrors: 2 } });
 
-    // 3. Wise cannot be read, and 4. the function runs out of time before a model call: neither is the models' failure.
+    // 3. Wise cannot be read, 4. the function runs out of time before a model call, and 5. OpenRouter says our
+    // credit ran out: none of them is the models' failure.
     expect(await attempt([], {}, fakeWise({ failReads: true })).run()).toMatchObject({ result: "infra", detail: "wise_read_failed" });
     const outOfTime = attempt([], { deadlineMs: Date.now() + 60_000 });
     expect(await outOfTime.run()).toMatchObject({ result: "infra", detail: "function_budget_exhausted" });
     expect(outOfTime.model.seen).toEqual([]);
+    expect(await attempt([failedCall("Insufficient credits", 402)]).run())
+      .toMatchObject({ result: "infra", detail: `${AUTOWRITER_MODELS.writer.arm}:Insufficient credits` });
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "transcribing", metadata: { writerErrors: 2 } });
 
-    // 5. The third model failure (a reply that is not JSON): the class is written from the summary instead of
+    // 6. The third model failure (a reply that is not JSON): the class is written from the summary instead of
     // retried until the deadline. The job stays on the row for the review window, like any fallback's.
     const third = attempt([failedCall("invalid_json_response")]);
     expect(await third.run()).toMatchObject({ result: "summary_fallback", detail: "writer_failed" });
@@ -1558,6 +1561,16 @@ describe("transcript first (Postgres + fakes)", () => {
     expect(wise.posts).toHaveLength(1);
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
       state: "verified", evidence: "summary", metadata: { draftEvidence: "summary", summaryFallback: { cause: "writer_failed" } },
+    });
+  });
+
+  it("starts a new count once the models deliver a transcript draft", async () => {
+    await updateControl(db, { mode: "shadow" }, "t@x.com");
+    await handedOver({ metadata: { ...HANDED_OVER, writerErrors: 2 } });
+    expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fakeSoniox().client, { now: () => after(40) }), webhook))
+      .toMatchObject({ result: "would_submit" });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+      state: "would_submit", evidence: "transcript", metadata: { draftEvidence: "transcript", writerErrors: 0 },
     });
   });
 

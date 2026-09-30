@@ -85,6 +85,8 @@ describe("validateFeedbackDraft", () => {
       ["heading", `## Next steps\n${goodOutput.improvement}`],
       ["bold with underscores", `${goodOutput.improvement} Practise __common denominators__ daily.`],
       ["bold with asterisks", `${goodOutput.improvement} Practise **common denominators** daily.`],
+      ["bold italic with underscores", `${goodOutput.improvement} Practise ___common denominators___ daily.`],
+      ["bold over a line break", `${goodOutput.improvement} Practise __common\ndenominators__ daily.`],
     ]) {
       const marked = check({ ...goodOutput, improvement });
       expect(marked.ok, label).toBe(false);

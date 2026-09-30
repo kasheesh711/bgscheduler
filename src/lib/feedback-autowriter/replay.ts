@@ -15,7 +15,7 @@ import {
 } from "./config";
 import { JUDGE_JSON_SCHEMA, buildJudgeMessages, judgeProblems, parseJudgeOutput, type JudgeOutput } from "./judge";
 import { callOpenRouter, type OpenRouterCallResult } from "./openrouter";
-import { FUNCTION_BUDGET_EXHAUSTED, runWritingPipeline, type PipelineResult } from "./pipeline";
+import { runWritingPipeline, type PipelineResult } from "./pipeline";
 import { chooseStudentDisplayName, classDetailsBlock, describeClass, redactForModel } from "./prompt";
 import { AUTOWRITER_TEACHER_ALLOWLIST, AUTOWRITER_TUTORS, rosterTutor, type AutowriterTutor } from "./roster";
 import { mapWithConcurrency } from "./run";
@@ -464,13 +464,17 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
         });
         // Production retries the models' failures on a transcript draft and, after the third in a row, writes the
         // class from the summary (`writer_failed`); the replay retries after a short pause instead of 10 minutes.
-        const modelFailed = (result: PipelineResult) => result.kind === "infra" && result.error !== FUNCTION_BUDGET_EXHAUSTED;
+        const modelFailed = (result: PipelineResult) => result.kind === "infra" && result.modelFailure;
+        let tryFrom = record.calls.length;
         let result = await write();
         for (let failures = 1; modelFailed(result) && failures < AUTOWRITER_MAX_WRITER_ERRORS; failures += 1) {
           await sleep(REPLAY_WRITER_RETRY_PAUSE_MS);
+          // The draft, its verdicts and its writer are the last try's.
+          tryFrom = record.calls.length;
+          writerContents.length = 0;
           result = await write();
         }
-        record.transcriptDraft = draftOf(result, record, "transcript_draft", writerContents, displayName);
+        record.transcriptDraft = draftOf(result, { ...record, calls: record.calls.slice(tryFrom) }, "transcript_draft", writerContents, displayName);
         if (modelFailed(result)) fallback = "writer_failed";
         else record.outcome = record.transcriptDraft.outcome;
       }
@@ -802,8 +806,8 @@ export function summarizeReplay(records: readonly ReplayRecord[]): ReplaySummary
       p90TurnaroundSeconds: percentile(turnarounds, 90),
       undeletedJobs: records.flatMap((record) => record.soniox?.undeletedJobs ?? []),
     },
-    writers: [...new Set(calls.filter((call) => call.role === "writer").map((call) => `${call.purpose} ${call.model}`))].map((key) => {
-      const [purpose, model] = key.split(" ") as [ReplayCall["purpose"], string];
+    writers: [...new Map(calls.filter((call) => call.role === "writer")
+      .map((call) => [`${call.purpose}|${call.model}`, { purpose: call.purpose, model: call.model }])).values()].map(({ purpose, model }) => {
       const made = calls.filter((call) => call.role === "writer" && call.purpose === purpose && call.model === model);
       const answered = made.filter((call) => call.ok);
       return {
