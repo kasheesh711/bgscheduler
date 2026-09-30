@@ -442,8 +442,9 @@ export async function noteSonioxRecorded(db: Database, wiseSessionId: string, tr
  * recording waiting for its 30-min length recheck (held with its own alert
  * next), a transcript waiting briefly for Zoom's names (it goes ahead on its
  * own), or an infra retry (the recording may well be there) — including a failed
- * Wise read, which since v4 also sends an older version's transcript draft back
- * to wait here while it is written again. Nor for a transcript-first class still
+ * Wise read, which since v4 also sends an older version's transcript draft (since
+ * v5 also one judged at a single level) back to wait here while it is written
+ * again. Nor for a transcript-first class still
  * waiting for its recording: it falls back to the summary at the same point
  * instead. One already being transcribed has no such fallback, so it alerts.
  */
@@ -511,14 +512,17 @@ export async function expireOverdueRows(db: Database, input: {
 
 /** Shadow drafts become eligible again when the owner switches to live. */
 export async function requeueShadowDrafts(db: Database, minDeadline: Date): Promise<number> {
-  // Back to work. A judged transcript draft of the current prompt and judge versions is posted as it is, never
-  // re-read: its transcript's review window keeps running, as does a class that fell back to the summary (it never
-  // reads its transcript again). Any other draft may transcribe again (an older version's is written and judged
-  // again: `reusableTranscriptDraft` in job.ts), so its window starts again when it is next done.
+  // Back to work. A judged transcript draft of the current prompt and judge versions that both judge levels passed
+  // (v5) is posted as it is, never re-read: its transcript's review window keeps running, as does a class that fell
+  // back to the summary (it never reads its transcript again). Any other draft may transcribe again (an older
+  // version's, or one judged at a single level, is written and judged again: `reusableTranscriptDraft` in job.ts),
+  // so its window starts again when it is next done. The levels are `AUTOWRITER_JUDGE_EFFORTS` (judge.ts schema).
   const rows = await db.update(S).set({
     state: "pending",
     nextAttemptAt: null,
     metadata: sql`case when (${S.metadata} ->> 'draftEvidence' = 'transcript' and ${S.metadata} -> 'judge' ->> 'faithful' = 'true'
+        and ${S.metadata} -> 'judge' -> 'levels' -> 'medium' ->> 'faithful' = 'true'
+        and ${S.metadata} -> 'judge' -> 'levels' -> 'high' ->> 'faithful' = 'true'
         and ${S.metadata} -> 'pipeline' ->> 'promptVersion' = ${String(PROMPT_VERSION)}
         and ${S.metadata} -> 'pipeline' ->> 'judgeVersion' = ${String(JUDGE_PROMPT_VERSION)}) or ${S.metadata} ? 'summaryFallback'
       then ${S.metadata} - 'triagedAt' else ${S.metadata} - 'sonioxRetainUntil' - 'triagedAt' end`,

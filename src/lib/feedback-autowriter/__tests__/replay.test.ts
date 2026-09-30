@@ -192,7 +192,7 @@ describe("replay: read-only by construction", () => {
 });
 
 describe("replay: the same evidence and decisions as production", () => {
-  it("transcribes like production and judges the transcript draft at high and at medium on the same messages", async () => {
+  it("transcribes like production and judges every draft at medium and at high on the same messages", async () => {
     const soniox = fakeSoniox();
     const model = fakeModel();
     const detail = sessionDetail(RECORDING);
@@ -212,16 +212,18 @@ describe("replay: the same evidence and decisions as production", () => {
       summaryDraft: { outcome: "draft", writerModel: AUTOWRITER_MODELS.writer.model },
     });
     expect(record.transcript).toBeUndefined();
-    // Every judge call (transcript at high and medium, summary at high) goes to the judge model, whatever the writer is.
+    // Every judge call (the transcript and the summary draft, each at medium and high) goes to the judge model,
+    // whatever the writer is: the pipeline's own two levels, with no extra call.
     expect(model.requests.filter((request) => request.schemaName === "feedback_faithfulness").map((request) => request.model))
-      .toEqual(Array(3).fill(AUTOWRITER_MODELS.judge.model));
+      .toEqual(Array(4).fill(AUTOWRITER_MODELS.judge.model));
     const judges = model.requests.filter((request) => request.schemaName === "feedback_faithfulness");
     const transcriptJudges = judges.filter((request) => request.messages[1].content.includes("Lesson transcript:"));
-    expect(transcriptJudges.map((request) => request.effort)).toEqual(["high", "medium"]);
+    expect(transcriptJudges.map((request) => request.effort)).toEqual(["medium", "high"]);
     expect(transcriptJudges[1].messages).toEqual(transcriptJudges[0].messages);
-    // The summary draft is judged at production's effort only.
-    expect(judges.filter((request) => request.messages[1].content.includes("Lesson summary:")).map((request) => request.effort)).toEqual(["high"]);
-    expect(record.calls.filter((call) => call.shadow)).toHaveLength(1);
+    expect(judges.filter((request) => request.messages[1].content.includes("Lesson summary:")).map((request) => request.effort)).toEqual(["medium", "high"]);
+    expect(record.calls.filter((call) => call.role === "judge").map((call) => `${call.purpose}:${call.effort}`).toSorted())
+      .toEqual(["summary_draft:high", "summary_draft:medium", "transcript_draft:high", "transcript_draft:medium"]);
+    expect(record.calls.every((call) => !("shadow" in call))).toBe(true);
   });
 
   it("judges the posted draft against the transcript, with the student's name redacted", async () => {
@@ -231,16 +233,41 @@ describe("replay: the same evidence and decisions as production", () => {
       replayDeps({ wise: readOnlyWise(sessionDetail(RECORDING)).wise, soniox: fakeSoniox().client, callModel: model.callModel as never }),
       { ...SAMPLE, postedFields: posted, postedSource: "pre_correction_version" },
     );
-    const postedJudge = model.requests.find((request) => request.messages[1].content.includes("the last two pages"));
-    expect(postedJudge?.effort).toBe("high");
-    expect(postedJudge?.messages[1].content).toContain("[STUDENT_1] found common denominators");
-    expect(postedJudge?.messages[1].content).not.toMatch(/\bTom\b|Somchai/u);
+    // Judged as production judges a transcript draft: at both levels, on the same messages.
+    const postedJudges = model.requests.filter((request) => request.messages[1].content.includes("the last two pages"));
+    expect(postedJudges.map((request) => request.effort)).toEqual(["medium", "high"]);
+    expect(postedJudges[1].messages).toEqual(postedJudges[0].messages);
+    for (const postedJudge of postedJudges) {
+      expect(postedJudge.messages[1].content).toContain("[STUDENT_1] found common denominators");
+      expect(postedJudge.messages[1].content).not.toMatch(/\bTom\b|Somchai/u);
+    }
     expect(record.posted).toMatchObject({
       source: "pre_correction_version",
-      verdict: { faithful: false },
+      verdict: { faithful: false, levels: { medium: { faithful: false }, high: { faithful: false } } },
+      // Both levels quote the same words: each problem once.
       problems: ["wrong person: [STUDENT_1] finished; then left early", "homework not set: the last two pages"],
       error: null,
     });
+  });
+
+  it("flags a posted draft that only one level flags, and reports a level that gives no verdict", async () => {
+    const posted = { ...GOOD_FIELDS, homework: "Finish the last two pages." };
+    const isPosted = (request: ModelRequest) => request.messages[1].content.includes("the last two pages");
+    const onlyMedium = fakeModel({ judge: (request) => isPosted(request) && request.effort === "medium" ? UNFAITHFUL : PASSING });
+    const flagged = await replayClass(
+      replayDeps({ wise: readOnlyWise(sessionDetail(RECORDING)).wise, soniox: fakeSoniox().client, callModel: onlyMedium.callModel as never }),
+      { ...SAMPLE, postedFields: posted, postedSource: "row" },
+    );
+    expect(flagged.posted).toMatchObject({ verdict: { faithful: false, levels: { medium: { faithful: false }, high: { faithful: true } } }, error: null });
+    expect(summarizeReplay([flagged]).posted).toMatchObject({ judged: 1, flagged: 1, parseFailures: 0 });
+
+    const noVerdict = fakeModel({ judge: (request) => isPosted(request) && request.effort === "high" ? "not json" : PASSING });
+    const unjudged = await replayClass(
+      replayDeps({ wise: readOnlyWise(sessionDetail(RECORDING)).wise, soniox: fakeSoniox().client, callModel: noVerdict.callModel as never }),
+      { ...SAMPLE, postedFields: posted, postedSource: "row" },
+    );
+    expect(unjudged.posted).toEqual({ source: "row", verdict: null, problems: [], error: "judge:high:judge_unparseable" });
+    expect(summarizeReplay([unjudged]).posted).toMatchObject({ judged: 1, flagged: 0, parseFailures: 1 });
   });
 
   it("does not judge the posted draft against a transcript production would not write from", async () => {
@@ -300,24 +327,55 @@ describe("replay: the same evidence and decisions as production", () => {
     }
   });
 
-  it("keeps only the last try's verdicts for a transcript draft that was tried again", async () => {
+  it("never falls back for a judge that keeps failing: the last try stands, with only its own verdicts", async () => {
     let transcriptJudgeCalls = 0;
-    const timedOut = { ok: false, error: "timeout", httpStatus: null, model: null, provider: null, finishReason: null, usage: null, latencyMs: 120_000 } as OpenRouterCallResult;
+    const timedOut = { ok: false, error: "timeout", httpStatus: null, model: null, provider: null, finishReason: null, usage: null, latencyMs: 240_000 } as OpenRouterCallResult;
     const callModel = vi.fn(async (request: ModelRequest) => {
       if (request.schemaName === "post_class_feedback") return reply(request, WRITER_JSON);
       if (!request.messages[1].content.includes("Lesson transcript:")) return reply(request, PASSING);
       transcriptJudgeCalls += 1;
-      // Try 1: the high judge times out and its medium re-run flags the draft; tries 2 and 3: both time out.
+      // Try 1: medium times out while high flags the draft; tries 2 and 3: both levels time out.
       return transcriptJudgeCalls === 2 ? reply(request, UNFAITHFUL) : timedOut;
+    });
+    const pauses: number[] = [];
+    const record = await replayClass(
+      replayDeps({
+        wise: readOnlyWise(sessionDetail(RECORDING)).wise, soniox: fakeSoniox().client, callModel: callModel as never,
+        sleep: async (ms) => { pauses.push(ms); },
+      }),
+      SAMPLE,
+    );
+    // Three tries, two levels each; production would keep retrying every 10 minutes — only the writer's failures
+    // send a class back to the summary (owner decision, 30 Sep).
+    expect(transcriptJudgeCalls).toBe(6);
+    expect(pauses.filter((ms) => ms === 30_000)).toHaveLength(2);
+    expect(record).toMatchObject({ outcome: "error:judge:medium:timeout", afterFallback: null });
+    expect(record.transcriptDraft).toMatchObject({ outcome: "error:judge:medium:timeout", judgeHigh: null, judgeMedium: null });
+    const summary = summarizeReplay([record]);
+    expect(summary.outcomes).toMatchObject({ error: 1, fallback: 0 });
+    expect(summary.judge.pairs).toBe(0);
+  });
+
+  it("starts the writer's count again once it delivers a draft, even when that draft's judge then fails", async () => {
+    // Try 1: the writer times out. Try 2: it delivers and the high judge times out. Try 3: the writer times out again.
+    const failed = (latencyMs: number) => ({ ok: false, error: "timeout", httpStatus: null, model: null, provider: null, finishReason: null, usage: null, latencyMs }) as OpenRouterCallResult;
+    let transcriptWrites = 0;
+    const callModel = vi.fn(async (request: ModelRequest) => {
+      const transcript = request.messages[1].content.includes("Lesson transcript:");
+      if (request.schemaName === "post_class_feedback") {
+        if (!transcript) return reply(request, WRITER_JSON);
+        transcriptWrites += 1;
+        return transcriptWrites === 2 ? reply(request, WRITER_JSON) : failed(180_000);
+      }
+      return transcript && request.effort === "high" ? failed(240_000) : reply(request, PASSING);
     });
     const record = await replayClass(
       replayDeps({ wise: readOnlyWise(sessionDetail(RECORDING)).wise, soniox: fakeSoniox().client, callModel: callModel as never }),
       SAMPLE,
     );
-    expect(transcriptJudgeCalls).toBe(6);
-    expect(record.outcome).toBe("fallback:writer_failed");
-    expect(record.transcriptDraft).toMatchObject({ outcome: "error:judge:timeout", judgeHigh: null, judgeMedium: null });
-    expect(summarizeReplay([record]).judge.pairs).toBe(0);
+    expect(transcriptWrites).toBe(3);
+    // Two writer failures, not three in a row: no fallback.
+    expect(record).toMatchObject({ outcome: `error:${AUTOWRITER_MODELS.writer.arm}:timeout`, afterFallback: null });
   });
 
   it("holds a recording or transcript too short for the class, and skips a class that would not have passed the gates", async () => {
@@ -383,7 +441,15 @@ describe("replay: the same evidence and decisions as production", () => {
 describe("replay summary", () => {
   it("measures holds, fallbacks, judge efforts and cost, and its markdown holds no lesson text", async () => {
     const soniox = fakeSoniox();
-    const unparseableMedium = fakeModel({ judge: (request) => request.effort === "medium" ? "{\"faithful\": true}" : PASSING });
+    // The medium judge's first reply to each draft is incomplete (no verdict); its second try passes.
+    const askedBefore = new WeakSet<object>();
+    const unparseableMedium = fakeModel({
+      judge: (request) => {
+        if (request.effort !== "medium" || askedBefore.has(request.messages)) return PASSING;
+        askedBefore.add(request.messages);
+        return "{\"faithful\": true}";
+      },
+    });
     const samples: ReplaySample[] = [
       SAMPLE,
       { ...SAMPLE, wiseSessionId: "6a0000000000000000000022" },
@@ -405,7 +471,12 @@ describe("replay summary", () => {
       outcomes: { draft: 2, hold: 0, fallback: 1, skip: 1, error: 0 },
       fallbacks: [{ cause: "no_recording", count: 1, afterFallback: ["draft"] }],
       soniox: { jobs: 2, audioMinutes: 120, perTranscribedClassUsd: expect.closeTo(0.1, 6), undeletedJobs: [] },
-      judge: { pairs: 0, medium: { calls: 2, parseFailures: 2 }, high: { parseFailures: 0, p90LatencyMs: 45_000 } },
+      // Two transcript drafts and three summary drafts, each judged at both levels; medium needed its second try.
+      judge: {
+        pairs: 2, agree: 2, onlyHighUnfaithful: 0, onlyMediumUnfaithful: 0,
+        medium: { calls: 10, parseFailures: 5, errors: 0, p90LatencyMs: 20_000 },
+        high: { calls: 5, parseFailures: 0, errors: 0, p90LatencyMs: 45_000 },
+      },
       acceptance: {
         transcriptHoldsAtMost15Percent: true, fallbacksAtMost20Percent: false, noJudgeParseFailures: false,
         judgeP90AtMost90Seconds: true, sonioxAboutTenCentsPerClass: true,
@@ -421,6 +492,10 @@ describe("replay summary", () => {
     const markdown = renderReplayMarkdown({ summary, records, commit: "local:abc", generatedAt: new Date("2026-09-30T05:00:00.000Z") });
     expect(markdown).toContain("| fallback | 1 |");
     expect(markdown).toContain("acceptance ≤ 20%: **NO**");
+    expect(markdown).toContain("writer v5 and judge v5");
+    expect(markdown).toContain("at `medium` and `high` on the same messages (a draft passes only when every level passes it)");
+    expect(markdown).toContain("| medium | 10 | 5 | 0 | 20.0 s | 20.0 s |");
+    expect(markdown).toContain("Pairs: 2; same verdict 2;");
     expect(markdown).toContain(`| transcript_draft | ${AUTOWRITER_MODELS.writer.model} | 2 | 0 | 60.0 s | 60.0 s |`);
     for (const text of [GOOD_FIELDS.topics, GOOD_FIELDS.performance.slice(0, 40), "Tom", "Somchai", "three quarters"]) {
       expect(markdown).not.toContain(text);

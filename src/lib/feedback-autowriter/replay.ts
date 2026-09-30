@@ -4,6 +4,8 @@ import * as schema from "@/lib/db/schema";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
 import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
 import {
+  AUTOWRITER_JUDGE_EFFORTS,
+  AUTOWRITER_JUDGE_TIMEOUT_MS,
   AUTOWRITER_MAX_TRANSCRIBE_ERRORS,
   AUTOWRITER_MAX_WRITER_ERRORS,
   AUTOWRITER_MODELS,
@@ -13,10 +15,20 @@ import {
   AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS,
   type AutowriterModelConfig,
 } from "./config";
-import { JUDGE_JSON_SCHEMA, buildJudgeMessages, judgeProblems, parseJudgeOutput, type JudgeOutput } from "./judge";
+import {
+  JUDGE_JSON_SCHEMA,
+  JUDGE_PROMPT_VERSION,
+  buildJudgeMessages,
+  combineJudgeVerdicts,
+  judgeProblems,
+  parseJudgeOutput,
+  type JudgeEffort,
+  type JudgeOutput,
+  type StoredJudgeVerdict,
+} from "./judge";
 import { callOpenRouter, type OpenRouterCallResult } from "./openrouter";
 import { runWritingPipeline, type PipelineResult } from "./pipeline";
-import { chooseStudentDisplayName, classDetailsBlock, describeClass, redactForModel } from "./prompt";
+import { PROMPT_VERSION, chooseStudentDisplayName, classDetailsBlock, describeClass, redactForModel } from "./prompt";
 import { AUTOWRITER_TEACHER_ALLOWLIST, AUTOWRITER_TUTORS, rosterTutor, type AutowriterTutor } from "./roster";
 import { mapWithConcurrency } from "./run";
 import {
@@ -42,8 +54,9 @@ import { finalizeFields, parseModelOutput } from "./validate";
 /**
  * Replay (read-only): what transcript first would have done with recent classes, before its switch is turned on.
  * Per class: Wise's session detail (one GET), a Soniox transcript of the recording (the job is deleted in `finally`
- * as soon as its transcript is fetched), the v4 transcript draft with its judge at `high` and, on the same messages,
- * at `medium`; a v4 summary draft; and a v4 `high` judge of the draft actually posted, against the transcript.
+ * as soon as its transcript is fetched), the transcript draft with its judge at `medium` and `high` on the same
+ * messages (production's pipeline: both must pass); a summary draft, judged the same way; and both judge levels on
+ * the draft actually posted, against the transcript.
  * Nothing here can write: Wise is reachable only through the one session-detail GET (`ReplayWiseReads`), no database
  * handle is passed in (the caller hands over what it read with `loadReplaySample`), and model calls are kept in memory.
  */
@@ -91,9 +104,8 @@ export interface ReplayCall {
   purpose: "transcript_draft" | "summary_draft" | "posted_draft";
   role: "writer" | "judge";
   model: string;
+  /** The reasoning effort asked for; every draft is judged once per effort in `AUTOWRITER_JUDGE_EFFORTS`. */
   effort: string;
-  /** A `medium` re-run of a `high` judge call on the same messages (transcript drafts only). */
-  shadow: boolean;
   ok: boolean;
   error: string | null;
   provider: string | null;
@@ -147,15 +159,17 @@ export interface ReplayRecord {
   transcriptDraft: ReplayDraft | null;
   summary: { characters: number; thaiShare: number } | null;
   summaryDraft: ReplayDraft | null;
-  /** The posted draft, judged (v4, `high`) against the transcript. */
-  posted: { source: string; verdict: JudgeOutput | null; problems: string[]; error: string | null } | null;
+  /** The posted draft, judged at both levels against the transcript (the verdict is their union). */
+  posted: { source: string; verdict: StoredJudgeVerdict | null; problems: string[]; error: string | null } | null;
   calls: ReplayCall[];
   /** Only with `keepTranscripts`. */
   transcript?: string;
 }
 
-/** Budget the pipeline sees: generous, so every call gets its production time-out (writer 180 s, judge 120 s). */
+/** Budget the pipeline sees: generous, so every call gets its production time-out (writer 180 s, judge 120 or 240 s). */
 const REPLAY_BUDGET_MS = 15 * 60 * 1000;
+/** Tries of one transcript draft: enough for the writer to fail three times in a row (`writer_failed`). */
+const REPLAY_TRANSCRIPT_TRIES = AUTOWRITER_MAX_WRITER_ERRORS;
 /** Between tries of a transcript draft whose writer or judge failed (production waits 10 minutes; the replay cannot). */
 const REPLAY_WRITER_RETRY_PAUSE_MS = 30_000;
 
@@ -182,45 +196,37 @@ async function fetchText(url: string): Promise<string> {
 }
 
 /**
- * Every model call, kept in memory with its tokens, latency and (judge) verdict. With `mediumShadow`, each judge call
- * is sent once more at `medium` on the same messages, so the two efforts can be compared on the same draft; the
- * pipeline only ever sees the `high` reply. `writerContents` keeps the writer's replies to show a held draft.
+ * Every model call, kept in memory with its tokens, latency and (judge) verdict. The pipeline itself judges every
+ * draft at both efforts on the same messages (v5), so the two can be compared on the same draft from its own calls.
+ * `writerContents` keeps the writer's replies to show a held draft.
  */
 function recordingCaller(deps: ReplayDeps, record: ReplayRecord, purpose: ReplayCall["purpose"], options: {
-  mediumShadow: boolean;
   writerContents?: string[];
-}): CallModel {
+} = {}): CallModel {
   const call = deps.callModel ?? callOpenRouter;
-  const stat = (request: Parameters<CallModel>[0], result: OpenRouterCallResult, shadow: boolean): ReplayCall => {
+  return async (request) => {
+    const result: OpenRouterCallResult = await call(request);
     const role = request.schemaName === "feedback_faithfulness" ? "judge" as const : "writer" as const;
-    return {
-      purpose, role, model: request.model, effort: request.effort, shadow, ok: result.ok,
+    record.calls.push({
+      purpose, role, model: request.model, effort: request.effort, ok: result.ok,
       error: result.ok ? null : result.error, provider: result.provider, latencyMs: result.latencyMs,
       promptTokens: result.usage?.promptTokens ?? null, completionTokens: result.usage?.completionTokens ?? null,
       reasoningTokens: result.usage?.reasoningTokens ?? null, costUsd: result.usage?.costUsd ?? null,
       ...(role === "judge" ? { verdict: result.ok ? parseJudgeOutput(result.content) : null } : {}),
-    };
-  };
-  return async (request) => {
-    const result = await call(request);
-    record.calls.push(stat(request, result, false));
-    if (request.schemaName === "post_class_feedback" && result.ok) options.writerContents?.push(result.content);
-    if (options.mediumShadow && request.schemaName === "feedback_faithfulness") {
-      const medium = { ...request, effort: "medium" as const };
-      record.calls.push(stat(medium, await call(medium), true));
-    }
+    });
+    if (role === "writer" && result.ok) options.writerContents?.push(result.content);
     return result;
   };
 }
 
-function lastVerdict(record: ReplayRecord, purpose: ReplayCall["purpose"], shadow: boolean): JudgeOutput | null {
-  const judged = record.calls.filter((call) => call.purpose === purpose && call.role === "judge" && call.shadow === shadow && call.verdict);
+function lastVerdict(record: ReplayRecord, purpose: ReplayCall["purpose"], effort: JudgeEffort): JudgeOutput | null {
+  const judged = record.calls.filter((call) => call.purpose === purpose && call.role === "judge" && call.effort === effort && call.verdict);
   return judged.at(-1)?.verdict ?? null;
 }
 
 function draftOf(result: PipelineResult, record: ReplayRecord, purpose: ReplayCall["purpose"], writerContents: string[], displayName: string): ReplayDraft {
-  const judgeHigh = result.kind === "draft" ? result.judge : lastVerdict(record, purpose, false);
-  const judgeMedium = lastVerdict(record, purpose, true);
+  const judgeHigh = result.kind === "draft" ? result.judge.levels.high : lastVerdict(record, purpose, "high");
+  const judgeMedium = result.kind === "draft" ? result.judge.levels.medium : lastVerdict(record, purpose, "medium");
   // The pipeline returns the first draft that passes, so the last writer call wrote it (or was the last to try).
   const writer = record.calls.filter((call) => call.purpose === purpose && call.role === "writer").at(-1);
   const writerModel = writer?.model ?? null;
@@ -314,7 +320,10 @@ async function zoomCues(deps: ReplayDeps, detail: AutowriterSessionDetail): Prom
   }
 }
 
-/** The posted draft, judged at the production judge's effort against the transcript; names redacted as for any judge call. */
+/**
+ * The posted draft, judged as production judges a transcript draft — at every effort, on the same messages, passing
+ * only when all do — against the transcript; names redacted as for any judge call. One try per level.
+ */
 async function judgePostedDraft(deps: ReplayDeps, record: ReplayRecord, input: {
   fields: FeedbackFieldAnswers;
   source: string;
@@ -325,37 +334,44 @@ async function judgePostedDraft(deps: ReplayDeps, record: ReplayRecord, input: {
 }): Promise<NonNullable<ReplayRecord["posted"]>> {
   const redact = (text: string) => redactForModel(text, input.names);
   const judge = AUTOWRITER_MODELS.judge;
-  const call = recordingCaller(deps, record, "posted_draft", { mediumShadow: false });
-  const result = await call({
+  const call = recordingCaller(deps, record, "posted_draft");
+  const messages = buildJudgeMessages({
+    redactedSummary: redact(input.rendered),
+    classDetails: classDetailsBlock(input.classDetails, input.names),
+    placeholderFields: {
+      topics: redact(input.fields.topics),
+      performance: redact(input.fields.performance),
+      improvement: redact(input.fields.improvement),
+      homework: redact(input.fields.homework),
+    },
+    evidence: "transcript",
+    speakerLabels: input.speakerLabels,
+    otherPeople: [],
+  });
+  const replies = await Promise.all(AUTOWRITER_JUDGE_EFFORTS.map((effort) => call({
     apiKey: deps.apiKey,
     model: judge.model,
     provider: judge.provider,
-    messages: buildJudgeMessages({
-      redactedSummary: redact(input.rendered),
-      classDetails: classDetailsBlock(input.classDetails, input.names),
-      placeholderFields: {
-        topics: redact(input.fields.topics),
-        performance: redact(input.fields.performance),
-        improvement: redact(input.fields.improvement),
-        homework: redact(input.fields.homework),
-      },
-      evidence: "transcript",
-      speakerLabels: input.speakerLabels,
-      otherPeople: [],
-    }),
+    messages,
     schemaName: "feedback_faithfulness",
     schema: JUDGE_JSON_SCHEMA,
-    effort: judge.effort,
+    effort,
     maxTokens: 32_000,
-    timeoutMs: 120_000,
-  });
-  const verdict = result.ok ? parseJudgeOutput(result.content) : null;
-  return {
-    source: input.source,
-    verdict,
-    problems: verdict ? judgeProblems(verdict) : [],
-    error: result.ok ? (verdict ? null : "judge_unparseable") : result.error,
-  };
+    timeoutMs: AUTOWRITER_JUDGE_TIMEOUT_MS.transcript,
+  })));
+  const verdicts = replies.map((reply) => reply.ok ? parseJudgeOutput(reply.content) : null);
+  const failed = verdicts.findIndex((verdict) => !verdict);
+  if (failed >= 0) {
+    const reply = replies[failed];
+    return {
+      source: input.source, verdict: null, problems: [],
+      error: `judge:${AUTOWRITER_JUDGE_EFFORTS[failed]}:${reply.ok ? "judge_unparseable" : reply.error}`,
+    };
+  }
+  const verdict = combineJudgeVerdicts(Object.fromEntries(
+    AUTOWRITER_JUDGE_EFFORTS.map((effort, index) => [effort, verdicts[index]]),
+  ) as Record<JudgeEffort, JudgeOutput>);
+  return { source: input.source, verdict, problems: judgeProblems(verdict), error: null };
 }
 
 /**
@@ -460,14 +476,19 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
           priorFeedback,
           record: async () => {},
           remainingMs: () => REPLAY_BUDGET_MS,
-          callModel: recordingCaller(deps, record, "transcript_draft", { mediumShadow: true, writerContents }),
+          callModel: recordingCaller(deps, record, "transcript_draft", { writerContents }),
         });
-        // Production retries the models' failures on a transcript draft and, after the third in a row, writes the
-        // class from the summary (`writer_failed`); the replay retries after a short pause instead of 10 minutes.
-        const modelFailed = (result: PipelineResult) => result.kind === "infra" && result.modelFailure;
+        // Production retries the models' failures on a transcript draft every 10 minutes. After the writer's third
+        // failure in a row it writes the class from the summary (`writer_failed`); a judge failure just retries and,
+        // the writer having delivered, starts that count again. The replay tries up to three times, a short pause
+        // apart, and a judge still failing on the last try ends as `error:judge:<effort>:…`.
+        let writerFailures = 0;
         let tryFrom = record.calls.length;
         let result = await write();
-        for (let failures = 1; modelFailed(result) && failures < AUTOWRITER_MAX_WRITER_ERRORS; failures += 1) {
+        for (let tries = 1; ; tries += 1) {
+          if (result.kind === "infra" && result.stage === "writer" && result.modelFailure) writerFailures += 1;
+          else if (result.kind === "infra" && result.stage === "judge") writerFailures = 0;
+          if (!(result.kind === "infra" && result.modelFailure) || tries >= REPLAY_TRANSCRIPT_TRIES) break;
           await sleep(REPLAY_WRITER_RETRY_PAUSE_MS);
           // The draft, its verdicts and its writer are the last try's.
           tryFrom = record.calls.length;
@@ -475,7 +496,7 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
           result = await write();
         }
         record.transcriptDraft = draftOf(result, { ...record, calls: record.calls.slice(tryFrom) }, "transcript_draft", writerContents, displayName);
-        if (modelFailed(result)) fallback = "writer_failed";
+        if (writerFailures >= AUTOWRITER_MAX_WRITER_ERRORS) fallback = "writer_failed";
         else record.outcome = record.transcriptDraft.outcome;
       }
       // The draft actually posted for this class, judged against what was said — only on a transcript production
@@ -492,7 +513,7 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
     }
   }
 
-  // 2. A v4 summary draft for every class: the fallback's evidence, and the comparison for the others.
+  // 2. A summary draft for every class: the fallback's evidence, and the comparison for the others.
   if (usableSummary) {
     const writerContents: string[] = [];
     const result = await runWritingPipeline({
@@ -502,7 +523,7 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
       priorFeedback,
       record: async () => {},
       remainingMs: () => REPLAY_BUDGET_MS,
-      callModel: recordingCaller(deps, record, "summary_draft", { mediumShadow: false, writerContents }),
+      callModel: recordingCaller(deps, record, "summary_draft", { writerContents }),
     });
     record.summaryDraft = draftOf(result, record, "summary_draft", writerContents, displayName);
   }
@@ -747,8 +768,8 @@ export function summarizeReplay(records: readonly ReplayRecord[]): ReplaySummary
   };
 
   const calls = records.flatMap((record) => record.calls);
-  const judgeStats = (shadow: boolean) => {
-    const judged = calls.filter((call) => call.role === "judge" && call.shadow === shadow);
+  const judgeStats = (effort: JudgeEffort) => {
+    const judged = calls.filter((call) => call.role === "judge" && call.effort === effort);
     const answered = judged.filter((call) => call.ok);
     return {
       calls: judged.length,
@@ -766,8 +787,8 @@ export function summarizeReplay(records: readonly ReplayRecord[]): ReplaySummary
   const transcribed = records.filter((record) => record.soniox && record.soniox.costUsd !== null);
   const sonioxCost = sum(records.map((record) => record.soniox?.costUsd ?? null));
   const turnarounds = records.flatMap((record) => record.soniox?.turnaroundSeconds ?? []);
-  const high = judgeStats(false);
-  const medium = judgeStats(true);
+  const high = judgeStats("high");
+  const medium = judgeStats("medium");
   const posted = records.flatMap((record) => record.posted ? [record.posted] : []);
   const perClass = transcribed.length > 0 ? sonioxCost / transcribed.length : null;
   const holdRate = decided > 0 ? outcomes.hold / decided : null;
@@ -860,8 +881,9 @@ export function renderReplayMarkdown(input: { summary: ReplaySummary; records: r
   const lines = [
     `# Transcript-first replay — ${input.generatedAt.toISOString()}`,
     "",
-    `Code \`${input.commit ?? "unknown"}\`; writer and judge v4 — writer \`${AUTOWRITER_MODELS.writer.model}\` (fallback \`${AUTOWRITER_MODELS.fallbackWriter.model}\`), ` +
-      `judge \`${AUTOWRITER_MODELS.judge.model}\` at \`${AUTOWRITER_MODELS.judge.effort}\`, with a \`medium\` re-run of each transcript-draft judge call.`,
+    `Code \`${input.commit ?? "unknown"}\`; writer v${PROMPT_VERSION} and judge v${JUDGE_PROMPT_VERSION} — writer \`${AUTOWRITER_MODELS.writer.model}\` ` +
+      `(fallback \`${AUTOWRITER_MODELS.fallbackWriter.model}\`), judge \`${AUTOWRITER_MODELS.judge.model}\` at ` +
+      `${AUTOWRITER_JUDGE_EFFORTS.map((effort) => `\`${effort}\``).join(" and ")} on the same messages (a draft passes only when every level passes it).`,
     `Read-only: Wise session-detail GETs, database SELECTs, Soniox jobs deleted after each transcript; nothing was posted.`,
     "",
     "## Outcomes (what transcript first would do)",
@@ -880,7 +902,7 @@ export function renderReplayMarkdown(input: { summary: ReplaySummary; records: r
     `- Judge p90 latency (high): ${fmt(summary.judge.high.p90LatencyMs === null ? null : summary.judge.high.p90LatencyMs / 1000, 1, " s")} — acceptance ≤ 90 s: **${yes(summary.acceptance.judgeP90AtMost90Seconds)}**`,
     `- Soniox per transcribed class: ${fmt(summary.soniox.perTranscribedClassUsd, 3, " USD")} — acceptance ≈ $0.10: **${yes(summary.acceptance.sonioxAboutTenCentsPerClass)}**`,
     "",
-    "## Judge: high vs medium on the same transcript drafts",
+    "## Judge: high and medium on the same drafts",
     "",
     "| Effort | Calls | Parse failures | Errors | p50 latency | p90 latency | Mean reasoning tokens | Cost |",
     "|---|---:|---:|---:|---:|---:|---:|---:|",
@@ -891,7 +913,8 @@ export function renderReplayMarkdown(input: { summary: ReplaySummary; records: r
     }),
     "",
     `Pairs: ${summary.judge.pairs}; same verdict ${summary.judge.agree}; unfaithful at high only ${summary.judge.onlyHighUnfaithful}; ` +
-      `unfaithful at medium only ${summary.judge.onlyMediumUnfaithful}. (High covers every judge call: transcript, summary and posted drafts.)`,
+      `unfaithful at medium only ${summary.judge.onlyMediumUnfaithful}. (Pairs are transcript drafts; the rows above cover every judge call: ` +
+      "transcript, summary and posted drafts.)",
     "",
     "## Writers",
     "",
@@ -902,7 +925,7 @@ export function renderReplayMarkdown(input: { summary: ReplaySummary; records: r
       `${fmt(writer.p90LatencyMs === null ? null : writer.p90LatencyMs / 1000, 1, " s")} | $${writer.costUsd.toFixed(4)} | ` +
       `${writer.failures.map((failure) => `${failure.error.replaceAll("|", "/")} ×${failure.count}`).join(", ") || "—"} |`),
     "",
-    "## Posted drafts judged against the transcript (v4, high)",
+    `## Posted drafts judged against the transcript (v${JUDGE_PROMPT_VERSION}: both levels)`,
     "",
     `Judged ${summary.posted.judged}; flagged ${summary.posted.flagged} (misattributed ${summary.posted.misattributed}, ` +
       `homework not set ${summary.posted.homeworkNotSet}, unsupported ${summary.posted.unsupported}); not judged (transcript not usable) ` +
