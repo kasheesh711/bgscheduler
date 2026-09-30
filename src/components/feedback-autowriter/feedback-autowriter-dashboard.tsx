@@ -223,9 +223,12 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
   const shown = useMemo(() => filterInbox(inbox, tutorKey), [inbox, tutorKey]);
   const filteredTo = tutorKey ? data.tutors.find((tutor) => tutor.tutorKey === tutorKey)?.displayName ?? tutorKey : null;
   const halted = Boolean(data.control.haltedAt);
+  // Without the review data the list has the held classes and the failed posts only: an empty one proves nothing.
+  const reviewMissing = loaded === null ? unavailableReason ?? "load_failed" : null;
   const headline = halted ? "Posting is halted. That needs you first."
-    : inbox.length === 0 ? "Nothing needs you. Back to teaching."
-      : "A little attention. Then back to teaching.";
+    : reviewMissing ? "Some of what needs you could not load."
+      : inbox.length === 0 ? "Nothing needs you. Back to teaching."
+        : "A little attention. Then back to teaching.";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto scroll-smooth">
@@ -273,7 +276,7 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
 
         <div className="grid items-stretch gap-5 lg:grid-cols-3">
           <Inbox className="lg:col-span-2" items={shown} dashboard={data} review={loaded} now={now} filteredTo={filteredTo}
-            reviewUnavailable={loaded === null} canControl={canControl} onOpen={setTarget} />
+            reviewUnavailable={reviewMissing} canControl={canControl} onOpen={setTarget} />
           <HealthRail dashboard={data} review={loaded} unavailableReason={unavailableReason} />
         </div>
 

@@ -146,6 +146,31 @@ describe("FeedbackAutowriterDashboard", () => {
     expect(html).toContain("since 5 Oct");
   });
 
+  it("never says nothing needs the owner while the posts to review and the incidents are missing", () => {
+    const quiet = quietDashboardFixture();
+    for (const reason of ["load_failed", "review_tables_missing"] as const) {
+      const html = render({ data: quiet, review: { available: false, reason }, trends: null });
+      expect(html, reason).toContain("Some of what needs you could not load.");
+      expect(html, reason).not.toContain("Nothing needs you");
+      expect(html, reason).toContain("0 open");
+      expect(html, reason).toContain('data-empty="review-missing"');
+    }
+    const failed = render({ data: quiet, review: { available: false, reason: "load_failed" }, trends: null });
+    expect(failed).toContain("Posts to review and incidents could not load — Refresh to try again.");
+    const none = render({ data: quiet, review: null, trends: null });
+    expect(none).toContain("Some of what needs you could not load.");
+    expect(none).toContain("Posts to review and incidents could not load — Refresh to try again.");
+    // The held classes and the failed posts still show, under the same headline.
+    const busy = render({ review: { available: false, reason: "load_failed" }, trends: null });
+    expect(busy).toContain("Some of what needs you could not load.");
+    expect(busy).toContain("Recording too short");
+    expect(busy).toContain("A post did not verify in Wise");
+    expect(busy).not.toContain("A little attention");
+    // A halt still comes first.
+    const halted = dashboardFixture({ control: { ...dashboardFixture().control, haltedAt: "2026-10-06T02:00:00.000Z", haltReason: "x" } });
+    expect(render({ data: halted, review: { available: false, reason: "load_failed" }, trends: null })).toContain("Posting is halted. That needs you first.");
+  });
+
   it("keeps the to-do list to holds and failed posts, and says why there is no quality data, before migration 0101", () => {
     const html = render({ review: { available: false, reason: "review_tables_missing" }, trends: null });
     expect(html).toContain("What needs you");

@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { buildInbox, filterInbox } from "@/lib/feedback-autowriter/inbox";
+import type { AutowriterReviewUnavailable } from "@/lib/feedback-autowriter/review-data";
 import { Inbox } from "../inbox";
 import { FIXTURE_NOW, SESSION, dashboardFixture, quietDashboardFixture, quietReviewFixture, reviewFixture } from "./fixtures";
 
@@ -9,6 +10,8 @@ const NOW = new Date(FIXTURE_NOW);
 function render(options: {
   tutorKey?: string | null;
   review?: ReturnType<typeof reviewFixture> | null;
+  /** Why the review data is missing, when `review` is null (a failed load by default). */
+  reason?: AutowriterReviewUnavailable["reason"];
   dashboard?: ReturnType<typeof dashboardFixture>;
   canControl?: boolean;
 } = {}): string {
@@ -17,7 +20,7 @@ function render(options: {
   const items = filterInbox(buildInbox(dashboard, review, { now: NOW }), options.tutorKey ?? null);
   return renderToStaticMarkup(
     <Inbox items={items} dashboard={dashboard} review={review} now={NOW} filteredTo={options.tutorKey ?? null}
-      reviewUnavailable={review === null} canControl={options.canControl ?? true} onOpen={() => undefined} />,
+      reviewUnavailable={review === null ? options.reason ?? "load_failed" : null} canControl={options.canControl ?? true} onOpen={() => undefined} />,
   );
 }
 
@@ -40,6 +43,16 @@ describe("Inbox", () => {
     expect(html).not.toContain("Expansion");
     expect(html).toContain("Nothing urgent is hidden below.");
     expect(html).toContain("Synced at 15:35");
+  });
+
+  it("counts the classes that wait, not the rows: a class with an incident and a post to review is one", () => {
+    const busy = reviewFixture();
+    const aboutFlagged = { ...busy.incidents[0], id: "44444444-4444-4444-8444-444444444444", wiseSessionId: SESSION.benFlagged };
+    const html = render({ review: { ...busy, incidents: [...busy.incidents, aboutFlagged] } });
+    // Two incidents now, and still nine classes: Ben's flagged post has both a row to review and an incident.
+    expect(html).toMatch(/Incidents<\/span><span[^>]*>2<\/span>/u);
+    expect(html).toContain("9 open");
+    expect(html).not.toContain("10 open");
   });
 
   it("says when the review data is older than the classes: it is polled less often", () => {
@@ -125,6 +138,23 @@ describe("Inbox", () => {
     expect(html).toContain("4 open");
     expect(html).toContain("could not load");
     expect(render()).not.toContain("could not load");
+  });
+
+  it("never says nothing needs the owner when the posts to review and the incidents could not load", () => {
+    const quiet = quietDashboardFixture();
+    const failed = render({ dashboard: quiet, review: null, reason: "load_failed" });
+    expect(failed).toContain("Posts to review and incidents could not load — Refresh to try again.");
+    expect(failed).toContain("Held classes and failed posts did load: there are none.");
+    expect(failed).toContain("0 open");
+    expect(failed).not.toContain("Nothing needs you");
+    // The empty state says it once: no footer repeating it.
+    expect(failed).not.toContain("so this list has the held classes and the failed posts only");
+    const missing = render({ dashboard: quiet, review: null, reason: "review_tables_missing" });
+    expect(missing).toContain("Posts to review and incidents are not available yet — migration 0101 creates their tables.");
+    expect(missing).not.toContain("Nothing needs you");
+    expect(render({ dashboard: quiet, review: null, tutorKey: "Dao" })).toContain("Held classes and failed posts did load: Dao has none.");
+    // With the review data, an empty list is good news.
+    expect(render({ dashboard: quiet, review: quietReviewFixture() })).toContain("Nothing needs you.");
   });
 
   it("tells an admin who is not the owner that the list is read-only, with the same items to open", () => {

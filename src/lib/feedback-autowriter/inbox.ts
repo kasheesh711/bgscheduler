@@ -240,6 +240,14 @@ export function buildInbox(
 }
 
 /**
+ * How many things wait in the list: its classes, each counted once whatever its rows (a post to review with an incident
+ * about it is one class), and each item about no class on its own.
+ */
+export function openCount(items: ReadonlyArray<Pick<InboxItem, "id" | "wiseSessionId">>): number {
+  return new Set(items.map((item) => item.wiseSessionId === null ? `item:${item.id}` : `class:${item.wiseSessionId}`)).size;
+}
+
+/**
  * The list narrowed to one tutor; `null` keeps every item. An item that belongs to no tutor (a halt, an incident on a
  * class the page does not hold, the expansion confirmation) concerns everyone and stays in every tutor's list, so a
  * filter never hides a critical incident.

@@ -10,6 +10,7 @@ import {
   holdUrgency,
   incidentTitle,
   isOpenHold,
+  openCount,
   type InboxDashboard,
   type InboxItem,
   type InboxReview,
@@ -341,6 +342,30 @@ describe("filterInbox", () => {
     // A tutor with nothing open still sees what concerns everyone.
     expect(ids(filterInbox(items, "Dao"))).toEqual(["incident:i-halt"]);
     expect(filterInbox([], "Anna")).toEqual([]);
+  });
+});
+
+describe("openCount", () => {
+  it("counts classes, not rows: a class with a post to review and an incident about it is one", () => {
+    const items = buildInbox(
+      dashboard({ holds: [hold("h-anna")], failedPosts: [failedPost("r-chai")] }),
+      review({
+        queue: [queueItem("r-chai"), queueItem("r-anna", { tutorKey: "Anna" })],
+        incidents: [incident("i-chai", { wiseSessionId: "r-chai" }), incident("i-chai-2", { wiseSessionId: "r-chai" })],
+      }),
+      { now: NOW },
+    );
+    // Two incidents, a review and a failed post of one class, a hold, and another review: three classes.
+    expect(items).toHaveLength(6);
+    expect(openCount(items)).toBe(3);
+  });
+
+  it("counts each item about no class on its own", () => {
+    const items = buildInbox(dashboard({ holds: [hold("h-anna")] }), review({
+      incidents: [incident("i-halt", { kind: "halt" }), incident("i-scan", { kind: "scan_failed" })],
+    }), { now: NOW });
+    expect(openCount(items)).toBe(3);
+    expect(openCount([])).toBe(0);
   });
 });
 

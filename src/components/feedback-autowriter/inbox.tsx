@@ -4,8 +4,8 @@ import type { ReactNode } from "react";
 import { Check, CircleAlert, Clock, FileText, Split, TriangleAlert, UserPlus, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { AutowriterDashboard } from "@/lib/feedback-autowriter/dashboard";
-import { INBOX_GROUPS, flagReasons, type InboxItem, type InboxItemKind } from "@/lib/feedback-autowriter/inbox";
-import type { AutowriterReview } from "@/lib/feedback-autowriter/review-data";
+import { INBOX_GROUPS, flagReasons, openCount, type InboxItem, type InboxItemKind } from "@/lib/feedback-autowriter/inbox";
+import type { AutowriterReview, AutowriterReviewUnavailable } from "@/lib/feedback-autowriter/review-data";
 import { cn } from "@/lib/utils";
 import { CountChip, Panel, Tag, Upper, type Tone } from "./atoms";
 import { stateLabel } from "./class-states";
@@ -45,6 +45,12 @@ const ACTION_TONE: Record<Tone, string> = {
 
 const ACTION_LABEL: Record<InboxItem["action"], string> = { open: "Open", review: "Review", decide: "Decide", confirm: "Confirm" };
 const URGENCY_TONE: Record<InboxItem["urgency"], Tone> = { critical: "red", soon: "amber", normal: "neutral" };
+
+/** What an empty list says when the posts to review and the incidents are not on the page: never "Nothing needs you". */
+const REVIEW_MISSING: Record<AutowriterReviewUnavailable["reason"], string> = {
+  load_failed: "Posts to review and incidents could not load — Refresh to try again.",
+  review_tables_missing: "Posts to review and incidents are not available yet — migration 0101 creates their tables.",
+};
 
 /** What one row shows: built per kind from the item and the page's payloads. */
 interface RowView {
@@ -131,7 +137,8 @@ export function Inbox({ items, dashboard, review, now, filteredTo, reviewUnavail
   now: Date;
   /** The name of the tutor the page is filtered to. */
   filteredTo: string | null;
-  reviewUnavailable: boolean;
+  /** Why the posts to review and the incidents are not on the page (the review data did not load); null when they are. */
+  reviewUnavailable: AutowriterReviewUnavailable["reason"] | null;
   /** The owner; every other admin reads, and the list says so. */
   canControl: boolean;
   onOpen: (target: DrawerTarget) => void;
@@ -147,12 +154,23 @@ export function Inbox({ items, dashboard, review, now, filteredTo, reviewUnavail
       <div className="flex items-center justify-between gap-3 border-b px-5 py-[19px]">
         <div className="flex items-center gap-[9px]">
           <h2 id="autowriter-inbox-title" className="text-sm font-[650] tracking-[-0.02em]">What needs you</h2>
-          <CountChip>{items.length} open</CountChip>
+          <CountChip>{openCount(items)} open</CountChip>
         </div>
         <span className="text-[11px] text-muted-foreground">{filteredTo ? `filtered to ${filteredTo}` : "Nothing urgent is hidden below."}</span>
       </div>
 
-      {groups.length === 0 ? (
+      {groups.length === 0 && reviewUnavailable ? (
+        // Only the held classes and the failed posts loaded: an empty list does not mean nothing needs the owner.
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 border-b px-5 py-14 text-center" data-empty="review-missing">
+          <span className="grid size-9 place-items-center rounded-full bg-amber-50 text-amber-600 dark:bg-amber-950 dark:text-amber-300">
+            <CircleAlert aria-hidden className="size-4" />
+          </span>
+          <p className="max-w-sm text-sm font-[550]">{REVIEW_MISSING[reviewUnavailable]}</p>
+          <p className="max-w-xs text-[11px] text-muted-foreground">
+            {`Held classes and failed posts did load: ${filteredTo ? `${filteredTo} has` : "there are"} none.`}
+          </p>
+        </div>
+      ) : groups.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 border-b px-5 py-14 text-center">
           <span className="grid size-9 place-items-center rounded-full bg-available/10 text-available"><Check aria-hidden className="size-4" /></span>
           <p className="text-sm font-[550]">Nothing needs you.</p>
@@ -210,7 +228,7 @@ export function Inbox({ items, dashboard, review, now, filteredTo, reviewUnavail
         </div>
       )}
 
-      {reviewUnavailable ? (
+      {reviewUnavailable && groups.length > 0 ? (
         <p className="border-t bg-amber-50/60 px-5 py-2.5 text-[11px] text-amber-800 dark:bg-amber-950 dark:text-amber-200">
           The posts to review and the incidents could not load, so this list has the held classes and the failed posts only.
         </p>
