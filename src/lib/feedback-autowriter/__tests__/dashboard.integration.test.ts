@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { calculateFeedbackDeadline } from "@/lib/post-class-feedback/policy";
@@ -50,17 +50,28 @@ async function seedSave(wiseSessionId: string, actorKind: typeof FX.$inferInsert
 }
 
 /**
- * A version of the class's feedback as the Class Feedback collection observed it in Wise
- * (`post_class_feedback_versions`); the class needs its `post_class_sessions` row (`className` in `seedRow`).
+ * One read of the class's teacher submission by the Class Feedback collection, stored the way its `saveObservation`
+ * stores it: one version row per submission and content (the time it was first seen stays its `observed_at`), and the
+ * session's pointer at the current teacher version when its topics, performance or improvement hold text, at nothing
+ * otherwise. `fields: null` is a read that finds no teacher submission. The class needs its `post_class_sessions` row
+ * (`className` in `seedRow`).
  */
-async function seedFeedback(wiseSessionId: string, observedAt: string, fields: Partial<typeof FIELDS> = {}, profile = "teacher"): Promise<void> {
+async function collect(wiseSessionId: string, observedAt: string, fields: Partial<typeof FIELDS> | null): Promise<void> {
   const [session] = await db.select({ id: PC.id }).from(PC).where(eq(PC.wiseSessionId, wiseSessionId));
   if (!session) throw new Error(`no post_class_sessions row for ${wiseSessionId}`);
+  if (fields === null) {
+    await db.update(PC).set({ latestFeedbackVersionId: null }).where(eq(PC.id, session.id));
+    return;
+  }
   const text = { topics: "", performance: "", improvement: "", homework: "", ...fields };
+  const contentHash = JSON.stringify(text);
+  const versionKey = `submission-1:${contentHash}`;
   await db.insert(PCV).values({
-    sessionId: session.id, versionKey: `${profile}-${observedAt}`, contentHash: `hash-${profile}-${observedAt}`, profile,
-    observedAt: new Date(observedAt), ...text,
-  });
+    sessionId: session.id, versionKey, wiseSubmissionId: "submission-1", contentHash, profile: "teacher", observedAt: new Date(observedAt), ...text,
+  }).onConflictDoNothing({ target: [PCV.sessionId, PCV.versionKey] });
+  const [version] = await db.select({ id: PCV.id }).from(PCV).where(and(eq(PCV.sessionId, session.id), eq(PCV.versionKey, versionKey)));
+  const hasText = [text.topics, text.performance, text.improvement].some((value) => value.trim() !== "");
+  await db.update(PC).set({ latestFeedbackVersionId: hasText ? version.id : null }).where(eq(PC.id, session.id));
 }
 
 beforeAll(async () => {
@@ -124,58 +135,83 @@ describe("loadAutowriterDashboard", () => {
     expect(board.system).toMatchObject({ promptVersion: expect.any(Number), writer: { model: expect.any(String) } });
   });
 
-  it("marks a held class as written once it has a person's feedback text in Wise, and no other", async () => {
+  it("marks a held class as written while its teacher feedback in Wise holds text, and no other", async () => {
     const written = await seedRow(1, { endAt: "2026-09-29T03:00:00Z", className: "Class one" });
-    const blankSave = await seedRow(2, { endAt: "2026-09-29T04:00:00Z", reason: "attendance_0pct", className: "Class two" });
-    const billingFix = await seedRow(3, { endAt: "2026-09-29T05:00:00Z", reason: "billing_differs_from_current_submission", className: "Class three" });
-    const erased = await seedRow(4, { endAt: "2026-09-29T06:00:00Z", className: "Class four" });
+    const rewritten = await seedRow(2, { endAt: "2026-09-29T03:30:00Z", wiseTeacherUserId: EK_MAIN, className: "Class two" });
+    const blankSave = await seedRow(3, { endAt: "2026-09-29T04:00:00Z", reason: "attendance_0pct", className: "Class three" });
+    const billingFix = await seedRow(4, { endAt: "2026-09-29T05:00:00Z", reason: "billing_differs_from_current_submission", className: "Class four" });
     const whitespace = await seedRow(5, { endAt: "2026-09-29T07:00:00Z", className: "Class five" });
-    const studentForm = await seedRow(6, { endAt: "2026-09-29T08:00:00Z", className: "Class six" });
+    const homeworkOnly = await seedRow(6, { endAt: "2026-09-29T08:00:00Z", className: "Class six" });
     const notCollected = await seedRow(7, { endAt: "2026-09-29T09:00:00Z" });
-    const oneField = await seedRow(8, { endAt: "2026-09-29T10:00:00Z", wiseTeacherUserId: EK_MAIN, className: "Class eight" });
     // A class the tutor wrote before we could: never a hold, whatever is in Wise.
-    const tutorFirst = await seedRow(9, { endAt: "2026-09-29T11:00:00Z", state: "skipped_human", reason: "human_submission", className: "Class nine" });
+    const tutorFirst = await seedRow(8, { endAt: "2026-09-29T11:00:00Z", state: "skipped_human", reason: "human_submission", className: "Class eight" });
 
-    // Wise's blank auto-submission, then the tutor's text: the latest version counts.
-    await seedFeedback(written, "2026-09-29T03:00:30Z");
-    await seedFeedback(written, "2026-09-29T09:00:00Z", FIELDS);
+    // Wise's blank auto-submission, then the tutor's text.
+    await collect(written, "2026-09-29T03:13:00Z", {});
+    await collect(written, "2026-09-29T09:13:00Z", FIELDS);
+    // Written, then written again: the text in Wise now.
+    await collect(rewritten, "2026-09-29T03:43:00Z", {});
+    await collect(rewritten, "2026-09-29T09:13:00Z", FIELDS);
+    await collect(rewritten, "2026-09-29T09:43:00Z", { ...FIELDS, improvement: "Number sequences" });
     // The tutor submitted the form blank (the student was absent): a save, and nothing written.
-    await seedFeedback(blankSave, "2026-09-29T04:00:30Z");
-    await seedFeedback(blankSave, "2026-09-29T10:00:00Z");
+    await collect(blankSave, "2026-09-29T04:13:00Z", {});
     await seedSave(blankSave, "tutor", "2026-09-29T10:00:00Z");
+    await collect(blankSave, "2026-09-29T10:13:00Z", {});
     // Staff corrected the credits of a class held for its billing: a person's save, and the form is still blank.
-    await seedFeedback(billingFix, "2026-09-29T05:00:30Z");
+    await collect(billingFix, "2026-09-29T05:13:00Z", {});
     await seedSave(billingFix, "other_staff", "2026-09-29T11:00:00Z");
     await seedSave(billingFix, "owner_web", "2026-09-29T11:30:00Z");
-    // Text that was taken out again: the class is as unwritten as before.
-    await seedFeedback(erased, "2026-09-29T12:00:00Z", FIELDS);
-    await seedFeedback(erased, "2026-09-29T13:00:00Z");
-    await seedFeedback(whitespace, "2026-09-29T12:00:00Z", { topics: "  \n", performance: "\t", improvement: " ", homework: "" });
-    // A student's own form is not the teacher's feedback.
-    await seedFeedback(studentForm, "2026-09-29T12:00:00Z", FIELDS, "student");
+    await collect(billingFix, "2026-09-29T11:43:00Z", {});
+    await collect(whitespace, "2026-09-29T12:13:00Z", { topics: "  \n", performance: "\t", improvement: " " });
+    // Homework alone is not feedback on the class (the Class Feedback rule): it stays listed.
+    await collect(homeworkOnly, "2026-09-29T12:13:00Z", { homework: "Page 12" });
     await seedSave(notCollected, "tutor", "2026-09-29T12:00:00Z");
-    // One field is a write-up too.
-    await seedFeedback(oneField, "2026-09-29T12:00:00Z", { homework: "Page 12" });
-    await seedFeedback(tutorFirst, "2026-09-29T11:05:00Z", FIELDS);
+    await collect(tutorFirst, "2026-09-29T11:13:00Z", FIELDS);
 
     const board = await loadAutowriterDashboard(db, { windowDays: 7, now: NOW });
 
     expect(Object.fromEntries(board.holds.map((row) => [row.wiseSessionId, row.resolvedBy]))).toEqual({
-      [written]: "tutor_wrote", [oneField]: "tutor_wrote",
-      [blankSave]: null, [billingFix]: null, [erased]: null, [whitespace]: null, [studentForm]: null, [notCollected]: null,
+      [written]: "tutor_wrote", [rewritten]: "tutor_wrote",
+      [blankSave]: null, [billingFix]: null, [whitespace]: null, [homeworkOnly]: null, [notCollected]: null,
     });
     // The class stays a hold: the row is still `held`, and the window still counts it.
-    expect(board.totals.held).toBe(8);
+    expect(board.totals.held).toBe(7);
     expect(board.recent.find((row) => row.wiseSessionId === written)?.state).toBe("held");
     expect(board.holds.some((row) => row.wiseSessionId === tutorFirst)).toBe(false);
   });
 
-  it("takes the latest version by when it was observed, whatever the order the rows were written in", async () => {
-    const held = await seedRow(1, { endAt: "2026-09-29T03:00:00Z", className: "Class one" });
-    // Written last, observed first: the blank version is the older one.
-    await seedFeedback(held, "2026-09-29T09:00:00Z", FIELDS);
-    await seedFeedback(held, "2026-09-29T03:00:30Z");
-    expect((await loadAutowriterDashboard(db, { windowDays: 7, now: NOW })).holds).toMatchObject([{ wiseSessionId: held, resolvedBy: "tutor_wrote" }]);
+  it("does not take text that was taken out again, or a submission that is gone, for a write-up", async () => {
+    const erased = await seedRow(1, { endAt: "2026-09-29T03:00:00Z", className: "Class one" });
+    const removed = await seedRow(2, { endAt: "2026-09-29T04:00:00Z", className: "Class two" });
+    // Wise's blank auto-submission, the tutor's text (the wrong class), and the form cleared again.
+    await collect(erased, "2026-09-29T03:13:00Z", {});
+    await collect(erased, "2026-09-29T09:13:00Z", FIELDS);
+    expect((await loadAutowriterDashboard(db, { windowDays: 7, now: NOW })).holds.find((row) => row.wiseSessionId === erased)?.resolvedBy).toBe("tutor_wrote");
+    await collect(erased, "2026-09-29T09:43:00Z", {});
+    await collect(removed, "2026-09-29T09:13:00Z", FIELDS);
+    await collect(removed, "2026-09-29T09:43:00Z", null);
+
+    // The cleared form is the blank version seen first: no new row, so the text is still the version observed last.
+    const versions = await db.select({ topics: PCV.topics, wiseSessionId: PC.wiseSessionId }).from(PCV)
+      .innerJoin(PC, eq(PC.id, PCV.sessionId)).orderBy(desc(PCV.observedAt));
+    expect(versions.filter((row) => row.wiseSessionId === erased)).toHaveLength(2);
+    expect(versions.find((row) => row.wiseSessionId === erased)?.topics).toBe(FIELDS.topics);
+
+    const board = await loadAutowriterDashboard(db, { windowDays: 7, now: NOW });
+    expect(Object.fromEntries(board.holds.map((row) => [row.wiseSessionId, row.resolvedBy]))).toEqual({ [erased]: null, [removed]: null });
+  });
+
+  it("reads only a teacher's version through the pointer", async () => {
+    const otherProfile = await seedRow(1, { endAt: "2026-09-29T03:00:00Z", className: "Class one" });
+    // The collection never points at a version that is not the teacher's; if a pointer ever did, it proves nothing.
+    // (A pointer to a version that is gone cannot exist: the column is a foreign key.)
+    const [session] = await db.select({ id: PC.id }).from(PC).where(eq(PC.wiseSessionId, otherProfile));
+    const [version] = await db.insert(PCV).values({
+      sessionId: session.id, versionKey: "submission-2:student", contentHash: "student", profile: "student", observedAt: new Date("2026-09-29T09:13:00Z"), ...FIELDS,
+    }).returning({ id: PCV.id });
+    await db.update(PC).set({ latestFeedbackVersionId: version.id }).where(eq(PC.id, session.id));
+    const board = await loadAutowriterDashboard(db, { windowDays: 7, now: NOW });
+    expect(board.holds).toMatchObject([{ wiseSessionId: otherProfile, resolvedBy: null }]);
   });
 
   it("has no holds and no failed posts when there are none", async () => {

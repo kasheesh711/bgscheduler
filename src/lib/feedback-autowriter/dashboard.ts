@@ -41,7 +41,7 @@ export interface DashboardHoldRow extends Pick<AutowriterSessionRow,
   className: string | null;
   /** The row stores a judged draft (`fields`). */
   hasDraft: boolean;
-  /** The class has a person's feedback text in Wise now (`loadHeldClassesAPersonWrote`). */
+  /** The class's teacher feedback in Wise holds text now, a person's (`loadHeldClassesAPersonWrote`). */
   personWrote: boolean;
 }
 
@@ -189,9 +189,9 @@ export interface AutowriterDashboard {
     /** A judged draft is stored on the row. */
     hasDraft: boolean;
     /**
-     * `tutor_wrote`: the class has a person's feedback text in Wise now, so it no longer waits for anyone (the row
-     * stays `held`: the autowriter never touches a held class again). Null while it has none — a form saved blank, or
-     * staff correcting its status or credits, is not a write-up.
+     * `tutor_wrote`: the class's teacher feedback in Wise holds text now, a person's, so it no longer waits for anyone
+     * (the row stays `held`: the autowriter never touches a held class again). Null while it holds none — a form saved
+     * blank, staff correcting its status or credits, or text taken out again is not a write-up.
      */
     resolvedBy: "tutor_wrote" | null;
     wiseUrl: string | null;
@@ -509,25 +509,26 @@ function tallyBy<T>(rows: readonly T[], key: (row: T) => string): Array<[string,
 }
 
 /**
- * The held classes a person has written since: those whose latest teacher feedback, as our evidence of Wise has it
- * (`post_class_feedback_versions`; the collection runs every half hour and takes a class with a new save first),
- * holds text. The autowriter never posts to a held class, so that text is a person's.
+ * The held classes a person has written since: those whose teacher feedback in Wise holds text now, as the Class
+ * Feedback collection last read it (`post_class_sessions.latest_feedback_version_id`: on every read it points at the
+ * class's current teacher submission when its topics, performance or improvement hold text, and at nothing
+ * otherwise; the collection runs every half hour and takes a class with a new save first). The autowriter never
+ * posts to a held class, so that text is a person's.
  *
- * A person's save alone (the fix events) does not say so: staff correcting the status or the credits of a class held
- * for its billing, and a form submitted blank, are saves too, and the class would leave the to-do list with no
- * feedback in Wise. The price is a hold someone settled without writing (a student marked absent): it stays listed
+ * Two weaker signals were tried and dropped, both able to take a class off the to-do list with no feedback in Wise:
+ * - a person's save (the fix events): staff correcting the status or the credits of a class held for its billing, and
+ *   a form submitted blank, are saves too;
+ * - the version observed last (`observed_at`): a version is stored once per content, first seen, so text written and
+ *   then taken out again stays the "latest" one.
+ * The price is a hold someone settled without writing (a student marked absent, or homework alone): it stays listed
  * until a day after its deadline.
  */
 async function loadHeldClassesAPersonWrote(db: Database): Promise<Set<string>> {
-  const latest = await db.selectDistinctOn([S.wiseSessionId], {
-    wiseSessionId: S.wiseSessionId,
-    written: sql<boolean>`(${PCV.topics} || ${PCV.performance} || ${PCV.improvement} || ${PCV.homework}) ~ '\\S'`,
-  }).from(S)
+  const rows = await db.select({ wiseSessionId: S.wiseSessionId }).from(S)
     .innerJoin(PC, eq(PC.wiseSessionId, S.wiseSessionId))
-    .innerJoin(PCV, eq(PCV.sessionId, PC.id))
-    .where(and(eq(S.state, "held"), eq(PCV.profile, "teacher")))
-    .orderBy(S.wiseSessionId, desc(PCV.observedAt), desc(PCV.createdAt));
-  return new Set(latest.filter((row) => row.written).map((row) => row.wiseSessionId));
+    .innerJoin(PCV, eq(PCV.id, PC.latestFeedbackVersionId))
+    .where(and(eq(S.state, "held"), eq(PCV.profile, "teacher")));
+  return new Set(rows.map((row) => row.wiseSessionId));
 }
 
 /** Read-only loader for the page and its API route. */
