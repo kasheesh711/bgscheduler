@@ -127,13 +127,21 @@ function deps(ops: WiseFeedbackOps, overrides: Partial<AutowriterDeps> = {}): Au
   };
 }
 
+/**
+ * A seeded class's deadline, unless the test sets its own: two days ahead of both clocks it is compared with — the
+ * `NOW` that `deps()` pins (expiry, sweep order, owner retries) and Postgres `now()`, the wall clock, which decides
+ * that a class past its deadline is done with its Soniox job (`doneWithSonioxJob` in store.ts). A fixed date falls
+ * behind the wall clock: 30 Sep 23:59:59 Bangkok did, and a class still transcribing had its review window started.
+ */
+const DEADLINE = new Date(Math.max(NOW.getTime(), Date.now()) + 48 * 3600_000);
+
 async function seedRow(overrides: Partial<typeof S.$inferInsert> = {}) {
   await ensureSessionRow(db, {
     wiseSessionId: SESSION_ID,
     wiseClassId: CLASS_ID,
     wiseTeacherUserId: KEVIN,
     scheduledEndAt: new Date("2026-09-28T09:30:00.000Z"),
-    deadlineAt: new Date("2026-09-30T16:59:59.999Z"),
+    deadlineAt: DEADLINE,
     trigger: "test",
   });
   if (Object.keys(overrides).length > 0) await db.update(S).set(overrides).where(eq(S.wiseSessionId, SESSION_ID));
@@ -178,7 +186,10 @@ function wiseForMany(detailFor: (sessionId: string) => Detail = () => sessionDet
   return { ops, started, current: () => current };
 }
 
-/** One more class of the same tutor, due now; `hoursToDeadline` orders it among the others. */
+/**
+ * One more class of the same tutor, due now; `hoursToDeadline`, from the pinned `NOW`, orders it among the others. On
+ * the database's clock its deadline has passed, so it is no class to test the Soniox review window with (`DEADLINE`).
+ */
 async function seedClass(wiseSessionId: string, hoursToDeadline: number, overrides: Partial<typeof S.$inferInsert> = {}) {
   await ensureSessionRow(db, {
     wiseSessionId, wiseClassId: CLASS_ID, wiseTeacherUserId: KEVIN,
@@ -440,7 +451,7 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     await seedRow();
     await ensureSessionRow(db, {
       wiseSessionId: "6a0000000000000000000099", wiseClassId: "6a0000000000000000000098", wiseTeacherUserId: KEVIN,
-      scheduledEndAt: new Date("2026-09-28T09:30:00.000Z"), deadlineAt: new Date("2026-09-30T16:59:59.999Z"), trigger: "test",
+      scheduledEndAt: new Date("2026-09-28T09:30:00.000Z"), deadlineAt: DEADLINE, trigger: "test",
     });
     await db.update(S).set({ state: "posting", postStartedAt: sql`now() - interval '10 minutes'` as never })
       .where(eq(S.wiseSessionId, "6a0000000000000000000099"));
@@ -471,7 +482,7 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     await seedRow();
     await ensureSessionRow(db, {
       wiseSessionId: "6a0000000000000000000099", wiseClassId: "6a0000000000000000000098", wiseTeacherUserId: KEVIN,
-      scheduledEndAt: new Date("2026-09-28T09:30:00.000Z"), deadlineAt: new Date("2026-09-30T16:59:59.999Z"), trigger: "test",
+      scheduledEndAt: new Date("2026-09-28T09:30:00.000Z"), deadlineAt: DEADLINE, trigger: "test",
     });
     await db.update(S).set({ state: "posting", postStartedAt: sql`now()` }).where(eq(S.wiseSessionId, "6a0000000000000000000099"));
     const wise = fakeWise();
@@ -498,7 +509,7 @@ describe("runSweep (Postgres + fake Wise and models)", () => {
     await seedRow({ deadlineAt: new Date(NOW.getTime() + 10 * 60 * 1000) });
     await ensureSessionRow(db, {
       wiseSessionId: "6a0000000000000000000077", wiseClassId: CLASS_ID, wiseTeacherUserId: KEVIN,
-      scheduledEndAt: new Date("2026-09-28T09:30:00.000Z"), deadlineAt: new Date("2026-09-30T16:59:59.999Z"), trigger: "test",
+      scheduledEndAt: new Date("2026-09-28T09:30:00.000Z"), deadlineAt: DEADLINE, trigger: "test",
     });
     await updateControl(db, { haltedAt: new Date(), haltReason: "manual pause" }, "t@x.com");
     const wise = fakeWise();
@@ -550,9 +561,10 @@ describe("runSweep (Postgres + fake Wise and models)", () => {
 
   it("stops processing the moment a halt lands mid-sweep", async () => {
     await seedRow();
+    // Half an hour after the first class's deadline: the sweep starts it second.
     await ensureSessionRow(db, {
       wiseSessionId: "6a0000000000000000000077", wiseClassId: CLASS_ID, wiseTeacherUserId: KEVIN,
-      scheduledEndAt: new Date("2026-09-28T09:30:00.000Z"), deadlineAt: new Date("2026-09-30T17:30:00.000Z"), trigger: "test",
+      scheduledEndAt: new Date("2026-09-28T09:30:00.000Z"), deadlineAt: new Date(DEADLINE.getTime() + 30 * 60 * 1000), trigger: "test",
     });
     const wise = fakeWise();
     const calls: string[] = [];
