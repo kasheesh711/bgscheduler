@@ -8,8 +8,9 @@ mode, pause/resume and per-tutor switches (one per tutor, covering both of their
 roster account are skipped at once (Wise type `OFFLINE`) and left out of the dashboard entirely — they stay the
 tutor's to write.
 
-Writes a tutor's post-class feedback for **online one-to-one classes** from Wise's AI meeting summary and
-completes Wise's own **blank auto-submission** through the same endpoint the Wise web app uses
+Writes a tutor's post-class feedback for **online one-to-one classes** from Wise's AI meeting summary — or, with
+[transcript first](#transcript-first-switch-30-sep) on, from a Soniox transcript of the lesson recording, with the
+summary as the fallback — and completes Wise's own **blank auto-submission** through the same endpoint the Wise web app uses
 (`POST /teacher/classes/{classId}/session/{sessionId}/feedback`). It is a separate module on purpose:
 [Post-Class Feedback](./post-class-feedback.md) stays read-only toward Wise and never generates feedback; it
 simply ingests what the autowriter posted like any other submission.
@@ -33,7 +34,7 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
    [`/api/wise/webhook`](../../src/app/api/wise/webhook/route.ts) stores the delivery and answers 200, then
    processes the session in `after()`, skipping any retry wait and re-reading Wise every 20 s for up to 3 minutes
    while the summary is not there yet (measured: the summary appears 17–78 s after the meeting ends). Target:
-   feedback posted ~2–3 minutes after class. The [backstop cron](../reference/crons.md#feedback-autowriter-job)
+   feedback posted ~2–3 minutes after class (about an hour with transcript first, which waits for the recording). The [backstop cron](../reference/crons.md#feedback-autowriter-job)
    (`8,22,38,52 * * * *`) sweeps anything missed.
 2. **Lease.** One worker per session (`feedback_autowriter_sessions`, conditional update on the database clock).
    The lease (14 min) outlives any function (800 s), so an expired lease always means a dead worker; the sweep
@@ -110,6 +111,7 @@ When the AI summary cannot carry the feedback, the class is handed to a second p
 
 | Handover | When |
 |---|---|
+| `transcript_first` | every class that passes the gates, while [transcript first](#transcript-first-switch-30-sep) is on |
 | `summary_draft_held` | both summary drafts failed validation or the faithfulness judge |
 | `no_usable_summary` | still no summary (or too short) 30 minutes after the class end |
 | `thai_summary` | the summary is at least half Thai: Wise builds it from Zoom's Thai transcript, which loses the English terms |
@@ -162,10 +164,12 @@ it (v4, above). While Wise itself is not ready (attendance, status, the
 POST slot, a failed read once a draft exists) the class waits in `pending`, not `awaiting_recording`. Three Soniox failures (errors, a job running
 over an hour, or a run whose status checks never get an answer; within one run a failed check after a good answer
 does not count, and the backstop checks once per run), several recording parts, a recording too short for the
-class, or a transcript under 800 characters → `held` + alert. A
+class, or a transcript under 800 characters → `held` + alert (with [transcript first](#transcript-first-switch-30-sep),
+the Soniox failures, several parts and unclear speakers fall back to the summary instead). A
 class still waiting for its recording (or its transcript) 3 hours after class raises a `no_recording` alert (live
-mode; not for a switched-off tutor, a short recording waiting for its recheck, or an infra retry); rows still
-waiting at the deadline margin expire with an alert as before.
+mode; not for a switched-off tutor, a short recording waiting for its recheck, an infra retry, or a transcript-first
+class still waiting for its recording, which falls back instead); rows still waiting at the deadline margin expire
+with an alert as before.
 Soniox jobs of finished rows and of shadow drafts are deleted by the sweep once their review window is over or the
 class is triaged; a refused delete is retried at the next sweep.
 
@@ -173,6 +177,60 @@ Pilot (2026-09-29, 8 classes): on Thai/English lessons Soniox kept the English t
 was preferred in 17 of 18 compared windows; no gain on English-only lessons.
 
 Switch: `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED=true` plus `SONIOX_API_KEY`; off → the fast path behaves as before.
+
+## Transcript first (switch, 30 Sep)
+
+Both errors reported on 29 Sep came from Wise's summary itself: redaction left another student's name as the only
+real name in it, and the summary mis-heard a Thai exchange as "three remaining homework problems". The transcript
+carries neither. Owner decision (30 Sep), for all five tutors: wait for the recording and write from its transcript;
+use the summary only when the transcript cannot carry the class. Switch: `FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST=true`
+([`config.ts`](../../src/lib/feedback-autowriter/config.ts)), exact string only, and it acts only while the second
+pass is on. Off (the default), nothing changes.
+
+- **Handover** (`processLeased` in [`job.ts`](../../src/lib/feedback-autowriter/job.ts)). After every gate —
+  attendance, the submission (a class the tutor already wrote is `skipped_human` before any Soniox spend), scope,
+  form, billing and the student and tutor — and before anything uses the summary: `awaiting_recording`,
+  `evidence = transcript`, reason `transcript_first`, `metadata.handover` and `metadata.summaryAtHandover`
+  (`{characters, thaiShare}`, for analysis only). The readiness wait no longer needs the summary, so a webhook hands
+  over as soon as attendance is in. Due at once when Wise already has the recording (the next webhook or sweep
+  picks it up); otherwise the usual 30-minute recheck, never later than the fallback time. Wise's
+  `RecordingCompletedEvent` webhook continues it, as for any second-pass class.
+- **Fallback to the summary** (`fallBackToSummary`, once): no recording **3 h after the scheduled end**, a recording
+  in several parts, speakers it cannot tell apart, three Soniox failures, or the transcript pass switched off while
+  the class waited. The row goes back to `pending` with `evidence = summary`, due at once, reason
+  `summary_fallback:<cause>` and `metadata.summaryFallback {cause, at}` (the run reports `summary_fallback`), and the
+  summary path writes it as before. A transcript draft kept on the row (only possible for a recording that gained a
+  second part, or the pass switched off) is dropped with its verdict and stamp. Measured before choosing 3 h (first `RecordingCompletedEvent` − scheduled end,
+  16–29 Sep, 453 classes): median 34 min, 90th percentile 61 min, 95th 71 min, one class over 3 h; the roster
+  tutors' online classes: 95th percentile 72 min, none over 3 h.
+- **Still holds.** A recording or transcript too short for the class, and a transcript draft the validator or judge
+  rejects: the better evidence could not support a draft, so a person writes it.
+- **After a fallback.** A mostly-Thai summary is held (`thai_summary_no_transcript`); a held summary draft stays
+  held; no summary retries, alerts `no_summary` and expires as before. Nothing hands over again, so there is no loop;
+  an owner `--retry` clears `summaryFallback`, `summaryAtHandover` and `handover`, and the class may go to the
+  transcript again.
+- **Alerts and retention** ([`store.ts`](../../src/lib/feedback-autowriter/store.ts)). A transcript-first class still
+  waiting for its recording raises no `no_recording` alert — it falls back at that point instead; one whose
+  transcription is still running 3 h after class has no time-based fallback, so it alerts as before. A class that
+  fell back is done with its Soniox job (the summary path never reads it again) unless a POST is in flight or a worker
+  holds it: 72 h review window, then deletion; going live keeps its window.
+- **Dashboard.** "Waiting for the recording"; a fallback shows under its state, e.g. "No recording after 3 h — from
+  summary"; fallback counts by cause; class end → post median and 90th percentile by what the post was written from
+  (transcript, summary after a fallback, summary).
+- **Replay** (read-only, [`replay.ts`](../../src/lib/feedback-autowriter/replay.ts); CLI `--replay`). What transcript
+  first would do with recent classes, before the switch is turned on: Wise session-detail GETs, database SELECTs,
+  Soniox jobs deleted right after each transcript, model calls kept in memory. Per class: the outcome (draft, hold
+  or fallback), Soniox minutes, cost and turnaround, the speaker method, the v4 transcript draft with its judge at
+  `high` and — on the same messages — at `medium`, a v4 summary draft, and a v4 `high` judge of the draft actually
+  posted (the original, when a one-time correction replaced it) against the transcript — only on a transcript
+  production would write from. Writer models are whatever `AUTOWRITER_MODELS` names, shown per draft. It is typed so
+  it cannot post (`Pick<WiseFeedbackOps, "getSessionDetailById">`), and no database handle is passed in: the CLI
+  SELECTs the sample (including when Wise announced each recording) and the tutor's prior feedback. A class whose
+  published recording Wise no longer lists (Wise drops recordings about a day after class) is skipped
+  (`skip:recording_gone`), not counted as a fallback. It shares `sonioxJobInput()` and `buildTranscriptEvidence()`
+  with production ([`transcript.ts`](../../src/lib/feedback-autowriter/transcript.ts)) and production's Soniox
+  time-out. Output: gitignored `.feedback-autowriter/replay/<ts>/` (0600): `records.json`, `summary.json` and
+  `summary.md` (no lesson text); transcripts only with `--keep-transcripts`.
 
 ## Robustness and traceability
 - A timeout while reading a model or Soniox reply is an ordinary timeout (retried later), never an unhandled error.
@@ -223,7 +281,8 @@ Preview deployments never touch autowriter state.
 
 GLM ≈ $0.0024 per class (writer) + ≈ $0.0008 (judge, measured at reasoning `medium`; `high` since v4 is not
 re-measured yet); Luna fallback ≈ $0.0012. ~200 online classes/month across
-the five tutors → under $1/month. Each call's tokens and billed cost are in `feedback_autowriter_calls`.
+the five tutors → under $1/month. Transcript first adds Soniox for every class: about $0.10 per class-hour of
+recording, ~$22/month. Each call's tokens and billed cost are in `feedback_autowriter_calls`.
 
 ## Side effects to know
 
