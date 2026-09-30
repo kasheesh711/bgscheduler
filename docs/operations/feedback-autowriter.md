@@ -29,28 +29,34 @@ Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowrite
    `WISE_WEBHOOK_AUTH_HEADER`); a refused delivery logs `unauthorized delivery; header names: …` instead.
    Confirm read-only with `GET /institutes/{id}/webhooks` that both subscriptions exist and the original is unchanged.
 
-### Operating loop, Phase 1 (migration 0100) — in this order
+### Operating loop, Phase 1 (migration 0101) — in this order
 
-1. **Apply migration 0100** on production Neon (`DATABASE_URL=… npm run db:migrate`). It is numbered after main's 0099
-   (`0099_feedback_autowriter_sol`, which widens the arm CHECKs); `db:migrate` applies them in order. It adds tables, and one AFTER
+1. **Apply migration 0101** on production Neon (`DATABASE_URL=… npm run db:migrate`). It is numbered, and timestamped, after
+   main's `0099_staff_feedback_timing` and the Sol arm-check migration (`0100_feedback_autowriter_sol`), both already applied
+   in production, so `db:migrate` applies only this one. It adds tables, and one AFTER
    trigger on `feedback_autowriter_control` that logs mode and tutor-switch changes (lease and halt writes do not fire
    it); the history is seeded with the row's state as of its last change. The autowriter keeps running meanwhile.
 2. **Day-one backfill — dry run, then the go/no-go check** (reads only, never writes to Wise, prints metadata only):
    `npx tsx --tsconfig scripts/tsconfig.json scripts/feedback-autowriter-backfill-review.ts`
-   Expect every posted class `first shot PROVEN` and one correction row per one-time re-post the rows record: the six
-   nickname fixes of 29 Sep (`metadata.nicknameFix`) and the two owner-approved corrections of 30 Sep
-   (`metadata.corrections`), none "TEXT NOT FOUND". The script refuses to run without `WISE_USER_ID`.
+   Expect every posted class `first shot PROVEN` and one row per one-time re-post the rows record: the six nickname
+   fixes of 29 Sep (`metadata.nicknameFix`) as `policy` posts (never a fix, owner decision D-01) and the two
+   owner-approved corrections of 30 Sep (`metadata.corrections`) as `correction` posts (fixes), none "TEXT NOT FOUND".
+   The script refuses to run without `WISE_USER_ID`. It also prints the coverage of every day of the gate window and
+   the owner verdicts it will record (`scripts/feedback-autowriter-owner-verdicts.json`), each pinned to its first shot.
    **Go/no-go:** the line "API saves no post explains" must list **no critical one** (a save after the autowriter
-   went live at 2026-09-29 08:07:30 UTC). Each info one must be a known pre-launch save — on 29 Sep the prototype's
-   four saves at 05:06–05:07 UTC. A critical one means someone wrote to Wise with the API key outside the lock:
-   find out who before continuing (it will page the owner on the review job's first run whatever the order).
-   The preview uses the job's own classification over the same classes, so it can be re-run at any time (also
-   after `--apply`) and still says exactly what the job stores.
+   went live at 2026-09-29 08:07:30 UTC). Each info one must be a known pre-launch save — on 29 Sep the owner's four
+   pilot posts at 05:06–05:07 UTC on his own classes, confirmed by the owner on 30 Sep (GO). A critical one means someone
+   wrote to Wise with the API key outside the lock: find out who before continuing (it will page the owner on the
+   review job's first run whatever the order). The preview uses the job's own code over the same classes, so it can be
+   re-run at any time (also after `--apply`) and still says exactly what the job stores.
 3. **`--apply`**, then **deploy**. Either order is safe: until the backfill records them, the job explains our first
    posts from the rows themselves and the one-time re-posts from the `metadata` the scripts wrote, so none of them is
    reported as an unmatched API save; an edited class only shows an info `first_shot_unverified` incident until the
-   backfill proves its first shot. Applying twice, or twice at once, records each post once (`dedupe_key`). It writes
-   no verdicts.
+   backfill proves its first shot. Applying twice, or twice at once, records each post once (`dedupe_key`). It records
+   the owner's committed verdicts once each through the dashboard's path (reviewer `kevhsh7@gmail.com (owner interview
+   2026-09-30)`); one whose class meanwhile got another verdict, or a flag raised after the decision, is reported and
+   left for the dashboard. The 29 Sep critical keeps the gate `blocked_critical` through the 12 Oct row (the 13 Oct
+   window is the first without it); the critical verdict's incident is pushed to the owner like any other.
 4. Optional: `FEEDBACK_AUTOWRITER_LINE_TO` (a LINE user or group id) to receive critical incidents on LINE as well
    as by email; set `FEEDBACK_AUTOWRITER_ALERT_EMAILS` if it is still empty — with no channel a critical incident
    stays pending and the review job reports `ok:false` (Data Health shows it). `WISE_USER_ID` must be set on the

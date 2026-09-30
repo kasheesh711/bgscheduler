@@ -137,7 +137,7 @@ export function ReviewUnavailable({ reason }: { reason: AutowriterReviewUnavaila
   return (
     <p className="rounded-lg border bg-card px-4 py-8 text-center text-sm text-muted-foreground">
       {reason === "review_tables_missing"
-        ? "Quality data is not available yet (the review tables are created by migration 0100)."
+        ? "Quality data is not available yet (the review tables are created by migration 0101)."
         : "The quality data could not load. Refresh to try again; if it keeps failing, check the server logs."}
     </p>
   );
@@ -153,7 +153,7 @@ function modelLabel(model: string): string {
 export function FeedbackAutowriterDashboard({ initialData, canControl, initialReview = null }: {
   initialData: AutowriterDashboard;
   canControl: boolean;
-  /** Quality and Review tabs, or why their data is unavailable (migration 0100 not applied, or a load failure). */
+  /** Quality and Review tabs, or why their data is unavailable (migration 0101 not applied, or a load failure). */
   initialReview?: AutowriterReview | AutowriterReviewUnavailable | null;
 }) {
   const [data, setData] = useState(initialData);

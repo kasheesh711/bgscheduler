@@ -19,7 +19,7 @@ async function FeedbackAutowriterBody() {
   const db = getDb();
   const [initialData, initialReview] = await Promise.all([
     loadAutowriterDashboard(db, { windowDays: 7 }),
-    // The overview must render whatever happens to the review data. Missing tables (migration 0100 not applied
+    // The overview must render whatever happens to the review data. Missing tables (migration 0101 not applied
     // yet) come back as a typed payload; any other failure is logged (name and SQLSTATE only) and shown as such.
     loadAutowriterReview(db).catch((error: unknown): AutowriterReviewUnavailable => {
       if (typeof error === "object" && error !== null && (error as { digest?: unknown }).digest === "HANGING_PROMISE_REJECTION") throw error;

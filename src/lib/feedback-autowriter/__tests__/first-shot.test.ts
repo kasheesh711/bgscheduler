@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
-import { NICKNAME_FIX_ACTOR, NICKNAME_FIX_REASON, ONE_TIME_CORRECTION_ACTOR, planReviewBackfill, type BackfillSessionInput } from "../backfill";
+import ownerVerdictsJson from "../../../../scripts/feedback-autowriter-owner-verdicts.json";
+import {
+  NICKNAME_FIX_ACTOR,
+  NICKNAME_FIX_REASON,
+  ONE_TIME_CORRECTION_ACTOR,
+  isRecordedDecision,
+  parseOwnerVerdicts,
+  planOwnerVerdicts,
+  planReviewBackfill,
+  type BackfillSessionInput,
+} from "../backfill";
 import {
   FORM_FIELD_ORDERS,
   landedProblemCategory,
@@ -119,7 +129,7 @@ describe("planReviewBackfill", () => {
     expect(plan.corrections).toEqual([]);
   });
 
-  it("proves a renamed row from Class Feedback's first version, and records the rename as a correction", () => {
+  it("proves a renamed row from Class Feedback's first version, and records the rename as a policy re-post (never a fix)", () => {
     const current = renamed(ORIGINAL, "Alexander", "Alex");
     const plan = planReviewBackfill([{
       row: row({ fields: current, fieldsSha256: fieldsHash(current), metadata: { nicknameFix: { from: "Alexander", to: "Alex", at: fixAt, by: "owner@example.com (one-time fix)" } } }),
@@ -129,8 +139,9 @@ describe("planReviewBackfill", () => {
     }]);
     expect(plan.firstShots[0]).toMatchObject({ method: "pc_first_version" });
     expect(plan.firstShots[0].values.fields).toEqual(ORIGINAL);
+    expect(plan.corrections[0]).toMatchObject({ source: "nicknameFix", kind: "policy", dedupeKey: `nickname-fix:${"6a0000000000000000000b01"}` });
     expect(plan.corrections[0].values).toMatchObject({
-      kind: "correction", actorKind: "script", actor: NICKNAME_FIX_ACTOR, reason: NICKNAME_FIX_REASON,
+      kind: "policy", actorKind: "script", actor: NICKNAME_FIX_ACTOR, reason: NICKNAME_FIX_REASON, provenance: "backfill",
       postFinishedAt: new Date(fixAt), outcome: "verified", fields: current, fieldsSha256: fieldsHash(current), bodyHash: null,
     });
   });
@@ -179,12 +190,12 @@ describe("planReviewBackfill", () => {
     };
   }
 
-  it("records each metadata.corrections entry as a one-time correction post, exactly like the nickname fix", () => {
+  it("records each metadata.corrections entry as a one-time correction post (a fix), keyed like the nickname fix", () => {
     const plan = planReviewBackfill([correctedInput()]);
     expect(plan.firstShots[0]).toMatchObject({ method: "pc_first_version" });
     expect(plan.firstShots[0].values.fields).toEqual(ORIGINAL);
     expect(plan.corrections).toHaveLength(1);
-    expect(plan.corrections[0]).toMatchObject({ source: "corrections", dedupeKey: "correction:6a0000000000000000000c01:2026-09-29T18:07:12.757Z" });
+    expect(plan.corrections[0]).toMatchObject({ source: "corrections", kind: "correction", dedupeKey: "correction:6a0000000000000000000c01:2026-09-29T18:07:12.757Z" });
     expect(plan.corrections[0].values).toMatchObject({
       kind: "correction", actorKind: "script", actor: ONE_TIME_CORRECTION_ACTOR, provenance: "backfill", outcome: "verified",
       postStartedAt: null, postFinishedAt: new Date("2026-09-29T18:07:12.757Z"), bodyHash: null,
@@ -229,9 +240,9 @@ describe("planReviewBackfill", () => {
       hasFirstShot: false,
       recordedDedupeKeys: none,
     }]);
-    expect(plan.corrections.map((entry) => [entry.source, entry.values.fieldsSha256])).toEqual([
-      ["nicknameFix", fieldsHash(renamedText)],
-      ["corrections", fieldsHash(corrected)],
+    expect(plan.corrections.map((entry) => [entry.source, entry.values.kind, entry.values.fieldsSha256])).toEqual([
+      ["nicknameFix", "policy", fieldsHash(renamedText)],
+      ["corrections", "correction", fieldsHash(corrected)],
     ]);
   });
 });
@@ -246,9 +257,9 @@ describe("one-time re-posts and landed posts", () => {
       ],
       nicknameFix: { from: "Alexander", to: "Alex", at: "2026-09-29T13:25:26.402Z", by: "o" },
     });
-    expect(corrections.map((entry) => [entry.source, entry.dedupeKey])).toEqual([
-      ["nicknameFix", "nickname-fix:s1"],
-      ["corrections", "correction:s1:2026-09-29T18:07:04.491Z"],
+    expect(corrections.map((entry) => [entry.source, entry.kind, entry.dedupeKey])).toEqual([
+      ["nicknameFix", "policy", "nickname-fix:s1"],
+      ["corrections", "correction", "correction:s1:2026-09-29T18:07:04.491Z"],
     ]);
     expect(readOneTimeCorrections("s1", null)).toEqual([]);
   });
@@ -264,5 +275,62 @@ describe("one-time re-posts and landed posts", () => {
     expect(landedProblemCategory(["status_CANCELLED"])).toBe("billing_status");
     expect(landedProblemCategory(["foreign_submit_event_in_post_window"])).toBe("should_not_have_posted");
     expect(landedProblemCategory(["field_mismatch:topics"])).toBeNull();
+  });
+});
+
+describe("owner verdicts given outside the dashboard", () => {
+  const file = (overrides: Record<string, unknown> = {}, verdicts?: unknown[]) => ({
+    decidedAt: "2026-09-30T09:30:00+07:00",
+    reviewer: "owner@example.com (owner interview 2026-09-30)",
+    verdicts: verdicts ?? [
+      { wiseSessionId: "6a0000000000000000000e01", verdict: "needs_fix", severity: "critical", criticalCategory: "wrong_person", note: "synthetic: another student's work" },
+      { wiseSessionId: "6a0000000000000000000e02", verdict: "needs_fix", severity: "factual", criticalCategory: null, note: "synthetic: false homework claim" },
+    ],
+    ...overrides,
+  });
+
+  it("reads the committed decisions of the 30 Sep interview: session ids and the owner's words only", () => {
+    const decisions = parseOwnerVerdicts(ownerVerdictsJson);
+    expect(decisions.decidedAt.toISOString()).toBe("2026-09-30T02:30:00.000Z");
+    expect(decisions.reviewer).toBe("kevhsh7@gmail.com (owner interview 2026-09-30)");
+    expect(decisions.verdicts.map((entry) => [entry.wiseSessionId, entry.verdict, entry.severity, entry.criticalCategory])).toEqual([
+      ["699477ceb50e50f4cc219904", "needs_fix", "critical", "wrong_person"],
+      ["6ab89191c10615490d43a8cf", "needs_fix", "factual", null],
+    ]);
+    expect(decisions.verdicts.every((entry) => entry.note.endsWith("— owner, 30 Sep interview"))).toBe(true);
+  });
+
+  it("refuses a file a dashboard verdict could not be: wrong shape, severity without category, a class decided twice", () => {
+    expect(() => parseOwnerVerdicts(file())).not.toThrow();
+    expect(() => parseOwnerVerdicts(file({ decidedAt: "30 Sep" }))).toThrow(/invalid/u);
+    expect(() => parseOwnerVerdicts(file({ extra: 1 }))).toThrow(/invalid/u);
+    expect(() => parseOwnerVerdicts(file({}, [{ wiseSessionId: "../x", verdict: "approve", severity: null, criticalCategory: null, note: "n" }]))).toThrow(/invalid/u);
+    expect(() => parseOwnerVerdicts(file({}, [{ wiseSessionId: "6a0000000000000000000e01", verdict: "needs_fix", severity: "critical", criticalCategory: null, note: "n" }])))
+      .toThrow(/requires a category/u);
+    expect(() => parseOwnerVerdicts(file({}, [{ wiseSessionId: "6a0000000000000000000e01", verdict: "needs_fix", severity: "factual", criticalCategory: null, note: " " }])))
+      .toThrow(/invalid/u);
+    const twice = { wiseSessionId: "6a0000000000000000000e01", verdict: "approve", severity: null, criticalCategory: null, note: "n" };
+    expect(() => parseOwnerVerdicts(file({}, [twice, twice]))).toThrow(/twice/u);
+  });
+
+  it("pins each decision to the class's first shot and says what the write will do", () => {
+    const decisions = parseOwnerVerdicts(file());
+    const [critical, major] = decisions.verdicts;
+    const sha = "c".repeat(64);
+    const plan = planOwnerVerdicts(decisions, { firstShots: new Map([[critical.wiseSessionId, sha]]) });
+    expect(plan.map((entry) => [entry.wiseSessionId, entry.fieldsSha256, entry.status, entry.reviewer])).toEqual([
+      [critical.wiseSessionId, sha, "planned", decisions.reviewer],
+      [major.wiseSessionId, null, "no_first_shot", decisions.reviewer],
+    ]);
+    const recorded = { reviewer: decisions.reviewer, verdict: critical.verdict, severity: critical.severity, criticalCategory: critical.criticalCategory, note: critical.note, fieldsSha256: sha };
+    expect(planOwnerVerdicts(decisions, { firstShots: new Map([[critical.wiseSessionId, sha]]), currentVerdicts: new Map([[critical.wiseSessionId, recorded]]) })[0].status)
+      .toBe("already_recorded");
+    // Anyone else's verdict, or this one pinned to another text, is not this decision.
+    expect(isRecordedDecision({ ...recorded, reviewer: "owner@example.com" }, critical, decisions.reviewer, sha)).toBe(false);
+    expect(isRecordedDecision(recorded, critical, decisions.reviewer, "d".repeat(64))).toBe(false);
+    expect(planOwnerVerdicts(decisions, {
+      firstShots: new Map([[critical.wiseSessionId, sha]]),
+      currentVerdicts: new Map([[critical.wiseSessionId, { ...recorded, reviewer: "owner@example.com", severity: "factual", criticalCategory: null }]]),
+    })[0].status).toBe("other_verdict");
   });
 });

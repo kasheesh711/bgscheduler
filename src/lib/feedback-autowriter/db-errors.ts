@@ -10,7 +10,7 @@ export function sqlStateOf(error: unknown): string | null {
   return typeof candidate.cause?.code === "string" ? candidate.cause.code : null;
 }
 
-/** 42P01: a table the query needs does not exist (e.g. migration 0100 not applied yet). */
+/** 42P01: a table the query needs does not exist (e.g. migration 0101 not applied yet). */
 export function isMissingRelationError(error: unknown): boolean {
   return sqlStateOf(error) === "42P01";
 }

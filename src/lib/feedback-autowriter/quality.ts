@@ -1,20 +1,22 @@
 /**
  * Quality measurement for the autowriter operating loop (Phase 1, pure — no database, no clock).
  *
- * Owner decisions (29 Sep 2026, quick 260929-lop):
+ * Owner decisions (29 Sep 2026, quick 260929-lop; D-01 and D-03 settled at the owner interview of 30 Sep):
  * - A post is accurate when it needed no real fix: approved, or "needs fix" with cosmetic severity.
  * - Accuracy = accurate ÷ owner-reviewed posts, judged on the two-sided 95% Wilson lower bound.
- * - Coverage = posted ÷ (eligible − classes the tutor wrote first). Each class is judged by the mode, its tutor's
- *   switch and the roster during its own posting window (class end → deadline − margin), never by today's.
+ * - Coverage = posted ÷ (eligible − classes the tutor wrote first − data-quality holds). Each class is judged by the
+ *   mode, its tutor's switch and the roster during its own posting window (class end → deadline − margin), never by
+ *   today's. D-03: a hold leaves the denominator only when the class's own data made a faithful write-up impossible
+ *   (`DATA_QUALITY_REASONS`); a hold where the judge or the validator rejected our drafts is a miss.
  * - Gate (rolling 14 days): lower bound ≥ 80%, zero critical verdicts, no unresolved critical flag, no unexplained API
  *   write, coverage ≥ 70%, no flagged post and no required post waiting for review, and every posted first shot
  *   recorded. A lower bound ≥ 70% starts the head start for the next tutors.
  * - Every tutor is reviewed at 100% until their cohort has passed a gate; proven tutors drop to a random 30%
  *   sample (drawn once, before any flag) plus flagged posts.
- * - Measured fixes: saves after our first post, per actor, up to the owner's current Approve.
+ * - Measured fixes: saves after our first post, per actor, up to the owner's current Approve. D-01: a one-time
+ *   re-post for an owner policy change (the 29 Sep nickname rule) is `autowriter_policy`, never a fix; an
+ *   owner-approved correction of a wrong post is a fix.
  * - Expansion grows the roster by half, rounded up: 5 → 8 → 12 → 18.
- * Open decision D-03 (which holds are correct) is taken fail-closed: every hold is a miss; absence holds are shown
- * as a sub-count.
  */
 
 import type { AutowriterVerdictSeverity } from "@/lib/db/schema";
@@ -132,6 +134,7 @@ export function fixRoundBucket(current: { verdict: "approve" | "needs_fix" } | n
 export type CoverageClass =
   | "posted"
   | "excluded_scope"
+  | "excluded_data_quality"
   | "excluded_tutor_off"
   | "excluded_not_live"
   | "excluded_tutor_first"
@@ -144,7 +147,7 @@ export type CoverageClass =
 
 export const COVERAGE_CLASSES: readonly CoverageClass[] = [
   "posted", "miss_held", "miss_late", "miss_expired", "miss_failed", "miss_unseen",
-  "excluded_tutor_first", "excluded_tutor_off", "excluded_not_live", "excluded_scope", "pending",
+  "excluded_tutor_first", "excluded_data_quality", "excluded_tutor_off", "excluded_not_live", "excluded_scope", "pending",
 ];
 
 const MISSES = new Set<CoverageClass>(["miss_held", "miss_late", "miss_expired", "miss_failed", "miss_unseen"]);
@@ -156,10 +159,32 @@ export function isCoverageMiss(value: CoverageClass): boolean {
 /** Skip reasons of an in-person class; such classes are the tutor's and are left out everywhere. */
 const ONSITE_REASONS = new Set(["session_type_OFFLINE", "session_type_in_person_title"]);
 
-/** Held because the student was absent or barely there (open decision D-03: still a miss, shown as a sub-count). */
-export function isAbsenceHold(reason: string | null): boolean {
-  if (!reason) return false;
-  return reason === "student_count_0" || reason === "student_not_wise_user" || /^attendance_\d+pct$/u.test(reason);
+/**
+ * D-03 (owner, 30 Sep 2026): the reasons a class goes unposted because of its own data — no draft of ours could have
+ * fixed it — which leave the coverage denominator. Exactly these: a hold where the judge found our draft unfaithful,
+ * the validator or the form rejected it, billing drifted or the pipeline failed, and any reason not listed here, is
+ * a miss (fail-closed). Reasons are matched whole.
+ */
+export const DATA_QUALITY_REASONS: ReadonlyArray<{
+  match: RegExp;
+  label: string;
+  /** A hold (`held`), or the deadline hand-back of a switched-off tutor's class (`skipped_scope`). */
+  coverage: "excluded_data_quality" | "excluded_tutor_off";
+}> = [
+  { match: /^recording_too_short$/u, label: "Recording too short", coverage: "excluded_data_quality" },
+  { match: /^recording_multiple_parts$/u, label: "Recording in several parts", coverage: "excluded_data_quality" },
+  { match: /^speakers_unclear$/u, label: "Speakers unclear", coverage: "excluded_data_quality" },
+  { match: /^transcript_too_short$/u, label: "Transcript too short", coverage: "excluded_data_quality" },
+  { match: /^student_count_0$/u, label: "No student", coverage: "excluded_data_quality" },
+  { match: /^attendance_\d+pct$/u, label: "Student absent (attendance below the minimum)", coverage: "excluded_data_quality" },
+  { match: /^student_not_wise_user$/u, label: "Student not a Wise user", coverage: "excluded_data_quality" },
+  { match: /^tutor_off_at_deadline$/u, label: "Tutor switched off", coverage: "excluded_tutor_off" },
+];
+
+/** The data-quality entry a hold or hand-back reason matches, or null (then the class is a miss). */
+export function dataQualityReason(reason: string | null): (typeof DATA_QUALITY_REASONS)[number] | null {
+  if (!reason) return null;
+  return DATA_QUALITY_REASONS.find((entry) => entry.match.test(reason)) ?? null;
 }
 
 /** One change of the control row's mode or tutor switches (`feedback_autowriter_control_history`). */
@@ -260,7 +285,8 @@ export interface CoverageInput {
 /**
  * Where one roster class stands for coverage; null when it does not count at all (in-person, an unseen class not
  * proven to be online one-to-one, or one whose account was never on the roster during its window).
- * A POST proves the class was workable; every other class the switches never let us write is excluded.
+ * A POST proves the class was workable; every other class the switches never let us write is excluded, and so is a
+ * class held (or handed back) for a data-quality reason (D-03).
  */
 export function classifyCoverage(input: CoverageInput): CoverageClass | null {
   const { state, reason, eligibility } = input;
@@ -273,18 +299,17 @@ export function classifyCoverage(input: CoverageInput): CoverageClass | null {
   }
   if (state === "skipped_scope" && reason !== null && ONSITE_REASONS.has(reason)) return null;
   if (state === "verified" || state === "awaiting_event") return "posted";
-  if (state === "skipped_scope" && reason === "tutor_off_at_deadline") {
-    // Handed back unposted because the tutor was switched off at the deadline: excluded only if they were off (or the
-    // mode not live) for the whole window; a class the autowriter could have written first is a miss.
-    return eligibility && !eligibility.workable ? notWorkable() : "miss_expired";
-  }
-  if (state === "skipped_scope") return "excluded_scope";
+  const dataQuality = dataQualityReason(reason);
+  // Handed back unposted at the deadline because its tutor was switched off: the owner's switch, never our miss (D-03).
+  if (state === "skipped_scope") return dataQuality?.coverage === "excluded_tutor_off" ? "excluded_tutor_off" : "excluded_scope";
   if (eligibility && !eligibility.workable) return notWorkable();
   switch (state) {
     case "skipped_human":
       return input.tutorWroteFirst === true ? "excluded_tutor_first" : "miss_late";
     case "held":
-      return "miss_held";
+      // D-03: the class's own data (recording, speakers, transcript, absence, not a Wise user) is left out; a hold on
+      // our drafts (unfaithful, validation, form), billing drift or an error is a miss.
+      return dataQuality?.coverage === "excluded_data_quality" ? "excluded_data_quality" : "miss_held";
     case "expired":
       return "miss_expired";
     case "rejected":
@@ -428,8 +453,6 @@ export function computeGateFacts(input: {
 export interface DailyClassFact {
   tutorKey: string;
   coverage: CoverageClass | null;
-  /** A hold for absence or partial attendance (a miss; also counted in `heldAbsence`). */
-  absenceHold?: boolean;
 }
 
 export interface DailyReviewFact {
@@ -453,12 +476,14 @@ export interface DailyMetricValues {
   eligible: number;
   excludedScope: number;
   excludedTutorFirst: number;
+  /** Held for the class's own data (D-03): left out of coverage. */
+  excludedDataQuality: number;
   excludedTutorOff: number;
   excludedNotLive: number;
   pending: number;
   unseen: number;
+  /** Held for any other reason (our drafts rejected, form or billing drift, errors): a miss. */
   held: number;
-  heldAbsence: number;
   late: number;
   expired: number;
   failed: number;
@@ -491,12 +516,12 @@ export function buildDailyMetrics(input: {
       eligible: coverageRatio(counts).den,
       excludedScope: counts.excluded_scope,
       excludedTutorFirst: counts.excluded_tutor_first,
+      excludedDataQuality: counts.excluded_data_quality,
       excludedTutorOff: counts.excluded_tutor_off,
       excludedNotLive: counts.excluded_not_live,
       pending: counts.pending,
       unseen: counts.miss_unseen,
       held: counts.miss_held,
-      heldAbsence: classes.filter((row) => row.coverage === "miss_held" && row.absenceHold === true).length,
       late: counts.miss_late,
       expired: counts.miss_expired,
       failed: counts.miss_failed,

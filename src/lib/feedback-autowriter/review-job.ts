@@ -3,7 +3,7 @@ import { and, between, count, desc, eq, getTableColumns, gte, inArray, isNotNull
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { sqlStateOf } from "./db-errors";
-import { UNMATCHED_API_CRITICAL_FROM, ingestFixEvents, type FixEventIngestResult } from "./fix-events";
+import { UNMATCHED_API_CRITICAL_FROM, ingestFixEvents, type FixActorKind, type FixEventIngestResult } from "./fix-events";
 import { landedProblemCategory, normalizeFields, postMayHaveLanded, postedBilling, problemCodes, proveFirstShot, type FirstShotProof } from "./first-shot";
 import { countUndeliveredCritical, drainIncidentOutbox, recordIncident, type DrainResult, type IncidentPushChannels } from "./incidents";
 import {
@@ -20,7 +20,6 @@ import {
   dailyGateDate,
   evaluateGate,
   gateWindow,
-  isAbsenceHold,
   metricDates,
   postingWindowEligibility,
   reviewInclusion,
@@ -67,6 +66,7 @@ const CALLS = schema.feedbackAutowriterCalls;
 const PC = schema.postClassSessions;
 const WAR = schema.wiseActivitySyncRuns;
 const INC = schema.feedbackAutowriterIncidents;
+const C = schema.feedbackAutowriterControl;
 
 export const REVIEW_SYSTEM_ACTOR = "system:feedback-autowriter-review";
 /** A `running` review run older than this is abandoned (maxDuration is 300 s). */
@@ -429,20 +429,9 @@ export async function refreshReviewCounts(db: Database, input: { sinceDate: stri
  * it was on the roster then), else now; a removed account keeps its last sighting.
  */
 export async function recordRosterAccounts(db: Database, now: Date): Promise<number> {
-  const accounts = [...AUTOWRITER_TEACHER_ALLOWLIST];
-  if (accounts.length === 0) return 0;
-  const earliest = await db.select({ wiseTeacherUserId: S.wiseTeacherUserId, first: sql<Date>`min(${S.createdAt})` }).from(S)
-    .where(inArray(S.wiseTeacherUserId, accounts)).groupBy(S.wiseTeacherUserId);
-  const firstRow = new Map(earliest.map((row) => [row.wiseTeacherUserId, validDate(row.first)]));
-  await db.insert(RA).values(accounts.map((id) => {
-    const first = firstRow.get(id) ?? null;
-    return {
-      wiseTeacherUserId: id,
-      tutorKey: tutorKeyFor(id),
-      firstSeenAt: first && first.getTime() < now.getTime() ? first : now,
-      lastSeenAt: now,
-    };
-  })).onConflictDoUpdate({
+  const sightings = await rosterSightings(db, now);
+  if (sightings.length === 0) return 0;
+  await db.insert(RA).values(sightings).onConflictDoUpdate({
     target: RA.wiseTeacherUserId,
     set: {
       tutorKey: sql`excluded.tutor_key`,
@@ -450,7 +439,32 @@ export async function recordRosterAccounts(db: Database, now: Date): Promise<num
       lastSeenAt: sql`greatest(${RA.lastSeenAt}, excluded.last_seen_at)`,
     },
   });
-  return accounts.length;
+  return sightings.length;
+}
+
+export interface RosterAccountRow {
+  wiseTeacherUserId: string;
+  tutorKey: string;
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+}
+
+/** The sightings a run at `now` records for the code roster (see `recordRosterAccounts`), without writing them. */
+export async function rosterSightings(db: Database, now: Date): Promise<RosterAccountRow[]> {
+  const accounts = [...AUTOWRITER_TEACHER_ALLOWLIST];
+  if (accounts.length === 0) return [];
+  const earliest = await db.select({ wiseTeacherUserId: S.wiseTeacherUserId, first: sql<Date>`min(${S.createdAt})` }).from(S)
+    .where(inArray(S.wiseTeacherUserId, accounts)).groupBy(S.wiseTeacherUserId);
+  const firstRow = new Map(earliest.map((row) => [row.wiseTeacherUserId, validDate(row.first)]));
+  return accounts.map((id) => {
+    const first = firstRow.get(id) ?? null;
+    return {
+      wiseTeacherUserId: id,
+      tutorKey: tutorKeyFor(id),
+      firstSeenAt: first && first.getTime() < now.getTime() ? first : now,
+      lastSeenAt: now,
+    };
+  });
 }
 
 /** The control row's recorded changes, oldest first. */
@@ -480,23 +494,74 @@ function postingWindow(endedAt: Date, deadlineAt: Date | null, now: Date): { win
 
 const metricColumnNames = Object.fromEntries(Object.entries(getTableColumns(M)).map(([key, column]) => [key, column.name]));
 
+/** The review rows of a date range with their current verdicts (accuracy and severities of the daily metrics). */
+async function loadDailyReviewRows(db: Database, first: string, last: string) {
+  return db.select({
+    bangkokDate: R.bangkokDate,
+    tutorKey: R.tutorKey,
+    inclusionReason: R.inclusionReason,
+    measuredFixCount: R.measuredFixCount,
+    correctionsVerified: R.correctionsVerified,
+    verdict: V.verdict,
+    severity: V.severity,
+  }).from(R).leftJoin(V, eq(V.id, R.currentVerdictId)).where(between(R.bangkokDate, first, last));
+}
+
+type DailyReviewRow = Awaited<ReturnType<typeof loadDailyReviewRows>>[number];
+
+/** A person's first save on each skipped class in `sessionsSql`, from the stored fix events. */
+async function loadFirstPersonSaves(db: Database, sessionsSql: ReturnType<typeof sql>): Promise<Map<string, Date>> {
+  const rows = await db.select({ wiseSessionId: FX.wiseSessionId, at: sql<Date>`min(${FX.eventAt})` }).from(FX).where(and(
+    inArray(FX.actorKind, [...PERSON_SAVE_KINDS]),
+    sql`${FX.wiseSessionId} in ${sessionsSql}`,
+  )).groupBy(FX.wiseSessionId);
+  return new Map(rows.flatMap((row) => {
+    const at = validDate(row.at);
+    return at ? [[row.wiseSessionId, at] as const] : [];
+  }));
+}
+
+/** A person's first save per class from classified fix events: what `loadFirstPersonSaves` reads once they are stored. */
+export function firstPersonSavesOf(events: ReadonlyArray<{ wiseSessionId: string; actorKind: FixActorKind; eventAt: Date }>): Map<string, Date> {
+  const kinds = new Set<FixActorKind>(PERSON_SAVE_KINDS);
+  const first = new Map<string, Date>();
+  for (const event of events) {
+    if (!kinds.has(event.actorKind)) continue;
+    const seen = first.get(event.wiseSessionId);
+    if (!seen || event.eventAt.getTime() < seen.getTime()) first.set(event.wiseSessionId, event.eventAt);
+  }
+  return first;
+}
+
+/** Stand-ins for what the daily metrics read from the review tables (a dry run before migration 0101). */
+export interface DailyMetricOverrides {
+  rosterRows?: RosterAccountRow[];
+  history?: ControlStateChange[];
+  firstPersonSave?: ReadonlyMap<string, Date>;
+  reviews?: DailyReviewRow[];
+}
+
 /**
- * Recompute the metric rows of the given Bangkok dates (all of the gate window on every run). Every class is judged
- * by the switches, the roster and its own state over its posting window: a posted class counts; a class the switches
- * never let us write is excluded (not live, or its tutor switched off); a class still unsettled once its window is
- * over is a miss (the sweep may not have expired it yet); an unseen roster class is a miss only when proven online
- * one-to-one and its account was on the roster during the window. `skipped_human` is "the tutor wrote first" only
- * when a person's save is recorded before our first writer call.
+ * The metric rows of the given Bangkok dates, computed without writing (`refreshDailyMetrics` records the roster
+ * sightings first and stores them). Every class is judged by the switches, the roster and its own state over its
+ * posting window: a posted class counts; a class the switches never let us write is excluded (not live, or its tutor
+ * switched off), and so is one held for its own data (D-03); a class still unsettled once its window is over is a miss
+ * (the sweep may not have expired it yet); an unseen roster class is a miss only when proven online one-to-one and its
+ * account was on the roster during the window. `skipped_human` is "the tutor wrote first" only when a person's save is
+ * recorded before our first writer call.
  */
-export async function refreshDailyMetrics(db: Database, input: { dates: readonly string[]; now: Date }): Promise<number> {
+export async function computeDailyMetrics(db: Database, input: {
+  dates: readonly string[];
+  now: Date;
+  overrides?: DailyMetricOverrides;
+}): Promise<Array<typeof M.$inferInsert>> {
   const dates = [...new Set(input.dates)].toSorted();
-  if (dates.length === 0) return 0;
-  const { now } = input;
+  if (dates.length === 0) return [];
+  const { now, overrides = {} } = input;
   const rangeStart = bangkokDayBounds(dates[0]).start;
   const rangeEnd = bangkokDayBounds(dates.at(-1)!).end;
   const unseenBefore = new Date(Math.min(rangeEnd.getTime(), now.getTime() - UNSEEN_AFTER_END_MS));
-  await recordRosterAccounts(db, now);
-  const rosterRows = await db.select().from(RA);
+  const rosterRows = overrides.rosterRows ?? await db.select().from(RA);
   const rosterIds = [...new Set([...AUTOWRITER_TEACHER_ALLOWLIST, ...rosterRows.map((row) => row.wiseTeacherUserId)])];
   const skippedHumanInRange = sql`(select s.wise_session_id from feedback_autowriter_sessions s where s.state = 'skipped_human'
     and s.scheduled_end_at >= ${rangeStart} and s.scheduled_end_at < ${rangeEnd})`;
@@ -522,29 +587,18 @@ export async function refreshDailyMetrics(db: Database, input: { dates: readonly
     isNull(PC.wiseDeletedAt),
     sql`not exists (select 1 from feedback_autowriter_sessions a where a.wise_session_id = post_class_sessions.wise_session_id)`,
   ));
-  const [sessions, reviews, history, writerCalls, personSaves] = await Promise.all([
+  const [sessions, reviews, history, writerCalls, firstPersonSave] = await Promise.all([
     db.select({
       wiseSessionId: S.wiseSessionId, wiseTeacherUserId: S.wiseTeacherUserId, state: S.state, reason: S.reason,
       scheduledEndAt: S.scheduledEndAt, deadlineAt: S.deadlineAt,
     }).from(S).where(and(gte(S.scheduledEndAt, rangeStart), lt(S.scheduledEndAt, rangeEnd))),
-    db.select({
-      bangkokDate: R.bangkokDate,
-      tutorKey: R.tutorKey,
-      inclusionReason: R.inclusionReason,
-      measuredFixCount: R.measuredFixCount,
-      correctionsVerified: R.correctionsVerified,
-      verdict: V.verdict,
-      severity: V.severity,
-    }).from(R).leftJoin(V, eq(V.id, R.currentVerdictId)).where(between(R.bangkokDate, dates[0], dates.at(-1)!)),
-    loadControlHistory(db),
+    overrides.reviews ?? loadDailyReviewRows(db, dates[0], dates.at(-1)!),
+    overrides.history ?? loadControlHistory(db),
     // Our first writer call, successful or not: from then on a person's save is a miss (late), not "wrote first".
     db.select({ wiseSessionId: CALLS.wiseSessionId, at: sql<Date>`min(${CALLS.createdAt})` }).from(CALLS).where(and(
       eq(CALLS.role, "writer"), sql`${CALLS.wiseSessionId} in ${skippedHumanInRange}`,
     )).groupBy(CALLS.wiseSessionId),
-    db.select({ wiseSessionId: FX.wiseSessionId, at: sql<Date>`min(${FX.eventAt})` }).from(FX).where(and(
-      inArray(FX.actorKind, [...PERSON_SAVE_KINDS]),
-      sql`${FX.wiseSessionId} in ${skippedHumanInRange}`,
-    )).groupBy(FX.wiseSessionId),
+    overrides.firstPersonSave ?? loadFirstPersonSaves(db, skippedHumanInRange),
   ]);
 
   const rosterKeys = new Map(rosterRows.map((row) => [row.wiseTeacherUserId, row.tutorKey]));
@@ -552,7 +606,6 @@ export async function refreshDailyMetrics(db: Database, input: { dates: readonly
   const rowIds = new Set(sessions.map((row) => row.wiseSessionId));
   const unseen = unseenRead.filter((row) => !rowIds.has(row.wiseSessionId));
   const firstWriterCall = new Map(writerCalls.map((row) => [row.wiseSessionId, validDate(row.at)]));
-  const firstPersonSave = new Map(personSaves.map((row) => [row.wiseSessionId, validDate(row.at)]));
   const classes = new Map<string, Array<DailyClassFact & { workable: boolean }>>();
   const add = (endedAt: Date, fact: DailyClassFact & { workable: boolean }) => {
     const date = bangkokDateKey(endedAt);
@@ -572,12 +625,7 @@ export async function refreshDailyMetrics(db: Database, input: { dates: readonly
         ? tutorWroteFirst({ firstWriterCallAt: firstWriterCall.get(row.wiseSessionId) ?? null, firstHumanSaveAt: firstPersonSave.get(row.wiseSessionId) ?? null })
         : undefined,
     });
-    add(row.scheduledEndAt, {
-      tutorKey: tutorKeyFor(row.wiseTeacherUserId, rosterKeys),
-      coverage,
-      absenceHold: row.state === "held" && isAbsenceHold(row.reason),
-      workable: eligibility.workable,
-    });
+    add(row.scheduledEndAt, { tutorKey: tutorKeyFor(row.wiseTeacherUserId, rosterKeys), coverage, workable: eligibility.workable });
   }
   for (const row of unseen) {
     if (!row.scheduledEndAt) continue;
@@ -613,6 +661,15 @@ export async function refreshDailyMetrics(db: Database, input: { dates: readonly
     });
     for (const row of rows) values.push({ metricDate: date, liveMode, policyVersion: QUALITY_POLICY_VERSION, ...row });
   }
+  return values;
+}
+
+/** Recompute and store the metric rows of the given Bangkok dates (all of the gate window on every run). */
+export async function refreshDailyMetrics(db: Database, input: { dates: readonly string[]; now: Date }): Promise<number> {
+  const dates = [...new Set(input.dates)].toSorted();
+  if (dates.length === 0) return 0;
+  await recordRosterAccounts(db, input.now);
+  const values = await computeDailyMetrics(db, { dates, now: input.now });
   const updatable = Object.keys(values[0]).filter((key) => key !== "metricDate" && key !== "tutorKey");
   await db.insert(M).values(values).onConflictDoUpdate({
     target: [M.metricDate, M.tutorKey],
@@ -628,6 +685,38 @@ export async function refreshDailyMetrics(db: Database, input: { dates: readonly
     sql`(${M.metricDate}::text || '|' || ${M.tutorKey}) not in ${written}`,
   ));
   return values.length;
+}
+
+/**
+ * The daily metrics of the gate window a run at `now` would store, computed without writing anything — the backfill's
+ * dry run. The fix events are the dry run's own classification (the job's code over the same classes). Before
+ * migration 0101 (`reviewTables: false`) the control history is the seed the migration writes (the control row at its
+ * last update), the roster is the sightings the first run records, and no review exists yet.
+ */
+export async function previewDailyMetrics(db: Database, input: {
+  now: Date;
+  reviewTables: boolean;
+  classifiedFixEvents: ReadonlyArray<{ wiseSessionId: string; actorKind: FixActorKind; eventAt: Date }>;
+}): Promise<Array<typeof M.$inferInsert>> {
+  const sightings = await rosterSightings(db, input.now);
+  const stored = input.reviewTables ? await db.select().from(RA) : [];
+  const roster = new Map<string, RosterAccountRow>(stored.map((row) => [row.wiseTeacherUserId, row]));
+  for (const seen of sightings) {
+    const before = roster.get(seen.wiseTeacherUserId);
+    roster.set(seen.wiseTeacherUserId, before ? {
+      ...seen,
+      firstSeenAt: before.firstSeenAt.getTime() < seen.firstSeenAt.getTime() ? before.firstSeenAt : seen.firstSeenAt,
+      lastSeenAt: before.lastSeenAt.getTime() > seen.lastSeenAt.getTime() ? before.lastSeenAt : seen.lastSeenAt,
+    } : seen);
+  }
+  const overrides: DailyMetricOverrides = { rosterRows: [...roster.values()], firstPersonSave: firstPersonSavesOf(input.classifiedFixEvents) };
+  if (!input.reviewTables) {
+    const [control] = await db.select({ mode: C.mode, disabledTutors: C.disabledTutors, updatedAt: C.updatedAt }).from(C)
+      .where(eq(C.id, "default")).limit(1);
+    overrides.history = control ? [{ changedAt: control.updatedAt, mode: control.mode, disabledTutors: control.disabledTutors ?? [] }] : [];
+    overrides.reviews = [];
+  }
+  return computeDailyMetrics(db, { dates: metricDates(input.now), now: input.now, overrides });
 }
 
 /** SQL: the autowriter row (if any) is not an in-person class (those are left out everywhere). */

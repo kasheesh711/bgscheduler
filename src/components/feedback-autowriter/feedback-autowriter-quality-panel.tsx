@@ -178,7 +178,6 @@ export function FeedbackAutowriterQualityPanel({ review, canControl = false, onC
           <div className="mt-3 flex flex-wrap gap-1.5">
             <Chip label="Posted" value={coverage.posted} tone="good" />
             <Chip label="Held" value={coverage.miss_held} tone="miss" />
-            <Chip label="of which absence" value={coverage.heldAbsence} tone="miss" />
             <Chip label="Written after our draft" value={coverage.miss_late} tone="miss" />
             <Chip label="Expired" value={coverage.miss_expired} tone="miss" />
             <Chip label="Failed" value={coverage.miss_failed} tone="miss" />
@@ -186,6 +185,7 @@ export function FeedbackAutowriterQualityPanel({ review, canControl = false, onC
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">
             <Chip label="Tutor wrote first" value={coverage.excluded_tutor_first} tone="muted" />
+            <Chip label="Data quality" value={coverage.excluded_data_quality} tone="muted" />
             <Chip label="Tutor switched off" value={coverage.excluded_tutor_off} tone="muted" />
             <Chip label="Not live (shadow/off)" value={coverage.excluded_not_live} tone="muted" />
             <Chip label="Out of scope" value={coverage.excluded_scope} tone="muted" />
@@ -193,8 +193,9 @@ export function FeedbackAutowriterQualityPanel({ review, canControl = false, onC
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
             Misses: {misses}. Each class is judged by the mode and its tutor&apos;s switch during its own posting window.
-            Excluded and in-progress classes count on neither side; in-person classes are not counted. Absence holds
-            count as misses until interview decision D-03.
+            Excluded and in-progress classes count on neither side; in-person classes are not counted. A hold for the
+            class&apos;s own data (recording, speakers, transcript, absence, not a Wise user) is left out; a hold on our
+            drafts (unfaithful, validation, format) is a miss.
           </p>
           <div className="mt-4 border-t pt-3">
             <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Fix rounds per post</div>

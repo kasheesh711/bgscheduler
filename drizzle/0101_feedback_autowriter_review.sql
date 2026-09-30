@@ -18,7 +18,8 @@ CREATE TABLE feedback_autowriter_posts (
   wise_session_id text NOT NULL,
   wise_class_id text,
   wise_teacher_user_id text,
-  kind text NOT NULL CHECK (kind IN ('first_shot','correction')),
+  -- 'policy': a one-time re-post for an owner policy change (the 29 Sep nickname rule) — never counted as a fix.
+  kind text NOT NULL CHECK (kind IN ('first_shot','correction','policy')),
   -- Foreign key to feedback_autowriter_corrections arrives with that table (Phase 2).
   correction_id uuid,
   fields jsonb NOT NULL,
@@ -218,7 +219,7 @@ CREATE TABLE feedback_autowriter_fix_events (
   actor_wise_user_id text,
   actor_role text,
   auto_submitted boolean,
-  actor_kind text NOT NULL CHECK (actor_kind IN ('autowriter_first','autowriter_correction','api_actor_unmatched','owner_web','tutor','other_staff','student','auto')),
+  actor_kind text NOT NULL CHECK (actor_kind IN ('autowriter_first','autowriter_correction','autowriter_policy','api_actor_unmatched','owner_web','tutor','other_staff','student','auto')),
   post_id uuid REFERENCES feedback_autowriter_posts(id),
   counts_as_fix boolean NOT NULL,
   classifier_version integer NOT NULL,
@@ -269,16 +270,17 @@ CREATE TABLE feedback_autowriter_daily_metrics (
   eligible integer NOT NULL DEFAULT 0,
   excluded_scope integer NOT NULL DEFAULT 0,
   excluded_tutor_first integer NOT NULL DEFAULT 0,
+  -- Held for the class's own data (D-03: recording, speakers, transcript, absence, not a Wise user): left out.
+  excluded_data_quality integer NOT NULL DEFAULT 0,
   excluded_tutor_off integer NOT NULL DEFAULT 0,
   excluded_not_live integer NOT NULL DEFAULT 0,
   pending integer NOT NULL DEFAULT 0,
   unseen integer NOT NULL DEFAULT 0,
+  -- Any other hold (our drafts rejected, form or billing drift, errors): a miss.
   held integer NOT NULL DEFAULT 0,
-  -- Of `held`: holds for absence or partial attendance (still misses until interview decision D-03).
-  held_absence integer NOT NULL DEFAULT 0,
   expired integer NOT NULL DEFAULT 0,
   failed integer NOT NULL DEFAULT 0,
-  -- A person wrote the class after our judged draft was ready (a miss, unlike a tutor who wrote first).
+  -- A person wrote the class after we started writing it (a miss, unlike a tutor who wrote first).
   late integer NOT NULL DEFAULT 0,
   measured_fix_classes integer NOT NULL DEFAULT 0,
   corrections_verified integer NOT NULL DEFAULT 0,

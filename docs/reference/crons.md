@@ -16,7 +16,7 @@ are owner-only. See the [feature page](../features/feedback-autowriter.md) and [
 |---|---|---|---|---|
 | `/api/internal/feedback-autowriter/review` | `27 * * * *` | Hourly at :27 | `feedback_autowriter_review` | 300s |
 
-Operating-loop review job (migration 0100): snapshots first shots, derives fix events from the Wise activity mirror
+Operating-loop review job (migration 0101): snapshots first shots, derives fix events from the Wise activity mirror
 (it runs ten minutes after the `:17` activity sync) for every autowriter class, assigns review inclusion, raises
 flags, recomputes the quality metrics of every date in the gate window and writes one daily gate evaluation, then
 pushes pending critical incidents (those already waiting first, then the ones the run raised). Reads our database

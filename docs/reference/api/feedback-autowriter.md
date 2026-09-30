@@ -64,7 +64,7 @@ Runs `runAutowriterReviewJob()` ([`review-job.ts`](../../../src/lib/feedback-aut
 
 [`src/app/api/feedback-autowriter/review/route.ts`](../../../src/app/api/feedback-autowriter/review/route.ts). Returns the `AutowriterReview` built by [`loadAutowriterReview`](../../../src/lib/feedback-autowriter/review-data.ts) (`available: true`): the live gate over the rolling 14 Bangkok days, computed by the same SQL as the nightly row (`loadGateFacts`); coverage breakdown; fix-round histogram; daily and per-tutor rows; the review queue — every flagged and every unreviewed required class, then the latest others up to 300 — with exact `queueTotals`, each item carrying the first shot (and its outcome), current text, word diff, measured saves (`counted` or listed after the Approve), corrections, verdict log and open flags (with ids, for the verdict's pins); and incidents (recent ones plus every unacknowledged undelivered critical one). In-person classes are left out.
 
-**Responses:** `200` · `200 { available: false, reason: "review_tables_missing" }` before migration 0100 (an optional table, not a failure) · `401` · `403` (not an admin) · `500 { error }` for any other failure (logged by error name and SQLSTATE only).
+**Responses:** `200` · `200 { available: false, reason: "review_tables_missing" }` before migration 0101 (an optional table, not a failure) · `401` · `403` (not an admin) · `500 { error }` for any other failure (logged by error name and SQLSTATE only).
 
 ## `POST /api/feedback-autowriter/verdicts`
 

@@ -6,15 +6,16 @@ import * as schema from "@/lib/db/schema";
 import { calculateFeedbackDeadline } from "@/lib/post-class-feedback/policy";
 import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
 import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
-import { applyReviewBackfillPlan, planReviewBackfill } from "../backfill";
+import { applyOwnerVerdicts, applyReviewBackfillPlan, planReviewBackfill, type OwnerVerdicts } from "../backfill";
 import { ingestFixEvents, loadFixEventSources, planFixEvents } from "../fix-events";
 import { MAX_PUSH_ATTEMPTS, acknowledgeIncident, countUndeliveredCritical, drainIncidentOutbox, recordIncident } from "../incidents";
-import { metricDates } from "../quality";
+import { evaluateGate, gateWindow, metricDates } from "../quality";
 import { loadAutowriterReview } from "../review-data";
 import {
   activityMirrorStatus,
   assignReviews,
   loadGateFacts,
+  previewDailyMetrics,
   raiseFixFlags,
   raiseVerificationFlags,
   recordDailyGate,
@@ -234,7 +235,7 @@ beforeEach(async () => {
     RESTART IDENTITY CASCADE`);
 });
 
-describe("migration 0100 guards (SQLSTATE 55000)", () => {
+describe("migration 0101 guards (SQLSTATE 55000)", () => {
   it("keeps a post's content immutable, a settled outcome final and every row undeletable", async () => {
     await seedPosted(1);
     await snapshotFirstShots(db);
@@ -659,7 +660,7 @@ describe("daily metrics", () => {
     await seedEvent(tutorFirst, at("2026-09-29T09:20:00Z"), { id: MIMI, role: "TEACHER" });
     await seedRow(43, { state: "skipped_scope", reason: "session_type_OFFLINE", endAt: at("2026-09-29T10:00:00Z") });
     await seedUnseen(44, { endAt: at("2026-09-29T11:00:00Z") });
-    // Open decision D-03, taken fail-closed: an absence hold is a miss, shown as a sub-count.
+    // D-03 (owner, 30 Sep): a hold for the class's own data (no student) is left out; the unfaithful one is a miss.
     await seedRow(45, { state: "held", reason: "student_count_0", endAt: at("2026-09-29T12:00:00Z") });
     await snapshotFirstShots(db);
     await assignReviews(db, { now: NOW });
@@ -667,7 +668,7 @@ describe("daily metrics", () => {
 
     expect(await refreshDailyMetrics(db, { dates: metricDates(NOW), now: NOW })).toBe(15 * 6);
     expect(await starRow(DAY)).toMatchObject({
-      liveMode: true, posted: 1, held: 2, heldAbsence: 1, unseen: 1, excludedTutorFirst: 1, eligible: 4, required: 1, reviewed: 0,
+      liveMode: true, posted: 1, held: 1, excludedDataQuality: 1, unseen: 1, excludedTutorFirst: 1, eligible: 3, required: 1, reviewed: 0,
     });
     // Every date of the window has its row, a day without classes included.
     expect(await starRow("2026-09-20")).toMatchObject({ posted: 0, eligible: 0 });
@@ -677,8 +678,47 @@ describe("daily metrics", () => {
     expect(await recordDailyGate(db, DAY)).toBeNull();
     const rows = await db.select().from(G);
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ evalKind: "daily", windowStart: "2026-09-16", windowEnd: DAY, coverageNum: 1, coverageDen: 4, requiredPending: 1, unrecordedPosts: 0 });
+    expect(rows[0]).toMatchObject({ evalKind: "daily", windowStart: "2026-09-16", windowEnd: DAY, coverageNum: 1, coverageDen: 3, requiredPending: 1, unrecordedPosts: 0 });
     await expectSqlState(db.insert(G).values({ ...rows[0], id: undefined }), "23505");
+  });
+
+  it("leaves out only the holds for a class's own data and a switched-off tutor's hand-back (D-03); every other hold is a miss", async () => {
+    const endAt = at("2026-09-29T12:00:00Z");
+    let n = 130;
+    for (const reason of [
+      "recording_too_short", "recording_multiple_parts", "speakers_unclear", "transcript_too_short", "student_count_0",
+      "attendance_20pct", "student_not_wise_user",
+    ]) await seedRow(n++, { state: "held", reason, endAt });
+    for (const reason of [
+      "glm:unfaithful:homework not in the lesson", "glm:markdown:improvement; luna:output_not_json", "feedback_form_question_unmapped",
+      "billing:insufficient_student_credits", "error:fetch failed",
+    ]) await seedRow(n++, { state: "held", reason, endAt });
+    // Workable all day, then switched off and handed back at the deadline: the owner's switch, not our miss.
+    await seedRow(n++, { state: "skipped_scope", reason: "tutor_off_at_deadline", endAt });
+    await refreshDailyMetrics(db, { dates: metricDates(NOW), now: NOW });
+    expect(await starRow(DAY)).toMatchObject({ posted: 0, excludedDataQuality: 7, held: 5, excludedTutorOff: 1, excludedScope: 0, eligible: 5 });
+  });
+
+  it("previews in the dry run exactly the rows the job stores", async () => {
+    await seedPosted(150);
+    await seedRow(151, { state: "held", reason: "speakers_unclear", endAt: at("2026-09-29T10:00:00Z") });
+    await seedRow(152, { state: "held", reason: "glm:unfaithful", endAt: at("2026-09-29T10:30:00Z") });
+    const tutorFirst = await seedRow(153, { state: "skipped_human", reason: "human_submission", endAt: at("2026-09-29T11:00:00Z") });
+    await seedEvent(tutorFirst, at("2026-09-29T11:20:00Z"), { id: MIMI, role: "TEACHER" });
+    await seedUnseen(154, { endAt: at("2026-09-29T11:30:00Z") });
+    await snapshotFirstShots(db);
+    await assignReviews(db, { now: NOW });
+    const since = at("2026-09-01T00:00:00Z");
+    const classified = planFixEvents(await loadFixEventSources(db, { since }), API).classified;
+    const preview = await previewDailyMetrics(db, { now: NOW, reviewTables: true, classifiedFixEvents: classified });
+    await ingestFixEvents(db, { apiActorId: API, since });
+    await refreshDailyMetrics(db, { dates: metricDates(NOW), now: NOW });
+    const keys = Object.keys(preview[0]) as Array<keyof (typeof preview)[number]>;
+    const shape = (rows: ReadonlyArray<Record<string, unknown>>) => rows.map((row) => JSON.stringify(keys.map((key) => row[key]))).toSorted();
+    expect(shape(preview)).toEqual(shape(await db.select().from(M)));
+    expect(preview.find((row) => row.metricDate === DAY && row.tutorKey === "*")).toMatchObject({
+      posted: 1, held: 1, excludedDataQuality: 1, excludedTutorFirst: 1, unseen: 1, eligible: 3,
+    });
   });
 
   it("still counts a class of day D that expired at 23:38 on D+2 in the run at 00:27 on D+3", async () => {
@@ -981,8 +1021,21 @@ describe("day-one backfill", () => {
     expect(await applyReviewBackfillPlan(db, plan)).toEqual({ firstShots: 0, corrections: 0, incidents: 0 });
     const posts = await db.select().from(P).where(eq(P.wiseSessionId, row.wiseSessionId));
     expect(posts.map((post) => [post.kind, post.dedupeKey]).toSorted()).toEqual([
-      ["correction", `nickname-fix:${row.wiseSessionId}`], ["first_shot", null],
+      ["policy", `nickname-fix:${row.wiseSessionId}`], ["first_shot", null],
     ].toSorted());
+  });
+
+  it("never counts the nickname re-post as a fix (D-01): not in the fix count, the fix rounds or the corrections", async () => {
+    const row = await renamedRow(122);
+    await applyReviewBackfillPlan(db, planReviewBackfill([{ row, pcFirstVersion: null, hasFirstShot: false, recordedDedupeKeys: new Set() }]));
+    await assignReviews(db, { now: NOW });
+    const since = at("2026-09-01T00:00:00Z");
+    await ingestFixEvents(db, { apiActorId: API, since });
+    expect((await db.select().from(FX).orderBy(FX.eventAt)).map((event) => [event.actorKind, event.countsAsFix, event.postId !== null]))
+      .toEqual([["autowriter_first", false, true], ["autowriter_policy", false, true]]);
+    expect(await raiseFixFlags(db, { since })).toEqual({ flags: 0, incidents: 0 });
+    await refreshReviewCounts(db, { sinceDate: "2026-09-01" });
+    expect((await db.select().from(R))[0]).toMatchObject({ measuredFixCount: 0, measuredFixesByActor: {}, correctionsVerified: 0 });
   });
 
   it("previews exactly what the job stores — also when run again after --apply", async () => {
@@ -992,13 +1045,88 @@ describe("day-one backfill", () => {
     const preview = async () => planFixEvents(await loadFixEventSources(db, { since }), API).classified
       .map((event) => [event.wiseEventId, event.actorKind, event.countsAsFix]).toSorted();
     const before = await preview();
-    expect(before.map(([, kind]) => kind).toSorted()).toEqual(["autowriter_correction", "autowriter_first"]);
+    expect(before.map(([, kind]) => kind).toSorted()).toEqual(["autowriter_first", "autowriter_policy"]);
     await applyReviewBackfillPlan(db, plan);
     await ingestFixEvents(db, { apiActorId: API, since });
     const stored = (await db.select().from(FX)).map((event) => [event.wiseEventId, event.actorKind, event.countsAsFix]).toSorted();
     // The same classification before --apply, after it, and in the table: never "unmatched" for a recorded class.
     expect(stored).toEqual(before);
     expect(await preview()).toEqual(before);
+  });
+});
+
+describe("owner verdicts from the 30 Sep interview", () => {
+  // Synthetic ids and words; the committed file (scripts/feedback-autowriter-owner-verdicts.json) names the real classes.
+  const REVIEWER = "owner@example.com (owner interview 2026-09-30)";
+  const decisions = (): OwnerVerdicts => ({
+    decidedAt: at("2026-09-30T02:30:00Z"),
+    reviewer: REVIEWER,
+    verdicts: [
+      { wiseSessionId: id24(140), verdict: "needs_fix", severity: "critical", criticalCategory: "wrong_person", note: "synthetic: another student's work — owner, 30 Sep interview" },
+      { wiseSessionId: id24(141), verdict: "needs_fix", severity: "factual", criticalCategory: null, note: "synthetic: false homework claim — owner, 30 Sep interview" },
+    ],
+  });
+
+  /** Two classes of 29 Sep (20:00 and 21:00 Bangkok), posted and recorded by the backfill, with their review rows. */
+  async function backfilled() {
+    await seedPosted(140, { endAt: at("2026-09-29T13:00:00Z") });
+    await seedPosted(141, { endAt: at("2026-09-29T14:00:00Z") });
+    const rows = await db.select().from(S);
+    await applyReviewBackfillPlan(db, planReviewBackfill(rows.map((row) => ({ row, pcFirstVersion: null, hasFirstShot: false, recordedDedupeKeys: new Set<string>() }))));
+    await assignReviews(db, { now: NOW });
+  }
+
+  it("records each decision once, as the owner, pinned to the first shot — also applied twice or by two runs at once", async () => {
+    await backfilled();
+    // A flag the owner had seen by the interview is answered by the decision.
+    await db.insert(FL).values({ wiseSessionId: id24(141), source: "measured_fix", createdBy: "system", idempotencyKey: "seen-flag", createdAt: at("2026-09-29T20:00:00Z") });
+    const runs = await Promise.all([applyOwnerVerdicts(db, decisions()), applyOwnerVerdicts(db, decisions())]);
+    expect(runs.flatMap((run) => run.recorded).toSorted()).toEqual([id24(140), id24(141)]);
+    expect(runs.flatMap((run) => run.alreadyRecorded).toSorted()).toEqual([id24(140), id24(141)]);
+    expect(runs.flatMap((run) => run.skipped)).toEqual([]);
+    expect(await applyOwnerVerdicts(db, decisions())).toEqual({ recorded: [], alreadyRecorded: [id24(140), id24(141)], skipped: [] });
+
+    const verdicts = await db.select().from(V).orderBy(V.wiseSessionId);
+    const firstShots = new Map((await db.select().from(P).where(eq(P.kind, "first_shot"))).map((post) => [post.wiseSessionId, post]));
+    expect(verdicts.map((row) => [row.wiseSessionId, row.verdict, row.severity, row.criticalCategory, row.reviewer, row.source, row.postId, row.fieldsSha256]))
+      .toEqual([
+        [id24(140), "needs_fix", "critical", "wrong_person", REVIEWER, "backfill", firstShots.get(id24(140))!.id, firstShots.get(id24(140))!.fieldsSha256],
+        [id24(141), "needs_fix", "factual", null, REVIEWER, "backfill", firstShots.get(id24(141))!.id, firstShots.get(id24(141))!.fieldsSha256],
+      ]);
+    expect(verdicts.map((row) => row.note)).toEqual(decisions().verdicts.map((entry) => entry.note));
+    const reviews = await db.select().from(R).orderBy(R.wiseSessionId);
+    expect(reviews.map((row) => row.currentVerdictId)).toEqual(verdicts.map((row) => row.id));
+    expect((await db.select().from(FL))[0].resolvedByVerdictId).toBe(verdicts[1].id);
+    expect(await db.select().from(I).where(eq(I.kind, "critical_verdict"))).toMatchObject([{ wiseSessionId: id24(140), severity: "critical" }]);
+  });
+
+  it("leaves a class to the dashboard when it has another verdict, or a flag raised after the decision", async () => {
+    await backfilled();
+    await recordVerdict(db, await verdictFor(id24(140), { verdict: "approve" }));
+    await db.insert(FL).values({ wiseSessionId: id24(141), source: "measured_fix", createdBy: "system", idempotencyKey: "news", createdAt: at("2026-09-30T07:00:00Z") });
+    const result = await applyOwnerVerdicts(db, decisions());
+    expect(result.recorded).toEqual([]);
+    expect(result.skipped.map((entry) => entry.wiseSessionId)).toEqual([id24(140), id24(141)]);
+    expect(result.skipped[0].reason).toContain("already has a verdict by owner@example.com");
+    expect(result.skipped[1].reason).toContain("flag raised after the decision");
+    expect(await db.select().from(V)).toHaveLength(1);
+  });
+
+  it("blocks expansion with the 29 Sep critical until the 13 Oct gate: every window holding 29 Sep is blocked_critical", async () => {
+    await backfilled();
+    await applyOwnerVerdicts(db, decisions());
+    const gateOn = async (date: string) => evaluateGate(await loadGateFacts(db, gateWindow(date)));
+    expect(await gateOn("2026-09-29")).toMatchObject({ status: "blocked_critical" });
+    const last = await gateOn("2026-10-12");
+    expect(gateWindow("2026-10-12")).toEqual({ start: "2026-09-29", end: "2026-10-12" });
+    expect(last.status).toBe("blocked_critical");
+    expect(last.reasons).toContain("1 critical verdict(s) in the window");
+    const clear = await gateOn("2026-10-13");
+    expect(clear.status).not.toBe("blocked_critical");
+    expect(clear.reasons.join(" ")).not.toContain("critical");
+    // The nightly rows say the same.
+    expect(await recordDailyGate(db, "2026-10-12")).toEqual({ date: "2026-10-12", status: "blocked_critical" });
+    expect((await recordDailyGate(db, "2026-10-13"))?.status).not.toBe("blocked_critical");
   });
 });
 

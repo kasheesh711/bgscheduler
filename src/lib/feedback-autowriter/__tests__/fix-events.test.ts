@@ -36,17 +36,18 @@ const firstShot: PostForMatching = {
   postFinishedAt: new Date("2026-09-29T08:39:46.100Z"),
   eventAt: new Date("2026-09-29T08:39:45.495Z"),
 };
-// A backfilled one-time correction knows only when it was verified (a few seconds after its POST).
+// A backfilled one-time re-post knows only when it was verified (a few seconds after its POST). The nickname fix
+// applied a naming rule made after the post: a policy re-post (owner decision D-01, 30 Sep).
 const nicknameFix: PostForMatching = {
   id: "post-fix",
-  kind: "correction",
+  kind: "policy",
   postStartedAt: null,
   postFinishedAt: new Date("2026-09-29T13:26:11.505Z"),
   eventAt: null,
 };
 
 describe("classifySessionFixEvents", () => {
-  it("reproduces day one: auto-submission, our first post, the nickname re-post", () => {
+  it("reproduces day one: auto-submission, our first post, the nickname re-post (a policy change, never a fix)", () => {
     const events = [
       event("2026-09-29T08:04:05.113Z", { actorWiseUserId: null, actorRole: null, autoSubmitted: true }),
       event("2026-09-29T08:39:45.495Z"),
@@ -56,8 +57,11 @@ describe("classifySessionFixEvents", () => {
     expect(classified.map((row) => [row.actorKind, row.postId, row.countsAsFix])).toEqual([
       ["auto", null, false],
       ["autowriter_first", "post-first", false],
-      ["autowriter_correction", "post-fix", true],
+      ["autowriter_policy", "post-fix", false],
     ]);
+    // The same save matched to an owner-approved correction of a wrong post is a fix.
+    const corrected = classifySessionFixEvents(events, { posts: [firstShot, { ...nicknameFix, kind: "correction" }], apiActorId: API });
+    expect(corrected[2]).toMatchObject({ actorKind: "autowriter_correction", countsAsFix: true });
   });
 
   it("ignores students; counts a person's save after our first post as a fix, never one before it", () => {
@@ -156,7 +160,7 @@ describe("matchingPostsForSession", () => {
     expect(matchingPostsForSession(session({ state: "held", postStartedAt: null }), [])).toEqual([]);
   });
 
-  it("treats every metadata.corrections entry like the nickname fix: the correction's API save is ours, not unmatched", () => {
+  it("explains every metadata.corrections entry from the row: the correction's API save is ours (a fix), not unmatched", () => {
     const posts = matchingPostsForSession(session({ metadata: corrected }), [])!;
     expect(posts.map((post) => [post.kind, post.dedupeKey ?? null])).toEqual([
       ["first_shot", null],
@@ -174,6 +178,29 @@ describe("matchingPostsForSession", () => {
     });
     expect(bare[1]).toMatchObject({ actorKind: "api_actor_unmatched", countsAsFix: true });
     expect(bare[1].eventAt.getTime()).toBeGreaterThan(UNMATCHED_API_CRITICAL_FROM.getTime());
+  });
+
+  it("tells the nickname fix (policy, not counted) from an owner-approved correction (a fix) on the same class", () => {
+    const both = {
+      ...corrected,
+      nicknameFix: { from: "Alexander", to: "Alex", at: "2026-09-29T15:00:03.000Z", by: "owner@example.com (one-time fix)" },
+    };
+    const posts = matchingPostsForSession(session({ metadata: both }), [])!;
+    expect(posts.map((post) => [post.kind, post.dedupeKey ?? null])).toEqual([
+      ["first_shot", null],
+      ["policy", `nickname-fix:${SESSION}`],
+      ["correction", `correction:${SESSION}:2026-09-29T18:07:12.757Z`],
+    ]);
+    const classified = classifySessionFixEvents([
+      event("2026-09-29T14:09:17.871Z"),
+      event("2026-09-29T15:00:01.000Z"),
+      event("2026-09-29T18:07:08.506Z"),
+    ], { posts, apiActorId: API });
+    expect(classified.map((row) => [row.actorKind, row.countsAsFix])).toEqual([
+      ["autowriter_first", false],
+      ["autowriter_policy", false],
+      ["autowriter_correction", true],
+    ]);
   });
 
   it("does not add a one-time re-post twice once the backfill recorded it", () => {

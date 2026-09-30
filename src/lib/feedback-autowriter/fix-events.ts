@@ -13,8 +13,9 @@ import { AUTOWRITER_TEACHER_ALLOWLIST } from "./roster";
  * API user's saves are matched to the posts we made (first shot, correction, or a one-time script's re-post the row
  * records); an API save no post explains is `api_actor_unmatched`, on any class — held, skipped and expired ones
  * included, since those are the classes a script outside the lock would touch. A save by anyone else after our
- * first post is a measured fix. `post_class_feedback_versions` is not used for this: it collapses saves and names
- * the tutor as the actor.
+ * first post is a measured fix, and so is our own correction of a wrong post; a re-post for an owner policy change
+ * (the 29 Sep nickname rule, owner decision D-01) is `autowriter_policy` and never a fix.
+ * `post_class_feedback_versions` is not used for this: it collapses saves and names the tutor as the actor.
  */
 
 export const FIX_EVENT_CLASSIFIER_VERSION = 1;
@@ -59,7 +60,7 @@ export interface FixEventInput {
 export interface PostForMatching {
   /** The posts row id; a matching key only when `synthetic`. */
   id: string;
-  kind: "first_shot" | "correction";
+  kind: "first_shot" | "correction" | "policy";
   postStartedAt: Date | null;
   postFinishedAt: Date | null;
   /** Our confirming submit event's time, when the POST's verification recorded it. */
@@ -90,11 +91,12 @@ export function postEventWindow(post: PostForMatching): { start: number; end: nu
  * Classify one class's feedback events (any order). Each post is matched to at most one API event: first by the
  * exact event time its verification recorded, then by its POST window.
  * - auto-submissions and students are ignored (never a fix);
- * - our API user: the matching first shot or correction, or `api_actor_unmatched` when no post explains it
- *   (a script outside the lock, or the key owner's own web save — they look identical);
+ * - our API user: the matching first shot, correction or policy re-post, or `api_actor_unmatched` when no post
+ *   explains it (a script outside the lock, or the key owner's own web save — they look identical);
  * - Kevin's web user → `owner_web`; a roster account → `tutor`; anyone else → `other_staff`.
  * `countsAsFix`: every correction, and any other non-ignored save after our first post (never on a class we
- * did not post). Without the API user's id nothing can be told apart, so this refuses to classify.
+ * did not post); never our first shot or a policy re-post. Without the API user's id nothing can be told apart, so
+ * this refuses to classify.
  */
 export function classifySessionFixEvents(events: readonly FixEventInput[], input: {
   posts: readonly PostForMatching[];
@@ -132,9 +134,10 @@ export function classifySessionFixEvents(events: readonly FixEventInput[], input
       const post = exact.get(event.wiseEventId) ?? matchByWindow(event, input.posts, used);
       if (post) {
         used.add(post.id);
-        return post.kind === "first_shot"
-          ? { ...event, actorKind: "autowriter_first", postId: postIdOf(post), countsAsFix: false }
-          : { ...event, actorKind: "autowriter_correction", postId: postIdOf(post), countsAsFix: true };
+        if (post.kind === "first_shot") return { ...event, actorKind: "autowriter_first", postId: postIdOf(post), countsAsFix: false };
+        // D-01: a policy re-post changed the text to a rule made after the post — not a fix of the first shot.
+        if (post.kind === "policy") return { ...event, actorKind: "autowriter_policy", postId: postIdOf(post), countsAsFix: false };
+        return { ...event, actorKind: "autowriter_correction", postId: postIdOf(post), countsAsFix: true };
       }
       return { ...event, actorKind: "api_actor_unmatched", postId: null, countsAsFix: afterFirstPost(event) };
     }
@@ -206,7 +209,7 @@ export function matchingPostsForSession(session: SessionForMatching, recorded: r
     if (recordedKeys.has(correction.dedupeKey)) continue;
     posts.push({
       id: `synthetic:${correction.dedupeKey}`,
-      kind: "correction",
+      kind: correction.kind,
       postStartedAt: null,
       postFinishedAt: correction.at,
       eventAt: null,
@@ -257,7 +260,7 @@ export interface FixEventSources {
  * The classes in scope — every class the autowriter has a row for (class ended, or row made, since `since`) plus
  * every first shot recorded since then — with their feedback events, rows and recorded posts. The events are read
  * before the session states, so a POST that lands meanwhile is seen in flight, not as a stranger's save.
- * `postsTable: false` plans as if no posts were recorded yet (a dry run before migration 0100).
+ * `postsTable: false` plans as if no posts were recorded yet (a dry run before migration 0101).
  */
 export async function loadFixEventSources(db: Database, input: { since: Date; postsTable?: boolean }): Promise<FixEventSources> {
   const postsTable = input.postsTable ?? true;

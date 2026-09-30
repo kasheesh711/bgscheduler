@@ -47,7 +47,7 @@ function metric(overrides: Partial<MetricRow>): MetricRow {
   return {
     metricDate: "2026-09-29", tutorKey: "*", liveMode: true, posted: 8, required: 8, reviewed: 1, requiredPending: 7, accurate: 1,
     cosmetic: 0, factual: 0, critical: 0, eligible: 9, excludedScope: 0, excludedTutorFirst: 5, excludedTutorOff: 0,
-    excludedNotLive: 2, pending: 0, unseen: 0, held: 1, heldAbsence: 1, expired: 0, failed: 0, late: 0, measuredFixClasses: 6,
+    excludedNotLive: 2, excludedDataQuality: 1, pending: 0, unseen: 0, held: 1, expired: 0, failed: 0, late: 0, measuredFixClasses: 6,
     correctionsVerified: 6, policyVersion: 1, computedAt: NOW, ...overrides,
   };
 }
@@ -73,8 +73,8 @@ function source(overrides: Partial<ReviewSourceRows> = {}): ReviewSourceRows {
       post({}),
       post({
         id: "fix-1", kind: "correction", fields: RENAMED, fieldsSha256: fieldsHash(RENAMED), actorKind: "script",
-        actor: "script:nickname-fix (owner@example.com)", reason: "owner naming policy: nickname", postStartedAt: null,
-        postFinishedAt: new Date("2026-09-29T13:26:11Z"), dedupeKey: "nickname-fix:s1",
+        actor: "script:correct-posts (owner@example.com)", reason: "synthetic: an owner-approved correction", postStartedAt: null,
+        postFinishedAt: new Date("2026-09-29T13:26:11Z"), dedupeKey: "correction:s1:2026-09-29T13:26:11.000Z",
       }),
       post({ id: "post-2", wiseSessionId: "s2" }),
       post({ id: "post-3", wiseSessionId: "s3" }),
@@ -96,7 +96,7 @@ function source(overrides: Partial<ReviewSourceRows> = {}): ReviewSourceRows {
       { wiseSessionId: "s3", wiseClassId: "c3", wiseTeacherUserId: "696e2c4343579bbada2340f8", state: "skipped_scope", reason: "session_type_OFFLINE", className: "In-person class" },
     ],
     currentVersions: [],
-    metrics: [metric({}), metric({ tutorKey: "Mimi", posted: 6, eligible: 6 }), metric({ metricDate: "2026-09-28", liveMode: false, posted: 0, eligible: 3, held: 0, heldAbsence: 0, excludedTutorFirst: 0 })],
+    metrics: [metric({}), metric({ tutorKey: "Mimi", posted: 6, eligible: 6 }), metric({ metricDate: "2026-09-28", liveMode: false, posted: 0, eligible: 3, held: 0, excludedDataQuality: 0, excludedTutorFirst: 0 })],
     lastDailyGate: null,
     incidents: [],
     lastRun: null,
@@ -126,9 +126,30 @@ describe("buildAutowriterReview", () => {
     expect(item.diff.map((entry) => entry.field)).toEqual(["performance"]);
     expect(item.fixEvents.map((event) => [event.actorKind, event.counted])).toEqual([["autowriter_first", false], ["autowriter_correction", true]]);
     expect(item.measuredFixesByActor).toEqual({ autowriter_correction: 1 });
-    expect(item.corrections[0]).toMatchObject({ actor: "script:nickname-fix (owner@example.com)", outcome: "verified" });
+    expect(item.corrections[0]).toMatchObject({ kind: "correction", actor: "script:correct-posts (owner@example.com)", outcome: "verified" });
     expect(item.status).toBe("needs_review");
     expect(item.tutor).toBe("Thanit (Mimi) Montrikittiphant");
+  });
+
+  it("shows a policy re-post (the nickname rule) as the current text, never as a correction or a fix", () => {
+    const base = source();
+    const payload = buildAutowriterReview({
+      now: NOW,
+      ...base,
+      posts: base.posts.map((row) => row.id === "fix-1" ? {
+        ...row, kind: "policy" as const, actor: "script:nickname-fix (owner@example.com)", reason: "owner naming policy: nickname", dedupeKey: "nickname-fix:s1",
+      } : row),
+      fixEvents: base.fixEvents.map((event) => event.wiseEventId === "e2" ? { ...event, actorKind: "autowriter_policy" as const, countsAsFix: false } : event),
+      windowReviews: base.windowReviews.map((row) => row.wiseSessionId === "s1" ? { ...row, measuredFixCount: 0, measuredFixesByActor: {} } : row),
+      queueReviews: base.queueReviews.map((row) => row.wiseSessionId === "s1" ? { ...row, measuredFixCount: 0, measuredFixesByActor: {} } : row),
+    });
+    const item = payload.queue.find((entry) => entry.wiseSessionId === "s1")!;
+    expect(item.current).toMatchObject({ source: "policy", fields: RENAMED });
+    expect(item.corrections).toMatchObject([{ kind: "policy", actor: "script:nickname-fix (owner@example.com)" }]);
+    expect(item.fixEvents.map((event) => [event.actorKind, event.countsAsFix, event.counted])).toEqual([
+      ["autowriter_first", false, false], ["autowriter_policy", false, false],
+    ]);
+    expect(item.measuredFixCount).toBe(0);
   });
 
   it("prefers the text Class Feedback read from Wise when it is newer than our last post", () => {
@@ -166,7 +187,7 @@ describe("buildAutowriterReview", () => {
 
   it("counts coverage over every day of the window and fix rounds only for approved classes", () => {
     const payload = buildAutowriterReview({ now: NOW, ...source() });
-    expect(payload.coverage).toMatchObject({ posted: 8, miss_held: 1, heldAbsence: 1, excluded_tutor_first: 5, excluded_not_live: 4 });
+    expect(payload.coverage).toMatchObject({ posted: 8, miss_held: 1, excluded_data_quality: 1, excluded_tutor_first: 5, excluded_not_live: 4 });
     expect(payload.daily.map((row) => row.date)).toEqual(["2026-09-29", "2026-09-28"]);
     expect(payload.tutors.find((row) => row.tutorKey === "Mimi")).toMatchObject({ textsInWise: 2, reviewed: 1, coverageNum: 6, coverageDen: 6, phase: "full_review" });
     // s1 has no verdict yet; s2 is approved with no counted fix.

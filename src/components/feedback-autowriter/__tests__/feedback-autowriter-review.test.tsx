@@ -40,7 +40,7 @@ function item(overrides: Partial<ReviewQueueItem> = {}): ReviewQueueItem {
     diff: [{ field: "performance", segments: [
       { kind: "removed", text: "Alexander" }, { kind: "added", text: "Alex" }, { kind: "same", text: " spotted symmetry fast." },
     ] }],
-    corrections: [{ actor: "script:nickname-fix (owner@example.com)", reason: "owner naming policy: nickname", outcome: "verified", at: "2026-09-29T13:26:11.000Z", provenance: "backfill" }],
+    corrections: [{ kind: "correction", actor: "script:correct-posts (owner@example.com)", reason: "synthetic correction", outcome: "verified", at: "2026-09-29T13:26:11.000Z", provenance: "backfill" }],
     fixEvents: [
       { wiseEventId: "e1", at: "2026-09-29T08:39:45.495Z", actorKind: "autowriter_first", countsAsFix: false, counted: false },
       { wiseEventId: "e2", at: "2026-09-29T13:26:07.299Z", actorKind: "autowriter_correction", countsAsFix: true, counted: true },
@@ -78,7 +78,7 @@ function review(overrides: Partial<AutowriterReview> = {}): AutowriterReview {
     },
     coverage: {
       posted: 8, miss_held: 1, miss_late: 1, miss_expired: 0, miss_failed: 0, miss_unseen: 0, excluded_tutor_first: 5,
-      excluded_tutor_off: 0, excluded_not_live: 2, excluded_scope: 0, pending: 0, heldAbsence: 1,
+      excluded_data_quality: 1, excluded_tutor_off: 0, excluded_not_live: 2, excluded_scope: 0, pending: 0,
     },
     fixRounds: { zero: 2, one: 6, two: 0, threePlus: 0, unresolved: 0 },
     daily: [{
@@ -121,7 +121,8 @@ describe("FeedbackAutowriterQualityPanel", () => {
     expect(html).toContain("Tutor wrote first");
     expect(html).toContain("Written after our draft");
     expect(html).toContain("Not live (shadow/off)");
-    expect(html).toContain("of which absence");
+    expect(html).toContain("Data quality");
+    expect(html).not.toContain("of which absence");
     expect(html).toContain("Cosmetic / major / critical");
     expect(html).toContain("Texts in Wise");
     expect(html).toContain("2026-09-29");
@@ -150,10 +151,10 @@ describe("FeedbackAutowriterQualityPanel", () => {
 
 describe("ReviewUnavailable", () => {
   it("says a missing migration and a load failure apart", () => {
-    expect(renderToStaticMarkup(<ReviewUnavailable reason="review_tables_missing" />)).toContain("migration 0100");
+    expect(renderToStaticMarkup(<ReviewUnavailable reason="review_tables_missing" />)).toContain("migration 0101");
     const failed = renderToStaticMarkup(<ReviewUnavailable reason="load_failed" />);
     expect(failed).toContain("could not load");
-    expect(failed).not.toContain("migration 0100");
+    expect(failed).not.toContain("migration 0101");
   });
 });
 
@@ -167,10 +168,29 @@ describe("FeedbackAutowriterReviewQueue", () => {
     expect(html).toContain("<ins");
     expect(html).toContain("Autowriter — correction");
     expect(html).toContain("after approval — not counted");
-    expect(html).toContain("Correction by script:nickname-fix (owner@example.com)");
+    expect(html).toContain("Correction by script:correct-posts (owner@example.com)");
     expect(html).toContain("1 measured fix (Autowriter — correction 1)");
     expect(html).toContain("Needs review (1)");
     expect(html).toContain("All (2)");
+  });
+
+  it("labels the nickname re-post a policy change, never a fix", () => {
+    const policy = item({
+      current: { ...item().current, source: "policy" },
+      corrections: [{ kind: "policy", actor: "script:nickname-fix (owner@example.com)", reason: "owner naming policy: nickname", outcome: "verified", at: "2026-09-29T13:26:11.000Z", provenance: "backfill" }],
+      fixEvents: [
+        { wiseEventId: "e1", at: "2026-09-29T08:39:45.495Z", actorKind: "autowriter_first", countsAsFix: false, counted: false },
+        { wiseEventId: "e2", at: "2026-09-29T13:26:07.299Z", actorKind: "autowriter_policy", countsAsFix: false, counted: false },
+      ],
+      measuredFixCount: 0,
+      measuredFixesByActor: {},
+    });
+    const html = renderToStaticMarkup(<FeedbackAutowriterReviewQueue review={review({ queue: [policy] })} canControl={false} onRecorded={() => undefined} />);
+    expect(html).toContain("the owner&#x27;s policy re-post (not a fix)");
+    expect(html).toContain("Autowriter — policy re-post (not a fix)");
+    expect(html).toContain("Policy re-post (not a fix) by script:nickname-fix (owner@example.com)");
+    expect(html).not.toContain("· fix</strong>");
+    expect(html).not.toContain("Correction by");
   });
 
   it("counts the filters from the database totals and says when the queue is a subset", () => {

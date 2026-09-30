@@ -163,10 +163,11 @@ export interface ReviewQueueItem {
     outcome: string;
     problems: string[];
   };
-  current: { fields: FeedbackFieldAnswers; source: "first_shot" | "correction" | "wise_feedback_version"; at: string | null };
+  current: { fields: FeedbackFieldAnswers; source: "first_shot" | "correction" | "policy" | "wise_feedback_version"; at: string | null };
   changed: boolean;
   diff: Array<{ field: Field; segments: DiffSegment[] }>;
-  corrections: Array<{ actor: string; reason: string | null; outcome: string; at: string | null; provenance: string }>;
+  /** Every re-post after the first shot: a `correction` (a fix) or a `policy` re-post (an owner rule change, never a fix). */
+  corrections: Array<{ kind: "correction" | "policy"; actor: string; reason: string | null; outcome: string; at: string | null; provenance: string }>;
   /** Every save in Wise; `counted` = a measured fix now (a save after the current Approve is listed, not counted). */
   fixEvents: Array<{ wiseEventId: string; at: string; actorKind: string; countsAsFix: boolean; counted: boolean }>;
   measuredFixCount: number;
@@ -208,7 +209,7 @@ export interface QualityTutorRow {
   measuredFixClasses: number;
 }
 
-/** The review tables cannot be read: not created yet (migration 0100), or a load failure (not the same thing). */
+/** The review tables cannot be read: not created yet (migration 0101), or a load failure (not the same thing). */
 export interface AutowriterReviewUnavailable {
   available: false;
   reason: "review_tables_missing" | "load_failed";
@@ -238,7 +239,7 @@ export interface AutowriterReview {
     currentTutors: number;
     nextExpansionSize: number;
   };
-  coverage: CoverageCounts & { heldAbsence: number };
+  coverage: CoverageCounts;
   fixRounds: { zero: number; one: number; two: number; threePlus: number; unresolved: number };
   daily: QualityDailyRow[];
   tutors: QualityTutorRow[];
@@ -337,11 +338,11 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
   const gate = evaluateGate(input.gateFacts);
 
   const windowMetrics = input.metrics.filter((row) => inWindow(row.metricDate));
-  const coverage = { ...emptyCoverageCounts(), heldAbsence: 0 };
+  const coverage = emptyCoverageCounts();
   for (const row of windowMetrics.filter((metric) => metric.tutorKey === "*")) {
     coverage.posted += row.posted;
     coverage.miss_held += row.held;
-    coverage.heldAbsence += row.heldAbsence;
+    coverage.excluded_data_quality += row.excludedDataQuality;
     coverage.miss_late += row.late;
     coverage.miss_expired += row.expired;
     coverage.miss_failed += row.failed;
@@ -410,7 +411,7 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
       const firstShot = posts.find((post) => post.id === review.firstPostId);
       if (!firstShot) return [];
       const session = sessions.get(review.wiseSessionId);
-      const corrections = posts.filter((post) => post.kind === "correction").toSorted((a, b) => postTime(a) - postTime(b));
+      const corrections = posts.filter((post) => post.kind !== "first_shot").toSorted((a, b) => postTime(a) - postTime(b));
       const latestPost = corrections.filter((post) => post.outcome === "verified").at(-1) ?? firstShot;
       const version = input.currentVersions.find((row) => row.wiseSessionId === review.wiseSessionId);
       const firstFields = asFields(firstShot.fields);
@@ -418,7 +419,7 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
         ? { fields: version.fields, source: "wise_feedback_version" as const, at: version.observedAt.toISOString() }
         : {
           fields: asFields(latestPost.fields),
-          source: latestPost === firstShot ? "first_shot" as const : "correction" as const,
+          source: latestPost === firstShot ? "first_shot" as const : latestPost.kind === "policy" ? "policy" as const : "correction" as const,
           at: iso(latestPost.postFinishedAt ?? latestPost.postStartedAt),
         };
       const diff = POST_CLASS_FEEDBACK_FIELDS
@@ -467,6 +468,7 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
         changed: diff.length > 0,
         diff,
         corrections: corrections.map((post) => ({
+          kind: post.kind === "policy" ? "policy" as const : "correction" as const,
           actor: post.actor,
           reason: post.reason,
           outcome: post.outcome,
@@ -625,7 +627,7 @@ async function loadAvailableReview(db: Database, now: Date, queueLimit: number):
 
 /**
  * Read-only loader for the page and `GET /api/feedback-autowriter/review`. A missing review table (SQLSTATE 42P01:
- * migration 0100 not applied) is a typed "unavailable" payload; any other failure propagates — it is not the same
+ * migration 0101 not applied) is a typed "unavailable" payload; any other failure propagates — it is not the same
  * thing and must not look like it.
  */
 export async function loadAutowriterReview(

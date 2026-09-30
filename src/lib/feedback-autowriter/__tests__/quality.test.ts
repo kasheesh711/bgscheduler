@@ -5,11 +5,13 @@ import {
   addDays,
   bangkokDateKey,
   bangkokDayBounds,
+  DATA_QUALITY_REASONS,
   buildDailyMetrics,
   classifyCoverage,
   computeGateFacts,
   countsTowardFix,
   coverageRatio,
+  dataQualityReason,
   downgradeOf,
   dailyGateDate,
   emptyCoverageCounts,
@@ -64,13 +66,14 @@ describe("classifyCoverage", () => {
   it.each([
     ["verified", "verified", "posted"],
     ["awaiting_event", null, "posted"],
-    // Handed back at the deadline: without window facts the class counts (fail-closed).
-    ["skipped_scope", "tutor_off_at_deadline", "miss_expired"],
+    // Handed back at the deadline because the tutor was switched off: the owner's switch (D-03), left out.
+    ["skipped_scope", "tutor_off_at_deadline", "excluded_tutor_off"],
     ["skipped_scope", "class_type_GROUP", "excluded_scope"],
-    // Open decision D-03, taken fail-closed: an absence hold is still a miss until the owner rules it correct.
-    ["held", "student_count_0", "miss_held"],
-    ["held", "attendance_30pct", "miss_held"],
-    ["held", "student_not_wise_user", "miss_held"],
+    // D-03: a hold for the class's own data is left out; a hold on our drafts is a miss.
+    ["held", "student_count_0", "excluded_data_quality"],
+    ["held", "attendance_30pct", "excluded_data_quality"],
+    ["held", "student_not_wise_user", "excluded_data_quality"],
+    ["held", "recording_too_short", "excluded_data_quality"],
     ["held", "glm:unfaithful:…", "miss_held"],
     ["expired", "deadline_passed_or_too_close", "miss_expired"],
     ["rejected", null, "miss_failed"],
@@ -106,12 +109,74 @@ describe("classifyCoverage", () => {
     expect(classifyCoverage({ state: "verified", reason: null, eligibility: notLive })).toBe("posted");
   });
 
-  it("counts a class handed back at the deadline as the tutor's only when they were switched off the whole window", () => {
+  it("leaves out a class handed back at the deadline because its tutor was switched off (D-03), however long it was workable", () => {
     const workable = { onRoster: true, workable: true, tutorOffThroughout: false };
     const tutorOff = { onRoster: true, workable: false, tutorOffThroughout: true };
     expect(classifyCoverage({ state: "skipped_scope", reason: "tutor_off_at_deadline", eligibility: tutorOff })).toBe("excluded_tutor_off");
-    // Workable for hours, then switched off: the autowriter could have written it — a miss.
-    expect(classifyCoverage({ state: "skipped_scope", reason: "tutor_off_at_deadline", eligibility: workable })).toBe("miss_expired");
+    expect(classifyCoverage({ state: "skipped_scope", reason: "tutor_off_at_deadline", eligibility: workable })).toBe("excluded_tutor_off");
+  });
+
+  // D-03 (owner, 30 Sep): every reason the autowriter holds a class for (job.ts, session.ts gates, pipeline.ts), and the
+  // class it lands in. Only the class's own data leaves the denominator; anything about our drafts, the form, billing
+  // or our pipeline is a miss — and so is a reason nobody listed (fail-closed).
+  it.each([
+    // Data quality: nothing any draft could fix.
+    ["recording_too_short", "excluded_data_quality"],
+    ["recording_multiple_parts", "excluded_data_quality"],
+    ["speakers_unclear", "excluded_data_quality"],
+    ["transcript_too_short", "excluded_data_quality"],
+    ["student_count_0", "excluded_data_quality"],
+    ["attendance_0pct", "excluded_data_quality"],
+    ["attendance_45pct", "excluded_data_quality"],
+    ["student_not_wise_user", "excluded_data_quality"],
+    // The judge or the validator rejected our drafts (one reason per writer arm, "; "-joined).
+    ["glm:unfaithful:homework not in the summary", "miss_held"],
+    ["glm:unfaithful:a | b; luna:unfaithful:c", "miss_held"],
+    ["glm:markdown:improvement; luna:output_not_json", "miss_held"],
+    ["glm:thai_text:topics", "miss_held"],
+    ["glm:placeholder_token:homework", "miss_held"],
+    // The model's own claim that the student was absent is a validation hold, not Wise's attendance: a miss.
+    ["glm:model_reports_student_not_attended", "miss_held"],
+    // The form, billing or our pipeline.
+    ["feedback_form_question_unmapped", "miss_held"],
+    ["feedback_form_missing_or_disabled", "miss_held"],
+    ["billing:auto_status_CANCELLED", "miss_held"],
+    ["billing:insufficient_student_credits", "miss_held"],
+    ["error:TypeError: fetch failed", "miss_held"],
+    ["transcript_pass_unavailable", "miss_held"],
+    ["soniox_timeout", "miss_held"],
+    ["soniox_error:bad audio", "miss_held"],
+    ["missing_student_or_tutor", "miss_held"],
+    ["missing_summary_student_or_tutor", "miss_held"],
+    ["submission_ambiguous:two_teacher_submissions", "miss_held"],
+    ["non_teacher_submission_with_billing", "miss_held"],
+    // Not whole matches of a data-quality reason, and no reason at all.
+    ["recording_too_short_maybe", "miss_held"],
+    ["glm:speakers_unclear", "miss_held"],
+    [null, "miss_held"],
+  ] as const)("a hold for %s → %s", (reason, expected) => {
+    expect(classifyCoverage({ state: "held", reason })).toBe(expected);
+  });
+
+  it("lists exactly the owner's data-quality reasons, each with a label", () => {
+    expect(DATA_QUALITY_REASONS.map((entry) => [entry.label, entry.coverage])).toEqual([
+      ["Recording too short", "excluded_data_quality"],
+      ["Recording in several parts", "excluded_data_quality"],
+      ["Speakers unclear", "excluded_data_quality"],
+      ["Transcript too short", "excluded_data_quality"],
+      ["No student", "excluded_data_quality"],
+      ["Student absent (attendance below the minimum)", "excluded_data_quality"],
+      ["Student not a Wise user", "excluded_data_quality"],
+      ["Tutor switched off", "excluded_tutor_off"],
+    ]);
+    expect(dataQualityReason("tutor_off_at_deadline")?.label).toBe("Tutor switched off");
+    // Matched whole, and never a global regex (a stateful lastIndex would skip every other match).
+    expect(DATA_QUALITY_REASONS.every((entry) => entry.match.source.startsWith("^") && entry.match.source.endsWith("$") && !entry.match.global)).toBe(true);
+    expect([1, 2, 3].map(() => dataQualityReason("speakers_unclear")?.label)).toEqual(["Speakers unclear", "Speakers unclear", "Speakers unclear"]);
+    // A data-quality hold of a class the switches never let us write stays "not live"; a tutor-off reason never excuses a hold.
+    expect(classifyCoverage({ state: "held", reason: "tutor_off_at_deadline" })).toBe("miss_held");
+    expect(classifyCoverage({ state: "held", reason: "speakers_unclear", eligibility: { onRoster: true, workable: false, tutorOffThroughout: false } }))
+      .toBe("excluded_not_live");
   });
 
   it("counts a skipped class as the tutor's only when they wrote before we started writing", () => {
@@ -382,7 +447,7 @@ describe("buildDailyMetrics", () => {
         { tutorKey: "Ek", coverage: "miss_held" },
         { tutorKey: "Ek", coverage: "excluded_tutor_first" },
         { tutorKey: "Ek", coverage: null },
-        { tutorKey: "Mimi", coverage: "miss_held", absenceHold: true },
+        { tutorKey: "Mimi", coverage: "excluded_data_quality" },
         { tutorKey: "Mimi", coverage: "miss_late" },
         { tutorKey: "Ek", coverage: "excluded_not_live" },
       ],
@@ -395,7 +460,7 @@ describe("buildDailyMetrics", () => {
     const all = rows.find((row) => row.tutorKey === "*")!;
     expect(all).toMatchObject({
       posted: 3, required: 3, reviewed: 2, requiredPending: 1, accurate: 1, cosmetic: 1, factual: 1, critical: 0,
-      eligible: 6, held: 2, heldAbsence: 1, late: 1, excludedTutorFirst: 1, excludedNotLive: 1, measuredFixClasses: 1, correctionsVerified: 1,
+      eligible: 5, held: 1, excludedDataQuality: 1, late: 1, excludedTutorFirst: 1, excludedNotLive: 1, measuredFixClasses: 1, correctionsVerified: 1,
     });
     expect(rows.find((row) => row.tutorKey === "Ek")).toMatchObject({ posted: 1, eligible: 2, held: 1, excludedNotLive: 1 });
     expect(rows.map((row) => row.tutorKey)).toEqual(["Mimi", "Ek", "*"]);

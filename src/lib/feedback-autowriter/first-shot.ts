@@ -84,10 +84,15 @@ export function proveFirstShot(input: {
  * A re-post made by an owner-approved one-time script, as the script recorded it on the session row after verifying
  * it in Wise: `metadata.nicknameFix` (29 Sep, first name → nickname) or an entry of `metadata.corrections`
  * (`.feedback-autowriter/correct-posts.ts`: `{fields, reason, fromSha256, toSha256, at, by}`). Each is one API save
- * we caused, recorded as a correction post (origin one-time) so it is never reported as an unmatched API write.
+ * we caused, recorded as a post (origin one-time) so it is never reported as an unmatched API write.
  */
 export interface OneTimeCorrection {
   source: "nicknameFix" | "corrections";
+  /**
+   * The post kind (owner decision D-01, 30 Sep): the nickname fix applied a naming policy that changed after the post
+   * — a `policy` re-post, never a fix; an owner-approved correction repaired a wrong post — a `correction`, a fix.
+   */
+  kind: "policy" | "correction";
   /** The correction post's `dedupe_key`: the same re-post is recorded at most once. */
   dedupeKey: string;
   /** When the script stamped it (after its POST and read-back). */
@@ -115,7 +120,7 @@ export function readOneTimeCorrections(wiseSessionId: string, metadata: unknown)
   const fixAt = validInstant(fix?.at);
   if (fix && fixAt && typeof fix.from === "string" && typeof fix.to === "string") {
     out.push({
-      source: "nicknameFix", dedupeKey: `nickname-fix:${wiseSessionId}`, at: fixAt, by: typeof fix.by === "string" ? fix.by : null,
+      source: "nicknameFix", kind: "policy", dedupeKey: `nickname-fix:${wiseSessionId}`, at: fixAt, by: typeof fix.by === "string" ? fix.by : null,
       reason: null, fields: null, fromSha256: null, toSha256: null, rename: { from: fix.from, to: fix.to },
     });
   }
@@ -125,6 +130,7 @@ export function readOneTimeCorrections(wiseSessionId: string, metadata: unknown)
     if (!at || typeof entry.toSha256 !== "string") continue;
     out.push({
       source: "corrections",
+      kind: "correction",
       dedupeKey: `correction:${wiseSessionId}:${at.toISOString()}`,
       at,
       by: typeof entry.by === "string" ? entry.by : null,

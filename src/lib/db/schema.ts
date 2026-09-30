@@ -6219,7 +6219,7 @@ export const wiseWebhookEvents = pgTable("wise_webhook_events", {
 ]);
 
 // ---------------------------------------------------------------------------
-// Feedback autowriter operating loop, Phase 1 (migration 0100): measurement.
+// Feedback autowriter operating loop, Phase 1 (migration 0101): measurement.
 // Immutable post log, owner verdicts, fixes measured from Wise activity events,
 // quality metrics and the expansion gate. Nothing here writes to Wise.
 // ---------------------------------------------------------------------------
@@ -6233,7 +6233,8 @@ export const feedbackAutowriterPosts = pgTable("feedback_autowriter_posts", {
   wiseSessionId: text("wise_session_id").notNull(),
   wiseClassId: text("wise_class_id"),
   wiseTeacherUserId: text("wise_teacher_user_id"),
-  kind: text("kind").$type<"first_shot" | "correction">().notNull(),
+  /** `policy`: a one-time re-post for an owner policy change (the 29 Sep nickname rule), never counted as a fix. */
+  kind: text("kind").$type<"first_shot" | "correction" | "policy">().notNull(),
   correctionId: uuid("correction_id"),
   fields: jsonb("fields").$type<Record<string, string>>().notNull(),
   fieldsSha256: text("fields_sha256").notNull(),
@@ -6341,8 +6342,8 @@ export const feedbackAutowriterFixEvents = pgTable("feedback_autowriter_fix_even
   actorRole: text("actor_role"),
   autoSubmitted: boolean("auto_submitted"),
   actorKind: text("actor_kind").$type<
-    | "autowriter_first" | "autowriter_correction" | "api_actor_unmatched" | "owner_web" | "tutor" | "other_staff"
-    | "student" | "auto"
+    | "autowriter_first" | "autowriter_correction" | "autowriter_policy" | "api_actor_unmatched" | "owner_web" | "tutor"
+    | "other_staff" | "student" | "auto"
   >().notNull(),
   postId: uuid("post_id").references(() => feedbackAutowriterPosts.id),
   countsAsFix: boolean("counts_as_fix").notNull(),
@@ -6394,16 +6395,17 @@ export const feedbackAutowriterDailyMetrics = pgTable("feedback_autowriter_daily
   eligible: integer("eligible").notNull().default(0),
   excludedScope: integer("excluded_scope").notNull().default(0),
   excludedTutorFirst: integer("excluded_tutor_first").notNull().default(0),
+  /** Held for the class's own data (D-03: recording, speakers, transcript, absence, not a Wise user): left out. */
+  excludedDataQuality: integer("excluded_data_quality").notNull().default(0),
   excludedTutorOff: integer("excluded_tutor_off").notNull().default(0),
   excludedNotLive: integer("excluded_not_live").notNull().default(0),
   pending: integer("pending").notNull().default(0),
   unseen: integer("unseen").notNull().default(0),
+  /** Any other hold (our drafts rejected, form or billing drift, errors): a miss. */
   held: integer("held").notNull().default(0),
-  /** Of `held`: absence or partial-attendance holds (still misses until interview decision D-03). */
-  heldAbsence: integer("held_absence").notNull().default(0),
   expired: integer("expired").notNull().default(0),
   failed: integer("failed").notNull().default(0),
-  /** A person wrote the class after our judged draft was ready. */
+  /** A person wrote the class after we started writing it (our first writer call). */
   late: integer("late").notNull().default(0),
   measuredFixClasses: integer("measured_fix_classes").notNull().default(0),
   correctionsVerified: integer("corrections_verified").notNull().default(0),

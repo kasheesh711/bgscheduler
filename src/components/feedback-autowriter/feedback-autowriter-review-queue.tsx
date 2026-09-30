@@ -40,6 +40,7 @@ const STATUS_TONE: Record<ReviewQueueItem["status"], string> = {
 const ACTOR_LABEL: Record<string, string> = {
   autowriter_first: "Autowriter — first post",
   autowriter_correction: "Autowriter — correction",
+  autowriter_policy: "Autowriter — policy re-post (not a fix)",
   api_actor_unmatched: "Wise API user — no recorded post",
   owner_web: "Owner (Wise web)",
   tutor: "Tutor",
@@ -337,7 +338,8 @@ function QueueItem({ item, canControl, onRecorded }: { item: ReviewQueueItem; ca
               <h3 className="text-sm font-semibold">Current text</h3>
               <span className="text-[11px] text-muted-foreground">
                 {item.current.source === "wise_feedback_version" ? "as Class Feedback last read it from Wise"
-                  : item.current.source === "correction" ? "the last verified correction" : "unchanged since the first post"}
+                  : item.current.source === "correction" ? "the last verified correction"
+                    : item.current.source === "policy" ? "the owner's policy re-post (not a fix)" : "unchanged since the first post"}
                 {item.current.at ? ` · ${when(item.current.at)}` : ""}
               </span>
             </div>
@@ -380,7 +382,10 @@ function QueueItem({ item, canControl, onRecorded }: { item: ReviewQueueItem; ca
             {item.corrections.length > 0 ? (
               <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground">
                 {item.corrections.map((correction, index) => (
-                  <li key={index}>Correction by {correction.actor} ({correction.outcome}) · {correction.reason ?? "—"} · {when(correction.at)}</li>
+                  <li key={index}>
+                    {correction.kind === "policy" ? "Policy re-post (not a fix)" : "Correction"} by {correction.actor} ({correction.outcome})
+                    {" · "}{correction.reason ?? "—"} · {when(correction.at)}
+                  </li>
                 ))}
               </ul>
             ) : null}

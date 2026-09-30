@@ -7,7 +7,7 @@ and holds with the written text, class-end-to-post latency, model cost and webho
 mode, pause/resume and per-tutor switches (one per tutor, covering both of their Wise accounts). In-person classes on a
 roster account are skipped at once (Wise type `OFFLINE`) and left out of the dashboard entirely — they stay the
 tutor's to write. The **Quality** and **Review** tabs measure first-shot accuracy, coverage and the expansion gate
-(see [Operating loop: measurement](#operating-loop-measurement-phase-1-migration-0100)); only the owner records verdicts.
+(see [Operating loop: measurement](#operating-loop-measurement-phase-1-migration-0101)); only the owner records verdicts.
 
 Writes a tutor's post-class feedback for **online one-to-one classes** from Wise's AI meeting summary and
 completes Wise's own **blank auto-submission** through the same endpoint the Wise web app uses
@@ -185,7 +185,7 @@ emailed (`alerts_sent` = `suppressed:<mode>`) — tutors still write their own t
 (`rejected`, `unknown_outcome`, `verify_failed`) are emailed in every mode. Mode `off` still reconciles posted rows.
 Preview deployments never touch autowriter state.
 
-## Operating loop: measurement (Phase 1, migration 0100)
+## Operating loop: measurement (Phase 1, migration 0101)
 
 Measures every post against the owner's goal — **first-shot accuracy of at least 80% before adding tutors** — and
 never writes to Wise; the POST path is unchanged (plan: `.planning/quick/260929-lop-autowriter-operating-loop/`).
@@ -198,10 +198,11 @@ hourly review job snapshots every settled posted class this way (with the read-b
 response body). A class a one-time script re-posted no longer proves itself and gets an info incident until the
 backfill script proves it from Class Feedback's first stored version or by reversing a rename — a critical one when
 the post did not verify, since then nobody knows what is in Wise. Every one-time re-post a row records becomes a
-correction row with its own `dedupe_key` (recorded at most once): the six nickname fixes of 29 Sep
-(`metadata.nicknameFix`, by `script:nickname-fix (kevhsh7@gmail.com)`, "owner naming policy: nickname") and the
-owner-approved corrections of 30 Sep (`metadata.corrections[]` = `{fields, reason, fromSha256, toSha256, at, by}`,
-by `script:correct-posts (kevhsh7@gmail.com)`), each carrying the text it put in Wise (found by its hash).
+post row with its own `dedupe_key` (recorded at most once), carrying the text it put in Wise (found by its hash): the
+six nickname fixes of 29 Sep (`metadata.nicknameFix`, by `script:nickname-fix (kevhsh7@gmail.com)`, "owner naming
+policy: nickname") as **`policy`** posts — a naming rule made after the post, never a fix (owner decision D-01, 30 Sep)
+— and the owner-approved corrections of 30 Sep (`metadata.corrections[]` = `{fields, reason, fromSha256, toSha256, at,
+by}`, by `script:correct-posts (kevhsh7@gmail.com)`) as **`correction`** posts, which are fixes.
 
 **Verdicts** (`feedback_autowriter_verdicts`, append-only, Review tab, owner only). Approve, or Needs fix with a
 severity the owner must choose (there is no default) — `cosmetic` (still counts as accurate), **major** (stored as
@@ -214,7 +215,13 @@ owner confirms and explains (409 without the confirmation, 400 without a note; s
 critical verdict or a critical flag answered with anything non-critical, or a major verdict with cosmetic or Approve —
 an Approve after a fix never quietly turns an inaccurate first shot into an accurate one (re-recording the same
 severity answers a new flag without changing the judgement). A critical verdict queues a critical incident, pushed
-to the owner at any hour.
+to the owner at any hour. Verdicts the owner gave outside the dashboard are committed as
+`scripts/feedback-autowriter-owner-verdicts.json` (session ids and the owner's words, never a student's name — today
+the two decisions of the 30 Sep interview: `699477ce…` critical, wrong person; `6ab89191…` major) and recorded once by
+the backfill's `--apply` through the same path (`source: backfill`, reviewer `kevhsh7@gmail.com (owner interview
+2026-09-30)`, pinned to the first shot); a class that meanwhile has another verdict, or a flag raised after the
+decision, is left for the dashboard. The 29 Sep critical keeps every gate window holding 29 Sep `blocked_critical`:
+through the 12 Oct gate row; the 13 Oct window is the first without it.
 
 **Review inclusion** (`feedback_autowriter_reviews`). Every first shot whose text may be in Wise gets one review row
 when the job first sees it — verified posts, and also posts that landed without verifying (`verify_failed`,
@@ -227,8 +234,9 @@ and pushed, so the gate stays blocked until the owner has judged it.
 
 **Measured fixes** (`feedback_autowriter_fix_events`). Every `SessionFeedbackSubmittedEvent` on any class the
 autowriter has a row for — held, skipped and expired ones included — from the Wise activity mirror, classified by
-who saved it: our API user (`WISE_USER_ID`) matched to the first shot or a correction (the row's own settled POST and
-the one-time re-posts it records count too, before the backfill records them); an API save no post explains
+who saved it: our API user (`WISE_USER_ID`) matched to the first shot (`autowriter_first`), a correction
+(`autowriter_correction`, a fix) or a policy re-post (`autowriter_policy`, never a fix) — the row's own settled POST
+and the one-time re-posts it records count too, before the backfill records them; an API save no post explains
 (`api_actor_unmatched` — a script outside the lock, or the key owner's own web save) raises an incident, critical
 (pushed) from the autowriter's go-live (29 Sep 2026 08:07:30 UTC) and info before it (the prototype's saves that
 morning); Kevin's web user `695369c0…986` is `owner_web` (also his main roster account, so on his classes an owner
@@ -237,7 +245,8 @@ and Wise's auto-submissions are ignored. A class whose POST is still settling is
 `WISE_USER_ID` nothing is classified and the run is red. **Fixes until satisfied**: a save after our first post counts
 (in total and per actor kind) up to the owner's current Approve and flags the class for review (`measured_fix`);
 one after the Approve is listed ("after approval — not counted") unless a later verdict replaces the Approve; every
-correction counts. Fix rounds per post (0 / 1 / 2 / 3+) are final only for approved classes; the rest are unresolved.
+correction counts, a policy re-post never does (not in the fix count, the fix rounds, the flags or accuracy). Fix
+rounds per post (0 / 1 / 2 / 3+) are final only for approved classes; the rest are unresolved.
 
 **Numbers** (`quality.ts`, pure). Accuracy = accurate ÷ owner-reviewed required posts (a voluntary review of an
 unsampled post never counts), judged on the two-sided 95% Wilson lower bound (z = 1.959964; with no errors 9 reviews
@@ -247,15 +256,18 @@ the mode, its tutor's switch and the roster during **its own posting window** (c
 from `feedback_autowriter_control_history` (a trigger on the control row logs every mode or switch change) and
 `feedback_autowriter_roster_accounts` (when the job saw each code-roster account) — never by today's switches: a class
 the switches never let us write (mode not live, or its tutor switched off throughout) is excluded, and before the
-history starts every class counts as live (fail-closed). A class handed back at the deadline because its tutor was
-switched off counts as a miss if it was workable earlier in its window. A class the tutor wrote first — a person's
+history starts every class counts as live (fail-closed). A class the tutor wrote first — a person's
 save recorded before our first writer call, successful or not (while we still waited for the evidence) — counts on
 neither side; one a person wrote after we started (a draft ready, or a writer outage) is a miss (`late`), and so is
 one whose person save is not mirrored yet, and a class still unsettled once its window closed. A roster class the autowriter never
 saw counts as a miss only when proven online one-to-one (past-session mirror or the Wise title in Credit Control) and
 its account was on the roster during the window. Out-of-scope and in-progress classes count on neither side, and
-in-person classes not at all. Every hold counts as a miss until interview decision D-03 says which holds were correct
-(absence holds are shown as a sub-count). The job recomputes every date of the gate window on every run.
+in-person classes not at all. **Holds (owner decision D-03, 30 Sep)**: a hold for the class's own data — recording too
+short or in several parts, speakers unclear, transcript too short, no student or attendance below the minimum, the
+student not a Wise user — is left out (`excluded_data_quality`), and so is a class handed back at the deadline because
+its tutor was switched off (`excluded_tutor_off`); every other hold — the judge found the draft unfaithful, the
+validator or the form rejected it, billing drifted, an error — is a miss, as is any reason not in the table
+(`DATA_QUALITY_REASONS` in `quality.ts`, fail-closed). The job recomputes every date of the gate window on every run.
 
 **Gate** (rolling 14 Bangkok days). `pass` = lower bound ≥ 80%, zero critical verdicts, no unresolved critical flag,
 **no unexplained API write** (a critical `api_actor_unmatched` incident the owner has not acknowledged), coverage ≥
@@ -286,7 +298,7 @@ review / flagged / all, counted exactly; every flagged and unreviewed class is a
 ones); each class shows the immutable first shot ("recorded at post" or "reconstructed · hash-verified", and a warning
 when it landed without verifying) next to the current text (the last verified correction, or what Class Feedback last
 read from Wise if newer) with a word diff, the saves measured in Wise by actor, corrections, open flags and the
-verdict log. Owner-only Approve / Needs fix controls; other admins read. Before migration 0100 the tabs say the review
+verdict log. Owner-only Approve / Needs fix controls; other admins read. Before migration 0101 the tabs say the review
 tables are missing; any other load failure says so (and is logged by name and SQLSTATE).
 
 ## Costs (measured in the 2026-09-29 pilot)
