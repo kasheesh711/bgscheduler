@@ -90,3 +90,27 @@ it('persists observation-only session/credit facts at original times without com
     expect(runs[0]).toMatchObject({ kind: 'history', complete: false });
     expect(await h.db.select().from(s.workforceCreditVersions)).toHaveLength(1);
 });
+
+it('recovers snapshot wall-clock timestamps before future filtering and fails closed on inconsistent metadata', async () => {
+ const now = new Date('2026-10-05T12:30:00Z');
+ const [snapshot] = await h.db.insert(s.snapshots).values({active:true,createdAt:new Date('2026-10-05T12:00:00Z')}).returning();
+ const [group] = await h.db.insert(s.tutorIdentityGroups).values({snapshotId:snapshot.id,canonicalKey:'Synthetic',displayName:'Synthetic'}).returning();
+ const base = {snapshotId:snapshot.id,groupId:group.id,wiseTeacherId:'synthetic',wiseStatus:'UPCOMING',studentIds:[]};
+ await h.db.insert(s.futureSessionBlocks).values([
+  {...base,wiseSessionId:'already-ended',startTime:new Date('2026-10-05T18:00:00Z'),endTime:new Date('2026-10-05T19:00:00Z'),weekday:1,startMinute:1080,endMinute:1140},
+  {...base,wiseSessionId:'evening',startTime:new Date('2026-10-05T20:00:00Z'),endTime:new Date('2026-10-05T21:00:00Z'),weekday:1,startMinute:1200,endMinute:1260},
+  {...base,wiseSessionId:'correct-utc',startTime:new Date('2026-10-05T14:00:00Z'),endTime:new Date('2026-10-05T15:00:00Z'),weekday:1,startMinute:1260,endMinute:1320},
+  {...base,wiseSessionId:'unverified',startTime:new Date('2026-10-05T14:00:00Z'),endTime:new Date('2026-10-05T15:00:00Z'),weekday:4,startMinute:1260,endMinute:1320},
+ ]);
+ const retained = window('raw-retained', '2026-10-05T11:00:00Z');
+ retained.sessions[0].startAt='2026-12-01T03:00:00Z'; retained.sessions[0].endAt='2026-12-01T04:00:00Z';
+ await persistWorkforceSourceWindow(db(),retained);
+ const result = await loadWorkforceEvidence(db(),query,now);
+ expect(result.sessions.some(f=>f.wiseSessionId==='already-ended')).toBe(false);
+ expect(result.sessions.find(f=>f.wiseSessionId==='evening')).toMatchObject({startAt:'2026-10-05T13:00:00.000Z',endAt:'2026-10-05T14:00:00.000Z',scheduledMinutes:60});
+ expect(result.sessions.find(f=>f.wiseSessionId==='correct-utc')?.startAt).toBe('2026-10-05T14:00:00.000Z');
+ expect(result.sessions.find(f=>f.wiseSessionId==='unverified')).toMatchObject({startAt:'',endAt:null,scheduledMinutes:null,completeness:'unknown',reasonCodes:['SNAPSHOT_TIMESTAMP_UNVERIFIED']});
+ expect(result.sourceCoverage.find(c=>c.source==='wise_future_snapshot')).toMatchObject({completeness:'partial',issueCodes:['SNAPSHOT_TIMESTAMP_UNVERIFIED']});
+ expect(result.sessions.find(f=>f.wiseSessionId==='s1')).toBeDefined();
+ expect(result.sessions.find(f=>f.wiseSessionId==='s1')!.reasonCodes).not.toContain('absent_from_current_future_snapshot');
+});

@@ -23,7 +23,7 @@ export function SubjectMatrix({
   onSelect: (row: WorkforceSubjectRow) => void;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [metric, setMetric] = useState<DisplayMetric>("freeHours");
+  const [metric, setMetric] = useState<DisplayMetric>("bookedHours");
   const { ref, width } = useChartWidth();
   const pattern = useId().replaceAll(":", "");
   const visible = visibleSubjectRows(rows, expanded),

@@ -57,7 +57,10 @@ describe("D3 workforce redesign", () => {
     const fixture = workforceFixture(),
       matrix = renderToStaticMarkup(
         <SubjectMatrix
-          rows={fixture.subjects}
+          rows={fixture.subjects.map((row) => ({
+            ...row,
+            bookedHours: row.freeHours,
+          }))}
           months={fixture.months.map((m) => m.month)}
           onSelect={() => {}}
         />,
@@ -68,6 +71,7 @@ describe("D3 workforce redesign", () => {
     expect(matrix).toContain("patternUnits");
     expect(matrix).toContain("Unavailable ≠ zero");
     expect(matrix).toContain('aria-label="Expand Mathematics"');
+    expect(matrix).toContain('value="bookedHours" selected=""');
     expect(matrix).toContain("0 h");
     expect(matrix).toContain("Unavailable");
     for (const label of [
