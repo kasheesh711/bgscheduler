@@ -1,3 +1,4 @@
+import { scorePerson } from "@/lib/tutor-offboarding/score";
 import { buildOffboardingDashboard } from "@/lib/tutor-offboarding/data";
 import type {
   DecisionRecord,
@@ -113,4 +114,17 @@ export function emptyDashboardFixture(): OffboardingDashboardData {
 
 export function notSetUpFixture(): OffboardingDashboard {
   return { available: false, reason: "not_set_up", viewer: ADMIN };
+}
+
+/** Synthetic confirmation evidence; no private Sheet content enters the preview. */
+export function confirmedDashboardFixture(viewer: TutorOffboardingViewer = OWNER): OffboardingDashboardData {
+  const data = dashboardFixture(viewer);
+  const proof = (sourceRow: number, sourceName: string) => ({ sourceRow, sourceName, checkedAt: "2026-10-01T04:45:00.000Z", sourceUrl: "https://example.com/tutors", match: "email" as const });
+  for (const row of [...data.inbox, ...data.excluded, ...data.staff]) {
+    if (["Aria", "Fern", "Gus"].includes(row.signals.canonicalKey)) row.termination = proof(row.signals.canonicalKey === "Aria" ? 12 : 13, `${row.signals.displayName} Fictional`);
+  }
+  const signals = PEOPLE.find((person) => person.canonicalKey === "Kai")!;
+  data.inbox.push({ signals, score: scorePerson(signals, { now: FIXTURE_NOW, curve: data.curve, snoozedKeys: new Set(), freshnessOk: true }), openDecision: null, termination: proof(14, "Kai Fictional") });
+  data.terminationSource = { status: "ready", checkedAt: "2026-10-01T04:45:00.000Z", sourceUrl: "https://example.com/tutors", confirmedRows: 5, matchedPeople: 4, unmatched: [{ sourceRow: 15, sourceName: "Nori Fictional", reason: "No matching Wise account" }] };
+  return data;
 }

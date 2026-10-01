@@ -30,9 +30,13 @@ export const BAND_LABEL: Record<OffboardingBand, string> = {
 
 export const INBOX_BANDS: OffboardingBand[] = ["very_likely_gone", "likely_gone", "unclear"];
 
-export function topLineSentence(summary: OffboardingSummary): string {
+export function topLineSentence(summary: OffboardingSummary, confirmedToReview = 0, confirmedOnRoster = confirmedToReview): string {
   const { veryLikely, veryLikelyAccounts, likely, unclear } = summary;
-  if (veryLikely + likely + unclear === 0) return "No tutors look like they have left. Nothing to review.";
+  if (veryLikely + likely + unclear === 0) {
+    if (confirmedToReview > 0) return `${confirmedToReview} confirmed terminated ${confirmedToReview === 1 ? "tutor needs" : "tutors need"} review.`;
+    if (confirmedOnRoster > 0) return `${confirmedOnRoster} confirmed terminated ${confirmedOnRoster === 1 ? "tutor is" : "tutors are"} on the roster; review their exclusions or staff accounts.`;
+    return "No tutors look like they have left. Nothing to review.";
+  }
   const head = veryLikely > 0
     ? `${veryLikely} ${veryLikely === 1 ? "tutor" : "tutors"} (${veryLikelyAccounts} Wise ${veryLikelyAccounts === 1 ? "account" : "accounts"}) ${veryLikely === 1 ? "is" : "are"} very likely no longer with us`
     : "No tutor is very likely gone";

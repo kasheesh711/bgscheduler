@@ -17,12 +17,18 @@ function StillWithUsForm({ row, onClose, onSaved }: { row: OffboardingPersonRow;
   const [note, setNote] = useState("");
   const [snoozeDays, setSnoozeDays] = useState<90 | 365>(90);
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function save() {
     setSaving(true);
     setError(null);
     try {
+      if (saved) {
+        await onSaved();
+        onClose();
+        return;
+      }
       const response = await fetch("/api/tutor-offboarding/decisions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -32,10 +38,15 @@ function StillWithUsForm({ row, onClose, onSaved }: { row: OffboardingPersonRow;
         setError(errorMessage(await response.json().catch(() => null), "The decision could not be saved."));
         return;
       }
-      await onSaved();
-      onClose();
+      setSaved(true);
+      try {
+        await onSaved();
+        onClose();
+      } catch {
+        setError("The decision was saved, but the review list could not refresh. Try refreshing again.");
+      }
     } catch {
-      setError("The decision could not be saved.");
+      setError(saved ? "The decision was saved, but the review list could not refresh. Try refreshing again." : "The decision could not be saved.");
     } finally {
       setSaving(false);
     }
@@ -52,7 +63,7 @@ function StillWithUsForm({ row, onClose, onSaved }: { row: OffboardingPersonRow;
         <div className="flex gap-2">
           {SNOOZES.map((option) => (
             <Button key={option.days} type="button" size="sm" variant={snoozeDays === option.days ? "default" : "outline"}
-              aria-pressed={snoozeDays === option.days} onClick={() => setSnoozeDays(option.days)}>
+              aria-pressed={snoozeDays === option.days} disabled={saved || saving} onClick={() => setSnoozeDays(option.days)}>
               {option.label}
             </Button>
           ))}
@@ -60,12 +71,12 @@ function StillWithUsForm({ row, onClose, onSaved }: { row: OffboardingPersonRow;
       </fieldset>
       <label className="block space-y-1.5 text-xs font-medium">
         Note (optional)
-        <Textarea value={note} maxLength={1_000} onChange={(event) => setNote(event.target.value)} placeholder="e.g. On a term break, back in January" />
+        <Textarea disabled={saved || saving} value={note} maxLength={1_000} onChange={(event) => setNote(event.target.value)} placeholder="e.g. On a term break, back in January" />
       </label>
       {error ? <p role="alert" className="text-xs text-conflict">{error}</p> : null}
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
-        <Button type="button" onClick={() => void save()} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
+        <Button type="button" onClick={() => void save()} disabled={saving}>{saving ? (saved ? "Refreshing…" : "Saving…") : saved ? "Refresh list" : "Save"}</Button>
       </DialogFooter>
     </>
   );

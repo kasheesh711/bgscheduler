@@ -5,6 +5,7 @@ import type { CalibrationCurve } from "@/lib/tutor-offboarding/calibration";
 import type { FreshnessReport, OffboardingPersonRow } from "@/lib/tutor-offboarding/types";
 import { CountChip, Disclosure, Panel, Upper } from "./atoms";
 import { curveSentence, formatDay, formatDayYear } from "./format";
+import { TerminationBadge } from "./termination-evidence";
 
 /** OFF-07: names every stale feed. */
 export function FreshnessBanner({ report }: { report: FreshnessReport }) {
@@ -61,7 +62,7 @@ export function StaffAccounts({ rows, onOpen }: { rows: OffboardingPersonRow[]; 
           <li key={row.signals.canonicalKey}>
             <button type="button" onClick={() => onOpen(row.signals.canonicalKey)}
               className="w-full rounded-md text-left text-xs outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/50">
-              <span className="font-medium">{row.signals.displayName}</span>
+              <span className="flex flex-wrap items-center gap-2"><span className="font-medium">{row.signals.displayName}</span><TerminationBadge row={row} /></span>
               <span className="block text-muted-foreground">
                 {`${row.signals.lastAdminActionAt ? `Last admin action ${formatDay(row.signals.lastAdminActionAt)}` : "No admin activity on record"}${
                   row.signals.lastTaughtAt ? ` · last class ${formatDay(row.signals.lastTaughtAt)}` : ""}`}
@@ -75,10 +76,29 @@ export function StaffAccounts({ rows, onOpen }: { rows: OffboardingPersonRow[]; 
 }
 
 export function ExcludedList({ rows, onOpen, onUndo }: { rows: OffboardingPersonRow[]; onOpen: (key: string) => void; onUndo: (decisionId: string) => void }) {
-  const teaching = rows.filter((row) => row.score.exclusion?.code === "teaching").length;
-  const others = rows.filter((row) => row.score.exclusion?.code !== "teaching");
+  const confirmed = rows.filter((row) => row.termination);
+  const remaining = rows.filter((row) => !row.termination);
+  const teaching = remaining.filter((row) => row.score.exclusion?.code === "teaching").length;
+  const others = remaining.filter((row) => row.score.exclusion?.code !== "teaching");
   return (
-    <Disclosure title="Excluded" count={rows.length}>
+    <>
+      {confirmed.length ? (
+        <Panel className="px-5 py-4">
+          <Upper>Confirmed terminations with exclusions</Upper>
+          <ul className="mt-3 space-y-3 text-xs">
+            {confirmed.map((row) => (
+              <li key={row.signals.canonicalKey}>
+                <button type="button" onClick={() => onOpen(row.signals.canonicalKey)} className="flex flex-wrap items-center gap-2 rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
+                  <span className="font-medium">{row.signals.displayName}</span><TerminationBadge row={row} />
+                </button>
+                <p className="mt-1 text-muted-foreground">{row.score.exclusion?.text}</p>
+                {row.openDecision ? <Button type="button" size="xs" variant="ghost" onClick={() => onUndo(row.openDecision!.id)}>Undo still with us</Button> : null}
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      ) : null}
+    <Disclosure title="Excluded" count={remaining.length}>
       <p className="px-5 pt-3 text-xs text-muted-foreground">{`${teaching} teaching (have upcoming classes).`}</p>
       <ul className="space-y-2 px-5 py-3">
         {others.map((row) => (
@@ -98,5 +118,6 @@ export function ExcludedList({ rows, onOpen, onUndo }: { rows: OffboardingPerson
         ))}
       </ul>
     </Disclosure>
+    </>
   );
 }

@@ -7,6 +7,7 @@ import type { OffboardingPersonRow } from "@/lib/tutor-offboarding/types";
 import { Tag, Upper } from "./atoms";
 import { BAND_LABEL, formatDay, formatDayYear } from "./format";
 import { accountLabel, LikelihoodBar } from "./person-row";
+import { TerminationDetail } from "./termination-evidence";
 
 const SHEET = "top-0 right-0 left-auto flex h-dvh w-full max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-l p-0 data-open:zoom-in-100 data-closed:zoom-out-100 sm:max-w-[560px]";
 
@@ -27,6 +28,7 @@ export function PersonDetail({ row }: { row: OffboardingPersonRow }) {
   const when = (iso: string | null, fallback: string) => (iso ? formatDayYear(iso) : fallback);
   return (
     <div className="space-y-5 text-sm">
+      <TerminationDetail row={row} />
       <section>
         <Upper>Likelihood no longer with us</Upper>
         <div className="mt-2 flex items-center gap-3"><LikelihoodBar value={score.likelihood} /><Tag>{BAND_LABEL[score.band]}</Tag></div>

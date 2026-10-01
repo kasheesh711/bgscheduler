@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import type { OffboardingAccount, OffboardingPersonRow } from "@/lib/tutor-offboarding/types";
 import { cn } from "@/lib/utils";
 import { Tag } from "./atoms";
+import { TerminationBadge } from "./termination-evidence";
 
 export function LikelihoodBar({ value }: { value: number }) {
   const tone = value >= 90 ? "bg-conflict" : value >= 70 ? "bg-amber-500" : "bg-muted-foreground/50";
@@ -24,18 +25,19 @@ export function accountLabel(account: OffboardingAccount): string {
 export function PersonRow({ row, onOpen, onKeep }: { row: OffboardingPersonRow; onOpen: () => void; onKeep: () => void }) {
   const { signals, score } = row;
   return (
-    <li className="flex items-start gap-4 border-t px-5 py-3.5 first:border-t-0">
+    <li className="flex flex-col items-start gap-3 border-t sm:flex-row sm:gap-4 px-5 py-3.5 first:border-t-0">
       <button type="button" onClick={onOpen} className="min-w-0 flex-1 rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
         <span className="flex flex-wrap items-center gap-3">
           <span className="truncate text-[13px] font-semibold">{signals.displayName}</span>
+          <TerminationBadge row={row} />
           <LikelihoodBar value={score.likelihood} />
         </span>
         <span className="mt-1 block text-xs text-muted-foreground">{score.reasons[0]?.text}</span>
         <span className="mt-2 flex flex-wrap gap-1">
           {score.reasons.slice(1).map((reason) => (
-            <Tag key={reason.code} tone={reason.direction === "toward_gone" ? "amber" : "green"}>{reason.text}</Tag>
+            <Tag key={reason.code} className="max-w-full whitespace-normal break-words" tone={reason.direction === "toward_gone" ? "amber" : "green"}>{reason.text}</Tag>
           ))}
-          {signals.accounts.map((account) => <Tag key={account.wiseTeacherId}>{accountLabel(account)}</Tag>)}
+          {signals.accounts.map((account) => <Tag key={account.wiseTeacherId} className="max-w-full whitespace-normal [overflow-wrap:anywhere]">{accountLabel(account)}</Tag>)}
         </span>
       </button>
       <Button type="button" size="sm" variant="outline" onClick={onKeep}>Still with us</Button>

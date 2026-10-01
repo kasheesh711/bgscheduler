@@ -18,13 +18,13 @@ export function Inbox({ rows, onOpen, onKeep }: { rows: OffboardingPersonRow[]; 
   }
   return (
     <div className="space-y-4">
-      {INBOX_BANDS.map((band) => {
-        const group = rows.filter((row) => row.score.band === band);
+      {[...INBOX_BANDS, "active" as const].map((band) => {
+        const group = rows.filter((row) => row.score.band === band && (band !== "active" || row.termination));
         if (group.length === 0) return null;
         return (
           <Panel key={band} data-band={band}>
             <header className="flex items-center gap-2 border-b px-5 py-3">
-              <span className="text-[13px] font-semibold">{BAND_LABEL[band]}</span>
+              <span className="text-[13px] font-semibold">{band === "active" ? "Confirmed terminated · recent teaching evidence" : BAND_LABEL[band]}</span>
               <CountChip>{group.length}</CountChip>
             </header>
             <ul>

@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { topLineSentence } from "../format";
 import { TutorOffboardingWorkspace } from "../tutor-offboarding-workspace";
-import { ADMIN, dashboardFixture, emptyDashboardFixture, notSetUpFixture, staleDashboardFixture } from "./fixtures";
+import { ADMIN, confirmedDashboardFixture, dashboardFixture, emptyDashboardFixture, notSetUpFixture, staleDashboardFixture } from "./fixtures";
 
 function render(initial: Parameters<typeof TutorOffboardingWorkspace>[0]["initial"]) {
   return renderToStaticMarkup(<TutorOffboardingWorkspace initial={initial} />);
@@ -35,5 +35,27 @@ describe("TutorOffboardingWorkspace", () => {
 
   it("explains a page that is not set up yet", () => {
     expect(render(notSetUpFixture())).toContain("Tutor Offboarding is not set up yet: its database migration has not been applied.");
+  });
+});
+
+describe("confirmation-only review", () => {
+  it("does not claim nothing needs review when a confirmed person has an Active score", () => {
+    const data = confirmedDashboardFixture();
+    data.inbox = data.inbox.filter((row) => row.score.band === "active");
+    data.summary = { veryLikely: 0, veryLikelyAccounts: 0, likely: 0, unclear: 0 };
+    const html = render({ available: true, ...data });
+    expect(html).not.toContain("Nothing to review.");
+    expect(html).toContain("1 confirmed terminated tutor needs review.");
+  });
+});
+
+describe("confirmation-only exclusions", () => {
+  it("keeps confirmed staff and teaching evidence in the header when the inbox is empty", () => {
+    const data = confirmedDashboardFixture();
+    data.inbox = [];
+    data.summary = { veryLikely: 0, veryLikelyAccounts: 0, likely: 0, unclear: 0 };
+    const html = render({ available: true, ...data });
+    expect(html).not.toContain("No tutors look like they have left.");
+    expect(html).toContain("2 confirmed terminated tutors are on the roster; review their exclusions or staff accounts.");
   });
 });
