@@ -49,7 +49,7 @@ Serve only public synthetic folder:
 
 URL: http://127.0.0.1:8768/ . Variants `?view=stale` (one409 detail → fresh report → retry), `?view=error` (refresh503 retains old report), `?view=unavailable`, `?theme=dark`. Mapping review uses fictional local mock responses. `window.__workforceRequests` records read/write requests for QA without private data.
 
-This agent's CUA inventory had no browser surfaces; parent has the browser surface and is performing desktop/narrow/keyboard/interaction checks. Parent confirmed the harness opens and caught fixture-only arithmetic mismatch; fixed and rebuilt before commit. Do not treat browser QA as complete until parent's checks finish.
+This agent's CUA inventory had no browser surfaces; parent has the browser surface and is performing desktop/narrow/keyboard/interaction checks. Parent confirmed the harness opens, checked 375px page width with zero page overflow, and caught fixture-only arithmetic mismatch; matched person totals and monthly rows were fixed and rebuilt. Filters remain non-sticky at narrow widths; sticky placement starts at lg. Do not treat browser QA as complete until parent's checks finish.
 
 ## Remaining integration checks
 

@@ -13,7 +13,10 @@ import { sortPeople } from "../utilization-table";
 import { rateFormula } from "../presentation";
 describe("workforce detail evidence", () => {
   it("fixture utilization numerators agree with displayed rates", () => {
-    for (const person of workforceFixture().people) {
+    for (const person of workforceFixture().people.flatMap((person) => [
+      person,
+      ...person.months,
+    ])) {
       const net = person.usableHours.value!;
       expect(person.reservedUtilizationPercent.value).toBeCloseTo(
         (person.utilizationReservedHours.value! / net) * 100,

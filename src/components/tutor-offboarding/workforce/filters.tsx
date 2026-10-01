@@ -71,7 +71,7 @@ export function WorkforceFilters({
         setError(null);
         onChange(draft);
       }}
-      className="sticky top-0 z-10 space-y-3 rounded-[10px] border bg-card/95 p-4 backdrop-blur-sm"
+      className="lg:sticky lg:top-0 z-10 space-y-3 rounded-[10px] border bg-card/95 p-4 backdrop-blur-sm"
     >
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
         <label className="text-xs text-muted-foreground">
