@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, lte, sql } from "drizzle-orm";
+import { asc, desc, eq, lte, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -6,6 +6,7 @@ import { loadTerminationSnapshot } from "../termination-sync";
 import { buildTerminationMatches } from "../termination-source";
 import type { PersonSignals } from "../types";
 import { workforceContentHash } from "./observations";
+import { interpretSnapshotSessionInterval } from "./snapshot-timezone";
 import type { WorkforceDatedObservation, WorkforceEvidence, WorkforcePerson, WorkforceQuery, WorkforceSession, WorkforceSourceCoverage, StudentCreditEvidence } from "./types";
 async function sequential<T extends unknown[]>(queries: [...T]): Promise<{ [K in keyof T]: Awaited<T[K]> }> {
     const results: unknown[] = [];
@@ -96,14 +97,20 @@ export async function loadWorkforceEvidenceInTransaction(db: Database, _query: W
                 session.reasonCodes = [...session.reasonCodes, 'unresolved_teacher_identity'];
         }
     const currentFutureIds = new Set<string>();
+    let futureTimestampIncomplete = false;
     const snapshotAge = active[0] ? now.getTime() - active[0].createdAt.getTime() : NaN;
     const futureFresh = Number.isFinite(snapshotAge) && snapshotAge >= 0 && snapshotAge <= 90 * 60000;
     if (active[0]) {
-        const future = await db.select({ block: s.futureSessionBlocks, canonicalKey: s.tutorIdentityGroups.canonicalKey }).from(s.futureSessionBlocks).innerJoin(s.tutorIdentityGroups, eq(s.tutorIdentityGroups.id, s.futureSessionBlocks.groupId)).where(and(eq(s.futureSessionBlocks.snapshotId, active[0].id), gt(s.futureSessionBlocks.endTime, now)));
+        const future = await db.select({ block: s.futureSessionBlocks, canonicalKey: s.tutorIdentityGroups.canonicalKey }).from(s.futureSessionBlocks).innerJoin(s.tutorIdentityGroups, eq(s.tutorIdentityGroups.id, s.futureSessionBlocks.groupId)).where(eq(s.futureSessionBlocks.snapshotId, active[0].id));
         for (const { block, canonicalKey } of future) {
+            const interval = interpretSnapshotSessionInterval(block);
+            if (!interval) futureTimestampIncomplete = true;
+            // Filter only after recovering the real instant: shifted rows near midnight/now
+            // must not create false upcoming classes or omit a still-current assignment.
+            if (interval && Date.parse(interval.endAt) <= now.getTime()) continue;
             currentFutureIds.add(block.wiseSessionId);
             const old = sessions.get(block.wiseSessionId);
-            const fact: WorkforceSession = { wiseSessionId: block.wiseSessionId, wiseClassId: block.wiseClassId, classTitle: block.title, startAt: block.startTime.toISOString(), endAt: block.endTime.toISOString(), scheduledMinutes: (block.endTime.getTime() - block.startTime.getTime()) / 60000, canonicalTutorKeys: [canonicalKey], wiseTeacherIds: [block.wiseTeacherId], historicalBookedStudentIds: block.studentIds, participantCompleteness: block.studentIds ? 'complete' : 'unknown', completeness: block.studentIds ? 'complete' : 'partial', meetingStatus: block.wiseStatus, attendanceStatus: null, modality: block.sessionType === 'OFFLINE' ? 'onsite' : block.sessionType === 'SCHEDULED' ? 'online' : null, subject: null, curriculum: null, level: null, observedAt: active[0].createdAt.toISOString(), reasonCodes: block.studentIds ? [] : ['historical_participants_unknown'] };
+            const fact: WorkforceSession = { wiseSessionId: block.wiseSessionId, wiseClassId: block.wiseClassId, classTitle: block.title, startAt: interval?.startAt ?? "", endAt: interval?.endAt ?? null, scheduledMinutes: interval?.scheduledMinutes ?? null, canonicalTutorKeys: [canonicalKey], wiseTeacherIds: [block.wiseTeacherId], historicalBookedStudentIds: block.studentIds, participantCompleteness: block.studentIds ? 'complete' : 'unknown', completeness: !interval ? 'unknown' : block.studentIds ? 'complete' : 'partial', meetingStatus: block.wiseStatus, attendanceStatus: null, modality: block.sessionType === 'OFFLINE' ? 'onsite' : block.sessionType === 'SCHEDULED' ? 'online' : null, subject: null, curriculum: null, level: null, observedAt: active[0].createdAt.toISOString(), reasonCodes: [...(block.studentIds ? [] : ['historical_participants_unknown']), ...(interval?.reasonCodes ?? ['SNAPSHOT_TIMESTAMP_UNVERIFIED'])] };
             if (!old || Date.parse(old.observedAt ?? '') < active[0].createdAt.getTime())
                 sessions.set(block.wiseSessionId, fact);
             else if (!old.canonicalTutorKeys.includes(canonicalKey)) {
@@ -113,7 +120,7 @@ export async function loadWorkforceEvidenceInTransaction(db: Database, _query: W
             }
         }
     }
-    if (futureFresh) for (const fact of sessions.values()) if (Date.parse(fact.endAt ?? fact.startAt) > now.getTime() && !currentFutureIds.has(fact.wiseSessionId)) fact.reasonCodes = [...new Set([...fact.reasonCodes, 'absent_from_current_future_snapshot'])];
+    if (futureFresh && !futureTimestampIncomplete) for (const fact of sessions.values()) if (Date.parse(fact.endAt ?? fact.startAt) > now.getTime() && !currentFutureIds.has(fact.wiseSessionId)) fact.reasonCodes = [...new Set([...fact.reasonCodes, 'absent_from_current_future_snapshot'])];
     for (const person of people.values())
         if (person.accounts.some(a => a.relation === 'ADMIN')) {
             const knownTeaching = dated.some(o => o.canonicalKey === person.canonicalKey && ((o.qualificationCompleteness !== 'unknown' && o.qualifications.length > 0) || (o.availabilityCompleteness === 'complete' && o.offeredWindows.length > 0))) || [...sessions.values()].some(f => f.canonicalTutorKeys.includes(person.canonicalKey) && !['CANCELLED', 'CANCELED', 'MISSED', 'NO_SHOW'].includes((f.meetingStatus ?? '').toUpperCase()));
@@ -128,7 +135,7 @@ export async function loadWorkforceEvidenceInTransaction(db: Database, _query: W
     const matchingPeople: PersonSignals[] = [...people.values()].map(p => ({ canonicalKey: p.canonicalKey, displayName: p.displayName, accounts: accounts.filter(a => a.canonicalKey === p.canonicalKey).map(a => ({ wiseTeacherId: a.wiseTeacherId, wiseUserId: a.wiseUserId, displayName: a.displayName, email: a.email })) } as PersonSignals));
     const marks = buildTerminationMatches(matchingPeople, snapshot, now);
     const coverage = runs.filter(r => r.kind === 'history').map(r => r.coverage as unknown as WorkforceSourceCoverage);
-    coverage.push({ source: 'wise_future_snapshot', requestedFrom: _query.from, requestedTo: _query.to, returnedFrom: null, returnedTo: null, observedAt: active[0]?.createdAt.toISOString(), pagesRequested: 0, pagesReturned: 0, recordsReturned: [...sessions.values()].filter(f => Date.parse(f.endAt ?? f.startAt) > now.getTime()).length, truncated: false, completeness: futureFresh ? 'complete' : 'unknown', issueCodes: futureFresh ? [] : [active[0] ? 'future_snapshot_stale' : 'future_snapshot_missing'] });
+    coverage.push({ source: 'wise_future_snapshot', requestedFrom: _query.from, requestedTo: _query.to, returnedFrom: null, returnedTo: null, observedAt: active[0]?.createdAt.toISOString(), pagesRequested: 0, pagesReturned: 0, recordsReturned: [...sessions.values()].filter(f => Date.parse(f.endAt ?? f.startAt) > now.getTime()).length, truncated: false, completeness: !futureFresh ? 'unknown' : futureTimestampIncomplete ? 'partial' : 'complete', issueCodes: [...(futureFresh ? [] : [active[0] ? 'future_snapshot_stale' : 'future_snapshot_missing']), ...(futureTimestampIncomplete ? ['SNAPSHOT_TIMESTAMP_UNVERIFIED'] : [])] });
     if (snapshot.checkedAt)
         coverage.push({ source: 'termination_sheet', requestedFrom: _query.from, requestedTo: _query.to, returnedFrom: null, returnedTo: null, observedAt: snapshot.checkedAt, pagesRequested: 1, pagesReturned: 1, recordsReturned: snapshot.rows.length, truncated: false, completeness: marks.source.status === 'ready' ? 'complete' : 'partial', issueCodes: [...marks.source.unmatched.map(() => 'unmatched_termination_identity'), ...(marks.source.status === 'ready' ? [] : [`termination_source_${marks.source.status}`])] });
     return { revision: workforceContentHash({ runs: runs.map(r => [r.id, r.complete]), versions: versions.map(v => v.id), sessions: sessionVersions.map(v => v.id), credits: creditVersions.map(v => v.id), mappings, sheet: [snapshot.checkedAt, snapshot.lastError, marks.source.status], active: active[0]?.id }), people: [...people.values()], observations: dated, sessions: [...sessions.values()], tutorFacts: [...tutorFacts.values()], historicalBookedParticipants: [...participants.values()], studentCredits: [...credits.values()], subjectMappings: mappings.map(m => ({ ...m, reviewedAt: m.reviewedAt?.toISOString() ?? null })), terminationMarks: Object.entries(marks.byKey).map(([canonicalKey, e]) => ({ canonicalKey, effectiveAt: null, markedAt: e.checkedAt, status: 'complete', sourceId: String(e.sourceRow) })), sourceCoverage: coverage };
