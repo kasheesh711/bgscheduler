@@ -44,3 +44,11 @@ it('keeps known qualification capacity partial when other qualification tags are
     expect(intervalMinutes(p.usable)).toBe(360);
     expect(p.reasonCodes).toContain('QUALIFICATIONS_PARTIAL');
 });
+it('supports an explicitly modeled current month without changing observed intervals or projecting earlier history', () => {
+    const e = evidence(), instant = new Date(start + 10.5 * HOUR);
+    const actual = buildCapacity(e, query, instant), model = buildCapacity(e, query, instant, { projectionStart: start });
+    expect(model.people[0].coverage).toEqual(actual.people[0].coverage);
+    expect(model.people[0].projectionOffered[0].start).toBe(start + 8 * HOUR);
+    expect(model.people[0].projectionReasonCodes).toContain('MODELED_CURRENT_MONTH_RECURRENCE');
+    expect(() => buildCapacity(e, query, instant, { projectionStart: Date.parse('2026-02-01T00:00:00+07:00') })).toThrow('earlier historical month');
+});

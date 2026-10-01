@@ -1,5 +1,5 @@
 import { isCancelledSession } from './credits';
-import { bangkokDayStart, unionIntervals, intersectIntervals, subtractIntervals, intervalMinutes, type Interval } from './intervals';
+import { bangkokDayStart, bangkokMonthBounds, unionIntervals, intersectIntervals, subtractIntervals, intervalMinutes, type Interval } from './intervals';
 import { WORKFORCE_OBSERVATION_MAX_AGE_MINUTES } from './observations';
 import type { WorkforceEvidence, WorkforceQuery, WorkforceQualification, WorkforceDatedObservation, WorkforceSession } from './types';
 const DAY = 86400000, MINUTE = 60000;
@@ -57,7 +57,11 @@ function leaves(observation: WorkforceDatedObservation, bounds: Interval): Inter
     return intersectIntervals(observation.leaves.filter(l => l.status === 'approved').flatMap(l => { const start = Date.parse(l.startAt), end = Date.parse(l.endAt); return Number.isFinite(start) && Number.isFinite(end) && end > start ? [{ start, end }] : []; }), [bounds]);
 }
 /** Canonical-person interval unions prevent online/onsite and subject double counting. */
-export function buildCapacity(evidence: WorkforceEvidence, query: WorkforceQuery, now: Date): CapacityResult {
+export function buildCapacity(evidence: WorkforceEvidence, query: WorkforceQuery, now: Date, options: {
+    projectionStart?: number;
+} = {}): CapacityResult {
+    if (options.projectionStart !== undefined && (!Number.isFinite(options.projectionStart) || options.projectionStart < bangkokMonthBounds(new Date(now.getTime() + 7 * 3600000).toISOString().slice(0, 7)).start))
+        throw new RangeError('A modeled recurrence cannot project an earlier historical month');
     const bounds = queryBounds(query), observedBounds = { start: bounds.start, end: Math.max(bounds.start, Math.min(bounds.end, now.getTime())) };
     const byPerson = Map.groupBy(evidence.observations.filter(o => Number.isFinite(Date.parse(o.observedAt)) && Date.parse(o.observedAt) <= now.getTime()), o => o.canonicalKey);
     const blocks = new Map<string, Interval[]>();
@@ -108,7 +112,7 @@ export function buildCapacity(evidence: WorkforceEvidence, query: WorkforceQuery
             result.reasonCodes.push('AVAILABILITY_HISTORY_MISSING');
         const last = [...observations].reverse().find(o => o.availabilityCompleteness === 'complete');
         if (last && bounds.end > now.getTime()) {
-            const projectionBounds = { start: Math.max(bounds.start, now.getTime()), end: bounds.end };
+            const projectionBounds = { start: Math.max(bounds.start, options.projectionStart ?? now.getTime()), end: bounds.end };
             const qualificationObservation = [...observations].reverse().find(o => o.qualifications.length || o.qualificationCompleteness === 'complete') ?? last;
             const matching = qualificationObservation.qualifications.filter(q => qualificationMatches(q, query));
             if (!(query.subject || query.curriculum || query.level) || matching.length) {
@@ -118,7 +122,7 @@ export function buildCapacity(evidence: WorkforceEvidence, query: WorkforceQuery
             }
             result.projectionQualificationSpans = matching.map(qualification => ({ interval: projectionBounds, qualification, completeness: qualificationObservation.qualificationCompleteness }));
             result.projectionSourceAt = last.sourceTimes?.availability ?? last.observedAt;
-            result.projectionReasonCodes = ['PROJECTED_RECURRENCE', 'LEAVE_HORIZON_NOT_PROVEN'];
+            result.projectionReasonCodes = ['PROJECTED_RECURRENCE', 'LEAVE_HORIZON_NOT_PROVEN', ...(options.projectionStart !== undefined && options.projectionStart < now.getTime() ? ['MODELED_CURRENT_MONTH_RECURRENCE'] : [])];
             if (qualificationObservation.qualificationCompleteness !== 'complete')
                 result.projectionReasonCodes.push('QUALIFICATIONS_PARTIAL');
             if (now.getTime() - Date.parse(result.projectionSourceAt) > WORKFORCE_OBSERVATION_MAX_AGE_MINUTES * MINUTE)
