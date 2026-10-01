@@ -13,13 +13,23 @@ import { GET as detailGet } from "../drilldown/route";
 import { GET as exportGet } from "../export/route";
 const filters = "from=2026-03-01&to=2026-10-01&viewMonth=2026-09&subject=Maths";
 const request = (extra="") => new Request(`https://example.test/api/workforce?${filters}${extra}`);
+const unknown = {value:null,completeness:"unknown" as const,reasonCodes:["NO_AVAILABILITY_HISTORY"]};
+const metrics: WorkforceUtilizationMetrics = {
+  uniqueStudents:unknown,studentBookings:unknown,distinctClasses:unknown,bookedHours:unknown,
+  cancelledBookings:unknown,noShowBookings:unknown,creditConsumedHours:unknown,recordedTeachingHours:unknown,
+  qualifiedPeople:unknown,offeredHours:unknown,leaveHours:unknown,usableHours:unknown,reservedHours:unknown,
+  freeHours:unknown,outsideHours:unknown,overlapHours:unknown,coverageHours:unknown,expectedCoverageHours:unknown,
+  coveragePercent:unknown,utilizationReservedHours:unknown,utilizationCreditConsumedHours:unknown,
+  utilizationRecordedTeachingHours:unknown,reservedUtilizationPercent:unknown,consumedUtilizationPercent:unknown,
+  recordedTeachingUtilizationPercent:unknown,
+};
 const report: WorkforceReport = {
   schemaVersion:1,reportRevision:"r1",generatedAt:"2026-10-01T00:00:00Z",
   query:{from:"2026-03-01",to:"2026-10-01",viewMonth:"2026-09",subject:"Maths",role:"all",modality:"all"},
-  totals:{} as WorkforceUtilizationMetrics,months:[],subjects:[],weekCells:[],
-  people:[{canonicalKey:"p1",displayName:"Tutor A",role:"tutor",rosterState:"active",joinedAt:null,departedAt:null,pendingDeparture:false,months:[],reasonCodes:[],
+  totals:metrics,months:[],subjects:[],weekCells:[],
+  people:[{...metrics,canonicalKey:"p1",displayName:"Tutor A",role:"tutor",rosterState:"active",joinedAt:null,departedAt:null,pendingDeparture:false,months:[],reasonCodes:[],
     creditConsumedHours:{value:0.75,completeness:"complete",reasonCodes:[]},
-    usableHours:{value:null,completeness:"unknown",reasonCodes:["NO_AVAILABILITY_HISTORY"]}} as WorkforceReport["people"][number]],
+    usableHours:{value:null,completeness:"unknown",reasonCodes:["NO_AVAILABILITY_HISTORY"]}}],
   quality:{completeness:"partial",issueCodes:["NO_AVAILABILITY_HISTORY"],sourceCoverage:[],exceptions:[]},
 };
 beforeEach(()=>{
