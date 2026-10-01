@@ -30,7 +30,7 @@ files_modified:
   - src/app/api/class-capture/[id]/draft/route.ts
   - src/app/api/internal/feedback-autowriter/route.ts
   - src/lib/db/schema.ts
-  - drizzle/0107_class_capture.sql
+  - drizzle/0108_class_capture.sql
   - src/lib/auth-access.ts
   - src/proxy.ts
   - src/lib/navigation/tools.ts
@@ -77,7 +77,7 @@ must_haves:
 - Active bounds: class audio totals 100 MiB across eight sections, one 10 MiB debrief, four JPG/PNG worksheets at 8 MiB/24 megapixels each. Browser debrief recording stops at three minutes; imported bytes do not establish a pre-spend duration limit. Replacements retain a lifetime 20-intent/200 MiB budget per capture. Evidence/recovery expires logically after 24 hours; photos are tutor-review-only.
 - Use fictional fixtures and mocked providers/synthetic media only. No real student data, live provider spending, production writes/migrations, credentials, deployment, merge, or outbound messages.
 - Existing teacher/admin feedback and payroll behavior remains unchanged. No new feedback submit endpoint or imported autowriter submit capability.
-- Migration `0107_class_capture.sql` adds capture/assets tables and remains unapplied in production. File decomposition and contracts below match the implementation; update them if names change.
+- Migration `0108_class_capture.sql` adds capture/assets tables and remains unapplied in production. File decomposition and contracts below match the implementation; update them if names change.
 - Root owns shared schema/model/backend/cron; the access executor owns scoped session discovery and auth/navigation wiring; the UI executor owns components/browser recovery. Shared contract changes go through root.
 
 ## Review focus
@@ -117,7 +117,7 @@ Deliver the guarded onsite capture-to-reviewed-draft path and a review-ready dra
 
 <task type="auto" tdd="true">
   <name>2. Implement private evidence lifecycle, durable transcription, grounded drafts, and deletion</name>
-  <files>src/lib/class-capture/model.ts, src/lib/class-capture/store.ts, src/lib/class-capture/files.ts, src/lib/class-capture/providers.ts, src/lib/class-capture/evidence.ts, src/lib/class-capture/processing.ts, src/lib/class-capture/cleanup.ts, src/lib/class-capture/handlers.ts, src/lib/class-capture/http.ts, src/lib/class-capture/__tests__/, src/app/api/class-capture/, src/app/api/internal/feedback-autowriter/route.ts, src/lib/db/schema.ts, drizzle/0107_class_capture.sql, docs/operations/class-capture.md</files>
+  <files>src/lib/class-capture/model.ts, src/lib/class-capture/store.ts, src/lib/class-capture/files.ts, src/lib/class-capture/providers.ts, src/lib/class-capture/evidence.ts, src/lib/class-capture/processing.ts, src/lib/class-capture/cleanup.ts, src/lib/class-capture/handlers.ts, src/lib/class-capture/http.ts, src/lib/class-capture/__tests__/, src/app/api/class-capture/, src/app/api/internal/feedback-autowriter/route.ts, src/lib/db/schema.ts, drizzle/0108_class_capture.sql, docs/operations/class-capture.md</files>
   <behavior>Consent precedes tokens/provider processing. Only private bounded intent-bound audio/photos can finalize. Durable claims protect against concurrent attempts; unknown paid outcomes block automatic replay. Transcript/debrief citations must match current evidence and cannot cite history/photos. Expiry/cancel hides evidence immediately and retries deletion of Blob, Soniox job/file, and sensitive DB content even when capture/autowriting is off.</behavior>
   <action>
     - [ ] Write failing model, upload, provider, draft, and cleanup tests with fictional English/Thai/mixed evidence. Include wrong-owner finalization, revoked grant, content sniffing, active/lifetime count/size limits, stale intent, cancellation during finalization, concurrent claims, lost provider response, and retryable deletion.

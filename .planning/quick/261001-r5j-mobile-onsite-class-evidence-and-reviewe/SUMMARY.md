@@ -7,11 +7,11 @@ date: 2026-10-01
 
 # Mobile onsite class capture and reviewed feedback drafts
 
-Implemented on isolated branch `codex/mobile-class-evidence` from `origin/main` at `3273ae89`. Production activation is intentionally separate from this completed implementation.
+Implemented on isolated branch `codex/mobile-class-evidence` from `origin/main` at `3273ae89`, then synchronized with `main` at `e5f2d88e` before review. The class-capture migration moved to 0108 because the new upstream Atom migration uses 0107. Production activation is intentionally separate from this completed implementation.
 
 Tutors choose an authorized one-to-one onsite class, attest to participant/guardian consent and named-provider processing, visibly record, optionally add a debrief or permitted worksheet photos, and explicitly request transcription and a draft. Sources remain distinct. The model selects validated current-source excerpts; class audio cannot establish student mastery or silent/written work. Tutors edit and save their review, copy the feedback, and explicitly submit through the existing Wise form. There is no new feedback submission or parent-message action.
 
-Private upload intents, current session/identity checks, optimistic edits, processing leases, bounded file allocation, duplicate-click protection, cancellation, and account-scoped local recovery are implemented. Logical expiry is 24 hours. Independent bounded retention rotates retries, preserves uncertain-provider tombstones, and keeps the existing autowriter deadline. Migration 0107 is committed but has not run against production.
+Private upload intents, current session/identity checks, optimistic edits, processing leases, bounded file allocation, duplicate-click protection, cancellation, and account-scoped local recovery are implemented. Logical expiry is 24 hours. Independent bounded retention rotates retries, preserves uncertain-provider tombstones, and keeps the existing autowriter deadline. Migration 0108 is committed but has not run against production.
 
 ## Verification
 
