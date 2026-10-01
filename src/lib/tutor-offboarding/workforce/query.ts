@@ -29,7 +29,7 @@ const exporting = common.extend({
 }).strict();
 
 function input(params: URLSearchParams): Record<string, string> {
-  const values: Record<string, string> = {};
+  const values: Record<string, string> = Object.create(null);
   for (const [key, value] of params) {
     if (Object.hasOwn(values, key)) throw new TutorOffboardingError("Repeated workforce filters are not supported.", 400);
     values[key] = value;
