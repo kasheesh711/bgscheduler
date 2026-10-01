@@ -76,6 +76,12 @@ For unposted enriched comparisons, run the same replay with `--with-atom --out=.
 
 At activation, enable the server style-review switch and independently enable the approved content switch(es). Read back the effective switches in Review. Only then pause the old **Review Mimi's first ten live posts** Codex heartbeat. Keep the v1 files and receipt. The new server job owns the first-ten monitoring; unresolved post outcomes and missing required source evidence remain actionable incidents through the existing email/LINE channels.
 
+### Scheduled retrieval trial with an empty queue
+
+If no eligible feedback is pending, a temporary read-only trial can exercise the same scheduled cloud collector. Set `FEEDBACK_ATOM_TRIAL_STUDENT_ID` to an actively approved Atom identity, `FEEDBACK_ATOM_TRIAL_DATE` to a known activity date in the past 30 days, and `FEEDBACK_ATOM_TRIAL_EXPIRES_AT` to an ISO timestamp no more than 24 hours ahead. The trial expires automatically, records `counts.trial = true`, and does not queue or post feedback. Remove these three settings after recording the result. An admin probe still cannot count as unattended proof; the owner must confirm a scheduled run occurred with Codex and the computer off.
+
+For current and future lesson dates, Atom collection reads the complete, strictly paginated Wise FUTURE listing and then filters exact Bangkok dates. Wise's FUTURE DATE query has returned previous-day sessions in production. PAST reads keep strict calendar boundaries; duplicate occurrences across the two listings must agree on lesson ownership and timing.
+
 ## Failure and rollback
 
 - Turn off either content switch to stop that feature independently. Drafts with stale guide/evidence stamps are regenerated before posting.

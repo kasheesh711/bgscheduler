@@ -94,6 +94,23 @@ describe("unattended collector and rollout", () => {
     const [probe] = await db.insert(s.feedbackAtomSyncRuns).values({triggerSource:"admin",status:"succeeded",deploymentId:"cloud",counts:{snapshots:1,activities:1}}).returning();
     await expect(confirmUnattendedAtomProof(db,probe.id,"owner")).rejects.toThrow("scheduled cloud run");
   });
+  it("allows a scheduled retrieval trial only for an actively approved student", async () => {
+    const { runAtomCollector } = await import("../atom/collector");
+    const sessionsBefore = await db.select().from(s.feedbackAutowriterSessions);
+    const collect = vi.fn(async () => []);
+    const openClient = vi.fn(async () => ({ catalog: [{ id: "_123", name: "Same Name" }], collect, close: async () => {} }));
+    const input = { db, deadlineMs: Date.now() + 60000, triggerSource: "cron" as const, deploymentId: "cloud", trial: true,
+      probe: { studentId: "_123", date: "2026-09-20" }, fetchDays: async () => [], openClient };
+    expect((await runAtomCollector(input)).ok).toBe(false);
+    expect(openClient).not.toHaveBeenCalled();
+    await approveAtomLink(db, approval);
+    const result = await runAtomCollector(input);
+    expect(result.ok).toBe(true);
+    expect(collect).toHaveBeenCalledWith("_123", ["2026-09-20"]);
+    const runs = await db.select().from(s.feedbackAtomSyncRuns);
+    expect(runs.find(run => run.status === "succeeded")?.counts.trial).toBe(true);
+    expect(await db.select().from(s.feedbackAutowriterSessions)).toEqual(sessionsBefore);
+  });
 });
 
 describe("server review accounting", () => {
