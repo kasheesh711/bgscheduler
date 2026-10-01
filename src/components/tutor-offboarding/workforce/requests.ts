@@ -6,6 +6,7 @@ import type {
   WorkforceExportSection,
   ReviewedSubjectMapping,
 } from "@/lib/tutor-offboarding/workforce/types";
+import { WORKFORCE_REFRESH_HEADER } from "@/lib/tutor-offboarding/workforce/read-cache";
 const BASE = "/api/tutor-offboarding/analytics/workforce";
 export class WorkforceRequestError extends Error {
   constructor(
@@ -21,11 +22,12 @@ export function queryParams(query: WorkforceQuery): URLSearchParams {
     if (value !== undefined && value !== "") params.set(key, String(value));
   return params;
 }
-async function read(path: string, signal: AbortSignal): Promise<unknown> {
+async function read(path: string, signal: AbortSignal, refresh = false): Promise<unknown> {
   const response = await fetch(path, {
     method: "GET",
     cache: "no-store",
     signal,
+    ...(refresh ? { headers: { [WORKFORCE_REFRESH_HEADER]: "1" } } : {}),
   });
   const body = await response.json().catch(() => null);
   if (!response.ok)
@@ -89,10 +91,12 @@ function validMetrics(value: unknown): boolean {
 export async function fetchWorkforceReport(
   query: WorkforceQuery,
   signal: AbortSignal,
+  refresh = false,
 ): Promise<WorkforceReport> {
   const body = (await read(
     `${BASE}?${queryParams(query)}`,
     signal,
+    refresh,
   )) as WorkforceReport | null;
   if (
     !body ||

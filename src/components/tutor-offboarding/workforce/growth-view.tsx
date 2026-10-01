@@ -16,14 +16,9 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Panel, Tag } from "../atoms";
-import { ChartPanel, INK, LinesChart } from "./charts";
-import {
-  AveragesChart,
-  GrowthFlowChart,
-  GrowthGapChart,
-  HiringChart,
-  type GrowthSelection,
-} from "./growth-charts";
+import { HiringSummary } from "./hiring-summary";
+import { ReadCache } from "@/lib/tutor-offboarding/workforce/read-cache";
+import { GrowthFlowChart, type GrowthSelection } from "./growth-charts";
 import {
   fetchGrowthDetail,
   fetchGrowthExport,
@@ -31,19 +26,19 @@ import {
 } from "./growth-requests";
 import { LatestRequest, WorkforceRequestError } from "./requests";
 import { EvidenceIssueSummary } from "./evidence-issue-summary";
-import {
-  bangkokTime,
-  formatMetric,
-  metricReason,
-  monthLabel,
-} from "./presentation";
+import { bangkokTime, formatMetric, monthLabel } from "./presentation";
 export function growthFilters(filters: WorkforceQuery): WorkforceQuery {
-  return { ...filters, role: "all", modality: "all" };
+  return {
+    ...filters,
+    viewMonth: filters.to.slice(0, 7),
+    role: "all",
+    modality: "all",
+  };
 }
 const OVERRIDES = [
   ["newStudentHours", "Monthly new student-hours"],
-  ["reactivatedStudentHours", "Monthly reactivated student-hours"],
-  ["churnStudentHours", "Monthly soft churn loss · student-hours"],
+  ["reactivatedStudentHours", "Monthly returning student-hours"],
+  ["churnStudentHours", "Monthly lost demand · student-hours"],
   ["cancellationFraction", "Cancellation / refund fraction · 0–1"],
   ["studentHoursPerTutorHour", "Student-hours per tutor-hour"],
 ] as const;
@@ -64,10 +59,16 @@ export function updateCourseOverride(
 export function GrowthView({
   filters,
   initial,
+  display = "hiring",
+  sourceUpdatedAt,
 }: {
   filters: WorkforceQuery;
   initial?: GrowthReport;
+  display?: "demand" | "hiring";
+  sourceUpdatedAt?: string;
 }) {
+  const assumptionsPanel = useRef<HTMLDetailsElement>(null);
+  const priorSourceTime = useRef(sourceUpdatedAt);
   const [report, setReport] = useState<GrowthReport | null>(initial ?? null),
     [error, setError] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
@@ -86,9 +87,14 @@ export function GrowthView({
   const gate = useRef(new LatestRequest()),
     detailGate = useRef(new LatestRequest()),
     exportGate = useRef(new LatestRequest());
+  const reportCache = useRef(new ReadCache<GrowthReport>(60000, 3, false));
   const stableFilters = JSON.stringify(growthFilters(filters));
   const load = useCallback(
-    async (assumptions: GrowthAssumptions, measured = false) => {
+    async (
+      assumptions: GrowthAssumptions,
+      measured = false,
+      refresh = false,
+    ) => {
       const ticket = gate.current.begin();
       setBusy(true);
       setError(null);
@@ -97,6 +103,8 @@ export function GrowthView({
           { filters: JSON.parse(stableFilters), assumptions },
           ticket.signal,
           measured,
+          refresh,
+          reportCache.current,
         );
         if (!gate.current.isCurrent(ticket))
           throw new DOMException("Superseded scenario", "AbortError");
@@ -118,11 +126,15 @@ export function GrowthView({
     [stableFilters],
   );
   useEffect(() => {
+    const sourceChanged = priorSourceTime.current !== sourceUpdatedAt;
+    priorSourceTime.current = sourceUpdatedAt;
+    if (sourceChanged) reportCache.current.clear();
     setSelection(null);
     setDetail(null);
     setDetailBusy(false);
     setExporting(false);
     if (
+      sourceChanged ||
       !initial ||
       JSON.stringify(growthFilters(initial.query.filters)) !== stableFilters
     )
@@ -135,7 +147,7 @@ export function GrowthView({
       details.cancel();
       exports.cancel();
     };
-  }, [stableFilters, initial, load]);
+  }, [stableFilters, initial, load, sourceUpdatedAt]);
   const courses = report
     ? [
         ...new Map(
@@ -151,7 +163,6 @@ export function GrowthView({
     courses.find((c) => c.courseKey === course)?.courseKey ??
     courses[0]?.courseKey ??
     "";
-  const selectedLabel = courses.find((c) => c.courseKey === selectedCourse);
   const months = report
     ? [...new Set(report.forecast.months.map((m) => m.month))].sort()
     : [];
@@ -167,7 +178,7 @@ export function GrowthView({
     } catch (failure) {
       if (!(failure instanceof WorkforceRequestError) || failure.status !== 409)
         throw failure;
-      const fresh = await load(report.query.assumptions);
+      const fresh = await load(report.query.assumptions, false, true);
       return action(fresh);
     }
   };
@@ -337,7 +348,7 @@ export function GrowthView({
             variant="outline"
             className="mt-3"
             onClick={() =>
-              void load({ bufferPercent: 0 }, true).catch(() => {})
+              void load({ bufferPercent: 0 }, true, true).catch(() => {})
             }
           >
             Retry measured model
@@ -368,181 +379,125 @@ export function GrowthView({
                 ))}
               </select>
             </label>
-            <label className="text-xs">
-              Projection month{" "}
-              <select
-                aria-label="Projection month"
-                className="ml-2 rounded border bg-background p-2"
-                value={selectedMonth}
-                onChange={(e) => setForecastMonth(e.target.value)}
-              >
-                {months.map((m) => (
-                  <option key={m} value={m}>
-                    {monthLabel(m)}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {display === "hiring" && (
+              <label className="text-xs">
+                Projection month{" "}
+                <select
+                  aria-label="Projection month"
+                  className="ml-2 rounded border bg-background p-2"
+                  value={selectedMonth}
+                  onChange={(e) => setForecastMonth(e.target.value)}
+                >
+                  {months.map((m) => (
+                    <option key={m} value={m}>
+                      {monthLabel(m)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <span className="text-xs text-muted-foreground">
               {report.quality.completeness} evidence ·{" "}
               {report.forecast.bufferPercent}% buffer
             </span>
           </div>
-          <div className="grid items-start gap-4 xl:grid-cols-[1.7fr_1fr]">
-            <GrowthFlowChart
-              rows={report.flows.months.filter(
-                (r) => r.courseKey === selectedCourse,
-              )}
-              onSelect={onSelect}
-            />
-            <AveragesChart
-              row={report.flows.averages.find(
-                (r) => r.courseKey === selectedCourse,
-              )}
-            />
-          </div>
-          <ChartPanel
-            title={`Twelve-month projection · ${selectedLabel?.subject ?? "course"}`}
-            subtitle={`Tutor-hours / month · base ${monthLabel(report.forecast.baseMonth)} · scenario estimate`}
-          >
-            <LinesChart
-              label="Projected booked and credit-adjusted tutor-hours, flat demand and current commitments"
-              selectedMonth={selectedMonth}
-              onSelect={setForecastMonth}
-              rows={report.forecast.months
-                .filter((r) => r.courseKey === selectedCourse)
-                .map((r) => ({
-                  month: r.month,
-                  booked: r.bookedTutorHours,
-                  credit: r.creditTutorHours,
-                  committed: r.knownCommittedTutorHours,
-                  flat: {
-                    ...r.flatStudentHours,
-                    value:
-                      input?.studentHoursPerTutorHour.value &&
-                      r.flatStudentHours.value !== null
-                        ? r.flatStudentHours.value /
-                          input.studentHoursPerTutorHour.value
-                        : null,
-                  },
-                }))}
-              series={[
-                { key: "booked", label: "Booked forecast", color: INK.supply },
-                { key: "credit", label: "Credit-adjusted", color: INK.credit },
-                {
-                  key: "committed",
-                  label: "Commitments",
-                  color: INK.actual,
-                  dash: "4 3",
-                },
-                {
-                  key: "flat",
-                  label: "Flat demand",
-                  color: "#8a8291",
-                  dash: "2 4",
-                },
-              ]}
-            />
-            {input &&
-              [
-                ...OVERRIDES.map(([k]) => input[k]),
-                input.baseStudentHours,
-              ].some((v) => v.value === null) && (
-                <p className="mt-3 rounded border border-amber-300/40 p-3 text-xs text-amber-800 dark:text-amber-200">
-                  Automatic forecast unavailable:{" "}
-                  {OVERRIDES.filter(([k]) => input[k].value === null)
-                    .map(([, l]) => l)
-                    .join(", ") || "starting demand"}
-                  . Enter explicit assumptions below or review missing source
-                  evidence.
+          {display === "demand" ? (
+            <>
+              <GrowthFlowChart
+                rows={report.flows.months.filter(
+                  (r) => r.courseKey === selectedCourse,
+                )}
+                onSelect={onSelect}
+              />
+              <div className="rounded-xl border bg-card p-5">
+                <h4 className="text-sm font-medium">
+                  Average change per month
+                </h4>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {report.flows.commonWindow.map(monthLabel).join(" · ")} · the
+                  same three fully observed months
                 </p>
-              )}
-            <details className="mt-3 text-xs">
-              <summary className="cursor-pointer text-muted-foreground">
-                View forecast data & flat comparison
-              </summary>
-              <div className="overflow-x-auto">
-                <table className="mt-3 w-full min-w-[700px] text-left">
-                  <thead>
-                    <tr>
-                      {[
-                        "Month",
-                        "Booked tutor h",
-                        "Credit tutor h",
-                        "Current commitments h",
-                        "Required capacity h",
-                        "Flat student h",
-                        "Extra h/week",
-                      ].map((l) => (
-                        <th className="p-2" key={l}>
-                          {l}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.forecast.months
-                      .filter((r) => r.courseKey === selectedCourse)
-                      .map((r) => (
-                        <tr key={r.key} className="border-t">
-                          <th className="p-2">{monthLabel(r.month)}</th>
-                          {[
-                            r.bookedTutorHours,
-                            r.creditTutorHours,
-                            r.knownCommittedTutorHours,
-                            r.capacityRequiredTutorHours,
-                            r.flatStudentHours,
-                            r.bufferedAdditionalWeeklyHours,
-                          ].map((m, i) => (
-                            <td key={i} className="p-2" title={metricReason(m)}>
-                              {formatMetric(m)}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
+                <div className="mt-4 grid grid-cols-3 gap-4">
+                  {(
+                    [
+                      ["New", "newStudentHours"],
+                      ["Returning", "reactivatedStudentHours"],
+                      ["Lost", "churnStudentHours"],
+                    ] as const
+                  ).map(([label, key]) => {
+                    const value = report.flows.averages.find(
+                      (r) => r.courseKey === selectedCourse,
+                    )?.[key];
+                    return (
+                      <div key={key}>
+                        <span className="text-xs text-muted-foreground">
+                          {label}
+                        </span>
+                        <strong className="mt-1 block text-2xl">
+                          {formatMetric(value, "h")}
+                        </strong>
+                        {value?.completeness === "partial" && (
+                          <span className="text-xs text-amber-700 dark:text-amber-300">
+                            Partial records
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <details className="mt-4 border-t pt-3 text-sm">
+                  <summary className="cursor-pointer font-medium">
+                    How calculated
+                  </summary>
+                  <ol className="mt-3 list-decimal space-y-2 pl-5">
+                    <li>
+                      New demand: hours booked in a student’s first regular
+                      month in this subject. Trials and level changes do not
+                      create a new subject enrolment.
+                    </li>
+                    <li>
+                      Returning demand: hours from students who resume after
+                      leaving the subject.
+                    </li>
+                    <li>
+                      Lost demand: a student has no class for 60 days and no
+                      future booking. Use their average hours in the three full
+                      months before the month of their last class.
+                    </li>
+                    <li>
+                      Add the hours in each category across the three months
+                      shown, then divide by three. Recent unconfirmed losses
+                      stay provisional.
+                    </li>
+                  </ol>
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    These are student-hours: five students in a one-hour class
+                    contribute five hours of student demand and one hour of
+                    tutor time. The March starting cohort is excluded from
+                    growth averages.
+                  </p>
+                </details>
               </div>
-            </details>
-          </ChartPanel>
-          <div className="flex flex-wrap items-baseline justify-between gap-3 rounded border bg-primary/5 px-5 py-3">
-            <p className="text-sm font-medium">
-              Shared overall additional availability ·{" "}
-              {selectedMonth
-                ? monthLabel(selectedMonth)
-                : "Projection unavailable"}
-            </p>
-            <strong className="text-xl tabular-nums">
-              {formatMetric(
-                report.forecast.allocations.find(
-                  (a) => a.month === selectedMonth,
-                )?.bufferedAdditionalWeeklyHours,
-                "h/week",
-              )}
-            </strong>
-            {report.forecast.allocations.find((a) => a.month === selectedMonth)
-              ?.bufferedAdditionalWeeklyHours.completeness === "partial" && (
-              <Tag tone="amber">Partial</Tag>
-            )}
-            <p className="w-full text-xs text-muted-foreground">
-              One physical tutor pool. This overall gap is calculated
-              independently; course hiring estimates overlap.
-            </p>
-          </div>
-          <GrowthGapChart
-            cells={
-              report.forecast.allocations
-                .find((a) => a.month === selectedMonth)
-                ?.cells.filter((c) => c.courseKey === selectedCourse) ?? []
-            }
-            onSelect={onSelect}
-          />
-          <HiringChart
-            rows={report.forecast.hiring.filter(
-              (r) => r.month === selectedMonth,
-            )}
-          />
-          <details className="rounded-[10px] border bg-card p-4">
+            </>
+          ) : (
+            <HiringSummary
+              report={report}
+              month={selectedMonth}
+              course={selectedCourse}
+              onCourse={setCourse}
+              onMonth={setForecastMonth}
+              onEditAssumptions={() => {
+                if (assumptionsPanel.current) {
+                  assumptionsPanel.current.open = true;
+                  assumptionsPanel.current.scrollIntoView({ block: "nearest" });
+                }
+              }}
+            />
+          )}
+          <details
+            ref={assumptionsPanel}
+            className="rounded-[10px] border bg-card p-4"
+          >
             <summary className="cursor-pointer text-sm font-semibold">
               Model assumptions & sources
             </summary>
@@ -617,7 +572,7 @@ export function GrowthView({
                   variant="outline"
                   disabled={busy || exporting}
                   onClick={() =>
-                    void load({ bufferPercent: 0 }, true).catch(() => {})
+                    void load({ bufferPercent: 0 }, true, true).catch(() => {})
                   }
                 >
                   Reset to measured model
@@ -627,7 +582,7 @@ export function GrowthView({
             <div className="mt-4 space-y-2 text-xs text-muted-foreground">
               <p>
                 Booked student-hours at month k = max(0, base + k × (new +
-                reactivated − soft churn)). Apply the cancellation/refund
+                returning − lost demand)). Apply the cancellation/refund
                 fraction once, then divide by the observed group mix to obtain
                 tutor-hours.
               </p>
@@ -717,10 +672,12 @@ export function GrowthView({
                   </p>
                 </div>
               ))}
-              {detail.exceptions.length > 0 && <section className="space-y-2">
-                <h4 className="font-semibold">Report-wide source issues</h4>
-                <EvidenceIssueSummary issues={detail.exceptions} />
-              </section>}
+              {detail.exceptions.length > 0 && (
+                <section className="space-y-2">
+                  <h4 className="font-semibold">Report-wide source issues</h4>
+                  <EvidenceIssueSummary issues={detail.exceptions} />
+                </section>
+              )}
               {detail.nextCursor && (
                 <Button
                   variant="outline"

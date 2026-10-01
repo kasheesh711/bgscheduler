@@ -1,21 +1,32 @@
 "use client";
-import { useState } from "react";
-import type { WorkforcePersonRow } from "@/lib/tutor-offboarding/workforce/types";
-import { Panel, Tag } from "../atoms";
+
+import { useMemo, useState } from "react";
 import { scaleLinear } from "d3";
-import { activate, INK, useChartWidth } from "./charts";
 import { Input } from "@/components/ui/input";
+import type {
+  WorkforceMetric,
+  WorkforcePersonRow,
+  WorkforcePersonMonth,
+  WorkforceUtilizationMetrics,
+} from "@/lib/tutor-offboarding/workforce/types";
+import { Panel, Tag } from "../atoms";
+import { INK } from "./charts";
 import {
   formatMetric,
   metricReason,
+  METRIC_LABELS,
   RATE_LABELS,
   rateFormula,
   type DisplayMetric,
 } from "./presentation";
+
+const PAGE_SIZE = 10;
+type SortDirection = "asc" | "desc";
+
 export function sortPeople(
   people: WorkforcePersonRow[],
   key: DisplayMetric,
-  direction: "asc" | "desc",
+  direction: SortDirection,
 ) {
   return [...people].sort((a, b) => {
     const av = a[key].value,
@@ -29,314 +40,394 @@ export function sortPeople(
     );
   });
 }
+
+function selectedMetrics(
+  person: WorkforcePersonRow,
+  month?: string,
+): WorkforceUtilizationMetrics | WorkforcePersonMonth {
+  if (!month) return person;
+  const selected = person.months.find((row) => row.month === month);
+  if (selected) return selected;
+  const unavailable = () => ({
+    value: null,
+    completeness: "unknown" as const,
+    reasonCodes: ["NO_DATA_FOR_SELECTED_MONTH"],
+  });
+  const metricKeys = [
+    ...Object.keys(METRIC_LABELS),
+    "utilizationReservedHours",
+    "utilizationCreditConsumedHours",
+    "utilizationRecordedTeachingHours",
+    "coverageHours",
+    "expectedCoverageHours",
+    "coveragePercent",
+  ];
+  return Object.fromEntries(
+    metricKeys.map((key) => [key, unavailable()]),
+  ) as unknown as WorkforceUtilizationMetrics;
+}
+
+function calculationLines(
+  metrics: WorkforceUtilizationMetrics | WorkforcePersonMonth,
+  periodLabel: string,
+) {
+  return [
+    ["Gross offered hours", metrics.offeredHours],
+    ["Approved leave", metrics.leaveHours],
+    ["Usable hours", metrics.usableHours],
+    ["Booked tutor-hours", metrics.bookedHours],
+    ["Reserved hours", metrics.reservedHours],
+    ["Reserved hours on covered dates", metrics.utilizationReservedHours],
+    [
+      `Credit-consumed hours (${periodLabel} total)`,
+      metrics.creditConsumedHours,
+    ],
+    [
+      "Credit-consumed hours on covered dates",
+      metrics.utilizationCreditConsumedHours,
+    ],
+    ["Recorded teaching hours", metrics.recordedTeachingHours],
+    ["Free hours", metrics.freeHours],
+    ["Outside offered hours", metrics.outsideHours],
+    ["Overlapping booking hours", metrics.overlapHours],
+  ] as const;
+}
+
+function creditCoverageLabel(metric: WorkforceMetric) {
+  const coverage = metric.creditCoverage;
+  if (!coverage) return null;
+  return `Credit coverage: ${coverage.computedClasses} computed of ${coverage.totalClasses} classes; ${coverage.estimatedClasses} estimated, ${coverage.unknownClasses} unknown.`;
+}
+
+function personSummary(
+  person: WorkforcePersonRow,
+  metrics: WorkforceUtilizationMetrics | WorkforcePersonMonth,
+) {
+  return [
+    `Open ${person.displayName}'s weekly schedule.`,
+    `Usable availability ${formatMetric(metrics.usableHours, "h")}.`,
+    `Reserved hours on covered dates ${formatMetric(metrics.utilizationReservedHours, "h")}.`,
+    `Credit-used hours on supported dates ${formatMetric(metrics.utilizationCreditConsumedHours, "h")}.`,
+    `Full selected-period credit total ${formatMetric(metrics.creditConsumedHours, "h")}.`,
+    `Availability history covers ${formatMetric(metrics.coveragePercent, "%")} of the selected period.`,
+  ].join(" ");
+}
+
 export function UtilizationTable({
   people,
   onSelect,
+  selectedMonth,
 }: {
   people: WorkforcePersonRow[];
   onSelect: (person: WorkforcePersonRow) => void;
+  selectedMonth?: string;
 }) {
-  const { ref, width } = useChartWidth();
   const [search, setSearch] = useState("");
-  const [sort, setSort] = useState<DisplayMetric>("consumedUtilizationPercent");
-  const [direction, setDirection] = useState<"asc" | "desc">("desc");
-  const filtered = sortPeople(
-    people.filter((person) =>
-      person.displayName.toLowerCase().includes(search.toLowerCase()),
-    ),
-    sort,
-    direction,
+  const [sort, setSort] = useState<DisplayMetric>("freeHours");
+  const [direction, setDirection] = useState<SortDirection>("desc");
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  const monthPeople = useMemo(
+    () =>
+      people.map((person) => ({
+        person,
+        metrics: selectedMetrics(person, selectedMonth),
+      })),
+    [people, selectedMonth],
   );
-  const columns: DisplayMetric[] = [
-    "offeredHours",
-    "leaveHours",
-    "usableHours",
-    "bookedHours",
-    "creditConsumedHours",
-    "recordedTeachingHours",
-    "reservedUtilizationPercent",
-    "consumedUtilizationPercent",
-    "recordedTeachingUtilizationPercent",
+  const filtered = monthPeople.filter(({ person }) =>
+    person.displayName.toLowerCase().includes(search.trim().toLowerCase()),
+  );
+  const sortRows = filtered.map(({ person, metrics }) => ({
+    ...person,
+    ...metrics,
+  }));
+  const orderedKeys = sortPeople(sortRows, sort, direction).map(
+    (person) => person.canonicalKey,
+  );
+  const byKey = new Map(
+    filtered.map((entry) => [entry.person.canonicalKey, entry]),
+  );
+  const ordered = orderedKeys.map((key) => byKey.get(key)!);
+  const visible = ordered.slice(0, visibleCount);
+  const remaining = Math.max(0, ordered.length - visible.length);
+
+  const maxHours = Math.max(
+    1,
+    ...visible.flatMap(({ metrics }) => [
+      metrics.usableHours.value ?? 0,
+      metrics.utilizationReservedHours.value ?? 0,
+      metrics.utilizationCreditConsumedHours.value ?? 0,
+    ]),
+  );
+  const x = scaleLinear().domain([0, maxHours]).range([0, 100]);
+  const ticks = x.ticks(4);
+
+  const sortOptions: { key: DisplayMetric; label: string }[] = [
+    { key: "freeHours", label: "Free hours" },
+    { key: "reservedUtilizationPercent", label: "Reserved utilization" },
+    { key: "consumedUtilizationPercent", label: "Credit utilization" },
+    { key: "creditConsumedHours", label: "Credit-consumed hours" },
   ];
-  const labels: Record<string, string> = {
-    offeredHours: "Gross offered hours",
-    leaveHours: "Approved leave",
-    usableHours: "Usable hours",
-    bookedHours: "Booked tutor-hours",
-    creditConsumedHours: "Credit-consumed hours",
-    recordedTeachingHours: "Recorded teaching hours",
-    ...RATE_LABELS,
-  };
-  const rateKeys = Object.keys(RATE_LABELS) as (keyof typeof RATE_LABELS)[];
-  const colors = [INK.supply, INK.credit, INK.actual];
-  const left = width < 480 ? 90 : 160,
-    right = width < 480 ? 64 : 90;
-  const max = Math.max(
-    100,
-    ...filtered.flatMap((p) => rateKeys.map((k) => p[k].value ?? 0)),
-  );
-  const x = scaleLinear()
-    .domain([0, max * 1.08])
-    .range([left, width - right]);
+
   return (
-    <Panel aria-label="Individual utilization">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
+    <Panel aria-label="Tutor capacity by person">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b px-5 py-4">
         <div>
-          <h3 className="font-semibold">Tutor utilization</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Selected range · All three rates use usable hours after approved
-            leave, with numerators limited to the same supported dates. Rates
-            over 100% remain visible.
+          <h3 className="font-semibold">Tutor capacity</h3>
+          <p className="mt-1 max-w-3xl text-xs text-muted-foreground">
+            {selectedMonth ? `${selectedMonth} · ` : "Selected range · "}
+            Available, booked and credit-used hours on dates with recorded
+            availability.
           </p>
         </div>
         <Input
           aria-label="Search tutor or teaching administrator"
           placeholder="Find a person…"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(event) => {
+            setSearch(event.target.value);
+            setVisibleCount(PAGE_SIZE);
+          }}
           className="max-w-64"
         />
       </div>
-      <div className="flex flex-wrap items-center gap-3 px-5 pt-3 text-xs">
-        <label>
-          Sort{" "}
+
+      <div className="flex flex-wrap items-center gap-3 px-5 py-3 text-xs">
+        <label className="flex items-center gap-2">
+          Sort by
           <select
-            aria-label="Sort utilization"
+            aria-label="Sort people"
             value={sort}
-            onChange={(e) => setSort(e.target.value as DisplayMetric)}
-            className="ml-2 rounded border bg-background p-2"
+            onChange={(event) => setSort(event.target.value as DisplayMetric)}
+            className="rounded border bg-background p-2"
           >
-            {columns.map((k) => (
-              <option key={k} value={k}>
-                {labels[k]}
+            {sortOptions.map((option) => (
+              <option key={option.key} value={option.key}>
+                {option.label}
               </option>
             ))}
           </select>
         </label>
         <button
+          type="button"
           className="rounded border px-3 py-2"
           aria-label="Reverse sort direction"
           onClick={() => setDirection(direction === "desc" ? "asc" : "desc")}
         >
           {direction === "desc" ? "Highest first ↓" : "Lowest first ↑"}
         </button>
-        {rateKeys.map((k, i) => (
-          <span key={k} style={{ color: colors[i] }}>
-            {i === 0 ? "●" : i === 1 ? "◆" : "■"} {RATE_LABELS[k]}
+        {selectedMonth ? (
+          <span className="text-muted-foreground">
+            Showing {visible.length} of {ordered.length} people
           </span>
-        ))}
+        ) : null}
       </div>
-      <div ref={ref} className="px-4 pt-4">
-        <svg
-          width="100%"
-          height={Math.max(110, filtered.length * 69 + 40)}
-          viewBox={`0 0 ${width} ${Math.max(110, filtered.length * 69 + 40)}`}
-          role="group"
-          aria-label="Three utilization rates by person, with 100 percent reference"
-          style={{ fontSize: 11 }}
-        >
-          {x.ticks(width < 480 ? 3 : 5).map((t) => (
-            <g key={t}>
-              <line
-                x1={x(t)}
-                x2={x(t)}
-                y1="25"
-                y2={filtered.length * 69 + 30}
-                stroke={t === 100 ? INK.loss : INK.grid}
-                strokeDasharray={t === 100 ? "4 3" : undefined}
-              />
-              <text x={x(t)} y="15" textAnchor="middle" fill="currentColor">
-                {t}%
-              </text>
-            </g>
-          ))}
-          <line
-            x1={x(100)}
-            x2={x(100)}
-            y1="25"
-            y2={filtered.length * 69 + 30}
-            stroke={INK.loss}
-            strokeDasharray="4 3"
-          />
-          {filtered.map((p, i) => (
-            <g
-              key={p.canonicalKey}
-              tabIndex={0}
-              role="button"
-              aria-label={`Open ${p.displayName} evidence: ${rateKeys.map((k) => `${RATE_LABELS[k]} ${formatMetric(p[k], "%")}`).join(", ")}`}
-              onClick={() => onSelect(p)}
-              onKeyDown={(e) => activate(e, () => onSelect(p))}
-              className="cursor-pointer focus:outline-2 focus:outline-primary"
-            >
-              <rect
-                x="0"
-                y={30 + i * 69}
-                width={width}
-                height="66"
-                fill="transparent"
-              />
-              <text x="0" y={51 + i * 69} fontWeight="600" fill="currentColor">
-                {p.displayName.slice(0, width < 480 ? 13 : 22)}
-              </text>
-              <text x="0" y={67 + i * 69} fontSize="10" fill="currentColor">
-                {p.pendingDeparture
-                  ? "Pending departure"
-                  : p.role === "teaching_admin"
-                    ? "Teaching admin"
-                    : "Tutor"}
-              </text>
-              {rateKeys.map((k, j) => {
-                const v = p[k].value,
-                  cy = 41 + i * 69 + j * 16;
-                return (
-                  <g key={k}>
-                    <line
-                      x1={left}
-                      x2={width - right}
-                      y1={cy}
-                      y2={cy}
-                      stroke={INK.grid}
-                      strokeWidth=".6"
-                    />
-                    {v !== null ? (
-                      j === 0 ? (
-                        <circle cx={x(v)} cy={cy} r="4" fill={colors[j]} />
-                      ) : j === 1 ? (
-                        <path
-                          d={`M${x(v)} ${cy - 5}l5 5-5 5-5-5Z`}
-                          fill={colors[j]}
-                        />
-                      ) : (
-                        <rect
-                          x={x(v) - 4}
-                          y={cy - 4}
-                          width="8"
-                          height="8"
-                          fill={colors[j]}
-                        />
-                      )
-                    ) : (
-                      <text x={left + 4} y={cy + 4} fill="currentColor">
-                        ?
-                      </text>
-                    )}
-                    <text x={width - right + 8} y={cy + 4} fill={colors[j]}>
-                      {v === null ? "Unknown" : formatMetric(p[k], "%")}
-                    </text>
-                    <title>{rateFormula(p, k)}</title>
-                  </g>
-                );
-              })}
-            </g>
-          ))}
-        </svg>
-      </div>
-      <details className="px-5 pb-4 text-xs">
-        <summary className="cursor-pointer text-muted-foreground">
-          View data & exceptions
-        </summary>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <caption className="sr-only">
-              Tutor and teaching administrator hours and utilization for the
-              selected range
-            </caption>
-            <thead className="bg-muted/30">
-              <tr>
-                <th scope="col" className="min-w-44 px-4 py-3">
-                  Person
-                </th>
-                {columns.map((key) => (
-                  <th
-                    key={key}
-                    scope="col"
-                    className="min-w-28 px-3 py-3"
-                    aria-sort={
-                      sort === key
-                        ? direction === "asc"
-                          ? "ascending"
-                          : "descending"
-                        : "none"
-                    }
-                  >
-                    <button
-                      className="rounded text-left focus-visible:outline-2 focus-visible:outline-primary"
-                      onClick={() => {
-                        setSort(key);
-                        setDirection(
-                          sort === key && direction === "desc" ? "asc" : "desc",
-                        );
-                      }}
-                    >
-                      {labels[key]}{" "}
-                      {sort === key ? (direction === "desc" ? "↓" : "↑") : ""}
-                    </button>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((person) => (
-                <tr className="border-t align-top" key={person.canonicalKey}>
-                  <th scope="row" className="px-4 py-3">
-                    <button
-                      onClick={() => onSelect(person)}
-                      className="rounded text-primary underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-primary"
-                    >
-                      {person.displayName}
-                    </button>
-                    <p className="mt-1 font-normal text-muted-foreground">
-                      {person.role === "teaching_admin"
-                        ? "Teaching admin"
-                        : person.role === "tutor"
-                          ? "Tutor"
-                          : "Role unavailable"}
-                    </p>
-                    {person.pendingDeparture ? (
-                      <Tag tone="amber" className="mt-2">
-                        Pending departure
-                      </Tag>
-                    ) : null}
-                    {(person.outsideHours.value ?? 0) > 0 ||
-                    (person.overlapHours.value ?? 0) > 0 ? (
-                      <p className="mt-2 font-normal text-amber-700 dark:text-amber-300">
-                        Outside hours: {formatMetric(person.outsideHours, "h")}{" "}
-                        · Overlap: {formatMetric(person.overlapHours, "h")}
-                      </p>
-                    ) : null}
-                  </th>
-                  {columns.map((key) => (
-                    <td
-                      key={key}
-                      className={`px-3 py-3 ${(person[key].value ?? 0) > 100 && key.endsWith("Percent") ? "font-semibold text-amber-700 dark:text-amber-300" : ""}`}
-                      title={
-                        key in RATE_LABELS
-                          ? rateFormula(person, key as keyof typeof RATE_LABELS)
-                          : metricReason(person[key])
-                      }
-                    >
-                      {formatMetric(
-                        person[key],
-                        key.endsWith("Percent") ? "%" : "h",
-                      )}
-                      {person[key].completeness === "partial" ? (
-                        <span className="mt-1 block text-[10px] text-muted-foreground">
-                          Partial support
-                        </span>
-                      ) : null}
-                    </td>
-                  ))}
-                </tr>
+
+      {visible.length > 0 ? (
+        <div className="px-5 pb-5">
+          <div className="mb-3 grid grid-cols-[minmax(8rem,1fr)_minmax(0,2fr)] gap-3 pl-1 text-[11px] text-muted-foreground sm:gap-5">
+            <span>Person</span>
+            <div className="flex justify-between" aria-hidden="true">
+              {ticks.map((tick) => (
+                <span key={tick}>
+                  {formatMetric(
+                    { value: tick, completeness: "complete", reasonCodes: [] },
+                    "h",
+                  )}
+                </span>
               ))}
-            </tbody>
-          </table>
+            </div>
+          </div>
+          <div className="space-y-3">
+            {visible.map(({ person, metrics }) => {
+              const creditCoverage =
+                creditCoverageLabel(metrics.creditConsumedHours) ??
+                creditCoverageLabel(metrics.utilizationCreditConsumedHours);
+              const series = [
+                {
+                  label: "Usable availability",
+                  metric: metrics.usableHours,
+                  color: INK.supply,
+                },
+                {
+                  label: "Booked · covered dates",
+                  metric: metrics.utilizationReservedHours,
+                  color: INK.actual,
+                },
+                {
+                  label: "Credit used · covered dates",
+                  metric: metrics.utilizationCreditConsumedHours,
+                  color: INK.credit,
+                },
+              ];
+              return (
+                <article
+                  key={person.canonicalKey}
+                  className="rounded-lg border bg-card p-3 sm:p-4"
+                >
+                  <button
+                    type="button"
+                    onClick={() => onSelect(person)}
+                    aria-label={personSummary(person, metrics)}
+                    className="mb-3 flex w-full flex-wrap items-center justify-between gap-2 rounded text-left focus-visible:outline-2 focus-visible:outline-primary"
+                  >
+                    <span>
+                      <span className="font-medium text-primary underline-offset-2 hover:underline">
+                        {person.displayName}
+                      </span>
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        {person.role === "teaching_admin"
+                          ? "Teaching admin"
+                          : person.role === "tutor"
+                            ? "Tutor"
+                            : "Role unavailable"}
+                      </span>
+                    </span>
+                    {person.pendingDeparture ? (
+                      <Tag tone="amber">Pending departure</Tag>
+                    ) : null}
+                  </button>
+
+                  <div
+                    className="mb-3 flex justify-between gap-2 text-[11px] text-muted-foreground"
+                    aria-label={`Availability history coverage: ${formatMetric(metrics.coveragePercent, "%")}`}
+                  >
+                    <span>Availability history coverage</span>
+                    <span>{formatMetric(metrics.coveragePercent, "%")}</span>
+                  </div>
+
+                  {series.every((item) => item.metric.value === null) ? (
+                    <p className="text-xs text-muted-foreground">
+                      Availability was not recorded for this{" "}
+                      {selectedMonth ? "month" : "period"}.
+                    </p>
+                  ) : (
+                    <div className="space-y-2.5">
+                      {series.map(({ label, metric, color }) => (
+                        <div
+                          key={label}
+                          className="grid grid-cols-[minmax(8rem,1fr)_minmax(0,2fr)] items-center gap-3 sm:gap-5"
+                        >
+                          <span className="text-xs text-muted-foreground">
+                            {label}
+                          </span>
+                          <div className="flex min-w-0 items-center gap-3">
+                            <div
+                              className="relative h-3 min-w-0 flex-1 rounded bg-muted/70"
+                              aria-hidden="true"
+                            >
+                              {metric.value !== null ? (
+                                <div
+                                  className="absolute inset-y-0 left-0 rounded"
+                                  style={{
+                                    width: `${x(Math.max(0, metric.value))}%`,
+                                    backgroundColor: color,
+                                  }}
+                                />
+                              ) : null}
+                            </div>
+                            <span className="w-20 shrink-0 text-right text-xs font-medium tabular-nums">
+                              {formatMetric(metric, "h")}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    Credit-used {selectedMonth ? "this month" : "in this range"}
+                    : {formatMetric(metrics.creditConsumedHours, "h")}
+                    {metrics.creditConsumedHours.completeness === "partial"
+                      ? " · partial estimate"
+                      : " full-period total"}
+                    {creditCoverage
+                      ? ` · ${creditCoverage.replace("Credit coverage: ", "")}`
+                      : ""}
+                  </p>
+
+                  <details className="mt-3 border-t pt-3 text-xs">
+                    <summary className="cursor-pointer text-muted-foreground">
+                      View calculations and data quality
+                    </summary>
+                    <div className="mt-3 space-y-3">
+                      <p className="text-muted-foreground">
+                        Utilization compares usable hours after approved leave
+                        with booked and credit-used hours on those same
+                        supported dates. Rates above 100% are preserved.
+                      </p>
+                      <p className="text-muted-foreground">
+                        Availability history covers{" "}
+                        {formatMetric(metrics.coverageHours, "h")} of{" "}
+                        {formatMetric(metrics.expectedCoverageHours, "h")}{" "}
+                        calendar time in this period.
+                      </p>
+                      <dl className="grid gap-2 sm:grid-cols-2">
+                        {calculationLines(
+                          metrics,
+                          selectedMonth ? "selected-month" : "selected-range",
+                        ).map(([label, value]) => (
+                          <div
+                            key={label}
+                            className="flex justify-between gap-3 border-b border-dashed pb-1"
+                          >
+                            <dt>{label}</dt>
+                            <dd
+                              className="text-right tabular-nums"
+                              title={metricReason(value)}
+                            >
+                              {formatMetric(value, "h")}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                      {creditCoverage ? (
+                        <p className="text-muted-foreground">
+                          {creditCoverage}
+                        </p>
+                      ) : null}
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        {(
+                          Object.keys(
+                            RATE_LABELS,
+                          ) as (keyof typeof RATE_LABELS)[]
+                        ).map((key) => (
+                          <div
+                            key={key}
+                            className="rounded bg-muted/40 p-2"
+                            title={metricReason(metrics[key])}
+                          >
+                            <div className="text-muted-foreground">
+                              {RATE_LABELS[key]}
+                            </div>
+                            <div className="mt-1 font-medium tabular-nums">
+                              {rateFormula(metrics, key)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </details>
+                </article>
+              );
+            })}
+          </div>
+          {remaining > 0 ? (
+            <button
+              type="button"
+              className="mt-4 rounded border px-4 py-2 text-sm hover:bg-muted/50"
+              onClick={() => setVisibleCount((count) => count + PAGE_SIZE)}
+            >
+              Show more ({remaining} remaining)
+            </button>
+          ) : null}
         </div>
-      </details>
-      {filtered.length === 0 ? (
+      ) : (
         <p className="p-5 text-sm text-muted-foreground">
           No people match this selection.
         </p>
-      ) : null}
+      )}
     </Panel>
   );
 }

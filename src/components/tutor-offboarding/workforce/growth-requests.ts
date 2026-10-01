@@ -6,15 +6,16 @@ import type {
   GrowthExportSection,
 } from "@/lib/tutor-offboarding/workforce/growth/types";
 import { queryParams, WorkforceRequestError } from "./requests";
+import { ReadCache, workforceReadKey, workforceReportDeadline, WORKFORCE_REFRESH_HEADER } from "@/lib/tutor-offboarding/workforce/read-cache";
 const BASE = "/api/tutor-offboarding/analytics/workforce/growth";
-async function jsonRequest(path: string, signal: AbortSignal, body?: unknown) {
+async function jsonRequest(path: string, signal: AbortSignal, body?: unknown, refresh = false) {
   const response = await fetch(path, {
     method: body ? "POST" : "GET",
     cache: "no-store",
     signal,
+    headers: { ...(body ? { "Content-Type": "application/json" } : {}), ...(refresh ? { [WORKFORCE_REFRESH_HEADER]: "1" } : {}) },
     ...(body
       ? {
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         }
       : {}),
@@ -56,11 +57,15 @@ export async function fetchGrowthReport(
   query: GrowthQuery,
   signal: AbortSignal,
   measured = false,
+  refresh = false,
+  cache?: ReadCache<GrowthReport>,
 ): Promise<GrowthReport> {
+  if (cache) return cache.read(workforceReadKey(query), () => fetchGrowthReport(query, signal, measured, refresh), refresh, workforceReportDeadline);
   const result = await jsonRequest(
     measured ? `${BASE}?${queryParams(query.filters)}` : BASE,
     signal,
     measured ? undefined : query,
+    refresh,
   );
   if (
     !result ||
