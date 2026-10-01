@@ -46,5 +46,17 @@ export function validateIsebFormat(fields: FeedbackFieldAnswers): string[] {
   }
   const inventory = fields.topics.replace(/^\d+\.\s*/gmu, "").trim().toLowerCase();
   if (inventory.length > 35 && fields.performance.toLowerCase().includes(inventory)) errors.push("style:topic_inventory_repeated");
+  const opening = fields.performance.trim().split(/[.!?](?:\s|$)/u)[0];
+  if (/^(?:we|I)\s+(?:reviewed|covered|explored|worked|practised|practiced|looked)\b/iu.test(opening)) {
+    const stop = new Set(["and", "with", "the", "for", "from", "into", "about", "through"]);
+    const words = (text: string) => new Set((text.toLowerCase().match(/\p{L}+/gu) ?? [])
+      .filter(word => word.length > 2 && !stop.has(word)).map(word => word.replace(/(?:ing|ed|s)$/u, "")));
+    const openingWords = words(opening);
+    const repeated = fields.topics.split("\n").filter(label => {
+      const labelWords = words(label);
+      return labelWords.size >= 2 && [...labelWords].filter(word => openingWords.has(word)).length / labelWords.size >= 0.6;
+    });
+    if (repeated.length >= 3) errors.push("style:topic_inventory_repeated");
+  }
   return errors;
 }

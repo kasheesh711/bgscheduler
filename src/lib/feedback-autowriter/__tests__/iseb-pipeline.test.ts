@@ -84,4 +84,9 @@ describe("ISEB format rollout", () => {
     expect(validateIsebFormat({ ...fields, improvement: "1. Check\n- detail" })).toContain("style:numbering:improvement");
     expect(validateIsebFormat({ ...fields, performance: "First\n\nSecond\n\nThird" })).toContain("style:performance_prose");
   });
+  it("rejects an opening recap of the topic list without rejecting learner-specific feedback", () => {
+    const topics = "1. Non-verbal reasoning\n2. Polygon symmetry and parallel sides\n3. Rearranging equations with fractions\n4. Number sequences and nth terms";
+    expect(validateIsebFormat({ ...fields, topics, performance: "We reviewed polygon symmetry and parallel sides, then worked on non-verbal reasoning and rearranging equations." })).toContain("style:topic_inventory_repeated");
+    expect(validateIsebFormat({ ...fields, topics, performance: "Tom rearranged equations carefully and explained his reasoning about polygon symmetry." })).not.toContain("style:topic_inventory_repeated");
+  });
 });
