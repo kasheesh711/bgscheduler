@@ -113,13 +113,20 @@ function sumEvidence(rows: PreparedClass[], field: 'consumed' | 'taught', mask: 
 /** Demand uses the verified full period; ratios use precisely the observed capacity mask. */
 export function measureWorkforce(prepared: PreparedWorkforce, query: WorkforceQuery, mask: Interval[], candidateRows = prepared.classes, candidatePeople = pool(prepared, query), exactOverlap = false): WorkforceUtilizationMetrics {
     const activeKeys = new Set(prepared.evidence.people.filter(p => p.role && (query.role === 'all' || p.role === query.role)).map(p => p.canonicalKey));
+    const knownTeachingKeys = new Set(prepared.evidence.people.filter(p => p.role).map(p => p.canonicalKey));
+    const unresolved = (r: PreparedClass) => r.session.canonicalTutorKeys.length !== 1 || !knownTeachingKeys.has(r.session.canonicalTutorKeys[0]);
+    const inScope = (r: PreparedClass) => classMatches(r.session, query) && (exactOverlap
+        ? Boolean(r.interval && intervalMinutes(intersectIntervals([r.interval], mask)) > 0)
+        : mask.some(i => Date.parse(r.session.startAt) >= i.start && Date.parse(r.session.startAt) < i.end));
     const rateRows = candidateRows.filter(r => r.interval && intervalMinutes(intersectIntervals([r.interval], mask)) > 0 && classMatches(r.session, query) && r.session.canonicalTutorKeys.some(k => activeKeys.has(k)));
-    const rows = exactOverlap ? rateRows : candidateRows.filter(r => mask.some(i => Date.parse(r.session.startAt) >= i.start && Date.parse(r.session.startAt) < i.end) && classMatches(r.session, query) && r.session.canonicalTutorKeys.some(k => activeKeys.has(k)));
+    const rows = candidateRows.filter(r => inScope(r) && (r.session.canonicalTutorKeys.some(k => activeKeys.has(k)) || query.role === 'all' && unresolved(r)));
     const complete = sourceComplete(prepared, mask);
     const demandReasons = complete ? [] : ['SESSION_HISTORY_INCOMPLETE'];
     const ids = new Set<string>();
     let bookings = 0, booked = 0, cancelled = 0, noShows = 0;
-    let membershipUnknown = false, durationUnknown = false, identityUnknown = false;
+    let membershipUnknown = false, durationUnknown = false;
+    let identityUnknown = candidateRows.some(r => inScope(r) && unresolved(r));
+    if (identityUnknown) demandReasons.push('TUTOR_ASSIGNMENT_UNRESOLVED');
     for (const row of rows) {
         const students = unique(row.session.historicalBookedStudentIds ?? []);
         for (const id of students)
@@ -298,7 +305,7 @@ function buildReport(prepared: PreparedWorkforce): WorkforceReport {
                 return [field, { ...value, value: value.value === null || denominator === 0 ? null : value.value / denominator,
                         reasonCodes: unique([...value.reasonCodes, `COVERED_OCCURRENCES:${denominator}`]) }];
             })) as unknown as WorkforceUtilizationMetrics;
-            const contributingRows = (cellRows.get(key) ?? []).filter(r => classMatches(r.session, query) && r.session.canonicalTutorKeys.some(k => people.some(p => p.canonicalKey === k)));
+            const contributingRows = (cellRows.get(key) ?? []).filter(r => classMatches(r.session, query) && (query.role === 'all' || r.session.canonicalTutorKeys.some(k => people.some(p => p.canonicalKey === k))));
             const studentOccurrences = mask.filter(span => sourceComplete(prepared, [span])).reduce((sum, span) => sum + new Set(contributingRows.filter(r => r.interval && intervalMinutes(intersectIntervals([r.interval], [span])) > 0).flatMap(r => r.session.historicalBookedStudentIds ?? [])).size, 0);
             average.uniqueStudents = { ...average.uniqueStudents, value: demandDates > 0 ? studentOccurrences / demandDates : null };
             const qualifiedOccurrences = mask.reduce((sum, span) => sum + people.filter(p => p.qualificationSpans.some(s => qualificationMatches(s.qualification, query) && intervalMinutes(intersectIntervals([s.interval], [span])) > 0)).length, 0);
@@ -323,7 +330,10 @@ function buildReport(prepared: PreparedWorkforce): WorkforceReport {
     const totals = measureWorkforce(prepared, query, [bounds]);
     const issueCodes = unique([...evidence.sourceCoverage.flatMap(c => c.issueCodes), ...evidence.people.filter(p => !p.role).map(() => 'ROLE_UNCONFIRMED'),
         ...prepared.classes.flatMap(r => r.session.reasonCodes), ...Object.values(totals).flatMap(m => m.completeness === 'complete' ? [] : m.reasonCodes)]);
-    const reportRevision = createHash('sha256').update(JSON.stringify({ revision: evidence.revision ?? evidence, query, totals, months, sourceCoverage: evidence.sourceCoverage })).digest('hex');
+    const digest = createHash('sha256').update(JSON.stringify({ revision: evidence.revision ?? evidence, query, totals, months, sourceCoverage: evidence.sourceCoverage })).digest('hex');
+    // Carry the calculation instant so a later drilldown/export does not extend
+    // an in-progress observation merely because another request took time.
+    const reportRevision = `v2:${now.getTime()}:${digest}`;
     return { schemaVersion: 1, reportRevision, generatedAt: now.toISOString(), query, totals, months, subjects, weekCells, people,
         quality: { completeness: Object.values(totals).some(m => m.completeness !== 'complete') || issueCodes.length ? 'partial' : 'complete', issueCodes, sourceCoverage: evidence.sourceCoverage,
             exceptions: prepared.classes.filter(r => !r.session.subject || r.session.canonicalTutorKeys.length !== 1 || !r.interval).map(r => ({ code: !r.session.subject ? 'ACADEMIC_SUBJECT_UNMAPPED' : 'SESSION_IDENTITY_OR_DURATION_UNKNOWN', message: 'This class has unresolved source evidence.', entityId: r.session.wiseSessionId })) } };

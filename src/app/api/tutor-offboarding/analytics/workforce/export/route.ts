@@ -11,7 +11,7 @@ export async function GET(request: Request) {
   try {
     await requireTutorOffboardingAdmin();
     const { query, section, reportRevision } = parseWorkforceExportQuery(new URL(request.url).searchParams);
-    const report = await getWorkforceReport(getDb(), query, new Date());
+    const report = await getWorkforceReport(getDb(), query, new Date(), reportRevision);
     if (report.reportRevision !== reportRevision) throw new TutorOffboardingError("The report changed. Refresh before exporting.", 409);
     response = new Response(`\uFEFF${serializeWorkforceCsv(report, section)}`, {
       headers: {

@@ -5,13 +5,23 @@ import { queryBounds } from './capacity';
 import { bangkokMonthBounds, intersectIntervals, intervalMinutes, type Interval } from './intervals';
 import { loadWorkforceEvidence } from './source-db';
 import type { WorkforceDrilldown, WorkforceDrilldownQuery, WorkforceQuery, WorkforceReport } from './types';
+function calculationTime(revision: string | undefined, now: Date): Date {
+    if (!revision) return now;
+    const match = /^v2:(\d{13}):[a-f0-9]{64}$/.exec(revision);
+    const instant = match ? Number(match[1]) : NaN;
+    if (!Number.isFinite(instant) || instant > now.getTime())
+        throw new TutorOffboardingError('Refresh the workforce report before opening details or exporting.', 409);
+    return new Date(instant);
+}
 /** Database-only read. The loader supplies one repeatable-read evidence revision. */
-export async function getWorkforceReport(db: Database, query: WorkforceQuery, now: Date): Promise<WorkforceReport> {
-    return buildPreparedWorkforceReport(prepareWorkforce(await loadWorkforceEvidence(db, query, now), query, now));
+export async function getWorkforceReport(db: Database, query: WorkforceQuery, now: Date, revision?: string): Promise<WorkforceReport> {
+    const asOf = calculationTime(revision, now);
+    return buildPreparedWorkforceReport(prepareWorkforce(await loadWorkforceEvidence(db, query, now), query, asOf));
 }
 export async function getWorkforceDrilldown(db: Database, query: WorkforceDrilldownQuery, now: Date): Promise<WorkforceDrilldown> {
     const { kind, key, reportRevision, cursor, pageSize, ...filters } = query;
-    const prepared = prepareWorkforce(await loadWorkforceEvidence(db, filters, now), filters, now);
+    const asOf = calculationTime(reportRevision, now);
+    const prepared = prepareWorkforce(await loadWorkforceEvidence(db, filters, now), filters, asOf);
     const report = buildPreparedWorkforceReport(prepared);
     if (report.reportRevision !== reportRevision)
         throw new TutorOffboardingError('The workforce evidence changed. Refresh the report before opening details.', 409);
@@ -46,7 +56,7 @@ export async function getWorkforceDrilldown(db: Database, query: WorkforceDrilld
     }
     const keySet = new Set(keys);
     const sessions = prepared.classes.filter(r => r.interval && intervalMinutes(intersectIntervals([r.interval], mask)) > 0 &&
-        r.session.canonicalTutorKeys.some(k => keySet.has(k))).map(r => classMatches(r.session, selected) ? r.session : { ...r.session, reasonCodes: [...r.session.reasonCodes, 'OTHER_SUBJECT_COMMITMENT'] });
+        (r.session.canonicalTutorKeys.some(k => keySet.has(k)) || kind === 'subject_cell' && filters.role === 'all' && !r.session.canonicalTutorKeys.length && classMatches(r.session, selected))).map(r => classMatches(r.session, selected) ? r.session : { ...r.session, reasonCodes: [...r.session.reasonCodes, 'OTHER_SUBJECT_COMMITMENT'] });
     const observations = prepared.evidence.observations.filter(o => keySet.has(o.canonicalKey));
     const offset = cursor === undefined ? 0 : Number(cursor);
     if (!Number.isSafeInteger(offset) || offset < 0)

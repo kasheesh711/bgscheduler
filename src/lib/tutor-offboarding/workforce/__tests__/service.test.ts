@@ -3,7 +3,7 @@ import type { Database } from '@/lib/db';
 vi.mock('../source-db', () => ({ loadWorkforceEvidence: vi.fn() }));
 import { loadWorkforceEvidence } from '../source-db';
 import { getWorkforceReport, getWorkforceDrilldown } from '../service';
-import { evidence, query, now, addSession } from './calculation-fixtures';
+import { evidence, query, now, addSession, start, HOUR } from './calculation-fixtures';
 beforeEach(() => { vi.mocked(loadWorkforceEvidence).mockResolvedValue(evidence()); });
 it('keeps revision stable across response generation times and rejects stale drilldowns', async () => {
     const db = {} as Database;
@@ -44,4 +44,18 @@ it('propagates loader failures and refuses unknown detail keys', async () => {
     await expect(getWorkforceDrilldown(db, { ...query, kind: 'subject_cell', key: 'not-a-cell', reportRevision: report.reportRevision }, now)).rejects.toMatchObject({ status: 404 });
     vi.mocked(loadWorkforceEvidence).mockRejectedValue(new Error('source failed'));
     await expect(getWorkforceReport(db, query, now)).rejects.toThrow('source failed');
+});
+it('pins an in-progress observation to the report time for later details and exports', async () => {
+    const e = evidence();
+    addSession(e, '1', 10, 60);
+    vi.mocked(loadWorkforceEvidence).mockResolvedValue(e);
+    const asOf = new Date(start + 10.5 * HOUR), later = new Date(asOf.getTime() + 2500);
+    const report = await getWorkforceReport({} as Database, query, asOf);
+    const detail = await getWorkforceDrilldown({} as Database, { ...query, kind: 'person', key: 'Aria', reportRevision: report.reportRevision }, later);
+    expect(detail.reportRevision).toBe(report.reportRevision);
+    const exported = await getWorkforceReport({} as Database, query, later, report.reportRevision);
+    expect(exported.totals).toEqual(report.totals);
+    expect(exported.reportRevision).toBe(report.reportRevision);
+    vi.mocked(loadWorkforceEvidence).mockResolvedValue({ ...e, revision: 'new-source' });
+    await expect(getWorkforceDrilldown({} as Database, { ...query, kind: 'person', key: 'Aria', reportRevision: report.reportRevision }, later)).rejects.toMatchObject({ status: 409 });
 });

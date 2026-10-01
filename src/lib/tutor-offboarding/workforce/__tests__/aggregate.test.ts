@@ -167,3 +167,15 @@ it('keeps incomplete empty retrieval unknown rather than claiming zero demand', 
     expect(r.totals.bookedHours.value).toBeNull();
     expect(r.totals.creditConsumedHours.value).toBeNull();
 });
+it('retains unassigned classes in institution demand and marks role subsets incomplete', () => {
+    const e = evidence();
+    addSession(e, 'unassigned', 10, 60).canonicalTutorKeys = [];
+    const report = buildWorkforceReport(e, query, now);
+    expect(report.totals.bookedHours.value).toBe(1);
+    expect(report.totals.studentBookings.value).toBe(1);
+    expect(report.totals.bookedHours.completeness).toBe('partial');
+    expect(report.totals.bookedHours.reasonCodes).toContain('TUTOR_ASSIGNMENT_UNRESOLVED');
+    expect(report.totals.consumedUtilizationPercent.value).toBeNull();
+    const tutors = buildWorkforceReport(e, { ...query, role: 'tutor' }, now);
+    expect(tutors.totals.bookedHours.completeness).toBe('partial');
+});
