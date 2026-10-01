@@ -1,13 +1,15 @@
 # Tutor Offboarding
 
-**Status: building (PR 1 read-only, 2026-10-01).** Removal from Wise arrives in PR 2 behind
-`WISE_TEACHER_REMOVAL_VERIFIED`. Design: [spec](../superpowers/specs/2026-10-01-tutor-offboarding-design.md).
+**Status: PR 2 removal controls implemented; deployment and live mode are pending review and owner verification (2026-10-01).**
+Wise removal remains manual until a labelled dummy-teacher probe succeeds and the owner enables
+`WISE_TEACHER_REMOVAL_VERIFIED` in Vercel production. Design:
+[spec](../superpowers/specs/2026-10-01-tutor-offboarding-design.md).
 
 ## Purpose
 
 Admins rarely remove the Wise accounts of tutors who have left, so former tutors keep a working Wise login and
 clutter Wise and BGScheduler. `/tutor-offboarding` ranks every person on the Wise roster by how likely they are no
-longer with BeGifted, explains each score, and (PR 2) lets a granted admin remove them from the Wise institute.
+longer with BeGifted, explains each score, and lets a granted admin preview and operate an audited removal run.
 
 ## How the score works
 
@@ -53,7 +55,42 @@ until its snooze ends. Removal additionally needs the last class 45+ days ago (O
   recorded `failed` whenever contact warnings exist); progress-test, post-class, Wise-activity and leave-request syncs
   ≤ 3 days since their last success.
 - **Tables:** `tutor_offboarding_decisions`, `tutor_offboarding_access_grants`,
-  `tutor_offboarding_access_audit_log`, and `tutor_offboarding_sheet_source` (migration 0102).
+  `tutor_offboarding_access_audit_log`, and `tutor_offboarding_sheet_source` (migration 0102); removal runs and
+  per-account snapshots (migration 0104).
+
+## Removal controls (PR 2)
+
+Only admins with a fresh `tutor_offboarding_access_grants` row can preview, apply, or reconcile. A preview rechecks
+eligibility and live Wise roster/upcoming sessions, then expires after 15 minutes. Apply requires the saved preview
+token, explicit confirmation, the exact account count, and a reason of at least ten characters. Wise requests use a
+no-retry client and are sent only after a durable `sending` record. Reconciliation is read-only toward Wise; unknown
+outcomes are settled by roster readback and are never resent. The local sync hook also reconciles after a successful
+snapshot sync.
+
+The default is manual mode. Live removal requires both `WISE_TEACHER_REMOVAL_VERIFIED=true` and
+`VERCEL_ENV=production`; no code path switches an already previewed run between modes. Until the owner verifies the
+endpoint with a controlled dummy teacher, use the checklist shown in the run result to remove accounts manually in
+Wise. The application does not execute removals during deployment or background sync.
+
+### Owner-operated endpoint probe and live-mode setup
+
+The owner must create or approve a clearly labelled `ZZ BGS Removal Probe` teacher account they control, with no
+courses and no sessions. After PR 2 is deployed in manual mode, the owner can run this command with that teacher's
+Wise teacher-row id:
+
+```bash
+node --env-file=<production-env-file> --import tsx scripts/probe-wise-teacher-removal.ts \
+  --teacher-id <24-character-teacher-id> --confirm remove-probe-teacher
+```
+
+The env file must supply `WISE_USER_ID`, `WISE_API_KEY`, `WISE_NAMESPACE`, and `WISE_INSTITUTE_ID`; the script does
+not load environment files implicitly. It refuses targets without the label or with any past or future sessions or
+courses, sends exactly one no-retry removal request, then re-reads the roster. It prints only the safe request
+outcome, HTTP status, readback, endpoint-verification result and next step. It never tries a teacher-row id after a
+rejection. The owner should re-invite the dummy in Wise, record whether it returns with the same user id in
+[`wise-api.md`](../reference/wise-api.md), and only after successful verification set
+`WISE_TEACHER_REMOVAL_VERIFIED=true` in the Vercel **Production** environment and redeploy. Preview deployments and
+local runs remain manual even if the flag is set. Deployment does not run the probe or remove any account.
 
 ## Page and access
 
@@ -61,7 +98,5 @@ Nav: Scheduling & Tutors → Tutor Offboarding. Admins with the page in `allowed
 Still with us, staff accounts, exclusions and history. The owner (`SUPER_ADMIN_EMAILS`) also manages who may remove
 tutors (OFF-11). API: [reference](../reference/api/tutor-offboarding.md).
 
-## Open items
-
-- PR 2: preview → confirm → apply removal via `POST /institutes/{id}/removeParticipant`, manual mode until verified.
-- `removeParticipant` is documented for students only; a labelled dummy-teacher probe must pass first.
+**Endpoint semantics remain unverified** for teacher accounts until the owner completes the guarded dummy probe;
+  `removeParticipant` has previously been documented for students only.
