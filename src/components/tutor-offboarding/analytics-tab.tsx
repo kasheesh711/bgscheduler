@@ -166,8 +166,15 @@ function download(contents: string, filename: string) {
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;
-  link.click();
-  URL.revokeObjectURL(url);
+  link.style.display = "none";
+  document.body.appendChild(link);
+  try {
+    link.click();
+  } finally {
+    link.remove();
+    // Let the browser start reading the Blob before releasing its URL.
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  }
 }
 function Metric({
   label,
