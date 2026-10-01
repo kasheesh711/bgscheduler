@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadEnvConfig } from "@next/env";
 import { Client } from "pg";
+import { getDb } from "@/lib/db";
+import { loadAtomLessonEvidence } from "@/lib/feedback-autowriter/atom/data";
 import { createWiseFeedbackOps } from "@/lib/feedback-autowriter/run";
 import { runWritingPipeline, type PipelineResult } from "@/lib/feedback-autowriter/pipeline";
 import { ISEB_FORMAT_GUIDE, isIsebClass } from "@/lib/feedback-autowriter/format";
@@ -19,7 +21,8 @@ loadEnvConfig(option("env-dir") ?? process.cwd());
 const out = path.resolve(option("out") ?? ".feedback-autowriter/iseb-v2-comparisons");
 const oldDir = option("mimi-v1-dir");
 const transcriptDir = option("transcript-dir");
-const quota: Record<string, number> = { Mimi: 10, Kevin: 3, Gift: 3, Ek: 3, Peat: 1 };
+const withAtom = process.argv.includes("--with-atom");
+const quota: Record<string, number> = { Mimi: 10, Kevin: 4, Gift: 3, Ek: 2, Peat: 1 };
 const esc = (v: string) => v.replace(/[&<>"']/gu, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 const save = (file: string, data: unknown) => fs.writeFileSync(path.join(out, file), JSON.stringify(data, null, 2) + "\n", { mode: 0o600 });
 interface Source { id: string; tutor: string; at: string; fields: FeedbackFieldAnswers }
@@ -31,8 +34,8 @@ function render() {
   const passed = records.filter(row => row.result.kind === "draft");
   save("summary.json", { generatedAt: new Date().toISOString(), expected: quota, passed: Object.fromEntries(Object.keys(quota).map(tutor => [tutor, passed.filter(r => r.tutor === tutor).length])), format: { id: "iseb", version: 1 }, mimi: { id: "mimi", version: 2 }, posted: 0, comparisonHash: evidenceHash(records) });
   const fields = (v: FeedbackFieldAnswers) => Object.entries(v).map(([name,text]) => `<h4>${esc(name)}</h4><p>${esc(text || "—")}</p>`).join("");
-  const body = records.map(row => `<article><h2>${esc(row.tutor)} · ${esc(row.subject)}</h2><p class="meta">${esc(row.result.kind === "draft" ? row.result.atomEvidence?.lessonStart ?? "Date unavailable" : "Held attempt")} · ${esc(row.evidence)} · ${esc(row.id)} · ${esc(row.result.kind)} · Atom statistics omitted: no approved student link</p><div class="grid"><section><h3>Previous feedback / preserved Mimi v1 draft</h3>${fields(row.before)}</section><section><h3>ISEB v1 format${row.tutor === "Mimi" ? " · Mimi voice v2" : ""}</h3>${row.result.kind === "draft" ? fields(row.result.fields) : `<pre>${esc(JSON.stringify(row.result,null,2))}</pre>`}</section></div></article>`).join("");
-  fs.writeFileSync(path.join(out,"comparison.html"), `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ISEB feedback comparisons</title><style>body{font:16px/1.65 system-ui;background:#f5f4ee;color:#233743;max-width:1250px;margin:auto;padding:28px}h1,h2,h3,h4{line-height:1.25}h4{text-transform:capitalize;margin-bottom:8px}p{white-space:pre-wrap;margin-top:0}.meta{font-size:13px;color:#536875}article{background:white;padding:24px;margin:24px 0;border:1px solid #dce3e4;border-radius:14px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:32px}section{min-width:0}pre{white-space:pre-wrap;overflow-wrap:anywhere}@media(max-width:750px){.grid{grid-template-columns:1fr}body{padding:12px}}@media print{article{break-inside:avoid}}</style><h1>ISEB feedback: unposted comparisons</h1><p>${passed.length}/20 accepted drafts. Both factual judges must pass. V1 artifacts are preserved. These comparisons test the lesson-only path; Atom statistics await approved identity links and cloud verification.</p>${body}</html>`, { mode: 0o600 });
+  const body = records.map(row => `<article><h2>${esc(row.tutor)} · ${esc(row.subject)}</h2><p class="meta">${esc(row.result.kind === "draft" ? row.result.atomEvidence?.lessonStart ?? "Date unavailable" : "Held attempt")} · ${esc(row.evidence)} · ${esc(row.id)} · ${esc(row.result.kind)} · ${esc(row.result.kind === "draft" ? `Atom: ${row.result.atomEvidence?.status ?? "unavailable"}; ${row.result.atomEvidence?.omissions.map(item => item.reason).join(", ") ?? ""}` : "Held for review")}</p><div class="grid"><section><h3>Previous feedback / preserved Mimi v1 draft</h3>${fields(row.before)}</section><section><h3>ISEB v1 format${row.tutor === "Mimi" ? " · Mimi voice v2" : ""}</h3>${row.result.kind === "draft" ? fields(row.result.fields) : `<pre>${esc(JSON.stringify(row.result,null,2))}</pre>`}</section></div></article>`).join("");
+  fs.writeFileSync(path.join(out,"comparison.html"), `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ISEB feedback comparisons</title><style>body{font:16px/1.65 system-ui;background:#f5f4ee;color:#233743;max-width:1250px;margin:auto;padding:28px}h1,h2,h3,h4{line-height:1.25}h4{text-transform:capitalize;margin-bottom:8px}p{white-space:pre-wrap;margin-top:0}.meta{font-size:13px;color:#536875}article{background:white;padding:24px;margin:24px 0;border:1px solid #dce3e4;border-radius:14px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:32px}section{min-width:0}pre{white-space:pre-wrap;overflow-wrap:anywhere}@media(max-width:750px){.grid{grid-template-columns:1fr}body{padding:12px}}@media print{article{break-inside:avoid}}</style><h1>ISEB feedback: unposted comparisons</h1><p>${passed.length}/20 accepted drafts. Both factual judges must pass. V1 artifacts are preserved. Atom statistics require approved identity links and matched activity evidence. Content activation remains subject to owner approval and cloud verification.</p>${body}</html>`, { mode: 0o600 });
 }
 function archived(id: string, tutor: string, teacherName: string): string | null {
   if (!transcriptDir) return null;
@@ -50,6 +53,8 @@ function archived(id: string, tutor: string, teacherName: string): string | null
 }
 async function main() {
   if (process.argv.includes("--render-only")) { render(); return; }
+  if (withAtom && (!option("out") || out === path.resolve(".feedback-autowriter/iseb-v2-comparisons"))) throw new Error("Use --out with a separate directory for enriched comparisons; preserve the lesson-only bundle.");
+  if (withAtom && fs.existsSync(out) && fs.readdirSync(out).some(file => /^[a-f0-9]{24}\.json$/u.test(file))) throw new Error("Use a fresh --out directory so enriched comparisons recheck current student links and snapshots.");
   if (!process.env.DATABASE_URL || !process.env.OPENROUTER_API_KEY) throw new Error("Source database and model credentials required");
   fs.mkdirSync(out,{recursive:true,mode:0o700});
   const db=new Client({connectionString:process.env.DATABASE_URL}); await db.connect();
@@ -95,7 +100,8 @@ async function main() {
     const text=transcript??extractAiSummary(detail)?.text;
     if(!text||text.length<200) { console.log(`Skipped ${tutor.canonicalKey} ${source.id.slice(-6)}: insufficient lesson evidence`); continue; }
     const evidence=transcript?"transcript" as const:"summary" as const;
-    const atom=buildAtomLessonEvidence({lesson:{sessionId:detail._id,studentId:student.wiseUserId??"",teacherId:detailTeacherId(detail)!,subject:atomSubject(detail.title??""),start:detail.scheduledStartTime,end:detail.scheduledEndTime},link:null,snapshot:null,now:new Date(),otherLessons:null,lessonRecord:text,unavailableReason:"student_unmapped"});
+    const atom=withAtom ? await loadAtomLessonEvidence(getDb(),{detail,studentId:student.wiseUserId,lessonRecord:text,preview:true})
+      : buildAtomLessonEvidence({lesson:{sessionId:detail._id,studentId:student.wiseUserId??"",teacherId:detailTeacherId(detail)!,subject:atomSubject(detail.title??""),start:detail.scheduledStartTime,end:detail.scheduledEndTime},link:null,snapshot:null,now:new Date(),otherLessons:null,lessonRecord:text,unavailableReason:"student_unmapped"});
     const input={wiseSessionId:source.id,canonicalTutorKey:tutor.canonicalKey,atomEvidence:atom,studentFullName:student.name,studentAliases:student.joinedAsGuest?[student.joinedAsGuest]:[],studentDisplayName:chooseStudentDisplayName(student.name),classDetails,scheduledMinutes:window.minutes,summary:{text,meetingUUIDs:[]},evidence,speakerLabels:"inferred" as const};
     save(`${source.id}.source.json`,{...input,sourceHash:evidenceHash(input)});
     const calls:unknown[]=[];const started=Date.now();

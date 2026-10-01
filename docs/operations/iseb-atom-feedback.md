@@ -72,6 +72,8 @@ npx tsx --tsconfig scripts/tsconfig.json scripts/save-iseb-comparison-bundle.ts 
 
 Saving does not approve it. Kevin approves the displayed bundle in Review. A different bundle clears that approval. For Atom, approve student links, let the cloud collector run through pending lessons with the local computer off, then record the successful scheduled run ID and the explicit unattended confirmation in Review. Check every statistic in the enriched comparisons against its Atom source before enabling enrichment.
 
+For unposted enriched comparisons, run the same replay with `--with-atom --out=.feedback-autowriter/iseb-atom-comparisons`. It reads only approved links and validated snapshots, while bypassing the content activation switch. Collect the relevant lesson dates first; missing or stale snapshots still omit statistics. The separate output directory preserves the lesson-only bundle.
+
 At activation, enable the server style-review switch and independently enable the approved content switch(es). Read back the effective switches in Review. Only then pause the old **Review Mimi's first ten live posts** Codex heartbeat. Keep the v1 files and receipt. The new server job owns the first-ten monitoring; unresolved post outcomes and missing required source evidence remain actionable incidents through the existing email/LINE channels.
 
 ## Failure and rollback

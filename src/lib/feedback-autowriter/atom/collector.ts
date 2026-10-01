@@ -73,7 +73,8 @@ export async function runAtomCollector(input: {
     const dates = [...new Set(pending.flatMap(row => row.scheduledEndAt ? [
       bangkokDate(row.scheduledEndAt.toISOString()), bangkokDate(new Date(row.scheduledEndAt.getTime() - 86400_000).toISOString()),
     ] : []))];
-    if (input.probe) dates.push(input.probe.date);
+    if (input.probe) dates.push(input.probe.date,
+      bangkokDate(new Date(Date.parse(input.probe.date + "T00:00:00+07:00") - 86400_000).toISOString()));
     if (dates.length > 7) throw new AtomCollectionError("collection_failed");
     const wise = await input.fetchDays([...new Set(dates)]);
     const lessons = lessonsFromWise(wise);

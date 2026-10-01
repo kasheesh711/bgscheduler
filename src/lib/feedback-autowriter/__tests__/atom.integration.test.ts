@@ -86,7 +86,9 @@ describe("unattended collector and rollout", () => {
     const { runAtomCollector } = await import("../atom/collector");
     const { AtomCollectionError } = await import("../atom/normalize");
     const { confirmUnattendedAtomProof } = await import("../iseb-rollout");
-    const result = await runAtomCollector({ db, deadlineMs: Date.now()+60000, triggerSource: "cron", fetchDays: async () => [], openClient: async () => { throw new AtomCollectionError("authentication_failed"); } });
+    const fetchDays = vi.fn(async () => []);
+    const result = await runAtomCollector({ db, deadlineMs: Date.now()+60000, triggerSource: "admin", probe: { studentId: "_123", date: "2026-09-20" }, fetchDays, openClient: async () => { throw new AtomCollectionError("authentication_failed"); } });
+    expect(fetchDays).toHaveBeenCalledWith(expect.arrayContaining(["2026-09-19", "2026-09-20"]));
     expect(result.ok).toBe(false);
     const [run] = await db.select().from(s.feedbackAtomSyncRuns); expect(run.errorCode).toBe("authentication_failed");
     const [probe] = await db.insert(s.feedbackAtomSyncRuns).values({triggerSource:"admin",status:"succeeded",deploymentId:"cloud",counts:{snapshots:1,activities:1}}).returning();
