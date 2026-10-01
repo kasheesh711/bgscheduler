@@ -19,6 +19,9 @@ describe('durable workforce observations', () => {
         await captureWorkforceObservation(db(), capture('b', '2026-10-01T03:30:00Z'));
         expect(await h.db.select().from(s.workforcePersonVersions)).toHaveLength(1);
         expect(await h.db.select().from(s.workforcePersonObservations)).toHaveLength(2);
+        const evidence = await loadWorkforceEvidence(db(), query, new Date('2026-10-01T03:45:00Z'));
+        expect(evidence.people[0].firstObservedAt).toBe('2026-10-01T03:00:00.000Z');
+        expect(evidence.people[0].lastObservedAt).toBe('2026-10-01T03:30:00.000Z');
         await captureWorkforceObservation(db(), capture('c', '2026-10-01T04:00:00Z', 720));
         await captureWorkforceObservation(db(), capture('d', '2026-10-01T04:30:00Z'));
         expect(await h.db.select().from(s.workforcePersonVersions)).toHaveLength(3);

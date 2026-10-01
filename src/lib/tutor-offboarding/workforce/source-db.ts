@@ -50,6 +50,12 @@ export async function loadWorkforceEvidenceInTransaction(db: Database, _query: W
         const payload = version?.payload as unknown as PersonPayload | undefined;
         return { ...(payload?.observation ?? { role: null, accounts: [], qualifications: [], offeredWindows: [], leaves: [], availabilityCompleteness: 'unknown', qualificationCompleteness: 'unknown', completeness: 'unknown', reasonCodes: ['no_complete_person_observation'] }), ...row.quality, id: row.id, canonicalKey: row.canonicalKey, observedAt: row.observedAt.toISOString() } as WorkforceDatedObservation;
     });
+    for (const observation of dated) {
+        const person = people.get(observation.canonicalKey);
+        if (!person) continue;
+        if (!person.firstObservedAt || observation.observedAt < person.firstObservedAt) person.firstObservedAt = observation.observedAt;
+        if (!person.lastObservedAt || observation.observedAt > person.lastObservedAt) person.lastObservedAt = observation.observedAt;
+    }
     for (const account of accounts) {
         const prior = people.get(account.canonicalKey);
         const mapped = { wiseTeacherId: account.wiseTeacherId, wiseUserId: account.wiseUserId ?? '', joinedAt: account.wiseJoinedOn?.toISOString() ?? null, relation: account.wiseRelation, modality: account.isOnlineVariant ? 'online' as const : null };

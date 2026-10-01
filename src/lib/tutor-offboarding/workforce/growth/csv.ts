@@ -24,7 +24,7 @@ function cell(value: unknown): string {
 /** A lossless export of the selected chart rows, including their evidence and assumptions. */
 export function serializeGrowthCsv(report: GrowthReport, section: GrowthExportSection): string {
   const commonHeaders = ["report_revision", "generated_at", "filters", "scenario", "common_window", "forecast_base_month", "source_status", "source_issues", "source_coverage", "source_exceptions", "availability_observed_at", "lifecycle_evidence", "forecast_assumptions"];
-  const commonValues = [report.reportRevision, report.generatedAt, report.query.filters, report.query.assumptions,
+  const commonValues: unknown[] = [report.reportRevision, report.generatedAt, report.query.filters, report.query.assumptions,
     report.flows.commonWindow.join("|"), report.forecast.baseMonth, report.quality.completeness,
     report.quality.issueCodes.join("|"), report.quality.sourceCoverage, report.quality.exceptions,
     [...new Set(report.forecast.allocations.flatMap(row => row.observedAt))].sort(), null, report.forecast.assumptions];
