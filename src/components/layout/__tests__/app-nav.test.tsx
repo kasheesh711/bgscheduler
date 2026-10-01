@@ -15,6 +15,20 @@ import { usePathname } from "next/navigation";
 import { AppNav } from "@/components/layout/app-nav";
 
 describe("AppNav", () => {
+  it("shows Class Capture to teachers only after the fresh access decision", () => {
+    expect(renderToStaticMarkup(<AppNav allowedPages={["/progress-tests"]} />)).not.toContain("Class Capture");
+    const html = renderToStaticMarkup(<AppNav allowedPages={["/progress-tests"]} classCaptureAccess />);
+    expect(html).toContain("Class Capture");
+    expect(html).toContain('href="/class-capture"');
+    expect(html).not.toContain(">Home<");
+  });
+
+  it("hides Class Capture when fresh access fails even for stale page claims or full admins", () => {
+    expect(renderToStaticMarkup(<AppNav allowedPages={["/class-capture"]} />)).not.toContain("Class Capture");
+    expect(renderToStaticMarkup(<AppNav allowedPages={null} />)).not.toContain("Class Capture");
+    expect(renderToStaticMarkup(<AppNav allowedPages={null} classCaptureAccess />)).toContain("Class Capture");
+  });
+
   it("shows Manage Access only for a freshly authorized owner", () => {
     expect(renderToStaticMarkup(<AppNav allowedPages={null} />)).not.toContain("Manage Access");
     expect(renderToStaticMarkup(<AppNav allowedPages={null} ownerAccess />)).toContain("Manage Access");

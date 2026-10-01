@@ -4,8 +4,8 @@ milestone: v1.2
 milestone_name: Autonomous LINE Scheduling
 status: executing
 stopped_at: "Completed 12-05: C2 hardening — Phase 12 (IDENT-07) COMPLETE"
-last_updated: "2026-09-07T12:45:00.000Z"
-last_activity: 2026-09-07
+last_updated: "2026-10-01T13:36:51.833957+00:00"
+last_activity: 2026-10-01
 progress:
   total_phases: 11
   completed_phases: 10
@@ -30,7 +30,8 @@ Phase: 12 (LINE Backlog Identity Recovery (IDENT-07)) — EXECUTING
 Plan: 5 of 5 (phase complete)
 Next: `/gsd-plan-phase 11` — create executable plans
 Status: Ready to execute
-Last activity: 2026-09-29 - Completed quick task 260929-nwm: Data Health manual Run dispatch parity (every offered Run button dispatches; student promotions excluded fail-closed; Unearned Revenue run needs its access_manager grant; on fix/data-health-run-dispatch — not pushed, not deployed)
+Last activity: 2026-10-01 - Completed quick task 261001-r5j: mobile onsite class capture, private evidence, reviewed feedback drafts; default disabled, production activation pending.
+Previous: 2026-09-29 - Completed quick task 260929-nwm: Data Health manual Run dispatch parity (every offered Run button dispatches; student promotions excluded fail-closed; Unearned Revenue run needs its access_manager grant; on fix/data-health-run-dispatch — not pushed, not deployed)
 Previous: 2026-09-28 - Completed quick task 260928-j77: post-class payout follow-ups (deadline_crossed lane + 12 h watchdog, versioned auto-approve key, contained retirement skips with held corrections, non-blocking evidence-exclusion signal, exemption hardening)
 Previous: 2026-08-11 - Completed quick task 260811-evt: Reconciler carried-row fixes (holdsRoom widening: needs_review carried rows now block occupancy, seed sticky continuity, and are displaceable in the unlock-retry loop; contextSessions option: online center-room 60-min chains now computed over pending + carried sessions with full-run parity; both differentially tested; on feat/classroom-continuity with 260811-div, pending deploy)
 Previous: 2026-08-11 - Completed quick task 260811-div: Classroom assignment continuity (Ras priority lock on Never Ever (TV) over Mandy/Calvin; same-day sticky-room cascade step gated by the capacity-demotion score; reconciler seeds continuity from carried rows via fixedTutorAssignments; Room switches tile + per-tutor badges in the workspace; 5 commits on feat/classroom-continuity in the bgscheduler-classroom worktree — not pushed, not deployed; review follow-ups chipped: needs_review room double-booking + online center-room chain across carried rows)
@@ -158,6 +159,7 @@ None blocking roadmap execution.
 | 260929-gvd | Feedback autowriter: GLM (ZDR) online-class feedback from Wise AI summaries for 5 roster tutors, webhook + backstop cron, single-POST state machine, monitoring dashboard | 2026-09-29 | de9be21 | [260929-gvd-feedback-autowriter-pilot-for-kevin-onli](./quick/260929-gvd-feedback-autowriter-pilot-for-kevin-onli/) |
 | 260929-snx | Feedback autowriter second pass: Soniox transcript of the Wise recording for held, summary-less and Thai-summary classes (GLM ZDR only, Zoom-aligned speakers, coverage and job-lifecycle guards) | 2026-09-29 | 69358cd | [260929-snx-soniox-transcript-second-pass](./quick/260929-snx-soniox-transcript-second-pass/) |
 | 260929-nwm | Data Health manual Run dispatch parity (DEF-3): nine missing run-job branches mirror their crons; student promotions excluded via manualRunDisabledReason (409 before confirmation and audit); Unearned Revenue run gated on its access_manager grant; satisfies-typed parity test; branch fix/data-health-run-dispatch, not pushed | 2026-09-29 | 490301d | [260929-nwm-data-health-manual-run-dispatch-parity-f](./quick/260929-nwm-data-health-manual-run-dispatch-parity-f/) |
+| 261001-r5j | Mobile onsite class capture and tutor-reviewed feedback drafts; private evidence, recovery, consent and retention | 2026-10-01 | dc1bfbb9 | [261001-r5j-mobile-onsite-class-evidence-and-reviewe](./quick/261001-r5j-mobile-onsite-class-evidence-and-reviewe/) |
 | Phase 10-vpol-01-view-transitions P01 | 216 | 2 tasks | 2 files |
 | Phase 10-vpol-01-view-transitions P02 | 4min | 2 tasks | 2 files |
 | Phase 11 P03 | 31515093 | 2 tasks | 3 files |

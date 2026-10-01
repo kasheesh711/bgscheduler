@@ -45,8 +45,8 @@ once. Wise `ADMIN` accounts are excluded from the tutor denominator. Full-time i
 non-ADMIN person with an ended class remains in the denominator and appears in the separate full-time breakout.
 Unresolved identities and incomplete feeds remain visible as limitations.
 
-`turnover.actualRate` is always `null`: these sources have neither an effective separation date for the marked Sheet
-rows nor a reliable 1 March opening employee headcount. `denominator` is the number of distinct non-ADMIN people
+`turnover.actualRate` remains `null` in this legacy planning response. Monthly turnover now lives in the workforce
+report below, using the owner's confirmed list, last class dates and opening Wise roster. Here, `denominator` is the number of distinct non-ADMIN people
 with at least one `ENDED` class since 1 March. `markedShare` is matched marked people in that observed teaching cohort
 divided by the cohort; `markedAndInferredShare` adds unmarked very-likely people to the numerator over the same
 denominator. These are observed-teaching-cohort scenario shares, not HR turnover rates or confirmed-exit rates. Their

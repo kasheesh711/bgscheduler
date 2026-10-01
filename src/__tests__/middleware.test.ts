@@ -25,6 +25,23 @@ function makeReq(pathname: string, isAuth = false, search = "", allowedPages?: s
 }
 
 describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
+  it.each(["/class-capture", "/class-capture/draft", "/api/class-capture/sessions", "/api/class-capture/captures/draft"])("passes authenticated capture requests to fresh feature authorization: %s", async pathname => {
+    const response = await middleware(makeReq(pathname, true, "", ["/progress-tests"]) as never, {} as never) as Response;
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+  });
+
+  it.each(["/api/class-capture", "/api/class-capture/sessions"])("returns JSON 401 for signed-out capture APIs: %s", async pathname => {
+    const response = await middleware(makeReq(pathname) as never, {} as never) as Response;
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "Unauthorized" });
+  });
+
+  it("does not coarse-pass a capture-like sibling namespace", async () => {
+    const response = await middleware(makeReq("/api/class-capture-admin", true, "", ["/progress-tests"]) as never, {} as never) as Response;
+    expect(response.status).toBe(403);
+  });
+
   it.each(["/api/admin/sync-wise", "/api/class-assignments/run", "/api/class-assignments/runs/run-1/publish",
     "/api/data-health/jobs/wise_snapshot/run", "/api/data-health/jobs/classroom_morning/run"])("returns JSON 401 for a classroom operation without a cookie: %s", async pathname => {
     const response = await middleware(makeReq(pathname) as never, {} as never) as Response;

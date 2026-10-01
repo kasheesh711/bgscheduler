@@ -1,4 +1,5 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNotNull } from "drizzle-orm";
+import { z } from "zod";
 import type { Database } from "@/lib/db";
 import { feedbackAtomSyncRuns, feedbackIsebRollouts } from "@/lib/db/schema";
 import { activeFormatGuide, validateIsebFormat } from "./format";
@@ -10,16 +11,32 @@ import { validateAtomStatisticClaims } from "./atom/statistics";
 import type { AtomLessonEvidence } from "./atom/types";
 
 export const ISEB_ROLLOUT_ID = "iseb-format-1-mimi-2";
+const CloudProofReview = z.object({
+  method: z.literal("scheduled_cloud_run"),
+  runId: z.string().uuid(),
+  comparisonHash: z.string().regex(/^[a-f0-9]{64}$/u),
+  approvedBy: z.string().trim().min(1),
+  approvedAt: z.string().datetime(),
+  note: z.string().trim().min(1).max(1000),
+  computerOffConfirmed: z.literal(false),
+}).strict();
 export function hasIsebApproval(row: typeof feedbackIsebRollouts.$inferSelect | null): boolean {
   return Boolean(row?.approvedAt && row.approvedBy && row.comparisonHash);
 }
 export function hasAtomProof(row: typeof feedbackIsebRollouts.$inferSelect | null): boolean {
-  return hasIsebApproval(row) && Boolean(row?.cloudProofRunId && row.unattendedConfirmedBy);
+  if (!hasIsebApproval(row) || !row?.cloudProofRunId) return false;
+  if (row.cloudProofReview != null) {
+    const proof = CloudProofReview.safeParse(row.cloudProofReview);
+    return proof.success && proof.data.runId === row.cloudProofRunId && proof.data.comparisonHash === row.comparisonHash;
+  }
+  return Boolean(row.unattendedConfirmedBy?.trim());
 }
 export function isSuccessfulCloudCollection(run: typeof feedbackAtomSyncRuns.$inferSelect | null): boolean {
   const snapshots = run?.counts.snapshots;
   const activities = run?.counts.activities;
-  return Boolean(run && run.status === "succeeded" && run.triggerSource === "cron" && run.deploymentId?.trim() &&
+  return Boolean(run && run.status === "succeeded" && !run.errorCode && run.triggerSource === "cron" && run.deploymentId?.trim() &&
+    run.finishedAt && Number.isFinite(run.startedAt.getTime()) && Number.isFinite(run.finishedAt.getTime()) &&
+    run.finishedAt >= run.startedAt &&
     typeof snapshots === "number" && Number.isSafeInteger(snapshots) && snapshots > 0 &&
     typeof activities === "number" && Number.isSafeInteger(activities) && activities > 0);
 }
@@ -70,7 +87,25 @@ export async function confirmUnattendedAtomProof(db: Database, runId: string, ac
   if (!run || !isSuccessfulCloudCollection(run)) {
     throw new AutowriterReviewError("Choose a successful scheduled cloud run that retrieved completed activities while Codex and the local computer were off.", 409);
   }
-  const changed = await db.update(feedbackIsebRollouts).set({ cloudProofRunId: run.id, unattendedConfirmedBy: actor })
+  const changed = await db.update(feedbackIsebRollouts).set({ cloudProofRunId: run.id, unattendedConfirmedBy: actor, cloudProofReview: null })
     .where(eq(feedbackIsebRollouts.id, ISEB_ROLLOUT_ID)).returning();
   if (!changed.length) throw new AutowriterReviewError("Save the comparison bundle first.", 409);
+}
+
+/** Keeps the scheduled-run decision distinct from an actual computer-off confirmation. */
+export async function approveScheduledAtomProof(db: Database, runId: string, comparisonHash: string, actor: string, note: string) {
+  const rollout = await readIsebRollout(db);
+  if (!hasIsebApproval(rollout) || rollout?.comparisonHash !== comparisonHash) {
+    throw new AutowriterReviewError("Approve the current comparison bundle before accepting a cloud run.", 409);
+  }
+  const [run] = await db.select().from(feedbackAtomSyncRuns).where(eq(feedbackAtomSyncRuns.id, runId)).limit(1);
+  if (!run || !isSuccessfulCloudCollection(run)) {
+    throw new AutowriterReviewError("Choose a successful scheduled cloud run that finished retrieving completed Atom activities.", 409);
+  }
+  const review = CloudProofReview.parse({ method: "scheduled_cloud_run", runId, comparisonHash,
+    approvedBy: actor, approvedAt: new Date().toISOString(), note, computerOffConfirmed: false });
+  const changed = await db.update(feedbackIsebRollouts).set({ cloudProofRunId: run.id, cloudProofReview: review, unattendedConfirmedBy: null })
+    .where(and(eq(feedbackIsebRollouts.id, ISEB_ROLLOUT_ID), eq(feedbackIsebRollouts.comparisonHash, comparisonHash),
+      isNotNull(feedbackIsebRollouts.approvedAt), isNotNull(feedbackIsebRollouts.approvedBy))).returning();
+  if (!changed.length) throw new AutowriterReviewError("The comparison approval changed. Reload before accepting a cloud run.", 409);
 }
