@@ -98,3 +98,39 @@ describe("openDecisionsByKey", () => {
     expect([...open.entries()].map(([key, value]) => [key, value.id])).toEqual([["Gus", "new"]]);
   });
 });
+
+
+describe("source consistency", () => {
+  it("treats invalid and future feed dates as provisional (OFF-07)", () => {
+    expect(evaluateFreshness({ ...FRESH, progressTests: "invalid" }, NOW).ok).toBe(false);
+    expect(evaluateFreshness({ ...FRESH, progressTests: "2026-10-01T06:00:00.000Z" }, NOW).ok).toBe(false);
+  });
+
+  it("blocks removal if cached people and fresh feed timestamps name different snapshots", () => {
+    const data = buildOffboardingDashboard({ signals: signals([person("Aria")]),
+      feeds: { ...FRESH, tutorSnapshot: "2026-10-01T04:50:00.000Z" }, decisions: [], grants: null, viewer: VIEWER, now: NOW });
+    expect(data.freshness.ok).toBe(false);
+    expect(data.inbox[0].score.removable).toBe(false);
+  });
+
+  it("adds termination evidence to every group and shows confirmed people with an active score", () => {
+    const terminationSnapshot = { checkedAt: NOW.toISOString(), lastError: null,
+      rows: ["Aria", "Fern", "Dara", "Emil"].map((name, index) => ({ sourceRow: index + 2,
+        fullName: `${name} Example`, wiseName: `${name} (${name})`, nickname: name,
+        emails: [`${name.toLowerCase()}@example.com`], terminated: true })) };
+    const data = buildOffboardingDashboard({ signals: signals([person("Aria"),
+      person("Fern", { lastTaughtAt: "2026-09-28T03:00:00.000Z" }),
+      person("Dara", { upcomingSessions: 1 }),
+      person("Emil", { accounts: [account("Emil", { relation: "ADMIN" })] })]),
+      feeds: FRESH, decisions: [], grants: null, viewer: VIEWER, now: NOW, terminationSnapshot });
+    expect(data.terminationSource).toMatchObject({ status: "ready", matchedPeople: 4 });
+    const fern = data.inbox.find((row) => row.signals.canonicalKey === "Fern")!;
+    expect(fern.termination).toMatchObject({ sourceRow: 3, match: "email" });
+    expect(fern.score).toMatchObject({ band: "active", likelihood: 3, removable: false, removableBlockedBy: "Looks active" });
+    expect(data.activeCount).toBe(0);
+    expect(data.excluded[0].termination).toBeDefined();
+    expect(data.staff[0].termination).toBeDefined();
+    expect(data.excluded[0].score.exclusion?.code).toBe("teaching");
+    expect(data.staff[0].score.exclusion?.code).toBe("wise_admin");
+  });
+});

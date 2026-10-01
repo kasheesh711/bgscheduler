@@ -114,6 +114,16 @@ describe("loadOffboardingSignals", () => {
     expect(await loadOffboardingSignals(db, NOW)).toBeNull();
   });
 
+  it("keeps a blocking class in progress as teaching evidence (OFF-04)", async () => {
+    const { snapshot } = await seed();
+    const [group] = await handle.db.select().from(schema.tutorIdentityGroups);
+    await handle.db.insert(schema.futureSessionBlocks).values(
+      futureBlock(snapshot.id, group.id, "t-aria-off", "ongoing", "2026-10-01T04:30:00Z", true),
+    );
+    const result = await loadOffboardingSignals(db, NOW);
+    expect(result!.people.find((person) => person.canonicalKey === "Aria")!.upcomingSessions).toBe(1);
+  });
+
   it("assembles each person on the active snapshot from every source", async () => {
     const { snapshot } = await seed();
     const signals = await loadOffboardingSignals(db, NOW);

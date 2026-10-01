@@ -87,10 +87,11 @@ export async function loadOffboardingSignals(db: Database = getDb(), now: Date =
   const leaves = schema.datedLeaves;
   const requests = schema.leaveRequests;
   const events = schema.wiseActivityEvents;
+  // OFF-04: an ongoing blocking class still proves the person is teaching.
   const [upcoming, windowCounts, availabilityIssues, wiseLeaves, leaveRequests, actions, fullTime, taught] = await Promise.all([
     db.select({ groupId: blocks.groupId, sessions: count(), next: min(blocks.startTime) })
       .from(blocks)
-      .where(and(eq(blocks.snapshotId, snapshot.id), eq(blocks.isBlocking, true), gt(blocks.startTime, now)))
+      .where(and(eq(blocks.snapshotId, snapshot.id), eq(blocks.isBlocking, true), gt(blocks.endTime, now)))
       .groupBy(blocks.groupId),
     db.select({ wiseTeacherId: windows.wiseTeacherId, windows: count() })
       .from(windows).where(eq(windows.snapshotId, snapshot.id)).groupBy(windows.wiseTeacherId),

@@ -1,6 +1,7 @@
 import { bangkokDateKey } from "@/lib/room-capacity/dates";
 import { buildCalibrationCurve } from "./calibration";
 import { scorePerson } from "./score";
+import { buildTerminationMatches, type TerminationSnapshot } from "./termination-source";
 import type {
   DecisionRecord,
   FeedKey,
@@ -25,7 +26,8 @@ export const FEEDS: ReadonlyArray<{ key: FeedKey; label: string; maxAgeHours: nu
 export function evaluateFreshness(timestamps: FeedTimestamps, now: Date): FreshnessReport {
   const feeds = FEEDS.map(({ key, label, maxAgeHours }) => {
     const lastSuccessAt = timestamps[key];
-    const fresh = lastSuccessAt !== null && now.getTime() - Date.parse(lastSuccessAt) <= maxAgeHours * 3_600_000;
+    const age = lastSuccessAt === null ? NaN : now.getTime() - Date.parse(lastSuccessAt);
+    const fresh = Number.isFinite(age) && age >= 0 && age <= maxAgeHours * 3_600_000;
     return { key, label, lastSuccessAt, maxAgeHours, fresh };
   });
   return { ok: feeds.every((feed) => feed.fresh), feeds };
@@ -52,8 +54,18 @@ export function buildOffboardingDashboard(input: {
   grants: GrantRecord[] | null;
   viewer: TutorOffboardingViewer;
   now: Date;
+  terminationSnapshot?: TerminationSnapshot;
 }): OffboardingDashboardData {
   const freshness = evaluateFreshness(input.feeds, input.now);
+  // OFF-07: fresh feed metadata cannot bless people loaded from a different snapshot.
+  if (input.signals.snapshotCreatedAt !== input.feeds.tutorSnapshot) {
+    freshness.ok = false;
+    const snapshotFeed = freshness.feeds.find((feed) => feed.key === "tutorSnapshot")!;
+    snapshotFeed.fresh = false;
+    snapshotFeed.lastSuccessAt = input.signals.snapshotCreatedAt;
+  }
+  const termination = input.terminationSnapshot
+    ? buildTerminationMatches(input.signals.people, input.terminationSnapshot, input.now) : null;
   const curve = buildCalibrationCurve(new Map(Object.entries(input.signals.taughtDates)), bangkokDateKey(input.now));
   const open = openDecisionsByKey(input.decisions, input.now);
   const snoozedKeys = new Set(open.keys());
@@ -61,8 +73,9 @@ export function buildOffboardingDashboard(input: {
     signals,
     score: scorePerson(signals, { now: input.now, curve, snoozedKeys, freshnessOk: freshness.ok }),
     openDecision: open.get(signals.canonicalKey) ?? null,
+    ...(termination?.byKey[signals.canonicalKey] ? { termination: termination.byKey[signals.canonicalKey] } : {}),
   }));
-  const inbox = rows.filter((row) => !row.score.exclusion && row.score.band !== "active")
+  const inbox = rows.filter((row) => !row.score.exclusion && (row.score.band !== "active" || row.termination !== undefined))
     .sort((a, b) => b.score.likelihood - a.score.likelihood || byName(a, b));
   const veryLikely = inbox.filter((row) => row.score.band === "very_likely_gone");
   const names = new Map(input.signals.people.map((person) => [person.canonicalKey, person.displayName]));
@@ -73,12 +86,13 @@ export function buildOffboardingDashboard(input: {
     freshness,
     curve,
     inbox,
-    activeCount: rows.filter((row) => !row.score.exclusion && row.score.band === "active").length,
+    activeCount: rows.filter((row) => !row.score.exclusion && row.score.band === "active" && row.termination === undefined).length,
     excluded: rows.filter((row) => row.score.exclusion && row.score.exclusion.code !== "wise_admin").sort(byName),
     staff: rows.filter((row) => row.score.exclusion?.code === "wise_admin").sort(byName),
     decisions: input.decisions.map((decision) => ({ ...decision, displayName: names.get(decision.canonicalKey) ?? decision.canonicalKey })),
     grants: input.grants,
     viewer: input.viewer,
+    ...(termination ? { terminationSource: termination.source } : {}),
     summary: {
       veryLikely: veryLikely.length,
       likely: inbox.filter((row) => row.score.band === "likely_gone").length,

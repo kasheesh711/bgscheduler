@@ -2,11 +2,14 @@ import "server-only";
 
 import { cacheLife, cacheTag } from "next/cache";
 import { getDb } from "@/lib/db";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import { buildOffboardingDashboard } from "./data";
 import { listDecisions } from "./decisions";
 import { isMissingSchemaError } from "./errors";
 import { listGrants } from "./grants";
 import { loadFeedTimestamps, loadOffboardingSignals } from "./signals";
+import { loadTerminationSnapshot } from "./termination-sync";
+import type { TerminationSnapshot } from "./termination-source";
 import type { OffboardingDashboard, OffboardingPersonRow, OffboardingSignals, TutorOffboardingViewer } from "./types";
 
 /** Cached per snapshot: the sync's revalidateTag("snapshot") clears it. Freshness, decisions and grants are read uncached. */
@@ -20,14 +23,23 @@ export async function getCachedOffboardingSignals(): Promise<OffboardingSignals 
 export async function loadTutorOffboardingDashboard(viewer: TutorOffboardingViewer): Promise<OffboardingDashboard> {
   const db = getDb();
   try {
-    const [signals, feeds, decisions, grants] = await Promise.all([
+    const [cachedSignals, feeds, decisions, grants, terminationSnapshot] = await Promise.all([
       getCachedOffboardingSignals(),
       loadFeedTimestamps(db),
       listDecisions(db),
       viewer.isOwner ? listGrants(db) : Promise.resolve(null),
+      loadTerminationSnapshot(db).catch((error: unknown): TerminationSnapshot => {
+        if (isMissingSchemaError(error)) throw error;
+        const errorName = error instanceof Error ? error.name : "UnknownError";
+        console.error("[tutor-offboarding:termination-source]", { errorName, sqlState: sqlStateOf(error) });
+        return { rows: [], checkedAt: null, lastError: errorName };
+      }),
     ]);
+    // OFF-07: re-read after a snapshot rotation while cached data is being refreshed.
+    const signals = feeds.tutorSnapshot !== null && cachedSignals?.snapshotCreatedAt !== feeds.tutorSnapshot
+      ? await loadOffboardingSignals(db, new Date()) : cachedSignals;
     if (!signals) return { available: false, reason: "no_snapshot", viewer };
-    return { available: true, ...buildOffboardingDashboard({ signals, feeds, decisions, grants, viewer, now: new Date() }) };
+    return { available: true, ...buildOffboardingDashboard({ signals, feeds, decisions, grants, viewer, now: new Date(), terminationSnapshot }) };
   } catch (error) {
     if (isMissingSchemaError(error)) return { available: false, reason: "not_set_up", viewer };
     throw error;

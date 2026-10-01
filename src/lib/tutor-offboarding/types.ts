@@ -1,4 +1,5 @@
 import type { CalibrationCurve } from "./calibration";
+import type { TerminationEvidence, TerminationSourceStatus } from "./termination-source";
 
 // ----------------------------------------------------------------------------
 // Tutor Offboarding types. Instants are ISO strings everywhere, so the signals
@@ -150,6 +151,8 @@ export interface OffboardingPersonRow {
   signals: PersonSignals;
   score: PersonScore;
   openDecision: DecisionRecord | null;
+  /** OFF-15: dated confirmation from the owner-maintained tutor Sheet. */
+  termination?: TerminationEvidence;
 }
 
 export interface OffboardingSummary {
@@ -167,7 +170,7 @@ export interface OffboardingDashboardData {
   snapshotCreatedAt: string;
   freshness: FreshnessReport;
   curve: CalibrationCurve;
-  /** Not excluded and not Active, most likely first. */
+  /** Not excluded; includes confirmed departures even with an Active score, most likely first. */
   inbox: OffboardingPersonRow[];
   activeCount: number;
   /** Excluded for any reason except a Wise ADMIN account. */
@@ -179,6 +182,7 @@ export interface OffboardingDashboardData {
   grants: GrantRecord[] | null;
   viewer: TutorOffboardingViewer;
   summary: OffboardingSummary;
+  terminationSource?: TerminationSourceStatus;
 }
 
 export type OffboardingUnavailableReason = "not_set_up" | "no_snapshot" | "load_failed";
