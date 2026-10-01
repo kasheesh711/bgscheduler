@@ -750,6 +750,13 @@
       "when": 1790847600000,
       "tag": "0106_tutor_course_demand_growth",
       "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1790851200000,
+      "tag": "0107_class_capture",
+      "breakpoints": true
     }
   ]
 }

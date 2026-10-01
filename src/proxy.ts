@@ -50,6 +50,9 @@ function isPathAllowed(pathname: string, allowedPages: string[] | null): boolean
   // The owner guard checks current designation and admin status independently.
   if (pathname === "/admin/users" || pathname === "/api/admin/users") return true;
   if (pathname === "/api/home/summary") return true;
+  // Class Capture checks current admin grants or exact active tutor bindings
+  // and session ownership inside every page/API handler.
+  if (pathname === "/class-capture" || pathname.startsWith("/class-capture/") || isClassCaptureApi(pathname)) return true;
   // Every sit-in handler checks current department grants independently.
   if (pathname === "/tutor-sit-ins" || pathname.startsWith("/tutor-sit-ins/") || pathname === "/api/tutor-sit-ins" || pathname.startsWith("/api/tutor-sit-ins/")) return true;
   // Coarse authenticated pass; fresh attendance enrollment/admin checks own access.
@@ -92,6 +95,10 @@ function isPathAllowed(pathname: string, allowedPages: string[] | null): boolean
   });
 }
 
+function isClassCaptureApi(pathname: string): boolean {
+  return pathname === "/api/class-capture" || pathname.startsWith("/api/class-capture/");
+}
+
 export default edgeAuth(async (req) => {
   const { pathname, search } = req.nextUrl;
 
@@ -123,7 +130,7 @@ export default edgeAuth(async (req) => {
 
   // Require auth for everything else
   if (!session) {
-    if ((req.auth && pathname.startsWith("/api/")) || isClassroomOperationsApi(pathname)) {
+    if ((req.auth && pathname.startsWith("/api/")) || isClassroomOperationsApi(pathname) || isClassCaptureApi(pathname)) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const loginUrl = new URL("/login", req.url);

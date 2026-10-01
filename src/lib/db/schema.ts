@@ -23,6 +23,53 @@ import {
 import { sql } from "drizzle-orm";
 import type { Week, OfficeNetwork } from "@/lib/tutor-attendance/model";
 import type { WiseTeacher } from "@/lib/wise/types";
+import type { CaptureConsent, CaptureSession, DraftFields } from "@/lib/class-capture/model";
+
+// Short-lived onsite evidence. No relationship to feedback submission or payroll ledgers.
+export const classCaptures = pgTable("class_captures", {
+  id: uuid("id").primaryKey(),
+  createdByEmail: text("created_by_email").notNull(),
+  teacherKey: text("teacher_key").notNull(),
+  session: jsonb("session").$type<CaptureSession>().notNull(),
+  consent: jsonb("consent").$type<CaptureConsent>().notNull(),
+  consentVersion: text("consent_version").notNull().default("2026-10-01-v1"),
+  topic: text("topic").notNull(),
+  tutorNotes: text("tutor_notes").notNull().default(""),
+  draft: jsonb("draft").$type<DraftFields | null>(),
+  reviewed: boolean("reviewed").notNull().default(false),
+  version: integer("version").notNull().default(0),
+  draftLeaseUntil: timestamp("draft_lease_until", { withTimezone: true }),
+  draftAttempts: integer("draft_attempts").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  cleanupAttemptedAt: timestamp("cleanup_attempted_at", { withTimezone: true }),
+}, (t) => [index("class_captures_expiry_idx").on(t.expiresAt), index("class_captures_owner_idx").on(t.createdByEmail)]);
+
+export const classCaptureAssets = pgTable("class_capture_assets", {
+  id: uuid("id").primaryKey(),
+  captureId: uuid("capture_id").notNull().references(() => classCaptures.id, { onDelete: "cascade" }),
+  kind: text("kind").$type<"recording" | "debrief" | "worksheet">().notNull(),
+  worksheetPermission: boolean("worksheet_permission").notNull().default(false),
+  mime: text("mime").notNull(),
+  size: integer("size").notNull(),
+  pathname: text("pathname").notNull().unique(),
+  status: text("status").$type<"pending" | "ready" | "transcribing" | "transcribed" | "failed">().notNull().default("pending"),
+  transcript: text("transcript"),
+  error: text("error"),
+  providerFileId: text("provider_file_id"),
+  providerJobId: text("provider_job_id"),
+  processingStartedAt: timestamp("processing_started_at", { withTimezone: true }),
+  // Unknown network outcomes are never silently retried at a paid provider.
+  providerUncertain: boolean("provider_uncertain").notNull().default(false),
+  discardedAt: timestamp("discarded_at", { withTimezone: true }),
+  cleanupAttemptedAt: timestamp("cleanup_attempted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index("class_capture_assets_capture_idx").on(t.captureId),
+  check("class_capture_assets_bounds", sql`${t.size} > 0 and ${t.size} <= 104857600`),
+  check("class_capture_assets_kind", sql`${t.kind} in ('recording','debrief','worksheet')`),
+  check("class_capture_assets_status", sql`${t.status} in ('pending','ready','transcribing','transcribed','failed')`),
+]);
 
 // One outstanding browser-bound email challenge per approved-or-requested address.
 export const authEmailChallenges = pgTable("auth_email_challenges", {
