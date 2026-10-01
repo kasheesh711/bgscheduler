@@ -35,7 +35,8 @@ export type CronJobKey =
   | "line_credit_digest"
   | "competitor_intelligence"
   | "feedback_autowriter"
-  | "feedback_autowriter_review";
+  | "feedback_autowriter_review"
+  | "feedback_atom";
 
 export interface CronJobDefinition {
   key: CronJobKey;
@@ -64,6 +65,10 @@ export interface CronJobDefinition {
 }
 
 export const CRON_JOBS = [
+  { key: "feedback_atom", label: "Atom Lesson Evidence", feature: "Class Feedback",
+    path: "/api/internal/feedback-autowriter/atom", schedule: "6,21,36,51 * * * *", cadenceLabel: "Every 15 min",
+    cadenceMinutes: 15, lateAfterMinutes: 45, maxDurationSeconds: 750, manualOnly: false, dangerous: false,
+    confirmationLabel: null, routeMethod: "GET" },
   { key: "feedback_autowriter", label: "Feedback Autowriter", feature: "Class Feedback",
     path: "/api/internal/feedback-autowriter", schedule: "8,22,38,52 * * * *",
     cadenceLabel: "Every ~15 min backstop; Wise webhook is the fast path", cadenceMinutes: 15, lateAfterMinutes: 30,
@@ -521,6 +526,7 @@ export function statusRank(status: CronJobStatus): number {
 
 /** Physical cron schedules remain registered; expected work follows feature mode. */
 export function effectiveCronJob(job: CronJobDefinition): CronJobDefinition {
+  if (job.key === "feedback_atom" && process.env.FEEDBACK_ATOM_COLLECTOR_ENABLED !== "true") return { ...job, paused: true, cadenceLabel: "Atom collector disabled" };
   if (isWiseClassroomJob(job.key) && !wiseClassroomAutomationEnabled()) return { ...job, paused: true, cadenceLabel: "Paused by owner" };
   if (job.key.startsWith("feedback_autowriter") && process.env.FEEDBACK_AUTOWRITER_ENABLED !== "true") return { ...job, paused: true, cadenceLabel: "Feedback autowriter disabled" };
   if (job.key.startsWith("tutor_sit_ins") && process.env.TUTOR_SIT_INS_ENABLED !== "true") return { ...job, paused: true, cadenceLabel: "Tutor Sit-ins disabled" };

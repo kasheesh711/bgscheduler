@@ -177,6 +177,38 @@ describe("buildAutowriterReview", () => {
     expect(buildAutowriterReview({ now: NOW, ...source({ gateFacts: { ...GATE_FACTS, criticalVerdicts: 1 } }) }).gate.status).toBe("blocked_critical");
   });
 
+  it("says until when a critical verdict blocks the gate: the latest critical class's date plus the window's 14 days", () => {
+    const critical = (id: string, sessionId: string) => verdict({
+      id, wiseSessionId: sessionId, verdict: "needs_fix", severity: "critical", criticalCategory: "wrong_person", note: "synthetic",
+    });
+    const blockedUntil = (overrides: Partial<ReviewSourceRows>) => buildAutowriterReview({ now: NOW, ...source(overrides) }).gate.blockedUntil;
+    const base = source();
+    // No critical verdict in the window: nothing to wait for (s2 is approved, s1 has no verdict).
+    expect(blockedUntil({})).toBeNull();
+
+    // s1 (a class of 29 Sep) is judged critical: every window holding 29 Sep is blocked, so the first clear one ends on 13 Oct.
+    const s1Critical = base.windowReviews.map((row) => row.wiseSessionId === "s1" ? { ...row, currentVerdictId: "c1" } : row);
+    expect(blockedUntil({ windowReviews: s1Critical, verdicts: [...base.verdicts, critical("c1", "s1")] })).toBe("2026-10-13");
+
+    // The latest critical class decides; a critical verdict counts whatever the sampling.
+    const earlier = review({ wiseSessionId: "s4", firstPostId: "post-4", bangkokDate: "2026-09-20", inclusionReason: "not_sampled", currentVerdictId: "c2" });
+    const later = review({ wiseSessionId: "s5", firstPostId: "post-5", bangkokDate: "2026-09-30", inclusionReason: "not_sampled", currentVerdictId: "c3" });
+    expect(blockedUntil({ windowReviews: [...base.windowReviews, earlier], verdicts: [...base.verdicts, critical("c2", "s4")] })).toBe("2026-10-04");
+    expect(blockedUntil({
+      windowReviews: [...s1Critical, earlier, later], verdicts: [...base.verdicts, critical("c1", "s1"), critical("c2", "s4"), critical("c3", "s5")],
+    })).toBe("2026-10-14");
+
+    // Not the current verdict any more (the owner downgraded it), outside the window, or an in-person class: no block.
+    expect(blockedUntil({ verdicts: [...base.verdicts, critical("c1", "s1")] })).toBeNull();
+    const outside = review({ wiseSessionId: "s6", firstPostId: "post-6", bangkokDate: "2026-09-16", currentVerdictId: "c4" });
+    expect(blockedUntil({ windowReviews: [...base.windowReviews, outside], verdicts: [...base.verdicts, critical("c4", "s6")] })).toBeNull();
+    const inPerson = base.windowReviews.map((row) => row.wiseSessionId === "s3" ? { ...row, currentVerdictId: "c5" } : row);
+    expect(blockedUntil({ windowReviews: inPerson, verdicts: [...base.verdicts, critical("c5", "s3")] })).toBeNull();
+    // A major verdict is not a block.
+    const major = base.windowReviews.map((row) => row.wiseSessionId === "s1" ? { ...row, currentVerdictId: "m1" } : row);
+    expect(blockedUntil({ windowReviews: major, verdicts: [...base.verdicts, verdict({ id: "m1", wiseSessionId: "s1", verdict: "needs_fix", severity: "factual" })] })).toBeNull();
+  });
+
   it("lists a save after the current Approve without counting it, and shows open flags with their ids", () => {
     const payload = buildAutowriterReview({ now: NOW, ...source() });
     const item = payload.queue.find((entry) => entry.wiseSessionId === "s2")!;
@@ -189,9 +221,49 @@ describe("buildAutowriterReview", () => {
     const payload = buildAutowriterReview({ now: NOW, ...source() });
     expect(payload.coverage).toMatchObject({ posted: 8, miss_held: 1, excluded_data_quality: 1, excluded_tutor_first: 5, excluded_not_live: 4 });
     expect(payload.daily.map((row) => row.date)).toEqual(["2026-09-29", "2026-09-28"]);
-    expect(payload.tutors.find((row) => row.tutorKey === "Mimi")).toMatchObject({ textsInWise: 2, reviewed: 1, coverageNum: 6, coverageDen: 6, phase: "full_review" });
+    expect(payload.tutors.find((row) => row.tutorKey === "Mimi")).toMatchObject({
+      textsInWise: 2, reviewed: 1, accurate: 1, critical: 0, coverageNum: 6, coverageDen: 6, phase: "full_review",
+    });
     // s1 has no verdict yet; s2 is approved with no counted fix.
     expect(payload.fixRounds).toEqual({ zero: 1, one: 0, two: 0, threePlus: 0, unresolved: 1 });
+  });
+
+  it("hands over the all-tutors counts of the six dates before the window, and counts them nowhere else", () => {
+    const base = source();
+    // The window of 30 Sep is 17–30 Sep: its look-back is 11–16 Sep.
+    const before = [
+      metric({ metricDate: "2026-09-16", posted: 3, eligible: 5, reviewed: 2, accurate: 1, held: 9, critical: 4 }),
+      metric({ metricDate: "2026-09-11", posted: 1, eligible: 2, reviewed: 1, accurate: 1 }),
+      // A tutor's own row, and a date before the look-back: neither is handed over.
+      metric({ metricDate: "2026-09-16", tutorKey: "Mimi", posted: 50, eligible: 50 }),
+      metric({ metricDate: "2026-09-10", posted: 70, eligible: 70 }),
+    ];
+    const payload = buildAutowriterReview({ now: NOW, ...base, metrics: [...base.metrics, ...before] });
+    expect(payload.window).toMatchObject({ start: "2026-09-17", end: "2026-09-30" });
+    expect(payload.lookback).toEqual([
+      { date: "2026-09-11", reviewed: 1, accurate: 1, posted: 1, eligible: 2 },
+      { date: "2026-09-16", reviewed: 2, accurate: 1, posted: 3, eligible: 5 },
+    ]);
+    // Everything else reads the window alone, as without those rows.
+    const without = buildAutowriterReview({ now: NOW, ...base });
+    expect(without.lookback).toEqual([]);
+    expect({ ...payload, lookback: [] }).toEqual(without);
+  });
+
+  it("counts a tutor's critical verdicts in the window, sampled or not, and no other tutor's", () => {
+    const base = source();
+    const critical = (id: string, sessionId: string) => verdict({
+      id, wiseSessionId: sessionId, verdict: "needs_fix", severity: "critical", criticalCategory: "wrong_person", note: "synthetic",
+    });
+    const unsampled = review({ wiseSessionId: "s4", firstPostId: "post-4", inclusionReason: "not_sampled", currentVerdictId: "c2" });
+    const outside = review({ wiseSessionId: "s5", firstPostId: "post-5", bangkokDate: "2026-09-16", currentVerdictId: "c3" });
+    const payload = buildAutowriterReview({ now: NOW, ...source({
+      windowReviews: [...base.windowReviews.map((row) => row.wiseSessionId === "s1" ? { ...row, currentVerdictId: "c1" } : row), unsampled, outside],
+      verdicts: [...base.verdicts, critical("c1", "s1"), critical("c2", "s4"), critical("c3", "s5")],
+    }) });
+    // s1 (required, judged critical) is reviewed and not accurate; s4 was never sampled, so it counts as critical only.
+    expect(payload.tutors.find((row) => row.tutorKey === "Mimi")).toMatchObject({ reviewed: 2, accurate: 1, critical: 2 });
+    expect(payload.tutors.filter((row) => row.tutorKey !== "Mimi").every((row) => row.critical === 0)).toBe(true);
   });
 
   it("reports exact queue totals even when the queue shows fewer classes", () => {

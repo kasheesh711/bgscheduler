@@ -157,10 +157,11 @@ async function seedEvent(sessionId: string, when: Date, actor: { id: string | nu
   return eventId;
 }
 
-async function seedWriterCall(sessionId: string, when: Date, ok: boolean) {
+/** A writer call whose row was written at `when`; `result` is what the pipeline recorded with it. */
+async function seedWriterCall(sessionId: string, when: Date, ok: boolean, result?: Record<string, unknown>) {
   await db.insert(schema.feedbackAutowriterCalls).values({
     wiseSessionId: sessionId, role: "writer", arm: "glm", requestedModel: "writer-model", ok,
-    error: ok ? null : "provider_timeout", promptVersion: 4, createdAt: when,
+    error: ok ? null : "provider_timeout", promptVersion: 4, createdAt: when, ...(result ? { result } : {}),
   });
 }
 
@@ -695,14 +696,22 @@ describe("daily metrics", () => {
     for (const reason of [
       "glm:unfaithful:homework not in the lesson", "glm:markdown:improvement; luna:output_not_json", "feedback_form_question_unmapped",
       "billing:insufficient_student_credits", "error:fetch failed",
+      // Transcript first: neither of its own holds is about the class's data.
+      "thai_summary_no_transcript", "missing_student_or_tutor",
     ]) await seedRow(n++, { state: "held", reason, endAt });
+    // Transcript first: waiting for the recording, or back on the summary after a fallback (whatever its cause), is
+    // still in the works while the posting window is open — on neither side.
+    await seedRow(n++, { state: "awaiting_recording", reason: "transcript_first", endAt });
+    await seedRow(n++, { state: "pending", reason: "summary_fallback:speakers_unclear", endAt });
     // Both handed back by the sweep because Ek was switched off when it ran. The class of the 27th was workable, then
     // switched off before its window closed (23:29:59 Bangkok on the 29th): the owner's switch, not our miss. For the
     // class of the 26th Ek was still on when its window closed (23:29:59 on the 28th): ours to post, a miss.
     await seedRow(n++, { state: "skipped_scope", reason: "tutor_off_at_deadline", endAt: at("2026-09-27T12:00:00Z"), teacher: EK });
     await seedRow(n++, { state: "skipped_scope", reason: "tutor_off_at_deadline", endAt: at("2026-09-26T12:00:00Z"), teacher: EK });
     await refreshDailyMetrics(db, { dates: metricDates(NOW), now: NOW });
-    expect(await starRow(DAY)).toMatchObject({ posted: 0, excludedDataQuality: 8, held: 5, excludedTutorOff: 0, excludedScope: 0, eligible: 5 });
+    expect(await starRow(DAY)).toMatchObject({
+      posted: 0, excludedDataQuality: 8, held: 7, pending: 2, excludedTutorOff: 0, excludedScope: 0, eligible: 7,
+    });
     expect(await starRow("2026-09-27")).toMatchObject({ excludedTutorOff: 1, expired: 0, excludedScope: 0, eligible: 0 });
     expect(await starRow("2026-09-26")).toMatchObject({ excludedTutorOff: 0, expired: 1, excludedScope: 0, eligible: 1 });
   });
@@ -799,6 +808,54 @@ describe("daily metrics", () => {
     await ingestFixEvents(db, { apiActorId: API, since: at("2026-09-01T00:00:00Z") });
     await refreshDailyMetrics(db, { dates: metricDates(NOW), now: NOW });
     expect(await starRow(DAY)).toMatchObject({ late: 3, excludedTutorFirst: 2, eligible: 3 });
+  });
+
+  it("dates our first writer call by when its request was sent, not by when a rate-limited attempt's row was written", async () => {
+    const endAt = at("2026-09-29T12:00:00Z");
+    const duringWaits = await seedRow(105, { state: "skipped_human", reason: "submission_changed_to_human", endAt });
+    const beforeUs = await seedRow(106, { state: "skipped_human", reason: "human_submission", endAt });
+    const unmarked = await seedRow(107, { state: "skipped_human", reason: "human_submission", endAt });
+    // We sent the writer's request at 12:40:00 and were rate limited; its rows were written when the call ended, after
+    // the waits (12:40:45). The tutor saved at 12:40:20, while we waited: we had started, so it is our miss.
+    const limited = { error: "rate limited upstream", evidence: "summary" };
+    await seedWriterCall(duringWaits, at("2026-09-29T12:40:45Z"), false, { ...limited, attemptAt: "2026-09-29T12:40:00.000Z", retryAfterMs: 20_000, waitedMs: 20_000 });
+    await seedWriterCall(duringWaits, at("2026-09-29T12:40:45Z"), false, { ...limited, rateLimitRetry: 1, attemptAt: "2026-09-29T12:40:21.000Z", waitedMs: 10_000 });
+    await seedWriterCall(duringWaits, at("2026-09-29T12:40:45Z"), true, { validation: "ok", evidence: "summary", rateLimitRetry: 2 });
+    await seedEvent(duringWaits, at("2026-09-29T12:40:20Z"), { id: MIMI, role: "TEACHER" });
+    // The same rows, the tutor's save a minute before our request went out: theirs.
+    await seedWriterCall(beforeUs, at("2026-09-29T12:40:45Z"), false, { ...limited, attemptAt: "2026-09-29T12:40:00.000Z", waitedMs: 4_000 });
+    await seedWriterCall(beforeUs, at("2026-09-29T12:40:45Z"), true, { validation: "ok", evidence: "summary", rateLimitRetry: 1 });
+    await seedEvent(beforeUs, at("2026-09-29T12:39:00Z"), { id: MIMI, role: "TEACHER" });
+    // A call that was never rate limited carries no such time: dated by its row, as before.
+    await seedWriterCall(unmarked, at("2026-09-29T12:40:45Z"), true, { validation: "ok", evidence: "summary" });
+    await seedEvent(unmarked, at("2026-09-29T12:40:20Z"), { id: MIMI, role: "TEACHER" });
+    await ingestFixEvents(db, { apiActorId: API, since: at("2026-09-01T00:00:00Z") });
+    await refreshDailyMetrics(db, { dates: metricDates(NOW), now: NOW });
+    expect(await starRow(DAY)).toMatchObject({ late: 1, excludedTutorFirst: 2, eligible: 1 });
+  });
+
+  it("never lets an attemptAt that is no time fail the day's metrics: that call is dated by its row", async () => {
+    const endAt = at("2026-09-29T12:00:00Z");
+    const limited = { error: "rate limited upstream", evidence: "summary" };
+    // The same class each time: one rate-limited writer call whose row was written at 12:40:45, and the tutor's save
+    // at 12:40:20. Its `attemptAt` cannot be read as a time — wrong form, a day or an hour that does not exist, or no
+    // text at all — so the call is dated by its row, and the save came before it: the tutor's.
+    const unreadable = [
+      "not a time", "", "2026-13-45T99:99:99.000Z", "2026-02-30T12:40:00.000Z", "2027-02-29T12:40:00.000Z", "2026-09-29T24:00:00.000Z",
+      "2026-09-29 12:40:00", "2026-09-29T12:40:00.000+07:00", 1_790_685_600_000, null, true, { at: "2026-09-29T12:40:00.000Z" }, ["2026-09-29T12:40:00.000Z"],
+    ];
+    for (const [index, attemptAt] of unreadable.entries()) {
+      const session = await seedRow(200 + index, { state: "skipped_human", reason: "human_submission", endAt });
+      await seedWriterCall(session, at("2026-09-29T12:40:45Z"), false, { ...limited, attemptAt });
+      await seedEvent(session, at("2026-09-29T12:40:20Z"), { id: MIMI, role: "TEACHER" });
+    }
+    // A time that can be read still counts: sent at 12:40:00, so the save at 12:40:20 came after we had started.
+    const readable = await seedRow(250, { state: "skipped_human", reason: "submission_changed_to_human", endAt });
+    await seedWriterCall(readable, at("2026-09-29T12:40:45Z"), false, { ...limited, attemptAt: "2026-09-29T12:40:00.000Z" });
+    await seedEvent(readable, at("2026-09-29T12:40:20Z"), { id: MIMI, role: "TEACHER" });
+    await ingestFixEvents(db, { apiActorId: API, since: at("2026-09-01T00:00:00Z") });
+    await refreshDailyMetrics(db, { dates: metricDates(NOW), now: NOW });
+    expect(await starRow(DAY)).toMatchObject({ late: 1, excludedTutorFirst: unreadable.length, eligible: 1 });
   });
 });
 
@@ -1132,6 +1189,10 @@ describe("owner verdicts from the 30 Sep interview", () => {
     const clear = await gateOn("2026-10-13");
     expect(clear.status).not.toBe("blocked_critical");
     expect(clear.reasons.join(" ")).not.toContain("critical");
+    // The page names the same date: the first gate date whose window has left the critical class behind.
+    const shown = await loadAutowriterReview(db, { now: NOW });
+    if (!shown.available) throw new Error("review unavailable");
+    expect(shown.gate).toMatchObject({ status: "blocked_critical", blockedUntil: "2026-10-13" });
     // The nightly rows say the same.
     expect(await recordDailyGate(db, "2026-10-12")).toEqual({ date: "2026-10-12", status: "blocked_critical" });
     expect((await recordDailyGate(db, "2026-10-13"))?.status).not.toBe("blocked_critical");
@@ -1156,6 +1217,62 @@ describe("loadAutowriterReview", () => {
     expect(review.queueTotals).toEqual({ needsReview: 1, flagged: 1, all: 3, shown: 2 });
     const facts = await loadGateFacts(db, { start: review.window.start, end: review.window.end });
     expect(review.gate).toMatchObject(facts);
+  });
+
+  it("loads the stored counts of the six dates before the window for the 7-day values, apart from the window's own", async () => {
+    const stored = { liveMode: true, policyVersion: 1, tutorKey: "*" };
+    await db.insert(M).values([
+      // The window of 30 Sep is 17–30 Sep.
+      { ...stored, metricDate: "2026-09-17", posted: 2, eligible: 4, reviewed: 2, accurate: 2 },
+      { ...stored, metricDate: "2026-09-16", posted: 3, eligible: 5, reviewed: 2, accurate: 1 },
+      { ...stored, metricDate: "2026-09-11", posted: 1, eligible: 2, reviewed: 1, accurate: 1 },
+      { ...stored, metricDate: "2026-09-16", tutorKey: "Mimi", posted: 9, eligible: 9 },
+      // Older than the look-back: not read at all.
+      { ...stored, metricDate: "2026-09-10", posted: 7, eligible: 7, reviewed: 7, accurate: 7 },
+    ]);
+    const review = await loadAutowriterReview(db, { now: NOW });
+    if (!review.available) throw new Error("review unavailable");
+    expect(review.window).toMatchObject({ start: "2026-09-17", end: "2026-09-30" });
+    expect(review.lookback).toEqual([
+      { date: "2026-09-11", reviewed: 1, accurate: 1, posted: 1, eligible: 2 },
+      { date: "2026-09-16", reviewed: 2, accurate: 1, posted: 3, eligible: 5 },
+    ]);
+    expect(review.daily.map((row) => [row.date, row.posted, row.eligible])).toEqual([["2026-09-17", 2, 4]]);
+    expect(review.coverage.posted).toBe(2);
+  });
+
+  it("lists every critical incident still waiting for the owner first, however old and whether its alert went out", async () => {
+    const DAY = 24 * 60 * 60_000;
+    const daysAgo = (days: number) => new Date(NOW.getTime() - days * DAY);
+    const incident = (dedupeKey: string, patch: Partial<typeof I.$inferInsert> = {}): typeof I.$inferInsert => ({
+      dedupeKey, kind: "first_shot_unverified", severity: "info", summary: `synthetic ${dedupeKey}`, pushStatus: "not_required", ...patch,
+    });
+    // An API save no post explains, raised 40 days ago: its alert went out, and nobody has acknowledged it.
+    await db.insert(I).values(incident("old-critical", { kind: "api_actor_unmatched", severity: "critical", pushStatus: "sent", createdAt: daysAgo(40) }));
+    // Old ones that wait for nobody: a critical the owner acknowledged, and an info incident.
+    await db.insert(I).values([
+      incident("old-acknowledged", {
+        kind: "critical_verdict", severity: "critical", pushStatus: "sent", acknowledgedAt: daysAgo(39), acknowledgedBy: OWNER, createdAt: daysAgo(40),
+      }),
+      incident("old-info", { createdAt: daysAgo(40) }),
+    ]);
+    // More incidents in the queue's days than the cap.
+    await db.insert(I).values(Array.from({ length: 105 }, (_, n) => incident(`recent-${n}`, { createdAt: minutes(NOW, -(n + 1)) })));
+
+    const review = await loadAutowriterReview(db, { now: NOW });
+    if (!review.available) throw new Error("review unavailable");
+    expect(review.incidents[0]).toMatchObject({
+      summary: "synthetic old-critical", kind: "api_actor_unmatched", severity: "critical", pushStatus: "sent", acknowledgedAt: null,
+    });
+    // The cap is the others': the 100 latest of the queue's days, after it.
+    expect(review.incidents).toHaveLength(101);
+    expect(review.incidents.slice(1).map((row) => row.summary)).toEqual(Array.from({ length: 100 }, (_, n) => `synthetic recent-${n}`));
+    const summaries = review.incidents.map((row) => row.summary);
+    expect(summaries).not.toContain("synthetic old-acknowledged");
+    expect(summaries).not.toContain("synthetic old-info");
+    // The gate counts the same incident: the page never shows a blocker it cannot open.
+    expect(review.gate.unexplainedApiWrites).toBe(1);
+    expect(review.gate.status).toBe("blocked_critical");
   });
 
   it("says the review tables are missing as a typed payload, and lets any other error through", async () => {

@@ -100,7 +100,7 @@ const WiseSessionDetailSchema = z.object({
 
 export type WiseCreditStudent = z.infer<typeof WiseCreditStudentSchema>;
 export type WiseCreditSession = z.infer<typeof WiseCreditSessionSchema>;
-export type WiseSessionCredits = z.infer<typeof WiseSessionCreditsSchema>["data"];
+export type WiseSessionCredits = z.infer<typeof WiseSessionCreditsSchema>["data"] & { rawSessionCreditHistory?: unknown[] };
 
 function isoDate(value: Date): string {
   return value.toISOString().slice(0, 10);
@@ -275,7 +275,9 @@ export async function fetchSessionCredits(
     `/institutes/${instituteId}/classes/${classId}/students/${studentId}/sessionCredits`,
     { fetchHistory: "true" },
   );
-  return WiseSessionCreditsSchema.parse(response).data;
+  const parsed = WiseSessionCreditsSchema.parse(response).data;
+  const raw = response as { data?: { sessionCreditHistory?: unknown } };
+  return { ...parsed, rawSessionCreditHistory: Array.isArray(raw?.data?.sessionCreditHistory) ? raw.data.sessionCreditHistory : [] };
 }
 
 export async function fetchSessionTeacherFeedback(

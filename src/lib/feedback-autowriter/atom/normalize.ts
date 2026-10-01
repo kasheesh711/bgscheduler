@@ -1,0 +1,124 @@
+import { z } from "zod";
+import { AtomActivitySchema, type AtomActivity, type AtomSubject } from "./types";
+import { bangkokDate } from "./evidence";
+
+export class AtomCollectionError extends Error {
+  constructor(readonly code: "authentication_failed" | "response_changed" | "source_contradiction" | "collection_failed", readonly stage?: string) {
+    super(code);
+    this.name = "AtomCollectionError";
+  }
+}
+export const ATOM_SUBJECT_IDS: Readonly<Record<number, AtomSubject>> = {
+  235: "english", 236: "verbal_reasoning", 237: "maths", 238: "non_verbal_reasoning",
+};
+const id = z.string().regex(/^_[0-9]+$/u);
+const date = z.string().datetime({ offset: true });
+const nullableDate = date.nullable();
+const ListTest = z.object({
+  id_mock_test: id, id_student: id, name: z.string().min(1), completed: z.boolean(),
+  started: nullableDate, finished: nullableDate, id_course_subject: z.number().nullable(),
+  score: z.number().nullable(), totalQuestions: z.number().int().nonnegative(),
+  questionsCorrect: z.number().int().nonnegative().nullable(), questionsAnswered: z.number().int().nonnegative().nullable(),
+}).passthrough();
+const ListPractice = z.object({
+  id_practice_full: id, id_full_student: id, customPracticeName: z.string().nullable(),
+  completed: z.boolean(), started: nullableDate, dateFinished: nullableDate,
+  id_course_subject: z.number(), questions: z.number().int().nonnegative(),
+  questionsAnswered: z.number().int().nonnegative(), tutorMode: z.boolean(),
+}).passthrough();
+const ListIsland = z.object({
+  title: z.string().min(1), id_course_subject: z.number(), status: z.string(),
+  sessions: z.array(z.object({ id_question_session: id, completed: nullableDate, started: nullableDate }).passthrough()),
+}).passthrough();
+export interface AtomActivityReference {
+  id: string; studentId: string; name: string; subject: AtomSubject; kind: AtomActivity["kind"];
+  completedAt: string; startedAt: string;
+  expectedCorrect?: number | null; expectedAttempted?: number | null; expectedTotal?: number; expectedSas?: number | null;
+  assisted?: boolean;
+}
+
+/** Whole lists are validated before date selection. Shape drift is never an empty successful result. */
+export function parseActivityIndex(kind: AtomActivity["kind"], raw: unknown, studentId: string, dates: ReadonlySet<string>): AtomActivityReference[] {
+  const inRange = (start: string | null, end: string | null) => !!start && !!end &&
+    [...dates].some(day => bangkokDate(start) <= day && bangkokDate(end) >= day);
+  try {
+    if (kind === "test") return ListTest.array().max(20_000).parse(raw).flatMap(row => {
+      if (row.id_student !== studentId) throw new AtomCollectionError("source_contradiction");
+      const subject = row.id_course_subject === null ? null : ATOM_SUBJECT_IDS[row.id_course_subject];
+      if (!row.completed || !subject || !inRange(row.started, row.finished)) return [];
+      return [{ id: row.id_mock_test, studentId, name: row.name, subject, kind, completedAt: row.finished!, startedAt: row.started!,
+        expectedCorrect: row.questionsCorrect, expectedAttempted: row.questionsAnswered, expectedTotal: row.totalQuestions, expectedSas: row.score }];
+    });
+    if (kind === "practice") return ListPractice.array().max(20_000).parse(raw).flatMap(row => {
+      if (row.id_full_student !== studentId) throw new AtomCollectionError("source_contradiction");
+      const subject = ATOM_SUBJECT_IDS[row.id_course_subject];
+      if (!row.completed || !subject || !inRange(row.started, row.dateFinished)) return [];
+      return [{ id: row.id_practice_full, studentId, name: row.customPracticeName || "Extra practice", subject, kind,
+        completedAt: row.dateFinished!, startedAt: row.started!, expectedAttempted: row.questionsAnswered,
+        expectedTotal: row.questions, assisted: row.tutorMode }];
+    });
+    return ListIsland.array().max(20_000).parse(raw).flatMap(row => {
+      const subject = ATOM_SUBJECT_IDS[row.id_course_subject];
+      if (!subject || row.status !== "completed") return [];
+      return row.sessions.filter(session => inRange(session.started, session.completed)).map(session => ({
+        id: session.id_question_session, studentId, name: row.title, subject, kind,
+        startedAt: session.started!, completedAt: session.completed!,
+      }));
+    });
+  } catch (error) {
+    if (error instanceof AtomCollectionError) throw error;
+    throw new AtomCollectionError("response_changed", `index_${kind}:${error instanceof z.ZodError ? error.issues[0]?.path.join(".") : "invalid"}`);
+  }
+}
+
+const Response = z.object({
+  id_student: id, id_course_question: z.number().int(), id_course_subject: z.number(),
+  answeredAt: date, correct: z.boolean(), noAttempt: z.boolean(), autoResponse: z.boolean(),
+  tutorMode: z.boolean(), secondsTaken: z.number().finite().nonnegative(),
+  id_homework: z.union([z.string(), z.number()]).nullable(),
+}).passthrough();
+const Transcript = z.object({
+  id_question_session: id, id_student: id, name: z.string().nullable(),
+  questionSessionType: z.enum(["mock_test", "practice", "learning_journey_practice_island"]),
+  totalQuestions: z.number().int().nonnegative(), isScoredUsingMarks: z.literal(false),
+  includesAiMarkedQuestions: z.literal(false),
+  score: z.number().finite().nullable().optional(),
+  subtopicScore: z.array(z.object({ title: z.string(), score: z.number().min(0).max(100) }).passthrough()).optional(),
+  questions: z.array(z.object({ id_course_question: z.number().int(), responses: z.array(Response) }).passthrough()).max(2000),
+}).passthrough();
+
+export function normalizeAtomTranscript(raw: unknown, ref: AtomActivityReference): AtomActivity {
+  try {
+    const parsed = Transcript.parse(raw);
+    if (parsed.id_student !== ref.studentId || parsed.id_question_session !== ref.id) throw new AtomCollectionError("source_contradiction");
+    const sourceKind = { test: "mock_test", practice: "practice", exam_topic: "learning_journey_practice_island" }[ref.kind];
+    if (sourceKind !== parsed.questionSessionType || parsed.questions.some(question => question.responses.some(response =>
+      response.id_course_question !== question.id_course_question || response.id_student !== ref.studentId))) throw new AtomCollectionError("source_contradiction");
+    const responses = parsed.questions.flatMap(question => question.responses.filter(response => !response.noAttempt && !response.autoResponse));
+    if (responses.some(response => response.id_student !== ref.studentId || ATOM_SUBJECT_IDS[response.id_course_subject] !== ref.subject)) {
+      throw new AtomCollectionError("source_contradiction");
+    }
+    // Multiple records for one question cannot silently inflate the attempted denominator.
+    const answers = responses.map(response => ({
+      questionId: String(response.id_course_question), answeredAt: response.answeredAt, correct: response.correct,
+      seconds: response.secondsTaken, assisted: response.tutorMode || !!ref.assisted,
+    }));
+    const correct = answers.filter(answer => answer.correct).length;
+    if ((ref.expectedTotal !== undefined && parsed.totalQuestions !== ref.expectedTotal) ||
+      (ref.expectedCorrect != null && correct !== ref.expectedCorrect) ||
+      (ref.expectedAttempted != null && answers.length !== ref.expectedAttempted) ||
+      (ref.expectedSas != null && parsed.score !== ref.expectedSas)) throw new AtomCollectionError("source_contradiction");
+    return AtomActivitySchema.parse({
+      id: ref.id, studentId: ref.studentId, kind: ref.kind, subject: ref.subject,
+      name: parsed.name?.trim() || ref.name,
+      sourceUrl: `https://app.atomlearning.com/tutor/transcript/${ref.id}`,
+      completedAt: ref.completedAt, purpose: responses.some(response => response.id_homework !== null) ? "homework" : "unknown",
+      wiseTeacherUserId: null, totalQuestions: parsed.totalQuestions, answers,
+      sas: ref.kind === "test" ? parsed.score ?? null : null,
+      modelledTopicEstimates: ref.kind === "test" ? (parsed.subtopicScore ?? []).map(topic => ({ topic: topic.title, percent: topic.score })) : [],
+    });
+  } catch (error) {
+    if (error instanceof AtomCollectionError) throw error;
+    throw new AtomCollectionError("response_changed", `transcript:${error instanceof z.ZodError ? error.issues[0]?.path.join(".") : "invalid"}`);
+  }
+}

@@ -1,7 +1,11 @@
+import { ATOM_MODEL_RULES } from "./atom/evidence";
+import type { FeedbackFormatGuide } from "./format";
 import { redactKnownNames } from "@/lib/post-class-feedback/similarity";
+import { styleInstructions, type FeedbackStyleGuide } from "./style";
 import type { AiSummary } from "./types";
 
-export const PROMPT_VERSION = 4;
+/** v5 (owner decision, 30 Sep): the feedback names no one but the student (summary rule 12, transcript rule 13). */
+export const PROMPT_VERSION = 5;
 export const STUDENT_TOKEN = "[STUDENT_1]";
 export const TUTOR_TOKEN = "[TUTOR]";
 
@@ -275,7 +279,8 @@ export function speakerLabelNote(labels: SpeakerLabels): string {
       "only treat something as the student's own answer when it clearly is.";
 }
 
-function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels): string {
+function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels, styleGuide: FeedbackStyleGuide | null, formatGuide: FeedbackFormatGuide | null, atomEvidence: string): string {
+  const guided = !!styleGuide || !!formatGuide;
   const record = evidence === "summary" ? "the summary" : "the transcript";
   return [
     "You write the post-class feedback a tutor sends to a student's parents after a one-to-one online lesson.",
@@ -288,13 +293,15 @@ function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels): string {
     "Rules:",
     `1. Use only facts stated or clearly implied by ${record}. Never invent scores, topics, materials, homework, dates or events.`,
     "2. Never mention attendance, absence, lateness, cancellation, rescheduling, technical problems, recordings, transcripts, Zoom, AI or the summary itself.",
-    "3. Warm, clear, professional English that a parent can read. Plain sentences in short paragraphs; no headings, no markdown, no bullet symbols.",
+    guided ? "3. Follow the presentation guide below, using warm, clear, professional English that a parent can read."
+      : "3. Warm, clear, professional English that a parent can read. Plain sentences in short paragraphs; no headings, no markdown, no bullet symbols.",
     "4. topics: the specific skills, sub-topics, question types, texts or papers covered.",
     `5. performance: concrete observations of what ${STUDENT_TOKEN} did well and found difficult, with examples from this lesson. ` +
       `Every judgement of how well ${STUDENT_TOKEN} did (confidently, well, engaged, quickly, struggled) must be stated in ${record}; ` +
       `when ${record} does not say how it went, describe what ${STUDENT_TOKEN} worked on and practised instead of judging it.`,
     // v4 (30 Sep): a summary's "problems still to complete" was posted as homework, and repeated under improvement.
-    "6. improvement: the specific weak areas and two or three concrete next steps or strategies to practise before the next lesson, " +
+    (guided ? "6. improvement: a short numbered list of specific skills to practise before the next lesson, "
+      : "6. improvement: the specific weak areas and two or three concrete next steps or strategies to practise before the next lesson, ") +
       "written as suggestions — never as homework the tutor set, and never repeating the homework.",
     `7. homework: only work ${record} shows the tutor clearly setting ${STUDENT_TOKEN} to do after this lesson, with its timing if stated. ` +
       "Work only described as remaining, unfinished, left over or still to complete is not homework unless the tutor set it. " +
@@ -302,7 +309,8 @@ function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels): string {
       (evidence === "summary" ? "A \"Next steps\" line in the summary is the summary's own suggestion, not homework the tutor set. " : "") +
       `If ${record} does not clearly show the tutor setting homework, return an empty string. ` +
       "Never repeat or restate the homework in topics, performance or improvement.",
-    "8. Length: topics, performance and improvement are each between 120 and 600 characters, and together at least 450 characters.",
+    guided ? "8. Length: topics, performance and improvement together need at least 300 characters, with no per-field minimum; never pad sparse evidence."
+      : "8. Length: topics, performance and improvement are each between 120 and 600 characters, and together at least 450 characters.",
     `9. studentAttended is true only if ${record} shows the student actively took part; lessonHappened is true only if a real lesson took place.`,
     `10. The class details come from the school's system and are accurate. Use them only to name the programme and subject correctly; everything about the lesson itself comes only from ${record}.`,
     // v4 (30 Sep): redaction leaves every other name in place, and a draft gave another student's words to ours.
@@ -312,6 +320,9 @@ function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels): string {
           "Any other name belongs to someone else — another student, a family member, a friend, or a person or character in the lesson material — " +
           `never to ${STUDENT_TOKEN}, even when the summary seems to be about them. ` +
           `Never give ${STUDENT_TOKEN} anything the summary says ${TUTOR_TOKEN} or another named person did, said, finished or did not finish.`,
+        // v5 (owner decision, 30 Sep): a prompt rule only, no gate. The tutor is never named either (above).
+        `12. Never name anyone but ${STUDENT_TOKEN}: refer to any other person generically — ` +
+          "\"another student\", \"a classmate\", \"a family member\" — never by name.",
       ]
       : [
         // Hedged ("clearly not the student"): Thai-script or mis-heard names of the student are not redacted in a transcript.
@@ -319,12 +330,20 @@ function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels): string {
           "Anyone named in the lesson who is clearly not the student — another student, a family member, a friend, or a person or character in the lesson material — " +
           `is never ${STUDENT_TOKEN}: never give ${STUDENT_TOKEN} what is said about them.`,
         `12. Something the tutor explained was covered, not mastered: only say ${STUDENT_TOKEN} understood, solved or explained something when the transcript shows ${STUDENT_TOKEN} doing it.`,
-        `13. Names in the transcript may be written in Thai script; never repeat any name — write ${STUDENT_TOKEN} for the student.`,
+        // v5 (owner decision, 30 Sep): other people too, referred to generically.
+        `13. Names in the transcript may be written in Thai script; never repeat any name — write ${STUDENT_TOKEN} for the student ` +
+          "and refer to anyone else generically (\"another student\", \"a classmate\", \"a family member\").",
       ]),
+    ...(styleGuide ? ["", styleInstructions(styleGuide)] : []),
+    ...(formatGuide ? ["", formatGuide.instructions] : []),
+    ...(atomEvidence ? ["", ATOM_MODEL_RULES] : []),
   ].join("\n");
 }
 
 export interface PromptContext {
+  formatGuide?: FeedbackFormatGuide | null;
+  atomEvidence?: string;
+  styleGuide?: FeedbackStyleGuide | null;
   studentFullName: string;
   /** Other names the student appeared under (a guest join); redacted like the full name. */
   studentAliases?: readonly string[];
@@ -363,11 +382,12 @@ export function buildFeedbackMessages(context: PromptContext): Array<{ role: "sy
     : null;
   return [
     // Fails closed: a transcript is only called reliable when Zoom confirmed the labels.
-    { role: "system", content: systemPrompt(evidence, context.speakerLabels ?? "inferred") },
+    { role: "system", content: systemPrompt(evidence, context.speakerLabels ?? "inferred", context.styleGuide ?? null, context.formatGuide ?? null, context.atomEvidence ?? "") },
     {
       role: "user",
       content: `Class details (from the school's system):\n${details}\n\n${people ? `${people}\n\n` : ""}` +
-        `${evidence === "summary" ? "Lesson summary" : "Lesson transcript"}:\n${record}`,
+        `${evidence === "summary" ? "Lesson summary" : "Lesson transcript"}:\n${record}` +
+        (context.atomEvidence ? `\n\nFrozen Atom lesson evidence:\n${context.atomEvidence}` : ""),
     },
   ];
 }
