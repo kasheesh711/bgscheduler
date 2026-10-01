@@ -345,7 +345,7 @@ export function WorkforceDashboard({
                     "Departures",
                     month?.departuresCount,
                     report.months.map((m) => m.departuresCount),
-                    "Completed sheet-marked departures after the final taught class.",
+                    "Owner-confirmed departures, dated to the last recorded class. Future classes stay pending.",
                   ],
                   [
                     "Turnover",

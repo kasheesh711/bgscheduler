@@ -52,9 +52,17 @@ earliest retained Wise account-join date, including people awaiting their first 
 **reconstructed Wise roster**: accounts removed before collection began, missing dates and unresolved identities
 remain limitations.
 
-Only sheet-marked people can become departures. Their final day comes from their last recorded taught class;
-known cancellations and student no-shows are excluded. An uncancelled future class keeps the person pending,
-even when viewing a past month. This status never triggers a removal.
+Departures require an owner-confirmed list or a sheet marking. Following the owner's 1 October definition,
+the resignation date is the last recorded past ENDED class (or direct teaching evidence), excluding known
+cancellations and student no-shows. This date does not require credit evidence or complete history through
+today; those limits stay visible and still apply to credit-consumed and delivered utilization. An uncancelled
+future class keeps the person pending, even when viewing a past month. This status never triggers a removal.
+
+Known matched departures remain visible when another source identity is unresolved. The monthly percentage is
+labelled partial in that case; a genuinely unknown opening denominator still has no rate. Owner confirmations
+are stored separately as `owner-confirmed-departures` in `tutor_offboarding_sheet_source` and read only by workforce
+analytics. They retain their confirmation date and do not expire when the Sheets refresh becomes stale. They
+neither edit the connected sheet nor grant removal eligibility.
 
 ### Subject supply and booked demand
 

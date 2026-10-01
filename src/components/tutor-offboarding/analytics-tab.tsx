@@ -373,8 +373,8 @@ export function AnalyticsContent({
               markings may be pending, and inactivity does not confirm an exit.
             </p>
             <p className="mt-2 text-xs">
-              <strong>HR turnover rate is unavailable.</strong>
-              {` ${report.turnover.unavailableReason}`}
+              Monthly turnover is shown in Workforce Overview using confirmed
+              departures and last class dates.
             </p>
           </Panel>
           <Panel className="px-4 py-3">

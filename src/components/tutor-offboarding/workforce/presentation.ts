@@ -37,6 +37,17 @@ const reasons: Record<string, string> = {
   subject_unmapped: "Academic subject needs review.",
   roster_history_incomplete:
     "Opening Wise roster is reconstructed from incomplete history.",
+  OWNER_CONFIRMED_DEPARTURE: "Departure confirmed by the owner’s list.",
+  OWNER_CONFIRMED_DEPARTURES: "Departures come from the owner’s confirmed list.",
+  LAST_RECORDED_CLASS_DATE: "Resignation date is the last recorded class date.",
+  DEPARTURE_HISTORY_INCOMPLETE: "The last recorded class is used; later history may be incomplete.",
+  DEPARTURE_DATE_UNCONFIRMED: "A confirmed departure has no usable last class date.",
+  TERMINATION_SOURCE_INCOMPLETE: "Some departure records still need an identity match.",
+  WISE_ROSTER_RECONSTRUCTED: "Opening roster uses retained Wise account join dates.",
+  ROLE_HISTORY_RECONSTRUCTED: "Includes tutors and administrators with teaching evidence.",
+  FUTURE_SNAPSHOT_UNCONFIRMED: "Upcoming class coverage is incomplete or out of date.",
+  LATER_CLASS_STATUS_UNCONFIRMED: "A later class has an unknown status; the last recorded ended class is used.",
+  PENDING_CLASS_TIME_UNCONFIRMED: "A remaining class has an unverified time, so departure stays pending.",
 };
 export function metricReason(metric: WorkforceMetric | undefined) {
   if (!metric) return "Supporting evidence is unavailable.";
