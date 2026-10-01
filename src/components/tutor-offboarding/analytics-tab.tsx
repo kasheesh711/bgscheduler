@@ -1,4 +1,6 @@
 "use client";
+import { WorkforceTab } from "./workforce/dashboard";
+import type { WorkforceReport } from "@/lib/tutor-offboarding/workforce/types";
 
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -197,9 +199,11 @@ function Metric({
 export function AnalyticsContent({
   report,
   initialScenario = "marked",
+  contextOnly = false,
 }: {
   report: AnalyticsReport;
   initialScenario?: AnalyticsScenario;
+  contextOnly?: boolean;
 }) {
   const [scenario, setScenario] = useState<AnalyticsScenario>(initialScenario);
   const [query, setQuery] = useState("");
@@ -299,7 +303,11 @@ export function AnalyticsContent({
     <div className="mt-4 space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">Tutor and staff departures</h2>
+          <h2 className="text-lg font-semibold">
+            {contextOnly
+              ? "Departure planning context"
+              : "Tutor and staff departures"}
+          </h2>
           <p className="mt-1 text-xs text-muted-foreground">{`Teaching history since ${formatDayYear(report.historyStart)} · snapshot ${checked} Bangkok`}</p>
         </div>
         <label className="flex flex-col gap-1 text-xs font-medium">
@@ -325,57 +333,67 @@ export function AnalyticsContent({
             : "Treat this analysis as provisional."}
         </Panel>
       ) : null}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric
-          label="Current roster"
-          value={number(report.totals.rosterTutors)}
-          detail={`${number(report.totals.fullTimeTutors)} full-time tutors included; Wise staff counted separately`}
-        />
-        <Metric
-          label="Demonstrated teaching"
-          value={number(report.totals.historicalTeachingPeople)}
-          detail={`Tutors with ended classes since 1 March; ${number(report.totals.historicalOffRosterPeople)} are off the current roster`}
-        />
-        <Metric
-          label="Marked for termination"
-          value={number(report.totals.markedTutors)}
-          detail={`${number(report.totals.markedPendingClasses)} still have upcoming classes`}
-        />
-        <Metric
-          label="Unmarked · very likely gone"
-          value={number(report.totals.inferredVeryLikely)}
-          detail="An inactivity estimate; departure has not been confirmed"
-        />
-      </div>
-      <Panel className="px-4 py-4">
-        <Upper>
-          {scenario === "marked"
-            ? "Teaching cohort marked for departure"
-            : "Teaching cohort in expanded departure scenario"}
-        </Upper>
-        <div className="mt-2 flex flex-wrap items-baseline gap-3">
-          <p className="text-2xl font-semibold tabular-nums">{share}</p>
-          <p className="text-sm tabular-nums">{`${numerator} ÷ ${report.turnover.denominator} × 100 = ${share}`}</p>
-        </div>
-        <p className="mt-2 text-xs text-muted-foreground">
-          Scenario tutors who taught since 1 March ÷ all tutors who taught in
-          that period. This is a departure planning estimate. Sheet markings may
-          be pending, and inactivity does not confirm an exit.
+      {!contextOnly ? (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <Metric
+              label="Current roster"
+              value={number(report.totals.rosterTutors)}
+              detail={`${number(report.totals.fullTimeTutors)} full-time tutors included; Wise staff counted separately`}
+            />
+            <Metric
+              label="Demonstrated teaching"
+              value={number(report.totals.historicalTeachingPeople)}
+              detail={`Tutors with ended classes since 1 March; ${number(report.totals.historicalOffRosterPeople)} are off the current roster`}
+            />
+            <Metric
+              label="Marked for termination"
+              value={number(report.totals.markedTutors)}
+              detail={`${number(report.totals.markedPendingClasses)} still have upcoming classes`}
+            />
+            <Metric
+              label="Unmarked · very likely gone"
+              value={number(report.totals.inferredVeryLikely)}
+              detail="An inactivity estimate; departure has not been confirmed"
+            />
+          </div>
+          <Panel className="px-4 py-4">
+            <Upper>
+              {scenario === "marked"
+                ? "Teaching cohort marked for departure"
+                : "Teaching cohort in expanded departure scenario"}
+            </Upper>
+            <div className="mt-2 flex flex-wrap items-baseline gap-3">
+              <p className="text-2xl font-semibold tabular-nums">{share}</p>
+              <p className="text-sm tabular-nums">{`${numerator} ÷ ${report.turnover.denominator} × 100 = ${share}`}</p>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Scenario tutors who taught since 1 March ÷ all tutors who taught
+              in that period. This is a departure planning estimate. Sheet
+              markings may be pending, and inactivity does not confirm an exit.
+            </p>
+            <p className="mt-2 text-xs">
+              <strong>HR turnover rate is unavailable.</strong>
+              {` ${report.turnover.unavailableReason}`}
+            </p>
+          </Panel>
+          <Panel className="px-4 py-3">
+            <Upper>Staff evidence</Upper>
+            <p className="mt-2 text-sm">{`${report.totals.staff} current Wise staff accounts · ${report.people.filter((p) => p.category === "staff" && p.marked).length} marked for termination`}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Staff are separate from the tutor teaching cohort. Wise roles and
+              sheet markings do not establish historical staffing levels or a
+              staff turnover rate.
+            </p>
+          </Panel>
+        </>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          This original tutor-only departure scenario uses history since March
+          and its own scenario selector. Workforce filters above do not apply
+          here. Inactivity estimates do not establish a completed departure.
         </p>
-        <p className="mt-2 text-xs">
-          <strong>HR turnover rate is unavailable.</strong>
-          {` ${report.turnover.unavailableReason}`}
-        </p>
-      </Panel>
-      <Panel className="px-4 py-3">
-        <Upper>Staff evidence</Upper>
-        <p className="mt-2 text-sm">{`${report.totals.staff} current Wise staff accounts · ${report.people.filter((p) => p.category === "staff" && p.marked).length} marked for termination`}</p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Staff are separate from the tutor teaching cohort. Wise roles and
-          sheet markings do not establish historical staffing levels or a staff
-          turnover rate.
-        </p>
-      </Panel>
+      )}
       <Disclosure
         title="People by departure evidence"
         count={report.people.length}
@@ -671,7 +689,9 @@ export function AnalyticsContent({
 export function AnalyticsTab({
   initial,
   initialError = null,
+  initialWorkforce,
 }: {
+  initialWorkforce?: WorkforceReport;
   initial?: TutorOffboardingAnalytics;
   initialError?: string | null;
 }) {
@@ -704,33 +724,39 @@ export function AnalyticsTab({
   }, [initial, load]);
   return (
     <section aria-label="Tutor offboarding analytics">
-      <div className="mt-4 flex justify-end">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={busy}
-          onClick={() => void load()}
-        >
-          {busy ? "Loading analytics…" : "Refresh analytics"}
-        </Button>
-      </div>
-      {error ? (
-        <p role="alert" className="mt-3 text-sm text-conflict">
-          {error}
-        </p>
-      ) : null}
-      {!report && !error ? (
-        <Panel className="mt-4 px-4 py-5 text-sm text-muted-foreground">
-          Loading tutor and course evidence…
-        </Panel>
-      ) : null}
-      {report?.available ? (
-        <AnalyticsContent report={report} />
-      ) : report ? (
-        <Panel className="mt-4 px-4 py-5 text-sm text-muted-foreground">
-          {UNAVAILABLE[report.reason]}
-        </Panel>
-      ) : null}
+      <WorkforceTab initial={initialWorkforce} />
+      <details className="mt-5 rounded-[10px] border bg-card p-4">
+        <summary className="cursor-pointer text-sm font-semibold focus-visible:outline-2">
+          Departure planning context and affected courses
+        </summary>
+        <div className="mt-4 flex justify-end">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => void load()}
+          >
+            {busy ? "Loading analytics…" : "Refresh analytics"}
+          </Button>
+        </div>
+        {error ? (
+          <p role="alert" className="mt-3 text-sm text-conflict">
+            {error}
+          </p>
+        ) : null}
+        {!report && !error ? (
+          <Panel className="mt-4 px-4 py-5 text-sm text-muted-foreground">
+            Loading tutor and course evidence…
+          </Panel>
+        ) : null}
+        {report?.available ? (
+          <AnalyticsContent report={report} contextOnly />
+        ) : report ? (
+          <Panel className="mt-4 px-4 py-5 text-sm text-muted-foreground">
+            {UNAVAILABLE[report.reason]}
+          </Panel>
+        ) : null}
+      </details>
     </section>
   );
 }
