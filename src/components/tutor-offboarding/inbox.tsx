@@ -6,7 +6,10 @@ import { BAND_LABEL, INBOX_BANDS } from "./format";
 import { PersonRow } from "./person-row";
 
 /** The review list: one panel per band, most likely first. */
-export function Inbox({ rows, onOpen, onKeep }: { rows: OffboardingPersonRow[]; onOpen: (key: string) => void; onKeep: (key: string) => void }) {
+export function Inbox({ rows, onOpen, onKeep, selectedKeys, onSelect, canRemove = false }: {
+  rows: OffboardingPersonRow[]; onOpen: (key: string) => void; onKeep: (key: string) => void;
+  selectedKeys?: ReadonlySet<string>; onSelect?: (key: string) => void; canRemove?: boolean;
+}) {
   if (rows.length === 0) {
     return (
       <Panel>
@@ -30,7 +33,9 @@ export function Inbox({ rows, onOpen, onKeep }: { rows: OffboardingPersonRow[]; 
             <ul>
               {group.map((row) => (
                 <PersonRow key={row.signals.canonicalKey} row={row}
-                  onOpen={() => onOpen(row.signals.canonicalKey)} onKeep={() => onKeep(row.signals.canonicalKey)} />
+                  onOpen={() => onOpen(row.signals.canonicalKey)} onKeep={() => onKeep(row.signals.canonicalKey)}
+                  selected={selectedKeys?.has(row.signals.canonicalKey)} canRemove={canRemove}
+                  onSelect={onSelect ? () => onSelect(row.signals.canonicalKey) : undefined} />
               ))}
             </ul>
           </Panel>

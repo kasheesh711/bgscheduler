@@ -228,15 +228,16 @@ The payout path is *stable, with writes flag-gated by `POST_CLASS_PAYOUT_WRITES_
 
 > **Deployment cross-check.** `requirePayoutGoogleTarget` compares `POST_CLASS_PAYOUT_TARGET` against Vercel's injected `VERCEL_ENV` ([`payout-config.ts:115`–`123`](../../src/lib/post-class-feedback/payout-config.ts)): a `production` deployment must target `production`, a `preview` deployment must target `scratch`. Both mismatches throw. Because `value()` returns `""` rather than `undefined`, an unset `VERCEL_ENV` (local dev) resolves to `""` and neither check fires. There are deliberately no live spreadsheet, folder, tab, or account fallbacks in source ([`payout-config.ts:1`–`5`](../../src/lib/post-class-feedback/payout-config.ts)).
 
-### 2.5 Wise writeback verification gates (3)
+### 2.5 Wise writeback verification gates (4)
 
-Three independent gates, each requiring the exact string `"true"`. They exist so a Wise write contract that has not been validated against the `begifted-education` tenant cannot fire.
+Four independent gates, each requiring the exact string `"true"`. They exist so a Wise write contract that has not been validated against the `begifted-education` tenant cannot fire.
 
 | Variable | Gate | Consumed at | If unset |
 |---|---|---|---|
 | `WISE_SESSION_OPERATIONS_VERIFIED` | LINE-originated session operations (cancel / reschedule writeback) | [`wise/operations.ts:10`–`12`](../../src/lib/wise/operations.ts) (function); [`line/operational.ts:21`](../../src/lib/line/operational.ts) — a **module-level `const`**, captured once at import | Writeback stays dry-run |
 | `WISE_SESSION_CREATE_VERIFIED` | Real Wise session creation for progress-test bookings | [`progress-tests/config.ts:49`–`51`](../../src/lib/progress-tests/config.ts) | Bookings record locally and require a manual Wise booking ([`config.ts:40`–`47`](../../src/lib/progress-tests/config.ts)) |
 | `WISE_SESSION_SUBJECT_UPDATE_VERIFIED` | Future-session subject rewrite during the student-promotion run. The name lives in a `const` ([`student-promotions/data.ts:201`](../../src/lib/student-promotions/data.ts)) and is read via computed access ([`:450`](../../src/lib/student-promotions/data.ts)), so a literal grep finds the `const`, not the read | [`data.ts:449`–`451`](../../src/lib/student-promotions/data.ts); enforced at [`:2412`](../../src/lib/student-promotions/data.ts) | Throws `WISE_SESSION_SUBJECT_UPDATE_VERIFIED=true is required before Wise session subject writes` |
+| `WISE_TEACHER_REMOVAL_VERIFIED` | Wise institute participant removal from Tutor Offboarding | [`removal-safety.ts`](../../src/lib/tutor-offboarding/removal-safety.ts) | Manual mode unless exactly `true` **and** `VERCEL_ENV=production` |
 
 ### 2.6 Leave requests (4)
 
@@ -332,20 +333,20 @@ flowchart TD
 
 ## 4. `.env.example` reconciliation
 
-`.env.example` lists **43** concrete keys plus one commented optional Tutor Offboarding account example. Every one is genuinely read somewhere — there are no dead entries. It carries 19 of the 20 schema-declared keys; `CREDIT_REFRESH_MAX_AGE_MINUTES` is the declared omission. **Thirty-seven** named keys read by non-test runtime code are missing from it:
+`.env.example` lists **43** concrete keys plus two commented optional Tutor Offboarding examples. Every one is genuinely read somewhere — there are no dead entries. It carries 19 of the 20 schema-declared keys; `CREDIT_REFRESH_MAX_AGE_MINUTES` is the declared omission. **Thirty-eight** named keys read by non-test runtime code are missing from it:
 
 - **AI models and flags (6):** `OPENAI_SCHEDULER_SHADOW_MODEL`, `OPENAI_SCHEDULER_REASONING_EFFORT`, `OPENAI_PROGRESS_TEST_MODEL`, `OPENAI_POST_CLASS_FEEDBACK_MODEL`, `OPENAI_COMPETITOR_INTEL_MODEL`, `ENABLE_COMPETITOR_AI`
 - **Competitor providers (8):** `APIFY_API_TOKEN`, `APIFY_INSTAGRAM_ACTOR`, `APIFY_FACEBOOK_ACTOR`, `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD`, `COMPETITOR_APIFY_COST_PER_ITEM_USD`, `COMPETITOR_DATAFORSEO_COST_PER_QUERY_USD`, `COMPETITOR_INTEL_MONTHLY_CAP_USD`
-- **Wise writeback gates (3):** `WISE_SESSION_OPERATIONS_VERIFIED`, `WISE_SESSION_CREATE_VERIFIED`, `WISE_SESSION_SUBJECT_UPDATE_VERIFIED`
+- **Wise writeback gates (4):** `WISE_SESSION_OPERATIONS_VERIFIED`, `WISE_SESSION_CREATE_VERIFIED`, `WISE_SESSION_SUBJECT_UPDATE_VERIFIED`, `WISE_TEACHER_REMOVAL_VERIFIED`
 - **Admissions email (3):** `RESEND_API_KEY`, `ADMISSIONS_EMAIL_FROM`, `ADMISSIONS_EMAIL_REPLY_TO`
 - **Unattended charging (2):** `POST_CLASS_AUTO_APPROVE_ENABLED`, `POST_CLASS_AUTO_APPROVE_GRACE_HOURS` — the two knobs that decide whether money moves without a human
 - **Ops and misc (4):** `SCHEDULE_EMAIL_PUBLIC_BASE_URL`, `LINE_VALIDATION_LEAD_EMAILS`, `SEED_ADMIN_EMAILS`, `SALES_DASHBOARD_CONNECTED_EMAIL`
 - **Wise traffic controls (4):** `WISE_FAR_HORIZON_MAX_AGE_MINUTES`, `WISE_AVAILABILITY_HORIZON_DAYS`, `WISE_MAX_CONCURRENCY`, `CREDIT_REFRESH_MAX_AGE_MINUTES`
 - **Local PDF runtime (1):** `CHROME_EXECUTABLE_PATH`
-- **Tutor Offboarding (1):** `TUTOR_OFFBOARDING_CONNECTED_EMAIL` (optional; falls back to `SALES_DASHBOARD_CONNECTED_EMAIL`)
+- **Tutor Offboarding (2):** `TUTOR_OFFBOARDING_CONNECTED_EMAIL` (optional; falls back to `SALES_DASHBOARD_CONNECTED_EMAIL`) and `WISE_TEACHER_REMOVAL_VERIFIED` (optional; enable only after owner probe)
 - **Platform-injected (5), correctly omitted:** `VERCEL`, `VERCEL_ENV`, `VERCEL_URL`, `VERCEL_PROJECT_PRODUCTION_URL`, `AWS_LAMBDA_FUNCTION_NAME`
 
-The actionable production gap is the first seven groups — **30 keys** that change application behaviour and are discoverable only by reading source. The local Chrome override, platform-injected keys, and 6 test/script-only keys (§2.10) are reasonably omitted. The `COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD` family cannot be listed at all, because the key name is computed at call time ([`budget.ts:19`](../../src/lib/competitor-intelligence/budget.ts)).
+The actionable production gap is the first seven groups — **31 keys** that change application behaviour and are discoverable only by reading source. The local Chrome override, platform-injected keys, and 6 test/script-only keys (§2.10) are reasonably omitted. The `COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD` family cannot be listed at all, because the key name is computed at call time ([`budget.ts:19`](../../src/lib/competitor-intelligence/budget.ts)).
 
 **Three blank placeholders would fail the declared schema.** `.env.example:24`–`25` ship `LINE_CHANNEL_SECRET=` and `LINE_CHANNEL_ACCESS_TOKEN=`, and `.env.example:45` ships `APP_BASE_URL=`. A dotenv loader sets those to `""`, not `undefined`, and `z.string().min(1).optional()` / `z.string().url().optional()` reject `""`. Today this is harmless because the schema never runs and every consumer `.trim()`s and treats `""` as unset ([`line/client.ts:21`–`22`](../../src/lib/line/client.ts), [`link/route.ts:19`](../../src/app/api/student-schedule/link/route.ts)). If `src/lib/env.ts` is ever wired into a boot path, a `.env.local` copied verbatim from the template will throw on those three lines. `MAINTENANCE_MODE=`, `MAINTENANCE_BYPASS_EMAILS=`, and `LINE_SCHEDULE_BOT_ADMIN_IDS=` are plain `.optional()` strings and parse fine when blank.
 
@@ -512,3 +513,5 @@ row, not in env ([runbook](../operations/feedback-autowriter.md)).
 | `TUTOR_OFFBOARDING_CONNECTED_EMAIL` | Google OAuth token owner for the configured `Tutors` termination-source sheet | Falls back to `SALES_DASHBOARD_CONNECTED_EMAIL`, then an empty value; without a usable connection, the next snapshot sync records a visible source error and the dashboard reports the missing or stale source. |
 
 The spreadsheet ID and tab ID (`470328060`, title `Tutors`) are fixed in [`termination-source.ts`](../../src/lib/tutor-offboarding/termination-source.ts). The existing Wise snapshot sync refreshes this source after promotion; dashboard and API reads use Postgres only. Failed refreshes preserve the last successful rows and show the error. The optional example is commented out in [`.env.example`](../../.env.example): remove the comment and set a real account only when it differs from the fallback.
+
+Live Tutor Offboarding removal also requires `WISE_TEACHER_REMOVAL_VERIFIED=true` **and** `VERCEL_ENV=production` ([`removal-safety.ts`](../../src/lib/tutor-offboarding/removal-safety.ts)). Keep the flag unset until the owner completes and records the dummy-teacher endpoint probe. When disabled, apply saves a manual checklist and performs no Wise POST. Only the owner should enable it in Vercel's Production environment after verification, then deploy the change.

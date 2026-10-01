@@ -22,7 +22,10 @@ export function accountLabel(account: OffboardingAccount): string {
   return `${account.isOnlineVariant ? "Online" : "Onsite"}${account.email ? ` · ${account.email}` : ""}`;
 }
 
-export function PersonRow({ row, onOpen, onKeep }: { row: OffboardingPersonRow; onOpen: () => void; onKeep: () => void }) {
+export function PersonRow({ row, onOpen, onKeep, selected = false, onSelect, canRemove = false }: {
+  row: OffboardingPersonRow; onOpen: () => void; onKeep: () => void;
+  selected?: boolean; onSelect?: () => void; canRemove?: boolean;
+}) {
   const { signals, score } = row;
   return (
     <li className="flex flex-col items-start gap-3 border-t sm:flex-row sm:gap-4 px-5 py-3.5 first:border-t-0">
@@ -40,7 +43,17 @@ export function PersonRow({ row, onOpen, onKeep }: { row: OffboardingPersonRow; 
           {signals.accounts.map((account) => <Tag key={account.wiseTeacherId} className="max-w-full whitespace-normal [overflow-wrap:anywhere]">{accountLabel(account)}</Tag>)}
         </span>
       </button>
-      <Button type="button" size="sm" variant="outline" onClick={onKeep}>Still with us</Button>
+      <div className="flex shrink-0 flex-wrap items-center gap-3 sm:flex-col sm:items-end">
+        {onSelect && score.removable && !score.exclusion ? (
+          <label className="flex cursor-pointer items-center gap-2 text-xs">
+            <input type="checkbox" checked={selected} disabled={!canRemove} onChange={onSelect}
+              aria-label={`Select ${signals.displayName} for removal`} className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-ring" />
+            Select
+          </label>
+        ) : null}
+        <Button type="button" size="sm" variant="outline" onClick={onKeep}>Still with us</Button>
+      </div>
+      {onSelect && !score.removable ? <p className="text-xs text-muted-foreground sm:max-w-36">{score.exclusion?.text ?? score.removableBlockedBy ?? "Not eligible for removal"}</p> : null}
     </li>
   );
 }
