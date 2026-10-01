@@ -91,6 +91,8 @@ Apply the observed cancellation/refund fraction to that projected booked demand 
 
 Display twelve monthly points beginning with the month after the base month. Label them as projections. Controls may override monthly additions, churn loss, cancellation/refund fraction, and group mix. Every override is visibly distinguished from a measured input. Reset restores the measured model. No automatic annual seasonality is applied.
 
+Show already-booked future demand alongside the forecast. It is part of projected total demand, not an extra amount to add on top. A staffing requirement must still cover current uncancelled booking commitments when they exceed the model's estimate.
+
 ## 5. Extra weekly availability
 
 Translate projected tutor-hours into an average week using the observed subject/weekday/time pattern, accounting for calendar occurrences. Compare with projected capacity from the latest recorded tutor availability, qualifications, and approved leave. Show when those source facts were observed and that future capacity assumes they continue.
