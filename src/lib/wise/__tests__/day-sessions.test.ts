@@ -30,6 +30,12 @@ describe("complete Bangkok-day Wise reads", () => {
     expect(await fetchWiseSessionsForBangkokDates(client, "i", [date], { now: new Date("2026-09-13T00:00:00Z") })).toEqual([]);
     expect(vi.mocked(client.get).mock.calls[0][1]?.status).toBe("PAST");
   });
+  it("can read only the strict PAST listing when the caller handles FUTURE separately", async () => {
+    const client = mock(page([row("ended")]));
+    expect(await fetchWiseSessionsForBangkokDates(client, "i", [date], { now: new Date("2026-09-12T08:00:00Z"), pastOnly: true })).toHaveLength(1);
+    expect(client.get).toHaveBeenCalledOnce();
+    expect(vi.mocked(client.get).mock.calls[0][1]?.status).toBe("PAST");
+  });
   it.each([
     {}, page([row("a")], 0), page([row("a")], 2), page([], 2), page([row("a"), row("a")]),
     page([{ ...row("a"), scheduledEndTime: "invalid" }]),

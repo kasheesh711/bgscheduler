@@ -3,7 +3,6 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { createWiseClient } from "@/lib/wise/client";
-import { fetchWiseSessionsForBangkokDates } from "@/lib/wise/day-sessions";
 import type { WiseSession } from "@/lib/wise/types";
 import { isPreviewEnvironment } from "@/lib/preview-policy";
 import { isIsebClass } from "../format";
@@ -15,6 +14,8 @@ import { atomSubject, bangkokDate, evidenceHash } from "./evidence";
 import { openAtomReadClient, type AtomReadClient } from "./browser";
 import { AtomCollectionError } from "./normalize";
 import type { AtomLesson } from "./types";
+import { fetchAtomLessonTimetable } from "./wise";
+import { configuredAtomTrial } from "./trial";
 
 const RUN = s.feedbackAtomSyncRuns;
 const PENDING = ["pending", "generating", "would_submit", "awaiting_recording", "transcribing"] as const;
@@ -45,6 +46,7 @@ export async function runAtomCollector(input: {
   now?: Date;
   /** Owner-only cloud proof. Does not approve a Wise-to-Atom link or generate feedback. */
   probe?: { studentId: string; date: string };
+  trial?: boolean;
 }) {
   const { db } = input;
   const now = input.now ?? new Date();
@@ -89,6 +91,9 @@ export async function runAtomCollector(input: {
         isIsebClass(rosterTutor(refId(session.userId))?.canonicalKey, describeClass({ programme, title: session.title }));
     }).map(session => session._id));
     const links = await db.select().from(s.feedbackAtomLinks).where(eq(s.feedbackAtomLinks.active, true));
+    if (input.trial && (!input.probe || !links.some(link => link.atomStudentId === input.probe!.studentId))) {
+      throw new AtomCollectionError("collection_failed", "trial_link_unapproved");
+    }
     const targets = new Map<string, Set<string>>();
     for (const lesson of lessons.filter(lesson => relevantIds.has(lesson.sessionId))) {
       const link = links.find(link => link.wiseStudentId === lesson.studentId);
@@ -98,7 +103,11 @@ export async function runAtomCollector(input: {
       wanted.add(bangkokDate(lesson.end));
       targets.set(link.atomStudentId, wanted);
     }
-    if (input.probe) targets.set(input.probe.studentId, new Set([input.probe.date]));
+    if (input.probe) {
+      const wanted = targets.get(input.probe.studentId) ?? new Set<string>();
+      wanted.add(input.probe.date);
+      targets.set(input.probe.studentId, wanted);
+    }
     client = await input.openClient();
     catalog = client.catalog;
     for (const [studentId, wanted] of targets) {
@@ -126,7 +135,7 @@ export async function runAtomCollector(input: {
     await client?.close().catch(() => undefined);
     await db.update(RUN).set({
       status: failure ? "failed" : "succeeded", finishedAt: new Date(), errorCode: failure,
-      counts: { snapshots, activities: activityCount, catalog, studentResults, probe: Boolean(input.probe) },
+      counts: { snapshots, activities: activityCount, catalog, studentResults, probe: Boolean(input.probe), trial: Boolean(input.trial) },
     }).where(eq(RUN.id, runId));
   }
   if (failure) {
@@ -149,12 +158,14 @@ export async function collectAtomOnServer(triggerSource: "cron" | "admin" = "cro
   const { env } = await import("@/lib/env");
   const deadlineMs = Date.now() + 690_000;
   const wise = createWiseClient();
+  const trial = triggerSource === "cron" ? configuredAtomTrial(process.env) : null;
   return runAtomCollector({
-    db: getDb(), deadlineMs, triggerSource, deploymentId: process.env.VERCEL_DEPLOYMENT_ID ?? process.env.VERCEL_URL ?? null, probe,
+    db: getDb(), deadlineMs, triggerSource, deploymentId: process.env.VERCEL_DEPLOYMENT_ID ?? process.env.VERCEL_URL ?? null,
+    probe: probe ?? trial ?? undefined, trial: Boolean(trial),
     openClient: () => {
       if (!username || !password) throw new AtomCollectionError("authentication_failed");
       return openAtomReadClient({ username, password, deadlineMs });
     },
-    fetchDays: dates => fetchWiseSessionsForBangkokDates(wise, env.WISE_INSTITUTE_ID, dates, { deadlineAt: deadlineMs }),
+    fetchDays: dates => fetchAtomLessonTimetable(wise, env.WISE_INSTITUTE_ID, dates, { deadlineAt: deadlineMs }),
   });
 }
