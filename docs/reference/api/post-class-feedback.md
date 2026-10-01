@@ -503,3 +503,15 @@ The daily admin digest email. **Parked** — no cron entry, `manualOnly: true`, 
 ---
 
 _Verified against main@0cd1e81 (clean tree) on 2026-09-02._
+
+
+## Gmail connection and private reminder alerts
+
+All `/api/post-class-feedback/email` controls require `access_manager` and return no tokens or receipt codes. POST rejects other origins.
+
+- `GET /email`: Gmail configuration, connection, renewal and test metadata; private LINE verification and alert status.
+- `POST /email`: `{action: "connect"}` returns the Google authorization URL and sets an encrypted callback cookie. Other actions: `renew`, `test` (current manager's inbox), `confirm` with `code`, `line_test` (pinned private destination), `line_confirm` with `code`.
+- `GET /email/callback`: validates state, initiating manager, PKCE, exact verified mailbox and granted scope; stores encrypted credentials separately and clears the cookie.
+- `POST /reminders`: `shadow_preview`, `retry`, or `resolve`; the old primary/backup test action has been removed.
+
+Activation and resume require current Gmail receipt/renewal, verified private LINE, complete current-policy shadow and legacy-cutover evidence. See the [operator runbook](../../operations/nightly-feedback-reminders.md).
