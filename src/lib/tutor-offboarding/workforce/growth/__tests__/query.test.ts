@@ -24,6 +24,10 @@ describe("growth scenario boundaries", () => {
     expect(()=>parseGrowthExportRequest({filters,section:"forecast"})).toThrow();
     expect(parseGrowthExportRequest({filters,section:"gaps",reportRevision:"r"}).section).toBe("gaps");
   });
+  it("rejects a partial teaching roster instead of silently dropping competing demand", () => {
+    expect(()=>parseGrowthRequest({filters:{...filters,role:"tutor"}})).toThrow("all teaching staff");
+    expect(()=>parseGrowthRequest({filters:{...filters,modality:"online"}})).toThrow("all teaching staff");
+  });
   it("bounds bodies before parsing and rejects malformed JSON", async () => {
     const req=(body:string)=>new Request("https://example.test",{method:"POST",headers:{"Content-Type":"application/json"},body});
     await expect(readGrowthBody(req('{"a":1}'))).resolves.toEqual({a:1});

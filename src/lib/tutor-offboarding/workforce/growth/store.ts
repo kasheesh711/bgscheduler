@@ -88,11 +88,9 @@ export async function loadGrowthEvidence(db: Database, now = new Date()): Promis
   return withDatabaseTransaction(db, async tx => {
     await tx.execute(sql`set transaction isolation level repeatable read read only`);
     const today = formatInTimeZone(now, "Asia/Bangkok", "yyyy-MM-dd");
-    const [workforce, classifications, events] = await Promise.all([
-      loadWorkforceEvidenceInTransaction(tx, { from: "2026-03-01", to: today, viewMonth: today.slice(0,7), role: "all", modality: "all" }, now),
-      tx.select().from(bookings).where(eq(bookings.isCurrent, true)),
-      tx.select().from(lifecycle).where(eq(lifecycle.isCurrent, true)),
-    ]);
+    const workforce = await loadWorkforceEvidenceInTransaction(tx, { from: "2026-03-01", to: today, viewMonth: today.slice(0,7), role: "all", modality: "all" }, now);
+    const classifications = await tx.select().from(bookings).where(eq(bookings.isCurrent, true));
+    const events = await tx.select().from(lifecycle).where(eq(lifecycle.isCurrent, true));
     const retained = new Map(classifications.map(r => [r.wiseSessionId, r.payload as unknown as GrowthBookingMetadata]));
     const bookingMetadata = workforce.sessions.map(session => {
       const prior = retained.get(session.wiseSessionId);

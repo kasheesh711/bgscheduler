@@ -33,10 +33,15 @@ function validateKeys(value: unknown, depth=0): void {
 export function parseGrowthRequest(value: unknown): GrowthQuery {
   validateKeys(value);
   const parsed=base.parse(value);
-  return {filters:parseWorkforceQuery(new URLSearchParams(parsed.filters)),assumptions:parsed.assumptions};
+  const filters = institutionScope(parseWorkforceQuery(new URLSearchParams(parsed.filters)));
+  return {filters,assumptions:parsed.assumptions};
 }
 export function parseGrowthGetQuery(params: URLSearchParams): GrowthQuery {
-  return {filters:parseWorkforceQuery(params),assumptions:{bufferPercent:0}};
+  return {filters:institutionScope(parseWorkforceQuery(params)),assumptions:{bufferPercent:0}};
+}
+function institutionScope(filters: GrowthQuery["filters"]): GrowthQuery["filters"] {
+  if (filters.role !== "all" || filters.modality !== "all") throw new TutorOffboardingError("Growth forecasts cover all teaching staff and delivery modes. Use the workforce views for role or mode breakdowns.",422);
+  return filters;
 }
 export function parseGrowthDetailRequest(value: unknown): GrowthDetailQuery {
   validateKeys(value);
