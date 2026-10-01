@@ -6735,3 +6735,35 @@ export const workforceSubjectMappings = pgTable("workforce_subject_mappings", {
   revision: integer("revision").notNull(), reviewedBy: text("reviewed_by"),
   reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
 }, t => [index("workforce_subject_mapping_class_idx").on(t.classId), check("workforce_mapping_revision", sql`${t.revision} > 0`)]);
+
+export const workforceBookingClassifications = pgTable("workforce_booking_classifications", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  wiseSessionId: text("wise_session_id").notNull(),
+  revision: integer("revision").notNull(),
+  contentHash: text("content_hash").notNull(),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  isCurrent: boolean("is_current").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+}, t => [
+  uniqueIndex("workforce_booking_classification_revision_idx").on(t.wiseSessionId, t.revision),
+  uniqueIndex("workforce_booking_classification_current_idx").on(t.wiseSessionId).where(sql`${t.isCurrent}`),
+  check("workforce_booking_classification_revision", sql`${t.revision} > 0`),
+]);
+
+export const workforceCourseLifecycleEvents = pgTable("workforce_course_lifecycle_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  eventKey: text("event_key").notNull(),
+  revision: integer("revision").notNull(),
+  studentId: text("student_id").notNull(),
+  subject: text("subject").notNull(),
+  effectiveMonth: text("effective_month").notNull(),
+  contentHash: text("content_hash").notNull(),
+  recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
+  isCurrent: boolean("is_current").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+}, t => [
+  uniqueIndex("workforce_lifecycle_revision_idx").on(t.eventKey, t.revision),
+  uniqueIndex("workforce_lifecycle_current_idx").on(t.eventKey).where(sql`${t.isCurrent}`),
+  index("workforce_lifecycle_student_subject_idx").on(t.studentId, t.subject, t.effectiveMonth),
+  check("workforce_lifecycle_revision", sql`${t.revision} > 0`),
+]);

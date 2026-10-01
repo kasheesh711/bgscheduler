@@ -743,6 +743,13 @@
       "when": 1790844000000,
       "tag": "0105_tutor_workforce_analytics",
       "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1790847600000,
+      "tag": "0106_tutor_course_demand_growth",
+      "breakpoints": true
     }
   ]
 }
