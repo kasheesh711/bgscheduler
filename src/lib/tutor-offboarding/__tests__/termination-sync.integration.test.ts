@@ -32,6 +32,8 @@ describe("termination source snapshots", () => {
     expect(await loadTerminationSnapshot(db)).toEqual({ rows: [], checkedAt: null, lastError: null });
     mockSource();
     expect(await syncTerminationSource("owner@example.com", NOW, db)).toEqual({ rows: 1, confirmed: 1 });
+    // Compare identity without serializing the database connection into an assertion failure.
+    expect(vi.mocked(getGoogleSheetsAccessToken).mock.calls[0]?.[1] === db).toBe(true);
     expect(await loadTerminationSnapshot(db)).toMatchObject({ checkedAt: NOW.toISOString(), lastError: null, rows: [{ sourceRow: 2, terminated: true }] });
     const requests = vi.mocked(fetch).mock.calls;
     expect(requests).toHaveLength(2);

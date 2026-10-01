@@ -8,8 +8,8 @@ import { parseTerminationSheet, TERMINATION_SHEET_ID, TERMINATION_SPREADSHEET_ID
 const SOURCE_KEY = "terminated-tutors";
 
 /** Called only by the existing snapshot sync, never by a page or API read. */
-async function fetchTerminationSheet(email: string) {
-  const token = await getGoogleSheetsAccessToken(email);
+async function fetchTerminationSheet(email: string, db: Database) {
+  const token = await getGoogleSheetsAccessToken(email, db);
   const read = async (params: URLSearchParams): Promise<TerminationSheetResponse> => {
     const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${TERMINATION_SPREADSHEET_ID}?${params}`, {
       headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000),
@@ -40,7 +40,7 @@ export async function syncTerminationSource(
     if (!email.trim()) {
       const error = new Error("No integration account configured"); error.name = "NotConfigured"; throw error;
     }
-    const rows = await fetchTerminationSheet(email.trim().toLowerCase());
+    const rows = await fetchTerminationSheet(email.trim().toLowerCase(), db);
     await db.insert(tutorOffboardingSheetSource).values({ sourceKey: SOURCE_KEY, rows, checkedAt: now, attemptedAt: now, lastError: null })
       .onConflictDoUpdate({ target: tutorOffboardingSheetSource.sourceKey, set: { rows, checkedAt: now, attemptedAt: now, lastError: null } });
     return { rows: rows.length, confirmed: rows.filter((r) => r.terminated).length };
