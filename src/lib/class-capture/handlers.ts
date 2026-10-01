@@ -20,7 +20,7 @@ export async function list(request: Request) {
   try {
     const scope = await requireCaptureScope();
     requireCaptureEnabled();
-    const date = new URL(request.url).searchParams.get("date") || todayBangkok();
+    const date = new URL(request.url).searchParams.get("date") ?? todayBangkok();
     return captureJson({ sessions: await listCaptureSessions(scope, date), availability: availability() });
   } catch (error) { return captureError(error); }
 }

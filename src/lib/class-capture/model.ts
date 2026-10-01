@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { bangkokDateKey, todayBangkok } from "@/lib/room-capacity/dates";
 
 export const CAPTURE_RETENTION_MS = 24 * 60 * 60 * 1000;
 export const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
@@ -8,6 +9,30 @@ export const AUDIO_TYPES = ["audio/webm", "audio/mp4", "audio/ogg", "audio/wav"]
 export const PHOTO_TYPES = ["image/jpeg", "image/png"] as const;
 export class CaptureError extends Error {
   constructor(public readonly status: number, message: string) { super(message); this.name = "CaptureError"; }
+}
+export type CaptureScope = { email: string; keys: string[] };
+const captureEmailSchema = z.email().max(254);
+export function normalizeCaptureEmail(value: unknown): string | null {
+  // Validate before case folding: Unicode lookalikes must not become another login.
+  if (typeof value !== "string" || value.length > 320) return null;
+  const parsed = captureEmailSchema.safeParse(value.trim());
+  return parsed.success ? parsed.data.toLowerCase() : null;
+}
+/** No caller, including an admin or a direct storage call, may use an unscoped grant. */
+export function assertCaptureScope(scope: CaptureScope, teacherKey?: string): void {
+  if (!scope || !scope.email || normalizeCaptureEmail(scope.email) !== scope.email ||
+    !Array.isArray(scope.keys) || scope.keys.length !== 1 || typeof scope.keys[0] !== "string" ||
+    !scope.keys[0].trim() || scope.keys[0].length > 512 ||
+    (teacherKey !== undefined && scope.keys[0] !== teacherKey)) {
+    throw new CaptureError(403, "This class is outside your current tutor access.");
+  }
+}
+/** Only new selections/inserts use this guard; an owned existing capture can cross midnight. */
+export function assertCaptureSessionToday(session: CaptureSession): void {
+  const start = new Date(session.startTime);
+  if (!Number.isFinite(start.getTime()) || bangkokDateKey(start) !== todayBangkok()) {
+    throw new CaptureError(400, "Choose a class scheduled today in Bangkok. Refresh today's classes and try again.");
+  }
 }
 export function captureEnabled(env: Record<string, string | undefined> = process.env) {
   return env.ENABLE_CLASS_CAPTURE === "true";

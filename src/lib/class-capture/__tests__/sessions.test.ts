@@ -6,7 +6,7 @@ vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
 
 import { getDb } from "@/lib/db";
-import { assertCaptureSessionCurrent, listCaptureSessions, loadPriorFeedback, requireCaptureSession } from "../sessions";
+import { assertCaptureSessionCurrent, listCaptureSessions, loadPriorFeedback, requireCaptureSession, type CaptureScope } from "../sessions";
 import type { CaptureSession } from "../model";
 
 const now = new Date("2026-10-01T04:30:00Z");
@@ -97,7 +97,7 @@ describe("authorized class selection", () => {
 
   it("requires a refresh for recent ended selection when the shared snapshot is stale", async () => {
     database({ future_session_blocks: [], credit_control_snapshots: [{ id: "credit-snapshot", generatedAt: new Date("2026-10-01T00:00:00Z"), source: "wise" }] });
-    await expect(listCaptureSessions(scope, "2026-09-30")).rejects.toMatchObject({ status: 503 });
+    await expect(listCaptureSessions(scope, "2026-10-01")).rejects.toMatchObject({ status: 503 });
   });
 
   it.each([
@@ -110,7 +110,7 @@ describe("authorized class selection", () => {
     await expect(listCaptureSessions(scope, "2026-10-01")).rejects.toMatchObject({ status: 503 });
   });
 
-  it.each(["2026-02-30", "2026-09-23", "2026-10-03", "10/01/2026"])("rejects invalid or out-of-window date %s before reading data", async date => {
+  it.each(["", "2026-02-30", "2026-09-23", "2026-09-30", "2026-10-02", "2026-10-03", "10/01/2026"])("rejects every date except today in Bangkok before reading data: %s", async date => {
     database();
     await expect(listCaptureSessions(scope, date)).rejects.toMatchObject({ status: 400 });
     expect(getDb).not.toHaveBeenCalled();
@@ -150,10 +150,54 @@ describe("authorized class selection", () => {
     await expect(listCaptureSessions(scope, "2026-10-01")).resolves.toEqual([]);
   });
 
-  it("allows full admins to select a verified tutor session but empty teacher scopes grant nothing", async () => {
+  it.each([null, undefined, [], ["Tutor Example", "Other Tutor"], [""], ["   "], "Tutor Example"])("denies unscoped, multiple or malformed keys before any session or prior-feedback query: %j", async keys => {
     database();
-    await expect(requireCaptureSession({ email: "admin@example.test", keys: null }, "session-one", "student-one")).resolves.toMatchObject({ teacherKey: "Tutor Example" });
-    await expect(listCaptureSessions({ email: "tutor@example.test", keys: [] }, "2026-10-01")).rejects.toMatchObject({ status: 403 });
+    const unscoped = { email: "admin@example.test", keys } as CaptureScope;
+    await expect(listCaptureSessions(unscoped, "2026-10-01")).rejects.toMatchObject({ status: 403 });
+    await expect(requireCaptureSession(unscoped, "session-one", "student-one")).rejects.toMatchObject({ status: 403 });
+    await expect(loadPriorFeedback(unscoped, saved)).rejects.toMatchObject({ status: 403 });
+    await expect(assertCaptureSessionCurrent(unscoped, saved)).rejects.toMatchObject({ status: 403 });
+    expect(getDb).not.toHaveBeenCalled();
+  });
+
+  it("does not list or create another tutor's class even for an admin pilot", async () => {
+    database({ tutor_identity_group_members: [identity, { ...identity, canonicalKey: "Other Tutor", groupId: "other-group", wiseUserId: "other-user", wiseTeacherId: "other-teacher" }],
+      future_session_blocks: [future, { ...future, wiseSessionId: "other-session", groupId: "other-group", wiseTeacherUserId: "other-user", wiseTeacherId: "other-teacher" }] });
+    const admin = { email: "admin@example.test", keys: ["Tutor Example"] };
+    expect((await listCaptureSessions(admin, "2026-10-01")).map(item => item.sessionId)).toEqual(["session-one"]);
+    await expect(requireCaptureSession(admin, "other-session", "student-one")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it.each(["2026-09-30", "2026-10-02"])("excludes forged %s session IDs from new selection even if the data layer returns them", async date => {
+    database({ future_session_blocks: [{ ...future, startTime: new Date(`${date}T10:00:00Z`), endTime: new Date(`${date}T12:00:00Z`) }],
+      credit_control_sessions: [{ ...ended, scheduledStartTime: new Date(`${date}T01:00:00Z`), scheduledEndTime: new Date(`${date}T02:00:00Z`) }] });
+    await expect(listCaptureSessions(scope, "2026-10-01")).resolves.toEqual([]);
+    await expect(requireCaptureSession(scope, "session-one", "student-one")).rejects.toMatchObject({ status: 404 });
+    await expect(requireCaptureSession(scope, "ended-one", "student-one")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("rolls new selection over at Bangkok midnight while preserving an owned ended capture", async () => {
+    vi.setSystemTime("2026-10-01T16:59:59Z");
+    database({ snapshots: [{ id: "identity-snapshot", createdAt: new Date() }],
+      credit_control_snapshots: [{ id: "credit-snapshot", generatedAt: new Date(), source: "wise" }],
+      future_session_blocks: [{ ...future, wiseStatus: "ENDED" }] });
+    await expect(requireCaptureSession(scope, "session-one", "student-one")).resolves.toMatchObject({ teacherKey: "Tutor Example" });
+    vi.setSystemTime("2026-10-01T17:00:00Z");
+    await expect(listCaptureSessions(scope, "2026-10-01")).rejects.toMatchObject({ status: 400 });
+    await expect(requireCaptureSession(scope, "session-one", "student-one")).rejects.toMatchObject({ status: 404 });
+    await expect(assertCaptureSessionCurrent(scope, saved)).resolves.toBeUndefined();
+    database({ snapshots: [{ id: "identity-snapshot", createdAt: new Date() }], future_session_blocks: [] });
+    await expect(assertCaptureSessionCurrent(scope, saved)).resolves.toBeUndefined();
+  });
+
+  it("rejects a selection lookup that completes after Bangkok midnight", async () => {
+    vi.setSystemTime("2026-10-01T16:59:59Z");
+    database({ snapshots: [{ id: "identity-snapshot", createdAt: new Date() }],
+      credit_control_snapshots: [{ id: "credit-snapshot", generatedAt: new Date(), source: "wise" }],
+      future_session_blocks: [{ ...future, wiseStatus: "ENDED" }] });
+    const pending = requireCaptureSession(scope, "session-one", "student-one");
+    vi.setSystemTime("2026-10-01T17:00:00Z");
+    await expect(pending).rejects.toMatchObject({ status: 400 });
   });
 
   it("cannot resurrect a fresh cancellation from an older ended row", async () => {
@@ -239,9 +283,9 @@ describe("current access to a saved capture", () => {
     await expect(assertCaptureSessionCurrent(scope, saved)).rejects.toMatchObject({ status: 403 });
   });
 
-  it("does not let a full admin reinterpret an earlier capture as another tutor's class", async () => {
+  it("does not let an admin pilot reinterpret an earlier capture as another tutor's class", async () => {
     database({ tutor_identity_group_members: [{ ...identity, canonicalKey: "New Tutor" }] });
-    await expect(assertCaptureSessionCurrent({ email: "admin@example.test", keys: null }, saved)).rejects.toMatchObject({ status: 403 });
+    await expect(assertCaptureSessionCurrent({ email: "admin@example.test", keys: ["Tutor Example"] }, saved)).rejects.toMatchObject({ status: 403 });
   });
 
   it.each([true, false])("denies a proven deletion whether the session remains in the future feed: %s", async remains => {
