@@ -284,6 +284,12 @@ downstream. Three subsystems pull this same roster independently: the snapshot s
 ([`orchestrator.ts:84`](../../src/lib/sync/orchestrator.ts)), progress tests ([`progress-tests/sync.ts:504`](../../src/lib/progress-tests/sync.ts)) and
 payroll ([`payroll/sync.ts:277`](../../src/lib/payroll/sync.ts)).
 
+**Roster extras (2026-10-01).** Live roster rows also carry `joinedOn`, `relation` (`TEACHER` or `ADMIN`; 11 of
+164 rows were `ADMIN` on 1 Oct), `status` (all `ACCEPTED`), `updatedAt`, `classes[] { _id, name, subject }`, and
+`userId.{ activated, phoneNumber, profilePicture }`. `WiseTeacher` declares them as optional fields. The snapshot sync
+persists `relation`, `joinedOn`, the `classes` count and `userId.activated` onto `tutor_wise_accounts` for Tutor
+Offboarding, after promotion and best effort (`src/lib/tutor-onboarding/roster-facts.ts`). No extra Wise call is made.
+
 ### Availability (one window) — `fetchTeacherAvailability`
 
 [`fetchers.ts:42-57`](../../src/lib/wise/fetchers.ts).
