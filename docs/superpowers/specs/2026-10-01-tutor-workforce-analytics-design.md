@@ -88,6 +88,8 @@ Selected online classes have participant-presence evidence; this is not a univer
 
 ## Historical coverage
 
+**Owner-confirmed credit rule, 1 October 2026:** one Wise credit always represents one scheduled teaching hour, including historical and group bookings. The normal per-student charge is therefore scheduled minutes divided by 60. Record this business-rule provenance separately from verification of the actual net deduction. Missing net deductions or historical participants remain unknown.
+
 - Show verified class and demand history from March. Validate that backfill pagination and dates cover the requested period.
 - Do not estimate old availability using today's schedule. Historical capacity and utilization remain unavailable where offered-hours history is missing.
 - For partial recorded periods, align utilization's numerator and denominator to the same supported time span and show its coverage. Never divide a full month's class hours by only a few days of recorded availability.
