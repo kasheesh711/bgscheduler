@@ -124,6 +124,6 @@ One transaction appends the verdict (superseding the current one), sets `reviews
 | `GET /api/feedback-autowriter/atom?sessionId=…` | Same | Retained lesson/Atom evidence, source URLs, both factual verdicts and style reviews |
 | `POST /api/feedback-autowriter/atom` | Operations owner | Explicit `{wiseStudentId, atomStudentId, expectedRevision, active, note}` link approval/revocation; 409 on changed or occupied identity |
 | `POST /api/feedback-autowriter/atom/probe` | Operations owner | `{studentId, date}` interactive cloud retrieval probe; no link approval or feedback generation; cannot count as unattended proof |
-| `POST /api/feedback-autowriter/atom/rollout` | Operations owner | `approve_comparisons` with the exact `comparisonHash`, or `confirm_unattended_run` with `runId` and `codexAndComputerWereOff:true`; does not change environment switches |
+| `POST /api/feedback-autowriter/atom/rollout` | Operations owner | `approve_comparisons` with the exact `comparisonHash`; `approve_cloud_run` with `runId`, approved `comparisonHash` and a nonempty `note`; or `confirm_unattended_run` with `runId` and `codexAndComputerWereOff:true` only after an actual computer-off test. Cloud approval records the authenticated owner and its basis; none changes environment switches |
 
 Authentication, errors and owner checks follow the existing Review interface. No route accepts a credential in its body. See the [runbook](../../operations/iseb-atom-feedback.md) for evidence semantics and independent activation.

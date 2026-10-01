@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import type { AtomLessonEvidence } from "@/lib/feedback-autowriter/atom/types";
+import type { AtomCloudProofReview, AtomLessonEvidence } from "@/lib/feedback-autowriter/atom/types";
 import type { StoredJudgeVerdict } from "@/lib/feedback-autowriter/judge";
 import { when } from "./format";
 
@@ -11,7 +11,7 @@ type Link = { wiseStudentId: string; atomStudentId: string; wiseName: string; at
 type Overview = {
   links: Link[]; catalog: Student[]; candidates: Student[];
   sync: { id: string; status: string; startedAt: string; errorCode: string | null; snapshots: number; activities: number } | null;
-  rollout: { comparisonHash: string | null; approvedBy: string | null; approvedAt: string | null; cloudProofRunId: string | null; unattendedConfirmedBy: string | null; receipt: { comparisons?: { id: string; tutor: string; subject: string; evidence: string; before: Record<string,string>; result: { fields: Record<string,string>; atomEvidence?: AtomLessonEvidence } }[] } } | null;
+  rollout: { comparisonHash: string | null; approvedBy: string | null; approvedAt: string | null; cloudProofRunId: string | null; unattendedConfirmedBy: string | null; cloudProofReview: AtomCloudProofReview | null; receipt: { comparisons?: { id: string; tutor: string; subject: string; evidence: string; before: Record<string,string>; result: { fields: Record<string,string>; atomEvidence?: AtomLessonEvidence } }[] } } | null;
   enabled: { collection: boolean; format: boolean; enrichment: boolean };
   monitoring: { cohort: string; verified: number; reviewed: number; unresolved: number }[];
 };
@@ -33,6 +33,7 @@ export function AtomReviewTools({ canControl }: { canControl: boolean }) {
   const [atomId, setAtomId] = useState("");
   const [note, setNote] = useState("");
   const [proofRun, setProofRun] = useState("");
+  const [proofNote, setProofNote] = useState("");
   const [unattended, setUnattended] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
   async function load(query = search) {
@@ -84,11 +85,18 @@ export function AtomReviewTools({ canControl }: { canControl: boolean }) {
             {(data.rollout?.receipt.comparisons ?? []).map(comparison => <details key={comparison.id} className="border-t pt-2"><summary className="cursor-pointer">{comparison.tutor} · {comparison.subject} · {comparison.evidence}{comparison.result.atomEvidence?.lessonStart ? ` · ${when(comparison.result.atomEvidence.lessonStart)}` : ""}</summary><div className="my-3 grid gap-4 md:grid-cols-2">{[{ name: "Previous feedback", fields: comparison.before }, { name: "New draft", fields: comparison.result.fields }].map(side => <section key={side.name}><h4 className="mb-2 font-semibold">{side.name}</h4>{["topics","performance","improvement","homework"].map(field => <div key={field}><strong className="capitalize">{field}</strong><p className="mb-2 whitespace-pre-wrap text-xs">{side.fields[field] || "—"}</p></div>)}</section>)}</div></details>)}
             {!data.rollout?.receipt.comparisons?.length ? <p className="text-muted-foreground">No comparison bundle saved yet.</p> : null}
             {canControl && data.rollout?.comparisonHash && !data.rollout.approvedAt ? <Button disabled={busy} onClick={() => void rolloutAction({ action: "approve_comparisons", comparisonHash: data.rollout!.comparisonHash })}>Approve these 20 drafts</Button> : null}
-            <p>{data.rollout?.cloudProofRunId ? `Unattended cloud run confirmed by ${data.rollout.unattendedConfirmedBy}.` : "Unattended cloud retrieval still needs confirmation."}</p>
+            <p>{data.rollout?.cloudProofReview ? `Scheduled cloud collection approved by ${data.rollout.cloudProofReview.approvedBy} · ${when(data.rollout.cloudProofReview.approvedAt)}. Computer-off test not performed.`
+              : data.rollout?.cloudProofRunId ? `Computer-off cloud test confirmed by ${data.rollout.unattendedConfirmedBy}.` : "Scheduled cloud retrieval still needs owner approval."}</p>
+            {data.rollout?.cloudProofRunId ? <p className="text-xs text-muted-foreground">Run: {data.rollout.cloudProofRunId}{data.rollout.cloudProofReview ? ` · ${data.rollout.cloudProofReview.note}` : ""}</p> : null}
             {canControl && data.rollout && !data.rollout.cloudProofRunId ? <div className="space-y-2">
               <label className="block text-xs">Scheduled cloud run ID<input className={inputClass} value={proofRun} onChange={event => setProofRun(event.target.value)} /></label>
-              <label className="flex items-start gap-2 text-xs"><input type="checkbox" checked={unattended} onChange={event => setUnattended(event.target.checked)} />I confirm this scheduled run retrieved completed Atom activities while Codex was closed and my local computer was off.</label>
-              <Button variant="outline" disabled={busy || !proofRun || !unattended} onClick={() => void rolloutAction({ action: "confirm_unattended_run", runId: proofRun, codexAndComputerWereOff: true })}>Record cloud verification</Button>
+              <p className="text-xs text-muted-foreground">A completed scheduled server run can establish cloud retrieval. Owner approval records this basis without claiming a computer-off test.</p>
+              <label className="block text-xs">Cloud approval note<input className={inputClass} maxLength={1000} value={proofNote} onChange={event => setProofNote(event.target.value)} /></label>
+              <Button variant="outline" disabled={busy || !proofRun || !proofNote.trim() || !data.rollout.approvedAt || !data.rollout.comparisonHash} onClick={() => void rolloutAction({ action: "approve_cloud_run", runId: proofRun, comparisonHash: data.rollout!.comparisonHash, note: proofNote })}>Approve scheduled cloud run</Button>
+              <details className="text-xs"><summary className="cursor-pointer">Optional computer-off test</summary><div className="mt-2 space-y-2">
+                <label className="flex items-start gap-2"><input type="checkbox" checked={unattended} onChange={event => setUnattended(event.target.checked)} />I confirm this scheduled run retrieved completed Atom activities while Codex was closed and my local computer was off.</label>
+                <Button variant="outline" disabled={busy || !proofRun || !unattended} onClick={() => void rolloutAction({ action: "confirm_unattended_run", runId: proofRun, codexAndComputerWereOff: true })}>Record computer-off verification</Button>
+              </div></details>
             </div> : null}
           </div>
         </details>

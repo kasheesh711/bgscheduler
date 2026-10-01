@@ -6681,6 +6681,7 @@ export const feedbackIsebRollouts = pgTable("feedback_iseb_rollouts", {
   comparisonHash: text("comparison_hash"),
   cloudProofRunId: uuid("cloud_proof_run_id").references(() => feedbackAtomSyncRuns.id),
   unattendedConfirmedBy: text("unattended_confirmed_by"),
+  cloudProofReview: jsonb("cloud_proof_review").$type<import("../feedback-autowriter/atom/types").AtomCloudProofReview>(),
   activatedAt: timestamp("activated_at", { withTimezone: true }),
   receipt: jsonb("receipt").$type<Record<string, unknown>>().notNull().default({}),
 });

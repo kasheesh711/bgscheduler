@@ -38,17 +38,17 @@ The observed Atom account exposes English, Maths, VR and NVR activity endpoints.
 
 ## Deployment and independent activation
 
-Migration **0103** adds approved links, sync runs, snapshots, timetables, retained evidence, style reviews and a rollout receipt. Apply it before enabling collection. All switches require the exact string `true`.
+Migration **0103** adds approved links, sync runs, snapshots, timetables, retained evidence, style reviews and a rollout receipt. Migration **0107** adds the owner's scheduled cloud verification record. Apply the migrations before deploying their readers. All switches require the exact string `true`.
 
 | Setting | Purpose | Initial value |
 |---|---|---|
 | `ATOM_USERNAME`, `ATOM_PASSWORD` | Normal sign-in credentials; server secrets only | Set through the deployment secret store |
 | `FEEDBACK_ATOM_COLLECTOR_ENABLED` | Read-only scheduled collection | Enable after dark deployment |
 | `FEEDBACK_AUTOWRITER_ISEB_FORMAT_ENABLED` | Shared format v1 and Mimi voice v2 | Off until comparison approval |
-| `FEEDBACK_ATOM_ENRICHMENT_ENABLED` | Include matched Atom evidence | Off until comparison approval and unattended proof |
+| `FEEDBACK_ATOM_ENRICHMENT_ENABLED` | Include matched Atom evidence | Off until comparison approval and approved cloud verification |
 | `FEEDBACK_AUTOWRITER_ISEB_REVIEW_ENABLED` | API style checks in the server review job | Enable at activation |
 
-The last two content switches are independently gated by a persisted owner approval. Atom enrichment also requires a successful **scheduled** cloud run with a deployment ID and nonzero snapshot/activity counts, plus the owner's explicit confirmation that Codex and the local computer were off. An interactive admin probe cannot establish that proof.
+The two content switches are independently gated by a persisted owner approval. Atom enrichment also requires a successful **scheduled** cloud run with a deployment ID, valid start/finish timestamps, no error and nonzero snapshot/activity counts. The owner can approve that run in Review with a note and the exact approved comparison hash. This records the owner, timestamp, run ID and `computerOffConfirmed:false`. A computer-off test is optional and has a separate explicit confirmation; it must never be recorded unless it occurred. An interactive admin probe cannot establish cloud verification.
 
 Use the repository's guarded production deployment workflow from clean, pushed `main`. Deploy this code with content switches off. Credentials must never enter model prompts, committed files, console output or browser screenshots. The collector intercepts browser writes and permits only the normal login POST; direct activity reads are GET-only. Preview deployments never run the collector.
 
@@ -70,7 +70,7 @@ npx tsx --tsconfig scripts/tsconfig.json scripts/save-iseb-comparison-bundle.ts 
   --env-dir=/private/checkout --dir=.feedback-autowriter/iseb-v2-comparisons
 ```
 
-Saving does not approve it. Kevin approves the displayed bundle in Review. A different bundle clears that approval. For Atom, approve student links, let the cloud collector run through pending lessons with the local computer off, then record the successful scheduled run ID and the explicit unattended confirmation in Review. Check every statistic in the enriched comparisons against its Atom source before enabling enrichment.
+Saving does not approve it. Kevin approves the displayed bundle in Review. A different bundle clears comparison and cloud approvals. For Atom, approve student links, let the cloud collector retrieve activities, then approve the successful scheduled run ID with a note in Review. If a computer-off test actually occurred, its separate confirmation remains available. Check every statistic in the enriched comparisons against its Atom source before enabling enrichment.
 
 For unposted enriched comparisons, run the same replay with `--with-atom --out=.feedback-autowriter/iseb-atom-comparisons`. It reads only approved links and validated snapshots, while bypassing the content activation switch. Collect the relevant lesson dates first; missing or stale snapshots still omit statistics. The separate output directory preserves the lesson-only bundle.
 
@@ -78,7 +78,7 @@ At activation, enable the server style-review switch and independently enable th
 
 ### Scheduled retrieval trial with an empty queue
 
-If no eligible feedback is pending, a temporary read-only trial can exercise the same scheduled cloud collector. Set `FEEDBACK_ATOM_TRIAL_STUDENT_ID` to an actively approved Atom identity, `FEEDBACK_ATOM_TRIAL_DATE` to a known activity date in the past 30 days, and `FEEDBACK_ATOM_TRIAL_EXPIRES_AT` to an ISO timestamp no more than 24 hours ahead. The trial expires automatically, records `counts.trial = true`, and does not queue or post feedback. Remove these three settings after recording the result. An admin probe still cannot count as unattended proof; the owner must confirm a scheduled run occurred with Codex and the computer off.
+If no eligible feedback is pending, a temporary read-only trial can exercise the same scheduled cloud collector. Set `FEEDBACK_ATOM_TRIAL_STUDENT_ID` to an actively approved Atom identity, `FEEDBACK_ATOM_TRIAL_DATE` to a known activity date in the past 30 days, and `FEEDBACK_ATOM_TRIAL_EXPIRES_AT` to an ISO timestamp no more than 24 hours ahead. The trial expires automatically, records `counts.trial = true`, and does not queue or post feedback. Remove these three settings after recording the result. The owner can approve a successful scheduled trial using the same cloud verification action. An admin probe still cannot count.
 
 For current and future lesson dates, Atom collection reads the complete, strictly paginated Wise FUTURE listing and then filters exact Bangkok dates. Wise's FUTURE DATE query has returned previous-day sessions in production. PAST reads keep strict calendar boundaries; duplicate occurrences across the two listings must agree on lesson ownership and timing.
 
@@ -91,4 +91,4 @@ For current and future lesson dates, Atom collection reads the complete, strictl
 
 ## Verification record
 
-See the rollout receipt and saved validation logs for the exact revision tested. Unit tests cover numbering/fallback, empty homework, sparse source evidence, identical model inputs, score rejection, wrong students, duplicate names, midnight boundaries, overlaps, partial activities, assistance, stale snapshots and response drift. Postgres integration tests cover link uniqueness, immutable evidence, failed collections, stale drafts, source holds and review accounting. Local sign-in success is not unattended cloud verification.
+See the rollout receipt and saved validation logs for the exact revision tested. Unit tests cover numbering/fallback, empty homework, sparse source evidence, identical model inputs, score rejection, wrong students, duplicate names, midnight boundaries, overlaps, partial activities, assistance, stale snapshots and response drift. API and Postgres tests cover owner-only cloud approval, comparison changes, invalid collection runs, link uniqueness, immutable evidence, failed collections, stale drafts, source holds and review accounting. Local sign-in success cannot establish cloud verification.
