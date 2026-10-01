@@ -10,6 +10,13 @@ export function nightlyCheckpoint(date: string): Date {
   return new Date(bangkokDateStartUtc(date).getTime() + 22 * 60 * 60_000);
 }
 
+export function nightlyActivationCheckpoint(now: Date, includeCurrentNight = false): Date | null {
+  const today = todayBangkok(now);
+  const checkpoint = nightlyCheckpoint(today);
+  if (includeCurrentNight) return checkpoint <= now ? checkpoint : null;
+  return checkpoint > now ? checkpoint : nightlyCheckpoint(addBangkokDays(today, 1));
+}
+
 /** The clock, never the spreadsheet timezone, determines the eligible night. */
 export function latestNightlyDate(now: Date, activatedAt: Date | null): string | null {
   if (!activatedAt) return null;

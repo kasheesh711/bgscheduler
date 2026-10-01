@@ -23,10 +23,10 @@ Open **Class Feedback → Settings → Nightly feedback reminders**. Viewers can
 
 - **Shadow mode** records real discovery and current policy outcomes and creates email previews. It sends no tutor reminders.
 - **Build shadow preview** rehearses the most recent 22:00 window even if shadow mode was enabled after that checkpoint. Expired classes stay recorded. This action is rejected outside shadow mode.
-- **Live** requires a completed current-policy shadow batch, successful Gmail renewal and confirmed email receipt within 24 hours, a verified private LINE destination, and confirmation that the legacy reminder trigger is disabled. Every activation or resume starts at the next 22:00 checkpoint, covering its normal three dates. Earlier missed nightly batches are not replayed.
+- **Live** requires a completed current-policy shadow batch, successful Gmail renewal and confirmed email receipt within 24 hours, a verified private LINE destination, and confirmation that the legacy reminder trigger is disabled. By default, activation or resume starts at the next 22:00 checkpoint, covering its normal three dates. An access manager can explicitly select **Include tonight's batch now** after 22:00 and before Bangkok midnight, then choose **Process due reminders**. This records the request time and tonight's checkpoint in the configuration audit. The same queue, feedback checks, deadlines and concurrency safeguards apply. Earlier missed nights are not replayed.
 - **Pause reminders** selects `off`, retaining the ledger and queue. In-flight requests may already have reached Gmail. Their uncertain outcomes remain visible and can be reconciled while paused. Resuming consolidates relevant unfinished work and records passed deadlines as missed.
 
-Settings: `PATCH /api/post-class-feedback/settings`, with `expectedVersion` and `reminderMode`; activation can also provide a prospective `reminderActivationAt` and `legacyReminderDisabled: true`.
+Settings: `PATCH /api/post-class-feedback/settings`, with `expectedVersion` and `reminderMode`; activation can also provide a prospective `reminderActivationAt` and `legacyReminderDisabled: true`. Alternatively, `reminderIncludeCurrentNight: true` explicitly includes tonight after 22:00; it cannot be combined with another checkpoint or used while already live. It never bypasses readiness checks.
 
 History/health: `GET /api/post-class-feedback/reminders?sessionId=<uuid>&tutorKey=<canonical-key>`. Access managers can request `preview=true`.
 
