@@ -20,20 +20,28 @@ import { crc32, deflateSync, inflateSync } from "node:zlib";
 import tailwind from "@tailwindcss/postcss";
 import { build } from "esbuild";
 import postcss from "postcss";
+import { chromium } from "playwright-core";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const OUT = path.join(ROOT, ".tutor-offboarding", "preview");
 const CHROME = process.env.CHROME_BIN || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const VIEWS = ["owner", "admin", "stale", "empty", "not-set-up"];
 const DRAWERS = ["very_likely_gone"];
+const REMOVAL_VIEWS = ["manual-preview", "live-preview", "manual-results", "partial-results", "expired-preview", "removal-error", "removal-history"];
 const WIDTH = 1440;
 const DRAWER_HEIGHT = 900;
 
 const ENTRY = `
 import { createRoot } from "react-dom/client";
+import { RemovalDialog } from "@/components/tutor-offboarding/removal-dialog";
+import { RemovalHistory } from "@/components/tutor-offboarding/removal-history";
+import { HistoryTable } from "@/components/tutor-offboarding/history-table";
 import { TutorOffboardingWorkspace } from "@/components/tutor-offboarding/tutor-offboarding-workspace";
 import {
   ADMIN,
+  FIXTURE_NOW,
+  removalRunFixture,
+  partialRemovalRunFixture,
   dashboardFixture,
   confirmedDashboardFixture,
   emptyDashboardFixture,
@@ -55,7 +63,20 @@ window.fetch = () => new Promise(() => undefined);
 const params = new URLSearchParams(window.location.search);
 if (params.get("theme") === "dark") document.documentElement.classList.add("dark");
 const name = params.get("view") ?? "owner";
-createRoot(document.getElementById("root")).render(<TutorOffboardingWorkspace initial={(VIEWS[name] ?? VIEWS.owner)()} />);
+const base = (VIEWS[name] ?? VIEWS.owner)();
+let run = name === "live-preview" ? removalRunFixture("live")
+  : name === "manual-results" ? removalRunFixture("manual", "applied")
+  : name === "partial-results" ? partialRemovalRunFixture()
+  : ["manual-preview", "expired-preview", "removal-error"].includes(name) ? removalRunFixture("manual") : null;
+if (name === "expired-preview") run = { ...run, status: "expired", previewExpiresAt: "2026-10-01T04:59:00Z" };
+const noop = () => undefined;
+createRoot(document.getElementById("root")).render(name === "removal-history"
+  ? <div className="mx-auto w-full max-w-[1392px]"><h1 className="text-[22px] font-semibold">Tutor Offboarding · History</h1><RemovalHistory initialRuns={[partialRemovalRunFixture(), { ...removalRunFixture("manual", "applied"), id: "fictional-second-run" }]} onOpen={noop} /><HistoryTable decisions={dashboardFixture().decisions} /></div>
+  : <><TutorOffboardingWorkspace initial={base} /><RemovalDialog run={run} canRemove={true} busy={false} uncertain={name === "removal-error"} error={name === "removal-error" ? "The request did not finish. Check this run’s status." : null} onClose={noop} onApply={noop} onRefresh={noop} onReconcile={noop} now={FIXTURE_NOW} /></>);
+if (name === "selected") window.setTimeout(() => {
+  document.querySelector('[aria-label="Select Aria for removal"]')?.click();
+  document.querySelector('[aria-label="Select Bodhi for removal"]')?.click();
+}, 500);
 // ?open=<band>: the drawer on that band's first person, as a click on the row opens it.
 const open = params.get("open");
 if (open) window.setTimeout(() => document.querySelector('[data-band="' + open + '"] li button')?.click(), 500);
@@ -269,15 +290,52 @@ async function drawerScreenshot(group) {
   return file;
 }
 
+async function removalScreenshot(name, mobile = false) {
+  const width = mobile ? 390 : WIDTH;
+  const height = mobile ? 844 : DRAWER_HEIGHT;
+  const file = path.join(OUT, `removal-${name}${mobile ? "-mobile" : ""}.png`);
+  rmSync(file, { force: true });
+  if (mobile) {
+    // Chrome's CLI window can keep a wider layout viewport than its screenshot on macOS.
+    // Explicit viewport emulation makes the mobile fixture an actual 390px layout.
+    const browser = await chromium.launch({ executablePath: CHROME, headless: true });
+    try {
+      const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 1 });
+      await page.goto(pageUrl(`view=${name}`));
+      await page.waitForTimeout(1700);
+      await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important}" });
+      const dimensions = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth }));
+      if (dimensions.width !== width || dimensions.scroll > width) throw new Error(`Mobile ${name} overflows: ${JSON.stringify(dimensions)}`);
+      await page.screenshot({ path: file });
+    } finally { await browser.close(); }
+    return file;
+  }
+  await chrome([`--window-size=${width},${height + windowExtra}`, `--screenshot=${file}`], pageUrl(`view=${name}`), settled(file), written(file));
+  cropPngHeight(file, height);
+  return file;
+}
+
 mkdirSync(OUT, { recursive: true });
 const [script, css] = await Promise.all([bundle(), styles()]);
 writeFileSync(path.join(OUT, "index.html"), html(script, css));
 console.log(`Preview written to ${path.relative(ROOT, OUT)}/ (index.html?view=${VIEWS.join("|")})`);
 
-if (!process.argv.includes("--no-shot")) {
+if (process.argv.includes("--mobile-only")) {
+  for (const scenario of ["manual-preview", "live-preview", "partial-results", "removal-history", "selected"]) {
+    console.log(`${path.relative(ROOT, await removalScreenshot(scenario, true))}  390x844`);
+  }
+} else if (!process.argv.includes("--no-shot")) {
   for (const [name, query] of [...VIEWS.map((view) => [view, `view=${view}`]), ["details", "view=owner&details=open"]]) {
     const { file, height } = await screenshot(name, query);
     console.log(`${path.relative(ROOT, file)}  ${WIDTH}x${height}`);
+  }
+  const selected = await screenshot("selected", "view=selected");
+  console.log(`${path.relative(ROOT, selected.file)}  ${WIDTH}x${selected.height}`);
+  for (const scenario of REMOVAL_VIEWS) {
+    console.log(`${path.relative(ROOT, await removalScreenshot(scenario))}  ${WIDTH}x${DRAWER_HEIGHT}`);
+  }
+  for (const scenario of ["manual-preview", "live-preview", "partial-results", "removal-history", "selected"]) {
+    console.log(`${path.relative(ROOT, await removalScreenshot(scenario, true))}  390x844`);
   }
   for (const group of DRAWERS) {
     console.log(`${path.relative(ROOT, await drawerScreenshot(group))}  ${WIDTH}x${DRAWER_HEIGHT}`);

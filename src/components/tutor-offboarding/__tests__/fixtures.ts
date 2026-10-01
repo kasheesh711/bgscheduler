@@ -1,3 +1,4 @@
+import type { RemovalRunDetail } from "@/lib/tutor-offboarding/removal-types";
 import { scorePerson } from "@/lib/tutor-offboarding/score";
 import { buildOffboardingDashboard } from "@/lib/tutor-offboarding/data";
 import type {
@@ -127,4 +128,26 @@ export function confirmedDashboardFixture(viewer: TutorOffboardingViewer = OWNER
   data.inbox.push({ signals, score: scorePerson(signals, { now: FIXTURE_NOW, curve: data.curve, snoozedKeys: new Set(), freshnessOk: true }), openDecision: null, termination: proof(14, "Kai Fictional") });
   data.terminationSource = { status: "ready", checkedAt: "2026-10-01T04:45:00.000Z", sourceUrl: "https://example.com/tutors", confirmedRows: 5, matchedPeople: 4, unmatched: [{ sourceRow: 15, sourceName: "Nori Fictional", reason: "No matching Wise account" }] };
   return data;
+}
+
+export function removalRunFixture(mode: "manual" | "live" = "manual", status: RemovalRunDetail["status"] = "previewed"): RemovalRunDetail {
+  const candidates = dashboardFixture().inbox.filter((row) => ["Aria", "Bodhi"].includes(row.signals.canonicalKey));
+  const runId = "00000000-0000-4000-8000-000000000001";
+  const accounts: RemovalRunDetail["accounts"] = candidates.flatMap((row) => row.signals.accounts.map((account, index) => ({
+    id: `${row.signals.canonicalKey}-${index}`, runId, canonicalKey: row.signals.canonicalKey, displayName: row.signals.displayName,
+    wiseTeacherId: account.wiseTeacherId, wiseUserId: account.wiseUserId, isOnlineVariant: account.isOnlineVariant,
+    accountSnapshot: { _id: account.wiseTeacherId, userId: { _id: account.wiseUserId ?? "fictional-user", name: account.displayName, email: account.email ?? "fictional@example.com" }, relation: "TEACHER", joinedOn: account.joinedOn ?? undefined, classes: [] },
+    likelihoodAtPreview: row.score.likelihood, reasons: row.score.reasons.map((reason) => reason.text), plan: "remove" as const, skipReason: null,
+    status: status === "previewed" ? "planned" as const : mode === "manual" ? "manual_required" as const : "verified" as const,
+    errorMessage: null, sentAt: status !== "previewed" && mode === "live" ? FIXTURE_NOW.toISOString() : null, verifiedAt: null, localStateBefore: null,
+  })));
+  return { id: runId, status, mode, reason: status === "previewed" ? null : "Confirmed departure by owner", previewToken: "fictional-preview-token", previewExpiresAt: "2026-10-01T05:15:00.000Z", tutorCount: 2, accountCount: 3, createdByEmail: "owner@example.com", createdAt: FIXTURE_NOW.toISOString(), appliedByEmail: status === "previewed" ? null : "owner@example.com", appliedAt: status === "previewed" ? null : FIXTURE_NOW.toISOString(), finishedAt: status === "previewed" || status === "applying" ? null : FIXTURE_NOW.toISOString(), accounts };
+}
+
+export function partialRemovalRunFixture(): RemovalRunDetail {
+  const run = removalRunFixture("live", "applied_with_errors");
+  run.accounts[1].status = "unknown";
+  run.accounts[1].errorMessage = "The response was not confirmed";
+  run.accounts[2].status = "not_removed";
+  return run;
 }
