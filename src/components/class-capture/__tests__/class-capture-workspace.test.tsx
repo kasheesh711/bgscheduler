@@ -12,15 +12,23 @@ const capture: CaptureView = {
 const initialData = { sessions: [capture.session], availability: { enabled: true, storage: true, transcription: true, drafting: true } };
 
 describe("Class Capture consent and review", () => {
+  it("shows only today's own classes with a static Bangkok label and no date picker", () => {
+    const html = renderToStaticMarkup(<ClassCaptureWorkspace ownerEmail="synthetic@example.test" enabled initialData={initialData} />);
+    expect(html).toContain("Your classes today");
+    expect(html).toContain("Today · Bangkok");
+    expect(html).not.toContain('type="date"');
+    expect(html).toContain("Only your own scheduled classes appear");
+  });
+
   it("shows a clear pause and the existing feedback path when disabled", () => {
-    const html = renderToStaticMarkup(<ClassCaptureWorkspace ownerEmail="synthetic@example.test" enabled={false} initialDate="2026-10-01" />);
+    const html = renderToStaticMarkup(<ClassCaptureWorkspace ownerEmail="synthetic@example.test" enabled={false} />);
     expect(html).toContain("Class capture is paused");
     expect(html).toContain('href="/post-class-feedback"');
     expect(html).not.toContain("Start class recording");
   });
 
   it("requires participant, guardian and processing confirmation before preparation", () => {
-    const html = renderToStaticMarkup(<ClassCaptureWorkspace ownerEmail="synthetic@example.test" enabled initialData={initialData} initialDate="2026-10-01" />);
+    const html = renderToStaticMarkup(<ClassCaptureWorkspace ownerEmail="synthetic@example.test" enabled initialData={initialData} />);
     expect(html).toContain("Permission comes first.");
     expect(html).toContain("Guardian permission");
     expect(html).toContain("private Vercel Blob storage, Soniox transcription and the OpenRouter drafting model");
@@ -30,7 +38,7 @@ describe("Class Capture consent and review", () => {
   });
 
   it("clearly separates tutor evidence and drafts from submission", () => {
-    const html = renderToStaticMarkup(<ClassCaptureWorkspace ownerEmail="synthetic@example.test" enabled initialData={initialData} initialCapture={capture} initialDate="2026-10-01" />);
+    const html = renderToStaticMarkup(<ClassCaptureWorkspace ownerEmail="synthetic@example.test" enabled initialData={initialData} initialCapture={capture} />);
     expect(html).toContain("separate from the transcript");
     expect(html).toContain("understanding cannot be inferred from audio");
     expect(html).toContain("Background recording is not supported");
@@ -40,7 +48,7 @@ describe("Class Capture consent and review", () => {
   });
 
   it("provides a Wise handoff only for the saved reviewed draft", () => {
-    const html = renderToStaticMarkup(<ClassCaptureWorkspace ownerEmail="synthetic@example.test" enabled initialData={initialData} initialCapture={{ ...capture, reviewed: true }} initialDate="2026-10-01" />);
+    const html = renderToStaticMarkup(<ClassCaptureWorkspace ownerEmail="synthetic@example.test" enabled initialData={initialData} initialCapture={{ ...capture, reviewed: true }} />);
     expect(html).toContain('href="https://wiseapp.live/synthetic-class"');
     expect(html).toContain("Reviewed · not submitted");
     expect(html).toContain("Copy reviewed feedback");

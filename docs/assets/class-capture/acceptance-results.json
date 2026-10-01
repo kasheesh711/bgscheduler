@@ -31,6 +31,10 @@
       "passed": true
     },
     {
+      "name": "Focus and a new Bangkok day preserve active draft edits, review and local media",
+      "passed": true
+    },
+    {
       "name": "Regeneration resets the existing draft before an explicit new generation",
       "passed": true
     },
@@ -53,6 +57,18 @@
     {
       "name": "Default pause is visible with no microphone request",
       "passed": true
+    },
+    {
+      "name": "Bangkok midnight clears pending choices and consent and loads today's list",
+      "passed": true
+    },
+    {
+      "name": "A late older response cannot restore a superseded class list",
+      "passed": true
+    },
+    {
+      "name": "Visible return after suspended timers refreshes today and recovers a failed refresh",
+      "passed": true
     }
   ],
   "metrics": {
@@ -62,7 +78,8 @@
     "transcriptions": 2,
     "drafts": 3,
     "gets": 8,
-    "patches": 5
+    "patches": 5,
+    "lists": 5
   },
   "unverified": [
     "Real iOS Safari and Android Chrome hardware, phone calls, lockscreen and OS termination",

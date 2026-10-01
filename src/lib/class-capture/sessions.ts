@@ -1,7 +1,5 @@
-import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, ne, sql } from "drizzle-orm";
-import { z } from "zod";
+import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { auth } from "@/lib/auth";
-import { isSuperAdminEmail } from "@/lib/admin-users/policy";
 import { getDb, type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { classroomTimestampToWiseIso } from "@/lib/classrooms/timestamps";
@@ -9,39 +7,61 @@ import { getClassroomSessionMode } from "@/lib/classrooms/session-mode";
 import { addBangkokDays, bangkokDateKey, bangkokDateStartUtc, todayBangkok } from "@/lib/room-capacity/dates";
 import { deriveSessionModality } from "@/lib/student-schedule/data";
 import { wiseSessionLink } from "@/lib/wise/links";
-import { captureEnabled, CaptureError, type CaptureSession } from "./model";
+import { assertCaptureScope, assertCaptureSessionToday, captureEnabled, CaptureError, normalizeCaptureEmail, type CaptureScope, type CaptureSession } from "./model";
 
-export type CaptureScope = { email: string; keys: string[] | null };
+export type { CaptureScope } from "./model";
 
-const pilotEmailSchema = z.email().max(254);
-function normalizedPilotEmail(value: unknown): string | null {
-  // Permit surrounding configuration whitespace without accepting unbounded input,
-  // address lists, display names, aliases or Unicode lookalikes as another identity.
-  if (typeof value !== "string" || value.length > 320) return null;
-  const parsed = pilotEmailSchema.safeParse(value.trim());
-  return parsed.success ? parsed.data.toLowerCase() : null;
+function pilotEmails(): string[] {
+  const plural = process.env.CLASS_CAPTURE_PILOT_EMAILS;
+  if (plural === undefined) {
+    const singular = normalizeCaptureEmail(process.env.CLASS_CAPTURE_PILOT_EMAIL);
+    return singular ? [singular] : [];
+  }
+  if (!plural || plural.length > 6400) return [];
+  const entries = plural.split(",");
+  if (entries.length > 20) return [];
+  const emails = entries.map(normalizeCaptureEmail);
+  // An invalid/empty/duplicate entry invalidates the whole list; never fall back.
+  if (emails.some(email => !email) || new Set(emails).size !== emails.length) return [];
+  return emails as string[];
 }
 
-/** A single designated owner AND fresh admin access gate every pilot entry point. */
+/** Every pilot receives exactly one current tutor binding, including full admins. */
 export async function requireCaptureScope(): Promise<CaptureScope> {
   const session = await auth();
-  const email = normalizedPilotEmail(session?.user?.email);
+  const email = normalizeCaptureEmail(session?.user?.email);
   if (!email) throw new CaptureError(401, "Sign in to use Class Capture.");
-  const pilotEmail = normalizedPilotEmail(process.env.CLASS_CAPTURE_PILOT_EMAIL);
+  const role = session?.user?.role;
   const accessVersion = session?.user?.adminAccessVersion;
-  if (session?.user?.role !== "admin" || !pilotEmail || email !== pilotEmail || !isSuperAdminEmail(email) ||
-    typeof accessVersion !== "number" || !Number.isInteger(accessVersion) || accessVersion < 0) {
-    throw new CaptureError(403, "Class Capture is limited to its configured website-owner pilot.");
+  if (!pilotEmails().includes(email) || (role !== "admin" && role !== "teacher") ||
+    (role === "admin" && (typeof accessVersion !== "number" || !Number.isInteger(accessVersion) || accessVersion < 0))) {
+    throw new CaptureError(403, "Class Capture is limited to its configured tutor pilots.");
   }
   const db = getDb();
-  const [admin] = await db.select({ disabled: s.adminUsers.disabled, allowedPages: s.adminUsers.allowedPages,
+  const admins = await db.select({ disabled: s.adminUsers.disabled, allowedPages: s.adminUsers.allowedPages,
     accessVersion: s.adminUsers.accessVersion }).from(s.adminUsers)
-    .where(sql`lower(btrim(${s.adminUsers.email})) = ${email}`).limit(1);
-  if (!admin || admin.disabled !== false || admin.accessVersion !== accessVersion ||
-    (admin.allowedPages !== null && (!Array.isArray(admin.allowedPages) || !admin.allowedPages.includes("/class-capture")))) {
+    .where(sql`lower(btrim(${s.adminUsers.email})) = ${email}`).limit(2);
+  const admin = admins[0];
+  // Current admin rows take precedence over teacher bindings. A stale admin
+  // session or a conflicting teacher role cannot fall back to tutor access.
+  if (admins.length > 1 || (role === "teacher" && admin) || (role === "admin" &&
+    (!admin || admin.disabled !== false || admin.accessVersion !== accessVersion ||
+      (admin.allowedPages !== null && (!Array.isArray(admin.allowedPages) || !admin.allowedPages.includes("/class-capture")))))) {
     throw new CaptureError(403, "Class Capture access has not been granted or is no longer current. Sign in again after access is restored.");
   }
-  return { email, keys: null };
+  const contacts = await db.select({ canonicalKey: s.tutorContacts.canonicalKey, active: s.tutorContacts.active,
+    onsiteEmail: s.tutorContacts.onsiteEmail, onlineEmail: s.tutorContacts.onlineEmail }).from(s.tutorContacts)
+    .where(and(eq(s.tutorContacts.active, true), or(
+      sql`lower(btrim(${s.tutorContacts.onsiteEmail})) = ${email}`,
+      sql`lower(btrim(${s.tutorContacts.onlineEmail})) = ${email}`,
+    ))).limit(2);
+  // Names, primary delivery overrides and aliases never confer capture access.
+  const keys = [...new Set(contacts.filter(contact => contact.active === true &&
+    (normalizeCaptureEmail(contact.onsiteEmail) === email || normalizeCaptureEmail(contact.onlineEmail) === email))
+    .map(contact => contact.canonicalKey))];
+  const scope = { email, keys };
+  assertCaptureScope(scope);
+  return scope;
 }
 
 /** Navigation uses the same current grant as the page; a stale cookie cannot expose the tool. */
@@ -54,20 +74,9 @@ const MAX_SNAPSHOT_AGE_MS = 2 * 60 * 60 * 1000;
 const MAX_QUERY_ROWS = 1000;
 const ACTIVE_STATUSES = new Set(["UPCOMING", "SCHEDULED", "IN_PROGRESS", "ENDED"]);
 
-function assertScope(scope: CaptureScope, teacherKey?: string) {
-  if (!scope.email || (scope.keys !== null && (scope.keys.length !== 1 || (teacherKey !== undefined && !scope.keys.includes(teacherKey))))) {
-    throw new CaptureError(403, "This class is outside your current tutor access.");
-  }
-}
-
 function isFresh(value: Date, now: Date): boolean {
   const age = now.getTime() - value.getTime();
   return Number.isFinite(age) && age >= -5 * 60 * 1000 && age <= MAX_SNAPSHOT_AGE_MS;
-}
-
-function captureWindow(now: Date) {
-  const today = todayBangkok(now);
-  return { first: addBangkokDays(today, -7), last: addBangkokDays(today, 1) };
 }
 
 type Identity = {
@@ -82,13 +91,13 @@ function verifiedTeacher(identities: Identity[], userId: string | null, teacherI
     new Set(matches.map(identity => identity.groupId)).size !== 1) return null;
   const match = matches.find(identity => identity.wiseTeacherId === teacherId);
   if (!match || match.isOnlineVariant || !["onsite", "both"].includes(match.supportedModality) ||
-    (scope.keys !== null && !scope.keys.includes(match.canonicalKey))) return null;
+    scope.keys[0] !== match.canonicalKey) return null;
   return match;
 }
 
 /** Reads only pinned snapshots. The caller receives no synthetic or recurrence-derived sessions. */
 async function readCaptureSessions(scope: CaptureScope, first: string, last: string, now: Date, requestedSessionId?: string) {
-  assertScope(scope);
+  assertCaptureScope(scope);
   const db = getDb();
   const [identitySnapshots, creditSnapshots] = await Promise.all([
     db.select({ id: s.snapshots.id, createdAt: s.snapshots.createdAt }).from(s.snapshots)
@@ -215,20 +224,24 @@ async function readCaptureSessions(scope: CaptureScope, first: string, last: str
 }
 
 export async function listCaptureSessions(scope: CaptureScope, date: string): Promise<CaptureSession[]> {
-  const now = new Date(), window = captureWindow(now);
-  const parsed = new Date(`${date}T00:00:00+07:00`);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(parsed.getTime()) || bangkokDateKey(parsed) !== date || date < window.first || date > window.last) {
-    throw new CaptureError(400, "Choose a Bangkok date from the past seven days through tomorrow.");
+  assertCaptureScope(scope);
+  const now = new Date();
+  if (date !== todayBangkok(now)) {
+    throw new CaptureError(400, "Choose today's classes in Bangkok.");
   }
-  return readCaptureSessions(scope, date, date, now);
+  const sessions = await readCaptureSessions(scope, date, date, now);
+  if (date !== todayBangkok()) throw new CaptureError(400, "The Bangkok date changed. Refresh today's classes and try again.");
+  return sessions;
 }
 
 export async function requireCaptureSession(scope: CaptureScope, sessionId: string, studentId: string): Promise<CaptureSession> {
-  const now = new Date(), window = captureWindow(now);
+  assertCaptureScope(scope);
+  const now = new Date(), today = todayBangkok(now);
   if (!sessionId.trim() || !studentId.trim() || sessionId.length > 200 || studentId.length > 200) throw new CaptureError(404, "This class is not available for capture.");
-  const sessions = await readCaptureSessions(scope, window.first, window.last, now, sessionId);
+  const sessions = await readCaptureSessions(scope, today, today, now, sessionId);
   const session = sessions.find(session => session.sessionId === sessionId && session.studentId === studentId);
   if (!session) throw new CaptureError(404, "This class is not available for capture.");
+  assertCaptureSessionToday(session);
   return session;
 }
 
@@ -242,7 +255,7 @@ export async function assertCaptureSessionCurrent(
   session: CaptureSession,
   db?: Database,
 ): Promise<void> {
-  assertScope(scope, session.teacherKey);
+  assertCaptureScope(scope, session.teacherKey);
   const start = new Date(session.startTime), end = new Date(session.endTime), now = new Date();
   const changed = () => new CaptureError(403, "This class has changed or is no longer authorized for this capture. Review the current schedule.");
   if (!session.sessionId || !session.classId || !session.studentId || !session.teacherKey ||
@@ -300,7 +313,7 @@ export async function assertCaptureSessionCurrent(
 
 /** Session must be the server-loaded, owned capture snapshot, never request-body fields. */
 export async function loadPriorFeedback(scope: CaptureScope, session: CaptureSession): Promise<Array<{ date: string; text: string }>> {
-  assertScope(scope, session.teacherKey);
+  assertCaptureScope(scope, session.teacherKey);
   const start = new Date(session.startTime), now = new Date();
   if (!session.sessionId || !session.classId || !session.studentId || !session.teacherKey || !Number.isFinite(start.getTime())) return [];
   const earliest = new Date(start.getTime() - 90 * 86400000);
