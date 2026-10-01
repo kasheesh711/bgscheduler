@@ -152,6 +152,15 @@ describe("D3 workforce redesign", () => {
     }
     expect(html).not.toContain("May–July");
   });
+  it("shows unavailable projection month when an academic filter returns no courses", () => {
+    const selected = { ...filters, subject: "Unmapped subject" },
+      report = growthPreviewFixture(selected),
+      html = renderToStaticMarkup(
+        <GrowthView filters={selected} initial={report} />,
+      );
+    expect(html).toContain("Projection unavailable");
+    expect(html).not.toContain("Invalid Date");
+  });
   it("uses a coherent varied preview, exact averages and twelve projection points per course", () => {
     const workforce = workforcePreviewFixture(),
       growth = growthPreviewFixture();

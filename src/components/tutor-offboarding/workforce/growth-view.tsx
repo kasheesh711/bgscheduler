@@ -507,7 +507,9 @@ export function GrowthView({
           <div className="flex flex-wrap items-baseline justify-between gap-3 rounded border bg-primary/5 px-5 py-3">
             <p className="text-sm font-medium">
               Shared overall additional availability ·{" "}
-              {monthLabel(selectedMonth)}
+              {selectedMonth
+                ? monthLabel(selectedMonth)
+                : "Projection unavailable"}
             </p>
             <strong className="text-xl tabular-nums">
               {formatMetric(
