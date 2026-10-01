@@ -4,6 +4,17 @@ export interface WiseUserReference {
   _id: string;
   name?: string;
   email?: string;
+  /** True once the user has activated their Wise login (live roster only). */
+  activated?: boolean;
+  phoneNumber?: string;
+  [key: string]: unknown;
+}
+
+/** A course the live roster lists under a teacher. */
+export interface WiseTeacherClassReference {
+  _id: string;
+  name?: string;
+  subject?: string;
   [key: string]: unknown;
 }
 
@@ -12,6 +23,12 @@ export interface WiseTeacher {
   userId?: string | WiseUserReference;
   name?: string;
   tags?: WiseTag[];
+  /** Live-roster extras (Tutor Offboarding). Optional: fixtures and older payloads omit them. */
+  relation?: string;
+  joinedOn?: string;
+  status?: string;
+  updatedAt?: string;
+  classes?: Array<WiseTeacherClassReference | string>;
   [key: string]: unknown;
 }
 

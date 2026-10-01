@@ -15,6 +15,7 @@ export type NavToolId =
   | "leave-requests"
   | "class-assignments"
   | "tutor-profiles"
+  | "tutor-offboarding"
   | "room-capacity"
   | "onsite-foot-traffic"
   | "post-class-feedback"
@@ -146,6 +147,13 @@ export const NAV_TOOLS: NavTool[] = [
     href: "/tutor-profiles",
     label: "Tutor Profiles",
     description: "Maintain editorial tutor fit, tags, and parent-safe context.",
+    section: "scheduling-tutors",
+  },
+  {
+    id: "tutor-offboarding",
+    href: "/tutor-offboarding",
+    label: "Tutor Offboarding",
+    description: "Find tutors who have likely left and review their Wise accounts.",
     section: "scheduling-tutors",
   },
   {

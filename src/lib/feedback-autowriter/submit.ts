@@ -225,6 +225,7 @@ export async function submitFeedbackGuarded(input: {
   plan: SubmitPlan;
   gateInput: GateInput;
   apiActorId: string;
+  validateEvidence?: (detail: AutowriterSessionDetail) => Promise<boolean>;
   remainingMs: () => number;
   dryRun?: boolean;
   sleep?: (ms: number) => Promise<void>;
@@ -236,6 +237,10 @@ export async function submitFeedbackGuarded(input: {
 
   if (plan.expected.kind !== "auto_blank") return abort(`expected_${plan.expected.kind}_not_supported`);
   if (plan.billing.source !== "auto_blank_reuse" || plan.billing.expectedConsumedDelta !== 0) return abort("billing_plan_not_reuse");
+  // Checked before the three reads below as well as before the claim: each read may take 45 s, and a POST that can
+  // no longer be claimed needs none of them. The caller keeps the judged draft for the next run.
+  const budgetTooSmall = () => !input.dryRun && input.remainingMs() < AUTOWRITER_MIN_POST_BUDGET_MS;
+  if (budgetTooSmall()) return abort("function_budget_too_small_for_post");
 
   let before: AutowriterSessionDetail;
   try {
@@ -282,8 +287,9 @@ export async function submitFeedbackGuarded(input: {
   const body = buildFeedbackPostBody(form.plan, plan.fields, plan.billing);
   const bodyHash = feedbackBodyHash(body);
   if (input.dryRun) return { status: "preflight_ok", bodyHash };
-  if (input.remainingMs() < AUTOWRITER_MIN_POST_BUDGET_MS) return abort("function_budget_too_small_for_post");
+  if (budgetTooSmall()) return abort("function_budget_too_small_for_post");
 
+  if (input.validateEvidence && !await input.validateEvidence(before)) return abort("iseb_evidence_changed");
   const claim = await store.claimPost({
     bodyHash,
     fieldsSha256: fieldsHash(plan.fields),

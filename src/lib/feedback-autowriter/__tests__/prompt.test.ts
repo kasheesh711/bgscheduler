@@ -200,8 +200,7 @@ describe("v4 rules (30 Sep)", () => {
     evidence,
   });
 
-  it("is prompt version 4 and asks for homework only when the tutor clearly set it", () => {
-    expect(PROMPT_VERSION).toBe(4);
+  it("asks for homework only when the tutor clearly set it", () => {
     expect(FEEDBACK_JSON_SCHEMA.properties.homework.description)
       .toBe("Only homework the tutor clearly set for after this lesson, with timing; empty string if none or unclear.");
   });
@@ -248,7 +247,6 @@ describe("v4 rules (30 Sep)", () => {
       "never to [STUDENT_1], even when the summary seems to be about them. " +
       "Never give [STUDENT_1] anything the summary says [TUTOR] or another named person did, said, finished or did not finish.",
     );
-    expect(system.content).not.toContain("12.");
   });
 
   it("tells the writer who did what in a transcript, then keeps the covered-not-mastered and Thai-name rules as 12 and 13", () => {
@@ -260,6 +258,26 @@ describe("v4 rules (30 Sep)", () => {
     );
     expect(system.content).toContain("12. Something the tutor explained was covered, not mastered:");
     expect(system.content).toContain("13. Names in the transcript may be written in Thai script;");
+  });
+
+  it("v5: never names anyone but the student — other people are referred to generically (owner decision, 30 Sep)", () => {
+    expect(PROMPT_VERSION).toBe(5);
+    const rules = (evidence: "summary" | "transcript") => messages(evidence, "[00:00] TUTOR: we read chapter two")[0].content.split("\n");
+    // Summary mode: a rule of its own, the last one.
+    expect(rules("summary").at(-1)).toBe(
+      "12. Never name anyone but [STUDENT_1]: refer to any other person generically — " +
+      "\"another student\", \"a classmate\", \"a family member\" — never by name.",
+    );
+    expect(rules("summary").filter((line) => /^1[23]\. /u.test(line))).toHaveLength(1);
+    // Transcript mode: rule 13 already forbade repeating any name; it now says what to write for other people.
+    expect(rules("transcript").at(-1)).toBe(
+      "13. Names in the transcript may be written in Thai script; never repeat any name — write [STUDENT_1] for the student " +
+      "and refer to anyone else generically (\"another student\", \"a classmate\", \"a family member\").",
+    );
+    // The tutor is never named either, in both modes (unchanged): [TUTOR] is not an allowed name.
+    for (const evidence of ["summary", "transcript"] as const) {
+      expect(messages(evidence, "x")[0].content).toContain("Refer to the student only as [STUDENT_1]. Never name the tutor or write [TUTOR].");
+    }
   });
 
   it("names the other people in the summary on a line before it, only when there are any", () => {

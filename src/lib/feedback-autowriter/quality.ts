@@ -168,6 +168,9 @@ const ONSITE_REASONS = new Set(["session_type_OFFLINE", "session_type_in_person_
  * fixed it — which leave the coverage denominator. Exactly these: a hold where the judge found our draft unfaithful,
  * the validator or the form rejected it, billing drifted or the pipeline failed, and any reason not listed here, is
  * a miss (fail-closed). Reasons are matched whole.
+ * Transcript first adds none: a class that fell back to the summary is judged by where it ends, so its fallback cause
+ * (`summary_fallback:<cause>`, even a recording in several parts or unclear speakers) never leaves it out, and a
+ * mostly-Thai summary held after a fallback (`thai_summary_no_transcript`) is a miss.
  */
 export const DATA_QUALITY_REASONS: ReadonlyArray<{
   match: RegExp;
@@ -271,8 +274,28 @@ export function postingWindowEligibility(input: {
 }
 
 /**
+ * Every 7-day rate of the dashboard pools this many days: the date and the six before it (numerators and denominators
+ * summed, then divided). The trend series, the review payload's look-back and the health rail's charts all derive
+ * from it, so they cannot drift apart.
+ */
+export const RATE_POOL_DAYS = 7;
+
+const ISO_DAY = String.raw`(?:20\d\d-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|02-(?:0[1-9]|1\d|2[0-8]))|20(?:[02468][048]|[13579][26])-02-29)`;
+const ISO_TIME = String.raw`(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,6})?`;
+/**
+ * A call record's `result.attemptAt` that can be read as a time: the form our own code writes (`Date#toISOString`,
+ * `2026-09-30T12:40:00.000Z`), and a real day and time of this century — so a value that matches always casts to a
+ * timestamp. The daily-metrics query casts `attemptAt` only when it matches (review-job.ts): a malformed value
+ * (edited by hand, or a later bug's) dates the call by its row instead of failing the whole query. Written to be a
+ * Postgres and a JavaScript regular expression alike.
+ */
+export const ATTEMPT_AT_PATTERN = `^${ISO_DAY}T${ISO_TIME}Z$`;
+
+/**
  * Whether the tutor (or any person) wrote the class before we started writing it — before our first writer call,
- * successful or not (waiting for the evidence is not a miss; a writer outage is). A person's save we have not seen
+ * successful or not (waiting for the evidence is not a miss; a writer outage is). `firstWriterCallAt` is when that
+ * call's request was sent: a rate-limited attempt records it (`result.attemptAt`), since its row is only written
+ * after the waits; any other call's row is dated when it ended (`created_at`). A person's save we have not seen
  * (activity not mirrored yet) proves nothing: the class counts as a miss until the event arrives (the metrics are
  * recomputed hourly).
  */
@@ -343,6 +366,8 @@ export function classifyCoverage(input: CoverageInput): CoverageClass | null {
     default:
       // pending, generating, awaiting_recording, transcribing, would_submit: still in the works — or, once the
       // posting window is over, a class that can no longer be posted (the sweep may not have expired it yet).
+      // Transcript first: a class waiting for its recording (`transcript_first`) and one back on the summary after a
+      // fallback (`summary_fallback:<cause>`) are in the works like any other.
       return input.windowClosed ? "miss_expired" : "pending";
   }
 }

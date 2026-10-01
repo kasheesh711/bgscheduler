@@ -715,6 +715,41 @@
       "when": 1790740000000,
       "tag": "0101_feedback_autowriter_review",
       "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1790830000000,
+      "tag": "0102_tutor_offboarding",
+      "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1790838000000,
+      "tag": "0103_iseb_atom_feedback",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1790840000000,
+      "tag": "0104_tutor_offboarding_removal",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1790844000000,
+      "tag": "0105_tutor_workforce_analytics",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1790847600000,
+      "tag": "0106_tutor_course_demand_growth",
+      "breakpoints": true
     }
   ]
 }

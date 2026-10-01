@@ -24,7 +24,7 @@ export function useSavedDraft<T>(saved: T): [T, Dispatch<SetStateAction<T>>] {
   return [state.value, next => setState(current => ({ ...current, value: typeof next === "function" ? (next as (value: T) => T)(current.value) : next }))];
 }
 export function Button({ variant = "secondary", className = "", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "quiet" }) {
-  return <button {...props} type={props.type || "button"} className={`${css.button} ${css[variant]} ${className}`} />;
+  return <button {...props} data-pt-variant={variant} type={props.type || "button"} className={`${css.button} ${css[variant]} ${className}`} />;
 }
 export function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className={css.field}><span>{label}</span>{children}</label>; }
 export function Empty({ title, children }: { title: string; children: React.ReactNode }) { return <div className={css.empty}><div className={css.emptyGlyph}><FileUp size={24} /></div><h3>{title}</h3><p>{children}</p></div>; }

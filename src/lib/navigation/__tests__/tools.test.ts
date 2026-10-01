@@ -24,6 +24,7 @@ describe("navigation tool registry", () => {
     expect(sections[0].tools.map((tool) => tool.href)).toContain("/leave-requests");
     expect(sections[0].tools.map((tool) => tool.href)).toContain("/post-class-feedback");
     expect(sections[0].tools.map((tool) => tool.href)).toContain("/onsite-foot-traffic");
+    expect(sections[0].tools.map((tool) => tool.href)).toContain("/tutor-offboarding");
     expect(sections[1].tools.map((tool) => tool.href)).toEqual([
       "/progress-tests",
       "/student-schedule",

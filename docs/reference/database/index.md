@@ -513,3 +513,54 @@ Migration **0101** (operating loop, Phase 1 — measurement) adds eleven tables 
 | `feedback_autowriter_roster_accounts` | `feedbackAutowriterRosterAccounts` | One code-roster account as the review job saw it (first and last sighting): a class the autowriter never saw is judged only while its account was on the roster |
 
 See [the feature page](../../features/feedback-autowriter.md).
+
+## Tutor Offboarding — migration 0102
+
+| SQL table | Drizzle export | Grain |
+|---|---|---|
+| `tutor_offboarding_decisions` | `tutorOffboardingDecisions` | One "Still with us" decision: snooze end, the likelihood/band/reasons it overrode, who decided, optional undo |
+| `tutor_offboarding_access_grants` | `tutorOffboardingAccessGrants` | One admin email allowed to remove tutors from Wise (OFF-11); owner-managed |
+| `tutor_offboarding_access_audit_log` | `tutorOffboardingAccessAuditLog` | Grant/revoke audit history; appended by the application, with no database immutability trigger |
+| `tutor_offboarding_sheet_source` | `tutorOffboardingSheetSource` | Latest confirmed-termination Sheet snapshot and sync health |
+
+Migration 0102 also adds four nullable roster columns to `tutor_wise_accounts`: `wise_relation`, `wise_joined_on`,
+`wise_course_count`, `wise_activated` (null = unknown), written best-effort by the snapshot sync after promotion.
+
+## Tutor Offboarding — migration 0104
+
+| SQL table | Drizzle export | Grain |
+|---|---|---|
+| `tutor_offboarding_runs` | `tutorOffboardingRuns` | One immutable preview/apply lifecycle, including stored mode, expiry, operator and final state; a partial unique index allows only one `applying` run |
+| `tutor_offboarding_run_accounts` | `tutorOffboardingRunAccounts` | One per-account snapshot and outcome in a run; unique by run and Wise teacher id, with the saved account payload and pre-removal local active state |
+
+Both tables are additive. Apply migration 0104 only with owner authorization and before deploying removal controls.
+The migration has no down path; rollback requires a forward migration.
+
+## Tutor workforce history — migration 0105
+
+| SQL table | Drizzle export | Grain |
+|---|---|---|
+| `workforce_capture_runs` | `workforceCaptureRuns` | One idempotent roster observation or historical source-window capture, including original time and coverage |
+| `workforce_person_versions` | `workforcePersonVersions` | One changed canonical-person payload: accounts, role, qualifications, offered windows and leave |
+| `workforce_person_observations` | `workforcePersonObservations` | One person at a capture boundary, referencing a reusable payload version plus source quality |
+| `workforce_session_versions` | `workforceSessionVersions` | One changed Wise-session payload, including tutor identities and booked-participant evidence |
+| `workforce_credit_versions` | `workforceCreditVersions` | One changed Wise session/student credit-evidence payload |
+| `workforce_subject_mappings` | `workforceSubjectMappings` | One reviewed exact class/lesson-label mapping with an edit revision |
+
+These tables have no cascading foreign key to rotating snapshots. Original source time determines historical order;
+content hashes avoid recopying unchanged payloads. A later return to an older value is a new version. Failed or
+partial captures retain diagnostics without replacing complete source evidence. Migration 0105 is additive and must
+be applied before deploying code that reads these tables. No Wise data is changed by this migration.
+
+## Course demand growth — migration 0106
+
+| SQL table | Drizzle export | Grain |
+|---|---|---|
+| `workforce_booking_classifications` | `workforceBookingClassifications` | Versioned regular/trial/pretest/unknown classification per Wise session, with exact source evidence and original observation time |
+| `workforce_course_lifecycle_events` | `workforceCourseLifecycleEvents` | Versioned churn/reactivation event per stable student-subject event key, with effective month, baseline and inferred/observed certainty |
+
+Both tables have unique natural-key/revision indexes and a partial unique index allowing one current revision per
+session or event key. Classification observations are ordered by their original time; older imports cannot replace a
+newer current classification. Lifecycle reconciliation records explicit corrections and supersession; absence from a
+partial capture never deletes a known event. Neither table has a foreign key to rotating snapshots. The migration is
+additive; application reads do not create or update these records.

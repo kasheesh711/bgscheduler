@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { SONIOX_TERMS, describeClass } from "../prompt";
 import {
   assignSpeakerRoles,
+  buildTranscriptEvidence,
   parseZoomVtt,
   renderTranscript,
   segmentsFromTokens,
+  sonioxJobInput,
   thaiShare,
   type Segment,
 } from "../transcript";
+import { SESSION_ID, STUDENT_NAME } from "./fixtures";
 
 const tokens = [
   { text: "Let's", start_ms: 0, end_ms: 400, speaker: "1" },
@@ -190,5 +194,102 @@ describe("thaiShare", () => {
     expect(thaiShare("Hello")).toBe(0);
     expect(thaiShare("ab สว")).toBe(0.5);
     expect(thaiShare("123 !")).toBe(0);
+  });
+});
+
+/** A long, clearly one-to-one lesson (the tutor explains, the student answers): enough to write from. */
+function lessonTokens(minutes = 12) {
+  const out: Array<{ text: string; start_ms: number; end_ms: number; speaker: string }> = [];
+  for (let i = 0; i < minutes; i += 1) {
+    const at = i * 60_000;
+    out.push({ text: " Today we add fractions with unlike denominators and simplify the answer, step by step.", start_ms: at, end_ms: at + 25_000, speaker: "1" });
+    out.push({ text: " I got three quarters because I found the common denominator first.", start_ms: at + 31_000, end_ms: at + 55_000, speaker: "2" });
+  }
+  return out;
+}
+
+const LESSON_VTT = `WEBVTT
+
+1
+00:00:00.000 --> 00:00:25.000
+Kevin (Kev) Y. Hsieh Online: Today we add fractions
+
+2
+00:00:31.000 --> 00:00:55.000
+${STUDENT_NAME}: I got three quarters
+`;
+
+describe("buildTranscriptEvidence (shared by the second pass and the replay)", () => {
+  const base = {
+    scheduledMinutes: 60,
+    teacherName: "Kevin (Kev) Y. Hsieh Online",
+    alsoTeacher: ["Kevin Hsieh", "Kev"],
+  };
+  const transcript = (tokens = lessonTokens()) => ({ text: tokens.map((token) => token.text).join(""), tokens });
+
+  it("renders TUTOR/STUDENT turns with Zoom-confirmed labels and the stored metadata", () => {
+    const evidence = buildTranscriptEvidence({ ...base, transcript: transcript(), audioDurationMs: 3_600_000, zoomCues: parseZoomVtt(LESSON_VTT) });
+    expect(evidence.tooShort).toBeNull();
+    expect(evidence.speakerLabels).toBe("verified");
+    expect(evidence.speakers.method).toBe("zoom_alignment");
+    expect(evidence.rendered).toContain("[00:00] TUTOR: Today we add fractions");
+    expect(evidence.rendered).toContain("[00:31] STUDENT: I got three quarters");
+    expect(evidence.meta).toEqual({ audioMinutes: 60, speakerMethod: "zoom_alignment", shares: { tutor: 57, student: 43, other: 0 }, thaiShare: 0 });
+  });
+
+  it("says the labels are inferred when only the talk share names the tutor, and leaves an unclear split to the caller", () => {
+    const tutorLed = lessonTokens().map((token) => token.speaker === "2" ? { ...token, text: " Three quarters." } : token);
+    const inferred = buildTranscriptEvidence({ ...base, transcript: transcript(tutorLed), audioDurationMs: 3_600_000, zoomCues: [] });
+    expect(inferred).toMatchObject({ speakerLabels: "inferred", tooShort: null, meta: { speakerMethod: "talk_share" } });
+    const even = lessonTokens().map((token, index) => ({ ...token, speaker: String((index % 3) + 1) }));
+    const unclear = buildTranscriptEvidence({ ...base, transcript: transcript(even), audioDurationMs: 3_600_000, zoomCues: [] });
+    expect(unclear).toMatchObject({ speakerLabels: "inferred", tooShort: null, speakers: { method: "unclear" } });
+  });
+
+  it("flags a recording much shorter than the class before a short transcript, and trusts no length it was not given", () => {
+    const short = buildTranscriptEvidence({ ...base, transcript: transcript(lessonTokens(1)), audioDurationMs: 20 * 60_000, zoomCues: [] });
+    expect(short.tooShort).toBe("recording_too_short");
+    expect(short.meta.audioMinutes).toBe(20);
+    const thin = buildTranscriptEvidence({ ...base, transcript: transcript(lessonTokens(1)), audioDurationMs: 3_600_000, zoomCues: [] });
+    expect(thin.tooShort).toBe("transcript_too_short");
+    const unknownLength = buildTranscriptEvidence({ ...base, transcript: transcript(), audioDurationMs: null, zoomCues: [] });
+    expect(unknownLength.tooShort).toBeNull();
+    expect(unknownLength.meta.audioMinutes).toBe(0);
+  });
+
+  it("measures how Thai the transcript is", () => {
+    const thai = lessonTokens().map((token) => token.speaker === "2" ? { ...token, text: " ได้สามส่วนสี่ครับ เพราะหาตัวส่วนร่วมก่อน" } : token);
+    expect(buildTranscriptEvidence({ ...base, transcript: transcript(thai), audioDurationMs: 3_600_000, zoomCues: [] }).meta.thaiShare)
+      .toBeGreaterThan(0.2);
+  });
+});
+
+describe("sonioxJobInput (shared by the second pass and the replay)", () => {
+  it("sends the recording with our terms, the tutor's and the student's names, and the class details", () => {
+    const input = sonioxJobInput({
+      wiseSessionId: SESSION_ID,
+      audioUrl: "https://files.wiseapp.live/rec.mp4",
+      detail: { classSubject: "11+/13+", title: "Live Session - NVR" },
+      tutorNames: ["Kevin Hsieh", "Kev"],
+      studentName: STUDENT_NAME,
+    });
+    expect(input).toEqual({
+      audioUrl: "https://files.wiseapp.live/rec.mp4",
+      terms: [...SONIOX_TERMS, "Kevin Hsieh", "Kev", "Somchai", "Tom"],
+      general: [
+        { key: "domain", value: "one-to-one online tutoring lesson between a tutor and a student" },
+        ...describeClass({ programme: "11+/13+", title: "Live Session - NVR" }).map((line) => ({ key: "class", value: line })),
+      ],
+      clientReferenceId: SESSION_ID,
+    });
+  });
+
+  it("leaves out a nickname the student's Wise name does not have", () => {
+    const input = sonioxJobInput({
+      wiseSessionId: SESSION_ID, audioUrl: "https://files.wiseapp.live/rec.mp4",
+      detail: { classSubject: null, title: null }, tutorNames: ["Kevin Hsieh"], studentName: "Somchai Jaidee",
+    });
+    expect(input.terms).toEqual([...SONIOX_TERMS, "Kevin Hsieh", "Somchai"]);
+    expect(input.general).toEqual([{ key: "domain", value: "one-to-one online tutoring lesson between a tutor and a student" }]);
   });
 });

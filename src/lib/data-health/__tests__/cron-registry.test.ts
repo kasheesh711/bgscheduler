@@ -97,6 +97,7 @@ describe("data-health cron registry", () => {
     function stubFeatureFlags(enabled: boolean) {
       vi.stubEnv("WISE_CLASSROOM_AUTOMATION_ENABLED", enabled ? "true" : undefined);
       vi.stubEnv("FEEDBACK_AUTOWRITER_ENABLED", enabled ? "true" : undefined);
+      vi.stubEnv("FEEDBACK_ATOM_COLLECTOR_ENABLED", enabled ? "true" : undefined);
       vi.stubEnv("TUTOR_SIT_INS_ENABLED", enabled ? "true" : undefined);
       vi.stubEnv("CREDIT_CONTROL_MODE", enabled ? "active" : undefined);
     }
@@ -114,7 +115,7 @@ describe("data-health cron registry", () => {
       stubFeatureFlags(false);
       const offered = manuallyRunnableCronJobs().map((job) => job.key);
 
-      for (const paused of ["wise_snapshot", "classroom_morning", "feedback_autowriter", "tutor_sit_ins", "tutor_sit_ins_digest", "line_credit_digest"]) {
+      for (const paused of ["wise_snapshot", "classroom_morning", "feedback_atom", "feedback_autowriter", "tutor_sit_ins", "tutor_sit_ins_digest", "line_credit_digest"]) {
         expect(offered).not.toContain(paused);
       }
       expect(offered).not.toContain("student_promotions_july_1");

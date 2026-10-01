@@ -7,6 +7,7 @@ vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
 vi.mock("@/lib/wise/client", () => ({ createWiseClient: vi.fn() }));
 // Branches that predate this test (the autowriter and workspace-jobs ones are dynamic imports inside run-job).
 vi.mock("@/lib/feedback-autowriter/dispatch", () => ({ runAutowriterJob: vi.fn(), runAutowriterReviewJob: vi.fn() }));
+vi.mock("@/lib/feedback-autowriter/atom/collector", () => ({ collectAtomOnServer: vi.fn() }));
 vi.mock("@/lib/post-class-feedback/nightly-reminders", () => ({ nightlyWorkerOutcome: vi.fn(), runNightlyReminders: vi.fn() }));
 vi.mock("@/lib/progress-tests/workspace/jobs", () => ({ processJobs: vi.fn() }));
 vi.mock("@/lib/room-booking/refresh", () => ({ runRoomRefresh: vi.fn() }));
@@ -56,6 +57,7 @@ import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import { CRON_JOBS, getCronJobDefinition, manuallyRunnableCronJobs, type CronJobDefinition } from "@/lib/data-health/cron-registry";
 import { runDataHealthJob } from "@/lib/data-health/run-job";
 import { getDb } from "@/lib/db";
+import { collectAtomOnServer } from "@/lib/feedback-autowriter/atom/collector";
 import { runAutowriterJob, runAutowriterReviewJob } from "@/lib/feedback-autowriter/dispatch";
 import { runCronWatchdog } from "@/lib/internal/cron-watchdog";
 import { syncLeaveRequests } from "@/lib/leave-requests/sync";
@@ -88,6 +90,7 @@ type ManualRunKey = Exclude<(typeof CRON_JOBS)[number], { manualRunDisabledReaso
 
 /** One primary entry point per key Data Health can run; `satisfies` turns a missing branch into a type error. */
 const DISPATCH_TARGETS = {
+  feedback_atom: collectAtomOnServer,
   feedback_autowriter: runAutowriterJob,
   feedback_autowriter_review: runAutowriterReviewJob,
   post_class_feedback_nightly: runNightlyReminders,
@@ -151,6 +154,7 @@ function applyDefaults(): void {
   vi.mocked(runWiseSyncRequest).mockImplementation(async () => NextResponse.json({ ok: true }) as never);
   vi.mocked(runCreditControlSyncRequest).mockImplementation(async () => NextResponse.json({ ok: true }) as never);
   vi.mocked(runProgressTestSyncRequest).mockImplementation(async () => NextResponse.json({ ok: true }) as never);
+  vi.mocked(collectAtomOnServer).mockResolvedValue({ ok: true } as never);
   vi.mocked(runAutowriterJob).mockResolvedValue({ ok: true } as never);
   vi.mocked(runAutowriterReviewJob).mockResolvedValue({ ok: true } as never);
   vi.mocked(runNightlyReminders).mockResolvedValue({} as never);
@@ -214,6 +218,7 @@ describe("runDataHealthJob", () => {
   ])("offers only Run buttons it can dispatch with %s", (_mode, flag, creditControlMode) => {
     vi.stubEnv("WISE_CLASSROOM_AUTOMATION_ENABLED", flag);
     vi.stubEnv("FEEDBACK_AUTOWRITER_ENABLED", flag);
+    vi.stubEnv("FEEDBACK_ATOM_COLLECTOR_ENABLED", flag);
     vi.stubEnv("TUTOR_SIT_INS_ENABLED", flag);
     vi.stubEnv("CREDIT_CONTROL_MODE", creditControlMode);
 
