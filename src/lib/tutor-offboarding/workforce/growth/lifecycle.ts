@@ -94,11 +94,17 @@ export function hasUnresolvedGrowthTeachingHistory(
     return booking.studentIds.some(id => !booking.course || booking.kind === 'unknown' || studentWasTaught(booking, id) === null);
   });
 }
-function hasContemporaneousGrowthFutureCheck(evidence: GrowthEvidence, now: Date, threshold: number): boolean {
-  return hasFreshGrowthFutureEvidence(evidence, now) && evidence.workforce.sourceCoverage.some(row =>
+function contemporaneousGrowthFutureCheckAt(evidence: GrowthEvidence, now: Date, threshold: number): string | null {
+  if (!hasFreshGrowthFutureEvidence(evidence, now)) return null;
+  return evidence.workforce.sourceCoverage.filter(row =>
     row.source === 'wise_future_snapshot' && row.completeness === 'complete' && !row.truncated &&
     Math.abs(Date.parse(row.observedAt ?? '') - threshold) <= 90 * 60000 &&
-    Date.parse(row.observedAt ?? '') <= now.getTime());
+    Date.parse(row.observedAt ?? '') <= now.getTime())
+    .map(row => row.observedAt!).sort()[0] ?? null;
+}
+function retainedFutureCheckAt(event: GrowthLifecycleEvent | undefined, now: Date, threshold: number): string | null {
+  const at = Date.parse(event?.futureCheckedAt ?? '');
+  return Number.isFinite(at) && at <= now.getTime() && Math.abs(at - threshold) <= 90 * 60000 ? event!.futureCheckedAt! : null;
 }
 export function hasCompleteGrowthTeachingHistory(evidence: GrowthEvidence, start: number, end: number): boolean {
   const intervals = evidence.workforce.sourceCoverage.filter(row=>row.source==='wise_history' && row.completeness==='complete' && !row.truncated).flatMap(row=>{
@@ -141,7 +147,8 @@ export function deriveGrowthLifecycleEvents(evidence: GrowthEvidence, now: Date)
   }
   const retained = new Map(evidence.lifecycleEvents.map(event => [event.eventKey,event]));
   const events = new Map<string,GrowthLifecycleEvent>();
-  // Retained events survive returns. Only direct source corrections supersede them.
+  // Retained events survive returns, while new contradictory or uncertain facts
+  // produce explicit revisions rather than keeping an unproven absence active.
   for (const event of retained.values()) {
     if (event.status === 'superseded') { events.set(event.eventKey,event); continue; }
     const rows = groups.get(identity(event.studentId,event.subject)) ?? [];
@@ -158,7 +165,19 @@ export function deriveGrowthLifecycleEvents(evidence: GrowthEvidence, now: Date)
     const finalSourcePresent = bookings.some(row => event.sourceSessionIds.includes(row.session.wiseSessionId) && !event.baselineMonths.includes(monthOf(row.session.startAt)) && row.session.startAt !== event.returnAt);
     const returnSourcePresent = event.kind === 'reactivation' && bookings.some(row => event.sourceSessionIds.includes(row.session.wiseSessionId) && row.session.startAt === event.returnAt);
     if ((finalSourcePresent && ((!anchor && !anchorUnknown) || interruption)) || (returnSourcePresent && invalidReturn)) events.set(event.eventKey,{...event,revision:event.revision+1,status:'superseded',evidenceRevision:evidence.revision,reasonCodes:[...new Set([...event.reasonCodes,'SOURCE_CORRECTION_SUPERSEDED'])]});
-    else events.set(event.eventKey,event);
+    else if (event.kind === 'churn') {
+      const historicalReturn = rows.some(row => Date.parse(row.session.startAt) >= threshold && Date.parse(row.session.startAt) <= now.getTime() && isActiveGrowthBooking(row));
+      const uncertain = hasUnresolvedGrowthTeachingHistory(bookings,Date.parse(event.lastTaughtAt ?? '')+1,historicalReturn ? threshold : now.getTime(),event.studentId,event.subject);
+      if (uncertain) events.set(event.eventKey,{...event,revision:event.revision+1,status:'superseded',evidenceRevision:evidence.revision,reasonCodes:[...new Set([...event.reasonCodes,'CHURN_ABSENCE_UNCONFIRMED'])]});
+      else {
+        const futureCheckedAt = retainedFutureCheckAt(event,now,threshold) ?? (!historicalReturn ? contemporaneousGrowthFutureCheckAt(evidence,now,threshold) : null);
+        const certainty = futureCheckedAt ? 'observed' : 'inferred';
+        events.set(event.eventKey,certainty !== event.certainty || futureCheckedAt !== (event.futureCheckedAt ?? null)
+          ? {...event,revision:event.revision+1,certainty,futureCheckedAt,evidenceRevision:evidence.revision,
+            reasonCodes:[...event.reasonCodes.filter(code=>code!=='FRESH_FUTURE_NO_BOOKING_CHECK'&&code!=='HISTORICAL_FUTURE_BOOKINGS_NOT_RETAINED'),certainty==='inferred'?'HISTORICAL_FUTURE_BOOKINGS_NOT_RETAINED':'FRESH_FUTURE_NO_BOOKING_CHECK']}
+          : event);
+      }
+    } else events.set(event.eventKey,event);
   }
   for (const [key, rows] of groups) {
     const [studentId,subject] = JSON.parse(key) as [string,string];
@@ -183,9 +202,10 @@ export function deriveGrowthLifecycleEvents(evidence: GrowthEvidence, now: Date)
       if (old?.status === 'superseded' && !historical && (future || futureUnknown || !hasFreshGrowthFutureEvidence(evidence,now))) continue;
       const months = churnBaselineMonths(last.session.startAt);
       const summary = baseline(rows,studentId,months,evidence);
-      const certainty = old?.certainty ?? (!historical && hasContemporaneousGrowthFutureCheck(evidence,now,threshold) ? 'observed' : 'inferred');
+      const futureCheckedAt = retainedFutureCheckAt(old,now,threshold) ?? (!historical ? contemporaneousGrowthFutureCheckAt(evidence,now,threshold) : null);
+      const certainty = futureCheckedAt ? 'observed' : 'inferred';
       const churn: GrowthLifecycleEvent = { eventKey:churnKey,revision:old?.status === 'superseded' ? old.revision+1 : old?.revision ?? 1,studentId,subject,kind:'churn',lastTaughtAt:last.session.startAt,returnAt:null,
-        effectiveMonth:addMonths(monthOf(last.session.startAt),1),confirmedAt:old?.confirmedAt ?? new Date(threshold).toISOString(),baselineMonths:months,
+        effectiveMonth:addMonths(monthOf(last.session.startAt),1),confirmedAt:old?.confirmedAt ?? new Date(threshold).toISOString(),futureCheckedAt,baselineMonths:months,
         baselineStudentHours:summary.metric,baselineByCourse:summary.byCourse,evidenceRevision:evidence.revision,
         sourceSessionIds:[...new Set([last.session.wiseSessionId,...summary.sourceIds])].sort(),status:'active',certainty,
         reasonCodes:[GROWTH_LIFECYCLE_ALGORITHM,...(certainty==='inferred' ? ['HISTORICAL_FUTURE_BOOKINGS_NOT_RETAINED'] : ['FRESH_FUTURE_NO_BOOKING_CHECK']),...(summary.metric.reasonCodes)] };
@@ -203,6 +223,8 @@ export function deriveGrowthLifecycleEvents(evidence: GrowthEvidence, now: Date)
   for (const event of events.values()) if (event.kind === 'reactivation' && event.status === 'active') {
     const churn = [...events.values()].find(other => other.kind === 'churn' && other.studentId === event.studentId && other.subject === event.subject && other.lastTaughtAt === event.lastTaughtAt);
     if (churn?.status === 'superseded') events.set(event.eventKey,{...event,status:'superseded',revision:event.revision+1,evidenceRevision:evidence.revision,reasonCodes:[...new Set([...event.reasonCodes,'SOURCE_CORRECTION_SUPERSEDED'])]});
+    else if (churn && (event.certainty !== churn.certainty || (event.futureCheckedAt ?? null) !== (churn.futureCheckedAt ?? null)))
+      events.set(event.eventKey,{...event,certainty:churn.certainty,futureCheckedAt:churn.futureCheckedAt,revision:event.revision+1,evidenceRevision:evidence.revision});
   }
   return [...events.values()].sort((a,b) => a.confirmedAt.localeCompare(b.confirmedAt) || a.kind.localeCompare(b.kind) || a.eventKey.localeCompare(b.eventKey));
 }

@@ -4,6 +4,41 @@ import {booking,evidence,now} from './fixtures';
 const late = new Date('2026-10-19T10:00:00+07:00');
 function august(){const e=evidence();booking(e,'may','2026-05-05',['John'],3);booking(e,'june','2026-06-05',['John'],6);booking(e,'july','2026-07-05',['John'],9);booking(e,'last','2026-08-20',['John']);e.workforce.sourceCoverage[1].observedAt=late.toISOString();e.workforce.sourceCoverage[0].requestedTo='2026-10-19';return e;}
 describe('growth lifecycle',()=>{
+ it.each(['unknown-credit','partial-membership'])('supersedes retained churn when new %s makes its absence interval uncertain',cause=>{
+  const e=august(), original=deriveGrowthLifecycleEvents(e,late)[0];
+  e.lifecycleEvents=[original];
+  booking(e,'recent','2026-09-20',cause==='unknown-credit'?['John']:['Evan'],1,'Maths',cause==='partial-membership'?{participantCompleteness:'partial'}:{});
+  if(cause==='unknown-credit')e.workforce.studentCredits=e.workforce.studentCredits.filter(x=>x.wiseSessionId!=='recent');
+  const corrected=deriveGrowthLifecycleEvents(e,late).find(x=>x.eventKey===original.eventKey)!;
+  expect(corrected.status).toBe('superseded');
+  expect(corrected.revision).toBe(2);
+  expect(corrected.reasonCodes).toContain('CHURN_ABSENCE_UNCONFIRMED');
+  e.lifecycleEvents=[corrected];
+  expect(deriveGrowthLifecycleEvents(e,late).find(x=>x.eventKey===original.eventKey)?.revision).toBe(2);
+ });
+ it('downgrades legacy observed historical churn without retained contemporaneous future-check evidence',()=>{
+  const e=evidence();booking(e,'may-final','2026-05-01',['John']);
+  const original={...deriveGrowthLifecycleEvents(e,now)[0],certainty:'observed' as const,reasonCodes:['subject-lifecycle-v1','FRESH_FUTURE_NO_BOOKING_CHECK']};
+  e.lifecycleEvents=[original];
+  const corrected=deriveGrowthLifecycleEvents(e,now).find(x=>x.eventKey===original.eventKey)!;
+  expect(corrected.certainty).toBe('inferred');
+  expect(corrected.revision).toBe(2);
+  expect(corrected.status).toBe('active');
+  expect(corrected.reasonCodes).toContain('HISTORICAL_FUTURE_BOOKINGS_NOT_RETAINED');
+  e.lifecycleEvents=[corrected];
+  expect(deriveGrowthLifecycleEvents(e,now).find(x=>x.eventKey===original.eventKey)?.revision).toBe(2);
+ });
+ it('retains a genuinely observed future-check timestamp when later snapshots replace it',()=>{
+  const e=august(),original=deriveGrowthLifecycleEvents(e,late)[0];
+  expect(original).toMatchObject({certainty:'observed',futureCheckedAt:late.toISOString()});
+  e.lifecycleEvents=[original];
+  const later=new Date(late.getTime()+86400000);
+  e.workforce.sourceCoverage[1].observedAt=later.toISOString();e.workforce.sourceCoverage[0].requestedTo='2026-10-20';
+  const retained=deriveGrowthLifecycleEvents(e,later).find(x=>x.eventKey===original.eventKey)!;
+  expect(retained.certainty).toBe('observed');
+  expect(retained.revision).toBe(1);
+  expect(retained).toHaveProperty('futureCheckedAt',late.toISOString());
+ });
  it('cannot confirm absence when a recent ended class has unknown student credit evidence',()=>{const e=august();booking(e,'recent','2026-09-20',['John']);e.workforce.studentCredits=e.workforce.studentCredits.filter(x=>x.wiseSessionId!=='recent');expect(deriveGrowthLifecycleEvents(e,late).filter(x=>x.studentId==='John')).toEqual([]);});
  it('cannot prove absence from a partial historical membership list even when the missing student is not returned',()=>{const e=august();booking(e,'partial-members','2026-09-20',['Evan'],1,'Maths',{participantCompleteness:'partial'});expect(deriveGrowthLifecycleEvents(e,late).filter(x=>x.studentId==='John')).toEqual([]);});
  it('confirmed cancelled partial-member classes do not block the absence proof',()=>{const e=august();booking(e,'cancelled','2026-09-20',['Evan'],1,'Maths',{participantCompleteness:'partial',meetingStatus:'CANCELLED'});expect(deriveGrowthLifecycleEvents(e,late).filter(x=>x.studentId==='John'&&x.kind==='churn')).toHaveLength(1);});

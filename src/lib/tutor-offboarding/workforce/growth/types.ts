@@ -27,6 +27,8 @@ export interface GrowthLifecycleEvent {
   returnAt: string | null;
   effectiveMonth: string;
   confirmedAt: string;
+  /** Retained complete future-snapshot observation supporting a contemporaneous absence check. */
+  futureCheckedAt?: string | null;
   baselineMonths: string[];
   baselineStudentHours: WorkforceMetric;
   baselineByCourse?: Array<{ course: GrowthCourse; studentHours: WorkforceMetric }>;
