@@ -13,6 +13,7 @@ import { POSTED_STATES, STATE_TONE, stateLabel } from "./class-states";
 import { deadlineCountdown, minutes, usd, when } from "./format";
 import { ARM_LABEL } from "./model-labels";
 import { FeedbackFields, ReviewDetail } from "./review-detail";
+import { AtomEvidencePanel } from "./atom-review";
 import { VerdictForm } from "./verdict-form";
 
 // ----------------------------------------------------------------------------
@@ -502,6 +503,7 @@ export function ItemDrawer({ target, dashboard, review, now, canControl, onChang
             <IncidentBody incident={content.incident} about={content.about} canControl={canControl} onAcknowledged={() => done("Incident acknowledged.")}
               onOpen={onOpen} />
           ) : null}
+          {target && "wiseSessionId" in target && content?.kind !== "missing" ? <div className="mt-4"><AtomEvidencePanel key={target.wiseSessionId} sessionId={target.wiseSessionId} /></div> : null}
           {content?.kind === "missing" ? <p className="text-xs text-muted-foreground">Close this and look at the list again.</p> : null}
         </div>
       </DialogContent>

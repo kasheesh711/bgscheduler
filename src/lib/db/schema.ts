@@ -6488,3 +6488,87 @@ export const feedbackAutowriterRosterAccounts = pgTable("feedback_autowriter_ros
 }, (table) => [
   check("feedback_autowriter_roster_accounts_seen_check", sql`${table.lastSeenAt} >= ${table.firstSeenAt}`),
 ]);
+
+
+// ISEB feedback enrichment. Stable student links are approved by staff; activity evidence is append-only.
+export const feedbackAtomLinks = pgTable("feedback_atom_links", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  wiseStudentId: text("wise_student_id").notNull(),
+  atomStudentId: text("atom_student_id").notNull(),
+  wiseName: text("wise_name").notNull(),
+  atomName: text("atom_name").notNull(),
+  revision: integer("revision").notNull(),
+  active: boolean("active").notNull().default(true),
+  approvedBy: text("approved_by").notNull(),
+  approvedAt: timestamp("approved_at", { withTimezone: true }).notNull().defaultNow(),
+  note: text("note").notNull(),
+}, table => [
+  uniqueIndex("feedback_atom_link_revision_idx").on(table.wiseStudentId, table.revision),
+  uniqueIndex("feedback_atom_link_wise_active_idx").on(table.wiseStudentId).where(sql`${table.active}`),
+  uniqueIndex("feedback_atom_link_atom_active_idx").on(table.atomStudentId).where(sql`${table.active}`),
+]);
+
+export const feedbackAtomSyncRuns = pgTable("feedback_atom_sync_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  status: text("status").$type<"running" | "succeeded" | "failed">().notNull().default("running"),
+  triggerSource: text("trigger_source").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  deploymentId: text("deployment_id"),
+  counts: jsonb("counts").$type<Record<string, unknown>>().notNull().default({}),
+  errorCode: text("error_code"),
+}, table => [uniqueIndex("feedback_atom_single_sync_idx").on(table.status).where(sql`${table.status} = 'running'`)]);
+
+export const feedbackAtomSnapshots = pgTable("feedback_atom_snapshots", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => feedbackAtomSyncRuns.id),
+  atomStudentId: text("atom_student_id").notNull(),
+  sourceHash: text("source_hash").notNull(),
+  schemaVersion: integer("schema_version").notNull().default(1),
+  collectedAt: timestamp("collected_at", { withTimezone: true }).notNull().defaultNow(),
+  activities: jsonb("activities").$type<import("../feedback-autowriter/atom/types").AtomActivity[]>().notNull(),
+}, table => [index("feedback_atom_snapshot_student_idx").on(table.atomStudentId, table.collectedAt)]);
+
+/** One complete Wise day, shared by every student in that collection run. */
+export const feedbackAtomTimetables = pgTable("feedback_atom_timetables", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => feedbackAtomSyncRuns.id),
+  bangkokDate: text("bangkok_date").notNull(),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull().defaultNow(),
+  lessons: jsonb("lessons").$type<import("../feedback-autowriter/atom/types").AtomLesson[]>().notNull(),
+}, table => [index("feedback_atom_timetable_date_idx").on(table.bangkokDate, table.observedAt)]);
+
+/** Exact inputs retained even after the external transcript's review window expires. */
+export const feedbackIsebEvidence = pgTable("feedback_iseb_evidence", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  wiseSessionId: text("wise_session_id").notNull(),
+  evidenceHash: text("evidence_hash").notNull(),
+  atom: jsonb("atom").$type<import("../feedback-autowriter/atom/types").AtomLessonEvidence>(),
+  lessonRecord: text("lesson_record").notNull(),
+  evidenceKind: text("evidence_kind").$type<"summary" | "transcript">().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => [uniqueIndex("feedback_iseb_evidence_hash_idx").on(table.wiseSessionId, table.evidenceHash)]);
+
+export const feedbackIsebStyleReviews = pgTable("feedback_iseb_style_reviews", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  postId: uuid("post_id").notNull().references(() => feedbackAutowriterPosts.id),
+  fieldsSha256: text("fields_sha256").notNull(),
+  status: text("status").$type<"passed" | "flagged" | "unavailable">().notNull(),
+  reviewVersion: integer("review_version").notNull().default(1),
+  result: jsonb("result").$type<Record<string, unknown>>().notNull(),
+  model: text("model"),
+  costUsd: numeric("cost_usd", { precision: 12, scale: 8 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => [index("feedback_iseb_style_post_idx").on(table.postId, table.createdAt)]);
+
+/** Owner-approved rollout receipt. No automatic approval and no inferred laptop-off claim. */
+export const feedbackIsebRollouts = pgTable("feedback_iseb_rollouts", {
+  id: text("id").primaryKey(),
+  approvedBy: text("approved_by"),
+  approvedAt: timestamp("approved_at", { withTimezone: true }),
+  comparisonHash: text("comparison_hash"),
+  cloudProofRunId: uuid("cloud_proof_run_id").references(() => feedbackAtomSyncRuns.id),
+  unattendedConfirmedBy: text("unattended_confirmed_by"),
+  activatedAt: timestamp("activated_at", { withTimezone: true }),
+  receipt: jsonb("receipt").$type<Record<string, unknown>>().notNull().default({}),
+});

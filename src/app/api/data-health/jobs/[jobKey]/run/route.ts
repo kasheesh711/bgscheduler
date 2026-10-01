@@ -24,7 +24,7 @@ export async function POST(request: NextRequest, context: RunRouteContext) {
     return NextResponse.json({ error: "Unknown job" }, { status: 404 });
   }
 
-  if (isWiseClassroomJob(job.key) || job.key.startsWith("feedback_autowriter")) {
+  if (isWiseClassroomJob(job.key) || (job.key.startsWith("feedback_autowriter") || job.key === "feedback_atom")) {
     try { await requireClassroomOperationsOwner(); }
     catch (error) { return classroomOperationsAccessError(error); }
   }
