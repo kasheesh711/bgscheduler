@@ -36,8 +36,10 @@ export async function loadTutorOffboardingDashboard(viewer: TutorOffboardingView
         return { rows: [], checkedAt: null, lastError: errorName };
       }),
     ]);
+    // OFF-07: the fresh control-plane read outranks a cached roster after snapshot deactivation.
+    if (feeds.tutorSnapshot === null) return { available: false, reason: "no_snapshot", viewer };
     // OFF-07: re-read after a snapshot rotation while cached data is being refreshed.
-    const signals = feeds.tutorSnapshot !== null && cachedSignals?.snapshotCreatedAt !== feeds.tutorSnapshot
+    const signals = cachedSignals?.snapshotCreatedAt !== feeds.tutorSnapshot
       ? await loadOffboardingSignals(db, new Date()) : cachedSignals;
     if (!signals) return { available: false, reason: "no_snapshot", viewer };
     return { available: true, ...buildOffboardingDashboard({ signals, feeds, decisions, grants, viewer, now: new Date(), terminationSnapshot }) };

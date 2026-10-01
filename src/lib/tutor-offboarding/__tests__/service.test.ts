@@ -74,6 +74,12 @@ describe("loadTutorOffboardingDashboard", () => {
     expect(listGrants).toHaveBeenCalledTimes(1);
   });
 
+  it("returns no_snapshot if the fresh active snapshot disappears despite cached people", async () => {
+    const timestamps = await loadFeedTimestamps();
+    vi.mocked(loadFeedTimestamps).mockResolvedValue({ ...timestamps, tutorSnapshot: null });
+    expect(await loadTutorOffboardingDashboard(viewer)).toEqual({ available: false, reason: "no_snapshot", viewer });
+  });
+
   it("returns no_snapshot for an empty active roster snapshot", async () => {
     vi.mocked(loadOffboardingSignals).mockResolvedValue(null);
     expect(await loadTutorOffboardingDashboard(viewer)).toEqual({ available: false, reason: "no_snapshot", viewer });
