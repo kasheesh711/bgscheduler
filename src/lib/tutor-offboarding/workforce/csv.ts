@@ -4,6 +4,7 @@ const metrics: Array<keyof WorkforceUtilizationMetrics> = [
   "uniqueStudents", "studentBookings", "distinctClasses", "bookedHours", "cancelledBookings", "noShowBookings",
   "creditConsumedHours", "recordedTeachingHours", "qualifiedPeople", "offeredHours", "leaveHours", "usableHours",
   "reservedHours", "freeHours", "outsideHours", "overlapHours", "coverageHours", "expectedCoverageHours", "coveragePercent",
+  "utilizationReservedHours", "utilizationCreditConsumedHours", "utilizationRecordedTeachingHours",
   "reservedUtilizationPercent", "consumedUtilizationPercent", "recordedTeachingUtilizationPercent",
 ];
 const rosterMetrics = ["openingRosterCount", "closingRosterCount", "joinsCount", "departuresCount", "pendingCount", "turnoverPercent"];

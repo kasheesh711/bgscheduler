@@ -164,6 +164,10 @@ export interface WorkforceCapacityMetrics {
   offeredHours: WorkforceMetric; leaveHours: WorkforceMetric;
   usableHours: WorkforceMetric; reservedHours: WorkforceMetric; freeHours: WorkforceMetric;
   outsideHours: WorkforceMetric; overlapHours: WorkforceMetric;
+  /** Numerators clipped to the same observed coverage as usableHours. */
+  utilizationReservedHours: WorkforceMetric;
+  utilizationCreditConsumedHours: WorkforceMetric;
+  utilizationRecordedTeachingHours: WorkforceMetric;
   /** Observed time span, not offered time. Used to explain partial support. */
   coverageHours: WorkforceMetric; expectedCoverageHours: WorkforceMetric;
   coveragePercent: WorkforceMetric;
