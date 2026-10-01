@@ -6497,6 +6497,18 @@ export const feedbackAutowriterRosterAccounts = pgTable("feedback_autowriter_ros
 // ── Tutor Offboarding ────────────────────────────────────────────────
 
 /** "Still with us" decisions on the departed-tutor detector; each keeps the score it overrode (future labels). */
+// OFF-15: last complete read of the owner's termination sheet, plus latest source health.
+export const tutorOffboardingSheetSource = pgTable("tutor_offboarding_sheet_source", {
+  sourceKey: text("source_key").primaryKey(),
+  rows: jsonb("rows").$type<Array<{
+    sourceRow: number; fullName: string; wiseName: string; nickname: string;
+    emails: string[]; terminated: boolean;
+  }>>().notNull().default([]),
+  checkedAt: timestamp("checked_at", { withTimezone: true }),
+  attemptedAt: timestamp("attempted_at", { withTimezone: true }).notNull().defaultNow(),
+  lastError: text("last_error"),
+});
+
 export const tutorOffboardingDecisions = pgTable("tutor_offboarding_decisions", {
   id: uuid("id").primaryKey().defaultRandom(),
   canonicalKey: text("canonical_key").notNull(),

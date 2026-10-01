@@ -12,6 +12,15 @@
 
 ## Global Constraints
 
+**1 Oct owner update (OFF-15):** crossed-out tutor names in the supplied Core Setup Data sheet are confirmed
+terminated. The spec's owner-update section adds a saved Sheet source, a separate confirmation badge and
+source health/matching review. This amendment supersedes the original three-table inventory below:
+migration 0102 now also creates `tutor_offboarding_sheet_source`. The existing snapshot sync reads the
+sheet; all dashboard reads remain Postgres-only. Confirmation changes neither likelihood nor exclusions.
+No production source import, migration, push, or merge has been performed by this amendment.
+The owner's latest request authorizes parallel implementation lanes and cost-aware GPT-6.1 Sol / GPT-6 Luna
+delegation; retain per-task test evidence and the independent final review.
+
 - **Read-only toward Wise.** PR 1 adds no Wise write code and makes no Wise call on any request path. The only new Wise-derived data is persisted by the existing sync from the roster it already fetches.
 - **PR 2 scope stays out:** selection checkboxes, the sticky Remove bar, removal runs and the History tab's run list are PR 2. PR 1 shows each person's removal check as text in the drawer only.
 - **React SSR text:** component tests render with `renderToStaticMarkup`, which separates adjacent text nodes with `<!-- -->`. Any text a test asserts as one string must be rendered as one template literal.

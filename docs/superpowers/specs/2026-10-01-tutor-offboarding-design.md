@@ -37,6 +37,30 @@ Non-goals:
 
 ## 3. Facts established (1 Oct 2026, read-only)
 
+### Owner update: confirmed terminations in the tutor sheet
+
+**OFF-15.** The owner confirmed that crossed-out names in the `Tutors` tab of the
+[Core Setup Data sheet](https://docs.google.com/spreadsheets/d/1xwbaLzyceUSNMUhhIBLV4j7uG3cRIqFKwJUfYZE_vG4/edit?gid=470328060#gid=470328060)
+are definitely terminated. The 1 Oct source read contained 80 tutor rows, 27 with all populated name
+fields crossed out. This supersedes the earlier assumption that only estimated departure evidence exists.
+
+PR 1 shows **Confirmed terminated** separately from the estimated likelihood. The existing snapshot sync
+reads the sheet's effective and rich-text strikethrough in columns D:F, retaining the exact source row and
+read timestamp. Unique exact email or full-name matches connect it to a person; nickname-only, conflicting,
+and duplicate matches require review. Unstruck or absent rows do not prove that someone is still active.
+The dashboard reads the saved source from Postgres; it makes no Google Sheets or Wise calls.
+
+A fourth migration-A table, `tutor_offboarding_sheet_source`, stores the last complete source read and the
+latest attempt status. Failed reads preserve the last good evidence and show a warning. Source evidence
+older than three days is marked stale. A later successful read replaces the source, so removing a strike
+removes that confirmation. Confirmation remains visible for excluded tutors and staff; it bypasses none of
+OFF-03 through OFF-07, grants, or the later human-confirmed removal flow. No removal is implemented in PR 1.
+
+The source is refreshed using `TUTOR_OFFBOARDING_CONNECTED_EMAIL`, falling back to
+`SALES_DASHBOARD_CONNECTED_EMAIL`. An absent or disconnected integration account appears as a source error.
+The migration and deployment gates below still apply. The 27 source confirmations and the prototype's
+23 high-likelihood people are different counts and are not forced to agree.
+
 ### 3.1 Wise
 
 - **There is no delete-user API.** The only removal is `POST /institutes/{instituteId}/removeParticipant`, body
@@ -378,7 +402,7 @@ the owner's word.
    production before PR 1 merges (the sync reads the new columns).
 2. **PR 2: removal flow.** Migration B; Wise helper and no-retry client; preview / confirm / apply in manual and live
    modes; reconcile hook; History tab; probe script; docs (`env.md` flag, Wise writeback table).
-3. **Operations**, each with the owner's go-ahead: apply migrations to production → admins use manual mode → run the
+3. **PR 2 operations**, each with the owner's go-ahead: apply migration B to production → admins use manual mode → run the
    probe (§8.4) → the owner sets `WISE_TEACHER_REMOVAL_VERIFIED=true`.
 
 ## 12. Risks and known side effects

@@ -39,6 +39,7 @@ import { pruneOldSnapshots } from "@/lib/sync/snapshot-pruning";
 import { onboardingEnabled, resolveOnboardingIdentities, unmanagedTeacherSessions } from "@/lib/tutor-onboarding/planner";
 import { loadAccountMappings, promoteWithTutorContacts } from "@/lib/tutor-onboarding/sync";
 import { extractRosterFacts, persistRosterFacts } from "@/lib/tutor-onboarding/roster-facts";
+import { syncTerminationSource } from "@/lib/tutor-offboarding/termination-sync";
 import { observationsFromWise, recordModeObservations } from "@/lib/classrooms/mode-history-data";
 
 export interface SyncResult {
@@ -718,6 +719,20 @@ export async function runFullSync(
       }
     }
     if (promotedSnapshotId) {
+      // OFF-15: explicit Sheet evidence is refreshed only here, never on a dashboard request.
+      // Failure is isolated from snapshot promotion and retains the last good source snapshot.
+      let terminationSource: Awaited<ReturnType<typeof syncTerminationSource>>;
+      try {
+        terminationSource = await syncTerminationSource(
+          process.env.TUTOR_OFFBOARDING_CONNECTED_EMAIL ?? process.env.SALES_DASHBOARD_CONNECTED_EMAIL ?? "",
+          options.now ?? new Date(), db,
+        );
+      } catch (error) {
+        const errorName = error instanceof Error ? error.name : "UnknownError";
+        const sqlState = sqlStateOf(error);
+        terminationSource = { error: `${errorName} (${sqlState ?? "no SQLSTATE"})` };
+        console.error("[sync-orchestrator] termination source capture failed", { errorName, sqlState });
+      }
       let pruning:
         | Awaited<ReturnType<typeof pruneOldSnapshots>>
         | { attempted: true; failed: true; error: string };
@@ -736,7 +751,7 @@ export async function runFullSync(
       try {
         await db
           .update(schema.syncRuns)
-          .set({ metadata: { ...successMetadata, pruning, modalityHistory, rosterFacts } })
+          .set({ metadata: { ...successMetadata, pruning, modalityHistory, rosterFacts, terminationSource } })
           .where(eq(schema.syncRuns.id, syncRunId));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
