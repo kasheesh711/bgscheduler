@@ -105,7 +105,7 @@ export function parseTerminationSheet(response: TerminationSheetResponse): Termi
 export function buildTerminationMatches(people: PersonSignals[], snapshot: TerminationSnapshot, now: Date): {
   byKey: Record<string, TerminationEvidence>; source: TerminationSourceStatus;
 } {
-  const byKey: Record<string, TerminationEvidence> = {};
+  const byKey: Record<string, TerminationEvidence> = Object.create(null);
   const source: TerminationSourceStatus = {
     status: snapshot.lastError ? "error" : !snapshot.checkedAt ? "not_synced" :
       now.getTime() - Date.parse(snapshot.checkedAt) > 3 * 86_400_000 || !Number.isFinite(Date.parse(snapshot.checkedAt)) ? "stale" : "ready",

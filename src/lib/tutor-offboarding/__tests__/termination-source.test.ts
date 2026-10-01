@@ -74,6 +74,10 @@ describe("buildTerminationMatches", () => {
     const p = person("Ari"); p.accounts.push({ ...p.accounts[0], wiseTeacherId: "online" });
     expect(match([p], [source()]).source.matchedPeople).toBe(1);
   });
+  it("does not inherit confirmations from object property names", () => {
+    expect(match([person("constructor", "unmatched@example.com", "Unmatched Person")], [source()]).byKey.constructor).toBeUndefined();
+    expect(match([person("__proto__")], [source()]).source.matchedPeople).toBe(1);
+  });
   it("reports unmatched confirmed names but does not infer termination from unstruck rows", () => {
     const result = match([person("Ari")], [source({ terminated: false }), source({ sourceRow: 3, fullName: "Bodhi Jones", wiseName: "Bodhi Jones", emails: [] })]);
     expect(result.byKey).toEqual({});
