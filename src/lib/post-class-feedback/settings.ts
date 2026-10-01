@@ -4,11 +4,14 @@ import { and, eq, gte, inArray, sql } from "drizzle-orm";
 
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
-import { bangkokDateStartUtc, todayBangkok } from "@/lib/room-capacity/dates";
+import { addBangkokDays, bangkokDateStartUtc, todayBangkok } from "@/lib/room-capacity/dates";
 
 import { PostClassConflictError, PostClassNotFoundError, PostClassValidationError } from "./errors";
 import { withPostClassTransaction } from "./transaction";
 import { lockPostClassFinance } from "./finance-lock";
+import { requireFeedbackMailboxReadiness } from "./gmail-credentials";
+import { requireReminderLineReadiness } from "./reminder-line";
+import { nightlyCheckpoint } from "./nightly-reminder-model";
 
 const FIELD_KEYS = ["topics", "performance", "improvement", "homework"] as const;
 type FieldKey = (typeof FIELD_KEYS)[number];
@@ -166,7 +169,7 @@ export async function updatePostClassSettings(
     let legacyReminderDisabledAt = current.legacyReminderDisabledAt;
     if (reminderMode !== "off") reminderStartedAt ??= now;
     if (patch.legacyReminderDisabled === true) legacyReminderDisabledAt = now;
-    if (reminderMode === "live" && !reminderActivatedAt) {
+    if (reminderMode === "live" && (current.reminderMode !== "live" || !reminderActivatedAt)) {
       if (patch.mapping) throw new PostClassValidationError("Validate the updated mapping in shadow mode before live reminder activation.");
       if (!legacyReminderDisabledAt) throw new PostClassValidationError("Verify that the legacy reminder trigger is disabled before live activation.");
       const since = new Date(now.getTime() - 24 * 60 * 60_000);
@@ -176,21 +179,17 @@ export async function updatePostClassSettings(
         sql`${schema.postClassNotificationRuns.metadata}->>'policyVersion' = ${String(current.policyVersion)}`,
         sql`${schema.postClassNotificationRuns.metadata}->>'mappingVersion' = ${String(current.formMappingVersion)}`,
       )).limit(1);
-      const tests = await tx.select({ evidence: schema.postClassConfigAuditLog.afterValue }).from(schema.postClassConfigAuditLog).where(and(
-        eq(schema.postClassConfigAuditLog.entityType, "email_delivery"), eq(schema.postClassConfigAuditLog.action, "test_succeeded"),
-        gte(schema.postClassConfigAuditLog.createdAt, since),
-      ));
-      const verified = new Set(tests.filter((row) => typeof row.evidence?.providerMessageId === "string" && row.evidence.providerMessageId)
-        .map((row) => row.evidence?.senderKey));
-      if (!shadow || !verified.has("primary") || !verified.has("backup")) {
-        throw new PostClassValidationError("Complete a current-policy shadow batch and verify primary and backup test receipts within 24 hours before activation.");
-      }
-      reminderActivatedAt = patch.reminderActivationAt ? new Date(patch.reminderActivationAt) : now;
-      if (!Number.isFinite(reminderActivatedAt.getTime()) || reminderActivatedAt.getTime() < now.getTime() - 60_000) {
-        throw new PostClassValidationError("Reminder activation must be prospective.");
+      if (!shadow) throw new PostClassValidationError("Complete a current-policy shadow batch within 24 hours before activation.");
+      await requireFeedbackMailboxReadiness(tx, now);
+      await requireReminderLineReadiness(tx);
+      const today = todayBangkok(now);
+      const next = nightlyCheckpoint(today) > now ? nightlyCheckpoint(today) : nightlyCheckpoint(addBangkokDays(today, 1));
+      reminderActivatedAt = patch.reminderActivationAt ? new Date(patch.reminderActivationAt) : next;
+      if (!Number.isFinite(reminderActivatedAt.getTime()) || reminderActivatedAt < next) {
+        throw new PostClassValidationError("Reminder activation starts at the next prospective 22:00 Bangkok checkpoint.");
       }
     } else if (patch.reminderActivationAt && reminderActivatedAt?.toISOString() !== new Date(patch.reminderActivationAt).toISOString()) {
-      throw new PostClassValidationError("The original reminder activation instant is immutable.");
+      throw new PostClassValidationError("Pause reminders before choosing a new activation checkpoint.");
     }
     let mappingVersion = current.formMappingVersion;
     let mappingValid = current.formMappingValid;

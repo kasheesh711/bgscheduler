@@ -65,6 +65,15 @@ describe("Gmail reminder transport", () => {
     vi.stubGlobal("fetch", async () => Response.json({}));
     await expect(createGmailSender(async () => "access").sendEmail(input)).rejects.not.toBeInstanceOf(ScheduleEmailRejection);
   });
+  it("checks eligibility again after token renewal and before submitting email", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ id: "must-not-send" })); vi.stubGlobal("fetch", fetcher);
+    let renewed = false;
+    const sender = createGmailSender(async () => { renewed = true; return "token"; }, async () => {
+      expect(renewed).toBe(true); throw new ScheduleEmailRejection("Deadline passed during renewal");
+    });
+    await expect(sender.sendEmail(input)).rejects.toBeInstanceOf(ScheduleEmailRejection);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
   it("treats a token failure before sending as definitely unsent", async () => {
     await expect(createGmailSender(async () => { throw new Error("invalid_grant"); }).sendEmail(input))
       .rejects.toMatchObject({ definitelyNotAccepted: true, permanent: true });

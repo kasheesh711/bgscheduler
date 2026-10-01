@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 import { eq, sql } from "drizzle-orm";
@@ -10,6 +10,8 @@ import { runNightlyReminders, resolveNightlyUnknown } from "../nightly-reminders
 import { loadNightlyReminderHealth } from "../nightly-reminder-health";
 import { nightlyWindow } from "../nightly-reminder-model";
 import { updatePostClassSettings } from "../settings";
+import { encryptToken } from "@/lib/sales-dashboard/google-oauth";
+import { GmailRejection, GMAIL_SEND_SCOPE, FEEDBACK_MAILBOX } from "../gmail";
 import { ScheduleEmailRejection } from "@/lib/classrooms/schedule-email";
 
 let handle: Awaited<ReturnType<typeof startTestDb>>;
@@ -239,18 +241,59 @@ describe("durable nightly reminders", () => {
     expect(mail.find((m) => m.id === queued.id)?.status).toBe("cancelled");
     expect(mail.find((m) => m.status === "sent")?.frozenContent?.sessionIds).toHaveLength(2);
   });
-  it("requires shadow and both relay receipts before first activation", async () => {
-    await handle.db.update(schema.postClassSettings).set({ reminderMode: "shadow", reminderActivatedAt: null, legacyReminderDisabledAt: null });
-    await expect(updatePostClassSettings({ email: "admin@example.com" }, { reminderMode: "live", expectedVersion: 1, legacyReminderDisabled: true }, db()))
-      .rejects.toThrow(/shadow batch/);
-    const options = dependencies(); await runNightlyReminders({ ...options, shadowPreview: true });
-    await handle.db.insert(schema.postClassConfigAuditLog).values(["primary", "backup"].map((senderKey) => ({
-      entityType: "email_delivery", entityKey: "admin@example.com", action: "test_succeeded", actorEmail: "admin@example.com",
-      afterValue: { senderKey, providerMessageId: `receipt-${senderKey}` },
-    })));
-    await updatePostClassSettings({ email: "admin@example.com" }, { reminderMode: "live", expectedVersion: 1, legacyReminderDisabled: true }, db());
-    const [config] = await handle.db.select().from(schema.postClassSettings);
-    expect(config.reminderMode).toBe("live"); expect(config.reminderActivatedAt).not.toBeNull();
+  it("uses Gmail as the production transport and records acceptance separately", async () => {
+    vi.stubEnv("AUTH_SECRET", "test-key"); vi.stubEnv("POST_CLASS_GMAIL_CLIENT_ID", "client");
+    vi.stubEnv("POST_CLASS_GMAIL_CLIENT_SECRET", "secret"); vi.stubEnv("POST_CLASS_GMAIL_WORKSPACE_TRUSTED", "true");
+    const request = vi.fn().mockResolvedValue(Response.json({ id: "gmail-message-id" })); vi.stubGlobal("fetch", request);
+    try {
+      await seed();
+      await handle.db.insert(schema.postClassEmailConnection).values({ id: "gmail", clientId: "client", mailbox: FEEDBACK_MAILBOX,
+        googleSubject: "subject", accessTokenCiphertext: encryptToken("token")!, refreshTokenCiphertext: encryptToken("refresh")!,
+        expiresAt: new Date(Date.now() + 3600000), scope: GMAIL_SEND_SCOPE, connectedBy: "admin@example.com" });
+      const options = dependencies();
+      expect((await runNightlyReminders({ ...options, senders: undefined })).ok).toBe(true);
+      expect(request).toHaveBeenCalledWith("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", expect.any(Object));
+      expect((await handle.db.select().from(schema.postClassNotificationDeliveries))[0]).toMatchObject({ provider: "gmail", providerMessageId: "gmail-message-id", status: "sent" });
+    } finally { vi.unstubAllEnvs(); vi.unstubAllGlobals(); }
   });
-
+  it("honors Gmail retry timing and does not retry permanent rejections", async () => {
+    await seed(); const options = dependencies();
+    const retryAt = new Date(now.getTime() + 2 * 60 * 60_000);
+    options.senders.primary.sendEmail.mockRejectedValueOnce(new GmailRejection("quota", false, retryAt));
+    await runNightlyReminders(options);
+    expect((await handle.db.select().from(schema.postClassNotificationDeliveries))[0].nextAttemptAt).toEqual(retryAt);
+  });
+  it("does not schedule another attempt after a permanent Gmail rejection", async () => {
+    await seed(); const options = dependencies();
+    options.senders.primary.sendEmail.mockRejectedValueOnce(new GmailRejection("revoked", true));
+    await runNightlyReminders(options);
+    expect((await handle.db.select().from(schema.postClassNotificationDeliveries))[0].nextAttemptAt).toBeNull();
+  });
+  it("requires Gmail renewal, inbox proof and private LINE proof before prospective activation or resume", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(now);
+    vi.stubEnv("POST_CLASS_GMAIL_CLIENT_ID", "client"); vi.stubEnv("POST_CLASS_GMAIL_CLIENT_SECRET", "secret");
+    vi.stubEnv("POST_CLASS_GMAIL_WORKSPACE_TRUSTED", "true"); vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "line-token");
+    const recipient = "U" + "a".repeat(32); vi.stubEnv("POST_CLASS_REMINDER_LINE_USER_ID", recipient);
+    try {
+      await handle.db.update(schema.postClassSettings).set({ reminderMode: "shadow", reminderActivatedAt: null, legacyReminderDisabledAt: null });
+      await expect(updatePostClassSettings({ email: "admin@example.com" }, { reminderMode: "live", expectedVersion: 1, legacyReminderDisabled: true }, db())).rejects.toThrow(/shadow batch/);
+      const options = dependencies(); await runNightlyReminders({ ...options, shadowPreview: true });
+      await handle.db.insert(schema.postClassConfigAuditLog).values(["primary", "backup"].map(senderKey => ({
+        entityType: "email_delivery", entityKey: "admin@example.com", action: "test_succeeded", actorEmail: "admin@example.com",
+        afterValue: { senderKey, providerMessageId: `receipt-${senderKey}` },
+      })));
+      await expect(updatePostClassSettings({ email: "admin@example.com" }, { reminderMode: "live", expectedVersion: 1, legacyReminderDisabled: true }, db())).rejects.toThrow(/Gmail/);
+      const proof = { hash: "hash", actor: "admin@example.com", binding: "client:subject:1", expiresAt: new Date(now.getTime() + 86400000).toISOString(), attempts: 1, acceptedAt: now.toISOString(), confirmedAt: now.toISOString(), receipt: "id" };
+      await handle.db.insert(schema.postClassEmailConnection).values({ id: "gmail", clientId: "client", mailbox: FEEDBACK_MAILBOX, googleSubject: "subject", accessTokenCiphertext: "encrypted", refreshTokenCiphertext: "encrypted", expiresAt: new Date(now.getTime() + 3600000), scope: GMAIL_SEND_SCOPE, connectedBy: proof.actor, refreshedAt: now, testEvidence: proof });
+      await expect(updatePostClassSettings({ email: proof.actor }, { reminderMode: "live", expectedVersion: 1, legacyReminderDisabled: true }, db())).rejects.toThrow(/LINE/);
+      const binding = createHash("sha256").update(`${recipient}:line-token`).digest("hex");
+      await handle.db.insert(schema.postClassReminderLineChannel).values({ id: "private", recipientId: recipient, binding, testEvidence: { ...proof, binding } });
+      await updatePostClassSettings({ email: proof.actor }, { reminderMode: "live", expectedVersion: 1, legacyReminderDisabled: true }, db());
+      const [config] = await handle.db.select().from(schema.postClassSettings);
+      expect(config.reminderMode).toBe("live"); expect(config.reminderActivatedAt!.getTime()).toBeGreaterThanOrEqual(now.getTime());
+      await updatePostClassSettings({ email: proof.actor }, { reminderMode: "off", expectedVersion: 2 }, db());
+      await handle.db.update(schema.postClassEmailConnection).set({ testEvidence: null });
+      await expect(updatePostClassSettings({ email: proof.actor }, { reminderMode: "live", expectedVersion: 3 }, db())).rejects.toThrow(/Gmail/);
+    } finally { vi.useRealTimers(); vi.unstubAllEnvs(); }
+  });
 });

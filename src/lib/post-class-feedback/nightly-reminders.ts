@@ -2,13 +2,15 @@ import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, ne, notInArray, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
-import { createAppsScriptScheduleEmailSender, ScheduleEmailRejection, type ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
+import { ScheduleEmailRejection, type ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
 import { buildFeedbackReminderEmail, feedbackReminderSubject } from "@/lib/teacher-emails/templates";
 import { teacherEmailLogoUrl } from "@/lib/teacher-emails/brand";
 import { teacherEmailPublicBaseUrl } from "@/lib/teacher-emails/config";
 import { resolvePostClassTutorRecipient, safePostClassWiseSessionUrl } from "./notifications";
 import { PostClassConflictError, PostClassValidationError } from "./errors";
 import { withPostClassTransaction } from "./transaction";
+import { createGmailSender, GmailRejection } from "./gmail";
+import { feedbackGmailAccessToken } from "./gmail-credentials";
 import { latestNightlyDate, nightlyCheckpoint, nightlyCounts, nightlyDisposition, nightlyWindow,
   NIGHTLY_FRESHNESS_MS, NIGHTLY_RETRY_MINUTES, NIGHTLY_TERMINAL, type NightlySessionState } from "./nightly-reminder-model";
 import { discoverNightlyInventory, refreshNightlyItems, type NightlyInventory, type NightlyInventoryItem } from "./nightly-reminder-source";
@@ -94,7 +96,7 @@ async function globalSourceReady(db: Database): Promise<boolean> {
 async function hasLease(db: Database, token: string, now: Date): Promise<boolean> {
   const [row] = await db.select({ id: schema.postClassReminderWorker.id }).from(schema.postClassReminderWorker)
     .where(and(eq(schema.postClassReminderWorker.id, "nightly"), eq(schema.postClassReminderWorker.leaseToken, token),
-      gte(schema.postClassReminderWorker.leaseUntil, new Date(now.getTime() + 30_000)))).limit(1);
+      gte(schema.postClassReminderWorker.leaseUntil, new Date(now.getTime() + 120_000)))).limit(1);
   return Boolean(row);
 }
 
@@ -307,7 +309,7 @@ async function acceptDeliveryInTransaction(tx: Database, id: string, attemptNumb
 }
 
 async function dispatchDelivery(db: Database, id: string, token: string, clock: () => Date,
-  senders: { primary: ScheduleEmailSender; backup: ScheduleEmailSender }) {
+  senders?: { primary: ScheduleEmailSender; backup: ScheduleEmailSender }) {
   const now = clock();
   const [delivery] = await db.select().from(deliveries).where(eq(deliveries.id, id));
   if (!delivery?.frozenContent || !["pending", "failed"].includes(delivery.status) || delivery.attemptCount >= 4) return;
@@ -331,7 +333,8 @@ async function dispatchDelivery(db: Database, id: string, token: string, clock: 
     await cancelUnacceptedDelivery(db, id, now); return;
   }
   const number = delivery.attemptCount + 1;
-  const provider = number === 1 ? "primary" : "backup";
+  const senderKey = number === 1 ? "primary" : "backup";
+  const provider = senders ? senderKey : "gmail";
   const claimed = await withPostClassTransaction(db, async (tx) => {
     const currentConfig = await settings(tx);
     if (!await hasLease(tx, token, clock()) || currentConfig.reminderMode !== "live" ||
@@ -349,18 +352,33 @@ async function dispatchDelivery(db: Database, id: string, token: string, clock: 
   if (!claimed) return;
   let receipt: { id: string };
   try {
-    receipt = await senders[provider].sendEmail({ to: delivery.recipientEmail, subject: delivery.subject,
+    const sender = senders?.[senderKey] ?? createGmailSender(force => feedbackGmailAccessToken(force, db), async () => {
+      const current = await settings(db);
+      const finalStates = await loadStates(db, rows);
+      const finalRecipient = await recipientFor(db, delivery.canonicalTutorKey);
+      const content = await emailContent(db, rows, finalStates);
+      if (current.reminderMode !== "live" || !await hasLease(db, token, clock()) || !await globalSourceReady(db) ||
+        current.policyVersion !== config.policyVersion || current.formMappingVersion !== config.formMappingVersion ||
+        finalRecipient.email !== delivery.recipientEmail || content.text !== delivery.frozenContent!.text || content.html !== delivery.frozenContent!.html ||
+        rows.some(row => disposition(finalStates.get(row.wiseSessionId), clock(), nightlyCheckpoint(row.reminderDate)).status !== "ready")) {
+        throw new GmailRejection("Reminder eligibility changed before submission; refresh the queued classes.", true);
+      }
+    });
+    receipt = await sender.sendEmail({ to: delivery.recipientEmail, subject: delivery.subject,
       text: delivery.frozenContent.text, html: delivery.frozenContent.html, idempotencyKey: delivery.idempotencyKey });
   } catch (error) {
     if (!(error instanceof ScheduleEmailRejection)) { await unknownDelivery(db, id, clock()); return; }
     const failedAt = clock();
+    const gmail = error instanceof GmailRejection ? error : null;
+    const retryAt = number < 4 && !gmail?.permanent
+      ? new Date(Math.max(failedAt.getTime() + NIGHTLY_RETRY_MINUTES[number - 1] * 60_000, gmail?.retryAt?.getTime() ?? 0)) : null;
+    const reason = gmail?.message ?? "The email service rejected this message.";
     await withPostClassTransaction(db, async (tx) => {
-      await tx.update(attempts).set({ status: "failed", errorCode: "relay_rejected", errorMessage: "Rejected before acceptance.", finishedAt: failedAt })
+      await tx.update(attempts).set({ status: "failed", errorCode: gmail ? "gmail_rejected" : "relay_rejected", errorMessage: reason, finishedAt: failedAt })
         .where(and(eq(attempts.deliveryId, id), eq(attempts.attemptNumber, number)));
-      await tx.update(deliveries).set({ status: "failed", nextAttemptAt: number < 4
-        ? new Date(failedAt.getTime() + NIGHTLY_RETRY_MINUTES[number - 1] * 60_000) : null,
-        finalError: "The email relay rejected this message.", updatedAt: failedAt }).where(eq(deliveries.id, id));
-      await tx.update(ledger).set({ status: "failed", reason: "The email relay rejected this message.", updatedAt: failedAt })
+      await tx.update(deliveries).set({ status: "failed", nextAttemptAt: retryAt,
+        finalError: reason, updatedAt: failedAt }).where(eq(deliveries.id, id));
+      await tx.update(ledger).set({ status: "failed", reason, updatedAt: failedAt })
         .where(eq(ledger.deliveryId, id));
     });
     return;
@@ -454,8 +472,7 @@ export async function runNightlyReminders(options: NightlyReminderOptions = {}) 
       await queueReadyGroups(db, run.id, clock(), token);
       const due = await db.select({ id: deliveries.id }).from(deliveries).where(and(eq(deliveries.runId, run.id),
         inArray(deliveries.status, ["pending", "failed"]), lte(deliveries.nextAttemptAt, clock()))).orderBy(asc(deliveries.createdAt));
-      const senders = options.senders ?? { primary: createAppsScriptScheduleEmailSender("primary", { strictOutcome: true }),
-        backup: createAppsScriptScheduleEmailSender("backup", { strictOutcome: true }) };
+      const senders = options.senders;
       for (const item of due) {
         if (clock().getTime() - now.getTime() >= BUDGET_MS) break;
         await dispatchDelivery(db, item.id, token, clock, senders);

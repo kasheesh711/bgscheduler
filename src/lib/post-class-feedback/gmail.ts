@@ -41,7 +41,7 @@ function mime(input: ScheduleEmailSendInput): string {
 }
 
 /** Only explicit rejections are retryable. A Message-ID is not a Gmail idempotency key. */
-export function createGmailSender(accessToken: (force?: boolean) => Promise<string>): ScheduleEmailSender {
+export function createGmailSender(accessToken: (force?: boolean) => Promise<string>, beforeSubmit?: () => Promise<void>): ScheduleEmailSender {
   return { async sendEmail(input) {
     const raw = Buffer.from(mime(input)).toString("base64url");
     for (let authAttempt = 0; authAttempt < 2; authAttempt++) {
@@ -50,6 +50,12 @@ export function createGmailSender(accessToken: (force?: boolean) => Promise<stri
       catch (error) {
         if (error instanceof GmailRejection) throw error;
         throw new GmailRejection("Gmail authorization is unavailable. Reconnect the sender.", true);
+      }
+      // Renewal can take time. Recheck the deadline and worker fence after it.
+      try { await beforeSubmit?.(); }
+      catch (error) {
+        if (error instanceof ScheduleEmailRejection) throw error;
+        throw new GmailRejection("Reminder eligibility could not be rechecked before submission.");
       }
       const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
         method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },

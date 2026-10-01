@@ -31,6 +31,14 @@ describe("nightly reminder boundaries", () => {
     expect(nightlyDisposition({ ...state, deleted: true, lastObservedAt: new Date(0) }, now, now).status).toBe("excluded");
     expect(nightlyDisposition(state, now, now).status).toBe("ready");
   });
+  it("excludes only freshly verified no-shows when identity is unresolved", () => {
+    const noShow = { ...state, eligible: false, eligibilityReason: "missed_or_no_show", sourceStatus: "identity_review", canonicalTutorKey: null, policyCurrent: true };
+    expect(nightlyDisposition(noShow, now, now).status).toBe("excluded");
+    expect(nightlyDisposition({ ...noShow, policyCurrent: false }, now, now).status).toBe("blocked_source");
+    expect(nightlyDisposition({ ...noShow, sourceStatus: "unavailable" }, now, now).status).toBe("blocked_source");
+    expect(nightlyDisposition({ ...noShow, eligibilityReason: null }, now, now).status).toBe("blocked_source");
+    expect(nightlyDisposition({ ...noShow, lastObservedAt: new Date(0) }, now, now).status).toBe("blocked_source");
+  });
   it("rechecks completion, policy scope and deadline before dispatch", () => {
     expect(nightlyDisposition({ ...state, assessment: { ...state.assessment!, combinedRawCharCount: 350, fieldFailures: [] } }, now, now).status).toBe("excluded");
     expect(nightlyDisposition({ ...state, eligible: false }, now, now).status).toBe("excluded");

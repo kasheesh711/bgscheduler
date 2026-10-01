@@ -134,6 +134,7 @@ export async function confirmFeedbackMailboxTest(actor: string, code: string, db
 /** Called inside the settings transaction; does not request or expose tokens. */
 export async function requireFeedbackMailboxReadiness(db: Database, now: Date) {
   requireFeedbackEmailConfiguration();
+  await db.execute(sql`select id from post_class_email_connection where id = 'gmail' for update`);
   const [row] = await db.select().from(table).where(singleton);
   const since = now.getTime() - 86_400_000;
   if (!row || row.clientId !== process.env.POST_CLASS_GMAIL_CLIENT_ID || row.mailbox !== FEEDBACK_MAILBOX || !hasScope(row.scope) || row.lastError ||

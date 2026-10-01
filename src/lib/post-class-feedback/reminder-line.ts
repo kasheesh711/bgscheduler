@@ -73,6 +73,7 @@ export async function reminderLineStatus(db: Database = getDb()) {
     pending: pending.length, alertError: pending.find(p => p.lastError)?.lastError ?? null, lastAcceptedAt: last?.at?.toISOString() ?? null };
 }
 export async function requireReminderLineReadiness(db: Database) {
+  await db.execute(sql`select id from post_class_reminder_line_channel where id = 'private' for update`);
   const status = await reminderLineStatus(db);
   if (!status.verified || status.alertError) throw new PostClassValidationError("Verify Kevin's private LINE test receipt and resolve alert delivery failures before activation.");
 }
