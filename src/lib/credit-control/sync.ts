@@ -1,5 +1,6 @@
 import { creditControlActive } from "@/lib/credit-control/mode";
 import { captureGrowthBookingMetadata } from "@/lib/tutor-offboarding/workforce/growth/capture";
+import { captureGrowthLifecycle } from "@/lib/tutor-offboarding/workforce/growth/reconcile";
 import type { WorkforceSession } from "@/lib/tutor-offboarding/workforce/types";
 import { revalidateTag } from "next/cache";
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
@@ -1094,9 +1095,10 @@ export async function runCreditControlSync(
         });
       }
       await captureGrowthBookingMetadata(db, [...metadataSessions.values()], now.toISOString());
+      await captureGrowthLifecycle(db, now);
     } catch (error) {
       const safeName = error instanceof Error ? error.name : "UnknownError";
-      console.error(`[credit-control] growth booking metadata capture failed (${safeName})`);
+      console.error(`[credit-control] growth evidence capture failed (${safeName})`);
     }
 
     // Churn lifecycle (best-effort; never roll back the promoted snapshot).

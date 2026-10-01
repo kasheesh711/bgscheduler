@@ -4,6 +4,7 @@ import { WiseApiError } from "@/lib/wise/client";
 import { persistWorkforceSourceWindow } from "./observation-store";
 import { fetchWorkforceSourceWindow } from "./wise-source";
 import { captureGrowthBookingMetadata } from "./growth/capture";
+import { captureGrowthLifecycle } from "./growth/reconcile";
 import { normalizeGrowthBookingMetadata } from "./growth/source";
 import type { Database } from "@/lib/db";
 import type { SourceWindowRequest, SourceWindowResult, WorkforceCompleteness } from "./types";
@@ -164,9 +165,10 @@ export async function syncWorkforceHistory(
         if (result.complete && result.completeness === "complete" && !result.truncated && dependencies.db) {
           try {
             await captureGrowthBookingMetadata(dependencies.db, result.sessions, result.observedAt);
+            await captureGrowthLifecycle(dependencies.db, new Date(result.observedAt));
           } catch (error) {
             const safeName = error instanceof Error ? error.name : "UnknownError";
-            console.error(`[workforce-sync] growth metadata capture failed (${safeName})`);
+            console.error(`[workforce-sync] growth evidence capture failed (${safeName})`);
           }
         }
       }
