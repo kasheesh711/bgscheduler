@@ -77,6 +77,16 @@ describe("workforce Wise source adapter", () => {
     expect(verifiedNetWithoutNormal.evidenceStatus).toBe("verified");
   });
 
+  it("derives the normal charge from scheduled duration under the owner-confirmed credit-hour rule", () => {
+    const twoHourSession = normalizeStudentCreditEvidence({
+      wiseSessionId: "s4", wiseStudentId: "student-4", observedAt: "2026-10-01T00:00:00.000Z",
+      scheduledMinutes: 120, history: [{ _id: "s4", credit: 1, type: "SESSION" }],
+    });
+    expect(twoHourSession.normalCredits).toBe(2);
+    expect(twoHourSession.netCredits).toBe(1);
+    expect(twoHourSession.issueCodes).toContain("OWNER_CONFIRMED_ONE_CREDIT_PER_HOUR");
+  });
+
   it("keeps coverage incomplete when the request cap prevents fetching a page", async () => {
     const { wise, budget } = client(1);
     globalThis.fetch = vi.fn(async () => Response.json({ data: { sessions: [session("s1")], page_count: 2 } }));

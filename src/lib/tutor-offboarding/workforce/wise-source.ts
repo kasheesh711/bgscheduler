@@ -133,6 +133,7 @@ export function normalizeStudentCreditEvidence(input: {
   wiseSessionId: string;
   wiseStudentId: string;
   observedAt: string;
+  scheduledMinutes?: number | null;
   history: unknown[] | null;
 }): StudentCreditEvidence {
   const matchingRows = (input.history ?? []).map(record).filter((row): row is Record<string, unknown> => Boolean(row))
@@ -148,10 +149,14 @@ export function normalizeStudentCreditEvidence(input: {
   if (sessionRows.length > 1) issueCodes.push("MULTIPLE_SESSION_MOVEMENTS_AMBIGUOUS");
   if (sessionRows.length === 1 && credit !== null && credit < 0) issueCodes.push("NEGATIVE_SESSION_MOVEMENT_AMBIGUOUS_REFUND");
   if (sessionRows.length === 1 && credit === null) issueCodes.push("SESSION_MOVEMENT_AMOUNT_MISSING");
-  issueCodes.push("HISTORICAL_NORMAL_CHARGE_NOT_EXPOSED");
+  const normalCredits = input.scheduledMinutes !== null && input.scheduledMinutes !== undefined
+    && Number.isFinite(input.scheduledMinutes) && input.scheduledMinutes > 0
+    ? input.scheduledMinutes / 60 : null;
+  if (normalCredits !== null) issueCodes.push("OWNER_CONFIRMED_ONE_CREDIT_PER_HOUR");
+  else issueCodes.push("SCHEDULED_NORMAL_CREDITS_UNKNOWN");
   return {
     wiseSessionId: input.wiseSessionId, wiseStudentId: input.wiseStudentId,
-    netCredits: verifiedSessionMovement ? credit : null, normalCredits: null,
+    netCredits: verifiedSessionMovement ? credit : null, normalCredits,
     evidenceStatus: verifiedSessionMovement ? "verified" : "unknown",
     sourceInterpretation: verifiedSessionMovement ? "verified_session_charge" : sessionRows.length || matchingRows.some((row) => ["REFUND", "CREDIT"].includes(text(row.type)?.toUpperCase() ?? "")) ? "ambiguous_ledger_movement" : "unverified_historical_normal_charge",
     observedAt: input.observedAt, issueCodes,
@@ -248,7 +253,7 @@ export async function fetchWorkforceSourceWindow(
       if (history === null) issues.push("SESSION_CREDIT_HISTORY_NOT_EXPOSED");
       credits.push(normalizeStudentCreditEvidence({
         wiseSessionId: example.sessionId ?? "unknown_session", wiseStudentId: example.studentId,
-        observedAt, history,
+        observedAt, scheduledMinutes: allSessions.find((session) => session.wiseSessionId === example.sessionId)?.scheduledMinutes, history,
       }));
     } catch (error) {
       if (error instanceof WiseApiError && error.status === 429) throw error;
@@ -360,7 +365,9 @@ export async function probeWorkforceSources(options: ProbeOptions): Promise<Sour
       });
       credits.push(normalizeStudentCreditEvidence({
         wiseSessionId: example.sessionId ?? "unknown_session", wiseStudentId: example.studentId,
-        observedAt: new Date().toISOString(), history,
+        observedAt: new Date().toISOString(),
+        scheduledMinutes: source.sessions.find((session) => session.wiseSessionId === example.sessionId)?.scheduledMinutes,
+        history,
       }));
     } catch (error) {
       if (error instanceof WiseApiError && error.status === 429) throw error;
@@ -383,7 +390,7 @@ export async function probeWorkforceSources(options: ProbeOptions): Promise<Sour
       historicalParticipants: source.sessions.some((session) => session.participantCompleteness !== "complete") ? source.sessions.some((session) => session.participantCompleteness === "unknown") ? "unknown" : "partial" : "complete",
       availabilityCoverage: availabilityCompleteness,
       currentBalanceOrLedger: creditsSeen.has("verified_session_charge") || creditsSeen.has("ambiguous_ledger_movement") ? "ledger_movement" : "unknown",
-      historicalNormalCharges: "not_exposed", ambiguousRefunds,
+      historicalNormalCharges: credits.some((credit) => credit.normalCredits !== null) ? "verified" : "not_exposed", ambiguousRefunds,
     },
     evidence: source.evidence,
     availabilityDiagnostics: availabilitySamples,
