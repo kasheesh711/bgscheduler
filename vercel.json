@@ -119,5 +119,10 @@
       "path": "/api/internal/feedback-autowriter/atom",
       "schedule": "6,21,36,51 * * * *"
     }
-  ]
+  ],
+  "git": {
+    "deploymentEnabled": {
+      "codex/credit-control-sync-batching": false
+    }
+  }
 }
