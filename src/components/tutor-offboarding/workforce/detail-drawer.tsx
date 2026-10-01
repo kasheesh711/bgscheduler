@@ -102,12 +102,12 @@ export function DetailContent({
           <p className="text-xs text-muted-foreground">
             Wise join:{" "}
             {person.joinedAt ? bangkokTime(person.joinedAt) : "Unavailable"} ·
-            Departure:{" "}
+            Resignation date (last class):{" "}
             {person.departedAt
               ? bangkokTime(person.departedAt)
               : person.pendingDeparture
                 ? "Pending"
-                : "No completed sheet-marked departure"}
+                : "No confirmed departure date"}
           </p>
           <DetailMetrics row={person} />
           <h4 className="font-semibold">Monthly utilization</h4>
@@ -173,6 +173,7 @@ export function DetailContent({
               {person.displayName} ·{" "}
               {person.role === "teaching_admin" ? "Teaching admin" : "Tutor"}
               {person.pendingDeparture ? " · Pending departure" : ""}
+              {person.departedAt ? ` · Resigned ${bangkokTime(person.departedAt)} (last class)` : ""}
             </p>
           ))}
           {detail.people.length === 0 ? (

@@ -38,7 +38,26 @@ describe("ISEB rollout receipts", () => {
     expect(hasIsebApproval(null)).toBe(false);
   });
 });
-describe("unattended cloud proof", () => {
+describe("scheduled cloud proof approval", () => {
+  const runId = "11111111-1111-4111-8111-111111111111";
+  const comparisonHash = "a".repeat(64);
+  const review = { method: "scheduled_cloud_run" as const, runId, comparisonHash, approvedBy: "owner",
+    approvedAt: "2026-10-01T08:30:00.000Z", note: "Accept scheduled cloud retrieval", computerOffConfirmed: false as const };
+  const row = { approvedAt: new Date(), approvedBy: "owner", comparisonHash, cloudProofRunId: runId,
+    cloudProofReview: review, unattendedConfirmedBy: null } as typeof feedbackIsebRollouts.$inferSelect;
+  it("accepts an owner review without claiming a computer-off test", () => {
+    expect(hasAtomProof(row)).toBe(true);
+    expect(hasAtomProof({ ...row, approvedAt: null })).toBe(false);
+    expect(hasAtomProof({ ...row, comparisonHash: "b".repeat(64) })).toBe(false);
+    expect(hasAtomProof({ ...row, cloudProofRunId: "22222222-2222-4222-8222-222222222222" })).toBe(false);
+  });
+  it.each([
+    { approvedBy: " " }, { approvedAt: "invalid" }, { note: "" }, { computerOffConfirmed: true }, { method: "local_probe" },
+  ])("rejects malformed reviews even when a legacy confirmer exists: %j", invalid => {
+    expect(hasAtomProof({ ...row, unattendedConfirmedBy: "owner", cloudProofReview: { ...review, ...invalid } } as typeof row)).toBe(false);
+  });
+});
+describe("successful scheduled cloud collection", () => {
   const run: typeof feedbackAtomSyncRuns.$inferSelect = { id: "run", startedAt: new Date(), finishedAt: new Date(), errorCode: null,
     status: "succeeded", triggerSource: "cron", deploymentId: "dpl_cloud", counts: { snapshots: 1, activities: 1 } };
   it("accepts a successful scheduled retrieval", () => expect(isSuccessfulCloudCollection(run)).toBe(true));
@@ -50,5 +69,12 @@ describe("unattended cloud proof", () => {
     expect(isSuccessfulCloudCollection({ ...run, deploymentId: null })).toBe(false);
     expect(isSuccessfulCloudCollection({ ...run, status: "failed" })).toBe(false);
     expect(isSuccessfulCloudCollection({ ...run, triggerSource: "admin" })).toBe(false);
+  });
+  it("requires a completed, error-free run with valid ordered timestamps", () => {
+    expect(isSuccessfulCloudCollection({ ...run, finishedAt: null })).toBe(false);
+    expect(isSuccessfulCloudCollection({ ...run, errorCode: "authentication_failed" })).toBe(false);
+    expect(isSuccessfulCloudCollection({ ...run, finishedAt: new Date(run.startedAt.getTime() - 1) })).toBe(false);
+    expect(isSuccessfulCloudCollection({ ...run, startedAt: new Date("invalid") })).toBe(false);
+    expect(isSuccessfulCloudCollection({ ...run, finishedAt: new Date("invalid") })).toBe(false);
   });
 });

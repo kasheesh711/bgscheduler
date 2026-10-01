@@ -48,12 +48,12 @@ describe("monthly reconstructed Wise roster", () => {
     const data = evidence([person("p")], [session("p"), session("cancel", { canonicalTutorKeys: ["p"], startAt: "2026-10-02T02:00:00Z", endAt: "2026-10-02T03:00:00Z", meetingStatus: "CANCELLED" }), session("absent", { canonicalTutorKeys: ["p"], startAt: "2026-09-30T02:00:00Z", endAt: "2026-09-30T03:00:00Z", attendanceStatus: "STUDENT_NO_SHOW" })]);
     expect(buildWorkforcePersonStates(data, now)[0].departedAt).toBe("2026-09-20T03:00:00.000Z");
   });
-  it("leaves an uncertain later class visible instead of choosing an earlier final day", () => {
+  it("uses a later ENDED class without financial evidence as the confirmed resignation date", () => {
     const data = evidence([person("p")], [session("p"), session("unknown", { canonicalTutorKeys: ["p"], startAt: "2026-09-30T02:00:00Z", endAt: "2026-09-30T03:00:00Z", directTeachingEvidence: null })]);
     const state = buildWorkforcePersonStates(data, now)[0];
-    expect(state.departedAt).toBeNull();
-    expect(state.reasonCodes).toContain("DEPARTURE_DATE_UNCONFIRMED");
-    expect(buildTurnoverMonths(data, query, now)[0].turnoverPercent.value).toBeNull();
+    expect(state.departedAt).toBe("2026-09-30T03:00:00.000Z");
+    expect(state.reasonCodes).toContain("LAST_RECORDED_CLASS_DATE");
+    expect(buildTurnoverMonths(data, query, now)[0].turnoverPercent.value).toBe(100);
   });
   it("uses Bangkok month boundaries and retains a join and exit in the same month", () => {
     const data = evidence([person("p", { joinedAt: "2026-08-31T18:00:00Z" })], [session("p", { startAt: "2026-09-30T16:00:00Z", endAt: "2026-09-30T16:59:00Z" })]);
@@ -78,12 +78,14 @@ describe("monthly reconstructed Wise roster", () => {
     expect(row.turnoverPercent.value).toBeNull();
     expect(row.openingRosterCount.reasonCodes).toContain("JOIN_DATE_UNKNOWN");
   });
-  it("requires history after the candidate and a fresh future snapshot", () => {
+  it("retains owner-confirmed dates with missing history or stale future coverage as partial provenance", () => {
     const data = evidence([person("p")], [session("p")]);
     data.sourceCoverage = data.sourceCoverage.filter(c => c.source !== "wise_history");
-    expect(buildWorkforcePersonStates(data, now)[0].departedAt).toBeNull();
+    expect(buildWorkforcePersonStates(data, now)[0].departedAt).toBe("2026-09-20T03:00:00.000Z");
+    expect(buildWorkforcePersonStates(data, now)[0].reasonCodes).toContain("DEPARTURE_HISTORY_INCOMPLETE");
     data.sourceCoverage = evidence([], []).sourceCoverage.map(c => c.source === "wise_future_snapshot" ? { ...c, observedAt: "2026-09-01T00:00:00Z" } : c);
-    expect(buildWorkforcePersonStates(data, now)[0].departedAt).toBeNull();
+    expect(buildWorkforcePersonStates(data, now)[0].departedAt).toBe("2026-09-20T03:00:00.000Z");
+    expect(buildTurnoverMonths(data, query, now)[0].turnoverPercent).toMatchObject({value:100,completeness:"partial"});
   });
   it("does not backdate current qualifications to create historical subject rosters", () => {
     const row = buildTurnoverMonths(evidence([person("p")]), { ...query, subject: "Math" }, now)[0];
@@ -98,4 +100,109 @@ describe("monthly reconstructed Wise roster", () => {
     expect(row.turnoverPercent.value).toBeNull();
     expect(row.turnoverPercent.reasonCodes).toContain("TERMINATION_SOURCE_INCOMPLETE");
   });
+});
+
+
+it("computes the known opening-roster rate despite partial identities and no credit/capacity history", () => {
+  const data = evidence([person("confirmed"), person("retained"), person("unknown-role", {role:null}), person("office", {role:null,accounts:[{wiseTeacherId:"office",wiseUserId:"office",joinedAt:null,relation:"ADMIN",modality:null}]})], [session("confirmed", {directTeachingEvidence:null})]);
+  data.sourceCoverage = data.sourceCoverage.filter(c=>c.source!=="wise_history" && c.source!=="wise_future_snapshot").map(c=>({...c,completeness:"partial",issueCodes:["unmatched_termination_identity"]}));
+  const row = buildTurnoverMonths(data, query, now)[0];
+  expect(row.openingRosterCount.value).toBe(2);
+  expect(row.departuresCount.value).toBe(1);
+  expect(row.turnoverPercent).toMatchObject({value:50,completeness:"partial"});
+  expect(row.turnoverPercent.reasonCodes).toContain("TERMINATION_SOURCE_INCOMPLETE");
+  expect(row.turnoverPercent.reasonCodes).toContain("DEPARTURE_HISTORY_INCOMPLETE");
+  expect(row.turnoverPercent.reasonCodes).toContain("FUTURE_SNAPSHOT_UNCONFIRMED");
+});
+
+it("keeps a known nonteaching admin out of unresolved all-staff roster gates", () => {
+  const data = evidence([person("tutor"),person("office",{role:null,accounts:[{wiseTeacherId:"office",wiseUserId:"office",joinedAt:null,relation:"ADMIN",modality:null}]})],[session("tutor",{directTeachingEvidence:null})]);
+  const row = buildTurnoverMonths(data,query,now)[0];
+  expect(row.turnoverPercent).toMatchObject({value:100,completeness:"complete"});
+  expect(row.turnoverPercent.reasonCodes).not.toContain("ROLE_UNCONFIRMED");
+});
+
+it("recognizes teaching admins from recorded classes without credit evidence", () => {
+  const data = evidence([person("admin",{role:null,accounts:[{wiseTeacherId:"admin",wiseUserId:"admin",joinedAt:null,relation:"ADMIN",modality:null}]})],[session("admin",{directTeachingEvidence:null})]);
+  expect(buildWorkforcePersonStates(data,now)[0].role).toBe("teaching_admin");
+  expect(buildTurnoverMonths(data,query,now)[0].departuresCount.value).toBe(1);
+});
+
+it("does not invent a last class for a confirmed person with only cancellations or no-shows", () => {
+  const data = evidence([person("p")],[session("p",{meetingStatus:"CANCELLED"}),session("no-show",{canonicalTutorKeys:["p"],attendanceStatus:"STUDENT_NO_SHOW"})]);
+  const state = buildWorkforcePersonStates(data,now)[0];
+  expect(state.markedForDeparture).toBe(true);expect(state.departedAt).toBeNull();
+  expect(state.reasonCodes).toContain("DEPARTURE_DATE_UNCONFIRMED");
+  expect(buildTurnoverMonths(data,query,now)[0].turnoverPercent).toMatchObject({value:0,completeness:"partial"});
+});
+
+it("does not allow a rate when an included person's missing join prevents a usable opening denominator", () => {
+  const data = evidence([person("p"),person("missing",{joinedAt:null})],[session("p",{directTeachingEvidence:null})]);
+  const row = buildTurnoverMonths(data,query,now)[0];
+  expect(row.departuresCount.value).toBe(1);expect(row.turnoverPercent.value).toBeNull();
+  expect(row.turnoverPercent.reasonCodes).toContain("JOIN_DATE_UNKNOWN");
+});
+
+
+it("uses actual future classes to settle a previously pending-class mark but ignores cancelled confirmation", () => {
+  const data = evidence([person("p")],[session("p",{directTeachingEvidence:null})]);
+  data.terminationMarks[0].status="pending_classes";
+  let state = buildWorkforcePersonStates(data,now)[0];
+  expect(state.departedAt).toBe("2026-09-20T03:00:00.000Z");
+  data.terminationMarks[0].status="cancelled";
+  state=buildWorkforcePersonStates(data,now)[0];
+  expect(state.markedForDeparture).toBe(false);expect(state.departedAt).toBeNull();
+});
+
+it("ignores future no-shows and missed records but retains a genuine future class as pending even without coverage", () => {
+  const data = evidence([person("p")],[session("p",{directTeachingEvidence:null}),session("future-missed",{canonicalTutorKeys:["p"],startAt:"2026-10-20T02:00:00Z",endAt:"2026-10-20T03:00:00Z",meetingStatus:"MISSED"}),session("future-noshow",{canonicalTutorKeys:["p"],startAt:"2026-10-21T02:00:00Z",endAt:"2026-10-21T03:00:00Z",meetingStatus:"FUTURE",attendanceStatus:"STUDENT_NO_SHOW"})]);
+  data.sourceCoverage=data.sourceCoverage.filter(c=>c.source!=="wise_future_snapshot");
+  expect(buildWorkforcePersonStates(data,now)[0].departedAt).toBe("2026-09-20T03:00:00.000Z");
+  data.sessions.push(session("future-real",{canonicalTutorKeys:["p"],startAt:"2026-10-22T02:00:00Z",endAt:"2026-10-22T03:00:00Z",meetingStatus:"FUTURE",directTeachingEvidence:null}));
+  const state=buildWorkforcePersonStates(data,now)[0];
+  expect(state.pendingDeparture).toBe(true);expect(state.departedAt).toBeNull();
+});
+
+it("keeps an invalid final date unavailable without using a credit value to infer it", () => {
+  const data=evidence([person("p")],[session("p",{startAt:"invalid",endAt:null,directTeachingEvidence:null})]);
+  const state=buildWorkforcePersonStates(data,now)[0];
+  expect(state.departedAt).toBeNull();expect(state.reasonCodes).toContain("DEPARTURE_DATE_UNCONFIRMED");
+});
+
+it("does not extend resignation with MISSED classes even when contradictory direct evidence is present", () => {
+  const data=evidence([person("p")],[session("p"),session("missed",{canonicalTutorKeys:["p"],startAt:"2026-09-30T02:00:00Z",endAt:"2026-09-30T03:00:00Z",meetingStatus:"MISSED"})]);
+  expect(buildWorkforcePersonStates(data,now)[0].departedAt).toBe("2026-09-20T03:00:00.000Z");
+});
+
+
+it("accepts explicit owner-confirmed departure evidence when no sheet source exists", () => {
+  const data=evidence([person("p"),person("retained")],[session("p",{directTeachingEvidence:null})]);
+  data.sourceCoverage=data.sourceCoverage.filter(c=>c.source!=="termination_sheet");
+  data.sourceCoverage.push({...data.sourceCoverage[0],source:"owner_confirmed_departures",completeness:"partial",issueCodes:["unmatched_termination_identity"]});
+  const row=buildTurnoverMonths(data,query,now)[0];
+  expect(row.departuresCount.value).toBe(1);
+  expect(row.turnoverPercent).toMatchObject({value:50,completeness:"partial"});
+});
+
+it("uses positive direct class evidence with an unknown meeting status without relying on credits", () => {
+  const data=evidence([person("p")],[session("p",{meetingStatus:"UNKNOWN"})]);
+  expect(buildWorkforcePersonStates(data,now)[0].departedAt).toBe('2026-09-20T03:00:00.000Z');
+});
+
+it("keeps turnover unavailable when confirmed marks have no usable source coverage", () => {
+  const data=evidence([person("p")],[session("p",{directTeachingEvidence:null})]);
+  data.sourceCoverage=data.sourceCoverage.map(c=>c.source==='termination_sheet'?{...c,completeness:'unknown'}:c);
+  expect(buildTurnoverMonths(data,query,now)[0].turnoverPercent.value).toBeNull();
+});
+
+it("keeps a current upcoming assignment pending when its snapshot timestamp is unverified", () => {
+  const data=evidence([person("p")],[session("p",{directTeachingEvidence:null}),session("unverified",{canonicalTutorKeys:["p"],startAt:'',endAt:null,meetingStatus:'UPCOMING',directTeachingEvidence:null,reasonCodes:['SNAPSHOT_TIMESTAMP_UNVERIFIED']})]);
+  data.sourceCoverage=data.sourceCoverage.map(c=>c.source==='wise_future_snapshot'?{...c,completeness:'partial'}:c);
+  const state=buildWorkforcePersonStates(data,now)[0];
+  expect(state.pendingDeparture).toBe(true);expect(state.departedAt).toBeNull();
+  expect(state.reasonCodes).toContain('PENDING_CLASS_TIME_UNCONFIRMED');
+  data.sessions[1].meetingStatus='CANCELLED';
+  expect(buildWorkforcePersonStates(data,now)[0].departedAt).toBe('2026-09-20T03:00:00.000Z');
+  data.sessions[1].meetingStatus='UPCOMING';data.sessions[1].attendanceStatus='STUDENT_NO_SHOW';
+  expect(buildWorkforcePersonStates(data,now)[0].departedAt).toBe('2026-09-20T03:00:00.000Z');
 });
