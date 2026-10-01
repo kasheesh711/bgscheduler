@@ -1,4 +1,6 @@
 import { creditControlActive } from "@/lib/credit-control/mode";
+import { captureGrowthBookingMetadata } from "@/lib/tutor-offboarding/workforce/growth/capture";
+import type { WorkforceSession } from "@/lib/tutor-offboarding/workforce/types";
 import { revalidateTag } from "next/cache";
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
@@ -1053,6 +1055,49 @@ export async function runCreditControlSync(
           eq(schema.creditControlSnapshots.id, snapshot.id),
         ),
       );
+
+    // Retain Wise's raw booking-purpose fields for growth analysis only after
+    // this Credit Control snapshot has been promoted successfully.
+    try {
+      const metadataSessions = new Map<string, WorkforceSession>();
+      for (const session of [...pastSessions, ...futureSessions]) {
+        const purpose = typeof session.purpose === "string" ? session.purpose : null;
+        const wiseUserId = typeof session.userId === "string" ? session.userId : session.userId?._id;
+        metadataSessions.set(session._id, {
+          wiseSessionId: session._id,
+          wiseClassId: session.classId._id,
+          classTitle: session.title ?? null,
+          startAt: session.scheduledStartTime.toISOString(),
+          endAt: session.scheduledEndTime?.toISOString() ?? null,
+          scheduledMinutes: session.scheduledEndTime
+            ? (session.scheduledEndTime.getTime() - session.scheduledStartTime.getTime()) / 60_000
+            : durationMsToMinutes(session.duration),
+          canonicalTutorKeys: [],
+          wiseTeacherIds: session.teacherId ? [session.teacherId] : [],
+          wiseUserIds: wiseUserId ? [wiseUserId] : [],
+          historicalBookedStudentIds: session.students,
+          participantCompleteness: "partial",
+          completeness: "partial",
+          meetingStatus: session.meetingStatus,
+          attendanceStatus: null,
+          modality: null,
+          subject: null,
+          curriculum: null,
+          level: null,
+          observedAt: now.toISOString(),
+          bookingClassificationSource: {
+            classType: session.classId.classType ?? null,
+            purpose,
+            title: session.title ?? null,
+          },
+          reasonCodes: ["CREDIT_CONTROL_SESSION_METADATA_ONLY"],
+        });
+      }
+      await captureGrowthBookingMetadata(db, [...metadataSessions.values()], now.toISOString());
+    } catch (error) {
+      const safeName = error instanceof Error ? error.name : "UnknownError";
+      console.error(`[credit-control] growth booking metadata capture failed (${safeName})`);
+    }
 
     // Churn lifecycle (best-effort; never roll back the promoted snapshot).
     try {

@@ -96,6 +96,11 @@ function sessionNormalize(raw: unknown, observedAt: string): { session: Workforc
   // often name the student/course container, so they are not substituted here.
   const classTitle = text(row.title);
   if (!classTitle) issues.push("SESSION_TITLE_NOT_EXPOSED");
+  const bookingClassificationSource = {
+    classType: text(classRef?.classType) ?? text(row.classType),
+    purpose: text(row.purpose) ?? text(classRef?.purpose),
+    title: text(row.title),
+  };
   const userId = refId(row.userId);
   const teacherId = text(row.teacherId);
   if (!userId && !teacherId) issues.push("MISSING_TUTOR_REFERENCE");
@@ -122,6 +127,7 @@ function sessionNormalize(raw: unknown, observedAt: string): { session: Workforc
       participantCompleteness: Array.isArray(rawStudents) && studentIds!.length === rawStudents.length ? "partial" : "unknown",
       completeness, meetingStatus: text(row.meetingStatus), attendanceStatus: text(row.attendanceStatus),
       modality: null, subject: null, curriculum: null, level: null, observedAt, reasonCodes: [...issues],
+      bookingClassificationSource,
     },
     issues,
   };

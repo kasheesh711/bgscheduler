@@ -34,7 +34,7 @@ describe("workforce Wise source adapter", () => {
   it("requests the next page at an exact page-size boundary and deduplicates by session ID", async () => {
     const { wise, budget } = client();
     const pages: unknown[] = [
-      { data: { sessions: [session("s1", { title: "In-Person Session - Physics" }), session("s2")], page_number: 1, page_count: 2 } },
+      { data: { sessions: [session("s1", { title: "In-Person Session - Physics", purpose: "TRIAL", classId: { _id: "class-1", name: "Year 8 Mathematics", classType: "GROUP" } }), session("s2")], page_number: 1, page_count: 2 } },
       { data: { sessions: [session("s2"), session("s3")], page_number: 2, page_count: 2 } },
     ];
     globalThis.fetch = vi.fn(async () => Response.json(pages.shift()));
@@ -44,6 +44,7 @@ describe("workforce Wise source adapter", () => {
     expect(result.sessions.map((row) => row.wiseSessionId)).toEqual(["s1", "s2", "s3"]);
     expect(result.sessions[0].classTitle).toBe("In-Person Session - Physics");
     expect(result.sessions[0].wiseClassId).toBe("class-1");
+    expect(result.sessions[0].bookingClassificationSource).toEqual({ classType: "GROUP", purpose: "TRIAL", title: "In-Person Session - Physics" });
     expect(result.contractIssues).toContain("DUPLICATE_SESSION_ID");
   });
 

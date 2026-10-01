@@ -136,6 +136,8 @@ export interface WorkforceSession {
   modality: WorkforceModality | null;
   subject: string | null; curriculum: string | null; level: string | null;
   observedAt?: string;
+  /** Raw Wise classification fields retained for audited regular/trial/pretest review. */
+  bookingClassificationSource?: { classType?: string | null; purpose?: string | null; title?: string | null };
   directTeachingEvidence?: { minutes: number; source: string; evidenceId: string } | null;
   reasonCodes: string[];
 }
