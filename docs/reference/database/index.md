@@ -513,3 +513,15 @@ Migration **0101** (operating loop, Phase 1 — measurement) adds eleven tables 
 | `feedback_autowriter_roster_accounts` | `feedbackAutowriterRosterAccounts` | One code-roster account as the review job saw it (first and last sighting): a class the autowriter never saw is judged only while its account was on the roster |
 
 See [the feature page](../../features/feedback-autowriter.md).
+
+## Tutor Offboarding — migration 0102
+
+| SQL table | Drizzle export | Grain |
+|---|---|---|
+| `tutor_offboarding_decisions` | `tutorOffboardingDecisions` | One "Still with us" decision: snooze end, the likelihood/band/reasons it overrode, who decided, optional undo |
+| `tutor_offboarding_access_grants` | `tutorOffboardingAccessGrants` | One admin email allowed to remove tutors from Wise (OFF-11); owner-managed |
+| `tutor_offboarding_access_audit_log` | `tutorOffboardingAccessAuditLog` | Immutable grant/revoke history |
+| `tutor_offboarding_sheet_source` | `tutorOffboardingSheetSource` | Latest confirmed-termination Sheet snapshot and sync health |
+
+The same migration adds four nullable roster columns to `tutor_wise_accounts`: `wise_relation`, `wise_joined_on`,
+`wise_course_count`, `wise_activated` (null = unknown), written best-effort by the snapshot sync after promotion.
