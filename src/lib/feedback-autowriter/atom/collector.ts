@@ -103,7 +103,11 @@ export async function runAtomCollector(input: {
       wanted.add(bangkokDate(lesson.end));
       targets.set(link.atomStudentId, wanted);
     }
-    if (input.probe) targets.set(input.probe.studentId, new Set([input.probe.date]));
+    if (input.probe) {
+      const wanted = targets.get(input.probe.studentId) ?? new Set<string>();
+      wanted.add(input.probe.date);
+      targets.set(input.probe.studentId, wanted);
+    }
     client = await input.openClient();
     catalog = client.catalog;
     for (const [studentId, wanted] of targets) {

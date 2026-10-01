@@ -111,6 +111,25 @@ describe("unattended collector and rollout", () => {
     expect(runs.find(run => run.status === "succeeded")?.counts.trial).toBe(true);
     expect(await db.select().from(s.feedbackAutowriterSessions)).toEqual(sessionsBefore);
   });
+  it("keeps pending lesson dates when the same student is used for the retrieval trial", async () => {
+    const { runAtomCollector } = await import("../atom/collector");
+    const { KEVIN_ONLINE_WISE_USER_ID } = await import("../roster");
+    const { bangkokDate } = await import("../atom/evidence");
+    await approveAtomLink(db, approval);
+    await db.execute(sql`TRUNCATE feedback_autowriter_sessions`);
+    await db.insert(s.feedbackAutowriterSessions).values({ wiseSessionId: detail._id, wiseTeacherUserId: KEVIN_ONLINE_WISE_USER_ID, scheduledEndAt: now, deadlineAt: new Date(now.getTime() + 86400000) });
+    const sessionsBefore = await db.select().from(s.feedbackAutowriterSessions);
+    const trialDate = bangkokDate(new Date(now.getTime() - 3 * 86400000).toISOString());
+    const collect = vi.fn(async () => []);
+    const result = await runAtomCollector({ db, deadlineMs: Date.now() + 60000, triggerSource: "cron", now, trial: true,
+      probe: { studentId: "_123", date: trialDate },
+      openClient: async () => ({ catalog: [{ id: "_123", name: "Same Name" }], collect, close: async () => {} }),
+      fetchDays: async () => [{ _id: detail._id, userId: KEVIN_ONLINE_WISE_USER_ID, students: [STUDENT_ID], classId: { _id: "class", subject: "13+" }, title: "Online Maths", type: "SCHEDULED", meetingStatus: "ENDED", scheduledStartTime: start, scheduledEndTime: end }] as never,
+    });
+    expect(result.ok).toBe(true);
+    expect(collect).toHaveBeenCalledExactlyOnceWith("_123", [...new Set([bangkokDate(start), bangkokDate(end), trialDate])]);
+    expect(await db.select().from(s.feedbackAutowriterSessions)).toEqual(sessionsBefore);
+  });
 });
 
 describe("server review accounting", () => {
