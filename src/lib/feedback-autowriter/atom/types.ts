@@ -111,3 +111,13 @@ export interface AtomLessonEvidence {
   contradictions: string[];
   hash: string;
 }
+/** Owner acceptance of server retrieval, without claiming a local shutdown test. */
+export type AtomCloudProofReview = {
+  method: "scheduled_cloud_run";
+  runId: string;
+  comparisonHash: string;
+  approvedBy: string;
+  approvedAt: string;
+  note: string;
+  computerOffConfirmed: false;
+};

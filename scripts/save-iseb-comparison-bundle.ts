@@ -20,7 +20,8 @@ async function main() {
     console.log(JSON.stringify({saved:comparisons.length,comparisonHash,approved:Boolean(current.approvedAt),unchanged:true}));
     return;
   }
-  const value={id:ISEB_ROLLOUT_ID,receipt,comparisonHash,approvedAt:null,approvedBy:null};
+  const value={id:ISEB_ROLLOUT_ID,receipt,comparisonHash,approvedAt:null,approvedBy:null,
+    cloudProofRunId:null,cloudProofReview:null,unattendedConfirmedBy:null};
   await db.insert(feedbackIsebRollouts).values(value).onConflictDoUpdate({target:feedbackIsebRollouts.id,set:value});
   console.log(JSON.stringify({saved:comparisons.length,comparisonHash,approved:false}));
 }

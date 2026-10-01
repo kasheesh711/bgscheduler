@@ -7,6 +7,7 @@ import { approveAtomLink, loadAtomLessonEvidence, retainIsebEvidence, storedIseb
 import { evidenceHash } from "../atom/evidence";
 import { parseAutowriterSessionDetail } from "../session";
 import { sessionDetail, STUDENT_ID } from "./fixtures";
+import { approveScheduledAtomProof, atomRolloutApproved, readIsebRollout } from "../iseb-rollout";
 vi.mock("server-only", () => ({}));
 let h: Awaited<ReturnType<typeof startTestDb>>;
 let db: Database;
@@ -19,7 +20,7 @@ beforeAll(async () => { h = await startTestDb(); db = h.db as unknown as Databas
 afterAll(async () => { vi.unstubAllEnvs(); await stopTestDb(h); });
 beforeEach(async () => {
   vi.stubEnv("FEEDBACK_ATOM_ENRICHMENT_ENABLED", "true");
-  await db.execute(sql`TRUNCATE feedback_atom_links, feedback_atom_sync_runs, feedback_iseb_evidence CASCADE`);
+  await db.execute(sql`TRUNCATE feedback_atom_links, feedback_atom_sync_runs, feedback_iseb_evidence, feedback_iseb_rollouts CASCADE`);
 });
 async function snapshot() {
   await approveAtomLink(db, approval);
@@ -67,6 +68,47 @@ describe("Atom durable evidence", () => {
 });
 
 describe("unattended collector and rollout", () => {
+  const comparisonHash = "a".repeat(64);
+  async function approvedComparison() {
+    await db.insert(s.feedbackIsebRollouts).values({ id: "iseb-format-1-mimi-2", approvedBy: "owner", approvedAt: now, comparisonHash });
+  }
+  async function cloudRun(overrides: Partial<typeof s.feedbackAtomSyncRuns.$inferInsert> = {}) {
+    const [run] = await db.insert(s.feedbackAtomSyncRuns).values({ triggerSource: "cron", status: "succeeded",
+      deploymentId: "dpl_cloud", startedAt: new Date(now.getTime() - 10000), finishedAt: now,
+      counts: { snapshots: 1, activities: 7 }, ...overrides }).returning();
+    return run;
+  }
+  it("persists scheduled cloud approval bound to the exact comparison without a shutdown claim", async () => {
+    await approvedComparison();
+    const run = await cloudRun();
+    expect(await atomRolloutApproved(db)).toBe(false);
+    await approveScheduledAtomProof(db, run.id, comparisonHash, "owner", "Scheduled cloud retrieval accepted");
+    expect(await atomRolloutApproved(db)).toBe(true);
+    expect(await readIsebRollout(db)).toMatchObject({ comparisonHash, approvedBy: "owner", cloudProofRunId: run.id,
+      unattendedConfirmedBy: null, cloudProofReview: { method: "scheduled_cloud_run", runId: run.id,
+        comparisonHash, approvedBy: "owner", note: "Scheduled cloud retrieval accepted", computerOffConfirmed: false,
+        approvedAt: expect.any(String) } });
+    // A replaced bundle cannot inherit this proof, even if somebody preserves its old approval fields.
+    await db.update(s.feedbackIsebRollouts).set({ comparisonHash: "b".repeat(64) });
+    expect(await atomRolloutApproved(db)).toBe(false);
+  });
+  it("requires the current comparison approval before recording cloud proof", async () => {
+    const run = await cloudRun();
+    await expect(approveScheduledAtomProof(db, run.id, comparisonHash, "owner", "Accepted")).rejects.toThrow("current comparison");
+    await approvedComparison();
+    await expect(approveScheduledAtomProof(db, run.id, "b".repeat(64), "owner", "Accepted")).rejects.toThrow("current comparison");
+    expect((await readIsebRollout(db))?.cloudProofReview).toBeNull();
+  });
+  it.each([
+    { triggerSource: "admin" }, { status: "failed", errorCode: "authentication_failed" }, { finishedAt: null },
+    { deploymentId: null }, { counts: { snapshots: 1, activities: 0 } },
+  ] satisfies Partial<typeof s.feedbackAtomSyncRuns.$inferInsert>[])("cannot activate from an unsuitable collection: %j", async overrides => {
+    await approvedComparison();
+    const run = await cloudRun(overrides);
+    await expect(approveScheduledAtomProof(db, run.id, comparisonHash, "owner", "Accepted")).rejects.toThrow("scheduled cloud run");
+    expect(await atomRolloutApproved(db)).toBe(false);
+    expect((await readIsebRollout(db))?.cloudProofRunId).toBeNull();
+  });
   it("collects only linked pending students and retains a complete overlap timetable", async () => {
     const { runAtomCollector } = await import("../atom/collector");
     const { KEVIN_ONLINE_WISE_USER_ID } = await import("../roster");
