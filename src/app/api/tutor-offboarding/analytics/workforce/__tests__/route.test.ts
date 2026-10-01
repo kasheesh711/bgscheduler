@@ -8,9 +8,9 @@ import { getDb } from "@/lib/db";
 import { requireTutorOffboardingAdmin } from "@/lib/tutor-offboarding/access";
 import { TutorOffboardingError } from "@/lib/tutor-offboarding/errors";
 import { getWorkforceReport, getWorkforceDrilldown } from "@/lib/tutor-offboarding/workforce/service";
-import { GET as reportGet } from "../route";
-import { GET as detailGet } from "../drilldown/route";
-import { GET as exportGet } from "../export/route";
+import { GET as reportGet, maxDuration as reportDuration } from "../route";
+import { GET as detailGet, maxDuration as detailDuration } from "../drilldown/route";
+import { GET as exportGet, maxDuration as exportDuration } from "../export/route";
 const filters = "from=2026-03-01&to=2026-10-01&viewMonth=2026-09&subject=Maths";
 const request = (extra="") => new Request(`https://example.test/api/workforce?${filters}${extra}`);
 const unknown = {value:null,completeness:"unknown" as const,reasonCodes:["NO_AVAILABILITY_HISTORY"]};
@@ -89,5 +89,37 @@ describe("authorized workforce reports and exports",()=>{
     expect(response.status).toBe(500);
     expect(await response.text()).not.toContain("private DB parameters");
     log.mockRestore();
+  });
+});
+
+
+describe("large workforce transport", () => {
+  it("streams full report, detail and CSV above the buffered payload limit", async () => {
+    const large = { ...report, people: [{ ...report.people[0], displayName: "x".repeat(4_600_000) + "ไทย🧑" }] };
+    const detail = { query: report.query, reportRevision: "r1", kind: "person" as const, key: "p1", contributors: {canonicalKeys:["p1"],wiseSessionIds:[],wiseClassIds:[],wiseStudentIds:[],terminationSourceIds:[],observationIds:[]},people:large.people,sessions:[],observations:[],exceptions:[],nextCursor:null };
+    vi.mocked(getWorkforceReport).mockResolvedValue(large);
+    vi.mocked(getWorkforceDrilldown).mockResolvedValue(detail);
+    for (const [handler, extra, expected] of [
+      [reportGet, "", large], [detailGet, "&kind=person&key=p1&reportRevision=r1", detail],
+      [exportGet, "&section=people&reportRevision=r1", null],
+    ] as const) {
+      const response = await handler(request(extra));
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(response.headers.get("content-length")).toBeNull();
+      const reader = response.body!.getReader();
+      const first = await reader.read();
+      expect(first.value!.byteLength).toBeLessThanOrEqual(65536);
+      const parts = [first.value!];
+      for (;;) { const next = await reader.read(); if (next.done) break; parts.push(next.value); }
+      const bytes = Buffer.concat(parts);
+      expect(bytes.byteLength).toBeGreaterThan(4_500_000);
+      if (expected) expect(JSON.parse(bytes.toString())).toEqual(expected);
+      else {
+        expect(bytes.subarray(0,3)).toEqual(Buffer.from([0xef,0xbb,0xbf]));
+        expect(bytes.toString()).toContain(large.people[0].displayName);
+        expect(response.headers.get("content-disposition")).toContain("workforce-people");
+      }
+    }
+    expect([reportDuration,detailDuration,exportDuration]).toEqual([120,120,120]);
   });
 });

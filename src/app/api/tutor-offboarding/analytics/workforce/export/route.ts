@@ -1,3 +1,4 @@
+import { streamTextResponse } from "@/lib/tutor-offboarding/workforce/response";
 import { getDb } from "@/lib/db";
 import { requireTutorOffboardingAdmin } from "@/lib/tutor-offboarding/access";
 import { tutorOffboardingErrorResponse } from "@/lib/tutor-offboarding/api";
@@ -6,6 +7,8 @@ import { parseWorkforceExportQuery } from "@/lib/tutor-offboarding/workforce/que
 import { getWorkforceReport } from "@/lib/tutor-offboarding/workforce/service";
 import { serializeWorkforceCsv } from "@/lib/tutor-offboarding/workforce/csv";
 
+export const maxDuration = 120;
+
 export async function GET(request: Request) {
   let response: Response;
   try {
@@ -13,7 +16,7 @@ export async function GET(request: Request) {
     const { query, section, reportRevision } = parseWorkforceExportQuery(new URL(request.url).searchParams);
     const report = await getWorkforceReport(getDb(), query, new Date(), reportRevision);
     if (report.reportRevision !== reportRevision) throw new TutorOffboardingError("The report changed. Refresh before exporting.", 409);
-    response = new Response(`\uFEFF${serializeWorkforceCsv(report, section)}`, {
+    response = streamTextResponse(`\uFEFF${serializeWorkforceCsv(report, section)}`, {
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": `attachment; filename="workforce-${section}-${query.from}-${query.to}.csv"`,

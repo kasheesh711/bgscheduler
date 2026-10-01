@@ -8,9 +8,10 @@ import { getDb } from "@/lib/db";
 import { requireTutorOffboardingAdmin } from "@/lib/tutor-offboarding/access";
 import { TutorOffboardingError } from "@/lib/tutor-offboarding/errors";
 import { getGrowthReport, getGrowthDrilldown } from "@/lib/tutor-offboarding/workforce/growth/service";
-import { GET, POST } from "../route";
-import { POST as detail } from "../drilldown/route";
-import { POST as exporting } from "../export/route";
+import { GET, POST, maxDuration as reportDuration } from "../route";
+import { POST as detail, maxDuration as detailDuration } from "../drilldown/route";
+import { POST as exporting, maxDuration as exportDuration } from "../export/route";
+import * as csv from "@/lib/tutor-offboarding/workforce/growth/csv";
 const filters = { from: "2026-03-01", to: "2026-10-01", viewMonth: "2026-09", role: "all" as const, modality: "all" as const };
 const quality = { completeness: "partial" as const, issueCodes: ["CREDIT_HISTORY_MISSING"], sourceCoverage: [], exceptions: [] };
 const report: GrowthReport = { schemaVersion: 1, reportRevision: "r1", generatedAt: "2026-10-01T05:00:00Z", query: { filters, assumptions: { bufferPercent: 0 } }, flows: { months: [], averages: [], lifecycleEvents: [], commonWindow: ["2026-06", "2026-07", "2026-08"], patterns: [], quality }, forecast: { baseMonth: "2026-09", inputs: [], months: [], allocations: [], hiring: [], bufferPercent: 0, assumptions: [], quality }, quality };
@@ -61,5 +62,44 @@ describe("authorized read-only growth endpoints", () => {
     const bad = await POST(request());
     expect(bad.status).toBe(500); expect(await bad.text()).not.toContain("private SQL params");
     log.mockRestore();
+  });
+});
+
+
+describe("large growth transport", () => {
+  it("streams GET/scenario/detail/CSV without dropping final evidence", async () => {
+    const label = "x".repeat(4_600_000) + "ไทย🧑";
+    const large = { ...report, quality: { ...quality, issueCodes: [label] } };
+    const largeDetail = { reportRevision:"r1",kind:"cohort" as const,key:"row1",contributors:{studentIds:[],sessionIds:[],eventKeys:[]},sessions:[],events:[],observations:[],exceptions:[{code:"UNKNOWN",entityId:"synthetic",message:label}],nextCursor:null };
+    vi.mocked(getGrowthReport).mockResolvedValue(large);
+    vi.mocked(getGrowthDrilldown).mockResolvedValue(largeDetail);
+    const csvSpy = vi.spyOn(csv,"serializeGrowthCsv").mockReturnValue('"evidence"\r\n"'+label+'"\r\n');
+    try {
+      for (const [handler, input, expected] of [
+        [GET,new Request(`https://example.test/?${new URLSearchParams(filters)}`),large],
+        [POST,request(),large],
+        [detail,request({filters,reportRevision:"r1",kind:"cohort",key:"row1"}),largeDetail],
+        [exporting,request({filters,reportRevision:"r1",section:"forecast"}),null],
+      ] as const) {
+        const response = await handler(input);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("private, no-store");
+        expect(response.headers.get("content-length")).toBeNull();
+        const reader = response.body!.getReader();
+        const first = await reader.read();
+        expect(first.value!.byteLength).toBeLessThanOrEqual(65536);
+        const parts = [first.value!];
+        for (;;) { const next = await reader.read(); if(next.done)break;parts.push(next.value); }
+        const bytes = Buffer.concat(parts);
+        expect(bytes.byteLength).toBeGreaterThan(4_500_000);
+        if(expected)expect(JSON.parse(bytes.toString())).toEqual(expected);
+        else {
+          expect(bytes.equals(Buffer.from('\uFEFF"evidence"\r\n"'+label+'"\r\n'))).toBe(true);
+          expect(response.headers.get("content-disposition")).toContain("course-demand-forecast");
+          expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+        }
+      }
+    } finally { csvSpy.mockRestore(); }
+    expect([reportDuration,detailDuration,exportDuration]).toEqual([120,120,120]);
   });
 });

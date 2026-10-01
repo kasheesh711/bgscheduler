@@ -1,16 +1,18 @@
-import { NextResponse } from "next/server";
+import { streamJsonResponse } from "@/lib/tutor-offboarding/workforce/response";
 import { getDb } from "@/lib/db";
 import { requireTutorOffboardingAdmin } from "@/lib/tutor-offboarding/access";
 import { tutorOffboardingErrorResponse } from "@/lib/tutor-offboarding/api";
 import { parseGrowthGetQuery, parseGrowthRequest, readGrowthBody } from "@/lib/tutor-offboarding/workforce/growth/query";
 import { getGrowthReport } from "@/lib/tutor-offboarding/workforce/growth/service";
 
+export const maxDuration = 120;
+
 async function report(request: Request, scenario: boolean) {
   let response: Response;
   try {
     await requireTutorOffboardingAdmin();
     const query = scenario ? parseGrowthRequest(await readGrowthBody(request)) : parseGrowthGetQuery(new URL(request.url).searchParams);
-    response = NextResponse.json(await getGrowthReport(getDb(), query, new Date()));
+    response = streamJsonResponse(await getGrowthReport(getDb(), query, new Date()));
   } catch (error) {
     response = tutorOffboardingErrorResponse("[growth] report failed", error, "Course demand could not load.");
   }
