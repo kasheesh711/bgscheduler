@@ -36,6 +36,15 @@ describe("loadTutorOffboardingDashboard", () => {
     expect(await loadTutorOffboardingDashboard(viewer)).toEqual({ available: false, reason: "not_set_up", viewer });
   });
 
+  it("passes abandoned-render signals through source error handling", async () => {
+    const error = { digest: "HANGING_PROMISE_REJECTION" };
+    vi.mocked(loadTerminationSnapshot).mockRejectedValue(error);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await expect(loadTutorOffboardingDashboard(viewer)).rejects.toBe(error);
+    expect(log).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
   it("reports a source read failure visibly while preserving the dashboard", async () => {
     vi.mocked(loadTerminationSnapshot).mockRejectedValue(new Error("private query with note"));
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);

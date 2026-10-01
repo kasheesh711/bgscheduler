@@ -29,7 +29,8 @@ export async function loadTutorOffboardingDashboard(viewer: TutorOffboardingView
       listDecisions(db),
       viewer.isOwner ? listGrants(db) : Promise.resolve(null),
       loadTerminationSnapshot(db).catch((error: unknown): TerminationSnapshot => {
-        if (isMissingSchemaError(error)) throw error;
+        if (isMissingSchemaError(error) || (typeof error === "object" && error !== null &&
+          (error as { digest?: unknown }).digest === "HANGING_PROMISE_REJECTION")) throw error;
         const errorName = error instanceof Error ? error.name : "UnknownError";
         console.error("[tutor-offboarding:termination-source]", { errorName, sqlState: sqlStateOf(error) });
         return { rows: [], checkedAt: null, lastError: errorName };
