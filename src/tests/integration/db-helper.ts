@@ -52,6 +52,14 @@ export async function stopTestDb(h: Handle): Promise<void> {
 export async function truncateAll(db: TestDb): Promise<void> {
   await db.execute(sql`
     TRUNCATE TABLE
+      workforce_booking_classifications,
+      workforce_course_lifecycle_events,
+      workforce_person_observations,
+      workforce_person_versions,
+      workforce_session_versions,
+      workforce_credit_versions,
+      workforce_subject_mappings,
+      workforce_capture_runs,
       tutor_offboarding_sheet_source,
       tutor_offboarding_decisions,
       tutor_offboarding_run_accounts,

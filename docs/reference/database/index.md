@@ -535,3 +535,32 @@ Migration 0102 also adds four nullable roster columns to `tutor_wise_accounts`: 
 
 Both tables are additive. Apply migration 0104 only with owner authorization and before deploying removal controls.
 The migration has no down path; rollback requires a forward migration.
+
+## Tutor workforce history — migration 0105
+
+| SQL table | Drizzle export | Grain |
+|---|---|---|
+| `workforce_capture_runs` | `workforceCaptureRuns` | One idempotent roster observation or historical source-window capture, including original time and coverage |
+| `workforce_person_versions` | `workforcePersonVersions` | One changed canonical-person payload: accounts, role, qualifications, offered windows and leave |
+| `workforce_person_observations` | `workforcePersonObservations` | One person at a capture boundary, referencing a reusable payload version plus source quality |
+| `workforce_session_versions` | `workforceSessionVersions` | One changed Wise-session payload, including tutor identities and booked-participant evidence |
+| `workforce_credit_versions` | `workforceCreditVersions` | One changed Wise session/student credit-evidence payload |
+| `workforce_subject_mappings` | `workforceSubjectMappings` | One reviewed exact class/lesson-label mapping with an edit revision |
+
+These tables have no cascading foreign key to rotating snapshots. Original source time determines historical order;
+content hashes avoid recopying unchanged payloads. A later return to an older value is a new version. Failed or
+partial captures retain diagnostics without replacing complete source evidence. Migration 0105 is additive and must
+be applied before deploying code that reads these tables. No Wise data is changed by this migration.
+
+## Course demand growth — migration 0106
+
+| SQL table | Drizzle export | Grain |
+|---|---|---|
+| `workforce_booking_classifications` | `workforceBookingClassifications` | Versioned regular/trial/pretest/unknown classification per Wise session, with exact source evidence and original observation time |
+| `workforce_course_lifecycle_events` | `workforceCourseLifecycleEvents` | Versioned churn/reactivation event per stable student-subject event key, with effective month, baseline and inferred/observed certainty |
+
+Both tables have unique natural-key/revision indexes and a partial unique index allowing one current revision per
+session or event key. Classification observations are ordered by their original time; older imports cannot replace a
+newer current classification. Lifecycle reconciliation records explicit corrections and supersession; absence from a
+partial capture never deletes a known event. Neither table has a foreign key to rotating snapshots. The migration is
+additive; application reads do not create or update these records.

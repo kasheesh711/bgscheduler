@@ -594,6 +594,46 @@ zero-decimal currencies, wrong for two-decimal ones, and unexercised today.
 
 ---
 
+## Workforce analytics source collection
+
+`src/lib/tutor-offboarding/workforce/wise-source.ts` reads the institute sessions endpoint in bounded date windows
+and the per-class/student `sessionCredits?fetchHistory=true` endpoint. It preserves absent fields as unknown;
+normalization defaults from other features must not turn absent participants or credit evidence into zero.
+
+A complete requested window means its pagination was exhausted. It does not imply every financial or attendance
+field is known. Metric-specific gaps remain on the individual records while verified session dates and durations
+can still support demand reporting. Exact lesson titles are retained for reviewed academic-subject mappings;
+a classroom name may identify a student rather than a subject.
+
+The published [Wise API collection](https://documenter.getpostman.com/view/17903053/2sA3XPChyE), linked from
+[Wise's integration guide](https://wise-app.gitbook.io/wise-app/wise-api-integration), mixes `SESSION` credit entries
+with independent `CREDIT` ledger movements. Session entries are matched by session ID. Do not sum every ledger
+movement into a session or infer a historical normal charge from today's price. On 1 October 2026, the owner
+confirmed that one Wise credit always equals one scheduled teaching hour, including historical and group bookings.
+The normal per-student charge therefore comes from scheduled minutes divided by 60, with owner-confirmed provenance.
+Missing duration or participant evidence prevents a numeric consumed-hours ratio while a separately verified positive net
+session deduction can support the approved recorded-teaching fallback.
+
+Availability contract probes use seven-day windows. Canonical availability history comes from promoted snapshot
+capture, preserving original availability and cached-leave fetch times; the probe never invents a canonical
+identity from a Wise user ID. No availability-change webhook is documented in the public catalogue used for this
+implementation, so the existing polling sync remains the capture source.
+
+The probe and backfill commands are capped and GET-only against Wise. Backfill defaults to dry-run; its apply mode
+writes only BGScheduler's workforce evidence tables. Historical capacity is never reconstructed from today's schedule.
+
+`scripts/sync-tutor-workforce-history.ts` keeps a checkpoint for each month. `--sessions-only` collects demand history
+without the per-class/student credit calls and explicitly records skipped financial evidence. `--refresh-credits`
+revisits complete session windows whose credit capture was skipped or partial. These options are mutually exclusive;
+request and page caps apply in both modes, and errors stop the run. Complete session pagination never implies complete
+credit coverage.
+
+After credit-control snapshot promotion, a separate capture hook retains returned session facts and exact-session
+credit entries. Cached credit pairs keep their original observation time. The Wise client also preserves the raw
+ledger before defaults are applied: an absent credit amount remains unknown, while an explicitly returned zero can
+support a full refund. Legacy cached rows without this raw-evidence marker remain unknown until refreshed. This
+capture is partial observation evidence and never marks a whole historical window complete.
+
 ## Writeback operations
 
 BGScheduler is **read-mostly**. Six standalone helpers mutate Wise; each is narrow in field

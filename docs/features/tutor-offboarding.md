@@ -37,37 +37,111 @@ Source errors, missing syncs and snapshots older than three days stay visible in
 last successful rows after a failed refresh. The API reports current source health, matched people and unmatched rows.
 The page reads this source from Postgres and makes no Sheets or Wise call.
 
-## Analytics (history from 1 March 2026)
+## Workforce analytics (history from 1 March 2026)
 
-The Analytics tab reports completed teaching activity from 1 March 2026 onward, current roster status, matched
-termination evidence, scored-but-unmarked idle gaps, current qualifications and scheduled class impact. It is a
-read-only Postgres report and does not fetch Sheets or Wise data.
+The Analytics tab combines monthly turnover, subject supply and demand, and tutor utilization. Shared Bangkok
+date, month, role, subject, curriculum, level and delivery-mode filters apply to the report and its CSV export.
+Tutors and teaching administrators are included; linked Wise accounts count as one canonical person. Selecting a
+month, subject cell or tutor opens the contributing records and data-quality explanations. Existing course-impact
+context remains available below the workforce dashboard.
 
-This dataset cannot calculate an HR turnover rate: the termination sheet records a marked status but no effective
-separation date, and the compiled sources do not provide a reliable opening employee headcount for 1 March. The report
-therefore keeps `actualRate` unavailable. Its two labelled observed-teaching-cohort shares use as denominator distinct
-non-ADMIN tutors with at least one `ENDED` class since 1 March. The first numerator is matched Sheet-confirmed people
-in that cohort; the second adds unmarked very-likely people. These are scenario shares, not turnover rates or
-confirmed-exit rates. The inferred group is score-based and never merged into the Sheet-confirmed group. Matched,
-unmatched and pending identities remain separate from score bands; source confirmation and idle-gap likelihood
-describe different evidence.
+### Monthly turnover
 
-Counts use canonical people, so a tutor's online and onsite Wise accounts count once. Wise `ADMIN` accounts are
-excluded from the tutor denominator. Full-time office attendance is a separate, potentially overlapping flag; a
-full-time tutor with an `ENDED` class remains in the denominator. Monthly activity counts distinct people with an
-`ENDED` class and ended sessions; it is observed teaching activity, not an employee roster count. Partial months are
-flagged.
+Turnover is **departures in the month divided by the roster at the start of the month**. The join date is the
+earliest retained Wise account-join date, including people awaiting their first class. The roster is labelled a
+**reconstructed Wise roster**: accounts removed before collection began, missing dates and unresolved identities
+remain limitations.
 
-Course analysis uses observed classes and available future schedules, while qualification coverage comes from the
-current snapshot's `subjectLevelQualifications`. A tutor with a qualification is not necessarily available to teach.
-For each qualification, the report compares current qualified people with the remaining names after the marked-only
-and marked-plus-inferred scenarios. Future classes are shown separately as pending load and are not treated as
-completed teaching or guaranteed replacement capacity. Per-course upcoming counts include only marked or inferred
-people assigned to that course, with separate marked and inferred counts; historical teaching totals include all
-identified tutors on the course. Other historical tutors are not assumed to be available replacements. Wise
-`courseCount` and `wiseCourseCategory` are operational course metadata; Wise's subject-like course field is a pricing
-band, not an academic subject. Missing qualifications, identity conflicts, unresolved historical sessions and
-future session records without course IDs are reported as data limitations.
+Only sheet-marked people can become departures. Their final day comes from their last recorded taught class;
+known cancellations and student no-shows are excluded. An uncancelled future class keeps the person pending,
+even when viewing a past month. This status never triggers a removal.
+
+### Subject supply and booked demand
+
+The subject-by-month matrix expands into curriculum and level. The selected month also has a weekday/time view
+in 30-minute buckets, using exact interval overlap and an average week. Coverage counts and monthly totals explain
+the values, including months with different numbers of Mondays.
+
+Demand shows unique students, student bookings, distinct scheduled classes and booked tutor-hours. Cancelled
+bookings and no-shows remain in demand. A one-hour group class with five students contributes five student bookings,
+one class and one tutor-hour. Overall unique students are deduplicated across subjects.
+
+Supply is shared time: eight hours offered by a Maths/Physics tutor remain one eight-hour pool. A Physics booking
+uses time that would otherwise be eligible for Maths too. Overlapping commitments block their union only. Subject
+supply rows must not be added into an organization total, and booked demand minus remaining free time is not an
+unmet-demand estimate.
+
+Academic subjects come from reviewed exact lesson labels and class IDs. A Wise classroom name may be a student's
+name, and its subject-like field may be a pricing band. Neither is evidence of an academic subject. Unmapped or
+changed labels remain visible in the mapping review panel.
+
+### Utilization and teaching evidence
+
+The denominator is offered hours minus approved leave. Original hours and leave losses remain visible. Three
+separate measures use this denominator:
+
+- Reserved utilization: non-cancelled scheduled tutor-hours.
+- Credit-consumed utilization: duration multiplied by the mean of each booked student's net-credit/normal-credit fraction.
+- Recorded teaching utilization: classes established as taught by direct evidence or the approved fallback below.
+
+A one-hour group class with full and half charges consumes 0.75 tutor-hours. A verified full refund consumes zero;
+missing credits, missing participants or an unknown scheduled duration are unavailable, not zero. The owner confirmed
+on 1 October 2026 that one Wise credit always equals one teaching hour, including historical and group bookings;
+the normal per-student charge is scheduled minutes divided by 60. Unexplained
+negative or excessive charges remain exceptions. Classes outside offered hours count and may produce rates over 100%.
+
+Where direct teaching evidence is absent, the approved fallback is Wise ENDED plus verified positive credit
+consumption, excluding known cancellations and no-shows. Scheduled duration is used when actual duration is unknown;
+the UI labels this as recorded class data. A refund does not erase independently established teaching.
+
+### Availability history and coverage
+
+Current availability is not copied backwards into earlier months. Durable observations retain identity, role,
+qualifications, offered windows, leave, source timestamps and quality separately from rotating snapshots. Unchanged
+payloads are reused, while each observed boundary is retained. A measured observation ends at the next observation,
+an error boundary or 90 minutes after the source observation, whichever comes first. Future recurrence is a projection.
+
+Each utilization numerator is clipped to the same supported time as its availability denominator. The report also
+retains full-period known class totals, so missing capacity does not hide demand. Unknown capacity is displayed as
+unavailable and partial coverage remains explicit.
+
+All report reads use Postgres. The source probe/backfill and existing sync hooks only read Wise. The new report lives
+at `/api/tutor-offboarding/analytics/workforce`; the older `/analytics` contract is retained for compatibility and
+course-impact context. See [API reference](../reference/api/tutor-offboarding.md) and
+[workforce tables](../reference/database/index.md#tutor-workforce-history--migration-0105).
+
+## Course demand growth and hiring
+
+The Growth view tracks new demand, reactivation, churn losses and a twelve-month projection. A cohort is a student
+starting a subject for the first time in retained history; moving levels within that subject does not create another
+cohort. Hours are attributed to the recorded subject, curriculum and level. The March 2026 starting cohort is excluded
+from growth averages because earlier history is unavailable. Trials and pretests are separate: the approved title
+rules identify those terms, and other reviewed academic lessons count as regular. Unmapped lessons require review.
+
+Churn requires 60 days without a taught class and no future booking in the subject. Lost monthly demand starts in the
+month after the last taught class, using the three full months before that class's month as its baseline. For example,
+an August final class uses May–July and records its loss in September after confirmation. Historic gaps without a
+retained no-future-booking check are marked inferred. Missing months are unknown; fully covered empty months are zero.
+
+New, reactivated and churned hours use the same three mature months. The projection starts from the latest completed
+month and adds the average monthly net change, then applies the cancellation loss fraction once. Student-hours and
+tutor-hours remain separate, with the observed group mix used for conversion. Known future commitments provide a
+minimum requirement. The model shares each tutor's physical availability across all qualified subjects and allocates
+the whole institution before applying academic display filters.
+For each course and month, fixed bookings consume their actual times first. The remaining patterned demand is the
+positive difference between the model and those bookings, so the requirement is their maximum rather than their sum.
+The current month's forecast projects the latest offered recurrence across the whole calendar month; this does not
+backfill measured historical availability.
+
+Growth and hiring cover all teaching staff and delivery modes; role and mode breakdowns remain in the workforce
+views. Course estimates show additional weekly hours, an optional buffer (initially 0%), and a hiring comparison.
+Comparable tutors are all current qualified tutors and teaching admins with known offered schedules, including those
+without classes, excluding people marked for departure. The benchmark shows average total offered hours and the
+hours matching the shortage times. Fractional equivalents and rounded-up hires use matching hours; overlapping course
+estimates must not be added together. Unknown availability or zero overlap does not produce a numeric hiring promise.
+
+Charts lead each view. Definitions, source evidence and raw tables remain available through details. Scenario inputs
+are computed on request and are not saved. All sources remain read-only toward Wise.
 
 ## Exclusions (never in the review list)
 
