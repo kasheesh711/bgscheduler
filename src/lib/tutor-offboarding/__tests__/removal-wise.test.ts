@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRemovalWiseClient, removeWiseParticipantOnce } from "../removal-wise";
+import { createRemovalWiseClient, readRemovalRoster, readRemovalWiseEvidence, removeWiseParticipantOnce } from "../removal-wise";
+const reads = vi.hoisted(() => ({ teachers: vi.fn(), sessions: vi.fn() }));
+vi.mock("@/lib/wise/fetchers", () => ({ fetchAllTeachers: reads.teachers, fetchAllInstituteSessions: reads.sessions }));
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.stubEnv("WISE_USER_ID", "test-user"); vi.stubEnv("WISE_API_KEY", "test-key"); vi.stubEnv("WISE_INSTITUTE_ID", "test-institute");
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
@@ -26,5 +29,30 @@ describe("dedicated no-retry removal request", () => {
   });
   it("fails closed on absent credentials", () => {
     vi.stubEnv("WISE_API_KEY", ""); expect(() => createRemovalWiseClient()).toThrow("incomplete");
+  });
+  it("posts the user ID to the exact endpoint with a cancellation signal", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(Response.json({ status: 200, message: "Success" }));
+    vi.stubGlobal("fetch", fetch);
+    await removeWiseParticipantOnce("user-example");
+    expect(fetch).toHaveBeenCalledOnce();
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe("https://api.wiseapp.live/institutes/test-institute/removeParticipant");
+    expect(init).toMatchObject({ method: "POST", body: JSON.stringify({ userId: "user-example" }) });
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+  });
+  it("rejects incomplete rosters and requires strict, deadline-bounded session pagination", async () => {
+    const roster = [{ _id: "teacher-example", userId: "user-example", name: "Aria", relation: "TEACHER", classes: [] }];
+    reads.teachers.mockResolvedValueOnce([]).mockResolvedValueOnce(roster);
+    reads.sessions.mockResolvedValueOnce([]);
+    await expect(readRemovalRoster()).rejects.toThrow("complete nonempty");
+    const before = Date.now();
+    expect(await readRemovalWiseEvidence()).toEqual({ roster, sessions: [] });
+    expect(reads.sessions).toHaveBeenCalledOnce();
+    const args = reads.sessions.mock.calls[0];
+    expect(args[1]).toBe("test-institute");
+    expect(args[2]).toEqual({ status: "FUTURE" });
+    expect(args[3]).toMatchObject({ strict: true });
+    expect(args[3].deadlineAt).toBeGreaterThanOrEqual(before + 89_000);
+    expect(args[3].deadlineAt).toBeLessThanOrEqual(Date.now() + 90_000);
   });
 });
