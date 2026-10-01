@@ -114,3 +114,16 @@ One transaction appends the verdict (superseding the current one), sets `reviews
 [`src/app/api/feedback-autowriter/incidents/route.ts`](../../../src/app/api/feedback-autowriter/incidents/route.ts). Strict body `{ "action": "acknowledge", "incidentId": "<uuid>" }`. Sets `acknowledged_at` / `acknowledged_by` once (idempotent): the outbox stops pushing it, and an undelivered critical incident no longer keeps the review job red.
 
 **Responses:** `200 { ok: true, id, acknowledgedAt, acknowledgedBy }` · `400` · `401` · `403` · `404` (no such incident) · `500`.
+
+## ISEB / Atom routes (migration 0103)
+
+| Method and path | Access | Effect |
+|---|---|---|
+| `GET /api/internal/feedback-autowriter/atom` | Cron secret | Separate 15-minute collector, max 750s; gated by collector flag and disabled on previews |
+| `GET /api/feedback-autowriter/atom` | Admin and existing page scope | Link catalog, current approvals, collection status and first-ten review progress; optional `q` suggests Wise names |
+| `GET /api/feedback-autowriter/atom?sessionId=…` | Same | Retained lesson/Atom evidence, source URLs, both factual verdicts and style reviews |
+| `POST /api/feedback-autowriter/atom` | Operations owner | Explicit `{wiseStudentId, atomStudentId, expectedRevision, active, note}` link approval/revocation; 409 on changed or occupied identity |
+| `POST /api/feedback-autowriter/atom/probe` | Operations owner | `{studentId, date}` interactive cloud retrieval probe; no link approval or feedback generation; cannot count as unattended proof |
+| `POST /api/feedback-autowriter/atom/rollout` | Operations owner | `approve_comparisons` with the exact `comparisonHash`, or `confirm_unattended_run` with `runId` and `codexAndComputerWereOff:true`; does not change environment switches |
+
+Authentication, errors and owner checks follow the existing Review interface. No route accepts a credential in its body. See the [runbook](../../operations/iseb-atom-feedback.md) for evidence semantics and independent activation.

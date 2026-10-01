@@ -114,6 +114,10 @@
     {
       "path": "/api/internal/feedback-autowriter/review",
       "schedule": "27 * * * *"
+    },
+    {
+      "path": "/api/internal/feedback-autowriter/atom",
+      "schedule": "6,21,36,51 * * * *"
     }
   ]
 }

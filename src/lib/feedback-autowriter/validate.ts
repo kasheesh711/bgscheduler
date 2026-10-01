@@ -1,3 +1,4 @@
+import { validateIsebFormat, type FeedbackFormatGuide } from "./format";
 import { z } from "zod";
 import { postClassDeductionExemption } from "@/lib/post-class-feedback/deduction-exemption";
 import { assessFeedbackContent, isPlaceholderFeedback } from "@/lib/post-class-feedback/policy";
@@ -65,6 +66,7 @@ export function validateFeedbackDraft(input: {
   tutorNames: readonly string[];
   priorFeedback: readonly PriorFeedbackComparison[];
   styleGuide?: FeedbackStyleGuide | null;
+  formatGuide?: FeedbackFormatGuide | null;
   lessonRecord?: string;
 }): { ok: true } | { ok: false; reasons: string[] } {
   const reasons: string[] = [];
@@ -85,7 +87,8 @@ export function validateFeedbackDraft(input: {
     if (isPlaceholderFeedback(fields[field])) reasons.push(`placeholder_text:${field}`);
   }
 
-  if (input.styleGuide) reasons.push(...validateStyleFormat(fields, input.lessonRecord ?? ""));
+  if (input.formatGuide) reasons.push(...validateIsebFormat(fields));
+  if (input.styleGuide || input.formatGuide) reasons.push(...validateStyleFormat(fields, input.lessonRecord ?? ""));
 
   const content = assessFeedbackContent(fields);
   if (!content.compliant) reasons.push(...content.violationReasons.map((reason) => `policy:${reason}`));
@@ -102,7 +105,7 @@ export function validateFeedbackDraft(input: {
   // Mimi's approved format has short numbered fields. Only this presentation heuristic is replaced
   // by the guide's structural checks; placeholders, padding and copy detection still reject the draft.
   if (suspect.suspect) reasons.push(...suspect.reasons
-    .filter((reason) => !(input.styleGuide && reason === "short_required_field"))
+    .filter((reason) => !((input.styleGuide || input.formatGuide) && reason === "short_required_field"))
     .map((reason) => `ai_suspect:${reason}`));
 
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons: [...new Set(reasons)] };

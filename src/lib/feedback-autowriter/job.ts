@@ -1,3 +1,7 @@
+import { loadAtomLessonEvidence, retainIsebEvidence, storedIsebEvidenceMatches, eligibleForIseb } from "./atom/data";
+import { matchingFormatStamp } from "./format";
+import { approvedFormatGuide, atomRolloutApproved } from "./iseb-rollout";
+import { MIMI_STYLE_GUIDE_V2 } from "./style";
 import { activeStyleGuide, matchingStoredStyle, type StyleGuideStamp } from "./style";
 import { eq, sql } from "drizzle-orm";
 import type { ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
@@ -661,11 +665,18 @@ async function processLeased(deps: AutowriterDeps, input: {
     return out("infra", "OPENROUTER_API_KEY missing");
   }
 
+  const atomEvidence = await loadAtomLessonEvidence(db, { detail, studentId: student.wiseUserId, lessonRecord: summary.text, now });
+  const formatGuide = await approvedFormatGuide(db, tutor.canonicalKey, describeClass({ programme: detail.classSubject, title: detail.title }));
+  const lessonEvidenceHash = atomEvidence || formatGuide ? await retainIsebEvidence(db, {
+    wiseSessionId: row.wiseSessionId, atom: atomEvidence, lessonRecord: summary.text, evidenceKind: "summary",
+  }) : null;
   const result: PipelineResult = await runWritingPipeline({
     apiKey: deps.apiKey,
+    formatGuide,
     session: {
       wiseSessionId: row.wiseSessionId,
       canonicalTutorKey: tutor.canonicalKey,
+      atomEvidence,
       studentFullName: student.name,
       studentAliases: student.joinedAsGuest ? [student.joinedAsGuest] : [],
       studentDisplayName: chooseStudentDisplayName(student.name),
@@ -693,13 +704,15 @@ async function processLeased(deps: AutowriterDeps, input: {
   if (result.kind === "held") {
     const reasons = result.reasons.join("; ").slice(0, 900);
     // The summary could not carry a faithful draft: the transcript usually can (never again after a fallback).
-    if (mayHandOver && !result.reasons.some(reason => reason.includes(":style:"))) return handOverToTranscript(release, out, "summary_draft_held", { summaryHold: reasons, ...judgeAnswered(row) });
-    await release({ state: "held", reason: reasons, countAttempt: true, alertKind: "held" });
+    if (mayHandOver && !result.reasons.some(reason => reason.includes(":style:") || reason.startsWith("atom:"))) return handOverToTranscript(release, out, "summary_draft_held", { summaryHold: reasons, ...judgeAnswered(row) });
+    await release({ state: "held", reason: reasons, countAttempt: true, alertKind: "held", metadata: { isebEvidenceHash: lessonEvidenceHash } });
     return out("held", result.reasons.join("; "));
   }
   return postDraft(deps, {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
-    draft: { arm: result.arm, fields: result.fields, judge: result.judge, pipeline: pipelineStamp("summary", result.arm, result.styleGuide) }, evidence: "summary",
+    draft: { arm: result.arm, fields: result.fields, judge: result.judge, pipeline: { ...pipelineStamp("summary", result.arm, result.styleGuide),
+      formatGuide: result.formatGuide ?? null, atomEvidenceHash: result.atomEvidence?.hash ?? null,
+      atomMapping: result.atomEvidence?.mapping ?? null, lessonEvidenceHash, factualVerdicts: result.judge } }, evidence: "summary",
     extraMetadata: { ...guestMetadata(student), ...judgeAnswered(row) }, release, out,
   });
 }
@@ -727,10 +740,20 @@ async function postDraft(deps: AutowriterDeps, input: {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   // The draft exists: a retry waits for Wise or the POST slot, not for the recording (no `no_recording` alert).
   const pipeline = draft.pipeline ?? pipelineStamp(input.evidence, draft.arm);
-  const expectedStyle = activeStyleGuide(rosterTutor(detailTeacherId(input.detail))?.canonicalKey);
-  if (!matchingStoredStyle(pipeline.styleGuide, expectedStyle)) {
-    await release({ state: "pending", reason: "style_guide_changed", retryInMs: 0 });
+  const tutorKey = rosterTutor(detailTeacherId(input.detail))?.canonicalKey;
+  const expectedFormat = await approvedFormatGuide(db, tutorKey, describeClass({ programme: input.detail.classSubject, title: input.detail.title }));
+  const expectedStyle = expectedFormat && tutorKey === "Mimi" ? MIMI_STYLE_GUIDE_V2 : activeStyleGuide(tutorKey);
+  if (!matchingStoredStyle(pipeline.styleGuide, expectedStyle) || !matchingFormatStamp(pipeline.formatGuide, expectedFormat)) {
+    await release({ state: "pending", reason: "style_guide_changed", retryInMs: 0, metadata: { pipeline: null } });
     return out("retry", "style_guide_changed");
+  }
+  const evidenceValid = async (detail: AutowriterSessionDetail) => {
+    if (eligibleForIseb(detail) && process.env.FEEDBACK_ATOM_ENRICHMENT_ENABLED === "true" && !pipeline.lessonEvidenceHash && await atomRolloutApproved(db)) return false;
+    return storedIsebEvidenceMatches(db, detail, studentParticipants(detail)[0]?.wiseUserId ?? null, pipeline);
+  };
+  if (!await evidenceValid(input.detail)) {
+    await release({ state: "pending", reason: "iseb_evidence_changed", retryInMs: 0, metadata: { pipeline: null } });
+    return out("retry", "iseb_evidence_changed");
   }
   const draftPatch = {
     arm: draft.arm,
@@ -772,6 +795,7 @@ async function postDraft(deps: AutowriterDeps, input: {
       },
       gateInput: { now: clock(deps), allowlist: AUTOWRITER_TEACHER_ALLOWLIST, requireSummary },
       apiActorId: deps.apiActorId,
+      validateEvidence: evidenceValid,
       remainingMs: () => remaining(deps),
       sleep: deps.sleep,
     });
@@ -843,7 +867,11 @@ function reusableTranscriptDraft(row: AutowriterSessionRow): StoredDraft | null 
   if (!judge) return null;
   const pipeline = metadata.pipeline && typeof metadata.pipeline === "object" ? metadata.pipeline as Record<string, unknown> : null;
   if (pipeline?.promptVersion !== PROMPT_VERSION || pipeline.judgeVersion !== JUDGE_PROMPT_VERSION) return null;
-  if (!matchingStoredStyle(pipeline.styleGuide, activeStyleGuide(rosterTutor(row.wiseTeacherUserId)?.canonicalKey))) return null;
+  const tutorKey = rosterTutor(row.wiseTeacherUserId)?.canonicalKey;
+  const storedFormat = pipeline.formatGuide as { id?: string; version?: number } | undefined;
+  const expectedStyle = process.env.FEEDBACK_AUTOWRITER_ISEB_FORMAT_ENABLED === "true" && storedFormat?.id === "iseb" && tutorKey === "Mimi"
+    ? MIMI_STYLE_GUIDE_V2 : activeStyleGuide(tutorKey);
+  if (!matchingStoredStyle(pipeline.styleGuide, expectedStyle)) return null;
   return { arm: row.arm, fields: row.fields as unknown as FeedbackFieldAnswers, judge, pipeline };
 }
 
@@ -1082,8 +1110,8 @@ async function processTranscript(deps: AutowriterDeps, input: {
     zoomCues: cues, teacherName: detailTeacherName(detail), alsoTeacher: tutorSelfNames(detail),
   });
   const { speakers, rendered, meta: transcriptMeta } = evidence;
-  const holdFor = async (reason: string) => {
-    await release({ state: "held", reason, alertKind: "held", metadata: { transcript: transcriptMeta } });
+  const holdFor = async (reason: string, extra: Record<string, unknown> = {}) => {
+    await release({ state: "held", reason, alertKind: "held", metadata: { transcript: transcriptMeta, ...extra } });
     return out("held", reason);
   };
   // Soniox's own audio length catches a recording Wise gave no length for; then the transcript's own length.
@@ -1106,11 +1134,18 @@ async function processTranscript(deps: AutowriterDeps, input: {
   }
 
   // 5. Write and judge from the transcript (Sol, Luna fallback, GLM judge — zero-retention routes only).
+  const atomEvidence = await loadAtomLessonEvidence(db, { detail, studentId: student.wiseUserId, lessonRecord: rendered, now });
+  const formatGuide = await approvedFormatGuide(db, tutor.canonicalKey, describeClass({ programme: detail.classSubject, title: detail.title }));
+  const lessonEvidenceHash = atomEvidence || formatGuide ? await retainIsebEvidence(db, {
+    wiseSessionId: row.wiseSessionId, atom: atomEvidence, lessonRecord: rendered, evidenceKind: "transcript",
+  }) : null;
   const result = await runWritingPipeline({
     apiKey: deps.apiKey,
+    formatGuide,
     session: {
       wiseSessionId: row.wiseSessionId,
       canonicalTutorKey: tutor.canonicalKey,
+      atomEvidence,
       studentFullName: student.name,
       studentAliases: student.joinedAsGuest ? [student.joinedAsGuest] : [],
       studentDisplayName: chooseStudentDisplayName(student.name),
@@ -1160,11 +1195,13 @@ async function processTranscript(deps: AutowriterDeps, input: {
     });
     return { ...out("infra", result.error), ...(result.rateLimited ? { rateLimited: result.stage } : {}) };
   }
-  if (result.kind === "held") return holdFor(result.reasons.join("; ").slice(0, 900));
+  if (result.kind === "held") return holdFor(result.reasons.join("; ").slice(0, 900), { isebEvidenceHash: lessonEvidenceHash });
   // The judged draft is stored with the job id; once the class is done, the sweep keeps the job for review only.
   return postDraft(deps, {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
-    draft: { arm: result.arm, fields: result.fields, judge: result.judge, pipeline: pipelineStamp("transcript", result.arm, result.styleGuide) }, evidence: "transcript",
+    draft: { arm: result.arm, fields: result.fields, judge: result.judge, pipeline: { ...pipelineStamp("transcript", result.arm, result.styleGuide),
+      formatGuide: result.formatGuide ?? null, atomEvidenceHash: result.atomEvidence?.hash ?? null,
+      atomMapping: result.atomEvidence?.mapping ?? null, lessonEvidenceHash, factualVerdicts: result.judge } }, evidence: "transcript",
     // A stored draft: a later failure (a requeued shadow draft written again) starts a new count, of the writer's
     // failures and of the judge's.
     extraMetadata: { transcript: transcriptMeta, ...guestMetadata(student), ...(canFallBack ? { writerErrors: 0 } : {}), ...judgeAnswered(row) },

@@ -526,12 +526,12 @@ See [the feature page](../../features/feedback-autowriter.md).
 Migration 0102 also adds four nullable roster columns to `tutor_wise_accounts`: `wise_relation`, `wise_joined_on`,
 `wise_course_count`, `wise_activated` (null = unknown), written best-effort by the snapshot sync after promotion.
 
-## Tutor Offboarding — migration 0103
+## Tutor Offboarding — migration 0104
 
 | SQL table | Drizzle export | Grain |
 |---|---|---|
 | `tutor_offboarding_runs` | `tutorOffboardingRuns` | One immutable preview/apply lifecycle, including stored mode, expiry, operator and final state; a partial unique index allows only one `applying` run |
 | `tutor_offboarding_run_accounts` | `tutorOffboardingRunAccounts` | One per-account snapshot and outcome in a run; unique by run and Wise teacher id, with the saved account payload and pre-removal local active state |
 
-Both tables are additive. Apply migration 0103 only with owner authorization and before deploying removal controls.
+Both tables are additive. Apply migration 0104 only with owner authorization and before deploying removal controls.
 The migration has no down path; rollback requires a forward migration.

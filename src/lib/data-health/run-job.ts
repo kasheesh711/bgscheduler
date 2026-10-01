@@ -37,7 +37,7 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
     return NextResponse.json({ error: "Unknown job" }, { status: 404 });
   }
 
-  if ((isWiseClassroomJob(jobKey) || jobKey.startsWith("feedback_autowriter")) && !isClassroomOperationsOwner(actorEmail)) {
+  if ((isWiseClassroomJob(jobKey) || (jobKey.startsWith("feedback_autowriter") || jobKey === "feedback_atom")) && !isClassroomOperationsOwner(actorEmail)) {
     return NextResponse.json({ error: "Only Kevin can run this job." }, { status: 403 });
   }
 
@@ -51,6 +51,13 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
     async () => {
       if (isWiseClassroomJob(jobKey) && jobKey !== "wise_snapshot" && !wiseClassroomAutomationEnabled()) {
         return NextResponse.json(pausedWiseClassroomResult());
+      }
+      if (jobKey === "feedback_atom") {
+        try {
+          const { collectAtomOnServer } = await import("@/lib/feedback-autowriter/atom/collector");
+          const result = await collectAtomOnServer("admin");
+          return NextResponse.json(result, { status: result.ok ? 200 : 503 });
+        } catch { return NextResponse.json({ ok: false, error: "Atom collection could not complete." }, { status: 503 }); }
       }
       if (jobKey === "feedback_autowriter") {
         try {

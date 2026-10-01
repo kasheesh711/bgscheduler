@@ -19,7 +19,7 @@ Continue the approved `2026-10-01-tutor-offboarding-design.md`, sections 6–12.
 ## Parallel ownership
 
 1. Core: removal types, service/store/Wise helper, reconciliation, sync hook, probe script and meaningful unit/integration tests. Publish interfaces early.
-2. API/schema/docs: migration 0103 and schema, four removal routes plus reconcile endpoint, route tests, feature/API/DB/env docs. Coordinate table interfaces with core before implementation.
+2. API/schema/docs: migration 0104 and schema, four removal routes plus reconcile endpoint, route tests, feature/API/DB/env docs. Coordinate table interfaces with core before implementation.
 3. UI: selection and eligibility explanation, preview/confirm dialog, manual/live mode wording, result/history and reconciliation controls; fixture renders and tests. Coordinate types with core.
 4. Primary agent: production rollout of PR 1; independent integration/security review; required checks, fixture/browser verification, migration B, reviewed PR 2 publication and deployment. Never issue any removal POST.
 

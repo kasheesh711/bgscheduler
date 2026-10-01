@@ -795,3 +795,7 @@ guide; disabling or changing it invalidates guided drafts. A check before storin
 from crossing a guide switch. No database migration is required; stamps use existing JSON metadata.
 
 See the [activation and replay procedure](../operations/feedback-autowriter.md#mimi-style-guide-review-and-activation).
+
+## ISEB format v1, Mimi voice v2 and Atom evidence
+
+The independent, initially disabled ISEB rollout adds numbered topics, concrete improvement actions and explicitly assigned homework, with warm performance prose. Atom collection uses the existing server Chromium runtime every 15 minutes and only enriches staff-linked, unambiguous lesson activity. Both writers and both factual judges share frozen evidence; the hourly review job has a separate API style reviewer. The authenticated Review interface includes student links, sources, omission reasons and first-ten progress. Owner comparison approval and unattended cloud proof gate activation. See the [ISEB and Atom runbook](../operations/iseb-atom-feedback.md).

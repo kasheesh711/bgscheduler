@@ -751,3 +751,7 @@ can overlap the existing daily review/email windows; idle ticks make no Wise cal
 ## Nightly feedback reminder worker
 
 `GET /api/internal/post-class-feedback/reminder-nightly` is scheduled at `0,30 * * * *`, authenticated by `CRON_SECRET`, with `maxDuration = 800`. Registry key: `post_class_feedback_nightly`. It creates the 22:00 Bangkok batch and resumes unfinished work on later passes. Its reminder-specific setting defaults to `off`; it does not enable the older reminder handlers or change payout scheduling. Health includes independent per-session coverage and persistent uncertain deliveries. See the [nightly reminder runbook](../operations/nightly-feedback-reminders.md).
+
+## Atom lesson evidence
+
+`GET /api/internal/feedback-autowriter/atom` runs at `6,21,36,51 * * * *`, registry key `feedback_atom`, maximum 750 seconds. The cron-secret check, invocation audit and Postgres single-flight row guard apply. `FEEDBACK_ATOM_COLLECTOR_ENABLED=true` enables read-only collection for approved student links with pending ISEB lessons. Preview deployments skip it. See the [ISEB / Atom runbook](../operations/iseb-atom-feedback.md). The existing hourly autowriter review job independently enables API style checks with `FEEDBACK_AUTOWRITER_ISEB_REVIEW_ENABLED=true`.

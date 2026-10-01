@@ -56,7 +56,7 @@ until its snooze ends. Removal additionally needs the last class 45+ days ago (O
   ≤ 3 days since their last success.
 - **Tables:** `tutor_offboarding_decisions`, `tutor_offboarding_access_grants`,
   `tutor_offboarding_access_audit_log`, and `tutor_offboarding_sheet_source` (migration 0102); removal runs and
-  per-account snapshots (migration 0103).
+  per-account snapshots (migration 0104).
 
 ## Removal controls (PR 2)
 

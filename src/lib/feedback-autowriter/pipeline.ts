@@ -1,3 +1,8 @@
+import { activeFormatGuide, type FeedbackFormatGuide } from "./format";
+import { MIMI_STYLE_GUIDE_V2 } from "./style";
+import { atomModelEvidence, evidenceHash } from "./atom/evidence";
+import type { AtomLessonEvidence } from "./atom/types";
+import { validateAtomStatisticClaims } from "./atom/statistics";
 import { randomUUID } from "node:crypto";
 import { activeStyleGuide, styleGuideStamp, type FeedbackStyleGuide, type StyleGuideStamp } from "./style";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
@@ -37,6 +42,7 @@ import type { AiSummary, ModelArm } from "./types";
 import { finalizeFields, parseModelOutput, validateFeedbackDraft, type ModelOutput } from "./validate";
 
 export interface PipelineSession {
+  atomEvidence?: AtomLessonEvidence | null;
   canonicalTutorKey?: string;
   wiseSessionId: string;
   studentFullName: string;
@@ -75,7 +81,7 @@ export interface CallRecord {
 }
 
 export type PipelineResult =
-  | { kind: "draft"; arm: ModelArm; output: ModelOutput; fields: FeedbackFieldAnswers; judge: StoredJudgeVerdict; styleGuide?: StyleGuideStamp }
+  | { kind: "draft"; arm: ModelArm; output: ModelOutput; fields: FeedbackFieldAnswers; judge: StoredJudgeVerdict; styleGuide?: StyleGuideStamp; formatGuide?: StyleGuideStamp; atomEvidence?: AtomLessonEvidence }
   | { kind: "held"; reasons: string[] }
   /**
    * Retried later. `stage`: whose call failed or could not start — the writer's, or the judge's (the writer had
@@ -165,6 +171,7 @@ export async function runWritingPipeline(input: {
   session: PipelineSession;
   /** Explicit override for offline replay only; production resolves the disabled-by-default switch. */
   styleGuide?: FeedbackStyleGuide | null;
+  formatGuide?: FeedbackFormatGuide | null;
   tutorNames: readonly string[];
   priorFeedback: readonly PriorFeedbackComparison[];
   record: (record: CallRecord) => Promise<void>;
@@ -182,11 +189,22 @@ export async function runWritingPipeline(input: {
 }): Promise<PipelineResult> {
   const callModel = input.callModel ?? callOpenRouter;
   const { session } = input;
-  const styleGuide = input.styleGuide === undefined ? activeStyleGuide(session.canonicalTutorKey) : input.styleGuide;
+  const formatGuide = input.formatGuide === undefined ? activeFormatGuide(session.canonicalTutorKey, session.classDetails) : input.formatGuide;
+  const styleGuide = input.styleGuide === undefined
+    ? (formatGuide && session.canonicalTutorKey === "Mimi" ? MIMI_STYLE_GUIDE_V2 : activeStyleGuide(session.canonicalTutorKey)) : input.styleGuide;
+  // Copy once: asynchronous collectors and callers cannot mutate one model's evidence between calls.
+  const atomEvidence = session.atomEvidence ? structuredClone(session.atomEvidence) : null;
+  if (atomEvidence) {
+    const { hash, ...body } = atomEvidence;
+    if (hash !== evidenceHash(body) || atomEvidence.sessionId !== session.wiseSessionId) return { kind: "held", reasons: ["atom:evidence_integrity"] };
+    if (atomEvidence.status === "contradiction") return { kind: "held", reasons: ["atom:source_contradiction", ...atomEvidence.contradictions] };
+  }
+  const formatStamp = formatGuide ? { id: formatGuide.id, version: formatGuide.version } : null;
   if (styleGuide && styleGuide.canonicalTutorKey !== session.canonicalTutorKey) throw new Error("style_guide_tutor_mismatch");
   const styleStamp = styleGuideStamp(styleGuide);
   const reasons: string[] = [];
   const names = { studentFullName: session.studentFullName, studentAliases: session.studentAliases, tutorNames: input.tutorNames };
+  const modelAtomEvidence = atomEvidence ? redactForModel(atomModelEvidence(atomEvidence), names) : "";
   const redactedSummary = redactForModel(session.summary.text, names);
   const redactedClassDetails = classDetailsBlock(session.classDetails, names);
   const evidence: EvidenceKind = session.evidence ?? "summary";
@@ -223,7 +241,7 @@ export async function runWritingPipeline(input: {
         provider: config.provider,
         messages,
         schemaName: role === "writer" ? "post_class_feedback" : "feedback_faithfulness",
-        schema: role === "writer" ? (styleGuide ? { ...FEEDBACK_JSON_SCHEMA, properties: { ...FEEDBACK_JSON_SCHEMA.properties,
+        schema: role === "writer" ? ((styleGuide || formatGuide) ? { ...FEEDBACK_JSON_SCHEMA, properties: { ...FEEDBACK_JSON_SCHEMA.properties,
           improvement: { type: "string", description: "A short numbered list of specific skills to practise; one item is enough." },
         } } : FEEDBACK_JSON_SCHEMA) : JUDGE_JSON_SCHEMA,
         effort: config.effort,
@@ -280,9 +298,11 @@ export async function runWritingPipeline(input: {
       speakerLabels: session.speakerLabels,
       otherPeople,
       styleGuide,
+      formatGuide,
+      atomEvidence: modelAtomEvidence,
     }), AUTOWRITER_WRITER_TIMEOUT_MS, (call, result) => input.record({
       wiseSessionId: session.wiseSessionId, role: "writer", arm: writer.arm, requestedModel: writer.model,
-      promptVersion: PROMPT_VERSION, call, result: { ...result, evidence, ...(styleStamp ? { styleGuide: styleStamp } : {}) },
+      promptVersion: PROMPT_VERSION, call, result: { ...result, evidence, ...(styleStamp ? { styleGuide: styleStamp } : {}), ...(formatStamp ? { formatGuide: formatStamp } : {}), ...(atomEvidence ? { atomEvidenceHash: atomEvidence.hash } : {}) },
     }));
     if (written.kind === "budget") return ended({ kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false, stage: "writer" });
     const writeCall = written.call;
@@ -302,7 +322,7 @@ export async function runWritingPipeline(input: {
     const parsed = parseModelOutput(writeCall.content);
     if (!parsed.ok) {
       await recordWriter({ error: parsed.reason });
-      reasons.push(`${writer.arm}:${styleGuide ? "style:" : ""}${parsed.reason}`);
+      reasons.push(`${writer.arm}:${styleGuide || formatGuide ? "style:" : ""}${parsed.reason}`);
       continue;
     }
     const fields = finalizeFields(parsed.output, session.studentDisplayName);
@@ -312,12 +332,14 @@ export async function runWritingPipeline(input: {
       studentFullName: session.studentFullName,
       tutorNames: input.tutorNames,
       styleGuide,
-      lessonRecord: session.summary.text,
+      formatGuide,
+      lessonRecord: session.summary.text + (atomEvidence?.activities.length ? "\nAtom learning" : ""),
       priorFeedback: input.priorFeedback.filter((prior) => prior.key !== session.wiseSessionId),
     });
-    await recordWriter(validation.ok ? { validation: "ok" } : { validation: validation.reasons });
-    if (!validation.ok) {
-      reasons.push(...validation.reasons.map((reason) => `${writer.arm}:${reason}`));
+    const validationReasons = [...(validation.ok ? [] : validation.reasons), ...validateAtomStatisticClaims(fields, atomEvidence)];
+    await recordWriter(validationReasons.length ? { validation: validationReasons } : { validation: "ok" });
+    if (validationReasons.length) {
+      reasons.push(...validationReasons.map((reason) => `${writer.arm}:${reason}`));
       continue;
     }
 
@@ -329,6 +351,7 @@ export async function runWritingPipeline(input: {
     // it then makes no second try and no further in-run retry (`decided`, below).
     const judgeMessages = buildJudgeMessages({
       redactedSummary,
+      atomEvidence: modelAtomEvidence,
       evidence,
       speakerLabels: session.speakerLabels,
       otherPeople,
@@ -359,7 +382,7 @@ export async function runWritingPipeline(input: {
         const judged = await run(config, "judge", judgeMessages, AUTOWRITER_JUDGE_TIMEOUT_MS[evidence], (call, result) => input.record({
           wiseSessionId: session.wiseSessionId, role: "judge", arm: config.arm, requestedModel: config.model,
           promptVersion: JUDGE_PROMPT_VERSION, call,
-          result: { effort, ...result, judgedArm: writer.arm, judgedGeneration, evidence },
+          result: { effort, ...result, judgedArm: writer.arm, judgedGeneration, evidence, ...((formatGuide || atomEvidence) ? { lessonRecordHash: evidenceHash(session.summary.text) } : {}), ...(atomEvidence ? { atomEvidenceHash: atomEvidence.hash } : {}) },
         }), () => decided);
         if (judged.kind === "budget") return stop({ kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false, stage: "judge" });
         const judgeCall = judged.call;
@@ -400,6 +423,9 @@ export async function runWritingPipeline(input: {
       if ("stop" in level.value) stopped ??= level.value.stop;
       else if ("verdict" in level.value) levels[AUTOWRITER_JUDGE_EFFORTS[index]] = level.value.verdict;
     }
+    if ([levels.medium, levels.high].some(verdict => verdict?.unsupported.some(problem => problem.startsWith("SOURCE_CONTRADICTION:")))) {
+      return { kind: "held", reasons: ["atom:source_contradiction", ...[levels.medium, levels.high].flatMap(verdict => verdict?.unsupported.filter(problem => problem.startsWith("SOURCE_CONTRADICTION:")) ?? [])] };
+    }
     if (stopped) return ended(stopped);
     // No level stopped: the judges decided this draft, passing or rejecting it.
     judgeAnswered = true;
@@ -413,7 +439,7 @@ export async function runWritingPipeline(input: {
       reasons.push(`${writer.arm}:unfaithful:${problems.slice(0, 3).join(" | ").slice(0, 300)}`);
       continue;
     }
-    return { kind: "draft", arm: writer.arm, output: parsed.output, fields, judge: verdict, ...(styleStamp ? { styleGuide: styleStamp } : {}) };
+    return { kind: "draft", arm: writer.arm, output: parsed.output, fields, judge: verdict, ...(styleStamp ? { styleGuide: styleStamp } : {}), ...(formatStamp ? { formatGuide: formatStamp } : {}), ...(atomEvidence ? { atomEvidence } : {}) };
   }
   return { kind: "held", reasons };
 }
