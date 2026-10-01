@@ -115,7 +115,7 @@ One transaction appends the verdict (superseding the current one), sets `reviews
 
 **Responses:** `200 { ok: true, id, acknowledgedAt, acknowledgedBy }` · `400` · `401` · `403` · `404` (no such incident) · `500`.
 
-## ISEB / Atom routes (migration 0102)
+## ISEB / Atom routes (migration 0103)
 
 | Method and path | Access | Effect |
 |---|---|---|

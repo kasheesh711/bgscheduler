@@ -2139,6 +2139,11 @@ export const tutorWiseAccounts = pgTable("tutor_wise_accounts", {
   isOnlineVariant: boolean("is_online_variant").notNull(),
   email: text("email"),
   status: text("status").notNull(),
+  // Tutor Offboarding roster details (OFF-02: null = unknown), written best-effort after each promotion.
+  wiseRelation: text("wise_relation"),
+  wiseJoinedOn: timestamp("wise_joined_on", { withTimezone: true }),
+  wiseCourseCount: integer("wise_course_count"),
+  wiseActivated: boolean("wise_activated"),
   lastSnapshotId: uuid("last_snapshot_id").notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [index("tutor_wise_accounts_key_idx").on(table.canonicalKey)]);
@@ -6487,6 +6492,60 @@ export const feedbackAutowriterRosterAccounts = pgTable("feedback_autowriter_ros
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
 }, (table) => [
   check("feedback_autowriter_roster_accounts_seen_check", sql`${table.lastSeenAt} >= ${table.firstSeenAt}`),
+]);
+
+// ── Tutor Offboarding ────────────────────────────────────────────────
+
+/** "Still with us" decisions on the departed-tutor detector; each keeps the score it overrode (future labels). */
+// OFF-15: last complete read of the owner's termination sheet, plus latest source health.
+export const tutorOffboardingSheetSource = pgTable("tutor_offboarding_sheet_source", {
+  sourceKey: text("source_key").primaryKey(),
+  rows: jsonb("rows").$type<Array<{
+    sourceRow: number; fullName: string; wiseName: string; nickname: string;
+    emails: string[]; terminated: boolean;
+  }>>().notNull().default([]),
+  checkedAt: timestamp("checked_at", { withTimezone: true }),
+  attemptedAt: timestamp("attempted_at", { withTimezone: true }).notNull().defaultNow(),
+  lastError: text("last_error"),
+});
+
+export const tutorOffboardingDecisions = pgTable("tutor_offboarding_decisions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  canonicalKey: text("canonical_key").notNull(),
+  kind: text("kind").notNull().default("still_with_us"),
+  note: text("note"),
+  snoozeUntil: timestamp("snooze_until", { withTimezone: true }).notNull(),
+  likelihoodAtDecision: integer("likelihood_at_decision").notNull(),
+  bandAtDecision: text("band_at_decision").notNull(),
+  reasons: jsonb("reasons").$type<string[]>().notNull().default([]),
+  decidedByEmail: text("decided_by_email").notNull(),
+  decidedAt: timestamp("decided_at", { withTimezone: true }).notNull().defaultNow(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  revokedByEmail: text("revoked_by_email"),
+}, (table) => [
+  index("tod_open_key_idx").on(table.canonicalKey).where(sql`${table.revokedAt} is null`),
+  index("tod_decided_at_idx").on(table.decidedAt),
+  check("tod_kind_check", sql`${table.kind} in ('still_with_us')`),
+  check("tod_band_check", sql`${table.bandAtDecision} in ('very_likely_gone', 'likely_gone', 'unclear', 'active')`),
+]);
+
+/** OFF-11: who may remove departed tutors from Wise. Managed by the owner; read fresh on every request. */
+export const tutorOffboardingAccessGrants = pgTable("tutor_offboarding_access_grants", {
+  email: text("email").primaryKey(),
+  grantedByEmail: text("granted_by_email").notNull(),
+  grantedAt: timestamp("granted_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Grant-change history: the application only appends; no database immutability trigger. */
+export const tutorOffboardingAccessAuditLog = pgTable("tutor_offboarding_access_audit_log", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  action: text("action").notNull(),
+  email: text("email").notNull(),
+  actorEmail: text("actor_email").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("toaal_created_at_idx").on(table.createdAt),
+  check("toaal_action_check", sql`${table.action} in ('grant', 'revoke')`),
 ]);
 
 

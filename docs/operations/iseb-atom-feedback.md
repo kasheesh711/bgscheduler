@@ -38,7 +38,7 @@ The observed Atom account exposes English, Maths, VR and NVR activity endpoints.
 
 ## Deployment and independent activation
 
-Migration **0102** adds approved links, sync runs, snapshots, timetables, retained evidence, style reviews and a rollout receipt. Apply it before enabling collection. All switches require the exact string `true`.
+Migration **0103** adds approved links, sync runs, snapshots, timetables, retained evidence, style reviews and a rollout receipt. Apply it before enabling collection. All switches require the exact string `true`.
 
 | Setting | Purpose | Initial value |
 |---|---|---|

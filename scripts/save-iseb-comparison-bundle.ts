@@ -11,7 +11,7 @@ const opt = (key: string) => process.argv.find(arg => arg.startsWith(`--${key}=`
 loadEnvConfig(opt("env-dir") ?? process.cwd());
 async function main() {
   const dir=opt("dir"); if(!dir) throw new Error("--dir is required");
-  const comparisons=fs.readdirSync(dir).filter(file=>/^[a-f0-9]{24}\.json$/u.test(file)).map(file=>JSON.parse(fs.readFileSync(path.join(dir,file),"utf8"))).filter(row=>row.result?.kind==="draft");
+  const comparisons=fs.readdirSync(dir).filter(file=>/^[a-f0-9]{24}\.json$/u.test(file)).map(file=>JSON.parse(fs.readFileSync(path.join(dir,file),"utf8"))).filter(row=>row.result?.kind==="draft").sort((a,b)=>a.id.localeCompare(b.id));
   const receipt={comparisons}; const comparisonHash=evidenceHash(receipt);
   if(!validateComparisonBundle(receipt,comparisonHash)) throw new Error("The bundle must contain ten accepted Mimi drafts and ten accepted drafts covering Kevin, Gift, Ek and Peat.");
   const db=getDb();
