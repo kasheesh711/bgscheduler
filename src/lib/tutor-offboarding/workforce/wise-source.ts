@@ -115,7 +115,6 @@ function sessionNormalize(raw: unknown, observedAt: string): { session: Workforc
   }
   if (!startAt || !endAt) issues.push("SCHEDULED_INTERVAL_INCOMPLETE");
   const scheduledMinutes = startAt && endAt ? (endMs - startMs) / 60_000 : null;
-  const identityRefs = [userId, teacherId].filter((value): value is string => Boolean(value));
   const completeness: WorkforceCompleteness = issues.length ? "partial" : "complete";
   return {
     session: {
@@ -236,6 +235,9 @@ export async function fetchWorkforceSourceWindow(
         allSessions.push(normalized.session);
         const startMs = Date.parse(normalized.session.startAt);
         if (Number.isFinite(startMs)) advertisedEnd = advertisedEnd === null ? startMs : Math.max(advertisedEnd, startMs);
+      }
+      if (sessions.length === 0 && advertisedPages !== null && (page > 1 || advertisedPages > 1)) {
+        issues.push("EMPTY_ADVERTISED_SESSION_PAGE"); truncated = true; break outer;
       }
       if (advertisedPages !== null ? page >= advertisedPages : sessions.length < pageSize) break;
       if (sessions.length === 0) { issues.push("EMPTY_ADVERTISED_SESSION_PAGE"); truncated = true; break outer; }
@@ -383,6 +385,8 @@ export async function probeWorkforceSources(options: ProbeOptions): Promise<Sour
   source.evidence.studentCredits = credits;
   const creditConclusions = credits;
   const creditsSeen = new Set(creditConclusions.map((credit) => credit.sourceInterpretation));
+  const allCreditExamplesObserved = requestedExamples.length > 0 && requestedExamples.every(example =>
+    credits.some(credit => credit.wiseSessionId === (example.sessionId ?? "unknown_session") && credit.wiseStudentId === example.studentId));
   const ambiguousRefunds = "unknown" as const;
   const report: SourceContractReport & {
     availabilityDiagnostics: typeof availabilitySamples;
@@ -396,7 +400,8 @@ export async function probeWorkforceSources(options: ProbeOptions): Promise<Sour
       historicalParticipants: source.sessions.some((session) => session.participantCompleteness !== "complete") ? source.sessions.some((session) => session.participantCompleteness === "unknown") ? "unknown" : "partial" : "complete",
       availabilityCoverage: availabilityCompleteness,
       currentBalanceOrLedger: creditsSeen.has("verified_session_charge") || creditsSeen.has("ambiguous_ledger_movement") ? "ledger_movement" : "unknown",
-      historicalNormalCharges: credits.some((credit) => credit.normalCredits !== null) ? "verified" : "not_exposed", ambiguousRefunds,
+      historicalNormalCharges: !allCreditExamplesObserved ? "unknown"
+        : credits.every((credit) => credit.normalCredits !== null) ? "verified" : "not_exposed", ambiguousRefunds,
     },
     evidence: source.evidence,
     availabilityDiagnostics: availabilitySamples,

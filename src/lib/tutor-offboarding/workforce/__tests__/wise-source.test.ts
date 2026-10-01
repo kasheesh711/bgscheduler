@@ -5,11 +5,12 @@ import {
   fetchWorkforceSourceWindow,
   WorkforceRequestBudget,
   normalizeStudentCreditEvidence,
+  probeWorkforceSources,
 } from "../wise-source";
 import { WiseClient } from "@/lib/wise/client";
 
 const originalFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = originalFetch; vi.restoreAllMocks(); });
+afterEach(() => { globalThis.fetch = originalFetch; vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 function client(maxRequests = 20) {
   const budget = new WorkforceRequestBudget(maxRequests);
@@ -31,6 +32,22 @@ function session(id: string, extra: Record<string, unknown> = {}) {
 }
 
 describe("workforce Wise source adapter", () => {
+  it("keeps an unexpectedly empty final advertised page incomplete", async () => {
+    const { wise, budget } = client();
+    const pages = [ { data: { sessions: [session("s1")], page_count: 2 } }, { data: { sessions: [], page_count: 2 } } ];
+    globalThis.fetch = vi.fn(async () => Response.json(pages.shift()));
+    const result = await fetchWorkforceSourceWindow({ from: "2026-03-01", to: "2026-03-02", maxRequests: 4 }, { client: wise, budget, instituteId: "inst" });
+    expect(result.complete).toBe(false);
+    expect(result.contractIssues).toContain("EMPTY_ADVERTISED_SESSION_PAGE");
+  });
+
+  it("does not conclude credit normal charges when the probe budget never reached them", async () => {
+    vi.stubEnv("WISE_USER_ID", "fixture"); vi.stubEnv("WISE_API_KEY", "fixture"); vi.stubEnv("WISE_INSTITUTE_ID", "fixture");
+    globalThis.fetch = vi.fn(async () => Response.json({ data: { sessions: [session("s1")], page_count: 1 } }));
+    const result = await probeWorkforceSources({ from: "2026-03-01", to: "2026-03-01", maxRequests: 1, maxPages: 1, maxDates: 1, maxCreditExamples: 1, availabilityTeacherUserIds: [], creditExamples: [{ label: "normal", classId: "class-1", studentId: "student-1", sessionId: "s1" }] });
+    expect(result.conclusions.historicalNormalCharges).toBe("unknown");
+    expect(result.contractIssues).toContain("REQUEST_CAP_EXHAUSTED");
+  });
   it("requests the next page at an exact page-size boundary and deduplicates by session ID", async () => {
     const { wise, budget } = client();
     const pages: unknown[] = [

@@ -24,10 +24,10 @@ function cell(value: unknown): string {
 
 /** Exports the selected report rows, including the exact completeness state for every metric. */
 export function serializeWorkforceCsv(report: WorkforceReport, section: WorkforceExportSection): string {
-  const commonHeaders = ["report_revision", "generated_at", "from", "to", "selected_month", "role_filter", "subject_filter", "curriculum_filter", "level_filter", "modality_filter", "source_status", "source_issues"];
+  const commonHeaders = ["report_revision", "generated_at", "from", "to", "selected_month", "role_filter", "subject_filter", "curriculum_filter", "level_filter", "modality_filter", "source_status", "source_issues", "source_coverage", "source_exceptions"];
   const commonValues = [report.reportRevision, report.generatedAt, report.query.from, report.query.to, report.query.viewMonth,
     report.query.role, report.query.subject, report.query.curriculum, report.query.level, report.query.modality,
-    report.quality.completeness, report.quality.issueCodes.join("|")];
+    report.quality.completeness, report.quality.issueCodes.join("|"), JSON.stringify(report.quality.sourceCoverage), JSON.stringify(report.quality.exceptions)];
   const rowMetrics = [...metrics, ...(section === "months" ? rosterMetrics : [])];
   const header = [...commonHeaders, ...labels[section], ...rowMetrics.flatMap(key => [`${key}_value`, `${key}_completeness`, `${key}_reasons`])];
   const rows = section === "week" ? report.weekCells : report[section];

@@ -27,4 +27,9 @@ describe("workforce CSV",()=>{
     expect(csv.split("\r\n").filter(Boolean)).toHaveLength(1);
     expect(csv).toContain('"turnoverPercent_value"');
   });
+  it("retains source timestamps and exact coverage instead of only the export time",()=>{
+    const evidenceReport = {...report,quality:{...report.quality,sourceCoverage:[{source:"wise_history",requestedFrom:"2026-03-01",requestedTo:"2026-03-31",returnedFrom:null,returnedTo:null,observedAt:"2026-10-01T04:00:00Z",pagesRequested:2,pagesReturned:1,recordsReturned:100,truncated:true,completeness:"partial" as const,issueCodes:["REQUEST_CAP_EXHAUSTED"]}]}};
+    const csv=serializeWorkforceCsv(evidenceReport,"people");
+    expect(csv).toContain("source_coverage"); expect(csv).toContain("2026-10-01T04:00:00Z"); expect(csv).toContain("REQUEST_CAP_EXHAUSTED");
+  });
 });
