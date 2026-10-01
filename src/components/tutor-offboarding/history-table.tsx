@@ -8,7 +8,7 @@ export function HistoryTable({ decisions }: { decisions: DecisionView[] }) {
   return (
     <Panel className="mt-4">
       <div className="overflow-x-auto">
-      <table className="w-full min-w-[640px] table-fixed text-xs">
+      <table className="w-full min-w-[640px] table-fixed text-xs [&_td]:align-top">
         <thead className="border-b text-muted-foreground">
           <tr>{["Tutor", "Decision", "Score then", "By", "When", "Note"].map((heading) => <th key={heading} className="px-4 py-2 text-left font-medium">{heading}</th>)}</tr>
         </thead>
@@ -22,7 +22,7 @@ export function HistoryTable({ decisions }: { decisions: DecisionView[] }) {
               <td className="px-4 py-2 tabular-nums">{decision.likelihoodAtDecision}% · {BAND_LABEL[decision.bandAtDecision]}</td>
               <td className="px-4 py-2 [overflow-wrap:anywhere]">{decision.decidedByEmail}</td>
               <td className="px-4 py-2">{formatDayYear(decision.decidedAt)}</td>
-              <td className="px-4 py-2 text-muted-foreground [overflow-wrap:anywhere]">{decision.note ?? ""}</td>
+              <td className="px-4 py-2 text-muted-foreground [overflow-wrap:anywhere]"><div tabIndex={decision.note ? 0 : undefined} className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded outline-none focus-visible:ring-2 focus-visible:ring-ring/50">{decision.note ?? ""}</div></td>
             </tr>
           ))}
         </tbody>
