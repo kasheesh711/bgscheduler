@@ -52,6 +52,7 @@ export interface WorkforceDatedObservation {
   id: string; canonicalKey: string;
   observedAt: string;
   source: string; sourceSnapshotId?: string;
+  sourceTimes?: { roster: string; availability: string | null; nearLeaves: string | null; farLeaves: string | null };
   role: WorkforceRole | null;
   accounts: WorkforceAccount[];
   qualifications: WorkforceQualification[];
