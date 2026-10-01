@@ -117,8 +117,8 @@ roster column (not yet synced) is unknown.
 
 ### 4.3 Calibration — likelihood from BeGifted's own history
 
-1. **Taught dates.** A session counts as taught when it is an attendance-ledger row, a blocking past session block,
-   or a post-class session whose final status is not cancelled. For each person with at least one taught session,
+1. **Taught dates.** A session counts as taught when it is an attendance-ledger row with meeting status `ENDED`, a
+   blocking past session block, or a post-class session with final status `ENDED`. For each person with at least one taught session,
    take the distinct Asia/Bangkok dates with a taught session, on or after `HISTORY_START = 2026-03-01`.
 2. **Gaps.** Consecutive taught dates `a < b` form a *closed* gap of `b − a` days (the tutor returned). The time from
    the last taught date to today is the person's *open* gap.
@@ -161,6 +161,8 @@ An excluded person is never selectable; the row shows why.
 - Full-time tutor (active attendance enrollment).
 - "Still with us" decision whose snooze has not expired.
 - Any account with `tutor_wise_accounts.status = 'identity_conflict'` → "Identity needs fixing in Wise first".
+- No class on record and a joined date not yet known (roster details not synced yet) → "Waiting for Wise account
+  details". Under OFF-02 a brand-new hire must never look departed.
 
 **OFF-06.** Removal additionally requires the last class to be at least 45 days ago (for a person with no class on
 record: their earliest account joined at least 60 days ago). This keeps the latest payroll month and post-class payout
@@ -170,11 +172,13 @@ Selectable for removal = band is not Active, no exclusion, OFF-06 met, freshness
 
 ### 4.6 Freshness gate
 
-**OFF-07.** If the active tutor snapshot is more than 2 hours old, or the last successful run of any history feed
-(`sync_runs`, the progress-test sync, the post-class collector, the Wise activity sync, the leave-request sync) is
-more than 3 days old, the
+**OFF-07.** If the active tutor snapshot (`snapshots.created_at`) is more than 2 hours old, or the last successful run
+of any other history feed (the progress-test sync, the post-class collector, the Wise activity sync, the
+leave-request sync) is more than 3 days old, the
 page shows an amber banner, marks every score provisional, and blocks removal. A broken sync must never make
-everyone look idle.
+everyone look idle. The snapshot is judged by its own age, not by `sync_runs.status`: since onboarding began
+(5 Sep) a promoted run is still recorded `failed` whenever contact warnings exist, so `sync_runs` has no recent
+`success` row even though snapshots promote every 30 minutes.
 
 ### 4.7 Computation and caching
 
@@ -276,8 +280,9 @@ Migration numbers are assigned at build time: `origin/main` ends at 0101 and the
 **Migration A (PR 1)**
 
 - `tutor_wise_accounts` gains nullable `wise_relation text`, `wise_joined_on timestamptz`, `wise_course_count integer`,
-  `wise_activated boolean`. Null = unknown. They are written by `planTutorContacts` from roster fields the sync already
-  fetches; `absent` rows keep their last values.
+  `wise_activated boolean`. Null = unknown. They are written from roster fields the sync already fetches, by a
+  best-effort step right after promotion (`persistRosterFacts`), outside the promotion transaction, so a missing column
+  (migration not yet applied) can never block a sync; `absent` rows keep their last values.
 - `tutor_offboarding_decisions`: `id`, `canonical_key`, `kind` (`still_with_us`), `note`, `snooze_until`,
   `likelihood_at_decision`, `band_at_decision`, `reasons jsonb`, `decided_by_email`, `decided_at`, `revoked_at`,
   `revoked_by_email`; index on `canonical_key` where `revoked_at is null`.
@@ -297,7 +302,7 @@ Migration numbers are assigned at build time: `origin/main` ends at 0101 and the
   `response_payload`, `error_message`, `local_state_before jsonb`, `sent_at`, `verified_at`, `updated_at`;
   unique on (`run_id`, `wise_teacher_id`).
 
-Status columns use `pgEnum`, per repo convention.
+Enumerated columns use `text` with a CHECK constraint, as the newest tables do (no new Postgres enum types).
 
 ## 8. Interfaces
 
