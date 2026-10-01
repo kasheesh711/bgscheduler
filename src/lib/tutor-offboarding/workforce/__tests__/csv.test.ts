@@ -10,6 +10,15 @@ const report = {
   months:[],subjects:[],weekCells:[],quality:{completeness:"partial",issueCodes:[],sourceCoverage:[],exceptions:[]},
 } as unknown as WorkforceReport;
 describe("workforce CSV",()=>{
+  it("retains large report evidence once with an explicit reference from every metric row",()=>{
+    const large = {...report, people:Array.from({length:100},(_,i)=>({...report.people[0],displayName:`Teacher ${i}`})), quality:{...report.quality,exceptions:[{code:"SOURCE_GAP",message:"x".repeat(1_000_000),entityId:"retained-source-record"}]}};
+    const csv=serializeWorkforceCsv(large,"people");
+    expect(csv.match(/retained-source-record/g)).toHaveLength(1);
+    expect(csv).toContain('"report_metadata_data_row"');
+    expect(csv.split("\r\n").filter(Boolean)).toHaveLength(101);
+    expect(Buffer.byteLength(csv)).toBeLessThan(2_000_000);
+    expect(csv).toContain('"Teacher 99"');
+  });
   it("uses report values and includes revision, filters, null state and reasons",()=>{
     const csv=serializeWorkforceCsv(report,"people");
     expect(csv).toContain('"report_revision"');

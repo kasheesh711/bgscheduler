@@ -21,6 +21,17 @@ function fixture(): GrowthReport {
 }
 
 describe("growth CSV", () => {
+  it("keeps complete report metadata once without multiplying it by chart rows", () => {
+    const report = fixture();
+    report.flows.months=Array.from({length:100},(_,i)=>({...report.flows.months[0],key:`month-row-${i}`,subject:'Math'}));
+    report.quality.exceptions=[{code:'SOURCE_GAP',message:'x'.repeat(1_000_000),entityId:'retained-source-record'}];
+    const csv=serializeGrowthCsv(report,'months');
+    expect(csv.match(/retained-source-record/g)).toHaveLength(1);
+    expect(csv).toContain('"report_metadata_data_row"');
+    expect(csv.split('\r\n').filter(Boolean)).toHaveLength(101);
+    expect(Buffer.byteLength(csv)).toBeLessThan(2_000_000);
+    expect(csv).toContain('"month-row-99"');
+  });
   it("exports source provenance, cohort IDs, exact windows, certainty and null metric states", () => {
     const csv = serializeGrowthCsv(fixture(), "months");
     for (const value of ["growth-r1", "2026-06|2026-07|2026-08", "2026-05", "inferred", "lesson1", "2026-10-01T04:00:00Z", "CREDITS_MISSING", "source_coverage", "newStudentHours_value"]) expect(csv).toContain(value);

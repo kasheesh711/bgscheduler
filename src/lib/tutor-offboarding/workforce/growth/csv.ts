@@ -23,11 +23,12 @@ function cell(value: unknown): string {
 
 /** A lossless export of the selected chart rows, including their evidence and assumptions. */
 export function serializeGrowthCsv(report: GrowthReport, section: GrowthExportSection): string {
-  const commonHeaders = ["report_revision", "generated_at", "filters", "scenario", "common_window", "forecast_base_month", "source_status", "source_issues", "source_coverage", "source_exceptions", "availability_observed_at", "lifecycle_evidence", "forecast_assumptions"];
+  const commonHeaders = ["report_revision", "generated_at", "filters", "scenario", "common_window", "forecast_base_month", "source_status", "source_issues", "source_coverage", "source_exceptions", "availability_observed_at", "lifecycle_evidence", "forecast_assumptions", "report_metadata_data_row"];
   const commonValues: unknown[] = [report.reportRevision, report.generatedAt, report.query.filters, report.query.assumptions,
     report.flows.commonWindow.join("|"), report.forecast.baseMonth, report.quality.completeness,
     report.quality.issueCodes.join("|"), report.quality.sourceCoverage, report.quality.exceptions,
-    [...new Set(report.forecast.allocations.flatMap(row => row.observedAt))].sort(), null, report.forecast.assumptions];
+    [...new Set(report.forecast.allocations.flatMap(row => row.observedAt))].sort(), null, report.forecast.assumptions, 1];
+  const commonCells = commonValues.map(cell);
   const keys = ["courseKey", "subject", "curriculum", "level", ...rowKeys[section]];
   const headers = [...commonHeaders, ...keys, ...metricKeys[section].flatMap(key => [`${key}_value`, `${key}_completeness`, `${key}_reasons`]), "model_inputs", "hiring_benchmark"];
   const rows = section === "months" ? report.flows.months : section === "averages" ? report.flows.averages
@@ -35,23 +36,24 @@ export function serializeGrowthCsv(report: GrowthReport, section: GrowthExportSe
   const events = new Map(report.flows.lifecycleEvents.map(event => [event.eventKey, event]));
   const inputs = new Map(report.forecast.inputs.map(input => [input.courseKey, input]));
   const benchmarks = new Map(report.forecast.hiring.map(estimate => [JSON.stringify([estimate.month, estimate.courseKey]), estimate]));
-  const lines = rows.map(row => {
+  const lines = rows.map((row, rowIndex) => {
     const record = row as unknown as Record<string, unknown>;
     const contributors = record.contributors as { eventKeys?: string[] } | undefined;
     const relevantEvents = section === 'months'
       ? (contributors?.eventKeys ?? []).flatMap(key => events.has(key) ? [events.get(key)!] : [])
       : report.flows.lifecycleEvents.filter(event => event.subject === row.subject && report.flows.commonWindow.includes(event.effectiveMonth));
-    const provenance = [...commonValues];
+    // Report-wide evidence is retained once, not multiplied by every chart cell.
+    const provenance = commonCells.map((value, index) => rowIndex > 0 && [2, 3, 7, 8, 9, 10, 12].includes(index) ? '""' : value);
     // Keep unrelated people and lifecycle histories out of every exported row.
-    provenance[11] = relevantEvents;
+    provenance[11] = cell(relevantEvents);
     const values = metricKeys[section].flatMap(key => {
       const metric = record[key] as WorkforceMetric | undefined;
       return [metric?.value ?? null, metric?.completeness ?? "unknown", metric?.reasonCodes.join("|") ?? "NOT_AVAILABLE"];
     });
-    return [...provenance, ...keys.map(key => record[key]), ...values,
+    return [...provenance, ...[...keys.map(key => record[key]), ...values,
       inputs.get(row.courseKey) ?? null,
       benchmarks.get(JSON.stringify([record.month, row.courseKey])) ?? null,
-    ].map(cell).join(",");
+    ].map(cell)].join(",");
   });
   return [headers.map(cell).join(","), ...lines].join("\r\n") + "\r\n";
 }

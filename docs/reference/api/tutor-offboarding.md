@@ -96,6 +96,9 @@ Export adds `section=months|subjects|week|people` and mandatory `reportRevision`
 any CSV is returned. UTF-8 CSV contains the selected filters, source revision, each metric's value/completeness/reasons,
 and the coverage-aligned utilization numerators. Spreadsheet formula-leading strings are neutralized; quotes and
 newlines are escaped. The filename contains the validated section and dates.
+Report-wide source issues, coverage and exceptions appear in the first data row. Every row carries
+`report_metadata_data_row=1` and the report revision; blank metadata cells in later rows refer to that first row.
+This preserves the complete source evidence without duplicating it for every exported metric row.
 
 Mappings GET uses the shared filters and returns `{mappings,unmappedClasses}`. Each unmapped row carries classId,
 sourceValue, bookedHours and sessionsCount. POST accepts `{id?,classId,sourceValue,subject,curriculum,level,expectedRevision}`;
@@ -133,3 +136,6 @@ Export adds `reportRevision` and `section=months|averages|forecast|gaps`. It inc
 months, contributor identifiers, inferred/observed certainty, source coverage and observation times, scenario inputs,
 metric completeness and hiring benchmark context. A stale revision returns 409. CSV uses UTF-8 with a BOM, escaped
 quotes/newlines and neutralized formula-leading text. All outcomes use `Cache-Control: private, no-store`.
+Report-wide filters, scenario, source evidence, availability observation times and forecast assumptions appear once
+in the first data row, referenced by `report_metadata_data_row=1`. Row-specific metrics, lifecycle contributions,
+model inputs and hiring benchmarks remain on their own rows. JSON and CSV responses stream complete content.
