@@ -101,14 +101,14 @@ export function TurnoverChart({
                     r={selectedMonth === m.month ? 5 : 3.5}
                     fill={INK.supply}
                   />
-                  <text
+                  {(!mobile || selectedMonth === m.month || index === 0 || index === months.length - 1) && <text
                     x={middle(m.month)}
                     y={y(m.turnoverPercent.value) - 10}
                     textAnchor="middle"
                     fill={INK.supply}
                   >
                     {formatMetric(m.turnoverPercent, "%")}
-                  </text>
+                  </text>}
                 </>
               ) : (
                 <text
