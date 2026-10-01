@@ -107,11 +107,13 @@ export function buildTurnoverMonths(evidence: WorkforceEvidence, query: Workforc
   const missingJoins = people.some(p => p.joinedAt === null);
   const uncertainDepartures = people.some(p => p.markedForDeparture && !p.pendingDeparture && p.departedAt === null);
   const unknownRemovalDates = people.some(p => p.rosterState === "off_roster" && !p.departedAt);
+  const terminationSourceIncomplete = !evidence.sourceCoverage.some(c => c.source === "termination_sheet" &&
+    c.completeness === "complete" && !c.truncated && !c.issueCodes.includes("unmatched_termination_identity"));
   const reasons = ["WISE_ROSTER_RECONSTRUCTED", "ROLE_HISTORY_RECONSTRUCTED",
     ...(missingJoins ? ["JOIN_DATE_UNKNOWN"] : []), ...(uncertainDepartures ? ["DEPARTURE_DATE_UNCONFIRMED"] : []),
     ...(unresolvedRoles ? ["ROLE_UNCONFIRMED"] : []), ...(unresolvedModality ? ["MODALITY_HISTORY_UNCONFIRMED"] : []),
-    ...(unknownRemovalDates ? ["REMOVAL_DATE_UNKNOWN"] : [])];
-  const incomplete = missingJoins || uncertainDepartures || unresolvedRoles || unresolvedModality || unknownRemovalDates;
+    ...(unknownRemovalDates ? ["REMOVAL_DATE_UNKNOWN"] : []), ...(terminationSourceIncomplete ? ["TERMINATION_SOURCE_INCOMPLETE"] : [])];
+  const incomplete = missingJoins || uncertainDepartures || unresolvedRoles || unresolvedModality || unknownRemovalDates || terminationSourceIncomplete;
   const selectedStart = bangkokDayStart(query.from), selectedEnd = bangkokDayStart(query.to) + DAY;
   const rows: WorkforceTurnoverMonth[] = [];
   for (let month = query.from.slice(0, 7); month <= query.to.slice(0, 7);) {
@@ -130,8 +132,8 @@ export function buildTurnoverMonths(evidence: WorkforceEvidence, query: Workforc
       openingRosterCount: metric(unsupported ? null : opening.length, rowReasons, incomplete),
       closingRosterCount: metric(unsupported ? null : closing.length, rowReasons, incomplete),
       joinsCount: metric(unsupported ? null : joined.length, rowReasons, missingJoins || unresolvedRoles || unresolvedModality),
-      departuresCount: metric(unsupported ? null : departed.length, rowReasons, uncertainDepartures || unresolvedRoles || unresolvedModality),
-      pendingCount: metric(unsupported ? null : pending.length, rowReasons, unresolvedRoles || unresolvedModality),
+      departuresCount: metric(unsupported ? null : departed.length, rowReasons, uncertainDepartures || unresolvedRoles || unresolvedModality || terminationSourceIncomplete),
+      pendingCount: metric(unsupported ? null : pending.length, rowReasons, unresolvedRoles || unresolvedModality || terminationSourceIncomplete),
       turnoverPercent: metric(unsupported || incomplete || opening.length === 0 ? null : departed.length / opening.length * 100,
         [...rowReasons, ...(opening.length === 0 ? ["NO_OPENING_ROSTER"] : [])]),
       joinedPersonKeys: unsupported ? [] : joined.map(p => p.canonicalKey),

@@ -12,7 +12,7 @@ function session(key: string, changes: Partial<WorkforceSession> = {}): Workforc
 }
 function evidence(people: WorkforcePerson[], sessions: WorkforceSession[] = []): WorkforceEvidence {
   const coverage = { requestedFrom: "2026-03-01", requestedTo: "2026-10-01", returnedFrom: "2026-03-01", returnedTo: "2026-10-01", observedAt: now.toISOString(), pagesRequested: 1, pagesReturned: 1, recordsReturned: sessions.length, truncated: false, completeness: "complete" as const, issueCodes: [] };
-  return { people, sessions, observations: [], tutorFacts: [], historicalBookedParticipants: [], studentCredits: [], subjectMappings: [], terminationMarks: sessions.map(s => ({ canonicalKey: s.canonicalTutorKeys[0], effectiveAt: null, markedAt: now.toISOString(), status: "complete", sourceId: s.wiseSessionId })), sourceCoverage: [{ ...coverage, source: "wise_history" }, { ...coverage, source: "wise_future_snapshot" }] };
+  return { people, sessions, observations: [], tutorFacts: [], historicalBookedParticipants: [], studentCredits: [], subjectMappings: [], terminationMarks: sessions.map(s => ({ canonicalKey: s.canonicalTutorKeys[0], effectiveAt: null, markedAt: now.toISOString(), status: "complete", sourceId: s.wiseSessionId })), sourceCoverage: [{ ...coverage, source: "wise_history" }, { ...coverage, source: "wise_future_snapshot" }, { ...coverage, source: "termination_sheet" }] };
 }
 describe("monthly reconstructed Wise roster", () => {
   it("uses opening roster: three departures among sixty is five percent", () => {
@@ -82,5 +82,13 @@ describe("monthly reconstructed Wise roster", () => {
     const row = buildTurnoverMonths(evidence([person("p")]), { ...query, subject: "Math" }, now)[0];
     expect(row.turnoverPercent.value).toBeNull();
     expect(row.openingRosterCount.reasonCodes).toContain("HISTORICAL_QUALIFICATIONS_UNAVAILABLE");
+  });
+  it("does not turn a failed termination source into zero turnover", () => {
+    const data = evidence([person("p")]);
+    data.sourceCoverage = data.sourceCoverage.filter(c => c.source !== "termination_sheet");
+    const row = buildTurnoverMonths(data, query, now)[0];
+    expect(row.departuresCount.completeness).toBe("partial");
+    expect(row.turnoverPercent.value).toBeNull();
+    expect(row.turnoverPercent.reasonCodes).toContain("TERMINATION_SOURCE_INCOMPLETE");
   });
 });
