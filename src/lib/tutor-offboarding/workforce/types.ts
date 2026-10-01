@@ -89,6 +89,7 @@ export interface StudentCreditEvidence {
   /** Positive net credits deducted; refunds reduce this value. */
   netCredits: number | null;
   normalCredits: number | null;
+  /** Verification of the net session deduction; a normal charge may still be unknown. */
   evidenceStatus: StudentCreditEvidenceStatus;
   sourceInterpretation: StudentCreditSourceInterpretation;
   observedAt: string | null; issueCodes: string[];
