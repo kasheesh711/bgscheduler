@@ -4,7 +4,7 @@ Date: 1 October 2026. Extension to the approved [workforce analytics design](202
 
 ## Purpose
 
-Show which subjects are gaining or losing demand, then project the extra weekly tutor availability needed over the next twelve months. The owner decides how many people to hire. This feature changes no Wise bookings, student statuses, or tutor accounts.
+Show which subjects are gaining or losing demand, then project the extra weekly tutor availability needed over the next twelve months. Include the owner's subsequently approved hiring estimate by subject, curriculum and level; the owner makes the hiring decision. This feature changes no Wise bookings, student statuses, or tutor accounts.
 
 Keep this view inside Tutor Offboarding → Analytics, alongside the workforce, subject coverage, and tutor utilization views. Reuse their Bangkok dates, academic subject mappings, evidence indicators, and export conventions.
 
@@ -105,7 +105,17 @@ Show:
 - The shared overall gap, calculated independently rather than by summing overlapping subject rows.
 - A minimum requirement with a **0% buffer** initially, plus an optional editable spare-capacity buffer. Define a 20% buffer as twenty percent extra availability above the minimum, so it is not confused with an 80% utilization target.
 
-Do not calculate a recommended hiring headcount. The owner will decide it from the hours and subject coverage needed.
+### Hiring estimate — approved addition, 1 October
+
+Break demand and shortages down by subject, curriculum and level. Cohort identity remains student × subject: changing level does not create new subject demand. Attribute booked hours to their recorded course dimensions; distribute churn baseline hours across the course dimensions present in its three baseline months. Do not invent future level promotions.
+
+For each course dimension, use the arithmetic mean of offered weekly availability from all current qualified tutors and teaching administrators, including people awaiting their first assigned class. Exclude anyone marked for departure and anyone with unknown availability. Include known zero schedules and show eligible/known counts and observation dates.
+
+The benchmark for a new hire is the average offered time that overlaps that course's forecast shortage windows. Show the full offered average alongside it. Example: comparable tutors offer eight hours weekly but only three at shortage times; use three in the hiring calculation and display both. Current bookings and individual leave do not reduce this offered-time benchmark for a prospective new hire; they already affect the existing workforce's shortage.
+
+For each projected month, show `extra weekly hours / average matching offered weekly hours`, both as fractional tutor equivalents and rounded up to whole hires. Apply the optional buffer to the hours before converting. If the matching average is zero or unavailable, show that a tutor offering different hours is needed and leave the numeric estimate unavailable. Show the benchmark sample size; estimates based on a small or incomplete sample remain visibly limited.
+
+Calculate the shortage using shared capacity first. Course-level estimates overlap and must not be added into an overall hiring total. This is a planning estimate, not an automatic recruitment or employment decision.
 
 ## Interface and evidence
 
