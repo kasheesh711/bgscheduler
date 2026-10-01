@@ -225,6 +225,7 @@ export async function submitFeedbackGuarded(input: {
   plan: SubmitPlan;
   gateInput: GateInput;
   apiActorId: string;
+  validateEvidence?: (detail: AutowriterSessionDetail) => Promise<boolean>;
   remainingMs: () => number;
   dryRun?: boolean;
   sleep?: (ms: number) => Promise<void>;
@@ -288,6 +289,7 @@ export async function submitFeedbackGuarded(input: {
   if (input.dryRun) return { status: "preflight_ok", bodyHash };
   if (budgetTooSmall()) return abort("function_budget_too_small_for_post");
 
+  if (input.validateEvidence && !await input.validateEvidence(before)) return abort("iseb_evidence_changed");
   const claim = await store.claimPost({
     bodyHash,
     fieldsSha256: fieldsHash(plan.fields),

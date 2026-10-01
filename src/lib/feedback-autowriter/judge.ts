@@ -1,3 +1,4 @@
+import { ATOM_MODEL_RULES } from "./atom/evidence";
 import { z } from "zod";
 import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
 import { AUTOWRITER_JUDGE_EFFORTS } from "./config";
@@ -97,6 +98,7 @@ const judgeSystemPrompt = (evidence: EvidenceKind, labels: SpeakerLabels) => [
  */
 export function buildJudgeMessages(input: {
   redactedSummary: string;
+  atomEvidence?: string;
   /** Already redacted `classDetailsBlock` text (may be empty). */
   classDetails: string;
   placeholderFields: FeedbackFieldAnswers;
@@ -117,11 +119,11 @@ export function buildJudgeMessages(input: {
   ].join("\n");
   const people = evidence === "summary" ? otherPeopleLine(input.otherPeople) : null;
   return [
-    { role: "system", content: judgeSystemPrompt(evidence, input.speakerLabels ?? "inferred") },
+    { role: "system", content: judgeSystemPrompt(evidence, input.speakerLabels ?? "inferred") + (input.atomEvidence ? "\n" + ATOM_MODEL_RULES + "\nWhen the sources explicitly contradict each other, add SOURCE_CONTRADICTION: followed by the conflicting claims to unsupported, even if the draft omits the conflict. Do not judge style or formatting." : "") },
     {
       role: "user",
       content: `Class details (from the school's system — true):\n${input.classDetails || "- (none)"}\n\n${people ? `${people}\n\n` : ""}` +
-        `${evidence === "summary" ? "Lesson summary" : "Lesson transcript"}:\n${input.redactedSummary}\n\nFeedback:\n${feedback}`,
+        `${evidence === "summary" ? "Lesson summary" : "Lesson transcript"}:\n${input.redactedSummary}${input.atomEvidence ? `\n\nFrozen Atom lesson evidence:\n${input.atomEvidence}` : ""}\n\nFeedback:\n${feedback}`,
     },
   ];
 }

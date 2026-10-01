@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AtomReviewTools } from "./atom-review";
 import { Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { AutowriterDashboard } from "@/lib/feedback-autowriter/dashboard";
@@ -294,6 +295,7 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
           </div>
           <div className="space-y-3">
             <ClassesLog dashboard={data} review={loaded} tutorKey={tutorKey} onTutorChange={selectTutor} onOpen={setTarget} />
+            <AtomReviewTools canControl={canControl} />
             <SystemDetails dashboard={data} review={loaded} onOpen={setTarget} />
           </div>
         </section>

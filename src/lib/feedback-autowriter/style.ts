@@ -12,6 +12,11 @@ export const MIMI_STYLE_GUIDE: FeedbackStyleGuide = {
   id: "mimi", version: 1, canonicalTutorKey: "Mimi", examples: mimiExamples.examples,
 };
 
+/** V1 examples remain immutable; v2 changes guidance only and gets its own stamp. */
+export const MIMI_STYLE_GUIDE_V2: FeedbackStyleGuide = Object.freeze({
+  ...MIMI_STYLE_GUIDE, version: 2,
+});
+
 /** Disabled until the owner approves the ten-draft comparison. Both accounts resolve via the canonical key. */
 export function activeStyleGuide(
   canonicalTutorKey: string | undefined,
@@ -33,6 +38,14 @@ export function matchingStoredStyle(stored: unknown, expected: FeedbackStyleGuid
 }
 
 export function styleInstructions(guide: FeedbackStyleGuide): string {
+  if (guide.version === 2) return [
+    "Mimi voice guide v2 (presentation only): warm, direct, specific English in the tutor's voice; use I or we naturally.",
+    "Keep the concrete coaching in improvement, as numbered actions. Do not move it away or reduce it to vague labels.",
+    "When the current lesson supports it: ask the student to choose multiple-choice answers independently, use precise words for particle motion and energy, and interpret sloping and flat parts of heating graphs. These are examples of specificity, not facts to copy.",
+    "Follow shared ISEB format v1 for field structure. No forced praise, closing sentence or strategy count.",
+    "These frozen historical examples illustrate Mimi's voice only. Their topics, scores, observations, materials, dates and homework are not evidence for the current lesson.",
+    ...guide.examples.map((example, index) => `Historical voice example ${index + 1}:\n${JSON.stringify(example.fields)}`),
+  ].join("\n");
   return [
     `Writing guide ${guide.id} v${guide.version} (presentation only; the lesson record is the only evidence):`,
     "topics: concise numbered items, one item per line, numbered 1., 2., 3. in order. Use brief topic labels rather than explanations of every concept discussed. A short material label, Atom learning or Worksheets, may precede a list only when that material is named in THIS lesson record; restart numbering at 1 after a label.",
