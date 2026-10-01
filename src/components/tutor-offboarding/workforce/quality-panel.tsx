@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Panel, Tag } from "../atoms";
 import { bangkokTime } from "./presentation";
+import { EvidenceIssueSummary } from "./evidence-issue-summary";
 import {
   fetchMappingReview,
   saveMappingReview,
@@ -78,11 +79,7 @@ export function QualityContent({ report }: { report: WorkforceReport }) {
       {report.quality.exceptions.length ? (
         <div>
           <h4 className="mb-2 font-semibold">Evidence requiring review</h4>
-          {report.quality.exceptions.map((issue, i) => (
-            <p key={i} className="mb-2 text-xs [overflow-wrap:anywhere]">
-              {issue.message}
-            </p>
-          ))}
+          <EvidenceIssueSummary issues={report.quality.exceptions} />
         </div>
       ) : null}
     </div>

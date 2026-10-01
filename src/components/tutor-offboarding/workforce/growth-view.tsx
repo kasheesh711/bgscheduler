@@ -30,6 +30,7 @@ import {
   fetchGrowthReport,
 } from "./growth-requests";
 import { LatestRequest, WorkforceRequestError } from "./requests";
+import { EvidenceIssueSummary } from "./evidence-issue-summary";
 import {
   bangkokTime,
   formatMetric,
@@ -716,11 +717,7 @@ export function GrowthView({
                   </p>
                 </div>
               ))}
-              {detail.exceptions.map((e, i) => (
-                <p key={i} className="text-amber-800 dark:text-amber-200">
-                  {e.message}
-                </p>
-              ))}
+              <EvidenceIssueSummary issues={detail.exceptions} />
               {detail.nextCursor && (
                 <Button
                   variant="outline"

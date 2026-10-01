@@ -81,12 +81,13 @@ export async function getGrowthDrilldown(db: Database, query: GrowthDetailQuery,
   ].sort((a, b) => a.sortKey.localeCompare(b.sortKey));
   if (offset > records.length) throw new TutorOffboardingError("The detail cursor is outside this report.", 400);
   const page = records.slice(offset, offset + pageSize), nextOffset = offset + page.length;
+  const pageSessionIds = new Set(page.filter(value => value.kind === "session").map(value => value.value.wiseSessionId));
   return { reportRevision: report.reportRevision, kind: query.kind, key: query.key,
     contributors: capacity ? { studentIds: unique(sessions.flatMap(value => value.historicalBookedStudentIds ?? [])), sessionIds: sessions.map(value => value.wiseSessionId).sort(), eventKeys: [] } : contributors,
     sessions: page.filter(value => value.kind === "session").map(value => value.value),
     events: page.filter(value => value.kind === "event").map(value => value.value),
     observations: page.filter(value => value.kind === "observation").map(value => value.value),
-    exceptions: report.quality.exceptions,
+    exceptions: report.quality.exceptions.filter(issue => !issue.entityId || pageSessionIds.has(issue.entityId)),
     nextCursor: nextOffset < records.length ? Buffer.from(JSON.stringify({ revision: report.reportRevision, kind: query.kind, key: query.key, offset: nextOffset })).toString("base64url") : null,
   };
 }
