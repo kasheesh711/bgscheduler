@@ -1,5 +1,7 @@
 import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, ne, sql } from "drizzle-orm";
+import { z } from "zod";
 import { auth } from "@/lib/auth";
+import { isSuperAdminEmail } from "@/lib/admin-users/policy";
 import { getDb, type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { classroomTimestampToWiseIso } from "@/lib/classrooms/timestamps";
@@ -11,30 +13,35 @@ import { captureEnabled, CaptureError, type CaptureSession } from "./model";
 
 export type CaptureScope = { email: string; keys: string[] | null };
 
-/** Fresh exact email bindings; names, JWT page claims and other tools grant nothing. */
+const pilotEmailSchema = z.email().max(254);
+function normalizedPilotEmail(value: unknown): string | null {
+  // Permit surrounding configuration whitespace without accepting unbounded input,
+  // address lists, display names, aliases or Unicode lookalikes as another identity.
+  if (typeof value !== "string" || value.length > 320) return null;
+  const parsed = pilotEmailSchema.safeParse(value.trim());
+  return parsed.success ? parsed.data.toLowerCase() : null;
+}
+
+/** A single designated owner AND fresh admin access gate every pilot entry point. */
 export async function requireCaptureScope(): Promise<CaptureScope> {
   const session = await auth();
-  const email = session?.user?.email?.trim().toLowerCase();
+  const email = normalizedPilotEmail(session?.user?.email);
   if (!email) throw new CaptureError(401, "Sign in to use Class Capture.");
-  const db = getDb();
-  const [admin] = await db.select({ disabled: s.adminUsers.disabled, allowedPages: s.adminUsers.allowedPages })
-    .from(s.adminUsers).where(sql`lower(btrim(${s.adminUsers.email})) = ${email}`).limit(1);
-  if (admin) {
-    if (session?.user?.role !== "admin" || admin.disabled || (admin.allowedPages !== null && !admin.allowedPages.includes("/class-capture"))) {
-      throw new CaptureError(403, "Class Capture access has not been granted or has been revoked.");
-    }
-    return { email, keys: null };
+  const pilotEmail = normalizedPilotEmail(process.env.CLASS_CAPTURE_PILOT_EMAIL);
+  const accessVersion = session?.user?.adminAccessVersion;
+  if (session?.user?.role !== "admin" || !pilotEmail || email !== pilotEmail || !isSuperAdminEmail(email) ||
+    typeof accessVersion !== "number" || !Number.isInteger(accessVersion) || accessVersion < 0) {
+    throw new CaptureError(403, "Class Capture is limited to its configured website-owner pilot.");
   }
-  if (session?.user?.role === "admin") throw new CaptureError(403, "Sign in again to refresh your access.");
-  const contacts = await db.select({ canonicalKey: s.tutorContacts.canonicalKey, active: s.tutorContacts.active,
-    onsiteEmail: s.tutorContacts.onsiteEmail, onlineEmail: s.tutorContacts.onlineEmail })
-    .from(s.tutorContacts).where(and(eq(s.tutorContacts.active, true),
-      sql`(lower(btrim(${s.tutorContacts.onsiteEmail})) = ${email} or lower(btrim(${s.tutorContacts.onlineEmail})) = ${email})`));
-  const keys = [...new Set(contacts.filter(contact => contact.active &&
-    [contact.onsiteEmail, contact.onlineEmail].some(value => value?.trim().toLowerCase() === email))
-    .map(contact => contact.canonicalKey).filter(Boolean))];
-  if (keys.length !== 1) throw new CaptureError(403, "Your tutor identity needs an administrator to review it.");
-  return { email, keys };
+  const db = getDb();
+  const [admin] = await db.select({ disabled: s.adminUsers.disabled, allowedPages: s.adminUsers.allowedPages,
+    accessVersion: s.adminUsers.accessVersion }).from(s.adminUsers)
+    .where(sql`lower(btrim(${s.adminUsers.email})) = ${email}`).limit(1);
+  if (!admin || admin.disabled !== false || admin.accessVersion !== accessVersion ||
+    (admin.allowedPages !== null && (!Array.isArray(admin.allowedPages) || !admin.allowedPages.includes("/class-capture")))) {
+    throw new CaptureError(403, "Class Capture access has not been granted or is no longer current. Sign in again after access is restored.");
+  }
+  return { email, keys: null };
 }
 
 /** Navigation uses the same current grant as the page; a stale cookie cannot expose the tool. */
