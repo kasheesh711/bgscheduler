@@ -1,6 +1,8 @@
 import { and, desc, eq, gte, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { feedbackMailboxStatus } from "./gmail-credentials";
+import { reminderLineStatus } from "./reminder-line";
 import type { CronJobHealth } from "@/lib/data-health/types";
 import { latestNightlyDate, nightlyCheckpoint, nightlyCounts, nightlyWindow } from "./nightly-reminder-model";
 
@@ -14,8 +16,16 @@ export async function loadNightlyReminderHealth(db: Database = getDb(), now = ne
       and(eq(schema.postClassNotificationDeliveries.status, "sending"), lt(schema.postClassNotificationDeliveries.updatedAt, new Date(now.getTime() - 15 * 60_000))),
     )));
   const unresolvedDeliveries = Number(uncertain?.count ?? 0);
-  const [alert] = await db.select().from(schema.cronAlertState).where(eq(schema.cronAlertState.jobKey, "post_class_feedback_nightly")).limit(1);
-  const alertDeliveryError = alert?.errorSummary?.startsWith("Alert delivery failure:") ? alert.errorSummary : null;
+  const [mailbox, line] = await Promise.all([feedbackMailboxStatus(db), reminderLineStatus(db)]);
+  const alertDeliveryError = line.alertError;
+  const connectionFailure = mode === "live" && (!mailbox.connected || mailbox.lastError || !line.verified);
+  const connectionDetail = connectionFailure ? "Gmail or private LINE connection needs attention. " : "";
+  const [completed] = await db.select({ date: schema.postClassNotificationRuns.scheduledFor }).from(schema.postClassNotificationRuns).where(and(
+    eq(schema.postClassNotificationRuns.kind, "tutor_nightly"),
+    sql`${schema.postClassNotificationRuns.metadata}->>'mode' = 'live'`,
+    sql`${schema.postClassNotificationRuns.metadata}->>'sourceComplete' = 'true'`,
+    sql`${schema.postClassNotificationRuns.status} in ('sent', 'cancelled')`,
+  )).orderBy(desc(schema.postClassNotificationRuns.scheduledFor)).limit(1);
   let date = latestNightlyDate(now, mode === "live" ? config?.reminderActivatedAt ?? null : config?.reminderStartedAt ?? null);
   if (!date && mode === "shadow") {
     const [preview] = await db.select().from(schema.postClassNotificationRuns).where(and(
@@ -26,11 +36,12 @@ export async function loadNightlyReminderHealth(db: Database = getDb(), now = ne
   }
   const base = { mode, date, activatedAt: config?.reminderActivatedAt?.toISOString() ?? null,
     startedAt: config?.reminderStartedAt?.toISOString() ?? null,
-    legacyDisabledAt: config?.legacyReminderDisabledAt?.toISOString() ?? null, unresolvedDeliveries, alertDeliveryError };
-  if (mode === "off" || !date) return { ...base, status: unresolvedDeliveries ? "failing" as const : "healthy" as const,
+    legacyDisabledAt: config?.legacyReminderDisabledAt?.toISOString() ?? null, unresolvedDeliveries, alertDeliveryError,
+    mailbox, line, lastCompletedBatch: completed?.date.toISOString() ?? null };
+  if (mode === "off" || !date) return { ...base, status: unresolvedDeliveries || connectionFailure || alertDeliveryError ? "failing" as const : "healthy" as const,
     runId: null, counts: nightlyCounts([]), acceptedEmails: 0, coverageGaps: 0, sourceCheckedAt: null, sourceComplete: false,
-    detail: unresolvedDeliveries ? `${unresolvedDeliveries} uncertain deliveries still require reconciliation.`
-      : mode === "off" ? "Nightly reminders are off. Saved work is retained." : "Waiting for the first prospective 22:00 Bangkok batch." };
+    detail: connectionDetail + (unresolvedDeliveries ? `${unresolvedDeliveries} uncertain deliveries still require reconciliation.`
+      : mode === "off" ? "Nightly reminders are off. Saved work is retained." : "Waiting for the first prospective 22:00 Bangkok batch.") };
   const [run] = await db.select().from(schema.postClassNotificationRuns)
     .where(eq(schema.postClassNotificationRuns.idempotencyKey, `post-class-feedback:nightly:${mode}:${date}`)).limit(1);
   const rows = run ? await db.select({ status: schema.postClassReminderLedger.status }).from(schema.postClassReminderLedger)
@@ -52,14 +63,14 @@ export async function loadNightlyReminderHealth(db: Database = getDb(), now = ne
   const sourceComplete = run?.metadata.sourceComplete === true;
   const outstanding = counts.blockedSource + counts.blockedRecipient + counts.unknown + counts.failed + counts.pending +
     (mode === "live" ? counts.ready : 0);
-  const hardFailure = Boolean(run?.errorSummary) || unresolvedDeliveries > 0 || counts.failed > 0;
+  const hardFailure = Boolean(connectionFailure || alertDeliveryError || run?.errorSummary) || unresolvedDeliveries > 0 || counts.failed > 0;
   const failed = hardFailure || (afterGrace && (!sourceComplete || outstanding > 0 || coverageGaps > 0 || (mode === "live" && counts.expired > 0)));
   return { ...base, status: failed ? "failing" as const : "healthy" as const, runId: run?.id ?? null, counts, coverageGaps,
     acceptedEmails: Number(accepted?.count ?? 0),
     sourceComplete, sourceCheckedAt: typeof run?.metadata.sourceCheckedAt === "string" ? run.metadata.sourceCheckedAt : null,
-    detail: run?.errorSummary ?? (failed
+    detail: connectionDetail + (run?.errorSummary ?? (failed
       ? `${outstanding} unresolved classes, ${unresolvedDeliveries} uncertain deliveries across all nights, ${counts.expired} missed deadlines, ${coverageGaps} coverage gaps; source ${sourceComplete ? "verified" : "unverified"}.`
-      : `${counts.sent} classes notified; ${counts.excluded} excluded; ${counts.ready} ready${mode === "shadow" ? " in shadow mode" : ""}.`),
+      : `${counts.sent} classes notified; ${counts.excluded} excluded; ${counts.ready} ready${mode === "shadow" ? " in shadow mode" : ""}.`)),
   };
 }
 
@@ -72,7 +83,7 @@ export async function applyNightlyReminderHealth(jobs: CronJobHealth[], db: Data
   try {
     const health = await loadNightlyReminderHealth(db, now);
     const status = health.status === "failing" ? "failing" : health.mode === "off" ? "paused" : job.status;
-    return jobs.map((row) => row === job ? { ...row, status, healthDetail: [health.detail, health.alertDeliveryError].filter(Boolean).join(" "),
+    return jobs.map((row) => row === job ? { ...row, status, healthDetail: [health.detail, `Gmail: ${health.mailbox.connected ? "connected" : "not connected"}. Last completed batch: ${health.lastCompletedBatch ?? "none"}.`, health.alertDeliveryError].filter(Boolean).join(" "),
       errorSummary: health.status === "failing" ? health.detail : row.errorSummary } : row);
   } catch {
     return jobs.map((row) => row === job ? { ...row, status: "unknown" as const,

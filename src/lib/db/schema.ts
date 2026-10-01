@@ -3826,6 +3826,39 @@ export const postClassEmailConnection = pgTable("post_class_email_connection", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const postClassReminderLineChannel = pgTable("post_class_reminder_line_channel", {
+  id: text("id").primaryKey().default("private"),
+  recipientId: text("recipient_id").notNull(),
+  binding: text("binding").notNull(),
+  testEvidence: jsonb("test_evidence").$type<FeedbackReceiptEvidence>(),
+  health: text("health").notNull().default("unknown"),
+  episodeId: uuid("episode_id"),
+  checkedAt: timestamp("checked_at", { withTimezone: true }),
+  detail: text("detail"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Frozen private alerts; id is also LINE's 24-hour retry key. */
+export const postClassReminderAlerts = pgTable("post_class_reminder_alerts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  episodeId: uuid("episode_id").notNull(),
+  kind: text("kind").notNull(),
+  recipientId: text("recipient_id").notNull(),
+  binding: text("binding").notNull(),
+  message: text("message").notNull(),
+  status: text("status").notNull().default("pending"),
+  attempts: integer("attempts").notNull().default(0),
+  firstAttemptAt: timestamp("first_attempt_at", { withTimezone: true }),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  leaseToken: uuid("lease_token"),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  lastError: text("last_error"),
+  receipt: text("receipt"),
+  acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [uniqueIndex("pc_reminder_alert_episode_idx").on(table.episodeId, table.kind)]);
+
 export const postClassNotificationRuns = pgTable("post_class_notification_runs", {
   id: uuid("id").primaryKey().defaultRandom(),
   kind: postClassNotificationKindEnum("kind").notNull(),
