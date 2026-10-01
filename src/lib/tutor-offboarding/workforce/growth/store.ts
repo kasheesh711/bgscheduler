@@ -6,6 +6,8 @@ import { workforceBookingClassifications as bookings, workforceCourseLifecycleEv
 import { workforceContentHash } from "../observations";
 import { loadWorkforceEvidenceInTransaction } from "../source-db";
 import type { GrowthBookingMetadata, GrowthEvidence, GrowthLifecycleEvent } from "./types";
+import { normalizeGrowthBookingMetadata } from "./source";
+import { resolveAcademicSubject } from "../subject-mappings";
 
 const CHUNK = 500;
 const payload = (value: object): Record<string, unknown> => value as Record<string, unknown>;
@@ -91,9 +93,16 @@ export async function loadGrowthEvidence(db: Database, now = new Date()): Promis
       tx.select().from(bookings).where(eq(bookings.isCurrent, true)),
       tx.select().from(lifecycle).where(eq(lifecycle.isCurrent, true)),
     ]);
+    const retained = new Map(classifications.map(r => [r.wiseSessionId, r.payload as unknown as GrowthBookingMetadata]));
+    const bookingMetadata = workforce.sessions.map(session => {
+      const prior = retained.get(session.wiseSessionId);
+      if (prior?.classification !== "unknown" && prior && !prior.reasonCodes.includes("OWNER_CONFIRMED_TITLE_CLASSIFICATION")) return prior;
+      return normalizeGrowthBookingMetadata(session, session.observedAt ?? prior?.observedAt ?? now.toISOString(),
+        resolveAcademicSubject({classId:session.wiseClassId, sourceValue:session.classTitle}, workforce.subjectMappings).completeness === "complete");
+    });
     return {
       workforce,
-      bookingMetadata: classifications.map(r => r.payload as unknown as GrowthBookingMetadata),
+      bookingMetadata,
       lifecycleEvents: events.map(r => r.payload as unknown as GrowthLifecycleEvent),
       revision: workforceContentHash({ workforce: workforce.revision, classifications: classifications.map(r => [r.id, r.revision]).sort(), events: events.map(r => [r.id,r.revision]).sort() }),
     };

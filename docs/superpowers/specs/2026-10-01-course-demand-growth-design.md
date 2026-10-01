@@ -25,6 +25,7 @@ Show a flat-demand comparison. Do not invent seasonality or a statistical confid
 The cohort key is **student × academic subject**. A new level or curriculum within an existing subject does not create a new cohort. Starting Physics after studying Maths does.
 
 - Start at the student's first regular booking in that subject. Show trials and pretests separately; they do not start a regular-course cohort. Use recorded booking/course classification, not a zero-credit assumption, to identify trials.
+- Owner-approved source rule: when Wise has no explicit lesson-purpose field, identify whole-word `trial` or `pretest`/`pre-test` markers in the title. Other academically mapped lessons count as regular; unmapped lessons remain for review. Conflicting explicit purpose/title evidence stays unresolved. Record this policy as owner-confirmed, and recalculate after an academic mapping changes.
 - Sum that student's regular booked hours in the starting calendar month. Keep cancelled bookings and no-shows in gross booked demand, consistent with the existing dashboard.
 - A student new to the business and an existing student starting a subject both contribute.
 - Example: John starts Maths and books four hours; Evan already studies another subject and starts Maths with eight hours. New Maths demand is twelve **student-hours**.

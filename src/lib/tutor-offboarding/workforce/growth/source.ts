@@ -9,7 +9,7 @@ const asRecord = (v: unknown): Record<string, unknown> =>
   v !== null && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
 
 /** Purpose is independent of price, class format and academic subject. */
-export function normalizeGrowthBookingMetadata(raw: unknown, observedAt: string): GrowthBookingMetadata {
+export function normalizeGrowthBookingMetadata(raw: unknown, observedAt: string, hasReviewedAcademicSubject = false): GrowthBookingMetadata {
   const row = asRecord(raw), classroom = asRecord(row.classId), retained = asRecord(row.bookingClassificationSource);
   const id = row.wiseSessionId ?? row._id;
   if (typeof id !== "string" || !id.trim()) throw new Error("Missing growth session identity");
@@ -24,6 +24,11 @@ export function normalizeGrowthBookingMetadata(raw: unknown, observedAt: string)
     const kind = CLASSIFICATIONS.get(value.trim().toUpperCase().replace(/[ -]+/g, "_"));
     return kind ? [{ field, value, kind }] : [];
   });
+  const titleValue = row.classTitle ?? row.title ?? retained.title;
+  const title = typeof titleValue === "string" ? titleValue : "";
+  if (/\btrial\b/i.test(title)) matches.push({ field: "title", value: title, kind: "trial" });
+  if (/\bpre[\s_-]*test\b/i.test(title)) matches.push({ field: "title", value: title, kind: "pretest" });
+  if (!matches.length && hasReviewedAcademicSubject) matches.push({ field: "reviewed_academic_mapping", value: title, kind: "regular" });
   const kinds = new Set(matches.map(m => m.kind));
   const conflict = kinds.size > 1;
   const match = !conflict && matches.length ? matches[0] : null;
@@ -32,6 +37,6 @@ export function normalizeGrowthBookingMetadata(raw: unknown, observedAt: string)
     sourceField: match?.field ?? (candidates.length ? candidates.map(c => c[0]).join(" | ") : null),
     sourceValue: match?.value ?? (candidates.length ? candidates.map(c => c[1]).join(" | ") : null),
     observedAt: new Date(observedAt).toISOString(), completeness: match ? "complete" : "unknown",
-    reasonCodes: match ? [] : [conflict ? "CONFLICTING_BOOKING_CLASSIFICATION" : "BOOKING_CLASSIFICATION_UNAVAILABLE"],
+    reasonCodes: match ? ["title", "reviewed_academic_mapping"].includes(match.field) ? ["OWNER_CONFIRMED_TITLE_CLASSIFICATION"] : [] : [conflict ? "CONFLICTING_BOOKING_CLASSIFICATION" : "BOOKING_CLASSIFICATION_UNAVAILABLE"],
   };
 }

@@ -4,6 +4,8 @@ import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { loadGrowthEvidence, reconcileGrowthLifecycleEvents, storeGrowthBookingMetadata } from "../store";
 import type { GrowthBookingMetadata, GrowthLifecycleEvent } from "../types";
+import { persistWorkforceSourceWindow } from "../../observation-store";
+import { window } from "../../__tests__/fixtures";
 let h: Awaited<ReturnType<typeof startTestDb>>;
 beforeAll(async () => { h = await startTestDb(); }, 60000);
 afterAll(async () => { if (h) await stopTestDb(h); });
@@ -48,4 +50,16 @@ it("supports explicit supersession and changes report revision with mapping revi
   await h.db.insert(s.workforceSubjectMappings).values({ sourceValue: "Maths", subject: "Maths", revision: 1, reviewedBy: "test", reviewedAt: new Date() });
   const after = await loadGrowthEvidence(db(), new Date("2026-10-02T03:00:00Z"));
   expect(after.revision).not.toBe(before.revision);
+});
+it("recomputes the owner title rule after academic review without writing during a report read", async () => {
+  const source = window();
+  source.sessions[0].classTitle = "Academic Maths";
+  await persistWorkforceSourceWindow(db(), source);
+  const before = await loadGrowthEvidence(db(), new Date("2026-10-02T03:00:00Z"));
+  expect(before.bookingMetadata[0].classification).toBe("unknown");
+  await h.db.insert(s.workforceSubjectMappings).values({ sourceValue:"Academic Maths",subject:"Maths",revision:1,reviewedBy:"test",reviewedAt:new Date() });
+  const after = await loadGrowthEvidence(db(), new Date("2026-10-02T03:00:00Z"));
+  expect(after.bookingMetadata[0].classification).toBe("regular");
+  expect(after.revision).not.toBe(before.revision);
+  expect(await h.db.select().from(s.workforceBookingClassifications)).toHaveLength(0);
 });

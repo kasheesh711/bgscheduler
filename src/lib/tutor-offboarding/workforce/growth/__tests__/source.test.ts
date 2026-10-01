@@ -26,4 +26,11 @@ describe("growth booking classification", () => {
     expect(() => normalizeGrowthBookingMetadata({}, observedAt)).toThrow("session identity");
     expect(() => normalizeGrowthBookingMetadata({ _id: "a" }, "wrong")).toThrow("observation time");
   });
+  it("applies the owner's title rule and only defaults reviewed academic classes to regular", () => {
+    expect(normalizeGrowthBookingMetadata({ _id: "t", title: "Maths trial lesson" }, observedAt).classification).toBe("trial");
+    expect(normalizeGrowthBookingMetadata({ _id: "p", title: "Physics Pre-test" }, observedAt).classification).toBe("pretest");
+    expect(normalizeGrowthBookingMetadata({ _id: "u", title: "Maths Y10" }, observedAt).classification).toBe("unknown");
+    expect(normalizeGrowthBookingMetadata({ _id: "r", title: "Maths Y10" }, observedAt, true)).toMatchObject({ classification:"regular", reasonCodes:["OWNER_CONFIRMED_TITLE_CLASSIFICATION"] });
+    expect(normalizeGrowthBookingMetadata({ _id: "c", title: "Industrial chemistry" }, observedAt, true).classification).toBe("regular");
+  });
 });
