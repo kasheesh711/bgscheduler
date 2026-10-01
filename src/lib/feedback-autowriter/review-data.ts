@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNull, or, sql, count } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, or, sql, count } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { POST_CLASS_FEEDBACK_FIELDS, type FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
@@ -9,6 +9,7 @@ import { problemCodes } from "./first-shot";
 import {
   GATE_THRESHOLDS,
   PROVEN_TUTOR_KEYS,
+  RATE_POOL_DAYS,
   addDays,
   bangkokDateKey,
   countsTowardFix,
@@ -30,7 +31,7 @@ import { AUTOWRITER_TUTORS, rosterTutor, tutorLabel } from "./roster";
 import type { AutowriterSessionRow } from "./store";
 
 /**
- * The Quality and Review tabs of the autowriter dashboard (Phase 1 of the operating loop). Read-only; the pure
+ * The quality and review data of the autowriter dashboard (Phase 1 of the operating loop). Read-only; the pure
  * `buildAutowriterReview` shapes rows loaded by `loadAutowriterReview`. The gate shown is computed by the same SQL
  * as the nightly row (`loadGateFacts`), never from the page's rows. In-person classes stay hidden, as on the
  * overview (`isOnsiteSkip`).
@@ -55,6 +56,8 @@ export const REVIEW_QUEUE_DAYS = 30;
 export const QUEUE_LIMIT = 300;
 /** Unreviewed required classes loaded at most (far above a day's posts; the count is exact regardless). */
 const UNREVIEWED_LIMIT = 500;
+/** Incidents of the queue's days loaded at most, besides the critical ones still waiting for the owner (never capped). */
+const INCIDENT_LIMIT = 100;
 
 type Field = (typeof POST_CLASS_FEEDBACK_FIELDS)[number];
 
@@ -193,6 +196,15 @@ export interface QualityDailyRow {
   correctionsVerified: number;
 }
 
+/**
+ * Dates read before the gate window so that a 7-day value of the window's first dates pools a full seven days (the
+ * date and the six before it, as the trend series do).
+ */
+export const REVIEW_LOOKBACK_DAYS = RATE_POOL_DAYS - 1;
+
+/** The all-tutors counts of a date before the window: what a pooled 7-day rate needs of it, and nothing else. */
+export type QualityLookbackRow = Pick<QualityDailyRow, "date" | "reviewed" | "accurate" | "posted" | "eligible">;
+
 export interface QualityTutorRow {
   tutorKey: string;
   displayName: string;
@@ -201,6 +213,8 @@ export interface QualityTutorRow {
   textsInWise: number;
   reviewed: number;
   accurate: number;
+  /** Classes in the window whose current verdict is critical, sampled or not (as the gate counts them). */
+  critical: number;
   wilsonLower: number;
   requiredPending: number;
   coverage: number | null;
@@ -238,10 +252,21 @@ export interface AutowriterReview {
     lastDaily: { date: string; status: GateStatus; wilsonLower: number; createdAt: string } | null;
     currentTutors: number;
     nextExpansionSize: number;
+    /**
+     * The first Bangkok date whose window no longer holds today's critical verdicts: the latest critical class's date
+     * plus the window's 14 days (the rule the backfill prints). Null when no critical verdict is in the window.
+     */
+    blockedUntil: string | null;
   };
   coverage: CoverageCounts;
   fixRounds: { zero: number; one: number; two: number; threePlus: number; unresolved: number };
   daily: QualityDailyRow[];
+  /**
+   * The stored all-tutors counts of the `REVIEW_LOOKBACK_DAYS` dates before the window, oldest first (a date without
+   * a stored row is absent), as the review job last computed them. Only for the 7-day values of the window's first
+   * dates (the health rail's charts): never part of the gate, of `daily` or of any total.
+   */
+  lookback: QualityLookbackRow[];
   tutors: QualityTutorRow[];
   queue: ReviewQueueItem[];
   /** Exact counts behind the filters (the queue itself may be a subset: `shown`). */
@@ -288,6 +313,7 @@ export interface ReviewSourceRows {
     className: string | null;
   }>;
   currentVersions: ReadonlyArray<{ wiseSessionId: string; observedAt: Date; fields: FeedbackFieldAnswers }>;
+  /** The stored metrics of the window's dates and of the `REVIEW_LOOKBACK_DAYS` before it; rows of other dates are ignored. */
   metrics: readonly MetricRow[];
   lastDailyGate: typeof G.$inferSelect | null;
   incidents: ReadonlyArray<typeof I.$inferSelect>;
@@ -322,7 +348,7 @@ function verdictView(row: VerdictRow, currentId: string | null): ReviewVerdictVi
   };
 }
 
-/** Pure shaping of the Quality and Review tabs. */
+/** Pure shaping of the quality and review data. */
 export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): AutowriterReview {
   const today = bangkokDateKey(input.now);
   const window = gateWindow(today);
@@ -355,6 +381,10 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
   }
 
   const windowReviews = input.windowReviews.filter((review) => inWindow(review.bangkokDate) && notInPerson(review));
+  // A critical verdict blocks every window that holds its class date: the first clear window ends 14 days later.
+  const latestCritical = windowReviews
+    .flatMap((review) => currentVerdictOf(review)?.severity === "critical" ? [review.bangkokDate] : [])
+    .toSorted().at(-1);
   const fixRounds = { zero: 0, one: 0, two: 0, threePlus: 0, unresolved: 0 };
   for (const review of windowReviews) fixRounds[fixRoundBucket(currentVerdictOf(review), review.measuredFixCount)] += 1;
 
@@ -377,6 +407,12 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
       correctionsVerified: row.correctionsVerified,
     }));
 
+  const lookbackStart = addDays(window.start, -REVIEW_LOOKBACK_DAYS);
+  const lookback: QualityLookbackRow[] = input.metrics
+    .filter((row) => row.tutorKey === "*" && row.metricDate >= lookbackStart && row.metricDate < window.start)
+    .toSorted((a, b) => a.metricDate.localeCompare(b.metricDate))
+    .map((row) => ({ date: row.metricDate, reviewed: row.reviewed, accurate: row.accurate, posted: row.posted, eligible: row.eligible }));
+
   const tutors: QualityTutorRow[] = AUTOWRITER_TUTORS.map((tutor) => {
     const tutorReviews = windowReviews.filter((review) => review.tutorKey === tutor.canonicalKey);
     const counted = tutorReviews.flatMap((review) => {
@@ -394,6 +430,7 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
       textsInWise: tutorReviews.length,
       reviewed: counted.length,
       accurate,
+      critical: tutorReviews.filter((review) => currentVerdictOf(review)?.severity === "critical").length,
       wilsonLower: wilsonLowerBound(accurate, counted.length),
       requiredPending: tutorReviews.filter((review) => isRequiredReview(review.inclusionReason) && !review.currentVerdictId).length,
       coverage: coverageDen > 0 ? coverageNum / coverageDen : null,
@@ -516,10 +553,12 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
       } : null,
       currentTutors: AUTOWRITER_TUTORS.length,
       nextExpansionSize: nextExpansionSize(AUTOWRITER_TUTORS.length),
+      blockedUntil: latestCritical ? addDays(latestCritical, GATE_THRESHOLDS.windowDays) : null,
     },
     coverage,
     fixRounds,
     daily,
+    lookback,
     tutors,
     queue,
     queueTotals: { ...input.queueTotals, shown: queue.length },
@@ -556,6 +595,8 @@ const notInPersonReviewSql = sql`not exists (select 1 from feedback_autowriter_s
 const openFlagSql = sql`exists (select 1 from feedback_autowriter_flags f
   where f.wise_session_id = feedback_autowriter_reviews.wise_session_id and f.resolved_by_verdict_id is null)`;
 const requiredUnreviewedSql = sql`(${R.inclusionReason} in ('new_tutor', 'random_sample') and ${R.currentVerdictId} is null)`;
+/** SQL: a critical incident the owner has not acknowledged (it blocks the gate, and the to-do list shows it). */
+const openCriticalIncidentSql = sql`(${I.severity} = 'critical' and ${I.acknowledgedAt} is null)`;
 
 async function loadAvailableReview(db: Database, now: Date, queueLimit: number): Promise<AutowriterReview> {
   const today = bangkokDateKey(now);
@@ -576,7 +617,7 @@ async function loadAvailableReview(db: Database, now: Date, queueLimit: number):
   const queueReviews = [...new Map([...flagged, ...unreviewed, ...recent].map((row) => [row.wiseSessionId, row])).values()];
   const ids = [...new Set([...queueReviews, ...windowReviews].map((review) => review.wiseSessionId))];
   const byIds = <T>(load: () => Promise<T[]>) => ids.length > 0 ? load() : Promise.resolve([] as T[]);
-  const [posts, verdicts, flags, fixEvents, sessions, versions, metrics, lastDaily, incidents, lastRun] = await Promise.all([
+  const [posts, verdicts, flags, fixEvents, sessions, versions, metrics, lastDaily, openIncidents, otherIncidents, lastRun] = await Promise.all([
     byIds(() => db.select().from(P).where(inArray(P.wiseSessionId, ids))),
     byIds(() => db.select().from(V).where(inArray(V.wiseSessionId, ids))),
     byIds(() => db.select().from(FL).where(inArray(FL.wiseSessionId, ids))),
@@ -593,13 +634,15 @@ async function loadAvailableReview(db: Database, now: Date, queueLimit: number):
     }).from(PCV).innerJoin(PC, eq(PC.id, PCV.sessionId))
       .where(and(inArray(PC.wiseSessionId, ids), eq(PCV.profile, "teacher")))
       .orderBy(PC.wiseSessionId, desc(PCV.observedAt))),
-    db.select().from(M).where(gte(M.metricDate, window.start)),
+    // The window's rows, and those of the dates just before it for the 7-day values of its first dates (`lookback`).
+    db.select().from(M).where(gte(M.metricDate, addDays(window.start, -REVIEW_LOOKBACK_DAYS))),
     db.select().from(G).where(eq(G.evalKind, "daily")).orderBy(desc(G.bangkokDate)).limit(1),
-    // The latest 50, plus every critical incident still waiting for the owner.
-    db.select().from(I).where(or(
-      gte(I.createdAt, new Date(now.getTime() - REVIEW_QUEUE_DAYS * 24 * 60 * 60 * 1000)),
-      and(eq(I.severity, "critical"), isNull(I.acknowledgedAt), sql`${I.pushStatus} <> 'sent'`),
-    )).orderBy(desc(I.createdAt)).limit(100),
+    // Every critical incident still waiting for the owner, whatever its age and whether its alert went out: it blocks
+    // the gate, so it comes first and no cap may hide it. Then the latest others of the queue's days.
+    db.select().from(I).where(openCriticalIncidentSql).orderBy(desc(I.createdAt)),
+    db.select().from(I)
+      .where(and(gte(I.createdAt, new Date(now.getTime() - REVIEW_QUEUE_DAYS * 24 * 60 * 60 * 1000)), sql`not ${openCriticalIncidentSql}`))
+      .orderBy(desc(I.createdAt)).limit(INCIDENT_LIMIT),
     db.select().from(RUNS).orderBy(desc(RUNS.startedAt)).limit(1),
   ]);
   return buildAutowriterReview({
@@ -620,7 +663,9 @@ async function loadAvailableReview(db: Database, now: Date, queueLimit: number):
     })),
     metrics,
     lastDailyGate: lastDaily[0] ?? null,
-    incidents,
+    // The two reads are separate requests: an incident acknowledged between them comes back from both. Keep one row
+    // per id (the later read's copy, which is the fresher state) in first-seen order, so open criticals stay first.
+    incidents: [...new Map([...openIncidents, ...otherIncidents].map((row) => [row.id, row] as const)).values()],
     lastRun: lastRun[0] ?? null,
   });
 }

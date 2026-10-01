@@ -1189,6 +1189,10 @@ describe("owner verdicts from the 30 Sep interview", () => {
     const clear = await gateOn("2026-10-13");
     expect(clear.status).not.toBe("blocked_critical");
     expect(clear.reasons.join(" ")).not.toContain("critical");
+    // The page names the same date: the first gate date whose window has left the critical class behind.
+    const shown = await loadAutowriterReview(db, { now: NOW });
+    if (!shown.available) throw new Error("review unavailable");
+    expect(shown.gate).toMatchObject({ status: "blocked_critical", blockedUntil: "2026-10-13" });
     // The nightly rows say the same.
     expect(await recordDailyGate(db, "2026-10-12")).toEqual({ date: "2026-10-12", status: "blocked_critical" });
     expect((await recordDailyGate(db, "2026-10-13"))?.status).not.toBe("blocked_critical");
@@ -1213,6 +1217,62 @@ describe("loadAutowriterReview", () => {
     expect(review.queueTotals).toEqual({ needsReview: 1, flagged: 1, all: 3, shown: 2 });
     const facts = await loadGateFacts(db, { start: review.window.start, end: review.window.end });
     expect(review.gate).toMatchObject(facts);
+  });
+
+  it("loads the stored counts of the six dates before the window for the 7-day values, apart from the window's own", async () => {
+    const stored = { liveMode: true, policyVersion: 1, tutorKey: "*" };
+    await db.insert(M).values([
+      // The window of 30 Sep is 17–30 Sep.
+      { ...stored, metricDate: "2026-09-17", posted: 2, eligible: 4, reviewed: 2, accurate: 2 },
+      { ...stored, metricDate: "2026-09-16", posted: 3, eligible: 5, reviewed: 2, accurate: 1 },
+      { ...stored, metricDate: "2026-09-11", posted: 1, eligible: 2, reviewed: 1, accurate: 1 },
+      { ...stored, metricDate: "2026-09-16", tutorKey: "Mimi", posted: 9, eligible: 9 },
+      // Older than the look-back: not read at all.
+      { ...stored, metricDate: "2026-09-10", posted: 7, eligible: 7, reviewed: 7, accurate: 7 },
+    ]);
+    const review = await loadAutowriterReview(db, { now: NOW });
+    if (!review.available) throw new Error("review unavailable");
+    expect(review.window).toMatchObject({ start: "2026-09-17", end: "2026-09-30" });
+    expect(review.lookback).toEqual([
+      { date: "2026-09-11", reviewed: 1, accurate: 1, posted: 1, eligible: 2 },
+      { date: "2026-09-16", reviewed: 2, accurate: 1, posted: 3, eligible: 5 },
+    ]);
+    expect(review.daily.map((row) => [row.date, row.posted, row.eligible])).toEqual([["2026-09-17", 2, 4]]);
+    expect(review.coverage.posted).toBe(2);
+  });
+
+  it("lists every critical incident still waiting for the owner first, however old and whether its alert went out", async () => {
+    const DAY = 24 * 60 * 60_000;
+    const daysAgo = (days: number) => new Date(NOW.getTime() - days * DAY);
+    const incident = (dedupeKey: string, patch: Partial<typeof I.$inferInsert> = {}): typeof I.$inferInsert => ({
+      dedupeKey, kind: "first_shot_unverified", severity: "info", summary: `synthetic ${dedupeKey}`, pushStatus: "not_required", ...patch,
+    });
+    // An API save no post explains, raised 40 days ago: its alert went out, and nobody has acknowledged it.
+    await db.insert(I).values(incident("old-critical", { kind: "api_actor_unmatched", severity: "critical", pushStatus: "sent", createdAt: daysAgo(40) }));
+    // Old ones that wait for nobody: a critical the owner acknowledged, and an info incident.
+    await db.insert(I).values([
+      incident("old-acknowledged", {
+        kind: "critical_verdict", severity: "critical", pushStatus: "sent", acknowledgedAt: daysAgo(39), acknowledgedBy: OWNER, createdAt: daysAgo(40),
+      }),
+      incident("old-info", { createdAt: daysAgo(40) }),
+    ]);
+    // More incidents in the queue's days than the cap.
+    await db.insert(I).values(Array.from({ length: 105 }, (_, n) => incident(`recent-${n}`, { createdAt: minutes(NOW, -(n + 1)) })));
+
+    const review = await loadAutowriterReview(db, { now: NOW });
+    if (!review.available) throw new Error("review unavailable");
+    expect(review.incidents[0]).toMatchObject({
+      summary: "synthetic old-critical", kind: "api_actor_unmatched", severity: "critical", pushStatus: "sent", acknowledgedAt: null,
+    });
+    // The cap is the others': the 100 latest of the queue's days, after it.
+    expect(review.incidents).toHaveLength(101);
+    expect(review.incidents.slice(1).map((row) => row.summary)).toEqual(Array.from({ length: 100 }, (_, n) => `synthetic recent-${n}`));
+    const summaries = review.incidents.map((row) => row.summary);
+    expect(summaries).not.toContain("synthetic old-acknowledged");
+    expect(summaries).not.toContain("synthetic old-info");
+    // The gate counts the same incident: the page never shows a blocker it cannot open.
+    expect(review.gate.unexplainedApiWrites).toBe(1);
+    expect(review.gate.status).toBe("blocked_critical");
   });
 
   it("says the review tables are missing as a typed payload, and lets any other error through", async () => {

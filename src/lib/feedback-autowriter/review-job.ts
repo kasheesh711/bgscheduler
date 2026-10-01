@@ -993,7 +993,7 @@ export async function runReviewJob(deps: ReviewJobDeps): Promise<ReviewJobResult
     const deferred = result.incidents?.deferred ?? 0;
     if ((undelivered ?? 0) > 0 || deferred > 0 || (result.incidents?.stillPending ?? 0) > 0) {
       errors.push(`Critical incident push not delivered: ${undelivered ?? "?"} undelivered, ${deferred} deferred `
-        + `(acknowledge on the Quality tab once handled): ${result.incidents?.errors.slice(0, 2).join(" | ") || "retrying"}`);
+        + `(acknowledge on the dashboard once handled): ${result.incidents?.errors.slice(0, 2).join(" | ") || "retrying"}`);
     }
   } finally {
     result.stepErrors = errors;
