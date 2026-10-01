@@ -45,7 +45,7 @@ describe("confirmation-only review", () => {
     data.summary = { veryLikely: 0, veryLikelyAccounts: 0, likely: 0, unclear: 0 };
     const html = render({ available: true, ...data });
     expect(html).not.toContain("Nothing to review.");
-    expect(html).toContain("1 confirmed terminated tutor needs review.");
+    expect(html).toContain("1 tutor marked for termination needs review.");
   });
 });
 
@@ -56,6 +56,6 @@ describe("confirmation-only exclusions", () => {
     data.summary = { veryLikely: 0, veryLikelyAccounts: 0, likely: 0, unclear: 0 };
     const html = render({ available: true, ...data });
     expect(html).not.toContain("No tutors look like they have left.");
-    expect(html).toContain("2 confirmed terminated tutors are on the roster; review their exclusions or staff accounts.");
+    expect(html).toContain("2 tutors marked for termination are on the roster; review their exclusions or staff accounts.");
   });
 });

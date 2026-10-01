@@ -1,6 +1,6 @@
 # Tutor Offboarding
 
-**Status: PR 2 removal controls implemented; deployment and live mode are pending review and owner verification (2026-10-01).**
+**Status: PR 2 removal controls are deployed in manual mode; live mode remains disabled pending owner verification (2026-10-01).**
 Wise removal remains manual until a labelled dummy-teacher probe succeeds and the owner enables
 `WISE_TEACHER_REMOVAL_VERIFIED` in Vercel production. Design:
 [spec](../superpowers/specs/2026-10-01-tutor-offboarding-design.md).
@@ -34,9 +34,40 @@ A row is confirmed only when each populated name cell in columns D:F is fully st
 columns G:H does not affect confirmation. Matching uses a unique exact
 email or full-name identity; nickname-only, fuzzy, duplicate or conflicting matches remain unmatched for staff review.
 Source errors, missing syncs and snapshots older than three days stay visible in the dashboard. The sync retains the
-last successful rows after a failed refresh. A development source read on 1 Oct found 80 rows, 27 marked terminated;
-no production import or production sync has been verified. The page reads this source from Postgres and makes no
-Sheets or Wise call.
+last successful rows after a failed refresh. The API reports current source health, matched people and unmatched rows.
+The page reads this source from Postgres and makes no Sheets or Wise call.
+
+## Analytics (history from 1 March 2026)
+
+The Analytics tab reports completed teaching activity from 1 March 2026 onward, current roster status, matched
+termination evidence, scored-but-unmarked idle gaps, current qualifications and scheduled class impact. It is a
+read-only Postgres report and does not fetch Sheets or Wise data.
+
+This dataset cannot calculate an HR turnover rate: the termination sheet records a marked status but no effective
+separation date, and the compiled sources do not provide a reliable opening employee headcount for 1 March. The report
+therefore keeps `actualRate` unavailable. Its two labelled observed-teaching-cohort shares use as denominator distinct
+non-ADMIN tutors with at least one `ENDED` class since 1 March. The first numerator is matched Sheet-confirmed people
+in that cohort; the second adds unmarked very-likely people. These are scenario shares, not turnover rates or
+confirmed-exit rates. The inferred group is score-based and never merged into the Sheet-confirmed group. Matched,
+unmatched and pending identities remain separate from score bands; source confirmation and idle-gap likelihood
+describe different evidence.
+
+Counts use canonical people, so a tutor's online and onsite Wise accounts count once. Wise `ADMIN` accounts are
+excluded from the tutor denominator. Full-time office attendance is a separate, potentially overlapping flag; a
+full-time tutor with an `ENDED` class remains in the denominator. Monthly activity counts distinct people with an
+`ENDED` class and ended sessions; it is observed teaching activity, not an employee roster count. Partial months are
+flagged.
+
+Course analysis uses observed classes and available future schedules, while qualification coverage comes from the
+current snapshot's `subjectLevelQualifications`. A tutor with a qualification is not necessarily available to teach.
+For each qualification, the report compares current qualified people with the remaining names after the marked-only
+and marked-plus-inferred scenarios. Future classes are shown separately as pending load and are not treated as
+completed teaching or guaranteed replacement capacity. Per-course upcoming counts include only marked or inferred
+people assigned to that course, with separate marked and inferred counts; historical teaching totals include all
+identified tutors on the course. Other historical tutors are not assumed to be available replacements. Wise
+`courseCount` and `wiseCourseCategory` are operational course metadata; Wise's subject-like course field is a pricing
+band, not an academic subject. Missing qualifications, identity conflicts, unresolved historical sessions and
+future session records without course IDs are reported as data limitations.
 
 ## Exclusions (never in the review list)
 
@@ -94,8 +125,8 @@ local runs remain manual even if the flag is set. Deployment does not run the pr
 
 ## Page and access
 
-Nav: Scheduling & Tutors → Tutor Offboarding. Admins with the page in `allowedPages` see the review list, the drawer,
-Still with us, staff accounts, exclusions and history. The owner (`SUPER_ADMIN_EMAILS`) also manages who may remove
+Nav: Scheduling & Tutors → Tutor Offboarding. Admins with the page in `allowedPages` see the review list, Analytics,
+the drawer, Still with us, staff accounts, exclusions and history. The owner (`SUPER_ADMIN_EMAILS`) also manages who may remove
 tutors (OFF-11). API: [reference](../reference/api/tutor-offboarding.md).
 
 **Endpoint semantics remain unverified** for teacher accounts until the owner completes the guarded dummy probe;

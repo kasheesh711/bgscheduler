@@ -27,7 +27,7 @@ export function Inbox({ rows, onOpen, onKeep, selectedKeys, onSelect, canRemove 
         return (
           <Panel key={band} data-band={band}>
             <header className="flex items-center gap-2 border-b px-5 py-3">
-              <span className="text-[13px] font-semibold">{band === "active" ? "Confirmed terminated · recent teaching evidence" : BAND_LABEL[band]}</span>
+              <span className="text-[13px] font-semibold">{band === "active" ? "Marked for termination · recent teaching evidence" : BAND_LABEL[band]}</span>
               <CountChip>{group.length}</CountChip>
             </header>
             <ul>

@@ -12,8 +12,8 @@ describe("confirmed termination evidence", () => {
   it("shows the source evidence and removal checks separately in the drawer", () => {
     const row = confirmedDashboardFixture().inbox.find((row) => row.signals.canonicalKey === "Aria")!;
     const html = renderToStaticMarkup(<PersonDetail row={row} />);
-    expect(html).toContain("Confirmed terminated");
-    expect(html).toContain("Struck through in the Tutors sheet");
+    expect(html).toContain("Marked for termination");
+    expect(html).toContain("Marked for termination in the Tutors sheet");
     expect(html).toContain("Source row 12");
     expect(html).toContain("Checked 1 Oct 2026");
     expect(html).toContain("https://example.com/tutors");
@@ -24,7 +24,7 @@ describe("confirmed termination evidence", () => {
     const data = confirmedDashboardFixture();
     const html = renderToStaticMarkup(<Inbox rows={data.inbox} onOpen={noop} onKeep={noop} />);
     expect(html).toContain("Kai");
-    expect(html).toContain("Confirmed terminated");
+    expect(html).toContain("Marked for termination");
     expect(html).toContain('data-band="active"');
   });
 
@@ -32,16 +32,18 @@ describe("confirmed termination evidence", () => {
     const data = confirmedDashboardFixture();
     const staff = renderToStaticMarkup(<StaffAccounts rows={data.staff} onOpen={noop} />);
     const excluded = renderToStaticMarkup(<ExcludedList rows={data.excluded} onOpen={noop} onUndo={noop} />);
-    expect(staff).toContain("Confirmed terminated");
+    expect(staff).toContain("Marked for termination");
     expect(excluded).toContain("Fern");
-    expect(excluded).toContain("Confirmed terminated");
-    expect(excluded).toContain("Teaching: 6 upcoming classes");
+    expect(excluded).toContain("Marked for termination");
+    expect(excluded).toContain("Pending departure: 6 upcoming classes");
+    const fern = data.excluded.find((row) => row.signals.canonicalKey === "Fern")!;
+    expect(renderToStaticMarkup(<PersonDetail row={fern} />)).toContain("Pending departure: 6 upcoming classes still assigned.");
   });
 
   it("summarizes matches and displays unmatched rows with their reasons", () => {
     const data = confirmedDashboardFixture();
     const html = renderToStaticMarkup(<TutorOffboardingWorkspace initial={{ available: true, ...data }} />);
-    expect(html).toContain("4 people matched from 5 confirmed sheet rows");
+    expect(html).toContain("4 people matched from 5 marked sheet rows");
     expect(html).toContain("Nori Fictional");
     expect(html).toContain("No matching Wise account");
     expect(html).toContain("Source rows needing review");
@@ -51,7 +53,7 @@ describe("confirmed termination evidence", () => {
     const data = confirmedDashboardFixture();
     data.terminationSource!.status = status;
     const html = renderToStaticMarkup(<TutorOffboardingWorkspace initial={{ available: true, ...data }} />);
-    const expected = { stale: "Confirmation data is out of date", not_synced: "The Tutors sheet has not been checked yet", error: "The Tutors sheet could not be read" };
+    const expected = { stale: "Sheet markings are out of date", not_synced: "The Tutors sheet has not been checked yet", error: "The Tutors sheet could not be read" };
     expect(html).toContain(expected[status]);
   });
 });

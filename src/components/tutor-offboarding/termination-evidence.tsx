@@ -4,7 +4,7 @@ import { formatDayYear } from "./format";
 
 /** OFF-15: owner-confirmed Sheet evidence is independent of the estimated likelihood and OFF-03/OFF-04/OFF-06 gates. */
 export function TerminationBadge({ row }: { row: OffboardingPersonRow }) {
-  return row.termination ? <Tag tone="red">Confirmed terminated</Tag> : null;
+  return row.termination ? <Tag tone="red">Marked for termination</Tag> : null;
 }
 
 function checkedLabel(iso: string): string {
@@ -28,7 +28,8 @@ export function TerminationDetail({ row }: { row: OffboardingPersonRow }) {
   return (
     <section className="rounded-md border border-conflict/30 bg-conflict/5 px-3 py-3">
       <TerminationBadge row={row} />
-      <p className="mt-2 text-xs">Struck through in the Tutors sheet, confirmed by the owner.</p>
+      <p className="mt-2 text-xs">Marked for termination in the Tutors sheet. This may be a planned departure; upcoming classes still need review.</p>
+      {row.signals.upcomingSessions > 0 ? <p className="mt-2 text-xs font-medium text-amber-800 dark:text-amber-200">{`Pending departure: ${row.signals.upcomingSessions} upcoming classes still assigned.`}</p> : null}
       <p className="mt-1 text-xs text-muted-foreground">{evidence.sourceName}</p>
       <a href={sourceRowUrl(evidence.sourceUrl, evidence.sourceRow)} target="_blank" rel="noopener noreferrer" className="mt-1 inline-block text-xs underline underline-offset-2">
         {`Source row ${evidence.sourceRow}`}
@@ -40,19 +41,19 @@ export function TerminationDetail({ row }: { row: OffboardingPersonRow }) {
 }
 
 export function TerminationSourcePanel({ source }: { source: NonNullable<OffboardingDashboardData["terminationSource"]> }) {
-  const warning = source.status === "stale" ? "Confirmation data is out of date. The badges reflect the last successful check."
-    : source.status === "not_synced" ? "The Tutors sheet has not been checked yet. Confirmed terminations are unavailable."
+  const warning = source.status === "stale" ? "Sheet markings are out of date. The badges reflect the last successful check."
+    : source.status === "not_synced" ? "The Tutors sheet has not been checked yet. Termination markings are unavailable."
     : source.status === "error" ? "The Tutors sheet could not be read. Any badges reflect the last successful check."
     : null;
   return (
     <Panel className="mt-4 px-4 py-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Upper>Confirmed terminations</Upper>
+        <Upper>Marked for termination</Upper>
         <a href={source.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-xs underline underline-offset-2">Tutors sheet</a>
       </div>
       {source.checkedAt ? (
         <>
-          <p className="mt-1 text-sm font-medium">{`${source.matchedPeople} people matched from ${source.confirmedRows} confirmed sheet rows`}</p>
+          <p className="mt-1 text-sm font-medium">{`${source.matchedPeople} people matched from ${source.confirmedRows} marked sheet rows`}</p>
           <p className="mt-1 text-xs text-muted-foreground">{checkedLabel(source.checkedAt)}</p>
         </>
       ) : null}

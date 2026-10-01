@@ -33,8 +33,8 @@ export const INBOX_BANDS: OffboardingBand[] = ["very_likely_gone", "likely_gone"
 export function topLineSentence(summary: OffboardingSummary, confirmedToReview = 0, confirmedOnRoster = confirmedToReview): string {
   const { veryLikely, veryLikelyAccounts, likely, unclear } = summary;
   if (veryLikely + likely + unclear === 0) {
-    if (confirmedToReview > 0) return `${confirmedToReview} confirmed terminated ${confirmedToReview === 1 ? "tutor needs" : "tutors need"} review.`;
-    if (confirmedOnRoster > 0) return `${confirmedOnRoster} confirmed terminated ${confirmedOnRoster === 1 ? "tutor is" : "tutors are"} on the roster; review their exclusions or staff accounts.`;
+    if (confirmedToReview > 0) return `${confirmedToReview} ${confirmedToReview === 1 ? "tutor marked for termination needs" : "tutors marked for termination need"} review.`;
+    if (confirmedOnRoster > 0) return `${confirmedOnRoster} ${confirmedOnRoster === 1 ? "tutor marked for termination is" : "tutors marked for termination are"} on the roster; review their exclusions or staff accounts.`;
     return "No tutors look like they have left. Nothing to review.";
   }
   const head = veryLikely > 0
