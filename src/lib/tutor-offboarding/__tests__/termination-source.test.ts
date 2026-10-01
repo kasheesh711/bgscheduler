@@ -85,6 +85,7 @@ describe("buildTerminationMatches", () => {
   });
   it("keeps dated evidence on stale/error feeds and exposes health, never pretends it is fresh", () => {
     expect(match([person("Ari")], [source()], "2026-09-01T00:00:00Z").source.status).toBe("stale");
+    expect(match([person("Ari")], [source()], "2026-10-02T00:00:00Z").source.status).toBe("stale");
     const failed = match([person("Ari")], [source()], NOW.toISOString(), "Error (no SQLSTATE)");
     expect(failed.source.status).toBe("error");
     expect(failed.byKey.Ari.checkedAt).toBe(NOW.toISOString());

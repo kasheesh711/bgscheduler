@@ -106,9 +106,10 @@ export function buildTerminationMatches(people: PersonSignals[], snapshot: Termi
   byKey: Record<string, TerminationEvidence>; source: TerminationSourceStatus;
 } {
   const byKey: Record<string, TerminationEvidence> = Object.create(null);
+  const age = snapshot.checkedAt ? now.getTime() - Date.parse(snapshot.checkedAt) : NaN;
   const source: TerminationSourceStatus = {
     status: snapshot.lastError ? "error" : !snapshot.checkedAt ? "not_synced" :
-      now.getTime() - Date.parse(snapshot.checkedAt) > 3 * 86_400_000 || !Number.isFinite(Date.parse(snapshot.checkedAt)) ? "stale" : "ready",
+      !Number.isFinite(age) || age < 0 || age > 3 * 86_400_000 ? "stale" : "ready",
     checkedAt: snapshot.checkedAt, sourceUrl: TERMINATION_SOURCE_URL,
     confirmedRows: snapshot.rows.filter((r) => r.terminated).length, matchedPeople: 0, unmatched: [],
   };
