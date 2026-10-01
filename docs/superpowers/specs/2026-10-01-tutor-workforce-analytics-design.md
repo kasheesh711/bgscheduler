@@ -1,6 +1,6 @@
 # Tutor Offboarding — dashboard design for review
 
-Status: proposed design for user review, based on the agreed metric definitions. No application changes or ongoing collection have been deployed for this redesign.
+Status: approved by the user on 1 October 2026. Implementation planning is in progress; no application changes or ongoing collection have been deployed for this redesign.
 
 ## Recommended layout
 
