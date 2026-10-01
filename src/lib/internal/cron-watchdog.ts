@@ -17,6 +17,7 @@
 // one digest that their colleagues received.
 
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { monitorNightlyReminders } from "@/lib/post-class-feedback/reminder-monitor";
 import { weekendAlertRecipient, WEEKEND_CHECK_JOB_KEY } from "@/lib/classrooms/weekend-config";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -514,6 +515,13 @@ async function runLockedSweep(
   jobs: CronJobHealth[],
   options: RunCronWatchdogOptions,
 ): Promise<CronWatchdogSweepSummary> {
+  const nightly = jobs.find(job => job.key === "post_class_feedback_nightly");
+  const monitored = nightly ? await monitorNightlyReminders(db, now, nightly) : null;
+  const result = await runEmailSweep(db, now, jobs.filter(job => job.key !== "post_class_feedback_nightly"), options);
+  return { ...result, checked: result.checked + (nightly ? 1 : 0), unhealthy: result.unhealthy + (monitored?.failing ? 1 : 0) };
+}
+
+async function runEmailSweep(db: Database, now: Date, jobs: CronJobHealth[], options: RunCronWatchdogOptions): Promise<CronWatchdogSweepSummary> {
   const privateJobs = jobs.filter(job => job.key === WEEKEND_CHECK_JOB_KEY);
   if (!privateJobs.length) return runRecipientSweep(db, now, jobs, options);
   const shared = await runRecipientSweep(db, now, jobs.filter(job => job.key !== WEEKEND_CHECK_JOB_KEY), options);

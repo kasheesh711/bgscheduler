@@ -515,3 +515,15 @@ row, not in env ([runbook](../operations/feedback-autowriter.md)).
 The spreadsheet ID and tab ID (`470328060`, title `Tutors`) are fixed in [`termination-source.ts`](../../src/lib/tutor-offboarding/termination-source.ts). The existing Wise snapshot sync refreshes this source after promotion; dashboard and API reads use Postgres only. Failed refreshes preserve the last successful rows and show the error. The optional example is commented out in [`.env.example`](../../.env.example): remove the comment and set a real account only when it differs from the fallback.
 
 Live Tutor Offboarding removal also requires `WISE_TEACHER_REMOVAL_VERIFIED=true` **and** `VERCEL_ENV=production` ([`removal-safety.ts`](../../src/lib/tutor-offboarding/removal-safety.ts)). Keep the flag unset until the owner completes and records the dummy-teacher endpoint probe. When disabled, apply saves a manual checklist and performs no Wise POST. Only the owner should enable it in Vercel's Production environment after verification, then deploy the change.
+
+
+## Nightly feedback Gmail and private LINE
+
+| Variable | Purpose |
+|---|---|
+| `POST_CLASS_GMAIL_CLIENT_ID` | Dedicated Web OAuth client in BeGifted Scheduling; production only. |
+| `POST_CLASS_GMAIL_CLIENT_SECRET` | Dedicated client secret; encrypted token storage uses the existing `AUTH_SECRET`. |
+| `POST_CLASS_GMAIL_WORKSPACE_TRUSTED` | Set to `true` only after Workspace approval of the exact client. Connection and sending refuse otherwise. |
+| `POST_CLASS_REMINDER_LINE_USER_ID` | Kevin's private LINE `U...` destination; receipt confirmation required. Uses the existing `LINE_CHANNEL_ACCESS_TOKEN`. |
+
+See [nightly feedback operations](../operations/nightly-feedback-reminders.md). The callback uses the origin of `APP_BASE_URL` (default `https://bgscheduler.vercel.app`). Previews cannot authorize or send. Other email transports are unchanged.
