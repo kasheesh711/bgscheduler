@@ -2,7 +2,7 @@ import { isCancelledSession, isNoShowSession, recordedTeachingMinutes } from '..
 import { workforceContentHash } from '../observations';
 import { bangkokDayStart, clipIntervals, intervalMinutes } from '../intervals';
 import { resolveAcademicSubject } from '../subject-mappings';
-import type { WorkforceMetric, WorkforceSession } from '../types';
+import type { StudentCreditEvidence, WorkforceMetric, WorkforceSession } from '../types';
 import { addMonths, churnBaselineMonths, GROWTH_CHURN_WAIT_MS, historyCoversMonth, monthOf } from './calendar';
 import { normalizeGrowthBookingMetadata } from './source';
 import type { GrowthBookingKind, GrowthCourse, GrowthEvidence, GrowthLifecycleEvent } from './types';
@@ -18,6 +18,7 @@ export interface GrowthResolvedBooking {
   course: GrowthCourse | null;
   kind: GrowthBookingKind;
   studentIds: string[];
+  creditsByStudent: Map<string, StudentCreditEvidence[]>;
   reasonCodes: string[];
 }
 /** Latest retained revision wins before cohort dates are calculated. Academic labels are re-resolved. */
@@ -28,6 +29,14 @@ export function resolveGrowthBookings(evidence: GrowthEvidence): GrowthResolvedB
     if (!old || Date.parse(session.observedAt ?? '1970-01-01') >= Date.parse(old.observedAt ?? '1970-01-01')) latest.set(session.wiseSessionId, session);
   }
   const metadata = new Map(evidence.bookingMetadata.map(row => [row.wiseSessionId, row]));
+  const creditsBySession = new Map<string, Map<string, StudentCreditEvidence[]>>();
+  for (const credit of evidence.workforce.studentCredits) {
+    const students = creditsBySession.get(credit.wiseSessionId) ?? new Map<string, StudentCreditEvidence[]>();
+    const rows = students.get(credit.wiseStudentId) ?? [];
+    rows.push(credit);
+    students.set(credit.wiseStudentId, rows);
+    creditsBySession.set(credit.wiseSessionId, students);
+  }
   return [...latest.values()].filter(session => Number.isFinite(Date.parse(session.startAt))).map(session => {
     const mapping = resolveAcademicSubject({ classId: session.wiseClassId, sourceValue: session.classTitle }, evidence.workforce.subjectMappings);
     const stored = metadata.get(session.wiseSessionId);
@@ -35,21 +44,23 @@ export function resolveGrowthBookings(evidence: GrowthEvidence): GrowthResolvedB
       ? stored : normalizeGrowthBookingMetadata(session, session.observedAt ?? stored?.observedAt ?? '1970-01-01T00:00:00Z', mapping.completeness === 'complete');
     return { session, course: mapping.subject ? growthCourse(mapping.subject, mapping.curriculum, mapping.level) : null,
       kind: classification.classification, studentIds: [...new Set(session.historicalBookedStudentIds ?? [])],
+      creditsByStudent: creditsBySession.get(session.wiseSessionId) ?? new Map(),
       reasonCodes: [...new Set([...mapping.reasonCodes, ...classification.reasonCodes])] };
   }).sort((a,b) => Date.parse(a.session.startAt) - Date.parse(b.session.startAt) || a.session.wiseSessionId.localeCompare(b.session.wiseSessionId));
 }
 /** Teaching is established independently for each known historical participant. */
-export function studentWasTaught(booking: GrowthResolvedBooking, studentId: string, evidence: GrowthEvidence): boolean {
+export function studentWasTaught(booking: GrowthResolvedBooking, studentId: string): boolean | null {
   const { session } = booking;
-  const credits = evidence.workforce.studentCredits.filter(row => row.wiseSessionId === session.wiseSessionId && row.wiseStudentId === studentId);
+  const credits = booking.creditsByStudent.get(studentId) ?? [];
   // Per-student exclusions can be retained without discarding other members of a group.
   if (credits.some(row => row.issueCodes.some(code => ['STUDENT_CANCELLED','STUDENT_CANCELED','STUDENT_NO_SHOW','STUDENT_ABSENT'].includes(code.toUpperCase())))) return false;
-  return (recordedTeachingMinutes(session, credits).value ?? 0) > 0;
+  const minutes = recordedTeachingMinutes(session, credits).value;
+  return minutes === null ? null : minutes > 0;
 }
-export function studentNetHours(booking: GrowthResolvedBooking, studentId: string, evidence: GrowthEvidence): WorkforceMetric {
+export function studentNetHours(booking: GrowthResolvedBooking, studentId: string): WorkforceMetric {
   const normal = (booking.session.scheduledMinutes ?? 0) / 60;
   if (!Number.isFinite(normal) || normal <= 0) return growthUnknown('SCHEDULED_DURATION_UNKNOWN');
-  const rows = evidence.workforce.studentCredits.filter(row => row.wiseSessionId === booking.session.wiseSessionId && row.wiseStudentId === studentId);
+  const rows = booking.creditsByStudent.get(studentId) ?? [];
   const distinct = new Map(rows.map(row => [JSON.stringify([row.netCredits,row.evidenceStatus,row.sourceInterpretation]),row]));
   if (distinct.size !== 1) return growthUnknown(distinct.size ? 'CONFLICTING_CREDIT_EVIDENCE' : 'CREDIT_EVIDENCE_MISSING');
   const row = [...distinct.values()][0];
@@ -65,6 +76,29 @@ export function hasFreshGrowthFutureEvidence(evidence: GrowthEvidence, now: Date
   const latest = snapshots.sort((a,b) => Date.parse(b.observedAt ?? '') - Date.parse(a.observedAt ?? ''))[0];
   const age = now.getTime() - Date.parse(latest?.observedAt ?? '');
   return Boolean(latest?.completeness === 'complete' && !latest.truncated && age >= 0 && age <= 90 * 60000);
+}
+/** Unknown teaching or omitted participants cannot establish a student's absence. */
+export function hasUnresolvedGrowthTeachingHistory(
+  bookings: GrowthResolvedBooking[], start: number, end: number,
+  studentId?: string, subject?: string,
+): boolean {
+  return bookings.some(booking => {
+    const at = Date.parse(booking.session.startAt);
+    if (at < start || at >= end || isCancelledSession(booking.session) || isNoShowSession(booking.session)) return false;
+    if (subject && booking.course && booking.course.subject !== subject) return false;
+    if (studentId) {
+      if (!booking.studentIds.includes(studentId)) return booking.session.participantCompleteness !== 'complete';
+      return !booking.course || booking.kind === 'unknown' || studentWasTaught(booking, studentId) === null;
+    }
+    if (booking.session.participantCompleteness !== 'complete') return true;
+    return booking.studentIds.some(id => !booking.course || booking.kind === 'unknown' || studentWasTaught(booking, id) === null);
+  });
+}
+function hasContemporaneousGrowthFutureCheck(evidence: GrowthEvidence, now: Date, threshold: number): boolean {
+  return hasFreshGrowthFutureEvidence(evidence, now) && evidence.workforce.sourceCoverage.some(row =>
+    row.source === 'wise_future_snapshot' && row.completeness === 'complete' && !row.truncated &&
+    Math.abs(Date.parse(row.observedAt ?? '') - threshold) <= 90 * 60000 &&
+    Date.parse(row.observedAt ?? '') <= now.getTime());
 }
 export function hasCompleteGrowthTeachingHistory(evidence: GrowthEvidence, start: number, end: number): boolean {
   const intervals = evidence.workforce.sourceCoverage.filter(row=>row.source==='wise_history' && row.completeness==='complete' && !row.truncated).flatMap(row=>{
@@ -111,20 +145,24 @@ export function deriveGrowthLifecycleEvents(evidence: GrowthEvidence, now: Date)
   for (const event of retained.values()) {
     if (event.status === 'superseded') { events.set(event.eventKey,event); continue; }
     const rows = groups.get(identity(event.studentId,event.subject)) ?? [];
-    const anchor = rows.find(row => row.session.startAt === event.lastTaughtAt && studentWasTaught(row,event.studentId,evidence));
+    const anchor = rows.find(row => row.session.startAt === event.lastTaughtAt && studentWasTaught(row,event.studentId));
+    const anchorUnknown = rows.some(row => row.session.startAt === event.lastTaughtAt && studentWasTaught(row,event.studentId) === null) ||
+      bookings.some(row => event.sourceSessionIds.includes(row.session.wiseSessionId) && row.session.startAt === event.lastTaughtAt &&
+        !isCancelledSession(row.session) && !isNoShowSession(row.session) &&
+        (row.session.participantCompleteness !== 'complete' || !row.course));
     const threshold = Date.parse(event.lastTaughtAt ?? '') + GROWTH_CHURN_WAIT_MS;
-    const interruption = rows.some(row => Date.parse(row.session.startAt) > Date.parse(event.lastTaughtAt ?? '') && Date.parse(row.session.startAt) < threshold && studentWasTaught(row,event.studentId,evidence));
+    const interruption = rows.some(row => Date.parse(row.session.startAt) > Date.parse(event.lastTaughtAt ?? '') && Date.parse(row.session.startAt) < threshold && studentWasTaught(row,event.studentId));
     const invalidReturn = event.kind === 'reactivation' && !rows.some(row => row.session.startAt === event.returnAt && isActiveGrowthBooking(row));
     // Missing records in a partial replay cannot invalidate retained evidence. A
     // changed final-class record can: its ID was outside the baseline months.
     const finalSourcePresent = bookings.some(row => event.sourceSessionIds.includes(row.session.wiseSessionId) && !event.baselineMonths.includes(monthOf(row.session.startAt)) && row.session.startAt !== event.returnAt);
     const returnSourcePresent = event.kind === 'reactivation' && bookings.some(row => event.sourceSessionIds.includes(row.session.wiseSessionId) && row.session.startAt === event.returnAt);
-    if ((finalSourcePresent && (!anchor || interruption)) || (returnSourcePresent && invalidReturn)) events.set(event.eventKey,{...event,revision:event.revision+1,status:'superseded',evidenceRevision:evidence.revision,reasonCodes:[...new Set([...event.reasonCodes,'SOURCE_CORRECTION_SUPERSEDED'])]});
+    if ((finalSourcePresent && ((!anchor && !anchorUnknown) || interruption)) || (returnSourcePresent && invalidReturn)) events.set(event.eventKey,{...event,revision:event.revision+1,status:'superseded',evidenceRevision:evidence.revision,reasonCodes:[...new Set([...event.reasonCodes,'SOURCE_CORRECTION_SUPERSEDED'])]});
     else events.set(event.eventKey,event);
   }
   for (const [key, rows] of groups) {
     const [studentId,subject] = JSON.parse(key) as [string,string];
-    const taught = rows.filter(row => Date.parse(row.session.startAt) <= now.getTime() && studentWasTaught(row,studentId,evidence));
+    const taught = rows.filter(row => Date.parse(row.session.startAt) <= now.getTime() && studentWasTaught(row,studentId));
     for (let i = 0; i < taught.length; i++) {
       const last = taught[i], threshold = Date.parse(last.session.startAt) + GROWTH_CHURN_WAIT_MS;
       if (threshold > now.getTime()) continue;
@@ -138,13 +176,14 @@ export function deriveGrowthLifecycleEvents(evidence: GrowthEvidence, now: Date)
       const churnKey = eventKey(studentId,subject,'churn',last.session.wiseSessionId);
       const old = events.get(churnKey);
       const historyComplete = hasCompleteGrowthTeachingHistory(evidence,Date.parse(last.session.startAt),historical ? threshold : now.getTime());
+      if (hasUnresolvedGrowthTeachingHistory(bookings,Date.parse(last.session.startAt)+1,historical ? threshold : now.getTime(),studentId,subject)) continue;
       if ((!old || old.status==='superseded') && !historyComplete) continue;
       if (!old && !historical && (future || futureUnknown || !hasFreshGrowthFutureEvidence(evidence,now))) continue;
       // Reinstating a corrected source creates another explicit revision.
       if (old?.status === 'superseded' && !historical && (future || futureUnknown || !hasFreshGrowthFutureEvidence(evidence,now))) continue;
       const months = churnBaselineMonths(last.session.startAt);
       const summary = baseline(rows,studentId,months,evidence);
-      const certainty = old?.certainty ?? (historical ? 'inferred' : 'observed');
+      const certainty = old?.certainty ?? (!historical && hasContemporaneousGrowthFutureCheck(evidence,now,threshold) ? 'observed' : 'inferred');
       const churn: GrowthLifecycleEvent = { eventKey:churnKey,revision:old?.status === 'superseded' ? old.revision+1 : old?.revision ?? 1,studentId,subject,kind:'churn',lastTaughtAt:last.session.startAt,returnAt:null,
         effectiveMonth:addMonths(monthOf(last.session.startAt),1),confirmedAt:old?.confirmedAt ?? new Date(threshold).toISOString(),baselineMonths:months,
         baselineStudentHours:summary.metric,baselineByCourse:summary.byCourse,evidenceRevision:evidence.revision,
