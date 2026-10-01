@@ -293,31 +293,39 @@ describe("durable nightly reminders", () => {
     await runNightlyReminders(options);
     expect((await handle.db.select().from(schema.postClassNotificationDeliveries))[0].nextAttemptAt).toBeNull();
   });
-  it("requires Gmail renewal, inbox proof and private LINE proof before prospective activation or resume", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(now);
+  it.each([false, true])("keeps every readiness gate for activation, including tonight: %s", async (reminderIncludeCurrentNight) => {
+    const activationNow = new Date(now.getTime() + 31 * 60_000);
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(activationNow);
     vi.stubEnv("POST_CLASS_GMAIL_CLIENT_ID", "client"); vi.stubEnv("POST_CLASS_GMAIL_CLIENT_SECRET", "secret");
     vi.stubEnv("POST_CLASS_GMAIL_WORKSPACE_TRUSTED", "true"); vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "line-token");
     const recipient = "U" + "a".repeat(32); vi.stubEnv("POST_CLASS_REMINDER_LINE_USER_ID", recipient);
     try {
       await handle.db.update(schema.postClassSettings).set({ reminderMode: "shadow", reminderActivatedAt: null, legacyReminderDisabledAt: null });
-      await expect(updatePostClassSettings({ email: "admin@example.com" }, { reminderMode: "live", expectedVersion: 1, legacyReminderDisabled: true }, db())).rejects.toThrow(/shadow batch/);
-      const options = dependencies(); await runNightlyReminders({ ...options, shadowPreview: true });
+      const activation = { reminderMode: "live" as const, reminderIncludeCurrentNight, expectedVersion: 1, legacyReminderDisabled: true };
+      await expect(updatePostClassSettings({ email: "admin@example.com" }, { ...activation, legacyReminderDisabled: false }, db())).rejects.toThrow(/legacy reminder/);
+      await expect(updatePostClassSettings({ email: "admin@example.com" }, activation, db())).rejects.toThrow(/shadow batch/);
+      const options = dependencies(activationNow); await runNightlyReminders({ ...options, shadowPreview: true });
       await handle.db.insert(schema.postClassConfigAuditLog).values(["primary", "backup"].map(senderKey => ({
         entityType: "email_delivery", entityKey: "admin@example.com", action: "test_succeeded", actorEmail: "admin@example.com",
         afterValue: { senderKey, providerMessageId: `receipt-${senderKey}` },
       })));
-      await expect(updatePostClassSettings({ email: "admin@example.com" }, { reminderMode: "live", expectedVersion: 1, legacyReminderDisabled: true }, db())).rejects.toThrow(/Gmail/);
+      await expect(updatePostClassSettings({ email: "admin@example.com" }, activation, db())).rejects.toThrow(/Gmail/);
       const proof = { hash: "hash", actor: "admin@example.com", binding: "client:subject:1", expiresAt: new Date(now.getTime() + 86400000).toISOString(), attempts: 1, acceptedAt: now.toISOString(), confirmedAt: now.toISOString(), receipt: "id" };
       await handle.db.insert(schema.postClassEmailConnection).values({ id: "gmail", clientId: "client", mailbox: FEEDBACK_MAILBOX, googleSubject: "subject", accessTokenCiphertext: "encrypted", refreshTokenCiphertext: "encrypted", expiresAt: new Date(now.getTime() + 3600000), scope: GMAIL_SEND_SCOPE, connectedBy: proof.actor, refreshedAt: now, testEvidence: proof });
-      await expect(updatePostClassSettings({ email: proof.actor }, { reminderMode: "live", expectedVersion: 1, legacyReminderDisabled: true }, db())).rejects.toThrow(/LINE/);
+      await expect(updatePostClassSettings({ email: proof.actor }, activation, db())).rejects.toThrow(/LINE/);
       const binding = createHash("sha256").update(`${recipient}:line-token`).digest("hex");
       await handle.db.insert(schema.postClassReminderLineChannel).values({ id: "private", recipientId: recipient, binding, testEvidence: { ...proof, binding } });
-      await updatePostClassSettings({ email: proof.actor }, { reminderMode: "live", expectedVersion: 1, legacyReminderDisabled: true }, db());
+      await updatePostClassSettings({ email: proof.actor }, activation, db());
       const [config] = await handle.db.select().from(schema.postClassSettings);
-      expect(config.reminderMode).toBe("live"); expect(config.reminderActivatedAt!.getTime()).toBeGreaterThanOrEqual(now.getTime());
+      expect(config.reminderMode).toBe("live");
+      expect(config.reminderActivatedAt?.toISOString()).toBe(reminderIncludeCurrentNight ? "2026-09-29T15:00:00.000Z" : "2026-09-30T15:00:00.000Z");
+      if (reminderIncludeCurrentNight) {
+        expect((await handle.db.select().from(schema.postClassConfigAuditLog).where(eq(schema.postClassConfigAuditLog.action, "reminder_start_tonight")))).toHaveLength(1);
+        await expect(updatePostClassSettings({ email: proof.actor }, { ...activation, expectedVersion: 2 }, db())).rejects.toThrow(/activation/);
+      }
       await updatePostClassSettings({ email: proof.actor }, { reminderMode: "off", expectedVersion: 2 }, db());
       await handle.db.update(schema.postClassEmailConnection).set({ testEvidence: null });
-      await expect(updatePostClassSettings({ email: proof.actor }, { reminderMode: "live", expectedVersion: 3 }, db())).rejects.toThrow(/Gmail/);
+      await expect(updatePostClassSettings({ email: proof.actor }, { reminderMode: "live", reminderIncludeCurrentNight, expectedVersion: 3 }, db())).rejects.toThrow(/Gmail/);
     } finally { vi.useRealTimers(); vi.unstubAllEnvs(); }
   });
 });

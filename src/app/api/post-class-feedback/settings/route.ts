@@ -8,6 +8,7 @@ import { updatePostClassSettings } from "@/lib/post-class-feedback/settings";
 const BodySchema = z.object({
   reminderMode: z.enum(["off", "shadow", "live"]).optional(),
   reminderActivationAt: z.string().datetime({ offset: true }).optional(),
+  reminderIncludeCurrentNight: z.boolean().optional(),
   legacyReminderDisabled: z.boolean().optional(),
   mode: z.enum(["shadow", "live", "paused"]).optional(),
   effectiveAt: z.string().trim().min(1).nullable().optional(),

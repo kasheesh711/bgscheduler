@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
-import { latestNightlyDate, nightlyDisposition, nightlyWindow, type NightlySessionState } from "../nightly-reminder-model";
+import { latestNightlyDate, nightlyActivationCheckpoint, nightlyDisposition, nightlyWindow, type NightlySessionState } from "../nightly-reminder-model";
 import { parseNightlyInventory } from "../nightly-reminder-source";
 import { fetchWisePastSessionsByBangkokDate } from "@/lib/wise/fetchers";
 import type { WiseClient } from "@/lib/wise/client";
@@ -13,6 +13,16 @@ const state: NightlySessionState = { eligible: true, enforcementMode: "live", so
     combinedRawCharCount: 0, fieldFailures: ["combined_characters:0/300"], details: { policyApplies: true } } };
 
 describe("nightly reminder boundaries", () => {
+  it("defaults to the next checkpoint and limits an explicit manual start to tonight after 22:00", () => {
+    const before = new Date("2026-09-29T14:59:59Z");
+    const after = new Date("2026-09-29T15:31:00Z");
+    expect(nightlyActivationCheckpoint(before)?.toISOString()).toBe("2026-09-29T15:00:00.000Z");
+    expect(nightlyActivationCheckpoint(after)?.toISOString()).toBe("2026-09-30T15:00:00.000Z");
+    expect(nightlyActivationCheckpoint(before, true)).toBeNull();
+    expect(nightlyActivationCheckpoint(now, true)?.toISOString()).toBe("2026-09-29T15:00:00.000Z");
+    expect(nightlyActivationCheckpoint(after, true)?.toISOString()).toBe("2026-09-29T15:00:00.000Z");
+    expect(nightlyActivationCheckpoint(new Date("2026-09-29T17:00:00Z"), true)).toBeNull();
+  });
   it("starts at 22:00 Bangkok and retains the prior night across midnight", () => {
     const activated = new Date("2026-09-29T14:59:00Z");
     expect(latestNightlyDate(new Date("2026-09-29T14:59:59Z"), activated)).toBeNull();
