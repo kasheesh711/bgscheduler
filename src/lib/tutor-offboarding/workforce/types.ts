@@ -1,265 +1,239 @@
-/** Shared, source-neutral contracts for the tutor workforce report. */
-
+/** Source-neutral contracts. All date-only values and weekdays use Asia/Bangkok. */
 export type WorkforceRole = "tutor" | "teaching_admin";
 export type WorkforceModality = "online" | "onsite";
 export type WorkforceCompleteness = "complete" | "partial" | "unknown";
-
-/** `from` and `to` are inclusive Bangkok calendar dates (`YYYY-MM-DD`). */
 export interface WorkforceQuery {
-  from: string;
-  to: string;
-  viewMonth: string;
+  /** Inclusive Bangkok dates, YYYY-MM-DD. */
+  from: string; to: string; viewMonth: string;
   role: "all" | WorkforceRole;
-  subject?: string;
-  curriculum?: string;
-  level?: string;
+  subject?: string; curriculum?: string; level?: string;
   modality: "all" | WorkforceModality;
 }
-
 export interface WorkforceMetric {
-  /** Unknown values are null; zero is reserved for a measured zero. */
   value: number | null;
   completeness: WorkforceCompleteness;
   reasonCodes: string[];
 }
-
+export interface WorkforceAccount {
+  wiseTeacherId: string;
+  wiseUserId: string;
+  joinedAt: string | null;
+  relation: string | null;
+  modality: WorkforceModality | null;
+}
 export interface WorkforcePerson {
-  canonicalKey: string;
-  displayName: string;
+  canonicalKey: string; displayName: string;
   role: WorkforceRole | null;
   rosterState: "active" | "inactive" | "off_roster" | "unknown";
-  firstObservedAt: string | null;
-  lastObservedAt: string | null;
+  /** Earliest retained Wise join date, not a first-class date. */
+  joinedAt: string | null;
+  accounts: WorkforceAccount[];
+  firstObservedAt: string | null; lastObservedAt: string | null;
   identityCompleteness: WorkforceCompleteness;
   reasonCodes: string[];
 }
-
+export interface WorkforceQualification {
+  subject: string; curriculum: string | null; level: string | null;
+  modality: WorkforceModality | null;
+}
+export interface WorkforceOfferedWindow {
+  /** Sunday=0; minutes from Bangkok midnight. */
+  weekday: number; startMinute: number; endMinute: number;
+  modality: WorkforceModality | null;
+  wiseUserId?: string;
+}
+export interface WorkforceLeave {
+  startAt: string; endAt: string;
+  status: "approved" | "pending" | "rejected" | "unknown";
+  wiseUserId?: string;
+}
+/** A successful or failed observation at the original source time. Never backdated. */
 export interface WorkforceDatedObservation {
-  id: string;
-  canonicalKey: string | null;
+  id: string; canonicalKey: string;
   observedAt: string;
-  effectiveAt: string | null;
-  kind: "roster_join" | "roster_departure" | "availability" | "teaching" | "termination" | "other";
-  source: string;
+  source: string; sourceSnapshotId?: string;
+  role: WorkforceRole | null;
+  accounts: WorkforceAccount[];
+  qualifications: WorkforceQualification[];
+  offeredWindows: WorkforceOfferedWindow[];
+  leaves: WorkforceLeave[];
+  availabilityCompleteness: WorkforceCompleteness;
+  qualificationCompleteness: WorkforceCompleteness;
   completeness: WorkforceCompleteness;
   reasonCodes: string[];
 }
-
+/** Raw adapter observation; converted to canonical person observations by capture. */
 export interface AvailabilityObservation {
-  observedAt: string;
-  requestedFrom: string;
-  requestedTo: string;
+  observedAt: string; requestedFrom: string; requestedTo: string;
   workingHours: Array<{ day: number | string; startTime: string; endTime: string }>;
   leaves: Array<{ startAt: string; endAt: string }>;
-  completeness: WorkforceCompleteness;
-  issueCodes: string[];
+  completeness: WorkforceCompleteness; issueCodes: string[];
 }
-
 export interface WorkforceTutorFact {
-  id: string;
-  wiseSessionId: string;
-  canonicalKey: string | null;
-  scheduledMinutes: number | null;
-  teachingMinutes: number | null;
+  id: string; wiseSessionId: string; canonicalKey: string | null;
+  scheduledMinutes: number | null; teachingMinutes: number | null;
   modality: WorkforceModality | null;
-  subject: string | null;
-  curriculum: string | null;
-  level: string | null;
-  completeness: WorkforceCompleteness;
-  reasonCodes: string[];
+  subject: string | null; curriculum: string | null; level: string | null;
+  completeness: WorkforceCompleteness; reasonCodes: string[];
 }
-
 export interface HistoricalBookedParticipants {
-  wiseSessionId: string;
-  studentIds: string[];
-  completeness: WorkforceCompleteness;
-  source: string;
-  reasonCodes: string[];
+  wiseSessionId: string; studentIds: string[];
+  completeness: WorkforceCompleteness; source: string; reasonCodes: string[];
 }
-
 export type StudentCreditEvidenceStatus = "verified" | "partial" | "unknown";
 export type StudentCreditSourceInterpretation =
-  | "verified_session_charge"
-  | "verified_session_refund"
-  | "current_balance"
-  | "ambiguous_ledger_movement"
-  | "unverified_historical_normal_charge"
-  | "unknown";
-
+  | "verified_session_charge" | "verified_session_refund" | "current_balance"
+  | "ambiguous_ledger_movement" | "unverified_historical_normal_charge" | "unknown";
 export interface StudentCreditEvidence {
-  wiseSessionId: string;
-  wiseStudentId: string;
-  /** Signed net change only when Wise contract semantics are verified. */
+  wiseSessionId: string; wiseStudentId: string;
+  /** Positive net credits deducted; refunds reduce this value. */
   netCredits: number | null;
-  /** Normal charge only when it is directly and unambiguously evidenced. */
   normalCredits: number | null;
   evidenceStatus: StudentCreditEvidenceStatus;
   sourceInterpretation: StudentCreditSourceInterpretation;
-  observedAt: string | null;
-  issueCodes: string[];
+  observedAt: string | null; issueCodes: string[];
 }
-
 export interface ReviewedSubjectMapping {
+  id: string;
+  /** Exact class ID takes precedence over a reviewed exact label alias. */
+  classId: string | null;
   sourceValue: string;
-  subject: string;
-  curriculum: string | null;
-  level: string | null;
-  reviewedBy: string | null;
-  reviewedAt: string | null;
+  subject: string; curriculum: string | null; level: string | null;
+  revision: number;
+  reviewedBy: string | null; reviewedAt: string | null;
 }
-
+export type SubjectMapping = ReviewedSubjectMapping;
 export interface WorkforceTerminationMark {
   canonicalKey: string;
+  /** Optional source date; turnover derives the final taught date independently. */
   effectiveAt: string | null;
   markedAt: string;
   status: "pending_classes" | "complete" | "cancelled";
   sourceId: string;
 }
-
 export interface WorkforceSourceCoverage {
   source: string;
-  requestedFrom: string;
-  requestedTo: string;
-  returnedFrom: string | null;
-  returnedTo: string | null;
-  pagesRequested: number;
-  pagesReturned: number;
-  recordsReturned: number;
-  truncated: boolean;
-  completeness: WorkforceCompleteness;
-  issueCodes: string[];
+  requestedFrom: string; requestedTo: string;
+  returnedFrom: string | null; returnedTo: string | null;
+  observedAt?: string;
+  pagesRequested: number; pagesReturned: number; recordsReturned: number;
+  truncated: boolean; completeness: WorkforceCompleteness; issueCodes: string[];
 }
-
 export interface WorkforceSession {
-  wiseSessionId: string;
-  wiseClassId: string | null;
-  /** Exact source label; never normalize or infer a reviewed subject from it. */
+  wiseSessionId: string; wiseClassId: string | null;
+  /** Exact source label, retained for reviewed mapping and changed-label detection. */
   classTitle: string | null;
-  startAt: string;
-  endAt: string | null;
-  scheduledMinutes: number | null;
+  startAt: string; endAt: string | null; scheduledMinutes: number | null;
   canonicalTutorKeys: string[];
+  /** Used to resolve identity when ingest precedes a roster observation. */
+  wiseTeacherIds?: string[]; wiseUserIds?: string[];
   historicalBookedStudentIds: string[] | null;
   participantCompleteness: WorkforceCompleteness;
   completeness: WorkforceCompleteness;
-  meetingStatus: string | null;
-  attendanceStatus: string | null;
+  meetingStatus: string | null; attendanceStatus: string | null;
   modality: WorkforceModality | null;
-  subject: string | null;
-  curriculum: string | null;
-  level: string | null;
-  /** Populated only by direct, attributable evidence. */
-  directTeachingEvidence?: {
-    minutes: number;
-    source: string;
-    evidenceId: string;
-  } | null;
+  subject: string | null; curriculum: string | null; level: string | null;
+  observedAt?: string;
+  directTeachingEvidence?: { minutes: number; source: string; evidenceId: string } | null;
   reasonCodes: string[];
 }
-
 export interface WorkforceEvidence {
-  people: WorkforcePerson[];
-  observations: WorkforceDatedObservation[];
-  tutorFacts: WorkforceTutorFact[];
-  sessions: WorkforceSession[];
+  /** Stable source/version token. Never based only on response generation time. */
+  revision?: string;
+  people: WorkforcePerson[]; observations: WorkforceDatedObservation[];
+  tutorFacts: WorkforceTutorFact[]; sessions: WorkforceSession[];
   historicalBookedParticipants: HistoricalBookedParticipants[];
   studentCredits: StudentCreditEvidence[];
   subjectMappings: ReviewedSubjectMapping[];
   terminationMarks: WorkforceTerminationMark[];
   sourceCoverage: WorkforceSourceCoverage[];
 }
-
-export interface WorkforceMonthlyRow {
-  month: string;
-  openingRosterCount: WorkforceMetric;
-  closingRosterCount: WorkforceMetric;
-  joinsCount: WorkforceMetric;
-  departuresCount: WorkforceMetric;
-  pendingCount: WorkforceMetric;
+export interface WorkforceDemandMetrics {
+  uniqueStudents: WorkforceMetric;
+  studentBookings: WorkforceMetric;
+  distinctClasses: WorkforceMetric;
+  bookedHours: WorkforceMetric;
+  cancelledBookings: WorkforceMetric;
+  noShowBookings: WorkforceMetric;
+  creditConsumedHours: WorkforceMetric;
+  recordedTeachingHours: WorkforceMetric;
+}
+export interface WorkforceCapacityMetrics {
+  qualifiedPeople: WorkforceMetric;
+  offeredHours: WorkforceMetric; leaveHours: WorkforceMetric;
+  usableHours: WorkforceMetric; reservedHours: WorkforceMetric; freeHours: WorkforceMetric;
+  outsideHours: WorkforceMetric; overlapHours: WorkforceMetric;
+  /** Observed time span, not offered time. Used to explain partial support. */
+  coverageHours: WorkforceMetric; expectedCoverageHours: WorkforceMetric;
+  coveragePercent: WorkforceMetric;
+}
+export interface WorkforceUtilizationMetrics extends WorkforceDemandMetrics, WorkforceCapacityMetrics {
+  reservedUtilizationPercent: WorkforceMetric;
+  consumedUtilizationPercent: WorkforceMetric;
+  recordedTeachingUtilizationPercent: WorkforceMetric;
+}
+export interface WorkforceMonth extends WorkforceUtilizationMetrics {
+  month: string; partialMonth: boolean;
+  openingRosterCount: WorkforceMetric; closingRosterCount: WorkforceMetric;
+  joinsCount: WorkforceMetric; departuresCount: WorkforceMetric; pendingCount: WorkforceMetric;
   turnoverPercent: WorkforceMetric;
+  joinedPersonKeys: string[]; departedPersonKeys: string[]; pendingPersonKeys: string[];
 }
-
-export interface WorkforceUtilizationMetrics {
-  /** Sum of scheduled demand minutes, expressed in hours. */
-  demandHours: WorkforceMetric;
-  offeredHours: WorkforceMetric;
-  usableHours: WorkforceMetric;
-  freeHours: WorkforceMetric;
-  utilizationDemandPercent: WorkforceMetric;
-  utilizationOfferedPercent: WorkforceMetric;
-  utilizationUsablePercent: WorkforceMetric;
-}
-
+export type WorkforceMonthlyRow = WorkforceMonth;
 export interface WorkforceSubjectRow extends WorkforceUtilizationMetrics {
-  subject: string;
-  curriculum: string | null;
-  level: string | null;
+  key: string; month: string;
+  subject: string; curriculum: string | null; level: string | null;
+  depth: 0 | 1 | 2; parentKey: string | null;
   modality: "all" | WorkforceModality;
 }
-
+/** Metrics are average-week values. monthlyTotals and coveredDates explain support. */
 export interface WorkforceWeekCell extends WorkforceUtilizationMetrics {
-  weekStart: string;
-  weekEnd: string;
-  subject: string | null;
-  curriculum: string | null;
-  level: string | null;
+  key: string; month: string;
+  weekday: number; startMinute: number; endMinute: number;
+  coveredDates: number; calendarOccurrences: number;
+  monthlyTotals: Partial<WorkforceUtilizationMetrics>;
+  subject: string | null; curriculum: string | null; level: string | null;
   modality: "all" | WorkforceModality;
 }
-
+export interface WorkforcePersonMonth extends WorkforceUtilizationMetrics { month: string; }
 export interface WorkforcePersonRow extends WorkforceUtilizationMetrics {
-  canonicalKey: string;
-  displayName: string;
-  role: WorkforceRole | null;
-  rosterState: WorkforcePerson["rosterState"];
-  joinsCount: WorkforceMetric;
-  departuresCount: WorkforceMetric;
-  pendingCount: WorkforceMetric;
+  canonicalKey: string; displayName: string;
+  role: WorkforceRole | null; rosterState: WorkforcePerson["rosterState"];
+  joinedAt: string | null; departedAt: string | null; pendingDeparture: boolean;
+  months: WorkforcePersonMonth[];
+  reasonCodes: string[];
 }
-
+export interface WorkforceException { code: string; message: string; entityId?: string; }
 export interface WorkforceQuality {
-  completeness: WorkforceCompleteness;
-  issueCodes: string[];
+  completeness: WorkforceCompleteness; issueCodes: string[];
   sourceCoverage: WorkforceSourceCoverage[];
+  exceptions: WorkforceException[];
 }
-
 export interface WorkforceReport {
-  schemaVersion: 1;
-  generatedAt: string;
-  query: WorkforceQuery;
-  months: WorkforceMonthlyRow[];
-  subjects: WorkforceSubjectRow[];
-  weekCells: WorkforceWeekCell[];
-  people: WorkforcePersonRow[];
+  schemaVersion: 1; reportRevision: string; generatedAt: string; query: WorkforceQuery;
+  totals: WorkforceUtilizationMetrics;
+  months: WorkforceMonth[]; subjects: WorkforceSubjectRow[];
+  weekCells: WorkforceWeekCell[]; people: WorkforcePersonRow[];
   quality: WorkforceQuality;
 }
-
-/** Stable contributor identifiers shared by every drilldown kind. */
 export interface WorkforceContributingEntityIds {
-  canonicalKeys: string[];
-  wiseSessionIds: string[];
-  wiseClassIds: string[];
-  wiseStudentIds: string[];
-  terminationSourceIds: string[];
-  observationIds: string[];
+  canonicalKeys: string[]; wiseSessionIds: string[]; wiseClassIds: string[];
+  wiseStudentIds: string[]; terminationSourceIds: string[]; observationIds: string[];
 }
-
 export interface WorkforceDrilldown {
-  query: WorkforceQuery;
-  reportRevision: string;
-  kind: "person" | "subject_cell" | "turnover";
-  key: string;
+  query: WorkforceQuery; reportRevision: string;
+  kind: "person" | "subject_cell" | "turnover"; key: string;
   contributors: WorkforceContributingEntityIds;
-  exceptions: Array<{ code: string; message: string; entityId?: string }>;
+  people: WorkforcePersonRow[];
+  sessions: WorkforceSession[];
+  observations: WorkforceDatedObservation[];
+  exceptions: WorkforceException[];
+  nextCursor: string | null;
 }
-
 export interface WorkforceDrilldownQuery extends WorkforceQuery {
-  kind: WorkforceDrilldown["kind"];
-  key: string;
-  reportRevision: string;
-  cursor?: string;
-  pageSize?: number;
+  kind: WorkforceDrilldown["kind"]; key: string; reportRevision: string;
+  cursor?: string; pageSize?: number;
 }
-
 export type WorkforceExportSection = "months" | "subjects" | "week" | "people";
 
 export interface SourceWindowRequest {
