@@ -31,6 +31,17 @@ it('replaying a source window is idempotent', async () => {
     await persistWorkforceSourceWindow(db(), window());
     expect(await h.db.select().from(s.workforceCaptureRuns)).toHaveLength(1);
 });
+it('dedupes cached credits at their original observation time, preserving an older same-value correction', async () => {
+    await persistWorkforceSourceWindow(db(), window('initial','2026-10-01T01:00:00Z',1));
+    await persistWorkforceSourceWindow(db(), window('latest','2026-10-01T04:00:00Z',0));
+    const imported = window('imported-later','2026-10-01T05:00:00Z',0);
+    imported.credits[0].observedAt = '2026-10-01T02:00:00Z';
+    await persistWorkforceSourceWindow(db(), imported);
+    const earlier = await loadWorkforceEvidence(db(),query,new Date('2026-10-01T03:00:00Z'));
+    expect(earlier.studentCredits[0].netCredits).toBe(0);
+    expect(earlier.studentCredits[0].observedAt).toBe('2026-10-01T02:00:00.000Z');
+    expect(await h.db.select().from(s.workforceCreditVersions)).toHaveLength(3);
+});
 it('upgrades a failed source key on complete retry and preserves unknown historical normal charges', async () => {
     await persistWorkforceSourceWindow(db(), window('retry', '2026-10-01T03:00:00Z', 1, false));
     const complete = window('retry');

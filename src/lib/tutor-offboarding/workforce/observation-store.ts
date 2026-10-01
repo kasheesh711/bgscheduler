@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -74,15 +74,23 @@ export async function persistWorkforceSourceWindow(db: Database, window: SourceW
             return { runId: run.id, versionsAdded: 0, observationsAdded: 0, complete: run.complete };
         const observedAt = date(window.observedAt);
         const priorSessions = await tx.selectDistinctOn([s.workforceSessionVersions.wiseSessionId]).from(s.workforceSessionVersions).where(lte(s.workforceSessionVersions.observedAt, observedAt)).orderBy(asc(s.workforceSessionVersions.wiseSessionId), desc(s.workforceSessionVersions.observedAt), desc(s.workforceSessionVersions.versionOrder));
-        const priorCredits = await tx.selectDistinctOn([s.workforceCreditVersions.wiseSessionId, s.workforceCreditVersions.wiseStudentId]).from(s.workforceCreditVersions).where(lte(s.workforceCreditVersions.observedAt, observedAt)).orderBy(asc(s.workforceCreditVersions.wiseSessionId), asc(s.workforceCreditVersions.wiseStudentId), desc(s.workforceCreditVersions.observedAt), desc(s.workforceCreditVersions.versionOrder));
-        const latestSessions = new Map<string, string>(), latestCredits = new Map<string, string>();
+        const creditSessionIds = [...new Set(window.credits.map(credit => credit.wiseSessionId))];
+        const latestCreditAt = new Date(Math.max(observedAt.getTime(), ...window.credits.map(credit => date(credit.observedAt ?? window.observedAt).getTime())));
+        const priorCredits: Array<typeof s.workforceCreditVersions.$inferSelect> = [];
+        for (let offset = 0; offset < creditSessionIds.length; offset += 500) {
+            priorCredits.push(...await tx.select().from(s.workforceCreditVersions).where(and(
+                inArray(s.workforceCreditVersions.wiseSessionId, creditSessionIds.slice(offset, offset + 500)),
+                lte(s.workforceCreditVersions.observedAt, latestCreditAt),
+            )).orderBy(desc(s.workforceCreditVersions.observedAt), desc(s.workforceCreditVersions.versionOrder)));
+        }
+        const latestSessions = new Map<string, string>();
+        const creditsByKey = new Map<string, typeof priorCredits>();
         for (const row of priorSessions)
             if (!latestSessions.has(row.wiseSessionId))
                 latestSessions.set(row.wiseSessionId, row.contentHash);
         for (const row of priorCredits) {
             const key = JSON.stringify([row.wiseSessionId, row.wiseStudentId]);
-            if (!latestCredits.has(key))
-                latestCredits.set(key, row.contentHash);
+            creditsByKey.set(key, [...(creditsByKey.get(key) ?? []), row]);
         }
         const tutorBySession = new Map<string, typeof window.evidence.tutorFacts>();
         const participantsBySession = new Map<string, typeof window.evidence.historicalBookedParticipants>();
@@ -108,8 +116,10 @@ export async function persistWorkforceSourceWindow(db: Database, window: SourceW
             if (seenCreditHashes.has(key) && seenCreditHashes.get(key) !== contentHash)
                 throw new Error('Conflicting workforce credit');
             seenCreditHashes.set(key, contentHash);
-            if (latestCredits.get(key) !== contentHash)
-                credits.set(key, { wiseSessionId: credit.wiseSessionId, wiseStudentId: credit.wiseStudentId, contentHash, observedAt: credit.observedAt ? date(credit.observedAt) : observedAt, runId: run.id, payload });
+            const creditObservedAt = credit.observedAt ? date(credit.observedAt) : observedAt;
+            const prior = creditsByKey.get(key)?.find(row => row.observedAt.getTime() <= creditObservedAt.getTime());
+            if (prior?.contentHash !== contentHash)
+                credits.set(key, { wiseSessionId: credit.wiseSessionId, wiseStudentId: credit.wiseStudentId, contentHash, observedAt: creditObservedAt, runId: run.id, payload });
         }
         for (const rows of [Array.from(sessions.values())])
             for (let i = 0; i < rows.length; i += 500)
