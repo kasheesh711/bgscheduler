@@ -1,4 +1,4 @@
-import type { StudentCreditEvidence, WorkforceMetric, WorkforceSession } from "./types";
+import type { StudentCreditEvidence, WorkforceCreditCoverage, WorkforceMetric, WorkforceSession } from "./types";
 const known = (value:number,reasonCodes:string[]=[]):WorkforceMetric => ({value,completeness:"complete",reasonCodes});
 const unknown = (...reasonCodes:string[]):WorkforceMetric => ({value:null,completeness:"unknown",reasonCodes:[...new Set(reasonCodes)]});
 const status = (value:string|null) => value?.trim().toUpperCase().replace(/[ -]+/g,"_");
@@ -9,16 +9,31 @@ export function isNoShowSession(session:WorkforceSession):boolean {
   return [session.meetingStatus,session.attendanceStatus].some(value=>["NO_SHOW","NOSHOW","STUDENT_NO_SHOW","STUDENT_ABSENT"].includes(status(value)??""));
 }
 
-/** Mean of per-student fractions, never a sum of student credits or a price-weighted mean. */
+/** Coverage counts remain counts when a metric is converted from minutes to hours. */
+export function sumCreditCoverage(metrics: Iterable<WorkforceMetric>): WorkforceCreditCoverage {
+  const total: WorkforceCreditCoverage = { totalClasses: 0, computedClasses: 0, estimatedClasses: 0, unknownClasses: 0,
+    returnedParticipants: 0, verifiedCreditParticipants: 0, unknownCreditParticipants: 0 };
+  for (const metric of metrics) if (metric.creditCoverage) {
+    for (const key of Object.keys(total) as Array<keyof WorkforceCreditCoverage>) total[key] += metric.creditCoverage[key];
+  }
+  return total;
+}
+
+/** Mean of all returned students' fractions. Reconstructed membership yields an estimate, never a lower bound. */
 export function computeConsumedMinutes(session:WorkforceSession,credits:StudentCreditEvidence[]):WorkforceMetric {
   const minutes=session.scheduledMinutes;
-  if (minutes===null || !Number.isFinite(minutes) || minutes<=0) return unknown("SCHEDULED_DURATION_UNKNOWN");
   const ids=[...new Set(session.historicalBookedStudentIds??[])];
-  if (session.participantCompleteness!=="complete" || !ids.length) return unknown("HISTORICAL_PARTICIPANTS_INCOMPLETE");
+  const reconstructed = session.participantCompleteness === 'partial'
+    && session.reasonCodes.includes('HISTORICAL_PARTICIPANTS_RECONSTRUCTED_FROM_RETURNED_SESSION')
+    && !session.reasonCodes.includes('CONFLICTING_PARTICIPANTS');
   const fractions:number[]=[];
   const issues:string[]=[];
+  if (minutes===null || !Number.isFinite(minutes) || minutes<=0) issues.push('SCHEDULED_DURATION_UNKNOWN');
+  if (!ids.length || session.participantCompleteness!=='complete' && !reconstructed
+    || session.reasonCodes.includes('CONFLICTING_PARTICIPANTS')) issues.push('HISTORICAL_PARTICIPANTS_INCOMPLETE');
+  const byStudent = Map.groupBy(credits.filter(row => row.wiseSessionId === session.wiseSessionId), row => row.wiseStudentId);
   for (const id of ids) {
-    const matches=credits.filter(row=>row.wiseSessionId===session.wiseSessionId && row.wiseStudentId===id);
+    const matches=byStudent.get(id) ?? [];
     const distinct=new Map(matches.map(row=>[JSON.stringify([row.netCredits,row.normalCredits,row.evidenceStatus,row.sourceInterpretation]),row]));
     if (distinct.size!==1) { issues.push(distinct.size ? "CONFLICTING_CREDIT_EVIDENCE" : "CREDIT_EVIDENCE_MISSING"); continue; }
     const row=[...distinct.values()][0];
@@ -33,8 +48,14 @@ export function computeConsumedMinutes(session:WorkforceSession,credits:StudentC
     if (row.netCredits>row.normalCredits) { issues.push("CHARGE_ABOVE_NORMAL"); continue; }
     fractions.push(row.normalCredits===0 ? 0 : row.netCredits/row.normalCredits);
   }
-  if (issues.length) return unknown(...issues);
-  return known(minutes*fractions.reduce((sum,value)=>sum+value,0)/ids.length);
+  const computed = issues.length === 0;
+  const creditCoverage: WorkforceCreditCoverage = { totalClasses: 1, computedClasses: computed ? 1 : 0,
+    estimatedClasses: computed && reconstructed ? 1 : 0, unknownClasses: computed ? 0 : 1,
+    returnedParticipants: ids.length, verifiedCreditParticipants: fractions.length, unknownCreditParticipants: ids.length - fractions.length };
+  if (!computed) return { ...unknown(...issues), creditCoverage };
+  return { value: minutes!*fractions.reduce((sum,value)=>sum+value,0)/ids.length,
+    completeness: reconstructed ? 'partial' : 'complete',
+    reasonCodes: reconstructed ? ['HISTORICAL_PARTICIPANTS_INCOMPLETE','RETURNED_PARTICIPANT_CREDIT_ESTIMATE'] : [], creditCoverage };
 }
 
 /** The fallback is a recorded-class estimate, not a measurement of attendance minutes. */

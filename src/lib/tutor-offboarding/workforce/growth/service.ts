@@ -1,6 +1,7 @@
 import type { Database } from "@/lib/db";
 import { TutorOffboardingError } from "../../errors";
 import { workforceContentHash } from "../observations";
+import { cachedWorkforceRead, invalidateWorkforceReadCache, workforceReadKey, workforceReportDeadline, WORKFORCE_READ_CACHE_MS } from "../read-cache";
 import type { WorkforceQuality } from "../types";
 import { buildAllGrowthFlows } from "./flows";
 import { buildGrowthForecast, selectGrowthFlows } from "./forecast";
@@ -38,9 +39,14 @@ export function buildGrowthReport(evidence: GrowthEvidence, query: GrowthQuery, 
 }
 
 /** Database reads and pure calculations only. Ingestion owns lifecycle persistence. */
-export async function getGrowthReport(db: Database, query: GrowthQuery, now = new Date(), revision?: string): Promise<GrowthReport> {
+export async function getGrowthReport(db: Database, query: GrowthQuery, now = new Date(), revision?: string, refresh = false): Promise<GrowthReport> {
   const asOf = calculationTime(revision, now);
-  return buildGrowthReport(await loadGrowthEvidence(db, now), query, asOf);
+  if (revision) return buildGrowthReport(await loadGrowthEvidence(db, now), query, asOf);
+  if (refresh) invalidateWorkforceReadCache();
+  return cachedWorkforceRead(db, 'growth-report', workforceReadKey(query), async () => {
+    const loaded = await cachedWorkforceRead(db, 'growth-evidence', 'all', async () => ({ evidence: await loadGrowthEvidence(db, now), asOf }), refresh, value => value.asOf.getTime() + WORKFORCE_READ_CACHE_MS);
+    return buildGrowthReport(loaded.evidence, query, loaded.asOf);
+  }, refresh, workforceReportDeadline);
 }
 
 function readOffset(query: GrowthDetailQuery): number {

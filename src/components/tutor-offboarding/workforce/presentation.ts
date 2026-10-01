@@ -38,17 +38,38 @@ const reasons: Record<string, string> = {
   roster_history_incomplete:
     "Opening Wise roster is reconstructed from incomplete history.",
   OWNER_CONFIRMED_DEPARTURE: "Departure confirmed by the owner’s list.",
-  OWNER_CONFIRMED_DEPARTURES: "Departures come from the owner’s confirmed list.",
+  OWNER_CONFIRMED_DEPARTURES:
+    "Departures come from the owner’s confirmed list.",
   LAST_RECORDED_CLASS_DATE: "Resignation date is the last recorded class date.",
-  DEPARTURE_HISTORY_INCOMPLETE: "The last recorded class is used; later history may be incomplete.",
-  DEPARTURE_DATE_UNCONFIRMED: "A confirmed departure has no usable last class date.",
-  TERMINATION_SOURCE_INCOMPLETE: "Some departure records still need an identity match.",
-  WISE_ROSTER_RECONSTRUCTED: "Opening roster uses retained Wise account join dates.",
-  ROLE_HISTORY_RECONSTRUCTED: "Includes tutors and administrators with teaching evidence.",
-  FUTURE_SNAPSHOT_UNCONFIRMED: "Upcoming class coverage is incomplete or out of date.",
-  LATER_CLASS_STATUS_UNCONFIRMED: "A later class has an unknown status; the last recorded ended class is used.",
-  PENDING_CLASS_TIME_UNCONFIRMED: "A remaining class has an unverified time, so departure stays pending.",
+  DEPARTURE_HISTORY_INCOMPLETE:
+    "The last recorded class is used; later history may be incomplete.",
+  DEPARTURE_DATE_UNCONFIRMED:
+    "A confirmed departure has no usable last class date.",
+  TERMINATION_SOURCE_INCOMPLETE:
+    "Some departure records still need an identity match.",
+  WISE_ROSTER_RECONSTRUCTED:
+    "Opening roster uses retained Wise account join dates.",
+  ROLE_HISTORY_RECONSTRUCTED:
+    "Includes tutors and administrators with teaching evidence.",
+  FUTURE_SNAPSHOT_UNCONFIRMED:
+    "Upcoming class coverage is incomplete or out of date.",
+  LATER_CLASS_STATUS_UNCONFIRMED:
+    "A later class has an unknown status; the last recorded ended class is used.",
+  PENDING_CLASS_TIME_UNCONFIRMED:
+    "A remaining class has an unverified time, so departure stays pending.",
+  RETURNED_PARTICIPANT_CREDIT_ESTIMATE:
+    "Credit time is estimated from the students returned by Wise; the full class roster is unverified.",
+  REVIEWED_TITLE_FORMAT_VARIANT:
+    "Uses a reviewed subject match; only the lesson format or cancellation suffix differs.",
+  RECORDED_MODEL_ESTIMATE:
+    "This projection uses estimates from incomplete recorded data.",
+  NO_DATA_FOR_SELECTED_MONTH: "No data was recorded for this month.",
 };
+export function creditCoverageSummary(metric: WorkforceMetric | undefined) {
+  const coverage = metric?.creditCoverage;
+  if (!coverage) return null;
+  return `${coverage.computedClasses.toLocaleString("en")} of ${coverage.totalClasses.toLocaleString("en")} classes have usable credit records${coverage.unknownClasses ? `; ${coverage.unknownClasses.toLocaleString("en")} are excluded` : ""}.`;
+}
 export function metricReason(metric: WorkforceMetric | undefined) {
   if (!metric) return "Supporting evidence is unavailable.";
   return (

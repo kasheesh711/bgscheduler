@@ -34,6 +34,26 @@ function resolved(mapping: ReviewedSubjectMapping): SubjectResolution {
   return { subject: mapping.subject, curriculum: mapping.curriculum, level: mapping.level, mappingId: mapping.id, completeness: "complete", reasonCodes: [] };
 }
 
+/** Only remove scheduling decoration; academic words and level labels stay intact. */
+const labelCache = new Map<string, string>();
+function academicLabel(value: string): string {
+  const cached = labelCache.get(value);
+  if (cached !== undefined) return cached;
+  const result = value.trim().toLowerCase()
+    .replace(/\s*\((?:cancelled|canceled)\)\s*$/i, "")
+    .replace(/^(?:(?:in[ -]?person|on[ -]?site|online|live)\s+)?session\s*(?:[-–—:]\s*|$)/i, "")
+    .replace(/\s+/g, " ").trim();
+  if (labelCache.size >= 4096) labelCache.clear();
+  labelCache.set(value, result);
+  return result;
+}
+function equivalentMapping(rows: ReviewedSubjectMapping[]): SubjectResolution | null {
+  if (!rows.length) return null;
+  if (rows.some(row => !reviewed(row))) return unreviewed("SUBJECT_MAPPING_UNREVIEWED");
+  if (new Set(rows.map(row => JSON.stringify([row.subject,row.curriculum,row.level]))).size !== 1) return unreviewed("SUBJECT_MAPPING_AMBIGUOUS");
+  return {...resolved(rows[0]), reasonCodes:["REVIEWED_TITLE_FORMAT_VARIANT"]};
+}
+
 /** Exact class + exact observed title takes precedence over an exact reviewed global alias. */
 export function resolveAcademicSubject(input: ClassIdentity, mappings: ReviewedSubjectMapping[]): SubjectResolution {
   const sourceValue = input.sourceValue;
@@ -42,9 +62,20 @@ export function resolveAcademicSubject(input: ClassIdentity, mappings: ReviewedS
   if (scoped.length > 1) return unreviewed("SUBJECT_MAPPING_AMBIGUOUS");
   if (scoped.length === 1) return reviewed(scoped[0]) ? resolved(scoped[0]) : unreviewed("SUBJECT_MAPPING_UNREVIEWED");
 
+  // Keep a reviewed course's curriculum/level when only its format or cancellation suffix changed.
+  const normalized = academicLabel(sourceValue);
+  if (normalized && input.classId !== null) {
+    const variant = equivalentMapping(mappings.filter(mapping => mapping.classId === input.classId && academicLabel(mapping.sourceValue) === normalized));
+    if (variant) return variant;
+  }
+
   const aliases = mappings.filter(mapping => mapping.classId === null && mapping.sourceValue === sourceValue);
   if (aliases.length > 1) return unreviewed("SUBJECT_ALIAS_AMBIGUOUS");
   if (aliases.length === 1) return reviewed(aliases[0]) ? resolved(aliases[0]) : unreviewed("SUBJECT_ALIAS_UNREVIEWED");
+  if (normalized) {
+    const variant = equivalentMapping(mappings.filter(mapping => mapping.classId === null && academicLabel(mapping.sourceValue) === normalized));
+    if (variant) return variant;
+  }
   const renamed = mappings.some(mapping => mapping.classId === input.classId && mapping.sourceValue !== sourceValue);
   return unreviewed(renamed ? "CLASS_LABEL_CHANGED_REVIEW_REQUIRED" : "SUBJECT_MAPPING_UNMAPPED");
 }
