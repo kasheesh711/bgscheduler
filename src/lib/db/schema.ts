@@ -3,6 +3,7 @@ import type { RoomBotEvent, RoomEvidence } from "@/lib/room-booking/model";
 import type { CompletionEvidence, CoverageRevision, LeaveInterpretation, WorkStudent } from "@/lib/leave-requests/work-types";
 import {
   pgTable,
+  bigserial,
   type AnyPgColumn,
   primaryKey,
   uuid,
@@ -6683,3 +6684,54 @@ export const feedbackIsebRollouts = pgTable("feedback_iseb_rollouts", {
   activatedAt: timestamp("activated_at", { withTimezone: true }),
   receipt: jsonb("receipt").$type<Record<string, unknown>>().notNull().default({}),
 });
+
+
+// Workforce history deliberately has no foreign keys to rotating snapshots.
+export const workforceCaptureRuns = pgTable("workforce_capture_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sourceKey: text("source_key").notNull(),
+  kind: text("kind").notNull(),
+  sourceSnapshotId: text("source_snapshot_id"),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  complete: boolean("complete").notNull(),
+  coverage: jsonb("coverage").$type<Record<string, unknown>>().notNull(),
+}, t => [uniqueIndex("workforce_capture_source_idx").on(t.sourceKey), index("workforce_capture_time_idx").on(t.observedAt), check("workforce_capture_kind", sql`${t.kind} in ('roster', 'history')`)]);
+
+export const workforcePersonVersions = pgTable("workforce_person_versions", {
+  id: uuid("id").primaryKey().defaultRandom(), versionOrder: bigserial("version_order", { mode: "number" }).notNull(),
+  canonicalKey: text("canonical_key").notNull(), contentHash: text("content_hash").notNull(),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+}, t => [index("workforce_person_version_key_idx").on(t.canonicalKey, t.observedAt)]);
+
+export const workforcePersonObservations = pgTable("workforce_person_observations", {
+  id: uuid("id").primaryKey().defaultRandom(), runId: uuid("run_id").notNull().references(() => workforceCaptureRuns.id),
+  canonicalKey: text("canonical_key").notNull(),
+  versionId: uuid("version_id").references(() => workforcePersonVersions.id),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  quality: jsonb("quality").$type<Record<string, unknown>>().notNull(),
+}, t => [uniqueIndex("workforce_person_observation_run_idx").on(t.runId, t.canonicalKey), index("workforce_person_observation_time_idx").on(t.canonicalKey, t.observedAt)]);
+
+export const workforceSessionVersions = pgTable("workforce_session_versions", {
+  id: uuid("id").primaryKey().defaultRandom(), versionOrder: bigserial("version_order", { mode: "number" }).notNull(),
+  wiseSessionId: text("wise_session_id").notNull(), contentHash: text("content_hash").notNull(),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  startAt: timestamp("start_at", { withTimezone: true }).notNull(),
+  runId: uuid("run_id").notNull().references(() => workforceCaptureRuns.id),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+}, t => [index("workforce_session_version_key_idx").on(t.wiseSessionId, t.observedAt), index("workforce_session_version_start_idx").on(t.startAt)]);
+
+export const workforceCreditVersions = pgTable("workforce_credit_versions", {
+  id: uuid("id").primaryKey().defaultRandom(), versionOrder: bigserial("version_order", { mode: "number" }).notNull(),
+  wiseSessionId: text("wise_session_id").notNull(), wiseStudentId: text("wise_student_id").notNull(),
+  contentHash: text("content_hash").notNull(), observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  runId: uuid("run_id").notNull().references(() => workforceCaptureRuns.id),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+}, t => [index("workforce_credit_version_key_idx").on(t.wiseSessionId, t.wiseStudentId, t.observedAt)]);
+
+export const workforceSubjectMappings = pgTable("workforce_subject_mappings", {
+  id: uuid("id").primaryKey().defaultRandom(), classId: text("class_id"), sourceValue: text("source_value").notNull(),
+  subject: text("subject").notNull(), curriculum: text("curriculum"), level: text("level"),
+  revision: integer("revision").notNull(), reviewedBy: text("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+}, t => [index("workforce_subject_mapping_class_idx").on(t.classId), check("workforce_mapping_revision", sql`${t.revision} > 0`)]);

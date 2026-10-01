@@ -1,3 +1,5 @@
+import { captureWorkforceObservation } from "@/lib/tutor-offboarding/workforce/observation-store";
+import { buildSnapshotWorkforceObservation, type SnapshotAvailability } from "@/lib/tutor-offboarding/workforce/observations";
 import { eq, or, sql } from "drizzle-orm";
 import { addDays } from "date-fns";
 import { Database } from "@/lib/db";
@@ -224,6 +226,7 @@ export async function runFullSync(
       }
     }
 
+    const workforceAvailability = new Map<string, SnapshotAvailability>();
     // Process teachers with availability
     for (const teacher of wiseTeachers) {
       const groupId = teacherToGroupId.get(teacher._id);
@@ -248,6 +251,7 @@ export async function runFullSync(
       }
 
       try {
+        const availabilityObservedAt = new Date().toISOString();
         const near = await fetchTeacherNearAvailability(
           client,
           instituteId,
@@ -256,6 +260,7 @@ export async function runFullSync(
           leaveFetchNow,
         );
         const workingHours = near.workingHours;
+        workforceAvailability.set(teacher._id, { observedAt: availabilityObservedAt, workingHours: workingHours?.slots, leaves: near.leaves, complete: false, nearLeavesAt: availabilityObservedAt, farLeavesAt: null });
 
         // Far tier: reuse the cached leaves when fresh, else fetch live and
         // queue the row for the single batched upsert after this loop.
@@ -303,6 +308,7 @@ export async function runFullSync(
         // leave straddling the day-28 window boundary appearing in both tiers is
         // harmless.
         const leaves = [...near.leaves, ...farLeaves];
+        workforceAvailability.set(teacher._id, { observedAt: availabilityObservedAt, workingHours: workingHours?.slots, leaves, complete: true, nearLeavesAt: availabilityObservedAt, farLeavesAt: farFetchedAt.toISOString() });
 
         // Normalize and store working hours
         const windows = normalizeWorkingHours(workingHours?.slots);
@@ -745,6 +751,21 @@ export async function runFullSync(
         terminationSource = { error: `${errorName} (${sqlState ?? "no SQLSTATE"})` };
         console.error("[sync-orchestrator] termination source capture failed", { errorName, sqlState });
       }
+      // Archive source-time observations before snapshot pruning. Analytics failure is an explicit gap,
+      // never a scheduling failure. No additional Wise requests occur in this archive step.
+      let workforceCapture: Awaited<ReturnType<typeof captureWorkforceObservation>> | { error: string };
+      try {
+        workforceCapture = await captureWorkforceObservation(db, buildSnapshotWorkforceObservation({
+          sourceKey: `wise-sync:${syncRunId}`, snapshotId: promotedSnapshotId,
+          observedAt: new Date(startTime).toISOString(), teachers: wiseTeachers, groups,
+          modalities: teacherModalities, availability: workforceAvailability,
+        }));
+      } catch (error) {
+        const errorName = error instanceof Error ? error.name : "UnknownError";
+        const sqlState = sqlStateOf(error);
+        workforceCapture = { error: `${errorName} (${sqlState ?? "no SQLSTATE"})` };
+        console.error("[sync-orchestrator] workforce capture failed", { errorName, sqlState });
+      }
       let pruning:
         | Awaited<ReturnType<typeof pruneOldSnapshots>>
         | { attempted: true; failed: true; error: string };
@@ -763,7 +784,7 @@ export async function runFullSync(
       try {
         await db
           .update(schema.syncRuns)
-          .set({ metadata: { ...successMetadata, pruning, modalityHistory, rosterFacts, terminationSource, offboardingReconciliation } })
+          .set({ metadata: { ...successMetadata, pruning, modalityHistory, rosterFacts, terminationSource, offboardingReconciliation, workforceCapture } })
           .where(eq(schema.syncRuns.id, syncRunId));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
