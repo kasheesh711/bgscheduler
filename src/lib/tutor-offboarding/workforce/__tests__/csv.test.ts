@@ -1,0 +1,30 @@
+import { describe, expect, it } from "vitest";
+import { serializeWorkforceCsv } from "../csv";
+import type { WorkforceReport } from "../types";
+const report = {
+  schemaVersion:1, reportRevision:"revision-1", generatedAt:"2026-10-01T00:00:00Z",
+  query:{from:"2026-03-01",to:"2026-10-01",viewMonth:"2026-09",role:"all",modality:"all"},
+  people:[{canonicalKey:"p1",displayName:'=SUM(1,2)\n"teacher"',role:"tutor",rosterState:"active",joinedAt:null,departedAt:null,pendingDeparture:false,
+    bookedHours:{value:4,completeness:"complete",reasonCodes:[]},
+    creditConsumedHours:{value:null,completeness:"unknown",reasonCodes:["NORMAL_CHARGE_UNKNOWN"]}}],
+  months:[],subjects:[],weekCells:[],quality:{completeness:"partial",issueCodes:[],sourceCoverage:[],exceptions:[]},
+} as unknown as WorkforceReport;
+describe("workforce CSV",()=>{
+  it("uses report values and includes revision, filters, null state and reasons",()=>{
+    const csv=serializeWorkforceCsv(report,"people");
+    expect(csv).toContain('"report_revision"');
+    expect(csv).toContain('"revision-1"');
+    expect(csv).toContain('"bookedHours_value"');
+    expect(csv).toContain(',4,"complete",');
+    expect(csv).toContain(',"","unknown","NORMAL_CHARGE_UNKNOWN"');
+    expect(csv).toContain('"2026-09"');
+  });
+  it("quotes newlines and literal quotes while neutralizing formulas",()=>{
+    expect(serializeWorkforceCsv(report,"people")).toContain('"\'=SUM(1,2)\n""teacher"""');
+  });
+  it("exports a header for an empty section",()=>{
+    const csv=serializeWorkforceCsv(report,"months");
+    expect(csv.split("\r\n").filter(Boolean)).toHaveLength(1);
+    expect(csv).toContain('"turnoverPercent_value"');
+  });
+});
