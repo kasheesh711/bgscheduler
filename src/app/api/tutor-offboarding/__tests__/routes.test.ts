@@ -7,6 +7,10 @@ vi.mock("@/lib/db", () => ({ getDb: vi.fn(() => ({})) }));
 vi.mock("@/lib/admin-users/access", () => ({ requireSuperAdmin: vi.fn() }));
 vi.mock("@/lib/tutor-offboarding/service", () => ({ loadTutorOffboardingDashboard: vi.fn(), findPersonRow: vi.fn() }));
 vi.mock("@/lib/tutor-offboarding/decisions", () => ({ recordStillWithUs: vi.fn(), revokeDecision: vi.fn() }));
+vi.mock("@/lib/tutor-offboarding/removal", () => ({
+  previewRemovalRun: vi.fn(), getRemovalRun: vi.fn(), listRemovalRuns: vi.fn(), applyRemovalRun: vi.fn(),
+}));
+vi.mock("@/lib/tutor-offboarding/reconcile", () => ({ reconcileRemovalRuns: vi.fn() }));
 vi.mock("@/lib/tutor-offboarding/grants", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/tutor-offboarding/grants")>(),
   hasRemovalGrant: vi.fn(async () => false),
@@ -19,13 +23,19 @@ import { requireSuperAdmin } from "@/lib/admin-users/access";
 import { AdminUsersAccessError } from "@/lib/admin-users/types";
 import { recordStillWithUs, revokeDecision } from "@/lib/tutor-offboarding/decisions";
 import { TutorOffboardingError } from "@/lib/tutor-offboarding/errors";
-import { changeGrant } from "@/lib/tutor-offboarding/grants";
+import { changeGrant, hasRemovalGrant } from "@/lib/tutor-offboarding/grants";
+import { applyRemovalRun, getRemovalRun, listRemovalRuns, previewRemovalRun } from "@/lib/tutor-offboarding/removal";
+import { reconcileRemovalRuns } from "@/lib/tutor-offboarding/reconcile";
 import { findPersonRow, loadTutorOffboardingDashboard } from "@/lib/tutor-offboarding/service";
 import type { OffboardingPersonRow } from "@/lib/tutor-offboarding/types";
 import { GET } from "../route";
 import { POST as postDecision } from "../decisions/route";
 import { DELETE as deleteDecision } from "../decisions/[decisionId]/route";
 import { GET as getGrants, POST as postGrant } from "../grants/route";
+import { GET as getRemovalRuns, POST as postRemovalPreview } from "../removal-runs/route";
+import { GET as getRemovalRunDetail } from "../removal-runs/[runId]/route";
+import { POST as postRemovalApply } from "../removal-runs/[runId]/apply/route";
+import { POST as postReconcile } from "../reconcile/route";
 
 const authMock = vi.mocked(auth as unknown as () => Promise<unknown>);
 const dashboardMock = vi.mocked(loadTutorOffboardingDashboard);
@@ -33,9 +43,18 @@ const findMock = vi.mocked(findPersonRow);
 const recordMock = vi.mocked(recordStillWithUs);
 const revokeMock = vi.mocked(revokeDecision);
 const ownerMock = vi.mocked(requireSuperAdmin);
+const removalGrantMock = vi.mocked(hasRemovalGrant);
 const grantMock = vi.mocked(changeGrant);
+const previewRemovalMock = vi.mocked(previewRemovalRun);
+const getRemovalMock = vi.mocked(getRemovalRun);
+const listRemovalMock = vi.mocked(listRemovalRuns);
+const applyRemovalMock = vi.mocked(applyRemovalRun);
+const reconcileMock = vi.mocked(reconcileRemovalRuns);
 
 const DECISION_ID = "11111111-1111-4111-8111-111111111111";
+const RUN_ID = "22222222-2222-4222-8222-222222222222";
+const VIEWER = { email: "admin@example.com", isOwner: false, canRemove: true };
+const RUN = { id: RUN_ID, status: "previewed", mode: "manual", accounts: [] };
 const ROW = {
   signals: { canonicalKey: "Aria" },
   score: { likelihood: 96, band: "very_likely_gone", reasons: [{ code: "idle_gap", direction: "toward_gone", text: "Last class 120 days ago (3 Jun)" }] },
@@ -53,6 +72,71 @@ beforeEach(() => {
   vi.clearAllMocks();
   signedIn();
   ownerMock.mockResolvedValue({ email: "owner@example.com", accessVersion: 1 });
+  removalGrantMock.mockResolvedValue(false);
+});
+
+describe("Tutor Offboarding removal routes", () => {
+  it("validates preview bodies strictly and requires a fresh capability grant", async () => {
+    previewRemovalMock.mockResolvedValue(RUN as never);
+    removalGrantMock.mockResolvedValue(true);
+    for (const body of ["not json", {}, { canonicalKeys: ["Aria"], extra: true }, { canonicalKeys: [] }, { canonicalKeys: ["Aria", "Aria"] }]) {
+      expect((await postRemovalPreview(json(body, "http://localhost/api/tutor-offboarding/removal-runs"))).status).toBe(400);
+    }
+    expect(previewRemovalMock).not.toHaveBeenCalled();
+
+    removalGrantMock.mockResolvedValue(false);
+    expect((await postRemovalPreview(json({ canonicalKeys: ["Aria"] }, "http://localhost/api/tutor-offboarding/removal-runs"))).status).toBe(403);
+    expect(previewRemovalMock).not.toHaveBeenCalled();
+
+    removalGrantMock.mockResolvedValue(true);
+    const response = await postRemovalPreview(json({ canonicalKeys: ["Aria"] }, "http://localhost/api/tutor-offboarding/removal-runs"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ run: RUN });
+    expect(previewRemovalMock).toHaveBeenCalledWith(VIEWER, ["Aria"]);
+  });
+
+  it("lists runs for admins and returns a typed 404 for an unknown run", async () => {
+    authMock.mockResolvedValue(null);
+    expect((await getRemovalRuns()).status).toBe(401);
+    signedIn("teacher");
+    expect((await getRemovalRuns()).status).toBe(403);
+    signedIn();
+    listRemovalMock.mockResolvedValue([RUN] as never);
+    expect(await (await getRemovalRuns()).json()).toEqual({ runs: [RUN] });
+    listRemovalMock.mockRejectedValue({ code: "42P01" });
+    expect(await (await getRemovalRuns()).json()).toEqual({ available: false, reason: "not_set_up" });
+    getRemovalMock.mockResolvedValue(null);
+    const response = await getRemovalRunDetail(new NextRequest(`http://localhost/api/tutor-offboarding/removal-runs/${RUN_ID}`), { params: Promise.resolve({ runId: RUN_ID }) });
+    expect([response.status, await response.json()]).toEqual([404, { error: "That removal run was not found." }]);
+  });
+
+  it("validates apply confirmation and delegates only after a fresh grant check", async () => {
+    applyRemovalMock.mockResolvedValue(RUN as never);
+    const valid = { previewToken: "a".repeat(64), confirmed: true, reason: "Confirmed after owner review", accountCount: 2 };
+    removalGrantMock.mockResolvedValue(true);
+    for (const body of ["not json", { ...valid, confirmed: false }, { ...valid, accountCount: "2" }, { ...valid, reason: "short" }, { ...valid, extra: true }]) {
+      expect((await postRemovalApply(json(body, `http://localhost/api/tutor-offboarding/removal-runs/${RUN_ID}/apply`), { params: Promise.resolve({ runId: RUN_ID }) })).status).toBe(400);
+    }
+    expect(applyRemovalMock).not.toHaveBeenCalled();
+    removalGrantMock.mockResolvedValue(false);
+    expect((await postRemovalApply(json(valid, `http://localhost/api/tutor-offboarding/removal-runs/${RUN_ID}/apply`), { params: Promise.resolve({ runId: RUN_ID }) })).status).toBe(403);
+    expect(applyRemovalMock).not.toHaveBeenCalled();
+    removalGrantMock.mockResolvedValue(true);
+    const response = await postRemovalApply(json(valid, `http://localhost/api/tutor-offboarding/removal-runs/${RUN_ID}/apply`), { params: Promise.resolve({ runId: RUN_ID }) });
+    expect(response.status).toBe(200);
+    expect(applyRemovalMock).toHaveBeenCalledWith(VIEWER, RUN_ID, valid, { db: {} });
+  });
+
+  it("reconciles only for a freshly granted admin and does not accept a caller-supplied roster", async () => {
+    reconcileMock.mockResolvedValue({ checked: 4, settled: 2, restored: 0 });
+    removalGrantMock.mockResolvedValue(false);
+    expect((await postReconcile()).status).toBe(403);
+    expect(reconcileMock).not.toHaveBeenCalled();
+    removalGrantMock.mockResolvedValue(true);
+    const response = await postReconcile();
+    expect([response.status, await response.json()]).toEqual([200, { result: { checked: 4, settled: 2, restored: 0 } }]);
+    expect(reconcileMock).toHaveBeenCalledWith({});
+  });
 });
 
 describe("GET /api/tutor-offboarding", () => {

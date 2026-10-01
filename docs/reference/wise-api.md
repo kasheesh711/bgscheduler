@@ -37,7 +37,7 @@ answer — lives in the matching [`docs/features/*`](../features/) page.
 - **Request counting (new):** every `get`/`post`/`put` is tallied by normalized path on the client instance and persisted per run — `sync_runs.metadata.wiseCallCount` / `.wiseTopPaths` and `credit_control_sync_runs.metadata`. See [The EFF-00 request counter](#the-eff-00-request-counter).
 - **Availability is stitched, and must be:** the 180-day leave horizon is assembled from **26 seven-day windows** per teacher. A probe run on **2026-09-02** confirmed Wise **rejects any wider span with HTTP 400** — see [The 7-day availability ceiling](#the-7-day-availability-ceiling). Since 2026-09-04 those windows are fetched in two tiers (near every run, far every 6 hours) — see [Near/far tiering](#nearfar-tiering-avail-01-2026-09-04).
 - **Institute scoping:** most endpoints nest under `/institutes/{instituteId}`; callers pass `WISE_INSTITUTE_ID` (default `696e1f4d90102225641cc413`). A minority sit under `/user/...` or `/teacher/...`.
-- **Writeback is narrow and gated:** four mutating helpers exist. Classroom assignment writes only OFFLINE session `location`; Student Promotions writes registration answers, class `subject`, and (behind a flag + typed confirmation) single-session `subject`; Progress Tests creates a session behind `WISE_SESSION_CREATE_VERIFIED`. **Post-Class Feedback performs no Wise mutation at all.**
+- **Writeback is narrow and gated:** six standalone helpers mutate Wise. Classroom assignment writes only OFFLINE session `location`; Student Promotions writes registration answers, class `subject`, and (behind a flag + typed confirmation) single-session `subject`; Progress Tests creates a session behind `WISE_SESSION_CREATE_VERIFIED`; Tutor Offboarding removes one institute participant only after saved preview + explicit apply and with the verification flag in production. **Post-Class Feedback is a separate guarded feedback write; it does not call the general Wise client.**
 
 ---
 
@@ -596,8 +596,8 @@ zero-decimal currencies, wrong for two-decimal ones, and unexercised today.
 
 ## Writeback operations
 
-BGScheduler is **read-mostly**. Four helpers mutate Wise; each is narrow in field
-scope, and three of the four are additionally flag-gated. A fifth write — teacher
+BGScheduler is **read-mostly**. Six standalone helpers mutate Wise; each is narrow in field
+scope, and three are additionally flag-gated. A seventh write — teacher
 feedback — is the [feedback autowriter](../features/feedback-autowriter.md), run by the
 Wise webhook, a backstop cron and its CLI, and gated by `FEEDBACK_AUTOWRITER_ENABLED`
 plus the database control row.
@@ -609,7 +609,14 @@ plus the database control row.
 | `updateWiseCourseSubject` | `PUT /teacher/editClass` | `classId`, `subject` | Verified plan + roster/subject re-read before write |
 | `updateSessionSubject` | `PUT /teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE` | `subject` | `WISE_SESSION_SUBJECT_UPDATE_VERIFIED=true` **and** typed confirmation |
 | `scheduleWiseSession` | `POST /teacher/classes/{classId}/sessions` | one `SINGLE` session | `WISE_SESSION_CREATE_VERIFIED=true` **and** a passing availability pre-check |
+| `removeWiseParticipantOnce` (`removal-wise.ts`) | `POST /institutes/{id}/removeParticipant` | institute participant identified by Wise `userId` | Saved preview + explicit apply; `WISE_TEACHER_REMOVAL_VERIFIED=true` **and** `VERCEL_ENV=production`; no retries |
 | `createWiseFeedbackOps().postFeedback` ([feedback-autowriter](../../src/lib/feedback-autowriter/run.ts)) | `POST /teacher/classes/{classId}/session/{sessionId}/feedback` | teacher feedback `answers` (positional, form order), `sessionStatus`, `creditsConsumed` | `FEEDBACK_AUTOWRITER_ENABLED=true` **and** control row `mode = live`, not halted, tutor switched on: roster tutors only, not-yet-due sessions, only Wise's own blank auto-submission, generation lease + single POST claim (one POST in flight), no-retry client, GET + credit + submit-event verification |
+
+Tutor Offboarding first rechecks eligibility, roster identity and upcoming sessions in a 15-minute preview. The apply
+route stores each account as `sending` before the one POST attempt and uses a client with `maxRetries: 0`. A rejected
+or unknown outcome is never resent; the roster readback and later reconciliation settle it. Reconcile makes Wise
+GETs only. The teacher-removal endpoint is not considered verified until the owner records a successful guarded
+dummy-teacher probe; see [Tutor Offboarding](../features/tutor-offboarding.md#owner-operated-endpoint-probe-and-live-mode-setup).
 
 ### Session location update — `updateSessionLocation`
 

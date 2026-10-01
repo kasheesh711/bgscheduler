@@ -523,5 +523,15 @@ See [the feature page](../../features/feedback-autowriter.md).
 | `tutor_offboarding_access_audit_log` | `tutorOffboardingAccessAuditLog` | Grant/revoke audit history; appended by the application, with no database immutability trigger |
 | `tutor_offboarding_sheet_source` | `tutorOffboardingSheetSource` | Latest confirmed-termination Sheet snapshot and sync health |
 
-The same migration adds four nullable roster columns to `tutor_wise_accounts`: `wise_relation`, `wise_joined_on`,
+Migration 0102 also adds four nullable roster columns to `tutor_wise_accounts`: `wise_relation`, `wise_joined_on`,
 `wise_course_count`, `wise_activated` (null = unknown), written best-effort by the snapshot sync after promotion.
+
+## Tutor Offboarding — migration 0103
+
+| SQL table | Drizzle export | Grain |
+|---|---|---|
+| `tutor_offboarding_runs` | `tutorOffboardingRuns` | One immutable preview/apply lifecycle, including stored mode, expiry, operator and final state; a partial unique index allows only one `applying` run |
+| `tutor_offboarding_run_accounts` | `tutorOffboardingRunAccounts` | One per-account snapshot and outcome in a run; unique by run and Wise teacher id, with the saved account payload and pre-removal local active state |
+
+Both tables are additive. Apply migration 0103 only with owner authorization and before deploying removal controls.
+The migration has no down path; rollback requires a forward migration.

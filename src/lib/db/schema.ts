@@ -21,6 +21,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { Week, OfficeNetwork } from "@/lib/tutor-attendance/model";
+import type { WiseTeacher } from "@/lib/wise/types";
 
 // One outstanding browser-bound email challenge per approved-or-requested address.
 export const authEmailChallenges = pgTable("auth_email_challenges", {
@@ -6546,4 +6547,55 @@ export const tutorOffboardingAccessAuditLog = pgTable("tutor_offboarding_access_
 }, (table) => [
   index("toaal_created_at_idx").on(table.createdAt),
   check("toaal_action_check", sql`${table.action} in ('grant', 'revoke')`),
+]);
+
+/** A preview/apply lifecycle for an explicitly selected person-level removal. */
+export const tutorOffboardingRuns = pgTable("tutor_offboarding_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  status: text("status").notNull(),
+  mode: text("mode").notNull(),
+  reason: text("reason"),
+  previewToken: text("preview_token").notNull(),
+  previewExpiresAt: timestamp("preview_expires_at", { withTimezone: true }).notNull(),
+  tutorCount: integer("tutor_count").notNull(),
+  accountCount: integer("account_count").notNull(),
+  createdByEmail: text("created_by_email").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  appliedByEmail: text("applied_by_email"),
+  appliedAt: timestamp("applied_at", { withTimezone: true }),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+}, (table) => [
+  uniqueIndex("tutor_offboarding_one_applying_uidx").on(table.status).where(sql`${table.status} = 'applying'`),
+  index("tutor_offboarding_runs_created_at_idx").on(table.createdAt),
+  check("tutor_offboarding_run_status_check", sql`${table.status} in ('previewed', 'applying', 'applied', 'applied_with_errors', 'expired')`),
+  check("tutor_offboarding_run_mode_check", sql`${table.mode} in ('live', 'manual')`),
+]);
+
+/** Immutable per-account snapshot and result log for each removal run. */
+export const tutorOffboardingRunAccounts = pgTable("tutor_offboarding_run_accounts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => tutorOffboardingRuns.id, { onDelete: "cascade" }),
+  canonicalKey: text("canonical_key").notNull(),
+  displayName: text("display_name").notNull(),
+  wiseTeacherId: text("wise_teacher_id").notNull(),
+  wiseUserId: text("wise_user_id"),
+  isOnlineVariant: boolean("is_online_variant").notNull(),
+  accountSnapshot: jsonb("account_snapshot").$type<WiseTeacher>().notNull(),
+  likelihoodAtPreview: integer("likelihood_at_preview").notNull(),
+  reasons: jsonb("reasons").$type<string[]>().notNull().default([]),
+  plan: text("plan").notNull(),
+  skipReason: text("skip_reason"),
+  status: text("status").notNull().default("planned"),
+  requestPayload: jsonb("request_payload").$type<Record<string, unknown> | null>(),
+  responsePayload: jsonb("response_payload").$type<Record<string, unknown> | null>(),
+  errorMessage: text("error_message"),
+  localStateBefore: jsonb("local_state_before").$type<{ contactActive: boolean | null; profileActive: boolean | null } | null>(),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("tutor_offboarding_run_account_teacher_uidx").on(table.runId, table.wiseTeacherId),
+  index("tutor_offboarding_run_accounts_run_idx").on(table.runId),
+  check("tutor_offboarding_run_account_plan_check", sql`${table.plan} in ('remove', 'skip')`),
+  check("tutor_offboarding_run_account_status_check", sql`${table.status} in ('planned', 'skipped', 'sending', 'sent', 'rejected', 'unknown', 'verified', 'not_removed', 'manual_required', 'removed_manually', 'restored')`),
 ]);
