@@ -2,6 +2,7 @@ import { eq, or, sql } from "drizzle-orm";
 import { addDays } from "date-fns";
 import { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import { topWisePaths, WiseClient } from "@/lib/wise/client";
 import {
   getWiseSessionTeacherUserId,
@@ -699,15 +700,21 @@ export async function runFullSync(
         console.error("[sync-orchestrator] modality history capture failed", modalityHistory.error);
       }
     }
-    // Tutor Offboarding (OFF-02): roster details the detector scores on. Best effort and outside the promotion
-    // transaction, so a missing column (migration not yet applied) can never block a sync.
+    // Tutor Offboarding (OFF-02): roster details the detector scores on. A failure of THIS step never blocks a
+    // sync: it is best effort and runs outside the promotion transaction. Migration 0102 is different: it must be
+    // applied before this code deploys, because the sync's own reads and upserts of tutor_wise_accounts
+    // (loadAccountMappings, promoteWithTutorContacts) name these columns, so a missing column fails every sync
+    // with 42703. Only the error's name and SQLSTATE are kept: a database error's message is the query and its
+    // parameters.
     let rosterFacts: { updated?: number; error?: string } = {};
     if (promotedSnapshotId && importContacts) {
       try {
         rosterFacts = { updated: await persistRosterFacts(db, extractRosterFacts(wiseTeachers)) };
       } catch (error) {
-        rosterFacts = { error: error instanceof Error ? error.message.slice(0, 500) : String(error) };
-        console.error("[sync-orchestrator] roster facts capture failed", rosterFacts.error);
+        const errorName = error instanceof Error ? error.name : "UnknownError";
+        const sqlState = sqlStateOf(error);
+        rosterFacts = { error: `${errorName} (${sqlState ?? "no SQLSTATE"})` };
+        console.error("[sync-orchestrator] roster facts capture failed", { errorName, sqlState });
       }
     }
     if (promotedSnapshotId) {

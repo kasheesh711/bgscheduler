@@ -1,6 +1,7 @@
 -- Tutor Offboarding PR 1, migration A (spec docs/superpowers/specs/2026-10-01-tutor-offboarding-design.md §7).
--- Additive only: four nullable roster columns and three new tables. Safe to apply before the code ships: the
--- sync writes the columns best-effort, and the page reports "not set up" until this has run.
+-- Additive only: four nullable roster columns and three new tables. OWNER GATE: apply this BEFORE deploying the
+-- code that declares these columns, because the sync reads and upserts tutor_wise_accounts by column name (a
+-- missing column fails every sync with 42703). Applying it early is safe for the code live today: additive, nullable.
 ALTER TABLE "tutor_wise_accounts" ADD COLUMN "wise_relation" text;
 --> statement-breakpoint
 ALTER TABLE "tutor_wise_accounts" ADD COLUMN "wise_joined_on" timestamp with time zone;

@@ -281,8 +281,10 @@ Migration numbers are assigned at build time: `origin/main` ends at 0101 and the
 
 - `tutor_wise_accounts` gains nullable `wise_relation text`, `wise_joined_on timestamptz`, `wise_course_count integer`,
   `wise_activated boolean`. Null = unknown. They are written from roster fields the sync already fetches, by a
-  best-effort step right after promotion (`persistRosterFacts`), outside the promotion transaction, so a missing column
-  (migration not yet applied) can never block a sync; `absent` rows keep their last values.
+  best-effort step right after promotion (`persistRosterFacts`), outside the promotion transaction, so a failure of
+  that step never blocks a sync; `absent` rows keep their last values. The columns are declared on the Drizzle table,
+  so the sync's own reads and upserts of `tutor_wise_accounts` name them: migration A must be applied to production
+  before this code deploys, or every sync fails with `42703` (undefined column).
 - `tutor_offboarding_decisions`: `id`, `canonical_key`, `kind` (`still_with_us`), `note`, `snooze_until`,
   `likelihood_at_decision`, `band_at_decision`, `reasons jsonb`, `decided_by_email`, `decided_at`, `revoked_at`,
   `revoked_by_email`; index on `canonical_key` where `revoked_at is null`.
@@ -372,7 +374,8 @@ the owner's word.
 
 1. **PR 1: read-only dashboard.** Migration A; roster extras in the sync; scoring engine; page with inbox, drawer,
    Still with us, staff panel, owner grant panel, How the score works; docs (feature page, API, DB, Wise roster
-   fields). Rendered with fixture data to a PNG for the owner before merge.
+   fields). Rendered with fixture data to a PNG for the owner before merge. Gate: migration A is applied to
+   production before PR 1 merges (the sync reads the new columns).
 2. **PR 2: removal flow.** Migration B; Wise helper and no-retry client; preview / confirm / apply in manual and live
    modes; reconcile hook; History tab; probe script; docs (`env.md` flag, Wise writeback table).
 3. **Operations**, each with the owner's go-ahead: apply migrations to production → admins use manual mode → run the

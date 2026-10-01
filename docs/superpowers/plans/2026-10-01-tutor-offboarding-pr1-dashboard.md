@@ -24,7 +24,7 @@
 - **Instants are ISO strings** in every payload (cacheable, client-safe). Bangkok day math uses `bangkokDateKey` from `@/lib/room-capacity/dates`.
 - **Copy is plain language** for non-technical admins: "likelihood", "last class", "still with us"; no "model", "logit", "probability".
 - **Fixtures use made-up names and `@example.com` emails only.** Never real tutor names.
-- **Migration:** hand-written SQL plus a journal entry; take the next free number at build time (this plan says `0102`; the autowriter plans earmark 0102–0104, so renumber if `origin/main` already has it). Never commit untrimmed `db:generate` output. Applying it to production needs the owner's word.
+- **Migration:** hand-written SQL plus a journal entry; take the next free number at build time (this plan says `0102`; the autowriter plans earmark 0102–0104, so renumber if `origin/main` already has it). Never commit untrimmed `db:generate` output. Applying it to production needs the owner's word. Apply 0102 to production BEFORE PR 1 merges: the sync's reads of `tutor_wise_accounts` name the new columns.
 - **Worktree:** work only in `.claude/worktrees/slot-a` on branch `feat/tutor-offboarding`. No local `npm run build` (CI builds).
 - **Every commit message ends with** `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - **PR stays draft** until a reviewer reports CLEAR; merge only with the owner's OK.
@@ -41,6 +41,7 @@
 | `src/tests/integration/db-helper.ts` (modify) | `truncateAll` covers new and newly seeded tables |
 | `src/lib/wise/types.ts` (modify) | Optional roster fields on `WiseTeacher` / `WiseUserReference` |
 | `src/lib/tutor-onboarding/roster-facts.ts` (create) | `extractRosterFacts` (pure) + `persistRosterFacts` (one bulk UPDATE) |
+| `src/lib/db/sql-state.ts` (create) | `sqlStateOf`: SQLSTATE of a driver or Drizzle error (`code ?? cause.code`, never message text); used by the sync's roster step and by Task 5 |
 | `src/lib/sync/orchestrator.ts` (modify) | Best-effort roster-facts step after promotion; result in run metadata |
 | `src/lib/tutor-offboarding/calibration.ts` (create) | Pure: taught dates → return-rate curve; base likelihood for a gap |
 | `src/lib/tutor-offboarding/types.ts` (create) | Every Tutor Offboarding type |
@@ -341,8 +342,9 @@ Create `drizzle/0102_tutor_offboarding.sql`:
 
 ```sql
 -- Tutor Offboarding PR 1, migration A (spec docs/superpowers/specs/2026-10-01-tutor-offboarding-design.md §7).
--- Additive only: four nullable roster columns and three new tables. Safe to apply before the code ships: the
--- sync writes the columns best-effort, and the page reports "not set up" until this has run.
+-- Additive only: four nullable roster columns and three new tables. OWNER GATE: apply this BEFORE deploying the
+-- code that declares these columns, because the sync reads and upserts tutor_wise_accounts by column name (a
+-- missing column fails every sync with 42703). Applying it early is safe for the code live today: additive, nullable.
 ALTER TABLE "tutor_wise_accounts" ADD COLUMN "wise_relation" text;
 --> statement-breakpoint
 ALTER TABLE "tutor_wise_accounts" ADD COLUMN "wise_joined_on" timestamp with time zone;
@@ -535,6 +537,12 @@ In `src/lib/sync/orchestrator.ts`, after the import line `import { loadAccountMa
 import { extractRosterFacts, persistRosterFacts } from "@/lib/tutor-onboarding/roster-facts";
 ```
 
+and, after the line `import * as schema from "@/lib/db/schema";`, add (the helper lives in `src/lib/db/sql-state.ts`, see File Structure):
+
+```ts
+import { sqlStateOf } from "@/lib/db/sql-state";
+```
+
 Directly after the existing block that ends
 
 ```ts
@@ -546,15 +554,21 @@ Directly after the existing block that ends
 insert:
 
 ```ts
-    // Tutor Offboarding (OFF-02): roster details the detector scores on. Best effort and outside the promotion
-    // transaction, so a missing column (migration not yet applied) can never block a sync.
+    // Tutor Offboarding (OFF-02): roster details the detector scores on. A failure of THIS step never blocks a
+    // sync: it is best effort and runs outside the promotion transaction. Migration 0102 is different: it must be
+    // applied before this code deploys, because the sync's own reads and upserts of tutor_wise_accounts
+    // (loadAccountMappings, promoteWithTutorContacts) name these columns, so a missing column fails every sync
+    // with 42703. Only the error's name and SQLSTATE are kept: a database error's message is the query and its
+    // parameters.
     let rosterFacts: { updated?: number; error?: string } = {};
     if (promotedSnapshotId && importContacts) {
       try {
         rosterFacts = { updated: await persistRosterFacts(db, extractRosterFacts(wiseTeachers)) };
       } catch (error) {
-        rosterFacts = { error: error instanceof Error ? error.message.slice(0, 500) : String(error) };
-        console.error("[sync-orchestrator] roster facts capture failed", rosterFacts.error);
+        const errorName = error instanceof Error ? error.name : "UnknownError";
+        const sqlState = sqlStateOf(error);
+        rosterFacts = { error: `${errorName} (${sqlState ?? "no SQLSTATE"})` };
+        console.error("[sync-orchestrator] roster facts capture failed", { errorName, sqlState });
       }
     }
 ```
@@ -1831,7 +1845,7 @@ EOF
 - Test: `src/lib/tutor-offboarding/__tests__/api.test.ts`
 
 **Interfaces:**
-- Consumes: schema (Task 1), types (Task 3), `withDatabaseTransaction` (`@/lib/db/transaction`), `sqlStateOf` (`@/lib/feedback-autowriter/db-errors`), `isSuperAdminEmail` (`@/lib/admin-users/policy`), `AdminUsersAccessError` (`@/lib/admin-users/types`), `auth` (`@/lib/auth`).
+- Consumes: schema (Task 1), types (Task 3), `withDatabaseTransaction` (`@/lib/db/transaction`), `sqlStateOf` (`@/lib/db/sql-state`), `isSuperAdminEmail` (`@/lib/admin-users/policy`), `AdminUsersAccessError` (`@/lib/admin-users/types`), `auth` (`@/lib/auth`).
 - Produces:
   - `class TutorOffboardingError extends Error { status: 400 | 401 | 403 | 404 | 409 | 422 }`, `isMissingSchemaError(error: unknown): boolean`
   - `SNOOZE_DAYS = [90, 365] as const`, `type SnoozeDays`, `listDecisions(db?, now?, logLimit?): Promise<DecisionRecord[]>`, `recordStillWithUs(db, input): Promise<DecisionRecord>`, `revokeDecision(db, input): Promise<DecisionRecord>`
@@ -1976,7 +1990,7 @@ Expected: FAIL — `Failed to resolve import "../decisions"`.
 Create `src/lib/tutor-offboarding/errors.ts`:
 
 ```ts
-import { sqlStateOf } from "@/lib/feedback-autowriter/db-errors";
+import { sqlStateOf } from "@/lib/db/sql-state";
 
 /** A request Tutor Offboarding refuses on purpose; the message is safe to show. */
 export class TutorOffboardingError extends Error {
@@ -2181,7 +2195,7 @@ Create `src/lib/tutor-offboarding/api.ts`:
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { AdminUsersAccessError } from "@/lib/admin-users/types";
-import { sqlStateOf } from "@/lib/feedback-autowriter/db-errors";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import { isMissingSchemaError, TutorOffboardingError } from "./errors";
 
 /**
@@ -4402,6 +4416,7 @@ gh pr create --draft --base main --title "Tutor Offboarding PR 1: read-only depa
 Spec: `docs/superpowers/specs/2026-10-01-tutor-offboarding-design.md` · Plan: `docs/superpowers/plans/2026-10-01-tutor-offboarding-pr1-dashboard.md`
 
 ## Test plan
+- [ ] Owner applied migration 0102 to production BEFORE merge (the snapshot sync reads the new columns)
 - [ ] `npm run typecheck`, `npm run lint`, `npm test`
 - [ ] Integration: `npx vitest run --project integration src/lib/tutor-offboarding src/lib/tutor-onboarding src/lib/sync`
 - [ ] Fixture renders reviewed by the owner (`node scripts/dev/render-tutor-offboarding.mjs`)
