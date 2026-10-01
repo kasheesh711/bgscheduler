@@ -12,6 +12,7 @@ import {
 import { JUDGE_PROMPT_VERSION } from "../judge";
 import { speakerLabelNote } from "../prompt";
 import { MIMI_STYLE_GUIDE, type FeedbackStyleGuide } from "../style";
+import { buildSystemStatus } from "../system-status";
 import { GOOD_FIELDS, STUDENT_NAME } from "./fixtures";
 
 const usage = { promptTokens: 1000, completionTokens: 2000, reasoningTokens: 1700, cachedTokens: 0, costUsd: 0.002 };
@@ -1088,7 +1089,9 @@ describe("hardening follow-ups (30 Sep reviews of #113 and #114)", () => {
       id: "default", mode: "live" as const, disabledTutors: [], haltedAt: null, haltReason: null, leaseToken: null, leaseUntil: null,
       updatedBy: null, updatedAt: new Date("2026-09-30T01:00:00.000Z"),
     };
-    expect(buildAutowriterDashboard({ now: new Date("2026-09-30T05:00:00.000Z"), windowDays: 7, control, sessions: [], calls, webhooks: [] }).judgeRejections).toBe(2);
+    expect(buildAutowriterDashboard({
+      now: new Date("2026-09-30T05:00:00.000Z"), windowDays: 7, control, system: buildSystemStatus({}), holds: [], sessions: [], calls, webhooks: [],
+    }).judgeRejections).toBe(2);
     // A reply with a generation id keeps it as the key.
     const withId = run({ writers: [SOL(writerJson)], judge: [GLM(FAITHFUL)] });
     await withId.promise;
