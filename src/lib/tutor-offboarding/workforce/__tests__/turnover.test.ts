@@ -37,6 +37,13 @@ describe("monthly reconstructed Wise roster", () => {
     expect(row.departuresCount.value).toBe(0);
     expect(buildWorkforcePersonStates(data, now)[0].pendingDeparture).toBe(true);
   });
+  it("uses current future membership when an old booking has been removed", () => {
+    const data = evidence([person("p")], [session("p"), session("removed", { canonicalTutorKeys: ["p"], startAt: "2026-10-20T02:00:00Z", endAt: "2026-10-20T03:00:00Z", meetingStatus: "FUTURE", reasonCodes: ["absent_from_current_future_snapshot"] })]);
+    const state = buildWorkforcePersonStates(data, now)[0];
+    expect(state.pendingDeparture).toBe(false);
+    expect(state.departedAt).toBe("2026-09-20T03:00:00.000Z");
+    expect(data.sessions).toHaveLength(2);
+  });
   it("does not extend the last day with cancellations or student no-shows", () => {
     const data = evidence([person("p")], [session("p"), session("cancel", { canonicalTutorKeys: ["p"], startAt: "2026-10-02T02:00:00Z", endAt: "2026-10-02T03:00:00Z", meetingStatus: "CANCELLED" }), session("absent", { canonicalTutorKeys: ["p"], startAt: "2026-09-30T02:00:00Z", endAt: "2026-09-30T03:00:00Z", attendanceStatus: "STUDENT_NO_SHOW" })]);
     expect(buildWorkforcePersonStates(data, now)[0].departedAt).toBe("2026-09-20T03:00:00.000Z");

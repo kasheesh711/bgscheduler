@@ -59,7 +59,8 @@ export function buildWorkforcePersonStates(evidence: WorkforceEvidence, now: Dat
     dateValue(c.observedAt)! <= now.getTime() && now.getTime() - dateValue(c.observedAt)! <= MAX_SOURCE_AGE);
 
   return [...people.values()].map(person => {
-    const sessions = [...new Map((sessionsByPerson.get(person.canonicalKey) ?? []).map(s => [s.wiseSessionId, s])).values()];
+    const sessions = [...new Map((sessionsByPerson.get(person.canonicalKey) ?? []).map(s => [s.wiseSessionId, s])).values()]
+      .filter(s => !s.reasonCodes.includes("absent_from_current_future_snapshot"));
     const observations = observationsByPerson.get(person.canonicalKey) ?? [];
     const teachingEvidence = observations.some(o => o.qualifications.length > 0 || o.offeredWindows.some(w => w.endMinute > w.startMinute)) ||
       sessions.some(s => (recordedTeachingMinutes(s, creditsBySession.get(s.wiseSessionId) ?? []).value ?? 0) > 0);
