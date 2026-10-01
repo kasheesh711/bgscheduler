@@ -12,10 +12,12 @@ export function WorkforceFilters({
   subjects,
   busy = false,
   onChange,
+  growthScope = false,
 }: {
   query: WorkforceQuery;
   subjects: WorkforceSubjectRow[];
   busy?: boolean;
+  growthScope?: boolean;
   onChange: (query: WorkforceQuery) => void;
 }) {
   const [draft, setDraft] = useState(query);
@@ -71,7 +73,7 @@ export function WorkforceFilters({
         setError(null);
         onChange(draft);
       }}
-      className="lg:sticky lg:top-0 z-10 space-y-3 rounded-[10px] border bg-card/95 p-4 backdrop-blur-sm"
+      className="space-y-3 rounded-[10px] border bg-card p-4"
     >
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
         <label className="text-xs text-muted-foreground">
@@ -112,7 +114,8 @@ export function WorkforceFilters({
           Role
           <select
             className={`${selectClass} mt-1`}
-            value={draft.role}
+            disabled={growthScope}
+            value={growthScope ? "all" : draft.role}
             onChange={(e) => change("role", e.target.value)}
           >
             <option value="all">Tutors + teaching admins</option>
@@ -146,7 +149,8 @@ export function WorkforceFilters({
           Mode
           <select
             className={`${selectClass} mt-1`}
-            value={draft.modality}
+            disabled={growthScope}
+            value={growthScope ? "all" : draft.modality}
             onChange={(e) => change("modality", e.target.value)}
           >
             <option value="all">All modes</option>

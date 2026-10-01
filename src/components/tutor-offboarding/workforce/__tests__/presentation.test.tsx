@@ -9,6 +9,7 @@ import {
   changeFilter,
 } from "../presentation";
 import { WorkforceDashboard } from "../dashboard";
+import { UtilizationTable } from "../utilization-table";
 describe("workforce presentation", () => {
   it("keeps unknown distinct from a confirmed zero", () => {
     expect(formatMetric(metric(null))).toBe("Unavailable");
@@ -58,18 +59,27 @@ describe("workforce presentation", () => {
     );
     for (const text of [
       "3 ÷ 60 × 100 = 5%",
-      "Reserved utilization",
-      "Credit-consumed utilization",
-      "Recorded teaching utilization",
       "7 h",
-      "Unavailable",
-      "125%",
+      "unavailable evidence",
       "Approved leave",
       "Student bookings",
       "Shared capacity",
       "Source quality",
     ])
       expect(html).toContain(text);
+    const people = renderToStaticMarkup(
+      <UtilizationTable
+        people={workforceFixture().people}
+        onSelect={() => {}}
+      />,
+    );
+    for (const label of [
+      "Reserved utilization",
+      "Credit-consumed utilization",
+      "Recorded teaching utilization",
+      "125%",
+    ])
+      expect(people).toContain(label);
     expect(html).not.toContain("shortage");
   });
 });

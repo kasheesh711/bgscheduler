@@ -1,13 +1,13 @@
 "use client";
 import { useState } from "react";
 import type { WorkforceWeekCell } from "@/lib/tutor-offboarding/workforce/types";
-import { Panel } from "../atoms";
+import { scaleBand, scaleSequential, interpolateRgb } from "d3";
+import { useId } from "react";
+import { activate, ChartPanel, useChartWidth } from "./charts";
 import {
   formatMetric,
   metricReason,
   heatDomain,
-  heatTone,
-  HEAT_CLASSES,
   METRIC_LABELS,
   monthLabel,
   type DisplayMetric,
@@ -28,114 +28,172 @@ export function WeekHeatmap({
   month: string;
   onSelect: (cell: WorkforceWeekCell) => void;
 }) {
-  const [metric, setMetric] = useState<DisplayMetric>("freeHours");
-  const selected = cells.filter((cell) => cell.month === month);
-  const domain = heatDomain(cells, metric);
-  const times = [...new Set(selected.map((cell) => cell.startMinute))].sort(
-    (a, b) => a - b,
-  );
+  const [metric, setMetric] = useState<DisplayMetric>("freeHours"),
+    { ref, width } = useChartWidth();
+  const pattern = useId().replaceAll(":", "");
+  const selected = cells.filter((c) => c.month === month),
+    times = [...new Set(selected.map((c) => c.startMinute))].sort(
+      (a, b) => a - b,
+    ),
+    domain = heatDomain(cells, metric);
+  const x = scaleBand<number>()
+      .domain([1, 2, 3, 4, 5, 6, 0])
+      .range([48, width - 6])
+      .padding(0.06),
+    y = scaleBand<number>()
+      .domain(times)
+      .range([30, 30 + times.length * 44])
+      .padding(0.08),
+    color = scaleSequential(interpolateRgb("#eaf5fb", "#087bb5")).domain([
+      0,
+      domain,
+    ]);
   return (
-    <Panel aria-label="Average week heat map">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
-        <div>
-          <h3 className="font-semibold">Average week · {monthLabel(month)}</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            30-minute buckets · hours per supported weekday occurrence · Bangkok
-            time. Each cell includes its monthly total and supported dates.
-          </p>
-        </div>
-        <label className="text-xs">
-          Week measure
-          <select
-            className="mt-1 block max-w-full rounded-md border bg-background p-2"
-            value={metric}
-            onChange={(e) => setMetric(e.target.value as DisplayMetric)}
-          >
-            {(
-              [
-                "freeHours",
-                "usableHours",
-                "bookedHours",
-                "creditConsumedHours",
-                "recordedTeachingHours",
-              ] as DisplayMetric[]
-            ).map((key) => (
-              <option key={key} value={key}>
-                {METRIC_LABELS[key]}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      <p className="px-5 py-3 text-xs text-muted-foreground">
-        Comparable scale across report months: 0–{domain.toFixed(2)} h · Missing
-        support stays unavailable.
+    <ChartPanel
+      title={`Average week · ${monthLabel(month)}`}
+      subtitle="Hours per supported weekday · 30-minute buckets · Bangkok"
+      action={
+        <select
+          aria-label="Week measure"
+          value={metric}
+          onChange={(e) => setMetric(e.target.value as DisplayMetric)}
+          className="max-w-48 rounded border bg-background p-2 text-xs"
+        >
+          {(
+            [
+              "freeHours",
+              "usableHours",
+              "bookedHours",
+              "creditConsumedHours",
+              "recordedTeachingHours",
+            ] as DisplayMetric[]
+          ).map((k) => (
+            <option key={k} value={k}>
+              {METRIC_LABELS[k]}
+            </option>
+          ))}
+        </select>
+      }
+    >
+      <p className="mb-3 text-xs text-muted-foreground">
+        {METRIC_LABELS[metric]} · fixed 0–{domain.toFixed(2)} h · ▧ Unknown · ~
+        Partial
       </p>
-      <div className="max-h-[480px] overflow-auto">
-        <table className="w-full text-xs">
-          <caption className="sr-only">
-            Average week hours by weekday and half-hour interval
-          </caption>
-          <thead className="sticky top-0 bg-card">
-            <tr>
-              <th scope="col" className="px-3 py-2 text-left">
-                Bangkok
-              </th>
-              {[1, 2, 3, 4, 5, 6, 0].map((day) => (
-                <th scope="col" key={day} className="min-w-20 p-2">
-                  {DAYS[day]}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {times.map((time) => (
-              <tr key={time}>
-                <th
-                  scope="row"
-                  className="whitespace-nowrap px-3 py-2 text-left font-normal"
-                >
-                  {minuteLabel(time)}–{minuteLabel(time + 30)}
-                </th>
-                {[1, 2, 3, 4, 5, 6, 0].map((day) => {
-                  const cell = selected.find(
-                    (cell) => cell.weekday === day && cell.startMinute === time,
-                  );
-                  const tone = cell
-                    ? heatTone(cell[metric], domain)
-                    : "unknown";
-                  return (
-                    <td key={day} className="p-1">
-                      {cell ? (
-                        <button
-                          onClick={() => onSelect(cell)}
-                          title={weekCellLabel(cell, metric)}
-                          aria-label={weekCellLabel(cell, metric)}
-                          className={`w-full rounded p-2 focus-visible:outline-2 focus-visible:outline-primary ${tone === "unknown" ? "bg-muted/40 text-muted-foreground" : HEAT_CLASSES[tone]}`}
-                        >
-                          {formatMetric(cell[metric], "h")}
-                        </button>
-                      ) : (
-                        <span
-                          className="block rounded bg-muted/20 p-2 text-center text-muted-foreground"
-                          aria-label={`${DAYS[day]} ${minuteLabel(time)} unavailable`}
-                        >
-                          —
-                        </span>
-                      )}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div ref={ref} className="max-h-[500px] overflow-auto">
+        <svg
+          width={width}
+          height={Math.max(80, times.length * 44 + 40)}
+          role="group"
+          aria-label="Average week hours by weekday and half-hour interval"
+          style={{ fontSize: 11 }}
+        >
+          <defs>
+            <pattern
+              id={pattern}
+              width="6"
+              height="6"
+              patternUnits="userSpaceOnUse"
+            >
+              <rect width="6" height="6" fill="#edf0f2" />
+              <path d="M0 6L6 0" stroke="#cbd3db" strokeWidth=".8" />
+            </pattern>
+          </defs>
+          {[1, 2, 3, 4, 5, 6, 0].map((d) => (
+            <text
+              key={d}
+              x={x(d)! + x.bandwidth() / 2}
+              y="18"
+              textAnchor="middle"
+              fill="currentColor"
+            >
+              {DAYS[d]}
+            </text>
+          ))}
+          {times.map((t) => (
+            <g key={t}>
+              <text
+                x="42"
+                y={y(t)! + y.bandwidth() / 2 + 4}
+                textAnchor="end"
+                fill="currentColor"
+              >
+                {minuteLabel(t)}
+              </text>
+              {[1, 2, 3, 4, 5, 6, 0].map((d) => {
+                const c = selected.find(
+                    (v) => v.startMinute === t && v.weekday === d,
+                  ),
+                  v = c?.[metric],
+                  unknown = v?.value == null;
+                return (
+                  <g
+                    key={d}
+                    role={c ? "button" : undefined}
+                    tabIndex={c ? 0 : undefined}
+                    aria-label={
+                      c
+                        ? weekCellLabel(c, metric)
+                        : `${DAYS[d]} ${minuteLabel(t)} unavailable`
+                    }
+                    onClick={() => c && onSelect(c)}
+                    onKeyDown={(e) => c && activate(e, () => onSelect(c))}
+                    className="cursor-pointer focus:outline-2 focus:outline-primary"
+                  >
+                    <rect
+                      x={x(d)}
+                      y={y(t)}
+                      width={x.bandwidth()}
+                      height={y.bandwidth()}
+                      rx="3"
+                      fill={unknown ? `url(#${pattern})` : color(v!.value!)}
+                      stroke={
+                        v?.completeness === "partial" ? "#d97706" : "none"
+                      }
+                    />
+                    <text
+                      x={x(d)! + x.bandwidth() / 2}
+                      y={y(t)! + y.bandwidth() / 2 + 4}
+                      textAnchor="middle"
+                      fill={
+                        !unknown && v!.value! > domain * 0.6
+                          ? "white"
+                          : "#334155"
+                      }
+                    >
+                      {unknown
+                        ? "?"
+                        : `${v?.completeness === "partial" ? "~" : ""}${formatMetric(v)}`}
+                    </text>
+                    {c && <title>{weekCellLabel(c, metric)}</title>}
+                  </g>
+                );
+              })}
+            </g>
+          ))}
+        </svg>
       </div>
-      {times.length === 0 ? (
-        <p className="p-5 text-sm text-muted-foreground">
+      {!times.length && (
+        <p className="text-sm text-muted-foreground">
           Average-week evidence is unavailable for this month.
         </p>
-      ) : null}
-    </Panel>
+      )}
+      <details className="mt-3 text-xs">
+        <summary className="cursor-pointer text-muted-foreground">
+          View monthly totals & support
+        </summary>
+        <ul className="mt-3 space-y-2">
+          {selected.map((c) => (
+            <li key={c.key}>
+              <button
+                className="text-left text-primary"
+                onClick={() => onSelect(c)}
+              >
+                {weekCellLabel(c, metric)}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </details>
+    </ChartPanel>
   );
 }

@@ -1,6 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
-import type { ChartConfiguration } from "chart.js";
+import { useState } from "react";
 import type {
   WorkforceDrilldown,
   WorkforceUtilizationMetrics,
@@ -12,10 +11,8 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import {
-  ChartCanvas,
-  chartColors,
-} from "@/components/sales-dashboard/chart-canvas";
+import { LinesChart, INK } from "./charts";
+import { SharedPoolDiagram, GroupCreditDiagram } from "./overview";
 import { Panel, Tag } from "../atoms";
 import {
   formatMetric,
@@ -81,36 +78,6 @@ export function DetailContent({
       ? detail.people.find((p) => p.canonicalKey === detail.key)
       : undefined;
   const [week, setWeek] = useState(`${detail.query.viewMonth}-01`);
-  const config = useMemo<ChartConfiguration>(() => {
-    const colors = chartColors();
-    return {
-      type: "line",
-      data: {
-        labels: person?.months.map((m) => monthLabel(m.month)) ?? [],
-        datasets: Object.entries(RATE_LABELS).map(([key, label], index) => ({
-          label,
-          data:
-            person?.months.map(
-              (m) => m[key as keyof typeof RATE_LABELS].value,
-            ) ?? [],
-          borderColor: colors.chart[index],
-          spanGaps: false,
-        })),
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        scales: {
-          y: {
-            beginAtZero: true,
-            title: { display: true, text: "Utilization (%)" },
-          },
-        },
-        plugins: { legend: { position: "bottom" } },
-      },
-    };
-  }, [person]);
   const start = new Date(`${week}T00:00:00+07:00`).getTime();
   const end = start + 7 * 86400000;
   const sessions = detail.sessions.filter(
@@ -144,13 +111,21 @@ export function DetailContent({
           </p>
           <DetailMetrics row={person} />
           <h4 className="font-semibold">Monthly utilization</h4>
-          <div className="h-56">
-            <ChartCanvas
-              config={config}
-              className="h-full"
-              ariaLabel="All three monthly utilization rates. The following table contains the values."
-            />
-          </div>
+          <LinesChart
+            label="Monthly reserved, credit-consumed and recorded teaching utilization percentages"
+            unit="%"
+            rows={person.months.map((m) => ({
+              month: m.month,
+              reserved: m.reservedUtilizationPercent,
+              credit: m.consumedUtilizationPercent,
+              actual: m.recordedTeachingUtilizationPercent,
+            }))}
+            series={[
+              { key: "reserved", label: "Reserved", color: INK.supply },
+              { key: "credit", label: "Credit-consumed", color: INK.credit },
+              { key: "actual", label: "Recorded teaching", color: INK.actual },
+            ]}
+          />
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>
@@ -207,27 +182,8 @@ export function DetailContent({
           ) : null}
         </div>
       )}
-      <Panel className="p-4">
-        <h4 className="font-semibold">How group credit works</h4>
-        <p className="mt-2 text-xs leading-relaxed">
-          Example: a one-hour group class with two students charged 100% and 50%
-          uses 60 × mean(1, 0.5) = <strong>45 minutes</strong> of
-          credit-consumed tutor-time. It remains one class and two student
-          bookings. Credit consumption and recorded teaching are separate
-          measures.
-        </p>
-      </Panel>
-      <div>
-        <h4 className="font-semibold">
-          Shared capacity and other-subject commitments
-        </h4>
-        <p className="mt-2 text-xs text-muted-foreground">
-          A tutor qualified in Maths and Physics with eight usable hours and one
-          Physics booking has seven shared free hours eligible for either
-          subject. The overall pool is seven hours. The booking occupies the
-          same tutor-time in every eligible subject.
-        </p>
-      </div>
+      <GroupCreditDiagram />
+      <SharedPoolDiagram />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h4 className="font-semibold">Selected-week schedule</h4>
         <label className="text-xs">

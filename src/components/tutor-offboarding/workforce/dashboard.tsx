@@ -16,6 +16,9 @@ import { WeekHeatmap } from "./week-heatmap";
 import { UtilizationTable } from "./utilization-table";
 import { WorkforceDetailDrawer } from "./detail-drawer";
 import { QualityPanel } from "./quality-panel";
+import { GrowthView } from "./growth-view";
+import { SubjectCapacity, OverallTrend } from "./overview";
+import { Sparkline, INK } from "./charts";
 import {
   formatMetric,
   metricReason,
@@ -47,6 +50,7 @@ export function WorkforceDashboard({
   onRefresh,
   busy = false,
 }: WorkforceDashboardProps) {
+  const [view, setView] = useState("Overview");
   const [selection, setSelection] = useState<Selection | null>(null);
   const [detail, setDetail] = useState<WorkforceDrilldown | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -185,201 +189,275 @@ export function WorkforceDashboard({
     [onQueryChange, report.query],
   );
   return (
-    <div className="min-w-0 space-y-5" aria-busy={busy}>
-      <header className="flex flex-wrap items-start justify-between gap-3">
+    <div className="min-w-0 space-y-4" aria-busy={busy}>
+      <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold">Tutor workforce</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Workforce movement, shared teaching capacity and observed demand.
-          </p>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Report generated {bangkokTime(report.generatedAt)} ·{" "}
-            {report.query.from}–{report.query.to}
+          <h2 className="text-xl font-semibold">Tutor workforce & growth</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {report.query.from}–{report.query.to} ·{" "}
+            {report.quality.completeness} evidence · updated{" "}
+            {bangkokTime(report.generatedAt)}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <QualityPanel report={report} onRefresh={refresh} />
-          <label className="sr-only" htmlFor="workforce-export">
-            Export section
-          </label>
-          <select
-            id="workforce-export"
-            value={exportSection}
-            onChange={(e) =>
-              setExportSection(e.target.value as WorkforceExportSection)
-            }
-            className="h-8 max-w-full rounded border bg-background px-2 text-xs"
-            disabled={exporting || busy}
-          >
-            {(["months", "subjects", "week", "people"] as const).map(
-              (section) => (
-                <option value={section} key={section}>
-                  Export {section}
+          <label className="text-xs">
+            Month{" "}
+            <select
+              aria-label="Dashboard selected month"
+              value={report.query.viewMonth}
+              disabled={busy}
+              onChange={(e) => selectMonth(e.target.value)}
+              className="ml-1 rounded border bg-background p-2"
+            >
+              {report.months.map((m) => (
+                <option key={m.month} value={m.month}>
+                  {monthLabel(m.month)}
                 </option>
-              ),
-            )}
-          </select>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void exportCsv()}
-            disabled={exporting || busy}
-          >
-            {exporting ? "Preparing CSV…" : "Download CSV"}
-          </Button>
+              ))}
+            </select>
+          </label>
+          <QualityPanel report={report} onRefresh={refresh} />
+          {view !== "Growth" && (
+            <>
+              <select
+                aria-label="Export section"
+                value={exportSection}
+                onChange={(e) =>
+                  setExportSection(e.target.value as WorkforceExportSection)
+                }
+                className="max-w-36 rounded border bg-background p-2 text-xs"
+                disabled={exporting || busy}
+              >
+                {(["months", "subjects", "week", "people"] as const).map(
+                  (section) => (
+                    <option value={section} key={section}>
+                      {section}
+                    </option>
+                  ),
+                )}
+              </select>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void exportCsv()}
+                disabled={exporting || busy}
+              >
+                {exporting ? "Preparing…" : "Export CSV"}
+              </Button>
+            </>
+          )}
         </div>
       </header>
-      {exportError ? (
+      {exportError && (
         <p role="alert" className="text-sm text-conflict">
           {exportError}
         </p>
-      ) : null}
-      <WorkforceFilters
-        key={queryKey}
-        query={report.query}
-        subjects={[...initialSubjects, ...report.subjects]}
-        onChange={onQueryChange}
-        busy={busy || exporting}
-      />
-      {busy ? (
-        <p role="status" className="rounded border bg-primary/5 p-3 text-sm">
-          Loading the selected filters. Values below remain the previous report
-          until the new evidence arrives.
-        </p>
-      ) : null}
-      <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-sm font-semibold">
-          {monthLabel(report.query.viewMonth)}
-        </h3>
-        {month?.partialMonth ? <Tag tone="amber">Partial month</Tag> : null}
-        <span className="text-xs text-muted-foreground">
-          Selected-month workforce counts
-        </span>
-      </div>
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {(
-          [
-            ["Opening Wise roster", month?.openingRosterCount],
-            ["Joined", month?.joinsCount],
-            ["Completed departures", month?.departuresCount],
-            ["Pending departure", month?.pendingCount],
-          ] as const
-        ).map(([label, metric]) => (
-          <Panel className="p-4" key={label}>
-            <p className="text-xs text-muted-foreground">{label}</p>
-            <p
-              className="mt-2 text-2xl font-semibold"
-              title={metricReason(metric)}
-            >
-              {formatMetric(metric)}
-            </p>
-            <p className="mt-2 text-[11px] text-muted-foreground">
-              {label === "Opening Wise roster"
-                ? "Reconstructed from retained Wise history"
-                : label === "Completed departures"
-                  ? "Sheet-marked, after final taught class"
-                  : label === "Pending departure"
-                    ? "Classes remain or completion unverified"
-                    : "Earliest retained Wise account join date"}
-            </p>
-          </Panel>
-        ))}
-      </div>
-      <TurnoverChart
-        months={report.months}
-        selectedMonth={report.query.viewMonth}
-        onSelect={selectMonth}
-        onPeople={(month) =>
-          select({
-            kind: "turnover",
-            key: month,
-            title: `People counted · ${monthLabel(month)}`,
-          })
-        }
-      />
-      <Panel className="p-4">
-        <h3 className="text-sm font-semibold">
-          Shared capacity · overall selected range
-        </h3>
-        <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
-          {(
-            [
-              ["Gross offered hours", report.totals.offeredHours],
-              ["Approved leave", report.totals.leaveHours],
-              ["Usable hours", report.totals.usableHours],
-              ["Shared free hours", report.totals.freeHours],
-            ] as const
-          ).map(([label, metric]) => (
-            <div key={label}>
-              <p className="text-xs text-muted-foreground">{label}</p>
-              <p
-                className="mt-1 text-lg font-semibold"
-                title={metricReason(metric)}
+      )}
+      <div className="flex flex-wrap items-center gap-3 border-b pb-3">
+        <div
+          role="tablist"
+          aria-label="Workforce views"
+          className="flex min-w-0 flex-wrap gap-1"
+        >
+          {["Overview", "Supply & demand", "Tutors", "Growth"].map(
+            (tab, i, tabs) => (
+              <button
+                key={tab}
+                id={`workforce-tab-${i}`}
+                role="tab"
+                aria-selected={view === tab}
+                aria-controls="workforce-view"
+                tabIndex={view === tab ? 0 : -1}
+                className={`rounded-md px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-primary ${view === tab ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                onClick={() => setView(tab)}
+                onKeyDown={(e) => {
+                  if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+                    e.preventDefault();
+                    const next =
+                      (i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) %
+                      tabs.length;
+                    setView(tabs[next]);
+                    document.getElementById(`workforce-tab-${next}`)?.focus();
+                  }
+                  if (e.key === "Home" || e.key === "End") {
+                    e.preventDefault();
+                    const next = e.key === "Home" ? 0 : tabs.length - 1;
+                    setView(tabs[next]);
+                    document.getElementById(`workforce-tab-${next}`)?.focus();
+                  }
+                }}
               >
-                {formatMetric(metric, "h")}
-              </p>
+                {tab}
+              </button>
+            ),
+          )}
+        </div>
+        {month?.partialMonth && <Tag tone="amber">Partial month</Tag>}
+      </div>
+      <details className="group rounded-lg border bg-card px-4 py-2">
+        <summary className="cursor-pointer text-xs font-medium">
+          Filters ·{" "}
+          {[
+            report.query.subject,
+            report.query.curriculum,
+            report.query.level,
+            view === "Growth"
+              ? "All teaching staff · all modes"
+              : `${report.query.role.replaceAll("_", " ")} · ${report.query.modality}`,
+          ]
+            .filter(Boolean)
+            .join(" / ")}
+        </summary>
+        <div className="mt-3">
+          <WorkforceFilters
+            key={`${queryKey}:${view === "Growth"}`}
+            query={report.query}
+            subjects={[...initialSubjects, ...report.subjects]}
+            growthScope={view === "Growth"}
+            onChange={onQueryChange}
+            busy={busy || exporting}
+          />
+        </div>
+      </details>
+      {busy && (
+        <p role="status" className="text-xs text-muted-foreground">
+          Loading selected filters. Previous report remains visible.
+        </p>
+      )}
+      <div
+        id="workforce-view"
+        role="tabpanel"
+        aria-labelledby={`workforce-tab-${["Overview", "Supply & demand", "Tutors", "Growth"].indexOf(view)}`}
+        className="space-y-4"
+      >
+        {view === "Overview" && (
+          <>
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              {(
+                [
+                  [
+                    "Opening roster",
+                    month?.openingRosterCount,
+                    report.months.map((m) => m.openingRosterCount),
+                    "Opening Wise roster reconstructed from retained history.",
+                  ],
+                  [
+                    "Departures",
+                    month?.departuresCount,
+                    report.months.map((m) => m.departuresCount),
+                    "Completed sheet-marked departures after the final taught class.",
+                  ],
+                  [
+                    "Turnover",
+                    month?.turnoverPercent,
+                    report.months.map((m) => m.turnoverPercent),
+                    "Completed departures ÷ opening roster × 100.",
+                  ],
+                  [
+                    "Pending",
+                    month?.pendingCount,
+                    report.months.map((m) => m.pendingCount),
+                    "Classes remain or completion is unverified.",
+                  ],
+                ] as const
+              ).map(([label, metric, trend, definition]) => (
+                <Panel className="p-4" key={label}>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-muted-foreground">{label}</p>
+                    <details className="relative text-xs text-muted-foreground">
+                      <summary
+                        aria-label={`${label} definition`}
+                        className="cursor-pointer list-none rounded focus-visible:outline-2 focus-visible:outline-primary"
+                      >
+                        ⓘ
+                      </summary>
+                      <p className="absolute right-0 z-20 mt-1 w-56 rounded border bg-popover p-3 text-popover-foreground shadow-md">
+                        {definition} {metricReason(metric)}
+                      </p>
+                    </details>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-end justify-between gap-2">
+                    <strong className="text-2xl tabular-nums">
+                      {formatMetric(metric, label === "Turnover" ? "%" : "")}
+                    </strong>
+                    {metric?.completeness === "partial" && (
+                      <Tag tone="amber">Partial</Tag>
+                    )}
+                    <Sparkline
+                      values={[...trend]}
+                      color={label === "Departures" ? INK.loss : INK.supply}
+                    />
+                  </div>
+                </Panel>
+              ))}
             </div>
-          ))}
-        </div>
-        <p className="mt-3 text-xs text-muted-foreground">
-          Usable = offered hours − approved leave. Shared free = usable hours
-          after blocking commitments. Each tutor’s time is counted once in
-          overall totals. Booked demand is not a measure of unmet demand.
-        </p>
-        <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs">
-          <span>
-            Unique students: {formatMetric(report.totals.uniqueStudents)}
-          </span>
-          <span>
-            Student bookings: {formatMetric(report.totals.studentBookings)}
-          </span>
-          <span>Classes: {formatMetric(report.totals.distinctClasses)}</span>
-          <span>
-            Booked tutor-hours: {formatMetric(report.totals.bookedHours, "h")}
-          </span>
-        </div>
-      </Panel>
-      <SubjectMatrix
-        rows={report.subjects}
-        months={report.months.map((month) => month.month)}
-        onSelect={(row) =>
-          select({
-            kind: "subject_cell",
-            key: row.key,
-            title: `${[row.subject, row.curriculum, row.level].filter(Boolean).join(" / ")} · ${monthLabel(row.month)}`,
-          })
-        }
-      />
-      <WeekHeatmap
-        cells={report.weekCells}
-        month={report.query.viewMonth}
-        onSelect={(cell) =>
-          select({
-            kind: "subject_cell",
-            key: cell.key,
-            title: `Average-week evidence · ${monthLabel(cell.month)}`,
-          })
-        }
-      />
-      <UtilizationTable
-        people={report.people}
-        onSelect={(person) =>
-          select({
-            kind: "person",
-            key: person.canonicalKey,
-            title: person.displayName,
-          })
-        }
-      />
-      <Panel className="p-4">
-        <h3 className="text-sm font-semibold">Source quality</h3>
-        <p className="mt-2 text-xs text-muted-foreground">
-          {report.quality.completeness} supporting evidence · Historical
-          capacity remains unavailable wherever availability was not retained.
-          Review exact class labels and coverage before making staffing
-          decisions.
-        </p>
-      </Panel>
+            <div className="grid items-start gap-4 xl:grid-cols-[1.6fr_1fr]">
+              <TurnoverChart
+                months={report.months}
+                selectedMonth={report.query.viewMonth}
+                onSelect={selectMonth}
+                onPeople={(m) =>
+                  select({
+                    kind: "turnover",
+                    key: m,
+                    title: `People counted · ${monthLabel(m)}`,
+                  })
+                }
+              />
+              <SubjectCapacity
+                report={report}
+                onSelect={(r) =>
+                  select({
+                    kind: "subject_cell",
+                    key: r.key,
+                    title: `${r.subject} · ${monthLabel(r.month)}`,
+                  })
+                }
+              />
+            </div>
+            <OverallTrend report={report} />
+          </>
+        )}
+        {view === "Supply & demand" && (
+          <>
+            <SubjectMatrix
+              rows={report.subjects}
+              months={report.months.map((m) => m.month)}
+              onSelect={(r) =>
+                select({
+                  kind: "subject_cell",
+                  key: r.key,
+                  title: `${[r.subject, r.curriculum, r.level].filter(Boolean).join(" / ")} · ${monthLabel(r.month)}`,
+                })
+              }
+            />
+            <WeekHeatmap
+              cells={report.weekCells}
+              month={report.query.viewMonth}
+              onSelect={(c) =>
+                select({
+                  kind: "subject_cell",
+                  key: c.key,
+                  title: `Average-week evidence · ${monthLabel(c.month)}`,
+                })
+              }
+            />
+          </>
+        )}
+        {view === "Tutors" && (
+          <UtilizationTable
+            people={report.people}
+            onSelect={(p) =>
+              select({
+                kind: "person",
+                key: p.canonicalKey,
+                title: p.displayName,
+              })
+            }
+          />
+        )}
+        {view === "Growth" && <GrowthView filters={report.query} />}
+      </div>
       <WorkforceDetailDrawer
         open={selection !== null}
         title={selection?.title ?? "Workforce evidence"}
@@ -456,8 +534,8 @@ export function WorkforceTab({
     return () => requestGate.cancel();
   }, [initial, load]);
   return (
-    <section className="mt-5 min-w-0" aria-label="Workforce analytics">
-      <div className="mb-4 flex justify-end">
+    <section className="min-w-0" aria-label="Workforce analytics">
+      <div className="mb-2 flex justify-end">
         <Button
           variant="outline"
           size="sm"

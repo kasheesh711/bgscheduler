@@ -1,13 +1,8 @@
 "use client";
-import { useMemo } from "react";
-import type { ChartConfiguration } from "chart.js";
+import { line, scaleBand, scaleLinear } from "d3";
 import type { WorkforceMonth } from "@/lib/tutor-offboarding/workforce/types";
-import {
-  ChartCanvas,
-  chartColors,
-} from "@/components/sales-dashboard/chart-canvas";
-import { Panel, Tag } from "../atoms";
-import { formatMetric, metricReason, monthLabel } from "./presentation";
+import { activate, ChartPanel, INK, useChartWidth } from "./charts";
+import { formatMetric, monthLabel, metricReason } from "./presentation";
 export function TurnoverChart({
   months,
   selectedMonth,
@@ -19,168 +14,240 @@ export function TurnoverChart({
   onSelect: (month: string) => void;
   onPeople?: (month: string) => void;
 }) {
-  const config = useMemo<ChartConfiguration>(() => {
-    const colors = chartColors();
-    return {
-      type: "bar",
-      data: {
-        labels: months.map((m) => monthLabel(m.month)),
-        datasets: [
-          {
-            label: "Joined · people",
-            data: months.map((m) => m.joinsCount.value),
-            backgroundColor: colors.chart[0],
-            yAxisID: "people",
-          },
-          {
-            label: "Completed departures · people",
-            data: months.map((m) => m.departuresCount.value),
-            backgroundColor: colors.chart[1],
-            yAxisID: "people",
-          },
-          {
-            type: "line",
-            label: "Turnover · %",
-            data: months.map((m) => m.turnoverPercent.value),
-            borderColor: colors.chart[2],
-            backgroundColor: colors.chart[2],
-            yAxisID: "percent",
-            spanGaps: false,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        interaction: { mode: "index", intersect: false },
-        plugins: {
-          legend: {
-            position: "bottom",
-            labels: { color: colors.mutedForeground },
-          },
-        },
-        scales: {
-          people: {
-            beginAtZero: true,
-            title: { display: true, text: "People" },
-            ticks: { precision: 0 },
-          },
-          percent: {
-            position: "right",
-            beginAtZero: true,
-            title: { display: true, text: "Turnover (%)" },
-            grid: { drawOnChartArea: false },
-          },
-          x: { ticks: { color: colors.mutedForeground } },
-        },
-        onClick: (_, elements) => {
-          const index = elements[0]?.index;
-          if (index !== undefined) onSelect(months[index].month);
-        },
-      },
-    };
-  }, [months, onSelect]);
+  const { ref, width } = useChartWidth();
+  const mobile = width < 480;
+  const x = scaleBand()
+    .domain(months.map((m) => m.month))
+    .range([38, width - 16])
+    .padding(0.25);
+  const middle = (month: string) => x(month)! + x.bandwidth() / 2;
+  const y = scaleLinear()
+    .domain([
+      0,
+      Math.max(1, ...months.map((m) => m.turnoverPercent.value ?? 0)),
+    ])
+    .nice()
+    .range([142, 26]);
+  const bars = scaleLinear()
+    .domain([
+      0,
+      Math.max(
+        1,
+        ...months.flatMap((m) => [
+          m.joinsCount.value ?? 0,
+          m.departuresCount.value ?? 0,
+        ]),
+      ),
+    ])
+    .nice()
+    .range([245, 188]);
+  const path = line<WorkforceMonth>()
+    .defined((m) => m.turnoverPercent.value !== null)
+    .x((m) => middle(m.month))
+    .y((m) => y(m.turnoverPercent.value!))(months);
   return (
-    <Panel aria-label="Monthly workforce trends">
-      <div className="space-y-1 border-b px-5 py-4">
-        <h3 className="font-semibold">1. Workforce trends</h3>
-        <p className="text-xs text-muted-foreground">
-          Completed sheet-marked departures ÷ start-of-month reconstructed Wise
-          roster × 100. Tutors with remaining classes stay pending.
-        </p>
-      </div>
-      <div className="h-72 px-3 py-4">
-        <ChartCanvas
-          config={config}
-          ariaLabel="Monthly joins and departures in people, turnover on a separate percentage axis. The table below contains all values."
-          className="h-full"
-        />
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-xs">
-          <caption className="sr-only">
-            Monthly workforce counts, calculation and people drilldown
-          </caption>
-          <thead className="bg-muted/30">
-            <tr>
+    <ChartPanel
+      title="Workforce movement"
+      subtitle="Turnover % above · joins and completed departures below"
+    >
+      <div ref={ref}>
+        <svg
+          width="100%"
+          height="290"
+          viewBox={`0 0 ${width} 290`}
+          role="group"
+          aria-label="Monthly turnover percentages and separately aligned people counts"
+          style={{ fontSize: 11 }}
+        >
+          <title>Monthly workforce movement</title>
+          {y.ticks(3).map((t) => (
+            <g key={t}>
+              <line
+                x1="38"
+                x2={width - 16}
+                y1={y(t)}
+                y2={y(t)}
+                stroke={INK.grid}
+                strokeWidth=".7"
+              />
+              <text x="30" y={y(t) + 4} textAnchor="end" fill="currentColor">
+                {t}%
+              </text>
+            </g>
+          ))}
+          <path
+            d={path ?? ""}
+            fill="none"
+            stroke={INK.supply}
+            strokeWidth="2.5"
+          />
+          {months.map((m, index) => (
+            <g key={m.month}>
+              {selectedMonth === m.month && (
+                <rect
+                  x={x(m.month)! - 4}
+                  y="15"
+                  width={x.bandwidth() + 8}
+                  height="240"
+                  fill={INK.supply}
+                  opacity=".07"
+                />
+              )}
+              {m.turnoverPercent.value !== null ? (
+                <>
+                  <circle
+                    cx={middle(m.month)}
+                    cy={y(m.turnoverPercent.value)}
+                    r={selectedMonth === m.month ? 5 : 3.5}
+                    fill={INK.supply}
+                  />
+                  <text
+                    x={middle(m.month)}
+                    y={y(m.turnoverPercent.value) - 10}
+                    textAnchor="middle"
+                    fill={INK.supply}
+                  >
+                    {formatMetric(m.turnoverPercent, "%")}
+                  </text>
+                </>
+              ) : (
+                <text
+                  x={middle(m.month)}
+                  y="85"
+                  textAnchor="middle"
+                  fill="currentColor"
+                >
+                  ?
+                </text>
+              )}
               {[
-                "Month",
-                "Opening roster",
-                "Joined",
-                "Departed",
-                "Pending",
-                "Turnover calculation",
-              ].map((label) => (
-                <th
-                  scope="col"
-                  key={label}
-                  className="whitespace-nowrap px-4 py-3 font-medium"
+                { metric: m.joinsCount, color: INK.supply, offset: -0.26 },
+                { metric: m.departuresCount, color: INK.loss, offset: 0.02 },
+              ].map((b, i) =>
+                b.metric.value === null ? null : (
+                  <g key={i}>
+                    <rect
+                      x={middle(m.month) + x.bandwidth() * b.offset}
+                      y={bars(b.metric.value)}
+                      width={Math.max(3, x.bandwidth() * 0.24)}
+                      height={245 - bars(b.metric.value)}
+                      fill={b.color}
+                      rx="2"
+                    />
+                    <text
+                      x={middle(m.month) + x.bandwidth() * (b.offset + 0.12)}
+                      y={bars(b.metric.value) - 5}
+                      textAnchor="middle"
+                      fill={b.color}
+                    >
+                      {formatMetric(b.metric)}
+                    </text>
+                  </g>
+                ),
+              )}
+              {(!mobile ||
+                index % Math.ceil(months.length / 4) === 0 ||
+                index === months.length - 1) && (
+                <text
+                  x={middle(m.month)}
+                  y="273"
+                  textAnchor="middle"
+                  fill="currentColor"
                 >
-                  {label}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {months.map((month) => (
-              <tr
-                key={month.month}
-                className={
-                  month.month === selectedMonth ? "bg-primary/5" : "border-t"
-                }
+                  {monthLabel(m.month).split(" ")[0]}
+                </text>
+              )}
+              <rect
+                x={x(m.month)! - 4}
+                y="0"
+                width={Math.max(28, x.bandwidth() + 8)}
+                height="250"
+                fill="transparent"
+                tabIndex={0}
+                role="button"
+                aria-current={m.month === selectedMonth ? "true" : undefined}
+                aria-label={`Select ${monthLabel(m.month)}: turnover ${formatMetric(m.turnoverPercent, "%")}, ${formatMetric(m.joinsCount)} joined, ${formatMetric(m.departuresCount)} departed${m.partialMonth ? ", partial month" : ""}`}
+                onClick={() => onSelect(m.month)}
+                onKeyDown={(e) => activate(e, () => onSelect(m.month))}
+                className="cursor-pointer focus:stroke-primary"
               >
-                <th scope="row" className="px-4 py-3">
-                  <button
-                    type="button"
-                    onClick={() => onSelect(month.month)}
-                    className="rounded text-left text-primary underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-primary"
-                    aria-current={
-                      month.month === selectedMonth ? "true" : undefined
-                    }
-                  >
-                    {monthLabel(month.month)}
-                  </button>
-                  {month.partialMonth ? (
-                    <Tag className="mt-1">Partial month</Tag>
-                  ) : null}
-                </th>
-                {[
-                  month.openingRosterCount,
-                  month.joinsCount,
-                  month.departuresCount,
-                  month.pendingCount,
-                ].map((metric, index) => (
-                  <td
-                    className="px-4 py-3"
-                    key={index}
-                    title={metricReason(metric)}
-                  >
-                    {formatMetric(metric)}
-                  </td>
-                ))}
-                <td
-                  className="min-w-48 px-4 py-3"
-                  title={metricReason(month.turnoverPercent)}
-                >
-                  {`${formatMetric(month.departuresCount)} ÷ ${formatMetric(month.openingRosterCount)} × 100 = ${formatMetric(month.turnoverPercent, "%")}`}
-                  <button
-                    className="mt-1 block text-primary underline focus-visible:outline-2"
-                    onClick={() => onPeople?.(month.month)}
-                  >
-                    See people counted
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                <title>{metricReason(m.turnoverPercent)}</title>
+              </rect>
+            </g>
+          ))}
+          <text x="38" y="178" fill={INK.supply}>
+            Joined · people
+          </text>
+          <text x="160" y="178" fill={INK.loss}>
+            Departed · people
+          </text>
+        </svg>
       </div>
-      {months.length === 0 ? (
-        <p className="p-5 text-sm text-muted-foreground">
-          No monthly workforce evidence is available for this range.
+      <details className="text-xs">
+        <summary className="cursor-pointer text-muted-foreground">
+          View data & definition
+        </summary>
+        <p className="mt-3">
+          Completed sheet-marked departures ÷ opening reconstructed Wise roster
+          × 100. Remaining classes stay pending.
         </p>
-      ) : null}
-    </Panel>
+        <div className="overflow-x-auto">
+          <table className="mt-3 w-full text-left">
+            <thead>
+              <tr>
+                {[
+                  "Month",
+                  "Opening roster",
+                  "Joined",
+                  "Departed",
+                  "Pending",
+                  "Turnover",
+                ].map((s) => (
+                  <th key={s} className="p-2 font-medium">
+                    {s}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {months.map((m) => (
+                <tr key={m.month} className="border-t">
+                  <th className="p-2">
+                    <button onClick={() => onSelect(m.month)}>
+                      {monthLabel(m.month)}
+                      {m.partialMonth ? " · Partial" : ""}
+                    </button>
+                  </th>
+                  {[
+                    m.openingRosterCount,
+                    m.joinsCount,
+                    m.departuresCount,
+                    m.pendingCount,
+                  ].map((v, i) => (
+                    <td key={i} className="p-2">
+                      {formatMetric(v)}
+                    </td>
+                  ))}
+                  <td className="p-2">
+                    {`${formatMetric(m.departuresCount)} ÷ ${formatMetric(m.openingRosterCount)} × 100 = ${formatMetric(m.turnoverPercent, "%")}`}
+                    <button
+                      className="ml-2 text-primary underline"
+                      onClick={() => onPeople?.(m.month)}
+                    >
+                      See people counted
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+      {!months.length && (
+        <p className="text-sm text-muted-foreground">
+          No monthly evidence is available.
+        </p>
+      )}
+    </ChartPanel>
   );
 }
