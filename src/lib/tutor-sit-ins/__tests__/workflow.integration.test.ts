@@ -112,6 +112,9 @@ const sources = {
 beforeAll(async () => {
   handle = await startTestDb();
   db = handle.db as unknown as Database;
+  // PostgreSQL does not use Vitest's frozen Date. Match queue readiness to the
+  // fixture clock so freshly inserted jobs are due in delivery regressions.
+  await db.execute(sql`ALTER TABLE tutor_sit_in_jobs ALTER COLUMN retry_at SET DEFAULT TIMESTAMPTZ '2026-10-01T00:00:00Z'`);
 }, 120_000);
 afterAll(async () => {
   vi.useRealTimers();
