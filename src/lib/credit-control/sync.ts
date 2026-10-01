@@ -44,9 +44,8 @@ interface PairRecord {
 }
 
 /**
- * One `sessionCreditHistory` movement, normalized so a freshly fetched Wise
- * entry and a row carried forward from the previous snapshot are the same
- * shape downstream (CRED-01).
+ * One freshly fetched Wise `sessionCreditHistory` movement, normalized for
+ * insertion into the candidate snapshot.
  */
 interface PairHistoryEntry {
   wiseCreditHistoryId: string;
@@ -58,12 +57,23 @@ interface PairHistoryEntry {
   raw: Record<string, unknown>;
 }
 
+interface PairSessionCredit {
+  wiseCreditHistoryId: string;
+  credit: number;
+}
+
 interface PairCreditRecord extends PairRecord {
   credits: WiseSessionCredits["credits"];
-  history: PairHistoryEntry[];
+  history:
+    | { source: "wise"; entries: PairHistoryEntry[] }
+    | { source: "snapshot"; applications: PairSessionCredit[] };
   /** When the balance was OBSERVED, not when the row was written. */
   creditsObservedAt: Date;
 }
+
+type CarriedCreditRecord = PairCreditRecord & {
+  history: { source: "snapshot"; applications: PairSessionCredit[] };
+};
 
 /** The previous snapshot's row for one pair, plus its carry-forward payload. */
 interface PriorPairRow extends PriorPairCredits {
@@ -441,7 +451,7 @@ async function fetchPairCredits(
       return {
         ...pair,
         credits: credits.credits,
-        history: toHistoryEntries(credits.sessionCreditHistory),
+        history: { source: "wise", entries: toHistoryEntries(credits.sessionCreditHistory) },
         creditsObservedAt: observedAt,
       } satisfies PairCreditRecord;
     } catch {
@@ -450,7 +460,7 @@ async function fetchPairCredits(
     }
   });
   return {
-    records: results.filter((record): record is PairCreditRecord => Boolean(record)),
+    records: results.filter((record) => record !== null),
     failed,
   };
 }
@@ -599,18 +609,17 @@ function planPairRefresh(options: {
 }
 
 /**
- * Loads the previous snapshot's credit-history rows for the carried pairs so
- * they can be re-inserted under the new snapshot id. History is never
- * fabricated: `creditApplied` on past sessions is derived from it, so a
- * missing row would turn an already-charged session back into a pending
- * deduction and understate the balance.
+ * Read IDs and amounts to derive positive session applications and count the
+ * rows each copy must preserve. Full ledgers stay in Postgres until copied into
+ * the candidate snapshot, avoiding a round trip for every raw Wise payload.
+ * A read failure still refetches the affected pairs, as before CRED-01.
  */
-async function loadCarriedHistory(
+async function loadCarriedSessionCredits(
   db: Database,
   priorSnapshotId: string,
   keys: string[],
-): Promise<Map<string, PairHistoryEntry[]>> {
-  const historyByPair = new Map<string, PairHistoryEntry[]>();
+): Promise<Map<string, PairSessionCredit[]>> {
+  const creditsByPair = new Map<string, PairSessionCredit[]>();
   for (const part of chunk(keys, CARRIED_HISTORY_KEY_CHUNK_SIZE)) {
     const rows = await db
       .select({
@@ -618,11 +627,6 @@ async function loadCarriedHistory(
         wiseClassId: schema.creditControlCreditHistory.wiseClassId,
         wiseStudentId: schema.creditControlCreditHistory.wiseStudentId,
         credit: schema.creditControlCreditHistory.credit,
-        type: schema.creditControlCreditHistory.type,
-        meetingStatus: schema.creditControlCreditHistory.meetingStatus,
-        durationMinutes: schema.creditControlCreditHistory.durationMinutes,
-        createdAtWise: schema.creditControlCreditHistory.createdAtWise,
-        raw: schema.creditControlCreditHistory.raw,
       })
       .from(schema.creditControlCreditHistory)
       .where(and(
@@ -635,20 +639,63 @@ async function loadCarriedHistory(
 
     for (const row of rows) {
       const key = pairKey(row.wiseClassId, row.wiseStudentId);
-      const entries = historyByPair.get(key) ?? [];
-      entries.push({
-        wiseCreditHistoryId: row.wiseCreditHistoryId,
-        credit: row.credit ?? 0,
-        type: row.type,
-        meetingStatus: row.meetingStatus,
-        durationMinutes: row.durationMinutes ?? 0,
-        createdAtWise: row.createdAtWise,
-        raw: row.raw ?? {},
-      });
-      historyByPair.set(key, entries);
+      const entries = creditsByPair.get(key) ?? [];
+      entries.push({ wiseCreditHistoryId: row.wiseCreditHistoryId, credit: row.credit });
+      creditsByPair.set(key, entries);
     }
   }
-  return historyByPair;
+  return creditsByPair;
+}
+
+/**
+ * Copy all movements (including zero/negative ones) inside Postgres. The prior
+ * snapshot is immutable; only the snapshot ID and this run's package key change.
+ * Each bounded statement is atomic, and every copy finishes before promotion.
+ */
+async function copyCarriedCreditHistory(
+  db: Database,
+  priorSnapshotId: string,
+  snapshotId: string,
+  pairs: CarriedCreditRecord[],
+): Promise<number> {
+  let copied = 0;
+  const nonempty = pairs.filter(pair => pair.history.applications.length > 0);
+  for (const [chunkIndex, part] of chunk(nonempty, CARRIED_HISTORY_KEY_CHUNK_SIZE).entries()) {
+    const expectedRows = part.reduce((total, pair) => total + pair.history.applications.length, 0);
+    const pairValues = part.map(pair => sql`(
+      ${pair.wiseClassId}, ${pair.wiseStudentId},
+      ${buildStudentPackageKey(pair.studentName, pair.packageName)}
+    )`);
+    try {
+      const result = await db.execute(sql`
+        WITH copied AS (
+          INSERT INTO credit_control_credit_history (
+            snapshot_id, wise_credit_history_id, wise_student_id, wise_class_id,
+            package_key, credit, type, meeting_status, duration_minutes, created_at_wise, raw
+          )
+          SELECT ${snapshotId}::uuid, h.wise_credit_history_id, h.wise_student_id,
+            h.wise_class_id, p.package_key, h.credit, h.type, h.meeting_status,
+            h.duration_minutes, h.created_at_wise, h.raw
+          FROM credit_control_credit_history h
+          JOIN (VALUES ${sql.join(pairValues, sql`, `)}) AS p(wise_class_id, wise_student_id, package_key)
+            ON h.wise_class_id = p.wise_class_id AND h.wise_student_id = p.wise_student_id
+          WHERE h.snapshot_id = ${priorSnapshotId}::uuid
+          RETURNING 1
+        )
+        SELECT count(*)::integer AS copied FROM copied
+      `);
+      const rows = (Array.isArray(result) ? result : result.rows) as Array<{ copied: number | string }>;
+      const count = Number(rows[0]?.copied);
+      if (count !== expectedRows) throw new Error(`Expected ${expectedRows} carried-history rows; copied ${count}`);
+      copied += count;
+    } catch (cause) {
+      throw new Error(
+        `Credit control carried-history copy failed for pair chunk ${chunkIndex + 1} (${part.length} pairs)`,
+        { cause },
+      );
+    }
+  }
+  return copied;
 }
 
 async function buildSessionRows(
@@ -666,13 +713,17 @@ async function buildSessionRows(
     // Recomputed from THIS run's names, so a carried-forward history row keys
     // to the same package as the pair's fresh session rows.
     const packageKey = buildStudentPackageKey(pair.studentName, pair.packageName);
-    for (const history of pair.history) {
+    const applications = pair.history.source === "wise" ? pair.history.entries : pair.history.applications;
+    for (const history of applications) {
       if (history.credit > 0) {
         positiveCreditByPairSession.set(
           `${pairKey(pair.wiseClassId, pair.wiseStudentId)}|${history.wiseCreditHistoryId}`,
           history.credit,
         );
       }
+    }
+    if (pair.history.source !== "wise") continue;
+    for (const history of pair.history.entries) {
       histories.push({
         snapshotId,
         wiseCreditHistoryId: history.wiseCreditHistoryId,
@@ -958,10 +1009,10 @@ export async function runCreditControlSync(
 
     let refetchPairs = plan.refetch;
     let carriedPairs = plan.carried;
-    let carriedRecords: PairCreditRecord[] = [];
+    let carriedRecords: CarriedCreditRecord[] = [];
     if (carriedPairs.length > 0 && prior) {
       try {
-        const historyByPair = await loadCarriedHistory(
+        const creditsByPair = await loadCarriedSessionCredits(
           db,
           prior.snapshotId,
           carriedPairs.map(({ pair }) => pairKey(pair.wiseClassId, pair.wiseStudentId)),
@@ -969,7 +1020,10 @@ export async function runCreditControlSync(
         carriedRecords = carriedPairs.map(({ pair, prior: priorRow }) => ({
           ...pair,
           credits: priorRow.credits,
-          history: historyByPair.get(pairKey(pair.wiseClassId, pair.wiseStudentId)) ?? [],
+          history: {
+            source: "snapshot",
+            applications: creditsByPair.get(pairKey(pair.wiseClassId, pair.wiseStudentId)) ?? [],
+          },
           creditsObservedAt: priorRow.creditsObservedAt,
         }));
       } catch (historyError) {
@@ -1034,6 +1088,9 @@ export async function runCreditControlSync(
     await insertChunks(db, schema.creditControlPackages, packageRows, "credit_control_packages");
     await insertChunks(db, schema.creditControlSessions, sessionRows, "credit_control_sessions");
     await insertChunks(db, schema.creditControlCreditHistory, histories, "credit_control_credit_history");
+    const carriedHistoryRows = prior && carriedPairs.length > 0
+      ? await copyCarriedCreditHistory(db, prior.snapshotId, snapshot.id, carriedRecords)
+      : 0;
     // Pair/feedback fetchers tolerate individual errors in active mode. An
     // aborted daily refresh must never promote their incomplete results.
     options.signal?.throwIfAborted();
@@ -1075,7 +1132,7 @@ export async function runCreditControlSync(
         metadata: {
           ...options.runMetadata,
           failedCreditPairs,
-          creditHistoryRows: histories.length,
+          creditHistoryRows: histories.length + carriedHistoryRows,
           // EFF-00: how much of this run was Wise, recorded per run so the
           // API cost of a sync is measurable instead of inferred.
           wiseCallCount: wiseStats.requests,

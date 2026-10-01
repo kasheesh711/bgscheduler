@@ -103,12 +103,14 @@ function makeDbMock(options: {
   selectRows?: Map<unknown, unknown[]>;
   /** Tables whose `select()` rejects, for the prior-snapshot failure paths. */
   failSelectTables?: unknown[];
+  carriedHistoryRows?: number;
 } = {}): { db: Database; events: DbEvent[] } {
   const events: DbEvent[] = [];
   const snapshotId = options.snapshotId ?? "snapshot-1";
   let sessionChunkIndex = 0;
 
   const db = {
+    execute: vi.fn().mockResolvedValue({ rows: [{ copied: options.carriedHistoryRows ?? 0 }] }),
     select: vi.fn(() => {
       let source: unknown;
       const chain = {
@@ -579,8 +581,9 @@ describe("runCreditControlSync — pair reuse (CRED-01)", () => {
     return runCreditControlSync(db, fakeClient(), "institute-1", NOW, { syncRunId: "run-1" });
   }
 
-  it("carries a quiet pair's package row, history, and observation time forward", async () => {
+  it("carries a quiet pair's package row, session credits, and observation time forward", async () => {
     const { db, events } = makeDbMock({
+      carriedHistoryRows: 1,
       selectRows: priorSnapshotRows(
         [
           priorPackage(),
@@ -621,25 +624,37 @@ describe("runCreditControlSync — pair reuse (CRED-01)", () => {
     expect(refetched).toMatchObject({ remainingCredits: 3 });
     expect(refetched?.creditsObservedAt).toEqual(NOW);
 
-    // History is copied, not fabricated, and re-keyed to this run's package.
-    const historyRows = insertedRows<Record<string, unknown>>(events, schema.creditControlCreditHistory);
-    expect(historyRows).toHaveLength(1);
-    expect(historyRows[0]).toMatchObject({
-      snapshotId: "snapshot-1",
-      wiseCreditHistoryId: "history-1",
-      wiseClassId: "class-1",
-      wiseStudentId: "student-1",
-      packageKey: "Ada Lovelace|||Math Package",
-      credit: 1.5,
-      durationMinutes: 90,
-      raw: { _id: "history-1", classroom: { subject: "Math" } },
-    });
+    // The full ledger is copied by SQL rather than materialized and reinserted.
+    // The integration suite verifies every copied field against real Postgres.
+    expect(insertedRows(events, schema.creditControlCreditHistory)).toEqual([]);
+    const historyProjection = vi.mocked(db.select).mock.calls.find(([fields]) => (
+      fields && "wiseCreditHistoryId" in fields
+    ))?.[0];
+    expect(Object.keys(historyProjection ?? {}).sort()).toEqual([
+      "credit", "wiseClassId", "wiseCreditHistoryId", "wiseStudentId",
+    ]);
 
     expect(latestUpdate(events, "success")?.setValue.metadata).toMatchObject({
       pairsRefetched: 1,
       pairsReused: 1,
       pairsSkippedExcluded: 0,
+      creditHistoryRows: 1,
     });
+  });
+
+  it("retains the prior snapshot if a carried-history copy reports missing rows", async () => {
+    vi.mocked(fetchCreditStudents).mockResolvedValue([makePairStudents()[0]]);
+    const { db, events } = makeDbMock({
+      carriedHistoryRows: 0,
+      selectRows: priorSnapshotRows([priorPackage()], [{
+        wiseCreditHistoryId: "history-1", wiseClassId: "class-1", wiseStudentId: "student-1", credit: 1,
+      }]),
+    });
+    const result = await run(db);
+    expect(result.success).toBe(false);
+    expect(result.errorSummary).toContain("carried-history copy failed");
+    expect(events.some(event => event.type === "update" && event.table === schema.creditControlSnapshots)).toBe(false);
+    expect(latestUpdate(events, "failed")?.setValue.metadata).toBeDefined();
   });
 
   // SAFETY: the property the whole rule rests on. A balance a human would be
