@@ -4,7 +4,7 @@ milestone: v1.2
 milestone_name: Autonomous LINE Scheduling
 status: executing
 stopped_at: "Completed 12-05: C2 hardening — Phase 12 (IDENT-07) COMPLETE"
-last_updated: "2026-10-01T13:36:51.833957+00:00"
+last_updated: "2026-10-01T15:32:00+00:00"
 last_activity: 2026-10-01
 progress:
   total_phases: 11
@@ -157,6 +157,7 @@ None blocking roadmap execution.
 | 260929-gvd | Feedback autowriter: GLM (ZDR) online-class feedback from Wise AI summaries for 5 roster tutors, webhook + backstop cron, single-POST state machine, monitoring dashboard | 2026-09-29 | de9be21 | [260929-gvd-feedback-autowriter-pilot-for-kevin-onli](./quick/260929-gvd-feedback-autowriter-pilot-for-kevin-onli/) |
 | 260929-snx | Feedback autowriter second pass: Soniox transcript of the Wise recording for held, summary-less and Thai-summary classes (GLM ZDR only, Zoom-aligned speakers, coverage and job-lifecycle guards) | 2026-09-29 | 69358cd | [260929-snx-soniox-transcript-second-pass](./quick/260929-snx-soniox-transcript-second-pass/) |
 | 261001-r5j | Mobile onsite class capture and tutor-reviewed feedback drafts; private evidence, recovery, consent and retention | 2026-10-01 | dc1bfbb9 | [261001-r5j-mobile-onsite-class-evidence-and-reviewe](./quick/261001-r5j-mobile-onsite-class-evidence-and-reviewe/) |
+| 261001-ulx | Scope all Class Capture pilots to their own tutor and today's Bangkok classes; preserve unexpired recovery and refresh safely at midnight | 2026-10-01 | 099162e0 | [261001-ulx-restrict-class-capture-to-each-pilot-tut](./quick/261001-ulx-restrict-class-capture-to-each-pilot-tut/) |
 | Phase 10-vpol-01-view-transitions P01 | 216 | 2 tasks | 2 files |
 | Phase 10-vpol-01-view-transitions P02 | 4min | 2 tasks | 2 files |
 | Phase 11 P03 | 31515093 | 2 tasks | 3 files |

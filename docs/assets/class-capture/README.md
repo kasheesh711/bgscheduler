@@ -10,7 +10,8 @@ and uses headless Chrome. The harness substitutes the microphone and Blob upload
 client and blocks requests outside that localhost origin. It is not an application
 route, production fixture, login bypass, or live-provider test.
 
-- `mobile-select-class.png`: scheduled session selection.
+- `mobile-select-class.png`: today's own scheduled classes, with a static Bangkok date.
+- `mobile-today-rollover.png`: the next Bangkok day's list and cleared pending consent.
 - `mobile-consent.png`: participant, guardian, and named-provider attestations.
 - `mobile-recording.png`: visible recording and the persistent Stop control.
 - `mobile-review.png`: editable draft and the tutor’s review responsibility.
@@ -19,12 +20,18 @@ route, production fixture, login bypass, or live-provider test.
 - `mobile-paused.png`: default-off behavior.
 - `acceptance-results.json`: outcomes and synthetic request counts.
 
-The checks exercise permission denial, cancellation of a delayed permission
+The 17 passing synthetic checks exercise permission denial, cancellation of a delayed permission
 response, stopping on background, real IndexedDB recovery across reload, account
 isolation, upload interruption/cancellation/retry with one asset intent, explicit
 transcription, worksheet permission, draft regeneration, uncertain-provider
 evidence removal, and saved-review gating. Touch controls are checked at 44 px or
 larger and the mobile document is checked for horizontal overflow.
+
+Controlled-clock checks cover Bangkok midnight, focus and visible return after
+suspended timers, stale list responses, and a retryable schedule refresh failure.
+They verify that pending session selection and consent are cleared while an active
+recording, local media, unsaved notes, draft edits, and review acknowledgement survive
+list refreshes. Listing requests contain no client-controlled date parameter.
 
 Unverified: real iOS/Android microphone and lockscreen behavior; browser or OS
 termination during a chunk write; live private Blob uploads and multipart behavior;

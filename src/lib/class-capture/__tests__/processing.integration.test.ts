@@ -5,7 +5,7 @@ import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
 import type { Database } from "@/lib/db";
 import { createCapture, createAsset, captureView, markDeleted } from "../store";
 import { transcribeCapture, draftCapture } from "../processing";
-import type { CaptureSession } from "../model";
+import type { CaptureScope, CaptureSession } from "../model";
 let h: Awaited<ReturnType<typeof startTestDb>>;
 let db: Database;
 const scope = { email: "synthetic@example.invalid", keys: ["one"] };
@@ -24,6 +24,23 @@ beforeEach(async () => {
 });
 const client = () => ({ upload: vi.fn(async () => "file"), create: vi.fn(async () => "job"), get: vi.fn(async () => ({ status: "completed" as const })), transcript: vi.fn(async () => "Synthetic classroom speech."), removeFile: vi.fn(async () => {}), removeJob: vi.fn(async () => {}), reapOrphans: vi.fn(async () => 0) });
 describe("durable evidence processing", () => {
+  it.each([
+    { actor: { ...scope, keys: null }, status: 403 },
+    { actor: { ...scope, keys: [] }, status: 403 },
+    { actor: { ...scope, keys: ["one", "two"] }, status: 403 },
+    { actor: { ...scope, keys: ["other-tutor"] }, status: 404 },
+    { actor: { ...scope, email: "other@example.invalid" }, status: 404 },
+  ])("denies unscoped or differently owned evidence before private bytes, prior context or paid providers: $actor", async ({ actor, status }) => {
+    const speech = client(), readBytes = vi.fn(), prior = vi.fn(), generate = vi.fn();
+    await expect(transcribeCapture(actor as CaptureScope, id, assetId, { db, speech, readBytes })).rejects.toMatchObject({ status });
+    await expect(draftCapture(actor as CaptureScope, id, { db, prior, generate })).rejects.toMatchObject({ status });
+    expect(readBytes).not.toHaveBeenCalled();
+    expect(speech.upload).not.toHaveBeenCalled();
+    expect(speech.create).not.toHaveBeenCalled();
+    expect(prior).not.toHaveBeenCalled();
+    expect(generate).not.toHaveBeenCalled();
+  });
+
   it("concurrent clicks start one paid job, then resume by stored job ID and remove provider copies", async () => {
     const speech = client();
     const deps = { db, speech, readBytes: async () => Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 1, 2, 3, 4]) };
