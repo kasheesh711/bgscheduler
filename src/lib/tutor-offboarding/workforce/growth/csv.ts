@@ -27,20 +27,30 @@ export function serializeGrowthCsv(report: GrowthReport, section: GrowthExportSe
   const commonValues = [report.reportRevision, report.generatedAt, report.query.filters, report.query.assumptions,
     report.flows.commonWindow.join("|"), report.forecast.baseMonth, report.quality.completeness,
     report.quality.issueCodes.join("|"), report.quality.sourceCoverage, report.quality.exceptions,
-    [...new Set(report.forecast.allocations.flatMap(row => row.observedAt))].sort(), report.flows.lifecycleEvents, report.forecast.assumptions];
+    [...new Set(report.forecast.allocations.flatMap(row => row.observedAt))].sort(), null, report.forecast.assumptions];
   const keys = ["courseKey", "subject", "curriculum", "level", ...rowKeys[section]];
   const headers = [...commonHeaders, ...keys, ...metricKeys[section].flatMap(key => [`${key}_value`, `${key}_completeness`, `${key}_reasons`]), "model_inputs", "hiring_benchmark"];
   const rows = section === "months" ? report.flows.months : section === "averages" ? report.flows.averages
     : section === "forecast" ? report.forecast.months : report.forecast.allocations.flatMap(row => row.cells);
+  const events = new Map(report.flows.lifecycleEvents.map(event => [event.eventKey, event]));
+  const inputs = new Map(report.forecast.inputs.map(input => [input.courseKey, input]));
+  const benchmarks = new Map(report.forecast.hiring.map(estimate => [JSON.stringify([estimate.month, estimate.courseKey]), estimate]));
   const lines = rows.map(row => {
     const record = row as unknown as Record<string, unknown>;
+    const contributors = record.contributors as { eventKeys?: string[] } | undefined;
+    const relevantEvents = section === 'months'
+      ? (contributors?.eventKeys ?? []).flatMap(key => events.has(key) ? [events.get(key)!] : [])
+      : report.flows.lifecycleEvents.filter(event => event.subject === row.subject && report.flows.commonWindow.includes(event.effectiveMonth));
+    const provenance = [...commonValues];
+    // Keep unrelated people and lifecycle histories out of every exported row.
+    provenance[11] = relevantEvents;
     const values = metricKeys[section].flatMap(key => {
       const metric = record[key] as WorkforceMetric | undefined;
       return [metric?.value ?? null, metric?.completeness ?? "unknown", metric?.reasonCodes.join("|") ?? "NOT_AVAILABLE"];
     });
-    return [...commonValues, ...keys.map(key => record[key]), ...values,
-      report.forecast.inputs.find(input => input.courseKey === row.courseKey) ?? null,
-      report.forecast.hiring.find(estimate => estimate.courseKey === row.courseKey && estimate.month === record.month) ?? null,
+    return [...provenance, ...keys.map(key => record[key]), ...values,
+      inputs.get(row.courseKey) ?? null,
+      benchmarks.get(JSON.stringify([record.month, row.courseKey])) ?? null,
     ].map(cell).join(",");
   });
   return [headers.map(cell).join(","), ...lines].join("\r\n") + "\r\n";
