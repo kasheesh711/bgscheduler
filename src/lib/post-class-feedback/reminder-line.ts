@@ -1,12 +1,13 @@
 import "server-only";
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, notInArray, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { isPreviewEnvironment } from "@/lib/preview-policy";
-import { PostClassValidationError } from "./errors";
+import { PostClassConflictError, PostClassValidationError } from "./errors";
 import { withPostClassTransaction } from "./transaction";
 import { newReceiptChallenge, checkReceiptChallenge } from "./receipt-evidence";
+import { assertFeedbackConnectionPaused } from "./reminder-connection-state";
 
 const channel = schema.postClassReminderLineChannel;
 const alerts = schema.postClassReminderAlerts;
@@ -39,8 +40,11 @@ async function push(text: string, id: string, expectedBinding: string) {
 export async function sendReminderLineTest(actor: string, db: Database = getDb()) {
   const config = configuration();
   const challenge = newReceiptChallenge(actor, config.binding);
-  await db.insert(channel).values({ id: "private", recipientId: config.recipient, binding: config.binding, testEvidence: challenge.evidence })
-    .onConflictDoUpdate({ target: channel.id, set: { recipientId: config.recipient, binding: config.binding, testEvidence: challenge.evidence, updatedAt: new Date() } });
+  await withPostClassTransaction(db, async tx => {
+    await assertFeedbackConnectionPaused(tx, true);
+    await tx.insert(channel).values({ id: "private", recipientId: config.recipient, binding: config.binding, testEvidence: challenge.evidence })
+      .onConflictDoUpdate({ target: channel.id, set: { recipientId: config.recipient, binding: config.binding, testEvidence: challenge.evidence, updatedAt: new Date() } });
+  });
   const receipt = await push(`BeGifted connection test. Your verification code is ${challenge.code}. Enter it in Class Feedback to confirm this private LINE destination.`, randomUUID(), config.binding);
   await db.update(channel).set({ testEvidence: { ...challenge.evidence, receipt, acceptedAt: new Date().toISOString() } })
     .where(and(singleton, eq(channel.binding, config.binding), sql`${channel.testEvidence}->>'hash' = ${challenge.evidence.hash}`));
@@ -66,10 +70,11 @@ export async function reminderLineStatus(db: Database = getDb()) {
   let config: ReturnType<typeof configuration> | null = null;
   try { config = configuration(); } catch { /* Expose configuration state without credentials. */ }
   const [row] = await db.select().from(channel).where(singleton);
-  const pending = await db.select({ lastError: alerts.lastError }).from(alerts).where(ne(alerts.status, "accepted"));
+  const pending = await db.select({ id: alerts.id, kind: alerts.kind, status: alerts.status, attempts: alerts.attempts, createdAt: alerts.createdAt, lastError: alerts.lastError }).from(alerts).where(notInArray(alerts.status, ["accepted", "not_sent"]));
   const [last] = await db.select({ at: alerts.acceptedAt }).from(alerts).where(eq(alerts.status, "accepted")).orderBy(desc(alerts.acceptedAt)).limit(1);
   return { configured: Boolean(config), verified: Boolean(config && row?.binding === config.binding && row.testEvidence?.confirmedAt && row.testEvidence?.receipt),
     testAcceptedAt: row?.testEvidence?.acceptedAt ?? null, testConfirmedAt: row?.testEvidence?.confirmedAt ?? null,
+    blockedAlerts: pending.filter(p => p.status === "blocked").map(p => ({ id: p.id, kind: p.kind, attempts: p.attempts, createdAt: p.createdAt.toISOString() })),
     pending: pending.length, alertError: pending.find(p => p.lastError)?.lastError ?? null, lastAcceptedAt: last?.at?.toISOString() ?? null };
 }
 export async function requireReminderLineReadiness(db: Database) {
@@ -105,7 +110,7 @@ export async function dispatchReminderAlerts(db: Database = getDb(), now = new D
   const leaseToken = randomUUID();
   const claimed = await withPostClassTransaction(db, async tx => {
     await tx.execute(sql`select id from post_class_reminder_line_channel where id = 'private' for update`);
-    const [row] = await tx.select().from(alerts).where(ne(alerts.status, "accepted")).orderBy(asc(alerts.createdAt), asc(alerts.id)).limit(1);
+    const [row] = await tx.select().from(alerts).where(notInArray(alerts.status, ["accepted", "not_sent"])).orderBy(asc(alerts.createdAt), asc(alerts.id)).limit(1);
     if (!row || row.status === "blocked" || row.nextAttemptAt > now || (row.leaseUntil && row.leaseUntil > now)) return null;
     if (row.firstAttemptAt && now.getTime() - row.firstAttemptAt.getTime() >= 23 * 60 * 60_000) {
       await tx.update(alerts).set({ status: "blocked", lastError: "LINE alert needs manual reconciliation: its retry window has expired.", updatedAt: now }).where(eq(alerts.id, row.id));
@@ -131,4 +136,20 @@ export async function dispatchReminderAlerts(db: Database = getDb(), now = new D
       .where(and(eq(alerts.id, claimed.id), eq(alerts.leaseToken, leaseToken)));
     return false;
   }
+}
+
+export async function resolveReminderAlert(actor: string, input: { id: string; expectedAttempts: number; outcome: "accepted" | "not_sent"; receipt?: string; note: string }, db: Database = getDb()) {
+  if (input.note.trim().length < 10 || (input.outcome === "accepted" && !input.receipt?.trim())) {
+    throw new PostClassValidationError("Record the private chat evidence and a message reference for received alerts.");
+  }
+  await withPostClassTransaction(db, async tx => {
+    const [row] = await tx.select().from(alerts).where(eq(alerts.id, input.id)).for("update");
+    if (!row || row.status !== "blocked" || row.attempts !== input.expectedAttempts) throw new PostClassConflictError("The alert changed. Refresh before recording its outcome.");
+    await tx.update(alerts).set({ status: input.outcome, receipt: input.receipt?.trim() || null,
+      acceptedAt: input.outcome === "accepted" ? new Date() : null, leaseUntil: null, updatedAt: new Date() }).where(eq(alerts.id, row.id));
+    await tx.insert(schema.postClassConfigAuditLog).values({ entityType: "feedback_line_alert", entityKey: row.id,
+      action: `resolve_${input.outcome}`, actorEmail: actor, beforeValue: { status: row.status, attempts: row.attempts, error: row.lastError },
+      afterValue: { status: input.outcome, receipt: input.receipt?.trim() || null }, note: input.note.trim() });
+  });
+  return { resolved: true };
 }

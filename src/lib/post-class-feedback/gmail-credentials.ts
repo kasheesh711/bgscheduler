@@ -8,6 +8,8 @@ import { FEEDBACK_OAUTH_PATH, feedbackEmailConfiguration, requireFeedbackEmailCo
 import { PostClassValidationError } from "./errors";
 import { withPostClassTransaction } from "./transaction";
 import { newReceiptChallenge, checkReceiptChallenge } from "./receipt-evidence";
+import { assertFeedbackConnectionPaused } from "./reminder-connection-state";
+export { assertFeedbackConnectionPaused } from "./reminder-connection-state";
 
 const table = schema.postClassEmailConnection;
 const singleton = eq(table.id, "gmail");
@@ -27,8 +29,21 @@ async function tokenRequest(params: Record<string, string>) {
   return data as typeof data & { access_token: string; expires_in: number };
 }
 
+/** Pin every production submission to the previously verified grant. */
+export async function feedbackReminderGrant(db: Database): Promise<number> {
+  requireFeedbackEmailConfiguration();
+  const [row] = await db.select().from(table).where(singleton);
+  if (!row || row.clientId !== process.env.POST_CLASS_GMAIL_CLIENT_ID || row.mailbox !== FEEDBACK_MAILBOX || !hasScope(row.scope) ||
+    !row.refreshedAt || row.lastError?.startsWith("Reconnect") || row.testEvidence?.binding !== binding(row) ||
+    !row.testEvidence?.confirmedAt || !row.testEvidence.receipt) {
+    throw new GmailRejection("The current Gmail grant must be verified before sending tutor reminders.", true);
+  }
+  return row.revision;
+}
+
 export async function connectFeedbackMailbox(code: string, state: ReturnType<typeof verifyFeedbackEmailState>, db: Database = getDb()) {
   const config = requireFeedbackEmailConfiguration();
+  await assertFeedbackConnectionPaused(db);
   if (state.clientId !== config.clientId || state.origin !== config.origin) throw new PostClassValidationError("Gmail client changed. Start the connection again.");
   const token = await tokenRequest({ client_id: config.clientId, client_secret: config.clientSecret,
     grant_type: "authorization_code", code, code_verifier: state.verifier, redirect_uri: state.origin + FEEDBACK_OAUTH_PATH });
@@ -45,6 +60,7 @@ export async function connectFeedbackMailbox(code: string, state: ReturnType<typ
     expiresAt: new Date(Date.now() + token.expires_in * 1000), scope: token.scope!, connectedBy: state.actor,
     connectedAt: new Date(), refreshedAt: null, checkedAt: null, lastError: null, testEvidence: null, updatedAt: new Date() };
   await withPostClassTransaction(db, async (tx) => {
+    await assertFeedbackConnectionPaused(tx, true);
     const [row] = await tx.insert(table).values({ id: "gmail", ...values }).onConflictDoUpdate({ target: table.id,
       set: { ...values, revision: sql`${table.revision} + 1` } }).returning({ revision: table.revision });
     await tx.insert(schema.postClassConfigAuditLog).values({ entityType: "feedback_gmail", entityKey: "gmail", action: "connected",
@@ -101,11 +117,17 @@ export async function feedbackMailboxStatus(db: Database = getDb()) {
 }
 
 export async function sendFeedbackMailboxTest(actor: string, db: Database = getDb()) {
+  await assertFeedbackConnectionPaused(db);
   // A successful fresh renewal is an explicit launch prerequisite.
   await feedbackGmailAccessToken(true, db);
-  const [row] = await db.select().from(table).where(singleton);
-  const challenge = newReceiptChallenge(actor, binding(row));
-  await db.update(table).set({ testEvidence: challenge.evidence }).where(and(singleton, eq(table.revision, row.revision)));
+  const { row, challenge } = await withPostClassTransaction(db, async tx => {
+    await assertFeedbackConnectionPaused(tx, true);
+    const [row] = await tx.select().from(table).where(singleton).for("update");
+    if (!row) throw new PostClassValidationError("Connect the dedicated Gmail sender first.");
+    const challenge = newReceiptChallenge(actor, binding(row));
+    await tx.update(table).set({ testEvidence: challenge.evidence }).where(singleton);
+    return { row, challenge };
+  });
   const sender = createGmailSender(force => feedbackGmailAccessToken(force, db, row.revision));
   const content = `BeGifted reminder email test.\n\nYour verification code is ${challenge.code}.\n\nEnter this code in Class Feedback to confirm receipt. This is a test; no tutor reminders have been enabled.`;
   const receipt = await sender.sendEmail({ to: actor, subject: "BeGifted feedback email verification", text: content,

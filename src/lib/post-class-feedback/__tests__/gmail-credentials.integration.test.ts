@@ -6,7 +6,7 @@ import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { decryptToken } from "@/lib/sales-dashboard/google-oauth";
 import { connectFeedbackMailbox, feedbackGmailAccessToken, feedbackMailboxStatus, sendFeedbackMailboxTest,
-  confirmFeedbackMailboxTest, requireFeedbackMailboxReadiness } from "../gmail-credentials";
+  confirmFeedbackMailboxTest, requireFeedbackMailboxReadiness, feedbackReminderGrant } from "../gmail-credentials";
 import { FEEDBACK_MAILBOX, GMAIL_SEND_SCOPE, GmailRejection } from "../gmail";
 let handle: Awaited<ReturnType<typeof startTestDb>>;
 const db = () => handle.db as unknown as Database;
@@ -17,6 +17,7 @@ beforeAll(async () => { handle = await startTestDb(); }, 120_000);
 afterAll(async () => { if (handle) await stopTestDb(handle); });
 beforeEach(async () => {
   await handle.db.delete(schema.postClassEmailConnection);
+  await handle.db.update(schema.postClassSettings).set({ reminderMode: "shadow" });
   vi.stubEnv("AUTH_SECRET", "test-key"); vi.stubEnv("POST_CLASS_GMAIL_CLIENT_ID", "dedicated-client");
   vi.stubEnv("POST_CLASS_GMAIL_CLIENT_SECRET", "secret"); vi.stubEnv("POST_CLASS_GMAIL_WORKSPACE_TRUSTED", "true");
   vi.stubGlobal("fetch", fetchMock); fetchMock.mockReset();
@@ -32,6 +33,29 @@ describe("Gmail credential storage and renewal", () => {
     await expect(consent("wrong@example.com")).rejects.toThrow();
     expect(await handle.db.select().from(schema.postClassEmailConnection)).toHaveLength(0);
     await expect(consent(FEEDBACK_MAILBOX, "openid email")).rejects.toThrow();
+  });
+  it("requires pausing before replacing a live Gmail grant", async () => {
+    await handle.db.insert(schema.postClassSettings).values({ id: "default", reminderMode: "live" })
+      .onConflictDoUpdate({ target: schema.postClassSettings.id, set: { reminderMode: "live" } });
+    await expect(consent()).rejects.toThrow(/Pause reminders/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("keeps a verified live grant usable when another receipt test is requested", async () => {
+    await consent();
+    const now = new Date();
+    await handle.db.update(schema.postClassEmailConnection).set({ refreshedAt: now, testEvidence: {
+      hash: "verified", actor: state.actor, binding: "dedicated-client:google-subject:1", attempts: 0,
+      expiresAt: new Date(now.getTime() + 86_400_000).toISOString(), confirmedAt: now.toISOString(), receipt: "original-receipt",
+    } });
+    await handle.db.insert(schema.postClassSettings).values({ id: "default", reminderMode: "live" })
+      .onConflictDoUpdate({ target: schema.postClassSettings.id, set: { reminderMode: "live" } });
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValueOnce(json({ access_token: "renewed", expires_in: 3600 }))
+      .mockResolvedValueOnce(json({ id: "unwanted-live-test" }));
+    await expect(feedbackReminderGrant(db())).resolves.toBe(1);
+    await expect(sendFeedbackMailboxTest(state.actor, db())).rejects.toThrow(/Pause reminders/);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(feedbackReminderGrant(db())).resolves.toBe(1);
   });
   it("encrypts both tokens separately from other Google connections", async () => {
     await consent();

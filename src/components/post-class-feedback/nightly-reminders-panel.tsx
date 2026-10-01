@@ -70,7 +70,7 @@ export function NightlyRemindersPanel({ payload, submitting, onRequest }: {
     </dl>}
     {health?.alertDeliveryError && <p role="alert" className="text-sm text-red-700">{health.alertDeliveryError}</p>}
     {health?.sourceCheckedAt && <p className="text-xs text-muted-foreground">Source verified {formatBangkokDate(health.sourceCheckedAt, true)}. Accepted messages have a sending-service receipt; this does not confirm inbox delivery.</p>}
-    {canManage && <ReminderConnection disabled={submitting} />}
+    {canManage && <ReminderConnection disabled={submitting} live={health?.mode === "live"} />}
     {health?.lastCompletedBatch && <p className="text-xs text-muted-foreground">Last completed live batch: {formatBangkokDate(health.lastCompletedBatch, true)}.</p>}
     {canManage && <div className="flex flex-wrap gap-2">
       <Button size="sm" variant="outline" disabled={submitting || health?.mode === "off"} onClick={() => void mode("off")}>Pause reminders</Button>

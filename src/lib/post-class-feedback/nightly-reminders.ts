@@ -10,7 +10,7 @@ import { resolvePostClassTutorRecipient, safePostClassWiseSessionUrl } from "./n
 import { PostClassConflictError, PostClassValidationError } from "./errors";
 import { withPostClassTransaction } from "./transaction";
 import { createGmailSender, GmailRejection } from "./gmail";
-import { feedbackGmailAccessToken } from "./gmail-credentials";
+import { feedbackGmailAccessToken, feedbackReminderGrant } from "./gmail-credentials";
 import { latestNightlyDate, nightlyCheckpoint, nightlyCounts, nightlyDisposition, nightlyWindow,
   NIGHTLY_FRESHNESS_MS, NIGHTLY_RETRY_MINUTES, NIGHTLY_TERMINAL, type NightlySessionState } from "./nightly-reminder-model";
 import { discoverNightlyInventory, refreshNightlyItems, type NightlyInventory, type NightlyInventoryItem } from "./nightly-reminder-source";
@@ -21,6 +21,8 @@ const runs = schema.postClassNotificationRuns;
 const attempts = schema.postClassNotificationAttempts;
 const BUDGET_MS = 8 * 60_000;
 const LEASE_MS = 15 * 60_000; // exceeds the route's 800-second hard limit
+class ReminderChangedBeforeSubmission extends ScheduleEmailRejection {}
+
 type LedgerRow = typeof ledger.$inferSelect;
 type Session = typeof schema.postClassSessions.$inferSelect;
 type Assessment = typeof schema.postClassAssessments.$inferSelect;
@@ -287,11 +289,14 @@ async function queueReadyGroups(db: Database, runId: string, now: Date, token: s
   }
 }
 
-async function cancelUnacceptedDelivery(db: Database, id: string, now: Date) {
+async function cancelUnacceptedDelivery(db: Database, id: string, now: Date, claimedAttempt?: number) {
   await withPostClassTransaction(db, async (tx) => {
     const changed = await tx.update(deliveries).set({ status: "cancelled", cancelledAt: now, nextAttemptAt: null, updatedAt: now })
-      .where(and(eq(deliveries.id, id), inArray(deliveries.status, ["pending", "failed"]))).returning({ id: deliveries.id });
+      .where(and(eq(deliveries.id, id), claimedAttempt === undefined ? inArray(deliveries.status, ["pending", "failed"]) :
+        and(eq(deliveries.status, "sending"), eq(deliveries.attemptCount, claimedAttempt)))).returning({ id: deliveries.id });
     if (!changed.length) return;
+    if (claimedAttempt !== undefined) await tx.update(attempts).set({ status: "cancelled", errorCode: "eligibility_changed", errorMessage: "Definitely unsent; refresh and recompose.", finishedAt: now })
+      .where(and(eq(attempts.deliveryId, id), eq(attempts.attemptNumber, claimedAttempt)));
     await tx.update(ledger).set({ deliveryId: null, status: "pending", updatedAt: now })
       .where(and(eq(ledger.deliveryId, id), notInArray(ledger.status, [...NIGHTLY_TERMINAL, "unknown"])));
   });
@@ -352,7 +357,9 @@ async function dispatchDelivery(db: Database, id: string, token: string, clock: 
   if (!claimed) return;
   let receipt: { id: string };
   try {
-    const sender = senders?.[senderKey] ?? createGmailSender(force => feedbackGmailAccessToken(force, db), async () => {
+    const grant = senders ? undefined : await feedbackReminderGrant(db);
+    const sender = senders?.[senderKey] ?? createGmailSender(force => feedbackGmailAccessToken(force, db, grant), async () => {
+      if (await feedbackReminderGrant(db) !== grant) throw new GmailRejection("Gmail authorization changed before submission.", true);
       const current = await settings(db);
       const finalStates = await loadStates(db, rows);
       const finalRecipient = await recipientFor(db, delivery.canonicalTutorKey);
@@ -361,12 +368,13 @@ async function dispatchDelivery(db: Database, id: string, token: string, clock: 
         current.policyVersion !== config.policyVersion || current.formMappingVersion !== config.formMappingVersion ||
         finalRecipient.email !== delivery.recipientEmail || content.text !== delivery.frozenContent!.text || content.html !== delivery.frozenContent!.html ||
         rows.some(row => disposition(finalStates.get(row.wiseSessionId), clock(), nightlyCheckpoint(row.reminderDate)).status !== "ready")) {
-        throw new GmailRejection("Reminder eligibility changed before submission; refresh the queued classes.", true);
+        throw new ReminderChangedBeforeSubmission("Reminder eligibility changed before submission; refresh the queued classes.");
       }
     });
     receipt = await sender.sendEmail({ to: delivery.recipientEmail, subject: delivery.subject,
       text: delivery.frozenContent.text, html: delivery.frozenContent.html, idempotencyKey: delivery.idempotencyKey });
   } catch (error) {
+    if (error instanceof ReminderChangedBeforeSubmission) { await cancelUnacceptedDelivery(db, id, clock(), number); return; }
     if (!(error instanceof ScheduleEmailRejection)) { await unknownDelivery(db, id, clock()); return; }
     const failedAt = clock();
     const gmail = error instanceof GmailRejection ? error : null;

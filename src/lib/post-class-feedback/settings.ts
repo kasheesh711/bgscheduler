@@ -134,7 +134,7 @@ export async function updatePostClassSettings(
   db: Database = getDb(),
 ) {
   return withPostClassTransaction(db, async (tx) => {
-    const [current] = await tx.select().from(schema.postClassSettings).limit(1);
+    const [current] = await tx.select().from(schema.postClassSettings).limit(1).for("update");
     if (!current) throw new PostClassNotFoundError("Post-class feedback settings are not initialized.");
     if (patch.expectedVersion !== current.version) {
       throw new PostClassConflictError();

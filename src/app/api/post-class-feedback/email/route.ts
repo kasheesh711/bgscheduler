@@ -4,8 +4,8 @@ import { requirePostClassCapability } from '@/lib/post-class-feedback/access';
 import { postClassFeedbackErrorResponse } from '@/lib/post-class-feedback/api';
 import { PostClassValidationError } from '@/lib/post-class-feedback/errors';
 import { beginFeedbackEmailOAuth, FEEDBACK_OAUTH_COOKIE, FEEDBACK_OAUTH_PATH } from '@/lib/post-class-feedback/gmail-connection';
-import { feedbackMailboxStatus, feedbackGmailAccessToken, sendFeedbackMailboxTest, confirmFeedbackMailboxTest } from '@/lib/post-class-feedback/gmail-credentials';
-import { reminderLineStatus, sendReminderLineTest, confirmReminderLineTest } from '@/lib/post-class-feedback/reminder-line';
+import { feedbackMailboxStatus, assertFeedbackConnectionPaused, feedbackGmailAccessToken, sendFeedbackMailboxTest, confirmFeedbackMailboxTest } from '@/lib/post-class-feedback/gmail-credentials';
+import { reminderLineStatus, sendReminderLineTest, confirmReminderLineTest, resolveReminderAlert } from '@/lib/post-class-feedback/reminder-line';
 
 export const maxDuration = 120;
 const Action = z.discriminatedUnion('action', [
@@ -13,6 +13,7 @@ const Action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('test') }), z.object({ action: z.literal('line_test') }),
   z.object({ action: z.literal('confirm'), code: z.string().trim().min(1).max(64) }),
   z.object({ action: z.literal('line_confirm'), code: z.string().trim().min(1).max(64) }),
+  z.object({ action: z.literal('line_resolve'), id: z.string().uuid(), expectedAttempts: z.number().int().min(1), outcome: z.enum(['accepted', 'not_sent']), receipt: z.string().trim().max(500).optional(), note: z.string().trim().min(10).max(2000) }),
 ]);
 export async function GET() {
   try {
@@ -27,6 +28,7 @@ export async function POST(request: NextRequest) {
     if (request.headers.get('origin') !== request.nextUrl.origin) throw new PostClassValidationError('Use the Class Feedback page to manage this connection.');
     const input = Action.parse(await request.json());
     if (input.action === 'connect') {
+      await assertFeedbackConnectionPaused();
       const { url, cookie } = beginFeedbackEmailOAuth(actor.email, request.nextUrl.origin);
       const response = NextResponse.json({ url });
       response.cookies.set(FEEDBACK_OAUTH_COOKIE, cookie, { httpOnly: true, secure: true, sameSite: 'lax', path: FEEDBACK_OAUTH_PATH, maxAge: 600 });
@@ -34,6 +36,7 @@ export async function POST(request: NextRequest) {
     }
     if (input.action === 'renew') { await feedbackGmailAccessToken(true); return NextResponse.json({ renewed: true }); }
     if (input.action === 'test') return NextResponse.json(await sendFeedbackMailboxTest(actor.email));
+    if (input.action === 'line_resolve') return NextResponse.json(await resolveReminderAlert(actor.email, input));
     if (input.action === 'line_test') return NextResponse.json(await sendReminderLineTest(actor.email));
     if (input.action === 'confirm') return NextResponse.json(await confirmFeedbackMailboxTest(actor.email, input.code));
     return NextResponse.json(await confirmReminderLineTest(actor.email, input.code));
