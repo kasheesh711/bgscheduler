@@ -110,6 +110,15 @@ describe("POST /api/tutor-offboarding/decisions", () => {
     const response = await postDecision(json({ canonicalKey: "Aria", snoozeDays: 90 }));
     expect([response.status, await response.json()]).toEqual([409, { error: "This tutor is already marked still with us." }]);
   });
+
+  it("keeps Wise staff accounts read-only even when an admin submits a decision directly", async () => {
+    findMock.mockResolvedValue({ ...ROW, score: { ...ROW.score, exclusion: { code: "wise_admin", text: "Wise staff account" } } });
+    recordMock.mockResolvedValue({ id: DECISION_ID } as never);
+    const response = await postDecision(json({ canonicalKey: "Aria", snoozeDays: 90 }));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "Wise staff accounts are read-only." });
+    expect(recordMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("DELETE /api/tutor-offboarding/decisions/[decisionId]", () => {

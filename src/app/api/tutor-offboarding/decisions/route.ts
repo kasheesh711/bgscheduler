@@ -27,6 +27,8 @@ export async function POST(request: NextRequest) {
     if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     const row = await findPersonRow(viewer, parsed.data.canonicalKey);
     if (!row) throw new TutorOffboardingError("This tutor is not on the review page.", 404);
+    // OFF-03: the staff panel is read-only, including direct requests for local decisions.
+    if (row.score.exclusion?.code === "wise_admin") throw new TutorOffboardingError("Wise staff accounts are read-only.", 409);
     const decision = await recordStillWithUs(getDb(), {
       canonicalKey: row.signals.canonicalKey,
       note: parsed.data.note ? parsed.data.note : null,
