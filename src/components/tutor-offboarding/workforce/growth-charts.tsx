@@ -531,8 +531,9 @@ export function HiringChart({ rows }: { rows: GrowthHiringEstimate[] }) {
       {rows
         .filter(
           (r) =>
-            r.averageMatchingWeeklyHours.value === null ||
-            r.averageMatchingWeeklyHours.value === 0,
+            (r.extraWeeklyHours.value ?? 0) > 0 &&
+            (r.averageMatchingWeeklyHours.value === null ||
+              r.averageMatchingWeeklyHours.value === 0),
         )
         .map((r) => (
           <p
@@ -590,7 +591,8 @@ export function HiringChart({ rows }: { rows: GrowthHiringEstimate[] }) {
                     {formatMetric(r.roundedHiringEstimate)}
                     {r.tutorEquivalents.value === null && (
                       <p className="mt-1">
-                        {(r.averageMatchingWeeklyHours.value ?? 0) === 0
+                        {(r.extraWeeklyHours.value ?? 0) > 0 &&
+                        r.averageMatchingWeeklyHours.value === 0
                           ? "A tutor offering different hours is needed."
                           : "Matching availability is unavailable."}
                       </p>
