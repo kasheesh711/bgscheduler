@@ -48,15 +48,15 @@ describe("growth report evidence and pagination", () => {
 });
 
 
-it("keeps drilldown exceptions scoped to the visible page plus global evidence", async () => {
-  const exceptions = ["lesson1", "lesson2", "lesson3", "unrelated"].map(entityId => ({ code: "UNRESOLVED", entityId, message: "Review this class." }));
+it("keeps report-wide uncertainty visible even when an unmapped booking cannot belong to a course", async () => {
+  const exceptions = ["lesson1", "lesson2", "lesson3", "unmapped-without-contributor"].map(entityId => ({ code: "UNRESOLVED", entityId, message: "Review this class." }));
   const global = { code: "HISTORY_PARTIAL", message: "A source window is incomplete." };
   vi.mocked(buildAllGrowthFlows).mockReturnValue({ ...flows, quality: { ...quality, exceptions: [...exceptions, global] } });
   const revision = buildGrowthReport(evidence, query, now).reportRevision;
   const selection = { ...query, reportRevision: revision, kind: "cohort" as const, key: row.key, pageSize: 2 };
   const first = await getGrowthDrilldown(db, selection, now);
-  expect(first.exceptions).toEqual([exceptions[0], exceptions[1], global]);
+  expect(first.exceptions).toEqual([...exceptions, global]);
   const second = await getGrowthDrilldown(db, { ...selection, cursor: first.nextCursor! }, now);
-  expect(second.exceptions).toEqual([exceptions[2], global]);
+  expect(second.exceptions).toEqual([...exceptions, global]);
   expect(buildGrowthReport(evidence, query, now).quality.exceptions).toHaveLength(5);
 });

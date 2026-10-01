@@ -717,7 +717,10 @@ export function GrowthView({
                   </p>
                 </div>
               ))}
-              <EvidenceIssueSummary issues={detail.exceptions} />
+              {detail.exceptions.length > 0 && <section className="space-y-2">
+                <h4 className="font-semibold">Report-wide source issues</h4>
+                <EvidenceIssueSummary issues={detail.exceptions} />
+              </section>}
               {detail.nextCursor && (
                 <Button
                   variant="outline"

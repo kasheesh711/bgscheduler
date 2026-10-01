@@ -129,6 +129,8 @@ Drilldown adds `reportRevision`, `kind=cohort|churn|cancellation|capacity`, `key
 (default 100, maximum 500). Keys are returned chart-row keys; churn also accepts a returned lifecycle event key.
 The page limit applies across sessions, lifecycle events and availability observations together. A cursor is bound to
 the revision, kind and key. A stale revision returns 409; an unavailable row returns 404.
+Report-wide source exceptions remain available on each page because an unmapped booking may affect certainty
+without belonging to a course. The UI groups identical messages with counts and labels their report-wide scope.
 Growth revisions also pin the calculation time. A fresh source read must reproduce the pinned report before details
 or a CSV are returned.
 
