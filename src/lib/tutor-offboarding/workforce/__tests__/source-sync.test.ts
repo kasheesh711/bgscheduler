@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { SourceWindowResult, StudentCreditEvidence, WorkforceSession } from "../types";
 import { syncWorkforceHistory } from "../source-sync";
+import { WorkforceSourceFetchError } from "../wise-source";
 
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); vi.restoreAllMocks(); });
@@ -43,6 +44,17 @@ describe("bounded workforce history sync", () => {
     expect(persisted.map((row) => row.requestedWindow.from)).toEqual(["2026-03-01"]);
   });
 
+  it("stops after a thrown partial-page fetch before granting another window a fresh budget", async () => {
+    const fetchWindow = vi.fn(async () => { throw new WorkforceSourceFetchError(new Error("second page failed after consuming requests"), 2, 1); });
+    const outcome = await syncWorkforceHistory(request(setup()), { fetchWindow });
+    expect(fetchWindow).toHaveBeenCalledTimes(1);
+    expect(outcome.windows).toHaveLength(1);
+    expect(outcome.windows[0]).toMatchObject({ status: "failed", reasonCodes: ["SOURCE_FETCH_FAILED"] });
+    expect(outcome.completeThrough).toBeNull();
+    expect(outcome).toMatchObject({ requests: 2, pages: 1 });
+    expect(outcome.windows[0]).toMatchObject({ requests: 2, pages: 1 });
+  });
+
   it("safely resumes after the last complete stored window", async () => {
     const checkpointPath = setup();
     const persistWindow = vi.fn(async () => {});
@@ -51,6 +63,31 @@ describe("bounded workforce history sync", () => {
     const resumed = await syncWorkforceHistory(request(checkpointPath), { fetchWindow, persistWindow });
     expect(fetchWindow.mock.calls.map(([arg]) => arg.from)).toEqual(["2026-04-01"]);
     expect(resumed.completeThrough).toBe("2026-04-30");
+  });
+
+  it("prioritizes all demand months with sessions-only and revisits skipped credits explicitly", async () => {
+    const checkpointPath = setup();
+    const fetchWindow = vi.fn(async (input) => result(input));
+    const persistWindow = vi.fn(async () => {});
+    const sessionsOnly = await syncWorkforceHistory({ ...request(checkpointPath), sessionsOnly: true }, { fetchWindow, persistWindow });
+    expect(fetchWindow.mock.calls.every(([arg]) => arg.creditExamples?.length === 0)).toBe(true);
+    expect(sessionsOnly).toMatchObject({ complete: true, creditsComplete: false });
+    expect(sessionsOnly.windows.map(window => window.creditCapture)).toEqual(["skipped", "skipped"]);
+    fetchWindow.mockClear();
+    const refreshed = await syncWorkforceHistory({ ...request(checkpointPath), refreshCredits: true }, { fetchWindow: vi.fn(async input => { fetchWindow(input); return result({ ...input, net: 1 }); }), persistWindow });
+    expect(fetchWindow.mock.calls.map(([arg]) => arg.from)).toEqual(["2026-03-01", "2026-04-01"]);
+    expect(refreshed).toMatchObject({ complete: true, creditsComplete: true });
+    expect(refreshed.windows.map(window => window.creditCapture)).toEqual(["complete", "complete"]);
+  });
+
+  it("keeps already captured demand coverage when the later financial pass fails", async () => {
+    const checkpointPath = setup();
+    const persistWindow = vi.fn(async () => {});
+    await syncWorkforceHistory({ ...request(checkpointPath), sessionsOnly: true }, { fetchWindow: async input => result(input), persistWindow });
+    const refresh = await syncWorkforceHistory({ ...request(checkpointPath), refreshCredits: true }, { fetchWindow: async () => { throw new WorkforceSourceFetchError(new Error("fixture failure"), 2, 1); }, persistWindow });
+    expect(refresh).toMatchObject({ complete: true, completeThrough: "2026-04-30", creditsComplete: false, requests: 2 });
+    expect(refresh.windows.map(window => window.status)).toEqual(["complete", "complete"]);
+    expect(refresh.windows[0].creditCapture).toBe("partial");
   });
 
   it("retains corrected/refunded credit versions and separates historical participants from current roster", async () => {

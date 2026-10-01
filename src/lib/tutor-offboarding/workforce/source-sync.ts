@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import path from "node:path";
 import { WiseApiError } from "@/lib/wise/client";
 import { persistWorkforceSourceWindow } from "./observation-store";
-import { fetchWorkforceSourceWindow } from "./wise-source";
+import { fetchWorkforceSourceWindow, WorkforceSourceFetchError } from "./wise-source";
 import { captureGrowthBookingMetadata } from "./growth/capture";
 import { captureGrowthLifecycle } from "./growth/reconcile";
 import { normalizeGrowthBookingMetadata } from "./growth/source";
@@ -17,6 +17,10 @@ export interface HistorySyncRequest {
   maxPages: number;
   checkpointPath: string;
   mode: HistorySyncMode;
+  /** Spend the bounded run on demand dates before collecting financial evidence. */
+  sessionsOnly?: boolean;
+  /** Revisit date-complete windows whose financial capture is partial or skipped. */
+  refreshCredits?: boolean;
 }
 export interface HistorySyncWindow {
   from: string;
@@ -28,12 +32,14 @@ export interface HistorySyncWindow {
   pages: number;
   persisted: boolean;
   reasonCodes: string[];
+  creditCapture?: "complete" | "partial" | "skipped";
 }
 export interface HistorySyncResult {
   mode: HistorySyncMode;
   requestedWindow: { from: string; to: string };
   completeThrough: string | null;
   complete: boolean;
+  creditsComplete: boolean;
   requests: number;
   pages: number;
   windows: HistorySyncWindow[];
@@ -113,7 +119,9 @@ function checkpointResult(checkpoint: HistoryCheckpoint, mode: HistorySyncMode, 
   const classifications = outputs.flatMap(result => result.sessions.map(session => normalizeGrowthBookingMetadata(session, session.observedAt ?? result.observedAt)));
   return {
     mode, requestedWindow: { from: checkpoint.from, to: checkpoint.to }, completeThrough,
-    complete: completeThrough === checkpoint.to, requests, pages,
+    complete: completeThrough === checkpoint.to,
+    creditsComplete: planned.every(period => checkpoint.windows.some(row => row.from === period.from && row.to === period.to && row.status === "complete" && row.creditCapture === "complete")),
+    requests, pages,
     windows: checkpoint.windows, sessions: outputs.reduce((sum, result) => sum + result.sessions.length, 0),
     creditEvidence: creditRows.length, knownNetCredits: creditRows.filter(row => row.netCredits !== null && row.evidenceStatus === "verified").length,
     unknownNetCredits: creditRows.filter(row => row.netCredits === null || row.evidenceStatus !== "verified").length,
@@ -131,6 +139,7 @@ export async function syncWorkforceHistory(
 ): Promise<HistorySyncResult> {
   if (!Number.isInteger(input.maxRequests) || input.maxRequests < 1 || !Number.isInteger(input.maxPages) || input.maxPages < 1) throw new Error("Explicit positive request and page caps are required");
   if (!input.checkpointPath.trim()) throw new Error("checkpointPath is required");
+  if (input.sessionsOnly && input.refreshCredits) throw new Error("sessionsOnly and refreshCredits cannot be combined");
   const planned = windows(input.from, input.to);
   const checkpointFile = path.resolve(input.checkpointPath);
   const checkpoint = readCheckpoint(checkpointFile, input.from, input.to);
@@ -144,16 +153,21 @@ export async function syncWorkforceHistory(
 
   for (const period of planned) {
     const prior = checkpoint.windows.find(row => row.from === period.from && row.to === period.to);
-    if (prior?.status === "complete" && (input.mode === "dry_run" || prior.persisted)) continue;
+    if (prior?.status === "complete" && (input.mode === "dry_run" || prior.persisted)
+      && (!input.refreshCredits || prior.creditCapture === "complete")) continue;
     const remainingRequests = input.maxRequests - requests;
     const remainingPages = input.maxPages - pages;
     if (remainingRequests <= 0 || remainingPages <= 0) {
       const failed: HistorySyncWindow = { from: period.from, to: period.to, status: "incomplete", sourceKey: null, observedAt: null, requests: 0, pages: 0, persisted: false, reasonCodes: [remainingRequests <= 0 ? "REQUEST_CAP_EXHAUSTED" : "PAGE_CAP_EXHAUSTED"] };
-      checkpoint.windows = [...checkpoint.windows.filter(row => row.from !== period.from || row.to !== period.to), failed].sort((a, b) => a.from.localeCompare(b.from));
+      const checkpointRow = prior?.status === "complete" && prior.persisted
+        ? { ...prior, creditCapture: "partial" as const, reasonCodes: [...new Set([...prior.reasonCodes, ...failed.reasonCodes])] }
+        : failed;
+      checkpoint.windows = [...checkpoint.windows.filter(row => row.from !== period.from || row.to !== period.to), checkpointRow].sort((a, b) => a.from.localeCompare(b.from));
+      writeCheckpoint(checkpointFile, checkpoint);
       break;
     }
     try {
-      const source = await fetchWindow({ from: period.from, to: period.to, maxRequests: remainingRequests, maxPages: remainingPages });
+      const source = await fetchWindow({ from: period.from, to: period.to, maxRequests: remainingRequests, maxPages: remainingPages, ...(input.sessionsOnly ? { creditExamples: [] } : {}) });
       requests += source.paging.requests;
       pages += source.paging.pagesReturned;
       const result = { ...source, sourceKey: `wise-history:${period.from}:${period.to}:${source.observedAt}` };
@@ -173,16 +187,34 @@ export async function syncWorkforceHistory(
         }
       }
       const status: HistorySyncWindow["status"] = result.complete && result.completeness === "complete" && !result.truncated ? "complete" : "incomplete";
-      const row: HistorySyncWindow = { from: period.from, to: period.to, status, sourceKey: result.sourceKey, observedAt: result.observedAt, requests: result.paging.requests, pages: result.paging.pagesReturned, persisted, reasonCodes: result.contractIssues };
-      checkpoint.windows = [...checkpoint.windows.filter(item => item.from !== period.from || item.to !== period.to), row].sort((a, b) => a.from.localeCompare(b.from));
+      const missingCredit = result.sessions.some(session => session.wiseClassId && (session.historicalBookedStudentIds ?? []).some(studentId =>
+        !result.credits.some(credit => credit.wiseSessionId === session.wiseSessionId && credit.wiseStudentId === studentId)));
+      const creditCapture = input.sessionsOnly ? "skipped" as const
+        : status !== "complete" || missingCredit || result.contractIssues.some(code => ["CREDIT_EXAMPLE_REQUEST_CAP_EXHAUSTED", "SESSION_CREDIT_FETCH_FAILED", "SESSION_CREDIT_HISTORY_NOT_EXPOSED"].includes(code))
+          ? "partial" as const : "complete" as const;
+      const row: HistorySyncWindow = { from: period.from, to: period.to, status, creditCapture, sourceKey: result.sourceKey, observedAt: result.observedAt, requests: result.paging.requests, pages: result.paging.pagesReturned, persisted, reasonCodes: result.contractIssues };
+      const checkpointRow = prior?.status === "complete" && prior.persisted && status !== "complete"
+        ? { ...prior, creditCapture: "partial" as const, reasonCodes: [...new Set([...prior.reasonCodes, ...row.reasonCodes])] }
+        : row;
+      checkpoint.windows = [...checkpoint.windows.filter(item => item.from !== period.from || item.to !== period.to), checkpointRow].sort((a, b) => a.from.localeCompare(b.from));
       writeCheckpoint(checkpointFile, checkpoint);
       if (status === "incomplete" && (result.contractIssues.includes("REQUEST_CAP_EXHAUSTED") || result.contractIssues.includes("PAGE_CAP_EXHAUSTED"))) break;
     } catch (error) {
-      const status429 = error instanceof WiseApiError && error.status === 429;
-      const row: HistorySyncWindow = { from: period.from, to: period.to, status: "failed", sourceKey: null, observedAt: (dependencies.now?.() ?? new Date()).toISOString(), requests: 0, pages: 0, persisted: false, reasonCodes: [status429 ? "WISE_RATE_LIMITED" : "SOURCE_FETCH_FAILED"] };
-      checkpoint.windows = [...checkpoint.windows.filter(item => item.from !== period.from || item.to !== period.to), row].sort((a, b) => a.from.localeCompare(b.from));
+      const sourceError = error instanceof WorkforceSourceFetchError ? error.sourceError : error;
+      const failedRequests = error instanceof WorkforceSourceFetchError ? error.requests : 0;
+      const failedPages = error instanceof WorkforceSourceFetchError ? error.pagesReturned : 0;
+      requests += failedRequests;
+      pages += failedPages;
+      const status429 = sourceError instanceof WiseApiError && sourceError.status === 429;
+      const row: HistorySyncWindow = { from: period.from, to: period.to, status: "failed", sourceKey: null, observedAt: (dependencies.now?.() ?? new Date()).toISOString(), requests: failedRequests, pages: failedPages, persisted: false, reasonCodes: [status429 ? "WISE_RATE_LIMITED" : "SOURCE_FETCH_FAILED"] };
+      const checkpointRow = prior?.status === "complete" && prior.persisted
+        ? { ...prior, creditCapture: "partial" as const, reasonCodes: [...new Set([...prior.reasonCodes, ...row.reasonCodes])] }
+        : row;
+      checkpoint.windows = [...checkpoint.windows.filter(item => item.from !== period.from || item.to !== period.to), checkpointRow].sort((a, b) => a.from.localeCompare(b.from));
       writeCheckpoint(checkpointFile, checkpoint);
-      if (status429) break;
+      // Consumption before a thrown page cannot be recovered from every adapter.
+      // Stop here so another window never receives an overstated remaining cap.
+      break;
     }
   }
   if (!existsSync(checkpointFile)) writeCheckpoint(checkpointFile, checkpoint);

@@ -72,3 +72,21 @@ it('keeps historical future-booking facts while a fresh snapshot marks their abs
  const evidence=await loadWorkforceEvidence(db(),query,new Date('2026-10-01T03:30:00Z'));
  expect(evidence.sessions[0].meetingStatus).toBe('UPCOMING');expect(evidence.sessions[0].reasonCodes).toContain('absent_from_current_future_snapshot');
 });
+
+it('persists observation-only session/credit facts at original times without complete history coverage', async () => {
+    const retained = window('credit-control-source', '2026-10-01T04:00:00Z', 0, false);
+    retained.credits[0].observedAt = '2026-10-01T02:00:00Z';
+    retained.sessions[0].participantCompleteness = 'partial';
+    await persistWorkforceSourceWindow(db(), retained, { mode: 'observation_only' });
+    await persistWorkforceSourceWindow(db(), retained, { mode: 'observation_only' });
+    const evidence = await loadWorkforceEvidence(db(), query, new Date('2026-10-01T05:00:00Z'));
+    expect(evidence.sessions).toHaveLength(1);
+    expect(evidence.sessions[0].participantCompleteness).toBe('partial');
+    expect(evidence.studentCredits[0]).toMatchObject({ netCredits: 0, observedAt: '2026-10-01T02:00:00.000Z' });
+    expect(evidence.sourceCoverage.some(row => row.source === 'wise_history')).toBe(false);
+    expect(evidence.sourceCoverage.find(row => row.source === 'credit_control_observation')?.completeness).toBe('partial');
+    const runs = await h.db.select().from(s.workforceCaptureRuns);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ kind: 'history', complete: false });
+    expect(await h.db.select().from(s.workforceCreditVersions)).toHaveLength(1);
+});

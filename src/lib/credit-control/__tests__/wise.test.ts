@@ -37,6 +37,13 @@ function snapshot(header: string[], rows: unknown[][]): SheetSnapshot {
 }
 
 describe("credit-control Wise fetchers", () => {
+  it("preserves raw credit field presence separately from legacy numeric defaults", async () => {
+    const rawSessionCreditHistory = [{ _id: "missing", type: "SESSION" }, { _id: "zero", type: "SESSION", credit: 0 }];
+    const result = await fetchSessionCredits(fakeClient(vi.fn(async () => ({ data: { credits: {}, sessionCreditHistory: rawSessionCreditHistory } }))), "i", "c", "s");
+    expect(result.sessionCreditHistory.map(row => row.credit)).toEqual([0, 0]);
+    expect(result.rawSessionCreditHistory).toEqual(rawSessionCreditHistory);
+    expect(result.rawSessionCreditHistory?.[0]).not.toHaveProperty("credit");
+  });
   it("paginates students with parent data requested", async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => ({
       _id: `student-${index}`,

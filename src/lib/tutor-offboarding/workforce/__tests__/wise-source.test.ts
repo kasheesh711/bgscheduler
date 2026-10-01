@@ -4,6 +4,7 @@ import {
   fetchWorkforceAvailabilityWindow,
   fetchWorkforceSourceWindow,
   WorkforceRequestBudget,
+  WorkforceSourceFetchError,
   normalizeStudentCreditEvidence,
   probeWorkforceSources,
 } from "../wise-source";
@@ -41,6 +42,18 @@ describe("workforce Wise source adapter", () => {
     expect(result.contractIssues).toContain("EMPTY_ADVERTISED_SESSION_PAGE");
   });
 
+  it("reports consumed requests and returned pages when a later page fails", async () => {
+    const { wise, budget } = client(4);
+    globalThis.fetch = vi.fn().mockResolvedValueOnce(Response.json({ data: { sessions: [session("s1")], page_count: 2 } }))
+      .mockRejectedValueOnce(new Error("fixture connection failure"));
+    let failure: unknown;
+    try { await fetchWorkforceSourceWindow({ from: "2026-03-01", to: "2026-03-02", maxRequests: 4 }, { client: wise, budget, instituteId: "inst" }); }
+    catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(WorkforceSourceFetchError);
+    expect(failure).toMatchObject({ requests: 2, pagesReturned: 1 });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("does not conclude credit normal charges when the probe budget never reached them", async () => {
     vi.stubEnv("WISE_USER_ID", "fixture"); vi.stubEnv("WISE_API_KEY", "fixture"); vi.stubEnv("WISE_INSTITUTE_ID", "fixture");
     globalThis.fetch = vi.fn(async () => Response.json({ data: { sessions: [session("s1")], page_count: 1 } }));
@@ -63,6 +76,33 @@ describe("workforce Wise source adapter", () => {
     expect(result.sessions[0].wiseClassId).toBe("class-1");
     expect(result.sessions[0].bookingClassificationSource).toEqual({ classType: "GROUP", purpose: "TRIAL", title: "In-Person Session - Physics" });
     expect(result.contractIssues).toContain("DUPLICATE_SESSION_ID");
+  });
+
+  it("collects exact session credit rows by deduplicated class/student pairs without supplied examples", async () => {
+    const { wise, budget } = client(3);
+    const urls: string[] = [];
+    globalThis.fetch = vi.fn(async (url) => {
+      urls.push(String(url));
+      if (String(url).includes("sessionCredits")) return Response.json({ data: { credits: { consumed: 99 }, sessionCreditHistory: [
+        { _id: "s1", type: "SESSION", credit: 1 }, { _id: "s2", type: "SESSION", credit: 0 }, { _id: "s3", type: "SESSION" },
+      ] } });
+      return Response.json({ data: { sessions: [session("s1"), session("s2"), session("s3")], page_count: 1 } });
+    });
+    const result = await fetchWorkforceSourceWindow({ from: "2026-03-01", to: "2026-03-03", maxRequests: 3 }, { client: wise, budget, instituteId: "inst" });
+    expect(urls.filter(url => url.includes("sessionCredits"))).toHaveLength(1);
+    expect(result.credits.map(row => row.netCredits)).toEqual([1, 0, null]);
+    expect(result.credits.map(row => row.evidenceStatus)).toEqual(["verified", "verified", "unknown"]);
+    expect(result.sessions.every(row => row.participantCompleteness === "partial")).toBe(true);
+    expect(result.paging.requests).toBe(2);
+  });
+
+  it("retains unknown financial rows when session retrieval consumes the budget", async () => {
+    const { wise, budget } = client(1);
+    globalThis.fetch = vi.fn(async () => Response.json({ data: { sessions: [session("s1")], page_count: 1 } }));
+    const result = await fetchWorkforceSourceWindow({ from: "2026-03-01", to: "2026-03-03", maxRequests: 1 }, { client: wise, budget, instituteId: "inst" });
+    expect(result).toMatchObject({ complete: true, paging: { requests: 1 } });
+    expect(result.credits[0]).toMatchObject({ netCredits: null, evidenceStatus: "unknown", normalCredits: 1 });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 
   it("keeps absent historical participant arrays unknown", async () => {

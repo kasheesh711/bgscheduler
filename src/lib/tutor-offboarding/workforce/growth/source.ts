@@ -20,23 +20,26 @@ export function normalizeGrowthBookingMetadata(raw: unknown, observedAt: string,
     ["bookingClassificationSource.purpose", retained.purpose],
     ["bookingClassificationSource.classType", retained.classType],
   ].filter((pair): pair is [string, string] => typeof pair[1] === "string" && pair[1].trim().length > 0);
+  const unknownPurpose = candidates.some(([field, value]) => field.endsWith("purpose")
+    && !CLASSIFICATIONS.has(value.trim().toUpperCase().replace(/[ -]+/g, "_")));
+  const hasPurpose = candidates.some(([field]) => field.endsWith("purpose"));
   const matches = candidates.flatMap(([field, value]) => {
     const kind = CLASSIFICATIONS.get(value.trim().toUpperCase().replace(/[ -]+/g, "_"));
     return kind ? [{ field, value, kind }] : [];
   });
   const titleValue = row.classTitle ?? row.title ?? retained.title;
   const title = typeof titleValue === "string" ? titleValue : "";
-  if (/\btrial\b/i.test(title)) matches.push({ field: "title", value: title, kind: "trial" });
-  if (/\bpre[\s_-]*test\b/i.test(title)) matches.push({ field: "title", value: title, kind: "pretest" });
-  if (!matches.length && hasReviewedAcademicSubject) matches.push({ field: "reviewed_academic_mapping", value: title, kind: "regular" });
+  if (!hasPurpose && /\btrial\b/i.test(title)) matches.push({ field: "title", value: title, kind: "trial" });
+  if (!hasPurpose && /\bpre[\s_-]*test\b/i.test(title)) matches.push({ field: "title", value: title, kind: "pretest" });
+  if (!hasPurpose && !matches.length && hasReviewedAcademicSubject) matches.push({ field: "reviewed_academic_mapping", value: title, kind: "regular" });
   const kinds = new Set(matches.map(m => m.kind));
   const conflict = kinds.size > 1;
-  const match = !conflict && matches.length ? matches[0] : null;
+  const match = !unknownPurpose && !conflict && matches.length ? matches[0] : null;
   return {
     wiseSessionId: id, classification: match?.kind ?? "unknown",
     sourceField: match?.field ?? (candidates.length ? candidates.map(c => c[0]).join(" | ") : null),
     sourceValue: match?.value ?? (candidates.length ? candidates.map(c => c[1]).join(" | ") : null),
     observedAt: new Date(observedAt).toISOString(), completeness: match ? "complete" : "unknown",
-    reasonCodes: match ? ["title", "reviewed_academic_mapping"].includes(match.field) ? ["OWNER_CONFIRMED_TITLE_CLASSIFICATION"] : [] : [conflict ? "CONFLICTING_BOOKING_CLASSIFICATION" : "BOOKING_CLASSIFICATION_UNAVAILABLE"],
+    reasonCodes: match ? ["title", "reviewed_academic_mapping"].includes(match.field) ? ["OWNER_CONFIRMED_TITLE_CLASSIFICATION"] : [] : [unknownPurpose ? "UNRECOGNIZED_BOOKING_PURPOSE" : conflict ? "CONFLICTING_BOOKING_CLASSIFICATION" : "BOOKING_CLASSIFICATION_UNAVAILABLE"],
   };
 }

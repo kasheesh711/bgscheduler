@@ -30,9 +30,11 @@ async function main(): Promise<void> {
   const result = await syncWorkforceHistory({
     from, to, maxRequests: positiveInt("max-requests"), maxPages: positiveInt("max-pages"),
     checkpointPath, mode: apply ? "apply" : "dry_run",
+    sessionsOnly: process.argv.includes("--sessions-only"),
+    refreshCredits: process.argv.includes("--refresh-credits"),
   }, apply ? { db: getDb() } : {});
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  if (!result.complete) process.exitCode = 2;
+  if (!result.complete || (process.argv.includes("--refresh-credits") && !result.creditsComplete)) process.exitCode = 2;
 }
 
 main().catch(error => {

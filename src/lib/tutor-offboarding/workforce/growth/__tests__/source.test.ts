@@ -22,6 +22,15 @@ describe("growth booking classification", () => {
     expect(row.classification).toBe("unknown");
     expect(row.reasonCodes).toContain("CONFLICTING_BOOKING_CLASSIFICATION");
   });
+  it("retains explicit unknown purposes even with a reviewed subject, known class type or trial title", () => {
+    for (const purpose of ["UNRECOGNIZED_PURPOSE", "OTHER"]) {
+      const result = normalizeGrowthBookingMetadata({ _id: "u", purpose, classType: "REGULAR", title: "Physics trial" }, observedAt, true);
+      expect(result).toMatchObject({ classification: "unknown", completeness: "unknown" });
+      expect(result.reasonCodes).toContain("UNRECOGNIZED_BOOKING_PURPOSE");
+      expect(normalizeGrowthBookingMetadata({ wiseSessionId: "u", bookingClassificationSource: { purpose }, title: "Maths" }, observedAt, true).classification).toBe("unknown");
+    }
+    expect(normalizeGrowthBookingMetadata({ _id: "u", classType: "ONE_ON_ONE", title: "Maths" }, observedAt, true).classification).toBe("regular");
+  });
   it("rejects invalid record identity or observation time", () => {
     expect(() => normalizeGrowthBookingMetadata({}, observedAt)).toThrow("session identity");
     expect(() => normalizeGrowthBookingMetadata({ _id: "a" }, "wrong")).toThrow("observation time");

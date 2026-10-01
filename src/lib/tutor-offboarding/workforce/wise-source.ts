@@ -20,6 +20,13 @@ export class WorkforceRequestCapError extends Error {
   constructor() { super("REQUEST_CAP_EXHAUSTED"); this.name = "WorkforceRequestCapError"; }
 }
 
+export class WorkforceSourceFetchError extends Error {
+  constructor(readonly sourceError: unknown, readonly requests: number, readonly pagesReturned: number) {
+    super("SOURCE_FETCH_FAILED", { cause: sourceError });
+    this.name = "WorkforceSourceFetchError";
+  }
+}
+
 export class WorkforceRequestBudget {
   private used = 0;
   constructor(readonly maxRequests: number) {
@@ -78,7 +85,7 @@ function refId(value: unknown): string | null {
   return text(record(value)?._id);
 }
 
-function sessionNormalize(raw: unknown, observedAt: string): { session: WorkforceSession | null; issues: string[] } {
+export function normalizeWorkforceSession(raw: unknown, observedAt: string): { session: WorkforceSession | null; issues: string[] } {
   const row = record(raw);
   const issues: string[] = [];
   if (!row) return { session: null, issues: ["INVALID_SESSION_RECORD"] };
@@ -208,10 +215,15 @@ export async function fetchWorkforceSourceWindow(
         break outer;
       }
       pagesRequested += 1;
-      const response = await client.get<unknown>(`/institutes/${instituteId}/sessions`, {
+      let response: unknown;
+      try {
+        response = await client.get<unknown>(`/institutes/${instituteId}/sessions`, {
         status: "PAST", paginateBy: "DATE", startDate: isoDay(windowStart),
         endDate: isoDay(windowEndExclusive), page_number: String(page), page_size: String(pageSize),
       }, { cache: "no-store", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+      } catch (error) {
+        throw new WorkforceSourceFetchError(error, budget.requests, pagesReturned);
+      }
       const envelope = record(response);
       const data = record(envelope?.data);
       const sessions = data?.sessions;
@@ -227,7 +239,7 @@ export async function fetchWorkforceSourceWindow(
         if (advertised === 0 && sessions.length > 0) { issues.push("SESSION_PAGE_COUNT_CONTRADICTS_CONTENT"); truncated = true; break outer; }
       }
       for (const raw of sessions) {
-        const normalized = sessionNormalize(raw, observedAt);
+        const normalized = normalizeWorkforceSession(raw, observedAt);
         issues.push(...normalized.issues);
         if (!normalized.session) { truncated = true; continue; }
         if (seen.has(normalized.session.wiseSessionId)) { issues.push("DUPLICATE_SESSION_ID"); continue; }
@@ -247,29 +259,38 @@ export async function fetchWorkforceSourceWindow(
   }
 
   const credits: StudentCreditEvidence[] = [];
-  const examples = input.creditExamples ?? [];
+  // Undefined means collect all returned participant pairs. An explicit empty
+  // array keeps contract probes session-only. Never substitute a class roster.
+  const examples = input.creditExamples ?? allSessions.flatMap(session =>
+    session.wiseClassId && session.historicalBookedStudentIds
+      ? session.historicalBookedStudentIds.map(studentId => ({ classId: session.wiseClassId!, studentId, sessionId: session.wiseSessionId })) : []);
+  const pairs = new Map<string, { classId: string; studentId: string; sessionIds: Set<string> }>();
   for (const example of examples) {
+    const key = JSON.stringify([example.classId, example.studentId]);
+    const pair = pairs.get(key) ?? { classId: example.classId, studentId: example.studentId, sessionIds: new Set<string>() };
+    pair.sessionIds.add(example.sessionId ?? "unknown_session");
+    pairs.set(key, pair);
+  }
+  for (const pair of pairs.values()) {
+    let history: unknown[] | null = null;
     if (budget.exhausted) {
-      // Credit examples are metric evidence, not historical session-window
-      // pagination. A cap here must not discard complete demand/session facts.
-      issues.push("CREDIT_EXAMPLE_REQUEST_CAP_EXHAUSTED"); break;
+      // Financial evidence may be partial while session date retrieval is complete.
+      issues.push("CREDIT_EXAMPLE_REQUEST_CAP_EXHAUSTED");
+    } else {
+      try {
+        const response = await client.get<unknown>(`/institutes/${instituteId}/classes/${pair.classId}/students/${pair.studentId}/sessionCredits`, { fetchHistory: "true" }, { cache: "no-store", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+        const data = record(record(response)?.data);
+        history = Array.isArray(data?.sessionCreditHistory) ? data.sessionCreditHistory : null;
+        if (history === null) issues.push("SESSION_CREDIT_HISTORY_NOT_EXPOSED");
+      } catch (error) {
+        if (error instanceof WiseApiError && error.status === 429) throw new WorkforceSourceFetchError(error, budget.requests, pagesReturned);
+        issues.push("SESSION_CREDIT_FETCH_FAILED");
+      }
     }
-    try {
-      const response = await client.get<unknown>(`/institutes/${instituteId}/classes/${example.classId}/students/${example.studentId}/sessionCredits`, { fetchHistory: "true" }, { cache: "no-store", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-      const data = record(record(response)?.data);
-      const history = Array.isArray(data?.sessionCreditHistory) ? data.sessionCreditHistory : null;
-      if (history === null) issues.push("SESSION_CREDIT_HISTORY_NOT_EXPOSED");
-      credits.push(normalizeStudentCreditEvidence({
-        wiseSessionId: example.sessionId ?? "unknown_session", wiseStudentId: example.studentId,
-        observedAt, scheduledMinutes: allSessions.find((session) => session.wiseSessionId === example.sessionId)?.scheduledMinutes, history,
-      }));
-    } catch (error) {
-      if (error instanceof WiseApiError && error.status === 429) throw error;
-      issues.push("SESSION_CREDIT_FETCH_FAILED");
-      credits.push(normalizeStudentCreditEvidence({
-        wiseSessionId: example.sessionId ?? "unknown_session", wiseStudentId: example.studentId, observedAt, history: null,
-      }));
-    }
+    for (const sessionId of pair.sessionIds) credits.push(normalizeStudentCreditEvidence({
+      wiseSessionId: sessionId, wiseStudentId: pair.studentId, observedAt,
+      scheduledMinutes: allSessions.find(session => session.wiseSessionId === sessionId)?.scheduledMinutes, history,
+    }));
   }
 
   const complete = !truncated && !stoppedByCap;

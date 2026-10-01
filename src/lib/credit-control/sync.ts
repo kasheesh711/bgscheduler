@@ -1,7 +1,7 @@
 import { creditControlActive } from "@/lib/credit-control/mode";
 import { captureGrowthBookingMetadata } from "@/lib/tutor-offboarding/workforce/growth/capture";
 import { captureGrowthLifecycle } from "@/lib/tutor-offboarding/workforce/growth/reconcile";
-import type { WorkforceSession } from "@/lib/tutor-offboarding/workforce/types";
+import { captureCreditControlWorkforceEvidence } from "@/lib/tutor-offboarding/workforce/credit-control-capture";
 import { revalidateTag } from "next/cache";
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
@@ -419,7 +419,7 @@ function buildPackageRows(
   });
 }
 
-function toHistoryEntries(history: WiseSessionCredits["sessionCreditHistory"]): PairHistoryEntry[] {
+function toHistoryEntries(history: WiseSessionCredits["sessionCreditHistory"], rawHistory?: unknown[]): PairHistoryEntry[] {
   return history.map((entry) => ({
     wiseCreditHistoryId: entry._id,
     credit: Number(entry.credit) || 0,
@@ -427,7 +427,8 @@ function toHistoryEntries(history: WiseSessionCredits["sessionCreditHistory"]): 
     meetingStatus: entry.meetingStatus ?? null,
     durationMinutes: durationMsToMinutes(entry.duration),
     createdAtWise: entry.createdAt ?? null,
-    raw: JSON.parse(JSON.stringify(entry)) as Record<string, unknown>,
+    raw: { ...JSON.parse(JSON.stringify(rawHistory === undefined ? entry : rawHistory.find(raw =>
+      raw !== null && typeof raw === "object" && "_id" in raw && raw._id === entry._id) ?? {})), _workforceRawCreditEvidence: true } as Record<string, unknown>,
   }));
 }
 
@@ -444,7 +445,7 @@ async function fetchPairCredits(
       return {
         ...pair,
         credits: credits.credits,
-        history: toHistoryEntries(credits.sessionCreditHistory),
+        history: toHistoryEntries(credits.sessionCreditHistory, credits.rawSessionCreditHistory),
         creditsObservedAt: observedAt,
       } satisfies PairCreditRecord;
     } catch {
@@ -1057,48 +1058,18 @@ export async function runCreditControlSync(
         ),
       );
 
-    // Retain Wise's raw booking-purpose fields for growth analysis only after
-    // this Credit Control snapshot has been promoted successfully.
+    // Capture retained source facts only after successful snapshot promotion.
+    // Analytics failures cannot roll back or fail the operational sync.
     try {
-      const metadataSessions = new Map<string, WorkforceSession>();
-      for (const session of [...pastSessions, ...futureSessions]) {
-        const purpose = typeof session.purpose === "string" ? session.purpose : null;
-        const wiseUserId = typeof session.userId === "string" ? session.userId : session.userId?._id;
-        metadataSessions.set(session._id, {
-          wiseSessionId: session._id,
-          wiseClassId: session.classId._id,
-          classTitle: session.title ?? null,
-          startAt: session.scheduledStartTime.toISOString(),
-          endAt: session.scheduledEndTime?.toISOString() ?? null,
-          scheduledMinutes: session.scheduledEndTime
-            ? (session.scheduledEndTime.getTime() - session.scheduledStartTime.getTime()) / 60_000
-            : durationMsToMinutes(session.duration),
-          canonicalTutorKeys: [],
-          wiseTeacherIds: session.teacherId ? [session.teacherId] : [],
-          wiseUserIds: wiseUserId ? [wiseUserId] : [],
-          historicalBookedStudentIds: session.students,
-          participantCompleteness: "partial",
-          completeness: "partial",
-          meetingStatus: session.meetingStatus,
-          attendanceStatus: null,
-          modality: null,
-          subject: null,
-          curriculum: null,
-          level: null,
-          observedAt: now.toISOString(),
-          bookingClassificationSource: {
-            classType: session.classId.classType ?? null,
-            purpose,
-            title: session.title ?? null,
-          },
-          reasonCodes: ["CREDIT_CONTROL_SESSION_METADATA_ONLY"],
-        });
-      }
-      await captureGrowthBookingMetadata(db, [...metadataSessions.values()], now.toISOString());
+      const retained = await captureCreditControlWorkforceEvidence(db, {
+        snapshotId: snapshot.id, observedAt: now, from: pastStart, to: futureEnd,
+        sessions: [...pastSessions, ...futureSessions], pairs: creditPairs,
+      });
+      await captureGrowthBookingMetadata(db, retained.sessions, now.toISOString());
       await captureGrowthLifecycle(db, now);
     } catch (error) {
       const safeName = error instanceof Error ? error.name : "UnknownError";
-      console.error(`[credit-control] growth evidence capture failed (${safeName})`);
+      console.error(`[credit-control] workforce evidence capture failed (${safeName})`);
     }
 
     // Churn lifecycle (best-effort; never roll back the promoted snapshot).

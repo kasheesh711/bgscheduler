@@ -63,14 +63,16 @@ export async function captureWorkforceObservation(db: Database, input: Workforce
         return { runId: run.id, versionsAdded, observationsAdded: input.people.length, complete };
     });
 }
-/** Retrieval-complete windows can contain unknown financial fields. Partial retrieval never replaces facts. */
-export async function persistWorkforceSourceWindow(db: Database, window: SourceWindowResult): Promise<CaptureResult> {
+/** Partial history retrieval never replaces facts. Explicit observation-only
+ * capture retains returned facts while leaving historical date coverage partial. */
+export async function persistWorkforceSourceWindow(db: Database, window: SourceWindowResult, options?: { mode: "observation_only" }): Promise<CaptureResult> {
     return withDatabaseTransaction(db, async (tx) => {
         await tx.execute(sql `select pg_advisory_xact_lock(hashtext('workforce-history-capture'))`);
-        const complete = window.complete && window.completeness === 'complete' && !window.truncated;
-        const coverage = { source: 'wise_history', requestedFrom: window.requestedWindow.from, requestedTo: window.requestedWindow.to, returnedFrom: window.returnedWindow.from, returnedTo: window.returnedWindow.to, observedAt: window.observedAt, ...window.paging, truncated: window.truncated, completeness: complete ? 'complete' : window.completeness === 'complete' ? 'partial' : window.completeness, issueCodes: window.contractIssues };
+        const observationOnly = options?.mode === 'observation_only';
+        const complete = !observationOnly && window.complete && window.completeness === 'complete' && !window.truncated;
+        const coverage = { source: observationOnly ? 'credit_control_observation' : 'wise_history', requestedFrom: window.requestedWindow.from, requestedTo: window.requestedWindow.to, returnedFrom: window.returnedWindow.from, returnedTo: window.returnedWindow.to, observedAt: window.observedAt, ...window.paging, truncated: window.truncated, completeness: complete ? 'complete' : window.completeness === 'complete' ? 'partial' : window.completeness, issueCodes: window.contractIssues };
         const { run, replay } = await captureRun(tx, { sourceKey: window.sourceKey, kind: 'history', observedAt: window.observedAt, complete, coverage });
-        if (replay || !complete)
+        if (replay || (!complete && !observationOnly))
             return { runId: run.id, versionsAdded: 0, observationsAdded: 0, complete: run.complete };
         const observedAt = date(window.observedAt);
         const priorSessions = await tx.selectDistinctOn([s.workforceSessionVersions.wiseSessionId]).from(s.workforceSessionVersions).where(lte(s.workforceSessionVersions.observedAt, observedAt)).orderBy(asc(s.workforceSessionVersions.wiseSessionId), desc(s.workforceSessionVersions.observedAt), desc(s.workforceSessionVersions.versionOrder));
@@ -127,6 +129,6 @@ export async function persistWorkforceSourceWindow(db: Database, window: SourceW
         const creditRows = Array.from(credits.values());
         for (let i = 0; i < creditRows.length; i += 500)
             await tx.insert(s.workforceCreditVersions).values(creditRows.slice(i, i + 500));
-        return { runId: run.id, versionsAdded: sessions.size + credits.size, observationsAdded: 1, complete: true };
+        return { runId: run.id, versionsAdded: sessions.size + credits.size, observationsAdded: 1, complete };
     });
 }
