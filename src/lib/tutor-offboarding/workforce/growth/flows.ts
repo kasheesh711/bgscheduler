@@ -149,7 +149,7 @@ export function buildGrowthFlows(evidence: GrowthEvidence,query: GrowthQuery,now
     && (b.session.participantCompleteness!=='complete' || !b.course || b.kind==='unknown'));
   const futureIncomplete=!hasFreshGrowthFutureEvidence(evidence,now) || unknownFuture;
   const confirmationHistoryIncomplete=commonWindow.length>0 && !hasCompleteGrowthTeachingHistory(evidence,bangkokDayStart(GROWTH_HISTORY_FLOOR),bangkokMonthBounds(commonWindow.at(-1)!).start-1+GROWTH_CHURN_WAIT_MS);
-  const inceptionMissing=commonWindow.length ? dates(GROWTH_HISTORY_FLOOR,`${commonWindow.at(-1)}-01`).filter(month=>!historyCoversMonth(evidence.workforce.sourceCoverage,month)) : []; 
+  const inceptionMissing=commonWindow.length ? dates(GROWTH_HISTORY_FLOOR,`${commonWindow.at(-1)}-01`).filter(month=>!historyCoversMonth(evidence.workforce.sourceCoverage,month)) : [];
   const modelUnresolved=unresolved.filter(b=>monthOf(b.session.startAt)<=commonWindow.at(-1)!);
   const uncertainTeachingBySubject=new Map<string,boolean>();
   const confirmationEnd=commonWindow.length ? Math.min(now.getTime(),bangkokMonthBounds(commonWindow.at(-1)!).start-1+GROWTH_CHURN_WAIT_MS) : now.getTime();
