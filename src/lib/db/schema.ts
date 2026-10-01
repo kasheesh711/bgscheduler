@@ -6536,7 +6536,7 @@ export const tutorOffboardingAccessGrants = pgTable("tutor_offboarding_access_gr
   grantedAt: timestamp("granted_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-/** Immutable history of removal-grant changes. */
+/** Grant-change history: the application only appends; no database immutability trigger. */
 export const tutorOffboardingAccessAuditLog = pgTable("tutor_offboarding_access_audit_log", {
   id: uuid("id").primaryKey().defaultRandom(),
   action: text("action").notNull(),

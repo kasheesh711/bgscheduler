@@ -520,7 +520,7 @@ See [the feature page](../../features/feedback-autowriter.md).
 |---|---|---|
 | `tutor_offboarding_decisions` | `tutorOffboardingDecisions` | One "Still with us" decision: snooze end, the likelihood/band/reasons it overrode, who decided, optional undo |
 | `tutor_offboarding_access_grants` | `tutorOffboardingAccessGrants` | One admin email allowed to remove tutors from Wise (OFF-11); owner-managed |
-| `tutor_offboarding_access_audit_log` | `tutorOffboardingAccessAuditLog` | Immutable grant/revoke history |
+| `tutor_offboarding_access_audit_log` | `tutorOffboardingAccessAuditLog` | Grant/revoke audit history; appended by the application, with no database immutability trigger |
 | `tutor_offboarding_sheet_source` | `tutorOffboardingSheetSource` | Latest confirmed-termination Sheet snapshot and sync health |
 
 The same migration adds four nullable roster columns to `tutor_wise_accounts`: `wise_relation`, `wise_joined_on`,
