@@ -37,6 +37,7 @@ import { pruneOldSnapshots } from "@/lib/sync/snapshot-pruning";
 
 import { onboardingEnabled, resolveOnboardingIdentities, unmanagedTeacherSessions } from "@/lib/tutor-onboarding/planner";
 import { loadAccountMappings, promoteWithTutorContacts } from "@/lib/tutor-onboarding/sync";
+import { extractRosterFacts, persistRosterFacts } from "@/lib/tutor-onboarding/roster-facts";
 import { observationsFromWise, recordModeObservations } from "@/lib/classrooms/mode-history-data";
 
 export interface SyncResult {
@@ -698,6 +699,17 @@ export async function runFullSync(
         console.error("[sync-orchestrator] modality history capture failed", modalityHistory.error);
       }
     }
+    // Tutor Offboarding (OFF-02): roster details the detector scores on. Best effort and outside the promotion
+    // transaction, so a missing column (migration not yet applied) can never block a sync.
+    let rosterFacts: { updated?: number; error?: string } = {};
+    if (promotedSnapshotId && importContacts) {
+      try {
+        rosterFacts = { updated: await persistRosterFacts(db, extractRosterFacts(wiseTeachers)) };
+      } catch (error) {
+        rosterFacts = { error: error instanceof Error ? error.message.slice(0, 500) : String(error) };
+        console.error("[sync-orchestrator] roster facts capture failed", rosterFacts.error);
+      }
+    }
     if (promotedSnapshotId) {
       let pruning:
         | Awaited<ReturnType<typeof pruneOldSnapshots>>
@@ -717,7 +729,7 @@ export async function runFullSync(
       try {
         await db
           .update(schema.syncRuns)
-          .set({ metadata: { ...successMetadata, pruning, modalityHistory } })
+          .set({ metadata: { ...successMetadata, pruning, modalityHistory, rosterFacts } })
           .where(eq(schema.syncRuns.id, syncRunId));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
