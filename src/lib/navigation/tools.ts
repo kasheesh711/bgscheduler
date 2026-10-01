@@ -19,6 +19,7 @@ export type NavToolId =
   | "room-capacity"
   | "onsite-foot-traffic"
   | "post-class-feedback"
+  | "class-capture"
   | "feedback-autowriter"
   | "scheduler-metrics"
   | "progress-tests"
@@ -182,6 +183,13 @@ export const NAV_TOOLS: NavTool[] = [
     href: "/feedback-autowriter",
     label: "Feedback Autowriter",
     description: "Monitor AI-written post-class feedback for online classes: posts, holds, latency, and cost.",
+    section: "scheduling-tutors",
+  },
+  {
+    id: "class-capture",
+    href: "/class-capture",
+    label: "Class Capture",
+    description: "Record a consented onsite class and review a feedback draft.",
     section: "scheduling-tutors",
   },
   {
