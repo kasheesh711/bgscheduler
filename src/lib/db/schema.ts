@@ -3795,6 +3795,37 @@ export const postClassSourceIssues = pgTable("post_class_source_issues", {
   index("pc_source_issues_session_idx").on(table.sessionId),
 ]);
 
+export interface FeedbackReceiptEvidence {
+  hash: string;
+  actor: string;
+  binding: string;
+  expiresAt: string;
+  attempts: number;
+  acceptedAt?: string;
+  receipt?: string;
+  confirmedAt?: string;
+}
+
+/** Separate send-only grant: ordinary Google login never touches this row. */
+export const postClassEmailConnection = pgTable("post_class_email_connection", {
+  id: text("id").primaryKey().default("gmail"),
+  clientId: text("client_id").notNull(),
+  mailbox: text("mailbox").notNull(),
+  googleSubject: text("google_subject").notNull(),
+  revision: integer("revision").notNull().default(1),
+  accessTokenCiphertext: text("access_token_ciphertext").notNull(),
+  refreshTokenCiphertext: text("refresh_token_ciphertext").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  scope: text("scope").notNull(),
+  connectedBy: text("connected_by").notNull(),
+  connectedAt: timestamp("connected_at", { withTimezone: true }).notNull().defaultNow(),
+  refreshedAt: timestamp("refreshed_at", { withTimezone: true }),
+  checkedAt: timestamp("checked_at", { withTimezone: true }),
+  lastError: text("last_error"),
+  testEvidence: jsonb("test_evidence").$type<FeedbackReceiptEvidence>(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const postClassNotificationRuns = pgTable("post_class_notification_runs", {
   id: uuid("id").primaryKey().defaultRandom(),
   kind: postClassNotificationKindEnum("kind").notNull(),
