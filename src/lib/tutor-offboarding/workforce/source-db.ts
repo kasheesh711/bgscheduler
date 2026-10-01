@@ -25,10 +25,10 @@ type SessionPayload = {
 export async function loadWorkforceEvidence(db: Database, query: WorkforceQuery, now: Date): Promise<WorkforceEvidence> {
     return withDatabaseTransaction(db, async tx => {
         await tx.execute(sql`set transaction isolation level repeatable read read only`);
-        return loadEvidence(tx, query, now);
+        return loadWorkforceEvidenceInTransaction(tx, query, now);
     });
 }
-async function loadEvidence(db: Database, _query: WorkforceQuery, now: Date): Promise<WorkforceEvidence> {
+export async function loadWorkforceEvidenceInTransaction(db: Database, _query: WorkforceQuery, now: Date): Promise<WorkforceEvidence> {
     const [versions, observations, runs, sessionVersions, creditVersions, mappings, accounts, active] = await sequential([
         db.select().from(s.workforcePersonVersions).where(lte(s.workforcePersonVersions.observedAt, now)).orderBy(asc(s.workforcePersonVersions.observedAt), asc(s.workforcePersonVersions.versionOrder)),
         db.select().from(s.workforcePersonObservations).where(lte(s.workforcePersonObservations.observedAt, now)).orderBy(asc(s.workforcePersonObservations.observedAt)),
