@@ -11,6 +11,24 @@ afterAll(async () => { if (h)
     await stopTestDb(h); });
 beforeEach(async () => { await truncateAll(h.db); });
 const db = () => h.db as unknown as Database;
+it('retains owner-confirmed resignations for analytics without changing the sheet or removal source', async () => {
+    const at = new Date('2026-10-01T03:00:00Z');
+    const [snapshot] = await h.db.insert(s.snapshots).values({ active: true, createdAt: at }).returning();
+    await h.db.insert(s.tutorWiseAccounts).values({ wiseTeacherId: 'confirmed-teacher', wiseUserId: 'confirmed-user', canonicalKey: 'Aria', displayName: 'Aria Smith', email: 'aria@example.com', isOnlineVariant: false, status: 'active', wiseRelation: 'TEACHER', wiseJoinedOn: new Date('2026-01-01T00:00:00Z'), lastSnapshotId: snapshot.id });
+    const row = { sourceRow: 2, fullName: 'Aria Smith', wiseName: 'Aria Smith', nickname: 'Ari', emails: ['aria@example.com'], terminated: true };
+    await h.db.insert(s.tutorOffboardingSheetSource).values([
+      { sourceKey: 'terminated-tutors', rows: [{ ...row, terminated: false }], checkedAt: at, attemptedAt: at },
+      { sourceKey: 'owner-confirmed-departures', rows: [row], checkedAt: at, attemptedAt: at },
+    ]);
+    const result = await loadWorkforceEvidence(db(), query, new Date('2026-10-05T03:00:00Z'));
+    expect(result.terminationMarks).toEqual([{ canonicalKey: 'Aria', effectiveAt: null, markedAt: at.toISOString(), status: 'complete', sourceId: 'owner-confirmed-departures:2' }]);
+    expect(result.sourceCoverage.find(c => c.source === 'owner_confirmed_departures')).toMatchObject({ completeness: 'complete', recordsReturned: 1, issueCodes: [] });
+    const saved = await h.db.select().from(s.tutorOffboardingSheetSource);
+    expect(saved.find(s => s.sourceKey === 'terminated-tutors')?.rows[0].terminated).toBe(false);
+    expect(await h.db.select().from(s.tutorOffboardingRuns)).toHaveLength(0);
+    const earlier = await loadWorkforceEvidence(db(), query, new Date('2026-10-01T02:00:00Z'));
+    expect(earlier.terminationMarks).toHaveLength(0);
+});
 it('versions corrections and refunds while an incomplete window neither replaces facts nor advances coverage', async () => {
     await persistWorkforceSourceWindow(db(), window());
     await persistWorkforceSourceWindow(db(), window('same', '2026-10-01T03:30:00Z'));

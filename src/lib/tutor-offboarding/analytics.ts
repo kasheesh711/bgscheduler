@@ -388,7 +388,7 @@ export function buildTutorOffboardingAnalytics(input: {
     expanded.has(k),
   ).length;
   const limitations = [
-    "Actual HR turnover is unavailable: effective separation dates and opening employment headcount are not recorded. Sheet marks and last teaching dates are not separation dates.",
+    "Monthly turnover is shown in Workforce Overview using owner-confirmed departures, last recorded class dates and the opening Wise roster.",
     "Qualification counts describe current roster matches, not available teaching capacity. Missing qualifications are unknown, not zero capability; historical qualification snapshots are not retained since March.",
     "Monthly counts use confirmed ENDED sessions across stored history, deduplicated by Wise session ID. The current month is partial; teaching gaps can be seasonal.",
     "Course categories are Wise pricing bands, not academic subjects. Upcoming impact counts include only assignments to the selected departure cohort. Historical session totals describe the whole course; other historical tutors are not proven available replacements.",
@@ -457,7 +457,7 @@ export function buildTutorOffboardingAnalytics(input: {
     turnover: {
       actualRate: null,
       unavailableReason:
-        "Effective separation dates and opening employment headcount are unavailable.",
+        "Monthly turnover is calculated in the workforce report using confirmed departures and last class dates.",
       denominator: taught.size,
       markedNumerator,
       markedShare: taught.size ? (100 * markedNumerator) / taught.size : null,

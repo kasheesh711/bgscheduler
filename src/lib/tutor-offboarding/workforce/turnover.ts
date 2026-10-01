@@ -1,6 +1,6 @@
-import { isCancelledSession, recordedTeachingMinutes } from "./credits";
+import { isCancelledSession, isNoShowSession } from "./credits";
 import { bangkokDayStart, bangkokMonthBounds, subtractIntervals, type Interval } from "./intervals";
-import type { WorkforceEvidence, WorkforceMetric, WorkforceMonth, WorkforcePerson, WorkforceQuery, WorkforceRole } from "./types";
+import type { WorkforceEvidence, WorkforceMetric, WorkforceMonth, WorkforcePerson, WorkforceQuery, WorkforceRole, WorkforceSession } from "./types";
 
 const DAY = 86_400_000;
 const MAX_SOURCE_AGE = 90 * 60_000;
@@ -9,6 +9,28 @@ const dateValue = (value: string | null | undefined): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 const distinct = (values: string[]) => [...new Set(values)];
+function nonTeachingRecord(session: WorkforceSession): boolean {
+  return isCancelledSession(session) || isNoShowSession(session)
+    || [session.meetingStatus, session.attendanceStatus].some(value => value?.trim().toUpperCase() === "MISSED");
+}
+/** Owner-defined resignation dating uses recorded classes, independently of delivered/credit metrics. */
+function recordedClass(session: WorkforceSession): boolean {
+  if (nonTeachingRecord(session)) return false;
+  const direct = session.directTeachingEvidence;
+  return session.meetingStatus?.trim().toUpperCase() === "ENDED"
+    || Boolean(direct && Number.isFinite(direct.minutes) && direct.minutes > 0 && direct.source && direct.evidenceId);
+}
+/** Current snapshot identity is known even when its clock cannot be interpreted safely. */
+function unverifiedCurrentClass(session: WorkforceSession): boolean {
+  return session.reasonCodes.includes("SNAPSHOT_TIMESTAMP_UNVERIFIED")
+    && dateValue(session.endAt) === null && dateValue(session.startAt) === null
+    && !nonTeachingRecord(session) && !recordedClass(session);
+}
+function nonTeachingAdmin(person: WorkforcePerson): boolean {
+  return person.role === null && person.accounts.length > 0
+    && person.accounts.every(account => account.relation?.trim().toUpperCase() === "ADMIN");
+}
+
 function metric(value: number | null, reasons: string[] = [], incomplete = false): WorkforceMetric {
   return { value, completeness: value === null ? "unknown" : incomplete ? "partial" : "complete", reasonCodes: distinct(reasons) };
 }
@@ -46,7 +68,6 @@ export function buildWorkforcePersonStates(evidence: WorkforceEvidence, now: Dat
     rows.push(session);
     sessionsByPerson.set(key, rows);
   }
-  const creditsBySession = Map.groupBy(evidence.studentCredits, c => c.wiseSessionId);
   const observationsByPerson = Map.groupBy(evidence.observations, o => o.canonicalKey);
   const marks = new Map<string, WorkforceEvidence["terminationMarks"][number]>();
   for (const mark of evidence.terminationMarks) {
@@ -63,7 +84,7 @@ export function buildWorkforcePersonStates(evidence: WorkforceEvidence, now: Dat
       .filter(s => !s.reasonCodes.includes("absent_from_current_future_snapshot"));
     const observations = observationsByPerson.get(person.canonicalKey) ?? [];
     const teachingEvidence = observations.some(o => o.qualifications.length > 0 || o.offeredWindows.some(w => w.endMinute > w.startMinute)) ||
-      sessions.some(s => (recordedTeachingMinutes(s, creditsBySession.get(s.wiseSessionId) ?? []).value ?? 0) > 0);
+      sessions.some(recordedClass);
     const isAdmin = person.accounts.some(a => a.relation?.trim().toUpperCase() === "ADMIN");
     const isTeacher = person.accounts.some(a => a.relation?.trim().toUpperCase() === "TEACHER");
     const role: WorkforceRole | null = person.role ?? (isAdmin && teachingEvidence ? "teaching_admin" : isTeacher ? "tutor" : null);
@@ -74,8 +95,9 @@ export function buildWorkforcePersonStates(evidence: WorkforceEvidence, now: Dat
     const markedForDeparture = Boolean(mark && mark.status !== "cancelled");
     const pendingDeparture = markedForDeparture && sessions.some(s => {
       const end = dateValue(s.endAt) ?? dateValue(s.startAt);
-      return end !== null && end > now.getTime() && !isCancelledSession(s);
+      return (end !== null && end > now.getTime() && !nonTeachingRecord(s)) || unverifiedCurrentClass(s);
     });
+    if (markedForDeparture && sessions.some(unverifiedCurrentClass)) reasonCodes.push("PENDING_CLASS_TIME_UNCONFIRMED");
     let departedAt: string | null = null;
     if (markedForDeparture && !pendingDeparture) {
       let lastTaught: number | null = null;
@@ -83,15 +105,16 @@ export function buildWorkforcePersonStates(evidence: WorkforceEvidence, now: Dat
       for (const session of sessions) {
         const end = dateValue(session.endAt) ?? dateValue(session.startAt);
         if (end === null || end > now.getTime()) continue;
-        const taught = recordedTeachingMinutes(session, creditsBySession.get(session.wiseSessionId) ?? []);
-        if (taught.value !== null && taught.value > 0) lastTaught = Math.max(lastTaught ?? -Infinity, end);
-        else if (taught.value === null) lastUnknown = Math.max(lastUnknown ?? -Infinity, end);
+        if (recordedClass(session)) lastTaught = Math.max(lastTaught ?? -Infinity, end);
+        else if (!nonTeachingRecord(session)) lastUnknown = Math.max(lastUnknown ?? -Infinity, end);
       }
       const historyComplete = lastTaught !== null && subtractIntervals([{ start: lastTaught, end: now.getTime() }], history).length === 0;
       if (!freshFuture) reasonCodes.push("FUTURE_SNAPSHOT_UNCONFIRMED");
       if (!historyComplete) reasonCodes.push("DEPARTURE_HISTORY_INCOMPLETE");
-      if (lastTaught !== null && (lastUnknown === null || lastUnknown <= lastTaught) && historyComplete && freshFuture) {
+      if (lastUnknown !== null && (lastTaught === null || lastUnknown > lastTaught)) reasonCodes.push("LATER_CLASS_STATUS_UNCONFIRMED");
+      if (lastTaught !== null) {
         departedAt = new Date(lastTaught).toISOString();
+        reasonCodes.push("OWNER_CONFIRMED_DEPARTURE", "LAST_RECORDED_CLASS_DATE");
       } else reasonCodes.push("DEPARTURE_DATE_UNCONFIRMED");
     }
     return { ...person, role, departedAt, pendingDeparture, markedForDeparture, reasonCodes: distinct(reasonCodes) };
@@ -103,18 +126,22 @@ export function buildTurnoverMonths(evidence: WorkforceEvidence, query: Workforc
   const states = buildWorkforcePersonStates(evidence, now);
   const candidates = states.filter(p => p.role !== null && (query.role === "all" || p.role === query.role));
   const people = query.modality === "all" ? candidates : candidates.filter(p => p.accounts.some(a => a.modality === query.modality));
-  const unresolvedRoles = query.role === "all" && states.some(p => p.role === null);
+  const unresolvedRoles = query.role === "all" && states.some(p => p.role === null && !nonTeachingAdmin(p));
   const unresolvedModality = query.modality !== "all" && candidates.some(p => p.accounts.some(a => a.modality === null) || p.accounts.length === 0);
   const missingJoins = people.some(p => p.joinedAt === null);
   const uncertainDepartures = people.some(p => p.markedForDeparture && !p.pendingDeparture && p.departedAt === null);
   const unknownRemovalDates = people.some(p => p.rosterState === "off_roster" && !p.departedAt);
-  const terminationSourceIncomplete = !evidence.sourceCoverage.some(c => c.source === "termination_sheet" &&
-    c.completeness === "complete" && !c.truncated && !c.issueCodes.includes("unmatched_termination_identity"));
-  const reasons = ["WISE_ROSTER_RECONSTRUCTED", "ROLE_HISTORY_RECONSTRUCTED",
+  const departureSources = evidence.sourceCoverage.filter(c => ["termination_sheet", "owner_confirmed_departures"].includes(c.source));
+  const usableTerminationSource = departureSources.some(c => c.completeness !== "unknown" && !c.truncated);
+  const terminationSourceIncomplete = !usableTerminationSource || departureSources.some(c =>
+    c.completeness !== "complete" || c.truncated || c.issueCodes.includes("unmatched_termination_identity"));
+  const departureWarnings = distinct(people.filter(p => p.markedForDeparture).flatMap(p => p.reasonCodes)
+    .filter(reason => ["DEPARTURE_HISTORY_INCOMPLETE", "FUTURE_SNAPSHOT_UNCONFIRMED", "LATER_CLASS_STATUS_UNCONFIRMED", "PENDING_CLASS_TIME_UNCONFIRMED"].includes(reason)));
+  const reasons = ["WISE_ROSTER_RECONSTRUCTED", "ROLE_HISTORY_RECONSTRUCTED", "OWNER_CONFIRMED_DEPARTURES", "LAST_RECORDED_CLASS_DATE", ...departureWarnings,
     ...(missingJoins ? ["JOIN_DATE_UNKNOWN"] : []), ...(uncertainDepartures ? ["DEPARTURE_DATE_UNCONFIRMED"] : []),
     ...(unresolvedRoles ? ["ROLE_UNCONFIRMED"] : []), ...(unresolvedModality ? ["MODALITY_HISTORY_UNCONFIRMED"] : []),
     ...(unknownRemovalDates ? ["REMOVAL_DATE_UNKNOWN"] : []), ...(terminationSourceIncomplete ? ["TERMINATION_SOURCE_INCOMPLETE"] : [])];
-  const incomplete = missingJoins || uncertainDepartures || unresolvedRoles || unresolvedModality || unknownRemovalDates || terminationSourceIncomplete;
+  const incomplete = missingJoins || uncertainDepartures || unresolvedRoles || unresolvedModality || unknownRemovalDates || terminationSourceIncomplete || departureWarnings.length > 0;
   const selectedStart = bangkokDayStart(query.from), selectedEnd = bangkokDayStart(query.to) + DAY;
   const rows: WorkforceTurnoverMonth[] = [];
   for (let month = query.from.slice(0, 7); month <= query.to.slice(0, 7);) {
@@ -134,9 +161,9 @@ export function buildTurnoverMonths(evidence: WorkforceEvidence, query: Workforc
       closingRosterCount: metric(unsupported ? null : closing.length, rowReasons, incomplete),
       joinsCount: metric(unsupported ? null : joined.length, rowReasons, missingJoins || unresolvedRoles || unresolvedModality),
       departuresCount: metric(unsupported ? null : departed.length, rowReasons, uncertainDepartures || unresolvedRoles || unresolvedModality || terminationSourceIncomplete),
-      pendingCount: metric(unsupported ? null : pending.length, rowReasons, unresolvedRoles || unresolvedModality || terminationSourceIncomplete),
-      turnoverPercent: metric(unsupported || incomplete || opening.length === 0 ? null : departed.length / opening.length * 100,
-        [...rowReasons, ...(opening.length === 0 ? ["NO_OPENING_ROSTER"] : [])]),
+      pendingCount: metric(unsupported ? null : pending.length, rowReasons, unresolvedRoles || unresolvedModality || terminationSourceIncomplete || departureWarnings.includes("PENDING_CLASS_TIME_UNCONFIRMED")),
+      turnoverPercent: metric(unsupported || missingJoins || !usableTerminationSource || opening.length === 0 ? null : departed.length / opening.length * 100,
+        [...rowReasons, ...(opening.length === 0 ? ["NO_OPENING_ROSTER"] : [])], incomplete),
       joinedPersonKeys: unsupported ? [] : joined.map(p => p.canonicalKey),
       departedPersonKeys: unsupported ? [] : departed.map(p => p.canonicalKey),
       pendingPersonKeys: unsupported ? [] : pending.map(p => p.canonicalKey) });

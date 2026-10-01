@@ -16,7 +16,8 @@ describe("offboarding analytics", () => {
     );
     expect(html).toContain("Teaching cohort marked for departure");
     expect(html).toContain("1 ÷ 4 × 100 = 25.0%");
-    expect(html).toContain("HR turnover rate is unavailable");
+    expect(html).toContain("Monthly turnover is shown in Workforce Overview");
+    expect(html).not.toContain("HR turnover rate is unavailable");
     expect(html).toContain("Aria");
     expect(html).toContain("117");
     expect(html).toContain("Pending departures with classes");

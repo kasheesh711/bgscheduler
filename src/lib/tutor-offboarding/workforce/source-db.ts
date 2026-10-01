@@ -1,4 +1,4 @@
-import { asc, desc, eq, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, lte, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -134,9 +134,29 @@ export async function loadWorkforceEvidenceInTransaction(db: Database, _query: W
     const snapshot = await loadTerminationSnapshot(db);
     const matchingPeople: PersonSignals[] = [...people.values()].map(p => ({ canonicalKey: p.canonicalKey, displayName: p.displayName, accounts: accounts.filter(a => a.canonicalKey === p.canonicalKey).map(a => ({ wiseTeacherId: a.wiseTeacherId, wiseUserId: a.wiseUserId, displayName: a.displayName, email: a.email })) } as PersonSignals));
     const marks = buildTerminationMatches(matchingPeople, snapshot, now);
+    // Owner-confirmed lists are analytics evidence only. The normal sheet reader
+    // and all removal controls continue to use their existing source unchanged.
+    const [ownerSource] = await db.select().from(s.tutorOffboardingSheetSource).where(and(
+        eq(s.tutorOffboardingSheetSource.sourceKey, 'owner-confirmed-departures'),
+        lte(s.tutorOffboardingSheetSource.checkedAt, now),
+    )).limit(1);
+    const ownerMatches = ownerSource?.checkedAt ? buildTerminationMatches(matchingPeople, {
+        rows: ownerSource.rows, checkedAt: ownerSource.checkedAt.toISOString(), lastError: ownerSource.lastError,
+    }, now) : null;
+    const terminationMarks: WorkforceEvidence['terminationMarks'] = Object.entries(marks.byKey).map(([canonicalKey, e]) => ({ canonicalKey, effectiveAt: null, markedAt: e.checkedAt, status: 'complete', sourceId: String(e.sourceRow) }));
+    for (const [canonicalKey, e] of Object.entries(ownerMatches?.byKey ?? {})) {
+        const previous = terminationMarks.findIndex(mark => mark.canonicalKey === canonicalKey);
+        if (previous >= 0) terminationMarks.splice(previous, 1);
+        terminationMarks.push({ canonicalKey, effectiveAt: null, markedAt: e.checkedAt, status: 'complete', sourceId: `owner-confirmed-departures:${e.sourceRow}` });
+    }
     const coverage = runs.filter(r => r.kind === 'history').map(r => r.coverage as unknown as WorkforceSourceCoverage);
     coverage.push({ source: 'wise_future_snapshot', requestedFrom: _query.from, requestedTo: _query.to, returnedFrom: null, returnedTo: null, observedAt: active[0]?.createdAt.toISOString(), pagesRequested: 0, pagesReturned: 0, recordsReturned: [...sessions.values()].filter(f => Date.parse(f.endAt ?? f.startAt) > now.getTime()).length, truncated: false, completeness: !futureFresh ? 'unknown' : futureTimestampIncomplete ? 'partial' : 'complete', issueCodes: [...(futureFresh ? [] : [active[0] ? 'future_snapshot_stale' : 'future_snapshot_missing']), ...(futureTimestampIncomplete ? ['SNAPSHOT_TIMESTAMP_UNVERIFIED'] : [])] });
     if (snapshot.checkedAt)
         coverage.push({ source: 'termination_sheet', requestedFrom: _query.from, requestedTo: _query.to, returnedFrom: null, returnedTo: null, observedAt: snapshot.checkedAt, pagesRequested: 1, pagesReturned: 1, recordsReturned: snapshot.rows.length, truncated: false, completeness: marks.source.status === 'ready' ? 'complete' : 'partial', issueCodes: [...marks.source.unmatched.map(() => 'unmatched_termination_identity'), ...(marks.source.status === 'ready' ? [] : [`termination_source_${marks.source.status}`])] });
-    return { revision: workforceContentHash({ runs: runs.map(r => [r.id, r.complete]), versions: versions.map(v => v.id), sessions: sessionVersions.map(v => v.id), credits: creditVersions.map(v => v.id), mappings, sheet: [snapshot.checkedAt, snapshot.lastError, marks.source.status], active: active[0]?.id }), people: [...people.values()], observations: dated, sessions: [...sessions.values()], tutorFacts: [...tutorFacts.values()], historicalBookedParticipants: [...participants.values()], studentCredits: [...credits.values()], subjectMappings: mappings.map(m => ({ ...m, reviewedAt: m.reviewedAt?.toISOString() ?? null })), terminationMarks: Object.entries(marks.byKey).map(([canonicalKey, e]) => ({ canonicalKey, effectiveAt: null, markedAt: e.checkedAt, status: 'complete', sourceId: String(e.sourceRow) })), sourceCoverage: coverage };
+    if (ownerSource?.checkedAt && ownerMatches) {
+        const issueCodes = [...ownerMatches.source.unmatched.map(() => 'unmatched_termination_identity'), ...(ownerSource.lastError ? ['owner_confirmation_source_error'] : [])];
+        // Human confirmation is durable; its age is not a failed feed refresh.
+        coverage.push({ source: 'owner_confirmed_departures', requestedFrom: _query.from, requestedTo: _query.to, returnedFrom: null, returnedTo: null, observedAt: ownerSource.checkedAt.toISOString(), pagesRequested: 1, pagesReturned: 1, recordsReturned: ownerSource.rows.length, truncated: false, completeness: issueCodes.length ? 'partial' : 'complete', issueCodes });
+    }
+    return { revision: workforceContentHash({ runs: runs.map(r => [r.id, r.complete]), versions: versions.map(v => v.id), sessions: sessionVersions.map(v => v.id), credits: creditVersions.map(v => v.id), mappings, sheet: [snapshot.checkedAt, snapshot.lastError, marks.source.status], ownerConfirmations: ownerSource ? [ownerSource.checkedAt, ownerSource.rows, ownerSource.lastError] : null, active: active[0]?.id }), people: [...people.values()], observations: dated, sessions: [...sessions.values()], tutorFacts: [...tutorFacts.values()], historicalBookedParticipants: [...participants.values()], studentCredits: [...credits.values()], subjectMappings: mappings.map(m => ({ ...m, reviewedAt: m.reviewedAt?.toISOString() ?? null })), terminationMarks, sourceCoverage: coverage };
 }

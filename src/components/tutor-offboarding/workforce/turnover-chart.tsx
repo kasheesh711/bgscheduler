@@ -188,9 +188,14 @@ export function TurnoverChart({
           View data & definition
         </summary>
         <p className="mt-3">
-          Completed sheet-marked departures ÷ opening reconstructed Wise roster
-          × 100. Remaining classes stay pending.
+          Confirmed departures ÷ opening Wise roster × 100. Resignation date =
+          last recorded class. Remaining classes stay pending.
         </p>
+        {months.some(m => m.turnoverPercent.completeness === "partial") && (
+          <p className="mt-2 text-amber-700 dark:text-amber-300">
+            Partial figures include matched departures; unresolved records remain in source review.
+          </p>
+        )}
         <div className="overflow-x-auto">
           <table className="mt-3 w-full text-left">
             <thead>
@@ -230,6 +235,7 @@ export function TurnoverChart({
                   ))}
                   <td className="p-2">
                     {`${formatMetric(m.departuresCount)} ÷ ${formatMetric(m.openingRosterCount)} × 100 = ${formatMetric(m.turnoverPercent, "%")}`}
+                    {m.turnoverPercent.completeness === "partial" ? " · Partial" : ""}
                     <button
                       className="ml-2 text-primary underline"
                       onClick={() => onPeople?.(m.month)}
