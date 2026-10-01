@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+vi.mock("server-only", () => ({}));
 import { eventProofOutcome, serializePostClassFeedbackAnswer } from "../detail";
 
 const DEADLINE = new Date("2026-08-05T16:59:59.999Z");

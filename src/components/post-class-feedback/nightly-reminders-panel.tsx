@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import type { FeedbackNightlyHistoryRow, PostClassFeedbackPayload } from "@/types/post-class-feedback";
 import type { SettingsRequest } from "./settings-tab";
 import { formatBangkokDate } from "./feedback-ui";
+import { ReminderConnection } from "./reminder-connection";
 
 type HistoryRow = FeedbackNightlyHistoryRow;
 interface Preview { tutorKey: string; classes: number; html: string; recipient: { email: string | null } }
@@ -68,15 +69,15 @@ export function NightlyRemindersPanel({ payload, submitting, onRequest }: {
         <div key={label} className="rounded-lg bg-muted/40 p-2"><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 font-semibold tabular-nums">{value}</dd></div>)}
     </dl>}
     {health?.alertDeliveryError && <p role="alert" className="text-sm text-red-700">{health.alertDeliveryError}</p>}
-    {health?.sourceCheckedAt && <p className="text-xs text-muted-foreground">Source verified {formatBangkokDate(health.sourceCheckedAt, true)}. Accepted messages have a sending-service receipt.</p>}
+    {health?.sourceCheckedAt && <p className="text-xs text-muted-foreground">Source verified {formatBangkokDate(health.sourceCheckedAt, true)}. Accepted messages have a sending-service receipt; this does not confirm inbox delivery.</p>}
+    {canManage && <ReminderConnection disabled={submitting} live={health?.mode === "live"} />}
+    {health?.lastCompletedBatch && <p className="text-xs text-muted-foreground">Last completed live batch: {formatBangkokDate(health.lastCompletedBatch, true)}.</p>}
     {canManage && <div className="flex flex-wrap gap-2">
       <Button size="sm" variant="outline" disabled={submitting || health?.mode === "off"} onClick={() => void mode("off")}>Pause reminders</Button>
       <Button size="sm" variant="outline" disabled={submitting || health?.mode === "shadow"} onClick={() => void mode("shadow")}>Shadow mode</Button>
       <Button size="sm" disabled={submitting || health?.mode === "live"} onClick={() => setActivate(true)}>Enable live reminders</Button>
       {health?.mode === "shadow" && <Button size="sm" variant="outline" disabled={submitting} onClick={() => void onRequest("/api/post-class-feedback/reminders", "POST", { action: "shadow_preview" })}>Build shadow preview</Button>}
       <Button size="sm" variant="outline" disabled={submitting || health?.mode === "off"} onClick={() => void onRequest("/api/post-class-feedback/reminders", "POST", { action: "retry" })}>Process due reminders</Button>
-      <Button size="sm" variant="outline" disabled={submitting} onClick={() => void onRequest("/api/post-class-feedback/reminders", "POST", { action: "test", senderKey: "primary" })}>Test primary to me</Button>
-      <Button size="sm" variant="outline" disabled={submitting} onClick={() => void onRequest("/api/post-class-feedback/reminders", "POST", { action: "test", senderKey: "backup" })}>Test backup to me</Button>
     </div>}
     <p className="text-xs text-muted-foreground">Reminder controls operate independently of deductions.</p>
     {previews.length > 0 && <div className="flex flex-wrap gap-2">{previews.map((item) =>
@@ -90,8 +91,8 @@ export function NightlyRemindersPanel({ payload, submitting, onRequest }: {
         <TableCell>{row.tutorKey ?? "Unresolved"}<div className="text-xs">{row.className ?? row.wiseSessionId}</div><div className="text-xs text-muted-foreground">{formatBangkokDate(row.scheduledEndAt, true)}</div></TableCell><TableCell>{row.status.replaceAll("_", " ")}</TableCell>
         <TableCell className="max-w-sm whitespace-normal text-xs">{row.reason}{row.sentAt && <div>{formatBangkokDate(row.sentAt, true)}</div>}{row.receipt && <div className="break-all">Receipt: {row.receipt}</div>}</TableCell>
         <TableCell>{canManage && row.status === "unknown" && row.deliveryId && <Button size="xs" variant="outline" onClick={() => { setResolving(row); setReceipt(""); setNote(""); }}>Resolve</Button>}</TableCell></TableRow>)}</TableBody></Table></div>
-    <Dialog open={activate} onOpenChange={setActivate}><DialogContent><DialogHeader><DialogTitle>Enable nightly reminders</DialogTitle><DialogDescription>Complete a shadow batch and verify both test emails before enabling the next 22:00 Bangkok batch.</DialogDescription></DialogHeader>
-      <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={legacyDisabled || Boolean(health?.legacyDisabledAt)} onChange={(e) => setLegacyDisabled(e.target.checked)} />The old spreadsheet reminder trigger has been disabled and checked.</label>
+    <Dialog open={activate} onOpenChange={setActivate}><DialogContent><DialogHeader><DialogTitle>Enable nightly reminders</DialogTitle><DialogDescription>Complete a current shadow batch, verify Gmail token renewal, and confirm the email and private LINE test receipts. Activation starts at the next 22:00 Bangkok checkpoint.</DialogDescription></DialogHeader>
+      <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={legacyDisabled || Boolean(health?.legacyDisabledAt)} onChange={(e) => setLegacyDisabled(e.target.checked)} />Only sendMissingCommentsReminders has been disabled and checked. The other four legacy triggers remain active.</label>
       <DialogFooter><Button variant="outline" onClick={() => setActivate(false)}>Cancel</Button><Button disabled={submitting || !(legacyDisabled || health?.legacyDisabledAt)} onClick={() => void mode("live")}>Enable reminders</Button></DialogFooter></DialogContent></Dialog>
     <Dialog open={Boolean(resolving)} onOpenChange={(open) => { if (!open) setResolving(null); }}><DialogContent><DialogHeader><DialogTitle>Resolve uncertain email</DialogTitle><DialogDescription>Check the sending mailbox. This decision is recorded with your evidence and name.</DialogDescription></DialogHeader>
       <label className="grid gap-1 text-sm">Verified outcome<select className="rounded border p-2" value={outcome} onChange={(e) => setOutcome(e.target.value as typeof outcome)}><option value="accepted">Message was sent</option><option value="not_sent">Verified that it was not sent</option></select></label>
