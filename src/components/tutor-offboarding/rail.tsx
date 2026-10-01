@@ -84,14 +84,14 @@ export function ExcludedList({ rows, onOpen, onUndo }: { rows: OffboardingPerson
     <>
       {confirmed.length ? (
         <Panel className="px-5 py-4">
-          <Upper>Confirmed terminations with exclusions</Upper>
+          <Upper>Marked departures with exclusions</Upper>
           <ul className="mt-3 space-y-3 text-xs">
             {confirmed.map((row) => (
               <li key={row.signals.canonicalKey}>
                 <button type="button" onClick={() => onOpen(row.signals.canonicalKey)} className="flex flex-wrap items-center gap-2 rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
                   <span className="font-medium">{row.signals.displayName}</span><TerminationBadge row={row} />
                 </button>
-                <p className="mt-1 text-muted-foreground">{row.score.exclusion?.text}</p>
+                <p className="mt-1 text-muted-foreground">{row.signals.upcomingSessions > 0 ? `Pending departure: ${row.signals.upcomingSessions} upcoming classes` : row.score.exclusion?.text}</p>
                 {row.openDecision ? <Button type="button" size="xs" variant="ghost" onClick={() => onUndo(row.openDecision!.id)}>Undo still with us</Button> : null}
               </li>
             ))}

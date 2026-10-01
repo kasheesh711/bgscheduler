@@ -18,6 +18,7 @@ import { applyRemoval, getRemovalRun, previewRemoval, reconcileRemovals, refresh
 import { RemovalDialog } from "./removal-dialog";
 import { RemovalHistory } from "./removal-history";
 import { selectedRemovalRows, SelectionBar } from "./selection-bar";
+import { AnalyticsTab } from "./analytics-tab";
 
 const UNAVAILABLE: Record<OffboardingUnavailableReason, string> = {
   not_set_up: "Tutor Offboarding is not set up yet: its database migration has not been applied.",
@@ -161,6 +162,7 @@ export function TutorOffboardingWorkspace({ initial }: { initial: OffboardingDas
           <TabsList>
             <TabsTrigger value="review">To review</TabsTrigger>
             <TabsTrigger value="history">History</TabsTrigger>
+            <TabsTrigger value="analytics">Analytics</TabsTrigger>
           </TabsList>
           <TabsContent value="review">
             <div className="mt-4 grid gap-5 lg:grid-cols-3">
@@ -180,6 +182,9 @@ export function TutorOffboardingWorkspace({ initial }: { initial: OffboardingDas
           <TabsContent value="history">
             {tab === "history" ? <RemovalHistory onOpen={(id) => void openRun(id)} /> : null}
             <HistoryTable decisions={dashboard.decisions} />
+          </TabsContent>
+          <TabsContent value="analytics">
+            {tab === "analytics" ? <AnalyticsTab /> : null}
           </TabsContent>
         </Tabs>
       </div>
