@@ -260,6 +260,17 @@ describe("runClaude", () => {
     expect(await killChildren(new Set())).toBe(0);
   });
 
+  it("validates the call before writing any temp file", async () => {
+    const tempDir = path.join(dir, "tmp");
+    fs.mkdirSync(tempDir);
+    const spawn = vi.fn();
+    await expect(runClaude({ purpose: "audit", key: "k", system: "s", user: "u", schema: SCHEMA, budgetUsd: 0 }, {
+      cwd: dir, cliVersion: null, callsLog: null, spawn: spawn as unknown as SpawnLike, tempDir,
+    })).rejects.toThrow(/positive budget/u);
+    expect(fs.readdirSync(tempDir)).toEqual([]);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("reports a failed spawn as a CLI error", async () => {
     const spawn: SpawnLike = () => {
       const child = new FakeChild();

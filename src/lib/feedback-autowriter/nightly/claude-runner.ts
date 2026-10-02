@@ -315,15 +315,17 @@ export async function killChildren(children: Set<ChildLike>, options: { graceMs?
 /** One `claude -p` call: system prompt in a 0600 temp file, the prompt on stdin, killed after its time-out. */
 export async function runClaude(call: ClaudeCall, deps: ClaudeRunnerDeps): Promise<ClaudeOutcome> {
   const now = deps.now ?? (() => new Date());
+  // Validated before anything is written: a bad budget or flag throws with no temp file left behind.
+  buildClaudeArgs({ schema: call.schema, budgetUsd: call.budgetUsd, systemPromptFile: "<pending>" });
   const tempRoot = deps.tempDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "bgs-nightly-"));
   const systemFile = path.join(tempRoot, `system-${randomBytes(6).toString("hex")}.txt`);
-  fs.writeFileSync(systemFile, call.system, { encoding: "utf8", mode: NIGHTLY_FILE_MODE, flag: "wx" });
   const args = buildClaudeArgs({ schema: call.schema, budgetUsd: call.budgetUsd, systemPromptFile: systemFile });
   const started = Date.now();
   const timeoutMs = call.timeoutMs ?? CLAUDE_DEFAULT_TIMEOUT_MS;
   let outcome: ClaudeOutcome;
   let exitCode: number | null = null;
   try {
+    fs.writeFileSync(systemFile, call.system, { encoding: "utf8", mode: NIGHTLY_FILE_MODE, flag: "wx" });
     const finished = await new Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }>((resolve) => {
       let stdout = "";
       let stderr = "";

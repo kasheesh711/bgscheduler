@@ -64,12 +64,12 @@ describe("owner config", () => {
   it("reads caps under `caps` or at the top level; a missing file changes nothing", () => {
     const file = path.join(home, "config.json");
     expect(loadOwnerConfig(file)).toEqual({ ok: true, caps: {}, notes: [], runnerSha: null });
-    fs.writeFileSync(file, JSON.stringify({ caps: { maxTargets: 10, deadlineBangkok: "05:00", bogus: 1, maxWiseReads: "x" } }));
+    fs.writeFileSync(file, JSON.stringify({ caps: { maxTargets: 10, deadlineBangkok: "05:00", bogus: 1 } }));
     const config = loadOwnerConfig(file);
     expect(config).toEqual({
       ok: true,
       caps: { maxTargets: 10, deadlineBangkok: "05:00" },
-      notes: ["unknown key ignored: bogus", "maxWiseReads ignored: not a non-negative number"],
+      notes: ["unknown key ignored: bogus"],
       runnerSha: null,
     });
     fs.writeFileSync(file, JSON.stringify({ maxOpusCalls: 5 }));
@@ -82,6 +82,21 @@ describe("owner config", () => {
     expect(loadOwnerConfig(file)).toMatchObject({ ok: true, runnerSha: "abc123def", caps: { maxTargets: 5 }, notes: [] });
     fs.writeFileSync(file, JSON.stringify({ runnerSha: "main" }));
     expect(loadOwnerConfig(file)).toEqual({ ok: false, reason: "runnerSha must be a 7-40 character hex commit" });
+  });
+
+  it("refuses a cap value the nightly cannot use, before anything runs", () => {
+    const file = path.join(home, "config.json");
+    const reason = (caps: Record<string, unknown>) => {
+      fs.writeFileSync(file, JSON.stringify({ caps }));
+      const config = loadOwnerConfig(file);
+      return config.ok ? null : config.reason;
+    };
+    expect(reason({ maxWiseReads: "x" })).toBe("maxWiseReads must be a non-negative number");
+    expect(reason({ perAuditUsd: 0 })).toBe("perAuditUsd must be greater than 0");
+    expect(reason({ maxTargets: 2.5 })).toBe("maxTargets must be a whole number");
+    expect(reason({ auditConcurrency: 0 })).toBe("auditConcurrency must be at least 1");
+    expect(reason({ deadlineBangkok: "6:50" })).toBe("deadlineBangkok must be HH:MM");
+    expect(reason({ maxTargets: 0, maxOpusCalls: 0, perAuditUsd: 0.5 })).toBeNull();
   });
 
   it("fails closed on a config that does not parse", () => {

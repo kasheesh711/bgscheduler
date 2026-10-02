@@ -112,6 +112,22 @@ export function ownerConfigFile(home?: string): string {
   return path.join(nightlyHome(home), "config.json");
 }
 
+/** Per-call budgets: a call cannot have a zero budget (`--max-budget-usd` must be positive). */
+const PER_CALL_USD = new Set<keyof NightlyCaps>(["perAuditUsd", "perReauditUsd", "perSynthesisUsd"]);
+/** Counts: whole numbers (0 pauses that kind of work). */
+const COUNT_CAPS = new Set<keyof NightlyCaps>([
+  "maxTargets", "maxWiseReads", "maxOpusCalls", "maxCorrectionsPerNight", "maxCorrectionsPerWeek", "maxFlagsPerNight", "auditConcurrency",
+]);
+
+/** Why a number cannot be used for this cap, or null. */
+export function capValueProblem(name: keyof NightlyCaps, value: unknown): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "must be a non-negative number";
+  if (PER_CALL_USD.has(name) && value <= 0) return "must be greater than 0";
+  if (COUNT_CAPS.has(name) && !Number.isInteger(value)) return "must be a whole number";
+  if (name === "auditConcurrency" && value < 1) return "must be at least 1";
+  return null;
+}
+
 export type OwnerConfig =
   | {
     ok: true;
@@ -124,8 +140,9 @@ export type OwnerConfig =
 
 /**
  * The owner's config: `{ "caps": { "maxTargets": 40, … }, "runnerSha": "<commit>" }` (cap keys may also sit at the top
- * level). Missing file: no changes. A file that does not parse, or a runnerSha that is not a 7–40 character hex commit,
- * is a config error (fail closed, never ignored); unknown keys and values of the wrong type are noted and ignored.
+ * level). Missing file: no changes. A file that does not parse, a cap value the nightly cannot use (wrong type, a zero
+ * per-call budget, a fractional count, concurrency below 1, a deadline not HH:MM) or a runnerSha that is not a 7–40
+ * character hex commit is a config error (fail closed, never ignored); unknown keys are noted and ignored.
  */
 export function loadOwnerConfig(file: string = ownerConfigFile()): OwnerConfig {
   let text: string;
@@ -154,16 +171,15 @@ export function loadOwnerConfig(file: string = ownerConfigFile()): OwnerConfig {
       continue;
     }
     const name = key as keyof NightlyCaps;
+    // A cap the owner wrote but the nightly cannot use is a config error (fail closed), never silently ignored.
     if (name === "deadlineBangkok") {
-      if (typeof value === "string" && /^([01]\d|2[0-3]):[0-5]\d$/u.test(value)) caps.deadlineBangkok = value;
-      else notes.push("deadlineBangkok ignored: not HH:MM");
+      if (typeof value !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/u.test(value)) return { ok: false, reason: "deadlineBangkok must be HH:MM" };
+      caps.deadlineBangkok = value;
       continue;
     }
-    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-      notes.push(`${name} ignored: not a non-negative number`);
-      continue;
-    }
-    (caps as Record<string, number>)[name] = value;
+    const problem = capValueProblem(name, value);
+    if (problem) return { ok: false, reason: `${name} ${problem}` };
+    (caps as Record<string, number>)[name] = value as number;
   }
   const pinned = record.runnerSha;
   if (pinned !== undefined && pinned !== null && (typeof pinned !== "string" || !/^[0-9a-f]{7,40}$/iu.test(pinned.trim()))) {
