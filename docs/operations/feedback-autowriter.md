@@ -474,10 +474,10 @@ npx tsx --tsconfig scripts/tsconfig.json scripts/feedback-autowriter-nightly.ts 
 | `status` | Run state, lock, STOP files, Wise cooldown, the night's spend (reads only). |
 | `preflight [--supervised]` | STOP files, the lock, a clean tree of reviewed code — HEAD reachable from `origin/main`, or the commit pinned as `runnerSha` in `~/.bgscheduler-nightly/config.json`; `--supervised` overrides for a watched run and is recorded in `run.json` — `DATABASE_URL`/`WISE_USER_ID`/`WISE_API_KEY`, node ≥ 22, a `claude` CLI 2.1.x or later; writes `run.json`. |
 | `select [--sessions=a,b] [--force]` | The night's verified autowriter posts (database SELECTs only), newest first, merged into any earlier selection of the night (a class once selected is never dropped: already-audited classes stay in the night's report), plus posts of the two previous nights that were verified after their own selection and never audited (`late`). At most 60 classes still to audit. Refused until an hour after the night ends (01:00 Bangkok) unless `--force`. |
-| `collect [--retranscribe] [--soniox-usd=n] [--sessions=a,b]` | Evidence per class, cache-first: the retained ISEB lesson record (guided posts), one Wise session-detail GET (paced ≥ 5 s, never in the minutes production hits Wise, ≤ 200 a night; the first 429 parks Wise reads for 30 min and stops), the production Soniox transcript read-only (get/transcript only; rendered exactly as the second pass rendered it), Zoom's captions. `--retranscribe`: our own Soniox job for a transcript post whose production transcript is gone — reserved in the ledger first, deleted afterwards; `--soniox-usd` raises the night's Soniox cap (default $2) up to $5 for this run. Writes one bundle with deterministic prechecks per class. |
-| `audit [--smoke] [--plan] [--sessions=a,b]` | One `claude -p` per class (see below). `--smoke`: one tiny synthetic call that prints the proof; `--plan`: the estimate only. |
+| `collect [--retranscribe] [--soniox-usd=n] [--sessions=a,b]` | Evidence per class, cache-first: the retained ISEB lesson record (guided posts), one Wise session-detail GET (paced ≥ 5 s, never in the minutes production hits Wise, ≤ 200 a night; the first 429 parks Wise reads for 30 min and stops), the production Soniox transcript read-only (get/transcript only; rendered exactly as the second pass rendered it), Zoom's captions. `--retranscribe`: our own Soniox job for a transcript post whose production transcript is gone — reserved in the ledger first, deleted afterwards; `--soniox-usd` raises the night's Soniox cap (default $2) up to $5 for this run. Writes one bundle with deterministic prechecks per class. A class whose Wise or production-Soniox read failed transiently is marked incomplete (the step is partial) and is not audited until a later collect completes it. |
+| `audit [--smoke] [--plan] [--sessions=a,b]` | One `claude -p` per class (see below); never for an incomplete collection or a class with no evidence. `--smoke`: one tiny synthetic call that prints the proof; `--plan`: the estimate only. |
 | `report [--no-synthesis]` | Prechecks merged with audits, failure modes against the last 14 nights, the production spend and retry watchdog (M16), and one Opus synthesis call → `report.md`, `summary.md`, `plan.md`, `fix-brief.json`. |
-| `flag [--apply]` | One `agent` flag per class with a major or critical finding (at most 10 a night, criticals first) and a `critical_flag` incident for a high-confidence critical. A dry run unless `--apply`. |
+| `flag [--apply]` | One `agent` flag per class with a major or critical finding (at most 10 a night, criticals first, counted in the database so re-runs cannot pass it) and a `critical_flag` incident for a high-confidence critical. A dry run unless `--apply`. |
 | `run [--apply-flags] [--retranscribe] [--soniox-usd=n] [--no-synthesis] [--force]` | preflight → select → collect → audit → report (→ flag). Preflight and select run every time, so every later step runs again from its cache (no repeated Wise read or paid call). Any stop ends the run with a partial report — never a retry loop. |
 | `prune [--dry-run]` | Deletes local evidence older than 7 days. |
 | `costs [--days=7]` | The last nights' spend. |
@@ -492,34 +492,41 @@ login, never an API key, and sees no database, Wise, OpenRouter or Soniox secret
 `modelUsage` proves `claude-opus-5-5` wrote it (another model writing more than 500 tokens, or a fallback, fails
 closed); every call's argv, CLI version, usage and cost — never the prompt — is logged to `claude-calls.jsonl`, and the
 summary prints the proof as `Opus5.5 (effort max requested) n/n` (`modelUsage` proves the model; the effort is what
-every call requested). One retry after 30 s for an unparseable answer or a CLI error only; a
-usage limit, an auth failure or two failures in a row end the stage.
+every call requested). One retry after 30 s for an invalid or unparseable answer or a CLI error only; a usage limit, an
+auth failure or two failures in a row end the stage. Only invalid or unparseable answers count toward a class's
+`failed_twice`; a CLI error, time-out, budget ceiling, usage limit or auth failure never does (the next run tries the
+class again). A collect stopped by Wise throttling or a cap still audits and reports the classes already collected; a
+running `claude` call is killed (SIGTERM, then SIGKILL) before an interrupted run releases its lock.
 
 **Kill switches.** Either STOP file stops every step at once: `~/.bgscheduler-nightly/STOP` or
 `/Users/kevinhsieh/Developer/Scheduling/.feedback-autowriter/STOP` (the nightly writes the first itself when a cap was
 breached after the fact; delete it once you have looked). To stop it for good, disable the Desktop scheduled task
-`bgs-autowriter-nightly`. `~/.bgscheduler-nightly/config.json` (`{"caps": {…}}`) may only tighten the caps below.
+`bgs-autowriter-nightly`. `~/.bgscheduler-nightly/config.json` (`{"caps": {…}, "runnerSha": "<commit>"}`) may only
+tighten the caps below (a value the nightly cannot use is a config error, exit 2); `runnerSha` names a reviewed commit
+preflight accepts besides anything on `origin/main`. The lock is stale when its pid is dead or reused, or after 6 hours.
 
 | Cap | Default |
 |---|---|
 | Classes a night | 60 |
 | Wise reads a night / pacing | 200 / ≥ 5 s apart |
 | Opus calls a night | 80 |
-| Per call (`--max-budget-usd`, API-equivalent) | audit $1.50 · re-audit $1.50 · synthesis $2 |
-| Claude a night / a week (API-equivalent, subscription) | $25 / $120 |
+| Per call (`--max-budget-usd`, API-equivalent) | audit $3 · re-audit $3 · synthesis $4 |
+| Claude a night / a week (API-equivalent, subscription) | $60 / $300 |
 | Soniox a night | $2 (`--soniox-usd` up to $5 for one run) |
 | OpenRouter a night | $3 |
 | Agent flags a night | 10 |
 | Stop | 06:50 Bangkok on the morning after the audited day |
 
-Every spend is reserved in `spend.jsonl` before it starts (a crash leaves the reservation counting at its estimate).
+Every spend is reserved in `spend.jsonl` before it starts (a crash leaves the reservation counting at its estimate); a
+call that cost more than it reserved and passed a cap writes the home STOP file.
 
 **Outputs.** State lives outside every worktree: `$BGS_NIGHTLY_ROOT`, default `~/.bgscheduler-nightly/nightly`
 (directories 0700, files 0600; `~/.bgscheduler-nightly/backup/` is never touched). Real data — `cache/<sid>/` (Wise
 detail, transcripts, captions), `audits/<sid>/`, and each night's `bundles/`, `targets.json`, `report.md`, `plan.md` —
 is deleted after 7 days (`prune`). Kept: `run.json`, `summary.md` (counts, modes, costs, proof — no names or text),
-`claude-calls.jsonl`, `fix-brief.json` (sanitised: an invented fixture, refused if it carries a real name or an 8-word
-run copied from the evidence), and the root ledgers `ledger.jsonl` (ids, hashes, modes, verdicts, cost) and
+`claude-calls.jsonl`, `fix-brief.json` (sanitised: an invented fixture, refused if it carries a real name — students,
+tutors, the tutors' other students, people the audits found named, Zoom caption speakers — an 8-word run or a
+25-character Thai run copied from the evidence), and the root ledgers `ledger.jsonl` (ids, hashes, modes, verdicts, cost) and
 `costs.jsonl`.
 
 **Exit codes.** 0 ok/nothing, 1 error, 2 usage/config, 3 caps, 4 Claude usage limit/auth/model proof, 5 Wise
