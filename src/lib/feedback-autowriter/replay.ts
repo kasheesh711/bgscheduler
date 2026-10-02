@@ -5,7 +5,6 @@ import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similari
 import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
 import {
   AUTOWRITER_JUDGE_EFFORTS,
-  AUTOWRITER_JUDGE_TIMEOUT_MS,
   AUTOWRITER_MAX_TRANSCRIBE_ERRORS,
   AUTOWRITER_MAX_WRITER_ERRORS,
   AUTOWRITER_MODELS,
@@ -16,19 +15,16 @@ import {
   type AutowriterModelRoute,
 } from "./config";
 import {
-  JUDGE_JSON_SCHEMA,
   JUDGE_PROMPT_VERSION,
-  buildJudgeMessages,
-  combineJudgeVerdicts,
-  judgeProblems,
   parseJudgeOutput,
   type JudgeEffort,
   type JudgeOutput,
   type StoredJudgeVerdict,
 } from "./judge";
-import { callOpenRouter, callWithRateLimitRetries, type OpenRouterCallResult } from "./openrouter";
+import { judgeDraftAtEveryLevel } from "./judge-draft";
+import { callOpenRouter, type OpenRouterCallResult } from "./openrouter";
 import { runWritingPipeline, type PipelineResult } from "./pipeline";
-import { PROMPT_VERSION, chooseStudentDisplayName, classDetailsBlock, describeClass, redactForModel } from "./prompt";
+import { PROMPT_VERSION, chooseStudentDisplayName, describeClass } from "./prompt";
 import { AUTOWRITER_TEACHER_ALLOWLIST, AUTOWRITER_TUTORS, rosterTutor, type AutowriterTutor } from "./roster";
 import { mapWithConcurrency } from "./run";
 import {
@@ -355,7 +351,7 @@ async function zoomCues(deps: ReplayDeps, detail: AutowriterSessionDetail): Prom
 /**
  * The posted draft, judged as production judges a transcript draft — at every effort, on the same messages, passing
  * only when all do — against the transcript; names redacted as for any judge call. One try per level (a rate-limited
- * call is tried again first, as in production).
+ * call is tried again first, as in production). Shared with the nightly verification (`judgeDraftAtEveryLevel`).
  */
 async function judgePostedDraft(deps: ReplayDeps, record: ReplayRecord, input: {
   fields: FeedbackFieldAnswers;
@@ -365,52 +361,20 @@ async function judgePostedDraft(deps: ReplayDeps, record: ReplayRecord, input: {
   names: { studentFullName: string; studentAliases: readonly string[]; tutorNames: readonly string[] };
   classDetails: readonly string[];
 }): Promise<NonNullable<ReplayRecord["posted"]>> {
-  const redact = (text: string) => redactForModel(text, input.names);
-  const judge = AUTOWRITER_MODELS.judge;
-  const call = recordingCaller(deps, record, "posted_draft");
-  const messages = buildJudgeMessages({
-    redactedSummary: redact(input.rendered),
-    classDetails: classDetailsBlock(input.classDetails, input.names),
-    placeholderFields: {
-      topics: redact(input.fields.topics),
-      performance: redact(input.fields.performance),
-      improvement: redact(input.fields.improvement),
-      homework: redact(input.fields.homework),
-    },
+  const judged = await judgeDraftAtEveryLevel({
+    apiKey: deps.apiKey,
+    fields: input.fields,
+    record: input.rendered,
     evidence: "transcript",
     speakerLabels: input.speakerLabels,
-    otherPeople: [],
-  });
-  const replies = (await Promise.all(AUTOWRITER_JUDGE_EFFORTS.map((effort) => callWithRateLimitRetries({
-    call,
-    request: {
-      apiKey: deps.apiKey,
-      model: judge.model,
-      provider: judge.provider,
-      messages,
-      schemaName: "feedback_faithfulness",
-      schema: JUDGE_JSON_SCHEMA,
-      effort,
-      maxTokens: 32_000,
-      timeoutMs: AUTOWRITER_JUDGE_TIMEOUT_MS.transcript,
-    },
+    names: input.names,
+    classDetails: input.classDetails,
+    call: recordingCaller(deps, record, "posted_draft"),
     remainingMs: () => REPLAY_BUDGET_MS,
     sleep: deps.sleep,
     random: deps.random,
-  })))).map((made) => made.call);
-  const verdicts = replies.map((reply) => reply.ok ? parseJudgeOutput(reply.content) : null);
-  const failed = verdicts.findIndex((verdict) => !verdict);
-  if (failed >= 0) {
-    const reply = replies[failed];
-    return {
-      source: input.source, verdict: null, problems: [],
-      error: `judge:${AUTOWRITER_JUDGE_EFFORTS[failed]}:${reply.ok ? "judge_unparseable" : reply.error}`,
-    };
-  }
-  const verdict = combineJudgeVerdicts(Object.fromEntries(
-    AUTOWRITER_JUDGE_EFFORTS.map((effort, index) => [effort, verdicts[index]]),
-  ) as Record<JudgeEffort, JudgeOutput>);
-  return { source: input.source, verdict, problems: judgeProblems(verdict), error: null };
+  });
+  return { source: input.source, verdict: judged.verdict, problems: judged.problems, error: judged.error };
 }
 
 /**
