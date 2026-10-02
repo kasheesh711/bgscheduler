@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sessionDetail, answers, autoBlankSubmission } from "../../__tests__/fixtures";
 import { KEVIN_ONLINE_WISE_USER_ID } from "../../roster";
+import { parseAutowriterSessionDetail } from "../../session";
 import { SonioxError, type SonioxClient, type SonioxToken } from "../../soniox";
 import { NIGHTLY_CAPS } from "../caps";
 import {
@@ -15,6 +16,7 @@ import {
   readCachedEvidence,
   readOnlySoniox,
   renderZoomCaptions,
+  retranscribeRecording,
   wiseQuietWaitMs,
   type CollectDeps,
   type RawEvidence,
@@ -322,6 +324,28 @@ describe("collectRawEvidence", () => {
     const refused = await collectRawEvidence({ ...deps, cacheDir: path.join(dir, "cache2"), retranscribe: { client: failing, ledger: capped, sleep } }, target());
     expect(refused.status.retranscribe).toBe("refused:cap:soniox_usd_night");
     expect(failing.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("deletes our Soniox job even when settling the ledger fails", async () => {
+    const detailValue = parseAutowriterSessionDetail({ data: detail() });
+    const client: SonioxClient = {
+      create: vi.fn(async () => ({ id: "our-job" })),
+      get: vi.fn(async () => ({ status: "completed" as const, audioDurationMs: 3_600_000, errorMessage: null })),
+      transcript: vi.fn(async () => TRANSCRIPT),
+      remove: vi.fn(async () => "deleted" as const),
+      list: vi.fn(),
+    };
+    const ledger = {
+      reserve: () => ({ ok: true as const, id: "r1" }),
+      settle: () => {
+        throw new Error("disk full");
+      },
+    };
+    await expect(retranscribeRecording({ client, ledger, sleep, pollMs: 10 }, {
+      wiseSessionId: SID, detail: detailValue, audioUrl: "https://files.example.invalid/recording.mp4", durationSeconds: 3600, productionJobId: "prod-job",
+    })).rejects.toThrow("disk full");
+    expect(client.remove).toHaveBeenCalledWith("our-job");
+    expect(vi.mocked(client.remove).mock.calls.flat()).not.toContain("prod-job");
   });
 
   it("propagates a Wise 429 as a stage stop, with the class's status saved", async () => {

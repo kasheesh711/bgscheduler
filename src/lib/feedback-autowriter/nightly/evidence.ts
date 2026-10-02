@@ -344,6 +344,7 @@ export async function retranscribeRecording(deps: RetranscribeDeps, input: {
   let actualUsd: number | null = null;
   let outcome = "error";
   let stopped: NightlyStop | null = null;
+  let undeleted: string | null = null;
   type Outcome = { ok: true; transcript: CachedTranscript; costUsd: number | null } | { ok: false; reason: string };
   let result: Outcome = { ok: false, reason: "unfinished" };
   try {
@@ -398,12 +399,16 @@ export async function retranscribeRecording(deps: RetranscribeDeps, input: {
   } catch (error) {
     if (error instanceof NightlyStop) stopped = error;
     result = { ok: false, reason: error instanceof NightlyStop ? error.reason : `soniox:${message(error)}` };
-  }
-  deps.ledger.settle(reserved.id, { actualUsd, outcome });
-  let undeleted: string | null = null;
-  if (ourJob && ourJob !== input.productionJobId) {
-    if (await removeOurJob(deps.client, ourJob, sleep)) deps.inFlight?.delete(ourJob);
-    else undeleted = ourJob;
+  } finally {
+    // Whatever happened — even when settling the ledger throws — our job is deleted (never the production job).
+    try {
+      deps.ledger.settle(reserved.id, { actualUsd, outcome });
+    } finally {
+      if (ourJob && ourJob !== input.productionJobId) {
+        if (await removeOurJob(deps.client, ourJob, sleep)) deps.inFlight?.delete(ourJob);
+        else undeleted = ourJob;
+      }
+    }
   }
   if (stopped) throw stopped;
   return { ...result, undeleted };
