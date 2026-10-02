@@ -199,10 +199,18 @@ export interface CorrectionStore {
 
 export type CorrectionRefusalStage = "plan" | "db" | "wise" | "lock" | "window";
 
+/**
+ * On an outcome that released the lock: the release's compare-and-swap did not fire — someone halted the autowriter
+ * on top of the lock (an owner pause, an anomaly halt), so it stays halted until an owner resumes.
+ */
+export interface ReleaseReport {
+  productionStillHalted?: true;
+}
+
 export type CorrectionOutcome =
   | { status: "preflight_ok"; bodyHash: string; guards: string[] }
-  | { status: "refused"; stage: CorrectionRefusalStage; reason: string }
-  | { status: "verified"; postId: string; bodyHash: string }
+  | ({ status: "refused"; stage: CorrectionRefusalStage; reason: string } & ReleaseReport)
+  | ({ status: "verified"; postId: string; bodyHash: string } & ReleaseReport)
   /**
    * The corrected text verified in Wise, but our own submit event not seen within `CORRECTION_EVENT_WAIT_MS`: the
    * posts row is `awaiting_event` and the lock is KEPT (the autowriter stays halted) — a late stranger's save inside
@@ -210,7 +218,7 @@ export type CorrectionOutcome =
    * settles it by reads alone, then `releaseStaleCorrectionLock` lifts the lock.
    */
   | { status: "awaiting_event_locked"; postId: string; bodyHash: string }
-  | { status: "not_sent"; postId: string; reason: string }
+  | ({ status: "not_sent"; postId: string; reason: string } & ReleaseReport)
   /** Halted, settled and reported: a person must look at the class in Wise. The lock is never released. */
   | { status: "safety"; postId: string | null; problems: string[] };
 
@@ -564,10 +572,13 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
     guards.push("lock");
   }
   const held = lock;
-  const refuseHeld = async (stage: CorrectionRefusalStage, reason: string): Promise<CorrectionOutcome> => {
-    if (held) await held.release();
-    return refuse(stage, reason);
+  /** Release the lock (if taken); the report says when the autowriter stays halted all the same. */
+  const releaseLock = async (): Promise<ReleaseReport> => {
+    if (!held || await held.release()) return {};
+    return { productionStillHalted: true };
   };
+  const refuseHeld = async (stage: CorrectionRefusalStage, reason: string): Promise<CorrectionOutcome> =>
+    ({ status: "refused", stage, reason, ...await releaseLock() });
 
   // 6. The fresh reads, made AFTER the lock is taken (on a dry run, without it): the saves since the first shot, then
   // the session — the last read before the POST, so the text checked is as fresh as it can be. The POST window
@@ -642,8 +653,7 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
       // Recovery settled it already (this machine slept past the lease), or the database failed: recovery finds it.
       problems.push(`settle_failed:${failureName(error)}`);
     }
-    await held.release();
-    return { status: "not_sent", postId, reason: problems.join(",") };
+    return { status: "not_sent", postId, reason: problems.join(","), ...await releaseLock() };
   };
   // The last checks before the POST, nothing in between: the lock is still ours on the database clock (the lease not
   // expired while this machine slept, no owner pause, resume or tutor switch), and the budget is not spent.
@@ -768,8 +778,7 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
     if (!check.readFailed && check.baseIntact) {
       // Wise refused it and nothing changed: not sent, never retried here.
       await store.settle(postId, { outcome: "not_sent", verification: { ...timing, httpStatus: 429, stillBase: true } });
-      await held.release();
-      return { status: "not_sent", postId, reason: "wise_rate_limited" };
+      return { status: "not_sent", postId, reason: "wise_rate_limited", ...await releaseLock() };
     }
     const problems = ["http_429", check.readFailed ? "read_failed_after_retries" : "submission_changed_after_429", ...check.problems];
     return safety("unknown_outcome", problems, { httpStatus: 429, stillBase: false });
@@ -837,6 +846,5 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
   }
   // Not settled until our event shows: the lock stays, and recover settles it by reads alone, then lifts the lock.
   if (!ours) return { status: "awaiting_event_locked", postId, bodyHash };
-  await held.release();
-  return { status: "verified", postId, bodyHash };
+  return { status: "verified", postId, bodyHash, ...await releaseLock() };
 }

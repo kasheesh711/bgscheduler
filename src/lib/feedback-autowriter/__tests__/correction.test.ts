@@ -51,6 +51,8 @@ interface StoreOptions {
   onLock?: () => void;
   /** What the lock's last check before the POST finds (default: still held). */
   isHeld?: boolean | Error;
+  /** Whether the release's compare-and-swap fires (default: yes; no: someone halted on top of the lock). */
+  releaseFires?: boolean;
   record?: Error;
   /** Runs when the posts row is recorded (e.g. this machine sleeping). */
   onRecord?: () => void;
@@ -95,7 +97,7 @@ function memoryStore(log: string[], time: Clock, options: StoreOptions = {}) {
           release: async () => {
             log.push("store:release");
             store.releases += 1;
-            return true;
+            return options.releaseFires ?? true;
           },
         },
       };
@@ -760,6 +762,25 @@ describe("correctPostGuarded: the last checks between the claim and the POST", (
     expect(failed.outcome).toEqual({ status: "not_sent", postId: "post-1", reason: "lock_lost,settle_failed:Error" });
     expect(failed.wise.postFeedback).not.toHaveBeenCalled();
     expect(failed.store.releases).toBe(1);
+  });
+});
+
+describe("correctPostGuarded: a release that leaves the autowriter halted", () => {
+  const cases: Array<[string, Parameters<typeof run>[0], Record<string, unknown>]> = [
+    ["a refusal under the lock", { wise: { eventsBefore: [] } }, { status: "refused", stage: "wise", reason: "first_shot_save_missing" }],
+    ["a lock lost before the POST", { store: { isHeld: false } }, { status: "not_sent", reason: "lock_lost" }],
+    ["HTTP 429", { wise: { postResult: { kind: "rate_limited", status: 429 } } }, { status: "not_sent", reason: "wise_rate_limited" }],
+    ["a verified correction", {}, { status: "verified" }],
+  ];
+  it.each(cases)("says so after %s (someone halted on top of the lock)", async (_name, options, expected) => {
+    const result = await run({ ...options, store: { ...options?.store, releaseFires: false } });
+    expect(result.outcome).toMatchObject({ ...expected, productionStillHalted: true });
+    expect(result.store.releases).toBe(1);
+  });
+
+  it("says nothing when the release lifted the lock", async () => {
+    expect((await run()).outcome).not.toHaveProperty("productionStillHalted");
+    expect((await run({ wise: { eventsBefore: [] } })).outcome).not.toHaveProperty("productionStillHalted");
   });
 });
 

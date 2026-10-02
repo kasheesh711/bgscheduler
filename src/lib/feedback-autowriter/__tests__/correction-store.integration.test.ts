@@ -764,6 +764,28 @@ describe("end to end through the real store", () => {
     expect(await readControl(db)).toMatchObject({ haltedAt: null, haltReason: null });
   });
 
+  it("says the autowriter stays halted when an owner paused during the run", async () => {
+    const seeded = await postedWithFirstShot();
+    const time = clock(windowStart());
+    const wise = fakeWise(time, [], { eventsBefore: [save(seeded.verifiedAt, API_ACTOR, "OWNER")], wiseNow: () => new Date() });
+    const real = store();
+    const paused: CorrectionStore = {
+      ...real,
+      async lock(plan) {
+        const locked = await real.lock(plan);
+        await haltAutowriter(db, `paused by ${OWNER}: checking a class`, OWNER);
+        return locked;
+      },
+    };
+    const outcome = await correctPostGuarded({
+      ops: wise, store: paused, plan: planFor(seeded), apiActorId: API_ACTOR, allowlist: AUTOWRITER_TEACHER_ALLOWLIST,
+      disabledTutors: [], aiSuspect: AI_SUSPECT, textProblems: () => [], now: time.now, sleep: time.sleep, eventWaitMs: 0,
+    });
+    expect(outcome).toEqual({ status: "refused", stage: "lock", reason: "lock:lost", productionStillHalted: true });
+    expect(wise.postFeedback).not.toHaveBeenCalled();
+    expect((await readControl(db)).haltReason).toMatch(/ \| then: paused by owner@example\.com: checking a class$/u);
+  });
+
   it("never posts once the lease ran out between the claim and the POST (this machine slept): not_sent, released", async () => {
     const seeded = await postedWithFirstShot();
     const time = clock(windowStart());
