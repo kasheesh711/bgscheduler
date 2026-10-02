@@ -107,7 +107,8 @@ switch there covers both of their Wise accounts; "Partly on" means the CLI switc
      session ids parsed (`wise_session_id is not null`).
 2. Same hour: `--mode=live` and message the tutors:
    Tutors on the roster: Kevin, Gift, Ek, Peat, Mimi (29 Sep); Ras, Celeste, Taki, Dome, Mandy, Grace, Mint, Fluke
-   (Chettaporn), Calvin, Lukas, A (Anavat), Ohm, Mookie (2 Oct, live on deploy — a new roster tutor is on unless their
+   (Chettaporn), Calvin, Lukas, A (Anavat), Ohm, Mookie, then Aey, Mikki, Sagotty, Buzz, Linn, Eng, Kavin, Copter, Amy
+   (2 Oct, live on deploy — a new roster tutor is on unless their
    accounts are in `disabled_tutors`).
    > From today BGScheduler writes the Wise feedback for your **online one-to-one** classes from the Zoom
    > summary, in English. Offline and group classes are still yours. You can't edit it in Wise afterwards — ask an
@@ -405,7 +406,7 @@ else is written again by GLM. No data change is needed.
 
 ## 8a. Luna first for the tutors added on 2026-10-02
 
-The 13 tutors added on 2 Oct (roster entries with `writer: "luna"`) are written by Luna (reasoning `max`) first, with
+The 22 tutors added on 2 Oct, in two cohorts of 13 and 9 (roster entries with `writer: "luna"`), are written by Luna (reasoning `max`) first, with
 Sol as their fallback; the GLM judges are unchanged and everyone else keeps Sol then Luna (`writersFor` in
 `config.ts`). No migration: `luna` and `sol` are both allowed arms. In the section 8 query, these tutors' writer rows
 are mostly `luna`; a `sol` row for one of them is a fallback draft. The dashboard's "Written by the fallback writer"

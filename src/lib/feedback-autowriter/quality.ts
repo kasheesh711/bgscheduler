@@ -607,7 +607,7 @@ export function isRequiredReview(reason: InclusionReason): boolean {
   return reason === "new_tutor" || reason === "random_sample";
 }
 
-/** The next roster size: +50%, rounded up (5 → 8 → 12 → 18). */
+/** The next roster size: +50%, rounded up (5 → 8 → 12 → 18 → 27). */
 export function nextExpansionSize(current: number): number {
   return current + Math.ceil(current / 2);
 }
