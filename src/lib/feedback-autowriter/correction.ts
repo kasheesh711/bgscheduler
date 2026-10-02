@@ -1,4 +1,4 @@
-import { assessFeedbackContent } from "@/lib/post-class-feedback/policy";
+import { assessAiSuspect, type PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
 import {
   POST_CLASS_FEEDBACK_FIELDS,
   type FeedbackFieldAnswers,
@@ -29,8 +29,8 @@ import {
   type SubmitFeedbackEvent,
   type WiseFeedbackOps,
 } from "./submit";
-import { WISE_FEEDBACK_ANSWER_MAX_CHARACTERS, type BillingPlan, type SubmissionState } from "./types";
-import { tidyFeedbackText } from "./validate";
+import type { BillingPlan, SubmissionState } from "./types";
+import { feedbackTextChecks, tidyFeedbackText } from "./validate";
 
 /**
  * Guarded agent correction (quick 261003-12b): the nightly agent edits the text of one autowriter post that is
@@ -172,6 +172,21 @@ export type CorrectionOutcome =
   /** Halted, settled and reported: a person must look at the class in Wise. The lock is never released. */
   | { status: "safety"; postId: string | null; problems: string[] };
 
+/**
+ * What the AI-suspect and copy checks need: the checks every first shot passed (`validateFeedbackDraft`). Required —
+ * a correction is never checked without them.
+ */
+export interface CorrectionAiSuspectInput {
+  /** The student's Wise names: the full name and the display name the text uses. */
+  studentNames: readonly string[];
+  /** The tutor's names, as the first shot was checked with. */
+  tutorNames: readonly string[];
+  /** The tutor's recent feedback, keyed by Wise session id; the class's own is never compared with. */
+  priorFeedback: readonly PriorFeedbackComparison[];
+  /** The class follows a style or format guide: its short numbered fields are no AI-suspect sign (as for a draft). */
+  styleGuided?: boolean;
+}
+
 export interface CorrectPostInput {
   ops: CorrectionWiseOps;
   store: CorrectionStore;
@@ -180,7 +195,9 @@ export interface CorrectPostInput {
   apiActorId: string;
   allowlist: ReadonlySet<string>;
   disabledTutors: readonly string[];
-  /** The caller's text checks (placeholders, Thai, markdown, …); each code is refused as `text:<code>`. */
+  /** The AI-suspect and copy checks' context (required: see `correctionTextProblems`). */
+  aiSuspect: CorrectionAiSuspectInput;
+  /** The caller's own text checks (a style or format guide's, …); each code is refused as `text:<code>`. */
   textProblems: (fields: FeedbackFieldAnswers) => string[];
   /** Every read and check, but no lock, no posts row and no POST. */
   dryRun?: boolean;
@@ -203,26 +220,58 @@ function failureName(error: unknown): string {
 }
 
 /**
- * Problems with a corrected text before any lock: whitespace no draft ever posts (Wise may store it otherwise, and the
- * read-back would then halt), Wise's hard length limit (a longer answer is a certain 4xx, i.e. a halt), Class
- * Feedback's content bar (a correction must never create a deduction), and the caller's own checks.
+ * Problems with a corrected text before any lock — every check its first shot passed as a draft, and more:
+ * - whitespace no draft ever posts (Wise may store it otherwise, and the read-back would then halt);
+ * - the draft's context-free checks (`feedbackTextChecks`): leftover placeholder tokens and placeholder text, Thai
+ *   text (the student's own names aside: a Wise name may be Thai), Wise's length limit (a longer answer is a certain
+ *   4xx, i.e. a halt), markdown, Class Feedback's content bar, and absence or cancellation wording — a correction
+ *   must never create a deduction, nor make Class Feedback mark the session ineligible;
+ * - the AI-suspect and copy checks against the tutor's prior feedback (`aiSuspect`, required; the class's own
+ *   feedback is never compared with);
+ * - the caller's own checks (a style or format guide's, …).
  */
-export function correctionTextProblems(
-  fields: FeedbackFieldAnswers,
-  textProblems: (fields: FeedbackFieldAnswers) => string[],
-): string[] {
+export function correctionTextProblems(fields: FeedbackFieldAnswers, input: {
+  wiseSessionId: string;
+  aiSuspect: CorrectionAiSuspectInput;
+  textProblems: (fields: FeedbackFieldAnswers) => string[];
+}): string[] {
+  const { aiSuspect } = input;
   const problems: string[] = [];
   for (const field of POST_CLASS_FEEDBACK_FIELDS) {
     if (fields[field] !== tidyFeedbackText(fields[field])) problems.push(`untidy:${field}`);
-    if ([...fields[field]].length > WISE_FEEDBACK_ANSWER_MAX_CHARACTERS) problems.push(`too_long:${field}`);
   }
-  problems.push(...assessFeedbackContent(fields).violationReasons.map((reason) => `policy:${reason}`));
-  problems.push(...textProblems(fields));
+  // A draft's Thai check reads the model's text before the student's name is restored; here the names are taken out.
+  const names = aiSuspect.studentNames.filter((name) => name.trim() !== "").toSorted((a, b) => b.length - a.length);
+  const withoutNames = Object.fromEntries(POST_CLASS_FEEDBACK_FIELDS.map((field) =>
+    [field, names.reduce((text, name) => text.replaceAll(name, " "), fields[field])])) as unknown as FeedbackFieldAnswers;
+  const text = feedbackTextChecks(fields, { thaiSource: withoutNames });
+  problems.push(...text.form, ...text.content);
+  const suspect = assessAiSuspect(fields, {
+    studentNames: [...aiSuspect.studentNames],
+    tutorNames: [...aiSuspect.tutorNames],
+    priorFeedback: aiSuspect.priorFeedback.filter((prior) => prior.key !== input.wiseSessionId),
+  });
+  if (suspect.suspect) {
+    problems.push(...suspect.reasons
+      .filter((reason) => !(aiSuspect.styleGuided === true && reason === "short_required_field"))
+      .map((reason) => `ai_suspect:${reason}`));
+  }
+  problems.push(...input.textProblems(fields));
   return [...new Set(problems)];
 }
 
+/** The AI-suspect context names a student and a tutor, and carries a prior-feedback list (which may be empty). */
+function aiSuspectInputComplete(input: CorrectionAiSuspectInput | undefined): boolean {
+  const names = (list: unknown) => Array.isArray(list) && list.every((name) => typeof name === "string") &&
+    list.some((name: string) => name.trim() !== "");
+  return Boolean(input) && names(input?.studentNames) && names(input?.tutorNames) && Array.isArray(input?.priorFeedback);
+}
+
 /** Refusal code for the plan itself (pure), or null. */
-function planRefusal(plan: CorrectionPlan, input: Pick<CorrectPostInput, "apiActorId" | "textProblems" | "stopRequested">): string | null {
+function planRefusal(
+  plan: CorrectionPlan,
+  input: Pick<CorrectPostInput, "apiActorId" | "aiSuspect" | "textProblems" | "stopRequested">,
+): string | null {
   const wellFormed = (fields: FeedbackFieldAnswers | undefined) =>
     Boolean(fields) && POST_CLASS_FEEDBACK_FIELDS.every((field) => typeof fields?.[field] === "string");
   if (!wellFormed(plan.fields) || !wellFormed(plan.base?.fields)) return "fields_malformed";
@@ -232,9 +281,14 @@ function planRefusal(plan: CorrectionPlan, input: Pick<CorrectPostInput, "apiAct
   if (!plan.reason?.trim()) return "reason_missing";
   if ([...plan.reason].length > CORRECTION_MAX_REASON_CHARACTERS) return "reason_too_long";
   if (!input.apiActorId) return "api_actor_missing";
+  if (!aiSuspectInputComplete(input.aiSuspect)) return "ai_suspect_input_missing";
   let problems: string[];
   try {
-    problems = correctionTextProblems(plan.fields, input.textProblems);
+    problems = correctionTextProblems(plan.fields, {
+      wiseSessionId: plan.wiseSessionId,
+      aiSuspect: input.aiSuspect,
+      textProblems: input.textProblems,
+    });
   } catch (error) {
     problems = [`check_failed:${errorName(error)}`];
   }
@@ -357,7 +411,8 @@ interface ReadBack {
 /**
  * Replace the text of a verified autowriter post in Wise, under every guard, with exactly one POST:
  *   1. the plan: hashes match the texts, the text changes, the reason is a short line, the corrected text passes
- *      Wise's limit, Class Feedback's content bar and the caller's checks; no STOP;
+ *      every check its first shot passed as a draft (`correctionTextProblems`: the context-free draft checks, the
+ *      AI-suspect and copy checks, Wise's limit) and the caller's checks; no STOP;
  *   2. the window (`inCorrectionWindow`) — not enforced on a dry run, which says so;
  *   3. the database preconditions (`store.preconditions`);
  *   4. Wise before the lock, reads only: the post as Wise shows it (`checkWiseState`), the one billed student, and

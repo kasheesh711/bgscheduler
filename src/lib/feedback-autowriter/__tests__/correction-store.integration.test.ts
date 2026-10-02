@@ -40,7 +40,7 @@ import {
 } from "../store";
 import { feedbackBodyHash, fieldsHash, type WiseFeedbackOps } from "../submit";
 import type { BillingPlan } from "../types";
-import { API_ACTOR, BASE, CORRECTED, STANDARD_ORDER, clock, fakeWise, postedDetail, save } from "./correction-fixtures";
+import { AI_SUSPECT, API_ACTOR, BASE, CORRECTED, STANDARD_ORDER, clock, fakeWise, postedDetail, save } from "./correction-fixtures";
 import { CLASS_ID, SESSION_ID, STUDENT_ID, SUBMISSION_ID } from "./fixtures";
 
 // Synthetic ids and invented lesson text only. The roster teacher id is the code roster's (the claim checks it).
@@ -564,7 +564,7 @@ describe("end to end through the real store", () => {
 
     const outcome = await correctPostGuarded({
       ops: wise, store: store(), plan: planFor(seeded), apiActorId: API_ACTOR, allowlist: AUTOWRITER_TEACHER_ALLOWLIST,
-      disabledTutors: [], textProblems: () => [], now: time.now, sleep: time.sleep, eventWaitMs: 0,
+      disabledTutors: [], aiSuspect: AI_SUSPECT, textProblems: () => [], now: time.now, sleep: time.sleep, eventWaitMs: 0,
     });
     expect(outcome).toMatchObject({ status: "verified" });
     expect(wise.postFeedback).toHaveBeenCalledTimes(1);
@@ -605,7 +605,7 @@ describe("end to end through the real store", () => {
     });
     const outcome = await correctPostGuarded({
       ops: wise, store: store(), plan: planFor(seeded), apiActorId: API_ACTOR, allowlist: AUTOWRITER_TEACHER_ALLOWLIST,
-      disabledTutors: [], textProblems: () => [], now: time.now, sleep: time.sleep, eventWaitMs: 0,
+      disabledTutors: [], aiSuspect: AI_SUSPECT, textProblems: () => [], now: time.now, sleep: time.sleep, eventWaitMs: 0,
     });
     expect(outcome).toMatchObject({ status: "safety", problems: ["credit_entries_changed:[1]->[1,1]"] });
     const control = await readControl(db);

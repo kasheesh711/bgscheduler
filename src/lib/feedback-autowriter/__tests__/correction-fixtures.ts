@@ -1,8 +1,9 @@
 import { vi } from "vitest";
 import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
+import type { CorrectionAiSuspectInput } from "../correction";
 import type { PostResult, SubmitFeedbackEvent } from "../submit";
 import type { WiseFeedbackPostBody } from "../types";
-import { GOOD_FIELDS, QUESTIONS, autoBlankSubmission, sessionDetail } from "./fixtures";
+import { GOOD_FIELDS, QUESTIONS, STUDENT_NAME, autoBlankSubmission, sessionDetail } from "./fixtures";
 
 /** Shared fakes for the agent-correction tests (unit and integration). Synthetic ids and invented lesson text only. */
 
@@ -17,6 +18,9 @@ export const CORRECTED: FeedbackFieldAnswers = {
   ...GOOD_FIELDS,
   performance: "Somchai found common denominators quickly and explained each step of both word problems clearly. He checked every simplification with the highest common factor and corrected his own slips without prompting.",
 };
+
+/** The AI-suspect context of the synthetic class: the student's names, the tutor's, no prior feedback. */
+export const AI_SUSPECT: CorrectionAiSuspectInput = { studentNames: [STUDENT_NAME, "Somchai"], tutorNames: ["Kevin Hsieh", "Kev"], priorFeedback: [] };
 
 export type Field = keyof FeedbackFieldAnswers;
 export const STANDARD_ORDER: Field[] = ["topics", "performance", "improvement", "homework"];

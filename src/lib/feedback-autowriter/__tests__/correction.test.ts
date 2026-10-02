@@ -18,6 +18,7 @@ import {
 import { AUTOWRITER_TEACHER_ALLOWLIST, KEVIN_ONLINE_WISE_USER_ID } from "../roster";
 import { feedbackBodyHash, fieldsHash } from "../submit";
 import {
+  AI_SUSPECT,
   API_ACTOR,
   BASE,
   BILLING,
@@ -138,6 +139,7 @@ async function run(options: {
     apiActorId: API_ACTOR,
     allowlist: AUTOWRITER_TEACHER_ALLOWLIST,
     disabledTutors: [],
+    aiSuspect: AI_SUSPECT,
     textProblems: () => [],
     now: time.now,
     sleep: time.sleep,
@@ -306,8 +308,55 @@ describe("correctPostGuarded: refusals before anything is read", () => {
     const result = await run({ input: { plan: plan({ fields: thin, fieldsSha256: fieldsHash(thin) }) } });
     expect(result.outcome).toMatchObject({ status: "refused", stage: "plan" });
     if (result.outcome.status !== "refused") throw new Error("unreachable");
-    expect(result.outcome.reason).toMatch(/^text:policy:combined_characters:/u);
+    expect(result.outcome.reason).toMatch(/(?:^|,)text:policy:combined_characters:/u);
     expectUntouched(result);
+  });
+
+  // Each passes the caller's (empty) check: the executor's own checks must refuse it.
+  const unsafe: Array<[string, Partial<Record<Field, string>>, string]> = [
+    ["absence wording (Class Feedback would mark the session ineligible)", { homework: "Student was absent today." },
+      "text:attendance_wording:missed_or_no_show:homework"],
+    ["a leftover name placeholder", { performance: CORRECTED.performance.replace("Somchai", "[STUDENT_1]") }, "text:placeholder_token:performance"],
+    ["Thai text", { topics: `${CORRECTED.topics} (เศษส่วน)` }, "text:thai_text:topics"],
+    ["markdown", { improvement: `**Next steps**\n${CORRECTED.improvement}` }, "text:markdown:improvement"],
+  ];
+  it.each(unsafe)("refuses %s with an empty caller check", async (_name, change, reason) => {
+    const fields = { ...CORRECTED, ...change };
+    const result = await run({ input: { plan: plan({ fields, fieldsSha256: fieldsHash(fields) }), textProblems: () => [] } });
+    expect(result.outcome).toMatchObject({ status: "refused", stage: "plan" });
+    if (result.outcome.status !== "refused") throw new Error("unreachable");
+    expect(result.outcome.reason.split(",")).toContain(reason);
+    expectUntouched(result);
+    expect(result.log).toEqual([]);
+  });
+
+  it("refuses a near-copy of the tutor's feedback on another class, never of the class's own first shot", async () => {
+    const other = await run({ input: { aiSuspect: { ...AI_SUSPECT, priorFeedback: [{ key: "6a00000000000000000000e1", fields: CORRECTED }] } } });
+    expect(other.outcome).toMatchObject({ status: "refused", stage: "plan", reason: "text:ai_suspect:similar_prior_feedback" });
+    expectUntouched(other);
+    const own = await run({ input: { aiSuspect: { ...AI_SUSPECT, priorFeedback: [{ key: SESSION_ID, fields: BASE }] } } });
+    expect(own.outcome.status).toBe("verified");
+  });
+
+  it("allows the student's own Thai name, as a draft's check does", async () => {
+    const fields = Object.fromEntries(Object.entries(CORRECTED).map(([field, text]) => [field, text.replaceAll("Somchai", "สมชาย")])) as typeof CORRECTED;
+    const thaiNamed = plan({ fields, fieldsSha256: fieldsHash(fields) });
+    const result = await run({ input: { plan: thaiNamed, aiSuspect: { ...AI_SUSPECT, studentNames: ["สมชาย ใจดี", "สมชาย"] } } });
+    // The name passed every text check: the correction lands.
+    expect(result.outcome).toMatchObject({ status: "verified" });
+    expect(result.wise.postFeedback).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses without the AI-suspect context (a student and a tutor name)", async () => {
+    for (const aiSuspect of [
+      { ...AI_SUSPECT, studentNames: [] },
+      { ...AI_SUSPECT, tutorNames: [" "] },
+      undefined as unknown as typeof AI_SUSPECT,
+    ]) {
+      const result = await run({ input: { aiSuspect } });
+      expect(result.outcome).toEqual({ status: "refused", stage: "plan", reason: "ai_suspect_input_missing" });
+      expectUntouched(result);
+    }
   });
 
   it("refuses outside the window, before the database or Wise is read", async () => {
@@ -471,7 +520,7 @@ describe("correctPostGuarded: the fresh read under the lock (refused → release
     const store = memoryStore(log, { onLock: () => time.advance(CORRECTION_LOCK_BUDGET_MS) });
     const outcome = await correctPostGuarded({
       ops: wise, store, plan: plan(), apiActorId: API_ACTOR, allowlist: AUTOWRITER_TEACHER_ALLOWLIST, disabledTutors: [],
-      textProblems: () => [], now: time.now, sleep: time.sleep, eventWaitMs: 0,
+      aiSuspect: AI_SUSPECT, textProblems: () => [], now: time.now, sleep: time.sleep, eventWaitMs: 0,
     });
     expect(outcome).toEqual({ status: "refused", stage: "lock", reason: "lock_budget" });
     expect(wise.postFeedback).not.toHaveBeenCalled();
