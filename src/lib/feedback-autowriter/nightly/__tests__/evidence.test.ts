@@ -223,7 +223,8 @@ describe("Wise read gate", () => {
     await expect(gate.read("k", async () => {
       throw Object.assign(new Error("Wise API 404"), { status: 404 });
     })).rejects.toThrow("Wise API 404");
-    expect(ledger.attempts("k")).toEqual({ total: 1, failed: 1, succeeded: 0 });
+    // Settled, as a failure that is not the key's own (only invalid or unparseable model answers are).
+    expect(ledger.attempts("k")).toEqual({ total: 1, failed: 0, succeeded: 0, other: 1 });
   });
 });
 

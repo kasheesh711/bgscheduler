@@ -103,6 +103,17 @@ export function loggableArgs(args: readonly string[]): string[] {
 
 export type ClaudeOutcomeKind = "success" | "cli_error" | "budget_exceeded" | "usage_limited" | "auth" | "timeout" | "unparseable";
 
+/**
+ * How a `claude -p` call is settled in the spend ledger. Only "invalid" (an answer that failed validation) and
+ * "unparseable" (no usable JSON) are the key's own failures and count toward `failed_twice`; every other failure is
+ * `infra:<kind>` (CLI error, time-out, budget, usage limit, auth) and never does — the next run tries the key again.
+ */
+export function ledgerOutcome(kind: ClaudeOutcomeKind, valid: boolean): string {
+  if (kind === "success") return valid ? "success" : "invalid";
+  if (kind === "unparseable") return "unparseable";
+  return `infra:${kind}`;
+}
+
 export type ClaudeOutcome =
   | { kind: "success"; value: unknown; proof: ClaudeProof }
   | { kind: Exclude<ClaudeOutcomeKind, "success">; reason: string; proof: ClaudeProof | null };

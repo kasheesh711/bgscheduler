@@ -1,6 +1,6 @@
 import { buildSynthesisPrompt, evidenceTextOf } from "./audit-prompt";
 import { SYNTHESIS_JSON_SCHEMA, parseSynthesisResult, type SynthesisResult } from "./audit-schema";
-import type { ClaudeCall, ClaudeOutcome } from "./claude-runner";
+import { ledgerOutcome, type ClaudeCall, type ClaudeOutcome } from "./claude-runner";
 import { EXIT, NightlyStop } from "./exit";
 import type { NightlyLedger } from "./ledger";
 import type { ClassReport, ModeGroup } from "./report";
@@ -70,7 +70,7 @@ export async function synthesizeNight(deps: {
   });
   const costUsd = outcome.proof?.costUsd ?? null;
   if (outcome.kind !== "success") {
-    deps.ledger.settle(reserved.id, { actualUsd: costUsd, outcome: outcome.kind });
+    deps.ledger.settle(reserved.id, { actualUsd: costUsd, outcome: ledgerOutcome(outcome.kind, false) });
     const stop = outcome.kind === "usage_limited" || outcome.kind === "auth" ? new NightlyStop(outcome.kind, EXIT.model) : null;
     return { ok: false, reason: `${outcome.kind}:${outcome.reason}`, proof: outcome.proof, costUsd, stop };
   }
@@ -79,7 +79,7 @@ export async function synthesizeNight(deps: {
     realNames: realNamesOf(input.files),
     evidenceTexts: input.files.flatMap((file) => [evidenceTextOf(file.bundle), Object.values(file.bundle.postedFields).join("\n")]),
   });
-  deps.ledger.settle(reserved.id, { actualUsd: costUsd, outcome: parsed.ok ? "success" : "unparseable" });
+  deps.ledger.settle(reserved.id, { actualUsd: costUsd, outcome: ledgerOutcome("success", parsed.ok) });
   if (!parsed.ok) return { ok: false, reason: `invalid:${parsed.reason}`, proof: outcome.proof, costUsd, stop: null };
   return { ok: true, result: parsed.result, proof: outcome.proof, costUsd };
 }

@@ -3,7 +3,7 @@ import path from "node:path";
 import { AUDIT_PROMPT_VERSION, buildAuditPrompt, evidenceTextOf } from "./audit-prompt";
 import { AUDIT_JSON_SCHEMA, AUDIT_VERSION, parseAuditResult, type CheckedAuditResult } from "./audit-schema";
 import { stopFilePresent, writeStopFile } from "./caps";
-import type { ClaudeCall, ClaudeOutcome } from "./claude-runner";
+import { ledgerOutcome, type ClaudeCall, type ClaudeOutcome } from "./claude-runner";
 import { EXIT, NightlyStop } from "./exit";
 import type { NightlyLedger } from "./ledger";
 import { appendJsonl, readJsonFile, writeJsonAtomic } from "./paths";
@@ -14,9 +14,10 @@ import type { AuditRecord } from "./types";
 /**
  * One Opus 5.5 max audit per posted text: cached per class, text hash, audit version and evidence hash
  * (`audits/<sid>/<fieldsSha256>.a<AUDIT_VERSION>.<bundleHash12>.json`, 0600), reserved in the spend ledger before the
- * call, validated by `parseAuditResult` (zod + fail-closed post-checks). One retry after 30 s, for an unparseable
- * answer or a CLI error only; a budget, time-out or auth failure is not retried; a usage limit or auth failure ends the
- * stage, and so do two failures in a row. A key that failed twice is never tried again until AUDIT_VERSION changes.
+ * call, validated by `parseAuditResult` (zod + fail-closed post-checks). One retry after 30 s, for an invalid or
+ * unparseable answer or a CLI error only; a budget, time-out or auth failure is not retried; a usage limit or auth
+ * failure ends the stage, and so do two failures in a row. A key whose answers were invalid or unparseable twice is never
+ * tried again until AUDIT_VERSION changes; infrastructure failures (`infra:*`) never count toward that.
  * Every audit (and failure) is appended to the metadata-only `ledger.jsonl`: ids, hashes, modes, verdicts, cost.
  */
 
@@ -176,7 +177,8 @@ export async function auditBundles(deps: AuditStageDeps, files: readonly BundleF
       } else {
         failure = `${outcome.kind}:${outcome.reason}`.slice(0, 300);
       }
-      const settledOutcome = result ? "success" : outcome.kind === "success" ? "unparseable" : outcome.kind;
+      // Only an invalid or unparseable answer counts toward failed_twice; infrastructure failures settle as infra:*.
+      const settledOutcome = ledgerOutcome(outcome.kind, result !== null);
       const costUsd = outcome.proof?.costUsd ?? null;
       out.costUsd += costUsd ?? 0;
       const { breached } = deps.ledger.settle(reserved.id, { actualUsd: costUsd, outcome: settledOutcome });
@@ -206,14 +208,14 @@ export async function auditBundles(deps: AuditStageDeps, files: readonly BundleF
         return;
       }
       deps.log?.(`audit ${sid}: attempt ${attempt} failed (${failure})`);
-      if (settledOutcome === "usage_limited" || settledOutcome === "auth") {
+      if (outcome.kind === "usage_limited" || outcome.kind === "auth") {
         appendJsonl(deps.ledgerJsonl, auditLedgerLine(deps.night, record, { costUsd, outcome: settledOutcome }));
         out.records.push(record);
         out.failed += 1;
-        stopStage(new NightlyStop(settledOutcome, EXIT.model));
+        stopStage(new NightlyStop(outcome.kind, EXIT.model));
         return;
       }
-      const retryable = settledOutcome === "unparseable" || settledOutcome === "cli_error";
+      const retryable = settledOutcome === "invalid" || settledOutcome === "unparseable" || outcome.kind === "cli_error";
       if (retryable && attempt === 1 && !out.stop) {
         await sleep(deps.retryDelayMs ?? AUDIT_RETRY_DELAY_MS);
         continue;

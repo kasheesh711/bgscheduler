@@ -142,6 +142,26 @@ describe("auditBundles", () => {
     const result = await auditBundles(auditDeps, [file(SID_A), file(SID_B), file("6a0000000000000000000a03")]);
     expect(run).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({ failed: 2, stop: { reason: "claude_errors", exitCode: 4 } });
+    // Infrastructure failures never count toward failed_twice: the next run tries these classes again.
+    const ledger = auditDeps.ledger as NightlyLedger;
+    expect(ledger.attempts(`audit:${SID_A}:0a01aaaaaaaa:a${AUDIT_VERSION}`)).toMatchObject({ failed: 0, other: 1 });
+    const lines = readJsonl<{ outcome: string }>(auditDeps.ledgerJsonl);
+    expect(lines.map((line) => line.outcome)).toEqual(["infra:budget_exceeded", "infra:budget_exceeded"]);
+  });
+
+  it("never counts CLI errors, time-outs or auth failures toward failed_twice", async () => {
+    const outcomes: ClaudeOutcome[] = [
+      { kind: "cli_error", reason: "exit_1", proof: null },
+      { kind: "cli_error", reason: "exit_1", proof: null },
+      { kind: "timeout", reason: "timeout", proof: null },
+    ];
+    const run = vi.fn(async (): Promise<ClaudeOutcome> => outcomes.shift() ?? success());
+    const { deps: auditDeps, ledger } = deps(run, { concurrency: 1 });
+    await auditBundles(auditDeps, [file(SID_A)]);
+    await auditBundles(auditDeps, [file(SID_A)]);
+    expect(ledger.attempts(`audit:${SID_A}:0a01aaaaaaaa:a${AUDIT_VERSION}`)).toMatchObject({ failed: 0, other: 3 });
+    // Not skipped as failed_twice: the third run audits it.
+    expect(await auditBundles(auditDeps, [file(SID_A)])).toMatchObject({ audited: 1, skipped: [] });
   });
 
   it("stops the stage on a usage limit or an auth failure", async () => {

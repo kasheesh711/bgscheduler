@@ -18,8 +18,12 @@ export type SpendKind = (typeof SPEND_KINDS)[number];
 
 const CLAUDE_KINDS = new Set<SpendKind>(["opus_audit", "opus_reaudit", "opus_synthesis", "opus_fix"]);
 
-/** Outcomes that are not the key's own fault (an account or global stop): they never count toward its failures. */
-const NOT_THE_KEYS_FAULT = new Set(["usage_limited", "auth", "stopped", "refused", "deadline"]);
+/**
+ * Outcomes that are the key's own failure (the model answered, but not usably) and count toward `failed_twice`.
+ * Everything else that is not a success — `infra:*` (CLI error, time-out, budget, usage limit, auth), a stop, or a
+ * reservation a crashed process never settled — is not the key's fault: the next run tries it again.
+ */
+const KEY_FAILURES = new Set(["invalid", "unparseable"]);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -111,21 +115,28 @@ export class NightlyLedger {
     return { night: this.sum(tonight), week: this.sum(this.since(7, (entry) => CLAUDE_KINDS.has(entry.kind))), calls: tonight.length };
   }
 
-  /** Every reservation of a key across nights: how many, how many failed (crashed ones included), how many succeeded. */
-  attempts(key: string): { total: number; failed: number; succeeded: number } {
+  /**
+   * Every reservation of a key across nights: how many; how many failed by the key's own fault (an invalid or
+   * unparseable answer — what `failed_twice` counts); how many succeeded; and how many ended otherwise (an
+   * infrastructure failure, a stop, or a reservation a crashed process never settled).
+   */
+  attempts(key: string): { total: number; failed: number; succeeded: number; other: number } {
     const entries = this.select((entry) => entry.key === key);
     let failed = 0;
     let succeeded = 0;
+    let other = 0;
     for (const entry of entries) {
       if (!entry.settled) {
-        if (!this.live.has(entry.id)) failed += 1;
+        if (!this.live.has(entry.id)) other += 1;
       } else if (entry.settled.outcome === "success") {
         succeeded += 1;
-      } else if (!NOT_THE_KEYS_FAULT.has(entry.settled.outcome)) {
+      } else if (KEY_FAILURES.has(entry.settled.outcome)) {
         failed += 1;
+      } else {
+        other += 1;
       }
     }
-    return { total: entries.length, failed, succeeded };
+    return { total: entries.length, failed, succeeded, other };
   }
 
   /** Corrections reserved in the last `days` days (all nights). */

@@ -49,7 +49,7 @@ import {
   stopFiles,
   type NightlyCaps,
 } from "@/lib/feedback-autowriter/nightly/caps";
-import { claudeCwd, readClaudeCliVersion, runClaude, type ClaudeRunnerDeps } from "@/lib/feedback-autowriter/nightly/claude-runner";
+import { claudeCwd, ledgerOutcome, readClaudeCliVersion, runClaude, type ClaudeRunnerDeps } from "@/lib/feedback-autowriter/nightly/claude-runner";
 import { createWiseReadGate, dbEvidenceSources, readOnlySoniox } from "@/lib/feedback-autowriter/nightly/evidence";
 import { EXIT, exitCodeForStop, type ExitCode } from "@/lib/feedback-autowriter/nightly/exit";
 import { NightlyLedger } from "@/lib/feedback-autowriter/nightly/ledger";
@@ -252,7 +252,7 @@ async function audit(session: Session): Promise<StepResult> {
     if (!reserved.ok) return fail(reserved.reason, EXIT.caps, { step: "audit-smoke", night: ctx.night });
     const runner = session.claude();
     const outcome = await runClaude(call, runner);
-    ledger.settle(reserved.id, { actualUsd: outcome.proof?.costUsd ?? null, outcome: outcome.kind });
+    ledger.settle(reserved.id, { actualUsd: outcome.proof?.costUsd ?? null, outcome: ledgerOutcome(outcome.kind, true) });
     const ok = outcome.kind === "success";
     return {
       ok,

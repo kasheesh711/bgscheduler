@@ -83,22 +83,27 @@ describe("NightlyLedger", () => {
     expect(later.correctionsSince(7)).toBe(0);
   });
 
-  it("counts a key's failures across nights, crashed reservations included, but not account-wide stops", () => {
+  it("counts only invalid or unparseable answers as a key's failures, across nights; infrastructure failures and crashes do not", () => {
     const first = NightlyLedger.open(dir, "2026-10-01", caps(), { now });
-    const failed = first.reserve("opus_audit", { key: "k", estimateUsd: 1.5 });
-    if (!failed.ok) throw new Error("unreachable");
-    first.settle(failed.id, { actualUsd: 0.3, outcome: "unparseable" });
-    const limited = first.reserve("opus_audit", { key: "k", estimateUsd: 1.5 });
-    if (!limited.ok) throw new Error("unreachable");
-    first.settle(limited.id, { actualUsd: 0, outcome: "usage_limited" });
-    // A reservation this process still holds is in flight, not failed …
+    const settle = (outcome: string) => {
+      const reserved = first.reserve("opus_audit", { key: "k", estimateUsd: 1.5 });
+      if (!reserved.ok) throw new Error("unreachable");
+      first.settle(reserved.id, { actualUsd: 0.1, outcome });
+    };
+    settle("invalid");
+    for (const outcome of ["infra:cli_error", "infra:timeout", "infra:usage_limited", "infra:auth", "infra:budget_exceeded"]) settle(outcome);
+    // A reservation this process still holds is in flight …
     const inFlight = first.reserve("opus_audit", { key: "k", estimateUsd: 1.5 });
-    expect(first.attempts("k")).toEqual({ total: 3, failed: 1, succeeded: 0 });
-    // … but seen from a later run it never settled: the process died, and it counts as a failure.
-    const second = NightlyLedger.open(dir, "2026-10-02", caps(), { now });
     expect(inFlight.ok).toBe(true);
-    expect(second.attempts("k")).toEqual({ total: 3, failed: 2, succeeded: 0 });
-    expect(second.attempts("other")).toEqual({ total: 0, failed: 0, succeeded: 0 });
+    expect(first.attempts("k")).toEqual({ total: 7, failed: 1, succeeded: 0, other: 5 });
+    // … and seen from a later run it never settled (the process died): not the key's fault either.
+    const second = NightlyLedger.open(dir, "2026-10-02", caps(), { now });
+    expect(second.attempts("k")).toEqual({ total: 7, failed: 1, succeeded: 0, other: 6 });
+    const reserved = second.reserve("opus_audit", { key: "k", estimateUsd: 1.5 });
+    if (!reserved.ok) throw new Error("unreachable");
+    second.settle(reserved.id, { actualUsd: 0.1, outcome: "unparseable" });
+    expect(second.attempts("k")).toMatchObject({ failed: 2 });
+    expect(second.attempts("other")).toEqual({ total: 0, failed: 0, succeeded: 0, other: 0 });
   });
 
   it("reports a breach when a call cost more than it reserved", () => {
