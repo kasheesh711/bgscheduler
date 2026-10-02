@@ -35,7 +35,8 @@ export function parseModelOutput(content: string): { ok: true; output: ModelOutp
   return parsed.success ? { ok: true, output: parsed.data } : { ok: false, reason: "output_schema_mismatch" };
 }
 
-function tidy(value: string): string {
+/** Whitespace as every draft posts it: `\n` line ends, no trailing blanks, at most one empty line, trimmed. */
+export function tidyFeedbackText(value: string): string {
   return value.replace(/\r\n?/gu, "\n").replace(/[ \t]+\n/gu, "\n").replace(/\n{3,}/gu, "\n\n").trim();
 }
 
@@ -43,7 +44,7 @@ function tidy(value: string): string {
 export function finalizeFields(output: ModelOutput, studentDisplayName: string): FeedbackFieldAnswers {
   const fields = {} as FeedbackFieldAnswers;
   for (const field of POST_CLASS_FEEDBACK_FIELDS) {
-    fields[field] = tidy(restoreStudentName(output[field], studentDisplayName));
+    fields[field] = tidyFeedbackText(restoreStudentName(output[field], studentDisplayName));
   }
   return fields;
 }

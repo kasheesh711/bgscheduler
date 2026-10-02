@@ -30,6 +30,7 @@ import {
   type WiseFeedbackOps,
 } from "./submit";
 import { WISE_FEEDBACK_ANSWER_MAX_CHARACTERS, type BillingPlan, type SubmissionState } from "./types";
+import { tidyFeedbackText } from "./validate";
 
 /**
  * Guarded agent correction (quick 261003-12b): the nightly agent edits the text of one autowriter post that is
@@ -202,8 +203,9 @@ function failureName(error: unknown): string {
 }
 
 /**
- * Problems with a corrected text before any lock: Wise's hard length limit (a longer answer is a certain 4xx, i.e. a
- * halt), Class Feedback's content bar (a correction must never create a deduction), and the caller's own checks.
+ * Problems with a corrected text before any lock: whitespace no draft ever posts (Wise may store it otherwise, and the
+ * read-back would then halt), Wise's hard length limit (a longer answer is a certain 4xx, i.e. a halt), Class
+ * Feedback's content bar (a correction must never create a deduction), and the caller's own checks.
  */
 export function correctionTextProblems(
   fields: FeedbackFieldAnswers,
@@ -211,6 +213,7 @@ export function correctionTextProblems(
 ): string[] {
   const problems: string[] = [];
   for (const field of POST_CLASS_FEEDBACK_FIELDS) {
+    if (fields[field] !== tidyFeedbackText(fields[field])) problems.push(`untidy:${field}`);
     if ([...fields[field]].length > WISE_FEEDBACK_ANSWER_MAX_CHARACTERS) problems.push(`too_long:${field}`);
   }
   problems.push(...assessFeedbackContent(fields).violationReasons.map((reason) => `policy:${reason}`));
@@ -260,7 +263,7 @@ function checkWiseState(detail: AutowriterSessionDetail, context: {
 
   const form = planFeedbackForm(detail, plan.mappings);
   if (!form.ok) return no(`form:${form.reason}`);
-  const unmapped = POST_CLASS_FEEDBACK_FIELDS.filter((field) => plan.fields[field].trim() !== "" && !form.plan.fieldOrder.includes(field));
+  const unmapped = POST_CLASS_FEEDBACK_FIELDS.filter((field) => plan.fields[field] !== "" && !form.plan.fieldOrder.includes(field));
   if (unmapped.length > 0) return no(`form:form_lacks_field:${unmapped.join(",")}`);
 
   const snapshot = teacherSubmissionSnapshot(detail);
@@ -372,7 +375,7 @@ interface ReadBack {
  * read failures only → keep the lock and re-read every 30 s for up to 4 min. Anything else — an unknown outcome, a
  * 4xx, a read-back mismatch, changed credits, billing or submission, a stranger's or an extra save — halts first
  * (so the lock's compare-and-swap release can never undo it), settles the posts row, records a critical incident
- * and keeps the lock. Throws only when the database fails after the POST; the lock then stays (run recover).
+ * and keeps the lock. Throws only when the database fails while the lock is held; the lock may then stay (run recover).
  */
 export async function correctPostGuarded(input: CorrectPostInput): Promise<CorrectionOutcome> {
   const { ops, store, plan } = input;

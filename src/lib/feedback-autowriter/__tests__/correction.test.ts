@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
 import { DEFAULT_FEEDBACK_FIELD_MAPPINGS } from "@/lib/post-class-feedback/wise";
 import {
   CORRECTION_LOCK_BUDGET_MS,
@@ -17,130 +16,26 @@ import {
   type CorrectionStore,
 } from "../correction";
 import { AUTOWRITER_TEACHER_ALLOWLIST, KEVIN_ONLINE_WISE_USER_ID } from "../roster";
-import { feedbackBodyHash, fieldsHash, type PostResult, type SubmitFeedbackEvent } from "../submit";
-import type { WiseFeedbackPostBody } from "../types";
-import { CLASS_ID, GOOD_FIELDS, QUESTIONS, SESSION_ID, STUDENT_ID, SUBMISSION_ID, autoBlankSubmission, sessionDetail } from "./fixtures";
-
-// Synthetic ids and invented lesson text only.
-const API_ACTOR = "69366668c05630afe5d8a2a4";
-const OTHER_TEACHER = "6a00000000000000000000aa";
-const OTHER_STUDENT = "6a00000000000000000000bb";
-const START = new Date("2026-10-02T19:11:00.000Z"); // UTC minute 11: inside the window
-const FIRST_SHOT_AT = new Date("2026-10-02T09:40:00.000Z");
-const BILLING = { sessionStatus: "COMPLETED", creditsConsumed: 1, source: "auto_blank_reuse", expectedConsumedDelta: 0 } as const;
-const BASE: FeedbackFieldAnswers = GOOD_FIELDS;
-const CORRECTED: FeedbackFieldAnswers = {
-  ...GOOD_FIELDS,
-  performance: "Somchai found common denominators quickly and explained each step of both word problems clearly. He checked every simplification with the highest common factor and corrected his own slips without prompting.",
-};
-
-type Field = keyof FeedbackFieldAnswers;
-const STANDARD_ORDER: Field[] = ["topics", "performance", "improvement", "homework"];
-const QUESTION_OF: Record<Field, (typeof QUESTIONS)[number]> = {
-  topics: QUESTIONS[0], performance: QUESTIONS[1], improvement: QUESTIONS[2], homework: QUESTIONS[3],
-};
-
-/** A session whose one teacher submission holds `text` (our first shot, as Wise shows it after the POST). */
-function postedDetail(input: {
-  text?: FeedbackFieldAnswers;
-  order?: Field[];
-  answerOrder?: Field[];
-  submission?: Record<string, unknown>;
-  detail?: Record<string, unknown>;
-} = {}) {
-  const order = input.order ?? STANDARD_ORDER;
-  const text = input.text ?? BASE;
-  return sessionDetail({
-    feedbackForm: { _id: "form1", profile: "teacher", enabled: true, questions: order.map((field) => QUESTION_OF[field]) },
-    feedbackSubmissions: [autoBlankSubmission({
-      answers: (input.answerOrder ?? order).map((field, index) => ({
-        _id: `a${index + 1}`, questionText: QUESTION_OF[field].questionText, type: QUESTION_OF[field].type, answer: text[field],
-      })),
-      metadata: null,
-      ...input.submission,
-    })],
-    ...input.detail,
-  });
-}
-
-function clock(start = START) {
-  let current = start.getTime();
-  return {
-    now: () => new Date(current),
-    advance: (ms: number) => { current += ms; },
-    sleep: vi.fn(async (ms: number) => { current += ms; }),
-  };
-}
-type Clock = ReturnType<typeof clock>;
-
-const save = (at: Date, actorId: string | null, actorRole: string | null, autoSubmitted: boolean | null = false): SubmitFeedbackEvent =>
-  ({ at, actorId, actorRole, autoSubmitted });
-const firstShotSave = () => save(new Date(FIRST_SHOT_AT.getTime() + 1_000), API_ACTOR, "OWNER");
-
-interface FakeWiseOptions {
-  order?: Field[];
-  /** The detail for one getSessionDetail call (1-based), or an Error to throw; undefined → Wise's current state. */
-  detailOn?: (call: number) => Record<string, unknown> | Error | undefined;
-  postResult?: PostResult | Error;
-  applyPost?: boolean;
-  /** What Wise stores for a POST (default: exactly what was sent). */
-  storeAs?: (fields: FeedbackFieldAnswers) => FeedbackFieldAnswers;
-  credits?: Array<{ credit: number }>;
-  creditsAfterPost?: Array<{ credit: number }>;
-  creditsOn?: (call: number) => Error | undefined;
-  eventsBefore?: SubmitFeedbackEvent[];
-  eventsAfterPost?: (postedAt: Date) => SubmitFeedbackEvent[];
-  eventsOn?: (call: number) => Error | undefined;
-}
-
-/** Fake Wise applying the POST the way the web-app edit does: same submission id, billing as sent. */
-function fakeWise(time: Clock, log: string[], options: FakeWiseOptions = {}) {
-  const order = options.order ?? STANDARD_ORDER;
-  let text = { ...BASE };
-  let billing: { sessionStatus: string; creditsConsumed: number } = { sessionStatus: BILLING.sessionStatus, creditsConsumed: BILLING.creditsConsumed };
-  let credits = options.credits ?? [{ credit: 1 }];
-  let postedAt: Date | null = null;
-  const posts: WiseFeedbackPostBody[] = [];
-  const calls = { detail: 0, credits: 0, events: 0 };
-  return {
-    posts,
-    getSessionDetail: vi.fn(async () => {
-      calls.detail += 1;
-      log.push(`wise:detail#${calls.detail}`);
-      const override = options.detailOn?.(calls.detail);
-      if (override instanceof Error) throw override;
-      return { data: override ?? postedDetail({ text, order, submission: billing }) };
-    }),
-    postFeedback: vi.fn(async (_classId: string, _sessionId: string, body: WiseFeedbackPostBody): Promise<PostResult> => {
-      log.push("wise:post");
-      posts.push(body);
-      if (options.postResult instanceof Error) throw options.postResult;
-      if (options.applyPost ?? (options.postResult === undefined || options.postResult.kind === "sent")) {
-        postedAt = time.now();
-        const sent = Object.fromEntries(order.map((field, index) => [field, body.answers[index].answer])) as FeedbackFieldAnswers;
-        text = options.storeAs?.(sent) ?? sent;
-        billing = { sessionStatus: body.sessionStatus, creditsConsumed: body.creditsConsumed };
-        credits = options.creditsAfterPost ?? credits;
-      }
-      return options.postResult ?? { kind: "sent", status: 200 };
-    }),
-    getSessionCreditEntries: vi.fn(async () => {
-      calls.credits += 1;
-      log.push(`wise:credits#${calls.credits}`);
-      const failure = options.creditsOn?.(calls.credits);
-      if (failure) throw failure;
-      return credits;
-    }),
-    findFeedbackEvents: vi.fn(async (_classId: string, _sessionId: string, since: Date) => {
-      calls.events += 1;
-      log.push(`wise:events#${calls.events}`);
-      const failure = options.eventsOn?.(calls.events);
-      if (failure) throw failure;
-      const after = postedAt ? (options.eventsAfterPost?.(postedAt) ?? [save(new Date(postedAt.getTime() + 500), API_ACTOR, "OWNER")]) : [];
-      return [...(options.eventsBefore ?? [firstShotSave()]), ...after].filter((event) => event.at.getTime() >= since.getTime());
-    }),
-  };
-}
+import { feedbackBodyHash, fieldsHash } from "../submit";
+import {
+  API_ACTOR,
+  BASE,
+  BILLING,
+  CORRECTED,
+  FIRST_SHOT_AT,
+  OTHER_STUDENT,
+  OTHER_TEACHER,
+  STANDARD_ORDER,
+  START,
+  clock,
+  fakeWise,
+  firstShotSave,
+  postedDetail,
+  save,
+  type FakeWiseOptions,
+  type Field,
+} from "./correction-fixtures";
+import { CLASS_ID, QUESTIONS, SESSION_ID, STUDENT_ID, SUBMISSION_ID, autoBlankSubmission } from "./fixtures";
 
 interface StoreOptions {
   preconditions?: string[] | Error;
@@ -391,6 +286,11 @@ describe("correctPostGuarded: refusals before anything is read", () => {
       "Wise's answer limit",
       { plan: plan({ fields: { ...CORRECTED, homework: long }, fieldsSha256: fieldsHash({ ...CORRECTED, homework: long }) }) },
       "text:too_long:homework",
+    ],
+    [
+      "whitespace no draft posts",
+      { plan: plan({ fields: { ...CORRECTED, topics: `${CORRECTED.topics}\r\n` }, fieldsSha256: fieldsHash({ ...CORRECTED, topics: `${CORRECTED.topics}\r\n` }) }) },
+      "text:untidy:topics",
     ],
     ["stop_requested", { stopRequested: () => true }, "stop_requested"],
   ];
