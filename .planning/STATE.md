@@ -167,6 +167,7 @@ None blocking roadmap execution.
 | Phase 12 P01 | 4m | 2 tasks | 2 files |
 | Phase 12 P02 | 8 | 2 tasks | 4 files |
 | Phase 12 P03 | 6m | 3 tasks | 4 files |
+| 261002-rmf | Give autowriter incidents their own kinds (Atom, style review) instead of scan_failed | 2026-10-02 | 53edb60b | [261002-rmf-give-autowriter-incidents-their-own-kind](./quick/261002-rmf-give-autowriter-incidents-their-own-kind/) |
 
 ## Session Continuity
 
