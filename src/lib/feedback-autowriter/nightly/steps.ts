@@ -593,8 +593,10 @@ export async function stepReport(ctx: NightContext, deps: {
     recordStep(ctx, "report", { status: "partial", stop: stop.reason, summary });
     return result({ ok: false, stop: stop.reason, next: null, summary, exitCode: stop.exitCode });
   }
-  const next = recordStep(ctx, "report", { status: "done", stop: null, summary });
-  return result({ summary, next: nextStep(next, "report") });
+  // A report written before collection and the audits finished is partial: a resumed run writes it again.
+  const complete = state.steps.collect?.status === "done" && state.steps.audit?.status === "done";
+  const next = recordStep(ctx, "report", { status: complete ? "done" : "partial", stop: null, summary: { ...summary, partial: !complete } });
+  return result({ summary: { ...summary, partial: !complete }, next: complete ? nextStep(next, "report") : nextStep(next) });
 }
 
 // ---------------------------------------------------------------------------
@@ -666,18 +668,23 @@ function addDaysIso(night: string, days: number): string {
 // ---------------------------------------------------------------------------
 
 /**
- * The whole night, from the first unfinished step. A step that stops ends the run — never a retry loop — after a
- * partial report when the stop came after selection (not for a STOP file: STOP means stop).
+ * The whole night, from the first unfinished step. A step is skipped only when it is done and no step before it ran
+ * in this invocation: once a step runs (new targets, a new audit), every later step runs again — the report is always
+ * rewritten after a new audit. `always` names steps that run every time. A step that stops ends the run — never a
+ * retry loop — after a partial report when the stop came after selection (not for a STOP file: STOP means stop).
  */
 export async function runNight(ctx: Pick<NightContext, "paths" | "night" | "now" | "log">, input: {
   order: readonly StepName[];
   steps: Partial<Record<StepName, () => Promise<StepResult> | StepResult>>;
   partialReport: () => Promise<StepResult>;
+  always?: ReadonlySet<StepName>;
 }): Promise<StepResult> {
   const steps: Record<string, unknown> = {};
   const brief = (step: StepResult) => ({ ok: step.ok, stop: step.stop, exitCode: step.exitCode, summary: step.summary });
+  let ranBefore = false;
   for (const name of input.order) {
-    if (readRunState(ctx).steps[name]?.status === "done") {
+    const done = readRunState(ctx).steps[name]?.status === "done";
+    if (done && !ranBefore && !input.always?.has(name)) {
       steps[name] = "done earlier";
       continue;
     }
@@ -685,6 +692,7 @@ export async function runNight(ctx: Pick<NightContext, "paths" | "night" | "now"
     if (!handler) continue;
     ctx.log?.(`run: ${name}`);
     const outcome = await handler();
+    ranBefore = true;
     steps[name] = brief(outcome);
     if (!outcome.ok) {
       const reportable = !["preflight", "select", "report"].includes(name) && outcome.stop !== "stop_file";

@@ -236,7 +236,8 @@ describe("stepReport, stepFlag, stepCosts and runNight", () => {
     const summary = fs.readFileSync(ctx.paths.summaryMd, "utf8");
     expect(summary).toContain("M13×1");
     expect(summary).not.toMatch(/Pim|Testwong|fractions/u);
-    expect(readRunState(ctx).steps.report?.status).toBe("done");
+    // Collection and audits never finished in this run state: the report is partial.
+    expect(readRunState(ctx).steps.report?.status).toBe("partial");
   });
 
   it("pays for the synthesis once per set of audits: a report re-run reuses it", async () => {
@@ -320,5 +321,46 @@ describe("stepReport, stepFlag, stepCosts and runNight", () => {
     });
     expect(stopped.stop).toBe("stop_file");
     expect(partialReport).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-runs every later step once one runs: the report is rewritten after a new audit", async () => {
+    const ctx = context();
+    for (const step of ["preflight", "select", "collect", "report"] as const) recordStep(ctx, step, { status: "done", stop: null, summary: {} });
+    const calls: string[] = [];
+    const ok = (step: string) => async () => {
+      calls.push(step);
+      return { ok: true, stop: null, next: null, summary: { step }, exitCode: 0 as const };
+    };
+    await runNight(ctx, {
+      order: ["preflight", "select", "collect", "audit", "report"],
+      steps: { preflight: ok("preflight"), select: ok("select"), collect: ok("collect"), audit: ok("audit"), report: ok("report") },
+      partialReport: vi.fn(),
+    });
+    // preflight, select and collect were done and nothing before them ran; the audit was not done, so it and the
+    // report after it run.
+    expect(calls).toEqual(["audit", "report"]);
+    calls.length = 0;
+    await runNight(ctx, {
+      order: ["preflight", "select", "collect", "audit", "report"],
+      steps: { preflight: ok("preflight"), select: ok("select"), collect: ok("collect"), audit: ok("audit"), report: ok("report") },
+      partialReport: vi.fn(),
+      always: new Set(["select"]),
+    });
+    expect(calls).toEqual(["select", "collect", "audit", "report"]);
+  });
+
+  it("records a report written before the audits finished as partial, so a resumed run writes it again", async () => {
+    const ctx = context({ deadline: null });
+    collectedNight(ctx);
+    const ledger = NightlyLedger.open(ctx.paths.root, ctx.night, ctx.caps);
+    for (const step of ["preflight", "select", "collect"] as const) recordStep(ctx, step, { status: "done", stop: null, summary: {} });
+    recordStep(ctx, "audit", { status: "stopped", stop: "usage_limited", summary: {} });
+    const partial = await stepReport(ctx, { db: null, ledger, run: null, cliVersion: null });
+    expect(partial.summary).toMatchObject({ partial: true });
+    expect(readRunState(ctx).steps.report?.status).toBe("partial");
+    expect(nextStep(readRunState(ctx))).toBe("audit");
+    recordStep(ctx, "audit", { status: "done", stop: null, summary: {} });
+    await stepReport(ctx, { db: null, ledger, run: null, cliVersion: null });
+    expect(readRunState(ctx).steps.report?.status).toBe("done");
   });
 });
