@@ -42,7 +42,7 @@ async function FeedbackAutowriterBody() {
   return <FeedbackAutowriterDashboard initialData={initialData} canControl={canControl} initialReview={initialReview} initialTrends={initialTrends} />;
 }
 
-/** The page's outline while it loads: the system line, the to-do list beside the rail, four chart boxes, the table. */
+/** The page's outline while it loads: the system line, the to-do list and four chart boxes beside the rail, the table. */
 function FeedbackAutowriterSkeleton() {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden" role="status" aria-label="Loading feedback autowriter">
@@ -56,13 +56,15 @@ function FeedbackAutowriterSkeleton() {
           <div className="h-8 w-96 max-w-full animate-pulse rounded bg-muted" />
           <div className="h-4 w-72 max-w-full animate-pulse rounded bg-muted" />
         </div>
-        <div className="grid gap-5 lg:grid-cols-3">
-          <div className="h-[520px] animate-pulse rounded-[10px] bg-muted lg:col-span-2" />
-          <div className="h-[520px] animate-pulse rounded-[10px] bg-muted" />
-        </div>
-        <div className="mt-7 mb-[13px] h-5 w-64 animate-pulse rounded bg-muted" />
-        <div className="grid gap-[18px] lg:grid-cols-2">
-          {Array.from({ length: 4 }, (_, index) => <div key={index} className="h-[330px] animate-pulse rounded-[10px] bg-muted" />)}
+        <div className="grid items-start gap-5 lg:grid-cols-3">
+          <div className="h-[260px] animate-pulse rounded-[10px] bg-muted lg:col-span-2" />
+          <div className="h-[640px] animate-pulse rounded-[10px] bg-muted lg:col-start-3 lg:row-span-2 lg:row-start-1" />
+          <div className="lg:col-span-2">
+            <div className="mt-2 mb-[13px] h-5 w-64 animate-pulse rounded bg-muted" />
+            <div className="grid gap-[18px] lg:grid-cols-2">
+              {Array.from({ length: 4 }, (_, index) => <div key={index} className="h-[330px] animate-pulse rounded-[10px] bg-muted" />)}
+            </div>
+          </div>
         </div>
         <div className="mt-7 mb-[13px] h-5 w-32 animate-pulse rounded bg-muted" />
         <div className="h-64 animate-pulse rounded-[10px] bg-muted" />

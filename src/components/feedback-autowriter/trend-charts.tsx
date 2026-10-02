@@ -307,7 +307,7 @@ function EvidenceCard({ trends }: { trends: AutowriterTrends }) {
   );
 }
 
-export function TrendCharts({ trends: answer, review, unavailableReason, rangeDays, onRangeChange, loading, filteredTo }: {
+export function TrendCharts({ trends: answer, review, unavailableReason, rangeDays, onRangeChange, loading, filteredTo, className, headerClassName = "mt-7" }: {
   /**
    * The series of the range and the tutor filter; the trends route's typed answer when the review tables are missing
    * (migration 0101 not applied); null when they could not load.
@@ -321,13 +321,16 @@ export function TrendCharts({ trends: answer, review, unavailableReason, rangeDa
   loading: boolean;
   /** The name of the tutor the page is filtered to: the series are theirs. */
   filteredTo: string | null;
+  className?: string;
+  /** The heading row's top margin: the page's section gap, or less inside the top grid. */
+  headerClassName?: string;
 }) {
   const trends = answer && !("available" in answer) ? answer : null;
   const missing = answer && "available" in answer ? answer.reason : null;
   const since = trends ? trendSinceNote(trends) : null;
   return (
-    <section id="autowriter-trends" aria-labelledby="autowriter-trends-title" className="scroll-mt-4">
-      <div className="mt-7 mb-[13px] flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+    <section id="autowriter-trends" aria-labelledby="autowriter-trends-title" className={cn("min-w-0 scroll-mt-4", className)}>
+      <div className={cn("mb-[13px] flex flex-wrap items-center justify-between gap-x-4 gap-y-2", headerClassName)}>
         <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
           <h2 id="autowriter-trends-title" className="text-[15px] font-[650] tracking-[-0.02em]">How the pilot is trending</h2>
           <span className="text-[11px] text-muted-foreground">

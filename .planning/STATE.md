@@ -30,7 +30,7 @@ Phase: 12 (LINE Backlog Identity Recovery (IDENT-07)) — EXECUTING
 Plan: 5 of 5 (phase complete)
 Next: `/gsd-plan-phase 11` — create executable plans
 Status: Ready to execute
-Last activity: 2026-10-01 - Completed quick task 261001-r5j: mobile onsite class capture, private evidence, reviewed feedback drafts; default disabled, production activation pending.
+Last activity: 2026-10-02 - Completed quick task 261002-rwm: autowriter dashboard density (trends under the to-do list, dense tutors table).
 Previous: 2026-08-11 - Completed quick task 260811-evt: Reconciler carried-row fixes (holdsRoom widening: needs_review carried rows now block occupancy, seed sticky continuity, and are displaceable in the unlock-retry loop; contextSessions option: online center-room 60-min chains now computed over pending + carried sessions with full-run parity; both differentially tested; on feat/classroom-continuity with 260811-div, pending deploy)
 Previous: 2026-08-11 - Completed quick task 260811-div: Classroom assignment continuity (Ras priority lock on Never Ever (TV) over Mandy/Calvin; same-day sticky-room cascade step gated by the capacity-demotion score; reconciler seeds continuity from carried rows via fixedTutorAssignments; Room switches tile + per-tutor badges in the workspace; 5 commits on feat/classroom-continuity in the bgscheduler-classroom worktree — not pushed, not deployed; review follow-ups chipped: needs_review room double-booking + online center-room chain across carried rows)
 Previous: 2026-08-07 - Completed quick task 260807-o3b: Post-class feedback role-blind event timing proof (Wise stamps actorRole from the account's role, not authorship, so a tutor holding an admin account had their own on-time submissions judged late; qualifying rule widened to any non-auto event, timing-evidence timeline added to the session dialog, activity mirror moved to 15-minute cadence; reassess applied in prod — 871 sessions late→on_time, 4 deductions waived; on branch feat/maintenance-mode — not pushed, not deployed)
@@ -169,6 +169,7 @@ None blocking roadmap execution.
 | Phase 12 P02 | 8 | 2 tasks | 4 files |
 | Phase 12 P03 | 6m | 3 tasks | 4 files |
 | 261002-r45 | Autowriter: guest under student's own name stands in at 50% | 2026-10-02 | d496be3a | [261002-r45-autowriter-guest-name-stand-in](./quick/261002-r45-autowriter-guest-name-stand-in/) |
+| 261002-rwm | Autowriter dashboard: trends under the to-do list, sticky rail, dense tutors table with search/views/sort and quiet-tutor chips | 2026-10-02 | f3c9fd2c | [261002-rwm-autowriter-dashboard-density-trends-unde](./quick/261002-rwm-autowriter-dashboard-density-trends-unde/) |
 
 ## Session Continuity
 

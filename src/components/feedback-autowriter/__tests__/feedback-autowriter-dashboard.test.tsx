@@ -53,6 +53,14 @@ describe("FeedbackAutowriterDashboard", () => {
     expect(html).toContain(">Refresh<");
     // The to-do list has two thirds of the width, the rail one.
     expect(html).toMatch(/lg:grid-cols-3[^>]*><section[^>]*lg:col-span-2/u);
+    // Nothing stretches the to-do list to the rail's height: the trends follow it in the left column, the rail spans both.
+    const grid = /<div class="(grid [^"]*lg:grid-cols-3[^"]*)"/u.exec(html)?.[1].split(" ") ?? [];
+    expect(grid).toEqual(expect.arrayContaining(["items-start", "lg:grid-rows-[auto_1fr]"]));
+    expect(grid).not.toContain("items-stretch");
+    const rail = /<section class="([^"]*)"[^>]*aria-labelledby="autowriter-health-title"/u.exec(html)?.[1].split(" ") ?? [];
+    expect(rail).toEqual(expect.arrayContaining(["lg:sticky", "lg:col-start-3", "lg:row-span-2", "lg:row-start-1"]));
+    expect(html).toMatch(/id="autowriter-trends"[^>]*lg:col-span-2/u);
+    expect(html.indexOf('id="autowriter-trends"')).toBeLessThan(html.indexOf('id="autowriter-tutors"'));
   });
 
   it("has no row of number cards and no tabs", () => {
