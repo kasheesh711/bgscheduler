@@ -7,7 +7,9 @@ import { bangkokDate, evidenceHash } from "./evidence";
 const refId = (ref: unknown) => typeof ref === "string" ? ref
   : ref && typeof ref === "object" && "_id" in ref ? ref._id : null;
 
-const cancelled = (session: WiseSession) => /^CANCELL?ED$/iu.test(session.meetingStatus ?? "");
+/** The statuses `lessonsFromWise` drops. Both must use this one rule, or the PAST/FUTURE check below stops failing closed. */
+export const isCancelledWiseSession = (session: Pick<WiseSession, "meetingStatus">) =>
+  /^CANCELL?ED$/iu.test(session.meetingStatus ?? "");
 
 /** Who and when. The meeting status is compared separately: it legitimately moves as a class ends. */
 function ownership(session: WiseSession) {
@@ -42,7 +44,7 @@ export async function fetchAtomLessonTimetable(client: WiseClient, instituteId: 
     // BKK collection failure). The PAST
     // record is retained. Conflicting ownership or timing, or a cancellation on
     // only one side, must still fail closed.
-    if (previous && (ownership(previous) !== ownership(session) || cancelled(previous) !== cancelled(session))) {
+    if (previous && (ownership(previous) !== ownership(session) || isCancelledWiseSession(previous) !== isCancelledWiseSession(session))) {
       throw new Error("Wise timetable occurrences conflict");
     }
     if (!previous) result.set(session._id, session);

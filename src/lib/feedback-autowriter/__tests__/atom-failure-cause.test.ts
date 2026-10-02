@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { atomFailureCause } from "../atom/collector";
 import { AtomCollectionError } from "../atom/normalize";
+import { WiseApiError } from "@/lib/wise/client";
 vi.mock("server-only", () => ({}));
 
 describe("Atom failure cause labels", () => {
@@ -11,6 +12,10 @@ describe("Atom failure cause labels", () => {
     [new Error("Incomplete Wise day pagination for 2026-10-02 (PAST, page 2)"), "pagination_incomplete"],
     [new Error("Unable to verify complete Wise session pagination at page 3"), "pagination_incomplete"],
     [new Error("Wise returned an empty advertised session page"), "pagination_incomplete"],
+    [new Error("Wise session page count contradicts its contents"), "pagination_incomplete"],
+    [new Error("Wise session read contains duplicate, missing, or invalid session data"), "invalid_session"],
+    [new Error("Invalid Wise calendar date"), "invalid_date"],
+    [new WiseApiError(429, "{\"secret\":\"body\"}", "https://api.wiseapp.live/x"), "wise_http_429"],
     [new Error("Wise session read exceeded its time budget"), "time_budget"],
     [new DOMException("Wise day read time budget exceeded", "TimeoutError"), "time_budget"],
     [new Error("Invalid, duplicate or out-of-date Wise session for 2026-10-02"), "invalid_session"],
