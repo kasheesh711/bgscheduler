@@ -28,6 +28,7 @@ key-decisions:
   - "releaseStaleCorrectionLock un-halts only an exact lock reason whose lease is no longer live, with nothing unsettled"
   - "Built-in text guards (untidy whitespace, Wise 5000-char limit, Class Feedback content bar) on top of the caller's textProblems"
 commits: [8fdc2f5a, 8f7b1432, 13a4e03f]
+review_fix_commits: [09057c85, 6d88a43e, 96fd801a, f7d3318b, 918f6a59, 80b245f6, dd212d2b, 13c9bb6d, c15ed8be, 3329632f, 2276e37e, 8d317a19, 3096fb38, b178bf4a]
 duration: 34min
 completed: 2026-10-03
 ---
@@ -37,6 +38,10 @@ completed: 2026-10-03
 **`correctPostGuarded` replaces the text of one verified autowriter post in Wise, once per class, ever. Every guard
 runs before a single, never-retried POST, made under a lock that stops every other autowriter POST. Any doubt after
 the POST halts first, then settles, then pages; the lock is never lifted on a problem.**
+
+> The independent review's fixes ([Review fixes](#review-fixes), below) supersede several details in the sections
+> before it: the text checks, the lease (now 20 min), the event wait (now 5 min, lock kept if our event is unseen),
+> the recovery threshold (now 25 min), the clocks the POST window uses, and the store interface.
 
 ## Performance
 
@@ -199,3 +204,94 @@ the POST halts first, then settles, then pages; the lock is never lifted on a pr
 
 - Files: all 5 created files and both modified files exist on the branch.
 - Commits: 8fdc2f5a, 8f7b1432 and 13a4e03f are in `git log`.
+
+## Review fixes
+
+Fourteen commits on top of d8a699ab, one per finding where practical, each with its tests green, so they
+cherry-pick in order. Files: `correction.ts`, `correction-store.ts`, `validate.ts` (extraction only), their tests and
+`__tests__/correction-fixtures.ts`.
+
+| Commit | Finding | Fix |
+| --- | --- | --- |
+| 09057c85 | H1 | `feedbackTextChecks` is the context-free half of `validateFeedbackDraft`: placeholder tokens and text, Thai, Wise's limit, markdown, content bar, `attendance_wording:*`. `validateFeedbackDraft` keeps its exact reasons and their order; its tests are unchanged and pass. `correctionTextProblems` runs these checks plus AI-suspect and copy checks. Their context (`aiSuspect`: student names, tutor names, prior feedback) is a required input, and an incomplete one is refused as `ai_suspect_input_missing`. |
+| 6d88a43e | M4 | Refusal `root_cause_missing`. `CORRECTION_DAILY_CAP = 6`: agent corrections other than `not_sent` in 24 h, refused as `daily_cap` in `preconditions` and inside the conditional insert. |
+| 96fd801a | L7 | Extra keys on the corrected or base text are refused (`fields_extra_keys`). `exactFeedbackFields` strips to the four fields before anything is hashed, posted or stored, in both the executor and the store. |
+| f7d3318b | L3 | `preconditions` returns `{ problems, firstShotPostedAt }`, the first shot's own `post_started_at`. The events are read from that time, never the plan's. `first_shot_time_unknown` if there is none. |
+| 918f6a59 | L1 | Under the lock the events are read first and the session last (`freshReadAt` is taken at that read). The POST window starts at the events read (`eventsReadAt`, stored for recovery), so a save between the two reads is never outside both. |
+| 80b245f6 | H2 | The store's lock reads the database clock from the halt update (`RETURNING now()`), between two readings of the local clock. It refuses `clock_skew` beyond 2 s either way, whatever the round trip, and leaves nothing behind. `databaseNow()` timestamps the events read, the session read and the POST's end. The POST's start is the posts row's `post_started_at`. Recovery reuses these database times. If the database clock can't be read, the correction is refused before the POST; after the POST, the window ends at the POST time-out instead. |
+| dd212d2b | M2 | Lease 20 min (pinned by a test above the longest run plus 5 min). Stale threshold is the lease plus 5 min. `recoverStaleCorrections` returns `lease_live` and touches nothing while a correction lease is live; the stale release already waited. After the claim, `CorrectionLock.isHeld()` (on the database clock) and then the lock budget are checked, with nothing in between, so a machine that slept never posts (`not_sent`: `lock_lost`, `lock_budget`, `lock_check_failed:*`). |
+| 13c9bb6d | M1 | Events are polled every 20 s for up to 5 min. If our event is still unseen, the row settles `awaiting_event` and the lock is kept: the outcome is `awaiting_event_locked`, and the old `awaiting_event` outcome is gone. The `recover` command then runs `recoverStaleCorrections`, which settles it by reads only, then `releaseStaleCorrectionLock`, which lifts the lock. |
+| c15ed8be | M3 | Recovery of an `awaiting_event` row checks only the events, like `reconcileRow`. The second-API-save window ends at the POST's end (or start plus the POST time-out) plus 5 s, in both recovery and the executor. |
+| 3329632f | L4 | Both releases also require `updated_at = halted_at` (nothing has written the control row since the lock) and no ` \| then: `. |
+| 2276e37e | L5 | `productionStillHalted: true` on `refused`, `not_sent` and `verified` when the release's compare-and-swap did not fire. |
+| 8d317a19 | L8, L10 | New tests: the stale release with a `posting` row left unsettled, and an incident write failing on the safety path. The fixture comment now says `API_ACTOR` is the real, public API user id. The other L8 tests landed with H1, M2 and M3. |
+| 3096fb38 | L2 | Documented, not changed: a `not_sent` correction still uses up the class's one correction. |
+| b178bf4a | — | JSDoc reflow. |
+
+### Interface changes PR C must follow
+
+- `CorrectPostInput.aiSuspect` is required: `{ studentNames, tutorNames, priorFeedback, styleGuided? }`. It needs at least one student name and one tutor name. Prior feedback is keyed by Wise session id; the class's own entry is ignored.
+- `correctionTextProblems(fields, { wiseSessionId, aiSuspect, textProblems })`.
+- `CorrectionStore.preconditions` returns `{ problems, firstShotPostedAt }`.
+- New methods: `CorrectionStore.databaseNow()` and `CorrectionLock.isHeld()`. Any fake store needs both.
+- `CorrectionOutcome`:
+  - `awaiting_event` is replaced by `awaiting_event_locked`. The lock is still held, so run `recover` after the lease.
+  - `productionStillHalted?` is added on `refused`, `not_sent` and `verified`.
+- `CorrectionRecoveryResult` gains `lease_live`.
+- Constants:
+  - `CORRECTION_EVENT_WAIT_MS` is now 5 min.
+  - `CORRECTION_LOCK_LEASE_MS` is now 20 min.
+  - `CORRECTION_STALE_AFTER_MS` is now 25 min.
+  - New: `CORRECTION_EVENT_POLL_MS`, `CORRECTION_MAX_CLOCK_SKEW_MS`, `CORRECTION_DAILY_CAP`.
+- Pass the executor and `pgCorrectionStore` the same `now`, or neither. The clock check compares the store's clock
+  with the database's.
+
+### Decisions beyond the review's wording
+
+- **H1, Thai check.** A draft's Thai check reads the model's text before the student's name is restored. A correction
+  has no such text, so the student's names from `aiSuspect` are removed before the check. A Thai Wise name passes;
+  Thai anywhere else is refused.
+- **H2, where the clock check lives.** The store's lock compares its own clock with the database clock. The executor's
+  `now` then drives only the window, the budgets and the waits. This keeps the integration tests possible: their
+  executor clock sits at minute 11, while the database clock is real time.
+- **L1, window start.** Starting the POST window at the session read (`freshReadAt`) alone would open a gap after the
+  events read, so the window starts at the events read instead.
+- **L4, the nonce.** The lock reason already carried a nonce: its lease token, a fresh UUID. A nonce cannot stop a
+  *new* reason that is a substring of the lock reason from being folded in by `haltAutowriter`. Only the
+  `updated_at = halted_at` guard can. The cost: an owner write during the lock (for example, switching a tutor)
+  leaves the autowriter halted until an owner resumes. The outcome says so (`productionStillHalted`).
+- **M4, `rootCauseRef` type.** It stays `string | null` for compatibility and is refused at runtime.
+- **M1, recover command.** `recoverStaleCorrections` and `releaseStaleCorrectionLock` stay separate calls; together
+  they make the `recover` command. The return type is unchanged.
+
+### Verification
+
+- **Unit** (`npx vitest run --project unit src/lib/feedback-autowriter`): 36 files, 855 tests, all passing. Before
+  the fixes: 821.
+- **Integration** (`correction-store.integration.test.ts` and `job.integration.test.ts`, OrbStack): 186 tests, all
+  passing. Before the fixes: 161. All eight autowriter integration files: 299 tests, all passing (before: 274).
+- **Static checks:** `eslint src/lib/feedback-autowriter` is clean. `tsc --noEmit` shows 27 errors, all from the
+  missing `d3` and `highs` packages (the tutor-offboarding workforce charts and the classrooms overflow planner).
+- **Mutation checks.** Each fix was broken, a failing test was seen, and the fix was restored.
+  - **H1:**
+    - Dropping the shared checks: 6 tests fail.
+    - Dropping the name masking: 1 fails.
+    - Dropping the AI-suspect check and the required input: 2 fail.
+  - **H2:**
+    - No clock check: 2 fail (the ±20 s integration tests).
+    - Windows on the local clock: 9 unit tests fail, plus the end-to-end integration test.
+  - **M2:**
+    - No `isHeld` before the POST: 3 unit and 1 integration fail.
+    - No budget re-check: 1 fails.
+    - Recovery under a live lease: 1 fails.
+    - An 8-minute lease: the lease invariant test fails.
+  - **M4:**
+    - The claim ignores the cap: 1 fails.
+    - The preconditions ignore the cap: 1 fails.
+    - No `root_cause_missing`: 2 fail.
+  - **Also caught:**
+    - L1's window anchor.
+    - M1's kept lock (unit and integration).
+    - M3's bounded window (unit and integration).
+    - Both L4 guards.
+
