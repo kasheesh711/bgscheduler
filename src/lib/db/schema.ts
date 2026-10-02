@@ -3,6 +3,7 @@ import type { RoomBotEvent, RoomEvidence } from "@/lib/room-booking/model";
 import type { CompletionEvidence, CoverageRevision, LeaveInterpretation, WorkStudent } from "@/lib/leave-requests/work-types";
 import {
   pgTable,
+  bigserial,
   type AnyPgColumn,
   primaryKey,
   uuid,
@@ -21,6 +22,54 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { Week, OfficeNetwork } from "@/lib/tutor-attendance/model";
+import type { WiseTeacher } from "@/lib/wise/types";
+import type { CaptureConsent, CaptureSession, DraftFields } from "@/lib/class-capture/model";
+
+// Short-lived onsite evidence. No relationship to feedback submission or payroll ledgers.
+export const classCaptures = pgTable("class_captures", {
+  id: uuid("id").primaryKey(),
+  createdByEmail: text("created_by_email").notNull(),
+  teacherKey: text("teacher_key").notNull(),
+  session: jsonb("session").$type<CaptureSession>().notNull(),
+  consent: jsonb("consent").$type<CaptureConsent>().notNull(),
+  consentVersion: text("consent_version").notNull().default("2026-10-01-v1"),
+  topic: text("topic").notNull(),
+  tutorNotes: text("tutor_notes").notNull().default(""),
+  draft: jsonb("draft").$type<DraftFields | null>(),
+  reviewed: boolean("reviewed").notNull().default(false),
+  version: integer("version").notNull().default(0),
+  draftLeaseUntil: timestamp("draft_lease_until", { withTimezone: true }),
+  draftAttempts: integer("draft_attempts").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  cleanupAttemptedAt: timestamp("cleanup_attempted_at", { withTimezone: true }),
+}, (t) => [index("class_captures_expiry_idx").on(t.expiresAt), index("class_captures_owner_idx").on(t.createdByEmail)]);
+
+export const classCaptureAssets = pgTable("class_capture_assets", {
+  id: uuid("id").primaryKey(),
+  captureId: uuid("capture_id").notNull().references(() => classCaptures.id, { onDelete: "cascade" }),
+  kind: text("kind").$type<"recording" | "debrief" | "worksheet">().notNull(),
+  worksheetPermission: boolean("worksheet_permission").notNull().default(false),
+  mime: text("mime").notNull(),
+  size: integer("size").notNull(),
+  pathname: text("pathname").notNull().unique(),
+  status: text("status").$type<"pending" | "ready" | "transcribing" | "transcribed" | "failed">().notNull().default("pending"),
+  transcript: text("transcript"),
+  error: text("error"),
+  providerFileId: text("provider_file_id"),
+  providerJobId: text("provider_job_id"),
+  processingStartedAt: timestamp("processing_started_at", { withTimezone: true }),
+  // Unknown network outcomes are never silently retried at a paid provider.
+  providerUncertain: boolean("provider_uncertain").notNull().default(false),
+  discardedAt: timestamp("discarded_at", { withTimezone: true }),
+  cleanupAttemptedAt: timestamp("cleanup_attempted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index("class_capture_assets_capture_idx").on(t.captureId),
+  check("class_capture_assets_bounds", sql`${t.size} > 0 and ${t.size} <= 104857600`),
+  check("class_capture_assets_kind", sql`${t.kind} in ('recording','debrief','worksheet')`),
+  check("class_capture_assets_status", sql`${t.status} in ('pending','ready','transcribing','transcribed','failed')`),
+]);
 
 // One outstanding browser-bound email challenge per approved-or-requested address.
 export const authEmailChallenges = pgTable("auth_email_challenges", {
@@ -2139,6 +2188,11 @@ export const tutorWiseAccounts = pgTable("tutor_wise_accounts", {
   isOnlineVariant: boolean("is_online_variant").notNull(),
   email: text("email"),
   status: text("status").notNull(),
+  // Tutor Offboarding roster details (OFF-02: null = unknown), written best-effort after each promotion.
+  wiseRelation: text("wise_relation"),
+  wiseJoinedOn: timestamp("wise_joined_on", { withTimezone: true }),
+  wiseCourseCount: integer("wise_course_count"),
+  wiseActivated: boolean("wise_activated"),
   lastSnapshotId: uuid("last_snapshot_id").notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [index("tutor_wise_accounts_key_idx").on(table.canonicalKey)]);
@@ -3741,6 +3795,70 @@ export const postClassSourceIssues = pgTable("post_class_source_issues", {
   index("pc_source_issues_session_idx").on(table.sessionId),
 ]);
 
+export interface FeedbackReceiptEvidence {
+  hash: string;
+  actor: string;
+  binding: string;
+  expiresAt: string;
+  attempts: number;
+  acceptedAt?: string;
+  receipt?: string;
+  confirmedAt?: string;
+}
+
+/** Separate send-only grant: ordinary Google login never touches this row. */
+export const postClassEmailConnection = pgTable("post_class_email_connection", {
+  id: text("id").primaryKey().default("gmail"),
+  clientId: text("client_id").notNull(),
+  mailbox: text("mailbox").notNull(),
+  googleSubject: text("google_subject").notNull(),
+  revision: integer("revision").notNull().default(1),
+  accessTokenCiphertext: text("access_token_ciphertext").notNull(),
+  refreshTokenCiphertext: text("refresh_token_ciphertext").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  scope: text("scope").notNull(),
+  connectedBy: text("connected_by").notNull(),
+  connectedAt: timestamp("connected_at", { withTimezone: true }).notNull().defaultNow(),
+  refreshedAt: timestamp("refreshed_at", { withTimezone: true }),
+  checkedAt: timestamp("checked_at", { withTimezone: true }),
+  lastError: text("last_error"),
+  testEvidence: jsonb("test_evidence").$type<FeedbackReceiptEvidence>(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const postClassReminderLineChannel = pgTable("post_class_reminder_line_channel", {
+  id: text("id").primaryKey().default("private"),
+  recipientId: text("recipient_id").notNull(),
+  binding: text("binding").notNull(),
+  testEvidence: jsonb("test_evidence").$type<FeedbackReceiptEvidence>(),
+  health: text("health").notNull().default("unknown"),
+  episodeId: uuid("episode_id"),
+  checkedAt: timestamp("checked_at", { withTimezone: true }),
+  detail: text("detail"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Frozen private alerts; id is also LINE's 24-hour retry key. */
+export const postClassReminderAlerts = pgTable("post_class_reminder_alerts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  episodeId: uuid("episode_id").notNull(),
+  kind: text("kind").notNull(),
+  recipientId: text("recipient_id").notNull(),
+  binding: text("binding").notNull(),
+  message: text("message").notNull(),
+  status: text("status").notNull().default("pending"),
+  attempts: integer("attempts").notNull().default(0),
+  firstAttemptAt: timestamp("first_attempt_at", { withTimezone: true }),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  leaseToken: uuid("lease_token"),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  lastError: text("last_error"),
+  receipt: text("receipt"),
+  acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [uniqueIndex("pc_reminder_alert_episode_idx").on(table.episodeId, table.kind)]);
+
 export const postClassNotificationRuns = pgTable("post_class_notification_runs", {
   id: uuid("id").primaryKey().defaultRandom(),
   kind: postClassNotificationKindEnum("kind").notNull(),
@@ -4084,6 +4202,8 @@ export const postClassPayoutTutorNames = pgTable("post_class_payout_tutor_names"
   updatedByEmail: text("updated_by_email").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  /** Removal/replacement/activation guard; adding an alias only advances updatedAt. */
+  identityChangedAt: timestamp("identity_changed_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("pc_payout_tutor_names_key_idx").on(table.canonicalKey),
   uniqueIndex("pc_payout_tutor_names_primary_idx").on(table.primaryLedgerName),
@@ -4137,6 +4257,8 @@ export const postClassPayoutRunLines = pgTable("post_class_payout_run_lines", {
   scheduledEndAt: timestamp("scheduled_end_at", { withTimezone: true }).notNull(),
   deadlineAt: timestamp("deadline_at", { withTimezone: true }).notNull(),
   tutorSubmittedAt: timestamp("tutor_submitted_at", { withTimezone: true }),
+  /** 1 = historical non-auto events; 2 = non-auto TEACHER/ADMIN events. */
+  submissionEvidenceVersion: integer("submission_evidence_version").notNull().default(2),
   /** Signed minor units: deductions are negative; corrections are separate positive rows. */
   amountMinor: integer("amount_minor").notNull(),
   currency: text("currency").notNull().default("THB"),
@@ -4173,6 +4295,7 @@ export const postClassPayoutRunLines = pgTable("post_class_payout_run_lines", {
   index("pc_payout_run_lines_tutor_idx").on(table.runId, table.canonicalTutorKey),
   check("pc_payout_run_lines_kind_check", sql`${table.lineKind} = 'deduction'`),
   check("pc_payout_run_lines_signed_check", sql`${table.amountMinor} < 0`),
+  check("pc_payout_run_lines_evidence_check", sql`${table.submissionEvidenceVersion} in (1, 2)`),
 ]);
 
 /**
@@ -6156,7 +6279,7 @@ export const feedbackAutowriterSessions = pgTable("feedback_autowriter_sessions"
   nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
   leaseToken: uuid("lease_token"),
   leaseUntil: timestamp("lease_until", { withTimezone: true }),
-  arm: text("arm").$type<"glm" | "luna">(),
+  arm: text("arm").$type<"glm" | "luna" | "sol">(),
   fields: jsonb("fields").$type<Record<string, string>>(),
   fieldsSha256: text("fields_sha256"),
   billing: jsonb("billing").$type<Record<string, unknown>>(),
@@ -6182,7 +6305,7 @@ export const feedbackAutowriterCalls = pgTable("feedback_autowriter_calls", {
   id: uuid("id").primaryKey().defaultRandom(),
   wiseSessionId: text("wise_session_id").notNull(),
   role: text("role").$type<"writer" | "judge" | "transcriber">().notNull(),
-  arm: text("arm").$type<"glm" | "luna" | "soniox">().notNull(),
+  arm: text("arm").$type<"glm" | "luna" | "sol" | "soniox">().notNull(),
   requestedModel: text("requested_model").notNull(),
   resolvedModel: text("resolved_model"),
   provider: text("provider"),
@@ -6216,4 +6339,543 @@ export const wiseWebhookEvents = pgTable("wise_webhook_events", {
 }, (table) => [
   uniqueIndex("wise_webhook_events_dedupe_idx").on(table.dedupeKey),
   index("wise_webhook_events_session_idx").on(table.wiseSessionId, table.receivedAt),
+]);
+
+// ---------------------------------------------------------------------------
+// Feedback autowriter operating loop, Phase 1 (migration 0101): measurement.
+// Immutable post log, owner verdicts, fixes measured from Wise activity events,
+// quality metrics and the expansion gate. Nothing here writes to Wise.
+// ---------------------------------------------------------------------------
+
+export type AutowriterVerdictSeverity = "cosmetic" | "factual" | "critical";
+export type AutowriterCriticalCategory = "wrong_person" | "billing_status" | "invented_content" | "should_not_have_posted";
+
+/** Every text put in Wise for a class: the first shot and each re-post. Content immutable (trigger, 55000). */
+export const feedbackAutowriterPosts = pgTable("feedback_autowriter_posts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  wiseSessionId: text("wise_session_id").notNull(),
+  wiseClassId: text("wise_class_id"),
+  wiseTeacherUserId: text("wise_teacher_user_id"),
+  /** `policy`: a one-time re-post for an owner policy change (the 29 Sep nickname rule), never counted as a fix. */
+  kind: text("kind").$type<"first_shot" | "correction" | "policy">().notNull(),
+  correctionId: uuid("correction_id"),
+  fields: jsonb("fields").$type<Record<string, string>>().notNull(),
+  fieldsSha256: text("fields_sha256").notNull(),
+  bodyHash: text("body_hash"),
+  billing: jsonb("billing").$type<Record<string, unknown>>().notNull(),
+  arm: text("arm"),
+  evidence: text("evidence"),
+  pipeline: jsonb("pipeline").$type<Record<string, unknown>>(),
+  actorKind: text("actor_kind").$type<"autowriter" | "owner" | "agent" | "script">().notNull(),
+  actor: text("actor").notNull(),
+  reason: text("reason"),
+  postStartedAt: timestamp("post_started_at", { withTimezone: true }),
+  postFinishedAt: timestamp("post_finished_at", { withTimezone: true }),
+  outcome: text("outcome").$type<
+    "posting" | "awaiting_event" | "verified" | "not_sent" | "rejected" | "unknown_outcome" | "verify_failed"
+  >().notNull(),
+  verification: jsonb("verification").$type<Record<string, unknown>>().notNull().default({}),
+  provenance: text("provenance").$type<"snapshot" | "live" | "backfill">().notNull(),
+  reconstruction: jsonb("reconstruction").$type<Record<string, unknown>>(),
+  /** A writer's own idempotency key (e.g. `nickname-fix:<session>`): the same re-post is never recorded twice. */
+  dedupeKey: text("dedupe_key"),
+  recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
+  settledAt: timestamp("settled_at", { withTimezone: true }),
+}, (table) => [
+  uniqueIndex("feedback_autowriter_posts_first_shot_idx").on(table.wiseSessionId).where(sql`${table.kind} = 'first_shot'`),
+  uniqueIndex("feedback_autowriter_posts_dedupe_idx").on(table.dedupeKey).where(sql`${table.dedupeKey} IS NOT NULL`),
+  index("feedback_autowriter_posts_session_idx").on(table.wiseSessionId, table.recordedAt),
+]);
+
+/** Owner verdicts, append-only, pinned to the fields_sha256 of the text judged. */
+export const feedbackAutowriterVerdicts = pgTable("feedback_autowriter_verdicts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  wiseSessionId: text("wise_session_id").notNull(),
+  targetKind: text("target_kind").$type<"post" | "dry_run">().notNull().default("post"),
+  postId: uuid("post_id").references(() => feedbackAutowriterPosts.id),
+  dryRunId: uuid("dry_run_id"),
+  fieldsSha256: text("fields_sha256").notNull(),
+  verdict: text("verdict").$type<"approve" | "needs_fix">().notNull(),
+  severity: text("severity").$type<AutowriterVerdictSeverity>(),
+  criticalCategory: text("critical_category").$type<AutowriterCriticalCategory>(),
+  note: text("note"),
+  reviewer: text("reviewer").notNull(),
+  source: text("source").$type<"dashboard" | "backfill">().notNull(),
+  supersedesId: uuid("supersedes_id").references((): AnyPgColumn => feedbackAutowriterVerdicts.id),
+  /** This verdict replaced a harsher judgement (critical verdict or flag, or a major verdict) with a milder one, with a note. */
+  downgradedFrom: text("downgraded_from").$type<"critical" | "factual">(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("feedback_autowriter_verdicts_session_idx").on(table.wiseSessionId, table.createdAt),
+  check("feedback_autowriter_verdicts_downgrade_check", sql`${table.downgradedFrom} IS NULL OR (btrim(coalesce(${table.note}, '')) <> '' AND (
+    (${table.downgradedFrom} = 'critical' AND coalesce(${table.severity}, '') <> 'critical')
+    OR (${table.downgradedFrom} = 'factual' AND coalesce(${table.severity}, '') NOT IN ('critical', 'factual'))))`),
+]);
+
+/** One per posted class: review inclusion (drawn once, before any flag) and the current verdict. */
+export const feedbackAutowriterReviews = pgTable("feedback_autowriter_reviews", {
+  wiseSessionId: text("wise_session_id").primaryKey(),
+  firstPostId: uuid("first_post_id").notNull().unique().references(() => feedbackAutowriterPosts.id),
+  tutorKey: text("tutor_key").notNull(),
+  wiseTeacherUserId: text("wise_teacher_user_id"),
+  classEndedAt: timestamp("class_ended_at", { withTimezone: true }),
+  bangkokDate: date("bangkok_date", { mode: "string" }).notNull(),
+  inclusionReason: text("inclusion_reason").$type<"new_tutor" | "random_sample" | "not_sampled">().notNull(),
+  inclusionProbability: numeric("inclusion_probability", { precision: 4, scale: 3 }).notNull(),
+  sampleDraw: doublePrecision("sample_draw").notNull(),
+  samplingPolicy: text("sampling_policy").notNull(),
+  flaggedAt: timestamp("flagged_at", { withTimezone: true }),
+  flagSources: text("flag_sources").array().notNull().default(sql`'{}'::text[]`),
+  currentVerdictId: uuid("current_verdict_id").references(() => feedbackAutowriterVerdicts.id),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+  /** Saves after our first post, up to the current Approve (all of them while there is none) … */
+  measuredFixCount: integer("measured_fix_count").notNull().default(0),
+  /** … and the same saves per actor kind. */
+  measuredFixesByActor: jsonb("measured_fixes_by_actor").$type<Record<string, number>>().notNull().default({}),
+  correctionsVerified: integer("corrections_verified").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("feedback_autowriter_reviews_date_idx").on(table.bangkokDate, table.tutorKey),
+]);
+
+/** Reasons a post needs the owner's eyes; resolved by the next verdict on the class. */
+export const feedbackAutowriterFlags = pgTable("feedback_autowriter_flags", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  wiseSessionId: text("wise_session_id").notNull(),
+  source: text("source").$type<"measured_fix" | "agent" | "owner" | "api_unmatched" | "system">().notNull(),
+  suggestedSeverity: text("suggested_severity").$type<AutowriterVerdictSeverity>(),
+  suggestedCategory: text("suggested_category").$type<AutowriterCriticalCategory>(),
+  note: text("note"),
+  createdBy: text("created_by").notNull(),
+  idempotencyKey: text("idempotency_key").notNull().unique(),
+  resolvedByVerdictId: uuid("resolved_by_verdict_id").references(() => feedbackAutowriterVerdicts.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("feedback_autowriter_flags_open_idx").on(table.wiseSessionId).where(sql`${table.resolvedByVerdictId} IS NULL`),
+]);
+
+/** Feedback saves on autowriter classes, derived from `wise_activity_events` (re-derivable). */
+export const feedbackAutowriterFixEvents = pgTable("feedback_autowriter_fix_events", {
+  wiseEventId: text("wise_event_id").primaryKey(),
+  wiseActivityEventId: uuid("wise_activity_event_id").references(() => wiseActivityEvents.id, { onDelete: "set null" }),
+  wiseSessionId: text("wise_session_id").notNull(),
+  eventAt: timestamp("event_at", { withTimezone: true }).notNull(),
+  actorWiseUserId: text("actor_wise_user_id"),
+  actorRole: text("actor_role"),
+  autoSubmitted: boolean("auto_submitted"),
+  actorKind: text("actor_kind").$type<
+    | "autowriter_first" | "autowriter_correction" | "autowriter_policy" | "api_actor_unmatched" | "owner_web" | "tutor"
+    | "other_staff" | "student" | "auto"
+  >().notNull(),
+  postId: uuid("post_id").references(() => feedbackAutowriterPosts.id),
+  countsAsFix: boolean("counts_as_fix").notNull(),
+  classifierVersion: integer("classifier_version").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("feedback_autowriter_fix_events_session_idx").on(table.wiseSessionId, table.eventAt),
+]);
+
+/** Outbox of things a person must know; critical ones are pushed (email, optional LINE) and retried. */
+export const feedbackAutowriterIncidents = pgTable("feedback_autowriter_incidents", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  dedupeKey: text("dedupe_key").notNull().unique(),
+  kind: text("kind").$type<
+    | "halt" | "correction_failed" | "critical_verdict" | "critical_flag" | "credit_entries_changed"
+    | "api_actor_unmatched" | "first_shot_unverified" | "scan_failed"
+  >().notNull(),
+  severity: text("severity").$type<"critical" | "info">().notNull(),
+  wiseSessionId: text("wise_session_id"),
+  summary: text("summary").notNull(),
+  detail: jsonb("detail").$type<Record<string, unknown>>().notNull().default({}),
+  pushStatus: text("push_status").$type<"pending" | "sent" | "failed" | "not_required">().notNull(),
+  pushAttempts: integer("push_attempts").notNull().default(0),
+  pushedChannels: text("pushed_channels").array().notNull().default(sql`'{}'::text[]`),
+  pushedAt: timestamp("pushed_at", { withTimezone: true }),
+  lastPushError: text("last_push_error"),
+  nextPushAt: timestamp("next_push_at", { withTimezone: true }),
+  acknowledgedAt: timestamp("acknowledged_at", { withTimezone: true }),
+  acknowledgedBy: text("acknowledged_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("feedback_autowriter_incidents_pending_idx").on(table.nextPushAt).where(sql`${table.pushStatus} = 'pending'`),
+]);
+
+/** Quality metrics per Bangkok date and tutor (`*` = all); recomputed by the review job. */
+export const feedbackAutowriterDailyMetrics = pgTable("feedback_autowriter_daily_metrics", {
+  metricDate: date("metric_date", { mode: "string" }).notNull(),
+  tutorKey: text("tutor_key").notNull(),
+  liveMode: boolean("live_mode").notNull().default(false),
+  posted: integer("posted").notNull().default(0),
+  required: integer("required").notNull().default(0),
+  reviewed: integer("reviewed").notNull().default(0),
+  requiredPending: integer("required_pending").notNull().default(0),
+  accurate: integer("accurate").notNull().default(0),
+  cosmetic: integer("cosmetic").notNull().default(0),
+  factual: integer("factual").notNull().default(0),
+  critical: integer("critical").notNull().default(0),
+  eligible: integer("eligible").notNull().default(0),
+  excludedScope: integer("excluded_scope").notNull().default(0),
+  excludedTutorFirst: integer("excluded_tutor_first").notNull().default(0),
+  /** Held for the class's own data (D-03: recording, speakers, transcript, absence, not a Wise user): left out. */
+  excludedDataQuality: integer("excluded_data_quality").notNull().default(0),
+  excludedTutorOff: integer("excluded_tutor_off").notNull().default(0),
+  excludedNotLive: integer("excluded_not_live").notNull().default(0),
+  pending: integer("pending").notNull().default(0),
+  unseen: integer("unseen").notNull().default(0),
+  /** Any other hold (our drafts rejected, form or billing drift, errors): a miss. */
+  held: integer("held").notNull().default(0),
+  expired: integer("expired").notNull().default(0),
+  failed: integer("failed").notNull().default(0),
+  /** A person wrote the class after we started writing it (our first writer call). */
+  late: integer("late").notNull().default(0),
+  measuredFixClasses: integer("measured_fix_classes").notNull().default(0),
+  correctionsVerified: integer("corrections_verified").notNull().default(0),
+  policyVersion: integer("policy_version").notNull(),
+  computedAt: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.metricDate, table.tutorKey] }),
+]);
+
+/** Expansion-gate evaluations, append-only; one `daily` row per Bangkok date. */
+export const feedbackAutowriterGateEvaluations = pgTable("feedback_autowriter_gate_evaluations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  evalKind: text("eval_kind").$type<"daily" | "on_demand" | "expansion_confirm">().notNull(),
+  bangkokDate: date("bangkok_date", { mode: "string" }).notNull(),
+  windowStart: date("window_start", { mode: "string" }).notNull(),
+  windowEnd: date("window_end", { mode: "string" }).notNull(),
+  rosterTutors: text("roster_tutors").array().notNull(),
+  reviewed: integer("reviewed").notNull(),
+  accurate: integer("accurate").notNull(),
+  /** Unrounded (a rounded bound could read as meeting a threshold the status says it missed). */
+  wilsonLower: doublePrecision("wilson_lower").notNull(),
+  critical: integer("critical").notNull(),
+  pendingCriticalFlags: integer("pending_critical_flags").notNull(),
+  pendingFlaggedReviews: integer("pending_flagged_reviews").notNull(),
+  requiredPending: integer("required_pending").notNull(),
+  unrecordedPosts: integer("unrecorded_posts").notNull(),
+  unexplainedApiWrites: integer("unexplained_api_writes").notNull(),
+  coverageNum: integer("coverage_num").notNull(),
+  coverageDen: integer("coverage_den").notNull(),
+  status: text("status").$type<"insufficient_data" | "below_head_start" | "head_start" | "pass" | "blocked_critical">().notNull(),
+  reasons: text("reasons").array().notNull().default(sql`'{}'::text[]`),
+  thresholds: jsonb("thresholds").$type<Record<string, unknown>>().notNull(),
+  createdBy: text("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("feedback_autowriter_gate_evaluations_daily_idx").on(table.bangkokDate).where(sql`${table.evalKind} = 'daily'`),
+  check("feedback_autowriter_gate_evaluations_wilson_lower_check", sql`${table.wilsonLower} >= 0 AND ${table.wilsonLower} <= 1`),
+]);
+
+/** Run ledger of the hourly review job; single-flight through the partial unique index on `running`. */
+export const feedbackAutowriterReviewRuns = pgTable("feedback_autowriter_review_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  status: text("status").$type<"running" | "succeeded" | "failed">().notNull().default("running"),
+  triggerSource: text("trigger_source").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  counts: jsonb("counts").$type<Record<string, unknown>>().notNull().default({}),
+  errorSummary: text("error_summary"),
+}, (table) => [
+  uniqueIndex("feedback_autowriter_review_runs_single_running_idx").on(table.status).where(sql`${table.status} = 'running'`),
+  index("feedback_autowriter_review_runs_started_idx").on(table.startedAt),
+]);
+
+/**
+ * Every change of the control row's mode or tutor switches (trigger on `feedback_autowriter_control`), append-only.
+ * Coverage judges each class by the switches during its own posting window.
+ */
+export const feedbackAutowriterControlHistory = pgTable("feedback_autowriter_control_history", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  changedAt: timestamp("changed_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  mode: text("mode").$type<"off" | "shadow" | "live">().notNull(),
+  disabledTutors: jsonb("disabled_tutors").$type<string[]>().notNull(),
+  source: text("source").$type<"seed" | "change">().notNull(),
+  updatedBy: text("updated_by"),
+}, (table) => [
+  index("feedback_autowriter_control_history_changed_idx").on(table.changedAt),
+]);
+
+/** Roster accounts as the review job saw them (a class the autowriter never saw is judged only while on the roster). */
+export const feedbackAutowriterRosterAccounts = pgTable("feedback_autowriter_roster_accounts", {
+  wiseTeacherUserId: text("wise_teacher_user_id").primaryKey(),
+  tutorKey: text("tutor_key").notNull(),
+  firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+}, (table) => [
+  check("feedback_autowriter_roster_accounts_seen_check", sql`${table.lastSeenAt} >= ${table.firstSeenAt}`),
+]);
+
+// ── Tutor Offboarding ────────────────────────────────────────────────
+
+/** "Still with us" decisions on the departed-tutor detector; each keeps the score it overrode (future labels). */
+// OFF-15: last complete read of the owner's termination sheet, plus latest source health.
+export const tutorOffboardingSheetSource = pgTable("tutor_offboarding_sheet_source", {
+  sourceKey: text("source_key").primaryKey(),
+  rows: jsonb("rows").$type<Array<{
+    sourceRow: number; fullName: string; wiseName: string; nickname: string;
+    emails: string[]; terminated: boolean;
+  }>>().notNull().default([]),
+  checkedAt: timestamp("checked_at", { withTimezone: true }),
+  attemptedAt: timestamp("attempted_at", { withTimezone: true }).notNull().defaultNow(),
+  lastError: text("last_error"),
+});
+
+export const tutorOffboardingDecisions = pgTable("tutor_offboarding_decisions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  canonicalKey: text("canonical_key").notNull(),
+  kind: text("kind").notNull().default("still_with_us"),
+  note: text("note"),
+  snoozeUntil: timestamp("snooze_until", { withTimezone: true }).notNull(),
+  likelihoodAtDecision: integer("likelihood_at_decision").notNull(),
+  bandAtDecision: text("band_at_decision").notNull(),
+  reasons: jsonb("reasons").$type<string[]>().notNull().default([]),
+  decidedByEmail: text("decided_by_email").notNull(),
+  decidedAt: timestamp("decided_at", { withTimezone: true }).notNull().defaultNow(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  revokedByEmail: text("revoked_by_email"),
+}, (table) => [
+  index("tod_open_key_idx").on(table.canonicalKey).where(sql`${table.revokedAt} is null`),
+  index("tod_decided_at_idx").on(table.decidedAt),
+  check("tod_kind_check", sql`${table.kind} in ('still_with_us')`),
+  check("tod_band_check", sql`${table.bandAtDecision} in ('very_likely_gone', 'likely_gone', 'unclear', 'active')`),
+]);
+
+/** OFF-11: who may remove departed tutors from Wise. Managed by the owner; read fresh on every request. */
+export const tutorOffboardingAccessGrants = pgTable("tutor_offboarding_access_grants", {
+  email: text("email").primaryKey(),
+  grantedByEmail: text("granted_by_email").notNull(),
+  grantedAt: timestamp("granted_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Grant-change history: the application only appends; no database immutability trigger. */
+export const tutorOffboardingAccessAuditLog = pgTable("tutor_offboarding_access_audit_log", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  action: text("action").notNull(),
+  email: text("email").notNull(),
+  actorEmail: text("actor_email").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("toaal_created_at_idx").on(table.createdAt),
+  check("toaal_action_check", sql`${table.action} in ('grant', 'revoke')`),
+]);
+
+/** A preview/apply lifecycle for an explicitly selected person-level removal. */
+export const tutorOffboardingRuns = pgTable("tutor_offboarding_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  status: text("status").notNull(),
+  mode: text("mode").notNull(),
+  reason: text("reason"),
+  previewToken: text("preview_token").notNull(),
+  previewExpiresAt: timestamp("preview_expires_at", { withTimezone: true }).notNull(),
+  tutorCount: integer("tutor_count").notNull(),
+  accountCount: integer("account_count").notNull(),
+  createdByEmail: text("created_by_email").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  appliedByEmail: text("applied_by_email"),
+  appliedAt: timestamp("applied_at", { withTimezone: true }),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+}, (table) => [
+  uniqueIndex("tutor_offboarding_one_applying_uidx").on(table.status).where(sql`${table.status} = 'applying'`),
+  index("tutor_offboarding_runs_created_at_idx").on(table.createdAt),
+  check("tutor_offboarding_run_status_check", sql`${table.status} in ('previewed', 'applying', 'applied', 'applied_with_errors', 'expired')`),
+  check("tutor_offboarding_run_mode_check", sql`${table.mode} in ('live', 'manual')`),
+]);
+
+/** Immutable per-account snapshot and result log for each removal run. */
+export const tutorOffboardingRunAccounts = pgTable("tutor_offboarding_run_accounts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => tutorOffboardingRuns.id, { onDelete: "cascade" }),
+  canonicalKey: text("canonical_key").notNull(),
+  displayName: text("display_name").notNull(),
+  wiseTeacherId: text("wise_teacher_id").notNull(),
+  wiseUserId: text("wise_user_id"),
+  isOnlineVariant: boolean("is_online_variant").notNull(),
+  accountSnapshot: jsonb("account_snapshot").$type<WiseTeacher>().notNull(),
+  likelihoodAtPreview: integer("likelihood_at_preview").notNull(),
+  reasons: jsonb("reasons").$type<string[]>().notNull().default([]),
+  plan: text("plan").notNull(),
+  skipReason: text("skip_reason"),
+  status: text("status").notNull().default("planned"),
+  requestPayload: jsonb("request_payload").$type<Record<string, unknown> | null>(),
+  responsePayload: jsonb("response_payload").$type<Record<string, unknown> | null>(),
+  errorMessage: text("error_message"),
+  localStateBefore: jsonb("local_state_before").$type<{ contactActive: boolean | null; profileActive: boolean | null } | null>(),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("tutor_offboarding_run_account_teacher_uidx").on(table.runId, table.wiseTeacherId),
+  index("tutor_offboarding_run_accounts_run_idx").on(table.runId),
+  check("tutor_offboarding_run_account_plan_check", sql`${table.plan} in ('remove', 'skip')`),
+  check("tutor_offboarding_run_account_status_check", sql`${table.status} in ('planned', 'skipped', 'sending', 'sent', 'rejected', 'unknown', 'verified', 'not_removed', 'manual_required', 'removed_manually', 'restored')`),
+]);
+
+
+// ISEB feedback enrichment. Stable student links are approved by staff; activity evidence is append-only.
+export const feedbackAtomLinks = pgTable("feedback_atom_links", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  wiseStudentId: text("wise_student_id").notNull(),
+  atomStudentId: text("atom_student_id").notNull(),
+  wiseName: text("wise_name").notNull(),
+  atomName: text("atom_name").notNull(),
+  revision: integer("revision").notNull(),
+  active: boolean("active").notNull().default(true),
+  approvedBy: text("approved_by").notNull(),
+  approvedAt: timestamp("approved_at", { withTimezone: true }).notNull().defaultNow(),
+  note: text("note").notNull(),
+}, table => [
+  uniqueIndex("feedback_atom_link_revision_idx").on(table.wiseStudentId, table.revision),
+  uniqueIndex("feedback_atom_link_wise_active_idx").on(table.wiseStudentId).where(sql`${table.active}`),
+  uniqueIndex("feedback_atom_link_atom_active_idx").on(table.atomStudentId).where(sql`${table.active}`),
+]);
+
+export const feedbackAtomSyncRuns = pgTable("feedback_atom_sync_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  status: text("status").$type<"running" | "succeeded" | "failed">().notNull().default("running"),
+  triggerSource: text("trigger_source").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  deploymentId: text("deployment_id"),
+  counts: jsonb("counts").$type<Record<string, unknown>>().notNull().default({}),
+  errorCode: text("error_code"),
+}, table => [uniqueIndex("feedback_atom_single_sync_idx").on(table.status).where(sql`${table.status} = 'running'`)]);
+
+export const feedbackAtomSnapshots = pgTable("feedback_atom_snapshots", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => feedbackAtomSyncRuns.id),
+  atomStudentId: text("atom_student_id").notNull(),
+  sourceHash: text("source_hash").notNull(),
+  schemaVersion: integer("schema_version").notNull().default(1),
+  collectedAt: timestamp("collected_at", { withTimezone: true }).notNull().defaultNow(),
+  activities: jsonb("activities").$type<import("../feedback-autowriter/atom/types").AtomActivity[]>().notNull(),
+}, table => [index("feedback_atom_snapshot_student_idx").on(table.atomStudentId, table.collectedAt)]);
+
+/** One complete Wise day, shared by every student in that collection run. */
+export const feedbackAtomTimetables = pgTable("feedback_atom_timetables", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => feedbackAtomSyncRuns.id),
+  bangkokDate: text("bangkok_date").notNull(),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull().defaultNow(),
+  lessons: jsonb("lessons").$type<import("../feedback-autowriter/atom/types").AtomLesson[]>().notNull(),
+}, table => [index("feedback_atom_timetable_date_idx").on(table.bangkokDate, table.observedAt)]);
+
+/** Exact inputs retained even after the external transcript's review window expires. */
+export const feedbackIsebEvidence = pgTable("feedback_iseb_evidence", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  wiseSessionId: text("wise_session_id").notNull(),
+  evidenceHash: text("evidence_hash").notNull(),
+  atom: jsonb("atom").$type<import("../feedback-autowriter/atom/types").AtomLessonEvidence>(),
+  lessonRecord: text("lesson_record").notNull(),
+  evidenceKind: text("evidence_kind").$type<"summary" | "transcript">().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => [uniqueIndex("feedback_iseb_evidence_hash_idx").on(table.wiseSessionId, table.evidenceHash)]);
+
+export const feedbackIsebStyleReviews = pgTable("feedback_iseb_style_reviews", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  postId: uuid("post_id").notNull().references(() => feedbackAutowriterPosts.id),
+  fieldsSha256: text("fields_sha256").notNull(),
+  status: text("status").$type<"passed" | "flagged" | "unavailable">().notNull(),
+  reviewVersion: integer("review_version").notNull().default(1),
+  result: jsonb("result").$type<Record<string, unknown>>().notNull(),
+  model: text("model"),
+  costUsd: numeric("cost_usd", { precision: 12, scale: 8 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => [index("feedback_iseb_style_post_idx").on(table.postId, table.createdAt)]);
+
+/** Owner-approved rollout receipt. No automatic approval and no inferred laptop-off claim. */
+export const feedbackIsebRollouts = pgTable("feedback_iseb_rollouts", {
+  id: text("id").primaryKey(),
+  approvedBy: text("approved_by"),
+  approvedAt: timestamp("approved_at", { withTimezone: true }),
+  comparisonHash: text("comparison_hash"),
+  cloudProofRunId: uuid("cloud_proof_run_id").references(() => feedbackAtomSyncRuns.id),
+  unattendedConfirmedBy: text("unattended_confirmed_by"),
+  cloudProofReview: jsonb("cloud_proof_review").$type<import("../feedback-autowriter/atom/types").AtomCloudProofReview>(),
+  activatedAt: timestamp("activated_at", { withTimezone: true }),
+  receipt: jsonb("receipt").$type<Record<string, unknown>>().notNull().default({}),
+});
+
+
+// Workforce history deliberately has no foreign keys to rotating snapshots.
+export const workforceCaptureRuns = pgTable("workforce_capture_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sourceKey: text("source_key").notNull(),
+  kind: text("kind").notNull(),
+  sourceSnapshotId: text("source_snapshot_id"),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  complete: boolean("complete").notNull(),
+  coverage: jsonb("coverage").$type<Record<string, unknown>>().notNull(),
+}, t => [uniqueIndex("workforce_capture_source_idx").on(t.sourceKey), index("workforce_capture_time_idx").on(t.observedAt), check("workforce_capture_kind", sql`${t.kind} in ('roster', 'history')`)]);
+
+export const workforcePersonVersions = pgTable("workforce_person_versions", {
+  id: uuid("id").primaryKey().defaultRandom(), versionOrder: bigserial("version_order", { mode: "number" }).notNull(),
+  canonicalKey: text("canonical_key").notNull(), contentHash: text("content_hash").notNull(),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+}, t => [index("workforce_person_version_key_idx").on(t.canonicalKey, t.observedAt)]);
+
+export const workforcePersonObservations = pgTable("workforce_person_observations", {
+  id: uuid("id").primaryKey().defaultRandom(), runId: uuid("run_id").notNull().references(() => workforceCaptureRuns.id),
+  canonicalKey: text("canonical_key").notNull(),
+  versionId: uuid("version_id").references(() => workforcePersonVersions.id),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  quality: jsonb("quality").$type<Record<string, unknown>>().notNull(),
+}, t => [uniqueIndex("workforce_person_observation_run_idx").on(t.runId, t.canonicalKey), index("workforce_person_observation_time_idx").on(t.canonicalKey, t.observedAt)]);
+
+export const workforceSessionVersions = pgTable("workforce_session_versions", {
+  id: uuid("id").primaryKey().defaultRandom(), versionOrder: bigserial("version_order", { mode: "number" }).notNull(),
+  wiseSessionId: text("wise_session_id").notNull(), contentHash: text("content_hash").notNull(),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  startAt: timestamp("start_at", { withTimezone: true }).notNull(),
+  runId: uuid("run_id").notNull().references(() => workforceCaptureRuns.id),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+}, t => [index("workforce_session_version_key_idx").on(t.wiseSessionId, t.observedAt), index("workforce_session_version_start_idx").on(t.startAt)]);
+
+export const workforceCreditVersions = pgTable("workforce_credit_versions", {
+  id: uuid("id").primaryKey().defaultRandom(), versionOrder: bigserial("version_order", { mode: "number" }).notNull(),
+  wiseSessionId: text("wise_session_id").notNull(), wiseStudentId: text("wise_student_id").notNull(),
+  contentHash: text("content_hash").notNull(), observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  runId: uuid("run_id").notNull().references(() => workforceCaptureRuns.id),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+}, t => [index("workforce_credit_version_key_idx").on(t.wiseSessionId, t.wiseStudentId, t.observedAt)]);
+
+export const workforceSubjectMappings = pgTable("workforce_subject_mappings", {
+  id: uuid("id").primaryKey().defaultRandom(), classId: text("class_id"), sourceValue: text("source_value").notNull(),
+  subject: text("subject").notNull(), curriculum: text("curriculum"), level: text("level"),
+  revision: integer("revision").notNull(), reviewedBy: text("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+}, t => [index("workforce_subject_mapping_class_idx").on(t.classId), check("workforce_mapping_revision", sql`${t.revision} > 0`)]);
+
+export const workforceBookingClassifications = pgTable("workforce_booking_classifications", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  wiseSessionId: text("wise_session_id").notNull(),
+  revision: integer("revision").notNull(),
+  contentHash: text("content_hash").notNull(),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  isCurrent: boolean("is_current").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+}, t => [
+  uniqueIndex("workforce_booking_classification_revision_idx").on(t.wiseSessionId, t.revision),
+  uniqueIndex("workforce_booking_classification_current_idx").on(t.wiseSessionId).where(sql`${t.isCurrent}`),
+  check("workforce_booking_classification_revision", sql`${t.revision} > 0`),
+]);
+
+export const workforceCourseLifecycleEvents = pgTable("workforce_course_lifecycle_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  eventKey: text("event_key").notNull(),
+  revision: integer("revision").notNull(),
+  studentId: text("student_id").notNull(),
+  subject: text("subject").notNull(),
+  effectiveMonth: text("effective_month").notNull(),
+  contentHash: text("content_hash").notNull(),
+  recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
+  isCurrent: boolean("is_current").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+}, t => [
+  uniqueIndex("workforce_lifecycle_revision_idx").on(t.eventKey, t.revision),
+  uniqueIndex("workforce_lifecycle_current_idx").on(t.eventKey).where(sql`${t.isCurrent}`),
+  index("workforce_lifecycle_student_subject_idx").on(t.studentId, t.subject, t.effectiveMonth),
+  check("workforce_lifecycle_revision", sql`${t.revision} > 0`),
 ]);

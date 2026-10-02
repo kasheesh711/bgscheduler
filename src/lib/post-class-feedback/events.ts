@@ -1,4 +1,5 @@
 import type { FeedbackEventEvidence } from "./types";
+import { feedbackAutoSubmittedFlag } from "./feedback-proof";
 
 // ── Wise feedback activity events ───────────────────────────────────────
 //
@@ -46,14 +47,6 @@ function nestedString(value: unknown, paths: string[][]): string | null {
   return null;
 }
 
-function nestedBoolean(value: unknown, paths: string[][]): boolean | null {
-  for (const path of paths) {
-    const result = nestedValue(value, path);
-    if (typeof result === "boolean") return result;
-  }
-  return null;
-}
-
 /**
  * Project a persisted `SessionFeedbackSubmittedEvent` row into timing and
  * authorship evidence.
@@ -80,12 +73,7 @@ export function toFeedbackEventEvidence(
     eventTimestamp: row.eventTimestamp,
     // `payload.session.autoSubmitted` is the only path Wise actually uses. The
     // rest are defensive fallbacks that have never matched a production row.
-    autoSubmitted: nestedBoolean(row.payload, [
-      ["session", "autoSubmitted"],
-      ["autoSubmitted"],
-      ["feedback", "autoSubmitted"],
-      ["feedbackSubmission", "autoSubmitted"],
-    ]),
+    autoSubmitted: feedbackAutoSubmittedFlag(row.payload),
     actorWiseUserId: row.actorWiseUserId,
     actorName: row.actorName,
     actorRole: row.actorRole,

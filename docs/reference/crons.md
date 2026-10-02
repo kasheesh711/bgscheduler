@@ -12,6 +12,24 @@ shows paused) unless `FEEDBACK_AUTOWRITER_ENABLED=true`. Single-flight is a leas
 `ok:false` (503) only for infrastructure errors, an undelivered alert digest, or a halt. Manual runs from Data Health
 are owner-only. See the [feature page](../features/feedback-autowriter.md) and [runbook](../operations/feedback-autowriter.md).
 
+| Path | UTC schedule | Bangkok | Registry key | Maximum |
+|---|---|---|---|---|
+| `/api/internal/feedback-autowriter/review` | `27 * * * *` | Hourly at :27 | `feedback_autowriter_review` | 300s |
+
+Operating-loop review job (migration 0101): snapshots first shots, derives fix events from the Wise activity mirror
+(it runs ten minutes after the `:17` activity sync) for every autowriter class, assigns review inclusion, raises
+flags, recomputes the quality metrics of every date in the gate window and writes one daily gate evaluation, then
+pushes pending critical incidents (those already waiting first, then the ones the run raised). Reads our database
+only — no Wise calls. The daily gate row is written only by a run in which every earlier step succeeded and the last
+full Wise activity sync — checked at the start of the run — finished ≤ 30 minutes earlier without stopping at its
+page cap; otherwise the run records `dailyGateSkipped` and a later run of the day writes it (a stale mirror alone is
+not an error — the activity sync alarms on its own). Incident pushes are never started when the 300 s function could be cut off
+mid-push (deferred to the next run). Paused with the autowriter (`FEEDBACK_AUTOWRITER_ENABLED`). Single-flight
+through `feedback_autowriter_review_runs` (partial unique index on `running`; a run older than 15 minutes is failed).
+Returns `ok:false` (503) when a step failed, `WISE_USER_ID` is missing, or a critical incident is undelivered — every
+run, until it is delivered or the owner acknowledges it. Manual runs from Data Health are owner-only and need
+confirmation.
+
 ## Tutor Sit-ins jobs
 
 | Path | UTC schedule | Bangkok | Registry key | Maximum |
@@ -733,3 +751,7 @@ can overlap the existing daily review/email windows; idle ticks make no Wise cal
 ## Nightly feedback reminder worker
 
 `GET /api/internal/post-class-feedback/reminder-nightly` is scheduled at `0,30 * * * *`, authenticated by `CRON_SECRET`, with `maxDuration = 800`. Registry key: `post_class_feedback_nightly`. It creates the 22:00 Bangkok batch and resumes unfinished work on later passes. Its reminder-specific setting defaults to `off`; it does not enable the older reminder handlers or change payout scheduling. Health includes independent per-session coverage and persistent uncertain deliveries. See the [nightly reminder runbook](../operations/nightly-feedback-reminders.md).
+
+## Atom lesson evidence
+
+`GET /api/internal/feedback-autowriter/atom` runs at `6,21,36,51 * * * *`, registry key `feedback_atom`, maximum 750 seconds. The cron-secret check, invocation audit and Postgres single-flight row guard apply. `FEEDBACK_ATOM_COLLECTOR_ENABLED=true` enables read-only collection for approved student links with pending ISEB lessons. Preview deployments skip it. See the [ISEB / Atom runbook](../operations/iseb-atom-feedback.md). The existing hourly autowriter review job independently enables API style checks with `FEEDBACK_AUTOWRITER_ISEB_REVIEW_ENABLED=true`.

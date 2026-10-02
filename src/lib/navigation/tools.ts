@@ -15,9 +15,11 @@ export type NavToolId =
   | "leave-requests"
   | "class-assignments"
   | "tutor-profiles"
+  | "tutor-offboarding"
   | "room-capacity"
   | "onsite-foot-traffic"
   | "post-class-feedback"
+  | "class-capture"
   | "feedback-autowriter"
   | "scheduler-metrics"
   | "progress-tests"
@@ -149,6 +151,13 @@ export const NAV_TOOLS: NavTool[] = [
     section: "scheduling-tutors",
   },
   {
+    id: "tutor-offboarding",
+    href: "/tutor-offboarding",
+    label: "Tutor Offboarding",
+    description: "Find tutors who have likely left and review their Wise accounts.",
+    section: "scheduling-tutors",
+  },
+  {
     id: "room-capacity",
     href: "/room-capacity",
     label: "Room Capacity",
@@ -174,6 +183,13 @@ export const NAV_TOOLS: NavTool[] = [
     href: "/feedback-autowriter",
     label: "Feedback Autowriter",
     description: "Monitor AI-written post-class feedback for online classes: posts, holds, latency, and cost.",
+    section: "scheduling-tutors",
+  },
+  {
+    id: "class-capture",
+    href: "/class-capture",
+    label: "Class Capture",
+    description: "Record a consented onsite class and review a feedback draft.",
     section: "scheduling-tutors",
   },
   {

@@ -1,0 +1,60 @@
+import {describe,expect,it} from 'vitest';
+import {deriveGrowthLifecycleEvents} from '../lifecycle';
+import {booking,evidence,now} from './fixtures';
+const late = new Date('2026-10-19T10:00:00+07:00');
+function august(){const e=evidence();booking(e,'may','2026-05-05',['John'],3);booking(e,'june','2026-06-05',['John'],6);booking(e,'july','2026-07-05',['John'],9);booking(e,'last','2026-08-20',['John']);e.workforce.sourceCoverage[1].observedAt=late.toISOString();e.workforce.sourceCoverage[0].requestedTo='2026-10-19';return e;}
+describe('growth lifecycle',()=>{
+ it.each(['unknown-credit','partial-membership'])('supersedes retained churn when new %s makes its absence interval uncertain',cause=>{
+  const e=august(), original=deriveGrowthLifecycleEvents(e,late)[0];
+  e.lifecycleEvents=[original];
+  booking(e,'recent','2026-09-20',cause==='unknown-credit'?['John']:['Evan'],1,'Maths',cause==='partial-membership'?{participantCompleteness:'partial'}:{});
+  if(cause==='unknown-credit')e.workforce.studentCredits=e.workforce.studentCredits.filter(x=>x.wiseSessionId!=='recent');
+  const corrected=deriveGrowthLifecycleEvents(e,late).find(x=>x.eventKey===original.eventKey)!;
+  expect(corrected.status).toBe('superseded');
+  expect(corrected.revision).toBe(2);
+  expect(corrected.reasonCodes).toContain('CHURN_ABSENCE_UNCONFIRMED');
+  e.lifecycleEvents=[corrected];
+  expect(deriveGrowthLifecycleEvents(e,late).find(x=>x.eventKey===original.eventKey)?.revision).toBe(2);
+ });
+ it('downgrades legacy observed historical churn without retained contemporaneous future-check evidence',()=>{
+  const e=evidence();booking(e,'may-final','2026-05-01',['John']);
+  const original={...deriveGrowthLifecycleEvents(e,now)[0],certainty:'observed' as const,reasonCodes:['subject-lifecycle-v1','FRESH_FUTURE_NO_BOOKING_CHECK']};
+  e.lifecycleEvents=[original];
+  const corrected=deriveGrowthLifecycleEvents(e,now).find(x=>x.eventKey===original.eventKey)!;
+  expect(corrected.certainty).toBe('inferred');
+  expect(corrected.revision).toBe(2);
+  expect(corrected.status).toBe('active');
+  expect(corrected.reasonCodes).toContain('HISTORICAL_FUTURE_BOOKINGS_NOT_RETAINED');
+  e.lifecycleEvents=[corrected];
+  expect(deriveGrowthLifecycleEvents(e,now).find(x=>x.eventKey===original.eventKey)?.revision).toBe(2);
+ });
+ it('retains a genuinely observed future-check timestamp when later snapshots replace it',()=>{
+  const e=august(),original=deriveGrowthLifecycleEvents(e,late)[0];
+  expect(original).toMatchObject({certainty:'observed',futureCheckedAt:late.toISOString()});
+  e.lifecycleEvents=[original];
+  const later=new Date(late.getTime()+86400000);
+  e.workforce.sourceCoverage[1].observedAt=later.toISOString();e.workforce.sourceCoverage[0].requestedTo='2026-10-20';
+  const retained=deriveGrowthLifecycleEvents(e,later).find(x=>x.eventKey===original.eventKey)!;
+  expect(retained.certainty).toBe('observed');
+  expect(retained.revision).toBe(1);
+  expect(retained).toHaveProperty('futureCheckedAt',late.toISOString());
+ });
+ it('cannot confirm absence when a recent ended class has unknown student credit evidence',()=>{const e=august();booking(e,'recent','2026-09-20',['John']);e.workforce.studentCredits=e.workforce.studentCredits.filter(x=>x.wiseSessionId!=='recent');expect(deriveGrowthLifecycleEvents(e,late).filter(x=>x.studentId==='John')).toEqual([]);});
+ it('cannot prove absence from a partial historical membership list even when the missing student is not returned',()=>{const e=august();booking(e,'partial-members','2026-09-20',['Evan'],1,'Maths',{participantCompleteness:'partial'});expect(deriveGrowthLifecycleEvents(e,late).filter(x=>x.studentId==='John')).toEqual([]);});
+ it('confirmed cancelled partial-member classes do not block the absence proof',()=>{const e=august();booking(e,'cancelled','2026-09-20',['Evan'],1,'Maths',{participantCompleteness:'partial',meetingStatus:'CANCELLED'});expect(deriveGrowthLifecycleEvents(e,late).filter(x=>x.studentId==='John'&&x.kind==='churn')).toHaveLength(1);});
+ it('labels a historical no-return departure inferred when only todays future check exists',()=>{const e=evidence();booking(e,'may-final','2026-05-01',['John']);const event=deriveGrowthLifecycleEvents(e,now).find(x=>x.studentId==='John')!;expect(event.certainty).toBe('inferred');expect(event.reasonCodes).toContain('HISTORICAL_FUTURE_BOOKINGS_NOT_RETAINED');});
+ it('does not supersede retained teaching evidence merely because a later incomplete fetch lost its net credits',()=>{const e=august();const event=deriveGrowthLifecycleEvents(e,late).find(x=>x.studentId==='John')!;e.lifecycleEvents=[event];e.workforce.studentCredits=e.workforce.studentCredits.filter(x=>x.wiseSessionId!=='last');expect(deriveGrowthLifecycleEvents(e,late).find(x=>x.eventKey===event.eventKey)?.status).toBe('active');});
+ it('a confirmed cancellation still supersedes an anchor with partial membership',()=>{const e=august();const event=deriveGrowthLifecycleEvents(e,late).find(x=>x.studentId==='John')!;e.lifecycleEvents=[event];const last=e.workforce.sessions.find(x=>x.wiseSessionId==='last')!;last.participantCompleteness='partial';last.meetingStatus='CANCELLED';expect(deriveGrowthLifecycleEvents(e,late).find(x=>x.eventKey===event.eventKey)?.status).toBe('superseded');});
+ it('does not confirm a departure across missing teaching-history days',()=>{const e=august();e.workforce.sourceCoverage[0].requestedTo='2026-09-30';expect(deriveGrowthLifecycleEvents(e,late)).toEqual([]);});
+ it('future trial bookings in the same subject prevent current churn',()=>{const e=august();booking(e,'trial','2026-11-01',['John']);e.bookingMetadata.find(x=>x.wiseSessionId==='trial')!.classification='trial';expect(deriveGrowthLifecycleEvents(e,late)).toEqual([]);});
+ it('unknown future membership cannot prove no booking for this student',()=>{const e=august();booking(e,'future','2026-11-01',[],1,'Physics',{meetingStatus:'FUTURE',participantCompleteness:'unknown'});expect(deriveGrowthLifecycleEvents(e,late)).toEqual([]);});
+ it('allows a reinstated final class to reactivate the corrected event with a new revision',()=>{const e=august();const original=deriveGrowthLifecycleEvents(e,late)[0];e.lifecycleEvents=[original];e.workforce.sessions.find(x=>x.wiseSessionId==='last')!.meetingStatus='CANCELLED';e.lifecycleEvents=deriveGrowthLifecycleEvents(e,late);e.workforce.sessions.find(x=>x.wiseSessionId==='last')!.meetingStatus='ENDED';const restored=deriveGrowthLifecycleEvents(e,late).find(x=>x.eventKey===original.eventKey)!;expect(restored.status).toBe('active');expect(restored.revision).toBeGreaterThan(original.revision);expect(restored.confirmedAt).toBe(original.confirmedAt);});
+ it('keeps confirmed events when a partial replay omits the anchor',()=>{const e=august();const original=deriveGrowthLifecycleEvents(e,late)[0];e.lifecycleEvents=[original];e.workforce.sessions=e.workforce.sessions.filter(x=>x.wiseSessionId!=='last');expect(deriveGrowthLifecycleEvents(e,late).find(x=>x.eventKey===original.eventKey)?.status).toBe('active');});
+
+ it('confirms at exactly sixty days, uses May–July, and assigns September',()=>{const e=august();expect(deriveGrowthLifecycleEvents(e,new Date(late.getTime()-1))).toEqual([]);const events=deriveGrowthLifecycleEvents(e,late);expect(events).toHaveLength(1);expect(events[0]).toMatchObject({kind:'churn',effectiveMonth:'2026-09',baselineMonths:['2026-05','2026-06','2026-07'],baselineStudentHours:{value:6,completeness:'complete'},confirmedAt:late.toISOString(),certainty:'observed'});expect(deriveGrowthLifecycleEvents(e,new Date(late.getTime()+1000))[0].confirmedAt).toBe(late.toISOString());});
+ it('requires a fresh complete future check and checks the departed subject',()=>{const e=august();booking(e,'other','2026-11-01',['John'],1,'Physics',{meetingStatus:'FUTURE'});expect(deriveGrowthLifecycleEvents(e,late).filter(x=>x.kind==='churn')).toHaveLength(1);booking(e,'future','2026-11-02',['John'],1,'Maths',{meetingStatus:'FUTURE'});expect(deriveGrowthLifecycleEvents(e,late)).toEqual([]);const stale=august();stale.workforce.sourceCoverage[1].observedAt=now.toISOString();expect(deriveGrowthLifecycleEvents(stale,late)).toEqual([]);});
+ it('preserves unavailable baseline months and complete empty zero months',()=>{const e=august();e.workforce.sessions=e.workforce.sessions.filter(x=>x.wiseSessionId!=='may');expect(deriveGrowthLifecycleEvents(e,late)[0].baselineStudentHours.value).toBe(5);e.workforce.sourceCoverage[0].requestedFrom='2026-06-01';expect(deriveGrowthLifecycleEvents(e,late)[0].baselineStudentHours).toMatchObject({value:null,completeness:'unknown'});});
+ it('labels reconstructed historical gaps inferred and keeps departures after return',()=>{const e=august();booking(e,'return','2026-11-02',['John'],2);const dec=new Date('2026-12-01T00:00:00+07:00');e.workforce.sourceCoverage[1].observedAt=dec.toISOString();let events=deriveGrowthLifecycleEvents(e,dec);expect(events.map(x=>x.kind)).toEqual(['churn','reactivation']);expect(events[0].certainty).toBe('inferred');e.lifecycleEvents=events;events=deriveGrowthLifecycleEvents(e,dec);expect(events.map(x=>x.kind)).toEqual(['churn','reactivation']);});
+ it('supersedes corrected teaching and invalid return events explicitly',()=>{const e=august();e.lifecycleEvents=deriveGrowthLifecycleEvents(e,late);e.workforce.sessions.find(x=>x.wiseSessionId==='last')!.meetingStatus='CANCELLED';const events=deriveGrowthLifecycleEvents(e,late);expect(events.find(x=>x.eventKey===e.lifecycleEvents[0].eventKey)?.status).toBe('superseded');});
+ it('does not use another group member positive credits as this student teaching',()=>{const e=evidence();booking(e,'group','2026-06-01',['John','Evan']);e.workforce.studentCredits.find(x=>x.wiseStudentId==='John')!.netCredits=0;const result=deriveGrowthLifecycleEvents(e,now);expect(result.filter(x=>x.studentId==='John')).toEqual([]);expect(result.filter(x=>x.studentId==='Evan')).toHaveLength(1);});
+});

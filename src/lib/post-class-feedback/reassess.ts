@@ -1,11 +1,14 @@
 import "server-only";
 
-import { and, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 
 import { applyPostClassReviewAction } from "./actions";
+import { withPostClassTransaction } from "./transaction";
+import { lockPostClassFinance } from "./finance-lock";
+import { PostClassConflictError } from "./errors";
 import { hasWrittenPayoutDeduction } from "./payout-repository";
 import {
   calculateFeedbackDeadline,
@@ -32,9 +35,9 @@ import type { FeedbackVersion, TimingStatus } from "./types";
 // that stored evidence, with zero Wise traffic.
 //
 // It is deliberately verdict-only. It writes an assessment row and the session's
-// timing projection; it never rewrites identity, eligibility, participants, or
-// content, because it has no fresher evidence for any of them than the row
-// already carries.
+// timing/content projections, policy stamp, and compliance lock. It never
+// rewrites source identity, eligibility, participants, immutable versions, or
+// financial decisions when financeActions is false.
 
 /**
  * System actor for the unattended waive a cleared violation implies. Mirrors
@@ -58,6 +61,9 @@ export interface PostClassReassessOutcome {
   cleared: "timing" | "content" | null;
   provenAt: Date | null;
   deductionWaived: boolean;
+  reviewRequired: boolean;
+  onTimeComplianceLocked: boolean;
+  objectiveViolation: boolean;
 }
 
 export interface PostClassReassessResult {
@@ -84,6 +90,8 @@ export async function reassessPostClassSessions(options: {
   wiseSessionIds?: string[];
   limit?: number;
   apply?: boolean;
+  /** Recovery may update evidence while preserving every financial decision. */
+  financeActions?: boolean;
   now?: Date;
   db?: Database;
   repository?: PostClassFeedbackRepository;
@@ -107,6 +115,10 @@ export async function reassessPostClassSessions(options: {
     // cleared without a timing flip (e.g. a content-rule change) while an
     // open deduction still stands.
     deductionStatus: schema.postClassSessions.deductionStatus,
+    policyVersion: schema.postClassSessions.policyVersion,
+    contentStatus: schema.postClassSessions.contentStatus,
+    firstOnTimeCompliantVersionId: schema.postClassSessions.firstOnTimeCompliantVersionId,
+    version: schema.postClassSessions.version,
   }).from(schema.postClassSessions)
     .where(and(
       eq(schema.postClassSessions.eligible, true),
@@ -167,15 +179,20 @@ export async function reassessPostClassSessions(options: {
       // current policy no longer finds violating is a change worth writing.
       const openDeduction = row.deductionStatus === "pending_review"
         || row.deductionStatus === "approved";
-      const violationCleared = !assessment.violation && openDeduction;
-      const changed = timingChanged || violationCleared;
-      const cleared: "timing" | "content" | null = !assessment.violation && openDeduction
+      const violationCleared = !assessment.violation && openDeduction && (options.financeActions ?? true)
+        && !assessment.timingReviewRequired;
+      const projectionChanged = (row.policyVersion !== undefined && row.policyVersion !== policy.policyVersion)
+        || (row.contentStatus !== undefined && row.contentStatus !== assessment.contentStatus)
+        || Boolean(row.firstOnTimeCompliantVersionId && !assessment.onTimeComplianceLocked);
+      const changed = timingChanged || violationCleared || projectionChanged;
+      const cleared: "timing" | "content" | null = violationCleared
         ? (timingChanged ? "timing" : "content")
         : null;
       let deductionWaived = false;
       if (changed && apply) {
         await writeReassessedVerdict(db, {
           sessionId: row.id,
+          expectedVersion: row.version,
           wiseSessionId: row.wiseSessionId,
           scheduledEndAt: row.scheduledEndAt,
           policyVersion: policy.policyVersion,
@@ -189,7 +206,7 @@ export async function reassessPostClassSessions(options: {
           assessedAt: now,
         });
       }
-      if (changed && apply && !assessment.violation) {
+      if (changed && apply && violationCleared) {
         deductionWaived = await waiveClearedDeduction(
           db,
           row.id,
@@ -210,6 +227,9 @@ export async function reassessPostClassSessions(options: {
         cleared,
         provenAt: assessment.tutorSubmittedAt,
         deductionWaived,
+        reviewRequired: assessment.timingReviewRequired ?? false,
+        onTimeComplianceLocked: assessment.onTimeComplianceLocked,
+        objectiveViolation: assessment.violation,
       });
     } catch (error) {
       result.failed += 1;
@@ -232,6 +252,7 @@ async function writeReassessedVerdict(
   db: Database,
   input: {
     sessionId: string;
+    expectedVersion: number;
     wiseSessionId: string;
     scheduledEndAt: Date;
     policyVersion: number;
@@ -243,59 +264,84 @@ async function writeReassessedVerdict(
   },
 ): Promise<void> {
   const { assessment } = input;
-  await db.insert(schema.postClassAssessments).values({
-    sessionId: input.sessionId,
-    feedbackVersionId: null,
-    assessmentKey: [
-      "reassess",
-      input.wiseSessionId,
-      input.policyVersion,
-      input.mappingVersion,
-      assessment.deadlineAt.toISOString(),
-      assessment.timingStatus,
-      input.assessedAt.toISOString(),
-    ].join(":"),
-    policyVersion: input.policyVersion,
-    mappingVersion: input.mappingVersion,
-    sourceStatus: assessment.sourceStatus,
-    contentStatus: assessment.contentStatus,
-    timingStatus: assessment.timingStatus,
-    deductionStatus: "none",
-    enforcementMode: input.enforcementMode,
-    assessedAt: input.assessedAt,
-    requiredFieldsPassed: assessment.content.failedFields.length === 0,
-    combinedRawCharCount: assessment.content.combinedRawCharacterCount,
-    fieldFailures: assessment.content.violationReasons,
-    objectiveViolation: assessment.violation,
-    rawOnTime: assessment.rawOnTimeCompliant,
-    adjustedCompliant: assessment.adjustedCompliant,
-    remediatedLate: assessment.remediatedLate,
-    timingUnknown: assessment.timingStatus === "unknown",
-    // Same evidence-code derivation as the collector (repository.ts), so a
-    // reassessed session explains its verdict identically — including the
-    // trusted-Wise-timestamp and created-at-lower-bound codes.
-    timingEvidence: timingEvidence(assessment, input.governingVersion),
-    sourceReady: assessment.sourceStatus === "ready" && assessment.assessed,
-    details: {
-      due: assessment.due,
-      reassessed: true,
-      policyApplies: assessment.policyApplies,
-      scheduledEndAt: input.scheduledEndAt.toISOString(),
-      deadlineAt: assessment.deadlineAt.toISOString(),
-      governingVersionKey: assessment.governingVersionKey,
-      onTimeVersionKey: assessment.onTimeVersionKey,
-      onTimeComplianceLocked: assessment.onTimeComplianceLocked,
-      timingEvidenceSource: assessment.timingEvidenceSource,
-      submitterRoles: assessment.submitterRoles,
-      tutorSubmittedAt: assessment.tutorSubmittedAt?.toISOString() ?? null,
-    },
-  }).onConflictDoNothing({ target: schema.postClassAssessments.assessmentKey });
+  await withPostClassTransaction(db, async tx => {
+    await lockPostClassFinance(tx);
+    const [settings] = await tx.select().from(schema.postClassSettings)
+      .where(eq(schema.postClassSettings.id, "default")).for("update");
+    if (settings?.policyVersion !== input.policyVersion || settings.formMappingVersion !== input.mappingVersion) {
+      throw new PostClassConflictError("Policy changed during reassessment; retry from fresh evidence.");
+    }
+    const [publishing] = await tx.select({ id: schema.postClassPayoutRuns.id }).from(schema.postClassPayoutRuns)
+      .where(and(eq(schema.postClassPayoutRuns.status, "publishing"), gt(schema.postClassPayoutRuns.leaseExpiresAt, new Date()))).limit(1);
+    if (publishing) throw new PostClassConflictError("A payout publication is active; wait for its lease to end before reassessment.");
+    const [current] = await tx.select().from(schema.postClassSessions)
+      .where(eq(schema.postClassSessions.id, input.sessionId)).for("update");
+    if (!current || current.version !== input.expectedVersion) {
+      throw new PostClassConflictError("Session changed during reassessment; retry from fresh evidence.");
+    }
+    const keys = [assessment.onTimeVersionKey, assessment.governingVersionKey].filter((key): key is string => Boolean(key));
+    const feedback = keys.length ? await tx.select({ id: schema.postClassFeedbackVersions.id, key: schema.postClassFeedbackVersions.versionKey })
+      .from(schema.postClassFeedbackVersions).where(and(eq(schema.postClassFeedbackVersions.sessionId, input.sessionId), inArray(schema.postClassFeedbackVersions.versionKey, keys))) : [];
+    const onTimeId = feedback.find(version => version.key === assessment.onTimeVersionKey)?.id ?? null;
+    await tx.insert(schema.postClassAssessments).values({
+      sessionId: input.sessionId,
+      feedbackVersionId: feedback.find(version => version.key === assessment.governingVersionKey)?.id ?? null,
+      assessmentKey: [
+        "reassess",
+        input.wiseSessionId,
+        input.policyVersion,
+        input.mappingVersion,
+        assessment.deadlineAt.toISOString(),
+        assessment.timingStatus,
+        input.assessedAt.toISOString(),
+      ].join(":"),
+      policyVersion: input.policyVersion,
+      mappingVersion: input.mappingVersion,
+      sourceStatus: assessment.sourceStatus,
+      contentStatus: assessment.contentStatus,
+      timingStatus: assessment.timingStatus,
+      deductionStatus: "none",
+      enforcementMode: input.enforcementMode,
+      assessedAt: input.assessedAt,
+      requiredFieldsPassed: assessment.content.failedFields.length === 0,
+      combinedRawCharCount: assessment.content.combinedRawCharacterCount,
+      fieldFailures: assessment.content.violationReasons,
+      objectiveViolation: assessment.violation,
+      rawOnTime: assessment.rawOnTimeCompliant,
+      adjustedCompliant: assessment.adjustedCompliant,
+      remediatedLate: assessment.remediatedLate,
+      timingUnknown: assessment.timingStatus === "unknown",
+      // Same evidence-code derivation as the collector (repository.ts), so a
+      // reassessed session explains its verdict identically — including the
+      // trusted-Wise-timestamp and created-at-lower-bound codes.
+      timingEvidence: timingEvidence(assessment, input.governingVersion),
+      sourceReady: assessment.sourceStatus === "ready" && assessment.assessed,
+      details: {
+        due: assessment.due,
+        reassessed: true,
+        policyApplies: assessment.policyApplies,
+        scheduledEndAt: input.scheduledEndAt.toISOString(),
+        deadlineAt: assessment.deadlineAt.toISOString(),
+        governingVersionKey: assessment.governingVersionKey,
+        onTimeVersionKey: assessment.onTimeVersionKey,
+        onTimeComplianceLocked: assessment.onTimeComplianceLocked,
+        timingEvidenceSource: assessment.timingEvidenceSource,
+        submitterRoles: assessment.submitterRoles,
+        tutorSubmittedAt: assessment.tutorSubmittedAt?.toISOString() ?? null,
+        timingReviewRequired: assessment.timingReviewRequired ?? false,
+      },
+    }).onConflictDoNothing({ target: schema.postClassAssessments.assessmentKey });
 
-  await db.update(schema.postClassSessions).set({
-    timingStatus: assessment.timingStatus,
-    lastAssessedAt: input.assessedAt,
-    updatedAt: input.assessedAt,
-  }).where(eq(schema.postClassSessions.id, input.sessionId));
+    await tx.update(schema.postClassSessions).set({
+      policyVersion: input.policyVersion,
+      contentStatus: assessment.contentStatus,
+      firstOnTimeCompliantVersionId: assessment.onTimeComplianceLocked ? onTimeId : null,
+      version: sql`${schema.postClassSessions.version} + 1`,
+      timingStatus: assessment.timingStatus,
+      lastAssessedAt: input.assessedAt,
+      updatedAt: input.assessedAt,
+    }).where(eq(schema.postClassSessions.id, input.sessionId));
+  });
 }
 
 /**

@@ -1,0 +1,159 @@
+import { beforeAll, afterAll, beforeEach, it, expect } from 'vitest';
+import { startTestDb, stopTestDb, truncateAll } from '@/tests/integration/db-helper';
+import type { Database } from '@/lib/db';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import * as s from '@/lib/db/schema';
+import { persistWorkforceSourceWindow } from '../observation-store';
+import { loadWorkforceEvidence } from '../source-db';
+import { query, window } from './fixtures';
+let h: Awaited<ReturnType<typeof startTestDb>>;
+beforeAll(async () => { h = await startTestDb(); }, 60000);
+afterAll(async () => { if (h)
+    await stopTestDb(h); });
+beforeEach(async () => { await truncateAll(h.db); });
+const db = () => h.db as unknown as Database;
+it('retains complete source facts while avoiding unused version hashes and snapshot student names in reads', async () => {
+    const source = window();
+    source.evidence.tutorFacts = [{ id: 'fact1', wiseSessionId: 's1', canonicalKey: 'Aria', scheduledMinutes: 60, teachingMinutes: 55, modality: 'onsite', subject: 'Maths', curriculum: 'Thai', level: 'G1-9', completeness: 'complete', reasonCodes: [] }];
+    source.evidence.historicalBookedParticipants = [{ wiseSessionId: 's1', studentIds: ['st1'], completeness: 'complete', source: 'original_booking', reasonCodes: [] }];
+    await persistWorkforceSourceWindow(db(), source);
+    const [snapshot] = await h.db.insert(s.snapshots).values({ active: true, createdAt: new Date('2026-10-01T04:30:00Z') }).returning();
+    const [group] = await h.db.insert(s.tutorIdentityGroups).values({ snapshotId: snapshot.id, canonicalKey: 'Aria', displayName: 'Aria' }).returning();
+    await h.db.insert(s.futureSessionBlocks).values({ snapshotId: snapshot.id, groupId: group.id, wiseTeacherId: 't1', wiseSessionId: 'future', wiseClassId: 'course1', startTime: new Date('2026-10-04T10:30:00Z'), endTime: new Date('2026-10-04T11:30:00Z'), weekday: 0, startMinute: 1050, endMinute: 1110, wiseStatus: 'UPCOMING', sessionType: 'SCHEDULED', studentName: 'Unused private field', location: 'Unused location', studentIds: ['st2'], title: 'Maths' });
+    const queries: string[] = [];
+    const reader = drizzle(h.pool, { schema: s, logger: { logQuery(query) { queries.push(query); } } }) as unknown as Database;
+    const result = await loadWorkforceEvidence(reader, query, new Date('2026-10-01T05:00:00Z'));
+    expect(result.sessions[0]).toMatchObject(source.sessions[0]);
+    expect(result.studentCredits[0]).toMatchObject({ ...source.credits[0], observedAt: new Date(source.credits[0].observedAt!).toISOString() });
+    expect(result.tutorFacts).toEqual(source.evidence.tutorFacts);
+    expect(result.historicalBookedParticipants).toEqual(source.evidence.historicalBookedParticipants);
+    const sessionSelect = queries.find(q => q.includes('from "workforce_session_versions"'))!;
+    const creditSelect = queries.find(q => q.includes('from "workforce_credit_versions"'))!;
+    expect(sessionSelect.split(' from ')[0]).not.toContain('content_hash');
+    expect(creditSelect.split(' from ')[0]).not.toContain('content_hash');
+    const futureSelect = queries.find(q => q.includes('from "future_session_blocks"'))!;
+    expect(futureSelect.split(' from ')[0]).not.toContain('student_name');
+    expect(futureSelect.split(' from ')[0]).not.toContain('location');
+    expect(result.sessions.find(s => s.wiseSessionId === 'future')).toMatchObject({ wiseClassId: 'course1', classTitle: 'Maths', startAt: '2026-10-04T10:30:00.000Z', endAt: '2026-10-04T11:30:00.000Z', historicalBookedStudentIds: ['st2'], modality: 'online' });
+});
+it('retains owner-confirmed resignations for analytics without changing the sheet or removal source', async () => {
+    const at = new Date('2026-10-01T03:00:00Z');
+    const [snapshot] = await h.db.insert(s.snapshots).values({ active: true, createdAt: at }).returning();
+    await h.db.insert(s.tutorWiseAccounts).values({ wiseTeacherId: 'confirmed-teacher', wiseUserId: 'confirmed-user', canonicalKey: 'Aria', displayName: 'Aria Smith', email: 'aria@example.com', isOnlineVariant: false, status: 'active', wiseRelation: 'TEACHER', wiseJoinedOn: new Date('2026-01-01T00:00:00Z'), lastSnapshotId: snapshot.id });
+    const row = { sourceRow: 2, fullName: 'Aria Smith', wiseName: 'Aria Smith', nickname: 'Ari', emails: ['aria@example.com'], terminated: true };
+    await h.db.insert(s.tutorOffboardingSheetSource).values([
+      { sourceKey: 'terminated-tutors', rows: [{ ...row, terminated: false }], checkedAt: at, attemptedAt: at },
+      { sourceKey: 'owner-confirmed-departures', rows: [row], checkedAt: at, attemptedAt: at },
+    ]);
+    const result = await loadWorkforceEvidence(db(), query, new Date('2026-10-05T03:00:00Z'));
+    expect(result.terminationMarks).toEqual([{ canonicalKey: 'Aria', effectiveAt: null, markedAt: at.toISOString(), status: 'complete', sourceId: 'owner-confirmed-departures:2' }]);
+    expect(result.sourceCoverage.find(c => c.source === 'owner_confirmed_departures')).toMatchObject({ completeness: 'complete', recordsReturned: 1, issueCodes: [] });
+    const saved = await h.db.select().from(s.tutorOffboardingSheetSource);
+    expect(saved.find(s => s.sourceKey === 'terminated-tutors')?.rows[0].terminated).toBe(false);
+    expect(await h.db.select().from(s.tutorOffboardingRuns)).toHaveLength(0);
+    const earlier = await loadWorkforceEvidence(db(), query, new Date('2026-10-01T02:00:00Z'));
+    expect(earlier.terminationMarks).toHaveLength(0);
+});
+it('versions corrections and refunds while an incomplete window neither replaces facts nor advances coverage', async () => {
+    await persistWorkforceSourceWindow(db(), window());
+    await persistWorkforceSourceWindow(db(), window('same', '2026-10-01T03:30:00Z'));
+    expect(await h.db.select().from(s.workforceSessionVersions)).toHaveLength(1);
+    expect(await h.db.select().from(s.workforceCreditVersions)).toHaveLength(1);
+    await persistWorkforceSourceWindow(db(), window('bad', '2026-10-01T04:00:00Z', 0, false));
+    let evidence = await loadWorkforceEvidence(db(), query, new Date('2026-10-01T05:00:00Z'));
+    expect(evidence.studentCredits[0].netCredits).toBe(1);
+    expect(evidence.sourceCoverage.filter(r => r.completeness === 'complete')).toHaveLength(2);
+    expect(evidence.sourceCoverage.some(r => r.truncated)).toBe(true);
+    await persistWorkforceSourceWindow(db(), window('refund', '2026-10-01T04:30:00Z', 0));
+    evidence = await loadWorkforceEvidence(db(), query, new Date('2026-10-01T05:00:00Z'));
+    expect(evidence.studentCredits[0].netCredits).toBe(0);
+    expect(await h.db.select().from(s.workforceCreditVersions)).toHaveLength(2);
+});
+it('replaying a source window is idempotent', async () => {
+    await persistWorkforceSourceWindow(db(), window());
+    await persistWorkforceSourceWindow(db(), window());
+    expect(await h.db.select().from(s.workforceCaptureRuns)).toHaveLength(1);
+});
+it('dedupes cached credits at their original observation time, preserving an older same-value correction', async () => {
+    await persistWorkforceSourceWindow(db(), window('initial','2026-10-01T01:00:00Z',1));
+    await persistWorkforceSourceWindow(db(), window('latest','2026-10-01T04:00:00Z',0));
+    const imported = window('imported-later','2026-10-01T05:00:00Z',0);
+    imported.credits[0].observedAt = '2026-10-01T02:00:00Z';
+    await persistWorkforceSourceWindow(db(), imported);
+    const earlier = await loadWorkforceEvidence(db(),query,new Date('2026-10-01T03:00:00Z'));
+    expect(earlier.studentCredits[0].netCredits).toBe(0);
+    expect(earlier.studentCredits[0].observedAt).toBe('2026-10-01T02:00:00.000Z');
+    expect(await h.db.select().from(s.workforceCreditVersions)).toHaveLength(3);
+});
+it('upgrades a failed source key on complete retry and preserves unknown historical normal charges', async () => {
+    await persistWorkforceSourceWindow(db(), window('retry', '2026-10-01T03:00:00Z', 1, false));
+    const complete = window('retry');
+    complete.credits[0].normalCredits = null;
+    complete.credits[0].evidenceStatus = 'unknown';
+    complete.contractIssues = ['historical_normal_charge_unknown'];
+    await persistWorkforceSourceWindow(db(), complete);
+    const evidence = await loadWorkforceEvidence(db(), query, new Date('2026-10-01T05:00:00Z'));
+    expect(evidence.sessions).toHaveLength(1);
+    expect(evidence.studentCredits[0].normalCredits).toBeNull();
+    expect(evidence.sourceCoverage.find(r => r.source === 'wise_history')?.completeness).toBe('complete');
+});
+it('retains all future departure context for an old report month and requires evidence to classify teaching admins', async () => {
+ const [snapshot]=await h.db.insert(s.snapshots).values({active:true,createdAt:new Date('2026-10-01T03:00:00Z')}).returning();
+ await h.db.insert(s.tutorWiseAccounts).values(['Aria','Office'].map((key,i)=>({wiseTeacherId:'admin'+i,wiseUserId:'adminuser'+i,canonicalKey:key,displayName:key,isOnlineVariant:false,status:'active',wiseRelation:'ADMIN',lastSnapshotId:snapshot.id,wiseJoinedOn:new Date('2026-02-01T00:00:00Z')})));
+ const [group]=await h.db.insert(s.tutorIdentityGroups).values({snapshotId:snapshot.id,canonicalKey:'Aria',displayName:'Aria'}).returning();
+ await h.db.insert(s.futureSessionBlocks).values({snapshotId:snapshot.id,groupId:group.id,wiseTeacherId:'admin0',wiseSessionId:'future2028',startTime:new Date('2028-01-01T03:00:00Z'),endTime:new Date('2028-01-01T04:00:00Z'),weekday:6,startMinute:600,endMinute:660,wiseStatus:'UPCOMING',studentIds:['st1']});
+ const evidence=await loadWorkforceEvidence(db(),{...query,to:'2026-03-31',viewMonth:'2026-03'},new Date('2026-10-01T03:30:00Z'));
+ expect(evidence.sessions.some(f=>f.wiseSessionId==='future2028')).toBe(true);
+ expect(evidence.people.find(p=>p.canonicalKey==='Aria')?.role).toBe('teaching_admin');
+ expect(evidence.people.find(p=>p.canonicalKey==='Office')?.role).toBeNull();
+ expect(evidence.sourceCoverage.find(c=>c.source==='wise_future_snapshot')?.completeness).toBe('complete');
+});
+it('keeps historical future-booking facts while a fresh snapshot marks their absence for departure context',async()=>{
+ const archived=window();archived.sessions[0].startAt='2026-12-01T03:00:00Z';archived.sessions[0].endAt='2026-12-01T04:00:00Z';archived.sessions[0].meetingStatus='UPCOMING';
+ await persistWorkforceSourceWindow(db(),archived);
+ await h.db.insert(s.snapshots).values({active:true,createdAt:new Date('2026-10-01T03:00:00Z')});
+ const evidence=await loadWorkforceEvidence(db(),query,new Date('2026-10-01T03:30:00Z'));
+ expect(evidence.sessions[0].meetingStatus).toBe('UPCOMING');expect(evidence.sessions[0].reasonCodes).toContain('absent_from_current_future_snapshot');
+});
+
+it('persists observation-only session/credit facts at original times without complete history coverage', async () => {
+    const retained = window('credit-control-source', '2026-10-01T04:00:00Z', 0, false);
+    retained.credits[0].observedAt = '2026-10-01T02:00:00Z';
+    retained.sessions[0].participantCompleteness = 'partial';
+    await persistWorkforceSourceWindow(db(), retained, { mode: 'observation_only' });
+    await persistWorkforceSourceWindow(db(), retained, { mode: 'observation_only' });
+    const evidence = await loadWorkforceEvidence(db(), query, new Date('2026-10-01T05:00:00Z'));
+    expect(evidence.sessions).toHaveLength(1);
+    expect(evidence.sessions[0].participantCompleteness).toBe('partial');
+    expect(evidence.studentCredits[0]).toMatchObject({ netCredits: 0, observedAt: '2026-10-01T02:00:00.000Z' });
+    expect(evidence.sourceCoverage.some(row => row.source === 'wise_history')).toBe(false);
+    expect(evidence.sourceCoverage.find(row => row.source === 'credit_control_observation')?.completeness).toBe('partial');
+    const runs = await h.db.select().from(s.workforceCaptureRuns);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ kind: 'history', complete: false });
+    expect(await h.db.select().from(s.workforceCreditVersions)).toHaveLength(1);
+});
+
+it('recovers snapshot wall-clock timestamps before future filtering and fails closed on inconsistent metadata', async () => {
+ const now = new Date('2026-10-05T12:30:00Z');
+ const [snapshot] = await h.db.insert(s.snapshots).values({active:true,createdAt:new Date('2026-10-05T12:00:00Z')}).returning();
+ const [group] = await h.db.insert(s.tutorIdentityGroups).values({snapshotId:snapshot.id,canonicalKey:'Synthetic',displayName:'Synthetic'}).returning();
+ const base = {snapshotId:snapshot.id,groupId:group.id,wiseTeacherId:'synthetic',wiseStatus:'UPCOMING',studentIds:[]};
+ await h.db.insert(s.futureSessionBlocks).values([
+  {...base,wiseSessionId:'already-ended',startTime:new Date('2026-10-05T18:00:00Z'),endTime:new Date('2026-10-05T19:00:00Z'),weekday:1,startMinute:1080,endMinute:1140},
+  {...base,wiseSessionId:'evening',startTime:new Date('2026-10-05T20:00:00Z'),endTime:new Date('2026-10-05T21:00:00Z'),weekday:1,startMinute:1200,endMinute:1260},
+  {...base,wiseSessionId:'correct-utc',startTime:new Date('2026-10-05T14:00:00Z'),endTime:new Date('2026-10-05T15:00:00Z'),weekday:1,startMinute:1260,endMinute:1320},
+  {...base,wiseSessionId:'unverified',startTime:new Date('2026-10-05T14:00:00Z'),endTime:new Date('2026-10-05T15:00:00Z'),weekday:4,startMinute:1260,endMinute:1320},
+ ]);
+ const retained = window('raw-retained', '2026-10-05T11:00:00Z');
+ retained.sessions[0].startAt='2026-12-01T03:00:00Z'; retained.sessions[0].endAt='2026-12-01T04:00:00Z';
+ await persistWorkforceSourceWindow(db(),retained);
+ const result = await loadWorkforceEvidence(db(),query,now);
+ expect(result.sessions.some(f=>f.wiseSessionId==='already-ended')).toBe(false);
+ expect(result.sessions.find(f=>f.wiseSessionId==='evening')).toMatchObject({startAt:'2026-10-05T13:00:00.000Z',endAt:'2026-10-05T14:00:00.000Z',scheduledMinutes:60});
+ expect(result.sessions.find(f=>f.wiseSessionId==='correct-utc')?.startAt).toBe('2026-10-05T14:00:00.000Z');
+ expect(result.sessions.find(f=>f.wiseSessionId==='unverified')).toMatchObject({startAt:'',endAt:null,scheduledMinutes:null,completeness:'unknown',reasonCodes:['SNAPSHOT_TIMESTAMP_UNVERIFIED']});
+ expect(result.sourceCoverage.find(c=>c.source==='wise_future_snapshot')).toMatchObject({completeness:'partial',issueCodes:['SNAPSHOT_TIMESTAMP_UNVERIFIED']});
+ expect(result.sessions.find(f=>f.wiseSessionId==='s1')).toBeDefined();
+ expect(result.sessions.find(f=>f.wiseSessionId==='s1')!.reasonCodes).not.toContain('absent_from_current_future_snapshot');
+});

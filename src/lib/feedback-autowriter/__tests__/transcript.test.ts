@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { SONIOX_TERMS, describeClass } from "../prompt";
 import {
   assignSpeakerRoles,
+  buildTranscriptEvidence,
   parseZoomVtt,
   renderTranscript,
   segmentsFromTokens,
+  sonioxJobInput,
   thaiShare,
   type Segment,
 } from "../transcript";
+import { SESSION_ID, STUDENT_NAME } from "./fixtures";
 
 const tokens = [
   { text: "Let's", start_ms: 0, end_ms: 400, speaker: "1" },
@@ -24,7 +28,7 @@ Apivit (Ek) Sirithana Online: Let's start
 
 2
 00:00:00.900 --> 00:00:01.500
-Silpakorn (Gino.Ti) Tiyachate: Okay
+Anucha (Nont.Bo) Boonmee: Okay
 
 3
 00:01.600 --> 00:03.000
@@ -43,7 +47,7 @@ describe("transcript segments", () => {
   it("parses Zoom WEBVTT cues with and without hours", () => {
     expect(parseZoomVtt(VTT)).toEqual([
       { speakerName: "Apivit (Ek) Sirithana Online", startMs: 0, endMs: 800 },
-      { speakerName: "Silpakorn (Gino.Ti) Tiyachate", startMs: 900, endMs: 1_500 },
+      { speakerName: "Anucha (Nont.Bo) Boonmee", startMs: 900, endMs: 1_500 },
       { speakerName: "Apivit (Ek) Sirithana Online", startMs: 1_600, endMs: 3_000 },
     ]);
   });
@@ -62,6 +66,26 @@ describe("assignSpeakerRoles", () => {
     expect(result.roles.get("1")).toBe("tutor");
     expect(result.roles.get("2")).toBe("student");
     expect(result.shares).toEqual({ tutor: 55, student: 45, other: 0 });
+  });
+
+  it("counts Zoom lines under the tutor's other names (a second device) as the tutor's", () => {
+    const vtt = `${VTT}
+4
+00:00:04.000 --> 00:00:06.000
+Ek: Can you hear me on the tablet?
+`;
+    const segments: Segment[] = [
+      { speaker: "1", startMs: 0, endMs: 800, text: "t".repeat(60) },
+      { speaker: "2", startMs: 900, endMs: 1_500, text: "s".repeat(25) },
+      // The tutor's tablet, picked up as a third voice.
+      { speaker: "3", startMs: 4_000, endMs: 6_000, text: "e".repeat(15) },
+    ];
+    const cues = parseZoomVtt(vtt);
+    const without = assignSpeakerRoles({ segments, zoomCues: cues, teacherName: "Apivit (Ek) Sirithana Online" });
+    expect(without.roles.get("3")).toBe("student");
+    const withNames = assignSpeakerRoles({ segments, zoomCues: cues, teacherName: "Apivit (Ek) Sirithana Online", alsoTeacher: ["Ek", "Apivit Sirithana"] });
+    expect(withNames.method).toBe("zoom_alignment");
+    expect([...withNames.roles.entries()]).toEqual([["1", "tutor"], ["2", "student"], ["3", "tutor"]]);
   });
 
   it("does not trust an alignment that does not look like a one-to-one lesson", () => {
@@ -170,5 +194,102 @@ describe("thaiShare", () => {
     expect(thaiShare("Hello")).toBe(0);
     expect(thaiShare("ab สว")).toBe(0.5);
     expect(thaiShare("123 !")).toBe(0);
+  });
+});
+
+/** A long, clearly one-to-one lesson (the tutor explains, the student answers): enough to write from. */
+function lessonTokens(minutes = 12) {
+  const out: Array<{ text: string; start_ms: number; end_ms: number; speaker: string }> = [];
+  for (let i = 0; i < minutes; i += 1) {
+    const at = i * 60_000;
+    out.push({ text: " Today we add fractions with unlike denominators and simplify the answer, step by step.", start_ms: at, end_ms: at + 25_000, speaker: "1" });
+    out.push({ text: " I got three quarters because I found the common denominator first.", start_ms: at + 31_000, end_ms: at + 55_000, speaker: "2" });
+  }
+  return out;
+}
+
+const LESSON_VTT = `WEBVTT
+
+1
+00:00:00.000 --> 00:00:25.000
+Kevin (Kev) Y. Hsieh Online: Today we add fractions
+
+2
+00:00:31.000 --> 00:00:55.000
+${STUDENT_NAME}: I got three quarters
+`;
+
+describe("buildTranscriptEvidence (shared by the second pass and the replay)", () => {
+  const base = {
+    scheduledMinutes: 60,
+    teacherName: "Kevin (Kev) Y. Hsieh Online",
+    alsoTeacher: ["Kevin Hsieh", "Kev"],
+  };
+  const transcript = (tokens = lessonTokens()) => ({ text: tokens.map((token) => token.text).join(""), tokens });
+
+  it("renders TUTOR/STUDENT turns with Zoom-confirmed labels and the stored metadata", () => {
+    const evidence = buildTranscriptEvidence({ ...base, transcript: transcript(), audioDurationMs: 3_600_000, zoomCues: parseZoomVtt(LESSON_VTT) });
+    expect(evidence.tooShort).toBeNull();
+    expect(evidence.speakerLabels).toBe("verified");
+    expect(evidence.speakers.method).toBe("zoom_alignment");
+    expect(evidence.rendered).toContain("[00:00] TUTOR: Today we add fractions");
+    expect(evidence.rendered).toContain("[00:31] STUDENT: I got three quarters");
+    expect(evidence.meta).toEqual({ audioMinutes: 60, speakerMethod: "zoom_alignment", shares: { tutor: 57, student: 43, other: 0 }, thaiShare: 0 });
+  });
+
+  it("says the labels are inferred when only the talk share names the tutor, and leaves an unclear split to the caller", () => {
+    const tutorLed = lessonTokens().map((token) => token.speaker === "2" ? { ...token, text: " Three quarters." } : token);
+    const inferred = buildTranscriptEvidence({ ...base, transcript: transcript(tutorLed), audioDurationMs: 3_600_000, zoomCues: [] });
+    expect(inferred).toMatchObject({ speakerLabels: "inferred", tooShort: null, meta: { speakerMethod: "talk_share" } });
+    const even = lessonTokens().map((token, index) => ({ ...token, speaker: String((index % 3) + 1) }));
+    const unclear = buildTranscriptEvidence({ ...base, transcript: transcript(even), audioDurationMs: 3_600_000, zoomCues: [] });
+    expect(unclear).toMatchObject({ speakerLabels: "inferred", tooShort: null, speakers: { method: "unclear" } });
+  });
+
+  it("flags a recording much shorter than the class before a short transcript, and trusts no length it was not given", () => {
+    const short = buildTranscriptEvidence({ ...base, transcript: transcript(lessonTokens(1)), audioDurationMs: 20 * 60_000, zoomCues: [] });
+    expect(short.tooShort).toBe("recording_too_short");
+    expect(short.meta.audioMinutes).toBe(20);
+    const thin = buildTranscriptEvidence({ ...base, transcript: transcript(lessonTokens(1)), audioDurationMs: 3_600_000, zoomCues: [] });
+    expect(thin.tooShort).toBe("transcript_too_short");
+    const unknownLength = buildTranscriptEvidence({ ...base, transcript: transcript(), audioDurationMs: null, zoomCues: [] });
+    expect(unknownLength.tooShort).toBeNull();
+    expect(unknownLength.meta.audioMinutes).toBe(0);
+  });
+
+  it("measures how Thai the transcript is", () => {
+    const thai = lessonTokens().map((token) => token.speaker === "2" ? { ...token, text: " ได้สามส่วนสี่ครับ เพราะหาตัวส่วนร่วมก่อน" } : token);
+    expect(buildTranscriptEvidence({ ...base, transcript: transcript(thai), audioDurationMs: 3_600_000, zoomCues: [] }).meta.thaiShare)
+      .toBeGreaterThan(0.2);
+  });
+});
+
+describe("sonioxJobInput (shared by the second pass and the replay)", () => {
+  it("sends the recording with our terms, the tutor's and the student's names, and the class details", () => {
+    const input = sonioxJobInput({
+      wiseSessionId: SESSION_ID,
+      audioUrl: "https://files.wiseapp.live/rec.mp4",
+      detail: { classSubject: "11+/13+", title: "Live Session - NVR" },
+      tutorNames: ["Kevin Hsieh", "Kev"],
+      studentName: STUDENT_NAME,
+    });
+    expect(input).toEqual({
+      audioUrl: "https://files.wiseapp.live/rec.mp4",
+      terms: [...SONIOX_TERMS, "Kevin Hsieh", "Kev", "Somchai", "Tom"],
+      general: [
+        { key: "domain", value: "one-to-one online tutoring lesson between a tutor and a student" },
+        ...describeClass({ programme: "11+/13+", title: "Live Session - NVR" }).map((line) => ({ key: "class", value: line })),
+      ],
+      clientReferenceId: SESSION_ID,
+    });
+  });
+
+  it("leaves out a nickname the student's Wise name does not have", () => {
+    const input = sonioxJobInput({
+      wiseSessionId: SESSION_ID, audioUrl: "https://files.wiseapp.live/rec.mp4",
+      detail: { classSubject: null, title: null }, tutorNames: ["Kevin Hsieh"], studentName: "Somchai Jaidee",
+    });
+    expect(input.terms).toEqual([...SONIOX_TERMS, "Kevin Hsieh", "Somchai"]);
+    expect(input.general).toEqual([{ key: "domain", value: "one-to-one online tutoring lesson between a tutor and a student" }]);
   });
 });

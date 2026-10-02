@@ -6,6 +6,7 @@ import { API, Button, Empty, Field, command, fileUrl, formatDate, readApi, type 
 import { AssessmentEditor, STAGE_LABELS } from "./assessment-editor";
 import { PaperEditor } from "./paper-editor";
 import css from "./workspace.module.css";
+import { TeacherProgressWorkspace } from "./tutor-workspace";
 
 type Tab = "students" | "library" | "grading" | "history";
 type Detail = { kind: "assessment"; data: Serialized<AssessmentDetail> } | { kind: "paper"; data: Serialized<PaperDetail> };
@@ -27,15 +28,17 @@ export function TutorProgressWorkspace() {
   const [title, setTitle] = useState("");
   const [createOwner, setCreateOwner] = useState("");
   const [busy, setBusy] = useState(false);
+  const openRequest = useRef(0);
   const load = useCallback(async () => { const data = await readApi<Serialized<Overview>>(API); setOverview(data); return data; }, []);
   const open = useCallback(async (kind: "assessment" | "paper", id: string) => {
+    const request = ++openRequest.current;
     setError(""); setLoadingDetail(true);
     try {
-      if (kind === "assessment") setDetail({ kind, data:await readApi<Serialized<AssessmentDetail>>(`${API}/assessments/${id}`) });
-      else setDetail({ kind, data:await readApi<Serialized<PaperDetail>>(`${API}/papers/${id}`) });
-      window.scrollTo({ top:0,behavior:"instant" });
-    } catch(e) { setError(e instanceof Error ? e.message : "Unable to open record."); }
-    finally { setLoadingDetail(false); }
+      if (kind === "assessment") { const data = await readApi<Serialized<AssessmentDetail>>(`${API}/assessments/${id}`); if (request === openRequest.current) setDetail({ kind, data }); }
+      else { const data = await readApi<Serialized<PaperDetail>>(`${API}/papers/${id}`); if (request === openRequest.current) setDetail({ kind, data }); }
+      if (request === openRequest.current) window.scrollTo({ top:0,behavior:"instant" });
+    } catch(e) { if (request === openRequest.current) setError(e instanceof Error ? e.message : "Unable to open record."); }
+    finally { if (request === openRequest.current) setLoadingDetail(false); }
   }, []);
   useEffect(() => {
     let mounted = true;
@@ -63,11 +66,12 @@ export function TutorProgressWorkspace() {
   const refreshed = async () => {
     await load();
     if (detail) {
-      if (detail.kind === "paper") setDetail({ kind:"paper",data:await readApi<Serialized<PaperDetail>>(`${API}/papers/${detail.data.id}`) });
-      else setDetail({ kind:"assessment",data:await readApi<Serialized<AssessmentDetail>>(`${API}/assessments/${detail.data.id}`) });
+      if (detail.kind === "paper") { const data = await readApi<Serialized<PaperDetail>>(`${API}/papers/${detail.data.id}`); setDetail(current => current?.kind === "paper" && current.data.id === data.id ? { kind: "paper", data } : current); }
+      else { const data = await readApi<Serialized<AssessmentDetail>>(`${API}/assessments/${detail.data.id}`); setDetail(current => current?.kind === "assessment" && current.data.id === data.id ? { kind: "assessment", data } : current); }
     }
   };
   if (!overview) return <div className={css.workspace} data-begifted-surface="ops">{error ? <div role="alert" className={css.error}>{error}<Button onClick={() => { setError(""); void load().catch(e => setError(e.message)); }}>Retry</Button></div> : <div role="status" className={css.loading}><LoaderCircle className={css.spinner}/>Loading your workspace…</div>}</div>;
+  if (overview.user.role === "teacher") return <TeacherProgressWorkspace overview={overview} detail={detail} loading={loadingDetail} error={error} onError={setError} open={open} close={() => { openRequest.current++; setLoadingDetail(false); setDetail(null); }} refresh={load} saved={refreshed}/>;
   const all = overview.assessments.filter(a => !owner || a.series.ownerKey === owner);
   const active = all.filter(a => a.stage !== "approved");
   const filtered = all.filter(a => `${a.series.studentName} ${a.series.courseName} ${a.series.tutorName}`.toLowerCase().includes(search.toLowerCase()))

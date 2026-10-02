@@ -708,3 +708,8 @@ Every financial mutation runs through two layers.
 - **Enforcement state is duplicated by design, and the copies can disagree.** `enforcementMode` and `policyVersion` live on `postClassSettings` (current), on `postClassEnforcementWindows` (historical), and stamped onto each `postClassSessions` and `postClassAssessments` row (as-judged). That is deliberate — a stored verdict must stay reproducible — but nothing in the schema constrains a session's stamped mode to any window that actually existed.
 
 _Verified against main@0cd1e81 (clean tree) on 2026-09-02._
+
+
+### Gmail reminder connection and private alert outbox
+
+Migration `0109_feedback_gmail` adds `post_class_email_connection` (one encrypted send-only grant, revision and inbox proof), `post_class_reminder_line_channel` (one verified private destination and current failure episode), and `post_class_reminder_alerts` (frozen failure/recovery messages, LINE retry key, lease, attempts and acceptance proof). These tables are independent of finance and payout tables. Reconnection clears obsolete Gmail receipt evidence; LINE evidence binds the destination and channel token.

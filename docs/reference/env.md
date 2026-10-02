@@ -12,10 +12,10 @@ The count inventory below predates the collaborator-access release. The addition
 |---|---|---|
 | Declared in the Zod schema | **20** keys | [`src/lib/env.ts:3`–`46`](../../src/lib/env.ts) |
 | Documented in `.env.example` | **43** keys | [`.env.example`](../../.env.example) — `grep -cE '^[A-Z_][A-Z0-9_]*=' .env.example` |
-| Read by non-test `src/` at runtime | **79** named keys + 1 dynamically-named family | includes the Onsite Foot Traffic HMAC and PDF-runtime keys |
-| Read anywhere in the repo (`src/`, `scripts/`, root config) | **85** named keys | the 79 above + 6 test/script-only keys (§2.10). `TZ` is *written*, not read |
+| Read by non-test `src/` at runtime | **80** named keys + 1 dynamically-named family | includes the Onsite Foot Traffic HMAC and PDF-runtime keys |
+| Read anywhere in the repo (`src/`, `scripts/`, root config) | **86** named keys | the 80 above + 6 test/script-only keys (§2.10). `TZ` is *written*, not read |
 
-> **Counting method.** A literal `process.env.NAME` scan of non-test `src/` yields 68 runtime names after excluding `TEST_DATABASE_URL`. Eleven more never appear in that form: nine `POST_CLASS_PAYOUT_*` keys read through `value(env, "NAME")` or `env.POST_CLASS_PAYOUT_WRITES_ENABLED`, `VERCEL_ENV` through the same helper, and `WISE_SESSION_SUBJECT_UPDATE_VERIFIED` through computed access on a constant. That produces 79 named runtime keys; the computed `COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD` family is listed separately rather than guessed.
+> **Counting method.** A literal `process.env.NAME` scan of non-test `src/` yields 69 runtime names after excluding `TEST_DATABASE_URL`. Eleven more never appear in that form: nine `POST_CLASS_PAYOUT_*` keys read through `value(env, "NAME")` or `env.POST_CLASS_PAYOUT_WRITES_ENABLED`, `VERCEL_ENV` through the same helper, and `WISE_SESSION_SUBJECT_UPDATE_VERIFIED` through computed access on a constant. That produces 80 named runtime keys; the computed `COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD` family is listed separately rather than guessed.
 
 ---
 
@@ -68,10 +68,10 @@ Where the repo's prose stands against this table:
 | Source | Claim | Zod truth |
 |---|---|---|
 | [`AGENTS.md:291`](../../AGENTS.md) | heading "Environment Variables (9 required)" over a 12-row table that includes the three `LEAVE_REQUESTS_*` vars | 7 hard-required + 2 defaulted; the `LEAVE_REQUESTS_*` vars are **not** in the schema — they are read at [`src/lib/leave-requests/config.ts:1`–`5`](../../src/lib/leave-requests/config.ts) |
-| [`AGENTS.md`](../../AGENTS.md) | Historical environment inventory | 7 required + 2 defaulted + 11 optional = 20 declared; **79** runtime names read; and schema validation never executes (next section) |
+| [`AGENTS.md`](../../AGENTS.md) | Historical environment inventory | 7 required + 2 defaulted + 11 optional = 20 declared; **80** runtime names read; and schema validation never executes (next section) |
 | [`README.md`](../../README.md) | Historical environment inventory | This page is canonical; the root README is not the effective contract |
 | [`CLAUDE.md`](../../CLAUDE.md) | Historical environment inventory | This page is canonical; counts can drift whenever a point-of-use read is added |
-| [`docs/OPEN-QUESTIONS.md`](../OPEN-QUESTIONS.md) (DEF-2 / ENV items) | Earlier counts retained in dated questions | 20 declared; 79 runtime names |
+| [`docs/OPEN-QUESTIONS.md`](../OPEN-QUESTIONS.md) (DEF-2 / ENV items) | Earlier counts retained in dated questions | 20 declared; 80 runtime names |
 
 Accurate phrasing: **7 hard-required + 2 defaulted + 11 optional = 20 declared; 79 named keys (+ 1 dynamic family) read at runtime by `src/`.**
 
@@ -228,15 +228,16 @@ The payout path is *stable, with writes flag-gated by `POST_CLASS_PAYOUT_WRITES_
 
 > **Deployment cross-check.** `requirePayoutGoogleTarget` compares `POST_CLASS_PAYOUT_TARGET` against Vercel's injected `VERCEL_ENV` ([`payout-config.ts:115`–`123`](../../src/lib/post-class-feedback/payout-config.ts)): a `production` deployment must target `production`, a `preview` deployment must target `scratch`. Both mismatches throw. Because `value()` returns `""` rather than `undefined`, an unset `VERCEL_ENV` (local dev) resolves to `""` and neither check fires. There are deliberately no live spreadsheet, folder, tab, or account fallbacks in source ([`payout-config.ts:1`–`5`](../../src/lib/post-class-feedback/payout-config.ts)).
 
-### 2.5 Wise writeback verification gates (3)
+### 2.5 Wise writeback verification gates (4)
 
-Three independent gates, each requiring the exact string `"true"`. They exist so a Wise write contract that has not been validated against the `begifted-education` tenant cannot fire.
+Four independent gates, each requiring the exact string `"true"`. They exist so a Wise write contract that has not been validated against the `begifted-education` tenant cannot fire.
 
 | Variable | Gate | Consumed at | If unset |
 |---|---|---|---|
 | `WISE_SESSION_OPERATIONS_VERIFIED` | LINE-originated session operations (cancel / reschedule writeback) | [`wise/operations.ts:10`–`12`](../../src/lib/wise/operations.ts) (function); [`line/operational.ts:21`](../../src/lib/line/operational.ts) — a **module-level `const`**, captured once at import | Writeback stays dry-run |
 | `WISE_SESSION_CREATE_VERIFIED` | Real Wise session creation for progress-test bookings | [`progress-tests/config.ts:49`–`51`](../../src/lib/progress-tests/config.ts) | Bookings record locally and require a manual Wise booking ([`config.ts:40`–`47`](../../src/lib/progress-tests/config.ts)) |
 | `WISE_SESSION_SUBJECT_UPDATE_VERIFIED` | Future-session subject rewrite during the student-promotion run. The name lives in a `const` ([`student-promotions/data.ts:201`](../../src/lib/student-promotions/data.ts)) and is read via computed access ([`:450`](../../src/lib/student-promotions/data.ts)), so a literal grep finds the `const`, not the read | [`data.ts:449`–`451`](../../src/lib/student-promotions/data.ts); enforced at [`:2412`](../../src/lib/student-promotions/data.ts) | Throws `WISE_SESSION_SUBJECT_UPDATE_VERIFIED=true is required before Wise session subject writes` |
+| `WISE_TEACHER_REMOVAL_VERIFIED` | Wise institute participant removal from Tutor Offboarding | [`removal-safety.ts`](../../src/lib/tutor-offboarding/removal-safety.ts) | Manual mode unless exactly `true` **and** `VERCEL_ENV=production` |
 
 ### 2.6 Leave requests (4)
 
@@ -332,19 +333,20 @@ flowchart TD
 
 ## 4. `.env.example` reconciliation
 
-`.env.example` lists **43** keys. Every one is genuinely read somewhere — there are no dead entries. It carries 19 of the 20 schema-declared keys; `CREDIT_REFRESH_MAX_AGE_MINUTES` is the declared omission. **Thirty-six** named keys read by non-test runtime code are missing from it:
+`.env.example` lists **43** concrete keys plus two commented optional Tutor Offboarding examples. Every one is genuinely read somewhere — there are no dead entries. It carries 19 of the 20 schema-declared keys; `CREDIT_REFRESH_MAX_AGE_MINUTES` is the declared omission. **Thirty-eight** named keys read by non-test runtime code are missing from it:
 
 - **AI models and flags (6):** `OPENAI_SCHEDULER_SHADOW_MODEL`, `OPENAI_SCHEDULER_REASONING_EFFORT`, `OPENAI_PROGRESS_TEST_MODEL`, `OPENAI_POST_CLASS_FEEDBACK_MODEL`, `OPENAI_COMPETITOR_INTEL_MODEL`, `ENABLE_COMPETITOR_AI`
 - **Competitor providers (8):** `APIFY_API_TOKEN`, `APIFY_INSTAGRAM_ACTOR`, `APIFY_FACEBOOK_ACTOR`, `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD`, `COMPETITOR_APIFY_COST_PER_ITEM_USD`, `COMPETITOR_DATAFORSEO_COST_PER_QUERY_USD`, `COMPETITOR_INTEL_MONTHLY_CAP_USD`
-- **Wise writeback gates (3):** `WISE_SESSION_OPERATIONS_VERIFIED`, `WISE_SESSION_CREATE_VERIFIED`, `WISE_SESSION_SUBJECT_UPDATE_VERIFIED`
+- **Wise writeback gates (4):** `WISE_SESSION_OPERATIONS_VERIFIED`, `WISE_SESSION_CREATE_VERIFIED`, `WISE_SESSION_SUBJECT_UPDATE_VERIFIED`, `WISE_TEACHER_REMOVAL_VERIFIED`
 - **Admissions email (3):** `RESEND_API_KEY`, `ADMISSIONS_EMAIL_FROM`, `ADMISSIONS_EMAIL_REPLY_TO`
 - **Unattended charging (2):** `POST_CLASS_AUTO_APPROVE_ENABLED`, `POST_CLASS_AUTO_APPROVE_GRACE_HOURS` — the two knobs that decide whether money moves without a human
 - **Ops and misc (4):** `SCHEDULE_EMAIL_PUBLIC_BASE_URL`, `LINE_VALIDATION_LEAD_EMAILS`, `SEED_ADMIN_EMAILS`, `SALES_DASHBOARD_CONNECTED_EMAIL`
 - **Wise traffic controls (4):** `WISE_FAR_HORIZON_MAX_AGE_MINUTES`, `WISE_AVAILABILITY_HORIZON_DAYS`, `WISE_MAX_CONCURRENCY`, `CREDIT_REFRESH_MAX_AGE_MINUTES`
 - **Local PDF runtime (1):** `CHROME_EXECUTABLE_PATH`
+- **Tutor Offboarding (2):** `TUTOR_OFFBOARDING_CONNECTED_EMAIL` (optional; falls back to `SALES_DASHBOARD_CONNECTED_EMAIL`) and `WISE_TEACHER_REMOVAL_VERIFIED` (optional; enable only after owner probe)
 - **Platform-injected (5), correctly omitted:** `VERCEL`, `VERCEL_ENV`, `VERCEL_URL`, `VERCEL_PROJECT_PRODUCTION_URL`, `AWS_LAMBDA_FUNCTION_NAME`
 
-The actionable production gap is the first seven groups — **30 keys** that change application behaviour and are discoverable only by reading source. The local Chrome override, platform-injected keys, and 6 test/script-only keys (§2.10) are reasonably omitted. The `COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD` family cannot be listed at all, because the key name is computed at call time ([`budget.ts:19`](../../src/lib/competitor-intelligence/budget.ts)).
+The actionable production gap is the first seven groups — **31 keys** that change application behaviour and are discoverable only by reading source. The local Chrome override, platform-injected keys, and 6 test/script-only keys (§2.10) are reasonably omitted. The `COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD` family cannot be listed at all, because the key name is computed at call time ([`budget.ts:19`](../../src/lib/competitor-intelligence/budget.ts)).
 
 **Three blank placeholders would fail the declared schema.** `.env.example:24`–`25` ship `LINE_CHANNEL_SECRET=` and `LINE_CHANNEL_ACCESS_TOKEN=`, and `.env.example:45` ships `APP_BASE_URL=`. A dotenv loader sets those to `""`, not `undefined`, and `z.string().min(1).optional()` / `z.string().url().optional()` reject `""`. Today this is harmless because the schema never runs and every consumer `.trim()`s and treats `""` as unset ([`line/client.ts:21`–`22`](../../src/lib/line/client.ts), [`link/route.ts:19`](../../src/app/api/student-schedule/link/route.ts)). If `src/lib/env.ts` is ever wired into a boot path, a `.env.local` copied verbatim from the template will throw on those three lines. `MAINTENANCE_MODE=`, `MAINTENANCE_BYPASS_EMAILS=`, and `LINE_SCHEDULE_BOT_ADMIN_IDS=` are plain `.optional()` strings and parse fine when blank.
 
@@ -356,7 +358,7 @@ Two comments in the repo historically carried stale cron counts. The current sou
 
 1. **The schema is dead code.** Nothing imports `src/lib/env.ts`, so its validation never runs and its `.default()` values never apply. Either wire it into a startup path (root layout, or a new `instrumentation.ts`) or relabel it as advisory. Tracked as DEF-2 / DEAD-1 / ENV-1 in [`OPEN-QUESTIONS.md`](../OPEN-QUESTIONS.md).
 2. **Secondary prose inventories drift.** This page and [`docs/README.md`](../README.md) carry the mechanical counts. Older orientation files and open questions still contain historical totals and should not be used as an environment contract.
-3. **The schema covers 20 of 79 live keys.** Is direct `process.env` access with per-call-site guards the intended pattern, or should the schema become the inventory? Every `OPENAI_*`, `POST_CLASS_*`, `SCHEDULE_EMAIL_*`, `LEAVE_REQUESTS_*`, `UNEARNED_REVENUE_*`, `WISE_SESSION_*_VERIFIED`, `APIFY_*`, `DATAFORSEO_*`, `COMPETITOR_*`, `RESEND_API_KEY`, and `ADMISSIONS_EMAIL_*` key sits outside it. The `POST_CLASS_*` module argues for operation-boundary validation explicitly ([`payout-config.ts:65`–`71`](../../src/lib/post-class-feedback/payout-config.ts)); the others are silent.
+3. **The schema covers 20 of 80 live keys.** Is direct `process.env` access with per-call-site guards the intended pattern, or should the schema become the inventory? Every `OPENAI_*`, `POST_CLASS_*`, `SCHEDULE_EMAIL_*`, `LEAVE_REQUESTS_*`, `UNEARNED_REVENUE_*`, `WISE_SESSION_*_VERIFIED`, `APIFY_*`, `DATAFORSEO_*`, `COMPETITOR_*`, `RESEND_API_KEY`, and `ADMISSIONS_EMAIL_*` key sits outside it. The `POST_CLASS_*` module argues for operation-boundary validation explicitly ([`payout-config.ts:65`–`71`](../../src/lib/post-class-feedback/payout-config.ts)); the others are silent.
 4. **`WISE_INSTITUTE_ID` is effectively hard-coded.** The literal `696e1f4d90102225641cc413` appears 18 times in non-test `src/` — 11 inline fallbacks plus 6 `DEFAULT_INSTITUTE_ID` consts. Only [`room-capacity/utilization.ts:433`](../../src/lib/room-capacity/utilization.ts) and [`post-class-feedback/sync.ts:1053`](../../src/lib/post-class-feedback/sync.ts) refuse to guess.
 5. **Three different failure modes for the same Wise credentials.** `createWiseClient()` ([`wise/client.ts:215`–`221`](../../src/lib/wise/client.ts)) asserts `WISE_USER_ID!` / `WISE_API_KEY!` and builds a client whose Basic header encodes `"undefined:undefined"` ([`:70`](../../src/lib/wise/client.ts)), 401ing at request time; `createWiseClientFromEnv()` ([`classrooms/data.ts:1151`–`1159`](../../src/lib/classrooms/data.ts)) and `createPromotionWiseClient()` ([`student-promotions/data.ts:298`–`306`](../../src/lib/student-promotions/data.ts)) throw immediately with named errors; [`wise-activity/reconciliation.ts:770`, `:797`](../../src/lib/wise-activity/reconciliation.ts) return a typed error result.
 6. **`CRON_SECRET` checking is duplicated six times.** [`cron-auth.ts`](../../src/lib/internal/cron-auth.ts) is the shared helper with 16 route importers, yet six internal routes reimplement the identical constant-time comparison inline. A change to the algorithm needs seven edits.
@@ -495,7 +497,33 @@ The manual operations owner is the exact normalized identity `kevhsh7@gmail.com`
 | `WISE_WEBHOOK_SECRET` | Shared key Wise sends with each delivery | [`api/wise/webhook/route.ts`](../../src/app/api/wise/webhook/route.ts) | Every delivery is refused (401) |
 | `WISE_WEBHOOK_AUTH_HEADER` | Pins the header carrying the key | same | Unset: the key is accepted from any header, and the first delivery logs the header's name to pin |
 | `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED` | Second pass: held / summary-less / Thai-summary classes are written from a Soniox transcript of the recording | [`feedback-autowriter/config.ts`](../../src/lib/feedback-autowriter/config.ts) | Off — exact `"true"` only |
-| `SONIOX_API_KEY` | Bearer key for Soniox async transcription | same | Second-pass classes are held with an alert (`transcript_pass_unavailable`) |
+| `SONIOX_API_KEY` | Bearer key for Soniox async transcription | same | Second-pass classes are held with an alert (`transcript_pass_unavailable`); a transcript-first class falls back to the summary instead |
+| `FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST` | Transcript first: every class that passes the gates is written from the Soniox transcript of its recording; Wise's summary is only the fallback (no recording 3 h after class, a recording in several parts, speakers unclear, three Soniox failures, the transcript pass switched off while the class waits, the writer failing three times in a row on the transcript draft). Acts only with the two above ([runbook §6](../operations/feedback-autowriter.md)) | [`feedback-autowriter/config.ts`](../../src/lib/feedback-autowriter/config.ts) (`autowriterTranscriptFirst`) | Off — exact `"true"` only; the summary stays the first evidence |
+| `FEEDBACK_AUTOWRITER_MIMI_STYLE_ENABLED` | Versioned Mimi format and voice guide on both roster accounts; enable only after owner approval of the ten-draft offline comparison | [`feedback-autowriter/style.ts`](../../src/lib/feedback-autowriter/style.ts) | Disabled; only exact `"true"` enables it |
+| `FEEDBACK_AUTOWRITER_LINE_TO` | Optional LINE user or group id that receives the operating loop's critical incidents (critical verdict, a post that landed without verifying, an API save no post explains), pushed with `LINE_CHANNEL_ACCESS_TOKEN` | [`feedback-autowriter/config.ts`](../../src/lib/feedback-autowriter/config.ts) | Critical incidents go by email (`FEEDBACK_AUTOWRITER_ALERT_EMAILS`) only; with neither set they stay pending and the review job reports `ok:false` |
 
 Runtime modes (`off`/`shadow`/`live`), the halt and per-tutor switches live in the `feedback_autowriter_control`
 row, not in env ([runbook](../operations/feedback-autowriter.md)).
+
+
+## Tutor Offboarding termination source (1)
+
+| Variable | Purpose | If unset |
+|---|---|---|
+| `TUTOR_OFFBOARDING_CONNECTED_EMAIL` | Google OAuth token owner for the configured `Tutors` termination-source sheet | Falls back to `SALES_DASHBOARD_CONNECTED_EMAIL`, then an empty value; without a usable connection, the next snapshot sync records a visible source error and the dashboard reports the missing or stale source. |
+
+The spreadsheet ID and tab ID (`470328060`, title `Tutors`) are fixed in [`termination-source.ts`](../../src/lib/tutor-offboarding/termination-source.ts). The existing Wise snapshot sync refreshes this source after promotion; dashboard and API reads use Postgres only. Failed refreshes preserve the last successful rows and show the error. The optional example is commented out in [`.env.example`](../../.env.example): remove the comment and set a real account only when it differs from the fallback.
+
+Live Tutor Offboarding removal also requires `WISE_TEACHER_REMOVAL_VERIFIED=true` **and** `VERCEL_ENV=production` ([`removal-safety.ts`](../../src/lib/tutor-offboarding/removal-safety.ts)). Keep the flag unset until the owner completes and records the dummy-teacher endpoint probe. When disabled, apply saves a manual checklist and performs no Wise POST. Only the owner should enable it in Vercel's Production environment after verification, then deploy the change.
+
+
+## Nightly feedback Gmail and private LINE
+
+| Variable | Purpose |
+|---|---|
+| `POST_CLASS_GMAIL_CLIENT_ID` | Dedicated Web OAuth client in BeGifted Scheduling; production only. |
+| `POST_CLASS_GMAIL_CLIENT_SECRET` | Dedicated client secret; encrypted token storage uses the existing `AUTH_SECRET`. |
+| `POST_CLASS_GMAIL_WORKSPACE_TRUSTED` | Set to `true` only after Workspace approval of the exact client. Connection and sending refuse otherwise. |
+| `POST_CLASS_REMINDER_LINE_USER_ID` | Kevin's private LINE `U...` destination; receipt confirmation required. Uses the existing `LINE_CHANNEL_ACCESS_TOKEN`. |
+
+See [nightly feedback operations](../operations/nightly-feedback-reminders.md). The callback uses the origin of `APP_BASE_URL` (default `https://bgscheduler.vercel.app`). Previews cannot authorize or send. Other email transports are unchanged.

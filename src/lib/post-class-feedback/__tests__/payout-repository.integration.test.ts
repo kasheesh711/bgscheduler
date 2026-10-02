@@ -393,7 +393,7 @@ describe("selectPayoutRunCandidates", () => {
     await releaseRun(acquired);
   });
 
-  it("counts any non-auto human submission regardless of actor role (D-EVT-04)", async () => {
+  it("counts teacher and admin submissions and excludes students", async () => {
     // Wise stamps the account's role, not authorship: a tutor holding an admin
     // account submits as ADMIN. Only auto-submissions are excluded.
     const deductionId = await seedDeduction({
@@ -407,19 +407,28 @@ describe("selectPayoutRunCandidates", () => {
       .where(eq(schema.postClassDeductions.id, deductionId));
     const events = await handle.db.insert(schema.wiseActivityEvents).values([
       {
+        eventId: "student-feedback-event", sessionId: "admin-submission",
+        eventName: "SessionFeedbackSubmittedEvent",
+        eventTimestamp: new Date("2026-07-09T23:30:00.000Z"), actorRole: "STUDENT",
+      },
+      {
         eventId: "auto-role-less-event",
+        sessionId: "admin-submission",
+        payload: { session: { autoSubmitted: true } },
         eventName: "SessionFeedbackSubmittedEvent",
         eventTimestamp: new Date("2026-07-10T00:30:00.000Z"),
         actorRole: null,
       },
       {
         eventId: "admin-feedback-event",
+        sessionId: "admin-submission",
         eventName: "SessionFeedbackSubmittedEvent",
         eventTimestamp: new Date("2026-07-10T01:00:00.000Z"),
         actorRole: "ADMIN",
       },
       {
         eventId: "teacher-feedback-event",
+        sessionId: "admin-submission",
         eventName: "SessionFeedbackSubmittedEvent",
         eventTimestamp: new Date("2026-07-10T02:00:00.000Z"),
         actorRole: " Teacher ",
@@ -437,7 +446,7 @@ describe("selectPayoutRunCandidates", () => {
         eventTimestamp: event.eventTimestamp,
         // The earliest event is the Wise auto-submission; the human ones carry
         // NULL / false, mirroring production rows.
-        autoSubmitted: index === 0 ? true : index === 1 ? null : false,
+        autoSubmitted: index === 1 ? true : null,
       })),
     );
 
@@ -461,12 +470,15 @@ describe("selectPayoutRunCandidates", () => {
     const events = await handle.db.insert(schema.wiseActivityEvents).values([
       {
         eventId: "auto-feedback-event",
+        sessionId: "null-auto-submission",
+        payload: { session: { autoSubmitted: true } },
         eventName: "SessionFeedbackSubmittedEvent",
         eventTimestamp: new Date("2026-07-10T01:00:00.000Z"),
         actorRole: "TEACHER",
       },
       {
         eventId: "manual-feedback-event",
+        sessionId: "null-auto-submission",
         eventName: "SessionFeedbackSubmittedEvent",
         eventTimestamp: new Date("2026-07-10T02:00:00.000Z"),
         actorRole: "TEACHER",
@@ -651,6 +663,7 @@ describe("acquirePayoutRunLease", () => {
     expect(written.tutorSubmittedAt).toBeNull();
     const [event] = await handle.db.insert(schema.wiseActivityEvents).values({
       eventId: "late-discovered-submission",
+        sessionId: "written-adjustment-source",
       eventName: "SessionFeedbackSubmittedEvent",
       eventTimestamp: new Date("2026-07-10T05:00:00.000Z"),
       actorRole: "TEACHER",
@@ -685,6 +698,7 @@ describe("acquirePayoutRunLease", () => {
       .where(eq(schema.postClassDeductions.id, deductionId));
     const [event] = await handle.db.insert(schema.wiseActivityEvents).values({
       eventId: "original-submission-event",
+        sessionId: "stored-submission-drift",
       eventName: "SessionFeedbackSubmittedEvent",
       eventTimestamp: new Date("2026-07-10T04:00:00.000Z"),
       actorRole: "TEACHER",
@@ -715,9 +729,9 @@ describe("acquirePayoutRunLease", () => {
       },
     });
     await releaseRun(acquired, false);
-    await handle.db.update(schema.postClassFeedbackEventLinks).set({
+    await handle.db.update(schema.wiseActivityEvents).set({
       eventTimestamp: new Date("2026-07-11T04:00:00.000Z"),
-    }).where(eq(schema.postClassFeedbackEventLinks.wiseActivityEventId, event.id));
+    }).where(eq(schema.wiseActivityEvents.id, event.id));
 
     await expect(acquireRun()).rejects.toBeInstanceOf(PostClassConflictError);
   });
@@ -1377,6 +1391,54 @@ describe("acquirePayoutRunLease", () => {
 
     const { coverage } = await readPayoutRunPreview(appDb(), { window: WINDOW });
     expect(coverage.blockingGlobalSourceIssues).toBe(1);
+  });
+});
+
+describe("historical payout evidence compatibility", () => {
+  it("retains a historical student timestamp while presentation uses staff evidence", async () => {
+    const { line } = await seedWrittenPayoutDeduction();
+    const oldAt = new Date("2026-07-10T01:00:00Z");
+    const staffAt = new Date("2026-07-12T18:40:00Z");
+    for (const [role, at] of [["STUDENT", oldAt], ["TEACHER", staffAt]] as const) {
+      const [event] = await handle.db.insert(schema.wiseActivityEvents).values({
+        eventId: `legacy-${role}`, sessionId: "written-adjustment-source",
+        eventName: "SessionFeedbackSubmittedEvent", actorRole: role, eventTimestamp: at,
+      }).returning();
+      await handle.db.insert(schema.postClassFeedbackEventLinks).values({
+        sessionId: line.sessionId, wiseActivityEventId: event.id,
+        wiseEventId: event.eventId, eventTimestamp: at, autoSubmitted: null,
+      });
+    }
+    await handle.db.update(schema.postClassPayoutRunLines).set({
+      tutorSubmittedAt: oldAt, submissionEvidenceVersion: 1,
+    }).where(eq(schema.postClassPayoutRunLines.id, line.id));
+    const acquired = await acquireRun();
+    expect(acquired.lines[0].tutorSubmittedAt).toEqual(oldAt);
+    expect(acquired.submissionTimes.get(line.sessionId)?.staffSubmittedAt).toEqual(staffAt);
+    await releaseRun(acquired, false);
+    const [unchanged] = await handle.db.select().from(schema.postClassPayoutRunLines).where(eq(schema.postClassPayoutRunLines.id, line.id));
+    expect(unchanged.amountMinor).toBe(-10_000);
+    expect(unchanged.tutorSubmittedAt).toEqual(oldAt);
+  });
+
+  it("adding a verified alias preserves written rows; removing an identity blocks publication", async () => {
+    const { line } = await seedWrittenPayoutDeduction();
+    // Start with just the primary, as Pakgad's mapping did at the charge.
+    const baseline = new Date("2020-01-01T00:00:00Z");
+    await handle.db.update(schema.postClassPayoutTutorNames).set({ alternateLedgerName: null, identityChangedAt: baseline, updatedAt: baseline });
+    const added = await upsertPayoutTutorName(appDb(), {
+      canonicalKey: "kevin", primaryLedgerName: "Kevin (Kev) Y. Hsieh",
+      alternateLedgerName: "Kevin (Kev) Y. Hsieh Online", active: true, updatedByEmail: "finance@example.com",
+    });
+    expect(added.identityChangedAt).toEqual(baseline);
+    expect(added.updatedAt.getTime()).toBeGreaterThan(baseline.getTime());
+    await releaseRun(await acquireRun(), false);
+    expect((await handle.db.select().from(schema.postClassPayoutRunLines).where(eq(schema.postClassPayoutRunLines.id, line.id)))[0].amountMinor).toBe(-10_000);
+    await upsertPayoutTutorName(appDb(), {
+      canonicalKey: "kevin", primaryLedgerName: "Kevin (Kev) Y. Hsieh",
+      alternateLedgerName: null, active: true, updatedByEmail: "finance@example.com",
+    });
+    await expect(acquireRun()).rejects.toBeInstanceOf(PostClassConflictError);
   });
 });
 

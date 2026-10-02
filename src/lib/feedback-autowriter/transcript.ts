@@ -1,4 +1,7 @@
-import type { SonioxToken } from "./soniox";
+import { AUTOWRITER_MIN_TRANSCRIPT_CHARACTERS } from "./config";
+import { SONIOX_TERMS, describeClass, parseStudentName, type SpeakerLabels } from "./prompt";
+import { recordingTooShort, type AutowriterSessionDetail } from "./session";
+import type { SonioxClient, SonioxToken } from "./soniox";
 
 /**
  * Turning a Soniox transcript into speaker turns the writer can use. Soniox
@@ -6,6 +9,8 @@ import type { SonioxToken } from "./soniox";
  * (Wise `rawTranscript`, whose cues carry display names) by time overlap, with
  * a clear talk-share split as the fallback (tutors did 74–93% of the talking in
  * the pilot). Anything else is "unclear" and the class goes to a person.
+ * `sonioxJobInput` and `buildTranscriptEvidence` are shared by the second pass
+ * (job.ts) and the read-only replay (replay.ts), so both see the same evidence.
  */
 
 export interface Segment {
@@ -129,20 +134,27 @@ export function assignSpeakerRoles(input: {
   segments: readonly Segment[];
   zoomCues: readonly ZoomCue[];
   teacherName: string | null;
+  /**
+   * Other names the same tutor may appear under in Zoom's cues (their other Wise
+   * account, a second device joined as a guest under their own name): their
+   * lines are the tutor's, never the student's.
+   */
+  alsoTeacher?: readonly string[];
 }): RoleAssignment {
   const { segments } = input;
   const teacher = input.teacherName ? normalizeName(input.teacherName) : null;
+  const teacherNames = new Set([...(teacher ? [teacher] : []), ...(input.alsoTeacher ?? []).map(normalizeName)]);
   let zoomTutors = new Set<string>();
   let zoomStudents = new Set<string>();
   // Without a cue under the teacher's name, Zoom says nothing about who is who.
-  if (teacher && input.zoomCues.some((cue) => normalizeName(cue.speakerName) === teacher)) {
+  if (teacher && input.zoomCues.some((cue) => teacherNames.has(normalizeName(cue.speakerName)))) {
     const teacherOverlap = new Map<string, number>();
     const otherOverlap = new Map<string, number>();
     for (const segment of segments) {
       for (const cue of input.zoomCues) {
         const overlap = Math.min(segment.endMs, cue.endMs) - Math.max(segment.startMs, cue.startMs);
         if (overlap <= 0) continue;
-        const target = normalizeName(cue.speakerName) === teacher ? teacherOverlap : otherOverlap;
+        const target = teacherNames.has(normalizeName(cue.speakerName)) ? teacherOverlap : otherOverlap;
         target.set(segment.speaker, (target.get(segment.speaker) ?? 0) + overlap);
       }
     }
@@ -212,4 +224,86 @@ export function thaiShare(text: string): number {
     else if (/[A-Za-z]/u.test(char)) latin += 1;
   }
   return thai + latin === 0 ? 0 : thai / (thai + latin);
+}
+
+/**
+ * The Soniox job for a class's recording: our terms plus the tutor's and the
+ * student's names as vocabulary, and the class details as context. The Wise
+ * session id is the client reference (the orphan reaper recognises it).
+ */
+export function sonioxJobInput(input: {
+  wiseSessionId: string;
+  audioUrl: string;
+  detail: Pick<AutowriterSessionDetail, "classSubject" | "title">;
+  tutorNames: readonly string[];
+  studentName: string;
+}): Parameters<SonioxClient["create"]>[0] {
+  const classLines = describeClass({ programme: input.detail.classSubject, title: input.detail.title });
+  const student = parseStudentName(input.studentName);
+  return {
+    audioUrl: input.audioUrl,
+    terms: [...SONIOX_TERMS, ...input.tutorNames, student.firstName, student.nickname ?? ""]
+      .filter((term) => term.trim() !== ""),
+    general: [{ key: "domain", value: "one-to-one online tutoring lesson between a tutor and a student" },
+      ...classLines.map((line) => ({ key: "class", value: line }))],
+    clientReferenceId: input.wiseSessionId,
+  };
+}
+
+/** What a finished Soniox transcript gives the writer, and whether it can be written from at all. */
+export interface TranscriptEvidence {
+  /** `[mm:ss] TUTOR/STUDENT: …` lines, names not redacted yet (the pipeline redacts them). */
+  rendered: string;
+  speakers: RoleAssignment;
+  /** The models are told the labels are reliable only when Zoom confirmed them. */
+  speakerLabels: SpeakerLabels;
+  /** Stored with the draft, hold or fallback as `metadata.transcript`. */
+  meta: {
+    audioMinutes: number;
+    speakerMethod: RoleAssignment["method"];
+    shares: Record<SpeakerRole, number>;
+    thaiShare: number;
+  };
+  /**
+   * Too little to write from: Soniox heard much less audio than the class (a recording that stopped early would
+   * be written up as the whole lesson), or the rendered transcript is under the minimum. Checked in this order.
+   */
+  tooShort: "recording_too_short" | "transcript_too_short" | null;
+}
+
+/**
+ * Speaker turns, roles (Zoom's named cues when there are any, a clear talk share otherwise), the rendered
+ * transcript and its coverage checks. Pure: fetching Zoom's WEBVTT and deciding whether to wait for it stay with
+ * the caller. `speakers.method === "unclear"` is for the caller to act on, after any wait for Zoom.
+ */
+export function buildTranscriptEvidence(input: {
+  transcript: { text: string; tokens: readonly SonioxToken[] };
+  /** Soniox's own audio length; null when it gave none. */
+  audioDurationMs: number | null;
+  scheduledMinutes: number;
+  zoomCues: readonly ZoomCue[];
+  teacherName: string | null;
+  alsoTeacher: readonly string[];
+}): TranscriptEvidence {
+  const segments = segmentsFromTokens(input.transcript.tokens);
+  const speakers = assignSpeakerRoles({
+    segments, zoomCues: input.zoomCues, teacherName: input.teacherName, alsoTeacher: input.alsoTeacher,
+  });
+  const rendered = renderTranscript(segments, speakers.roles);
+  const audioDurationMs = input.audioDurationMs ?? 0;
+  const tooShort = input.audioDurationMs !== null && recordingTooShort(input.audioDurationMs / 1000, input.scheduledMinutes)
+    ? "recording_too_short" as const
+    : rendered.length < AUTOWRITER_MIN_TRANSCRIPT_CHARACTERS ? "transcript_too_short" as const : null;
+  return {
+    rendered,
+    speakers,
+    speakerLabels: speakers.method === "zoom_alignment" ? "verified" : "inferred",
+    meta: {
+      audioMinutes: Math.round(audioDurationMs / 600) / 100,
+      speakerMethod: speakers.method,
+      shares: speakers.shares,
+      thaiShare: Math.round(thaiShare(input.transcript.text) * 100) / 100,
+    },
+    tooShort,
+  };
 }

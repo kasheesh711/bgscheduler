@@ -4,8 +4,8 @@ milestone: v1.2
 milestone_name: Autonomous LINE Scheduling
 status: executing
 stopped_at: "Completed 12-05: C2 hardening — Phase 12 (IDENT-07) COMPLETE"
-last_updated: "2026-09-07T12:45:00.000Z"
-last_activity: 2026-09-07
+last_updated: "2026-10-01T15:32:00+00:00"
+last_activity: 2026-10-01
 progress:
   total_phases: 11
   completed_phases: 10
@@ -30,7 +30,8 @@ Phase: 12 (LINE Backlog Identity Recovery (IDENT-07)) — EXECUTING
 Plan: 5 of 5 (phase complete)
 Next: `/gsd-plan-phase 11` — create executable plans
 Status: Ready to execute
-Last activity: 2026-09-29 - Completed quick task 260929-rta: Data Health paused jobs state their own pause reason; synthetic watchdog rows never offer a Run action (on fix/data-health-paused-detail — not pushed)
+Last activity: 2026-10-01 - Completed quick task 261001-r5j: mobile onsite class capture, private evidence, reviewed feedback drafts; default disabled, production activation pending.
+Previous: 2026-09-29 - Completed quick task 260929-rta: Data Health paused jobs state their own pause reason; synthetic watchdog rows never offer a Run action (on fix/data-health-paused-detail — not pushed)
 Previous: 2026-09-28 - Completed quick task 260928-j77: post-class payout follow-ups (deadline_crossed lane + 12 h watchdog, versioned auto-approve key, contained retirement skips with held corrections, non-blocking evidence-exclusion signal, exemption hardening)
 Previous: 2026-08-11 - Completed quick task 260811-evt: Reconciler carried-row fixes (holdsRoom widening: needs_review carried rows now block occupancy, seed sticky continuity, and are displaceable in the unlock-retry loop; contextSessions option: online center-room 60-min chains now computed over pending + carried sessions with full-run parity; both differentially tested; on feat/classroom-continuity with 260811-div, pending deploy)
 Previous: 2026-08-11 - Completed quick task 260811-div: Classroom assignment continuity (Ras priority lock on Never Ever (TV) over Mandy/Calvin; same-day sticky-room cascade step gated by the capacity-demotion score; reconciler seeds continuity from carried rows via fixedTutorAssignments; Room switches tile + per-tutor badges in the workspace; 5 commits on feat/classroom-continuity in the bgscheduler-classroom worktree — not pushed, not deployed; review follow-ups chipped: needs_review room double-booking + online center-room chain across carried rows)
@@ -158,6 +159,8 @@ None blocking roadmap execution.
 | 260929-gvd | Feedback autowriter: GLM (ZDR) online-class feedback from Wise AI summaries for 5 roster tutors, webhook + backstop cron, single-POST state machine, monitoring dashboard | 2026-09-29 | de9be21 | [260929-gvd-feedback-autowriter-pilot-for-kevin-onli](./quick/260929-gvd-feedback-autowriter-pilot-for-kevin-onli/) |
 | 260929-snx | Feedback autowriter second pass: Soniox transcript of the Wise recording for held, summary-less and Thai-summary classes (GLM ZDR only, Zoom-aligned speakers, coverage and job-lifecycle guards) | 2026-09-29 | 69358cd | [260929-snx-soniox-transcript-second-pass](./quick/260929-snx-soniox-transcript-second-pass/) |
 | 260929-rta | Data Health paused jobs state their own reason ("<reason>; scheduled runs are skipped until it is enabled."; the LINE credit digest keeps its sentence) instead of the credit-alert text for every paused job; synthetic watchdog rows never offer a Run action; branch fix/data-health-paused-detail, not pushed | 2026-09-29 | 4087a00 | [260929-rta-fix-misleading-paused-job-text-on-data-h](./quick/260929-rta-fix-misleading-paused-job-text-on-data-h/) |
+| 261001-r5j | Mobile onsite class capture and tutor-reviewed feedback drafts; private evidence, recovery, consent and retention | 2026-10-01 | dc1bfbb9 | [261001-r5j-mobile-onsite-class-evidence-and-reviewe](./quick/261001-r5j-mobile-onsite-class-evidence-and-reviewe/) |
+| 261001-ulx | Scope all Class Capture pilots to their own tutor and today's Bangkok classes; preserve unexpired recovery and refresh safely at midnight | 2026-10-01 | 099162e0 | [261001-ulx-restrict-class-capture-to-each-pilot-tut](./quick/261001-ulx-restrict-class-capture-to-each-pilot-tut/) |
 | Phase 10-vpol-01-view-transitions P01 | 216 | 2 tasks | 2 files |
 | Phase 10-vpol-01-view-transitions P02 | 4min | 2 tasks | 2 files |
 | Phase 11 P03 | 31515093 | 2 tasks | 3 files |

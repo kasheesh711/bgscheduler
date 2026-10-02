@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+vi.mock("server-only", () => ({}));
 import { eventProofOutcome, serializePostClassFeedbackAnswer } from "../detail";
 
 const DEADLINE = new Date("2026-08-05T16:59:59.999Z");
@@ -18,22 +19,29 @@ function activityEvent(input: {
 }
 
 describe("eventProofOutcome", () => {
-  it("counts a pre-deadline event whatever account role Wise stamped", () => {
+  it("counts non-automatic teacher and admin events with an absent auto flag", () => {
     // The production case: a tutor who also holds an admin account submits
     // their own feedback and Wise records ADMIN.
-    for (const role of ["TEACHER", "ADMIN", "STUDENT", "OWNER", null]) {
+    for (const role of ["TEACHER", "ADMIN", " teacher "]) {
       expect(eventProofOutcome(activityEvent({ at: "2026-08-05T16:42:05.728Z", role }), DEADLINE))
         .toEqual({ countedAsProof: true, reason: null });
     }
   });
 
+  it("excludes student evidence and explains unverified actors", () => {
+    for (const [role, reason] of [["STUDENT", "student_feedback"], [null, "unverified_actor"], ["OWNER", "unverified_actor"]]) {
+      expect(eventProofOutcome(activityEvent({ at: "2026-08-05T16:42:05.728Z", role }), DEADLINE))
+        .toEqual({ countedAsProof: false, reason });
+    }
+  });
+
   it("counts an event landing exactly on the deadline instant", () => {
-    expect(eventProofOutcome(activityEvent({ at: "2026-08-05T16:59:59.999Z" }), DEADLINE))
+    expect(eventProofOutcome(activityEvent({ at: "2026-08-05T16:59:59.999Z", role: "TEACHER" }), DEADLINE))
       .toEqual({ countedAsProof: true, reason: null });
   });
 
   it("does not count an event one millisecond past the deadline", () => {
-    expect(eventProofOutcome(activityEvent({ at: "2026-08-05T17:00:00.000Z" }), DEADLINE))
+    expect(eventProofOutcome(activityEvent({ at: "2026-08-05T17:00:00.000Z", role: "ADMIN" }), DEADLINE))
       .toEqual({ countedAsProof: false, reason: "after_deadline" });
   });
 

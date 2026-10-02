@@ -1,6 +1,6 @@
 # API — Feedback Autowriter
 
-Four method/path endpoints. Meaning, rules and the state machine live in [the feature page](../../features/feedback-autowriter.md); day-to-day operation in [the runbook](../../operations/feedback-autowriter.md).
+Nine method/path endpoints. Meaning, rules and the state machine live in [the feature page](../../features/feedback-autowriter.md); day-to-day operation in [the runbook](../../operations/feedback-autowriter.md).
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
@@ -8,6 +8,11 @@ Four method/path endpoints. Meaning, rules and the state machine live in [the fe
 | `GET` | `/api/internal/feedback-autowriter` | cron secret | Backstop sweep, `8,22,38,52 * * * *`. Also runnable by the owner from Data Health. |
 | `GET` | `/api/feedback-autowriter` | admin session (page scope via the proxy) | Dashboard payload. |
 | `POST` | `/api/feedback-autowriter/control` | owner only (`requireClassroomOperationsOwner`) | Mode, pause/resume and per-tutor switches. |
+| `GET` | `/api/internal/feedback-autowriter/review` | cron secret | Operating-loop review job, `27 * * * *`. Also runnable by the owner from Data Health. |
+| `GET` | `/api/feedback-autowriter/review` | admin session (page scope via the proxy) | Quality and review payload: the gate, coverage, daily and per-tutor rows, the review queue, incidents. |
+| `GET` | `/api/feedback-autowriter/trends` | admin session (page scope via the proxy) | Daily trend series for a range and a tutor. |
+| `POST` | `/api/feedback-autowriter/verdicts` | owner only (`requireClassroomOperationsOwner`) | Records a verdict on a class's first shot. |
+| `POST` | `/api/feedback-autowriter/incidents` | owner only (`requireClassroomOperationsOwner`) | Acknowledges an incident (stops its pushes; an undelivered critical one stops keeping the review job red). |
 
 ## `POST /api/wise/webhook`
 
@@ -31,7 +36,16 @@ Runs `runAutowriterJob()` with a 740-second budget: reconcile `posting`/`awaitin
 
 ## `GET /api/feedback-autowriter`
 
-[`src/app/api/feedback-autowriter/route.ts`](../../../src/app/api/feedback-autowriter/route.ts). Query `days` = `1`, `7` or `30` (anything else falls back to `7`). Returns the `AutowriterDashboard` built by [`loadAutowriterDashboard`](../../../src/lib/feedback-autowriter/dashboard.ts): control row, totals by state, class-end-to-POST latency, cost by model and by Bangkok day, per-tutor rows, the 60 most recent classes with the written fields, and the last 24 hours of webhook deliveries.
+[`src/app/api/feedback-autowriter/route.ts`](../../../src/app/api/feedback-autowriter/route.ts). Query `days` = `1`, `7` or `30` (anything else falls back to `7`; the page asks for `7`). Returns the `AutowriterDashboard` built by [`loadAutowriterDashboard`](../../../src/lib/feedback-autowriter/dashboard.ts):
+
+- `control` (mode, halt, switched-off accounts) and `system` (writer, fallback writer and judge with their efforts, the evidence switches as they act, prompt and judge versions, commit);
+- `today`: the classes ending today in Bangkok by where they stand;
+- `holds`: every class in state `held`, whatever its age (up to 500 — past that, those that may still wait are kept first: no deadline, or one ahead or passed less than 24 hours ago — soonest deadline first), each with its reason, deadline, alert time, whether a draft is stored, and `resolvedBy` — `"tutor_wrote"` while `post_class_sessions.latest_feedback_version_id` points at a teacher version (the class's current teacher submission holds text in topics, performance or improvement, as the Class Feedback collection last read it; a person's, since the autowriter never posts to a held class), else `null` (a blank form, a billing correction, homework alone, or text taken out again does not count). The draft's text is not in this list;
+- `failedPosts`: the window's classes in `verify_failed`, `unknown_outcome` or `rejected`;
+- for the window: totals by state, class-end-to-POST latency (overall and by evidence route), transcript-first fallbacks by cause, cost by model and by Bangkok day, per-tutor rows, and the 60 most recent classes with the written fields and the judge's problems;
+- the last 24 hours of webhook deliveries.
+
+In-person classes are left out everywhere.
 
 **Responses:** `200` · `401` · `500 { error }`.
 
@@ -44,6 +58,72 @@ Runs `runAutowriterJob()` with a 740-second budget: reconcile `posting`/`awaitin
 | `{ "action": "mode", "mode": "off" \| "shadow" \| "live" }` | Sets the mode. Going `live` re-queues shadow drafts whose deadline is still outside the margin and returns their count as `requeued`. |
 | `{ "action": "pause", "reason": "…" }` | Sets the global halt (`halt_reason` = `paused by <email>: <reason>`). |
 | `{ "action": "resume" }` | Clears the halt. |
-| `{ "action": "tutor", "wiseUserId": "<24 hex>", "enabled": boolean }` | Adds or removes a roster tutor from `disabled_tutors`; non-roster ids get `400`. |
+| `{ "action": "tutor", "wiseUserIds": ["<24 hex>", …], "enabled": boolean }` | Adds or removes roster accounts (1 to 20; the dashboard sends every account of one tutor) from `disabled_tutors`; a non-roster id gets `400`. |
 
 **Responses:** `200 { ok: true, requeued, control }` · `400` (bad JSON, bad body, non-roster tutor) · `401` · `403 "Only Kevin can change the feedback autowriter."` · `500`.
+
+## `GET /api/internal/feedback-autowriter/review`
+
+[`src/app/api/internal/feedback-autowriter/review/route.ts`](../../../src/app/api/internal/feedback-autowriter/review/route.ts), `maxDuration = 300`, wrapped in `withCronInvocationAudit({ jobKey: "feedback_autowriter_review" })`.
+
+Runs `runAutowriterReviewJob()` ([`review-job.ts`](../../../src/lib/feedback-autowriter/review-job.ts)): pushes of incidents already waiting, the activity-mirror check, first-shot snapshots, fix events (every autowriter class; none without `WISE_USER_ID`), review rows, verification and fix flags, review counts, the metrics of every date in the gate window, the daily gate row (only when every earlier step succeeded and the Wise activity mirror, checked before the run read it, synced within 30 minutes without stopping at its page cap) and the pushes of this run's incidents (no push is started that the 300 s budget could cut off). Reads our database only; never calls Wise.
+
+**Responses:** `200` with a `ReviewJobResult` (`ok`, `syncRunId`, `firstShots`, `fixEvents`, `reviewsCreated`, `verificationFlags`, `flags`, `reviewCountsUpdated`, `metricRows`, `dailyGate`, `dailyGateSkipped` — why a due daily row was not written, `incidents`, `undeliveredCritical`, `stepErrors`) · `200 { ok: true, skipped: true, reason }` when disabled, on a preview deployment, or while another run holds the lock · `401` · `503` when a step failed, `WISE_USER_ID` is missing, or a critical incident is undelivered and not acknowledged.
+
+## `GET /api/feedback-autowriter/review`
+
+[`src/app/api/feedback-autowriter/review/route.ts`](../../../src/app/api/feedback-autowriter/review/route.ts). Returns the `AutowriterReview` built by [`loadAutowriterReview`](../../../src/lib/feedback-autowriter/review-data.ts) (`available: true`): the live gate over the rolling 14 Bangkok days, computed by the same SQL as the nightly row (`loadGateFacts`), with `blockedUntil` (the latest critical class's Bangkok date plus 14 days, or `null`); coverage breakdown; fix-round histogram; daily rows (and `lookback`: the stored all-tutors reviewed / accurate / posted / eligible counts of the six dates before the window, only for the 7-day values of its first dates); per-tutor rows (with each tutor's critical verdicts in the window); the review queue — every flagged and every unreviewed required class, then the latest others up to 300 — with exact `queueTotals`, each item carrying the first shot (and its outcome), current text, word diff, measured saves (`counted` or listed after the Approve), corrections, verdict log and open flags (with ids, for the verdict's pins); and incidents (every unacknowledged critical one first, whatever its age and whether its alert went out, never capped; then the latest 100 others of the last 30 days). In-person classes are left out.
+
+**Responses:** `200` · `200 { available: false, reason: "review_tables_missing" }` before migration 0101 (an optional table, not a failure) · `401` · `403` (not an admin) · `500 { error }` for any other failure (logged by error name and SQLSTATE only).
+
+## `GET /api/feedback-autowriter/trends`
+
+[`src/app/api/feedback-autowriter/trends/route.ts`](../../../src/app/api/feedback-autowriter/trends/route.ts). Query:
+
+| Parameter | Rule |
+|---|---|
+| `days` | `14`, `30` or `90`; default `14` |
+| `tutor` | `*` for all tutors (the default), or a roster tutor's key (the `tutorKey` of the dashboard's tutor rows) |
+
+Returns the `AutowriterTrends` built by [`loadAutowriterTrends`](../../../src/lib/feedback-autowriter/trends.ts): the `range` (Bangkok dates, ending today), `since` (the first date with any data among those read, or `null`), one entry per date in `days` — reviewed and accurate counts, accuracy, its pooled 7-day value and the rolling 14-day Wilson lower bound, critical verdicts, posted and eligible counts with coverage and its 7-day value, the median minutes from class end to the POST claim and its 7-day value, cost and cost per posted class, classes posted from the summary and from the transcript with the 7-day transcript share, and posts by writer — and `totals` over the range (with p90 minutes and the held classes by reason category). A date without data has `null` ratios, never zeros. Every date is the Bangkok date of the class's scheduled end. Coverage comes from the stored daily metrics; accuracy is recomputed from the review rows and their current verdicts. Reads our database only.
+
+**Responses:** `200` · `200 { available: false, reason: "review_tables_missing" }` before migration 0101 (SQLSTATE 42P01: an optional table, not a failure, as for the review route; the page then says the quality data is not available yet) · `400` (a range other than 14, 30 or 90, or a key that is not a roster tutor's) · `401` · `403` (not an admin) · `500 { error }` for any other failure (logged by error name and SQLSTATE only).
+
+## `POST /api/feedback-autowriter/verdicts`
+
+[`src/app/api/feedback-autowriter/verdicts/route.ts`](../../../src/app/api/feedback-autowriter/verdicts/route.ts). Strict body:
+
+| Field | Rule |
+|---|---|
+| `wiseSessionId` | 24 hex characters; the class must have a review row |
+| `fieldsSha256` | 64 hex characters: the first shot's `fields_sha256` the owner was shown (a mismatch is `409`) |
+| `currentVerdictId` | UUID or `null`: the class's current verdict as the page showed it (another one now is `409`) |
+| `seenFlagIds` | up to 100 UUIDs: the class's open flags as the page showed them (any other open flag now is `409`); only these are resolved |
+| `verdict` | `approve` or `needs_fix` |
+| `severity` | `cosmetic` \| `factual` (the owner's "major": a real fix) \| `critical` — required for `needs_fix`, absent for `approve` |
+| `criticalCategory` | `wrong_person` \| `billing_status` \| `invented_content` \| `should_not_have_posted` — required exactly when `severity` is `critical` |
+| `note` | optional, up to 2,000 characters; required for a downgrade |
+| `confirmDowngrade` | optional `true`: the owner confirms replacing a harsher judgement with a milder verdict — a critical current verdict or open critical flag with anything non-critical, or a major (`factual`) verdict with cosmetic or Approve |
+
+One transaction appends the verdict (superseding the current one), sets `reviews.current_verdict_id`, resolves the flags the page showed, stamps `metadata.triagedAt` on the `verified` session row for an accurate verdict only (Approve or cosmetic — ending the Soniox review window; a major or critical verdict removes it again; `updated_at` is left alone), records `downgraded_from`, and, for a critical verdict, queues a critical incident.
+
+**Responses:** `200 { ok: true, verdictId, supersedesId, resolvedFlags, criticalIncident, downgradedFrom }` · `400` (bad JSON, body or shape; a downgrade without a note) · `401` · `403 "Only Kevin can record autowriter verdicts or acknowledge incidents."` · `404` (no review row) · `409` (stale page: another first shot, current verdict or set of open flags; or a downgrade not confirmed) · `500`.
+
+## `POST /api/feedback-autowriter/incidents`
+
+[`src/app/api/feedback-autowriter/incidents/route.ts`](../../../src/app/api/feedback-autowriter/incidents/route.ts). Strict body `{ "action": "acknowledge", "incidentId": "<uuid>" }`. Sets `acknowledged_at` / `acknowledged_by` once (idempotent): the outbox stops pushing it, and an undelivered critical incident no longer keeps the review job red.
+
+**Responses:** `200 { ok: true, id, acknowledgedAt, acknowledgedBy }` · `400` · `401` · `403` · `404` (no such incident) · `500`.
+
+## ISEB / Atom routes (migration 0103)
+
+| Method and path | Access | Effect |
+|---|---|---|
+| `GET /api/internal/feedback-autowriter/atom` | Cron secret | Separate 15-minute collector, max 750s; gated by collector flag and disabled on previews |
+| `GET /api/feedback-autowriter/atom` | Admin and existing page scope | Link catalog, current approvals, collection status and first-ten review progress; optional `q` suggests Wise names |
+| `GET /api/feedback-autowriter/atom?sessionId=…` | Same | Retained lesson/Atom evidence, source URLs, both factual verdicts and style reviews |
+| `POST /api/feedback-autowriter/atom` | Operations owner | Explicit `{wiseStudentId, atomStudentId, expectedRevision, active, note}` link approval/revocation; 409 on changed or occupied identity |
+| `POST /api/feedback-autowriter/atom/probe` | Operations owner | `{studentId, date}` interactive cloud retrieval probe; no link approval or feedback generation; cannot count as unattended proof |
+| `POST /api/feedback-autowriter/atom/rollout` | Operations owner | `approve_comparisons` with the exact `comparisonHash`; `approve_cloud_run` with `runId`, approved `comparisonHash` and a nonempty `note`; or `confirm_unattended_run` with `runId` and `codexAndComputerWereOff:true` only after an actual computer-off test. Cloud approval records the authenticated owner and its basis; none changes environment switches |
+
+Authentication, errors and owner checks follow the existing Review interface. No route accepts a credential in its body. See the [runbook](../../operations/iseb-atom-feedback.md) for evidence semantics and independent activation.

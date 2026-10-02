@@ -1,142 +1,101 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Badge } from "@/components/ui/badge";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AtomReviewTools } from "./atom-review";
+import { Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { formatBangkokShortDateTime } from "@/lib/bangkok-time";
 import type { AutowriterDashboard } from "@/lib/feedback-autowriter/dashboard";
-import { cn } from "@/lib/utils";
+import { buildInbox, filterInbox } from "@/lib/feedback-autowriter/inbox";
+import type { AutowriterReview, AutowriterReviewUnavailable } from "@/lib/feedback-autowriter/review-data";
+import type { AutowriterTrends, TrendRangeDays } from "@/lib/feedback-autowriter/trends";
+import { ClassesLog } from "./classes-log";
+import { clock, longDate } from "./format";
+import { HealthRail } from "./health-rail";
+import { Inbox } from "./inbox";
+import { ItemDrawer, type DrawerTarget } from "./item-drawer";
+import { StatusLines, reloadsWhenShown, staleReviewMessage } from "./page-status";
+import { SystemDetails } from "./system-details";
+import { SystemLine } from "./system-line";
+import { TrendCharts } from "./trend-charts";
+import { TutorFilterChip, TutorTable } from "./tutor-table";
 
-const WINDOWS = [
-  { days: 1, label: "24 h" },
-  { days: 7, label: "7 days" },
-  { days: 30, label: "30 days" },
-] as const;
+// ----------------------------------------------------------------------------
+// The page's shell: the three payloads and their polling, the range and the
+// tutor filter, the drawer, and the layout (mockup A): the system line, the
+// to-do list beside the health rail, the trends, the tutors, the details.
+// ----------------------------------------------------------------------------
 
-const STATE_LABEL: Record<string, string> = {
-  verified: "Posted",
-  awaiting_event: "Posted · confirming",
-  posting: "Posting",
-  would_submit: "Shadow draft",
-  held: "Held",
-  skipped_human: "Tutor wrote it",
-  skipped_scope: "Out of scope",
-  expired: "Expired",
-  rejected: "Rejected",
-  unknown_outcome: "Unknown outcome",
-  verify_failed: "Verify failed",
-  pending: "Waiting",
-  generating: "Writing",
-  awaiting_recording: "Waiting for recording",
-  transcribing: "Transcribing",
-};
-
-const STATE_TONE: Record<string, string> = {
-  verified: "border-available/30 bg-available/10 text-available",
-  awaiting_event: "border-available/30 bg-available/10 text-available",
-  posting: "border-sky-300 bg-sky-50 text-sky-800 dark:bg-sky-950 dark:text-sky-200",
-  would_submit: "border-sky-300 bg-sky-50 text-sky-800 dark:bg-sky-950 dark:text-sky-200",
-  awaiting_recording: "border-violet-300 bg-violet-50 text-violet-800 dark:bg-violet-950 dark:text-violet-200",
-  transcribing: "border-violet-300 bg-violet-50 text-violet-800 dark:bg-violet-950 dark:text-violet-200",
-  held: "border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
-  expired: "border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
-  rejected: "border-red-300 bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-200",
-  unknown_outcome: "border-red-300 bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-200",
-  verify_failed: "border-red-300 bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-200",
-};
-
-const FIELD_LABELS: Array<[string, string]> = [
-  ["topics", "Topics covered"],
-  ["performance", "How the student did in class"],
-  ["improvement", "Need more work on"],
-  ["homework", "Homework and due date"],
-];
+/** The all-tutors key of the trends route (`ALL_TUTORS`). */
+const ALL_TUTORS = "*";
+const DASHBOARD_POLL_MS = 60_000;
+const REVIEW_POLL_MS = 5 * 60_000;
 
 function isDashboard(value: unknown): value is AutowriterDashboard {
-  return typeof value === "object" && value !== null && "totals" in value && "control" in value && "recent" in value;
+  return typeof value === "object" && value !== null
+    && "totals" in value && "control" in value && "recent" in value && "holds" in value && "system" in value && "today" in value;
 }
 
-function usd(value: number | null | undefined): string {
-  if (value === null || value === undefined) return "—";
-  return value < 0.01 && value > 0 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`;
+function isReview(value: unknown): value is AutowriterReview {
+  return typeof value === "object" && value !== null && (value as { available?: unknown }).available === true
+    && "gate" in value && "queue" in value && "daily" in value;
 }
 
-function minutes(value: number | null): string {
-  if (value === null) return "—";
-  return value < 60 ? `${value.toFixed(1)} min` : `${(value / 60).toFixed(1)} h`;
+function isUnavailable(value: unknown): value is AutowriterReviewUnavailable {
+  return typeof value === "object" && value !== null && (value as { available?: unknown }).available === false;
 }
 
-function when(value: string | null): string {
-  return value ? formatBangkokShortDateTime(value) : "—";
+function isTrends(value: unknown): value is AutowriterTrends {
+  return typeof value === "object" && value !== null && "range" in value && "days" in value && "totals" in value;
 }
 
-function Kpi({ label, value, detail, tone = "default" }: {
-  label: string;
-  value: string;
-  detail?: string;
-  tone?: "default" | "good" | "warning" | "danger";
-}) {
-  return (
-    <div className="rounded-lg border bg-card px-4 py-3">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className={cn("mt-1 text-2xl font-semibold tracking-tight", {
-        "text-available": tone === "good",
-        "text-amber-700 dark:text-amber-400": tone === "warning",
-        "text-red-700 dark:text-red-400": tone === "danger",
-      })}>{value}</div>
-      {detail ? <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{detail}</div> : null}
-    </div>
-  );
+function errorOf(json: unknown, status: number): string {
+  const error = (json as { error?: unknown } | null)?.error;
+  return typeof error === "string" ? error : `HTTP ${status}`;
 }
 
-function Section({ title, count, children, action }: { title: string; count?: number; children: ReactNode; action?: ReactNode }) {
-  return (
-    <section className="rounded-lg border bg-card">
-      <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
-        <div className="flex items-center gap-2">
-          <h2 className="text-sm font-semibold">{title}</h2>
-          {count !== undefined ? <Badge variant="outline">{count}</Badge> : null}
-        </div>
-        {action}
-      </div>
-      <div className="overflow-auto">{children}</div>
-    </section>
-  );
-}
-
-function modelLabel(model: string): string {
-  if (model.startsWith("z-ai/glm")) return "GLM Flash";
-  if (model.startsWith("openai/gpt-6-luna")) return "GPT-6 Luna";
-  if (model.startsWith("stt-async")) return "Soniox transcription";
-  return model;
-}
-
-export function FeedbackAutowriterDashboard({ initialData, canControl }: {
+export function FeedbackAutowriterDashboard({ initialData, canControl, initialReview = null, initialTrends = null }: {
   initialData: AutowriterDashboard;
+  /** The owner: reviews, acknowledges, pauses and switches tutors. Every other admin reads. */
   canControl: boolean;
+  /** The review data, or why it is unavailable (migration 0101 not applied, or a load failure). */
+  initialReview?: AutowriterReview | AutowriterReviewUnavailable | null;
+  /** The trend series of the last 14 days for all tutors; null when they could not load. */
+  initialTrends?: AutowriterTrends | null;
 }) {
   const [data, setData] = useState(initialData);
-  const [windowDays, setWindowDays] = useState<number>(initialData.windowDays);
+  const [review, setReview] = useState<AutowriterReview | AutowriterReviewUnavailable | null>(initialReview);
+  const [trends, setTrends] = useState<AutowriterTrends | AutowriterReviewUnavailable | null>(initialTrends);
+  const [rangeDays, setRangeDays] = useState<TrendRangeDays>(initialTrends?.range.days ?? 14);
+  const [tutorKey, setTutorKey] = useState<string | null>(null);
+  const [target, setTarget] = useState<DrawerTarget | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [trendsLoading, setTrendsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Their own messages: a dashboard refresh that succeeds a moment later must not wipe a review refresh that failed,
+  // nor a Pause (or any other change) that was not saved.
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [controlError, setControlError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const requestSequence = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
+  const reviewSequence = useRef(0);
+  const trendsSequence = useRef(0);
+  const trendsControllerRef = useRef<AbortController | null>(null);
+  const windowDays = initialData.windowDays;
 
-  const load = useCallback(async (days: number) => {
+  const load = useCallback(async () => {
     const sequence = ++requestSequence.current;
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
     setRefreshing(true);
     try {
-      const response = await fetch(`/api/feedback-autowriter?days=${days}`, { cache: "no-store", signal: controller.signal });
+      const response = await fetch(`/api/feedback-autowriter?days=${windowDays}`, { cache: "no-store", signal: controller.signal });
       const json: unknown = await response.json().catch(() => null);
       if (sequence !== requestSequence.current) return;
       if (!response.ok || !isDashboard(json)) {
-        setError((json as { error?: string } | null)?.error ?? `HTTP ${response.status}`);
+        setError(errorOf(json, response.status));
         return;
       }
       setData(json);
@@ -147,22 +106,94 @@ export function FeedbackAutowriterDashboard({ initialData, canControl }: {
     } finally {
       if (sequence === requestSequence.current) setRefreshing(false);
     }
+  }, [windowDays]);
+
+  const loadReview = useCallback(async () => {
+    // The reload after an action and the 5-minute poll can overlap: only the latest request's answer is kept.
+    const sequence = ++reviewSequence.current;
+    try {
+      const response = await fetch("/api/feedback-autowriter/review", { cache: "no-store" });
+      const json: unknown = await response.json().catch(() => null);
+      if (sequence !== reviewSequence.current) return;
+      if (response.ok && (isUnavailable(json) || isReview(json))) {
+        setReview(json);
+        setReviewError(null);
+        return;
+      }
+      setReviewError(errorOf(json, response.status));
+    } catch {
+      if (sequence === reviewSequence.current) setReviewError("no answer");
+    }
+  }, []);
+
+  const loadTrends = useCallback(async (days: TrendRangeDays, tutor: string | null) => {
+    const sequence = ++trendsSequence.current;
+    trendsControllerRef.current?.abort();
+    const controller = new AbortController();
+    trendsControllerRef.current = controller;
+    setTrendsLoading(true);
+    try {
+      const query = `days=${days}&tutor=${encodeURIComponent(tutor ?? ALL_TUTORS)}`;
+      const response = await fetch(`/api/feedback-autowriter/trends?${query}`, { cache: "no-store", signal: controller.signal });
+      const json: unknown = await response.json().catch(() => null);
+      if (sequence !== trendsSequence.current) return;
+      // Charts of another range or tutor would be mislabelled: a failed load shows the message instead. Missing review
+      // tables (migration 0101) are a typed answer, not a failure: the charts then say the quality data is not there.
+      setTrends(response.ok && (isTrends(json) || isUnavailable(json)) ? json : null);
+    } catch (caught) {
+      if (caught instanceof Error && caught.name === "AbortError") return;
+      if (sequence === trendsSequence.current) setTrends(null);
+    } finally {
+      if (sequence === trendsSequence.current) setTrendsLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    const interval = window.setInterval(() => void load(windowDays), 60_000);
+    const interval = window.setInterval(() => void load(), DASHBOARD_POLL_MS);
     return () => window.clearInterval(interval);
-  }, [load, windowDays]);
+  }, [load]);
 
-  const changeWindow = (days: number) => {
-    setWindowDays(days);
-    void load(days);
+  useEffect(() => {
+    const interval = window.setInterval(() => void loadReview(), REVIEW_POLL_MS);
+    return () => window.clearInterval(interval);
+  }, [loadReview]);
+
+  /** Everything the page shows, again: after an action, on Refresh, and when the page is shown again. */
+  const reloadAll = useCallback(async () => {
+    await Promise.all([load(), loadReview(), loadTrends(rangeDays, tutorKey)]);
+  }, [load, loadReview, loadTrends, rangeDays, tutorKey]);
+
+  // The app keeps the page, hidden, while the owner is on another one (`cacheComponents`): its state survives, its
+  // effects stop, and they run again when it is shown. By then what it shows is as old as the visit, and both polls
+  // start from zero (short visits would starve the 5-minute one for good): so it reloads everything at once.
+  const reloadAllRef = useRef(reloadAll);
+  const hiddenAt = useRef<number | null>(null);
+  useEffect(() => {
+    reloadAllRef.current = reloadAll;
+  }, [reloadAll]);
+  useEffect(() => {
+    if (reloadsWhenShown(hiddenAt.current, Date.now())) void reloadAllRef.current();
+    hiddenAt.current = null;
+    return () => {
+      hiddenAt.current = Date.now();
+    };
+  }, []);
+
+  const changeRange = (days: TrendRangeDays) => {
+    setRangeDays(days);
+    void loadTrends(days, tutorKey);
+  };
+
+  const selectTutor = (key: string | null) => {
+    setTutorKey(key);
+    void loadTrends(rangeDays, key);
   };
 
   const sendControl = async (body: Record<string, unknown>, confirmText: string) => {
     if (!window.confirm(confirmText)) return;
     setBusy(true);
     setNote(null);
+    setControlError(null);
     try {
       const response = await fetch("/api/feedback-autowriter/control", {
         method: "POST",
@@ -170,265 +201,108 @@ export function FeedbackAutowriterDashboard({ initialData, canControl }: {
         body: JSON.stringify(body),
       });
       const json = await response.json().catch(() => null) as { error?: unknown; requeued?: number } | null;
+      // Said until the next change or a Refresh: nobody must take a Pause that failed for one that went through.
       if (!response.ok) {
-        setError(typeof json?.error === "string" ? json.error : `HTTP ${response.status}`);
+        setControlError(`Not saved (${errorOf(json, response.status).replace(/\.$/u, "")}). The controls are as they were.`);
         return;
       }
       setNote(json?.requeued ? `Saved. ${json.requeued} shadow draft(s) queued for posting.` : "Saved.");
-      await load(windowDays);
+      await load();
+    } catch {
+      setControlError("Not saved (the server could not be reached). The controls are as they were.");
     } finally {
       setBusy(false);
     }
   };
 
-  const pause = () => {
-    const reason = window.prompt("Why pause the autowriter?");
-    if (!reason?.trim()) return;
-    void sendControl({ action: "pause", reason: reason.trim() }, "Pause all feedback posting now?");
-  };
-
-  const { control, totals } = data;
-  const halted = Boolean(control.haltedAt);
-  const modeTone = control.mode === "live"
-    ? "border-available/30 bg-available/10 text-available"
-    : control.mode === "shadow"
-      ? "border-sky-300 bg-sky-50 text-sky-800 dark:bg-sky-950 dark:text-sky-200"
-      : "border-muted-foreground/30 text-muted-foreground";
+  const loaded = review?.available ? review : null;
+  const unavailableReason = review && !review.available ? review.reason : null;
+  // What the page still shows of the review data is then older than its "Updated" time: say as of when.
+  const reviewStale = staleReviewMessage(reviewError, loaded?.generatedAt ?? null, data.generatedAt);
+  // The payload's own clock: the same on the server and in the browser, and a minute old at most.
+  const now = useMemo(() => new Date(data.generatedAt), [data.generatedAt]);
+  const inbox = useMemo(() => buildInbox(data, loaded, { now }), [data, loaded, now]);
+  const shown = useMemo(() => filterInbox(inbox, tutorKey), [inbox, tutorKey]);
+  const filteredTo = tutorKey ? data.tutors.find((tutor) => tutor.tutorKey === tutorKey)?.displayName ?? tutorKey : null;
+  const halted = Boolean(data.control.haltedAt);
+  // Without the review data the list has the held classes and the failed posts only: an empty one proves nothing.
+  const reviewMissing = loaded === null ? unavailableReason ?? "load_failed" : null;
+  const headline = halted ? "Posting is halted. That needs you first."
+    : reviewMissing ? "Some of what needs you could not load."
+      : inbox.length === 0 ? "Nothing needs you. Back to teaching."
+        : "A little attention. Then back to teaching.";
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto pb-8">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Feedback Autowriter</h1>
-          <p className="text-sm text-muted-foreground">
-            AI-written post-class feedback for roster tutors&apos; online one-to-one classes, from Wise&apos;s meeting summary.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex rounded-md border p-0.5" role="group" aria-label="Time window">
-            {WINDOWS.map((option) => (
-              <Button key={option.days} size="xs" variant={windowDays === option.days ? "default" : "ghost"} onClick={() => changeWindow(option.days)}>
-                {option.label}
-              </Button>
-            ))}
-          </div>
-          <Button size="sm" variant="outline" onClick={() => void load(windowDays)} disabled={refreshing}>
-            {refreshing ? "Refreshing…" : "Refresh"}
-          </Button>
-          <span className="text-xs text-muted-foreground">Updated {when(data.generatedAt)}</span>
-        </div>
-      </header>
-
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-4 py-3">
-        <span className="text-sm font-medium">Mode</span>
-        <Badge variant="outline" className={cn("capitalize", modeTone)}>{control.mode}</Badge>
-        {halted ? <Badge variant="destructive">Halted</Badge> : null}
-        <span className="text-xs text-muted-foreground">
-          {control.updatedBy ? `last changed by ${control.updatedBy} · ${when(control.updatedAt)}` : null}
-        </span>
-        {canControl ? (
-          <div className="ml-auto flex flex-wrap gap-2">
-            {(["shadow", "live", "off"] as const).filter((mode) => mode !== control.mode).map((mode) => (
-              <Button key={mode} size="sm" variant={mode === "live" ? "default" : "outline"} disabled={busy}
-                onClick={() => void sendControl({ action: "mode", mode },
-                  mode === "live"
-                    ? "Switch to LIVE? The autowriter will post feedback to Wise for roster tutors."
-                    : `Switch to ${mode.toUpperCase()}? No feedback will be posted to Wise.`)}>
-                {mode === "live" ? "Go live" : mode === "shadow" ? "Shadow" : "Turn off"}
-              </Button>
-            ))}
-            {halted ? (
-              <Button size="sm" variant="outline" disabled={busy}
-                onClick={() => void sendControl({ action: "resume" }, "Resume posting? Check the class named in the halt reason first.")}>
-                Resume
-              </Button>
-            ) : (
-              <Button size="sm" variant="destructive" disabled={busy} onClick={pause}>Pause</Button>
-            )}
-          </div>
-        ) : null}
-      </div>
-
-      {halted ? (
-        <div className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:bg-red-950 dark:text-red-200" role="alert">
-          <strong>Posting is halted</strong> since {when(control.haltedAt)} — {control.haltReason ?? "no reason recorded"}
-        </div>
-      ) : null}
-      {error || note ? (
-        <div role="status" className={cn("rounded-md border px-3 py-2 text-sm", error ? "border-red-300 text-red-700" : "border-available/30 text-available")}>
-          {error ?? note}
-        </div>
-      ) : null}
-
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-9">
-        <Kpi label="Posted to Wise" value={String(totals.posted)} detail={`${totals.verified} confirmed`} tone="good" />
-        <Kpi label="Shadow drafts" value={String(totals.shadowDrafts)} detail="written, not posted" />
-        <Kpi label="From recording" value={String(totals.awaitingRecording)}
-          detail={`waiting · ${totals.fromTranscript} posted from a transcript`} />
-        <Kpi label="Held for a person" value={String(totals.held)} tone={totals.held > 0 ? "warning" : "default"} />
-        <Kpi label="Tutor wrote first" value={String(totals.skippedHuman)} detail={`${totals.skippedScope} out of scope`} />
-        <Kpi label="Expired / failed" value={`${totals.expired} / ${totals.failed}`} tone={totals.failed > 0 ? "danger" : totals.expired > 0 ? "warning" : "default"} />
-        <Kpi label="Class end → posted" value={minutes(data.latency.medianMinutes)} detail={`p90 ${minutes(data.latency.p90Minutes)} · ${data.latency.samples} posts`} />
-        <Kpi label="Model cost" value={usd(data.cost.totalUsd)} detail={`${usd(data.cost.perDraftUsd)} per draft`} />
-        <Kpi label="Checks" value={`${data.judgeRejections} judged unfaithful`}
-          detail={data.fallbackShare === null ? "no drafts yet" : `${Math.round(data.fallbackShare * 100)}% written by Luna fallback`} />
-      </div>
-
-      <Section title="Tutors" count={data.tutors.length}>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Tutor</TableHead>
-              <TableHead className="text-right">Classes</TableHead>
-              <TableHead className="text-right">Posted</TableHead>
-              <TableHead className="text-right">Shadow</TableHead>
-              <TableHead className="text-right">Held</TableHead>
-              <TableHead className="text-right">Tutor wrote</TableHead>
-              <TableHead className="text-right">Expired</TableHead>
-              <TableHead className="text-right">Failed</TableHead>
-              <TableHead className="text-right">Median to post</TableHead>
-              <TableHead className="text-right">Cost</TableHead>
-              <TableHead>Status</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {data.tutors.map((tutor) => (
-              <TableRow key={tutor.wiseUserId}>
-                <TableCell className="font-medium">{tutor.displayName}</TableCell>
-                <TableCell className="text-right">{tutor.seen}</TableCell>
-                <TableCell className="text-right">{tutor.posted}</TableCell>
-                <TableCell className="text-right">{tutor.shadowDrafts}</TableCell>
-                <TableCell className="text-right">{tutor.held}</TableCell>
-                <TableCell className="text-right">{tutor.skippedHuman}</TableCell>
-                <TableCell className="text-right">{tutor.expired}</TableCell>
-                <TableCell className="text-right">{tutor.failed}</TableCell>
-                <TableCell className="text-right">{minutes(tutor.medianLatencyMinutes)}</TableCell>
-                <TableCell className="text-right">{usd(tutor.costUsd)}</TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline" className={tutor.enabled ? "border-available/30 text-available" : "text-muted-foreground"}>
-                      {tutor.enabled ? "On" : "Off"}
-                    </Badge>
-                    {canControl ? (
-                      <Button size="xs" variant="ghost" disabled={busy}
-                        onClick={() => void sendControl({ action: "tutor", wiseUserId: tutor.wiseUserId, enabled: !tutor.enabled },
-                          `${tutor.enabled ? "Turn off" : "Turn on"} the autowriter for ${tutor.displayName}?`)}>
-                        {tutor.enabled ? "Turn off" : "Turn on"}
-                      </Button>
-                    ) : null}
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Section>
-
-      <Section title="Recent classes" count={data.recent.length}>
-        {data.recent.length === 0 ? (
-          <p className="px-4 py-8 text-center text-sm text-muted-foreground">No classes handled in this window yet.</p>
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Class ended (Bangkok)</TableHead>
-                <TableHead>Tutor</TableHead>
-                <TableHead>Class</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Model</TableHead>
-                <TableHead className="text-right">To post</TableHead>
-                <TableHead className="text-right">Cost</TableHead>
-                <TableHead>Detail</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.recent.map((row) => (
-                <TableRow key={row.wiseSessionId} className="align-top">
-                  <TableCell className="whitespace-nowrap">{when(row.scheduledEndAt)}</TableCell>
-                  <TableCell className="whitespace-nowrap">{row.tutor.replace(/ Online$/u, "")}</TableCell>
-                  <TableCell className="max-w-48 truncate" title={row.className ?? undefined}>{row.className ?? "—"}</TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className={cn("whitespace-nowrap", STATE_TONE[row.state])}>{STATE_LABEL[row.state] ?? row.state}</Badge>
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    {row.arm === "luna" ? "GPT-6 Luna" : row.arm === "glm" ? "GLM Flash" : "—"}
-                    {row.evidence === "transcript" ? <span className="ml-1 text-[10px] uppercase text-muted-foreground">· transcript</span> : null}
-                  </TableCell>
-                  <TableCell className="text-right whitespace-nowrap">{minutes(row.latencyMinutes)}</TableCell>
-                  <TableCell className="text-right">{usd(row.costUsd)}</TableCell>
-                  <TableCell className="min-w-64">
-                    <details>
-                      <summary className="cursor-pointer text-xs text-muted-foreground">
-                        {row.reason && !["shadow", "verified"].includes(row.reason) ? row.reason.slice(0, 80) : "View"}
-                      </summary>
-                      <div className="mt-2 space-y-2 text-xs">
-                        {row.fields ? FIELD_LABELS.map(([key, label]) => (
-                          <div key={key}>
-                            <div className="font-medium">{label}</div>
-                            <p className="whitespace-pre-wrap text-muted-foreground">{row.fields?.[key] || "—"}</p>
-                          </div>
-                        )) : <p className="text-muted-foreground">No draft stored.</p>}
-                        {row.judgeUnsupported.length > 0 ? (
-                          <p className="text-amber-700">Judge flagged: {row.judgeUnsupported.join(" · ")}</p>
-                        ) : null}
-                        {row.reason ? <p className="text-muted-foreground">Reason: {row.reason}</p> : null}
-                        {row.wiseUrl ? <a className="text-primary underline" href={row.wiseUrl} target="_blank" rel="noreferrer">Open in Wise</a> : null}
-                      </div>
-                    </details>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </Section>
-
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Section title="Cost by model">
-          <Table>
-            <TableHeader><TableRow><TableHead>Model</TableHead><TableHead>Role</TableHead><TableHead className="text-right">Calls</TableHead><TableHead className="text-right">Cost</TableHead></TableRow></TableHeader>
-            <TableBody>
-              {data.cost.byModel.map((entry) => (
-                <TableRow key={`${entry.role}-${entry.model}`}>
-                  <TableCell title={entry.model}>{modelLabel(entry.model)}</TableCell>
-                  <TableCell className="capitalize">{entry.role}</TableCell>
-                  <TableCell className="text-right">{entry.calls}</TableCell>
-                  <TableCell className="text-right">{usd(entry.costUsd)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Section>
-        <Section title="By day (Bangkok)">
-          <Table>
-            <TableHeader><TableRow><TableHead>Date</TableHead><TableHead className="text-right">Drafts</TableHead><TableHead className="text-right">Posted</TableHead><TableHead className="text-right">Cost</TableHead></TableRow></TableHeader>
-            <TableBody>
-              {data.cost.byDay.map((entry) => (
-                <TableRow key={entry.date}>
-                  <TableCell>{entry.date}</TableCell>
-                  <TableCell className="text-right">{entry.drafts}</TableCell>
-                  <TableCell className="text-right">{entry.posted}</TableCell>
-                  <TableCell className="text-right">{usd(entry.costUsd)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Section>
-        <Section title="Wise webhooks (24 h)">
-          <div className="space-y-3 px-4 py-3 text-sm">
-            <p className="text-muted-foreground">Last delivery: {when(data.webhooks.lastReceivedAt)}</p>
-            <ul className="space-y-1">
-              {data.webhooks.byEvent.map((entry) => <li key={entry.eventName} className="flex justify-between"><span>{entry.eventName}</span><span>{entry.count}</span></li>)}
-            </ul>
-            <div className="border-t pt-2">
-              <div className="mb-1 text-[10px] font-semibold uppercase text-muted-foreground">Outcomes</div>
-              <ul className="space-y-1">
-                {data.webhooks.byOutcome.map((entry) => <li key={entry.outcome} className="flex justify-between"><span>{entry.outcome}</span><span>{entry.count}</span></li>)}
-              </ul>
+    <div className="flex min-h-0 flex-1 flex-col overflow-auto scroll-smooth">
+      <div className="mx-auto w-full max-w-[1440px] pb-10 lg:px-6">
+        <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b pt-1.5 pb-4">
+          <div className="flex items-center gap-10">
+            <div className="flex items-center gap-2.5">
+              <span aria-hidden className="grid size-[30px] place-items-center rounded-lg border border-sky-200 bg-sky-50 text-sky-600 dark:border-sky-900 dark:bg-sky-950 dark:text-sky-300">
+                <Sparkles className="size-4" strokeWidth={1.6} />
+              </span>
+              <h1 className="text-[15px] font-[650] tracking-[-0.03em]">Feedback Autowriter</h1>
             </div>
+            <nav aria-label="On this page" className="hidden items-center gap-7 text-xs text-muted-foreground md:flex">
+              <a className="hover:text-foreground" href="#autowriter-overview">Overview</a>
+              <a className="hover:text-foreground" href="#autowriter-trends">Trends</a>
+              <a className="hover:text-foreground" href="#autowriter-tutors">Tutors</a>
+              <a className="hover:text-foreground" href="#autowriter-details">Details</a>
+            </nav>
           </div>
-        </Section>
+          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+            <span>Updated {clock(data.generatedAt)}</span>
+            <Button size="sm" variant="outline" className="h-7 rounded-md px-2.5 text-[11px] font-[550]" disabled={refreshing}
+              onClick={() => { setControlError(null); void reloadAll(); }}>
+              {refreshing ? "Refreshing…" : "Refresh"}
+            </Button>
+          </div>
+        </header>
+
+        <div className="mt-3">
+          <SystemLine dashboard={data} lastRun={loaded ? loaded.lastRun : undefined} canControl={canControl} busy={busy}
+            onControl={(body, confirmText) => void sendControl(body, confirmText)} />
+        </div>
+        <StatusLines problems={[controlError, error, reviewStale]} note={note} />
+
+        <section id="autowriter-overview" className="mt-7 mb-[23px] flex scroll-mt-4 flex-wrap items-end justify-between gap-4">
+          <div>
+            <p className="text-[25px] leading-tight font-[650] tracking-[-0.035em]">{headline}</p>
+            <p className="mt-[7px] text-xs text-muted-foreground">
+              {longDate(data.today.date)} <span aria-hidden className="mx-1.5 text-muted-foreground/50">/</span> All times Bangkok · Online 1:1 pilot.
+              In-person classes stay with the tutor and are not shown here.
+            </p>
+          </div>
+          {tutorKey && filteredTo ? <TutorFilterChip name={filteredTo} onClear={() => selectTutor(null)} /> : null}
+        </section>
+
+        <div className="grid items-stretch gap-5 lg:grid-cols-3">
+          <Inbox className="lg:col-span-2" items={shown} dashboard={data} review={loaded} now={now} filteredTo={filteredTo}
+            reviewUnavailable={reviewMissing} canControl={canControl} onOpen={setTarget} />
+          <HealthRail dashboard={data} review={loaded} unavailableReason={unavailableReason} />
+        </div>
+
+        <TrendCharts trends={trends} review={loaded} unavailableReason={unavailableReason} rangeDays={rangeDays} onRangeChange={changeRange}
+          loading={trendsLoading} filteredTo={filteredTo} />
+
+        <TutorTable dashboard={data} review={loaded} now={now} selectedTutorKey={tutorKey} onSelect={selectTutor} canControl={canControl} busy={busy}
+          onControl={(body, confirmText) => void sendControl(body, confirmText)} />
+
+        <section id="autowriter-details" aria-labelledby="autowriter-details-title" className="scroll-mt-4">
+          <div className="mt-7 mb-[13px] flex flex-wrap items-baseline gap-x-2.5">
+            <h2 id="autowriter-details-title" className="text-[15px] font-[650] tracking-[-0.02em]">Details</h2>
+            <span className="text-[11px] text-muted-foreground">Every class and the exact numbers · closed until you open them</span>
+          </div>
+          <div className="space-y-3">
+            <ClassesLog dashboard={data} review={loaded} tutorKey={tutorKey} onTutorChange={selectTutor} onOpen={setTarget} />
+            <AtomReviewTools canControl={canControl} />
+            <SystemDetails dashboard={data} review={loaded} onOpen={setTarget} />
+          </div>
+        </section>
       </div>
+
+      <ItemDrawer target={target} dashboard={data} review={loaded} now={now} canControl={canControl} onChanged={reloadAll} onSaved={setNote}
+        onOpen={setTarget} onClose={() => setTarget(null)} />
     </div>
   );
 }
