@@ -377,13 +377,30 @@ const DEVICE_MODEL_WORDS = new Set([
 ]);
 
 /**
+ * Parent, sibling and grandparent words: a guest "Mae Aim" or "Aim's Mom" is someone
+ * else's name for the device, not the student's own (owner rule, 2 Oct). Kept separate
+ * from `GENERIC_GUEST_WORDS`, which also drops these words but only as filler.
+ */
+const FAMILY_GUEST_WORDS = new Set([
+  "mom", "mum", "mommy", "mummy", "mother", "mama", "mae", "dad", "daddy", "father", "papa", "pa", "ma", "family",
+  "sister", "sis", "brother", "bro", "aunt", "auntie", "uncle", "grandma", "grandpa", "granny", "nanny", "son", "daughter",
+]);
+
+/**
+ * The Thai family words, matched as a word's start since Thai is often written without
+ * spaces ("แม่เอม"). Not น้อง, the usual prefix for the child themselves ("น้องเอม"), nor
+ * the short ambiguous ตา, อา, น้า, พี่.
+ */
+const THAI_FAMILY_PREFIXES = ["แม่", "พ่อ", "ยาย", "ย่า", "ปู่", "ป้า", "ลุง"];
+
+/**
  * Whether a guest's name is the student's own: one of its words — a possessive
- * as the bare name, never a device, model or family word ("Mom's iPad", "iPad Air")
- * — equals the student's first name, nickname or surname, compared by `nameKey`.
- * Whole words only, never a prefix. A nameless guest is not named as anyone. A
- * family word beside the name ("Mae Aim") still matches: the student on a parent's
- * device, which the remaining stand-in conditions (one guest, account absent, tutor
- * present) bound.
+ * as the bare name, never a device or model word ("iPad Air") — equals the
+ * student's first name, nickname or surname, compared by `nameKey`. Whole words
+ * only, never a prefix. A nameless guest is not named as anyone, nor is a name
+ * with a family word in it ("Mae Aim", "Aim's Mom", "แม่เอม"): a parent's or
+ * sibling's name for the device keeps the stricter guest bar (owner rule, 2 Oct).
+ * A surname-only match ("Nattapong Kaewmanee") counts, on purpose (owner rule, 2 Oct).
  */
 export function guestNamedAsStudent(guestName: string, studentName: string): boolean {
   const { firstName, nickname } = parseStudentName(studentName);
@@ -394,9 +411,13 @@ export function guestNamedAsStudent(guestName: string, studentName: string): boo
     .map(nameKey)
     .filter((key) => [...key].length >= MIN_NAME_KEY_LENGTH));
   if (studentKeys.size === 0) return false;
-  return guestName.split(/[^\p{L}\p{M}'’]+/u)
+  const words = guestName.normalize("NFKC").split(/[^\p{L}\p{M}'’]+/u)
     .map((word) => word.replace(/['’]s?$/u, "").replace(/['’]/gu, ""))
-    .filter((word) => word !== "" && !GENERIC_GUEST_WORDS.has(word.toLocaleLowerCase("en-US")) &&
+    .filter((word) => word !== "");
+  if (words.some((word) => FAMILY_GUEST_WORDS.has(word.toLocaleLowerCase("en-US")) ||
+    THAI_FAMILY_PREFIXES.some((prefix) => word.startsWith(prefix)))) return false;
+  return words
+    .filter((word) => !GENERIC_GUEST_WORDS.has(word.toLocaleLowerCase("en-US")) &&
       !DEVICE_MODEL_WORDS.has(word.toLocaleLowerCase("en-US")))
     .map(nameKey)
     .some((key) => [...key].length >= MIN_NAME_KEY_LENGTH && studentKeys.has(key));

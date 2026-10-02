@@ -180,8 +180,11 @@ describe("evaluateSessionGates", () => {
     // Exactly the usual minimum stands in; under it, no stand-in.
     expect(gate([account, { ...guest, absolutePercentAttendance: 50 }, teacher])).toEqual({ ok: true });
     expect(gate([account, { ...guest, absolutePercentAttendance: 49 }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
-    // The surname alone is enough (the student on a family device).
-    expect(gate([account, { ...guest, name: "Kaewmanee Family" }, teacher])).toEqual({ ok: true });
+    // The surname alone is enough (owner rule, 2 Oct)...
+    expect(gate([account, { ...guest, name: "Nattapong Kaewmanee" }, teacher])).toEqual({ ok: true });
+    // ...but a family word means a parent's or sibling's name for the device: the stricter guest bar.
+    expect(gate([account, { ...guest, name: "Kaewmanee Family" }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
+    expect(gate([account, { ...guest, name: "Mae Aim" }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
     // A device whose model word is also a nickname is not the student.
     const air = { ...account, name: "Somchai (Air.Ka) Kaewmanee" };
     expect(gate([air, { ...guest, name: "iPad Air" }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
@@ -343,6 +346,20 @@ describe("guestNamedAsStudent", () => {
 
   it("matches the student's name in Thai script", () => {
     expect(guestNamedAsStudent("เอมมม", "สมชาย (เอม.Ka) แก้วมณี")).toBe(true);
+    // น้อง is the usual prefix for the child themselves.
+    expect(guestNamedAsStudent("น้อง เอม", "สมชาย (เอม.Ka) แก้วมณี")).toBe(true);
+  });
+
+  it("never matches a name with a family word in it (owner rule, 2 Oct)", () => {
+    for (const name of ["Mae Aim", "Aim's Mom", "Mommy Aim", "Kaewmanee Family", "Aim Brother"]) {
+      expect(guestNamedAsStudent(name, student)).toBe(false);
+    }
+    for (const name of ["แม่ เอม", "แม่เอม", "พ่อเอม", "ยาย เอม"]) {
+      expect(guestNamedAsStudent(name, "สมชาย (เอม.Ka) แก้วมณี")).toBe(false);
+    }
+    // A surname-only match and a device word are still fine.
+    expect(guestNamedAsStudent("Nattapong Kaewmanee", student)).toBe(true);
+    expect(guestNamedAsStudent("Aim's iPad", student)).toBe(true);
   });
 
   it("reads a student name without a nickname or surname", () => {
