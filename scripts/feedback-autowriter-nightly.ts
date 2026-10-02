@@ -424,7 +424,8 @@ async function correct(session: Session): Promise<StepResult> {
     ledger,
     ops: wise.ops,
     throttled: wise.throttled,
-    store: pgCorrectionStore(db, { actor: AGENT_CORRECTION_ACTOR }),
+    // The executor's clock and the store's must be the same (the store checks it against the database's: clock_skew).
+    store: pgCorrectionStore(db, { actor: AGENT_CORRECTION_ACTOR, now: ctx.now }),
     apiActorId: wiseApiActorId(),
     allowlist: AUTOWRITER_TEACHER_ALLOWLIST,
     loadRows: (wiseSessionId) => loadCorrectionRows(db, wiseSessionId),

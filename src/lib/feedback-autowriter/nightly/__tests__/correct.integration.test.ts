@@ -93,7 +93,8 @@ describe("the plan's rows (Postgres, SELECT only)", () => {
       base: { fields: BASE, fieldsSha256: fieldsHash(BASE), submissionId: SUBMISSION_ID, billing: BILLING, firstShotPostedAt: postStartedAt },
     });
     // The store's own preconditions accept the plan as built (reads only).
-    expect(await pgCorrectionStore(db, { actor: AGENT_CORRECTION_ACTOR }).preconditions(planned.plan, new Date())).toEqual([]);
+    expect(await pgCorrectionStore(db, { actor: AGENT_CORRECTION_ACTOR }).preconditions(planned.plan, new Date()))
+      .toEqual({ problems: [], firstShotPostedAt: postStartedAt });
     expect(await loadCorrectionRows(db, id24(77))).toEqual({ session: null, firstShot: null });
   });
 
@@ -128,24 +129,44 @@ describe("unsettledCorrections (the dry run of recover)", () => {
     const locked = await pgCorrectionStore(db, { actor: AGENT_CORRECTION_ACTOR, sleep: noSleep }).lock(plan(postStartedAt));
     expect(locked.ok).toBe(true);
     expect(await unsettledCorrections(db)).toMatchObject({ lock: { state: "live", wiseSessionId: SESSION_ID }, releasable: false });
+    expect(await releaseStaleCorrectionLock(db)).toBe(false);
 
-    // The run died: its lease ran out with the lock still on the control row.
+    // The run died: its lease ran out with the lock still on the control row (no other write since).
     await db.update(C).set({ leaseUntil: sql`now() - interval '1 minute'` }).where(eq(C.id, "default"));
     const stale = await unsettledCorrections(db);
     expect(stale).toMatchObject({ lock: { state: "stale", wiseSessionId: SESSION_ID }, releasable: true });
     expect(preflightCorrections(stale)).toEqual({ unsettled: 0, lock: "stale" });
 
-    // A person (or an anomaly) halted on top: only a person resumes it.
-    await haltAutowriter(db, "owner pause for review", "owner@example.com");
-    expect(await unsettledCorrections(db)).toMatchObject({ lock: { state: "halted_on_top" }, releasable: false });
+    // An unsettled correction anywhere keeps it (recover first), as the real release does.
+    await db.insert(P).values({
+      wiseSessionId: id24(9), kind: "correction", fields: BASE, fieldsSha256: fieldsHash(BASE), billing: BILLING as unknown as Record<string, unknown>,
+      actorKind: "agent", actor: AGENT_CORRECTION_ACTOR, reason: "synthetic", outcome: "posting", provenance: "live",
+      postStartedAt: new Date(), dedupeKey: agentCorrectionDedupeKey(id24(9)),
+    });
+    expect(await unsettledCorrections(db)).toMatchObject({ lock: { state: "stale" }, releasable: false });
     expect(await releaseStaleCorrectionLock(db)).toBe(false);
+    // Settled (posts rows are append-only; settling is the one change allowed).
+    await db.update(P).set({ outcome: "not_sent", settledAt: sql`now()` }).where(eq(P.wiseSessionId, id24(9)));
 
-    // Back to the stale lock alone: the dry run and the real release agree.
-    const [{ reason }] = await db.select({ reason: C.haltReason }).from(C).where(eq(C.id, "default"));
-    await db.update(C).set({ haltReason: reason!.split(" | then: ")[0] }).where(eq(C.id, "default"));
+    // The dry run and the real release agree.
     expect((await unsettledCorrections(db)).releasable).toBe(true);
     expect(await releaseStaleCorrectionLock(db)).toBe(true);
     expect(await unsettledCorrections(db)).toEqual({ rows: [], lock: null, releasable: false });
+  });
+
+  it("never offers to lift a lock someone halted on top of, appended or folded in", async () => {
+    const { postStartedAt } = await posted();
+    expect((await pgCorrectionStore(db, { actor: AGENT_CORRECTION_ACTOR, sleep: noSleep }).lock(plan(postStartedAt))).ok).toBe(true);
+    await db.update(C).set({ leaseUntil: sql`now() - interval '1 minute'` }).where(eq(C.id, "default"));
+    // A person halted on top: appended to the lock's reason.
+    await haltAutowriter(db, "owner pause for review", "owner@example.com");
+    expect(await unsettledCorrections(db)).toMatchObject({ lock: { state: "halted_on_top" }, releasable: false });
+    expect(await releaseStaleCorrectionLock(db)).toBe(false);
+    // The reason back to the bare lock (a halt folded in): the control row was written since, so still on top.
+    const [{ reason }] = await db.select({ reason: C.haltReason }).from(C).where(eq(C.id, "default"));
+    await db.update(C).set({ haltReason: reason!.split(" | then: ")[0] }).where(eq(C.id, "default"));
+    expect(await unsettledCorrections(db)).toMatchObject({ lock: { state: "halted_on_top" }, releasable: false });
+    expect(await releaseStaleCorrectionLock(db)).toBe(false);
   });
 });
 

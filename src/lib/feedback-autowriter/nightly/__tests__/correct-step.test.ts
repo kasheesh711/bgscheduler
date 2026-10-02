@@ -97,7 +97,7 @@ function untouchableStore(): CorrectionStore {
   const fail = async (): Promise<never> => {
     throw new Error("the step must not use the store itself");
   };
-  return { preconditions: fail, lock: fail, recordPostStart: fail, settle: fail, halt: fail, incident: fail };
+  return { preconditions: fail, lock: fail, databaseNow: fail, recordPostStart: fail, settle: fail, halt: fail, incident: fail };
 }
 
 function harness(ctx: NightContext, patch: Partial<CorrectDeps> & { outcome?: (input: CorrectPostInput) => CorrectionOutcome } = {}) {
@@ -263,6 +263,12 @@ describe("stepCorrect: a dry run", () => {
     await stepCorrect(ctx, h.deps);
     const [input] = h.execute.mock.calls[0];
     expect(input).toMatchObject({ dryRun: true, apiActorId: "69366668c05630afe5d8a2a4", disabledTutors: ["6a00000000000000000000ab"], plan: { wiseClassId: CID, base: { submissionId: SUBMISSION } } });
+    // The executor's required AI-suspect context: every name of the student, the tutor's names, the prior feedback.
+    expect(input.aiSuspect).toEqual({
+      studentNames: ["Pimchanok (Pim.Ta) Testwong", "Pim"], tutorNames: ["Arthit Teacherson", "Art"], priorFeedback: [], styleGuided: false,
+    });
+    // The executor and the store read one clock (the store checks it against the database's).
+    expect(input.now).toBe(ctx.now);
     expect(input.allowlist).toBe(AUTOWRITER_TEACHER_ALLOWLIST);
     expect(input.textProblems(PIM_CORRECTED)).toEqual([]);
     expect(input.textProblems({ ...PIM_CORRECTED, topics: `${PIM_CORRECTED.topics} We used the Zoom recording.` })).toEqual(expect.arrayContaining(["meta_word:zoom@topics", "meta_word:recording@topics"]));
@@ -366,10 +372,14 @@ describe("stepCorrect: applying", () => {
     seed(ctx, correctionProposal({ wiseSessionId: SID_B }));
     const h = harness(ctx, {
       apply: true,
-      outcome: () => ({ status: "awaiting_event_locked", postId: "post-1", bodyHash: "body", productionStillHalted: true }) as unknown as CorrectionOutcome,
+      outcome: () => ({ status: "awaiting_event_locked", postId: "post-1", bodyHash: "body" }),
     });
     const result = await stepCorrect(ctx, h.deps);
-    expect(result).toMatchObject({ ok: false, stop: "awaiting_event_locked", exitCode: 7, next: "recover", summary: { productionStillHalted: true } });
+    expect(result).toMatchObject({
+      ok: false, stop: "awaiting_event_locked", exitCode: 7, next: "recover --apply",
+      // recover acts once the row is older than the lock's lease (plus margin): 25 minutes from now at the latest.
+      summary: { productionStillHalted: true, recoverNotBefore: new Date(clock + 25 * 60_000).toISOString() },
+    });
     expect(h.raiseFlag).toHaveBeenCalledTimes(1);
     expect(h.log.map((line) => line.split("@")[0])).toEqual([`dry:${SID}`, `apply:${SID}`]);
   });
@@ -381,6 +391,28 @@ describe("stepCorrect: applying", () => {
     expect(await stepCorrect(ctx, h.deps)).toMatchObject({ ok: false, stop: "wise_429", exitCode: 5 });
     expect(activeWiseCooldown(new Date(clock), dir)).not.toBeNull();
     expect(h.raiseFlag).not.toHaveBeenCalled();
+  });
+
+  it("stops without parking Wise when the lock was lost or its budget spent before the POST", async () => {
+    for (const reason of ["lock_lost", "lock_budget", "lock_check_failed:NeonDbError,settle_failed:23505"]) {
+      const ctx = context({}, { paths: nightlyPaths(path.join(dir, reason.slice(0, 12)), NIGHT), home: path.join(dir, reason.slice(0, 12)) });
+      seed(ctx);
+      seed(ctx, correctionProposal({ wiseSessionId: SID_B }));
+      const h = harness(ctx, { apply: true, outcome: () => ({ status: "not_sent", postId: "post-1", reason }) });
+      expect(await stepCorrect(ctx, h.deps), reason).toMatchObject({ ok: false, stop: `not_sent:${reason.split(/[,:]/u)[0]}`, exitCode: 7 });
+      expect(activeWiseCooldown(new Date(clock), ctx.home), reason).toBeNull();
+      expect(h.log.map((line) => line.split("@")[0]), reason).toEqual([`dry:${SID}`, `apply:${SID}`]);
+    }
+  });
+
+  it("stops when a released correction leaves the autowriter halted by someone else, after flagging it", async () => {
+    const ctx = context();
+    seed(ctx);
+    seed(ctx, correctionProposal({ wiseSessionId: SID_B }));
+    const h = harness(ctx, { apply: true, outcome: () => ({ status: "verified", postId: "post-1", bodyHash: "body", productionStillHalted: true }) });
+    expect(await stepCorrect(ctx, h.deps)).toMatchObject({ ok: false, stop: "production_halted", exitCode: 7, next: null, summary: { productionStillHalted: true } });
+    expect(h.raiseFlag).toHaveBeenCalledTimes(1);
+    expect(h.log.map((line) => line.split("@")[0])).toEqual([`dry:${SID}`, `apply:${SID}`]);
   });
 
   it("keeps to the night (6) and week (15) caps, the database's daily cap and --max", async () => {
@@ -529,6 +561,21 @@ describe("stepRecover", () => {
     expect(stopped.recover).not.toHaveBeenCalled();
   });
 
+  it("waits while a correction lock's lease is live: nothing is released, try again later", async () => {
+    const ctx = context();
+    const deps = recoverDeps({ apply: true, recover: vi.fn<RecoverDeps["recover"]>(async () => [{ postId: "p1", wiseSessionId: SID, result: "lease_live", problems: [] }]) });
+    expect(await stepRecover(ctx, deps)).toMatchObject({ ok: false, stop: "lease_live", exitCode: 7, next: "recover --apply", summary: { released: false } });
+    expect(deps.release).not.toHaveBeenCalled();
+    // A live lock with nothing old enough to recover yet: the same.
+    const live = recoverDeps({
+      apply: true,
+      unsettled: vi.fn<RecoverDeps["unsettled"]>(async () => ({ rows: [], lock: { state: "live", wiseSessionId: SID }, releasable: false })),
+      recover: vi.fn<RecoverDeps["recover"]>(async () => []),
+    });
+    expect(await stepRecover(ctx, live)).toMatchObject({ ok: false, stop: "lease_live", exitCode: 7 });
+    expect(live.release).not.toHaveBeenCalled();
+  });
+
   it("exits 10 and writes STOP when a correction could not be settled safely", async () => {
     const ctx = context();
     const deps = recoverDeps({ apply: true, recover: vi.fn<RecoverDeps["recover"]>(async () => [{ postId: "p1", wiseSessionId: SID, result: "safety", problems: ["api_save_but_text_not_landed"] }]) });
@@ -554,8 +601,9 @@ describe("stepCorrect with the real executor (dry run)", () => {
     writeJsonAtomic(path.join(ctx.paths.bundlesDir, `${SESSION_ID}.json`), file);
     const time = executorClock(IN_WINDOW);
     const wise = fakeWise(time, []);
-    const preconditions = vi.fn(async () => [] as string[]);
-    const store: CorrectionStore = { ...untouchableStore(), preconditions };
+    const preconditions = vi.fn(async () => ({ problems: [] as string[], firstShotPostedAt: new Date("2026-10-02T09:40:00.000Z") }));
+    const databaseNow = vi.fn(async () => time.now());
+    const store: CorrectionStore = { ...untouchableStore(), preconditions, databaseNow };
     const h = harness(ctx, {
       execute: undefined,
       ops: wise,

@@ -7,6 +7,7 @@ import {
   correctPostGuarded,
   inCorrectionWindow,
   type CorrectPostInput,
+  type CorrectionAiSuspectInput,
   type CorrectionOutcome,
   type CorrectionPlan,
   type CorrectionStore,
@@ -23,7 +24,7 @@ import type { NightlyLedger } from "./ledger";
 import { appendJsonl, readJsonl } from "./paths";
 import { readProposalFiles, verifyProposal, type CorrectionProposal, type HmacKeyResult } from "./proposals";
 import { readBundleFile, stopBeforeStep, type BundleFile, type NightContext, type StepResult } from "./steps";
-import { correctionTextProblems } from "./text-problems";
+import { correctionTextProblems, type TextProblemInput } from "./text-problems";
 import { textProblemContext } from "./verify";
 
 /**
@@ -39,9 +40,11 @@ import { textProblemContext } from "./verify";
  * - One class at a time: STOP before each class, the executor's own dry run (reads only) first, then — applying —
  *   the next correction window (`inCorrectionWindow`, waited for up to 6 minutes, never past the deadline), the
  *   night (6) and 7-day (15) caps reserved in the ledger, and the one guarded POST.
- * - Verified (or still awaiting its event): an `agent` flag puts the class back in the owner's review list. A safety
- *   outcome stops everything (exit 10, STOP written; the executor leaves the autowriter halted). An event still
- *   missing with the lock kept (`awaiting_event_locked`) stops the night's corrections: `recover` settles it later.
+ * - Verified (or verified in Wise with our event still missing): an `agent` flag puts the class back in the owner's
+ *   review list. A safety outcome stops everything (exit 10, STOP written; the executor leaves the autowriter
+ *   halted). An event still missing with the lock kept (`awaiting_event_locked`) stops the night's corrections:
+ *   `recover --apply` settles it once the lock's lease is over. An outcome that leaves the autowriter halted by
+ *   someone else (`productionStillHalted`: an owner pause on top of the lock) stops the run too.
  */
 
 export const CORRECTION_WINDOW_MAX_WAIT_MS = 6 * 60_000;
@@ -99,21 +102,26 @@ export async function loadDisabledTutors(db: Database): Promise<string[] | null>
 }
 
 export interface UnsettledCorrections {
-  /** Agent corrections still `posting` or `awaiting_event` (`stale`: older than recovery's threshold). */
+  /** Agent corrections still `posting` or `awaiting_event` (`stale`: old enough for `recoverStaleCorrections`). */
   rows: Array<{ postId: string; wiseSessionId: string; outcome: string; stale: boolean }>;
   /**
    * The control row halted by a correction lock: `live` (a correction holds it now), `stale` (its run is gone:
    * `recover --apply` lifts it once nothing is unsettled), or `halted_on_top` (an anomaly or a person halted the
-   * autowriter on top of the lock: only a person resumes it).
+   * autowriter on top of the lock — appended to the reason, or folded into it with a later control-row write — so
+   * only a person resumes it).
    */
   lock: { state: "live" | "stale" | "halted_on_top"; wiseSessionId: string | null } | null;
-  /** Whether `releaseStaleCorrectionLock` would lift the lock now. */
+  /** Whether `releaseStaleCorrectionLock` would lift the lock now (the same conditions, read only). */
   releasable: boolean;
 }
 
 const LOCK_PREFIX = "correction-lock:";
 
-/** What a run left unsettled (reads only): the dry run of `recover`, and the check `preflight` and `correct` make. */
+/**
+ * What a run left unsettled (reads only): the dry run of `recover`, and the check `preflight` and `correct` make.
+ * `releasable` mirrors `releaseStaleCorrectionLock`'s conditions: the exact lock reason, untouched since the lock
+ * (nothing appended, `updated_at` still the halt's own time), its lease over, and no correction unsettled.
+ */
 export async function unsettledCorrections(db: Database, opts: { staleAfterMs?: number } = {}): Promise<UnsettledCorrections> {
   const staleAfterMs = opts.staleAfterMs ?? CORRECTION_STALE_AFTER_MS;
   const rows = await db.select({
@@ -126,19 +134,23 @@ export async function unsettledCorrections(db: Database, opts: { staleAfterMs?: 
     haltReason: C.haltReason,
     leaseToken: sql<string | null>`${C.leaseToken}::text`,
     leaseLive: sql<boolean>`coalesce(${C.leaseUntil} > now(), false)`,
+    untouched: sql<boolean>`coalesce(position(' | then: ' in ${C.haltReason}) = 0 and ${C.updatedAt} = ${C.haltedAt}, false)`,
+    anyCorrectionUnsettled: sql<boolean>`exists (select 1 from feedback_autowriter_posts p
+      where p.kind = 'correction' and p.outcome in ('posting', 'awaiting_event'))`,
   }).from(C).where(eq(C.id, "default")).limit(1);
   let lock: UnsettledCorrections["lock"] = null;
   const reason = control?.haltReason ?? null;
   if (reason?.startsWith(LOCK_PREFIX)) {
     const token = /^correction-lock:([0-9a-f-]{36})/u.exec(reason)?.[1] ?? null;
     const live = control?.leaseLive === true && token !== null && control.leaseToken === token;
+    const untouched = isCorrectionLockReason(reason) && control?.untouched === true;
     lock = {
-      state: !isCorrectionLockReason(reason) ? "halted_on_top" : live ? "live" : "stale",
+      state: live ? "live" : untouched ? "stale" : "halted_on_top",
       wiseSessionId: /nightly agent correcting ([0-9a-f]{24})/u.exec(reason)?.[1] ?? null,
     };
   }
-  const settledRows = rows.map((row) => ({ ...row, stale: row.stale === true }));
-  return { rows: settledRows, lock, releasable: lock?.state === "stale" && settledRows.length === 0 };
+  const listed = rows.map((row) => ({ ...row, stale: row.stale === true }));
+  return { rows: listed, lock, releasable: lock?.state === "stale" && control?.anyCorrectionUnsettled !== true };
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +388,18 @@ async function waitForWindow(ctx: NightContext, deps: CorrectDeps): Promise<Nigh
   }
 }
 
+/** The executor's AI-suspect context from the class's text-check context: every name of the student, the tutor's. */
+export function aiSuspectOf(context: Omit<TextProblemInput, "fields">): CorrectionAiSuspectInput {
+  const studentNames = [context.studentFullName, context.studentDisplayName, ...(context.studentAliases ?? [])]
+    .map((name) => name.trim()).filter((name) => name !== "");
+  return {
+    studentNames: [...new Set(studentNames)],
+    tutorNames: [...new Set(context.tutorNames.map((name) => name.trim()).filter((name) => name !== ""))],
+    priorFeedback: [...context.priorFeedback],
+    styleGuided: Boolean(context.styleGuide || context.formatGuide),
+  };
+}
+
 /**
  * Refusals that would refuse every later class as well end the run: the database's own daily cap, and a Mac clock
  * that disagrees with the database's.
@@ -465,7 +489,7 @@ export async function stepCorrect(ctx: NightContext, deps: CorrectDeps): Promise
     ctx.log?.(`correct ${line.wiseSessionId}: ${line.status}${line.stage ? ` (${line.stage}: ${line.reason})` : line.reason ? ` (${line.reason})` : ""}`);
     return full;
   };
-  const stopOn = (stop: NightlyStop, next = "correct") =>
+  const stopOn = (stop: NightlyStop, next: string | null = "correct") =>
     finish({ ok: false, stop: stop.reason, exitCode: stop.exitCode, next, extra: { proposals: proposals.length } });
 
   for (const proposal of proposals) {
@@ -526,7 +550,10 @@ export async function stepCorrect(ctx: NightContext, deps: CorrectDeps): Promise
       apiActorId: deps.apiActorId ?? "",
       allowlist: deps.allowlist,
       disabledTutors,
-      // Production's validators with this class's own post left out of the copy check, meta words and identity.
+      // The executor's own AI-suspect and copy checks, against the tutor's prior feedback (this class's own left out).
+      aiSuspect: aiSuspectOf(context),
+      // Production's validators with this class's own post left out of the copy check, the class's style or format
+      // guide, meta words and identity (PR A's checks): each code refused as `text:<code>`.
       textProblems: (fields) => correctionTextProblems({ ...context, fields: { ...fields } })
         .map((problem) => `${problem.code}${problem.field ? `@${problem.field}` : ""}`),
       now: ctx.now,
@@ -581,13 +608,29 @@ export async function stepCorrect(ctx: NightContext, deps: CorrectDeps): Promise
       writeStopFile(`nightly correction of ${sid} ended in a safety stop: the autowriter is halted; check the class in Wise`, ctx.home, ctx.now());
       return stopOn(new NightlyStop("safety", EXIT.safety));
     }
-    // Our event is not in Wise yet and the lock is kept: no other correction tonight; `recover` settles it later.
-    if (line.status === "awaiting_event_locked") return stopOn(new NightlyStop("awaiting_event_locked", EXIT.stopped), "recover");
+    // Our event is not in Wise yet and the lock is kept (the autowriter stays halted): no other correction tonight.
+    // `recover --apply` settles it by reads alone once the lock's lease is over, then lifts the lock.
+    if (line.status === "awaiting_event_locked") {
+      return finish({
+        ok: false, stop: "awaiting_event_locked", exitCode: EXIT.stopped, next: "recover --apply",
+        extra: { proposals: proposals.length, recoverNotBefore: new Date(ctx.now().getTime() + CORRECTION_STALE_AFTER_MS).toISOString() },
+      });
+    }
     if (line.status === "not_sent") {
-      writeWiseCooldown(ctx.now(), ctx.home);
-      return stopOn(new NightlyStop("wise_429", EXIT.wiseThrottled));
+      // Wise answered 429 and nothing changed: park Wise. Otherwise the lock was lost or its budget spent between the
+      // claim and the POST (an owner's switch, this machine asleep): stop the run. Either way the class's one
+      // correction is used up.
+      if ((line.reason ?? "").startsWith("wise_rate_limited")) {
+        writeWiseCooldown(ctx.now(), ctx.home);
+        return stopOn(new NightlyStop("wise_429", EXIT.wiseThrottled));
+      }
+      return stopOn(new NightlyStop(`not_sent:${(line.reason ?? "unknown").split(/[,:]/u)[0]}`, EXIT.stopped));
     }
     if (flag?.startsWith("failed:")) return stopOn(new NightlyStop("flag_failed", EXIT.error));
+    // Released, but someone halted the autowriter on top of the lock (an owner pause): respect it, stop.
+    if ((outcome as { productionStillHalted?: boolean }).productionStillHalted === true) {
+      return stopOn(new NightlyStop("production_halted", EXIT.stopped), null);
+    }
     const runStop = line.status === "refused" ? runStopForRefusal(line.reason) : null;
     if (runStop) return stopOn(runStop);
     if (deps.throttled()) return stopOn(new NightlyStop("wise_429", EXIT.wiseThrottled));
@@ -631,7 +674,9 @@ export async function stepRecover(ctx: NightContext, deps: RecoverDeps): Promise
   if (stopFilePresent(ctx.stopFiles)) return { ok: false, stop: "stop_file", next: "recover", exitCode: EXIT.stopped, summary };
   if (nothing) return { ok: true, stop: null, next: null, exitCode: EXIT.ok, summary };
   const results = await deps.recover();
-  const released = await deps.release();
+  // A correction lock's lease is still live: its run may still be working — nothing was read or written. Try later.
+  const leaseLive = results.some((item) => item.result === "lease_live") || (before.lock?.state === "live" && results.length === 0);
+  const released = leaseLive ? false : await deps.release();
   const after = await deps.unsettled();
   summary.results = results.map((item) => ({ postId: item.postId, wiseSessionId: item.wiseSessionId, result: item.result, problems: item.problems }));
   summary.released = released;
@@ -641,6 +686,7 @@ export async function stepRecover(ctx: NightContext, deps: RecoverDeps): Promise
     writeStopFile("nightly recover found a correction it could not settle safely: the autowriter is halted", ctx.home, ctx.now());
     return { ok: false, stop: "safety", next: null, exitCode: EXIT.safety, summary };
   }
+  if (leaseLive) return { ok: false, stop: "lease_live", next: "recover --apply", exitCode: EXIT.stopped, summary };
   if (after.rows.length > 0 || after.lock) {
     const readFailed = results.some((item) => item.result === "read_failed");
     return { ok: false, stop: readFailed ? "read_failed" : "still_unsettled", next: "recover --apply", exitCode: readFailed ? EXIT.error : EXIT.guardRefused, summary };
