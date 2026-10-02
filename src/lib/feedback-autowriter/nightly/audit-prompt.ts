@@ -19,7 +19,7 @@ const MAX_SUMMARY_CHARS = 20_000;
 
 const DATA_TAGS = [
   "class_details", "people", "feedback", "posted_from", "speaker_labels", "lesson_transcript", "zoom_captions",
-  "wise_summary", "deterministic_candidates", "prior_issues", "writer_rules",
+  "wise_summary", "deterministic_candidates", "prior_issues", "writer_rules", "night", "audits", "history_14d",
 ] as const;
 
 /** Neutralises anything in lesson data that looks like one of our tags, so data can never close a tag early. */
