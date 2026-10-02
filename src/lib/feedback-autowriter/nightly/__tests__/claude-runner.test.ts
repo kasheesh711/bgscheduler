@@ -223,6 +223,18 @@ describe("runClaude", () => {
     expect(child!.killed).toContain("SIGTERM");
   });
 
+  it("settles a call whose process exited even when its pipes never close", async () => {
+    const { spawn } = fakeSpawn(({ child }) => {
+      child.stdout.emit("data", Buffer.from(envelope()));
+      // A grandchild keeps stdout open: "exit" but never "close".
+      child.emit("exit", 0, null);
+    });
+    const outcome = await runClaude({ purpose: "audit", key: "k", system: "s", user: "u", schema: SCHEMA, budgetUsd: 1 }, {
+      cwd: dir, cliVersion: null, callsLog: null, spawn, exitGraceMs: 20,
+    });
+    expect(outcome.kind).toBe("success");
+  });
+
   it("reports a failed spawn as a CLI error", async () => {
     const spawn: SpawnLike = () => {
       const child = new FakeChild();

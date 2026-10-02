@@ -24,6 +24,11 @@ const OTHER_MODEL_OUTPUT_LIMIT = 500;
 const MAX_OPUS_OUTPUT_TOKENS = 60_000;
 const MAX_STDOUT_BYTES = 20 * 1024 * 1024;
 const KILL_GRACE_MS = 10_000;
+/**
+ * After the `claude` process exits, its pipes normally close at once ("close"). A grandchild that inherited them can keep
+ * them open: the call is settled this long after the exit anyway, with the output read so far.
+ */
+const EXIT_GRACE_MS = 5_000;
 
 /** The only variables a `claude -p` child gets. */
 export const CLAUDE_ENV_ALLOWLIST = ["HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TMPDIR", "TERM"] as const;
@@ -254,6 +259,7 @@ export interface ChildLike {
   stdout: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown } | null;
   stderr: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown } | null;
   on(event: "close", listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
+  on(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
   on(event: "error", listener: (error: Error) => void): unknown;
   kill(signal?: NodeJS.Signals): boolean;
 }
@@ -286,6 +292,8 @@ export interface ClaudeRunnerDeps {
   now?: () => Date;
   /** Where the system prompt file is written for `--system-prompt-file` (default: a fresh temp dir). */
   tempDir?: string;
+  /** How long after the process exits its output may still arrive before the call is settled (tests shorten it). */
+  exitGraceMs?: number;
 }
 
 /** One `claude -p` call: system prompt in a 0600 temp file, the prompt on stdin, killed after its time-out. */
@@ -311,9 +319,11 @@ export async function runClaude(call: ClaudeCall, deps: ClaudeRunnerDeps): Promi
         settled = true;
         clearTimeout(timer);
         clearTimeout(killer);
+        clearTimeout(exitGrace);
         resolve({ stdout, stderr, code, timedOut });
       };
       let killer: ReturnType<typeof setTimeout> | undefined;
+      let exitGrace: ReturnType<typeof setTimeout> | undefined;
       const timer = setTimeout(() => {
         timedOut = true;
         child.kill("SIGTERM");
@@ -330,6 +340,9 @@ export async function runClaude(call: ClaudeCall, deps: ClaudeRunnerDeps): Promi
         finish(null);
       });
       child.on("close", (code) => finish(code));
+      child.on("exit", (code) => {
+        exitGrace = setTimeout(() => finish(code), deps.exitGraceMs ?? EXIT_GRACE_MS);
+      });
       child.stdin?.on?.("error", () => undefined);
       child.stdin?.write(call.user);
       child.stdin?.end();
