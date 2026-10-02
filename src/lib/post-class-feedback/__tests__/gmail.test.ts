@@ -23,6 +23,23 @@ describe("Gmail reminder transport", () => {
     expect(raw).toMatch(/Message-ID: <[a-f0-9]+@begiftededucation.com>/);
   });
 
+  it("uses an optional sender name and reply-to for app mail", async () => {
+    let request: RequestInit | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_u, init) => { request = init; return Response.json({ id: "google-456" }); }));
+    await createGmailSender(async () => "access", undefined, { senderName: "BeGifted Ops", replyTo: "kevhsh7@gmail.com" }).sendEmail(input);
+    const raw = Buffer.from(JSON.parse(String(request?.body)).raw, "base64url").toString();
+    expect(raw).toContain("From: BeGifted Ops <admin@begiftededucation.com>\r\n");
+    expect(raw).toContain("Reply-To: kevhsh7@gmail.com\r\n");
+  });
+
+  it("quotes a display name containing specials", async () => {
+    let request: RequestInit | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_u, init) => { request = init; return Response.json({ id: "google-789" }); }));
+    await createGmailSender(async () => "access", undefined, { senderName: "BeGifted, Ops" }).sendEmail(input);
+    const raw = Buffer.from(JSON.parse(String(request?.body)).raw, "base64url").toString();
+    expect(raw).toContain('From: "BeGifted, Ops" <admin@begiftededucation.com>\r\n');
+  });
+
   it("rejects header injection before calling Google", async () => {
     const calls: unknown[] = [];
     vi.stubGlobal("fetch", async (...args: unknown[]) => { calls.push(args); return Response.json({ id: "wrong" }); });

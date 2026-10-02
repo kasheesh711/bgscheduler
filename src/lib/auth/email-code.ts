@@ -4,7 +4,7 @@ import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import { adminUsers, admissionsCaseMembers, authEmailChallenges, authEmailRateLimits } from "@/lib/db/schema";
 import { resolveUserAccess } from "@/lib/auth-access";
-import { createAppsScriptScheduleEmailSender } from "@/lib/classrooms/schedule-email";
+import { createOutboundEmailSender, outboundEmailTransport } from "@/lib/email/outbound";
 import { renderTeacherEmail } from "@/lib/teacher-emails/render";
 import { teacherEmailLogoUrl } from "@/lib/teacher-emails/brand";
 import { teacherEmailPublicBaseUrl } from "@/lib/teacher-emails/config";
@@ -39,6 +39,9 @@ async function takeLimit(tx: Database, key: string, limit: number, now: Date) {
 }
 
 export function emailCodeSenderKeys(): Array<"primary" | "backup"> {
+  // Workspace Gmail falls back to the primary relay by itself, and "backup"
+  // is that same relay under gmail, so a second attempt would only repeat it.
+  if (outboundEmailTransport() === "gmail") return ["primary"];
   const keys: Array<"primary" | "backup"> = [];
   if (process.env.SCHEDULE_EMAIL_APPS_SCRIPT_URL?.trim() && process.env.SCHEDULE_EMAIL_APPS_SCRIPT_SECRET?.trim()) keys.push("primary");
   if (process.env.SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_URL?.trim() && process.env.SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_SECRET?.trim()) keys.push("backup");
@@ -56,7 +59,7 @@ export async function sendEmailCode(email: string, code: string, challengeId: st
   });
   for (const key of emailCodeSenderKeys()) {
     try {
-      await createAppsScriptScheduleEmailSender(key).sendEmail({ to: email, ...content, idempotencyKey: "auth-code:" + challengeId });
+      await createOutboundEmailSender(key).sendEmail({ to: email, ...content, idempotencyKey: "auth-code:" + challengeId });
       return;
     } catch {
       // Retry the SAME code through the backup. Provider errors can contain private data.

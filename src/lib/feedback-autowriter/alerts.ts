@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { createAppsScriptScheduleEmailSender, type ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
+import { type ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
+import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { wiseSessionLink } from "@/lib/wise/links";
 import { rosterTutor } from "./roster";
 import type { AlertKind, JudgeUnreachedCause, PendingAlert } from "./store";
@@ -86,7 +87,7 @@ export async function sendAlertDigest(input: {
 }): Promise<{ sent: boolean; error: string | null }> {
   if (input.alerts.length === 0) return { sent: false, error: null };
   if (input.recipients.length === 0) return { sent: false, error: "FEEDBACK_AUTOWRITER_ALERT_EMAILS is empty" };
-  const sender = input.sender ?? createAppsScriptScheduleEmailSender("primary", { strictOutcome: true });
+  const sender = input.sender ?? createOutboundEmailSender("primary", { strictOutcome: true });
   const digest = buildAlertDigest(input.alerts, input.halt);
   try {
     for (const to of input.recipients) {
