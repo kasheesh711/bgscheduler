@@ -477,7 +477,7 @@ describe("stepVerify: caps, stops and the ledger", () => {
     h.deps.judge = (input) => judgeCandidate({ apiKey: "k", ledger: h.ledger, key: input.key, callModel }, input);
     await stepVerify(ctx, h.deps);
     const reserved = readJsonl<{ type: string; kind: string; key: string }>(ctx.paths.spendJsonl).filter((line) => line.type === "reserve");
-    expect(reserved.map((line) => `${line.kind}:${line.key.split(":").at(-1)}`).toSorted()).toEqual(["openrouter:high", "openrouter:medium", "opus_reaudit:a1"]);
+    expect(reserved.map((line) => `${line.kind}:${line.key.split(":").at(-1)}`).toSorted()).toEqual(["openrouter:high", "openrouter:medium", `opus_reaudit:a${AUDIT_VERSION}`]);
     expect(callModel).toHaveBeenCalledTimes(2);
   });
 
