@@ -2,13 +2,14 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CLAUDE_ENV_ALLOWLIST,
   assertSafeClaudeArgs,
   buildClaudeArgs,
   claudeChildEnv,
   claudeVersionSupported,
+  killChildren,
   parseClaudeEnvelope,
   runClaude,
   type ChildLike,
@@ -233,6 +234,30 @@ describe("runClaude", () => {
       cwd: dir, cliVersion: null, callsLog: null, spawn, exitGraceMs: 20,
     });
     expect(outcome.kind).toBe("success");
+  });
+
+  it("tracks running calls so a signal handler can kill them: SIGTERM, then SIGKILL after the grace", async () => {
+    const children = new Set<ChildLike>();
+    let running: FakeChild | null = null;
+    const { spawn } = fakeSpawn(({ child }) => {
+      running = child;
+    });
+    const call = runClaude({ purpose: "audit", key: "k", system: "s", user: "u", schema: SCHEMA, budgetUsd: 1 }, {
+      cwd: dir, cliVersion: null, callsLog: null, spawn, children,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(children.size).toBe(1);
+    // A child that dies on SIGTERM leaves the set at once.
+    expect(await killChildren(children, { graceMs: 1_000, pollMs: 5 })).toBe(1);
+    expect(running!.killed).toEqual(["SIGTERM"]);
+    expect(await call).toMatchObject({ kind: "cli_error" });
+    expect(children.size).toBe(0);
+    // One that ignores SIGTERM gets SIGKILL.
+    const stubborn = { kill: vi.fn(() => true) } as unknown as ChildLike;
+    const set = new Set<ChildLike>([stubborn]);
+    expect(await killChildren(set, { graceMs: 20, pollMs: 5 })).toBe(1);
+    expect(vi.mocked(stubborn.kill).mock.calls.map((args) => args[0])).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(await killChildren(new Set())).toBe(0);
   });
 
   it("reports a failed spawn as a CLI error", async () => {

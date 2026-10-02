@@ -57,7 +57,15 @@ import {
   writeStopFile,
   type NightlyCaps,
 } from "@/lib/feedback-autowriter/nightly/caps";
-import { claudeCwd, ledgerOutcome, readClaudeCliVersion, runClaude, type ClaudeRunnerDeps } from "@/lib/feedback-autowriter/nightly/claude-runner";
+import {
+  claudeCwd,
+  killChildren,
+  ledgerOutcome,
+  readClaudeCliVersion,
+  runClaude,
+  type ChildLike,
+  type ClaudeRunnerDeps,
+} from "@/lib/feedback-autowriter/nightly/claude-runner";
 import { createWiseReadGate, dbEvidenceSources, readOnlySoniox } from "@/lib/feedback-autowriter/nightly/evidence";
 import { EXIT, exitCodeForStop, type ExitCode } from "@/lib/feedback-autowriter/nightly/exit";
 import { NightlyLedger } from "@/lib/feedback-autowriter/nightly/ledger";
@@ -179,6 +187,8 @@ class Session {
   readonly ledger: NightlyLedger;
   /** Our own Soniox jobs in flight (re-transcription), deleted by the signal handler. */
   readonly inFlight = new Set<string>();
+  /** Running `claude -p` calls, killed by the signal handler before it releases the lock. */
+  readonly claudeChildren = new Set<ChildLike>();
 
   constructor(readonly ctx: NightContext, readonly runnerSha: string | null) {
     // A call that cost more than it reserved and passed a cap stops every later step (and the next night) until the
@@ -197,7 +207,9 @@ class Session {
 
   /** The claude runner; `claude --version` is read once per invocation. */
   claude(): ClaudeRunnerDeps {
-    this.runner ??= { cwd: claudeCwd(), cliVersion: readClaudeCliVersion(), callsLog: this.ctx.paths.claudeCallsJsonl };
+    this.runner ??= {
+      cwd: claudeCwd(), cliVersion: readClaudeCliVersion(), callsLog: this.ctx.paths.claudeCallsJsonl, children: this.claudeChildren,
+    };
     return this.runner;
   }
 }
@@ -400,15 +412,17 @@ async function main(): Promise<void> {
   const onSignal = (signal: NodeJS.Signals) => {
     if (handled) return;
     handled = true;
-    const pending = [...session.inFlight];
-    const key = process.env.SONIOX_API_KEY?.trim();
-    const cleanup = pending.length > 0 && key ? Promise.allSettled(pending.map((id) => createSonioxClient(key).remove(id))) : Promise.resolve([]);
-    void cleanup.then((results) => {
-      const left = pending.filter((_, index) => (results as PromiseSettledResult<unknown>[])[index]?.status === "rejected");
-      process.stderr.write(`${signal}: stopped${left.length ? `; Soniox jobs NOT deleted: ${left.join(", ")}` : ""}\n`);
+    void (async () => {
+      // Running claude calls first (they would outlive us and spend), then our own Soniox jobs, then the lock.
+      const killed = await killChildren(session.claudeChildren);
+      const pending = [...session.inFlight];
+      const key = process.env.SONIOX_API_KEY?.trim();
+      const results = pending.length > 0 && key ? await Promise.allSettled(pending.map((id) => createSonioxClient(key).remove(id))) : [];
+      const left = pending.filter((_, index) => results[index]?.status === "rejected");
+      process.stderr.write(`${signal}: stopped${killed ? `; ${killed} claude call(s) killed` : ""}${left.length ? `; Soniox jobs NOT deleted: ${left.join(", ")}` : ""}\n`);
       lock.release();
       process.exit(130);
-    });
+    })();
   };
   process.once("SIGINT", onSignal);
   process.once("SIGTERM", onSignal);

@@ -294,6 +294,22 @@ export interface ClaudeRunnerDeps {
   tempDir?: string;
   /** How long after the process exits its output may still arrive before the call is settled (tests shorten it). */
   exitGraceMs?: number;
+  /** Every `claude` process still running, so a signal handler can kill them before the lock is released. */
+  children?: Set<ChildLike>;
+}
+
+/**
+ * Stop every running `claude` call: SIGTERM, then SIGKILL for any still running after `graceMs`. Resolves once the set is
+ * empty (each call removes its process when it settles) or the second signal was sent. Returns how many were running.
+ */
+export async function killChildren(children: Set<ChildLike>, options: { graceMs?: number; pollMs?: number } = {}): Promise<number> {
+  const running = [...children];
+  if (running.length === 0) return 0;
+  for (const child of running) child.kill("SIGTERM");
+  const until = Date.now() + (options.graceMs ?? 3_000);
+  while (children.size > 0 && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, options.pollMs ?? 100));
+  for (const child of children) child.kill("SIGKILL");
+  return running.length;
 }
 
 /** One `claude -p` call: system prompt in a 0600 temp file, the prompt on stdin, killed after its time-out. */
@@ -314,9 +330,11 @@ export async function runClaude(call: ClaudeCall, deps: ClaudeRunnerDeps): Promi
       let timedOut = false;
       let settled = false;
       const child = (deps.spawn ?? defaultSpawn)(deps.claudeBin ?? "claude", args, { cwd: deps.cwd, env: claudeChildEnv(deps.parentEnv) });
+      deps.children?.add(child);
       const finish = (code: number | null) => {
         if (settled) return;
         settled = true;
+        deps.children?.delete(child);
         clearTimeout(timer);
         clearTimeout(killer);
         clearTimeout(exitGrace);
