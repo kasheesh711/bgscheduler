@@ -1,4 +1,6 @@
+import { and, count, eq, inArray } from "drizzle-orm";
 import type { Database } from "@/lib/db";
+import * as schema from "@/lib/db/schema";
 import type { AutowriterCriticalCategory } from "@/lib/db/schema";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import { recordIncident } from "../incidents";
@@ -14,6 +16,8 @@ import type { ClassReport } from "./report";
  */
 
 export const AGENT_FLAG_ACTOR = "agent:nightly-audit";
+
+const FL = schema.feedbackAutowriterFlags;
 
 const CRITICAL_CATEGORIES = new Set<AutowriterCriticalCategory>(["wrong_person", "billing_status", "invented_content", "should_not_have_posted"]);
 
@@ -69,16 +73,41 @@ export function planAgentFlags(reports: readonly ClassReport[], input: { auditVe
   return { items, overCap };
 }
 
-/** Write the planned flags (and incidents), each in one transaction. Re-running inserts nothing new. */
-export async function applyAgentFlags(db: Database, items: readonly FlagPlanItem[]): Promise<{
+/** Agent flags the nightly has already raised on these classes (SELECT): what the night's flag cap counts. */
+export async function countAgentFlags(db: Database, wiseSessionIds: readonly string[]): Promise<number> {
+  if (wiseSessionIds.length === 0) return 0;
+  const [row] = await db.select({ total: count() }).from(FL)
+    .where(and(eq(FL.source, "agent"), eq(FL.createdBy, AGENT_FLAG_ACTOR), inArray(FL.wiseSessionId, [...wiseSessionIds])));
+  return Number(row?.total ?? 0);
+}
+
+/**
+ * Write the planned flags (and incidents), each in one transaction, in plan order (criticals first). A flag that
+ * already exists is counted, not written again; at most `maxNew` new ones are written — the night's cap counted in
+ * the database (`countAgentFlags`), so re-runs cannot go past it — and the rest are reported over the cap.
+ */
+export async function applyAgentFlags(db: Database, items: readonly FlagPlanItem[], options: { maxNew?: number } = {}): Promise<{
   inserted: number;
   existing: number;
   incidents: number;
+  overCap: string[];
 }> {
   let inserted = 0;
   let existing = 0;
   let incidents = 0;
+  const overCap: string[] = [];
+  const keys = items.map((item) => item.idempotencyKey);
+  const present = new Set(keys.length === 0 ? [] : (await db.select({ key: FL.idempotencyKey }).from(FL)
+    .where(inArray(FL.idempotencyKey, keys))).map((row) => row.key));
   for (const item of items) {
+    if (present.has(item.idempotencyKey)) {
+      existing += 1;
+      continue;
+    }
+    if (options.maxNew !== undefined && inserted >= options.maxNew) {
+      overCap.push(item.wiseSessionId);
+      continue;
+    }
     const done = await withDatabaseTransaction(db, async (tx) => {
       const flagged = await insertFlag(tx, {
         wiseSessionId: item.wiseSessionId,
@@ -103,5 +132,5 @@ export async function applyAgentFlags(db: Database, items: readonly FlagPlanItem
     else existing += 1;
     if (done.pushed) incidents += 1;
   }
-  return { inserted, existing, incidents };
+  return { inserted, existing, incidents, overCap };
 }

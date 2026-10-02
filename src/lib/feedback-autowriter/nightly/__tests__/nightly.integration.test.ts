@@ -6,7 +6,7 @@ import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
 import { KEVIN_ONLINE_WISE_USER_ID } from "../../roster";
 import { fieldsHash } from "../../submit";
 import { dbEvidenceSources } from "../evidence";
-import { AGENT_FLAG_ACTOR, applyAgentFlags, planAgentFlags } from "../flags";
+import { AGENT_FLAG_ACTOR, applyAgentFlags, countAgentFlags, planAgentFlags } from "../flags";
 import { loadOtherStudentNames } from "../prechecks";
 import { loadWatchdog, type ClassReport } from "../report";
 import { loadNightlyTargets } from "../select";
@@ -184,8 +184,8 @@ describe("applyAgentFlags (the one write)", () => {
       report(1, { severity: "critical", modes: ["M01"], criticalHighConfidence: true, criticalCategory: "wrong_person" }),
       report(2, {}),
     ], { auditVersion: 1, maxFlags: 10 });
-    expect(await applyAgentFlags(db, plan.items)).toEqual({ inserted: 2, existing: 0, incidents: 1 });
-    expect(await applyAgentFlags(db, plan.items)).toEqual({ inserted: 0, existing: 2, incidents: 0 });
+    expect(await applyAgentFlags(db, plan.items)).toEqual({ inserted: 2, existing: 0, incidents: 1, overCap: [] });
+    expect(await applyAgentFlags(db, plan.items)).toEqual({ inserted: 0, existing: 2, incidents: 0, overCap: [] });
     const flags = await db.select().from(FL).orderBy(FL.wiseSessionId);
     expect(flags.map((flag) => [flag.wiseSessionId, flag.source, flag.createdBy, flag.suggestedSeverity, flag.suggestedCategory, flag.idempotencyKey])).toEqual([
       [id(1), "agent", AGENT_FLAG_ACTOR, "critical", "wrong_person", `agent-audit:${id(1)}:${SHA}:1`],
@@ -200,5 +200,24 @@ describe("applyAgentFlags (the one write)", () => {
       kind: "critical_flag", severity: "critical", wiseSessionId: id(1), pushStatus: "pending", dedupeKey: `agent-audit:${id(1)}:${SHA}:1`,
     });
     expect(incidents[0].summary).not.toMatch(/Pim|fraction/iu);
+  });
+
+  it("counts the night's cap in the database: earlier runs' flags count, existing ones are not written again", async () => {
+    const report = (n: number): ClassReport => ({
+      wiseSessionId: id(n), fieldsSha256: SHA, tutorKey: "Kevin", className: null, postedEvidenceKind: "transcript", grade: "rebuilt", lateFrom: null,
+      improvable: false, auditVerdict: "major", auditFailure: null, auditSummaryLine: null, severity: "major", modes: ["M06"], findings: [],
+      ownerVerdict: null, judgePassed: true, wiseTextEdited: false, costUsd: 0.4, criticalHighConfidence: false, criticalCategory: null,
+    });
+    const first = planAgentFlags([report(1), report(2)], { auditVersion: 1, maxFlags: 10 });
+    expect(await applyAgentFlags(db, first.items, { maxNew: 10 })).toEqual({ inserted: 2, existing: 0, incidents: 0, overCap: [] });
+    expect(await countAgentFlags(db, [id(1), id(2), id(3)])).toBe(2);
+    // An owner flag on the same class is not the nightly's.
+    await db.insert(FL).values({ wiseSessionId: id(3), source: "owner", createdBy: "owner@example.invalid", idempotencyKey: "owner:3" });
+    expect(await countAgentFlags(db, [id(1), id(2), id(3)])).toBe(2);
+    // A later run of the night with a cap of 3: the two existing flags count, so only one more is written.
+    const later = planAgentFlags([report(1), report(2), report(3), report(4)], { auditVersion: 1, maxFlags: 10 });
+    const already = await countAgentFlags(db, [id(1), id(2), id(3), id(4)]);
+    expect(await applyAgentFlags(db, later.items, { maxNew: 3 - already })).toEqual({ inserted: 1, existing: 2, incidents: 0, overCap: [id(4)] });
+    expect(await countAgentFlags(db, [id(1), id(2), id(3), id(4)])).toBe(3);
   });
 });

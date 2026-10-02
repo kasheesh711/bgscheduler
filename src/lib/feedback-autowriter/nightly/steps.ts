@@ -18,7 +18,7 @@ import {
 import { claudeVersionSupported, type ClaudeCall, type ClaudeOutcome } from "./claude-runner";
 import { EXIT, NightlyStop, type ExitCode } from "./exit";
 import type { NightlyLedger } from "./ledger";
-import { applyAgentFlags, planAgentFlags } from "./flags";
+import { applyAgentFlags, countAgentFlags, planAgentFlags } from "./flags";
 import { appendJsonl, nightlyPaths, readJsonFile, readJsonl, writeJsonAtomic, writeTextAtomic, type NightlyPaths } from "./paths";
 import { runPrechecks } from "./prechecks";
 import {
@@ -708,8 +708,13 @@ export async function stepFlag(ctx: NightContext, deps: { db: Database | null; a
     writeJsonAtomic(path.join(ctx.paths.nightDir, "flags.json"), { ...summary, at: ctx.now().toISOString() });
     return result({ summary, next: "flag" });
   }
-  const applied = await applyAgentFlags(deps.db, plan.items);
-  const summary = { step: "flag", night: ctx.night, dryRun: false, planned: items, overCap: plan.overCap, ...applied };
+  // The night's cap is counted in the database: flags raised by earlier runs of this night count too.
+  const already = await countAgentFlags(deps.db, reports.map((report) => report.wiseSessionId));
+  const applied = await applyAgentFlags(deps.db, plan.items, { maxNew: Math.max(0, ctx.caps.maxFlagsPerNight - already) });
+  const summary = {
+    step: "flag", night: ctx.night, dryRun: false, planned: items, alreadyRaised: already,
+    inserted: applied.inserted, existing: applied.existing, incidents: applied.incidents, overCap: [...plan.overCap, ...applied.overCap],
+  };
   writeJsonAtomic(path.join(ctx.paths.nightDir, "flags.json"), { ...summary, at: ctx.now().toISOString() });
   const state = recordStep(ctx, "flag", { status: "done", stop: null, summary });
   return result({ summary, next: nextStep(state, "flag") });
