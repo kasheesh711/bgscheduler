@@ -574,37 +574,48 @@ For each audited class of the night with a major or critical issue in a text-fix
 - a candidate passes only when every check passes, cheapest first: combined length 0.6–1.6× the post; production's
   validators (with the class's own post left out of the copy check), meta words and identity
   (`correctionTextProblems`); the student's display name used; both production GLM judge levels on the bundle's
-  evidence (the transcript, else Wise's summary; production's messages, redaction and pinned route); and one Opus 5.5
-  max re-audit of the candidate with the prior issues — verdict accurate or cosmetic, no major omission, every prior
-  major or critical issue gone, nobody else named, homework only when the tutor set it.
+  evidence (the transcript, else Wise's summary — and, for an ISEB post, the frozen Atom evidence its writer was given;
+  production's messages, redaction and pinned route); and one Opus 5.5 max re-audit of the candidate with the prior
+  issues — verdict accurate or cosmetic, no major omission, every prior major or critical issue gone, nobody else
+  named, homework only when the tutor set it.
 A passing candidate becomes `<night>/proposals/<sid>.json` (0600): the candidate text and its hash, the posted text's
 hash, the source (`replay` or `minimal_fix`), every check, a reason of mode codes only, the root-cause reference and the
 versions behind it — signed with HMAC-SHA256 over its canonical JSON with `~/.bgscheduler-nightly/hmac.key` (32 random
-bytes, 0600, created by the first `verify`; never commit or copy it). Every paid call is reserved first and cached in
-`<night>/verify/calls/`: a candidate is re-audited at most once, ever; nothing is retried in a loop. At most 6 proposals
-a night. `<night>/verify/<sid>.json` keeps each class's candidates and checks for the morning review.
+bytes, 0600, created by the first `verify`; never commit or copy it). Every paid call is reserved first and recorded in
+`<night>/verify/calls/` before it is made and after: a candidate is re-audited at most once, ever (also after a crash
+mid-call); nothing is retried in a loop, except a call a usage limit or login failure stopped. At most 6 proposals a
+night. `<night>/verify/<sid>.json` keeps each class's candidates and checks for the morning review. A proposal must
+carry every check passed (`correct` refuses one that does not).
 
 **3. `correct` (dry run), then `correct --apply`.** Every proposal's signature is checked first (one that fails —
 unsigned, edited, signed with another key, renamed, another night's — refuses the whole run). The plan comes from the
 database, never from a proposal: the first-shot posts row (its text and hash, billing and `post_started_at`), the
 session row's expected submission, the class and teacher, and production's field mappings; the Wise ops are the
-production client's with both STOP files checked before every read. One class at a time: STOP, the executor's own
-guards on reads alone (a refused class never waits or counts), then — with `--apply` — the next correction window
-(UTC minutes 10–15 and 40–45, i.e. 06:10–06:15 and 06:40–06:45 Bangkok; waited for up to 6 minutes, never past the
-06:50 deadline), the night and week caps reserved in `spend.jsonl`, and the one guarded POST
-([`correction.ts`](../../src/lib/feedback-autowriter/correction.ts)). Each outcome is appended to
-`<night>/corrections.jsonl` (codes and ids only).
+production client's with both STOP files checked before every read. The executor also gets the class's AI-suspect and
+copy context (the student's names, the tutor's names, the tutor's prior feedback) and the night's text checks, and it
+reads the same clock as the store, which refuses the lock (`clock_skew`) when this Mac is more than 2 s off the
+database. One class at a time: STOP, the executor's own guards on reads alone (a refused class never waits or counts),
+then — with `--apply` — the next correction window (UTC minutes 10–15 and 40–45, i.e. 06:10–06:15 and 06:40–06:45
+Bangkok; waited for up to 6 minutes, never past the 06:50 deadline), the night and week caps reserved in
+`spend.jsonl`, and the one guarded POST ([`correction.ts`](../../src/lib/feedback-autowriter/correction.ts)): up to
+3 minutes of checks under the lock, then up to about 10 minutes of read-back and waiting for our Wise event. Each
+outcome is appended to `<night>/corrections.jsonl` (codes and ids only).
 - `--apply` runs only from a clean checkout whose HEAD is `origin/main` (fetch first). `--supervised` lifts that for
   an owner-watched run from a branch and is recorded on every outcome; the scheduled task never passes it.
 - Verified, or waiting for our Wise event: an `agent` flag (`agent-correction:<sid>`, "corrected by the nightly agent:
   <mode codes>") puts the class back in the review list.
 - `safety`: the executor halted the autowriter and kept its lock; `correct` writes `~/.bgscheduler-nightly/STOP` and
   exits 10. Check the class in Wise, then resume the autowriter by hand.
-- `awaiting_event_locked`: our save is not in Wise's events yet and the lock is kept; no other correction tonight,
-  `next: "recover"`, `productionStillHalted: true` in the summary. Run `recover --apply` once the event can have
-  arrived (the lock's lease must have run out).
-- A Wise 429 that sent nothing (`not_sent`) parks Wise for 30 minutes (`wise_429`, exit 5); the class is not tried
-  again tonight.
+- `awaiting_event_locked` (exit 7): the corrected text verified in Wise but our own save event did not show within 5
+  minutes, so the lock is KEPT (the autowriter stays halted) — no other correction tonight, `next: "recover --apply"`,
+  `recoverNotBefore` in the summary. `recover --apply` settles it by Wise reads alone once the lock's 20-minute lease is
+  over (rows count as stale after 25 minutes; until then it answers `lease_live`, exit 7), then lifts the lock.
+- A Wise 429 that sent nothing (`not_sent`) parks Wise for 30 minutes (`wise_429`, exit 5). A `not_sent` because the lock
+  was lost or its budget spent before the POST (an owner's switch, this Mac asleep) stops the run (`not_sent:<reason>`,
+  exit 7). Either way the class's one correction is used up.
+- A correction that released the lock while someone else had halted the autowriter on top of it (an owner pause) stops
+  the run (`production_halted`, exit 7); so do the database's own cap of 6 agent corrections in 24 hours
+  (`cap:daily_db`, exit 3) and a skewed clock (`clock_skew`, exit 6).
 
 **Kill switches for corrections.** Either STOP file stops `verify` and `correct` before the next class (and every
 Wise read of `correct`); pause the autowriter (`--pause`) and every correction is refused at its guards; delete

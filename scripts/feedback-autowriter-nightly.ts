@@ -49,7 +49,8 @@
  *                                  agent corrections a dead run left unsettled, settled from Wise reads (never a POST),
  *                                  then a correction lock it left lifted; a dry run (database reads only) unless --apply
  * Global: --no-deadline (supervised runs only: ignore the 06:50 Bangkok stop); --supervised (preflight and run: allow
- * reviewed code that is not on origin/main yet, recorded in run.json).
+ * reviewed code that is not on origin/main yet, recorded in run.json; correct --apply and recover --apply: allow a
+ * checkout whose HEAD is not exactly origin/main, recorded on every outcome).
  *
  * State lives outside every worktree: $BGS_NIGHTLY_ROOT, default ~/.bgscheduler-nightly/nightly (0700 dirs, 0600 files).
  * Kill switches: ~/.bgscheduler-nightly/STOP and /Users/kevinhsieh/Developer/Scheduling/.feedback-autowriter/STOP.
