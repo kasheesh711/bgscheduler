@@ -247,6 +247,7 @@ export function pgCorrectionStore(db: Database, opts: {
         stage: "posting",
         baseFieldsSha256: plan.base.fieldsSha256,
         submissionId: plan.base.submissionId,
+        ...(input.eventsReadAt ? { eventsReadAt: input.eventsReadAt.toISOString() } : {}),
         ...(input.freshReadAt ? { freshReadAt: input.freshReadAt.toISOString() } : {}),
         ...(input.studentWiseUserId ? { studentWiseUserId: input.studentWiseUserId } : {}),
         ...(input.baselineCredits ? { baselineCredits: input.baselineCredits } : {}),
@@ -469,10 +470,11 @@ async function recoverOne(context: {
   } catch {
     return unreadable("credits");
   }
-  const freshReadAt = dateOf(v.freshReadAt) ?? new Date(postStartedAt.getTime() - 60_000);
+  // The POST window starts at the first of the fresh reads (the events read; older rows: the session read).
+  const windowFrom = dateOf(v.eventsReadAt) ?? dateOf(v.freshReadAt) ?? new Date(postStartedAt.getTime() - 60_000);
   let events: SubmitFeedbackEvent[];
   try {
-    events = await ops.findFeedbackEvents(classId, sid, new Date(freshReadAt.getTime() - 5_000));
+    events = await ops.findFeedbackEvents(classId, sid, new Date(windowFrom.getTime() - 5_000));
   } catch {
     return unreadable("events");
   }
@@ -485,9 +487,9 @@ async function recoverOne(context: {
     ...verifyStoredSubmission(detail, { fields, billing: billingPlan, expected, mappings }),
     ...(creditsOk ? [] : ["credit_entries_changed"]),
   ];
-  const found = classifySubmitEvents(events, { apiActorId, freshReadAt, postStartedAt, postFinishedAt: dateOf(v.postFinishedAt) });
+  const found = classifySubmitEvents(events, { apiActorId, freshReadAt: windowFrom, postStartedAt, postFinishedAt: dateOf(v.postFinishedAt) });
   const extra = events.filter((event) => event !== found.ours && event.autoSubmitted !== true && event.actorId === apiActorId &&
-    event.at.getTime() >= freshReadAt.getTime() - 5_000);
+    event.at.getTime() >= windowFrom.getTime() - 5_000);
   const eventProblems = [
     ...(found.foreign.length > 0 ? ["foreign_submit_event_in_post_window"] : []),
     ...(extra.length > 0 ? [`extra_api_save_in_post_window:${extra.length}`] : []),

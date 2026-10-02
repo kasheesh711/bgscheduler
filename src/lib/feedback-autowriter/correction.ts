@@ -132,6 +132,9 @@ export interface CorrectionLock {
 /** The posts row's start: what recovery needs to read Wise back later (`verification` while unsettled). */
 export interface CorrectionPostStartInput {
   bodyHash: string;
+  /** The events read under the lock: the POST window starts here. */
+  eventsReadAt?: Date;
+  /** The session read under the lock, the last read before the POST. */
   freshReadAt?: Date;
   studentWiseUserId?: string;
   baselineCredits?: number[];
@@ -441,9 +444,9 @@ interface ReadBack {
  *   4. Wise before the lock, reads only: the post as Wise shows it (`checkWiseState`), the one billed student, and
  *      the credit baseline — exactly the one charge;
  *   5. the lock (`store.lock`): every other autowriter POST stops until it is released;
- *   6. under the lock, a fresh read: the same checks again, the same student, and no save since the first shot but
- *      our own first-shot save; still within the lock budget; no STOP. A dry run makes this read without the lock
- *      and returns `preflight_ok` here — it never locks, records or posts;
+ *   6. under the lock, fresh reads: no save since the first shot (from its posts row's time) but our own first-shot
+ *      save, then the session — the same checks again, the same student; still within the lock budget; no STOP. A
+ *      dry run makes these reads without the lock and returns `preflight_ok` here — it never locks, records or posts;
  *   7. the posts row (`store.recordPostStart`, which re-checks the lock), then ONE POST with the current billing in
  *      form order, never retried;
  *   8. read back after 3 s — the corrected text, the same submission, billing and credit entries — then poll for our
@@ -537,8 +540,19 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
     return refuse(stage, reason);
   };
 
-  // 6. The fresh read: made AFTER the lock is taken (on a dry run, without it).
+  // 6. The fresh reads, made AFTER the lock is taken (on a dry run, without it): the saves since the first shot, then
+  // the session — the last read before the POST, so the text checked is as fresh as it can be. The POST window
+  // starts at the events read, not the session read: a save between the two is never outside both.
   const unlocked = dryRun ? " (without the lock: dry run)" : "";
+  const eventsReadAt = now();
+  let sinceFirstShot: SubmitFeedbackEvent[];
+  try {
+    sinceFirstShot = await ops.findFeedbackEvents(plan.wiseClassId, sid, new Date(firstShotPostedAt.getTime() - EVENT_SKEW_MS));
+  } catch (error) {
+    return refuseHeld("wise", `events_read_failed:${errorName(error)}`);
+  }
+  const savesProblem = savesSinceFirstShotRefusal(sinceFirstShot, input.apiActorId);
+  if (savesProblem) return refuseHeld("wise", savesProblem);
   const freshReadAt = now();
   let fresh: AutowriterSessionDetail;
   try {
@@ -551,15 +565,7 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
   const freshStudent = soleStudentAccount(fresh);
   if (!freshStudent.ok) return refuseHeld("wise", freshStudent.reason);
   if (freshStudent.wiseUserId !== student.wiseUserId) return refuseHeld("wise", "student_changed");
-  let sinceFirstShot: SubmitFeedbackEvent[];
-  try {
-    sinceFirstShot = await ops.findFeedbackEvents(plan.wiseClassId, sid, new Date(firstShotPostedAt.getTime() - EVENT_SKEW_MS));
-  } catch (error) {
-    return refuseHeld("wise", `events_read_failed:${errorName(error)}`);
-  }
-  const savesProblem = savesSinceFirstShotRefusal(sinceFirstShot, input.apiActorId);
-  if (savesProblem) return refuseHeld("wise", savesProblem);
-  guards.push(`wise_state_under_lock${unlocked}`, `no_save_since_first_shot${unlocked}`);
+  guards.push(`no_save_since_first_shot${unlocked}`, `wise_state_under_lock${unlocked}`);
   if (held) {
     if (now().getTime() - lockStartedAt >= lockBudgetMs) return refuseHeld("lock", "lock_budget");
     guards.push("lock_budget");
@@ -577,6 +583,7 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
   try {
     ({ postId } = await store.recordPostStart(plan, {
       bodyHash,
+      eventsReadAt,
       freshReadAt,
       studentWiseUserId: student.wiseUserId,
       baselineCredits: baseline.map((entry) => entry.credit),
@@ -594,6 +601,7 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
   }
   const postFinishedAt = now();
   const timing = {
+    eventsReadAt: eventsReadAt.toISOString(),
     freshReadAt: freshReadAt.toISOString(),
     postStartedAt: postStartedAt.toISOString(),
     postFinishedAt: postFinishedAt.toISOString(),
@@ -709,19 +717,20 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
     });
   }
 
-  // Our own submit event, and nobody else's save (nor a second API save) between the fresh read and the POST's end.
+  // Our own submit event, and nobody else's save (nor a second API save) between the fresh reads and the POST's end.
   const found = await waitForSubmitEvents(ops, {
     classId: plan.wiseClassId,
     sessionId: sid,
     apiActorId: input.apiActorId,
-    freshReadAt,
+    // The window's start (`classifySubmitEvents`): the first of the fresh reads.
+    freshReadAt: eventsReadAt,
     postStartedAt,
     postFinishedAt,
     waitMs: input.eventWaitMs ?? CORRECTION_EVENT_WAIT_MS,
     sleep,
   });
   const extra = found.events.filter((event) => event !== found.ours && event.autoSubmitted !== true &&
-    event.actorId === input.apiActorId && event.at.getTime() >= freshReadAt.getTime() - EVENT_SKEW_MS);
+    event.actorId === input.apiActorId && event.at.getTime() >= eventsReadAt.getTime() - EVENT_SKEW_MS);
   const eventProblems = [
     ...(found.foreign.length > 0 ? ["foreign_submit_event_in_post_window"] : []),
     ...(extra.length > 0 ? [`extra_api_save_in_post_window:${extra.length}`] : []),

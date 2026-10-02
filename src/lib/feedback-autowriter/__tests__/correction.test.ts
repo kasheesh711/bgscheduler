@@ -32,6 +32,7 @@ import {
   clock,
   fakeWise,
   firstShotSave,
+  type Clock,
   postedDetail,
   save,
   type FakeWiseOptions,
@@ -130,13 +131,15 @@ function plan(overrides: Partial<CorrectionPlan> = {}): CorrectionPlan {
 /** One run with fresh fakes; `wise`/`store` options shape them, `input` overrides the call. */
 async function run(options: {
   wise?: FakeWiseOptions;
+  /** Wise options that need the run's clock (instead of `wise`). */
+  wiseWithClock?: (time: Clock) => FakeWiseOptions;
   store?: StoreOptions;
   input?: Partial<CorrectPostInput>;
   start?: Date;
 } = {}) {
   const log: string[] = [];
   const time = clock(options.start);
-  const wise = fakeWise(time, log, options.wise);
+  const wise = fakeWise(time, log, options.wiseWithClock?.(time) ?? options.wise);
   const store = memoryStore(log, options.store);
   const outcome = await correctPostGuarded({
     ops: wise,
@@ -210,11 +213,11 @@ describe("correctPostGuarded: a correction that lands", () => {
     }]);
     // Reads before the lock, the fresh read and the events after it, the posts row before the POST, release last.
     expect(result.log).toEqual([
-      "store:preconditions", "wise:detail#1", "wise:credits#1", "store:lock", "wise:detail#2", "wise:events#1",
+      "store:preconditions", "wise:detail#1", "wise:credits#1", "store:lock", "wise:events#1", "wise:detail#2",
       "store:record", "wise:post", "wise:detail#3", "wise:credits#2", "wise:events#2", "store:settle:verified", "store:release",
     ]);
     expect(result.store.records[0].input).toMatchObject({ studentWiseUserId: STUDENT_ID, baselineCredits: [1] });
-    expect(result.store.records[0].input.freshReadAt).toEqual(START);
+    expect(result.store.records[0].input).toMatchObject({ eventsReadAt: START, freshReadAt: START });
     const [settled] = result.store.settles;
     expect(settled.session).toMatchObject({
       fields: CORRECTED, fieldsSha256: fieldsHash(CORRECTED), fromSha256: fieldsHash(BASE), reason: plan().reason,
@@ -248,6 +251,23 @@ describe("correctPostGuarded: a correction that lands", () => {
     expect(result.wise.postFeedback).toHaveBeenCalledTimes(1);
   });
 
+  it("starts the POST window at the events read: a save between the two fresh reads is never outside both", async () => {
+    // Wise answers the events read 10 s late; 2 s into it a teacher re-saved the same text (the session read shows
+    // nothing new). Counting the window from the session read would miss the save; from the events read it halts.
+    const result = await run({
+      wiseWithClock: (time) => ({
+        eventsOn: (call) => { if (call === 1) time.advance(10_000); return undefined; },
+        eventsAfterPost: (postedAt) => [
+          save(new Date(START.getTime() + 2_000), KEVIN_ONLINE_WISE_USER_ID, "TEACHER"),
+          save(new Date(postedAt.getTime() + 500), API_ACTOR, "OWNER"),
+        ],
+      }),
+    });
+    expect(result.log.slice(3, 6)).toEqual(["store:lock", "wise:events#1", "wise:detail#2"]);
+    expect(result.store.records[0].input).toMatchObject({ eventsReadAt: START, freshReadAt: new Date(START.getTime() + 10_000) });
+    expect(result.outcome).toMatchObject({ status: "safety", problems: ["foreign_submit_event_in_post_window"] });
+  });
+
   it("ignores a student's own feedback save since the first shot (their form, not the teacher's text)", async () => {
     const result = await run({ wise: { eventsBefore: [firstShotSave(), save(new Date(FIRST_SHOT_AT.getTime() + 60_000), STUDENT_ID, "STUDENT")] } });
     expect(result.outcome.status).toBe("verified");
@@ -261,10 +281,10 @@ describe("correctPostGuarded: dry run", () => {
     if (result.outcome.status !== "preflight_ok") throw new Error("unreachable");
     expect(result.outcome.guards).toEqual([
       "plan", "window", "db_preconditions", "wise_state_before_lock", "credit_baseline", "lock (not taken: dry run)",
-      "wise_state_under_lock (without the lock: dry run)", "no_save_since_first_shot (without the lock: dry run)", "stop",
+      "no_save_since_first_shot (without the lock: dry run)", "wise_state_under_lock (without the lock: dry run)", "stop",
     ]);
     expectUntouched(result);
-    expect(result.log).toEqual(["store:preconditions", "wise:detail#1", "wise:credits#1", "wise:detail#2", "wise:events#1"]);
+    expect(result.log).toEqual(["store:preconditions", "wise:detail#1", "wise:credits#1", "wise:events#1", "wise:detail#2"]);
     // The body hash is the live run's.
     const live = await run();
     expect(live.outcome.status).toBe("verified");
@@ -546,8 +566,8 @@ describe("correctPostGuarded: the fresh read under the lock (refused → release
     const result = await run({ wise });
     expect(result.outcome).toEqual({ status: "refused", stage, reason });
     expectReleasedUnsent(result);
-    // The refusing read came after the lock.
-    expect(result.log.indexOf("store:lock")).toBeLessThan(result.log.indexOf("wise:detail#2"));
+    // The refusing read came after the lock (the events first, then the session).
+    expect(result.log.indexOf("store:lock")).toBeLessThan(result.log.indexOf("wise:events#1"));
   });
 
   it("refuses once the lock budget is spent", async () => {
