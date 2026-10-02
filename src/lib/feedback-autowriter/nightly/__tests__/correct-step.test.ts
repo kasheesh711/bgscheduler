@@ -14,6 +14,7 @@ import {
   guardedWiseOps,
   msUntilCorrectionWindow,
   planFromRows,
+  runStopForRefusal,
   stepCorrect,
   stepRecover,
   type CorrectDeps,
@@ -403,6 +404,19 @@ describe("stepCorrect: applying", () => {
     seed(limited, correctionProposal({ wiseSessionId: SID_B }));
     const one = harness(limited, { apply: true, max: 1 });
     expect(await stepCorrect(limited, one.deps)).toMatchObject({ ok: true, stop: "max_reached", summary: { outcomes: { verified: 1 } } });
+  });
+
+  it("ends the run on a refusal every later class would meet too: the database's daily cap, a skewed clock", async () => {
+    for (const [reason, stop, exitCode] of [["daily_cap", "cap:daily_db", 3], ["clock_skew:3400ms", "clock_skew", 6]] as const) {
+      const ctx = context({}, { paths: nightlyPaths(path.join(dir, stop), NIGHT) });
+      seed(ctx);
+      seed(ctx, correctionProposal({ wiseSessionId: SID_B }));
+      const h = harness(ctx);
+      h.execute.mockImplementation(async () => ({ status: "refused", stage: "db", reason }));
+      expect(await stepCorrect(ctx, h.deps), reason).toMatchObject({ ok: false, stop, exitCode });
+      expect(h.execute, reason).toHaveBeenCalledTimes(1);
+    }
+    expect(runStopForRefusal("db:owner_flag_open")).toBeNull();
   });
 
   it("does not wait, reserve or post for a class its own read-only guards refuse", async () => {

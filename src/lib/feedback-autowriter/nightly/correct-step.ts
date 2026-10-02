@@ -356,6 +356,17 @@ async function waitForWindow(ctx: NightContext, deps: CorrectDeps): Promise<Nigh
   }
 }
 
+/**
+ * Refusals that would refuse every later class as well end the run: the database's own daily cap, and a Mac clock
+ * that disagrees with the database's.
+ */
+export function runStopForRefusal(reason: string | undefined): NightlyStop | null {
+  if (!reason) return null;
+  if (/daily_cap/u.test(reason)) return new NightlyStop("cap:daily_db", EXIT.caps);
+  if (/clock_skew/u.test(reason)) return new NightlyStop("clock_skew", EXIT.guardRefused);
+  return null;
+}
+
 function codeRefusal(deps: Pick<CorrectDeps, "apply" | "supervised" | "code">): string | null {
   if (!deps.apply || deps.supervised) return null;
   if (!deps.code?.head || !deps.code.originMain) return "code_unknown";
@@ -506,8 +517,10 @@ export async function stepCorrect(ctx: NightContext, deps: CorrectDeps): Promise
     // Every guard, reads only (also when applying: a refused class never waits for a window or takes the cap).
     const preflight = await execute({ ...input, dryRun: true });
     if (preflight.status !== "preflight_ok" || !deps.apply) {
-      record({ ...about, ...lineOf(preflight) });
+      const dry = record({ ...about, ...lineOf(preflight) });
       if (deps.throttled()) return stopOn(new NightlyStop("wise_429", EXIT.wiseThrottled));
+      const runStop = dry.status === "refused" ? runStopForRefusal(dry.reason) : null;
+      if (runStop) return stopOn(runStop);
       continue;
     }
 
@@ -555,7 +568,8 @@ export async function stepCorrect(ctx: NightContext, deps: CorrectDeps): Promise
       return stopOn(new NightlyStop("wise_429", EXIT.wiseThrottled));
     }
     if (flag?.startsWith("failed:")) return stopOn(new NightlyStop("flag_failed", EXIT.error));
-    if (line.status === "refused" && /daily_cap/u.test(line.reason ?? "")) return stopOn(new NightlyStop("cap:daily_db", EXIT.caps));
+    const runStop = line.status === "refused" ? runStopForRefusal(line.reason) : null;
+    if (runStop) return stopOn(runStop);
     if (deps.throttled()) return stopOn(new NightlyStop("wise_429", EXIT.wiseThrottled));
   }
   return finish({ extra: { proposals: proposals.length } });
