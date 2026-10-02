@@ -15,6 +15,10 @@
  *                                  Soniox transcript read-only, Zoom captions; --retranscribe makes our OWN Soniox job
  *                                  for a transcript post whose production transcript is gone (reserved first, deleted
  *                                  after; --soniox-usd raises the night's Soniox cap up to 5 for this run)
+ *   audit [--smoke] [--plan] [--sessions=a,b]
+ *                                  one `claude -p` Opus 5.5 max audit per collected class (no tools, safe mode, JSON
+ *                                  schema, $1.50 budget, prompt on stdin); --smoke: one tiny synthetic call printing
+ *                                  the proof (model, effort, login, cost); --plan: the estimate only, nothing spawned
  * Global: --no-deadline (supervised runs only: ignore the 06:50 Bangkok stop).
  *
  * State lives outside every worktree: $BGS_NIGHTLY_ROOT, default ~/.bgscheduler-nightly/nightly (0700 dirs, 0600 files).
@@ -39,17 +43,22 @@ import {
   dbEvidenceSources,
   readOnlySoniox,
 } from "@/lib/feedback-autowriter/nightly/evidence";
-import { EXIT, type ExitCode } from "@/lib/feedback-autowriter/nightly/exit";
+import { planAudit, smokeCall } from "@/lib/feedback-autowriter/nightly/audit";
+import { claudeCwd, readClaudeCliVersion, runClaude, type ClaudeRunnerDeps } from "@/lib/feedback-autowriter/nightly/claude-runner";
+import { EXIT, exitCodeForStop, type ExitCode } from "@/lib/feedback-autowriter/nightly/exit";
 import { NightlyLedger } from "@/lib/feedback-autowriter/nightly/ledger";
 import { acquireLock, lockHolder } from "@/lib/feedback-autowriter/nightly/lock";
 import { isNightLabel, nightDeadline, nightLabel, nightlyPaths, nightlyRoot } from "@/lib/feedback-autowriter/nightly/paths";
 import { loadOtherStudentNames } from "@/lib/feedback-autowriter/nightly/prechecks";
 import {
+  readNightBundles,
   readRunState,
   readTargets,
+  stepAudit,
   stepCollect,
   stepPreflight,
   stepSelect,
+  stopBeforeStep,
   type NightContext,
   type StepResult,
 } from "@/lib/feedback-autowriter/nightly/steps";
@@ -61,7 +70,7 @@ import { loadPayoutScriptEnvironment } from "./lib/payout-script";
 
 loadPayoutScriptEnvironment();
 
-const COMMANDS = ["status", "preflight", "select", "collect"] as const;
+const COMMANDS = ["status", "preflight", "select", "collect", "audit"] as const;
 type Command = (typeof COMMANDS)[number];
 
 const REQUIRED_ENV = ["DATABASE_URL", "WISE_USER_ID", "WISE_API_KEY"] as const;
@@ -110,21 +119,6 @@ function codeFacts(): { head: string | null; branch: string | null; dirty: boole
   return { head, branch: git(["rev-parse", "--abbrev-ref", "HEAD"]), dirty: (git(["status", "--porcelain", "--untracked-files=no"]) ?? "x") !== "" };
 }
 
-/** `claude --version`, with the same scrubbed environment the audit calls get. */
-function claudeCliVersion(): string | null {
-  try {
-    const env: Record<string, string> = {};
-    for (const key of ["HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "TMPDIR", "TERM"]) {
-      if (process.env[key]) env[key] = process.env[key]!;
-    }
-    return execFileSync("claude", ["--version"], {
-      encoding: "utf8", env: env as NodeJS.ProcessEnv, timeout: 20_000, stdio: ["ignore", "pipe", "ignore"],
-    }).trim() || null;
-  } catch {
-    return null;
-  }
-}
-
 async function fetchText(url: string): Promise<string> {
   const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -167,6 +161,67 @@ function status(ctx: NightContext): StepResult {
       claude: ledger.claudeUsd(),
     },
   };
+}
+
+function runnerFor(ctx: NightContext): ClaudeRunnerDeps {
+  return { cwd: claudeCwd(), cliVersion: readClaudeCliVersion(), callsLog: ctx.paths.claudeCallsJsonl };
+}
+
+/** `audit`, `audit --smoke`, `audit --plan`: no database or Wise access, only `claude -p`. */
+async function audit(ctx: NightContext): Promise<StepResult> {
+  const ledger = NightlyLedger.open(ctx.paths.root, ctx.night, ctx.caps);
+  if (flag("smoke")) {
+    const stop = stopBeforeStep(ctx);
+    if (stop) return fail(stop.reason, stop.exitCode, { step: "audit-smoke", night: ctx.night });
+    const key = `smoke:${new Date().toISOString()}`;
+    const call = smokeCall(key);
+    const reserved = ledger.reserve("opus_audit", { key, estimateUsd: call.budgetUsd });
+    if (!reserved.ok) return fail(reserved.reason, EXIT.caps, { step: "audit-smoke", night: ctx.night });
+    const runner = runnerFor(ctx);
+    const outcome = await runClaude(call, runner);
+    ledger.settle(reserved.id, { actualUsd: outcome.proof?.costUsd ?? null, outcome: outcome.kind });
+    const ok = outcome.kind === "success";
+    return {
+      ok,
+      stop: ok ? null : outcome.kind,
+      next: null,
+      exitCode: ok ? EXIT.ok : exitCodeForStop(outcome.kind === "usage_limited" || outcome.kind === "auth" ? outcome.kind : "error"),
+      summary: {
+        step: "audit-smoke",
+        night: ctx.night,
+        outcome: outcome.kind,
+        reason: ok ? null : outcome.reason,
+        value: ok ? outcome.value : null,
+        cliVersion: runner.cliVersion,
+        proof: outcome.proof,
+      },
+    };
+  }
+  const targets = readTargets(ctx.paths);
+  const sessionIds = new Set(sessionIdsOption());
+  const files = readNightBundles(ctx.paths, targets).filter((file) => sessionIds.size === 0 || sessionIds.has(file.target.wiseSessionId));
+  if (flag("plan")) {
+    const plan = planAudit({ auditsDir: ctx.paths.auditsDir, ledger, perAuditUsd: ctx.caps.perAuditUsd }, files);
+    const claude = ledger.claudeUsd();
+    return {
+      ok: true,
+      stop: null,
+      next: "audit",
+      exitCode: EXIT.ok,
+      summary: {
+        step: "audit-plan",
+        night: ctx.night,
+        bundles: files.length,
+        ...plan,
+        claudeUsdTonight: claude.night,
+        claudeUsdWeek: claude.week,
+        caps: { maxClaudeUsdNight: ctx.caps.maxClaudeUsdNight, maxClaudeUsdWeek: ctx.caps.maxClaudeUsdWeek, maxOpusCalls: ctx.caps.maxOpusCalls },
+        fitsTonight: claude.night + plan.toAudit * ctx.caps.perAuditUsd <= ctx.caps.maxClaudeUsdNight,
+      },
+    };
+  }
+  const runner = runnerFor(ctx);
+  return stepAudit(ctx, { ledger, run: (call) => runClaude(call, runner), sessionIds: [...sessionIds] });
 }
 
 async function main(): Promise<void> {
@@ -221,9 +276,13 @@ async function main(): Promise<void> {
         missingEnv: [...missingEnv],
         optionalEnvMissing: OPTIONAL_ENV.filter((name) => !process.env[name]?.trim()),
         code: codeFacts(),
-        claudeCliVersion: claudeCliVersion(),
+        claudeCliVersion: readClaudeCliVersion(),
         lock: { ok: true },
       }));
+      return;
+    }
+    if (command === "audit") {
+      print(await audit(ctx));
       return;
     }
     const db = getDb();

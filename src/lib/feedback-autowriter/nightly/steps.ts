@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Database } from "@/lib/db";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
+import { auditBundles } from "./audit";
 import { AUDIT_VERSION } from "./audit-schema";
 import { activeWiseCooldown, stopFilePresent, type NightlyCaps } from "./caps";
 import {
@@ -11,6 +12,7 @@ import {
   type CollectDeps,
   type RawEvidence,
 } from "./evidence";
+import type { ClaudeCall, ClaudeOutcome } from "./claude-runner";
 import { EXIT, NightlyStop, type ExitCode } from "./exit";
 import type { NightlyLedger } from "./ledger";
 import { readJsonFile, writeJsonAtomic, type NightlyPaths } from "./paths";
@@ -337,4 +339,67 @@ export function bundleAuditKey(file: BundleFile): string {
 /** Whether a marker file exists (COLLECT_READY and friends). */
 export function markerExists(file: string): boolean {
   return fs.existsSync(file);
+}
+
+// ---------------------------------------------------------------------------
+// audit
+// ---------------------------------------------------------------------------
+
+/** One Opus 5.5 max audit per collected class not audited yet (see audit.ts). */
+export async function stepAudit(ctx: NightContext, deps: {
+  ledger: Pick<NightlyLedger, "reserve" | "settle" | "attempts">;
+  run: (call: ClaudeCall) => Promise<ClaudeOutcome>;
+  sessionIds?: readonly string[];
+  sleep?: (ms: number) => Promise<void>;
+  retryDelayMs?: number;
+}): Promise<StepResult> {
+  const stop = stopBeforeStep(ctx);
+  if (stop) return stoppedResult(ctx, "audit", stop);
+  const targets = readTargets(ctx.paths);
+  const wanted = deps.sessionIds && deps.sessionIds.length > 0 ? new Set(deps.sessionIds) : null;
+  const files = readNightBundles(ctx.paths, targets).filter((file) => !wanted || wanted.has(file.target.wiseSessionId));
+  if (!targets || (targets.chosen.length > 0 && files.length === 0)) {
+    const summary = { step: "audit", night: ctx.night, reason: "nothing collected yet" };
+    return result({ ok: false, stop: "no_bundles", next: targets ? "collect" : "select", summary, exitCode: EXIT.usage });
+  }
+  const stage = await auditBundles({
+    night: ctx.night,
+    auditsDir: ctx.paths.auditsDir,
+    ledgerJsonl: ctx.paths.ledgerJsonl,
+    ledger: deps.ledger,
+    run: deps.run,
+    concurrency: ctx.caps.auditConcurrency,
+    perAuditUsd: ctx.caps.perAuditUsd,
+    deadline: ctx.deadline,
+    stopFiles: ctx.stopFiles,
+    now: ctx.now,
+    sleep: deps.sleep,
+    retryDelayMs: deps.retryDelayMs,
+    home: ctx.home,
+    log: ctx.log,
+  }, files);
+  const verdicts: Record<string, number> = {};
+  for (const record of stage.records) {
+    const verdict = record.result?.verdict ?? "failed";
+    verdicts[verdict] = (verdicts[verdict] ?? 0) + 1;
+  }
+  const summary = {
+    step: "audit",
+    night: ctx.night,
+    bundles: files.length,
+    audited: stage.audited,
+    cached: stage.cached,
+    failed: stage.failed,
+    skipped: stage.skipped.length,
+    verdicts,
+    calls: stage.calls,
+    proof: `Opus5.5max ${stage.opusProven}/${stage.calls}`,
+    costUsd: Math.round(stage.costUsd * 10_000) / 10_000,
+  };
+  if (stage.stop) {
+    recordStep(ctx, "audit", { status: "stopped", stop: stage.stop.reason, summary });
+    return result({ ok: false, stop: stage.stop.reason, next: "report", summary, exitCode: stage.stop.exitCode });
+  }
+  const state = recordStep(ctx, "audit", { status: "done", stop: null, summary });
+  return result({ summary, next: nextStep(state, "audit") });
 }
