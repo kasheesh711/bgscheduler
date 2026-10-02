@@ -7,7 +7,7 @@ import { HOLD_LISTED_AFTER_DEADLINE_MS } from "./inbox";
 import { judgeProblems } from "./judge";
 import { tutorKeyFor } from "./review-job";
 import { AUTOWRITER_TUTORS, rosterTutor, tutorLabel } from "./roster";
-import { readControl, type AutowriterSessionRow } from "./store";
+import { readControl, sessionClassNameSql, type AutowriterSessionRow } from "./store";
 import { buildSystemStatus, type AutowriterSystemStatus } from "./system-status";
 import { SUMMARY_FALLBACK_CAUSES, type SummaryFallbackCause } from "./types";
 
@@ -566,7 +566,7 @@ export async function loadAutowriterDashboard(
       metadata: S.metadata,
       createdAt: S.createdAt,
       updatedAt: S.updatedAt,
-      className: schema.postClassSessions.className,
+      className: sessionClassNameSql,
     }).from(S)
       .leftJoin(schema.postClassSessions, eq(schema.postClassSessions.wiseSessionId, S.wiseSessionId))
       // In-person classes never reach the page (see isOnsiteSkip); a NULL reason is kept.
@@ -584,7 +584,7 @@ export async function loadAutowriterDashboard(
       reason: S.reason,
       alertsSent: S.alertsSent,
       hasDraft: sql<boolean>`${S.fields} is not null`,
-      className: schema.postClassSessions.className,
+      className: sessionClassNameSql,
     }).from(S)
       .leftJoin(schema.postClassSessions, eq(schema.postClassSessions.wiseSessionId, S.wiseSessionId))
       .where(eq(S.state, "held"))
