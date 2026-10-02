@@ -64,6 +64,10 @@ is lost (section 3.8 says where each item goes).
 
 ### 3.2 "What needs you" (left, two thirds)
 
+The list keeps its own height: it is not stretched to the rail's. The trend charts (3.5) follow it in the same left
+column, and the rail spans both rows on the right, sticky while the left column scrolls (amended 2 Oct 2026: a short
+list left a tall blank panel). Narrow screens stack the list, the rail, then the trends.
+
 A grouped list. Groups appear only when they have items, in this fixed order:
 
 1. **Incidents** — unacknowledged `critical` incidents. Action: Open (drawer with the incident and its class),
@@ -130,6 +134,18 @@ Four charts on the shared `ChartCanvas` wrapper (`src/components/sales-dashboard
 Columns: tutor; accuracy (accurate / reviewed) for the range; Wilson lower bound; coverage (posted / eligible);
 holds (open / total); real fixes (and critical count); review phase (full review, or sampled; from PR 4 probation
 progress "9 / 15"); status (On / Partly on / Off, with the owner's switch).
+
+Amended 2 Oct 2026, for a pilot of 18 tutors and growing:
+
+- One line per tutor. The accuracy cell carries an interval bar: a band from the Wilson lower bound to the accuracy,
+  a dot at the accuracy, hairlines at the 70% head-start and 80% pass bars.
+- The review-phase column is dropped while every tutor is in full review; a sampled tutor gets a "Sampled" tag by
+  the name. PR 4's probation progress goes there too.
+- A search by name, and four views with their counts: All, Needs attention (below a bar, a critical verdict, an
+  open hold, a post to review, or partly on), No posts yet, Off.
+- Every figure column sorts (accuracy, highest first, by default); a tutor without the figure stays last.
+- Tutors with no post and no hold in the window are folded into a row of chips under the table (name, status, the
+  owner's switch); a chip filters the page like a row.
 
 Clicking a row sets the page's tutor filter: the to-do list is filtered on the client, the trends reload for that
 tutor, the table highlights the row, and a "Showing <tutor> ×" chip clears it.

@@ -276,14 +276,18 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
           {tutorKey && filteredTo ? <TutorFilterChip name={filteredTo} onClear={() => selectTutor(null)} /> : null}
         </section>
 
-        <div className="grid items-stretch gap-5 lg:grid-cols-3">
+        {/*
+          The to-do list keeps its own height and the trends follow it in the left two thirds; the rail spans both rows
+          on the right, held in view while the left column scrolls past it. Narrow screens stack them in DOM order:
+          to-do list, rail, trends.
+        */}
+        <div className="grid items-start gap-5 lg:grid-cols-3 lg:grid-rows-[auto_1fr]">
           <Inbox className="lg:col-span-2" items={shown} dashboard={data} review={loaded} now={now} filteredTo={filteredTo}
             reviewUnavailable={reviewMissing} canControl={canControl} onOpen={setTarget} />
-          <HealthRail dashboard={data} review={loaded} unavailableReason={unavailableReason} />
+          <HealthRail className="lg:sticky lg:top-4 lg:col-start-3 lg:row-span-2 lg:row-start-1" dashboard={data} review={loaded} unavailableReason={unavailableReason} />
+          <TrendCharts className="lg:col-span-2" headerClassName="mt-2" trends={trends} review={loaded} unavailableReason={unavailableReason}
+            rangeDays={rangeDays} onRangeChange={changeRange} loading={trendsLoading} filteredTo={filteredTo} />
         </div>
-
-        <TrendCharts trends={trends} review={loaded} unavailableReason={unavailableReason} rangeDays={rangeDays} onRangeChange={changeRange}
-          loading={trendsLoading} filteredTo={filteredTo} />
 
         <TutorTable dashboard={data} review={loaded} now={now} selectedTutorKey={tutorKey} onSelect={selectTutor} canControl={canControl} busy={busy}
           onControl={(body, confirmText) => void sendControl(body, confirmText)} />
