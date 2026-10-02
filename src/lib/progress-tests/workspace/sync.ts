@@ -7,7 +7,8 @@ import { loadActiveIdentityEntries } from "../db";
 import type { ProgressTestSyncDeps, ProgressTestSyncResult } from "../sync";
 import { cycleNumbers, cyclePosition, WorkspaceError } from "./model";
 import { countedAttendance, verifiedInstructor, seriesKey, needsReminder } from "./cadence";
-import { createAppsScriptScheduleEmailSender, type ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
+import { type ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
+import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { renderTeacherEmail } from "@/lib/teacher-emails/render";
 import { teacherEmailPublicBaseUrl } from "@/lib/teacher-emails/config";
 import { teacherEmailLogoUrl } from "@/lib/teacher-emails/brand";
@@ -32,7 +33,7 @@ export async function notifyWorkspaceTutors(db: Database, sender?: ScheduleEmail
         paragraphs: [`${series.studentName} has completed ${series.count} classes with you in this course since launch. Assessment ${a.cycle} is due in your class ${a.cycle * 8}.`],
         sections: [{ heading: "Your next steps", bullets: [`Prepare your topic test and marking rubric.`, `Explain the covered topics to the student in class ${a.cycle * 8 - 1}.`, `Administer the test within class ${a.cycle * 8}, then upload the student's work for review.`], action: { label: "Open Progress Tests", url: `${base}/progress-tests?assessment=${a.id}` } }],
         logoUrl: teacherEmailLogoUrl(base), footerNote: "This test takes place in the student's ordinary lesson. The next assessment remains due every eight classes, even if an earlier submission is late." });
-      await (sender ?? createAppsScriptScheduleEmailSender()).sendEmail({ to: email, ...content, idempotencyKey: `pt-workspace-reminder:${a.id}` });
+      await (sender ?? createOutboundEmailSender()).sendEmail({ to: email, ...content, idempotencyKey: `pt-workspace-reminder:${a.id}` });
       await db.update(s.ptAssessments).set({ notifiedAt: new Date(), notificationError: null }).where(eq(s.ptAssessments.id, a.id));
       sent++;
     } catch {

@@ -12,7 +12,7 @@ Data Health is the operations command center for admin staff. It exists because 
 
 It also carries **manual run controls**: one button per registered job, session-gated, with a confirmation gate on the nine jobs flagged `dangerous` because they email people, write to Wise, append payout deductions, or push LINE messages to staff groups (`cron-registry.ts`, `dangerous: true` on nine entries; the LINE case is `line_credit_digest`, `:339-350`). Those buttons execute the real jobs, so the page is read-mostly, not read-only.
 
-The **cron watchdog** (`src/lib/internal/cron-watchdog.ts`) is the push half of the feature. It is itself a registered 30-minute cron that re-runs the same health derivation and emails full-access admins once per failure episode, with a recovery notice when the job comes back (`cron-watchdog.ts:1-17`). It also carries the retention sweep for the audit table (`cron-watchdog.ts:380-385`).
+The **cron watchdog** (`src/lib/internal/cron-watchdog.ts`) is the push half of the feature. It is itself a registered 30-minute cron that re-runs the same health derivation and records failure episodes every sweep, but emails only **one daily digest** (WD-DIGEST-01): on the first sweep at or after 08:00 Bangkok it sends the currently unhealthy jobs plus the episodes opened and closed in the last 24 hours to `CRON_WATCHDOG_ALERT_EMAILS` (default `kevhsh7@gmail.com`). Until 2026-10-02 every sweep that opened or closed an episode emailed all full-access admins, about 100 emails a day that exhausted the shared Apps Script mail quota (`cron-watchdog.ts` header). It also carries the retention sweep for the audit table (`cron-watchdog.ts:380-385`).
 
 Consumers, beyond the page:
 
@@ -43,7 +43,7 @@ Fourteen tables are fetched in one `Promise.all` (`dashboard.ts:752-806`): `sync
 
 **Read — recipients**
 
-- **`admin_users`** — the watchdog emails only rows with `allowedPages IS NULL`, i.e. full-access admins who can open the `/data-health` link the email points at (`cron-watchdog.ts:257-269`).
+- **`CRON_WATCHDOG_ALERT_EMAILS`** — digest recipients (comma list, default `kevhsh7@gmail.com`), read by `watchdogAlertRecipients()`. The watchdog no longer reads `admin_users`. The private weekend-check job keeps its own `CLASSROOM_WEEKEND_ALERT_EMAIL` recipient and still alerts per episode.
 
 One consequence worth stating plainly: the manual-run buttons execute the underlying jobs, and whatever those jobs write, one click from this page writes. `classroom_morning` runs the assignment automation and Wise location publish; `post_class_feedback_payout_accrual` appends real payout deductions (`cron-registry.ts:245-256`); the two tutor reminders and the admin digests send email; `line_credit_digest` pushes to registered LINE staff groups (`:339-350`).
 
@@ -127,7 +127,7 @@ flowchart TD
       CJH --> EVAL
       WD --> LOCK["claim sweep lock"]
       LOCK --> CAS[("cron_alert_state")]
-      WD -->|"one digest per episode"| MAIL["full-access admin email"]
+      WD -->|"one digest per Bangkok day"| MAIL["CRON_WATCHDOG_ALERT_EMAILS"]
     end
 ```
 
@@ -187,7 +187,8 @@ The runner passes `triggerType: "manual"` into every domain helper that accepts 
 
 **Watchdog rules** (`src/lib/internal/cron-watchdog.ts`):
 - Alertable statuses are `failing | late | unknown` (`:53`). `checked` excludes manual-only jobs and the watchdog itself (`:159-178`).
-- Episode dedup: a new alert is sent only when no state row exists or the last episode closed with `recovered`; a recovery notice is sent only for a healthy job whose episode is still `alerted` (`:169-176`). Episode state is written **after** at least one recipient accepted the email, so a total delivery failure retries next sweep (`:482-485`, `:494-519`). Partial delivery still closes the episode — a documented tradeoff against re-emailing everyone every 30 minutes for one bouncing address (`:11-17`, `:486-492`).
+- Episodes: a sweep opens an episode (`lastAlertOutcome = "alerted"`) when no state row exists or the last one closed with `recovered`, and closes it (`recovered`) when the job is healthy again. Transitions are written every sweep with no email.
+- Daily digest (WD-DIGEST-01): its state is the `__watchdog_daily_digest` sentinel row (`episodeKey = digest:<Bangkok date>` once settled). A quiet day settles as `digest_empty` with no email. A pre-acceptance rejection (`ScheduleEmailRejection`) settles nothing, so the next sweep retries; an uncertain outcome settles the day and is never resent.
 - Single-flight: the sweep claims the sentinel `cron_alert_state` row via one conditional upsert whose `setWhere` allows takeover only when the previous holder released it or went stale after 6 minutes (`:51`, `:305-330`); release matches on the claim token so a stale-reclaim race cannot release someone else's lock (`:333-350`). A second sweep in flight skips with `skippedReason: "another sweep is in flight"` (`:419-429`).
 - Missing `cron_alert_state` (pg `42P01`, detected on the error and its `cause`) disables alerting for the sweep rather than sending un-deduped mail; the route still returns 200 with the reason (`:278-296`, `:403-417`).
 - **Synthetic job.** The sweep appends `post_class_payout_window`, derived from `loadPayoutWindowStaleness`, so a payout window left un-finalized past its anchor month's end alerts even though the accrual cron itself fired on time (`:84-123`; `src/lib/post-class-feedback/payout-window-health.ts:20-24`). The loader returns `null` while the accrual entry has no schedule, so the check arms itself when the registry does (`payout-window-health.ts:98-102`). A throw inside it degrades to "no payout entry this sweep" (`cron-watchdog.ts:125-143`).
@@ -212,7 +213,7 @@ All under `src/**/__tests__/`, in the `unit` Vitest project.
 | `src/app/api/data-health/__tests__/modality-counter.test.ts` | `modality` + `conflict_model` merged under one counter, including the session-only case; `entityName`/message preserved; null `entityName` coerced to `""`. |
 | `src/app/api/data-health/jobs/[jobKey]/run/__tests__/route.test.ts` | Admin session required; non-dangerous run; 409 without confirmation; confirmed dangerous run; 404 unknown job; `access_manager` gate on post-class jobs in both directions. |
 | `src/components/data-health/__tests__/data-health-dashboard.test.tsx` | One static render (`:146-158`) asserting most section headings — Next expected cron, Manual controls, Cron control plane, Wise snapshot fidelity, Unified run history — plus the page title, one proof-footer label (`Direct audit`), one domain label (`Room Utilization`), and the `manual only` badge. Data freshness, the three normalization-issue tables, and the other proof labels are not asserted. |
-| `src/lib/internal/__tests__/cron-watchdog.test.ts` | `sweepCronJobs` classification (failing/late/unknown, self- and manual-only exclusion, episode dedup, re-failure as a new episode, recoveries); digest email content, recovery subject, HTML escaping; `runCronWatchdog`: alert once, no duplicate while open, late and unknown alerts, recovery re-arms, never self-alerts, unmarked episode when no recipient reachable, lock claim/release, skip when another sweep holds the lock, missing-table fail-safe (drizzle-wrapped and bare), rethrow of unrelated errors, payout-window alert and recovery, no payout entry when the loader yields nothing, sweep survives a payout-check throw, retention count reported, alerting survives a prune throw. |
+| `src/lib/internal/__tests__/cron-watchdog.test.ts` | `sweepCronJobs` classification (failing/late/unknown, self- and manual-only exclusion, episode dedup, re-failure as a new episode, recoveries); digest email content, recovery subject, HTML escaping; `runCronWatchdog`: episodes recorded without email, no reopen while open, late and unknown episodes, recovery re-arms, never self-alerts, lock claim/release, skip when another sweep holds the lock, missing-table fail-safe (drizzle-wrapped and bare), rethrow of unrelated errors, payout-window alert and recovery, no payout entry when the loader yields nothing, sweep survives a payout-check throw, retention count reported, alerting survives a prune throw; daily digest: nothing before 08:00 Bangkok, one digest to `CRON_WATCHDOG_ALERT_EMAILS` only, no second digest the same day, next-day digest for a still-open episode, 24 h recoveries, quiet-day skip, retry after rejection, no resend after an uncertain outcome; recipient parsing and Bangkok date rollover. |
 | `src/__tests__/vercel-crons.test.ts` | Pins the 19 `vercel.json` entries and their stagger; complements the registry mirror test from the other side. |
 
 No integration test exercises `getDataHealthDashboardPayload` against a real database; the payload builder is covered only indirectly through the mocked route test.

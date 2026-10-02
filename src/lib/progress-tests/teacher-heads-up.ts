@@ -12,7 +12,7 @@
 //
 // Mirrors the once-per-recipient idempotent pattern in
 // src/lib/leave-requests/sync.ts (sendNewRequestNotifications) and reuses
-// createAppsScriptScheduleEmailSender() like src/lib/classrooms/admin-schedule-email.ts.
+// createOutboundEmailSender() like src/lib/classrooms/admin-schedule-email.ts.
 //
 // Fire-and-forget safe: a send failure is recorded and never thrown out of this
 // module (a per-enrollment error must not abort the sync run). Never log the AI
@@ -26,9 +26,9 @@ import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { APP_BASE_URL } from "@/lib/leave-requests/config";
 import {
-  createAppsScriptScheduleEmailSender,
   type ScheduleEmailSender,
 } from "@/lib/classrooms/schedule-email";
+import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { PROGRESS_TEST_THRESHOLD } from "./config";
 import type { ProgressTestAiSummary } from "./types";
 
@@ -315,7 +315,7 @@ export async function runTeacherHeadsUpNotifications(
   db: Database = getDb(),
   input: TeacherHeadsUpInput,
 ): Promise<TeacherHeadsUpResult> {
-  const sender = input.sender ?? createAppsScriptScheduleEmailSender();
+  const sender = input.sender ?? createOutboundEmailSender();
   const outcomes: TeacherHeadsUpOutcome[] = [];
 
   for (const enrollment of input.enrollments) {
