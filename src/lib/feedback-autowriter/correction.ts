@@ -95,6 +95,10 @@ export interface CorrectionPlan {
   fieldsSha256: string;
   /** Failure-mode codes plus one line — no lesson text (stored on the posts row). */
   reason: string;
+  /**
+   * The audit finding behind the correction (stored on the posts row). Required: null or blank is refused
+   * (`root_cause_missing`); the type keeps null only so a plan read from JSON is checked here, not trusted.
+   */
   rootCauseRef: string | null;
   /** What produced the corrected text (commit, prompt and judge versions…): stored on the posts row. */
   pipeline: Record<string, unknown>;
@@ -280,6 +284,7 @@ function planRefusal(
   if (plan.fieldsSha256 === plan.base.fieldsSha256) return "no_change";
   if (!plan.reason?.trim()) return "reason_missing";
   if ([...plan.reason].length > CORRECTION_MAX_REASON_CHARACTERS) return "reason_too_long";
+  if (typeof plan.rootCauseRef !== "string" || !plan.rootCauseRef.trim()) return "root_cause_missing";
   if (!input.apiActorId) return "api_actor_missing";
   if (!aiSuspectInputComplete(input.aiSuspect)) return "ai_suspect_input_missing";
   let problems: string[];

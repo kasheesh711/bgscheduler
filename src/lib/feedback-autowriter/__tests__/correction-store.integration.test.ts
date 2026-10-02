@@ -15,6 +15,7 @@ import {
   type CorrectionStore,
 } from "../correction";
 import {
+  CORRECTION_DAILY_CAP,
   CORRECTION_LOCK_SETTLE_MS,
   correctionLockReason,
   isCorrectionLockReason,
@@ -172,6 +173,19 @@ async function insertInFlightCorrection(n: number, outcome: "posting" | "awaitin
     actorKind: "agent", actor: AGENT_CORRECTION_ACTOR, reason: "synthetic", outcome, provenance: "live",
     postStartedAt: new Date(), dedupeKey: agentCorrectionDedupeKey(id24(n)),
   });
+}
+
+/** Agent corrections of other classes, posted `hoursAgo` (settled with `outcome`). */
+async function insertAgentCorrections(count: number, options: { outcome?: "verified" | "not_sent" | "verify_failed"; hoursAgo?: number; from?: number } = {}) {
+  const at = new Date(Date.now() - (options.hoursAgo ?? 1) * 3_600_000);
+  for (let index = 0; index < count; index += 1) {
+    const sid = id24((options.from ?? 200) + index);
+    await db.insert(P).values({
+      wiseSessionId: sid, kind: "correction", fields: BASE, fieldsSha256: fieldsHash(BASE), billing: BILLING as unknown as Record<string, unknown>,
+      actorKind: "agent", actor: AGENT_CORRECTION_ACTOR, reason: "synthetic", outcome: options.outcome ?? "verified", provenance: "live",
+      postStartedAt: at, recordedAt: at, settledAt: at, dedupeKey: agentCorrectionDedupeKey(sid),
+    });
+  }
 }
 
 async function seedActivity(sessionId: string, at: Date, actorId: string, actorRole = "OWNER") {
@@ -376,6 +390,7 @@ describe("the posts-row claim (recordPostStart)", () => {
       await db.insert(FL).values({ wiseSessionId: SESSION_ID, source: "owner", note: "check", createdBy: OWNER, idempotencyKey: "owner:1" });
     }, "owner_flag_open"],
     ["a first POST claimed meanwhile", () => insertPostingSession(94), "post_in_flight"],
+    ["the daily cap reached meanwhile", () => insertAgentCorrections(CORRECTION_DAILY_CAP), "daily_cap"],
   ];
   it.each(lost)("is refused after %s — no row, nothing to send", async (_name, change, reason) => {
     const plan = planFor(await postedWithFirstShot());
@@ -383,7 +398,7 @@ describe("the posts-row claim (recordPostStart)", () => {
     await lockOrThrow(correctionStore, plan);
     await change();
     expect(await refusal(correctionStore.recordPostStart(plan, { bodyHash: "h" }))).toBe(reason);
-    expect(await db.select().from(P).where(eq(P.kind, "correction"))).toEqual([]);
+    expect(await db.select().from(P).where(and(eq(P.kind, "correction"), eq(P.wiseSessionId, plan.wiseSessionId)))).toEqual([]);
   });
 
   it("is refused without the lock", async () => {
@@ -522,6 +537,15 @@ describe("preconditions", () => {
       await db.insert(FL).values({ wiseSessionId: seeded.wiseSessionId, source: "owner", note: "check", createdBy: OWNER, idempotencyKey: "owner:2" });
     }, ["owner_flag_open"]],
     ["app_post_stuck", async () => insertPostingSession(95, new Date(Date.now() - 10 * 60_000)), ["app_post_stuck"]],
+    ["daily_cap (six agent corrections in 24 h, whatever their outcome)", async () => {
+      await insertAgentCorrections(CORRECTION_DAILY_CAP - 1);
+      await insertAgentCorrections(1, { outcome: "verify_failed", from: 300 });
+    }, ["daily_cap"]],
+    ["no daily cap: not_sent and older corrections do not count", async () => {
+      await insertAgentCorrections(CORRECTION_DAILY_CAP - 1);
+      await insertAgentCorrections(3, { outcome: "not_sent", from: 300 });
+      await insertAgentCorrections(CORRECTION_DAILY_CAP, { hoursAgo: 25, from: 400 });
+    }, []],
   ];
   it.each(cases)("%s", async (_name, arrange, expected) => {
     const seeded = await postedWithFirstShot();

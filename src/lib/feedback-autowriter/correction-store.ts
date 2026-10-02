@@ -52,6 +52,8 @@ export const CORRECTION_LOCK_LEASE_MS = 8 * 60_000;
 export const CORRECTION_LOCK_SETTLE_MS = 2_000;
 /** An agent correction still unsettled this long after its POST started is no live request any more. */
 export const CORRECTION_STALE_AFTER_MS = 10 * 60_000;
+/** At most this many agent corrections (any outcome but `not_sent`) in any 24 h, checked in the database. */
+export const CORRECTION_DAILY_CAP = 6;
 
 const LOCK_PREFIX = "correction-lock:";
 const LOCK_REASON_SUFFIX = " — auto-released; if this persists run scripts/feedback-autowriter-nightly.ts recover";
@@ -82,6 +84,11 @@ const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(r
 /** SQL: any POST — a first post or a correction — whose outcome is not settled yet. */
 const postInFlightSql = sql`(exists (select 1 from feedback_autowriter_sessions s where s.state in ('posting', 'awaiting_event'))
   or exists (select 1 from feedback_autowriter_posts p where p.outcome in ('posting', 'awaiting_event')))`;
+
+/** SQL: the daily cap is reached — `CORRECTION_DAILY_CAP` agent corrections that may have reached Wise in the last 24 h. */
+const dailyCapReachedSql = sql`(select count(*) from feedback_autowriter_posts p where p.kind = 'correction'
+  and p.actor_kind = 'agent' and p.outcome <> 'not_sent'
+  and coalesce(p.post_started_at, p.recorded_at) > now() - interval '24 hours') >= ${CORRECTION_DAILY_CAP}`;
 
 /** SQL: an open flag the owner raised on the class. */
 const ownerFlagOpenSql = (wiseSessionId: string) => sql`exists (select 1 from feedback_autowriter_flags f
@@ -153,6 +160,7 @@ export function pgCorrectionStore(db: Database, opts: {
         humanSave: sql`exists (select 1 from feedback_autowriter_fix_events f where f.wise_session_id = ${sid}
           and f.actor_kind in ('owner_web', 'tutor', 'other_staff', 'api_actor_unmatched'))`,
         ownerFlagOpen: ownerFlagOpenSql(sid),
+        dailyCapReached: dailyCapReachedSql,
       });
       const stuck = await stuckPostInFlight(db, AUTOWRITER_STALE_POSTING_MS);
 
@@ -186,6 +194,7 @@ export function pgCorrectionStore(db: Database, opts: {
       // An owner verdict (approve or needs fix) does not block: the owner asked for flagged posts to be corrected too.
       if (facts.humanSave) problems.push("human_save_since_post");
       if (facts.ownerFlagOpen) problems.push("owner_flag_open");
+      if (facts.dailyCapReached) problems.push("daily_cap");
       if (stuck) problems.push("app_post_stuck");
       return [...new Set(problems)];
     },
@@ -243,8 +252,9 @@ export function pgCorrectionStore(db: Database, opts: {
       };
       const pipeline = { ...plan.pipeline, rootCauseRef: plan.rootCauseRef };
       // The claim: inserted only while the lock is still ours (an owner pause or resume, a mode change or the tutor
-      // switched off since stop it), the session row still holds the base text, and nothing else is in flight. Never
-      // touches the session row (its state, post_started_at, body_hash and verified_event belong to the first shot).
+      // switched off since stop it), the session row still holds the base text, nothing else is in flight, and the
+      // daily cap is not reached. Never touches the session row (its state, post_started_at, body_hash and
+      // verified_event belong to the first shot).
       const result = await db.execute(sql`
         insert into feedback_autowriter_posts (wise_session_id, wise_class_id, wise_teacher_user_id, kind, fields, fields_sha256,
           body_hash, billing, arm, evidence, pipeline, actor_kind, actor, reason, post_started_at, outcome, verification,
@@ -260,6 +270,7 @@ export function pgCorrectionStore(db: Database, opts: {
           and ${sessionStillBaseSql(plan)}
           and not ${ownerFlagOpenSql(sid)}
           and not ${postInFlightSql}
+          and not ${dailyCapReachedSql}
         returning id, post_started_at`);
       const row = result.rows[0] as { id?: unknown; post_started_at?: unknown } | undefined;
       if (row && typeof row.id === "string") {
@@ -274,6 +285,7 @@ export function pgCorrectionStore(db: Database, opts: {
         rowSame: sessionStillBaseSql(plan),
         ownerFlagOpen: ownerFlagOpenSql(sid),
         inFlight: postInFlightSql,
+        dailyCap: dailyCapReachedSql,
       });
       throw new CorrectionRefusedError(
         !why.lockHeld ? "lock:lost"
@@ -281,7 +293,8 @@ export function pgCorrectionStore(db: Database, opts: {
             : !why.rowSame ? "row_changed"
               : why.ownerFlagOpen ? "owner_flag_open"
                 : why.inFlight ? "post_in_flight"
-                  : "conditions_changed",
+                  : why.dailyCap ? "daily_cap"
+                    : "conditions_changed",
       );
     },
 

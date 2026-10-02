@@ -281,6 +281,8 @@ describe("correctPostGuarded: refusals before anything is read", () => {
     ["no_change", { plan: plan({ fields: BASE, fieldsSha256: fieldsHash(BASE) }) }, "no_change"],
     ["reason_missing", { plan: plan({ reason: "  " }) }, "reason_missing"],
     ["reason_too_long", { plan: plan({ reason: "r".repeat(501) }) }, "reason_too_long"],
+    ["root_cause_missing (none)", { plan: plan({ rootCauseRef: null }) }, "root_cause_missing"],
+    ["root_cause_missing (blank)", { plan: plan({ rootCauseRef: "  " }) }, "root_cause_missing"],
     ["api_actor_missing", { apiActorId: "" }, "api_actor_missing"],
     ["the caller's text check", { textProblems: () => ["markdown:topics"] }, "text:markdown:topics"],
     ["a text check that throws", { textProblems: () => { throw new TypeError("bad"); } }, "text:check_failed:TypeError"],
