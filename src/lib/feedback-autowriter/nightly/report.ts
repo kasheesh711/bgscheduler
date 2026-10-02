@@ -91,11 +91,33 @@ export function judgePassedOf(storedJudge: unknown): boolean | null {
   return passingStoredVerdict(storedJudge) !== null;
 }
 
+/**
+ * The audit's review of one candidate: matched on its unique id (`code#n`). A review under the bare code counts only
+ * when that code is unambiguous (one candidate has it — also how bundles collected before ids are matched); a bare
+ * code shared by several candidates confirms them all when any such review confirms (fail closed: a person looks),
+ * and otherwise leaves them unconfirmed.
+ */
+export function candidateVerdict(
+  precheck: PrecheckFinding,
+  prechecks: readonly PrecheckFinding[],
+  reviews: AuditResult["candidateReview"],
+): boolean | null {
+  const id = precheck.id ?? precheck.code;
+  const exact = reviews.filter((review) => review.code.trim() === id);
+  if (exact.length > 0) return exact.at(-1)!.confirmed;
+  const bare = reviews.filter((review) => review.code.trim() === precheck.code);
+  if (bare.length === 0) return null;
+  const sharing = prechecks.filter((item) => item.candidate && item.code === precheck.code).length;
+  if (sharing <= 1) return bare.at(-1)!.confirmed;
+  return bare.some((review) => review.confirmed) ? true : null;
+}
+
 /** One class's findings: prechecks floors, confirmed candidates, the audit's issues and omissions. */
 export function mergeClassReport(file: BundleFile, record: AuditRecord | null): ClassReport {
   const result = record?.result ?? null;
-  const reviewed = new Map((result?.candidateReview ?? []).map((review) => [review.code, review.confirmed]));
-  const findings: ReportFinding[] = file.prechecks.map((precheck) => precheckFinding(precheck, precheck.candidate ? reviewed.get(precheck.code) ?? null : null));
+  const reviews = result?.candidateReview ?? [];
+  const findings: ReportFinding[] = file.prechecks.map((precheck) =>
+    precheckFinding(precheck, precheck.candidate ? candidateVerdict(precheck, file.prechecks, reviews) : null));
   for (const issue of result?.issues ?? []) {
     findings.push({
       source: "audit", code: issue.id, mode: issue.mode, severity: issue.severity, confidence: issue.confidence,

@@ -8,8 +8,9 @@ import type { AuditRecord, EvidenceBundle, PrecheckFinding } from "./types";
  * speaker-label confidence, so it is byte-identical across classes of the same kind (prompt caching). Everything
  * about the class goes in the user message, inside tags the model is told are data, never instructions.
  * Bump `AUDIT_PROMPT_VERSION` whenever the wording changes. v2 (3 Oct): states the id formats and every length limit.
+ * v3 (3 Oct): each deterministic candidate is listed under its unique id (`code#n`) and reviewed by it.
  */
-export const AUDIT_PROMPT_VERSION = 2;
+export const AUDIT_PROMPT_VERSION = 3;
 
 /** Longest lesson record sent to the auditor; transcripts of a 2-hour lesson stay well under it. */
 const MAX_TRANSCRIPT_CHARS = 150_000;
@@ -215,7 +216,7 @@ export function buildAuditPrompt(input: {
       : ["<wise_summary>(no summary available)</wise_summary>"]),
     "<deterministic_candidates>",
     candidates.length
-      ? fenceData(candidates.map((f) => `- ${f.code} (${f.severity}${f.candidate ? ", confirm or reject" : ""}): ${f.detail}`).join("\n"))
+      ? fenceData(candidates.map((f) => `- ${f.id ?? f.code} (${f.severity}${f.candidate ? ", confirm or reject" : ""}): ${f.detail}`).join("\n"))
       : "(none)",
     "</deterministic_candidates>",
     ...(input.priorIssues?.length

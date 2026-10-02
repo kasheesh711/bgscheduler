@@ -135,7 +135,17 @@ export function runPrechecks(input: {
   if (input.raw) {
     for (const note of evidenceNotes(input.raw, bundle)) findings.push(finding(`note:${note.split(":")[0]}`, "info", note, null));
   }
-  return findings;
+  return withIds(findings);
+}
+
+/** Each finding's unique id: `<code>#<n>`, n counting findings with the same code in order. */
+export function withIds(findings: readonly PrecheckFinding[]): PrecheckFinding[] {
+  const seen = new Map<string, number>();
+  return findings.map((item) => {
+    const n = (seen.get(item.code) ?? 0) + 1;
+    seen.set(item.code, n);
+    return { ...item, id: `${item.code}#${n}` };
+  });
 }
 
 /**

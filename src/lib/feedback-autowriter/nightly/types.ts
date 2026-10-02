@@ -74,6 +74,11 @@ export interface PrecheckFinding {
   candidate: boolean;
   detail: string;
   mode: string | null;
+  /**
+   * Unique within the class's prechecks, `<code>#<n>` (the n-th finding with that code): the auditor reviews each
+   * candidate by it, so two candidates with the same code are never confused. Absent on bundles collected before ids.
+   */
+  id?: string;
 }
 
 /** One audit of one posted text (cached per session, text hash, audit version and bundle hash). */

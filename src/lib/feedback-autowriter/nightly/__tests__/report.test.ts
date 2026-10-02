@@ -78,6 +78,26 @@ describe("mergeClassReport", () => {
     expect(unaudited.findings[0].detail).toMatch(/not confirmed/u);
   });
 
+  it("matches each candidate's review on its unique id; a bare code only when unambiguous", () => {
+    const ploy = precheck({ code: "other_person_named", id: "other_person_named#1", severity: "major", mode: "M11", candidate: true, detail: "Ploy" });
+    const fern = precheck({ code: "other_person_named", id: "other_person_named#2", severity: "major", mode: "M11", candidate: true, detail: "Fern" });
+    const byId = mergeClassReport(file([ploy, fern]), audit({ candidateReview: [
+      { code: "other_person_named#1", confirmed: false, reason: "a character in the book" },
+      { code: "other_person_named#2", confirmed: true, reason: "another student" },
+    ] }));
+    expect(byId.findings.map((finding) => [finding.code, finding.severity, finding.confirmed])).toEqual([
+      ["other_person_named", "info", false], ["other_person_named", "major", true],
+    ]);
+    // A bare code shared by two candidates: confirmed → both (a person looks); rejected → neither confirmed.
+    const ambiguous = mergeClassReport(file([ploy, fern]), audit({ candidateReview: [{ code: "other_person_named", confirmed: true, reason: "x" }] }));
+    expect(ambiguous.findings.map((finding) => finding.severity)).toEqual(["major", "major"]);
+    const rejected = mergeClassReport(file([ploy, fern]), audit({ candidateReview: [{ code: "other_person_named", confirmed: false, reason: "x" }] }));
+    expect(rejected.findings.map((finding) => finding.confirmed)).toEqual([null, null]);
+    // A bundle collected before ids: matched on the code when it is unambiguous.
+    const legacy = mergeClassReport(file([{ ...ploy, id: undefined }]), audit({ candidateReview: [{ code: "other_person_named", confirmed: true, reason: "x" }] }));
+    expect(legacy.findings[0]).toMatchObject({ severity: "major", confirmed: true });
+  });
+
   it("merges audit issues and omissions; high-confidence criticals mark the class for an incident", () => {
     const report = mergeClassReport(file(), audit({
       verdict: "critical",

@@ -79,6 +79,16 @@ describe("runPrechecks", () => {
     ]));
   });
 
+  it("gives every finding a unique id, so two candidates with the same code are told apart", () => {
+    const findings = run({ bundle: { postedFields: { ...PIM_FIELDS, performance: `${PIM_FIELDS.performance} Ploy also finished early and Fern also did.` } } });
+    const people = findings.filter((finding) => finding.code === "other_person_named");
+    expect(people.map((finding) => [finding.id, finding.detail])).toEqual([
+      ["other_person_named#1", expect.stringContaining("Ploy")],
+      ["other_person_named#2", expect.stringContaining("Fern")],
+    ]);
+    expect(new Set(findings.map((finding) => finding.id)).size).toBe(findings.length);
+  });
+
   it("adds the class's context as info", () => {
     const findings = run({ target: { guided: true, humanSavedSincePost: true, ownerFlagOpen: true, verdict: "approve", firstShotPostId: null } });
     expect(findings.map((finding) => finding.code)).toEqual(expect.arrayContaining([
