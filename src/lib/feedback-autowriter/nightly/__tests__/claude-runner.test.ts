@@ -118,6 +118,11 @@ describe("parseClaudeEnvelope", () => {
     }), "", 0, CONTEXT)).toMatchObject({ kind: "success" });
     expect(parseClaudeEnvelope(envelope({ modelUsage: { "claude-opus-5-5": { outputTokens: 60_001 } } }), "", 0, CONTEXT))
       .toMatchObject({ kind: "cli_error", reason: "oversized_output" });
+    // Thinking does not count: a long max-effort audit with a normal-sized answer is kept (2 Oct).
+    expect(parseClaudeEnvelope(envelope({ modelUsage: { "claude-opus-5-5": { outputTokens: 90_000, thinkingTokens: 80_000 } } }), "", 0, CONTEXT))
+      .toMatchObject({ kind: "success" });
+    expect(parseClaudeEnvelope(envelope({ modelUsage: { "claude-opus-5-5": { outputTokens: 130_000, thinkingTokens: 60_000 } } }), "", 0, CONTEXT))
+      .toMatchObject({ kind: "cli_error", reason: "oversized_output" });
     // A dated or canonical alias of the same model still proves it.
     expect(parseClaudeEnvelope(envelope({ modelUsage: { "opus-alias": { outputTokens: 10, canonicalModel: "claude-opus-5-5" } } }), "", 0, CONTEXT))
       .toMatchObject({ kind: "success" });
