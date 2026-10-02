@@ -22,6 +22,7 @@ import { applyAgentFlags, countAgentFlags, planAgentFlags } from "./flags";
 import { appendJsonl, nightlyPaths, readJsonFile, readJsonl, writeJsonAtomic, writeTextAtomic, type NightlyPaths } from "./paths";
 import { runPrechecks } from "./prechecks";
 import {
+  auditCounts,
   classReportLine,
   groupByMode,
   loadWatchdog,
@@ -664,6 +665,7 @@ export async function stepReport(ctx: NightContext, deps: {
   writeTextAtomic(ctx.paths.reportMd, renderReportMarkdown(input));
   writeTextAtomic(ctx.paths.summaryMd, renderSummaryMarkdown(input));
   appendJsonl(ctx.paths.costsJsonl, { night: ctx.night, at, ...costs, watchdogDayUsd: watchdog?.dayTotalUsd ?? null });
+  const counts = auditCounts(reports);
   const severities: Record<string, number> = {};
   for (const report of reports) {
     const key = report.severity ?? (report.auditVerdict ? report.auditVerdict === "insufficient_evidence" ? "insufficient_evidence" : "accurate" : "not_audited");
@@ -673,6 +675,8 @@ export async function stepReport(ctx: NightContext, deps: {
     step: "report",
     night: ctx.night,
     classes: reports.length,
+    audited: counts.audited,
+    notAudited: counts.notAudited,
     severities,
     modes: modes.map((group) => ({ mode: group.mode, classes: group.classes })),
     watchdogOutliers: watchdog?.outliers.length ?? null,

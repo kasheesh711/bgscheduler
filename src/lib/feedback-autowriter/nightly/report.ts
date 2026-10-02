@@ -365,20 +365,45 @@ function cell(value: unknown): string {
   return String(value ?? "—").replace(/\|/gu, "/").replace(/\n/gu, " ");
 }
 
-function verdictCounts(reports: readonly ClassReport[]): Record<string, number> {
-  const counts: Record<string, number> = { accurate: 0, cosmetic: 0, major: 0, critical: 0, insufficient_evidence: 0, failed: 0 };
+/**
+ * The night's posts: how many were audited successfully, their verdicts (deterministic floors merged in), and why the
+ * others were not (collection incomplete, no evidence, a failed or refused audit — by category, never counted as audited).
+ */
+export function auditCounts(reports: readonly ClassReport[]): {
+  posts: number;
+  audited: number;
+  verdicts: Record<string, number>;
+  notAudited: Record<string, number>;
+} {
+  const verdicts: Record<string, number> = { accurate: 0, cosmetic: 0, major: 0, critical: 0, insufficient_evidence: 0 };
+  const notAudited: Record<string, number> = {};
+  let audited = 0;
   for (const report of reports) {
-    const key = report.severity ?? (report.auditVerdict === "insufficient_evidence" ? "insufficient_evidence" : report.auditVerdict ? "accurate" : "failed");
-    counts[key] = (counts[key] ?? 0) + 1;
+    if (report.auditVerdict === null) {
+      const reason = (report.auditFailure ?? "not_audited").split(":")[0];
+      notAudited[reason] = (notAudited[reason] ?? 0) + 1;
+      continue;
+    }
+    audited += 1;
+    const key = report.severity ?? (report.auditVerdict === "insufficient_evidence" ? "insufficient_evidence" : "accurate");
+    verdicts[key] = (verdicts[key] ?? 0) + 1;
   }
-  return counts;
+  return { posts: reports.length, audited, verdicts, notAudited };
+}
+
+/** "Posts 14; audited 12 (accurate 9, …); not audited 2 (collection_incomplete 1, invalid 1)". */
+function auditCountsLine(reports: readonly ClassReport[]): string {
+  const counts = auditCounts(reports);
+  const list = (record: Record<string, number>) => Object.entries(record).map(([key, value]) => `${key} ${value}`).join(", ");
+  const notAudited = counts.posts - counts.audited;
+  return `Posts ${counts.posts}; audited ${counts.audited} (${list(counts.verdicts)})` +
+    (notAudited > 0 ? `; not audited ${notAudited} (${list(counts.notAudited)})` : "");
 }
 
 const SEVERITY_ORDER: Record<string, number> = { critical: 0, major: 1, cosmetic: 2 };
 
 /** `report.md`: everything, quotes included (local, 0600, deleted after 7 days). */
 export function renderReportMarkdown(input: ReportInput): string {
-  const counts = verdictCounts(input.reports);
   const sorted = [...input.reports].sort((a, b) =>
     (SEVERITY_ORDER[a.severity ?? ""] ?? 3) - (SEVERITY_ORDER[b.severity ?? ""] ?? 3) || a.wiseSessionId.localeCompare(b.wiseSessionId));
   const lines = [
@@ -390,7 +415,7 @@ export function renderReportMarkdown(input: ReportInput): string {
     "",
     "## Posts",
     "",
-    `Audited ${input.reports.length}: ${Object.entries(counts).map(([key, value]) => `${key} ${value}`).join(", ")}.`,
+    `${auditCountsLine(input.reports)}.`,
     ...(input.synthesisLine ? ["", `Synthesis: ${input.synthesisLine} (see plan.md)`] : []),
     ...input.notes.map((note) => `- ${note}`),
     "",
@@ -449,12 +474,11 @@ export function renderReportMarkdown(input: ReportInput): string {
 
 /** `summary.md`: counts, modes, costs and proof only — no names, no quotes, no lesson or feedback text. */
 export function renderSummaryMarkdown(input: ReportInput): string {
-  const counts = verdictCounts(input.reports);
   const flagged = input.reports.filter((report) => report.severity === "critical" || report.severity === "major");
   return [
     `# Nightly audit summary — ${input.night}`,
     "",
-    `- Posts audited: ${input.reports.length} (${Object.entries(counts).map(([key, value]) => `${key} ${value}`).join(", ")})`,
+    `- ${auditCountsLine(input.reports)}`,
     `- Major or critical: ${flagged.length}; already approved by the owner: ${flagged.filter((report) => report.ownerVerdict === "approve").length}; ` +
       `passed by the production judges: ${flagged.filter((report) => report.judgePassed === true).length}`,
     `- Modes: ${input.modes.map((group) => `${group.mode}×${group.classes}`).join(", ") || "none"}`,
