@@ -337,13 +337,16 @@ describe("stepVerify: the 2 Oct night's evidence shapes", () => {
       bundle: {
         grade: "exact", pipeline: { ...unguided, atomEvidenceHash: "atom-hash", lessonEvidenceHash: "lesson-hash" },
         transcript: { text: "Lesson record (synthetic).", source: "iseb_record", speakerMethod: "zoom_alignment", speakerLabels: "verified" },
+        atomEvidence: "Matched activity: Fractions drill 3 — 18 of 20 correct (90%).",
       },
     });
     const passing = JSON.stringify({ faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] });
     const modes = new Map<string, string>();
     const callModel = vi.fn(async (request: { messages: Array<{ content: string }> }): Promise<OpenRouterCallResult> => {
       const content = request.messages[1].content;
-      modes.set(content.includes("Lesson transcript:") ? (content.includes("Lesson record (synthetic).") ? "iseb" : "transcript") : "summary", "seen");
+      const mode = content.includes("Lesson transcript:") ? (content.includes("Lesson record (synthetic).") ? "iseb" : "transcript") : "summary";
+      // Only the ISEB post's judge gets the Atom evidence its writer was given.
+      modes.set(mode, content.includes("Frozen Atom lesson evidence:") ? "atom" : "plain");
       return {
         ok: true, content: passing, model: AUTOWRITER_MODELS.judge.expectModel, provider: AUTOWRITER_MODELS.judge.expectProvider, generationId: "g",
         finishReason: "stop", usage: { promptTokens: 1, completionTokens: 1, reasoningTokens: 0, cachedTokens: 0, costUsd: 0.001 }, latencyMs: 1,
@@ -355,7 +358,7 @@ describe("stepVerify: the 2 Oct night's evidence shapes", () => {
     expect(result.summary.proposed).toEqual(expect.arrayContaining([
       { wiseSessionId: SID, source: "replay" }, { wiseSessionId: SID_B, source: "replay" }, { wiseSessionId: SID_C, source: "minimal_fix" },
     ]));
-    expect([...modes.keys()].toSorted()).toEqual(["iseb", "summary", "transcript"]);
+    expect(Object.fromEntries(modes)).toEqual({ iseb: "atom", summary: "plain", transcript: "plain" });
     expect(classRecord(ctx, SID_C)?.candidates[0]).toMatchObject({ source: "replay", unavailable: "guided_post" });
   });
 });

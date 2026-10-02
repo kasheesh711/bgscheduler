@@ -104,6 +104,19 @@ describe("judgeCandidate", () => {
     expect(callModel).not.toHaveBeenCalled();
   });
 
+  it("gives the judges an ISEB post's Atom evidence, redacted, as production does", async () => {
+    const callModel = vi.fn<(request: Request) => Promise<OpenRouterCallResult>>(async () => reply(PASSING));
+    const atom = "Matched activity: Fractions drill 3 — Pimchanok answered 18 of 20 correctly (90%).";
+    await judgeCandidate({ apiKey: "k", ledger: ledger(), key: "judge:k", callModel }, {
+      fields: PIM_FIELDS, bundle: nightlyBundle({ atomEvidence: atom }),
+    });
+    const user = callModel.mock.calls[0][0].messages[1].content;
+    expect(user).toContain("Frozen Atom lesson evidence:");
+    expect(user).toContain("answered 18 of 20 correctly (90%)");
+    expect(user).not.toContain("Pimchanok");
+    expect(callModel.mock.calls[0][0].messages[0].content).toContain("SOURCE_CONTRADICTION");
+  });
+
   it("judges a summary-only bundle in summary mode at the summary time-out", async () => {
     const callModel = vi.fn<(request: Request) => Promise<OpenRouterCallResult>>(async () => reply(PASSING, null));
     const result = await judgeCandidate({ apiKey: "k", ledger: ledger(), key: "judge:k", callModel }, {

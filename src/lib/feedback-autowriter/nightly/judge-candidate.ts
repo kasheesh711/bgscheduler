@@ -10,9 +10,10 @@ import type { EvidenceBundle } from "./types";
  * The production GLM judge on a correction candidate (quick 261003-12b): both levels of `AUTOWRITER_JUDGE_EFFORTS`
  * must pass it, on the messages production builds (`judgeDraftAtEveryLevel`: redacted record, class details and text,
  * production's pinned route), against the class's evidence bundle — the transcript when there is one (the best
- * record of the lesson), else Wise's summary. Every model call, retries of a rate limit included, is reserved
- * (`openrouter`) in the nightly ledger before it is sent and settled with what it cost; a reservation the ledger
- * refuses is never sent, and the candidate does not pass.
+ * record of the lesson), else Wise's summary — and, for an ISEB post, the frozen Atom evidence its writer was given
+ * (redacted, with the judge's Atom rules, as production judges such a draft). Every model call, retries of a rate
+ * limit included, is reserved (`openrouter`) in the nightly ledger before it is sent and settled with what it cost; a
+ * reservation the ledger refuses is never sent, and the candidate does not pass.
  */
 
 /** What one judge call is reserved at (settled with OpenRouter's billed cost). */
@@ -117,6 +118,7 @@ export async function judgeCandidate(deps: JudgeCandidateDeps, input: {
     apiKey: deps.apiKey,
     fields: input.fields,
     record: source.record,
+    atomEvidence: input.bundle.atomEvidence ?? null,
     evidence: source.evidence,
     speakerLabels: source.speakerLabels,
     names: { studentFullName, studentAliases: input.bundle.studentAliases, tutorNames: input.bundle.tutorNames },

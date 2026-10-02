@@ -30,6 +30,11 @@ export interface DraftJudgeInput {
   fields: FeedbackFieldAnswers;
   /** What the draft is checked against, unredacted: a rendered transcript or Wise's summary. */
   record: string;
+  /**
+   * The frozen Atom evidence the writer was given (`atomModelEvidence`, unredacted) for an ISEB post: redacted and
+   * handed to the judge exactly as production's pipeline does, with its Atom rules. Absent for every other post.
+   */
+  atomEvidence?: string | null;
   evidence: EvidenceKind;
   speakerLabels?: SpeakerLabels;
   names: { studentFullName: string; studentAliases: readonly string[]; tutorNames: readonly string[] };
@@ -61,6 +66,7 @@ export async function judgeDraftAtEveryLevel(input: DraftJudgeInput): Promise<Dr
   const redactedRecord = redact(input.record);
   const messages = buildJudgeMessages({
     redactedSummary: redactedRecord,
+    ...(input.atomEvidence ? { atomEvidence: redact(input.atomEvidence) } : {}),
     classDetails: classDetailsBlock(input.classDetails, input.names),
     placeholderFields: {
       topics: redact(input.fields.topics),

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ATOM_MODEL_RULES } from "../atom/evidence";
 import { AUTOWRITER_JUDGE_TIMEOUT_MS, AUTOWRITER_MODELS } from "../config";
 import { judgeDraftAtEveryLevel, type DraftJudgeInput } from "../judge-draft";
 import type { OpenRouterCallResult } from "../openrouter";
@@ -76,6 +77,27 @@ describe("judgeDraftAtEveryLevel", () => {
     const elsewhere = vi.fn(async () => reply(PASSING, { provider: "SomeOtherHost" }));
     expect((await judgeDraftAtEveryLevel(input(elsewhere))).error).toBeNull();
     expect((await judgeDraftAtEveryLevel(input(elsewhere, { requirePinnedRoute: true }))).error).toBe("judge:medium:provider_mismatch:SomeOtherHost");
+  });
+
+  it("gives the judge an ISEB post's Atom evidence, redacted, with production's Atom rules", async () => {
+    const requests: Request[] = [];
+    const call = vi.fn(async (request: Request) => {
+      requests.push(request);
+      return reply(PASSING);
+    });
+    const atom = "Matched activity: Fractions drill 3 — Somchai answered 18 of 20 correctly (90%) in 12 minutes.";
+    await judgeDraftAtEveryLevel(input(call, { atomEvidence: atom }));
+    const [system, user] = requests[0].messages;
+    expect(system.content).toContain(ATOM_MODEL_RULES);
+    expect(system.content).toContain("SOURCE_CONTRADICTION");
+    expect(user.content).toContain("Frozen Atom lesson evidence:");
+    expect(user.content).toContain("[STUDENT_1] answered 18 of 20 correctly (90%)");
+    expect(user.content).not.toContain("Somchai");
+    // Without Atom evidence the messages are production's plain ones.
+    requests.length = 0;
+    await judgeDraftAtEveryLevel(input(call, { atomEvidence: null }));
+    expect(requests[0].messages[0].content).not.toContain(ATOM_MODEL_RULES);
+    expect(requests[0].messages[1].content).not.toContain("Frozen Atom lesson evidence:");
   });
 
   it("lists the union of both levels' problems", async () => {
