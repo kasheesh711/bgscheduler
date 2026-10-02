@@ -1,5 +1,5 @@
 import { buildFeedbackMessages, type EvidenceKind, type SpeakerLabels } from "../prompt";
-import type { AuditResult } from "./audit-schema";
+import { AUDIT_LIMITS, type AuditResult } from "./audit-schema";
 import { FAILURE_MODES, ROOT_STAGES, postAuditModes } from "./modes";
 import type { AuditRecord, EvidenceBundle, PrecheckFinding } from "./types";
 
@@ -7,9 +7,9 @@ import type { AuditRecord, EvidenceBundle, PrecheckFinding } from "./types";
  * Prompts for the nightly Opus audit (quick 261003-12b). The system prompt depends only on the evidence kind and
  * speaker-label confidence, so it is byte-identical across classes of the same kind (prompt caching). Everything
  * about the class goes in the user message, inside tags the model is told are data, never instructions.
- * Bump `AUDIT_PROMPT_VERSION` whenever the wording changes.
+ * Bump `AUDIT_PROMPT_VERSION` whenever the wording changes. v2 (3 Oct): states the id formats and every length limit.
  */
-export const AUDIT_PROMPT_VERSION = 1;
+export const AUDIT_PROMPT_VERSION = 2;
 
 /** Longest lesson record sent to the auditor; transcripts of a 2-hour lesson stay well under it. */
 const MAX_TRANSCRIPT_CHARS = 150_000;
@@ -153,6 +153,11 @@ export function auditSystemPrompt(evidence: EvidenceKind, labels: SpeakerLabels)
     "Return only the JSON object the schema asks for. Claim and issue quotes must be verbatim from the feedback; evidence quotes verbatim " +
       "from the evidence. summaryLine: one plain line with no name and no quote (for example \"2 issues: homework not set (major), praise " +
       "overstated (major)\"). For a re-audit, fill priorIssueReview with one entry per prior issue; otherwise set it to null.",
+    `Ids and limits: claim ids are c1, c2, c3 … in order; issue ids are i1, i2, … in order; an issue's claimIds use those claim ids. At most ` +
+      `${AUDIT_LIMITS.claims} claims (factual ones first), ${AUDIT_LIMITS.evidencePerItem} evidence quotes per claim or issue (the most ` +
+      `decisive ones), ${AUDIT_LIMITS.issues} issues, ${AUDIT_LIMITS.omissions} omissions. Each evidence quote is the SHORTEST verbatim excerpt ` +
+      `that proves the point, under ${AUDIT_LIMITS.quote} characters; gloss under ${AUDIT_LIMITS.gloss}; mechanism under ` +
+      `${AUDIT_LIMITS.mechanism}; summaryLine under ${AUDIT_LIMITS.summaryLine}; evidence notes at most ${AUDIT_LIMITS.notes} short lines.`,
   ].join("\n");
 }
 
@@ -276,7 +281,10 @@ export function buildSynthesisPrompt(input: {
     "Failure-mode registry:",
     FAILURE_MODES.map((mode) => `${mode.id} ${mode.slug} (${mode.defaultSeverity}): ${mode.definition}`).join("\n"),
     "",
-    "Return only the JSON object the schema asks for. summaryLine: one plain line with no name and no quote.",
+    "Return only the JSON object the schema asks for. summaryLine: one plain line with no name and no quote, under 200 characters.",
+    "Limits: mode is a registry id like M03 or NEW:<snake_case_slug>; at most 20 failure modes, 6 proposed files, 8 acceptance checks, " +
+      "10 long-term plan items with at most 8 steps each; mechanism and proposedChange under 1200 characters; the invented fixture " +
+      "evidence under 4000 characters.",
   ].join("\n");
   const rows = input.records.filter((record) => record.result).map((record) => {
     const meta = input.classes?.[record.wiseSessionId];

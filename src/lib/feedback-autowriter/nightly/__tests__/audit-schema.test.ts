@@ -4,6 +4,7 @@ import {
   SYNTHESIS_JSON_SCHEMA,
   containsAnyName,
   copiedRun,
+  normaliseModeRef,
   normaliseForQuote,
   parseAuditResult,
   parseSynthesisResult,
@@ -176,13 +177,73 @@ describe("parseAuditResult", () => {
     expect(out.ok && out.result.issues[0].criticalCategory).toBeNull();
   });
 
-  it("refuses duplicate issue ids", () => {
+  it("renumbers duplicate issue ids instead of failing", () => {
     const issue = {
       id: "i1", claimIds: [], field: "homework" as const, quote: "Complete page 12 by Friday.", mode: "M03" as const, severity: "major" as const,
       criticalCategory: null, rootStage: "writer" as const, defense: "none" as const, mechanism: "x", evidence: [], minimalFix: null,
       confidence: "high" as const,
     };
-    expect(parseAuditResult(baseResult({ verdict: "major", issues: [issue, issue] }), ctx)).toMatchObject({ ok: false });
+    const out = parseAuditResult(baseResult({ verdict: "major", issues: [issue, issue] }), ctx);
+    expect(out.ok && out.result.issues.map((i) => i.id)).toEqual(["i1", "i2"]);
+  });
+});
+
+describe("normaliseAuditOutput (v2: the CLI schema carries no lengths or id patterns)", () => {
+  it("accepts the first live failure shape: free-form claim ids and a fifth evidence quote", () => {
+    const evidence = [1, 2, 3, 4, 5].map(() => quote("Twelve is the common one, so seven twelfths."));
+    const raw = baseResult({
+      verdict: "major",
+      claims: [
+        { id: "claim_1", field: "performance", text: "Pim added fractions with unlike denominators correctly after one reminder.", kind: "student_action", verdict: "supported", evidence },
+        { id: "claim_2", field: "performance", text: "She confidently mastered word problems.", kind: "judgement", verdict: "unsupported", evidence: [] },
+      ],
+      issues: [{
+        id: "issue-A", claimIds: ["claim_2", "claim_9"], field: "performance", quote: "She confidently mastered word problems.", mode: "M06",
+        severity: "major", criticalCategory: null, rootStage: "writer", defense: "prompt_rule", mechanism: "Padded praise.", evidence: [],
+        minimalFix: { action: "delete_span", from: "She confidently mastered word problems.", to: null }, confidence: "high",
+      }],
+    }) as unknown as Record<string, unknown>;
+    const out = parseAuditResult(raw, ctx);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.result.claims.map((c) => c.id)).toEqual(["c1", "c2"]);
+    expect(out.result.claims[0].evidence).toHaveLength(4);
+    expect(out.result.issues[0]).toMatchObject({ id: "i1", claimIds: ["c2"] });
+    expect(out.result.postCheck.addedIssues).toEqual([]);
+  });
+
+  it("clips long strings, drops a fix that would need clipping, and fills missing nullable keys", () => {
+    const longFrom = "x".repeat(700);
+    const raw = baseResult({
+      summaryLine: "y".repeat(400),
+      issues: [{
+        id: "1", claimIds: [], field: "homework", quote: "Complete page 12 by Friday.", mode: "M03", severity: "major", criticalCategory: null,
+        rootStage: "writer", defense: "judge_list", mechanism: "m".repeat(900), evidence: [quote("q".repeat(900))],
+        minimalFix: { action: "delete_span", from: longFrom, to: null }, confidence: "high",
+      }],
+    }) as unknown as Record<string, unknown>;
+    delete raw.priorIssueReview;
+    const out = parseAuditResult(raw, ctx);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.result.summaryLine).toHaveLength(160);
+    expect(out.result.summaryLine.endsWith("…")).toBe(true);
+    expect(out.result.issues[0].mechanism).toHaveLength(500);
+    expect(out.result.issues[0].evidence[0].quote).toHaveLength(400);
+    expect(out.result.issues[0].minimalFix).toBeNull();
+    expect(out.result.priorIssueReview).toBeNull();
+  });
+
+  it("still rejects structural problems", () => {
+    expect(parseAuditResult(baseResult({ verdict: "fine" as never }), ctx)).toMatchObject({ ok: false });
+    expect(parseAuditResult({ ...baseResult(), homework: null }, ctx)).toMatchObject({ ok: false });
+  });
+
+  it("normalises synthesis mode references", () => {
+    expect(normaliseModeRef("M03")).toBe("M03");
+    expect(normaliseModeRef("M03 homework_not_set")).toBe("M03");
+    expect(normaliseModeRef("Brand new mode!")).toBe("NEW:brand_new_mode");
+    expect(normaliseModeRef("NEW:Speaker Swap")).toBe("NEW:speaker_swap");
   });
 });
 

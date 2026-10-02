@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { answers, autoBlankSubmission, sessionDetail } from "../../__tests__/fixtures";
 import { auditCacheFile } from "../audit";
+import { AUDIT_VERSION } from "../audit-schema";
 import { NIGHTLY_CAPS } from "../caps";
 import { createWiseReadGate, readOnlySoniox, type RowMeta } from "../evidence";
 import { NightlyLedger } from "../ledger";
@@ -111,7 +112,7 @@ describe("stepSelect", () => {
     const ledger = NightlyLedger.open(ctx.paths.root, ctx.night, ctx.caps);
     const first = await stepSelect(ctx, { db, ledger });
     expect(first).toMatchObject({ ok: true, summary: { posts: 0, chosen: 0 } });
-    expect(readTargets(ctx.paths)).toMatchObject({ night: "2026-10-02", chosen: [], auditVersion: 1 });
+    expect(readTargets(ctx.paths)).toMatchObject({ night: "2026-10-02", chosen: [], auditVersion: AUDIT_VERSION });
     const again = await stepSelect(ctx, { db, ledger });
     expect(again.summary).toMatchObject({ cached: true });
     expect(queries).toHaveLength(1);
@@ -122,7 +123,7 @@ describe("stepSelect", () => {
 
 describe("stepCollect", () => {
   function writeTargets(ctx: NightContext, targets = [nightlyTarget()]) {
-    const file: TargetsFile = { night: ctx.night, auditVersion: 1, selectedAt: "", chosen: targets, skipped: [] };
+    const file: TargetsFile = { night: ctx.night, auditVersion: AUDIT_VERSION, selectedAt: "", chosen: targets, skipped: [] };
     fs.mkdirSync(path.dirname(ctx.paths.targetsJson), { recursive: true });
     fs.writeFileSync(ctx.paths.targetsJson, JSON.stringify(file));
   }
@@ -210,7 +211,7 @@ describe("stepCollect", () => {
 describe("stepReport, stepFlag, stepCosts and runNight", () => {
   function collectedNight(ctx: NightContext) {
     const target = nightlyTarget({ fieldsSha256: "abcdef0123456789" });
-    const file = { night: ctx.night, auditVersion: 1, selectedAt: "", chosen: [target], skipped: [] };
+    const file = { night: ctx.night, auditVersion: AUDIT_VERSION, selectedAt: "", chosen: [target], skipped: [] };
     fs.mkdirSync(ctx.paths.bundlesDir, { recursive: true });
     fs.writeFileSync(ctx.paths.targetsJson, JSON.stringify(file));
     fs.writeFileSync(path.join(ctx.paths.bundlesDir, `${SID}.json`), JSON.stringify({
@@ -246,7 +247,7 @@ describe("stepReport, stepFlag, stepCosts and runNight", () => {
     const auditFile = auditCacheFile(ctx.paths.auditsDir, { wiseSessionId: SID, fieldsSha256: target.fieldsSha256, bundleHash: "bundle-hash-0001" });
     fs.mkdirSync(path.dirname(auditFile), { recursive: true });
     fs.writeFileSync(auditFile, JSON.stringify({
-      wiseSessionId: SID, fieldsSha256: target.fieldsSha256, auditVersion: 1, promptVersion: 1, bundleHash: "bundle-hash-0001", grade: "rebuilt",
+      wiseSessionId: SID, fieldsSha256: target.fieldsSha256, auditVersion: AUDIT_VERSION, promptVersion: 1, bundleHash: "bundle-hash-0001", grade: "rebuilt",
       failure: null, proof: null, at: "",
       result: {
         verdict: "accurate", claims: [], issues: [], omissions: [], homework: { feedbackStatesHomework: false, tutorSetHomework: "no", evidence: [] },

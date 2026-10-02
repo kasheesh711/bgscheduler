@@ -18,8 +18,20 @@ import type { EvidenceGrade } from "./types";
  * - an unsupported, contradicted or misattributed claim that no issue covers gets an issue of its own;
  * - severities are raised to their failure mode's floor, and the verdict to the worst issue.
  * Bump `AUDIT_VERSION` whenever the schema or these rules change: cached audits are keyed by it.
+ * v2 (3 Oct): the CLI's `--json-schema` carries no lengths, id patterns or item caps (they are stripped for structured
+ * output), so the first live audit was rejected for "claim_1"-style ids and a fifth evidence quote. The model's JSON is
+ * now normalised before zod (`normaliseAuditOutput`: ids renumbered, lists and strings clipped) and the prompt states
+ * the limits; only structural problems still fail.
  */
-export const AUDIT_VERSION = 1;
+export const AUDIT_VERSION = 2;
+
+/** Every list and string limit of `AuditResultSchema`, stated in the prompt and applied by `normaliseAuditOutput`. */
+export const AUDIT_LIMITS = {
+  claims: 40, evidencePerItem: 4, issues: 20, omissions: 5, omissionEvidence: 3, homeworkEvidence: 2, claimIdsPerIssue: 10,
+  studentCalled: 5, otherPeopleNamed: 10, candidateReview: 20, notes: 5, priorIssueReview: 20,
+  quote: 400, gloss: 300, locator: 40, claimText: 600, issueQuote: 600, mechanism: 500, fixText: 600, omissionDetail: 300,
+  reason: 300, note: 200, name: 60, code: 80, summaryLine: 160, priorNote: 300, priorId: 8,
+} as const;
 
 export const FEEDBACK_FIELDS = ["topics", "performance", "improvement", "homework"] as const;
 
@@ -167,6 +179,120 @@ function contains(haystack: string, needle: string): boolean {
 
 const INSUFFICIENT_GRADES: readonly EvidenceGrade[] = ["secondary_only", "none"];
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function clipString(value: unknown, max: number, ellipsis = false): unknown {
+  if (typeof value !== "string" || value.length <= max) return value;
+  return ellipsis ? `${value.slice(0, max - 1)}…` : value.slice(0, max);
+}
+
+function clipList<T>(value: unknown, max: number, each: (item: unknown) => T = (item) => item as T): unknown {
+  return Array.isArray(value) ? value.slice(0, max).map(each) : value;
+}
+
+function nullIfMissing(record: Record<string, unknown>, key: string): void {
+  if (record[key] === undefined) record[key] = null;
+}
+
+function normaliseQuote(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const quote = { ...value };
+  // A prefix of a verbatim quote is still verbatim, so clipping keeps the quote checkable.
+  quote.quote = clipString(quote.quote, AUDIT_LIMITS.quote);
+  nullIfMissing(quote, "gloss");
+  quote.gloss = clipString(quote.gloss, AUDIT_LIMITS.gloss);
+  nullIfMissing(quote, "locator");
+  quote.locator = clipString(quote.locator, AUDIT_LIMITS.locator);
+  nullIfMissing(quote, "speaker");
+  return quote;
+}
+
+/**
+ * Makes the model's JSON fit `AuditResultSchema` where only presentation is off: claim ids become c1, c2, … and issue
+ * ids i1, i2, … in order (issue `claimIds` follow; unknown ones are dropped), lists keep their first N items, strings are
+ * clipped, and missing nullable keys become null. A minimal fix whose text would have to be clipped is dropped instead
+ * (a clipped `from` would edit the wrong span). Structural problems (a wrong enum, a missing object) are left for zod.
+ */
+export function normaliseAuditOutput(raw: unknown): unknown {
+  if (!isRecord(raw)) return raw;
+  const out: Record<string, unknown> = { ...raw };
+  const L = AUDIT_LIMITS;
+
+  const claimIds = new Map<string, string>();
+  out.claims = clipList(out.claims, L.claims, (item) => {
+    if (!isRecord(item)) return item;
+    const claim = { ...item };
+    const next = `c${claimIds.size + 1}`;
+    if (typeof claim.id === "string" && !claimIds.has(claim.id)) claimIds.set(claim.id, next);
+    claim.id = next;
+    claim.text = clipString(claim.text, L.claimText);
+    claim.evidence = clipList(claim.evidence, L.evidencePerItem, normaliseQuote);
+    return claim;
+  });
+
+  let issueNumber = 0;
+  out.issues = clipList(out.issues, L.issues, (item) => {
+    if (!isRecord(item)) return item;
+    const issue = { ...item };
+    issueNumber += 1;
+    issue.id = `i${issueNumber}`;
+    issue.claimIds = Array.isArray(issue.claimIds)
+      ? [...new Set(issue.claimIds.map((id) => claimIds.get(String(id))).filter((id): id is string => Boolean(id)))].slice(0, L.claimIdsPerIssue)
+      : [];
+    issue.quote = clipString(issue.quote, L.issueQuote);
+    issue.mechanism = clipString(issue.mechanism, L.mechanism);
+    nullIfMissing(issue, "criticalCategory");
+    issue.evidence = clipList(issue.evidence, L.evidencePerItem, normaliseQuote);
+    if (issue.minimalFix === undefined) issue.minimalFix = null;
+    if (isRecord(issue.minimalFix)) {
+      const fix = { ...issue.minimalFix };
+      if (fix.to === undefined) fix.to = null;
+      const tooLong = (typeof fix.from === "string" && fix.from.length > L.fixText) || (typeof fix.to === "string" && fix.to.length > L.fixText);
+      issue.minimalFix = tooLong ? null : fix;
+    }
+    return issue;
+  });
+
+  out.omissions = clipList(out.omissions, L.omissions, (item) => {
+    if (!isRecord(item)) return item;
+    const omission = { ...item };
+    omission.detail = clipString(omission.detail, L.omissionDetail);
+    omission.evidence = clipList(omission.evidence, L.omissionEvidence, normaliseQuote);
+    return omission;
+  });
+
+  if (isRecord(out.homework)) {
+    const homework = { ...out.homework };
+    homework.evidence = clipList(homework.evidence, L.homeworkEvidence, normaliseQuote);
+    out.homework = homework;
+  }
+  if (isRecord(out.names)) {
+    const names = { ...out.names };
+    names.studentCalled = clipList(names.studentCalled, L.studentCalled, (name) => clipString(name, L.name));
+    names.otherPeopleNamed = clipList(names.otherPeopleNamed, L.otherPeopleNamed, (name) => clipString(name, L.name));
+    out.names = names;
+  }
+  if (out.candidateReview === undefined) out.candidateReview = [];
+  out.candidateReview = clipList(out.candidateReview, L.candidateReview, (item) => {
+    if (!isRecord(item)) return item;
+    return { ...item, code: clipString(item.code, L.code), reason: clipString(item.reason, L.reason) };
+  });
+  if (isRecord(out.evidenceQuality)) {
+    const quality = { ...out.evidenceQuality };
+    quality.notes = clipList(quality.notes, L.notes, (note) => clipString(note, L.note));
+    out.evidenceQuality = quality;
+  }
+  if (out.priorIssueReview === undefined) out.priorIssueReview = null;
+  out.priorIssueReview = clipList(out.priorIssueReview, L.priorIssueReview, (item) => {
+    if (!isRecord(item)) return item;
+    return { ...item, id: clipString(item.id, L.priorId), note: clipString(item.note, L.priorNote) };
+  });
+  out.summaryLine = clipString(out.summaryLine, L.summaryLine, true);
+  return out;
+}
+
 /** Which failure mode an uncovered claim falls under, and how severe it is at least. */
 function modeForUncoveredClaim(claim: AuditClaim): { mode: AuditIssue["mode"]; severity: FailureSeverity } {
   if (claim.verdict === "misattributed") return { mode: "M01", severity: "critical" };
@@ -190,7 +316,7 @@ export function parseAuditResult(
   value: unknown,
   ctx: { postFields: Record<string, string>; evidenceText: string; grade: EvidenceGrade },
 ): { ok: true; result: CheckedAuditResult } | { ok: false; reason: string } {
-  const parsed = AuditResultSchema.safeParse(value);
+  const parsed = AuditResultSchema.safeParse(normaliseAuditOutput(value));
   if (!parsed.success) return { ok: false, reason: `schema: ${parsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".")} ${i.message}`).join("; ")}` };
   const result: AuditResult = structuredClone(parsed.data);
 
@@ -349,6 +475,78 @@ export const SynthesisResultSchema = z.object({
 
 export type SynthesisResult = z.infer<typeof SynthesisResultSchema>;
 
+const MODE_ID = /^M(0[1-9]|1[0-7])$/;
+
+/** A failure-mode reference as the schema wants it: a registry id, or `NEW:<slug>`. */
+export function normaliseModeRef(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (MODE_ID.test(trimmed)) return trimmed;
+  const embedded = trimmed.match(/\bM(0[1-9]|1[0-7])\b/);
+  if (embedded) return embedded[0];
+  const slug = trimmed.replace(/^NEW:/i, "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").replace(/^[^a-z]+/, "");
+  return `NEW:${(slug.length >= 3 ? slug : `mode_${slug}`).slice(0, 41)}`;
+}
+
+/** The synthesis counterpart of `normaliseAuditOutput`: mode refs normalised, lists and strings clipped. */
+export function normaliseSynthesisOutput(raw: unknown): unknown {
+  if (!isRecord(raw)) return raw;
+  const out: Record<string, unknown> = { ...raw };
+  out.failureModes = clipList(out.failureModes, 20, (item) => {
+    if (!isRecord(item)) return item;
+    return {
+      ...item,
+      mode: normaliseModeRef(item.mode),
+      title: clipString(item.title, 120),
+      sessions: clipList(item.sessions, 60, (sid) => clipString(sid, 40)),
+      mechanism: clipString(item.mechanism, 1200),
+      proposedChange: clipString(item.proposedChange, 1200),
+      proposedFiles: clipList(item.proposedFiles, 6, (file) => clipString(file, 120)),
+    };
+  });
+  if (isRecord(out.fixPick)) out.fixPick = { ...out.fixPick, mode: normaliseModeRef(out.fixPick.mode), reason: clipString(out.fixPick.reason, 600) };
+  if (out.fixPick === undefined) out.fixPick = null;
+  if (out.fixBrief === undefined) out.fixBrief = null;
+  if (isRecord(out.fixBrief)) {
+    const brief: Record<string, unknown> = { ...out.fixBrief, mode: normaliseModeRef(out.fixBrief.mode) };
+    brief.mechanism = clipString(brief.mechanism, 1200);
+    brief.targetFiles = clipList(brief.targetFiles, 6, (file) => clipString(file, 120));
+    brief.acceptance = clipList(brief.acceptance, 8, (line) => clipString(line, 300));
+    if (isRecord(brief.syntheticFixture)) {
+      const fixture: Record<string, unknown> = { ...brief.syntheticFixture };
+      fixture.evidence = clipString(fixture.evidence, 4000);
+      fixture.expectedBehaviour = clipString(fixture.expectedBehaviour, 800);
+      if (isRecord(fixture.badFeedback)) {
+        const bad = fixture.badFeedback;
+        fixture.badFeedback = {
+          ...bad,
+          topics: clipString(bad.topics, 800),
+          performance: clipString(bad.performance, 800),
+          improvement: clipString(bad.improvement, 800),
+          homework: clipString(bad.homework, 400),
+        };
+      }
+      brief.syntheticFixture = fixture;
+    }
+    out.fixBrief = brief;
+  }
+  out.longTermPlan = clipList(out.longTermPlan, 10, (item) => {
+    if (!isRecord(item)) return item;
+    return {
+      ...item,
+      title: clipString(item.title, 120),
+      why: clipString(item.why, 600),
+      steps: clipList(item.steps, 8, (step) => clipString(step, 400)),
+      costImpact: clipString(item.costImpact, 300),
+    };
+  });
+  if (isRecord(out.judgeMisses)) {
+    out.judgeMisses = { ...out.judgeMisses, modes: clipList(out.judgeMisses.modes, 20, normaliseModeRef) };
+  }
+  out.summaryLine = clipString(out.summaryLine, 200, true);
+  return out;
+}
+
 /** Whole-word, case-insensitive search for any of `names` in `text` (Latin or Thai script). */
 export function containsAnyName(text: string, names: readonly string[]): string | null {
   const haystack = text.normalize("NFC").toLowerCase();
@@ -374,7 +572,7 @@ export function parseSynthesisResult(
   value: unknown,
   ctx: { sessionIds: ReadonlySet<string>; realNames: readonly string[]; evidenceTexts: readonly string[] },
 ): { ok: true; result: SynthesisResult } | { ok: false; reason: string } {
-  const parsed = SynthesisResultSchema.safeParse(value);
+  const parsed = SynthesisResultSchema.safeParse(normaliseSynthesisOutput(value));
   if (!parsed.success) return { ok: false, reason: `schema: ${parsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".")} ${i.message}`).join("; ")}` };
   const result = parsed.data;
   for (const mode of result.failureModes) {
