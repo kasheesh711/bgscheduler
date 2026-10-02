@@ -1,6 +1,7 @@
 import { inArray, sql } from "drizzle-orm";
 import { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import { NEAR_HORIZON_DAYS, resolveAvailabilityHorizonDays } from "./fetchers";
 import type { WiseLeave } from "./types";
 
@@ -85,14 +86,11 @@ export function isFarCacheFresh(
  * drizzle-orm 0.45 wraps every driver error in a DrizzleQueryError whose
  * message is `Failed query: <sql>` — it names this table on ANY failure, so
  * the message cannot tell a pending migration from an outage. Only SQLSTATE
- * 42P01 (undefined_table) is the migration case: `code` on a raw driver error,
- * `cause.code` under the drizzle wrapper. The read names no other relation, so
- * here 42P01 means this table is missing.
+ * 42P01 (undefined_table) is the migration case. The read names no other relation,
+ * so here 42P01 means this table is missing.
  */
 function isMissingCacheTable(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const candidate = error as { code?: unknown; cause?: { code?: unknown } };
-  return (candidate.code ?? candidate.cause?.code) === "42P01";
+  return sqlStateOf(error) === "42P01";
 }
 
 /**

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import { getRoomCapacityForecast } from "@/lib/room-capacity/data";
 
 /**
@@ -8,13 +9,10 @@ import { getRoomCapacityForecast } from "@/lib/room-capacity/data";
  * message is `Failed query: <sql>`, so it names the room_capacity_* table on
  * ANY failure (timeout, dropped connection, permission). Only SQLSTATE 42P01
  * (undefined_table: a relation this read needs is not migrated yet) earns the
- * typed missing payload — `code` on a raw driver error, `cause.code` under the
- * drizzle wrapper. Anything else must stay a 500.
+ * typed missing payload. Anything else must stay a 500.
  */
 function isMissingForecastTableError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const candidate = error as { code?: unknown; cause?: { code?: unknown } };
-  return (candidate.code ?? candidate.cause?.code) === "42P01";
+  return sqlStateOf(error) === "42P01";
 }
 
 function missingForecastBody(scenario: string) {

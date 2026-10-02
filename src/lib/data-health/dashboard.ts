@@ -2,6 +2,7 @@ import { applyNightlyReminderHealth } from "@/lib/post-class-feedback/nightly-re
 import { desc, eq, getTableColumns, gte, lte, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import { isApiSnapshotStale } from "@/lib/ops/stale";
 import { effectiveCronJob, CRON_JOBS, statusRank, type CronJobDefinition } from "./cron-registry";
 import { evaluateCronJobStatus, type InvocationEvidence, type RunEvidence } from "./status";
@@ -886,17 +887,14 @@ const INVOCATIONS_LOOKBACK_DAYS = 45;
  * drizzle-orm 0.45 wraps every driver error in a DrizzleQueryError whose
  * message is `Failed query: <sql>` — it names cron_invocations on ANY failure
  * (timeout, dropped connection, permission), so the message cannot tell a
- * missing table from an outage. Decide on SQLSTATE 42P01 (undefined_table):
- * `code` on a raw driver error, `cause.code` under the drizzle wrapper. The
- * read names no other relation, so here 42P01 means this table is missing.
+ * missing table from an outage. Decide on SQLSTATE 42P01 (undefined_table).
+ * The read names no other relation, so here 42P01 means this table is missing.
  * Keep it that way: Postgres also raises 42P01 for a missing FROM-clause entry
  * (e.g. an outer-query reference to cron_invocations instead of the ranked
  * subquery), which would degrade just as quietly.
  */
 function isMissingCronInvocationsTable(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const candidate = error as { code?: unknown; cause?: { code?: unknown } };
-  return (candidate.code ?? candidate.cause?.code) === "42P01";
+  return sqlStateOf(error) === "42P01";
 }
 
 /**
