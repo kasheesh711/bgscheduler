@@ -20,6 +20,8 @@ export const AUTOWRITER_MIN_ATTENDANCE_PERCENT = 50;
  * A guest (no Wise account) stands in for an absent Wise account only when they
  * — and the tutor — stayed at least this share of the class (owner rule, 29 Sep:
  * a class that runs its full length with one guest was taught to the student).
+ * A guest under the student's own name only needs `AUTOWRITER_MIN_ATTENDANCE_PERCENT`
+ * (owner rule, 2 Oct); the tutor always needs this share.
  */
 export const AUTOWRITER_GUEST_STUDENT_MIN_PERCENT = 80;
 

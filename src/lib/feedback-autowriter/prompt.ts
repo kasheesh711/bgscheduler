@@ -103,7 +103,7 @@ function guestNameWords(alias: string): string[] {
 }
 
 /** Words Zoom guest names are often made of that are not the student's name. */
-const GENERIC_GUEST_WORDS = new Set([
+export const GENERIC_GUEST_WORDS = new Set([
   "zoom", "user", "guest", "iphone", "ipad", "android", "phone", "tablet", "laptop", "desktop", "pc", "mac",
   "macbook", "samsung", "galaxy", "huawei", "oppo", "vivo", "xiaomi", "redmi", "pixel", "windows", "my", "the", "of",
   // Whose device it is, or where it is.
