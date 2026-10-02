@@ -1,6 +1,6 @@
 -- Incident kinds of their own for the Atom collector and the guided-post style review, which recorded under
 -- 'scan_failed' (shown as "The forward scan failed") before any forward scan existed. 'scan_failed' stays for it.
-ALTER TABLE feedback_autowriter_incidents DROP CONSTRAINT IF EXISTS feedback_autowriter_incidents_kind_check;
+ALTER TABLE feedback_autowriter_incidents DROP CONSTRAINT feedback_autowriter_incidents_kind_check;
 --> statement-breakpoint
 ALTER TABLE feedback_autowriter_incidents ADD CONSTRAINT feedback_autowriter_incidents_kind_check CHECK (kind IN (
   'halt','correction_failed','critical_verdict','critical_flag','credit_entries_changed','api_actor_unmatched',

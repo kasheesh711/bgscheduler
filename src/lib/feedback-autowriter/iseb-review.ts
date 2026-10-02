@@ -47,10 +47,11 @@ export async function reviewIsebPosts(db: Database, deadlineMs: number, callMode
     }) === retained.evidenceHash;
     const factual = passingStoredVerdict(pipeline.factualVerdicts);
     if (!fields || fieldsHash(fields) !== post.fieldsSha256 || !evidenceValid || !factual || retained.atom?.status === "contradiction") {
-      await db.insert(R).values({ postId: post.id, fieldsSha256: post.fieldsSha256, status: "unavailable",
-        result: { reason: "source_or_factual_verdict_unavailable" } });
+      // The incident first: a review row ends the post's turn, so it is written only once the incident exists.
       await recordIncident(db, { dedupeKey: `iseb-review-source:${post.id}`, kind: "style_review_source_missing", severity: "critical",
         wiseSessionId: post.wiseSessionId, summary: "The guided feedback post needs source evidence or both factual verdicts before its review can complete." });
+      await db.insert(R).values({ postId: post.id, fieldsSha256: post.fieldsSha256, status: "unavailable",
+        result: { reason: "source_or_factual_verdict_unavailable" } });
       continue;
     }
     const style = pipeline.styleGuide as { id?: string; version?: number } | undefined;
@@ -78,20 +79,21 @@ export async function reviewIsebPosts(db: Database, deadlineMs: number, callMode
       try { verdict = Output.parse(JSON.parse(call.content.replace(/^\x60\x60\x60(?:json)?\s*/u, "").replace(/\s*\x60\x60\x60$/u, ""))); } catch { /* an absent verdict is unresolved */ }
     }
     const status = !verdict ? "unavailable" : !verdict.matches || verdict.problems.length || formatProblems.length ? "flagged" : "passed";
-    await db.insert(R).values({
-      postId: post.id, fieldsSha256: post.fieldsSha256, status,
-      model: call.model, costUsd: call.usage?.costUsd?.toFixed(8) ?? null,
-      result: { formatProblems, verdict, evidenceHash: retained.evidenceHash,
-        error: call.ok ? (verdict ? null : "invalid_style_verdict") : "style_api_unavailable" },
-    });
     // A style result is dashboard-only (owner, 2 Oct 2026): the facts were judged before posting, and an unavailable
-    // review retries after 6 hours, so neither is pushed.
+    // review retries after 6 hours, so neither is pushed. The incident comes before the review row, which ends the
+    // post's turn: a failed incident write leaves the post to be reviewed again rather than losing its incident.
     if (status !== "passed") await recordIncident(db, {
       dedupeKey: `iseb-style:${post.id}:${status}`, kind: status === "flagged" ? "style_review_flagged" : "style_review_unavailable",
       severity: "info", wiseSessionId: post.wiseSessionId,
       summary: status === "flagged" ? "Guided feedback needs a style correction. Open its evidence and style review."
         : "The style reviewer could not return a verdict. This post remains unreviewed.",
       detail: { formatProblems, problems: verdict?.problems ?? [] },
+    });
+    await db.insert(R).values({
+      postId: post.id, fieldsSha256: post.fieldsSha256, status,
+      model: call.model, costUsd: call.usage?.costUsd?.toFixed(8) ?? null,
+      result: { formatProblems, verdict, evidenceHash: retained.evidenceHash,
+        error: call.ok ? (verdict ? null : "invalid_style_verdict") : "style_api_unavailable" },
     });
     reviewed += 1;
   }

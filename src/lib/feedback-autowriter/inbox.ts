@@ -82,7 +82,8 @@ const INCIDENT_TITLES: Record<string, string> = {
  * Info incidents that still wait in the list for the owner to acknowledge (not red, never pushed). A style check that
  * could not run is not one: it retries by itself, and its later result supersedes it.
  */
-const LISTED_INFO_KINDS: ReadonlySet<string> = new Set(["style_review_flagged"]);
+export const LISTED_INFO_INCIDENT_KINDS = ["style_review_flagged"] as const;
+const LISTED_INFO_KINDS: ReadonlySet<string> = new Set(LISTED_INFO_INCIDENT_KINDS);
 
 const FAILED_POST_TITLES: Record<InboxDashboard["failedPosts"][number]["state"], string> = {
   verify_failed: "A post did not verify in Wise",
