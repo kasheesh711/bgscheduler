@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { auditBundles, auditCacheFile, cachedAudit, planAudit, smokeCall, type AuditStageDeps } from "../audit";
-import type { AuditResult } from "../audit-schema";
+import { AUDIT_VERSION, type AuditResult } from "../audit-schema";
 import { NIGHTLY_CAPS } from "../caps";
 import type { ClaudeCall, ClaudeOutcome } from "../claude-runner";
 import { NightlyLedger } from "../ledger";
@@ -101,7 +101,7 @@ describe("auditBundles", () => {
     expect(result.costUsd).toBeCloseTo(0.82);
     expect(ledger.used("opus_audit")).toEqual({ count: 2, usd: 0.82 });
     const cache = auditCacheFile(auditDeps.auditsDir, { wiseSessionId: SID_A, fieldsSha256: "0a01aaaaaaaa", bundleHash: "0a01bbbbbbbbbbbbbbbb" });
-    expect(path.basename(cache)).toBe("0a01aaaaaaaa.a1.0a01bbbbbbbb.json");
+    expect(path.basename(cache)).toBe(`0a01aaaaaaaa.a${AUDIT_VERSION}.0a01bbbbbbbb.json`);
     expect(fs.statSync(cache).mode & 0o777).toBe(0o600);
     const lines = readJsonl<Record<string, unknown>>(auditDeps.ledgerJsonl);
     expect(lines).toHaveLength(2);
@@ -129,7 +129,7 @@ describe("auditBundles", () => {
     expect(auditDeps.sleep).toHaveBeenCalledWith(30_000);
     expect(result).toMatchObject({ audited: 0, failed: 1 });
     expect(result.records[0].failure).toMatch(/^invalid:schema/u);
-    expect(ledger.attempts("audit:6a0000000000000000000a01:0a01aaaaaaaa:a1")).toMatchObject({ total: 2, failed: 2 });
+    expect(ledger.attempts(`audit:6a0000000000000000000a01:0a01aaaaaaaa:a${AUDIT_VERSION}`)).toMatchObject({ total: 2, failed: 2 });
     // Failed twice: never tried again at this version.
     run.mockClear();
     expect(await auditBundles(auditDeps, [file(SID_A)])).toMatchObject({ skipped: [{ wiseSessionId: SID_A, reason: "failed_twice" }], calls: 0 });
