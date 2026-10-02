@@ -168,6 +168,7 @@ None blocking roadmap execution.
 | Phase 12 P01 | 4m | 2 tasks | 2 files |
 | Phase 12 P02 | 8 | 2 tasks | 4 files |
 | Phase 12 P03 | 6m | 3 tasks | 4 files |
+| 261002-r45 | Autowriter: guest under student's own name stands in at 50% | 2026-10-02 | d496be3a | [261002-r45-autowriter-guest-name-stand-in](./quick/261002-r45-autowriter-guest-name-stand-in/) |
 
 ## Session Continuity
 
