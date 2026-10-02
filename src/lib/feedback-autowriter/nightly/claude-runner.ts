@@ -130,6 +130,8 @@ export type ClaudeOutcome =
 interface ModelUsageEntry {
   inputTokens?: number;
   outputTokens?: number;
+  /** Thinking tokens within `outputTokens`, when the CLI reports them (absent: the whole output counts as visible). */
+  thinkingTokens?: number;
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
   costUSD?: number;
