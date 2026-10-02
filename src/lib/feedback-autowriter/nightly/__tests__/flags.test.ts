@@ -5,7 +5,7 @@ import type { ClassReport } from "../report";
 function report(sid: string, patch: Partial<ClassReport> = {}): ClassReport {
   return {
     wiseSessionId: sid, fieldsSha256: "f".repeat(64), tutorKey: "Kevin", className: "Somsri (Pim.Ta) Testwong", postedEvidenceKind: "transcript",
-    grade: "rebuilt", lateFrom: null, auditVerdict: "major", auditFailure: null, auditSummaryLine: "x", severity: "major", modes: ["M06"],
+    grade: "rebuilt", lateFrom: null, improvable: false, auditVerdict: "major", auditFailure: null, auditSummaryLine: "x", severity: "major", modes: ["M06"],
     findings: [{
       source: "audit", code: "i1", mode: "M06", severity: "major", confidence: "medium", criticalCategory: null, field: "performance",
       quote: "She confidently mastered fractions", detail: "Judgement not in the evidence", minimalFix: null, evidence: [], confirmed: null,

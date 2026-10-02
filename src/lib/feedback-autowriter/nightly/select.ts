@@ -204,13 +204,17 @@ interface AuditLedgerLine {
   type?: string;
   key?: string;
   verdict?: string | null;
+  final?: boolean;
 }
 
-/** Keys with a finished audit (any verdict, insufficient evidence included) in the audit ledger. */
+/**
+ * Keys with a final audit in the audit ledger: any verdict, except insufficient evidence while the evidence may still
+ * improve (`final: false`) — such a class is not audited yet.
+ */
 export function auditedKeys(ledgerJsonl: string): Set<string> {
   const keys = new Set<string>();
   for (const line of readJsonl<AuditLedgerLine>(ledgerJsonl)) {
-    if (line.type === "audit" && typeof line.key === "string" && typeof line.verdict === "string") keys.add(line.key);
+    if (line.type === "audit" && typeof line.key === "string" && typeof line.verdict === "string" && line.final !== false) keys.add(line.key);
   }
   return keys;
 }

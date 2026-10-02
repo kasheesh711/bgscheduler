@@ -231,6 +231,23 @@ describe("stepCollect", () => {
     expect(wise.getSessionDetail).toHaveBeenCalledTimes(1);
   });
 
+  it("records a transient collection failure: the class waits, the step is partial", async () => {
+    const ctx = context();
+    writeTargets(ctx);
+    const { deps: collectDeps, wise } = deps(ctx, async () => {
+      throw Object.assign(new Error("Wise API 503"), { status: 503 });
+    });
+    const result = await stepCollect(ctx, collectDeps);
+    expect(result).toMatchObject({ ok: true, next: "audit", summary: { collected: 1, incomplete: [`${SID}:wise_detail_failed`] } });
+    expect(readRunState(ctx).steps.collect?.status).toBe("partial");
+    expect(readBundleFile(ctx.paths, SID)).toMatchObject({ transient: ["wise_detail_failed"], improvable: true });
+    // The next collect reads Wise again (nothing was cached) and completes the class.
+    wise.getSessionDetail.mockResolvedValueOnce({ data: sessionDetail({ _id: SID, classId: CID }) });
+    await stepCollect(ctx, collectDeps);
+    expect(readBundleFile(ctx.paths, SID)).toMatchObject({ transient: [] });
+    expect(readRunState(ctx).steps.collect?.status).toBe("done");
+  });
+
   it("stops the stage on a Wise 429 and keeps what it collected", async () => {
     const ctx = context();
     writeTargets(ctx, [nightlyTarget(), nightlyTarget({ wiseSessionId: "6a0000000000000000000a02", scheduledEndAt: "2026-10-02T08:00:00.000Z" })]);

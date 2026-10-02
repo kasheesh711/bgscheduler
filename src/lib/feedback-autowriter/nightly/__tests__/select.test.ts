@@ -246,7 +246,10 @@ describe("chooseTargets", () => {
       appendJsonl(file, { type: "audit", key: "audit:a:sha:a1", verdict: "major" });
       appendJsonl(file, { type: "audit", key: "audit:b:sha:a1", verdict: null, failure: "unparseable" });
       appendJsonl(file, { type: "class_report", key: "audit:c:sha:a1", verdict: "accurate" });
-      expect([...auditedKeys(file)]).toEqual(["audit:a:sha:a1"]);
+      // Insufficient evidence that may still improve is not final; once final it counts.
+      appendJsonl(file, { type: "audit", key: "audit:d:sha:a1", verdict: "insufficient_evidence", final: false });
+      appendJsonl(file, { type: "audit", key: "audit:e:sha:a1", verdict: "insufficient_evidence", final: true });
+      expect([...auditedKeys(file)]).toEqual(["audit:a:sha:a1", "audit:e:sha:a1"]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

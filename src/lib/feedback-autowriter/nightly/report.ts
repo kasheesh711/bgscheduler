@@ -51,6 +51,8 @@ export interface ClassReport {
   grade: string;
   /** A post of an earlier night picked up late: that night. */
   lateFrom: string | null;
+  /** Whether better evidence may still come for this class. */
+  improvable: boolean;
   auditVerdict: AuditResult["verdict"] | null;
   auditFailure: string | null;
   auditSummaryLine: string | null;
@@ -148,8 +150,11 @@ export function mergeClassReport(file: BundleFile, record: AuditRecord | null): 
     postedEvidenceKind: file.bundle.postedEvidenceKind,
     grade: file.bundle.grade,
     lateFrom: file.target.lateFrom ?? null,
+    improvable: file.improvable ?? false,
     auditVerdict: result?.verdict ?? null,
-    auditFailure: record?.failure ?? (record ? null : "not_audited"),
+    auditFailure: record?.failure ?? (record ? null
+      : file.transient && file.transient.length > 0 ? `collection_incomplete:${file.transient.join(",")}`
+        : file.bundle.grade === "none" ? "no_evidence" : "not_audited"),
     auditSummaryLine: result?.summaryLine ?? null,
     severity,
     modes: [...new Set(counted.flatMap((finding) => (finding.mode ? [finding.mode] : [])))].sort(),
@@ -406,7 +411,9 @@ export function renderReportMarkdown(input: ReportInput): string {
         `Tutor ${report.tutorKey ?? "?"}; class ${report.className ?? "?"}; posted from ${report.postedEvidenceKind}; evidence ${report.grade}; ` +
         `owner verdict ${report.ownerVerdict ?? "none"}; production judges passed ${report.judgePassed ?? "?"}` +
         `${report.wiseTextEdited ? "; TEXT EDITED IN WISE SINCE OUR POST (never corrected over)" : ""}.`,
-      ...(report.auditFailure ? [`Audit failed: ${report.auditFailure}`] : []),
+      ...(report.auditFailure ? [`Not audited: ${report.auditFailure}`] : []),
+      ...(report.auditVerdict === "insufficient_evidence" && report.improvable
+        ? ["Evidence may still improve (collect again, with --retranscribe while Wise lists the recording)."] : []),
       ...(report.auditSummaryLine ? [`Audit: ${report.auditSummaryLine}`] : []),
       "",
     );

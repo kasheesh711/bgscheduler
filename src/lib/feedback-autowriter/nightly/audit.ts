@@ -78,7 +78,7 @@ export function cachedAudit(auditsDir: string, file: BundleFile): AuditRecord | 
 }
 
 /** The metadata line for `ledger.jsonl` (no text: modes, severities, verdict, cost). */
-export function auditLedgerLine(night: string, record: AuditRecord, extra: { costUsd: number | null; outcome: string }): Record<string, unknown> {
+export function auditLedgerLine(night: string, record: AuditRecord, extra: { costUsd: number | null; outcome: string; improvable?: boolean }): Record<string, unknown> {
   return {
     type: "audit",
     night,
@@ -91,6 +91,8 @@ export function auditLedgerLine(night: string, record: AuditRecord, extra: { cos
     bundleHash: record.bundleHash,
     grade: record.grade,
     verdict: record.result?.verdict ?? null,
+    // insufficient_evidence is not final while the evidence may still improve: such a class is not "audited" yet.
+    final: !(record.result?.verdict === "insufficient_evidence" && extra.improvable === true),
     failure: record.failure,
     outcome: extra.outcome,
     issues: (record.result?.issues ?? []).map((issue) => ({
@@ -137,6 +139,15 @@ export async function auditBundles(deps: AuditStageDeps, files: readonly BundleF
   await mapLimited(files, deps.concurrency, async (file) => {
     const sid = file.target.wiseSessionId;
     const key = auditKey({ wiseSessionId: sid, fieldsSha256: file.target.fieldsSha256, auditVersion: AUDIT_VERSION });
+    // Never audited: a class whose collection failed transiently (a later collect completes it), or with no evidence.
+    if (file.transient && file.transient.length > 0) {
+      out.skipped.push({ wiseSessionId: sid, reason: "collection_incomplete" });
+      return;
+    }
+    if (file.bundle.grade === "none") {
+      out.skipped.push({ wiseSessionId: sid, reason: "no_evidence" });
+      return;
+    }
     const cached = cachedAudit(deps.auditsDir, file);
     if (cached) {
       out.records.push(cached);
@@ -200,7 +211,7 @@ export async function auditBundles(deps: AuditStageDeps, files: readonly BundleF
       };
       if (result) {
         writeJsonAtomic(auditCacheFile(deps.auditsDir, { wiseSessionId: sid, fieldsSha256: file.target.fieldsSha256, bundleHash: file.bundle.hash }), record);
-        appendJsonl(deps.ledgerJsonl, auditLedgerLine(deps.night, record, { costUsd, outcome: settledOutcome }));
+        appendJsonl(deps.ledgerJsonl, auditLedgerLine(deps.night, record, { costUsd, outcome: settledOutcome, improvable: file.improvable }));
         out.records.push(record);
         out.audited += 1;
         failuresInARow = 0;
@@ -209,7 +220,7 @@ export async function auditBundles(deps: AuditStageDeps, files: readonly BundleF
       }
       deps.log?.(`audit ${sid}: attempt ${attempt} failed (${failure})`);
       if (outcome.kind === "usage_limited" || outcome.kind === "auth") {
-        appendJsonl(deps.ledgerJsonl, auditLedgerLine(deps.night, record, { costUsd, outcome: settledOutcome }));
+        appendJsonl(deps.ledgerJsonl, auditLedgerLine(deps.night, record, { costUsd, outcome: settledOutcome, improvable: file.improvable }));
         out.records.push(record);
         out.failed += 1;
         stopStage(new NightlyStop(outcome.kind, EXIT.model));
@@ -220,7 +231,7 @@ export async function auditBundles(deps: AuditStageDeps, files: readonly BundleF
         await sleep(deps.retryDelayMs ?? AUDIT_RETRY_DELAY_MS);
         continue;
       }
-      appendJsonl(deps.ledgerJsonl, auditLedgerLine(deps.night, record, { costUsd, outcome: settledOutcome }));
+      appendJsonl(deps.ledgerJsonl, auditLedgerLine(deps.night, record, { costUsd, outcome: settledOutcome, improvable: file.improvable }));
       out.records.push(record);
       out.failed += 1;
       failuresInARow += 1;
@@ -242,6 +253,7 @@ export function planAudit(deps: Pick<AuditStageDeps, "auditsDir" | "ledger" | "p
   let cached = 0;
   let failedTwice = 0;
   for (const file of files) {
+    if ((file.transient && file.transient.length > 0) || file.bundle.grade === "none") continue;
     if (cachedAudit(deps.auditsDir, file)) cached += 1;
     else if (deps.ledger.attempts(auditKey({ wiseSessionId: file.target.wiseSessionId, fieldsSha256: file.target.fieldsSha256, auditVersion: AUDIT_VERSION })).failed >= 2) failedTwice += 1;
     else toAudit += 1;

@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Database } from "@/lib/db";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
 import { addDays, bangkokDayBounds } from "../quality";
+import { parseAutowriterSessionDetail, recordingForTranscription } from "../session";
 import { auditBundles, cachedAudit } from "./audit";
 import { AUDIT_VERSION } from "./audit-schema";
 import { activeWiseCooldown, stopFilePresent, type NightlyCaps } from "./caps";
@@ -280,6 +281,42 @@ export interface BundleFile {
   notes: string[];
   status: RawEvidence["status"];
   collectedAt: string;
+  /**
+   * Why collection is incomplete for now (a Wise read or a production Soniox read failed, the job had not finished):
+   * the class is not audited until a later collect gets it. Empty or absent: complete.
+   */
+  transient?: string[];
+  /** Whether better evidence may still come (a transient failure, or a recording still listed to re-transcribe). */
+  improvable?: boolean;
+}
+
+/** Recordings stay listed in Wise for about a day after class. */
+const RECORDING_LISTED_MS = 24 * 60 * 60 * 1000;
+
+/** Transient collection failures of one class (empty: none). */
+export function transientFailures(status: RawEvidence["status"]): string[] {
+  const reasons: string[] = [];
+  if (status.detail === "failed") reasons.push("wise_detail_failed");
+  if (status.soniox === "error") reasons.push("soniox_read_failed");
+  if (status.soniox === "not_finished") reasons.push("soniox_job_not_finished");
+  return reasons;
+}
+
+/**
+ * Whether the evidence may still get better: a transient failure, no Soniox key to read the production transcript,
+ * or a transcript post with no transcript whose recording Wise still lists (a re-transcription could recover it).
+ */
+export function evidenceImprovable(input: { target: NightlyTarget; bundle: EvidenceBundle; raw: RawEvidence; now: Date }): boolean {
+  if (transientFailures(input.raw.status).length > 0 || input.raw.status.soniox === "no_client") return true;
+  if (input.target.evidence !== "transcript" || input.bundle.transcript) return false;
+  if (input.raw.status.retranscribe === "done") return false;
+  let recordingListed = false;
+  try {
+    recordingListed = input.raw.detail !== null && recordingForTranscription(parseAutowriterSessionDetail(input.raw.detail)).ok;
+  } catch {
+    recordingListed = false;
+  }
+  return recordingListed && input.now.getTime() < new Date(input.target.scheduledEndAt).getTime() + RECORDING_LISTED_MS;
 }
 
 export function bundleFile(paths: NightlyPaths, wiseSessionId: string): string {
@@ -318,6 +355,8 @@ export async function stepCollect(ctx: NightContext, deps: CollectStepDeps): Pro
   const retranscribe: Record<string, number> = {};
   const failures: string[] = [];
   const undeleted: string[] = [];
+  /** Classes collected with a transient failure: not audited until a later collect completes them. */
+  const incomplete: string[] = [];
   let collected = 0;
   let stopped: NightlyStop | null = null;
   for (const target of chosen) {
@@ -334,9 +373,12 @@ export async function stepCollect(ctx: NightContext, deps: CollectStepDeps): Pro
         otherStudentNames: await deps.otherStudentNames(target),
         priorFeedback: await deps.priorFeedback(target),
       });
+      const transient = transientFailures(raw.status);
       const file: BundleFile = {
         target, bundle, prechecks, notes: evidenceNotes(raw, bundle), status: raw.status, collectedAt: ctx.now().toISOString(),
+        transient, improvable: evidenceImprovable({ target, bundle, raw, now: ctx.now() }),
       };
+      if (transient.length > 0) incomplete.push(`${target.wiseSessionId}:${transient.join(",")}`);
       writeJsonAtomic(bundleFile(ctx.paths, target.wiseSessionId), file);
       collected += 1;
       grades[bundle.grade] = (grades[bundle.grade] ?? 0) + 1;
@@ -364,6 +406,7 @@ export async function stepCollect(ctx: NightContext, deps: CollectStepDeps): Pro
     retranscribe,
     wiseReads: deps.collect.gate.reads,
     failures,
+    incomplete,
     undeletedSonioxJobs: undeleted,
   };
   if (stopped) {
@@ -372,7 +415,7 @@ export async function stepCollect(ctx: NightContext, deps: CollectStepDeps): Pro
   }
   // Every class collected (with whatever evidence it has): done. A class that failed outright is left for a re-run;
   // a Soniox job of ours that could not be deleted is listed for a person (the production reaper removes it in 2 h).
-  const status = collected < chosen.length || undeleted.length > 0 ? "partial" : "done";
+  const status = collected < chosen.length || undeleted.length > 0 || incomplete.length > 0 ? "partial" : "done";
   const state = recordStep(ctx, "collect", { status, stop: null, summary });
   return result({ summary, next: status === "done" ? nextStep(state, "collect") : "audit" });
 }
@@ -446,6 +489,7 @@ export async function stepAudit(ctx: NightContext, deps: {
     cached: stage.cached,
     failed: stage.failed,
     skipped: stage.skipped.length,
+    skippedReasons: Object.fromEntries([...new Set(stage.skipped.map((item) => item.reason))].map((reason) => [reason, stage.skipped.filter((item) => item.reason === reason).length])),
     verdicts,
     calls: stage.calls,
     proof: `Opus5.5max ${stage.opusProven}/${stage.calls}`,
@@ -455,8 +499,10 @@ export async function stepAudit(ctx: NightContext, deps: {
     recordStep(ctx, "audit", { status: "stopped", stop: stage.stop.reason, summary });
     return result({ ok: false, stop: stage.stop.reason, next: "report", summary, exitCode: stage.stop.exitCode });
   }
-  const state = recordStep(ctx, "audit", { status: "done", stop: null, summary });
-  return result({ summary, next: nextStep(state, "audit") });
+  // A class skipped for incomplete collection is audited by a later run, once collect completes it.
+  const waiting = stage.skipped.some((item) => item.reason === "collection_incomplete");
+  const state = recordStep(ctx, "audit", { status: waiting ? "partial" : "done", stop: null, summary });
+  return result({ summary, next: waiting ? "report" : nextStep(state, "audit") });
 }
 
 // ---------------------------------------------------------------------------
