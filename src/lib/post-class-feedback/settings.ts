@@ -9,6 +9,9 @@ import { bangkokDateStartUtc, todayBangkok } from "@/lib/room-capacity/dates";
 import { PostClassConflictError, PostClassNotFoundError, PostClassValidationError } from "./errors";
 import { withPostClassTransaction } from "./transaction";
 import { lockPostClassFinance } from "./finance-lock";
+import { requireFeedbackMailboxReadiness } from "./gmail-credentials";
+import { requireReminderLineReadiness } from "./reminder-line";
+import { nightlyActivationCheckpoint } from "./nightly-reminder-model";
 
 const FIELD_KEYS = ["topics", "performance", "improvement", "homework"] as const;
 type FieldKey = (typeof FIELD_KEYS)[number];
@@ -56,6 +59,7 @@ export interface PostClassSettingsPatch {
   mode?: "shadow" | "live" | "paused";
   reminderMode?: "off" | "shadow" | "live";
   reminderActivationAt?: string;
+  reminderIncludeCurrentNight?: boolean;
   legacyReminderDisabled?: boolean;
   effectiveAt?: string | null;
   mapping?: Partial<Record<FieldKey, string | null>>;
@@ -131,7 +135,7 @@ export async function updatePostClassSettings(
   db: Database = getDb(),
 ) {
   return withPostClassTransaction(db, async (tx) => {
-    const [current] = await tx.select().from(schema.postClassSettings).limit(1);
+    const [current] = await tx.select().from(schema.postClassSettings).limit(1).for("update");
     if (!current) throw new PostClassNotFoundError("Post-class feedback settings are not initialized.");
     if (patch.expectedVersion !== current.version) {
       throw new PostClassConflictError();
@@ -164,9 +168,12 @@ export async function updatePostClassSettings(
     let reminderStartedAt = current.reminderStartedAt;
     let reminderActivatedAt = current.reminderActivatedAt;
     let legacyReminderDisabledAt = current.legacyReminderDisabledAt;
+    if (patch.reminderIncludeCurrentNight && (patch.reminderMode !== "live" || current.reminderMode === "live" || patch.reminderActivationAt)) {
+      throw new PostClassValidationError("Tonight's manual batch must be selected at activation without another activation checkpoint.");
+    }
     if (reminderMode !== "off") reminderStartedAt ??= now;
     if (patch.legacyReminderDisabled === true) legacyReminderDisabledAt = now;
-    if (reminderMode === "live" && !reminderActivatedAt) {
+    if (reminderMode === "live" && (current.reminderMode !== "live" || !reminderActivatedAt)) {
       if (patch.mapping) throw new PostClassValidationError("Validate the updated mapping in shadow mode before live reminder activation.");
       if (!legacyReminderDisabledAt) throw new PostClassValidationError("Verify that the legacy reminder trigger is disabled before live activation.");
       const since = new Date(now.getTime() - 24 * 60 * 60_000);
@@ -176,21 +183,17 @@ export async function updatePostClassSettings(
         sql`${schema.postClassNotificationRuns.metadata}->>'policyVersion' = ${String(current.policyVersion)}`,
         sql`${schema.postClassNotificationRuns.metadata}->>'mappingVersion' = ${String(current.formMappingVersion)}`,
       )).limit(1);
-      const tests = await tx.select({ evidence: schema.postClassConfigAuditLog.afterValue }).from(schema.postClassConfigAuditLog).where(and(
-        eq(schema.postClassConfigAuditLog.entityType, "email_delivery"), eq(schema.postClassConfigAuditLog.action, "test_succeeded"),
-        gte(schema.postClassConfigAuditLog.createdAt, since),
-      ));
-      const verified = new Set(tests.filter((row) => typeof row.evidence?.providerMessageId === "string" && row.evidence.providerMessageId)
-        .map((row) => row.evidence?.senderKey));
-      if (!shadow || !verified.has("primary") || !verified.has("backup")) {
-        throw new PostClassValidationError("Complete a current-policy shadow batch and verify primary and backup test receipts within 24 hours before activation.");
-      }
-      reminderActivatedAt = patch.reminderActivationAt ? new Date(patch.reminderActivationAt) : now;
-      if (!Number.isFinite(reminderActivatedAt.getTime()) || reminderActivatedAt.getTime() < now.getTime() - 60_000) {
-        throw new PostClassValidationError("Reminder activation must be prospective.");
+      if (!shadow) throw new PostClassValidationError("Complete a current-policy shadow batch within 24 hours before activation.");
+      await requireFeedbackMailboxReadiness(tx, now);
+      await requireReminderLineReadiness(tx);
+      const next = nightlyActivationCheckpoint(now, patch.reminderIncludeCurrentNight);
+      if (!next) throw new PostClassValidationError("Tonight's manual batch is available after 22:00 Bangkok, before midnight.");
+      reminderActivatedAt = patch.reminderActivationAt ? new Date(patch.reminderActivationAt) : next;
+      if (!Number.isFinite(reminderActivatedAt.getTime()) || reminderActivatedAt < next) {
+        throw new PostClassValidationError("Reminder activation starts at the next prospective 22:00 Bangkok checkpoint.");
       }
     } else if (patch.reminderActivationAt && reminderActivatedAt?.toISOString() !== new Date(patch.reminderActivationAt).toISOString()) {
-      throw new PostClassValidationError("The original reminder activation instant is immutable.");
+      throw new PostClassValidationError("Pause reminders before choosing a new activation checkpoint.");
     }
     let mappingVersion = current.formMappingVersion;
     let mappingValid = current.formMappingValid;
@@ -329,7 +332,7 @@ export async function updatePostClassSettings(
     await tx.insert(schema.postClassConfigAuditLog).values({
       entityType: "settings",
       entityKey: current.id,
-      action: nextMode !== current.enforcementMode
+      action: patch.reminderIncludeCurrentNight ? "reminder_start_tonight" : nextMode !== current.enforcementMode
         ? nextMode === "live" ? "activate" : nextMode === "paused" ? "pause" : "shadow"
         : patch.mapping ? "mapping_update"
           : patch.digestRecipientEmails ? "digest_recipients_update" : "update",
@@ -337,6 +340,7 @@ export async function updatePostClassSettings(
       beforeValue: before,
       afterValue: {
         reminderMode: updated.reminderMode,
+        ...(patch.reminderIncludeCurrentNight ? { reminderIncludeCurrentNight: true, requestedAt: now.toISOString() } : {}),
         reminderActivatedAt: updated.reminderActivatedAt?.toISOString() ?? null,
         legacyReminderDisabledAt: updated.legacyReminderDisabledAt?.toISOString() ?? null,
         mode: updated.enforcementMode,
@@ -346,7 +350,7 @@ export async function updatePostClassSettings(
         digestRecipientEmails,
         version: updated.version,
       },
-      note: null,
+      note: patch.reminderIncludeCurrentNight ? "Access manager explicitly included tonight's batch at activation. All readiness gates passed; dispatch still requires current feedback and deadlines." : null,
     });
     return updated;
   });

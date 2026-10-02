@@ -106,7 +106,10 @@ switch there covers both of their Wise accounts; "Partly on" means the CLI switc
    - webhook deliveries arriving (`select event_name, count(*) from wise_webhook_events group by 1`) and their
      session ids parsed (`wise_session_id is not null`).
 2. Same hour: `--mode=live` and message the tutors:
-   Tutors on the roster: Kevin, Gift, Ek, Peat, Mimi.
+   Tutors on the roster: Kevin, Gift, Ek, Peat, Mimi (29 Sep); Ras, Celeste, Taki, Dome, Mandy, Grace, Mint, Fluke
+   (Chettaporn), Calvin, Lukas, A (Anavat), Ohm, Mookie, then Aey, Mikki, Sagotty, Buzz, Linn, Eng, Kavin, Copter, Amy
+   (2 Oct, live on deploy — a new roster tutor is on unless their
+   accounts are in `disabled_tutors`).
    > From today BGScheduler writes the Wise feedback for your **online one-to-one** classes from the Zoom
    > summary, in English. Offline and group classes are still yours. You can't edit it in Wise afterwards — ask an
    > admin. If an online class still shows blank feedback 3 hours after it ends, tell an admin.
@@ -401,6 +404,17 @@ and judge versions wrote it (the switch itself changed neither; v5 since changed
 again), and its row keeps `arm = 'sol'`, which the old checks would reject. Rows Sol already wrote keep `arm = 'sol'` (the older dashboard shows no model name for them); anything
 else is written again by GLM. No data change is needed.
 
+## 8a. Luna first for the tutors added on 2026-10-02
+
+The 22 tutors added on 2 Oct, in two cohorts of 13 and 9 (roster entries with `writer: "luna"`), are written by Luna (reasoning `max`) first, with
+Sol as their fallback; the GLM judges are unchanged and everyone else keeps Sol then Luna (`writersFor` in
+`config.ts`). No migration: `luna` and `sol` are both allowed arms. In the section 8 query, these tutors' writer rows
+are mostly `luna`; a `sol` row for one of them is a fallback draft. The dashboard's "Written by the fallback writer"
+counts Sol drafts for them and Luna drafts for everyone else.
+
+**Turning one tutor off:** the dashboard switch (`disabled_tutors`), no deploy. **Moving them to Sol first:** remove
+`writer: "luna"` from their roster entries and deploy.
+
 ## 9. Reviewing posts (operating loop)
 
 `/feedback-autowriter` → **What needs you → To review** → Review. The group lists every flagged post, then every
@@ -432,7 +446,13 @@ write (`api_actor_unmatched`, critical) blocks the gate until you acknowledge it
 the API key first. Incidents: `critical_verdict`, `critical_flag` /
 `credit_entries_changed` (a post landed without verifying) and `api_actor_unmatched` (an API save no recorded post
 explains — check who wrote to Wise with the API key) are pushed; `first_shot_unverified` is shown only (critical when
-the post did not verify) — run the backfill script to prove it, or confirm by hand what was posted. A critical
+the post did not verify) — run the backfill script to prove it, or confirm by hand what was posted.
+`atom_collection_failed` (an Atom collector run failed; lesson-only feedback carries on) and
+`style_review_source_missing` (a guided post has no retained evidence or both factual verdicts) are critical and
+pushed. Style review results are dashboard-only, never pushed (owner, 2 Oct 2026): `style_review_flagged` (the post
+needs a style fix — listed in What needs you, not red, until acknowledged) and `style_review_unavailable` (the
+reviewer returned no verdict; it retries after 6 hours, shown under Details only). `scan_failed` is kept for the
+forward scan; before migration 0110 the Atom collector and the style review recorded under it. A critical
 incident that was not delivered keeps the review job red (Data Health) until you **Acknowledge** it (What needs you →
 Incidents → Open; its pushes stop too).
 

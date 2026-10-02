@@ -3795,6 +3795,70 @@ export const postClassSourceIssues = pgTable("post_class_source_issues", {
   index("pc_source_issues_session_idx").on(table.sessionId),
 ]);
 
+export interface FeedbackReceiptEvidence {
+  hash: string;
+  actor: string;
+  binding: string;
+  expiresAt: string;
+  attempts: number;
+  acceptedAt?: string;
+  receipt?: string;
+  confirmedAt?: string;
+}
+
+/** Separate send-only grant: ordinary Google login never touches this row. */
+export const postClassEmailConnection = pgTable("post_class_email_connection", {
+  id: text("id").primaryKey().default("gmail"),
+  clientId: text("client_id").notNull(),
+  mailbox: text("mailbox").notNull(),
+  googleSubject: text("google_subject").notNull(),
+  revision: integer("revision").notNull().default(1),
+  accessTokenCiphertext: text("access_token_ciphertext").notNull(),
+  refreshTokenCiphertext: text("refresh_token_ciphertext").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  scope: text("scope").notNull(),
+  connectedBy: text("connected_by").notNull(),
+  connectedAt: timestamp("connected_at", { withTimezone: true }).notNull().defaultNow(),
+  refreshedAt: timestamp("refreshed_at", { withTimezone: true }),
+  checkedAt: timestamp("checked_at", { withTimezone: true }),
+  lastError: text("last_error"),
+  testEvidence: jsonb("test_evidence").$type<FeedbackReceiptEvidence>(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const postClassReminderLineChannel = pgTable("post_class_reminder_line_channel", {
+  id: text("id").primaryKey().default("private"),
+  recipientId: text("recipient_id").notNull(),
+  binding: text("binding").notNull(),
+  testEvidence: jsonb("test_evidence").$type<FeedbackReceiptEvidence>(),
+  health: text("health").notNull().default("unknown"),
+  episodeId: uuid("episode_id"),
+  checkedAt: timestamp("checked_at", { withTimezone: true }),
+  detail: text("detail"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Frozen private alerts; id is also LINE's 24-hour retry key. */
+export const postClassReminderAlerts = pgTable("post_class_reminder_alerts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  episodeId: uuid("episode_id").notNull(),
+  kind: text("kind").notNull(),
+  recipientId: text("recipient_id").notNull(),
+  binding: text("binding").notNull(),
+  message: text("message").notNull(),
+  status: text("status").notNull().default("pending"),
+  attempts: integer("attempts").notNull().default(0),
+  firstAttemptAt: timestamp("first_attempt_at", { withTimezone: true }),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  leaseToken: uuid("lease_token"),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  lastError: text("last_error"),
+  receipt: text("receipt"),
+  acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [uniqueIndex("pc_reminder_alert_episode_idx").on(table.episodeId, table.kind)]);
+
 export const postClassNotificationRuns = pgTable("post_class_notification_runs", {
   id: uuid("id").primaryKey().defaultRandom(),
   kind: postClassNotificationKindEnum("kind").notNull(),
@@ -6420,6 +6484,7 @@ export const feedbackAutowriterIncidents = pgTable("feedback_autowriter_incident
   kind: text("kind").$type<
     | "halt" | "correction_failed" | "critical_verdict" | "critical_flag" | "credit_entries_changed"
     | "api_actor_unmatched" | "first_shot_unverified" | "scan_failed"
+    | "atom_collection_failed" | "style_review_flagged" | "style_review_unavailable" | "style_review_source_missing"
   >().notNull(),
   severity: text("severity").$type<"critical" | "info">().notNull(),
   wiseSessionId: text("wise_session_id"),

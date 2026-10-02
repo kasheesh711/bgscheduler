@@ -9,10 +9,22 @@ export interface WorkforceQuery {
   subject?: string; curriculum?: string; level?: string;
   modality: "all" | WorkforceModality;
 }
+/** Counts within the selected class/time scope; not a percentage of an unobserved roster. */
+export interface WorkforceCreditCoverage {
+  totalClasses: number;
+  computedClasses: number;
+  estimatedClasses: number;
+  unknownClasses: number;
+  returnedParticipants: number;
+  verifiedCreditParticipants: number;
+  unknownCreditParticipants: number;
+}
 export interface WorkforceMetric {
   value: number | null;
   completeness: WorkforceCompleteness;
   reasonCodes: string[];
+  /** A returned-roster estimate is neither a complete total nor a lower bound. */
+  creditCoverage?: WorkforceCreditCoverage;
 }
 export interface WorkforceAccount {
   wiseTeacherId: string;

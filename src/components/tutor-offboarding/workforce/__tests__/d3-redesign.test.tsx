@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { WorkforceDashboard } from "../dashboard";
 import { WorkforceFilters } from "../filters";
 import { SubjectMatrix } from "../subject-matrix";
+import { DemandView } from "../demand-view";
 import { UtilizationTable } from "../utilization-table";
 import {
   GrowthView,
@@ -32,7 +33,7 @@ describe("D3 workforce redesign", () => {
       />,
     );
     expect(html).toContain('role="tablist"');
-    for (const view of ["Overview", "Supply &amp; demand", "Tutors", "Growth"])
+    for (const view of ["Overview", "Demand", "Tutor capacity", "Hiring"])
       expect(html).toContain(view);
     expect(html).toContain('aria-selected="true"');
     expect(html).toContain("Workforce movement");
@@ -80,7 +81,7 @@ describe("D3 workforce redesign", () => {
       "Recorded teaching utilization",
       "125%",
       "100%",
-      "View data &amp; exceptions",
+      "View calculations and data quality",
     ])
       expect(people).toContain(label);
   });
@@ -125,7 +126,7 @@ describe("D3 workforce redesign", () => {
     expect(cleared.subjects?.[a]).toEqual({ churnStudentHours: 1 });
     expect(initial.subjects[a].newStudentHours).toBe(4);
   });
-  it("shows observed flows, signed loss axis, starting cohort, unknown forecasts and hiring benchmarks", () => {
+  it("shows observed flows, signed loss axis, starting cohort, unknown forecasts and a simple hiring equation", () => {
     const report = growthPreviewFixture(),
       flow = renderToStaticMarkup(
         <GrowthFlowChart
@@ -140,21 +141,62 @@ describe("D3 workforce redesign", () => {
     expect(flow).toContain("Starting cohort · excluded from growth averages");
     for (const text of [
       "All teaching staff · all modes",
-      "Three-month monthly mean",
       "Jun 2026",
       "Aug 2026",
-      "Flat demand",
-      "Course hiring estimates",
-      "Mean matching",
+      "Where do we need more tutors?",
+      "hours short / week",
+      "matching hours / tutor",
+      "tutor equivalents",
+      "How calculated · step by step",
       "total offered",
-      "known",
+      "comparable tutors have recorded schedules",
       "Reset to measured model",
-      "Unavailable",
+      "Needs data",
     ]) {
-      if (text === "known") expect(html).toContain("Known / eligible");
-      else expect(html).toContain(text);
+      expect(html).toContain(text);
     }
+    expect(html).not.toMatch(/<details[^>]*open/);
     expect(html).not.toContain("May–July");
+  });
+  it("leads demand with one hours chart and keeps raw data and heatmaps collapsed", () => {
+    const report = workforcePreviewFixture();
+    const html = renderToStaticMarkup(
+      <DemandView
+        report={report}
+        onSelect={() => {}}
+        onWeekSelect={() => {}}
+      />,
+    );
+    expect(html).toContain("demand over time");
+    expect(html).toContain('aria-label="Demand subject"');
+    expect(html).toContain('aria-label="Demand curriculum"');
+    expect(html).toContain('aria-label="Demand level"');
+    expect(html).toContain("How calculated");
+    expect(html).toContain(
+      "Cancellations and no-shows remain in booked demand",
+    );
+    expect(html).toContain("Month to date · dashed line");
+    expect(html).toContain("Compare subjects across months");
+    expect(html).not.toMatch(/<details[^>]*open/);
+  });
+  it("does not present a scheduled-class floor as a complete growth forecast", () => {
+    const report = growthPreviewFixture();
+    report.forecast.inputs[0].churnStudentHours = {
+      value: null,
+      source: "unavailable",
+      measured: {
+        value: null,
+        completeness: "unknown",
+        reasonCodes: ["UNCONFIRMED_LOSSES"],
+      },
+    };
+    const html = renderToStaticMarkup(
+      <GrowthView filters={filters} initial={report} />,
+    );
+    expect(html).toMatch(/still needs? a growth assumption/);
+    expect(html).toContain("Their gaps use scheduled classes only");
+    expect(html).toContain("Review assumptions");
+    expect(html).toContain("Monthly lost demand");
   });
   it("shows unavailable projection month when an academic filter returns no courses", () => {
     const selected = { ...filters, subject: "Unmapped subject" },

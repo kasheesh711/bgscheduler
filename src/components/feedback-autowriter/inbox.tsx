@@ -19,7 +19,7 @@ import { ARM_LABEL } from "./model-labels";
 // ----------------------------------------------------------------------------
 
 const GROUP_VIEW: Record<InboxItemKind, { icon: LucideIcon; note: string }> = {
-  incident: { icon: TriangleAlert, note: "Critical · not acknowledged" },
+  incident: { icon: TriangleAlert, note: "Not acknowledged" },
   hold: { icon: Clock, note: "Not posted · needs a person before the deadline" },
   review: { icon: FileText, note: "Posted · awaiting your verdict" },
   decision: { icon: Split, note: "From the forward scan" },
@@ -106,11 +106,12 @@ function rowView(item: InboxItem, dashboard: AutowriterDashboard, review: Autowr
   if (item.kind === "incident") {
     const incident = review?.incidents.find((entry) => `incident:${entry.id}` === item.id);
     const tutor = item.tutorKey ? dashboard.tutors.find((entry) => entry.tutorKey === item.tutorKey)?.tutorKey ?? null : null;
+    const critical = item.urgency === "critical";
     return {
-      tile: "red",
-      action: "red",
+      tile: critical ? "red" : "neutral",
+      action: critical ? "red" : "neutral",
       title: item.title,
-      tags: <Tag tone="red">Critical{incident ? ` · ${dayOf(incident.createdAt)}` : ""}</Tag>,
+      tags: <Tag tone={critical ? "red" : "neutral"}>{critical ? "Critical" : "Info"}{incident ? ` · ${dayOf(incident.createdAt)}` : ""}</Tag>,
       sub: joined(tutor, item.detail),
     };
   }
@@ -186,7 +187,7 @@ export function Inbox({ items, dashboard, review, now, filteredTo, reviewUnavail
         <div className="flex-1">
           {groups.map((group) => {
             const { icon: Icon, note } = GROUP_VIEW[group.kind];
-            const critical = group.kind === "incident";
+            const critical = group.items.some((item) => item.urgency === "critical" && item.kind === "incident");
             return (
               <div key={group.kind} data-group={group.kind}>
                 <div className="flex items-center justify-between gap-3 border-b bg-muted/40 px-5 py-[9px]">
@@ -203,7 +204,7 @@ export function Inbox({ items, dashboard, review, now, filteredTo, reviewUnavail
                     const target = drawerTargetFor(item);
                     return (
                       <li key={item.id} data-tutor={item.tutorKey ?? undefined}
-                        className={cn("flex min-h-16 items-center gap-[11px] border-b px-5 py-3", critical && "bg-conflict/[0.03]")}>
+                        className={cn("flex min-h-16 items-center gap-[11px] border-b px-5 py-3", item.kind === "incident" && item.urgency === "critical" && "bg-conflict/[0.03]")}>
                         <span className={cn("grid size-[29px] shrink-0 place-items-center rounded-[7px]", TILE_TONE[view.tile])}>
                           <Icon aria-hidden className="size-4" strokeWidth={1.6} />
                         </span>

@@ -54,6 +54,12 @@ describe("authorized workforce reports and exports",()=>{
     expect(await response.json()).toEqual(report);
     expect(vi.mocked(getWorkforceReport).mock.calls[0][1]).toEqual(report.query);
   });
+  it("forwards explicit refresh only after authorization and preserves private no-store", async () => {
+    const original = request();
+    const response = await reportGet(new Request(original.url, { headers: { 'x-workforce-refresh': '1' } }));
+    expect(vi.mocked(getWorkforceReport).mock.lastCall?.[4]).toBe(true);
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+  });
   it("rejects malformed filters before a data read",async()=>{
     const response=await reportGet(new Request("https://example.test/?from=2026-02-30"));
     expect(response.status).toBe(400);

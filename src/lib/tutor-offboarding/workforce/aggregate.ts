@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { buildCapacity, qualificationMatches, queryBounds, sessionInterval, type PersonCapacity } from './capacity';
-import { computeConsumedMinutes, isCancelledSession, isNoShowSession, recordedTeachingMinutes } from './credits';
+import { computeConsumedMinutes, isCancelledSession, isNoShowSession, recordedTeachingMinutes, sumCreditCoverage } from './credits';
 import { bangkokDayStart, bangkokMonthBounds, intersectIntervals, intervalMinutes, subtractIntervals, unionIntervals, type Interval } from './intervals';
 import { resolveAcademicSubject } from './subject-mappings';
 import { buildTurnoverMonths, buildWorkforcePersonStates } from './turnover';
@@ -92,13 +92,16 @@ function sourceComplete(prepared: PreparedWorkforce, mask: Interval[]): boolean 
     return subtractIntervals(mask, history).length === 0;
 }
 function sumEvidence(rows: PreparedClass[], field: 'consumed' | 'taught', mask: Interval[], complete: boolean, exactOverlap: boolean): WorkforceMetric {
-    let total = 0, known = 0, missing = false;
+    let total = 0, known = 0, missing = false, partial = false;
+    const included: WorkforceMetric[] = [];
     const reasons: string[] = [];
     for (const row of rows) {
         const fraction = exactOverlap && row.interval ? intervalMinutes(intersectIntervals([row.interval], mask)) / intervalMinutes([row.interval]) : 1;
         if (fraction <= 0)
             continue;
         reasons.push(...row[field].reasonCodes);
+        included.push(row[field]);
+        partial ||= row[field].completeness !== 'complete';
         if (row[field].value === null)
             missing = true;
         else {
@@ -108,7 +111,8 @@ function sumEvidence(rows: PreparedClass[], field: 'consumed' | 'taught', mask: 
     }
     if (!complete)
         reasons.push('SESSION_HISTORY_INCOMPLETE');
-    return metric(missing && !known || !rows.length && !complete ? null : total, reasons, missing || !complete);
+    return { ...metric(missing && !known || !rows.length && !complete ? null : total, reasons, missing || partial || !complete),
+        ...(field === 'consumed' ? { creditCoverage: sumCreditCoverage(included) } : {}) };
 }
 /** Demand uses the verified full period; ratios use precisely the observed capacity mask. */
 export function measureWorkforce(prepared: PreparedWorkforce, query: WorkforceQuery, mask: Interval[], candidateRows = prepared.classes, candidatePeople = pool(prepared, query), exactOverlap = false): WorkforceUtilizationMetrics {
@@ -147,6 +151,7 @@ export function measureWorkforce(prepared: PreparedWorkforce, query: WorkforceQu
     let coverage = 0, expected = 0, offered = 0, leave = 0, usable = 0, free = 0, outside = 0, overlap = 0;
     let maskedReserved = 0, maskedConsumed = 0, maskedTaught = 0, reserved = 0;
     let missingConsumed = false, missingTaught = false, qualificationPartial = false;
+    const coveredConsumed: WorkforceMetric[] = [];
     const capacityReasons: string[] = [];
     const reportBounds = queryBounds(query);
     const observedMask = intersectIntervals(mask, [{ start: reportBounds.start, end: Math.max(reportBounds.start, Math.min(reportBounds.end, prepared.now.getTime())) }]);
@@ -172,6 +177,7 @@ export function measureWorkforce(prepared: PreparedWorkforce, query: WorkforceQu
                 outside += intervalMinutes(subtractIntervals(intersectIntervals([row.interval!], support), offeredIntervals));
             }
             if (covered > 0) {
+                coveredConsumed.push(row.consumed);
                 if (row.consumed.value === null)
                     missingConsumed = true;
                 else
@@ -211,6 +217,19 @@ export function measureWorkforce(prepared: PreparedWorkforce, query: WorkforceQu
     const cap = (minutes: number) => metric(hasCoverage ? minutes / 60 : null, capacityReasons, partialCapacity);
     const numerator = (minutes: number, missing: boolean) => metric(hasCoverage ? minutes / 60 : null, [...capacityReasons, ...(missing ? ['UTILIZATION_CLASS_EVIDENCE_INCOMPLETE'] : [])], partialCapacity || missing || !complete);
     const ratio = (minutes: number, missing: boolean) => metric(hasCoverage && usable > 0 && !missing && !identityUnknown && !busyDurationUnknown ? minutes / usable * 100 : null, [...capacityReasons, ...(usable === 0 ? ['NO_USABLE_CAPACITY'] : []), ...(missing ? ['UTILIZATION_CLASS_EVIDENCE_INCOMPLETE'] : [])], partialCapacity || !complete);
+    const creditCoverage = sumCreditCoverage(coveredConsumed);
+    const consumedPartial = coveredConsumed.some(m => m.completeness !== 'complete');
+    const consumedReasons = coveredConsumed.flatMap(m => m.reasonCodes);
+    const consumedNumerator = numerator(maskedConsumed, missingConsumed);
+    const consumedRatio = ratio(maskedConsumed, missingConsumed);
+    const noKnownConsumed = creditCoverage.totalClasses > 0 && creditCoverage.computedClasses === 0;
+    const withCreditCoverage = (value: WorkforceMetric): WorkforceMetric => ({ ...value,
+        completeness: value.value === null ? 'unknown' : consumedPartial ? 'partial' : value.completeness,
+        reasonCodes: unique([...value.reasonCodes, ...consumedReasons]), creditCoverage });
+    if (noKnownConsumed || !complete && !coveredConsumed.length) {
+        consumedNumerator.value = null;
+        consumedNumerator.completeness = 'unknown';
+    }
     return {
         uniqueStudents: metric(absentDemand ? null : ids.size, participantReasons, demandPartial || membershipUnknown),
         studentBookings: metric(absentDemand ? null : bookings, participantReasons, demandPartial || membershipUnknown),
@@ -223,10 +242,10 @@ export function measureWorkforce(prepared: PreparedWorkforce, query: WorkforceQu
         offeredHours: cap(offered), leaveHours: cap(leave), usableHours: cap(usable), freeHours: busyDurationUnknown ? metric(null, capacityReasons) : cap(free),
         reservedHours: metric(absentDemand || busyDurationUnknown ? null : reserved / 60, identityUnknown ? ['CONFLICTING_TUTOR_ASSIGNMENT'] : demandReasons, demandPartial),
         outsideHours: cap(outside), overlapHours: cap(overlap),
-        utilizationReservedHours: numerator(maskedReserved, identityUnknown), utilizationCreditConsumedHours: numerator(maskedConsumed, missingConsumed), utilizationRecordedTeachingHours: numerator(maskedTaught, missingTaught),
+        utilizationReservedHours: numerator(maskedReserved, identityUnknown), utilizationCreditConsumedHours: withCreditCoverage(consumedNumerator), utilizationRecordedTeachingHours: numerator(maskedTaught, missingTaught),
         coverageHours: metric(coverage / 60, capacityReasons, partialCapacity), expectedCoverageHours: metric(expected / 60),
         coveragePercent: metric(expected > 0 ? coverage / expected * 100 : null, capacityReasons, partialCapacity),
-        reservedUtilizationPercent: ratio(maskedReserved, identityUnknown), consumedUtilizationPercent: ratio(maskedConsumed, missingConsumed), recordedTeachingUtilizationPercent: ratio(maskedTaught, missingTaught),
+        reservedUtilizationPercent: ratio(maskedReserved, identityUnknown), consumedUtilizationPercent: withCreditCoverage(consumedRatio), recordedTeachingUtilizationPercent: ratio(maskedTaught, missingTaught),
     };
 }
 export function subjectKey(month: string, subject: string, curriculum: string | null, level: string | null): string {

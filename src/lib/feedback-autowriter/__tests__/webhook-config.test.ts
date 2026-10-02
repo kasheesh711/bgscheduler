@@ -8,6 +8,7 @@ import {
   autowriterTranscriptFirst,
   autowriterWritesAllowedHere,
   openRouterApiKey,
+  writersFor,
 } from "../config";
 import { classifyGateReason } from "../session";
 import {
@@ -102,6 +103,19 @@ describe("config", () => {
     for (const config of Object.values(AUTOWRITER_MODELS)) {
       expect(config.provider).toMatchObject({ zdr: true, data_collection: "deny", require_parameters: true });
     }
+  });
+
+  it("writes the tutors added on 2 Oct with Luna first and Sol as their fallback; everyone else Sol then Luna", () => {
+    const solFirst = [AUTOWRITER_MODELS.writer, AUTOWRITER_MODELS.fallbackWriter];
+    const lunaFirst = [AUTOWRITER_MODELS.fallbackWriter, AUTOWRITER_MODELS.writer];
+    expect(writersFor("Mimi")).toEqual(solFirst);
+    expect(writersFor("Kevin")).toEqual(solFirst);
+    for (const key of ["Ras", "Celeste", "Taki", "Dome", "Mandy", "Grace", "Mint", "Fluke", "Calvin", "Lukas", "A", "Ohm", "Mookie"]) {
+      expect(writersFor(key)).toEqual(lunaFirst);
+    }
+    // Not on the roster (or unknown): the default order, never a guess.
+    expect(writersFor("Fluke-Supha")).toEqual(solFirst);
+    expect(writersFor(undefined)).toEqual(solFirst);
   });
 
   it("keeps a writer per arm for the evaluation CLI", () => {

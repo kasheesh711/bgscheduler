@@ -21,7 +21,7 @@ const availability = { enabled: true, storage: true, transcription: true, drafti
 let capture = null;
 let transcriptionOutcome = "success";
 const uploaded = new Set();
-const metrics = { creates: 0, assetIntents: 0, uploads: 0, transcriptions: 0, drafts: 0, gets: 0, patches: 0 };
+const metrics = { creates: 0, assetIntents: 0, uploads: 0, transcriptions: 0, drafts: 0, gets: 0, patches: 0, lists: 0 };
 const results = [];
 
 const ENTRY = `
@@ -70,7 +70,7 @@ window.__fakeUpload = async (pathname, body, options) => {
   options.onUploadProgress?.({ percentage: 100, loaded: body.size, total: body.size });
   return { pathname };
 };
-createRoot(document.getElementById("root")).render(<ClassCaptureWorkspace ownerEmail={window.__owner} enabled={params.get("paused") !== "true"} initialDate="2026-10-01" />);
+createRoot(document.getElementById("root")).render(<ClassCaptureWorkspace ownerEmail={window.__owner} enabled={params.get("paused") !== "true"} />);
 `;
 
 const bundled = await build({
@@ -97,7 +97,7 @@ const server = createServer(async (request, response) => {
   const body = raw ? JSON.parse(raw) : {};
   if (url.pathname === "/__fixture-upload") { metrics.uploads++; uploaded.add(body.pathname); json(response, { ok: true }); return; }
   if (url.pathname === "/api/class-capture") {
-    if (request.method === "GET") { json(response, { sessions: [session], availability }); return; }
+    if (request.method === "GET") { metrics.lists++; assert.equal(url.search, "", "The browser must not choose a listing date"); json(response, { sessions: [session], availability }); return; }
     metrics.creates++;
     capture ??= { id: body.id, session, topic: body.topic, tutorNotes: "", consent: body.consent, assets: [], draft: null, reviewed: false, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), version: 0 };
     json(response, { capture }); return;
@@ -157,6 +157,7 @@ try {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, permissions: ["clipboard-read", "clipboard-write"] });
   await context.route("**/*", route => route.request().url().startsWith(origin) ? route.continue() : route.abort());
   const page = await context.newPage();
+  await page.clock.setFixedTime(new Date("2026-10-01T16:00:00Z"));
   const pageErrors = [];
   page.on("pageerror", error => pageErrors.push(error.message));
   await page.goto(origin);
@@ -165,6 +166,8 @@ try {
     await page.getByRole("button", { name: /Ari \(fictional\)/ }).waitFor();
     assert.equal(await page.getByRole("button", { name: "Prepare class capture" }).isDisabled(), true);
     assert.equal(await page.evaluate(() => window.__micRequests), 0);
+    assert.equal(await page.locator('input[type="date"]').count(), 0);
+    await page.getByText("Today · Bangkok", { exact: true }).waitFor();
     await page.screenshot({ path: path.join(OUT, "mobile-select-class.png") });
     await page.getByRole("button", { name: /Ari \(fictional\)/ }).click();
     await page.getByLabel("Today’s lesson topic").fill("Equivalent fractions");
@@ -198,11 +201,20 @@ try {
   });
 
   await check("Visible recording stops on background and keeps recoverable audio", async () => {
+    await page.clock.setFixedTime(new Date("2026-10-01T16:59:58Z"));
     await page.evaluate(() => { window.__micMode = "allowed"; });
     await page.getByLabel("All participants still agree", { exact: false }).check();
     await page.getByRole("button", { name: "Start class recording" }).click();
     await page.getByText("Recording class audio", { exact: true }).waitFor();
     await page.evaluate(() => window.__recorder.emit());
+    const stoppedBeforeMidnight = await page.evaluate(() => window.__trackStops);
+    await page.clock.setFixedTime(new Date("2026-10-01T17:00:00Z"));
+    await Promise.all([
+      page.waitForResponse(response => response.url() === `${origin}/api/class-capture` && response.request().method() === "GET"),
+      page.evaluate(() => window.dispatchEvent(new Event("focus"))),
+    ]);
+    await page.getByText("Recording class audio", { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => window.__trackStops), stoppedBeforeMidnight, "Refreshing today's list must not stop an active recording");
     await page.locator("[data-class-capture]").evaluate(element => { element.scrollTop = 0; });
     await page.screenshot({ path: path.join(OUT, "mobile-recording.png") });
     await page.evaluate(() => {
@@ -238,6 +250,7 @@ try {
   });
 
   await check("Tutor notes and photos remain distinct from class transcript", async () => {
+    await page.clock.setFixedTime(new Date("2026-10-01T16:59:58Z"));
     await page.getByLabel("Tutor observations", { exact: false }).fill("Tutor observation: Ari completed two written examples independently and needed one reminder about equivalent ratios.");
     await page.getByRole("button", { name: "Save observations" }).click();
     await page.getByText("Your observations were saved", { exact: false }).waitFor();
@@ -274,6 +287,29 @@ try {
     await page.getByLabel("Difficulties", { exact: true }).fill("A new tutor edit requires another review.");
     assert.equal(await page.getByRole("button", { name: "Copy reviewed feedback" }).isDisabled(), true);
     assert.equal(await page.getByRole("link", { name: "Open Wise to submit" }).count(), 0);
+  });
+
+  await check("Focus and a new Bangkok day preserve active draft edits, review and local media", async () => {
+    const notes = "Unsaved tutor observation: keep this text through list refresh.";
+    const difficulty = "Unsaved difficulty: preserve this edited draft field.";
+    await page.getByLabel("Tutor observations", { exact: false }).fill(notes);
+    await page.getByLabel("Difficulties", { exact: true }).fill(difficulty);
+    await page.getByLabel("I reviewed the evidence", { exact: false }).check();
+    const id = capture.id;
+    const previousGets = metrics.gets;
+    const previousLocal = await page.evaluate(() => window.__listLocal());
+    await page.clock.setFixedTime(new Date("2026-10-01T17:00:01Z"));
+    await Promise.all([
+      page.waitForResponse(response => response.url() === `${origin}/api/class-capture` && response.request().method() === "GET"),
+      page.evaluate(() => window.dispatchEvent(new Event("focus"))),
+    ]);
+    assert.equal(await page.getByLabel("Tutor observations", { exact: false }).inputValue(), notes);
+    assert.equal(await page.getByLabel("Difficulties", { exact: true }).inputValue(), difficulty);
+    assert.equal(await page.getByLabel("I reviewed the evidence", { exact: false }).isChecked(), true);
+    assert.equal(capture.id, id);
+    assert.equal(metrics.gets, previousGets, "List refresh must not reload the active capture over unsaved fields");
+    assert.deepEqual((await page.evaluate(() => window.__listLocal())).map(record => record.assetId), previousLocal.map(record => record.assetId));
+    await page.clock.setFixedTime(new Date("2026-10-01T17:00:01Z"));
   });
 
   await check("Regeneration resets the existing draft before an explicit new generation", async () => {
@@ -350,6 +386,94 @@ try {
     assert.equal(await page.evaluate(() => window.__micRequests), 0);
     await page.screenshot({ path: path.join(OUT, "mobile-paused.png") });
   });
+
+  const todayContext = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
+  await todayContext.route("**/*", route => route.request().url().startsWith(origin) ? route.continue() : route.abort());
+  const todayPage = await todayContext.newPage();
+  todayPage.on("pageerror", error => pageErrors.push(error.message));
+  await todayPage.clock.install({ time: new Date("2026-10-01T16:59:00Z") });
+  let listDay = "2026-10-01";
+  let listName = "Today pupil (fictional)";
+  let failList = false;
+  let holdNextList = false;
+  let heldResponse;
+  let heldArrival;
+  let heldFinished;
+  let todayRequests = 0;
+  const listed = () => ({ sessions: [{ ...session, sessionId: `${listDay}-own-session`, studentName: listName, startTime: `${listDay}T08:00:00Z`, endTime: `${listDay}T09:00:00Z` }], availability });
+  await todayPage.route(`${origin}/api/class-capture`, async route => {
+    assert.equal(new URL(route.request().url()).search, "");
+    assert.equal(route.request().method(), "GET", "Calendar checks must not create a capture");
+    todayRequests++;
+    const body = JSON.stringify(listed());
+    if (holdNextList) {
+      holdNextList = false;
+      heldArrival();
+      await new Promise(resolve => { heldResponse = resolve; });
+      await route.fulfill({ status: 200, contentType: "application/json", body });
+      heldFinished();
+    } else await route.fulfill({ status: failList ? 503 : 200, contentType: "application/json", body: failList ? JSON.stringify({ error: "Synthetic schedule refresh failure." }) : body });
+  });
+  await todayPage.goto(origin);
+
+  await check("Bangkok midnight clears pending choices and consent and loads today's list", async () => {
+    await todayPage.getByRole("button", { name: /Today pupil/ }).click();
+    await todayPage.getByLabel("Today’s lesson topic").fill("Synthetic lesson");
+    await todayPage.getByLabel("I have explained this recording", { exact: false }).check();
+    await todayPage.getByLabel("Guardian permission", { exact: true }).selectOption("confirmed");
+    await todayPage.getByLabel("I have permission to use private Vercel Blob storage", { exact: false }).check();
+    assert.equal(await todayPage.getByRole("button", { name: "Prepare class capture" }).isEnabled(), true);
+    listDay = "2026-10-02";
+    listName = "New day pupil (fictional)";
+    await todayPage.clock.fastForward(61_000);
+    await todayPage.getByRole("button", { name: /New day pupil/ }).waitFor();
+    assert.equal(await todayPage.getByRole("button", { name: /Today pupil/ }).count(), 0);
+    assert.equal(await todayPage.getByRole("button", { name: "Prepare class capture" }).isDisabled(), true);
+    assert.equal(await todayPage.getByLabel("I have explained this recording", { exact: false }).isChecked(), false);
+    assert.equal(await todayPage.getByLabel("Guardian permission", { exact: true }).inputValue(), "");
+    assert.equal(await todayPage.getByLabel("I have permission to use private Vercel Blob storage", { exact: false }).isChecked(), false);
+    await todayPage.getByRole("heading", { name: "Your classes today" }).evaluate(element => element.closest("section").scrollIntoView({ block: "start" }));
+    await todayPage.screenshot({ path: path.join(OUT, "mobile-today-rollover.png") });
+  });
+
+  await check("A late older response cannot restore a superseded class list", async () => {
+    listName = "Obsolete response pupil (fictional)";
+    holdNextList = true;
+    const arrived = new Promise(resolve => { heldArrival = resolve; });
+    const finished = new Promise(resolve => { heldFinished = resolve; });
+    await todayPage.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await arrived;
+    listName = "Newest response pupil (fictional)";
+    await todayPage.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await todayPage.getByRole("button", { name: /Newest response pupil/ }).waitFor();
+    heldResponse();
+    await finished;
+    await todayPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => resolve())));
+    assert.equal(await todayPage.getByRole("button", { name: /Obsolete response pupil/ }).count(), 0);
+    assert.equal(await todayPage.getByRole("button", { name: /Newest response pupil/ }).count(), 1);
+  });
+
+  await check("Visible return after suspended timers refreshes today and recovers a failed refresh", async () => {
+    await todayPage.getByRole("button", { name: /Newest response pupil/ }).click();
+    await todayPage.getByLabel("I have explained this recording", { exact: false }).check();
+    const previousRequests = todayRequests;
+    await todayPage.evaluate(() => { Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
+    assert.equal(todayRequests, previousRequests);
+    await todayPage.clock.setSystemTime(new Date("2026-10-02T17:00:01Z"));
+    listDay = "2026-10-03";
+    listName = "Returned pupil (fictional)";
+    failList = true;
+    await todayPage.evaluate(() => { Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
+    await todayPage.getByText("Synthetic schedule refresh failure.", { exact: false }).waitFor();
+    assert.equal(await todayPage.getByRole("button", { name: /Newest response pupil/ }).count(), 0);
+    assert.equal(await todayPage.getByLabel("I have explained this recording", { exact: false }).isChecked(), false);
+    failList = false;
+    await todayPage.getByRole("button", { name: "Retry today’s classes" }).click();
+    await todayPage.getByRole("button", { name: /Returned pupil/ }).waitFor();
+    assert.equal(await todayPage.locator('time[datetime="2026-10-03"]').count(), 1);
+    assert.equal(await todayPage.locator('input[type="date"]').count(), 0);
+  });
+  await todayContext.close();
   assert.deepEqual(pageErrors, [], `Unexpected browser errors: ${pageErrors.join(", ")}`);
   writeFileSync(path.join(OUT, "acceptance-results.json"), `${JSON.stringify({ syntheticOnly: true, providerCalls: 0, checks: results, metrics, unverified: ["Real iOS Safari and Android Chrome hardware, phone calls, lockscreen and OS termination", "Live private Blob upload, Soniox transcription and OpenRouter draft generation", "Production account grants, scheduling snapshots and Wise submission", "Reliable recovery after abrupt browser/process termination is not guaranteed"] }, null, 2)}\n`);
   process.stdout.write(`Saved ${results.length} passing synthetic acceptance checks and screenshots to ${OUT}\n`);

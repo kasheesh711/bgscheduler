@@ -5,7 +5,7 @@ import * as s from "@/lib/db/schema";
 import { AUTOWRITER_MODELS, openRouterApiKey } from "./config";
 import { ISEB_FORMAT_GUIDE, validateIsebFormat } from "./format";
 import { MIMI_STYLE_GUIDE, MIMI_STYLE_GUIDE_V2, styleInstructions, validateStyleFormat } from "./style";
-import { callOpenRouter } from "./openrouter";
+import { callOpenRouter, callWithRateLimitRetries, isRateLimited } from "./openrouter";
 import { passingStoredVerdict } from "./judge";
 import { recordIncident } from "./incidents";
 import { evidenceHash } from "./atom/evidence";
@@ -19,8 +19,20 @@ const Output = z.object({ matches: z.boolean(), problems: z.array(z.string().max
 const OUTPUT_SCHEMA = { type: "object", additionalProperties: false, required: ["matches", "problems"],
   properties: { matches: { type: "boolean" }, problems: { type: "array", items: { type: "string" } } } } as const;
 
-/** API style review is separate from both factual judges and cannot override either verdict. */
-export async function reviewIsebPosts(db: Database, deadlineMs: number, callModel = callOpenRouter) {
+/**
+ * API style review is separate from both factual judges and cannot override either verdict. The check runs on the
+ * writer's route, which is rate limited upstream in bursts (seen 30 Sep and 2 Oct 2026), so a rate-limited
+ * call is tried again in the same run like every other model call (`callWithRateLimitRetries`), and a check that
+ * still fails keeps the provider's own error on its review row. A limit that outlasts one post's retries ends the run's
+ * reviews, as the sweep stops retrying a lasting limit: the later posts wait for the next run, without the 6-hour
+ * wait of an unavailable review, and the job's incident drain keeps its time.
+ */
+export async function reviewIsebPosts(
+  db: Database,
+  deadlineMs: number,
+  callModel = callOpenRouter,
+  sleep?: (ms: number) => Promise<void>,
+) {
   const P = s.feedbackAutowriterPosts;
   const R = s.feedbackIsebStyleReviews;
   const key = openRouterApiKey();
@@ -47,10 +59,11 @@ export async function reviewIsebPosts(db: Database, deadlineMs: number, callMode
     }) === retained.evidenceHash;
     const factual = passingStoredVerdict(pipeline.factualVerdicts);
     if (!fields || fieldsHash(fields) !== post.fieldsSha256 || !evidenceValid || !factual || retained.atom?.status === "contradiction") {
+      // The incident first: a review row ends the post's turn, so it is written only once the incident exists.
+      await recordIncident(db, { dedupeKey: `iseb-review-source:${post.id}`, kind: "style_review_source_missing", severity: "critical",
+        wiseSessionId: post.wiseSessionId, summary: "The guided feedback post needs source evidence or both factual verdicts before its review can complete." });
       await db.insert(R).values({ postId: post.id, fieldsSha256: post.fieldsSha256, status: "unavailable",
         result: { reason: "source_or_factual_verdict_unavailable" } });
-      await recordIncident(db, { dedupeKey: `iseb-review-source:${post.id}`, kind: "scan_failed", severity: "critical",
-        wiseSessionId: post.wiseSessionId, summary: "The guided feedback post needs source evidence or both factual verdicts before its review can complete." });
       continue;
     }
     const style = pipeline.styleGuide as { id?: string; version?: number } | undefined;
@@ -58,7 +71,7 @@ export async function reviewIsebPosts(db: Database, deadlineMs: number, callMode
     const guide = style?.id === "mimi" ? (style.version === 2 ? MIMI_STYLE_GUIDE_V2 : MIMI_STYLE_GUIDE) : null;
     const formatProblems = [...validateStyleFormat(fields, retained.lessonRecord + (retained.atom?.activities.length ? "\nAtom learning" : "")), ...validateAtomStatisticClaims(fields, retained.atom),
       ...(format?.id === "iseb" ? validateIsebFormat(fields) : [])];
-    const call = await callModel({
+    const { call, rateLimited } = await callWithRateLimitRetries({ call: callModel, remainingMs: () => deadlineMs - Date.now(), sleep, request: {
       apiKey: key, ...AUTOWRITER_MODELS.writer, maxTokens: 3000, timeoutMs: 60_000,
       schemaName: "feedback_style_review", schema: OUTPUT_SCHEMA,
       messages: [
@@ -72,25 +85,35 @@ export async function reviewIsebPosts(db: Database, deadlineMs: number, callMode
         ].join("\n") },
         { role: "user", content: JSON.stringify(fields) },
       ],
-    });
+    } });
+    const mismatch = call.ok && routeMismatch(AUTOWRITER_MODELS.writer, call);
     let verdict: z.infer<typeof Output> | null = null;
-    if (call.ok && !routeMismatch(AUTOWRITER_MODELS.writer, call)) {
+    if (call.ok && !mismatch) {
       try { verdict = Output.parse(JSON.parse(call.content.replace(/^\x60\x60\x60(?:json)?\s*/u, "").replace(/\s*\x60\x60\x60$/u, ""))); } catch { /* an absent verdict is unresolved */ }
     }
     const status = !verdict ? "unavailable" : !verdict.matches || verdict.problems.length || formatProblems.length ? "flagged" : "passed";
-    await db.insert(R).values({
-      postId: post.id, fieldsSha256: post.fieldsSha256, status,
-      model: call.model, costUsd: call.usage?.costUsd?.toFixed(8) ?? null,
-      result: { formatProblems, verdict, evidenceHash: retained.evidenceHash,
-        error: call.ok ? (verdict ? null : "invalid_style_verdict") : "style_api_unavailable" },
-    });
+    // A style result is dashboard-only (owner, 2 Oct 2026): the facts were judged before posting, and an unavailable
+    // review retries after 6 hours, so neither is pushed. The incident comes before the review row, which ends the
+    // post's turn: a failed incident write leaves the post to be reviewed again rather than losing its incident.
     if (status !== "passed") await recordIncident(db, {
-      dedupeKey: `iseb-style:${post.id}:${status}`, kind: "scan_failed", severity: "critical", wiseSessionId: post.wiseSessionId,
+      dedupeKey: `iseb-style:${post.id}:${status}`, kind: status === "flagged" ? "style_review_flagged" : "style_review_unavailable",
+      severity: "info", wiseSessionId: post.wiseSessionId,
       summary: status === "flagged" ? "Guided feedback needs a style correction. Open its evidence and style review."
         : "The style reviewer could not return a verdict. This post remains unreviewed.",
       detail: { formatProblems, problems: verdict?.problems ?? [] },
     });
+    // Every attempt was a real request, so the row's cost is theirs together.
+    const costs = [...rateLimited, call].map((attempt) => attempt.usage?.costUsd).filter((cost) => typeof cost === "number");
+    await db.insert(R).values({
+      postId: post.id, fieldsSha256: post.fieldsSha256, status,
+      model: call.model, costUsd: costs.length ? costs.reduce((sum, cost) => sum + cost, 0).toFixed(8) : null,
+      result: { formatProblems, verdict, evidenceHash: retained.evidenceHash,
+        error: call.ok ? (verdict ? null : "invalid_style_verdict") : "style_api_unavailable",
+        ...(call.ok ? (mismatch ? { cause: "route_mismatch" } : {}) : { cause: call.error, httpStatus: call.httpStatus }),
+        ...(rateLimited.length ? { rateLimitRetries: rateLimited.length } : {}) },
+    });
     reviewed += 1;
+    if (isRateLimited(call)) break;
   }
   return { reviewed };
 }

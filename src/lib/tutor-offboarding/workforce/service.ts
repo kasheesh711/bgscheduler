@@ -4,6 +4,7 @@ import { buildPreparedWorkforceReport, capacityMask, classMatches, prepareWorkfo
 import { queryBounds } from './capacity';
 import { bangkokMonthBounds, intersectIntervals, intervalMinutes, type Interval } from './intervals';
 import { loadWorkforceEvidence } from './source-db';
+import { cachedWorkforceRead, invalidateWorkforceReadCache, workforceReadKey, workforceReportDeadline, WORKFORCE_READ_CACHE_MS } from './read-cache';
 import type { WorkforceDrilldown, WorkforceDrilldownQuery, WorkforceQuery, WorkforceReport } from './types';
 function calculationTime(revision: string | undefined, now: Date): Date {
     if (!revision) return now;
@@ -14,9 +15,16 @@ function calculationTime(revision: string | undefined, now: Date): Date {
     return new Date(instant);
 }
 /** Database-only read. The loader supplies one repeatable-read evidence revision. */
-export async function getWorkforceReport(db: Database, query: WorkforceQuery, now: Date, revision?: string): Promise<WorkforceReport> {
+export async function getWorkforceReport(db: Database, query: WorkforceQuery, now: Date, revision?: string, refresh = false): Promise<WorkforceReport> {
     const asOf = calculationTime(revision, now);
-    return buildPreparedWorkforceReport(prepareWorkforce(await loadWorkforceEvidence(db, query, now), query, asOf));
+    // Pinned exports deliberately reload evidence so an evidence change still returns 409.
+    if (revision) return buildPreparedWorkforceReport(prepareWorkforce(await loadWorkforceEvidence(db, query, now), query, asOf));
+    if (refresh) invalidateWorkforceReadCache();
+    return cachedWorkforceRead(db, 'workforce-report', workforceReadKey(query), async () => {
+        const loaded = await cachedWorkforceRead(db, 'workforce-evidence', workforceReadKey({ from: query.from, to: query.to }),
+            async () => ({ evidence: await loadWorkforceEvidence(db, query, now), asOf }), refresh, value => value.asOf.getTime() + WORKFORCE_READ_CACHE_MS);
+        return buildPreparedWorkforceReport(prepareWorkforce(loaded.evidence, query, loaded.asOf));
+    }, refresh, workforceReportDeadline);
 }
 export async function getWorkforceDrilldown(db: Database, query: WorkforceDrilldownQuery, now: Date): Promise<WorkforceDrilldown> {
     const { kind, key, reportRevision, cursor, pageSize, ...filters } = query;

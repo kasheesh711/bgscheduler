@@ -8,6 +8,7 @@ import { loadWorkforceEvidence } from "@/lib/tutor-offboarding/workforce/source-
 import { resolveAcademicSubject, saveSubjectMapping } from "@/lib/tutor-offboarding/workforce/subject-mappings";
 import type { ReviewedSubjectMapping, WorkforceSession } from "@/lib/tutor-offboarding/workforce/types";
 import { formatInTimeZone } from "date-fns-tz";
+import { invalidateWorkforceReadCache } from "@/lib/tutor-offboarding/workforce/read-cache";
 
 const bodySchema = z.object({
   id: z.string().uuid().optional(), classId: z.string().trim().min(1).nullable(),
@@ -70,6 +71,7 @@ export async function POST(request: Request): Promise<Response> {
     const viewer = await requireTutorOffboardingAdmin(db);
     const body = bodySchema.parse(await request.json());
     const mapping = await saveSubjectMapping(db, body, viewer.email);
+    invalidateWorkforceReadCache();
     response = NextResponse.json({ mapping });
   } catch (error) {
     response = tutorOffboardingErrorResponse("[workforce] subject mapping save failed", error, "Subject mapping could not be saved.");

@@ -6,6 +6,7 @@ import type { AutowriterSystemStatus } from "../system-status";
 const NOW = new Date("2026-09-30T05:00:00.000Z");
 const system: AutowriterSystemStatus = {
   writer: { model: "openai/gpt-6.1-sol", effort: "low" },
+  tutorWriter: null,
   fallbackWriter: { model: "openai/gpt-6-luna", effort: "max" },
   judge: { model: "z-ai/glm-5.3-flash", efforts: ["medium", "high"] },
   transcriptFirst: true,
@@ -170,7 +171,11 @@ describe("buildAutowriterDashboard", () => {
   });
 
   it("reports one row and switch per tutor across both Wise accounts, and recent rows with Wise links", () => {
-    expect(dashboard.tutors.map((tutor) => tutor.tutorKey)).toEqual(["Kevin", "Gift", "Ek", "Peat", "Mimi"]);
+    expect(dashboard.tutors.map((tutor) => tutor.tutorKey)).toEqual([
+      "Kevin", "Gift", "Ek", "Peat", "Mimi",
+      "Ras", "Celeste", "Taki", "Dome", "Mandy", "Grace", "Mint", "Fluke", "Calvin", "Lukas", "A", "Ohm", "Mookie",
+      "Aey", "Mikki", "Sagotty", "Buzz", "Linn", "Eng", "Kavin", "Copter", "Amy",
+    ]);
     // Only Ek's Online account is switched off (per account, from the CLI): partly on.
     expect(dashboard.tutors.find((tutor) => tutor.tutorKey === "Ek")).toMatchObject({
       enabled: false, partlyEnabled: true, wiseUserIds: ["6976680baf7fbc5ac88c3ea9", "695369c028118f629edcba05"],

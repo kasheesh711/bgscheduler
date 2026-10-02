@@ -2,16 +2,16 @@ import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import { classCaptures as captures, classCaptureAssets as assets } from "@/lib/db/schema";
-import { CAPTURE_RETENTION_MS, CaptureError, MAX_AUDIO_BYTES, assetInputSchema, createCaptureSchema, patchCaptureSchema, type CaptureAsset, type CaptureSession, type CaptureView } from "./model";
-import type { CaptureScope } from "./sessions";
+import { CAPTURE_RETENTION_MS, CaptureError, MAX_AUDIO_BYTES, assertCaptureScope, assertCaptureSessionToday, assetInputSchema, createCaptureSchema, patchCaptureSchema, type CaptureAsset, type CaptureScope, type CaptureSession, type CaptureView } from "./model";
 import type { z } from "zod";
 
 export type StoredCapture = typeof captures.$inferSelect;
 export type StoredAsset = typeof assets.$inferSelect;
 
 export async function captureForScope(scope: CaptureScope, id: string, db: Database = getDb(), deleting = false): Promise<StoredCapture> {
-  const [row] = await db.select().from(captures).where(and(eq(captures.id, id), eq(captures.createdByEmail, scope.email))).limit(1);
-  if (!row || (scope.keys !== null && !scope.keys.includes(row.teacherKey))) throw new CaptureError(404, "Capture not found.");
+  assertCaptureScope(scope);
+  const [row] = await db.select().from(captures).where(and(eq(captures.id, id), eq(captures.createdByEmail, scope.email), eq(captures.teacherKey, scope.keys[0]))).limit(1);
+  if (!row || row.createdByEmail !== scope.email || row.teacherKey !== scope.keys[0] || row.session.teacherKey !== scope.keys[0]) throw new CaptureError(404, "Capture not found.");
   if (!deleting && row.deletedAt) throw new CaptureError(410, "This capture was deleted.");
   if (!deleting && row.expiresAt.getTime() <= Date.now()) throw new CaptureError(410, "This capture expired after 24 hours.");
   return row;
@@ -26,8 +26,9 @@ export async function captureView(scope: CaptureScope, id: string, db: Database 
     assets: media.map(projectAsset), draft: row.draft, reviewed: row.reviewed, expiresAt: row.expiresAt.toISOString(), version: row.version };
 }
 export async function createCapture(scope: CaptureScope, raw: z.infer<typeof createCaptureSchema>, session: CaptureSession, db: Database = getDb()) {
+  assertCaptureScope(scope, session.teacherKey);
   const input = createCaptureSchema.parse(raw);
-  if (input.sessionId !== session.sessionId || input.studentId !== session.studentId || (scope.keys !== null && !scope.keys.includes(session.teacherKey))) throw new CaptureError(403, "This class is not assigned to you.");
+  if (input.sessionId !== session.sessionId || input.studentId !== session.studentId) throw new CaptureError(403, "This class is not assigned to you.");
   return withDatabaseTransaction(db, async tx => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`capture:${scope.email}`}))`);
     const [existing] = await tx.select().from(captures).where(eq(captures.id, input.id));
@@ -39,14 +40,18 @@ export async function createCapture(scope: CaptureScope, raw: z.infer<typeof cre
     const recent = await tx.select().from(captures).where(and(eq(captures.createdByEmail, scope.email), gt(captures.createdAt, new Date(Date.now() - CAPTURE_RETENTION_MS))));
     // Bounds storage/spend even if a browser invents many new intent IDs.
     if (recent.length >= 10) throw new CaptureError(429, "You have reached the daily limit of 10 class captures.");
-    const same = recent.find(r => !r.deletedAt && r.expiresAt.getTime() > Date.now() && r.session.sessionId === input.sessionId && r.session.studentId === input.studentId);
+    const same = recent.find(r => r.createdByEmail === scope.email && r.teacherKey === scope.keys[0] && r.session.teacherKey === scope.keys[0] && !r.deletedAt && r.expiresAt.getTime() > Date.now() && r.session.sessionId === input.sessionId && r.session.studentId === input.studentId);
     if (same) return same.id;
+    // Recheck after awaited lookup/locking: a request started before midnight
+    // may recover an existing capture, but cannot insert yesterday's class.
+    assertCaptureSessionToday(session);
     await tx.insert(captures).values({ id: input.id, createdByEmail: scope.email, teacherKey: session.teacherKey, session,
       topic: input.topic, consent: input.consent, expiresAt: new Date(Date.now() + CAPTURE_RETENTION_MS) });
     return input.id;
   });
 }
 export async function updateCapture(scope: CaptureScope, id: string, raw: z.infer<typeof patchCaptureSchema>, db: Database = getDb()) {
+  assertCaptureScope(scope);
   const input = patchCaptureSchema.parse(raw);
   const current = await captureForScope(scope, id, db);
   const changedEvidence = current.topic !== input.topic || current.tutorNotes !== input.tutorNotes;
@@ -59,6 +64,7 @@ export async function updateCapture(scope: CaptureScope, id: string, raw: z.infe
   if (!updated) throw new CaptureError(409, "This capture changed or is drafting. Reload before saving.");
 }
 export async function createAsset(scope: CaptureScope, captureId: string, raw: z.infer<typeof assetInputSchema>, db: Database = getDb()): Promise<CaptureAsset> {
+  assertCaptureScope(scope);
   const input = assetInputSchema.parse(raw);
   return withDatabaseTransaction(db, async tx => {
     await tx.execute(sql`select id from class_captures where id = ${captureId} for update`);
@@ -83,6 +89,7 @@ export async function createAsset(scope: CaptureScope, captureId: string, raw: z
   });
 }
 export async function assetForScope(scope: CaptureScope, id: string, db: Database = getDb()) {
+  assertCaptureScope(scope);
   const [row] = await db.select().from(assets).where(eq(assets.id, id)).limit(1);
   if (!row || row.discardedAt) throw new CaptureError(404, "Evidence not found.");
   await captureForScope(scope, row.captureId, db);

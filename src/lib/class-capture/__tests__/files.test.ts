@@ -57,7 +57,7 @@ describe("private capture files", () => {
     const result = await uploadHandler(new Request("https://example.invalid"), { type: "blob.generate-client-token", payload: { pathname: asset.pathname, clientPayload: asset.id, multipart: true } }, { email: "synthetic@example.invalid", keys: ["tutor"] });
     expect(result).toMatchObject({ maximumSizeInBytes: 8, allowedContentTypes: ["audio/webm"], allowOverwrite: false, addRandomSuffix: false });
     mocks.asset.mockResolvedValue({ ...asset, status: "ready" });
-    await expect(uploadHandler(new Request("https://example.invalid"), {} as never, { email: "synthetic@example.invalid", keys: null })).rejects.toThrow("pending");
+    await expect(uploadHandler(new Request("https://example.invalid"), {} as never, { email: "synthetic@example.invalid", keys: ["Synthetic Tutor"] })).rejects.toThrow("pending");
   });
 });
 

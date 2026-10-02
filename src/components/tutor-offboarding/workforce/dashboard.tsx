@@ -11,14 +11,18 @@ import { Button } from "@/components/ui/button";
 import { Panel, Tag } from "../atoms";
 import { WorkforceFilters } from "./filters";
 import { TurnoverChart } from "./turnover-chart";
-import { SubjectMatrix } from "./subject-matrix";
-import { WeekHeatmap } from "./week-heatmap";
+import { DemandView } from "./demand-view";
 import { UtilizationTable } from "./utilization-table";
 import { WorkforceDetailDrawer } from "./detail-drawer";
 import { QualityPanel } from "./quality-panel";
 import { GrowthView } from "./growth-view";
 import { SubjectCapacity, OverallTrend } from "./overview";
 import { Sparkline, INK } from "./charts";
+import {
+  ReadCache,
+  workforceReadKey,
+  workforceReportDeadline,
+} from "@/lib/tutor-offboarding/workforce/read-cache";
 import {
   formatMetric,
   metricReason,
@@ -51,6 +55,8 @@ export function WorkforceDashboard({
   busy = false,
 }: WorkforceDashboardProps) {
   const [view, setView] = useState("Overview");
+  const [hiringVisited, setHiringVisited] = useState(false);
+  const [demandVisited, setDemandVisited] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [detail, setDetail] = useState<WorkforceDrilldown | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -217,7 +223,7 @@ export function WorkforceDashboard({
             </select>
           </label>
           <QualityPanel report={report} onRefresh={refresh} />
-          {view !== "Growth" && (
+          {view !== "Hiring" && (
             <>
               <select
                 aria-label="Export section"
@@ -259,7 +265,7 @@ export function WorkforceDashboard({
           aria-label="Workforce views"
           className="flex min-w-0 flex-wrap gap-1"
         >
-          {["Overview", "Supply & demand", "Tutors", "Growth"].map(
+          {["Overview", "Demand", "Tutor capacity", "Hiring"].map(
             (tab, i, tabs) => (
               <button
                 key={tab}
@@ -269,7 +275,11 @@ export function WorkforceDashboard({
                 aria-controls="workforce-view"
                 tabIndex={view === tab ? 0 : -1}
                 className={`rounded-md px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-primary ${view === tab ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
-                onClick={() => setView(tab)}
+                onClick={() => {
+                  setView(tab);
+                  if (tab === "Hiring") setHiringVisited(true);
+                  if (tab === "Demand") setDemandVisited(true);
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
                     e.preventDefault();
@@ -277,12 +287,16 @@ export function WorkforceDashboard({
                       (i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) %
                       tabs.length;
                     setView(tabs[next]);
+                    if (tabs[next] === "Hiring") setHiringVisited(true);
+                    if (tabs[next] === "Demand") setDemandVisited(true);
                     document.getElementById(`workforce-tab-${next}`)?.focus();
                   }
                   if (e.key === "Home" || e.key === "End") {
                     e.preventDefault();
                     const next = e.key === "Home" ? 0 : tabs.length - 1;
                     setView(tabs[next]);
+                    if (tabs[next] === "Hiring") setHiringVisited(true);
+                    if (tabs[next] === "Demand") setDemandVisited(true);
                     document.getElementById(`workforce-tab-${next}`)?.focus();
                   }
                 }}
@@ -301,7 +315,7 @@ export function WorkforceDashboard({
             report.query.subject,
             report.query.curriculum,
             report.query.level,
-            view === "Growth"
+            view === "Hiring"
               ? "All teaching staff · all modes"
               : `${report.query.role.replaceAll("_", " ")} · ${report.query.modality}`,
           ]
@@ -310,10 +324,10 @@ export function WorkforceDashboard({
         </summary>
         <div className="mt-3">
           <WorkforceFilters
-            key={`${queryKey}:${view === "Growth"}`}
+            key={`${queryKey}:${view === "Hiring"}`}
             query={report.query}
             subjects={[...initialSubjects, ...report.subjects]}
-            growthScope={view === "Growth"}
+            growthScope={view === "Hiring"}
             onChange={onQueryChange}
             busy={busy || exporting}
           />
@@ -327,7 +341,7 @@ export function WorkforceDashboard({
       <div
         id="workforce-view"
         role="tabpanel"
-        aria-labelledby={`workforce-tab-${["Overview", "Supply & demand", "Tutors", "Growth"].indexOf(view)}`}
+        aria-labelledby={`workforce-tab-${["Overview", "Demand", "Tutor capacity", "Hiring"].indexOf(view)}`}
         className="space-y-4"
       >
         {view === "Overview" && (
@@ -418,11 +432,10 @@ export function WorkforceDashboard({
             <OverallTrend report={report} />
           </>
         )}
-        {view === "Supply & demand" && (
-          <>
-            <SubjectMatrix
-              rows={report.subjects}
-              months={report.months.map((m) => m.month)}
+        {demandVisited && (
+          <div hidden={view !== "Demand"}>
+            <DemandView
+              report={report}
               onSelect={(r) =>
                 select({
                   kind: "subject_cell",
@@ -430,23 +443,20 @@ export function WorkforceDashboard({
                   title: `${[r.subject, r.curriculum, r.level].filter(Boolean).join(" / ")} · ${monthLabel(r.month)}`,
                 })
               }
-            />
-            <WeekHeatmap
-              cells={report.weekCells}
-              month={report.query.viewMonth}
-              onSelect={(c) =>
+              onWeekSelect={(c) =>
                 select({
                   kind: "subject_cell",
                   key: c.key,
-                  title: `Average-week evidence · ${monthLabel(c.month)}`,
+                  title: `Average week · ${monthLabel(c.month)}`,
                 })
               }
             />
-          </>
+          </div>
         )}
-        {view === "Tutors" && (
+        {view === "Tutor capacity" && (
           <UtilizationTable
             people={report.people}
+            selectedMonth={report.query.viewMonth}
             onSelect={(p) =>
               select({
                 kind: "person",
@@ -456,7 +466,14 @@ export function WorkforceDashboard({
             }
           />
         )}
-        {view === "Growth" && <GrowthView filters={report.query} />}
+        {hiringVisited && (
+          <div hidden={view !== "Hiring"}>
+            <GrowthView
+              filters={report.query}
+              sourceUpdatedAt={report.generatedAt}
+            />
+          </div>
+        )}
       </div>
       <WorkforceDetailDrawer
         open={selection !== null}
@@ -505,12 +522,20 @@ export function WorkforceTab({
   const [busy, setBusy] = useState(false);
   const gate = useRef(new LatestRequest());
   const selectedQuery = useRef(initial?.query ?? DEFAULT_QUERY);
-  const load = useCallback(async (query: WorkforceQuery) => {
+  // This cache lives only for this mounted dashboard; it never persists staff evidence.
+  const reports = useRef(new ReadCache<WorkforceReport>(60_000, 3, false));
+  const load = useCallback(async (query: WorkforceQuery, refresh = false) => {
+    if (refresh) reports.current.clear();
     selectedQuery.current = query;
     const ticket = gate.current.begin();
     setBusy(true);
     try {
-      const next = await fetchWorkforceReport(query, ticket.signal);
+      const next = await reports.current.read(
+        workforceReadKey(query),
+        () => fetchWorkforceReport(query, ticket.signal, refresh),
+        refresh,
+        workforceReportDeadline,
+      );
       if (!gate.current.isCurrent(ticket))
         throw new DOMException("Superseded report request", "AbortError");
       setReport(next);
@@ -540,7 +565,7 @@ export function WorkforceTab({
           variant="outline"
           size="sm"
           disabled={busy}
-          onClick={() => void load(selectedQuery.current).catch(() => {})}
+          onClick={() => void load(selectedQuery.current, true).catch(() => {})}
         >
           {busy ? "Loading workforce…" : "Refresh workforce"}
         </Button>
@@ -559,7 +584,7 @@ export function WorkforceTab({
           report={report}
           busy={busy}
           onQueryChange={(query) => void load(query).catch(() => {})}
-          onRefresh={() => load(selectedQuery.current)}
+          onRefresh={() => load(selectedQuery.current, true)}
         />
       ) : !error ? (
         <Panel className="p-5 text-sm text-muted-foreground">

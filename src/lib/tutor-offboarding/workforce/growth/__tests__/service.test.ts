@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Database } from "@/lib/db";
 import type { GrowthEvidence, GrowthFlows, GrowthForecast, GrowthMonthlyRow, GrowthQuery } from "../types";
 vi.mock("server-only", () => ({}));
@@ -9,6 +9,7 @@ import { buildAllGrowthFlows } from "../flows";
 import { buildGrowthForecast } from "../forecast";
 import { loadGrowthEvidence, reconcileGrowthLifecycleEvents, storeGrowthBookingMetadata } from "../store";
 import { buildGrowthReport, getGrowthDrilldown, getGrowthReport } from "../service";
+import { invalidateWorkforceReadCache } from "../../read-cache";
 
 const db = {} as Database, now = new Date("2026-10-01T05:00:00Z");
 const query: GrowthQuery = { filters: { from: "2026-03-01", to: "2026-10-01", viewMonth: "2026-09", role: "all", modality: "all" }, assumptions: { bufferPercent: 0 } };
@@ -19,7 +20,20 @@ const flows: GrowthFlows = { months: [row], lifecycleEvents: [], commonWindow: [
 const forecast: GrowthForecast = { baseMonth: "2026-09", inputs: [], months: [], allocations: [], hiring: [], bufferPercent: 0, assumptions: [], quality };
 const evidence: GrowthEvidence = { revision: "evidence1", bookingMetadata: [], lifecycleEvents: [], workforce: { people: [], observations: [], tutorFacts: [], sessions: row.contributors.sessionIds.map(wiseSessionId => ({ wiseSessionId, wiseClassId: "class1", classTitle: "Maths", startAt: "2026-09-01T02:00:00Z", endAt: "2026-09-01T03:00:00Z", scheduledMinutes: 60, canonicalTutorKeys: ["tutor1"], historicalBookedStudentIds: ["s1"], participantCompleteness: "complete", completeness: "complete", meetingStatus: "ENDED", attendanceStatus: null, modality: "online", subject: "Maths", curriculum: null, level: null, reasonCodes: [] })), historicalBookedParticipants: [], studentCredits: [], subjectMappings: [], terminationMarks: [], sourceCoverage: [] } };
 beforeEach(() => {
+  vi.useFakeTimers(); vi.setSystemTime(now);
+  invalidateWorkforceReadCache();
   vi.clearAllMocks(); vi.mocked(buildAllGrowthFlows).mockReturnValue(flows); vi.mocked(buildGrowthForecast).mockReturnValue(forecast); vi.mocked(loadGrowthEvidence).mockResolvedValue(evidence);
+});
+afterEach(() => vi.useRealTimers());
+it('reuses growth evidence for scenarios while explicit refresh and detail still read fresh evidence', async () => {
+  const first = await getGrowthReport(db, query, now);
+  expect(await getGrowthReport(db, query, now)).toBe(first);
+  await getGrowthReport(db, { ...query, assumptions: { bufferPercent: 10 } }, now);
+  expect(loadGrowthEvidence).toHaveBeenCalledTimes(1);
+  await getGrowthReport(db, query, now, undefined, true);
+  expect(loadGrowthEvidence).toHaveBeenCalledTimes(2);
+  await getGrowthDrilldown(db, { ...query, reportRevision: first.reportRevision, kind: 'cohort', key: row.key }, now);
+  expect(loadGrowthEvidence).toHaveBeenCalledTimes(3);
 });
 
 describe("growth report evidence and pagination", () => {

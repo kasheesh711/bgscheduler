@@ -28,7 +28,7 @@ export function WeekHeatmap({
   month: string;
   onSelect: (cell: WorkforceWeekCell) => void;
 }) {
-  const [metric, setMetric] = useState<DisplayMetric>("freeHours"),
+  const [metric, setMetric] = useState<DisplayMetric>("bookedHours"),
     { ref, width } = useChartWidth();
   const pattern = useId().replaceAll(":", "");
   const selected = cells.filter((c) => c.month === month),

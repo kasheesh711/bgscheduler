@@ -83,6 +83,11 @@ Academic subjects come from reviewed exact lesson labels and class IDs. A Wise c
 name, and its subject-like field may be a pricing band. Neither is evidence of an academic subject. Unmapped or
 changed labels remain visible in the mapping review panel.
 
+Reviewed labels also cover formatting variants: standard lesson-format prefixes, spacing and a terminal
+`(Cancelled)`/`(Canceled)` suffix. Academic words and level labels must still match. Conflicting reviewed aliases
+stay unknown; a class-specific review takes precedence. On 1 October 2026, the owner approved generic `English`
+as `EFL`, without inferring curriculum or level. Generic `Live Session` or `In-Person Session` titles still need review.
+
 ### Utilization and teaching evidence
 
 The denominator is offered hours minus approved leave. Original hours and leave losses remain visible. Three
@@ -98,9 +103,32 @@ on 1 October 2026 that one Wise credit always equals one teaching hour, includin
 the normal per-student charge is scheduled minutes divided by 60. Unexplained
 negative or excessive charges remain exceptions. Classes outside offered hours count and may produce rates over 100%.
 
+When Wise returns a nonempty but unverified participant roster, verified charges for every returned student produce
+a **partial estimate** using that roster's mean. Missing charges for any returned student keep the class unknown.
+Credit coverage reports computed, estimated and unknown classes. Partial totals exclude unknown classes and are
+not a complete total or a guaranteed lower bound. Utilization compares credit time and availability on the same
+recorded dates; full-period credit hours are displayed separately when historical availability is absent.
+
 Where direct teaching evidence is absent, the approved fallback is Wise ENDED plus verified positive credit
 consumption, excluding known cancellations and no-shows. Scheduled duration is used when actual duration is unknown;
 the UI labels this as recorded class data. A refund does not erase independently established teaching.
+
+### Dashboard navigation and read performance
+
+Overview retains the workforce summary. Demand leads with monthly booked and credit-consumed tutor-hours, with
+new/returning/lost student demand in a separate view. Tutor capacity compares available, booked and credit-used
+hours on recorded dates. Hiring ranks extra weekly hours and shows `hours short ÷ matching hours per tutor`,
+followed by the rounded hiring estimate. Detailed formulas, heatmaps, source records and assumptions are collapsed.
+
+Report and source reads use bounded 60-second application-memory caches. Authentication runs before every route
+read; explicit refresh bypasses cached values, and mapping saves invalidate the local server cache. Freshness is
+anchored to the source calculation time, so changing a filter cannot extend it. Detail and export reads reload
+evidence and retain revision conflict checks. No Wise write is part of this flow.
+
+Recorded partial inputs can support a labeled forecast estimate. Cancellation loss uses only bookings with matching
+verified credit evidence so missing deductions do not dilute the loss rate. Unknown churn remains unknown; when
+the trend cannot be calculated, Hiring labels its displayed gaps as scheduled-class requirements. A user can enter
+an explicit lost-demand assumption in the scenario panel. Reset restores the measured inputs.
 
 ### Availability history and coverage
 
@@ -120,7 +148,7 @@ course-impact context. See [API reference](../reference/api/tutor-offboarding.md
 
 ## Course demand growth and hiring
 
-The Growth view tracks new demand, reactivation, churn losses and a twelve-month projection. A cohort is a student
+The Demand and Hiring views track new demand, reactivation, churn losses and a twelve-month projection. A cohort is a student
 starting a subject for the first time in retained history; moving levels within that subject does not create another
 cohort. Hours are attributed to the recorded subject, curriculum and level. The March 2026 starting cohort is excluded
 from growth averages because earlier history is unavailable. Trials and pretests are separate: the approved title

@@ -99,8 +99,11 @@ export async function ensureSessionRow(db: Database, input: {
   scheduledEndAt: Date | null;
   deadlineAt: Date | null;
   trigger: string;
+  /** Wise's class name from the detail read (`detailClassName`), kept as `metadata.className`. */
+  className?: string | null;
 }): Promise<void> {
-  await db.insert(S).values({ ...input, lastTrigger: input.trigger, state: "pending" })
+  const { className, ...row } = input;
+  await db.insert(S).values({ ...row, lastTrigger: input.trigger, state: "pending", metadata: className ? { className } : {} })
     .onConflictDoUpdate({
       target: S.wiseSessionId,
       set: {
@@ -111,11 +114,33 @@ export async function ensureSessionRow(db: Database, input: {
           then excluded.wise_teacher_user_id else coalesce(${S.wiseTeacherUserId}, excluded.wise_teacher_user_id) end`,
         scheduledEndAt: sql`coalesce(${S.scheduledEndAt}, excluded.scheduled_end_at)`,
         deadlineAt: sql`coalesce(${S.deadlineAt}, excluded.deadline_at)`,
+        ...(className ? { metadata: withClassName(className) } : {}),
         lastTrigger: input.trigger,
         updatedAt: nowSql,
       },
     });
 }
+
+/** `metadata` with `className` added; a name already there is kept. */
+function withClassName(className: string) {
+  return sql`case when ${S.metadata} ? 'className' then ${S.metadata}
+    else ${S.metadata} || jsonb_build_object('className', ${className}::text) end`;
+}
+
+/**
+ * Keeps Wise's class name on a row that has none yet (a row made before names were
+ * kept, or by the cron path). The dashboard reads it when Class Feedback has no row.
+ */
+export async function stampClassName(db: Database, wiseSessionId: string, className: string): Promise<void> {
+  await db.update(S).set({ metadata: withClassName(className) })
+    .where(and(eq(S.wiseSessionId, wiseSessionId), sql`not ${S.metadata} ? 'className'`));
+}
+
+/**
+ * The class name a page shows: the Class Feedback mirror's, else the one the
+ * autowriter kept from Wise (a webhook can make the row before the mirror has it).
+ */
+export const sessionClassNameSql = sql<string | null>`coalesce(${schema.postClassSessions.className}, ${S.metadata} ->> 'className')`;
 
 export async function readSessionRow(db: Database, wiseSessionId: string): Promise<AutowriterSessionRow | null> {
   const [row] = await db.select().from(S).where(eq(S.wiseSessionId, wiseSessionId)).limit(1);

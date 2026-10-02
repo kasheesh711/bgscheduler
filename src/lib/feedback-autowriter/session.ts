@@ -10,6 +10,7 @@ import {
   resolveFeedbackFieldMapping,
 } from "@/lib/post-class-feedback/wise";
 import type { WiseFeedbackAnswer, WiseFeedbackQuestion } from "@/lib/wise/types";
+import { GENERIC_GUEST_WORDS, parseStudentName } from "./prompt";
 import { AUTOWRITER_ROSTER, rosterAccountIds, rosterTutor } from "./roster";
 import {
   AUTOWRITER_DEADLINE_MARGIN_MS,
@@ -173,6 +174,19 @@ export function detailTeacherId(detail: AutowriterSessionDetail): string | null 
   return refId(detail.userId);
 }
 
+/**
+ * The class's name as Class Feedback would mirror it (Wise `className`, else
+ * `classId.name`; at BeGifted usually the student's name), else the first
+ * student with a Wise account. The dashboard shows it until the mirror row exists.
+ */
+export function detailClassName(detail: AutowriterSessionDetail): string | null {
+  const classIdName = typeof detail.classId === "string" ? undefined : detail.classId.name;
+  for (const name of [detail.className, classIdName]) {
+    if (typeof name === "string" && name.trim()) return name.trim();
+  }
+  return studentParticipants(detail).find((student) => student.wiseUserId && student.name)?.name ?? null;
+}
+
 export function scheduledWindow(detail: AutowriterSessionDetail): { start: Date; end: Date; minutes: number } {
   const start = new Date(detail.scheduledStartTime);
   const end = new Date(detail.scheduledEndTime);
@@ -317,8 +331,12 @@ export function studentParticipants(detail: AutowriterSessionDetail): Autowriter
  * participant besides the Wise account is one guest, the Wise account attended
  * under the minimum, and the guest and the tutor both stayed at least
  * `AUTOWRITER_GUEST_STUDENT_MIN_PERCENT` of the class, the guest is the student.
- * The Wise account stays the student billed, credit-checked and named; the
- * guest's attendance counts. Anything else: null (no stand-in).
+ * A guest whose name is the student's own (`guestNamedAsStudent`) only needs the
+ * usual `AUTOWRITER_MIN_ATTENDANCE_PERCENT` (owner rule, 2 Oct: a guest "emmieeee"
+ * at 65% beside the account "Emmika (Emmie.Wi) …" at 0 minutes is the student).
+ * The tutor's bar is unchanged. The Wise account stays the student billed,
+ * credit-checked and named; the guest's attendance counts. Anything else: null
+ * (no stand-in).
  */
 function guestStandsInForStudent(detail: AutowriterSessionDetail, students: readonly AutowriterStudent[]): AutowriterStudent[] | null {
   if (detail.classType !== "ONE_TO_ONE" || students.length !== 2) return null;
@@ -340,7 +358,10 @@ function guestStandsInForStudent(detail: AutowriterSessionDetail, students: read
     .filter((value): value is number => value !== null);
   const teacherPercent = teacherPercents.length > 0 ? Math.max(...teacherPercents) : null;
   if (accountPercent === null || accountPercent >= AUTOWRITER_MIN_ATTENDANCE_PERCENT) return null;
-  if (guestPercent === null || guestPercent < AUTOWRITER_GUEST_STUDENT_MIN_PERCENT) return null;
+  const guestBar = guestNamedAsStudent(guest.name, account.name)
+    ? AUTOWRITER_MIN_ATTENDANCE_PERCENT
+    : AUTOWRITER_GUEST_STUDENT_MIN_PERCENT;
+  if (guestPercent === null || guestPercent < guestBar) return null;
   if (teacherPercent === null || teacherPercent < AUTOWRITER_GUEST_STUDENT_MIN_PERCENT) return null;
   return [{
     ...account,
@@ -349,6 +370,70 @@ function guestStandsInForStudent(detail: AutowriterSessionDetail, students: read
     // "" for a nameless guest: still the stand-in, but nothing to redact.
     joinedAsGuest: guest.name.trim(),
   }];
+}
+
+/** A name word compared loosely: case-folded, stretched letters collapsed ("emmieeee" and "Emmie" are both "emie"). */
+function nameKey(word: string): string {
+  return word.normalize("NFKC").toLocaleLowerCase("en-US").replace(/(\p{L})\1+/gu, "$1");
+}
+
+/** Shorter name words ("Wi", "Ka") are too common to say who someone is. */
+const MIN_NAME_KEY_LENGTH = 3;
+
+/**
+ * Device-model and account-label words that are also common Thai nicknames: a Zoom
+ * guest "iPad Air" or "Redmi Note 12" is a device, not a student nicknamed Air or Note.
+ * Kept out of `GENERIC_GUEST_WORDS`, which redaction reads (an alias "Air" must still be redacted).
+ */
+const DEVICE_MODEL_WORDS = new Set([
+  "air", "mini", "max", "pro", "plus", "note", "ultra", "lite", "fold", "flip", "tab", "book", "se", "online", "onsite",
+]);
+
+/**
+ * Parent, sibling and grandparent words: a guest "Mae Aim" or "Aim's Mom" is someone
+ * else's name for the device, not the student's own (owner rule, 2 Oct). Kept separate
+ * from `GENERIC_GUEST_WORDS`, which also drops these words but only as filler.
+ */
+const FAMILY_GUEST_WORDS = new Set([
+  "mom", "mum", "mommy", "mummy", "mother", "mama", "mae", "dad", "daddy", "father", "papa", "pa", "ma", "family",
+  "sister", "sis", "brother", "bro", "aunt", "auntie", "uncle", "grandma", "grandpa", "granny", "nanny", "son", "daughter",
+]);
+
+/**
+ * The Thai family words, matched as a word's start since Thai is often written without
+ * spaces ("แม่เอม"). Not น้อง, the usual prefix for the child themselves ("น้องเอม"), nor
+ * the short ambiguous ตา, อา, น้า, พี่.
+ */
+const THAI_FAMILY_PREFIXES = ["แม่", "พ่อ", "ยาย", "ย่า", "ปู่", "ป้า", "ลุง"];
+
+/**
+ * Whether a guest's name is the student's own: one of its words — a possessive
+ * as the bare name, never a device or model word ("iPad Air") — equals the
+ * student's first name, nickname or surname, compared by `nameKey`. Whole words
+ * only, never a prefix. A nameless guest is not named as anyone, nor is a name
+ * with a family word in it ("Mae Aim", "Aim's Mom", "แม่เอม"): a parent's or
+ * sibling's name for the device keeps the stricter guest bar (owner rule, 2 Oct).
+ * A surname-only match ("Nattapong Kaewmanee") counts, on purpose (owner rule, 2 Oct).
+ */
+export function guestNamedAsStudent(guestName: string, studentName: string): boolean {
+  const { firstName, nickname } = parseStudentName(studentName);
+  const surname = studentName.replace(/\s*\([^)]*\)\s*/gu, " ").replace(/\s+(?:online|onsite)\s*$/iu, "")
+    .trim().split(/\s+/u).slice(1).at(-1) ?? null;
+  const studentKeys = new Set([firstName, nickname, surname]
+    .filter((word): word is string => Boolean(word?.trim()))
+    .map(nameKey)
+    .filter((key) => [...key].length >= MIN_NAME_KEY_LENGTH));
+  if (studentKeys.size === 0) return false;
+  const words = guestName.normalize("NFKC").split(/[^\p{L}\p{M}'’]+/u)
+    .map((word) => word.replace(/['’]s?$/u, "").replace(/['’]/gu, ""))
+    .filter((word) => word !== "");
+  if (words.some((word) => FAMILY_GUEST_WORDS.has(word.toLocaleLowerCase("en-US")) ||
+    THAI_FAMILY_PREFIXES.some((prefix) => word.startsWith(prefix)))) return false;
+  return words
+    .filter((word) => !GENERIC_GUEST_WORDS.has(word.toLocaleLowerCase("en-US")) &&
+      !DEVICE_MODEL_WORDS.has(word.toLocaleLowerCase("en-US")))
+    .map(nameKey)
+    .some((key) => [...key].length >= MIN_NAME_KEY_LENGTH && studentKeys.has(key));
 }
 
 /** One Wise account and one guest, not (yet) a stand-in: attendance may still be arriving. */
