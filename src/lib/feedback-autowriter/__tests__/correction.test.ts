@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_FEEDBACK_FIELD_MAPPINGS } from "@/lib/post-class-feedback/wise";
 import {
+  CORRECTION_EVENT_POLL_MS,
+  CORRECTION_EVENT_WAIT_MS,
   CORRECTION_LOCK_BUDGET_MS,
   CORRECTION_READ_BACK_DELAY_MS,
   CORRECTION_READ_RETRIES,
@@ -265,14 +267,48 @@ describe("correctPostGuarded: a correction that lands", () => {
     }]);
   });
 
-  it("settles awaiting_event (session text updated) and releases when our event is not seen yet", async () => {
-    const result = await run({ wise: { eventsAfterPost: () => [] } });
-    expect(result.outcome).toMatchObject({ status: "awaiting_event", postId: "post-1" });
+  it("polls for our event every 20 s for 5 min, then settles awaiting_event and KEEPS the lock", async () => {
+    const result = await run({ wise: { eventsAfterPost: () => [] }, input: { eventWaitMs: CORRECTION_EVENT_WAIT_MS } });
+    expect(result.outcome).toEqual({ status: "awaiting_event_locked", postId: "post-1", bodyHash: expect.any(String) });
     expect(result.store.settles.map((settled) => settled.outcome)).toEqual(["awaiting_event"]);
     expect(result.store.settles[0].session).toMatchObject({ fields: CORRECTED, fromSha256: fieldsHash(BASE) });
     expect(result.store.settles[0].verification).toMatchObject({ event: null, landed: true });
-    expect(result.log.slice(-2)).toEqual(["store:settle:awaiting_event", "store:release"]);
+    // 16 reads of the events, 20 s apart (0 s … 300 s); the autowriter stays halted for recovery.
+    expect(result.time.sleep.mock.calls.filter(([ms]) => ms === CORRECTION_EVENT_POLL_MS)).toHaveLength(15);
+    expect(result.log.filter((entry) => entry.startsWith("wise:events#"))).toHaveLength(1 + 16);
+    expect(result.store.releases).toBe(0);
+    expect(result.store.halts).toEqual([]);
+    expect(result.log.at(-1)).toBe("store:settle:awaiting_event");
     expect(result.wise.postFeedback).toHaveBeenCalledTimes(1);
+  });
+
+  it("verifies (and releases) when our event shows on a later poll", async () => {
+    const result = await run({
+      input: { eventWaitMs: CORRECTION_EVENT_WAIT_MS },
+      wiseWithClock: (time) => ({
+        // Wise shows our save a minute after the POST.
+        eventsAfterPost: (postedAt) => time.now().getTime() >= postedAt.getTime() + 60_000
+          ? [save(new Date(postedAt.getTime() + 500), API_ACTOR, "OWNER")]
+          : [],
+      }),
+    });
+    expect(result.outcome).toMatchObject({ status: "verified" });
+    expect(result.time.sleep.mock.calls.filter(([ms]) => ms === CORRECTION_EVENT_POLL_MS)).toHaveLength(3);
+    expect(result.store.releases).toBe(1);
+  });
+
+  it("stops waiting at a stranger's save in the POST window: halt, settle verify_failed, lock kept", async () => {
+    const result = await run({
+      input: { eventWaitMs: CORRECTION_EVENT_WAIT_MS },
+      wiseWithClock: (time) => ({
+        eventsAfterPost: (postedAt) => time.now().getTime() >= postedAt.getTime() + 40_000
+          ? [save(new Date(postedAt.getTime() - 1_000), KEVIN_ONLINE_WISE_USER_ID, "TEACHER")]
+          : [],
+      }),
+    });
+    expect(result.outcome).toMatchObject({ status: "safety", problems: ["foreign_submit_event_in_post_window"] });
+    expect(result.time.sleep.mock.calls.filter(([ms]) => ms === CORRECTION_EVENT_POLL_MS)).toHaveLength(2);
+    expect(result.store.releases).toBe(0);
   });
 
   it("starts the POST window at the events read: a save between the two fresh reads is never outside both", async () => {

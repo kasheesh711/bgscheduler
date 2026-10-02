@@ -4,7 +4,6 @@ import {
   type FeedbackFieldAnswers,
   type FeedbackFieldMapping,
 } from "@/lib/post-class-feedback/types";
-import { AUTOWRITER_POST_TIMEOUT_MS } from "./config";
 import { sqlStateOf } from "./db-errors";
 import {
   buildFeedbackPostBody,
@@ -20,12 +19,12 @@ import {
   type FormPlan,
 } from "./session";
 import {
+  classifySubmitEvents,
   creditProblems,
   feedbackBodyHash,
   fieldsHash,
   isReadFailure,
   verifyStoredSubmission,
-  waitForSubmitEvents,
   type PostResult,
   type SubmitFeedbackEvent,
   type WiseFeedbackOps,
@@ -51,8 +50,12 @@ import { feedbackTextChecks, tidyFeedbackText } from "./validate";
 export const AGENT_CORRECTION_ACTOR = "agent:feedback-autowriter-nightly";
 /** The pre-POST part under the lock must finish within this long of taking it (the autowriter is halted meanwhile). */
 export const CORRECTION_LOCK_BUDGET_MS = 180_000;
-/** How long to poll Wise for our own submit event after the POST. */
-export const CORRECTION_EVENT_WAIT_MS = 90_000;
+/**
+ * How long to poll Wise for our own submit event after the POST, and how often. Not seen by then: the lock is kept
+ * (`awaiting_event_locked`) until recovery settles the correction by reads alone.
+ */
+export const CORRECTION_EVENT_WAIT_MS = 5 * 60_000;
+export const CORRECTION_EVENT_POLL_MS = 20_000;
 /** Wait before reading back what Wise stored. */
 export const CORRECTION_READ_BACK_DELAY_MS = 3_000;
 /** Read-back that only failed to read Wise: re-read this often, this many times, for at most this long — then halt. */
@@ -198,7 +201,14 @@ export type CorrectionRefusalStage = "plan" | "db" | "wise" | "lock" | "window";
 export type CorrectionOutcome =
   | { status: "preflight_ok"; bodyHash: string; guards: string[] }
   | { status: "refused"; stage: CorrectionRefusalStage; reason: string }
-  | { status: "verified" | "awaiting_event"; postId: string; bodyHash: string }
+  | { status: "verified"; postId: string; bodyHash: string }
+  /**
+   * The corrected text verified in Wise, but our own submit event not seen within `CORRECTION_EVENT_WAIT_MS`: the
+   * posts row is `awaiting_event` and the lock is KEPT (the autowriter stays halted) — a late stranger's save inside
+   * the POST window could still make it a halt. Run recover once the lease is over: `recoverStaleCorrections`
+   * settles it by reads alone, then `releaseStaleCorrectionLock` lifts the lock.
+   */
+  | { status: "awaiting_event_locked"; postId: string; bodyHash: string }
   | { status: "not_sent"; postId: string; reason: string }
   /** Halted, settled and reported: a person must look at the class in Wise. The lock is never released. */
   | { status: "safety"; postId: string | null; problems: string[] };
@@ -465,10 +475,12 @@ interface ReadBack {
  *      database clock (`lock.isHeld`) and the lock budget again on this machine's, nothing else in between, so a
  *      machine that slept since the claim never posts (`not_sent`) — ONE POST with the current billing in form
  *      order, never retried;
- *   8. read back after 3 s — the corrected text, the same submission, billing and credit entries — then poll for our
- *      own submit event and for anyone else's save inside the POST window.
- * Settling: verified → the posts row and the session's text, then release; our event not seen yet → `awaiting_event`
- * (same session update), then release; HTTP 429 with the base text still in Wise → `not_sent`, release, no retry;
+ *   8. read back after 3 s — the corrected text, the same submission, billing and credit entries — then poll every
+ *      20 s, for up to 5 min, for our own submit event and for anyone else's save inside the POST window.
+ * Settling: verified → the posts row and the session's text, then release; our event still not seen →
+ * `awaiting_event` (same session update) and the lock is KEPT (`awaiting_event_locked`: until our event shows, a late
+ * save could still turn it into a halt, so nothing else posts meanwhile; recover settles it by reads alone, then lifts
+ * the lock); HTTP 429 with the base text still in Wise → `not_sent`, release, no retry;
  * read failures only → keep the lock and re-read every 30 s for up to 4 min. Anything else — an unknown outcome, a
  * 4xx, a read-back mismatch, changed credits, billing or submission, a stranger's or an extra save — halts first
  * (so the lock's compare-and-swap release can never undo it), settles the posts row, records a critical incident
@@ -772,38 +784,46 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
     });
   }
 
-  // Our own submit event, and nobody else's save (nor a second API save) between the fresh reads and the POST's end.
-  const found = await waitForSubmitEvents(ops, {
-    classId: plan.wiseClassId,
-    sessionId: sid,
-    apiActorId: input.apiActorId,
-    // The window's start (`classifySubmitEvents`): the first of the fresh reads.
-    freshReadAt: eventsReadAt,
-    postStartedAt,
-    postFinishedAt: postFinishedAt ?? new Date(postStartedAt.getTime() + AUTOWRITER_POST_TIMEOUT_MS),
-    waitMs: input.eventWaitMs ?? CORRECTION_EVENT_WAIT_MS,
-    sleep,
-  });
-  const extra = found.events.filter((event) => event !== found.ours && event.autoSubmitted !== true &&
-    event.actorId === input.apiActorId && event.at.getTime() >= eventsReadAt.getTime() - EVENT_SKEW_MS);
+  // Our own submit event, and nobody else's save (nor a second API save) in the POST window — from the first of the
+  // fresh reads to the POST's end — polled every 20 s for up to 5 min. A stranger's or a second save ends the wait.
+  const waitMs = input.eventWaitMs ?? CORRECTION_EVENT_WAIT_MS;
+  const waitStartedAt = now().getTime();
+  let found: { ours: SubmitFeedbackEvent | undefined; foreign: SubmitFeedbackEvent[]; extra: SubmitFeedbackEvent[] } =
+    { ours: undefined, foreign: [], extra: [] };
+  let eventsReadFailed = false;
+  for (;;) {
+    try {
+      const events = await ops.findFeedbackEvents(plan.wiseClassId, sid, new Date(eventsReadAt.getTime() - EVENT_SKEW_MS));
+      const classified = classifySubmitEvents(events, { apiActorId: input.apiActorId, freshReadAt: eventsReadAt, postStartedAt, postFinishedAt });
+      const extra = events.filter((event) => event !== classified.ours && event.autoSubmitted !== true &&
+        event.actorId === input.apiActorId && event.at.getTime() >= eventsReadAt.getTime() - EVENT_SKEW_MS);
+      found = { ...classified, extra };
+      eventsReadFailed = false;
+    } catch {
+      eventsReadFailed = true;
+    }
+    if (found.ours || found.foreign.length > 0 || found.extra.length > 0) break;
+    if (now().getTime() - waitStartedAt >= waitMs) break;
+    await sleep(CORRECTION_EVENT_POLL_MS);
+  }
   const eventProblems = [
     ...(found.foreign.length > 0 ? ["foreign_submit_event_in_post_window"] : []),
-    ...(extra.length > 0 ? [`extra_api_save_in_post_window:${extra.length}`] : []),
+    ...(found.extra.length > 0 ? [`extra_api_save_in_post_window:${found.extra.length}`] : []),
   ];
   if (eventProblems.length > 0) return safety("verify_failed", eventProblems, { httpStatus: result.status, landed: true });
 
-  const outcome = found.ours ? "verified" : "awaiting_event";
+  const ours = found.ours;
   const verification = {
     ...timing,
     httpStatus: result.status,
     landed: true,
     creditEntries: baseline.length,
-    eventsReadFailed: found.readFailed,
-    event: found.ours ? serializeEvent(found.ours) : null,
+    eventsReadFailed,
+    event: ours ? serializeEvent(ours) : null,
   };
   try {
     await store.settle(postId, {
-      outcome,
+      outcome: ours ? "verified" : "awaiting_event",
       verification,
       session: { fields: plan.fields, fieldsSha256: plan.fieldsSha256, fromSha256: plan.base.fieldsSha256, at: now(), reason: plan.reason },
     });
@@ -811,6 +831,8 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
     // The text is in Wise but could not be recorded (e.g. the session row moved): a person must reconcile it.
     return safety("verify_failed", [`settle_failed:${failureName(error)}`], { httpStatus: result.status, landed: true });
   }
+  // Not settled until our event shows: the lock stays, and recover settles it by reads alone, then lifts the lock.
+  if (!ours) return { status: "awaiting_event_locked", postId, bodyHash };
   await held.release();
-  return { status: outcome, postId, bodyHash };
+  return { status: "verified", postId, bodyHash };
 }

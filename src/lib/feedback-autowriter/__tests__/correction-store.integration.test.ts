@@ -711,6 +711,38 @@ describe("end to end through the real store", () => {
     expect(await db.select().from(I)).toEqual([]);
   });
 
+  it("keeps the lock while our event is unseen; recovery settles it by reads alone, then the lock is lifted", async () => {
+    const seeded = await postedWithFirstShot();
+    const time = clock(windowStart());
+    const wise = fakeWise(time, [], {
+      eventsBefore: [save(seeded.verifiedAt, API_ACTOR, "OWNER")], eventsAfterPost: () => [], wiseNow: () => new Date(),
+    });
+    const outcome = await correctPostGuarded({
+      ops: wise, store: store(), plan: planFor(seeded), apiActorId: API_ACTOR, allowlist: AUTOWRITER_TEACHER_ALLOWLIST,
+      disabledTutors: [], aiSuspect: AI_SUSPECT, textProblems: () => [], now: time.now, sleep: time.sleep, eventWaitMs: 0,
+    });
+    expect(outcome).toMatchObject({ status: "awaiting_event_locked" });
+    const [correction] = await db.select().from(P).where(eq(P.kind, "correction"));
+    expect(correction).toMatchObject({ outcome: "awaiting_event", settledAt: null });
+    expect((await readSessionRow(db, seeded.wiseSessionId))?.fields).toEqual(CORRECTED);
+    // Every other POST stays stopped: the lock (lease and exact halt) is kept.
+    expect(isCorrectionLockReason((await readControl(db)).haltReason)).toBe(true);
+    expect(await acquireSweepLease(db, 60_000)).toBeNull();
+    expect(await releaseStaleCorrectionLock(db)).toBe(false);
+    await leaseRunOut();
+    expect(await releaseStaleCorrectionLock(db)).toBe(false); // the correction is still unsettled
+
+    const later = fakeWise(clock(), [], {
+      detailOn: () => postedDetail({ text: CORRECTED }),
+      eventsBefore: [save(seeded.verifiedAt, API_ACTOR, "OWNER"), save(new Date(correction.postStartedAt!.getTime() + 1_000), API_ACTOR, "OWNER")],
+    });
+    expect(await recoverStaleCorrections(db, later, { apiActorId: API_ACTOR, olderThanMs: -60_000, mappings: DEFAULT_FEEDBACK_FIELD_MAPPINGS }))
+      .toMatchObject([{ postId: correction.id, result: "verified" }]);
+    expect(later.postFeedback).not.toHaveBeenCalled();
+    expect(await releaseStaleCorrectionLock(db)).toBe(true);
+    expect(await readControl(db)).toMatchObject({ haltedAt: null, haltReason: null });
+  });
+
   it("never posts once the lease ran out between the claim and the POST (this machine slept): not_sent, released", async () => {
     const seeded = await postedWithFirstShot();
     const time = clock(windowStart());
