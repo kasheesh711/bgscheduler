@@ -174,6 +174,7 @@ describe("buildAutowriterDashboard", () => {
     expect(dashboard.tutors.map((tutor) => tutor.tutorKey)).toEqual([
       "Kevin", "Gift", "Ek", "Peat", "Mimi",
       "Ras", "Celeste", "Taki", "Dome", "Mandy", "Grace", "Mint", "Fluke", "Calvin", "Lukas", "A", "Ohm", "Mookie",
+      "Aey", "Mikki", "Sagotty", "Buzz", "Linn", "Eng", "Kavin", "Copter", "Amy",
     ]);
     // Only Ek's Online account is switched off (per account, from the CLI): partly on.
     expect(dashboard.tutors.find((tutor) => tutor.tutorKey === "Ek")).toMatchObject({
