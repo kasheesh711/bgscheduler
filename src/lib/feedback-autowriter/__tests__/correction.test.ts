@@ -8,6 +8,7 @@ import {
   CorrectionRefusedError,
   agentCorrectionDedupeKey,
   correctPostGuarded,
+  exactFeedbackFields,
   inCorrectionWindow,
   type CorrectPostInput,
   type CorrectionPlan,
@@ -178,6 +179,14 @@ describe("inCorrectionWindow", () => {
   });
 });
 
+describe("exactFeedbackFields", () => {
+  it("keeps exactly the four feedback fields", () => {
+    const fields = exactFeedbackFields({ ...CORRECTED, note: "extra" } as typeof CORRECTED);
+    expect(fields).toEqual(CORRECTED);
+    expect(Object.keys(fields)).toEqual(["topics", "performance", "improvement", "homework"]);
+  });
+});
+
 describe("agentCorrectionDedupeKey", () => {
   it("is one key per class", () => {
     expect(agentCorrectionDedupeKey(SESSION_ID)).toBe(`agent-correction:${SESSION_ID}`);
@@ -276,6 +285,9 @@ describe("correctPostGuarded: refusals before anything is read", () => {
   const long = "x".repeat(5_001);
   const cases: Array<[string, Partial<CorrectPostInput>, string]> = [
     ["fields_malformed", { plan: plan({ fields: { ...CORRECTED, homework: undefined as unknown as string } }) }, "fields_malformed"],
+    // The hash reads only the four fields, so an extra key would otherwise ride along into the posts row.
+    ["fields_extra_keys (corrected)", { plan: plan({ fields: { ...CORRECTED, note: "extra" } as typeof CORRECTED }) }, "fields_extra_keys"],
+    ["fields_extra_keys (base)", { plan: plan({ base: { ...plan().base, fields: { ...BASE, note: "extra" } as typeof BASE } }) }, "fields_extra_keys"],
     ["hash_mismatch", { plan: plan({ fieldsSha256: fieldsHash(BASE) }) }, "hash_mismatch"],
     ["base_hash_mismatch", { plan: plan({ base: { ...plan().base, fieldsSha256: fieldsHash(CORRECTED) } }) }, "base_hash_mismatch"],
     ["no_change", { plan: plan({ fields: BASE, fieldsSha256: fieldsHash(BASE) }) }, "no_change"],

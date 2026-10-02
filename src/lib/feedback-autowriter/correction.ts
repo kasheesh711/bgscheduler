@@ -271,6 +271,11 @@ function aiSuspectInputComplete(input: CorrectionAiSuspectInput | undefined): bo
   return Boolean(input) && names(input?.studentNames) && names(input?.tutorNames) && Array.isArray(input?.priorFeedback);
 }
 
+/** Exactly the four feedback fields: nothing else is hashed, posted or stored. */
+export function exactFeedbackFields(fields: FeedbackFieldAnswers): FeedbackFieldAnswers {
+  return Object.fromEntries(POST_CLASS_FEEDBACK_FIELDS.map((field) => [field, fields[field]])) as unknown as FeedbackFieldAnswers;
+}
+
 /** Refusal code for the plan itself (pure), or null. */
 function planRefusal(
   plan: CorrectionPlan,
@@ -279,6 +284,9 @@ function planRefusal(
   const wellFormed = (fields: FeedbackFieldAnswers | undefined) =>
     Boolean(fields) && POST_CLASS_FEEDBACK_FIELDS.every((field) => typeof fields?.[field] === "string");
   if (!wellFormed(plan.fields) || !wellFormed(plan.base?.fields)) return "fields_malformed";
+  const extraKeys = (fields: FeedbackFieldAnswers) =>
+    Object.keys(fields).some((key) => !(POST_CLASS_FEEDBACK_FIELDS as readonly string[]).includes(key));
+  if (extraKeys(plan.fields) || extraKeys(plan.base.fields)) return "fields_extra_keys";
   if (fieldsHash(plan.fields) !== plan.fieldsSha256) return "hash_mismatch";
   if (fieldsHash(plan.base.fields) !== plan.base.fieldsSha256) return "base_hash_mismatch";
   if (plan.fieldsSha256 === plan.base.fieldsSha256) return "no_change";
@@ -438,19 +446,25 @@ interface ReadBack {
  * and keeps the lock. Throws only when the database fails while the lock is held; the lock may then stay (run recover).
  */
 export async function correctPostGuarded(input: CorrectPostInput): Promise<CorrectionOutcome> {
-  const { ops, store, plan } = input;
+  const { ops, store } = input;
   const now = input.now ?? (() => new Date());
   const sleep = input.sleep ?? defaultSleep;
   const dryRun = input.dryRun === true;
   const lockBudgetMs = input.lockBudgetMs ?? CORRECTION_LOCK_BUDGET_MS;
-  const sid = plan.wiseSessionId;
   const guards: string[] = [];
   const refuse = (stage: CorrectionRefusalStage, reason: string): CorrectionOutcome => ({ status: "refused", stage, reason });
 
   // 1. The plan.
-  const planProblem = planRefusal(plan, input);
+  const planProblem = planRefusal(input.plan, input);
   if (planProblem) return refuse("plan", planProblem);
   guards.push("plan");
+  // Exactly the four fields from here on (extra keys were refused): nothing else is hashed, posted or stored.
+  const plan: CorrectionPlan = {
+    ...input.plan,
+    fields: exactFeedbackFields(input.plan.fields),
+    base: { ...input.plan.base, fields: exactFeedbackFields(input.plan.base.fields) },
+  };
+  const sid = plan.wiseSessionId;
 
   // 2. The window.
   if (inCorrectionWindow(now())) guards.push("window");

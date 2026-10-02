@@ -8,6 +8,7 @@ import {
   AGENT_CORRECTION_ACTOR,
   CorrectionRefusedError,
   agentCorrectionDedupeKey,
+  exactFeedbackFields,
   type CorrectionLock,
   type CorrectionPlan,
   type CorrectionSessionUpdate,
@@ -259,7 +260,7 @@ export function pgCorrectionStore(db: Database, opts: {
         insert into feedback_autowriter_posts (wise_session_id, wise_class_id, wise_teacher_user_id, kind, fields, fields_sha256,
           body_hash, billing, arm, evidence, pipeline, actor_kind, actor, reason, post_started_at, outcome, verification,
           provenance, dedupe_key)
-        select ${sid}, ${plan.wiseClassId}, ${plan.wiseTeacherUserId}, 'correction', ${JSON.stringify(plan.fields)}::jsonb,
+        select ${sid}, ${plan.wiseClassId}, ${plan.wiseTeacherUserId}, 'correction', ${JSON.stringify(exactFeedbackFields(plan.fields))}::jsonb,
           ${plan.fieldsSha256}, ${input.bodyHash}, ${JSON.stringify(plan.base.billing)}::jsonb, ${plan.arm}, ${plan.evidence},
           ${JSON.stringify(pipeline)}::jsonb, 'agent', ${actor}, ${plan.reason}, now(), 'posting',
           ${JSON.stringify(verification)}::jsonb, 'live', ${agentCorrectionDedupeKey(sid)}
@@ -312,7 +313,7 @@ export function pgCorrectionStore(db: Database, opts: {
         const update: CorrectionSessionUpdate = input.session;
         // Never `metadata.corrections` (the one-time script's list): the review backfill would count it a second time.
         const sessions = await tx.update(S).set({
-          fields: update.fields as unknown as Record<string, string>,
+          fields: exactFeedbackFields(update.fields) as unknown as Record<string, string>,
           fieldsSha256: update.fieldsSha256,
           metadata: sql`${S.metadata} || ${JSON.stringify({
             agentCorrection: {

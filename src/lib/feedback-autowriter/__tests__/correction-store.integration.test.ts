@@ -358,6 +358,22 @@ describe("the posts-row claim (recordPostStart)", () => {
     await expectSqlState(db.delete(P).where(eq(P.id, started.postId)), "55000");
   });
 
+  it("stores exactly the four feedback fields, on the posts row and the session row, whatever else the plan carries", async () => {
+    const seeded = await postedWithFirstShot();
+    const extra = { ...CORRECTED, note: "extra" } as typeof CORRECTED;
+    const plan = planFor(seeded, { fields: extra });
+    const correctionStore = store();
+    await lockOrThrow(correctionStore, plan);
+    const { postId } = await correctionStore.recordPostStart(plan, { bodyHash: "h" });
+    expect((await db.select().from(P).where(eq(P.id, postId)))[0].fields).toEqual(CORRECTED);
+    await correctionStore.settle(postId, {
+      outcome: "verified",
+      verification: {},
+      session: { fields: extra, fieldsSha256: fieldsHash(CORRECTED), fromSha256: fieldsHash(BASE), at: new Date(), reason: "synthetic" },
+    });
+    expect((await readSessionRow(db, seeded.wiseSessionId))?.fields).toEqual(CORRECTED);
+  });
+
   it("allows one agent correction per class, ever: refused while one is in flight, the unique index after it settled", async () => {
     const seeded = await postedWithFirstShot();
     const plan = planFor(seeded);
