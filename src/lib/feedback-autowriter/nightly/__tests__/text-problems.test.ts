@@ -68,6 +68,29 @@ describe("correctionTextProblems", () => {
     expect(codes({ fields: { ...PIM_FIELDS, topics: `${PIM_FIELDS.topics} We also looked at pixel art.` } })).toEqual([]);
   });
 
+  it("does not take a name that is part of a named term for a person", () => {
+    const terms = correctionTextProblems(input({
+      studentFullName: "Calvin (Pim.Ta) Testwong",
+      tutorNames: ["Ohm Teacherson", "Ohm"],
+      otherStudentNames: ["Newton"],
+      fields: {
+        ...PIM_FIELDS,
+        topics: `${PIM_FIELDS.topics} We also used Ohm's law, the Calvin cycle and Newton's second law.`,
+      },
+    }));
+    expect(terms.filter((problem) => ["student_name_form", "tutor_named", "other_student_named"].includes(problem.code))).toEqual([]);
+    // The same names used for people are still reported.
+    const people = correctionTextProblems(input({
+      studentFullName: "Calvin (Pim.Ta) Testwong",
+      tutorNames: ["Ohm Teacherson", "Ohm"],
+      otherStudentNames: ["Newton"],
+      fields: { ...PIM_FIELDS, performance: `${PIM_FIELDS.performance} Ohm's notes helped Calvin, and Newton's maths test too.` },
+    }));
+    expect(people.map((problem) => [problem.code, problem.detail])).toEqual(expect.arrayContaining([
+      ["tutor_named", "Ohm"], ["student_name_form", "Calvin"], ["other_student_named", "Newton"],
+    ]));
+  });
+
   it("names another person only from a capitalised word before a person verb", () => {
     const problems = correctionTextProblems(input({
       fields: { ...PIM_FIELDS, performance: `${PIM_FIELDS.performance} Ploy also finished the paper early.` },

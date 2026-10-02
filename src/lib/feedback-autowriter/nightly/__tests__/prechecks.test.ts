@@ -58,7 +58,8 @@ describe("runPrechecks", () => {
     };
     const findings = run({ bundle: { postedFields: fields } });
     expect(findings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: "student_name_form", severity: "major", mode: "M11", candidate: false }),
+      // A one-word form of the student's name: a candidate the audit must confirm.
+      expect.objectContaining({ code: "student_name_form", severity: "major", mode: "M11", candidate: true }),
       expect.objectContaining({ code: "other_student_named", severity: "critical", mode: "M02", candidate: true }),
       expect.objectContaining({ code: "meta_word:zoom", severity: "major", mode: "M12", candidate: true }),
     ]));
@@ -67,6 +68,14 @@ describe("runPrechecks", () => {
     const validator = run({ bundle: { postedFields: { ...PIM_FIELDS, topics: `${PIM_FIELDS.topics} [STUDENT_1]` } } });
     expect(validator).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: "validator:placeholder_token:topics", severity: "major", mode: "M12" }),
+    ]));
+  });
+
+  it("keeps the student's multi-word name as a floor, and makes a tutor name a candidate", () => {
+    const findings = run({ bundle: { postedFields: { ...PIM_FIELDS, performance: `${PIM_FIELDS.performance} Pimchanok (Pim.Ta) Testwong and Art agreed.` } } });
+    expect(findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "student_name_form", severity: "major", candidate: false, detail: expect.stringContaining("Pimchanok (Pim.Ta) Testwong") }),
+      expect.objectContaining({ code: "tutor_named", severity: "major", mode: "M11", candidate: true }),
     ]));
   });
 

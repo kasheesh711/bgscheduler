@@ -59,9 +59,31 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
-/** Case-sensitive whole word or phrase ("May" the name, never "may" the verb). */
+/** Case-sensitive whole word or phrase ("May" the name, never "may" the verb), every occurrence. */
 function wordPattern(value: string): RegExp {
-  return new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(value)}(?![\\p{L}\\p{N}])`, "u");
+  return new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(value)}(?![\\p{L}\\p{N}])`, "gu");
+}
+
+/**
+ * Nouns that make a name before them part of a named term, not a person: "Ohm's law", "Calvin cycle", "Newton's second
+ * law". Kept to unmistakable ones, with at most an ordinal in between, so "Nok's maths test" is still a name.
+ */
+const TERM_NOUNS = [
+  "law", "laws", "theorem", "theorems", "cycle", "principle", "constant", "equation", "equations", "effect", "paradox",
+  "conjecture", "lemma", "formula", "triangle", "diagram", "sequence", "series", "rule", "process", "square",
+];
+const TERM_AFTER_NAME = new RegExp(
+  `^(?:['’]s)?\\s+(?:(?:first|second|third|zeroth)\\s+)?(?:${TERM_NOUNS.join("|")})(?![\\p{L}\\p{N}])`,
+  "iu",
+);
+
+/** Whether the text uses the name for a person: any whole-word occurrence that is not part of a named term. */
+function namedOutsideTerms(text: string, name: string): boolean {
+  for (const match of text.matchAll(wordPattern(name))) {
+    const end = (match.index ?? 0) + match[0].length;
+    if (!TERM_AFTER_NAME.test(text.slice(end, end + 40))) return true;
+  }
+  return false;
 }
 
 function nameParts(name: string): string[] {
@@ -100,6 +122,7 @@ function otherStudentForms(input: TextProblemInput): string[] {
  * Every problem with a feedback text: production's own validator on a pseudo model output (each field redacted as
  * the writer's output would have been; the class's own prior post left out of the copy check), meta words, the
  * student called by anything but their display name, the tutor named, another person named, another student's name.
+ * A name used as part of a named term ("Ohm's law", "Calvin cycle") is not a person and is not reported.
  */
 export function correctionTextProblems(input: TextProblemInput): TextProblem[] {
   const problems: TextProblem[] = [];
@@ -146,13 +169,13 @@ export function correctionTextProblems(input: TextProblemInput): TextProblem[] {
       if (match) problems.push({ code: `meta_word:${meta.word}`, field, detail: match[0] });
     }
     for (const form of studentForms) {
-      if (wordPattern(form).test(text)) problems.push({ code: "student_name_form", field, detail: form });
+      if (namedOutsideTerms(text, form)) problems.push({ code: "student_name_form", field, detail: form });
     }
     for (const word of tutorWords) {
-      if (wordPattern(word).test(text)) problems.push({ code: "tutor_named", field, detail: word });
+      if (namedOutsideTerms(text, word)) problems.push({ code: "tutor_named", field, detail: word });
     }
     for (const name of others) {
-      if (wordPattern(name).test(text)) problems.push({ code: "other_student_named", field, detail: name });
+      if (namedOutsideTerms(text, name)) problems.push({ code: "other_student_named", field, detail: name });
     }
     for (const person of otherPeopleNamed(redacted[field], input.studentFullName, input.classDetails ?? [], input.studentAliases ?? [])) {
       problems.push({ code: "other_person_named", field, detail: person });

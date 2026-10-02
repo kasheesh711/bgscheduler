@@ -146,8 +146,10 @@ counts are refreshed by one weekly PR. A mode first seen less than twice in 14 n
 - **Definition:** The right student, but called by the wrong form of name (not the nickname the school uses), or
   anyone else is named, including the tutor.
 - **Synthetic example:** The student's nickname is Pim but the feedback uses the full first name; or it names the tutor.
-- **Detection:** deterministic prechecks `student_name_form` and `tutor_named` (floors), and the candidate
-  `other_person_named` (confirmed by the audit); the audit's `names` section.
+- **Detection:** the deterministic precheck `student_name_form` is a floor for the student's multi-word name; a one-word
+  form (first name, surname, nickname code), a tutor name (`tutor_named`) and `other_person_named` are candidates the
+  audit must confirm (a name used in a named term, "Ohm's law" or "Calvin cycle", is not flagged); the audit's `names`
+  section.
 - **Status:** open. **Counts (14 nights):** — . **Root cause:** — . **Fix PRs:** — .
 
 ## M12 meta_or_format_leak — Meta words, attendance or format leak
