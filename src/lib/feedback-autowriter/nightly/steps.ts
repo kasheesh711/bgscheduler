@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Database } from "@/lib/db";
@@ -487,6 +488,18 @@ export function nightCosts(ctx: Pick<NightContext, "paths">, ledger: Pick<Nightl
   };
 }
 
+/** What the night's synthesis was made from: the audited texts, their evidence and verdicts. */
+export function synthesisInputHash(records: readonly AuditRecord[]): string {
+  const keys = records.filter((record) => record.result)
+    .map((record) => `${record.wiseSessionId}:${record.fieldsSha256}:${record.bundleHash}:${record.auditVersion}:${record.result!.verdict}`)
+    .sort();
+  return createHash("sha256").update(keys.join("\n")).digest("hex");
+}
+
+function synthesisCacheFile(paths: NightlyPaths): string {
+  return path.join(paths.nightDir, "synthesis.json");
+}
+
 /**
  * Merge, group, watchdog, optionally the synthesis (Opus, one call), then `report.md`, `summary.md`, `plan.md`,
  * `fix-brief.json`, the ledger's class lines and the night's cost line. Runs after a stopped audit too (a partial
@@ -517,7 +530,13 @@ export async function stepReport(ctx: NightContext, deps: {
   let synthesis: Record<string, unknown> = { ran: false };
   let stop: NightlyStop | null = null;
   const pastDeadline = ctx.deadline !== null && ctx.now().getTime() >= ctx.deadline.getTime();
-  if (deps.run && !pastDeadline && records.some((record) => record.result)) {
+  // The synthesis is paid for once per set of audits: a report re-run over the same audits reuses it.
+  const synthesisInput = synthesisInputHash(records);
+  const previous = readJsonFile<{ inputHash: string; summaryLine: string; fixPick: string | null; brief: boolean }>(synthesisCacheFile(ctx.paths));
+  if (deps.run && previous && previous.inputHash === synthesisInput && fs.existsSync(ctx.paths.planMd)) {
+    synthesisLine = previous.summaryLine;
+    synthesis = { ran: false, reused: true, ok: true, fixPick: previous.fixPick, brief: previous.brief, costUsd: 0 };
+  } else if (deps.run && !pastDeadline && records.some((record) => record.result)) {
     const outcome = await synthesizeNight({ ledger: deps.ledger, run: deps.run, perSynthesisUsd: ctx.caps.perSynthesisUsd }, {
       night: ctx.night, records, files, reports, modes,
     });
@@ -527,6 +546,9 @@ export async function stepReport(ctx: NightContext, deps: {
       if (brief) writeJsonAtomic(ctx.paths.fixBriefJson, brief);
       synthesisLine = outcome.result.summaryLine;
       synthesis = { ran: true, ok: true, fixPick: outcome.result.fixPick?.mode ?? null, brief: Boolean(brief), costUsd: outcome.costUsd };
+      writeJsonAtomic(synthesisCacheFile(ctx.paths), {
+        inputHash: synthesisInput, summaryLine: outcome.result.summaryLine, fixPick: outcome.result.fixPick?.mode ?? null, brief: Boolean(brief),
+      });
     } else {
       synthesis = { ran: true, ok: false, reason: outcome.reason, costUsd: outcome.costUsd };
       notes.push(`synthesis failed: ${outcome.reason}`);

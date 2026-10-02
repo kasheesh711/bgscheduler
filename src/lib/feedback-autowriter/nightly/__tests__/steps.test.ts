@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { answers, autoBlankSubmission, sessionDetail } from "../../__tests__/fixtures";
+import { auditCacheFile } from "../audit";
 import { NIGHTLY_CAPS } from "../caps";
 import { createWiseReadGate, readOnlySoniox, type RowMeta } from "../evidence";
 import { NightlyLedger } from "../ledger";
@@ -231,6 +232,37 @@ describe("stepReport, stepFlag, stepCosts and runNight", () => {
     expect(summary).toContain("M13×1");
     expect(summary).not.toMatch(/Pim|Testwong|fractions/u);
     expect(readRunState(ctx).steps.report?.status).toBe("done");
+  });
+
+  it("pays for the synthesis once per set of audits: a report re-run reuses it", async () => {
+    const ctx = context({ deadline: null });
+    collectedNight(ctx);
+    const target = nightlyTarget({ fieldsSha256: "abcdef0123456789" });
+    const auditFile = auditCacheFile(ctx.paths.auditsDir, { wiseSessionId: SID, fieldsSha256: target.fieldsSha256, bundleHash: "bundle-hash-0001" });
+    fs.mkdirSync(path.dirname(auditFile), { recursive: true });
+    fs.writeFileSync(auditFile, JSON.stringify({
+      wiseSessionId: SID, fieldsSha256: target.fieldsSha256, auditVersion: 1, promptVersion: 1, bundleHash: "bundle-hash-0001", grade: "rebuilt",
+      failure: null, proof: null, at: "",
+      result: {
+        verdict: "accurate", claims: [], issues: [], omissions: [], homework: { feedbackStatesHomework: false, tutorSetHomework: "no", evidence: [] },
+        names: { studentCalled: ["Pim"], otherPeopleNamed: [] }, candidateReview: [],
+        evidenceQuality: { transcript: "full", speakerLabels: "verified", summaryVsTranscript: "agrees", notes: [] }, priorIssueReview: null, summaryLine: "ok",
+      },
+    }));
+    const ledger = NightlyLedger.open(ctx.paths.root, ctx.night, ctx.caps);
+    const synthesis = {
+      failureModes: [], fixPick: null, fixBrief: null, longTermPlan: [], judgeMisses: { count: 0, modes: [] }, summaryLine: "Nothing to fix tonight.",
+    };
+    const run = vi.fn(async () => ({
+      kind: "success" as const, value: synthesis,
+      proof: { argv: [], cliVersion: null, models: ["claude-opus-5-5"], opusOutputTokens: 1, inputTokens: 1, outputTokens: 1, costUsd: 0.5, durationMs: 1, effort: "max" as const },
+    }));
+    const first = await stepReport(ctx, { db: null, ledger, run, cliVersion: null });
+    expect(first.summary).toMatchObject({ synthesis: { ran: true, ok: true } });
+    const again = await stepReport(ctx, { db: null, ledger, run, cliVersion: null });
+    expect(again.summary).toMatchObject({ synthesis: { ran: false, reused: true } });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(fs.readFileSync(ctx.paths.planMd, "utf8")).toContain("Nothing to fix tonight.");
   });
 
   it("plans flags as a dry run unless applied", async () => {
