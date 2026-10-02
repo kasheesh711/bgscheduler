@@ -65,8 +65,8 @@ is lost (section 3.8 says where each item goes).
 ### 3.2 "What needs you" (left, two thirds)
 
 The list keeps its own height: it is not stretched to the rail's. The trend charts (3.5) follow it in the same left
-column, and the rail spans both rows on the right, sticky while the left column scrolls (amended 2 Oct 2026: a short
-list left a tall blank panel). Narrow screens stack the list, the rail, then the trends.
+column, and the right column (the rail, then the quality cards of 3.4a) spans both rows (amended 2 Oct 2026: a short
+list left a tall blank panel). Narrow screens stack the list, the right column, then the trends.
 
 A grouped list. Groups appear only when they have items, in this fixed order:
 
@@ -112,6 +112,46 @@ After any successful action the drawer closes and the page data reloads.
   current 14-day figure and counts ("46 of 51 reviewed").
 - **Today** line: posted · waiting for a recording · held · tutor wrote first · out of scope, for classes ending
   today in Bangkok. This one line replaces the nine cards.
+
+### 3.4a Quality cards under the rail (amended 2 Oct 2026)
+
+The right column holds the rail and two cards, in this order. The second card is shown only when it fits beside
+the left column (the to-do list and the trends), so it never makes the page taller.
+
+- **Placement.** One wrapper in the grid's right column (`lg:col-start-3 lg:row-span-2 lg:row-start-1`, a flex
+  column with the grid's 20px gap). Nothing in it is sticky: a column this tall would hide its own bottom.
+- **Fitting.** A `useFits` hook (ResizeObserver on the to-do list, the trends and the right column) shows the second
+  card when the rail, the first card and the second card fit in the left column's height, with 24px of hysteresis
+  so it does not flicker. The first card is always shown, even when it makes the page taller. On the server and
+  below the `lg` breakpoint the hook answers false and true respectively: server markup never has the second card,
+  narrow screens always do.
+- **Scope.** Both cards are fleet-level like the rail: every tutor, the gate's 14 Bangkok dates. Each subtitle says
+  "all tutors · 23 Sep – 6 Oct". The tutor filter does not change them.
+- **No review data.** Neither card is drawn; the rail already says why.
+
+**Card 1, "What goes wrong"** — what to fix in the prompt next. Built from the review payload only.
+
+- Headline: "4 of 26 reviewed needed a fix": required reviews in the window whose current verdict is `needs_fix`,
+  of required reviews with a verdict (the gate's own counts, so it agrees with the rail).
+- Chart (about 110px): one stacked bar per class date, from the window's required queue items that have a current
+  verdict: approved, cosmetic, factual, critical (green, sky, amber, `--conflict`). A date with no verdict is a gap.
+  The daily rows are not used here: their severity counts include optional reviews and their `accurate` includes
+  cosmetic fixes, so the segments would not add up.
+- **Fields fixed**: for each feedback field, how many of those reviewed posts changed it after the first shot
+  (`queue[].changed`, `diff[].field`), most first, with the field labels of `format.ts` ("Homework 3 · Summary 2").
+  When the queue is cut (`queueTotals.shown < all`) the line ends "of the N shown".
+- **Critical kinds**: chips for each critical category with a count (wrong person, billing or status, invented
+  content, should not have posted). With none, one green line: "No critical verdict in these 14 days."
+- Nothing reviewed yet: "No reviewed posts yet."
+
+**Card 2, "Review backlog"** — whether the owner keeps up while every new tutor's post is reviewed.
+
+- Headline: "3 required pending · oldest 2 days" (the earliest class date among queue items `needs_review` or
+  `flagged`, counted in Bangkok days to today), and "1 flagged" when `queueTotals.flagged > 0`.
+- Chart: one stacked bar per class date: reviewed (`daily.reviewed`) and still pending (`daily.requiredPending`,
+  amber). Both count required reviews only.
+- Footer: "Every new tutor's post is reviewed until the gate passes."
+- Nothing required in the window: "Nothing to review."
 
 ### 3.5 Trends (2 × 2)
 
@@ -340,6 +380,7 @@ suites pass, and ships only with the owner's approval.
 | `item-drawer.tsx` | The drawer and its four bodies |
 | `review-detail.tsx`, `verdict-form.tsx` | Split out of `feedback-autowriter-review-queue.tsx`, behaviour unchanged |
 | `health-rail.tsx` | Gate card, mini charts, Today line |
+| `quality-cards.tsx`, `use-fits.ts` | "What goes wrong" and "Review backlog" under the rail (3.4a); the fit check |
 | `trend-charts.tsx` | The four charts and their footers |
 | `tutor-table.tsx` | Merged tutor table with the filter |
 | `classes-log.tsx`, `system-details.tsx` | Collapsed detail sections |
