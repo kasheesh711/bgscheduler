@@ -296,6 +296,14 @@ const IN_PERSON_TITLE = /^\s*(?:in[\s-]?person|on[\s-]?site)\s+session\b/iu;
  * the guest standing in for the student (`guestStandsInForStudent`).
  */
 export function studentParticipants(detail: AutowriterSessionDetail): AutowriterStudent[] {
+  return resolveStudents(detail).students;
+}
+
+/**
+ * `studentParticipants`, plus why a guest who may be the student did not stand in for them
+ * (`GuestStandIn.declined`); null when there was no such guest.
+ */
+function resolveStudents(detail: AutowriterSessionDetail): { students: AutowriterStudent[]; declined: string | null } {
   const self = tutorSelf(detail);
   const students = detail.participants
     .filter((participant) => participant.isTeacher !== true)
@@ -308,8 +316,24 @@ export function studentParticipants(detail: AutowriterSessionDetail): Autowriter
       inMeetingSeconds: participant.inMeetingDuration ?? participant.duration ?? null,
       absolutePercentAttendance: participant.absolutePercentAttendance ?? null,
     }));
-  return guestStandsInForStudent(detail, students) ?? students;
+  const standIn = guestStandsInForStudent(detail, students);
+  if (standIn.kind === "stand_in") return { students: standIn.students, declined: null };
+  return { students, declined: standIn.kind === "declined" ? standIn.reason : null };
 }
+
+/**
+ * - `stand_in`: the guest is the student.
+ * - `declined`: the Wise account attended under the minimum, but the guest did not qualify to stand in — usually the
+ *   student joining the wrong way, not a class for two. The reason is `guest_stand_in_<n>pct` (the guest under their
+ *   bar; n is their attendance rounded down), `guest_stand_in_unknown` (no attendance for the guest) or
+ *   `guest_stand_in_tutor_absent` (the tutor under `AUTOWRITER_GUEST_STUDENT_MIN_PERCENT`).
+ * - `none`: not one account plus one guest in a one-to-one class, or the account's attendance is unknown or at the
+ *   minimum (with a guest beside it: two people).
+ */
+type GuestStandIn =
+  | { kind: "stand_in"; students: AutowriterStudent[] }
+  | { kind: "declined"; reason: string }
+  | { kind: "none" };
 
 /**
  * A one-to-one student who joined through a Zoom link as a guest instead of
@@ -322,14 +346,15 @@ export function studentParticipants(detail: AutowriterSessionDetail): Autowriter
  * usual `AUTOWRITER_MIN_ATTENDANCE_PERCENT` (owner rule, 2 Oct: a guest "emmieeee"
  * at 65% beside the account "Emmika (Emmie.Wi) …" at 0 minutes is the student).
  * The tutor's bar is unchanged. The Wise account stays the student billed,
- * credit-checked and named; the guest's attendance counts. Anything else: null
- * (no stand-in).
+ * credit-checked and named; the guest's attendance counts. A guest under their
+ * bar, or a tutor under theirs, beside an account under the minimum is `declined`
+ * with the reason (held for a person, owner rule 2 Oct); anything else is `none`.
  */
-function guestStandsInForStudent(detail: AutowriterSessionDetail, students: readonly AutowriterStudent[]): AutowriterStudent[] | null {
-  if (detail.classType !== "ONE_TO_ONE" || students.length !== 2) return null;
+function guestStandsInForStudent(detail: AutowriterSessionDetail, students: readonly AutowriterStudent[]): GuestStandIn {
+  if (detail.classType !== "ONE_TO_ONE" || students.length !== 2) return { kind: "none" };
   const account = students.find((student) => student.wiseUserId);
   const guest = students.find((student) => !student.wiseUserId);
-  if (!account || !guest) return null;
+  if (!account || !guest) return { kind: "none" };
   const minutes = scheduledWindow(detail).minutes;
   const accountPercent = studentAttendancePercent(account, minutes);
   const guestPercent = studentAttendancePercent(guest, minutes);
@@ -344,19 +369,26 @@ function guestStandsInForStudent(detail: AutowriterSessionDetail, students: read
     }, minutes))
     .filter((value): value is number => value !== null);
   const teacherPercent = teacherPercents.length > 0 ? Math.max(...teacherPercents) : null;
-  if (accountPercent === null || accountPercent >= AUTOWRITER_MIN_ATTENDANCE_PERCENT) return null;
+  if (accountPercent === null || accountPercent >= AUTOWRITER_MIN_ATTENDANCE_PERCENT) return { kind: "none" };
   const guestBar = guestNamedAsStudent(guest.name, account.name)
     ? AUTOWRITER_MIN_ATTENDANCE_PERCENT
     : AUTOWRITER_GUEST_STUDENT_MIN_PERCENT;
-  if (guestPercent === null || guestPercent < guestBar) return null;
-  if (teacherPercent === null || teacherPercent < AUTOWRITER_GUEST_STUDENT_MIN_PERCENT) return null;
-  return [{
-    ...account,
-    inMeetingSeconds: guest.inMeetingSeconds,
-    absolutePercentAttendance: guestPercent,
-    // "" for a nameless guest: still the stand-in, but nothing to redact.
-    joinedAsGuest: guest.name.trim(),
-  }];
+  if (guestPercent === null) return { kind: "declined", reason: "guest_stand_in_unknown" };
+  // Rounded down like `attendance_<n>pct`: 79.6% reads 79, never the 80 it missed.
+  if (guestPercent < guestBar) return { kind: "declined", reason: `guest_stand_in_${Math.floor(guestPercent)}pct` };
+  if (teacherPercent === null || teacherPercent < AUTOWRITER_GUEST_STUDENT_MIN_PERCENT) {
+    return { kind: "declined", reason: "guest_stand_in_tutor_absent" };
+  }
+  return {
+    kind: "stand_in",
+    students: [{
+      ...account,
+      inMeetingSeconds: guest.inMeetingSeconds,
+      absolutePercentAttendance: guestPercent,
+      // "" for a nameless guest: still the stand-in, but nothing to redact.
+      joinedAsGuest: guest.name.trim(),
+    }],
+  };
 }
 
 /** A name word compared loosely: case-folded, stretched letters collapsed ("emmieeee" and "Emmie" are both "emie"). */
@@ -567,7 +599,10 @@ export function evaluateSessionGates(
   if (submission.kind === "ambiguous") return { ok: false, reason: `submission_ambiguous:${submission.reason}` };
   if (nonTeacherBillingEvidence(detail)) return { ok: false, reason: "non_teacher_submission_with_billing" };
 
-  const students = studentParticipants(detail);
+  const { students, declined } = resolveStudents(detail);
+  // The Wise account attended under the minimum and the guest did not stand in: most likely the student joined
+  // the wrong way, not a class for two — a person decides (owner rule, 2 Oct).
+  if (declined) return { ok: false, reason: declined };
   // A guest may yet turn out to stand in for the student once Wise has computed attendance: not final yet.
   if (accountAndGuest(students)) return { ok: false, reason: "student_count_2_guest" };
   if (students.length !== 1) return { ok: false, reason: `student_count_${students.length}` };
@@ -599,12 +634,18 @@ export function evaluateSessionGates(
  */
 export type GateDisposition = "retry" | "scope" | "human" | "person" | "expired";
 
+/** The reasons of `GuestStandIn.declined`. */
+const GUEST_STAND_IN_DECLINED = /^guest_stand_in_(?:\d+pct|unknown|tutor_absent)$/u;
+
 export function classifyGateReason(reason: string, context: { minutesSinceEnd?: number } = {}): GateDisposition {
   const settling = context.minutesSinceEnd !== undefined && context.minutesSinceEnd < AUTOWRITER_ATTENDANCE_SETTLE_MINUTES;
   if (reason === "student_count_0" || reason === "student_not_wise_user" || /^attendance_\d+pct$/u.test(reason)) {
     return settling ? "retry" : "person";
   }
-  // Settled and still an account plus a guest who did not stand in: a class for two, out of scope as before.
+  // An account under the minimum beside a guest who did not stand in: usually the student joining the wrong way,
+  // so a person looks once attendance has settled (owner rule, 2 Oct).
+  if (GUEST_STAND_IN_DECLINED.test(reason)) return settling ? "retry" : "person";
+  // Settled and still an account (at the minimum, or unknown) plus a guest: a class for two, out of scope as before.
   if (reason === "student_count_2_guest") return settling ? "retry" : "scope";
   if (reason === "deadline_passed_or_too_close") return "expired";
   if (reason === "human_submission" || reason === "human_blank_submission") return "human";
