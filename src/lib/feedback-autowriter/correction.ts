@@ -68,7 +68,12 @@ export const CORRECTION_MAX_REASON_CHARACTERS = 500;
 /** Slack for Wise's event clock against ours. */
 const EVENT_SKEW_MS = 5_000;
 
-/** One agent correction per class, ever: the posts table's unique `dedupe_key` index enforces it. */
+/**
+ * One agent correction per class, ever: the posts table's unique `dedupe_key` index enforces it. The key is taken
+ * when the posts row is claimed, before the POST, and posts rows are append-only — so a correction that ends
+ * `not_sent` (Wise answered 429 and nothing changed, or the lock was lost or the budget spent between the claim and
+ * the POST) uses up the class's one correction too. Accepted (review finding L2): a person can still edit in Wise.
+ */
 export function agentCorrectionDedupeKey(wiseSessionId: string): string {
   return `agent-correction:${wiseSessionId}`;
 }
@@ -218,6 +223,7 @@ export type CorrectionOutcome =
    * settles it by reads alone, then `releaseStaleCorrectionLock` lifts the lock.
    */
   | { status: "awaiting_event_locked"; postId: string; bodyHash: string }
+  /** Nothing reached Wise. The class's one correction is used up all the same (`agentCorrectionDedupeKey`). */
   | ({ status: "not_sent"; postId: string; reason: string } & ReleaseReport)
   /** Halted, settled and reported: a person must look at the class in Wise. The lock is never released. */
   | { status: "safety"; postId: string | null; problems: string[] };
@@ -489,7 +495,8 @@ interface ReadBack {
  * Settling: verified → the posts row and the session's text, then release; our event still not seen →
  * `awaiting_event` (same session update) and the lock is KEPT (`awaiting_event_locked`: until our event shows, a late
  * save could still turn it into a halt, so nothing else posts meanwhile; recover settles it by reads alone, then lifts
- * the lock); HTTP 429 with the base text still in Wise → `not_sent`, release, no retry;
+ * the lock); HTTP 429 with the base text still in Wise → `not_sent`, release, no retry (the class's one correction is
+ * used up: `agentCorrectionDedupeKey`);
  * read failures only → keep the lock and re-read every 30 s for up to 4 min. Anything else — an unknown outcome, a
  * 4xx, a read-back mismatch, changed credits, billing or submission, a stranger's or an extra save — halts first
  * (so the lock's compare-and-swap release can never undo it), settles the posts row, records a critical incident
