@@ -12,6 +12,8 @@ export interface AutowriterTutor {
   displayName: string;
   canonicalKey: string;
   tutorNames: readonly string[];
+  /** The tutor's first writer; unset means Sol (`writersFor` in config.ts). */
+  writer?: "luna";
 }
 
 export const KEVIN_ONLINE_WISE_USER_ID = "696e2c4343579bbada2340ed";
@@ -81,6 +83,191 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
     canonicalKey: "Mimi",
     tutorNames: ["Thanit Montrikittiphant", "Mimi"],
   },
+  // Added 2026-10-02 (owner decision): 13 tutors, both Wise accounts each, written by GPT-6 Luna first, Sol as
+  // their fallback (`writer: "luna"`). Canonical keys are the snapshot's. "Fluke" is Chettaporn, not Fluke-Supha. Anavat's
+  // nickname "A" is NOT a name variant: redaction is case-insensitive, so it would replace every article "a".
+  {
+    wiseUserId: "69f2f50500512973d762b9ad",
+    displayName: "Rasna (Ras) Rajkitkul Online",
+    canonicalKey: "Ras",
+    tutorNames: ["Rasna Rajkitkul", "Ras"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "69f2f61500512973d763f134",
+    displayName: "Rasna (Ras) Rajkitkul",
+    canonicalKey: "Ras",
+    tutorNames: ["Rasna Rajkitkul", "Ras"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "696e2c4343579bbada233e41",
+    displayName: "Chinnakrit (Celeste) Channiti Online",
+    canonicalKey: "Celeste",
+    tutorNames: ["Chinnakrit Channiti", "Celeste"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "695369c028118f629edcb9c9",
+    displayName: "Chinnakrit (Celeste) Channiti",
+    canonicalKey: "Celeste",
+    tutorNames: ["Chinnakrit Channiti", "Celeste"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "6ab0bdb118d8f4181aacb563",
+    displayName: "Takuma (Taki) Notoda Online",
+    canonicalKey: "Taki",
+    tutorNames: ["Takuma Notoda", "Taki"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "6ab0bcf418d8f4181aac4b82",
+    displayName: "Takuma (Taki) Notoda",
+    canonicalKey: "Taki",
+    tutorNames: ["Takuma Notoda", "Taki"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "696e2c4343579bbada234179",
+    displayName: "Kijpat (Dome) Thavorn Online",
+    canonicalKey: "Dome",
+    tutorNames: ["Kijpat Thavorn", "Dome"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "695369c028118f629edcbab2",
+    displayName: "Kijpat (Dome) Thavorn",
+    canonicalKey: "Dome",
+    tutorNames: ["Kijpat Thavorn", "Dome"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "696e2c4343579bbada233eb1",
+    displayName: "Mandy (Mandy) Boontanrart Online",
+    canonicalKey: "Mandy",
+    tutorNames: ["Mandy Boontanrart", "Mandy"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "695369c028118f629edcbd31",
+    displayName: "Mandy (Mandy) Boontanrart",
+    canonicalKey: "Mandy",
+    tutorNames: ["Mandy Boontanrart", "Mandy"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "697afb13af7fbc5ac8086c40",
+    displayName: "Wongsiri (Grace) Montrikittiphant Online",
+    canonicalKey: "Grace",
+    tutorNames: ["Wongsiri Montrikittiphant", "Grace"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "697afac6af7fbc5ac8084581",
+    displayName: "Wongsiri (Grace) Montrikittiphant",
+    canonicalKey: "Grace",
+    tutorNames: ["Wongsiri Montrikittiphant", "Grace"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "696e2c4343579bbada234239",
+    displayName: "Pornnapha (Mint) Montrikittiphant Online",
+    canonicalKey: "Mint",
+    tutorNames: ["Pornnapha Montrikittiphant", "Mint"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "695369c028118f629edcbcec",
+    displayName: "Pornnapha (Mint) Montrikittiphant",
+    canonicalKey: "Mint",
+    tutorNames: ["Pornnapha Montrikittiphant", "Mint"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "698bddb3b0e4b23fd50633f2",
+    displayName: "Chettaporn (Fluke) Chuesuphan Online",
+    canonicalKey: "Fluke",
+    tutorNames: ["Chettaporn Chuesuphan", "Fluke"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "698bdcc8b0e4b23fd5055a49",
+    displayName: "Chettaporn (Fluke) Chuesuphan",
+    canonicalKey: "Fluke",
+    tutorNames: ["Chettaporn Chuesuphan", "Fluke"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "696e2c4343579bbada234096",
+    displayName: "Calvin (Calvin) Lim Wen Quan Online",
+    canonicalKey: "Calvin",
+    tutorNames: ["Calvin Lim Wen Quan", "Calvin"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "695369c028118f629edcb9f6",
+    displayName: "Calvin (Calvin) Lim Wen Quan",
+    canonicalKey: "Calvin",
+    tutorNames: ["Calvin Lim Wen Quan", "Calvin"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "696e2c4343579bbada234167",
+    displayName: "Ruke (Lukas) Ogan Online",
+    canonicalKey: "Lukas",
+    tutorNames: ["Ruke Ogan", "Lukas"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "695369c128118f629edcbf9e",
+    displayName: "Ruke (Lukas) Ogan",
+    canonicalKey: "Lukas",
+    tutorNames: ["Ruke Ogan", "Lukas"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "69daf6e898ee51775fec0aed",
+    displayName: "Anavat (A) Siamwala Online",
+    canonicalKey: "A",
+    tutorNames: ["Anavat Siamwala"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "69d3dea798ee51775f5e21b3",
+    displayName: "Anavat (A) Siamwala",
+    canonicalKey: "A",
+    tutorNames: ["Anavat Siamwala"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "6a848f585bc1ee067e2eb7ae",
+    displayName: "Kriangdet (Ohm) Nakprasert Online",
+    canonicalKey: "Ohm",
+    tutorNames: ["Kriangdet Nakprasert", "Ohm"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "6a848eee5bc1ee067e2e67dc",
+    displayName: "Kriangdet (Ohm) Nakprasert",
+    canonicalKey: "Ohm",
+    tutorNames: ["Kriangdet Nakprasert", "Ohm"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "696e2c4343579bbada233e8c",
+    displayName: "Phurit (Mookie) Bovornchutichai Online",
+    canonicalKey: "Mookie",
+    tutorNames: ["Phurit Bovornchutichai", "Mookie"],
+    writer: "luna",
+  },
+  {
+    wiseUserId: "695369c028118f629edcbb83",
+    displayName: "Phurit (Mookie) Bovornchutichai",
+    canonicalKey: "Mookie",
+    tutorNames: ["Phurit Bovornchutichai", "Mookie"],
+    writer: "luna",
+  },
 ];
 
 export const AUTOWRITER_TEACHER_ALLOWLIST: ReadonlySet<string> = new Set(
@@ -89,6 +276,11 @@ export const AUTOWRITER_TEACHER_ALLOWLIST: ReadonlySet<string> = new Set(
 
 export function rosterTutor(wiseUserId: string | null | undefined): AutowriterTutor | null {
   return AUTOWRITER_ROSTER.find((tutor) => tutor.wiseUserId === wiseUserId) ?? null;
+}
+
+/** The first writer a tutor's roster entries name, or null for the default (Sol). */
+export function rosterWriterArm(canonicalKey: string | null | undefined): AutowriterTutor["writer"] | null {
+  return AUTOWRITER_ROSTER.find((tutor) => tutor.canonicalKey === canonicalKey)?.writer ?? null;
 }
 
 /** A tutor's name without the account suffix, e.g. "Wanwisa (Gift) Montrikittiphant". */
