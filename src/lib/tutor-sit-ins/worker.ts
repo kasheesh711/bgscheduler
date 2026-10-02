@@ -5,9 +5,9 @@ import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
 import {
-  createAppsScriptScheduleEmailSender,
   type ScheduleEmailSender,
 } from "@/lib/classrooms/schedule-email";
+import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { renderTeacherEmail } from "@/lib/teacher-emails/render";
 import { teacherEmailLogoUrl } from "@/lib/teacher-emails/brand";
 import { accessForEmail, assertScope } from "./access";
@@ -638,7 +638,7 @@ export async function processJobs(
           if (content) {
             assertDeliveryRecipients([job.recipient]);
             await (
-              options.sender || createAppsScriptScheduleEmailSender()
+              options.sender || createOutboundEmailSender()
             ).sendEmail({
               to: job.recipient,
               ...content,

@@ -156,6 +156,26 @@ describe("unattended collector and rollout", () => {
     expect(incident.summary).toContain("(wise_timetable: timetable_conflict)");
     expect(JSON.stringify([run, incident])).not.toContain("teacher-secret-value");
   });
+  it("stops at its own deadline and records where, when the Atom browser never opens", async () => {
+    const { runAtomCollector } = await import("../atom/collector");
+    const startedAt = Date.now();
+    const result = await runAtomCollector({ db, deadlineMs: Date.now() + 1500, triggerSource: "admin", probe: { studentId: "_123", date: "2026-09-20" },
+      fetchDays: async () => [], openClient: () => new Promise(() => undefined) });
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+    expect(result).toMatchObject({ ok: false, errorCode: "collection_failed", failureStage: "atom_open", failureCause: "run_deadline" });
+    const [run] = await db.select().from(s.feedbackAtomSyncRuns);
+    expect(run.status).toBe("failed");
+    expect(run.finishedAt).not.toBeNull();
+    expect(run.counts).toMatchObject({ failureStage: "atom_open", failureCause: "run_deadline" });
+  });
+  it("records a successful run before a browser shutdown that never finishes", async () => {
+    const { runAtomCollector } = await import("../atom/collector");
+    const openClient = async () => ({ catalog: [], collect: async () => [], close: () => new Promise<void>(() => undefined) });
+    const result = await runAtomCollector({ db, deadlineMs: Date.now() + 60000, triggerSource: "admin", fetchDays: async () => [], openClient });
+    expect(result.ok).toBe(true);
+    const [run] = await db.select().from(s.feedbackAtomSyncRuns);
+    expect(run.status).toBe("succeeded");
+  });
   it("allows a scheduled retrieval trial only for an actively approved student", async () => {
     const { runAtomCollector } = await import("../atom/collector");
     const sessionsBefore = await db.select().from(s.feedbackAutowriterSessions);

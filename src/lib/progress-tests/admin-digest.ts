@@ -21,9 +21,9 @@ import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { todayBangkok } from "@/lib/room-capacity/dates";
 import {
-  createAppsScriptScheduleEmailSender,
   type ScheduleEmailSender,
 } from "@/lib/classrooms/schedule-email";
+import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { APP_BASE_URL } from "@/lib/leave-requests/config";
 import { PROGRESS_TEST_THRESHOLD } from "./config";
 import { launchConfig } from "./workspace/cutover";
@@ -393,7 +393,7 @@ export async function sendProgressTestAdminDigest(
   }
 
   const recipients = await loadAdminEmails(db);
-  const sender = options.sender ?? createAppsScriptScheduleEmailSender();
+  const sender = options.sender ?? createOutboundEmailSender();
   const html = renderHtml(digestDate, content);
   const text = renderText(digestDate, content);
   const counts = { attempted: 0, success: 0, failed: 0 };
