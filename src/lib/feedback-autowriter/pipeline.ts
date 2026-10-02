@@ -13,6 +13,7 @@ import {
   AUTOWRITER_JUDGE_TIMEOUT_MS,
   AUTOWRITER_MODELS,
   AUTOWRITER_WRITER_TIMEOUT_MS,
+  writersFor,
   type AutowriterModelConfig,
   type AutowriterModelRoute,
 } from "./config";
@@ -173,6 +174,8 @@ export async function runWritingPipeline(input: {
   styleGuide?: FeedbackStyleGuide | null;
   formatGuide?: FeedbackFormatGuide | null;
   tutorNames: readonly string[];
+  /** Explicit writers, in order, for offline evaluation and tests; production uses `writersFor` the session's tutor. */
+  writers?: readonly AutowriterModelConfig[];
   priorFeedback: readonly PriorFeedbackComparison[];
   record: (record: CallRecord) => Promise<void>;
   remainingMs: () => number;
@@ -285,7 +288,8 @@ export async function runWritingPipeline(input: {
     judgeAnswered && result.kind === "infra" ? { ...result, judgeAnswered: true } : result;
 
   // Every writer is on a zero-retention route, so transcripts get the fallback too.
-  const writers: AutowriterModelConfig[] = [AUTOWRITER_MODELS.writer, AUTOWRITER_MODELS.fallbackWriter];
+  // Each tutor's own order: Sol then Luna, or Luna then Sol for the tutors added on 2 Oct (`writersFor`).
+  const writers: AutowriterModelConfig[] = input.writers ? [...input.writers] : writersFor(session.canonicalTutorKey);
   for (const writer of writers) {
     const written = await run(writer, "writer", buildFeedbackMessages({
       studentFullName: session.studentFullName,

@@ -170,7 +170,7 @@ describe("buildAutowriterReview", () => {
     const payload = buildAutowriterReview({ now: NOW, ...source() });
     expect(payload.gate).toMatchObject({
       reviewed: 1, accurate: 1, pendingFlaggedReviews: 1, requiredPending: 1, unrecordedPosts: 0, coverageNum: 8, coverageDen: 9,
-      status: "below_head_start", currentTutors: 5, nextExpansionSize: 8,
+      status: "below_head_start", currentTutors: 27, nextExpansionSize: 41,
     });
     expect(payload.gate.reasons).toContain("1 required post(s) not yet reviewed");
     // Different facts in → a different gate out, whatever the queue holds.

@@ -11,31 +11,27 @@ import { MAX_AUDIO_BYTES, type CaptureAsset, type CaptureSession, type CaptureVi
 import { LocalRecovery, type RecoveryRecord } from "@/lib/class-capture/local-recovery";
 import { AssetCard } from "./asset-card";
 import { RecordingPanel } from "./recording-panel";
+import { bangkokDay, watchTodaySessions } from "./today-sessions";
 import { canonicalMime, captureRequest, CaptureRequestError, clearCapturePointer, DRAFT_LABELS, EMPTY_DRAFT, feedbackText, loadCapturePointer, saveCapturePointer, validateLocalFile, type CaptureAvailability, type LocalMedia } from "./client-helpers";
 
 type SessionData = { sessions: CaptureSession[]; availability: CaptureAvailability };
 const UNAVAILABLE: CaptureAvailability = { enabled: false, storage: false, transcription: false, drafting: false };
 
-function todayBangkok() {
-  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
 function sessionTime(session: CaptureSession) {
   return `${formatBangkokDateTime(session.startTime, { hour: "2-digit", minute: "2-digit" })}–${formatBangkokDateTime(session.endTime, { hour: "2-digit", minute: "2-digit" })}`;
 }
 
-export function ClassCaptureWorkspace({ ownerEmail, enabled, initialData, initialCapture, initialDate }: {
+export function ClassCaptureWorkspace({ ownerEmail, enabled, initialData, initialCapture }: {
   ownerEmail: string;
   enabled: boolean;
   initialData?: SessionData;
   initialCapture?: CaptureView;
-  initialDate?: string;
 }) {
-  const [date, setDate] = useState(initialDate ?? todayBangkok);
+  const [today, setToday] = useState(() => bangkokDay());
   const [data, setData] = useState<SessionData>(initialData ?? { sessions: [], availability: { ...UNAVAILABLE, enabled } });
   const [loading, setLoading] = useState(!initialData && enabled);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const listRefresh = useRef<(() => void) | null>(null);
   const [selected, setSelected] = useState<CaptureSession | null>(null);
   const [capture, setCapture] = useState<CaptureView | null>(initialCapture ?? null);
   const currentCapture = useRef<CaptureView | null>(initialCapture ?? null);
@@ -100,11 +96,28 @@ export function ClassCaptureWorkspace({ ownerEmail, enabled, initialData, initia
   }
 
   useEffect(() => {
-    let cancelled = false;
-    if (!enabled || initialData) return;
-    captureRequest<SessionData>(`?date=${date}`).then((result) => { if (!cancelled) { setData(result); setLoading(false); } }).catch((problem: Error) => { if (!cancelled) { setError(problem.message); setLoading(false); } });
-    return () => { cancelled = true; };
-  }, [date, enabled, initialData]);
+    if (!enabled) return;
+    const watcher = watchTodaySessions({
+      request: () => captureRequest<SessionData>(""),
+      focus: window,
+      visibility: document,
+      onRefresh: (day) => {
+        setToday(day); setLoading(true); setSessionError(null);
+        setData((previous) => ({ ...previous, sessions: [] }));
+        if (!currentCapture.current) {
+          setSelected(null); setParticipants(false); setGuardian(""); setProcessing(false);
+          createAttempt.current = null;
+        }
+      },
+      onResult: (result) => { setData(result); setLoading(false); },
+      onError: (problem) => {
+        setSessionError(problem instanceof Error ? problem.message : "Today's classes could not be refreshed.");
+        setLoading(false);
+      },
+    });
+    listRefresh.current = watcher.refresh;
+    return () => { watcher.stop(); listRefresh.current = null; };
+  }, [enabled]);
 
   useEffect(() => {
     if (booted.current || initialCapture) return;
@@ -125,6 +138,8 @@ export function ClassCaptureWorkspace({ ownerEmail, enabled, initialData, initia
   }, []);
 
   async function createCapture() {
+    if (today !== bangkokDay()) { listRefresh.current?.(); return; }
+    if (loading || sessionError) return;
     if (!selected || !participants || !guardian || !processing || !topic.trim()) return;
     await run("Preparing capture", async () => {
       createAttempt.current ??= crypto.randomUUID();
@@ -244,12 +259,13 @@ export function ClassCaptureWorkspace({ ownerEmail, enabled, initialData, initia
         <ol aria-label="Capture progress" className="my-6 grid grid-cols-3 gap-2 sm:gap-4">{["Choose class", "Capture & reflect", "Review & finish"].map((label, index) => <li key={label} aria-current={step === index + 1 ? "step" : undefined} className={`flex items-center gap-2 border-t-2 pt-3 text-xs font-medium sm:text-sm ${step >= index + 1 ? "border-primary text-primary" : "border-border text-muted-foreground"}`}><span className={`flex size-6 shrink-0 items-center justify-center rounded-full text-xs ${step > index + 1 ? "bg-primary text-primary-foreground" : "bg-muted"}`}>{step > index + 1 ? <Check className="size-3.5" /> : index + 1}</span><span>{label}</span></li>)}</ol>
         {offline && <div role="status" className="mb-4 flex gap-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><WifiOff className="size-5 shrink-0" /><p>You’re offline. You can keep recording with this page open. Reconnect before uploading or saving draft edits.</p></div>}
         {error && <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-900">{error}{capture && !locked && <Button variant="ghost" className="mt-2 min-h-11" onClick={() => void run("Reloading capture", () => recoverCapture(capture.id))}><RefreshCw />Reload saved capture</Button>}</div>}
+        {sessionError && <div role="alert" className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900"><p>Today’s classes could not be refreshed. {sessionError}</p>{capture && <p className="mt-1 text-xs">Your current capture and edits are unchanged.</p>}<Button variant="outline" className="mt-2 min-h-11" disabled={loading} onClick={() => listRefresh.current?.()}><RefreshCw />Retry today’s classes</Button></div>}
         {notice && <p role="status" className="mb-4 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm leading-6 text-sky-900 dark:bg-sky-950 dark:text-sky-100">{notice}</p>}
         {!active ? <section className="rounded-2xl border bg-card p-6 sm:p-10"><div className="mb-4 flex size-12 items-center justify-center rounded-xl bg-muted"><Mic className="size-6 text-muted-foreground" /></div><h2 className="text-xl font-semibold">Class capture is paused</h2><p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">Recording and AI drafting are not enabled for this workspace yet. Continue writing and submitting feedback through your usual Wise class page.</p><a href="/post-class-feedback" className="mt-5 inline-flex min-h-11 items-center gap-2 text-sm font-medium text-primary">Open Class Feedback<ArrowRight className="size-4" /></a>{recoverable.length > 0 && <div className="mt-4 border-t pt-4"><p className="text-xs leading-5 text-muted-foreground">This device has saved media from an earlier capture. You can remove those local recovery copies while capture is paused.</p><Button variant="outline" className="mt-3 min-h-11" disabled={Boolean(busy)} onClick={() => void run("Removing local recovery", async () => { const store = recovery.current ??= new LocalRecovery(); for (const record of recoverable) await store.remove(ownerEmail, record.assetId); clearCapturePointer(); setRecoverable([]); setNotice("Local recovery copies removed. Cloud retention and cleanup are unchanged."); })}>Delete local recovery copies</Button></div>}</section> : <>
           {recoveryIds.length > 0 && <section className="mb-5 rounded-xl border border-amber-200 bg-amber-50/60 p-4"><h2 className="text-sm font-semibold">There’s audio to recover on this device</h2><p className="mt-1 text-xs leading-5 text-muted-foreground">Reopening checks your class access first. Local copies expire after 24 hours and may be incomplete.</p><div className="mt-3 flex flex-wrap gap-2">{recoveryIds.map((id, index) => <Button key={id} variant="outline" className="min-h-11" disabled={locked} onClick={() => void run("Recovering capture", () => recoverCapture(id))}>Recover capture {index + 1}</Button>)}<Button variant="ghost" className="min-h-11" disabled={locked} onClick={() => void run("Removing local recovery", async () => { for (const id of recoveryIds) await recovery.current?.deleteCapture(ownerEmail, id); setRecoverable([]); setNotice("Local recovery copies removed."); })}>Delete local recovery copies</Button></div></section>}
           {!capture ? <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-            <section className="rounded-2xl border bg-card p-5 sm:p-6"><div className="flex items-center justify-between gap-3"><h2 className="text-xl font-semibold">Your scheduled classes</h2><CalendarDays className="size-5 text-primary" /></div><p className="mt-2 text-sm leading-6 text-muted-foreground">Choose the student and session you’re teaching.</p><label className="mt-5 block text-xs font-medium text-muted-foreground" htmlFor="class-date">Class date · Bangkok time</label><Input id="class-date" type="date" value={date} className="mt-2 min-h-11 w-full text-base" disabled={locked} onChange={(event) => { setDate(event.target.value); setSelected(null); createAttempt.current = null; setLoading(!initialData); }} />
-              <div className="mt-4 space-y-2">{loading ? <p role="status" className="py-8 text-center text-sm text-muted-foreground">Loading your classes…</p> : data.sessions.length ? data.sessions.map((session) => <button key={`${session.sessionId}:${session.studentId}`} className={`flex min-h-24 w-full items-center gap-3 rounded-xl border p-4 text-left transition-colors ${selected?.sessionId === session.sessionId && selected.studentId === session.studentId ? "border-primary bg-sky-50 ring-1 ring-primary dark:bg-sky-950" : "bg-background hover:border-sky-300"}`} disabled={locked} aria-pressed={selected?.sessionId === session.sessionId && selected.studentId === session.studentId} onClick={() => { setSelected(session); createAttempt.current = null; setParticipants(false); setGuardian(""); setProcessing(false); }}><span className="min-w-0 flex-1"><span className="block text-xs font-medium text-primary">{sessionTime(session)}</span><span className="mt-1 block font-semibold">{session.studentName}</span><span className="mt-1 block break-words text-xs leading-5 text-muted-foreground">{session.title} · {session.teacherName}</span></span><ChevronRight className="size-5 shrink-0 text-muted-foreground" /></button>) : <p className="rounded-xl bg-muted/50 p-5 text-sm leading-6 text-muted-foreground">No eligible in-person classes are available for this date. Only authorized sessions with one student appear. If today’s schedule is missing, ask operations to check the schedule sync.</p>}</div>
+            <section className="rounded-2xl border bg-card p-5 sm:p-6"><div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-xl font-semibold">Your classes today</h2><Button variant="ghost" className="min-h-11" aria-label="Refresh today’s classes" disabled={loading} onClick={() => listRefresh.current?.()}><RefreshCw className={loading ? "animate-spin" : undefined} />Refresh</Button></div><p className="mt-2 text-sm leading-6 text-muted-foreground">Only your own scheduled classes appear. Choose the student and session you’re teaching today.</p><div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-900 dark:bg-sky-950 dark:text-sky-100"><span className="inline-flex items-center gap-1.5 font-semibold"><CalendarDays className="size-4" />Today · Bangkok</span><time dateTime={today}>{formatBangkokDateTime(`${today}T12:00:00+07:00`, { day: "numeric", month: "short", year: "numeric" })}</time></div>
+              <div className="mt-4 space-y-2">{loading ? <p role="status" className="py-8 text-center text-sm text-muted-foreground">Loading your classes…</p> : data.sessions.length ? data.sessions.map((session) => <button key={`${session.sessionId}:${session.studentId}`} className={`flex min-h-24 w-full items-center gap-3 rounded-xl border p-4 text-left transition-colors ${selected?.sessionId === session.sessionId && selected.studentId === session.studentId ? "border-primary bg-sky-50 ring-1 ring-primary dark:bg-sky-950" : "bg-background hover:border-sky-300"}`} disabled={locked} aria-pressed={selected?.sessionId === session.sessionId && selected.studentId === session.studentId} onClick={() => { setSelected(session); createAttempt.current = null; setParticipants(false); setGuardian(""); setProcessing(false); }}><span className="min-w-0 flex-1"><span className="block text-xs font-medium text-primary">{sessionTime(session)}</span><span className="mt-1 block font-semibold">{session.studentName}</span><span className="mt-1 block break-words text-xs leading-5 text-muted-foreground">{session.title} · {session.teacherName}</span></span><ChevronRight className="size-5 shrink-0 text-muted-foreground" /></button>) : <p className="rounded-xl bg-muted/50 p-5 text-sm leading-6 text-muted-foreground">No eligible in-person classes are scheduled for you today. Only your own sessions with one student appear. If today’s schedule is missing, ask operations to check the schedule sync.</p>}</div>
             </section>
             <section className="rounded-2xl border border-sky-200 bg-sky-50/40 p-5 sm:p-6"><div className="mb-4 flex size-11 items-center justify-center rounded-full bg-sky-100 text-primary"><ShieldCheck className="size-5" /></div><h2 className="text-xl font-semibold">Permission comes first.</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">Explain what you’re recording and why. Everyone can decline or ask you to stop. Use your usual notes if anyone is uncomfortable.</p>
               <label htmlFor="lesson-topic" className="mt-5 block text-sm font-medium">Today’s lesson topic</label><Input id="lesson-topic" value={topic} maxLength={500} disabled={locked} onChange={(event) => setTopic(event.target.value)} placeholder="e.g. Equivalent fractions" className="mt-2 min-h-11 bg-background text-base" />
@@ -257,7 +273,7 @@ export function ClassCaptureWorkspace({ ownerEmail, enabled, initialData, initia
               <label htmlFor="guardian-consent" className="mt-4 block text-sm font-medium">Guardian permission</label><select id="guardian-consent" value={guardian} disabled={locked} onChange={(event) => setGuardian(event.target.value as typeof guardian)} className="mt-2 min-h-11 w-full rounded-lg border bg-background px-3 text-base"><option value="">Select the applicable confirmation</option><option value="confirmed">Required guardian permission is confirmed</option><option value="not_required">All participants are adults; guardian permission is not required</option></select>
               <label className="mt-5 flex min-h-11 cursor-pointer items-start gap-3 text-sm leading-6"><input type="checkbox" checked={processing} disabled={locked} onChange={(event) => setProcessing(event.target.checked)} className="mt-1 size-5 shrink-0 accent-sky-700" /><span>I have permission to use private Vercel Blob storage, Soniox transcription and the OpenRouter drafting model for this class’s evidence.</span></label>
               <p className="mt-4 text-xs leading-5 text-muted-foreground">Cloud captures expire after 24 hours. You can delete them earlier. Copies downloaded to your device need to be deleted separately.</p>
-              <Button className="mt-5 min-h-12 w-full text-base" disabled={locked || offline || !selected || !topic.trim() || !participants || !guardian || !processing} onClick={() => void createCapture()}>{busy ? <Loader2 className="animate-spin" /> : <ArrowRight />}Prepare class capture</Button>
+              <Button className="mt-5 min-h-12 w-full text-base" disabled={locked || loading || Boolean(sessionError) || offline || !selected || !topic.trim() || !participants || !guardian || !processing} onClick={() => void createCapture()}>{busy ? <Loader2 className="animate-spin" /> : <ArrowRight />}Prepare class capture</Button>
             </section>
           </div> : <>
             <section className="mb-5 flex flex-wrap items-center justify-between gap-4 rounded-xl border bg-card p-4 sm:px-5"><div className="min-w-0"><p className="text-xs font-medium text-primary">{formatBangkokDateTime(capture.session.startTime, { day: "numeric", month: "short" })} · {sessionTime(capture.session)} · Bangkok</p><h2 className="mt-1 text-lg font-semibold">{capture.session.studentName}<span className="ml-2 text-sm font-normal text-muted-foreground">{capture.session.title}</span></h2><p className="mt-1 text-xs text-muted-foreground">{capture.session.teacherName} · Consent confirmed</p></div><span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800"><span className="size-1.5 rounded-full bg-amber-500" />{savedReview ? "Reviewed draft" : "Draft only"}</span></section>

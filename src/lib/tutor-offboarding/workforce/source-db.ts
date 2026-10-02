@@ -31,13 +31,15 @@ export async function loadWorkforceEvidence(db: Database, query: WorkforceQuery,
 }
 export async function loadWorkforceEvidenceInTransaction(db: Database, _query: WorkforceQuery, now: Date): Promise<WorkforceEvidence> {
     const [versions, observations, runs, sessionVersions, creditVersions, mappings, accounts, active] = await sequential([
-        db.select().from(s.workforcePersonVersions).where(lte(s.workforcePersonVersions.observedAt, now)).orderBy(asc(s.workforcePersonVersions.observedAt), asc(s.workforcePersonVersions.versionOrder)),
-        db.select().from(s.workforcePersonObservations).where(lte(s.workforcePersonObservations.observedAt, now)).orderBy(asc(s.workforcePersonObservations.observedAt)),
-        db.select().from(s.workforceCaptureRuns).where(lte(s.workforceCaptureRuns.observedAt, now)).orderBy(asc(s.workforceCaptureRuns.observedAt)),
-        db.selectDistinctOn([s.workforceSessionVersions.wiseSessionId]).from(s.workforceSessionVersions).where(lte(s.workforceSessionVersions.observedAt, now)).orderBy(asc(s.workforceSessionVersions.wiseSessionId), desc(s.workforceSessionVersions.observedAt), desc(s.workforceSessionVersions.versionOrder)),
-        db.selectDistinctOn([s.workforceCreditVersions.wiseSessionId, s.workforceCreditVersions.wiseStudentId]).from(s.workforceCreditVersions).where(lte(s.workforceCreditVersions.observedAt, now)).orderBy(asc(s.workforceCreditVersions.wiseSessionId), asc(s.workforceCreditVersions.wiseStudentId), desc(s.workforceCreditVersions.observedAt), desc(s.workforceCreditVersions.versionOrder)),
-        db.select().from(s.workforceSubjectMappings), db.select().from(s.tutorWiseAccounts),
-        db.select().from(s.snapshots).where(eq(s.snapshots.active, true)).limit(1),
+        db.select({ id: s.workforcePersonVersions.id, canonicalKey: s.workforcePersonVersions.canonicalKey, observedAt: s.workforcePersonVersions.observedAt, payload: s.workforcePersonVersions.payload }).from(s.workforcePersonVersions).where(lte(s.workforcePersonVersions.observedAt, now)).orderBy(asc(s.workforcePersonVersions.observedAt), asc(s.workforcePersonVersions.versionOrder)),
+        db.select({ id: s.workforcePersonObservations.id, canonicalKey: s.workforcePersonObservations.canonicalKey, versionId: s.workforcePersonObservations.versionId, observedAt: s.workforcePersonObservations.observedAt, quality: s.workforcePersonObservations.quality }).from(s.workforcePersonObservations).where(lte(s.workforcePersonObservations.observedAt, now)).orderBy(asc(s.workforcePersonObservations.observedAt)),
+        db.select({ id: s.workforceCaptureRuns.id, complete: s.workforceCaptureRuns.complete, kind: s.workforceCaptureRuns.kind, coverage: s.workforceCaptureRuns.coverage }).from(s.workforceCaptureRuns).where(lte(s.workforceCaptureRuns.observedAt, now)).orderBy(asc(s.workforceCaptureRuns.observedAt)),
+        // All immutable payload fields and selected IDs remain intact. Ordering columns
+        // still select the same latest version without transferring unused metadata.
+        db.selectDistinctOn([s.workforceSessionVersions.wiseSessionId], { id: s.workforceSessionVersions.id, wiseSessionId: s.workforceSessionVersions.wiseSessionId, observedAt: s.workforceSessionVersions.observedAt, payload: s.workforceSessionVersions.payload }).from(s.workforceSessionVersions).where(lte(s.workforceSessionVersions.observedAt, now)).orderBy(asc(s.workforceSessionVersions.wiseSessionId), desc(s.workforceSessionVersions.observedAt), desc(s.workforceSessionVersions.versionOrder)),
+        db.selectDistinctOn([s.workforceCreditVersions.wiseSessionId, s.workforceCreditVersions.wiseStudentId], { id: s.workforceCreditVersions.id, wiseSessionId: s.workforceCreditVersions.wiseSessionId, wiseStudentId: s.workforceCreditVersions.wiseStudentId, observedAt: s.workforceCreditVersions.observedAt, payload: s.workforceCreditVersions.payload }).from(s.workforceCreditVersions).where(lte(s.workforceCreditVersions.observedAt, now)).orderBy(asc(s.workforceCreditVersions.wiseSessionId), asc(s.workforceCreditVersions.wiseStudentId), desc(s.workforceCreditVersions.observedAt), desc(s.workforceCreditVersions.versionOrder)),
+        db.select().from(s.workforceSubjectMappings), db.select({ canonicalKey: s.tutorWiseAccounts.canonicalKey, wiseTeacherId: s.tutorWiseAccounts.wiseTeacherId, wiseUserId: s.tutorWiseAccounts.wiseUserId, wiseJoinedOn: s.tutorWiseAccounts.wiseJoinedOn, wiseRelation: s.tutorWiseAccounts.wiseRelation, isOnlineVariant: s.tutorWiseAccounts.isOnlineVariant, status: s.tutorWiseAccounts.status, displayName: s.tutorWiseAccounts.displayName, email: s.tutorWiseAccounts.email }).from(s.tutorWiseAccounts),
+        db.select({ id: s.snapshots.id, createdAt: s.snapshots.createdAt }).from(s.snapshots).where(eq(s.snapshots.active, true)).limit(1),
     ]);
     const versionById = new Map(versions.map(v => [v.id, v]));
     const people = new Map<string, WorkforcePerson>();
@@ -101,7 +103,14 @@ export async function loadWorkforceEvidenceInTransaction(db: Database, _query: W
     const snapshotAge = active[0] ? now.getTime() - active[0].createdAt.getTime() : NaN;
     const futureFresh = Number.isFinite(snapshotAge) && snapshotAge >= 0 && snapshotAge <= 90 * 60000;
     if (active[0]) {
-        const future = await db.select({ block: s.futureSessionBlocks, canonicalKey: s.tutorIdentityGroups.canonicalKey }).from(s.futureSessionBlocks).innerJoin(s.tutorIdentityGroups, eq(s.tutorIdentityGroups.id, s.futureSessionBlocks.groupId)).where(eq(s.futureSessionBlocks.snapshotId, active[0].id));
+        const future = await db.select({ block: {
+            wiseSessionId: s.futureSessionBlocks.wiseSessionId, wiseClassId: s.futureSessionBlocks.wiseClassId,
+            wiseTeacherId: s.futureSessionBlocks.wiseTeacherId, startTime: s.futureSessionBlocks.startTime,
+            endTime: s.futureSessionBlocks.endTime, weekday: s.futureSessionBlocks.weekday,
+            startMinute: s.futureSessionBlocks.startMinute, endMinute: s.futureSessionBlocks.endMinute,
+            title: s.futureSessionBlocks.title, studentIds: s.futureSessionBlocks.studentIds,
+            wiseStatus: s.futureSessionBlocks.wiseStatus, sessionType: s.futureSessionBlocks.sessionType,
+        }, canonicalKey: s.tutorIdentityGroups.canonicalKey }).from(s.futureSessionBlocks).innerJoin(s.tutorIdentityGroups, eq(s.tutorIdentityGroups.id, s.futureSessionBlocks.groupId)).where(eq(s.futureSessionBlocks.snapshotId, active[0].id));
         for (const { block, canonicalKey } of future) {
             const interval = interpretSnapshotSessionInterval(block);
             if (!interval) futureTimestampIncomplete = true;

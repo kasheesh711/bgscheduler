@@ -89,6 +89,20 @@ beforeEach(async () => {
 });
 
 describe("loadAutowriterDashboard", () => {
+  it("names a class from the autowriter's own Wise read until Class Feedback mirrors it; the mirror's name wins", async () => {
+    const unmirrored = await seedRow(1, { endAt: "2026-09-30T03:00:00Z", metadata: { className: "Athen (Athen.Si) Simthumnimit" } });
+    const mirrored = await seedRow(2, { endAt: "2026-09-30T04:00:00Z", metadata: { className: "Wise read" }, className: "Mirror name" });
+    const nameless = await seedRow(3, { endAt: "2026-09-30T02:00:00Z" });
+
+    const board = await loadAutowriterDashboard(db, { windowDays: 7, now: NOW });
+    const names = (rows: ReadonlyArray<{ wiseSessionId: string; className: string | null }>) =>
+      Object.fromEntries(rows.map((row) => [row.wiseSessionId, row.className]));
+
+    const expected = { [unmirrored]: "Athen (Athen.Si) Simthumnimit", [mirrored]: "Mirror name", [nameless]: null };
+    expect(names(board.holds)).toEqual(expected);
+    expect(names(board.recent)).toEqual(expected);
+  });
+
   it("lists every held class whatever its age, with its alert time as the sweep wrote it, the failed posts and today's classes", async () => {
     // Held today, with a judged draft kept on the row; its alert digest was emailed.
     const emailed = await seedRow(1, {

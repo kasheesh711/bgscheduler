@@ -9,6 +9,12 @@ import {
 } from "../requests";
 afterEach(() => vi.unstubAllGlobals());
 describe("workforce reads", () => {
+  it("explicit refresh bypasses server cache without changing the report filters", async () => {
+    const mock = vi.fn().mockResolvedValue(new Response(JSON.stringify(workforceFixture())));
+    vi.stubGlobal("fetch", mock);
+    await fetchWorkforceReport(workforceFixture().query, new AbortController().signal, true);
+    expect(mock).toHaveBeenCalledWith(expect.not.stringContaining("refresh="), expect.objectContaining({ headers: { "x-workforce-refresh": "1" } }));
+  });
   it("omits empty filters and issues abortable GET only", async () => {
     const mock = vi
       .fn()

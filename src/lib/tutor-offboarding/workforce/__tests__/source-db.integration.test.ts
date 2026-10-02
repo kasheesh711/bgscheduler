@@ -1,6 +1,7 @@
 import { beforeAll, afterAll, beforeEach, it, expect } from 'vitest';
 import { startTestDb, stopTestDb, truncateAll } from '@/tests/integration/db-helper';
 import type { Database } from '@/lib/db';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import * as s from '@/lib/db/schema';
 import { persistWorkforceSourceWindow } from '../observation-store';
 import { loadWorkforceEvidence } from '../source-db';
@@ -11,6 +12,30 @@ afterAll(async () => { if (h)
     await stopTestDb(h); });
 beforeEach(async () => { await truncateAll(h.db); });
 const db = () => h.db as unknown as Database;
+it('retains complete source facts while avoiding unused version hashes and snapshot student names in reads', async () => {
+    const source = window();
+    source.evidence.tutorFacts = [{ id: 'fact1', wiseSessionId: 's1', canonicalKey: 'Aria', scheduledMinutes: 60, teachingMinutes: 55, modality: 'onsite', subject: 'Maths', curriculum: 'Thai', level: 'G1-9', completeness: 'complete', reasonCodes: [] }];
+    source.evidence.historicalBookedParticipants = [{ wiseSessionId: 's1', studentIds: ['st1'], completeness: 'complete', source: 'original_booking', reasonCodes: [] }];
+    await persistWorkforceSourceWindow(db(), source);
+    const [snapshot] = await h.db.insert(s.snapshots).values({ active: true, createdAt: new Date('2026-10-01T04:30:00Z') }).returning();
+    const [group] = await h.db.insert(s.tutorIdentityGroups).values({ snapshotId: snapshot.id, canonicalKey: 'Aria', displayName: 'Aria' }).returning();
+    await h.db.insert(s.futureSessionBlocks).values({ snapshotId: snapshot.id, groupId: group.id, wiseTeacherId: 't1', wiseSessionId: 'future', wiseClassId: 'course1', startTime: new Date('2026-10-04T10:30:00Z'), endTime: new Date('2026-10-04T11:30:00Z'), weekday: 0, startMinute: 1050, endMinute: 1110, wiseStatus: 'UPCOMING', sessionType: 'SCHEDULED', studentName: 'Unused private field', location: 'Unused location', studentIds: ['st2'], title: 'Maths' });
+    const queries: string[] = [];
+    const reader = drizzle(h.pool, { schema: s, logger: { logQuery(query) { queries.push(query); } } }) as unknown as Database;
+    const result = await loadWorkforceEvidence(reader, query, new Date('2026-10-01T05:00:00Z'));
+    expect(result.sessions[0]).toMatchObject(source.sessions[0]);
+    expect(result.studentCredits[0]).toMatchObject({ ...source.credits[0], observedAt: new Date(source.credits[0].observedAt!).toISOString() });
+    expect(result.tutorFacts).toEqual(source.evidence.tutorFacts);
+    expect(result.historicalBookedParticipants).toEqual(source.evidence.historicalBookedParticipants);
+    const sessionSelect = queries.find(q => q.includes('from "workforce_session_versions"'))!;
+    const creditSelect = queries.find(q => q.includes('from "workforce_credit_versions"'))!;
+    expect(sessionSelect.split(' from ')[0]).not.toContain('content_hash');
+    expect(creditSelect.split(' from ')[0]).not.toContain('content_hash');
+    const futureSelect = queries.find(q => q.includes('from "future_session_blocks"'))!;
+    expect(futureSelect.split(' from ')[0]).not.toContain('student_name');
+    expect(futureSelect.split(' from ')[0]).not.toContain('location');
+    expect(result.sessions.find(s => s.wiseSessionId === 'future')).toMatchObject({ wiseClassId: 'course1', classTitle: 'Maths', startAt: '2026-10-04T10:30:00.000Z', endAt: '2026-10-04T11:30:00.000Z', historicalBookedStudentIds: ['st2'], modality: 'online' });
+});
 it('retains owner-confirmed resignations for analytics without changing the sheet or removal source', async () => {
     const at = new Date('2026-10-01T03:00:00Z');
     const [snapshot] = await h.db.insert(s.snapshots).values({ active: true, createdAt: at }).returning();

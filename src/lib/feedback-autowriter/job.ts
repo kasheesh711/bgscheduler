@@ -52,6 +52,7 @@ import {
   classifyGateReason,
   classifyTeacherSubmission,
   detailClassId,
+  detailClassName,
   detailTeacherId,
   detailTeacherName,
   evaluateSessionGates,
@@ -94,6 +95,7 @@ import {
   releaseSweepLease,
   sessionSubmitStore,
   setSonioxTranscription,
+  stampClassName,
   stuckPostInFlight,
   updateLeasedTeacher,
   type AlertKind,
@@ -241,6 +243,7 @@ export async function processSession(deps: AutowriterDeps, input: {
       scheduledEndAt: window.end,
       deadlineAt: calculateFeedbackDeadline(window.end),
       trigger: input.trigger,
+      className: detailClassName(detail),
     });
     row = await readSessionRow(db, input.wiseSessionId);
     if (!row) return out("not_found");
@@ -610,6 +613,11 @@ async function processLeased(deps: AutowriterDeps, input: {
     const retrying = gateReason !== null && classifyGateReason(gateReason, { minutesSinceEnd: minutesSinceEnd(detail, now) }) === "retry";
     if (!retrying || Date.now() + 20_000 > waitUntil) break;
     await sleep(20_000);
+  }
+  // A row made before names were kept, or by the cron path: keep Wise's name for the dashboard.
+  if (!(row.metadata as { className?: unknown }).className) {
+    const className = detailClassName(detail);
+    if (className) await stampClassName(db, row.wiseSessionId, className);
   }
 
   const followed = await followTeacher(deps, { row, token: input.token, control: input.control, detail, release, out, retryState: "pending" });

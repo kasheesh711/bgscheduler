@@ -72,7 +72,18 @@ const INCIDENT_TITLES: Record<string, string> = {
   api_actor_unmatched: "A save by the Wise API user that no post explains",
   first_shot_unverified: "A post cannot be proven against what was sent",
   scan_failed: "The forward scan failed",
+  atom_collection_failed: "Atom lesson collection failed",
+  style_review_flagged: "A guided post needs a style fix",
+  style_review_unavailable: "A guided post's style check could not run",
+  style_review_source_missing: "A guided post is missing its evidence or fact checks",
 };
+
+/**
+ * Info incidents that still wait in the list for the owner to acknowledge (not red, never pushed). A style check that
+ * could not run is not one: it retries by itself, and its later result supersedes it.
+ */
+export const LISTED_INFO_INCIDENT_KINDS = ["style_review_flagged"] as const;
+const LISTED_INFO_KINDS: ReadonlySet<string> = new Set(LISTED_INFO_INCIDENT_KINDS);
 
 const FAILED_POST_TITLES: Record<InboxDashboard["failedPosts"][number]["state"], string> = {
   verify_failed: "A post did not verify in Wise",
@@ -83,6 +94,14 @@ const FAILED_POST_TITLES: Record<InboxDashboard["failedPosts"][number]["state"],
 /** What an incident of a kind is, as a short plain sentence; a kind nobody listed gets a general one. */
 export function incidentTitle(kind: string): string {
   return INCIDENT_TITLES[kind] ?? "An incident needs a look";
+}
+
+/**
+ * Whether an incident waits in the list until the owner acknowledges it: every critical one, and the info kinds that
+ * need a person (a guided post's style fix).
+ */
+export function isListedIncident(incident: { kind: string; severity: "critical" | "info"; acknowledgedAt: string | null }): boolean {
+  return incident.acknowledgedAt === null && (incident.severity === "critical" || LISTED_INFO_KINDS.has(incident.kind));
 }
 
 /** What happened to a post that did not end well, as a short plain sentence. */
@@ -133,7 +152,8 @@ export function isOpenHold(hold: Pick<InboxDashboard["holds"][number], "resolved
 
 /**
  * The to-do list, in display order:
- * 1. incidents: critical and not acknowledged, newest first;
+ * 1. incidents not acknowledged (`isListedIncident`): critical ones newest first (red), then the listed info ones
+ *    newest first (a guided post's style fix, not red);
  * 2. holds still waiting for someone (`isOpenHold`): soonest deadline first — red with under 6 hours left (or the
  *    deadline passed), amber under 24 hours;
  * 3. reviews: posts with an open flag first (amber), then the required ones without a verdict, oldest class first;
@@ -160,14 +180,15 @@ export function buildInbox(
   for (const row of dashboard.recent) known(row.wiseSessionId, row.tutorKey, row.scheduledEndAt);
 
   const incidents = (review?.incidents ?? [])
-    .filter((incident) => incident.severity === "critical" && incident.acknowledgedAt === null)
-    .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .filter(isListedIncident)
+    .toSorted((a, b) => Number(b.severity === "critical") - Number(a.severity === "critical")
+      || b.createdAt.localeCompare(a.createdAt))
     .map((incident): InboxItem => {
       const about = incident.wiseSessionId ? classes.get(incident.wiseSessionId) : undefined;
       return {
         id: `incident:${incident.id}`,
         kind: "incident",
-        urgency: "critical",
+        urgency: incident.severity === "critical" ? "critical" : "normal",
         title: incidentTitle(incident.kind),
         detail: incident.summary,
         tutorKey: about?.tutorKey ?? null,

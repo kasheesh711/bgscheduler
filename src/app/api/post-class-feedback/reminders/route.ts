@@ -1,5 +1,3 @@
-import { createAppsScriptScheduleEmailSender } from "@/lib/classrooms/schedule-email";
-import { sendPostClassTestEmail } from "@/lib/post-class-feedback/notifications";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getDb } from "@/lib/db";
@@ -15,7 +13,6 @@ export const maxDuration = 800;
 const Action = z.discriminatedUnion("action", [
   z.object({ action: z.literal("retry") }),
   z.object({ action: z.literal("shadow_preview") }),
-  z.object({ action: z.literal("test"), senderKey: z.enum(["primary", "backup"]) }),
   z.object({ action: z.literal("resolve"), deliveryId: z.string().uuid(), expectedAttempt: z.number().int().min(1),
     outcome: z.enum(["accepted", "not_sent"]), receipt: z.string().trim().max(500).optional(), note: z.string().trim().min(10).max(2000) }),
 ]);
@@ -45,8 +42,6 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(result, { status: result.ok ? 200 : 503 });
       });
     }
-    if (input.action === "test") return NextResponse.json(await sendPostClassTestEmail(actor.email, actor.email, getDb(),
-      createAppsScriptScheduleEmailSender(input.senderKey, { strictOutcome: true }), input.senderKey));
     if (input.action === "retry") return runDataHealthJob("post_class_feedback_nightly", actor.email);
     await resolveNightlyUnknown(input, actor.email);
     return NextResponse.json({ ok: true });

@@ -1,3 +1,4 @@
+import { computeConsumedMinutes, sumCreditCoverage } from '../credits';
 import { formatInTimeZone } from 'date-fns-tz';
 import { bangkokDayStart, bangkokMonthBounds } from '../intervals';
 import type { WorkforceMetric, WorkforceQuality } from '../types';
@@ -14,14 +15,16 @@ function add(row: GrowthMonthlyRow, key: MetricKey, hours: number) { const m=row
 function limit(row: GrowthMonthlyRow, keys: MetricKey[], ...reasons: string[]) {
   for (const key of keys) { row[key].completeness = row[key].value === null ? 'unknown' : 'partial'; row[key].reasonCodes=sorted([...row[key].reasonCodes,...reasons]); }
 }
-function ratio(numerator: WorkforceMetric, denominator: WorkforceMetric): WorkforceMetric {
+/** A recorded estimate may use partial values only when numerator and denominator cover the same observations. */
+function recordedRatio(numerator: WorkforceMetric, denominator: WorkforceMetric): WorkforceMetric {
   const reasons=sorted([...numerator.reasonCodes,...denominator.reasonCodes]);
-  if (numerator.completeness !== 'complete' || denominator.completeness !== 'complete' || numerator.value === null || denominator.value === null) return growthUnknown(...reasons,'MODEL_INPUT_INCOMPLETE');
-  return denominator.value>0 ? growthKnown(numerator.value/denominator.value,reasons) : growthUnknown(...reasons,'ZERO_DEMAND_RATIO_UNAVAILABLE');
+  if (numerator.value===null || denominator.value===null) return growthUnknown(...reasons,'MODEL_INPUT_INCOMPLETE');
+  if (denominator.value<=0) return growthUnknown(...reasons,'ZERO_DEMAND_RATIO_UNAVAILABLE');
+  return {value:numerator.value/denominator.value,completeness:numerator.completeness==='complete' && denominator.completeness==='complete' ? 'complete' : 'partial',reasonCodes:reasons};
 }
-function sumStrict(values: WorkforceMetric[], divide=1): WorkforceMetric {
-  if (!values.length || values.some(row=>row.value===null || row.completeness!=='complete')) return growthUnknown(...sorted(values.flatMap(row=>row.reasonCodes)), 'THREE_MONTH_INPUT_INCOMPLETE');
-  return growthKnown(values.reduce((sum,row)=>sum+row.value!,0)/divide,sorted(values.flatMap(row=>row.reasonCodes)));
+function sumRecorded(values: WorkforceMetric[], divide=1): WorkforceMetric {
+  if (!values.length || values.some(row=>row.value===null || row.completeness==='unknown')) return growthUnknown(...sorted(values.flatMap(row=>row.reasonCodes)), 'THREE_MONTH_INPUT_INCOMPLETE');
+  return {value:values.reduce((sum,row)=>sum+row.value!,0)/divide,completeness:values.some(row=>row.completeness!=='complete')?'partial':'complete',reasonCodes:sorted(values.flatMap(row=>row.reasonCodes))};
 }
 function dates(from: string, to: string): string[] {
   const start=from.slice(0,7), end=to.slice(0,7), result: string[]=[];
@@ -93,6 +96,9 @@ export function buildGrowthFlows(evidence: GrowthEvidence,query: GrowthQuery,now
   for(const event of events.filter(e=>e.status==='active'&&e.kind==='reactivation')){const key=JSON.stringify([event.studentId,event.subject]);returns.set(key,[...(returns.get(key) ?? []),event]);}
   const studentCounts=new Map<string,Set<string>>();
   const verifiedTutorCreditRows=new Set<string>();
+  const creditCoveredBookings=new Map<string,{booked:number;loss:number}>();
+  const participantSupportedTutorHours=new Map<string,number>();
+  const knownParticipantRows=new Set<string>(), unknownEmptyRows=new Set<string>();
   function count(row:GrowthMonthlyRow,key:'newlyObservedStudents'|'reactivatedStudents'|'churnedStudents',student:string){const id=JSON.stringify([row.key,key]);const set=studentCounts.get(id) ?? new Set<string>();if(!set.has(student)){set.add(student);add(row,key,1);}studentCounts.set(id,set);}
   for(const booking of selected){
     const {session,course,studentIds,kind}=booking;if(!course || session.reasonCodes.includes('absent_from_current_future_snapshot'))continue;
@@ -107,25 +113,37 @@ export function buildGrowthFlows(evidence: GrowthEvidence,query: GrowthQuery,now
       continue;
     }
     if(kind!=='regular'){limit(row,metricKeys,'BOOKING_CLASSIFICATION_UNRESOLVED');continue;}
+    if(studentIds.length)knownParticipantRows.add(row.key);
+    if(!studentIds.length && session.participantCompleteness!=='complete')unknownEmptyRows.add(row.key);
+    if(studentIds.length || session.participantCompleteness==='complete')participantSupportedTutorHours.set(row.key,(participantSupportedTutorHours.get(row.key) ?? 0)+hours);
     add(row,'bookedStudentHours',hours*studentIds.length);add(row,'bookedTutorHours',hours);
-    let netSum=0,knownNet=0,newMembers=0,returnMembers=0;
+    let newMembers=0,returnMembers=0;
     for(const student of studentIds){
       const net=studentNetHours(booking,student);
       if(net.value===null){limit(row,['creditStudentHours','cancellationStudentHours'],...net.reasonCodes);}
-      else{netSum+=net.value;knownNet++;add(row,'creditStudentHours',net.value);add(row,'cancellationStudentHours',hours-net.value);}
+      else{
+        const covered=creditCoveredBookings.get(row.key) ?? {booked:0,loss:0};
+        covered.booked+=hours;covered.loss+=hours-net.value;creditCoveredBookings.set(row.key,covered);
+        add(row,'creditStudentHours',net.value);add(row,'cancellationStudentHours',hours-net.value);}
       const key=JSON.stringify([student,course.subject]),start=starts.get(key);
       const returnEvent=returns.get(key)?.find(event=>event.effectiveMonth===month && Date.parse(session.startAt)>=Date.parse(event.returnAt!));
       if(returnEvent){count(row,'reactivatedStudents',student);add(row,'reactivatedStudentHours',hours);returnMembers++;row.contributors.eventKeys.push(returnEvent.eventKey);}
       else if(start===month && month!=='2026-03'){count(row,'newlyObservedStudents',student);add(row,'newStudentHours',hours);newMembers++;}
     }
-    if(studentIds.length && session.participantCompleteness==='complete' && knownNet===studentIds.length){add(row,'creditTutorHours',netSum/studentIds.length);add(row,'cancellationTutorHours',hours-netSum/studentIds.length);verifiedTutorCreditRows.add(row.key);}
-    else{
-      // A mean cannot be recovered from only part of a group's participants.
+    const consumed = computeConsumedMinutes(session,[...booking.creditsByStudent.values()].flat());
+    row.creditTutorHours.creditCoverage = sumCreditCoverage([row.creditTutorHours,consumed]);
+    row.cancellationTutorHours.creditCoverage = row.creditTutorHours.creditCoverage;
+    if(consumed.value!==null){
+      add(row,'creditTutorHours',consumed.value/60);
+      add(row,'cancellationTutorHours',hours-consumed.value/60);
+      verifiedTutorCreditRows.add(row.key);
+      if(consumed.completeness!=='complete')limit(row,['creditTutorHours','cancellationTutorHours'],...consumed.reasonCodes);
+    } else {
       if(!verifiedTutorCreditRows.has(row.key)){row.creditTutorHours.value=null;row.cancellationTutorHours.value=null;}
-      limit(row,['creditTutorHours','cancellationTutorHours'],'GROUP_CREDIT_OR_MEMBERSHIP_INCOMPLETE');
+      limit(row,['creditTutorHours','cancellationTutorHours'],'GROUP_CREDIT_OR_MEMBERSHIP_INCOMPLETE',...consumed.reasonCodes);
     }
     if(studentIds.length){add(row,'newTutorHours',hours*newMembers/studentIds.length);add(row,'reactivatedTutorHours',hours*returnMembers/studentIds.length);}
-    if(session.participantCompleteness!=='complete' || !studentIds.length)limit(row,['bookedStudentHours','creditStudentHours','cancellationStudentHours','newStudentHours','reactivatedStudentHours','newTutorHours','reactivatedTutorHours','newlyObservedStudents','reactivatedStudents'],'HISTORICAL_PARTICIPANTS_INCOMPLETE');
+    if(session.participantCompleteness!=='complete')limit(row,['bookedStudentHours','creditStudentHours','cancellationStudentHours','newStudentHours','reactivatedStudentHours','newTutorHours','reactivatedTutorHours','newlyObservedStudents','reactivatedStudents'],'HISTORICAL_PARTICIPANTS_INCOMPLETE');
   }
   for(const event of events.filter(e=>e.kind==='churn'&&e.status==='active')) {
     const parts=event.baselineByCourse ?? [];
@@ -154,6 +172,14 @@ export function buildGrowthFlows(evidence: GrowthEvidence,query: GrowthQuery,now
   const uncertainTeachingBySubject=new Map<string,boolean>();
   const confirmationEnd=commonWindow.length ? Math.min(now.getTime(),bangkokMonthBounds(commonWindow.at(-1)!).start-1+GROWTH_CHURN_WAIT_MS) : now.getTime();
   for(const row of rows.values()){
+    // No returned learner cannot establish a zero student subtotal. Other known
+    // participant classes may still establish a partial recorded subtotal.
+    if(unknownEmptyRows.has(row.key) && !knownParticipantRows.has(row.key)){
+      for(const field of ['bookedStudentHours','creditStudentHours','cancellationStudentHours','newStudentHours','reactivatedStudentHours','newTutorHours','reactivatedTutorHours','newlyObservedStudents','reactivatedStudents'] as const){
+        row[field].value=null;row[field].completeness='unknown';
+        row[field].reasonCodes=sorted([...row[field].reasonCodes,'HISTORICAL_PARTICIPANTS_UNKNOWN']);
+      }
+    }
     // An unmapped lesson could belong to any selected subject; its absence is not a measured zero.
     if(unresolved.some(b=>monthOf(b.session.startAt)===row.month))limit(row,metricKeys,'UNRESOLVED_BOOKING_OR_SUBJECT');
     if(modelUnresolved.length)limit(row,['newStudentHours','reactivatedStudentHours','churnStudentHours'],'COHORT_HISTORY_UNRESOLVED');
@@ -166,11 +192,34 @@ export function buildGrowthFlows(evidence: GrowthEvidence,query: GrowthQuery,now
   }
   const averages:GrowthSubjectAverages[]=[...courses.values()].map(course=>{
     const monthly=commonWindow.map(month=>get(course,month));
-    const metric=(key:MetricKey)=>commonWindow.length===3?sumStrict(monthly.map(row=>row[key]),3):growthUnknown('COMMON_MATURE_WINDOW_UNAVAILABLE');
-    const numerator=commonWindow.length===3?sumStrict(monthly.map(row=>row.cancellationStudentHours)):growthUnknown('COMMON_MATURE_WINDOW_UNAVAILABLE');
-    const denominator=commonWindow.length===3?sumStrict(monthly.map(row=>row.bookedStudentHours)):growthUnknown('COMMON_MATURE_WINDOW_UNAVAILABLE');
-    const tutor=commonWindow.length===3?sumStrict(monthly.map(row=>row.bookedTutorHours)):growthUnknown('COMMON_MATURE_WINDOW_UNAVAILABLE');
-    return {...course,months:commonWindow,newStudentHours:metric('newStudentHours'),reactivatedStudentHours:metric('reactivatedStudentHours'),churnStudentHours:metric('churnStudentHours'),cancellationNumerator:numerator,cancellationDenominator:denominator,cancellationFraction:ratio(numerator,denominator),studentHoursPerTutorHour:ratio(denominator,tutor)};
+    const metric=(key:MetricKey)=>{
+      const values=monthly.map(row=>row[key]);
+      const absenceUnknown=key==='churnStudentHours' && values.some(value=>value.reasonCodes.some(reason=>[
+        'CHURN_TEACHING_EVIDENCE_INCOMPLETE','SUBJECT_CHURN_FUTURE_CHECK_INCOMPLETE','CHURN_CONFIRMATION_HISTORY_INCOMPLETE','CHURN_BASELINE_UNAVAILABLE'
+      ].includes(reason)));
+      return commonWindow.length===3 && !absenceUnknown ? sumRecorded(values,3) : growthUnknown(...values.flatMap(v=>v.reasonCodes),absenceUnknown?'CHURN_ABSENCE_EVIDENCE_UNAVAILABLE':'COMMON_MATURE_WINDOW_UNAVAILABLE');
+    };
+    const matched=(row:GrowthMonthlyRow,field:'booked'|'loss'):WorkforceMetric=>{
+      const covered=creditCoveredBookings.get(row.key);
+      const unknown=!covered && row.bookedStudentHours.value===null;
+      const partial=row.cancellationStudentHours.completeness!=='complete' || row.bookedStudentHours.completeness!=='complete';
+      return {value:unknown?null:covered?.[field] ?? 0,completeness:unknown?'unknown':partial?'partial':'complete',
+        reasonCodes:sorted([...row.cancellationStudentHours.reasonCodes,...row.bookedStudentHours.reasonCodes,...(partial?['MATCHED_CREDIT_BOOKINGS_ESTIMATE']:[])]),
+        creditCoverage:row.creditTutorHours.creditCoverage};
+    };
+    const numerator=commonWindow.length===3?sumRecorded(monthly.map(row=>matched(row,'loss'))):growthUnknown('COMMON_MATURE_WINDOW_UNAVAILABLE');
+    const denominator=commonWindow.length===3?sumRecorded(monthly.map(row=>matched(row,'booked'))):growthUnknown('COMMON_MATURE_WINDOW_UNAVAILABLE');
+    numerator.creditCoverage=sumCreditCoverage(monthly.map(row=>row.creditTutorHours));
+    denominator.creditCoverage=numerator.creditCoverage;
+    const booked=commonWindow.length===3?sumRecorded(monthly.map(row=>row.bookedStudentHours)):growthUnknown('COMMON_MATURE_WINDOW_UNAVAILABLE');
+    const tutor=commonWindow.length===3?sumRecorded(monthly.map(row=>({
+      ...row.bookedTutorHours,value:row.bookedStudentHours.value===null?null:participantSupportedTutorHours.get(row.key) ?? 0,
+      completeness:row.bookedStudentHours.value===null?'unknown':row.bookedStudentHours.completeness,
+      reasonCodes:row.bookedStudentHours.reasonCodes
+    }))):growthUnknown('COMMON_MATURE_WINDOW_UNAVAILABLE');
+    const mix=recordedRatio(booked,tutor);
+    if(mix.value!==null && mix.value<=0){mix.value=null;mix.completeness='unknown';mix.reasonCodes=sorted([...mix.reasonCodes,'ZERO_GROUP_MIX_UNAVAILABLE']);}
+    return {...course,months:commonWindow,newStudentHours:metric('newStudentHours'),reactivatedStudentHours:metric('reactivatedStudentHours'),churnStudentHours:metric('churnStudentHours'),cancellationNumerator:numerator,cancellationDenominator:denominator,cancellationFraction:recordedRatio(numerator,denominator),studentHoursPerTutorHour:mix};
   }).sort((a,b)=>a.courseKey.localeCompare(b.courseKey));
   const issueCodes=sorted([...unresolved.flatMap(b=>b.reasonCodes),...averages.flatMap(row=>[row.newStudentHours,row.reactivatedStudentHours,row.churnStudentHours,row.cancellationFraction,row.studentHoursPerTutorHour].flatMap(metric=>metric.reasonCodes)),...events.flatMap(event=>event.reasonCodes.filter(reason=>reason!=='subject-lifecycle-v1' && reason!=='FRESH_FUTURE_NO_BOOKING_CHECK' && reason!=='RETURN_AFTER_CONFIRMED_CHURN'))]);
   const quality:WorkforceQuality={completeness:issueCodes.length?'partial':'complete',issueCodes,sourceCoverage:evidence.workforce.sourceCoverage,

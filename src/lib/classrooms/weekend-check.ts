@@ -7,7 +7,8 @@ import { isWeekendCheckDue, weekendAlertRecipient, weekendDates, WEEKEND_CHECK_L
 import { previewWeekendReadiness, type WeekendEvaluationOptions } from "./weekend-preview";
 import { notificationForReport, type WeekendReport } from "./weekend-readiness";
 import { buildWeekendEmail } from "./weekend-email";
-import { createAppsScriptScheduleEmailSender, type ScheduleEmailSender } from "./schedule-email";
+import { type ScheduleEmailSender } from "./schedule-email";
+import { createOutboundEmailSender } from "@/lib/email/outbound";
 
 export async function claimWeekendCheck(db: Database, now: Date) {
   const [check] = await db.insert(checks).values({ checkDate: todayBangkok(now), weekendDate: weekendDates(now)[0], claimedAt: now })
@@ -89,7 +90,7 @@ export async function runWeekendClassroomCheck(db: Database | undefined = undefi
       await assertWeekendClaim(db, check.id, now, clock());
       await db.update(notifications).set({ attempts: sql`${notifications.attempts} + 1`, lastError: null }).where(eq(notifications.id, notification.id));
       try {
-        const sent = await (options.sender ?? createAppsScriptScheduleEmailSender()).sendEmail({
+        const sent = await (options.sender ?? createOutboundEmailSender()).sendEmail({
           to: recipient, subject: notification.subject, text: notification.text, html: notification.html, idempotencyKey: notification.idempotencyKey });
         await assertWeekendClaim(db, check.id, now, clock());
         await db.update(notifications).set({ status: "sent", sentAt: clock(), providerMessageId: sent.id, lastError: null })

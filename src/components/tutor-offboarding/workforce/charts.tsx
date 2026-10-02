@@ -96,6 +96,7 @@ export function LinesChart({
   onSelect,
   selectedMonth,
   unit = "h",
+  partialMonths = [],
 }: {
   rows: TrendRow[];
   series: { key: string; label: string; color: string; dash?: string }[];
@@ -103,6 +104,7 @@ export function LinesChart({
   onSelect?: (month: string) => void;
   selectedMonth?: string;
   unit?: string;
+  partialMonths?: string[];
 }) {
   const { ref, width } = useChartWidth();
   const mobile = width < 480,
@@ -185,6 +187,7 @@ export function LinesChart({
               i === rows.length - 1) && (
               <text x={x(d.month)} y={233} textAnchor="middle">
                 {monthLabel(d.month).split(" ")[0]}
+                {partialMonths.includes(d.month) ? "*" : ""}
               </text>
             )}
             {selectedMonth === d.month && (
@@ -202,7 +205,11 @@ export function LinesChart({
         ))}
         {series.map((s) => {
           const path = line<TrendRow>()
-            .defined((d) => (d[s.key] as WorkforceMetric).value !== null)
+            .defined(
+              (d) =>
+                (d[s.key] as WorkforceMetric).value !== null &&
+                !partialMonths.includes(d.month),
+            )
             .x((d) => x(d.month)!)
             .y((d) => y((d[s.key] as WorkforceMetric).value!))(rows);
           const last = rows.findLast(
@@ -217,6 +224,27 @@ export function LinesChart({
                 strokeWidth="2.5"
                 strokeDasharray={s.dash}
               />
+              {rows.map((row, i) => {
+                if (!partialMonths.includes(row.month) || i === 0) return null;
+                const previous = rows[i - 1];
+                const currentValue = (row[s.key] as WorkforceMetric).value;
+                const previousValue = (previous[s.key] as WorkforceMetric)
+                  .value;
+                return currentValue === null ||
+                  previousValue === null ? null : (
+                  <line
+                    key={row.month}
+                    x1={x(previous.month)}
+                    x2={x(row.month)}
+                    y1={y(previousValue)}
+                    y2={y(currentValue)}
+                    stroke={s.color}
+                    strokeWidth="2"
+                    strokeDasharray="4 5"
+                    opacity=".5"
+                  />
+                );
+              })}
               {rows.map((d) => {
                 const value = d[s.key] as WorkforceMetric;
                 return value.value === null ? null : (
@@ -231,7 +259,7 @@ export function LinesChart({
                     stroke={s.color}
                     strokeWidth="1.5"
                   >
-                    <title>{`${monthLabel(d.month)} · ${s.label}: ${formatMetric(value, unit)}${value.completeness === "partial" ? " · Partial evidence" : ""}`}</title>
+                    <title>{`${monthLabel(d.month)} · ${s.label}: ${formatMetric(value, unit)}${partialMonths.includes(d.month) ? " · Month to date" : ""}${value.completeness === "partial" ? " · Partial evidence" : ""}`}</title>
                   </circle>
                 );
               })}
@@ -268,6 +296,11 @@ export function LinesChart({
           ))}
       </svg>
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+        {partialMonths.length > 0 && (
+          <span className="text-muted-foreground">
+            * Month to date · dashed line
+          </span>
+        )}
         {series.map((s) => (
           <span key={s.key} style={{ color: s.color }}>
             ● {s.label}

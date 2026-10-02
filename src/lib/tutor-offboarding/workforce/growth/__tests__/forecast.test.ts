@@ -45,3 +45,19 @@ it('needs no modeled pattern when dated commitments already exceed that months e
     expect(r.months[0].capacityRequiredTutorHours.value).toBe(60);
     expect(r.allocations[0].reasonCodes).not.toContain('FORECAST_TIME_PATTERN_UNAVAILABLE');
 });
+
+it('uses numeric recorded estimates while preserving partial model, allocation and hiring evidence', () => {
+ const e=evidence(),f=flows();
+ f.months[0].bookedStudentHours={value:100,completeness:'partial',reasonCodes:['HISTORICAL_PARTICIPANTS_INCOMPLETE']};
+ f.averages[0].cancellationFraction={value:.1,completeness:'partial',reasonCodes:['MATCHED_CREDIT_BOOKINGS_ESTIMATE']};
+ e.workforce.observations=Array.from({length:3},(_,i)=>({id:'o'+i,canonicalKey:i===0?'Tutor':'Tutor'+i,observedAt:now.toISOString(),source:'fixture',role:'tutor' as const,accounts:[],qualifications:[{subject:'Maths',curriculum:'International',level:'Y10',modality:'onsite' as const}],offeredWindows:[{weekday:1,startMinute:600,endMinute:660,modality:'onsite' as const}],leaves:[],availabilityCompleteness:'complete' as const,qualificationCompleteness:'complete' as const,completeness:'complete' as const,reasonCodes:[]}));
+ e.workforce.people.push(...[1,2].map(i=>({...e.workforce.people[0],canonicalKey:'Tutor'+i})));
+ const r=buildGrowthForecast(e,f,query,now,f);
+ expect(r.inputs[0].baseStudentHours).toMatchObject({value:100,source:'measured',measured:{completeness:'partial'}});
+ expect(r.months[0].creditTutorHours).toMatchObject({value:49.5,completeness:'partial'});
+ expect(r.allocations[0].requiredHours.completeness).toBe('partial');
+ expect(r.hiring[0].roundedHiringEstimate.completeness).toBe('partial');
+ expect(r.months[0].creditTutorHours.reasonCodes).toContain('RECORDED_MODEL_ESTIMATE');
+ f.averages[0].churnStudentHours=growthUnknown('CHURN_TEACHING_EVIDENCE_INCOMPLETE');
+ expect(buildGrowthForecast(e,f,query,now,f).months[0].creditTutorHours.value).toBeNull();
+});

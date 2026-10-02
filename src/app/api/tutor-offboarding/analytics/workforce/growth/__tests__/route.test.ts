@@ -38,6 +38,13 @@ describe("authorized read-only growth endpoints", () => {
     expect(await response.json()).toEqual(report);
     expect(vi.mocked(getGrowthReport).mock.lastCall?.[1]).toEqual({ filters, assumptions });
   });
+  it('forwards explicit refresh for a read-only scenario without changing its assumptions', async () => {
+    const original = request({ filters, assumptions: { bufferPercent: 0 } });
+    const response = await POST(new Request(original, { headers: { 'content-type': 'application/json', 'x-workforce-refresh': '1' } }));
+    expect(response.status).toBe(200);
+    expect(vi.mocked(getGrowthReport).mock.lastCall?.[4]).toBe(true);
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+  });
   it("rejects duplicate filters, invalid assumptions and oversized JSON without reading evidence", async () => {
     expect((await GET(new Request("https://example.test/?role=all&role=tutor"))).status).toBe(400);
     expect((await POST(request({ filters, assumptions: { bufferPercent: 101 } }))).status).toBe(400);

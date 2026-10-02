@@ -4,6 +4,7 @@ import { requireTutorOffboardingAdmin } from "@/lib/tutor-offboarding/access";
 import { tutorOffboardingErrorResponse } from "@/lib/tutor-offboarding/api";
 import { parseGrowthGetQuery, parseGrowthRequest, readGrowthBody } from "@/lib/tutor-offboarding/workforce/growth/query";
 import { getGrowthReport } from "@/lib/tutor-offboarding/workforce/growth/service";
+import { WORKFORCE_REFRESH_HEADER } from "@/lib/tutor-offboarding/workforce/read-cache";
 
 export const maxDuration = 120;
 
@@ -12,7 +13,7 @@ async function report(request: Request, scenario: boolean) {
   try {
     await requireTutorOffboardingAdmin();
     const query = scenario ? parseGrowthRequest(await readGrowthBody(request)) : parseGrowthGetQuery(new URL(request.url).searchParams);
-    response = streamJsonResponse(await getGrowthReport(getDb(), query, new Date()));
+    response = streamJsonResponse(await getGrowthReport(getDb(), query, new Date(), undefined, request.headers.get(WORKFORCE_REFRESH_HEADER) === "1"));
   } catch (error) {
     response = tutorOffboardingErrorResponse("[growth] report failed", error, "Course demand could not load.");
   }

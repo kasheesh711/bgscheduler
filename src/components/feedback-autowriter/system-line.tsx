@@ -99,6 +99,11 @@ export function SystemLine({ dashboard, lastRun, canControl, busy, onControl }: 
   const lastChange = control.updatedBy ? `Controls last changed by ${control.updatedBy} · ${when(control.updatedAt)}` : null;
   const facts: Array<{ key: string; content: ReactNode; title?: string }> = [
     { key: "writer", content: <>Writer {modelLabel(system.writer.model)} ({system.writer.effort})</>, title: system.writer.model },
+    ...(system.tutorWriter ? [{
+      key: "tutor-writer",
+      content: <>{modelLabel(system.tutorWriter.model)} ({system.tutorWriter.effort}) first for {system.tutorWriter.tutors} tutors</>,
+      title: system.tutorWriter.model,
+    }] : []),
     { key: "fallback", content: <>Fallback {modelLabel(system.fallbackWriter.model)} ({system.fallbackWriter.effort})</>, title: system.fallbackWriter.model },
     { key: "judge", content: <>Judge {modelLabel(system.judge.model)} ({effortsLabel(system.judge.efforts)})</>, title: system.judge.model },
     { key: "transcript-first", content: <>Transcript first: {system.transcriptFirst ? "on" : "off"}</> },

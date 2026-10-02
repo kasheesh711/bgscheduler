@@ -51,7 +51,7 @@ export function GrowthFlowChart({
           height="260"
           viewBox={`0 0 ${width} 260`}
           role="group"
-          aria-label="Newly observed and reactivated demand above zero, soft churn loss below"
+          aria-label="New and returning demand above zero, lost demand below"
           style={{ fontSize: 11 }}
         >
           {y.ticks(5).map((t) => (
@@ -83,7 +83,7 @@ export function GrowthFlowChart({
                 onSelect({
                   kind: "churn",
                   key: r.key,
-                  title: `Soft churn · ${monthLabel(r.month)}`,
+                  title: `Lost demand · ${monthLabel(r.month)}`,
                 });
             return (
               <g key={r.key}>
@@ -136,7 +136,7 @@ export function GrowthFlowChart({
                   <g
                     role="button"
                     tabIndex={0}
-                    aria-label={`${monthLabel(r.month)}: soft churn ${formatMetric(r.churnStudentHours, "student-hours")}${r.provisional ? ", provisional" : ""}`}
+                    aria-label={`${monthLabel(r.month)}: lost demand ${formatMetric(r.churnStudentHours, "student-hours")}${r.provisional ? ", provisional" : ""}`}
                     onClick={lost}
                     onKeyDown={(e) => activate(e, lost)}
                     className="cursor-pointer focus:outline-2 focus:outline-primary"
@@ -157,7 +157,7 @@ export function GrowthFlowChart({
                       textAnchor="middle"
                       fill={INK.loss}
                     >
-                      {churn}
+                      {formatMetric(r.churnStudentHours)}
                     </text>
                   </g>
                 ) : (
@@ -193,8 +193,8 @@ export function GrowthFlowChart({
       </div>
       <div className="flex flex-wrap gap-3 text-xs">
         <span style={{ color: INK.supply }}>■ Newly observed</span>
-        <span style={{ color: INK.credit }}>■ Reactivated</span>
-        <span style={{ color: INK.loss }}>■ Soft churn</span>
+        <span style={{ color: INK.credit }}>■ Returning</span>
+        <span style={{ color: INK.loss }}>■ Lost demand</span>
         <span style={{ color: INK.actual }}>
           ■ Starting cohort · excluded from growth averages
         </span>
@@ -212,8 +212,8 @@ export function GrowthFlowChart({
               {[
                 "Month",
                 "New",
-                "Reactivated",
-                "Soft churn",
+                "Returning",
+                "Lost demand",
                 "Trial / pretest h",
               ].map((l) => (
                 <th key={l} className="p-2">
@@ -244,8 +244,8 @@ export function GrowthFlowChart({
           </tbody>
         </table>
         <p className="mt-2">
-          March starting cohorts are excluded from new-demand averages. Soft
-          churn follows 60 days without taught classes and no future subject
+          March starting cohorts are excluded from new-demand averages. Lost
+          demand follows 60 days without taught classes and no future subject
           booking.
         </p>
       </details>
@@ -259,7 +259,7 @@ export function AveragesChart({ row }: { row?: GrowthSubjectAverages }) {
       "reactivatedStudentHours",
       "churnStudentHours",
     ] as const,
-    labels = ["New", "Reactivated", "Soft churn"],
+    labels = ["New", "Returning", "Lost demand"],
     colors = [INK.supply, INK.credit, INK.loss];
   const x = scaleLinear()
     .domain([0, Math.max(1, ...keys.map((k) => row?.[k].value ?? 0))])

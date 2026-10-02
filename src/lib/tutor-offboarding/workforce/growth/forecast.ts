@@ -12,7 +12,10 @@ import { growthKnown, growthUnknown, resolveGrowthBookings, hasFreshGrowthFuture
 import type { GrowthAllocationDemand, GrowthAllocationInput, GrowthCourse, GrowthEvidence, GrowthFlows, GrowthForecast, GrowthForecastInputs, GrowthForecastMonth, GrowthModelInput, GrowthQuery, GrowthSubjectOverrides } from './types';
 const DAY = 86400000, HOUR = 3600000, MINUTE = 60000;
 const fields = ['newStudentHours', 'reactivatedStudentHours', 'churnStudentHours', 'cancellationFraction', 'studentHoursPerTutorHour'] as const;
-function input(measured: WorkforceMetric, override?: number): GrowthModelInput { return { value: override ?? (measured.completeness === 'complete' ? measured.value : null), source: override !== undefined ? 'override' : measured.completeness === 'complete' && measured.value !== null ? 'measured' : 'unavailable', measured }; }
+function input(measured: WorkforceMetric, override?: number): GrowthModelInput {
+    const available=measured.completeness!=='unknown' && measured.value!==null;
+    return {value:override ?? (available?measured.value:null),source:override!==undefined?'override':available?'measured':'unavailable',measured};
+}
 function validateOverrides(query: GrowthQuery, courses: Set<string>) {
     if (query.filters.role !== 'all' || query.filters.modality !== 'all')
         throw new TutorOffboardingError('Growth allocation covers all teaching staff and modes.', 422);
@@ -150,7 +153,7 @@ export function buildGrowthForecast(evidence: GrowthEvidence, _displayFlows: Gro
             row: GrowthForecastMonth;
             modeledKnown: boolean;
         }> = [], monthReasons = new Set(sourceReasons);
-        let missingModels = false, missingPatterns = false;
+        let missingModels = false, missingPatterns = false, partialModels = false;
         for (const model of inputs) {
             const values = [model.baseStudentHours, model.newStudentHours, model.reactivatedStudentHours, model.churnStudentHours];
             const raw = values.every(v => v.value !== null) ? Math.max(0, model.baseStudentHours.value! + (k + 1) * (model.newStudentHours.value! + model.reactivatedStudentHours.value! - model.churnStudentHours.value!)) : null;
@@ -158,7 +161,13 @@ export function buildGrowthForecast(evidence: GrowthEvidence, _displayFlows: Gro
             const missing = fields.filter(field => model[field].value === null).map(field => 'MODEL_INPUT_UNAVAILABLE:' + field);
             if (model.baseStudentHours.value === null)
                 missing.push('MODEL_INPUT_UNAVAILABLE:baseStudentHours');
-            const metric = (value: number | null): WorkforceMetric => value === null ? growthUnknown(...missing) : growthKnown(value, fields.filter(field => model[field].source === 'override').map(field => 'OVERRIDE:' + field));
+            const modelInputs=[model.baseStudentHours,...fields.map(field=>model[field])];
+            const partialModel=modelInputs.some(value=>value.source==='measured' && value.measured.completeness!=='complete');
+            const modelReasons=[...fields.filter(field=>model[field].source==='override').map(field=>'OVERRIDE:'+field),
+                ...modelInputs.filter(value=>value.source==='measured').flatMap(value=>value.measured.reasonCodes),...(partialModel?['RECORDED_MODEL_ESTIMATE']:[])];
+            if(partialModel){partialModels=true;for(const reason of modelReasons)monthReasons.add(reason);}
+            const metric = (value: number | null): WorkforceMetric => value === null ? growthUnknown(...missing,...modelReasons) :
+                {value,completeness:partialModel?'partial':'complete',reasonCodes:[...new Set(modelReasons)].sort()};
             const knownCommitments = committedHours.get(JSON.stringify([month, model.courseKey])) ?? 0;
             let distributed: GrowthAllocationDemand[] = [];
             if (netTutor !== null && netTutor > 0)
@@ -174,7 +183,7 @@ export function buildGrowthForecast(evidence: GrowthEvidence, _displayFlows: Gro
             demand.push(...distributed);
             pending.push({ modeledKnown: netTutor !== null && (netTutor <= knownCommitments || distributed.length > 0), row: { courseKey: model.courseKey, subject: model.subject, curriculum: model.curriculum, level: model.level, key: 'forecast:' + JSON.stringify([month, model.courseKey]), month, bookedStudentHours: metric(raw), creditStudentHours: metric(net), bookedTutorHours: metric(tutor), creditTutorHours: metric(netTutor), flatStudentHours: metric(model.baseStudentHours.value), knownCommittedTutorHours: growthKnown(knownCommitments), capacityRequiredTutorHours: growthUnknown('ALLOCATION_PENDING'), additionalWeeklyHours: growthUnknown('ALLOCATION_PENDING'), bufferedAdditionalWeeklyHours: growthUnknown('ALLOCATION_PENDING') } });
         }
-        const allocationInput: GrowthAllocationInput = { month, supply: supplyByMonth.get(month) ?? [], demand, commitments: commitmentsByMonth.get(month) ?? [], completeness: supplyUnknown || missingPatterns ? 'unknown' : supplyPartial || missingModels ? 'partial' : 'complete', reasonCodes: [...monthReasons].sort(), bufferPercent: query.assumptions.bufferPercent, observedAt: capacity.people.flatMap(p => p.projectionSourceAt ? [p.projectionSourceAt] : []) };
+        const allocationInput: GrowthAllocationInput = { month, supply: supplyByMonth.get(month) ?? [], demand, commitments: commitmentsByMonth.get(month) ?? [], completeness: supplyUnknown || missingPatterns ? 'unknown' : supplyPartial || missingModels || partialModels ? 'partial' : 'complete', reasonCodes: [...monthReasons].sort(), bufferPercent: query.assumptions.bufferPercent, observedAt: capacity.people.flatMap(p => p.projectionSourceAt ? [p.projectionSourceAt] : []) };
         const allocation = allocateGrowthCapacity(allocationInput);
         allocations.push(allocation);
         for (const { row, modeledKnown } of pending) {

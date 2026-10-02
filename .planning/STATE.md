@@ -4,7 +4,7 @@ milestone: v1.2
 milestone_name: Autonomous LINE Scheduling
 status: executing
 stopped_at: "Completed 12-05: C2 hardening — Phase 12 (IDENT-07) COMPLETE"
-last_updated: "2026-10-01T13:36:51.833957+00:00"
+last_updated: "2026-10-01T15:32:00+00:00"
 last_activity: 2026-10-01
 progress:
   total_phases: 11
@@ -160,6 +160,9 @@ None blocking roadmap execution.
 | 260929-snx | Feedback autowriter second pass: Soniox transcript of the Wise recording for held, summary-less and Thai-summary classes (GLM ZDR only, Zoom-aligned speakers, coverage and job-lifecycle guards) | 2026-09-29 | 69358cd | [260929-snx-soniox-transcript-second-pass](./quick/260929-snx-soniox-transcript-second-pass/) |
 | 260929-nwm | Data Health manual Run dispatch parity (DEF-3): nine missing run-job branches mirror their crons; student promotions excluded via manualRunDisabledReason (409 before confirmation and audit); Unearned Revenue run gated on its access_manager grant; satisfies-typed parity test; branch fix/data-health-run-dispatch, not pushed | 2026-09-29 | 490301d | [260929-nwm-data-health-manual-run-dispatch-parity-f](./quick/260929-nwm-data-health-manual-run-dispatch-parity-f/) |
 | 261001-r5j | Mobile onsite class capture and tutor-reviewed feedback drafts; private evidence, recovery, consent and retention | 2026-10-01 | dc1bfbb9 | [261001-r5j-mobile-onsite-class-evidence-and-reviewe](./quick/261001-r5j-mobile-onsite-class-evidence-and-reviewe/) |
+| 261001-ulx | Scope all Class Capture pilots to their own tutor and today's Bangkok classes; preserve unexpired recovery and refresh safely at midnight | 2026-10-01 | 099162e0 | [261001-ulx-restrict-class-capture-to-each-pilot-tut](./quick/261001-ulx-restrict-class-capture-to-each-pilot-tut/) |
+| 261002-r16 | Atom collector records failing stage/cause; ended-class PAST/FUTURE status transition no longer fails the timetable read | 2026-10-02 | 0a9aa4da | [261002-r16-atom-collector-failure-stage-and-timetab](./quick/261002-r16-atom-collector-failure-stage-and-timetab/) |
+| 261002-rmf | Give autowriter incidents their own kinds (Atom, style review) instead of scan_failed | 2026-10-02 | 53edb60b | [261002-rmf-give-autowriter-incidents-their-own-kind](./quick/261002-rmf-give-autowriter-incidents-their-own-kind/) |
 | Phase 10-vpol-01-view-transitions P01 | 216 | 2 tasks | 2 files |
 | Phase 10-vpol-01-view-transitions P02 | 4min | 2 tasks | 2 files |
 | Phase 11 P03 | 31515093 | 2 tasks | 3 files |
@@ -169,6 +172,7 @@ None blocking roadmap execution.
 | Phase 12 P01 | 4m | 2 tasks | 2 files |
 | Phase 12 P02 | 8 | 2 tasks | 4 files |
 | Phase 12 P03 | 6m | 3 tasks | 4 files |
+| 261002-r45 | Autowriter: guest under student's own name stands in at 50% | 2026-10-02 | d496be3a | [261002-r45-autowriter-guest-name-stand-in](./quick/261002-r45-autowriter-guest-name-stand-in/) |
 
 ## Session Continuity
 
