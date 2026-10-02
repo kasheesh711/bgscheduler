@@ -577,9 +577,11 @@ async function verifyClass(state: VerifyState, file: BundleFile, record: AuditRe
     });
   }
 
+  // A confirmed critical travels with the proposal as a check of its own (`correct` requires it).
+  const confirmed = base.confirmation?.confirmed.length ? [check("critical_confirmation", true, `confirmed:${base.confirmation.confirmed.join(",")}`)] : [];
   const tried: CandidateRecord[] = [...unavailable];
   for (const candidate of candidates) {
-    const checks = await checkCandidate(state, { file, record: audited, serious, candidate, context });
+    const checks = [...confirmed, ...await checkCandidate(state, { file, record: audited, serious, candidate, context })];
     const passed = checks.length > 0 && checks.every((item) => item.pass);
     const hash = fieldsHash(candidate.fields);
     tried.push({ source: candidate.source, fields: candidate.fields, fieldsHash: hash, evidence: candidate.evidence, arm: candidate.arm, checks, passed, unavailable: null });

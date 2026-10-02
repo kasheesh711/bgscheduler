@@ -170,6 +170,9 @@ describe("planFromRows: the plan comes from the database", () => {
       [rows({ session: { wiseTeacherUserId: null } }), correctionProposal(), "teacher_unknown"],
       [rows({ firstShot: { wiseTeacherUserId: "6a00000000000000000000aa" } }), correctionProposal(), "teacher_mismatch"],
       [rows({ firstShot: { postStartedAt: null } }), correctionProposal(), "first_shot_time_unknown"],
+      [rows(), correctionProposal({ checks: correctionProposal().checks.filter((item) => item.name !== "judge") }), "checks_incomplete:judge"],
+      [rows(), correctionProposal({ checks: correctionProposal().checks.map((item) => (item.name === "reaudit_names" ? { ...item, pass: false } : item)) }), "checks_incomplete:reaudit_names"],
+      [rows(), correctionProposal({ severity: "critical" }), "checks_incomplete:critical_confirmation"],
     ];
     for (const [given, proposal, reason] of cases) expect(planFromRows(proposal, given, DEFAULT_FEEDBACK_FIELD_MAPPINGS), reason).toEqual({ ok: false, reason });
   });

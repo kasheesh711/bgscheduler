@@ -11,6 +11,7 @@ import { auditCacheFile } from "../audit";
 import { AUDIT_VERSION, type AuditIssue, type AuditResult } from "../audit-schema";
 import { NIGHTLY_CAPS, type NightlyCaps } from "../caps";
 import type { ClaudeCall, ClaudeOutcome } from "../claude-runner";
+import { missingProposalChecks } from "../correct-step";
 import { judgeCandidate, type JudgeCandidateResult } from "../judge-candidate";
 import { NightlyLedger } from "../ledger";
 import { nightlyPaths, readJsonFile, readJsonl, writeJsonAtomic } from "../paths";
@@ -208,6 +209,8 @@ describe("stepVerify: candidates", () => {
       "reaudit_verdict:true", "reaudit_omissions:true", "reaudit_prior_issues:true", "reaudit_names:true", "reaudit_homework:true",
     ]);
     expect(classRecord(ctx)?.status).toBe("proposed");
+    // What verify signs is exactly what correct requires.
+    expect(missingProposalChecks(verified.proposal)).toEqual([]);
   });
 
   it("prefers the fixed pipeline's replay draft, and falls back to the minimal fix when the draft fails a check", async () => {
@@ -413,9 +416,11 @@ describe("stepVerify: critical issues", () => {
     const ledger = readJsonl<{ type: string; kind: string; key: string }>(ctx.paths.spendJsonl).filter((line) => line.type === "reserve");
     expect(ledger.map((line) => line.kind)).toEqual(["opus_audit", "opus_reaudit"]);
     expect(classRecord(ctx)?.confirmation).toEqual({ outcome: "success", confirmed: ["i1"], unconfirmed: [] });
+    expect(classRecord(ctx)?.candidates.at(-1)?.checks[0]).toEqual({ name: "critical_confirmation", pass: true, detail: "confirmed:i1" });
     const [entry] = readProposalFiles(ctx.paths.proposalsDir);
     const verified = verifyProposal(entry.value, KEY);
     expect(verified.ok && verified.proposal).toMatchObject({ severity: "critical", criticalCategory: "wrong_person" });
+    expect(verified.ok && missingProposalChecks(verified.proposal)).toEqual([]);
   });
 
   it("downgrades an unconfirmed critical to needing Kevin: no candidate is tried", async () => {

@@ -51,7 +51,8 @@ export function correctionProposal(patch: Partial<CorrectionProposal> = {}): Cor
     version: 1, night: "2026-10-02", wiseSessionId: SID, fieldsSha256: fieldsHash(PIM_FIELDS), fields: PIM_CORRECTED,
     fieldsHash: fieldsHash(PIM_CORRECTED), source: "minimal_fix", evidence: "transcript", arm: "sol",
     issues: [{ id: "i1", mode: "M06", severity: "major" }], modes: ["M06"], severity: "major", criticalCategory: null,
-    checks: [{ name: "text_problems", pass: true, detail: "none" }],
+    checks: ["word_change", "length_ratio", "text_problems", "display_name", "judge", "reaudit", "reaudit_verdict", "reaudit_omissions",
+      "reaudit_prior_issues", "reaudit_names", "reaudit_homework"].map((name) => ({ name, pass: true, detail: "synthetic" })),
     reason: "M06 overstated_judgement (major): corrected from the audit's minimal fix", rootCauseRef: "fix/autowriter-audit-m06",
     pipeline: { auditVersion: 1 }, createdAt: "2026-10-02T20:00:00.000Z", ...patch,
   };

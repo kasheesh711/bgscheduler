@@ -149,6 +149,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** The checks every proposal must carry, passed (`verify` writes none without them). */
+export const REQUIRED_PROPOSAL_CHECKS = [
+  "length_ratio", "text_problems", "display_name", "judge", "reaudit", "reaudit_verdict", "reaudit_omissions",
+  "reaudit_prior_issues", "reaudit_names", "reaudit_homework",
+] as const;
+
+/** The required checks a proposal lacks or failed (a minimal fix also needs `word_change`, a critical one its confirmation). */
+export function missingProposalChecks(proposal: CorrectionProposal): string[] {
+  const required: string[] = [
+    ...REQUIRED_PROPOSAL_CHECKS,
+    ...(proposal.source === "minimal_fix" ? ["word_change"] : []),
+    ...(proposal.severity === "critical" ? ["critical_confirmation"] : []),
+  ];
+  const checks = Array.isArray(proposal.checks) ? proposal.checks : [];
+  const failed = checks.filter((item) => item.pass !== true).map((item) => item.name);
+  return [...new Set([...required.filter((name) => !checks.some((item) => item.name === name && item.pass === true)), ...failed])];
+}
+
 /**
  * The executor's plan: ids, the base text, its submission, billing and first-shot time from the database rows;
  * from the proposal only the corrected text, its reason, root cause and stamps. Refusal codes otherwise.
@@ -156,6 +174,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function planFromRows(proposal: CorrectionProposal, rows: CorrectionRows, mappings: readonly FeedbackFieldMapping[]):
   { ok: true; plan: CorrectionPlan } | { ok: false; reason: string } {
   const no = (reason: string) => ({ ok: false as const, reason });
+  const missing = missingProposalChecks(proposal);
+  if (missing.length > 0) return no(`checks_incomplete:${missing.join(",")}`);
   const { session, firstShot } = rows;
   if (!session) return no("session_missing");
   if (session.state !== "verified") return no(`session_not_verified:${session.state}`);
