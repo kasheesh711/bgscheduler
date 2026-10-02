@@ -143,7 +143,7 @@ const BANGKOK_THURSDAY = new Date("2026-07-09T01:12:00.000Z");
 const BANGKOK_SUNDAY = new Date("2026-07-12T01:12:00.000Z");
 // Distinct values per pass, so a swapped response key fails the equality checks.
 const PC_SYNC = { runId: "pc-run-1" };
-const PC_AI = { processed: 1, failed: 0, skipped: 2 };
+const PC_AI = { processed: 1, failed: 0, skipped: 2, retried: 0, stopped: null };
 const PC_RETRIES = { considered: 3, sent: 3, failed: 0, cancelled: 0, deferred: 0 };
 const PC_HYGIENE = { reopened: 0, reopenFailed: 0, waived: 1, waiveFailed: 0 };
 const PC_BODY = { ok: true, result: PC_SYNC, ai: PC_AI, retries: PC_RETRIES, hygiene: PC_HYGIENE };
@@ -391,10 +391,11 @@ describe("runDataHealthJob", () => {
     const response = await pending;
 
     expect(runPostClassFeedbackSync).toHaveBeenCalledWith({ triggerType: "manual", actorEmail: OWNER });
-    for (const pass of passes) {
-      expect(pass).toHaveBeenCalledTimes(1);
-      expect(pass).toHaveBeenCalledWith();
-    }
+    for (const pass of passes) expect(pass).toHaveBeenCalledTimes(1);
+    // As in the cron: the AI pass gets the tick's deadline, the other passes no arguments.
+    expect(processPostClassAiReviews).toHaveBeenCalledWith({ deadlineAt: expect.any(Number) });
+    expect(processDuePostClassNotificationRetries).toHaveBeenCalledWith();
+    expect(runPostClassDeductionHygiene).toHaveBeenCalledWith();
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(PC_BODY);
   });

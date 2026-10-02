@@ -248,7 +248,7 @@ erDiagram
         uuid id PK
         uuid session_id FK
         uuid feedback_version_id FK
-        text request_hash UK "identical input never re-bills"
+        text request_hash UK "one row per request, up to 3 attempts"
         post_class_ai_status status
         text model
     }
@@ -516,9 +516,9 @@ This is the timing evidence. `wiseActivityEventId` is the domain's only outbound
 
 #### `postClassAssessments` (`post_class_assessments`, lines 3372–3401)
 
-**Grain:** one row per *distinct verdict*, not per evaluation attempt — `pc_assessments_key_idx` unique on `assessmentKey`, and every writer uses `onConflictDoNothing` on that target (`repository.ts:1851`, `reassess.ts:292`).
+**Grain:** one row per *distinct verdict*, not per evaluation attempt — `pc_assessments_key_idx` unique on `assessmentKey`, and every writer uses `onConflictDoNothing` on that target (`repository.ts:1851`, `reassess.ts:293`).
 
-`assessmentKey` is a SHA-256 of the full verdict input set: sync run, assessed-at, Wise session id, policy and mapping versions, scheduled end, deadline, enforcement mode, all three status axes, the governing version key, and the `violation` / `adjustedCompliant` booleans (`repository.ts:404-421`). Re-running the same evaluation therefore writes nothing; only a genuinely changed verdict appends. The policy-replay path (`reassess.ts:249-258`) builds a differently shaped key prefixed `reassess:`, so a replay is always distinguishable from a collection-time verdict.
+`assessmentKey` is a SHA-256 of the full verdict input set: sync run, assessed-at, Wise session id, policy and mapping versions, scheduled end, deadline, enforcement mode, all three status axes, the governing version key, and the `violation` / `adjustedCompliant` booleans (`repository.ts:404-421`). Re-running the same evaluation therefore writes nothing; only a genuinely changed verdict appends. The policy-replay path (`reassess.ts:250-259`) builds a differently shaped key prefixed `reassess:`, so a replay is always distinguishable from a collection-time verdict.
 
 Beyond the four statuses the row carries the audit detail behind the verdict — `requiredFieldsPassed`, `combinedRawCharCount`, `fieldFailures`, `objectiveViolation`, `rawOnTime`, `adjustedCompliant`, `remediatedLate`, `timingUnknown`, `timingEvidence`, `sourceReady`, and a `details` jsonb.
 
@@ -564,9 +564,9 @@ The AI tables are strictly advisory. `postClassAiConcerns` has no path into `pos
 
 #### `postClassAiRuns` (`post_class_ai_runs`, lines 3503–3522)
 
-**Grain:** one AI review call for one feedback version — `pc_ai_runs_request_hash_idx` unique on `requestHash`.
+**Grain:** one AI review request for one feedback version, holding up to three model attempts — `pc_ai_runs_request_hash_idx` unique on `requestHash`.
 
-`requestHash` is a SHA-256 over session id, feedback version id, content hash, prompt version, and redaction version (`ai.ts:39-42`), so identical input never re-bills and a prompt bump deliberately produces a fresh run. `redactionVersion` is stored on the row, making it possible to tell which scrubbing rules the outbound payload used. `triggerReasons` records why the run was queued at all.
+`requestHash` is a SHA-256 over session id, feedback version id, content hash, prompt version, and redaction version (`ai.ts:50-53`), so identical input shares one row and a prompt bump deliberately produces a fresh run. A transient failure (timeout, network error, OpenAI 429/5xx) or a run killed mid-call is retried on that same row, so one row can carry up to three billed model attempts. `metadata` records `promptVersion`, `highestPriorSimilarity`, `matchingPriorKey` and `attempts`, and after a failure `retryable` and `lastErrorName` (the error class). `redactionVersion` is stored on the row, making it possible to tell which scrubbing rules the outbound payload used. `triggerReasons` records why the run was queued at all.
 
 #### `postClassAiConcerns` (`post_class_ai_concerns`, lines 3524–3537)
 
@@ -602,7 +602,7 @@ Waiver provenance (`waiverCategory`, `waiverNote`), reviewer attribution (`decis
 
 The vocabulary splits by capability: review actions are `approve` / `waive` / `reopen` / `reinstate` and finance actions are `move` / `process` / `reverse` (`actions.ts:44`, `actions.ts:53`). Each row records `fromStatus` → `toStatus`, the `amountMinor` in play, the finance period, `actorEmail`, and a `metadata` jsonb.
 
-Unattended auto-approval writes here too, and through the same code path: the sweep hands candidates to `applyPostClassReviewAction` rather than reimplementing approval, so a system approval produces the same audited row shape a human does, distinguished only by its `actorEmail` (`auto-approval.ts:28-32`).
+Unattended auto-approval writes here too, and through the same code path: the sweep hands candidates to `applyPostClassReviewAction` rather than reimplementing approval, so a system approval produces the same audited row shape a human does, distinguished only by its `actorEmail` (`auto-approval.ts:29-33`).
 
 #### `postClassDeductionOffsets` (`post_class_deduction_offsets`, lines 3615–3630)
 
@@ -696,7 +696,7 @@ Every financial mutation runs through two layers.
 
 **Retirement before correction — the no-netting invariant.** The instant-charge pipeline writes a −฿100 row the moment a violation is proven, so evidence arriving later that clears the violation must take the row *off* the ledger by deleting the sheet row and retiring the line, never by netting a +฿100 correction. Retiring first is what preserves the invariant: a waive that follows sees no live written line, so `createPayoutAdjustment` is never reached (`payout-retirement.ts:29-42`). Deletes run in descending chunks located by marker, never by stored row number, and a readback must prove every removed marker gone and every retained marker intact before any line is retired.
 
-**Unattended passes reuse the attended ones.** Auto-approval hands candidates to `applyPostClassReviewAction` (`auto-approval.ts:21-26`); accrual calls `publishPayoutRun` (`payout-accrual.ts:31-34`). Neither reimplements the write, so the audit rows are indistinguishable in shape from a human's. Scope is bounded on both ends: auto-charging applies only from the later of a policy floor date and the last-ended payout window (`auto-approval.ts:43-57`), and the unattended finalize waits three Bangkok days past a window's end, because the last classes of a window can still produce brand-new proven violations through the 27th (`payout-accrual.ts:49-58`).
+**Unattended passes reuse the attended ones.** Auto-approval hands candidates to `applyPostClassReviewAction` (`auto-approval.ts:22-27`); accrual calls `publishPayoutRun` (`payout-accrual.ts:31-34`). Neither reimplements the write, so the audit rows are indistinguishable in shape from a human's. Scope is bounded on both ends: auto-charging applies only from the later of a policy floor date and the last-ended payout window (`auto-approval.ts:44-58`), and the unattended finalize waits three Bangkok days past a window's end, because the last classes of a window can still produce brand-new proven violations through the 27th (`payout-accrual.ts:49-58`).
 
 **Two kill switches sit outside the schema.** `POST_CLASS_PAYOUT_WRITES_ENABLED` must be `"true"` for any Google write (`payout-config.ts:49-50`), and `POST_CLASS_PAYOUT_TARGET` must be `production` on a production deployment and `scratch` on a preview (`payout-config.ts:112-122`). Neither is in `src/lib/env.ts`; both are read directly from `process.env`. See [`../env.md`](../env.md).
 

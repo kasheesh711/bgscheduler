@@ -470,7 +470,7 @@ Two in-app paths exist, both behind an Auth.js session and both audited with
 |---|---|---|
 | `200` | Ran; body is the job result. Wise sync returns 200 when a snapshot was promoted, with `outcome: "success"` or `"partial"`. A partial refresh retains review warnings and operational alerts but permits classroom generation. | [`run-wise-sync.ts`](../../src/lib/sync/run-wise-sync.ts) |
 | `202` | **Skipped — another run is in flight.** Body carries `skipped: true, alreadyRunning: true, runningStartedAt`. Audited as `skipped`, not failed. | Wise ([`run-wise-sync.ts:148-150`](../../src/lib/sync/run-wise-sync.ts)); credit control; progress tests; admissions when every pass skipped ([`route.ts:62-63`](../../src/app/api/internal/admissions-notifications/route.ts)) |
-| `409` | Also "already running", on routes that throw a typed error instead: Wise activity ([`:28-30`](../../src/app/api/internal/sync-wise-activity/route.ts)), leave requests ([`:20-22`](../../src/app/api/internal/sync-leave-requests/route.ts)), post-class sync/backfill ([`collection-tick.ts:106-108`](../../src/lib/post-class-feedback/collection-tick.ts), [`:72-74`](../../src/app/api/internal/post-class-feedback-backfill/route.ts)), competitor ([`:55-61`](../../src/app/api/internal/sync-competitor-intelligence/route.ts)). **Different 409s:** sales dashboard → the connected Google account has no Sheets token ([`:62-66`](../../src/app/api/internal/sync-sales-dashboard/route.ts)); student promotions → not the target date; Data Health run → confirmation missing. | |
+| `409` | Also "already running", on routes that throw a typed error instead: Wise activity ([`:28-30`](../../src/app/api/internal/sync-wise-activity/route.ts)), leave requests ([`:20-22`](../../src/app/api/internal/sync-leave-requests/route.ts)), post-class sync/backfill ([`collection-tick.ts:110-112`](../../src/lib/post-class-feedback/collection-tick.ts), [`:72-74`](../../src/app/api/internal/post-class-feedback-backfill/route.ts)), competitor ([`:55-61`](../../src/app/api/internal/sync-competitor-intelligence/route.ts)). **Different 409s:** sales dashboard → the connected Google account has no Sheets token ([`:62-66`](../../src/app/api/internal/sync-sales-dashboard/route.ts)); student promotions → not the target date; Data Health run → confirmation missing. | |
 | `400` | Bad query/body — backfill date/cap rules, admissions `runType`. | [`backfill/route.ts:36-41`](../../src/app/api/internal/post-class-feedback-backfill/route.ts), [`admissions-notifications/route.ts:77-86`](../../src/app/api/internal/admissions-notifications/route.ts) |
 | `401` | Bearer wrong or missing (and, on POST routes with a session fallback, no session either). | [`cron-auth.ts:25`](../../src/lib/internal/cron-auth.ts) |
 | `403` | Data Health run of a `post_class_feedback*` job without `access_manager`. | [`run/route.ts:25-30`](../../src/app/api/data-health/jobs/%5BjobKey%5D/run/route.ts) |
@@ -478,7 +478,7 @@ Two in-app paths exist, both behind an Auth.js session and both audited with
 | `503` | Post-class reminder checkpoint not ready (manual-only routes), or maintenance mode on a non-exempt path. | [`reminder-day-after/route.ts:17-23`](../../src/app/api/internal/post-class-feedback/reminder-day-after/route.ts), [`maintenance.ts:120-134`](../../src/lib/maintenance.ts) |
 
 Three post-class routes return a **generic** error string and discard the underlying message —
-`"Post-class feedback sync failed"` ([`collection-tick.ts:110`](../../src/lib/post-class-feedback/collection-tick.ts)),
+`"Post-class feedback sync failed"` ([`collection-tick.ts:114`](../../src/lib/post-class-feedback/collection-tick.ts)),
 `"Post-class feedback backfill failed"` ([`route.ts:75-78`](../../src/app/api/internal/post-class-feedback-backfill/route.ts)),
 `"Post-class payout accrual failed"` ([`route.ts:33-37`](../../src/app/api/internal/post-class-feedback/payout-accrual/route.ts)).
 For those the real reason is in `post_class_sync_runs.error_summary` or the Vercel function log,
@@ -488,7 +488,17 @@ never in the HTTP body (§7.5). The collection tick logs `[post-class-collection
 that fails before its run row exists (an unset `WISE_INSTITUTE_ID`, a database error in `beginSync`)
 has no `error_summary`, so that `pass: "sync"` line is its only log. The class is often a plain
 `Error`, so the line shows that the sync failed, not why: check `WISE_INSTITUTE_ID` and the database
-first, then look for a `post_class_sync_runs` row started at that time.
+first, then look for a `post_class_sync_runs` row started at that time. The deduction sweeps log one line
+per failed deduction — `[post-class-auto-approve]`, `[post-class-ineligible-waive]` or
+`[post-class-auto-reopen]` with `{ deductionId, errorName, causeName?, code?, message? }` (reassessment:
+`[post-class-reassess]` with `wiseSessionId`). `code` is the SQLSTATE or network code; `message`
+appears only for the domain's typed errors (for example "This record changed. Refresh and try again."),
+never for a driver error, whose text can carry SQL and parameters. The AI review pass logs
+`[post-class-ai-review] { stopped, processed, failed, retried }` when its model calls end early: `deadline`
+(10 minutes into the tick), `model_failures` (three in a row, so OpenAI is likely down; failures that are
+transient are retried after an hour), `not_configured` (no `OPENAI_API_KEY`) or `key_rejected` (OpenAI
+answered 401/403: rotate the key; the review that hit it is left untouched). Each failed run row keeps its
+own `error_message` and `metadata.lastErrorName`.
 
 ---
 

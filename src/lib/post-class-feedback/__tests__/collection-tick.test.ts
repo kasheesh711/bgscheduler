@@ -21,7 +21,7 @@ import { runPostClassFeedbackSync } from "@/lib/post-class-feedback/sync";
 
 // Distinct values per pass, so a swapped response key fails the equality checks.
 const SYNC = { runId: "pc-run-1", status: "success" };
-const AI = { processed: 1, failed: 0, skipped: 2 };
+const AI = { processed: 1, failed: 0, skipped: 2, retried: 0, stopped: null };
 const RETRIES = { considered: 3, sent: 3, failed: 0, cancelled: 0, deferred: 0 };
 const HYGIENE = { reopened: 0, reopenFailed: 0, waived: 1, waiveFailed: 0 };
 const BODY = { ok: true, result: SYNC, ai: AI, retries: RETRIES, hygiene: HYGIENE };
@@ -48,6 +48,7 @@ beforeEach(() => {
 
 afterEach(() => {
   consoleError.mockRestore();
+  vi.useRealTimers();
 });
 
 describe("runPostClassCollectionTick", () => {
@@ -64,20 +65,26 @@ describe("runPostClassCollectionTick", () => {
       endDate: "2026-09-04",
     } as const;
 
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const tickStart = new Date("2026-09-29T12:00:00.000Z");
+    vi.setSystemTime(tickStart);
     const pending = runPostClassCollectionTick(options);
     // Give an eagerly started pass the chance to run while the sync is still pending.
     await new Promise((resolve) => setTimeout(resolve, 0));
     for (const pass of PASSES) expect(pass).not.toHaveBeenCalled();
 
+    // The sync takes five minutes; the AI pass's budget still counts from the tick's start.
+    vi.setSystemTime(new Date(tickStart.getTime() + 5 * 60_000));
     finishSync(SYNC);
 
     expect(await pending).toEqual(BODY);
     expect(runPostClassFeedbackSync).toHaveBeenCalledTimes(1);
     expect(runPostClassFeedbackSync).toHaveBeenCalledWith(options);
-    for (const pass of PASSES) {
-      expect(pass).toHaveBeenCalledTimes(1);
-      expect(pass).toHaveBeenCalledWith();
-    }
+    for (const pass of PASSES) expect(pass).toHaveBeenCalledTimes(1);
+    // The AI pass gets a deadline 10 minutes after the tick started; the other passes take no arguments.
+    expect(processPostClassAiReviews).toHaveBeenCalledWith({ deadlineAt: tickStart.getTime() + 600_000 });
+    expect(processDuePostClassNotificationRetries).toHaveBeenCalledWith();
+    expect(runPostClassDeductionHygiene).toHaveBeenCalledWith();
     expect(consoleError).not.toHaveBeenCalled();
   });
 

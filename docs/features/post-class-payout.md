@@ -284,7 +284,7 @@ the tab`, and `readback unparseable`
 The whole unattended pipeline is one opt-in. `resolveAutoApproveEnabled` keys on
 `raw?.trim() === "true"` ([`payout-config.ts:164`-`168`](../../src/lib/post-class-feedback/payout-config.ts)),
 and three separate places consult it: the approve sweep
-([`auto-approval.ts:73`](../../src/lib/post-class-feedback/auto-approval.ts)), the payout-candidate
+([`auto-approval.ts:75`](../../src/lib/post-class-feedback/auto-approval.ts)), the payout-candidate
 carve-out that admits exactly one system actor as a decision-maker
 (`payout-repository.ts:142`-`147`), and the ledger-retirement pass
 (`payout-retirement.ts:185`-`187`). Flipping it off instantly restores human-only money movement.
@@ -292,13 +292,13 @@ carve-out that admits exactly one system actor as a decision-maker
 **Scope is bounded twice.** `autoChargeLowerBoundUtc` takes the *later* of a hard-coded policy
 floor — `PAYOUT_AUTO_CHARGE_FLOOR_BANGKOK = "2026-08-26"`, the start of the first fully automated
 window (`payout-config.ts:199`-`205`) — and the start of the last-ended payout window
-(`auto-approval.ts:51`-`57`). The floor keeps the pre-automation backlog and the settled prior
+(`auto-approval.ts:52`-`58`). The floor keeps the pre-automation backlog and the settled prior
 ledger a human decision forever; the last-ended-window bound keeps the sweep off ancient backlogs,
 so a months-late flag stays a visible item in the review UI rather than silently becoming money.
 
 **Approve sweep.** A `pending_review` deduction is auto-approved when its session is `live`-enforced,
 source-`ready`, inside scope, and its deadline is at least `POST_CLASS_AUTO_APPROVE_GRACE_HOURS` in
-the past (`auto-approval.ts:84`-`90`). The grace default is **24 hours**, and blank, non-numeric, or
+the past (`auto-approval.ts:85`-`91`). The grace default is **24 hours**, and blank, non-numeric, or
 negative values all fall back to 24 — an explicit `"0"` is the deliberate charge-at-deadline mode
 (`payout-config.ts:170`-`190`). The JSDoc there records why: the naive `Number(raw ?? 24)` it
 replaced turned `""` into `0` (no grace at all) and `"24h"` into `NaN`, which poisons the `Date`
