@@ -7,11 +7,14 @@ import { bangkokDate, evidenceHash } from "./evidence";
 const refId = (ref: unknown) => typeof ref === "string" ? ref
   : ref && typeof ref === "object" && "_id" in ref ? ref._id : null;
 
+const cancelled = (session: WiseSession) => /^CANCELL?ED$/iu.test(session.meetingStatus ?? "");
+
+/** Who and when. The meeting status is compared separately: it legitimately moves as a class ends. */
 function ownership(session: WiseSession) {
   return evidenceHash({
     start: session.scheduledStartTime, end: session.scheduledEndTime,
     teacher: refId(session.userId), students: session.students?.map(refId).sort(),
-    title: session.title, type: session.type, status: session.meetingStatus,
+    title: session.title, type: session.type,
     classId: refId(session.classId),
     programme: typeof session.classId === "object" ? session.classId.subject : null,
   });
@@ -34,9 +37,14 @@ export async function fetchAtomLessonTimetable(client: WiseClient, instituteId: 
   for (const session of future) {
     if (!futureDates.has(bangkokDate(session.scheduledStartTime))) continue;
     const previous = result.get(session._id);
-    // A class may appear in both statuses as it ends. Conflicting ownership or
-    // timing must still fail closed; an identical occurrence is retained once.
-    if (previous && ownership(previous) !== ownership(session)) throw new Error("Wise timetable occurrences conflict");
+    // A class may appear in both statuses as it ends, with FUTURE still showing its
+    // earlier meeting status for some minutes (likely cause of the 2 Oct 2026 17:36
+    // BKK collection failure). The PAST
+    // record is retained. Conflicting ownership or timing, or a cancellation on
+    // only one side, must still fail closed.
+    if (previous && (ownership(previous) !== ownership(session) || cancelled(previous) !== cancelled(session))) {
+      throw new Error("Wise timetable occurrences conflict");
+    }
     if (!previous) result.set(session._id, session);
   }
   return [...result.values()];

@@ -36,6 +36,21 @@ export function lessonsFromWise(sessions: WiseSession[]): AtomLesson[] {
   });
 }
 
+/**
+ * A fixed label for why a step failed. Raw error text can carry Wise or Atom payload values, so only these labels
+ * are stored on the run and the incident.
+ */
+export function atomFailureCause(error: unknown): string {
+  if (error instanceof AtomCollectionError) return error.stage ?? error.code;
+  if (!(error instanceof Error)) return "unknown";
+  const message = error.message;
+  if (/occurrences conflict/iu.test(message)) return "timetable_conflict";
+  if (/pagination|advertised session page/iu.test(message)) return "pagination_incomplete";
+  if (/time budget/iu.test(message) || error.name === "TimeoutError" || error.name === "AbortError") return "time_budget";
+  if (/invalid, duplicate or out-of-date/iu.test(message)) return "invalid_session";
+  return /^[A-Za-z]{1,40}$/u.test(error.name) ? error.name : "unknown";
+}
+
 export async function runAtomCollector(input: {
   db: Database;
   openClient: () => Promise<AtomReadClient>;
@@ -63,6 +78,11 @@ export async function runAtomCollector(input: {
   let client: AtomReadClient | null = null;
   const studentResults: Record<string, string> = {};
   let failure: string | null = null;
+  // The step in progress and a fixed cause label, so a failed run says where it stopped.
+  let stage = "pending_query";
+  let failureStage: string | null = null;
+  let failureCause: string | null = null;
+  const fail = (code: string, cause: string) => { failure = code; failureStage = stage; failureCause = cause; };
   let snapshots = 0;
   let activityCount = 0;
   let catalog: AtomReadClient["catalog"] = [];
@@ -77,9 +97,11 @@ export async function runAtomCollector(input: {
     ] : []))];
     if (input.probe) dates.push(input.probe.date,
       bangkokDate(new Date(Date.parse(input.probe.date + "T00:00:00+07:00") - 86400_000).toISOString()));
-    if (dates.length > 7) throw new AtomCollectionError("collection_failed");
+    if (dates.length > 7) throw new AtomCollectionError("collection_failed", "too_many_dates");
+    stage = "wise_timetable";
     const wise = await input.fetchDays([...new Set(dates)]);
     const lessons = lessonsFromWise(wise);
+    stage = "timetable_write";
     for (const day of new Set(dates)) {
       await db.insert(s.feedbackAtomTimetables).values({ runId, bangkokDate: day,
         observedAt: now, lessons: lessons.filter(lesson => bangkokDate(lesson.start) <= day && bangkokDate(lesson.end) >= day) });
@@ -90,6 +112,7 @@ export async function runAtomCollector(input: {
       return pendingIds.has(session._id) && session.type?.toUpperCase() !== "OFFLINE" &&
         isIsebClass(rosterTutor(refId(session.userId))?.canonicalKey, describeClass({ programme, title: session.title }));
     }).map(session => session._id));
+    stage = "link_lookup";
     const links = await db.select().from(s.feedbackAtomLinks).where(eq(s.feedbackAtomLinks.active, true));
     if (input.trial && (!input.probe || !links.some(link => link.atomStudentId === input.probe!.studentId))) {
       throw new AtomCollectionError("collection_failed", "trial_link_unapproved");
@@ -108,11 +131,13 @@ export async function runAtomCollector(input: {
       wanted.add(input.probe.date);
       targets.set(input.probe.studentId, wanted);
     }
+    stage = "atom_open";
     client = await input.openClient();
     catalog = client.catalog;
+    stage = "atom_collect";
     for (const [studentId, wanted] of targets) {
       if (Date.now() > input.deadlineMs - 30_000) {
-        studentResults[studentId] = "collection_failed"; failure = "collection_failed"; continue;
+        studentResults[studentId] = "collection_failed"; fail("collection_failed", "time_budget"); continue;
       }
       try {
         const activities = await client.collect(studentId, [...wanted]);
@@ -125,28 +150,30 @@ export async function runAtomCollector(input: {
       } catch (error) {
         const code = error instanceof AtomCollectionError ? error.code : "collection_failed";
         studentResults[studentId] = code;
-        failure = code;
+        fail(code, atomFailureCause(error));
         if (code === "authentication_failed") break;
       }
     }
   } catch (error) {
-    failure = error instanceof AtomCollectionError ? error.code : "collection_failed";
+    fail(error instanceof AtomCollectionError ? error.code : "collection_failed", atomFailureCause(error));
   } finally {
     await client?.close().catch(() => undefined);
     await db.update(RUN).set({
       status: failure ? "failed" : "succeeded", finishedAt: new Date(), errorCode: failure,
-      counts: { snapshots, activities: activityCount, catalog, studentResults, probe: Boolean(input.probe), trial: Boolean(input.trial) },
+      counts: { snapshots, activities: activityCount, catalog, studentResults, probe: Boolean(input.probe), trial: Boolean(input.trial),
+        ...(failure ? { failureStage, failureCause } : {}) },
     }).where(eq(RUN.id, runId));
   }
   if (failure) {
     await recordIncident(db, {
       dedupeKey: `atom-collection:${bangkokDate(now.toISOString())}:${failure}`,
       kind: "scan_failed", severity: "critical",
-      summary: `Atom collection needs attention: ${failure}. Lesson-only feedback remains available.`,
-      detail: { runId, code: failure },
+      summary: `Atom collection needs attention: ${failure} (${failureStage}: ${failureCause}). Lesson-only feedback remains available.`,
+      detail: { runId, code: failure, stage: failureStage, cause: failureCause },
     });
   }
-  return { ok: !failure, runId, snapshots, activities: activityCount, catalogStudents: catalog.length, errorCode: failure };
+  return { ok: !failure, runId, snapshots, activities: activityCount, catalogStudents: catalog.length, errorCode: failure,
+    ...(failure ? { failureStage, failureCause } : {}) };
 }
 
 export async function collectAtomOnServer(triggerSource: "cron" | "admin" = "cron", probe?: { studentId: string; date: string }) {
