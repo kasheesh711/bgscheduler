@@ -16,6 +16,8 @@ import {
   importRefreshableSalesSources,
 } from "@/lib/sales-dashboard/data";
 import { runCronWatchdog } from "@/lib/internal/cron-watchdog";
+import { processPostClassAiReviews } from "@/lib/post-class-feedback/ai";
+import { runPostClassDeductionHygiene } from "@/lib/post-class-feedback/auto-approval";
 import {
   processDuePostClassNotificationRetries,
   sendPostClassAdminDigest,
@@ -184,18 +186,27 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
 
       if (jobKey === "post_class_feedback") {
         try {
-          const result = await runPostClassFeedbackSync({
-            triggerType: "manual",
-            actorEmail,
+          const result = await runPostClassFeedbackSync({ triggerType: "manual", actorEmail });
+          const [ai, retries, hygiene] = await Promise.allSettled([
+            processPostClassAiReviews(),
+            processDuePostClassNotificationRetries(),
+            // Reopen unproven approvals and waive deductions on sessions the
+            // sync just found ineligible (e.g. cancelled in Wise) — releases
+            // claims only, never approves.
+            runPostClassDeductionHygiene(),
+          ]);
+          return NextResponse.json({
+            ok: true,
+            result,
+            ai: ai.status === "fulfilled" ? ai.value : { failed: true },
+            retries: retries.status === "fulfilled" ? retries.value : { failed: true },
+            hygiene: hygiene.status === "fulfilled" ? hygiene.value : { failed: true },
           });
-          const retries = await processDuePostClassNotificationRetries();
-          return NextResponse.json({ ok: true, result, retries });
         } catch (error) {
-          const message = error instanceof Error ? error.message : "Post-class feedback sync failed";
-          return NextResponse.json(
-            { error: message },
-            { status: message.includes("already running") ? 409 : 500 },
-          );
+          if (error instanceof PostClassFeedbackSyncAlreadyRunningError) {
+            return NextResponse.json({ error: error.message }, { status: 409 });
+          }
+          return NextResponse.json({ error: "Post-class feedback sync failed" }, { status: 500 });
         }
       }
 
