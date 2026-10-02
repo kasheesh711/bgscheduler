@@ -10,6 +10,7 @@ import {
   attendanceEnabled,
   attendanceStatus,
   datesBetween,
+  hasAttendanceEvidence,
   localDate,
   requirementFor,
 } from "./model";
@@ -71,76 +72,107 @@ export async function attendanceOverview(
   const end = query.end ?? today;
   const dates = datesBetween(start, end);
   const key = access.admin ? query.canonicalKey : access.canonicalKey!;
-  const [config, enrollments, schedules, exceptions, days, corrections] =
-    await Promise.all([
-      attendanceConfig(db),
-      db
-        .select({
-          enrollment: s.tutorAttendanceEnrollments,
-          name: s.tutorContacts.displayName,
-        })
-        .from(s.tutorAttendanceEnrollments)
-        .leftJoin(
-          s.tutorContacts,
+  const [
+    config,
+    enrollments,
+    schedules,
+    exceptions,
+    days,
+    corrections,
+    wfhRequests,
+  ] = await Promise.all([
+    attendanceConfig(db),
+    db
+      .select({
+        enrollment: s.tutorAttendanceEnrollments,
+        name: s.tutorContacts.displayName,
+        contactActive: s.tutorContacts.active,
+      })
+      .from(s.tutorAttendanceEnrollments)
+      .leftJoin(
+        s.tutorContacts,
+        eq(
+          s.tutorContacts.canonicalKey,
+          s.tutorAttendanceEnrollments.canonicalKey,
+        ),
+      )
+      .where(
+        key ? eq(s.tutorAttendanceEnrollments.canonicalKey, key) : undefined,
+      ),
+    db
+      .select()
+      .from(s.tutorAttendanceSchedules)
+      .where(
+        key ? eq(s.tutorAttendanceSchedules.canonicalKey, key) : undefined,
+      ),
+    // Office closures and tutor overrides are needed to derive the authorized rows; never returned as a global dataset.
+    db
+      .select()
+      .from(s.tutorAttendanceExceptions)
+      .where(
+        and(
+          gte(s.tutorAttendanceExceptions.date, start),
+          lte(s.tutorAttendanceExceptions.date, end),
+        ),
+      ),
+    db
+      .select()
+      .from(s.tutorAttendanceDays)
+      .where(
+        and(
+          gte(s.tutorAttendanceDays.date, start),
+          lte(s.tutorAttendanceDays.date, end),
+          key ? eq(s.tutorAttendanceDays.canonicalKey, key) : undefined,
+        ),
+      ),
+    db
+      .select({
+        correction: s.tutorAttendanceCorrections,
+        currentRevision: s.tutorAttendanceDays.revision,
+        recordedIn: s.tutorAttendanceDays.recordedIn,
+        recordedOut: s.tutorAttendanceDays.recordedOut,
+        effectiveIn: s.tutorAttendanceDays.effectiveIn,
+        effectiveOut: s.tutorAttendanceDays.effectiveOut,
+      })
+      .from(s.tutorAttendanceCorrections)
+      .leftJoin(
+        s.tutorAttendanceDays,
+        and(
           eq(
-            s.tutorContacts.canonicalKey,
-            s.tutorAttendanceEnrollments.canonicalKey,
+            s.tutorAttendanceDays.canonicalKey,
+            s.tutorAttendanceCorrections.canonicalKey,
           ),
-        )
-        .where(
-          key ? eq(s.tutorAttendanceEnrollments.canonicalKey, key) : undefined,
+          eq(s.tutorAttendanceDays.date, s.tutorAttendanceCorrections.date),
         ),
-      db
-        .select()
-        .from(s.tutorAttendanceSchedules)
-        .where(
-          key ? eq(s.tutorAttendanceSchedules.canonicalKey, key) : undefined,
-        ),
-      // Office closures and tutor overrides are needed to derive the authorized rows; never returned as a global dataset.
-      db
-        .select()
-        .from(s.tutorAttendanceExceptions)
-        .where(
-          and(
-            gte(s.tutorAttendanceExceptions.date, start),
-            lte(s.tutorAttendanceExceptions.date, end),
+      )
+      .where(
+        key ? eq(s.tutorAttendanceCorrections.canonicalKey, key) : undefined,
+      )
+      .orderBy(desc(s.tutorAttendanceCorrections.createdAt)),
+    db
+      .select({
+        request: s.tutorAttendanceWfhRequests,
+        day: s.tutorAttendanceDays,
+      })
+      .from(s.tutorAttendanceWfhRequests)
+      .leftJoin(
+        s.tutorAttendanceDays,
+        and(
+          eq(
+            s.tutorAttendanceDays.canonicalKey,
+            s.tutorAttendanceWfhRequests.canonicalKey,
           ),
+          eq(s.tutorAttendanceDays.date, s.tutorAttendanceWfhRequests.date),
         ),
-      db
-        .select()
-        .from(s.tutorAttendanceDays)
-        .where(
-          and(
-            gte(s.tutorAttendanceDays.date, start),
-            lte(s.tutorAttendanceDays.date, end),
-            key ? eq(s.tutorAttendanceDays.canonicalKey, key) : undefined,
-          ),
-        ),
-      db
-        .select({
-          correction: s.tutorAttendanceCorrections,
-          currentRevision: s.tutorAttendanceDays.revision,
-          recordedIn: s.tutorAttendanceDays.recordedIn,
-          recordedOut: s.tutorAttendanceDays.recordedOut,
-          effectiveIn: s.tutorAttendanceDays.effectiveIn,
-          effectiveOut: s.tutorAttendanceDays.effectiveOut,
-        })
-        .from(s.tutorAttendanceCorrections)
-        .leftJoin(
-          s.tutorAttendanceDays,
-          and(
-            eq(
-              s.tutorAttendanceDays.canonicalKey,
-              s.tutorAttendanceCorrections.canonicalKey,
-            ),
-            eq(s.tutorAttendanceDays.date, s.tutorAttendanceCorrections.date),
-          ),
-        )
-        .where(
-          key ? eq(s.tutorAttendanceCorrections.canonicalKey, key) : undefined,
-        )
-        .orderBy(desc(s.tutorAttendanceCorrections.createdAt)),
-    ]);
+      )
+      .where(
+        key ? eq(s.tutorAttendanceWfhRequests.canonicalKey, key) : undefined,
+      )
+      .orderBy(
+        desc(s.tutorAttendanceWfhRequests.date),
+        desc(s.tutorAttendanceWfhRequests.createdAt),
+      ),
+  ]);
   const index = new Map(days.map((d) => [`${d.canonicalKey}:${d.date}`, d]));
   const rows = enrollments
     .flatMap(({ enrollment, name }) =>
@@ -165,6 +197,8 @@ export async function attendanceOverview(
             clockOut: day?.effectiveOut?.toISOString() ?? null,
             revision: day?.revision ?? 0,
             corrected: day?.corrected ?? false,
+            workMode: day?.workMode ?? "office",
+            wfhRequestId: day?.wfhRequestId ?? null,
             ...attendanceStatus(
               date,
               requirement,
@@ -200,6 +234,62 @@ export async function attendanceOverview(
       reviewedAt: c.reviewedAt?.toISOString() ?? null,
     }),
   );
+  const eligibleForDate = (canonicalKey: string | null, date: string) => {
+    const owner = enrollments.find(
+      (e) => e.enrollment.canonicalKey === canonicalKey,
+    );
+    return (
+      !!owner?.contactActive &&
+      !!owner.enrollment.active &&
+      date >= owner.enrollment.startDate &&
+      (!owner.enrollment.endDate || date <= owner.enrollment.endDate)
+    );
+  };
+  const visibleWfhRequests = wfhRequests.map(({ request, day }) => {
+    const canReview =
+      access.admin &&
+      request.requestedBy !== access.email &&
+      request.canonicalKey !== access.canonicalKey;
+    const editable =
+      request.date >= today && !hasAttendanceEvidence(day ?? undefined);
+    return {
+      ...request,
+      createdAt: request.createdAt.toISOString(),
+      reviewedAt: request.reviewedAt?.toISOString() ?? null,
+      cancelledAt: request.cancelledAt?.toISOString() ?? null,
+      canApprove:
+        canReview &&
+        request.status === "pending" &&
+        editable &&
+        eligibleForDate(request.canonicalKey, request.date),
+      canReject: canReview && request.status === "pending",
+      canCancel:
+        (access.admin || request.canonicalKey === access.canonicalKey) &&
+        (request.status === "pending" ||
+          (request.status === "approved" &&
+            editable &&
+            day?.wfhRequestId === request.id)),
+      locationLocked: hasAttendanceEvidence(day ?? undefined),
+    };
+  });
+  const network = networkStatus(address, config.networks);
+  const mine = rows.find(
+    (r) => r.canonicalKey === access.canonicalKey && r.date === today,
+  );
+  const approvedWfh =
+    mine?.workMode === "wfh" &&
+    wfhRequests.some(
+      ({ request }) =>
+        request.id === mine.wfhRequestId &&
+        request.status === "approved" &&
+        request.canonicalKey === access.canonicalKey &&
+        request.date === today,
+    );
+  const clockingAllowed =
+    attendanceEnabled() &&
+    eligibleForDate(access.canonicalKey, today) &&
+    !!mine &&
+    (mine.workMode === "wfh" ? approvedWfh : network.approved);
   return {
     access,
     today,
@@ -207,9 +297,11 @@ export async function attendanceOverview(
     end,
     now: now.toISOString(),
     enabled: attendanceEnabled(),
-    network: networkStatus(address, config.networks),
+    network,
+    clockingAllowed,
     rows,
     corrections: visibleCorrections,
+    wfhRequests: visibleWfhRequests,
     tutors: enrollments.map((e) => ({
       canonicalKey: e.enrollment.canonicalKey,
       name: e.name ?? e.enrollment.canonicalKey,
@@ -239,6 +331,8 @@ export function attendanceCsv(overview: AttendanceOverview): string {
       "Early departure minutes",
       "Attendance span minutes (includes breaks)",
       "Corrected",
+      "Work location",
+      "WFH request ID",
     ],
     ...overview.rows.map((r) => [
       r.name,
@@ -254,6 +348,8 @@ export function attendanceCsv(overview: AttendanceOverview): string {
       r.earlyMinutes,
       r.spanMinutes,
       r.corrected,
+      r.workMode === "wfh" ? "WFH" : "Office",
+      r.wfhRequestId,
     ]),
   ]
     .map((row) => row.map(cell).join(","))

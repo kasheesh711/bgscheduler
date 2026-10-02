@@ -19,6 +19,7 @@ import {
   Wifi,
   WifiOff,
   CheckCircle2,
+  House,
 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import type {
@@ -33,16 +34,12 @@ import {
   type Week,
 } from "@/lib/tutor-attendance/model";
 import css from "./workspace.module.css";
+import { WfhRequests, type AttendanceSave } from "./wfh-requests";
 
 type Day = AttendanceOverview["rows"][number];
 type Settings = AttendanceSettings & { detectedAddress: string | null };
-type Tab = "Today" | "History" | "Corrections" | "Setup";
-type Save = (
-  url: string,
-  body: unknown,
-  message: string,
-  method?: string,
-) => Promise<boolean>;
+type Tab = "Today" | "History" | "WFH" | "Corrections" | "Setup";
+type Save = AttendanceSave;
 const api = "/api/tutor-attendance";
 const clock = (date: string | null, seconds = false) =>
   date
@@ -102,7 +99,7 @@ function RequirementLabel({ row }: { row?: Day }) {
         ? `${row.requirement.start}–${row.requirement.end}`
         : row.requirement && "excused" in row.requirement
           ? `Excused · ${row.requirement.reason}`
-          : "No required office hours"}
+          : "No required hours"}
     </>
   );
 }
@@ -149,9 +146,10 @@ function AttendanceTable({
           <tr>
             {history && <th>Date</th>}
             <th>Tutor</th>
+            <th>Location</th>
             <th>Required</th>
-            <th>Arrival</th>
-            <th>Departure</th>
+            <th>Clock in</th>
+            <th>Clock out</th>
             <th>Span</th>
             <th>Status</th>
             {correct && (
@@ -167,6 +165,13 @@ function AttendanceTable({
               {history && <td className={css.mono}>{displayDate(row.date)}</td>}
               <td>
                 <strong>{row.name}</strong>
+              </td>
+              <td>
+                <span
+                  className={`${css.pill} ${row.workMode === "wfh" ? css.good : ""}`}
+                >
+                  {row.workMode === "wfh" ? "WFH" : "Office"}
+                </span>
               </td>
               <td className={css.mono}>
                 <RequirementLabel row={row} />
@@ -308,7 +313,8 @@ export function AttendanceWorkspace() {
   const rows = payload?.rows ?? [];
   const todayRows = rows.filter(
     (r) =>
-      r.date === payload?.today && (r.requirement || r.clockIn || r.clockOut),
+      r.date === payload?.today &&
+      (r.requirement || r.clockIn || r.clockOut || r.workMode === "wfh"),
   );
   const mine = rows.find(
     (r) =>
@@ -328,17 +334,27 @@ export function AttendanceWorkspace() {
   };
   const pending =
     payload?.corrections.filter((c) => c.status === "pending").length ?? 0;
+  const pendingWfh =
+    payload?.wfhRequests.filter(
+      (r) => r.status === "pending" && r.date >= payload.today,
+    ).length ?? 0;
+  const myPendingWfh = payload?.wfhRequests.some(
+    (r) =>
+      r.canonicalKey === payload.access.canonicalKey &&
+      r.date === payload.today &&
+      r.status === "pending",
+  );
   return (
     <div className={css.workspace}>
       <div className={css.inner}>
         <header className={css.header}>
           <div>
             <p className={css.eyebrow}>BeGifted · Tutor operations</p>
-            <h1 className={css.title}>Office Attendance</h1>
+            <h1 className={css.title}>Attendance</h1>
             <p className={css.muted}>
               {payload?.access.admin
-                ? "A clear view of office hours, arrivals, and the records that need attention."
-                : "Your office hours, in one place. Connect to office Wi-Fi when you arrive and leave."}
+                ? "Office and WFH attendance, hours, and requests that need attention."
+                : "Clock in at the office or on an approved WFH day. Your usual hours apply."}
             </p>
           </div>
           <Button variant="outline" onClick={() => void load()} disabled={busy}>
@@ -375,7 +391,7 @@ export function AttendanceWorkspace() {
                 <strong>Clocking is not enabled yet.</strong>{" "}
                 {payload.access.admin
                   ? "Confirm tutor accounts, schedules, and office connections in Setup before launch."
-                  : "Your administrator is preparing attendance. History and correction requests are available."}
+                  : "Your administrator is preparing attendance. History, WFH requests and correction requests are available."}
               </div>
             )}
             <div
@@ -415,6 +431,7 @@ export function AttendanceWorkspace() {
                 [
                   "Today",
                   "History",
+                  "WFH",
                   "Corrections",
                   ...(payload.access.admin ? ["Setup"] : []),
                 ] as Tab[]
@@ -434,6 +451,7 @@ export function AttendanceWorkspace() {
                 >
                   {item}
                   {item === "Corrections" && pending > 0 ? ` (${pending})` : ""}
+                  {item === "WFH" && pendingWfh > 0 ? ` (${pendingWfh})` : ""}
                 </button>
               ))}
             </div>
@@ -449,24 +467,33 @@ export function AttendanceWorkspace() {
                         {mine && <Status row={mine} />}
                       </div>
                       <h2 className="mt-3">
-                        {mine?.name ?? "Your office attendance"}
+                        {mine?.name ?? "Your attendance"}
                       </h2>
+                      {mine && (
+                        <span
+                          className={`${css.pill} ${mine.workMode === "wfh" ? css.good : ""}`}
+                        >
+                          {mine.workMode === "wfh"
+                            ? "WFH · Approved"
+                            : "Office"}
+                        </span>
+                      )}
                       <div className={css.clockTime}>
                         <RequirementLabel row={mine} />
                       </div>
                       <p className={css.muted}>
-                        Asia/Bangkok · arrival and final departure · breaks
-                        included
+                        Asia/Bangkok · first clock-in and final clock-out ·
+                        breaks included
                       </p>
                       <div className={css.times}>
                         <div>
-                          <p className={css.muted}>Arrival</p>
+                          <p className={css.muted}>Clock in</p>
                           <p className={css.timeValue}>
                             {clock(mine?.clockIn ?? null, true)}
                           </p>
                         </div>
                         <div>
-                          <p className={css.muted}>Departure</p>
+                          <p className={css.muted}>Clock out</p>
                           <p className={css.timeValue}>
                             {clock(mine?.clockOut ?? null, true)}
                           </p>
@@ -481,15 +508,21 @@ export function AttendanceWorkspace() {
                     </div>
                     <div className={css.clockAction}>
                       <div className={css.row}>
-                        {payload.network.approved ? (
+                        {mine?.workMode === "wfh" ? (
+                          <House size={18} />
+                        ) : payload.network.approved ? (
                           <Wifi size={18} />
                         ) : (
                           <WifiOff size={18} />
                         )}
                         <span className={css.muted}>
-                          {payload.network.approved
-                            ? `Office connection recognized${payload.network.label ? ` · ${payload.network.label}` : ""}`
-                            : "Connect to approved office Wi-Fi"}
+                          {mine?.workMode === "wfh"
+                            ? "WFH approved · clock from any connection"
+                            : myPendingWfh
+                              ? "WFH awaiting approval. Office clocking remains available on office Wi-Fi."
+                              : payload.network.approved
+                                ? `Office connection recognized${payload.network.label ? ` · ${payload.network.label}` : ""}`
+                                : "Connect to approved office Wi-Fi"}
                         </span>
                       </div>
                       {mine?.clockOut ? (
@@ -499,12 +532,7 @@ export function AttendanceWorkspace() {
                         </Button>
                       ) : (
                         <Button
-                          disabled={
-                            busy ||
-                            !payload.enabled ||
-                            !payload.network.approved ||
-                            !mine
-                          }
+                          disabled={busy || !payload.clockingAllowed || !mine}
                           onClick={() =>
                             void punch(mine?.clockIn ? "out" : "in")
                           }
@@ -530,14 +558,21 @@ export function AttendanceWorkspace() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          disabled={
-                            busy ||
-                            !payload.enabled ||
-                            !payload.network.approved
-                          }
+                          disabled={busy || !payload.clockingAllowed}
                           onClick={() => void punch("out")}
                         >
                           Leaving with a missing arrival? Record departure
+                        </Button>
+                      )}
+                      {mine && mine.workMode !== "wfh" && (
+                        <Button
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() => setTab("WFH")}
+                        >
+                          {myPendingWfh
+                            ? "View WFH request"
+                            : "Request a WFH day"}
                         </Button>
                       )}
                     </div>
@@ -587,7 +622,7 @@ export function AttendanceWorkspace() {
                     <section className={css.panel}>
                       <div className={css.sectionHead}>
                         <div>
-                          <h2>Today’s office roster</h2>
+                          <h2>Today’s attendance</h2>
                           <p className={css.muted}>
                             {displayDate(payload.today)} · Asia/Bangkok
                           </p>
@@ -609,8 +644,9 @@ export function AttendanceWorkspace() {
                   </>
                 )}
                 <p className={css.muted}>
-                  Clocking records use of the office connection at each tap.
-                  Attendance spans include normal breaks.
+                  Office clocking requires the approved office connection. WFH
+                  clocking requires approval for that date. Attendance spans
+                  include normal breaks.
                 </p>
               </>
             )}
@@ -686,6 +722,9 @@ export function AttendanceWorkspace() {
                   correct={!payload.access.admin ? openCorrection : undefined}
                 />
               </section>
+            )}
+            {tab === "WFH" && (
+              <WfhRequests payload={payload} busy={busy} save={save} />
             )}
             {correctionDay && (
               <CorrectionForm

@@ -20,7 +20,7 @@ import {
   check,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import type { Week, OfficeNetwork } from "@/lib/tutor-attendance/model";
+import type { Week, OfficeNetwork, AttendanceWorkMode, WfhRequestStatus } from "@/lib/tutor-attendance/model";
 
 // One outstanding browser-bound email challenge per approved-or-requested address.
 export const authEmailChallenges = pgTable("auth_email_challenges", {
@@ -5721,6 +5721,29 @@ export const tutorAttendanceConfig = pgTable("tutor_attendance_config", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const tutorAttendanceWfhRequests = pgTable("tutor_attendance_wfh_requests", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  canonicalKey: text("canonical_key").notNull().references(() => tutorAttendanceEnrollments.canonicalKey),
+  date: date("date").notNull(),
+  reason: text("reason").notNull(),
+  status: text("status").$type<WfhRequestStatus>().notNull().default("pending"),
+  revision: integer("revision").notNull().default(0),
+  requestedBy: text("requested_by").notNull(),
+  requestKey: uuid("request_key").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  reviewedBy: text("reviewed_by"),
+  reviewReason: text("review_reason"),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+  cancelledBy: text("cancelled_by"),
+  cancellationReason: text("cancellation_reason"),
+  cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+}, t => [
+  uniqueIndex("ta_wfh_request_idx").on(t.requestedBy, t.requestKey),
+  uniqueIndex("ta_wfh_active_date_idx").on(t.canonicalKey, t.date).where(sql`${t.status} IN ('pending', 'approved')`),
+  index("ta_wfh_status_date_idx").on(t.status, t.date),
+  check("ta_wfh_status", sql`${t.status} IN ('pending', 'approved', 'rejected', 'cancelled')`),
+]);
+
 export const tutorAttendanceDays = pgTable("tutor_attendance_days", {
   canonicalKey: text("canonical_key").notNull().references(() => tutorAttendanceEnrollments.canonicalKey),
   date: date("date").notNull(),
@@ -5729,8 +5752,14 @@ export const tutorAttendanceDays = pgTable("tutor_attendance_days", {
   effectiveIn: timestamp("effective_in", { withTimezone: true }),
   effectiveOut: timestamp("effective_out", { withTimezone: true }),
   corrected: boolean("corrected").notNull().default(false),
+  workMode: text("work_mode").$type<AttendanceWorkMode>().notNull().default("office"),
+  wfhRequestId: uuid("wfh_request_id").references(() => tutorAttendanceWfhRequests.id),
   revision: integer("revision").notNull().default(0),
-}, t => [primaryKey({ columns: [t.canonicalKey, t.date] }), check("ta_effective_order", sql`${t.effectiveOut} IS NULL OR ${t.effectiveIn} IS NULL OR ${t.effectiveOut} >= ${t.effectiveIn}`)]);
+}, t => [
+  primaryKey({ columns: [t.canonicalKey, t.date] }),
+  check("ta_effective_order", sql`${t.effectiveOut} IS NULL OR ${t.effectiveIn} IS NULL OR ${t.effectiveOut} >= ${t.effectiveIn}`),
+  check("ta_day_work_mode", sql`(${t.workMode} = 'office' AND ${t.wfhRequestId} IS NULL) OR (${t.workMode} = 'wfh' AND ${t.wfhRequestId} IS NOT NULL)`),
+]);
 
 export const tutorAttendanceCorrections = pgTable("tutor_attendance_corrections", {
   id: uuid("id").primaryKey().defaultRandom(),

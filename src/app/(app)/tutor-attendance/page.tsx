@@ -4,7 +4,7 @@ import { requireAttendanceAccess } from "@/lib/tutor-attendance/access";
 import { AttendanceError } from "@/lib/tutor-attendance/model";
 import { AttendanceWorkspace } from "@/components/tutor-attendance/workspace";
 
-export const metadata = { title: "Office Attendance | BeGifted Ops" };
+export const metadata = { title: "Attendance | BeGifted Ops" };
 
 async function AttendanceBody() {
   try {
@@ -15,7 +15,7 @@ async function AttendanceBody() {
     if (error instanceof AttendanceError)
       return (
         <section className="mx-auto max-w-lg rounded-xl border bg-card p-6">
-          <h1 className="text-xl font-semibold">Office Attendance</h1>
+          <h1 className="text-xl font-semibold">Attendance</h1>
           <p className="mt-3 text-muted-foreground">{error.message}</p>
         </section>
       );
@@ -28,7 +28,7 @@ export default function AttendancePage() {
     <Suspense
       fallback={
         <p role="status" className="p-6 text-muted-foreground">
-          Loading office attendance…
+          Loading attendance…
         </p>
       }
     >

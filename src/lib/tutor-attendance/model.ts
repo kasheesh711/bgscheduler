@@ -32,6 +32,12 @@ export const DEFAULT_WEEK: Week = [
   null,
 ];
 export type OfficeNetwork = { label: string; cidr: string };
+export type AttendanceWorkMode = "office" | "wfh";
+export type WfhRequestStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "cancelled";
 export type Requirement =
   | { start: string; end: string; source: string }
   | { excused: true; reason: string }
@@ -127,6 +133,37 @@ export const reviewSchema = z
     expectedRevision: revisionSchema,
   })
   .strict();
+export const wfhRequestSchema = z
+  .object({
+    date: dateSchema,
+    reason: reasonSchema,
+    idempotencyKey: z.uuid(),
+  })
+  .strict();
+export const wfhDecisionSchema = z
+  .object({
+    decision: z.enum(["approved", "rejected", "cancelled"]),
+    reason: reasonSchema,
+    expectedRevision: revisionSchema,
+  })
+  .strict();
+// A correction is attendance evidence too, even if it later removes a time.
+export function hasAttendanceEvidence(day?: {
+  recordedIn: Date | null;
+  recordedOut: Date | null;
+  effectiveIn: Date | null;
+  effectiveOut: Date | null;
+  corrected: boolean;
+}) {
+  return !!(
+    day &&
+    (day.recordedIn ||
+      day.recordedOut ||
+      day.effectiveIn ||
+      day.effectiveOut ||
+      day.corrected)
+  );
+}
 export function instant(date: string, time: string) {
   return fromZonedTime(`${date}T${time}:00`, ATTENDANCE_ZONE);
 }

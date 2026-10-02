@@ -26,13 +26,31 @@ may prevent recognition of legitimate office traffic.
 
 ## Acceptance
 
-- Office Wi-Fi accepts new punches; mobile data/home internet rejects them.
+- Office Wi-Fi accepts new punches; mobile data/home internet rejects them unless the
+  tutor has approved WFH for that Bangkok date.
 - Duplicate taps and lost-response retries keep the first saved time.
 - Tutors cannot choose another identity or read another person's records.
 - Missing departure remains incomplete next day; no time/duration is invented.
 - Offsite correction requests work. Approval preserves raw punches; stale approval fails.
 - New schedules preserve historical dates; dated exceptions retain their reasons/history.
 - Mobile controls and both themes work; history and CSV agree on flags and complete spans.
+
+## WFH rollout
+
+Apply additive migration `0093_tutor_attendance_wfh.sql` before deploying the WFH code.
+It preserves all existing dates as office attendance and approves nobody automatically.
+The existing `TUTOR_ATTENDANCE_ENABLED` switch controls both office and WFH punches.
+
+Verify a tutor requests a date from home, sees pending status, and cannot clock remotely.
+An attendance administrator must approve it; after refresh the tutor can clock in/out from
+home and sees WFH in Today and History. Confirm CSV carries WFH and the request ID.
+Cancellation before the first punch restores office-only clocking. After any punch or
+approved time correction, cancellation and location changes must fail. Check rejection,
+duplicate submission, self-approval denial and the next day's independent office restriction.
+
+Rollback to the previous code pauses remote WFH punches; keep the additive schema and
+history intact. The shared clocking switch can pause all new punches while requests,
+reviews, history and corrections remain available.
 
 ## Recovery
 

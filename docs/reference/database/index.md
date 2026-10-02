@@ -478,3 +478,7 @@ date exceptions, office-network configuration, daily attendance, correction requ
 immutable audit evidence. They use durable tutor keys and survive Wise snapshot rotation.
 The complete [table inventory and transaction contract](../api/tutor-attendance.md#persistence)
 accompany the [feature](../../features/tutor-attendance.md).
+
+Migration `0093_tutor_attendance_wfh.sql` adds an eighth table, `tutor_attendance_wfh_requests`,
+for whole-day WFH requests and review history. Attendance days gain a work location and
+optional approval request reference; historical records default to office attendance.

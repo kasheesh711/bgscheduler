@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -12,11 +12,14 @@ import {
   AttendanceError,
   attendanceEnabled,
   correctionSchema,
+  hasAttendanceEvidence,
   instant,
   localDate,
   punchSchema,
   reviewSchema,
   settingsCommandSchema,
+  wfhDecisionSchema,
+  wfhRequestSchema,
 } from "./model";
 import { networkRule, networkStatus } from "./network";
 
@@ -44,6 +47,9 @@ async function dayFor(tx: Database, key: string, date: string) {
     .insert(s.tutorAttendanceDays)
     .values({ canonicalKey: key, date })
     .onConflictDoNothing();
+  return (await existingDay(tx, key, date))!;
+}
+async function existingDay(tx: Database, key: string, date: string) {
   const [day] = await tx
     .select()
     .from(s.tutorAttendanceDays)
@@ -54,15 +60,28 @@ function assertRevision(actual: number, expected: number) {
   if (actual !== expected)
     throw new AttendanceError(
       409,
-      "This record changed. Refresh and review the latest times before trying again.",
+      "This record changed. Refresh and review the latest details before trying again.",
       "STALE_REVISION",
     );
 }
 async function enrollmentFor(tx: Database, key: string, date?: string) {
-  const [enrollment] = await tx
-    .select()
+  const [row] = await tx
+    .select({ enrollment: s.tutorAttendanceEnrollments })
     .from(s.tutorAttendanceEnrollments)
-    .where(eq(s.tutorAttendanceEnrollments.canonicalKey, key));
+    .innerJoin(
+      s.tutorContacts,
+      eq(
+        s.tutorContacts.canonicalKey,
+        s.tutorAttendanceEnrollments.canonicalKey,
+      ),
+    )
+    .where(
+      and(
+        eq(s.tutorAttendanceEnrollments.canonicalKey, key),
+        eq(s.tutorContacts.active, true),
+      ),
+    );
+  const enrollment = row?.enrollment;
   if (!enrollment || !enrollment.active)
     throw new AttendanceError(
       403,
@@ -304,13 +323,31 @@ export async function recordAttendancePunch(
     await enrollmentFor(tx, fresh.canonicalKey, command.date);
     const config = await attendanceConfig(tx);
     const network = networkStatus(address, config.networks);
-    if (!network.approved)
+    const day = await dayFor(tx, fresh.canonicalKey, command.date);
+    if (day.workMode === "wfh") {
+      const [approval] = await tx
+        .select()
+        .from(s.tutorAttendanceWfhRequests)
+        .where(
+          and(
+            eq(s.tutorAttendanceWfhRequests.id, day.wfhRequestId!),
+            eq(s.tutorAttendanceWfhRequests.canonicalKey, fresh.canonicalKey),
+            eq(s.tutorAttendanceWfhRequests.date, command.date),
+            eq(s.tutorAttendanceWfhRequests.status, "approved"),
+          ),
+        );
+      if (!approval)
+        throw new AttendanceError(
+          403,
+          "WFH approval is no longer available. Refresh before clocking.",
+          "WFH_APPROVAL_REQUIRED",
+        );
+    } else if (!network.approved)
       throw new AttendanceError(
         403,
-        "Connect to the approved office Wi-Fi and retry, or submit a correction request.",
+        "Connect to approved office Wi-Fi, or request WFH and wait for approval before clocking from home.",
         "OFFICE_NETWORK_REQUIRED",
       );
-    const day = await dayFor(tx, fresh.canonicalKey, command.date);
     if (command.kind === "in" && day.effectiveOut)
       throw new AttendanceError(
         409,
@@ -342,9 +379,215 @@ export async function recordAttendancePunch(
         address,
         network: network.label,
         configRevision: config.revision,
+        workMode: day.workMode,
+        wfhRequestId: day.wfhRequestId,
+        authorization:
+          day.workMode === "wfh" ? "approved_wfh" : "office_network",
       },
     });
     return { saved: true, replayed: !!existing };
+  });
+}
+function assertWfhDateEditable(
+  date: string,
+  day: Awaited<ReturnType<typeof existingDay>>,
+  now: Date,
+) {
+  if (date < localDate(now))
+    throw new AttendanceError(
+      400,
+      "WFH can only be requested or changed for today or a future date.",
+      "WFH_DATE_PASSED",
+    );
+  if (hasAttendanceEvidence(day))
+    throw new AttendanceError(
+      409,
+      "Attendance is already recorded for this date. Its work location cannot be changed.",
+      "WORK_LOCATION_LOCKED",
+    );
+}
+
+export async function requestAttendanceWfh(
+  access: AttendanceAccess,
+  input: unknown,
+  db: Database = getDb(),
+  now = new Date(),
+) {
+  const command = wfhRequestSchema.parse(input);
+  return transaction(access, db, async (tx, fresh) => {
+    if (!fresh.canonicalKey)
+      throw new AttendanceError(
+        403,
+        "Only enrolled tutors can request their own WFH day.",
+      );
+    const [replay] = await tx
+      .select()
+      .from(s.tutorAttendanceWfhRequests)
+      .where(
+        and(
+          eq(s.tutorAttendanceWfhRequests.requestedBy, fresh.email),
+          eq(s.tutorAttendanceWfhRequests.requestKey, command.idempotencyKey),
+        ),
+      );
+    if (replay) {
+      if (
+        replay.canonicalKey !== fresh.canonicalKey ||
+        replay.date !== command.date ||
+        replay.reason !== command.reason
+      )
+        throw new AttendanceError(
+          409,
+          "This request key was already used for a different WFH request.",
+        );
+      return { id: replay.id };
+    }
+    await enrollmentFor(tx, fresh.canonicalKey, command.date);
+    assertWfhDateEditable(
+      command.date,
+      await existingDay(tx, fresh.canonicalKey, command.date),
+      now,
+    );
+    const [active] = await tx
+      .select()
+      .from(s.tutorAttendanceWfhRequests)
+      .where(
+        and(
+          eq(s.tutorAttendanceWfhRequests.canonicalKey, fresh.canonicalKey),
+          eq(s.tutorAttendanceWfhRequests.date, command.date),
+          inArray(s.tutorAttendanceWfhRequests.status, ["pending", "approved"]),
+        ),
+      );
+    if (active)
+      throw new AttendanceError(
+        409,
+        "A WFH request for this date is already pending or approved.",
+        "WFH_REQUEST_EXISTS",
+      );
+    const [request] = await tx
+      .insert(s.tutorAttendanceWfhRequests)
+      .values({
+        canonicalKey: fresh.canonicalKey,
+        date: command.date,
+        reason: command.reason,
+        requestedBy: fresh.email,
+        requestKey: command.idempotencyKey,
+        createdAt: now,
+      })
+      .returning();
+    await tx.insert(s.tutorAttendanceAudit).values({
+      actor: fresh.email,
+      action: "wfh_requested",
+      canonicalKey: fresh.canonicalKey,
+      date: command.date,
+      data: { id: request.id, command },
+    });
+    return { id: request.id };
+  });
+}
+
+export async function decideAttendanceWfh(
+  access: AttendanceAccess,
+  id: string,
+  input: unknown,
+  db: Database = getDb(),
+  now = new Date(),
+) {
+  const command = wfhDecisionSchema.parse(input);
+  return transaction(access, db, async (tx, fresh) => {
+    const [request] = await tx
+      .select()
+      .from(s.tutorAttendanceWfhRequests)
+      .where(eq(s.tutorAttendanceWfhRequests.id, id));
+    if (
+      !request ||
+      (!fresh.admin && request.canonicalKey !== fresh.canonicalKey)
+    )
+      throw new AttendanceError(404, "WFH request not found.");
+    const cancelling = command.decision === "cancelled";
+    if (!cancelling) {
+      requireAttendanceAdmin(fresh);
+      if (
+        request.requestedBy === fresh.email ||
+        request.canonicalKey === fresh.canonicalKey
+      )
+        throw new AttendanceError(
+          403,
+          "Another administrator must review your own WFH request.",
+        );
+    }
+    if (
+      request.status === command.decision &&
+      request.revision === command.expectedRevision + 1 &&
+      (cancelling
+        ? request.cancelledBy === fresh.email &&
+          request.cancellationReason === command.reason
+        : request.reviewedBy === fresh.email &&
+          request.reviewReason === command.reason)
+    )
+      return { saved: true, replayed: true };
+    assertRevision(request.revision, command.expectedRevision);
+    if (
+      request.status !== "pending" &&
+      !(cancelling && request.status === "approved")
+    )
+      throw new AttendanceError(
+        409,
+        "This WFH request has already been resolved.",
+      );
+
+    if (
+      command.decision === "approved" ||
+      (cancelling && request.status === "approved")
+    ) {
+      const day = await dayFor(tx, request.canonicalKey, request.date);
+      assertWfhDateEditable(request.date, day, now);
+      if (command.decision === "approved")
+        await enrollmentFor(tx, request.canonicalKey, request.date);
+      else if (day.wfhRequestId !== request.id)
+        throw new AttendanceError(
+          409,
+          "This attendance record changed. Refresh before cancelling WFH.",
+        );
+      await tx
+        .update(s.tutorAttendanceDays)
+        .set({
+          workMode: cancelling ? "office" : "wfh",
+          wfhRequestId: cancelling ? null : request.id,
+          revision: day.revision + 1,
+        })
+        .where(dayWhere(request.canonicalKey, request.date));
+    }
+    await tx
+      .update(s.tutorAttendanceWfhRequests)
+      .set({
+        status: command.decision,
+        revision: request.revision + 1,
+        ...(cancelling
+          ? {
+              cancelledBy: fresh.email,
+              cancellationReason: command.reason,
+              cancelledAt: now,
+            }
+          : {
+              reviewedBy: fresh.email,
+              reviewReason: command.reason,
+              reviewedAt: now,
+            }),
+      })
+      .where(eq(s.tutorAttendanceWfhRequests.id, id));
+    await tx.insert(s.tutorAttendanceAudit).values({
+      actor: fresh.email,
+      action: `wfh_${command.decision}`,
+      canonicalKey: request.canonicalKey,
+      date: request.date,
+      data: {
+        id,
+        reason: command.reason,
+        before: request,
+        revision: request.revision + 1,
+      },
+    });
+    return { saved: true, replayed: false };
   });
 }
 export async function requestAttendanceCorrection(
