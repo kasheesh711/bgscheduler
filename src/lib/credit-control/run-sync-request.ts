@@ -5,6 +5,7 @@ import { and, desc, eq, lt } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import { createWiseClient } from "@/lib/wise/client";
 import { runCreditControlSync } from "@/lib/credit-control/sync";
 
@@ -38,13 +39,6 @@ interface SkippedCreditControlSyncResult {
   message: string;
   runningStartedAt: string;
   staleRunningSyncsFailed: number;
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  // drizzle-orm wraps driver errors in DrizzleQueryError; the SQLSTATE is on `.cause`.
-  const candidate = err as { code?: unknown; cause?: { code?: unknown } };
-  return candidate.code === "23505" || candidate.cause?.code === "23505";
 }
 
 async function failStaleRunningSyncs(db: Database, now: Date): Promise<number> {
@@ -128,7 +122,7 @@ async function acquireSyncRun(
     }
     return { syncRunId: syncRun.id, staleRunningSyncsFailed };
   } catch (err) {
-    if (!isUniqueViolation(err)) {
+    if (sqlStateOf(err) !== "23505") {
       throw err;
     }
 

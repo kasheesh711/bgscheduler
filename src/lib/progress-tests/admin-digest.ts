@@ -19,6 +19,7 @@ import { hasTodayRefresh } from "@/lib/credit-control/daily-refresh";
 import { eq, inArray } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import { todayBangkok } from "@/lib/room-capacity/dates";
 import {
   type ScheduleEmailSender,
@@ -243,16 +244,6 @@ async function hasTerminalDigestForDate(db: Database, digestDate: string): Promi
 }
 
 /**
- * Whether a driver failure is a Postgres unique-key violation (SQLSTATE 23505).
- * drizzle-orm wraps driver errors in DrizzleQueryError, so the code sits on `.cause`.
- */
-function isUniqueViolation(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const candidate = error as { code?: unknown; cause?: { code?: unknown } };
-  return candidate.code === "23505" || candidate.cause?.code === "23505";
-}
-
-/**
  * Inserts the per-date digest run row, returning null on a unique-key conflict.
  *
  * The unique idempotency key + unique digest_date index make this the
@@ -280,7 +271,7 @@ async function createDigestRun(
       .returning();
     return run;
   } catch (error) {
-    if (isUniqueViolation(error)) {
+    if (sqlStateOf(error) === "23505") {
       return null;
     }
     throw error;

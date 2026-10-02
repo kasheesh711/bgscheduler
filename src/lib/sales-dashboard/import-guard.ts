@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray, lt } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import type { SalesImportTrigger, SalesSourceStatus } from "@/lib/sales-dashboard/types";
 
 export const STALE_RUNNING_SALES_IMPORT_MS = 20 * 60 * 1000;
@@ -53,13 +54,6 @@ interface AcquiredSalesImportRun {
   runId: string;
   staleRunningImportsFailed: number;
   skipped?: false;
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  // drizzle-orm wraps driver errors in DrizzleQueryError; the SQLSTATE is on `.cause`.
-  const candidate = err as { code?: unknown; cause?: { code?: unknown } };
-  return candidate.code === "23505" || candidate.cause?.code === "23505";
 }
 
 function metadataStatus(value: unknown): "active" | "finalized" | "reopened" {
@@ -195,7 +189,7 @@ export async function acquireSalesImportRun(
 
     return { runId: run.id, staleRunningImportsFailed };
   } catch (err) {
-    if (!isUniqueViolation(err)) {
+    if (sqlStateOf(err) !== "23505") {
       throw err;
     }
 

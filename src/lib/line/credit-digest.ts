@@ -35,6 +35,7 @@ import { and, desc, eq, isNull } from "drizzle-orm";
 
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import { lineSchedulerEnabled, pushLineTextMessage } from "@/lib/line/client";
 import { bulkGetCreditAdminOwnership } from "@/lib/credit-control/db";
 import { computeProjection } from "@/lib/credit-control/projection";
@@ -208,16 +209,6 @@ async function hasTerminalDigestForDate(db: Database, digestDate: string): Promi
   return rows.length > 0;
 }
 
-/**
- * Whether a driver failure is a Postgres unique-key violation (SQLSTATE 23505).
- * drizzle-orm wraps driver errors in DrizzleQueryError, so the code sits on `.cause`.
- */
-function isUniqueViolation(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const candidate = error as { code?: unknown; cause?: { code?: unknown } };
-  return candidate.code === "23505" || candidate.cause?.code === "23505";
-}
-
 /** Inserts the per-date run row; null on the 23505 of a lost concurrent race. */
 async function createDigestRun(
   db: Database,
@@ -236,7 +227,7 @@ async function createDigestRun(
       .returning({ id: schema.lineCreditDigestRuns.id });
     return run ?? null;
   } catch (error) {
-    if (isUniqueViolation(error)) {
+    if (sqlStateOf(error) === "23505") {
       return null;
     }
     throw error;

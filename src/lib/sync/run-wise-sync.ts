@@ -5,6 +5,7 @@ import { and, desc, eq, lt } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import { createWiseClient } from "@/lib/wise/client";
 import { runFullSync } from "@/lib/sync/orchestrator";
 
@@ -40,13 +41,6 @@ interface SkippedSyncResult {
 
 const STALE_RUNNING_SYNC_ERROR =
   "Sync marked failed because it was still running after 20 minutes; likely timed out or the request was aborted.";
-
-function isUniqueViolation(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  // drizzle-orm wraps driver errors in DrizzleQueryError; the SQLSTATE is on `.cause`.
-  const candidate = err as { code?: unknown; cause?: { code?: unknown } };
-  return candidate.code === "23505" || candidate.cause?.code === "23505";
-}
 
 async function failStaleRunningSyncs(
   db: Database,
@@ -104,7 +98,7 @@ async function acquireSyncRun(
 
     return { syncRunId: syncRun.id, staleRunningSyncsFailed };
   } catch (err) {
-    if (!isUniqueViolation(err)) {
+    if (sqlStateOf(err) !== "23505") {
       throw err;
     }
 
