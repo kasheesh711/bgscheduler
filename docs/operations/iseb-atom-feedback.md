@@ -86,6 +86,8 @@ For current and future lesson dates, Atom collection reads the complete, strictl
 
 - Turn off either content switch to stop that feature independently. Drafts with stale guide/evidence stamps are regenerated before posting.
 - Turn off collection if sign-in or response validation repeatedly fails. Missing Atom statistics never imply an empty lesson.
+- A failed run records where it stopped in `counts.failureStage` (`pending_query`, `wise_timetable`, `timetable_write`, `lesson_scope`, `link_lookup`, `atom_open`, `atom_collect`) and a fixed `counts.failureCause` label (for example `timetable_conflict`, `pagination_incomplete`, `time_budget`, `wise_http_429`, `sign_in_form`). Raw error text is never stored. The incident is raised once per day and error code, so its detail and summary show the first failure of the day; each run row is the record for later failures.
+- A class that has just ended can appear in both the PAST and FUTURE Wise listings with different meeting statuses. The PAST record is kept. A difference in teacher, students, times, title, type or class, or a cancellation on only one side, still fails the run closed.
 - Source contradictions require human review. Do not bypass them by editing a snapshot; revoke a wrong link or collect corrected source data.
 - The evidence tables reject updates and deletes. Student links keep revision history. Existing posting halts and uncertain-POST reconciliation remain authoritative.
 

@@ -6,7 +6,7 @@ describe("autowriter roster", () => {
     const ids = AUTOWRITER_ROSTER.map((tutor) => tutor.wiseUserId);
     expect(new Set(ids).size).toBe(ids.length);
     for (const id of ids) expect(id).toMatch(/^[0-9a-f]{24}$/u);
-    expect(AUTOWRITER_TUTORS).toHaveLength(18);
+    expect(AUTOWRITER_TUTORS).toHaveLength(27);
     for (const tutor of AUTOWRITER_TUTORS) {
       expect(tutor.wiseUserIds).toHaveLength(2);
       expect(rosterAccountIds(tutor.canonicalKey)).toEqual(tutor.wiseUserIds);
@@ -30,11 +30,19 @@ describe("autowriter roster", () => {
     expect(rosterAccountIds("Fluke-Supha")).toEqual([]);
   });
 
+  it("writes the 9 tutors of cohort 4 (2 Oct) with Luna first", () => {
+    const added = ["Aey", "Mikki", "Sagotty", "Buzz", "Linn", "Eng", "Kavin", "Copter", "Amy"];
+    expect(added.map(rosterWriterArm)).toEqual(added.map(() => "luna"));
+    for (const key of added) expect(rosterAccountIds(key), key).toHaveLength(2);
+  });
+
   it("never redacts a name variant short enough to match ordinary words (redaction is case-insensitive)", () => {
     for (const account of AUTOWRITER_ROSTER) {
       for (const name of account.tutorNames) expect([...name.replace(/\s+/gu, "")].length, name).toBeGreaterThanOrEqual(2);
       for (const name of account.tutorNames) expect(name.toLowerCase(), name).not.toMatch(/^(?:a|i|an|am|as|at|be|by|do|go|he|if|in|is|it|me|my|no|of|on|or|so|to|up|us|we|online)$/u);
     }
     expect(AUTOWRITER_ROSTER.find((account) => account.canonicalKey === "A")?.tutorNames).toEqual(["Anavat Siamwala"]);
+    // "Eng" is also shorthand for English: redacting it would garble subject names in summaries.
+    expect(AUTOWRITER_ROSTER.find((account) => account.canonicalKey === "Eng")?.tutorNames).toEqual(["Phattadon Sucharittanonta"]);
   });
 });

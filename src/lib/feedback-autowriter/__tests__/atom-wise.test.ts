@@ -24,7 +24,19 @@ describe("Atom complete Wise timetable", () => {
     vi.mocked(fetchAllFutureSessions).mockResolvedValue([row("same")]);
     expect(await fetchAtomLessonTimetable(client, "i", ["2026-10-01"], options)).toHaveLength(1);
   });
-  it.each(["students", "userId", "scheduledStartTime", "meetingStatus"] as const)("rejects conflicting %s across statuses", async key => {
+  it.each(["STARTED", "SCHEDULED", "FUTURE"])("keeps the PAST record when FUTURE still shows %s for an ended class", async status => {
+    vi.mocked(fetchWiseSessionsForBangkokDates).mockResolvedValue([row("same")]);
+    vi.mocked(fetchAllFutureSessions).mockResolvedValue([{ ...row("same"), meetingStatus: status } as unknown as WiseSession]);
+    const result = await fetchAtomLessonTimetable(client, "i", ["2026-10-01"], options);
+    expect(result).toHaveLength(1);
+    expect(result[0].meetingStatus).toBe("ENDED");
+  });
+  it.each([["ENDED", "CANCELLED"], ["CANCELED", "STARTED"]])("rejects a cancellation on only one side (%s / %s)", async (past, future) => {
+    vi.mocked(fetchWiseSessionsForBangkokDates).mockResolvedValue([{ ...row("same"), meetingStatus: past } as unknown as WiseSession]);
+    vi.mocked(fetchAllFutureSessions).mockResolvedValue([{ ...row("same"), meetingStatus: future } as unknown as WiseSession]);
+    await expect(fetchAtomLessonTimetable(client, "i", ["2026-10-01"], options)).rejects.toThrow("conflict");
+  });
+  it.each(["students", "userId", "scheduledStartTime", "title"] as const)("rejects conflicting %s across statuses", async key => {
     vi.mocked(fetchWiseSessionsForBangkokDates).mockResolvedValue([row("same")]);
     vi.mocked(fetchAllFutureSessions).mockResolvedValue([{ ...row("same"), [key]: key === "students" ? ["other"] : key === "scheduledStartTime" ? "2026-10-01T03:00:00Z" : "other" } as unknown as WiseSession]);
     await expect(fetchAtomLessonTimetable(client, "i", ["2026-10-01"], options)).rejects.toThrow("conflict");
