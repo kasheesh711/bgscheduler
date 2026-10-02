@@ -302,6 +302,8 @@ export interface BundleFile {
   transient?: string[];
   /** Whether better evidence may still come (a transient failure, or a recording still listed to re-transcribe). */
   improvable?: boolean;
+  /** Display names of the tutor's other students (local; the fix brief must never contain them). */
+  otherStudentNames?: string[];
 }
 
 /** Recordings stay listed in Wise for about a day after class. */
@@ -382,15 +384,15 @@ export async function stepCollect(ctx: NightContext, deps: CollectStepDeps): Pro
     try {
       const raw = await collectRawEvidence({ ...deps.collect, cacheDir: ctx.paths.cacheDir }, target);
       const bundle = buildEvidenceBundle({ target, night: ctx.night, raw });
+      const otherStudentNames = await deps.otherStudentNames(target);
       const prechecks = runPrechecks({
-        bundle, target, raw,
-        otherStudentNames: await deps.otherStudentNames(target),
+        bundle, target, raw, otherStudentNames,
         priorFeedback: await deps.priorFeedback(target),
       });
       const transient = transientFailures(raw.status);
       const file: BundleFile = {
         target, bundle, prechecks, notes: evidenceNotes(raw, bundle), status: raw.status, collectedAt: ctx.now().toISOString(),
-        transient, improvable: evidenceImprovable({ target, bundle, raw, now: ctx.now() }),
+        transient, improvable: evidenceImprovable({ target, bundle, raw, now: ctx.now() }), otherStudentNames,
       };
       if (transient.length > 0) incomplete.push(`${target.wiseSessionId}:${transient.join(",")}`);
       writeJsonAtomic(bundleFile(ctx.paths, target.wiseSessionId), file);
