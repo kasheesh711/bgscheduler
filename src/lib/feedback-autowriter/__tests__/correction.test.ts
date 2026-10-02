@@ -50,9 +50,15 @@ interface StoreOptions {
   record?: Error;
   /** Settle calls (1-based) that throw. */
   settleFails?: number[];
+  /** The database clock against the test clock (Wise's agrees with the database's). */
+  dbOffsetMs?: number;
+  /** databaseNow calls (1-based) that throw. */
+  clockFails?: number[];
 }
 
-function memoryStore(log: string[], options: StoreOptions = {}) {
+function memoryStore(log: string[], time: Clock, options: StoreOptions = {}) {
+  let clockReads = 0;
+  const dbNow = () => new Date(time.now().getTime() + (options.dbOffsetMs ?? 0));
   const store = {
     releases: 0,
     records: [] as Array<{ plan: CorrectionPlan; input: CorrectionPostStartInput }>,
@@ -87,7 +93,13 @@ function memoryStore(log: string[], options: StoreOptions = {}) {
       log.push("store:record");
       if (options.record) throw options.record;
       store.records.push({ plan, input });
-      return { postId: "post-1", postStartedAt: new Date() };
+      return { postId: "post-1", postStartedAt: dbNow() };
+    },
+    async databaseNow() {
+      clockReads += 1;
+      log.push("store:clock");
+      if (options.clockFails?.includes(clockReads)) throw Object.assign(new Error("db down"), { code: "57P01" });
+      return dbNow();
     },
     async settle(postId: string, input: { outcome: CorrectionSettleOutcome; verification: Record<string, unknown>; session?: unknown }) {
       log.push(`store:settle:${input.outcome}`);
@@ -140,7 +152,7 @@ async function run(options: {
   const log: string[] = [];
   const time = clock(options.start);
   const wise = fakeWise(time, log, options.wiseWithClock?.(time) ?? options.wise);
-  const store = memoryStore(log, options.store);
+  const store = memoryStore(log, time, options.store);
   const outcome = await correctPostGuarded({
     ops: wise,
     store,
@@ -211,10 +223,12 @@ describe("correctPostGuarded: a correction that lands", () => {
       sessionStatus: "COMPLETED",
       creditsConsumed: 1,
     }]);
-    // Reads before the lock, the fresh read and the events after it, the posts row before the POST, release last.
+    // Reads before the lock; under it the events, then the session, each read at a database-clock time; the posts row
+    // before the POST, the database clock after it; release last.
     expect(result.log).toEqual([
-      "store:preconditions", "wise:detail#1", "wise:credits#1", "store:lock", "wise:events#1", "wise:detail#2",
-      "store:record", "wise:post", "wise:detail#3", "wise:credits#2", "wise:events#2", "store:settle:verified", "store:release",
+      "store:preconditions", "wise:detail#1", "wise:credits#1", "store:lock", "store:clock", "wise:events#1", "store:clock",
+      "wise:detail#2", "store:record", "wise:post", "store:clock", "wise:detail#3", "wise:credits#2", "wise:events#2",
+      "store:settle:verified", "store:release",
     ]);
     expect(result.store.records[0].input).toMatchObject({ studentWiseUserId: STUDENT_ID, baselineCredits: [1] });
     expect(result.store.records[0].input).toMatchObject({ eventsReadAt: START, freshReadAt: START });
@@ -263,7 +277,8 @@ describe("correctPostGuarded: a correction that lands", () => {
         ],
       }),
     });
-    expect(result.log.slice(3, 6)).toEqual(["store:lock", "wise:events#1", "wise:detail#2"]);
+    expect(result.log.filter((entry) => /^(?:store:lock|wise:events#1|wise:detail#2)$/u.test(entry)))
+      .toEqual(["store:lock", "wise:events#1", "wise:detail#2"]);
     expect(result.store.records[0].input).toMatchObject({ eventsReadAt: START, freshReadAt: new Date(START.getTime() + 10_000) });
     expect(result.outcome).toMatchObject({ status: "safety", problems: ["foreign_submit_event_in_post_window"] });
   });
@@ -271,6 +286,60 @@ describe("correctPostGuarded: a correction that lands", () => {
   it("ignores a student's own feedback save since the first shot (their form, not the teacher's text)", async () => {
     const result = await run({ wise: { eventsBefore: [firstShotSave(), save(new Date(FIRST_SHOT_AT.getTime() + 60_000), STUDENT_ID, "STUDENT")] } });
     expect(result.outcome.status).toBe("verified");
+  });
+});
+
+describe("correctPostGuarded: every POST window on the database clock", () => {
+  /** The database (and Wise, which agrees with it) `ms` ahead of this machine's clock. */
+  const skewed = (ms: number, after?: FakeWiseOptions["eventsAfterPost"]) => ({
+    store: { dbOffsetMs: ms },
+    wiseWithClock: (time: Clock) => ({ wiseNow: () => new Date(time.now().getTime() + ms), eventsAfterPost: after }),
+  });
+
+  it.each([[-20_000], [20_000]])("finds our own save and records database times when this machine is %i ms off", async (ms) => {
+    const result = await run(skewed(ms));
+    expect(result.outcome.status).toBe("verified");
+    const at = new Date(START.getTime() + ms);
+    expect(result.store.records[0].input).toMatchObject({ eventsReadAt: at, freshReadAt: at });
+    expect(result.store.settles[0].verification).toMatchObject({
+      eventsReadAt: at.toISOString(), freshReadAt: at.toISOString(), postStartedAt: at.toISOString(), postFinishedAt: at.toISOString(),
+    });
+  });
+
+  it.each([[-20_000], [20_000]])("catches a teacher's save 1 s before our POST when this machine is %i ms off", async (ms) => {
+    const result = await run(skewed(ms, (postedAt) => [
+      save(new Date(postedAt.getTime() - 1_000), KEVIN_ONLINE_WISE_USER_ID, "TEACHER"),
+      save(new Date(postedAt.getTime() + 500), API_ACTOR, "OWNER"),
+    ]));
+    expect(result.outcome).toMatchObject({ status: "safety", problems: ["foreign_submit_event_in_post_window"] });
+  });
+
+  it("refuses when the database clock cannot be read before the POST", async () => {
+    for (const call of [1, 2]) {
+      const result = await run({ store: { clockFails: [call] } });
+      expect(result.outcome).toEqual({ status: "refused", stage: "db", reason: "clock_read_failed:57P01" });
+      expectReleasedUnsent(result);
+    }
+  });
+
+  it("after the POST, an unreadable database clock ends the window at the POST's time-out, never earlier", async () => {
+    const result = await run({ store: { clockFails: [3] } });
+    expect(result.outcome.status).toBe("verified");
+    expect(result.store.settles[0].verification).toMatchObject({ postFinishedAt: null });
+    const late = await run({
+      store: { clockFails: [3] },
+      wise: { eventsAfterPost: (postedAt) => [
+        save(new Date(postedAt.getTime() + 50_000), KEVIN_ONLINE_WISE_USER_ID, "TEACHER"),
+        save(new Date(postedAt.getTime() + 500), API_ACTOR, "OWNER"),
+      ] },
+    });
+    expect(late.outcome).toMatchObject({ status: "safety", problems: ["foreign_submit_event_in_post_window"] });
+  });
+
+  it("refuses when the store finds this machine's clock off the database's", async () => {
+    const result = await run({ store: { lock: { ok: false, reason: "clock_skew" } } });
+    expect(result.outcome).toEqual({ status: "refused", stage: "lock", reason: "lock:clock_skew" });
+    expect(result.wise.postFeedback).not.toHaveBeenCalled();
   });
 });
 
@@ -284,7 +353,9 @@ describe("correctPostGuarded: dry run", () => {
       "no_save_since_first_shot (without the lock: dry run)", "wise_state_under_lock (without the lock: dry run)", "stop",
     ]);
     expectUntouched(result);
-    expect(result.log).toEqual(["store:preconditions", "wise:detail#1", "wise:credits#1", "wise:events#1", "wise:detail#2"]);
+    expect(result.log).toEqual([
+      "store:preconditions", "wise:detail#1", "wise:credits#1", "store:clock", "wise:events#1", "store:clock", "wise:detail#2",
+    ]);
     // The body hash is the live run's.
     const live = await run();
     expect(live.outcome.status).toBe("verified");
@@ -574,7 +645,7 @@ describe("correctPostGuarded: the fresh read under the lock (refused → release
     const log: string[] = [];
     const time = clock();
     const wise = fakeWise(time, log);
-    const store = memoryStore(log, { onLock: () => time.advance(CORRECTION_LOCK_BUDGET_MS) });
+    const store = memoryStore(log, time, { onLock: () => time.advance(CORRECTION_LOCK_BUDGET_MS) });
     const outcome = await correctPostGuarded({
       ops: wise, store, plan: plan(), apiActorId: API_ACTOR, allowlist: AUTOWRITER_TEACHER_ALLOWLIST, disabledTutors: [],
       aiSuspect: AI_SUSPECT, textProblems: () => [], now: time.now, sleep: time.sleep, eventWaitMs: 0,

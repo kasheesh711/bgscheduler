@@ -40,7 +40,7 @@ import { AUTOWRITER_DEADLINE_MARGIN_MS, type BillingPlan, type SubmissionState }
  *   `mode` or `disabled_tutors` change (migration 0101), and coverage reads only those.
  * The halt is undone only by a compare-and-swap on the exact lock reason, so an owner pause or an anomaly halt added
  * on top (`haltAutowriter` appends) always survives the release. Every time the store compares is on the database
- * clock.
+ * clock; taking the lock also compares this machine's clock with it (`clock_skew` beyond 2 s).
  */
 
 const C = schema.feedbackAutowriterControl;
@@ -51,6 +51,11 @@ const P = schema.feedbackAutowriterPosts;
 export const CORRECTION_LOCK_LEASE_MS = 8 * 60_000;
 /** A POST claim that began before our halt committed can still commit after it: wait this long, then look for one. */
 export const CORRECTION_LOCK_SETTLE_MS = 2_000;
+/**
+ * How far this machine's clock may be from the database's when the lock is taken. Wise's event times are compared
+ * with database times only, but this clock still decides the window, the budgets and the waits.
+ */
+export const CORRECTION_MAX_CLOCK_SKEW_MS = 2_000;
 /** An agent correction still unsettled this long after its POST started is no live request any more. */
 export const CORRECTION_STALE_AFTER_MS = 10 * 60_000;
 /** At most this many agent corrections (any outcome but `not_sent`) in any 24 h, checked in the database. */
@@ -82,6 +87,12 @@ export class CorrectionStoreError extends Error {
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/** A timestamp as the driver returns it (a Date, or Postgres' text form), or null. */
+function databaseDate(value: unknown): Date | null {
+  const at = value instanceof Date ? value : typeof value === "string" ? new Date(value) : null;
+  return at && !Number.isNaN(at.getTime()) ? at : null;
+}
+
 /** SQL: any POST — a first post or a correction — whose outcome is not settled yet. */
 const postInFlightSql = sql`(exists (select 1 from feedback_autowriter_sessions s where s.state in ('posting', 'awaiting_event'))
   or exists (select 1 from feedback_autowriter_posts p where p.outcome in ('posting', 'awaiting_event')))`;
@@ -110,8 +121,9 @@ async function readBooleans<K extends string>(db: Database, columns: Record<K, S
 }
 
 /**
- * `CorrectionStore` on Postgres for one correction at a time (the store remembers the lock it holds).
- * `now` is accepted so a caller can hand one clock to every part; the store itself compares only on the database clock.
+ * `CorrectionStore` on Postgres for one correction at a time (the store remembers the lock it holds). `now` is this
+ * machine's clock (the executor's): taking the lock checks it against the database's. Every other time the store
+ * compares is on the database clock.
  */
 export function pgCorrectionStore(db: Database, opts: {
   actor: string;
@@ -119,6 +131,7 @@ export function pgCorrectionStore(db: Database, opts: {
   sleep?: (ms: number) => Promise<void>;
 }): CorrectionStore {
   const { actor } = opts;
+  const now = opts.now ?? (() => new Date());
   const sleep = opts.sleep ?? defaultSleep;
   let held: { token: string; reason: string; wiseSessionId: string } | null = null;
 
@@ -207,7 +220,9 @@ export function pgCorrectionStore(db: Database, opts: {
       const reason = correctionLockReason(token, plan.wiseSessionId);
       let halted = false;
       try {
-        // One statement: live, not halted, and our lease still valid.
+        // One statement: live, not halted, and our lease still valid. Its `now()` is the database clock at the halt,
+        // read between two readings of this machine's.
+        const before = now().getTime();
         const rows = await db.update(C).set({ haltedAt: sql`now()`, haltReason: reason, updatedBy: actor, updatedAt: sql`now()` })
           .where(and(
             eq(C.id, "default"),
@@ -216,13 +231,20 @@ export function pgCorrectionStore(db: Database, opts: {
             eq(C.leaseToken, token),
             sql`${C.leaseUntil} > now()`,
           ))
-          .returning({ id: C.id });
+          .returning({ id: C.id, at: sql<unknown>`now()` });
+        const after = now().getTime();
         if (rows.length === 0) {
           await releaseSweepLease(db, token);
           return { ok: false, reason: "not_live_or_halted" };
         }
         halted = true;
         held = { token, reason, wiseSessionId: plan.wiseSessionId };
+        // Within the tolerance whatever the round trip took: the database's time lies within it of both readings.
+        const at = databaseDate(rows[0].at)?.getTime() ?? Number.NaN;
+        if (!(at <= before + CORRECTION_MAX_CLOCK_SKEW_MS && at >= after - CORRECTION_MAX_CLOCK_SKEW_MS)) {
+          await release();
+          return { ok: false, reason: "clock_skew" };
+        }
         await sleep(CORRECTION_LOCK_SETTLE_MS);
         const { inFlight } = await readBooleans(db, { inFlight: postInFlightSql });
         if (inFlight) {
@@ -276,7 +298,10 @@ export function pgCorrectionStore(db: Database, opts: {
         returning id, post_started_at`);
       const row = result.rows[0] as { id?: unknown; post_started_at?: unknown } | undefined;
       if (row && typeof row.id === "string") {
-        return { postId: row.id, postStartedAt: new Date(row.post_started_at as string | Date) };
+        const postStartedAt = databaseDate(row.post_started_at);
+        // Never happens with a sane driver; the row stays `posting` for recovery, which finds the POST was not sent.
+        if (!postStartedAt) throw new CorrectionStoreError("post_started_at_unreadable");
+        return { postId: row.id, postStartedAt };
       }
       const why = await readBooleans(db, {
         lockHeld: sql`exists (select 1 from feedback_autowriter_control c where c.id = 'default' and c.mode = 'live'
@@ -298,6 +323,13 @@ export function pgCorrectionStore(db: Database, opts: {
                   : why.dailyCap ? "daily_cap"
                     : "conditions_changed",
       );
+    },
+
+    async databaseNow() {
+      const result = await db.execute(sql`select now() as at`);
+      const at = databaseDate((result.rows[0] as { at?: unknown } | undefined)?.at);
+      if (!at) throw new CorrectionStoreError("database_clock_unreadable");
+      return at;
     },
 
     async settle(postId, input) {

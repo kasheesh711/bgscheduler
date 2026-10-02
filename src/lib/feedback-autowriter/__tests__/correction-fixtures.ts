@@ -79,6 +79,8 @@ export interface FakeWiseOptions {
   eventsBefore?: SubmitFeedbackEvent[];
   eventsAfterPost?: (postedAt: Date) => SubmitFeedbackEvent[];
   eventsOn?: (call: number) => Error | undefined;
+  /** Wise's clock, which stamps our save (default: the test clock). Wise's and the database's agree. */
+  wiseNow?: () => Date;
 }
 
 /** Fake Wise applying the POST the way the web-app edit does: same submission id, billing as sent. */
@@ -104,7 +106,7 @@ export function fakeWise(time: Clock, log: string[], options: FakeWiseOptions = 
       posts.push(body);
       if (options.postResult instanceof Error) throw options.postResult;
       if (options.applyPost ?? (options.postResult === undefined || options.postResult.kind === "sent")) {
-        postedAt = time.now();
+        postedAt = (options.wiseNow ?? time.now)();
         const sent = Object.fromEntries(order.map((field, index) => [field, body.answers[index].answer])) as FeedbackFieldAnswers;
         text = options.storeAs?.(sent) ?? sent;
         billing = { sessionStatus: body.sessionStatus, creditsConsumed: body.creditsConsumed };

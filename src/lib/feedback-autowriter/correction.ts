@@ -4,6 +4,7 @@ import {
   type FeedbackFieldAnswers,
   type FeedbackFieldMapping,
 } from "@/lib/post-class-feedback/types";
+import { AUTOWRITER_POST_TIMEOUT_MS } from "./config";
 import { sqlStateOf } from "./db-errors";
 import {
   buildFeedbackPostBody,
@@ -39,6 +40,11 @@ import { feedbackTextChecks, tidyFeedbackText } from "./validate";
  * control row halted with a lock reason while the sweep lease is held: `correction-store.ts`). Wise access and
  * persistence are injected, so the executor can move in-app later unchanged. No lesson text ever goes into a
  * reason, a verification record, a halt or an incident: only codes, ids and times.
+ *
+ * Clocks: Wise's event times are only ever compared with database times — the events and session reads under the
+ * lock and the POST's end are read off the database clock (`store.databaseNow`), its start is the posts row's own
+ * `post_started_at` — and recovery reuses exactly those. This machine's clock decides only the window, the budgets
+ * and the waits, and the store refuses the lock (`clock_skew`) when it is more than 2 s off the database's.
  */
 
 /** The actor recorded on the posts row and on every control-row write the nightly agent makes. */
@@ -162,8 +168,13 @@ export interface CorrectionPreconditions {
 /** Persistence and locking of a correction; implemented on Postgres in `correction-store.ts`. */
 export interface CorrectionStore {
   preconditions(plan: CorrectionPlan, now: Date): Promise<CorrectionPreconditions>;
-  /** Stop every other autowriter POST until released. */
+  /**
+   * Stop every other autowriter POST until released. Refused (`clock_skew`, nothing left behind) when this machine's
+   * clock is more than 2 s off the database's when the lock is taken.
+   */
   lock(plan: CorrectionPlan): Promise<{ ok: true; lock: CorrectionLock } | { ok: false; reason: string }>;
+  /** The database clock: every time compared with Wise's event times is read from it. */
+  databaseNow(): Promise<Date>;
   /**
    * The posts row (`posting`, database-clock `post_started_at`) — written before the POST, so the POST's event is
    * always explained. Throws `CorrectionRefusedError` when the lock or a precondition no longer holds.
@@ -544,7 +555,12 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
   // the session — the last read before the POST, so the text checked is as fresh as it can be. The POST window
   // starts at the events read, not the session read: a save between the two is never outside both.
   const unlocked = dryRun ? " (without the lock: dry run)" : "";
-  const eventsReadAt = now();
+  let eventsReadAt: Date;
+  try {
+    eventsReadAt = await store.databaseNow();
+  } catch (error) {
+    return refuseHeld("db", `clock_read_failed:${failureName(error)}`);
+  }
   let sinceFirstShot: SubmitFeedbackEvent[];
   try {
     sinceFirstShot = await ops.findFeedbackEvents(plan.wiseClassId, sid, new Date(firstShotPostedAt.getTime() - EVENT_SKEW_MS));
@@ -553,7 +569,12 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
   }
   const savesProblem = savesSinceFirstShotRefusal(sinceFirstShot, input.apiActorId);
   if (savesProblem) return refuseHeld("wise", savesProblem);
-  const freshReadAt = now();
+  let freshReadAt: Date;
+  try {
+    freshReadAt = await store.databaseNow();
+  } catch (error) {
+    return refuseHeld("db", `clock_read_failed:${failureName(error)}`);
+  }
   let fresh: AutowriterSessionDetail;
   try {
     fresh = parseAutowriterSessionDetail(await ops.getSessionDetail(plan.wiseClassId, sid));
@@ -578,10 +599,11 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
   const bodyHash = feedbackBodyHash(body);
   if (!held) return { status: "preflight_ok", bodyHash, guards };
 
-  // 7. The posts row first, then exactly one POST.
+  // 7. The posts row first (its `post_started_at`, on the database clock, is the POST's start), then exactly one POST.
   let postId: string;
+  let postStartedAt: Date;
   try {
-    ({ postId } = await store.recordPostStart(plan, {
+    ({ postId, postStartedAt } = await store.recordPostStart(plan, {
       bodyHash,
       eventsReadAt,
       freshReadAt,
@@ -592,19 +614,24 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
     if (error instanceof CorrectionRefusedError) return refuseHeld(error.reason.startsWith("lock:") ? "lock" : "db", error.reason);
     return refuseHeld("db", sqlStateOf(error) === "23505" ? "already_corrected" : `record_failed:${failureName(error)}`);
   }
-  const postStartedAt = now();
   let result: PostResult;
   try {
     result = await ops.postFeedback(plan.wiseClassId, sid, body);
   } catch (error) {
     result = { kind: "unknown", error: errorName(error) };
   }
-  const postFinishedAt = now();
+  let postFinishedAt: Date | null;
+  try {
+    postFinishedAt = await store.databaseNow();
+  } catch {
+    // Unknown: the POST window then ends at the POST's time-out bound (`classifySubmitEvents`), never earlier.
+    postFinishedAt = null;
+  }
   const timing = {
     eventsReadAt: eventsReadAt.toISOString(),
     freshReadAt: freshReadAt.toISOString(),
     postStartedAt: postStartedAt.toISOString(),
-    postFinishedAt: postFinishedAt.toISOString(),
+    postFinishedAt: postFinishedAt?.toISOString() ?? null,
   };
 
   // 8. Read back.
@@ -725,7 +752,7 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
     // The window's start (`classifySubmitEvents`): the first of the fresh reads.
     freshReadAt: eventsReadAt,
     postStartedAt,
-    postFinishedAt,
+    postFinishedAt: postFinishedAt ?? new Date(postStartedAt.getTime() + AUTOWRITER_POST_TIMEOUT_MS),
     waitMs: input.eventWaitMs ?? CORRECTION_EVENT_WAIT_MS,
     sleep,
   });

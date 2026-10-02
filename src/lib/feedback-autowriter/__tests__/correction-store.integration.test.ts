@@ -144,8 +144,10 @@ async function postedWithFirstShot(options: { wiseSessionId?: string; wiseClassI
   return seeded;
 }
 
-const store = (sleep: (ms: number) => Promise<void> = noSleep): CorrectionStore =>
-  pgCorrectionStore(db, { actor: AGENT_CORRECTION_ACTOR, sleep });
+const store = (sleep: (ms: number) => Promise<void> = noSleep, now?: () => Date): CorrectionStore =>
+  pgCorrectionStore(db, { actor: AGENT_CORRECTION_ACTOR, sleep, now });
+
+const dbNow = async () => new Date((await db.execute(sql`select now() as now`)).rows[0].now as string | Date);
 
 async function lockOrThrow(correctionStore: CorrectionStore, plan: CorrectionPlan) {
   const locked = await correctionStore.lock(plan);
@@ -212,7 +214,10 @@ function sweepDeps(): AutowriterDeps {
   };
 }
 
-/** A start inside this hour's correction window (minute 11 UTC); deadlines are a day or more away either side. */
+/**
+ * A start inside this hour's correction window (minute 11 UTC) for the executor's clock — up to 49 min off the
+ * database's, which the store's clock (real time) is checked against. Deadlines are a day or more away either side.
+ */
 function windowStart(): Date {
   const start = new Date();
   start.setUTCMinutes(11, 0, 0);
@@ -275,6 +280,25 @@ describe("the correction lock", () => {
     expect(await sessionSubmitStore(db, other, token).claimPost(claim)).toEqual({ claimed: true });
   });
 
+  it.each([[20_000], [-20_000]])("is refused when this machine's clock is %i ms off the database's — leaving nothing behind", async (ms) => {
+    const plan = planFor(await postedWithFirstShot());
+    expect(await store(noSleep, () => new Date(Date.now() + ms)).lock(plan)).toEqual({ ok: false, reason: "clock_skew" });
+    expect(await readControl(db)).toMatchObject({ haltedAt: null, haltReason: null });
+    expect(await leaseFree()).toBe(true);
+  });
+
+  it("is taken when this machine's clock is within the tolerance of the database's", async () => {
+    const lock = await lockOrThrow(store(noSleep, () => new Date(Date.now() + 500)), planFor(await postedWithFirstShot()));
+    expect(await lock.release()).toBe(true);
+  });
+
+  it("reads the database clock", async () => {
+    const before = await dbNow();
+    const at = await store().databaseNow();
+    expect(at.getTime()).toBeGreaterThanOrEqual(before.getTime());
+    expect(at.getTime()).toBeLessThanOrEqual((await dbNow()).getTime());
+  });
+
   it("is refused while halted, not live, a sweep holds the lease, or any POST is unsettled — leaving nothing behind", async () => {
     const plan = planFor(await postedWithFirstShot());
 
@@ -327,7 +351,6 @@ describe("the posts-row claim (recordPostStart)", () => {
     const correctionStore = store();
     await lockOrThrow(correctionStore, plan);
     const sessionBefore = await readSessionRow(db, seeded.wiseSessionId);
-    const dbNow = async () => new Date((await db.execute(sql`select now() as now`)).rows[0].now as string | Date);
     const before = await dbNow();
     const freshReadAt = new Date();
     const started = await correctionStore.recordPostStart(plan, {
@@ -609,7 +632,9 @@ describe("end to end through the real store", () => {
     const seeded = await postedWithFirstShot();
     expect(await assignReviews(db, { now: new Date(), draw: () => 0.1 })).toBe(1);
     const time = clock(windowStart());
-    const wise = fakeWise(time, [], { eventsBefore: [save(seeded.verifiedAt, API_ACTOR, "OWNER")] });
+    // Wise stamps our save on real time, which the database's clock agrees with; the executor's clock is minute 11.
+    const wise = fakeWise(time, [], { eventsBefore: [save(seeded.verifiedAt, API_ACTOR, "OWNER")], wiseNow: () => new Date() });
+    const before = await dbNow();
 
     const outcome = await correctPostGuarded({
       ops: wise, store: store(), plan: planFor(seeded), apiActorId: API_ACTOR, allowlist: AUTOWRITER_TEACHER_ALLOWLIST,
@@ -622,6 +647,15 @@ describe("end to end through the real store", () => {
       ["first_shot", "verified", "autowriter"], ["correction", "verified", "agent"],
     ]);
     const [firstShot, correction] = posts;
+    // Every time recorded for the POST window is the database's, never the executor's minute-11 clock.
+    const after = await dbNow();
+    const recorded = correction.verification as Record<string, string>;
+    for (const key of ["eventsReadAt", "freshReadAt", "postStartedAt", "postFinishedAt"]) {
+      const at = new Date(recorded[key]).getTime();
+      expect(at, key).toBeGreaterThanOrEqual(before.getTime());
+      expect(at, key).toBeLessThanOrEqual(after.getTime());
+    }
+    expect(new Date(recorded.postStartedAt)).toEqual(correction.postStartedAt);
     expect(await readControl(db)).toMatchObject({ haltedAt: null, haltReason: null });
     expect(await leaseFree()).toBe(true);
     const row = (await readSessionRow(db, seeded.wiseSessionId))!;
@@ -651,6 +685,7 @@ describe("end to end through the real store", () => {
     const wise = fakeWise(time, [], {
       eventsBefore: [save(seeded.verifiedAt, API_ACTOR, "OWNER")],
       creditsAfterPost: [{ credit: 1 }, { credit: 1 }],
+      wiseNow: () => new Date(),
     });
     const outcome = await correctPostGuarded({
       ops: wise, store: store(), plan: planFor(seeded), apiActorId: API_ACTOR, allowlist: AUTOWRITER_TEACHER_ALLOWLIST,
