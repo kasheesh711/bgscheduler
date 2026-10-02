@@ -36,12 +36,12 @@ describe("NightlyLedger", () => {
   });
 
   it("refuses a reservation that would pass a cap, and counts an unsettled one at its estimate", () => {
-    const ledger = NightlyLedger.open(dir, "2026-10-02", caps({ maxClaudeUsdNight: 3 }), { now });
-    expect(ledger.reserve("opus_audit", { key: "a", estimateUsd: 1.5 }).ok).toBe(true);
-    expect(ledger.reserve("opus_audit", { key: "b", estimateUsd: 1.5 }).ok).toBe(true);
-    expect(ledger.reserve("opus_audit", { key: "c", estimateUsd: 1.5 })).toEqual({ ok: false, reason: "cap:claude_usd_night" });
-    expect(ledger.reserve("opus_audit", { key: "d", estimateUsd: 2 })).toEqual({ ok: false, reason: "cap:opus_audit_per_call" });
-    expect(ledger.reserve("opus_synthesis", { key: "s", estimateUsd: 2.5 })).toEqual({ ok: false, reason: "cap:opus_synthesis_per_call" });
+    const ledger = NightlyLedger.open(dir, "2026-10-02", caps({ maxClaudeUsdNight: 6 }), { now });
+    expect(ledger.reserve("opus_audit", { key: "a", estimateUsd: 3 }).ok).toBe(true);
+    expect(ledger.reserve("opus_audit", { key: "b", estimateUsd: 3 }).ok).toBe(true);
+    expect(ledger.reserve("opus_audit", { key: "c", estimateUsd: 3 })).toEqual({ ok: false, reason: "cap:claude_usd_night" });
+    expect(ledger.reserve("opus_audit", { key: "d", estimateUsd: 3.5 })).toEqual({ ok: false, reason: "cap:opus_audit_per_call" });
+    expect(ledger.reserve("opus_synthesis", { key: "s", estimateUsd: 4.5 })).toEqual({ ok: false, reason: "cap:opus_synthesis_per_call" });
   });
 
   it("caps Opus calls, the Claude week, Soniox, OpenRouter, Wise reads and corrections", () => {

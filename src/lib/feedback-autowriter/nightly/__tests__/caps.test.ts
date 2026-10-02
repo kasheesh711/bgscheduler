@@ -27,8 +27,8 @@ afterEach(() => {
 describe("caps", () => {
   it("has the approved defaults", () => {
     expect(NIGHTLY_CAPS).toMatchObject({
-      maxTargets: 60, maxWiseReads: 200, wisePacingMs: 5_000, maxOpusCalls: 80, perAuditUsd: 1.5, perReauditUsd: 1.5,
-      perSynthesisUsd: 2, maxClaudeUsdNight: 25, maxClaudeUsdWeek: 120, maxSonioxUsdNight: 2, maxOpenRouterUsdNight: 3,
+      maxTargets: 60, maxWiseReads: 200, wisePacingMs: 5_000, maxOpusCalls: 80, perAuditUsd: 3, perReauditUsd: 3,
+      perSynthesisUsd: 4, maxClaudeUsdNight: 60, maxClaudeUsdWeek: 300, maxSonioxUsdNight: 2, maxOpenRouterUsdNight: 3,
       maxCorrectionsPerNight: 6, maxCorrectionsPerWeek: 15, maxFlagsPerNight: 10, auditConcurrency: 2, deadlineBangkok: "06:50",
     });
     expect(Object.isFrozen(NIGHTLY_CAPS)).toBe(true);
@@ -39,7 +39,7 @@ describe("caps", () => {
       config: { maxTargets: 30, maxClaudeUsdNight: 100, wisePacingMs: 2_000, deadlineBangkok: "06:30", auditConcurrency: 0 },
     });
     expect(caps.maxTargets).toBe(30);
-    expect(caps.maxClaudeUsdNight).toBe(25);
+    expect(caps.maxClaudeUsdNight).toBe(60);
     // Pacing is stricter when longer.
     expect(caps.wisePacingMs).toBe(5_000);
     expect(caps.deadlineBangkok).toBe("06:30");

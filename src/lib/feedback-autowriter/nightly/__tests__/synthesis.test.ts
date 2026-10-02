@@ -107,7 +107,7 @@ describe("synthesizeNight", () => {
       night: "2026-10-02", records: [RECORD], files: [FILE], reports: [REPORT], modes: [],
     });
     expect(limited).toMatchObject({ ok: false, stop: { reason: "usage_limited" } });
-    const over = await synthesizeNight({ ledger, run: vi.fn(), perSynthesisUsd: 2.5 }, {
+    const over = await synthesizeNight({ ledger, run: vi.fn(), perSynthesisUsd: 4.5 }, {
       night: "2026-10-02", records: [RECORD], files: [FILE], reports: [REPORT], modes: [],
     });
     expect(over).toMatchObject({ ok: false, reason: "cap:opus_synthesis_per_call" });

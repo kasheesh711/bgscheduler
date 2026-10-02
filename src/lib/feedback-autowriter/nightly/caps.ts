@@ -14,11 +14,18 @@ export const NIGHTLY_CAPS = Object.freeze({
   /** At least this long between two Wise reads (≤ 0.2 req/s). */
   wisePacingMs: 5_000,
   maxOpusCalls: 80,
-  perAuditUsd: 1.5,
-  perReauditUsd: 1.5,
-  perSynthesisUsd: 2,
-  maxClaudeUsdNight: 25,
-  maxClaudeUsdWeek: 120,
+  /**
+   * Per-call ceilings, in list-price dollars (the subscription is not billed per call; this measures usage). Measured
+   * on 2 Oct transcripts at max effort: $0.68–$1.35 per audit, and 2 of 14 long lessons stopped at the first $1.50
+   * ceiling — a stopped call is pure waste, so the ceiling sits above the longest lesson and the night cap does the
+   * limiting.
+   */
+  perAuditUsd: 3,
+  perReauditUsd: 3,
+  perSynthesisUsd: 4,
+  /** ≈ 40 posts × $1.10 + synthesis + re-audits on the busiest nights. */
+  maxClaudeUsdNight: 60,
+  maxClaudeUsdWeek: 300,
   maxSonioxUsdNight: 2,
   maxOpenRouterUsdNight: 3,
   maxCorrectionsPerNight: 6,
