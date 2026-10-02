@@ -173,6 +173,19 @@ export function detailTeacherId(detail: AutowriterSessionDetail): string | null 
   return refId(detail.userId);
 }
 
+/**
+ * The class's name as Class Feedback would mirror it (Wise `className`, else
+ * `classId.name`; at BeGifted usually the student's name), else the first
+ * student with a Wise account. The dashboard shows it until the mirror row exists.
+ */
+export function detailClassName(detail: AutowriterSessionDetail): string | null {
+  const classIdName = typeof detail.classId === "string" ? undefined : detail.classId.name;
+  for (const name of [detail.className, classIdName]) {
+    if (typeof name === "string" && name.trim()) return name.trim();
+  }
+  return studentParticipants(detail).find((student) => student.wiseUserId && student.name)?.name ?? null;
+}
+
 export function scheduledWindow(detail: AutowriterSessionDetail): { start: Date; end: Date; minutes: number } {
   const start = new Date(detail.scheduledStartTime);
   const end = new Date(detail.scheduledEndTime);

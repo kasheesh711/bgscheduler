@@ -28,7 +28,7 @@ import {
 } from "./quality";
 import { loadGateFacts } from "./review-job";
 import { AUTOWRITER_TUTORS, rosterTutor, tutorLabel } from "./roster";
-import type { AutowriterSessionRow } from "./store";
+import { sessionClassNameSql, type AutowriterSessionRow } from "./store";
 
 /**
  * The quality and review data of the autowriter dashboard (Phase 1 of the operating loop). Read-only; the pure
@@ -626,7 +626,7 @@ async function loadAvailableReview(db: Database, now: Date, queueLimit: number):
     }).from(FX).where(inArray(FX.wiseSessionId, ids))),
     byIds(() => db.select({
       wiseSessionId: S.wiseSessionId, wiseClassId: S.wiseClassId, wiseTeacherUserId: S.wiseTeacherUserId, state: S.state,
-      reason: S.reason, className: PC.className,
+      reason: S.reason, className: sessionClassNameSql,
     }).from(S).leftJoin(PC, eq(PC.wiseSessionId, S.wiseSessionId)).where(inArray(S.wiseSessionId, ids))),
     byIds(() => db.selectDistinctOn([PC.wiseSessionId], {
       wiseSessionId: PC.wiseSessionId, observedAt: PCV.observedAt, topics: PCV.topics, performance: PCV.performance,
