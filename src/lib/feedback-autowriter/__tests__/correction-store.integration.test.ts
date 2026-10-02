@@ -362,6 +362,27 @@ describe("the correction lock", () => {
     expect(await lock.isHeld()).toBe(false);
   });
 
+  it("never lifts a halt folded into the lock reason (its text already in it) — nor does the stale-lock release", async () => {
+    const lock = await lockOrThrow(store(), planFor(await postedWithFirstShot()));
+    const reason = (await readControl(db)).haltReason;
+    // haltAutowriter keeps a reason that already contains the new one: the halt is recorded, the text unchanged.
+    await haltAutowriter(db, "auto-released", OWNER);
+    expect((await readControl(db)).haltReason).toBe(reason);
+    expect(await lock.release()).toBe(false);
+    expect((await readControl(db)).haltedAt).not.toBeNull();
+    expect(await leaseFree()).toBe(true);
+    expect(await releaseStaleCorrectionLock(db)).toBe(false);
+    expect((await readControl(db)).haltedAt).not.toBeNull();
+  });
+
+  it("never lifts a lock reason that carries \" | then: \", even its own", async () => {
+    const seeded = await postedWithFirstShot();
+    const lock = await lockOrThrow(store(), planFor(seeded, { wiseSessionId: `${seeded.wiseSessionId} | then: paused by ${OWNER}` }));
+    expect((await readControl(db)).haltReason).toContain(" | then: ");
+    expect(await lock.release()).toBe(false);
+    expect((await readControl(db)).haltedAt).not.toBeNull();
+  });
+
   it("never lifts an owner pause made while it is held — nor does the stale-lock release", async () => {
     const lock = await lockOrThrow(store(), planFor(await postedWithFirstShot()));
     await haltAutowriter(db, `paused by ${OWNER}: checking a class`, OWNER);

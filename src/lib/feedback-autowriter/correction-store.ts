@@ -38,8 +38,10 @@ import { AUTOWRITER_DEADLINE_MARGIN_MS, type BillingPlan, type SubmissionState }
  * - a halt with a lock reason: the webhook path stops at `control.haltedAt`, and the POST claim (`claimPost`) requires
  *   `halted_at is null`. Halting writes no `feedback_autowriter_control_history` row: that trigger fires only when
  *   `mode` or `disabled_tutors` change (migration 0101), and coverage reads only those.
- * The halt is undone only by a compare-and-swap on the exact lock reason, so an owner pause or an anomaly halt added
- * on top (`haltAutowriter` appends) always survives the release. Every time the store compares is on the database
+ * The halt is undone only by a compare-and-swap on the exact lock reason — nothing appended (` | then: `) — while
+ * nothing has written the control row since the lock (`updated_at` still the halt's own time): an owner pause or an
+ * anomaly halt added on top always survives the release, even one `haltAutowriter` folded into the lock reason
+ * unchanged because the lock reason already contained its text. Every time the store compares is on the database
  * clock; taking the lock also compares this machine's clock with it (`clock_skew` beyond 2 s).
  */
 
@@ -108,6 +110,13 @@ const dailyCapReachedSql = sql`(select count(*) from feedback_autowriter_posts p
   and p.actor_kind = 'agent' and p.outcome <> 'not_sent'
   and coalesce(p.post_started_at, p.recorded_at) > now() - interval '24 hours') >= ${CORRECTION_DAILY_CAP}`;
 
+/**
+ * SQL: the control row's halt is untouched since the lock wrote it — no ` | then: ` appended, and no write at all
+ * (`haltAutowriter` and `updateControl` always set `updated_at`; the lock set it to the halt's own time). The reason
+ * alone cannot show a halt that `haltAutowriter` folded into it because the lock reason already contained its text.
+ */
+const lockHaltUntouchedSql = sql`(position(' | then: ' in ${C.haltReason}) = 0 and ${C.updatedAt} = ${C.haltedAt})`;
+
 /** SQL: a correction lock's lease is still live (its run may still be working), whatever was appended to its halt. */
 const correctionLeaseLiveSql = sql`exists (select 1 from feedback_autowriter_control c where c.id = 'default'
   and c.lease_until > now() and c.lease_token is not null
@@ -158,7 +167,7 @@ export function pgCorrectionStore(db: Database, opts: {
     const current = held;
     if (!current) return false;
     const rows = await db.update(C).set({ haltedAt: null, haltReason: null, updatedBy: actor, updatedAt: sql`now()` })
-      .where(and(eq(C.id, "default"), eq(C.haltReason, current.reason)))
+      .where(and(eq(C.id, "default"), eq(C.haltReason, current.reason), lockHaltUntouchedSql))
       .returning({ id: C.id });
     await releaseSweepLease(db, current.token);
     held = null;
@@ -626,8 +635,9 @@ async function recoverOne(context: {
 
 /**
  * Lift a correction lock a run left behind (it died, or its release failed): only while the halt reason is exactly a
- * correction lock (no owner pause or anomaly halt on top), the run that took it no longer holds its lease, and no
- * agent correction is unsettled (run `recoverStaleCorrections` first). Returns whether it un-halted.
+ * correction lock and untouched since (no owner pause or anomaly halt on top, appended or folded in), the run that
+ * took it no longer holds its lease, and no agent correction is unsettled (run `recoverStaleCorrections` first).
+ * Returns whether it un-halted.
  */
 export async function releaseStaleCorrectionLock(db: Database, opts: { actor?: string } = {}): Promise<boolean> {
   const rows = await db.update(C).set({
@@ -635,6 +645,7 @@ export async function releaseStaleCorrectionLock(db: Database, opts: { actor?: s
   }).where(and(
     eq(C.id, "default"),
     sql`${C.haltReason} ~ ${LOCK_REASON_PATTERN}`,
+    lockHaltUntouchedSql,
     sql`not coalesce(${C.leaseUntil} > now()
       and ${C.leaseToken}::text = substring(${C.haltReason} from '^correction-lock:([0-9a-f-]{36})'), false)`,
     sql`not exists (select 1 from feedback_autowriter_posts p where p.kind = 'correction' and p.outcome in ('posting', 'awaiting_event'))`,
