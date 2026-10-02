@@ -81,7 +81,10 @@ export interface CorrectionBase {
   /** The teacher submission our first shot completed (Wise keeps its id when it is edited). */
   submissionId: string;
   billing: BillingPlan;
-  /** When the first shot was posted (its posts row's `post_started_at`): saves since then are looked for. */
+  /**
+   * When the first shot was posted (its posts row's `post_started_at`). Checked against that row (within a minute);
+   * the saves since the first shot are then looked for from the row's own time, never the plan's.
+   */
   firstShotPostedAt: Date;
 }
 
@@ -145,10 +148,17 @@ export class CorrectionRefusedError extends Error {
   }
 }
 
+/** What the database says before anything else. Reads only. */
+export interface CorrectionPreconditions {
+  /** Refusal codes; empty: every precondition holds. */
+  problems: string[];
+  /** The first shot's POST start as its posts row records it (database clock): saves since then are looked for. */
+  firstShotPostedAt: Date | null;
+}
+
 /** Persistence and locking of a correction; implemented on Postgres in `correction-store.ts`. */
 export interface CorrectionStore {
-  /** Database refusal codes (empty: every precondition holds). Reads only. */
-  preconditions(plan: CorrectionPlan, now: Date): Promise<string[]>;
+  preconditions(plan: CorrectionPlan, now: Date): Promise<CorrectionPreconditions>;
   /** Stop every other autowriter POST until released. */
   lock(plan: CorrectionPlan): Promise<{ ok: true; lock: CorrectionLock } | { ok: false; reason: string }>;
   /**
@@ -472,13 +482,15 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
   else return refuse("window", "outside_window");
 
   // 3. The database.
-  let dbProblems: string[];
+  let database: CorrectionPreconditions;
   try {
-    dbProblems = await store.preconditions(plan, now());
+    database = await store.preconditions(plan, now());
   } catch (error) {
     return refuse("db", `preconditions_failed:${failureName(error)}`);
   }
-  if (dbProblems.length > 0) return refuse("db", dbProblems.join(","));
+  if (database.problems.length > 0) return refuse("db", database.problems.join(","));
+  if (!database.firstShotPostedAt) return refuse("db", "first_shot_time_unknown");
+  const firstShotPostedAt = database.firstShotPostedAt;
   guards.push("db_preconditions");
 
   // 4. Wise before the lock (reads only).
@@ -541,7 +553,7 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
   if (freshStudent.wiseUserId !== student.wiseUserId) return refuseHeld("wise", "student_changed");
   let sinceFirstShot: SubmitFeedbackEvent[];
   try {
-    sinceFirstShot = await ops.findFeedbackEvents(plan.wiseClassId, sid, new Date(plan.base.firstShotPostedAt.getTime() - EVENT_SKEW_MS));
+    sinceFirstShot = await ops.findFeedbackEvents(plan.wiseClassId, sid, new Date(firstShotPostedAt.getTime() - EVENT_SKEW_MS));
   } catch (error) {
     return refuseHeld("wise", `events_read_failed:${errorName(error)}`);
   }

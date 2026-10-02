@@ -41,6 +41,8 @@ import { CLASS_ID, QUESTIONS, SESSION_ID, STUDENT_ID, SUBMISSION_ID, autoBlankSu
 
 interface StoreOptions {
   preconditions?: string[] | Error;
+  /** The first shot's POST start on its posts row (default `FIRST_SHOT_AT`); null: none recorded. */
+  firstShotPostedAt?: Date | null;
   lock?: { ok: false; reason: string } | Error;
   /** Runs when the lock is taken (e.g. time passing). */
   onLock?: () => void;
@@ -59,7 +61,10 @@ function memoryStore(log: string[], options: StoreOptions = {}) {
     async preconditions() {
       log.push("store:preconditions");
       if (options.preconditions instanceof Error) throw options.preconditions;
-      return options.preconditions ?? [];
+      return {
+        problems: options.preconditions ?? [],
+        firstShotPostedAt: options.firstShotPostedAt === undefined ? FIRST_SHOT_AT : options.firstShotPostedAt,
+      };
     },
     async lock() {
       log.push("store:lock");
@@ -387,6 +392,24 @@ describe("correctPostGuarded: database preconditions", () => {
     expect(one.log).toEqual(["store:preconditions"]);
     const two = await run({ store: { preconditions: ["owner_flag_open", "deadline_near"] } });
     expect(two.outcome).toEqual({ status: "refused", stage: "db", reason: "owner_flag_open,deadline_near" });
+  });
+
+  it("refuses when the first shot's own POST time is not recorded", async () => {
+    const result = await run({ store: { firstShotPostedAt: null } });
+    expect(result.outcome).toEqual({ status: "refused", stage: "db", reason: "first_shot_time_unknown" });
+    expectUntouched(result);
+  });
+
+  it("looks for saves since the first shot's posts row, never since the plan's time", async () => {
+    // The plan claims a later first shot than the row records: a tutor's save in between must still be seen.
+    const late = plan({ base: { ...plan().base, firstShotPostedAt: new Date(FIRST_SHOT_AT.getTime() + 30 * 60_000) } });
+    const result = await run({
+      input: { plan: late },
+      wise: { eventsBefore: [firstShotSave(), save(new Date(FIRST_SHOT_AT.getTime() + 10 * 60_000), KEVIN_ONLINE_WISE_USER_ID, "TEACHER")] },
+    });
+    expect(result.outcome).toEqual({ status: "refused", stage: "wise", reason: "foreign_save_since_post" });
+    expect(result.wise.findFeedbackEvents.mock.calls[0][2]).toEqual(new Date(FIRST_SHOT_AT.getTime() - 5_000));
+    expectReleasedUnsent(result);
   });
 
   it("refuses when the preconditions cannot be read", async () => {

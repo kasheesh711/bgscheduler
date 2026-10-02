@@ -566,7 +566,16 @@ describe("preconditions", () => {
   it.each(cases)("%s", async (_name, arrange, expected) => {
     const seeded = await postedWithFirstShot();
     const plan = (await arrange({ seeded, plan: planFor(seeded) })) ?? planFor(seeded);
-    expect(await store().preconditions(plan, new Date())).toEqual(expected);
+    expect((await store().preconditions(plan, new Date())).problems).toEqual(expected);
+  });
+
+  it("returns the first shot's POST start as its posts row records it", async () => {
+    const seeded = await postedWithFirstShot();
+    const [firstShot] = await db.select().from(P).where(eq(P.kind, "first_shot"));
+    expect(firstShot.postStartedAt).toEqual(seeded.postStartedAt);
+    // A plan a minute off (the verified event's own time) still reads the row's time.
+    const plan = planFor(seeded, { base: { ...planFor(seeded).base, firstShotPostedAt: seeded.verifiedAt } });
+    expect(await store().preconditions(plan, new Date())).toEqual({ problems: [], firstShotPostedAt: seeded.postStartedAt });
   });
 
   it("is not blocked by an owner verdict (approve or needs fix), a resolved owner flag, or other classes' flags", async () => {
@@ -585,13 +594,13 @@ describe("preconditions", () => {
     });
     await db.insert(FL).values({ wiseSessionId: id24(73), source: "owner", note: "another class", createdBy: OWNER, idempotencyKey: "owner:4" });
     await db.insert(FL).values({ wiseSessionId: seeded.wiseSessionId, source: "measured_fix", note: "system", createdBy: "system", idempotencyKey: "fix:1" });
-    expect(await store().preconditions(planFor(seeded), new Date())).toEqual([]);
+    expect((await store().preconditions(planFor(seeded), new Date())).problems).toEqual([]);
   });
 
   it("accepts a first-shot time up to a minute after the recorded POST start (the verified event's own time)", async () => {
     const seeded = await postedWithFirstShot();
     const plan = planFor(seeded, { base: { ...planFor(seeded).base, firstShotPostedAt: seeded.verifiedAt } });
-    expect(await store().preconditions(plan, new Date())).toEqual([]);
+    expect((await store().preconditions(plan, new Date())).problems).toEqual([]);
   });
 });
 

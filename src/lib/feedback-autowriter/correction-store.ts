@@ -197,7 +197,7 @@ export function pgCorrectionStore(db: Database, opts: {
       if (facts.ownerFlagOpen) problems.push("owner_flag_open");
       if (facts.dailyCapReached) problems.push("daily_cap");
       if (stuck) problems.push("app_post_stuck");
-      return [...new Set(problems)];
+      return { problems: [...new Set(problems)], firstShotPostedAt: firstShot?.postStartedAt ?? null };
     },
 
     async lock(plan) {
