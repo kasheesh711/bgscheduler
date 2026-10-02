@@ -53,6 +53,19 @@ describe("pruneNightly", () => {
     expect(fs.existsSync(path.join(dir, ".bgscheduler-nightly", "backup", "keep.txt"))).toBe(true);
   });
 
+  it("deletes an old night's proposals, verification and replay, and keeps its corrections log", () => {
+    touch(path.join(root, "2026-10-02", "proposals", "6a0000000000000000000a01.json"), 9);
+    touch(path.join(root, "2026-10-02", "verify", "6a0000000000000000000a01.json"), 9);
+    touch(path.join(root, "2026-10-02", "replay", "records.json"), 9);
+    touch(path.join(root, "2026-10-02", "corrections.jsonl"), 9);
+    const result = pruneNightly(root, { now: NOW, home: dir });
+    expect(result.nightFiles.map((item) => path.relative(root, item))).toEqual(expect.arrayContaining([
+      "2026-10-02/proposals", "2026-10-02/verify", "2026-10-02/replay",
+    ]));
+    expect(fs.existsSync(path.join(root, "2026-10-02", "proposals"))).toBe(false);
+    expect(fs.existsSync(path.join(root, "2026-10-02", "corrections.jsonl"))).toBe(true);
+  });
+
   it("refuses to prune the nightly home itself", () => {
     expect(() => pruneNightly(path.join(dir, ".bgscheduler-nightly"), { now: NOW, home: dir })).toThrow(/Refusing/u);
     expect(() => pruneNightly("/", { now: NOW, home: dir })).toThrow(/Refusing/u);

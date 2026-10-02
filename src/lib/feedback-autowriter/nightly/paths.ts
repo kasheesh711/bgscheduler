@@ -77,6 +77,14 @@ export interface NightlyPaths {
   lockFile: string;
   /** Marker the orchestrator polls before starting collection. */
   collectReady: string;
+  /** Signed correction proposals, one per class (`verify`; local, real data, deleted after 7 days). */
+  proposalsDir: string;
+  /** Each verified class's candidates and checks, and the cached paid calls behind them (local, real data). */
+  verifyDir: string;
+  /** Where to write the night's replay (`--out=`) so it is deleted with the night's other real data. */
+  replayDir: string;
+  /** One line per correction outcome (`correct`): ids, codes and statuses only. */
+  correctionsJsonl: string;
 }
 
 export function nightlyPaths(root: string, night: string): NightlyPaths {
@@ -100,6 +108,10 @@ export function nightlyPaths(root: string, night: string): NightlyPaths {
     spendJsonl: path.join(root, "spend.jsonl"),
     lockFile: path.join(root, "nightly.lock"),
     collectReady: path.join(root, "COLLECT_READY"),
+    proposalsDir: path.join(nightDir, "proposals"),
+    verifyDir: path.join(nightDir, "verify"),
+    replayDir: path.join(nightDir, "replay"),
+    correctionsJsonl: path.join(nightDir, "corrections.jsonl"),
   };
 }
 

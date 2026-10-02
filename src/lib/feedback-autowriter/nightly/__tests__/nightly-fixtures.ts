@@ -1,4 +1,6 @@
 import { KEVIN_ONLINE_WISE_USER_ID } from "../../roster";
+import { fieldsHash } from "../../submit";
+import type { CorrectionProposal } from "../proposals";
 import type { EvidenceBundle, NightlyTarget } from "../types";
 
 /** Synthetic people and lesson only: the repository is public. */
@@ -34,5 +36,23 @@ export function nightlyBundle(patch: Partial<EvidenceBundle> = {}): EvidenceBund
     transcript: { text: "[00:00] TUTOR: Today we add fractions.\n[00:10] STUDENT: Twelve.", source: "production_soniox", speakerMethod: "zoom_alignment", speakerLabels: "verified" },
     wiseSummary: "Overview: The class added fractions.", zoomCaptions: null, postedEvidenceKind: "transcript", scheduledMinutes: 60,
     storedJudge: null, pipeline: { evidence: "transcript" }, ...patch,
+  };
+}
+
+/** PIM_FIELDS with the second performance sentence removed: a minimal fix's result. */
+export const PIM_CORRECTED = {
+  ...PIM_FIELDS,
+  performance: "Pim found the lowest common multiple for most questions without help and rewrote each fraction carefully.",
+};
+
+/** A correction proposal as `verify` writes it, before signing. */
+export function correctionProposal(patch: Partial<CorrectionProposal> = {}): CorrectionProposal {
+  return {
+    version: 1, night: "2026-10-02", wiseSessionId: SID, fieldsSha256: fieldsHash(PIM_FIELDS), fields: PIM_CORRECTED,
+    fieldsHash: fieldsHash(PIM_CORRECTED), source: "minimal_fix", evidence: "transcript", arm: "sol",
+    issues: [{ id: "i1", mode: "M06", severity: "major" }], modes: ["M06"], severity: "major", criticalCategory: null,
+    checks: [{ name: "text_problems", pass: true, detail: "none" }],
+    reason: "M06 overstated_judgement (major): corrected from the audit's minimal fix", rootCauseRef: "fix/autowriter-audit-m06",
+    pipeline: { auditVersion: 1 }, createdAt: "2026-10-02T20:00:00.000Z", ...patch,
   };
 }
