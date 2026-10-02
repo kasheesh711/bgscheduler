@@ -71,10 +71,13 @@ export function readOnlySoniox(client: Pick<SonioxClient, "get" | "transcript">)
 // ---------------------------------------------------------------------------
 
 /**
- * UTC minutes when production jobs hit Wise (the snapshot sync at :00/:30, the autowriter and activity jobs around
- * :08/:22/:38/:52): the nightly never starts a read in them.
+ * UTC minutes when production jobs hit Wise: the snapshot sync at :00/:30 (and the minutes after), the autowriter and
+ * activity jobs around :08/:22/:38/:52, post-class collection at :13/:43, the Wise activity sync at :17/:47 and credit
+ * control at :20/:50. The nightly never starts a read in them.
  */
-const BUSY_UTC_MINUTES = new Set([0, 1, 2, 3, 4, 30, 31, 32, 33, 34, 7, 8, 9, 21, 22, 23, 37, 38, 39, 51, 52, 53]);
+const BUSY_UTC_MINUTES = new Set([
+  0, 1, 2, 3, 4, 30, 31, 32, 33, 34, 7, 8, 9, 21, 22, 23, 37, 38, 39, 51, 52, 53, 13, 17, 20, 43, 47, 50,
+]);
 /** A read starts only with at least this much of a quiet minute left before a busy one. */
 const QUIET_TAIL_MS = 15_000;
 

@@ -174,6 +174,14 @@ describe("Wise read gate", () => {
     expect(at("2026-10-02T19:06:50Z")).toBe(3 * 60_000 + 10_000); // too little left of :06 → :10
     expect(at("2026-10-02T19:06:40Z")).toBe(0);
     expect(at("2026-10-02T19:59:50Z")).toBe(5 * 60_000 + 10_000); // into the next hour's :00–:04
+    // Post-class collection (:13/:43), the Wise activity sync (:17/:47) and credit control (:20/:50).
+    expect(at("2026-10-02T19:13:00Z")).toBe(60_000); // → :14
+    expect(at("2026-10-02T19:17:30Z")).toBe(30_000); // → :18
+    expect(at("2026-10-02T19:20:00Z")).toBe(4 * 60_000); // :20–:23 → :24
+    expect(at("2026-10-02T19:43:00Z")).toBe(60_000); // → :44
+    expect(at("2026-10-02T19:47:00Z")).toBe(60_000); // → :48
+    expect(at("2026-10-02T19:50:00Z")).toBe(4 * 60_000); // :50–:53 → :54
+    expect(at("2026-10-02T19:12:50Z")).toBe(70_000); // too little left of :12 → :14
   });
 
   it("paces reads at least 5 s apart, reserving each in the ledger before it starts", async () => {
