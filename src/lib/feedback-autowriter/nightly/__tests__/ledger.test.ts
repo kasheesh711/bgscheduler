@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NIGHTLY_CAPS, type NightlyCaps } from "../caps";
 import { NightlyLedger } from "../ledger";
 import { readJsonl } from "../paths";
@@ -115,6 +115,20 @@ describe("NightlyLedger", () => {
     // Settling twice changes nothing.
     expect(ledger.settle(first.id, { actualUsd: 0, outcome: "success" })).toEqual({ breached: [] });
     expect(ledger.used("opus_audit").usd).toBe(2.4);
+  });
+
+  it("tells onBreach once per cap when a settled call passed it (the CLI writes STOP)", () => {
+    const onBreach = vi.fn();
+    const ledger = NightlyLedger.open(dir, "2026-10-02", caps({ maxClaudeUsdNight: 6 }), { now, onBreach });
+    const first = ledger.reserve("opus_audit", { key: "a", estimateUsd: 3 });
+    if (!first.ok) throw new Error("unreachable");
+    ledger.settle(first.id, { actualUsd: 2.9, outcome: "success" });
+    expect(onBreach).not.toHaveBeenCalled();
+    const second = ledger.reserve("opus_audit", { key: "b", estimateUsd: 3 });
+    if (!second.ok) throw new Error("unreachable");
+    expect(ledger.settle(second.id, { actualUsd: 3.4, outcome: "success" })).toEqual({ breached: ["claude_usd_night"] });
+    expect(onBreach).toHaveBeenCalledTimes(1);
+    expect(onBreach).toHaveBeenCalledWith(["claude_usd_night"]);
   });
 
   it("keeps the estimate when the actual cost is unknown", () => {

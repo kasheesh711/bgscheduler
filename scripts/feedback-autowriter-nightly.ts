@@ -54,6 +54,7 @@ import {
   loadOwnerConfig,
   stopFilePresent,
   stopFiles,
+  writeStopFile,
   type NightlyCaps,
 } from "@/lib/feedback-autowriter/nightly/caps";
 import { claudeCwd, ledgerOutcome, readClaudeCliVersion, runClaude, type ClaudeRunnerDeps } from "@/lib/feedback-autowriter/nightly/claude-runner";
@@ -180,7 +181,13 @@ class Session {
   readonly inFlight = new Set<string>();
 
   constructor(readonly ctx: NightContext, readonly runnerSha: string | null) {
-    this.ledger = NightlyLedger.open(ctx.paths.root, ctx.night, ctx.caps);
+    // A call that cost more than it reserved and passed a cap stops every later step (and the next night) until the
+    // owner deletes the STOP file.
+    this.ledger = NightlyLedger.open(ctx.paths.root, ctx.night, ctx.caps, {
+      onBreach: (breached) => {
+        writeStopFile(`nightly spend passed a cap after the fact: ${breached.join(", ")} (night ${ctx.night})`);
+      },
+    });
   }
 
   get db(): Database {

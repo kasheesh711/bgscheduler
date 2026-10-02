@@ -58,16 +58,23 @@ export class NightlyLedger {
   /** Reservations made by this process and not settled yet: in flight, not crashed. */
   private readonly live = new Set<string>();
 
+  /** Breaches already reported to `onBreach` by this process. */
+  private readonly reported = new Set<string>();
+
   private constructor(
     readonly file: string,
     readonly night: string,
     private readonly caps: NightlyCaps,
     private readonly now: () => Date,
+    private readonly onBreach: ((breached: string[]) => void) | null,
   ) {}
 
-  /** Opens `<dir>/spend.jsonl` (created on the first reservation). */
-  static open(dir: string, night: string, caps: NightlyCaps, options: { now?: () => Date } = {}): NightlyLedger {
-    const ledger = new NightlyLedger(path.join(dir, "spend.jsonl"), night, caps, options.now ?? (() => new Date()));
+  /**
+   * Opens `<dir>/spend.jsonl` (created on the first reservation). `onBreach` is told, once per cap, when a settled call
+   * cost so much more than it reserved that a cap is now passed (the CLI writes the STOP file).
+   */
+  static open(dir: string, night: string, caps: NightlyCaps, options: { now?: () => Date; onBreach?: (breached: string[]) => void } = {}): NightlyLedger {
+    const ledger = new NightlyLedger(path.join(dir, "spend.jsonl"), night, caps, options.now ?? (() => new Date()), options.onBreach ?? null);
     for (const line of readJsonl<LedgerLine>(ledger.file)) ledger.apply(line);
     return ledger;
   }
@@ -206,7 +213,13 @@ export class NightlyLedger {
     appendJsonl(this.file, line);
     this.apply(line);
     this.live.delete(id);
-    return { breached: this.breaches() };
+    const breached = this.breaches();
+    const fresh = breached.filter((cap) => !this.reported.has(cap));
+    if (fresh.length > 0 && this.onBreach) {
+      for (const cap of fresh) this.reported.add(cap);
+      this.onBreach(fresh);
+    }
+    return { breached };
   }
 
   /** Caps the recorded spend has passed (only possible when a call cost more than it reserved). */
