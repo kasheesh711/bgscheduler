@@ -159,6 +159,7 @@ None blocking roadmap execution.
 | 261001-r5j | Mobile onsite class capture and tutor-reviewed feedback drafts; private evidence, recovery, consent and retention | 2026-10-01 | dc1bfbb9 | [261001-r5j-mobile-onsite-class-evidence-and-reviewe](./quick/261001-r5j-mobile-onsite-class-evidence-and-reviewe/) |
 | 261001-ulx | Scope all Class Capture pilots to their own tutor and today's Bangkok classes; preserve unexpired recovery and refresh safely at midnight | 2026-10-01 | 099162e0 | [261001-ulx-restrict-class-capture-to-each-pilot-tut](./quick/261001-ulx-restrict-class-capture-to-each-pilot-tut/) |
 | 261002-r16 | Atom collector records failing stage/cause; ended-class PAST/FUTURE status transition no longer fails the timetable read | 2026-10-02 | 0a9aa4da | [261002-r16-atom-collector-failure-stage-and-timetab](./quick/261002-r16-atom-collector-failure-stage-and-timetab/) |
+| 261002-rmf | Give autowriter incidents their own kinds (Atom, style review) instead of scan_failed | 2026-10-02 | 53edb60b | [261002-rmf-give-autowriter-incidents-their-own-kind](./quick/261002-rmf-give-autowriter-incidents-their-own-kind/) |
 | Phase 10-vpol-01-view-transitions P01 | 216 | 2 tasks | 2 files |
 | Phase 10-vpol-01-view-transitions P02 | 4min | 2 tasks | 2 files |
 | Phase 11 P03 | 31515093 | 2 tasks | 3 files |

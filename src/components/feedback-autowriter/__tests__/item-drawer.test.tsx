@@ -263,4 +263,15 @@ describe("IncidentBody", () => {
     expect(info).toContain(">Info<");
     expect(info).not.toContain("push ");
   });
+
+  it("offers Acknowledge on a guided post's style fix, which is info and never pushed", () => {
+    const styleFix = { ...incident(INCIDENT.info), kind: "style_review_flagged", summary: "Guided feedback needs a style correction. Open its evidence and style review." };
+    const owner = renderToStaticMarkup(<IncidentBody incident={styleFix} about={null} canControl onAcknowledged={() => undefined} />);
+    expect(owner.match(/>Acknowledge</gu)).toHaveLength(1);
+    expect(owner).toContain("A guided post needs a style fix");
+    expect(owner).toContain(">Info<");
+    expect(owner).toContain("Style results are shown here only, never pushed. Acknowledging takes it off the list.");
+    expect(owner).not.toContain("stops the alert");
+    expect(owner).not.toContain("push ");
+  });
 });

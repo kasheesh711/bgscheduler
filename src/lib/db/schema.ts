@@ -6484,6 +6484,7 @@ export const feedbackAutowriterIncidents = pgTable("feedback_autowriter_incident
   kind: text("kind").$type<
     | "halt" | "correction_failed" | "critical_verdict" | "critical_flag" | "credit_entries_changed"
     | "api_actor_unmatched" | "first_shot_unverified" | "scan_failed"
+    | "atom_collection_failed" | "style_review_flagged" | "style_review_unavailable" | "style_review_source_missing"
   >().notNull(),
   severity: text("severity").$type<"critical" | "info">().notNull(),
   wiseSessionId: text("wise_session_id"),
