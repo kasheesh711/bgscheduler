@@ -8,8 +8,10 @@ import { otherPeopleLine, speakerLabelNote, type EvidenceKind, type SpeakerLabel
  * v5 (owner decision, 30 Sep): the v4 prompt below, unchanged, run at every effort in `AUTOWRITER_JUDGE_EFFORTS` on
  * byte-identical messages; a draft passes only when every level passes it. Stored drafts and call records carry this
  * number, so a draft judged at one level (v4 and before) is never reused as if both had passed it.
+ * v6 (nightly audit 3 Oct, failure mode M07): in transcript mode, crediting the student with an answer or value that
+ * their STUDENT line only repeats from the tutor is listed as misattributed.
  */
-export const JUDGE_PROMPT_VERSION = 5;
+export const JUDGE_PROMPT_VERSION = 6;
 
 export type JudgeEffort = (typeof AUTOWRITER_JUDGE_EFFORTS)[number];
 
@@ -79,7 +81,10 @@ const judgeSystemPrompt = (evidence: EvidenceKind, labels: SpeakerLabels) => [
     `that the ${evidence} does not state or clearly imply.` +
     (evidence === "transcript" ? " Claiming the student understood or solved something the transcript only shows the tutor explaining is unsupported." : ""),
   "- misattributed: something the feedback says [STUDENT_1] did, said, finished, got wrong or did not finish, " +
-    `when the ${evidence} says it about [TUTOR] or about another person.`,
+    `when the ${evidence} says it about [TUTOR] or about another person.` +
+    (evidence === "transcript"
+      ? " This includes an answer or value the feedback credits to [STUDENT_1] when the STUDENT line only repeats or confirms what the TUTOR line just before said."
+      : ""),
   "- homeworkNotSet: homework, a task or a due date the feedback says was set — everything under \"Homework and due date\", " +
     `and any such statement in another field — unless the ${evidence} clearly shows the tutor setting it for [STUDENT_1] to do after this lesson. ` +
     "Work only described as remaining, unfinished or still to complete was not set." +
