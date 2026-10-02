@@ -146,7 +146,8 @@ export async function openAtomReadClient(input: {
   };
   try {
     // Several Playwright calls have no timeout of their own. Closing the browser on the deadline also fails them.
-    return await withAtomTimeout(open(), input.deadlineMs - Date.now() - 5_000, "open_deadline");
+    // The margin covers both bounded closes, so this fires before the run deadline.
+    return await withAtomTimeout(open(), input.deadlineMs - Date.now() - 15_000, "open_deadline");
   } catch (error) {
     abandoned = true;
     await closeQuietly(context ? () => context!.close() : undefined, "context_close");
