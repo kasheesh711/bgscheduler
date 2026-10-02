@@ -16,7 +16,7 @@ import { haltAutowriter } from "../../store";
 import { feedbackBodyHash, fieldsHash } from "../../submit";
 import type { BillingPlan } from "../../types";
 import { loadCorrectionRows, loadDisabledTutors, planFromRows, preflightCorrections, unsettledCorrections } from "../correct-step";
-import { applyAgentFlags, correctionFlagItem } from "../flags";
+import { AGENT_CORRECTION_FLAG_ACTOR, applyAgentFlags, correctionFlagItem, countAgentFlags } from "../flags";
 import { correctionProposal } from "./nightly-fixtures";
 
 /**
@@ -174,13 +174,15 @@ describe("the agent flag after a correction", () => {
   it("is raised once per class, with mode codes only, and puts the class back in the review list", async () => {
     await posted();
     const item = correctionFlagItem({ wiseSessionId: SESSION_ID, fieldsSha256: fieldsHash(CORRECTED), modes: ["M06"], severity: "major", criticalCategory: null });
-    expect(await applyAgentFlags(db, [item])).toEqual({ inserted: 1, existing: 0, incidents: 0 });
-    expect(await applyAgentFlags(db, [item])).toEqual({ inserted: 0, existing: 1, incidents: 0 });
+    expect(await applyAgentFlags(db, [item])).toEqual({ inserted: 1, existing: 0, incidents: 0, overCap: [] });
+    expect(await applyAgentFlags(db, [item])).toEqual({ inserted: 0, existing: 1, incidents: 0, overCap: [] });
     const flags = await db.select().from(FL).where(eq(FL.wiseSessionId, SESSION_ID));
     expect(flags).toHaveLength(1);
     expect(flags[0]).toMatchObject({
       source: "agent", idempotencyKey: `agent-correction:${SESSION_ID}`, note: "corrected by the nightly agent: M06",
-      suggestedSeverity: "factual", createdBy: "agent:nightly-audit", resolvedByVerdictId: null,
+      suggestedSeverity: "factual", createdBy: AGENT_CORRECTION_FLAG_ACTOR, resolvedByVerdictId: null,
     });
+    // The audit's nightly flag cap counts its own flags only.
+    expect(await countAgentFlags(db, [SESSION_ID])).toBe(0);
   });
 });

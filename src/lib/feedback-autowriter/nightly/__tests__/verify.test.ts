@@ -26,6 +26,7 @@ import {
   readReplayRecords,
   replayCandidate,
   stepVerify,
+  verifyCallFile,
   type VerifyClassRecord,
   type VerifyDeps,
 } from "../verify";
@@ -509,18 +510,21 @@ describe("stepVerify: caps, stops and the ledger", () => {
     expect(again.judge).not.toHaveBeenCalled();
     expect(result.summary.proposed).toEqual([{ wiseSessionId: SID, source: "minimal_fix" }]);
 
-    // A run that died during the re-audit left its reservation unsettled: the re-audit is never made again.
+    // A run that died during the re-audit left its call started and its reservation unsettled: never made again.
     const crashed = context({}, { paths: nightlyPaths(path.join(dir, "crashed"), NIGHT) });
     seed(crashed);
-    fs.mkdirSync(crashed.paths.root, { recursive: true });
+    const key = `reaudit:${SID}:${fieldsHash(PIM_CORRECTED)}:a${AUDIT_VERSION}`;
+    writeJsonAtomic(verifyCallFile(crashed, key), { key, at: new Date(clock).toISOString(), state: "started" });
     fs.writeFileSync(crashed.paths.spendJsonl, `${JSON.stringify({
-      type: "reserve", id: "dead-1", night: NIGHT, kind: "opus_reaudit", key: `reaudit:${SID}:${fieldsHash(PIM_CORRECTED)}:a${AUDIT_VERSION}`,
-      estimateUsd: 1.5, at: new Date(clock).toISOString(),
+      type: "reserve", id: "dead-1", night: NIGHT, kind: "opus_reaudit", key, estimateUsd: 3, at: new Date(clock).toISOString(),
     })}\n`);
     const resumed = harness(crashed);
     await stepVerify(crashed, resumed.deps);
     expect(resumed.run).not.toHaveBeenCalled();
     expect(classRecord(crashed)?.candidates[0].checks.at(-1)).toMatchObject({ name: "reaudit", pass: false, detail: "already_attempted" });
+    // The paid call is settled the way the audit settles its own calls.
+    const settled = readJsonl<{ type: string; outcome?: string }>(ctx.paths.spendJsonl).filter((line) => line.type === "settle").map((line) => line.outcome);
+    expect(settled).toEqual(["success"]);
   });
 
   it("stops at a usage limit without caching it, so a later run can make the call", async () => {
@@ -538,7 +542,7 @@ describe("stepVerify: caps, stops and the ledger", () => {
     const ctx = context();
     seed(ctx);
     const h = harness(ctx, { reaudit: () => cleanReaudit({}) });
-    h.run.mockImplementation(async () => ({ ...cleanReaudit(), proof: { ...PROOF, costUsd: 30 } }) as ClaudeOutcome);
+    h.run.mockImplementation(async () => ({ ...cleanReaudit(), proof: { ...PROOF, costUsd: NIGHTLY_CAPS.maxClaudeUsdNight + 5 } }) as ClaudeOutcome);
     const result = await stepVerify(ctx, h.deps);
     expect(result).toMatchObject({ ok: false, stop: "breach:claude_usd_night", exitCode: 10 });
     expect(fs.existsSync(path.join(dir, ".bgscheduler-nightly", "STOP"))).toBe(true);

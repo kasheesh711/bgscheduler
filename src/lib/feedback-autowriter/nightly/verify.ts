@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
 import { POST_CLASS_FEEDBACK_FIELDS, type FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
@@ -18,7 +19,7 @@ import {
   type AuditResult,
 } from "./audit-schema";
 import { writeStopFile } from "./caps";
-import type { ClaudeCall, ClaudeOutcome } from "./claude-runner";
+import { ledgerOutcome, type ClaudeCall, type ClaudeOutcome } from "./claude-runner";
 import { EXIT, NightlyStop } from "./exit";
 import type { JudgeCandidateResult } from "./judge-candidate";
 import type { NightlyLedger } from "./ledger";
@@ -55,8 +56,10 @@ import type { AuditRecord, EvidenceBundle, PrecheckFinding } from "./types";
  *   out of the copy check, meta words, identity), the student's display name, both production GLM judge levels, and
  *   one Opus 5.5 max re-audit of the candidate with the prior issues (verdict accurate or cosmetic, no major
  *   omission, every prior major or critical issue gone, no other person named, homework only when the tutor set it).
- * Every paid call is reserved in the ledger first and cached under `verify/calls/`: a candidate is re-audited at
- * most once, ever, and nothing is retried in a loop. At most `maxCorrectionsPerNight` proposals a night.
+ * Every paid call is reserved in the ledger first and recorded under `verify/calls/` before it is made (`started`) and
+ * after (`done`): a candidate is re-audited at most once, ever — also after a crash mid-call — and nothing is retried
+ * in a loop; only a usage limit or a login failure (nothing was audited) lets a later run make the call. At most
+ * `maxCorrectionsPerNight` proposals a night.
  */
 
 export const NEEDS_KEVIN_MODES: ReadonlySet<string> = new Set(["M13", "M14"]);
@@ -93,7 +96,7 @@ export interface VerifyClassRecord {
 }
 
 export interface VerifyDeps {
-  ledger: Pick<NightlyLedger, "reserve" | "settle" | "attempts">;
+  ledger: Pick<NightlyLedger, "reserve" | "settle">;
   /** One `claude -p` Opus 5.5 max call (re-audits and critical confirmations). */
   run: (call: ClaudeCall) => Promise<ClaudeOutcome>;
   /** Both production GLM judge levels on a candidate (production: `judgeCandidate`, which reserves each call). */
@@ -310,11 +313,38 @@ interface VerifyState {
 
 type NotCalled = { kind: "not_called"; reason: string };
 
-function callCacheFile(ctx: NightContext, key: string): string {
+/**
+ * Where a paid call's record lives (`verify/calls/<sha256(key)>.json`): `started` is written, fsynced, before the call
+ * is made and `done` (with its result) after, so a run that died mid-call never makes it again — whatever the ledger
+ * says about the reservation — and a finished call is reused, never repeated.
+ */
+export function verifyCallFile(ctx: Pick<NightContext, "paths">, key: string): string {
   return path.join(ctx.paths.verifyDir, "calls", `${createHash("sha256").update(key).digest("hex").slice(0, 40)}.json`);
 }
 
-/** Outcomes that are the account's, not the call's: never cached, so a later run may make the call. */
+interface CallRecordFile<T> {
+  key: string;
+  at: string;
+  state: "started" | "done";
+  result?: T;
+}
+
+function readCallRecord<T>(ctx: NightContext, key: string): { state: "none" } | { state: "started" } | { state: "done"; result: T } {
+  const record = readJsonFile<CallRecordFile<T>>(verifyCallFile(ctx, key));
+  if (!record || record.key !== key) return { state: "none" };
+  if (record.state === "done" && record.result !== undefined) return { state: "done", result: record.result };
+  return { state: "started" };
+}
+
+function writeCallRecord<T>(ctx: NightContext, key: string, state: "started" | "done", result?: T): void {
+  writeJsonAtomic(verifyCallFile(ctx, key), { key, at: ctx.now().toISOString(), state, ...(result === undefined ? {} : { result }) });
+}
+
+function dropCallRecord(ctx: NightContext, key: string): void {
+  fs.rmSync(verifyCallFile(ctx, key), { force: true });
+}
+
+/** Outcomes that are the account's, not the call's: the record is dropped, so a later run may make the call. */
 const ACCOUNT_OUTCOMES = new Set(["usage_limited", "auth"]);
 
 function raise(state: VerifyState, stop: NightlyStop): never {
@@ -334,22 +364,26 @@ function breach(state: VerifyState, breached: readonly string[], what: string): 
   raise(state, new NightlyStop(`breach:${breached.join(",")}`, EXIT.safety));
 }
 
-/** One Opus 5.5 max call: cached by key, reserved first, never made twice for the same key. */
+/**
+ * One Opus 5.5 max call: reused when done, never made again once started, reserved in the ledger first and settled
+ * the way the audit settles (`ledgerOutcome`: `invalid` when `valid` rejects the answer).
+ */
 async function opusCall(state: VerifyState, input: {
   key: string;
   kind: "opus_audit" | "opus_reaudit";
   purpose: string;
   budgetUsd: number;
   prompt: { system: string; user: string };
+  valid: (value: unknown) => boolean;
 }): Promise<ClaudeOutcome | NotCalled> {
-  const file = callCacheFile(state.ctx, input.key);
-  const cached = readJsonFile<{ key: string; outcome: ClaudeOutcome }>(file);
-  if (cached?.key === input.key) return cached.outcome;
-  const prior = state.deps.ledger.attempts(input.key);
-  if (prior.failed + prior.succeeded > 0) return { kind: "not_called", reason: "already_attempted" };
+  const { ctx } = state;
+  const recorded = readCallRecord<ClaudeOutcome>(ctx, input.key);
+  if (recorded.state === "done") return recorded.result;
+  if (recorded.state === "started") return { kind: "not_called", reason: "already_attempted" };
   checkStops(state);
   const reserved = state.deps.ledger.reserve(input.kind, { key: input.key, estimateUsd: input.budgetUsd });
   if (!reserved.ok) raise(state, new NightlyStop(reserved.reason, EXIT.caps));
+  writeCallRecord(ctx, input.key, "started");
   state.opusCalls += 1;
   const outcome = await state.deps.run({
     purpose: input.purpose, key: input.key, system: input.prompt.system, user: input.prompt.user, schema: AUDIT_JSON_SCHEMA,
@@ -357,28 +391,29 @@ async function opusCall(state: VerifyState, input: {
   });
   const costUsd = outcome.proof?.costUsd ?? null;
   state.claudeUsd += costUsd ?? 0;
-  const { breached } = state.deps.ledger.settle(reserved.id, { actualUsd: costUsd, outcome: outcome.kind });
-  if (!ACCOUNT_OUTCOMES.has(outcome.kind)) writeJsonAtomic(file, { key: input.key, at: state.ctx.now().toISOString(), outcome });
+  const valid = outcome.kind === "success" && input.valid(outcome.value);
+  const { breached } = state.deps.ledger.settle(reserved.id, { actualUsd: costUsd, outcome: ledgerOutcome(outcome.kind, valid) });
+  if (ACCOUNT_OUTCOMES.has(outcome.kind)) dropCallRecord(ctx, input.key);
+  else writeCallRecord(ctx, input.key, "done", outcome);
   breach(state, breached, input.purpose);
   if (ACCOUNT_OUTCOMES.has(outcome.kind)) raise(state, new NightlyStop(outcome.kind, EXIT.model));
   return outcome;
 }
 
-/** Both judge levels on one candidate: cached by key, never sent twice. */
+/** Both judge levels on one candidate (each call reserved by the judge itself): reused when done, never repeated. */
 async function judgeCall(state: VerifyState, input: { key: string; fields: FeedbackFieldAnswers; bundle: EvidenceBundle }): Promise<JudgeCandidateResult | NotCalled> {
-  const file = callCacheFile(state.ctx, input.key);
-  const cached = readJsonFile<{ key: string; result: JudgeCandidateResult }>(file);
-  if (cached?.key === input.key) return cached.result;
-  const attempted = ["medium", "high"].some((effort) => {
-    const prior = state.deps.ledger.attempts(`${input.key}:${effort}`);
-    return prior.failed + prior.succeeded > 0;
-  });
-  if (attempted) return { kind: "not_called", reason: "already_attempted" };
+  const { ctx } = state;
+  const recorded = readCallRecord<JudgeCandidateResult>(ctx, input.key);
+  if (recorded.state === "done") return recorded.result;
+  if (recorded.state === "started") return { kind: "not_called", reason: "already_attempted" };
   checkStops(state);
+  writeCallRecord(ctx, input.key, "started");
   const result = await state.deps.judge(input);
   state.judgeCalls += result.calls;
   state.openrouterUsd += result.costUsd;
-  if (!result.capStop) writeJsonAtomic(file, { key: input.key, at: state.ctx.now().toISOString(), result });
+  // Refused before anything was sent: nothing happened, a later run may judge it.
+  if (result.capStop && result.calls === 0) dropCallRecord(ctx, input.key);
+  else writeCallRecord(ctx, input.key, "done", result);
   breach(state, result.breached, "judge");
   if (result.capStop) raise(state, new NightlyStop(result.capStop, EXIT.caps));
   return result;
@@ -454,20 +489,20 @@ async function checkCandidate(state: VerifyState, input: {
     otherStudentNames: context.otherStudentNames ?? [],
     priorFeedback: context.priorFeedback,
   }).filter((finding) => finding.severity !== "info");
+  const auditContext = { postFields: { ...candidate.fields }, evidenceText: evidenceTextOf(file.bundle), grade: file.bundle.grade };
   const reaudit = await opusCall(state, {
     key: `reaudit:${sid}:${hash}:a${AUDIT_VERSION}`,
     kind: "opus_reaudit",
     purpose: "reaudit",
     budgetUsd: state.ctx.caps.perReauditUsd,
     prompt: buildAuditPrompt({ bundle: file.bundle, prechecks, priorIssues: input.record.result.issues, fields: { ...candidate.fields } }),
+    valid: (value) => parseAuditResult(value, auditContext).ok,
   });
   if (reaudit.kind !== "success") {
     checks.push(check("reaudit", false, reaudit.kind === "not_called" ? reaudit.reason : `${reaudit.kind}:${reaudit.reason}`));
     return checks;
   }
-  const parsed = parseAuditResult(reaudit.value, {
-    postFields: { ...candidate.fields }, evidenceText: evidenceTextOf(file.bundle), grade: file.bundle.grade,
-  });
+  const parsed = parseAuditResult(reaudit.value, auditContext);
   if (!parsed.ok) {
     checks.push(check("reaudit", false, "invalid"));
     return checks;
@@ -517,16 +552,16 @@ async function verifyClass(state: VerifyState, file: BundleFile, record: AuditRe
   const posted = postedFieldsOf(file);
   const criticals = serious.filter((issue) => issue.severity === "critical");
   if (criticals.length > 0) {
+    const postedContext = { postFields: file.bundle.postedFields, evidenceText: evidenceTextOf(file.bundle), grade: file.bundle.grade };
     const second = await opusCall(state, {
       key: `confirm:${sid}:${file.target.fieldsSha256}:a${AUDIT_VERSION}`,
       kind: "opus_audit",
       purpose: "confirm",
       budgetUsd: ctx.caps.perAuditUsd,
       prompt: buildAuditPrompt({ bundle: file.bundle, prechecks: file.prechecks }),
+      valid: (value) => parseAuditResult(value, postedContext).ok,
     });
-    const parsed = second.kind === "success"
-      ? parseAuditResult(second.value, { postFields: file.bundle.postedFields, evidenceText: evidenceTextOf(file.bundle), grade: file.bundle.grade })
-      : null;
+    const parsed = second.kind === "success" ? parseAuditResult(second.value, postedContext) : null;
     if (!parsed?.ok) {
       const outcome = second.kind === "success" ? "invalid" : second.kind === "not_called" ? second.reason : second.kind;
       return decide({
