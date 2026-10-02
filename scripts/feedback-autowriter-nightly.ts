@@ -25,7 +25,8 @@
  *                                  high-confidence critical); a DRY RUN unless --apply — the only database write
  *   run [--apply-flags] [--retranscribe] [--soniox-usd=<n>] [--no-synthesis]
  *                                  preflight → select → collect → audit → report (→ flag with --apply-flags), resuming
- *                                  at the first unfinished step; any stop ends with a partial report, never a retry
+ *                                  at the first unfinished step; any stop ends with a partial report, never a retry;
+ *                                  then prune (not after a STOP file)
  *   prune [--dry-run]              delete local evidence older than 7 days (cache, audits, old nights' real data)
  *   costs [--days=7]               the last nights' spend from the local cost ledger
  * Global: --no-deadline (supervised runs only: ignore the 06:50 Bangkok stop).
@@ -302,10 +303,13 @@ async function report(session: Session, options: { synthesis: boolean }): Promis
   });
 }
 
-/** preflight → select → collect → audit → report (→ flag), from the first unfinished step; a stop ends with a partial report. */
-function runAll(session: Session): Promise<StepResult> {
+/**
+ * preflight → select → collect → audit → report (→ flag), from the first unfinished step; a stop ends with a partial
+ * report. Then local evidence older than 7 days is deleted (not after a STOP file: STOP means stop).
+ */
+async function runAll(session: Session): Promise<StepResult> {
   const { ctx } = session;
-  return runNight(ctx, {
+  const result = await runNight(ctx, {
     order: ["preflight", "select", "collect", "audit", "report", ...(flag("apply-flags") ? ["flag" as const] : [])],
     steps: {
       preflight: () => preflight(session),
@@ -317,6 +321,8 @@ function runAll(session: Session): Promise<StepResult> {
     },
     partialReport: () => report(session, { synthesis: false }),
   });
+  if (result.stop === "stop_file" || stopFilePresent(ctx.stopFiles)) return result;
+  return { ...result, summary: { ...result.summary, prune: stepPrune(ctx).summary } };
 }
 
 async function main(): Promise<void> {
