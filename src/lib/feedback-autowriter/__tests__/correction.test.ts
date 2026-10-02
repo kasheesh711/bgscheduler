@@ -859,6 +859,14 @@ describe("correctPostGuarded: what the one POST did", () => {
     expect(result.wise.postFeedback).toHaveBeenCalledTimes(1);
   });
 
+  it("counts an API save after the POST window as on top of ours, never as a second save", async () => {
+    const result = await run({ wise: { eventsAfterPost: (postedAt) => [
+      save(new Date(postedAt.getTime() + 500), API_ACTOR, "OWNER"),
+      save(new Date(postedAt.getTime() + 30_000), API_ACTOR, "OWNER"),
+    ] } });
+    expect(result.outcome).toMatchObject({ status: "verified" });
+  });
+
   it("read failures only: keeps the lock, re-reads every 30 s, and verifies once Wise answers", async () => {
     const result = await run({ wise: { detailOn: (call) => call === 3 || call === 4 ? new Error("down") : undefined } });
     expect(result.outcome).toMatchObject({ status: "verified" });

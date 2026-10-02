@@ -3,7 +3,7 @@ import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import { POST_CLASS_FEEDBACK_FIELDS, type FeedbackFieldMapping } from "@/lib/post-class-feedback/types";
-import { AUTOWRITER_EVENT_DEADLINE_MS, AUTOWRITER_STALE_POSTING_MS } from "./config";
+import { AUTOWRITER_EVENT_DEADLINE_MS, AUTOWRITER_POST_TIMEOUT_MS, AUTOWRITER_STALE_POSTING_MS } from "./config";
 import {
   AGENT_CORRECTION_ACTOR,
   CorrectionRefusedError,
@@ -427,9 +427,12 @@ export interface CorrectionRecovery {
  * Settle agent corrections a dead or interrupted run left `posting` or `awaiting_event` (older than `olderThanMs`,
  * default `CORRECTION_STALE_AFTER_MS`) from what Wise shows — reads only, never a POST, and nothing at all while a
  * correction lock's lease is live (`lease_live`):
- * - the corrected text is in Wise and verifies (same submission, billing and credit entries, no stranger's or extra
- *   save in the POST window): `verified` with our event (the session takes the text if it had not yet), else
- *   `awaiting_event` until our event shows, for at most 2 h;
+ * - an `awaiting_event` correction (the run read its text back from Wise already): only the events, as the sweep's
+ *   reconciliation does — `verified` once our event shows with no stranger's or second API save in the POST window,
+ *   for at most 2 h; what Wise shows later is on top of ours, never a reason to halt;
+ * - a `posting` correction whose corrected text is in Wise and verifies (same submission, billing and credit entries,
+ *   no stranger's or second API save in the POST window): `verified` with our event (the session takes the text),
+ *   else `awaiting_event`;
  * - a `posting` correction whose base text is still in Wise, untouched: `not_sent`;
  * - anything else: halt, then settle (`unknown_outcome` from `posting`, `verify_failed` from `awaiting_event`), then a
  *   critical incident. A Wise read that fails leaves the row for the next run (after 2 h: the same as anything else).
@@ -497,6 +500,57 @@ async function recoverOne(context: {
   };
 
   const v = isRecord(row.verification) ? row.verification : {};
+  const postStartedAt = row.postStartedAt;
+  if (!row.wiseClassId || !postStartedAt) return fail(failOutcome, ["row_incomplete_for_recovery"]);
+  const classId = row.wiseClassId;
+  const overdue = recoveredAt.getTime() - postStartedAt.getTime() > AUTOWRITER_EVENT_DEADLINE_MS;
+  const unreadable = (what: string) => overdue
+    ? fail(failOutcome, [`${what}_unreadable_after_2h`])
+    : Promise.resolve({ result: "read_failed" as const, problems: [`${what}_read_failed`] });
+  const recovery = { at: recoveredAt.toISOString(), from: row.outcome };
+  const settleFailed = (error: unknown) => fail("verify_failed", [
+    `settle_failed:${error instanceof CorrectionStoreError ? error.code : error instanceof Error ? error.name : "Error"}`,
+  ]);
+
+  // The POST window as the run recorded it, on the database clock: from the first of the fresh reads (older rows: the
+  // session read) to the POST's end (unknown: its time-out bound), with the 5 s slack either side. Saves after it are
+  // on top of ours, whoever made them.
+  const windowFrom = dateOf(v.eventsReadAt) ?? dateOf(v.freshReadAt) ?? new Date(postStartedAt.getTime() - 60_000);
+  const postFinishedAt = dateOf(v.postFinishedAt);
+  const windowEndMs = (postFinishedAt?.getTime() ?? postStartedAt.getTime() + AUTOWRITER_POST_TIMEOUT_MS) + 5_000;
+  const checkEvents = (events: readonly SubmitFeedbackEvent[]) => {
+    const found = classifySubmitEvents(events, { apiActorId, freshReadAt: windowFrom, postStartedAt, postFinishedAt });
+    const extra = events.filter((event) => event !== found.ours && event.autoSubmitted !== true && event.actorId === apiActorId &&
+      event.at.getTime() >= windowFrom.getTime() - 5_000 && event.at.getTime() <= windowEndMs);
+    const problems = [
+      ...(found.foreign.length > 0 ? ["foreign_submit_event_in_post_window"] : []),
+      ...(extra.length > 0 ? [`extra_api_save_in_post_window:${extra.length}`] : []),
+    ];
+    return { ours: found.ours, problems };
+  };
+  const serialized = (event: SubmitFeedbackEvent) => ({ ...event, at: event.at.toISOString() });
+
+  if (!fromPosting) {
+    // `awaiting_event`: the run read the corrected text back from Wise, and the session took it. Like the sweep's
+    // reconciliation, only the events are checked now: what Wise shows later is on top of ours, never a false alarm.
+    let events: SubmitFeedbackEvent[];
+    try {
+      events = await ops.findFeedbackEvents(classId, sid, new Date(windowFrom.getTime() - 5_000));
+    } catch {
+      return unreadable("events");
+    }
+    const checked = checkEvents(events);
+    if (checked.problems.length > 0) return fail("verify_failed", checked.problems);
+    if (!checked.ours) return overdue ? fail("verify_failed", ["no_submit_event_after_2h"]) : { result: "awaiting_event", problems: [] };
+    try {
+      await store.settle(row.id, { outcome: "verified", verification: { recovery, event: serialized(checked.ours) } });
+    } catch (error) {
+      return settleFailed(error);
+    }
+    return { result: "verified", problems: [] };
+  }
+
+  // `posting`: the run stopped after its claim, before or after the POST — Wise shows which.
   const submissionId = stringOf(v.submissionId);
   const studentId = stringOf(v.studentWiseUserId);
   const baseSha = stringOf(v.baseFieldsSha256);
@@ -504,16 +558,7 @@ async function recoverOne(context: {
     ? v.baselineCredits as number[]
     : null;
   const billing = postedBilling(row.billing);
-  const postStartedAt = row.postStartedAt;
-  if (!row.wiseClassId || !submissionId || !studentId || !baseSha || !billing || !postStartedAt) {
-    return fail(failOutcome, ["row_incomplete_for_recovery"]);
-  }
-  const classId = row.wiseClassId;
-  const overdue = recoveredAt.getTime() - postStartedAt.getTime() > AUTOWRITER_EVENT_DEADLINE_MS;
-  const unreadable = (what: string) => overdue
-    ? fail(failOutcome, [`${what}_unreadable_after_2h`])
-    : Promise.resolve({ result: "read_failed" as const, problems: [`${what}_read_failed`] });
-
+  if (!submissionId || !studentId || !baseSha || !billing) return fail(failOutcome, ["row_incomplete_for_recovery"]);
   let detail: AutowriterSessionDetail;
   try {
     detail = parseAutowriterSessionDetail(await ops.getSessionDetail(classId, sid));
@@ -526,8 +571,6 @@ async function recoverOne(context: {
   } catch {
     return unreadable("credits");
   }
-  // The POST window starts at the first of the fresh reads (the events read; older rows: the session read).
-  const windowFrom = dateOf(v.eventsReadAt) ?? dateOf(v.freshReadAt) ?? new Date(postStartedAt.getTime() - 60_000);
   let events: SubmitFeedbackEvent[];
   try {
     events = await ops.findFeedbackEvents(classId, sid, new Date(windowFrom.getTime() - 5_000));
@@ -543,44 +586,27 @@ async function recoverOne(context: {
     ...verifyStoredSubmission(detail, { fields, billing: billingPlan, expected, mappings }),
     ...(creditsOk ? [] : ["credit_entries_changed"]),
   ];
-  const found = classifySubmitEvents(events, { apiActorId, freshReadAt: windowFrom, postStartedAt, postFinishedAt: dateOf(v.postFinishedAt) });
-  const extra = events.filter((event) => event !== found.ours && event.autoSubmitted !== true && event.actorId === apiActorId &&
-    event.at.getTime() >= windowFrom.getTime() - 5_000);
-  const eventProblems = [
-    ...(found.foreign.length > 0 ? ["foreign_submit_event_in_post_window"] : []),
-    ...(extra.length > 0 ? [`extra_api_save_in_post_window:${extra.length}`] : []),
-  ];
-  const recovery = { at: recoveredAt.toISOString(), from: row.outcome };
+  const checked = checkEvents(events);
 
   if (landedProblems.length === 0) {
-    if (eventProblems.length > 0) return fail("verify_failed", eventProblems);
-    // The session row takes the corrected text when the post leaves `posting` (as the executor does).
-    const session: CorrectionSessionUpdate | undefined = fromPosting
-      ? { fields, fieldsSha256: row.fieldsSha256, fromSha256: baseSha, at: recoveredAt, reason: row.reason ?? "agent correction" }
-      : undefined;
-    const next = found.ours ? "verified" : "awaiting_event";
-    if (!found.ours && overdue) return fail("verify_failed", ["no_submit_event_after_2h"]);
-    if (next === "verified" || fromPosting) {
-      try {
-        await store.settle(row.id, {
-          outcome: next,
-          verification: {
-            recovery,
-            landed: true,
-            event: found.ours ? { ...found.ours, at: found.ours.at.toISOString() } : null,
-          },
-          session,
-        });
-      } catch (error) {
-        const code = error instanceof CorrectionStoreError ? error.code : error instanceof Error ? error.name : "Error";
-        return fail("verify_failed", [`settle_failed:${code}`]);
-      }
+    if (checked.problems.length > 0) return fail("verify_failed", checked.problems);
+    if (!checked.ours && overdue) return fail("verify_failed", ["no_submit_event_after_2h"]);
+    const next = checked.ours ? "verified" : "awaiting_event";
+    try {
+      // The session row takes the corrected text as the post leaves `posting` (as the executor does).
+      await store.settle(row.id, {
+        outcome: next,
+        verification: { recovery, landed: true, event: checked.ours ? serialized(checked.ours) : null },
+        session: { fields, fieldsSha256: row.fieldsSha256, fromSha256: baseSha, at: recoveredAt, reason: row.reason ?? "agent correction" },
+      });
+    } catch (error) {
+      return settleFailed(error);
     }
     return { result: next, problems: [] };
   }
 
-  // The corrected text is not in Wise. Only a `posting` correction whose base text is untouched was simply not sent.
-  if (fromPosting && eventProblems.length === 0 && !found.ours && creditsOk) {
+  // The corrected text is not in Wise. Only a correction whose base text is untouched was simply not sent.
+  if (checked.problems.length === 0 && !checked.ours && creditsOk) {
     const [sessionRow] = await db.select({ state: S.state, fields: S.fields, fieldsSha256: S.fieldsSha256 })
       .from(S).where(eq(S.wiseSessionId, sid)).limit(1);
     const snapshot = teacherSubmissionSnapshot(detail);
@@ -595,7 +621,7 @@ async function recoverOne(context: {
       return { result: "not_sent", problems: [] };
     }
   }
-  return fail(failOutcome, [...landedProblems, ...eventProblems, ...(found.ours ? ["api_save_but_text_not_landed"] : [])]);
+  return fail(failOutcome, [...landedProblems, ...checked.problems, ...(checked.ours ? ["api_save_but_text_not_landed"] : [])]);
 }
 
 /**

@@ -4,6 +4,7 @@ import {
   type FeedbackFieldAnswers,
   type FeedbackFieldMapping,
 } from "@/lib/post-class-feedback/types";
+import { AUTOWRITER_POST_TIMEOUT_MS } from "./config";
 import { sqlStateOf } from "./db-errors";
 import {
   buildFeedbackPostBody,
@@ -787,6 +788,7 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
   // Our own submit event, and nobody else's save (nor a second API save) in the POST window — from the first of the
   // fresh reads to the POST's end — polled every 20 s for up to 5 min. A stranger's or a second save ends the wait.
   const waitMs = input.eventWaitMs ?? CORRECTION_EVENT_WAIT_MS;
+  const windowEndMs = (postFinishedAt?.getTime() ?? postStartedAt.getTime() + AUTOWRITER_POST_TIMEOUT_MS) + EVENT_SKEW_MS;
   const waitStartedAt = now().getTime();
   let found: { ours: SubmitFeedbackEvent | undefined; foreign: SubmitFeedbackEvent[]; extra: SubmitFeedbackEvent[] } =
     { ours: undefined, foreign: [], extra: [] };
@@ -795,8 +797,10 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
     try {
       const events = await ops.findFeedbackEvents(plan.wiseClassId, sid, new Date(eventsReadAt.getTime() - EVENT_SKEW_MS));
       const classified = classifySubmitEvents(events, { apiActorId: input.apiActorId, freshReadAt: eventsReadAt, postStartedAt, postFinishedAt });
+      // A second save by the API user inside the window; later ones are on top of ours (`classifySubmitEvents`).
       const extra = events.filter((event) => event !== classified.ours && event.autoSubmitted !== true &&
-        event.actorId === input.apiActorId && event.at.getTime() >= eventsReadAt.getTime() - EVENT_SKEW_MS);
+        event.actorId === input.apiActorId && event.at.getTime() >= eventsReadAt.getTime() - EVENT_SKEW_MS &&
+        event.at.getTime() <= windowEndMs);
       found = { ...classified, extra };
       eventsReadFailed = false;
     } catch {

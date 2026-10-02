@@ -867,6 +867,47 @@ describe("recovery of a correction a run left unsettled", () => {
     expect(other.postFeedback).not.toHaveBeenCalled();
   });
 
+  it("checks only the events of an awaiting_event correction: a later edit, charge or save in Wise is no false alarm", async () => {
+    const { seeded, postId, postStartedAt } = await interrupted();
+    await leaseRunOut();
+    const session = { fields: CORRECTED, fieldsSha256: fieldsHash(CORRECTED), fromSha256: fieldsHash(BASE), at: new Date(), reason: "synthetic" };
+    await store().settle(postId, { outcome: "awaiting_event", verification: { event: null }, session });
+    const later = new Date(postStartedAt.getTime() + 10 * 60_000);
+    const wise = fakeWise(clock(), [], {
+      // Since the correction a tutor edited the text and Wise charged again: on top of it, and never read here.
+      detailOn: () => postedDetail({ text: OTHER_TEXT }),
+      credits: [{ credit: 1 }, { credit: 1 }],
+      eventsBefore: [
+        save(seeded.verifiedAt, API_ACTOR, "OWNER"),
+        save(new Date(postStartedAt.getTime() + 1_000), API_ACTOR, "OWNER"),
+        save(later, TEACHER, "TEACHER"),
+        save(new Date(later.getTime() + 60_000), API_ACTOR, "OWNER"),
+      ],
+    });
+    expect(await recover(wise)).toEqual([{ postId, wiseSessionId: seeded.wiseSessionId, result: "verified", problems: [] }]);
+    expect(wise.getSessionDetail).not.toHaveBeenCalled();
+    expect(wise.getSessionCreditEntries).not.toHaveBeenCalled();
+    expect((await db.select().from(P).where(eq(P.id, postId)))[0]).toMatchObject({ outcome: "verified" });
+    expect(await db.select().from(I)).toEqual([]);
+  });
+
+  it.each([
+    ["after the POST window: on top of ours", 10 * 60_000, "verified", []],
+    ["inside the POST window: a second save", 30_000, "safety", ["extra_api_save_in_post_window:1"]],
+  ] as const)("counts an API save %s", async (_name, afterMs, result, problems) => {
+    const { seeded, postId, postStartedAt } = await interrupted();
+    await leaseRunOut();
+    const wise = fakeWise(clock(), [], {
+      detailOn: () => postedDetail({ text: CORRECTED }),
+      eventsBefore: [
+        save(seeded.verifiedAt, API_ACTOR, "OWNER"),
+        save(new Date(postStartedAt.getTime() + 1_000), API_ACTOR, "OWNER"),
+        save(new Date(postStartedAt.getTime() + afterMs), API_ACTOR, "OWNER"),
+      ],
+    });
+    expect(await recover(wise)).toEqual([{ postId, wiseSessionId: seeded.wiseSessionId, result, problems }]);
+  });
+
   it("gives an awaiting_event correction 2 h for its event, then halts", async () => {
     const { seeded, postId } = await interrupted();
     await leaseRunOut();
