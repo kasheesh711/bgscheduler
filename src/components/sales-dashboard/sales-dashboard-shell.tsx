@@ -240,8 +240,12 @@ export function SalesDashboardShell() {
 
   async function importProjectionSource() {
     await runAction("projection-import", async () => {
-      const payload = await postJson("/api/sales-dashboard/projection-import") as { result?: { projectionMonths?: number; targetMonthlyRevenue?: number } };
-      setMessage(`Projection refreshed: ${payload.result?.projectionMonths ?? 0} monthly scenario rows imported.`);
+      const payload = await postJson("/api/sales-dashboard/projection-import") as { result?: { projectionMonths?: number; targetMonthlyRevenue?: number; skipped?: boolean; message?: string } };
+      setMessage(
+        payload.result?.skipped
+          ? payload.result.message ?? "Projection import is already running."
+          : `Projection refreshed: ${payload.result?.projectionMonths ?? 0} monthly scenario rows imported.`,
+      );
     });
   }
 

@@ -583,6 +583,8 @@ one active snapshot in a database transaction. Source run/fingerprint/revision/c
 imports idempotent; a failure preserves the previous active snapshot. The job never reads from or
 writes to WISE and never writes to Google Sheets.
 
+Runs are single-flight: the partial unique index `ur_sync_single_running_idx` ([`schema.ts:5182-5184`](../../src/lib/db/schema.ts)) allows one `running` row, each run first fails any `running` row older than 20 minutes ([`sync.ts:35`, `:549-567`](../../src/lib/unearned-revenue/sync.ts)), and a concurrent run returns `skipped: true` with `202`, naming the running run (`syncRunId`, `runningStartedAt`, `message`) ([`sync.ts:583-608`](../../src/lib/unearned-revenue/sync.ts), [`route.ts:16`](../../src/app/api/internal/sync-unearned-revenue/route.ts)).
+
 ### 19. Onsite foot traffic reconciliation — `/api/internal/sync-onsite-foot-traffic`
 
 | | |

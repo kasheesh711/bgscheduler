@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import {
   COMPETITOR_AI_PROMPT_VERSION,
   competitorAiModel,
@@ -40,6 +41,8 @@ type KeywordRow = typeof schema.competitorSerpKeywords.$inferSelect;
 export const STALE_RUNNING_COMPETITOR_SYNC_MS = 20 * 60 * 1000;
 const STALE_RUNNING_COMPETITOR_SYNC_ERROR =
   "Competitor intelligence sync marked failed because it was still running after 20 minutes; likely timed out or the request was aborted.";
+// Callers map any message containing "already running" to HTTP 409 / a skipped cron audit outcome.
+const COMPETITOR_SYNC_ALREADY_RUNNING_ERROR = "Competitor intelligence sync is already running";
 
 interface RunCounts {
   sourceCount: number;
@@ -505,14 +508,22 @@ export async function runCompetitorIntelligenceSync(input: {
     .where(eq(schema.competitorSyncRuns.status, "running"))
     .limit(1);
   if (running) {
-    throw new Error("Competitor intelligence sync is already running");
+    throw new Error(COMPETITOR_SYNC_ALREADY_RUNNING_ERROR);
   }
-  const [run] = await db.insert(schema.competitorSyncRuns)
-    .values({
-      triggerType: input.triggerType,
-      actorEmail,
-    })
-    .returning();
+  let run: typeof schema.competitorSyncRuns.$inferSelect;
+  try {
+    [run] = await db.insert(schema.competitorSyncRuns)
+      .values({
+        triggerType: input.triggerType,
+        actorEmail,
+      })
+      .returning();
+  } catch (error) {
+    // Lost the insert race to a concurrent run (competitor_sync_runs_single_running_idx):
+    // same outcome as the pre-check above, so every caller keeps mapping it to 409 / skipped.
+    if (sqlStateOf(error) === "23505") throw new Error(COMPETITOR_SYNC_ALREADY_RUNNING_ERROR);
+    throw error;
+  }
 
   const counts: RunCounts = {
     sourceCount: 0,

@@ -189,7 +189,7 @@ Accept → `acceptCompetitorTaskSuggestion` runs in two stages. The task insert 
 
 ## Tests
 
-Eight files, all in the `unit` project; there is no integration suite for this feature.
+Nine files, all in the `unit` project; there is no integration suite for this feature.
 
 | File | Covers |
 |---|---|
@@ -197,14 +197,15 @@ Eight files, all in the `unit` project; there is no integration suite for this f
 | [`__tests__/ai.test.ts`](../../src/lib/competitor-intelligence/__tests__/ai.test.ts) | Deterministic brief binds task suggestions to real item keys and emits no keyword/competitor discoveries; War Room Zod schema accepts a valid angle and rejects an unsupported channel. |
 | [`__tests__/budget.test.ts`](../../src/lib/competitor-intelligence/__tests__/budget.test.ts) | UTC month bucket, scoped-over-global cap resolution, hard-cap blocking, bounded usage ratio. |
 | [`__tests__/normalization.test.ts`](../../src/lib/competitor-intelligence/__tests__/normalization.test.ts) | Stable keys across parameter order and fragments; website pricing extraction; Apify Instagram/Facebook normalisation with metrics and media; DataForSEO rank observations with daily keys. |
-| [`__tests__/sync-guard.test.ts`](../../src/lib/competitor-intelligence/__tests__/sync-guard.test.ts) | `failStaleRunningCompetitorSyncs` cascades to source runs and AI runs, and touches nothing when no run is stale. |
+| [`__tests__/sync-guard.test.ts`](../../src/lib/competitor-intelligence/__tests__/sync-guard.test.ts) | `failStaleRunningCompetitorSyncs` cascades to source runs and AI runs, and touches nothing when no run is stale. `runCompetitorIntelligenceSync` single-flight claim: a lost run-insert race (raw, `DrizzleQueryError`-wrapped or a real `DrizzleQueryError` carrying `23505`) is mapped to the "already running" error, any non-unique insert failure is rethrown verbatim, and the pre-check keeps its text and never inserts while a run is live. |
 | [`__tests__/war-room.test.ts`](../../src/lib/competitor-intelligence/__tests__/war-room.test.ts) | Bangkok week/90-day bounds; matrix scoring, sorting, channel counts, coverage warnings and drill-down top evidence from fixture rows; the attention-score weighting on fixed components. |
 | [`src/app/api/competitor-intelligence/__tests__/route.test.ts`](../../src/app/api/competitor-intelligence/__tests__/route.test.ts) | `GET` returns `401` with no session and never touches data; the payload contract for `weeklyWarRoom`, `competitorMatrix`, `contentAngles`, `scoreDrilldowns`. |
 | [`own-sources/__tests__/route.test.ts`](../../src/app/api/competitor-intelligence/own-sources/__tests__/route.test.ts) | Access guard, listing, creating a BeGifted source for the signed-in user, disabling through `PATCH`. |
+| [`sync/__tests__/route.test.ts`](../../src/app/api/competitor-intelligence/sync/__tests__/route.test.ts) | `POST` through the real `runCompetitorIntelligenceSync` over a stubbed database: a lost run-insert race answers `409` `{"error":"Competitor intelligence sync is already running"}`, and a non-unique insert failure stays `500` with its own message. |
 
 Cross-cutting pins: [`src/__tests__/vercel-crons.test.ts:20`](../../src/__tests__/vercel-crons.test.ts) fixes the `28 18 * * 0` expression; [`src/lib/navigation/__tests__/tools.test.ts:37`, `:67`](../../src/lib/navigation/__tests__/tools.test.ts) assert the tool is the sole member of *Market Intelligence*.
 
-**Not covered**, as far as reading all eight files above shows — no coverage report was run, so treat this as an inventory of what the suites assert rather than a proof of zero incidental reach: `runCompetitorIntelligenceSync` end to end (only the stale-run guard is tested), every provider in `providers.ts` (network), `getCompetitorIntelligencePayload` and the KPI derivations in `data.ts`, the `manual-evidence`, `sources`, `tasks`, `task-suggestions` and `sync` app routes, the internal cron route, `regenerateWarRoomSnapshot`'s persistence, and the dashboard component.
+**Not covered**, as far as reading all nine files above shows — no coverage report was run, so treat this as an inventory of what the suites assert rather than a proof of zero incidental reach: `runCompetitorIntelligenceSync` end to end (only the stale-run guard and the single-flight claim — the running pre-check and the lost insert race — are tested), every provider in `providers.ts` (network), `getCompetitorIntelligencePayload` and the KPI derivations in `data.ts`, the `manual-evidence`, `sources`, `tasks` and `task-suggestions` app routes, the internal cron route, `regenerateWarRoomSnapshot`'s persistence, and the dashboard component.
 
 ## Open questions
 

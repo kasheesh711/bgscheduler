@@ -62,6 +62,16 @@ Recorded so nobody re-opens them, and so any doc still asserting the old state c
   `cron-registry.ts:370-383` (`manualOnly: true`), a `run-job.ts:197` dispatch branch, a dashboard
   button, an npm script and a registry test. It still has no `vercel.json` entry — that is OPS-2/OPS-22,
   not an oversight in the registry.
+- **DATA-7 (projection-import bullet) and OPS-3 (projection lineage) — FIXED** by quick task 260929-lnu
+  (`fix/single-flight-guard-deviations`). `importSalesDashboardProjectionSource` now acquires its run
+  through `acquireSalesProjectionImportRun` (`src/lib/sales-dashboard/import-guard.ts:322-362`): a
+  per-source 20-minute stale sweep with no status restore (`:257-280`), a running pre-check that returns a
+  `skipped: true, alreadyRunning: true` outcome naming the live run, and a cause-aware `23505` race path
+  that re-reads the winner or rethrows the original error. `src/lib/sales-dashboard/data.ts:650-653`
+  returns the skipped outcome before the source row is touched, and the dashboard shows its message
+  (`src/components/sales-dashboard/sales-dashboard-shell.tsx:241-250`). **The DATA-7 bullet was also wrong
+  that the table lacks a single-flight index:** `sdpir_source_single_running_idx` (`schema.ts:804-806`)
+  has always been there; only the application guard was missing.
 
 ---
 
@@ -616,10 +626,6 @@ enumerate the four human values, but the log also carries `auto-clear`, `auto-re
 - `snapshots.active` has **no** database guard (`schema.ts:456-461`); single-activeness is upheld only
   by the orchestrator's bounded promotion `UPDATE` (`orchestrator.ts:489-496`). Every comparable
   "exactly one" in the schema uses a partial unique index. *Promote it?*
-- `sales_dashboard_projection_import_runs` has no single-flight partial unique index and
-  `importSalesDashboardProjectionSource` acquires no guard, unlike the per-source monthly path. Two
-  concurrent projection imports each insert months under their own run id; last writer wins the source
-  repoint (see OPS-3).
 - Neither `rcfd_scenario_month_idx` nor `rcpm_bucket_idx` is unique, so duplicate driver rows per
   (run, scenario, month) and duplicate package-hour buckets per run are representable.
 - The two proposals GiST exclusion constraints are scope-partitioned
@@ -784,14 +790,11 @@ Capacity dashboard therefore serves data as stale as the last operator run — a
 `room_utilization_sessions` table is the health-evidence fallback for five other registry keys
 (OPS-8). *Is adding a GET export plus a stagger slot the intended fix?*
 
-**OPS-3 — Four parked post-class jobs, plus a lineage with no stale-run recovery.** The admin digest
+**OPS-3 — Four parked post-class jobs.** The admin digest
 and both tutor reminders have been `manualOnly` since the reminder lane was parked; if they will never
 be scheduled, the `dangerous: true` + confirm gate is the only thing preventing an accidental tutor
 email from the Data Health UI. `settings-tab.tsx:404` still tells access managers the admin digest
-runs "Daily at 08:00 Bangkok". Separately, the **projection** import lineage has neither a stale sweep
-nor a skip path (`sales-dashboard/data.ts:641-650`): a run left `running` blocks every later projection
-import via `sdpir_source_single_running_idx` until repaired by hand, unlike the monthly path's
-`acquireSalesImportRun` recovery.
+runs "Daily at 08:00 Bangkok".
 
 **OPS-4 — `student_promotions_july_1` will fail every year from 2027, permanently alerting.** It is the
 only scheduled route not wrapped in `withCronInvocationAudit`, so it writes no `cron_invocations` row

@@ -69,7 +69,7 @@ Per-source import side effects (run rows, `refreshing` status, row inserts, stat
 **Response 200** — `{ ok: true, results, projectionResult }` ([`route.ts:61`](../../../src/app/api/internal/sync-sales-dashboard/route.ts)):
 
 - `results` — an array of per-source outcomes, one entry per source that was actually attempted (auto-finalized and non-refreshable sources contribute nothing). Each is either a `SalesDashboardImportResult` `{ sourceId, runId, normalRows, additionalRows, staleRunningImportsFailed }` or a `SkippedSalesDashboardImportResult` `{ sourceId, runId, normalRows: 0, additionalRows: 0, skipped: true, alreadyRunning: true, runningStartedAt, message, staleRunningImportsFailed }` ([`import-guard.ts:16-40,148-165`](../../../src/lib/sales-dashboard/import-guard.ts)).
-- `projectionResult` — `{ sourceId, runId, projectionMonths, targetMonthlyRevenue }` ([`data.ts:707-712`](../../../src/lib/sales-dashboard/data.ts)), or `null` when no active projection source exists.
+- `projectionResult` — `{ sourceId, runId, projectionMonths, targetMonthlyRevenue, staleRunningImportsFailed }` ([`data.ts:712-718`](../../../src/lib/sales-dashboard/data.ts)); the **skipped** outcome described under [`POST /api/sales-dashboard/projection-import`](#post-apisales-dashboardprojection-import) when a projection import is already running ([`import-guard.ts:304-320`](../../../src/lib/sales-dashboard/import-guard.ts)); or `null` when no active projection source exists.
 
 **Status codes:**
 
@@ -231,18 +231,19 @@ Re-imports the single active Bear/Base/Bull scenario workbook. Handler: [`projec
 
 **Side effects** (`importSalesDashboardProjectionSource`, [`data.ts:633-726`](../../../src/lib/sales-dashboard/data.ts)):
 
-- Inserts a `sales_dashboard_projection_import_runs` row with `status: "running"`, `triggerType: "manual"`, `actorEmail`, and clears the source's `lastImportError` ([`data.ts:641-655`](../../../src/lib/sales-dashboard/data.ts)). There is **no** single-flight guard on this table — concurrent projection imports are not prevented.
+- Acquires a run through `acquireSalesProjectionImportRun` ([`data.ts:643-655`](../../../src/lib/sales-dashboard/data.ts), [`import-guard.ts:322-362`](../../../src/lib/sales-dashboard/import-guard.ts)): it first fails any projection run for the source still `running` after 20 minutes (`failStaleSalesDashboardProjectionImports`, [`import-guard.ts:257-280`](../../../src/lib/sales-dashboard/import-guard.ts)); if another run is live — found by the pre-check, or by re-reading after a lost `23505` insert race — it returns a **skipped** outcome (see **Response 200**) and writes nothing else; otherwise it inserts a `sales_dashboard_projection_import_runs` row with `status: "running"`, `triggerType: "manual"`, `actorEmail` and `startedAt`. The partial unique index `sdpir_source_single_running_idx` ([`schema.ts:804-806`](../../../src/lib/db/schema.ts)) remains the arbiter.
+- Only once the run row exists, clears the source's `lastImportError` ([`data.ts:657-660`](../../../src/lib/sales-dashboard/data.ts)), so a skipped request never touches the source row.
 - Requires all three configured sheets to exist by name (`Summary`, `What_If`, `Calc_Multi` by default), throwing ``Projection workbook is missing <purpose> sheet "<name>"`` otherwise ([`data.ts:603-606`](../../../src/lib/sales-dashboard/data.ts)); fetches and parses them ([`data.ts:608-631`](../../../src/lib/sales-dashboard/data.ts)).
 - Inserts one `sales_dashboard_projection_months` row per scenario-month under the new `import_run_id` (chunks of 500), then marks the run `success` with `monthRowCount`, `targetMonthlyRevenue`, and the parsed `metadata` (which carries `scenarioSummaries`), and repoints the source's `lastSuccessfulImportRunId` / `lastImportedAt` / `lastProjectionMonthCount` / `lastTargetMonthlyRevenue` ([`data.ts:658-706`](../../../src/lib/sales-dashboard/data.ts)).
 - Invalidates the `sales-dashboard` cache tag; on failure marks the run `failed`, writes `lastImportError` on the source, invalidates the tag, and re-throws ([`data.ts:706,713-725`](../../../src/lib/sales-dashboard/data.ts)).
 
-**Response 200** — `{ ok: true, result }` with `result = { sourceId, runId, projectionMonths, targetMonthlyRevenue }` ([`projection-import/route.ts:22`](../../../src/app/api/sales-dashboard/projection-import/route.ts), [`data.ts:707-712`](../../../src/lib/sales-dashboard/data.ts)).
+**Response 200** — `{ ok: true, result }` ([`projection-import/route.ts:22`](../../../src/app/api/sales-dashboard/projection-import/route.ts)). For a completed import, `result = { sourceId, runId, projectionMonths, targetMonthlyRevenue, staleRunningImportsFailed }` ([`data.ts:712-718`](../../../src/lib/sales-dashboard/data.ts)). When another projection import already holds the slot, `result` is instead the **skipped** outcome `{ sourceId, runId, projectionMonths: 0, targetMonthlyRevenue: null, skipped: true, alreadyRunning: true, runningStartedAt, message: "Sales dashboard projection import is already running.", staleRunningImportsFailed }`, whose `runId` names the run that is already running ([`import-guard.ts:55-69`](../../../src/lib/sales-dashboard/import-guard.ts), [`:304-320`](../../../src/lib/sales-dashboard/import-guard.ts)) — still an HTTP **200**, not a 409 — and the dashboard shows its `message` ([`sales-dashboard-shell.tsx:241-250`](../../../src/components/sales-dashboard/sales-dashboard-shell.tsx)).
 
 **Status codes:**
 
 | Status | When |
 |--------|------|
-| 200 | Import completed. |
+| 200 | Import completed, **or** skipped because a projection import is already running (`result.skipped: true`). |
 | 401 | No session email. |
 | 409 | No active projection source — body `{"error":"No projection source configured."}` ([`projection-import/route.ts:19-21`](../../../src/app/api/sales-dashboard/projection-import/route.ts)); **or** `MissingGoogleSheetsTokenError` ([`projection-import/route.ts:25`](../../../src/app/api/sales-dashboard/projection-import/route.ts)). The two cases share a status and are distinguishable only by message. |
 | 500 | Any other thrown error, including a missing sheet tab. |
