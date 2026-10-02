@@ -20,7 +20,11 @@ export const CLAUDE_EFFORT = "max";
 export const CLAUDE_DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
 /** Output by another model above this is not "helper noise": the answer is not Opus 5.5's. */
 const OTHER_MODEL_OUTPUT_LIMIT = 500;
-/** An answer longer than this is a runaway, not an audit. */
+/**
+ * A VISIBLE answer (output minus thinking) longer than this is a runaway, not an audit. Thinking is not counted: at max
+ * effort a long lesson can think for more than 60k tokens (2 Oct), and the call's spend is already bounded by
+ * `--max-budget-usd`.
+ */
 const MAX_OPUS_OUTPUT_TOKENS = 60_000;
 const MAX_STDOUT_BYTES = 20 * 1024 * 1024;
 const KILL_GRACE_MS = 10_000;
@@ -256,7 +260,8 @@ export function parseClaudeEnvelope(stdout: string, stderr: string, code: number
     return { kind: "cli_error", reason: "model_proof:no_opus_usage", proof };
   }
   if (others.length > 0) return { kind: "cli_error", reason: `model_proof:other_model_output:${others.join(",")}`, proof };
-  if (num(usage[opusKey]?.outputTokens) > MAX_OPUS_OUTPUT_TOKENS) return { kind: "cli_error", reason: "oversized_output", proof };
+  const visibleOutput = num(usage[opusKey]?.outputTokens) - num(usage[opusKey]?.thinkingTokens);
+  if (visibleOutput > MAX_OPUS_OUTPUT_TOKENS) return { kind: "cli_error", reason: "oversized_output", proof };
   return { kind: "success", value, proof: proof! };
 }
 
