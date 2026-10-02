@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import {
   COMPETITOR_AI_PROMPT_VERSION,
   competitorAiModel,
@@ -79,13 +80,6 @@ function bangkokDateIso(now = new Date()): string {
 function compactError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.length > 500 ? `${message.slice(0, 500)}...` : message;
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  // drizzle-orm wraps driver errors in DrizzleQueryError; the SQLSTATE is on `.cause`.
-  const candidate = err as { code?: unknown; cause?: { code?: unknown } };
-  return candidate.code === "23505" || candidate.cause?.code === "23505";
 }
 
 export async function failStaleRunningCompetitorSyncs(db: Database, now: Date): Promise<number> {
@@ -527,7 +521,7 @@ export async function runCompetitorIntelligenceSync(input: {
   } catch (error) {
     // Lost the insert race to a concurrent run (competitor_sync_runs_single_running_idx):
     // same outcome as the pre-check above, so every caller keeps mapping it to 409 / skipped.
-    if (isUniqueViolation(error)) throw new Error(COMPETITOR_SYNC_ALREADY_RUNNING_ERROR);
+    if (sqlStateOf(error) === "23505") throw new Error(COMPETITOR_SYNC_ALREADY_RUNNING_ERROR);
     throw error;
   }
 
