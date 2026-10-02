@@ -1,5 +1,6 @@
 import { and, asc, count, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
-import { createAppsScriptScheduleEmailSender, type ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
+import { type ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
+import { createOutboundEmailSender } from "@/lib/email/outbound";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { pushLineTextMessage } from "@/lib/line/client";
@@ -134,7 +135,7 @@ export async function drainIncidentOutbox(
       try {
         if (target.startsWith("email:")) {
           const to = target.slice("email:".length);
-          emailSender ??= createAppsScriptScheduleEmailSender("primary", { strictOutcome: true });
+          emailSender ??= createOutboundEmailSender("primary", { strictOutcome: true });
           await emailSender.sendEmail({
             to,
             subject: `Feedback autowriter: ${incident.severity} — ${incident.summary.slice(0, 120)}`,

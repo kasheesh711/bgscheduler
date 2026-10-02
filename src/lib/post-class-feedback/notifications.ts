@@ -19,10 +19,10 @@ import {
 } from "drizzle-orm";
 
 import {
-  createAppsScriptScheduleEmailSender,
   type ScheduleEmailSender,
   type ScheduleEmailSenderKey,
 } from "@/lib/classrooms/schedule-email";
+import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { WISE_LEARN_ORIGIN, wiseSessionLink } from "@/lib/wise/links";
@@ -191,8 +191,8 @@ export function shouldRecoverPostClassSendingAttempt(input: {
 
 function defaultSenders(): PostClassNotificationSenders {
   return {
-    primary: createAppsScriptScheduleEmailSender("primary"),
-    backup: createAppsScriptScheduleEmailSender("backup"),
+    primary: createOutboundEmailSender("primary"),
+    backup: createOutboundEmailSender("backup"),
   };
 }
 
@@ -1211,7 +1211,7 @@ export async function sendPostClassTestEmail(
   actorEmail: string,
   recipientEmail: string,
   db: Database = getDb(),
-  sender: ScheduleEmailSender = createAppsScriptScheduleEmailSender("primary"),
+  sender: ScheduleEmailSender = createOutboundEmailSender("primary"),
   senderKey: "primary" | "backup" = "primary",
 ) {
   const recipient = normalizeEmail(recipientEmail);

@@ -23,15 +23,29 @@ function encodedSubject(subject: string): string {
   return words.join("\r\n ");
 }
 
-function mime(input: ScheduleEmailSendInput): string {
-  if (!/^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/.test(input.to) || /[\r\n]/.test(input.subject) || !input.idempotencyKey) {
+export interface GmailSenderHeaders {
+  /** Display name on the From header; defaults to "BeGifted". */
+  senderName?: string;
+  /** Reply-To address; defaults to the sending mailbox. */
+  replyTo?: string;
+}
+
+const EMAIL_ADDRESS = /^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/;
+
+function mime(input: ScheduleEmailSendInput, headers: GmailSenderHeaders = {}): string {
+  if (!EMAIL_ADDRESS.test(input.to) || /[\r\n]/.test(input.subject) || !input.idempotencyKey) {
     throw new GmailRejection("Invalid reminder email headers.", true);
   }
+  const senderName = headers.senderName?.replace(/[\r\n"<>\\]/g, "").trim() || "BeGifted";
+  // RFC 5322: a display name with specials (comma, colon, …) must be quoted.
+  const displayName = !/^[\x20-\x7e]+$/.test(senderName) ? encodedSubject(senderName)
+    : /^[A-Za-z0-9 !#$%&'*+\-/=?^_`{|}~]+$/.test(senderName) ? senderName : `"${senderName}"`;
+  const replyTo = headers.replyTo && EMAIL_ADDRESS.test(headers.replyTo) ? headers.replyTo : FEEDBACK_MAILBOX;
   const key = createHash("sha256").update(input.idempotencyKey).digest("hex");
   const boundary = `feedback_${key}`;
   const body = (value: string) => Buffer.from(value, "utf8").toString("base64").match(/.{1,76}/g)?.join("\r\n") ?? "";
   return [
-    `From: BeGifted <${FEEDBACK_MAILBOX}>`, `Reply-To: ${FEEDBACK_MAILBOX}`, `To: ${input.to}`,
+    `From: ${displayName} <${FEEDBACK_MAILBOX}>`, `Reply-To: ${replyTo}`, `To: ${input.to}`,
     `Subject: ${encodedSubject(input.subject)}`, `Message-ID: <${key}@begiftededucation.com>`,
     "MIME-Version: 1.0", `Content-Type: multipart/alternative; boundary="${boundary}"`, "",
     `--${boundary}`, 'Content-Type: text/plain; charset="UTF-8"', "Content-Transfer-Encoding: base64", "", body(input.text),
@@ -41,9 +55,13 @@ function mime(input: ScheduleEmailSendInput): string {
 }
 
 /** Only explicit rejections are retryable. A Message-ID is not a Gmail idempotency key. */
-export function createGmailSender(accessToken: (force?: boolean) => Promise<string>, beforeSubmit?: () => Promise<void>): ScheduleEmailSender {
+export function createGmailSender(
+  accessToken: (force?: boolean) => Promise<string>,
+  beforeSubmit?: () => Promise<void>,
+  headers?: GmailSenderHeaders,
+): ScheduleEmailSender {
   return { async sendEmail(input) {
-    const raw = Buffer.from(mime(input)).toString("base64url");
+    const raw = Buffer.from(mime(input, headers)).toString("base64url");
     for (let authAttempt = 0; authAttempt < 2; authAttempt++) {
       let token: string;
       try { token = await accessToken(authAttempt === 1); }
@@ -68,7 +86,8 @@ export function createGmailSender(accessToken: (force?: boolean) => Promise<stri
         const limited = response.status === 429 || ["rateLimitExceeded", "userRateLimitExceeded", "dailyLimitExceeded"].includes(reason);
         const retry = response.headers.get("retry-after");
         const at = retry ? (/^\d+$/.test(retry) ? new Date(Date.now() + Number(retry) * 1000) : new Date(retry)) : null;
-        throw new GmailRejection(limited ? "Gmail sending limit reached; the queued reminder will retry."
+        const daily = reason === "dailyLimitExceeded";
+        throw new GmailRejection(limited ? `Gmail ${daily ? "daily " : ""}sending limit reached; the queued reminder will retry.`
           : `Gmail rejected the reminder (HTTP ${response.status}). Check the sender authorization and recipient.`,
         !limited, at && Number.isFinite(at.getTime()) ? at : null);
       }
