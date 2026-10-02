@@ -457,6 +457,79 @@ incident that was not delivered keeps the review job red (Data Health) until you
 Incidents → Open; its pushes stop too).
 
 
+## 10. Nightly audit
+
+Every night, on the owner's Mac, Opus 5.5 at max effort re-checks the AI posts of ONE Bangkok day (the day of
+now − 12 h; `--night=YYYY-MM-DD` to choose) against the lesson evidence and sorts every problem into the failure-mode
+registry ([feedback-autowriter-failure-modes.md](feedback-autowriter-failure-modes.md)). It reads only verified
+autowriter posts (a first-shot post by the autowriter itself) — never tutor-written feedback — and never writes to
+Wise. Its only database write is the agent flag (`flag --apply`), which puts a class back in the review list.
+
+```sh
+npx tsx --tsconfig scripts/tsconfig.json scripts/feedback-autowriter-nightly.ts <command> [--night=YYYY-MM-DD] [--json]
+```
+
+| Command | What it does |
+|---|---|
+| `status` | Run state, lock, STOP files, Wise cooldown, the night's spend (reads only). |
+| `preflight` | STOP files, the lock, a clean tree, `DATABASE_URL`/`WISE_USER_ID`/`WISE_API_KEY`, node ≥ 22, `claude --version`; writes `run.json`. |
+| `select [--sessions=a,b] [--force]` | The night's verified autowriter posts (database SELECTs only), newest first, at most 60; a text already audited at this audit version, or one that failed twice, is skipped. |
+| `collect [--retranscribe] [--soniox-usd=n] [--sessions=a,b]` | Evidence per class, cache-first: the retained ISEB lesson record (guided posts), one Wise session-detail GET (paced ≥ 5 s, never in the minutes production hits Wise, ≤ 200 a night; the first 429 parks Wise reads for 30 min and stops), the production Soniox transcript read-only (get/transcript only; rendered exactly as the second pass rendered it), Zoom's captions. `--retranscribe`: our own Soniox job for a transcript post whose production transcript is gone — reserved in the ledger first, deleted afterwards; `--soniox-usd` raises the night's Soniox cap (default $2) up to $5 for this run. Writes one bundle with deterministic prechecks per class. |
+| `audit [--smoke] [--plan] [--sessions=a,b]` | One `claude -p` per class (see below). `--smoke`: one tiny synthetic call that prints the proof; `--plan`: the estimate only. |
+| `report [--no-synthesis]` | Prechecks merged with audits, failure modes against the last 14 nights, the production spend and retry watchdog (M16), and one Opus synthesis call → `report.md`, `summary.md`, `plan.md`, `fix-brief.json`. |
+| `flag [--apply]` | One `agent` flag per class with a major or critical finding (at most 10 a night, criticals first) and a `critical_flag` incident for a high-confidence critical. A dry run unless `--apply`. |
+| `run [--apply-flags] [--retranscribe] [--soniox-usd=n] [--no-synthesis]` | preflight → select → collect → audit → report (→ flag), from the first unfinished step. Any stop ends the run with a partial report — never a retry loop. |
+| `prune [--dry-run]` | Deletes local evidence older than 7 days. |
+| `costs [--days=7]` | The last nights' spend. |
+
+`--no-deadline` (supervised runs only) ignores the 06:50 Bangkok stop.
+
+**The Opus calls.** Each audit is `claude -p --model claude-opus-5-5 --effort max --tools "" --output-format json
+--json-schema … --max-budget-usd 1.5 --no-session-persistence --permission-prompts none --strict-mcp-config --safe-mode
+--system-prompt-file …`, the prompt on stdin, in the empty `~/.bgscheduler-nightly/claude-cwd`, with only `HOME PATH
+USER LOGNAME SHELL LANG LC_ALL TMPDIR TERM` in its environment — so it runs on the owner's Claude Code subscription
+login, never an API key, and sees no database, Wise, OpenRouter or Soniox secret. An answer counts only when its
+`modelUsage` proves `claude-opus-5-5` wrote it (another model writing more than 500 tokens, or a fallback, fails
+closed); every call's argv, CLI version, usage and cost — never the prompt — is logged to `claude-calls.jsonl`, and the
+summary prints the proof as `Opus5.5max n/n`. One retry after 30 s for an unparseable answer or a CLI error only; a
+usage limit, an auth failure or two failures in a row end the stage.
+
+**Kill switches.** Either STOP file stops every step at once: `~/.bgscheduler-nightly/STOP` or
+`/Users/kevinhsieh/Developer/Scheduling/.feedback-autowriter/STOP` (the nightly writes the first itself when a cap was
+breached after the fact; delete it once you have looked). To stop it for good, disable the Desktop scheduled task
+`bgs-autowriter-nightly`. `~/.bgscheduler-nightly/config.json` (`{"caps": {…}}`) may only tighten the caps below.
+
+| Cap | Default |
+|---|---|
+| Classes a night | 60 |
+| Wise reads a night / pacing | 200 / ≥ 5 s apart |
+| Opus calls a night | 80 |
+| Per call (`--max-budget-usd`, API-equivalent) | audit $1.50 · re-audit $1.50 · synthesis $2 |
+| Claude a night / a week (API-equivalent, subscription) | $25 / $120 |
+| Soniox a night | $2 (`--soniox-usd` up to $5 for one run) |
+| OpenRouter a night | $3 |
+| Agent flags a night | 10 |
+| Stop | 06:50 Bangkok on the morning after the audited day |
+
+Every spend is reserved in `spend.jsonl` before it starts (a crash leaves the reservation counting at its estimate).
+
+**Outputs.** State lives outside every worktree: `$BGS_NIGHTLY_ROOT`, default `~/.bgscheduler-nightly/nightly`
+(directories 0700, files 0600; `~/.bgscheduler-nightly/backup/` is never touched). Real data — `cache/<sid>/` (Wise
+detail, transcripts, captions), `audits/<sid>/`, and each night's `bundles/`, `targets.json`, `report.md`, `plan.md` —
+is deleted after 7 days (`prune`). Kept: `run.json`, `summary.md` (counts, modes, costs, proof — no names or text),
+`claude-calls.jsonl`, `fix-brief.json` (sanitised: an invented fixture, refused if it carries a real name or an 8-word
+run copied from the evidence), and the root ledgers `ledger.jsonl` (ids, hashes, modes, verdicts, cost) and
+`costs.jsonl`.
+
+**Exit codes.** 0 ok/nothing, 1 error, 2 usage/config, 3 caps, 4 Claude usage limit/auth/model proof, 5 Wise
+throttled, 6 guard refused, 7 STOP/lock/deadline, 10 safety (a cap breached after the fact).
+
+**Replaying from the cache.** `scripts/autowrite-online-feedback.ts --replay --transcripts-from=~/.bgscheduler-nightly/nightly/cache
+--out=<dir> [--sessions=a,b] [--no-summary-draft] [--no-posted-judge] [--max-model-usd=n]` replays classes from the
+nightly's cached detail, transcript and captions: no Wise read and no Soniox job (a class without a cached transcript
+is skipped before any call); model calls go to OpenRouter as in any replay.
+
+
 ## Mimi style guide review and activation
 
 Keep `FEEDBACK_AUTOWRITER_MIMI_STYLE_ENABLED=false` until the owner has approved ten successful comparison drafts.
