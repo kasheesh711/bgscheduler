@@ -443,6 +443,28 @@ describe("buildEvidenceBundle", () => {
     expect(summaryIseb.wiseSummary).toBe("Overview: the summary the writer saw.");
   });
 
+  it("gives the auditor the frozen Atom evidence an ISEB post was written with", () => {
+    const base: RawEvidence = {
+      wiseSessionId: SID, detail: { data: detail() }, iseb: null, transcript: null, zoomVtt: null,
+      rowMeta: { speakerMethod: null, judge: null, joinedAsGuest: null },
+      status: { collectedAt: "", rowMeta: "read", iseb: "found", detail: "fetched", soniox: "missing", zoom: "none", retranscribe: "not_requested" },
+      notes: [],
+    };
+    const atom = { status: "matched", activities: [{ id: "a1", name: "Extra practice 3", sourceUrl: "https://x", questionIds: ["q"], total: 10, correct: 7 }], omissions: [], contradictions: [] };
+    const withAtom = buildEvidenceBundle({
+      target: target({ evidence: "summary" }), night: "2026-10-02",
+      raw: { ...base, iseb: { evidenceHash: "h", lessonRecord: "Overview: x", evidenceKind: "summary", atom: atom as never } },
+    });
+    expect(withAtom.atomEvidence).toContain("Extra practice 3");
+    expect(withAtom.atomEvidence).not.toContain("https://x");
+    const without = buildEvidenceBundle({
+      target: target({ evidence: "summary" }), night: "2026-10-02",
+      raw: { ...base, iseb: { evidenceHash: "h", lessonRecord: "Overview: x", evidenceKind: "summary", atom: null } },
+    });
+    expect(without.atomEvidence).toBeNull();
+    expect(withAtom.hash).not.toBe(without.hash);
+  });
+
   it("notes a rebuild that does not match the post's own record", async () => {
     const raw = await collected({ speakerMethod: "talk_share" });
     const bundle = buildEvidenceBundle({ target: target(), night: "2026-10-02", raw: { ...raw, rowMeta: { ...raw.rowMeta, speakerMethod: "unclear" } } });

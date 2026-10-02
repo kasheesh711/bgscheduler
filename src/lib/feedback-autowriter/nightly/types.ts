@@ -65,6 +65,12 @@ export interface EvidenceBundle {
   } | null;
   wiseSummary: string | null;
   zoomCaptions: string | null;
+  /**
+   * The frozen Atom practice-platform evidence the writer was given for an ISEB post (`atomModelEvidence` of the
+   * retained `feedback_iseb_evidence.atom`): activity names, scores and timings. Null when the post used none.
+   * Without it, every Atom score in a post looks invented to the auditor (2 Oct: a false critical).
+   */
+  atomEvidence?: string | null;
   postedEvidenceKind: "summary" | "transcript";
   scheduledMinutes: number | null;
   storedJudge: unknown;

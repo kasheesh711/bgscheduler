@@ -4,7 +4,8 @@ import { and, eq } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { POST_CLASS_FEEDBACK_FIELDS } from "@/lib/post-class-feedback/types";
-import { evidenceHash } from "../atom/evidence";
+import { atomModelEvidence, evidenceHash } from "../atom/evidence";
+import type { AtomLessonEvidence } from "../atom/types";
 import { chooseStudentDisplayName, describeClass } from "../prompt";
 import { rosterTutor } from "../roster";
 import {
@@ -186,6 +187,8 @@ export interface IsebRecord {
   evidenceHash: string;
   lessonRecord: string;
   evidenceKind: "summary" | "transcript";
+  /** The frozen Atom evidence retained with the record (null when the post had none; absent in caches older than 3 Oct). */
+  atom?: AtomLessonEvidence | null;
 }
 
 /** What the autowriter's row says about how the post was written (SELECT only). */
@@ -248,7 +251,7 @@ export function dbEvidenceSources(db: Database): EvidenceSources {
       };
     },
     async isebRecord(wiseSessionId, hash) {
-      const [row] = await db.select({ evidenceHash: E.evidenceHash, lessonRecord: E.lessonRecord, evidenceKind: E.evidenceKind })
+      const [row] = await db.select({ evidenceHash: E.evidenceHash, lessonRecord: E.lessonRecord, evidenceKind: E.evidenceKind, atom: E.atom })
         .from(E).where(and(eq(E.wiseSessionId, wiseSessionId), eq(E.evidenceHash, hash))).limit(1);
       return row ?? null;
     },
@@ -450,6 +453,8 @@ export async function collectRawEvidence(deps: CollectDeps, target: NightlyTarge
     // a. The writer's exact input, retained for guided posts.
     const lessonHash = typeof target.pipeline?.lessonEvidenceHash === "string" ? target.pipeline.lessonEvidenceHash : null;
     let iseb = readJsonFile<IsebRecord>(file("iseb.json"));
+    // A record cached before the Atom evidence was kept (2 Oct) is read again.
+    if (iseb && !("atom" in iseb)) iseb = null;
     if (iseb) {
       status.iseb = "cached";
     } else if (lessonHash) {
@@ -729,6 +734,7 @@ export function buildEvidenceBundle(input: { target: NightlyTarget; night: strin
     transcript,
     wiseSummary,
     zoomCaptions,
+    atomEvidence: raw.iseb?.atom ? atomModelEvidence(raw.iseb.atom) || null : null,
     postedEvidenceKind: target.evidence,
     scheduledMinutes,
     storedJudge: raw.rowMeta.judge ?? target.pipeline?.factualVerdicts ?? null,
