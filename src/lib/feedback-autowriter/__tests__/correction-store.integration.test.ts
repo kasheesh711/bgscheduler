@@ -872,6 +872,14 @@ describe("recovery of a correction a run left unsettled", () => {
     expect(await readControl(db)).toMatchObject({ haltedAt: null, haltReason: null });
   });
 
+  it("leaves the lock while an agent correction is unsettled, though its lease is over", async () => {
+    const { postId } = await interrupted();
+    await leaseRunOut();
+    expect(await releaseStaleCorrectionLock(db)).toBe(false);
+    expect(isCorrectionLockReason((await readControl(db)).haltReason)).toBe(true);
+    expect((await db.select().from(P).where(eq(P.id, postId)))[0]).toMatchObject({ outcome: "posting" });
+  });
+
   it("counts a correction stale only once its lease is over plus five minutes", async () => {
     expect(CORRECTION_STALE_AFTER_MS).toBe(CORRECTION_LOCK_LEASE_MS + 5 * 60_000);
     const ops = fakeWise(clock(), []);

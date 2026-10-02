@@ -58,6 +58,8 @@ interface StoreOptions {
   onRecord?: () => void;
   /** Settle calls (1-based) that throw. */
   settleFails?: number[];
+  /** The incident write throws. */
+  incidentFails?: boolean;
   /** The database clock against the test clock (Wise's agrees with the database's). */
   dbOffsetMs?: number;
   /** databaseNow calls (1-based) that throw. */
@@ -130,6 +132,7 @@ function memoryStore(log: string[], time: Clock, options: StoreOptions = {}) {
     },
     async incident(input: { dedupeKey: string; summary: string; detail: Record<string, unknown>; wiseSessionId: string }) {
       log.push("store:incident");
+      if (options.incidentFails) throw Object.assign(new Error("db down"), { code: "57P01" });
       store.incidents.push(input);
     },
   };
@@ -922,12 +925,23 @@ describe("correctPostGuarded: what the one POST did", () => {
     expect(result.store.releases).toBe(0);
   });
 
-  it("reports a settle or incident that fails on the safety path without hiding the halt", async () => {
+  it("reports a settle that fails on the safety path without hiding the halt", async () => {
     const result = await run({ wise: { creditsAfterPost: [] }, store: { settleFails: [1] } });
     expect(result.outcome).toMatchObject({ status: "safety" });
     if (result.outcome.status !== "safety") throw new Error("unreachable");
     expect(result.outcome.problems).toEqual(["credit_entries_changed:[1]->[]", "settle_failed:Error"]);
     expect(result.store.halts).toHaveLength(1);
     expect(result.store.incidents).toHaveLength(1);
+  });
+
+  it("reports an incident that cannot be written on the safety path: halted and settled all the same, lock kept", async () => {
+    const result = await run({ wise: { creditsAfterPost: [] }, store: { incidentFails: true } });
+    expect(result.outcome).toEqual({
+      status: "safety", postId: "post-1", problems: ["credit_entries_changed:[1]->[]", "incident_failed:57P01"],
+    });
+    expect(result.log.filter((entry) => /^store:(halt|settle|incident|release)/u.test(entry)))
+      .toEqual(["store:halt", "store:settle:verify_failed", "store:incident"]);
+    expect(result.store.settles).toMatchObject([{ outcome: "verify_failed" }]);
+    expect(result.store.releases).toBe(0);
   });
 });

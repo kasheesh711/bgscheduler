@@ -5,8 +5,12 @@ import type { PostResult, SubmitFeedbackEvent } from "../submit";
 import type { WiseFeedbackPostBody } from "../types";
 import { GOOD_FIELDS, QUESTIONS, STUDENT_NAME, autoBlankSubmission, sessionDetail } from "./fixtures";
 
-/** Shared fakes for the agent-correction tests (unit and integration). Synthetic ids and invented lesson text only. */
+/**
+ * Shared fakes for the agent-correction tests (unit and integration). Invented lesson text, and synthetic ids except
+ * `API_ACTOR` and the roster's teacher ids.
+ */
 
+/** The real Wise API user id behind our key (`WISE_USER_ID`), already public in this repo's tests and plans: our saves. */
 export const API_ACTOR = "69366668c05630afe5d8a2a4";
 export const OTHER_TEACHER = "6a00000000000000000000aa";
 export const OTHER_STUDENT = "6a00000000000000000000bb";
