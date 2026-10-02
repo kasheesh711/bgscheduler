@@ -62,9 +62,11 @@ export interface RunState {
   auditVersion: number;
   steps: Partial<Record<StepName, StepRecord>>;
   /** Preflight facts: the code that ran, the CLI version, the caps in force. */
-  code?: { head: string | null; branch: string | null; dirty: boolean } | null;
+  code?: { head: string | null; branch: string | null; dirty: boolean; onMain?: boolean | null } | null;
   claudeCliVersion?: string | null;
   caps?: NightlyCaps;
+  /** The last preflight passed only because of `--supervised` (code not on origin/main and not pinned). */
+  supervised?: boolean;
 }
 
 export interface StepResult {
@@ -137,14 +139,20 @@ export interface PreflightFacts {
   nodeVersion: string;
   missingEnv: string[];
   optionalEnvMissing: string[];
-  code: { head: string | null; branch: string | null; dirty: boolean } | null;
+  /** `onMain`: HEAD is reachable from origin/main (null: origin/main unknown — treated as not). */
+  code: { head: string | null; branch: string | null; dirty: boolean; onMain?: boolean | null } | null;
   claudeCliVersion: string | null;
   lock: { ok: true } | { ok: false; reason: string; holder: unknown };
+  /** The commit the owner pinned in `~/.bgscheduler-nightly/config.json` (`runnerSha`), if any. */
+  pinnedSha?: string | null;
+  /** `--supervised`: the owner is watching this run from reviewed code that is not on origin/main yet. */
+  supervised?: boolean;
 }
 
 /**
- * STOP, the deadline, the lock, a clean tree, the environment, node ≥ 22 and a working `claude` CLI (2.1.x or later);
- * writes `run.json`.
+ * STOP, the deadline, the lock, a clean tree of reviewed code (HEAD on origin/main, the owner's pinned `runnerSha`, or
+ * an explicit `--supervised`, which is recorded), the environment, node ≥ 22 and a working `claude` CLI (2.1.x or
+ * later); writes `run.json`.
  */
 export function stepPreflight(ctx: NightContext, facts: PreflightFacts): StepResult {
   const stop = stopBeforeStep(ctx);
@@ -155,6 +163,10 @@ export function stepPreflight(ctx: NightContext, facts: PreflightFacts): StepRes
   if (facts.missingEnv.length > 0) problems.push(`env_missing:${facts.missingEnv.join(",")}`);
   if (!facts.code) problems.push("not_a_git_checkout");
   else if (facts.code.dirty) problems.push("dirty_tree");
+  // Unattended runs only run reviewed code: anything on origin/main, or the one commit the owner pinned.
+  const pinned = Boolean(facts.pinnedSha && facts.code?.head?.toLowerCase().startsWith(facts.pinnedSha.toLowerCase()));
+  const runner = { onMain: facts.code?.onMain ?? null, pinned, supervised: facts.supervised === true };
+  if (facts.code && !runner.onMain && !pinned && !runner.supervised) problems.push("runner_not_on_main");
   // Every reasoning step is a `claude -p` call: without a working, recent CLI the night cannot audit anything.
   if (!facts.claudeCliVersion) problems.push("claude_cli_missing");
   else if (!claudeVersionSupported(facts.claudeCliVersion)) problems.push("claude_cli_unsupported");
@@ -170,6 +182,7 @@ export function stepPreflight(ctx: NightContext, facts: PreflightFacts): StepRes
     deadline: ctx.deadline?.toISOString() ?? null,
     nodeVersion: facts.nodeVersion,
     code: facts.code,
+    runner,
     claudeCliVersion: facts.claudeCliVersion,
     optionalEnvMissing: facts.optionalEnvMissing,
     wiseCooldownUntil: cooldown?.toISOString() ?? null,
@@ -181,6 +194,7 @@ export function stepPreflight(ctx: NightContext, facts: PreflightFacts): StepRes
   }
   const state = recordStep(ctx, "preflight", { status: "done", stop: null, summary }, {
     code: facts.code, claudeCliVersion: facts.claudeCliVersion, caps: ctx.caps, auditVersion: AUDIT_VERSION,
+    supervised: runner.supervised,
   });
   return result({ summary, next: nextStep(state, "preflight") });
 }

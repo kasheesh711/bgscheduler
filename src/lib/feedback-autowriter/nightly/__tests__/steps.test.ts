@@ -59,7 +59,7 @@ const goodFacts: PreflightFacts = {
   nodeVersion: "v22.22.2",
   missingEnv: [],
   optionalEnvMissing: [],
-  code: { head: "abc123", branch: "feat/autowriter-nightly-audit", dirty: false },
+  code: { head: "abc123def456", branch: "main", dirty: false, onMain: true },
   claudeCliVersion: "2.1.287 (Claude Code)",
   lock: { ok: true },
 };
@@ -88,6 +88,15 @@ describe("stepPreflight", () => {
 
   it("refuses a dirty tree, missing environment or an old node (6), a held lock or STOP (7)", () => {
     expect(stepPreflight(context(), { ...goodFacts, code: { ...goodFacts.code!, dirty: true } })).toMatchObject({ ok: false, stop: "dirty_tree", exitCode: 6 });
+    // Only reviewed code runs: origin/main, the pinned commit, or an explicit --supervised.
+    const branch = { ...goodFacts, code: { ...goodFacts.code!, branch: "feat/x", onMain: false } };
+    expect(stepPreflight(context(), branch)).toMatchObject({ ok: false, stop: "runner_not_on_main", exitCode: 6 });
+    expect(stepPreflight(context(), { ...branch, code: { ...branch.code, onMain: null } })).toMatchObject({ stop: "runner_not_on_main" });
+    expect(stepPreflight(context(), { ...branch, pinnedSha: "abc123d" })).toMatchObject({ ok: true, summary: { runner: { pinned: true, supervised: false } } });
+    expect(stepPreflight(context(), { ...branch, pinnedSha: "fff0000" })).toMatchObject({ stop: "runner_not_on_main" });
+    const supervisedCtx = context();
+    expect(stepPreflight(supervisedCtx, { ...branch, supervised: true })).toMatchObject({ ok: true, summary: { runner: { onMain: false, supervised: true } } });
+    expect(readRunState(supervisedCtx).supervised).toBe(true);
     expect(stepPreflight(context(), { ...goodFacts, missingEnv: ["DATABASE_URL"] })).toMatchObject({ stop: "env_missing:DATABASE_URL", exitCode: 6 });
     expect(stepPreflight(context(), { ...goodFacts, nodeVersion: "v20.20.2" })).toMatchObject({ stop: "node_v20.20.2_below_22", exitCode: 6 });
     expect(stepPreflight(context(), { ...goodFacts, lock: { ok: false, reason: "held", holder: { pid: 1 } } })).toMatchObject({ stop: "locked", exitCode: 7 });

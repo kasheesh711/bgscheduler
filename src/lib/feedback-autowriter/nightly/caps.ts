@@ -112,19 +112,27 @@ export function ownerConfigFile(home?: string): string {
   return path.join(nightlyHome(home), "config.json");
 }
 
-export type OwnerConfig = { ok: true; caps: Partial<NightlyCaps>; notes: string[] } | { ok: false; reason: string };
+export type OwnerConfig =
+  | {
+    ok: true;
+    caps: Partial<NightlyCaps>;
+    notes: string[];
+    /** A commit the owner reviewed and allows the nightly to run from (besides anything on origin/main). */
+    runnerSha: string | null;
+  }
+  | { ok: false; reason: string };
 
 /**
- * The owner's config: `{ "caps": { "maxTargets": 40, … } }` (keys may also sit at the top level). Missing file: no
- * changes. A file that does not parse is a config error (fail closed, never ignored); unknown keys and values of the
- * wrong type are noted and ignored.
+ * The owner's config: `{ "caps": { "maxTargets": 40, … }, "runnerSha": "<commit>" }` (cap keys may also sit at the top
+ * level). Missing file: no changes. A file that does not parse, or a runnerSha that is not a 7–40 character hex commit,
+ * is a config error (fail closed, never ignored); unknown keys and values of the wrong type are noted and ignored.
  */
 export function loadOwnerConfig(file: string = ownerConfigFile()): OwnerConfig {
   let text: string;
   try {
     text = fs.readFileSync(file, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ok: true, caps: {}, notes: [] };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ok: true, caps: {}, notes: [], runnerSha: null };
     return { ok: false, reason: `owner config unreadable: ${(error as Error).message.slice(0, 120)}` };
   }
   let parsed: unknown;
@@ -140,7 +148,7 @@ export function loadOwnerConfig(file: string = ownerConfigFile()): OwnerConfig {
   const caps: Partial<NightlyCaps> = {};
   const notes: string[] = [];
   for (const [key, value] of Object.entries(source)) {
-    if (key === "caps") continue;
+    if (key === "caps" || key === "runnerSha") continue;
     if (!(key in NIGHTLY_CAPS)) {
       notes.push(`unknown key ignored: ${key}`);
       continue;
@@ -157,7 +165,11 @@ export function loadOwnerConfig(file: string = ownerConfigFile()): OwnerConfig {
     }
     (caps as Record<string, number>)[name] = value;
   }
-  return { ok: true, caps, notes };
+  const pinned = record.runnerSha;
+  if (pinned !== undefined && pinned !== null && (typeof pinned !== "string" || !/^[0-9a-f]{7,40}$/iu.test(pinned.trim()))) {
+    return { ok: false, reason: "runnerSha must be a 7-40 character hex commit" };
+  }
+  return { ok: true, caps, notes, runnerSha: typeof pinned === "string" ? pinned.trim().toLowerCase() : null };
 }
 
 /**

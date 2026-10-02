@@ -5,9 +5,11 @@
  *   npx tsx --tsconfig scripts/tsconfig.json scripts/feedback-autowriter-nightly.ts <command> [--night=YYYY-MM-DD] [--json]
  *
  * Commands (each prints ONE JSON line {ok, stop, next, summary} with --json; steps checkpoint into
- * <state root>/<night>/run.json and are idempotent — a finished step is not repeated):
+ * <state root>/<night>/run.json and are idempotent — cache-first, so running one again repeats no Wise read or paid call):
  *   status                         run state, lock, STOP files, Wise cooldown, tonight's spend (reads only)
- *   preflight                      STOP files, lock, clean tree, environment, node ≥ 22; writes run.json
+ *   preflight [--supervised]       STOP files, lock, a clean tree of reviewed code (HEAD on origin/main, or the
+ *                                  runnerSha pinned in the owner config; --supervised overrides, recorded),
+ *                                  environment, node ≥ 22, claude CLI ≥ 2.1; writes run.json
  *   select [--sessions=a,b] [--force]
  *                                  the night's verified autowriter posts to audit (database SELECTs only), merged into
  *                                  any earlier selection of the night (a class is never dropped), plus posts of the two
@@ -33,7 +35,8 @@
  *                                  then prune (not after a STOP file)
  *   prune [--dry-run]              delete local evidence older than 7 days (cache, audits, old nights' real data)
  *   costs [--days=7]               the last nights' spend from the local cost ledger
- * Global: --no-deadline (supervised runs only: ignore the 06:50 Bangkok stop).
+ * Global: --no-deadline (supervised runs only: ignore the 06:50 Bangkok stop); --supervised (preflight and run: allow
+ * reviewed code that is not on origin/main yet, recorded in run.json).
  *
  * State lives outside every worktree: $BGS_NIGHTLY_ROOT, default ~/.bgscheduler-nightly/nightly (0700 dirs, 0600 files).
  * Kill switches: ~/.bgscheduler-nightly/STOP and /Users/kevinhsieh/Developer/Scheduling/.feedback-autowriter/STOP.
@@ -128,10 +131,26 @@ function git(args: string[]): string | null {
   }
 }
 
-function codeFacts(): { head: string | null; branch: string | null; dirty: boolean } | null {
+/** Whether HEAD is reachable from origin/main (the local ref; null when it does not exist). */
+function headOnMain(): boolean | null {
+  if (git(["rev-parse", "--verify", "--quiet", "origin/main"]) === null) return null;
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", "HEAD", "origin/main"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function codeFacts(): { head: string | null; branch: string | null; dirty: boolean; onMain: boolean | null } | null {
   const head = git(["rev-parse", "HEAD"]);
   if (!head) return null;
-  return { head, branch: git(["rev-parse", "--abbrev-ref", "HEAD"]), dirty: (git(["status", "--porcelain", "--untracked-files=no"]) ?? "x") !== "" };
+  return {
+    head,
+    branch: git(["rev-parse", "--abbrev-ref", "HEAD"]),
+    dirty: (git(["status", "--porcelain", "--untracked-files=no"]) ?? "x") !== "",
+    onMain: headOnMain(),
+  };
 }
 
 async function fetchText(url: string): Promise<string> {
@@ -160,7 +179,7 @@ class Session {
   /** Our own Soniox jobs in flight (re-transcription), deleted by the signal handler. */
   readonly inFlight = new Set<string>();
 
-  constructor(readonly ctx: NightContext) {
+  constructor(readonly ctx: NightContext, readonly runnerSha: string | null) {
     this.ledger = NightlyLedger.open(ctx.paths.root, ctx.night, ctx.caps);
   }
 
@@ -209,6 +228,8 @@ function preflight(session: Session): StepResult {
     code: codeFacts(),
     claudeCliVersion: session.claude().cliVersion,
     lock: { ok: true },
+    pinnedSha: session.runnerSha,
+    supervised: flag("supervised"),
   });
 }
 
@@ -367,7 +388,7 @@ async function main(): Promise<void> {
     print(fail("locked", EXIT.stopped, { step: command, night, lock: { reason: lock.reason, holder: lock.holder, file: lock.file } }));
     return;
   }
-  const session = new Session(ctx);
+  const session = new Session(ctx, config.runnerSha);
   let handled = false;
   const onSignal = (signal: NodeJS.Signals) => {
     if (handled) return;

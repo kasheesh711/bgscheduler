@@ -63,16 +63,25 @@ describe("caps", () => {
 describe("owner config", () => {
   it("reads caps under `caps` or at the top level; a missing file changes nothing", () => {
     const file = path.join(home, "config.json");
-    expect(loadOwnerConfig(file)).toEqual({ ok: true, caps: {}, notes: [] });
+    expect(loadOwnerConfig(file)).toEqual({ ok: true, caps: {}, notes: [], runnerSha: null });
     fs.writeFileSync(file, JSON.stringify({ caps: { maxTargets: 10, deadlineBangkok: "05:00", bogus: 1, maxWiseReads: "x" } }));
     const config = loadOwnerConfig(file);
     expect(config).toEqual({
       ok: true,
       caps: { maxTargets: 10, deadlineBangkok: "05:00" },
       notes: ["unknown key ignored: bogus", "maxWiseReads ignored: not a non-negative number"],
+      runnerSha: null,
     });
     fs.writeFileSync(file, JSON.stringify({ maxOpusCalls: 5 }));
     expect(loadOwnerConfig(file)).toMatchObject({ ok: true, caps: { maxOpusCalls: 5 } });
+  });
+
+  it("reads the pinned runner commit, and refuses one that is not a commit", () => {
+    const file = path.join(home, "config.json");
+    fs.writeFileSync(file, JSON.stringify({ runnerSha: "ABC123DEF", caps: { maxTargets: 5 } }));
+    expect(loadOwnerConfig(file)).toMatchObject({ ok: true, runnerSha: "abc123def", caps: { maxTargets: 5 }, notes: [] });
+    fs.writeFileSync(file, JSON.stringify({ runnerSha: "main" }));
+    expect(loadOwnerConfig(file)).toEqual({ ok: false, reason: "runnerSha must be a 7-40 character hex commit" });
   });
 
   it("fails closed on a config that does not parse", () => {
