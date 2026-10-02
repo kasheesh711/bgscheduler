@@ -48,6 +48,16 @@ Recorded so nobody re-opens them, and so any doc still asserting the old state c
   explaining that health derivation reads this value, and `cron-registry.test.ts` pins route-vs-registry
   parity for all 22 entries. **AGENTS.md's "Known drift" section still asserts the old 300 and should
   drop it.**
+- **DEF-3 (Data Health "Run now" buttons that 404) — FIXED.** Ten registry keys had no
+  `runDataHealthJob` branch. Nine now have one that mirrors its cron route, passing
+  `triggerType: "manual"` and the actor where the library accepts them
+  (`src/lib/data-health/run-job.ts`). The tenth, `student_promotions_july_1`, is excluded on purpose
+  through the registry's `manualRunDisabledReason` and `isManuallyRunnable`
+  (`src/lib/data-health/cron-registry.ts`): no button, and a direct call gets a `409` carrying the
+  reason before the confirmation gate and the audit wrapper, so no failed `cron_invocations` row.
+  `unearned_revenue` also requires that feature's `access_manager` grant, as its own retry does, and
+  the newly reachable `line_backlog_recovery` and `progress_tests_digest` ask for confirmation.
+  `run-job.test.ts` fails typecheck and the unit suite if a registry key ever lacks a branch.
 - **DEF-24 (Student Schedule print report's back link) — FIXED.** `PrintToolbar` now takes
   `backHref`/`backLabel` (`src/components/learning-plan/print-toolbar.tsx:8-14`) and the report passes
   `/student-schedule` (`report/page.tsx:98`).
@@ -80,7 +90,7 @@ it (edge runtime; throws on a partial env), so any wiring must exclude the edge 
 *Wire it into a real startup path (root layout or `instrumentation.ts`) and extend it to the live key
 set, narrow it to a non-throwing inventory export, or delete it?*
 
-**DEF-3 — Seven Data Health "Run now" buttons return 404 and write a failed audit row.**
+**DEF-3 — Seven Data Health "Run now" buttons return 404 and write a failed audit row.** **FIXED — see §0.**
 (re-verified) The registry declares 22 job keys; `runDataHealthJob` dispatches 15 and falls through to
 `{ error: "Unknown job" }, 404` (`src/lib/data-health/run-job.ts:207`). The seven with no branch are
 `progress_tests`, `progress_tests_digest`, `post_class_feedback_backfill`, `student_promotions_july_1`,
@@ -227,8 +237,8 @@ idempotency key rejects the retry insert, so every later attempt returns `skippe
 
 **DEF-31 — `GET /api/internal/line-backlog-recovery` hard-codes `dryRun: false`** (`route.ts:19`), so
 `runLineBacklogRecovery`'s dry-run mode and its `dryRunMatches` payload are unreachable over HTTP.
-Combined with having no Data Health branch (DEF-3), there is no way to preview this job's matches
-before it inserts.
+The Data Health branch added for DEF-3 also runs live (`dryRun: false`), so there is still no HTTP way
+to preview this job's matches before it inserts.
 
 **DEF-32 — `POST /api/internal/sync-competitor-intelligence` flattens Forbidden to 401.** It catches
 `requireCompetitorIntelligenceSession`'s throw indiscriminately (`route.ts:31-36`); every other CI route
@@ -796,7 +806,7 @@ import via `sdpir_source_single_running_idx` until repaired by hand, unlike the 
 **OPS-4 — `student_promotions_july_1` will fail every year from 2027, permanently alerting.** It is the
 only scheduled route not wrapped in `withCronInvocationAudit`, so it writes no `cron_invocations` row
 and Data Health fails it closed to `unknown` (`dashboard.ts:274-286`) — an alertable status holding an
-open watchdog episode — and `run-job.ts` cannot dispatch it (DEF-3). It is also one of the nine
+open watchdog episode — and Data Health deliberately refuses to run it (`manualRunDisabledReason`; DEF-3 fixed, see §0). It is also one of the nine
 `criticalRoutes` in `production-route-surface.json`, and its 409-on-any-other-day guard makes the
 Vercel cron UI show a failure every non-target day. *Remove the `vercel.json` entry, make the target
 date a rolling rule, or accept a permanent alert?*
@@ -1377,8 +1387,9 @@ the repo-wide auth → JSON → Zod → try/catch convention, so a driver error 
 framework 500. `GET /api/leave-requests/[requestId]` (`route.ts:14-24`) has the same gap.
 
 **TEST-12 — `cron-registry.test.ts` now pins `maxDurationSeconds` parity for all 22 entries** (the fix
-for DEF-1), but nothing tests the `manualActions` / `run-job.ts` pairing (DEF-3) or the six duplicated
-cron-secret copies (OPS-11). `migration.test.ts` pins post-class migrations `0055` and `0057`–`0062` but
+for DEF-1), and `run-job.test.ts` now pins the registry / `run-job.ts` pairing and checks the Run-button list
+(`manuallyRunnableCronJobs`) against it (DEF-3, fixed), but
+nothing tests the six duplicated cron-secret copies (OPS-11). `migration.test.ts` pins post-class migrations `0055` and `0057`–`0062` but
 not `0068_payout_adjustment_superseded.sql`, whose `superseded` status is load-bearing for retirement,
 close readiness and the accrual planner.
 

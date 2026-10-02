@@ -604,7 +604,7 @@ Five of the 24 handlers under `src/app/api/internal/**` are **not** in `vercel.j
 | Endpoint | Registry key | Verb | `maxDuration` | Classification |
 |---|---|---|---|---|
 | `/api/internal/sync-room-utilization` | `room_utilization` | **POST** | 800s | **Manual / effectively disabled** — exports no `GET`, so it is structurally un-schedulable; refreshed only from the Room Capacity dashboard button or a CLI script |
-| `/api/internal/line-backlog-recovery` | `line_backlog_recovery` | GET | 300s | **Manual** — one-off identity recovery sweep; not dispatchable from Data Health |
+| `/api/internal/line-backlog-recovery` | `line_backlog_recovery` | GET | 300s | **Manual** — one-off identity recovery sweep; runnable from the Data Health job list |
 | `/api/internal/post-class-feedback/admin-digest` | `post_class_feedback_digest` | GET | 300s | **Parked** — emails admins; `dangerous: true` |
 | `/api/internal/post-class-feedback/reminder-day-after` | `post_class_feedback_day_after` | GET | 800s | **Parked** — emails tutors; `dangerous: true` |
 | `/api/internal/post-class-feedback/reminder-deadline` | `post_class_feedback_deadline` | GET | 800s | **Parked** — emails tutors; `dangerous: true` |
@@ -625,7 +625,7 @@ Three manual paths exist: the Room Capacity dashboard's "sync" action, which `PO
 
 Fetches the full LINE follower roster, matches fresh display names against human-verified OA-resolver targets, and inserts suggested links (**IDENT-07**, [`backlog-recovery.ts:1-20`](../../src/lib/line/backlog-recovery.ts), [`:52-74`](../../src/lib/line/backlog-recovery.ts)). The route always runs with `dryRun: false` ([`route.ts:19`](../../src/app/api/internal/line-backlog-recovery/route.ts)). Fail-closed invariant: every insert uses `status: "suggested"`, never `"verified"` (**IDENT-02**, [`backlog-recovery.ts:18`](../../src/lib/line/backlog-recovery.ts), [`:138`](../../src/lib/line/backlog-recovery.ts)). `maxDuration` is 300s because the follower re-anchor pass is deliberately not called here ([`route.ts:7-9`](../../src/app/api/internal/line-backlog-recovery/route.ts)).
 
-Reachability: cron secret only via curl, or the CLI [`scripts/backlog-recovery-dry-run.ts`](../../scripts/backlog-recovery-dry-run.ts) (dry-run by default, `--live` to write). It is **not** dispatchable from Data Health ([`run-job.ts`](../../src/lib/data-health/run-job.ts) has no branch for it). Feature context: [LINE Integration](../features/line-integration.md) — **stable (scheduler write-path flag-gated)**.
+Reachability: cron secret via curl, the Data Health job list, or the CLI [`scripts/backlog-recovery-dry-run.ts`](../../scripts/backlog-recovery-dry-run.ts) (dry-run by default, `--live` to write). Data Health dispatches it in-process with the same `runLineBacklogRecovery({ db, dryRun: false })` call ([`run-job.ts`](../../src/lib/data-health/run-job.ts)). Feature context: [LINE Integration](../features/line-integration.md) — **stable (scheduler write-path flag-gated)**.
 
 ### The three parked post-class routes
 
@@ -635,7 +635,7 @@ The registry comment states the intent plainly: outbound tutor reminders and the
 - **Day-after reminder** — "May email tutors whose post-class feedback is incomplete."
 - **Deadline reminder** — "May email tutors whose feedback is due tonight."
 
-Both reminder routes first drain their checkpoint through repeated 50-detail sync batches (default 8 batches / 9 minutes) and refuse to send while unreconciled Wise sessions remain, returning **`503`** with the result attached ([`reminder-job.ts:42-128`](../../src/lib/post-class-feedback/reminder-job.ts), [`reminder-day-after/route.ts:17-23`](../../src/app/api/internal/post-class-feedback/reminder-day-after/route.ts), [`reminder-deadline/route.ts:17-23`](../../src/app/api/internal/post-class-feedback/reminder-deadline/route.ts)) — a reminder built on incomplete data would email the wrong tutors. Unlike the two manual routes above, all three **are** dispatchable from Data Health, behind the `access_manager` capability and a confirmation body ([`run-job.ts:121-139`](../../src/lib/data-health/run-job.ts)). Feature meaning: [Post-class Feedback → Parked tutor reminders and admin digest](../features/post-class-feedback.md#parked-tutor-reminders-and-admin-digest).
+Both reminder routes first drain their checkpoint through repeated 50-detail sync batches (default 8 batches / 9 minutes) and refuse to send while unreconciled Wise sessions remain, returning **`503`** with the result attached ([`reminder-job.ts:42-128`](../../src/lib/post-class-feedback/reminder-job.ts), [`reminder-day-after/route.ts:17-23`](../../src/app/api/internal/post-class-feedback/reminder-day-after/route.ts), [`reminder-deadline/route.ts:17-23`](../../src/app/api/internal/post-class-feedback/reminder-deadline/route.ts)) — a reminder built on incomplete data would email the wrong tutors. Like the two manual routes above, all three are dispatchable from Data Health — these behind the `access_manager` capability and a confirmation body ([`run-job.ts`](../../src/lib/data-health/run-job.ts)). Feature meaning: [Post-class Feedback → Parked tutor reminders and admin digest](../features/post-class-feedback.md#parked-tutor-reminders-and-admin-digest).
 
 ---
 
@@ -673,17 +673,19 @@ Manual invocations are audited exactly like scheduled ones, with `triggerSource`
 
 1. Auth.js session with an email required → else `401`.
 2. Unknown `jobKey` → `404`.
-3. Any `post_class_feedback*` key additionally requires the `access_manager` capability → else `403`.
-4. A `dangerous: true` job requires `{ "confirmed": true }` in the body → else `409` carrying the registry's `confirmationLabel`.
-5. Dispatch through `runDataHealthJob(jobKey, actorEmail)` with `triggerSource: "admin"` ([`run-job.ts:29-41`](../../src/lib/data-health/run-job.ts)).
+3. A job whose registry entry carries `manualRunDisabledReason` (`student_promotions_july_1`) → `409` with its reason, before the confirmation gate; `runDataHealthJob` repeats the refusal before its audit wrapper.
+4. Wise/classroom jobs, both `feedback_autowriter*` jobs and `feedback_atom` are restricted to the classroom-operations owner.
+5. Any `post_class_feedback*` key additionally requires the post-class `access_manager` capability, and `unearned_revenue` the Unearned Revenue `access_manager` grant its own import retry requires → else `403`.
+6. A `dangerous: true` job requires `{ "confirmed": true }` in the body → else `409` carrying the registry's `confirmationLabel`.
+7. Dispatch through `runDataHealthJob(jobKey, actorEmail)` with `triggerSource: "admin"` ([`run-job.ts`](../../src/lib/data-health/run-job.ts)).
 
-**Coverage gap.** `runDataHealthJob` implements 16 of the 24 registry keys; the rest fall through to `404 { error: "Unknown job" }` ([`run-job.ts`](../../src/lib/data-health/run-job.ts)), even though the dashboard marks every job `canRunManually: true` unconditionally.
+**Coverage.** `runDataHealthJob` has a branch for every registry key except `student_promotions_july_1`, which carries `manualRunDisabledReason` and is refused with `409` before the confirmation gate and the audit wrapper; the dashboard offers a button only for jobs `isManuallyRunnable` accepts ([`run-job.ts`](../../src/lib/data-health/run-job.ts), [`cron-registry.ts`](../../src/lib/data-health/cron-registry.ts)). [`run-job.test.ts`](../../src/lib/data-health/__tests__/run-job.test.ts) pins the pairing.
 
-| Runnable from Data Health (16) | Not implemented → `404` (8) |
+| Runnable from Data Health | Refused → `409` before audit |
 |---|---|
-| `wise_snapshot`, `wise_activity`, `sales_dashboard`, `onsite_foot_traffic`, `competitor_intelligence`, `credit_control`, `post_class_feedback`, `post_class_feedback_digest`, `post_class_feedback_day_after`, `post_class_feedback_deadline`, `post_class_feedback_payout_accrual`, `leave_requests`, `classroom_morning`, `classroom_admin_email`, `cron_watchdog`, `room_utilization` | `unearned_revenue`, `progress_tests`, `progress_tests_digest`, `post_class_feedback_backfill`, `student_promotions_july_1`, `admissions_notifications`, `line_backlog_recovery`, `line_credit_digest` |
+| every other registry key | `student_promotions_july_1` — annual Wise-writing job; apply promotions from the Student Promotions page |
 
-Two behavioural differences from the cron path when run this way: `post_class_feedback` runs the sync and notification retries but **not** the AI review or deduction hygiene passes ([`run-job.ts:104-119`](../../src/lib/data-health/run-job.ts)), and `wise_activity` runs in `manual` mode — 30 days / 500 pages ([`run-job.ts:47-63`](../../src/lib/data-health/run-job.ts)).
+Three behavioural differences from the cron path when run this way: `post_class_feedback` runs the sync and notification retries but **not** the AI review or deduction hygiene passes ([`run-job.ts`](../../src/lib/data-health/run-job.ts)), `wise_activity` runs in `manual` mode — 30 days / 500 pages ([`run-job.ts`](../../src/lib/data-health/run-job.ts)), and `progress_tests` runs with `triggerType: "manual"`, so before the tutor-workspace launch it skips the cron's daily-window claim — as the route's admin-session path does — while still waiting for today's shared snapshot ([`run-sync-request.ts`](../../src/lib/progress-tests/run-sync-request.ts)); unlike that path, Data Health does not also require `/progress-tests` page access.
 
 ---
 
@@ -693,7 +695,7 @@ Two behavioural differences from the cron path when run this way: `post_class_fe
 
 2. **Sibling reference pages are stale on schedules.** [`api/internal-crons.md`](api/internal-crons.md) lists competitor intelligence at `25 18 * * 0` (now `28 18 * * 0`), shows `payout-accrual` as "not scheduled", says the job runner dispatches "14 of the 21" keys, and omits six scheduled paths from its schedule table; [`../OPEN-QUESTIONS.md`](../OPEN-QUESTIONS.md) OPS-1 / OPS-3 / OPS-8 carry the same 15/21 counts and describe payout accrual as parked. Both need regeneration against `main@0cd1e81`; this page deliberately links to the API page's file, not its per-route anchors.
 
-3. **Data Health cannot run 8 registered jobs.** `runDataHealthJob` has no branch for `unearned_revenue`, `progress_tests`, `progress_tests_digest`, `post_class_feedback_backfill`, `student_promotions_july_1`, `admissions_notifications`, `line_backlog_recovery`, or `line_credit_digest` → `404 Unknown job`, while `canRunManually` is hard-coded `true` for every job. The UI promises a control for all eight even though no branch exists.
+3. **Resolved — Data Health runs every job it offers.** Seven of the eight keys listed here (all but `student_promotions_july_1`), plus `tutor_sit_ins` and `tutor_sit_ins_digest`, now have `runDataHealthJob` branches; `student_promotions_july_1` is deliberately refused (`manualRunDisabledReason`, `409` before audit) and is no longer rendered as a button.
 
 4. **Health fallback comment is inaccurate, and two run tables go unread.** `pickJobRuns` claims "Only room_utilization reaches this fallback" ([`dashboard.ts:317-319`](../../src/lib/data-health/dashboard.ts)), but six keys have no branch and land there: `post_class_feedback_backfill`, `post_class_feedback_payout_accrual`, `admissions_notifications`, `line_credit_digest`, `line_backlog_recovery`, `room_utilization`. **Four of those are scheduled**, so a stale `room_utilization_sessions` row can stand in as their `latestSuccessfulRun` — exactly the masking the comment says is impossible. `admissions_notification_runs` and `line_credit_digest_runs` exist but are absent from `fetchAllRuns` ([`dashboard.ts:752-806`](../../src/lib/data-health/dashboard.ts)). Direct `cron_invocations` proof normally wins, so practical impact is limited, but intent and code disagree.
 
@@ -701,7 +703,7 @@ Two behavioural differences from the cron path when run this way: `post_class_fe
 
 6. **Room utilization has no refresh path.** `room_utilization_sessions` is written only by a `POST`-only, manual-only route, the dashboard button, and a CLI script. Is the Room Capacity dashboard expected to run on operator-triggered data indefinitely, or is adding a `GET` export plus a `vercel.json` stagger slot the intended fix?
 
-7. **`line-backlog-recovery` is curl-only.** It is registered manual-only but not dispatchable from Data Health, and its only in-repo caller is a dry-run CLI script. Its header describes a one-off IDENT-07 recovery. Is the route still needed, or should it be retired from both the tree and the route-surface manifest?
+7. **`line-backlog-recovery` is manual-only.** It is registered manual-only and runs live from the Data Health job list or with the cron secret; its only in-repo dry-run caller is a CLI script. Its header describes a one-off IDENT-07 recovery. Is the route still needed, or should it be retired from both the tree and the route-surface manifest?
 
 8. **Three parked post-class routes — ship or retire?** The admin digest and both tutor reminders have been manual-only since the reminder lane was parked. If they are never going to be scheduled, the `dangerous: true` + confirm gate is the only thing preventing an accidental tutor email from the Data Health UI.
 
