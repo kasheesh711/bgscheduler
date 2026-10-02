@@ -29,7 +29,9 @@ export async function openAtomReadClient(input: {
   let context: BrowserContext | null = null;
   let page: Page | null = null;
   let stage = "launch";
-  try {
+  // Set when the open deadline passes; a browser that finishes launching afterwards is closed at once.
+  let abandoned = false;
+  const open = async (): Promise<AtomReadClient> => {
     let executablePath: string;
     let args: string[] = [];
     if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
@@ -45,7 +47,12 @@ export async function openAtomReadClient(input: {
       if (!path) throw new AtomCollectionError("collection_failed");
       executablePath = path;
     }
-    browser = await playwrightChromium.launch({ executablePath, args, headless: true, timeout: 30_000 });
+    const launched = await playwrightChromium.launch({ executablePath, args, headless: true, timeout: 30_000 });
+    if (abandoned) {
+      await closeQuietly(() => launched.close(), "browser_close");
+      throw new AtomCollectionError("collection_failed", "open_deadline");
+    }
+    browser = launched;
     context = await browser.newContext({ serviceWorkers: "block" });
     // Only the normal sign-in form can POST. No assignments, edits, tracking POSTs or result mutations.
     await context.route("**/*", route => {
@@ -136,9 +143,17 @@ export async function openAtomReadClient(input: {
         await closeQuietly(() => ownedBrowser.close(), "browser_close");
       },
     };
+  };
+  try {
+    // Several Playwright calls have no timeout of their own. Closing the browser on the deadline also fails them.
+    return await withAtomTimeout(open(), input.deadlineMs - Date.now() - 5_000, "open_deadline");
   } catch (error) {
+    abandoned = true;
     await closeQuietly(context ? () => context!.close() : undefined, "context_close");
     await closeQuietly(browser ? () => browser!.close() : undefined, "browser_close");
+    if (error instanceof AtomCollectionError && error.stage === "open_deadline") {
+      throw new AtomCollectionError("collection_failed", `${stage}_timeout`);
+    }
     if (error instanceof AtomCollectionError) throw error;
     // Playwright errors can include typed values. Never propagate their text or stack.
     throw new AtomCollectionError("collection_failed", stage);

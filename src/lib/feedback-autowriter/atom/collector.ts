@@ -95,6 +95,7 @@ export async function runAtomCollector(input: {
   let snapshots = 0;
   let activityCount = 0;
   let catalog: AtomReadClient["catalog"] = [];
+  let recorded = { snapshots: 0, activities: 0 };
   const work = async () => {
     const pending = await db.select().from(s.feedbackAutowriterSessions).where(and(
       inArray(s.feedbackAutowriterSessions.state, [...PENDING]),
@@ -112,6 +113,7 @@ export async function runAtomCollector(input: {
     const lessons = lessonsFromWise(wise);
     stage = "timetable_write";
     for (const day of new Set(dates)) {
+      if (stopped) return;
       await db.insert(s.feedbackAtomTimetables).values({ runId, bangkokDate: day,
         observedAt: now, lessons: lessons.filter(lesson => bangkokDate(lesson.start) <= day && bangkokDate(lesson.end) >= day) });
     }
@@ -122,6 +124,7 @@ export async function runAtomCollector(input: {
       return pendingIds.has(session._id) && session.type?.toUpperCase() !== "OFFLINE" &&
         isIsebClass(rosterTutor(refId(session.userId))?.canonicalKey, describeClass({ programme, title: session.title }));
     }).map(session => session._id));
+    if (stopped) return;
     stage = "link_lookup";
     const links = await db.select().from(s.feedbackAtomLinks).where(eq(s.feedbackAtomLinks.active, true));
     if (input.trial && (!input.probe || !links.some(link => link.atomStudentId === input.probe!.studentId))) {
@@ -141,6 +144,7 @@ export async function runAtomCollector(input: {
       wanted.add(input.probe.date);
       targets.set(input.probe.studentId, wanted);
     }
+    if (stopped) return;
     stage = "atom_open";
     const opened = await input.openClient();
     if (stopped) { await opened.close().catch(() => undefined); return; }
@@ -176,13 +180,18 @@ export async function runAtomCollector(input: {
     fail(error instanceof AtomCollectionError ? error.code : "collection_failed", atomFailureCause(error));
   } finally {
     stopped = true;
-    // Record the outcome before closing the browser, whose shutdown can hang.
-    await db.update(RUN).set({
-      status: failure ? "failed" : "succeeded", finishedAt: new Date(), errorCode: failure,
-      counts: { snapshots, activities: activityCount, catalog, studentResults, probe: Boolean(input.probe), trial: Boolean(input.trial),
-        ...(failure ? { failureStage, failureCause } : {}) },
-    }).where(eq(RUN.id, runId));
-    await withAtomTimeout((client as AtomReadClient | null)?.close() ?? Promise.resolve(), 10_000, "close").catch(() => undefined);
+    // Late work can still finish an insert already in flight; the record and the response use these values.
+    recorded = { snapshots, activities: activityCount };
+    // Record the outcome before closing the browser, whose shutdown can hang. Close even if the write fails.
+    try {
+      await db.update(RUN).set({
+        status: failure ? "failed" : "succeeded", finishedAt: new Date(), errorCode: failure,
+        counts: { snapshots: recorded.snapshots, activities: recorded.activities, catalog, studentResults, probe: Boolean(input.probe),
+          trial: Boolean(input.trial), ...(failure ? { failureStage, failureCause } : {}) },
+      }).where(eq(RUN.id, runId));
+    } finally {
+      await withAtomTimeout((client as AtomReadClient | null)?.close() ?? Promise.resolve(), 10_000, "close").catch(() => undefined);
+    }
   }
   if (failure) {
     await recordIncident(db, {
@@ -192,7 +201,7 @@ export async function runAtomCollector(input: {
       detail: { runId, code: failure, stage: failureStage, cause: failureCause },
     });
   }
-  return { ok: !failure, runId, snapshots, activities: activityCount, catalogStudents: catalog.length, errorCode: failure,
+  return { ok: !failure, runId, snapshots: recorded.snapshots, activities: recorded.activities, catalogStudents: catalog.length, errorCode: failure,
     ...(failure ? { failureStage, failureCause } : {}) };
 }
 
