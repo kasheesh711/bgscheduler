@@ -36,6 +36,11 @@ export interface NightlyTarget {
   studentFullName: string | null;
   studentDisplayName: string | null;
   className: string | null;
+  /**
+   * Set on a post of an earlier night that was verified after that night's selection and never audited: the night it
+   * belongs to. Audited (and reported) with tonight's posts.
+   */
+  lateFrom?: string | null;
 }
 
 /** Everything the auditor sees for one class (local, 0600; real data allowed). */

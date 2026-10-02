@@ -176,7 +176,7 @@ describe("applyAgentFlags (the one write)", () => {
       inclusionProbability: "0.000", sampleDraw: 0.9, samplingPolicy: "test",
     });
     const report = (n: number, patch: Partial<ClassReport>): ClassReport => ({
-      wiseSessionId: id(n), fieldsSha256: SHA, tutorKey: "Kevin", className: null, postedEvidenceKind: "transcript", grade: "rebuilt",
+      wiseSessionId: id(n), fieldsSha256: SHA, tutorKey: "Kevin", className: null, postedEvidenceKind: "transcript", grade: "rebuilt", lateFrom: null,
       auditVerdict: "major", auditFailure: null, auditSummaryLine: null, severity: "major", modes: ["M06"], findings: [], ownerVerdict: null,
       judgePassed: true, wiseTextEdited: false, costUsd: 0.4, criticalHighConfidence: false, criticalCategory: null, ...patch,
     });

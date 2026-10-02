@@ -9,6 +9,7 @@ import {
   auditedKeys,
   chooseTargets,
   guidedStamp,
+  latePickups,
   loadNightlyTargets,
   targetFromRow,
   type TargetRow,
@@ -183,7 +184,7 @@ describe("chooseTargets", () => {
     ...(targetFromRow(row(), NO_FACTS) as NightlyTarget), wiseSessionId: sid, scheduledEndAt: end, fieldsSha256: sha,
   });
 
-  it("keeps the newest first, skips audited texts and keys that failed twice, and caps", () => {
+  it("keeps audited and twice-failed classes in the night, newest first, and caps only the classes still to audit", () => {
     const targets = [
       target("6a0000000000000000000a01", "2026-10-02T03:00:00.000Z"),
       target("6a0000000000000000000a02", "2026-10-02T09:00:00.000Z"),
@@ -194,14 +195,48 @@ describe("chooseTargets", () => {
     const audited = new Set([auditKey({ wiseSessionId: "6a0000000000000000000a03", fieldsSha256: "sha", auditVersion: 1 })]);
     const failedKey = auditKey({ wiseSessionId: "6a0000000000000000000a04", fieldsSha256: "sha", auditVersion: 1 });
     const choice = chooseTargets({ targets, audited, failures: (key) => (key === failedKey ? 2 : 0), auditVersion: 1, maxTargets: 2 });
-    expect(choice.chosen.map((item) => item.wiseSessionId)).toEqual(["6a0000000000000000000a02", "6a0000000000000000000a01"]);
-    expect(choice.skipped).toEqual([
-      { wiseSessionId: "6a0000000000000000000a04", reason: "failed_twice" },
-      { wiseSessionId: "6a0000000000000000000a03", reason: "already_audited" },
-      { wiseSessionId: "6a0000000000000000000a05", reason: "over_cap" },
+    expect(choice.chosen.map((item) => item.wiseSessionId)).toEqual([
+      "6a0000000000000000000a02", "6a0000000000000000000a04", "6a0000000000000000000a03", "6a0000000000000000000a01",
     ]);
-    // A new audit version is a new key: audited again.
-    expect(chooseTargets({ targets, audited, failures: () => 0, auditVersion: 2, maxTargets: 60 }).chosen).toHaveLength(5);
+    expect(choice.skipped).toEqual([{ wiseSessionId: "6a0000000000000000000a05", reason: "over_cap" }]);
+    expect(choice.counts).toEqual({ alreadyAudited: 1, failedTwice: 1, toAudit: 2, late: 0, kept: 0 });
+    // A new audit version is a new key: every class needs an audit again.
+    expect(chooseTargets({ targets, audited, failures: () => 0, auditVersion: 2, maxTargets: 60 }).counts.toAudit).toBe(5);
+  });
+
+  it("never drops a class an earlier selection chose, and lets the newest data win", () => {
+    const earlier = [target("6a0000000000000000000a01", "2026-10-02T03:00:00.000Z", "old-sha"), target("6a0000000000000000000a09", "2026-10-02T02:00:00.000Z")];
+    const audited = new Set([auditKey({ wiseSessionId: "6a0000000000000000000a09", fieldsSha256: "sha", auditVersion: 1 })]);
+    const choice = chooseTargets({
+      targets: [target("6a0000000000000000000a01", "2026-10-02T03:00:00.000Z", "new-sha"), target("6a0000000000000000000a02", "2026-10-02T09:00:00.000Z")],
+      previous: earlier, audited, failures: () => 0, auditVersion: 1, maxTargets: 1,
+    });
+    // a09 is no longer returned by the query (audited earlier): kept. a01 keeps its place with its new text; a02 is over the cap.
+    expect(choice.chosen.map((item) => [item.wiseSessionId, item.fieldsSha256])).toEqual([
+      ["6a0000000000000000000a01", "new-sha"], ["6a0000000000000000000a09", "sha"],
+    ]);
+    expect(choice.skipped).toEqual([{ wiseSessionId: "6a0000000000000000000a02", reason: "over_cap" }]);
+    expect(choice.counts).toMatchObject({ kept: 2, alreadyAudited: 1, toAudit: 1 });
+  });
+
+  it("puts late pickups after the night's own posts and labels them", () => {
+    const late = latePickups({
+      posts: [target("6a0000000000000000000b01", "2026-10-01T15:00:00.000Z"), target("6a0000000000000000000b02", "2026-10-01T14:00:00.000Z"),
+        target("6a0000000000000000000b03", "2026-10-01T13:00:00.000Z")],
+      night: "2026-10-01",
+      earlier: { chosen: [target("6a0000000000000000000b02", "2026-10-01T14:00:00.000Z")], skipped: [] },
+      audited: new Set([auditKey({ wiseSessionId: "6a0000000000000000000b03", fieldsSha256: "sha", auditVersion: 1 })]),
+      auditVersion: 1,
+    });
+    // b02 was selected that night; b03 was audited: only b01 is late.
+    expect(late.map((item) => [item.wiseSessionId, item.lateFrom])).toEqual([["6a0000000000000000000b01", "2026-10-01"]]);
+    // A night never selected is not caught up.
+    expect(latePickups({ posts: [target("6a0000000000000000000b01", "2026-10-01T15:00:00.000Z")], night: "2026-10-01", earlier: null, audited: new Set(), auditVersion: 1 })).toEqual([]);
+    const choice = chooseTargets({ targets: [target("6a0000000000000000000a01", "2026-10-02T03:00:00.000Z")], late, audited: new Set(), failures: () => 0, auditVersion: 1, maxTargets: 60 });
+    expect(choice.chosen.map((item) => [item.wiseSessionId, item.lateFrom ?? null])).toEqual([
+      ["6a0000000000000000000a01", null], ["6a0000000000000000000b01", "2026-10-01"],
+    ]);
+    expect(choice.counts.late).toBe(1);
   });
 
   it("reads finished audits from the metadata ledger", () => {

@@ -28,7 +28,7 @@ import {
   type TargetsFile,
 } from "../steps";
 import { fakeDb } from "./fake-db";
-import { CID, PIM_FIELDS, SID, STUDENT, nightlyTarget } from "./nightly-fixtures";
+import { CID, PIM_FIELDS, SID, STUDENT, nightlyTarget, targetQueryRow } from "./nightly-fixtures";
 
 let dir: string;
 let clock: number;
@@ -105,18 +105,64 @@ describe("stepPreflight", () => {
 });
 
 describe("stepSelect", () => {
-  it("writes the night's targets and does not select again once done", async () => {
+  /** The main target query answers with these rows per Bangkok night (by its start bound); follow-up reads are empty. */
+  function nightsDb(byNight: Record<string, unknown[][]>) {
+    return fakeDb((query) => {
+      if (!query.sql.includes("from \"feedback_autowriter_sessions\"")) return [];
+      const bounds = (key: string) => {
+        const start = new Date(`${key}T00:00:00+07:00`);
+        return [start.toISOString(), new Date(start.getTime() + 24 * 60 * 60 * 1000).toISOString()];
+      };
+      const night = Object.keys(byNight).find((key) => bounds(key).every((bound) => query.params.includes(bound)));
+      return night ? byNight[night] : [];
+    });
+  }
+
+  it("refuses before the night has been over an hour, unless forced", async () => {
     const ctx = context();
+    clock = new Date("2026-10-02T17:30:00Z").getTime(); // 00:30 Bangkok on the 3rd
     const { db, queries } = fakeDb(() => []);
     const ledger = NightlyLedger.open(ctx.paths.root, ctx.night, ctx.caps);
-    const first = await stepSelect(ctx, { db, ledger });
-    expect(first).toMatchObject({ ok: true, summary: { posts: 0, chosen: 0 } });
-    expect(readTargets(ctx.paths)).toMatchObject({ night: "2026-10-02", chosen: [], auditVersion: AUDIT_VERSION });
-    const again = await stepSelect(ctx, { db, ledger });
-    expect(again.summary).toMatchObject({ cached: true });
-    expect(queries).toHaveLength(1);
-    await stepSelect(ctx, { db, ledger, force: true });
-    expect(queries).toHaveLength(2);
+    expect(await stepSelect(ctx, { db, ledger })).toMatchObject({ ok: false, stop: "night_not_over", exitCode: 6 });
+    expect(queries).toHaveLength(0);
+    expect(await stepSelect(ctx, { db, ledger, force: true })).toMatchObject({ ok: true });
+  });
+
+  it("re-selects into the earlier selection: never drops a class, and adds new posts", async () => {
+    const ctx = context();
+    const ledger = NightlyLedger.open(ctx.paths.root, ctx.night, ctx.caps);
+    const first = nightsDb({ "2026-10-02": [targetQueryRow({ wiseSessionId: "6a0000000000000000000a01", scheduledEndAt: "2026-10-02 09:00:00+00" })] });
+    expect(await stepSelect(ctx, { db: first.db, ledger })).toMatchObject({ ok: true, summary: { posts: 1, chosen: 1, toAudit: 1 } });
+    expect(readTargets(ctx.paths)).toMatchObject({ night: "2026-10-02", auditVersion: AUDIT_VERSION });
+    // Later the query no longer returns a01 (say its text is being corrected) but returns a new post a02.
+    const second = nightsDb({ "2026-10-02": [targetQueryRow({ wiseSessionId: "6a0000000000000000000a02", scheduledEndAt: "2026-10-02 10:00:00+00" })] });
+    const again = await stepSelect(ctx, { db: second.db, ledger });
+    expect(again.summary).toMatchObject({ posts: 1, chosen: 2, kept: 1 });
+    expect(readTargets(ctx.paths)?.chosen.map((target) => target.wiseSessionId)).toEqual(["6a0000000000000000000a02", "6a0000000000000000000a01"]);
+  });
+
+  it("picks up posts of the two previous nights verified after their selection and never audited", async () => {
+    const ctx = context();
+    const ledger = NightlyLedger.open(ctx.paths.root, ctx.night, ctx.caps);
+    // 1 Oct was selected (b01 only); 30 Sep never ran (no catch-up).
+    const earlier = nightlyPaths(ctx.paths.root, "2026-10-01");
+    fs.mkdirSync(path.dirname(earlier.targetsJson), { recursive: true });
+    fs.writeFileSync(earlier.targetsJson, JSON.stringify({
+      night: "2026-10-01", auditVersion: AUDIT_VERSION, selectedAt: "", chosen: [nightlyTarget({ wiseSessionId: "6a0000000000000000000b01" })], skipped: [],
+    }));
+    const { db } = nightsDb({
+      "2026-10-02": [targetQueryRow({ wiseSessionId: "6a0000000000000000000a01", scheduledEndAt: "2026-10-02 09:00:00+00" })],
+      "2026-10-01": [
+        targetQueryRow({ wiseSessionId: "6a0000000000000000000b01", scheduledEndAt: "2026-10-01 09:00:00+00" }),
+        targetQueryRow({ wiseSessionId: "6a0000000000000000000b02", scheduledEndAt: "2026-10-01 15:00:00+00" }),
+      ],
+      "2026-09-30": [targetQueryRow({ wiseSessionId: "6a0000000000000000000c01", scheduledEndAt: "2026-09-30 09:00:00+00" })],
+    });
+    const result = await stepSelect(ctx, { db, ledger });
+    expect(result.summary).toMatchObject({ posts: 1, chosen: 2, late: 1 });
+    expect(readTargets(ctx.paths)?.chosen.map((target) => [target.wiseSessionId, target.lateFrom ?? null])).toEqual([
+      ["6a0000000000000000000a01", null], ["6a0000000000000000000b02", "2026-10-01"],
+    ]);
   });
 });
 

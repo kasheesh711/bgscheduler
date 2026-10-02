@@ -49,6 +49,8 @@ export interface ClassReport {
   className: string | null;
   postedEvidenceKind: "summary" | "transcript";
   grade: string;
+  /** A post of an earlier night picked up late: that night. */
+  lateFrom: string | null;
   auditVerdict: AuditResult["verdict"] | null;
   auditFailure: string | null;
   auditSummaryLine: string | null;
@@ -145,6 +147,7 @@ export function mergeClassReport(file: BundleFile, record: AuditRecord | null): 
     className: file.target.className,
     postedEvidenceKind: file.bundle.postedEvidenceKind,
     grade: file.bundle.grade,
+    lateFrom: file.target.lateFrom ?? null,
     auditVerdict: result?.verdict ?? null,
     auditFailure: record?.failure ?? (record ? null : "not_audited"),
     auditSummaryLine: result?.summaryLine ?? null,
@@ -205,6 +208,7 @@ export function classReportLine(night: string, report: ClassReport, at: string, 
     auditVersion,
     grade: report.grade,
     postedEvidenceKind: report.postedEvidenceKind,
+    lateFrom: report.lateFrom,
     auditVerdict: report.auditVerdict,
     auditFailure: report.auditFailure,
     severity: report.severity,
@@ -398,7 +402,8 @@ export function renderReportMarkdown(input: ReportInput): string {
     lines.push(
       `### ${report.wiseSessionId} — ${report.severity ?? (report.auditVerdict ?? "not audited")}`,
       "",
-      `Tutor ${report.tutorKey ?? "?"}; class ${report.className ?? "?"}; posted from ${report.postedEvidenceKind}; evidence ${report.grade}; ` +
+      `${report.lateFrom ? `Late pickup from ${report.lateFrom} (verified after that night's selection). ` : ""}` +
+        `Tutor ${report.tutorKey ?? "?"}; class ${report.className ?? "?"}; posted from ${report.postedEvidenceKind}; evidence ${report.grade}; ` +
         `owner verdict ${report.ownerVerdict ?? "none"}; production judges passed ${report.judgePassed ?? "?"}` +
         `${report.wiseTextEdited ? "; TEXT EDITED IN WISE SINCE OUR POST (never corrected over)" : ""}.`,
       ...(report.auditFailure ? [`Audit failed: ${report.auditFailure}`] : []),

@@ -9,7 +9,10 @@
  *   status                         run state, lock, STOP files, Wise cooldown, tonight's spend (reads only)
  *   preflight                      STOP files, lock, clean tree, environment, node ≥ 22; writes run.json
  *   select [--sessions=a,b] [--force]
- *                                  the night's verified autowriter posts to audit (database SELECTs only)
+ *                                  the night's verified autowriter posts to audit (database SELECTs only), merged into
+ *                                  any earlier selection of the night (a class is never dropped), plus posts of the two
+ *                                  previous nights verified after their selection and never audited (late); refused
+ *                                  until an hour after the night ends unless --force
  *   collect [--retranscribe] [--soniox-usd=<n>] [--sessions=a,b]
  *                                  evidence per class, cache-first: one paced Wise session-detail GET, the production
  *                                  Soniox transcript read-only, Zoom captions; --retranscribe makes our OWN Soniox job
@@ -23,9 +26,10 @@
  *                                  one Opus synthesis call → report.md, summary.md, plan.md, fix-brief.json
  *   flag [--apply]                 one `agent` flag per major/critical class (+ a critical_flag incident for a
  *                                  high-confidence critical); a DRY RUN unless --apply — the only database write
- *   run [--apply-flags] [--retranscribe] [--soniox-usd=<n>] [--no-synthesis]
- *                                  preflight → select → collect → audit → report (→ flag with --apply-flags), resuming
- *                                  at the first unfinished step; any stop ends with a partial report, never a retry;
+ *   run [--apply-flags] [--retranscribe] [--soniox-usd=<n>] [--no-synthesis] [--force]
+ *                                  preflight → select → collect → audit → report (→ flag with --apply-flags); preflight
+ *                                  and select run every time (the night's posts may have grown), so every later step
+ *                                  runs again from its cache; any stop ends with a partial report, never a retry;
  *                                  then prune (not after a STOP file)
  *   prune [--dry-run]              delete local evidence older than 7 days (cache, audits, old nights' real data)
  *   costs [--days=7]               the last nights' spend from the local cost ledger
@@ -313,13 +317,15 @@ async function runAll(session: Session): Promise<StepResult> {
     order: ["preflight", "select", "collect", "audit", "report", ...(flag("apply-flags") ? ["flag" as const] : [])],
     steps: {
       preflight: () => preflight(session),
-      select: () => stepSelect(ctx, { db: session.db, ledger: session.ledger }),
+      select: () => stepSelect(ctx, { db: session.db, ledger: session.ledger, force: flag("force") }),
       collect: () => collect(session),
       audit: () => audit(session),
       report: () => report(session, { synthesis: !flag("no-synthesis") }),
       flag: () => stepFlag(ctx, { db: session.db, apply: true }),
     },
     partialReport: () => report(session, { synthesis: false }),
+    // Checked and re-selected every run: the code may have changed, and posts may have been verified since.
+    always: new Set(["preflight", "select"]),
   });
   if (result.stop === "stop_file" || stopFilePresent(ctx.stopFiles)) return result;
   return { ...result, summary: { ...result.summary, prune: stepPrune(ctx).summary } };

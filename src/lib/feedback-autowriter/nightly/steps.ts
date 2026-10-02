@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Database } from "@/lib/db";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
+import { addDays, bangkokDayBounds } from "../quality";
 import { auditBundles, cachedAudit } from "./audit";
 import { AUDIT_VERSION } from "./audit-schema";
 import { activeWiseCooldown, stopFilePresent, type NightlyCaps } from "./caps";
@@ -17,7 +18,7 @@ import { claudeVersionSupported, type ClaudeCall, type ClaudeOutcome } from "./c
 import { EXIT, NightlyStop, type ExitCode } from "./exit";
 import type { NightlyLedger } from "./ledger";
 import { applyAgentFlags, planAgentFlags } from "./flags";
-import { appendJsonl, readJsonFile, readJsonl, writeJsonAtomic, writeTextAtomic, type NightlyPaths } from "./paths";
+import { appendJsonl, nightlyPaths, readJsonFile, readJsonl, writeJsonAtomic, writeTextAtomic, type NightlyPaths } from "./paths";
 import { runPrechecks } from "./prechecks";
 import {
   classReportLine,
@@ -32,7 +33,7 @@ import {
   type WatchdogResult,
 } from "./report";
 import { pruneNightly } from "./retention";
-import { auditedKeys, auditKey, chooseTargets, loadNightlyTargets, type TargetChoice } from "./select";
+import { auditedKeys, auditKey, chooseTargets, latePickups, loadNightlyTargets, type TargetChoice } from "./select";
 import { fixBriefFile, renderPlanMarkdown, synthesizeNight } from "./synthesis";
 import type { AuditRecord, EvidenceBundle, NightlyTarget, PrecheckFinding } from "./types";
 
@@ -197,41 +198,71 @@ export function readTargets(paths: NightlyPaths): TargetsFile | null {
   return readJsonFile<TargetsFile>(paths.targetsJson);
 }
 
-/** The night's posts to audit (SELECT only), skipping texts audited at this version and keys that failed twice. */
+/** Days before the audited night whose late-verified posts are picked up. */
+export const LATE_PICKUP_NIGHTS = 2;
+/** Selection waits this long after the night ends (24:00 Bangkok) for its last posts, unless forced. */
+export const SELECT_AFTER_NIGHT_END_MS = 60 * 60 * 1000;
+
+/**
+ * The night's posts to audit (SELECT only): refused until an hour after the night ended (unless `force`). Each selection
+ * is merged into the earlier one — a class once selected is never dropped — and posts of the previous nights that
+ * were verified after their own selection and never audited are added as late targets.
+ */
 export async function stepSelect(ctx: NightContext, deps: {
   db: Database;
   ledger: Pick<NightlyLedger, "attempts">;
   sessionIds?: readonly string[];
+  /** Select before the night is over (an hour after 24:00 Bangkok). */
   force?: boolean;
 }): Promise<StepResult> {
   const stop = stopBeforeStep(ctx);
   if (stop) return stoppedResult(ctx, "select", stop);
-  const state = readRunState(ctx);
-  const existing = readTargets(ctx.paths);
-  if (!deps.force && state.steps.select?.status === "done" && existing) {
-    const summary = { step: "select", night: ctx.night, chosen: existing.chosen.length, skipped: existing.skipped.length, cached: true };
-    return result({ summary, next: nextStep(state, "select") });
+  const nightOver = bangkokDayBounds(ctx.night).end.getTime() + SELECT_AFTER_NIGHT_END_MS;
+  if (!deps.force && ctx.now().getTime() < nightOver) {
+    const summary = { step: "select", night: ctx.night, reason: `the night is not over until ${new Date(nightOver).toISOString()} (use --force)` };
+    recordStep(ctx, "select", { status: "failed", stop: "night_not_over", summary });
+    return result({ ok: false, stop: "night_not_over", next: "select", summary, exitCode: EXIT.guardRefused });
   }
+  const audited = auditedKeys(ctx.paths.ledgerJsonl);
+  const wanted = deps.sessionIds && deps.sessionIds.length > 0 ? new Set(deps.sessionIds) : null;
   const targets = await loadNightlyTargets(deps.db, { night: ctx.night, sessionIds: deps.sessionIds });
+  const late: NightlyTarget[] = [];
+  for (let back = 1; back <= LATE_PICKUP_NIGHTS; back += 1) {
+    const earlierNight = addDays(ctx.night, -back);
+    const earlier = readTargets(nightlyPaths(ctx.paths.root, earlierNight));
+    if (!earlier) continue;
+    const posts = await loadNightlyTargets(deps.db, { night: earlierNight, sessionIds: deps.sessionIds });
+    late.push(...latePickups({ posts, night: earlierNight, earlier, audited, auditVersion: AUDIT_VERSION }));
+  }
+  const previous = (readTargets(ctx.paths)?.chosen ?? []).filter((target) => !wanted || wanted.has(target.wiseSessionId));
   const choice = chooseTargets({
     targets,
-    audited: auditedKeys(ctx.paths.ledgerJsonl),
+    late,
+    previous,
+    audited,
     failures: (key) => deps.ledger.attempts(key).failed,
     auditVersion: AUDIT_VERSION,
     maxTargets: ctx.caps.maxTargets,
   });
-  const file: TargetsFile = { night: ctx.night, auditVersion: AUDIT_VERSION, selectedAt: ctx.now().toISOString(), ...choice };
+  // With --sessions, the rest of an earlier selection is kept as it was.
+  const others = wanted ? (readTargets(ctx.paths)?.chosen ?? []).filter((target) => !wanted.has(target.wiseSessionId)) : [];
+  const file: TargetsFile = {
+    night: ctx.night, auditVersion: AUDIT_VERSION, selectedAt: ctx.now().toISOString(),
+    chosen: [...choice.chosen, ...others], skipped: choice.skipped,
+  };
   writeJsonAtomic(ctx.paths.targetsJson, file);
+  const chosen = file.chosen;
   const summary = {
     step: "select",
     night: ctx.night,
     posts: targets.length,
-    chosen: choice.chosen.length,
-    skipped: Object.fromEntries(["already_audited", "failed_twice", "over_cap"].map((reason) => [reason, choice.skipped.filter((item) => item.reason === reason).length])),
-    byEvidence: { transcript: choice.chosen.filter((t) => t.evidence === "transcript").length, summary: choice.chosen.filter((t) => t.evidence === "summary").length },
-    approvedByOwner: choice.chosen.filter((t) => t.verdict === "approve").length,
+    chosen: chosen.length,
+    ...choice.counts,
+    overCap: choice.skipped.length,
+    byEvidence: { transcript: chosen.filter((t) => t.evidence === "transcript").length, summary: chosen.filter((t) => t.evidence === "summary").length },
+    approvedByOwner: chosen.filter((t) => t.verdict === "approve").length,
     // Audited all the same; only a later correction needs the first-shot row.
-    noFirstShotRow: choice.chosen.filter((t) => t.firstShotPostId === null).length,
+    noFirstShotRow: chosen.filter((t) => t.firstShotPostId === null).length,
   };
   const next = recordStep(ctx, "select", { status: "done", stop: null, summary });
   return result({ summary, next: nextStep(next, "select") });
@@ -645,7 +676,7 @@ interface CostLine extends Partial<NightCosts> {
 export function stepCosts(ctx: NightContext, days: number): StepResult {
   const latest = new Map<string, CostLine>();
   for (const line of readJsonl<CostLine>(ctx.paths.costsJsonl)) if (line.night) latest.set(line.night, line);
-  const nights = [...latest.values()].filter((line) => line.night! > addDaysIso(ctx.night, -days)).sort((a, b) => a.night!.localeCompare(b.night!));
+  const nights = [...latest.values()].filter((line) => line.night! > addDays(ctx.night, -days)).sort((a, b) => a.night!.localeCompare(b.night!));
   const sum = (key: keyof NightCosts) => Math.round(nights.reduce((total, line) => total + (Number(line[key]) || 0), 0) * 10_000) / 10_000;
   return result({
     summary: {
@@ -657,11 +688,6 @@ export function stepCosts(ctx: NightContext, days: number): StepResult {
   });
 }
 
-function addDaysIso(night: string, days: number): string {
-  const date = new Date(`${night}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
 
 // ---------------------------------------------------------------------------
 // run

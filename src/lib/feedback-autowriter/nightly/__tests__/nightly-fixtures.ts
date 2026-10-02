@@ -36,3 +36,23 @@ export function nightlyBundle(patch: Partial<EvidenceBundle> = {}): EvidenceBund
     storedJudge: null, pipeline: { evidence: "transcript" }, ...patch,
   };
 }
+
+/** Column order of `loadNightlyTargets`' main SELECT, for the pg-proxy fake. */
+const TARGET_COLUMNS = [
+  "wiseSessionId", "wiseClassId", "postWiseClassId", "wiseTeacherUserId", "scheduledEndAt", "deadlineAt", "evidence", "arm",
+  "fields", "fieldsSha256", "billing", "sonioxTranscriptionId", "metadata", "sessionPostStartedAt", "firstShotPostId", "firstShotPipeline",
+  "firstShotStartedAt", "firstShotRecordedAt", "reviewTutorKey", "currentVerdictId", "mirrorClassName",
+] as const;
+
+/** One raw row of the main target query (as the pg-proxy fake returns it) for a synthetic verified post. */
+export function targetQueryRow(patch: { wiseSessionId: string; scheduledEndAt: string; fieldsSha256?: string; evidence?: "summary" | "transcript" }): unknown[] {
+  const values: Record<string, unknown> = {
+    wiseSessionId: patch.wiseSessionId, wiseClassId: CID, postWiseClassId: CID, wiseTeacherUserId: KEVIN_ONLINE_WISE_USER_ID,
+    scheduledEndAt: patch.scheduledEndAt, deadlineAt: null, evidence: patch.evidence ?? "transcript", arm: "sol", fields: PIM_FIELDS,
+    fieldsSha256: patch.fieldsSha256 ?? `sha-${patch.wiseSessionId.slice(-4)}`, billing: { sessionStatus: "COMPLETED", creditsConsumed: 1 },
+    sonioxTranscriptionId: null, metadata: { className: STUDENT }, sessionPostStartedAt: null, firstShotPostId: `post-${patch.wiseSessionId.slice(-4)}`,
+    firstShotPipeline: { evidence: patch.evidence ?? "transcript" }, firstShotStartedAt: null, firstShotRecordedAt: patch.scheduledEndAt,
+    reviewTutorKey: "Kevin", currentVerdictId: null, mirrorClassName: null,
+  };
+  return TARGET_COLUMNS.map((column) => values[column] ?? null);
+}
