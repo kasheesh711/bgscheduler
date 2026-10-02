@@ -260,6 +260,44 @@ describe("server review accounting", () => {
       {wiseSessionId:"style_fix",kind:"style_review_flagged",severity:"info",pushStatus:"not_required"},
     ]);
   });
+  it("tries a rate-limited style check again in the same run and keeps the provider's error when it still fails", async () => {
+    const { reviewIsebPosts } = await import("../iseb-review");
+    const { fieldsHash } = await import("../submit");
+    vi.stubEnv("OPENROUTER_API_KEY", "test-key");
+    await db.execute(sql`TRUNCATE feedback_autowriter_posts, feedback_autowriter_incidents CASCADE`);
+    const fields={topics:"1. Fractions",performance:"We worked carefully on finding common denominators. Tom explained the fraction additions clearly and corrected his simplification after checking the highest common factor. We practised checking each result together.",improvement:"1. Check the highest common factor of the numerator and denominator before writing the final fraction.",homework:""};
+    const fact={faithful:true,unsupported:[],misattributed:[],homeworkNotSet:[]};
+    const posts=[];
+    const order=["recovers","stays_limited","next_run"];
+    for (const wiseSessionId of order) {
+      const evidenceHash=await retainIsebEvidence(db,{wiseSessionId,atom:null,lessonRecord:"Tom practised fractions.",evidenceKind:"summary"});
+      const pipeline={formatGuide:{id:"iseb",version:1},styleGuide:{id:"mimi",version:2},lessonEvidenceHash:evidenceHash,factualVerdicts:{...fact,levels:{medium:fact,high:fact}}};
+      posts.push({kind:"first_shot" as const,fields,fieldsSha256:fieldsHash(fields),pipeline,billing:{},actorKind:"autowriter" as const,actor:"test",provenance:"live" as const,wiseSessionId,outcome:"verified" as const,postStartedAt:new Date(now.getTime()-30000+10000*order.indexOf(wiseSessionId))});
+    }
+    await db.insert(s.feedbackAutowriterPosts).values(posts);
+    const usage={promptTokens:1,completionTokens:1,reasoningTokens:0,cachedTokens:0,costUsd:0.002};
+    const limited={ok:false as const,error:"openai/gpt-6.1-sol is temporarily rate-limited upstream",httpStatus:429,model:"openai/gpt-6.1-sol",provider:"Azure",finishReason:null,usage:{...usage,costUsd:0.0001},latencyMs:1};
+    const call=vi.fn()
+      .mockResolvedValueOnce(limited)
+      .mockResolvedValueOnce({ok:true as const,content:JSON.stringify({matches:true,problems:[]}),model:"openai/gpt-6.1-sol",provider:"Azure",generationId:"g",finishReason:"stop",usage,latencyMs:1})
+      .mockResolvedValue(limited);
+    const sleep=vi.fn(async ()=>{});
+    await reviewIsebPosts(db,Date.now()+200000,call,sleep);
+    // The first post: one rate limit, then a verdict. The second: the first try and three more, all rate limited, which
+    // ends the run: the third waits for the next one rather than spending the run on a limit that has lasted.
+    expect(call).toHaveBeenCalledTimes(6);
+    expect(sleep).toHaveBeenCalledTimes(4);
+    const posted=Object.fromEntries((await db.select().from(s.feedbackAutowriterPosts)).map(post=>[post.wiseSessionId,post.id]));
+    const reviews=Object.fromEntries((await db.select().from(s.feedbackIsebStyleReviews)).map(review=>[review.postId,review]));
+    expect(reviews[posted.recovers]).toMatchObject({status:"passed",costUsd:"0.00210000",result:{error:null,rateLimitRetries:1}});
+    expect(reviews[posted.recovers].result).not.toHaveProperty("cause");
+    expect(reviews[posted.stays_limited]).toMatchObject({status:"unavailable",costUsd:"0.00040000",result:{error:"style_api_unavailable",
+      cause:"openai/gpt-6.1-sol is temporarily rate-limited upstream",httpStatus:429,rateLimitRetries:3}});
+    expect(reviews[posted.next_run]).toBeUndefined();
+    expect(await db.select().from(s.feedbackAutowriterIncidents)).toMatchObject([
+      {wiseSessionId:"stays_limited",kind:"style_review_unavailable",severity:"info",pushStatus:"not_required"},
+    ]);
+  });
 });
 
 describe("migration 0110", () => {
