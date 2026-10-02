@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Feedback Autowriter · Operations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;550;600;650;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f7f7f2;--panel:#fff;--ink:#202c38;--muted:#74808c;--line:#e8ecec;--blue:#1599dc;--blue-soft:#edf8fd;--green:#30846a;--green-soft:#edf6f0;--amber:#a7751c;--amber-soft:#fff8e8;--red:#c65353;--red-soft:#fff2f0;--purple:#8b80b2}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);font-family:Inter,sans-serif;color:var(--ink);font-size:13px;-webkit-font-smoothing:antialiased}button,a{font:inherit}button{cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid #83cdf2;outline-offset:3px}button{color:inherit}a{color:inherit;text-decoration:none}.page{max-width:1440px;margin:auto;padding:18px 48px 28px}.mockup{font-size:11px;color:#969b9f;margin:0 0 17px}.topbar{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #e2e6e4;padding-bottom:20px}.brand{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:650;letter-spacing:-.4px}.logo{width:30px;height:30px;border:1px solid #b9e0f5;border-radius:8px;background:#e9f6fd;display:grid;place-items:center;color:var(--blue)}.nav{display:flex;gap:28px;margin-left:40px;color:var(--muted);font-size:12px;align-self:stretch;align-items:center}.nav a.active{color:var(--ink);font-weight:600}.top-left{display:flex;align-items:center}.user{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12px}.avatar{border-radius:50%;background:#e9e9e1;color:#5f685e;font-size:10px;font-weight:650;width:28px;height:28px;display:grid;place-items:center}.icon{width:16px;height:16px;stroke:currentColor;stroke-width:1.6;fill:none;flex-shrink:0}.intro{display:flex;align-items:center;justify-content:space-between;margin:28px 0 23px}h1{font-size:25px;letter-spacing:-.9px;font-weight:650;margin:0 0 7px}.subtitle{color:var(--muted);font-size:12px;margin:0}.toolbar{display:flex;align-items:center;gap:8px}.button{border:1px solid #dde4e7;background:white;border-radius:6px;padding:8px 11px;font-size:11px;font-weight:550;display:inline-flex;align-items:center;justify-content:center;gap:7px;white-space:nowrap}.button:hover{background:#f5f9fb}.button.primary{background:var(--blue-soft);color:#087eb8;border-color:#cbe8f7}.button.amber{border-color:#eddcbb;color:#976b1a;background:#fffaf0}.button.red{color:#ba4c4c;border-color:#edd0ca;background:#fff8f6}.date-button{padding:9px 12px}.dot{width:6px;height:6px;background:var(--green);border-radius:50%;display:inline-block}.small{font-size:11px;color:var(--muted)}.mono{font-variant-numeric:tabular-nums}.upper{font-size:10px;letter-spacing:.9px;text-transform:uppercase;font-weight:600;color:var(--muted)}.panel{border:1px solid #e0e6e5;background:var(--panel);border-radius:10px;overflow:hidden;box-shadow:0 2px 3px #25344102}.top-grid{display:grid;grid-template-columns:2fr 1fr;gap:20px;align-items:stretch}.panel-head{padding:19px 20px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line)}h2{font-size:14px;font-weight:650;letter-spacing:-.3px;margin:0}h3{font-size:13px;margin:0;font-weight:600}.headline{display:flex;align-items:center;gap:9px}.count{font-size:10px;font-weight:600;background:#eff3f5;color:#657581;border-radius:4px;padding:3px 6px}.inbox-head-note{font-size:11px;color:var(--muted)}.group-label{display:flex;align-items:center;justify-content:space-between;background:#fafbf9;padding:9px 20px;border-bottom:1px solid var(--line)}.group-label .upper{display:flex;align-items:center;gap:7px}.group-label .upper .icon{width:13px;height:13px}.group-label .small{font-size:10px}.inbox-item{padding:12px 20px;display:flex;align-items:center;gap:11px;border-bottom:1px solid var(--line);min-height:64px}.inbox-item:last-child{border-bottom:0}.item-icon{width:29px;height:29px;display:grid;place-items:center;border-radius:7px;background:#f1f7fa;color:#7599b0;flex-shrink:0}.item-icon.amber{color:#b8892c;background:var(--amber-soft)}.item-icon.red{color:var(--red);background:var(--red-soft)}.item-copy{flex:1;min-width:0}.item-title{font-size:12px;font-weight:550;line-height:1.45}.item-sub{font-size:10px;color:var(--muted);margin-top:4px;line-height:1.4}.tag{display:inline-flex;align-items:center;gap:4px;font-size:9px;border-radius:4px;padding:3px 5px;line-height:1;font-weight:500;vertical-align:1px;margin-left:6px;border:1px solid #e6eaec;color:#76818b;background:#fafbfc}.tag.blue{background:var(--blue-soft);border-color:#d6ebf6;color:#4086a7}.tag.amber{background:var(--amber-soft);border-color:#efe0bf;color:var(--amber)}.tag.green{background:var(--green-soft);border-color:#dbeade;color:var(--green)}.tag.red{background:var(--red-soft);border-color:#f0d4cf;color:var(--red)}.inbox-item .button{padding:6px 10px;min-width:63px}.critical-row{background:#fffdfc}.inbox-footer{display:flex;justify-content:space-between;align-items:center;padding:12px 20px;border-top:1px solid var(--line);color:var(--muted);font-size:10px}.health{padding:20px 20px 15px;display:flex;flex-direction:column}.health-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:17px}.gate{background:#fff8ee;border:1px solid #f0e1c8;border-radius:7px;padding:14px}.gate-top{display:flex;align-items:center;gap:7px;color:#946d24;font-size:11px;font-weight:600}.gate h3{font-size:16px;letter-spacing:-.45px;margin:10px 0 6px;font-weight:600}.gate p{font-size:11px;line-height:1.6;color:#8a7d65;margin:0}.health-block{padding:21px 0 15px;border-bottom:1px solid var(--line)}.health-stat{display:flex;justify-content:space-between;align-items:baseline}.health-stat h3{font-size:11px;font-weight:550}.health-value{font-size:20px;letter-spacing:-.7px;font-weight:600}.health-value small{font-size:10px;letter-spacing:0;color:var(--muted);font-weight:400}.rail-chart{width:100%;height:94px;display:block;margin-top:10px}.rail-foot{display:flex;justify-content:space-between;align-items:center;font-size:10px;color:var(--muted)}.good{color:var(--green)}.bad{color:var(--red)}.warning{color:var(--amber)}.health-system{padding-top:18px;margin-top:auto}.system-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.system-grid{display:grid;grid-template-columns:1fr auto;gap:10px;font-size:10px}.system-grid span:nth-child(odd){color:var(--muted)}.system-grid span:nth-child(even){text-align:right}.status-live{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--green);font-weight:600}.rail-bottom{border-top:1px solid var(--line);margin-top:16px;padding-top:12px;font-size:10px;color:var(--muted);display:flex;justify-content:space-between}.section-head{display:flex;align-items:center;justify-content:space-between;margin:28px 0 13px}.section-head h2{font-size:15px}.section-sub{font-size:11px;color:var(--muted);margin-left:10px}.section-title{display:flex;align-items:baseline}.legend{display:flex;align-items:center;gap:14px;font-size:10px;color:var(--muted)}.legend span{display:flex;align-items:center;gap:5px}.legend-dot{width:5px;height:5px;border-radius:50%;background:#91c8e5;display:inline-block}.legend-line{width:15px;height:2px;background:var(--blue);display:inline-block}.legend-dash{width:15px;border-top:1px dashed var(--green);display:inline-block}.trends{display:grid;grid-template-columns:1fr 1fr;gap:18px}.trend-card{padding:19px 20px 14px}.trend-top{display:flex;justify-content:space-between;align-items:start}.trend-top h3{margin-bottom:6px}.trend-top .small{font-size:10px}.trend-number{font-size:23px;font-weight:600;letter-spacing:-.8px;text-align:right;line-height:1.1}.trend-number small{font-size:10px;font-weight:400;letter-spacing:0;color:var(--muted)}.chart{width:100%;height:194px;display:block;margin-top:15px}.chart text,.rail-chart text{font-family:Inter,sans-serif;font-size:9px;fill:#8a95a0}.chart .grid,.rail-chart .grid{stroke:#edf0f1;stroke-width:1}.chart-note{font-size:10px;color:var(--muted);padding-top:12px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px;line-height:1.6}.chart-note .icon{width:12px;height:12px}.inline-note{display:flex;align-items:center;gap:5px}.metric-pair{display:flex;gap:22px}.metric-pair .trend-number{font-size:20px}.metric-pair .small{text-align:right;margin-top:5px}.evidence-legend{display:flex;gap:14px;font-size:10px;color:var(--muted);margin-top:14px}.evidence-legend span{display:flex;align-items:center;gap:5px}.swatch{width:7px;height:7px;border-radius:2px;background:var(--blue);display:inline-block}.model-rows{display:flex;gap:7px;flex-wrap:wrap}.model-pill{font-size:9px;border:1px solid #e2e8eb;border-radius:4px;padding:4px 6px;background:#fafbfc}.evidence-bottom{display:flex;gap:18px;justify-content:space-between;border-top:1px solid var(--line);padding-top:10px}.evidence-bottom .upper{font-size:8px;margin-bottom:7px}.hold-bars{display:flex;gap:9px;font-size:9px;color:var(--muted);margin-top:3px}.hold-bars b{color:var(--ink);font-weight:550}.table-panel{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:11px;text-align:left}th{font-size:10px;font-weight:500;color:var(--muted);padding:11px 20px;background:#fafbf9;border-bottom:1px solid var(--line)}td{padding:14px 20px;border-bottom:1px solid var(--line)}tbody tr:last-child td{border-bottom:0}tbody tr:hover{background:#f8fbfc}tbody tr.selected{background:#edf8fd}th:not(:first-child),td:not(:first-child){text-align:right}th:last-child,td:last-child{text-align:left}.tutor-btn{display:flex;gap:10px;align-items:center;background:none;border:0;padding:0;text-align:left;width:100%}.tutor-avatar{width:28px;height:28px;border-radius:7px;background:#edf2f4;color:#6b8494;display:grid;place-items:center;font-weight:600;font-size:11px}.tutor-name{font-weight:550;color:var(--ink)}.tutor-meta{font-size:9px;color:var(--muted);margin-top:3px}.accuracy-cell{color:var(--green);font-weight:550}.cell-muted{color:var(--muted);font-size:9px;margin-left:5px}.table-foot{padding:11px 20px;background:#fdfdfb;border-top:1px solid var(--line);font-size:10px;color:var(--muted);display:flex;align-items:center;justify-content:space-between}.expansion-grid{display:grid;grid-template-columns:1fr 1fr;gap:0}.candidate{padding:18px 20px;display:flex;align-items:center;gap:14px}.candidate+.candidate{border-left:1px solid var(--line)}.rank{font-size:12px;color:#a4aeb4}.candidate-info{flex:1}.candidate-title{font-weight:600;font-size:12px;margin-bottom:5px}.candidate-metrics{display:flex;gap:19px;font-size:10px;color:var(--muted)}.candidate-metrics b{font-weight:550;color:var(--ink)}.expansion-note{padding:11px 20px;border-top:1px solid var(--line);font-size:10px;color:var(--muted);background:#fdfdfb}.footer{margin-top:20px;display:flex;justify-content:space-between;font-size:10px;color:#8d979d;align-items:center}.footer-status{display:flex;gap:9px;align-items:center}.filter-chip{display:none;align-items:center;gap:7px;color:#147eae;background:#e9f5fc;border:1px solid #cce5f3;padding:6px 9px;border-radius:5px;font-size:11px}.filter-chip button{background:none;border:0;color:inherit;padding:0;font-size:14px}.filtered-out{display:none!important}.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#24333d;color:white;padding:12px 18px;border-radius:8px;font-size:12px;box-shadow:0 4px 20px #0002;display:none;z-index:20}
+@media(min-width:1441px){.page{max-width:1440px}}@media(max-width:1000px){.page{padding:18px 24px}.top-grid{grid-template-columns:1.7fr 1fr}.nav{gap:15px;margin-left:25px}.item-sub{max-width:300px}.legend{gap:8px}.candidate-metrics{gap:10px}}@media(max-width:760px){.page{padding:15px}.nav{display:none}.intro{align-items:flex-start;gap:15px}.toolbar{flex-wrap:wrap;justify-content:flex-end}.top-grid,.trends,.expansion-grid{grid-template-columns:1fr}.candidate+.candidate{border-left:0;border-top:1px solid var(--line)}.section-head{gap:10px;flex-wrap:wrap}.section-sub{display:none}.inbox-item{padding:12px}.group-label,.panel-head{padding-left:12px;padding-right:12px}.footer-status{flex-wrap:wrap}.footer{gap:20px}.health{min-height:550px}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" aria-hidden="true" style="position:absolute">
+<defs>
+<symbol id="spark" viewBox="0 0 24 24"><path d="m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4Z"/><path d="m20 2 .6 1.4L22 4l-1.4.6L20 6l-.6-1.4L18 4l1.4-.6Z"/></symbol>
+<symbol id="clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3 2"/></symbol>
+<symbol id="check" viewBox="0 0 24 24"><path d="m6 12 4 4 8-9"/></symbol>
+<symbol id="document" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6Z"/><path d="M14 3v5h4M9 12h6M9 16h6"/></symbol>
+<symbol id="decision" viewBox="0 0 24 24"><path d="M12 21V11m0 3-6-6V3m6 11 6-6V3M3 6l3-3 3 3m6 0 3-3 3 3"/></symbol>
+<symbol id="alert" viewBox="0 0 24 24"><path d="m12 3 10 18H2Z"/><path d="M12 9v5m0 3v1"/></symbol>
+<symbol id="arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></symbol>
+<symbol id="calendar" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 10h16"/></symbol>
+<symbol id="chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></symbol>
+<symbol id="shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6Z"/><path d="M9 12h6"/></symbol>
+</defs>
+</svg>
+<div class="page">
+<p class="mockup">Mockup A — "Inbox + health rail"</p>
+<header class="topbar">
+<div class="top-left">
+<a class="brand" href="#"><span class="logo"><svg class="icon"><use href="#spark"/></svg></span>Feedback Autowriter</a>
+<nav class="nav" aria-label="Main navigation"><a class="active" href="#">Overview</a><a href="#trends">Trends</a><a href="#tutors">Tutors</a><a href="#expansion">Expansion</a></nav>
+</div>
+<div class="user"><span>School operations</span><span class="avatar" aria-label="Owner account">O</span></div>
+</header>
+
+<section class="intro">
+<div><h1>A little attention. Then back to teaching.</h1><p class="subtitle">Monday, 6 October 2025 <span style="margin:0 6px;color:#bcc3c7">/</span> All times ICT · Online 1:1 pilot</p></div>
+<div class="toolbar">
+<span class="filter-chip" id="filter-chip"><span id="filter-label"></span><button aria-label="Clear tutor filter" onclick="filterTutor(null)">×</button></span>
+<button class="button date-button" onclick="notify('Showing the last 14 days: 23 Sep–6 Oct 2025.')"><svg class="icon"><use href="#calendar"/></svg> Last 14 days <svg class="icon" style="width:12px"><use href="#chevron"/></svg></button>
+</div>
+</section>
+
+<div class="top-grid">
+<section class="panel" aria-labelledby="inbox-title">
+<div class="panel-head"><div class="headline"><h2 id="inbox-title">What needs you</h2><span class="count">8 open</span></div><span class="inbox-head-note">Nothing urgent is hidden below.</span></div>
+<div class="group-label"><span class="upper"><svg class="icon"><use href="#document"/></svg> To review <span class="count">3</span></span><span class="small">Posted · awaiting your verdict</span></div>
+<div class="inbox-item" data-tutor="Anna">
+<div class="item-icon"><svg class="icon"><use href="#document"/></svg></div>
+<div class="item-copy"><div class="item-title">Anna <span style="font-weight:400;color:#7c8790">· 6 Oct, 13:00 class</span><span class="tag blue">Transcript</span></div><div class="item-sub">Posted 14:12 · 184 words · Judge: pass · GPT-6.1 Sol</div></div>
+<button class="button primary" onclick="notify('Anna · 6 Oct, 13:00 — review draft ready. This is a static preview.')">Review</button>
+</div>
+<div class="inbox-item" data-tutor="Ben">
+<div class="item-icon"><svg class="icon"><use href="#document"/></svg></div>
+<div class="item-copy"><div class="item-title">Ben <span style="font-weight:400;color:#7c8790">· 6 Oct, 11:00 class</span><span class="tag">Summary</span></div><div class="item-sub">Posted 12:09 · 156 words · Judge: pass · Luna</div></div>
+<button class="button primary" onclick="notify('Ben · 6 Oct, 11:00 — review draft ready. This is a static preview.')">Review</button>
+</div>
+<div class="inbox-item" data-tutor="Chai">
+<div class="item-icon"><svg class="icon"><use href="#document"/></svg></div>
+<div class="item-copy"><div class="item-title">Chai <span style="font-weight:400;color:#7c8790">· 5 Oct, 18:00 class</span><span class="tag blue">Transcript</span></div><div class="item-sub">Posted 19:16 · 201 words · Judge: pass · GPT-6.1 Sol</div></div>
+<button class="button primary" onclick="notify('Chai · 5 Oct, 18:00 — review draft ready. This is a static preview.')">Review</button>
+</div>
+
+<div class="group-label"><span class="upper"><svg class="icon"><use href="#clock"/></svg> Held <span class="count">2</span></span><span class="small">Tutor notified · not posted</span></div>
+<div class="inbox-item" data-tutor="Ben">
+<div class="item-icon amber"><svg class="icon"><use href="#clock"/></svg></div>
+<div class="item-copy"><div class="item-title">Ben · Missing lesson evidence <span class="tag amber">Deadline in 9 h</span></div><div class="item-sub">6 Oct, 12:00 class · Held · tutor told 14:05 · due 7 Oct, 00:35</div></div>
+<button class="button amber" onclick="notify('Hold #H-042 · Request lesson evidence from Ben before 00:35 ICT.')">Open</button>
+</div>
+<div class="inbox-item" data-tutor="Chai">
+<div class="item-icon amber"><svg class="icon"><use href="#clock"/></svg></div>
+<div class="item-copy"><div class="item-title">Chai · Judge found unsupported progress <span class="tag amber">Deadline in 17 h</span></div><div class="item-sub">6 Oct, 14:00 class · Held · tutor told 15:18 · due 7 Oct, 08:35</div></div>
+<button class="button amber" onclick="notify('Hold #H-043 · Verify the progress claim against the transcript.')">Open</button>
+</div>
+
+<div class="group-label"><span class="upper"><svg class="icon"><use href="#decision"/></svg> Decisions <span class="count">2</span></span><span class="small">30-day scan · through 5 Nov</span></div>
+<div class="inbox-item" data-tutor="Anna">
+<div class="item-icon"><svg class="icon"><use href="#decision"/></svg></div>
+<div class="item-copy"><div class="item-title">Guest student · include or exclude?</div><div class="item-sub">Anna · 9 Oct, 16:00 · no feedback rule for guest attendance</div></div>
+<button class="button" onclick="notify('Decision preview · Choose whether guest-attendance classes are eligible.')">Decide</button>
+</div>
+<div class="inbox-item" data-tutor="Chai">
+<div class="item-icon"><svg class="icon"><use href="#decision"/></svg></div>
+<div class="item-copy"><div class="item-title">Thai-only summary · allow as evidence?</div><div class="item-sub">Chai · 12 Oct, 10:00 · no transcript expected</div></div>
+<button class="button" onclick="notify('Decision preview · Set an evidence rule for Thai-only summaries.')">Decide</button>
+</div>
+
+<div class="group-label"><span class="upper"><svg class="icon" style="color:var(--red)"><use href="#alert"/></svg> Incidents <span class="count" style="color:var(--red);background:#fff0ed">1</span></span><span class="small">Blocks expansion</span></div>
+<div class="inbox-item critical-row" data-tutor="Ben">
+<div class="item-icon red"><svg class="icon"><use href="#alert"/></svg></div>
+<div class="item-copy"><div class="item-title">Unsupported mastery claim <span class="tag red">Critical · 29 Sep</span></div><div class="item-sub">Ben · post corrected 29 Sep, 17:42 · prevention check still open</div></div>
+<button class="button red" onclick="notify('Incident #INC-007 · Correction posted. Prevention check remains open; gate resets 13 Oct.')">Open</button>
+</div>
+<div class="inbox-footer"><span>Sorted by action type, then deadline</span><span style="display:flex;align-items:center;gap:5px"><svg class="icon" style="width:12px;height:12px"><use href="#check"/></svg> Synced at 15:35</span></div>
+</section>
+
+<aside class="panel health" aria-labelledby="health-title">
+<div class="health-title"><h2 id="health-title">Pilot health</h2><span class="small">14-day window</span></div>
+<div class="gate">
+<div class="gate-top"><svg class="icon"><use href="#shield"/></svg> EXPANSION GATE · BLOCKED</div>
+<h3>Gate blocked until 13 Oct</h3>
+<p>Critical on 29 Sep. Keep the current pilot running; do not add live tutors yet.</p>
+<div style="border-top:1px solid #eddfc7;margin-top:12px;padding-top:10px;font-size:10px;color:#977442">Also needs Wilson lower bound ≥ 80%.</div>
+</div>
+<div class="health-block">
+<div class="health-stat"><h3>No real fix needed</h3><div class="health-value">90.2% <small>46 / 51 reviewed</small></div></div>
+<svg class="rail-chart" viewBox="0 0 370 94" role="img" aria-label="Daily accuracy and seven-day moving average; critical error on 29 September">
+<path class="grid" d="M3 15H365M3 44H365M3 73H365"/>
+<path d="M3 58H365" stroke="#b4ccbe" stroke-dasharray="3 4" fill="none"/>
+<polyline points="5,39 32,28 59,39 86,14 113,31 140,24 167,59 194,31 221,17 248,26 275,12 302,30 329,12 356,22" fill="none" stroke="#c0dff0" stroke-width="1"/>
+<g fill="#95c8e4"><circle cx="5" cy="39" r="2.5"/><circle cx="32" cy="28" r="2.5"/><circle cx="59" cy="39" r="2.5"/><circle cx="86" cy="14" r="2.5"/><circle cx="113" cy="31" r="2.5"/><circle cx="140" cy="24" r="2.5"/><circle cx="194" cy="31" r="2.5"/><circle cx="221" cy="17" r="2.5"/><circle cx="248" cy="26" r="2.5"/><circle cx="275" cy="12" r="2.5"/><circle cx="302" cy="30" r="2.5"/><circle cx="329" cy="12" r="2.5"/><circle cx="356" cy="22" r="2.5"/></g>
+<polyline points="5,36 32,34 59,35 86,32 113,31 140,30 167,34 194,33 221,32 248,30 275,29 302,29 329,27 356,22" fill="none" stroke="#1599dc" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="167" cy="59" r="4" fill="#c65353" stroke="white" stroke-width="1.5"/>
+<text x="3" y="91">23 Sep</text><text x="330" y="91">6 Oct</text><text x="341" y="54" style="fill:#7c9b8b">80%</text>
+</svg>
+<div class="rail-foot"><span><span class="legend-line" style="vertical-align:middle;margin-right:4px"></span>7-day average 91.0%</span><span class="warning">Wilson LB 79.0%</span></div>
+</div>
+<div class="health-block">
+<div class="health-stat"><h3>Eligible classes posted</h3><div class="health-value">76.8% <small>86 / 112</small></div></div>
+<svg class="rail-chart" style="height:75px;margin-top:6px" viewBox="0 0 370 75" role="img" aria-label="Daily coverage and seven-day average, above the 70 percent floor">
+<path d="M4 41H365" stroke="#b4ccbe" stroke-dasharray="3 4"/>
+<polyline points="5,44 32,30 59,38 86,21 113,35 140,27 167,39 194,26 221,22 248,32 275,15 302,29 329,19 356,24" fill="none" stroke="#bdddee" stroke-width="1"/>
+<g fill="#96cbe6"><circle cx="5" cy="44" r="2"/><circle cx="32" cy="30" r="2"/><circle cx="59" cy="38" r="2"/><circle cx="86" cy="21" r="2"/><circle cx="113" cy="35" r="2"/><circle cx="140" cy="27" r="2"/><circle cx="167" cy="39" r="2"/><circle cx="194" cy="26" r="2"/><circle cx="221" cy="22" r="2"/><circle cx="248" cy="32" r="2"/><circle cx="275" cy="15" r="2"/><circle cx="302" cy="29" r="2"/><circle cx="329" cy="19" r="2"/><circle cx="356" cy="24" r="2"/></g>
+<polyline points="5,39 32,37 59,37 86,34 113,34 140,33 167,33 194,31 221,30 248,29 275,28 302,27 329,26 356,25" fill="none" stroke="#1599dc" stroke-width="2.3"/>
+<text x="3" y="70">23 Sep</text><text x="330" y="70">6 Oct</text><text x="340" y="53" style="fill:#7c9b8b">70%</text>
+</svg>
+<div class="rail-foot"><span>7-day average 78.1%</span><span class="good">6.8 pp above floor</span></div>
+</div>
+<div class="health-system">
+<div class="system-title"><h3>System</h3><span class="status-live"><span class="dot"></span> LIVE</span></div>
+<div class="system-grid"><span>Writer</span><span>GPT-6.1 Sol</span><span>Judge</span><span>GLM · medium + high</span><span>Transcript first</span><span>Off</span><span>Prompt</span><span>v5</span></div>
+<div class="rail-bottom"><span>Last review run</span><span class="mono">15:27 ICT</span></div>
+</div>
+</aside>
+</div>
+
+<section id="trends">
+<div class="section-head"><div class="section-title"><h2>How the pilot is trending</h2><span class="section-sub">23 Sep–6 Oct · ICT · live posts only</span></div><div class="legend"><span><i class="legend-dot"></i>Daily points</span><span><i class="legend-line"></i>7-day moving average</span></div></div>
+<div class="trends">
+<article class="panel trend-card">
+<div class="trend-top"><div><h3>Accuracy &amp; gate</h3><div class="small">Reviewed posts needing no substantive correction</div></div><div class="trend-number">90.2%<div class="small" style="margin-top:6px">46 of 51 reviewed</div></div></div>
+<svg class="chart" viewBox="0 0 600 194" role="img" aria-label="Accuracy daily points, seven-day moving average, rolling fourteen-day Wilson lower bound, 80 percent target and red critical marker on 29 September">
+<g class="grid"><path d="M38 17H577M38 49H577M38 81H577M38 113H577M38 145H577"/></g>
+<g><text x="6" y="20">100%</text><text x="13" y="52">90%</text><text x="13" y="84">80%</text><text x="13" y="116">70%</text><text x="13" y="148">60%</text></g>
+<path d="M38 81H577" stroke="#82ad97" stroke-dasharray="4 4"/>
+<path d="M284 17V149" stroke="#eed2ce" stroke-dasharray="3 4"/>
+<polyline points="38,68 79,55 120,68 161,17 202,52 243,33 284,107 325,49 366,30 407,43 448,17 489,46 530,17 571,36" fill="none" stroke="#c7e3f1" stroke-width="1"/>
+<g fill="#9acbe5"><circle cx="38" cy="68" r="3"/><circle cx="79" cy="55" r="3"/><circle cx="120" cy="68" r="3"/><circle cx="161" cy="17" r="3"/><circle cx="202" cy="52" r="3"/><circle cx="243" cy="33" r="3"/><circle cx="325" cy="49" r="3"/><circle cx="366" cy="30" r="3"/><circle cx="407" cy="43" r="3"/><circle cx="448" cy="17" r="3"/><circle cx="489" cy="46" r="3"/><circle cx="530" cy="17" r="3"/><circle cx="571" cy="36" r="3"/></g>
+<polyline points="38,61 79,59 120,59 161,54 202,52 243,50 284,57 325,55 366,53 407,49 448,48 489,47 530,45 571,46" fill="none" stroke="#1599dc" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<polyline points="38,120 79,116 120,118 161,111 202,108 243,103 284,118 325,113 366,108 407,105 448,98 489,94 530,89 571,84" fill="none" stroke="#8b80b2" stroke-width="2" stroke-linejoin="round"/>
+<circle cx="284" cy="107" r="5" fill="#c65353" stroke="white" stroke-width="2"/><text x="291" y="125" style="fill:#c65353;font-size:8px">Critical</text>
+<text x="38" y="166">23 Sep</text><text x="191" y="166">27 Sep</text><text x="274" y="166">29 Sep</text><text x="438" y="166">3 Oct</text><text x="549" y="166">6 Oct</text>
+<text x="39" y="188" style="fill:#8b80b2">— 14-day Wilson lower bound</text><text x="214" y="188" style="fill:#648e79">┄ 80% target</text><text x="480" y="188">LB today: 79.0%</text>
+</svg>
+<div class="chart-note"><span class="inline-note warning"><svg class="icon"><use href="#shield"/></svg>Gate blocked until 13 Oct (critical on 29 Sep)</span><span>Minor style edits count as no fix.</span></div>
+</article>
+
+<article class="panel trend-card">
+<div class="trend-top"><div><h3>Coverage</h3><div class="small">Posted / eligible · excludes cancellations &amp; dry runs</div></div><div class="trend-number">76.8%<div class="small" style="margin-top:6px">86 of 112 eligible</div></div></div>
+<svg class="chart" viewBox="0 0 600 194" role="img" aria-label="Daily posted versus eligible coverage with seven-day moving average and seventy percent floor">
+<g class="grid"><path d="M38 17H577M38 49H577M38 81H577M38 113H577M38 145H577"/></g>
+<text x="6" y="20">100%</text><text x="13" y="52">90%</text><text x="13" y="84">80%</text><text x="13" y="116">70%</text><text x="13" y="148">60%</text>
+<path d="M38 113H577" stroke="#82ad97" stroke-dasharray="4 4"/>
+<path d="M38 116 79 92 120 110 161 62 202 100 243 81 284 113 325 81 366 72 407 100 448 62 489 90 530 68 571 78" fill="none" stroke="#c7e3f1" stroke-width="1"/>
+<g fill="#9acbe5"><circle cx="38" cy="116" r="3"/><circle cx="79" cy="92" r="3"/><circle cx="120" cy="110" r="3"/><circle cx="161" cy="62" r="3"/><circle cx="202" cy="100" r="3"/><circle cx="243" cy="81" r="3"/><circle cx="284" cy="113" r="3"/><circle cx="325" cy="81" r="3"/><circle cx="366" cy="72" r="3"/><circle cx="407" cy="100" r="3"/><circle cx="448" cy="62" r="3"/><circle cx="489" cy="90" r="3"/><circle cx="530" cy="68" r="3"/><circle cx="571" cy="78" r="3"/></g>
+<polyline points="38,109 79,106 120,105 161,100 202,99 243,97 284,96 325,93 366,90 407,89 448,88 489,85 530,84 571,87" fill="none" stroke="#1599dc" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="38" y="166">23 Sep</text><text x="191" y="166">27 Sep</text><text x="356" y="166">1 Oct</text><text x="549" y="166">6 Oct</text>
+<text x="39" y="188" style="fill:#648e79">┄ 70% minimum coverage</text><text x="452" y="188">7-day average: 78.1%</text>
+</svg>
+<div class="chart-note"><span class="good">Above the floor on 13 of 14 days.</span><span>26 unposted · 9 held, 17 skipped</span></div>
+</article>
+
+<article class="panel trend-card">
+<div class="trend-top"><div><h3>Speed &amp; cost</h3><div class="small">Class end → school-system post · writer + judge spend</div></div><div class="metric-pair"><div><div class="trend-number">12.4 <small>min</small></div><div class="small">14-day daily mean</div></div><div><div class="trend-number">$0.041</div><div class="small">per eligible class</div></div></div></div>
+<svg class="chart" viewBox="0 0 600 194" role="img" aria-label="Daily mean posting time and daily cost per eligible class, each with a seven-day moving average">
+<g class="grid"><path d="M38 19H559M38 50H559M38 81H559M38 112H559M38 143H559"/></g>
+<text x="12" y="22">20m</text><text x="12" y="53">16m</text><text x="12" y="84">12m</text><text x="18" y="115">8m</text><text x="18" y="146">4m</text>
+<text x="566" y="22">$.060</text><text x="566" y="53">$.050</text><text x="566" y="84">$.040</text><text x="566" y="115">$.030</text><text x="566" y="146">$.020</text>
+<polyline points="38,64 78,76 118,48 158,88 198,83 238,67 278,39 318,88 358,99 398,83 438,95 478,102 518,93 558,88" fill="none" stroke="#c7e3f1" stroke-width="1"/>
+<g fill="#9acbe5"><circle cx="38" cy="64" r="2.8"/><circle cx="78" cy="76" r="2.8"/><circle cx="118" cy="48" r="2.8"/><circle cx="158" cy="88" r="2.8"/><circle cx="198" cy="83" r="2.8"/><circle cx="238" cy="67" r="2.8"/><circle cx="278" cy="39" r="2.8"/><circle cx="318" cy="88" r="2.8"/><circle cx="358" cy="99" r="2.8"/><circle cx="398" cy="83" r="2.8"/><circle cx="438" cy="95" r="2.8"/><circle cx="478" cy="102" r="2.8"/><circle cx="518" cy="93" r="2.8"/><circle cx="558" cy="88" r="2.8"/></g>
+<polyline points="38,65 78,68 118,66 158,70 198,72 238,71 278,67 318,70 358,74 398,79 438,80 478,83 518,87 558,93" fill="none" stroke="#1599dc" stroke-width="2.5" stroke-linejoin="round"/>
+<polyline points="38,65 78,71 118,56 158,78 198,74 238,81 278,46 318,84 358,90 398,87 438,81 478,84 518,87 558,90" fill="none" stroke="#e0d9ec" stroke-width="1"/>
+<g fill="#b9a8d0"><circle cx="38" cy="65" r="2.5"/><circle cx="78" cy="71" r="2.5"/><circle cx="118" cy="56" r="2.5"/><circle cx="158" cy="78" r="2.5"/><circle cx="198" cy="74" r="2.5"/><circle cx="238" cy="81" r="2.5"/><circle cx="278" cy="46" r="2.5"/><circle cx="318" cy="84" r="2.5"/><circle cx="358" cy="90" r="2.5"/><circle cx="398" cy="87" r="2.5"/><circle cx="438" cy="81" r="2.5"/><circle cx="478" cy="84" r="2.5"/><circle cx="518" cy="87" r="2.5"/><circle cx="558" cy="90" r="2.5"/></g>
+<polyline points="38,68 78,69 118,67 158,70 198,71 238,73 278,69 318,72 358,75 398,79 438,80 478,81 518,82 558,86" fill="none" stroke="#8b80b2" stroke-width="2" stroke-linejoin="round"/>
+<text x="38" y="165">23 Sep</text><text x="188" y="165">27 Sep</text><text x="348" y="165">1 Oct</text><text x="536" y="165">6 Oct</text>
+<text x="39" y="188" style="fill:#1599dc">— Posting time · left axis</text><text x="209" y="188" style="fill:#8b80b2">— Cost / class · right axis</text>
+</svg>
+<div class="chart-note"><span>7-day averages: <b style="font-weight:550;color:var(--ink)">10.5 min · $0.038</b></span><span>Held time included when eventually posted.</span></div>
+</article>
+
+<article class="panel trend-card">
+<div class="trend-top"><div><h3>Evidence &amp; models</h3><div class="small">Evidence used per post · writer attribution retained</div></div><div class="trend-number">63%<div class="small" style="margin-top:6px">54 / 86 transcript-backed</div></div></div>
+<div class="evidence-legend"><span><i class="swatch"></i>Transcript</span><span><i class="swatch" style="background:#ccdce6"></i>Summary only</span><span><i class="legend-line"></i>7-day transcript share</span></div>
+<svg class="chart" style="height:136px;margin-top:8px" viewBox="0 0 600 136" role="img" aria-label="Daily stacked post counts for transcript and summary evidence with daily transcript-share points and seven-day moving average">
+<g class="grid"><path d="M38 9H559M38 33H559M38 57H559M38 81H559M38 105H559"/></g>
+<text x="18" y="12">8</text><text x="18" y="60">4</text><text x="18" y="108">0</text><text x="565" y="12">100%</text><text x="565" y="60">50%</text><text x="565" y="108">0%</text>
+<g fill="#ccdce6">
+<rect x="38" y="45" width="20" height="36" rx="2"/><rect x="78" y="33" width="20" height="36" rx="2"/><rect x="118" y="45" width="20" height="36" rx="2"/><rect x="158" y="21" width="20" height="24" rx="2"/><rect x="198" y="33" width="20" height="24" rx="2"/><rect x="238" y="33" width="20" height="36" rx="2"/><rect x="278" y="45" width="20" height="24" rx="2"/><rect x="318" y="33" width="20" height="24" rx="2"/><rect x="358" y="21" width="20" height="24" rx="2"/><rect x="398" y="33" width="20" height="24" rx="2"/><rect x="438" y="21" width="20" height="24" rx="2"/><rect x="478" y="33" width="20" height="24" rx="2"/><rect x="518" y="21" width="20" height="24" rx="2"/><rect x="558" y="33" width="20" height="24" rx="2"/>
+</g>
+<g fill="#61b8e6">
+<rect x="38" y="81" width="20" height="24"/><rect x="78" y="69" width="20" height="36"/><rect x="118" y="81" width="20" height="24"/><rect x="158" y="45" width="20" height="60"/><rect x="198" y="57" width="20" height="48"/><rect x="238" y="69" width="20" height="36"/><rect x="278" y="69" width="20" height="36"/><rect x="318" y="57" width="20" height="48"/><rect x="358" y="45" width="20" height="60"/><rect x="398" y="57" width="20" height="48"/><rect x="438" y="45" width="20" height="60"/><rect x="478" y="57" width="20" height="48"/><rect x="518" y="45" width="20" height="60"/><rect x="558" y="57" width="20" height="48"/>
+</g>
+<g fill="#157eaf" stroke="white" stroke-width="1"><circle cx="48" cy="67" r="2.7"/><circle cx="88" cy="57" r="2.7"/><circle cx="128" cy="67" r="2.7"/><circle cx="168" cy="36" r="2.7"/><circle cx="208" cy="41" r="2.7"/><circle cx="248" cy="57" r="2.7"/><circle cx="288" cy="47" r="2.7"/><circle cx="328" cy="41" r="2.7"/><circle cx="368" cy="36" r="2.7"/><circle cx="408" cy="41" r="2.7"/><circle cx="448" cy="36" r="2.7"/><circle cx="488" cy="41" r="2.7"/><circle cx="528" cy="36" r="2.7"/><circle cx="568" cy="41" r="2.7"/></g>
+<polyline points="48,62 88,61 128,62 168,57 208,55 248,55 288,53 328,50 368,47 408,43 448,43 488,43 528,40 568,39" fill="none" stroke="#087db5" stroke-width="2.2" stroke-linejoin="round"/>
+<text x="38" y="124">23 Sep</text><text x="188" y="124">27 Sep</text><text x="348" y="124">1 Oct</text><text x="542" y="124">6 Oct</text>
+</svg>
+<div class="evidence-bottom">
+<div><div class="upper">Latest posts · writer</div><div class="model-rows"><span class="model-pill">Anna #P-086 · GPT-6.1 Sol</span><span class="model-pill">Ben #P-085 · Luna</span><span class="model-pill">Chai #P-084 · GPT-6.1 Sol</span><span class="model-pill">Anna #P-081 · GLM</span></div></div>
+<div style="min-width:158px"><div class="upper">9 holds · last 14 days</div><div class="hold-bars"><span>Evidence <b>5</b></span><span>Judge <b>3</b></span><span>Rule <b>1</b></span></div><div style="height:4px;display:flex;gap:2px;margin-top:9px"><span style="width:56%;background:#dcb875;border-radius:2px"></span><span style="width:33%;background:#edcf94;border-radius:2px"></span><span style="width:11%;background:#f4e5c9;border-radius:2px"></span></div><div class="small" style="font-size:9px;margin-top:7px">2 currently open</div></div>
+</div>
+</article>
+</div>
+</section>
+
+<section id="tutors">
+<div class="section-head"><div class="section-title"><h2>Tutors</h2><span class="section-sub">5 in the pilot · 3 live, 2 dry-run · capacity for 18</span></div><span class="small">Click a tutor to filter the inbox and charts.</span></div>
+<div class="panel table-panel">
+<table>
+<thead><tr><th style="width:25%">Tutor</th><th>Accuracy <span style="color:#b2bdc4">↓</span></th><th>Coverage</th><th>Holds</th><th>Real fixes</th><th>Probation status</th></tr></thead>
+<tbody>
+<tr data-tutor-row="Anna"><td><button class="tutor-btn" onclick="filterTutor('Anna')"><span class="tutor-avatar">A</span><span><span class="tutor-name">Anna</span><div class="tutor-meta">Live · since 8 Sep</div></span></button></td><td class="accuracy-cell">95.0% <span class="cell-muted">19 / 20</span></td><td>84.6% <span class="cell-muted">33 / 39</span></td><td>2 <span class="cell-muted">0 open</span></td><td>1</td><td><span class="tag green" style="margin:0">Passed</span><span class="cell-muted">22 Sep</span></td></tr>
+<tr data-tutor-row="Chai"><td><button class="tutor-btn" onclick="filterTutor('Chai')"><span class="tutor-avatar" style="background:#edf3ec;color:#7b9275">C</span><span><span class="tutor-name">Chai</span><div class="tutor-meta">Live · since 15 Sep</div></span></button></td><td class="accuracy-cell">92.9% <span class="cell-muted">13 / 14</span></td><td>77.1% <span class="cell-muted">27 / 35</span></td><td>3 <span class="cell-muted">1 open</span></td><td>1</td><td><span class="tag green" style="margin:0">Passed</span><span class="cell-muted">29 Sep</span></td></tr>
+<tr data-tutor-row="Ben"><td><button class="tutor-btn" onclick="filterTutor('Ben')"><span class="tutor-avatar" style="background:#f3efe6;color:#9c8b6b">B</span><span><span class="tutor-name">Ben</span><div class="tutor-meta">Live · since 8 Sep</div></span></button></td><td class="warning" style="font-weight:550">82.4% <span class="cell-muted">14 / 17</span></td><td class="warning">68.4% <span class="cell-muted">26 / 38</span></td><td>4 <span class="cell-muted">1 open</span></td><td>3 <span class="cell-muted bad">1 critical</span></td><td><span class="tag amber" style="margin:0">Extended</span><span class="cell-muted">Until 13 Oct</span></td></tr>
+<tr data-tutor-row="Dao"><td><button class="tutor-btn" onclick="filterTutor('Dao')"><span class="tutor-avatar" style="background:#f0edf5;color:#9382a8">D</span><span><span class="tutor-name">Dao</span><div class="tutor-meta">Dry-run · no school-system posts</div></span></button></td><td>93.8% <span class="cell-muted">15 / 16 · dry-run</span></td><td class="small">— not live</td><td class="small">—</td><td>1 <span class="cell-muted">dry-run</span></td><td><span class="tag" style="margin:0">Not started</span></td></tr>
+<tr data-tutor-row="Emma"><td><button class="tutor-btn" onclick="filterTutor('Emma')"><span class="tutor-avatar" style="background:#edf3f2;color:#6c9391">E</span><span><span class="tutor-name">Emma</span><div class="tutor-meta">Dry-run · no school-system posts</div></span></button></td><td>91.7% <span class="cell-muted">11 / 12 · dry-run</span></td><td class="small">— not live</td><td class="small">—</td><td>1 <span class="cell-muted">dry-run</span></td><td><span class="tag" style="margin:0">Not started</span></td></tr>
+</tbody>
+</table>
+<div class="table-foot"><span>Accuracy and fixes use owner-reviewed posts. Holds are totals for this window, not only open items.</span><span>23 Sep–6 Oct</span></div>
+</div>
+</section>
+
+<section id="expansion">
+<div class="section-head"><div class="section-title"><h2>Next in line</h2><span class="section-sub">Expansion candidates · ranked by online 1:1 hours in the last 30 days</span></div><span class="inline-note small warning"><svg class="icon" style="width:13px"><use href="#shield"/></svg>Live enrollment paused by gate</span></div>
+<div class="panel">
+<div class="expansion-grid">
+<article class="candidate"><span class="rank">01</span><span class="tutor-avatar" style="background:#f0edf5;color:#9382a8">D</span><div class="candidate-info"><div class="candidate-title">Dao <span class="tag blue">Head start ready</span></div><div class="candidate-metrics"><span><b>42.5 h</b> online 1:1</span><span><b>93.8%</b> dry-run accuracy</span><span>16 reviewed</span></div></div><button class="button" onclick="notify('Dao · 15 of 16 dry-run drafts needed no real fix. Live enrollment is blocked by the gate.')">View <svg class="icon" style="width:12px"><use href="#arrow"/></svg></button></article>
+<article class="candidate"><span class="rank">02</span><span class="tutor-avatar" style="background:#edf3f2;color:#6c9391">E</span><div class="candidate-info"><div class="candidate-title">Emma <span class="tag">Collecting evidence</span></div><div class="candidate-metrics"><span><b>36.0 h</b> online 1:1</span><span><b>91.7%</b> dry-run accuracy</span><span>12 reviewed</span></div></div><button class="button" onclick="notify('Emma · 11 of 12 dry-run drafts needed no real fix. Four more reviews complete the head-start sample.')">View <svg class="icon" style="width:12px"><use href="#arrow"/></svg></button></article>
+</div>
+<div class="expansion-note">Dry runs never post to the school system. Head-start reviews inform onboarding; they do not replace live probation or unlock the expansion gate.</div>
+</div>
+</section>
+
+<footer class="footer">
+<div class="footer-status"><span class="status-live"><span class="dot"></span>Mode LIVE</span><span>·</span><span>Writer GPT-6.1 Sol</span><span>·</span><span>Judge GLM (medium+high)</span><span>·</span><span>Transcript first: off</span><span>·</span><span>Prompt v5</span><span>·</span><span>Last review run 15:27</span></div>
+<span style="white-space:nowrap">Illustrative data · not a live system</span>
+</footer>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script>
+let toastTimer;
+function notify(message){const t=document.getElementById('toast');t.textContent=message;t.style.display='block';clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.style.display='none',4500)}
+const originalTrendMarkup=document.querySelector('.trends').innerHTML;
+let activeTutor=null;
+function filterTutor(name){
+ if(activeTutor===name)name=null;
+ activeTutor=name;
+ document.getElementById('filter-chip').style.display=name?'inline-flex':'none';
+ document.getElementById('filter-label').textContent=name?'Tutor: '+name:'';
+ document.querySelectorAll('[data-tutor]').forEach(el=>el.classList.toggle('filtered-out',!!name&&el.dataset.tutor!==name));
+ document.querySelectorAll('[data-tutor-row]').forEach(el=>el.classList.toggle('selected',el.dataset.tutorRow===name));
+ const groups=[...document.querySelectorAll('.group-label')];
+ let open=0;
+ groups.forEach(group=>{
+ let row=group.nextElementSibling,count=0;
+ while(row&&row.classList.contains('inbox-item')){if(!row.classList.contains('filtered-out'))count++;row=row.nextElementSibling}
+ group.querySelector('.count').textContent=count;open+=count;
+ });
+ document.querySelector('.panel-head .count').textContent=open+' open';
+ const trends=document.querySelector('.trends');
+ if(!name){trends.innerHTML=originalTrendMarkup;document.querySelector('#trends .section-sub').textContent='23 Sep–6 Oct · ICT · live posts only';return}
+ document.querySelector('#trends .section-sub').textContent='23 Sep–6 Oct · '+name+' only';
+ const dry=name==='Dao'||name==='Emma';
+ trends.innerHTML='<div class="panel" style="grid-column:1 / -1;padding:28px;min-height:160px"><h3>'+name+' · '+(dry?'dry-run':'live')+' trend view</h3><p class="small" style="line-height:1.8;max-width:640px">'+(dry?'Dry-run reviews are shown in the tutor table. No live coverage, posting-time or spend series is available for this tutor.':'The inbox is filtered to '+name+'. Tutor-level daily chart series are not included in this static mockup; the all-tutor series is hidden to avoid showing aggregate data as tutor data.')+'</p><button class="button primary" onclick="filterTutor(null)">Clear filter · show pilot trends</button></div>';
+}
+</script>
+</body>
+</html>

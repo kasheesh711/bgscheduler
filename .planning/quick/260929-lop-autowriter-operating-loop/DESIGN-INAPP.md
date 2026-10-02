@@ -420,7 +420,7 @@ In-person classes stay hidden everywhere.
 1. **Candidate first shots** for every row with `post_started_at`:
    - the current `fields`;
    - for `metadata.nicknameFix` rows, the earliest `post_class_feedback_versions` text plus every 2^k reverse-rename
-     variant (e.g. Bas → Worawut at each occurrence).
+     variant (e.g. Tom → Somchai at each occurrence).
 2. **Proof:** accept only the candidate whose rebuilt body (one of the 24 field-order permutations plus the stored
    billing) hashes to `body_hash`. Record the method (`unchanged` / `pc_first_version` / `reverse_rename`) and the
    proof.
@@ -470,7 +470,7 @@ In-person classes stay hidden everywhere.
   - `moved_onsite`, cancelled, and ended with an outcome link;
   - no closure on a stale source;
   - series dedupe.
-- **Backfill reconstruction,** including an original text that already contained "Bas".
+- **Backfill reconstruction,** including an original text that already contained "Tom".
 - **Review builder and component:** owner-only controls; onsite classes hidden.
 - **`vercel-crons.test.ts`** updated.
 - **Routes:** 403 for a non-owner admin; 401 for a missing or wrong agent token; refused on preview deployments.

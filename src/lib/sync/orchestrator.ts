@@ -1,7 +1,10 @@
+import { captureWorkforceObservation } from "@/lib/tutor-offboarding/workforce/observation-store";
+import { buildSnapshotWorkforceObservation, type SnapshotAvailability } from "@/lib/tutor-offboarding/workforce/observations";
 import { eq, or, sql } from "drizzle-orm";
 import { addDays } from "date-fns";
 import { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import { topWisePaths, WiseClient } from "@/lib/wise/client";
 import {
   getWiseSessionTeacherUserId,
@@ -37,6 +40,9 @@ import { pruneOldSnapshots } from "@/lib/sync/snapshot-pruning";
 
 import { onboardingEnabled, resolveOnboardingIdentities, unmanagedTeacherSessions } from "@/lib/tutor-onboarding/planner";
 import { loadAccountMappings, promoteWithTutorContacts } from "@/lib/tutor-onboarding/sync";
+import { extractRosterFacts, persistRosterFacts } from "@/lib/tutor-onboarding/roster-facts";
+import { syncTerminationSource } from "@/lib/tutor-offboarding/termination-sync";
+import { reconcileRemovalRuns } from "@/lib/tutor-offboarding/reconcile";
 import { observationsFromWise, recordModeObservations } from "@/lib/classrooms/mode-history-data";
 
 export interface SyncResult {
@@ -220,6 +226,7 @@ export async function runFullSync(
       }
     }
 
+    const workforceAvailability = new Map<string, SnapshotAvailability>();
     // Process teachers with availability
     for (const teacher of wiseTeachers) {
       const groupId = teacherToGroupId.get(teacher._id);
@@ -244,6 +251,7 @@ export async function runFullSync(
       }
 
       try {
+        const availabilityObservedAt = new Date().toISOString();
         const near = await fetchTeacherNearAvailability(
           client,
           instituteId,
@@ -252,6 +260,7 @@ export async function runFullSync(
           leaveFetchNow,
         );
         const workingHours = near.workingHours;
+        workforceAvailability.set(teacher._id, { observedAt: availabilityObservedAt, workingHours: workingHours?.slots, leaves: near.leaves, complete: false, nearLeavesAt: availabilityObservedAt, farLeavesAt: null });
 
         // Far tier: reuse the cached leaves when fresh, else fetch live and
         // queue the row for the single batched upsert after this loop.
@@ -299,6 +308,7 @@ export async function runFullSync(
         // leave straddling the day-28 window boundary appearing in both tiers is
         // harmless.
         const leaves = [...near.leaves, ...farLeaves];
+        workforceAvailability.set(teacher._id, { observedAt: availabilityObservedAt, workingHours: workingHours?.slots, leaves, complete: true, nearLeavesAt: availabilityObservedAt, farLeavesAt: farFetchedAt.toISOString() });
 
         // Normalize and store working hours
         const windows = normalizeWorkingHours(workingHours?.slots);
@@ -698,7 +708,64 @@ export async function runFullSync(
         console.error("[sync-orchestrator] modality history capture failed", modalityHistory.error);
       }
     }
+    // Tutor Offboarding (OFF-02): roster details the detector scores on. A failure of THIS step never blocks a
+    // sync: it is best effort and runs outside the promotion transaction. Migration 0102 is different: it must be
+    // applied before this code deploys, because the sync's own reads and upserts of tutor_wise_accounts
+    // (loadAccountMappings, promoteWithTutorContacts) name these columns, so a missing column fails every sync
+    // with 42703. Only the error's name and SQLSTATE are kept: a database error's message is the query and its
+    // parameters.
+    let rosterFacts: { updated?: number; error?: string } = {};
+    if (promotedSnapshotId && importContacts) {
+      try {
+        rosterFacts = { updated: await persistRosterFacts(db, extractRosterFacts(wiseTeachers)) };
+      } catch (error) {
+        const errorName = error instanceof Error ? error.name : "UnknownError";
+        const sqlState = sqlStateOf(error);
+        rosterFacts = { error: `${errorName} (${sqlState ?? "no SQLSTATE"})` };
+        console.error("[sync-orchestrator] roster facts capture failed", { errorName, sqlState });
+      }
+    }
     if (promotedSnapshotId) {
+      // OFF-12: re-read the roster at the end of sync. Its initial fetch may predate
+      // an owner's removal. This helper only reads Wise; sync can never remove.
+      let offboardingReconciliation: Awaited<ReturnType<typeof reconcileRemovalRuns>> | { error: string };
+      try {
+        offboardingReconciliation = await reconcileRemovalRuns(db);
+      } catch (error) {
+        const errorName = error instanceof Error ? error.name : "UnknownError";
+        const sqlState = sqlStateOf(error);
+        offboardingReconciliation = { error: `${errorName} (${sqlState ?? "no SQLSTATE"})` };
+        console.error("[sync-orchestrator] offboarding reconciliation failed", { errorName, sqlState });
+      }
+      // OFF-15: explicit Sheet evidence is refreshed only here, never on a dashboard request.
+      // Failure is isolated from snapshot promotion and retains the last good source snapshot.
+      let terminationSource: Awaited<ReturnType<typeof syncTerminationSource>>;
+      try {
+        terminationSource = await syncTerminationSource(
+          process.env.TUTOR_OFFBOARDING_CONNECTED_EMAIL ?? process.env.SALES_DASHBOARD_CONNECTED_EMAIL ?? "",
+          options.now ?? new Date(), db,
+        );
+      } catch (error) {
+        const errorName = error instanceof Error ? error.name : "UnknownError";
+        const sqlState = sqlStateOf(error);
+        terminationSource = { error: `${errorName} (${sqlState ?? "no SQLSTATE"})` };
+        console.error("[sync-orchestrator] termination source capture failed", { errorName, sqlState });
+      }
+      // Archive source-time observations before snapshot pruning. Analytics failure is an explicit gap,
+      // never a scheduling failure. No additional Wise requests occur in this archive step.
+      let workforceCapture: Awaited<ReturnType<typeof captureWorkforceObservation>> | { error: string };
+      try {
+        workforceCapture = await captureWorkforceObservation(db, buildSnapshotWorkforceObservation({
+          sourceKey: `wise-sync:${syncRunId}`, snapshotId: promotedSnapshotId,
+          observedAt: new Date(startTime).toISOString(), teachers: wiseTeachers, groups,
+          modalities: teacherModalities, availability: workforceAvailability,
+        }));
+      } catch (error) {
+        const errorName = error instanceof Error ? error.name : "UnknownError";
+        const sqlState = sqlStateOf(error);
+        workforceCapture = { error: `${errorName} (${sqlState ?? "no SQLSTATE"})` };
+        console.error("[sync-orchestrator] workforce capture failed", { errorName, sqlState });
+      }
       let pruning:
         | Awaited<ReturnType<typeof pruneOldSnapshots>>
         | { attempted: true; failed: true; error: string };
@@ -717,7 +784,7 @@ export async function runFullSync(
       try {
         await db
           .update(schema.syncRuns)
-          .set({ metadata: { ...successMetadata, pruning, modalityHistory } })
+          .set({ metadata: { ...successMetadata, pruning, modalityHistory, rosterFacts, terminationSource, offboardingReconciliation, workforceCapture } })
           .where(eq(schema.syncRuns.id, syncRunId));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

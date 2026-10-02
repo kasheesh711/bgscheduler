@@ -1,0 +1,90 @@
+{
+  "syntheticOnly": true,
+  "providerCalls": 0,
+  "checks": [
+    {
+      "name": "Consent gates preparation and microphone access",
+      "passed": true
+    },
+    {
+      "name": "Permission denial offers settings and file fallback",
+      "passed": true
+    },
+    {
+      "name": "Cancelling pending permission releases a late microphone",
+      "passed": true
+    },
+    {
+      "name": "Visible recording stops on background and keeps recoverable audio",
+      "passed": true
+    },
+    {
+      "name": "Lost upload retries the same intent and requires explicit transcription",
+      "passed": true
+    },
+    {
+      "name": "Tutor notes and photos remain distinct from class transcript",
+      "passed": true
+    },
+    {
+      "name": "Review and a saved acknowledgement gate Copy and Wise handoff",
+      "passed": true
+    },
+    {
+      "name": "Focus and a new Bangkok day preserve active draft edits, review and local media",
+      "passed": true
+    },
+    {
+      "name": "Regeneration resets the existing draft before an explicit new generation",
+      "passed": true
+    },
+    {
+      "name": "Uncertain transcription can be removed before drafting from tutor notes",
+      "passed": true
+    },
+    {
+      "name": "Mobile layout fits 390px and touch controls are at least 44px",
+      "passed": true
+    },
+    {
+      "name": "Upload cancellation keeps local media and worksheet permission is sent on retry",
+      "passed": true
+    },
+    {
+      "name": "A different login cannot recover the prior account’s local media",
+      "passed": true
+    },
+    {
+      "name": "Default pause is visible with no microphone request",
+      "passed": true
+    },
+    {
+      "name": "Bangkok midnight clears pending choices and consent and loads today's list",
+      "passed": true
+    },
+    {
+      "name": "A late older response cannot restore a superseded class list",
+      "passed": true
+    },
+    {
+      "name": "Visible return after suspended timers refreshes today and recovers a failed refresh",
+      "passed": true
+    }
+  ],
+  "metrics": {
+    "creates": 1,
+    "assetIntents": 3,
+    "uploads": 3,
+    "transcriptions": 2,
+    "drafts": 3,
+    "gets": 8,
+    "patches": 5,
+    "lists": 5
+  },
+  "unverified": [
+    "Real iOS Safari and Android Chrome hardware, phone calls, lockscreen and OS termination",
+    "Live private Blob upload, Soniox transcription and OpenRouter draft generation",
+    "Production account grants, scheduling snapshots and Wise submission",
+    "Reliable recovery after abrupt browser/process termination is not guaranteed"
+  ]
+}

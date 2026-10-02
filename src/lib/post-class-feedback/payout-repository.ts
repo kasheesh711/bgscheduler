@@ -20,6 +20,7 @@ import {
 } from "drizzle-orm";
 import type { AnyColumn, SQL } from "drizzle-orm";
 
+import { feedbackAutoSubmittedSql, staffFeedbackEventSql, STAFF_SUBMISSION_EVIDENCE_VERSION } from "./feedback-proof";
 import { deductionEvidenceIssue, loadCurrentDeductionEvidence } from "./deduction-evidence";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -91,6 +92,41 @@ export interface PayoutRunCandidate {
    * next generation's identity (INC-260829 re-charge).
    */
   generation: number;
+}
+
+export interface PayoutSubmissionTimes {
+  staffSubmittedAt: Date | null;
+  legacySubmittedAt: Date | null;
+}
+
+/** Current presentation uses staff proof; historical payloads use their recorded version. */
+export async function loadPayoutSubmissionTimes(
+  db: Database, sessionIds: string[],
+): Promise<Map<string, PayoutSubmissionTimes>> {
+  if (sessionIds.length === 0) return new Map();
+  const staff = staffFeedbackEventSql(
+    feedbackAutoSubmittedSql(schema.wiseActivityEvents.payload), schema.wiseActivityEvents.actorRole,
+  );
+  const rows = await db.select({
+    sessionId: schema.postClassSessions.id,
+    staffSubmittedAt: sql<string | null>`min(${schema.wiseActivityEvents.eventTimestamp}) filter (where ${staff})`,
+    // Preserve the exact link-based, NULL-safe predicate used before D-EVT-05.
+    legacySubmittedAt: sql<string | null>`min(${schema.postClassFeedbackEventLinks.eventTimestamp}) filter (where ${schema.postClassFeedbackEventLinks.autoSubmitted} is distinct from true)`,
+  }).from(schema.postClassSessions)
+    .innerJoin(schema.wiseActivityEvents, and(
+      eq(schema.wiseActivityEvents.sessionId, schema.postClassSessions.wiseSessionId),
+      eq(schema.wiseActivityEvents.eventName, "SessionFeedbackSubmittedEvent"),
+    ))
+    .leftJoin(schema.postClassFeedbackEventLinks, and(
+      eq(schema.postClassFeedbackEventLinks.wiseActivityEventId, schema.wiseActivityEvents.id),
+      eq(schema.postClassFeedbackEventLinks.sessionId, schema.postClassSessions.id),
+    ))
+    .where(inArray(schema.postClassSessions.id, [...new Set(sessionIds)]))
+    .groupBy(schema.postClassSessions.id);
+  return new Map(rows.map(row => [row.sessionId, {
+    staffSubmittedAt: row.staffSubmittedAt ? new Date(row.staffSubmittedAt) : null,
+    legacySubmittedAt: row.legacySubmittedAt ? new Date(row.legacySubmittedAt) : null,
+  }]));
 }
 
 function anchorMonthDate(anchorMonth: string): string {
@@ -169,28 +205,7 @@ export async function selectPayoutRunCandidates(
     studentName: schema.postClassSessionParticipants.studentName,
   }).from(schema.postClassSessionParticipants)
     .where(inArray(schema.postClassSessionParticipants.sessionId, sessionIds));
-  const submissions = await db.select({
-    sessionId: schema.postClassFeedbackEventLinks.sessionId,
-    submittedAt: sql<string | null>`min(${schema.postClassFeedbackEventLinks.eventTimestamp})`,
-  }).from(schema.postClassFeedbackEventLinks)
-    .innerJoin(
-      schema.wiseActivityEvents,
-      eq(
-        schema.postClassFeedbackEventLinks.wiseActivityEventId,
-        schema.wiseActivityEvents.id,
-      ),
-    )
-    .where(and(
-      inArray(schema.postClassFeedbackEventLinks.sessionId, sessionIds),
-      // Genuine human submissions carry a NULL autoSubmitted; `<> true`
-      // would drop them under three-valued logic, so the predicate must be
-      // NULL-safe. No actor-role gate: Wise stamps the account's role, not
-      // authorship, so any non-auto event qualifies (D-EVT-04) — matching
-      // `deriveEventTimingEvidence` and the dashboard's Submitted column.
-      // Must stay identical to the drift query's predicate below.
-      sql`${schema.postClassFeedbackEventLinks.autoSubmitted} IS DISTINCT FROM true`,
-    ))
-    .groupBy(schema.postClassFeedbackEventLinks.sessionId);
+  const submissions = await loadPayoutSubmissionTimes(db, sessionIds);
   const written = await db.select().from(schema.postClassPayoutRunLines).where(and(
     inArray(schema.postClassPayoutRunLines.deductionId, rows.map(row => row.deductionId)),
     eq(schema.postClassPayoutRunLines.writeStatus, "written"),
@@ -220,9 +235,6 @@ export async function selectPayoutRunCandidates(
     if (!names.includes(row.studentName)) names.push(row.studentName);
     studentsBySession.set(row.sessionId, names);
   }
-  const submittedBySession = new Map(
-    submissions.map((row) => [row.sessionId, row.submittedAt ? new Date(row.submittedAt) : null]),
-  );
 
   return rows.map((row) => ({
     ...row,
@@ -234,7 +246,7 @@ export async function selectPayoutRunCandidates(
     // Written explanation/timestamp describe the evidence at the time of the charge.
     tutorSubmittedAt: writtenByDeduction.has(row.deductionId)
       ? writtenByDeduction.get(row.deductionId)!.tutorSubmittedAt
-      : submittedBySession.get(row.sessionId) ?? null,
+      : submissions.get(row.sessionId)?.staffSubmittedAt ?? null,
     reason: writtenByDeduction.get(row.deductionId)?.reason
       ?? (evidence.get(row.sessionId)?.fieldFailures.join(", ") || "Feedback was incomplete at the deadline"),
     generation: 1 + (removedByDeduction.get(row.deductionId) ?? 0),
@@ -403,40 +415,56 @@ export async function upsertPayoutTutorName(
   if (alternate && alternate.toLocaleLowerCase("en-US") === primary.toLocaleLowerCase("en-US")) {
     throw new PostClassConflictError("Primary and alternate ledger names must be different.");
   }
-  const existingMappings = await db.select().from(schema.postClassPayoutTutorNames);
-  const wantedNames = new Set(
-    [primary, alternate]
-      .filter((name): name is string => Boolean(name))
-      .map((name) => name.toLocaleLowerCase("en-US")),
-  );
-  const conflict = existingMappings.find((mapping) =>
-    mapping.canonicalKey !== input.canonicalKey
-    && [mapping.primaryLedgerName, mapping.alternateLedgerName]
-      .filter((name): name is string => Boolean(name))
-      .some((name) => wantedNames.has(name.toLocaleLowerCase("en-US"))));
-  if (conflict) {
-    throw new PostClassConflictError(
-      `Ledger identity is already assigned to ${conflict.canonicalKey}.`,
+  return withPostClassTransaction(db, async tx => {
+    await lockPostClassFinance(tx);
+    const existingMappings = await tx.select().from(schema.postClassPayoutTutorNames);
+    const wantedNames = new Set(
+      [primary, alternate]
+        .filter((name): name is string => Boolean(name))
+        .map((name) => name.toLocaleLowerCase("en-US")),
     );
-  }
-  const [row] = await db.insert(schema.postClassPayoutTutorNames).values({
-    canonicalKey: input.canonicalKey,
-    primaryLedgerName: primary,
-    alternateLedgerName: alternate,
-    active: input.active,
-    updatedByEmail: input.updatedByEmail,
-  })
-    .onConflictDoUpdate({
-      target: schema.postClassPayoutTutorNames.canonicalKey,
-      set: {
-        primaryLedgerName: primary,
-        alternateLedgerName: alternate,
-        active: input.active,
-        updatedByEmail: input.updatedByEmail,
-        updatedAt: new Date(),
-      },
-    }).returning();
-  return row;
+    const conflict = existingMappings.find((mapping) =>
+      mapping.canonicalKey !== input.canonicalKey
+      && [mapping.primaryLedgerName, mapping.alternateLedgerName]
+        .filter((name): name is string => Boolean(name))
+        .some((name) => wantedNames.has(name.toLocaleLowerCase("en-US"))));
+    if (conflict) {
+      throw new PostClassConflictError(
+        `Ledger identity is already assigned to ${conflict.canonicalKey}.`,
+      );
+    }
+    const previous = existingMappings.find(mapping => mapping.canonicalKey === input.canonicalKey);
+    const removesIdentity = previous && (previous.active !== input.active
+      || payoutTutorNameStrings(previous).some(name => !wantedNames.has(name.toLocaleLowerCase("en-US"))));
+    const now = new Date();
+    const [row] = await tx.insert(schema.postClassPayoutTutorNames).values({
+      canonicalKey: input.canonicalKey,
+      primaryLedgerName: primary,
+      alternateLedgerName: alternate,
+      active: input.active,
+      updatedByEmail: input.updatedByEmail,
+      identityChangedAt: now,
+    })
+      .onConflictDoUpdate({
+        target: schema.postClassPayoutTutorNames.canonicalKey,
+        set: {
+          primaryLedgerName: primary,
+          alternateLedgerName: alternate,
+          active: input.active,
+          updatedByEmail: input.updatedByEmail,
+          updatedAt: now,
+          identityChangedAt: removesIdentity ? now : previous?.identityChangedAt ?? now,
+        },
+      }).returning();
+    await tx.insert(schema.postClassConfigAuditLog).values({
+      entityType: "payout_tutor_name", entityKey: input.canonicalKey,
+      action: "update_payout_tutor_mapping", actorEmail: input.updatedByEmail,
+      beforeValue: previous ?? null, afterValue: row,
+      note: removesIdentity ? "Ledger identity removed, replaced, or activation changed."
+        : "Ledger mapping saved without removing an existing identity.",
+    });
+    return row;
+  });
 }
 
 export async function getPayoutRunByAnchor(
@@ -574,26 +602,7 @@ async function findWrittenPayoutLinePayloadDrift(
     studentName: schema.postClassSessionParticipants.studentName,
   }).from(schema.postClassSessionParticipants)
     .where(inArray(schema.postClassSessionParticipants.sessionId, sessionIds));
-  const submissions = await db.select({
-    sessionId: schema.postClassFeedbackEventLinks.sessionId,
-    submittedAt: sql<string | null>`min(${schema.postClassFeedbackEventLinks.eventTimestamp})`,
-  }).from(schema.postClassFeedbackEventLinks)
-    .innerJoin(
-      schema.wiseActivityEvents,
-      eq(
-        schema.postClassFeedbackEventLinks.wiseActivityEventId,
-        schema.wiseActivityEvents.id,
-      ),
-    )
-    .where(and(
-      inArray(schema.postClassFeedbackEventLinks.sessionId, sessionIds),
-      // Identical to the candidate query's predicate above: NULL means "not
-      // proven auto" and the actor role is deliberately not gated (D-EVT-04).
-      // Any divergence between the two queries makes freshly written lines
-      // register as payload drift on the very next pass.
-      sql`${schema.postClassFeedbackEventLinks.autoSubmitted} IS DISTINCT FROM true`,
-    ))
-    .groupBy(schema.postClassFeedbackEventLinks.sessionId);
+  const submissions = await loadPayoutSubmissionTimes(db, sessionIds);
 
   const studentsBySession = new Map<string, string[]>();
   for (const participant of participants) {
@@ -601,12 +610,6 @@ async function findWrittenPayoutLinePayloadDrift(
     if (!names.includes(participant.studentName)) names.push(participant.studentName);
     studentsBySession.set(participant.sessionId, names);
   }
-  const submittedBySession = new Map(
-    submissions.map((submission) => [
-      submission.sessionId,
-      submission.submittedAt ? new Date(submission.submittedAt) : null,
-    ]),
-  );
   const currentByDeduction = new Map(rows.map((row) => {
     const students = [
       ...(studentsBySession.get(row.sessionId)
@@ -616,7 +619,7 @@ async function findWrittenPayoutLinePayloadDrift(
       ...row,
       amountMinor: -Math.abs(row.amountMinor),
       studentNames: students,
-      tutorSubmittedAt: submittedBySession.get(row.sessionId) ?? null,
+      submissionTimes: submissions.get(row.sessionId),
     }] as const;
   }));
   const sameInstant = (left: Date | null, right: Date | null) =>
@@ -632,7 +635,7 @@ async function findWrittenPayoutLinePayloadDrift(
       && (
         !mapping
         || !line.writtenAt
-        || mapping.updatedAt.getTime() > line.writtenAt.getTime()
+        || mapping.identityChangedAt.getTime() > line.writtenAt.getTime()
       ),
     );
     return mappingChangedAfterWrite
@@ -650,7 +653,9 @@ async function findWrittenPayoutLinePayloadDrift(
       // links stored no timestamp; a newly derivable value does not contradict
       // the blank cell Google received, so only a stored value can drift.
       || (line.tutorSubmittedAt !== null
-        && !sameInstant(line.tutorSubmittedAt, current.tutorSubmittedAt))
+        && !sameInstant(line.tutorSubmittedAt, line.submissionEvidenceVersion === 1
+          ? current.submissionTimes?.legacySubmittedAt ?? null
+          : current.submissionTimes?.staffSubmittedAt ?? null))
       || line.amountMinor !== current.amountMinor
       || line.currency !== current.currency
       || line.financeMonth !== current.financeMonth;
@@ -669,6 +674,7 @@ export interface PayoutPreviewSnapshot {
   policyVersion: number;
   previewToken: string;
   sourceFingerprint: string;
+  submissionTimes: Map<string, PayoutSubmissionTimes>;
 }
 
 export async function readPayoutRunPreview(
@@ -697,6 +703,7 @@ export async function readPayoutRunPreview(
     ? candidates.filter((candidate) => candidate.canonicalTutorKey === input.tutorFilter)
     : candidates;
   const lines = run ? await loadPayoutRunLines(db, run.id) : [];
+  const submissionTimes = await loadPayoutSubmissionTimes(db, [...lines.map(line => line.sessionId), ...selectedCandidates.map(candidate => candidate.sessionId)]);
   const adjustments = run ? await loadPayoutAdjustments(db, run.id, lines) : [];
   const exceptions = run ? await loadPayoutExceptions(db, run.id) : [];
   const selectedCandidateIds = new Set(
@@ -797,6 +804,7 @@ export async function readPayoutRunPreview(
     policyVersion,
     previewToken,
     sourceFingerprint,
+    submissionTimes,
   };
 }
 
@@ -1042,6 +1050,7 @@ export async function acquirePayoutRunLease(input: {
             scheduledEndAt: candidate.scheduledEndAt,
             deadlineAt: candidate.deadlineAt,
             tutorSubmittedAt: candidate.tutorSubmittedAt,
+            submissionEvidenceVersion: STAFF_SUBMISSION_EVIDENCE_VERSION,
             amountMinor: candidate.amountMinor,
             currency: candidate.currency,
             financeMonth: candidate.defaultFinanceMonth,
@@ -1139,6 +1148,7 @@ export async function acquirePayoutRunLease(input: {
           scheduledEndAt: candidate.scheduledEndAt,
           deadlineAt: candidate.deadlineAt,
           tutorSubmittedAt: candidate.tutorSubmittedAt,
+            submissionEvidenceVersion: STAFF_SUBMISSION_EVIDENCE_VERSION,
           amountMinor: candidate.amountMinor,
           currency: candidate.currency,
           financeMonth: candidate.defaultFinanceMonth,
@@ -1168,6 +1178,7 @@ export async function acquirePayoutRunLease(input: {
           scheduledEndAt: sql`excluded.scheduled_end_at`,
           deadlineAt: sql`excluded.deadline_at`,
           tutorSubmittedAt: sql`excluded.tutor_submitted_at`,
+          submissionEvidenceVersion: sql`excluded.submission_evidence_version`,
           amountMinor: sql`excluded.amount_minor`,
           currency: sql`excluded.currency`,
           financeMonth: sql`excluded.finance_month`,

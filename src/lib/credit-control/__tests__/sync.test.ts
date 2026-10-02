@@ -17,6 +17,10 @@ import {
   serializeCreditControlSyncError,
 } from "@/lib/credit-control/sync";
 
+import { captureCreditControlWorkforceEvidence } from "@/lib/tutor-offboarding/workforce/credit-control-capture";
+vi.mock("@/lib/tutor-offboarding/workforce/credit-control-capture", () => ({ captureCreditControlWorkforceEvidence: vi.fn(async () => ({ sessions: [] })) }));
+vi.mock("@/lib/tutor-offboarding/workforce/growth/capture", () => ({ captureGrowthBookingMetadata: vi.fn() }));
+vi.mock("@/lib/tutor-offboarding/workforce/growth/reconcile", () => ({ captureGrowthLifecycle: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidateTag: vi.fn() }));
 vi.mock("@/lib/credit-control/wise", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/credit-control/wise")>();
@@ -226,6 +230,21 @@ describe("runCreditControlSync", () => {
     expect(result.success).toBe(false);
     expect(events.some(event => event.table === schema.creditControlSnapshots)).toBe(false);
     expect(latestUpdate(events, "failed")).toBeDefined();
+  });
+
+  it("captures fetched evidence only after promotion and tolerates unavailable analytics", async () => {
+    const { db, events } = makeDbMock();
+    vi.mocked(captureCreditControlWorkforceEvidence).mockImplementationOnce(async (_db, input) => {
+      expect(events.some(event => event.type === "update" && event.table === schema.creditControlSnapshots)).toBe(true);
+      expect(input.sessions).toHaveLength(101);
+      expect(input.pairs[0].creditsObservedAt.toISOString()).toBe("2026-09-11T00:00:00.000Z");
+      throw new Error("analytics unavailable");
+    });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await runCreditControlSync(db, fakeClient(), "institute-1", new Date("2026-09-11T00:00:00Z"), { syncRunId: "run-1" });
+    expect(result.success).toBe(true);
+    expect(captureCreditControlWorkforceEvidence).toHaveBeenCalledTimes(1);
+    log.mockRestore();
   });
 
   it("attaches the candidate snapshot id before inserting snapshot rows", async () => {

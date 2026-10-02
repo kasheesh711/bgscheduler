@@ -42,6 +42,8 @@ const EXPECTED_SCHEDULES: Record<string, string> = {
   "/api/internal/admissions-notifications": "12 1 * * *",
   "/api/internal/line-credit-digest": "3 2 * * *",
   "/api/internal/feedback-autowriter": "8,22,38,52 * * * *",
+  "/api/internal/feedback-autowriter/review": "27 * * * *",
+  "/api/internal/feedback-autowriter/atom": "6,21,36,51 * * * *",
 };
 
 function range(from: number, to: number): number[] {
@@ -107,10 +109,10 @@ function canCollide(left: FiringSet, right: FiringSet): boolean {
 }
 
 describe("vercel cron configuration", () => {
-  it("registers exactly the 27 known crons, each on its pinned schedule", () => {
+  it("registers exactly the 29 known crons, each on its pinned schedule", () => {
     const crons = loadVercelConfig().crons;
 
-    expect(crons).toHaveLength(27);
+    expect(crons).toHaveLength(29);
     expect(Object.fromEntries(crons.map((cron) => [cron.path, cron.schedule]))).toEqual(EXPECTED_SCHEDULES);
   });
 
@@ -160,7 +162,10 @@ describe("vercel cron configuration", () => {
             "/api/internal/class-assignments/weekend-check", "/api/internal/class-assignments/morning",
             "/api/internal/class-assignments/admin-email", "/api/internal/tutor-sit-ins/digest"].includes(path));
         const progressProcessingOverlap = pair.has("/api/internal/progress-tests/process");
-        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck && !nextDayClassroomOverlap && !roomAvailabilityOverlap && !publishRecoveryOverlap && !progressProcessingOverlap && !sitInDigestOverlap && !nightlyOverlap) {
+        // The 15-minute Atom reader shares only the paced, usually idle publish recovery
+        // (and the separately allowed room reader). It never calls a Wise mutation.
+        const atomReadOverlap = pair.has("/api/internal/feedback-autowriter/atom") && pair.has("/api/internal/class-assignments/publish-recovery");
+        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck && !nextDayClassroomOverlap && !roomAvailabilityOverlap && !publishRecoveryOverlap && !progressProcessingOverlap && !sitInDigestOverlap && !nightlyOverlap && !atomReadOverlap) {
           collisions.push(`${crons[i].path} vs ${crons[j].path}`);
         }
       }
@@ -242,6 +247,17 @@ describe("vercel cron configuration", () => {
     const crons = new Map(loadVercelConfig().crons.map((cron) => [cron.path, cron.schedule]));
 
     expect(crons.get("/api/internal/post-class-feedback/payout-accrual")).toBe("33 * * * *");
+  });
+
+  // The review job reads the Wise activity mirror, so it runs ten minutes after the :17 sync.
+  it("runs the autowriter review hourly at :27, clear of every other cron minute", () => {
+    const crons = new Map(loadVercelConfig().crons.map((cron) => [cron.path, cron.schedule]));
+    expect(crons.get("/api/internal/feedback-autowriter/review")).toBe("27 * * * *");
+
+    const otherMinutes = loadVercelConfig().crons
+      .filter((cron) => !["/api/internal/feedback-autowriter/review", "/api/internal/progress-tests/process"].includes(cron.path))
+      .flatMap((cron) => [...firingSet(cron.schedule).minutes]);
+    expect(otherMinutes).not.toContain(27);
   });
 
   it("staggers the admissions notifications cron away from every other cron minute", () => {

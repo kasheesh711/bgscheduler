@@ -15,6 +15,7 @@ import {
 } from "@/lib/room-capacity/dates";
 
 import { payoutGoogleHealth } from "./payout-google-health";
+import { feedbackAutoSubmittedSql, staffFeedbackEventSql } from "./feedback-proof";
 
 import type { FeedbackSubmitter } from "@/types/post-class-feedback";
 
@@ -299,7 +300,7 @@ export async function getPostClassFeedbackDashboard(
         .where(and(
           eq(schema.wiseActivityEvents.eventName, "SessionFeedbackSubmittedEvent"),
           inArray(schema.wiseActivityEvents.sessionId, wiseSessionIds),
-          sql`coalesce(${schema.wiseActivityEvents.payload} -> 'session' ->> 'autoSubmitted', 'false') <> 'true'`,
+          staffFeedbackEventSql(feedbackAutoSubmittedSql(schema.wiseActivityEvents.payload), schema.wiseActivityEvents.actorRole),
         ))
         .groupBy(schema.wiseActivityEvents.sessionId)
       : Promise.resolve([]),

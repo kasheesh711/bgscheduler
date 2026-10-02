@@ -20,6 +20,8 @@ export const AUTOWRITER_MIN_ATTENDANCE_PERCENT = 50;
  * A guest (no Wise account) stands in for an absent Wise account only when they
  * — and the tutor — stayed at least this share of the class (owner rule, 29 Sep:
  * a class that runs its full length with one guest was taught to the student).
+ * A guest under the student's own name only needs `AUTOWRITER_MIN_ATTENDANCE_PERCENT`
+ * (owner rule, 2 Oct); the tutor always needs this share.
  */
 export const AUTOWRITER_GUEST_STUDENT_MIN_PERCENT = 80;
 
@@ -33,7 +35,18 @@ export const AUTOWRITER_ATTENDANCE_SETTLE_MINUTES = 60;
 /** A summary shorter than this is not enough evidence to write from. */
 export const AUTOWRITER_MIN_SUMMARY_CHARACTERS = 200;
 
-export type ModelArm = "glm" | "luna";
+/**
+ * Transcript first: why a class handed to the transcript went back to Wise's summary
+ * (`metadata.summaryFallback.cause`) — no recording in time, a recording in several parts, speakers that cannot be
+ * told apart, Soniox failing three times, the transcript pass switched off while the class waited, or the writer
+ * failing three times in a row on the transcript draft.
+ */
+export const SUMMARY_FALLBACK_CAUSES = [
+  "no_recording", "recording_multiple_parts", "speakers_unclear", "soniox_failed", "transcript_pass_off", "writer_failed",
+] as const;
+export type SummaryFallbackCause = (typeof SUMMARY_FALLBACK_CAUSES)[number];
+
+export type ModelArm = "glm" | "luna" | "sol";
 
 export interface OpenRouterProviderPreferences {
   order?: string[];

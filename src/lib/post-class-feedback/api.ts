@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 
 import { PostClassAccessError } from "./access";
+import { GmailRejection } from "./gmail";
 
 import {
   PostClassConflictError,
@@ -28,6 +29,9 @@ export function postClassFeedbackErrorResponse(route: string, error: unknown, fa
   }
   if (error instanceof Error && error.message === "Forbidden") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  if (error instanceof GmailRejection) {
+    return NextResponse.json({ error: error.message }, { status: error.permanent ? 400 : 503 });
   }
   if (error instanceof PostClassValidationError) {
     return NextResponse.json({ error: error.message }, { status: 400 });

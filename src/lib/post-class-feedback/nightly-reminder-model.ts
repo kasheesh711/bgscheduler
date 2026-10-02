@@ -10,6 +10,13 @@ export function nightlyCheckpoint(date: string): Date {
   return new Date(bangkokDateStartUtc(date).getTime() + 22 * 60 * 60_000);
 }
 
+export function nightlyActivationCheckpoint(now: Date, includeCurrentNight = false): Date | null {
+  const today = todayBangkok(now);
+  const checkpoint = nightlyCheckpoint(today);
+  if (includeCurrentNight) return checkpoint <= now ? checkpoint : null;
+  return checkpoint > now ? checkpoint : nightlyCheckpoint(addBangkokDays(today, 1));
+}
+
 /** The clock, never the spreadsheet timezone, determines the eligible night. */
 export function latestNightlyDate(now: Date, activatedAt: Date | null): string | null {
   if (!activatedAt) return null;
@@ -29,6 +36,7 @@ export function nightlyWindow(date: string) {
 
 export interface NightlySessionState {
   eligible: boolean;
+  eligibilityReason?: string | null;
   enforcementMode: string;
   sourceStatus: string;
   canonicalTutorKey: string | null;
@@ -54,6 +62,10 @@ export function nightlyDisposition(state: NightlySessionState | null, now: Date,
   if (state.deleted) return { status: "excluded", reason: "Wise deletion was verified." };
   if (!state.lastObservedAt || state.lastObservedAt.getTime() < now.getTime() - NIGHTLY_FRESHNESS_MS) {
     return { status: "blocked_source", reason: "Fresh Wise feedback is required." };
+  }
+  if (state.policyCurrent === true && !state.eligible && state.eligibilityReason === "missed_or_no_show" &&
+    state.sourceStatus === "identity_review") {
+    return { status: "excluded", reason: "Fresh Wise evidence confirms a missed or no-show class." };
   }
   if (state.sourceStatus !== "ready" || state.policyCurrent === false) {
     return { status: "blocked_source", reason: "Current Wise evidence and policy versions are required." };
