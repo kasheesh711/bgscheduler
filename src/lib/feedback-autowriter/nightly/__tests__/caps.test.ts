@@ -27,8 +27,8 @@ afterEach(() => {
 describe("caps", () => {
   it("has the approved defaults", () => {
     expect(NIGHTLY_CAPS).toMatchObject({
-      maxTargets: 60, maxWiseReads: 200, wisePacingMs: 5_000, maxOpusCalls: 80, perAuditUsd: 1.5, perReauditUsd: 1.5,
-      perSynthesisUsd: 2, maxClaudeUsdNight: 25, maxClaudeUsdWeek: 120, maxSonioxUsdNight: 2, maxOpenRouterUsdNight: 3,
+      maxTargets: 60, maxWiseReads: 200, wisePacingMs: 5_000, maxOpusCalls: 80, perAuditUsd: 3, perReauditUsd: 3,
+      perSynthesisUsd: 4, maxClaudeUsdNight: 60, maxClaudeUsdWeek: 300, maxSonioxUsdNight: 2, maxOpenRouterUsdNight: 3,
       maxCorrectionsPerNight: 6, maxCorrectionsPerWeek: 15, maxFlagsPerNight: 10, auditConcurrency: 2, deadlineBangkok: "06:50",
     });
     expect(Object.isFrozen(NIGHTLY_CAPS)).toBe(true);
@@ -39,7 +39,7 @@ describe("caps", () => {
       config: { maxTargets: 30, maxClaudeUsdNight: 100, wisePacingMs: 2_000, deadlineBangkok: "06:30", auditConcurrency: 0 },
     });
     expect(caps.maxTargets).toBe(30);
-    expect(caps.maxClaudeUsdNight).toBe(25);
+    expect(caps.maxClaudeUsdNight).toBe(60);
     // Pacing is stricter when longer.
     expect(caps.wisePacingMs).toBe(5_000);
     expect(caps.deadlineBangkok).toBe("06:30");
@@ -63,16 +63,40 @@ describe("caps", () => {
 describe("owner config", () => {
   it("reads caps under `caps` or at the top level; a missing file changes nothing", () => {
     const file = path.join(home, "config.json");
-    expect(loadOwnerConfig(file)).toEqual({ ok: true, caps: {}, notes: [] });
-    fs.writeFileSync(file, JSON.stringify({ caps: { maxTargets: 10, deadlineBangkok: "05:00", bogus: 1, maxWiseReads: "x" } }));
+    expect(loadOwnerConfig(file)).toEqual({ ok: true, caps: {}, notes: [], runnerSha: null });
+    fs.writeFileSync(file, JSON.stringify({ caps: { maxTargets: 10, deadlineBangkok: "05:00", bogus: 1 } }));
     const config = loadOwnerConfig(file);
     expect(config).toEqual({
       ok: true,
       caps: { maxTargets: 10, deadlineBangkok: "05:00" },
-      notes: ["unknown key ignored: bogus", "maxWiseReads ignored: not a non-negative number"],
+      notes: ["unknown key ignored: bogus"],
+      runnerSha: null,
     });
     fs.writeFileSync(file, JSON.stringify({ maxOpusCalls: 5 }));
     expect(loadOwnerConfig(file)).toMatchObject({ ok: true, caps: { maxOpusCalls: 5 } });
+  });
+
+  it("reads the pinned runner commit, and refuses one that is not a commit", () => {
+    const file = path.join(home, "config.json");
+    fs.writeFileSync(file, JSON.stringify({ runnerSha: "ABC123DEF", caps: { maxTargets: 5 } }));
+    expect(loadOwnerConfig(file)).toMatchObject({ ok: true, runnerSha: "abc123def", caps: { maxTargets: 5 }, notes: [] });
+    fs.writeFileSync(file, JSON.stringify({ runnerSha: "main" }));
+    expect(loadOwnerConfig(file)).toEqual({ ok: false, reason: "runnerSha must be a 7-40 character hex commit" });
+  });
+
+  it("refuses a cap value the nightly cannot use, before anything runs", () => {
+    const file = path.join(home, "config.json");
+    const reason = (caps: Record<string, unknown>) => {
+      fs.writeFileSync(file, JSON.stringify({ caps }));
+      const config = loadOwnerConfig(file);
+      return config.ok ? null : config.reason;
+    };
+    expect(reason({ maxWiseReads: "x" })).toBe("maxWiseReads must be a non-negative number");
+    expect(reason({ perAuditUsd: 0 })).toBe("perAuditUsd must be greater than 0");
+    expect(reason({ maxTargets: 2.5 })).toBe("maxTargets must be a whole number");
+    expect(reason({ auditConcurrency: 0 })).toBe("auditConcurrency must be at least 1");
+    expect(reason({ deadlineBangkok: "6:50" })).toBe("deadlineBangkok must be HH:MM");
+    expect(reason({ maxTargets: 0, maxOpusCalls: 0, perAuditUsd: 0.5 })).toBeNull();
   });
 
   it("fails closed on a config that does not parse", () => {

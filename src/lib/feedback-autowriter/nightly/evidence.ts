@@ -4,7 +4,8 @@ import { and, eq } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { POST_CLASS_FEEDBACK_FIELDS } from "@/lib/post-class-feedback/types";
-import { evidenceHash } from "../atom/evidence";
+import { atomModelEvidence, evidenceHash } from "../atom/evidence";
+import type { AtomLessonEvidence } from "../atom/types";
 import { chooseStudentDisplayName, describeClass } from "../prompt";
 import { rosterTutor } from "../roster";
 import {
@@ -71,10 +72,13 @@ export function readOnlySoniox(client: Pick<SonioxClient, "get" | "transcript">)
 // ---------------------------------------------------------------------------
 
 /**
- * UTC minutes when production jobs hit Wise (the snapshot sync at :00/:30, the autowriter and activity jobs around
- * :08/:22/:38/:52): the nightly never starts a read in them.
+ * UTC minutes when production jobs hit Wise: the snapshot sync at :00/:30 (and the minutes after), the autowriter and
+ * activity jobs around :08/:22/:38/:52, post-class collection at :13/:43, the Wise activity sync at :17/:47 and credit
+ * control at :20/:50. The nightly never starts a read in them.
  */
-const BUSY_UTC_MINUTES = new Set([0, 1, 2, 3, 4, 30, 31, 32, 33, 34, 7, 8, 9, 21, 22, 23, 37, 38, 39, 51, 52, 53]);
+const BUSY_UTC_MINUTES = new Set([
+  0, 1, 2, 3, 4, 30, 31, 32, 33, 34, 7, 8, 9, 21, 22, 23, 37, 38, 39, 51, 52, 53, 13, 17, 20, 43, 47, 50,
+]);
 /** A read starts only with at least this much of a quiet minute left before a busy one. */
 const QUIET_TAIL_MS = 15_000;
 
@@ -183,6 +187,8 @@ export interface IsebRecord {
   evidenceHash: string;
   lessonRecord: string;
   evidenceKind: "summary" | "transcript";
+  /** The frozen Atom evidence retained with the record (null when the post had none; absent in caches older than 3 Oct). */
+  atom?: AtomLessonEvidence | null;
 }
 
 /** What the autowriter's row says about how the post was written (SELECT only). */
@@ -245,7 +251,7 @@ export function dbEvidenceSources(db: Database): EvidenceSources {
       };
     },
     async isebRecord(wiseSessionId, hash) {
-      const [row] = await db.select({ evidenceHash: E.evidenceHash, lessonRecord: E.lessonRecord, evidenceKind: E.evidenceKind })
+      const [row] = await db.select({ evidenceHash: E.evidenceHash, lessonRecord: E.lessonRecord, evidenceKind: E.evidenceKind, atom: E.atom })
         .from(E).where(and(eq(E.wiseSessionId, wiseSessionId), eq(E.evidenceHash, hash))).limit(1);
       return row ?? null;
     },
@@ -341,6 +347,7 @@ export async function retranscribeRecording(deps: RetranscribeDeps, input: {
   let actualUsd: number | null = null;
   let outcome = "error";
   let stopped: NightlyStop | null = null;
+  let undeleted: string | null = null;
   type Outcome = { ok: true; transcript: CachedTranscript; costUsd: number | null } | { ok: false; reason: string };
   let result: Outcome = { ok: false, reason: "unfinished" };
   try {
@@ -395,12 +402,16 @@ export async function retranscribeRecording(deps: RetranscribeDeps, input: {
   } catch (error) {
     if (error instanceof NightlyStop) stopped = error;
     result = { ok: false, reason: error instanceof NightlyStop ? error.reason : `soniox:${message(error)}` };
-  }
-  deps.ledger.settle(reserved.id, { actualUsd, outcome });
-  let undeleted: string | null = null;
-  if (ourJob && ourJob !== input.productionJobId) {
-    if (await removeOurJob(deps.client, ourJob, sleep)) deps.inFlight?.delete(ourJob);
-    else undeleted = ourJob;
+  } finally {
+    // Whatever happened — even when settling the ledger throws — our job is deleted (never the production job).
+    try {
+      deps.ledger.settle(reserved.id, { actualUsd, outcome });
+    } finally {
+      if (ourJob && ourJob !== input.productionJobId) {
+        if (await removeOurJob(deps.client, ourJob, sleep)) deps.inFlight?.delete(ourJob);
+        else undeleted = ourJob;
+      }
+    }
   }
   if (stopped) throw stopped;
   return { ...result, undeleted };
@@ -442,6 +453,8 @@ export async function collectRawEvidence(deps: CollectDeps, target: NightlyTarge
     // a. The writer's exact input, retained for guided posts.
     const lessonHash = typeof target.pipeline?.lessonEvidenceHash === "string" ? target.pipeline.lessonEvidenceHash : null;
     let iseb = readJsonFile<IsebRecord>(file("iseb.json"));
+    // A record cached before the Atom evidence was kept (2 Oct) is read again.
+    if (iseb && !("atom" in iseb)) iseb = null;
     if (iseb) {
       status.iseb = "cached";
     } else if (lessonHash) {
@@ -721,6 +734,7 @@ export function buildEvidenceBundle(input: { target: NightlyTarget; night: strin
     transcript,
     wiseSummary,
     zoomCaptions,
+    atomEvidence: raw.iseb?.atom ? atomModelEvidence(raw.iseb.atom) || null : null,
     postedEvidenceKind: target.evidence,
     scheduledMinutes,
     storedJudge: raw.rowMeta.judge ?? target.pipeline?.factualVerdicts ?? null,

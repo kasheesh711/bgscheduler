@@ -24,12 +24,29 @@ const OTHER_MODEL_OUTPUT_LIMIT = 500;
 const MAX_OPUS_OUTPUT_TOKENS = 60_000;
 const MAX_STDOUT_BYTES = 20 * 1024 * 1024;
 const KILL_GRACE_MS = 10_000;
+/**
+ * After the `claude` process exits, its pipes normally close at once ("close"). A grandchild that inherited them can keep
+ * them open: the call is settled this long after the exit anyway, with the output read so far.
+ */
+const EXIT_GRACE_MS = 5_000;
 
 /** The only variables a `claude -p` child gets. */
 export const CLAUDE_ENV_ALLOWLIST = ["HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TMPDIR", "TERM"] as const;
 
 /** Flags that would change auth or the model behind our back: never passed. */
 const FORBIDDEN_FLAGS = ["--bare", "--fallback-model", "--resume", "--continue", "--dangerously-skip-permissions"];
+
+/**
+ * Whether `claude --version` names a CLI new enough for these flags (`--safe-mode`, `--permission-prompts`, `--effort
+ * max`, `modelUsage` in the JSON envelope): 2.1.x or later. "2.1.287 (Claude Code)" → true.
+ */
+export function claudeVersionSupported(version: string | null): boolean {
+  const match = /(\d+)\.(\d+)\.(\d+)/u.exec(version ?? "");
+  if (!match) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major > 2 || (major === 2 && minor >= 1);
+}
 
 export function claudeChildEnv(parent: Record<string, string | undefined> = process.env): NodeJS.ProcessEnv {
   const env: Record<string, string> = {};
@@ -90,6 +107,17 @@ export function loggableArgs(args: readonly string[]): string[] {
 }
 
 export type ClaudeOutcomeKind = "success" | "cli_error" | "budget_exceeded" | "usage_limited" | "auth" | "timeout" | "unparseable";
+
+/**
+ * How a `claude -p` call is settled in the spend ledger. Only "invalid" (an answer that failed validation) and
+ * "unparseable" (no usable JSON) are the key's own failures and count toward `failed_twice`; every other failure is
+ * `infra:<kind>` (CLI error, time-out, budget, usage limit, auth) and never does — the next run tries the key again.
+ */
+export function ledgerOutcome(kind: ClaudeOutcomeKind, valid: boolean): string {
+  if (kind === "success") return valid ? "success" : "invalid";
+  if (kind === "unparseable") return "unparseable";
+  return `infra:${kind}`;
+}
 
 export type ClaudeOutcome =
   | { kind: "success"; value: unknown; proof: ClaudeProof }
@@ -163,6 +191,16 @@ export function proofOf(envelope: Envelope | null, input: { argv: readonly strin
   };
 }
 
+/**
+ * The CLI's own error line of an error envelope: `result` only when the envelope is an error and it is a short, plain
+ * line ("API Error: 401 …", "You've hit your limit · resets 5am") — never the model's answer, which is long or JSON.
+ */
+function cliErrorLine(envelope: Envelope): string {
+  const result = envelope.result?.trim() ?? "";
+  if (envelope.is_error !== true || result.length === 0 || result.length > 600) return "";
+  return /^(?:\{|\[|```)/u.test(result) ? "" : result;
+}
+
 function unfence(text: string): string {
   return text.trim().replace(/^```(?:json)?\s*/u, "").replace(/\s*```$/u, "");
 }
@@ -181,15 +219,15 @@ export function parseClaudeEnvelope(stdout: string, stderr: string, code: number
   const proof = proofOf(envelope, context);
   if (context.timedOut) return { kind: "timeout", reason: "timeout", proof };
   if (!envelope) {
-    const text = `${stdout}\n${stderr}`;
-    if (AUTH_PATTERN.test(text)) return { kind: "auth", reason: "auth", proof: null };
-    if (USAGE_PATTERN.test(text)) return { kind: "usage_limited", reason: "usage_limited", proof: null };
+    // stdout without an envelope may be the model's own words: only stderr says why the CLI failed.
+    if (AUTH_PATTERN.test(stderr)) return { kind: "auth", reason: "auth", proof: null };
+    if (USAGE_PATTERN.test(stderr)) return { kind: "usage_limited", reason: "usage_limited", proof: null };
     return code === 0
       ? { kind: "unparseable", reason: "no_json_envelope", proof: null }
       : { kind: "cli_error", reason: `exit_${code ?? "signal"}`, proof: null };
   }
   const subtype = envelope.subtype ?? "";
-  const errorText = [envelope.result ?? "", ...(Array.isArray(envelope.errors) ? envelope.errors : []), stderr].join("\n");
+  const errorText = [cliErrorLine(envelope), ...(Array.isArray(envelope.errors) ? envelope.errors : []), stderr].join("\n");
   if (subtype === "error_max_budget_usd") return { kind: "budget_exceeded", reason: "max_budget_usd", proof };
   if (envelope.is_error === true || (subtype !== "" && subtype !== "success")) {
     const status = envelope.api_error_status ?? null;
@@ -231,6 +269,7 @@ export interface ChildLike {
   stdout: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown } | null;
   stderr: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown } | null;
   on(event: "close", listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
+  on(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
   on(event: "error", listener: (error: Error) => void): unknown;
   kill(signal?: NodeJS.Signals): boolean;
 }
@@ -263,34 +302,58 @@ export interface ClaudeRunnerDeps {
   now?: () => Date;
   /** Where the system prompt file is written for `--system-prompt-file` (default: a fresh temp dir). */
   tempDir?: string;
+  /** How long after the process exits its output may still arrive before the call is settled (tests shorten it). */
+  exitGraceMs?: number;
+  /** Every `claude` process still running, so a signal handler can kill them before the lock is released. */
+  children?: Set<ChildLike>;
+}
+
+/**
+ * Stop every running `claude` call: SIGTERM, then SIGKILL for any still running after `graceMs`. Resolves once the set is
+ * empty (each call removes its process when it settles) or the second signal was sent. Returns how many were running.
+ */
+export async function killChildren(children: Set<ChildLike>, options: { graceMs?: number; pollMs?: number } = {}): Promise<number> {
+  const running = [...children];
+  if (running.length === 0) return 0;
+  for (const child of running) child.kill("SIGTERM");
+  const until = Date.now() + (options.graceMs ?? 3_000);
+  while (children.size > 0 && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, options.pollMs ?? 100));
+  for (const child of children) child.kill("SIGKILL");
+  return running.length;
 }
 
 /** One `claude -p` call: system prompt in a 0600 temp file, the prompt on stdin, killed after its time-out. */
 export async function runClaude(call: ClaudeCall, deps: ClaudeRunnerDeps): Promise<ClaudeOutcome> {
   const now = deps.now ?? (() => new Date());
+  // Validated before anything is written: a bad budget or flag throws with no temp file left behind.
+  buildClaudeArgs({ schema: call.schema, budgetUsd: call.budgetUsd, systemPromptFile: "<pending>" });
   const tempRoot = deps.tempDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "bgs-nightly-"));
   const systemFile = path.join(tempRoot, `system-${randomBytes(6).toString("hex")}.txt`);
-  fs.writeFileSync(systemFile, call.system, { encoding: "utf8", mode: NIGHTLY_FILE_MODE, flag: "wx" });
   const args = buildClaudeArgs({ schema: call.schema, budgetUsd: call.budgetUsd, systemPromptFile: systemFile });
   const started = Date.now();
   const timeoutMs = call.timeoutMs ?? CLAUDE_DEFAULT_TIMEOUT_MS;
   let outcome: ClaudeOutcome;
   let exitCode: number | null = null;
   try {
+    fs.writeFileSync(systemFile, call.system, { encoding: "utf8", mode: NIGHTLY_FILE_MODE, flag: "wx" });
     const finished = await new Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }>((resolve) => {
       let stdout = "";
       let stderr = "";
       let timedOut = false;
       let settled = false;
       const child = (deps.spawn ?? defaultSpawn)(deps.claudeBin ?? "claude", args, { cwd: deps.cwd, env: claudeChildEnv(deps.parentEnv) });
+      deps.children?.add(child);
       const finish = (code: number | null) => {
         if (settled) return;
         settled = true;
+        deps.children?.delete(child);
         clearTimeout(timer);
         clearTimeout(killer);
+        clearTimeout(exitGrace);
         resolve({ stdout, stderr, code, timedOut });
       };
       let killer: ReturnType<typeof setTimeout> | undefined;
+      let exitGrace: ReturnType<typeof setTimeout> | undefined;
       const timer = setTimeout(() => {
         timedOut = true;
         child.kill("SIGTERM");
@@ -307,6 +370,9 @@ export async function runClaude(call: ClaudeCall, deps: ClaudeRunnerDeps): Promi
         finish(null);
       });
       child.on("close", (code) => finish(code));
+      child.on("exit", (code) => {
+        exitGrace = setTimeout(() => finish(code), deps.exitGraceMs ?? EXIT_GRACE_MS);
+      });
       child.stdin?.on?.("error", () => undefined);
       child.stdin?.write(call.user);
       child.stdin?.end();

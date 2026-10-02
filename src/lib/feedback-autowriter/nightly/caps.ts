@@ -14,11 +14,18 @@ export const NIGHTLY_CAPS = Object.freeze({
   /** At least this long between two Wise reads (≤ 0.2 req/s). */
   wisePacingMs: 5_000,
   maxOpusCalls: 80,
-  perAuditUsd: 1.5,
-  perReauditUsd: 1.5,
-  perSynthesisUsd: 2,
-  maxClaudeUsdNight: 25,
-  maxClaudeUsdWeek: 120,
+  /**
+   * Per-call ceilings, in list-price dollars (the subscription is not billed per call; this measures usage). Measured
+   * on 2 Oct transcripts at max effort: $0.68–$1.35 per audit, and 2 of 14 long lessons stopped at the first $1.50
+   * ceiling — a stopped call is pure waste, so the ceiling sits above the longest lesson and the night cap does the
+   * limiting.
+   */
+  perAuditUsd: 3,
+  perReauditUsd: 3,
+  perSynthesisUsd: 4,
+  /** ≈ 40 posts × $1.10 + synthesis + re-audits on the busiest nights. */
+  maxClaudeUsdNight: 60,
+  maxClaudeUsdWeek: 300,
   maxSonioxUsdNight: 2,
   maxOpenRouterUsdNight: 3,
   maxCorrectionsPerNight: 6,
@@ -105,19 +112,44 @@ export function ownerConfigFile(home?: string): string {
   return path.join(nightlyHome(home), "config.json");
 }
 
-export type OwnerConfig = { ok: true; caps: Partial<NightlyCaps>; notes: string[] } | { ok: false; reason: string };
+/** Per-call budgets: a call cannot have a zero budget (`--max-budget-usd` must be positive). */
+const PER_CALL_USD = new Set<keyof NightlyCaps>(["perAuditUsd", "perReauditUsd", "perSynthesisUsd"]);
+/** Counts: whole numbers (0 pauses that kind of work). */
+const COUNT_CAPS = new Set<keyof NightlyCaps>([
+  "maxTargets", "maxWiseReads", "maxOpusCalls", "maxCorrectionsPerNight", "maxCorrectionsPerWeek", "maxFlagsPerNight", "auditConcurrency",
+]);
+
+/** Why a number cannot be used for this cap, or null. */
+export function capValueProblem(name: keyof NightlyCaps, value: unknown): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "must be a non-negative number";
+  if (PER_CALL_USD.has(name) && value <= 0) return "must be greater than 0";
+  if (COUNT_CAPS.has(name) && !Number.isInteger(value)) return "must be a whole number";
+  if (name === "auditConcurrency" && value < 1) return "must be at least 1";
+  return null;
+}
+
+export type OwnerConfig =
+  | {
+    ok: true;
+    caps: Partial<NightlyCaps>;
+    notes: string[];
+    /** A commit the owner reviewed and allows the nightly to run from (besides anything on origin/main). */
+    runnerSha: string | null;
+  }
+  | { ok: false; reason: string };
 
 /**
- * The owner's config: `{ "caps": { "maxTargets": 40, … } }` (keys may also sit at the top level). Missing file: no
- * changes. A file that does not parse is a config error (fail closed, never ignored); unknown keys and values of the
- * wrong type are noted and ignored.
+ * The owner's config: `{ "caps": { "maxTargets": 40, … }, "runnerSha": "<commit>" }` (cap keys may also sit at the top
+ * level). Missing file: no changes. A file that does not parse, a cap value the nightly cannot use (wrong type, a zero
+ * per-call budget, a fractional count, concurrency below 1, a deadline not HH:MM) or a runnerSha that is not a 7–40
+ * character hex commit is a config error (fail closed, never ignored); unknown keys are noted and ignored.
  */
 export function loadOwnerConfig(file: string = ownerConfigFile()): OwnerConfig {
   let text: string;
   try {
     text = fs.readFileSync(file, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ok: true, caps: {}, notes: [] };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ok: true, caps: {}, notes: [], runnerSha: null };
     return { ok: false, reason: `owner config unreadable: ${(error as Error).message.slice(0, 120)}` };
   }
   let parsed: unknown;
@@ -133,24 +165,27 @@ export function loadOwnerConfig(file: string = ownerConfigFile()): OwnerConfig {
   const caps: Partial<NightlyCaps> = {};
   const notes: string[] = [];
   for (const [key, value] of Object.entries(source)) {
-    if (key === "caps") continue;
+    if (key === "caps" || key === "runnerSha") continue;
     if (!(key in NIGHTLY_CAPS)) {
       notes.push(`unknown key ignored: ${key}`);
       continue;
     }
     const name = key as keyof NightlyCaps;
+    // A cap the owner wrote but the nightly cannot use is a config error (fail closed), never silently ignored.
     if (name === "deadlineBangkok") {
-      if (typeof value === "string" && /^([01]\d|2[0-3]):[0-5]\d$/u.test(value)) caps.deadlineBangkok = value;
-      else notes.push("deadlineBangkok ignored: not HH:MM");
+      if (typeof value !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/u.test(value)) return { ok: false, reason: "deadlineBangkok must be HH:MM" };
+      caps.deadlineBangkok = value;
       continue;
     }
-    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-      notes.push(`${name} ignored: not a non-negative number`);
-      continue;
-    }
-    (caps as Record<string, number>)[name] = value;
+    const problem = capValueProblem(name, value);
+    if (problem) return { ok: false, reason: `${name} ${problem}` };
+    (caps as Record<string, number>)[name] = value as number;
   }
-  return { ok: true, caps, notes };
+  const pinned = record.runnerSha;
+  if (pinned !== undefined && pinned !== null && (typeof pinned !== "string" || !/^[0-9a-f]{7,40}$/iu.test(pinned.trim()))) {
+    return { ok: false, reason: "runnerSha must be a 7-40 character hex commit" };
+  }
+  return { ok: true, caps, notes, runnerSha: typeof pinned === "string" ? pinned.trim().toLowerCase() : null };
 }
 
 /**

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -5,9 +6,27 @@ import { NIGHTLY_FILE_MODE, ensureDir } from "./paths";
 
 /**
  * Single flight for the nightly audit: an O_EXCL lockfile holding the owner's pid, start time, host and command.
- * A lock is stale only when its pid is dead; a lock that cannot be read (no pid to check) is never taken over —
- * the operator deletes it after looking.
+ * A lock is stale when its pid is dead, when that pid now belongs to a process started after the lock was taken (the
+ * pid was reused), or when the lock is older than LOCK_MAX_AGE_MS (no healthy run lasts that long). A lock that cannot
+ * be read (no pid to check) is never taken over — the operator deletes it after looking.
  */
+
+/** No nightly run lasts this long (the deadline ends it by 06:50 Bangkok): an older lock is stale. */
+export const LOCK_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+/** Clock slack between the lock's start time and the process start time `ps` reports (whole seconds). */
+const START_SLACK_MS = 60_000;
+
+/** When the process with this pid started (`ps -o lstart=`), or null when unknown. */
+export function processStartedAt(pid: number): Date | null {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    const text = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000 }).trim();
+    const at = new Date(text);
+    return text && !Number.isNaN(at.getTime()) ? at : null;
+  } catch {
+    return null;
+  }
+}
 
 export interface LockHolder {
   pid: number;
@@ -67,10 +86,16 @@ function tryCreate(file: string, holder: LockHolder): boolean {
 }
 
 /**
- * Take the lock. A lock whose pid is dead is taken over (once, only if the file still holds that same text);
- * a live pid — this process's own included — or an unreadable lock refuses.
+ * Take the lock. A stale lock (see above) is taken over (once, only if the file still holds that same text); a live
+ * holder — this process included — or an unreadable lock refuses.
  */
-export function acquireLock(file: string, input: { command: string; now?: Date; pid?: number; alive?: (pid: number) => boolean }): LockResult {
+export function acquireLock(file: string, input: {
+  command: string;
+  now?: Date;
+  pid?: number;
+  alive?: (pid: number) => boolean;
+  startedAt?: (pid: number) => Date | null;
+}): LockResult {
   ensureDir(path.dirname(file));
   const holder: LockHolder = {
     pid: input.pid ?? process.pid,
@@ -79,6 +104,16 @@ export function acquireLock(file: string, input: { command: string; now?: Date; 
     command: input.command.slice(0, 200),
   };
   const alive = input.alive ?? pidAlive;
+  const startedAt = input.startedAt ?? processStartedAt;
+  const now = (input.now ?? new Date()).getTime();
+  /** Whether the holder still owns the lock: its pid alive, started before the lock, and the lock not too old. */
+  const holderLive = (holder: LockHolder) => {
+    if (!alive(holder.pid)) return false;
+    const taken = new Date(holder.startedAt).getTime();
+    if (Number.isNaN(taken) || now - taken > LOCK_MAX_AGE_MS) return false;
+    const processStart = startedAt(holder.pid);
+    return !(processStart && processStart.getTime() > taken + START_SLACK_MS);
+  };
   const release = () => {
     const current = readHolder(file);
     if (current.holder && current.holder.pid === holder.pid && current.holder.startedAt === holder.startedAt) {
@@ -92,8 +127,8 @@ export function acquireLock(file: string, input: { command: string; now?: Date; 
     if (existing.text === null && tryCreate(file, holder)) return { ok: true, holder, release, tookOverStale: null };
     return { ok: false, reason: "unreadable", holder: null, file };
   }
-  if (alive(existing.holder.pid)) return { ok: false, reason: "held", holder: existing.holder, file };
-  // Stale: the owner's pid is dead. Remove it only if nobody replaced it meanwhile, then try once more.
+  if (holderLive(existing.holder)) return { ok: false, reason: "held", holder: existing.holder, file };
+  // Stale (dead or reused pid, or too old). Remove it only if nobody replaced it meanwhile, then try once more.
   const again = readHolder(file);
   if (again.text !== existing.text) return { ok: false, reason: "held", holder: again.holder, file };
   fs.rmSync(file, { force: true });

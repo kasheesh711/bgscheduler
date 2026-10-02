@@ -8,8 +8,9 @@ import type { AuditRecord, EvidenceBundle, PrecheckFinding } from "./types";
  * speaker-label confidence, so it is byte-identical across classes of the same kind (prompt caching). Everything
  * about the class goes in the user message, inside tags the model is told are data, never instructions.
  * Bump `AUDIT_PROMPT_VERSION` whenever the wording changes. v2 (3 Oct): states the id formats and every length limit.
+ * v3 (3 Oct): each deterministic candidate is listed under its unique id (`code#n`) and reviewed by it.
  */
-export const AUDIT_PROMPT_VERSION = 2;
+export const AUDIT_PROMPT_VERSION = 4;
 
 /** Longest lesson record sent to the auditor; transcripts of a 2-hour lesson stay well under it. */
 const MAX_TRANSCRIPT_CHARS = 150_000;
@@ -18,7 +19,7 @@ const MAX_SUMMARY_CHARS = 20_000;
 
 const DATA_TAGS = [
   "class_details", "people", "feedback", "posted_from", "speaker_labels", "lesson_transcript", "zoom_captions",
-  "wise_summary", "deterministic_candidates", "prior_issues", "writer_rules",
+  "wise_summary", "atom_evidence", "deterministic_candidates", "prior_issues", "writer_rules", "night", "audits", "history_14d",
 ] as const;
 
 /** Neutralises anything in lesson data that looks like one of our tags, so data can never close a tag early. */
@@ -77,6 +78,10 @@ export function auditSystemPrompt(evidence: EvidenceKind, labels: SpeakerLabels)
     "- <lesson_transcript> (when available): automatic speech-to-text of the recording, Thai and English mixed, with [mm:ss] times and " +
       "speaker labels. <speaker_labels> says whether the labels were verified against Zoom or inferred from who talked most.",
     "- <zoom_captions> (when available): Zoom's own captions with participants' display names (often Thai script; English terms may be lost).",
+    "- <atom_evidence> (ISEB posts only, when available): the frozen record from the Atom practice platform that the writer was given — " +
+      "matched activities with their names, question counts, correct answers, percentages and times. It is a system record and true for " +
+      "this student and lesson, like the class details: a score, activity name or count that appears in it is supported. The writer was told " +
+      "to report Atom statistics only from matched activities, with the activity name.",
     "- <wise_summary> (when available): an AI summary the platform wrote of the same lesson. It can be wrong: it has invented homework " +
       "and mixed up people before.",
     "- <deterministic_candidates>: things a script flagged that you must confirm or reject.",
@@ -90,7 +95,7 @@ export function auditSystemPrompt(evidence: EvidenceKind, labels: SpeakerLabels)
       "kind \"suggestion\" with verdict \"advice_ok\" — unless presented as homework the tutor set, or they state how the student performed.",
     "2. For each claim find the evidence and quote it VERBATIM (an exact substring of the evidence, in its original language — Thai stays " +
       "Thai — with an English gloss for Thai) with its [mm:ss] or line locator. Order of trust: transcript, then Zoom captions, then class " +
-      "details, then the Wise summary. The summary never supports a claim the transcript contradicts; when a transcript exists, a claim " +
+      "details and Atom evidence (system records), then the Wise summary. The summary never supports a claim the transcript contradicts; when a transcript exists, a claim " +
       "only the summary supports is partly_supported at best.",
     "   Verdicts: supported (the evidence states or clearly implies it); partly_supported (true in part — raise an issue for the rest); " +
       "unsupported (nothing in the evidence); contradicted (the evidence says otherwise); misattributed (the evidence says it about another " +
@@ -166,6 +171,7 @@ export function evidenceTextOf(bundle: EvidenceBundle): string {
   return [
     bundle.transcript?.text ?? "",
     bundle.zoomCaptions ?? "",
+    bundle.atomEvidence ?? "",
     bundle.wiseSummary ?? "",
     bundle.classDetails.join("\n"),
   ].join("\n");
@@ -210,12 +216,13 @@ export function buildAuditPrompt(input: {
       ? ["<lesson_transcript>", fenceData(clip(bundle.transcript.text, MAX_TRANSCRIPT_CHARS)), "</lesson_transcript>"]
       : ["<lesson_transcript>(no transcript available)</lesson_transcript>"]),
     ...(bundle.zoomCaptions ? ["<zoom_captions>", fenceData(clip(bundle.zoomCaptions, MAX_CAPTIONS_CHARS)), "</zoom_captions>"] : []),
+    ...(bundle.atomEvidence ? ["<atom_evidence>", fenceData(clip(bundle.atomEvidence, MAX_SUMMARY_CHARS)), "</atom_evidence>"] : []),
     ...(bundle.wiseSummary
       ? ["<wise_summary>", fenceData(clip(bundle.wiseSummary, MAX_SUMMARY_CHARS)), "</wise_summary>"]
       : ["<wise_summary>(no summary available)</wise_summary>"]),
     "<deterministic_candidates>",
     candidates.length
-      ? fenceData(candidates.map((f) => `- ${f.code} (${f.severity}${f.candidate ? ", confirm or reject" : ""}): ${f.detail}`).join("\n"))
+      ? fenceData(candidates.map((f) => `- ${f.id ?? f.code} (${f.severity}${f.candidate ? ", confirm or reject" : ""}): ${f.detail}`).join("\n"))
       : "(none)",
     "</deterministic_candidates>",
     ...(input.priorIssues?.length

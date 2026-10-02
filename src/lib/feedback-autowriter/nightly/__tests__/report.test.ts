@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { AuditResult } from "../audit-schema";
 import { appendJsonl } from "../paths";
 import {
+  auditCounts,
   classReportLine,
   groupByMode,
   judgePassedOf,
@@ -76,6 +77,26 @@ describe("mergeClassReport", () => {
     const unaudited = mergeClassReport(file([candidate]), null);
     expect(unaudited).toMatchObject({ severity: null, auditFailure: "not_audited" });
     expect(unaudited.findings[0].detail).toMatch(/not confirmed/u);
+  });
+
+  it("matches each candidate's review on its unique id; a bare code only when unambiguous", () => {
+    const ploy = precheck({ code: "other_person_named", id: "other_person_named#1", severity: "major", mode: "M11", candidate: true, detail: "Ploy" });
+    const fern = precheck({ code: "other_person_named", id: "other_person_named#2", severity: "major", mode: "M11", candidate: true, detail: "Fern" });
+    const byId = mergeClassReport(file([ploy, fern]), audit({ candidateReview: [
+      { code: "other_person_named#1", confirmed: false, reason: "a character in the book" },
+      { code: "other_person_named#2", confirmed: true, reason: "another student" },
+    ] }));
+    expect(byId.findings.map((finding) => [finding.code, finding.severity, finding.confirmed])).toEqual([
+      ["other_person_named", "info", false], ["other_person_named", "major", true],
+    ]);
+    // A bare code shared by two candidates: confirmed → both (a person looks); rejected → neither confirmed.
+    const ambiguous = mergeClassReport(file([ploy, fern]), audit({ candidateReview: [{ code: "other_person_named", confirmed: true, reason: "x" }] }));
+    expect(ambiguous.findings.map((finding) => finding.severity)).toEqual(["major", "major"]);
+    const rejected = mergeClassReport(file([ploy, fern]), audit({ candidateReview: [{ code: "other_person_named", confirmed: false, reason: "x" }] }));
+    expect(rejected.findings.map((finding) => finding.confirmed)).toEqual([null, null]);
+    // A bundle collected before ids: matched on the code when it is unambiguous.
+    const legacy = mergeClassReport(file([{ ...ploy, id: undefined }]), audit({ candidateReview: [{ code: "other_person_named", confirmed: true, reason: "x" }] }));
+    expect(legacy.findings[0]).toMatchObject({ severity: "major", confirmed: true });
   });
 
   it("merges audit issues and omissions; high-confidence criticals mark the class for an incident", () => {
@@ -159,15 +180,31 @@ describe("rendering", () => {
 
   it("puts quotes and fixes in report.md (local)", () => {
     const text = renderReportMarkdown(input());
-    expect(text).toContain("Proof: Opus5.5max 1/1");
+    expect(text).toContain("Proof: Opus5.5 (effort max requested) 1/1");
     expect(text).toContain(`Posted: "${QUOTE}"`);
     expect(text).toContain("Minimal fix: delete_span");
     expect(text).toContain("Evidence (transcript 12:30 STUDENT): \"Twelve.\"");
   });
 
+  it("counts only successful audits as audited, and says why the others were not", () => {
+    const audited = mergeClassReport(file(), audit({ verdict: "major", issues: [issue()] }));
+    const failed = mergeClassReport(file(), { ...audit(), result: null, failure: "invalid:schema: claims bad" });
+    const incomplete = mergeClassReport(file([], { transient: ["wise_detail_failed"] }), null);
+    const floorOnly = mergeClassReport(file([precheck({ code: "billing_drift", severity: "critical", mode: "M13" })]), null);
+    expect(auditCounts([audited, failed, incomplete, floorOnly])).toEqual({
+      posts: 4,
+      audited: 1,
+      verdicts: { accurate: 0, cosmetic: 0, major: 1, critical: 0, insufficient_evidence: 0 },
+      notAudited: { invalid: 1, collection_incomplete: 1, not_audited: 1 },
+    });
+    const text = renderSummaryMarkdown({ ...input(), reports: [audited, failed, incomplete, floorOnly] });
+    expect(text).toContain("- Posts 4; audited 1 (accurate 0, cosmetic 0, major 1, critical 0, insufficient_evidence 0); not audited 3 " +
+      "(invalid 1, collection_incomplete 1, not_audited 1)");
+  });
+
   it("keeps summary.md free of names and text", () => {
     const text = renderSummaryMarkdown(input());
-    expect(text).toContain("Proof: Opus5.5max 1/1");
+    expect(text).toContain("Proof: Opus5.5 (effort max requested) 1/1");
     expect(text).toContain("M06×1");
     for (const forbidden of ["hesitated", "Pim", "Testwong", "Kevin", PIM_FIELDS.topics.slice(0, 30)]) expect(text).not.toContain(forbidden);
   });

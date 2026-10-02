@@ -8,7 +8,7 @@ import type { ClaudeCall, ClaudeOutcome } from "../claude-runner";
 import { NightlyLedger } from "../ledger";
 import type { ClassReport } from "../report";
 import type { BundleFile } from "../steps";
-import { fixBriefFile, realNamesOf, renderPlanMarkdown, synthesizeNight } from "../synthesis";
+import { captionSpeakers, copiedThaiRun, fixBriefFile, realNamesOf, renderPlanMarkdown, synthesizeNight } from "../synthesis";
 import type { AuditRecord, ClaudeProof } from "../types";
 import { SID, nightlyBundle, nightlyTarget } from "./nightly-fixtures";
 
@@ -107,7 +107,7 @@ describe("synthesizeNight", () => {
       night: "2026-10-02", records: [RECORD], files: [FILE], reports: [REPORT], modes: [],
     });
     expect(limited).toMatchObject({ ok: false, stop: { reason: "usage_limited" } });
-    const over = await synthesizeNight({ ledger, run: vi.fn(), perSynthesisUsd: 2.5 }, {
+    const over = await synthesizeNight({ ledger, run: vi.fn(), perSynthesisUsd: 4.5 }, {
       night: "2026-10-02", records: [RECORD], files: [FILE], reports: [REPORT], modes: [],
     });
     expect(over).toMatchObject({ ok: false, reason: "cap:opus_synthesis_per_call" });
@@ -115,5 +115,44 @@ describe("synthesizeNight", () => {
 
   it("collects the night's real names for the brief check", () => {
     expect(realNamesOf([FILE])).toEqual(expect.arrayContaining(["Pimchanok (Pim.Ta) Testwong", "Pimchanok", "Testwong", "Pim", "Arthit Teacherson", "Art"]));
+  });
+
+  it("also checks the tutor's other students, people the audits found named, and Zoom caption speakers", () => {
+    const withCaptions: BundleFile = {
+      ...FILE,
+      otherStudentNames: ["Tawan"],
+      bundle: nightlyBundle({ zoomCaptions: "[00:00] Kruarthit Online: Hello\n[00:05] นภัสสร มีสุข: สวัสดีค่ะ\n[00:09] Zoom user: hi" }),
+    };
+    const record: AuditRecord = { ...RECORD, result: { ...RECORD.result!, names: { studentCalled: ["Pim"], otherPeopleNamed: ["Ploychompoo"] } } };
+    const names = realNamesOf([withCaptions], [record]);
+    expect(names).toEqual(expect.arrayContaining(["Tawan", "Ploychompoo", "Kruarthit Online", "Kruarthit", "นภัสสร มีสุข", "นภัสสร", "มีสุข"]));
+    // Words that are not names never count: "Online", or a Zoom guest's "Zoom" and "user".
+    expect(names).not.toEqual(expect.arrayContaining(["Online"]));
+    expect(names.map((name) => name.toLowerCase())).not.toContain("zoom");
+    expect(names.map((name) => name.toLowerCase())).not.toContain("user");
+    expect(captionSpeakers("[01:02] A Person: text\nno speaker line\n[10:00] นภัสสร: ค่ะ")).toEqual(["A Person", "นภัสสร"]);
+  });
+
+  it("refuses a brief naming another student of the tutor, or copying a Thai run from the evidence", async () => {
+    const ledger = NightlyLedger.open(dir, "2026-10-02", { ...NIGHTLY_CAPS });
+    const leaky = synthesis();
+    leaky.fixBrief!.syntheticFixture.badFeedback.performance = "Tawan worked well.";
+    const named = await synthesizeNight({ ledger, run: async () => ({ kind: "success", value: leaky, proof: PROOF }), perSynthesisUsd: 2 }, {
+      night: "2026-10-02", records: [RECORD], files: [{ ...FILE, otherStudentNames: ["Tawan"] }], reports: [REPORT], modes: [],
+    });
+    expect(named).toMatchObject({ ok: false, reason: "invalid:fix brief contains a real name" });
+
+    const thaiLesson = "[00:01] TUTOR: วันนี้เราจะทบทวนเรื่องเศษส่วนที่มีตัวส่วนไม่เท่ากันก่อนนะ";
+    const copying = synthesis();
+    // Spread out so the word-based 8-word check cannot see it; whitespace does not hide a copied Thai run.
+    copying.fixBrief!.syntheticFixture.evidence = [..."วันนี้เราจะทบทวนเรื่องเศษส่วนที่มีตัวส่วน"].join(" ");
+    const copied = await synthesizeNight({ ledger, run: async () => ({ kind: "success", value: copying, proof: PROOF }), perSynthesisUsd: 2 }, {
+      night: "2026-10-02", records: [RECORD],
+      files: [{ ...FILE, bundle: nightlyBundle({ transcript: { text: thaiLesson, source: "production_soniox", speakerMethod: null, speakerLabels: null } }) }],
+      reports: [REPORT], modes: [],
+    });
+    expect(copied).toMatchObject({ ok: false, reason: "invalid:fix brief copies a 25-character Thai run from the evidence" });
+    expect(copiedThaiRun("short ไทย", [thaiLesson])).toBeNull();
+    expect(copiedThaiRun("an English brief", [thaiLesson])).toBeNull();
   });
 });

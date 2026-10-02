@@ -49,6 +49,10 @@ export interface ClassReport {
   className: string | null;
   postedEvidenceKind: "summary" | "transcript";
   grade: string;
+  /** A post of an earlier night picked up late: that night. */
+  lateFrom: string | null;
+  /** Whether better evidence may still come for this class. */
+  improvable: boolean;
   auditVerdict: AuditResult["verdict"] | null;
   auditFailure: string | null;
   auditSummaryLine: string | null;
@@ -91,11 +95,33 @@ export function judgePassedOf(storedJudge: unknown): boolean | null {
   return passingStoredVerdict(storedJudge) !== null;
 }
 
+/**
+ * The audit's review of one candidate: matched on its unique id (`code#n`). A review under the bare code counts only
+ * when that code is unambiguous (one candidate has it — also how bundles collected before ids are matched); a bare
+ * code shared by several candidates confirms them all when any such review confirms (fail closed: a person looks),
+ * and otherwise leaves them unconfirmed.
+ */
+export function candidateVerdict(
+  precheck: PrecheckFinding,
+  prechecks: readonly PrecheckFinding[],
+  reviews: AuditResult["candidateReview"],
+): boolean | null {
+  const id = precheck.id ?? precheck.code;
+  const exact = reviews.filter((review) => review.code.trim() === id);
+  if (exact.length > 0) return exact.at(-1)!.confirmed;
+  const bare = reviews.filter((review) => review.code.trim() === precheck.code);
+  if (bare.length === 0) return null;
+  const sharing = prechecks.filter((item) => item.candidate && item.code === precheck.code).length;
+  if (sharing <= 1) return bare.at(-1)!.confirmed;
+  return bare.some((review) => review.confirmed) ? true : null;
+}
+
 /** One class's findings: prechecks floors, confirmed candidates, the audit's issues and omissions. */
 export function mergeClassReport(file: BundleFile, record: AuditRecord | null): ClassReport {
   const result = record?.result ?? null;
-  const reviewed = new Map((result?.candidateReview ?? []).map((review) => [review.code, review.confirmed]));
-  const findings: ReportFinding[] = file.prechecks.map((precheck) => precheckFinding(precheck, precheck.candidate ? reviewed.get(precheck.code) ?? null : null));
+  const reviews = result?.candidateReview ?? [];
+  const findings: ReportFinding[] = file.prechecks.map((precheck) =>
+    precheckFinding(precheck, precheck.candidate ? candidateVerdict(precheck, file.prechecks, reviews) : null));
   for (const issue of result?.issues ?? []) {
     findings.push({
       source: "audit", code: issue.id, mode: issue.mode, severity: issue.severity, confidence: issue.confidence,
@@ -123,8 +149,12 @@ export function mergeClassReport(file: BundleFile, record: AuditRecord | null): 
     className: file.target.className,
     postedEvidenceKind: file.bundle.postedEvidenceKind,
     grade: file.bundle.grade,
+    lateFrom: file.target.lateFrom ?? null,
+    improvable: file.improvable ?? false,
     auditVerdict: result?.verdict ?? null,
-    auditFailure: record?.failure ?? (record ? null : "not_audited"),
+    auditFailure: record?.failure ?? (record ? null
+      : file.transient && file.transient.length > 0 ? `collection_incomplete:${file.transient.join(",")}`
+        : file.bundle.grade === "none" ? "no_evidence" : "not_audited"),
     auditSummaryLine: result?.summaryLine ?? null,
     severity,
     modes: [...new Set(counted.flatMap((finding) => (finding.mode ? [finding.mode] : [])))].sort(),
@@ -183,6 +213,7 @@ export function classReportLine(night: string, report: ClassReport, at: string, 
     auditVersion,
     grade: report.grade,
     postedEvidenceKind: report.postedEvidenceKind,
+    lateFrom: report.lateFrom,
     auditVerdict: report.auditVerdict,
     auditFailure: report.auditFailure,
     severity: report.severity,
@@ -334,32 +365,65 @@ function cell(value: unknown): string {
   return String(value ?? "—").replace(/\|/gu, "/").replace(/\n/gu, " ");
 }
 
-function verdictCounts(reports: readonly ClassReport[]): Record<string, number> {
-  const counts: Record<string, number> = { accurate: 0, cosmetic: 0, major: 0, critical: 0, insufficient_evidence: 0, failed: 0 };
+/**
+ * The night's posts: how many were audited successfully, their verdicts (deterministic floors merged in), and why the
+ * others were not (collection incomplete, no evidence, a failed or refused audit — by category, never counted as audited).
+ */
+export function auditCounts(reports: readonly ClassReport[]): {
+  posts: number;
+  audited: number;
+  verdicts: Record<string, number>;
+  notAudited: Record<string, number>;
+} {
+  const verdicts: Record<string, number> = { accurate: 0, cosmetic: 0, major: 0, critical: 0, insufficient_evidence: 0 };
+  const notAudited: Record<string, number> = {};
+  let audited = 0;
   for (const report of reports) {
-    const key = report.severity ?? (report.auditVerdict === "insufficient_evidence" ? "insufficient_evidence" : report.auditVerdict ? "accurate" : "failed");
-    counts[key] = (counts[key] ?? 0) + 1;
+    if (report.auditVerdict === null) {
+      const reason = (report.auditFailure ?? "not_audited").split(":")[0];
+      notAudited[reason] = (notAudited[reason] ?? 0) + 1;
+      continue;
+    }
+    audited += 1;
+    const key = report.severity ?? (report.auditVerdict === "insufficient_evidence" ? "insufficient_evidence" : "accurate");
+    verdicts[key] = (verdicts[key] ?? 0) + 1;
   }
-  return counts;
+  return { posts: reports.length, audited, verdicts, notAudited };
+}
+
+/** "Posts 14; audited 12 (accurate 9, …); not audited 2 (collection_incomplete 1, invalid 1)". */
+function auditCountsLine(reports: readonly ClassReport[]): string {
+  const counts = auditCounts(reports);
+  const list = (record: Record<string, number>) => Object.entries(record).map(([key, value]) => `${key} ${value}`).join(", ");
+  const notAudited = counts.posts - counts.audited;
+  return `Posts ${counts.posts}; audited ${counts.audited} (${list(counts.verdicts)})` +
+    (notAudited > 0 ? `; not audited ${notAudited} (${list(counts.notAudited)})` : "");
 }
 
 const SEVERITY_ORDER: Record<string, number> = { critical: 0, major: 1, cosmetic: 2 };
 
+/**
+ * The proof line: calls whose usage shows claude-opus-5-5, out of all calls. `modelUsage` proves the model, not the
+ * effort: max effort was requested on every call (`--effort max`), which is all the CLI can attest.
+ */
+export function proofLine(counts: { opusProven: number; claudeCalls: number }): string {
+  return `Opus5.5 (effort max requested) ${counts.opusProven}/${counts.claudeCalls}`;
+}
+
 /** `report.md`: everything, quotes included (local, 0600, deleted after 7 days). */
 export function renderReportMarkdown(input: ReportInput): string {
-  const counts = verdictCounts(input.reports);
   const sorted = [...input.reports].sort((a, b) =>
     (SEVERITY_ORDER[a.severity ?? ""] ?? 3) - (SEVERITY_ORDER[b.severity ?? ""] ?? 3) || a.wiseSessionId.localeCompare(b.wiseSessionId));
   const lines = [
     `# Nightly audit — ${input.night}`,
     "",
     `Generated ${input.generatedAt}; code \`${input.code?.head?.slice(0, 12) ?? "unknown"}\` (${input.code?.branch ?? "?"}); ${input.cliVersion ?? "claude CLI ?"}.`,
-    `Proof: Opus5.5max ${input.costs.opusProven}/${input.costs.claudeCalls} calls. Spend: Claude $${input.costs.claudeUsd.toFixed(2)} (API-equivalent, subscription), ` +
+    `Proof: ${proofLine(input.costs)} calls. Spend: Claude $${input.costs.claudeUsd.toFixed(2)} (API-equivalent, subscription), ` +
       `Soniox $${input.costs.sonioxUsd.toFixed(2)}, Wise reads ${input.costs.wiseReads}.`,
     "",
     "## Posts",
     "",
-    `Audited ${input.reports.length}: ${Object.entries(counts).map(([key, value]) => `${key} ${value}`).join(", ")}.`,
+    `${auditCountsLine(input.reports)}.`,
     ...(input.synthesisLine ? ["", `Synthesis: ${input.synthesisLine} (see plan.md)`] : []),
     ...input.notes.map((note) => `- ${note}`),
     "",
@@ -376,10 +440,13 @@ export function renderReportMarkdown(input: ReportInput): string {
     lines.push(
       `### ${report.wiseSessionId} — ${report.severity ?? (report.auditVerdict ?? "not audited")}`,
       "",
-      `Tutor ${report.tutorKey ?? "?"}; class ${report.className ?? "?"}; posted from ${report.postedEvidenceKind}; evidence ${report.grade}; ` +
+      `${report.lateFrom ? `Late pickup from ${report.lateFrom} (verified after that night's selection). ` : ""}` +
+        `Tutor ${report.tutorKey ?? "?"}; class ${report.className ?? "?"}; posted from ${report.postedEvidenceKind}; evidence ${report.grade}; ` +
         `owner verdict ${report.ownerVerdict ?? "none"}; production judges passed ${report.judgePassed ?? "?"}` +
         `${report.wiseTextEdited ? "; TEXT EDITED IN WISE SINCE OUR POST (never corrected over)" : ""}.`,
-      ...(report.auditFailure ? [`Audit failed: ${report.auditFailure}`] : []),
+      ...(report.auditFailure ? [`Not audited: ${report.auditFailure}`] : []),
+      ...(report.auditVerdict === "insufficient_evidence" && report.improvable
+        ? ["Evidence may still improve (collect again, with --retranscribe while Wise lists the recording)."] : []),
       ...(report.auditSummaryLine ? [`Audit: ${report.auditSummaryLine}`] : []),
       "",
     );
@@ -415,16 +482,15 @@ export function renderReportMarkdown(input: ReportInput): string {
 
 /** `summary.md`: counts, modes, costs and proof only — no names, no quotes, no lesson or feedback text. */
 export function renderSummaryMarkdown(input: ReportInput): string {
-  const counts = verdictCounts(input.reports);
   const flagged = input.reports.filter((report) => report.severity === "critical" || report.severity === "major");
   return [
     `# Nightly audit summary — ${input.night}`,
     "",
-    `- Posts audited: ${input.reports.length} (${Object.entries(counts).map(([key, value]) => `${key} ${value}`).join(", ")})`,
+    `- ${auditCountsLine(input.reports)}`,
     `- Major or critical: ${flagged.length}; already approved by the owner: ${flagged.filter((report) => report.ownerVerdict === "approve").length}; ` +
       `passed by the production judges: ${flagged.filter((report) => report.judgePassed === true).length}`,
     `- Modes: ${input.modes.map((group) => `${group.mode}×${group.classes}`).join(", ") || "none"}`,
-    `- Proof: Opus5.5max ${input.costs.opusProven}/${input.costs.claudeCalls}`,
+    `- Proof: ${proofLine(input.costs)}`,
     `- Spend: Claude $${input.costs.claudeUsd.toFixed(2)} API-eq, Soniox $${input.costs.sonioxUsd.toFixed(2)}, OpenRouter $${input.costs.openrouterUsd.toFixed(2)}, Wise reads ${input.costs.wiseReads}`,
     `- Watchdog (M16): ${input.watchdog ? `${input.watchdog.outliers.length} class(es) over the limits${input.watchdog.dayOutlier ? "; day above 3× median" : ""}` : "not run"}`,
     "",

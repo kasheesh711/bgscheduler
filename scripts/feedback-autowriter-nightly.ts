@@ -5,11 +5,16 @@
  *   npx tsx --tsconfig scripts/tsconfig.json scripts/feedback-autowriter-nightly.ts <command> [--night=YYYY-MM-DD] [--json]
  *
  * Commands (each prints ONE JSON line {ok, stop, next, summary} with --json; steps checkpoint into
- * <state root>/<night>/run.json and are idempotent — a finished step is not repeated):
+ * <state root>/<night>/run.json and are idempotent — cache-first, so running one again repeats no Wise read or paid call):
  *   status                         run state, lock, STOP files, Wise cooldown, tonight's spend (reads only)
- *   preflight                      STOP files, lock, clean tree, environment, node ≥ 22; writes run.json
+ *   preflight [--supervised]       STOP files, lock, a clean tree of reviewed code (HEAD on origin/main, or the
+ *                                  runnerSha pinned in the owner config; --supervised overrides, recorded),
+ *                                  environment, node ≥ 22, claude CLI ≥ 2.1; writes run.json
  *   select [--sessions=a,b] [--force]
- *                                  the night's verified autowriter posts to audit (database SELECTs only)
+ *                                  the night's verified autowriter posts to audit (database SELECTs only), merged into
+ *                                  any earlier selection of the night (a class is never dropped), plus posts of the two
+ *                                  previous nights verified after their selection and never audited (late); refused
+ *                                  until an hour after the night ends unless --force
  *   collect [--retranscribe] [--soniox-usd=<n>] [--sessions=a,b]
  *                                  evidence per class, cache-first: one paced Wise session-detail GET, the production
  *                                  Soniox transcript read-only, Zoom captions; --retranscribe makes our OWN Soniox job
@@ -23,9 +28,10 @@
  *                                  one Opus synthesis call → report.md, summary.md, plan.md, fix-brief.json
  *   flag [--apply]                 one `agent` flag per major/critical class (+ a critical_flag incident for a
  *                                  high-confidence critical); a DRY RUN unless --apply — the only database write
- *   run [--apply-flags] [--retranscribe] [--soniox-usd=<n>] [--no-synthesis]
- *                                  preflight → select → collect → audit → report (→ flag with --apply-flags), resuming
- *                                  at the first unfinished step; any stop ends with a partial report, never a retry;
+ *   run [--apply-flags] [--retranscribe] [--soniox-usd=<n>] [--no-synthesis] [--force]
+ *                                  preflight → select → collect → audit → report (→ flag with --apply-flags); preflight
+ *                                  and select run every time (the night's posts may have grown), so every later step
+ *                                  runs again from its cache; any stop ends with a partial report, never a retry;
  *                                  then prune (not after a STOP file)
  *   prune [--dry-run]              delete local evidence older than 7 days (cache, audits, old nights' real data)
  *   costs [--days=7]               the last nights' spend from the local cost ledger
@@ -42,7 +48,8 @@
  *   recover [--apply] [--supervised]
  *                                  agent corrections a dead run left unsettled, settled from Wise reads (never a POST),
  *                                  then a correction lock it left lifted; a dry run (database reads only) unless --apply
- * Global: --no-deadline (supervised runs only: ignore the 06:50 Bangkok stop).
+ * Global: --no-deadline (supervised runs only: ignore the 06:50 Bangkok stop); --supervised (preflight and run: allow
+ * reviewed code that is not on origin/main yet, recorded in run.json).
  *
  * State lives outside every worktree: $BGS_NIGHTLY_ROOT, default ~/.bgscheduler-nightly/nightly (0700 dirs, 0600 files).
  * Kill switches: ~/.bgscheduler-nightly/STOP and /Users/kevinhsieh/Developer/Scheduling/.feedback-autowriter/STOP.
@@ -65,9 +72,18 @@ import {
   loadOwnerConfig,
   stopFilePresent,
   stopFiles,
+  writeStopFile,
   type NightlyCaps,
 } from "@/lib/feedback-autowriter/nightly/caps";
-import { claudeCwd, readClaudeCliVersion, runClaude, type ClaudeRunnerDeps } from "@/lib/feedback-autowriter/nightly/claude-runner";
+import {
+  claudeCwd,
+  killChildren,
+  ledgerOutcome,
+  readClaudeCliVersion,
+  runClaude,
+  type ChildLike,
+  type ClaudeRunnerDeps,
+} from "@/lib/feedback-autowriter/nightly/claude-runner";
 import {
   guardedWiseOps,
   loadCorrectionRows,
@@ -167,10 +183,26 @@ function git(args: string[]): string | null {
   }
 }
 
-function codeFacts(): { head: string | null; branch: string | null; dirty: boolean } | null {
+/** Whether HEAD is reachable from origin/main (the local ref; null when it does not exist). */
+function headOnMain(): boolean | null {
+  if (git(["rev-parse", "--verify", "--quiet", "origin/main"]) === null) return null;
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", "HEAD", "origin/main"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function codeFacts(): { head: string | null; branch: string | null; dirty: boolean; onMain: boolean | null } | null {
   const head = git(["rev-parse", "HEAD"]);
   if (!head) return null;
-  return { head, branch: git(["rev-parse", "--abbrev-ref", "HEAD"]), dirty: (git(["status", "--porcelain", "--untracked-files=no"]) ?? "x") !== "" };
+  return {
+    head,
+    branch: git(["rev-parse", "--abbrev-ref", "HEAD"]),
+    dirty: (git(["status", "--porcelain", "--untracked-files=no"]) ?? "x") !== "",
+    onMain: headOnMain(),
+  };
 }
 
 /** The checkout `correct --apply` and `recover --apply` must run from: HEAD, and origin/main as last fetched. */
@@ -205,9 +237,17 @@ class Session {
   readonly ledger: NightlyLedger;
   /** Our own Soniox jobs in flight (re-transcription), deleted by the signal handler. */
   readonly inFlight = new Set<string>();
+  /** Running `claude -p` calls, killed by the signal handler before it releases the lock. */
+  readonly claudeChildren = new Set<ChildLike>();
 
-  constructor(readonly ctx: NightContext) {
-    this.ledger = NightlyLedger.open(ctx.paths.root, ctx.night, ctx.caps);
+  constructor(readonly ctx: NightContext, readonly runnerSha: string | null) {
+    // A call that cost more than it reserved and passed a cap stops every later step (and the next night) until the
+    // owner deletes the STOP file.
+    this.ledger = NightlyLedger.open(ctx.paths.root, ctx.night, ctx.caps, {
+      onBreach: (breached) => {
+        writeStopFile(`nightly spend passed a cap after the fact: ${breached.join(", ")} (night ${ctx.night})`);
+      },
+    });
   }
 
   get db(): Database {
@@ -217,7 +257,9 @@ class Session {
 
   /** The claude runner; `claude --version` is read once per invocation. */
   claude(): ClaudeRunnerDeps {
-    this.runner ??= { cwd: claudeCwd(), cliVersion: readClaudeCliVersion(), callsLog: this.ctx.paths.claudeCallsJsonl };
+    this.runner ??= {
+      cwd: claudeCwd(), cliVersion: readClaudeCliVersion(), callsLog: this.ctx.paths.claudeCallsJsonl, children: this.claudeChildren,
+    };
     return this.runner;
   }
 }
@@ -263,6 +305,8 @@ async function preflight(session: Session): Promise<StepResult> {
     code: codeFacts(),
     claudeCliVersion: session.claude().cliVersion,
     lock: { ok: true },
+    pinnedSha: session.runnerSha,
+    supervised: flag("supervised"),
     corrections,
   });
 }
@@ -317,7 +361,7 @@ async function audit(session: Session): Promise<StepResult> {
     if (!reserved.ok) return fail(reserved.reason, EXIT.caps, { step: "audit-smoke", night: ctx.night });
     const runner = session.claude();
     const outcome = await runClaude(call, runner);
-    ledger.settle(reserved.id, { actualUsd: outcome.proof?.costUsd ?? null, outcome: outcome.kind });
+    ledger.settle(reserved.id, { actualUsd: outcome.proof?.costUsd ?? null, outcome: ledgerOutcome(outcome.kind, true) });
     const ok = outcome.kind === "success";
     return {
       ok,
@@ -477,13 +521,15 @@ async function runAll(session: Session): Promise<StepResult> {
     order: ["preflight", "select", "collect", "audit", "report", ...(flag("apply-flags") ? ["flag" as const] : [])],
     steps: {
       preflight: () => preflight(session),
-      select: () => stepSelect(ctx, { db: session.db, ledger: session.ledger }),
+      select: () => stepSelect(ctx, { db: session.db, ledger: session.ledger, force: flag("force") }),
       collect: () => collect(session),
       audit: () => audit(session),
       report: () => report(session, { synthesis: !flag("no-synthesis") }),
       flag: () => stepFlag(ctx, { db: session.db, apply: true }),
     },
     partialReport: () => report(session, { synthesis: false }),
+    // Checked and re-selected every run: the code may have changed, and posts may have been verified since.
+    always: new Set(["preflight", "select"]),
   });
   if (result.stop === "stop_file" || stopFilePresent(ctx.stopFiles)) return result;
   return { ...result, summary: { ...result.summary, prune: stepPrune(ctx).summary } };
@@ -525,20 +571,22 @@ async function main(): Promise<void> {
     print(fail("locked", EXIT.stopped, { step: command, night, lock: { reason: lock.reason, holder: lock.holder, file: lock.file } }));
     return;
   }
-  const session = new Session(ctx);
+  const session = new Session(ctx, config.runnerSha);
   let handled = false;
   const onSignal = (signal: NodeJS.Signals) => {
     if (handled) return;
     handled = true;
-    const pending = [...session.inFlight];
-    const key = process.env.SONIOX_API_KEY?.trim();
-    const cleanup = pending.length > 0 && key ? Promise.allSettled(pending.map((id) => createSonioxClient(key).remove(id))) : Promise.resolve([]);
-    void cleanup.then((results) => {
-      const left = pending.filter((_, index) => (results as PromiseSettledResult<unknown>[])[index]?.status === "rejected");
-      process.stderr.write(`${signal}: stopped${left.length ? `; Soniox jobs NOT deleted: ${left.join(", ")}` : ""}\n`);
+    void (async () => {
+      // Running claude calls first (they would outlive us and spend), then our own Soniox jobs, then the lock.
+      const killed = await killChildren(session.claudeChildren);
+      const pending = [...session.inFlight];
+      const key = process.env.SONIOX_API_KEY?.trim();
+      const results = pending.length > 0 && key ? await Promise.allSettled(pending.map((id) => createSonioxClient(key).remove(id))) : [];
+      const left = pending.filter((_, index) => results[index]?.status === "rejected");
+      process.stderr.write(`${signal}: stopped${killed ? `; ${killed} claude call(s) killed` : ""}${left.length ? `; Soniox jobs NOT deleted: ${left.join(", ")}` : ""}\n`);
       lock.release();
       process.exit(130);
-    });
+    })();
   };
   process.once("SIGINT", onSignal);
   process.once("SIGTERM", onSignal);

@@ -1,6 +1,9 @@
+import { and, count, eq, inArray } from "drizzle-orm";
 import type { Database } from "@/lib/db";
+import * as schema from "@/lib/db/schema";
 import type { AutowriterCriticalCategory } from "@/lib/db/schema";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
+import { AGENT_CORRECTION_ACTOR } from "../correction";
 import { recordIncident } from "../incidents";
 import { insertFlag } from "../review-job";
 import type { ClassReport } from "./report";
@@ -15,6 +18,8 @@ import type { ClassReport } from "./report";
 
 export const AGENT_FLAG_ACTOR = "agent:nightly-audit";
 
+const FL = schema.feedbackAutowriterFlags;
+
 const CRITICAL_CATEGORIES = new Set<AutowriterCriticalCategory>(["wrong_person", "billing_status", "invented_content", "should_not_have_posted"]);
 
 export interface FlagPlanItem {
@@ -28,6 +33,8 @@ export interface FlagPlanItem {
   /** A critical finding with high confidence: also an incident the review job pushes to the owner. */
   incident: boolean;
   modes: string[];
+  /** Who raised it (default `AGENT_FLAG_ACTOR`, the audit): a correction's flag says so (`AGENT_CORRECTION_FLAG_ACTOR`). */
+  createdBy?: string;
 }
 
 export function agentFlagKey(input: { wiseSessionId: string; fieldsSha256: string; auditVersion: number }): string {
@@ -69,6 +76,9 @@ export function planAgentFlags(reports: readonly ClassReport[], input: { auditVe
   return { items, overCap };
 }
 
+/** Who raises the flag after a correction: the correction's own actor, so the audit's nightly flag cap never counts it. */
+export const AGENT_CORRECTION_FLAG_ACTOR = AGENT_CORRECTION_ACTOR;
+
 /** The idempotency key of the flag a correction raises: one per class, as there is one agent correction per class. */
 export function agentCorrectionFlagKey(wiseSessionId: string): string {
   return `agent-correction:${wiseSessionId}`;
@@ -98,19 +108,45 @@ export function correctionFlagItem(input: {
     note: `corrected by the nightly agent: ${[...new Set(input.modes)].join(", ")}`.slice(0, 500),
     incident: false,
     modes: [...input.modes],
+    createdBy: AGENT_CORRECTION_FLAG_ACTOR,
   };
 }
 
-/** Write the planned flags (and incidents), each in one transaction. Re-running inserts nothing new. */
-export async function applyAgentFlags(db: Database, items: readonly FlagPlanItem[]): Promise<{
+/** Agent flags the nightly has already raised on these classes (SELECT): what the night's flag cap counts. */
+export async function countAgentFlags(db: Database, wiseSessionIds: readonly string[]): Promise<number> {
+  if (wiseSessionIds.length === 0) return 0;
+  const [row] = await db.select({ total: count() }).from(FL)
+    .where(and(eq(FL.source, "agent"), eq(FL.createdBy, AGENT_FLAG_ACTOR), inArray(FL.wiseSessionId, [...wiseSessionIds])));
+  return Number(row?.total ?? 0);
+}
+
+/**
+ * Write the planned flags (and incidents), each in one transaction, in plan order (criticals first). A flag that
+ * already exists is counted, not written again; at most `maxNew` new ones are written — the night's cap counted in
+ * the database (`countAgentFlags`), so re-runs cannot go past it — and the rest are reported over the cap.
+ */
+export async function applyAgentFlags(db: Database, items: readonly FlagPlanItem[], options: { maxNew?: number } = {}): Promise<{
   inserted: number;
   existing: number;
   incidents: number;
+  overCap: string[];
 }> {
   let inserted = 0;
   let existing = 0;
   let incidents = 0;
+  const overCap: string[] = [];
+  const keys = items.map((item) => item.idempotencyKey);
+  const present = new Set(keys.length === 0 ? [] : (await db.select({ key: FL.idempotencyKey }).from(FL)
+    .where(inArray(FL.idempotencyKey, keys))).map((row) => row.key));
   for (const item of items) {
+    if (present.has(item.idempotencyKey)) {
+      existing += 1;
+      continue;
+    }
+    if (options.maxNew !== undefined && inserted >= options.maxNew) {
+      overCap.push(item.wiseSessionId);
+      continue;
+    }
     const done = await withDatabaseTransaction(db, async (tx) => {
       const flagged = await insertFlag(tx, {
         wiseSessionId: item.wiseSessionId,
@@ -119,7 +155,7 @@ export async function applyAgentFlags(db: Database, items: readonly FlagPlanItem
         note: item.note,
         suggestedSeverity: item.suggestedSeverity,
         suggestedCategory: item.suggestedCategory,
-        createdBy: AGENT_FLAG_ACTOR,
+        createdBy: item.createdBy ?? AGENT_FLAG_ACTOR,
       });
       const pushed = item.incident ? await recordIncident(tx, {
         dedupeKey: item.idempotencyKey,
@@ -135,5 +171,5 @@ export async function applyAgentFlags(db: Database, items: readonly FlagPlanItem
     else existing += 1;
     if (done.pushed) incidents += 1;
   }
-  return { inserted, existing, incidents };
+  return { inserted, existing, incidents, overCap };
 }

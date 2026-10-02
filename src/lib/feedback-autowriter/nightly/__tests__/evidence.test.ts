@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sessionDetail, answers, autoBlankSubmission } from "../../__tests__/fixtures";
 import { KEVIN_ONLINE_WISE_USER_ID } from "../../roster";
+import { parseAutowriterSessionDetail } from "../../session";
 import { SonioxError, type SonioxClient, type SonioxToken } from "../../soniox";
 import { NIGHTLY_CAPS } from "../caps";
 import {
@@ -15,6 +16,7 @@ import {
   readCachedEvidence,
   readOnlySoniox,
   renderZoomCaptions,
+  retranscribeRecording,
   wiseQuietWaitMs,
   type CollectDeps,
   type RawEvidence,
@@ -174,6 +176,14 @@ describe("Wise read gate", () => {
     expect(at("2026-10-02T19:06:50Z")).toBe(3 * 60_000 + 10_000); // too little left of :06 → :10
     expect(at("2026-10-02T19:06:40Z")).toBe(0);
     expect(at("2026-10-02T19:59:50Z")).toBe(5 * 60_000 + 10_000); // into the next hour's :00–:04
+    // Post-class collection (:13/:43), the Wise activity sync (:17/:47) and credit control (:20/:50).
+    expect(at("2026-10-02T19:13:00Z")).toBe(60_000); // → :14
+    expect(at("2026-10-02T19:17:30Z")).toBe(30_000); // → :18
+    expect(at("2026-10-02T19:20:00Z")).toBe(4 * 60_000); // :20–:23 → :24
+    expect(at("2026-10-02T19:43:00Z")).toBe(60_000); // → :44
+    expect(at("2026-10-02T19:47:00Z")).toBe(60_000); // → :48
+    expect(at("2026-10-02T19:50:00Z")).toBe(4 * 60_000); // :50–:53 → :54
+    expect(at("2026-10-02T19:12:50Z")).toBe(70_000); // too little left of :12 → :14
   });
 
   it("paces reads at least 5 s apart, reserving each in the ledger before it starts", async () => {
@@ -223,7 +233,8 @@ describe("Wise read gate", () => {
     await expect(gate.read("k", async () => {
       throw Object.assign(new Error("Wise API 404"), { status: 404 });
     })).rejects.toThrow("Wise API 404");
-    expect(ledger.attempts("k")).toEqual({ total: 1, failed: 1, succeeded: 0 });
+    // Settled, as a failure that is not the key's own (only invalid or unparseable model answers are).
+    expect(ledger.attempts("k")).toEqual({ total: 1, failed: 0, succeeded: 0, other: 1 });
   });
 });
 
@@ -313,6 +324,28 @@ describe("collectRawEvidence", () => {
     const refused = await collectRawEvidence({ ...deps, cacheDir: path.join(dir, "cache2"), retranscribe: { client: failing, ledger: capped, sleep } }, target());
     expect(refused.status.retranscribe).toBe("refused:cap:soniox_usd_night");
     expect(failing.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("deletes our Soniox job even when settling the ledger fails", async () => {
+    const detailValue = parseAutowriterSessionDetail({ data: detail() });
+    const client: SonioxClient = {
+      create: vi.fn(async () => ({ id: "our-job" })),
+      get: vi.fn(async () => ({ status: "completed" as const, audioDurationMs: 3_600_000, errorMessage: null })),
+      transcript: vi.fn(async () => TRANSCRIPT),
+      remove: vi.fn(async () => "deleted" as const),
+      list: vi.fn(),
+    };
+    const ledger = {
+      reserve: () => ({ ok: true as const, id: "r1" }),
+      settle: () => {
+        throw new Error("disk full");
+      },
+    };
+    await expect(retranscribeRecording({ client, ledger, sleep, pollMs: 10 }, {
+      wiseSessionId: SID, detail: detailValue, audioUrl: "https://files.example.invalid/recording.mp4", durationSeconds: 3600, productionJobId: "prod-job",
+    })).rejects.toThrow("disk full");
+    expect(client.remove).toHaveBeenCalledWith("our-job");
+    expect(vi.mocked(client.remove).mock.calls.flat()).not.toContain("prod-job");
   });
 
   it("propagates a Wise 429 as a stage stop, with the class's status saved", async () => {
@@ -408,6 +441,28 @@ describe("buildEvidenceBundle", () => {
       raw: { ...base, iseb: { evidenceHash: "h", lessonRecord: "Overview: the summary the writer saw.", evidenceKind: "summary" } },
     });
     expect(summaryIseb.wiseSummary).toBe("Overview: the summary the writer saw.");
+  });
+
+  it("gives the auditor the frozen Atom evidence an ISEB post was written with", () => {
+    const base: RawEvidence = {
+      wiseSessionId: SID, detail: { data: detail() }, iseb: null, transcript: null, zoomVtt: null,
+      rowMeta: { speakerMethod: null, judge: null, joinedAsGuest: null },
+      status: { collectedAt: "", rowMeta: "read", iseb: "found", detail: "fetched", soniox: "missing", zoom: "none", retranscribe: "not_requested" },
+      notes: [],
+    };
+    const atom = { status: "matched", activities: [{ id: "a1", name: "Extra practice 3", sourceUrl: "https://x", questionIds: ["q"], total: 10, correct: 7 }], omissions: [], contradictions: [] };
+    const withAtom = buildEvidenceBundle({
+      target: target({ evidence: "summary" }), night: "2026-10-02",
+      raw: { ...base, iseb: { evidenceHash: "h", lessonRecord: "Overview: x", evidenceKind: "summary", atom: atom as never } },
+    });
+    expect(withAtom.atomEvidence).toContain("Extra practice 3");
+    expect(withAtom.atomEvidence).not.toContain("https://x");
+    const without = buildEvidenceBundle({
+      target: target({ evidence: "summary" }), night: "2026-10-02",
+      raw: { ...base, iseb: { evidenceHash: "h", lessonRecord: "Overview: x", evidenceKind: "summary", atom: null } },
+    });
+    expect(without.atomEvidence).toBeNull();
+    expect(withAtom.hash).not.toBe(without.hash);
   });
 
   it("notes a rebuild that does not match the post's own record", async () => {

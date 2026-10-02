@@ -2,12 +2,14 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CLAUDE_ENV_ALLOWLIST,
   assertSafeClaudeArgs,
   buildClaudeArgs,
   claudeChildEnv,
+  claudeVersionSupported,
+  killChildren,
   parseClaudeEnvelope,
   runClaude,
   type ChildLike,
@@ -59,6 +61,17 @@ describe("claude argv and environment", () => {
     expect(() => assertSafeClaudeArgs(args.map((arg) => (arg === "claude-opus-5-5" ? "sonnet" : arg)))).toThrow(/Opus 5.5/u);
     expect(() => assertSafeClaudeArgs(args.map((arg) => (arg === "max" ? "high" : arg)))).toThrow(/max effort/u);
     expect(() => assertSafeClaudeArgs(args.filter((arg) => arg !== "--safe-mode"))).toThrow(/--safe-mode/u);
+  });
+
+  it("accepts only a claude CLI 2.1.x or later", () => {
+    expect(claudeVersionSupported("2.1.287 (Claude Code)")).toBe(true);
+    expect(claudeVersionSupported("2.1.0")).toBe(true);
+    expect(claudeVersionSupported("2.2.1 (Claude Code)")).toBe(true);
+    expect(claudeVersionSupported("3.0.0")).toBe(true);
+    expect(claudeVersionSupported("2.0.99 (Claude Code)")).toBe(false);
+    expect(claudeVersionSupported("1.9.0")).toBe(false);
+    expect(claudeVersionSupported("")).toBe(false);
+    expect(claudeVersionSupported(null)).toBe(false);
   });
 
   it("passes the child only an allowlisted environment: no API key, no secrets, no nested-session markers", () => {
@@ -123,6 +136,20 @@ describe("parseClaudeEnvelope", () => {
     expect(parseClaudeEnvelope("", "", 0, CONTEXT)).toMatchObject({ kind: "unparseable" });
     expect(parseClaudeEnvelope(envelope(), "", null, { ...CONTEXT, timedOut: true })).toMatchObject({ kind: "timeout" });
     expect(parseClaudeEnvelope(`warning: something\n${envelope()}`, "", 0, CONTEXT)).toMatchObject({ kind: "success" });
+  });
+
+  it("never reads a usage limit or an auth failure out of the model's own words", () => {
+    // The model's answer (long, or JSON) in an error envelope: a CLI error, not a usage limit.
+    const answer = `{"summaryLine": "the tutor mentioned a rate limit and a 401 error in the lesson"} ${"x".repeat(700)}`;
+    expect(parseClaudeEnvelope(envelope({ subtype: "error_during_execution", is_error: true, result: answer }), "", 1, CONTEXT))
+      .toMatchObject({ kind: "cli_error", reason: "error_during_execution" });
+    expect(parseClaudeEnvelope(envelope({ is_error: true, result: '{"note": "usage limit"}' }), "", 1, CONTEXT)).toMatchObject({ kind: "cli_error" });
+    // No envelope: stdout may be the model's words; only stderr is the CLI's.
+    expect(parseClaudeEnvelope("The student hit the usage limit of the app (429).", "", 1, CONTEXT)).toMatchObject({ kind: "cli_error", reason: "exit_1" });
+    expect(parseClaudeEnvelope("partial output", "Error: 429 rate limit", 1, CONTEXT)).toMatchObject({ kind: "usage_limited" });
+    // The envelope's own errors still count.
+    expect(parseClaudeEnvelope(envelope({ subtype: "error_during_execution", is_error: true, errors: ["OAuth token expired"] }), "", 1, CONTEXT))
+      .toMatchObject({ kind: "auth" });
   });
 });
 
@@ -209,6 +236,53 @@ describe("runClaude", () => {
     });
     expect(outcome).toMatchObject({ kind: "timeout" });
     expect(child!.killed).toContain("SIGTERM");
+  });
+
+  it("settles a call whose process exited even when its pipes never close", async () => {
+    const { spawn } = fakeSpawn(({ child }) => {
+      child.stdout.emit("data", Buffer.from(envelope()));
+      // A grandchild keeps stdout open: "exit" but never "close".
+      child.emit("exit", 0, null);
+    });
+    const outcome = await runClaude({ purpose: "audit", key: "k", system: "s", user: "u", schema: SCHEMA, budgetUsd: 1 }, {
+      cwd: dir, cliVersion: null, callsLog: null, spawn, exitGraceMs: 20,
+    });
+    expect(outcome.kind).toBe("success");
+  });
+
+  it("tracks running calls so a signal handler can kill them: SIGTERM, then SIGKILL after the grace", async () => {
+    const children = new Set<ChildLike>();
+    let running: FakeChild | null = null;
+    const { spawn } = fakeSpawn(({ child }) => {
+      running = child;
+    });
+    const call = runClaude({ purpose: "audit", key: "k", system: "s", user: "u", schema: SCHEMA, budgetUsd: 1 }, {
+      cwd: dir, cliVersion: null, callsLog: null, spawn, children,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(children.size).toBe(1);
+    // A child that dies on SIGTERM leaves the set at once.
+    expect(await killChildren(children, { graceMs: 1_000, pollMs: 5 })).toBe(1);
+    expect(running!.killed).toEqual(["SIGTERM"]);
+    expect(await call).toMatchObject({ kind: "cli_error" });
+    expect(children.size).toBe(0);
+    // One that ignores SIGTERM gets SIGKILL.
+    const stubborn = { kill: vi.fn(() => true) } as unknown as ChildLike;
+    const set = new Set<ChildLike>([stubborn]);
+    expect(await killChildren(set, { graceMs: 20, pollMs: 5 })).toBe(1);
+    expect(vi.mocked(stubborn.kill).mock.calls.map((args) => args[0])).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(await killChildren(new Set())).toBe(0);
+  });
+
+  it("validates the call before writing any temp file", async () => {
+    const tempDir = path.join(dir, "tmp");
+    fs.mkdirSync(tempDir);
+    const spawn = vi.fn();
+    await expect(runClaude({ purpose: "audit", key: "k", system: "s", user: "u", schema: SCHEMA, budgetUsd: 0 }, {
+      cwd: dir, cliVersion: null, callsLog: null, spawn: spawn as unknown as SpawnLike, tempDir,
+    })).rejects.toThrow(/positive budget/u);
+    expect(fs.readdirSync(tempDir)).toEqual([]);
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("reports a failed spawn as a CLI error", async () => {

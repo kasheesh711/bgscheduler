@@ -41,7 +41,7 @@ const SEVERITIES = ["critical", "major", "cosmetic"] as const;
 const CRITICAL_CATEGORIES = ["wrong_person", "billing_status", "invented_content", "should_not_have_posted"] as const;
 
 const EvidenceQuoteSchema = z.object({
-  source: z.enum(["transcript", "summary", "zoom", "class_details"]),
+  source: z.enum(["transcript", "summary", "zoom", "class_details", "atom"]),
   /** "mm:ss" in a transcript, a paragraph or line number in a summary; null when there is none. */
   locator: z.string().max(40).nullable(),
   speaker: z.enum(["TUTOR", "STUDENT", "OTHER", "UNKNOWN"]).nullable(),

@@ -204,41 +204,119 @@ interface AuditLedgerLine {
   type?: string;
   key?: string;
   verdict?: string | null;
+  final?: boolean;
 }
 
-/** Keys with a finished audit (any verdict, insufficient evidence included) in the audit ledger. */
+/**
+ * Keys with a final audit in the audit ledger: any verdict, except insufficient evidence while the evidence may still
+ * improve (`final: false`) — such a class is not audited yet.
+ */
 export function auditedKeys(ledgerJsonl: string): Set<string> {
   const keys = new Set<string>();
   for (const line of readJsonl<AuditLedgerLine>(ledgerJsonl)) {
-    if (line.type === "audit" && typeof line.key === "string" && typeof line.verdict === "string") keys.add(line.key);
+    if (line.type === "audit" && typeof line.key === "string" && typeof line.verdict === "string" && line.final !== false) keys.add(line.key);
   }
   return keys;
 }
 
 export interface TargetChoice {
   chosen: NightlyTarget[];
+  /** Classes left out tonight: only for the cap (an already-audited or failed class stays in the night). */
   skipped: Array<{ wiseSessionId: string; reason: "already_audited" | "failed_twice" | "over_cap" }>;
 }
 
+export interface TargetCounts {
+  /** Chosen classes whose text was already audited at this version (cache hits, in the night's report). */
+  alreadyAudited: number;
+  /** Chosen classes whose audits failed twice (reported, never audited again at this version). */
+  failedTwice: number;
+  /** Chosen classes that still need an audit. */
+  toAudit: number;
+  /** Chosen posts of earlier nights verified after those nights' selection. */
+  late: number;
+  /** Chosen classes kept from an earlier selection of the night. */
+  kept: number;
+}
+
+function byEndNewestFirst(a: NightlyTarget, b: NightlyTarget): number {
+  return b.scheduledEndAt.localeCompare(a.scheduledEndAt) || a.wiseSessionId.localeCompare(b.wiseSessionId);
+}
+
 /**
- * The night's audit list: newest first, without texts already audited at this version or keys that failed twice,
- * capped at `maxTargets`.
+ * The night's classes: the UNION of an earlier selection (`previous`, never dropped — an audited class stays in the
+ * night's report, synthesis and flags) with tonight's query (`targets`, newest data wins) and the late pickups
+ * (`late`, after the night's own posts). Already-audited and twice-failed classes stay in the night; only classes that
+ * still need an audit count toward `maxTargets`, and a class beyond it is skipped unless an earlier selection chose it.
  */
 export function chooseTargets(input: {
   targets: readonly NightlyTarget[];
+  late?: readonly NightlyTarget[];
+  previous?: readonly NightlyTarget[];
   audited: ReadonlySet<string>;
   failures: (key: string) => number;
   auditVersion: number;
   maxTargets: number;
-}): TargetChoice {
-  const choice: TargetChoice = { chosen: [], skipped: [] };
-  const ordered = [...input.targets].sort((a, b) => b.scheduledEndAt.localeCompare(a.scheduledEndAt) || a.wiseSessionId.localeCompare(b.wiseSessionId));
+}): TargetChoice & { counts: TargetCounts } {
+  const keyOf = (target: NightlyTarget) => auditKey({ wiseSessionId: target.wiseSessionId, fieldsSha256: target.fieldsSha256, auditVersion: input.auditVersion });
+  const previous = input.previous ?? [];
+  const previousIds = new Set(previous.map((target) => target.wiseSessionId));
+  const merged = new Map<string, NightlyTarget>();
+  for (const target of previous) merged.set(target.wiseSessionId, target);
+  for (const target of [...input.targets, ...(input.late ?? [])]) {
+    const before = merged.get(target.wiseSessionId);
+    merged.set(target.wiseSessionId, { ...target, lateFrom: target.lateFrom ?? before?.lateFrom ?? null });
+  }
+  const own = [...merged.values()].filter((target) => !target.lateFrom).sort(byEndNewestFirst);
+  const late = [...merged.values()].filter((target) => target.lateFrom).sort(byEndNewestFirst);
+  const choice: TargetChoice & { counts: TargetCounts } = {
+    chosen: [], skipped: [], counts: { alreadyAudited: 0, failedTwice: 0, toAudit: 0, late: 0, kept: 0 },
+  };
+  const status = (target: NightlyTarget) => {
+    const key = keyOf(target);
+    const audited = input.audited.has(key);
+    const failedTwice = !audited && input.failures(key) >= 2;
+    return { audited, failedTwice, pending: !audited && !failedTwice, kept: previousIds.has(target.wiseSessionId) };
+  };
+  const ordered = [...own, ...late];
+  // Classes an earlier selection chose are committed first; new ones fill whatever room the cap leaves.
+  let room = input.maxTargets - ordered.filter((target) => {
+    const { pending, kept } = status(target);
+    return pending && kept;
+  }).length;
   for (const target of ordered) {
-    const key = auditKey({ wiseSessionId: target.wiseSessionId, fieldsSha256: target.fieldsSha256, auditVersion: input.auditVersion });
-    if (input.audited.has(key)) choice.skipped.push({ wiseSessionId: target.wiseSessionId, reason: "already_audited" });
-    else if (input.failures(key) >= 2) choice.skipped.push({ wiseSessionId: target.wiseSessionId, reason: "failed_twice" });
-    else if (choice.chosen.length >= input.maxTargets) choice.skipped.push({ wiseSessionId: target.wiseSessionId, reason: "over_cap" });
-    else choice.chosen.push(target);
+    const { audited, failedTwice, pending, kept } = status(target);
+    if (pending && !kept) {
+      if (room <= 0) {
+        choice.skipped.push({ wiseSessionId: target.wiseSessionId, reason: "over_cap" });
+        continue;
+      }
+      room -= 1;
+    }
+    choice.chosen.push(target);
+    if (audited) choice.counts.alreadyAudited += 1;
+    if (failedTwice) choice.counts.failedTwice += 1;
+    if (pending) choice.counts.toAudit += 1;
+    if (target.lateFrom) choice.counts.late += 1;
+    if (kept) choice.counts.kept += 1;
   }
   return choice;
+}
+
+/**
+ * Posts of an earlier night that its selection missed — verified after it ran — and that were never audited: they are
+ * picked up as late targets. A night that was never selected (no targets file) is skipped: that would be a catch-up run.
+ */
+export function latePickups(input: {
+  posts: readonly NightlyTarget[];
+  night: string;
+  earlier: { chosen: readonly NightlyTarget[]; skipped: ReadonlyArray<{ wiseSessionId: string }> } | null;
+  audited: ReadonlySet<string>;
+  auditVersion: number;
+}): NightlyTarget[] {
+  if (!input.earlier) return [];
+  const known = new Set([...input.earlier.chosen.map((target) => target.wiseSessionId), ...input.earlier.skipped.map((item) => item.wiseSessionId)]);
+  return input.posts
+    .filter((post) => !known.has(post.wiseSessionId))
+    .filter((post) => !input.audited.has(auditKey({ wiseSessionId: post.wiseSessionId, fieldsSha256: post.fieldsSha256, auditVersion: input.auditVersion })))
+    .map((post) => ({ ...post, lateFrom: input.night }));
 }

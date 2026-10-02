@@ -13,8 +13,9 @@ import type { EvidenceBundle, NightlyTarget, PrecheckFinding } from "./types";
 /**
  * Deterministic floors before the model looks (the auditor can only raise them):
  * - critical: billing drift between Wise's teacher submission and what we posted, or not exactly one teacher submission;
- * - major: production validator codes on the posted text, the student called by another form of their name, the tutor named;
- * - candidates the auditor must confirm: another student's or person's name, meta words (they can be lesson content);
+ * - major: production validator codes on the posted text, the student called by their multi-word name;
+ * - candidates the auditor must confirm: another student's or person's name, a tutor name, a one-word form of the
+ *   student's name, meta words (all can be ordinary words or lesson content);
  * - info: Wise's text edited since our post (never corrected over), a guided post, a person's save, an open owner flag.
  * Codes carry no names or lesson text; `detail` does (local files and the auditor's prompt only).
  */
@@ -43,9 +44,16 @@ function fromTextProblem(problem: TextProblem): PrecheckFinding {
     return finding(problem.code, "major", `Meta word${what}${where}: confirm it is about the lesson's delivery, not lesson content`, "M12", true);
   }
   if (problem.code === "student_name_form") {
-    return finding(problem.code, "major", `The student is called${what}${where}, not by the display name`, "M11");
+    // A one-word form (a first name, a surname, a nickname code) can be an ordinary word or another person's name:
+    // the audit confirms it. The student's multi-word name is unmistakable: a floor.
+    const oneWord = !/\s/u.test(problem.detail ?? "");
+    return oneWord
+      ? finding(problem.code, "major", `The student may be called${what}${where}, not by the display name: confirm it is the student's name`, "M11", true)
+      : finding(problem.code, "major", `The student is called${what}${where}, not by the display name`, "M11");
   }
-  if (problem.code === "tutor_named") return finding(problem.code, "major", `A tutor name${what}${where}`, "M11");
+  if (problem.code === "tutor_named") {
+    return finding(problem.code, "major", `A tutor name${what}${where}: confirm it names the tutor`, "M11", true);
+  }
   if (problem.code === "other_student_named") {
     return finding(problem.code, "critical", `Another student of this tutor${what}${where}: confirm it is a person named in this feedback`, "M02", true);
   }
@@ -127,7 +135,17 @@ export function runPrechecks(input: {
   if (input.raw) {
     for (const note of evidenceNotes(input.raw, bundle)) findings.push(finding(`note:${note.split(":")[0]}`, "info", note, null));
   }
-  return findings;
+  return withIds(findings);
+}
+
+/** Each finding's unique id: `<code>#<n>`, n counting findings with the same code in order. */
+export function withIds(findings: readonly PrecheckFinding[]): PrecheckFinding[] {
+  const seen = new Map<string, number>();
+  return findings.map((item) => {
+    const n = (seen.get(item.code) ?? 0) + 1;
+    seen.set(item.code, n);
+    return { ...item, id: `${item.code}#${n}` };
+  });
 }
 
 /**

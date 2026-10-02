@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Database } from "@/lib/db";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
+import { addDays, bangkokDayBounds } from "../quality";
+import { parseAutowriterSessionDetail, recordingForTranscription } from "../session";
 import { auditBundles, cachedAudit } from "./audit";
 import { AUDIT_VERSION } from "./audit-schema";
 import { activeWiseCooldown, stopFilePresent, type NightlyCaps } from "./caps";
@@ -13,18 +15,20 @@ import {
   type CollectDeps,
   type RawEvidence,
 } from "./evidence";
-import type { ClaudeCall, ClaudeOutcome } from "./claude-runner";
+import { claudeVersionSupported, type ClaudeCall, type ClaudeOutcome } from "./claude-runner";
 import { EXIT, NightlyStop, type ExitCode } from "./exit";
 import type { NightlyLedger } from "./ledger";
-import { applyAgentFlags, planAgentFlags } from "./flags";
-import { appendJsonl, readJsonFile, readJsonl, writeJsonAtomic, writeTextAtomic, type NightlyPaths } from "./paths";
+import { applyAgentFlags, countAgentFlags, planAgentFlags } from "./flags";
+import { appendJsonl, nightlyPaths, readJsonFile, readJsonl, writeJsonAtomic, writeTextAtomic, type NightlyPaths } from "./paths";
 import { runPrechecks } from "./prechecks";
 import {
+  auditCounts,
   classReportLine,
   groupByMode,
   loadWatchdog,
   mergeClassReport,
   modeHistory,
+  proofLine,
   renderReportMarkdown,
   renderSummaryMarkdown,
   type ClassReport,
@@ -32,7 +36,7 @@ import {
   type WatchdogResult,
 } from "./report";
 import { pruneNightly } from "./retention";
-import { auditedKeys, auditKey, chooseTargets, loadNightlyTargets, type TargetChoice } from "./select";
+import { auditedKeys, auditKey, chooseTargets, latePickups, loadNightlyTargets, type TargetChoice } from "./select";
 import { fixBriefFile, renderPlanMarkdown, synthesizeNight } from "./synthesis";
 import type { AuditRecord, EvidenceBundle, NightlyTarget, PrecheckFinding } from "./types";
 
@@ -60,9 +64,11 @@ export interface RunState {
   auditVersion: number;
   steps: Partial<Record<StepName, StepRecord>>;
   /** Preflight facts: the code that ran, the CLI version, the caps in force. */
-  code?: { head: string | null; branch: string | null; dirty: boolean } | null;
+  code?: { head: string | null; branch: string | null; dirty: boolean; onMain?: boolean | null } | null;
   claudeCliVersion?: string | null;
   caps?: NightlyCaps;
+  /** The last preflight passed only because of `--supervised` (code not on origin/main and not pinned). */
+  supervised?: boolean;
 }
 
 export interface StepResult {
@@ -135,9 +141,14 @@ export interface PreflightFacts {
   nodeVersion: string;
   missingEnv: string[];
   optionalEnvMissing: string[];
-  code: { head: string | null; branch: string | null; dirty: boolean } | null;
+  /** `onMain`: HEAD is reachable from origin/main (null: origin/main unknown — treated as not). */
+  code: { head: string | null; branch: string | null; dirty: boolean; onMain?: boolean | null } | null;
   claudeCliVersion: string | null;
   lock: { ok: true } | { ok: false; reason: string; holder: unknown };
+  /** The commit the owner pinned in `~/.bgscheduler-nightly/config.json` (`runnerSha`), if any. */
+  pinnedSha?: string | null;
+  /** `--supervised`: the owner is watching this run from reviewed code that is not on origin/main yet. */
+  supervised?: boolean;
   /**
    * The dry run of `recover` (database reads only): agent corrections a run left `posting`/`awaiting_event`, and a
    * correction lock left on the control row (`live`, `stale` or `halted_on_top`) — or why it could not be read.
@@ -147,7 +158,8 @@ export interface PreflightFacts {
 
 /**
  * STOP, the deadline, the lock, nothing a correction left unsettled (else `unsettled_correction`: run `recover`), a
- * clean tree, the environment and node ≥ 22; writes `run.json`.
+ * clean tree of reviewed code (HEAD on origin/main, the owner's pinned `runnerSha`, or an explicit `--supervised`,
+ * which is recorded), the environment, node ≥ 22 and a working `claude` CLI (2.1.x or later); writes `run.json`.
  */
 export function stepPreflight(ctx: NightContext, facts: PreflightFacts): StepResult {
   const stop = stopBeforeStep(ctx);
@@ -160,6 +172,13 @@ export function stepPreflight(ctx: NightContext, facts: PreflightFacts): StepRes
   if (facts.missingEnv.length > 0) problems.push(`env_missing:${facts.missingEnv.join(",")}`);
   if (!facts.code) problems.push("not_a_git_checkout");
   else if (facts.code.dirty) problems.push("dirty_tree");
+  // Unattended runs only run reviewed code: anything on origin/main, or the one commit the owner pinned.
+  const pinned = Boolean(facts.pinnedSha && facts.code?.head?.toLowerCase().startsWith(facts.pinnedSha.toLowerCase()));
+  const runner = { onMain: facts.code?.onMain ?? null, pinned, supervised: facts.supervised === true };
+  if (facts.code && !runner.onMain && !pinned && !runner.supervised) problems.push("runner_not_on_main");
+  // Every reasoning step is a `claude -p` call: without a working, recent CLI the night cannot audit anything.
+  if (!facts.claudeCliVersion) problems.push("claude_cli_missing");
+  else if (!claudeVersionSupported(facts.claudeCliVersion)) problems.push("claude_cli_unsupported");
   if (!facts.lock.ok) {
     const summary = { step: "preflight", night: ctx.night, lock: facts.lock };
     recordStep(ctx, "preflight", { status: "stopped", stop: "locked", summary });
@@ -172,6 +191,7 @@ export function stepPreflight(ctx: NightContext, facts: PreflightFacts): StepRes
     deadline: ctx.deadline?.toISOString() ?? null,
     nodeVersion: facts.nodeVersion,
     code: facts.code,
+    runner,
     claudeCliVersion: facts.claudeCliVersion,
     optionalEnvMissing: facts.optionalEnvMissing,
     wiseCooldownUntil: cooldown?.toISOString() ?? null,
@@ -184,6 +204,7 @@ export function stepPreflight(ctx: NightContext, facts: PreflightFacts): StepRes
   }
   const state = recordStep(ctx, "preflight", { status: "done", stop: null, summary }, {
     code: facts.code, claudeCliVersion: facts.claudeCliVersion, caps: ctx.caps, auditVersion: AUDIT_VERSION,
+    supervised: runner.supervised,
   });
   return result({ summary, next: nextStep(state, "preflight") });
 }
@@ -202,41 +223,71 @@ export function readTargets(paths: NightlyPaths): TargetsFile | null {
   return readJsonFile<TargetsFile>(paths.targetsJson);
 }
 
-/** The night's posts to audit (SELECT only), skipping texts audited at this version and keys that failed twice. */
+/** Days before the audited night whose late-verified posts are picked up. */
+export const LATE_PICKUP_NIGHTS = 2;
+/** Selection waits this long after the night ends (24:00 Bangkok) for its last posts, unless forced. */
+export const SELECT_AFTER_NIGHT_END_MS = 60 * 60 * 1000;
+
+/**
+ * The night's posts to audit (SELECT only): refused until an hour after the night ended (unless `force`). Each selection
+ * is merged into the earlier one — a class once selected is never dropped — and posts of the previous nights that
+ * were verified after their own selection and never audited are added as late targets.
+ */
 export async function stepSelect(ctx: NightContext, deps: {
   db: Database;
   ledger: Pick<NightlyLedger, "attempts">;
   sessionIds?: readonly string[];
+  /** Select before the night is over (an hour after 24:00 Bangkok). */
   force?: boolean;
 }): Promise<StepResult> {
   const stop = stopBeforeStep(ctx);
   if (stop) return stoppedResult(ctx, "select", stop);
-  const state = readRunState(ctx);
-  const existing = readTargets(ctx.paths);
-  if (!deps.force && state.steps.select?.status === "done" && existing) {
-    const summary = { step: "select", night: ctx.night, chosen: existing.chosen.length, skipped: existing.skipped.length, cached: true };
-    return result({ summary, next: nextStep(state, "select") });
+  const nightOver = bangkokDayBounds(ctx.night).end.getTime() + SELECT_AFTER_NIGHT_END_MS;
+  if (!deps.force && ctx.now().getTime() < nightOver) {
+    const summary = { step: "select", night: ctx.night, reason: `the night is not over until ${new Date(nightOver).toISOString()} (use --force)` };
+    recordStep(ctx, "select", { status: "failed", stop: "night_not_over", summary });
+    return result({ ok: false, stop: "night_not_over", next: "select", summary, exitCode: EXIT.guardRefused });
   }
+  const audited = auditedKeys(ctx.paths.ledgerJsonl);
+  const wanted = deps.sessionIds && deps.sessionIds.length > 0 ? new Set(deps.sessionIds) : null;
   const targets = await loadNightlyTargets(deps.db, { night: ctx.night, sessionIds: deps.sessionIds });
+  const late: NightlyTarget[] = [];
+  for (let back = 1; back <= LATE_PICKUP_NIGHTS; back += 1) {
+    const earlierNight = addDays(ctx.night, -back);
+    const earlier = readTargets(nightlyPaths(ctx.paths.root, earlierNight));
+    if (!earlier) continue;
+    const posts = await loadNightlyTargets(deps.db, { night: earlierNight, sessionIds: deps.sessionIds });
+    late.push(...latePickups({ posts, night: earlierNight, earlier, audited, auditVersion: AUDIT_VERSION }));
+  }
+  const previous = (readTargets(ctx.paths)?.chosen ?? []).filter((target) => !wanted || wanted.has(target.wiseSessionId));
   const choice = chooseTargets({
     targets,
-    audited: auditedKeys(ctx.paths.ledgerJsonl),
+    late,
+    previous,
+    audited,
     failures: (key) => deps.ledger.attempts(key).failed,
     auditVersion: AUDIT_VERSION,
     maxTargets: ctx.caps.maxTargets,
   });
-  const file: TargetsFile = { night: ctx.night, auditVersion: AUDIT_VERSION, selectedAt: ctx.now().toISOString(), ...choice };
+  // With --sessions, the rest of an earlier selection is kept as it was.
+  const others = wanted ? (readTargets(ctx.paths)?.chosen ?? []).filter((target) => !wanted.has(target.wiseSessionId)) : [];
+  const file: TargetsFile = {
+    night: ctx.night, auditVersion: AUDIT_VERSION, selectedAt: ctx.now().toISOString(),
+    chosen: [...choice.chosen, ...others], skipped: choice.skipped,
+  };
   writeJsonAtomic(ctx.paths.targetsJson, file);
+  const chosen = file.chosen;
   const summary = {
     step: "select",
     night: ctx.night,
     posts: targets.length,
-    chosen: choice.chosen.length,
-    skipped: Object.fromEntries(["already_audited", "failed_twice", "over_cap"].map((reason) => [reason, choice.skipped.filter((item) => item.reason === reason).length])),
-    byEvidence: { transcript: choice.chosen.filter((t) => t.evidence === "transcript").length, summary: choice.chosen.filter((t) => t.evidence === "summary").length },
-    approvedByOwner: choice.chosen.filter((t) => t.verdict === "approve").length,
+    chosen: chosen.length,
+    ...choice.counts,
+    overCap: choice.skipped.length,
+    byEvidence: { transcript: chosen.filter((t) => t.evidence === "transcript").length, summary: chosen.filter((t) => t.evidence === "summary").length },
+    approvedByOwner: chosen.filter((t) => t.verdict === "approve").length,
     // Audited all the same; only a later correction needs the first-shot row.
-    noFirstShotRow: choice.chosen.filter((t) => t.firstShotPostId === null).length,
+    noFirstShotRow: chosen.filter((t) => t.firstShotPostId === null).length,
   };
   const next = recordStep(ctx, "select", { status: "done", stop: null, summary });
   return result({ summary, next: nextStep(next, "select") });
@@ -254,6 +305,44 @@ export interface BundleFile {
   notes: string[];
   status: RawEvidence["status"];
   collectedAt: string;
+  /**
+   * Why collection is incomplete for now (a Wise read or a production Soniox read failed, the job had not finished):
+   * the class is not audited until a later collect gets it. Empty or absent: complete.
+   */
+  transient?: string[];
+  /** Whether better evidence may still come (a transient failure, or a recording still listed to re-transcribe). */
+  improvable?: boolean;
+  /** Display names of the tutor's other students (local; the fix brief must never contain them). */
+  otherStudentNames?: string[];
+}
+
+/** Recordings stay listed in Wise for about a day after class. */
+const RECORDING_LISTED_MS = 24 * 60 * 60 * 1000;
+
+/** Transient collection failures of one class (empty: none). */
+export function transientFailures(status: RawEvidence["status"]): string[] {
+  const reasons: string[] = [];
+  if (status.detail === "failed") reasons.push("wise_detail_failed");
+  if (status.soniox === "error") reasons.push("soniox_read_failed");
+  if (status.soniox === "not_finished") reasons.push("soniox_job_not_finished");
+  return reasons;
+}
+
+/**
+ * Whether the evidence may still get better: a transient failure, no Soniox key to read the production transcript,
+ * or a transcript post with no transcript whose recording Wise still lists (a re-transcription could recover it).
+ */
+export function evidenceImprovable(input: { target: NightlyTarget; bundle: EvidenceBundle; raw: RawEvidence; now: Date }): boolean {
+  if (transientFailures(input.raw.status).length > 0 || input.raw.status.soniox === "no_client") return true;
+  if (input.target.evidence !== "transcript" || input.bundle.transcript) return false;
+  if (input.raw.status.retranscribe === "done") return false;
+  let recordingListed = false;
+  try {
+    recordingListed = input.raw.detail !== null && recordingForTranscription(parseAutowriterSessionDetail(input.raw.detail)).ok;
+  } catch {
+    recordingListed = false;
+  }
+  return recordingListed && input.now.getTime() < new Date(input.target.scheduledEndAt).getTime() + RECORDING_LISTED_MS;
 }
 
 export function bundleFile(paths: NightlyPaths, wiseSessionId: string): string {
@@ -292,6 +381,8 @@ export async function stepCollect(ctx: NightContext, deps: CollectStepDeps): Pro
   const retranscribe: Record<string, number> = {};
   const failures: string[] = [];
   const undeleted: string[] = [];
+  /** Classes collected with a transient failure: not audited until a later collect completes them. */
+  const incomplete: string[] = [];
   let collected = 0;
   let stopped: NightlyStop | null = null;
   for (const target of chosen) {
@@ -303,14 +394,17 @@ export async function stepCollect(ctx: NightContext, deps: CollectStepDeps): Pro
     try {
       const raw = await collectRawEvidence({ ...deps.collect, cacheDir: ctx.paths.cacheDir }, target);
       const bundle = buildEvidenceBundle({ target, night: ctx.night, raw });
+      const otherStudentNames = await deps.otherStudentNames(target);
       const prechecks = runPrechecks({
-        bundle, target, raw,
-        otherStudentNames: await deps.otherStudentNames(target),
+        bundle, target, raw, otherStudentNames,
         priorFeedback: await deps.priorFeedback(target),
       });
+      const transient = transientFailures(raw.status);
       const file: BundleFile = {
         target, bundle, prechecks, notes: evidenceNotes(raw, bundle), status: raw.status, collectedAt: ctx.now().toISOString(),
+        transient, improvable: evidenceImprovable({ target, bundle, raw, now: ctx.now() }), otherStudentNames,
       };
+      if (transient.length > 0) incomplete.push(`${target.wiseSessionId}:${transient.join(",")}`);
       writeJsonAtomic(bundleFile(ctx.paths, target.wiseSessionId), file);
       collected += 1;
       grades[bundle.grade] = (grades[bundle.grade] ?? 0) + 1;
@@ -338,6 +432,7 @@ export async function stepCollect(ctx: NightContext, deps: CollectStepDeps): Pro
     retranscribe,
     wiseReads: deps.collect.gate.reads,
     failures,
+    incomplete,
     undeletedSonioxJobs: undeleted,
   };
   if (stopped) {
@@ -346,7 +441,7 @@ export async function stepCollect(ctx: NightContext, deps: CollectStepDeps): Pro
   }
   // Every class collected (with whatever evidence it has): done. A class that failed outright is left for a re-run;
   // a Soniox job of ours that could not be deleted is listed for a person (the production reaper removes it in 2 h).
-  const status = collected < chosen.length || undeleted.length > 0 ? "partial" : "done";
+  const status = collected < chosen.length || undeleted.length > 0 || incomplete.length > 0 ? "partial" : "done";
   const state = recordStep(ctx, "collect", { status, stop: null, summary });
   return result({ summary, next: status === "done" ? nextStep(state, "collect") : "audit" });
 }
@@ -420,17 +515,20 @@ export async function stepAudit(ctx: NightContext, deps: {
     cached: stage.cached,
     failed: stage.failed,
     skipped: stage.skipped.length,
+    skippedReasons: Object.fromEntries([...new Set(stage.skipped.map((item) => item.reason))].map((reason) => [reason, stage.skipped.filter((item) => item.reason === reason).length])),
     verdicts,
     calls: stage.calls,
-    proof: `Opus5.5max ${stage.opusProven}/${stage.calls}`,
+    proof: proofLine({ opusProven: stage.opusProven, claudeCalls: stage.calls }),
     costUsd: Math.round(stage.costUsd * 10_000) / 10_000,
   };
   if (stage.stop) {
     recordStep(ctx, "audit", { status: "stopped", stop: stage.stop.reason, summary });
     return result({ ok: false, stop: stage.stop.reason, next: "report", summary, exitCode: stage.stop.exitCode });
   }
-  const state = recordStep(ctx, "audit", { status: "done", stop: null, summary });
-  return result({ summary, next: nextStep(state, "audit") });
+  // A class skipped for incomplete collection is audited by a later run, once collect completes it.
+  const waiting = stage.skipped.some((item) => item.reason === "collection_incomplete");
+  const state = recordStep(ctx, "audit", { status: waiting ? "partial" : "done", stop: null, summary });
+  return result({ summary, next: waiting ? "report" : nextStep(state, "audit") });
 }
 
 // ---------------------------------------------------------------------------
@@ -576,6 +674,7 @@ export async function stepReport(ctx: NightContext, deps: {
   writeTextAtomic(ctx.paths.reportMd, renderReportMarkdown(input));
   writeTextAtomic(ctx.paths.summaryMd, renderSummaryMarkdown(input));
   appendJsonl(ctx.paths.costsJsonl, { night: ctx.night, at, ...costs, watchdogDayUsd: watchdog?.dayTotalUsd ?? null });
+  const counts = auditCounts(reports);
   const severities: Record<string, number> = {};
   for (const report of reports) {
     const key = report.severity ?? (report.auditVerdict ? report.auditVerdict === "insufficient_evidence" ? "insufficient_evidence" : "accurate" : "not_audited");
@@ -585,12 +684,14 @@ export async function stepReport(ctx: NightContext, deps: {
     step: "report",
     night: ctx.night,
     classes: reports.length,
+    audited: counts.audited,
+    notAudited: counts.notAudited,
     severities,
     modes: modes.map((group) => ({ mode: group.mode, classes: group.classes })),
     watchdogOutliers: watchdog?.outliers.length ?? null,
     watchdogDayOutlier: watchdog?.dayOutlier ?? null,
     synthesis,
-    proof: `Opus5.5max ${costs.opusProven}/${costs.claudeCalls}`,
+    proof: proofLine(costs),
     costs,
     files: { report: ctx.paths.reportMd, summary: ctx.paths.summaryMd, plan: synthesis.ok ? ctx.paths.planMd : null },
   };
@@ -598,8 +699,10 @@ export async function stepReport(ctx: NightContext, deps: {
     recordStep(ctx, "report", { status: "partial", stop: stop.reason, summary });
     return result({ ok: false, stop: stop.reason, next: null, summary, exitCode: stop.exitCode });
   }
-  const next = recordStep(ctx, "report", { status: "done", stop: null, summary });
-  return result({ summary, next: nextStep(next, "report") });
+  // A report written before collection and the audits finished is partial: a resumed run writes it again.
+  const complete = state.steps.collect?.status === "done" && state.steps.audit?.status === "done";
+  const next = recordStep(ctx, "report", { status: complete ? "done" : "partial", stop: null, summary: { ...summary, partial: !complete } });
+  return result({ summary: { ...summary, partial: !complete }, next: complete ? nextStep(next, "report") : nextStep(next) });
 }
 
 // ---------------------------------------------------------------------------
@@ -618,8 +721,13 @@ export async function stepFlag(ctx: NightContext, deps: { db: Database | null; a
     writeJsonAtomic(path.join(ctx.paths.nightDir, "flags.json"), { ...summary, at: ctx.now().toISOString() });
     return result({ summary, next: "flag" });
   }
-  const applied = await applyAgentFlags(deps.db, plan.items);
-  const summary = { step: "flag", night: ctx.night, dryRun: false, planned: items, overCap: plan.overCap, ...applied };
+  // The night's cap is counted in the database: flags raised by earlier runs of this night count too.
+  const already = await countAgentFlags(deps.db, reports.map((report) => report.wiseSessionId));
+  const applied = await applyAgentFlags(deps.db, plan.items, { maxNew: Math.max(0, ctx.caps.maxFlagsPerNight - already) });
+  const summary = {
+    step: "flag", night: ctx.night, dryRun: false, planned: items, alreadyRaised: already,
+    inserted: applied.inserted, existing: applied.existing, incidents: applied.incidents, overCap: [...plan.overCap, ...applied.overCap],
+  };
   writeJsonAtomic(path.join(ctx.paths.nightDir, "flags.json"), { ...summary, at: ctx.now().toISOString() });
   const state = recordStep(ctx, "flag", { status: "done", stop: null, summary });
   return result({ summary, next: nextStep(state, "flag") });
@@ -648,7 +756,7 @@ interface CostLine extends Partial<NightCosts> {
 export function stepCosts(ctx: NightContext, days: number): StepResult {
   const latest = new Map<string, CostLine>();
   for (const line of readJsonl<CostLine>(ctx.paths.costsJsonl)) if (line.night) latest.set(line.night, line);
-  const nights = [...latest.values()].filter((line) => line.night! > addDaysIso(ctx.night, -days)).sort((a, b) => a.night!.localeCompare(b.night!));
+  const nights = [...latest.values()].filter((line) => line.night! > addDays(ctx.night, -days)).sort((a, b) => a.night!.localeCompare(b.night!));
   const sum = (key: keyof NightCosts) => Math.round(nights.reduce((total, line) => total + (Number(line[key]) || 0), 0) * 10_000) / 10_000;
   return result({
     summary: {
@@ -660,29 +768,35 @@ export function stepCosts(ctx: NightContext, days: number): StepResult {
   });
 }
 
-function addDaysIso(night: string, days: number): string {
-  const date = new Date(`${night}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
 
 // ---------------------------------------------------------------------------
 // run
 // ---------------------------------------------------------------------------
 
 /**
- * The whole night, from the first unfinished step. A step that stops ends the run — never a retry loop — after a
- * partial report when the stop came after selection (not for a STOP file: STOP means stop).
+ * The whole night, from the first unfinished step. A step is skipped only when it is done and no step before it ran
+ * in this invocation: once a step runs (new targets, a new audit), every later step runs again — the report is always
+ * rewritten after a new audit. `always` names steps that run every time. A step that stops ends the run — never a
+ * retry loop — after a partial report when the stop came after selection (not for a STOP file: STOP means stop); a
+ * collect stopped by Wise throttling or a cap still lets the classes already collected be audited and reported.
  */
 export async function runNight(ctx: Pick<NightContext, "paths" | "night" | "now" | "log">, input: {
   order: readonly StepName[];
   steps: Partial<Record<StepName, () => Promise<StepResult> | StepResult>>;
   partialReport: () => Promise<StepResult>;
+  always?: ReadonlySet<StepName>;
 }): Promise<StepResult> {
   const steps: Record<string, unknown> = {};
   const brief = (step: StepResult) => ({ ok: step.ok, stop: step.stop, exitCode: step.exitCode, summary: step.summary });
+  const ended = (failure: StepResult): StepResult => ({
+    ok: false, stop: failure.stop, next: failure.next, exitCode: failure.exitCode, summary: { step: "run", night: ctx.night, steps },
+  });
+  let ranBefore = false;
+  /** A collect stop that still lets the classes collected so far be audited and reported (Wise throttled, a cap). */
+  let softStop: StepResult | null = null;
   for (const name of input.order) {
-    if (readRunState(ctx).steps[name]?.status === "done") {
+    const done = readRunState(ctx).steps[name]?.status === "done";
+    if (done && !ranBefore && !input.always?.has(name)) {
       steps[name] = "done earlier";
       continue;
     }
@@ -690,12 +804,22 @@ export async function runNight(ctx: Pick<NightContext, "paths" | "night" | "now"
     if (!handler) continue;
     ctx.log?.(`run: ${name}`);
     const outcome = await handler();
+    ranBefore = true;
     steps[name] = brief(outcome);
     if (!outcome.ok) {
+      if (name === "collect" && SOFT_COLLECT_STOPS.has(outcome.exitCode)) {
+        softStop = outcome;
+        continue;
+      }
       const reportable = !["preflight", "select", "report"].includes(name) && outcome.stop !== "stop_file";
       if (reportable) steps.report = brief(await input.partialReport());
-      return { ok: false, stop: outcome.stop, next: outcome.next, exitCode: outcome.exitCode, summary: { step: "run", night: ctx.night, steps } };
+      // The first stop is the run's: a soft collect stop before this one still names the run's end.
+      return ended(softStop ?? outcome);
     }
   }
+  if (softStop) return ended(softStop);
   return { ok: true, stop: null, next: null, exitCode: EXIT.ok, summary: { step: "run", night: ctx.night, steps } };
 }
+
+/** Collect stops after which the classes already collected are still audited and reported: Wise throttled, a cap. */
+const SOFT_COLLECT_STOPS = new Set<ExitCode>([EXIT.wiseThrottled, EXIT.caps]);

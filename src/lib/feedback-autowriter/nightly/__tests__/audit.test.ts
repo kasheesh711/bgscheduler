@@ -8,6 +8,7 @@ import { NIGHTLY_CAPS } from "../caps";
 import type { ClaudeCall, ClaudeOutcome } from "../claude-runner";
 import { NightlyLedger } from "../ledger";
 import { readJsonl } from "../paths";
+import { auditedKeys } from "../select";
 import type { BundleFile } from "../steps";
 import type { ClaudeProof } from "../types";
 import { PIM_FIELDS, nightlyBundle, nightlyTarget } from "./nightly-fixtures";
@@ -142,6 +143,26 @@ describe("auditBundles", () => {
     const result = await auditBundles(auditDeps, [file(SID_A), file(SID_B), file("6a0000000000000000000a03")]);
     expect(run).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({ failed: 2, stop: { reason: "claude_errors", exitCode: 4 } });
+    // Infrastructure failures never count toward failed_twice: the next run tries these classes again.
+    const ledger = auditDeps.ledger as NightlyLedger;
+    expect(ledger.attempts(`audit:${SID_A}:0a01aaaaaaaa:a${AUDIT_VERSION}`)).toMatchObject({ failed: 0, other: 1 });
+    const lines = readJsonl<{ outcome: string }>(auditDeps.ledgerJsonl);
+    expect(lines.map((line) => line.outcome)).toEqual(["infra:budget_exceeded", "infra:budget_exceeded"]);
+  });
+
+  it("never counts CLI errors, time-outs or auth failures toward failed_twice", async () => {
+    const outcomes: ClaudeOutcome[] = [
+      { kind: "cli_error", reason: "exit_1", proof: null },
+      { kind: "cli_error", reason: "exit_1", proof: null },
+      { kind: "timeout", reason: "timeout", proof: null },
+    ];
+    const run = vi.fn(async (): Promise<ClaudeOutcome> => outcomes.shift() ?? success());
+    const { deps: auditDeps, ledger } = deps(run, { concurrency: 1 });
+    await auditBundles(auditDeps, [file(SID_A)]);
+    await auditBundles(auditDeps, [file(SID_A)]);
+    expect(ledger.attempts(`audit:${SID_A}:0a01aaaaaaaa:a${AUDIT_VERSION}`)).toMatchObject({ failed: 0, other: 3 });
+    // Not skipped as failed_twice: the third run audits it.
+    expect(await auditBundles(auditDeps, [file(SID_A)])).toMatchObject({ audited: 1, skipped: [] });
   });
 
   it("stops the stage on a usage limit or an auth failure", async () => {
@@ -190,6 +211,54 @@ describe("auditBundles", () => {
     const checked = result.records[0].result as unknown as { postCheck: { quoteMismatchIssues: string[] }; issues: Array<{ minimalFix: unknown }> };
     expect(checked.postCheck.quoteMismatchIssues).toEqual(["i1"]);
     expect(checked.issues[0].minimalFix).toBeNull();
+  });
+});
+
+describe("what is never audited", () => {
+  it("skips a class whose collection failed transiently, and a class with no evidence", async () => {
+    const run = vi.fn(async () => success());
+    const { deps: auditDeps } = deps(run);
+    const result = await auditBundles(auditDeps, [
+      file(SID_A, { transient: ["wise_detail_failed"] }),
+      file(SID_B, { bundle: nightlyBundle({ wiseSessionId: SID_B, hash: "0a02bbbbbbbbbbbbbbbb", grade: "none" }) }),
+      file("6a0000000000000000000a03"),
+    ]);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(result.skipped).toEqual([
+      { wiseSessionId: SID_A, reason: "collection_incomplete" },
+      { wiseSessionId: SID_B, reason: "no_evidence" },
+    ]);
+    expect(planAudit(auditDeps, [file(SID_A, { transient: ["soniox_read_failed"] })])).toMatchObject({ toAudit: 0 });
+  });
+
+  it("marks insufficient evidence as not final while the evidence may still improve", async () => {
+    const insufficient = auditResult({ verdict: "insufficient_evidence" });
+    const run = vi.fn(async () => success(insufficient));
+    const { deps: auditDeps } = deps(run);
+    const weak = (sid: string, improvable: boolean) => file(sid, {
+      improvable, bundle: nightlyBundle({ wiseSessionId: sid, hash: `${sid.slice(-4)}cccccccccccccccc`, grade: "secondary_only", transcript: null }),
+    });
+    await auditBundles(auditDeps, [weak(SID_A, true), weak(SID_B, false)]);
+    const lines = readJsonl<{ wiseSessionId: string; verdict: string; final: boolean }>(auditDeps.ledgerJsonl);
+    expect(lines.map((line) => [line.wiseSessionId, line.verdict, line.final])).toEqual([
+      [SID_A, "insufficient_evidence", false], [SID_B, "insufficient_evidence", true],
+    ]);
+    expect([...auditedKeys(auditDeps.ledgerJsonl)]).toEqual([`audit:${SID_B}:0a02aaaaaaaa:a${AUDIT_VERSION}`]);
+  });
+});
+
+describe("weak evidence", () => {
+  it("turns an accurate verdict that checked no claim on secondary evidence into insufficient evidence", async () => {
+    const run = vi.fn(async () => success(auditResult({ verdict: "accurate", claims: [] })));
+    const { deps: auditDeps } = deps(run);
+    const weak = file(SID_A, { bundle: nightlyBundle({ wiseSessionId: SID_A, hash: "0a01dddddddddddddddd", grade: "secondary_only", transcript: null }) });
+    const strong = file(SID_B);
+    const result = await auditBundles(auditDeps, [weak, strong]);
+    const byId = new Map(result.records.map((record) => [record.wiseSessionId, record.result]));
+    expect(byId.get(SID_A)?.verdict).toBe("insufficient_evidence");
+    expect(byId.get(SID_A)?.evidenceQuality.notes).toContain("no claim checked on weak evidence");
+    // Strong evidence with no factual claim to check stays accurate.
+    expect(byId.get(SID_B)?.verdict).toBe("accurate");
   });
 });
 

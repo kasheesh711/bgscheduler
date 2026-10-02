@@ -18,8 +18,12 @@ export type SpendKind = (typeof SPEND_KINDS)[number];
 
 const CLAUDE_KINDS = new Set<SpendKind>(["opus_audit", "opus_reaudit", "opus_synthesis", "opus_fix"]);
 
-/** Outcomes that are not the key's own fault (an account or global stop): they never count toward its failures. */
-const NOT_THE_KEYS_FAULT = new Set(["usage_limited", "auth", "stopped", "refused", "deadline"]);
+/**
+ * Outcomes that are the key's own failure (the model answered, but not usably) and count toward `failed_twice`.
+ * Everything else that is not a success — `infra:*` (CLI error, time-out, budget, usage limit, auth), a stop, or a
+ * reservation a crashed process never settled — is not the key's fault: the next run tries it again.
+ */
+const KEY_FAILURES = new Set(["invalid", "unparseable"]);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -54,16 +58,23 @@ export class NightlyLedger {
   /** Reservations made by this process and not settled yet: in flight, not crashed. */
   private readonly live = new Set<string>();
 
+  /** Breaches already reported to `onBreach` by this process. */
+  private readonly reported = new Set<string>();
+
   private constructor(
     readonly file: string,
     readonly night: string,
     private readonly caps: NightlyCaps,
     private readonly now: () => Date,
+    private readonly onBreach: ((breached: string[]) => void) | null,
   ) {}
 
-  /** Opens `<dir>/spend.jsonl` (created on the first reservation). */
-  static open(dir: string, night: string, caps: NightlyCaps, options: { now?: () => Date } = {}): NightlyLedger {
-    const ledger = new NightlyLedger(path.join(dir, "spend.jsonl"), night, caps, options.now ?? (() => new Date()));
+  /**
+   * Opens `<dir>/spend.jsonl` (created on the first reservation). `onBreach` is told, once per cap, when a settled call
+   * cost so much more than it reserved that a cap is now passed (the CLI writes the STOP file).
+   */
+  static open(dir: string, night: string, caps: NightlyCaps, options: { now?: () => Date; onBreach?: (breached: string[]) => void } = {}): NightlyLedger {
+    const ledger = new NightlyLedger(path.join(dir, "spend.jsonl"), night, caps, options.now ?? (() => new Date()), options.onBreach ?? null);
     for (const line of readJsonl<LedgerLine>(ledger.file)) ledger.apply(line);
     return ledger;
   }
@@ -111,21 +122,28 @@ export class NightlyLedger {
     return { night: this.sum(tonight), week: this.sum(this.since(7, (entry) => CLAUDE_KINDS.has(entry.kind))), calls: tonight.length };
   }
 
-  /** Every reservation of a key across nights: how many, how many failed (crashed ones included), how many succeeded. */
-  attempts(key: string): { total: number; failed: number; succeeded: number } {
+  /**
+   * Every reservation of a key across nights: how many; how many failed by the key's own fault (an invalid or
+   * unparseable answer — what `failed_twice` counts); how many succeeded; and how many ended otherwise (an
+   * infrastructure failure, a stop, or a reservation a crashed process never settled).
+   */
+  attempts(key: string): { total: number; failed: number; succeeded: number; other: number } {
     const entries = this.select((entry) => entry.key === key);
     let failed = 0;
     let succeeded = 0;
+    let other = 0;
     for (const entry of entries) {
       if (!entry.settled) {
-        if (!this.live.has(entry.id)) failed += 1;
+        if (!this.live.has(entry.id)) other += 1;
       } else if (entry.settled.outcome === "success") {
         succeeded += 1;
-      } else if (!NOT_THE_KEYS_FAULT.has(entry.settled.outcome)) {
+      } else if (KEY_FAILURES.has(entry.settled.outcome)) {
         failed += 1;
+      } else {
+        other += 1;
       }
     }
-    return { total: entries.length, failed, succeeded };
+    return { total: entries.length, failed, succeeded, other };
   }
 
   /** Corrections reserved in the last `days` days (all nights). */
@@ -195,7 +213,13 @@ export class NightlyLedger {
     appendJsonl(this.file, line);
     this.apply(line);
     this.live.delete(id);
-    return { breached: this.breaches() };
+    const breached = this.breaches();
+    const fresh = breached.filter((cap) => !this.reported.has(cap));
+    if (fresh.length > 0 && this.onBreach) {
+      for (const cap of fresh) this.reported.add(cap);
+      this.onBreach(fresh);
+    }
+    return { breached };
   }
 
   /** Caps the recorded spend has passed (only possible when a call cost more than it reserved). */

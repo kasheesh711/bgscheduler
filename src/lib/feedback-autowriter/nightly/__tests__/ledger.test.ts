@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NIGHTLY_CAPS, type NightlyCaps } from "../caps";
 import { NightlyLedger } from "../ledger";
 import { readJsonl } from "../paths";
@@ -36,12 +36,12 @@ describe("NightlyLedger", () => {
   });
 
   it("refuses a reservation that would pass a cap, and counts an unsettled one at its estimate", () => {
-    const ledger = NightlyLedger.open(dir, "2026-10-02", caps({ maxClaudeUsdNight: 3 }), { now });
-    expect(ledger.reserve("opus_audit", { key: "a", estimateUsd: 1.5 }).ok).toBe(true);
-    expect(ledger.reserve("opus_audit", { key: "b", estimateUsd: 1.5 }).ok).toBe(true);
-    expect(ledger.reserve("opus_audit", { key: "c", estimateUsd: 1.5 })).toEqual({ ok: false, reason: "cap:claude_usd_night" });
-    expect(ledger.reserve("opus_audit", { key: "d", estimateUsd: 2 })).toEqual({ ok: false, reason: "cap:opus_audit_per_call" });
-    expect(ledger.reserve("opus_synthesis", { key: "s", estimateUsd: 2.5 })).toEqual({ ok: false, reason: "cap:opus_synthesis_per_call" });
+    const ledger = NightlyLedger.open(dir, "2026-10-02", caps({ maxClaudeUsdNight: 6 }), { now });
+    expect(ledger.reserve("opus_audit", { key: "a", estimateUsd: 3 }).ok).toBe(true);
+    expect(ledger.reserve("opus_audit", { key: "b", estimateUsd: 3 }).ok).toBe(true);
+    expect(ledger.reserve("opus_audit", { key: "c", estimateUsd: 3 })).toEqual({ ok: false, reason: "cap:claude_usd_night" });
+    expect(ledger.reserve("opus_audit", { key: "d", estimateUsd: 3.5 })).toEqual({ ok: false, reason: "cap:opus_audit_per_call" });
+    expect(ledger.reserve("opus_synthesis", { key: "s", estimateUsd: 4.5 })).toEqual({ ok: false, reason: "cap:opus_synthesis_per_call" });
   });
 
   it("caps Opus calls, the Claude week, Soniox, OpenRouter, Wise reads and corrections", () => {
@@ -83,22 +83,27 @@ describe("NightlyLedger", () => {
     expect(later.correctionsSince(7)).toBe(0);
   });
 
-  it("counts a key's failures across nights, crashed reservations included, but not account-wide stops", () => {
+  it("counts only invalid or unparseable answers as a key's failures, across nights; infrastructure failures and crashes do not", () => {
     const first = NightlyLedger.open(dir, "2026-10-01", caps(), { now });
-    const failed = first.reserve("opus_audit", { key: "k", estimateUsd: 1.5 });
-    if (!failed.ok) throw new Error("unreachable");
-    first.settle(failed.id, { actualUsd: 0.3, outcome: "unparseable" });
-    const limited = first.reserve("opus_audit", { key: "k", estimateUsd: 1.5 });
-    if (!limited.ok) throw new Error("unreachable");
-    first.settle(limited.id, { actualUsd: 0, outcome: "usage_limited" });
-    // A reservation this process still holds is in flight, not failed …
+    const settle = (outcome: string) => {
+      const reserved = first.reserve("opus_audit", { key: "k", estimateUsd: 1.5 });
+      if (!reserved.ok) throw new Error("unreachable");
+      first.settle(reserved.id, { actualUsd: 0.1, outcome });
+    };
+    settle("invalid");
+    for (const outcome of ["infra:cli_error", "infra:timeout", "infra:usage_limited", "infra:auth", "infra:budget_exceeded"]) settle(outcome);
+    // A reservation this process still holds is in flight …
     const inFlight = first.reserve("opus_audit", { key: "k", estimateUsd: 1.5 });
-    expect(first.attempts("k")).toEqual({ total: 3, failed: 1, succeeded: 0 });
-    // … but seen from a later run it never settled: the process died, and it counts as a failure.
-    const second = NightlyLedger.open(dir, "2026-10-02", caps(), { now });
     expect(inFlight.ok).toBe(true);
-    expect(second.attempts("k")).toEqual({ total: 3, failed: 2, succeeded: 0 });
-    expect(second.attempts("other")).toEqual({ total: 0, failed: 0, succeeded: 0 });
+    expect(first.attempts("k")).toEqual({ total: 7, failed: 1, succeeded: 0, other: 5 });
+    // … and seen from a later run it never settled (the process died): not the key's fault either.
+    const second = NightlyLedger.open(dir, "2026-10-02", caps(), { now });
+    expect(second.attempts("k")).toEqual({ total: 7, failed: 1, succeeded: 0, other: 6 });
+    const reserved = second.reserve("opus_audit", { key: "k", estimateUsd: 1.5 });
+    if (!reserved.ok) throw new Error("unreachable");
+    second.settle(reserved.id, { actualUsd: 0.1, outcome: "unparseable" });
+    expect(second.attempts("k")).toMatchObject({ failed: 2 });
+    expect(second.attempts("other")).toEqual({ total: 0, failed: 0, succeeded: 0, other: 0 });
   });
 
   it("reports a breach when a call cost more than it reserved", () => {
@@ -110,6 +115,20 @@ describe("NightlyLedger", () => {
     // Settling twice changes nothing.
     expect(ledger.settle(first.id, { actualUsd: 0, outcome: "success" })).toEqual({ breached: [] });
     expect(ledger.used("opus_audit").usd).toBe(2.4);
+  });
+
+  it("tells onBreach once per cap when a settled call passed it (the CLI writes STOP)", () => {
+    const onBreach = vi.fn();
+    const ledger = NightlyLedger.open(dir, "2026-10-02", caps({ maxClaudeUsdNight: 6 }), { now, onBreach });
+    const first = ledger.reserve("opus_audit", { key: "a", estimateUsd: 3 });
+    if (!first.ok) throw new Error("unreachable");
+    ledger.settle(first.id, { actualUsd: 2.9, outcome: "success" });
+    expect(onBreach).not.toHaveBeenCalled();
+    const second = ledger.reserve("opus_audit", { key: "b", estimateUsd: 3 });
+    if (!second.ok) throw new Error("unreachable");
+    expect(ledger.settle(second.id, { actualUsd: 3.4, outcome: "success" })).toEqual({ breached: ["claude_usd_night"] });
+    expect(onBreach).toHaveBeenCalledTimes(1);
+    expect(onBreach).toHaveBeenCalledWith(["claude_usd_night"]);
   });
 
   it("keeps the estimate when the actual cost is unknown", () => {

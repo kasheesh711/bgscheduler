@@ -36,6 +36,11 @@ export interface NightlyTarget {
   studentFullName: string | null;
   studentDisplayName: string | null;
   className: string | null;
+  /**
+   * Set on a post of an earlier night that was verified after that night's selection and never audited: the night it
+   * belongs to. Audited (and reported) with tonight's posts.
+   */
+  lateFrom?: string | null;
 }
 
 /** Everything the auditor sees for one class (local, 0600; real data allowed). */
@@ -60,6 +65,12 @@ export interface EvidenceBundle {
   } | null;
   wiseSummary: string | null;
   zoomCaptions: string | null;
+  /**
+   * The frozen Atom practice-platform evidence the writer was given for an ISEB post (`atomModelEvidence` of the
+   * retained `feedback_iseb_evidence.atom`): activity names, scores and timings. Null when the post used none.
+   * Without it, every Atom score in a post looks invented to the auditor (2 Oct: a false critical).
+   */
+  atomEvidence?: string | null;
   postedEvidenceKind: "summary" | "transcript";
   scheduledMinutes: number | null;
   storedJudge: unknown;
@@ -74,6 +85,11 @@ export interface PrecheckFinding {
   candidate: boolean;
   detail: string;
   mode: string | null;
+  /**
+   * Unique within the class's prechecks, `<code>#<n>` (the n-th finding with that code): the auditor reviews each
+   * candidate by it, so two candidates with the same code are never confused. Absent on bundles collected before ids.
+   */
+  id?: string;
 }
 
 /** One audit of one posted text (cached per session, text hash, audit version and bundle hash). */
