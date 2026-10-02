@@ -180,8 +180,11 @@ export function classifySubmitEvents(events: readonly SubmitFeedbackEvent[], inp
   return { ours, foreign };
 }
 
-/** Poll Wise's events for up to `waitMs` until our submit event shows up. */
-export async function waitForSubmitEvents(ops: WiseFeedbackOps, input: {
+/**
+ * Poll Wise's events for up to `waitMs` until our submit event shows up. `events` is the last list read (since the
+ * fresh read, less the skew), so a caller can also look for more than one save by the API owner.
+ */
+export async function waitForSubmitEvents(ops: Pick<WiseFeedbackOps, "findFeedbackEvents">, input: {
   classId: string;
   sessionId: string;
   apiActorId: string;
@@ -190,14 +193,16 @@ export async function waitForSubmitEvents(ops: WiseFeedbackOps, input: {
   postFinishedAt: Date;
   waitMs: number;
   sleep: (ms: number) => Promise<void>;
-}): Promise<{ ours: SubmitFeedbackEvent | undefined; foreign: SubmitFeedbackEvent[]; readFailed: boolean }> {
+}): Promise<{ ours: SubmitFeedbackEvent | undefined; foreign: SubmitFeedbackEvent[]; readFailed: boolean; events: SubmitFeedbackEvent[] }> {
   const waitUntil = Date.now() + input.waitMs;
   const since = new Date(input.freshReadAt.getTime() - 5_000);
   let found: { ours: SubmitFeedbackEvent | undefined; foreign: SubmitFeedbackEvent[] } = { ours: undefined, foreign: [] };
+  let events: SubmitFeedbackEvent[] = [];
   let readFailed = false;
   for (;;) {
     try {
-      found = classifySubmitEvents(await ops.findFeedbackEvents(input.classId, input.sessionId, since), input);
+      events = await ops.findFeedbackEvents(input.classId, input.sessionId, since);
+      found = classifySubmitEvents(events, input);
       readFailed = false;
     } catch {
       // Keep polling until the wait ends; the sweep reconciles later.
@@ -206,7 +211,7 @@ export async function waitForSubmitEvents(ops: WiseFeedbackOps, input: {
     if (found.ours || Date.now() >= waitUntil) break;
     await input.sleep(5_000);
   }
-  return { ...found, readFailed };
+  return { ...found, readFailed, events };
 }
 
 /**
