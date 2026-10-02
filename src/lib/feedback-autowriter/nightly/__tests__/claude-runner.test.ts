@@ -8,6 +8,7 @@ import {
   assertSafeClaudeArgs,
   buildClaudeArgs,
   claudeChildEnv,
+  claudeVersionSupported,
   parseClaudeEnvelope,
   runClaude,
   type ChildLike,
@@ -59,6 +60,17 @@ describe("claude argv and environment", () => {
     expect(() => assertSafeClaudeArgs(args.map((arg) => (arg === "claude-opus-5-5" ? "sonnet" : arg)))).toThrow(/Opus 5.5/u);
     expect(() => assertSafeClaudeArgs(args.map((arg) => (arg === "max" ? "high" : arg)))).toThrow(/max effort/u);
     expect(() => assertSafeClaudeArgs(args.filter((arg) => arg !== "--safe-mode"))).toThrow(/--safe-mode/u);
+  });
+
+  it("accepts only a claude CLI 2.1.x or later", () => {
+    expect(claudeVersionSupported("2.1.287 (Claude Code)")).toBe(true);
+    expect(claudeVersionSupported("2.1.0")).toBe(true);
+    expect(claudeVersionSupported("2.2.1 (Claude Code)")).toBe(true);
+    expect(claudeVersionSupported("3.0.0")).toBe(true);
+    expect(claudeVersionSupported("2.0.99 (Claude Code)")).toBe(false);
+    expect(claudeVersionSupported("1.9.0")).toBe(false);
+    expect(claudeVersionSupported("")).toBe(false);
+    expect(claudeVersionSupported(null)).toBe(false);
   });
 
   it("passes the child only an allowlisted environment: no API key, no secrets, no nested-session markers", () => {

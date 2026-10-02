@@ -13,7 +13,7 @@ import {
   type CollectDeps,
   type RawEvidence,
 } from "./evidence";
-import type { ClaudeCall, ClaudeOutcome } from "./claude-runner";
+import { claudeVersionSupported, type ClaudeCall, type ClaudeOutcome } from "./claude-runner";
 import { EXIT, NightlyStop, type ExitCode } from "./exit";
 import type { NightlyLedger } from "./ledger";
 import { applyAgentFlags, planAgentFlags } from "./flags";
@@ -140,7 +140,10 @@ export interface PreflightFacts {
   lock: { ok: true } | { ok: false; reason: string; holder: unknown };
 }
 
-/** STOP, the deadline, the lock, a clean tree, the environment and node ≥ 22; writes `run.json`. */
+/**
+ * STOP, the deadline, the lock, a clean tree, the environment, node ≥ 22 and a working `claude` CLI (2.1.x or later);
+ * writes `run.json`.
+ */
 export function stepPreflight(ctx: NightContext, facts: PreflightFacts): StepResult {
   const stop = stopBeforeStep(ctx);
   if (stop) return stoppedResult(ctx, "preflight", stop);
@@ -150,6 +153,9 @@ export function stepPreflight(ctx: NightContext, facts: PreflightFacts): StepRes
   if (facts.missingEnv.length > 0) problems.push(`env_missing:${facts.missingEnv.join(",")}`);
   if (!facts.code) problems.push("not_a_git_checkout");
   else if (facts.code.dirty) problems.push("dirty_tree");
+  // Every reasoning step is a `claude -p` call: without a working, recent CLI the night cannot audit anything.
+  if (!facts.claudeCliVersion) problems.push("claude_cli_missing");
+  else if (!claudeVersionSupported(facts.claudeCliVersion)) problems.push("claude_cli_unsupported");
   if (!facts.lock.ok) {
     const summary = { step: "preflight", night: ctx.night, lock: facts.lock };
     recordStep(ctx, "preflight", { status: "stopped", stop: "locked", summary });

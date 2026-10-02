@@ -91,6 +91,10 @@ describe("stepPreflight", () => {
     expect(stepPreflight(context(), { ...goodFacts, missingEnv: ["DATABASE_URL"] })).toMatchObject({ stop: "env_missing:DATABASE_URL", exitCode: 6 });
     expect(stepPreflight(context(), { ...goodFacts, nodeVersion: "v20.20.2" })).toMatchObject({ stop: "node_v20.20.2_below_22", exitCode: 6 });
     expect(stepPreflight(context(), { ...goodFacts, lock: { ok: false, reason: "held", holder: { pid: 1 } } })).toMatchObject({ stop: "locked", exitCode: 7 });
+    // No usable claude CLI: nothing can be audited.
+    expect(stepPreflight(context(), { ...goodFacts, claudeCliVersion: null })).toMatchObject({ ok: false, stop: "claude_cli_missing", exitCode: 6 });
+    expect(stepPreflight(context(), { ...goodFacts, claudeCliVersion: "2.0.77 (Claude Code)" })).toMatchObject({ stop: "claude_cli_unsupported", exitCode: 6 });
+    expect(stepPreflight(context(), { ...goodFacts, claudeCliVersion: "not a version" })).toMatchObject({ stop: "claude_cli_unsupported" });
     fs.writeFileSync(path.join(dir, "STOP"), "");
     expect(stepPreflight(context(), goodFacts)).toMatchObject({ stop: "stop_file", exitCode: 7 });
     fs.rmSync(path.join(dir, "STOP"));

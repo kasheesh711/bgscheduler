@@ -31,6 +31,18 @@ export const CLAUDE_ENV_ALLOWLIST = ["HOME", "PATH", "USER", "LOGNAME", "SHELL",
 /** Flags that would change auth or the model behind our back: never passed. */
 const FORBIDDEN_FLAGS = ["--bare", "--fallback-model", "--resume", "--continue", "--dangerously-skip-permissions"];
 
+/**
+ * Whether `claude --version` names a CLI new enough for these flags (`--safe-mode`, `--permission-prompts`, `--effort
+ * max`, `modelUsage` in the JSON envelope): 2.1.x or later. "2.1.287 (Claude Code)" → true.
+ */
+export function claudeVersionSupported(version: string | null): boolean {
+  const match = /(\d+)\.(\d+)\.(\d+)/u.exec(version ?? "");
+  if (!match) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major > 2 || (major === 2 && minor >= 1);
+}
+
 export function claudeChildEnv(parent: Record<string, string | undefined> = process.env): NodeJS.ProcessEnv {
   const env: Record<string, string> = {};
   for (const key of CLAUDE_ENV_ALLOWLIST) {
