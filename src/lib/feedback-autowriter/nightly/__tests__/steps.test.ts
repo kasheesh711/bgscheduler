@@ -377,14 +377,15 @@ describe("stepReport, stepFlag, stepCosts and runNight", () => {
       steps: {
         preflight: () => { calls.push("preflight"); return ok("preflight")(); },
         select: () => { calls.push("select"); return ok("select")(); },
-        collect: async () => { calls.push("collect"); return { ok: false, stop: "wise_429", next: "collect", summary: {}, exitCode: 5 as const }; },
+        // The deadline is a hard stop (a Wise 429 or a cap would still let the collected classes be audited).
+        collect: async () => { calls.push("collect"); return { ok: false, stop: "deadline", next: "collect", summary: {}, exitCode: 7 as const }; },
         audit: () => { calls.push("audit"); return ok("audit")(); },
       },
       partialReport,
     });
     expect(calls).toEqual(["select", "collect"]);
     expect(partialReport).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ ok: false, stop: "wise_429", exitCode: 5, summary: { steps: { preflight: "done earlier" } } });
+    expect(result).toMatchObject({ ok: false, stop: "deadline", exitCode: 7, summary: { steps: { preflight: "done earlier" } } });
 
     const stopped = await runNight(ctx, {
       order: ["select"],
@@ -393,6 +394,50 @@ describe("stepReport, stepFlag, stepCosts and runNight", () => {
     });
     expect(stopped.stop).toBe("stop_file");
     expect(partialReport).toHaveBeenCalledTimes(1);
+  });
+
+  it("still audits and reports what was collected when Wise throttles collection, but not after STOP", async () => {
+    const ctx = context();
+    const calls: string[] = [];
+    const ok = (step: string) => async () => {
+      calls.push(step);
+      return { ok: true, stop: null, next: null, summary: { step }, exitCode: 0 as const };
+    };
+    const partialReport = vi.fn();
+    const throttled = await runNight(ctx, {
+      order: ["collect", "audit", "report"],
+      steps: {
+        collect: async () => {
+          calls.push("collect");
+          return { ok: false, stop: "wise_429", next: "collect", summary: {}, exitCode: 5 as const };
+        },
+        audit: ok("audit"),
+        report: ok("report"),
+      },
+      partialReport,
+    });
+    expect(calls).toEqual(["collect", "audit", "report"]);
+    expect(partialReport).not.toHaveBeenCalled();
+    expect(throttled).toMatchObject({ ok: false, stop: "wise_429", exitCode: 5 });
+    calls.length = 0;
+    // An audit that then fails too: the partial report, and the run still ends on the first stop.
+    const both = await runNight(ctx, {
+      order: ["collect", "audit", "report"],
+      steps: {
+        collect: async () => ({ ok: false, stop: "cap:wise_reads_night", next: "collect", summary: {}, exitCode: 3 as const }),
+        audit: async () => ({ ok: false, stop: "usage_limited", next: "report", summary: {}, exitCode: 4 as const }),
+        report: ok("report"),
+      },
+      partialReport: vi.fn(async () => ({ ok: true, stop: null, next: null, summary: {}, exitCode: 0 as const })),
+    });
+    expect(both).toMatchObject({ stop: "cap:wise_reads_night", exitCode: 3 });
+    const stopped = await runNight(ctx, {
+      order: ["collect", "audit"],
+      steps: { collect: async () => ({ ok: false, stop: "stop_file", next: "collect", summary: {}, exitCode: 7 as const }), audit: ok("audit") },
+      partialReport,
+    });
+    expect(stopped.stop).toBe("stop_file");
+    expect(calls).toEqual([]);
   });
 
   it("re-runs every later step once one runs: the report is rewritten after a new audit", async () => {

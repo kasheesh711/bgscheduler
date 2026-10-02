@@ -759,7 +759,8 @@ export function stepCosts(ctx: NightContext, days: number): StepResult {
  * The whole night, from the first unfinished step. A step is skipped only when it is done and no step before it ran
  * in this invocation: once a step runs (new targets, a new audit), every later step runs again — the report is always
  * rewritten after a new audit. `always` names steps that run every time. A step that stops ends the run — never a
- * retry loop — after a partial report when the stop came after selection (not for a STOP file: STOP means stop).
+ * retry loop — after a partial report when the stop came after selection (not for a STOP file: STOP means stop); a
+ * collect stopped by Wise throttling or a cap still lets the classes already collected be audited and reported.
  */
 export async function runNight(ctx: Pick<NightContext, "paths" | "night" | "now" | "log">, input: {
   order: readonly StepName[];
@@ -769,7 +770,12 @@ export async function runNight(ctx: Pick<NightContext, "paths" | "night" | "now"
 }): Promise<StepResult> {
   const steps: Record<string, unknown> = {};
   const brief = (step: StepResult) => ({ ok: step.ok, stop: step.stop, exitCode: step.exitCode, summary: step.summary });
+  const ended = (failure: StepResult): StepResult => ({
+    ok: false, stop: failure.stop, next: failure.next, exitCode: failure.exitCode, summary: { step: "run", night: ctx.night, steps },
+  });
   let ranBefore = false;
+  /** A collect stop that still lets the classes collected so far be audited and reported (Wise throttled, a cap). */
+  let softStop: StepResult | null = null;
   for (const name of input.order) {
     const done = readRunState(ctx).steps[name]?.status === "done";
     if (done && !ranBefore && !input.always?.has(name)) {
@@ -783,10 +789,19 @@ export async function runNight(ctx: Pick<NightContext, "paths" | "night" | "now"
     ranBefore = true;
     steps[name] = brief(outcome);
     if (!outcome.ok) {
+      if (name === "collect" && SOFT_COLLECT_STOPS.has(outcome.exitCode)) {
+        softStop = outcome;
+        continue;
+      }
       const reportable = !["preflight", "select", "report"].includes(name) && outcome.stop !== "stop_file";
       if (reportable) steps.report = brief(await input.partialReport());
-      return { ok: false, stop: outcome.stop, next: outcome.next, exitCode: outcome.exitCode, summary: { step: "run", night: ctx.night, steps } };
+      // The first stop is the run's: a soft collect stop before this one still names the run's end.
+      return ended(softStop ?? outcome);
     }
   }
+  if (softStop) return ended(softStop);
   return { ok: true, stop: null, next: null, exitCode: EXIT.ok, summary: { step: "run", night: ctx.night, steps } };
 }
+
+/** Collect stops after which the classes already collected are still audited and reported: Wise throttled, a cap. */
+const SOFT_COLLECT_STOPS = new Set<ExitCode>([EXIT.wiseThrottled, EXIT.caps]);
