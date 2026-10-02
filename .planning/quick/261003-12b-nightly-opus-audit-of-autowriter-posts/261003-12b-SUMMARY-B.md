@@ -294,4 +294,3 @@ cherry-pick in order. Files: `correction.ts`, `correction-store.ts`, `validate.t
     - M1's kept lock (unit and integration).
     - M3's bounded window (unit and integration).
     - Both L4 guards.
-
