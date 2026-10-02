@@ -10,9 +10,9 @@ import {
   type ClassroomPublishJob,
 } from "./data";
 import {
-  createAppsScriptScheduleEmailSender,
   type ScheduleEmailSender,
 } from "./schedule-email";
+import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { claimAdminEmailRun, adminEmailClaimPredicate, assertAdminEmailClaim, sentAdminRecipients } from "./admin-email-claim";
 import { REMOTE_NO_ROOM_NEEDED } from "./assignment-engine";
 
@@ -407,7 +407,7 @@ export async function sendAdminClassroomScheduleEmail(
     blockers,
     triggerKind,
   };
-  const sender = options.sender ?? createAppsScriptScheduleEmailSender();
+  const sender = options.sender ?? createOutboundEmailSender();
   const html = renderHtml(context);
   const text = renderText(context);
   const counts = { attempted: 0, success: recipients.filter(email => alreadySent.has(email.toLowerCase())).length, failed: 0 };

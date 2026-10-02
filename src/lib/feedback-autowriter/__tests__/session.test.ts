@@ -6,6 +6,7 @@ import {
   recordingTooShort,
   zoomTranscriptUrl,
   classifyTeacherSubmission,
+  detailClassName,
   evaluateSessionGates,
   extractAiSummary,
   guestNamedAsStudent,
@@ -294,6 +295,23 @@ describe("session title", () => {
   it("is parsed from the Wise detail (it names the subject at BeGifted)", () => {
     expect(parse({ title: "Live Session - NVR" }).title).toBe("Live Session - NVR");
     expect(parse().title).toBeUndefined();
+  });
+});
+
+describe("detailClassName", () => {
+  it("is Wise's class name, else classId.name, else the first student with a Wise account", () => {
+    expect(detailClassName(parse())).toBe(STUDENT_NAME);
+    expect(detailClassName(parse({ className: "  ", classId: { _id: "6a0000000000000000000001", name: " Athen class " } })))
+      .toBe("Athen class");
+    expect(detailClassName(parse({ className: undefined }))).toBe(STUDENT_NAME);
+  });
+
+  it("is null when Wise names neither the class nor a student account", () => {
+    const participants = [
+      { wiseUserId: "696e2c4343579bbada2340ed", name: "Kevin (Kev) Y. Hsieh Online", isTeacher: true, inMeetingDuration: 3800 },
+      { name: "guest", isTeacher: false, inMeetingDuration: 3700 },
+    ];
+    expect(detailClassName(parse({ className: undefined, participants }))).toBeNull();
   });
 });
 

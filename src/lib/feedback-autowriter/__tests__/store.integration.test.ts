@@ -25,6 +25,7 @@ import {
   retryHeldSession,
   requeueShadowDrafts,
   sessionSubmitStore,
+  stampClassName,
   stampSonioxRetention,
   stuckPostInFlight,
   updateControl,
@@ -72,6 +73,22 @@ beforeEach(async () => {
 });
 
 describe("feedback autowriter store (Postgres)", () => {
+  it("keeps Wise's class name from the first read that has one, never replacing it", async () => {
+    const metadataOf = async (id: string) => (await readSessionRow(db, id))?.metadata;
+    expect(await metadataOf(SESSION)).toEqual({});
+    await stampClassName(db, SESSION, "Athen (Athen.Si) Simthumnimit");
+    await stampClassName(db, SESSION, "Someone else");
+    expect(await metadataOf(SESSION)).toEqual({ className: "Athen (Athen.Si) Simthumnimit" });
+
+    const input = {
+      wiseSessionId: OTHER_SESSION, wiseClassId: null, wiseTeacherUserId: TEACHER, scheduledEndAt: null, deadlineAt: null, trigger: "webhook",
+    };
+    await ensureSessionRow(db, { ...input, className: "First name" });
+    await ensureSessionRow(db, { ...input, className: "Second name" });
+    await ensureSessionRow(db, { ...input, className: null });
+    expect(await metadataOf(OTHER_SESSION)).toEqual({ className: "First name" });
+  });
+
   it("migration seeds one control row in shadow mode", async () => {
     const control = await readControl(db);
     expect(control).toMatchObject({ id: "default", mode: "shadow", haltedAt: null, disabledTutors: [] });
