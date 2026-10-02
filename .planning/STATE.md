@@ -158,6 +158,7 @@ None blocking roadmap execution.
 | 260929-snx | Feedback autowriter second pass: Soniox transcript of the Wise recording for held, summary-less and Thai-summary classes (GLM ZDR only, Zoom-aligned speakers, coverage and job-lifecycle guards) | 2026-09-29 | 69358cd | [260929-snx-soniox-transcript-second-pass](./quick/260929-snx-soniox-transcript-second-pass/) |
 | 261001-r5j | Mobile onsite class capture and tutor-reviewed feedback drafts; private evidence, recovery, consent and retention | 2026-10-01 | dc1bfbb9 | [261001-r5j-mobile-onsite-class-evidence-and-reviewe](./quick/261001-r5j-mobile-onsite-class-evidence-and-reviewe/) |
 | 261001-ulx | Scope all Class Capture pilots to their own tutor and today's Bangkok classes; preserve unexpired recovery and refresh safely at midnight | 2026-10-01 | 099162e0 | [261001-ulx-restrict-class-capture-to-each-pilot-tut](./quick/261001-ulx-restrict-class-capture-to-each-pilot-tut/) |
+| 261002-r16 | Atom collector records failing stage/cause; ended-class PAST/FUTURE status transition no longer fails the timetable read | 2026-10-02 | 0a9aa4da | [261002-r16-atom-collector-failure-stage-and-timetab](./quick/261002-r16-atom-collector-failure-stage-and-timetab/) |
 | Phase 10-vpol-01-view-transitions P01 | 216 | 2 tasks | 2 files |
 | Phase 10-vpol-01-view-transitions P02 | 4min | 2 tasks | 2 files |
 | Phase 11 P03 | 31515093 | 2 tasks | 3 files |
@@ -167,6 +168,7 @@ None blocking roadmap execution.
 | Phase 12 P01 | 4m | 2 tasks | 2 files |
 | Phase 12 P02 | 8 | 2 tasks | 4 files |
 | Phase 12 P03 | 6m | 3 tasks | 4 files |
+| 261002-r45 | Autowriter: guest under student's own name stands in at 50% | 2026-10-02 | d496be3a | [261002-r45-autowriter-guest-name-stand-in](./quick/261002-r45-autowriter-guest-name-stand-in/) |
 
 ## Session Continuity
 
