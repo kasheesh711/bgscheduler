@@ -247,6 +247,21 @@ describe("what is never audited", () => {
   });
 });
 
+describe("weak evidence", () => {
+  it("turns an accurate verdict that checked no claim on secondary evidence into insufficient evidence", async () => {
+    const run = vi.fn(async () => success(auditResult({ verdict: "accurate", claims: [] })));
+    const { deps: auditDeps } = deps(run);
+    const weak = file(SID_A, { bundle: nightlyBundle({ wiseSessionId: SID_A, hash: "0a01dddddddddddddddd", grade: "secondary_only", transcript: null }) });
+    const strong = file(SID_B);
+    const result = await auditBundles(auditDeps, [weak, strong]);
+    const byId = new Map(result.records.map((record) => [record.wiseSessionId, record.result]));
+    expect(byId.get(SID_A)?.verdict).toBe("insufficient_evidence");
+    expect(byId.get(SID_A)?.evidenceQuality.notes).toContain("no claim checked on weak evidence");
+    // Strong evidence with no factual claim to check stays accurate.
+    expect(byId.get(SID_B)?.verdict).toBe("accurate");
+  });
+});
+
 describe("planAudit and the smoke call", () => {
   it("estimates without spawning anything", async () => {
     const run = vi.fn(async () => success());

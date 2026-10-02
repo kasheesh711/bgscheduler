@@ -9,7 +9,7 @@ import type { NightlyLedger } from "./ledger";
 import { appendJsonl, readJsonFile, writeJsonAtomic } from "./paths";
 import { auditKey } from "./select";
 import type { BundleFile } from "./steps";
-import type { AuditRecord } from "./types";
+import type { AuditRecord, EvidenceGrade } from "./types";
 
 /**
  * One Opus 5.5 max audit per posted text: cached per class, text hash, audit version and evidence hash
@@ -183,7 +183,7 @@ export async function auditBundles(deps: AuditStageDeps, files: readonly BundleF
         const checked = parseAuditResult(outcome.value, {
           postFields: file.bundle.postedFields, evidenceText: evidenceTextOf(file.bundle), grade: file.bundle.grade,
         });
-        if (checked.ok) result = checked.result;
+        if (checked.ok) result = weakEvidenceVerdict(checked.result, file.bundle.grade);
         else failure = `invalid:${checked.reason}`.slice(0, 300);
       } else {
         failure = `${outcome.kind}:${outcome.reason}`.slice(0, 300);
@@ -240,6 +240,19 @@ export async function auditBundles(deps: AuditStageDeps, files: readonly BundleF
     }
   }, () => out.stop !== null);
   return out;
+}
+
+/**
+ * An "accurate" verdict that checked no claim against only secondary evidence (Wise's summary or Zoom's captions for a
+ * transcript post) or none proves nothing: it is insufficient evidence.
+ */
+export function weakEvidenceVerdict(result: CheckedAuditResult, grade: EvidenceGrade): CheckedAuditResult {
+  if (result.verdict !== "accurate" || result.claims.length > 0 || (grade !== "secondary_only" && grade !== "none")) return result;
+  return {
+    ...result,
+    verdict: "insufficient_evidence",
+    evidenceQuality: { ...result.evidenceQuality, notes: [...result.evidenceQuality.notes, "no claim checked on weak evidence"].slice(-5) },
+  };
 }
 
 /** What auditing the bundles would cost at most, without spawning anything (`audit --plan`). */
