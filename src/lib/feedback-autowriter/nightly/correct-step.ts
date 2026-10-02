@@ -453,14 +453,25 @@ export async function stepCorrect(ctx: NightContext, deps: CorrectDeps): Promise
       continue;
     }
 
-    // The plan, from the database.
-    const planned = planFromRows(proposal, await deps.loadRows(sid), mappings);
+    // The plan, from the database; the text checks' context from the class's bundle and the database.
+    let rows: CorrectionRows;
+    let extra: Awaited<ReturnType<CorrectDeps["textContext"]>> | null = null;
+    let disabledTutors: string[] | null;
+    const bundle = readBundleFile(ctx.paths, sid);
+    try {
+      rows = await deps.loadRows(sid);
+      if (bundle) extra = await deps.textContext(bundle);
+      disabledTutors = await deps.loadDisabledTutors();
+    } catch (error) {
+      record({ ...about, status: "refused", stage: "db", reason: `read_failed:${error instanceof Error ? error.name : "Error"}` });
+      return stopOn(new NightlyStop("db_error", EXIT.error));
+    }
+    const planned = planFromRows(proposal, rows, mappings);
     if (!planned.ok) {
       record({ ...about, status: "refused", stage: "plan", reason: planned.reason });
       continue;
     }
-    const bundle = readBundleFile(ctx.paths, sid);
-    if (!bundle) {
+    if (!bundle || !extra) {
       record({ ...about, status: "refused", stage: "plan", reason: "bundle_missing" });
       continue;
     }
@@ -468,12 +479,11 @@ export async function stepCorrect(ctx: NightContext, deps: CorrectDeps): Promise
       record({ ...about, status: "refused", stage: "plan", reason: "bundle_stale" });
       continue;
     }
-    const context = textProblemContext(bundle, await deps.textContext(bundle));
+    const context = textProblemContext(bundle, extra);
     if (!context) {
       record({ ...about, status: "refused", stage: "plan", reason: "student_unknown" });
       continue;
     }
-    const disabledTutors = await deps.loadDisabledTutors();
     if (!disabledTutors) {
       record({ ...about, status: "refused", stage: "db", reason: "control_row_missing" });
       continue;

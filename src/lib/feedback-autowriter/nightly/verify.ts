@@ -276,6 +276,16 @@ export function reauditChecks(result: AuditResult, input: {
   return checks;
 }
 
+/** The posted draft's stamp, versions and ids only (a stamp can also carry the production judge's quotes). */
+export function postedStampOf(pipeline: Record<string, unknown> | null): Record<string, string | number> {
+  const kept: Record<string, string | number> = {};
+  for (const key of ["promptVersion", "judgeVersion", "evidence", "arm", "commitSha", "postedFromCommit"]) {
+    const value = pipeline?.[key];
+    if ((typeof value === "string" && value.length <= 80) || (typeof value === "number" && Number.isFinite(value))) kept[key] = value;
+  }
+  return kept;
+}
+
 function nameUsed(text: string, name: string): boolean {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
   return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "u").test(text);
@@ -288,6 +298,8 @@ function nameUsed(text: string, name: string): boolean {
 interface VerifyState {
   ctx: NightContext;
   deps: VerifyDeps;
+  /** Classes with a valid proposal already (an earlier run): never verified again. */
+  proposed: ReadonlySet<string>;
   stop: NightlyStop | null;
   opusCalls: number;
   judgeCalls: number;
@@ -476,6 +488,7 @@ async function verifyClass(state: VerifyState, file: BundleFile, record: AuditRe
   const recordFile = verifyRecordFile(ctx, sid);
   const previous = readJsonFile<VerifyClassRecord>(recordFile);
   if (previous && previous.fieldsSha256 === file.target.fieldsSha256) return previous;
+  if (state.proposed.has(sid)) return { skipped: "proposal_exists" };
 
   const base: VerifyClassRecord = {
     wiseSessionId: sid,
@@ -536,7 +549,7 @@ async function verifyClass(state: VerifyState, file: BundleFile, record: AuditRe
 
   const pipelineBase = {
     auditVersion: AUDIT_VERSION, auditPromptVersion: AUDIT_PROMPT_VERSION, judgePromptVersion: JUDGE_PROMPT_VERSION,
-    verifyCommit: deps.commit ?? null, auditBundleHash: record.bundleHash, postedPipeline: file.target.pipeline ?? null,
+    verifyCommit: deps.commit ?? null, auditBundleHash: record.bundleHash, posted: postedStampOf(file.target.pipeline),
   };
   const candidates: Candidate[] = [];
   const unavailable: CandidateRecord[] = [];
@@ -656,8 +669,9 @@ export async function stepVerify(ctx: NightContext, deps: VerifyDeps): Promise<S
   const wanted = deps.sessionIds && deps.sessionIds.length > 0 ? new Set(deps.sessionIds) : null;
   const files = readNightBundles(ctx.paths, targets).filter((file) => !wanted || wanted.has(file.target.wiseSessionId));
   const pairs = nightAuditRecords(ctx, files);
+  const proposed = existingProposals(ctx, deps.hmacKey);
   const state: VerifyState = {
-    ctx, deps, stop: null, opusCalls: 0, judgeCalls: 0, claudeUsd: 0, openrouterUsd: 0, proposals: existingProposals(ctx, deps.hmacKey).size,
+    ctx, deps, proposed, stop: null, opusCalls: 0, judgeCalls: 0, claudeUsd: 0, openrouterUsd: 0, proposals: proposed.size,
   };
   const decided: VerifyClassRecord[] = [];
   const skipped: Array<{ wiseSessionId: string; reason: string }> = [];
@@ -686,7 +700,7 @@ export async function stepVerify(ctx: NightContext, deps: VerifyDeps): Promise<S
     needsKevin: list("needs_kevin"),
     noCandidate: list("no_candidate"),
     blocked: list("blocked"),
-    skipped: Object.fromEntries(["not_audited", "nothing_to_correct", "over_cap"].map((reason) => [reason, skipped.filter((item) => item.reason === reason).length])),
+    skipped: Object.fromEntries(["not_audited", "nothing_to_correct", "over_cap", "proposal_exists"].map((reason) => [reason, skipped.filter((item) => item.reason === reason).length])),
     errors: skipped.filter((item) => item.reason.startsWith("error:")),
     overCap: skipped.filter((item) => item.reason === "over_cap").map((item) => item.wiseSessionId),
     proposalsTonight: state.proposals,

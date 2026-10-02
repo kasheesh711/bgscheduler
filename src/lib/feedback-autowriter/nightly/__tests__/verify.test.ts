@@ -20,6 +20,7 @@ import type { AuditRecord, ClaudeProof, PrecheckFinding } from "../types";
 import {
   confirmCriticals,
   needsKevinReasons,
+  postedStampOf,
   quotesOverlap,
   readReplayRecords,
   replayCandidate,
@@ -200,6 +201,8 @@ describe("stepVerify: candidates", () => {
     });
     expect(verified.proposal.reason).toMatch(/^M06 overstated_judgement \(major\): corrected from the audit's minimal fix/u);
     expect(verified.proposal.reason).not.toMatch(/hesitated|Pim/u);
+    // Only versions and ids of the posted draft's stamp travel with the proposal (a stamp can carry judge quotes).
+    expect(verified.proposal.pipeline).toMatchObject({ source: "minimal_fix", auditVersion: AUDIT_VERSION, verifyCommit: "abc1234", posted: { evidence: "transcript", promptVersion: 5 } });
     expect(verified.proposal.checks.map((item) => `${item.name}:${item.pass}`)).toEqual([
       "word_change:true", "length_ratio:true", "text_problems:true", "display_name:true", "judge:true", "reaudit:true",
       "reaudit_verdict:true", "reaudit_omissions:true", "reaudit_prior_issues:true", "reaudit_names:true", "reaudit_homework:true",
@@ -385,7 +388,7 @@ describe("stepVerify: who is never corrected", () => {
     seed(ctx, { audited: false });
     seed(ctx, { sid: SID_B, issues: [issue({ severity: "cosmetic", mode: "M17" })] });
     const result = await stepVerify(ctx, harness(ctx).deps);
-    expect(result.summary).toMatchObject({ classes: 2, skipped: { not_audited: 1, nothing_to_correct: 1, over_cap: 0 }, proposed: [] });
+    expect(result.summary).toMatchObject({ classes: 2, skipped: { not_audited: 1, nothing_to_correct: 1, over_cap: 0, proposal_exists: 0 }, proposed: [] });
   });
 });
 
@@ -476,6 +479,18 @@ describe("stepVerify: caps, stops and the ledger", () => {
     const reserved = readJsonl<{ type: string; kind: string; key: string }>(ctx.paths.spendJsonl).filter((line) => line.type === "reserve");
     expect(reserved.map((line) => `${line.kind}:${line.key.split(":").at(-1)}`).toSorted()).toEqual(["openrouter:high", "openrouter:medium", "opus_reaudit:a1"]);
     expect(callModel).toHaveBeenCalledTimes(2);
+  });
+
+  it("never verifies a class with a valid proposal again, and keeps only a stamp's versions and ids", async () => {
+    const ctx = context();
+    seed(ctx);
+    await stepVerify(ctx, harness(ctx).deps);
+    fs.rmSync(path.join(ctx.paths.verifyDir, `${SID}.json`));
+    const again = harness(ctx);
+    expect((await stepVerify(ctx, again.deps)).summary).toMatchObject({ skipped: { proposal_exists: 1 }, proposalsTonight: 1 });
+    expect(again.judge).not.toHaveBeenCalled();
+    expect(postedStampOf({ promptVersion: 5, factualVerdicts: { unsupported: ["a quote"] }, commitSha: "abc", evidence: "summary" }))
+      .toEqual({ promptVersion: 5, commitSha: "abc", evidence: "summary" });
   });
 
   it("never repeats a paid call: a re-run reuses decided classes, and a call a dead run reserved is not made again", async () => {

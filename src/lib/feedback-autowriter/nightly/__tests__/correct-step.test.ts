@@ -420,6 +420,18 @@ describe("stepCorrect: applying", () => {
     expect(h.ledger.used("correction").count).toBe(0);
   });
 
+  it("stops cleanly on a database read failure before any Wise access", async () => {
+    const ctx = context();
+    seed(ctx);
+    const h = harness(ctx, { apply: true, loadRows: vi.fn(async () => {
+      throw Object.assign(new Error("connection refused"), { name: "NeonDbError" });
+    }) });
+    expect(await stepCorrect(ctx, h.deps)).toMatchObject({
+      ok: false, stop: "db_error", exitCode: 1, summary: { classes: [expect.objectContaining({ status: "refused", reason: "read_failed:NeonDbError" })] },
+    });
+    expect(h.execute).not.toHaveBeenCalled();
+  });
+
   it("treats an executor that throws while holding the lock as a safety stop", async () => {
     const ctx = context();
     seed(ctx);
