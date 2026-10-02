@@ -137,6 +137,20 @@ describe("parseClaudeEnvelope", () => {
     expect(parseClaudeEnvelope(envelope(), "", null, { ...CONTEXT, timedOut: true })).toMatchObject({ kind: "timeout" });
     expect(parseClaudeEnvelope(`warning: something\n${envelope()}`, "", 0, CONTEXT)).toMatchObject({ kind: "success" });
   });
+
+  it("never reads a usage limit or an auth failure out of the model's own words", () => {
+    // The model's answer (long, or JSON) in an error envelope: a CLI error, not a usage limit.
+    const answer = `{"summaryLine": "the tutor mentioned a rate limit and a 401 error in the lesson"} ${"x".repeat(700)}`;
+    expect(parseClaudeEnvelope(envelope({ subtype: "error_during_execution", is_error: true, result: answer }), "", 1, CONTEXT))
+      .toMatchObject({ kind: "cli_error", reason: "error_during_execution" });
+    expect(parseClaudeEnvelope(envelope({ is_error: true, result: '{"note": "usage limit"}' }), "", 1, CONTEXT)).toMatchObject({ kind: "cli_error" });
+    // No envelope: stdout may be the model's words; only stderr is the CLI's.
+    expect(parseClaudeEnvelope("The student hit the usage limit of the app (429).", "", 1, CONTEXT)).toMatchObject({ kind: "cli_error", reason: "exit_1" });
+    expect(parseClaudeEnvelope("partial output", "Error: 429 rate limit", 1, CONTEXT)).toMatchObject({ kind: "usage_limited" });
+    // The envelope's own errors still count.
+    expect(parseClaudeEnvelope(envelope({ subtype: "error_during_execution", is_error: true, errors: ["OAuth token expired"] }), "", 1, CONTEXT))
+      .toMatchObject({ kind: "auth" });
+  });
 });
 
 describe("runClaude", () => {

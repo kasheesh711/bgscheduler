@@ -191,6 +191,16 @@ export function proofOf(envelope: Envelope | null, input: { argv: readonly strin
   };
 }
 
+/**
+ * The CLI's own error line of an error envelope: `result` only when the envelope is an error and it is a short, plain
+ * line ("API Error: 401 …", "You've hit your limit · resets 5am") — never the model's answer, which is long or JSON.
+ */
+function cliErrorLine(envelope: Envelope): string {
+  const result = envelope.result?.trim() ?? "";
+  if (envelope.is_error !== true || result.length === 0 || result.length > 600) return "";
+  return /^(?:\{|\[|```)/u.test(result) ? "" : result;
+}
+
 function unfence(text: string): string {
   return text.trim().replace(/^```(?:json)?\s*/u, "").replace(/\s*```$/u, "");
 }
@@ -209,15 +219,15 @@ export function parseClaudeEnvelope(stdout: string, stderr: string, code: number
   const proof = proofOf(envelope, context);
   if (context.timedOut) return { kind: "timeout", reason: "timeout", proof };
   if (!envelope) {
-    const text = `${stdout}\n${stderr}`;
-    if (AUTH_PATTERN.test(text)) return { kind: "auth", reason: "auth", proof: null };
-    if (USAGE_PATTERN.test(text)) return { kind: "usage_limited", reason: "usage_limited", proof: null };
+    // stdout without an envelope may be the model's own words: only stderr says why the CLI failed.
+    if (AUTH_PATTERN.test(stderr)) return { kind: "auth", reason: "auth", proof: null };
+    if (USAGE_PATTERN.test(stderr)) return { kind: "usage_limited", reason: "usage_limited", proof: null };
     return code === 0
       ? { kind: "unparseable", reason: "no_json_envelope", proof: null }
       : { kind: "cli_error", reason: `exit_${code ?? "signal"}`, proof: null };
   }
   const subtype = envelope.subtype ?? "";
-  const errorText = [envelope.result ?? "", ...(Array.isArray(envelope.errors) ? envelope.errors : []), stderr].join("\n");
+  const errorText = [cliErrorLine(envelope), ...(Array.isArray(envelope.errors) ? envelope.errors : []), stderr].join("\n");
   if (subtype === "error_max_budget_usd") return { kind: "budget_exceeded", reason: "max_budget_usd", proof };
   if (envelope.is_error === true || (subtype !== "" && subtype !== "success")) {
     const status = envelope.api_error_status ?? null;
