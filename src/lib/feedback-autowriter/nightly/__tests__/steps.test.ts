@@ -61,6 +61,7 @@ const goodFacts: PreflightFacts = {
   code: { head: "abc123", branch: "feat/autowriter-nightly-audit", dirty: false },
   claudeCliVersion: "2.1.287 (Claude Code)",
   lock: { ok: true },
+  corrections: { unsettled: 0, lock: null },
 };
 
 describe("run state", () => {
@@ -90,6 +91,10 @@ describe("stepPreflight", () => {
     expect(stepPreflight(context(), { ...goodFacts, missingEnv: ["DATABASE_URL"] })).toMatchObject({ stop: "env_missing:DATABASE_URL", exitCode: 6 });
     expect(stepPreflight(context(), { ...goodFacts, nodeVersion: "v20.20.2" })).toMatchObject({ stop: "node_v20.20.2_below_22", exitCode: 6 });
     expect(stepPreflight(context(), { ...goodFacts, lock: { ok: false, reason: "held", holder: { pid: 1 } } })).toMatchObject({ stop: "locked", exitCode: 7 });
+    // A correction a run left unsettled (or its lock) stops the night until `recover` has settled it.
+    expect(stepPreflight(context(), { ...goodFacts, corrections: { unsettled: 1, lock: null } })).toMatchObject({ ok: false, stop: "unsettled_correction", exitCode: 6 });
+    expect(stepPreflight(context(), { ...goodFacts, corrections: { unsettled: 0, lock: "stale" } })).toMatchObject({ ok: false, stop: "unsettled_correction", exitCode: 6 });
+    expect(stepPreflight(context(), { ...goodFacts, corrections: { error: "NeonDbError" } })).toMatchObject({ ok: false, stop: "corrections_unreadable:NeonDbError", exitCode: 6 });
     fs.writeFileSync(path.join(dir, "STOP"), "");
     expect(stepPreflight(context(), goodFacts)).toMatchObject({ stop: "stop_file", exitCode: 7 });
     fs.rmSync(path.join(dir, "STOP"));

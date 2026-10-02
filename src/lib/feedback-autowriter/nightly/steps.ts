@@ -138,13 +138,23 @@ export interface PreflightFacts {
   code: { head: string | null; branch: string | null; dirty: boolean } | null;
   claudeCliVersion: string | null;
   lock: { ok: true } | { ok: false; reason: string; holder: unknown };
+  /**
+   * The dry run of `recover` (database reads only): agent corrections a run left `posting`/`awaiting_event`, and a
+   * correction lock left on the control row (`live`, `stale` or `halted_on_top`) — or why it could not be read.
+   */
+  corrections: { unsettled: number; lock: string | null } | { error: string };
 }
 
-/** STOP, the deadline, the lock, a clean tree, the environment and node ≥ 22; writes `run.json`. */
+/**
+ * STOP, the deadline, the lock, nothing a correction left unsettled (else `unsettled_correction`: run `recover`), a
+ * clean tree, the environment and node ≥ 22; writes `run.json`.
+ */
 export function stepPreflight(ctx: NightContext, facts: PreflightFacts): StepResult {
   const stop = stopBeforeStep(ctx);
   if (stop) return stoppedResult(ctx, "preflight", stop);
   const problems: string[] = [];
+  if ("error" in facts.corrections) problems.push(`corrections_unreadable:${facts.corrections.error}`);
+  else if (facts.corrections.unsettled > 0 || facts.corrections.lock !== null) problems.push("unsettled_correction");
   const nodeMajor = Number(facts.nodeVersion.replace(/^v/u, "").split(".")[0]);
   if (!(nodeMajor >= 22)) problems.push(`node_${facts.nodeVersion}_below_22`);
   if (facts.missingEnv.length > 0) problems.push(`env_missing:${facts.missingEnv.join(",")}`);
@@ -165,6 +175,7 @@ export function stepPreflight(ctx: NightContext, facts: PreflightFacts): StepRes
     claudeCliVersion: facts.claudeCliVersion,
     optionalEnvMissing: facts.optionalEnvMissing,
     wiseCooldownUntil: cooldown?.toISOString() ?? null,
+    corrections: facts.corrections,
     problems,
   };
   if (problems.length > 0) {

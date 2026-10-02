@@ -69,6 +69,38 @@ export function planAgentFlags(reports: readonly ClassReport[], input: { auditVe
   return { items, overCap };
 }
 
+/** The idempotency key of the flag a correction raises: one per class, as there is one agent correction per class. */
+export function agentCorrectionFlagKey(wiseSessionId: string): string {
+  return `agent-correction:${wiseSessionId}`;
+}
+
+/**
+ * The flag raised after the nightly agent corrected a post in Wise, so the owner reviews the class again: the original
+ * finding's severity and category (the verdict still judges the first shot), mode codes in the note, never text.
+ */
+export function correctionFlagItem(input: {
+  wiseSessionId: string;
+  /** The corrected text's hash. */
+  fieldsSha256: string;
+  modes: readonly string[];
+  severity: "critical" | "major";
+  criticalCategory: string | null;
+}): FlagPlanItem {
+  const category = input.criticalCategory && CRITICAL_CATEGORIES.has(input.criticalCategory as AutowriterCriticalCategory)
+    ? input.criticalCategory as AutowriterCriticalCategory : null;
+  return {
+    wiseSessionId: input.wiseSessionId,
+    fieldsSha256: input.fieldsSha256,
+    idempotencyKey: agentCorrectionFlagKey(input.wiseSessionId),
+    severity: input.severity,
+    suggestedSeverity: input.severity === "critical" ? "critical" : "factual",
+    suggestedCategory: input.severity === "critical" ? category : null,
+    note: `corrected by the nightly agent: ${[...new Set(input.modes)].join(", ")}`.slice(0, 500),
+    incident: false,
+    modes: [...input.modes],
+  };
+}
+
 /** Write the planned flags (and incidents), each in one transaction. Re-running inserts nothing new. */
 export async function applyAgentFlags(db: Database, items: readonly FlagPlanItem[]): Promise<{
   inserted: number;
