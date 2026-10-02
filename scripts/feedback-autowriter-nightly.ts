@@ -19,6 +19,15 @@
  *                                  one `claude -p` Opus 5.5 max audit per collected class (no tools, safe mode, JSON
  *                                  schema, $1.50 budget, prompt on stdin); --smoke: one tiny synthetic call printing
  *                                  the proof (model, effort, login, cost); --plan: the estimate only, nothing spawned
+ *   report [--no-synthesis]        merged findings, failure modes, the production spend/retry watchdog (SELECT only),
+ *                                  one Opus synthesis call → report.md, summary.md, plan.md, fix-brief.json
+ *   flag [--apply]                 one `agent` flag per major/critical class (+ a critical_flag incident for a
+ *                                  high-confidence critical); a DRY RUN unless --apply — the only database write
+ *   run [--apply-flags] [--retranscribe] [--soniox-usd=<n>] [--no-synthesis]
+ *                                  preflight → select → collect → audit → report (→ flag with --apply-flags), resuming
+ *                                  at the first unfinished step; any stop ends with a partial report, never a retry
+ *   prune [--dry-run]              delete local evidence older than 7 days (cache, audits, old nights' real data)
+ *   costs [--days=7]               the last nights' spend from the local cost ledger
  * Global: --no-deadline (supervised runs only: ignore the 06:50 Bangkok stop).
  *
  * State lives outside every worktree: $BGS_NIGHTLY_ROOT, default ~/.bgscheduler-nightly/nightly (0700 dirs, 0600 files).
@@ -28,8 +37,9 @@
  * 7 STOP/lock/deadline, 10 SAFETY.
  */
 import { execFileSync } from "node:child_process";
-import { getDb } from "@/lib/db";
+import { getDb, type Database } from "@/lib/db";
 import { loadTutorPriorFeedback } from "@/lib/feedback-autowriter/job";
+import { planAudit, smokeCall } from "@/lib/feedback-autowriter/nightly/audit";
 import {
   activeWiseCooldown,
   effectiveCaps,
@@ -38,13 +48,8 @@ import {
   stopFiles,
   type NightlyCaps,
 } from "@/lib/feedback-autowriter/nightly/caps";
-import {
-  createWiseReadGate,
-  dbEvidenceSources,
-  readOnlySoniox,
-} from "@/lib/feedback-autowriter/nightly/evidence";
-import { planAudit, smokeCall } from "@/lib/feedback-autowriter/nightly/audit";
 import { claudeCwd, readClaudeCliVersion, runClaude, type ClaudeRunnerDeps } from "@/lib/feedback-autowriter/nightly/claude-runner";
+import { createWiseReadGate, dbEvidenceSources, readOnlySoniox } from "@/lib/feedback-autowriter/nightly/evidence";
 import { EXIT, exitCodeForStop, type ExitCode } from "@/lib/feedback-autowriter/nightly/exit";
 import { NightlyLedger } from "@/lib/feedback-autowriter/nightly/ledger";
 import { acquireLock, lockHolder } from "@/lib/feedback-autowriter/nightly/lock";
@@ -54,9 +59,14 @@ import {
   readNightBundles,
   readRunState,
   readTargets,
+  runNight,
   stepAudit,
   stepCollect,
+  stepCosts,
+  stepFlag,
   stepPreflight,
+  stepPrune,
+  stepReport,
   stepSelect,
   stopBeforeStep,
   type NightContext,
@@ -70,7 +80,7 @@ import { loadPayoutScriptEnvironment } from "./lib/payout-script";
 
 loadPayoutScriptEnvironment();
 
-const COMMANDS = ["status", "preflight", "select", "collect", "audit"] as const;
+const COMMANDS = ["status", "preflight", "select", "collect", "audit", "report", "flag", "run", "prune", "costs"] as const;
 type Command = (typeof COMMANDS)[number];
 
 const REQUIRED_ENV = ["DATABASE_URL", "WISE_USER_ID", "WISE_API_KEY"] as const;
@@ -126,16 +136,39 @@ async function fetchText(url: string): Promise<string> {
 }
 
 function contextFor(night: string, caps: NightlyCaps): NightContext {
-  const root = nightlyRoot();
   return {
     night,
-    paths: nightlyPaths(root, night),
+    paths: nightlyPaths(nightlyRoot(), night),
     caps,
     now: () => new Date(),
     deadline: flag("no-deadline") ? null : nightDeadline(night, caps.deadlineBangkok),
     stopFiles: stopFiles(),
     log: (line) => process.stderr.write(`${line}\n`),
   };
+}
+
+/** Everything one invocation shares: the context, the spend ledger, the database (lazily), the claude runner. */
+class Session {
+  private dbHandle: Database | null = null;
+  private runner: ClaudeRunnerDeps | null = null;
+  readonly ledger: NightlyLedger;
+  /** Our own Soniox jobs in flight (re-transcription), deleted by the signal handler. */
+  readonly inFlight = new Set<string>();
+
+  constructor(readonly ctx: NightContext) {
+    this.ledger = NightlyLedger.open(ctx.paths.root, ctx.night, ctx.caps);
+  }
+
+  get db(): Database {
+    this.dbHandle ??= getDb();
+    return this.dbHandle;
+  }
+
+  /** The claude runner; `claude --version` is read once per invocation. */
+  claude(): ClaudeRunnerDeps {
+    this.runner ??= { cwd: claudeCwd(), cliVersion: readClaudeCliVersion(), callsLog: this.ctx.paths.claudeCallsJsonl };
+    return this.runner;
+  }
 }
 
 function status(ctx: NightContext): StepResult {
@@ -163,13 +196,52 @@ function status(ctx: NightContext): StepResult {
   };
 }
 
-function runnerFor(ctx: NightContext): ClaudeRunnerDeps {
-  return { cwd: claudeCwd(), cliVersion: readClaudeCliVersion(), callsLog: ctx.paths.claudeCallsJsonl };
+function preflight(session: Session): StepResult {
+  return stepPreflight(session.ctx, {
+    nodeVersion: process.version,
+    missingEnv: REQUIRED_ENV.filter((name) => !process.env[name]?.trim()),
+    optionalEnvMissing: OPTIONAL_ENV.filter((name) => !process.env[name]?.trim()),
+    code: codeFacts(),
+    claudeCliVersion: session.claude().cliVersion,
+    lock: { ok: true },
+  });
+}
+
+async function collect(session: Session): Promise<StepResult> {
+  const { ctx, ledger } = session;
+  const sonioxKey = process.env.SONIOX_API_KEY?.trim() || null;
+  if (flag("retranscribe") && !sonioxKey) throw new UsageError("--retranscribe needs SONIOX_API_KEY");
+  const db = session.db;
+  const now = new Date();
+  const priorByTutor = new Map<string, Promise<PriorFeedbackComparison[]>>();
+  return stepCollect(ctx, {
+    sessionIds: sessionIdsOption(),
+    collect: {
+      sources: dbEvidenceSources(db),
+      wise: createNightlyWiseReader(),
+      gate: createWiseReadGate({ ledger, pacingMs: ctx.caps.wisePacingMs, deadline: ctx.deadline, stopFiles: ctx.stopFiles }),
+      soniox: sonioxKey ? readOnlySoniox(createSonioxClient(sonioxKey)) : null,
+      fetchText,
+      retranscribe: flag("retranscribe") && sonioxKey ? {
+        client: createSonioxClient(sonioxKey),
+        ledger,
+        inFlight: session.inFlight,
+        shouldStop: () => (stopFilePresent(ctx.stopFiles) ? "stop_file" : ctx.deadline && Date.now() >= ctx.deadline.getTime() ? "deadline" : null),
+      } : null,
+    },
+    priorFeedback: (target) => {
+      const tutor = rosterTutor(target.wiseTeacherUserId);
+      if (!tutor) return Promise.resolve([]);
+      if (!priorByTutor.has(tutor.canonicalKey)) priorByTutor.set(tutor.canonicalKey, loadTutorPriorFeedback(db, tutor, now));
+      return priorByTutor.get(tutor.canonicalKey)!;
+    },
+    otherStudentNames: (target) => loadOtherStudentNames(db, { tutorKey: target.tutorKey, excludeClassId: target.wiseClassId || null, now }),
+  });
 }
 
 /** `audit`, `audit --smoke`, `audit --plan`: no database or Wise access, only `claude -p`. */
-async function audit(ctx: NightContext): Promise<StepResult> {
-  const ledger = NightlyLedger.open(ctx.paths.root, ctx.night, ctx.caps);
+async function audit(session: Session): Promise<StepResult> {
+  const { ctx, ledger } = session;
   if (flag("smoke")) {
     const stop = stopBeforeStep(ctx);
     if (stop) return fail(stop.reason, stop.exitCode, { step: "audit-smoke", night: ctx.night });
@@ -177,7 +249,7 @@ async function audit(ctx: NightContext): Promise<StepResult> {
     const call = smokeCall(key);
     const reserved = ledger.reserve("opus_audit", { key, estimateUsd: call.budgetUsd });
     if (!reserved.ok) return fail(reserved.reason, EXIT.caps, { step: "audit-smoke", night: ctx.night });
-    const runner = runnerFor(ctx);
+    const runner = session.claude();
     const outcome = await runClaude(call, runner);
     ledger.settle(reserved.id, { actualUsd: outcome.proof?.costUsd ?? null, outcome: outcome.kind });
     const ok = outcome.kind === "success";
@@ -187,13 +259,8 @@ async function audit(ctx: NightContext): Promise<StepResult> {
       next: null,
       exitCode: ok ? EXIT.ok : exitCodeForStop(outcome.kind === "usage_limited" || outcome.kind === "auth" ? outcome.kind : "error"),
       summary: {
-        step: "audit-smoke",
-        night: ctx.night,
-        outcome: outcome.kind,
-        reason: ok ? null : outcome.reason,
-        value: ok ? outcome.value : null,
-        cliVersion: runner.cliVersion,
-        proof: outcome.proof,
+        step: "audit-smoke", night: ctx.night, outcome: outcome.kind, reason: ok ? null : outcome.reason, value: ok ? outcome.value : null,
+        cliVersion: runner.cliVersion, proof: outcome.proof,
       },
     };
   }
@@ -209,19 +276,47 @@ async function audit(ctx: NightContext): Promise<StepResult> {
       next: "audit",
       exitCode: EXIT.ok,
       summary: {
-        step: "audit-plan",
-        night: ctx.night,
-        bundles: files.length,
-        ...plan,
-        claudeUsdTonight: claude.night,
-        claudeUsdWeek: claude.week,
+        step: "audit-plan", night: ctx.night, bundles: files.length, ...plan, claudeUsdTonight: claude.night, claudeUsdWeek: claude.week,
         caps: { maxClaudeUsdNight: ctx.caps.maxClaudeUsdNight, maxClaudeUsdWeek: ctx.caps.maxClaudeUsdWeek, maxOpusCalls: ctx.caps.maxOpusCalls },
         fitsTonight: claude.night + plan.toAudit * ctx.caps.perAuditUsd <= ctx.caps.maxClaudeUsdNight,
       },
     };
   }
-  const runner = runnerFor(ctx);
+  const runner = session.claude();
   return stepAudit(ctx, { ledger, run: (call) => runClaude(call, runner), sessionIds: [...sessionIds] });
+}
+
+async function report(session: Session, options: { synthesis: boolean }): Promise<StepResult> {
+  const runner = options.synthesis ? session.claude() : null;
+  let db: Database | null = null;
+  try {
+    db = session.db;
+  } catch {
+    db = null;
+  }
+  return stepReport(session.ctx, {
+    db,
+    ledger: session.ledger,
+    run: runner ? (call) => runClaude(call, runner) : null,
+    cliVersion: runner?.cliVersion ?? null,
+  });
+}
+
+/** preflight → select → collect → audit → report (→ flag), from the first unfinished step; a stop ends with a partial report. */
+function runAll(session: Session): Promise<StepResult> {
+  const { ctx } = session;
+  return runNight(ctx, {
+    order: ["preflight", "select", "collect", "audit", "report", ...(flag("apply-flags") ? ["flag" as const] : [])],
+    steps: {
+      preflight: () => preflight(session),
+      select: () => stepSelect(ctx, { db: session.db, ledger: session.ledger }),
+      collect: () => collect(session),
+      audit: () => audit(session),
+      report: () => report(session, { synthesis: !flag("no-synthesis") }),
+      flag: () => stepFlag(ctx, { db: session.db, apply: true }),
+    },
+    partialReport: () => report(session, { synthesis: false }),
+  });
 }
 
 async function main(): Promise<void> {
@@ -236,11 +331,22 @@ async function main(): Promise<void> {
   }
   const sonioxUsd = option("soniox-usd");
   if (sonioxUsd !== undefined && !Number.isFinite(Number(sonioxUsd))) throw new UsageError("--soniox-usd must be a number");
-  const { caps } = effectiveCaps({ config: config.caps, sonioxUsdFlag: sonioxUsd === undefined ? null : Number(sonioxUsd) });
+  let caps: NightlyCaps;
+  try {
+    caps = effectiveCaps({ config: config.caps, sonioxUsdFlag: sonioxUsd === undefined ? null : Number(sonioxUsd) }).caps;
+  } catch (error) {
+    throw new UsageError((error as Error).message);
+  }
   const ctx = contextFor(night, caps);
 
   if (command === "status") {
     print(status(ctx));
+    return;
+  }
+  if (command === "costs") {
+    const days = Number(option("days") ?? "7");
+    if (!Number.isInteger(days) || days < 1 || days > 90) throw new UsageError("--days must be a whole number from 1 to 90");
+    print(stepCosts(ctx, days));
     return;
   }
 
@@ -249,16 +355,14 @@ async function main(): Promise<void> {
     print(fail("locked", EXIT.stopped, { step: command, night, lock: { reason: lock.reason, holder: lock.holder, file: lock.file } }));
     return;
   }
-  const inFlight = new Set<string>();
-  let releaseOnSignal = true;
+  const session = new Session(ctx);
+  let handled = false;
   const onSignal = (signal: NodeJS.Signals) => {
-    if (!releaseOnSignal) return;
-    releaseOnSignal = false;
-    const pending = [...inFlight];
+    if (handled) return;
+    handled = true;
+    const pending = [...session.inFlight];
     const key = process.env.SONIOX_API_KEY?.trim();
-    const cleanup = pending.length > 0 && key
-      ? Promise.allSettled(pending.map((id) => createSonioxClient(key).remove(id)))
-      : Promise.resolve([]);
+    const cleanup = pending.length > 0 && key ? Promise.allSettled(pending.map((id) => createSonioxClient(key).remove(id))) : Promise.resolve([]);
     void cleanup.then((results) => {
       const left = pending.filter((_, index) => (results as PromiseSettledResult<unknown>[])[index]?.status === "rejected");
       process.stderr.write(`${signal}: stopped${left.length ? `; Soniox jobs NOT deleted: ${left.join(", ")}` : ""}\n`);
@@ -269,61 +373,16 @@ async function main(): Promise<void> {
   process.once("SIGINT", onSignal);
   process.once("SIGTERM", onSignal);
   try {
-    if (command === "preflight") {
-      const missingEnv = REQUIRED_ENV.filter((name) => !process.env[name]?.trim());
-      print(stepPreflight(ctx, {
-        nodeVersion: process.version,
-        missingEnv: [...missingEnv],
-        optionalEnvMissing: OPTIONAL_ENV.filter((name) => !process.env[name]?.trim()),
-        code: codeFacts(),
-        claudeCliVersion: readClaudeCliVersion(),
-        lock: { ok: true },
-      }));
-      return;
-    }
-    if (command === "audit") {
-      print(await audit(ctx));
-      return;
-    }
-    const db = getDb();
-    const ledger = NightlyLedger.open(ctx.paths.root, night, caps);
-    if (command === "select") {
-      print(await stepSelect(ctx, { db, ledger, sessionIds: sessionIdsOption(), force: flag("force") }));
-      return;
-    }
-    if (command === "collect") {
-      const sonioxKey = process.env.SONIOX_API_KEY?.trim() || null;
-      if (flag("retranscribe") && !sonioxKey) throw new UsageError("--retranscribe needs SONIOX_API_KEY");
-      const priorByTutor = new Map<string, Promise<PriorFeedbackComparison[]>>();
-      const now = new Date();
-      const gate = createWiseReadGate({ ledger, pacingMs: caps.wisePacingMs, deadline: ctx.deadline, stopFiles: ctx.stopFiles });
-      print(await stepCollect(ctx, {
-        sessionIds: sessionIdsOption(),
-        collect: {
-          sources: dbEvidenceSources(db),
-          wise: createNightlyWiseReader(),
-          gate,
-          soniox: sonioxKey ? readOnlySoniox(createSonioxClient(sonioxKey)) : null,
-          fetchText,
-          retranscribe: flag("retranscribe") && sonioxKey ? {
-            client: createSonioxClient(sonioxKey),
-            ledger,
-            inFlight,
-            shouldStop: () => (stopFilePresent(ctx.stopFiles) ? "stop_file" : ctx.deadline && Date.now() >= ctx.deadline.getTime() ? "deadline" : null),
-          } : null,
-        },
-        priorFeedback: (target) => {
-          const tutor = rosterTutor(target.wiseTeacherUserId);
-          if (!tutor) return Promise.resolve([]);
-          if (!priorByTutor.has(tutor.canonicalKey)) priorByTutor.set(tutor.canonicalKey, loadTutorPriorFeedback(db, tutor, now));
-          return priorByTutor.get(tutor.canonicalKey)!;
-        },
-        otherStudentNames: (target) => loadOtherStudentNames(db, { tutorKey: target.tutorKey, excludeClassId: target.wiseClassId || null, now }),
-      }));
-      return;
-    }
+    if (command === "preflight") print(preflight(session));
+    else if (command === "select") print(await stepSelect(ctx, { db: session.db, ledger: session.ledger, sessionIds: sessionIdsOption(), force: flag("force") }));
+    else if (command === "collect") print(await collect(session));
+    else if (command === "audit") print(await audit(session));
+    else if (command === "report") print(await report(session, { synthesis: !flag("no-synthesis") }));
+    else if (command === "flag") print(await stepFlag(ctx, { db: flag("apply") ? session.db : null, apply: flag("apply") }));
+    else if (command === "run") print(await runAll(session));
+    else if (command === "prune") print(stepPrune(ctx, { dryRun: flag("dry-run") }));
   } finally {
-    releaseOnSignal = false;
+    handled = true;
     lock.release();
   }
 }

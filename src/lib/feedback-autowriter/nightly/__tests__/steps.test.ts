@@ -13,8 +13,12 @@ import {
   readRunState,
   readTargets,
   recordStep,
+  runNight,
   stepCollect,
+  stepCosts,
+  stepFlag,
   stepPreflight,
+  stepReport,
   stepSelect,
   type NightContext,
   type PreflightFacts,
@@ -194,5 +198,90 @@ describe("stepCollect", () => {
     writeTargets(ctx);
     fs.writeFileSync(path.join(dir, "STOP"), "");
     expect(await stepCollect(ctx, deps(ctx).deps)).toMatchObject({ ok: false, stop: "stop_file", exitCode: 7 });
+  });
+});
+
+describe("stepReport, stepFlag, stepCosts and runNight", () => {
+  function collectedNight(ctx: NightContext) {
+    const target = nightlyTarget({ fieldsSha256: "abcdef0123456789" });
+    const file = { night: ctx.night, auditVersion: 1, selectedAt: "", chosen: [target], skipped: [] };
+    fs.mkdirSync(ctx.paths.bundlesDir, { recursive: true });
+    fs.writeFileSync(ctx.paths.targetsJson, JSON.stringify(file));
+    fs.writeFileSync(path.join(ctx.paths.bundlesDir, `${SID}.json`), JSON.stringify({
+      target,
+      bundle: { wiseSessionId: SID, night: ctx.night, grade: "rebuilt", hash: "bundle-hash-0001", classDetails: [], tutorNames: [], studentFullName: STUDENT,
+        studentDisplayName: "Pim", studentAliases: [], postedFields: PIM_FIELDS, wiseCurrentFields: PIM_FIELDS, wiseTextMatchesPost: true, transcript: null,
+        wiseSummary: "Overview: fractions.", zoomCaptions: null, postedEvidenceKind: "transcript", scheduledMinutes: 60, storedJudge: null, pipeline: null },
+      prechecks: [{ code: "billing_drift", severity: "critical", candidate: false, detail: "Wise shows 2 credits", mode: "M13" }],
+      notes: [], status: {}, collectedAt: "",
+    }));
+  }
+
+  it("writes the partial report without an audit, never with names in the summary", async () => {
+    const ctx = context({ deadline: null });
+    collectedNight(ctx);
+    const ledger = NightlyLedger.open(ctx.paths.root, ctx.night, ctx.caps);
+    const run = vi.fn();
+    const result = await stepReport(ctx, { db: null, ledger, run, cliVersion: "2.1.287" });
+    expect(result).toMatchObject({ ok: true, summary: { classes: 1, severities: { critical: 1 }, synthesis: { ran: false } } });
+    // No audit with a result: no synthesis call.
+    expect(run).not.toHaveBeenCalled();
+    expect(fs.readFileSync(ctx.paths.reportMd, "utf8")).toContain("billing_drift");
+    const summary = fs.readFileSync(ctx.paths.summaryMd, "utf8");
+    expect(summary).toContain("M13×1");
+    expect(summary).not.toMatch(/Pim|Testwong|fractions/u);
+    expect(readRunState(ctx).steps.report?.status).toBe("done");
+  });
+
+  it("plans flags as a dry run unless applied", async () => {
+    const ctx = context();
+    collectedNight(ctx);
+    const result = await stepFlag(ctx, { db: null, apply: false });
+    expect(result.summary).toMatchObject({ dryRun: true, planned: [{ wiseSessionId: SID, severity: "critical", modes: ["M13"], incident: true }] });
+    expect(readRunState(ctx).steps.flag).toBeUndefined();
+    const { db, queries } = fakeDb(() => []);
+    await expect(stepFlag(ctx, { db, apply: false })).resolves.toMatchObject({ summary: { dryRun: true } });
+    expect(queries).toHaveLength(0);
+  });
+
+  it("sums the last nights' costs from the latest line per night", () => {
+    const ctx = context();
+    fs.mkdirSync(ctx.paths.root, { recursive: true });
+    fs.writeFileSync(ctx.paths.costsJsonl, [
+      JSON.stringify({ night: "2026-10-01", claudeUsd: 5, claudeCalls: 10, opusProven: 10, sonioxUsd: 1, openrouterUsd: 0, wiseReads: 20 }),
+      JSON.stringify({ night: "2026-10-02", claudeUsd: 3, claudeCalls: 6, opusProven: 6, sonioxUsd: 0, openrouterUsd: 0, wiseReads: 10 }),
+      JSON.stringify({ night: "2026-10-02", claudeUsd: 4, claudeCalls: 8, opusProven: 8, sonioxUsd: 0.5, openrouterUsd: 0, wiseReads: 12 }),
+      JSON.stringify({ night: "2026-09-01", claudeUsd: 99, claudeCalls: 1, opusProven: 1, sonioxUsd: 0, openrouterUsd: 0, wiseReads: 0 }),
+    ].join("\n"));
+    expect(stepCosts(ctx, 7).summary).toMatchObject({ totals: { claudeUsd: 9, claudeCalls: 18, sonioxUsd: 1.5, wiseReads: 32 } });
+  });
+
+  it("runs the night from the first unfinished step and ends a stopped step with a partial report", async () => {
+    const ctx = context();
+    recordStep(ctx, "preflight", { status: "done", stop: null, summary: {} });
+    const ok = (step: string) => async () => ({ ok: true, stop: null, next: null, summary: { step }, exitCode: 0 as const });
+    const calls: string[] = [];
+    const partialReport = vi.fn(async () => ({ ok: true, stop: null, next: null, summary: { step: "report" }, exitCode: 0 as const }));
+    const result = await runNight(ctx, {
+      order: ["preflight", "select", "collect", "audit", "report"],
+      steps: {
+        preflight: () => { calls.push("preflight"); return ok("preflight")(); },
+        select: () => { calls.push("select"); return ok("select")(); },
+        collect: async () => { calls.push("collect"); return { ok: false, stop: "wise_429", next: "collect", summary: {}, exitCode: 5 as const }; },
+        audit: () => { calls.push("audit"); return ok("audit")(); },
+      },
+      partialReport,
+    });
+    expect(calls).toEqual(["select", "collect"]);
+    expect(partialReport).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ ok: false, stop: "wise_429", exitCode: 5, summary: { steps: { preflight: "done earlier" } } });
+
+    const stopped = await runNight(ctx, {
+      order: ["select"],
+      steps: { select: async () => ({ ok: false, stop: "stop_file", next: "select", summary: {}, exitCode: 7 as const }) },
+      partialReport,
+    });
+    expect(stopped.stop).toBe("stop_file");
+    expect(partialReport).toHaveBeenCalledTimes(1);
   });
 });

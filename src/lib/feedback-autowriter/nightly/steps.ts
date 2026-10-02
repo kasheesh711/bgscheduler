@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Database } from "@/lib/db";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
-import { auditBundles } from "./audit";
+import { auditBundles, cachedAudit } from "./audit";
 import { AUDIT_VERSION } from "./audit-schema";
 import { activeWiseCooldown, stopFilePresent, type NightlyCaps } from "./caps";
 import {
@@ -15,10 +15,25 @@ import {
 import type { ClaudeCall, ClaudeOutcome } from "./claude-runner";
 import { EXIT, NightlyStop, type ExitCode } from "./exit";
 import type { NightlyLedger } from "./ledger";
-import { readJsonFile, writeJsonAtomic, type NightlyPaths } from "./paths";
+import { applyAgentFlags, planAgentFlags } from "./flags";
+import { appendJsonl, readJsonFile, readJsonl, writeJsonAtomic, writeTextAtomic, type NightlyPaths } from "./paths";
 import { runPrechecks } from "./prechecks";
+import {
+  classReportLine,
+  groupByMode,
+  loadWatchdog,
+  mergeClassReport,
+  modeHistory,
+  renderReportMarkdown,
+  renderSummaryMarkdown,
+  type ClassReport,
+  type NightCosts,
+  type WatchdogResult,
+} from "./report";
+import { pruneNightly } from "./retention";
 import { auditedKeys, auditKey, chooseTargets, loadNightlyTargets, type TargetChoice } from "./select";
-import type { EvidenceBundle, NightlyTarget, PrecheckFinding } from "./types";
+import { fixBriefFile, renderPlanMarkdown, synthesizeNight } from "./synthesis";
+import type { AuditRecord, EvidenceBundle, NightlyTarget, PrecheckFinding } from "./types";
 
 /**
  * The nightly run as a resumable state machine: every step checkpoints into `<night>/run.json` and prints one JSON
@@ -402,4 +417,250 @@ export async function stepAudit(ctx: NightContext, deps: {
   }
   const state = recordStep(ctx, "audit", { status: "done", stop: null, summary });
   return result({ summary, next: nextStep(state, "audit") });
+}
+
+// ---------------------------------------------------------------------------
+// report
+// ---------------------------------------------------------------------------
+
+interface AuditLedgerLine {
+  type?: string;
+  key?: string;
+  verdict?: string | null;
+  failure?: string | null;
+  at?: string;
+  bundleHash?: string;
+  grade?: string;
+  costUsd?: number | null;
+}
+
+/** Each collected class with its audit: the cached success, else its last recorded failure, else none. */
+export function nightAuditRecords(ctx: Pick<NightContext, "paths">, files: readonly BundleFile[]): Array<{ file: BundleFile; record: AuditRecord | null }> {
+  const failures = new Map<string, AuditLedgerLine>();
+  for (const line of readJsonl<AuditLedgerLine>(ctx.paths.ledgerJsonl)) {
+    if (line.type === "audit" && line.key && line.verdict === null && line.failure) failures.set(line.key, line);
+  }
+  return files.map((file) => {
+    const cached = cachedAudit(ctx.paths.auditsDir, file);
+    if (cached) return { file, record: cached };
+    const failed = failures.get(bundleAuditKey(file));
+    return {
+      file,
+      record: failed ? {
+        wiseSessionId: file.target.wiseSessionId, fieldsSha256: file.target.fieldsSha256, auditVersion: AUDIT_VERSION, promptVersion: 0,
+        bundleHash: file.bundle.hash, grade: file.bundle.grade, result: null, failure: failed.failure ?? "failed", proof: null, at: failed.at ?? "",
+      } : null,
+    };
+  });
+}
+
+/** The night's merged class reports (prechecks + audits). */
+export function nightReports(ctx: Pick<NightContext, "paths">): { files: BundleFile[]; records: AuditRecord[]; reports: ClassReport[] } {
+  const files = readNightBundles(ctx.paths, readTargets(ctx.paths));
+  const pairs = nightAuditRecords(ctx, files);
+  return {
+    files,
+    records: pairs.flatMap((pair) => (pair.record ? [pair.record] : [])),
+    reports: pairs.map((pair) => mergeClassReport(pair.file, pair.record)),
+  };
+}
+
+interface CallLogLine {
+  outcome?: string;
+  models?: string[];
+}
+
+/** Tonight's spend and proof from the ledgers. */
+export function nightCosts(ctx: Pick<NightContext, "paths">, ledger: Pick<NightlyLedger, "totals">): NightCosts {
+  const totals = ledger.totals();
+  const calls = readJsonl<CallLogLine>(ctx.paths.claudeCallsJsonl);
+  const claudeKinds = ["opus_audit", "opus_reaudit", "opus_synthesis", "opus_fix"] as const;
+  return {
+    claudeUsd: Math.round(claudeKinds.reduce((sum, kind) => sum + totals[kind].usd, 0) * 10_000) / 10_000,
+    claudeCalls: calls.length,
+    opusProven: calls.filter((call) => call.outcome === "success" && (call.models ?? []).some((model) => model.startsWith("claude-opus-5-5"))).length,
+    sonioxUsd: Math.round(totals.soniox.usd * 10_000) / 10_000,
+    openrouterUsd: Math.round(totals.openrouter.usd * 10_000) / 10_000,
+    wiseReads: totals.wise_read.count,
+  };
+}
+
+/**
+ * Merge, group, watchdog, optionally the synthesis (Opus, one call), then `report.md`, `summary.md`, `plan.md`,
+ * `fix-brief.json`, the ledger's class lines and the night's cost line. Runs after a stopped audit too (a partial
+ * report); only a STOP file prevents it, and the synthesis is skipped once the deadline has passed.
+ */
+export async function stepReport(ctx: NightContext, deps: {
+  db: Database | null;
+  ledger: Pick<NightlyLedger, "reserve" | "settle" | "totals">;
+  run: ((call: ClaudeCall) => Promise<ClaudeOutcome>) | null;
+  cliVersion: string | null;
+}): Promise<StepResult> {
+  if (stopFilePresent(ctx.stopFiles)) return stoppedResult(ctx, "report", new NightlyStop("stop_file", EXIT.stopped));
+  const state = readRunState(ctx);
+  const { files, records, reports } = nightReports(ctx);
+  const at = ctx.now().toISOString();
+  for (const report of reports) appendJsonl(ctx.paths.ledgerJsonl, classReportLine(ctx.night, report, at, AUDIT_VERSION));
+  const modes = groupByMode(reports, modeHistory(ctx.paths.ledgerJsonl, ctx.night));
+  const notes: string[] = [];
+  let watchdog: WatchdogResult | null = null;
+  if (deps.db) {
+    try {
+      watchdog = await loadWatchdog(deps.db, { night: ctx.night });
+    } catch (error) {
+      notes.push(`watchdog failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 120)}`);
+    }
+  }
+  let synthesisLine: string | null = null;
+  let synthesis: Record<string, unknown> = { ran: false };
+  let stop: NightlyStop | null = null;
+  const pastDeadline = ctx.deadline !== null && ctx.now().getTime() >= ctx.deadline.getTime();
+  if (deps.run && !pastDeadline && records.some((record) => record.result)) {
+    const outcome = await synthesizeNight({ ledger: deps.ledger, run: deps.run, perSynthesisUsd: ctx.caps.perSynthesisUsd }, {
+      night: ctx.night, records, files, reports, modes,
+    });
+    if (outcome.ok) {
+      writeTextAtomic(ctx.paths.planMd, renderPlanMarkdown(ctx.night, outcome.result));
+      const brief = fixBriefFile(ctx.night, outcome.result);
+      if (brief) writeJsonAtomic(ctx.paths.fixBriefJson, brief);
+      synthesisLine = outcome.result.summaryLine;
+      synthesis = { ran: true, ok: true, fixPick: outcome.result.fixPick?.mode ?? null, brief: Boolean(brief), costUsd: outcome.costUsd };
+    } else {
+      synthesis = { ran: true, ok: false, reason: outcome.reason, costUsd: outcome.costUsd };
+      notes.push(`synthesis failed: ${outcome.reason}`);
+      stop = outcome.stop;
+    }
+  } else if (deps.run && pastDeadline) {
+    notes.push("synthesis skipped: past the deadline");
+  }
+  const costs = nightCosts(ctx, deps.ledger);
+  const input = {
+    night: ctx.night, generatedAt: at, code: state.code ?? null, cliVersion: deps.cliVersion ?? state.claudeCliVersion ?? null,
+    reports, modes, watchdog, costs, synthesisLine, notes,
+  };
+  writeTextAtomic(ctx.paths.reportMd, renderReportMarkdown(input));
+  writeTextAtomic(ctx.paths.summaryMd, renderSummaryMarkdown(input));
+  appendJsonl(ctx.paths.costsJsonl, { night: ctx.night, at, ...costs, watchdogDayUsd: watchdog?.dayTotalUsd ?? null });
+  const severities: Record<string, number> = {};
+  for (const report of reports) {
+    const key = report.severity ?? (report.auditVerdict ? report.auditVerdict === "insufficient_evidence" ? "insufficient_evidence" : "accurate" : "not_audited");
+    severities[key] = (severities[key] ?? 0) + 1;
+  }
+  const summary = {
+    step: "report",
+    night: ctx.night,
+    classes: reports.length,
+    severities,
+    modes: modes.map((group) => ({ mode: group.mode, classes: group.classes })),
+    watchdogOutliers: watchdog?.outliers.length ?? null,
+    watchdogDayOutlier: watchdog?.dayOutlier ?? null,
+    synthesis,
+    proof: `Opus5.5max ${costs.opusProven}/${costs.claudeCalls}`,
+    costs,
+    files: { report: ctx.paths.reportMd, summary: ctx.paths.summaryMd, plan: synthesis.ok ? ctx.paths.planMd : null },
+  };
+  if (stop) {
+    recordStep(ctx, "report", { status: "partial", stop: stop.reason, summary });
+    return result({ ok: false, stop: stop.reason, next: null, summary, exitCode: stop.exitCode });
+  }
+  const next = recordStep(ctx, "report", { status: "done", stop: null, summary });
+  return result({ summary, next: nextStep(next, "report") });
+}
+
+// ---------------------------------------------------------------------------
+// flag
+// ---------------------------------------------------------------------------
+
+/** Agent flags for the night's major/critical classes: a dry run unless `apply`. */
+export async function stepFlag(ctx: NightContext, deps: { db: Database | null; apply: boolean }): Promise<StepResult> {
+  const stop = stopBeforeStep(ctx);
+  if (stop) return stoppedResult(ctx, "flag", stop);
+  const { reports } = nightReports(ctx);
+  const plan = planAgentFlags(reports, { auditVersion: AUDIT_VERSION, maxFlags: ctx.caps.maxFlagsPerNight });
+  const items = plan.items.map((item) => ({ wiseSessionId: item.wiseSessionId, severity: item.severity, modes: item.modes, incident: item.incident }));
+  if (!deps.apply || !deps.db) {
+    const summary = { step: "flag", night: ctx.night, dryRun: true, planned: items, overCap: plan.overCap };
+    writeJsonAtomic(path.join(ctx.paths.nightDir, "flags.json"), { ...summary, at: ctx.now().toISOString() });
+    return result({ summary, next: "flag" });
+  }
+  const applied = await applyAgentFlags(deps.db, plan.items);
+  const summary = { step: "flag", night: ctx.night, dryRun: false, planned: items, overCap: plan.overCap, ...applied };
+  writeJsonAtomic(path.join(ctx.paths.nightDir, "flags.json"), { ...summary, at: ctx.now().toISOString() });
+  const state = recordStep(ctx, "flag", { status: "done", stop: null, summary });
+  return result({ summary, next: nextStep(state, "flag") });
+}
+
+// ---------------------------------------------------------------------------
+// prune and costs
+// ---------------------------------------------------------------------------
+
+export function stepPrune(ctx: NightContext, options: { dryRun?: boolean } = {}): StepResult {
+  const pruned = pruneNightly(ctx.paths.root, { now: ctx.now(), dryRun: options.dryRun, home: ctx.home });
+  return result({
+    summary: {
+      step: "prune", dryRun: Boolean(options.dryRun), cacheDirs: pruned.cacheDirs.length, auditDirs: pruned.auditDirs.length,
+      nightFiles: pruned.nightFiles.length,
+    },
+  });
+}
+
+interface CostLine extends Partial<NightCosts> {
+  night?: string;
+  at?: string;
+}
+
+/** The last `days` nights' costs (the latest line per night) and their totals. */
+export function stepCosts(ctx: NightContext, days: number): StepResult {
+  const latest = new Map<string, CostLine>();
+  for (const line of readJsonl<CostLine>(ctx.paths.costsJsonl)) if (line.night) latest.set(line.night, line);
+  const nights = [...latest.values()].filter((line) => line.night! > addDaysIso(ctx.night, -days)).sort((a, b) => a.night!.localeCompare(b.night!));
+  const sum = (key: keyof NightCosts) => Math.round(nights.reduce((total, line) => total + (Number(line[key]) || 0), 0) * 10_000) / 10_000;
+  return result({
+    summary: {
+      step: "costs",
+      days,
+      nights: nights.map((line) => ({ night: line.night, claudeUsd: line.claudeUsd, claudeCalls: line.claudeCalls, opusProven: line.opusProven, sonioxUsd: line.sonioxUsd, wiseReads: line.wiseReads })),
+      totals: { claudeUsd: sum("claudeUsd"), claudeCalls: sum("claudeCalls"), sonioxUsd: sum("sonioxUsd"), openrouterUsd: sum("openrouterUsd"), wiseReads: sum("wiseReads") },
+    },
+  });
+}
+
+function addDaysIso(night: string, days: number): string {
+  const date = new Date(`${night}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+// ---------------------------------------------------------------------------
+// run
+// ---------------------------------------------------------------------------
+
+/**
+ * The whole night, from the first unfinished step. A step that stops ends the run — never a retry loop — after a
+ * partial report when the stop came after selection (not for a STOP file: STOP means stop).
+ */
+export async function runNight(ctx: Pick<NightContext, "paths" | "night" | "now" | "log">, input: {
+  order: readonly StepName[];
+  steps: Partial<Record<StepName, () => Promise<StepResult> | StepResult>>;
+  partialReport: () => Promise<StepResult>;
+}): Promise<StepResult> {
+  const steps: Record<string, unknown> = {};
+  const brief = (step: StepResult) => ({ ok: step.ok, stop: step.stop, exitCode: step.exitCode, summary: step.summary });
+  for (const name of input.order) {
+    if (readRunState(ctx).steps[name]?.status === "done") {
+      steps[name] = "done earlier";
+      continue;
+    }
+    const handler = input.steps[name];
+    if (!handler) continue;
+    ctx.log?.(`run: ${name}`);
+    const outcome = await handler();
+    steps[name] = brief(outcome);
+    if (!outcome.ok) {
+      const reportable = !["preflight", "select", "report"].includes(name) && outcome.stop !== "stop_file";
+      if (reportable) steps.report = brief(await input.partialReport());
+      return { ok: false, stop: outcome.stop, next: outcome.next, exitCode: outcome.exitCode, summary: { step: "run", night: ctx.night, steps } };
+    }
+  }
+  return { ok: true, stop: null, next: null, exitCode: EXIT.ok, summary: { step: "run", night: ctx.night, steps } };
 }
