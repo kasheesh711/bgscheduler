@@ -90,24 +90,27 @@ describe("loadNightlyTargets (Postgres, SELECT only)", () => {
     await db.insert(FX).values({
       wiseEventId: "event-2", wiseSessionId: id(2), eventAt: new Date("2026-10-02T11:00:00Z"), actorKind: "autowriter_first", countsAsFix: false, classifierVersion: 1,
     });
-    // Outside the night (23:30 Bangkok on the 1st, 00:30 on the 3rd), not verified, posted by a script, no post row.
+    // Outside the night (23:30 Bangkok on the 1st, 00:30 on the 3rd), not verified, or no text: never.
     await session(3, { scheduledEndAt: new Date("2026-10-01T16:30:00Z") });
     await firstShot(3);
     await session(4, { scheduledEndAt: new Date("2026-10-02T17:30:00Z") });
     await firstShot(4);
     await session(5, { state: "held", metadata: { className: "Tawanchai Example" } });
-    await session(6);
+    await session(8, { fields: null, fieldsSha256: null });
+    // Verified, but no autowriter first-shot row yet (not snapshotted, or only another actor's): audited all the same.
+    await session(6, { scheduledEndAt: new Date("2026-10-02T08:00:00Z"), postStartedAt: new Date("2026-10-02T08:30:00Z") });
     await firstShot(6, { actorKind: "script", actor: "script:test" });
-    await session(7);
+    await session(7, { scheduledEndAt: new Date("2026-10-02T07:00:00Z") });
 
     const targets = await loadNightlyTargets(db, { night: "2026-10-02" });
-    expect(targets.map((target) => target.wiseSessionId)).toEqual([id(1), id(2)]);
+    expect(targets.map((target) => target.wiseSessionId)).toEqual([id(1), id(6), id(7), id(2)]);
+    expect(targets.filter((target) => target.firstShotPostId === null).map((target) => target.wiseSessionId)).toEqual([id(6), id(7)]);
     expect(targets[0]).toMatchObject({
       wiseClassId: classId(1), tutorKey: "Kevin", evidence: "transcript", fieldsSha256: SHA, sonioxTranscriptionId: "job-a",
       firstShotPostId: postA, currentVerdictId: verdict.id, verdict: "approve", ownerFlagOpen: true, humanSavedSincePost: true,
       guided: false, studentDisplayName: "Pim", scheduledEndAt: "2026-10-02T09:00:00.000Z",
     });
-    expect(targets[1]).toMatchObject({ evidence: "summary", verdict: null, ownerFlagOpen: false, humanSavedSincePost: false, guided: true, studentDisplayName: "Nok" });
+    expect(targets[3]).toMatchObject({ evidence: "summary", verdict: null, ownerFlagOpen: false, humanSavedSincePost: false, guided: true, studentDisplayName: "Nok" });
     expect((await loadNightlyTargets(db, { night: "2026-10-02", sessionIds: [id(2)] })).map((target) => target.wiseSessionId)).toEqual([id(2)]);
     expect(await loadNightlyTargets(db, { night: "2026-09-20" })).toEqual([]);
   });

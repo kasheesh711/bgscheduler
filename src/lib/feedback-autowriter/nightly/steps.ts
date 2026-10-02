@@ -223,6 +223,8 @@ export async function stepSelect(ctx: NightContext, deps: {
     skipped: Object.fromEntries(["already_audited", "failed_twice", "over_cap"].map((reason) => [reason, choice.skipped.filter((item) => item.reason === reason).length])),
     byEvidence: { transcript: choice.chosen.filter((t) => t.evidence === "transcript").length, summary: choice.chosen.filter((t) => t.evidence === "summary").length },
     approvedByOwner: choice.chosen.filter((t) => t.verdict === "approve").length,
+    // Audited all the same; only a later correction needs the first-shot row.
+    noFirstShotRow: choice.chosen.filter((t) => t.firstShotPostId === null).length,
   };
   const next = recordStep(ctx, "select", { status: "done", stop: null, summary });
   return result({ summary, next: nextStep(next, "select") });

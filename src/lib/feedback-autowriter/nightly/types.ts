@@ -25,7 +25,8 @@ export interface NightlyTarget {
   fieldsSha256: string;
   billing: Record<string, unknown> | null;
   sonioxTranscriptionId: string | null;
-  firstShotPostId: string;
+  /** The autowriter's first-shot post row; null while the hourly review job has not recorded (or could not prove) it. */
+  firstShotPostId: string | null;
   currentVerdictId: string | null;
   verdict: "approve" | "needs_fix" | null;
   ownerFlagOpen: boolean;

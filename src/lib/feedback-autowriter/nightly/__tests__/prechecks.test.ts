@@ -71,10 +71,11 @@ describe("runPrechecks", () => {
   });
 
   it("adds the class's context as info", () => {
-    const findings = run({ target: { guided: true, humanSavedSincePost: true, ownerFlagOpen: true, verdict: "approve" } });
+    const findings = run({ target: { guided: true, humanSavedSincePost: true, ownerFlagOpen: true, verdict: "approve", firstShotPostId: null } });
     expect(findings.map((finding) => finding.code)).toEqual(expect.arrayContaining([
-      "guided_post", "human_save_since_post", "owner_flag_open", "owner_verdict_approve",
+      "guided_post", "human_save_since_post", "owner_flag_open", "owner_verdict_approve", "no_first_shot_row",
     ]));
+    expect(findings.find((finding) => finding.code === "no_first_shot_row")?.severity).toBe("info");
     expect(run({ bundle: { studentFullName: null, studentDisplayName: null }, target: { studentFullName: null } }).map((f) => f.code)).toContain("student_unknown");
   });
 });

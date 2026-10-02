@@ -39,6 +39,7 @@ function row(patch: Partial<TargetRow> = {}): TargetRow {
     billing: { sessionStatus: "COMPLETED", creditsConsumed: 1 },
     sonioxTranscriptionId: "job-1",
     metadata: { className: "Somsri (Pim.Ta) Testwong", transcript: { speakerMethod: "zoom_alignment" } },
+    sessionPostStartedAt: new Date("2026-10-02T09:40:00Z"),
     firstShotPostId: "post-1",
     firstShotPipeline: { evidence: "transcript", promptVersion: 5, styleGuide: null },
     firstShotStartedAt: new Date("2026-10-02T09:40:00Z"),
@@ -106,6 +107,19 @@ describe("targetFromRow", () => {
     });
   });
 
+  it("keeps a verified post whose first shot is not recorded yet, timing person saves from the row's own POST", () => {
+    const target = targetFromRow(row({
+      firstShotPostId: null, firstShotPipeline: null, firstShotStartedAt: null, firstShotRecordedAt: null,
+      metadata: { className: "Somsri (Pim.Ta) Testwong", pipeline: { evidence: "transcript", lessonEvidenceHash: "h" } },
+    }), { verdicts: [], ownerFlagOpen: false, humanSaves: [new Date("2026-10-02T09:39:00Z"), new Date("2026-10-02T09:50:00Z")] });
+    expect(target).toMatchObject({ firstShotPostId: null, guided: true, pipeline: { lessonEvidenceHash: "h" }, humanSavedSincePost: true });
+    const early = targetFromRow(row({ firstShotPostId: null, firstShotStartedAt: null, firstShotRecordedAt: null, sessionPostStartedAt: null }), {
+      verdicts: [], ownerFlagOpen: false, humanSaves: [new Date("2026-10-02T08:00:00Z")],
+    });
+    // Without any POST time, only saves after the class ended count.
+    expect(early?.humanSavedSincePost).toBe(false);
+  });
+
   it("skips a row whose text is not four readable fields", () => {
     expect(targetFromRow(row({ fields: { topics: "x" } }), NO_FACTS)).toBeNull();
     expect(targetFromRow(row({ scheduledEndAt: null }), NO_FACTS)).toBeNull();
@@ -122,15 +136,15 @@ describe("targetFromRow", () => {
 describe("loadNightlyTargets", () => {
   const MAIN_ORDER = [
     "wiseSessionId", "wiseClassId", "postWiseClassId", "wiseTeacherUserId", "scheduledEndAt", "deadlineAt", "evidence", "arm",
-    "fields", "fieldsSha256", "billing", "sonioxTranscriptionId", "metadata", "firstShotPostId", "firstShotPipeline",
+    "fields", "fieldsSha256", "billing", "sonioxTranscriptionId", "metadata", "sessionPostStartedAt", "firstShotPostId", "firstShotPipeline",
     "firstShotStartedAt", "firstShotRecordedAt", "reviewTutorKey", "currentVerdictId", "mirrorClassName",
   ];
 
-  it("reads only (SELECTs), bounds the Bangkok day and joins the first-shot post by the autowriter", async () => {
+  it("reads only (SELECTs), bounds the Bangkok day and LEFT-joins the first-shot post by the autowriter", async () => {
     const { db, queries } = fakeDb((query) => {
       if (query.sql.includes("from \"feedback_autowriter_sessions\"")) {
         return asRows(MAIN_ORDER, [{
-          ...row(), scheduledEndAt: "2026-10-02 09:00:00+00", deadlineAt: "2026-10-04 16:59:00+00",
+          ...row(), scheduledEndAt: "2026-10-02 09:00:00+00", deadlineAt: "2026-10-04 16:59:00+00", sessionPostStartedAt: "2026-10-02 09:40:00+00",
           firstShotStartedAt: "2026-10-02 09:40:00+00", firstShotRecordedAt: "2026-10-02 10:27:00+00",
         }]);
       }
@@ -144,7 +158,7 @@ describe("loadNightlyTargets", () => {
     expect(targets[0]).toMatchObject({ wiseSessionId: SID, verdict: "approve", humanSavedSincePost: true, studentDisplayName: "Pim" });
     expect(queries.every((query) => /^\s*select\b/iu.test(query.sql))).toBe(true);
     const main = queries[0];
-    expect(main.sql).toMatch(/inner join "feedback_autowriter_posts"/u);
+    expect(main.sql).toMatch(/left join "feedback_autowriter_posts"/u);
     expect(main.sql).toMatch(/"feedback_autowriter_posts"\."kind" = \$\d+/u);
     expect(main.sql).toMatch(/"feedback_autowriter_posts"\."actor_kind" = \$\d+/u);
     expect(main.params).toEqual(expect.arrayContaining(["first_shot", "autowriter", "verified"]));

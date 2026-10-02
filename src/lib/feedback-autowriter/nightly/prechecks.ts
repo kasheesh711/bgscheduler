@@ -117,6 +117,9 @@ export function runPrechecks(input: {
   }
 
   if (target.guided) findings.push(finding("guided_post", "info", "Written with a style/format guide or Atom evidence", null));
+  if (target.firstShotPostId === null) {
+    findings.push(finding("no_first_shot_row", "info", "No first-shot post row recorded yet: audited, but a correction would be refused", null));
+  }
   if (target.humanSavedSincePost) findings.push(finding("human_save_since_post", "info", "A person (or an unmatched API save) saved this class's feedback after our post", null));
   if (target.ownerFlagOpen) findings.push(finding("owner_flag_open", "info", "The owner has an open flag on this class", null));
   if (target.verdict) findings.push(finding(`owner_verdict_${target.verdict}`, "info", `The owner's current verdict: ${target.verdict}`, null));

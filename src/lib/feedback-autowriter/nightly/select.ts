@@ -10,9 +10,10 @@ import { readJsonl } from "./paths";
 import type { NightlyTarget } from "./types";
 
 /**
- * Which posted classes a night audits (SELECT only): the autowriter's own verified posts of classes that ended on the
- * Bangkok date `night`, each with its first-shot post row — never tutor-written feedback. A class is audited once per
- * posted text and audit version (`auditKey`); a key that failed twice is not tried again until the version changes.
+ * Which posted classes a night audits (SELECT only): every verified autowriter post of a class that ended on the
+ * Bangkok date `night` — never tutor-written feedback — with its first-shot post row when the hourly review job has
+ * recorded one (only a later correction needs it). A class is audited once per posted text and audit version
+ * (`auditKey`); a key that failed twice is not tried again until the version changes.
  */
 
 const S = schema.feedbackAutowriterSessions;
@@ -73,10 +74,12 @@ export interface TargetRow {
   billing: Record<string, unknown> | null;
   sonioxTranscriptionId: string | null;
   metadata: Record<string, unknown>;
-  firstShotPostId: string;
+  /** The session row's own POST claim time (also when no first-shot row exists yet). */
+  sessionPostStartedAt: Date | null;
+  firstShotPostId: string | null;
   firstShotPipeline: Record<string, unknown> | null;
   firstShotStartedAt: Date | null;
-  firstShotRecordedAt: Date;
+  firstShotRecordedAt: Date | null;
   reviewTutorKey: string | null;
   currentVerdictId: string | null;
   mirrorClassName: string | null;
@@ -102,7 +105,9 @@ export function targetFromRow(row: TargetRow, facts: TargetFacts): NightlyTarget
   const stampEvidence = pipeline?.evidence;
   const current = row.currentVerdictId ? facts.verdicts.find((verdict) => verdict.id === row.currentVerdictId) ?? null : null;
   const verdict = current ?? facts.verdicts[0] ?? null;
-  const postedAt = (row.firstShotStartedAt ?? row.firstShotRecordedAt).getTime();
+  // When our text went in: the first shot's POST, else the row's own claim, else the class end (a save before it is
+  // not "since our post").
+  const postedAt = (row.firstShotStartedAt ?? row.sessionPostStartedAt ?? row.firstShotRecordedAt ?? new Date(scheduledEndAt)).getTime();
   const className = row.mirrorClassName?.trim() || (typeof row.metadata.className === "string" ? row.metadata.className.trim() : "") || null;
   return {
     wiseSessionId: row.wiseSessionId,
@@ -158,6 +163,7 @@ export async function loadNightlyTargets(db: Database, input: { night: string; s
     billing: S.billing,
     sonioxTranscriptionId: S.sonioxTranscriptionId,
     metadata: S.metadata,
+    sessionPostStartedAt: S.postStartedAt,
     firstShotPostId: P.id,
     firstShotPipeline: P.pipeline,
     firstShotStartedAt: P.postStartedAt,
@@ -166,7 +172,8 @@ export async function loadNightlyTargets(db: Database, input: { night: string; s
     currentVerdictId: R.currentVerdictId,
     mirrorClassName: PC.className,
   }).from(S)
-    .innerJoin(P, and(eq(P.wiseSessionId, S.wiseSessionId), eq(P.kind, "first_shot"), eq(P.actorKind, "autowriter")))
+    // LEFT: a verified post whose first shot the review job has not recorded yet is audited all the same.
+    .leftJoin(P, and(eq(P.wiseSessionId, S.wiseSessionId), eq(P.kind, "first_shot"), eq(P.actorKind, "autowriter")))
     .leftJoin(R, eq(R.wiseSessionId, S.wiseSessionId))
     .leftJoin(PC, eq(PC.wiseSessionId, S.wiseSessionId))
     .where(and(...conditions))
