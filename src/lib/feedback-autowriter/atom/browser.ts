@@ -4,12 +4,17 @@ import { z } from "zod";
 import { chromium as playwrightChromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { serverlessChromiumArgs } from "@/lib/onsite-foot-traffic/pdf";
 import { AtomCollectionError, ATOM_SUBJECT_IDS, normalizeAtomTranscript, parseActivityIndex } from "./normalize";
+import { withAtomTimeout } from "./deadline";
 import type { AtomActivity } from "./types";
 
 const APP = "https://app.atomlearning.com";
 const API = "https://api.atomlearning.com";
 const Student = z.object({ id_full_student: z.string().regex(/^_[0-9]+$/u), studentName: z.string(), surname: z.string().nullable().optional() });
 export interface AtomCatalogStudent { id: string; name: string }
+/** Browser shutdown can hang on serverless Chromium; it never holds a run open longer than this. */
+const CLOSE_TIMEOUT_MS = 5_000;
+const closeQuietly = (close: (() => Promise<void>) | undefined, stage: string) =>
+  close ? withAtomTimeout(close(), CLOSE_TIMEOUT_MS, stage).catch(() => undefined) : Promise.resolve();
 export interface AtomReadClient {
   catalog: AtomCatalogStudent[];
   collect(studentId: string, dates: string[]): Promise<AtomActivity[]>;
@@ -30,7 +35,9 @@ export async function openAtomReadClient(input: {
     if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
       const { default: chromium } = await import("@sparticuz/chromium");
       chromium.setGraphicsMode = false;
-      executablePath = await chromium.executablePath();
+      stage = "chromium_extract";
+      executablePath = await withAtomTimeout(chromium.executablePath(), 60_000, "chromium_extract");
+      stage = "launch";
       args = serverlessChromiumArgs(chromium.args);
     } else {
       const path = [process.env.CHROME_EXECUTABLE_PATH, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/usr/bin/chromium", "/usr/bin/google-chrome"]
@@ -79,7 +86,8 @@ export async function openAtomReadClient(input: {
     if (!Number.isSafeInteger(expected) || expected < 1 || expected > 5000) throw new AtomCollectionError("response_changed");
     const readyBy = Math.min(input.deadlineMs - 10_000, Date.now() + 45_000);
     while (catalog.size < expected && Date.now() < readyBy) {
-      await Promise.allSettled([...responseJobs]);
+      // A response body that never completes must not hold the run past its deadline.
+      await withAtomTimeout(Promise.allSettled([...responseJobs]), readyBy - Date.now(), "catalog_responses").catch(() => undefined);
       await new Promise(resolve => setTimeout(resolve, 200));
     }
     // Atom uses its HttpOnly atom-auth session cookie. BrowserContext.request shares that cookie jar.
@@ -123,11 +131,14 @@ export async function openAtomReadClient(input: {
         }
         return activities.sort((a, b) => a.id.localeCompare(b.id));
       },
-      close: async () => { await ownedContext.close(); await ownedBrowser.close(); },
+      close: async () => {
+        await closeQuietly(() => ownedContext.close(), "context_close");
+        await closeQuietly(() => ownedBrowser.close(), "browser_close");
+      },
     };
   } catch (error) {
-    await context?.close().catch(() => undefined);
-    await browser?.close().catch(() => undefined);
+    await closeQuietly(context ? () => context!.close() : undefined, "context_close");
+    await closeQuietly(browser ? () => browser!.close() : undefined, "browser_close");
     if (error instanceof AtomCollectionError) throw error;
     // Playwright errors can include typed values. Never propagate their text or stack.
     throw new AtomCollectionError("collection_failed", stage);

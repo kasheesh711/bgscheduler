@@ -16,6 +16,7 @@ import { AtomCollectionError } from "./normalize";
 import type { AtomLesson } from "./types";
 import { fetchAtomLessonTimetable, isCancelledWiseSession } from "./wise";
 import { configuredAtomTrial } from "./trial";
+import { withAtomTimeout } from "./deadline";
 
 const RUN = s.feedbackAtomSyncRuns;
 const PENDING = ["pending", "generating", "would_submit", "awaiting_recording", "transcribing"] as const;
@@ -85,11 +86,16 @@ export async function runAtomCollector(input: {
   let stage = "pending_query";
   let failureStage = null as string | null;
   let failureCause = null as string | null;
-  const fail = (code: string, cause: string) => { failure = code; failureStage = stage; failureCause = cause; };
+  // Set once the run deadline passes. Work still in flight after that must not write evidence or change the outcome.
+  let stopped = false;
+  const fail = (code: string, cause: string) => {
+    if (stopped) return;
+    failure = code; failureStage = stage; failureCause = cause;
+  };
   let snapshots = 0;
   let activityCount = 0;
   let catalog: AtomReadClient["catalog"] = [];
-  try {
+  const work = async () => {
     const pending = await db.select().from(s.feedbackAutowriterSessions).where(and(
       inArray(s.feedbackAutowriterSessions.state, [...PENDING]),
       sql`${s.feedbackAutowriterSessions.deadlineAt} > now()`,
@@ -136,15 +142,19 @@ export async function runAtomCollector(input: {
       targets.set(input.probe.studentId, wanted);
     }
     stage = "atom_open";
-    client = await input.openClient();
-    catalog = client.catalog;
+    const opened = await input.openClient();
+    if (stopped) { await opened.close().catch(() => undefined); return; }
+    client = opened;
+    catalog = opened.catalog;
     stage = "atom_collect";
     for (const [studentId, wanted] of targets) {
+      if (stopped) return;
       if (Date.now() > input.deadlineMs - 30_000) {
         studentResults[studentId] = "collection_failed"; fail("collection_failed", "time_budget"); continue;
       }
       try {
-        const activities = await client.collect(studentId, [...wanted]);
+        const activities = await opened.collect(studentId, [...wanted]);
+        if (stopped) return;
         await db.insert(s.feedbackAtomSnapshots).values({
           runId, atomStudentId: studentId, sourceHash: evidenceHash(activities), activities, collectedAt: new Date(),
         });
@@ -158,15 +168,21 @@ export async function runAtomCollector(input: {
         if (code === "authentication_failed") break;
       }
     }
+  };
+  try {
+    // Vercel kills the function at its maxDuration, before `finally` could record why. Stop first.
+    await withAtomTimeout(work(), input.deadlineMs - Date.now(), "run_deadline");
   } catch (error) {
     fail(error instanceof AtomCollectionError ? error.code : "collection_failed", atomFailureCause(error));
   } finally {
-    await client?.close().catch(() => undefined);
+    stopped = true;
+    // Record the outcome before closing the browser, whose shutdown can hang.
     await db.update(RUN).set({
       status: failure ? "failed" : "succeeded", finishedAt: new Date(), errorCode: failure,
       counts: { snapshots, activities: activityCount, catalog, studentResults, probe: Boolean(input.probe), trial: Boolean(input.trial),
         ...(failure ? { failureStage, failureCause } : {}) },
     }).where(eq(RUN.id, runId));
+    await withAtomTimeout((client as AtomReadClient | null)?.close() ?? Promise.resolve(), 10_000, "close").catch(() => undefined);
   }
   if (failure) {
     await recordIncident(db, {
