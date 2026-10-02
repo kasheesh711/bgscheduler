@@ -28,6 +28,7 @@ import {
   loadWatchdog,
   mergeClassReport,
   modeHistory,
+  proofLine,
   renderReportMarkdown,
   renderSummaryMarkdown,
   type ClassReport,
@@ -509,7 +510,7 @@ export async function stepAudit(ctx: NightContext, deps: {
     skippedReasons: Object.fromEntries([...new Set(stage.skipped.map((item) => item.reason))].map((reason) => [reason, stage.skipped.filter((item) => item.reason === reason).length])),
     verdicts,
     calls: stage.calls,
-    proof: `Opus5.5max ${stage.opusProven}/${stage.calls}`,
+    proof: proofLine({ opusProven: stage.opusProven, claudeCalls: stage.calls }),
     costUsd: Math.round(stage.costUsd * 10_000) / 10_000,
   };
   if (stage.stop) {
@@ -682,7 +683,7 @@ export async function stepReport(ctx: NightContext, deps: {
     watchdogOutliers: watchdog?.outliers.length ?? null,
     watchdogDayOutlier: watchdog?.dayOutlier ?? null,
     synthesis,
-    proof: `Opus5.5max ${costs.opusProven}/${costs.claudeCalls}`,
+    proof: proofLine(costs),
     costs,
     files: { report: ctx.paths.reportMd, summary: ctx.paths.summaryMd, plan: synthesis.ok ? ctx.paths.planMd : null },
   };

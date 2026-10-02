@@ -180,7 +180,7 @@ describe("rendering", () => {
 
   it("puts quotes and fixes in report.md (local)", () => {
     const text = renderReportMarkdown(input());
-    expect(text).toContain("Proof: Opus5.5max 1/1");
+    expect(text).toContain("Proof: Opus5.5 (effort max requested) 1/1");
     expect(text).toContain(`Posted: "${QUOTE}"`);
     expect(text).toContain("Minimal fix: delete_span");
     expect(text).toContain("Evidence (transcript 12:30 STUDENT): \"Twelve.\"");
@@ -204,7 +204,7 @@ describe("rendering", () => {
 
   it("keeps summary.md free of names and text", () => {
     const text = renderSummaryMarkdown(input());
-    expect(text).toContain("Proof: Opus5.5max 1/1");
+    expect(text).toContain("Proof: Opus5.5 (effort max requested) 1/1");
     expect(text).toContain("M06×1");
     for (const forbidden of ["hesitated", "Pim", "Testwong", "Kevin", PIM_FIELDS.topics.slice(0, 30)]) expect(text).not.toContain(forbidden);
   });

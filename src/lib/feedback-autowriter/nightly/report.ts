@@ -402,6 +402,14 @@ function auditCountsLine(reports: readonly ClassReport[]): string {
 
 const SEVERITY_ORDER: Record<string, number> = { critical: 0, major: 1, cosmetic: 2 };
 
+/**
+ * The proof line: calls whose usage shows claude-opus-5-5, out of all calls. `modelUsage` proves the model, not the
+ * effort: max effort was requested on every call (`--effort max`), which is all the CLI can attest.
+ */
+export function proofLine(counts: { opusProven: number; claudeCalls: number }): string {
+  return `Opus5.5 (effort max requested) ${counts.opusProven}/${counts.claudeCalls}`;
+}
+
 /** `report.md`: everything, quotes included (local, 0600, deleted after 7 days). */
 export function renderReportMarkdown(input: ReportInput): string {
   const sorted = [...input.reports].sort((a, b) =>
@@ -410,7 +418,7 @@ export function renderReportMarkdown(input: ReportInput): string {
     `# Nightly audit — ${input.night}`,
     "",
     `Generated ${input.generatedAt}; code \`${input.code?.head?.slice(0, 12) ?? "unknown"}\` (${input.code?.branch ?? "?"}); ${input.cliVersion ?? "claude CLI ?"}.`,
-    `Proof: Opus5.5max ${input.costs.opusProven}/${input.costs.claudeCalls} calls. Spend: Claude $${input.costs.claudeUsd.toFixed(2)} (API-equivalent, subscription), ` +
+    `Proof: ${proofLine(input.costs)} calls. Spend: Claude $${input.costs.claudeUsd.toFixed(2)} (API-equivalent, subscription), ` +
       `Soniox $${input.costs.sonioxUsd.toFixed(2)}, Wise reads ${input.costs.wiseReads}.`,
     "",
     "## Posts",
@@ -482,7 +490,7 @@ export function renderSummaryMarkdown(input: ReportInput): string {
     `- Major or critical: ${flagged.length}; already approved by the owner: ${flagged.filter((report) => report.ownerVerdict === "approve").length}; ` +
       `passed by the production judges: ${flagged.filter((report) => report.judgePassed === true).length}`,
     `- Modes: ${input.modes.map((group) => `${group.mode}×${group.classes}`).join(", ") || "none"}`,
-    `- Proof: Opus5.5max ${input.costs.opusProven}/${input.costs.claudeCalls}`,
+    `- Proof: ${proofLine(input.costs)}`,
     `- Spend: Claude $${input.costs.claudeUsd.toFixed(2)} API-eq, Soniox $${input.costs.sonioxUsd.toFixed(2)}, OpenRouter $${input.costs.openrouterUsd.toFixed(2)}, Wise reads ${input.costs.wiseReads}`,
     `- Watchdog (M16): ${input.watchdog ? `${input.watchdog.outliers.length} class(es) over the limits${input.watchdog.dayOutlier ? "; day above 3× median" : ""}` : "not run"}`,
     "",

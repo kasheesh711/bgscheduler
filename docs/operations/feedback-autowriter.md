@@ -491,7 +491,8 @@ USER LOGNAME SHELL LANG LC_ALL TMPDIR TERM` in its environment — so it runs on
 login, never an API key, and sees no database, Wise, OpenRouter or Soniox secret. An answer counts only when its
 `modelUsage` proves `claude-opus-5-5` wrote it (another model writing more than 500 tokens, or a fallback, fails
 closed); every call's argv, CLI version, usage and cost — never the prompt — is logged to `claude-calls.jsonl`, and the
-summary prints the proof as `Opus5.5max n/n`. One retry after 30 s for an unparseable answer or a CLI error only; a
+summary prints the proof as `Opus5.5 (effort max requested) n/n` (`modelUsage` proves the model; the effort is what
+every call requested). One retry after 30 s for an unparseable answer or a CLI error only; a
 usage limit, an auth failure or two failures in a row end the stage.
 
 **Kill switches.** Either STOP file stops every step at once: `~/.bgscheduler-nightly/STOP` or
