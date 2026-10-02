@@ -204,7 +204,7 @@ function CostAndSpeed({ dashboard }: { dashboard: AutowriterDashboard }) {
         </Stat>
         <Stat label="Model cost">{usd(cost.totalUsd)} <span className="font-normal text-muted-foreground">({usd(cost.perDraftUsd)} per draft)</span></Stat>
         <Stat label="Drafts judged unfaithful">{dashboard.judgeRejections}</Stat>
-        <Stat label="Written by the Luna fallback">{dashboard.fallbackShare === null ? "no drafts yet" : `${Math.round(dashboard.fallbackShare * 100)}%`}</Stat>
+        <Stat label="Written by the fallback writer">{dashboard.fallbackShare === null ? "no drafts yet" : `${Math.round(dashboard.fallbackShare * 100)}%`}</Stat>
       </dl>
       <div className="grid lg:grid-cols-2">
         <div className="border-b lg:border-r">

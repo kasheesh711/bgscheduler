@@ -1,6 +1,6 @@
 # Feedback Autowriter
 
-**Status:** live since 2026-09-29, constrained rollout (5 tutors, both of each tutor's Wise accounts). **Code:** [`src/lib/feedback-autowriter/`](../../src/lib/feedback-autowriter/).
+**Status:** live since 2026-09-29, constrained rollout (18 tutors since 2026-10-02, both of each tutor's Wise accounts). **Code:** [`src/lib/feedback-autowriter/`](../../src/lib/feedback-autowriter/).
 **Runbook:** [`operations/feedback-autowriter.md`](../operations/feedback-autowriter.md). **API:** [`reference/api/feedback-autowriter.md`](../reference/api/feedback-autowriter.md).
 **Dashboard:** `/feedback-autowriter` (nav: Scheduling & Tutors → Feedback Autowriter), described in
 [Dashboard](#dashboard-feedback-autowriter): a to-do list for the owner, the expansion gate and its trends, one row per
@@ -21,7 +21,7 @@ simply ingests what the autowriter posted like any other submission.
 
 | Rule | Where |
 |---|---|
-| Only the roster tutors (Kevin, Gift, Ek, Peat, Mimi — chosen by online-class volume to cover ≥20% of institution online classes), on both of their Wise accounts: the "… Online" one and their main one. Tutors teach online from either (all of Gift's online classes in September were on her main account); in-person classes on either are skipped by the session type below | [`roster.ts`](../../src/lib/feedback-autowriter/roster.ts) |
+| Only the roster tutors, on both of their Wise accounts: Kevin, Gift, Ek, Peat, Mimi (29 Sep, chosen by online-class volume to cover ≥20% of institution online classes), plus Ras, Celeste, Taki, Dome, Mandy, Grace, Mint, Fluke (Chettaporn, not Fluke-Supha), Calvin, Lukas, A (Anavat), Ohm and Mookie (2 Oct, owner decision, written by Luna first — see [Models](#models)). On both accounts: the "… Online" one and their main one. Tutors teach online from either (all of Gift's online classes in September were on her main account); in-person classes on either are skipped by the session type below | [`roster.ts`](../../src/lib/feedback-autowriter/roster.ts) |
 | Session `type=SCHEDULED`, `classType=ONE_TO_ONE`, exactly one student who attended ≥50%, meeting `ENDED`. The tutor joining their own class again is not a student: their other Wise account, or a Zoom guest (no Wise account) under one of their names (Peat, 29 Sep, joined twice more as "Kasidej Jungrakangthong" and "Peat"). Any other extra participant still counts, so the class is skipped — except a student who joined by Zoom link as a guest: when the Wise account attended under 50% and exactly one guest and the tutor both stayed ≥ 80% of the class, the guest is the student (owner rule, 29 Sep); the Wise account stays the one billed, credit-checked and named, the guest's name is redacted as the same `[STUDENT_1]` (device, family and place words like "Zoom", "iPad", "Mom" or "Office" are left alone), and the row records `studentJoinedAsGuest`. While attendance settles (60 min), an account plus a guest is retried, not skipped for good. The student whose credit is checked is stored with the POST claim and re-used by reconciliation. The one student must be a Wise user (`student_not_wise_user` otherwise: retried while attendance settles, then held). A title starting "In-Person Session" / "On-site Session" is out of scope even if Wise's type says online (`session_type_in_person_title`) | `evaluateSessionGates`, `studentParticipants` in [`session.ts`](../../src/lib/feedback-autowriter/session.ts) |
 | Before the post-class deadline (≥30 min margin) | same |
 | Only when the teacher submission is Wise's blank auto-submission (`metadata.autoSubmitted=true`, all answers empty); anything a person wrote is never touched | `classifyTeacherSubmission` |
@@ -44,7 +44,8 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
 3. **Fresh Wise read** (`GET /user/session/{id}` or the class-scoped detail, 45 s time-out per read) → gates →
    billing plan. If Wise now shows a different teacher, the row follows it (and a switched-off tutor's class is
    not posted); a `pending` row also follows the teacher the backstop's shortlist reports.
-4. **Write.** `openai/gpt-6.1-sol` (GPT-6.1 Sol) on a zero-data-retention route, reasoning `low` (see
+4. **Write.** `openai/gpt-6.1-sol` (GPT-6.1 Sol) on a zero-data-retention route, reasoning `low` — or, for the 13
+   tutors added on 2 Oct, `openai/gpt-6-luna` (reasoning `max`) first with Sol as their fallback (see
    [Models](#models)); names are redacted before anything leaves BGScheduler. The model writes `[STUDENT_1]`,
    which becomes the student's **nickname** — the
    part before the dot in the Wise name's brackets ("Somchai (Tom.Ja) Jaidee" → "Tom"), or the first name when
@@ -320,7 +321,10 @@ first is switched on. No prompt changed: writer and judge versions stay 5.
 ## Models
 
 Since 2026-09-30 (owner decision: "Switch the writer to Sol for everyone today"; migration 0100 adds the arm `sol`).
-All three go through OpenRouter with `zdr: true`, `data_collection: "deny"` and `require_parameters: true`, so neither
+Since 2026-10-02 the writer order is chosen per tutor (`writersFor` in `config.ts`, from the roster's `writer` field,
+keyed by canonical tutor key so both accounts match): the 13 tutors added that day are written by Luna first and Sol
+as their fallback (owner decision); everyone else Sol then Luna. The judges are the same for every tutor. The
+model check below applies to Sol whichever place it takes. All three go through OpenRouter with `zdr: true`, `data_collection: "deny"` and `require_parameters: true`, so neither
 a summary nor a transcript ever reaches a host that retains it ([`config.ts`](../../src/lib/feedback-autowriter/config.ts)).
 
 | Role | Model | Route | Reasoning | Route check |
@@ -328,6 +332,10 @@ a summary nor a transcript ever reaches a host that retains it ([`config.ts`](..
 | Writer (`sol`) | `openai/gpt-6.1-sol` | any zero-data-retention host (Azure today) | `low` | the answer must come from `openai/gpt-6.1-sol` |
 | Fallback writer (`luna`) | `openai/gpt-6-luna` | same | `max` | — |
 | Judge (`glm`) | `z-ai/glm-5.3-flash` | pinned to Together, no host fallback | `medium` and `high`, in parallel — both must pass (v5; one call at `high` in v4, at `medium` before) | host `Together` and that model |
+
+Why Luna for the 2 Oct tutors (owner decision, 2 Oct): DeepSeek V4.1 Flash was tried first for them; in a read-only
+replay of their recent online classes none of its 4 transcript drafts passed the GLM judges, while Luna's passed in 2
+of 3 classes. Every one of these tutors' posts is reviewed (new tutors are always reviewed at 100%).
 
 Why Sol: a blind comparison on 11 classes (the same Soniox transcripts for every writer, v4 rules) found 82% of
 Sol-low drafts needed no real fix (no critical errors, 0.9 real errors per 100 claims), against 64% for Luna and 30%
@@ -421,7 +429,7 @@ Switch: `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED=true` plus `SONIOX_API_KEY`; of
 
 Both errors reported on 29 Sep came from Wise's summary itself: redaction left another student's name as the only
 real name in it, and the summary mis-heard a Thai exchange as "three remaining homework problems". The transcript
-carries neither. Owner decision (30 Sep), for all five tutors: wait for the recording and write from its transcript;
+carries neither. Owner decision (30 Sep), for every roster tutor: wait for the recording and write from its transcript;
 use the summary only when the transcript cannot carry the class. Switch: `FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST=true`
 ([`config.ts`](../../src/lib/feedback-autowriter/config.ts)), exact string only, and it acts only while the second
 pass is on. Off (the default), nothing changes.
@@ -639,7 +647,7 @@ date (from 22:00 Bangkok, else for yesterday), but only from a run in which ever
 Wise activity mirror — checked before the run read it — synced within 30 minutes and reached known events (not its
 page cap); otherwise the date waits for a later run (it stays due until 21:59 the next day) and the run records why
 (`dailyGateSkipped`). Expansion grows the roster by half, rounded up (5 → 8 → 12 → 18), after the owner confirms
-— Phase 6.
+— Phase 6. On 2 Oct the owner went from 5 to 18 tutors in one step, before the gate passed (owner decision).
 
 **The review job** (`/api/internal/feedback-autowriter/review`, hourly at :27 UTC, after the :17 activity sync):
 push critical incidents already waiting → check the activity mirror → snapshot first shots → derive fix events →
@@ -751,7 +759,7 @@ Writer (Sol, reasoning `low`) ≈ $0.04 per draft (mean of the 30 Sep comparison
 cost ≈ $0.0008 per check at reasoning `medium` on a summary in the 2026-09-29 pilot; since v5 every draft is checked
 twice (`medium` and `high`), about $0.004 more per transcript draft than one `high` call. A Luna fallback draft cost
 ≈ $0.0012 in the pilot (summaries), when GLM also wrote for ≈ $0.0024. ~200 online classes/month across
-the five tutors → roughly $8–10/month, plus Soniox for the second pass (≈ $0.10 per audio hour). Transcript first
+the first five tutors → roughly $8–10/month (Luna-first drafts for the 13 tutors added on 2 Oct cost ≈ $0.01 each on transcripts in the 2 Oct replay), plus Soniox for the second pass (≈ $0.10 per audio hour). Transcript first
 sends every class to Soniox: about $0.10 per class-hour of recording, ~$22/month. Each call's tokens and billed cost
 are in `feedback_autowriter_calls`.
 

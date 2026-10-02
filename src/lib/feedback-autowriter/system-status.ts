@@ -7,6 +7,7 @@ import {
 } from "./config";
 import { JUDGE_PROMPT_VERSION } from "./judge";
 import { PROMPT_VERSION } from "./prompt";
+import { AUTOWRITER_TUTORS, rosterWriterArm } from "./roster";
 
 /**
  * What the autowriter is running with right now: the dashboard's system line. Built from `config.ts`, the prompt and
@@ -14,6 +15,8 @@ import { PROMPT_VERSION } from "./prompt";
  */
 export interface AutowriterSystemStatus {
   writer: { model: string; effort: string };
+  /** The first writer of the tutors whose roster entries name one (Luna since 2 Oct, Sol their fallback), and how many. */
+  tutorWriter: { model: string; effort: string; tutors: number } | null;
   fallbackWriter: { model: string; effort: string };
   /** The judge runs at every one of these efforts (`AUTOWRITER_JUDGE_EFFORTS`); a draft passes only when all pass it. */
   judge: { model: string; efforts: string[] };
@@ -33,8 +36,12 @@ export interface AutowriterSystemStatus {
  */
 export function buildSystemStatus(env: Record<string, string | undefined> = process.env): AutowriterSystemStatus {
   const secondPass = autowriterTranscriptsEnabled(env) && sonioxApiKey(env) !== null;
+  const lunaTutors = AUTOWRITER_TUTORS.filter((tutor) => rosterWriterArm(tutor.canonicalKey) === "luna").length;
   return {
     writer: { model: AUTOWRITER_MODELS.writer.model, effort: AUTOWRITER_MODELS.writer.effort },
+    tutorWriter: lunaTutors > 0
+      ? { model: AUTOWRITER_MODELS.fallbackWriter.model, effort: AUTOWRITER_MODELS.fallbackWriter.effort, tutors: lunaTutors }
+      : null,
     fallbackWriter: { model: AUTOWRITER_MODELS.fallbackWriter.model, effort: AUTOWRITER_MODELS.fallbackWriter.effort },
     judge: { model: AUTOWRITER_MODELS.judge.model, efforts: [...AUTOWRITER_JUDGE_EFFORTS] },
     transcriptFirst: secondPass && autowriterTranscriptFirst(env),

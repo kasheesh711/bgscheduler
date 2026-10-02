@@ -2,7 +2,7 @@ import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { wiseSessionLink } from "@/lib/wise/links";
-import { AUTOWRITER_MAX_TRANSCRIBE_ERRORS, AUTOWRITER_MAX_WRITER_ERRORS, AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS } from "./config";
+import { AUTOWRITER_MAX_TRANSCRIBE_ERRORS, AUTOWRITER_MAX_WRITER_ERRORS, AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS, writersFor } from "./config";
 import { HOLD_LISTED_AFTER_DEADLINE_MS } from "./inbox";
 import { judgeProblems } from "./judge";
 import { tutorKeyFor } from "./review-job";
@@ -433,7 +433,10 @@ export function buildAutowriterDashboard(input: {
       byDay: [...days.values()].map((entry) => ({ ...entry, costUsd: round(entry.costUsd, 4) ?? 0 }))
         .toSorted((a, b) => a.date.localeCompare(b.date)),
     },
-    fallbackShare: armed.length > 0 ? round(armed.filter((row) => row.arm === "luna").length / armed.length, 3) : null,
+    // A draft from the tutor's fallback writer: Luna, or Sol for the tutors added on 2 Oct (Luna first for them).
+    fallbackShare: armed.length > 0
+      ? round(armed.filter((row) => row.arm === writersFor(rosterTutor(row.wiseTeacherUserId)?.canonicalKey)[1].arm).length / armed.length, 3)
+      : null,
     judgeRejections,
     tutors: AUTOWRITER_TUTORS.map((tutor) => {
       const accounts = new Set(tutor.wiseUserIds);

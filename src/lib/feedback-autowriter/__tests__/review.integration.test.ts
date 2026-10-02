@@ -667,7 +667,7 @@ describe("daily metrics", () => {
     await assignReviews(db, { now: NOW });
     await ingestFixEvents(db, { apiActorId: API, since: at("2026-09-01T00:00:00Z") });
 
-    expect(await refreshDailyMetrics(db, { dates: metricDates(NOW), now: NOW })).toBe(15 * 6);
+    expect(await refreshDailyMetrics(db, { dates: metricDates(NOW), now: NOW })).toBe(15 * 19); // 15 dates × (18 tutors + "*")
     expect(await starRow(DAY)).toMatchObject({
       liveMode: true, posted: 1, held: 1, excludedDataQuality: 1, unseen: 1, excludedTutorFirst: 1, eligible: 3, required: 1, reviewed: 0,
     });
@@ -1047,7 +1047,7 @@ describe("runReviewJob", () => {
     const result = await runReviewJob(deps());
     expect(result).toMatchObject({
       ok: true, firstShots: { recorded: 1, unverified: 0 }, fixEvents: { inserted: 1 }, reviewsCreated: 1,
-      dailyGate: { date: DAY, status: "insufficient_data" }, metricRows: 15 * 6,
+      dailyGate: { date: DAY, status: "insufficient_data" }, metricRows: 15 * 19,
     });
     const runs = await db.select().from(RUNS).orderBy(RUNS.startedAt);
     expect(runs.map((run) => run.status)).toEqual(["failed", "succeeded"]);
