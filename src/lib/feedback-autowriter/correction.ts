@@ -496,11 +496,12 @@ interface ReadBack {
  * `awaiting_event` (same session update) and the lock is KEPT (`awaiting_event_locked`: until our event shows, a late
  * save could still turn it into a halt, so nothing else posts meanwhile; recover settles it by reads alone, then lifts
  * the lock); HTTP 429 with the base text still in Wise → `not_sent`, release, no retry (the class's one correction is
- * used up: `agentCorrectionDedupeKey`);
- * read failures only → keep the lock and re-read every 30 s for up to 4 min. Anything else — an unknown outcome, a
- * 4xx, a read-back mismatch, changed credits, billing or submission, a stranger's or an extra save — halts first
- * (so the lock's compare-and-swap release can never undo it), settles the posts row, records a critical incident
- * and keeps the lock. Throws only when the database fails while the lock is held; the lock may then stay (run recover).
+ * used up: `agentCorrectionDedupeKey`); read failures only → keep the lock and re-read every 30 s for up to 4 min.
+ * Anything else — an unknown outcome, a 4xx, a read-back mismatch, changed credits, billing or submission, a
+ * stranger's or an extra save — halts first (so the lock's compare-and-swap release can never undo it), settles the
+ * posts row, records a critical incident and keeps the lock. Every outcome that releases the lock says when the
+ * autowriter stays halted all the same (`productionStillHalted`). Throws only when the database fails while the lock
+ * is held; the lock may then stay (run recover).
  */
 export async function correctPostGuarded(input: CorrectPostInput): Promise<CorrectionOutcome> {
   const { ops, store } = input;
