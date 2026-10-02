@@ -41,9 +41,9 @@ export function createNightlyWiseReader(env: Record<string, string | undefined> 
   });
   const init = () => ({ cache: "no-store" as const, signal: AbortSignal.timeout(AUTOWRITER_WISE_READ_TIMEOUT_MS) });
   return Object.freeze({
-    getSessionDetail: (classId: string, sessionId: string) =>
+    getSessionDetail: async (classId: string, sessionId: string): Promise<unknown> =>
       client.get(`/user/classes/${checkedId(classId)}/sessions/${checkedId(sessionId)}`, { ...DETAIL_PARAMS }, init()),
-    getSessionDetailById: (sessionId: string) =>
+    getSessionDetailById: async (sessionId: string): Promise<unknown> =>
       client.get(`/user/session/${checkedId(sessionId)}`, { ...DETAIL_PARAMS }, init()),
   });
 }
