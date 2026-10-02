@@ -584,9 +584,9 @@ describe("stepRecover", () => {
   });
 });
 
-describe("stepCorrect with the real executor (dry run)", () => {
-  it("builds a plan the guarded executor accepts: every guard passes on reads alone", async () => {
-    const ctx = context();
+describe("stepCorrect with the real executor", () => {
+  /** The class of PR B's correction fixtures, seeded as verify and collect leave it, with fake Wise and a memory store. */
+  function realExecutorRun(ctx: NightContext) {
     const proposal = correctionProposal({
       wiseSessionId: SESSION_ID, fieldsSha256: fieldsHash(BASE), fields: CORRECTED, fieldsHash: fieldsHash(CORRECTED),
     });
@@ -601,14 +601,25 @@ describe("stepCorrect with the real executor (dry run)", () => {
     writeJsonAtomic(path.join(ctx.paths.bundlesDir, `${SESSION_ID}.json`), file);
     const time = executorClock(IN_WINDOW);
     const wise = fakeWise(time, []);
+    const settled: string[] = [];
     const preconditions = vi.fn(async () => ({ problems: [] as string[], firstShotPostedAt: new Date("2026-10-02T09:40:00.000Z") }));
     const databaseNow = vi.fn(async () => time.now());
-    const store: CorrectionStore = { ...untouchableStore(), preconditions, databaseNow };
+    const store: CorrectionStore = {
+      ...untouchableStore(),
+      preconditions,
+      databaseNow,
+      lock: vi.fn(async () => ({ ok: true as const, lock: { isHeld: async () => true, release: async () => true } })),
+      recordPostStart: vi.fn(async () => ({ postId: "post-1", postStartedAt: time.now() })),
+      settle: vi.fn(async (_postId: string, input: { outcome: string }) => {
+        settled.push(input.outcome);
+      }),
+    };
     const h = harness(ctx, {
       execute: undefined,
       ops: wise,
       store,
       apiActorId: API_ACTOR,
+      sleep: time.sleep,
       loadRows: vi.fn(async () => ({
         session: {
           wiseClassId: CLASS_ID, wiseTeacherUserId: KEVIN_ONLINE_WISE_USER_ID, state: "verified", fieldsSha256: fieldsHash(BASE),
@@ -620,11 +631,32 @@ describe("stepCorrect with the real executor (dry run)", () => {
         },
       })),
     });
+    return { h, wise, store, preconditions, settled, time };
+  }
+
+  it("builds a plan the guarded executor accepts: every guard passes on reads alone", async () => {
+    const ctx = context();
+    const { h, wise, preconditions } = realExecutorRun(ctx);
     const result = await stepCorrect(ctx, h.deps);
     expect(result.summary.classes).toEqual([expect.objectContaining({ wiseSessionId: SESSION_ID, status: "preflight_ok" })]);
     const [line] = result.summary.classes as Array<{ guards: string[] }>;
     expect(line.guards).toEqual(expect.arrayContaining(["plan", "db_preconditions", "wise_state_before_lock", "credit_baseline", "lock (not taken: dry run)"]));
     expect(preconditions).toHaveBeenCalledTimes(1);
     expect(wise.postFeedback).not.toHaveBeenCalled();
+  });
+
+  it("corrects end to end: one POST of the corrected text, verified, settled, flagged, reserved in the ledger", async () => {
+    const ctx = context({}, { now: () => new Date(clock) });
+    const run = realExecutorRun(ctx);
+    // The step's clock and the executor's are one: the fake clock the executor advances while it waits.
+    const stepCtx = { ...ctx, now: run.time.now };
+    const result = await stepCorrect(stepCtx, { ...run.h.deps, apply: true });
+    expect(result).toMatchObject({ ok: true, exitCode: 0, summary: { outcomes: { verified: 1 }, productionStillHalted: false } });
+    expect(run.wise.postFeedback).toHaveBeenCalledTimes(1);
+    expect(run.wise.posts[0].answers.map((answer) => answer.answer)).toEqual([CORRECTED.topics, CORRECTED.performance, CORRECTED.improvement, CORRECTED.homework]);
+    expect(run.settled).toEqual(["verified"]);
+    expect(run.h.raiseFlag).toHaveBeenCalledTimes(1);
+    expect(run.h.ledger.used("correction").count).toBe(1);
+    expect(readJsonl<{ status: string; flag: string }>(ctx.paths.correctionsJsonl).at(-1)).toMatchObject({ status: "verified", flag: "raised" });
   });
 });
