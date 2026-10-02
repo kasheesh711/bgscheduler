@@ -132,7 +132,8 @@ describe("other reads (Postgres, SELECT only)", () => {
     await db.insert(E).values({ wiseSessionId: id(1), evidenceHash: "hash-1", lessonRecord: "[00:00] TUTOR: Fractions.", evidenceKind: "transcript" });
     const sources = dbEvidenceSources(db);
     expect(await sources.rowMeta(id(1))).toEqual({ speakerMethod: "talk_share", judge: { faithful: true }, joinedAsGuest: "Pim iPad" });
-    expect(await sources.isebRecord(id(1), "hash-1")).toEqual({ evidenceHash: "hash-1", lessonRecord: "[00:00] TUTOR: Fractions.", evidenceKind: "transcript" });
+    // The Atom record is read with it (da249460); none was retained for this class.
+    expect(await sources.isebRecord(id(1), "hash-1")).toEqual({ evidenceHash: "hash-1", lessonRecord: "[00:00] TUTOR: Fractions.", evidenceKind: "transcript", atom: null });
     expect(await sources.isebRecord(id(1), "other")).toBeNull();
     expect(await sources.rowMeta(id(99))).toEqual({ speakerMethod: null, judge: null, joinedAsGuest: null });
   });
