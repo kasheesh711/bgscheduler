@@ -8,6 +8,7 @@ import {
   classifyTeacherSubmission,
   evaluateSessionGates,
   extractAiSummary,
+  guestNamedAsStudent,
   nonTeacherBillingEvidence,
   parseAutowriterSessionDetail,
   planFeedbackForm,
@@ -144,9 +145,10 @@ describe("evaluateSessionGates", () => {
     expect(evaluateSessionGates(parse({ participants: [account, guest, teacher] }), gateInput)).toEqual({ ok: true });
 
     const gate = (participants: unknown[]) => evaluateSessionGates(parse({ participants }), gateInput);
-    // The guest left early, or the tutor did: no stand-in (an account plus a guest: retried while attendance
-    // settles, then out of scope).
-    expect(gate([account, { ...guest, absolutePercentAttendance: 79, inMeetingDuration: 2844 }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
+    // A guest not named as the student left early, or the tutor did: no stand-in (an account plus a guest:
+    // retried while attendance settles, then out of scope).
+    const zoomGuest = { ...guest, name: "Zoom user" };
+    expect(gate([account, { ...zoomGuest, absolutePercentAttendance: 79, inMeetingDuration: 2844 }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
     expect(gate([account, guest, { ...teacher, inMeetingDuration: 2800 }])).toEqual({ ok: false, reason: "student_count_2_guest" });
     // The Wise account attended too: two people.
     expect(gate([{ ...account, inMeetingDuration: 3300, absolutePercentAttendance: 92 }, guest, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
@@ -161,6 +163,36 @@ describe("evaluateSessionGates", () => {
     expect(gate([account, guest, { ...guest, name: "Mum" }, teacher])).toEqual({ ok: false, reason: "student_count_3" });
     expect(evaluateSessionGates(parse({ participants: [account, guest, teacher], classType: "GROUP" }), gateInput))
       .toEqual({ ok: false, reason: "class_type_GROUP" });
+  });
+
+  it("lets a guest under the student's own name stand in at the usual attendance minimum (owner rule, 2 Oct)", () => {
+    // 2 Oct: the student joined by Zoom link as a stretched nickname at 65%; the Wise account shows 0 minutes.
+    const teacher = { ...sessionDetail().participants[0], inMeetingDuration: 3461 };
+    const account = { wiseUserId: "6a00000000000000000000a2", name: "Somchai (Aim.Ka) Kaewmanee", isTeacher: false, inMeetingDuration: 0 };
+    const guest = { name: "aimmm", isTeacher: false, inMeetingDuration: 2340, absolutePercentAttendance: 65 };
+    const gate = (participants: unknown[]) => evaluateSessionGates(parse({ participants }), gateInput);
+
+    expect(studentParticipants(parse({ participants: [account, guest, teacher] }))).toEqual([{
+      wiseUserId: "6a00000000000000000000a2", name: "Somchai (Aim.Ka) Kaewmanee",
+      inMeetingSeconds: 2340, absolutePercentAttendance: 65, joinedAsGuest: "aimmm",
+    }]);
+    expect(gate([account, guest, teacher])).toEqual({ ok: true });
+    // Exactly the usual minimum stands in; under it, no stand-in.
+    expect(gate([account, { ...guest, absolutePercentAttendance: 50 }, teacher])).toEqual({ ok: true });
+    expect(gate([account, { ...guest, absolutePercentAttendance: 49 }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
+    // The surname alone is enough (the student on a family device).
+    expect(gate([account, { ...guest, name: "Kaewmanee Family" }, teacher])).toEqual({ ok: true });
+    // A device whose model word is also a nickname is not the student.
+    const air = { ...account, name: "Somchai (Air.Ka) Kaewmanee" };
+    expect(gate([air, { ...guest, name: "iPad Air" }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
+    // A guest not named as the student keeps the higher bar; so does a nameless guest or a device on someone else's name.
+    expect(gate([account, { ...guest, name: "Nattapong" }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
+    expect(gate([account, { ...guest, name: "" }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
+    expect(gate([account, { ...guest, name: "Mom's iPad" }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
+    // The tutor's bar does not move.
+    expect(gate([account, guest, { ...teacher, inMeetingDuration: 2800 }])).toEqual({ ok: false, reason: "student_count_2_guest" });
+    // The Wise account attended too: two people.
+    expect(gate([{ ...account, inMeetingDuration: 3300, absolutePercentAttendance: 92 }, guest, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
   });
 
   it("does not count the tutor joining their own class again as a student", () => {
@@ -273,5 +305,48 @@ describe("form planning and POST body", () => {
   it("reads back the stored fields of the teacher submission", () => {
     const written = autoBlankSubmission({ metadata: null, answers: answers([GOOD_FIELDS.topics, GOOD_FIELDS.performance, GOOD_FIELDS.improvement, ""]) });
     expect(storedTeacherFields(parse({ feedbackSubmissions: [written] }))).toEqual(GOOD_FIELDS);
+  });
+});
+
+describe("guestNamedAsStudent", () => {
+  const student = "Somchai (Aim.Ka) Kaewmanee";
+
+  it("matches the student's nickname, first name or surname as a whole word", () => {
+    expect(guestNamedAsStudent("Aim", student)).toBe(true);
+    expect(guestNamedAsStudent("aimmm", student)).toBe(true);
+    expect(guestNamedAsStudent("SOMCHAI", student)).toBe(true);
+    expect(guestNamedAsStudent("Krit Kaewmanee", student)).toBe(true);
+    expect(guestNamedAsStudent("Aim's iPad", student)).toBe(true);
+    expect(guestNamedAsStudent("iPhone ของ Aim", student)).toBe(true);
+  });
+
+  it("never matches device or family words, short words, prefixes or a nameless guest", () => {
+    expect(guestNamedAsStudent("Mom's iPad", student)).toBe(false);
+    expect(guestNamedAsStudent("Mae Kaew", student)).toBe(false);
+    expect(guestNamedAsStudent("Ka", student)).toBe(false);
+    expect(guestNamedAsStudent("Aimee", student)).toBe(false);
+    expect(guestNamedAsStudent("Somchaiya", student)).toBe(false);
+    expect(guestNamedAsStudent("", student)).toBe(false);
+    expect(guestNamedAsStudent("Zoom user", student)).toBe(false);
+  });
+
+  it("never reads a device-model word as a nickname", () => {
+    expect(guestNamedAsStudent("iPad Air", "Somchai (Air.Ka) Kaewmanee")).toBe(false);
+    expect(guestNamedAsStudent("iPhone 15 Pro Max", "Somchai (Max.Ka) Kaewmanee")).toBe(false);
+    expect(guestNamedAsStudent("Redmi Note 12", "Somchai (Note.Ka) Kaewmanee")).toBe(false);
+  });
+
+  it("does not take an account label for the surname", () => {
+    expect(guestNamedAsStudent("Online", "Somchai (Aim.Ka) Kaewmanee Online")).toBe(false);
+    expect(guestNamedAsStudent("Kaewmanee", "Somchai (Aim.Ka) Kaewmanee Online")).toBe(true);
+  });
+
+  it("matches the student's name in Thai script", () => {
+    expect(guestNamedAsStudent("เอมมม", "สมชาย (เอม.Ka) แก้วมณี")).toBe(true);
+  });
+
+  it("reads a student name without a nickname or surname", () => {
+    expect(guestNamedAsStudent("Nattapong", "Nattapong")).toBe(true);
+    expect(guestNamedAsStudent("Nattapong", "Somchai Kaewmanee")).toBe(false);
   });
 });
