@@ -133,8 +133,24 @@ describe("unattended collector and rollout", () => {
     expect(fetchDays).toHaveBeenCalledWith(expect.arrayContaining(["2026-09-19", "2026-09-20"]));
     expect(result.ok).toBe(false);
     const [run] = await db.select().from(s.feedbackAtomSyncRuns); expect(run.errorCode).toBe("authentication_failed");
+    expect(run.counts).toMatchObject({ failureStage: "atom_open", failureCause: "authentication_failed" });
     const [probe] = await db.insert(s.feedbackAtomSyncRuns).values({triggerSource:"admin",status:"succeeded",deploymentId:"cloud",counts:{snapshots:1,activities:1}}).returning();
     await expect(confirmUnattendedAtomProof(db,probe.id,"owner")).rejects.toThrow("scheduled cloud run");
+  });
+  it("records the failing stage and a fixed cause label, never the raw error text", async () => {
+    const { runAtomCollector } = await import("../atom/collector");
+    await db.execute(sql`DELETE FROM feedback_autowriter_incidents`);
+    const openClient = vi.fn();
+    const result = await runAtomCollector({ db, deadlineMs: Date.now() + 60000, triggerSource: "admin", probe: { studentId: "_123", date: "2026-09-20" },
+      fetchDays: async () => { throw new Error("Wise timetable occurrences conflict for teacher-secret-value"); }, openClient });
+    expect(result).toMatchObject({ ok: false, errorCode: "collection_failed", failureStage: "wise_timetable", failureCause: "timetable_conflict" });
+    expect(openClient).not.toHaveBeenCalled();
+    const [run] = await db.select().from(s.feedbackAtomSyncRuns);
+    expect(run.counts).toMatchObject({ failureStage: "wise_timetable", failureCause: "timetable_conflict" });
+    const [incident] = await db.select().from(s.feedbackAutowriterIncidents);
+    expect(incident.detail).toEqual({ runId: run.id, code: "collection_failed", stage: "wise_timetable", cause: "timetable_conflict" });
+    expect(incident.summary).toContain("(wise_timetable: timetable_conflict)");
+    expect(JSON.stringify([run, incident])).not.toContain("teacher-secret-value");
   });
   it("allows a scheduled retrieval trial only for an actively approved student", async () => {
     const { runAtomCollector } = await import("../atom/collector");
