@@ -47,7 +47,11 @@ interface StoreOptions {
   lock?: { ok: false; reason: string } | Error;
   /** Runs when the lock is taken (e.g. time passing). */
   onLock?: () => void;
+  /** What the lock's last check before the POST finds (default: still held). */
+  isHeld?: boolean | Error;
   record?: Error;
+  /** Runs when the posts row is recorded (e.g. this machine sleeping). */
+  onRecord?: () => void;
   /** Settle calls (1-based) that throw. */
   settleFails?: number[];
   /** The database clock against the test clock (Wise's agrees with the database's). */
@@ -81,6 +85,11 @@ function memoryStore(log: string[], time: Clock, options: StoreOptions = {}) {
       return {
         ok: true as const,
         lock: {
+          isHeld: async () => {
+            log.push("store:isHeld");
+            if (options.isHeld instanceof Error) throw options.isHeld;
+            return options.isHeld ?? true;
+          },
           release: async () => {
             log.push("store:release");
             store.releases += 1;
@@ -93,6 +102,7 @@ function memoryStore(log: string[], time: Clock, options: StoreOptions = {}) {
       log.push("store:record");
       if (options.record) throw options.record;
       store.records.push({ plan, input });
+      options.onRecord?.();
       return { postId: "post-1", postStartedAt: dbNow() };
     },
     async databaseNow() {
@@ -227,7 +237,7 @@ describe("correctPostGuarded: a correction that lands", () => {
     // before the POST, the database clock after it; release last.
     expect(result.log).toEqual([
       "store:preconditions", "wise:detail#1", "wise:credits#1", "store:lock", "store:clock", "wise:events#1", "store:clock",
-      "wise:detail#2", "store:record", "wise:post", "store:clock", "wise:detail#3", "wise:credits#2", "wise:events#2",
+      "wise:detail#2", "store:record", "store:isHeld", "wise:post", "store:clock", "wise:detail#3", "wise:credits#2", "wise:events#2",
       "store:settle:verified", "store:release",
     ]);
     expect(result.store.records[0].input).toMatchObject({ studentWiseUserId: STUDENT_ID, baselineCredits: [1] });
@@ -677,6 +687,43 @@ describe("correctPostGuarded: the posts row is claimed before the POST", () => {
     expect(result.wise.postFeedback).not.toHaveBeenCalled();
     expect(result.store.releases).toBe(1);
     expect(result.log.filter((entry) => /^store:(settle|halt|incident)/u.test(entry))).toEqual([]);
+  });
+});
+
+describe("correctPostGuarded: the last checks between the claim and the POST", () => {
+  const abandoned = (result: Awaited<ReturnType<typeof run>>, reason: string) => {
+    expect(result.outcome).toEqual({ status: "not_sent", postId: "post-1", reason });
+    expect(result.wise.postFeedback).not.toHaveBeenCalled();
+    expect(result.store.settles).toMatchObject([{ outcome: "not_sent", verification: { notSent: reason.split(",")[0] } }]);
+    expect(result.store.settles[0]).not.toHaveProperty("session");
+    expect(result.store.releases).toBe(1);
+    expect(result.store.halts).toEqual([]);
+  };
+
+  it("settles not_sent and releases when the lock is no longer ours (lease run out, a pause or resume)", async () => {
+    const result = await run({ store: { isHeld: false } });
+    abandoned(result, "lock_lost");
+    expect(result.log.slice(-3)).toEqual(["store:isHeld", "store:settle:not_sent", "store:release"]);
+  });
+
+  it("settles not_sent when this machine slept between the claim and the POST (the lock budget spent)", async () => {
+    const log: string[] = [];
+    const time = clock();
+    const wise = fakeWise(time, log);
+    const store = memoryStore(log, time, { onRecord: () => time.advance(CORRECTION_LOCK_BUDGET_MS) });
+    const outcome = await correctPostGuarded({
+      ops: wise, store, plan: plan(), apiActorId: API_ACTOR, allowlist: AUTOWRITER_TEACHER_ALLOWLIST, disabledTutors: [],
+      aiSuspect: AI_SUSPECT, textProblems: () => [], now: time.now, sleep: time.sleep, eventWaitMs: 0,
+    });
+    abandoned({ outcome, log, wise, store, time }, "lock_budget");
+  });
+
+  it("settles not_sent when the lock cannot be checked, and reports a settle that fails", async () => {
+    abandoned(await run({ store: { isHeld: Object.assign(new Error("db down"), { code: "57P01" }) } }), "lock_check_failed:57P01");
+    const failed = await run({ store: { isHeld: false, settleFails: [1] } });
+    expect(failed.outcome).toEqual({ status: "not_sent", postId: "post-1", reason: "lock_lost,settle_failed:Error" });
+    expect(failed.wise.postFeedback).not.toHaveBeenCalled();
+    expect(failed.store.releases).toBe(1);
   });
 });
 

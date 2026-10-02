@@ -47,8 +47,11 @@ const C = schema.feedbackAutowriterControl;
 const S = schema.feedbackAutowriterSessions;
 const P = schema.feedbackAutowriterPosts;
 
-/** The lock's sweep lease: past a correction's pre-POST budget, and over before the backstop sweep after the window. */
-export const CORRECTION_LOCK_LEASE_MS = 8 * 60_000;
+/**
+ * The lock's sweep lease: longer than any run (a 3-minute pre-POST budget, then up to about 10 minutes of read-back
+ * and waiting for our event). A run gives it back when it ends; one that dies keeps the backstop sweeps off this long.
+ */
+export const CORRECTION_LOCK_LEASE_MS = 20 * 60_000;
 /** A POST claim that began before our halt committed can still commit after it: wait this long, then look for one. */
 export const CORRECTION_LOCK_SETTLE_MS = 2_000;
 /**
@@ -56,8 +59,11 @@ export const CORRECTION_LOCK_SETTLE_MS = 2_000;
  * with database times only, but this clock still decides the window, the budgets and the waits.
  */
 export const CORRECTION_MAX_CLOCK_SKEW_MS = 2_000;
-/** An agent correction still unsettled this long after its POST started is no live request any more. */
-export const CORRECTION_STALE_AFTER_MS = 10 * 60_000;
+/**
+ * An agent correction still unsettled this long after its POST started is no live request any more: its lease (taken
+ * before the POST) has run out, with five minutes to spare. Recovery also waits while any correction lease is live.
+ */
+export const CORRECTION_STALE_AFTER_MS = CORRECTION_LOCK_LEASE_MS + 5 * 60_000;
 /** At most this many agent corrections (any outcome but `not_sent`) in any 24 h, checked in the database. */
 export const CORRECTION_DAILY_CAP = 6;
 
@@ -102,6 +108,11 @@ const dailyCapReachedSql = sql`(select count(*) from feedback_autowriter_posts p
   and p.actor_kind = 'agent' and p.outcome <> 'not_sent'
   and coalesce(p.post_started_at, p.recorded_at) > now() - interval '24 hours') >= ${CORRECTION_DAILY_CAP}`;
 
+/** SQL: a correction lock's lease is still live (its run may still be working), whatever was appended to its halt. */
+const correctionLeaseLiveSql = sql`exists (select 1 from feedback_autowriter_control c where c.id = 'default'
+  and c.lease_until > now() and c.lease_token is not null
+  and position(${LOCK_PREFIX} || c.lease_token::text in coalesce(c.halt_reason, '')) = 1)`;
+
 /** SQL: an open flag the owner raised on the class. */
 const ownerFlagOpenSql = (wiseSessionId: string) => sql`exists (select 1 from feedback_autowriter_flags f
   where f.wise_session_id = ${wiseSessionId} and f.source = 'owner' and f.resolved_by_verdict_id is null)`;
@@ -133,7 +144,14 @@ export function pgCorrectionStore(db: Database, opts: {
   const { actor } = opts;
   const now = opts.now ?? (() => new Date());
   const sleep = opts.sleep ?? defaultSleep;
-  let held: { token: string; reason: string; wiseSessionId: string } | null = null;
+  let held: { token: string; reason: string; wiseSessionId: string; teacherId: string } | null = null;
+
+  /** SQL: the lock is still ours — live, halted with exactly our reason, our lease not expired. */
+  const lockHeldSql = (current: { token: string; reason: string }) => sql`exists (select 1 from feedback_autowriter_control c
+    where c.id = 'default' and c.mode = 'live' and c.halted_at is not null and c.halt_reason = ${current.reason}
+      and c.lease_token = ${current.token}::uuid and c.lease_until > now())`;
+  const tutorDisabledSql = (teacherId: string) => sql`exists (select 1 from feedback_autowriter_control c
+    where c.id = 'default' and c.disabled_tutors ? ${teacherId})`;
 
   /** Un-halt first, only while the halt is exactly ours (compare-and-swap), then give the sweep lease back. */
   const release = async (): Promise<boolean> => {
@@ -238,7 +256,7 @@ export function pgCorrectionStore(db: Database, opts: {
           return { ok: false, reason: "not_live_or_halted" };
         }
         halted = true;
-        held = { token, reason, wiseSessionId: plan.wiseSessionId };
+        held = { token, reason, wiseSessionId: plan.wiseSessionId, teacherId: plan.wiseTeacherUserId };
         // Within the tolerance whatever the round trip took: the database's time lies within it of both readings.
         const at = databaseDate(rows[0].at)?.getTime() ?? Number.NaN;
         if (!(at <= before + CORRECTION_MAX_CLOCK_SKEW_MS && at >= after - CORRECTION_MAX_CLOCK_SKEW_MS)) {
@@ -251,7 +269,13 @@ export function pgCorrectionStore(db: Database, opts: {
           await release();
           return { ok: false, reason: "post_in_flight" };
         }
-        const lock: CorrectionLock = { release };
+        const isHeld = async (): Promise<boolean> => {
+          const current = held;
+          if (!current) return false;
+          const facts = await readBooleans(db, { lockHeld: lockHeldSql(current), tutorDisabled: tutorDisabledSql(current.teacherId) });
+          return facts.lockHeld && !facts.tutorDisabled;
+        };
+        const lock: CorrectionLock = { isHeld, release };
         return { ok: true, lock };
       } catch (error) {
         if (halted) await release().catch(() => false);
@@ -287,10 +311,8 @@ export function pgCorrectionStore(db: Database, opts: {
           ${plan.fieldsSha256}, ${input.bodyHash}, ${JSON.stringify(plan.base.billing)}::jsonb, ${plan.arm}, ${plan.evidence},
           ${JSON.stringify(pipeline)}::jsonb, 'agent', ${actor}, ${plan.reason}, now(), 'posting',
           ${JSON.stringify(verification)}::jsonb, 'live', ${agentCorrectionDedupeKey(sid)}
-        where exists (select 1 from feedback_autowriter_control c where c.id = 'default' and c.mode = 'live'
-            and c.halted_at is not null and c.halt_reason = ${current.reason}
-            and c.lease_token = ${current.token}::uuid and c.lease_until > now()
-            and not (c.disabled_tutors ? ${plan.wiseTeacherUserId}))
+        where ${lockHeldSql(current)}
+          and not ${tutorDisabledSql(plan.wiseTeacherUserId)}
           and ${sessionStillBaseSql(plan)}
           and not ${ownerFlagOpenSql(sid)}
           and not ${postInFlightSql}
@@ -304,11 +326,8 @@ export function pgCorrectionStore(db: Database, opts: {
         return { postId: row.id, postStartedAt };
       }
       const why = await readBooleans(db, {
-        lockHeld: sql`exists (select 1 from feedback_autowriter_control c where c.id = 'default' and c.mode = 'live'
-          and c.halted_at is not null and c.halt_reason = ${current.reason}
-          and c.lease_token = ${current.token}::uuid and c.lease_until > now())`,
-        tutorDisabled: sql`exists (select 1 from feedback_autowriter_control c where c.id = 'default'
-          and c.disabled_tutors ? ${plan.wiseTeacherUserId})`,
+        lockHeld: lockHeldSql(current),
+        tutorDisabled: tutorDisabledSql(plan.wiseTeacherUserId),
         rowSame: sessionStillBaseSql(plan),
         ownerFlagOpen: ownerFlagOpenSql(sid),
         inFlight: postInFlightSql,
@@ -394,7 +413,8 @@ function sameCredits(entries: ReadonlyArray<{ credit: number }>, baseline: reado
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-export type CorrectionRecoveryResult = "verified" | "awaiting_event" | "not_sent" | "safety" | "read_failed";
+/** `lease_live`: a correction lock's lease is still live (its run may still be working); nothing was read or written. */
+export type CorrectionRecoveryResult = "verified" | "awaiting_event" | "not_sent" | "safety" | "read_failed" | "lease_live";
 
 export interface CorrectionRecovery {
   postId: string;
@@ -404,8 +424,9 @@ export interface CorrectionRecovery {
 }
 
 /**
- * Settle agent corrections a dead or interrupted run left `posting` or `awaiting_event` (older than `olderThanMs`)
- * from what Wise shows — reads only, never a POST:
+ * Settle agent corrections a dead or interrupted run left `posting` or `awaiting_event` (older than `olderThanMs`,
+ * default `CORRECTION_STALE_AFTER_MS`) from what Wise shows — reads only, never a POST, and nothing at all while a
+ * correction lock's lease is live (`lease_live`):
  * - the corrected text is in Wise and verifies (same submission, billing and credit entries, no stranger's or extra
  *   save in the POST window): `verified` with our event (the session takes the text if it had not yet), else
  *   `awaiting_event` until our event shows, for at most 2 h;
@@ -434,6 +455,9 @@ export async function recoverStaleCorrections(
     sql`coalesce(${P.postStartedAt}, ${P.recordedAt}) < now() - (${olderThanMs} * interval '1 millisecond')`,
   )).orderBy(asc(P.recordedAt));
   if (rows.length === 0) return [];
+  // A live run may still be reading Wise or settling its row: never recover under its lease.
+  const { leaseLive } = await readBooleans(db, { leaseLive: correctionLeaseLiveSql });
+  if (leaseLive) return rows.map((row) => ({ postId: row.id, wiseSessionId: row.wiseSessionId, result: "lease_live" as const, problems: [] }));
   const mappings = input.mappings ?? await loadFieldMappings(db);
   const store = pgCorrectionStore(db, { actor: input.actor ?? AGENT_CORRECTION_ACTOR });
   const now = input.now ?? (() => new Date());

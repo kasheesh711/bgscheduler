@@ -8,6 +8,11 @@ import { DEFAULT_FEEDBACK_FIELD_MAPPINGS } from "@/lib/post-class-feedback/wise"
 import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
 import {
   AGENT_CORRECTION_ACTOR,
+  CORRECTION_EVENT_WAIT_MS,
+  CORRECTION_LOCK_BUDGET_MS,
+  CORRECTION_READ_BACK_DELAY_MS,
+  CORRECTION_READ_RETRY_INTERVAL_MS,
+  CORRECTION_READ_RETRY_WINDOW_MS,
   CorrectionRefusedError,
   agentCorrectionDedupeKey,
   correctPostGuarded,
@@ -16,7 +21,9 @@ import {
 } from "../correction";
 import {
   CORRECTION_DAILY_CAP,
+  CORRECTION_LOCK_LEASE_MS,
   CORRECTION_LOCK_SETTLE_MS,
+  CORRECTION_STALE_AFTER_MS,
   correctionLockReason,
   isCorrectionLockReason,
   pgCorrectionStore,
@@ -169,12 +176,17 @@ async function insertPostingSession(n: number, postStartedAt = new Date()) {
   });
 }
 
-async function insertInFlightCorrection(n: number, outcome: "posting" | "awaiting_event") {
+async function insertInFlightCorrection(n: number, outcome: "posting" | "awaiting_event", postStartedAt = new Date()) {
   await db.insert(P).values({
     wiseSessionId: id24(n), kind: "correction", fields: BASE, fieldsSha256: fieldsHash(BASE), billing: BILLING as unknown as Record<string, unknown>,
     actorKind: "agent", actor: AGENT_CORRECTION_ACTOR, reason: "synthetic", outcome, provenance: "live",
-    postStartedAt: new Date(), dedupeKey: agentCorrectionDedupeKey(id24(n)),
+    postStartedAt, dedupeKey: agentCorrectionDedupeKey(id24(n)),
   });
+}
+
+/** The run that holds the lock is gone (or asleep): its lease ran out. */
+async function leaseRunOut() {
+  await db.update(C).set({ leaseUntil: sql`now() - interval '1 second'` }).where(eq(C.id, "default"));
 }
 
 /** Agent corrections of other classes, posted `hoursAgo` (settled with `outcome`). */
@@ -243,6 +255,12 @@ beforeEach(async () => {
 });
 
 describe("the correction lock", () => {
+  it("leases the sweep for longer than the longest run, with five minutes to spare", () => {
+    const longestRun = CORRECTION_LOCK_BUDGET_MS + CORRECTION_READ_BACK_DELAY_MS + CORRECTION_READ_RETRY_WINDOW_MS +
+      CORRECTION_READ_RETRY_INTERVAL_MS + CORRECTION_EVENT_WAIT_MS + 60_000;
+    expect(CORRECTION_LOCK_LEASE_MS).toBeGreaterThanOrEqual(longestRun + 5 * 60_000);
+  });
+
   it("stops the real POST claim, the sweep and the webhook path while held; release restores them", async () => {
     const seeded = await postedWithFirstShot();
     // Another class waiting for its first POST: a worker holding its generation lease.
@@ -328,6 +346,20 @@ describe("the correction lock", () => {
     expect(await store().lock(plan)).toEqual({ ok: false, reason: "post_in_flight" });
     expect(await readControl(db)).toMatchObject({ haltedAt: null, haltReason: null });
     expect(await leaseFree()).toBe(true);
+  });
+
+  const notHeld: Array<[string, () => Promise<unknown>]> = [
+    ["its lease ran out", leaseRunOut],
+    ["an owner pause on top", () => haltAutowriter(db, `paused by ${OWNER}: stop`, OWNER)],
+    ["an owner resume", () => updateControl(db, { haltedAt: null, haltReason: null }, OWNER)],
+    ["a switch out of live", () => updateControl(db, { mode: "shadow" }, OWNER)],
+    ["the tutor switched off", () => updateControl(db, { disabledTutors: [TEACHER] }, OWNER)],
+  ];
+  it.each(notHeld)("is no longer held (the last check before the POST) after %s", async (_name, change) => {
+    const lock = await lockOrThrow(store(), planFor(await postedWithFirstShot()));
+    expect(await lock.isHeld()).toBe(true);
+    await change();
+    expect(await lock.isHeld()).toBe(false);
   });
 
   it("never lifts an owner pause made while it is held — nor does the stale-lock release", async () => {
@@ -679,6 +711,30 @@ describe("end to end through the real store", () => {
     expect(await db.select().from(I)).toEqual([]);
   });
 
+  it("never posts once the lease ran out between the claim and the POST (this machine slept): not_sent, released", async () => {
+    const seeded = await postedWithFirstShot();
+    const time = clock(windowStart());
+    const wise = fakeWise(time, [], { eventsBefore: [save(seeded.verifiedAt, API_ACTOR, "OWNER")], wiseNow: () => new Date() });
+    const real = store();
+    const sleeper: CorrectionStore = {
+      ...real,
+      async recordPostStart(plan, input) {
+        const started = await real.recordPostStart(plan, input);
+        await leaseRunOut();
+        return started;
+      },
+    };
+    const outcome = await correctPostGuarded({
+      ops: wise, store: sleeper, plan: planFor(seeded), apiActorId: API_ACTOR, allowlist: AUTOWRITER_TEACHER_ALLOWLIST,
+      disabledTutors: [], aiSuspect: AI_SUSPECT, textProblems: () => [], now: time.now, sleep: time.sleep, eventWaitMs: 0,
+    });
+    expect(outcome).toMatchObject({ status: "not_sent", reason: "lock_lost" });
+    expect(wise.postFeedback).not.toHaveBeenCalled();
+    expect((await db.select().from(P).where(eq(P.kind, "correction")))[0]).toMatchObject({ outcome: "not_sent" });
+    expect((await readSessionRow(db, seeded.wiseSessionId))?.fields).toEqual(BASE);
+    expect(await readControl(db)).toMatchObject({ haltedAt: null, haltReason: null });
+  });
+
   it("a problem after the POST halts, settles and pages — the lock is never lifted", async () => {
     const seeded = await postedWithFirstShot();
     const time = clock(windowStart());
@@ -719,26 +775,41 @@ describe("recovery of a correction a run left unsettled", () => {
   const recover = (ops: Parameters<typeof recoverStaleCorrections>[1], now?: () => Date) =>
     recoverStaleCorrections(db, ops, { apiActorId: API_ACTOR, olderThanMs: -60_000, mappings: DEFAULT_FEEDBACK_FIELD_MAPPINGS, now });
 
-  it("verifies a correction that landed (reads only), then the stale lock can be lifted once its lease is over", async () => {
+  it("waits while the lock's lease is live, then verifies a correction that landed (reads only); then the lock is lifted", async () => {
     const { seeded, postId, postStartedAt } = await interrupted();
     const wise = fakeWise(clock(), [], {
       detailOn: () => postedDetail({ text: CORRECTED }),
       eventsBefore: [save(seeded.verifiedAt, API_ACTOR, "OWNER"), save(new Date(postStartedAt.getTime() + 1_000), API_ACTOR, "OWNER")],
     });
+    // The run that took the lock may still be alive while its lease lasts: nothing is read or written.
+    expect(await recover(wise)).toEqual([{ postId, wiseSessionId: seeded.wiseSessionId, result: "lease_live", problems: [] }]);
+    expect(wise.getSessionDetail).not.toHaveBeenCalled();
+    expect(wise.findFeedbackEvents).not.toHaveBeenCalled();
+    expect((await db.select().from(P).where(eq(P.id, postId)))[0]).toMatchObject({ outcome: "posting" });
+    expect(await releaseStaleCorrectionLock(db)).toBe(false);
+
+    await leaseRunOut();
     expect(await recover(wise)).toEqual([{ postId, wiseSessionId: seeded.wiseSessionId, result: "verified", problems: [] }]);
     expect(wise.postFeedback).not.toHaveBeenCalled();
     expect((await db.select().from(P).where(eq(P.id, postId)))[0]).toMatchObject({ outcome: "verified" });
     expect(await readSessionRow(db, seeded.wiseSessionId)).toMatchObject({ fields: CORRECTED, fieldsSha256: fieldsHash(CORRECTED) });
-
-    // The run that took the lock may still be alive while its lease lasts.
-    expect(await releaseStaleCorrectionLock(db)).toBe(false);
-    await db.update(C).set({ leaseUntil: sql`now() - interval '1 second'` }).where(eq(C.id, "default"));
     expect(await releaseStaleCorrectionLock(db)).toBe(true);
     expect(await readControl(db)).toMatchObject({ haltedAt: null, haltReason: null });
   });
 
+  it("counts a correction stale only once its lease is over plus five minutes", async () => {
+    expect(CORRECTION_STALE_AFTER_MS).toBe(CORRECTION_LOCK_LEASE_MS + 5 * 60_000);
+    const ops = fakeWise(clock(), []);
+    const byDefault = () => recoverStaleCorrections(db, ops, { apiActorId: API_ACTOR, mappings: DEFAULT_FEEDBACK_FIELD_MAPPINGS });
+    await insertInFlightCorrection(96, "posting", new Date(Date.now() - CORRECTION_LOCK_LEASE_MS - 60_000));
+    expect(await byDefault()).toEqual([]);
+    await insertInFlightCorrection(97, "posting", new Date(Date.now() - CORRECTION_STALE_AFTER_MS - 60_000));
+    expect(await byDefault()).toMatchObject([{ wiseSessionId: id24(97), result: "safety", problems: ["row_incomplete_for_recovery"] }]);
+  });
+
   it("settles not_sent when Wise still shows the base text, untouched", async () => {
     const { seeded, postId } = await interrupted();
+    await leaseRunOut();
     const wise = fakeWise(clock(), [], { eventsBefore: [save(seeded.verifiedAt, API_ACTOR, "OWNER")] });
     expect(await recover(wise)).toMatchObject([{ postId, result: "not_sent" }]);
     expect((await db.select().from(P).where(eq(P.id, postId)))[0]).toMatchObject({ outcome: "not_sent" });
@@ -749,6 +820,7 @@ describe("recovery of a correction a run left unsettled", () => {
 
   it("halts, settles unknown_outcome and pages on anything else; leaves a failed read for the next run", async () => {
     const { postId } = await interrupted();
+    await leaseRunOut();
     const down = fakeWise(clock(), [], { detailOn: () => new Error("down") });
     expect(await recover(down)).toMatchObject([{ postId, result: "read_failed" }]);
     expect((await db.select().from(P).where(eq(P.id, postId)))[0]).toMatchObject({ outcome: "posting" });
@@ -759,13 +831,13 @@ describe("recovery of a correction a run left unsettled", () => {
     expect((await db.select().from(P).where(eq(P.id, postId)))[0]).toMatchObject({ outcome: "unknown_outcome" });
     expect((await readControl(db)).haltReason).toMatch(/ \| then: agent correction on .* could not be recovered/u);
     expect(await db.select().from(I).where(and(eq(I.kind, "correction_failed"), eq(I.severity, "critical")))).toHaveLength(1);
-    await db.update(C).set({ leaseUntil: sql`now() - interval '1 second'` }).where(eq(C.id, "default"));
     expect(await releaseStaleCorrectionLock(db)).toBe(false);
     expect(other.postFeedback).not.toHaveBeenCalled();
   });
 
   it("gives an awaiting_event correction 2 h for its event, then halts", async () => {
     const { seeded, postId } = await interrupted();
+    await leaseRunOut();
     const session = { fields: CORRECTED, fieldsSha256: fieldsHash(CORRECTED), fromSha256: fieldsHash(BASE), at: new Date(), reason: "synthetic" };
     await store().settle(postId, { outcome: "awaiting_event", verification: { event: null }, session });
     const landed = fakeWise(clock(), [], {

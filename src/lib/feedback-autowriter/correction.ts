@@ -72,8 +72,9 @@ export function agentCorrectionDedupeKey(wiseSessionId: string): string {
 /**
  * Whether a correction may start now: UTC minute 10–15 or 40–45 (Bangkok has the same minutes). Clear of every cron
  * that touches the autowriter or Wise's feedback: sync-wise :00/:30, the autowriter backstop :08/:22/:38/:52, the
- * review job :27, the Atom collector :06/:21/:36/:51 and the Wise activity sync :02/:17/:32/:47 — and the lock's
- * 8-minute lease ends before the backstop sweep after it would otherwise start.
+ * review job :27, the Atom collector :06/:21/:36/:51 and the Wise activity sync :02/:17/:32/:47. A run gives the
+ * sweep lease back when it ends; one that dies keeps it (and so skips the backstop sweeps) for at most the lease,
+ * 20 minutes (`CORRECTION_LOCK_LEASE_MS`), longer than any run.
  */
 export function inCorrectionWindow(now: Date): boolean {
   const minute = now.getUTCMinutes();
@@ -132,6 +133,8 @@ export interface CorrectionSessionUpdate {
 
 /** The held lock; `release()` is false when the control row stays halted (someone halted it on top of the lock). */
 export interface CorrectionLock {
+  /** Whether the lock is still ours on the database clock: live, our exact halt, our lease not expired, tutor on. */
+  isHeld(): Promise<boolean>;
   release(): Promise<boolean>;
 }
 
@@ -458,8 +461,10 @@ interface ReadBack {
  *   6. under the lock, fresh reads: no save since the first shot (from its posts row's time) but our own first-shot
  *      save, then the session — the same checks again, the same student; still within the lock budget; no STOP. A
  *      dry run makes these reads without the lock and returns `preflight_ok` here — it never locks, records or posts;
- *   7. the posts row (`store.recordPostStart`, which re-checks the lock), then ONE POST with the current billing in
- *      form order, never retried;
+ *   7. the posts row (`store.recordPostStart`, which re-checks the lock), then — the lock confirmed again on the
+ *      database clock (`lock.isHeld`) and the lock budget again on this machine's, nothing else in between, so a
+ *      machine that slept since the claim never posts (`not_sent`) — ONE POST with the current billing in form
+ *      order, never retried;
  *   8. read back after 3 s — the corrected text, the same submission, billing and credit entries — then poll for our
  *      own submit event and for anyone else's save inside the POST window.
  * Settling: verified → the posts row and the session's text, then release; our event not seen yet → `awaiting_event`
@@ -614,6 +619,29 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
     if (error instanceof CorrectionRefusedError) return refuseHeld(error.reason.startsWith("lock:") ? "lock" : "db", error.reason);
     return refuseHeld("db", sqlStateOf(error) === "23505" ? "already_corrected" : `record_failed:${failureName(error)}`);
   }
+
+  // Nothing was sent after all: the posts row settles `not_sent` (it still uses up the class's one correction).
+  const abandonBeforePost = async (reason: string): Promise<CorrectionOutcome> => {
+    const problems = [reason];
+    try {
+      await store.settle(postId, { outcome: "not_sent", verification: { notSent: reason, postStartedAt: postStartedAt.toISOString() } });
+    } catch (error) {
+      // Recovery settled it already (this machine slept past the lease), or the database failed: recovery finds it.
+      problems.push(`settle_failed:${failureName(error)}`);
+    }
+    await held.release();
+    return { status: "not_sent", postId, reason: problems.join(",") };
+  };
+  // The last checks before the POST, nothing in between: the lock is still ours on the database clock (the lease not
+  // expired while this machine slept, no owner pause, resume or tutor switch), and the budget is not spent.
+  let stillHeld: boolean;
+  try {
+    stillHeld = await held.isHeld();
+  } catch (error) {
+    return abandonBeforePost(`lock_check_failed:${failureName(error)}`);
+  }
+  if (!stillHeld) return abandonBeforePost("lock_lost");
+  if (now().getTime() - lockStartedAt >= lockBudgetMs) return abandonBeforePost("lock_budget");
   let result: PostResult;
   try {
     result = await ops.postFeedback(plan.wiseClassId, sid, body);
