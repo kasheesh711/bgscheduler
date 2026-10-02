@@ -78,6 +78,25 @@ SKILL.md @kasheesh711
 /src/lib/post-class-feedback/payout-config.ts @kasheesh711
 /src/lib/post-class-feedback/notification-config.ts @kasheesh711
 
+# Feedback autowriter: the Wise write path, billing, model routes, retention, roster and routes.
+# The operating loop's agents may only auto-merge data-only fixes elsewhere in the domain; these
+# always need the owner (plan .planning/quick/260929-lop-autowriter-operating-loop/).
+/src/lib/feedback-autowriter/submit.ts @kasheesh711
+/src/lib/feedback-autowriter/billing.ts @kasheesh711
+/src/lib/feedback-autowriter/store.ts @kasheesh711
+/src/lib/feedback-autowriter/job.ts @kasheesh711
+/src/lib/feedback-autowriter/run.ts @kasheesh711
+/src/lib/feedback-autowriter/config.ts @kasheesh711
+/src/lib/feedback-autowriter/types.ts @kasheesh711
+/src/lib/feedback-autowriter/openrouter.ts @kasheesh711
+/src/lib/feedback-autowriter/soniox.ts @kasheesh711
+/src/lib/feedback-autowriter/roster.ts @kasheesh711
+/src/lib/feedback-autowriter/webhook.ts @kasheesh711
+/src/lib/feedback-autowriter/dispatch.ts @kasheesh711
+/src/lib/feedback-autowriter/ab.ts @kasheesh711
+/src/app/api/feedback-autowriter/ @kasheesh711
+/src/app/api/wise/ @kasheesh711
+
 # Emergency Wise/classroom operations policy and publication fencing.
 /src/lib/classrooms/operations-*.ts @kasheesh711
 /src/lib/classrooms/publish-queue.ts @kasheesh711
