@@ -9,6 +9,7 @@ import {
   flagReasons,
   holdUrgency,
   incidentTitle,
+  isListedIncident,
   isOpenHold,
   openCount,
   type InboxDashboard,
@@ -167,6 +168,23 @@ describe("buildInbox", () => {
     expect(items.every((item) => item.urgency === "critical" && item.action === "open")).toBe(true);
   });
 
+  it("lists a guided post's style fix after the critical incidents, not red; never a style check that could not run", () => {
+    const items = buildInbox(dashboard(), review({
+      incidents: [
+        incident("style-fix", { createdAt: inHours(-1), kind: "style_review_flagged", severity: "info", pushStatus: "not_required",
+          summary: "Guided feedback needs a style correction. Open its evidence and style review." }),
+        incident("style-down", { createdAt: inHours(-2), kind: "style_review_unavailable", severity: "info", pushStatus: "not_required" }),
+        incident("style-done", { createdAt: inHours(-3), kind: "style_review_flagged", severity: "info", pushStatus: "not_required",
+          acknowledgedAt: inHours(-2), acknowledgedBy: "owner@example.com" }),
+        incident("atom", { createdAt: inHours(-4), kind: "atom_collection_failed" }),
+        incident("other-info", { createdAt: inHours(-1), kind: "first_shot_unverified", severity: "info", pushStatus: "not_required" }),
+      ],
+    }), { now: NOW });
+    expect(ids(items)).toEqual(["incident:atom", "incident:style-fix"]);
+    expect(items[0]).toMatchObject({ urgency: "critical", title: "Atom lesson collection failed" });
+    expect(items[1]).toMatchObject({ urgency: "normal", title: "A guided post needs a style fix", action: "open" });
+  });
+
   it("lists holds soonest deadline first, with the reason in plain words and no lesson text", () => {
     const items = buildInbox(dashboard({ holds: [
       hold("later", { deadlineAt: inHours(40) }),
@@ -303,9 +321,24 @@ describe("the words and colours the drawer shares with the list", () => {
     expect(incidentTitle("halt")).toBe("Posting was halted");
     expect(incidentTitle("critical_verdict")).toBe("A critical error was found in a post");
     expect(incidentTitle("something_new")).toBe("An incident needs a look");
+    // Each job names its own trouble; the forward scan keeps its kind for when it exists.
+    expect(incidentTitle("scan_failed")).toBe("The forward scan failed");
+    expect(incidentTitle("atom_collection_failed")).toBe("Atom lesson collection failed");
+    expect(incidentTitle("style_review_flagged")).toBe("A guided post needs a style fix");
+    expect(incidentTitle("style_review_unavailable")).toBe("A guided post's style check could not run");
+    expect(incidentTitle("style_review_source_missing")).toBe("A guided post is missing its evidence or fact checks");
     expect(failedPostTitle("verify_failed")).toBe("A post did not verify in Wise");
     expect(failedPostTitle("unknown_outcome")).toBe("A post's outcome in Wise is unknown");
     expect(failedPostTitle("rejected")).toBe("Wise rejected a post");
+  });
+
+  it("keeps an incident in the list until acknowledged when it is critical or a style fix", () => {
+    expect(isListedIncident({ kind: "halt", severity: "critical", acknowledgedAt: null })).toBe(true);
+    expect(isListedIncident({ kind: "halt", severity: "critical", acknowledgedAt: inHours(-1) })).toBe(false);
+    expect(isListedIncident({ kind: "style_review_flagged", severity: "info", acknowledgedAt: null })).toBe(true);
+    expect(isListedIncident({ kind: "style_review_flagged", severity: "info", acknowledgedAt: inHours(-1) })).toBe(false);
+    expect(isListedIncident({ kind: "style_review_unavailable", severity: "info", acknowledgedAt: null })).toBe(false);
+    expect(isListedIncident({ kind: "first_shot_unverified", severity: "info", acknowledgedAt: null })).toBe(false);
   });
 
   it("says why a post is flagged from its flags' sources, each once, never from a flag's note", () => {

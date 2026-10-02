@@ -1,5 +1,7 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { sql } from "drizzle-orm";
+import { like, sql } from "drizzle-orm";
 import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
 import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
@@ -133,6 +135,8 @@ describe("unattended collector and rollout", () => {
     expect(fetchDays).toHaveBeenCalledWith(expect.arrayContaining(["2026-09-19", "2026-09-20"]));
     expect(result.ok).toBe(false);
     const [run] = await db.select().from(s.feedbackAtomSyncRuns); expect(run.errorCode).toBe("authentication_failed");
+    const incidents = await db.select().from(s.feedbackAutowriterIncidents).where(like(s.feedbackAutowriterIncidents.dedupeKey, "atom-collection:%:authentication_failed"));
+    expect(incidents).toMatchObject([{ kind: "atom_collection_failed", severity: "critical", pushStatus: "pending" }]);
     const [probe] = await db.insert(s.feedbackAtomSyncRuns).values({triggerSource:"admin",status:"succeeded",deploymentId:"cloud",counts:{snapshots:1,activities:1}}).returning();
     await expect(confirmUnattendedAtomProof(db,probe.id,"owner")).rejects.toThrow("scheduled cloud run");
   });
@@ -191,5 +195,57 @@ describe("server review accounting", () => {
     expect(call).toHaveBeenCalledOnce();
     const progress=await isebMonitoringProgress(db);
     expect(progress[0]).toMatchObject({cohort:"mimi_v2",verified:2,reviewed:1,unresolved:1});
+    const incidents=await db.select().from(s.feedbackAutowriterIncidents).where(like(s.feedbackAutowriterIncidents.dedupeKey,"iseb-%"));
+    expect(incidents).toMatchObject([{kind:"style_review_source_missing",severity:"critical",pushStatus:"pending",wiseSessionId:"source_missing"}]);
+  });
+  it("records a style fix and a style check that could not run as dashboard-only incidents", async () => {
+    const { reviewIsebPosts } = await import("../iseb-review");
+    const { fieldsHash } = await import("../submit");
+    vi.stubEnv("OPENROUTER_API_KEY", "test-key");
+    await db.execute(sql`TRUNCATE feedback_autowriter_posts, feedback_autowriter_incidents CASCADE`);
+    const fields={topics:"1. Fractions",performance:"We worked carefully on finding common denominators. Tom explained the fraction additions clearly and corrected his simplification after checking the highest common factor. We practised checking each result together.",improvement:"1. Check the highest common factor of the numerator and denominator before writing the final fraction.",homework:""};
+    const fact={faithful:true,unsupported:[],misattributed:[],homeworkNotSet:[]};
+    const posts=[];
+    for (const wiseSessionId of ["style_fix","style_down"]) {
+      const evidenceHash=await retainIsebEvidence(db,{wiseSessionId,atom:null,lessonRecord:"Tom practised fractions.",evidenceKind:"summary"});
+      const pipeline={formatGuide:{id:"iseb",version:1},styleGuide:{id:"mimi",version:2},lessonEvidenceHash:evidenceHash,factualVerdicts:{...fact,levels:{medium:fact,high:fact}}};
+      posts.push({kind:"first_shot" as const,fields,fieldsSha256:fieldsHash(fields),pipeline,billing:{},actorKind:"autowriter" as const,actor:"test",provenance:"live" as const,wiseSessionId,outcome:"verified" as const,postStartedAt:new Date(now.getTime()-(wiseSessionId==="style_fix"?20000:10000))});
+    }
+    await db.insert(s.feedbackAutowriterPosts).values(posts);
+    const usage={promptTokens:1,completionTokens:1,reasoningTokens:0,cachedTokens:0,costUsd:0};
+    const call=vi.fn()
+      .mockResolvedValueOnce({ok:true as const,content:JSON.stringify({matches:false,problems:["Use the numbered layout."]}),model:"openai/gpt-6.1-sol",provider:"Azure",generationId:"g",finishReason:"stop",usage,latencyMs:1})
+      .mockResolvedValueOnce({ok:false as const,error:"rate limited",model:"openai/gpt-6.1-sol",provider:"Azure",latencyMs:1});
+    await reviewIsebPosts(db,Date.now()+200000,call);
+    expect(call).toHaveBeenCalledTimes(2);
+    const incidents=(await db.select().from(s.feedbackAutowriterIncidents)).toSorted((a,b)=>String(a.wiseSessionId).localeCompare(String(b.wiseSessionId)));
+    expect(incidents).toMatchObject([
+      {wiseSessionId:"style_down",kind:"style_review_unavailable",severity:"info",pushStatus:"not_required"},
+      {wiseSessionId:"style_fix",kind:"style_review_flagged",severity:"info",pushStatus:"not_required"},
+    ]);
+  });
+});
+
+describe("migration 0110", () => {
+  it("relabels incidents recorded under scan_failed by the job that raised them; style results become dashboard-only", async () => {
+    await db.execute(sql`TRUNCATE feedback_autowriter_incidents`);
+    const I=s.feedbackAutowriterIncidents;
+    await db.insert(I).values([
+      {dedupeKey:"atom-collection:2026-10-02:collection_failed",kind:"scan_failed",severity:"critical",summary:"Atom",pushStatus:"pending"},
+      {dedupeKey:"iseb-review-source:p1",kind:"scan_failed",severity:"critical",summary:"Source",pushStatus:"failed"},
+      {dedupeKey:"iseb-style:p2:flagged",kind:"scan_failed",severity:"critical",summary:"Flagged",pushStatus:"pending",nextPushAt:now},
+      {dedupeKey:"iseb-style:p3:unavailable",kind:"scan_failed",severity:"critical",summary:"Unavailable",pushStatus:"sent",pushedAt:now,pushedChannels:["email:owner@example.com"]},
+      {dedupeKey:"forward-scan:x",kind:"scan_failed",severity:"critical",summary:"Scan",pushStatus:"pending"},
+    ]);
+    const file=fs.readFileSync(path.resolve(__dirname,"../../../../drizzle/0110_feedback_autowriter_incident_kinds.sql"),"utf8");
+    for (const statement of file.split("--> statement-breakpoint")) await db.execute(sql.raw(statement));
+    const rows=Object.fromEntries((await db.select().from(I)).map(row=>[row.dedupeKey,row]));
+    expect(rows["atom-collection:2026-10-02:collection_failed"]).toMatchObject({kind:"atom_collection_failed",severity:"critical",pushStatus:"pending"});
+    expect(rows["iseb-review-source:p1"]).toMatchObject({kind:"style_review_source_missing",severity:"critical",pushStatus:"failed"});
+    expect(rows["iseb-style:p2:flagged"]).toMatchObject({kind:"style_review_flagged",severity:"info",pushStatus:"not_required",nextPushAt:null});
+    expect(rows["iseb-style:p3:unavailable"]).toMatchObject({kind:"style_review_unavailable",severity:"info",pushStatus:"not_required",pushedChannels:["email:owner@example.com"]});
+    expect(rows["iseb-style:p3:unavailable"].pushedAt).not.toBeNull();
+    expect(rows["forward-scan:x"]).toMatchObject({kind:"scan_failed",severity:"critical"});
+    await expect(db.insert(I).values({dedupeKey:"bad",kind:"not_a_kind" as never,severity:"info",summary:"x",pushStatus:"not_required"})).rejects.toThrow();
   });
 });

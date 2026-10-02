@@ -49,7 +49,7 @@ export async function reviewIsebPosts(db: Database, deadlineMs: number, callMode
     if (!fields || fieldsHash(fields) !== post.fieldsSha256 || !evidenceValid || !factual || retained.atom?.status === "contradiction") {
       await db.insert(R).values({ postId: post.id, fieldsSha256: post.fieldsSha256, status: "unavailable",
         result: { reason: "source_or_factual_verdict_unavailable" } });
-      await recordIncident(db, { dedupeKey: `iseb-review-source:${post.id}`, kind: "scan_failed", severity: "critical",
+      await recordIncident(db, { dedupeKey: `iseb-review-source:${post.id}`, kind: "style_review_source_missing", severity: "critical",
         wiseSessionId: post.wiseSessionId, summary: "The guided feedback post needs source evidence or both factual verdicts before its review can complete." });
       continue;
     }
@@ -84,8 +84,11 @@ export async function reviewIsebPosts(db: Database, deadlineMs: number, callMode
       result: { formatProblems, verdict, evidenceHash: retained.evidenceHash,
         error: call.ok ? (verdict ? null : "invalid_style_verdict") : "style_api_unavailable" },
     });
+    // A style result is dashboard-only (owner, 2 Oct 2026): the facts were judged before posting, and an unavailable
+    // review retries after 6 hours, so neither is pushed.
     if (status !== "passed") await recordIncident(db, {
-      dedupeKey: `iseb-style:${post.id}:${status}`, kind: "scan_failed", severity: "critical", wiseSessionId: post.wiseSessionId,
+      dedupeKey: `iseb-style:${post.id}:${status}`, kind: status === "flagged" ? "style_review_flagged" : "style_review_unavailable",
+      severity: "info", wiseSessionId: post.wiseSessionId,
       summary: status === "flagged" ? "Guided feedback needs a style correction. Open its evidence and style review."
         : "The style reviewer could not return a verdict. This post remains unreviewed.",
       detail: { formatProblems, problems: verdict?.problems ?? [] },
