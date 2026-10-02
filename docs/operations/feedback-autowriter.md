@@ -446,7 +446,13 @@ write (`api_actor_unmatched`, critical) blocks the gate until you acknowledge it
 the API key first. Incidents: `critical_verdict`, `critical_flag` /
 `credit_entries_changed` (a post landed without verifying) and `api_actor_unmatched` (an API save no recorded post
 explains — check who wrote to Wise with the API key) are pushed; `first_shot_unverified` is shown only (critical when
-the post did not verify) — run the backfill script to prove it, or confirm by hand what was posted. A critical
+the post did not verify) — run the backfill script to prove it, or confirm by hand what was posted.
+`atom_collection_failed` (an Atom collector run failed; lesson-only feedback carries on) and
+`style_review_source_missing` (a guided post has no retained evidence or both factual verdicts) are critical and
+pushed. Style review results are dashboard-only, never pushed (owner, 2 Oct 2026): `style_review_flagged` (the post
+needs a style fix — listed in What needs you, not red, until acknowledged) and `style_review_unavailable` (the
+reviewer returned no verdict; it retries after 6 hours, shown under Details only). `scan_failed` is kept for the
+forward scan; before migration 0110 the Atom collector and the style review recorded under it. A critical
 incident that was not delivered keeps the review job red (Data Health) until you **Acknowledge** it (What needs you →
 Incidents → Open; its pushes stop too).
 

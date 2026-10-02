@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { AutowriterDashboard } from "@/lib/feedback-autowriter/dashboard";
 import { HOLD_REASON_CATEGORY_LABELS, holdReasonCategory, holdReasonLabel } from "@/lib/feedback-autowriter/hold-reasons";
-import { failedPostTitle, holdUrgency, incidentTitle, type InboxItem } from "@/lib/feedback-autowriter/inbox";
+import { failedPostTitle, holdUrgency, incidentTitle, isListedIncident, type InboxItem } from "@/lib/feedback-autowriter/inbox";
 import type { AutowriterReview, ReviewQueueItem } from "@/lib/feedback-autowriter/review-data";
 import { cn } from "@/lib/utils";
 import { Tag, Upper, type Tone } from "./atoms";
@@ -378,7 +378,7 @@ export function IncidentBody({ incident, about, canControl, onAcknowledged, onOp
   onAcknowledged: () => Promise<void> | void;
   onOpen?: (target: DrawerTarget) => void;
 }) {
-  const open = incident.severity === "critical" && !incident.acknowledgedAt;
+  const open = isListedIncident(incident);
   return (
     <div className="space-y-4">
       <div className="space-y-2">
@@ -416,7 +416,11 @@ export function IncidentBody({ incident, about, canControl, onAcknowledged, onOp
           {canControl
             ? <AcknowledgeButton incidentId={incident.id} onAcknowledged={onAcknowledged} />
             : <p className="text-xs text-muted-foreground">Only the owner acknowledges incidents.</p>}
-          <p className="text-xs text-muted-foreground">Acknowledging stops the alert&apos;s pushes, and an undelivered alert no longer keeps the review job red.</p>
+          <p className="text-xs text-muted-foreground">
+            {incident.severity === "critical"
+              ? "Acknowledging stops the alert's pushes, and an undelivered alert no longer keeps the review job red."
+              : "Style results are shown here only, never pushed. Acknowledging takes it off the list."}
+          </p>
         </div>
       ) : null}
     </div>

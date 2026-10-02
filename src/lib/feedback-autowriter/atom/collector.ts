@@ -171,7 +171,7 @@ export async function runAtomCollector(input: {
   if (failure) {
     await recordIncident(db, {
       dedupeKey: `atom-collection:${bangkokDate(now.toISOString())}:${failure}`,
-      kind: "scan_failed", severity: "critical",
+      kind: "atom_collection_failed", severity: "critical",
       summary: `Atom collection needs attention: ${failure} (${failureStage}: ${failureCause}). Lesson-only feedback remains available.`,
       detail: { runId, code: failure, stage: failureStage, cause: failureCause },
     });

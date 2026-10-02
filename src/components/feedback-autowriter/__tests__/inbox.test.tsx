@@ -112,6 +112,20 @@ describe("Inbox", () => {
     expect(html).toContain(">Verify failed<");
   });
 
+  it("shows a guided post's style fix as info, not red, and keeps the group header red only for a critical incident", () => {
+    const styleFix = { ...reviewFixture().incidents.find((entry) => entry.severity === "info")!, kind: "style_review_flagged",
+      summary: "Guided feedback needs a style correction. Open its evidence and style review." };
+    /** The incident group's markup only: the other groups have red rows of their own. */
+    const incidentGroup = (html: string) => html.slice(html.indexOf('data-group="incident"'), html.indexOf('data-group="hold"'));
+    const onlyStyle = incidentGroup(render({ review: reviewFixture({ incidents: [styleFix] }) }));
+    expect(onlyStyle).toContain("A guided post needs a style fix");
+    expect(onlyStyle).toMatch(/>Info · /u);
+    expect(onlyStyle).not.toContain("conflict");
+    const withCritical = incidentGroup(render({ review: reviewFixture({ incidents: [...reviewFixture().incidents, styleFix] }) }));
+    expect(withCritical).toMatch(/Incidents<\/span><span[^>]*>2<\/span>/u);
+    expect(withCritical).toContain("text-conflict");
+  });
+
   it("narrows to one tutor and says so", () => {
     const html = render({ tutorKey: "Chai" });
     expect(html).toContain("filtered to Chai");
