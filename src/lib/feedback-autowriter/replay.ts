@@ -114,6 +114,12 @@ export interface ReplayDeps {
   transcriptSource?: (wiseSessionId: string) => Promise<CachedTranscript | null>;
   /** With a cache: a class without a cached transcript is `skip:no_cached_transcript` — no model call, no Soniox job. */
   requireCachedTranscript?: boolean;
+  /**
+   * With `requireCachedTranscript`: instead of skipping a class with no cached transcript, take production's summary
+   * route for it (fallback `speakers_unclear`, the reason summary-only posts were written on 2 Oct). No Soniox job.
+   * Used to replay summary-only posts through a changed writer/judge.
+   */
+  summaryWhenNoCachedTranscript?: boolean;
   /** Passes to run besides the transcript draft (both on by default). */
   passes?: { summaryDraft?: boolean; postedJudge?: boolean };
   /** What a draft must not copy (production: `loadTutorPriorFeedback`). */
@@ -431,7 +437,7 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   // A cached transcript replaces the Soniox job; without one a cache-only replay skips the class before any call.
   const cached = deps.transcriptSource ? await deps.transcriptSource(sample.wiseSessionId) : null;
-  if (!cached && deps.requireCachedTranscript) {
+  if (!cached && deps.requireCachedTranscript && !deps.summaryWhenNoCachedTranscript) {
     record.outcome = "skip:no_cached_transcript";
     return;
   }
@@ -500,6 +506,9 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
         },
       };
     }
+  } else if (deps.requireCachedTranscript && deps.summaryWhenNoCachedTranscript) {
+    // Cache-only replay of a summary-only post: production's route for it, never a Soniox job.
+    fallback = "speakers_unclear";
   } else if (!recording.ok && recording.reason === "recording_not_ready" && sample.recordingPublishedAt) {
     // Published (production transcribes within the hour) but no longer listed by Wise: not replayable.
     record.outcome = "skip:recording_gone";
