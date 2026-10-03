@@ -1,7 +1,7 @@
 import { del } from "@vercel/blob";
 import { and, eq, isNotNull, lt, or, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
-import { classCaptures as captures, classCaptureAssets as assets } from "@/lib/db/schema";
+import { classCaptures as captures, classCaptureAssets as assets, classCaptureJobs as jobs } from "@/lib/db/schema";
 import { CAPTURE_RETENTION_MS, CaptureError } from "./model";
 import { createCaptureSpeechClient } from "./providers";
 import { removeProviderCopies } from "./processing";
@@ -31,7 +31,7 @@ export async function cleanupCapture(id: string, db: Database = getDb(), deadlin
         if (!process.env.BLOB_READ_WRITE_TOKEN) throw pending();
         budgetLeft(deadline);
         await del(row.pathname, { abortSignal: AbortSignal.timeout(Math.max(1, Math.min(5_000, deadline - Date.now()))) });
-        await db.update(assets).set({ transcript: null }).where(eq(assets.id, row.id));
+        await db.update(assets).set({ transcript: null, transcriptSegments: null, photoFindings: null }).where(eq(assets.id, row.id));
       }
       if (row.providerJobId || row.providerFileId) {
         if (!speech) throw pending();
@@ -43,7 +43,8 @@ export async function cleanupCapture(id: string, db: Database = getDb(), deadlin
     } catch { failed = true; }
   }
   if (purgeAll) {
-    await db.update(assets).set({ transcript: null }).where(eq(assets.captureId, id));
+    await db.update(jobs).set({ proposal: null, evidence: null, expectedUploads: [], error: null, status: "attention" }).where(eq(jobs.captureId, id));
+    await db.update(assets).set({ transcript: null, transcriptSegments: null, photoFindings: null }).where(eq(assets.captureId, id));
     await db.update(captures).set({ draft: null, tutorNotes: "", topic: "", reviewed: false }).where(eq(captures.id, id));
   }
   // Repeat blob deletion while upload tokens/in-flight writes may still finish.

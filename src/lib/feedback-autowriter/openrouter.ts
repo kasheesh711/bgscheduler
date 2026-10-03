@@ -140,7 +140,7 @@ export async function callOpenRouter(input: {
   apiKey: string;
   model: string;
   provider: OpenRouterProviderPreferences;
-  messages: Array<{ role: "system" | "user"; content: string }>;
+  messages: Array<{ role: "system" | "user"; content: string | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> }>;
   schemaName: string;
   schema: object;
   effort: "max" | "high" | "medium" | "low";

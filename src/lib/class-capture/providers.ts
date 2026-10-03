@@ -22,6 +22,7 @@ export interface CaptureSpeechClient {
   /** Duration is provider-measured after processing starts, never a pre-spend limit guarantee. */
   get(id: string): Promise<{ status: "queued" | "processing" | "completed" | "error"; audioDurationMs?: number }>;
   transcript(id: string): Promise<string>;
+  transcriptDetails?(id: string): Promise<{ text: string; tokens: import("@/lib/feedback-autowriter/soniox").SonioxToken[] }>;
   removeJob(id: string): Promise<void>;
   removeFile(id: string): Promise<void>;
   /** Count of deleted resources, not captures. Partial failure throws so cleanup can retry. */
@@ -58,7 +59,12 @@ function parsed<T>(schema: z.ZodType<T>, value: unknown, uncertain = false): T {
 /** Private file uploads; tracking references are NOT provider idempotency keys. Never retry POST here. */
 export function createCaptureSpeechClient(apiKey: string, fetchImpl: typeof fetch = fetch, options: { deadlineMs?: number } = {}): CaptureSpeechClient {
   if (!apiKey.trim()) throw new CaptureSpeechError(503);
-  const existing = createSonioxClient(apiKey, fetchImpl);
+  const boundedFetch: typeof fetch = (input, init) => {
+    const remaining = (options.deadlineMs ?? Infinity) - Date.now();
+    if (remaining <= 0) throw new CaptureSpeechError(503);
+    return fetchImpl(input, Number.isFinite(remaining) ? { ...init, signal: AbortSignal.any([...(init?.signal ? [init.signal] : []), AbortSignal.timeout(Math.ceil(remaining))]) } : init);
+  };
+  const existing = createSonioxClient(apiKey, boundedFetch);
 
   async function request(path: string, init: RequestInit = {}, allowMissing = false): Promise<unknown> {
     const creates = init.method === "POST";
@@ -129,6 +135,10 @@ export function createCaptureSpeechClient(apiKey: string, fetchImpl: typeof fetc
       checkedId(id);
       const result = await sanitized(() => existing.get(id));
       return { status: result.status, ...(result.audioDurationMs === null ? {} : { audioDurationMs: result.audioDurationMs }) };
+    },
+    async transcriptDetails(id) {
+      checkedId(id);
+      return sanitized(() => existing.transcript(id));
     },
     async transcript(id) {
       checkedId(id);

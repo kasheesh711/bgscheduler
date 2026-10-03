@@ -8,6 +8,8 @@ import { createCaptureSpeechClient } from "./providers";
 import { generateCaptureDraft } from "./evidence";
 import { loadPriorFeedback, type CaptureScope } from "./sessions";
 
+import { transcriptSegments } from "./transcript-segments";
+
 type Speech = ReturnType<typeof createCaptureSpeechClient>;
 type SpeechDeps = { db?: Database; speech?: Speech; readBytes?: (asset: StoredAsset) => Promise<Buffer> };
 export async function removeProviderCopies(asset: StoredAsset, speech: Speech, db: Database) {
@@ -43,14 +45,15 @@ export async function transcribeCapture(scope: CaptureScope, captureId: string, 
     }
     if (status.status !== "completed") return;
     const durationLimit = asset.kind === "debrief" ? 180_000 : 2 * 60 * 60_000;
-    const transcript = status.audioDurationMs !== undefined && status.audioDurationMs > durationLimit ? "" : await speech.transcript(asset.providerJobId);
+    const details = speech.transcriptDetails ? await speech.transcriptDetails(asset.providerJobId) : null;
+    const transcript = status.audioDurationMs !== undefined && status.audioDurationMs > durationLimit ? "" : details?.text ?? await speech.transcript(asset.providerJobId);
     if (!transcript.trim() || transcript.length > 90000) {
       await db.update(assets).set({ status: "failed", error: "The recording exceeded the duration/review limit or returned no usable transcript. Remove it and use tutor notes." }).where(eq(assets.id, assetId));
       try { await removeProviderCopies(asset, speech, db); } catch { /* Retry durable deletion during retention. */ }
       throw new CaptureError(422, "No usable transcript was returned within the duration/review limit. Remove this audio and use tutor notes.");
     }
     // Cancellation or expiry while the provider was running must never resurrect content.
-    await db.update(assets).set({ status: "transcribed", transcript, providerUncertain: false, error: null })
+    await db.update(assets).set({ status: "transcribed", transcript, transcriptSegments: details ? transcriptSegments(details.tokens) : null, providerUncertain: false, error: null })
       .where(and(eq(assets.id, assetId), isNull(assets.discardedAt), eq(assets.status, "transcribing"), sql`exists (select 1 from class_captures c where c.id = ${assets.captureId} and c.deleted_at is null and c.expires_at > now())`));
     try { await removeProviderCopies(asset, speech, db); } catch { /* Durable IDs remain for the cleanup sweep. */ }
     return;

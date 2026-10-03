@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { automaticCaptureEnabled, type AutomaticProgress, type TranscriptSegment, type PhotoFindings } from "./automatic-model";
 import { bangkokDateKey, todayBangkok } from "@/lib/room-capacity/dates";
 
 export const CAPTURE_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -41,10 +42,10 @@ export function availability(env: Record<string, string | undefined> = process.e
   const enabled = captureEnabled(env);
   const approved = enabled && env.CLASS_CAPTURE_PROCESSING_APPROVED === "true";
   const storage = enabled && !!env.BLOB_READ_WRITE_TOKEN?.trim();
-  return { enabled, storage, transcription: approved && storage && !!env.SONIOX_API_KEY?.trim(), drafting: approved && !!env.OPENROUTER_API_KEY?.trim() };
+  return { ...(automaticCaptureEnabled(env) ? { automatic: true } : {}), enabled, storage, transcription: approved && storage && !!env.SONIOX_API_KEY?.trim(), drafting: approved && !!env.OPENROUTER_API_KEY?.trim() };
 }
 export const consentSchema = z.object({
-  participants: z.literal(true), guardian: z.enum(["confirmed", "not_required"]), processing: z.literal(true),
+  participants: z.literal(true), guardian: z.enum(["confirmed", "not_required"]), processing: z.literal(true), automatic: z.literal(true).optional(),
 }).strict();
 export type CaptureConsent = z.infer<typeof consentSchema>;
 export type CaptureSession = {
@@ -58,9 +59,11 @@ export const draftFieldsSchema = z.object({
 export type DraftFields = z.infer<typeof draftFieldsSchema>;
 export type CaptureAsset = {
   id: string; kind: "recording" | "debrief" | "worksheet"; mime: string; size: number; pathname: string;
+  transcriptSegments?: TranscriptSegment[] | null; photoFindings?: PhotoFindings | null; analysisUncertain?: boolean;
   status: "pending" | "ready" | "transcribing" | "transcribed" | "failed"; transcript: string | null; error: string | null;
 };
 export type CaptureView = {
+  automatic?: AutomaticProgress;
   id: string; session: CaptureSession; topic: string; tutorNotes: string; consent: CaptureConsent;
   assets: CaptureAsset[]; draft: DraftFields | null; reviewed: boolean; expiresAt: string; version: number;
 };

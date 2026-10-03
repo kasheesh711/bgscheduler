@@ -1,6 +1,6 @@
 import { assertMediaBytes, AUDIO_TYPES, PHOTO_TYPES, MAX_AUDIO_BYTES, MAX_DEBRIEF_BYTES, MAX_PHOTO_BYTES, type CaptureAsset, type DraftFields } from "@/lib/class-capture/model";
 
-export type CaptureAvailability = { enabled: boolean; storage: boolean; transcription: boolean; drafting: boolean };
+export type CaptureAvailability = { automatic?: boolean; enabled: boolean; storage: boolean; transcription: boolean; drafting: boolean };
 export type LocalMedia = { id: string; kind: CaptureAsset["kind"]; name: string; blob: Blob; incomplete?: boolean };
 export const EMPTY_DRAFT: DraftFields = { topicsCovered: "", demonstratedUnderstanding: "", difficulties: "", homeworkNextSteps: "" };
 export const DRAFT_LABELS: Record<keyof DraftFields, string> = {

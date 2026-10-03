@@ -1,3 +1,7 @@
+import { after } from "next/server";
+import { automaticCaptureEnabled } from "./automatic-model";
+import { kickAutomaticCapture } from "./automatic";
+import { projectAsset } from "./store";
 import { z } from "zod";
 import { availability, CaptureError, createCaptureSchema, patchCaptureSchema, assetInputSchema } from "./model";
 import { captureError, captureJson, captureRequest, privateHeaders, requireCaptureEnabled } from "./http";
@@ -88,6 +92,10 @@ export async function finalize(request: Request, context: AssetContext) {
     const { id, assetId } = await context.params;
     await currentCapture(scope, uuid(id));
     await finalizeAsset(scope, uuid(id), uuid(assetId));
+    if (automaticCaptureEnabled()) {
+      after(() => kickAutomaticCapture(id));
+      if (new URL(request.url).searchParams.get("automatic") === "1") return captureJson({ asset: projectAsset(await assetForScope(scope, assetId)) });
+    }
     return captureJson({ capture: await captureView(scope, id) });
   } catch (error) { return captureError(error); }
 }
