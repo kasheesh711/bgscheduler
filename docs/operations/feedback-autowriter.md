@@ -462,8 +462,10 @@ Incidents → Open; its pushes stop too).
 Every night, on the owner's Mac, Opus 5.5 at max effort re-checks the AI posts of ONE Bangkok day (the day of
 now − 12 h; `--night=YYYY-MM-DD` to choose) against the lesson evidence and sorts every problem into the failure-mode
 registry ([feedback-autowriter-failure-modes.md](feedback-autowriter-failure-modes.md)). It reads only verified
-autowriter posts (a first-shot post by the autowriter itself) — never tutor-written feedback — and never writes to
-Wise. Its only database write is the agent flag (`flag --apply`), which puts a class back in the review list.
+autowriter posts (a first-shot post by the autowriter itself) — never tutor-written feedback. The audit steps never
+write to Wise; their only database write is the agent flag (`flag --apply`), which puts a class back in the review
+list. The one Wise write of the whole nightly is `correct --apply` (below): a checked, signed correction of a post
+with a real error, through the guarded executor.
 
 ```sh
 npx tsx --tsconfig scripts/tsconfig.json scripts/feedback-autowriter-nightly.ts <command> [--night=YYYY-MM-DD] [--json]
@@ -481,8 +483,13 @@ npx tsx --tsconfig scripts/tsconfig.json scripts/feedback-autowriter-nightly.ts 
 | `run [--apply-flags] [--retranscribe] [--soniox-usd=n] [--no-synthesis] [--force]` | preflight → select → collect → audit → report (→ flag). Preflight and select run every time, so every later step runs again from its cache (no repeated Wise read or paid call). Any stop ends the run with a partial report — never a retry loop. |
 | `prune [--dry-run]` | Deletes local evidence older than 7 days. |
 | `costs [--days=7]` | The last nights' spend. |
+| `verify --root-cause-ref=<branch\|PR> [--replay-dir=<dir>] [--sessions=a,b]` | For each audited class with a major or critical issue a text can fix: a candidate text, checked by everything below, written as a signed proposal (`proposals/<sid>.json`). Never sends anything to Wise. |
+| `correct [--apply] [--supervised] [--max=n] [--sessions=a,b]` | The ONLY Wise write: each signed proposal through the guarded executor, one class at a time. A dry run (every guard printed per class) unless `--apply`. |
+| `recover [--apply] [--supervised]` | Settles agent corrections a dead run left `posting`/`awaiting_event` (Wise reads only, never a POST), then lifts a correction lock its run left. A dry run (database reads only) unless `--apply`. |
 
-`--no-deadline` (supervised runs only) ignores the 06:50 Bangkok stop.
+`--no-deadline` (supervised runs only) ignores the 06:50 Bangkok stop. `preflight` also runs the dry run of `recover`
+and stops with `unsettled_correction` while an agent correction is unsettled or a correction lock is left on the
+control row: run `recover`, then `recover --apply` (or resume by hand when another halt sits on top of the lock).
 
 **The Opus calls.** Each audit is `claude -p --model claude-opus-5-5 --effort max --tools "" --output-format json
 --json-schema … --max-budget-usd 1.5 --no-session-persistence --permission-prompts none --strict-mcp-config --safe-mode
@@ -515,6 +522,7 @@ preflight accepts besides anything on `origin/main`. The lock is stale when its 
 | Soniox a night | $2 (`--soniox-usd` up to $5 for one run) |
 | OpenRouter a night | $3 |
 | Agent flags a night | 10 |
+| Corrections (proposals, and POSTs) a night / a week | 6 / 15 (and the database's own 6 per 24 h) |
 | Stop | 06:50 Bangkok on the morning after the audited day |
 
 Every spend is reserved in `spend.jsonl` before it starts (a crash leaves the reservation counting at its estimate); a
@@ -522,20 +530,96 @@ call that cost more than it reserved and passed a cap writes the home STOP file.
 
 **Outputs.** State lives outside every worktree: `$BGS_NIGHTLY_ROOT`, default `~/.bgscheduler-nightly/nightly`
 (directories 0700, files 0600; `~/.bgscheduler-nightly/backup/` is never touched). Real data — `cache/<sid>/` (Wise
-detail, transcripts, captions), `audits/<sid>/`, and each night's `bundles/`, `targets.json`, `report.md`, `plan.md` —
-is deleted after 7 days (`prune`). Kept: `run.json`, `summary.md` (counts, modes, costs, proof — no names or text),
-`claude-calls.jsonl`, `fix-brief.json` (sanitised: an invented fixture, refused if it carries a real name — students,
-tutors, the tutors' other students, people the audits found named, Zoom caption speakers — an 8-word run or a
-25-character Thai run copied from the evidence), and the root ledgers `ledger.jsonl` (ids, hashes, modes, verdicts, cost) and
-`costs.jsonl`.
+detail, transcripts, captions), `audits/<sid>/`, and each night's `bundles/`, `targets.json`, `report.md`, `plan.md`,
+`proposals/`, `verify/` and `replay/` — is deleted after 7 days (`prune`). Kept: `run.json`, `summary.md` (counts,
+modes, costs, proof — no names or text), `claude-calls.jsonl`, `fix-brief.json` (sanitised: an invented fixture, refused
+if it carries a real name — students, tutors, the tutors' other students, people the audits found named, Zoom caption
+speakers — an 8-word run or a 25-character Thai run copied from the evidence), `corrections.jsonl` (ids, statuses and
+codes), and the root ledgers `ledger.jsonl` (ids, hashes, modes, verdicts, cost), `costs.jsonl` and `spend.jsonl`.
 
 **Exit codes.** 0 ok/nothing, 1 error, 2 usage/config, 3 caps, 4 Claude usage limit/auth/model proof, 5 Wise
-throttled, 6 guard refused, 7 STOP/lock/deadline, 10 safety (a cap breached after the fact).
+throttled, 6 guard refused, 7 STOP/lock/deadline/outside the correction window (also `awaiting_event_locked`), 10
+safety (a cap breached after the fact, or a correction that did not verify: the autowriter is halted).
 
 **Replaying from the cache.** `scripts/autowrite-online-feedback.ts --replay --transcripts-from=~/.bgscheduler-nightly/nightly/cache
 --out=<dir> [--sessions=a,b] [--no-summary-draft] [--no-posted-judge] [--max-model-usd=n]` replays classes from the
 nightly's cached detail, transcript and captions: no Wise read and no Soniox job (a class without a cached transcript
 is skipped before any call); model calls go to OpenRouter as in any replay.
+
+### Corrections: verify → correct (quick 261003-12b)
+
+A post with a real (major or critical) error is corrected in Wise once, ever, even when the owner already approved it,
+and flagged for the owner to review again. Billing and scope problems (M13, M14, `billing_status`,
+`should_not_have_posted`) and modes no text can fix are never corrected: `verify` lists them as **needs Kevin**.
+
+**1. Replay the fix** (optional, recommended): the fixed pipeline on the night's cached evidence, written into the
+night's folder so it is deleted with the night's other real data:
+
+```sh
+npx tsx --tsconfig scripts/tsconfig.json scripts/autowrite-online-feedback.ts --replay \
+  --transcripts-from=~/.bgscheduler-nightly/nightly/cache --sessions=<the failed classes> \
+  --out=~/.bgscheduler-nightly/nightly/<night>/replay --no-posted-judge
+```
+
+**2. `verify --root-cause-ref=<fix branch or PR> [--replay-dir=~/.bgscheduler-nightly/nightly/<night>/replay]`.**
+For each audited class of the night with a major or critical issue in a text-fixable mode:
+- skipped at no cost when a correction would be refused anyway (**blocked**: no first-shot row, Wise's text edited
+  since our post, a person's save, an open owner flag);
+- a **critical** issue first needs a second, fresh Opus 5.5 max audit of the posted text reporting a critical issue
+  on an overlapping quote of the same field — otherwise the class needs Kevin;
+- candidate A is the replay's draft for the class (the transcript draft; the summary draft when the transcript route
+  fell back) — never for a guided post (style or format guide, Atom); candidate B, the fallback, is the posted text
+  with the audit's minimal fixes applied exactly, in order (a fix whose span is gone or appears twice refuses the
+  candidate, and so does a result changing more than 25% of the words);
+- a candidate passes only when every check passes, cheapest first: combined length 0.6–1.6× the post; production's
+  validators (with the class's own post left out of the copy check), meta words and identity
+  (`correctionTextProblems`); the student's display name used; both production GLM judge levels on the bundle's
+  evidence (the transcript, else Wise's summary — and, for an ISEB post, the frozen Atom evidence its writer was given;
+  production's messages, redaction and pinned route); and one Opus 5.5 max re-audit of the candidate with the prior
+  issues — verdict accurate or cosmetic, no major omission, every prior major or critical issue gone, nobody else
+  named, homework only when the tutor set it.
+A passing candidate becomes `<night>/proposals/<sid>.json` (0600): the candidate text and its hash, the posted text's
+hash, the source (`replay` or `minimal_fix`), every check, a reason of mode codes only, the root-cause reference and the
+versions behind it — signed with HMAC-SHA256 over its canonical JSON with `~/.bgscheduler-nightly/hmac.key` (32 random
+bytes, 0600, created by the first `verify`; never commit or copy it). Every paid call is reserved first and recorded in
+`<night>/verify/calls/` before it is made and after: a candidate is re-audited at most once, ever (also after a crash
+mid-call); nothing is retried in a loop, except a call a usage limit or login failure stopped. At most 6 proposals a
+night. `<night>/verify/<sid>.json` keeps each class's candidates and checks for the morning review. A proposal must
+carry every check passed (`correct` refuses one that does not).
+
+**3. `correct` (dry run), then `correct --apply`.** Every proposal's signature is checked first (one that fails —
+unsigned, edited, signed with another key, renamed, another night's — refuses the whole run). The plan comes from the
+database, never from a proposal: the first-shot posts row (its text and hash, billing and `post_started_at`), the
+session row's expected submission, the class and teacher, and production's field mappings; the Wise ops are the
+production client's with both STOP files checked before every read. The executor also gets the class's AI-suspect and
+copy context (the student's names, the tutor's names, the tutor's prior feedback) and the night's text checks, and it
+reads the same clock as the store, which refuses the lock (`clock_skew`) when this Mac is more than 2 s off the
+database. One class at a time: STOP, the executor's own guards on reads alone (a refused class never waits or counts),
+then — with `--apply` — the next correction window (UTC minutes 10–15 and 40–45, i.e. 06:10–06:15 and 06:40–06:45
+Bangkok; waited for up to 6 minutes, never past the 06:50 deadline), the night and week caps reserved in
+`spend.jsonl`, and the one guarded POST ([`correction.ts`](../../src/lib/feedback-autowriter/correction.ts)): up to
+3 minutes of checks under the lock, then up to about 10 minutes of read-back and waiting for our Wise event. Each
+outcome is appended to `<night>/corrections.jsonl` (codes and ids only).
+- `--apply` runs only from a clean checkout whose HEAD is `origin/main` (fetch first). `--supervised` lifts that for
+  an owner-watched run from a branch and is recorded on every outcome; the scheduled task never passes it.
+- Verified, or waiting for our Wise event: an `agent` flag (`agent-correction:<sid>`, "corrected by the nightly agent:
+  <mode codes>") puts the class back in the review list.
+- `safety`: the executor halted the autowriter and kept its lock; `correct` writes `~/.bgscheduler-nightly/STOP` and
+  exits 10. Check the class in Wise, then resume the autowriter by hand.
+- `awaiting_event_locked` (exit 7): the corrected text verified in Wise but our own save event did not show within 5
+  minutes, so the lock is KEPT (the autowriter stays halted) — no other correction tonight, `next: "recover --apply"`,
+  `recoverNotBefore` in the summary. `recover --apply` settles it by Wise reads alone once the lock's 20-minute lease is
+  over (rows count as stale after 25 minutes; until then it answers `lease_live`, exit 7), then lifts the lock.
+- A Wise 429 that sent nothing (`not_sent`) parks Wise for 30 minutes (`wise_429`, exit 5). A `not_sent` because the lock
+  was lost or its budget spent before the POST (an owner's switch, this Mac asleep) stops the run (`not_sent:<reason>`,
+  exit 7). Either way the class's one correction is used up.
+- A correction that released the lock while someone else had halted the autowriter on top of it (an owner pause) stops
+  the run (`production_halted`, exit 7); so do the database's own cap of 6 agent corrections in 24 hours
+  (`cap:daily_db`, exit 3) and a skewed clock (`clock_skew`, exit 6).
+
+**Kill switches for corrections.** Either STOP file stops `verify` and `correct` before the next class (and every
+Wise read of `correct`); pause the autowriter (`--pause`) and every correction is refused at its guards; delete
+`~/.bgscheduler-nightly/hmac.key` and no proposal verifies; `--apply` from anything but a clean `origin/main` is refused.
 
 
 ## Mimi style guide review and activation
