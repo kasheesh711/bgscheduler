@@ -540,6 +540,18 @@ describe("replay from cached transcripts (nightly audit cache)", () => {
     expect(touched).toEqual([]);
   });
 
+  it("takes production's summary route for an uncached class when asked, without any Soniox call", async () => {
+    const model = fakeModel();
+    const record = await replayClass(replayDeps({
+      wise: readOnlyWise(sessionDetail(RECORDING)).wise, soniox: refusingSoniox(), callModel: model.callModel as never,
+      transcriptSource: async () => null, requireCachedTranscript: true, summaryWhenNoCachedTranscript: true,
+    }), SAMPLE);
+    expect(record.outcome).toBe("fallback:speakers_unclear");
+    expect(record.soniox).toBeNull();
+    expect(record.summaryDraft).not.toBeNull();
+    expect(record.calls.every((call) => call.purpose === "summary_draft")).toBe(true);
+  });
+
   it("refuses every Soniox call in a cache-only replay", async () => {
     const stub = refusingSoniox();
     await expect(stub.create({ audioUrl: "x", terms: [], general: [], clientReferenceId: "x" })).rejects.toThrow("soniox_disabled");
