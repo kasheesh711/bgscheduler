@@ -16,11 +16,11 @@ export async function removeProviderCopies(asset: StoredAsset, speech: Speech, d
   // Keep IDs until deletion is confirmed so a later sweep can retry provider failures.
   if (asset.providerJobId) {
     await speech.removeJob(asset.providerJobId);
-    await db.update(assets).set({ providerJobId: null }).where(eq(assets.id, asset.id));
+    await db.update(assets).set({ providerJobId: null }).where(and(eq(assets.id, asset.id), eq(assets.providerJobId, asset.providerJobId)));
   }
   if (asset.providerFileId) {
     await speech.removeFile(asset.providerFileId);
-    await db.update(assets).set({ providerFileId: null }).where(eq(assets.id, asset.id));
+    await db.update(assets).set({ providerFileId: null }).where(and(eq(assets.id, asset.id), eq(assets.providerFileId, asset.providerFileId)));
   }
 }
 export async function transcribeCapture(scope: CaptureScope, captureId: string, assetId: string, deps: SpeechDeps = {}) {

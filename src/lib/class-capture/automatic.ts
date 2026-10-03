@@ -56,7 +56,9 @@ export async function automaticAction(scope: CaptureScope, id: string, raw: unkn
     if (asset.providerUncertain || asset.analysisUncertain) throw new CaptureError(409, "This request may already have been processed. Its outcome needs review before another paid attempt.");
     if (asset.status !== "failed" && !(asset.kind === "worksheet" && asset.error)) throw new CaptureError(409, "This material is already processing or complete.");
     if (asset.providerFileId || asset.providerJobId) await removeProviderCopies(asset, createCaptureSpeechClient(process.env.SONIOX_API_KEY!), db);
-    await db.update(assets).set({ status: asset.status === "failed" ? "ready" : asset.status, analysisAttemptedAt: null, error: null }).where(eq(assets.id, asset.id));
+    const [reset] = await db.update(assets).set({ status: asset.status === "failed" ? "ready" : asset.status, analysisAttemptedAt: null, error: null })
+      .where(and(eq(assets.id, asset.id), eq(assets.status, asset.status), sql`${assets.error} is not distinct from ${asset.error}`)).returning({ id: assets.id });
+    if (!reset) return; // Another retry already changed this failure; never erase a newer attempt marker.
   }
   if (input.action === "retry" && !input.assetId && job.draftUncertain) throw new CaptureError(409, "The AI request outcome needs review before retrying.");
   await withDatabaseTransaction(db, async tx => {
@@ -104,6 +106,7 @@ export async function processAutomaticCapture(id: string, deps: AutomaticDeps = 
     sql`exists (select 1 from class_captures c where c.id = ${jobs.captureId} and c.deleted_at is null and c.expires_at > now())`)).returning();
   if (!job) return;
   const owned = () => and(eq(jobs.captureId, id), eq(jobs.leaseUntil, lease));
+  let writingStarted = false;
   try {
     if (!availability().drafting) throw new CaptureError(503, "Automatic feedback is unavailable until approved AI processing is configured.");
     const [capture] = await db.select().from(captures).where(eq(captures.id, id));
@@ -152,6 +155,7 @@ export async function processAutomaticCapture(id: string, deps: AutomaticDeps = 
           }
         })] : []),
       ]);
+      await db.update(jobs).set({ settleUntil: due() }).where(owned());
       return;
     }
     const outstanding = job.expectedUploads.filter(id => !media.some(a => a.id === id && a.status !== "pending"));
@@ -177,6 +181,7 @@ export async function processAutomaticCapture(id: string, deps: AutomaticDeps = 
     await db.update(jobs).set({ status: "writing", draftUncertain: true, attempts: sql`${jobs.attempts} + 1` }).where(owned());
     let prior: Array<{ date: string; text: string }> = [];
     try { prior = await (deps.prior ?? loadPriorFeedback)(scope, capture.session); } catch { /* History is optional context. */ }
+    writingStarted = true;
     const result = await (deps.synthesize ?? synthesizeFeedback)({ topic: capture.topic, tutorNotes: capture.tutorNotes, assets: usable, prior });
     if (usable.length < media.length) result.evidence.questions.push(`${media.length - usable.length} material(s) could not be read. This draft uses the successfully processed materials only.`);
     await withDatabaseTransaction(db, async tx => {
@@ -195,7 +200,7 @@ export async function processAutomaticCapture(id: string, deps: AutomaticDeps = 
     });
   } catch (error) {
     const retryable = error instanceof AnalysisError ? error.retryable : error instanceof CaptureError && [429, 503].includes(error.status);
-    if (error instanceof AnalysisError && !error.uncertain) await db.update(jobs).set({ draftUncertain: false }).where(owned());
+    if (writingStarted && error instanceof AnalysisError && !error.uncertain) await db.update(jobs).set({ draftUncertain: false }).where(owned());
     await db.update(jobs).set({ status: retryable && job.attempts < 3 ? "waiting" : "attention", error: error instanceof CaptureError ? error.message : "Processing could not finish. Your materials are saved.",
       attempts: sql`${jobs.attempts} + 1`, dueAt: new Date(Date.now() + 30_000) }).where(and(owned(), eq(jobs.revision, job.revision)));
   } finally {

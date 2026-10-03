@@ -123,6 +123,26 @@ describe("automatic capture durable workflow", () => {
     await expect(automaticAction(scope, id, { action: "retry", assetId: photo.id }, db)).rejects.toThrow("outcome");
     await tick(); expect((await captureView(scope, id, db)).automatic?.proposal?.evidence.questions).toHaveLength(1);
   });
+  it("does not let an image retry clear an earlier uncertain writer outcome", async () => {
+    await consent(); await audio(); deps.synthesize = vi.fn(async () => { throw new AnalysisError(true, false, "Unknown outcome"); }); await tick();
+    const photo = await createAsset(scope, id, { id: crypto.randomUUID(), kind: "worksheet", mime: "image/jpeg", size: bytes.length, worksheetPermission: true }, db);
+    await db.update(assets).set({ status: "ready" }).where(eq(assets.id, photo.id));
+    deps.readPhoto = vi.fn(async () => { throw new AnalysisError(false, true, "Rate limited"); }); await tick();
+    const [job] = await db.select().from(jobs); expect(job.draftUncertain).toBe(true);
+    deps.readPhoto = vi.fn(async () => findings); await tick(); await tick(); expect(deps.synthesize).toHaveBeenCalledTimes(1);
+  });
+  it("settles for ten seconds after the final material finishes processing", async () => {
+    await consent(); const photo = await createAsset(scope, id, { id: crypto.randomUUID(), kind: "worksheet", mime: "image/jpeg", size: bytes.length, worksheetPermission: true }, db);
+    await db.update(assets).set({ status: "ready" }).where(eq(assets.id, photo.id)); await tick();
+    await db.update(jobs).set({ dueAt: new Date(0) }); await processAutomaticCapture(id, deps);
+    expect(deps.synthesize).not.toHaveBeenCalled(); await tick(); expect(deps.synthesize).toHaveBeenCalledTimes(1);
+  });
+  it("concurrent retries cannot reset an in-flight photo attempt", async () => {
+    await consent(); const photo = await createAsset(scope, id, { id: crypto.randomUUID(), kind: "worksheet", mime: "image/jpeg", size: bytes.length, worksheetPermission: true }, db);
+    await db.update(assets).set({ status: "ready", analysisAttemptedAt: new Date(), error: "Known invalid response", analysisUncertain: false }).where(eq(assets.id, photo.id));
+    await Promise.allSettled([automaticAction(scope, id, { action: "retry", assetId: photo.id }, db), automaticAction(scope, id, { action: "retry", assetId: photo.id }, db)]);
+    await tick(); await tick(); expect(deps.readPhoto).toHaveBeenCalledTimes(1);
+  });
   it("cannot restore evidence or feedback after deletion during generation", async () => {
     await consent(); await audio(); deps.synthesize = vi.fn(async () => { await markDeleted(scope, id, db); return synthesis(); }); await tick();
     const [row] = await db.select({ draft: captures.draft }).from(captures).where(eq(captures.id, id));
