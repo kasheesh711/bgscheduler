@@ -185,6 +185,12 @@ export const DATA_QUALITY_REASONS: ReadonlyArray<{
   { match: /^student_count_0$/u, label: "No student", coverage: "excluded_data_quality" },
   { match: /^attendance_\d+pct$/u, label: "Student absent (attendance below the minimum)", coverage: "excluded_data_quality" },
   { match: /^student_not_wise_user$/u, label: "Student not a Wise user", coverage: "excluded_data_quality" },
+  // The Wise account attended under the minimum beside a guest who did not qualify to stand in (`session.ts`).
+  {
+    match: /^guest_stand_in_(?:\d+pct|unknown|tutor_absent)$/u,
+    label: "Student may have joined as a guest",
+    coverage: "excluded_data_quality",
+  },
   // The same fact when only the POST's fresh read finds it (`submit.ts` precheck): no student with a Wise user id.
   { match: /^student_id_missing$/u, label: "Student not a Wise user (POST check)", coverage: "excluded_data_quality" },
   { match: /^tutor_off_at_deadline$/u, label: "Tutor switched off", coverage: "excluded_tutor_off" },
