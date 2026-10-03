@@ -15,6 +15,7 @@ function loadVercelConfig(): VercelConfig {
  * timing, so the only place a stagger regression can be caught is here.
  */
 const EXPECTED_SCHEDULES: Record<string, string> = {
+  "/api/internal/class-capture/process": "* * * * *",
   "/api/internal/post-class-feedback/reminder-nightly": "0,30 * * * *",
   "/api/internal/tutor-sit-ins": "4,14,24,34,44,54 * * * *",
   "/api/internal/tutor-sit-ins/digest": "0 1 * * *",
@@ -109,10 +110,10 @@ function canCollide(left: FiringSet, right: FiringSet): boolean {
 }
 
 describe("vercel cron configuration", () => {
-  it("registers exactly the 29 known crons, each on its pinned schedule", () => {
+  it("registers exactly the 30 known crons, each on its pinned schedule", () => {
     const crons = loadVercelConfig().crons;
 
-    expect(crons).toHaveLength(29);
+    expect(crons).toHaveLength(30);
     expect(Object.fromEntries(crons.map((cron) => [cron.path, cron.schedule]))).toEqual(EXPECTED_SCHEDULES);
   });
 
@@ -161,7 +162,8 @@ describe("vercel cron configuration", () => {
           [...pair].some(path => ["/api/internal/sync-wise", "/api/internal/sync-unearned-revenue",
             "/api/internal/class-assignments/weekend-check", "/api/internal/class-assignments/morning",
             "/api/internal/class-assignments/admin-email", "/api/internal/tutor-sit-ins/digest"].includes(path));
-        const progressProcessingOverlap = pair.has("/api/internal/progress-tests/process");
+        // Per-capture durable leases prevent duplicate work in this minute-based worker.
+        const progressProcessingOverlap = pair.has("/api/internal/progress-tests/process") || pair.has("/api/internal/class-capture/process");
         // The 15-minute Atom reader shares only the paced, usually idle publish recovery
         // (and the separately allowed room reader). It never calls a Wise mutation.
         const atomReadOverlap = pair.has("/api/internal/feedback-autowriter/atom") && pair.has("/api/internal/class-assignments/publish-recovery");
@@ -255,7 +257,7 @@ describe("vercel cron configuration", () => {
     expect(crons.get("/api/internal/feedback-autowriter/review")).toBe("27 * * * *");
 
     const otherMinutes = loadVercelConfig().crons
-      .filter((cron) => !["/api/internal/feedback-autowriter/review", "/api/internal/progress-tests/process"].includes(cron.path))
+      .filter((cron) => !["/api/internal/feedback-autowriter/review", "/api/internal/progress-tests/process", "/api/internal/class-capture/process"].includes(cron.path))
       .flatMap((cron) => [...firingSet(cron.schedule).minutes]);
     expect(otherMinutes).not.toContain(27);
   });

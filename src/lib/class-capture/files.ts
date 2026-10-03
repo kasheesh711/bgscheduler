@@ -1,15 +1,17 @@
+import { automaticCaptureEnabled } from "./automatic-model";
+import { withDatabaseTransaction } from "@/lib/db/transaction";
 import { get } from "@vercel/blob";
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
-import { classCaptureAssets as assets, classCaptures as captures } from "@/lib/db/schema";
+import { classCaptureAssets as assets, classCaptures as captures, classCaptureJobs as jobs } from "@/lib/db/schema";
 import { assetForScope, captureForScope, type StoredAsset } from "./store";
 import { CaptureError, assertMediaBytes } from "./model";
 import type { CaptureScope } from "./sessions";
 
 export async function readMediaBytes(asset: StoredAsset): Promise<Buffer> {
   if (!/^class-capture\/[a-f0-9-]{36}\/[a-f0-9-]{36}$/.test(asset.pathname)) throw new CaptureError(400, "Invalid stored media path.");
-  const blob = await get(asset.pathname, { access: "private", useCache: false });
+  const blob = await get(asset.pathname, { access: "private", useCache: false, abortSignal: AbortSignal.timeout(30_000) });
   if (!blob || blob.statusCode !== 200) throw new CaptureError(409, "The upload is not complete. Retry the upload or check again.");
   if (blob.blob.size !== asset.size) { await blob.stream.cancel(); throw new CaptureError(400, "Uploaded file size does not match the authorized size."); }
   const reader = blob.stream.getReader();
@@ -126,9 +128,14 @@ export async function finalizeAsset(scope: CaptureScope, captureId: string, asse
   const bytes = await readMediaBytes(asset);
   await validateMedia(bytes, asset.mime);
   await captureForScope(scope, captureId, db);
-  await db.update(assets).set({ status: "ready" }).where(and(eq(assets.id, assetId), isNull(assets.discardedAt), eq(assets.status, "pending"),
-    sql`exists (select 1 from class_captures c where c.id = ${assets.captureId} and c.deleted_at is null and c.expires_at > now())`));
-  await db.update(captures).set({ reviewed: false }).where(eq(captures.id, captureId));
+  await withDatabaseTransaction(db, async tx => {
+    await tx.execute(sql`select id from class_captures where id = ${captureId} for update`);
+    const [completed] = await tx.update(assets).set({ status: "ready" }).where(and(eq(assets.id, assetId), isNull(assets.discardedAt), eq(assets.status, "pending"),
+      sql`exists (select 1 from class_captures c where c.id = ${assets.captureId} and c.deleted_at is null and c.expires_at > now())`)).returning({ id: assets.id });
+    if (!completed) return;
+    await tx.update(captures).set({ reviewed: false }).where(eq(captures.id, captureId));
+    if (automaticCaptureEnabled()) await tx.update(jobs).set({ revision: sql`${jobs.revision} + 1`, settleUntil: new Date(Date.now() + 10000), dueAt: new Date(), status: "waiting", attempts: 0 }).where(eq(jobs.captureId, captureId));
+  });
 }
 export async function uploadHandler(request: Request, body: HandleUploadBody, scope: CaptureScope) {
   // No callback required: the browser explicitly finalizes, and retry checks the private object.

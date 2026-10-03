@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { formatBangkokDateTime } from "@/lib/bangkok-time";
 import { MAX_AUDIO_BYTES, type CaptureAsset, type CaptureSession, type CaptureView, type DraftFields } from "@/lib/class-capture/model";
 import { LocalRecovery, type RecoveryRecord } from "@/lib/class-capture/local-recovery";
+import { AutomaticCaptureWorkspace } from "./automatic-workspace";
 import { AssetCard } from "./asset-card";
 import { WorksheetGallery } from "./worksheet-gallery";
 import { RecordingPanel } from "./recording-panel";
@@ -148,7 +149,7 @@ export function ClassCaptureWorkspace({ ownerEmail, enabled, initialData, initia
     if (!selected || !participants || !guardian || !processing || !topic.trim()) return;
     await run("Preparing capture", async () => {
       createAttempt.current ??= crypto.randomUUID();
-      const result = await captureRequest<{ capture: CaptureView }>("", "POST", { id: createAttempt.current, sessionId: selected.sessionId, studentId: selected.studentId, topic: topic.trim(), consent: { participants: true, guardian, processing: true } });
+      const result = await captureRequest<{ capture: CaptureView }>("", "POST", { id: createAttempt.current, sessionId: selected.sessionId, studentId: selected.studentId, topic: topic.trim(), consent: { participants: true, guardian, processing: true, ...(data.availability.automatic ? { automatic: true } : {}) } });
       applyCapture(result.capture, true);
       setNotice("Consent saved. Start recording when everyone is ready.");
     });
@@ -286,6 +287,8 @@ export function ClassCaptureWorkspace({ ownerEmail, enabled, initialData, initia
   const step = (capture?.draft || manualDraft) ? 3 : capture ? 2 : 1;
   const recoveryIds = [...new Set(recoverable.filter((record) => record.captureId !== capture?.id).map((record) => record.captureId))];
 
+  if (capture && active && data.availability.automatic) return <AutomaticCaptureWorkspace key={capture.id} initialCapture={capture} ownerEmail={ownerEmail} initialFiles={localFiles} onDeleted={() => { currentCapture.current = null; setCapture(null); setLocalFiles([]); setSelected(null); createAttempt.current = null; clearCapturePointer(); }} />;
+
   return (
     <div className="min-h-0 flex-1 overflow-y-auto" data-class-capture>
       <div className="mx-auto w-full max-w-5xl pb-16 pt-2 sm:pt-4">
@@ -308,7 +311,7 @@ export function ClassCaptureWorkspace({ ownerEmail, enabled, initialData, initia
               <label htmlFor="lesson-topic" className="mt-5 block text-sm font-medium">Today’s lesson topic</label><Input id="lesson-topic" value={topic} maxLength={500} disabled={locked} onChange={(event) => setTopic(event.target.value)} placeholder="e.g. Equivalent fractions" className="mt-2 min-h-11 bg-background text-base" />
               <label className="mt-5 flex min-h-11 cursor-pointer items-start gap-3 text-sm leading-6"><input type="checkbox" checked={participants} disabled={locked} onChange={(event) => setParticipants(event.target.checked)} className="mt-1 size-5 shrink-0 accent-sky-700" /><span>I have explained this recording and every participant agrees.</span></label>
               <label htmlFor="guardian-consent" className="mt-4 block text-sm font-medium">Guardian permission</label><select id="guardian-consent" value={guardian} disabled={locked} onChange={(event) => setGuardian(event.target.value as typeof guardian)} className="mt-2 min-h-11 w-full rounded-lg border bg-background px-3 text-base"><option value="">Select the applicable confirmation</option><option value="confirmed">Required guardian permission is confirmed</option><option value="not_required">All participants are adults; guardian permission is not required</option></select>
-              <label className="mt-5 flex min-h-11 cursor-pointer items-start gap-3 text-sm leading-6"><input type="checkbox" checked={processing} disabled={locked} onChange={(event) => setProcessing(event.target.checked)} className="mt-1 size-5 shrink-0 accent-sky-700" /><span>I have permission to use private Vercel Blob storage, Soniox transcription and the OpenRouter drafting model for this class’s evidence.</span></label>
+              <label className="mt-5 flex min-h-11 cursor-pointer items-start gap-3 text-sm leading-6"><input type="checkbox" checked={processing} disabled={locked} onChange={(event) => setProcessing(event.target.checked)} className="mt-1 size-5 shrink-0 accent-sky-700" /><span>{data.availability.automatic ? "I have permission for private storage, automatic audio transcription, worksheet image analysis and feedback drafting for this class." : "I have permission to use private Vercel Blob storage, Soniox transcription and the OpenRouter drafting model for this class’s evidence."}</span></label>
               <p className="mt-4 text-xs leading-5 text-muted-foreground">Cloud captures expire after 24 hours. You can delete them earlier. Copies downloaded to your device need to be deleted separately.</p>
               <Button className="mt-5 min-h-12 w-full text-base" disabled={locked || loading || Boolean(sessionError) || offline || !selected || !topic.trim() || !participants || !guardian || !processing} onClick={() => void createCapture()}>{busy ? <Loader2 className="animate-spin" /> : <ArrowRight />}Prepare class capture</Button>
             </section>

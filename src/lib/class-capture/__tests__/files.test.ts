@@ -50,7 +50,7 @@ describe("private capture files", () => {
     await expect(readMediaBytes({ ...asset, pathname: "https://attacker.invalid/secret" } as never)).rejects.toThrow("path");
     mocks.get.mockResolvedValue({ statusCode: 200, blob: { size: 8 }, stream: new ReadableStream({ start(c) { c.enqueue(new Uint8Array(9)); c.close(); } }) });
     await expect(readMediaBytes(asset as never)).rejects.toThrow("size");
-    expect(mocks.get).toHaveBeenCalledWith(asset.pathname, { access: "private", useCache: false });
+    expect(mocks.get).toHaveBeenCalledWith(asset.pathname, { access: "private", useCache: false, abortSignal: expect.any(AbortSignal) });
   });
   it("binds upload authorization to the current user, exact path/type/size and pending intent", async () => {
     mocks.handle.mockImplementation(async ({ onBeforeGenerateToken }) => onBeforeGenerateToken(asset.pathname, asset.id));

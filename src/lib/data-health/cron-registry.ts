@@ -3,6 +3,7 @@ import { creditControlActive } from "@/lib/credit-control/mode";
 import type { CronJobStatus } from "./types";
 
 export type CronJobKey =
+  | "class_capture_processing"
   | "tutor_sit_ins"
   | "tutor_sit_ins_digest"
   | "classroom_publish_recovery"
@@ -65,6 +66,10 @@ export interface CronJobDefinition {
 }
 
 export const CRON_JOBS = [
+  { key: "class_capture_processing", label: "Class Capture Processing", feature: "Class Capture", path: "/api/internal/class-capture/process",
+    schedule: "* * * * *", cadenceLabel: "Every minute", cadenceMinutes: 1, lateAfterMinutes: 5, maxDurationSeconds: 300,
+    manualOnly: false, dangerous: false, confirmationLabel: null, routeMethod: "GET",
+    manualRunDisabledReason: "Automatic capture processing runs from uploads and the recovery worker." },
   { key: "feedback_atom", label: "Atom Lesson Evidence", feature: "Class Feedback",
     path: "/api/internal/feedback-autowriter/atom", schedule: "6,21,36,51 * * * *", cadenceLabel: "Every 15 min",
     cadenceMinutes: 15, lateAfterMinutes: 45, maxDurationSeconds: 750, manualOnly: false, dangerous: false,
