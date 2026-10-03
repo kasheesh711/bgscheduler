@@ -178,7 +178,9 @@ export async function processAutomaticCapture(id: string, deps: AutomaticDeps = 
       await db.update(jobs).set({ status: "attention", error: "The draft request outcome needs review before another paid attempt." }).where(owned()); return;
     }
     if (job.attempts >= 3) { await db.update(jobs).set({ status: "attention", error: "Processing could not complete after three attempts. Retry when ready." }).where(owned()); return; }
-    await db.update(jobs).set({ status: "writing", draftUncertain: true, attempts: sql`${jobs.attempts} + 1` }).where(owned());
+    const [writerClaim] = await db.update(jobs).set({ status: "writing", draftUncertain: true, attempts: sql`${jobs.attempts} + 1` })
+      .where(and(owned(), eq(jobs.revision, job.revision), eq(jobs.draftUncertain, false), gt(jobs.leaseUntil, new Date()))).returning({ id: jobs.captureId });
+    if (!writerClaim) return;
     let prior: Array<{ date: string; text: string }> = [];
     try { prior = await (deps.prior ?? loadPriorFeedback)(scope, capture.session); } catch { /* History is optional context. */ }
     writingStarted = true;

@@ -143,6 +143,11 @@ describe("automatic capture durable workflow", () => {
     await Promise.allSettled([automaticAction(scope, id, { action: "retry", assetId: photo.id }, db), automaticAction(scope, id, { action: "retry", assetId: photo.id }, db)]);
     await tick(); await tick(); expect(deps.readPhoto).toHaveBeenCalledTimes(1);
   });
+  it("does not start a paid writer after another worker takes its lease", async () => {
+    await consent(); await audio();
+    deps.authorize = async () => { await db.update(jobs).set({ leaseUntil: new Date(Date.now() + 300000) }); return scope; };
+    await tick(); expect(deps.synthesize).not.toHaveBeenCalled();
+  });
   it("cannot restore evidence or feedback after deletion during generation", async () => {
     await consent(); await audio(); deps.synthesize = vi.fn(async () => { await markDeleted(scope, id, db); return synthesis(); }); await tick();
     const [row] = await db.select({ draft: captures.draft }).from(captures).where(eq(captures.id, id));

@@ -6,7 +6,7 @@
 - Real React UI with synthetic services: selected M4A and stopped recording produce drafts with no further processing clicks; autosave; approval/copy; 24 concurrent photo uploads; compact previews; failed-file retry; reload; preservation of edited feedback during proposals.
 - Postgres integration tests: consent/flag gating, duplicate processing claims, recording/upload/debounce waits, 24 photos in pairs, edits during generation, stale evidence revisions, proposal acceptance conflicts, uncertain paid outcomes, known throttling, interrupted finalization, deletion during generation, concurrent retries, and delayed provider cleanup.
 - Unit checks: source/citation validation, unsupported fields, separate evidence/questions, image data URLs and ZDR route, mixed Thai/English speaker turns, endpoint access/CSRF checks, existing legacy behavior, and cron registration.
-- Production build, TypeScript, scoped lint and production route-surface guard passed. The full unit run passed 608 of 609 suites; the remaining assertion was updated to require the new private-read abort signal, then its 30 tests passed. A subsequent focused run passed 505 tests across 16 suites. Original capture integration suites plus automatic jobs passed; the final automatic suite contains 15 passing tests.
+- Production build, TypeScript, scoped lint and production route-surface guard passed. The full unit run passed 608 of 609 suites; the remaining assertion was updated to require the new private-read abort signal, then its 30 tests passed. A subsequent focused run passed 505 tests across 16 suites. Original capture integration suites plus automatic jobs passed; the final automatic suite contains 16 passing tests.
 
 ## Measured photo transfer
 
