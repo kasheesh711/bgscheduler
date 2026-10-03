@@ -32,6 +32,10 @@ const params = new URLSearchParams(location.search);
 window.__micMode = "allowed";
 window.__micRequests = 0;
 window.__trackStops = 0;
+window.__wakeReleases = 0;
+Object.defineProperty(navigator, "wakeLock", { configurable: true, value: {
+  request: async () => Object.assign(new EventTarget(), { released: false, release: async () => { window.__wakeReleases++; } })
+} });
 window.__uploadAttempts = 0;
 window.__uploadDelay = 100;
 window.__failNextUpload = false;
@@ -206,6 +210,7 @@ try {
     await page.getByLabel("All participants still agree", { exact: false }).check();
     await page.getByRole("button", { name: "Start class recording" }).click();
     await page.getByText("Recording class audio", { exact: true }).waitFor();
+    await page.getByText("Screen stay-awake is on.", { exact: false }).waitFor();
     await page.evaluate(() => window.__recorder.emit());
     const stoppedBeforeMidnight = await page.evaluate(() => window.__trackStops);
     await page.clock.setFixedTime(new Date("2026-10-01T17:00:00Z"));
@@ -224,6 +229,7 @@ try {
     });
     await page.getByText("Recording stopped when this page left the foreground.", { exact: false }).waitFor();
     await page.getByRole("button", { name: "Upload privately" }).waitFor();
+    assert.ok(await page.evaluate(() => window.__wakeReleases > 0));
     await waitFor(page, async () => (await window.__listLocal()).some(record => record.size > 0), "Local IndexedDB recovery missing");
     assert.equal(metrics.transcriptions, 0);
     assert.equal(metrics.uploads, 0);
@@ -326,6 +332,7 @@ try {
     await page.getByLabel("All participants still agree", { exact: false }).check();
     await page.getByRole("button", { name: /Record a tutor debrief/ }).click();
     await page.getByText("Recording tutor debrief", { exact: true }).waitFor();
+    await page.getByText("Screen stay-awake is on.", { exact: false }).waitFor();
     await page.evaluate(() => window.__recorder.emit());
     await page.getByRole("button", { name: "Stop recording now", exact: true }).click();
     const debrief = page.locator("article").filter({ has: page.getByRole("heading", { name: "Tutor voice debrief", exact: true }) });
@@ -385,6 +392,50 @@ try {
     await page.getByRole("heading", { name: "Class capture is paused" }).waitFor();
     assert.equal(await page.evaluate(() => window.__micRequests), 0);
     await page.screenshot({ path: path.join(OUT, "mobile-paused.png") });
+  });
+
+  await check("iPhone M4A upload and manual retrospective feedback work without AI", async () => {
+    capture = null;
+    const manualContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    await manualContext.route("**/*", route => route.request().url().startsWith(origin) ? route.continue() : route.abort());
+    const manualPage = await manualContext.newPage();
+    manualPage.on("pageerror", error => pageErrors.push(error.message));
+    await manualPage.goto(origin);
+    await manualPage.getByRole("button", { name: /Ari \(fictional\)/ }).click();
+    await manualPage.getByLabel("Today’s lesson topic").fill("Retrospective feedback");
+    await manualPage.getByLabel("I have explained this recording", { exact: false }).check();
+    await manualPage.getByLabel("Guardian permission", { exact: true }).selectOption("confirmed");
+    await manualPage.getByLabel("I have permission to use private Vercel Blob storage", { exact: false }).check();
+    await manualPage.getByRole("button", { name: "Prepare class capture" }).click();
+    await manualPage.getByRole("button", { name: "Upload saved audio" }).waitFor();
+    const providerBefore = { transcriptions: metrics.transcriptions, drafts: metrics.drafts };
+    await manualPage.getByLabel("I have permission to upload these worksheets", { exact: false }).check();
+    await manualPage.getByLabel("Choose worksheet photos").setInputFiles(Array.from({ length: 6 }, (_, i) => ({ name: `Worksheet-${i}.png`, mimeType: "image/png", buffer: PNG })));
+    await waitFor(manualPage, async () => (await window.__listLocal()).filter(file => file.kind === "worksheet").length === 6, "Six worksheet photos should be retained");
+    const photos = manualPage.getByRole("article").filter({ has: manualPage.getByRole("heading", { name: "Worksheet photo" }) });
+    await photos.first().waitFor();
+    assert.equal(await photos.count(), 6);
+    for (let i = 0; i < 6; i++) await photos.first().getByRole("button", { name: "Remove", exact: true }).click();
+
+    await manualPage.getByLabel("Choose existing class audio").setInputFiles({ name: "Voice Memo.m4a", mimeType: "audio/x-m4a", buffer: Buffer.from([0,0,0,24,102,116,121,112,77,52,65,32]) });
+    await manualPage.getByRole("button", { name: "Upload privately" }).waitFor();
+    await manualPage.reload();
+    await manualPage.getByText("Capture reopened.", { exact: false }).waitFor();
+    await manualPage.getByRole("button", { name: "Upload privately" }).click();
+    await manualPage.getByRole("button", { name: "Transcribe audio" }).waitFor();
+    assert.equal(capture.assets[0].mime, "audio/mp4");
+    await manualPage.getByRole("button", { name: "Write feedback myself" }).click();
+    await manualPage.getByLabel("Topics covered", { exact: true }).fill("Practised equivalent fractions.");
+    await manualPage.getByLabel("Demonstrated understanding", { exact: true }).fill("Completed two written examples independently.");
+    await manualPage.getByLabel("I reviewed the evidence", { exact: false }).check();
+    await manualPage.getByRole("button", { name: "Save reviewed draft" }).click();
+    await manualPage.getByRole("link", { name: "Open Wise to submit" }).waitFor();
+    assert.equal(metrics.transcriptions, providerBefore.transcriptions);
+    assert.equal(metrics.drafts, providerBefore.drafts);
+    assert.equal(await manualPage.evaluate(() => window.__micRequests), 0);
+    assert.equal(capture.draft.topicsCovered, "Practised equivalent fractions.");
+    await manualPage.screenshot({ path: path.join(OUT, "mobile-manual-feedback.png") });
+    await manualContext.close();
   });
 
   const todayContext = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });

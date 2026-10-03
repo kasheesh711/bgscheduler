@@ -59,6 +59,10 @@
       "passed": true
     },
     {
+      "name": "iPhone M4A upload and manual retrospective feedback work without AI",
+      "passed": true
+    },
+    {
       "name": "Bangkok midnight clears pending choices and consent and loads today's list",
       "passed": true
     },
@@ -72,14 +76,14 @@
     }
   ],
   "metrics": {
-    "creates": 1,
-    "assetIntents": 3,
-    "uploads": 3,
+    "creates": 2,
+    "assetIntents": 4,
+    "uploads": 4,
     "transcriptions": 2,
     "drafts": 3,
-    "gets": 8,
-    "patches": 5,
-    "lists": 5
+    "gets": 10,
+    "patches": 6,
+    "lists": 7
   },
   "unverified": [
     "Real iOS Safari and Android Chrome hardware, phone calls, lockscreen and OS termination",
