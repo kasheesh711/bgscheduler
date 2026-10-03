@@ -4,8 +4,10 @@ import { redactKnownNames } from "@/lib/post-class-feedback/similarity";
 import { styleInstructions, type FeedbackStyleGuide } from "./style";
 import type { AiSummary } from "./types";
 
-/** v5 (owner decision, 30 Sep): the feedback names no one but the student (summary rule 12, transcript rule 13). */
-export const PROMPT_VERSION = 5;
+/** v5 (owner decision, 30 Sep): the feedback names no one but the student (summary rule 12, transcript rule 13).
+ * v6 (nightly audit 3 Oct): a STUDENT line that only echoes the tutor is not the student's own answer (transcript rule
+ * 12, failure mode M07); careful summary mode (summary rule 13, owner decision 3 Oct; modes M05/M06/M08). */
+export const PROMPT_VERSION = 6;
 export const STUDENT_TOKEN = "[STUDENT_1]";
 export const TUTOR_TOKEN = "[TUTOR]";
 
@@ -323,13 +325,22 @@ function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels, styleGuide:
         // v5 (owner decision, 30 Sep): a prompt rule only, no gate. The tutor is never named either (above).
         `12. Never name anyone but ${STUDENT_TOKEN}: refer to any other person generically — ` +
           "\"another student\", \"a classmate\", \"a family member\" — never by name.",
+        // v6 careful summary mode (owner decision, 3 Oct): the first nightly audit found a major error in every one of the
+        // five summary-only posts of 2 Oct — recap ranges and mis-heard terms copied, stock praise repeated.
+        "13. The summary is a machine recap that can mishear and generalise. Prefer its detailed sections to its opening overview: " +
+          "take ranges, levels, counts, question numbers and named question types only as the detailed sections state them, and leave a " +
+          "detail out when the overview and the details disagree. List as a topic only what the summary describes being worked on, never a " +
+          `term from one passing mention. Never repeat a generic line about ${STUDENT_TOKEN} (asked questions throughout, actively engaged, ` +
+          "worked confidently) unless the summary reports a concrete exchange behind it. Never be more specific or more positive than the summary.",
       ]
       : [
         // Hedged ("clearly not the student"): Thai-script or mis-heard names of the student are not redacted in a transcript.
         `11. Who did what: only the lines labelled STUDENT are ${STUDENT_TOKEN}'s own words and work; the lines labelled TUTOR are the tutor's. ` +
           "Anyone named in the lesson who is clearly not the student — another student, a family member, a friend, or a person or character in the lesson material — " +
           `is never ${STUDENT_TOKEN}: never give ${STUDENT_TOKEN} what is said about them.`,
-        `12. Something the tutor explained was covered, not mastered: only say ${STUDENT_TOKEN} understood, solved or explained something when the transcript shows ${STUDENT_TOKEN} doing it.`,
+        `12. Something the tutor explained was covered, not mastered: only say ${STUDENT_TOKEN} understood, solved or explained something when the transcript shows ${STUDENT_TOKEN} doing it. ` +
+          `A STUDENT line that only repeats, confirms or reads out what the tutor has just said (a number, an answer, a word), or a value the question gives, ` +
+          `is not ${STUDENT_TOKEN}'s own answer: never write that ${STUDENT_TOKEN} found, gave or knew it.`,
         // v5 (owner decision, 30 Sep): other people too, referred to generically.
         `13. Names in the transcript may be written in Thai script; never repeat any name — write ${STUDENT_TOKEN} for the student ` +
           "and refer to anyone else generically (\"another student\", \"a classmate\", \"a family member\").",
