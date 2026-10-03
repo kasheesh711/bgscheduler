@@ -1,0 +1,224 @@
+import fs from "node:fs";
+import path from "node:path";
+import { NIGHTLY_FILE_MODE, ensureDir, nightlyHome } from "./paths";
+
+/**
+ * The nightly audit's hard limits, its owner config and its kill switches. The owner's config
+ * (`~/.bgscheduler-nightly/config.json`) may only make a limit stricter; the one exception is `--soniox-usd=<n>`,
+ * which may raise the night's Soniox cap up to SONIOX_USD_FLAG_MAX for one run (first nights, when the production
+ * transcripts of already-approved posts are gone).
+ */
+export const NIGHTLY_CAPS = Object.freeze({
+  maxTargets: 60,
+  maxWiseReads: 200,
+  /** At least this long between two Wise reads (≤ 0.2 req/s). */
+  wisePacingMs: 5_000,
+  maxOpusCalls: 80,
+  /**
+   * Per-call ceilings, in list-price dollars (the subscription is not billed per call; this measures usage). Measured
+   * on 2 Oct transcripts at max effort: $0.68–$1.35 per audit, and 2 of 14 long lessons stopped at the first $1.50
+   * ceiling — a stopped call is pure waste, so the ceiling sits above the longest lesson and the night cap does the
+   * limiting.
+   */
+  perAuditUsd: 3,
+  perReauditUsd: 3,
+  perSynthesisUsd: 4,
+  /** ≈ 40 posts × $1.10 + synthesis + re-audits on the busiest nights. */
+  maxClaudeUsdNight: 60,
+  maxClaudeUsdWeek: 300,
+  maxSonioxUsdNight: 2,
+  maxOpenRouterUsdNight: 3,
+  maxCorrectionsPerNight: 6,
+  maxCorrectionsPerWeek: 15,
+  maxFlagsPerNight: 10,
+  auditConcurrency: 2,
+  /** Bangkok time on the morning after the audited day when every step stops. */
+  deadlineBangkok: "06:50",
+});
+
+export type NightlyCaps = {
+  -readonly [K in keyof typeof NIGHTLY_CAPS]: (typeof NIGHTLY_CAPS)[K] extends string ? string : number;
+};
+
+/** The most `--soniox-usd=<n>` may raise the Soniox cap to, for one run. */
+export const SONIOX_USD_FLAG_MAX = 5;
+
+/** Limits where a larger value is the stricter one; every other number is stricter when smaller. */
+const LARGER_IS_STRICTER = new Set<keyof NightlyCaps>(["wisePacingMs"]);
+
+/** The kill switches: either file stops every step (absolute paths, so a moved checkout cannot hide one). */
+export function stopFiles(home?: string): string[] {
+  return [
+    path.join(nightlyHome(home), "STOP"),
+    "/Users/kevinhsieh/Developer/Scheduling/.feedback-autowriter/STOP",
+  ];
+}
+
+/** The first STOP file present, or null. */
+export function stopFilePresent(files: readonly string[] = stopFiles()): string | null {
+  return files.find((file) => fs.existsSync(file)) ?? null;
+}
+
+export function stopRequested(files: readonly string[] = stopFiles()): boolean {
+  return stopFilePresent(files) !== null;
+}
+
+/**
+ * Write the home STOP file (a cap was breached after the fact). Never removed by the nightly itself: the owner
+ * deletes it once they have looked.
+ */
+export function writeStopFile(reason: string, home?: string, now: Date = new Date()): string {
+  const file = path.join(nightlyHome(home), "STOP");
+  ensureDir(path.dirname(file));
+  fs.writeFileSync(file, `${now.toISOString()} ${reason.slice(0, 500)}\n`, { encoding: "utf8", mode: NIGHTLY_FILE_MODE, flag: "a" });
+  return file;
+}
+
+/** How long a Wise 429 parks every Wise read of the nightly. */
+export const WISE_COOLDOWN_MS = 30 * 60 * 1000;
+
+/** Where a Wise 429 parks Wise reads (`~/.bgscheduler-nightly/wise-cooldown-until`, an ISO instant). */
+export function wiseCooldownFile(home?: string): string {
+  return path.join(nightlyHome(home), "wise-cooldown-until");
+}
+
+/** The instant Wise reads may resume, when a cooldown is still running. */
+export function activeWiseCooldown(now: Date = new Date(), home?: string): Date | null {
+  let text: string;
+  try {
+    text = fs.readFileSync(wiseCooldownFile(home), "utf8").trim();
+  } catch {
+    return null;
+  }
+  const until = new Date(text);
+  // An unreadable cooldown fails closed for its default length from the file's own time.
+  if (Number.isNaN(until.getTime())) {
+    const written = fs.statSync(wiseCooldownFile(home)).mtime;
+    const fallback = new Date(written.getTime() + WISE_COOLDOWN_MS);
+    return fallback > now ? fallback : null;
+  }
+  return until > now ? until : null;
+}
+
+export function writeWiseCooldown(now: Date = new Date(), home?: string, ms: number = WISE_COOLDOWN_MS): Date {
+  const until = new Date(now.getTime() + ms);
+  const file = wiseCooldownFile(home);
+  ensureDir(path.dirname(file));
+  fs.writeFileSync(file, `${until.toISOString()}\n`, { encoding: "utf8", mode: NIGHTLY_FILE_MODE });
+  return until;
+}
+
+export function ownerConfigFile(home?: string): string {
+  return path.join(nightlyHome(home), "config.json");
+}
+
+/** Per-call budgets: a call cannot have a zero budget (`--max-budget-usd` must be positive). */
+const PER_CALL_USD = new Set<keyof NightlyCaps>(["perAuditUsd", "perReauditUsd", "perSynthesisUsd"]);
+/** Counts: whole numbers (0 pauses that kind of work). */
+const COUNT_CAPS = new Set<keyof NightlyCaps>([
+  "maxTargets", "maxWiseReads", "maxOpusCalls", "maxCorrectionsPerNight", "maxCorrectionsPerWeek", "maxFlagsPerNight", "auditConcurrency",
+]);
+
+/** Why a number cannot be used for this cap, or null. */
+export function capValueProblem(name: keyof NightlyCaps, value: unknown): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "must be a non-negative number";
+  if (PER_CALL_USD.has(name) && value <= 0) return "must be greater than 0";
+  if (COUNT_CAPS.has(name) && !Number.isInteger(value)) return "must be a whole number";
+  if (name === "auditConcurrency" && value < 1) return "must be at least 1";
+  return null;
+}
+
+export type OwnerConfig =
+  | {
+    ok: true;
+    caps: Partial<NightlyCaps>;
+    notes: string[];
+    /** A commit the owner reviewed and allows the nightly to run from (besides anything on origin/main). */
+    runnerSha: string | null;
+  }
+  | { ok: false; reason: string };
+
+/**
+ * The owner's config: `{ "caps": { "maxTargets": 40, … }, "runnerSha": "<commit>" }` (cap keys may also sit at the top
+ * level). Missing file: no changes. A file that does not parse, a cap value the nightly cannot use (wrong type, a zero
+ * per-call budget, a fractional count, concurrency below 1, a deadline not HH:MM) or a runnerSha that is not a 7–40
+ * character hex commit is a config error (fail closed, never ignored); unknown keys are noted and ignored.
+ */
+export function loadOwnerConfig(file: string = ownerConfigFile()): OwnerConfig {
+  let text: string;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ok: true, caps: {}, notes: [], runnerSha: null };
+    return { ok: false, reason: `owner config unreadable: ${(error as Error).message.slice(0, 120)}` };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, reason: "owner config is not valid JSON" };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, reason: "owner config must be a JSON object" };
+  const record = parsed as Record<string, unknown>;
+  const source = record.caps && typeof record.caps === "object" && !Array.isArray(record.caps)
+    ? record.caps as Record<string, unknown> : record;
+  const caps: Partial<NightlyCaps> = {};
+  const notes: string[] = [];
+  for (const [key, value] of Object.entries(source)) {
+    if (key === "caps" || key === "runnerSha") continue;
+    if (!(key in NIGHTLY_CAPS)) {
+      notes.push(`unknown key ignored: ${key}`);
+      continue;
+    }
+    const name = key as keyof NightlyCaps;
+    // A cap the owner wrote but the nightly cannot use is a config error (fail closed), never silently ignored.
+    if (name === "deadlineBangkok") {
+      if (typeof value !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/u.test(value)) return { ok: false, reason: "deadlineBangkok must be HH:MM" };
+      caps.deadlineBangkok = value;
+      continue;
+    }
+    const problem = capValueProblem(name, value);
+    if (problem) return { ok: false, reason: `${name} ${problem}` };
+    (caps as Record<string, number>)[name] = value as number;
+  }
+  const pinned = record.runnerSha;
+  if (pinned !== undefined && pinned !== null && (typeof pinned !== "string" || !/^[0-9a-f]{7,40}$/iu.test(pinned.trim()))) {
+    return { ok: false, reason: "runnerSha must be a 7-40 character hex commit" };
+  }
+  return { ok: true, caps, notes, runnerSha: typeof pinned === "string" ? pinned.trim().toLowerCase() : null };
+}
+
+/**
+ * The limits for one run: the defaults, made stricter (never looser) by the owner's config, then `--soniox-usd`
+ * (0 to SONIOX_USD_FLAG_MAX) for the Soniox cap alone.
+ */
+export function effectiveCaps(input: { config?: Partial<NightlyCaps>; sonioxUsdFlag?: number | null } = {}): {
+  caps: NightlyCaps;
+  notes: string[];
+} {
+  const caps = { ...NIGHTLY_CAPS } as NightlyCaps;
+  const notes: string[] = [];
+  for (const [key, value] of Object.entries(input.config ?? {})) {
+    const name = key as keyof NightlyCaps;
+    if (value === undefined || !(name in NIGHTLY_CAPS)) continue;
+    if (name === "deadlineBangkok") {
+      if (typeof value === "string" && value < caps.deadlineBangkok) caps.deadlineBangkok = value;
+      else if (value !== caps.deadlineBangkok) notes.push("deadlineBangkok: config may only make it earlier");
+      continue;
+    }
+    const current = caps[name] as number;
+    const next = value as number;
+    const stricter = LARGER_IS_STRICTER.has(name) ? next >= current : next <= current;
+    if (stricter) (caps as Record<string, number | string>)[name] = next;
+    else notes.push(`${name}: config may only make it stricter (kept ${current})`);
+  }
+  if (caps.auditConcurrency < 1) caps.auditConcurrency = 1;
+  if (input.sonioxUsdFlag !== undefined && input.sonioxUsdFlag !== null) {
+    if (!Number.isFinite(input.sonioxUsdFlag) || input.sonioxUsdFlag < 0 || input.sonioxUsdFlag > SONIOX_USD_FLAG_MAX) {
+      throw new Error(`--soniox-usd must be a number from 0 to ${SONIOX_USD_FLAG_MAX}`);
+    }
+    caps.maxSonioxUsdNight = input.sonioxUsdFlag;
+    notes.push(`maxSonioxUsdNight set to ${input.sonioxUsdFlag} for this run (--soniox-usd)`);
+  }
+  return { caps, notes };
+}

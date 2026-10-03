@@ -20,11 +20,19 @@
  *       What transcript first would do with recent classes: Wise session-detail GETs, database SELECTs, Soniox jobs
  *       deleted after each transcript, model calls kept in memory. Writes .feedback-autowriter/replay/<ts>/
  *       (records.json, summary.json, summary.md; 0600). --per-tutor defaults to 4, or 0 when --sessions is given.
+ *     [--transcripts-from=<dir>]  replay from the nightly audit's cache (<dir>/<sid>/detail.json, transcript.json,
+ *       zoom.vtt): zero Wise reads, no Soniox client (every class needs a cached transcript, else skip); without
+ *       --sessions, every cached class with a transcript
+ *     [--out=<dir>]  write the run there instead of .feedback-autowriter/replay/<ts>/
+ *     [--no-summary-draft] [--no-posted-judge]  skip those passes (model calls)
+ *     [--max-model-usd=<n>]  stop starting classes once the finished classes' model calls cost this much
+ *     [--summary-when-uncached]  with --transcripts-from: take production's summary route for a class with no cached transcript
  *
  * Run with: npx tsx --tsconfig scripts/tsconfig.json scripts/autowrite-online-feedback.ts …
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { getDb } from "@/lib/db";
 import { assignModelArms } from "@/lib/feedback-autowriter/ab";
@@ -40,11 +48,14 @@ import { createSonioxClient, type SonioxClient } from "@/lib/feedback-autowriter
 import { loadTutorPriorFeedback, processSession, runSweep, type AutowriterDeps } from "@/lib/feedback-autowriter/job";
 import {
   loadReplaySample,
+  refusingSoniox,
   renderReplayMarkdown,
   runReplay,
   summarizeReplay,
+  type CachedTranscript,
   type ReplayWiseReads,
 } from "@/lib/feedback-autowriter/replay";
+import { parseAutowriterSessionDetail, zoomTranscriptUrl } from "@/lib/feedback-autowriter/session";
 import { AUTOWRITER_ROSTER, AUTOWRITER_TEACHER_ALLOWLIST, KEVIN_ONLINE_WISE_USER_ID, rosterTutor } from "@/lib/feedback-autowriter/roster";
 import {
   AUTOWRITER_ROOT,
@@ -250,67 +261,123 @@ async function replay(): Promise<void> {
     ...["process", "mode", "retry", "tutor-on", "tutor-off"].filter((name) => option(name) !== undefined),
   ];
   if (writeModes.length > 0) throw new Error(`--replay never runs with a write mode (${writeModes.map((name) => `--${name}`).join(", ")})`);
+  const fromOption = option("transcripts-from");
+  const cacheDir = fromOption ? path.resolve(fromOption.replace(/^~(?=\/|$)/u, os.homedir())) : null;
   const apiKey = openRouterApiKey();
   const sonioxKey = sonioxApiKey();
-  if (!apiKey || !sonioxKey) throw new Error("--replay needs OPENROUTER_API_KEY and SONIOX_API_KEY");
-  const sessionIds = (option("sessions") ?? "").split(",").map((id) => id.trim()).filter(Boolean);
+  if (!apiKey) throw new Error("--replay needs OPENROUTER_API_KEY");
+  if (!cacheDir && !sonioxKey) throw new Error("--replay needs SONIOX_API_KEY (or --transcripts-from=<dir>)");
+  if (cacheDir && !fs.existsSync(cacheDir)) throw new Error(`--transcripts-from: no such folder ${cacheDir}`);
+  let sessionIds = (option("sessions") ?? "").split(",").map((id) => id.trim()).filter(Boolean);
   const invalid = sessionIds.filter((id) => !/^[0-9a-f]{24}$/iu.test(id));
   if (invalid.length > 0) throw new Error(`Not Wise session ids: ${invalid.join(", ")}`);
+  if (cacheDir && sessionIds.length === 0) {
+    sessionIds = fs.readdirSync(cacheDir).filter((name) => /^[0-9a-f]{24}$/iu.test(name) && fs.existsSync(path.join(cacheDir, name, "transcript.json")));
+  }
   const count = (name: string, fallback: number, max: number) => {
     const value = Number(option(name) ?? fallback);
     if (!Number.isInteger(value) || value < 0 || value > max) throw new Error(`--${name} must be a whole number from 0 to ${max}`);
     return value;
   };
-  const perTutor = count("per-tutor", sessionIds.length > 0 ? 0 : 4, 20);
+  const perTutor = count("per-tutor", sessionIds.length > 0 || cacheDir ? 0 : 4, 20);
   const days = count("days", 7, 30);
   const concurrency = Math.max(1, count("concurrency", 3, 6));
+  const maxModelUsdOption = option("max-model-usd");
+  const maxModelUsd = maxModelUsdOption === undefined ? undefined : Number(maxModelUsdOption);
+  if (maxModelUsd !== undefined && !(Number.isFinite(maxModelUsd) && maxModelUsd > 0)) throw new Error("--max-model-usd must be a positive number");
   const db = getDb();
   const now = new Date();
   const samples = await loadReplaySample(db, { sessionIds, perTutor, days, now });
-  console.log(`Replaying ${samples.length} class(es): ${perTutor} per tutor over ${days} days${sessionIds.length ? ` + ${sessionIds.length} named` : ""}.`);
-  const ops = createWiseFeedbackOps();
-  // Only the GET crosses over: nothing the replay holds can POST.
-  const wise: ReplayWiseReads = { getSessionDetailById: (sessionId) => ops.getSessionDetailById(sessionId) };
-  // The replay deletes each job in `finally`; a Ctrl-C skips those, so jobs still in flight are deleted here.
-  const soniox = createSonioxClient(sonioxKey);
+  console.log(`Replaying ${samples.length} class(es): ${perTutor} per tutor over ${days} days${sessionIds.length ? ` + ${sessionIds.length} named` : ""}` +
+    `${cacheDir ? ` from the cache ${cacheDir} (no Wise reads, no Soniox)` : ""}.`);
+  // The replay's only Wise access: the session-detail GET, or the cached detail with --transcripts-from.
+  let wise: ReplayWiseReads;
+  let soniox: SonioxClient;
+  let fetchCaptions: ((url: string) => Promise<string>) | undefined;
+  let transcriptSource: ((sessionId: string) => Promise<CachedTranscript | null>) | undefined;
   const inFlight = new Set<string>();
-  const tracked: SonioxClient = {
-    ...soniox,
-    async create(input) {
-      const job = await soniox.create(input);
-      inFlight.add(job.id);
-      return job;
-    },
-    async remove(id) {
-      const gone = await soniox.remove(id);
-      inFlight.delete(id);
-      return gone;
-    },
-  };
-  const onSignal = (signal: NodeJS.Signals) => {
-    const pending = [...inFlight];
-    console.error(`${signal}: deleting ${pending.length} Soniox job(s) still in flight…`);
-    void Promise.allSettled(pending.map((id) => soniox.remove(id))).then((results) => {
-      const left = pending.filter((_, index) => results[index].status === "rejected");
-      if (left.length > 0) console.error(`Not deleted — delete them in the Soniox Console: ${left.join(", ")}`);
-      process.exit(130);
-    });
-  };
-  process.once("SIGINT", onSignal);
-  process.once("SIGTERM", onSignal);
+  if (cacheDir) {
+    const cached = (sessionId: string, file: string) => {
+      if (!/^[0-9a-f]{24}$/iu.test(sessionId)) throw new Error("Not a Wise session id");
+      return path.join(cacheDir, sessionId, file);
+    };
+    wise = {
+      getSessionDetailById: async (sessionId) => JSON.parse(fs.readFileSync(cached(sessionId, "detail.json"), "utf8")) as unknown,
+    };
+    // Zoom's captions from the cache too: each cached detail's caption URL → its zoom.vtt.
+    const captionsByUrl = new Map<string, string>();
+    for (const sessionId of sessionIds) {
+      try {
+        const url = zoomTranscriptUrl(parseAutowriterSessionDetail(JSON.parse(fs.readFileSync(cached(sessionId, "detail.json"), "utf8"))));
+        if (url && fs.existsSync(cached(sessionId, "zoom.vtt"))) captionsByUrl.set(url, cached(sessionId, "zoom.vtt"));
+      } catch {
+        // No cached detail: the class is skipped by the replay itself.
+      }
+    }
+    fetchCaptions = async (url) => {
+      const file = captionsByUrl.get(url);
+      if (!file) throw new Error("captions_not_cached");
+      return fs.readFileSync(file, "utf8");
+    };
+    transcriptSource = async (sessionId) => {
+      const file = cached(sessionId, "transcript.json");
+      if (!fs.existsSync(file)) return null;
+      const value = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<CachedTranscript>;
+      if (typeof value.text !== "string" || !Array.isArray(value.tokens)) return null;
+      return { text: value.text, tokens: value.tokens, audioDurationMs: typeof value.audioDurationMs === "number" ? value.audioDurationMs : null, source: value.source };
+    };
+    soniox = refusingSoniox();
+  } else {
+    const ops = createWiseFeedbackOps();
+    // Only the GET crosses over: nothing the replay holds can POST.
+    wise = { getSessionDetailById: (sessionId) => ops.getSessionDetailById(sessionId) };
+    // The replay deletes each job in `finally`; a Ctrl-C skips those, so jobs still in flight are deleted here.
+    const client = createSonioxClient(sonioxKey!);
+    soniox = {
+      ...client,
+      async create(input) {
+        const job = await client.create(input);
+        inFlight.add(job.id);
+        return job;
+      },
+      async remove(id) {
+        const gone = await client.remove(id);
+        inFlight.delete(id);
+        return gone;
+      },
+    };
+    const onSignal = (signal: NodeJS.Signals) => {
+      const pending = [...inFlight];
+      console.error(`${signal}: deleting ${pending.length} Soniox job(s) still in flight…`);
+      void Promise.allSettled(pending.map((id) => client.remove(id))).then((results) => {
+        const left = pending.filter((_, index) => results[index].status === "rejected");
+        if (left.length > 0) console.error(`Not deleted — delete them in the Soniox Console: ${left.join(", ")}`);
+        process.exit(130);
+      });
+    };
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+  }
   const records = await runReplay({
     wise,
-    soniox: tracked,
+    soniox,
     apiKey,
     priorFeedback: (tutor) => loadTutorPriorFeedback(db, tutor, now),
     keepTranscripts: flag("keep-transcripts"),
+    ...(fetchCaptions ? { fetchText: fetchCaptions } : {}),
+    ...(transcriptSource ? { transcriptSource, requireCachedTranscript: true, summaryWhenNoCachedTranscript: flag("summary-when-uncached") } : {}),
+    passes: { summaryDraft: !flag("no-summary-draft"), postedJudge: !flag("no-posted-judge") },
   }, samples, {
     concurrency,
+    maxModelUsd,
     onRecord: (record, index) => console.log(`${index + 1}/${samples.length} ${record.wiseSessionId} ${record.tutor ?? "?"}: ` +
       `${record.outcome.split(":").slice(0, 2).join(":")}${record.soniox?.undeletedJobs.length ? " (SONIOX JOB NOT DELETED)" : ""}`),
   });
   const summary = summarizeReplay(records);
-  const runDir = path.join(AUTOWRITER_ROOT, "replay", now.toISOString().replace(/[:.]/gu, "-"));
+  const outOption = option("out");
+  const runDir = outOption
+    ? path.resolve(outOption.replace(/^~(?=\/|$)/u, os.homedir()))
+    : path.join(AUTOWRITER_ROOT, "replay", now.toISOString().replace(/[:.]/gu, "-"));
   writeArtifact(path.join(runDir, "records.json"), records);
   writeArtifact(path.join(runDir, "summary.json"), summary);
   fs.writeFileSync(path.join(runDir, "summary.md"), renderReplayMarkdown({

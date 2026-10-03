@@ -3,10 +3,12 @@ import { AUTOWRITER_MODELS, type AutowriterModelRoute } from "../config";
 import type { OpenRouterCallResult } from "../openrouter";
 import {
   reasonCategory,
+  refusingSoniox,
   renderReplayMarkdown,
   replayClass,
   runReplay,
   summarizeReplay,
+  type CachedTranscript,
   type ReplayDeps,
   type ReplaySample,
   type ReplayWiseReads,
@@ -502,6 +504,77 @@ describe("replay: the same evidence and decisions as production", () => {
   it("keeps the rendered transcript only when asked", async () => {
     const record = await replayClass(replayDeps({ wise: readOnlyWise(sessionDetail(RECORDING)).wise, soniox: fakeSoniox().client, keepTranscripts: true }), SAMPLE);
     expect(record.transcript).toContain("[00:00] TUTOR: Today we add fractions");
+  });
+});
+
+describe("replay from cached transcripts (nightly audit cache)", () => {
+  const cachedTranscript = (): CachedTranscript => {
+    const tokens = lessonTokens();
+    return { text: tokens.map((token) => token.text).join(""), tokens, audioDurationMs: 3_600_000, source: "production" };
+  };
+
+  it("uses the cached transcript and never creates a Soniox job, even after Wise dropped the recording", async () => {
+    const soniox = fakeSoniox();
+    const transcriptSource = vi.fn(async () => cachedTranscript());
+    // No rawRecordings any more (Wise lists them for about a day), but the transcript is cached.
+    const detail = sessionDetail({ rawTranscript: RECORDING.rawTranscript });
+    const record = await replayClass(replayDeps({
+      wise: readOnlyWise(detail).wise, soniox: soniox.client, transcriptSource, requireCachedTranscript: true,
+    }), { ...SAMPLE, recordingPublishedAt: "2026-09-28T10:00:00.000Z" });
+    expect(transcriptSource).toHaveBeenCalledWith(SESSION_ID);
+    expect(soniox.client.create).not.toHaveBeenCalled();
+    expect(soniox.client.get).not.toHaveBeenCalled();
+    expect(record).toMatchObject({
+      outcome: "draft", soniox: { jobIds: [], attempts: 0, audioMinutes: 60, costUsd: null }, speakers: { method: "zoom_alignment" },
+    });
+  });
+
+  it("skips a class without a cached transcript before any Wise read, model call or Soniox job", async () => {
+    const model = fakeModel();
+    const { wise, touched } = readOnlyWise(sessionDetail(RECORDING));
+    const record = await replayClass(replayDeps({
+      wise, soniox: refusingSoniox(), callModel: model.callModel as never, transcriptSource: async () => null, requireCachedTranscript: true,
+    }), SAMPLE);
+    expect(record.outcome).toBe("skip:no_cached_transcript");
+    expect(model.requests).toEqual([]);
+    expect(touched).toEqual([]);
+  });
+
+  it("takes production's summary route for an uncached class when asked, without any Soniox call", async () => {
+    const model = fakeModel();
+    const record = await replayClass(replayDeps({
+      wise: readOnlyWise(sessionDetail(RECORDING)).wise, soniox: refusingSoniox(), callModel: model.callModel as never,
+      transcriptSource: async () => null, requireCachedTranscript: true, summaryWhenNoCachedTranscript: true,
+    }), SAMPLE);
+    expect(record.outcome).toBe("fallback:speakers_unclear");
+    expect(record.soniox).toBeNull();
+    expect(record.summaryDraft).not.toBeNull();
+    expect(record.calls.every((call) => call.purpose === "summary_draft")).toBe(true);
+  });
+
+  it("refuses every Soniox call in a cache-only replay", async () => {
+    const stub = refusingSoniox();
+    await expect(stub.create({ audioUrl: "x", terms: [], general: [], clientReferenceId: "x" })).rejects.toThrow("soniox_disabled");
+    await expect(stub.remove("x")).rejects.toThrow("soniox_disabled");
+  });
+
+  it("can switch off the summary draft and the posted-draft judge", async () => {
+    const model = fakeModel();
+    const record = await replayClass(replayDeps({
+      wise: readOnlyWise(sessionDetail(RECORDING)).wise, soniox: refusingSoniox(), callModel: model.callModel as never,
+      transcriptSource: async () => cachedTranscript(), requireCachedTranscript: true, passes: { summaryDraft: false, postedJudge: false },
+    }), { ...SAMPLE, postedFields: GOOD_FIELDS, postedSource: "row" });
+    expect(record).toMatchObject({ outcome: "draft", summaryDraft: null, posted: null });
+    expect(record.calls.every((call) => call.purpose === "transcript_draft")).toBe(true);
+  });
+
+  it("stops starting classes once the model spend reaches --max-model-usd", async () => {
+    const samples = [SAMPLE, { ...SAMPLE, wiseSessionId: "6a0000000000000000000a02" }, { ...SAMPLE, wiseSessionId: "6a0000000000000000000a03" }];
+    const records = await runReplay(replayDeps({
+      wise: readOnlyWise(sessionDetail(RECORDING)).wise, soniox: refusingSoniox(), transcriptSource: async () => cachedTranscript(),
+      requireCachedTranscript: true,
+    }), samples, { concurrency: 1, maxModelUsd: 0.001 });
+    expect(records.map((record) => record.outcome)).toEqual(["draft", "skip:model_budget", "skip:model_budget"]);
   });
 });
 

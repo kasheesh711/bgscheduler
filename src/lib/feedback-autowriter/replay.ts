@@ -83,10 +83,45 @@ export interface ReplaySample {
   recordingPublishedAt?: string | null;
 }
 
+/**
+ * A transcript collected earlier (the nightly audit's cache, `cache/<sid>/transcript.json`): the production job's,
+ * or a re-transcription's. Replaying from it needs no Soniox job at all.
+ */
+export interface CachedTranscript {
+  text: string;
+  tokens: SonioxToken[];
+  audioDurationMs: number | null;
+  source?: string;
+}
+
+/** A stand-in for a cache-only replay: not a Soniox client (no key, no network) — every call is refused. */
+export function refusingSoniox(): SonioxClient {
+  const refuse = async (): Promise<never> => {
+    throw new Error("soniox_disabled:replay_from_cache");
+  };
+  return { create: refuse, get: refuse, transcript: refuse, remove: refuse, list: refuse };
+}
+
 export interface ReplayDeps {
   wise: ReplayWiseReads;
+  /**
+   * Transcribes a class that has no cached transcript. A cache-only replay passes `refusingSoniox()`: no key, no
+   * network, and every call refused.
+   */
   soniox: SonioxClient;
   apiKey: string;
+  /** A cached transcript for the class: used instead of a Soniox job (`soniox.create` is never called for it). */
+  transcriptSource?: (wiseSessionId: string) => Promise<CachedTranscript | null>;
+  /** With a cache: a class without a cached transcript is `skip:no_cached_transcript` — no model call, no Soniox job. */
+  requireCachedTranscript?: boolean;
+  /**
+   * With `requireCachedTranscript`: instead of skipping a class with no cached transcript, take production's summary
+   * route for it (fallback `speakers_unclear`, the reason summary-only posts were written on 2 Oct). No Soniox job.
+   * Used to replay summary-only posts through a changed writer/judge.
+   */
+  summaryWhenNoCachedTranscript?: boolean;
+  /** Passes to run besides the transcript draft (both on by default). */
+  passes?: { summaryDraft?: boolean; postedJudge?: boolean };
   /** What a draft must not copy (production: `loadTutorPriorFeedback`). */
   priorFeedback: (tutor: AutowriterTutor) => Promise<PriorFeedbackComparison[]>;
   /** Zoom's WEBVTT (tests inject a fake). */
@@ -400,6 +435,12 @@ export async function replayClass(deps: ReplayDeps, sample: ReplaySample): Promi
 
 async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: ReplayRecord): Promise<void> {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  // A cached transcript replaces the Soniox job; without one a cache-only replay skips the class before any call.
+  const cached = deps.transcriptSource ? await deps.transcriptSource(sample.wiseSessionId) : null;
+  if (!cached && deps.requireCachedTranscript && !deps.summaryWhenNoCachedTranscript) {
+    record.outcome = "skip:no_cached_transcript";
+    return;
+  }
   let detail: AutowriterSessionDetail;
   try {
     detail = parseAutowriterSessionDetail(await deps.wise.getSessionDetailById(sample.wiseSessionId));
@@ -450,19 +491,38 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
   // 1. The transcript route, in production's order.
   let fallback: SummaryFallbackCause | null = null;
   const recording = recordingForTranscription(detail);
-  if (!recording.ok && recording.reason === "recording_not_ready" && sample.recordingPublishedAt) {
+  let transcribed: Awaited<ReturnType<typeof transcribe>> | null = null;
+  if (cached) {
+    // Collected while the recording was still listed: Wise may have dropped it since. Its length still counts.
+    if (recording.ok && recordingTooShort(recording.durationSeconds, window.minutes)) {
+      record.outcome = "hold:recording_too_short";
+    } else {
+      transcribed = {
+        transcript: { text: cached.text, tokens: cached.tokens },
+        audioDurationMs: cached.audioDurationMs,
+        soniox: {
+          jobIds: [], attempts: 0, audioMinutes: cached.audioDurationMs === null ? null : round2(cached.audioDurationMs / 60_000),
+          costUsd: null, turnaroundSeconds: null, undeletedJobs: [], error: null,
+        },
+      };
+    }
+  } else if (deps.requireCachedTranscript && deps.summaryWhenNoCachedTranscript) {
+    // Cache-only replay of a summary-only post: production's route for it, never a Soniox job.
+    fallback = "speakers_unclear";
+  } else if (!recording.ok && recording.reason === "recording_not_ready" && sample.recordingPublishedAt) {
     // Published (production transcribes within the hour) but no longer listed by Wise: not replayable.
     record.outcome = "skip:recording_gone";
     return;
-  }
-  if (!recording.ok) {
+  } else if (!recording.ok) {
     fallback = recording.reason === "recording_multiple_parts" ? "recording_multiple_parts" : "no_recording";
   } else if (recordingTooShort(recording.durationSeconds, window.minutes)) {
     record.outcome = "hold:recording_too_short";
   } else {
-    const transcribed = await transcribe(deps, sonioxJobInput({
+    transcribed = await transcribe(deps, sonioxJobInput({
       wiseSessionId: sample.wiseSessionId, audioUrl: recording.url, detail, tutorNames: tutor.tutorNames, studentName: student.name,
     }));
+  }
+  if (transcribed) {
     record.soniox = transcribed.soniox;
     if (!transcribed.transcript) {
       fallback = "soniox_failed";
@@ -515,7 +575,7 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
       }
       // The draft actually posted for this class, judged against what was said — only on a transcript production
       // would write from (a short one, or one without clear speakers, could flag a sound draft).
-      if (sample.postedFields) {
+      if (sample.postedFields && deps.passes?.postedJudge !== false) {
         const unusable = evidence.tooShort ?? (evidence.speakers.method === "unclear" ? "speakers_unclear" : null);
         record.posted = unusable
           ? { source: sample.postedSource ?? "row", verdict: null, problems: [], error: `transcript_not_usable:${unusable}` }
@@ -528,7 +588,8 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
   }
 
   // 2. A summary draft for every class: the fallback's evidence, and the comparison for the others.
-  if (usableSummary) {
+  const summaryPass = deps.passes?.summaryDraft !== false;
+  if (usableSummary && summaryPass) {
     const writerContents: string[] = [];
     const result = await runWritingPipeline({
       apiKey: deps.apiKey,
@@ -548,7 +609,8 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
     // What the summary path does after a fallback (processLeased): never back to the transcript.
     record.afterFallback = !usableSummary ? "retry:no_summary"
       : thaiShare(usableSummary.text) >= AUTOWRITER_THAI_SUMMARY_SHARE ? "hold:thai_summary_no_transcript"
-        : record.summaryDraft?.outcome ?? "error:no_summary_draft";
+        : !summaryPass ? "skip:summary_draft_off"
+          : record.summaryDraft?.outcome ?? "error:no_summary_draft";
   }
 }
 
@@ -556,9 +618,18 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
 export async function runReplay(deps: ReplayDeps, samples: readonly ReplaySample[], options: {
   concurrency?: number;
   onRecord?: (record: ReplayRecord, index: number) => void;
+  /** Stop starting classes once the model calls of finished classes cost this much (classes in flight still finish). */
+  maxModelUsd?: number;
 } = {}): Promise<ReplayRecord[]> {
+  let spentUsd = 0;
   return mapWithConcurrency(samples, Math.max(1, options.concurrency ?? 3), async (sample, index) => {
+    if (options.maxModelUsd !== undefined && spentUsd >= options.maxModelUsd) {
+      const skipped = { ...emptyRecord(sample), outcome: "skip:model_budget" };
+      options.onRecord?.(skipped, index);
+      return skipped;
+    }
     const record = await replayClass(deps, sample);
+    spentUsd += sum(record.calls.map((call) => call.costUsd));
     options.onRecord?.(record, index);
     return record;
   });
