@@ -426,7 +426,7 @@ Sends one test message through the Apps Script relay. Part of the **parked** ema
 
 **No request body.** Only the backfill route reads anything from the request, and it reads query parameters.
 
-**Manual runs.** Five of the six job keys have an in-process branch in the Data Health job runner, which calls the same libraries directly rather than re-issuing an HTTP request ([`run-job.ts:104-150`](../../../src/lib/data-health/run-job.ts)). `post_class_feedback_backfill` has **no** branch, so a targeted drain cannot be started from Data Health — only by a hand-issued request with the cron secret. That runner additionally requires the `access_manager` capability for any `post_class_feedback*` key and `confirmed: true` for any `dangerous` job ([`jobs/[jobKey]/run/route.ts:25-44`](../../../src/app/api/data-health/jobs/%5BjobKey%5D/run/route.ts)).
+**Manual runs.** Every job key has an in-process branch in the Data Health job runner, which calls the same libraries directly rather than re-issuing an HTTP request ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)). The `post_class_feedback_backfill` branch runs the cron's automatic window (the oldest unreconciled window, one 50-detail batch). A chosen date range runs one batch at a time through `POST /api/post-class-feedback/sync` (the Settings tab's Backfill dialog); only a multi-batch re-drain of a range still needs a hand-issued request with the cron secret. That runner additionally requires the `access_manager` capability for any `post_class_feedback*` key and `confirmed: true` for any `dangerous` job ([`jobs/[jobKey]/run/route.ts`](../../../src/app/api/data-health/jobs/%5BjobKey%5D/run/route.ts)).
 
 ### `GET /api/internal/sync-post-class-feedback`
 

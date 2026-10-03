@@ -15,10 +15,14 @@ vi.mock("@/lib/data-health/run-job", () => ({ runDataHealthJob: vi.fn() }));
 vi.mock("@/lib/post-class-feedback/access", () => ({
   getPostClassCapabilities: vi.fn(),
 }));
+vi.mock("@/lib/unearned-revenue/access", () => ({
+  getUnearnedRevenueCapabilities: vi.fn(),
+}));
 
 import { auth } from "@/lib/auth";
 import { runDataHealthJob } from "@/lib/data-health/run-job";
 import { getPostClassCapabilities } from "@/lib/post-class-feedback/access";
+import { getUnearnedRevenueCapabilities } from "@/lib/unearned-revenue/access";
 import { POST } from "../route";
 
 const authMock = auth as unknown as Mock;
@@ -40,6 +44,7 @@ describe("POST /api/data-health/jobs/[jobKey]/run", () => {
     authMock.mockResolvedValue({ user: { email: "kevhsh7@gmail.com" } });
     vi.mocked(runDataHealthJob).mockResolvedValue(NextResponse.json({ ok: true }) as never);
     vi.mocked(getPostClassCapabilities).mockResolvedValue(["access_manager"]);
+    vi.mocked(getUnearnedRevenueCapabilities).mockResolvedValue([]);
   });
 
   it("requires an admin session", async () => {
@@ -100,5 +105,35 @@ describe("POST /api/data-health/jobs/[jobKey]/run", () => {
       "post_class_feedback_deadline",
       "kevhsh7@gmail.com",
     );
+  });
+
+  it("refuses a job excluded from manual runs before asking for confirmation", async () => {
+    const res = await POST(request(), context("student_promotions_july_1"));
+
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({
+      error: "Student promotions write to Wise once a year; review and apply them from the Student Promotions page.",
+    });
+    expect(runDataHealthJob).not.toHaveBeenCalled();
+  });
+
+  it("requires the Unearned Revenue access-manager grant to run its import", async () => {
+    vi.mocked(getUnearnedRevenueCapabilities).mockResolvedValue(["viewer"]);
+
+    const res = await POST(request(), context("unearned_revenue"));
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual({ error: "Unearned Revenue access manager capability required" });
+    expect(getUnearnedRevenueCapabilities).toHaveBeenCalledWith("kevhsh7@gmail.com");
+    expect(runDataHealthJob).not.toHaveBeenCalled();
+  });
+
+  it("allows an Unearned Revenue access manager to run its import", async () => {
+    vi.mocked(getUnearnedRevenueCapabilities).mockResolvedValue(["viewer", "access_manager"]);
+
+    const res = await POST(request(), context("unearned_revenue"));
+
+    expect(res.status).toBe(200);
+    expect(runDataHealthJob).toHaveBeenCalledWith("unearned_revenue", "kevhsh7@gmail.com");
   });
 });

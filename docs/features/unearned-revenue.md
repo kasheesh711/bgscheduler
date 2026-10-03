@@ -112,7 +112,8 @@ Workbook hard checks include:
 
 The feature has dedicated `viewer` and `access_manager` grants, resolved from Postgres on every
 request. These grants may supersede a user's legacy `allowedPages` restriction for this feature only.
-An access manager can retry an import and edit the grant matrix; a transaction prevents self-removal
+An access manager can retry an import (here, or from Data Health's job list, which checks the same
+grant) and edit the grant matrix; a transaction prevents self-removal
 and removal of the final access manager. Every change is recorded in an immutable audit table with an
 optimistic-lock version.
 

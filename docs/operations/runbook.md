@@ -456,11 +456,9 @@ Two in-app paths exist, both behind an Auth.js session and both audited with
   [`run-job.ts:29-210`](../../src/lib/data-health/run-job.ts); `maxDuration` is 800
   ([`:11`](../../src/app/api/data-health/jobs/%5BjobKey%5D/run/route.ts)).
 
-  **Gap worth knowing:** `runDataHealthJob` implements only **16** of the 24 registry keys. The
-  eight with no branch — `unearned_revenue`, `progress_tests`, `progress_tests_digest`, `post_class_feedback_backfill`,
-  `student_promotions_july_1`, `admissions_notifications`, `line_credit_digest`,
-  `line_backlog_recovery` — fall through to `404 {"error":"Unknown job"}`
-  ([`run-job.ts:207`](../../src/lib/data-health/run-job.ts)). Those must be fired with curl (§4.5).
+  **Worth knowing:** `runDataHealthJob` dispatches every job the dashboard offers. The one registry
+  key it refuses is `student_promotions_july_1` (`manualRunDisabledReason` → `409` before the audit
+  wrapper, no button); apply promotions from the Student Promotions page.
 - **Class Assignments → Sync.** `POST /api/admin/sync-wise` — session only, running the same
   `runWiseSyncRequest` as the cron ([`route.ts:8-24`](../../src/app/api/admin/sync-wise/route.ts)).
   The client then polls for a freshly promoted snapshot every 5 s for up to **12 minutes** before
@@ -900,12 +898,10 @@ for syncs runs 15 concurrent requests ([`:214-221`](../../src/lib/wise/client.ts
   operator runs the SQL in §7.3. Every other cron-driven ledger sweeps at 20 or 30 minutes. Adding a
   `markAbandonedRuns` mirror is a one-function change in `src/lib/leave-requests/sync.ts` — a path
   this documentation pass is not permitted to edit.
-- **Data Health cannot run 8 of its own 24 registered jobs.** `runDataHealthJob` has no branch for
-  `unearned_revenue`, `progress_tests`, `progress_tests_digest`, `post_class_feedback_backfill`,
-  `student_promotions_july_1`, `admissions_notifications`, `line_credit_digest` or
-  `line_backlog_recovery`; they return `404 Unknown job`
-  ([`run-job.ts:207`](../../src/lib/data-health/run-job.ts)). Two of those are the only manual
-  recovery levers for their features.
+- **Resolved — Data Health runs every job it offers.** `runDataHealthJob` now dispatches the
+  previously missing keys, including `post_class_feedback_backfill` and `line_backlog_recovery`, the
+  only manual recovery levers for their features; `student_promotions_july_1` is excluded on purpose
+  (`manualRunDisabledReason`, `409` before audit) ([`run-job.ts`](../../src/lib/data-health/run-job.ts)).
 - **`line_backlog_recovery_sync_runs` is schema-only.** The table and its unique index exist
   ([`schema.ts:2680`](../../src/lib/db/schema.ts)) but nothing writes them, so the manual-only
   recovery route has no single-flight protection and no run history.

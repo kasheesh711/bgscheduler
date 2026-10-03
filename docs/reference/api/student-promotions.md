@@ -391,7 +391,7 @@ State this plainly, because the schedule and the guard disagree about how often 
 Two follow-on facts:
 
 - The guard is in the handler, not the library, so it applies to **any** caller — a manual `curl` with the cron secret gets the same 409 on the wrong day. The library's own window check is a *lower* bound (`now >= 2026-06-30T17:05Z`, [`data.ts:2063-2065,2289-2291`](../../../src/lib/student-promotions/data.ts)), which is why the admin `…/apply` endpoint still works after July 1 while this one does not.
-- There is **no in-app manual trigger** for it either. The Data Health "run now" path resolves the registry entry and enforces its `dangerous` confirmation, then falls through `runDataHealthJob`'s branch chain — which has no `student_promotions_july_1` case — to `404 {"error":"Unknown job"}` ([`run-job.ts:207`](../../../src/lib/data-health/run-job.ts), route at [`jobs/[jobKey]/run/route.ts:33-43`](../../../src/app/api/data-health/jobs/[jobKey]/run/route.ts)). The button is rendered; the job is unreachable through it.
+- There is **no one-click trigger** for it either, by design. Its registry entry carries `manualRunDisabledReason`, so Data Health renders no Run button, and a direct `POST /api/data-health/jobs/student_promotions_july_1/run` — once past the route's `dangerous` confirmation gate — is refused by `runDataHealthJob` with `409` (the reason as `error`) before its audit wrapper ([`run-job.ts`](../../../src/lib/data-health/run-job.ts), [`cron-registry.ts`](../../../src/lib/data-health/cron-registry.ts)). The admin `…/apply` workflow on the Student Promotions page is the in-app path.
 
 **Status codes:**
 

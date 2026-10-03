@@ -5,6 +5,7 @@ import { auth } from "@/lib/auth";
 import { getCronJobDefinition, type CronJobKey } from "@/lib/data-health/cron-registry";
 import { runDataHealthJob } from "@/lib/data-health/run-job";
 import { getPostClassCapabilities } from "@/lib/post-class-feedback/access";
+import { getUnearnedRevenueCapabilities } from "@/lib/unearned-revenue/access";
 
 interface RunRouteContext {
   params: Promise<{ jobKey: string }>;
@@ -24,6 +25,11 @@ export async function POST(request: NextRequest, context: RunRouteContext) {
     return NextResponse.json({ error: "Unknown job" }, { status: 404 });
   }
 
+  // Refused before the confirmation prompt: confirming a job that can never run here would mislead.
+  if (job.manualRunDisabledReason !== undefined) {
+    return NextResponse.json({ error: job.manualRunDisabledReason }, { status: 409 });
+  }
+
   if (isWiseClassroomJob(job.key) || (job.key.startsWith("feedback_autowriter") || job.key === "feedback_atom")) {
     try { await requireClassroomOperationsOwner(); }
     catch (error) { return classroomOperationsAccessError(error); }
@@ -33,6 +39,14 @@ export async function POST(request: NextRequest, context: RunRouteContext) {
     const capabilities = await getPostClassCapabilities(session.user.email);
     if (!capabilities.includes("access_manager")) {
       return NextResponse.json({ error: "Access manager capability required" }, { status: 403 });
+    }
+  }
+
+  // Same grant the feature's own import retry requires (POST /api/unearned-revenue/sync).
+  if (job.key === "unearned_revenue") {
+    const capabilities = await getUnearnedRevenueCapabilities(session.user.email);
+    if (!capabilities.includes("access_manager")) {
+      return NextResponse.json({ error: "Unearned Revenue access manager capability required" }, { status: 403 });
     }
   }
 

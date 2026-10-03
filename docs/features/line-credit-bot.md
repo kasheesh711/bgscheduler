@@ -121,10 +121,12 @@ review queue ([`schedule-bot.ts:261`-`276`](../../src/lib/line/schedule-bot.ts),
 [`schedule-bot-group.ts:353`-`366`](../../src/lib/line/schedule-bot-group.ts)). See
 [LINE Integration § Schedule bot](./line-integration.md#schedule-bot).
 
-**Manual re-run.** `line_credit_digest` has no branch in `runDataHealthJob`, so the Data Health
-"run job" button returns `404 Unknown job` for it; a direct `CRON_SECRET` request is the only manual
-path ([`internal-crons.md` § The Data Health manual-run path](../reference/api/internal-crons.md#the-data-health-manual-run-path)
-records this alongside six other keys).
+**Manual re-run.** While Credit Control is active, the Data Health job list dispatches
+`line_credit_digest` in-process (`sendLineCreditDigest()`, `500` only when the run `failed`, the
+cron route's mapping); while it is retired the job is paused and shows no button. A direct
+`CRON_SECRET` request reaches the same function, which itself skips while Credit Control is retired. Either way a second run on a date that already has a digest run
+row is skipped ("already recorded for this date") — see
+[`internal-crons.md` § The Data Health manual-run path](../reference/api/internal-crons.md#the-data-health-manual-run-path).
 
 ## UI
 
@@ -505,17 +507,17 @@ its own feature's suite. Its only real-code exercise in the repo is through
 ## Open questions
 
 1. **A `failed` digest is never retried.** Any run row for the date is terminal, `failed` included
-   ([`credit-digest.ts:199`-`207`](../../src/lib/line/credit-digest.ts)), and `line_credit_digest`
-   has no branch in `runDataHealthJob`, so recovery means a hand-rolled `CRON_SECRET` request — and
-   the row that blocks it must be deleted first. Should a `failed` row be re-runnable, or is
+   ([`credit-digest.ts:199`-`207`](../../src/lib/line/credit-digest.ts)), and neither a
+   Data Health re-run nor a `CRON_SECRET` request gets past it, so recovery means deleting the row that
+   blocks it first. Should a `failed` row be re-runnable, or is
    one-shot-per-day the intent?
 2. **`line_credit_digest_runs` is written but never read by Data Health.** It is absent from
    `fetchAllRuns`, so the job falls through to the `room_utilization_sessions` fallback for its
    `latestSuccessfulRun` — a scheduled job whose freshness can be masked by an unrelated table
    (recorded as open question 4 in [`crons.md`](../reference/crons.md)). Wire the ledger in?
-3. **The digest is registered `dangerous: true`** ([`cron-registry.ts:349`](../../src/lib/data-health/cron-registry.ts))
-   with a confirmation label, but it cannot be run from Data Health at all. The flag currently
-   guards a button that returns `404`.
+3. **Resolved — the digest's `dangerous: true` flag now guards a real run.** It is registered with a
+   confirmation label ([`cron-registry.ts`](../../src/lib/data-health/cron-registry.ts)), and the
+   Data Health job list dispatches it while Credit Control is active (see **Manual re-run** above).
 4. **`/credit setup` cannot bootstrap a chat.** It is a bare `UPDATE`, so a staff group must first
    be registered through the schedule bot's `setup staff` flow. That is coherent, but the failure is
    invisible: an admin in an unregistered chat sees nothing at all (CRED-BOT-G1 fires first). Should
