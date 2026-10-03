@@ -314,3 +314,27 @@ describe("JSON schemas for the CLI", () => {
     expect((AUDIT_JSON_SCHEMA.required as string[])).toContain("issues");
   });
 });
+
+describe("normaliseAuditOutput: blank strings (3 Oct)", () => {
+  it("keeps an issue with an empty quote as a placeholder and drops empty claims and evidence quotes", () => {
+    const raw = baseResult({
+      verdict: "major",
+      claims: [
+        { id: "c1", field: "performance", text: "", kind: "other", verdict: "advice_ok", evidence: [] },
+        { id: "c2", field: "homework", text: "Complete page 12 by Friday.", kind: "homework", verdict: "unsupported", evidence: [quote(""), quote("We can finish page 12 next time.")] },
+      ],
+      issues: [{
+        id: "i1", claimIds: ["c2"], field: "homework", quote: "", mode: "M03", severity: "major", criticalCategory: null,
+        rootStage: "writer", defense: "judge_list", mechanism: "", evidence: [quote("  ")], minimalFix: null, confidence: "medium",
+      }],
+    }) as unknown as Record<string, unknown>;
+    const out = parseAuditResult(raw, ctx);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.result.claims.map((c) => c.id)).toEqual(["c1"]);
+    expect(out.result.claims[0].evidence).toHaveLength(1);
+    expect(out.result.issues[0]).toMatchObject({ quote: "(no quote given)", mechanism: "(not given)", evidence: [], claimIds: ["c1"] });
+    expect(out.result.postCheck.quoteMismatchIssues).toEqual(["i1"]);
+    expect(out.result.verdict).toBe("major");
+  });
+});
