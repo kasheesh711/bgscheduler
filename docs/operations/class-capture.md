@@ -44,13 +44,27 @@ Participant agreement, required guardian permission, and permission for named pr
 | --- | --- |
 | Class audio | WebM, MP4/M4A, Ogg, or WAV; up to 100 MiB total across eight active sections. Browser recording stops at two hours or the byte limit. |
 | Tutor debrief | One active separate audio source, up to 10 MiB; the browser recorder stops at three minutes. The byte limit is not a server-side pre-spend duration guarantee for an imported file. |
-| Worksheets | Up to four active JPG/PNG files, 8 MiB each and 24 megapixels each. Tutor review only; no OCR or model photo upload. |
-| Replacements | Removed files release active slots, but every intent still consumes the capture's lifetime budget of 20 intents and 200 MiB total declared bytes. Deleting/replacing evidence does not reset that budget. |
+| Worksheets | No worksheet count limit; JPG/PNG files up to 8 MiB and 24 megapixels each. Tutor review only; no OCR or model photo upload. |
+| Replacements | Audio has a lifetime budget of 20 intents and 200 MiB total declared bytes, including removed audio. Worksheet uploads do not consume that budget and have no aggregate file-count or byte cap. |
 | Current draft input | Combined transcripts 90,000 characters, tutor notes 12,000 characters. Oversized current evidence fails visibly. |
 | Prior context | At most three earlier feedback records for the same student/class/tutor, within 90 days; at most 2,000 characters each enter the model. History cannot support a current-class claim. |
 | Generated draft | Four fields, at most 8,000 characters in total; excerpts keep class audio, tutor debrief, and written observations distinct. |
 
 The model selects source IDs and verbatim quotes. Unknown sources, invented quotes, prior-feedback citations, and worksheet citations are rejected. Demonstrated understanding can cite tutor observations/debrief only. Class-audio speakers are unverified. Quote membership does not prove the meaning of a claim; the tutor must review context, negation, attribution, and any proposed homework. Audio alone cannot establish silent or written work or mastery.
+
+## Phone recording and after-class feedback
+
+The recorder requests a screen wake lock and shows whether it was granted. This prevents automatic screen sleep when supported; it cannot continue reliably through a manual lock, app switch, or phone call. For a locked-screen iPhone workflow, record with Voice Memos, save/share the file to Files, and select **Upload saved audio**. M4A imports normalize Apple MIME aliases and use the extension plus a container signature check when Files supplies no type. The same canonical MIME is used for local recovery, upload authorization, Blob storage, and server validation.
+
+Recording emits recovery chunks every second when the browser permits. On interruption, it releases the microphone but waits for the recorder's final event, including delayed Safari events, before completing the local file. Chunks not yet emitted before process termination cannot be recovered.
+
+Today's completed classes remain selectable for retrospective feedback. When the student snapshot still labels a class upcoming, a newer ready, nondeleted, recent post-class observation can establish completion only if class, exact teacher user/canonical key, student roster and scheduled times match. Both snapshots retain the two-hour freshness requirement. A missing teacher membership ID is resolved only through a unique exact Wise user membership in the active identity snapshot. Current conflicting schedule rows still take precedence.
+
+**Write feedback myself** opens editable feedback fields without recording, uploading, or calling an AI provider. Review and save the fields, then copy them into Wise. A capture still expires 24 hours after creation. The class picker remains scoped to today in Bangkok.
+
+Selecting worksheet photos starts a sequential private upload automatically after the existing worksheet permission check. Thumbnails stay visible in a three-column gallery with a bounded scroll area; tap a photo for a full preview, or collapse the gallery. Failed or cancelled uploads retain a local retry path. The typed tutor-observations section is removed; prior saved observations are preserved, and new feedback can use the class transcript, voice debrief, or manual feedback fields.
+
+Worksheet photos have no count cap, including the former 20-intent aggregate upload cap. The per-photo format, size, pixel, permission and retention checks remain in place. Audio budgets are unchanged and count only audio intents.
 
 ## Upload, retry, and uncertain work
 
@@ -60,7 +74,7 @@ Keep the original or recoverable local audio until upload is confirmed. A lost r
 
 Transcription and drafting require explicit actions. Stored claims/provider IDs and draft version checks reduce duplicate work and protect edits. A Soniox POST can succeed even if its response is lost: its `client_reference_id` is a tracking value, **not an idempotency key**. The UI reports an uncertain outcome instead of silently resending. Do not clear that state or create a replacement paid attempt without reviewing known provider IDs and cleanup. The feature-specific `bg-capture:` prefix allows orphan deletion; it does not reconstruct a lost successful transcript. [Soniox API](https://soniox.com/docs/api-reference/stt/transcriptions/create_transcription).
 
-For an uncertain or failed audio source, retain the local original, ask the operator to inspect metadata and provider cleanup, or explicitly remove the source and draft from tutor notes. Never claim transcription succeeded from a missing/failed response. The worker has no proven exactly-once billing guarantee; account spend controls remain necessary.
+For an uncertain or failed audio source, retain the local original, ask the operator to inspect metadata and provider cleanup, or explicitly remove the source and draft from the remaining transcript or write the feedback manually. Never claim transcription succeeded from a missing/failed response. The worker has no proven exactly-once billing guarantee; account spend controls remain necessary.
 
 ## Retention and rollback
 
@@ -91,14 +105,15 @@ Daily capture/file/byte limits and bounded attempts reduce accidental load but a
 
 ## Acceptance evidence and remaining limits
 
-The [synthetic browser report](../assets/class-capture/acceptance-results.json) records **17 passing checks with zero provider calls**. [The harness](../../scripts/dev/verify-class-capture.mjs) bundles the actual React workspace and local recovery against a localhost mocked API/recorder/upload layer; it does not exercise application authentication or production services. Run from the repository with `node scripts/dev/verify-class-capture.mjs` using an installed supported Chromium/Chrome (`CHROME_BIN` if needed).
+The [synthetic browser report](../assets/class-capture/acceptance-results.json) records **18 passing checks with zero provider calls**. [The harness](../../scripts/dev/verify-class-capture.mjs) bundles the actual React workspace and local recovery against a localhost mocked API/recorder/upload layer; it does not exercise application authentication or production services. Run from the repository with `node scripts/dev/verify-class-capture.mjs` using an installed supported Chromium/Chrome (`CHROME_BIN` if needed).
 
 | Checked with synthetic browser behavior | Evidence |
 | --- | --- |
 | Consent gates preparation/microphone; permission denial gives fallback; canceling a pending prompt releases a late microphone | [Consent](../assets/class-capture/mobile-consent.png) |
 | Visible recording stops on background and retains emitted audio; lost upload retries the same intent; transcription stays explicit | [Recording](../assets/class-capture/mobile-recording.png), [paused](../assets/class-capture/mobile-paused.png) |
-| Notes/photos remain distinct; saved review gates copy/Wise; regeneration resets the draft; uncertain audio can be removed before using tutor notes | [Review](../assets/class-capture/mobile-review.png), [handoff](../assets/class-capture/mobile-handoff.png) |
+| Voice debrief/photos remain distinct; saved review gates copy/Wise; regeneration resets the draft; uncertain audio can be removed before using the remaining transcript | [Review](../assets/class-capture/mobile-review.png), [handoff](../assets/class-capture/mobile-handoff.png) |
 | 390px layout and 44px controls; canceled upload retains local media/worksheet permission; another login cannot recover it; default pause requests no microphone | [Class selection](../assets/class-capture/mobile-select-class.png), [desktop capture](../assets/class-capture/desktop-capture.png), [desktop review](../assets/class-capture/desktop-review.png) |
+| Photos upload on selection; 24 photos fit a bounded gallery; previews work after reload; M4A and manual feedback work without AI | [Photo gallery](../assets/class-capture/mobile-photo-gallery.png), [manual feedback](../assets/class-capture/mobile-manual-feedback.png) |
 | Today's own classes have no date picker; focus/midnight refresh drops stale choices and responses while preserving an existing capture and local edits | [Synthetic acceptance report](../assets/class-capture/acceptance-results.json) |
 
 Focused unit/integration tests cover server access, upload validation, provider/evidence boundaries, claims, and cleanup using synthetic fixtures/mocks or isolated local databases. The exact final command results and commit/CI status belong in the PR's verification record; the browser report alone does not establish backend or end-to-end production success.

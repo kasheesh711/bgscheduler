@@ -52,7 +52,6 @@ export class ClassRecorder {
   private stream: MediaStream | null = null;
   private chunks: Blob[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
-  private stopTimer: ReturnType<typeof setTimeout> | null = null;
   private generation = 0;
   private startedAt = 0;
   private readonly env: RecorderEnvironment;
@@ -103,7 +102,7 @@ export class ClassRecorder {
       this.media.onerror = () => this.stop("interrupted");
       stream.getTracks().forEach((track) => track.addEventListener("ended", () => this.stop("interrupted"), { once: true }));
       this.startedAt = this.env.now();
-      this.media.start(10_000);
+      this.media.start(1_000);
       this.publish({ status: "recording", mime: this.media.mimeType || mime });
       this.timer = setInterval(() => {
         const seconds = Math.floor((this.env.now() - this.startedAt) / 1_000);
@@ -124,11 +123,12 @@ export class ClassRecorder {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     // Stop tracks immediately, including navigation/unmount; waiting for onstop must never keep the mic live.
-    this.releaseTracks();
     if (this.media?.state !== "inactive" && this.media) {
+      // Safari can delay its final dataavailable event while suspended. Wait for
+      // onstop rather than finalizing a partial Blob after an arbitrary timeout.
       try { this.media.stop(); } catch { this.finish(); }
-      if (this.snapshot.status !== "stopped") this.stopTimer = setTimeout(() => this.finish(), 1_500);
-    } else this.finish();
+    } else if (!this.media) this.finish();
+    this.releaseTracks();
   }
 
   private releaseTracks() {
@@ -139,7 +139,6 @@ export class ClassRecorder {
   private finish() {
     if (this.snapshot.status === "stopped") return;
     if (this.timer) clearInterval(this.timer);
-    if (this.stopTimer) clearTimeout(this.stopTimer);
     this.releaseTracks();
     this.publish({ status: "stopped", blob: this.chunks.length ? new Blob(this.chunks, { type: this.snapshot.mime }) : null });
   }
