@@ -6,6 +6,7 @@ import { wiseSessionLink } from "@/lib/wise/links";
 import { isOnsiteSkip } from "./dashboard";
 import { isMissingRelationError, sqlStateOf } from "./db-errors";
 import { problemCodes } from "./first-shot";
+import { LISTED_INFO_INCIDENT_KINDS } from "./inbox";
 import {
   GATE_THRESHOLDS,
   PROVEN_TUTOR_KEYS,
@@ -28,7 +29,7 @@ import {
 } from "./quality";
 import { loadGateFacts } from "./review-job";
 import { AUTOWRITER_TUTORS, rosterTutor, tutorLabel } from "./roster";
-import type { AutowriterSessionRow } from "./store";
+import { sessionClassNameSql, type AutowriterSessionRow } from "./store";
 
 /**
  * The quality and review data of the autowriter dashboard (Phase 1 of the operating loop). Read-only; the pure
@@ -595,8 +596,12 @@ const notInPersonReviewSql = sql`not exists (select 1 from feedback_autowriter_s
 const openFlagSql = sql`exists (select 1 from feedback_autowriter_flags f
   where f.wise_session_id = feedback_autowriter_reviews.wise_session_id and f.resolved_by_verdict_id is null)`;
 const requiredUnreviewedSql = sql`(${R.inclusionReason} in ('new_tutor', 'random_sample') and ${R.currentVerdictId} is null)`;
-/** SQL: a critical incident the owner has not acknowledged (it blocks the gate, and the to-do list shows it). */
-const openCriticalIncidentSql = sql`(${I.severity} = 'critical' and ${I.acknowledgedAt} is null)`;
+/**
+ * SQL: an incident the to-do list keeps until the owner acknowledges it (`isListedIncident`): a critical one (it blocks
+ * the gate), or an info kind that needs a person (a guided post's style fix).
+ */
+const openListedIncidentSql = sql`(${I.acknowledgedAt} is null and (${I.severity} = 'critical'
+  or ${inArray(I.kind, [...LISTED_INFO_INCIDENT_KINDS])}))`;
 
 async function loadAvailableReview(db: Database, now: Date, queueLimit: number): Promise<AutowriterReview> {
   const today = bangkokDateKey(now);
@@ -626,7 +631,7 @@ async function loadAvailableReview(db: Database, now: Date, queueLimit: number):
     }).from(FX).where(inArray(FX.wiseSessionId, ids))),
     byIds(() => db.select({
       wiseSessionId: S.wiseSessionId, wiseClassId: S.wiseClassId, wiseTeacherUserId: S.wiseTeacherUserId, state: S.state,
-      reason: S.reason, className: PC.className,
+      reason: S.reason, className: sessionClassNameSql,
     }).from(S).leftJoin(PC, eq(PC.wiseSessionId, S.wiseSessionId)).where(inArray(S.wiseSessionId, ids))),
     byIds(() => db.selectDistinctOn([PC.wiseSessionId], {
       wiseSessionId: PC.wiseSessionId, observedAt: PCV.observedAt, topics: PCV.topics, performance: PCV.performance,
@@ -637,11 +642,11 @@ async function loadAvailableReview(db: Database, now: Date, queueLimit: number):
     // The window's rows, and those of the dates just before it for the 7-day values of its first dates (`lookback`).
     db.select().from(M).where(gte(M.metricDate, addDays(window.start, -REVIEW_LOOKBACK_DAYS))),
     db.select().from(G).where(eq(G.evalKind, "daily")).orderBy(desc(G.bangkokDate)).limit(1),
-    // Every critical incident still waiting for the owner, whatever its age and whether its alert went out: it blocks
-    // the gate, so it comes first and no cap may hide it. Then the latest others of the queue's days.
-    db.select().from(I).where(openCriticalIncidentSql).orderBy(desc(I.createdAt)),
+    // Every incident still waiting in the to-do list, whatever its age and whether its alert went out: a critical one
+    // blocks the gate, so no cap may hide any of them. Then the latest others of the queue's days.
+    db.select().from(I).where(openListedIncidentSql).orderBy(desc(I.createdAt)),
     db.select().from(I)
-      .where(and(gte(I.createdAt, new Date(now.getTime() - REVIEW_QUEUE_DAYS * 24 * 60 * 60 * 1000)), sql`not ${openCriticalIncidentSql}`))
+      .where(and(gte(I.createdAt, new Date(now.getTime() - REVIEW_QUEUE_DAYS * 24 * 60 * 60 * 1000)), sql`not ${openListedIncidentSql}`))
       .orderBy(desc(I.createdAt)).limit(INCIDENT_LIMIT),
     db.select().from(RUNS).orderBy(desc(RUNS.startedAt)).limit(1),
   ]);

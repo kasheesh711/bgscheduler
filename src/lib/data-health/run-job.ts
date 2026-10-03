@@ -16,6 +16,8 @@ import {
   importRefreshableSalesSources,
 } from "@/lib/sales-dashboard/data";
 import { runCronWatchdog } from "@/lib/internal/cron-watchdog";
+import { processPostClassAiReviews } from "@/lib/post-class-feedback/ai";
+import { runPostClassDeductionHygiene } from "@/lib/post-class-feedback/auto-approval";
 import {
   processDuePostClassNotificationRetries,
   sendPostClassAdminDigest,
@@ -26,15 +28,41 @@ import { runPostClassFeedbackSync } from "@/lib/post-class-feedback/sync";
 import { runWiseSyncRequest } from "@/lib/sync/run-wise-sync";
 import { createWiseClient } from "@/lib/wise/client";
 import { syncWiseActivityEvents, WiseActivitySyncAlreadyRunningError } from "@/lib/wise-activity/sync";
+import { runDailyNotifications, runWeeklyDigest } from "@/lib/admissions/notifications";
+import { formatBangkokDateTime } from "@/lib/bangkok-time";
+import { runLineBacklogRecovery } from "@/lib/line/backlog-recovery";
+import { sendLineCreditDigest } from "@/lib/line/credit-digest";
+import { runPostClassBackfillJob } from "@/lib/post-class-feedback/backfill-job";
+import { findOldestUnreconciledBackfillWindow } from "@/lib/post-class-feedback/backfill-window";
+import { PostClassFeedbackSyncAlreadyRunningError } from "@/lib/post-class-feedback/repository";
+import { sendProgressTestAdminDigest } from "@/lib/progress-tests/admin-digest";
+import { runProgressTestSyncRequest } from "@/lib/progress-tests/run-sync-request";
+import { sitInError, sitInJson } from "@/lib/tutor-sit-ins/http";
+import { processJobs as processSitInJobs, queueDailyDigests, runSitInWorker } from "@/lib/tutor-sit-ins/worker";
+import { runUnearnedRevenueSync } from "@/lib/unearned-revenue/sync";
 import { withCronInvocationAudit } from "./cron-audit";
 import { getCronJobDefinition, type CronJobKey } from "./cron-registry";
 
 const DEFAULT_INSTITUTE_ID = "696e1f4d90102225641cc413";
 
+/**
+ * Runs one registry job in-process for the Data Health job runner.
+ *
+ * 1. Unknown key → 404; a job carrying `manualRunDisabledReason` → 409 with that reason.
+ *    Both return before the audit wrapper, so neither writes a `cron_invocations` row.
+ * 2. Wise/classroom jobs and the feedback autowriter are owner-only (403).
+ * 3. Otherwise the job's branch runs inside `withCronInvocationAudit` as `triggerSource: "admin"`,
+ *    mirroring its `/api/internal/*` cron route. The terminal `Unknown job` 404 inside the wrapper
+ *    is a defensive default (audited as failed); run-job.test.ts keeps every runnable key off it.
+ */
 export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | null) {
   const job = getCronJobDefinition(jobKey);
   if (!job) {
     return NextResponse.json({ error: "Unknown job" }, { status: 404 });
+  }
+
+  if (job.manualRunDisabledReason !== undefined) {
+    return NextResponse.json({ error: job.manualRunDisabledReason }, { status: 409 });
   }
 
   if ((isWiseClassroomJob(jobKey) || (jobKey.startsWith("feedback_autowriter") || jobKey === "feedback_atom")) && !isClassroomOperationsOwner(actorEmail)) {
@@ -158,18 +186,27 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
 
       if (jobKey === "post_class_feedback") {
         try {
-          const result = await runPostClassFeedbackSync({
-            triggerType: "manual",
-            actorEmail,
+          const result = await runPostClassFeedbackSync({ triggerType: "manual", actorEmail });
+          const [ai, retries, hygiene] = await Promise.allSettled([
+            processPostClassAiReviews(),
+            processDuePostClassNotificationRetries(),
+            // Reopen unproven approvals and waive deductions on sessions the
+            // sync just found ineligible (e.g. cancelled in Wise) — releases
+            // claims only, never approves.
+            runPostClassDeductionHygiene(),
+          ]);
+          return NextResponse.json({
+            ok: true,
+            result,
+            ai: ai.status === "fulfilled" ? ai.value : { failed: true },
+            retries: retries.status === "fulfilled" ? retries.value : { failed: true },
+            hygiene: hygiene.status === "fulfilled" ? hygiene.value : { failed: true },
           });
-          const retries = await processDuePostClassNotificationRetries();
-          return NextResponse.json({ ok: true, result, retries });
         } catch (error) {
-          const message = error instanceof Error ? error.message : "Post-class feedback sync failed";
-          return NextResponse.json(
-            { error: message },
-            { status: message.includes("already running") ? 409 : 500 },
-          );
+          if (error instanceof PostClassFeedbackSyncAlreadyRunningError) {
+            return NextResponse.json({ error: error.message }, { status: 409 });
+          }
+          return NextResponse.json({ error: "Post-class feedback sync failed" }, { status: 500 });
         }
       }
 
@@ -276,6 +313,87 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
           const message = error instanceof Error ? error.message : "Failed to sync onsite foot traffic";
           return NextResponse.json({ error: message }, { status: 500 });
         }
+      }
+
+      if (jobKey === "tutor_sit_ins") {
+        try {
+          const result = await runSitInWorker();
+          return sitInJson(result, result.ok ? 200 : 500);
+        } catch (error) {
+          return sitInError(error);
+        }
+      }
+
+      if (jobKey === "tutor_sit_ins_digest") {
+        try {
+          await queueDailyDigests();
+          const result = await processSitInJobs(getDb(), {
+            limit: 50,
+            deadlineAt: Date.now() + 270_000,
+          });
+          return sitInJson(result, result.failed ? 500 : 200);
+        } catch (error) {
+          return sitInError(error);
+        }
+      }
+
+      if (jobKey === "unearned_revenue") {
+        const result = await runUnearnedRevenueSync({ triggerType: "manual", actorEmail });
+        return NextResponse.json(result, { status: result.ok ? result.skipped ? 202 : 200 : 502 });
+      }
+
+      if (jobKey === "progress_tests") {
+        return runProgressTestSyncRequest({ triggerType: "manual", actorEmail });
+      }
+
+      if (jobKey === "progress_tests_digest") {
+        const result = await sendProgressTestAdminDigest();
+        return NextResponse.json(result, { status: result.status === "failed" ? 500 : 200 });
+      }
+
+      if (jobKey === "post_class_feedback_backfill") {
+        try {
+          const window = await findOldestUnreconciledBackfillWindow();
+          if (!window) {
+            return NextResponse.json({ ok: true, skipped: "nothing-unreconciled" });
+          }
+          // Same single 50-detail batch as the cron. A chosen date range is one batch from the
+          // Post-Class Feedback settings Backfill dialog, or a multi-batch CRON_SECRET re-drain.
+          const result = await runPostClassBackfillJob({
+            startDate: window.startDate,
+            endDate: window.endDate,
+            actorEmail,
+            detailCap: 50,
+            maxBatches: 1,
+          });
+          return NextResponse.json({ ok: true, window, result });
+        } catch (error) {
+          if (error instanceof PostClassFeedbackSyncAlreadyRunningError) {
+            return NextResponse.json({ error: error.message }, { status: 409 });
+          }
+          return NextResponse.json({ error: "Post-class feedback backfill failed" }, { status: 500 });
+        }
+      }
+
+      if (jobKey === "admissions_notifications") {
+        const now = new Date();
+        const results = [await runDailyNotifications(now)];
+        // Same cadence as the cron: the weekly digest joins the daily scan on Bangkok Sundays.
+        if (formatBangkokDateTime(now, { weekday: "short" }, "en-US") === "Sun") {
+          results.push(await runWeeklyDigest(now));
+        }
+        const skipped = results.every((result) => result.skipped);
+        return NextResponse.json({ ok: true, skipped, results }, { status: skipped ? 202 : 200 });
+      }
+
+      if (jobKey === "line_credit_digest") {
+        const result = await sendLineCreditDigest();
+        return NextResponse.json(result, { status: result.status === "failed" ? 500 : 200 });
+      }
+
+      if (jobKey === "line_backlog_recovery") {
+        const result = await runLineBacklogRecovery({ db: getDb(), dryRun: false });
+        return NextResponse.json({ ok: true, result });
       }
 
       return NextResponse.json({ error: "Unknown job" }, { status: 404 });

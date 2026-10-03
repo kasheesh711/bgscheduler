@@ -5,6 +5,7 @@ import { buildTeachingScheduleEmail, formatTeacherEmailDate, teachingScheduleSub
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { createOutboundEmailSender, outboundRelayKey } from "@/lib/email/outbound";
 import { scheduleRecipientEmail } from "@/lib/tutor-onboarding/planner";
 import { REMOTE_NO_ROOM_NEEDED } from "./assignment-engine";
 import { buildTeacherSchedule } from "./schedule-projection";
@@ -513,7 +514,10 @@ function idempotencyKey(assignmentDate: string, item: ScheduleEmailPreviewItem):
 function isQuotaExhaustionError(message: string): boolean {
   const normalized = message.toLowerCase();
   return normalized.includes("mailapp daily recipient quota is exhausted") ||
-    (normalized.includes("quota") && normalized.includes("exhaust"));
+    (normalized.includes("quota") && normalized.includes("exhaust")) ||
+    // GmailRejection from the Workspace sender (src/lib/post-class-feedback/gmail.ts).
+    // Per-second burst limits are not quota exhaustion and must not fail over.
+    normalized.includes("gmail daily sending limit reached");
 }
 
 async function loadSentRecipientGroupIds(db: Database, assignmentRunId: string): Promise<Set<string>> {
@@ -777,8 +781,8 @@ async function sendBackupFailoverEmails(input: {
   });
   const counts = emptyEmailRunCounts();
   const sentGroupIds = await loadSentRecipientGroupIds(input.db, input.runId);
-  const backupConfigErrors = emailConfigBlockers("backup").map((blocker) => blocker.message);
-  const backupSender = input.backupSender ?? createAppsScriptScheduleEmailSender("backup");
+  const backupConfigErrors = emailConfigBlockers(outboundRelayKey("backup")).map((blocker) => blocker.message);
+  const backupSender = input.backupSender ?? createOutboundEmailSender("backup");
 
   for (let index = 0; index < input.items.length; index += 1) {
     const item = input.items[index];
@@ -894,7 +898,7 @@ export async function sendScheduleEmailsForRun(
 ): Promise<ScheduleEmailSendResult> {
   const senderKey = options.senderKey ?? "primary";
   const mode = options.mode ?? "selected";
-  const resolvedSender = sender ?? createAppsScriptScheduleEmailSender(senderKey);
+  const resolvedSender = sender ?? createOutboundEmailSender(senderKey);
   const autoFailoverEnabled = senderKey === "primary" && (mode === "selected" || mode === "failed_only");
   const preview = await getScheduleEmailPreview(db, runId, { senderKey });
   const selectedGroupIds = options.recipientGroupIds === undefined

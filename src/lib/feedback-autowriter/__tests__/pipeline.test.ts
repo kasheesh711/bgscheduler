@@ -477,6 +477,32 @@ describe("runWritingPipeline", () => {
   });
 });
 
+describe("per-tutor writer order (owner decision, 2 Oct: Luna first for the 13 tutors added that day)", () => {
+  it("writes an added tutor's class with Luna at reasoning max first, judged by GLM", async () => {
+    const { promise, records, requests } = run({ writers: [LUNA(writerJson)], judge: [GLM(FAITHFUL)] }, { canonicalTutorKey: "Celeste" });
+    expect(await promise).toMatchObject({ kind: "draft", arm: "luna" });
+    expect(roles(records)).toEqual(["writer:luna", "judge:glm", "judge:glm"]);
+    expect(requests[0]).toMatchObject({ model: "openai/gpt-6-luna", effort: "max", provider: { zdr: true, data_collection: "deny" } });
+  });
+
+  it("falls back to Sol when the Luna draft is unfaithful", async () => {
+    const { promise, records, requests } = run(
+      { writers: [LUNA(writerJson), SOL(writerJson)], judge: [GLM(UNFAITHFUL), GLM(FAITHFUL)] }, { canonicalTutorKey: "Mint" },
+    );
+    expect(await promise).toMatchObject({ kind: "draft", arm: "sol" });
+    expect(roles(records)).toEqual(["writer:luna", "judge:glm", "judge:glm", "writer:sol", "judge:glm", "judge:glm"]);
+    expect(requests[3]).toMatchObject({ model: "openai/gpt-6.1-sol", effort: "low" });
+  });
+
+  it("keeps Sol first for the first five tutors and for a session without a tutor key", async () => {
+    for (const canonicalTutorKey of ["Kevin", undefined]) {
+      const { promise, requests } = run({ writers: [SOL(writerJson)], judge: [GLM(FAITHFUL)] }, { canonicalTutorKey });
+      expect(await promise).toMatchObject({ kind: "draft", arm: "sol" });
+      expect(requests[0]).toMatchObject({ model: "openai/gpt-6.1-sol", effort: "low" });
+    }
+  });
+});
+
 describe("judge v5: medium and high must both pass (owner decision, 30 Sep)", () => {
   it("judges at both levels on byte-identical messages, for a summary and a transcript", async () => {
     for (const evidence of ["summary", "transcript"] as const) {

@@ -19,6 +19,23 @@ it.each([true, false])("keeps partial syncs visible to alerts despite HTTP 200 (
   expect(updates).toEqual([expect.objectContaining({ outcome: "failed", responseStatus: 200, errorSummary: "Teacher contact needs review" })]);
 });
 
+// Data Health branches without their own try/catch rely on this conversion.
+it("turns a thrown handler error into a 500 and records the invocation as failed", async () => {
+  const updates: Record<string, unknown>[] = [];
+  vi.mocked(getDb).mockReturnValue({
+    insert: () => ({ values: () => ({ returning: async () => [{ id: "invocation-1" }] }) }),
+    update: () => ({ set: (value: Record<string, unknown>) => { updates.push(value); return { where: async () => [] }; } }),
+  } as never);
+
+  const response = await withCronInvocationAudit({ jobKey: "unearned_revenue", triggerSource: "admin" }, async () => {
+    throw new Error("Workbook contract changed");
+  });
+
+  expect(response.status).toBe(500);
+  expect(await response.json()).toEqual({ error: "Workbook contract changed" });
+  expect(updates).toEqual([expect.objectContaining({ outcome: "failed", responseStatus: 500, errorSummary: "Workbook contract changed" })]);
+});
+
 describe("buildResponseDigest", () => {
   it("keeps top-level scalars verbatim", () => {
     expect(

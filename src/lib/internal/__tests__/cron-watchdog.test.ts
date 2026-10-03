@@ -19,12 +19,14 @@ vi.mock("@/lib/data-health/cron-registry", async (importOriginal) => {
 
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
-import type { ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
+import { ScheduleEmailRejection, type ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
 import type { CronJobHealth } from "@/lib/data-health/types";
 import type { FeedbackDeadlineCoverage } from "@/lib/post-class-feedback/deadline-coverage";
 import type { PayoutWindowStaleness } from "@/lib/post-class-feedback/payout-window-health";
 import {
+  bangkokClock,
   buildWatchdogEmail,
+  DAILY_DIGEST_KEY,
   DEADLINE_COVERAGE_JOB_KEY,
   deadlineCoverageJobHealth,
   PAYOUT_WINDOW_JOB_KEY,
@@ -32,6 +34,7 @@ import {
   runCronWatchdog,
   sweepCronJobs,
   SWEEP_LOCK_KEY,
+  watchdogAlertRecipients,
   type CronAlertStateRow,
 } from "@/lib/internal/cron-watchdog";
 
@@ -40,7 +43,10 @@ afterEach(() => { registry.mode = "actual"; });
 
 // ── Fixtures ──────────────────────────────────────────────────────────────
 
+// 10:07 Bangkok: past the 08:00 digest hour.
 const NOW = new Date("2026-06-10T03:07:00.000Z");
+// 07:07 Bangkok: before the digest hour.
+const BEFORE_DIGEST_HOUR = new Date("2026-06-10T00:07:00.000Z");
 
 function jobHealth(overrides: Partial<CronJobHealth> & { key: string }): CronJobHealth {
   return {
@@ -85,6 +91,16 @@ function alertState(overrides: Partial<CronAlertStateRow> & { jobKey: string }):
   };
 }
 
+/** The day's digest already went out, so a sweep only records episodes. */
+function settledDigest(date = "2026-06-10"): CronAlertStateRow {
+  return alertState({
+    jobKey: DAILY_DIGEST_KEY,
+    episodeKey: `digest:${date}`,
+    lastStatus: "digest_sent",
+    lastAlertOutcome: "digest_sent",
+  });
+}
+
 // ── Fake db ───────────────────────────────────────────────────────────────
 //
 // cron-watchdog.ts uses the Drizzle fluent builder directly, so the tests
@@ -99,6 +115,7 @@ interface FakeDbState {
   lockClaims: Array<Record<string, unknown>>;
   lockReleases: Array<Record<string, unknown>>;
   upserts: Array<{ values: Record<string, unknown>; set: Record<string, unknown> }>;
+  digestUpserts: Array<Record<string, unknown>>;
   updates: Array<Record<string, unknown>>;
 }
 
@@ -111,6 +128,7 @@ function freshState(overrides: Partial<FakeDbState> = {}): FakeDbState {
     lockClaims: [],
     lockReleases: [],
     upserts: [],
+    digestUpserts: [],
     updates: [],
     ...overrides,
   };
@@ -168,7 +186,9 @@ function makeFakeDb(state: FakeDbState): Database {
           return {
             onConflictDoUpdate(config: { set: Record<string, unknown> }) {
               const isLockClaim = values.jobKey === SWEEP_LOCK_KEY;
-              if (table === schema.cronAlertState && !isLockClaim) {
+              if (table === schema.cronAlertState && values.jobKey === DAILY_DIGEST_KEY) {
+                state.digestUpserts.push(values);
+              } else if (table === schema.cronAlertState && !isLockClaim) {
                 state.upserts.push({ values, set: config.set });
               }
               return {
@@ -400,8 +420,8 @@ describe("buildWatchdogEmail", () => {
 // ── runCronWatchdog ───────────────────────────────────────────────────────
 
 describe("runCronWatchdog", () => {
-  it("alerts once for a newly failing job and records the episode", async () => {
-    const state = freshState();
+  it("records a newly failing job's episode without emailing anyone", async () => {
+    const state = freshState({ alertStates: [settledDigest()] });
     const sender = makeSender();
     const result = await runCronWatchdog(makeFakeDb(state), {
       now: NOW,
@@ -412,12 +432,9 @@ describe("runCronWatchdog", () => {
       ]),
     });
 
-    expect(result).toMatchObject({ checked: 2, unhealthy: 1, alertsSent: 1, recoveries: 0 });
-    expect(sender.sendEmail).toHaveBeenCalledTimes(2);
-    const firstCall = vi.mocked(sender.sendEmail).mock.calls[0][0];
-    expect(firstCall.to).toBe("a@x.com");
-    expect(firstCall.subject).toBe("[BGScheduler] 1 cron job(s) unhealthy");
-    expect(firstCall.idempotencyKey).toBe(`cron-watchdog:${NOW.toISOString()}:a@x.com`);
+    expect(result).toMatchObject({ checked: 2, unhealthy: 1, alertsSent: 1, recoveries: 0, emailRecipients: 0, digestSent: false });
+    expect(sender.sendEmail).not.toHaveBeenCalled();
+    expect(state.digestUpserts).toEqual([]);
     expect(state.upserts).toHaveLength(1);
     expect(state.upserts[0].values).toMatchObject({
       jobKey: "wise_snapshot",
@@ -430,9 +447,9 @@ describe("runCronWatchdog", () => {
     expect(state.updates).toEqual([]);
   });
 
-  it("does not send a duplicate alert while the episode is still open", async () => {
+  it("does not reopen an episode that is still open", async () => {
     const state = freshState({
-      alertStates: [alertState({ jobKey: "wise_snapshot" })],
+      alertStates: [alertState({ jobKey: "wise_snapshot" }), settledDigest()],
     });
     const sender = makeSender();
     const result = await runCronWatchdog(makeFakeDb(state), {
@@ -476,9 +493,9 @@ describe("runCronWatchdog", () => {
     });
   });
 
-  it("sends a recovery notice once and re-arms the next episode", async () => {
+  it("closes a recovered episode without emailing and re-arms the next episode", async () => {
     const state = freshState({
-      alertStates: [alertState({ jobKey: "wise_snapshot" })],
+      alertStates: [alertState({ jobKey: "wise_snapshot" }), settledDigest()],
     });
     const sender = makeSender();
     const result = await runCronWatchdog(makeFakeDb(state), {
@@ -488,10 +505,7 @@ describe("runCronWatchdog", () => {
     });
 
     expect(result).toMatchObject({ checked: 1, unhealthy: 0, alertsSent: 0, recoveries: 1 });
-    expect(sender.sendEmail).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(sender.sendEmail).mock.calls[0][0].subject).toBe(
-      "[BGScheduler] 1 cron job(s) recovered",
-    );
+    expect(sender.sendEmail).not.toHaveBeenCalled();
     expect(state.updates).toHaveLength(1);
     expect(state.updates[0]).toMatchObject({
       lastStatus: "healthy",
@@ -503,6 +517,7 @@ describe("runCronWatchdog", () => {
     const secondState = freshState({
       alertStates: [
         alertState({ jobKey: "wise_snapshot", lastAlertOutcome: "recovered", lastStatus: "healthy" }),
+        settledDigest(),
       ],
     });
     const secondSender = makeSender();
@@ -529,28 +544,6 @@ describe("runCronWatchdog", () => {
     expect(result).toMatchObject({ checked: 0, unhealthy: 0, alertsSent: 0, recoveries: 0 });
     expect(sender.sendEmail).not.toHaveBeenCalled();
     expect(state.upserts).toEqual([]);
-  });
-
-  it("persists failed alert delivery without marking the episode alerted, so the next sweep retries", async () => {
-    const state = freshState();
-    const sender = makeSender(async () => {
-      throw new Error("Apps Script email send failed");
-    });
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      const result = await runCronWatchdog(makeFakeDb(state), {
-        now: NOW,
-        sender,
-        loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", status: "failing" })]),
-      });
-
-      expect(result).toMatchObject({ unhealthy: 1, alertsSent: 0, recoveries: 0 });
-      expect(result.skippedReason).toBe("email delivery failed");
-      expect(state.upserts).toHaveLength(1);
-      expect(state.upserts[0].values).toMatchObject({ lastAlertOutcome: "delivery_failed", errorSummary: expect.stringContaining("Alert delivery failure:") });
-    } finally {
-      errorSpy.mockRestore();
-    }
   });
 
   it("claims the sweep lock before alerting and releases it afterwards", async () => {
@@ -875,11 +868,11 @@ describe("private weekend watchdog routing", () => {
     try {
       const state = freshState();
       const sender = makeSender();
-      await runCronWatchdog(makeFakeDb(state), { sender, loadPayoutWindow: loadPayoutWindow(null),
+      await runCronWatchdog(makeFakeDb(state), { now: NOW, sender, recipients: ["a@x.com"], loadPayoutWindow: loadPayoutWindow(null),
         loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", label: "Wise Snapshot", status: "failing" }),
           jobHealth({ key: "classroom_weekend_check", label: "Weekend Classroom Check", status: "failing", errorSummary: "PRIVATE-WEEKEND-DETAIL" })]) });
       const messages = vi.mocked(sender.sendEmail).mock.calls.map(call => call[0]);
-      expect(messages.filter(message => message.to !== "kevhsh7@gmail.com")).toHaveLength(2);
+      expect(messages.filter(message => message.to !== "kevhsh7@gmail.com")).toHaveLength(1);
       for (const message of messages.filter(message => message.to !== "kevhsh7@gmail.com")) {
         expect(message.text).not.toContain("PRIVATE-WEEKEND-DETAIL");
         expect(message.text).not.toContain("Weekend Classroom");
@@ -892,7 +885,7 @@ describe("private weekend watchdog routing", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const sender = makeSender();
-      await runCronWatchdog(makeFakeDb(freshState()), { sender, loadPayoutWindow: loadPayoutWindow(null),
+      await runCronWatchdog(makeFakeDb(freshState()), { now: NOW, sender, loadPayoutWindow: loadPayoutWindow(null),
         loadJobs: loadJobs([jobHealth({ key: "classroom_weekend_check", status: "failing" })]) });
       expect(sender.sendEmail).not.toHaveBeenCalled();
     } finally { vi.unstubAllEnvs(); error.mockRestore(); }
@@ -910,5 +903,204 @@ describe("synthetic watchdog rows", () => {
   it.each(modes)("the deadline-coverage row never offers a Run action when its source definition is %s", (mode) => {
     registry.mode = mode;
     expect(deadlineCoverageJobHealth(deadlineCoverage()).canRunManually).toBe(false);
+  });
+});
+
+// ── daily digest (WD-DIGEST-01) ─────────────────────────────────────────
+
+describe("daily digest", () => {
+  const failing = () => jobHealth({ key: "wise_snapshot", label: "Wise Snapshot", status: "failing", errorSummary: "HTTP 500" });
+
+  it("sends nothing before 08:00 Bangkok", async () => {
+    const state = freshState();
+    const sender = makeSender();
+    const result = await runCronWatchdog(makeFakeDb(state), {
+      now: BEFORE_DIGEST_HOUR, sender, recipients: ["kevin@x.com"], loadJobs: loadJobs([failing()]),
+    });
+
+    expect(result).toMatchObject({ alertsSent: 1, emailRecipients: 0, digestSent: false });
+    expect(sender.sendEmail).not.toHaveBeenCalled();
+    expect(state.digestUpserts).toEqual([]);
+  });
+
+  it("emails one digest to the configured recipients only, never admin_users", async () => {
+    const state = freshState({ adminEmails: ["a@x.com", "b@x.com"] });
+    const sender = makeSender();
+    const result = await runCronWatchdog(makeFakeDb(state), {
+      now: NOW, sender, recipients: ["kevin@x.com"], loadJobs: loadJobs([failing()]),
+    });
+
+    expect(result).toMatchObject({ unhealthy: 1, alertsSent: 1, emailRecipients: 1, digestSent: true });
+    expect(sender.sendEmail).toHaveBeenCalledTimes(1);
+    const email = vi.mocked(sender.sendEmail).mock.calls[0][0];
+    expect(email.to).toBe("kevin@x.com");
+    expect(email.subject).toBe("[BGScheduler] Daily cron digest 2026-06-10: 1 cron job(s) unhealthy");
+    expect(email.idempotencyKey).toBe("cron-watchdog-digest:2026-06-10:kevin@x.com");
+    expect(email.text).toContain("Wise Snapshot [failing, new] - HTTP 500");
+    expect(state.digestUpserts).toEqual([
+      expect.objectContaining({ jobKey: DAILY_DIGEST_KEY, episodeKey: "digest:2026-06-10", lastAlertOutcome: "digest_sent" }),
+    ]);
+  });
+
+  it("does not send a second digest the same Bangkok day", async () => {
+    const state = freshState({ alertStates: [alertState({ jobKey: "wise_snapshot" }), settledDigest()] });
+    const sender = makeSender();
+    const result = await runCronWatchdog(makeFakeDb(state), {
+      now: new Date("2026-06-10T11:37:00.000Z"), sender, recipients: ["kevin@x.com"], loadJobs: loadJobs([failing()]),
+    });
+
+    expect(result.digestSent).toBe(false);
+    expect(sender.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("sends the next day's digest even while the same episode stays open", async () => {
+    const state = freshState({ alertStates: [alertState({ jobKey: "wise_snapshot" }), settledDigest("2026-06-09")] });
+    const sender = makeSender();
+    await runCronWatchdog(makeFakeDb(state), {
+      now: NOW, sender, recipients: ["kevin@x.com"], loadJobs: loadJobs([failing()]),
+    });
+
+    expect(sender.sendEmail).toHaveBeenCalledTimes(1);
+    // Opened at 02:37 UTC today, within the 24 h window, so still marked new.
+    expect(vi.mocked(sender.sendEmail).mock.calls[0][0].text).toContain("[failing, new]");
+  });
+
+  it("lists recoveries from the last 24 hours", async () => {
+    const state = freshState({
+      alertStates: [alertState({
+        jobKey: "wise_snapshot",
+        lastAlertOutcome: "recovered",
+        lastStatus: "healthy",
+        lastRecoveredAt: new Date("2026-06-09T20:00:00.000Z"),
+      })],
+    });
+    const sender = makeSender();
+    await runCronWatchdog(makeFakeDb(state), {
+      now: NOW, sender, recipients: ["kevin@x.com"],
+      loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", label: "Wise Snapshot", status: "healthy" })]),
+    });
+
+    const email = vi.mocked(sender.sendEmail).mock.calls[0][0];
+    expect(email.subject).toBe("[BGScheduler] Daily cron digest 2026-06-10: 1 cron job(s) recovered");
+    expect(email.text).toContain("Wise Snapshot recovered");
+  });
+
+  it("reaches back to the previous digest when today's goes out late", async () => {
+    const lateNow = new Date("2026-06-10T09:07:00.000Z"); // 16:07 Bangkok
+    const state = freshState({
+      alertStates: [
+        alertState({ jobKey: DAILY_DIGEST_KEY, episodeKey: "digest:2026-06-09", lastAlertOutcome: "digest_sent",
+          lastAlertedAt: new Date("2026-06-09T01:07:00.000Z") }),
+        // Closed 30 h before lateNow: outside a plain 24 h window, after the last digest.
+        alertState({ jobKey: "wise_snapshot", lastAlertOutcome: "recovered", lastStatus: "healthy",
+          lastAlertedAt: new Date("2026-06-09T02:00:00.000Z"), lastRecoveredAt: new Date("2026-06-09T03:07:00.000Z") }),
+      ],
+    });
+    const sender = makeSender();
+    await runCronWatchdog(makeFakeDb(state), {
+      now: lateNow, sender, recipients: ["kevin@x.com"],
+      loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", label: "Wise Snapshot", status: "healthy" })]),
+    });
+
+    expect(vi.mocked(sender.sendEmail).mock.calls[0][0].text).toContain("Wise Snapshot recovered");
+  });
+
+  it("keeps the last settled send time when an attempt is rejected", async () => {
+    const previous = new Date("2026-06-09T01:07:00.000Z");
+    const state = freshState({ alertStates: [alertState({ jobKey: DAILY_DIGEST_KEY, episodeKey: "digest:2026-06-09",
+      lastAlertOutcome: "digest_sent", lastAlertedAt: previous })] });
+    const sender = makeSender(async () => { throw new ScheduleEmailRejection("quota"); });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await runCronWatchdog(makeFakeDb(state), { now: NOW, sender, recipients: ["kevin@x.com"], loadJobs: loadJobs([failing()]) });
+    } finally {
+      errorSpy.mockRestore();
+    }
+    expect(state.digestUpserts[0]).toMatchObject({ lastAlertOutcome: "digest_failed", lastAlertedAt: previous });
+  });
+
+  it("settles a quiet day without sending", async () => {
+    const state = freshState();
+    const sender = makeSender();
+    const result = await runCronWatchdog(makeFakeDb(state), {
+      now: NOW, sender, recipients: ["kevin@x.com"],
+      loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", status: "healthy" })]),
+    });
+
+    expect(result.digestSent).toBe(false);
+    expect(sender.sendEmail).not.toHaveBeenCalled();
+    expect(state.digestUpserts).toEqual([
+      expect.objectContaining({ episodeKey: "digest:2026-06-10", lastAlertOutcome: "digest_empty" }),
+    ]);
+  });
+
+  it("leaves the day unsettled after a pre-acceptance rejection so the next sweep retries", async () => {
+    const state = freshState();
+    const sender = makeSender(async () => {
+      throw new ScheduleEmailRejection("MailApp daily recipient quota is exhausted");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await runCronWatchdog(makeFakeDb(state), {
+        now: NOW, sender, recipients: ["kevin@x.com"], loadJobs: loadJobs([failing()]),
+      });
+
+      expect(result).toMatchObject({ digestSent: false, skippedReason: "email delivery failed" });
+      expect(state.digestUpserts).toEqual([
+        expect.objectContaining({ episodeKey: "digest-failed:2026-06-10", lastAlertOutcome: "digest_failed" }),
+      ]);
+      // Episode bookkeeping does not depend on delivery.
+      expect(state.upserts[0].values).toMatchObject({ jobKey: "wise_snapshot", lastAlertOutcome: "alerted" });
+    } finally {
+      errorSpy.mockRestore();
+    }
+
+    const retrySender = makeSender();
+    const retryState = freshState({ alertStates: [
+      alertState({ jobKey: "wise_snapshot" }),
+      alertState({ jobKey: DAILY_DIGEST_KEY, episodeKey: "digest-failed:2026-06-10", lastAlertOutcome: "digest_failed" }),
+    ] });
+    const retry = await runCronWatchdog(makeFakeDb(retryState), {
+      now: new Date("2026-06-10T03:37:00.000Z"), sender: retrySender, recipients: ["kevin@x.com"], loadJobs: loadJobs([failing()]),
+    });
+    expect(retry.digestSent).toBe(true);
+    expect(retrySender.sendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it("never resends after an uncertain delivery outcome", async () => {
+    const state = freshState();
+    const sender = makeSender(async () => {
+      throw new Error("Email acceptance could not be confirmed. Reconcile before resending.");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await runCronWatchdog(makeFakeDb(state), {
+        now: NOW, sender, recipients: ["kevin@x.com"], loadJobs: loadJobs([failing()]),
+      });
+      expect(result).toMatchObject({ digestSent: false, emailRecipients: 0, skippedReason: "digest outcome uncertain" });
+      expect(state.digestUpserts).toEqual([
+        expect.objectContaining({ episodeKey: "digest:2026-06-10", lastAlertOutcome: "digest_sent" }),
+      ]);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+});
+
+describe("watchdogAlertRecipients", () => {
+  it("defaults to Kevin", () => {
+    expect(watchdogAlertRecipients({})).toEqual(["kevhsh7@gmail.com"]);
+    expect(watchdogAlertRecipients({ CRON_WATCHDOG_ALERT_EMAILS: "  " })).toEqual(["kevhsh7@gmail.com"]);
+  });
+
+  it("parses, lowercases, and de-duplicates a list", () => {
+    expect(watchdogAlertRecipients({ CRON_WATCHDOG_ALERT_EMAILS: "A@x.com, b@x.com;a@x.com" })).toEqual(["a@x.com", "b@x.com"]);
+  });
+});
+
+describe("bangkokClock", () => {
+  it("rolls the date at Bangkok midnight", () => {
+    expect(bangkokClock(new Date("2026-06-09T16:59:00.000Z"))).toEqual({ date: "2026-06-09", hour: 23 });
+    expect(bangkokClock(new Date("2026-06-09T17:00:00.000Z"))).toEqual({ date: "2026-06-10", hour: 0 });
   });
 });

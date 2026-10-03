@@ -56,7 +56,7 @@ Nineteen paths are registered in [`vercel.json`](../../../vercel.json), and ever
 
 ### The Data Health manual-run path
 
-`POST /api/data-health/jobs/{jobKey}/run` re-runs a job **by calling the same lib function in-process**, not by issuing an HTTP request to the route ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)). It handles 16 job keys, including a manual Onsite Foot Traffic reconciliation. **Eight registry keys have no branch and therefore return `404 {"error":"Unknown job"}`**: `unearned_revenue`, `progress_tests`, `progress_tests_digest`, `post_class_feedback_backfill`, `student_promotions_july_1`, `admissions_notifications`, `line_backlog_recovery`, `line_credit_digest`. For those eight, a direct `CRON_SECRET` call or a feature-specific manual route is required.
+`POST /api/data-health/jobs/{jobKey}/run` re-runs a job **by calling the same lib function in-process**, not by issuing an HTTP request to the route ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)). It dispatches every registry key, including a manual Onsite Foot Traffic reconciliation, except `student_promotions_july_1`: that entry carries `manualRunDisabledReason`, so Data Health shows no button for it and `runDataHealthJob` refuses a direct call with `409` (the reason as `error`) before its audit wrapper. Student promotions are applied from the Student Promotions page. Post-class keys and `unearned_revenue` also require their feature's `access_manager` grant.
 
 Where a Data Health branch exists, its response can differ slightly from the route's — e.g. the post-class digest branch returns `{ok, result}` ([`run-job.ts:121-124`](../../../src/lib/data-health/run-job.ts)) where the route returns `{ok, digest}`.
 
@@ -247,7 +247,7 @@ Because the three follow-ups are settled rather than awaited serially, any of th
 
 A rejected settled pass collapses to the literal `{ failed: true }` ([`route.ts:34-36`](../../../src/app/api/internal/sync-post-class-feedback/route.ts)). `SyncPostClassFeedbackResult` is at [`sync.ts:97-116`](../../../src/lib/post-class-feedback/sync.ts): `runId`, `status` (`success` | `partial`), `windowStart`, `windowEnd`, `discoveredCount`, `candidateCount`, `windowCandidateCount`, `detailFetchedCount`, `sessionSavedCount`, `sourceIssueCount`, `checkpoint`. The retries shape is at [`notifications.ts:1118-1124`](../../../src/lib/post-class-feedback/notifications.ts), the AI shape at [`ai.ts:348`](../../../src/lib/post-class-feedback/ai.ts).
 
-**Status codes:** `200` · `401` · **`409`** when `PostClassFeedbackSyncAlreadyRunningError` is thrown, body `{"error":"Post-class feedback sync is already running."}` ([`route.ts:39-41`](../../../src/app/api/internal/sync-post-class-feedback/route.ts), [`repository.ts:266-271`](../../../src/lib/post-class-feedback/repository.ts)) — the audit reads the `already running` substring and records `skipped`, not `failed` · `500` for anything else, with the underlying message **discarded** in favour of the fixed string `"Post-class feedback sync failed"` ([`route.ts:42`](../../../src/app/api/internal/sync-post-class-feedback/route.ts)).
+**Status codes:** `200` · `401` · **`409`** when `PostClassFeedbackSyncAlreadyRunningError` is thrown, body `{"error":"Post-class feedback sync is already running."}` ([`route.ts:39-41`](../../../src/app/api/internal/sync-post-class-feedback/route.ts), [`repository.ts:266-271`](../../../src/lib/post-class-feedback/repository.ts)) — the audit reads the `already running` substring and records `skipped`, not `failed`; the same error class, with body `{"error":"Post-class feedback sync is deferred while a payout operation holds a live lease."}`, is thrown when a live payout lease defers the sync, and that 409 audits as `failed` ([`repository.ts`](../../../src/lib/post-class-feedback/repository.ts)) · `500` for anything else, with the underlying message **discarded** in favour of the fixed string `"Post-class feedback sync failed"` ([`route.ts:42`](../../../src/app/api/internal/sync-post-class-feedback/route.ts)).
 
 ### `GET /api/internal/post-class-feedback-backfill`
 
@@ -442,7 +442,7 @@ Otherwise it reads the active snapshot's packages and upcoming future sessions, 
 
 ### `GET /api/internal/line-backlog-recovery`
 
-**Manual only — no `vercel.json` entry, and no Data Health branch either**, so a direct `CRON_SECRET` call is the sole way to run it. Registered `manualOnly: true`, `dangerous: false` ([`cron-registry.ts:384-398`](../../../src/lib/data-health/cron-registry.ts)). `maxDuration = 300`. **`GET` only** — there is no `POST` handler.
+**Manual only — no `vercel.json` entry.** Run it with a direct `CRON_SECRET` call or from the Data Health job list, which calls the same `runLineBacklogRecovery({ db, dryRun: false })` in-process ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)). Registered `manualOnly: true`, `dangerous: true` — Data Health asks for confirmation before the live write ([`cron-registry.ts`](../../../src/lib/data-health/cron-registry.ts)). `maxDuration = 300`. **`GET` only** — there is no `POST` handler.
 
 **Request.** None read. Note the route hard-codes `dryRun: false` ([`route.ts:19`](../../../src/app/api/internal/line-backlog-recovery/route.ts)); the lib's dry-run mode is not reachable over HTTP.
 

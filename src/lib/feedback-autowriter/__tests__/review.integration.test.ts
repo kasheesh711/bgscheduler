@@ -667,7 +667,7 @@ describe("daily metrics", () => {
     await assignReviews(db, { now: NOW });
     await ingestFixEvents(db, { apiActorId: API, since: at("2026-09-01T00:00:00Z") });
 
-    expect(await refreshDailyMetrics(db, { dates: metricDates(NOW), now: NOW })).toBe(15 * 6);
+    expect(await refreshDailyMetrics(db, { dates: metricDates(NOW), now: NOW })).toBe(15 * 28); // 15 dates × (27 tutors + "*")
     expect(await starRow(DAY)).toMatchObject({
       liveMode: true, posted: 1, held: 1, excludedDataQuality: 1, unseen: 1, excludedTutorFirst: 1, eligible: 3, required: 1, reviewed: 0,
     });
@@ -1047,7 +1047,7 @@ describe("runReviewJob", () => {
     const result = await runReviewJob(deps());
     expect(result).toMatchObject({
       ok: true, firstShots: { recorded: 1, unverified: 0 }, fixEvents: { inserted: 1 }, reviewsCreated: 1,
-      dailyGate: { date: DAY, status: "insufficient_data" }, metricRows: 15 * 6,
+      dailyGate: { date: DAY, status: "insufficient_data" }, metricRows: 15 * 28,
     });
     const runs = await db.select().from(RUNS).orderBy(RUNS.startedAt);
     expect(runs.map((run) => run.status)).toEqual(["failed", "succeeded"]);
@@ -1241,7 +1241,7 @@ describe("loadAutowriterReview", () => {
     expect(review.coverage.posted).toBe(2);
   });
 
-  it("lists every critical incident still waiting for the owner first, however old and whether its alert went out", async () => {
+  it("lists every incident still waiting for the owner first (critical, or a style fix), however old and whether its alert went out", async () => {
     const DAY = 24 * 60 * 60_000;
     const daysAgo = (days: number) => new Date(NOW.getTime() - days * DAY);
     const incident = (dedupeKey: string, patch: Partial<typeof I.$inferInsert> = {}): typeof I.$inferInsert => ({
@@ -1255,7 +1255,10 @@ describe("loadAutowriterReview", () => {
         kind: "critical_verdict", severity: "critical", pushStatus: "sent", acknowledgedAt: daysAgo(39), acknowledgedBy: OWNER, createdAt: daysAgo(40),
       }),
       incident("old-info", { createdAt: daysAgo(40) }),
+      incident("old-style-done", { kind: "style_review_flagged", acknowledgedAt: daysAgo(44), acknowledgedBy: OWNER, createdAt: daysAgo(45) }),
     ]);
+    // A guided post's style fix, 45 days old and not acknowledged: info, but it waits in the list like a critical one.
+    await db.insert(I).values(incident("old-style-fix", { kind: "style_review_flagged", createdAt: daysAgo(45) }));
     // More incidents in the queue's days than the cap.
     await db.insert(I).values(Array.from({ length: 105 }, (_, n) => incident(`recent-${n}`, { createdAt: minutes(NOW, -(n + 1)) })));
 
@@ -1264,11 +1267,13 @@ describe("loadAutowriterReview", () => {
     expect(review.incidents[0]).toMatchObject({
       summary: "synthetic old-critical", kind: "api_actor_unmatched", severity: "critical", pushStatus: "sent", acknowledgedAt: null,
     });
-    // The cap is the others': the 100 latest of the queue's days, after it.
-    expect(review.incidents).toHaveLength(101);
-    expect(review.incidents.slice(1).map((row) => row.summary)).toEqual(Array.from({ length: 100 }, (_, n) => `synthetic recent-${n}`));
+    expect(review.incidents[1]).toMatchObject({ summary: "synthetic old-style-fix", kind: "style_review_flagged", severity: "info" });
+    // The cap is the others': the 100 latest of the queue's days, after them.
+    expect(review.incidents).toHaveLength(102);
+    expect(review.incidents.slice(2).map((row) => row.summary)).toEqual(Array.from({ length: 100 }, (_, n) => `synthetic recent-${n}`));
     const summaries = review.incidents.map((row) => row.summary);
     expect(summaries).not.toContain("synthetic old-acknowledged");
+    expect(summaries).not.toContain("synthetic old-style-done");
     expect(summaries).not.toContain("synthetic old-info");
     // The gate counts the same incident: the page never shows a blocker it cannot open.
     expect(review.gate.unexplainedApiWrites).toBe(1);

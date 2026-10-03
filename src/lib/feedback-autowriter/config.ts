@@ -1,4 +1,5 @@
 import { isPreviewEnvironment } from "@/lib/preview-policy";
+import { rosterWriterArm } from "./roster";
 import type { ModelArm, OpenRouterProviderPreferences } from "./types";
 
 type AutowriterEnvironment = Record<string, string | undefined>;
@@ -172,6 +173,17 @@ export const AUTOWRITER_WRITER_BY_ARM: Record<ModelArm, AutowriterModelConfig> =
     expectProvider: "Together", expectModel: "z-ai/glm-5.3-flash",
   },
 };
+
+/**
+ * The writers a tutor's class is drafted with, in order (owner decision, 2 Oct): Sol then the Luna fallback, or — for
+ * the tutors whose roster entries say `writer: "luna"` (the 13 added that day) — Luna first and Sol as their fallback.
+ * Keyed by the canonical tutor key, so both of a tutor's Wise accounts write the same way.
+ */
+export function writersFor(canonicalTutorKey: string | null | undefined): AutowriterModelConfig[] {
+  return rosterWriterArm(canonicalTutorKey) === "luna"
+    ? [AUTOWRITER_MODELS.fallbackWriter, AUTOWRITER_MODELS.writer]
+    : [AUTOWRITER_MODELS.writer, AUTOWRITER_MODELS.fallbackWriter];
+}
 
 /** A session with no summary yet is retried this often … */
 export const AUTOWRITER_RETRY_DELAY_MS = 10 * 60 * 1000;
