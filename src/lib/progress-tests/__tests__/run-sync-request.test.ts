@@ -25,9 +25,13 @@ const successResult = {
 function makeDbMock(options: {
   runningRows?: { id: string; startedAt: Date }[];
   staleRows?: { id: string }[];
+  insertError?: Error;
+  duplicateRaceRows?: { id: string; startedAt: Date }[];
 } = {}) {
   const runningRows = options.runningRows ?? [];
   const staleRows = options.staleRows ?? [];
+  // 1st select = the pre-insert running check; 2nd = the re-read after a lost insert race.
+  const selectResponses = [runningRows, options.duplicateRaceRows ?? runningRows];
 
   return {
     update: vi.fn(() => ({
@@ -41,14 +45,16 @@ function makeDbMock(options: {
       from: vi.fn(() => ({
         where: vi.fn(() => ({
           orderBy: vi.fn(() => ({
-            limit: vi.fn().mockResolvedValue(runningRows),
+            limit: vi.fn().mockImplementation(() => Promise.resolve(selectResponses.shift() ?? runningRows)),
           })),
         })),
       })),
     })),
     insert: vi.fn(() => ({
       values: vi.fn(() => ({ onConflictDoNothing: vi.fn(() => ({
-        returning: vi.fn().mockResolvedValue([{ id: "guard-run-1" }]),
+        returning: options.insertError
+          ? vi.fn().mockRejectedValue(options.insertError)
+          : vi.fn().mockResolvedValue([{ id: "guard-run-1" }]),
       })), })),
     })),
   };
@@ -118,6 +124,57 @@ describe("runProgressTestSyncRequest", () => {
       syncRunId: "running-1",
       runningStartedAt: "2026-05-26T05:00:00.000Z",
     });
+    expect(runProgressTestSync).not.toHaveBeenCalled();
+  });
+
+  // The three lost-insert-race tests below use triggerType "manual" on purpose: it takes the direct
+  // claim(db) path, where catch-then-re-read is valid. "cron" (with no launch config) runs the claim
+  // inside claimDailyRefresh's transaction, where a caught 23505 would abort it and the re-read could not succeed.
+  it("returns 202 when a raw unique violation (23505) loses the insert race", async () => {
+    const duplicate = Object.assign(new Error("duplicate"), { code: "23505" });
+    vi.mocked(getDb).mockReturnValue(makeDbMock({
+      insertError: duplicate,
+      duplicateRaceRows: [{ id: "running-after-race", startedAt: new Date("2026-05-26T05:03:00.000Z") }],
+    }) as never);
+
+    const res = await runProgressTestSyncRequest({ triggerType: "manual" });
+
+    expect(res.status).toBe(202);
+    await expect(res.json()).resolves.toMatchObject({
+      skipped: true,
+      alreadyRunning: true,
+      syncRunId: "running-after-race",
+    });
+    expect(runProgressTestSync).not.toHaveBeenCalled();
+  });
+
+  it("returns 202 when a DrizzleQueryError-wrapped unique violation (cause.code 23505) loses the insert race", async () => {
+    // drizzle-orm 0.45 wraps every driver error: the SQLSTATE is on `.cause`, `.code` is undefined.
+    const wrapped = Object.assign(new Error("Failed query"), { cause: { code: "23505" } });
+    vi.mocked(getDb).mockReturnValue(makeDbMock({
+      insertError: wrapped,
+      duplicateRaceRows: [{ id: "running-after-race", startedAt: new Date("2026-05-26T05:03:00.000Z") }],
+    }) as never);
+
+    const res = await runProgressTestSyncRequest({ triggerType: "manual" });
+
+    expect(res.status).toBe(202);
+    await expect(res.json()).resolves.toMatchObject({
+      skipped: true,
+      alreadyRunning: true,
+      syncRunId: "running-after-race",
+    });
+    expect(runProgressTestSync).not.toHaveBeenCalled();
+  });
+
+  it("rethrows a wrapped non-unique insert failure (cause.code 23503) instead of skipping", async () => {
+    const wrapped = Object.assign(new Error("Failed query"), { cause: { code: "23503" } });
+    vi.mocked(getDb).mockReturnValue(makeDbMock({
+      insertError: wrapped,
+      duplicateRaceRows: [{ id: "running-after-race", startedAt: new Date("2026-05-26T05:03:00.000Z") }],
+    }) as never);
+
+    await expect(runProgressTestSyncRequest({ triggerType: "manual" })).rejects.toBe(wrapped);
     expect(runProgressTestSync).not.toHaveBeenCalled();
   });
 

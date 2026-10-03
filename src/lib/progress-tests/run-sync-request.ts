@@ -4,6 +4,7 @@ import { and, desc, eq, lt } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import { createWiseClient } from "@/lib/wise/client";
 import { STALE_RUNNING_PROGRESS_TEST_SYNC_MS } from "./config";
 import { runProgressTestSync } from "./sync";
@@ -36,15 +37,6 @@ interface SkippedProgressTestSyncResult {
   message: string;
   runningStartedAt: string;
   staleRunningSyncsFailed: number;
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: unknown }).code === "23505"
-  );
 }
 
 async function failStaleRunningSyncs(db: Database, now: Date): Promise<number> {
@@ -129,7 +121,7 @@ async function acquireSyncRun(
     }
     return { syncRunId: syncRun.id, staleRunningSyncsFailed };
   } catch (err) {
-    if (!isUniqueViolation(err)) {
+    if (sqlStateOf(err) !== "23505") {
       throw err;
     }
 
