@@ -52,3 +52,36 @@ describe("completed-class handoff against Postgres", () => {
     expect(await listCaptureSessions(scope, "2026-10-03")).toEqual([]);
   });
 });
+
+async function rotateCreditSnapshot() {
+  await handle.db.update(s.creditControlSnapshots).set({ active: false, generatedAt: new Date(now.getTime() - 30 * 60_000) });
+  const [fresh] = await handle.db.insert(s.creditControlSnapshots).values({ active: true, generatedAt: now, source: "wise" }).returning();
+  return fresh;
+}
+
+describe("completed class after student snapshot rotation", () => {
+  it("keeps the latest fresh retained class when both active schedules omit it", async () => {
+    await rotateCreditSnapshot();
+    expect((await listCaptureSessions(scope, "2026-10-03")).map(row => row.sessionId)).toEqual(["session"]);
+  });
+  it("does not use retained data without fresh completion evidence", async () => {
+    await rotateCreditSnapshot();
+    await handle.db.update(s.postClassSessions).set({ finalStatus: "CANCELLED" });
+    expect(await listCaptureSessions(scope, "2026-10-03")).toEqual([]);
+  });
+  it("does not use a stale retained snapshot", async () => {
+    await rotateCreditSnapshot();
+    await handle.db.execute(sql`UPDATE credit_control_snapshots SET generated_at = ${new Date(now.getTime() - 3 * 60 * 60_000)} WHERE active = false`);
+    expect(await listCaptureSessions(scope, "2026-10-03")).toEqual([]);
+  });
+  it.each([true, false])("a conflicting %s-active newer row blocks the older match", async active => {
+    const fresh = await rotateCreditSnapshot();
+    const [older] = await handle.db.select().from(s.creditControlSessions);
+    await handle.db.insert(s.creditControlSessions).values({ ...older, id: undefined, snapshotId: fresh.id, wiseTeacherUserId: "other-user", meetingStatus: "CANCELLED" });
+    if (!active) {
+      await handle.db.update(s.creditControlSnapshots).set({ active: false });
+      await handle.db.insert(s.creditControlSnapshots).values({ active: true, generatedAt: new Date(now.getTime() + 1000), source: "wise" });
+    }
+    expect(await listCaptureSessions(scope, "2026-10-03")).toEqual([]);
+  });
+});
