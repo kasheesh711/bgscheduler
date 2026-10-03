@@ -152,7 +152,9 @@ describe("buildJudgeMessages", () => {
       "The student's and the tutor's names are replaced by [STUDENT_1] and [TUTOR]; that is expected. Any other name in the summary is someone else, never [STUDENT_1].",
       "The class details come from the school's system and are true: naming the programme, exam or subject they give is supported.",
       "List every problem of these three kinds, quoting the feedback's own words:",
-      "- unsupported: a factual claim about THIS lesson — topics, what the student did or got wrong, scores, materials, dates — that the summary does not state or clearly imply.",
+      "- unsupported: a factual claim about THIS lesson — topics, what the student did or got wrong, scores, materials, dates — that the summary does not state or clearly imply. " +
+        "So is a generic judgement of the student (asked questions throughout, engaged, confident) that the summary gives only as a stock line with no concrete exchange behind it, " +
+        "and any detail more specific than the summary states it (a range, level, count or named question type).",
       "- misattributed: something the feedback says [STUDENT_1] did, said, finished, got wrong or did not finish, when the summary says it about [TUTOR] or about another person.",
       "- homeworkNotSet: homework, a task or a due date the feedback says was set — everything under \"Homework and due date\", and any such statement in another field — " +
         "unless the summary clearly shows the tutor setting it for [STUDENT_1] to do after this lesson. Work only described as remaining, unfinished or still to complete was not set. " +

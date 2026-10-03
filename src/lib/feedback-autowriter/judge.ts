@@ -8,8 +8,9 @@ import { otherPeopleLine, speakerLabelNote, type EvidenceKind, type SpeakerLabel
  * v5 (owner decision, 30 Sep): the v4 prompt below, unchanged, run at every effort in `AUTOWRITER_JUDGE_EFFORTS` on
  * byte-identical messages; a draft passes only when every level passes it. Stored drafts and call records carry this
  * number, so a draft judged at one level (v4 and before) is never reused as if both had passed it.
- * v6 (nightly audit 3 Oct, failure mode M07): in transcript mode, crediting the student with an answer or value that
- * their STUDENT line only repeats from the tutor is listed as misattributed.
+ * v6 (nightly audit 3 Oct): in transcript mode, crediting the student with an answer or value that their STUDENT line
+ * only repeats from the tutor is listed as misattributed (M07); in summary mode, stock praise and details more specific
+ * than the summary are unsupported (careful summary mode, owner decision 3 Oct).
  */
 export const JUDGE_PROMPT_VERSION = 6;
 
@@ -79,7 +80,12 @@ const judgeSystemPrompt = (evidence: EvidenceKind, labels: SpeakerLabels) => [
   "List every problem of these three kinds, quoting the feedback's own words:",
   "- unsupported: a factual claim about THIS lesson — topics, what the student did or got wrong, scores, materials, dates — " +
     `that the ${evidence} does not state or clearly imply.` +
-    (evidence === "transcript" ? " Claiming the student understood or solved something the transcript only shows the tutor explaining is unsupported." : ""),
+    (evidence === "transcript"
+      ? " Claiming the student understood or solved something the transcript only shows the tutor explaining is unsupported."
+      // v6 careful summary mode (owner decision, 3 Oct).
+      : " So is a generic judgement of the student (asked questions throughout, engaged, confident) that the summary gives only as a " +
+        "stock line with no concrete exchange behind it, and any detail more specific than the summary states it (a range, level, count " +
+        "or named question type)."),
   "- misattributed: something the feedback says [STUDENT_1] did, said, finished, got wrong or did not finish, " +
     `when the ${evidence} says it about [TUTOR] or about another person.` +
     (evidence === "transcript"
