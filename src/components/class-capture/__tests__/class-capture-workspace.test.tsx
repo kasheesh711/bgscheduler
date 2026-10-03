@@ -39,8 +39,8 @@ describe("Class Capture consent and review", () => {
 
   it("clearly separates tutor evidence and drafts from submission", () => {
     const html = renderToStaticMarkup(<ClassCaptureWorkspace ownerEmail="synthetic@example.test" enabled initialData={initialData} initialCapture={capture} />);
-    expect(html).toContain("separate from the transcript");
-    expect(html).toContain("understanding cannot be inferred from audio");
+    expect(html).not.toContain("Tutor observations");
+    expect(html).toContain("Photos upload automatically");
     expect(html).toContain("Background recording is not supported");
     expect(html).toContain("Existing feedback deadlines and payroll policies still apply");
     expect(html).toContain("Final submission happens in Wise");

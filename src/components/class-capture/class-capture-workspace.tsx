@@ -10,6 +10,7 @@ import { formatBangkokDateTime } from "@/lib/bangkok-time";
 import { MAX_AUDIO_BYTES, type CaptureAsset, type CaptureSession, type CaptureView, type DraftFields } from "@/lib/class-capture/model";
 import { LocalRecovery, type RecoveryRecord } from "@/lib/class-capture/local-recovery";
 import { AssetCard } from "./asset-card";
+import { WorksheetGallery } from "./worksheet-gallery";
 import { RecordingPanel } from "./recording-panel";
 import { bangkokDay, watchTodaySessions } from "./today-sessions";
 import { canonicalMime, captureRequest, CaptureRequestError, clearCapturePointer, DRAFT_LABELS, EMPTY_DRAFT, feedbackText, loadCapturePointer, saveCapturePointer, prepareLocalFile, validateLocalFile, type CaptureAvailability, type LocalMedia } from "./client-helpers";
@@ -53,6 +54,9 @@ export function ClassCaptureWorkspace({ ownerEmail, enabled, initialData, initia
   const [notice, setNotice] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
   const [progress, setProgress] = useState<{ id: string; value: number } | null>(null);
+  const [photoErrors, setPhotoErrors] = useState<Record<string, string>>({});
+  const [photoBatch, setPhotoBatch] = useState(false);
+  const cancelPhotos = useRef(false);
   const [discarding, setDiscarding] = useState(false);
   const recovery = useRef<LocalRecovery | null>(null);
   const controller = useRef<AbortController | null>(null);
@@ -135,7 +139,7 @@ export function ClassCaptureWorkspace({ ownerEmail, enabled, initialData, initia
     const update = () => setOffline(!navigator.onLine);
     update();
     window.addEventListener("online", update); window.addEventListener("offline", update);
-    return () => { window.removeEventListener("online", update); window.removeEventListener("offline", update); controller.current?.abort(); };
+    return () => { window.removeEventListener("online", update); window.removeEventListener("offline", update); cancelPhotos.current = true; controller.current?.abort(); };
   }, []);
 
   async function createCapture() {
@@ -156,7 +160,8 @@ export function ClassCaptureWorkspace({ ownerEmail, enabled, initialData, initia
     if (!files?.length || !capture) return;
     if (kind === "worksheet" && !worksheetPermission) { setError("Confirm worksheet permission before selecting photos."); return; }
     const chosen = Array.from(files);
-    await run("Saving files on this device", async () => {
+    await run(kind === "worksheet" ? "Uploading worksheet photos" : "Saving files on this device", async () => {
+      if (kind === "worksheet") cancelPhotos.current = false;
       const existing = new Map<string, { kind: CaptureAsset["kind"]; size: number }>([
         ...capture.assets.map((asset) => [asset.id, { kind: asset.kind, size: asset.size }] as const),
         ...localFiles.map((file) => [file.id, { kind: file.kind, size: file.blob.size }] as const),
@@ -177,14 +182,28 @@ export function ClassCaptureWorkspace({ ownerEmail, enabled, initialData, initia
         added.push({ id, kind, name: file.name, blob });
       }
       setLocalFiles((previous) => [...previous, ...added]);
+      if (kind === "worksheet") {
+        setPhotoBatch(true);
+        let uploaded = 0;
+        try {
+          for (const file of added) {
+            if (cancelPhotos.current) break;
+            try { await uploadFile(file, true); uploaded++; }
+            catch (problem) { setPhotoErrors(errors => ({ ...errors, [file.id]: problem instanceof Error ? problem.message : "Upload failed. Retry this photo." })); }
+          }
+          setNotice(`${uploaded} of ${added.length} photos uploaded. ${uploaded < added.length ? "Remaining photos are kept on this device; use Retry upload." : "Tap a thumbnail to view it."}`);
+        } finally { setPhotoBatch(false); }
+      }
     });
   }
 
-  async function uploadFile(file: LocalMedia) {
-    if (file.kind === "worksheet" && !worksheetPermission) { setError("Confirm worksheet permission before uploading photos."); return; }
-    const invalid = validateLocalFile(file.blob, file.kind);
-    if (invalid) { setError(invalid); return; }
-    await run("Uploading privately", async () => {
+  async function uploadFile(file: LocalMedia, withinBatch = false) {
+    const action = async () => {
+      if (file.kind === "worksheet" && !worksheetPermission) throw new Error("Confirm worksheet permission before uploading photos.");
+      if (!data.availability.storage) throw new Error("Private upload storage is unavailable. Retry when it is restored.");
+      const invalid = validateLocalFile(file.blob, file.kind);
+      if (invalid) throw new Error(invalid);
+      setPhotoErrors(errors => { const next = { ...errors }; delete next[file.id]; return next; });
       const current = currentCapture.current!;
       // Recover a finished upload before retrying: a dropped response must not create a second object.
       const refreshed = await captureRequest<{ capture: CaptureView }>(`/${current.id}`);
@@ -203,6 +222,7 @@ export function ClassCaptureWorkspace({ ownerEmail, enabled, initialData, initia
           if (!(problem instanceof CaptureRequestError) || ![404, 409].includes(problem.status)) throw problem;
         }
       }
+      if (withinBatch && cancelPhotos.current) throw new Error("Photo upload cancelled. Your file is still on this device.");
       controller.current = new AbortController();
       setProgress({ id: file.id, value: 0 });
       try {
@@ -215,6 +235,20 @@ export function ClassCaptureWorkspace({ ownerEmail, enabled, initialData, initia
         if (controller.current.signal.aborted) throw new Error("Upload cancelled. Your file is still on this device. Retry will check for an upload that already finished.");
         throw problem;
       } finally { setProgress(null); controller.current = null; }
+    };
+    if (withinBatch) await action();
+    else await run("Uploading privately", action);
+  }
+
+  async function removeItem(id: string) {
+    await run("Removing photo", async () => {
+      const current = currentCapture.current!;
+      if (current.assets.some(asset => asset.id === id)) {
+        await captureRequest(`/${current.id}/assets/${id}`, "DELETE");
+        applyCapture((await captureRequest<{ capture: CaptureView }>(`/${current.id}`)).capture);
+      }
+      await recovery.current?.remove(ownerEmail, id);
+      setLocalFiles(files => files.filter(file => file.id !== id));
     });
   }
 
@@ -243,6 +277,7 @@ export function ClassCaptureWorkspace({ ownerEmail, enabled, initialData, initia
   for (const asset of capture?.assets ?? []) items.set(asset.id, { remote: asset });
   for (const file of localFiles) items.set(file.id, { ...items.get(file.id), local: file });
   const allItems = [...items.values()];
+  const audioCount = allItems.filter(item => (item.remote?.kind ?? item.local?.kind) !== "worksheet").length;
   const audio = allItems.filter((item) => (item.remote?.kind ?? item.local?.kind) === "recording");
   const debriefExists = allItems.some((item) => (item.remote?.kind ?? item.local?.kind) === "debrief");
   const remainingRecordingBytes = Math.max(0, MAX_AUDIO_BYTES - audio.reduce((sum, item) => sum + (item.remote?.size ?? item.local?.blob.size ?? 0), 0));
@@ -291,20 +326,23 @@ export function ClassCaptureWorkspace({ ownerEmail, enabled, initialData, initia
                   </div>
                 </section>
                 <RecordingPanel captureId={capture.id} ownerEmail={ownerEmail} disabled={!active || Boolean(busy)} recordingLimitReached={recordingLimitReached} remainingRecordingBytes={remainingRecordingBytes} debriefExists={debriefExists} onFile={addRecording} onActiveChange={setRecording} />
-                <section className="rounded-2xl border bg-card p-5 sm:p-6"><div className="flex items-start justify-between gap-3"><div><p className="mb-1 text-xs font-semibold tracking-widest text-primary uppercase">02 · Add context</p><h2 className="text-xl font-semibold">What audio can’t tell us.</h2></div><ImagePlus className="size-5 shrink-0 text-primary" /></div><p className="mt-2 text-sm leading-6 text-muted-foreground">Silent thinking and written work need your observation. A quiet student’s understanding cannot be inferred from audio.</p>
-                  <label htmlFor="capture-topic" className="mt-5 block text-sm font-medium">Lesson topic</label><Input id="capture-topic" value={topic} maxLength={500} className="mt-2 min-h-11 text-base" disabled={locked} onChange={(event) => { setTopic(event.target.value); setReviewConfirmed(false); }} />
-                  <label htmlFor="tutor-notes" className="mt-4 block text-sm font-medium">Tutor observations <span className="font-normal text-muted-foreground">· separate from the transcript</span></label><Textarea id="tutor-notes" value={notes} maxLength={12000} rows={5} className="mt-2 text-base leading-6" disabled={locked} onChange={(event) => { setNotes(event.target.value); setReviewConfirmed(false); }} placeholder="What did you personally observe? Note independent work, help given, written mistakes and agreed homework." />
-                  <label className="mt-4 flex min-h-11 cursor-pointer items-start gap-3 text-sm leading-6"><input type="checkbox" checked={worksheetPermission} disabled={locked} onChange={(event) => setWorksheetPermission(event.target.checked)} className="mt-1 size-5 shrink-0 accent-sky-700" /><span>I have permission to upload these worksheets. They contain no faces, unrelated children or unrelated personal details.</span></label><div className="mt-3 flex flex-wrap gap-2"><Button variant="outline" className="min-h-11" disabled={locked || offline || !topic.trim()} onClick={() => void run("Saving observations", async () => { await saveEdits(); setNotice("Your observations were saved as tutor evidence."); })}>Save observations</Button><Button variant="outline" className="min-h-11" disabled={locked || !worksheetPermission} onClick={() => photoInput.current?.click()}><ImagePlus />Add worksheet photos</Button></div><p className="mt-3 text-xs leading-5 text-muted-foreground">Add as many JPG/PNG photos as you need, up to 8 MB each. Photos are for your review; the draft model does not read them. Avoid other students and unrelated personal details.</p>
+                <section className="rounded-2xl border bg-card p-5 sm:p-6">
+                  <div className="flex items-center justify-between gap-3"><h2 className="text-xl font-semibold">Worksheet photos</h2><ImagePlus className="size-5 text-primary" /></div>
+                  <label className="mt-3 flex min-h-11 cursor-pointer items-start gap-3 text-sm leading-6"><input type="checkbox" checked={worksheetPermission} disabled={locked} onChange={(event) => setWorksheetPermission(event.target.checked)} className="mt-1 size-5 shrink-0 accent-sky-700" /><span>I have permission to upload these worksheets. They contain no faces, unrelated children or unrelated personal details.</span></label>
+                  <Button className="mt-3 min-h-11 w-full" disabled={locked || !worksheetPermission || offline || !data.availability.storage} onClick={() => photoInput.current?.click()}><ImagePlus />Add worksheet photos</Button>
+                  <p className="mt-2 text-xs leading-5 text-muted-foreground">Photos upload automatically. No count limit; JPG/PNG up to 8 MB each. Tap to preview. Photos are for your review; the draft uses your transcript.</p>
+                  {photoBatch && <Button variant="outline" className="mt-2 min-h-11" onClick={() => { cancelPhotos.current = true; controller.current?.abort(); }}>Cancel remaining uploads</Button>}
+                  <WorksheetGallery captureId={capture.id} items={[...items.entries()].filter(([, item]) => (item.remote?.kind ?? item.local?.kind) === "worksheet")} busy={locked || offline} errors={photoErrors} progress={progress} uploadAllowed={worksheetPermission && data.availability.storage} onUpload={file => void uploadFile(file)} onRemove={id => void removeItem(id)} />
                 </section>
               </div>
               <div className="space-y-5">
-                <section className="rounded-2xl border bg-card p-5 sm:p-6"><div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-lg font-semibold">Your class evidence</h2><span className="text-xs text-muted-foreground">{items.size} {items.size === 1 ? "item" : "items"}</span></div><p className="mt-2 text-xs leading-5 text-muted-foreground">Uploads are private. Start transcription explicitly for each audio file. English, Thai and mixed language are supported by the configured service.</p>
+                <section className="rounded-2xl border bg-card p-5 sm:p-6"><div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-lg font-semibold">Your class evidence</h2><span className="text-xs text-muted-foreground">{audioCount} audio {audioCount === 1 ? "file" : "files"}</span></div><p className="mt-2 text-xs leading-5 text-muted-foreground">Uploads are private. Start transcription explicitly for each audio file. English, Thai and mixed language are supported by the configured service.</p>
                   {!data.availability.storage && <p role="status" className="mt-3 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">Private upload storage is not configured. Download your audio to keep it beyond this browser’s recovery window.</p>}
                   {!data.availability.transcription && <p role="status" className="mt-3 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">Transcription is unavailable until the approved provider is configured. No transcript will be invented.</p>}
-                  <div className="mt-4 space-y-3">{[...items.entries()].map(([id, item]) => <AssetCard key={id} captureId={capture.id} id={id} {...item} busy={locked || offline} progress={progress?.id === id ? progress.value : undefined} uploadAllowed={data.availability.storage && ((item.remote?.kind ?? item.local?.kind) !== "worksheet" || worksheetPermission)} transcriptionAvailable={data.availability.transcription} onUpload={() => { if (item.local && data.availability.storage) void uploadFile(item.local); else setError("Private upload storage is not configured."); }} onTranscribe={() => void transcribeAsset(capture.id, id)} onRemove={() => void run("Removing evidence", async () => { if (item.remote) { await captureRequest(`/${capture.id}/assets/${id}`, "DELETE"); const result = await captureRequest<{ capture: CaptureView }>(`/${capture.id}`); applyCapture(result.capture); } await recovery.current?.remove(ownerEmail, id); setLocalFiles((files) => files.filter((file) => file.id !== id)); setNotice("Evidence and its local recovery copy removed."); })} onCancel={() => controller.current?.abort()} />)}{!items.size && <div className="rounded-xl border border-dashed p-5 text-center"><FileUp className="mx-auto mb-2 size-6 text-muted-foreground" /><p className="text-sm text-muted-foreground">Record above, or add existing audio.</p></div>}</div>
+                  <div className="mt-4 space-y-3">{[...items.entries()].filter(([, item]) => (item.remote?.kind ?? item.local?.kind) !== "worksheet").map(([id, item]) => <AssetCard key={id} captureId={capture.id} id={id} {...item} busy={locked || offline} progress={progress?.id === id ? progress.value : undefined} uploadAllowed={data.availability.storage && ((item.remote?.kind ?? item.local?.kind) !== "worksheet" || worksheetPermission)} transcriptionAvailable={data.availability.transcription} onUpload={() => { if (item.local && data.availability.storage) void uploadFile(item.local); else setError("Private upload storage is not configured."); }} onTranscribe={() => void transcribeAsset(capture.id, id)} onRemove={() => void run("Removing evidence", async () => { if (item.remote) { await captureRequest(`/${capture.id}/assets/${id}`, "DELETE"); const result = await captureRequest<{ capture: CaptureView }>(`/${capture.id}`); applyCapture(result.capture); } await recovery.current?.remove(ownerEmail, id); setLocalFiles((files) => files.filter((file) => file.id !== id)); setNotice("Evidence and its local recovery copy removed."); })} onCancel={() => controller.current?.abort()} />)}{!audioCount && <div className="rounded-xl border border-dashed p-5 text-center"><FileUp className="mx-auto mb-2 size-6 text-muted-foreground" /><p className="text-sm text-muted-foreground">Record above, or add existing audio.</p></div>}</div>
                   <Button variant="outline" className="mt-4 min-h-11 w-full" disabled={locked || recordingLimitReached} onClick={() => audioInput.current?.click()}><FileUp />Choose an audio file</Button><p className="mt-2 text-xs leading-5 text-muted-foreground">WebM, MP4/M4A, Ogg or WAV. Up to 100 MB of class audio across 8 sections. Keep the original file until your upload succeeds.</p>
                 </section>
-                <section className="rounded-2xl border border-sky-200 bg-sky-50/40 p-5 sm:p-6"><Sparkles className="mb-3 size-5 text-primary" /><h2 className="text-lg font-semibold">Bring the lesson together.</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">The draft uses your lesson topic, available transcripts, tutor observations and authorized prior feedback. Prior feedback is context, not proof of today’s understanding.</p><p className="mt-3 text-xs leading-5 text-muted-foreground">Generating a draft sends this text to the approved AI provider. Review all evidence and correct transcription mistakes in your observations first.</p>{!data.availability.drafting && <p className="mt-3 text-xs leading-5 text-amber-800">AI drafting is unavailable until the approved provider is configured.</p>}<Button className="mt-5 min-h-12 w-full" disabled={locked || offline || !topic.trim() || !data.availability.drafting || (!notes.trim() && !capture.assets.some((asset) => Boolean(asset.transcript)))} onClick={() => void run("Preparing your draft", async () => { await saveEdits(false, Boolean(currentCapture.current?.draft)); const result = await captureRequest<{ capture: CaptureView }>(`/${capture.id}/draft`, "POST", {}); applyCapture(result.capture, true); setReviewConfirmed(false); setNotice("Draft ready for your review. Nothing has been submitted to Wise or sent to parents."); })}><Sparkles />{capture.draft ? "Regenerate draft" : "Create feedback draft"}</Button>{capture.draft && <p className="mt-2 text-xs text-muted-foreground">Regenerating replaces the current draft after saving your observations.</p>}</section>
+                <section className="rounded-2xl border border-sky-200 bg-sky-50/40 p-5 sm:p-6"><Sparkles className="mb-3 size-5 text-primary" /><h2 className="text-lg font-semibold">Bring the lesson together.</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">The draft uses your lesson topic, the class transcript, any voice debrief and authorized prior feedback. Prior feedback is context, not proof of today’s understanding.</p><p className="mt-3 text-xs leading-5 text-muted-foreground">Generating a draft sends this text to the approved AI provider. Read the transcript and check the generated feedback before submitting it.</p>{!data.availability.drafting && <p className="mt-3 text-xs leading-5 text-amber-800">AI drafting is unavailable until the approved provider is configured.</p>}<Button className="mt-5 min-h-12 w-full" disabled={locked || offline || !topic.trim() || !data.availability.drafting || (!notes.trim() && !capture.assets.some((asset) => Boolean(asset.transcript)))} onClick={() => void run("Preparing your draft", async () => { await saveEdits(false, Boolean(currentCapture.current?.draft)); const result = await captureRequest<{ capture: CaptureView }>(`/${capture.id}/draft`, "POST", {}); applyCapture(result.capture, true); setReviewConfirmed(false); setNotice("Draft ready for your review. Nothing has been submitted to Wise or sent to parents."); })}><Sparkles />{capture.draft ? "Regenerate draft" : "Create feedback draft"}</Button>{capture.draft && <p className="mt-2 text-xs text-muted-foreground">Regenerating replaces the current draft.</p>}</section>
               </div>
             </div>
             {(capture.draft || manualDraft) && <section className="mt-6 rounded-2xl border bg-card p-5 sm:p-7" aria-labelledby="draft-heading"><p className="mb-1 text-xs font-semibold tracking-widest text-primary uppercase">03 · Review & finish</p><div className="flex flex-wrap items-center justify-between gap-3"><h2 id="draft-heading" className="text-2xl font-semibold">Your judgment. Your feedback.</h2><span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800">{savedReview ? "Reviewed · not submitted" : "Needs tutor review"}</span></div><p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">Write or edit the feedback below. Check names, examples and homework, and include only what the class evidence or your own observations support.</p><div className="mt-6 grid gap-5 sm:grid-cols-2">{(Object.entries(DRAFT_LABELS) as [keyof DraftFields, string][]).map(([key, label]) => <div key={key}><label htmlFor={`draft-${key}`} className="text-sm font-semibold">{label}</label><Textarea id={`draft-${key}`} rows={6} value={fields[key]} maxLength={8000} className="mt-2 text-base leading-6" disabled={locked} onChange={(event) => { setFields((value) => ({ ...value, [key]: event.target.value })); setReviewConfirmed(false); }} /></div>)}</div><label className="mt-6 flex min-h-11 cursor-pointer items-start gap-3 rounded-xl bg-muted/50 p-4 text-sm leading-6"><input type="checkbox" checked={reviewConfirmed} disabled={locked} onChange={(event) => setReviewConfirmed(event.target.checked)} className="mt-0.5 size-5 shrink-0 accent-sky-700" /><span>I reviewed the evidence and edited this draft. Claims about understanding are supported; transcript evidence and my observations are accurately represented.</span></label><div className="mt-4 flex flex-col flex-wrap gap-2 sm:flex-row"><Button className="min-h-12" disabled={locked || offline || !reviewConfirmed || !topic.trim()} onClick={() => void run("Saving reviewed draft", async () => { await saveEdits(true); setNotice("Reviewed draft saved. Copy it into your Wise class feedback form and submit there when ready."); })}><CheckCheck />Save reviewed draft</Button><Button variant="outline" className="min-h-12" disabled={locked || !savedReview} onClick={() => void run("Copying reviewed feedback", async () => { try { await navigator.clipboard.writeText(feedbackText(fields)); } catch { throw new Error("Clipboard access was blocked. Select and copy the reviewed fields manually."); } setNotice("Reviewed feedback copied. Open Wise, paste into the class feedback form, and explicitly submit there."); })}><Clipboard />Copy reviewed feedback</Button>{savedReview ? <a className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg border px-4 text-sm font-medium hover:bg-muted" href={capture.session.wiseUrl} target="_blank" rel="noopener noreferrer">Open Wise to submit<ExternalLink className="size-4" /></a> : <Button variant="outline" className="min-h-12" disabled>Open Wise to submit<ExternalLink /></Button>}</div><p className="mt-4 flex items-start gap-2 text-xs leading-5 text-muted-foreground"><LockKeyhole className="mt-0.5 size-4 shrink-0" /><span>This workspace saves a draft only. Final submission happens in Wise. Existing feedback deadlines and payroll policies still apply.</span></p></section>}

@@ -11,11 +11,12 @@ import { build } from "esbuild";
 import postcss from "postcss";
 import tailwind from "@tailwindcss/postcss";
 import { chromium } from "playwright-core";
+import sharp from "sharp";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const OUT = path.join(ROOT, "docs/assets/class-capture");
 const CHROME = process.env.CHROME_BIN || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aK1cAAAAASUVORK5CYII=", "base64");
+const PNG = await sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="480" height="640"><rect width="480" height="640" fill="#fffaf0"/><text x="32" y="60" font-family="sans-serif" font-size="26" fill="#075985">Practice worksheet</text><text x="32" y="95" font-family="sans-serif" font-size="16" fill="#64748b">Synthetic example</text><g stroke="#cbd5e1" stroke-width="2"><path d="M32 160H448 M32 230H448 M32 300H448 M32 370H448 M32 440H448 M32 510H448"/></g><g font-family="sans-serif" font-size="22" fill="#334155"><text x="32" y="145">1. 24 + 18 = 42</text><text x="32" y="215">2. 7 × 8 = 56</text><text x="32" y="285">3. 3/4 + 1/4 = 1</text></g></svg>`)).png().toBuffer();
 const session = { sessionId: "fictional-session", classId: "fictional-class", studentId: "fictional-student", studentName: "Ari (fictional)", teacherKey: "fictional-tutor", teacherName: "Mali (fictional)", title: "Year 6 Maths", startTime: "2026-10-01T08:00:00Z", endTime: "2026-10-01T09:00:00Z", wiseUrl: "https://wiseapp.live/fictional-class" };
 const availability = { enabled: true, storage: true, transcription: true, drafting: true };
 let capture = null;
@@ -255,16 +256,16 @@ try {
     assert.equal(metrics.drafts, 0);
   });
 
-  await check("Tutor notes and photos remain distinct from class transcript", async () => {
+  await check("Photos upload on selection and show a tappable thumbnail", async () => {
     await page.clock.setFixedTime(new Date("2026-10-01T16:59:58Z"));
-    await page.getByLabel("Tutor observations", { exact: false }).fill("Tutor observation: Ari completed two written examples independently and needed one reminder about equivalent ratios.");
-    await page.getByRole("button", { name: "Save observations" }).click();
-    await page.getByText("Your observations were saved", { exact: false }).waitFor();
+    assert.equal(await page.getByLabel("Tutor observations", { exact: false }).count(), 0);
     assert.equal(await page.getByRole("button", { name: "Add worksheet photos" }).isDisabled(), true);
     await page.getByLabel("I have permission to upload these worksheets", { exact: false }).check();
     await page.getByLabel("Choose worksheet photos").setInputFiles({ name: "fictional-worksheet.png", mimeType: "image/png", buffer: PNG });
-    await page.getByText("Worksheet photo", { exact: true }).waitFor();
-    await page.getByText("This photo is not read by the drafting model.", { exact: false }).waitFor();
+    await page.getByText("1 of 1 photos uploaded.", { exact: false }).waitFor();
+    await page.getByRole("button", { name: "Preview worksheet photo 1", exact: true }).click();
+    await page.getByRole("dialog", { name: "Worksheet photo preview" }).waitFor();
+    await page.getByRole("button", { name: "Close preview" }).click();
     assert.equal(metrics.drafts, 0);
   });
 
@@ -296,9 +297,7 @@ try {
   });
 
   await check("Focus and a new Bangkok day preserve active draft edits, review and local media", async () => {
-    const notes = "Unsaved tutor observation: keep this text through list refresh.";
     const difficulty = "Unsaved difficulty: preserve this edited draft field.";
-    await page.getByLabel("Tutor observations", { exact: false }).fill(notes);
     await page.getByLabel("Difficulties", { exact: true }).fill(difficulty);
     await page.getByLabel("I reviewed the evidence", { exact: false }).check();
     const id = capture.id;
@@ -309,7 +308,6 @@ try {
       page.waitForResponse(response => response.url() === `${origin}/api/class-capture` && response.request().method() === "GET"),
       page.evaluate(() => window.dispatchEvent(new Event("focus"))),
     ]);
-    assert.equal(await page.getByLabel("Tutor observations", { exact: false }).inputValue(), notes);
     assert.equal(await page.getByLabel("Difficulties", { exact: true }).inputValue(), difficulty);
     assert.equal(await page.getByLabel("I reviewed the evidence", { exact: false }).isChecked(), true);
     assert.equal(capture.id, id);
@@ -319,16 +317,15 @@ try {
   });
 
   await check("Regeneration resets the existing draft before an explicit new generation", async () => {
-    await page.getByLabel("Tutor observations", { exact: false }).fill("New tutor observation: two written examples were independent; four follow-up questions were agreed.");
     await page.getByRole("button", { name: "Regenerate draft" }).click();
     await page.getByText("Draft ready for your review.", { exact: false }).waitFor();
     assert.equal(metrics.drafts, 2);
     assert.equal(capture.reviewed, false);
-    assert.match(capture.tutorNotes, /New tutor observation/);
+    assert.equal(capture.tutorNotes, "");
     assert.equal(await page.getByRole("button", { name: "Copy reviewed feedback" }).isDisabled(), true);
   });
 
-  await check("Uncertain transcription can be removed before drafting from tutor notes", async () => {
+  await check("Uncertain transcription can be removed before drafting from the remaining transcript", async () => {
     await page.getByLabel("All participants still agree", { exact: false }).check();
     await page.getByRole("button", { name: /Record a tutor debrief/ }).click();
     await page.getByText("Recording tutor debrief", { exact: true }).waitFor();
@@ -362,19 +359,20 @@ try {
     assert.deepEqual(layout.undersized, []);
   });
 
-  await check("Upload cancellation keeps local media and worksheet permission is sent on retry", async () => {
-    const photo = page.locator("article").filter({ has: page.getByRole("heading", { name: "Worksheet photo", exact: true }) });
-    await page.evaluate(() => { window.__uploadDelay = 800; });
-    await photo.getByRole("button", { name: "Upload privately" }).click();
-    await photo.getByRole("button", { name: "Cancel upload" }).click();
-    await page.getByText("Upload cancelled.", { exact: false }).waitFor();
+  await check("Automatic photo upload cancellation retains a retryable local copy", async () => {
+    await page.evaluate(() => { window.__uploadDelay = 1000; });
+    await page.getByLabel("Choose worksheet photos").setInputFiles({ name: "cancelled-photo.png", mimeType: "image/png", buffer: PNG });
+    await waitFor(page, () => !!document.querySelector('[aria-label^="Uploading"]'), "Automatic upload did not start");
+    await page.getByRole("button", { name: "Cancel remaining uploads" }).click();
+    await page.getByText("0 of 1 photos uploaded.", { exact: false }).waitFor();
     assert.ok((await page.evaluate(() => window.__listLocal())).some(record => record.kind === "worksheet"));
     await page.evaluate(() => { window.__uploadDelay = 100; });
-    await photo.getByRole("button", { name: "Upload privately" }).click();
-    await photo.getByText("Private upload", { exact: false }).waitFor();
-    assert.equal(capture.assets.filter(asset => asset.kind === "worksheet").length, 1);
-    await page.getByLabel("Choose worksheet photos").setInputFiles({ name: "another-fictional-worksheet.png", mimeType: "image/png", buffer: PNG });
-    await waitFor(page, async () => (await window.__listLocal()).some(record => record.kind === "worksheet"), "Additional synthetic photo was not stored for account isolation check");
+    await page.getByRole("button", { name: "Retry upload photo 2" }).click();
+    await waitFor(page, () => document.querySelectorAll('[aria-label="Worksheet photo gallery"] [aria-label="Uploaded"]').length === 2, "Photo retry did not finish");
+    await page.evaluate(() => { window.__failNextUpload = true; });
+    await page.getByLabel("Choose worksheet photos").setInputFiles({ name: "failed-photo.png", mimeType: "image/png", buffer: PNG });
+    await page.getByText("0 of 1 photos uploaded.", { exact: false }).waitFor();
+    await waitFor(page, async () => (await window.__listLocal()).some(record => record.kind === "worksheet"), "Failed photo must stay available for recovery");
   });
 
   await check("A different login cannot recover the prior account’s local media", async () => {
@@ -410,12 +408,20 @@ try {
     await manualPage.getByRole("button", { name: "Upload saved audio" }).waitFor();
     const providerBefore = { transcriptions: metrics.transcriptions, drafts: metrics.drafts };
     await manualPage.getByLabel("I have permission to upload these worksheets", { exact: false }).check();
-    await manualPage.getByLabel("Choose worksheet photos").setInputFiles(Array.from({ length: 6 }, (_, i) => ({ name: `Worksheet-${i}.png`, mimeType: "image/png", buffer: PNG })));
-    await waitFor(manualPage, async () => (await window.__listLocal()).filter(file => file.kind === "worksheet").length === 6, "Six worksheet photos should be retained");
-    const photos = manualPage.getByRole("article").filter({ has: manualPage.getByRole("heading", { name: "Worksheet photo" }) });
-    await photos.first().waitFor();
-    assert.equal(await photos.count(), 6);
-    for (let i = 0; i < 6; i++) await photos.first().getByRole("button", { name: "Remove", exact: true }).click();
+    await manualPage.getByLabel("Choose worksheet photos").setInputFiles(Array.from({ length: 24 }, (_, i) => ({ name: `Worksheet-${i}.png`, mimeType: "image/png", buffer: PNG })));
+    await manualPage.getByText("24 of 24 photos uploaded.", { exact: false }).waitFor({ timeout: 30000 });
+    const gallery = manualPage.getByLabel("Worksheet photo gallery", { exact: true });
+    assert.equal(await gallery.getByRole("article").count(), 24);
+    const geometry = await gallery.evaluate(el => ({ height: el.getBoundingClientRect().height, content: el.scrollHeight }));
+    assert.ok(geometry.height <= 321 && geometry.content > geometry.height, JSON.stringify(geometry));
+    await gallery.scrollIntoViewIfNeeded();
+    await manualPage.screenshot({ path: path.join(OUT, "mobile-photo-gallery.png") });
+    await manualPage.reload();
+    await manualPage.getByText("Capture reopened.", { exact: false }).waitFor();
+    await manualPage.getByRole("button", { name: "Preview worksheet photo 1", exact: true }).click();
+    await manualPage.getByRole("dialog", { name: "Worksheet photo preview" }).waitFor();
+    assert.ok(await manualPage.getByAltText("Full worksheet photo").evaluate(el => el.complete && el.naturalWidth > 0));
+    await manualPage.keyboard.press("Escape");
 
     await manualPage.getByLabel("Choose existing class audio").setInputFiles({ name: "Voice Memo.m4a", mimeType: "audio/x-m4a", buffer: Buffer.from([0,0,0,24,102,116,121,112,77,52,65,32]) });
     await manualPage.getByRole("button", { name: "Upload privately" }).waitFor();
@@ -423,7 +429,7 @@ try {
     await manualPage.getByText("Capture reopened.", { exact: false }).waitFor();
     await manualPage.getByRole("button", { name: "Upload privately" }).click();
     await manualPage.getByRole("button", { name: "Transcribe audio" }).waitFor();
-    assert.equal(capture.assets[0].mime, "audio/mp4");
+    assert.equal(capture.assets.find(asset => asset.kind === "recording").mime, "audio/mp4");
     await manualPage.getByRole("button", { name: "Write feedback myself" }).click();
     await manualPage.getByLabel("Topics covered", { exact: true }).fill("Practised equivalent fractions.");
     await manualPage.getByLabel("Demonstrated understanding", { exact: true }).fill("Completed two written examples independently.");
