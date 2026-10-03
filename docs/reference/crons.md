@@ -382,20 +382,20 @@ The 15-minute cadence exists for the post-class feedback deadline verdicts (see 
 | | |
 |---|---|
 | Schedule | `13,43 * * * *` ([`vercel.json:32-35`](../../vercel.json)) |
-| `maxDuration` | 800s ([`route.ts:13`](../../src/app/api/internal/sync-post-class-feedback/route.ts)) |
-| Job body | `runPostClassFeedbackSync({ triggerType: "cron" })`, then `processPostClassAiReviews()`, `processDuePostClassNotificationRetries()`, and `runPostClassDeductionHygiene()` under `Promise.allSettled` ([`route.ts:22-30`](../../src/app/api/internal/sync-post-class-feedback/route.ts)) |
+| `maxDuration` | 800s ([`route.ts:7`](../../src/app/api/internal/sync-post-class-feedback/route.ts)) |
+| Job body | `runPostClassCollectionTickRequest({ triggerType: "cron" })` ([`route.ts:15`](../../src/app/api/internal/sync-post-class-feedback/route.ts)): `runPostClassFeedbackSync`, then `processPostClassAiReviews()`, `processDuePostClassNotificationRetries()`, and `runPostClassDeductionHygiene()` under `Promise.allSettled` ([`collection-tick.ts:73-89`](../../src/lib/post-class-feedback/collection-tick.ts)) — the same tick as Data Health's Run and the Post-Class Feedback page's collect mode |
 | Run table | `post_class_sync_runs` |
 | Feature | [Post-class Feedback](../features/post-class-feedback.md) — **stable** |
 
 The rolling collector covers a **four-day** Bangkok window ([`post-class-feedback/sync.ts:49`](../../src/lib/post-class-feedback/sync.ts), [`:139-145`](../../src/lib/post-class-feedback/sync.ts)); anything older belongs to the backfill cron ([cron 9](#9-post-class-feedback-historical-drain--apiinternalpost-class-feedback-backfill)). Cron runs hold a 50-detail batch cap so a routine tick can never monopolise the Wise API; only an explicit manual backfill may go to 400 ([`sync.ts:40-47`](../../src/lib/post-class-feedback/sync.ts)). `WISE_INSTITUTE_ID` is required — no literal fallback here ([`sync.ts:1053-1054`](../../src/lib/post-class-feedback/sync.ts)).
 
-The three follow-on passes run under `Promise.allSettled`, so any one failing degrades to `{ failed: true }` in the response instead of failing the invocation ([`route.ts:23-37`](../../src/app/api/internal/sync-post-class-feedback/route.ts)):
+The three follow-on passes run under `Promise.allSettled`, so any one failing degrades to `{ failed: true }` in the response instead of failing the invocation, and is logged as `{ pass, errorName }` — the error class only ([`collection-tick.ts:50-58`](../../src/lib/post-class-feedback/collection-tick.ts), [`:77-88`](../../src/lib/post-class-feedback/collection-tick.ts)):
 
-- **AI review** — up to 10 pending reviews per tick, hard-capped at 25 ([`ai.ts:119-123`](../../src/lib/post-class-feedback/ai.ts)).
+- **AI review** — up to 10 pending reviews per tick, hard-capped at 25 ([`ai.ts:119-123`](../../src/lib/post-class-feedback/ai.ts)). Each model call times out after 30s ([`ai.ts:63`](../../src/lib/post-class-feedback/ai.ts)) and is then recorded as a failed review. Failed calls do not count toward the 10, so a sustained stall can still try every suspect version among the 40 the pass loads, 30s each — up to 1,200s, past the 800s limit. A failed review is never retried ([`ai.ts:135-143`](../../src/lib/post-class-feedback/ai.ts)).
 - **Notification retries** — up to 50 due `pending`/`failed`/stale-`sending` deliveries ([`notifications.ts:1090-1125`](../../src/lib/post-class-feedback/notifications.ts)).
-- **Deduction hygiene** — the safety-restoring half of the auto-approval sweep, with **no approve leg**: reopen `approved` deductions that lost proof, then waive `pending_review` deductions whose session is no longer eligible (e.g. cancelled in Wise). It releases claims only and never approves, which is why it is not behind the auto-approve flag ([`auto-approval.ts:259-282`](../../src/lib/post-class-feedback/auto-approval.ts), route comment at [`route.ts:26-28`](../../src/app/api/internal/sync-post-class-feedback/route.ts)).
+- **Deduction hygiene** — the safety-restoring half of the auto-approval sweep, with **no approve leg**: reopen `approved` deductions that lost proof, then waive `pending_review` deductions whose session is no longer eligible (e.g. cancelled in Wise). It releases claims only and never approves, which is why it is not behind the auto-approve flag ([`auto-approval.ts:279-302`](../../src/lib/post-class-feedback/auto-approval.ts), tick doc at [`collection-tick.ts:66-69`](../../src/lib/post-class-feedback/collection-tick.ts)).
 
-`PostClassFeedbackSyncAlreadyRunningError` → `409`; any other sync error → a generic `500` that discards the message ([`route.ts:39-42`](../../src/app/api/internal/sync-post-class-feedback/route.ts)).
+`PostClassFeedbackSyncAlreadyRunningError` → `409`; any other sync error → a generic `500` that discards the message but logs `{ pass: "sync", errorName }` ([`collection-tick.ts:106-110`](../../src/lib/post-class-feedback/collection-tick.ts)).
 
 ### 9. Post-class feedback historical drain — `/api/internal/post-class-feedback-backfill`
 
