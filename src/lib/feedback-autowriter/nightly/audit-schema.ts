@@ -196,6 +196,14 @@ function nullIfMissing(record: Record<string, unknown>, key: string): void {
   if (record[key] === undefined) record[key] = null;
 }
 
+function isBlank(value: unknown): boolean {
+  return typeof value === "string" && value.trim() === "";
+}
+
+function dropBlankQuotes(value: unknown): unknown {
+  return Array.isArray(value) ? value.filter((item) => !isRecord(item) || !isBlank(item.quote)) : value;
+}
+
 function normaliseQuote(value: unknown): unknown {
   if (!isRecord(value)) return value;
   const quote = { ...value };
@@ -221,6 +229,9 @@ export function normaliseAuditOutput(raw: unknown): unknown {
   const L = AUDIT_LIMITS;
 
   const claimIds = new Map<string, string>();
+  // A claim with no text quotes nothing and cannot be checked: dropped before numbering (3 Oct: an empty quote failed a
+  // whole paid audit). An evidence quote with no text is dropped; an issue keeps its place with a visible placeholder.
+  if (Array.isArray(out.claims)) out.claims = out.claims.filter((item) => !isRecord(item) || !isBlank(item.text));
   out.claims = clipList(out.claims, L.claims, (item) => {
     if (!isRecord(item)) return item;
     const claim = { ...item };
@@ -228,7 +239,7 @@ export function normaliseAuditOutput(raw: unknown): unknown {
     if (typeof claim.id === "string" && !claimIds.has(claim.id)) claimIds.set(claim.id, next);
     claim.id = next;
     claim.text = clipString(claim.text, L.claimText);
-    claim.evidence = clipList(claim.evidence, L.evidencePerItem, normaliseQuote);
+    claim.evidence = clipList(dropBlankQuotes(claim.evidence), L.evidencePerItem, normaliseQuote);
     return claim;
   });
 
@@ -241,10 +252,10 @@ export function normaliseAuditOutput(raw: unknown): unknown {
     issue.claimIds = Array.isArray(issue.claimIds)
       ? [...new Set(issue.claimIds.map((id) => claimIds.get(String(id))).filter((id): id is string => Boolean(id)))].slice(0, L.claimIdsPerIssue)
       : [];
-    issue.quote = clipString(issue.quote, L.issueQuote);
-    issue.mechanism = clipString(issue.mechanism, L.mechanism);
+    issue.quote = isBlank(issue.quote) ? "(no quote given)" : clipString(issue.quote, L.issueQuote);
+    issue.mechanism = isBlank(issue.mechanism) ? "(not given)" : clipString(issue.mechanism, L.mechanism);
     nullIfMissing(issue, "criticalCategory");
-    issue.evidence = clipList(issue.evidence, L.evidencePerItem, normaliseQuote);
+    issue.evidence = clipList(dropBlankQuotes(issue.evidence), L.evidencePerItem, normaliseQuote);
     if (issue.minimalFix === undefined) issue.minimalFix = null;
     if (isRecord(issue.minimalFix)) {
       const fix = { ...issue.minimalFix };
@@ -259,13 +270,13 @@ export function normaliseAuditOutput(raw: unknown): unknown {
     if (!isRecord(item)) return item;
     const omission = { ...item };
     omission.detail = clipString(omission.detail, L.omissionDetail);
-    omission.evidence = clipList(omission.evidence, L.omissionEvidence, normaliseQuote);
+    omission.evidence = clipList(dropBlankQuotes(omission.evidence), L.omissionEvidence, normaliseQuote);
     return omission;
   });
 
   if (isRecord(out.homework)) {
     const homework = { ...out.homework };
-    homework.evidence = clipList(homework.evidence, L.homeworkEvidence, normaliseQuote);
+    homework.evidence = clipList(dropBlankQuotes(homework.evidence), L.homeworkEvidence, normaliseQuote);
     out.homework = homework;
   }
   if (isRecord(out.names)) {
