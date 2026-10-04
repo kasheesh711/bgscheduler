@@ -214,4 +214,3 @@ next 20 eligible posts after release are audited with zero repeats of its code.
 - **Change:** add a daily major-error rate split into summary-only and transcript to the dashboard trends. Expansion
   decisions should use the transcript rate until captions ship, because the two sources fail at very different rates
   (across the two audited nights: summary-only 7 of 7 major, transcript 4 of 21).
-
