@@ -456,6 +456,12 @@ forward scan; before migration 0110 the Atom collector and the style review reco
 incident that was not delivered keeps the review job red (Data Health) until you **Acknowledge** it (What needs you →
 Incidents → Open; its pushes stop too).
 
+**Failure log.** Every failure a review finds — a post with a major or critical error, a draft the judges had to
+stop, a hold that missed or nearly missed its deadline, an operational fault — is appended to
+[feedback-autowriter-failure-log.md](feedback-autowriter-failure-log.md) with its code, root cause and status (no
+names: this repository is public). The long-term improvement plan at the end of that page says what stops each code
+from recurring; update it when a review finds a new pattern.
+
 
 ## Mimi style guide review and activation
 
