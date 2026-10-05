@@ -35,6 +35,7 @@ import { and, desc, eq, isNull } from "drizzle-orm";
 
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import { lineSchedulerEnabled, pushLineTextMessage } from "@/lib/line/client";
 import { bulkGetCreditAdminOwnership } from "@/lib/credit-control/db";
 import { computeProjection } from "@/lib/credit-control/projection";
@@ -226,8 +227,7 @@ async function createDigestRun(
       .returning({ id: schema.lineCreditDigestRuns.id });
     return run ?? null;
   } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error
-      && (error as { code?: unknown }).code === "23505") {
+    if (sqlStateOf(error) === "23505") {
       return null;
     }
     throw error;

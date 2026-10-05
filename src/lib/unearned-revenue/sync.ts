@@ -7,6 +7,7 @@ import { count, desc, eq, notInArray, sql } from "drizzle-orm";
 
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import {
   fetchGoogleSheetRange,
   listGoogleSheetProperties,
@@ -194,11 +195,6 @@ export async function readUnearnedRevenueWorkbook(
         .map((title) => [title, startProperties.get(title)!.sheetId]),
     ),
   };
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  return "code" in error && (error as { code?: unknown }).code === "23505";
 }
 
 async function insertChunks<T>(
@@ -541,7 +537,7 @@ export async function runUnearnedRevenueSync(options: SyncOptions): Promise<Unea
     }).returning({ id: schema.unearnedRevenueSyncRuns.id });
     syncRunId = run.id;
   } catch (error) {
-    if (isUniqueViolation(error)) {
+    if (sqlStateOf(error) === "23505") {
       return { ok: true, skipped: true, idempotent: false, syncRunId: null, snapshotId: null, cutoff: null, counts: null };
     }
     throw error;

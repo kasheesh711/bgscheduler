@@ -5,6 +5,7 @@ import { and, desc, eq, gte, inArray, lt, lte, or } from "drizzle-orm";
 import { DEFAULT_CLASSROOM_ROOMS } from "@/lib/classrooms/rooms";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import { createWiseClient, type WiseClient } from "@/lib/wise/client";
 import { fetchWisePastSessionsByBangkokDate } from "@/lib/wise/fetchers";
 import type { WiseSession } from "@/lib/wise/types";
@@ -29,11 +30,6 @@ export interface RunFootTrafficSyncInput {
   actorEmail?: string | null;
   now?: Date;
   client?: WiseClient;
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return typeof error === "object" && error !== null &&
-    "code" in error && (error as { code?: unknown }).code === "23505";
 }
 
 function errorMessage(error: unknown): string {
@@ -151,7 +147,7 @@ async function acquireRun(input: {
     }).returning({ id: schema.onsiteFootTrafficSyncRuns.id });
     return { runId: row.id, runningRunId: null };
   } catch (error) {
-    if (!isUniqueViolation(error)) throw error;
+    if (sqlStateOf(error) !== "23505") throw error;
     const raced = await currentRunningRun(input.db);
     if (!raced) throw error;
     return { runId: null, runningRunId: raced.id };

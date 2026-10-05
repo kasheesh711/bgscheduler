@@ -95,6 +95,33 @@ describe("sales dashboard import guard", () => {
     });
   });
 
+  it("skips when a DrizzleQueryError-wrapped unique violation (cause.code 23505) loses the race", async () => {
+    // drizzle-orm 0.45 wraps every driver error: the SQLSTATE is on `.cause`, `.code` is undefined.
+    const wrapped = Object.assign(new Error("Failed query"), { cause: { code: "23505" } });
+    const { db } = makeDbMock({
+      insertError: wrapped,
+      duplicateRaceRows: [{ id: "running-after-race", startedAt: new Date("2026-05-26T04:59:00.000Z") }],
+    });
+
+    const result = await acquireSalesImportRun(db as never, acquireInput);
+
+    expect(result).toMatchObject({
+      skipped: true,
+      alreadyRunning: true,
+      runId: "running-after-race",
+    });
+  });
+
+  it("rethrows a wrapped non-unique insert failure (cause.code 23503) instead of skipping", async () => {
+    const wrapped = Object.assign(new Error("Failed query"), { cause: { code: "23503" } });
+    const { db } = makeDbMock({
+      insertError: wrapped,
+      duplicateRaceRows: [{ id: "running-after-race", startedAt: new Date("2026-05-26T04:59:00.000Z") }],
+    });
+
+    await expect(acquireSalesImportRun(db as never, acquireInput)).rejects.toBe(wrapped);
+  });
+
   it("marks stale running imports failed and restores the previous source status", async () => {
     const { db, updateSet } = makeDbMock({
       staleRows: [{

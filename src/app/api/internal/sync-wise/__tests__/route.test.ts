@@ -314,6 +314,39 @@ describe("GET/POST /api/internal/sync-wise", () => {
     expect(runFullSync).not.toHaveBeenCalled();
   });
 
+  it("returns 202 when a DrizzleQueryError-wrapped unique violation (cause.code 23505) loses the race", async () => {
+    // drizzle-orm 0.45 wraps every driver error: the SQLSTATE is on `.cause`, `.code` is undefined.
+    const wrapped = Object.assign(new Error("Failed query"), { cause: { code: "23505" } });
+    vi.mocked(getDb).mockReturnValue(makeDbMock({
+      insertError: wrapped,
+      duplicateRaceRows: [{ id: "running-after-race", startedAt: new Date("2026-05-18T15:03:00.000Z") }],
+    }) as never);
+
+    const res = await GET(makeRequest("test-secret", "GET"));
+
+    expect(res.status).toBe(202);
+    await expect(res.json()).resolves.toMatchObject({
+      skipped: true,
+      alreadyRunning: true,
+      syncRunId: "running-after-race",
+    });
+    expect(runFullSync).not.toHaveBeenCalled();
+  });
+
+  it("does not mistake a wrapped non-unique insert failure (cause.code 23503) for a lost race", async () => {
+    const wrapped = Object.assign(new Error("Failed query"), { cause: { code: "23503" } });
+    vi.mocked(getDb).mockReturnValue(makeDbMock({
+      insertError: wrapped,
+      duplicateRaceRows: [{ id: "running-after-race", startedAt: new Date("2026-05-18T15:03:00.000Z") }],
+    }) as never);
+
+    const res = await GET(makeRequest("test-secret", "GET"));
+
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toMatchObject({ outcome: "failed", success: false, error: "Failed query" });
+    expect(runFullSync).not.toHaveBeenCalled();
+  });
+
   it("returns 401 when GET has no Authorization header even with a valid session", async () => {
     vi.mocked(auth).mockResolvedValue({
       user: { role: "admin", email: "kevhsh7@gmail.com" },

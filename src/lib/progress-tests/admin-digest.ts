@@ -19,6 +19,7 @@ import { hasTodayRefresh } from "@/lib/credit-control/daily-refresh";
 import { eq, inArray } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import { todayBangkok } from "@/lib/room-capacity/dates";
 import {
   type ScheduleEmailSender,
@@ -270,7 +271,7 @@ async function createDigestRun(
       .returning();
     return run;
   } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "23505") {
+    if (sqlStateOf(error) === "23505") {
       return null;
     }
     throw error;
