@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, or, sql, count } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, lt, or, sql, count } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { POST_CLASS_FEEDBACK_FIELDS, type FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
@@ -20,15 +20,14 @@ import {
   gateWindow,
   isAccurate,
   isRequiredReview,
-  nextExpansionSize,
   wilsonLowerBound,
   type CoverageCounts,
   type GateInput,
   type GateStatus,
   type InclusionReason,
 } from "./quality";
-import { loadGateFacts } from "./review-job";
-import { AUTOWRITER_TUTORS, rosterTutor, tutorLabel } from "./roster";
+import { ONLINE_TITLE_SQL, loadGateFacts } from "./review-job";
+import { AUTOWRITER_TEACHER_ALLOWLIST, AUTOWRITER_TUTORS, rosterTutor, tutorLabel } from "./roster";
 import { sessionClassNameSql, type AutowriterSessionRow } from "./store";
 
 /**
@@ -50,6 +49,8 @@ const RUNS = schema.feedbackAutowriterReviewRuns;
 const S = schema.feedbackAutowriterSessions;
 const PC = schema.postClassSessions;
 const PCV = schema.postClassFeedbackVersions;
+const CC = schema.creditControlSessions;
+const CCS = schema.creditControlSnapshots;
 
 /** Classes older than this leave the queue once reviewed and unflagged. */
 export const REVIEW_QUEUE_DAYS = 30;
@@ -59,6 +60,8 @@ export const QUEUE_LIMIT = 300;
 const UNREVIEWED_LIMIT = 500;
 /** Incidents of the queue's days loaded at most, besides the critical ones still waiting for the owner (never capped). */
 const INCIDENT_LIMIT = 100;
+/** Days of online classes `loadUncoveredTutors` reads. */
+export const UNCOVERED_TUTOR_DAYS = 14;
 
 type Field = (typeof POST_CLASS_FEEDBACK_FIELDS)[number];
 
@@ -252,7 +255,13 @@ export interface AutowriterReview {
     thresholds: { passLowerBound: number; headStartLowerBound: number; minCoverage: number };
     lastDaily: { date: string; status: GateStatus; wilsonLower: number; createdAt: string } | null;
     currentTutors: number;
-    nextExpansionSize: number;
+    /**
+     * Tutors who taught an online class lately but are not on the roster (`loadUncoveredTutors`): add them. Null when
+     * that read failed (it is advisory: it never takes the review page down).
+     */
+    uncoveredTutors: UncoveredTutor[] | null;
+    /** The days `uncoveredTutors` looks back (`UNCOVERED_TUTOR_DAYS`). */
+    uncoveredTutorDays: number;
     /**
      * The first Bangkok date whose window no longer holds today's critical verdicts: the latest critical class's date
      * plus the window's 14 days (the rule the backfill prints). Null when no critical verdict is in the window.
@@ -293,6 +302,13 @@ type VerdictRow = typeof V.$inferSelect;
 type FlagRow = typeof FL.$inferSelect;
 type MetricRow = typeof M.$inferSelect;
 
+/** A Wise teacher account with recent online classes that the roster does not list, so nothing writes its feedback. */
+export interface UncoveredTutor {
+  wiseUserId: string;
+  teacherName: string | null;
+  classes: number;
+}
+
 export interface ReviewSourceRows {
   /** The gate as the nightly job computes it (`loadGateFacts` over the dashboard window). */
   gateFacts: GateInput;
@@ -319,6 +335,7 @@ export interface ReviewSourceRows {
   lastDailyGate: typeof G.$inferSelect | null;
   incidents: ReadonlyArray<typeof I.$inferSelect>;
   lastRun: typeof RUNS.$inferSelect | null;
+  uncoveredTutors: readonly UncoveredTutor[] | null;
 }
 
 function asFields(value: unknown): FeedbackFieldAnswers {
@@ -553,7 +570,8 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
         createdAt: input.lastDailyGate.createdAt.toISOString(),
       } : null,
       currentTutors: AUTOWRITER_TUTORS.length,
-      nextExpansionSize: nextExpansionSize(AUTOWRITER_TUTORS.length),
+      uncoveredTutors: input.uncoveredTutors ? [...input.uncoveredTutors] : null,
+      uncoveredTutorDays: UNCOVERED_TUTOR_DAYS,
       blockedUntil: latestCritical ? addDays(latestCritical, GATE_THRESHOLDS.windowDays) : null,
     },
     coverage,
@@ -603,11 +621,37 @@ const requiredUnreviewedSql = sql`(${R.inclusionReason} in ('new_tutor', 'random
 const openListedIncidentSql = sql`(${I.acknowledgedAt} is null and (${I.severity} = 'critical'
   or ${inArray(I.kind, [...LISTED_INFO_INCIDENT_KINDS])}))`;
 
+/**
+ * Teacher accounts that held an online class in the last `UNCOVERED_TUTOR_DAYS` days (Wise title "Online …" or
+ * "Live …" on the active credit-control snapshot, cancelled titles left out) and are not on the roster, most classes
+ * first. The roster is meant to hold every online tutor, so a row here is a new hire to add.
+ */
+export async function loadUncoveredTutors(db: Database, now: Date): Promise<UncoveredTutor[]> {
+  const rows = await db.select({
+    wiseUserId: CC.wiseTeacherUserId,
+    teacherName: sql<string | null>`max(${CC.teacherName})`,
+    classes: sql<number>`count(distinct ${CC.wiseSessionId})`.mapWith(Number),
+  }).from(CC)
+    .innerJoin(CCS, and(eq(CCS.id, CC.snapshotId), eq(CCS.active, true)))
+    .where(and(
+      isNotNull(CC.wiseTeacherUserId),
+      gte(CC.scheduledStartTime, new Date(now.getTime() - UNCOVERED_TUTOR_DAYS * 24 * 60 * 60 * 1000)),
+      lt(CC.scheduledStartTime, now),
+      sql`${CC.title} ~* ${ONLINE_TITLE_SQL}`,
+      sql`${CC.title} !~* '\\(cancel'`,
+      sql`${CC.meetingStatus} !~* 'cancel'`,
+    ))
+    .groupBy(CC.wiseTeacherUserId);
+  return rows
+    .filter((row): row is UncoveredTutor => row.wiseUserId !== null && !AUTOWRITER_TEACHER_ALLOWLIST.has(row.wiseUserId))
+    .sort((a, b) => b.classes - a.classes || a.wiseUserId.localeCompare(b.wiseUserId));
+}
+
 async function loadAvailableReview(db: Database, now: Date, queueLimit: number): Promise<AutowriterReview> {
   const today = bangkokDateKey(now);
   const window = gateWindow(today);
   const queueSince = addDays(today, -(REVIEW_QUEUE_DAYS - 1));
-  const [gateFacts, windowReviews, flagged, unreviewed, recent, totals] = await Promise.all([
+  const [gateFacts, windowReviews, flagged, unreviewed, recent, totals, uncoveredTutors] = await Promise.all([
     loadGateFacts(db, window),
     db.select().from(R).where(and(gte(R.bangkokDate, window.start), notInPersonReviewSql)),
     db.select().from(R).where(and(openFlagSql, notInPersonReviewSql)),
@@ -618,6 +662,11 @@ async function loadAvailableReview(db: Database, now: Date, queueLimit: number):
       flagged: sql<number>`count(*) filter (where ${openFlagSql})`.mapWith(Number),
       all: count(),
     }).from(R).where(and(or(gte(R.bangkokDate, queueSince), requiredUnreviewedSql, openFlagSql), notInPersonReviewSql)),
+    // Advisory: a failed read shows "could not check" instead of failing the review queue with it.
+    loadUncoveredTutors(db, now).catch((error: unknown) => {
+      console.error("[feedback-autowriter] uncovered-tutor read failed", reviewLoadErrorSummary(error));
+      return null;
+    }),
   ]);
   const queueReviews = [...new Map([...flagged, ...unreviewed, ...recent].map((row) => [row.wiseSessionId, row])).values()];
   const ids = [...new Set([...queueReviews, ...windowReviews].map((review) => review.wiseSessionId))];
@@ -672,6 +721,7 @@ async function loadAvailableReview(db: Database, now: Date, queueLimit: number):
     // per id (the later read's copy, which is the fresher state) in first-seen order, so open criticals stay first.
     incidents: [...new Map([...openIncidents, ...otherIncidents].map((row) => [row.id, row] as const)).values()],
     lastRun: lastRun[0] ?? null,
+    uncoveredTutors,
   });
 }
 

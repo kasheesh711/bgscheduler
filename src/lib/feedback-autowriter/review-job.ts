@@ -83,7 +83,7 @@ const HUMAN_FIX_KINDS = ["owner_web", "tutor", "other_staff"] as const;
 /** Saves by a person (or by our API user outside any post) that can make a class "written by the tutor first". */
 const PERSON_SAVE_KINDS = [...HUMAN_FIX_KINDS, "api_actor_unmatched"] as const;
 const ONSITE_REASONS = ["session_type_OFFLINE", "session_type_in_person_title"] as const;
-const ONLINE_TITLE_SQL = "^\\s*(online|live)\\y";
+export const ONLINE_TITLE_SQL = "^\\s*(online|live)\\y";
 const IN_PERSON_TITLE_SQL = "^\\s*(in[\\s-]?person|on[\\s-]?site)\\y";
 
 /** SQL: a first shot whose text may be in Wise (mirror of `postMayHaveLanded`). */

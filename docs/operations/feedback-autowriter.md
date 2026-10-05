@@ -116,8 +116,8 @@ switch there covers both of their Wise accounts; "Partly on" means the CLI switc
 2. Same hour: `--mode=live` and message the tutors:
    Tutors on the roster: Kevin, Gift, Ek, Peat, Mimi (29 Sep); Ras, Celeste, Taki, Dome, Mandy, Grace, Mint, Fluke
    (Chettaporn), Calvin, Lukas, A (Anavat), Ohm, Mookie, then Aey, Mikki, Sagotty, Buzz, Linn, Eng, Kavin, Copter, Amy
-   (2 Oct, live on deploy — a new roster tutor is on unless their
-   accounts are in `disabled_tutors`).
+   (2 Oct), then every remaining online tutor: Tito, Petch-Than, Praew, Shop, Tai, Menika, Fay, Pat, Punlee, Pech, Jennie, Mek-Sila, Pakgad, Glai, Rew, Win, Sunday, Nithit, Key, Ayush, Art (5 Oct). All live on deploy — a new
+   roster tutor is on unless their accounts are in `disabled_tutors`.
    > From today BGScheduler writes the Wise feedback for your **online one-to-one** classes from the Zoom
    > summary, in English. Offline and group classes are still yours. You can't edit it in Wise afterwards — ask an
    > admin. If an online class still shows blank feedback 3 hours after it ends, tell an admin.
@@ -412,9 +412,10 @@ and judge versions wrote it (the switch itself changed neither; v5 since changed
 again), and its row keeps `arm = 'sol'`, which the old checks would reject. Rows Sol already wrote keep `arm = 'sol'` (the older dashboard shows no model name for them); anything
 else is written again by GLM. No data change is needed.
 
-## 8a. Luna first for the tutors added on 2026-10-02
+## 8a. Luna first for the tutors added on 2026-10-02 and 2026-10-05
 
-The 22 tutors added on 2 Oct, in two cohorts of 13 and 9 (roster entries with `writer: "luna"`), are written by Luna (reasoning `max`) first, with
+The 43 tutors added on 2 Oct (cohorts of 13 and 9) and 5 Oct (cohort 5, 21 tutors), all roster entries with
+`writer: "luna"`, are written by Luna (reasoning `max`) first, with
 Sol as their fallback; the GLM judges are unchanged and everyone else keeps Sol then Luna (`writersFor` in
 `config.ts`). No migration: `luna` and `sol` are both allowed arms. In the section 8 query, these tutors' writer rows
 are mostly `luna`; a `sol` row for one of them is a fallback draft. The dashboard's "Written by the fallback writer"
@@ -422,6 +423,12 @@ counts Sol drafts for them and Luna drafts for everyone else.
 
 **Turning one tutor off:** the dashboard switch (`disabled_tutors`), no deploy. **Moving them to Sol first:** remove
 `writer: "luna"` from their roster entries and deploy.
+
+**Adding a new online tutor:** the dashboard ("The gate in full", Roster line) lists every Wise account with an
+online class in the last 14 days that the roster lacks. Append a roster entry for each of the tutor's two accounts
+(from `tutor_identity_group_members` on the active snapshot) with `writer: "luna"`. Name variants are redacted word by
+word and case-insensitively, so leave out any nickname or name part that is an ordinary English word (see the cohort 5
+comment in `roster.ts`).
 
 ## 9. Reviewing posts (operating loop)
 

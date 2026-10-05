@@ -16,10 +16,10 @@ describe("HealthRail", () => {
     const html = render();
     expect(html).toContain("Pilot health");
     expect(html).toContain("23 Sep – 6 Oct · 14-day window");
-    expect(html).toContain("Expansion gate · Blocked");
+    expect(html).toContain("Accuracy gate · Blocked");
     // "Gate blocked until 13 Oct: critical on 29 Sep." in the card's two sizes of type.
     expect(html).toContain(">Gate blocked until 13 Oct<");
-    expect(html).toContain("Critical on 29 Sep. Keep the current pilot running; do not add tutors yet.");
+    expect(html).toContain("Critical on 29 Sep. A critical error blocks the gate; keep reviewing posts.");
     expect(html).toContain("Not met");
     expect(html).toContain("1 critical verdict(s) in the window");
     expect(html).toContain("accuracy lower bound 79% &lt; 80% (46/51)");
@@ -44,14 +44,14 @@ describe("HealthRail", () => {
     ];
     for (const [gate, status, headline] of sentences) {
       const html = render(gate);
-      expect(html).toContain(`Expansion gate · ${status}`);
+      expect(html).toContain(`Accuracy gate · ${status}`);
       expect(html).toContain(`>${headline}<`);
     }
     expect(render({ status: "blocked_critical", blockedUntil: null, criticalVerdicts: 0, unresolvedCriticalFlags: 2 })).toContain("2 critical flags to be judged.");
     expect(render({ status: "below_head_start", wilsonLower: 0.6123 })).toContain("Lower bound 61%, needs 70%.");
     expect(render({ status: "head_start", wilsonLower: 0.7225 })).toContain("Lower bound 72%, needs 80%.");
     const passed = render({ status: "pass", wilsonLower: 0.84, reasons: [] });
-    expect(passed).toContain("Ready to add 3 tutors.");
+    expect(passed).toContain("Accuracy meets the bar.");
     expect(passed).toContain('data-gate-status="pass"');
     expect(passed).not.toContain("Not met");
     // Nothing reviewed: no lower bound to show.
@@ -89,7 +89,7 @@ describe("HealthRail", () => {
     const missing = renderToStaticMarkup(<HealthRail dashboard={dashboardFixture()} review={null} unavailableReason="review_tables_missing" />);
     expect(missing).toContain("migration 0101");
     expect(missing).toContain("Waiting for a recording");
-    expect(missing).not.toContain("Expansion gate");
+    expect(missing).not.toContain("Accuracy gate");
     expect(missing).not.toContain("<canvas");
     const failed = renderToStaticMarkup(<HealthRail dashboard={dashboardFixture()} review={null} unavailableReason="load_failed" />);
     expect(failed).toContain("could not load");

@@ -11,7 +11,7 @@ function gate(overrides: Partial<Gate> = {}): Gate {
     reviewed: 10, accurate: 10, criticalVerdicts: 0, unresolvedCriticalFlags: 0, pendingFlaggedReviews: 0, requiredPending: 0,
     unrecordedPosts: 0, unexplainedApiWrites: 0, coverageNum: 8, coverageDen: 9,
     thresholds: { passLowerBound: 0.8, headStartLowerBound: 0.7, minCoverage: 0.7 },
-    lastDaily: null, currentTutors: 5, nextExpansionSize: 8, blockedUntil: null,
+    lastDaily: null, currentTutors: 5, uncoveredTutors: [], uncoveredTutorDays: 14, blockedUntil: null,
     ...overrides,
   };
 }
@@ -78,8 +78,12 @@ describe("gateSentence", () => {
 
   it("says when there is nothing to judge yet, and when the gate has passed", () => {
     expect(gateSentence(gate({ status: "insufficient_data", wilsonLower: 0, reviewed: 0, accurate: 0 }))).toBe("Not enough reviews yet.");
-    expect(gateSentence(gate({ status: "pass", wilsonLower: 0.84 }))).toBe("Gate passed: ready to add 3 tutors.");
-    expect(gateSentence(gate({ status: "pass", wilsonLower: 0.84, currentTutors: 2, nextExpansionSize: 3 }))).toBe("Gate passed: ready to add 1 tutor.");
+    expect(gateSentence(gate({ status: "pass", wilsonLower: 0.84 }))).toBe("Gate passed.");
+    const uncovered = (n: number) => Array.from({ length: n }, (_, i) => ({ wiseUserId: `u${i}`, teacherName: `Tutor ${i}`, classes: 1 }));
+    expect(gateSentence(gate({ status: "pass", wilsonLower: 0.84, uncoveredTutors: uncovered(1) })))
+      .toBe("Gate passed; 1 online tutor not on the roster yet.");
+    expect(gateSentence(gate({ status: "pass", wilsonLower: 0.84, uncoveredTutors: uncovered(2) })))
+      .toBe("Gate passed; 2 online tutors not on the roster yet.");
   });
 
   it("agrees with the gate's own evaluation for every status", () => {
@@ -91,7 +95,7 @@ describe("gateSentence", () => {
       const result = evaluateGate(input);
       return [result.status, gateSentence(gate({ ...input, ...result, blockedUntil }))];
     };
-    expect(sentence(facts({}))).toEqual(["pass", "Gate passed: ready to add 3 tutors."]);
+    expect(sentence(facts({}))).toEqual(["pass", "Gate passed."]);
     expect(sentence(facts({ reviewed: 0, accurate: 0 }))).toEqual(["insufficient_data", "Not enough reviews yet."]);
     expect(wilsonLowerBound(9, 9)).toBeGreaterThanOrEqual(0.7);
     expect(sentence(facts({ reviewed: 9, accurate: 9 }))).toEqual(["head_start", "Head start: lower bound 70%, needs 80%."]);

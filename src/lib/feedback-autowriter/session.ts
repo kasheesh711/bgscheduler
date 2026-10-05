@@ -289,6 +289,7 @@ function tutorSelf(detail: AutowriterSessionDetail): { accounts: Set<string>; na
   if (tutor) {
     for (const account of AUTOWRITER_ROSTER) if (account.canonicalKey === tutor.canonicalKey) add(account.displayName);
     for (const name of tutor.tutorNames) add(name);
+    for (const name of tutor.selfNames ?? []) add(name);
   }
   return { accounts, names, rawNames };
 }
