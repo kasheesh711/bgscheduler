@@ -43,7 +43,7 @@ describe("SystemDetails", () => {
     expect(html).toContain("3 waiting");
     expect(html).toContain("Every posted first shot recorded");
     expect(html).toContain("0 missing");
-    expect(html).toContain("5 tutors → next step 8");
+    expect(html).toContain("Roster: 5 tutors.");
     expect(html).toContain("Last nightly evaluation 2026-10-05: Blocked: critical error.");
     expect(html).toContain("Misses: 26.");
     expect(render({ review: { ...reviewFixture(), gate: { ...reviewFixture().gate, lastDaily: null } } })).toContain("No nightly evaluation yet.");
@@ -114,6 +114,16 @@ describe("SystemDetails", () => {
     expect(html).not.toContain("Acknowledge<");
     expect(html).toContain("Review job: succeeded · started 6 Oct, 15:27 · nightly gate not recorded yet (activity_mirror_stale");
     expect(render({ review: { ...review, incidents: [], lastRun: null } })).toContain("Review job: has not run yet");
+  });
+
+  it("says whether every online tutor is on the roster, and names the ones who are not", () => {
+    const review = reviewFixture();
+    expect(render({ review })).toContain("Roster: 5 tutors. Every tutor with an online class in the last 14 days is on it.");
+    const html = render({ review: { ...review, gate: { ...review.gate, uncoveredTutors: [
+      { wiseUserId: "6a0000000000000000000001", teacherName: "New (Hire) Tutor Online", classes: 4 },
+      { wiseUserId: "6a0000000000000000000002", teacherName: null, classes: 1 },
+    ] } } });
+    expect(html).toContain("Not on it, with online classes in the last 14 days: New (Hire) Tutor Online (4), 6a0000000000000000000002 (1). Add them to the roster.");
   });
 
   it("leaves out what the review data feeds when it is unavailable, and keeps the rest", () => {

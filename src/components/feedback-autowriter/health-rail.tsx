@@ -13,7 +13,7 @@ import { autowriterChartColors } from "./chart-palette";
 import { dayMonth, percent, threshold } from "./format";
 
 // ----------------------------------------------------------------------------
-// The health rail: the expansion gate as one sentence, accuracy and coverage
+// The health rail: the accuracy gate as one sentence, accuracy and coverage
 // over the gate's 14 days, and where today's classes stand.
 // ----------------------------------------------------------------------------
 
@@ -36,13 +36,13 @@ const GATE_STATUS_SHORT: Record<Gate["status"], string> = {
   blocked_critical: "Blocked",
 };
 
-/** What the status means for adding tutors. */
+/** What the status means. Every online tutor is on the roster (cohort 5), so the gate is an accuracy bar, not a roster step. */
 const GATE_MEANING: Record<Gate["status"], string> = {
-  pass: "Expansion can go ahead once you confirm it.",
-  head_start: "The next tutors can start their head start. Do not add them yet.",
-  below_head_start: "Keep the current pilot running; no head start for the next tutors yet.",
+  pass: "Accuracy meets the bar.",
+  head_start: "Accuracy is close to the bar; keep reviewing posts.",
+  below_head_start: "Accuracy is below the bar; keep reviewing posts.",
   insufficient_data: "The gate can say nothing until posts of the window are reviewed.",
-  blocked_critical: "Keep the current pilot running; do not add tutors yet.",
+  blocked_critical: "A critical error blocks the gate; keep reviewing posts.",
 };
 
 const GATE_TONE: Record<Gate["status"], { card: string; tone: Tone; rule: string }> = {
@@ -102,7 +102,7 @@ function GateCard({ gate }: { gate: Gate }) {
     <div className={cn("rounded-[7px] border p-3.5", tone.card)} data-gate-status={gate.status}>
       <div className={cn("flex items-center gap-[7px] text-[11px] font-semibold uppercase tracking-[0.04em]", TONE_TEXT[tone.tone])}>
         <Shield aria-hidden className="size-4" strokeWidth={1.6} />
-        Expansion gate · {GATE_STATUS_SHORT[gate.status]}
+        Accuracy gate · {GATE_STATUS_SHORT[gate.status]}
       </div>
       <h3 className="mt-2.5 text-base font-semibold tracking-[-0.03em]">{headline}</h3>
       <p className="mt-1.5 text-[11px] leading-[1.6] text-foreground/60">{detail ? `${detail} ` : ""}{GATE_MEANING[gate.status]}</p>

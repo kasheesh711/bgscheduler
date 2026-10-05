@@ -115,8 +115,11 @@ function GateInFull({ review }: { review: AutowriterReview }) {
               : ". No nightly evaluation yet."}
           </p>
           <p>
-            Roster: {gate.currentTutors} tutors → next step {gate.nextExpansionSize} (+50%, rounded up) once the gate passes and
-            you confirm. A lower bound of {threshold(gate.thresholds.headStartLowerBound)} starts the head start for the next tutors.
+            Roster: {gate.currentTutors} tutors.{" "}
+            {gate.uncoveredTutors.length === 0
+              ? `Every tutor with an online class in the last ${gate.uncoveredTutorDays} days is on it.`
+              : `Not on it, with online classes in the last ${gate.uncoveredTutorDays} days: ${gate.uncoveredTutors
+                .map((tutor) => `${tutor.teacherName ?? tutor.wiseUserId} (${tutor.classes})`).join(", ")}. Add them to the roster.`}
           </p>
           <p>
             Misses: {misses}. Each class is judged by the mode and its tutor&apos;s switch during its own posting window.
