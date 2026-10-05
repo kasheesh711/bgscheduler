@@ -605,7 +605,7 @@ export async function retryHeldSession(db: Database, wiseSessionId: string, inpu
     metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'genericErrors' - 'writerErrors' - 'judgeErrors' - 'judgeUnreached'
       - 'judgeUnreachedCause' - 'judgeFailingSince' - 'recordingShortSeenAt' - 'judge'
       - 'draftEvidence' - 'pipeline' - 'transcript' - 'handover' - 'summaryAtHandover' - 'summaryFallback' - 'sonioxFailure'
-      - 'writerFailure' - 'sonioxRetainUntil' - 'triagedAt')
+      - 'writerFailure' - 'sonioxRetainUntil' - 'triagedAt' - 'summaryOnlyHeld')
       || ${JSON.stringify({ retriedBy: input.actor })}::jsonb
       || jsonb_build_object('retriedAt', now()::text, 'retriedFrom', ${S.state}::text)`,
     alertsSent: sql`${S.alertsSent} - 'held' - 'expired'`,

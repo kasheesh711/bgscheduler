@@ -30,6 +30,7 @@ import { getDb } from "@/lib/db";
 import { assignModelArms } from "@/lib/feedback-autowriter/ab";
 import {
   autowriterAlertEmails,
+  autowriterHoldSummaryOnly,
   autowriterTranscriptFirst,
   autowriterTranscriptsEnabled,
   openRouterApiKey,
@@ -122,6 +123,8 @@ function cliDeps(budgetMs: number): AutowriterDeps {
     soniox: sonioxApiKey() ? createSonioxClient(sonioxApiKey()!) : null,
     // Same switch as production (`FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST`); acts only with the second pass.
     transcriptFirst: autowriterTranscriptFirst(),
+    // Same switch as production (`FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY`).
+    holdSummaryOnly: autowriterHoldSummaryOnly(),
   };
 }
 

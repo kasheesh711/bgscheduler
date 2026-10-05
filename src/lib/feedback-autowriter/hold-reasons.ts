@@ -72,6 +72,8 @@ const HOLD_REASONS: ReadonlyArray<{
 }> = [
   // Back on the summary after a transcript-first fallback, and the summary is mostly Thai.
   { match: /^thai_summary_no_transcript$/u, category: "validation", label: "The summary is mostly Thai and there is no transcript to write from" },
+  // `FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY`: only Wise's summary to write from, so a person writes it.
+  { match: /^summary_only_held$/u, category: "validation", label: "Only Wise's summary to write from, which is held for a person" },
 
   // Billing (`billing.ts`), the most specific first.
   { match: /^billing:auto_status_missing$/u, category: "billing_or_form", label: "Wise's auto-submission has no class status" },

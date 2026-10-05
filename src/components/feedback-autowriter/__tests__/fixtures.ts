@@ -132,6 +132,7 @@ export function dashboardFixture(overrides: Partial<AutowriterDashboard> = {}): 
       fallbackWriter: { model: "openai/gpt-6-luna", effort: "max" },
       judge: { model: "z-ai/glm-5.3-flash", efforts: ["medium", "high"] },
       transcriptFirst: true,
+      holdSummaryOnly: false,
       secondPass: true,
       promptVersion: 5,
       judgeVersion: 5,

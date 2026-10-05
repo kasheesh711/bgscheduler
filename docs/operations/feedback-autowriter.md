@@ -87,6 +87,14 @@ Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowrite
 
 Outer gates needing a redeploy: `FEEDBACK_AUTOWRITER_ENABLED`, `WISE_WEBHOOKS_ENABLED`. Preview deployments never POST.
 
+`FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY=true` (needs a redeploy; owner, 5 Oct 2026) holds every class that would be
+written from Wise's AI summary alone, before any model call: reason `summary_only_held`, a normal hold alert, a person
+writes it. With transcript first on, that is only a class that fell back from the transcript (no recording in 3 h,
+speakers unclear, several parts, Soniox or writer failures). Why: audited summary-only posts had a real error 5 times
+in 7, even with left-out homework not counted, and the nightly correction cannot repair them (its judges read the same
+summary). Each held class is a coverage miss. Turn it off once Zoom captions reach the writer and the judges. The
+system line shows "Summary-only drafts: held" while it is on.
+
 Which switch in an incident: `--pause` (or mode `off`) stops all drafting and posting at once and **keeps
 reconciling** POSTs already made, emailing their alerts. `FEEDBACK_AUTOWRITER_ENABLED=false` stops everything,
 reconciliation included — rows in `posting`/`awaiting_event` then wait, visible on the dashboard, until it is
