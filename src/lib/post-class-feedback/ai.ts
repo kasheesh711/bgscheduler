@@ -60,7 +60,7 @@ async function callQualityModel(input: {
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
 
   const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
+    method: "POST", signal: AbortSignal.timeout(30_000),
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",

@@ -856,12 +856,14 @@ verbs (`route.ts:17`), so operator reruns persist as cron-triggered. A session-a
 can come from the workspace buttons (unaudited) or the Data Health job (audited); the ledger does not
 distinguish them.
 
-**OPS-13 — Error detail is discarded for six post-class routes.** `sync-post-class-feedback/route.ts:42`,
+**OPS-13 — Error detail is discarded for six post-class routes.** `sync-post-class-feedback` (via the
+shared tick, `post-class-feedback/collection-tick.ts:109-110`),
 `post-class-feedback-backfill/route.ts:75-78`, `payout-accrual/route.ts:33-37`, both reminders and the
 admin digest return fixed generic 500 strings, so `cron_invocations.errorSummary` carries no
-diagnostic detail. `sync-leave-requests`, `sync-competitor-intelligence`, `cron-watchdog`,
-`line-credit-digest`, `line-backlog-recovery` and `progress-tests/admin-digest` all preserve the real
-message. *Deliberate information-hiding, or an inconsistency to close?*
+diagnostic detail. The collection tick now logs the failure's error class (never its message), but
+the response and the audit row stay generic. `sync-leave-requests`, `sync-competitor-intelligence`,
+`cron-watchdog`, `line-credit-digest`, `line-backlog-recovery` and `progress-tests/admin-digest` all
+preserve the real message. *Deliberate information-hiding, or an inconsistency to close?*
 
 **OPS-14 — Stale-running cutoffs vs the function ceiling.** The Wise sync cutoff is 20 minutes
 (`run-wise-sync.ts:10`) against `maxDuration = 800` (~13.3 min), so a sync cannot legitimately outlive

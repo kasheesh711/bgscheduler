@@ -279,7 +279,7 @@ export async function runPostClassAutoApprovalSweep(
 /**
  * The safety-restoring half of the sweep, with no approve leg: reopen
  * unproven approvals, then waive deductions on no-longer-eligible sessions.
- * Runs on every collection tick (sync-post-class-feedback route) so a class
+ * Runs on every collection tick (collection-tick.ts) so a class
  * cancelled in Wise clears its own review item within a sync cycle, without
  * any payout pass involved.
  */
