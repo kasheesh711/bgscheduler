@@ -2446,12 +2446,18 @@ describe("transcript first (Postgres + fakes)", () => {
 
     // Transcript first off but the second pass on: the class goes to the transcript instead of being held.
     await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
-    await seedRow({});
+    await seedRow({
+      arm: "sol", fields: { topics: "t", performance: "p", improvement: "i", homework: "" } as never, fieldsSha256: "abc",
+      metadata: { judge: { faithful: true }, draftEvidence: "summary", pipeline: { arm: "sol" } },
+    });
     const handModel = fakeModel();
     await processSession(firstDeps(fakeWise().ops, fakeSoniox().client,
       { holdSummaryOnly: true, transcriptFirst: false, callModel: handModel.callModel as never }), cron);
     expect(handModel.calls).toEqual([]);
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ evidence: "transcript", metadata: { handover: "summary_only" } });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+      evidence: "transcript", arm: null, fields: null, fieldsSha256: null,
+      metadata: { handover: "summary_only", judge: null, draftEvidence: null, pipeline: null },
+    });
   });
 
   it("drops a summary draft kept on the row when it holds a class as summary-only, so no one is shown it to paste", async () => {

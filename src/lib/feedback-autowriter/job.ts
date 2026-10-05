@@ -398,13 +398,16 @@ async function handOverToTranscript(
   metadata: Record<string, unknown> = {},
   /** When to look again: the usual recording recheck unless given (0 = due now). */
   retryInMs: number = AUTOWRITER_RECORDING_RECHECK_MS,
+  /** Drop any summary draft kept on the row, so a later hold on the transcript route shows none. */
+  clearDraft = false,
 ): Promise<ProcessOutcome> {
   await release({
     state: "awaiting_recording",
     evidence: "transcript",
     reason,
     retryInMs,
-    metadata: { handover: reason, ...metadata },
+    ...(clearDraft ? { arm: null, fields: null, fieldsSha256: null, billing: null } : {}),
+    metadata: { handover: reason, ...(clearDraft ? { judge: null, draftEvidence: null, pipeline: null } : {}), ...metadata },
   });
   return out("awaiting_recording", reason);
 }
@@ -681,7 +684,7 @@ async function processLeased(deps: AutowriterDeps, input: {
   if (deps.holdSummaryOnly ?? autowriterHoldSummaryOnly()) {
     if (mayHandOver) {
       const recording = recordingForTranscription(detail);
-      return handOverToTranscript(release, out, "summary_only", {}, recording.ok || recording.reason === "recording_multiple_parts" ? 0 : recordingRecheckMs(detail, now));
+      return handOverToTranscript(release, out, "summary_only", {}, recording.ok || recording.reason === "recording_multiple_parts" ? 0 : recordingRecheckMs(detail, now), true);
     }
     await release({
       state: "held", reason: "summary_only_held", alertKind: "held",
