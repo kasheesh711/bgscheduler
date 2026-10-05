@@ -27,6 +27,9 @@ describe("buildSystemStatus", () => {
     // Transcript first acts only while the second pass is on.
     expect(buildSystemStatus({ FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST: "true" }).transcriptFirst).toBe(false);
     expect(buildSystemStatus({ ...secondPass, FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST: "true" })).toMatchObject({ secondPass: true, transcriptFirst: true });
+    // Holding summary-only drafts does not depend on the second pass.
+    expect(buildSystemStatus({}).holdSummaryOnly).toBe(false);
+    expect(buildSystemStatus({ FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY: "true" }).holdSummaryOnly).toBe(true);
   });
 
   it("names the commit that is running: the deploy's, else a local checkout's, else none", () => {

@@ -42,6 +42,7 @@ import {
   AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS,
   AUTOWRITER_ZOOM_TRANSCRIPT_RECHECK_MS,
   AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS,
+  autowriterHoldSummaryOnly,
 } from "./config";
 import { JUDGE_PROMPT_VERSION, passingStoredVerdict, type StoredJudgeVerdict } from "./judge";
 import { FUNCTION_BUDGET_EXHAUSTED, runWritingPipeline, type PipelineResult, type RateLimitRetries } from "./pipeline";
@@ -138,6 +139,12 @@ export interface AutowriterDeps {
    * and `soniox`).
    */
   transcriptFirst?: boolean;
+  /**
+   * Hold summary-only drafts (`FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY`): a class about to be written from Wise's summary
+   * goes to the transcript pass when it may, otherwise it is held for a person (`summary_only_held`) before any model
+   * call. Unset: read from the environment, so a deps builder that forgets it still fails closed.
+   */
+  holdSummaryOnly?: boolean;
   /** Fetches Zoom's WEBVTT (tests inject a fake). */
   fetchText?: (url: string) => Promise<string>;
   now?: () => Date;
@@ -667,6 +674,21 @@ async function processLeased(deps: AutowriterDeps, input: {
       });
       return out("held", "thai_summary_no_transcript");
     }
+  }
+  // Owner, 5 Oct 2026: while the switch is on, nothing is written from the summary alone. The transcript pass takes
+  // the class when it may; otherwise a person writes it, and any draft kept on the row is dropped so nobody is shown
+  // summary-only text to paste.
+  if (deps.holdSummaryOnly ?? autowriterHoldSummaryOnly()) {
+    if (mayHandOver) {
+      const recording = recordingForTranscription(detail);
+      return handOverToTranscript(release, out, "summary_only", {}, recording.ok || recording.reason === "recording_multiple_parts" ? 0 : recordingRecheckMs(detail, now));
+    }
+    await release({
+      state: "held", reason: "summary_only_held", alertKind: "held",
+      arm: null, fields: null, fieldsSha256: null, billing: null,
+      metadata: { judge: null, draftEvidence: null, pipeline: null, summaryOnlyHeld: { fellBack, at: now.toISOString() } },
+    });
+    return out("held", "summary_only_held");
   }
   if (!deps.apiKey) {
     await release({ state: "pending", reason: "infra:OPENROUTER_API_KEY missing", retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true });
