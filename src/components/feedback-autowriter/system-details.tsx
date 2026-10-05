@@ -116,7 +116,9 @@ function GateInFull({ review }: { review: AutowriterReview }) {
           </p>
           <p>
             Roster: {gate.currentTutors} tutors.{" "}
-            {gate.uncoveredTutors.length === 0
+            {gate.uncoveredTutors === null
+              ? "Could not check for online tutors missing from it."
+              : gate.uncoveredTutors.length === 0
               ? `Every tutor with an online class in the last ${gate.uncoveredTutorDays} days is on it.`
               : `Not on it, with online classes in the last ${gate.uncoveredTutorDays} days: ${gate.uncoveredTutors
                 .map((tutor) => `${tutor.teacherName ?? tutor.wiseUserId} (${tutor.classes})`).join(", ")}. Add them to the roster.`}

@@ -19,6 +19,7 @@ describe("autowriter roster", () => {
       const accounts = AUTOWRITER_ROSTER.filter((account) => account.canonicalKey === tutor.canonicalKey);
       expect(new Set(accounts.map((account) => JSON.stringify(account.tutorNames))).size).toBe(1);
       expect(new Set(accounts.map((account) => account.writer ?? null)).size).toBe(1);
+      expect(new Set(accounts.map((account) => JSON.stringify(account.selfNames ?? []))).size).toBe(1);
     }
   });
 
@@ -54,6 +55,11 @@ describe("autowriter roster", () => {
     // Mek-Sila's main account spells the surname differently; both spellings are redacted.
     expect(AUTOWRITER_ROSTER.find((account) => account.canonicalKey === "Mek-Sila")?.tutorNames)
       .toEqual(["Sila Phonak", "Sila Phonrak", "Mek-Sila"]);
+    // A nickname kept out of redaction is still the tutor when they join their own class under it.
+    const selfNames = (key: string) => AUTOWRITER_ROSTER.find((account) => account.canonicalKey === key)?.selfNames;
+    expect(["Shop", "Win", "Sunday", "Key", "Art", "Petch-Than", "Pakgad"].map(selfNames)).toEqual([
+      ["Shop"], ["Win"], ["Sunday"], ["Key"], ["Art", "Artemio Jr. Padilla"], ["Petch-Than"], ["Supatcha Rod-em"],
+    ]);
   });
 
   it("redacts no ordinary lesson word, though every word of each name variant is redacted", () => {

@@ -73,7 +73,7 @@ export function gateSentence(gate: AutowriterReview["gate"]): string {
         ? `Head start: lower bound ${measured(gate.wilsonLower)}, needs ${bar(gate.thresholds.passLowerBound)}.`
         : `Head start: lower bound ${measured(gate.wilsonLower)}; the gate still waits for ${waitingFor(gate)}.`;
     case "pass":
-      return gate.uncoveredTutors.length > 0
+      return gate.uncoveredTutors && gate.uncoveredTutors.length > 0
         ? `Gate passed; ${count(gate.uncoveredTutors.length, "online tutor")} not on the roster yet.`
         : "Gate passed.";
   }

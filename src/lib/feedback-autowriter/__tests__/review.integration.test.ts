@@ -1226,6 +1226,7 @@ describe("loadUncoveredTutors", () => {
         session(active.id, ROSTER, "Live Session - English", day(1)),
         session(active.id, OTHER, "In-Person Session - Physics", day(1)),
         session(active.id, OTHER, "Live Session (Cancelled) - Physics", day(1)),
+        { ...session(active.id, OTHER, "Live Session - Physics", day(1)), meetingStatus: "CANCELLED" },
         session(active.id, OTHER, "Live Session - Physics", day(UNCOVERED_TUTOR_DAYS + 1)),
         session(active.id, OTHER, "Live Session - Physics", day(-1)),
         session(stale.id, OTHER, "Live Session - Physics", day(1)),

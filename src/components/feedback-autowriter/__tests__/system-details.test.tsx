@@ -124,6 +124,8 @@ describe("SystemDetails", () => {
       { wiseUserId: "6a0000000000000000000002", teacherName: null, classes: 1 },
     ] } } });
     expect(html).toContain("Not on it, with online classes in the last 14 days: New (Hire) Tutor Online (4), 6a0000000000000000000002 (1). Add them to the roster.");
+    expect(render({ review: { ...review, gate: { ...review.gate, uncoveredTutors: null } } }))
+      .toContain("Roster: 5 tutors. Could not check for online tutors missing from it.");
   });
 
   it("leaves out what the review data feeds when it is unavailable, and keeps the rest", () => {

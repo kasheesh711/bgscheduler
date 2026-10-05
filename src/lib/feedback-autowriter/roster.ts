@@ -14,6 +14,12 @@ export interface AutowriterTutor {
   tutorNames: readonly string[];
   /** The tutor's first writer; unset means Sol (`writersFor` in config.ts). */
   writer?: "luna";
+  /**
+   * Names the tutor may join their own class under that are kept out of `tutorNames` because a word of them is an
+   * ordinary English word (redaction is word by word). Matched only as a whole name, by `tutorSelf` in session.ts, so
+   * a guest device under the nickname is the tutor, not a student; never redacted.
+   */
+  selfNames?: readonly string[];
 }
 
 export const KEVIN_ONLINE_WISE_USER_ID = "696e2c4343579bbada2340ed";
@@ -347,6 +353,7 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
     displayName: "Phattadon (Eng) Sucharittanonta Online",
     canonicalKey: "Eng",
     tutorNames: ["Phattadon Sucharittanonta"],
+    selfNames: ["Eng"],
     writer: "luna",
   },
   {
@@ -354,6 +361,7 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
     displayName: "Phattadon (Eng) Sucharittanonta",
     canonicalKey: "Eng",
     tutorNames: ["Phattadon Sucharittanonta"],
+    selfNames: ["Eng"],
     writer: "luna",
   },
   {
@@ -397,7 +405,8 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
     canonicalKey: "Amy",
     tutorNames: ["Tavinie Olarnsakul", "Amy"],
     writer: "luna",
-  },  // Added 2026-10-05 (owner decision, cohort 5): every remaining tutor who taught an online class in the 30 days
+  },
+  // Added 2026-10-05 (owner decision, cohort 5): every remaining tutor who taught an online class in the 30 days
   // before, both Wise accounts each, Luna first. Ranked by 1:1 online classes (Tito 17, Petch-Than 12, Praew 12, Shop 12,
   // Tai 8, Menika 6, Fay 6, Pat 6, Punlee 6, Pech 4, Jennie 3, Mek-Sila 3, Pakgad 3, Glai 3, Rew 2, Win 2, Sunday 1,
   // Nithit 1, Key 1, Ayush 1, Art 1). Roster share of online classes: 750/860 (87%) → 860/860. The owner chose this
@@ -405,8 +414,9 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
   // Redaction is a case-insensitive whole-word match on each name AND on every word of it (`knownNameVariants`), so no
   // variant may hold an ordinary English word: the nicknames Shop, Win, Sunday, Key and Art are left out; Petch-Than is
   // listed as "Petch" ("than"); Supatcha's surname Rod-em is left out ("rod", "em"); Art's "Jr." is dropped. Tai and Pat
-  // are those tutors' own first names, redacted with their full names anyway. Mek-Sila's main account spells the
-  // surname "Phonrak", so both spellings are listed.
+  // are those tutors' own first names, redacted with their full names anyway. What is left out stays in `selfNames`, so
+  // a guest device under it is still the tutor. Mek-Sila's main account spells the surname "Phonrak", so both spellings
+  // are listed.
   {
     wiseUserId: "696e2c4343579bbada23427b",
     displayName: "Smit (Tito) Kanjanapas Online",
@@ -426,6 +436,7 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
     displayName: "Thanyawat (Petch-Than) Phattharathitinan Online",
     canonicalKey: "Petch-Than",
     tutorNames: ["Thanyawat Phattharathitinan", "Petch"],
+    selfNames: ["Petch-Than"],
     writer: "luna",
   },
   {
@@ -433,6 +444,7 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
     displayName: "Thanyawat (Petch-Than) Phattharathitinan",
     canonicalKey: "Petch-Than",
     tutorNames: ["Thanyawat Phattharathitinan", "Petch"],
+    selfNames: ["Petch-Than"],
     writer: "luna",
   },
   {
@@ -454,6 +466,7 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
     displayName: "Warit (Shop) Trikasemsak Online",
     canonicalKey: "Shop",
     tutorNames: ["Warit Trikasemsak"],
+    selfNames: ["Shop"],
     writer: "luna",
   },
   {
@@ -461,6 +474,7 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
     displayName: "Warit (Shop) Trikasemsak",
     canonicalKey: "Shop",
     tutorNames: ["Warit Trikasemsak"],
+    selfNames: ["Shop"],
     writer: "luna",
   },
   {
@@ -580,6 +594,7 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
     displayName: "Supatcha (Pakgad) Rod-em Online",
     canonicalKey: "Pakgad",
     tutorNames: ["Supatcha", "Pakgad"],
+    selfNames: ["Supatcha Rod-em"],
     writer: "luna",
   },
   {
@@ -587,6 +602,7 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
     displayName: "Supatcha (Pakgad) Rod-em",
     canonicalKey: "Pakgad",
     tutorNames: ["Supatcha", "Pakgad"],
+    selfNames: ["Supatcha Rod-em"],
     writer: "luna",
   },
   {
@@ -622,6 +638,7 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
     displayName: "Veerawin (Win) Su Online",
     canonicalKey: "Win",
     tutorNames: ["Veerawin Su"],
+    selfNames: ["Win"],
     writer: "luna",
   },
   {
@@ -629,6 +646,7 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
     displayName: "Veerawin (Win) Su",
     canonicalKey: "Win",
     tutorNames: ["Veerawin Su"],
+    selfNames: ["Win"],
     writer: "luna",
   },
   {
@@ -636,6 +654,7 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
     displayName: "Tanachot (Sunday) Phitprom Online",
     canonicalKey: "Sunday",
     tutorNames: ["Tanachot Phitprom"],
+    selfNames: ["Sunday"],
     writer: "luna",
   },
   {
@@ -643,6 +662,7 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
     displayName: "Tanachot (Sunday) Phitprom",
     canonicalKey: "Sunday",
     tutorNames: ["Tanachot Phitprom"],
+    selfNames: ["Sunday"],
     writer: "luna",
   },
   {
@@ -664,6 +684,7 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
     displayName: "Kieran (Key) Wilkinson Online",
     canonicalKey: "Key",
     tutorNames: ["Kieran Wilkinson"],
+    selfNames: ["Key"],
     writer: "luna",
   },
   {
@@ -671,6 +692,7 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
     displayName: "Kieran (Key) Wilkinson",
     canonicalKey: "Key",
     tutorNames: ["Kieran Wilkinson"],
+    selfNames: ["Key"],
     writer: "luna",
   },
   {
@@ -692,6 +714,7 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
     displayName: "Artemio (Art) Jr. Padilla Online",
     canonicalKey: "Art",
     tutorNames: ["Artemio Padilla"],
+    selfNames: ["Art", "Artemio Jr. Padilla"],
     writer: "luna",
   },
   {
@@ -699,6 +722,7 @@ export const AUTOWRITER_ROSTER: readonly AutowriterTutor[] = [
     displayName: "Artemio (Art) Jr. Padilla",
     canonicalKey: "Art",
     tutorNames: ["Artemio Padilla"],
+    selfNames: ["Art", "Artemio Jr. Padilla"],
     writer: "luna",
   },
 ];

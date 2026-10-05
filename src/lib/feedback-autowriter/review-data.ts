@@ -255,8 +255,11 @@ export interface AutowriterReview {
     thresholds: { passLowerBound: number; headStartLowerBound: number; minCoverage: number };
     lastDaily: { date: string; status: GateStatus; wilsonLower: number; createdAt: string } | null;
     currentTutors: number;
-    /** Tutors who taught an online class lately but are not on the roster (`loadUncoveredTutors`): add them. */
-    uncoveredTutors: UncoveredTutor[];
+    /**
+     * Tutors who taught an online class lately but are not on the roster (`loadUncoveredTutors`): add them. Null when
+     * that read failed (it is advisory: it never takes the review page down).
+     */
+    uncoveredTutors: UncoveredTutor[] | null;
     /** The days `uncoveredTutors` looks back (`UNCOVERED_TUTOR_DAYS`). */
     uncoveredTutorDays: number;
     /**
@@ -332,7 +335,7 @@ export interface ReviewSourceRows {
   lastDailyGate: typeof G.$inferSelect | null;
   incidents: ReadonlyArray<typeof I.$inferSelect>;
   lastRun: typeof RUNS.$inferSelect | null;
-  uncoveredTutors: readonly UncoveredTutor[];
+  uncoveredTutors: readonly UncoveredTutor[] | null;
 }
 
 function asFields(value: unknown): FeedbackFieldAnswers {
@@ -567,7 +570,7 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
         createdAt: input.lastDailyGate.createdAt.toISOString(),
       } : null,
       currentTutors: AUTOWRITER_TUTORS.length,
-      uncoveredTutors: [...input.uncoveredTutors],
+      uncoveredTutors: input.uncoveredTutors ? [...input.uncoveredTutors] : null,
       uncoveredTutorDays: UNCOVERED_TUTOR_DAYS,
       blockedUntil: latestCritical ? addDays(latestCritical, GATE_THRESHOLDS.windowDays) : null,
     },
@@ -636,6 +639,7 @@ export async function loadUncoveredTutors(db: Database, now: Date): Promise<Unco
       lt(CC.scheduledStartTime, now),
       sql`${CC.title} ~* ${ONLINE_TITLE_SQL}`,
       sql`${CC.title} !~* '\\(cancel'`,
+      sql`${CC.meetingStatus} !~* 'cancel'`,
     ))
     .groupBy(CC.wiseTeacherUserId);
   return rows
@@ -658,7 +662,11 @@ async function loadAvailableReview(db: Database, now: Date, queueLimit: number):
       flagged: sql<number>`count(*) filter (where ${openFlagSql})`.mapWith(Number),
       all: count(),
     }).from(R).where(and(or(gte(R.bangkokDate, queueSince), requiredUnreviewedSql, openFlagSql), notInPersonReviewSql)),
-    loadUncoveredTutors(db, now),
+    // Advisory: a failed read shows "could not check" instead of failing the review queue with it.
+    loadUncoveredTutors(db, now).catch((error: unknown) => {
+      console.error("[feedback-autowriter] uncovered-tutor read failed", reviewLoadErrorSummary(error));
+      return null;
+    }),
   ]);
   const queueReviews = [...new Map([...flagged, ...unreviewed, ...recent].map((row) => [row.wiseSessionId, row])).values()];
   const ids = [...new Set([...queueReviews, ...windowReviews].map((review) => review.wiseSessionId))];

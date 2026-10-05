@@ -20,7 +20,7 @@ import { dayMonth, percent, threshold } from "./format";
 type Gate = AutowriterReview["gate"];
 
 export const GATE_STATUS_LABEL: Record<Gate["status"], string> = {
-  pass: "Expansion ready",
+  pass: "Passed",
   head_start: "Head start",
   below_head_start: "Below head start",
   insufficient_data: "Not enough reviews yet",
