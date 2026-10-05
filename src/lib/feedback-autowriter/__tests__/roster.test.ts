@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { redactForModel } from "../prompt";
 import { AUTOWRITER_ROSTER, AUTOWRITER_TUTORS, rosterAccountIds, rosterWriterArm } from "../roster";
 
 describe("autowriter roster", () => {
@@ -6,7 +7,7 @@ describe("autowriter roster", () => {
     const ids = AUTOWRITER_ROSTER.map((tutor) => tutor.wiseUserId);
     expect(new Set(ids).size).toBe(ids.length);
     for (const id of ids) expect(id).toMatch(/^[0-9a-f]{24}$/u);
-    expect(AUTOWRITER_TUTORS).toHaveLength(27);
+    expect(AUTOWRITER_TUTORS).toHaveLength(48);
     for (const tutor of AUTOWRITER_TUTORS) {
       expect(tutor.wiseUserIds).toHaveLength(2);
       expect(rosterAccountIds(tutor.canonicalKey)).toEqual(tutor.wiseUserIds);
@@ -44,5 +45,21 @@ describe("autowriter roster", () => {
     expect(AUTOWRITER_ROSTER.find((account) => account.canonicalKey === "A")?.tutorNames).toEqual(["Anavat Siamwala"]);
     // "Eng" is also shorthand for English: redacting it would garble subject names in summaries.
     expect(AUTOWRITER_ROSTER.find((account) => account.canonicalKey === "Eng")?.tutorNames).toEqual(["Phattadon Sucharittanonta"]);
+  });
+
+  it("writes cohort 5 (5 Oct, every remaining online tutor) with Luna first", () => {
+    const added = ["Tito", "Petch-Than", "Praew", "Shop", "Tai", "Menika", "Fay", "Pat", "Punlee", "Pech", "Jennie", "Mek-Sila", "Pakgad", "Glai", "Rew", "Win", "Sunday", "Nithit", "Key", "Ayush", "Art"];
+    expect(added.map(rosterWriterArm)).toEqual(added.map(() => "luna"));
+    for (const key of added) expect(rosterAccountIds(key), key).toHaveLength(2);
+    // Mek-Sila's main account spells the surname differently; both spellings are redacted.
+    expect(AUTOWRITER_ROSTER.find((account) => account.canonicalKey === "Mek-Sila")?.tutorNames)
+      .toEqual(["Sila Phonak", "Sila Phonrak", "Mek-Sila"]);
+  });
+
+  it("redacts no ordinary lesson word, though every word of each name variant is redacted", () => {
+    const tutorNames = [...new Set(AUTOWRITER_ROSTER.flatMap((account) => account.tutorNames))];
+    const lesson = "On Sunday we did a test, then art and Eng Lit: the key idea is to win the shop game rather than "
+      + "roll the rod (em units, Jr. level).";
+    expect(redactForModel(lesson, { studentFullName: "Krit (Tom.Ka) Kaewmanee", tutorNames })).toBe(lesson);
   });
 });

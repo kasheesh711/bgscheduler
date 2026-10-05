@@ -176,6 +176,7 @@ describe("buildAutowriterDashboard", () => {
       "Kevin", "Gift", "Ek", "Peat", "Mimi",
       "Ras", "Celeste", "Taki", "Dome", "Mandy", "Grace", "Mint", "Fluke", "Calvin", "Lukas", "A", "Ohm", "Mookie",
       "Aey", "Mikki", "Sagotty", "Buzz", "Linn", "Eng", "Kavin", "Copter", "Amy",
+      "Tito", "Petch-Than", "Praew", "Shop", "Tai", "Menika", "Fay", "Pat", "Punlee", "Pech", "Jennie", "Mek-Sila", "Pakgad", "Glai", "Rew", "Win", "Sunday", "Nithit", "Key", "Ayush", "Art",
     ]);
     // Only Ek's Online account is switched off (per account, from the CLI): partly on.
     expect(dashboard.tutors.find((tutor) => tutor.tutorKey === "Ek")).toMatchObject({
