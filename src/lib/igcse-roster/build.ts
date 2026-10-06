@@ -126,8 +126,10 @@ const time = (value: Date | string | null) => {
   return Number.isFinite(ms) ? ms : -Infinity;
 };
 
-/** Two teachers who each taught this many (non-cancelled) sessions of one subject in a class are both linked. */
+/** A teacher with at least this many non-cancelled sessions of a subject in a class is always linked. */
 export const CO_TEACHING_MIN_SESSIONS = 3;
+/** The most recent teacher is also linked from this many non-cancelled sessions (a tutor change after their 2nd session). */
+export const LATEST_TEACHER_MIN_SESSIONS = 2;
 
 const isCancelledTitle = (title: string) => /\((?:cancelled|canceled)\)\s*$/i.test(title.trim());
 
@@ -147,8 +149,10 @@ interface SubjectCandidate {
  * Picks the teacher(s) of one subject within one class from its candidate groups:
  *  - cancelled-only teachers are dropped when anyone has non-cancelled sessions;
  *  - an unresolved teacher only counts when no resolved teacher exists;
- *  - the teacher with the most recent session is linked, plus every teacher with
- *    at least CO_TEACHING_MIN_SESSIONS sessions when the latest teacher also has that many.
+ *  - every teacher with at least CO_TEACHING_MIN_SESSIONS sessions is linked;
+ *  - so is the most recent teacher once they have LATEST_TEACHER_MIN_SESSIONS sessions;
+ *  - if that yields nobody, the most recent teacher is linked (new classes, single-session subjects).
+ *    A one-session substitute is therefore ignored whenever an established teacher exists.
  */
 function chooseTeachers(group: SubjectCandidate[]): Array<{ tutorKey: string | null; codes: string[]; title: string }> {
   const byTeacher = new Map<string, { tutorKey: string | null; codes: Set<string>; title: string; sessions: number; liveSessions: number; lastLive: number; lastAny: number }>();
@@ -169,9 +173,9 @@ function chooseTeachers(group: SubjectCandidate[]): Array<{ tutorKey: string | n
 
   teachers.sort((a, b) => b.lastStart - a.lastStart || (a.tutorKey ?? "").localeCompare(b.tutorKey ?? ""));
   const [latest] = teachers;
-  const chosen = latest.liveSessions >= CO_TEACHING_MIN_SESSIONS
-    ? teachers.filter((t) => t === latest || t.liveSessions >= CO_TEACHING_MIN_SESSIONS)
-    : [latest];
+  const chosen = teachers.filter((t) =>
+    t.liveSessions >= CO_TEACHING_MIN_SESSIONS || (t === latest && t.liveSessions >= LATEST_TEACHER_MIN_SESSIONS));
+  if (!chosen.length) chosen.push(latest);
   return chosen.map((t) => ({ tutorKey: t.tutorKey, codes: [...t.codes], title: t.title }));
 }
 

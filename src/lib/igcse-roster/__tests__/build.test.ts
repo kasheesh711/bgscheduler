@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewedSubjectMapping } from "@/lib/tutor-offboarding/workforce/types";
-import { buildIgcseRoster, CO_TEACHING_MIN_SESSIONS, type RosterBuildInput, type RosterSessionRow } from "../build";
+import { buildIgcseRoster, CO_TEACHING_MIN_SESSIONS, LATEST_TEACHER_MIN_SESSIONS, type RosterBuildInput, type RosterSessionRow } from "../build";
 import { isIgcseBand, syllabiForAcademicSubject } from "../subjects";
 
 const IGCSE_BAND = "Y9-11 / G8-10 (Int.)";
@@ -373,13 +373,30 @@ describe("buildIgcseRoster", () => {
       expect(linksOf(one)).toEqual(["u-a:0625"]);
     });
 
-    it("counts sessions across a teacher's title variants (cancelled and live)", () => {
+    it("counts only non-cancelled sessions toward the thresholds", () => {
       const roster = mixed([
-        group("Live Session-Physics", "a", 2, 20), group("Live Session-Physics (Cancelled)", "a", 1, 12),
+        // a: 1 live + 2 cancelled sessions and the latest start; b: 3 live sessions.
+        group("Live Session-Physics", "a", 1, 20), group("Live Session-Physics (Cancelled)", "a", 2, 12),
         group("Live Session-Physics", "b", 3, 10),
       ]);
-      // a has only 2 live sessions, so it is below the threshold: only the latest teacher (a) is linked.
-      expect(linksOf(roster)).toEqual(["u-a:0625"]);
+      expect(linksOf(roster)).toEqual(["u-b:0625"]);
+    });
+
+    it("ignores a late one-session substitute when an established teacher exists", () => {
+      const roster = mixed([group("Live Session-Math", "a", 10, 5), group("Live Session-Math", "c", 1, 25)]);
+      expect(linksOf(roster)).toEqual(["u-a:0580", "u-a:0607"]);
+    });
+
+    it("links a new tutor with two recent sessions alongside the old established tutor", () => {
+      expect(LATEST_TEACHER_MIN_SESSIONS).toBe(2);
+      const roster = mixed([group("Live Session-Math", "a", 10, 5), group("Live Session-Math", "c", 2, 25)]);
+      expect(linksOf(roster)).toEqual(["u-a:0580", "u-a:0607", "u-c:0580", "u-c:0607"]);
+    });
+
+    it("links the only teacher of a brand-new single-session subject", () => {
+      expect(linksOf(mixed([group("Live Session-Physics", "b", 1, 25)]))).toEqual(["u-b:0625"]);
+      // With nobody established, the most recent teacher wins over an older one-session teacher.
+      expect(linksOf(mixed([group("Live Session-Physics", "a", 1, 5), group("Live Session-Physics", "b", 1, 25)]))).toEqual(["u-b:0625"]);
     });
 
     it("does not make a cancelled-only teacher the subject's tutor when another teacher has live sessions", () => {
