@@ -23,6 +23,8 @@ export interface RosterSessionRow {
   wiseTeacherUserId: string | null;
   wiseTeacherId: string | null;
   lastStart: Date | string | null;
+  /** Sessions in this group; defaults to 1. */
+  sessionCount?: number;
 }
 export interface RosterAccountRow {
   wiseTeacherId: string;
@@ -124,6 +126,55 @@ const time = (value: Date | string | null) => {
   return Number.isFinite(ms) ? ms : -Infinity;
 };
 
+/** Two teachers who each taught this many (non-cancelled) sessions of one subject in a class are both linked. */
+export const CO_TEACHING_MIN_SESSIONS = 3;
+
+const isCancelledTitle = (title: string) => /\((?:cancelled|canceled)\)\s*$/i.test(title.trim());
+
+/** One (class, title, teacher) group with its resolved subject. */
+interface SubjectCandidate {
+  subjectKey: string;
+  codes: string[];
+  tutorKey: string | null;
+  title: string;
+  sessions: number;
+  /** Sessions whose title is not "(Cancelled)". */
+  liveSessions: number;
+  lastStart: number;
+}
+
+/**
+ * Picks the teacher(s) of one subject within one class from its candidate groups:
+ *  - cancelled-only teachers are dropped when anyone has non-cancelled sessions;
+ *  - an unresolved teacher only counts when no resolved teacher exists;
+ *  - the teacher with the most recent session is linked, plus every teacher with
+ *    at least CO_TEACHING_MIN_SESSIONS sessions when the latest teacher also has that many.
+ */
+function chooseTeachers(group: SubjectCandidate[]): Array<{ tutorKey: string | null; codes: string[]; title: string }> {
+  const byTeacher = new Map<string, { tutorKey: string | null; codes: Set<string>; title: string; sessions: number; liveSessions: number; lastLive: number; lastAny: number }>();
+  for (const c of group) {
+    const id = c.tutorKey ?? "";
+    const row = byTeacher.get(id) ?? { tutorKey: c.tutorKey, codes: new Set<string>(), title: c.title, sessions: 0, liveSessions: 0, lastLive: -Infinity, lastAny: -Infinity };
+    c.codes.forEach((code) => row.codes.add(code));
+    row.sessions += c.sessions;
+    row.liveSessions += c.liveSessions;
+    row.lastAny = Math.max(row.lastAny, c.lastStart);
+    if (c.liveSessions > 0) row.lastLive = Math.max(row.lastLive, c.lastStart);
+    if (c.liveSessions > 0 && isCancelledTitle(row.title)) row.title = c.title;
+    byTeacher.set(id, row);
+  }
+  let teachers = [...byTeacher.values()].map((t) => ({ ...t, lastStart: t.liveSessions > 0 ? t.lastLive : t.lastAny }));
+  if (teachers.some((t) => t.tutorKey)) teachers = teachers.filter((t) => t.tutorKey);
+  if (teachers.some((t) => t.liveSessions > 0)) teachers = teachers.filter((t) => t.liveSessions > 0);
+
+  teachers.sort((a, b) => b.lastStart - a.lastStart || (a.tutorKey ?? "").localeCompare(b.tutorKey ?? ""));
+  const [latest] = teachers;
+  const chosen = latest.liveSessions >= CO_TEACHING_MIN_SESSIONS
+    ? teachers.filter((t) => t === latest || t.liveSessions >= CO_TEACHING_MIN_SESSIONS)
+    : [latest];
+  return chosen.map((t) => ({ tutorKey: t.tutorKey, codes: [...t.codes], title: t.title }));
+}
+
 /**
  * Pure roster builder: IGCSE class/student/tutor links with bank syllabus codes.
  * One link per (class, student, syllabus). Anything that cannot be linked is
@@ -177,55 +228,74 @@ export function buildIgcseRoster(input: RosterBuildInput, now: Date = new Date()
       continue;
     }
 
-    // Teacher: the one on the class's most recent session that resolves to a tutor.
-    const latestFirst = [...sessions].sort((a, b) => time(b.lastStart) - time(a.lastStart));
-    let tutorKey: string | null = null;
-    for (const session of latestFirst) {
-      const key = [session.wiseTeacherUserId, session.wiseTeacherId]
-        .map((id) => (id ? keyByAccountId.get(id) : undefined)).find(Boolean);
-      if (key) { tutorKey = key; break; }
-    }
-    const tutor = tutorKey ? tutorIdentities.get(tutorKey) : undefined;
-
-    // Academic subject: reviewed mappings first; generic "Science" falls back to the tutor's Wise tags.
-    const syllabi = new Set<string>();
-    for (const title of [...new Set(sessions.map((s) => s.title))].sort()) {
+    // Wise classes here are per student and mix subjects taught by different tutors, so each
+    // (title, teacher) group is resolved on its own: subject from the title, tutor from its teacher.
+    const reported = new Set<string>();
+    const report = (entry: Omit<RosterUnmapped, "classLoaded">) => {
+      const key = JSON.stringify([entry.sessionTitle, entry.wiseStudentId ?? null, entry.reason]);
+      if (reported.has(key)) return;
+      reported.add(key);
+      unmapped.push(entry);
+    };
+    const candidates: SubjectCandidate[] = [];
+    for (const session of [...sessions].sort((a, b) => a.title.localeCompare(b.title))) {
+      const title = session.title;
+      const tutorKey = [session.wiseTeacherUserId, session.wiseTeacherId]
+        .map((id) => (id ? keyByAccountId.get(id) : undefined)).find(Boolean) ?? null;
       const resolution = resolveAcademicSubject({ classId: wiseClassId, sourceValue: title }, input.mappings);
       const resolved = resolution.subject && resolution.completeness === "complete" ? resolution.subject : null;
 
+      let subjectKey: string;
+      let codes: string[];
       if (resolved ? isGenericScienceLabel(resolved) : isGenericScienceLabel(title)) {
+        // Generic "Science": a named science wins, else this group's own teacher's Wise tags.
+        subjectKey = "science";
         const named = namedScienceSyllabi(resolved, title);
-        const codes = named.length
-          ? named
-          : tutorKey ? scienceSyllabiFromTags(tagsByKey.get(tutorKey) ?? []) : [];
+        codes = named.length ? named : tutorKey ? scienceSyllabiFromTags(tagsByKey.get(tutorKey) ?? []) : [];
         if (!codes.length) {
-          unmapped.push({ wiseClassId, className, sessionTitle: title || null, reason: tutorKey ? "science_no_tutor_tag" : "tutor_unresolved" });
-        }
-        codes.forEach((code) => syllabi.add(code));
-        continue;
-      }
-      if (!resolved) {
-        const trial = trialSyllabi(title);
-        if (trial) {
-          trial.forEach((code) => syllabi.add(code));
+          report({ wiseClassId, className, sessionTitle: title || null, reason: tutorKey ? "science_no_tutor_tag" : "tutor_unresolved" });
           continue;
         }
-        unmapped.push({ wiseClassId, className, sessionTitle: title || null, reason: `subject_unresolved:${resolution.reasonCodes[0] ?? "UNKNOWN"}` });
-        continue;
+      } else if (!resolved) {
+        const trial = trialSyllabi(title);
+        if (!trial) {
+          report({ wiseClassId, className, sessionTitle: title || null, reason: `subject_unresolved:${resolution.reasonCodes[0] ?? "UNKNOWN"}` });
+          continue;
+        }
+        codes = trial;
+        subjectKey = trial.join("+");
+      } else {
+        const mapped = syllabiForAcademicSubject(resolved);
+        if (!mapped) {
+          report({ wiseClassId, className, sessionTitle: title, reason: `subject_not_in_bank:${resolved}` });
+          continue;
+        }
+        codes = mapped;
+        subjectKey = mapped.join("+");
       }
-      const codes = syllabiForAcademicSubject(resolved);
-      if (!codes) {
-        unmapped.push({ wiseClassId, className, sessionTitle: title, reason: `subject_not_in_bank:${resolved}` });
-        continue;
-      }
-      codes.forEach((code) => syllabi.add(code));
+      const count = session.sessionCount ?? 1;
+      candidates.push({
+        subjectKey, codes, tutorKey, title,
+        sessions: count,
+        liveSessions: isCancelledTitle(title) ? 0 : count,
+        lastStart: time(session.lastStart),
+      });
     }
-    if (!syllabi.size) continue;
 
-    if (!tutor || "problem" in tutor) {
-      unmapped.push({ wiseClassId, className, sessionTitle: null, reason: tutor ? tutor.problem : "tutor_unresolved" });
-      continue;
+    // Per subject in this class: which teacher(s) actually teach it.
+    const assignments: Array<{ tutor: TutorIdentity; codes: string[] }> = [];
+    const subjectKeys = [...new Set(candidates.map((c) => c.subjectKey))].sort();
+    for (const subjectKey of subjectKeys) {
+      for (const chosen of chooseTeachers(candidates.filter((c) => c.subjectKey === subjectKey))) {
+        const tutor = chosen.tutorKey ? tutorIdentities.get(chosen.tutorKey) : undefined;
+        if (!tutor || "problem" in tutor) {
+          report({ wiseClassId, className, sessionTitle: chosen.title || null, reason: tutor ? tutor.problem : "tutor_unresolved" });
+          continue;
+        }
+        assignments.push({ tutor, codes: chosen.codes });
+      }
     }
+    if (!assignments.length) continue;
 
     for (const wiseStudentId of [...klass.studentIds].sort()) {
       const student = studentById.get(wiseStudentId);
@@ -239,9 +309,14 @@ export function buildIgcseRoster(input: RosterBuildInput, now: Date = new Date()
         continue;
       }
       usedStudents.set(wiseStudentId, { wiseStudentId, email, name: student.studentName.trim() });
-      for (const syllabus of [...syllabi].sort()) {
-        links.push({ wiseClassId, className, tutorWiseUserId: tutor.wiseUserId, tutorEmail: tutor.email, studentWiseId: wiseStudentId, studentEmail: email, syllabus });
-        tutorSyllabi.set(tutor.key, new Set([...(tutorSyllabi.get(tutor.key) ?? []), syllabus]));
+      const seen = new Set<string>();
+      for (const { tutor, codes } of assignments) {
+        for (const syllabus of [...codes].sort()) {
+          if (seen.has(`${tutor.key}|${syllabus}`)) continue;
+          seen.add(`${tutor.key}|${syllabus}`);
+          links.push({ wiseClassId, className, tutorWiseUserId: tutor.wiseUserId, tutorEmail: tutor.email, studentWiseId: wiseStudentId, studentEmail: email, syllabus });
+          tutorSyllabi.set(tutor.key, new Set([...(tutorSyllabi.get(tutor.key) ?? []), syllabus]));
+        }
       }
     }
   }

@@ -1,4 +1,4 @@
-import { and, eq, max } from "drizzle-orm";
+import { and, count, eq, max } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import type { RosterBuildInput } from "./build";
@@ -42,6 +42,7 @@ export async function loadIgcseRosterInput(db: Database): Promise<RosterBuildInp
       wiseTeacherUserId: s.creditControlSessions.wiseTeacherUserId,
       wiseTeacherId: s.creditControlSessions.wiseTeacherId,
       lastStart: max(s.creditControlSessions.scheduledStartTime),
+      sessionCount: count(),
     }).from(s.creditControlSessions)
       .where(eq(s.creditControlSessions.snapshotId, snapshot.id))
       .groupBy(

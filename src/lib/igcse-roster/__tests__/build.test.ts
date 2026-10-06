@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewedSubjectMapping } from "@/lib/tutor-offboarding/workforce/types";
-import { buildIgcseRoster, type RosterBuildInput } from "../build";
+import { buildIgcseRoster, CO_TEACHING_MIN_SESSIONS, type RosterBuildInput, type RosterSessionRow } from "../build";
 import { isIgcseBand, syllabiForAcademicSubject } from "../subjects";
 
 const IGCSE_BAND = "Y9-11 / G8-10 (Int.)";
@@ -311,6 +311,95 @@ describe("buildIgcseRoster", () => {
     // c-econ has no link at all.
     expect(roster.unmapped.find((u) => u.wiseClassId === "c-econ")).toMatchObject({ classLoaded: false });
     expect(roster.unmapped.every((u) => typeof u.classLoaded === "boolean")).toBe(true);
+  });
+
+  describe("per-subject tutors in a mixed class", () => {
+    const tutorRows = (key: string, name: string, n: string) => ({
+      account: { wiseTeacherId: `t-${n}`, wiseUserId: `u-${n}`, canonicalKey: key, isOnlineVariant: false, email: null },
+      contact: { canonicalKey: key, displayName: name, primaryEmail: `${n}@example.test`, onsiteEmail: null, onlineEmail: null, active: true },
+    });
+    const rows = ["a", "b", "c"].map((n) => tutorRows(`tutor-${n}`, `Tutor ${n.toUpperCase()}`, n));
+    const group = (title: string, teacher: string | null, sessionCount: number, day: number): RosterSessionRow => ({
+      wiseClassId: "c-mix", title, wiseTeacherUserId: teacher && `u-${teacher}`, wiseTeacherId: teacher && `t-${teacher}`,
+      sessionCount, lastStart: new Date(Date.UTC(2026, 9, day)),
+    });
+    function mixed(sessions: RosterSessionRow[], qualifications: RosterBuildInput["qualifications"] = []) {
+      const titles = [...new Set(sessions.map((x) => x.title))];
+      const subjectOf = (t: string) => (/math/i.test(t) ? "Math" : /physics/i.test(t) ? "Physics" : "Science");
+      return buildIgcseRoster(fixture({
+        packages: [{ wiseClassId: "c-mix", wiseStudentId: "s1", packageName: "Student One", subject: IGCSE_BAND, excludedReason: null }],
+        sessions,
+        accounts: rows.map((r) => r.account),
+        contacts: rows.map((r) => r.contact),
+        mappings: titles.map((t) => mapping("c-mix", t, subjectOf(t))),
+        qualifications,
+      }), NOW);
+    }
+    const linksOf = (r: ReturnType<typeof buildIgcseRoster>) =>
+      r.links.map((l) => `${l.tutorWiseUserId}:${l.syllabus}`).sort();
+
+    it("gives each tutor only the subjects they teach, with science from the science teacher's tags", () => {
+      const roster = mixed([
+        group("Live Session-Science", "b", 4, 5),
+        group("Live Session-Math", "a", 6, 20), // latest session in the class belongs to the maths tutor
+      ], [tag("Physics", "Y9-11", "International", "tutor-a"), tag("Biology", "Y9-11", "International", "tutor-b"), tag("Chemistry", "Y9-11", "International", "tutor-b")]);
+      expect(linksOf(roster)).toEqual(["u-a:0580", "u-a:0607", "u-b:0610", "u-b:0620"]);
+      expect(roster.tutors.map((t) => [t.wiseUserId, t.syllabi])).toEqual([
+        ["u-a", ["0580", "0607"]], ["u-b", ["0610", "0620"]],
+      ]);
+    });
+
+    it("never takes science tags from another subject's teacher", () => {
+      const roster = mixed([
+        group("Live Session-Science", "b", 4, 5),
+        group("Live Session-Math", "a", 6, 20),
+      ], [tag("Biology", "Y9-11", "International", "tutor-a")]);
+      expect(linksOf(roster)).toEqual(["u-a:0580", "u-a:0607"]);
+      expect(roster.unmapped).toContainEqual({
+        wiseClassId: "c-mix", className: "Student One", sessionTitle: "Live Session-Science", reason: "science_no_tutor_tag", classLoaded: true,
+      });
+    });
+
+    it("ignores a substitute with a single, older session", () => {
+      const roster = mixed([group("Live Session-Math", "a", 8, 20), group("Live Session-Math", "c", 1, 3)]);
+      expect(linksOf(roster)).toEqual(["u-a:0580", "u-a:0607"]);
+    });
+
+    it("links both teachers when each has at least the co-teaching threshold", () => {
+      expect(CO_TEACHING_MIN_SESSIONS).toBe(3);
+      const both = mixed([group("Live Session-Physics", "a", CO_TEACHING_MIN_SESSIONS, 20), group("Live Session-Physics", "b", CO_TEACHING_MIN_SESSIONS, 10)]);
+      expect(linksOf(both)).toEqual(["u-a:0625", "u-b:0625"]);
+      const one = mixed([group("Live Session-Physics", "a", CO_TEACHING_MIN_SESSIONS, 20), group("Live Session-Physics", "b", CO_TEACHING_MIN_SESSIONS - 1, 10)]);
+      expect(linksOf(one)).toEqual(["u-a:0625"]);
+    });
+
+    it("counts sessions across a teacher's title variants (cancelled and live)", () => {
+      const roster = mixed([
+        group("Live Session-Physics", "a", 2, 20), group("Live Session-Physics (Cancelled)", "a", 1, 12),
+        group("Live Session-Physics", "b", 3, 10),
+      ]);
+      // a has only 2 live sessions, so it is below the threshold: only the latest teacher (a) is linked.
+      expect(linksOf(roster)).toEqual(["u-a:0625"]);
+    });
+
+    it("does not make a cancelled-only teacher the subject's tutor when another teacher has live sessions", () => {
+      const roster = mixed([
+        group("Live Session-Math", "a", 2, 5),
+        group("Live Session-Math (Cancelled)", "c", 1, 25),
+      ]);
+      expect(linksOf(roster)).toEqual(["u-a:0580", "u-a:0607"]);
+      // Cancelled titles still identify the subject when nobody else teaches it.
+      const only = mixed([group("Live Session-Math (Cancelled)", "c", 1, 25)]);
+      expect(linksOf(only)).toEqual(["u-c:0580", "u-c:0607"]);
+    });
+
+    it("reports a subject whose teacher cannot be resolved against the exact title", () => {
+      const roster = mixed([group("Live Session-Math", "a", 3, 5), group("Live Session-Physics", null, 2, 6)]);
+      expect(linksOf(roster)).toEqual(["u-a:0580", "u-a:0607"]);
+      expect(roster.unmapped).toContainEqual({
+        wiseClassId: "c-mix", className: "Student One", sessionTitle: "Live Session-Physics", reason: "tutor_unresolved", classLoaded: true,
+      });
+    });
   });
 
   it("reports an IGCSE class that has no sessions", () => {
