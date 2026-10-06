@@ -1,8 +1,9 @@
 import { and, eq, gt, isNull, ne, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
-import { classCaptures as captures, classCaptureAssets as assets } from "@/lib/db/schema";
+import { classCaptures as captures, classCaptureAssets as assets, classCaptureJobs as jobs } from "@/lib/db/schema";
 import { CAPTURE_RETENTION_MS, CaptureError, MAX_AUDIO_BYTES, assertCaptureScope, assertCaptureSessionToday, assetInputSchema, createCaptureSchema, patchCaptureSchema, type CaptureAsset, type CaptureScope, type CaptureSession, type CaptureView } from "./model";
+import { automaticCaptureEnabled } from "./automatic-model";
 import type { z } from "zod";
 
 export type StoredCapture = typeof captures.$inferSelect;
@@ -17,12 +18,14 @@ export async function captureForScope(scope: CaptureScope, id: string, db: Datab
   return row;
 }
 export function projectAsset(row: StoredAsset): CaptureAsset {
-  return { id: row.id, kind: row.kind, mime: row.mime, size: row.size, pathname: row.pathname, status: row.status, transcript: row.transcript, error: row.error };
+  return { id: row.id, kind: row.kind, mime: row.mime, size: row.size, pathname: row.pathname, status: row.status, transcript: row.transcript, error: row.error, transcriptSegments: row.transcriptSegments, photoFindings: row.photoFindings, analysisUncertain: row.analysisUncertain };
 }
 export async function captureView(scope: CaptureScope, id: string, db: Database = getDb()): Promise<CaptureView> {
   const row = await captureForScope(scope, id, db);
   const media = await db.select().from(assets).where(and(eq(assets.captureId, id), isNull(assets.discardedAt))).orderBy(assets.createdAt, assets.id);
-  return { id, session: row.session, topic: row.topic, tutorNotes: row.tutorNotes, consent: row.consent,
+  const [job] = automaticCaptureEnabled() ? await db.select().from(jobs).where(eq(jobs.captureId, id)) : [];
+  return { ...(job ? { automatic: { consented: true, revision: job.revision, completedRevision: job.completedRevision, status: job.status,
+    recording: job.recording, expectedUploads: job.expectedUploads, error: job.error, proposal: job.proposal, evidence: job.evidence } } : {}), id, session: row.session, topic: row.topic, tutorNotes: row.tutorNotes, consent: row.consent,
     assets: media.map(projectAsset), draft: row.draft, reviewed: row.reviewed, expiresAt: row.expiresAt.toISOString(), version: row.version };
 }
 export async function createCapture(scope: CaptureScope, raw: z.infer<typeof createCaptureSchema>, session: CaptureSession, db: Database = getDb()) {
@@ -53,15 +56,19 @@ export async function createCapture(scope: CaptureScope, raw: z.infer<typeof cre
 export async function updateCapture(scope: CaptureScope, id: string, raw: z.infer<typeof patchCaptureSchema>, db: Database = getDb()) {
   assertCaptureScope(scope);
   const input = patchCaptureSchema.parse(raw);
-  const current = await captureForScope(scope, id, db);
-  const changedEvidence = current.topic !== input.topic || current.tutorNotes !== input.tutorNotes;
-  const draft = input.resetDraft ? null : input.fields ?? (changedEvidence ? null : current.draft);
-  if (input.reviewed && !draft) throw new CaptureError(400, "Review the feedback fields before marking them checked.");
-  const [updated] = await db.update(captures).set({ topic: input.topic, tutorNotes: input.tutorNotes, draft,
-    reviewed: input.reviewed === true && !!draft, version: sql`${captures.version} + 1` })
-    .where(and(eq(captures.id, id), eq(captures.version, input.version), isNull(captures.deletedAt), gt(captures.expiresAt, new Date()),
-      sql`(${captures.draftLeaseUntil} is null or ${captures.draftLeaseUntil} < now())`)).returning({ id: captures.id });
-  if (!updated) throw new CaptureError(409, "This capture changed or is drafting. Reload before saving.");
+  await withDatabaseTransaction(db, async tx => {
+    await tx.execute(sql`select id from class_captures where id = ${id} for update`);
+    const current = await captureForScope(scope, id, tx);
+    const changedEvidence = current.topic !== input.topic || current.tutorNotes !== input.tutorNotes;
+    const draft = input.resetDraft ? null : input.fields ?? (changedEvidence && !automaticCaptureEnabled() ? null : current.draft);
+    if (input.reviewed && !draft) throw new CaptureError(400, "Review the feedback fields before marking them checked.");
+    const [updated] = await tx.update(captures).set({ topic: input.topic, tutorNotes: input.tutorNotes, draft,
+      reviewed: input.reviewed === true && !!draft, version: sql`${captures.version} + 1` })
+      .where(and(eq(captures.id, id), eq(captures.version, input.version), isNull(captures.deletedAt), gt(captures.expiresAt, new Date()),
+        sql`(${captures.draftLeaseUntil} is null or ${captures.draftLeaseUntil} < now())`)).returning({ id: captures.id });
+    if (!updated) throw new CaptureError(409, "This capture changed or is drafting. Reload before saving.");
+    if (changedEvidence && automaticCaptureEnabled()) await tx.update(jobs).set({ revision: sql`${jobs.revision} + 1`, attempts: 0, status: "waiting", dueAt: new Date(Date.now() + 10000) }).where(eq(jobs.captureId, id));
+  });
 }
 export async function createAsset(scope: CaptureScope, captureId: string, raw: z.infer<typeof assetInputSchema>, db: Database = getDb()): Promise<CaptureAsset> {
   assertCaptureScope(scope);
@@ -86,7 +93,8 @@ export async function createAsset(scope: CaptureScope, captureId: string, raw: z
       if (same.length >= maxCount || (input.kind === "recording" && same.reduce((n, a) => n + a.size, input.size) > MAX_AUDIO_BYTES)) throw new CaptureError(400, "This capture has reached its audio evidence limit.");
     }
     const [row] = await tx.insert(assets).values({ ...input, captureId, pathname: `class-capture/${captureId}/${input.id}` }).returning();
-    await tx.update(captures).set({ draft: null, reviewed: false, version: sql`${captures.version} + 1` }).where(eq(captures.id, captureId));
+    await tx.update(captures).set({ ...(automaticCaptureEnabled() ? {} : { draft: null }), reviewed: false, version: sql`${captures.version} + 1` }).where(eq(captures.id, captureId));
+    if (automaticCaptureEnabled()) await tx.update(jobs).set({ revision: sql`${jobs.revision} + 1`, status: "waiting", attempts: 0, dueAt: new Date(Date.now() + 10000) }).where(eq(jobs.captureId, captureId));
     return projectAsset(row);
   });
 }
@@ -105,14 +113,18 @@ export async function claimTranscription(id: string, db: Database = getDb()) {
 export async function markDeleted(scope: CaptureScope, id: string, db: Database = getDb()) {
   await captureForScope(scope, id, db, true);
   await db.update(captures).set({ deletedAt: new Date(), draft: null, tutorNotes: "", topic: "", reviewed: false, version: sql`${captures.version} + 1` }).where(eq(captures.id, id));
-  await db.update(assets).set({ transcript: null }).where(eq(assets.captureId, id));
+  await db.update(assets).set({ transcript: null, transcriptSegments: null, photoFindings: null }).where(eq(assets.captureId, id));
+  await db.update(jobs).set({ proposal: null, evidence: null, expectedUploads: [], status: "attention", error: null }).where(eq(jobs.captureId, id));
 }
 export async function discardAsset(scope: CaptureScope, captureId: string, assetId: string, db: Database = getDb()) {
   await captureForScope(scope, captureId, db);
   const [asset] = await db.select().from(assets).where(and(eq(assets.id, assetId), eq(assets.captureId, captureId)));
   if (!asset) throw new CaptureError(404, "Evidence not found in this class.");
   await withDatabaseTransaction(db, async tx => {
-    await tx.update(assets).set({ discardedAt: new Date(), transcript: null }).where(eq(assets.id, assetId));
-    await tx.update(captures).set({ draft: null, reviewed: false, cleanupAttemptedAt: null, version: sql`${captures.version} + 1` }).where(eq(captures.id, captureId));
+    await tx.execute(sql`select id from class_captures where id = ${captureId} for update`);
+    await tx.update(assets).set({ discardedAt: new Date(), transcript: null, transcriptSegments: null, photoFindings: null }).where(eq(assets.id, assetId));
+    if (automaticCaptureEnabled()) await tx.update(jobs).set({ revision: sql`${jobs.revision} + 1`, attempts: 0, status: "waiting", dueAt: new Date(Date.now() + 10000),
+      expectedUploads: sql`coalesce((select jsonb_agg(v) from jsonb_array_elements_text(${jobs.expectedUploads}) v where v <> ${assetId}), '[]'::jsonb)` }).where(eq(jobs.captureId, captureId));
+    await tx.update(captures).set({ ...(automaticCaptureEnabled() ? {} : { draft: null }), reviewed: false, cleanupAttemptedAt: null, version: sql`${captures.version} + 1` }).where(eq(captures.id, captureId));
   });
 }

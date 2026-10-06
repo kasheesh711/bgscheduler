@@ -10,7 +10,10 @@ import { formatBytes, formatElapsed, type LocalMedia } from "./client-helpers";
 
 const INITIAL: RecorderSnapshot = { status: "idle", elapsedSeconds: 0, bytes: 0, blob: null, mime: "", reason: null, error: null };
 
-export function RecordingPanel({ captureId, ownerEmail, disabled, recordingLimitReached, remainingRecordingBytes, debriefExists, onFile, onActiveChange }: {
+export function RecordingPanel({ captureId, ownerEmail, disabled, recordingLimitReached, remainingRecordingBytes, debriefExists, onFile, onActiveChange, beforeStart, onDiscard, automatic = false }: {
+  automatic?: boolean;
+  beforeStart?: (id: string) => Promise<void>;
+  onDiscard?: (id: string) => void;
   captureId: string;
   ownerEmail: string;
   disabled: boolean;
@@ -20,6 +23,8 @@ export function RecordingPanel({ captureId, ownerEmail, disabled, recordingLimit
   onFile: (file: LocalMedia) => void;
   onActiveChange: (active: boolean) => void;
 }) {
+  const starting = useRef(false);
+  const [preparing, setPreparing] = useState(false);
   const [snapshot, setSnapshot] = useState(INITIAL);
   const [screenAwake, setScreenAwake] = useState<ScreenAwakeState>("requesting");
   const [kind, setKind] = useState<RecordingKind>("recording");
@@ -64,9 +69,14 @@ export function RecordingPanel({ captureId, ownerEmail, disabled, recordingLimit
     if (mounted.current) setRecoveryWarning("A recovery copy could not be saved. Keep this page open, then download or upload your audio before leaving.");
   }
 
-  function start(nextKind: RecordingKind) {
-    if (!consent || disabled || ["requesting", "recording", "stopping"].includes(recorder.current?.snapshot.status ?? "")) return;
+  async function start(nextKind: RecordingKind) {
+    if (starting.current || !consent || disabled || ["requesting", "recording", "stopping"].includes(recorder.current?.snapshot.status ?? "")) return;
     const id = crypto.randomUUID();
+    starting.current = true; setPreparing(true);
+    try { await beforeStart?.(id); }
+    catch (error) { setRecoveryWarning(error instanceof Error ? error.message : "Could not prepare recording."); starting.current = false; setPreparing(false); onDiscard?.(id); return; }
+    starting.current = false; setPreparing(false);
+    if (!mounted.current) { onDiscard?.(id); return; }
     const name = nextKind === "recording" ? "Class audio" : "Tutor voice debrief";
     const store = recovery.current ??= new LocalRecovery();
     setKind(nextKind);
@@ -82,11 +92,11 @@ export function RecordingPanel({ captureId, ownerEmail, disabled, recordingLimit
           setSnapshot(next);
           callbacks.current.onActiveChange(["requesting", "recording", "stopping"].includes(next.status));
         }
-        if (next.status === "error") void store.remove(ownerEmail, id).catch(warn);
+        if (next.status === "error") { void store.remove(ownerEmail, id).catch(warn); onDiscard?.(id); }
         if (next.status !== "stopped" || delivered) return;
         delivered = true;
-        if (mounted.current) setConsent(false);
-        if (next.reason === "cancelled" || !next.blob?.size) { void store.remove(ownerEmail, id).catch(warn); return; }
+        if (mounted.current && !automatic) setConsent(false);
+        if (next.reason === "cancelled" || !next.blob?.size) { void store.remove(ownerEmail, id).catch(warn); onDiscard?.(id); return; }
         void store.finish(ownerEmail, id).catch(warn);
         if (mounted.current) callbacks.current.onFile({ id, kind: nextKind, name, blob: next.blob, incomplete: next.reason !== "user" && next.reason !== "time-limit" });
       },
@@ -122,14 +132,14 @@ export function RecordingPanel({ captureId, ownerEmail, disabled, recordingLimit
             <input type="checkbox" className="mt-0.5 size-5 shrink-0 accent-sky-700" checked={consent} disabled={disabled} onChange={(event) => setConsent(event.target.checked)} />
             <span>All participants still agree to this recording. Required guardian permission is in place.</span>
           </label>
-          <Button className="min-h-12 w-full text-base" onClick={() => start("recording")} disabled={disabled || !consent || recordingLimitReached}><Mic />Start class recording</Button>
-          <Button variant="outline" className="min-h-11 w-full" onClick={() => start("debrief")} disabled={disabled || !consent || debriefExists}><Mic />Record a tutor debrief <span className="text-xs opacity-65">· 3 min</span></Button>
+          <Button className="min-h-12 w-full text-base" onClick={() => start("recording")} disabled={preparing || disabled || !consent || recordingLimitReached}><Mic />Start class recording</Button>
+          <Button variant="outline" className="min-h-11 w-full" onClick={() => start("debrief")} disabled={preparing || disabled || !consent || debriefExists}><Mic />Record a tutor debrief <span className="text-xs opacity-65">· 3 min</span></Button>
           <p className="text-xs leading-5 text-muted-foreground">{formatBytes(remainingRecordingBytes)} remaining across this class’s audio sections. Recording stops at the remaining limit.</p>
           {recordingLimitReached && <p className="text-xs text-muted-foreground">The class audio limit has been reached.</p>}
         </div>
       )}
       <div className="mt-5 flex gap-2 text-xs leading-5 text-muted-foreground"><Smartphone className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><p>The app requests screen stay-awake during recording. Keep this page open and your screen unlocked. Manually locking, switching apps or a call can still stop recording. Background recording is not supported; use Voice Memos for a locked screen.</p></div>
-      <div className="mt-3 flex gap-2 text-xs leading-5 text-muted-foreground"><ShieldCheck className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><p>Audio stays on this device until you choose Upload. Local recovery is best effort, on this browser and device for up to 24 hours.</p></div>
+      <div className="mt-3 flex gap-2 text-xs leading-5 text-muted-foreground"><ShieldCheck className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><p>{automatic ? "Audio uploads and processes automatically when you stop." : "Audio stays on this device until you choose Upload."} Local recovery is best effort, on this browser and device for up to 24 hours.</p></div>
       {(snapshot.error || stopReasonMessage(snapshot.reason) || recoveryWarning) && <p role="alert" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-5 text-amber-900 dark:bg-amber-950 dark:text-amber-100">{snapshot.error || stopReasonMessage(snapshot.reason) || recoveryWarning}</p>}
       {recoveryWarning && (snapshot.error || stopReasonMessage(snapshot.reason)) && <p role="alert" className="mt-3 text-sm text-amber-800">{recoveryWarning}</p>}
       {active && <div className="fixed right-4 bottom-4 left-4 z-40 mx-auto flex max-w-md items-center gap-3 rounded-2xl border border-red-200 bg-background px-4 py-3 shadow-xl" aria-label="Persistent recording controls"><span className="size-2.5 shrink-0 rounded-full bg-red-600 motion-safe:animate-pulse" aria-hidden="true" /><div className="min-w-0 flex-1"><p className="text-sm font-semibold text-red-800 dark:text-red-300">{snapshot.status === "requesting" ? "Microphone permission" : snapshot.status === "stopping" ? "Saving audio" : "Recording"}</p><p className="font-mono text-xs tabular-nums text-muted-foreground">{formatElapsed(snapshot.elapsedSeconds)}</p></div><Button className="min-h-12 bg-red-700 px-4 text-white hover:bg-red-800" disabled={snapshot.status === "stopping"} onClick={() => recorder.current?.stop("user")}><CircleStop />Stop recording now</Button></div>}

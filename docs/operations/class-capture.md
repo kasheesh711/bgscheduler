@@ -123,3 +123,37 @@ Still unverified: real iOS/Android permissions, calls, lockscreen and OS termina
 ### Completed sessions after snapshot rotation
 
 When both active schedules omit a completed class, Class Capture can use its latest retained Wise student-snapshot row within the existing two-hour freshness window. It requires an independently fresh, exact post-class completion record and matching tutor, single-student roster, class, times and onsite evidence. Any active or newer retained row takes priority, including conflicting or cancelled records. Snapshot IDs are bounded before scanning session rows. Today-only access remains in force.
+
+## Automatic feedback workflow (separate rollout)
+
+Implemented behind `CLASS_CAPTURE_AUTOMATIC_WORKFLOW=true`; omitted/false retains the legacy UI and writer. Apply additive migration **0111_class_capture_automatic** before deploying this revision, even while the workflow flag is off. The asset projections and retention cleanup use its columns independently of the UI flag. Do not remove its tables/columns during rollback.
+
+The new flow is choose class → add audio/photos or stop recording → automatic processing → edit → **Approve & copy** → manual Wise submission. The four fields contain concise English feedback. Exact quotations, source references, timestamps and clarification questions live separately in **Evidence and questions**. Unsupported fields stay empty. Typed observations are absent from the new screen; prior saved observations remain usable evidence.
+
+- Audio selection/recording stop initiates upload and transcription. Soniox anonymous speaker IDs and timestamps remain attached to transcript turns; they do not establish teacher/student identities by themselves.
+- Each selected photo gets an immediate private thumbnail. Preparation runs serially to bound decoded memory; upload copies have a maximum 2,560-pixel long edge and JPEG quality 0.85 where beneficial. Originals on the device are unchanged. Three photos upload concurrently; the gallery stays 320px high regardless of count. Audio uses a separate single upload slot.
+- Two photos per capture are analysed concurrently. Private bytes go inline through the existing OpenRouter writer's ZDR route. Findings separate questions, visible work, markings and uncertainty. Public model metadata checked on October 3 lists image input and structured output for `openai/gpt-6.1-sol`; a successful private vision call still needs verification in the rollout environment.
+- A persisted upload manifest and recording state hold drafting until the selected batch is complete. A ten-second settle interval follows the last material finishing processing, completed upload or recording stop. Adding material changes the evidence revision. Existing drafts remain visible; regenerated feedback appears as a proposal and requires **Use updated draft** to replace edits.
+- Edits autosave after 800ms. Version conflicts preserve local edits and require comparison if another tab changed the feedback. Approve & copy saves the reviewed text and requests the clipboard within the same tap for Safari. Nothing submits to Wise automatically.
+- Existing captures require a new explicit acknowledgement before automatic processing or image analysis. Fresh automatic captures include that acknowledgement in initial consent. The per-photo permission continues to exclude faces and unrelated personal information.
+
+### Worker and recovery
+
+`POST /api/class-capture/{id}/process` uses the normal current tutor scope, same-origin/CSRF checks and session validation. Upload finalization starts best-effort work with Next.js `after()`. `GET /api/internal/class-capture/process` runs each minute with the standard cron secret and invocation audit. It is excluded from Data Health's manual dispatch. A capture-row job lease prevents concurrent paid processing by the browser and cron. Background work rechecks the pilot, tutor binding, admin grant version, session assignment and expiry before processing.
+
+`class_capture_jobs` stores consent, evidence/completed revisions, upload IDs, recording state, due/settle times, leases, attempt count, uncertainty, current evidence and a separate proposal. Assets store grouped transcript segments, photo findings, and a pre-request image-analysis marker. Known speech job IDs are polled again safely. Confirmed throttling is retried within a bounded attempt count. An expired writer lease or uncertain paid result is held for operator review; retry controls cannot blindly repeat it. New evidence does not clear an uncertain writer outcome. Operators must investigate the original provider request before changing that state.
+
+If the browser disappears after Blob upload but before finalization, the worker checks pending intents older than 30 seconds and validates any complete private object. Incomplete uploads still require the device/page and local recovery. Uploaded work continues on the server while the phone sleeps. Browser recording itself still requires an unlocked screen. Deletion/expiry clears new findings and draft evidence as well as the original media and transcript.
+
+Older open tabs retain the full-capture finalization response. The new client opts into a per-asset response with `?automatic=1`, then does one consolidated refresh after a batch. Regular status polling remains separate.
+
+### Verification and activation
+
+Run `node scripts/dev/verify-class-capture-automatic.mjs` for the offline real-component browser checks and controlled Chromium upload benchmark. Results and mobile images are in `docs/assets/class-capture/automatic/`. The benchmark uses the same 24 textured worksheet images, a shared emulated 10 Mbps upload connection and 150ms latency. It includes browser compression and actual HTTP transfers to a local fixture, but excludes real Blob validation, AI latency and physical iPhone performance. Unit fixtures check evidence separation, source validation, uncertainty and mixed Thai/English token preservation; they do not prove live model judgment quality.
+
+Before activating the workflow flag:
+
+1. Verify migration 0111 and the minutely cron in the target environment; preserve the existing retention backstop.
+2. Run the private provider flow with approved synthetic audio and worksheets, checking speaker ambiguity, incorrect answers, unclear homework, blank worksheets, marked work and mixed Thai/English audio. Review the generated prose, not only the JSON schema.
+3. On an **actual iPhone**, verify M4A selection, recording stop, 24 photos, thumbnails, upload interruption/reload, sleep after completed uploads, autosave, adding materials during drafting, and Approve & copy. Verify photo legibility at full preview size.
+4. Only declare the workflow ready after those checks. Turn the separate flag off to return to the legacy UI/writer; keep migration 0111, private storage, provider cleanup access and `CLASS_CAPTURE_RETENTION_ENABLED=true` until retention is verified complete. No existing Wise records are rewritten by this rollout.

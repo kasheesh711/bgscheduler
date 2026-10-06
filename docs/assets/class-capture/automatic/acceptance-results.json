@@ -1,0 +1,59 @@
+{
+  "syntheticOnly": true,
+  "providerCalls": 0,
+  "checks": [
+    {
+      "name": "Selected M4A automatically uploads, transcribes and produces a draft",
+      "passed": true
+    },
+    {
+      "name": "Edits autosave and approval copies only feedback",
+      "passed": true
+    },
+    {
+      "name": "24 photos use three concurrent uploads, compact previews and preserve tutor edits",
+      "passed": true
+    },
+    {
+      "name": "A failed upload retries independently and reload retains saved edits",
+      "passed": true
+    },
+    {
+      "name": "Stopping a recording starts upload without another processing click",
+      "passed": true
+    },
+    {
+      "name": "Photo size reduction",
+      "originalBytes": 7139955,
+      "optimizedBytes": 858922,
+      "preparationMs": 226.09999999403954,
+      "modeledImprovementPercent": 85.25866756145027
+    },
+    {
+      "name": "Measured 24-photo browser upload benchmark",
+      "baselineMs": 141878.30000001192,
+      "optimizedMs": 17018.19999998808,
+      "improvementPercent": 88.00507195252082,
+      "connection": "Chromium network emulation: shared 10 Mbps upload, 150 ms latency",
+      "scope": "Actual HTTP uploads to local fixture, includes serial browser image preparation; excludes real Blob validation and AI provider latency. Physical iPhone remains unverified."
+    },
+    {
+      "name": "Image preparation reduces a 12 MP worksheet while keeping a 2560px legible copy",
+      "passed": true
+    }
+  ],
+  "metrics": {
+    "creates": 0,
+    "assetIntents": 27,
+    "uploads": 27,
+    "transcriptions": 2,
+    "drafts": 3,
+    "gets": 65,
+    "patches": 1,
+    "lists": 0
+  },
+  "unverified": [
+    "Physical iPhone",
+    "Live providers and upload storage"
+  ]
+}

@@ -118,6 +118,10 @@
     {
       "path": "/api/internal/feedback-autowriter/atom",
       "schedule": "6,21,36,51 * * * *"
+    },
+    {
+      "path": "/api/internal/class-capture/process",
+      "schedule": "* * * * *"
     }
   ]
 }

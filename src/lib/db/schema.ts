@@ -23,6 +23,7 @@ import {
 import { sql } from "drizzle-orm";
 import type { Week, OfficeNetwork } from "@/lib/tutor-attendance/model";
 import type { WiseTeacher } from "@/lib/wise/types";
+import type { TranscriptSegment, PhotoFindings, DraftProposal, DraftEvidence, AutomaticProgress } from "@/lib/class-capture/automatic-model";
 import type { CaptureConsent, CaptureSession, DraftFields } from "@/lib/class-capture/model";
 
 // Short-lived onsite evidence. No relationship to feedback submission or payroll ledgers.
@@ -56,6 +57,10 @@ export const classCaptureAssets = pgTable("class_capture_assets", {
   pathname: text("pathname").notNull().unique(),
   status: text("status").$type<"pending" | "ready" | "transcribing" | "transcribed" | "failed">().notNull().default("pending"),
   transcript: text("transcript"),
+  transcriptSegments: jsonb("transcript_segments").$type<TranscriptSegment[] | null>(),
+  photoFindings: jsonb("photo_findings").$type<PhotoFindings | null>(),
+  analysisAttemptedAt: timestamp("analysis_attempted_at", { withTimezone: true }),
+  analysisUncertain: boolean("analysis_uncertain").notNull().default(false),
   error: text("error"),
   providerFileId: text("provider_file_id"),
   providerJobId: text("provider_job_id"),
@@ -70,6 +75,28 @@ export const classCaptureAssets = pgTable("class_capture_assets", {
   check("class_capture_assets_kind", sql`${t.kind} in ('recording','debrief','worksheet')`),
   check("class_capture_assets_status", sql`${t.status} in ('pending','ready','transcribing','transcribed','failed')`),
 ]);
+
+// One durable processing job per capture. The lease is shared by browser kicks and cron recovery.
+export const classCaptureJobs = pgTable("class_capture_jobs", {
+  captureId: uuid("capture_id").primaryKey().references(() => classCaptures.id, { onDelete: "cascade" }),
+  consentedAt: timestamp("consented_at", { withTimezone: true }).notNull().defaultNow(),
+  authorizedAdminVersion: integer("authorized_admin_version"),
+  revision: integer("revision").notNull().default(0),
+  completedRevision: integer("completed_revision").notNull().default(-1),
+  draftUncertain: boolean("draft_uncertain").notNull().default(false),
+  settleUntil: timestamp("settle_until", { withTimezone: true }).notNull().defaultNow(),
+  status: text("status").$type<AutomaticProgress["status"]>().notNull().default("waiting"),
+  recording: boolean("recording").notNull().default(false),
+  expectedUploads: jsonb("expected_uploads").$type<string[]>().notNull().default([]),
+  dueAt: timestamp("due_at", { withTimezone: true }).notNull().defaultNow(),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  attempts: integer("attempts").notNull().default(0),
+  error: text("error"),
+  proposal: jsonb("proposal").$type<DraftProposal | null>(),
+  evidence: jsonb("evidence").$type<DraftEvidence | null>(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [index("class_capture_jobs_due_idx").on(t.dueAt),
+  check("class_capture_jobs_status", sql`${t.status} in ('waiting','processing','writing','ready','attention')`)]);
 
 // One outstanding browser-bound email challenge per approved-or-requested address.
 export const authEmailChallenges = pgTable("auth_email_challenges", {

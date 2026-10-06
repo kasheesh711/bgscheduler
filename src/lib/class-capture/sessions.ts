@@ -11,7 +11,7 @@ import { assertCaptureScope, assertCaptureSessionToday, captureEnabled, CaptureE
 
 export type { CaptureScope } from "./model";
 
-function pilotEmails(): string[] {
+export function pilotEmails(): string[] {
   const plural = process.env.CLASS_CAPTURE_PILOT_EMAILS;
   if (plural === undefined) {
     const singular = normalizeCaptureEmail(process.env.CLASS_CAPTURE_PILOT_EMAIL);

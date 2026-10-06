@@ -1,0 +1,44 @@
+{
+  "syntheticOnly": true,
+  "providerCalls": 0,
+  "checks": [
+    {
+      "name": "Selected M4A automatically uploads, transcribes and produces a draft",
+      "passed": true
+    },
+    {
+      "name": "Edits autosave and approval copies only feedback",
+      "passed": true
+    },
+    {
+      "name": "24 photos use three concurrent uploads, compact previews and preserve tutor edits",
+      "passed": true
+    },
+    {
+      "name": "A failed upload retries independently and reload retains saved edits",
+      "passed": true
+    },
+    {
+      "name": "Stopping a recording starts upload without another processing click",
+      "passed": true
+    },
+    {
+      "name": "Conflicting autosave preserves local text and another tab's saved feedback",
+      "passed": true
+    }
+  ],
+  "metrics": {
+    "creates": 0,
+    "assetIntents": 27,
+    "uploads": 27,
+    "transcriptions": 2,
+    "drafts": 3,
+    "gets": 12,
+    "patches": 1,
+    "lists": 0
+  },
+  "unverified": [
+    "Physical iPhone",
+    "Live providers and upload storage"
+  ]
+}

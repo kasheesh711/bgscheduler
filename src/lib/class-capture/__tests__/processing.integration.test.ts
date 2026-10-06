@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
 import type { Database } from "@/lib/db";
 import { createCapture, createAsset, captureView, markDeleted } from "../store";
-import { transcribeCapture, draftCapture } from "../processing";
+import { transcribeCapture, draftCapture, removeProviderCopies } from "../processing";
 import type { CaptureScope, CaptureSession } from "../model";
 let h: Awaited<ReturnType<typeof startTestDb>>;
 let db: Database;
@@ -52,6 +52,13 @@ describe("durable evidence processing", () => {
     expect(speech.create).toHaveBeenCalledTimes(1);
     expect(speech.removeJob).toHaveBeenCalled();
     expect(speech.removeFile).toHaveBeenCalled();
+  });
+  it("late cleanup cannot clear a newer provider job or file ID", async () => {
+    const speech = client();
+    await db.execute(sql`update class_capture_assets set provider_job_id='new-job', provider_file_id='new-file' where id=${assetId}`);
+    await removeProviderCopies({ id: assetId, providerJobId: "old-job", providerFileId: "old-file" } as never, speech, db);
+    const rows = await db.execute(sql`select provider_job_id, provider_file_id from class_capture_assets where id=${assetId}`);
+    expect(rows.rows[0]).toMatchObject({ provider_job_id: "new-job", provider_file_id: "new-file" });
   });
   it("does not retry an unknown provider outcome or access a cancelled capture", async () => {
     const speech = client(); speech.create.mockRejectedValue(new Error("unknown network outcome"));

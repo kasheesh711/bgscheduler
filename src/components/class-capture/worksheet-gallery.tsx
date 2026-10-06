@@ -11,6 +11,7 @@ type Photo = { local?: LocalMedia; remote?: CaptureAsset };
 type Props = {
   captureId: string; items: Array<[string, Photo]>; busy: boolean;
   errors: Record<string, string>; progress: { id: string; value: number } | null;
+  progressById?: Record<string, number>;
   uploadAllowed: boolean; onUpload: (file: LocalMedia) => void; onRemove: (id: string) => void;
 };
 
@@ -31,7 +32,7 @@ function PhotoTile({ id, photo, index, captureId, busy, error, progress, uploadA
       </span>
     </button>
     <div className="flex items-center justify-center">
-      {!uploaded && photo.local && <Button size="icon" variant="ghost" className="min-h-11 min-w-11" disabled={busy || !uploadAllowed} onClick={() => onUpload(photo.local!)} aria-label={`Retry upload photo ${index + 1}`}><RotateCcw className="size-4" /></Button>}
+      {!uploaded && photo.local && <Button size="icon" variant="ghost" className="min-h-11 min-w-11" disabled={busy || progress !== undefined || !uploadAllowed} onClick={() => onUpload(photo.local!)} aria-label={`Retry upload photo ${index + 1}`}><RotateCcw className="size-4" /></Button>}
       <Button size="icon" variant="ghost" className="min-h-11 min-w-11" disabled={busy} onClick={() => onRemove(id)} aria-label={`Remove photo ${index + 1}`}><Trash2 className="size-4" /></Button>
     </div>
     {error && !uploaded && <p className="px-2 pb-2 text-xs text-red-700" role="alert">Upload failed. Tap retry.</p>}
@@ -47,7 +48,7 @@ export function WorksheetGallery({ items, ...props }: Props) {
     <details open className="mt-3">
       <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium">{items.length} worksheet photos · show / hide</summary>
       <div className="grid max-h-80 grid-cols-3 gap-2 overflow-y-auto overscroll-contain pr-1" aria-label="Worksheet photo gallery" tabIndex={0}>
-        {items.map(([id, photo], index) => <PhotoTile key={id} id={id} photo={photo} index={index} {...props} error={props.errors[id]} progress={props.progress?.id === id ? props.progress.value : undefined} onPreview={setPreview} />)}
+        {items.map(([id, photo], index) => <PhotoTile key={id} id={id} photo={photo} index={index} {...props} error={props.errors[id]} progress={props.progressById?.[id] ?? (props.progress?.id === id ? props.progress.value : undefined)} onPreview={setPreview} />)}
       </div>
     </details>
     <dialog ref={dialog} onClose={() => setPreview(null)} className="fixed inset-0 m-auto max-h-[95dvh] w-[95vw] max-w-3xl rounded-xl bg-background p-3 backdrop:bg-black/70" aria-label="Worksheet photo preview">
