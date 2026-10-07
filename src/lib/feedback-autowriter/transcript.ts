@@ -108,7 +108,7 @@ const ALIGNED_MIN_STUDENT_SHARE = 0.05;
 /**
  * A student may out-talk the tutor (a chatty student, a student reading answers aloud). That alignment is still
  * trusted when Zoom's cues name nobody but the tutor and that student, every substantive Soniox speaker sits
- * cleanly on one side, and the tutor still carries at least this share.
+ * cleanly on one side and clean speakers carry ≥ 90% of the text, and the tutor still carries at least this share.
  */
 const NAMED_MIN_TUTOR_SHARE = 0.2;
 /** A Soniox speaker is "clean" when at least this share of its cue overlap is on one side … */
@@ -171,8 +171,8 @@ function cleanlySplit(segments: readonly Segment[], teacherOverlap: ReadonlyMap<
  * display name more than anyone else's; student = those overlapping the other
  * participant's cues. Trusted only when the result looks like a one-to-one
  * lesson (tutor ≥ 50% of the talk, student ≥ 5%) — or, when Zoom names only the
- * tutor and the student and every substantive speaker is cleanly on one side,
- * tutor ≥ 20% and student ≥ 5% — else unclear. Falls back to
+ * tutor and the student, every substantive speaker is cleanly on one side and
+ * clean speakers carry ≥ 90% of the text, tutor ≥ 20% and student ≥ 5% — else unclear. Falls back to
  * talk share when Zoom has no cues under the teacher's name or only one side
  * aligned, and calls it unclear when the split contradicts Zoom's cues.
  */
