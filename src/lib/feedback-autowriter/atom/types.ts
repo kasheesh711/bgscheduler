@@ -62,6 +62,14 @@ export interface AtomSnapshot {
   activities: AtomActivity[];
   sourceHash: string;
 }
+/**
+ * A record whose own list entry and transcript disagree on a count (`list_vs_transcript_*`). It is left out and the
+ * student's other activities are kept; an ownership or identity contradiction still fails the whole student.
+ */
+export interface AtomSkippedRecord {
+  id: string; kind: AtomActivity["kind"]; startedAt: string; completedAt: string; cause: string;
+}
+export interface AtomCollection { activities: AtomActivity[]; skipped: AtomSkippedRecord[] }
 export interface AtomLesson {
   sessionId: string;
   studentId: string;
@@ -74,7 +82,9 @@ export type AtomOmissionReason =
   | "disabled" | "rollout_not_approved" | "student_unmapped" | "no_matching_activity" | "ambiguous_overlap"
   | "stale_data" | "collection_failed" | "authentication_failed" | "response_changed"
   | "subject_unresolved" | "homework" | "other_tutor" | "outside_lesson"
-  | "timestamps_unavailable" | "lesson_roster_unavailable" | "wrong_student";
+  | "timestamps_unavailable" | "lesson_roster_unavailable" | "wrong_student"
+  /** An Atom record of this lesson was skipped because its list entry and transcript disagree. */
+  | "record_skipped";
 
 export interface MatchedAtomActivity {
   id: string;

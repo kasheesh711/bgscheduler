@@ -1,4 +1,6 @@
 import { loadAtomLessonEvidence, retainIsebEvidence, storedIsebEvidenceMatches, eligibleForIseb } from "./atom/data";
+import { hasAtomEvidenceWording } from "./atom/statistics";
+import { detectNoShow } from "./no-show";
 import { matchingFormatStamp } from "./format";
 import { approvedFormatGuide, atomRolloutApproved } from "./iseb-rollout";
 import { MIMI_STYLE_GUIDE_V2 } from "./style";
@@ -42,6 +44,7 @@ import {
   AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS,
   AUTOWRITER_ZOOM_TRANSCRIPT_RECHECK_MS,
   AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS,
+  autowriterHoldSummaryOnly,
 } from "./config";
 import { JUDGE_PROMPT_VERSION, passingStoredVerdict, type StoredJudgeVerdict } from "./judge";
 import { FUNCTION_BUDGET_EXHAUSTED, runWritingPipeline, type PipelineResult, type RateLimitRetries } from "./pipeline";
@@ -138,6 +141,12 @@ export interface AutowriterDeps {
    * and `soniox`).
    */
   transcriptFirst?: boolean;
+  /**
+   * Hold summary-only drafts (`FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY`): a class about to be written from Wise's summary
+   * goes to the transcript pass when it may, otherwise it is held for a person (`summary_only_held`) before any model
+   * call. Unset: read from the environment, so a deps builder that forgets it still fails closed.
+   */
+  holdSummaryOnly?: boolean;
   /** Fetches Zoom's WEBVTT (tests inject a fake). */
   fetchText?: (url: string) => Promise<string>;
   now?: () => Date;
@@ -391,13 +400,16 @@ async function handOverToTranscript(
   metadata: Record<string, unknown> = {},
   /** When to look again: the usual recording recheck unless given (0 = due now). */
   retryInMs: number = AUTOWRITER_RECORDING_RECHECK_MS,
+  /** Drop any summary draft kept on the row, so a later hold on the transcript route shows none. */
+  clearDraft = false,
 ): Promise<ProcessOutcome> {
   await release({
     state: "awaiting_recording",
     evidence: "transcript",
     reason,
     retryInMs,
-    metadata: { handover: reason, ...metadata },
+    ...(clearDraft ? { arm: null, fields: null, fieldsSha256: null, billing: null } : {}),
+    metadata: { handover: reason, ...(clearDraft ? { judge: null, draftEvidence: null, pipeline: null } : {}), ...metadata },
   });
   return out("awaiting_recording", reason);
 }
@@ -497,7 +509,11 @@ async function settleGate(input: {
   }
   const state = disposition === "scope" ? "skipped_scope" : disposition === "human" ? "skipped_human" : disposition === "expired" ? "expired" : "held";
   const alertKind: AlertKind | null = state === "held" ? "held" : state === "expired" ? "expired" : null;
-  await release({ ...(state === "held" ? input.draftPatch ?? {} : {}), state, reason, alertKind });
+  // A student who never joined while the tutor waited: the hold carries the standard note, ready for one click.
+  const noShow = state === "held" ? detectNoShow(detail, reason) : null;
+  const patch = state === "held" ? input.draftPatch ?? {} : {};
+  // Always written on a hold (null when not a no-show): `||` never removes a key, and an older note must not linger.
+  await release({ ...patch, ...(state === "held" ? { metadata: { ...(patch.metadata ?? {}), noShow } } : {}), state, reason, alertKind });
   return out(state, reason);
 }
 
@@ -668,6 +684,21 @@ async function processLeased(deps: AutowriterDeps, input: {
       return out("held", "thai_summary_no_transcript");
     }
   }
+  // Owner, 5 Oct 2026: while the switch is on, nothing is written from the summary alone. The transcript pass takes
+  // the class when it may; otherwise a person writes it, and any draft kept on the row is dropped so nobody is shown
+  // summary-only text to paste.
+  if (deps.holdSummaryOnly ?? autowriterHoldSummaryOnly()) {
+    if (mayHandOver) {
+      const recording = recordingForTranscription(detail);
+      return handOverToTranscript(release, out, "summary_only", {}, recording.ok || recording.reason === "recording_multiple_parts" ? 0 : recordingRecheckMs(detail, now), true);
+    }
+    await release({
+      state: "held", reason: "summary_only_held", alertKind: "held",
+      arm: null, fields: null, fieldsSha256: null, billing: null,
+      metadata: { judge: null, draftEvidence: null, pipeline: null, summaryOnlyHeld: { fellBack, at: now.toISOString() } },
+    });
+    return out("held", "summary_only_held");
+  }
   if (!deps.apiKey) {
     await release({ state: "pending", reason: "infra:OPENROUTER_API_KEY missing", retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true });
     return out("infra", "OPENROUTER_API_KEY missing");
@@ -720,7 +751,7 @@ async function processLeased(deps: AutowriterDeps, input: {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
     draft: { arm: result.arm, fields: result.fields, judge: result.judge, pipeline: { ...pipelineStamp("summary", result.arm, result.styleGuide),
       formatGuide: result.formatGuide ?? null, atomEvidenceHash: result.atomEvidence?.hash ?? null,
-      atomMapping: result.atomEvidence?.mapping ?? null, lessonEvidenceHash, factualVerdicts: result.judge } }, evidence: "summary",
+      atomMapping: result.atomEvidence?.mapping ?? null, lessonEvidenceHash, factualVerdicts: result.judge, repair: result.repair ?? null } }, evidence: "summary",
     extraMetadata: { ...guestMetadata(student), ...judgeAnswered(row) }, release, out,
   });
 }
@@ -880,7 +911,10 @@ function reusableTranscriptDraft(row: AutowriterSessionRow): StoredDraft | null 
   const expectedStyle = process.env.FEEDBACK_AUTOWRITER_ISEB_FORMAT_ENABLED === "true" && storedFormat?.id === "iseb" && tutorKey === "Mimi"
     ? MIMI_STYLE_GUIDE_V2 : activeStyleGuide(tutorKey);
   if (!matchingStoredStyle(pipeline.styleGuide, expectedStyle)) return null;
-  return { arm: row.arm, fields: row.fields as unknown as FeedbackFieldAnswers, judge, pipeline };
+  const fields = row.fields as unknown as FeedbackFieldAnswers;
+  // 7 Oct: a draft written under the earlier Atom rules may carry their audit wording; it is written again.
+  if (hasAtomEvidenceWording(fields)) return null;
+  return { arm: row.arm, fields, judge, pipeline };
 }
 
 /**
@@ -1116,6 +1150,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
   const evidence = buildTranscriptEvidence({
     transcript, audioDurationMs: status.audioDurationMs, scheduledMinutes,
     zoomCues: cues, teacherName: detailTeacherName(detail), alsoTeacher: tutorSelfNames(detail),
+    studentNames: [student.name, ...(student.joinedAsGuest ? [student.joinedAsGuest] : [])],
   });
   const { speakers, rendered, meta: transcriptMeta } = evidence;
   const holdFor = async (reason: string, extra: Record<string, unknown> = {}) => {
@@ -1209,7 +1244,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
     draft: { arm: result.arm, fields: result.fields, judge: result.judge, pipeline: { ...pipelineStamp("transcript", result.arm, result.styleGuide),
       formatGuide: result.formatGuide ?? null, atomEvidenceHash: result.atomEvidence?.hash ?? null,
-      atomMapping: result.atomEvidence?.mapping ?? null, lessonEvidenceHash, factualVerdicts: result.judge } }, evidence: "transcript",
+      atomMapping: result.atomEvidence?.mapping ?? null, lessonEvidenceHash, factualVerdicts: result.judge, repair: result.repair ?? null } }, evidence: "transcript",
     // A stored draft: a later failure (a requeued shadow draft written again) starts a new count, of the writer's
     // failures and of the judge's.
     extraMetadata: { transcript: transcriptMeta, ...guestMetadata(student), ...(canFallBack ? { writerErrors: 0 } : {}), ...judgeAnswered(row) },

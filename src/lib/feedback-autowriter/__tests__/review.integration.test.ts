@@ -10,7 +10,7 @@ import { applyOwnerVerdicts, applyReviewBackfillPlan, planReviewBackfill, type O
 import { ingestFixEvents, loadFixEventSources, planFixEvents } from "../fix-events";
 import { MAX_PUSH_ATTEMPTS, acknowledgeIncident, countUndeliveredCritical, drainIncidentOutbox, recordIncident } from "../incidents";
 import { evaluateGate, gateWindow, metricDates } from "../quality";
-import { loadAutowriterReview } from "../review-data";
+import { UNCOVERED_TUTOR_DAYS, loadAutowriterReview, loadUncoveredTutors } from "../review-data";
 import {
   activityMirrorStatus,
   assignReviews,
@@ -25,6 +25,7 @@ import {
   snapshotFirstShots,
   type ReviewJobDeps,
 } from "../review-job";
+import { AUTOWRITER_TUTORS } from "../roster";
 import { buildFeedbackPostBody } from "../session";
 import { listSonioxCleanup } from "../store";
 import { feedbackBodyHash, fieldsHash } from "../submit";
@@ -667,7 +668,7 @@ describe("daily metrics", () => {
     await assignReviews(db, { now: NOW });
     await ingestFixEvents(db, { apiActorId: API, since: at("2026-09-01T00:00:00Z") });
 
-    expect(await refreshDailyMetrics(db, { dates: metricDates(NOW), now: NOW })).toBe(15 * 28); // 15 dates × (27 tutors + "*")
+    expect(await refreshDailyMetrics(db, { dates: metricDates(NOW), now: NOW })).toBe(15 * (AUTOWRITER_TUTORS.length + 1)); // 15 dates × (each tutor + "*")
     expect(await starRow(DAY)).toMatchObject({
       liveMode: true, posted: 1, held: 1, excludedDataQuality: 1, unseen: 1, excludedTutorFirst: 1, eligible: 3, required: 1, reviewed: 0,
     });
@@ -1047,7 +1048,7 @@ describe("runReviewJob", () => {
     const result = await runReviewJob(deps());
     expect(result).toMatchObject({
       ok: true, firstShots: { recorded: 1, unverified: 0 }, fixEvents: { inserted: 1 }, reviewsCreated: 1,
-      dailyGate: { date: DAY, status: "insufficient_data" }, metricRows: 15 * 28,
+      dailyGate: { date: DAY, status: "insufficient_data" }, metricRows: 15 * (AUTOWRITER_TUTORS.length + 1),
     });
     const runs = await db.select().from(RUNS).orderBy(RUNS.startedAt);
     expect(runs.map((run) => run.status)).toEqual(["failed", "succeeded"]);
@@ -1196,6 +1197,51 @@ describe("owner verdicts from the 30 Sep interview", () => {
     // The nightly rows say the same.
     expect(await recordDailyGate(db, "2026-10-12")).toEqual({ date: "2026-10-12", status: "blocked_critical" });
     expect((await recordDailyGate(db, "2026-10-13"))?.status).not.toBe("blocked_critical");
+  });
+});
+
+describe("loadUncoveredTutors", () => {
+  it("lists online tutors of the active credit-control snapshot that the roster lacks, most classes first", async () => {
+    const CCS = schema.creditControlSnapshots;
+    const CC = schema.creditControlSessions;
+    const [active] = await db.insert(CCS).values({ active: true }).returning();
+    const [stale] = await db.insert(CCS).values({ active: false }).returning();
+    const NEW_HIRE = "6a0000000000000000000001";
+    const OTHER = "6a0000000000000000000002";
+    const ROSTER = AUTOWRITER_TUTORS[0].wiseUserIds[0];
+    let n = 0;
+    const session = (snapshotId: string, teacher: string, title: string, startAt: Date, student = "st-1") => ({
+      snapshotId, wiseSessionId: `cc-${(n += 1)}`, wiseClassId: "class", wiseStudentId: student, studentKey: student,
+      packageKey: "pkg", studentName: "Student", packageName: "Package", title, scheduledStartTime: startAt,
+      meetingStatus: "COMPLETED", sessionKind: "past", wiseTeacherUserId: teacher, teacherName: `Teacher ${teacher.slice(-1)}`,
+    });
+    const day = (days: number) => new Date(NOW.getTime() - days * 24 * 60 * 60 * 1000);
+    try {
+      await db.insert(CC).values([
+        session(active.id, NEW_HIRE, "Live Session - Maths", day(1)),
+        // The same class seen for two students counts once.
+        session(active.id, NEW_HIRE, "Online Session - Maths", day(2)),
+        session(active.id, OTHER, "Live Session - Physics", day(3)),
+        // Not counted: on the roster, in person, cancelled, too old, in the future, or on another snapshot.
+        session(active.id, ROSTER, "Live Session - English", day(1)),
+        session(active.id, OTHER, "In-Person Session - Physics", day(1)),
+        session(active.id, OTHER, "Live Session (Cancelled) - Physics", day(1)),
+        { ...session(active.id, OTHER, "Live Session - Physics", day(1)), meetingStatus: "CANCELLED" },
+        session(active.id, OTHER, "Live Session - Physics", day(UNCOVERED_TUTOR_DAYS + 1)),
+        session(active.id, OTHER, "Live Session - Physics", day(-1)),
+        session(stale.id, OTHER, "Live Session - Physics", day(1)),
+      ]);
+      const sameClassTwice = session(active.id, NEW_HIRE, "Online Session - Maths", day(2), "st-2");
+      await db.insert(CC).values({ ...sameClassTwice, wiseSessionId: `cc-2` });
+
+      expect(await loadUncoveredTutors(db, NOW)).toEqual([
+        { wiseUserId: NEW_HIRE, teacherName: "Teacher 1", classes: 2 },
+        { wiseUserId: OTHER, teacherName: "Teacher 2", classes: 1 },
+      ]);
+    } finally {
+      await db.delete(CC);
+      await db.delete(CCS);
+    }
   });
 });
 

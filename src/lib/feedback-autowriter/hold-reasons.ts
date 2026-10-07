@@ -57,6 +57,8 @@ const DRAFT_PROBLEMS: ReadonlyArray<{ match: RegExp; label: string }> = [
   { match: /^policy:/u, label: "a draft that does not meet the feedback policy" },
   { match: /^field:/u, label: "a field that does not meet the feedback policy" },
   { match: /^attendance_wording:/u, label: "wording that reads as an absence or a cancelled class" },
+  { match: /^atom:evidence_wording:/u, label: "Atom audit wording a parent should not see" },
+  { match: /^atom:unmatched_result_statistic$/u, label: "a test or practice result Atom did not confirm" },
   { match: /^ai_suspect:/u, label: "text the Class Feedback checks would flag" },
   { match: /^finish_reason_length$/u, label: "a reply that was cut off" },
   { match: /^finish_reason_content_filter$/u, label: "a reply blocked by a content filter" },
@@ -72,6 +74,8 @@ const HOLD_REASONS: ReadonlyArray<{
 }> = [
   // Back on the summary after a transcript-first fallback, and the summary is mostly Thai.
   { match: /^thai_summary_no_transcript$/u, category: "validation", label: "The summary is mostly Thai and there is no transcript to write from" },
+  // `FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY`: only Wise's summary to write from, so a person writes it.
+  { match: /^summary_only_held$/u, category: "validation", label: "Only Wise's summary to write from, which is held for a person" },
 
   // Billing (`billing.ts`), the most specific first.
   { match: /^billing:auto_status_missing$/u, category: "billing_or_form", label: "Wise's auto-submission has no class status" },

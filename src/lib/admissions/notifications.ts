@@ -16,8 +16,10 @@
 // single-flight guard as wise_activity_sync_runs (partial unique index on
 // status='running'; stale rows failed after 30 minutes).
 
+import { randomUUID } from "node:crypto";
 import { and, count, eq, gte, inArray, isNull, lt, lte } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
+import { createResendSender } from "@/lib/email/resend";
 import {
   admissionsCaseMembers,
   admissionsCases,
@@ -38,12 +40,6 @@ import type { AdmissionsTaskOwner } from "./meetings";
 import type { AdmissionsMemberDto, AdmissionsRole } from "./types";
 
 // ── Constants ───────────────────────────────────────────────────────────
-
-/** Resend REST endpoint (design §7 transport). */
-const RESEND_ENDPOINT = "https://api.resend.com/emails";
-
-/** Fallback sender when ADMISSIONS_EMAIL_FROM is not configured. */
-const DEFAULT_FROM = "BeGifted Admissions <onboarding@resend.dev>";
 
 /** Fallback reply-to (mirrors the schedule-email default). */
 const DEFAULT_REPLY_TO = "kevhsh7@gmail.com";
@@ -256,21 +252,17 @@ export function deriveStudentFirstName(student: {
 
 // ── Transport (CM-110) ──────────────────────────────────────────────────
 
-interface ResendEmailResponse {
-  id?: string;
-  message?: string;
-}
-
 /**
  * Sends one email through Resend and records it in
  * admissions_notification_log.
  *
  * 1. Dedupe short-circuit: when `dedupeKey` is set and a log row already
  *    carries it, skip the send entirely and return `{ skipped: true }`.
- * 2. Send via the Resend REST API (RESEND_API_KEY required; optional
- *    ADMISSIONS_EMAIL_FROM / ADMISSIONS_EMAIL_REPLY_TO overrides) — non-2xx
- *    responses throw with the provider message, mirroring the
- *    schedule-email error discipline.
+ * 2. Send via the shared Resend sender (RESEND_API_KEY required).
+ *    ADMISSIONS_EMAIL_FROM overrides the sender; otherwise RESEND_FROM is
+ *    required. ADMISSIONS_EMAIL_REPLY_TO optionally overrides the reply-to.
+ *    Idempotency key is `admissions:<dedupeKey|uuid>`; non-2xx responses throw
+ *    via the shared Resend sender.
  * 3. Insert the log row capturing the Resend email id. A concurrent run that
  *    won the partial unique dedupe index races here — that unique violation
  *    is reported as skipped instead of thrown (the key was sent exactly once).
@@ -296,31 +288,20 @@ export async function sendAdmissionsEmail(
     }
   }
 
-  const apiKey = process.env.RESEND_API_KEY?.trim();
-  if (!apiKey) throw new Error("RESEND_API_KEY is not configured");
-  const from = process.env.ADMISSIONS_EMAIL_FROM?.trim() || DEFAULT_FROM;
-  const replyTo = process.env.ADMISSIONS_EMAIL_REPLY_TO?.trim() || DEFAULT_REPLY_TO;
-
-  const response = await fetch(RESEND_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      from,
-      to: [to],
-      subject: input.subject,
-      html: input.html,
-      reply_to: replyTo,
-    }),
+  const sender = createResendSender(process.env, {
+    from: process.env.ADMISSIONS_EMAIL_FROM?.trim() || undefined,
+    replyTo: process.env.ADMISSIONS_EMAIL_REPLY_TO?.trim() || DEFAULT_REPLY_TO,
   });
-
-  const json = await response.json().catch(() => null) as ResendEmailResponse | null;
-  if (!response.ok) {
-    throw new Error(json?.message ?? `Resend returned HTTP ${response.status}`);
-  }
-  const resendEmailId = typeof json?.id === "string" && json.id.trim() ? json.id : null;
+  // Resend remembers the key for 24h, so a crashed run that retries the same
+  // dedupe key cannot double-send; unkeyed sends get a fresh one.
+  const { id } = await sender.sendEmail({
+    to,
+    subject: input.subject,
+    html: input.html,
+    text: "",
+    idempotencyKey: `admissions:${dedupeKey ?? randomUUID()}`,
+  });
+  const resendEmailId = id;
 
   try {
     const rows = await db

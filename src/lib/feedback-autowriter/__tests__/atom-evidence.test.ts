@@ -38,6 +38,14 @@ describe("Atom lesson ownership and statistics", () => {
     const earlier = { ...activity.answers[0], answeredAt: "2026-10-01T08:55:00Z" };
     expect(build({}, [{ ...activity, answers: [earlier, activity.answers[1]] }]).activities[0]).toMatchObject({ portion: "matched_portion", correctAnswers: 0, attemptedQuestions: 1, totalQuestions: 5, sas: null, seconds: 60, modelledTopicEstimates: [] });
   });
+  it("notes a skipped record worked on during the lesson, and ignores one from another time", () => {
+    const during = { id: "_9", startedAt: "2026-10-01T09:20:00Z", completedAt: "2026-10-01T09:40:00Z" };
+    const before = { id: "_8", startedAt: "2026-10-01T07:00:00Z", completedAt: "2026-10-01T08:00:00Z" };
+    const evidence = build({ skipped: [before, during] });
+    expect(evidence.status).toBe("matched");
+    expect(evidence.omissions).toEqual([{ activityId: "_9", reason: "record_skipped" }]);
+    expect(build({ skipped: [during] }, []).status).toBe("omitted");
+  });
   it("uses half-open lesson windows across Bangkok midnight", () => {
     const midnight = { ...lesson, start: "2026-09-30T16:30:00Z", end: "2026-09-30T17:30:00Z" };
     expect(bangkokDate(midnight.start)).toBe("2026-09-30");
@@ -69,5 +77,33 @@ describe("Atom lesson ownership and statistics", () => {
   });
   it("resolves NVR before VR and leaves unknown subjects unresolved", () => {
     expect(atomSubject("Online 13+ NVR")).toBe("non_verbal_reasoning"); expect(atomSubject("French")).toBe(null);
+  });
+});
+
+describe("Atom wording in a post a parent reads", () => {
+  const fields = { topics: "1. Fractions", performance: "Deenoh answered 15 of 20 questions correctly.", improvement: "1. Check units.", homework: "" };
+  it("rejects the evidence's labels and audit caveats, on matched and omitted evidence alike", async () => {
+    const { validateAtomStatisticClaims } = await import("../atom/statistics");
+    const leaked = { ...fields, performance: "In the matched portion of Extra practice, Deenoh answered 15 of 20 attempted questions correctly. " +
+      "Assistance was not marked for this portion, so I am reporting the result without treating it as proof of independent mastery." };
+    expect(validateAtomStatisticClaims(leaked, build())).toEqual(["atom:evidence_wording:performance"]);
+    expect(validateAtomStatisticClaims({ ...fields, improvement: "1. Keep the not_marked_assisted habit." }, build({ snapshot: null })))
+      .toContain("atom:evidence_wording:improvement");
+  });
+  it("accepts plain teacher language, including 'the whole activity' and guided work", async () => {
+    const { validateAtomStatisticClaims } = await import("../atom/statistics");
+    const plain = { ...fields, performance: "In the part of Extra practice we worked through in class, Deenoh answered 15 of 20 questions correctly, " +
+      "with my guidance on the harder items, and finished the whole activity." };
+    expect(validateAtomStatisticClaims(plain, build())).toEqual([]);
+    for (const prose of ["Deenoh matched part B to the correct diagram.", "She now shows evidence of independent mastery of long division.",
+      "We drew the atom data table for carbon.", "There was marked improvement in her timing."]) {
+      expect(validateAtomStatisticClaims({ ...fields, performance: prose }, build())).toEqual([]);
+    }
+    expect(validateAtomStatisticClaims(fields, null)).toEqual([]);
+  });
+  it("tells both models to keep the evidence's labels out of the post", async () => {
+    const { ATOM_MODEL_RULES } = await import("../atom/evidence");
+    expect(ATOM_MODEL_RULES).toContain("read by the student and parent");
+    expect(ATOM_MODEL_RULES).not.toContain("explicitly say so");
   });
 });

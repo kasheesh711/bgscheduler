@@ -22,7 +22,6 @@ import {
   gateWindow,
   isAccurate,
   metricDates,
-  nextExpansionSize,
   postingWindowEligibility,
   reviewInclusion,
   tutorWroteFirst,
@@ -556,14 +555,6 @@ describe("reviewInclusion", () => {
   it("samples 30% of a proven tutor's posts from the stored draw", () => {
     expect(reviewInclusion({ tutorProven: true, draw: 0.29 })).toEqual({ reason: "random_sample", probability: 0.3 });
     expect(reviewInclusion({ tutorProven: true, draw: 0.3 })).toEqual({ reason: "not_sampled", probability: 0.3 });
-  });
-});
-
-describe("nextExpansionSize", () => {
-  it("grows by half, rounded up: 5 → 8 → 12 → 18", () => {
-    const sizes = [5];
-    for (let step = 0; step < 3; step += 1) sizes.push(nextExpansionSize(sizes.at(-1)!));
-    expect(sizes).toEqual([5, 8, 12, 18]);
   });
 });
 

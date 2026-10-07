@@ -203,6 +203,29 @@ describe("post-class notification lifecycle", () => {
     ]);
   });
 
+  it.each(["resend", "gmail"])("keeps every retry on the primary sender under %s", (transport) => {
+    vi.stubEnv("OUTBOUND_EMAIL_TRANSPORT", transport);
+    try {
+      expect([1, 2, 3, 4].map(postClassSenderKeyForAttempt)).toEqual([
+        "primary",
+        "primary",
+        "primary",
+        "primary",
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("still uses the backup relay for retries when the transport is unset", () => {
+    vi.stubEnv("OUTBOUND_EMAIL_TRANSPORT", "");
+    try {
+      expect([2, 3, 4].map(postClassSenderKeyForAttempt)).toEqual(["backup", "backup", "backup"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("recovers an ambiguous stale send on the same durable attempt", () => {
     const now = new Date("2026-07-21T04:00:00.000Z");
     expect(shouldRecoverPostClassSendingAttempt({

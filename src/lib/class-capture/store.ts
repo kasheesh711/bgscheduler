@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, eq, gt, isNull, ne, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import { classCaptures as captures, classCaptureAssets as assets } from "@/lib/db/schema";
@@ -76,13 +76,15 @@ export async function createAsset(scope: CaptureScope, captureId: string, raw: z
       if (existing.captureId !== captureId || existing.kind !== input.kind || existing.mime !== input.mime || existing.size !== input.size) throw new CaptureError(409, "This upload identifier has different metadata.");
       return projectAsset(existing);
     }
-    const all = await tx.select().from(assets).where(eq(assets.captureId, captureId));
-    // Active limits allow replacing a mistaken photo or failed debrief. Lifetime
-    // intent/byte limits still bound storage and paid processing after removals.
-    if (all.length >= 20 || all.reduce((n, a) => n + a.size, input.size) > 2 * MAX_AUDIO_BYTES) throw new CaptureError(429, "This capture has reached its lifetime upload limit (20 files / 200 MB).");
-    const same = all.filter(a => !a.discardedAt && a.kind === input.kind);
-    const maxCount = input.kind === "worksheet" ? 4 : input.kind === "debrief" ? 1 : 8;
-    if (same.length >= maxCount || (input.kind === "recording" && same.reduce((n, a) => n + a.size, input.size) > MAX_AUDIO_BYTES)) throw new CaptureError(400, "This capture has reached its evidence limit.");
+    // Photos are intentionally uncapped by count; their individual size/pixel
+    // limits and retention still apply. Audio keeps its lifetime spend bounds.
+    if (input.kind !== "worksheet") {
+      const audio = await tx.select().from(assets).where(and(eq(assets.captureId, captureId), ne(assets.kind, "worksheet")));
+      if (audio.length >= 20 || audio.reduce((n, a) => n + a.size, input.size) > 2 * MAX_AUDIO_BYTES) throw new CaptureError(429, "This capture has reached its lifetime audio upload limit (20 files / 200 MB).");
+      const same = audio.filter(a => !a.discardedAt && a.kind === input.kind);
+      const maxCount = input.kind === "debrief" ? 1 : 8;
+      if (same.length >= maxCount || (input.kind === "recording" && same.reduce((n, a) => n + a.size, input.size) > MAX_AUDIO_BYTES)) throw new CaptureError(400, "This capture has reached its audio evidence limit.");
+    }
     const [row] = await tx.insert(assets).values({ ...input, captureId, pathname: `class-capture/${captureId}/${input.id}` }).returning();
     await tx.update(captures).set({ draft: null, reviewed: false, version: sql`${captures.version} + 1` }).where(eq(captures.id, captureId));
     return projectAsset(row);

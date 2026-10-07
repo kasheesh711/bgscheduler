@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ClassCaptureWorkspace } from "../class-capture-workspace";
-import { canonicalMime, feedbackText, validateLocalFile } from "../client-helpers";
+import { canonicalMime, feedbackText, prepareLocalFile, validateLocalFile } from "../client-helpers";
 import type { CaptureView } from "@/lib/class-capture/model";
 
 const capture: CaptureView = {
@@ -17,7 +17,7 @@ describe("Class Capture consent and review", () => {
     expect(html).toContain("Your classes today");
     expect(html).toContain("Today · Bangkok");
     expect(html).not.toContain('type="date"');
-    expect(html).toContain("Only your own scheduled classes appear");
+    expect(html).toContain("Your own ongoing, upcoming and completed classes appear");
   });
 
   it("shows a clear pause and the existing feedback path when disabled", () => {
@@ -39,8 +39,8 @@ describe("Class Capture consent and review", () => {
 
   it("clearly separates tutor evidence and drafts from submission", () => {
     const html = renderToStaticMarkup(<ClassCaptureWorkspace ownerEmail="synthetic@example.test" enabled initialData={initialData} initialCapture={capture} />);
-    expect(html).toContain("separate from the transcript");
-    expect(html).toContain("understanding cannot be inferred from audio");
+    expect(html).not.toContain("Tutor observations");
+    expect(html).toContain("Photos upload automatically");
     expect(html).toContain("Background recording is not supported");
     expect(html).toContain("Existing feedback deadlines and payroll policies still apply");
     expect(html).toContain("Final submission happens in Wise");
@@ -62,6 +62,18 @@ describe("class capture file handling", () => {
     expect(validateLocalFile(new Blob(["synthetic"], { type: "image/jpeg" }), "recording")).toMatch(/audio/);
     expect(validateLocalFile(new Blob([new Uint8Array(8 * 1024 * 1024 + 1)], { type: "image/png" }), "worksheet")).toMatch(/too large/);
     expect(validateLocalFile(new Blob([], { type: "audio/wav" }), "recording")).toMatch(/empty/);
+  });
+
+  it.each(["audio/x-m4a", "audio/m4a", "audio/mp4", "video/mp4", "", "application/octet-stream"])("imports iPhone M4A with type %s and retains bytes", async type => {
+    const bytes = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 77, 52, 65, 32]);
+    const normalized = await prepareLocalFile(new File([bytes], "Lesson.M4A", { type }), "recording");
+    expect(normalized.type).toBe("audio/mp4");
+    expect(new Uint8Array(await normalized.arrayBuffer())).toEqual(bytes);
+  });
+
+  it("rejects renamed non-audio files and explicit unsupported types", async () => {
+    await expect(prepareLocalFile(new File(["<html>not audio</html>"], "fake.m4a"), "recording")).rejects.toThrow(/media type/);
+    await expect(prepareLocalFile(new File(["content"], "fake.m4a", { type: "text/html" }), "recording")).rejects.toThrow(/audio file/);
   });
 
   it("copies only the reviewed feedback fields with clear headings", () => {

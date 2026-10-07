@@ -58,6 +58,7 @@ const EMITTED: ReadonlyArray<readonly [reason: string, category: HoldReasonCateg
   ["missing_student_or_tutor", "error", "The student or the tutor could not be identified"],
   ["missing_summary_student_or_tutor", "error", "The summary, the student or the tutor is missing"],
   ["thai_summary_no_transcript", "validation", "The summary is mostly Thai and there is no transcript to write from"],
+  ["summary_only_held", "validation", "Only Wise's summary to write from, which is held for a person"],
   ["transcript_pass_unavailable", "error", "The transcript pass is switched off"],
   ["recording_multiple_parts", "data_quality", "Recording in several parts"],
   ["recording_too_short", "data_quality", "Recording too short"],

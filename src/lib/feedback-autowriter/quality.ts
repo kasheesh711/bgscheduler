@@ -170,7 +170,8 @@ const ONSITE_REASONS = new Set(["session_type_OFFLINE", "session_type_in_person_
  * a miss (fail-closed). Reasons are matched whole.
  * Transcript first adds none: a class that fell back to the summary is judged by where it ends, so its fallback cause
  * (`summary_fallback:<cause>`, even a recording in several parts or unclear speakers) never leaves it out, and a
- * mostly-Thai summary held after a fallback (`thai_summary_no_transcript`) is a miss.
+ * mostly-Thai summary held after a fallback (`thai_summary_no_transcript`) is a miss. So is a summary-only class held by
+ * `FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY` (`summary_only_held`): an owner policy, not the class's own data.
  */
 export const DATA_QUALITY_REASONS: ReadonlyArray<{
   match: RegExp;
@@ -605,11 +606,6 @@ export function reviewInclusion(input: { tutorProven: boolean; draw: number }): 
 /** Inclusion reasons whose posts the gate counts (and the owner must review). */
 export function isRequiredReview(reason: InclusionReason): boolean {
   return reason === "new_tutor" || reason === "random_sample";
-}
-
-/** The next roster size: +50%, rounded up (5 → 8 → 12 → 18 → 27). */
-export function nextExpansionSize(current: number): number {
-  return current + Math.ceil(current / 2);
 }
 
 // ---------------------------------------------------------------------------

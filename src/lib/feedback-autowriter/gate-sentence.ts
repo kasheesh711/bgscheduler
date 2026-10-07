@@ -2,7 +2,7 @@ import { GATE_THRESHOLDS, addDays, floorPercent } from "./quality";
 import type { AutowriterReview } from "./review-data";
 
 /**
- * The expansion gate as one sentence for the health rail's gate card (dashboard redesign, section 3.4). Pure and free
+ * The accuracy gate as one sentence for the health rail's gate card (dashboard redesign, section 3.4). Pure and free
  * of server-only imports: safe to import from client components. The criteria that are not met are listed below the
  * sentence from `gate.reasons`; the sentence names what blocks a blocked gate, and otherwise the one criterion that
  * decides the status.
@@ -73,6 +73,8 @@ export function gateSentence(gate: AutowriterReview["gate"]): string {
         ? `Head start: lower bound ${measured(gate.wilsonLower)}, needs ${bar(gate.thresholds.passLowerBound)}.`
         : `Head start: lower bound ${measured(gate.wilsonLower)}; the gate still waits for ${waitingFor(gate)}.`;
     case "pass":
-      return `Gate passed: ready to add ${count(gate.nextExpansionSize - gate.currentTutors, "tutor")}.`;
+      return gate.uncoveredTutors && gate.uncoveredTutors.length > 0
+        ? `Gate passed; ${count(gate.uncoveredTutors.length, "online tutor")} not on the roster yet.`
+        : "Gate passed.";
   }
 }
