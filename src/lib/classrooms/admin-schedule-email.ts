@@ -407,7 +407,7 @@ export async function sendAdminClassroomScheduleEmail(
     blockers,
     triggerKind,
   };
-  const sender = options.sender ?? createOutboundEmailSender();
+  const sender = options.sender ?? createOutboundEmailSender("primary", { audience: "staff" });
   const html = renderHtml(context);
   const text = renderText(context);
   const counts = { attempted: 0, success: recipients.filter(email => alreadySent.has(email.toLowerCase())).length, failed: 0 };
