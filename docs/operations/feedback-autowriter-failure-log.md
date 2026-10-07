@@ -38,6 +38,7 @@ Operational failures have their own codes, **O01–O07** (new in this log):
 | O05 | Credit baseline mismatch: Wise holds a session charge other than the one the post expects |
 | O06 | The scheduled nightly audit did not run |
 | O07 | A Wise-side throttle (HTTP 429) failed a run |
+| O08 | A transcript existed but its speaker labels were called "unclear", so the class fell back to Wise's summary (and, with summary-only holds on, to a person) |
 
 **Owner rule, 5 Oct 2026:** homework that the feedback leaves out is **not an error**, because not every class has
 homework and an empty field is acceptable. Invented or wrong homework (M03: homework the tutor did not set, or a
@@ -77,6 +78,15 @@ correction is listed in Status and does not change the verdict.
 | 5 Oct (nightly) | 6a5f463845afae21065da667 | 4 Oct 19:30 | transcript | M17 | cosmetic | The first-person post calls the tutor's own practice set "tutor-created" | Left as is (cosmetic) |
 | 5 Oct (nightly) | 6ab8dc56c10615490d50b762 | 4 Oct 19:00 | transcript | M09 | cosmetic | The performance field leaves out several correct independent answers | Left as is (cosmetic) |
 | 5 Oct (nightly) | 6aaf4c2481ee4ce416cb3f60 | 4 Oct 17:30 | transcript | M17 | cosmetic | One trapezium question written as "trapezia" | Left as is (cosmetic) |
+| 7 Oct (audit) | 6a7422cabcd6af4342cc5cc1 | 6 Oct 20:30 | transcript | M05 | major | A point about control-rod materials was extended to fuel rods | Guarded correction attempted 7 Oct (see the audit report); otherwise left to the tutor |
+| 7 Oct (audit) | 6a93c1ae0c4febc6136d4a6a | 6 Oct 20:00 | transcript | M07 | major | The tutor's explanation was credited to the student; Soniox had merged both voices into one speaker for that stretch (zoom_alignment overall, tutor 84%) | Guarded correction attempted 7 Oct (see the audit report); otherwise left to the tutor |
+| 7 Oct (audit) | 6aa22d2a76c0cb26cfbaaa67 | 6 Oct 18:00 | transcript | M05 | major | A homework answer-key task was tied to a question without clear basis (low confidence) | Guarded correction attempted 7 Oct (see the audit report); otherwise left to the tutor |
+| 7 Oct (audit) | 6a9d1c0571b3aaa4b3b0cdca | 5 Oct 21:00 | transcript | M07 | major | The tutor's explanation (reversing both field and current) was credited to the student | Guarded correction attempted 7 Oct (see the audit report); otherwise left to the tutor |
+| 7 Oct (audit) | 6ab629b67d4c21cce91bcd92 | 5 Oct 21:00 | transcript | M03 | major | Daily word-problem practice suggested by the tutor was reported as set homework | Guarded correction attempted 7 Oct (see the audit report); otherwise left to the tutor |
+| 7 Oct (audit) | 6a76c108d39a835d85bd18af | 5 Oct 20:30 | transcript | M07 | major | Tutor-led reasoning on one divisibility question was credited to the student | Guarded correction attempted 7 Oct (see the audit report); otherwise left to the tutor |
+| 7 Oct (audit) | 6a75afef9fc415affe550e5a | late post | transcript | M07 | major | Credit to the student for tutor-led work (secondary evidence only) | Guarded correction attempted 7 Oct (see the audit report); otherwise left to the tutor |
+| 7 Oct (audit) | 6aa66a71e5e946e902d255dc | late post | transcript | M07 M09 | major | Credit to the student for tutor-led work; a main topic left out (secondary evidence only) | Guarded correction attempted 7 Oct (see the audit report); otherwise left to the tutor |
+| 7 Oct (audit) | 6a856a80784133d0b399b3b6 | late post | transcript | M05 | major | A mis-summarised detail (secondary evidence only) | Guarded correction attempted 7 Oct (see the audit report); otherwise left to the tutor |
 
 ### Drafts the judges stopped (not posted)
 
@@ -95,9 +105,73 @@ correction is listed in Status and does not change the verdict.
 | 2 Oct | Atom run 6c68a47f… | 2 Oct 17:36 | O03 | `collection_failed` on the Wise timetable read | A just-ended class appeared in both listings with different statuses | Fixed by kasheesh711/bgscheduler#139 |
 | 5 Oct | Atom runs e350c4e5…, fb8b1b6d…, c6b191f3… | 4 Oct 09:06, 12:36, 17:36 | O03 O07 | Two `wise_timetable: invalid_session` failures and one Wise 429. 197 of 200 runs in three days succeeded | Unknown: the failed run stores nothing about the offending record, and the stored timetables before and after show only ordinary reschedules | Plan: Atom collector |
 | 5 Oct | incidents for 6a76aeca…, 6abccb84… | 2 Oct 21:27 | O04 | Two critical "style reviewer could not return a verdict" incidents stayed open, and their pushes were reported as undelivered, for 2.5 days after both style checks passed | No automatic close when a later check for the same post passes | Acknowledged 5 Oct; plan: incident hygiene |
+| 7 Oct | 6abca2231ac8ce5fb7aeafcd | deadline 5 Oct 23:59 | O02 O05 | The credit-baseline hold (above) passed its deadline with no tutor post. The starter draft never reached the tutor | No hand-to-tutor path; the tutor is never told by the system | No deduction row on 7 Oct 09:30; owner to decide if one appears |
+| 7 Oct | 6abf1af067c24f09af696c87 | class 3 Oct, deadline 5 Oct 23:59 | O02 | Surfaced as a hold only on the evening of its deadline, when its tutor joined the roster (the cohort-5 deploy at 20:14). Nobody wrote it | Roster expansion makes old classes eligible on the day their deadline ends; no tutor notice | No deduction row on 7 Oct 09:30 |
+| 7 Oct | 6a76b04f0d147195a7454a54, 6ac209577811f1cd621cd661, 6abcbc297c7499a5688984b6, 6a3e27f5c98e73c4953f037b | 5–6 Oct | O08 | Four `summary_only_held` holds had a full Soniox transcript and Zoom captions naming both people | Two causes. (1) The student out-talked the tutor; the alignment was clean, but the rule needed the tutor at ≥50% of the talk. (2) Soniox merged both voices into one speaker, so no per-speaker label can be right | (1) fixed by kasheesh711/bgscheduler#165 (merged 7 Oct); (2) plan below. Retried on 7 Oct after the summary-only hold was switched off |
+| 7 Oct | scheduled task `bgs-autowriter-nightly` | 5–7 Oct | O06 | The scheduled task no longer exists, so the nights of 5 and 6 Oct were not audited by it | Unknown (the task was removed, not just blocked) | Nights 5 and 6 Oct audited by hand on 7 Oct |
+| 7 Oct | nightly correction ledger | 5 Oct 21:00 | O06 | Six `lock:sweep_running` refusals used up the night's correction cap for one real correction, so a verified fix could not be applied | A refused reservation counted toward the cap | Fixed by kasheesh711/bgscheduler#166 (draft, stacked on #159) |
+| 7 Oct | Atom runs 5 Oct 18:00–20:50 | 5 Oct | O03 | Every run failed `source_contradiction` on one student for three hours and held a maths class | The failed check and record were not stored | kasheesh711/bgscheduler#167 (draft) stores the check and the Atom activity id; Atom healthy since 21:00 |
 | 5 Oct | scheduled task `bgs-autowriter-nightly` | 4 and 5 Oct 01:44 | O06 | The nightly audit never ran for the nights of 3 and 4 Oct | The scheduled session waits on a Bash permission prompt in the main checkout | Run by hand for 4 Oct on 5 Oct (3 Oct not audited); plan: nightly audit |
 
 ## Long-term improvement plan
+
+### Status on 7 Oct and the next 30 days
+
+**Where the system is (7 days to 7 Oct):**
+- **Volume:** 203 classes seen. 118 posted (94 written from the transcript, 24 from Wise's summary). 28 held,
+  46 written by the tutor before the AI, 11 out of scope.
+- **Accuracy gate:** "head start", Wilson lower bound 73.8% (84 accurate of 102 reviewed). Coverage 88%.
+- **Cost:** $0.13 per draft (Soniox is 83% of it).
+- **Latency:** median 63 min overall. Transcript route 55 min; summary fallback 280 min (p90 51 h).
+- **Roster:** 48 tutors (every online tutor) since 5 Oct, about 20–25 posts a day. Owner review of every post no
+  longer fits in a day: 25 required posts were waiting on 7 Oct.
+
+**What changed in the picture since 5 Oct:**
+1. **Most summary-only drafts now come from discarded transcripts, not missing recordings.** 17 of the 29 summary
+   fallbacks in 7 days were `speakers_unclear` (O08). That status hides two failures:
+   - the student out-talks the tutor (fixed by #165);
+   - Soniox merges both voices into one speaker, about 70% of the cases still checkable.
+   The P0 caption work below should start with these classes, because the Zoom captions already exist for them.
+2. **Holds still have no path to the tutor (O02).** The system has told no tutor about any hold
+   (`tutorNotifiedAt` was empty on every one). Two holds passed their deadline unwritten on 5 Oct. On 7 Oct six
+   holds were due the same night and none had reached a tutor. This is now the largest deadline risk.
+3. **The nightly audit is not running at all (O06).** The scheduled task is gone, and #158/#159/#160 have been
+   drafts for four days. Hand runs from `slot-eval` are the only audit.
+
+**Owner decisions, 7 Oct (supersede the items below where they conflict):**
+- **Wise's summary is an accepted source.** Summary-only drafts are no longer held for a person:
+  `FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY` was removed from production on 7 Oct. Reviews and audits no longer flag them
+  either. A summary-only post that is faithful to the Wise summary counts as accurate, even where the transcript shows
+  the summary was wrong. The P0 "summary-only posts" item below is therefore closed. Captions (item 4) remain a
+  quality improvement, but they are no longer a blocker.
+- **Drop the false claims.** When the judges reject a draft, the system cuts the sentences they quoted and judges the
+  trimmed draft again at both levels. It posts the trimmed draft only if both levels pass it
+  (kasheesh711/bgscheduler#168). This replaces "hand a starter draft to the tutor" for judge holds (item 2), so item 2
+  now covers only the holds that cannot be repaired.
+- **Hold tracker (item 1): not yet.** Tutor messages stay manual for now.
+
+**Order of work (each item keeps the replay-fixture rule below):**
+
+| # | Item | Codes | Ships as | Owner gate |
+|---|---|---|---|---|
+| 1 | Hold tracker: tell the tutor when a class is held (deadline, reason, Wise link), owner alert 6 h before the deadline, Retry button. Spec: dashboard redesign §5, PR 2 | O01 O02 | migration + sweep + UI | Choose the channel (email or LINE) and whether the notice carries a starter draft |
+| 2 | Starter draft for every hold: a judge-rejected draft is repaired by the nightly verify path; a summary-only class gets a caption-based draft. The tutor edits instead of writing from nothing | O02 M07 | job + nightly | Tutor-facing text: owner sign-off on 5 samples |
+| 3 | Speaker attribution: #165 (merged 7 Oct), then label each word by the Zoom caption that covers it when Soniox merged the speakers (experiment: 71–91% of text covered; needs boundary smoothing + replay on the O08 fixtures) | O08 | transcript.ts | Replay + one-tap approval (who-said-what change) |
+| 4 | Captions as evidence when there is no recording (the P0 below, step 2) | M05 M09 | writer + both judges | Replay |
+| 5 | Make the nightly audit dependable: merge #158 → #159 → #166 → #160; recreate `bgs-autowriter-nightly` with the wrapper allow rule; show "Nightly audit for <night>: done / not run by 07:00" on the health rail | O06 | PRs + Mac config | Owner merges (money-adjacent: Wise writes) |
+| 6 | Review capacity: let the Opus audit be the first reviewer. The owner reviews every major/critical, every tutor edit, and a random 10% of "accurate" posts to measure agreement. Switch only after 50 paired verdicts show ≥90% agreement and no missed critical | gate | review-data + nightly | Owner decision |
+| 7 | Tutor edits as a signal: classify every `measured_fix` (the tutor changed the AI text) with the audit's mode registry and add a row here automatically | M* | nightly | — |
+| 8 | Judge bake-off rerun on owner-verdicted drafts (about 100 now): the GLM dual judge caught 8 of 17 real errors on 1 Oct. Try a who-said-what-only Sol/Opus check | M07 | judge | Replay + approval |
+| 9 | Attendance and billing holds go to the office, not the tutor: "student 0 min, charged 1 credit" (5 in 7 days) and credit-baseline holds open an office task with the Wise link | O05 | inbox + notice | — |
+| 10 | Roster expansion skips classes whose deadline is less than 24 h away, so a deploy cannot create same-night holds | O02 | job | — |
+| 11 | Atom: fail one session, not the run; Atom records which check failed (#167 is the first step) | O03 O07 | collector | — |
+| 12a | Nightly audit cost: night 2026-10-06 (33 posts) cost $47 API-eq. At 48 tutors (~30 posts a night) that is ~$320 a week, over the $300 weekly cap, so later nights would stop part-way. Audit 100% of new tutors, flagged posts, repaired posts (`metadata.pipeline.repair`) and transcript posts with tutor share < 50%, plus a 30% random sample of the rest | O06 | nightly select | Owner (sampling rule) |
+| 12b | M07 is the leading real error (5 of 9 majors on 7 Oct). Ship the deterministic pre-check from the M07 item below before more prompt work | M07 | judge pre-check | Replay |
+| 12 | Weekly merge session for autowriter drafts (#120 #121 #143 #146 #158–#160 #165–#167). Long-lived drafts are why fixes from 3 Oct were still not live on 7 Oct | — | process | Owner |
+
+**Targets for 6 Nov:** no hold reaches its deadline untold; judge holds that cannot be repaired under 1 a day; gate
+lower bound ≥ 80% on the transcript route; nightly audit done for 28 of 30 nights; owner review under 20 minutes a day.
+
 
 Ranked by how many parent-facing errors each item would have prevented. The sample is every reviewed first post up
 to 5 Oct: 90 posts, 14 of them with a major error under the 5 Oct homework rule. Every item ships with **replay fixtures**: the listed
