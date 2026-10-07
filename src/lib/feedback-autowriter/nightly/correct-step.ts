@@ -305,7 +305,7 @@ export interface CorrectDeps {
   supervised: boolean;
   code: CodeFacts | null;
   hmacKey: HmacKeyResult;
-  ledger: Pick<NightlyLedger, "reserve" | "settle" | "used" | "correctionsSince">;
+  ledger: Pick<NightlyLedger, "reserve" | "settle" | "used" | "correctionsSince" | "correctionsTonight" | "refusedTonight">;
   ops: CorrectionWiseOps;
   /** A Wise 429 was seen (through `guardedWiseOps`). */
   throttled: () => boolean;
