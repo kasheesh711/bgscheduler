@@ -23,6 +23,8 @@ export function verifyResendSignature(input: {
   const nowSeconds = Math.floor((input.now ?? new Date()).getTime() / 1000);
   if (Math.abs(nowSeconds - seconds) > TOLERANCE_SECONDS) return false;
   const key = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
+  // Svix keys are 24-32 bytes; a malformed secret decodes short/empty and must fail closed.
+  if (key.length < 16) return false;
   const expected = createHmac("sha256", key).update(`${id}.${timestamp}.${body}`).digest();
   return signature.split(" ").some((candidate) => {
     const [version, value] = candidate.split(",", 2);
