@@ -87,6 +87,10 @@ describe("Atom wording in a post a parent reads", () => {
     const plain = { ...fields, performance: "In the part of Extra practice we worked through in class, Deenoh answered 15 of 20 questions correctly, " +
       "with my guidance on the harder items, and finished the whole activity." };
     expect(validateAtomStatisticClaims(plain, build())).toEqual([]);
+    for (const prose of ["Deenoh matched part B to the correct diagram.", "She now shows evidence of independent mastery of long division.",
+      "We drew the atom data table for carbon.", "There was marked improvement in her timing."]) {
+      expect(validateAtomStatisticClaims({ ...fields, performance: prose }, build())).toEqual([]);
+    }
     expect(validateAtomStatisticClaims(fields, null)).toEqual([]);
   });
   it("tells both models to keep the evidence's labels out of the post", async () => {

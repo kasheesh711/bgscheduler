@@ -113,15 +113,20 @@ export function normalizeAtomTranscript(raw: unknown, ref: AtomActivityReference
       seconds: response.secondsTaken, assisted: response.tutorMode || !!ref.assisted,
     }));
     const correct = answers.filter(answer => answer.correct).length;
+    // Atom's list counts a skipped question as answered: on 7 Oct a practice listed 10 answered where the transcript
+    // held 8 answers and 2 `noAttempt` responses (no duplicates, no automatic ones). Either count agrees with the list;
+    // an answer recorded twice still contradicts it.
+    const skipped = parsed.questions.flatMap(question => question.responses.filter(response => response.noAttempt && !response.autoResponse)).length;
     const mismatched = [
       ref.expectedTotal !== undefined && parsed.totalQuestions !== ref.expectedTotal ? "total" : null,
       ref.expectedCorrect != null && correct !== ref.expectedCorrect ? "correct" : null,
-      ref.expectedAttempted != null && answers.length !== ref.expectedAttempted ? "attempted" : null,
+      ref.expectedAttempted != null && answers.length !== ref.expectedAttempted && answers.length + skipped !== ref.expectedAttempted ? "attempted" : null,
       ref.expectedSas != null && parsed.score !== ref.expectedSas ? "sas" : null,
     ].filter((field): field is string => field !== null);
     if (mismatched.length > 0) {
-      // Counts only (never a score, SAS or answer), so the run says which side of the comparison is off: a question
-      // answered twice, skipped or auto-filled answers, or a list that counts differently from the transcript.
+      // Question counts only (never SAS, an answer or a name), so the run says which side of the comparison is off: a
+      // question answered twice, skipped or auto-filled answers, or a list that counts differently from the transcript.
+      // `c=` is a correct-answer count; it reaches the owner's incident summary (email/LINE) like the activity id.
       const all = parsed.questions.flatMap(question => question.responses);
       const answeredQuestions = new Set(answers.map(answer => answer.questionId)).size;
       const shape = [

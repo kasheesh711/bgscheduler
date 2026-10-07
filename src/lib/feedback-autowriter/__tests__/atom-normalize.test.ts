@@ -30,6 +30,14 @@ describe("validated Atom boundary", () => {
     const otherStudent = [{ id_mock_test: "_1", id_student: "_789", name: "T", completed: true, started: null, finished: null, id_course_subject: 237, score: null, totalQuestions: 1, questionsCorrect: 0, questionsAnswered: 0 }];
     expect(stageOf(() => parseActivityIndex("test", otherStudent, "_456", new Set())).stage).toBe("index_student:test");
   });
+  it("accepts Atom's list counting skipped questions as answered, and still counts only real answers", () => {
+    const questions = [1, 2, 3].map(id => ({ id_course_question: id, responses: [{ ...response, id_course_question: id, noAttempt: id === 3, correct: id !== 3 }] }));
+    const practice = { ...transcript, id_question_session: "_123", questionSessionType: "practice", totalQuestions: 3, score: null, subtopicScore: undefined, questions };
+    const listed = { ...ref, kind: "practice" as const, expectedCorrect: null, expectedSas: null, expectedTotal: 3 };
+    expect(normalizeAtomTranscript(practice, { ...listed, expectedAttempted: 3 }).answers).toHaveLength(2);
+    expect(normalizeAtomTranscript(practice, { ...listed, expectedAttempted: 2 }).answers).toHaveLength(2);
+    expect(() => normalizeAtomTranscript(practice, { ...listed, expectedAttempted: 4 })).toThrow("source_contradiction");
+  });
   it("says which side of an attempted-count mismatch is off: a question answered twice shows as a=2 over q=1", () => {
     const twice = { ...transcript, questions: [{ id_course_question: 1, responses: [response, { ...response, correct: false, answeredAt: "2026-10-01T09:16:00Z" }] },
       { id_course_question: 2, responses: [{ ...response, id_course_question: 2, noAttempt: true, correct: false }] }] };
