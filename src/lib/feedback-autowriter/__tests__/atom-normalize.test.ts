@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AtomCollectionError, normalizeAtomTranscript, parseActivityIndex, type AtomActivityReference } from "../atom/normalize";
+import { AtomCollectionError, isSkippableContradiction, normalizeAtomTranscript, parseActivityIndex, type AtomActivityReference } from "../atom/normalize";
 const ref: AtomActivityReference = { id: "_123", studentId: "_456", name: "Test 7", subject: "maths", kind: "test", startedAt: "2026-10-01T09:00:00Z", completedAt: "2026-10-01T10:00:00Z", expectedCorrect: 1, expectedAttempted: 1, expectedTotal: 2, expectedSas: 102 };
 const response = { id_student: "_456", id_course_question: 1, id_course_subject: 237, answeredAt: "2026-10-01T09:15:00Z", correct: true, noAttempt: false, autoResponse: false, tutorMode: true, secondsTaken: 18, id_homework: null };
 const transcript = { id_question_session: "_123", id_student: "_456", name: "Test 7", questionSessionType: "mock_test", totalQuestions: 2, isScoredUsingMarks: false, includesAiMarkedQuestions: false, score: 102, subtopicScore: [{ title: "Fractions", score: 73, percentCorrect: 100 }], questions: [{ id_course_question: 1, responses: [response] }] };
@@ -48,6 +48,14 @@ describe("validated Atom boundary", () => {
       expect((error as AtomCollectionError).stage)
         .toBe("list_vs_transcript_attempted:test:_123|list:a=1,c=-,t=2|transcript:a=2,c=1,t=2,q=1,skip=1,auto=0");
     }
+  });
+  it("skips only a record whose own counts disagree; identity and subject contradictions still fail the student", () => {
+    const thrown = (fn: () => unknown) => { try { fn(); } catch (error) { return error; } throw new Error("did not throw"); };
+    expect(isSkippableContradiction(thrown(() => normalizeAtomTranscript(transcript, { ...ref, expectedCorrect: 2 })))).toBe(true);
+    expect(isSkippableContradiction(thrown(() => normalizeAtomTranscript({ ...transcript, id_student: "_789" }, ref)))).toBe(false);
+    expect(isSkippableContradiction(thrown(() => normalizeAtomTranscript(transcript, { ...ref, subject: "english" })))).toBe(false);
+    expect(isSkippableContradiction(new AtomCollectionError("source_contradiction", "student_not_in_catalog"))).toBe(false);
+    expect(isSkippableContradiction(new AtomCollectionError("response_changed", "list_vs_transcript_total:test:_1"))).toBe(false);
   });
   it.each([{ ...transcript, questionSessionType: "changed" }, { ...transcript, isScoredUsingMarks: true }, { ...transcript, questions: null }])("changed responses do not become empty success", changed => {
     expect(() => normalizeAtomTranscript(changed, ref)).toThrow("response_changed");

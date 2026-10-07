@@ -38,7 +38,7 @@ export interface InboxExtras {
 export interface InboxDashboard {
   holds: AutowriterDashboard["holds"];
   failedPosts: AutowriterDashboard["failedPosts"];
-  recent: ReadonlyArray<Pick<AutowriterDashboard["recent"][number], "wiseSessionId" | "tutorKey" | "scheduledEndAt">>;
+  recent: ReadonlyArray<Pick<AutowriterDashboard["recent"][number], "wiseSessionId" | "tutorKey" | "scheduledEndAt"> & { className?: string | null }>;
 }
 
 /** What the list reads from the review payload (`AutowriterReview` has all of it): never the feedback itself. */
@@ -76,13 +76,15 @@ const INCIDENT_TITLES: Record<string, string> = {
   style_review_flagged: "A guided post needs a style fix",
   style_review_unavailable: "A guided post's style check could not run",
   style_review_source_missing: "A guided post is missing its evidence or fact checks",
+  atom_record_skipped: "An Atom record was left out",
+  style_problem_recurring: "A style problem keeps recurring",
 };
 
 /**
  * Info incidents that still wait in the list for the owner to acknowledge (not red, never pushed). A style check that
  * could not run is not one: it retries by itself, and its later result supersedes it.
  */
-export const LISTED_INFO_INCIDENT_KINDS = ["style_review_flagged"] as const;
+export const LISTED_INFO_INCIDENT_KINDS = ["style_review_flagged", "atom_record_skipped", "style_problem_recurring"] as const;
 const LISTED_INFO_KINDS: ReadonlySet<string> = new Set(LISTED_INFO_INCIDENT_KINDS);
 
 const FAILED_POST_TITLES: Record<InboxDashboard["failedPosts"][number]["state"], string> = {
@@ -102,6 +104,11 @@ export function incidentTitle(kind: string): string {
  */
 export function isListedIncident(incident: { kind: string; severity: "critical" | "info"; acknowledgedAt: string | null }): boolean {
   return incident.acknowledgedAt === null && (incident.severity === "critical" || LISTED_INFO_KINDS.has(incident.kind));
+}
+
+/** A held class whose student never joined while the tutor waited (`metadata.noShow`). */
+export function noShowTitle(tutorMinutes: number): string {
+  return `The student did not join (the tutor waited ${tutorMinutes} min)`;
 }
 
 /** What happened to a post that did not end well, as a short plain sentence. */
@@ -170,14 +177,14 @@ export function buildInbox(
   const now = options.now ?? new Date();
 
   // The classes the page holds, for an incident's tutor and class time (the first list that knows a class wins).
-  const classes = new Map<string, { tutorKey: string; classEndedAt: string | null }>();
-  const known = (wiseSessionId: string, tutorKey: string, classEndedAt: string | null) => {
-    if (!classes.has(wiseSessionId)) classes.set(wiseSessionId, { tutorKey, classEndedAt });
+  const classes = new Map<string, { tutorKey: string; classEndedAt: string | null; className: string | null }>();
+  const known = (wiseSessionId: string, tutorKey: string, classEndedAt: string | null, className: string | null | undefined) => {
+    if (!classes.has(wiseSessionId)) classes.set(wiseSessionId, { tutorKey, classEndedAt, className: className ?? null });
   };
-  for (const item of review?.queue ?? []) known(item.wiseSessionId, item.tutorKey, item.classEndedAt);
-  for (const row of dashboard.holds) known(row.wiseSessionId, row.tutorKey, row.classEndedAt);
-  for (const row of dashboard.failedPosts) known(row.wiseSessionId, row.tutorKey, row.classEndedAt);
-  for (const row of dashboard.recent) known(row.wiseSessionId, row.tutorKey, row.scheduledEndAt);
+  for (const item of review?.queue ?? []) known(item.wiseSessionId, item.tutorKey, item.classEndedAt, item.className);
+  for (const row of dashboard.holds) known(row.wiseSessionId, row.tutorKey, row.classEndedAt, row.className);
+  for (const row of dashboard.failedPosts) known(row.wiseSessionId, row.tutorKey, row.classEndedAt, row.className);
+  for (const row of dashboard.recent) known(row.wiseSessionId, row.tutorKey, row.scheduledEndAt, row.className);
 
   const incidents = (review?.incidents ?? [])
     .filter(isListedIncident)
@@ -190,7 +197,8 @@ export function buildInbox(
         kind: "incident",
         urgency: incident.severity === "critical" ? "critical" : "normal",
         title: incidentTitle(incident.kind),
-        detail: incident.summary,
+        // The class's student first: two style fixes for one tutor otherwise read the same (7 Oct, Eng ×2).
+        detail: parts(about?.className ?? null, incident.summary),
         tutorKey: about?.tutorKey ?? null,
         wiseSessionId: incident.wiseSessionId,
         classEndedAt: about?.classEndedAt ?? null,
@@ -208,8 +216,8 @@ export function buildInbox(
       id: `hold:${row.wiseSessionId}`,
       kind: "hold",
       urgency: holdUrgency(row.deadlineAt, now),
-      title: holdReasonLabel(row.reason),
-      detail: parts(row.tutor, row.className, row.hasDraft && "draft stored"),
+      title: row.noShow ? noShowTitle(row.noShow.tutorMinutes) : holdReasonLabel(row.reason),
+      detail: parts(row.tutor, row.className, row.hasDraft && "draft stored", Boolean(row.noShow) && "no-show note ready"),
       tutorKey: row.tutorKey,
       wiseSessionId: row.wiseSessionId,
       classEndedAt: row.classEndedAt,
