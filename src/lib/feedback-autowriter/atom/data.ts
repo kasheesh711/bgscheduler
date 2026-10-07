@@ -78,11 +78,9 @@ export async function loadAtomLessonEvidence(db: Database, input: {
     const [studentRun] = await db.select().from(R).where(sql`${R.status} <> 'running' and ${R.counts}->'studentResults' ? ${link.atomStudentId}`)
       .orderBy(desc(R.startedAt)).limit(1);
     const studentCode = (studentRun?.counts.studentResults as Record<string, string> | undefined)?.[link.atomStudentId];
-    if (studentCode === "source_contradiction" && (!snapshot || studentRun!.finishedAt! >= snapshot.collectedAt)) {
-      const { hash: _hash, ...body } = buildAtomLessonEvidence({ ...base, link: { ...link, approvedAt: link.approvedAt.toISOString() }, snapshot: null, otherLessons: null }); void _hash;
-      const conflict = { ...body, status: "contradiction" as const, contradictions: ["collector_source_contradiction"] };
-      return { ...conflict, hash: evidenceHash(conflict) };
-    }
+    // Owner decision (7 Oct): a student whose Atom data contradicts itself is written lesson-only, like any other
+    // collection failure below — the writer gets no Atom data, the class is not held, and the collector's critical
+    // incident still asks for the Atom data to be fixed. (One student's every class was held from 5 Oct.)
     if (studentCode && studentCode !== "succeeded" && (!snapshot || studentRun!.finishedAt! >= snapshot.collectedAt)) {
       return omitted(studentCode === "authentication_failed" || studentCode === "response_changed" ? studentCode : "collection_failed");
     }

@@ -50,11 +50,13 @@ describe("Atom durable evidence", () => {
     const atom = await loadAtomLessonEvidence(db, { detail, studentId: STUDENT_ID, lessonRecord: "Fractions", now, preview: true });
     expect(atom?.omissions[0].reason).toBe("authentication_failed");
   });
-  it("student-specific source contradictions hold, even with an earlier valid snapshot", async () => {
+  it("a student-specific source contradiction leaves the class lesson-only, even with an earlier valid snapshot", async () => {
     await snapshot();
     await db.insert(s.feedbackAtomSyncRuns).values({ triggerSource: "cron", status: "failed", errorCode: "source_contradiction", startedAt: now, finishedAt: now, counts: { studentResults: { _123: "source_contradiction" } } });
     const atom = await loadAtomLessonEvidence(db, { detail, studentId: STUDENT_ID, lessonRecord: "Fractions", now, preview: true });
-    expect(atom?.status).toBe("contradiction");
+    expect(atom?.status).toBe("omitted");
+    expect(atom?.activities).toEqual([]);
+    expect(atom?.omissions[0].reason).toBe("collection_failed");
   });
   it("retains immutable evidence and refuses stale mappings on a stored draft", async () => {
     const atom = await loadAtomLessonEvidence(db, { detail, studentId: STUDENT_ID, lessonRecord: "Fractions", now, preview: true });
