@@ -22,7 +22,7 @@ import {
   type ScheduleEmailSender,
   type ScheduleEmailSenderKey,
 } from "@/lib/classrooms/schedule-email";
-import { createOutboundEmailSender } from "@/lib/email/outbound";
+import { createOutboundEmailSender, outboundEmailTransport } from "@/lib/email/outbound";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { WISE_LEARN_ORIGIN, wiseSessionLink } from "@/lib/wise/links";
@@ -177,6 +177,13 @@ export function postClassRemindersEnabledForState(input: {
 }
 
 export function postClassSenderKeyForAttempt(attemptNumber: number): ScheduleEmailSenderKey {
+  // Under gmail/resend "backup" is a different provider path (resend: the Gmail
+  // chain; gmail: the relay), and any error, including an uncertain one,
+  // schedules a retry. Moving an uncertain attempt to another provider could
+  // double-send a tutor, so every attempt stays on "primary" with the same
+  // idempotency key; the chain already falls back internally on definite
+  // rejections.
+  if (outboundEmailTransport() !== "apps_script") return "primary";
   return attemptNumber === 1 ? "primary" : "backup";
 }
 

@@ -23,6 +23,14 @@ describe("createResendSender", () => {
     });
   });
 
+  it.each(["", "  \n "])("omits the text key when the plain-text part is blank (%j)", async (text) => {
+    const fetchImpl = reply(200, { id: "x" });
+    await createResendSender(ENV, { fetchImpl }).sendEmail({ ...input, text });
+    const body = JSON.parse((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
+    expect("text" in body).toBe(false);
+    expect(body.html).toBe("<p>h</p>");
+  });
+
   it("prefers RESEND_REPLY_TO and per-call overrides", async () => {
     const fetchImpl = reply(200, { id: "x" });
     await createResendSender({ ...ENV, RESEND_REPLY_TO: "r@example.com" }, { fetchImpl, from: "A <a@notify.example.com>" }).sendEmail(input);

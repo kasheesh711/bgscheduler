@@ -258,9 +258,11 @@ export function deriveStudentFirstName(student: {
  *
  * 1. Dedupe short-circuit: when `dedupeKey` is set and a log row already
  *    carries it, skip the send entirely and return `{ skipped: true }`.
- * 2. Send via the Resend REST API (RESEND_API_KEY required; optional
- *    ADMISSIONS_EMAIL_FROM / ADMISSIONS_EMAIL_REPLY_TO overrides) — non-2xx
- *    responses throw via the shared Resend sender.
+ * 2. Send via the shared Resend sender (RESEND_API_KEY required).
+ *    ADMISSIONS_EMAIL_FROM overrides the sender; otherwise RESEND_FROM is
+ *    required. ADMISSIONS_EMAIL_REPLY_TO optionally overrides the reply-to.
+ *    Idempotency key is `admissions:<dedupeKey|uuid>`; non-2xx responses throw
+ *    via the shared Resend sender.
  * 3. Insert the log row capturing the Resend email id. A concurrent run that
  *    won the partial unique dedupe index races here — that unique violation
  *    is reported as skipped instead of thrown (the key was sent exactly once).

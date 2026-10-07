@@ -20,7 +20,8 @@ import {
  *   allows, falling back to the `gmail` chain on a pre-acceptance rejection.
  *
  * Read whenever a caller builds its sender (every job run), so setting
- * `OUTBOUND_EMAIL_TRANSPORT` to anything other than `gmail` is the kill switch.
+ * `OUTBOUND_EMAIL_TRANSPORT` to anything other than `gmail` or `resend` returns
+ * to the Apps Script relay (the kill switch).
  */
 export type OutboundEmailTransport = "apps_script" | "gmail" | "resend";
 /** Who reads the mail. Decides which rollout wave can move it to Resend. */
@@ -48,7 +49,7 @@ export function resendServesAudience(
 }
 
 /**
- * The Apps Script relay a sender key actually lands on. Under `gmail` both
+ * The Apps Script relay a sender key actually lands on. Under `gmail` or `resend` both
  * keys fall back to the primary relay, so configuration checks for a key must
  * look at that relay's env, not the key's own.
  */
@@ -147,6 +148,10 @@ function createResendFirstSender(env: OutboundEmailEnvironment, next: ScheduleEm
  * failover paths (tutor schedule quota failover, post-class retry attempts)
  * keep working. Gmail's own outcomes are strict: pre-acceptance failures throw
  * `ScheduleEmailRejection`, uncertain outcomes a plain `Error`.
+ *
+ * `backup` is not a separate provider under gmail/resend (resend: the Gmail
+ * chain; gmail: the relay) — callers must not fail over to it after an
+ * uncertain outcome.
  *
  * Under `resend`, `primary` mail for an audience RESEND_AUDIENCE serves goes
  * through Resend first and falls back to the `gmail` chain; everything else

@@ -71,7 +71,8 @@ export function createResendSender(
             to: [input.to.trim()],
             subject: input.subject.replace(/\s+/g, " ").trim(),
             html: input.html,
-            text: input.text,
+            // An empty text part would disable Resend's auto-generated plain text.
+            ...(input.text.trim() ? { text: input.text } : {}),
             reply_to: replyTo,
           }),
         });

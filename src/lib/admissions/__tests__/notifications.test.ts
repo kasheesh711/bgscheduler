@@ -230,7 +230,7 @@ describe("sendAdmissionsEmail", () => {
     expect(inserts).toHaveLength(0);
   });
 
-  it("throws the provider message on a non-2xx response (no log row)", async () => {
+  it("throws a rejection naming the HTTP status on a non-2xx response (no log row)", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: false,
       status: 422,
