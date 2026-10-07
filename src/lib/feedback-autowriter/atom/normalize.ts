@@ -10,10 +10,12 @@ export class AtomCollectionError extends Error {
 }
 /**
  * A contradiction labelled with the failed check, the activity kind and Atom's own activity id (an opaque `_digits`
- * id, never a name or a value from the payload), so a failed run says which record to look at.
+ * id, never a name or a value from the payload), so a failed run says which record to look at. A count mismatch also
+ * carries the question counts on both sides.
  */
-function contradiction(check: string, ref: Pick<AtomActivityReference, "kind" | "id">): AtomCollectionError {
-  return new AtomCollectionError("source_contradiction", `${check}:${ref.kind}:${/^_[0-9]+$/u.test(ref.id) ? ref.id : "id"}`);
+function contradiction(check: string, ref: Pick<AtomActivityReference, "kind" | "id">, counts?: string): AtomCollectionError {
+  return new AtomCollectionError("source_contradiction",
+    `${check}:${ref.kind}:${/^_[0-9]+$/u.test(ref.id) ? ref.id : "id"}${counts ? `|${counts}` : ""}`);
 }
 export const ATOM_SUBJECT_IDS: Readonly<Record<number, AtomSubject>> = {
   235: "english", 236: "verbal_reasoning", 237: "maths", 238: "non_verbal_reasoning",
@@ -111,13 +113,29 @@ export function normalizeAtomTranscript(raw: unknown, ref: AtomActivityReference
       seconds: response.secondsTaken, assisted: response.tutorMode || !!ref.assisted,
     }));
     const correct = answers.filter(answer => answer.correct).length;
+    // Atom's list counts a skipped question as answered: on 7 Oct a practice listed 10 answered where the transcript
+    // held 8 answers and 2 `noAttempt` responses (no duplicates, no automatic ones). Either count agrees with the list;
+    // an answer recorded twice still contradicts it.
+    const skipped = parsed.questions.flatMap(question => question.responses.filter(response => response.noAttempt && !response.autoResponse)).length;
     const mismatched = [
       ref.expectedTotal !== undefined && parsed.totalQuestions !== ref.expectedTotal ? "total" : null,
       ref.expectedCorrect != null && correct !== ref.expectedCorrect ? "correct" : null,
-      ref.expectedAttempted != null && answers.length !== ref.expectedAttempted ? "attempted" : null,
+      ref.expectedAttempted != null && answers.length !== ref.expectedAttempted && answers.length + skipped !== ref.expectedAttempted ? "attempted" : null,
       ref.expectedSas != null && parsed.score !== ref.expectedSas ? "sas" : null,
     ].filter((field): field is string => field !== null);
-    if (mismatched.length > 0) throw contradiction(`list_vs_transcript_${mismatched.join("+")}`, ref);
+    if (mismatched.length > 0) {
+      // Question counts only (never SAS, an answer or a name), so the run says which side of the comparison is off: a
+      // question answered twice, skipped or auto-filled answers, or a list that counts differently from the transcript.
+      // `c=` is a correct-answer count; it reaches the owner's incident summary (email/LINE) like the activity id.
+      const all = parsed.questions.flatMap(question => question.responses);
+      const answeredQuestions = new Set(answers.map(answer => answer.questionId)).size;
+      const shape = [
+        `list:a=${ref.expectedAttempted ?? "-"},c=${ref.expectedCorrect ?? "-"},t=${ref.expectedTotal ?? "-"}`,
+        `transcript:a=${answers.length},c=${correct},t=${parsed.totalQuestions},q=${answeredQuestions},` +
+          `skip=${all.filter(response => response.noAttempt).length},auto=${all.filter(response => response.autoResponse).length}`,
+      ].join("|");
+      throw contradiction(`list_vs_transcript_${mismatched.join("+")}`, ref, shape);
+    }
     return AtomActivitySchema.parse({
       id: ref.id, studentId: ref.studentId, kind: ref.kind, subject: ref.subject,
       name: parsed.name?.trim() || ref.name,

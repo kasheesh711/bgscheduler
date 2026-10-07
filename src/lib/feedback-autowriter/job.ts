@@ -1,4 +1,5 @@
 import { loadAtomLessonEvidence, retainIsebEvidence, storedIsebEvidenceMatches, eligibleForIseb } from "./atom/data";
+import { hasAtomEvidenceWording } from "./atom/statistics";
 import { matchingFormatStamp } from "./format";
 import { approvedFormatGuide, atomRolloutApproved } from "./iseb-rollout";
 import { MIMI_STYLE_GUIDE_V2 } from "./style";
@@ -905,7 +906,10 @@ function reusableTranscriptDraft(row: AutowriterSessionRow): StoredDraft | null 
   const expectedStyle = process.env.FEEDBACK_AUTOWRITER_ISEB_FORMAT_ENABLED === "true" && storedFormat?.id === "iseb" && tutorKey === "Mimi"
     ? MIMI_STYLE_GUIDE_V2 : activeStyleGuide(tutorKey);
   if (!matchingStoredStyle(pipeline.styleGuide, expectedStyle)) return null;
-  return { arm: row.arm, fields: row.fields as unknown as FeedbackFieldAnswers, judge, pipeline };
+  const fields = row.fields as unknown as FeedbackFieldAnswers;
+  // 7 Oct: a draft written under the earlier Atom rules may carry their audit wording; it is written again.
+  if (hasAtomEvidenceWording(fields)) return null;
+  return { arm: row.arm, fields, judge, pipeline };
 }
 
 /**

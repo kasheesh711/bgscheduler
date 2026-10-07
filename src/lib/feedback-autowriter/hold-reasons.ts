@@ -57,6 +57,8 @@ const DRAFT_PROBLEMS: ReadonlyArray<{ match: RegExp; label: string }> = [
   { match: /^policy:/u, label: "a draft that does not meet the feedback policy" },
   { match: /^field:/u, label: "a field that does not meet the feedback policy" },
   { match: /^attendance_wording:/u, label: "wording that reads as an absence or a cancelled class" },
+  { match: /^atom:evidence_wording:/u, label: "Atom audit wording a parent should not see" },
+  { match: /^atom:unmatched_result_statistic$/u, label: "a test or practice result Atom did not confirm" },
   { match: /^ai_suspect:/u, label: "text the Class Feedback checks would flag" },
   { match: /^finish_reason_length$/u, label: "a reply that was cut off" },
   { match: /^finish_reason_content_filter$/u, label: "a reply blocked by a content filter" },
