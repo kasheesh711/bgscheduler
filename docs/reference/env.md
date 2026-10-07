@@ -203,7 +203,7 @@ None of the following appear in `src/lib/env.ts`. Grouped by owning subsystem; 2
 | `SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_SECRET` | Backup shared secret | [`schedule-email.ts:292`](../../src/lib/classrooms/schedule-email.ts) | as above |
 | `SCHEDULE_EMAIL_SENDER_NAME` | Display name on outgoing schedule mail | [`schedule-email.ts:606`](../../src/lib/classrooms/schedule-email.ts) | `"BeGifted"` |
 | `SCHEDULE_EMAIL_REPLY_TO` | Reply-to address | [`schedule-email.ts:607`](../../src/lib/classrooms/schedule-email.ts) | a personal Gmail address hard-coded in source |
-| `OUTBOUND_EMAIL_TRANSPORT` | `gmail` sends app email through the Gmail API as the Workspace mailbox `admin@begiftededucation.com` (the nightly-reminder grant, about 2,000/day, shared with those reminders). Any Gmail rejection that precedes acceptance (preview or unconfigured environment, reconnect needed, daily limit) retries that one message through the Apps Script primary relay, and the `backup` sender key becomes that relay. Any other value keeps the Apps Script MailApp relay (about 100 recipients/day on a consumer account). Read whenever a job builds its sender, so changing it takes effect on the next run and doubles as the kill switch | [`src/lib/email/outbound.ts`](../../src/lib/email/outbound.ts) | unset → Apps Script relay |
+| `OUTBOUND_EMAIL_TRANSPORT` | `gmail` sends app email through the Gmail API as the Workspace mailbox `admin@begiftededucation.com` (the nightly-reminder grant, about 2,000/day, shared with those reminders). Any Gmail rejection that precedes acceptance (preview or unconfigured environment, reconnect needed, daily limit) retries that one message through the Apps Script primary relay, and the `backup` sender key becomes that relay. `resend` sends through Resend ([`src/lib/email/resend.ts`](../../src/lib/email/resend.ts)) for audiences `RESEND_AUDIENCE` allows (staff-tagged callers by default; `all` adds teacher mail); a Resend rejection that precedes acceptance falls back to the `gmail` chain for that message; an uncertain Resend outcome is never resent elsewhere; the `backup` sender key is the Gmail chain. Resend is skipped entirely when `RESEND_API_KEY` or `RESEND_FROM` is missing. Any other value keeps the Apps Script MailApp relay (about 100 recipients/day on a consumer account). Read whenever a job builds its sender, so changing it takes effect on the next run and doubles as the kill switch | [`src/lib/email/outbound.ts`](../../src/lib/email/outbound.ts) | unset → Apps Script relay |
 | `CRON_WATCHDOG_ALERT_EMAILS` | Comma list of recipients for the watchdog's single daily digest | [`src/lib/internal/cron-watchdog.ts`](../../src/lib/internal/cron-watchdog.ts) | `kevhsh7@gmail.com` |
 | `SCHEDULE_EMAIL_PUBLIC_BASE_URL` | Absolute origin for the floor-plan-map image embedded in the email | [`schedule-email.ts:266`](../../src/lib/classrooms/schedule-email.ts); also a base-URL fallback for leave requests ([`leave-requests/config.ts:19`](../../src/lib/leave-requests/config.ts)) | Falls through `VERCEL_PROJECT_PRODUCTION_URL` → `VERCEL_URL` → `DEFAULT_PUBLIC_BASE_URL = "https://bgscheduler.vercel.app"` ([`schedule-email.ts:265`–`276`](../../src/lib/classrooms/schedule-email.ts), const at [`:13`](../../src/lib/classrooms/schedule-email.ts)) |
 
@@ -261,13 +261,16 @@ Both variables are resolved at call time by [`src/lib/unearned-revenue/sync.ts`]
 | `UNEARNED_REVENUE_SPREADSHEET_ID` | Formula-backed accounting workbook imported by the dashboard sync | Falls back to `1AY6sAjw3rwAhdJCzMWR6qW0utBU91sv-JZWH1223mZc` |
 | `UNEARNED_REVENUE_CONNECTED_EMAIL` | Normalized email whose stored Google OAuth token reads the workbook | Falls back to `kevhsh7@gmail.com`; import fails closed when that account has no usable token or sheet access |
 
-### 2.7 Admissions notifications (3)
+### 2.7 Admissions and outbound email (6)
 
 | Variable | Purpose | Consumed at | If unset |
 |---|---|---|---|
-| `RESEND_API_KEY` | Resend API key for admissions email (`RESEND_ENDPOINT`, [`admissions/notifications.ts:43`](../../src/lib/admissions/notifications.ts)) | [`notifications.ts:299`–`300`](../../src/lib/admissions/notifications.ts) | Throws `RESEND_API_KEY is not configured` at send time |
-| `ADMISSIONS_EMAIL_FROM` | From header | [`notifications.ts:301`](../../src/lib/admissions/notifications.ts) | `DEFAULT_FROM` at [`:46`](../../src/lib/admissions/notifications.ts) — `BeGifted Admissions <onboarding@resend.dev>`, the Resend sandbox sender |
-| `ADMISSIONS_EMAIL_REPLY_TO` | Reply-to header | [`notifications.ts:302`](../../src/lib/admissions/notifications.ts) | `DEFAULT_REPLY_TO` at [`:49`](../../src/lib/admissions/notifications.ts) — a personal Gmail address |
+| `RESEND_API_KEY` | Resend API key for admissions email and shared outbound email transport | [`admissions/notifications.ts:43`](../../src/lib/admissions/notifications.ts), [`src/lib/email/resend.ts`](../../src/lib/email/resend.ts) | Throws `RESEND_API_KEY is not configured` at send time |
+| `RESEND_FROM` | Verified sender for Resend mail (e.g. `BeGifted <no-reply@notify.begiftededucation.com>`) | [`src/lib/email/resend.ts`](../../src/lib/email/resend.ts) | Missing → Resend skipped / rejected mail falls back to Gmail; read in shared transport |
+| `RESEND_REPLY_TO` | Reply-to for Resend mail | [`src/lib/email/resend.ts`](../../src/lib/email/resend.ts) | Falls back to `SCHEDULE_EMAIL_REPLY_TO`, then `kevhsh7@gmail.com` |
+| `RESEND_AUDIENCE` | `all` moves teacher mail to Resend; anything else or unset → staff only | [`src/lib/email/outbound.ts`](../../src/lib/email/outbound.ts) | `staff` |
+| `ADMISSIONS_EMAIL_FROM` | From header for admissions-specific sends | [`notifications.ts:301`](../../src/lib/admissions/notifications.ts) | `DEFAULT_FROM` at [`:46`](../../src/lib/admissions/notifications.ts) — `BeGifted Admissions <onboarding@resend.dev>`, the Resend sandbox sender |
+| `ADMISSIONS_EMAIL_REPLY_TO` | Reply-to header for admissions-specific sends | [`notifications.ts:302`](../../src/lib/admissions/notifications.ts) | `DEFAULT_REPLY_TO` at [`:49`](../../src/lib/admissions/notifications.ts) — a personal Gmail address |
 
 ### 2.8 LINE operations, seeding, and one-offs (3)
 
@@ -340,7 +343,7 @@ flowchart TD
 - **AI models and flags (6):** `OPENAI_SCHEDULER_SHADOW_MODEL`, `OPENAI_SCHEDULER_REASONING_EFFORT`, `OPENAI_PROGRESS_TEST_MODEL`, `OPENAI_POST_CLASS_FEEDBACK_MODEL`, `OPENAI_COMPETITOR_INTEL_MODEL`, `ENABLE_COMPETITOR_AI`
 - **Competitor providers (8):** `APIFY_API_TOKEN`, `APIFY_INSTAGRAM_ACTOR`, `APIFY_FACEBOOK_ACTOR`, `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD`, `COMPETITOR_APIFY_COST_PER_ITEM_USD`, `COMPETITOR_DATAFORSEO_COST_PER_QUERY_USD`, `COMPETITOR_INTEL_MONTHLY_CAP_USD`
 - **Wise writeback gates (4):** `WISE_SESSION_OPERATIONS_VERIFIED`, `WISE_SESSION_CREATE_VERIFIED`, `WISE_SESSION_SUBJECT_UPDATE_VERIFIED`, `WISE_TEACHER_REMOVAL_VERIFIED`
-- **Admissions email (3):** `RESEND_API_KEY`, `ADMISSIONS_EMAIL_FROM`, `ADMISSIONS_EMAIL_REPLY_TO`
+- **Admissions and outbound email (6):** `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_REPLY_TO`, `RESEND_AUDIENCE`, `ADMISSIONS_EMAIL_FROM`, `ADMISSIONS_EMAIL_REPLY_TO`
 - **Unattended charging (2):** `POST_CLASS_AUTO_APPROVE_ENABLED`, `POST_CLASS_AUTO_APPROVE_GRACE_HOURS` — the two knobs that decide whether money moves without a human
 - **Ops and misc (4):** `SCHEDULE_EMAIL_PUBLIC_BASE_URL`, `LINE_VALIDATION_LEAD_EMAILS`, `SEED_ADMIN_EMAILS`, `SALES_DASHBOARD_CONNECTED_EMAIL`
 - **Wise traffic controls (4):** `WISE_FAR_HORIZON_MAX_AGE_MINUTES`, `WISE_AVAILABILITY_HORIZON_DAYS`, `WISE_MAX_CONCURRENCY`, `CREDIT_REFRESH_MAX_AGE_MINUTES`
