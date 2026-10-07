@@ -357,6 +357,65 @@ export function sessionSubmitStore(
   };
 }
 
+/**
+ * The SubmitStore for the owner's no-show note on a `held` class (`no-show-post.ts`). Its claim is `held → posting`
+ * under the same atomic conditions as `sessionSubmitStore`'s (live, not halted, the teacher Wise showed is the stored
+ * one and switched on, no other POST unsettled); the held alert is dropped and `claimMetadata` (the expected
+ * submission and student, for reconciliation) is stored. No model wrote it: `arm` stays null. `finish` and `halt` are
+ * the session store's, so the sweep reconciles it like any other POST.
+ */
+export function heldNoShowSubmitStore(db: Database, wiseSessionId: string, claimMetadata: Record<string, unknown>,
+  held: { reason: string }): SubmitStore {
+  const base = sessionSubmitStore(db, wiseSessionId, "", claimMetadata);
+  return {
+    ...base,
+    // Not sent (Wise rate limited, the blank still there): the class goes back to its hold, not into the pipeline.
+    async finish(state, detail) {
+      if (state !== "pending") return base.finish(state, detail);
+      await db.update(S).set({
+        state: "held",
+        reason: held.reason,
+        nextAttemptAt: null,
+        metadata: sql`${S.metadata} || ${JSON.stringify({ alertKind: "held", noShowPost: { notSent: detail } })}::jsonb`,
+        updatedAt: nowSql,
+      }).where(and(eq(S.wiseSessionId, wiseSessionId), eq(S.state, "posting")));
+    },
+    async claimPost(input) {
+      let rows: Array<{ id: string }>;
+      try {
+        rows = await db.update(S).set({
+          state: "posting",
+          reason: "no_show_note",
+          postStartedAt: nowSql,
+          bodyHash: input.bodyHash,
+          fieldsSha256: input.fieldsSha256,
+          fields: input.fields as unknown as Record<string, string>,
+          billing: input.billing as unknown as Record<string, unknown>,
+          arm: null,
+          metadata: sql`(${S.metadata} - 'alertKind') || ${JSON.stringify({ ...claimMetadata, freshReadAt: input.freshReadAt.toISOString() })}::jsonb`,
+          updatedAt: nowSql,
+        }).where(and(
+          eq(S.wiseSessionId, wiseSessionId),
+          eq(S.state, "held"),
+          // Still the no-show hold the owner clicked: not re-held for something else meanwhile.
+          eq(S.reason, held.reason),
+          sql`${S.metadata} -> 'noShow' is not null and ${S.metadata} -> 'noShow' <> 'null'::jsonb`,
+          eq(S.wiseTeacherUserId, input.teacherId),
+          sql`exists (select 1 from feedback_autowriter_control c where c.id = 'default' and c.mode = 'live'
+            and c.halted_at is null and not (c.disabled_tutors ? ${input.teacherId}))`,
+          sql`not exists (select 1 from feedback_autowriter_sessions p where ${unsettledPostSql})`,
+        )).returning({ id: S.id });
+      } catch (error) {
+        if (isUniqueViolation(error)) return { claimed: false, reason: "post_in_flight" };
+        throw error;
+      }
+      if (rows.length > 0) return { claimed: true };
+      const [other] = await db.select({ id: S.id }).from(S).where(inArray(S.state, [...UNSETTLED_POST_STATES])).limit(1);
+      return { claimed: false, reason: other ? "post_in_flight" : "conditions" };
+    },
+  };
+}
+
 /** Move a row out of a post-claim state after a read-only reconciliation. */
 export async function reconcilePostedRow(db: Database, wiseSessionId: string, from: "posting" | "awaiting_event", to: {
   state: "awaiting_event" | "verified" | "unknown_outcome" | "verify_failed";
@@ -605,7 +664,7 @@ export async function retryHeldSession(db: Database, wiseSessionId: string, inpu
     metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'genericErrors' - 'writerErrors' - 'judgeErrors' - 'judgeUnreached'
       - 'judgeUnreachedCause' - 'judgeFailingSince' - 'recordingShortSeenAt' - 'judge'
       - 'draftEvidence' - 'pipeline' - 'transcript' - 'handover' - 'summaryAtHandover' - 'summaryFallback' - 'sonioxFailure'
-      - 'writerFailure' - 'sonioxRetainUntil' - 'triagedAt')
+      - 'writerFailure' - 'sonioxRetainUntil' - 'triagedAt' - 'summaryOnlyHeld' - 'noShow')
       || ${JSON.stringify({ retriedBy: input.actor })}::jsonb
       || jsonb_build_object('retriedAt', now()::text, 'retriedFrom', ${S.state}::text)`,
     alertsSent: sql`${S.alertsSent} - 'held' - 'expired'`,

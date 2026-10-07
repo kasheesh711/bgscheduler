@@ -494,6 +494,7 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
       const evidence = buildTranscriptEvidence({
         transcript: transcribed.transcript, audioDurationMs: transcribed.audioDurationMs, scheduledMinutes: window.minutes,
         zoomCues: await zoomCues(deps, detail), teacherName: detailTeacherName(detail), alsoTeacher: tutorSelfNames(detail),
+        studentNames: [student.name, ...(student.joinedAsGuest ? [student.joinedAsGuest] : [])],
       });
       record.speakers = { method: evidence.speakers.method, labels: evidence.speakerLabels, shares: evidence.speakers.shares };
       record.transcriptCharacters = evidence.rendered.length;

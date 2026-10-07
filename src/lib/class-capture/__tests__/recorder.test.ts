@@ -56,6 +56,35 @@ describe("ClassRecorder", () => {
     expect(media.stop).toHaveBeenCalledTimes(1);
   });
 
+  it("waits for Safari's delayed final chunk instead of truncating after 1.5 seconds", async () => {
+    vi.useFakeTimers();
+    const { env, media, track } = setup();
+    media.stop = vi.fn(() => { media.state = "inactive"; });
+    const recorder = new ClassRecorder({ kind: "recording" }, env);
+    await recorder.start(true);
+    expect(media.start).toHaveBeenCalledWith(1000);
+    media.chunk("first");
+    recorder.stop("background");
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(5000);
+    expect(recorder.snapshot.status).toBe("stopping");
+    media.chunk("delayed-tail");
+    media.onstop?.();
+    expect(await recorder.snapshot.blob?.text()).toBe("firstdelayed-tail");
+  });
+
+  it("retains final data when the browser marks the recorder inactive before the track ends", async () => {
+    const { env, media, track } = setup();
+    const recorder = new ClassRecorder({ kind: "recording" }, env);
+    await recorder.start(true);
+    media.state = "inactive";
+    track.dispatchEvent(new Event("ended"));
+    expect(recorder.snapshot.status).toBe("stopping");
+    media.chunk("final browser data");
+    media.onstop?.();
+    expect(await recorder.snapshot.blob?.text()).toBe("final browser data");
+  });
+
   it("stops a microphone permission response that arrives after cancellation", async () => {
     let resolve!: (value: MediaStream) => void;
     const request = new Promise<MediaStream>((done) => { resolve = done; });

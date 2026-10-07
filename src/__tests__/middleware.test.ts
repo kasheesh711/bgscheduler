@@ -66,7 +66,7 @@ describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
     expect(response.headers.get("location")).toContain("/login");
   });
 
-  it.each(["/api/line/webhook", "/api/internal/sync-wise", "/api/auth/session", "/schedule/token"])("does not read account access on public route %s even with a cookie", async (pathname) => {
+  it.each(["/api/line/webhook", "/api/email/resend-webhook", "/api/internal/sync-wise", "/api/auth/session", "/schedule/token"])("does not read account access on public route %s even with a cookie", async (pathname) => {
     await middleware(makeReq(pathname, true) as never, {} as never);
     expect(validateSessionAccess).not.toHaveBeenCalled();
   });
@@ -110,6 +110,12 @@ describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
 
   it("/api/search/assistant bypasses middleware so the route can return API auth errors", async () => {
     const res = await middleware(makeReq("/api/search/assistant") as never, {} as never) as Response;
+
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("/api/email/resend-webhook bypasses middleware so Resend can post signed delivery events", async () => {
+    const res = await middleware(makeReq("/api/email/resend-webhook") as never, {} as never) as Response;
 
     expect(res.headers.get("location")).toBeNull();
   });

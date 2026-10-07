@@ -85,17 +85,20 @@ type Identity = {
 };
 
 function verifiedTeacher(identities: Identity[], userId: string | null, teacherId: string | null, scope: CaptureScope) {
-  if (!userId || !teacherId) return null;
+  if (!userId) return null;
   const matches = identities.filter(identity => identity.wiseUserId === userId);
   if (new Set(matches.map(identity => identity.canonicalKey)).size !== 1 ||
     new Set(matches.map(identity => identity.groupId)).size !== 1) return null;
-  const match = matches.find(identity => identity.wiseTeacherId === teacherId);
+  // Past-session feeds can omit the membership ID. The exact Wise user must
+  // resolve to one membership; a present, conflicting ID never falls back.
+  if (!teacherId && new Set(matches.map(identity => identity.wiseTeacherId)).size !== 1) return null;
+  const match = teacherId ? matches.find(identity => identity.wiseTeacherId === teacherId) : matches[0];
   if (!match || match.isOnlineVariant || !["onsite", "both"].includes(match.supportedModality) ||
     scope.keys[0] !== match.canonicalKey) return null;
   return match;
 }
 
-/** Reads only pinned snapshots. The caller receives no synthetic or recurrence-derived sessions. */
+/** Reads verified snapshot evidence. The caller receives no synthetic or recurrence-derived sessions. */
 async function readCaptureSessions(scope: CaptureScope, first: string, last: string, now: Date, requestedSessionId?: string) {
   assertCaptureScope(scope);
   const db = getDb();
@@ -175,8 +178,49 @@ async function readCaptureSessions(scope: CaptureScope, first: string, last: str
   // stale. That older snapshot supplies names only; it never supplies grants.
   if (credit && isFresh(credit.generatedAt, now)) {
     const participantCount = sql<number>`(select count(*)::int from ${s.creditControlSessions} capture_participant
-      where capture_participant.snapshot_id = ${credit.id} and capture_participant.wise_session_id = ${s.creditControlSessions.wiseSessionId})`.mapWith(Number);
+      where capture_participant.snapshot_id = ${s.creditControlSessions.snapshotId} and capture_participant.wise_session_id = ${s.creditControlSessions.wiseSessionId})`.mapWith(Number);
+    // Feedback sync observes completed classes before the student snapshot rotates.
+    // Accept that newer state only when every identity, roster and time still agrees.
+    const verifiedCompletion = sql<boolean>`exists (
+      select 1 from ${s.postClassSessions} capture_completed
+      where capture_completed.wise_session_id = ${s.creditControlSessions.wiseSessionId}
+        and capture_completed.wise_class_id = ${s.creditControlSessions.wiseClassId}
+        and capture_completed.canonical_tutor_key = ${scope.keys[0]}
+        and capture_completed.wise_teacher_user_id = ${s.creditControlSessions.wiseTeacherUserId}
+        and capture_completed.scheduled_start_at = ${s.creditControlSessions.scheduledStartTime}
+        and capture_completed.scheduled_end_at = ${s.creditControlSessions.scheduledEndTime}
+        and capture_completed.source_status = 'ready' and capture_completed.final_status = 'ENDED'
+        and capture_completed.wise_deleted_at is null
+        and capture_completed.last_observed_at >= ${new Date(now.getTime() - MAX_SNAPSHOT_AGE_MS)}
+        and capture_completed.last_observed_at <= ${new Date(now.getTime() + 5 * 60 * 1000)}
+        and (select count(*) from ${s.postClassSessionParticipants} capture_roster
+             where capture_roster.session_id = capture_completed.id) = 1
+        and exists (select 1 from ${s.postClassSessionParticipants} capture_student
+             where capture_student.session_id = capture_completed.id
+               and capture_student.wise_student_id = ${s.creditControlSessions.wiseStudentId})
+    )`;
+    // A refresh can omit a just-ended class from both active schedules. Use only
+    // its latest retained row, still fresh and independently confirmed completed.
+    // Any current row or newer historical row wins, including conflicting data.
+    const recentRetainedSnapshot = sql<boolean>`exists (
+      select 1 from ${s.creditControlSnapshots} capture_snapshot
+      where capture_snapshot.id = ${s.creditControlSessions.snapshotId}
+        and capture_snapshot.source = 'wise'
+        and capture_snapshot.generated_at >= ${new Date(now.getTime() - MAX_SNAPSHOT_AGE_MS)}
+        and capture_snapshot.generated_at <= ${now}
+        and not exists (select 1 from ${s.creditControlSessions} capture_active
+          where capture_active.snapshot_id = ${credit.id}
+            and capture_active.wise_session_id = ${s.creditControlSessions.wiseSessionId})
+        and not exists (select 1 from ${s.creditControlSessions} capture_newer
+          join ${s.creditControlSnapshots} capture_newer_snapshot on capture_newer_snapshot.id = capture_newer.snapshot_id
+          where capture_newer.wise_session_id = ${s.creditControlSessions.wiseSessionId}
+            and capture_newer.snapshot_id in (select id from ${s.creditControlSnapshots}
+              where generated_at >= ${new Date(now.getTime() - MAX_SNAPSHOT_AGE_MS)})
+            and capture_newer.snapshot_id <> capture_snapshot.id
+            and capture_newer_snapshot.generated_at >= capture_snapshot.generated_at)
+    )`;
     const recent = await db.select({
+      verifiedCompletion,
       wiseSessionId: s.creditControlSessions.wiseSessionId, wiseClassId: s.creditControlSessions.wiseClassId,
       wiseStudentId: s.creditControlSessions.wiseStudentId, wiseTeacherId: s.creditControlSessions.wiseTeacherId,
       wiseTeacherUserId: s.creditControlSessions.wiseTeacherUserId, studentName: s.creditControlStudents.studentName,
@@ -189,14 +233,19 @@ async function readCaptureSessions(scope: CaptureScope, first: string, last: str
       knownDeleted: sql<boolean>`exists (select 1 from ${s.postClassSessions} capture_deleted
         where capture_deleted.wise_session_id = ${s.creditControlSessions.wiseSessionId} and capture_deleted.wise_deleted_at is not null)`,
     }).from(s.creditControlSessions).innerJoin(s.creditControlStudents, and(
-      eq(s.creditControlStudents.snapshotId, credit.id), eq(s.creditControlStudents.wiseStudentId, s.creditControlSessions.wiseStudentId),
+      eq(s.creditControlStudents.snapshotId, s.creditControlSessions.snapshotId), eq(s.creditControlStudents.wiseStudentId, s.creditControlSessions.wiseStudentId),
     )).innerJoin(s.creditControlPackages, and(
-      eq(s.creditControlPackages.snapshotId, credit.id), eq(s.creditControlPackages.wiseClassId, s.creditControlSessions.wiseClassId),
+      eq(s.creditControlPackages.snapshotId, s.creditControlSessions.snapshotId), eq(s.creditControlPackages.wiseClassId, s.creditControlSessions.wiseClassId),
       eq(s.creditControlPackages.wiseStudentId, s.creditControlSessions.wiseStudentId),
     )).where(and(
-      eq(s.creditControlSessions.snapshotId, credit.id), inArray(s.creditControlSessions.wiseTeacherUserId, userIds),
+      sql`${s.creditControlSessions.snapshotId} in (select id from ${s.creditControlSnapshots}
+        where id = ${credit.id} or (source = 'wise' and generated_at >= ${new Date(now.getTime() - MAX_SNAPSHOT_AGE_MS)}
+          and generated_at <= ${now}))`,
+      or(eq(s.creditControlSessions.snapshotId, credit.id), and(recentRetainedSnapshot, verifiedCompletion)),
+      inArray(s.creditControlSessions.wiseTeacherUserId, userIds),
       gte(s.creditControlSessions.scheduledStartTime, start), lt(s.creditControlSessions.scheduledStartTime, end),
-      eq(s.creditControlSessions.sessionKind, "past"), eq(s.creditControlSessions.meetingStatus, "ENDED"),
+      or(and(eq(s.creditControlSessions.sessionKind, "past"), eq(s.creditControlSessions.meetingStatus, "ENDED")),
+        and(inArray(s.creditControlSessions.meetingStatus, ["UPCOMING", "SCHEDULED", "IN_PROGRESS", "ENDED"]), verifiedCompletion)),
       lte(s.creditControlSessions.scheduledEndTime, now),
       requestedSessionId ? eq(s.creditControlSessions.wiseSessionId, requestedSessionId) : undefined,
     )).orderBy(asc(s.creditControlSessions.scheduledStartTime)).limit(MAX_QUERY_ROWS + 1);
@@ -204,7 +253,8 @@ async function readCaptureSessions(scope: CaptureScope, first: string, last: str
     for (const row of recent) {
       const teacher = verifiedTeacher(identities, row.wiseTeacherUserId, row.wiseTeacherId, scope);
       if (!teacher || !row.wiseStudentId || !row.wiseClassId || row.classType !== "ONE_TO_ONE" || row.sourceRowCount !== 1 || row.knownDeleted || row.hasCurrentScheduleEntry ||
-        row.sessionKind !== "past" || row.meetingStatus !== "ENDED" || deriveSessionModality(row.title) !== "onsite" ||
+        !((row.sessionKind === "past" && row.meetingStatus === "ENDED") ||
+          (row.verifiedCompletion === true && ACTIVE_STATUSES.has(row.meetingStatus))) || deriveSessionModality(row.title) !== "onsite" ||
         !row.scheduledEndTime || row.scheduledEndTime <= row.scheduledStartTime || row.scheduledEndTime > now ||
         row.scheduledStartTime < start || row.scheduledStartTime >= end) continue;
       // Any presence in the fresh tutor feed outranks the independent student

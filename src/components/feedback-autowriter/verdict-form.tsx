@@ -53,7 +53,7 @@ export function VerdictForm({ item, onRecorded, initialMode = "idle" }: {
     );
     if (downgrade && !downgradeConfirmed) return;
     if (verdict === "needs_fix" && chosenSeverity === "critical"
-      && !window.confirm("Record a CRITICAL verdict? It blocks expansion and pushes an alert.")) return;
+      && !window.confirm("Record a CRITICAL verdict? It blocks the gate and pushes an alert.")) return;
     const request = buildVerdictRequest(item, verdict, { severity, category, note, downgradeConfirmed });
     if (!request.ok) {
       setMessage({ error: true, text: request.error });
