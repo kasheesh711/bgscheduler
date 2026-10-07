@@ -56,6 +56,8 @@
 
 Suggested PR split: **PR A** = Tasks 1–4 (transport, routing, tags, auth). **PR B** = Task 5 (Admissions). **PR C** = Task 6 (digest switches). **PR D** = Tasks 7–8 (webhook). PR A is the only one on the critical path. B, C and D are independent of each other once A is merged.
 
+*Execution note: this shipped as two PRs instead: PR1 = Tasks 1–6 (transport, routing, tags, auth, Admissions, digest switches; no migration) and PR2 = Tasks 7–8 (webhook, migration 0111). Admissions goes live at owner Phase 3 (when `RESEND_API_KEY` and the from address are deployed after PR1), not Phase 4.*
+
 ---
 
 ### Task 1: Resend sender
@@ -1102,6 +1104,8 @@ Open as a draft PR. The migration `0111` must be applied to prod **before** merg
 4. Merge PR C, then set the two `*_ENABLED=false` values if the digests are being dropped.
 5. Merge PR D after migration 0111, then add the webhook in Resend and set `RESEND_WEBHOOK_SECRET`.
 6. After 1–2 weeks with a low bounce rate, set `RESEND_AUDIENCE=all` so teacher mail moves too.
+
+*Execution note: shipped as two PRs (PR1 = Tasks 1–6, PR2 = Tasks 7–8). Admissions goes live at owner Phase 3 (Resend key + from address deployed after PR1), not Phase 4.*
 
 **Rollback at any point:** set `OUTBOUND_EMAIL_TRANSPORT=gmail` and redeploy. Mail goes back to Workspace Gmail with the relay as fallback.
 

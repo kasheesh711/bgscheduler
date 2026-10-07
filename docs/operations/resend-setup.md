@@ -2,7 +2,9 @@
 
 Owner: Kevin. Pairs with the engineering plan [`docs/superpowers/plans/2026-10-07-resend-email-transport.md`](../superpowers/plans/2026-10-07-resend-email-transport.md).
 
-Code ships **dark**. Nothing changes for anyone until you flip the env values in Phase 4. Every step below can be undone by changing an env value and redeploying.
+The code ships in two PRs. **PR1** is the transport, staff routing, sign-in codes, Admissions and the digest switches (no migration). **PR2** is the delivery webhook plus migration 0111.
+
+Staff and teacher mail routing stays **dark** until you flip `OUTBOUND_EMAIL_TRANSPORT` in Phase 4. **Admissions is the exception:** once PR1 is merged and the Phase 3 values (`RESEND_API_KEY` plus `ADMISSIONS_EMAIL_FROM` or `RESEND_FROM`) are deployed, deadline reminders and weekly digests to students and parents start on the next admissions cron (01:12 UTC daily), with no wave and no transport flag. Every step below can be undone by changing an env value and redeploying, except mail already sent.
 
 **Time needed:** about 30 minutes of hands-on work, plus up to a few hours waiting for DNS.
 
@@ -84,9 +86,11 @@ vercel env add RESEND_REPLY_TO production
 
 5. **Don't** add these to Preview. Preview deploys should never send real mail.
 
+> **Heads-up: this phase turns Admissions email on.** After PR1 is merged and these values are deployed, the next admissions cron (01:12 UTC daily) sends deadline reminders and weekly digests to students and parents through Resend. `OUTBOUND_EMAIL_TRANSPORT` does not control it. If you want Admissions off, hold back `RESEND_API_KEY` (and the `ADMISSIONS_EMAIL_FROM` / `RESEND_FROM` values) until you are ready.
+
 **Check:** `vercel env ls production` lists `RESEND_API_KEY`, `RESEND_FROM`, `ADMISSIONS_EMAIL_FROM` and `RESEND_REPLY_TO`. Never use `vercel env pull` to check a value: it shows sensitive values as empty even when they're set.
 
-## Phase 4: Turn it on in waves (after PR A merges)
+## Phase 4: Turn it on in waves (after PR1 merges)
 
 Each flip is an env change followed by a redeploy (push to `main`, or **Redeploy** on the latest production deployment in the Vercel dashboard).
 
@@ -95,12 +99,12 @@ Each flip is an env change followed by a redeploy (push to `main`, or **Redeploy
 ```bash
 vercel env add OUTBOUND_EMAIL_TRANSPORT production
 ```
-Value: `resend`. Then redeploy.
+Value: `resend`. If the variable already exists, edit it in the Vercel dashboard instead. Then redeploy.
 
 What changes:
 - Cron alerts, autowriter alerts, weekend check, leave-request notices, admin digests and sign-in codes now go through **Resend**.
 - Teacher mail (classroom schedules, feedback reminders, progress-test heads-ups) now goes through **Workspace Gmail as admin@**. That also moves it off the 100-a-day Apps Script relay.
-- Admissions starts sending once PR B is merged.
+- Admissions is not part of this flip. It already sends through Resend from Phase 3 onward (once PR1 is merged), independent of `OUTBOUND_EMAIL_TRANSPORT`.
 
 **Check, same day:**
 - Request a sign-in code from `/login` and confirm it arrives within about 10 seconds and not in spam.
@@ -118,9 +122,9 @@ Value: `all`. Then redeploy.
 
 Afterwards, spot-check with two or three teachers that the next morning's classroom email didn't land in spam.
 
-## Phase 5: Bounce tracking (after PR D is ready)
+## Phase 5: Bounce tracking (PR2)
 
-1. **Apply the migration before merging PR D.** From the linked checkout, on the PR branch:
+1. **Apply the migration before merging PR2.** From the linked checkout, on the PR branch:
 
 ```bash
 set -a && source .env.local && set +a && npm run db:migrate
@@ -128,8 +132,14 @@ set -a && source .env.local && set +a && npm run db:migrate
 
    `.env.local` in the linked checkout holds the production Neon `DATABASE_URL`. Confirm that before running.
 
-   Confirm the only new migration it applies is `0111_email_delivery_events`.
-2. Merge PR D and wait for the production deploy.
+   Pre-check, before running it: confirm 0111 is the only pending migration. Against the production database run:
+
+```sql
+select count(*) from drizzle.__drizzle_migrations;
+```
+
+   It must return **111** (entries 0000 to 0110). After the migration it should return **112**.
+2. Merge PR2 and wait for the production deploy.
 3. Resend → **Webhooks → Add endpoint**
    - URL: `https://bgscheduler.vercel.app/api/email/resend-webhook`
    - Events: `email.delivered`, `email.bounced`, `email.complained`, `email.delivery_delayed`, `email.failed`
@@ -142,7 +152,7 @@ Then redeploy.
 
 5. Resend → Webhooks → your endpoint → **Send test event**. It should show `200`. A `503` means the secret isn't deployed yet; a `401` means the secret is wrong.
 
-## Phase 6: Optional: drop the two admin digests (after PR C merges)
+## Phase 6: Optional: drop the two admin digests (after PR1 merges)
 
 Only if staff don't act on them. The same information is on `/class-assignments` and `/progress-tests`.
 
@@ -156,6 +166,8 @@ vercel env add PROGRESS_TEST_ADMIN_DIGEST_ENABLED production
 ```
 Value: `false`
 
+`CLASSROOM_ADMIN_EMAIL_ENABLED=false` stops only the admin summary; teachers still get their schedules.
+
 Redeploy. To bring either digest back, set its value to `true` (or remove the variable) and redeploy.
 
 ---
@@ -167,7 +179,7 @@ If Resend mail is missing or landing in spam:
 1. Vercel → Settings → Environment Variables → `OUTBOUND_EMAIL_TRANSPORT` → change it to `gmail`.
 2. Redeploy.
 
-All app mail then goes back through Workspace Gmail, with the Apps Script relay as backup. Nothing else needs to change. If teacher mail alone is the problem, remove `RESEND_AUDIENCE` instead: staff mail stays on Resend and teacher mail goes back to Gmail.
+All app mail **except Admissions** then goes back through Workspace Gmail, with the Apps Script relay as backup. Admissions has no fallback: to stop Admissions mail, remove `RESEND_API_KEY` from Vercel and redeploy. That also moves staff mail back to Gmail, because Resend is skipped when it is unconfigured. If teacher mail alone is the problem, remove `RESEND_AUDIENCE` instead: staff mail stays on Resend and teacher mail goes back to Gmail.
 
 ## Rules that always apply
 
@@ -181,6 +193,6 @@ All app mail then goes back through Workspace Gmail, with the Apps Script relay 
 - [ ] `notify.begiftededucation.com` verified (SPF, DKIM, DMARC)
 - [ ] `RESEND_API_KEY`, `RESEND_FROM`, `ADMISSIONS_EMAIL_FROM`, `RESEND_REPLY_TO` in Vercel Production
 - [ ] Wave 1: `OUTBOUND_EMAIL_TRANSPORT=resend`, sign-in code test passed, headers show PASS
-- [ ] Migration 0111 applied, webhook added, `RESEND_WEBHOOK_SECRET` set, test event returned 200
+- [ ] PR2: migration 0111 applied (count was 111, now 112), webhook added, `RESEND_WEBHOOK_SECRET` set, test event returned 200
 - [ ] (optional) digests disabled
 - [ ] Wave 2 after 1–2 weeks: `RESEND_AUDIENCE=all`, teacher spot-check done
