@@ -1,4 +1,5 @@
 import { reviewIsebPosts } from "./iseb-review";
+import { raiseRecurringStyleProblems } from "./style-trends";
 import { randomBytes } from "node:crypto";
 import { and, between, count, desc, eq, getTableColumns, gte, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
@@ -977,6 +978,7 @@ export async function runReviewJob(deps: ReviewJobDeps): Promise<ReviewJobResult
 
     if (process.env.FEEDBACK_AUTOWRITER_ISEB_REVIEW_ENABLED === "true") {
       await step("iseb_style_review", () => reviewIsebPosts(db, deps.deadlineMs ?? Date.now() + 75_000));
+      await step("style_trends", () => raiseRecurringStyleProblems(db, now));
     }
     // Incidents this run raised.
     await drain("incidents", now);

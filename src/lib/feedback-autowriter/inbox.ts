@@ -77,13 +77,14 @@ const INCIDENT_TITLES: Record<string, string> = {
   style_review_unavailable: "A guided post's style check could not run",
   style_review_source_missing: "A guided post is missing its evidence or fact checks",
   atom_record_skipped: "An Atom record was left out",
+  style_problem_recurring: "A style problem keeps recurring",
 };
 
 /**
  * Info incidents that still wait in the list for the owner to acknowledge (not red, never pushed). A style check that
  * could not run is not one: it retries by itself, and its later result supersedes it.
  */
-export const LISTED_INFO_INCIDENT_KINDS = ["style_review_flagged", "atom_record_skipped"] as const;
+export const LISTED_INFO_INCIDENT_KINDS = ["style_review_flagged", "atom_record_skipped", "style_problem_recurring"] as const;
 const LISTED_INFO_KINDS: ReadonlySet<string> = new Set(LISTED_INFO_INCIDENT_KINDS);
 
 const FAILED_POST_TITLES: Record<InboxDashboard["failedPosts"][number]["state"], string> = {
