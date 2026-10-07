@@ -486,6 +486,11 @@ export async function runWritingPipeline(input: {
         reasons.push(...revalidationReasons.map((reason) => `${candidate.arm}:repair:${reason}`));
         continue;
       }
+      // No time left for a full judging: hold, as before repairs, rather than retry the whole class in a loop.
+      if (input.remainingMs() - AUTOWRITER_CALL_DEADLINE_MARGIN_MS < AUTOWRITER_JUDGE_TIMEOUT_MS[evidence]) {
+        reasons.push(`${candidate.arm}:repair:no_time`);
+        break;
+      }
       const second = await candidate.judgeDraft(repair.output, `${candidate.generation}:repair`);
       if (second.kind === "return") return second.result;
       if (second.verdict?.faithful) {

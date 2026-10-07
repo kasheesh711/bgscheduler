@@ -230,6 +230,17 @@ describe("runWritingPipeline", () => {
       expect(roles(records)).toHaveLength(8);
     });
 
+    it("holds rather than start a repair judging it has no time for", async () => {
+      const { promise, records } = run(
+        { writers: [SOL(withExtra), LUNA(withExtra)], judge: [GLM(QUOTED), GLM(QUOTED)] },
+        { evidence: "transcript", remainingMs: 700_000, latencyMs: (request) => request.schemaName === "post_class_feedback" ? 100_000 : 120_000 },
+      );
+      const result = await promise;
+      expect(result).toMatchObject({ kind: "held" });
+      if (result.kind === "held") expect(result.reasons.at(-1)).toBe("luna:repair:no_time");
+      expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm", "writer:luna", "judge:glm", "judge:glm"]);
+    });
+
     it("does not repair when the quote is not in the draft", async () => {
       const { promise, records } = run({ writers: [SOL(writerJson), LUNA(writerJson)], judge: [GLM(UNFAITHFUL), GLM(FAITHFUL)] });
       expect(await promise).toMatchObject({ kind: "draft", arm: "luna" });
