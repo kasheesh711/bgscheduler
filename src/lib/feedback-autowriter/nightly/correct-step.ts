@@ -52,9 +52,9 @@ export const CORRECTION_WINDOW_MAX_WAIT_MS = 6 * 60_000;
 const WAIT_SLICE_MS = 30_000;
 /** Outcomes after which a class is not tried again tonight. */
 const FINAL_APPLY_STATUSES = new Set(["verified", "awaiting_event", "awaiting_event_locked", "not_sent", "safety", "error"]);
-/** Outcomes whose text is (or may be) in Wise: the owner reviews the class again. */
 /** A class refused this many times tonight is not tried again tonight. */
 const MAX_REFUSED_PER_CLASS_NIGHT = 2;
+/** Outcomes whose text is (or may be) in Wise: the owner reviews the class again. */
 const LANDED_STATUSES = new Set(["verified", "awaiting_event", "awaiting_event_locked"]);
 
 // ---------------------------------------------------------------------------

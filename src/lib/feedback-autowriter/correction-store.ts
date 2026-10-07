@@ -191,6 +191,7 @@ export function pgCorrectionStore(db: Database, opts: {
         wiseTeacherUserId: S.wiseTeacherUserId,
         deadlineAt: S.deadlineAt,
         recordsRepost: sql<boolean>`${S.metadata} ?| array['corrections', 'nicknameFix', 'agentCorrection']`,
+        noShowNote: sql<boolean>`${S.metadata} ? 'noShowPost'`,
       }).from(S).where(eq(S.wiseSessionId, sid)).limit(1);
       const [firstShot] = await db.select({
         actorKind: P.actorKind, outcome: P.outcome, fieldsSha256: P.fieldsSha256, billing: P.billing, postStartedAt: P.postStartedAt,
@@ -213,6 +214,8 @@ export function pgCorrectionStore(db: Database, opts: {
       const stuck = await stuckPostInFlight(db, AUTOWRITER_STALE_POSTING_MS);
 
       const problems: string[] = [];
+      // The owner's no-show note: a correction would have to drop its absence wording (and with it the exemption).
+      if (row?.noShowNote) problems.push("no_show_note");
       if (!row) {
         problems.push("row_missing");
       } else {

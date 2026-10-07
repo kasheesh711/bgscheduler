@@ -708,6 +708,12 @@ describe("preconditions", () => {
     expect((await store().preconditions(planFor(seeded), new Date())).problems).toEqual([]);
   });
 
+  it("never corrects the owner's no-show note", async () => {
+    const seeded = await postedWithFirstShot();
+    await db.update(S).set({ metadata: sql`${S.metadata} || '{"noShowPost":{"actor":"owner"}}'::jsonb` }).where(eq(S.wiseSessionId, seeded.wiseSessionId));
+    expect((await store().preconditions(planFor(seeded), new Date())).problems).toContain("no_show_note");
+  });
+
   it("accepts a first-shot time up to a minute after the recorded POST start (the verified event's own time)", async () => {
     const seeded = await postedWithFirstShot();
     const plan = planFor(seeded, { base: { ...planFor(seeded).base, firstShotPostedAt: seeded.verifiedAt } });
