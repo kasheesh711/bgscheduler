@@ -597,9 +597,12 @@ reads the same clock as the store, which refuses the lock (`clock_skew`) when th
 database. One class at a time: STOP, the executor's own guards on reads alone (a refused class never waits or counts),
 then — with `--apply` — the next correction window (UTC minutes 10–15 and 40–45, i.e. 06:10–06:15 and 06:40–06:45
 Bangkok; waited for up to 6 minutes, never past the 06:50 deadline), the night and week caps reserved in
-`spend.jsonl`, and the one guarded POST ([`correction.ts`](../../src/lib/feedback-autowriter/correction.ts)): up to
-3 minutes of checks under the lock, then up to about 10 minutes of read-back and waiting for our Wise event. Each
-outcome is appended to `<night>/corrections.jsonl` (codes and ids only).
+`spend.jsonl`, and the one guarded POST ([`correction.ts`](../../src/lib/feedback-autowriter/correction.ts)). If a
+backstop sweep (:08/:38) still holds the lease, taking the lock waits for it every 15 s, never past the end of the
+window the correction started in and never on STOP, with nothing halted meanwhile; a sweep that outlasts the window
+ends the run (`sweep_running`). Then up to 3 minutes of checks under the lock (timed from the halt, credits re-read),
+then up to about 10 minutes of read-back and waiting for our Wise event. Each outcome is appended to
+`<night>/corrections.jsonl` (codes and ids only).
 - `--apply` runs only from a clean checkout whose HEAD is `origin/main` (fetch first). `--supervised` lifts that for
   an owner-watched run from a branch and is recorded on every outcome; the scheduled task never passes it.
 - Verified, or waiting for our Wise event: an `agent` flag (`agent-correction:<sid>`, "corrected by the nightly agent:

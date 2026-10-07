@@ -247,12 +247,16 @@ export function pgCorrectionStore(db: Database, opts: {
       return { problems: [...new Set(problems)], firstShotPostedAt: firstShot?.postStartedAt ?? null };
     },
 
-    async lock(plan) {
+    async lock(plan, options = {}) {
       if (held) throw new CorrectionStoreError("lock_already_held");
-      // A running sweep is waited for (bounded by attempts, not the clock, so a stubbed sleep cannot spin).
+      // A running sweep is waited for: bounded by attempts (a stubbed sleep cannot spin) and by `waitUntil` (the halt
+      // never starts after the correction window closes), and given up at once on STOP. Nothing is halted meanwhile.
       let token = await acquireSweepLease(db, CORRECTION_LOCK_LEASE_MS);
       for (let attempt = 1; !token && attempt <= CORRECTION_LOCK_WAIT_MS / CORRECTION_LOCK_POLL_MS; attempt += 1) {
+        if (options.waitUntil && now().getTime() + CORRECTION_LOCK_POLL_MS >= options.waitUntil.getTime()) break;
+        if (options.stopRequested?.()) return { ok: false, reason: "stop_requested" };
         await sleep(CORRECTION_LOCK_POLL_MS);
+        if (options.stopRequested?.()) return { ok: false, reason: "stop_requested" };
         token = await acquireSweepLease(db, CORRECTION_LOCK_LEASE_MS);
       }
       if (!token) return { ok: false, reason: "sweep_running" };
@@ -296,7 +300,7 @@ export function pgCorrectionStore(db: Database, opts: {
           const facts = await readBooleans(db, { lockHeld: lockHeldSql(current), tutorDisabled: tutorDisabledSql(current.teacherId) });
           return facts.lockHeld && !facts.tutorDisabled;
         };
-        const lock: CorrectionLock = { isHeld, release };
+        const lock: CorrectionLock = { isHeld, release, haltedAtMs: before };
         return { ok: true, lock };
       } catch (error) {
         if (halted) await release().catch(() => false);

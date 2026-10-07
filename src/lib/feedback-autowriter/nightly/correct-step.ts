@@ -410,6 +410,8 @@ export function runStopForRefusal(reason: string | undefined): NightlyStop | nul
   if (!reason) return null;
   if (/daily_cap/u.test(reason)) return new NightlyStop("cap:daily_db", EXIT.caps);
   if (/clock_skew/u.test(reason)) return new NightlyStop("clock_skew", EXIT.guardRefused);
+  // A sweep that outlasted the wait holds the lease past this window: every later class would wait and be refused too.
+  if (/sweep_running/u.test(reason)) return new NightlyStop("sweep_running", EXIT.stopped);
   return null;
 }
 

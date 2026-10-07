@@ -10,6 +10,7 @@ import {
   CorrectionRefusedError,
   agentCorrectionDedupeKey,
   correctPostGuarded,
+  correctionWindowEnd,
   exactFeedbackFields,
   inCorrectionWindow,
   type CorrectPostInput,
@@ -64,6 +65,8 @@ interface StoreOptions {
   dbOffsetMs?: number;
   /** databaseNow calls (1-based) that throw. */
   clockFails?: number[];
+  /** The lock's halt moment on the test clock (`CorrectionLock.haltedAtMs`). */
+  haltedAtMs?: number;
 }
 
 function memoryStore(log: string[], time: Clock, options: StoreOptions = {}) {
@@ -83,7 +86,9 @@ function memoryStore(log: string[], time: Clock, options: StoreOptions = {}) {
         firstShotPostedAt: options.firstShotPostedAt === undefined ? FIRST_SHOT_AT : options.firstShotPostedAt,
       };
     },
-    async lock() {
+    lockOptions: undefined as Parameters<CorrectionStore["lock"]>[1],
+    async lock(_plan?: CorrectionPlan, lockOptions?: Parameters<CorrectionStore["lock"]>[1]) {
+      store.lockOptions = lockOptions;
       log.push("store:lock");
       if (options.lock instanceof Error) throw options.lock;
       if (options.lock) return options.lock;
@@ -91,6 +96,7 @@ function memoryStore(log: string[], time: Clock, options: StoreOptions = {}) {
       return {
         ok: true as const,
         lock: {
+          haltedAtMs: options.haltedAtMs,
           isHeld: async () => {
             log.push("store:isHeld");
             if (options.isHeld instanceof Error) throw options.isHeld;
@@ -244,7 +250,7 @@ describe("correctPostGuarded: a correction that lands", () => {
     // before the POST, the database clock after it; release last.
     expect(result.log).toEqual([
       "store:preconditions", "wise:detail#1", "wise:credits#1", "store:lock", "store:clock", "wise:events#1", "store:clock",
-      "wise:detail#2", "store:record", "store:isHeld", "wise:post", "store:clock", "wise:detail#3", "wise:credits#2", "wise:events#2",
+      "wise:detail#2", "wise:credits#2", "store:record", "store:isHeld", "wise:post", "store:clock", "wise:detail#3", "wise:credits#3", "wise:events#2",
       "store:settle:verified", "store:release",
     ]);
     expect(result.store.records[0].input).toMatchObject({ studentWiseUserId: STUDENT_ID, baselineCredits: [1] });
@@ -692,6 +698,29 @@ describe("correctPostGuarded: the fresh read under the lock (refused → release
     expect(result.log.indexOf("store:lock")).toBeLessThan(result.log.indexOf("wise:events#1"));
   });
 
+  it("re-reads the credits under the lock and refuses, unsent, when staff changed them meanwhile", async () => {
+    const result = await run({ wise: { creditsValue: (call) => call === 2 ? [{ credit: 1 }, { credit: -1 }] : undefined } });
+    expect(result.outcome).toMatchObject({ status: "refused", stage: "wise", reason: "credit_baseline_changed" });
+    expect(result.log).not.toContain("wise:post");
+    expect(result.store.releases).toBe(1);
+  });
+
+  it("bounds the wait for a running sweep by the window it started in, and passes STOP to it", async () => {
+    const log: string[] = [];
+    const time = clock();
+    const wise = fakeWise(time, log);
+    const store = memoryStore(log, time);
+    const stop = () => false;
+    await correctPostGuarded({
+      ops: wise, store, plan: plan(), apiActorId: API_ACTOR, allowlist: AUTOWRITER_TEACHER_ALLOWLIST, disabledTutors: [],
+      aiSuspect: AI_SUSPECT, textProblems: () => [], now: time.now, sleep: time.sleep, eventWaitMs: 0, stopRequested: stop,
+    });
+    expect(store.lockOptions?.waitUntil).toEqual(new Date("2026-10-02T19:16:00.000Z"));
+    expect(store.lockOptions?.stopRequested).toBe(stop);
+    expect(correctionWindowEnd(new Date("2026-10-07T23:42:10Z"))).toEqual(new Date("2026-10-07T23:46:00Z"));
+    expect(correctionWindowEnd(new Date("2026-10-07T23:20:00Z"))).toBeNull();
+  });
+
   it("does not count the wait for a running sweep, inside taking the lock, against the lock budget", async () => {
     const log: string[] = [];
     const time = clock();
@@ -703,6 +732,20 @@ describe("correctPostGuarded: the fresh read under the lock (refused → release
     });
     expect(outcome).not.toMatchObject({ reason: "lock_budget" });
     expect(wise.postFeedback).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts the lock budget from the halt, including a slow tail inside taking the lock", async () => {
+    const log: string[] = [];
+    const time = clock();
+    const wise = fakeWise(time, log);
+    // Halted at START, then the settle and in-flight read inside lock() took the whole budget.
+    const store = memoryStore(log, time, { haltedAtMs: START.getTime(), onLock: () => time.advance(CORRECTION_LOCK_BUDGET_MS) });
+    const outcome = await correctPostGuarded({
+      ops: wise, store, plan: plan(), apiActorId: API_ACTOR, allowlist: AUTOWRITER_TEACHER_ALLOWLIST, disabledTutors: [],
+      aiSuspect: AI_SUSPECT, textProblems: () => [], now: time.now, sleep: time.sleep, eventWaitMs: 0,
+    });
+    expect(outcome).toEqual({ status: "refused", stage: "lock", reason: "lock_budget" });
+    expect(wise.postFeedback).not.toHaveBeenCalled();
   });
 
   it("refuses once the lock budget is spent", async () => {
@@ -923,7 +966,8 @@ describe("correctPostGuarded: what the one POST did", () => {
   });
 
   it("read failures only, for 4 minutes: safety, lock kept", async () => {
-    const result = await run({ wise: { creditsOn: (call) => call >= 2 ? new Error("down") : undefined } });
+    // Call 2 is the re-read under the lock; the read-back's from call 3 on fail.
+    const result = await run({ wise: { creditsOn: (call) => call >= 3 ? new Error("down") : undefined } });
     expect(result.outcome).toMatchObject({ status: "safety" });
     if (result.outcome.status !== "safety") throw new Error("unreachable");
     expect(result.outcome.problems).toEqual(["credits_reread_failed:Error", "read_failed_after_retries"]);

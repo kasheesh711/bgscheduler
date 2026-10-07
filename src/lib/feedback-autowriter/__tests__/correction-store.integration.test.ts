@@ -317,6 +317,23 @@ describe("the correction lock", () => {
     expect(at.getTime()).toBeLessThanOrEqual((await dbNow()).getTime());
   });
 
+  it("stops waiting at the window's end and on STOP, leaving nothing behind", async () => {
+    const plan = planFor(await postedWithFirstShot());
+    const sweep = (await acquireSweepLease(db, 60_000))!;
+    let at = Date.now();
+    const clockNow = () => new Date(at);
+    let waits = 0;
+    const ticking = async (ms: number) => { waits += 1; at += ms; };
+    // Three polls fit before the window closes 50 s from now.
+    expect(await store(ticking, clockNow).lock(plan, { waitUntil: new Date(at + 50_000) })).toEqual({ ok: false, reason: "sweep_running" });
+    expect(waits).toBe(3);
+    waits = 0;
+    expect(await store(ticking, clockNow).lock(plan, { stopRequested: () => waits >= 2 })).toEqual({ ok: false, reason: "stop_requested" });
+    expect(waits).toBe(2);
+    expect(await readControl(db)).toMatchObject({ haltedAt: null });
+    await releaseSweepLease(db, sweep);
+  });
+
   it("waits for a sweep that holds the lease and takes the lock once the sweep ends", async () => {
     const plan = planFor(await postedWithFirstShot());
     const sweep = (await acquireSweepLease(db, 60_000))!;
@@ -344,7 +361,11 @@ describe("the correction lock", () => {
 
     const sweep = (await acquireSweepLease(db, 60_000))!;
     const waits: number[] = [];
-    expect(await store(async (ms) => { waits.push(ms); }).lock(plan)).toEqual({ ok: false, reason: "sweep_running" });
+    const haltedWhileWaiting: unknown[] = [];
+    expect(await store(async (ms) => { waits.push(ms); haltedWhileWaiting.push((await readControl(db)).haltedAt); }).lock(plan))
+      .toEqual({ ok: false, reason: "sweep_running" });
+    // Nothing is halted while it waits.
+    expect(haltedWhileWaiting.every((at) => at === null)).toBe(true);
     // It waited for the sweep (every 15 s, for 5 min) before giving up.
     expect(waits).toEqual(Array(20).fill(15_000));
     expect(await readControl(db)).toMatchObject({ haltedAt: null });

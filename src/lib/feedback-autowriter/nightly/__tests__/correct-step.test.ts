@@ -442,7 +442,7 @@ describe("stepCorrect: applying", () => {
   });
 
   it("ends the run on a refusal every later class would meet too: the database's daily cap, a skewed clock", async () => {
-    for (const [reason, stop, exitCode] of [["daily_cap", "cap:daily_db", 3], ["clock_skew:3400ms", "clock_skew", 6]] as const) {
+    for (const [reason, stop, exitCode] of [["daily_cap", "cap:daily_db", 3], ["clock_skew:3400ms", "clock_skew", 6], ["lock:sweep_running", "sweep_running", 7]] as const) {
       const ctx = context({}, { paths: nightlyPaths(path.join(dir, stop), NIGHT) });
       seed(ctx);
       seed(ctx, correctionProposal({ wiseSessionId: SID_B }));
@@ -458,7 +458,7 @@ describe("stepCorrect: applying", () => {
     clock = new Date("2026-10-02T23:10:30.000Z").getTime();
     const ctx = context();
     seed(ctx);
-    const h = harness(ctx, { apply: true, outcome: () => ({ status: "refused", stage: "lock", reason: "lock:sweep_running" }) });
+    const h = harness(ctx, { apply: true, outcome: () => ({ status: "refused", stage: "lock", reason: "lock:post_in_flight" }) });
     await stepCorrect(ctx, h.deps);
     await stepCorrect(ctx, h.deps);
     const third = await stepCorrect(ctx, h.deps);
