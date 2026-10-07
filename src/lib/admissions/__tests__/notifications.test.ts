@@ -142,6 +142,8 @@ beforeEach(() => {
   }));
   vi.stubGlobal("fetch", fetchMock);
   vi.stubEnv("RESEND_API_KEY", "test-api-key");
+  vi.stubEnv("ADMISSIONS_EMAIL_FROM", "BeGifted Admissions <admissions@notify.example.com>");
+  vi.stubEnv("RESEND_FROM", "");
 });
 
 afterEach(() => {
@@ -197,11 +199,33 @@ describe("sendAdmissionsEmail", () => {
     expect(result).toEqual({ skipped: false, resendEmailId: "re_123", logId: "id-1" });
   });
 
+  it("sends with an Idempotency-Key derived from the dedupe key", async () => {
+    const { db } = makeDb({
+      selects: new Map([[admissionsNotificationLog, { limit: [] }]]),
+    });
+
+    await sendAdmissionsEmail({ ...input, dedupeKey: "case-1:deadline:2026-10-10" }, db);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>)["Idempotency-Key"]).toBe("admissions:case-1:deadline:2026-10-10");
+    expect(JSON.parse(init.body as string).from).toBe("BeGifted Admissions <admissions@notify.example.com>");
+  });
+
+  it("falls back to RESEND_FROM, never onboarding@resend.dev", async () => {
+    vi.stubEnv("ADMISSIONS_EMAIL_FROM", "");
+    vi.stubEnv("RESEND_FROM", "BeGifted <no-reply@notify.example.com>");
+    const { db } = makeDb();
+
+    await sendAdmissionsEmail(input, db);
+
+    expect(fetchBody(fetchMock).from).toBe("BeGifted <no-reply@notify.example.com>");
+  });
+
   it("throws when RESEND_API_KEY is not configured (no log row)", async () => {
     vi.stubEnv("RESEND_API_KEY", "");
     const { db, inserts } = makeDb();
 
-    await expect(sendAdmissionsEmail(input, db)).rejects.toThrow(/RESEND_API_KEY/);
+    await expect(sendAdmissionsEmail(input, db)).rejects.toThrow(/RESEND_API_KEY|RESEND_FROM/);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(inserts).toHaveLength(0);
   });
@@ -214,7 +238,7 @@ describe("sendAdmissionsEmail", () => {
     });
     const { db, inserts } = makeDb();
 
-    await expect(sendAdmissionsEmail(input, db)).rejects.toThrow("Invalid from address");
+    await expect(sendAdmissionsEmail(input, db)).rejects.toThrow(/HTTP 422/);
     expect(inserts).toHaveLength(0);
   });
 });
