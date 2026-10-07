@@ -8,6 +8,13 @@ export class AtomCollectionError extends Error {
     this.name = "AtomCollectionError";
   }
 }
+/**
+ * A contradiction labelled with the failed check, the activity kind and Atom's own activity id (an opaque `_digits`
+ * id, never a name or a value from the payload), so a failed run says which record to look at.
+ */
+function contradiction(check: string, ref: Pick<AtomActivityReference, "kind" | "id">): AtomCollectionError {
+  return new AtomCollectionError("source_contradiction", `${check}:${ref.kind}:${/^_[0-9]+$/u.test(ref.id) ? ref.id : "id"}`);
+}
 export const ATOM_SUBJECT_IDS: Readonly<Record<number, AtomSubject>> = {
   235: "english", 236: "verbal_reasoning", 237: "maths", 238: "non_verbal_reasoning",
 };
@@ -43,14 +50,14 @@ export function parseActivityIndex(kind: AtomActivity["kind"], raw: unknown, stu
     [...dates].some(day => bangkokDate(start) <= day && bangkokDate(end) >= day);
   try {
     if (kind === "test") return ListTest.array().max(20_000).parse(raw).flatMap(row => {
-      if (row.id_student !== studentId) throw new AtomCollectionError("source_contradiction");
+      if (row.id_student !== studentId) throw new AtomCollectionError("source_contradiction", "index_student:test");
       const subject = row.id_course_subject === null ? null : ATOM_SUBJECT_IDS[row.id_course_subject];
       if (!row.completed || !subject || !inRange(row.started, row.finished)) return [];
       return [{ id: row.id_mock_test, studentId, name: row.name, subject, kind, completedAt: row.finished!, startedAt: row.started!,
         expectedCorrect: row.questionsCorrect, expectedAttempted: row.questionsAnswered, expectedTotal: row.totalQuestions, expectedSas: row.score }];
     });
     if (kind === "practice") return ListPractice.array().max(20_000).parse(raw).flatMap(row => {
-      if (row.id_full_student !== studentId) throw new AtomCollectionError("source_contradiction");
+      if (row.id_full_student !== studentId) throw new AtomCollectionError("source_contradiction", "index_student:practice");
       const subject = ATOM_SUBJECT_IDS[row.id_course_subject];
       if (!row.completed || !subject || !inRange(row.started, row.dateFinished)) return [];
       return [{ id: row.id_practice_full, studentId, name: row.customPracticeName || "Extra practice", subject, kind,
@@ -90,13 +97,13 @@ const Transcript = z.object({
 export function normalizeAtomTranscript(raw: unknown, ref: AtomActivityReference): AtomActivity {
   try {
     const parsed = Transcript.parse(raw);
-    if (parsed.id_student !== ref.studentId || parsed.id_question_session !== ref.id) throw new AtomCollectionError("source_contradiction");
+    if (parsed.id_student !== ref.studentId || parsed.id_question_session !== ref.id) throw contradiction("transcript_identity", ref);
     const sourceKind = { test: "mock_test", practice: "practice", exam_topic: "learning_journey_practice_island" }[ref.kind];
     if (sourceKind !== parsed.questionSessionType || parsed.questions.some(question => question.responses.some(response =>
-      response.id_course_question !== question.id_course_question || response.id_student !== ref.studentId))) throw new AtomCollectionError("source_contradiction");
+      response.id_course_question !== question.id_course_question || response.id_student !== ref.studentId))) throw contradiction("transcript_kind_or_response", ref);
     const responses = parsed.questions.flatMap(question => question.responses.filter(response => !response.noAttempt && !response.autoResponse));
     if (responses.some(response => response.id_student !== ref.studentId || ATOM_SUBJECT_IDS[response.id_course_subject] !== ref.subject)) {
-      throw new AtomCollectionError("source_contradiction");
+      throw contradiction("transcript_subject", ref);
     }
     // Multiple records for one question cannot silently inflate the attempted denominator.
     const answers = responses.map(response => ({
@@ -104,10 +111,13 @@ export function normalizeAtomTranscript(raw: unknown, ref: AtomActivityReference
       seconds: response.secondsTaken, assisted: response.tutorMode || !!ref.assisted,
     }));
     const correct = answers.filter(answer => answer.correct).length;
-    if ((ref.expectedTotal !== undefined && parsed.totalQuestions !== ref.expectedTotal) ||
-      (ref.expectedCorrect != null && correct !== ref.expectedCorrect) ||
-      (ref.expectedAttempted != null && answers.length !== ref.expectedAttempted) ||
-      (ref.expectedSas != null && parsed.score !== ref.expectedSas)) throw new AtomCollectionError("source_contradiction");
+    const mismatched = [
+      ref.expectedTotal !== undefined && parsed.totalQuestions !== ref.expectedTotal ? "total" : null,
+      ref.expectedCorrect != null && correct !== ref.expectedCorrect ? "correct" : null,
+      ref.expectedAttempted != null && answers.length !== ref.expectedAttempted ? "attempted" : null,
+      ref.expectedSas != null && parsed.score !== ref.expectedSas ? "sas" : null,
+    ].filter((field): field is string => field !== null);
+    if (mismatched.length > 0) throw contradiction(`list_vs_transcript_${mismatched.join("+")}`, ref);
     return AtomActivitySchema.parse({
       id: ref.id, studentId: ref.studentId, kind: ref.kind, subject: ref.subject,
       name: parsed.name?.trim() || ref.name,
