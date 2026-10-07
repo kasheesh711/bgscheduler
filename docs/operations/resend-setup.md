@@ -135,10 +135,10 @@ set -a && source .env.local && set +a && npm run db:migrate
    Pre-check, before running it: confirm 0111 is the only pending migration. Against the production database run:
 
 ```sql
-select count(*) from drizzle.__drizzle_migrations;
+select max(created_at) from drizzle.__drizzle_migrations;
 ```
 
-   It must return **111** (entries 0000 to 0110). After the migration it should return **112**.
+   It must return **1790870000000**, which is 0110's timestamp. Drizzle applies every migration with a newer timestamp, so 0111 (`1790880000000`) is the only one that will run. If it returns `1790880000000` or higher, stop: another branch already applied something newer and 0111 would be skipped. After the migration it should return **1790880000000**. Ignore the row count: prod carries a couple of historical extra rows, which is expected.
 2. Merge PR2 and wait for the production deploy.
 3. Resend → **Webhooks → Add endpoint**
    - URL: `https://bgscheduler.vercel.app/api/email/resend-webhook`
@@ -193,6 +193,6 @@ All app mail **except Admissions** then goes back through Workspace Gmail, with 
 - [ ] `notify.begiftededucation.com` verified (SPF, DKIM, DMARC)
 - [ ] `RESEND_API_KEY`, `RESEND_FROM`, `ADMISSIONS_EMAIL_FROM`, `RESEND_REPLY_TO` in Vercel Production
 - [ ] Wave 1: `OUTBOUND_EMAIL_TRANSPORT=resend`, sign-in code test passed, headers show PASS
-- [ ] PR2: migration 0111 applied (count was 111, now 112), webhook added, `RESEND_WEBHOOK_SECRET` set, test event returned 200
+- [ ] PR2: migration 0111 applied (max created_at was 1790870000000, now 1790880000000), webhook added, `RESEND_WEBHOOK_SECRET` set, test event returned 200
 - [ ] (optional) digests disabled
 - [ ] Wave 2 after 1–2 weeks: `RESEND_AUDIENCE=all`, teacher spot-check done
