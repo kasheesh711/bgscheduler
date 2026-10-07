@@ -40,6 +40,7 @@ import {
   type SpeakerLabels,
 } from "./prompt";
 import type { AiSummary, ModelArm } from "./types";
+import { repairRejectedDraft, type DraftRepair } from "./repair";
 import { finalizeFields, parseModelOutput, validateFeedbackDraft, type ModelOutput } from "./validate";
 
 export interface PipelineSession {
@@ -82,7 +83,9 @@ export interface CallRecord {
 }
 
 export type PipelineResult =
-  | { kind: "draft"; arm: ModelArm; output: ModelOutput; fields: FeedbackFieldAnswers; judge: StoredJudgeVerdict; styleGuide?: StyleGuideStamp; formatGuide?: StyleGuideStamp; atomEvidence?: AtomLessonEvidence }
+  | { kind: "draft"; arm: ModelArm; output: ModelOutput; fields: FeedbackFieldAnswers; judge: StoredJudgeVerdict; styleGuide?: StyleGuideStamp; formatGuide?: StyleGuideStamp; atomEvidence?: AtomLessonEvidence;
+    /** Set when the judges rejected the written draft and passed it with these cuts (`repairRejectedDraft`). */
+    repair?: DraftRepair["removed"] }
   | { kind: "held"; reasons: string[] }
   /**
    * Retried later. `stage`: whose call failed or could not start — the writer's, or the judge's (the writer had
@@ -353,97 +356,134 @@ export async function runWritingPipeline(input: {
     // to give a verdict says nothing about the draft, so it never triggers the fallback writer.
     // Once one level has rejected the draft or stopped the run, nothing the other level does can let the draft pass:
     // it then makes no second try and no further in-run retry (`decided`, below).
-    const judgeMessages = buildJudgeMessages({
-      redactedSummary,
-      atomEvidence: modelAtomEvidence,
-      evidence,
-      speakerLabels: session.speakerLabels,
-      otherPeople,
-      classDetails: redactedClassDetails,
-      placeholderFields: {
-        topics: parsed.output.topics,
-        performance: parsed.output.performance,
-        improvement: parsed.output.improvement,
-        homework: parsed.output.homework,
-      },
-    });
     // The draft every level judged, so the dashboard counts a rejected draft once: the writer's generation id, or a
     // key of our own when the reply carries none (each level's call would otherwise count as a draft of its own).
-    const judgedGeneration = writeCall.generationId ?? `draft:${randomUUID()}`;
-    // A level has rejected this draft (an unfaithful verdict) or stopped the run. Set before that level's call is
-    // recorded, so the other level finds it however the two replies interleave.
-    let decided = false;
-    const stop = (result: PipelineResult): Stop => {
-      decided = true;
-      return { stop: result };
-    };
-    const judgeLevel = async (effort: JudgeEffort): Promise<{ verdict: JudgeOutput } | Stop | { leftOff: true }> => {
-      const config: AutowriterModelConfig = { ...AUTOWRITER_MODELS.judge, effort };
-      let failure = "";
-      for (let attempt = 0; attempt < JUDGE_ATTEMPTS; attempt += 1) {
-        // No second try once the other level has decided: whatever it gave, the draft would not pass.
-        if (attempt > 0 && decided) return { leftOff: true };
-        const judged = await run(config, "judge", judgeMessages, AUTOWRITER_JUDGE_TIMEOUT_MS[evidence], (call, result) => input.record({
-          wiseSessionId: session.wiseSessionId, role: "judge", arm: config.arm, requestedModel: config.model,
-          promptVersion: JUDGE_PROMPT_VERSION, call,
-          result: { effort, ...result, judgedArm: writer.arm, judgedGeneration, evidence, ...((formatGuide || atomEvidence) ? { lessonRecordHash: evidenceHash(session.summary.text) } : {}), ...(atomEvidence ? { atomEvidenceHash: atomEvidence.hash } : {}) },
-        }), () => decided);
-        if (judged.kind === "budget") return stop({ kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false, stage: "judge" });
-        const judgeCall = judged.call;
-        const recordJudge = judged.record;
-        if (!judgeCall.ok) {
-          // A rate limit that was not tried again only because the other level had decided is no failure of this level.
-          const failed = !judged.abandoned && isInfraFailure(judgeCall)
-            ? stop(callFailure(`judge:${effort}`, judgeCall, judged.shortened, "judge"))
-            : null;
-          await recordJudge({ error: judgeCall.error });
-          if (failed) return failed;
-          if (judged.abandoned) return { leftOff: true };
-          failure = `judge_${judgeCall.error}`;
-          continue;
+    const writerGeneration = writeCall.generationId ?? `draft:${randomUUID()}`;
+    const judgeDraft = async (draftOutput: ModelOutput, judgedGeneration: string): Promise<
+      { kind: "return"; result: PipelineResult } | { kind: "judged"; verdict: StoredJudgeVerdict | null; problems: string[] }
+    > => {
+      const judgeMessages = buildJudgeMessages({
+        redactedSummary,
+        atomEvidence: modelAtomEvidence,
+        evidence,
+        speakerLabels: session.speakerLabels,
+        otherPeople,
+        classDetails: redactedClassDetails,
+        placeholderFields: {
+          topics: draftOutput.topics,
+          performance: draftOutput.performance,
+          improvement: draftOutput.improvement,
+          homework: draftOutput.homework,
+        },
+      });
+      // A level has rejected this draft (an unfaithful verdict) or stopped the run. Set before that level's call is
+      // recorded, so the other level finds it however the two replies interleave.
+      let decided = false;
+      const stop = (result: PipelineResult): Stop => {
+        decided = true;
+        return { stop: result };
+      };
+      const judgeLevel = async (effort: JudgeEffort): Promise<{ verdict: JudgeOutput } | Stop | { leftOff: true }> => {
+        const config: AutowriterModelConfig = { ...AUTOWRITER_MODELS.judge, effort };
+        let failure = "";
+        for (let attempt = 0; attempt < JUDGE_ATTEMPTS; attempt += 1) {
+          // No second try once the other level has decided: whatever it gave, the draft would not pass.
+          if (attempt > 0 && decided) return { leftOff: true };
+          const judged = await run(config, "judge", judgeMessages, AUTOWRITER_JUDGE_TIMEOUT_MS[evidence], (call, result) => input.record({
+            wiseSessionId: session.wiseSessionId, role: "judge", arm: config.arm, requestedModel: config.model,
+            promptVersion: JUDGE_PROMPT_VERSION, call,
+            result: { effort, ...result, judgedArm: writer.arm, judgedGeneration, evidence, ...((formatGuide || atomEvidence) ? { lessonRecordHash: evidenceHash(session.summary.text) } : {}), ...(atomEvidence ? { atomEvidenceHash: atomEvidence.hash } : {}) },
+          }), () => decided);
+          if (judged.kind === "budget") return stop({ kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false, stage: "judge" });
+          const judgeCall = judged.call;
+          const recordJudge = judged.record;
+          if (!judgeCall.ok) {
+            // A rate limit that was not tried again only because the other level had decided is no failure of this level.
+            const failed = !judged.abandoned && isInfraFailure(judgeCall)
+              ? stop(callFailure(`judge:${effort}`, judgeCall, judged.shortened, "judge"))
+              : null;
+            await recordJudge({ error: judgeCall.error });
+            if (failed) return failed;
+            if (judged.abandoned) return { leftOff: true };
+            failure = `judge_${judgeCall.error}`;
+            continue;
+          }
+          const judgeMismatch = routeMismatch(config, judgeCall);
+          if (judgeMismatch) {
+            const stopped = stop({ kind: "infra", error: `judge:${effort}:${judgeMismatch}`, modelFailure: true, stage: "judge" });
+            await recordJudge({ error: judgeMismatch });
+            return stopped;
+          }
+          const verdict = parseJudgeOutput(judgeCall.content);
+          if (verdict && !verdict.faithful) decided = true;
+          // The three lists as returned, plus the flat `judgeProblems` list the hold reason and the dashboard use.
+          await recordJudge(verdict ? { ...verdict, problems: judgeProblems(verdict) } : { error: "judge_unparseable" });
+          if (verdict) return { verdict };
+          failure = "judge_unparseable";
         }
-        const judgeMismatch = routeMismatch(config, judgeCall);
-        if (judgeMismatch) {
-          const stopped = stop({ kind: "infra", error: `judge:${effort}:${judgeMismatch}`, modelFailure: true, stage: "judge" });
-          await recordJudge({ error: judgeMismatch });
-          return stopped;
-        }
-        const verdict = parseJudgeOutput(judgeCall.content);
-        if (verdict && !verdict.faithful) decided = true;
-        // The three lists as returned, plus the flat `judgeProblems` list the hold reason and the dashboard use.
-        await recordJudge(verdict ? { ...verdict, problems: judgeProblems(verdict) } : { error: "judge_unparseable" });
-        if (verdict) return { verdict };
-        failure = "judge_unparseable";
+        return stop({ kind: "infra", error: `judge:${effort}:${failure || "no_verdict"}`, modelFailure: true, stage: "judge" });
+      };
+      // Every level settles before anything is returned. A thrown error (the model client never throws) propagates as
+      // before; otherwise the first level (in effort order) that stopped decides the retry.
+      const outcomes = await Promise.allSettled(AUTOWRITER_JUDGE_EFFORTS.map(judgeLevel));
+      const levels: Partial<Record<JudgeEffort, JudgeOutput>> = {};
+      let stopped: PipelineResult | null = null;
+      for (const [index, level] of outcomes.entries()) {
+        if (level.status === "rejected") throw level.reason;
+        if ("stop" in level.value) stopped ??= level.value.stop;
+        else if ("verdict" in level.value) levels[AUTOWRITER_JUDGE_EFFORTS[index]] = level.value.verdict;
       }
-      return stop({ kind: "infra", error: `judge:${effort}:${failure || "no_verdict"}`, modelFailure: true, stage: "judge" });
-    };
-    // Every level settles before anything is returned. A thrown error (the model client never throws) propagates as
-    // before; otherwise the first level (in effort order) that stopped decides the retry.
-    const outcomes = await Promise.allSettled(AUTOWRITER_JUDGE_EFFORTS.map(judgeLevel));
-    const levels: Partial<Record<JudgeEffort, JudgeOutput>> = {};
-    let stopped: PipelineResult | null = null;
-    for (const [index, level] of outcomes.entries()) {
-      if (level.status === "rejected") throw level.reason;
-      if ("stop" in level.value) stopped ??= level.value.stop;
-      else if ("verdict" in level.value) levels[AUTOWRITER_JUDGE_EFFORTS[index]] = level.value.verdict;
-    }
-    if ([levels.medium, levels.high].some(verdict => verdict?.unsupported.some(problem => problem.startsWith("SOURCE_CONTRADICTION:")))) {
-      return { kind: "held", reasons: ["atom:source_contradiction", ...[levels.medium, levels.high].flatMap(verdict => verdict?.unsupported.filter(problem => problem.startsWith("SOURCE_CONTRADICTION:")) ?? [])] };
-    }
-    if (stopped) return ended(stopped);
-    // No level stopped: the judges decided this draft, passing or rejecting it.
-    judgeAnswered = true;
-    // Fail closed: a draft passes only on a verdict from every level (no cast: a level without one cannot be combined).
-    // A level that left off gave none — it left off because another level had rejected the draft (had that one
-    // stopped, the stop was returned above) — so the draft is rejected on the verdicts given.
-    const { medium, high } = levels;
-    const verdict = medium && high ? combineJudgeVerdicts({ medium, high }) : null;
-    if (!verdict?.faithful) {
+      if ([levels.medium, levels.high].some(verdict => verdict?.unsupported.some(problem => problem.startsWith("SOURCE_CONTRADICTION:")))) {
+        return { kind: "return", result: { kind: "held", reasons: ["atom:source_contradiction", ...[levels.medium, levels.high].flatMap(verdict => verdict?.unsupported.filter(problem => problem.startsWith("SOURCE_CONTRADICTION:")) ?? [])] } };
+      }
+      if (stopped) return { kind: "return", result: ended(stopped) };
+      // No level stopped: the judges decided this draft, passing or rejecting it.
+      judgeAnswered = true;
+      // Fail closed: a draft passes only on a verdict from every level (no cast: a level without one cannot be combined).
+      // A level that left off gave none — it left off because another level had rejected the draft (had that one
+      // stopped, the stop was returned above) — so the draft is rejected on the verdicts given.
+      const { medium, high } = levels;
+      const verdict = medium && high ? combineJudgeVerdicts({ medium, high }) : null;
       const problems = verdict ? judgeProblems(verdict) : [...new Set([medium, high].flatMap((given) => given ? judgeProblems(given) : []))];
-      reasons.push(`${writer.arm}:unfaithful:${problems.slice(0, 3).join(" | ").slice(0, 300)}`);
-      continue;
+      return { kind: "judged", verdict, problems };
+    };
+
+    const first = await judgeDraft(parsed.output, writerGeneration);
+    if (first.kind === "return") return first.result;
+    let accepted: { output: ModelOutput; fields: FeedbackFieldAnswers; verdict: StoredJudgeVerdict; repair: DraftRepair["removed"] | null } | null =
+      first.verdict?.faithful ? { output: parsed.output, fields, verdict: first.verdict, repair: null } : null;
+    if (!accepted) {
+      reasons.push(`${writer.arm}:unfaithful:${first.problems.slice(0, 3).join(" | ").slice(0, 300)}`);
+      // Owner decision (7 Oct): drop the claims the judges quoted and judge the trimmed draft again, once, at every
+      // level. Only on a full verdict (both levels gave one): the repair cuts what they quoted, nothing else.
+      const lists = first.verdict ?? null;
+      const repair = lists && !(styleGuide || formatGuide) ? repairRejectedDraft(parsed.output, lists) : null;
+      if (repair) {
+        const repairedFields = finalizeFields(repair.output, session.studentDisplayName);
+        const revalidated = validateFeedbackDraft({
+          output: repair.output,
+          fields: repairedFields,
+          studentFullName: session.studentFullName,
+          tutorNames: input.tutorNames,
+          lessonRecord: session.summary.text + (atomEvidence?.activities.length ? "\nAtom learning" : ""),
+          priorFeedback: input.priorFeedback.filter((prior) => prior.key !== session.wiseSessionId),
+        });
+        const revalidationReasons = [...(revalidated.ok ? [] : revalidated.reasons), ...validateAtomStatisticClaims(repairedFields, atomEvidence)];
+        if (revalidationReasons.length) {
+          reasons.push(...revalidationReasons.map((reason) => `${writer.arm}:repair:${reason}`));
+        } else {
+          const second = await judgeDraft(repair.output, `${writerGeneration}:repair`);
+          if (second.kind === "return") return second.result;
+          if (second.verdict?.faithful) {
+            accepted = { output: repair.output, fields: repairedFields, verdict: second.verdict, repair: repair.removed };
+          } else {
+            reasons.push(`${writer.arm}:repair:unfaithful:${second.problems.slice(0, 3).join(" | ").slice(0, 300)}`);
+          }
+        }
+      }
     }
-    return { kind: "draft", arm: writer.arm, output: parsed.output, fields, judge: verdict, ...(styleStamp ? { styleGuide: styleStamp } : {}), ...(formatStamp ? { formatGuide: formatStamp } : {}), ...(atomEvidence ? { atomEvidence } : {}) };
+    if (!accepted) continue;
+    return { kind: "draft", arm: writer.arm, output: accepted.output, fields: accepted.fields, judge: accepted.verdict, ...(accepted.repair ? { repair: accepted.repair } : {}), ...(styleStamp ? { styleGuide: styleStamp } : {}), ...(formatStamp ? { formatGuide: formatStamp } : {}), ...(atomEvidence ? { atomEvidence } : {}) };
   }
   return { kind: "held", reasons };
 }
