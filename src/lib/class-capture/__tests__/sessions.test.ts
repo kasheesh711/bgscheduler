@@ -95,6 +95,34 @@ describe("authorized class selection", () => {
     await expect(requireCaptureSession(scope, "ended-one", "student-other")).rejects.toMatchObject({ status: 404 });
   });
 
+  it("includes a completed class before the student snapshot changes from UPCOMING", async () => {
+    const queries = database({ future_session_blocks: [], credit_control_sessions: [{ ...ended,
+      wiseTeacherId: null, sessionKind: "future", meetingStatus: "UPCOMING", verifiedCompletion: true,
+    }] });
+    expect((await listCaptureSessions(scope, "2026-10-01")).map(row => row.sessionId)).toEqual(["ended-one"]);
+    await expect(requireCaptureSession(scope, "ended-one", "student-one")).resolves.toMatchObject({ teacherKey: "Tutor Example" });
+    const query = queries.find(query => query.table === "credit_control_sessions")!;
+    expect(query.sql).toContain("capture_completed.last_observed_at");
+    expect(query.sql).toContain("capture_completed.canonical_tutor_key");
+    expect(query.sql).toContain("capture_student.wise_student_id");
+  });
+
+  it.each([
+    { verifiedCompletion: false }, { meetingStatus: "CANCELLED" }, { wiseTeacherUserId: "unknown-user" },
+    { wiseTeacherId: "conflicting-membership" }, { sourceRowCount: 2 }, { knownDeleted: true },
+    { hasCurrentScheduleEntry: true }, { scheduledEndTime: new Date("2026-10-01T06:00:00Z") },
+  ])("does not use newer completion evidence to bypass class checks: %j", async patch => {
+    database({ future_session_blocks: [], credit_control_sessions: [{ ...ended, wiseTeacherId: null,
+      sessionKind: "future", meetingStatus: "UPCOMING", verifiedCompletion: true, ...patch }] });
+    await expect(listCaptureSessions(scope, "2026-10-01")).resolves.toEqual([]);
+  });
+
+  it("does not guess a missing membership ID for an ambiguous Wise user", async () => {
+    database({ future_session_blocks: [], tutor_identity_group_members: [identity, { ...identity, wiseTeacherId: "second-membership" }],
+      credit_control_sessions: [{ ...ended, wiseTeacherId: null }] });
+    await expect(listCaptureSessions(scope, "2026-10-01")).resolves.toEqual([]);
+  });
+
   it("requires a refresh for recent ended selection when the shared snapshot is stale", async () => {
     database({ future_session_blocks: [], credit_control_snapshots: [{ id: "credit-snapshot", generatedAt: new Date("2026-10-01T00:00:00Z"), source: "wise" }] });
     await expect(listCaptureSessions(scope, "2026-10-01")).rejects.toMatchObject({ status: 503 });

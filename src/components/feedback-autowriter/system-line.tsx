@@ -107,6 +107,7 @@ export function SystemLine({ dashboard, lastRun, canControl, busy, onControl }: 
     { key: "fallback", content: <>Fallback {modelLabel(system.fallbackWriter.model)} ({system.fallbackWriter.effort})</>, title: system.fallbackWriter.model },
     { key: "judge", content: <>Judge {modelLabel(system.judge.model)} ({effortsLabel(system.judge.efforts)})</>, title: system.judge.model },
     { key: "transcript-first", content: <>Transcript first: {system.transcriptFirst ? "on" : "off"}</> },
+    ...(system.holdSummaryOnly ? [{ key: "hold-summary-only", content: <>Summary-only drafts: held</> }] : []),
     { key: "second-pass", content: <>Second pass: {system.secondPass ? "on" : "off"}</> },
     {
       key: "versions", content: <>Prompt v{system.promptVersion} · Judge v{system.judgeVersion}</>,

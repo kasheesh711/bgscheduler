@@ -132,6 +132,7 @@ export function dashboardFixture(overrides: Partial<AutowriterDashboard> = {}): 
       fallbackWriter: { model: "openai/gpt-6-luna", effort: "max" },
       judge: { model: "z-ai/glm-5.3-flash", efforts: ["medium", "high"] },
       transcriptFirst: true,
+      holdSummaryOnly: false,
       secondPass: true,
       promptVersion: 5,
       judgeVersion: 5,
@@ -377,7 +378,7 @@ export function reviewFixture(overrides: Partial<AutowriterReview> = {}): Autowr
       unrecordedPosts: 0, unexplainedApiWrites: 0, coverageNum: 86, coverageDen: 112,
       thresholds: { passLowerBound: 0.8, headStartLowerBound: 0.7, minCoverage: 0.7 },
       lastDaily: { date: "2026-10-05", status: "blocked_critical", wilsonLower: 0.775, createdAt: at("2026-10-05", "22:27") },
-      currentTutors: 5, nextExpansionSize: 8, blockedUntil: "2026-10-13",
+      currentTutors: 5, uncoveredTutors: [], uncoveredTutorDays: 14, blockedUntil: "2026-10-13",
     },
     coverage: {
       posted: 86, miss_held: 9, miss_late: 6, miss_expired: 8, miss_failed: 2, miss_unseen: 1, excluded_tutor_first: 14,

@@ -2417,6 +2417,61 @@ describe("transcript first (Postgres + fakes)", () => {
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "pending", evidence: "summary", metadata: { alertKind: "no_summary" } });
   });
 
+  it("holds a summary-only draft for a person while the switch is on: after a fallback, and with no transcript pass at all", async () => {
+    await seedRow({ metadata: FELL_BACK });
+    const model = fakeModel();
+    expect(await processSession(firstDeps(fakeWise().ops, fakeSoniox().client,
+      { holdSummaryOnly: true, callModel: model.callModel as never, now: () => after(190) }), cron))
+      .toMatchObject({ result: "held", detail: "summary_only_held" });
+    expect(model.calls).toEqual([]);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+      state: "held", reason: "summary_only_held", evidence: "summary", fields: null,
+      metadata: { alertKind: "held", summaryOnlyHeld: { fellBack: true } },
+    });
+
+    // The second pass off: the class never had a transcript route, and is still held.
+    await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
+    await seedRow({});
+    const offModel = fakeModel();
+    expect(await processSession(firstDeps(fakeWise().ops, fakeSoniox().client,
+      { holdSummaryOnly: true, transcriptsEnabled: false, callModel: offModel.callModel as never }), cron))
+      .toMatchObject({ result: "held", detail: "summary_only_held" });
+    expect(offModel.calls).toEqual([]);
+
+    // Transcript first still hands a fresh class over to the transcript: the switch only stops the summary route.
+    await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
+    await seedRow({});
+    await processSession(firstDeps(fakeWise().ops, fakeSoniox().client, { holdSummaryOnly: true }), cron);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ evidence: "transcript", metadata: { handover: "transcript_first" } });
+
+    // Transcript first off but the second pass on: the class goes to the transcript instead of being held.
+    await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
+    await seedRow({
+      arm: "sol", fields: { topics: "t", performance: "p", improvement: "i", homework: "" } as never, fieldsSha256: "abc",
+      metadata: { judge: { faithful: true }, draftEvidence: "summary", pipeline: { arm: "sol" } },
+    });
+    const handModel = fakeModel();
+    await processSession(firstDeps(fakeWise().ops, fakeSoniox().client,
+      { holdSummaryOnly: true, transcriptFirst: false, callModel: handModel.callModel as never }), cron);
+    expect(handModel.calls).toEqual([]);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+      evidence: "transcript", arm: null, fields: null, fieldsSha256: null,
+      metadata: { handover: "summary_only", judge: null, draftEvidence: null, pipeline: null },
+    });
+  });
+
+  it("drops a summary draft kept on the row when it holds a class as summary-only, so no one is shown it to paste", async () => {
+    await seedRow({
+      arm: "sol", fields: { topics: "t", performance: "p", improvement: "i", homework: "" } as never, fieldsSha256: "abc",
+      metadata: { ...FELL_BACK, judge: { faithful: true }, draftEvidence: "summary", pipeline: { arm: "sol" } },
+    });
+    expect(await processSession(firstDeps(fakeWise().ops, fakeSoniox().client, { holdSummaryOnly: true, now: () => after(190) }), cron))
+      .toMatchObject({ result: "held", detail: "summary_only_held" });
+    const row = await readSessionRow(db, SESSION_ID);
+    expect(row).toMatchObject({ state: "held", arm: null, fields: null, fieldsSha256: null, billing: null });
+    expect(row?.metadata).toMatchObject({ judge: null, draftEvidence: null, pipeline: null });
+  });
+
   it("raises no no-recording alert for a transcript-first class waiting for its recording (it falls back instead), but does for one stuck transcribing", async () => {
     const longAgo = { scheduledEndAt: new Date(NOW.getTime() - 4 * 3600_000), nextAttemptAt: new Date(Date.now() + 3600_000) };
     await handedOver(longAgo);

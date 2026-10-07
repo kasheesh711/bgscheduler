@@ -50,11 +50,13 @@ describe("Atom durable evidence", () => {
     const atom = await loadAtomLessonEvidence(db, { detail, studentId: STUDENT_ID, lessonRecord: "Fractions", now, preview: true });
     expect(atom?.omissions[0].reason).toBe("authentication_failed");
   });
-  it("student-specific source contradictions hold, even with an earlier valid snapshot", async () => {
+  it("a student-specific source contradiction leaves the class lesson-only, even with an earlier valid snapshot", async () => {
     await snapshot();
     await db.insert(s.feedbackAtomSyncRuns).values({ triggerSource: "cron", status: "failed", errorCode: "source_contradiction", startedAt: now, finishedAt: now, counts: { studentResults: { _123: "source_contradiction" } } });
     const atom = await loadAtomLessonEvidence(db, { detail, studentId: STUDENT_ID, lessonRecord: "Fractions", now, preview: true });
-    expect(atom?.status).toBe("contradiction");
+    expect(atom?.status).toBe("omitted");
+    expect(atom?.activities).toEqual([]);
+    expect(atom?.omissions[0].reason).toBe("collection_failed");
   });
   it("retains immutable evidence and refuses stale mappings on a stored draft", async () => {
     const atom = await loadAtomLessonEvidence(db, { detail, studentId: STUDENT_ID, lessonRecord: "Fractions", now, preview: true });
@@ -111,13 +113,38 @@ describe("unattended collector and rollout", () => {
     expect(await atomRolloutApproved(db)).toBe(false);
     expect((await readIsebRollout(db))?.cloudProofRunId).toBeNull();
   });
+  it("leaves out only a record whose counts disagree, keeps the student's run green and notes it once on the dashboard", async () => {
+    const { runAtomCollector } = await import("../atom/collector");
+    const { KEVIN_ONLINE_WISE_USER_ID } = await import("../roster");
+    await approveAtomLink(db, approval);
+    await db.execute(sql`TRUNCATE feedback_autowriter_sessions, feedback_autowriter_incidents`);
+    await db.insert(s.feedbackAutowriterSessions).values({ wiseSessionId: detail._id, wiseTeacherUserId: KEVIN_ONLINE_WISE_USER_ID, scheduledEndAt: now, deadlineAt: new Date(now.getTime()+86400000) });
+    const skippedRecord = { id: "_777", kind: "practice" as const, startedAt: start, completedAt: end,
+      cause: "list_vs_transcript_attempted:practice:_777|list:a=10,c=-,t=10|transcript:a=8,c=6,t=10,q=8,skip=1,auto=0" };
+    const run = () => runAtomCollector({ db, deadlineMs: Date.now()+60000, triggerSource: "cron", now,
+      openClient: async () => ({ catalog: [{ id: "_123", name: "Same Name" }], collect: async () => ({ activities: [], skipped: [skippedRecord] }), close: async () => {} }),
+      fetchDays: async () => [{ _id: detail._id, userId: KEVIN_ONLINE_WISE_USER_ID, students: [STUDENT_ID], classId: { _id: "class", subject: "13+" }, title: "Online Maths", type: "SCHEDULED", meetingStatus: "ENDED", scheduledStartTime: start, scheduledEndTime: end }] as never,
+    });
+    expect(await run()).toMatchObject({ ok: true, errorCode: null });
+    await run();
+    const runs = await db.select().from(s.feedbackAtomSyncRuns);
+    expect(runs.every(row => row.status === "succeeded")).toBe(true);
+    expect(runs[0].counts).toMatchObject({ studentResults: { _123: "succeeded" }, skipped: { _123: [{ id: "_777" }] } });
+    const incidents = await db.select().from(s.feedbackAutowriterIncidents);
+    expect(incidents).toMatchObject([{ kind: "atom_record_skipped", severity: "info", pushStatus: "not_required",
+      dedupeKey: "atom-record-skipped:_777", detail: { activityId: "_777", atomUrl: "https://app.atomlearning.com/tutor/transcript/_777" } }]);
+    // The lesson's evidence says a record of this lesson was skipped, so no repeated score reads as confirmed.
+    vi.stubEnv("FEEDBACK_ATOM_ENRICHMENT_ENABLED", "true");
+    const atom = await loadAtomLessonEvidence(db, { detail, studentId: STUDENT_ID, lessonRecord: "Fractions", now: new Date(now.getTime() + 1000), preview: true });
+    expect(atom?.omissions).toContainEqual({ activityId: "_777", reason: "record_skipped" });
+  });
   it("collects only linked pending students and retains a complete overlap timetable", async () => {
     const { runAtomCollector } = await import("../atom/collector");
     const { KEVIN_ONLINE_WISE_USER_ID } = await import("../roster");
     await approveAtomLink(db, approval);
     await db.execute(sql`TRUNCATE feedback_autowriter_sessions`);
     await db.insert(s.feedbackAutowriterSessions).values({ wiseSessionId: detail._id, wiseTeacherUserId: KEVIN_ONLINE_WISE_USER_ID, scheduledEndAt: now, deadlineAt: new Date(now.getTime()+86400000) });
-    const collect = vi.fn<(studentId: string, dates: string[]) => Promise<never[]>>(async () => []);
+    const collect = vi.fn<(studentId: string, dates: string[]) => Promise<{ activities: never[]; skipped: never[] }>>(async () => ({ activities: [], skipped: [] }));
     const close = vi.fn(async () => {});
     const result = await runAtomCollector({ db, deadlineMs: Date.now()+60000, triggerSource: "cron", now,
       openClient: async () => ({ catalog: [{ id: "_123", name: "Same Name" }, { id: "_999", name: "Same Name" }], collect, close }),
@@ -152,9 +179,28 @@ describe("unattended collector and rollout", () => {
     const [run] = await db.select().from(s.feedbackAtomSyncRuns);
     expect(run.counts).toMatchObject({ failureStage: "wise_timetable", failureCause: "timetable_conflict" });
     const [incident] = await db.select().from(s.feedbackAutowriterIncidents);
-    expect(incident.detail).toEqual({ runId: run.id, code: "collection_failed", stage: "wise_timetable", cause: "timetable_conflict" });
+    expect(incident.detail).toEqual({ runId: run.id, code: "collection_failed", stage: "wise_timetable", cause: "timetable_conflict", studentResults: {} });
     expect(incident.summary).toContain("(wise_timetable: timetable_conflict)");
     expect(JSON.stringify([run, incident])).not.toContain("teacher-secret-value");
+  });
+  it("a repeat of the same day's failure refreshes the open incident with the latest cause, without pushing it again", async () => {
+    const { runAtomCollector } = await import("../atom/collector");
+    await db.execute(sql`TRUNCATE feedback_atom_sync_runs, feedback_autowriter_incidents CASCADE`);
+    const failWith = (message: string) => runAtomCollector({ db, deadlineMs: Date.now() + 60000, triggerSource: "admin",
+      probe: { studentId: "_123", date: "2026-09-20" }, fetchDays: async () => { throw new Error(message); }, openClient: vi.fn() });
+    await failWith("Wise timetable occurrences conflict");
+    await db.update(s.feedbackAutowriterIncidents).set({ pushStatus: "sent", pushAttempts: 1 });
+    const second = await failWith("Wise pagination incomplete");
+    if (!("runId" in second) || !second.runId) throw new Error("second run was skipped");
+    const [refreshed] = await db.select().from(s.feedbackAutowriterIncidents);
+    expect(refreshed).toMatchObject({ pushStatus: "sent", pushAttempts: 1, severity: "critical",
+      detail: { runId: second.runId, cause: "pagination_incomplete" } });
+    expect(refreshed.summary).toContain("(wise_timetable: pagination_incomplete)");
+    // Once acknowledged, a later run leaves the record the owner saw alone.
+    await db.update(s.feedbackAutowriterIncidents).set({ acknowledgedAt: new Date(), acknowledgedBy: "owner" });
+    await failWith("Wise timetable occurrences conflict");
+    const [kept] = await db.select().from(s.feedbackAutowriterIncidents);
+    expect(kept.detail).toMatchObject({ runId: second.runId, cause: "pagination_incomplete" });
   });
   it("stops at its own deadline and records where, when the Atom browser never opens", async () => {
     const { runAtomCollector } = await import("../atom/collector");
@@ -170,7 +216,7 @@ describe("unattended collector and rollout", () => {
   });
   it("records a successful run before a browser shutdown that never finishes", async () => {
     const { runAtomCollector } = await import("../atom/collector");
-    const openClient = async () => ({ catalog: [], collect: async () => [], close: () => new Promise<void>(() => undefined) });
+    const openClient = async () => ({ catalog: [], collect: async () => ({ activities: [], skipped: [] }), close: () => new Promise<void>(() => undefined) });
     const result = await runAtomCollector({ db, deadlineMs: Date.now() + 60000, triggerSource: "admin", fetchDays: async () => [], openClient });
     expect(result.ok).toBe(true);
     const [run] = await db.select().from(s.feedbackAtomSyncRuns);
@@ -179,7 +225,7 @@ describe("unattended collector and rollout", () => {
   it("allows a scheduled retrieval trial only for an actively approved student", async () => {
     const { runAtomCollector } = await import("../atom/collector");
     const sessionsBefore = await db.select().from(s.feedbackAutowriterSessions);
-    const collect = vi.fn(async () => []);
+    const collect = vi.fn(async () => ({ activities: [], skipped: [] }));
     const openClient = vi.fn(async () => ({ catalog: [{ id: "_123", name: "Same Name" }], collect, close: async () => {} }));
     const input = { db, deadlineMs: Date.now() + 60000, triggerSource: "cron" as const, deploymentId: "cloud", trial: true,
       probe: { studentId: "_123", date: "2026-09-20" }, fetchDays: async () => [], openClient };
@@ -202,7 +248,7 @@ describe("unattended collector and rollout", () => {
     await db.insert(s.feedbackAutowriterSessions).values({ wiseSessionId: detail._id, wiseTeacherUserId: KEVIN_ONLINE_WISE_USER_ID, scheduledEndAt: now, deadlineAt: new Date(now.getTime() + 86400000) });
     const sessionsBefore = await db.select().from(s.feedbackAutowriterSessions);
     const trialDate = bangkokDate(new Date(now.getTime() - 3 * 86400000).toISOString());
-    const collect = vi.fn(async () => []);
+    const collect = vi.fn(async () => ({ activities: [], skipped: [] }));
     const result = await runAtomCollector({ db, deadlineMs: Date.now() + 60000, triggerSource: "cron", now, trial: true,
       probe: { studentId: "_123", date: trialDate },
       openClient: async () => ({ catalog: [{ id: "_123", name: "Same Name" }], collect, close: async () => {} }),

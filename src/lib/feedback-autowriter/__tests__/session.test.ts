@@ -15,6 +15,7 @@ import {
   planFeedbackForm,
   storedTeacherFields,
   studentParticipants,
+  tutorSelfNames,
 } from "../session";
 import { classifyCoverage } from "../quality";
 import { AUTOWRITER_TEACHER_ALLOWLIST } from "../roster";
@@ -223,6 +224,19 @@ describe("evaluateSessionGates", () => {
       expect(evaluateSessionGates(parse({ participants: [...sessionDetail().participants, other] }), gateInput))
         .toEqual({ ok: false, reason });
     }
+  });
+
+  it("knows the tutor under a nickname kept out of redaction (`selfNames`)", () => {
+    // Shop's nickname is an English word, so it is not redacted, but a guest device under it is still Shop.
+    const shop = { _id: "696e2c4343579bbada233fee", name: "Warit (Shop) Trikasemsak Online" };
+    const participants = [
+      { wiseUserId: shop._id, name: shop.name, isTeacher: true, inMeetingDuration: 3800 },
+      sessionDetail().participants[1],
+      { name: "Shop", isTeacher: false, inMeetingDuration: 3500, absolutePercentAttendance: 95 },
+    ];
+    const detail = parse({ userId: shop, participants });
+    expect(studentParticipants(detail).map((student) => student.name)).toEqual([STUDENT_NAME]);
+    expect(tutorSelfNames(detail)).toContain("Shop");
   });
 });
 

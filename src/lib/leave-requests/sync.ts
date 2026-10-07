@@ -392,7 +392,7 @@ export async function syncLeaveRequests(db: Database, options: SyncLeaveRequests
     // Writeback failures retry independently; checkoffs and source imports remain durable.
     const writer = await resolveLeaveRequestsConnectedEmail(db, options.actorEmail, true).catch(() => null);
     if (writer) await flushLeaveWritebacks(db, writer);
-    const notificationCount = imported.migrating || options.suppressNotifications ? 0 : await sendNewRequestNotifications(db, syncRunId, imported.inserted, options.sender ?? createOutboundEmailSender());
+    const notificationCount = imported.migrating || options.suppressNotifications ? 0 : await sendNewRequestNotifications(db, syncRunId, imported.inserted, options.sender ?? createOutboundEmailSender("primary", { audience: "staff" }));
     const result = { syncRunId, scannedRowCount: parsedRows.length, insertedCount: imported.inserted.length, updatedCount: imported.updated.length, notificationCount, processing, reconciliation };
     await db.update(schema.leaveRequestSyncRuns).set({ status: "success", finishedAt: new Date(), notificationCount, metadata: { connectedEmail, processing, reconciliation, catchUpEmailsSuppressed: imported.migrating || !!options.suppressNotifications } }).where(eq(schema.leaveRequestSyncRuns.id, syncRunId));
     return result;

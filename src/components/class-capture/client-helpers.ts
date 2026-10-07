@@ -1,4 +1,4 @@
-import { AUDIO_TYPES, PHOTO_TYPES, MAX_AUDIO_BYTES, MAX_DEBRIEF_BYTES, MAX_PHOTO_BYTES, type CaptureAsset, type DraftFields } from "@/lib/class-capture/model";
+import { assertMediaBytes, AUDIO_TYPES, PHOTO_TYPES, MAX_AUDIO_BYTES, MAX_DEBRIEF_BYTES, MAX_PHOTO_BYTES, type CaptureAsset, type DraftFields } from "@/lib/class-capture/model";
 
 export type CaptureAvailability = { enabled: boolean; storage: boolean; transcription: boolean; drafting: boolean };
 export type LocalMedia = { id: string; kind: CaptureAsset["kind"]; name: string; blob: Blob; incomplete?: boolean };
@@ -7,7 +7,24 @@ export const DRAFT_LABELS: Record<keyof DraftFields, string> = {
   topicsCovered: "Topics covered", demonstratedUnderstanding: "Demonstrated understanding", difficulties: "Difficulties", homeworkNextSteps: "Homework & next steps",
 };
 
-export function canonicalMime(type: string): string { return type.split(";")[0].trim().toLowerCase(); }
+export function canonicalMime(type: string): string {
+  const mime = type.split(";")[0].trim().toLowerCase();
+  return ({ "audio/x-m4a": "audio/mp4", "audio/m4a": "audio/mp4", "video/mp4": "audio/mp4", "audio/x-wav": "audio/wav" } as Record<string, string>)[mime] ?? mime;
+}
+
+/** iOS Files may omit the MIME type. The extension is only a hint: verify bytes too. */
+export async function prepareLocalFile(file: File, kind: CaptureAsset["kind"]): Promise<Blob> {
+  let mime = canonicalMime(file.type);
+  if (kind !== "worksheet" && (!mime || mime === "application/octet-stream")) {
+    const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+    mime = ({ m4a: "audio/mp4", mp4: "audio/mp4", webm: "audio/webm", ogg: "audio/ogg", wav: "audio/wav" } as Record<string, string>)[extension] ?? mime;
+  }
+  const blob = file.slice(0, file.size, mime);
+  const invalid = validateLocalFile(blob, kind);
+  if (invalid) throw new Error(invalid);
+  if (kind !== "worksheet") assertMediaBytes(new Uint8Array(await blob.slice(0, 12).arrayBuffer()), mime);
+  return blob;
+}
 
 export function validateLocalFile(blob: Blob, kind: CaptureAsset["kind"]): string | null {
   const mime = canonicalMime(blob.type);

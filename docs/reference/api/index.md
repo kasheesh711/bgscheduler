@@ -18,14 +18,14 @@ The [Office Attendance reference](./tutor-attendance.md) covers seven new method
 
 ## What this counts
 
-All handlers live under `src/app/api/**/route.ts`. The tree holds **194 `route.ts` files exporting 258 method+path business endpoints**.
+All handlers live under `src/app/api/**/route.ts`. The tree holds **195 `route.ts` files exporting 259 method+path business endpoints**.
 
 Two counting notes, because a naive `grep -c 'export async function'` disagrees:
 
 - **+2 for Auth.js.** [`src/app/api/auth/[...nextauth]/route.ts`](../../../src/app/api/auth/%5B...nextauth%5D/route.ts) is three lines long and exports its two methods by destructuring — `export const { GET, POST } = handlers` — so it matches no `export function` pattern.
-- **−2 for CORS preflight.** The `OPTIONS` handlers on the two public OA-resolver routes ([`worklist/route.ts:17`](../../../src/app/api/line/contacts/oa-resolver/worklist/route.ts) and [`runs/[runId]/rows/route.ts:48`](../../../src/app/api/line/contacts/oa-resolver/runs/%5BrunId%5D/rows/route.ts)) return bare CORS headers and carry no business surface, so they are **excluded** from the 258. Counting the `line` group therefore yields 29, not 31.
+- **−2 for CORS preflight.** The `OPTIONS` handlers on the two public OA-resolver routes ([`worklist/route.ts:17`](../../../src/app/api/line/contacts/oa-resolver/worklist/route.ts) and [`runs/[runId]/rows/route.ts:48`](../../../src/app/api/line/contacts/oa-resolver/runs/%5BrunId%5D/rows/route.ts)) return bare CORS headers and carry no business surface, so they are **excluded** from the 259. Counting the `line` group therefore yields 29, not 31.
 
-The named-handler total across all 194 files is 256; 256 + 2 destructured = 258 business endpoints, and 258 + 2 preflight = 260 exported handlers in total.
+The named-handler total across all 195 files is 257; 257 + 2 destructured = 259 business endpoints, and 259 + 2 preflight = 261 exported handlers in total.
 
 ## How to read the Auth column
 
@@ -33,7 +33,7 @@ Every tier below is verified against [`src/middleware.ts`](../../../src/middlewa
 
 | Token | Meaning |
 |---|---|
-| `public` | Reachable without an Auth.js session. The allowlist is exactly `isPublicRoute` ([`middleware.ts:10-26`](../../../src/middleware.ts)): `/login`, `/api/auth/*`, `/api/search/assistant`, `/api/classrooms/floor-plan-map`, `/api/line/webhook`, `/schedule/*`, `/api/line/contacts/oa-resolver/worklist`, `/api/line/contacts/oa-resolver/runs/{runId}/rows`, and all of `/api/internal/*`. Every public route that touches data enforces its own in-handler check — a LINE channel signature, or an opaque `Bearer` resolver token. |
+| `public` | Reachable without an Auth.js session. The allowlist is exactly `isPublicRoute` ([`middleware.ts:10-26`](../../../src/middleware.ts)): `/login`, `/api/auth/*`, `/api/search/assistant`, `/api/classrooms/floor-plan-map`, `/api/line/webhook`, `/api/email/resend-webhook`, `/schedule/*`, `/api/line/contacts/oa-resolver/worklist`, `/api/line/contacts/oa-resolver/runs/{runId}/rows`, and all of `/api/internal/*`. Every public route that touches data enforces its own in-handler check — a LINE channel signature, or an opaque `Bearer` resolver token. |
 | `admin` | Authenticated Auth.js session. Unauthenticated page requests are redirected to `/login` ([`middleware.ts:92`](../../../src/middleware.ts)); an API path outside a restricted user's `allowedPages` gets `403 {"error":"Forbidden"}` ([`middleware.ts:96-99`](../../../src/middleware.ts)). The handler then calls `auth()` — or a domain guard such as `requireCreditControlSession` ([`credit-control/api.ts:5`](../../../src/lib/credit-control/api.ts)), `requireProgressTestsSession` ([`progress-tests/api.ts:35`](../../../src/lib/progress-tests/api.ts)), `requireCompetitorIntelligenceSession` ([`competitor-intelligence/access.ts:19`](../../../src/lib/competitor-intelligence/access.ts)), or `requireStudentPromotionSession` ([`student-promotions/api.ts:9`](../../../src/lib/student-promotions/api.ts)) — and returns `401` with no session. |
 | `admin (admin session)` | Progress Tests only. `requireProgressTestsAdminSession` ([`progress-tests/api.ts:66`](../../../src/lib/progress-tests/api.ts)) rejects the teacher-scoped sessions that `GET /api/progress-tests` accepts, so every write on that surface is admin-only. |
 | ``admin + cap:`X` `` | Admin session **plus** a fresh Postgres capability grant, re-read on every request and never cached in the JWT. Post-Class Feedback uses `viewer`, `reviewer`, `finance`, and `access_manager`; Unearned Revenue uses `viewer` and `access_manager`. Middleware deliberately passes both API families through legacy page scoping so their fresh feature grants decide. |
@@ -51,7 +51,7 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 
 ## Group directory
 
-31 path prefixes, 255 endpoints. Every link below resolves to a page that documents that prefix.
+32 path prefixes, 256 endpoints. Every link below resolves to a page that documents that prefix.
 
 | Group | Path prefix | Endpoints | Detail page |
 |---|---|---:|---|
@@ -65,6 +65,7 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 | competitor-intelligence | `/api/competitor-intelligence` | 9 | [competitor-intelligence.md](./competitor-intelligence.md) |
 | credit-control | `/api/credit-control` | 8 | [credit-control.md](./credit-control.md) |
 | data-health | `/api/data-health` | 2 | [data-health.md](./data-health.md) |
+| email | `/api/email` | 1 | [misc.md](./misc.md#email-webhook) |
 | filters | `/api/filters` | 1 | [misc.md](./misc.md#tutors-and-filters) |
 | home | `/api/home` | 1 | [misc.md](./misc.md#home-summary) |
 | internal | `/api/internal` | 33 | [internal-crons.md](./internal-crons.md) (25) + eight on their owning pages — see below |
@@ -86,11 +87,11 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 | unearned-revenue | `/api/unearned-revenue` | 5 | [unearned-revenue.md](./unearned-revenue.md) |
 | us-universities | `/api/us-universities` | 5 | [us-universities.md](./us-universities.md) |
 | wise-activity | `/api/wise-activity` | 5 | [wise-activity.md](./wise-activity.md) |
-| **Total** | | **255** | |
+| **Total** | | **256** | |
 
-### The same 255, counted by detail page
+### The same 256, counted by detail page
 
-`docs/reference/api/` holds **24 files: this index plus 23 detail pages.** Every detail page appears below, and the column sums to 255 — no endpoint is documented nowhere, and none is counted twice.
+`docs/reference/api/` holds **24 files: this index plus 23 detail pages.** Every detail page appears below, and the column sums to 256 — no endpoint is documented nowhere, and none is counted twice.
 
 | Detail page | Prefixes it owns | Endpoints |
 |---|---|---:|
@@ -102,7 +103,7 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 | [internal-crons.md](./internal-crons.md) | `/api/internal` (25 of 33) | 25 |
 | [leave-requests.md](./leave-requests.md) | `/api/leave-requests` | 8 |
 | [line.md](./line.md) | `/api/line` | 29 |
-| [misc.md](./misc.md) | `/api/search`, `/api/compare`, `/api/tutors`, `/api/filters`, `/api/home`, `/api/admin`, `/api/auth` | 11 |
+| [misc.md](./misc.md) | `/api/search`, `/api/compare`, `/api/tutors`, `/api/filters`, `/api/home`, `/api/admin`, `/api/auth`, `/api/email` | 12 |
 | [onsite-foot-traffic.md](./onsite-foot-traffic.md) | `/api/onsite-foot-traffic`, 1 internal cron | 6 |
 | [payroll.md](./payroll.md) | `/api/payroll` | 5 |
 | [post-class-feedback.md](./post-class-feedback.md) | `/api/post-class-feedback` | 13 |
@@ -117,7 +118,7 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 | [university-admissions.md](./university-admissions.md) | `/api/admissions` | 61 |
 | [us-universities.md](./us-universities.md) | `/api/us-universities` | 5 |
 | [wise-activity.md](./wise-activity.md) | `/api/wise-activity`, 1 internal cron | 5 |
-| **Total** | | **255** |
+| **Total** | | **256** |
 
 Three notes on how the two tables reconcile:
 
@@ -248,6 +249,7 @@ Sorted by group, then path, then method. `[bracketed]` segments are Next.js dyna
 | `POST` | `/api/credit-control/sync` | [credit-control](./credit-control.md) | admin | Admin-session trigger for the same `runCreditControlSyncRequest` the `20,50` cron runs. |
 | `GET` | `/api/data-health` | [data-health](./data-health.md) | admin | Ops dashboard payload: cron firing, data freshness, Wise snapshot fidelity, unresolved normalization issues. |
 | `POST` | `/api/data-health/jobs/[jobKey]/run` | [data-health](./data-health.md) | admin (+ capability / confirm) | Run one registry job by key. An unknown key is 404; a `post_class_feedback*` key additionally demands the `access_manager` capability (403); a job marked `dangerous` demands `confirmed: true` (409 with `confirmationLabel`). |
+| `POST` | `/api/email/resend-webhook` | [email](./misc.md#email-webhook) | public | Resend delivery webhook. Middleware-public; the handler verifies the Svix signature (`RESEND_WEBHOOK_SECRET`) and stores one `email_delivery_events` row per `svix-id`. |
 | `GET` | `/api/filters` | [filters](./misc.md#tutors-and-filters) | admin | Filter option sets (subjects, curricula, levels, exam prep) for the search UI. |
 | `GET` | `/api/home/summary` | [home](./misc.md#home-summary) | admin | Home-hub action summary feeding the seven nav count badges. Exempted from `allowedPages` scoping in middleware so restricted users still get their badges. |
 | `GET` | `/api/internal/admissions-notifications` | [internal](./internal-crons.md) | cron | Daily admissions deadline-reminder scan; on Bangkok Sundays the same invocation also runs the weekly digest. An explicit `runType` query param runs exactly one orchestrator. Scheduled `12 1 * * *`. |
