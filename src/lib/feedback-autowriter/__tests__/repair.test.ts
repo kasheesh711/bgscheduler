@@ -63,6 +63,21 @@ describe("repairRejectedDraft", () => {
     expect(repaired?.output.topics).toBe("1. Non-Verbal Reasoning test review\n2. A second Non-Verbal Reasoning test in class");
   });
 
+  it("never splits a sentence after an abbreviation, and keeps the field's own spacing", () => {
+    const withTitle: ModelOutput = { ...draft, performance: "We worked with Mr. [TUTOR] on ratios today. [STUDENT_1] scored 8/10 on the quiz. He explained the  unitary method clearly." };
+    const repaired = repairRejectedDraft(withTitle, { unsupported: ["\"[STUDENT_1] scored 8/10 on the quiz\""], misattributed: [], homeworkNotSet: [] });
+    expect(repaired?.output.performance).toBe("We worked with Mr. [TUTOR] on ratios today. He explained the  unitary method clearly.");
+    // A quote that starts after "Mr." cannot cut half a sentence.
+    expect(repairRejectedDraft(withTitle, { unsupported: ["\"[TUTOR] on ratios today\""], misattributed: [], homeworkNotSet: [] })?.output.performance)
+      .toBe("[STUDENT_1] scored 8/10 on the quiz. He explained the  unitary method clearly.");
+  });
+
+  it("does not repair when the quoted claim would still be in the draft", () => {
+    const twice: ModelOutput = { ...draft, improvement: draft.improvement + "\n4. I provided hints during parts of the activity, so this was not wholly independent work" };
+    const result = repairRejectedDraft(twice, { unsupported: ["\"I provided hints during parts of the activity\""], misattributed: [], homeworkNotSet: [] });
+    expect(result).toBeNull();
+  });
+
   it("does not repair when a quote is not in the draft, is a source contradiction, or there is nothing to cut", () => {
     expect(repairRejectedDraft(draft, { unsupported: ["\"scored 34 out of 40 on the test\" — no score was given"], misattributed: [], homeworkNotSet: [] })).toBeNull();
     expect(repairRejectedDraft(draft, { unsupported: ["SOURCE_CONTRADICTION: Atom says 12 correct, transcript says 10"], misattributed: [], homeworkNotSet: [] })).toBeNull();

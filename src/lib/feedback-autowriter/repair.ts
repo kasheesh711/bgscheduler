@@ -59,12 +59,25 @@ export function parseProblemQuote(problem: string): { field: DraftField | null; 
   return { field, text };
 }
 
+function isList(value: string): boolean {
+  return value.split(/\n/u).filter((line) => /^\s*(?:\d+[.)]|[-•*])\s/u.test(line)).length >= 2;
+}
+
+/** A full stop after these is not the end of a sentence ("Mr. [TUTOR]", "e.g. fractions"). */
+const ABBREVIATION = /(?:^|\s)(?:mr|mrs|ms|dr|prof|st|e\.g|i\.e|etc|vs|no|q|p|pp|fig|approx|cf)\.$/iu;
+
 /** Sentences, or numbered / bulleted lines, of one field, with their exact text. */
 function units(value: string): string[] {
-  const lines = value.split(/\n/u);
-  const listLike = lines.filter((line) => /^\s*(?:\d+[.)]|[-•*])\s/u.test(line)).length >= 2;
-  if (listLike) return lines.filter((line) => line.trim() !== "");
-  return value.split(/(?<=[.!?])\s+(?=[A-Z0-9"“(\[])/u).filter((part) => part.trim() !== "");
+  if (isList(value)) return value.split(/\n/u).filter((line) => line.trim() !== "");
+  const parts = value.split(/(?<=[.!?])\s+(?=[A-Z0-9"“(\[])/u);
+  const sentences: string[] = [];
+  for (const part of parts) {
+    const previous = sentences.at(-1);
+    if (previous !== undefined && ABBREVIATION.test(previous)) sentences[sentences.length - 1] = `${previous} ${part}`;
+    else sentences.push(part);
+  }
+  // Re-joined with one space: only use a sentence that is still verbatim in the field.
+  return sentences.filter((part) => part.trim() !== "" && value.includes(part));
 }
 
 function locate(output: ModelOutput, quote: string, field: DraftField | null): { field: DraftField; unit: string } | null {
@@ -82,8 +95,10 @@ function cut(value: string, unit: string): string {
   const target = [`${unit}\n`, `\n${unit}`, unit].find((candidate) => value.includes(candidate)) ?? unit;
   const index = value.indexOf(target);
   if (index < 0) return value;
-  return (value.slice(0, index) + value.slice(index + target.length))
-    .replace(/[ \t]{2,}/gu, " ").replace(/\n{3,}/gu, "\n\n").replace(/^\s+|\s+$/gu, "");
+  const before = value.slice(0, index).replace(/[ \t]+$/u, "");
+  const after = value.slice(index + target.length).replace(/^[ \t]+/u, "");
+  const joiner = before && after && !before.endsWith("\n") && !after.startsWith("\n") ? " " : "";
+  return `${before}${joiner}${after}`.replace(/\n{3,}/gu, "\n\n").trim();
 }
 
 /** Renumber a numbered list after a line was cut ("1. a\n3. c" → "1. a\n2. c"). */
@@ -119,7 +134,7 @@ export function repairRejectedDraft(output: ModelOutput, verdict: Pick<JudgeOutp
     const found = locate(next, text, field);
     if (!found) {
       // Already cut with an earlier problem's sentence?
-      if (removed.some((cutUnit) => squash(cutUnit.text).includes(squash(text)))) continue;
+      if (squash(text).length >= 8 && removed.some((cutUnit) => squash(cutUnit.text).includes(squash(text)))) continue;
       return null;
     }
     if (found.field === "homework") {
@@ -128,7 +143,14 @@ export function repairRejectedDraft(output: ModelOutput, verdict: Pick<JudgeOutp
       continue;
     }
     removed.push({ field: found.field, text: found.unit });
-    next[found.field] = renumber(cut(next[found.field], found.unit));
+    const list = isList(next[found.field]);
+    const trimmed = cut(next[found.field], found.unit);
+    next[found.field] = list ? renumber(trimmed) : trimmed;
+  }
+  // Every quoted claim must be gone from the trimmed draft: a cut of the wrong sentence is no repair.
+  for (const problem of problems) {
+    const needle = squash(parseProblemQuote(problem.quote).text);
+    if (FIELDS.some((name) => squash(next[name]).includes(needle))) return null;
   }
   const before = FIELDS.reduce((sum, name) => sum + output[name].length, 0) || 1;
   const cutChars = removed.reduce((sum, item) => sum + item.text.length, 0);

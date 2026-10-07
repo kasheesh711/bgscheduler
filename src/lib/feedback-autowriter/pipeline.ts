@@ -457,7 +457,12 @@ export async function runWritingPipeline(input: {
       // Owner decision (7 Oct): drop the claims the judges quoted and judge the trimmed draft again, once, at every
       // level. Only on a full verdict (both levels gave one): the repair cuts what they quoted, nothing else.
       const lists = first.verdict ?? null;
-      const repair = lists && !(styleGuide || formatGuide) ? repairRejectedDraft(parsed.output, lists) : null;
+      // A repair's judging must not take the time the fallback writer needs: with a writer still to come, repair only
+      // when both fit.
+      const fallbackPending = writer !== writers.at(-1);
+      const timeForRepair = !fallbackPending || input.remainingMs() - AUTOWRITER_CALL_DEADLINE_MARGIN_MS
+        >= AUTOWRITER_JUDGE_TIMEOUT_MS[evidence] + AUTOWRITER_WRITER_TIMEOUT_MS + AUTOWRITER_JUDGE_TIMEOUT_MS[evidence];
+      const repair = lists && timeForRepair && !(styleGuide || formatGuide) ? repairRejectedDraft(parsed.output, lists) : null;
       if (repair) {
         const repairedFields = finalizeFields(repair.output, session.studentDisplayName);
         const revalidated = validateFeedbackDraft({
