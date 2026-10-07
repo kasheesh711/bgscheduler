@@ -270,7 +270,7 @@ describe("IncidentBody", () => {
     expect(owner.match(/>Acknowledge</gu)).toHaveLength(1);
     expect(owner).toContain("A guided post needs a style fix");
     expect(owner).toContain(">Info<");
-    expect(owner).toContain("Style results are shown here only, never pushed. Acknowledging takes it off the list.");
+    expect(owner).toContain("Shown here only, never pushed. Acknowledging takes it off the list.");
     expect(owner).not.toContain("stops the alert");
     expect(owner).not.toContain("push ");
   });

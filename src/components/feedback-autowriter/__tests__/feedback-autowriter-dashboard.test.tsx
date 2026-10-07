@@ -122,7 +122,7 @@ describe("FeedbackAutowriterDashboard", () => {
     // Everything is still there to read and to open.
     expect(html).toContain("What needs you");
     expect(html.match(/>Review<\/button>/gu)?.length).toBeGreaterThan(0);
-    expect(html).toContain("Expansion gate");
+    expect(html).toContain("Accuracy gate");
   });
 
   it("makes a halt impossible to miss", () => {
@@ -201,7 +201,7 @@ describe("FeedbackAutowriterDashboard", () => {
     expect(html).toContain("The trend charts could not load.");
     // The rail's two charts still draw from the review data.
     expect(html.match(/<canvas/gu)).toHaveLength(2);
-    expect(html).toContain("Expansion gate");
+    expect(html).toContain("Accuracy gate");
     expect(render().match(/<canvas/gu)).toHaveLength(6);
   });
 

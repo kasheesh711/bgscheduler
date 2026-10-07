@@ -105,6 +105,16 @@ function percent(ratios: Record<SpeakerRole, number>): Record<SpeakerRole, numbe
 const ALIGNED_MIN_TUTOR_SHARE = 0.5;
 /** … and the student at least this share. */
 const ALIGNED_MIN_STUDENT_SHARE = 0.05;
+/**
+ * A student may out-talk the tutor (a chatty student, a student reading answers aloud). That alignment is still
+ * trusted when Zoom's cues name nobody but the tutor and that student, every substantive Soniox speaker sits
+ * cleanly on one side and clean speakers carry ≥ 90% of the text, and the tutor still carries at least this share.
+ */
+const NAMED_MIN_TUTOR_SHARE = 0.2;
+/** A Soniox speaker is "clean" when at least this share of its cue overlap is on one side … */
+const ALIGNED_MIN_PURITY = 0.8;
+/** … and clean speakers must carry at least this share of the text (many tiny speakers cannot skip the check). */
+const ALIGNED_MIN_CLEAN_TEXT = 0.9;
 /** A speaker with less than this share of the text is noise (a cough, a stray turn), not a participant. */
 const SUBSTANTIVE_SHARE = 0.05;
 /** Talk share alone only names the tutor when one of two main speakers clearly dominates. */
@@ -122,11 +132,47 @@ function byTalkShare(segments: readonly Segment[]): { roles: Map<string, Speaker
   return { roles, clear };
 }
 
+/** Zoom's cues name the tutor (any of their names) and the student, and nobody else. */
+function onlyTutorAndStudentNamed(cues: readonly ZoomCue[], teacherNames: ReadonlySet<string>, studentNames: readonly string[] | undefined): boolean {
+  const students = new Set((studentNames ?? []).filter((name) => name.trim() !== "").map(normalizeName));
+  // A name on both lists would be the student here and the tutor in the overlap vote: trust neither.
+  if (students.size === 0 || [...students].some((name) => teacherNames.has(name))) return false;
+  let studentNamed = false;
+  for (const cue of cues) {
+    const name = normalizeName(cue.speakerName);
+    if (students.has(name)) studentNamed = true;
+    else if (!teacherNames.has(name)) return false;
+  }
+  return studentNamed;
+}
+
+/**
+ * Every substantive Soniox speaker (≥ 5% of the text) overlaps one side's cues at least 80% of the time, and the
+ * clean speakers carry at least 90% of the text. A speaker that straddles both is diarization merging the two
+ * people, and no per-speaker label can be right.
+ */
+function cleanlySplit(segments: readonly Segment[], teacherOverlap: ReadonlyMap<string, number>, otherOverlap: ReadonlyMap<string, number>): boolean {
+  const chars = new Map<string, number>();
+  for (const segment of segments) chars.set(segment.speaker, (chars.get(segment.speaker) ?? 0) + segment.text.length);
+  const total = [...chars.values()].reduce((sum, value) => sum + value, 0) || 1;
+  let cleanText = 0;
+  for (const [speaker, value] of chars) {
+    const tutor = teacherOverlap.get(speaker) ?? 0;
+    const other = otherOverlap.get(speaker) ?? 0;
+    const clean = tutor + other > 0 && Math.max(tutor, other) / (tutor + other) >= ALIGNED_MIN_PURITY;
+    if (clean) cleanText += value;
+    else if (value / total >= SUBSTANTIVE_SHARE) return false;
+  }
+  return cleanText / total >= ALIGNED_MIN_CLEAN_TEXT;
+}
+
 /**
  * Tutor = every Soniox speaker whose talk overlaps Zoom cues of the teacher's
  * display name more than anyone else's; student = those overlapping the other
  * participant's cues. Trusted only when the result looks like a one-to-one
- * lesson (tutor ≥ 50% of the talk, student ≥ 5%), else unclear. Falls back to
+ * lesson (tutor ≥ 50% of the talk, student ≥ 5%) — or, when Zoom names only the
+ * tutor and the student, every substantive speaker is cleanly on one side and
+ * clean speakers carry ≥ 90% of the text, tutor ≥ 20% and student ≥ 5% — else unclear. Falls back to
  * talk share when Zoom has no cues under the teacher's name or only one side
  * aligned, and calls it unclear when the split contradicts Zoom's cues.
  */
@@ -140,6 +186,11 @@ export function assignSpeakerRoles(input: {
    * lines are the tutor's, never the student's.
    */
   alsoTeacher?: readonly string[];
+  /**
+   * The student's Wise name and any guest name they joined under. Only when Zoom's cues name nobody else may a
+   * student who out-talks the tutor be trusted; without it the tutor must carry half the talk.
+   */
+  studentNames?: readonly string[];
 }): RoleAssignment {
   const { segments } = input;
   const teacher = input.teacherName ? normalizeName(input.teacherName) : null;
@@ -171,7 +222,9 @@ export function assignSpeakerRoles(input: {
       const ratios = roleRatios(segments, roles);
       // A plausible one-to-one lesson: the tutor carries a real share and the student is actually heard.
       // Anything else (a rejoin under another name, noise aligned as "student") is not trusted.
-      const plausible = ratios.tutor >= ALIGNED_MIN_TUTOR_SHARE && ratios.student >= ALIGNED_MIN_STUDENT_SHARE;
+      const plausible = ratios.student >= ALIGNED_MIN_STUDENT_SHARE && (ratios.tutor >= ALIGNED_MIN_TUTOR_SHARE
+        || (ratios.tutor >= NAMED_MIN_TUTOR_SHARE && onlyTutorAndStudentNamed(input.zoomCues, teacherNames, input.studentNames)
+          && cleanlySplit(segments, teacherOverlap, otherOverlap)));
       return { roles, method: plausible ? "zoom_alignment" : "unclear", shares: percent(ratios) };
     }
   }
@@ -284,10 +337,13 @@ export function buildTranscriptEvidence(input: {
   zoomCues: readonly ZoomCue[];
   teacherName: string | null;
   alsoTeacher: readonly string[];
+  /** The student's Wise name and any guest name they joined under (see `assignSpeakerRoles`). */
+  studentNames?: readonly string[];
 }): TranscriptEvidence {
   const segments = segmentsFromTokens(input.transcript.tokens);
   const speakers = assignSpeakerRoles({
     segments, zoomCues: input.zoomCues, teacherName: input.teacherName, alsoTeacher: input.alsoTeacher,
+    studentNames: input.studentNames,
   });
   const rendered = renderTranscript(segments, speakers.roles);
   const audioDurationMs = input.audioDurationMs ?? 0;

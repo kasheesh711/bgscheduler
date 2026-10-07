@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import type { CaptureAsset } from "@/lib/class-capture/model";
 import { formatBytes, type LocalMedia } from "./client-helpers";
 
-function useBlobUrl(blob: Blob | undefined) {
+export function useBlobUrl(blob: Blob | undefined) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     if (!blob) return;

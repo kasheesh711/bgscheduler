@@ -1,4 +1,5 @@
 import { and, desc, eq, sql } from "drizzle-orm";
+import { z } from "zod";
 import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
@@ -47,6 +48,16 @@ export async function approveAtomLink(db: Database, input: {
   });
 }
 
+const SkippedRecords = z.array(z.object({ id: z.string(), startedAt: z.string(), completedAt: z.string() }).passthrough());
+
+/** `counts.skipped[atomStudentId]` of a collector run; anything unreadable counts as none. */
+export function skippedRecordsOf(counts: unknown, atomStudentId: string): { id: string; startedAt: string; completedAt: string }[] {
+  const all = counts && typeof counts === "object" ? (counts as { skipped?: unknown }).skipped : undefined;
+  const mine = all && typeof all === "object" ? (all as Record<string, unknown>)[atomStudentId] : undefined;
+  const parsed = SkippedRecords.safeParse(mine ?? []);
+  return parsed.success ? parsed.data.map(({ id, startedAt, completedAt }) => ({ id, startedAt, completedAt })) : [];
+}
+
 export async function loadAtomLessonEvidence(db: Database, input: {
   detail: AutowriterSessionDetail; studentId: string | null; lessonRecord: string; now?: Date;
   /** Read-only comparison generation can request evidence before activation. */
@@ -78,11 +89,9 @@ export async function loadAtomLessonEvidence(db: Database, input: {
     const [studentRun] = await db.select().from(R).where(sql`${R.status} <> 'running' and ${R.counts}->'studentResults' ? ${link.atomStudentId}`)
       .orderBy(desc(R.startedAt)).limit(1);
     const studentCode = (studentRun?.counts.studentResults as Record<string, string> | undefined)?.[link.atomStudentId];
-    if (studentCode === "source_contradiction" && (!snapshot || studentRun!.finishedAt! >= snapshot.collectedAt)) {
-      const { hash: _hash, ...body } = buildAtomLessonEvidence({ ...base, link: { ...link, approvedAt: link.approvedAt.toISOString() }, snapshot: null, otherLessons: null }); void _hash;
-      const conflict = { ...body, status: "contradiction" as const, contradictions: ["collector_source_contradiction"] };
-      return { ...conflict, hash: evidenceHash(conflict) };
-    }
+    // Owner decision (7 Oct): a student whose Atom data contradicts itself is written lesson-only, like any other
+    // collection failure below — the writer gets no Atom data, the class is not held, and the collector's critical
+    // incident still asks for the Atom data to be fixed. (One student's every class was held from 5 Oct.)
     if (studentCode && studentCode !== "succeeded" && (!snapshot || studentRun!.finishedAt! >= snapshot.collectedAt)) {
       return omitted(studentCode === "authentication_failed" || studentCode === "response_changed" ? studentCode : "collection_failed");
     }
@@ -102,8 +111,12 @@ export async function loadAtomLessonEvidence(db: Database, input: {
       return { ...body, status: "contradiction", contradictions: ["snapshot_hash_conflict"],
         hash: evidenceHash({ ...body, status: "contradiction", contradictions: ["snapshot_hash_conflict"] }) };
     }
+    // The run that produced this snapshot lists the records it skipped for the student (their counts disagree).
+    const skipped = snapshot && studentRun && studentCode === "succeeded" && studentRun.id === snapshot.runId
+      ? skippedRecordsOf(studentRun.counts, link.atomStudentId) : [];
     return buildAtomLessonEvidence({
       ...base,
+      skipped,
       link: { ...link, approvedAt: link.approvedAt.toISOString() } satisfies AtomStudentLink,
       snapshot: snapshot && parsed?.success ? { id: snapshot.id, studentId: snapshot.atomStudentId,
         sourceHash: snapshot.sourceHash, collectedAt: snapshot.collectedAt.toISOString(), activities: parsed.data } : null,

@@ -23,7 +23,7 @@
       "passed": true
     },
     {
-      "name": "Tutor notes and photos remain distinct from class transcript",
+      "name": "Photos upload on selection and show a tappable thumbnail",
       "passed": true
     },
     {
@@ -39,7 +39,7 @@
       "passed": true
     },
     {
-      "name": "Uncertain transcription can be removed before drafting from tutor notes",
+      "name": "Uncertain transcription can be removed before drafting from the remaining transcript",
       "passed": true
     },
     {
@@ -47,7 +47,7 @@
       "passed": true
     },
     {
-      "name": "Upload cancellation keeps local media and worksheet permission is sent on retry",
+      "name": "Automatic photo upload cancellation retains a retryable local copy",
       "passed": true
     },
     {
@@ -56,6 +56,10 @@
     },
     {
       "name": "Default pause is visible with no microphone request",
+      "passed": true
+    },
+    {
+      "name": "iPhone M4A upload and manual retrospective feedback work without AI",
       "passed": true
     },
     {
@@ -72,14 +76,14 @@
     }
   ],
   "metrics": {
-    "creates": 1,
-    "assetIntents": 3,
-    "uploads": 3,
+    "creates": 2,
+    "assetIntents": 30,
+    "uploads": 29,
     "transcriptions": 2,
     "drafts": 3,
-    "gets": 8,
+    "gets": 37,
     "patches": 5,
-    "lists": 5
+    "lists": 8
   },
   "unverified": [
     "Real iOS Safari and Android Chrome hardware, phone calls, lockscreen and OS termination",

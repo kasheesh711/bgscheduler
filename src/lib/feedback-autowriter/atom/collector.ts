@@ -8,12 +8,12 @@ import { isPreviewEnvironment } from "@/lib/preview-policy";
 import { isIsebClass } from "../format";
 import { describeClass } from "../prompt";
 import { rosterTutor } from "../roster";
-import { recordIncident } from "../incidents";
+import { recordIncident, refreshOpenIncident } from "../incidents";
 import { sqlStateOf } from "../db-errors";
 import { atomSubject, bangkokDate, evidenceHash } from "./evidence";
 import { openAtomReadClient, type AtomReadClient } from "./browser";
+import type { AtomLesson, AtomSkippedRecord } from "./types";
 import { AtomCollectionError } from "./normalize";
-import type { AtomLesson } from "./types";
 import { fetchAtomLessonTimetable, isCancelledWiseSession } from "./wise";
 import { configuredAtomTrial } from "./trial";
 import { withAtomTimeout } from "./deadline";
@@ -54,6 +54,16 @@ export function atomFailureCause(error: unknown): string {
   return /^[A-Za-z]{1,40}$/u.test(error.name) ? error.name : "unknown";
 }
 
+/** What a person does about a failed run, by its code (the alert is pushed, so it says so in one line). */
+export function atomNextStep(code: string): string {
+  switch (code) {
+    case "authentication_failed": return "Next: check the Atom login (ATOM_USERNAME / ATOM_PASSWORD) by signing in to Atom with it.";
+    case "response_changed": return "Next: Atom changed a page or response; the collector needs updating before Atom data returns.";
+    case "source_contradiction": return "Next: a student's Atom data belongs to someone else or another subject; check that student's Atom link on the Atom review page.";
+    default: return "Next: usually passing (Wise or Atom slow); act only if the next runs fail too.";
+  }
+}
+
 export async function runAtomCollector(input: {
   db: Database;
   openClient: () => Promise<AtomReadClient>;
@@ -80,6 +90,8 @@ export async function runAtomCollector(input: {
   }
   let client: AtomReadClient | null = null;
   const studentResults: Record<string, string> = {};
+  // Records left out because their list entry and transcript disagree; the student's other activities are kept.
+  const skippedRecords: Record<string, AtomSkippedRecord[]> = {};
   // Assigned only through `fail`; the casts keep TS from narrowing these to their initial null.
   let failure = null as string | null;
   // The step in progress and a fixed cause label, so a failed run says where it stopped.
@@ -157,12 +169,13 @@ export async function runAtomCollector(input: {
         studentResults[studentId] = "collection_failed"; fail("collection_failed", "time_budget"); continue;
       }
       try {
-        const activities = await opened.collect(studentId, [...wanted]);
+        const { activities, skipped } = await opened.collect(studentId, [...wanted]);
         if (stopped) return;
         await db.insert(s.feedbackAtomSnapshots).values({
           runId, atomStudentId: studentId, sourceHash: evidenceHash(activities), activities, collectedAt: new Date(),
         });
         studentResults[studentId] = "succeeded";
+        if (skipped.length) skippedRecords[studentId] = skipped;
         snapshots += 1;
         activityCount += activities.length;
       } catch (error) {
@@ -186,7 +199,7 @@ export async function runAtomCollector(input: {
     try {
       await db.update(RUN).set({
         status: failure ? "failed" : "succeeded", finishedAt: new Date(), errorCode: failure,
-        counts: { snapshots: recorded.snapshots, activities: recorded.activities, catalog, studentResults, probe: Boolean(input.probe),
+        counts: { snapshots: recorded.snapshots, activities: recorded.activities, catalog, studentResults, skipped: skippedRecords, probe: Boolean(input.probe),
           trial: Boolean(input.trial), ...(failure ? { failureStage, failureCause } : {}) },
       }).where(eq(RUN.id, runId));
     } finally {
@@ -194,12 +207,32 @@ export async function runAtomCollector(input: {
     }
   }
   if (failure) {
-    await recordIncident(db, {
+    const incident = {
       dedupeKey: `atom-collection:${bangkokDate(now.toISOString())}:${failure}`,
-      kind: "atom_collection_failed", severity: "critical",
-      summary: `Atom collection needs attention: ${failure} (${failureStage}: ${failureCause}). Lesson-only feedback remains available.`,
-      detail: { runId, code: failure, stage: failureStage, cause: failureCause },
-    });
+      summary: `Atom collection needs attention: ${failure} (${failureStage}: ${failureCause}). Lesson-only feedback remains available. ` +
+        atomNextStep(failure),
+      detail: { runId, code: failure, stage: failureStage, cause: failureCause, studentResults },
+    };
+    if (!await recordIncident(db, { ...incident, kind: "atom_collection_failed", severity: "critical" })) {
+      await refreshOpenIncident(db, incident);
+    }
+  }
+  // One dashboard-only note per skipped record, ever: the data is Atom's to fix, and nothing is held meanwhile. After
+  // the critical incident, and never able to lose it.
+  try {
+    for (const [atomStudentId, records] of Object.entries(skippedRecords)) {
+      for (const record of records) {
+        await recordIncident(db, {
+          dedupeKey: `atom-record-skipped:${record.id}`, kind: "atom_record_skipped", severity: "info",
+          summary: `One Atom ${record.kind === "exam_topic" ? "exam topic" : record.kind} was left out: its list entry and transcript ` +
+            "disagree. The student's other Atom work is still used; open the record in Atom to check it.",
+          detail: { runId, atomStudentId, activityId: record.id, kind: record.kind, cause: record.cause,
+            atomUrl: `https://app.atomlearning.com/tutor/transcript/${record.id}` },
+        });
+      }
+    }
+  } catch (error) {
+    console.error("[feedback-autowriter] Atom skipped-record note failed", error instanceof Error ? error.name : "Error");
   }
   return { ok: !failure, runId, snapshots: recorded.snapshots, activities: recorded.activities, catalogStudents: catalog.length, errorCode: failure,
     ...(failure ? { failureStage, failureCause } : {}) };

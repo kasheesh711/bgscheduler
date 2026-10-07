@@ -26,6 +26,16 @@ describe("private capture state", () => {
     expect((await captureView(scope, input.id, db)).assets).toHaveLength(1);
     await expect(createAsset(scope, input.id, { ...asset, size: 900 }, db)).rejects.toThrow("different");
   });
+  it("accepts more than four photos and more than twenty lifetime uploads without consuming audio quota", async () => {
+    await createCapture(scope, input, session, db);
+    for (let i = 0; i < 26; i++) {
+      await createAsset(scope, input.id, { id: crypto.randomUUID(), kind: "worksheet", mime: "image/jpeg", size: 8 * 1024 * 1024, worksheetPermission: true }, db);
+    }
+    expect((await captureView(scope, input.id, db)).assets).toHaveLength(26);
+    await expect(createAsset(scope, input.id, { id: crypto.randomUUID(), kind: "recording", mime: "audio/mp4", size: 1024 }, db)).resolves.toMatchObject({ kind: "recording" });
+    await expect(createAsset(scope, input.id, { id: crypto.randomUUID(), kind: "worksheet", mime: "image/jpeg", size: 8 * 1024 * 1024 + 1, worksheetPermission: true }, db)).rejects.toThrow();
+  });
+
   it("denies other tutors, other emails, revoked ownership and expired evidence", async () => {
     await createCapture(scope, input, session, db);
     await expect(captureView({ ...scope, email: "other@example.invalid" }, input.id, db)).rejects.toThrow("not found");
