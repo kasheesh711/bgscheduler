@@ -195,6 +195,40 @@ describe("runWritingPipeline", () => {
     expect(requests[3]).toMatchObject({ model: "openai/gpt-6-luna", effort: "max", provider: { zdr: true, data_collection: "deny" } });
   });
 
+  describe("repairing a rejected draft (owner decision, 7 Oct)", () => {
+    const EXTRA = " [STUDENT_1] also scored 95% on the end-of-lesson quiz.";
+    const withExtra = JSON.stringify({ ...JSON.parse(writerJson), performance: JSON.parse(writerJson).performance + EXTRA });
+    const QUOTED = JSON.stringify({
+      faithful: false, unsupported: ["How the student did in class: \"[STUDENT_1] also scored 95% on the end-of-lesson quiz\" — no score was given"],
+      misattributed: [], homeworkNotSet: [],
+    });
+
+    it("cuts what the judges quoted, has both levels judge the trimmed draft, and posts it", async () => {
+      const { promise, records, requests } = run({ writers: [SOL(withExtra)], judge: [GLM(QUOTED), GLM(FAITHFUL)] });
+      const result = await promise;
+      expect(result).toMatchObject({ kind: "draft", arm: "sol", repair: [{ field: "performance", text: "[STUDENT_1] also scored 95% on the end-of-lesson quiz." }] });
+      if (result.kind === "draft") expect(result.fields.performance).toBe(GOOD_FIELDS.performance);
+      expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm", "judge:glm", "judge:glm"]);
+      const second = judgeRequests(requests).slice(2).map((request) => request.messages.map((message) => message.content).join("\n"));
+      for (const text of second) expect(text).not.toContain("95%");
+      expect(records.slice(3).map((record) => record.result.judgedGeneration)).toEqual(["g:repair", "g:repair"]);
+    });
+
+    it("goes on to the fallback writer when the trimmed draft is rejected too", async () => {
+      const { promise, records } = run({ writers: [SOL(withExtra), LUNA(writerJson)], judge: [GLM(QUOTED), GLM(UNFAITHFUL), GLM(FAITHFUL)] });
+      const result = await promise;
+      expect(result).toMatchObject({ kind: "draft", arm: "luna" });
+      expect(result).not.toHaveProperty("repair");
+      expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm", "judge:glm", "judge:glm", "writer:luna", "judge:glm", "judge:glm"]);
+    });
+
+    it("does not repair when the quote is not in the draft", async () => {
+      const { promise, records } = run({ writers: [SOL(writerJson), LUNA(writerJson)], judge: [GLM(UNFAITHFUL), GLM(FAITHFUL)] });
+      expect(await promise).toMatchObject({ kind: "draft", arm: "luna" });
+      expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm", "writer:luna", "judge:glm", "judge:glm"]);
+    });
+  });
+
   it("holds when both drafts fail content checks", async () => {
     const { promise } = run({ writers: [SOL(JSON.stringify({ ...JSON.parse(writerJson), topics: "Fractions." })), LUNA("not json")] });
     const result = await promise;

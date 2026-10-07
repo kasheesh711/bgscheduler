@@ -693,7 +693,7 @@ async function sendDailyDigestIfDue(
     recoveries: recovered,
     digestDate: clock.date,
   });
-  const sender = options.sender ?? createOutboundEmailSender("primary", { strictOutcome: true });
+  const sender = options.sender ?? createOutboundEmailSender("primary", { strictOutcome: true, audience: "staff" });
   let accepted = 0;
   let uncertain = 0;
   for (const recipient of recipients) {
@@ -761,7 +761,7 @@ async function runRecipientSweep(db: Database, now: Date, jobs: CronJobHealth[],
     newAlerts: sweep.newAlerts,
     recoveries: sweep.recoveries,
   });
-  const sender = options.sender ?? createOutboundEmailSender();
+  const sender = options.sender ?? createOutboundEmailSender("primary", { audience: "staff" });
   let sentCount = 0;
   for (const recipient of recipients) {
     try {

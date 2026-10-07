@@ -126,6 +126,7 @@ describe("sendProgressTestAdminDigest", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("skips the send (no email) and records a terminal skipped run when there is nothing to report", async () => {
@@ -315,6 +316,18 @@ describe("sendProgressTestAdminDigest", () => {
 
     expect(result.status).toBe("skipped");
     expect(sender.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("skips without touching the database when PROGRESS_TEST_ADMIN_DIGEST_ENABLED=false", async () => {
+    vi.stubEnv("PROGRESS_TEST_ADMIN_DIGEST_ENABLED", "false");
+    const db = { select: vi.fn(), insert: vi.fn(), update: vi.fn() } as unknown as Database;
+    const sender = makeSender();
+    const result = await sendProgressTestAdminDigest(db, new Date("2026-10-07T02:00:00Z"), { sender });
+    expect(result).toMatchObject({ status: "skipped", digestDate: "2026-10-07", attempted: 0 });
+    expect(result.message).toMatch(/disabled/i);
+    expect(sender.sendEmail).not.toHaveBeenCalled();
+    expect(db.select).not.toHaveBeenCalled();
+    expect(hasTodayRefresh).not.toHaveBeenCalled();
   });
 });
 

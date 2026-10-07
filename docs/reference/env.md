@@ -12,10 +12,10 @@ The count inventory below predates the collaborator-access release. The addition
 |---|---|---|
 | Declared in the Zod schema | **20** keys | [`src/lib/env.ts:3`–`46`](../../src/lib/env.ts) |
 | Documented in `.env.example` | **43** keys | [`.env.example`](../../.env.example) — `grep -cE '^[A-Z_][A-Z0-9_]*=' .env.example` |
-| Read by non-test `src/` at runtime | **80** named keys + 1 dynamically-named family | includes the Onsite Foot Traffic HMAC and PDF-runtime keys |
-| Read anywhere in the repo (`src/`, `scripts/`, root config) | **86** named keys | the 80 above + 6 test/script-only keys (§2.10). `TZ` is *written*, not read |
+| Read by non-test `src/` at runtime | **86** named keys + 1 dynamically-named family | includes the Onsite Foot Traffic HMAC and PDF-runtime keys |
+| Read anywhere in the repo (`src/`, `scripts/`, root config) | **92** named keys | the 86 above + 6 test/script-only keys (§2.10). `TZ` is *written*, not read |
 
-> **Counting method.** A literal `process.env.NAME` scan of non-test `src/` yields 69 runtime names after excluding `TEST_DATABASE_URL`. Eleven more never appear in that form: nine `POST_CLASS_PAYOUT_*` keys read through `value(env, "NAME")` or `env.POST_CLASS_PAYOUT_WRITES_ENABLED`, `VERCEL_ENV` through the same helper, and `WISE_SESSION_SUBJECT_UPDATE_VERIFIED` through computed access on a constant. That produces 80 named runtime keys; the computed `COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD` family is listed separately rather than guessed.
+> **Counting method.** A literal `process.env.NAME` scan of non-test `src/` yields 75 runtime names after excluding `TEST_DATABASE_URL` (69 prior, +4 new Resend keys: `RESEND_FROM`, `RESEND_REPLY_TO`, `RESEND_AUDIENCE`, `RESEND_WEBHOOK_SECRET`, +2 digest kill switches: `CLASSROOM_ADMIN_EMAIL_ENABLED`, `PROGRESS_TEST_ADMIN_DIGEST_ENABLED`). Eleven more never appear in that form: nine `POST_CLASS_PAYOUT_*` keys read through `value(env, "NAME")` or `env.POST_CLASS_PAYOUT_WRITES_ENABLED`, `VERCEL_ENV` through the same helper, and `WISE_SESSION_SUBJECT_UPDATE_VERIFIED` through computed access on a constant. That produces 86 named runtime keys; the computed `COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD` family is listed separately rather than guessed.
 
 ---
 
@@ -68,12 +68,12 @@ Where the repo's prose stands against this table:
 | Source | Claim | Zod truth |
 |---|---|---|
 | [`AGENTS.md:291`](../../AGENTS.md) | heading "Environment Variables (9 required)" over a 12-row table that includes the three `LEAVE_REQUESTS_*` vars | 7 hard-required + 2 defaulted; the `LEAVE_REQUESTS_*` vars are **not** in the schema — they are read at [`src/lib/leave-requests/config.ts:1`–`5`](../../src/lib/leave-requests/config.ts) |
-| [`AGENTS.md`](../../AGENTS.md) | Historical environment inventory | 7 required + 2 defaulted + 11 optional = 20 declared; **80** runtime names read; and schema validation never executes (next section) |
+| [`AGENTS.md`](../../AGENTS.md) | Historical environment inventory | 7 required + 2 defaulted + 11 optional = 20 declared; **86** runtime names read; and schema validation never executes (next section) |
 | [`README.md`](../../README.md) | Historical environment inventory | This page is canonical; the root README is not the effective contract |
 | [`CLAUDE.md`](../../CLAUDE.md) | Historical environment inventory | This page is canonical; counts can drift whenever a point-of-use read is added |
-| [`docs/OPEN-QUESTIONS.md`](../OPEN-QUESTIONS.md) (DEF-2 / ENV items) | Earlier counts retained in dated questions | 20 declared; 80 runtime names |
+| [`docs/OPEN-QUESTIONS.md`](../OPEN-QUESTIONS.md) (DEF-2 / ENV items) | Earlier counts retained in dated questions | 20 declared; 86 runtime names |
 
-Accurate phrasing: **7 hard-required + 2 defaulted + 11 optional = 20 declared; 79 named keys (+ 1 dynamic family) read at runtime by `src/`.**
+Accurate phrasing: **7 hard-required + 2 defaulted + 11 optional = 20 declared; 82 named keys (+ 1 dynamic family) read at runtime by `src/`.**
 
 ---
 
@@ -105,7 +105,7 @@ flowchart LR
   end
   subgraph Actual["Effective contract — point-of-use reads"]
     P["process.env.NAME"] --> T{"absent?"}
-    T -->|"throw on first use"| A["DATABASE_URL · db/index.ts:7-9<br/>WISE_INSTITUTE_ID · utilization.ts:434 · pcf sync.ts:1054<br/>RESEND_API_KEY · notifications.ts:300<br/>LINE_CHANNEL_ACCESS_TOKEN · line/client.ts:31"]
+    T -->|"throw on first use"| A["DATABASE_URL · db/index.ts:7-9<br/>WISE_INSTITUTE_ID · utilization.ts:434 · pcf sync.ts:1054<br/>RESEND_API_KEY · notifications.ts:291<br/>LINE_CHANNEL_ACCESS_TOKEN · line/client.ts:31"]
     T -->|"HTTP 500 Server misconfigured"| D["CRON_SECRET · cron-auth.ts:22-24"]
     T -->|"401 from Wise at request time"| E["WISE_USER_ID / WISE_API_KEY<br/>createWiseClient() · wise/client.ts:216-217"]
     T -->|"feature off (fail-closed)"| B["LINE_CHANNEL_* · lineSchedulerEnabled()<br/>LINE_SCHEDULE_BOT_ADMIN_IDS · empty Set<br/>MAINTENANCE_BYPASS_EMAILS · empty Set<br/>WISE_SESSION_*_VERIFIED · === 'true'<br/>POST_CLASS_*_ENABLED · === 'true'"]
@@ -157,9 +157,9 @@ Ordered as declared. "Consumed at" lists non-test `src/` sites, plus root config
 
 ---
 
-## 2. Undeclared variables read at runtime or by committed scripts (65 named + 1 dynamic family)
+## 2. Undeclared variables read at runtime or by committed scripts (68 named + 1 dynamic family)
 
-None of the following appear in `src/lib/env.ts`. Grouped by owning subsystem; 20 declared + 65 undeclared = 85 named runtime/script variables.
+None of the following appear in `src/lib/env.ts`. Grouped by owning subsystem; 20 declared + 68 undeclared = 88 named runtime/script variables.
 
 ### 2.1 OpenAI and AI features (9)
 
@@ -193,7 +193,7 @@ None of the following appear in `src/lib/env.ts`. Grouped by owning subsystem; 2
 
 `CLASSROOM_CONTINUITY_ENABLED` defaults to enabled. Set it to the literal `false` and redeploy to disable the additional continuity optimizer and automatic room-profile initialization. The previous feasibility repair remains active, stored profiles are retained, and saved print reports continue to work. Read at runtime in `src/lib/classrooms/room-policy.ts`.
 
-### 2.3 Classroom schedule email (7)
+### 2.3 Classroom schedule email (11)
 
 | Variable | Purpose | Consumed at | If unset |
 |---|---|---|---|
@@ -203,9 +203,11 @@ None of the following appear in `src/lib/env.ts`. Grouped by owning subsystem; 2
 | `SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_SECRET` | Backup shared secret | [`schedule-email.ts:292`](../../src/lib/classrooms/schedule-email.ts) | as above |
 | `SCHEDULE_EMAIL_SENDER_NAME` | Display name on outgoing schedule mail | [`schedule-email.ts:606`](../../src/lib/classrooms/schedule-email.ts) | `"BeGifted"` |
 | `SCHEDULE_EMAIL_REPLY_TO` | Reply-to address | [`schedule-email.ts:607`](../../src/lib/classrooms/schedule-email.ts) | a personal Gmail address hard-coded in source |
-| `OUTBOUND_EMAIL_TRANSPORT` | `gmail` sends app email through the Gmail API as the Workspace mailbox `admin@begiftededucation.com` (the nightly-reminder grant, about 2,000/day, shared with those reminders). Any Gmail rejection that precedes acceptance (preview or unconfigured environment, reconnect needed, daily limit) retries that one message through the Apps Script primary relay, and the `backup` sender key becomes that relay. Any other value keeps the Apps Script MailApp relay (about 100 recipients/day on a consumer account). Read whenever a job builds its sender, so changing it takes effect on the next run and doubles as the kill switch | [`src/lib/email/outbound.ts`](../../src/lib/email/outbound.ts) | unset → Apps Script relay |
+| `OUTBOUND_EMAIL_TRANSPORT` | `gmail` sends app email through the Gmail API as the Workspace mailbox `admin@begiftededucation.com` (the nightly-reminder grant, about 2,000/day, shared with those reminders). Any Gmail rejection that precedes acceptance (preview or unconfigured environment, reconnect needed, daily limit) retries that one message through the Apps Script primary relay, and the `backup` sender key becomes that relay. `resend` sends through Resend ([`src/lib/email/resend.ts`](../../src/lib/email/resend.ts)) for audiences `RESEND_AUDIENCE` allows (staff-tagged callers by default; `all` adds teacher mail); a Resend rejection that precedes acceptance falls back to the `gmail` chain for that message; an uncertain Resend outcome is never resent elsewhere; the `backup` sender key is the Gmail chain. Resend is skipped entirely when `RESEND_API_KEY` or `RESEND_FROM` is missing. Any other value keeps the Apps Script MailApp relay (about 100 recipients/day on a consumer account). Read whenever a job builds its sender, so changing it takes effect on the next run and doubles as the kill switch | [`src/lib/email/outbound.ts`](../../src/lib/email/outbound.ts) | unset → Apps Script relay |
 | `CRON_WATCHDOG_ALERT_EMAILS` | Comma list of recipients for the watchdog's single daily digest | [`src/lib/internal/cron-watchdog.ts`](../../src/lib/internal/cron-watchdog.ts) | `kevhsh7@gmail.com` |
 | `SCHEDULE_EMAIL_PUBLIC_BASE_URL` | Absolute origin for the floor-plan-map image embedded in the email | [`schedule-email.ts:266`](../../src/lib/classrooms/schedule-email.ts); also a base-URL fallback for leave requests ([`leave-requests/config.ts:19`](../../src/lib/leave-requests/config.ts)) | Falls through `VERCEL_PROJECT_PRODUCTION_URL` → `VERCEL_URL` → `DEFAULT_PUBLIC_BASE_URL = "https://bgscheduler.vercel.app"` ([`schedule-email.ts:265`–`276`](../../src/lib/classrooms/schedule-email.ts), const at [`:13`](../../src/lib/classrooms/schedule-email.ts)) |
+| `CLASSROOM_ADMIN_EMAIL_ENABLED` | Kill switch for the daily classroom admin schedule email. It stops only the admin summary; teacher schedule emails still send. Only the literal `false` (trimmed, case-insensitive) disables; the cron still fires and returns `skipped` | [`classrooms/admin-schedule-email.ts`](../../src/lib/classrooms/admin-schedule-email.ts) (`sendAdminClassroomScheduleEmail`) | Enabled |
+| `PROGRESS_TEST_ADMIN_DIGEST_ENABLED` | Kill switch for the daily progress-test admin digest. Same semantics: only `false` disables; the cron returns `skipped` without touching the database | [`progress-tests/admin-digest.ts`](../../src/lib/progress-tests/admin-digest.ts) (`sendProgressTestAdminDigest`) | Enabled |
 
 ### 2.4 Post-class feedback payouts and unattended charging (11)
 
@@ -261,13 +263,17 @@ Both variables are resolved at call time by [`src/lib/unearned-revenue/sync.ts`]
 | `UNEARNED_REVENUE_SPREADSHEET_ID` | Formula-backed accounting workbook imported by the dashboard sync | Falls back to `1AY6sAjw3rwAhdJCzMWR6qW0utBU91sv-JZWH1223mZc` |
 | `UNEARNED_REVENUE_CONNECTED_EMAIL` | Normalized email whose stored Google OAuth token reads the workbook | Falls back to `kevhsh7@gmail.com`; import fails closed when that account has no usable token or sheet access |
 
-### 2.7 Admissions notifications (3)
+### 2.7 Admissions and outbound email (7)
 
 | Variable | Purpose | Consumed at | If unset |
 |---|---|---|---|
-| `RESEND_API_KEY` | Resend API key for admissions email (`RESEND_ENDPOINT`, [`admissions/notifications.ts:43`](../../src/lib/admissions/notifications.ts)) | [`notifications.ts:299`–`300`](../../src/lib/admissions/notifications.ts) | Throws `RESEND_API_KEY is not configured` at send time |
-| `ADMISSIONS_EMAIL_FROM` | From header | [`notifications.ts:301`](../../src/lib/admissions/notifications.ts) | `DEFAULT_FROM` at [`:46`](../../src/lib/admissions/notifications.ts) — `BeGifted Admissions <onboarding@resend.dev>`, the Resend sandbox sender |
-| `ADMISSIONS_EMAIL_REPLY_TO` | Reply-to header | [`notifications.ts:302`](../../src/lib/admissions/notifications.ts) | `DEFAULT_REPLY_TO` at [`:49`](../../src/lib/admissions/notifications.ts) — a personal Gmail address |
+| `RESEND_API_KEY` | Resend API key for admissions email and shared outbound email transport | [`admissions/notifications.ts:291`](../../src/lib/admissions/notifications.ts), [`src/lib/email/resend.ts`](../../src/lib/email/resend.ts) | Via `createOutboundEmailSender` ([`outbound.ts:167`](../../src/lib/email/outbound.ts)), missing key means Resend is skipped and mail routes through the Gmail chain; only Admissions' `sendAdmissionsEmail` throws `RESEND_API_KEY is not configured` at send time |
+| `RESEND_FROM` | Verified sender for Resend mail (e.g. `BeGifted <no-reply@notify.begiftededucation.com>`) | [`src/lib/email/resend.ts`](../../src/lib/email/resend.ts) | Resend skipped; mail uses the Gmail chain |
+| `RESEND_REPLY_TO` | Reply-to for Resend mail | [`src/lib/email/resend.ts`](../../src/lib/email/resend.ts) | Falls back to `SCHEDULE_EMAIL_REPLY_TO`, then `kevhsh7@gmail.com` |
+| `RESEND_AUDIENCE` | `all` moves teacher mail to Resend; anything else or unset → staff only | [`src/lib/email/outbound.ts`](../../src/lib/email/outbound.ts) | `staff` |
+| `RESEND_WEBHOOK_SECRET` | Svix signing secret (`whsec_…`) for the Resend delivery webhook; the route verifies the HMAC and a 5-minute timestamp window before storing anything | [`src/app/api/email/resend-webhook/route.ts`](../../src/app/api/email/resend-webhook/route.ts), [`src/lib/email/resend-webhook.ts`](../../src/lib/email/resend-webhook.ts) | Route answers 503 `Not configured` and stores nothing |
+| `ADMISSIONS_EMAIL_FROM` | From header for admissions-specific sends | [`notifications.ts:292`](../../src/lib/admissions/notifications.ts) | Falls back to `RESEND_FROM`. Neither set: the send is rejected (`RESEND_FROM is not configured`) before any log row is written |
+| `ADMISSIONS_EMAIL_REPLY_TO` | Reply-to header for admissions-specific sends | [`notifications.ts:293`](../../src/lib/admissions/notifications.ts) | `DEFAULT_REPLY_TO` at [`:45`](../../src/lib/admissions/notifications.ts) — a personal Gmail address |
 
 ### 2.8 LINE operations, seeding, and one-offs (3)
 
@@ -310,6 +316,7 @@ Several `scripts/*.ts` additionally hand-parse `.env.local` into `process.env` b
 | Idiom | Variables | Semantics |
 |---|---|---|
 | `X !== "false"` | `ENABLE_LINE_SCHEDULER` ([`line/client.ts:20`](../../src/lib/line/client.ts)), `ENABLE_AI_SCHEDULER` ([`ai/scheduler.ts:478`](../../src/lib/ai/scheduler.ts)), `ENABLE_COMPETITOR_AI` ([`competitor-intelligence/ai.ts:71`](../../src/lib/competitor-intelligence/ai.ts)), `ENABLE_STUDENT_SCHEDULE_LIVE` ([`student-schedule/live.ts:67`](../../src/lib/student-schedule/live.ts)) | **Opt-out.** Unset means enabled. Only the literal lowercase `false` disables — `0`, `no`, and `FALSE` do not; [`live.test.ts:37`–`40`](../../src/lib/student-schedule/__tests__/live.test.ts) pins `"0"` as *still on* |
+| `X.trim().toLowerCase() !== "false"` | `CLASSROOM_ADMIN_EMAIL_ENABLED`, `PROGRESS_TEST_ADMIN_DIGEST_ENABLED` | **Opt-out.** Unset means enabled. Trimmed and case-insensitive, so `false`, `FALSE` and ` False ` all disable; `0` and `no` do not |
 | `X === "true"` | `WISE_SESSION_OPERATIONS_VERIFIED` ([`wise/operations.ts:11`](../../src/lib/wise/operations.ts)), `WISE_SESSION_CREATE_VERIFIED` ([`progress-tests/config.ts:50`](../../src/lib/progress-tests/config.ts)), `WISE_SESSION_SUBJECT_UPDATE_VERIFIED` ([`student-promotions/data.ts:450`](../../src/lib/student-promotions/data.ts)), `POST_CLASS_PAYOUT_WRITES_ENABLED` ([`payout-config.ts:50`](../../src/lib/post-class-feedback/payout-config.ts)), `POST_CLASS_AUTO_APPROVE_ENABLED` ([`payout-config.ts:167`](../../src/lib/post-class-feedback/payout-config.ts) — the only one that `.trim()`s first), `MAINTENANCE_MODE` ([`maintenance.ts:60`](../../src/lib/maintenance.ts)) | **Opt-in.** Unset means off. For the five write gates that is fail-*closed*: no external write can happen by accident. For `MAINTENANCE_MODE` the identical idiom is fail-*open* — the site stays up by accident. Same polarity, inverted safety reading, and [`maintenance.ts:9`–`14`](../../src/lib/maintenance.ts) explains why |
 | Non-empty comma list | `LINE_SCHEDULE_BOT_ADMIN_IDS` ([`schedule-bot.ts:116`–`122`](../../src/lib/line/schedule-bot.ts)), `MAINTENANCE_BYPASS_EMAILS` ([`maintenance.ts:79`–`88`](../../src/lib/maintenance.ts)), `LINE_VALIDATION_LEAD_EMAILS` ([`link-validation.ts:220`–`228`](../../src/lib/line/link-validation.ts)), `SEED_ADMIN_EMAILS` ([`seed.ts:31`](../../src/lib/db/seed.ts)) | Split on `,`, trimmed, blanks dropped. The first two are fail-closed on empty (nobody qualifies); the last two fall back to a hard-coded list or a no-op |
 
@@ -335,20 +342,21 @@ flowchart TD
 
 ## 4. `.env.example` reconciliation
 
-`.env.example` lists **43** concrete keys plus two commented optional Tutor Offboarding examples. Every one is genuinely read somewhere — there are no dead entries. It carries 19 of the 20 schema-declared keys; `CREDIT_REFRESH_MAX_AGE_MINUTES` is the declared omission. **Thirty-eight** named keys read by non-test runtime code are missing from it:
+`.env.example` lists **43** concrete keys plus two commented optional Tutor Offboarding examples. Every one is genuinely read somewhere — there are no dead entries. It carries 19 of the 20 schema-declared keys; `CREDIT_REFRESH_MAX_AGE_MINUTES` is the declared omission. **Forty-four** named keys read by non-test runtime code are missing from it:
 
 - **AI models and flags (6):** `OPENAI_SCHEDULER_SHADOW_MODEL`, `OPENAI_SCHEDULER_REASONING_EFFORT`, `OPENAI_PROGRESS_TEST_MODEL`, `OPENAI_POST_CLASS_FEEDBACK_MODEL`, `OPENAI_COMPETITOR_INTEL_MODEL`, `ENABLE_COMPETITOR_AI`
 - **Competitor providers (8):** `APIFY_API_TOKEN`, `APIFY_INSTAGRAM_ACTOR`, `APIFY_FACEBOOK_ACTOR`, `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD`, `COMPETITOR_APIFY_COST_PER_ITEM_USD`, `COMPETITOR_DATAFORSEO_COST_PER_QUERY_USD`, `COMPETITOR_INTEL_MONTHLY_CAP_USD`
 - **Wise writeback gates (4):** `WISE_SESSION_OPERATIONS_VERIFIED`, `WISE_SESSION_CREATE_VERIFIED`, `WISE_SESSION_SUBJECT_UPDATE_VERIFIED`, `WISE_TEACHER_REMOVAL_VERIFIED`
-- **Admissions email (3):** `RESEND_API_KEY`, `ADMISSIONS_EMAIL_FROM`, `ADMISSIONS_EMAIL_REPLY_TO`
+- **Admissions and outbound email (7):** `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_REPLY_TO`, `RESEND_AUDIENCE`, `RESEND_WEBHOOK_SECRET`, `ADMISSIONS_EMAIL_FROM`, `ADMISSIONS_EMAIL_REPLY_TO`
 - **Unattended charging (2):** `POST_CLASS_AUTO_APPROVE_ENABLED`, `POST_CLASS_AUTO_APPROVE_GRACE_HOURS` — the two knobs that decide whether money moves without a human
+- **Admin digest kill switches (2):** `CLASSROOM_ADMIN_EMAIL_ENABLED`, `PROGRESS_TEST_ADMIN_DIGEST_ENABLED`
 - **Ops and misc (4):** `SCHEDULE_EMAIL_PUBLIC_BASE_URL`, `LINE_VALIDATION_LEAD_EMAILS`, `SEED_ADMIN_EMAILS`, `SALES_DASHBOARD_CONNECTED_EMAIL`
 - **Wise traffic controls (4):** `WISE_FAR_HORIZON_MAX_AGE_MINUTES`, `WISE_AVAILABILITY_HORIZON_DAYS`, `WISE_MAX_CONCURRENCY`, `CREDIT_REFRESH_MAX_AGE_MINUTES`
 - **Local PDF runtime (1):** `CHROME_EXECUTABLE_PATH`
 - **Tutor Offboarding (2):** `TUTOR_OFFBOARDING_CONNECTED_EMAIL` (optional; falls back to `SALES_DASHBOARD_CONNECTED_EMAIL`) and `WISE_TEACHER_REMOVAL_VERIFIED` (optional; enable only after owner probe)
 - **Platform-injected (5), correctly omitted:** `VERCEL`, `VERCEL_ENV`, `VERCEL_URL`, `VERCEL_PROJECT_PRODUCTION_URL`, `AWS_LAMBDA_FUNCTION_NAME`
 
-The actionable production gap is the first seven groups — **31 keys** that change application behaviour and are discoverable only by reading source. The local Chrome override, platform-injected keys, and 6 test/script-only keys (§2.10) are reasonably omitted. The `COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD` family cannot be listed at all, because the key name is computed at call time ([`budget.ts:19`](../../src/lib/competitor-intelligence/budget.ts)).
+The actionable production gap is the first seven groups — **34 keys** that change application behaviour and are discoverable only by reading source. The local Chrome override, platform-injected keys, and 6 test/script-only keys (§2.10) are reasonably omitted. The `COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD` family cannot be listed at all, because the key name is computed at call time ([`budget.ts:19`](../../src/lib/competitor-intelligence/budget.ts)).
 
 **Three blank placeholders would fail the declared schema.** `.env.example:24`–`25` ship `LINE_CHANNEL_SECRET=` and `LINE_CHANNEL_ACCESS_TOKEN=`, and `.env.example:45` ships `APP_BASE_URL=`. A dotenv loader sets those to `""`, not `undefined`, and `z.string().min(1).optional()` / `z.string().url().optional()` reject `""`. Today this is harmless because the schema never runs and every consumer `.trim()`s and treats `""` as unset ([`line/client.ts:21`–`22`](../../src/lib/line/client.ts), [`link/route.ts:19`](../../src/app/api/student-schedule/link/route.ts)). If `src/lib/env.ts` is ever wired into a boot path, a `.env.local` copied verbatim from the template will throw on those three lines. `MAINTENANCE_MODE=`, `MAINTENANCE_BYPASS_EMAILS=`, and `LINE_SCHEDULE_BOT_ADMIN_IDS=` are plain `.optional()` strings and parse fine when blank.
 
@@ -360,12 +368,12 @@ Two comments in the repo historically carried stale cron counts. The current sou
 
 1. **The schema is dead code.** Nothing imports `src/lib/env.ts`, so its validation never runs and its `.default()` values never apply. Either wire it into a startup path (root layout, or a new `instrumentation.ts`) or relabel it as advisory. Tracked as DEF-2 / DEAD-1 / ENV-1 in [`OPEN-QUESTIONS.md`](../OPEN-QUESTIONS.md).
 2. **Secondary prose inventories drift.** This page and [`docs/README.md`](../README.md) carry the mechanical counts. Older orientation files and open questions still contain historical totals and should not be used as an environment contract.
-3. **The schema covers 20 of 80 live keys.** Is direct `process.env` access with per-call-site guards the intended pattern, or should the schema become the inventory? Every `OPENAI_*`, `POST_CLASS_*`, `SCHEDULE_EMAIL_*`, `LEAVE_REQUESTS_*`, `UNEARNED_REVENUE_*`, `WISE_SESSION_*_VERIFIED`, `APIFY_*`, `DATAFORSEO_*`, `COMPETITOR_*`, `RESEND_API_KEY`, and `ADMISSIONS_EMAIL_*` key sits outside it. The `POST_CLASS_*` module argues for operation-boundary validation explicitly ([`payout-config.ts:65`–`71`](../../src/lib/post-class-feedback/payout-config.ts)); the others are silent.
+3. **The schema covers 20 of 86 live keys.** Is direct `process.env` access with per-call-site guards the intended pattern, or should the schema become the inventory? Every `OPENAI_*`, `POST_CLASS_*`, `SCHEDULE_EMAIL_*`, `LEAVE_REQUESTS_*`, `UNEARNED_REVENUE_*`, `WISE_SESSION_*_VERIFIED`, `APIFY_*`, `DATAFORSEO_*`, `COMPETITOR_*`, `RESEND_*`, and `ADMISSIONS_EMAIL_*` key sits outside it. The `POST_CLASS_*` module argues for operation-boundary validation explicitly ([`payout-config.ts:65`–`71`](../../src/lib/post-class-feedback/payout-config.ts)); the others are silent.
 4. **`WISE_INSTITUTE_ID` is effectively hard-coded.** The literal `696e1f4d90102225641cc413` appears 18 times in non-test `src/` — 11 inline fallbacks plus 6 `DEFAULT_INSTITUTE_ID` consts. Only [`room-capacity/utilization.ts:433`](../../src/lib/room-capacity/utilization.ts) and [`post-class-feedback/sync.ts:1053`](../../src/lib/post-class-feedback/sync.ts) refuse to guess.
 5. **Three different failure modes for the same Wise credentials.** `createWiseClient()` ([`wise/client.ts:215`–`221`](../../src/lib/wise/client.ts)) asserts `WISE_USER_ID!` / `WISE_API_KEY!` and builds a client whose Basic header encodes `"undefined:undefined"` ([`:70`](../../src/lib/wise/client.ts)), 401ing at request time; `createWiseClientFromEnv()` ([`classrooms/data.ts:1151`–`1159`](../../src/lib/classrooms/data.ts)) and `createPromotionWiseClient()` ([`student-promotions/data.ts:298`–`306`](../../src/lib/student-promotions/data.ts)) throw immediately with named errors; [`wise-activity/reconciliation.ts:770`, `:797`](../../src/lib/wise-activity/reconciliation.ts) return a typed error result.
 6. **`CRON_SECRET` checking is duplicated six times.** [`cron-auth.ts`](../../src/lib/internal/cron-auth.ts) is the shared helper with 16 route importers, yet six internal routes reimplement the identical constant-time comparison inline. A change to the algorithm needs seven edits.
-7. **Personal Gmail addresses as production fallbacks.** `SCHEDULE_EMAIL_REPLY_TO` ([`schedule-email.ts:607`](../../src/lib/classrooms/schedule-email.ts)), `ADMISSIONS_EMAIL_REPLY_TO` ([`notifications.ts:49`](../../src/lib/admissions/notifications.ts)), and `LINE_VALIDATION_LEAD_EMAILS` ([`link-validation.ts:122`–`125`](../../src/lib/line/link-validation.ts)) all default to individual addresses baked into source. Intentional, or should these be required?
-8. **`ADMISSIONS_EMAIL_FROM` defaults to the Resend sandbox sender** (`onboarding@resend.dev`, [`notifications.ts:46`](../../src/lib/admissions/notifications.ts)). Unset in production, admissions mail ships from a sandbox domain rather than failing loudly.
+7. **Personal Gmail addresses as production fallbacks.** `SCHEDULE_EMAIL_REPLY_TO` ([`schedule-email.ts:607`](../../src/lib/classrooms/schedule-email.ts)), `ADMISSIONS_EMAIL_REPLY_TO` ([`notifications.ts:45`](../../src/lib/admissions/notifications.ts)), and `LINE_VALIDATION_LEAD_EMAILS` ([`link-validation.ts:122`–`125`](../../src/lib/line/link-validation.ts)) all default to individual addresses baked into source. Intentional, or should these be required?
+8. **`ADMISSIONS_EMAIL_FROM` has no sandbox default any more.** Unset, Admissions falls back to `RESEND_FROM`; with neither set the send is rejected before any log row ([`notifications.ts:292`](../../src/lib/admissions/notifications.ts)).
 9. **Several flags are captured at module load, not per call.** `WISE_SESSION_OPERATIONS_VERIFIED` in [`line/operational.ts:21`](../../src/lib/line/operational.ts) (unlike the function reader at [`wise/operations.ts:11`](../../src/lib/wise/operations.ts)); the six `POST_CLASS_PAYOUT_*` module consts at [`payout-config.ts:15`–`35`](../../src/lib/post-class-feedback/payout-config.ts) (unlike `requirePayoutGoogleTarget`, which re-reads); the `APIFY_*_ACTOR` slugs ([`providers.ts:17`–`18`](../../src/lib/competitor-intelligence/providers.ts)); and all four `LEAVE_REQUESTS_*` values ([`config.ts:1`–`21`](../../src/lib/leave-requests/config.ts)). Toggling any of these needs a redeploy on that code path.
 10. **`APP_BASE_URL` naming collision.** [`leave-requests/config.ts:17`](../../src/lib/leave-requests/config.ts) exports a constant literally named `APP_BASE_URL` sourced from `NEXT_PUBLIC_APP_URL` — a different cascade from the `APP_BASE_URL` env var (§3 diagram). Two things, one name.
 11. **`SALES_DASHBOARD_CONNECTED_EMAIL` has no owner.** Its only reader is the leave-requests fallback ([`config.ts:13`](../../src/lib/leave-requests/config.ts)); the sales dashboard resolves `connectedEmail` from Postgres. Rename or remove?

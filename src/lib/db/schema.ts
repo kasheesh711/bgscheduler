@@ -6341,6 +6341,27 @@ export const wiseWebhookEvents = pgTable("wise_webhook_events", {
   index("wise_webhook_events_session_idx").on(table.wiseSessionId, table.receivedAt),
 ]);
 
+/**
+ * Resend delivery webhooks (email.sent / delivered / bounced / complained /
+ * delivery_delayed / failed). One row per Svix message id; recipient and
+ * content are deliberately not stored — join on provider_message_id to the
+ * sending feature's own log when an address is needed.
+ */
+export const emailDeliveryEvents = pgTable("email_delivery_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  svixId: text("svix_id").notNull(),
+  provider: text("provider").notNull().default("resend"),
+  providerMessageId: text("provider_message_id"),
+  eventType: text("event_type").notNull(),
+  bounceType: text("bounce_type"),
+  occurredAt: timestamp("occurred_at", { withTimezone: true }),
+  receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("email_delivery_events_svix_idx").on(table.svixId),
+  index("email_delivery_events_message_idx").on(table.providerMessageId),
+  index("email_delivery_events_type_idx").on(table.eventType, table.receivedAt),
+]);
+
 // ---------------------------------------------------------------------------
 // Feedback autowriter operating loop, Phase 1 (migration 0101): measurement.
 // Immutable post log, owner verdicts, fixes measured from Wise activity events,
