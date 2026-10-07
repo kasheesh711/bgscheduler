@@ -90,7 +90,7 @@ export async function runWeekendClassroomCheck(db: Database | undefined = undefi
       await assertWeekendClaim(db, check.id, now, clock());
       await db.update(notifications).set({ attempts: sql`${notifications.attempts} + 1`, lastError: null }).where(eq(notifications.id, notification.id));
       try {
-        const sent = await (options.sender ?? createOutboundEmailSender()).sendEmail({
+        const sent = await (options.sender ?? createOutboundEmailSender("primary", { audience: "staff" })).sendEmail({
           to: recipient, subject: notification.subject, text: notification.text, html: notification.html, idempotencyKey: notification.idempotencyKey });
         await assertWeekendClaim(db, check.id, now, clock());
         await db.update(notifications).set({ status: "sent", sentAt: clock(), providerMessageId: sent.id, lastError: null })
