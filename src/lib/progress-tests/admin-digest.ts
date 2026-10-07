@@ -320,6 +320,12 @@ export async function sendProgressTestAdminDigest(
 ): Promise<ProgressTestAdminDigestResult> {
   const digestDate = todayBangkok(now);
 
+  if (process.env.PROGRESS_TEST_ADMIN_DIGEST_ENABLED?.trim().toLowerCase() === "false") return {
+    status: "skipped", digestDate, digestRunId: null, approachingCount: 0, dueCount: 0,
+    unresolvedCount: 0, attempted: 0, success: 0, failed: 0,
+    message: "Progress test admin digest is disabled (PROGRESS_TEST_ADMIN_DIGEST_ENABLED=false).",
+  };
+
   if (!await hasTodayRefresh(db, "progress", now)) return {
     status: "skipped", digestDate, digestRunId: null, approachingCount: 0, dueCount: 0,
     unresolvedCount: 0, attempted: 0, success: 0, failed: 0,

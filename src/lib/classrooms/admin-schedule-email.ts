@@ -332,6 +332,13 @@ export async function sendAdminClassroomScheduleEmail(
   const now = options.now ?? new Date();
   const clock = () => new Date(now.getTime() + Date.now() - wallStart);
   const assignmentDate = options.assignmentDate ?? addBangkokDays(todayBangkok(now), 1);
+  if (process.env.CLASSROOM_ADMIN_EMAIL_ENABLED?.trim().toLowerCase() === "false") {
+    return {
+      status: "skipped", assignmentDate, assignmentRunId: null, emailRunId: null,
+      attempted: 0, success: 0, failed: 0,
+      message: "Admin classroom schedule email is disabled (CLASSROOM_ADMIN_EMAIL_ENABLED=false).",
+    };
+  }
   if (await hasTerminalAdminEmailForDate(db, assignmentDate)) {
     return {
       status: "skipped",
