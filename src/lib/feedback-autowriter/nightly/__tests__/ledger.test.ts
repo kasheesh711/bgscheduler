@@ -69,20 +69,27 @@ describe("NightlyLedger", () => {
       if (!reserved.ok) throw new Error(`refused reservation ${attempt} blocked the next: ${reserved.reason}`);
       ledger.settle(reserved.id, { actualUsd: 0, outcome: "refused" });
     }
-    expect(ledger.used("correction").count).toBe(0);
+    expect(ledger.correctionsTonight()).toBe(0);
+    expect(ledger.used("correction").count).toBe(3); // the report still sees every attempt
+    expect(ledger.refusedTonight("correction:s1")).toBe(3);
     expect(ledger.correctionsSince(7)).toBe(0);
     const real = ledger.reserve("correction", { key: "correction:s1", estimateUsd: 0 });
     if (!real.ok) throw new Error("unreachable");
     ledger.settle(real.id, { actualUsd: 0, outcome: "verified" });
-    expect(ledger.used("correction").count).toBe(1);
+    expect(ledger.correctionsTonight()).toBe(1);
     expect(ledger.reserve("correction", { key: "correction:s2", estimateUsd: 0 })).toEqual({ ok: false, reason: "cap:corrections_night" });
-    // An unsettled reservation (in flight or crashed) and not_sent still count.
+    // An unsettled reservation (in flight or crashed), not_sent, error and refused_after_claim still count.
     const reopened = NightlyLedger.open(dir, "2026-10-05", caps({ maxCorrectionsPerNight: 5, maxCorrectionsPerWeek: 5 }), { now });
     const notSent = reopened.reserve("correction", { key: "correction:s3", estimateUsd: 0 });
     if (!notSent.ok) throw new Error("unreachable");
     reopened.settle(notSent.id, { actualUsd: 0, outcome: "not_sent" });
+    for (const outcome of ["error", "refused_after_claim"]) {
+      const settled = reopened.reserve("correction", { key: `correction:${outcome}`, estimateUsd: 0 });
+      if (!settled.ok) throw new Error("unreachable");
+      reopened.settle(settled.id, { actualUsd: 0, outcome });
+    }
     expect(reopened.reserve("correction", { key: "correction:s4", estimateUsd: 0 }).ok).toBe(true);
-    expect(reopened.used("correction").count).toBe(3);
+    expect(reopened.correctionsTonight()).toBe(5);
   });
 
   it("keeps the Claude week and the correction week across nights", () => {

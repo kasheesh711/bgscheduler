@@ -119,13 +119,23 @@ export class NightlyLedger {
     return entries.reduce((total, entry) => total + this.amount(entry), 0);
   }
 
-  /**
-   * Tonight's count and spend of one kind (unsettled reservations at their estimate). A correction the executor
-   * refused (a guard or the lock said no, nothing was sent to Wise) does not use up a correction.
-   */
+  /** Tonight's count and spend of one kind (unsettled reservations at their estimate). */
   used(kind: SpendKind): { count: number; usd: number } {
-    const entries = this.tonight((entry) => entry.kind === kind && !(kind === "correction" && refusedCorrection(entry)));
+    const entries = this.tonight((entry) => entry.kind === kind);
     return { count: entries.length, usd: this.sum(entries) };
+  }
+
+  /**
+   * Tonight's corrections that count toward the caps: a correction the executor refused before claiming a posts row
+   * (a guard or the lock said no, nothing was sent to Wise) does not use one up.
+   */
+  correctionsTonight(): number {
+    return this.tonight((entry) => entry.kind === "correction" && !refusedCorrection(entry)).length;
+  }
+
+  /** How many reservations of this key were refused tonight (bounds retries of one class). */
+  refusedTonight(key: string): number {
+    return this.tonight((entry) => entry.key === key && refusedCorrection(entry)).length;
   }
 
   /** Claude (API-equivalent) spend tonight, and over the last 7 days. */
@@ -187,7 +197,7 @@ export class NightlyLedger {
     if (kind === "wise_read") {
       return this.used("wise_read").count + 1 > caps.maxWiseReads ? "cap:wise_reads_night" : null;
     }
-    if (this.used("correction").count + 1 > caps.maxCorrectionsPerNight) return "cap:corrections_night";
+    if (this.correctionsTonight() + 1 > caps.maxCorrectionsPerNight) return "cap:corrections_night";
     if (this.correctionsSince(7) + 1 > caps.maxCorrectionsPerWeek) return "cap:corrections_week";
     return null;
   }
