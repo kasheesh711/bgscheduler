@@ -705,6 +705,22 @@ describe("correctPostGuarded: the fresh read under the lock (refused → release
     expect(result.store.releases).toBe(1);
   });
 
+  it("never takes the lock once the reads before it ran past the window", async () => {
+    const log: string[] = [];
+    const time = clock();
+    const wise = fakeWise(time, log);
+    // The credit-baseline read (the last before the lock) ends after minute 15.
+    const credits = wise.getSessionCreditEntries.getMockImplementation()!;
+    wise.getSessionCreditEntries.mockImplementation(async (...args) => { time.advance(6 * 60_000); return credits(...args); });
+    const store = memoryStore(log, time);
+    const outcome = await correctPostGuarded({
+      ops: wise, store, plan: plan(), apiActorId: API_ACTOR, allowlist: AUTOWRITER_TEACHER_ALLOWLIST, disabledTutors: [],
+      aiSuspect: AI_SUSPECT, textProblems: () => [], now: time.now, sleep: time.sleep, eventWaitMs: 0,
+    });
+    expect(outcome).toEqual({ status: "refused", stage: "window", reason: "window_closed" });
+    expect(log).not.toContain("store:lock");
+  });
+
   it("bounds the wait for a running sweep by the window it started in, and passes STOP to it", async () => {
     const log: string[] = [];
     const time = clock();

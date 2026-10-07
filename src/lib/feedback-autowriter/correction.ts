@@ -543,8 +543,9 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
   const sid = plan.wiseSessionId;
 
   // 2. The window. Its end also bounds the wait for a running sweep (step 5).
-  const windowEnd = correctionWindowEnd(now());
-  if (inCorrectionWindow(now())) guards.push("window");
+  const windowAt = now();
+  const windowEnd = correctionWindowEnd(windowAt);
+  if (inCorrectionWindow(windowAt)) guards.push("window");
   else if (dryRun) guards.push("window (not enforced: dry run outside the window)");
   else return refuse("window", "outside_window");
 
@@ -589,6 +590,8 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
   if (dryRun) {
     guards.push("lock (not taken: dry run)");
   } else {
+    // The reads since step 2 may have run past the window: then no halt at all.
+    if (windowEnd && now().getTime() >= windowEnd.getTime()) return refuse("window", "window_closed");
     let locked: Awaited<ReturnType<CorrectionStore["lock"]>>;
     try {
       locked = await store.lock(plan, { waitUntil: windowEnd ?? undefined, stopRequested: input.stopRequested });
@@ -653,7 +656,7 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
     } catch (error) {
       return refuseHeld("wise", `credits_read_failed:${errorName(error)}`);
     }
-    if (JSON.stringify(underLock) !== JSON.stringify(baseline)) return refuseHeld("wise", "credit_baseline_changed");
+    if (!sameCreditEntries(underLock, baseline)) return refuseHeld("wise", "credit_baseline_changed");
   }
   guards.push(`no_save_since_first_shot${unlocked}`, `wise_state_under_lock${unlocked}`);
   if (held) {

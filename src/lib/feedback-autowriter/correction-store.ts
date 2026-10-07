@@ -249,8 +249,9 @@ export function pgCorrectionStore(db: Database, opts: {
 
     async lock(plan, options = {}) {
       if (held) throw new CorrectionStoreError("lock_already_held");
-      // A running sweep is waited for: bounded by attempts (a stubbed sleep cannot spin) and by `waitUntil` (the halt
-      // never starts after the correction window closes), and given up at once on STOP. Nothing is halted meanwhile.
+      // A running sweep is waited for: bounded by attempts (a stubbed sleep cannot spin) and by `waitUntil` (no wait
+      // runs past the correction window; the executor refuses a window already closed before calling), and given up
+      // at once on STOP. Nothing is halted meanwhile.
       let token = await acquireSweepLease(db, CORRECTION_LOCK_LEASE_MS);
       for (let attempt = 1; !token && attempt <= CORRECTION_LOCK_WAIT_MS / CORRECTION_LOCK_POLL_MS; attempt += 1) {
         if (options.waitUntil && now().getTime() + CORRECTION_LOCK_POLL_MS >= options.waitUntil.getTime()) break;
