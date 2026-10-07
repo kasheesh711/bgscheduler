@@ -72,6 +72,12 @@ describe("repairRejectedDraft", () => {
       .toBe("[STUDENT_1] scored 8/10 on the quiz. He explained the  unitary method clearly.");
   });
 
+  it("ends a sentence at 'etc.' or 'no.' unless a number follows", () => {
+    const value: ModelOutput = { ...draft, performance: "We revised fractions, decimals, etc. He scored 9/10 on the quiz. We reviewed Q. 5 together and he explained it well." };
+    expect(repairRejectedDraft(value, { unsupported: ["\"He scored 9/10 on the quiz\""], misattributed: [], homeworkNotSet: [] })?.output.performance)
+      .toBe("We revised fractions, decimals, etc. We reviewed Q. 5 together and he explained it well.");
+  });
+
   it("does not repair when the quoted claim would still be in the draft", () => {
     const twice: ModelOutput = { ...draft, improvement: draft.improvement + "\n4. I provided hints during parts of the activity, so this was not wholly independent work" };
     const result = repairRejectedDraft(twice, { unsupported: ["\"I provided hints during parts of the activity\""], misattributed: [], homeworkNotSet: [] });

@@ -64,7 +64,9 @@ function isList(value: string): boolean {
 }
 
 /** A full stop after these is not the end of a sentence ("Mr. [TUTOR]", "e.g. fractions"). */
-const ABBREVIATION = /(?:^|\s)(?:mr|mrs|ms|dr|prof|st|e\.g|i\.e|etc|vs|no|q|p|pp|fig|approx|cf)\.$/iu;
+const ABBREVIATION = /(?:^|\s)(?:mr|mrs|ms|dr|prof|st|e\.g|i\.e|vs|approx|cf)\.$/iu;
+/** "Q. 5", "No. 3", "p. 12": an abbreviation only when a number follows. */
+const NUMBERED_ABBREVIATION = /(?:^|\s)(?:no|q|p|pp|fig)\.$/iu;
 
 /** Sentences, or numbered / bulleted lines, of one field, with their exact text. */
 function units(value: string): string[] {
@@ -73,8 +75,11 @@ function units(value: string): string[] {
   const sentences: string[] = [];
   for (const part of parts) {
     const previous = sentences.at(-1);
-    if (previous !== undefined && ABBREVIATION.test(previous)) sentences[sentences.length - 1] = `${previous} ${part}`;
-    else sentences.push(part);
+    if (previous !== undefined && (ABBREVIATION.test(previous) || (NUMBERED_ABBREVIATION.test(previous) && /^\d/u.test(part)))) {
+      sentences[sentences.length - 1] = `${previous} ${part}`;
+    } else {
+      sentences.push(part);
+    }
   }
   // Re-joined with one space: only use a sentence that is still verbatim in the field.
   return sentences.filter((part) => part.trim() !== "" && value.includes(part));
@@ -148,7 +153,8 @@ export function repairRejectedDraft(output: ModelOutput, verdict: Pick<JudgeOutp
     next[found.field] = list ? renumber(trimmed) : trimmed;
   }
   // Every quoted claim must be gone from the trimmed draft: a cut of the wrong sentence is no repair.
-  for (const problem of problems) {
+  // Homework not set is handled by emptying or cutting above; the same words in a topic are not that claim.
+  for (const problem of problems.filter((item) => item.kind === "claim")) {
     const needle = squash(parseProblemQuote(problem.quote).text);
     if (FIELDS.some((name) => squash(next[name]).includes(needle))) return null;
   }
