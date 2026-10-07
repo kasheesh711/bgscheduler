@@ -53,6 +53,15 @@ interface Entry extends ReserveLine {
   settled: SettleLine | null;
 }
 
+/**
+ * A correction settled as `refused`: the guarded executor stopped before the POST (e.g. `lock:sweep_running` when
+ * the autowriter's own sweep held the lock), so Wise was never written. `not_sent` still counts: its lock was
+ * claimed and the class's one correction is used up.
+ */
+function refusedCorrection(entry: Entry): boolean {
+  return entry.settled?.outcome === "refused";
+}
+
 export class NightlyLedger {
   private readonly entries = new Map<string, Entry>();
   /** Reservations made by this process and not settled yet: in flight, not crashed. */
@@ -110,9 +119,12 @@ export class NightlyLedger {
     return entries.reduce((total, entry) => total + this.amount(entry), 0);
   }
 
-  /** Tonight's count and spend of one kind (unsettled reservations at their estimate). */
+  /**
+   * Tonight's count and spend of one kind (unsettled reservations at their estimate). A correction the executor
+   * refused (a guard or the lock said no, nothing was sent to Wise) does not use up a correction.
+   */
   used(kind: SpendKind): { count: number; usd: number } {
-    const entries = this.tonight((entry) => entry.kind === kind);
+    const entries = this.tonight((entry) => entry.kind === kind && !(kind === "correction" && refusedCorrection(entry)));
     return { count: entries.length, usd: this.sum(entries) };
   }
 
@@ -146,9 +158,9 @@ export class NightlyLedger {
     return { total: entries.length, failed, succeeded, other };
   }
 
-  /** Corrections reserved in the last `days` days (all nights). */
+  /** Corrections reserved in the last `days` days (all nights), less those the executor refused before sending. */
   correctionsSince(days: number): number {
-    return this.since(days, (entry) => entry.kind === "correction").length;
+    return this.since(days, (entry) => entry.kind === "correction" && !refusedCorrection(entry)).length;
   }
 
   /** Why one more reservation of this kind would pass a cap, or null. */
