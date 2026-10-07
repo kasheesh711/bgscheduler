@@ -121,6 +121,55 @@ Ek: Can you hear me on the tablet?
     expect(aligned(191, 9)).toBe("unclear"); // 4.5% would round to 5
   });
 
+  it("trusts a student who out-talks the tutor only when Zoom names just the two of them and the split is clean", () => {
+    const TEACHER = "Apivit (Ek) Sirithana Online";
+    const STUDENT = "Anucha (Nont.Bo) Boonmee";
+    const cues = parseZoomVtt(VTT);
+    // The student reads answers aloud: 70% of the talk, each Soniox speaker on one side of Zoom's cues.
+    const chatty: Segment[] = [
+      { speaker: "1", startMs: 0, endMs: 800, text: "t".repeat(30) },
+      { speaker: "2", startMs: 900, endMs: 1_500, text: "s".repeat(70) },
+    ];
+    expect(assignSpeakerRoles({ segments: chatty, zoomCues: cues, teacherName: TEACHER }).method).toBe("unclear");
+    const named = assignSpeakerRoles({ segments: chatty, zoomCues: cues, teacherName: TEACHER, studentNames: [STUDENT] });
+    expect(named.method).toBe("zoom_alignment");
+    expect(named.roles.get("1")).toBe("tutor");
+    expect(named.shares).toEqual({ tutor: 30, student: 70, other: 0 });
+    // The tutor must still carry 20%.
+    const quiet: Segment[] = [chatty[0], { ...chatty[1], text: "s".repeat(121) }];
+    expect(assignSpeakerRoles({ segments: quiet, zoomCues: cues, teacherName: TEACHER, studentNames: [STUDENT] }).method).toBe("unclear");
+    // A third name in Zoom's cues (a rejoin under another name, a parent) keeps the strict rule.
+    const third = [...cues, { speakerName: "Ek iPad", startMs: 3_100, endMs: 3_200 }];
+    expect(assignSpeakerRoles({ segments: chatty, zoomCues: third, teacherName: TEACHER, studentNames: [STUDENT] }).method).toBe("unclear");
+    // Zoom never names the student: nothing confirms who the other speaker is.
+    const teacherOnly = cues.filter((cue) => cue.speakerName === TEACHER);
+    expect(assignSpeakerRoles({ segments: chatty, zoomCues: [...teacherOnly, { speakerName: "Someone", startMs: 900, endMs: 1_500 }], teacherName: TEACHER, studentNames: [STUDENT] }).method)
+      .toBe("unclear");
+    // A guest name the student joined under counts as the student's.
+    const guestCues = cues.map((cue) => cue.speakerName === STUDENT ? { ...cue, speakerName: "Nont iPhone" } : cue);
+    expect(assignSpeakerRoles({ segments: chatty, zoomCues: guestCues, teacherName: TEACHER, studentNames: [STUDENT, "Nont iPhone"] }).method)
+      .toBe("zoom_alignment");
+  });
+
+  it("does not trust a Soniox speaker that straddles both people (diarization merged them)", () => {
+    const TEACHER = "Apivit (Ek) Sirithana Online";
+    const STUDENT = "Anucha (Nont.Bo) Boonmee";
+    const cues = [
+      { speakerName: TEACHER, startMs: 0, endMs: 1_000 },
+      { speakerName: STUDENT, startMs: 1_000, endMs: 3_000 },
+      { speakerName: TEACHER, startMs: 3_000, endMs: 4_000 },
+    ];
+    const run = (firstStartMs: number) => assignSpeakerRoles({
+      segments: [
+        { speaker: "1", startMs: firstStartMs, endMs: 3_000, text: "s".repeat(60) },
+        { speaker: "2", startMs: 3_000, endMs: 4_000, text: "t".repeat(40) },
+      ],
+      zoomCues: cues, teacherName: TEACHER, studentNames: [STUDENT],
+    }).method;
+    expect(run(0)).toBe("unclear"); // speaker 1 also covers the tutor's first cue: only 2/3 of it is the student's
+    expect(run(1_000)).toBe("zoom_alignment"); // speaker 1 on the student's cue alone
+  });
+
   it("calls a talk-share split that contradicts Zoom's cues unclear", () => {
     const teacherOnly = parseZoomVtt(VTT).filter((cue) => cue.speakerName.startsWith("Apivit"));
     // Zoom places speaker 1 on the teacher's lines, but speaker 2 talks most.
