@@ -745,7 +745,7 @@ async function processLeased(deps: AutowriterDeps, input: {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
     draft: { arm: result.arm, fields: result.fields, judge: result.judge, pipeline: { ...pipelineStamp("summary", result.arm, result.styleGuide),
       formatGuide: result.formatGuide ?? null, atomEvidenceHash: result.atomEvidence?.hash ?? null,
-      atomMapping: result.atomEvidence?.mapping ?? null, lessonEvidenceHash, factualVerdicts: result.judge } }, evidence: "summary",
+      atomMapping: result.atomEvidence?.mapping ?? null, lessonEvidenceHash, factualVerdicts: result.judge, repair: result.repair ?? null } }, evidence: "summary",
     extraMetadata: { ...guestMetadata(student), ...judgeAnswered(row) }, release, out,
   });
 }
@@ -1141,6 +1141,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
   const evidence = buildTranscriptEvidence({
     transcript, audioDurationMs: status.audioDurationMs, scheduledMinutes,
     zoomCues: cues, teacherName: detailTeacherName(detail), alsoTeacher: tutorSelfNames(detail),
+    studentNames: [student.name, ...(student.joinedAsGuest ? [student.joinedAsGuest] : [])],
   });
   const { speakers, rendered, meta: transcriptMeta } = evidence;
   const holdFor = async (reason: string, extra: Record<string, unknown> = {}) => {
@@ -1234,7 +1235,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
     draft: { arm: result.arm, fields: result.fields, judge: result.judge, pipeline: { ...pipelineStamp("transcript", result.arm, result.styleGuide),
       formatGuide: result.formatGuide ?? null, atomEvidenceHash: result.atomEvidence?.hash ?? null,
-      atomMapping: result.atomEvidence?.mapping ?? null, lessonEvidenceHash, factualVerdicts: result.judge } }, evidence: "transcript",
+      atomMapping: result.atomEvidence?.mapping ?? null, lessonEvidenceHash, factualVerdicts: result.judge, repair: result.repair ?? null } }, evidence: "transcript",
     // A stored draft: a later failure (a requeued shadow draft written again) starts a new count, of the writer's
     // failures and of the judge's.
     extraMetadata: { transcript: transcriptMeta, ...guestMetadata(student), ...(canFallBack ? { writerErrors: 0 } : {}), ...judgeAnswered(row) },
