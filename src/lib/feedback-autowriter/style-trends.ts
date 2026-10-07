@@ -25,7 +25,7 @@ const PROBLEM_CATEGORIES: ReadonlyArray<{ key: string; label: string; match: Reg
   { key: "tone", label: "tone that is not warm or pupil-facing", match: /\b(?:warm(?:er)?|pupil-facing|tone|encouraging|clinical)\b/iu },
   { key: "length", label: "too long or wordy", match: /\b(?:too long|shorten|more concise|wordy)\b/iu },
   { key: "format", label: "numbering or layout", match: /\b(?:numbered|numbering|bullet(?:s|ed)?|layout)\b/iu },
-]
+];
 
 export function styleProblemCategory(problem: string): { key: string; label: string } {
   const found = PROBLEM_CATEGORIES.find((category) => category.match.test(problem));

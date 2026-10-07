@@ -364,10 +364,22 @@ export function sessionSubmitStore(
  * submission and student, for reconciliation) is stored. No model wrote it: `arm` stays null. `finish` and `halt` are
  * the session store's, so the sweep reconciles it like any other POST.
  */
-export function heldNoShowSubmitStore(db: Database, wiseSessionId: string, claimMetadata: Record<string, unknown>): SubmitStore {
+export function heldNoShowSubmitStore(db: Database, wiseSessionId: string, claimMetadata: Record<string, unknown>,
+  held: { reason: string }): SubmitStore {
   const base = sessionSubmitStore(db, wiseSessionId, "", claimMetadata);
   return {
     ...base,
+    // Not sent (Wise rate limited, the blank still there): the class goes back to its hold, not into the pipeline.
+    async finish(state, detail) {
+      if (state !== "pending") return base.finish(state, detail);
+      await db.update(S).set({
+        state: "held",
+        reason: held.reason,
+        nextAttemptAt: null,
+        metadata: sql`${S.metadata} || ${JSON.stringify({ alertKind: "held", noShowPost: { notSent: detail } })}::jsonb`,
+        updatedAt: nowSql,
+      }).where(and(eq(S.wiseSessionId, wiseSessionId), eq(S.state, "posting")));
+    },
     async claimPost(input) {
       let rows: Array<{ id: string }>;
       try {
@@ -385,6 +397,9 @@ export function heldNoShowSubmitStore(db: Database, wiseSessionId: string, claim
         }).where(and(
           eq(S.wiseSessionId, wiseSessionId),
           eq(S.state, "held"),
+          // Still the no-show hold the owner clicked: not re-held for something else meanwhile.
+          eq(S.reason, held.reason),
+          sql`${S.metadata} -> 'noShow' is not null and ${S.metadata} -> 'noShow' <> 'null'::jsonb`,
           eq(S.wiseTeacherUserId, input.teacherId),
           sql`exists (select 1 from feedback_autowriter_control c where c.id = 'default' and c.mode = 'live'
             and c.halted_at is null and not (c.disabled_tutors ? ${input.teacherId}))`,

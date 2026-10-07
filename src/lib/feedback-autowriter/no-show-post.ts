@@ -68,7 +68,7 @@ export async function postNoShowNote(db: Database, input: {
     ops: input.ops,
     store: heldNoShowSubmitStore(db, row.wiseSessionId, {
       expected: submission, studentWiseUserId: student, noShowPost: { actor: input.actor, at: new Date().toISOString() },
-    }),
+    }, { reason: row.reason }),
     // `arm` is never stored for this claim (no model wrote the note).
     plan: { sessionId: row.wiseSessionId, classId: row.wiseClassId, arm: "sol", fields: shown.note, billing: billing.plan,
       expected: submission, mappings: await input.loadMappings(db) },

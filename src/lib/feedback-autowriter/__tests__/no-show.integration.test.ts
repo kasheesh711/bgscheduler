@@ -117,6 +117,30 @@ describe("owner one-click no-show note, through the guarded POST", () => {
     expect((await readControl(db)).haltedAt).not.toBeNull();
   });
 
+  it("leaves the class held, with its alert, when Wise rate limits and nothing was sent", async () => {
+    await heldNoShow();
+    const wise = fakeWise(noShowDetail(), { postResult: { kind: "rate_limited", status: 429 } });
+    expect(await post(wise.ops)).toEqual({ ok: false, status: 502, reason: "wise_rate_limited_not_sent" });
+    const saved = await row();
+    expect(saved).toMatchObject({ state: "held", reason: "attendance_0pct" });
+    expect(saved.metadata).toMatchObject({ alertKind: "held", noShow: { version: 1 } });
+    expect((await readControl(db)).haltedAt).toBeNull();
+  });
+
+  it("does not claim a class re-held for another reason meanwhile", async () => {
+    await heldNoShow();
+    const wise = fakeWise(noShowDetail());
+    const read = wise.ops.getSessionDetail;
+    let reads = 0;
+    wise.ops.getSessionDetail = vi.fn(async (classId: string, sessionId: string) => {
+      // The route's own read, then the guarded path's credit-baseline read: re-held in between.
+      if (++reads === 2) await db.update(S).set({ reason: "billing:auto_credits_missing" });
+      return read(classId, sessionId);
+    });
+    expect(await post(wise.ops)).toMatchObject({ ok: false, status: 409 });
+    expect(wise.ops.postFeedback).not.toHaveBeenCalled();
+  });
+
   it("halts on an unknown outcome", async () => {
     await heldNoShow();
     const wise = fakeWise(noShowDetail(), { postResult: { kind: "unknown", error: "socket hang up" } });
