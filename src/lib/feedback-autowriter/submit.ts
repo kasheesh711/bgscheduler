@@ -226,6 +226,13 @@ export async function submitFeedbackGuarded(input: {
   gateInput: GateInput;
   apiActorId: string;
   validateEvidence?: (detail: AutowriterSessionDetail) => Promise<boolean>;
+  /** The abort reason when `validateEvidence` says no (default `iseb_evidence_changed`). */
+  evidenceChangedReason?: string;
+  /**
+   * A gate failure the caller has already settled for this POST (the owner's no-show note: the student's low
+   * attendance is the point). Every gate before it still applies; none after it is evaluated.
+   */
+  acceptGateReason?: (reason: string) => boolean;
   remainingMs: () => number;
   dryRun?: boolean;
   sleep?: (ms: number) => Promise<void>;
@@ -273,7 +280,7 @@ export async function submitFeedbackGuarded(input: {
   if (missingFields.length > 0) return abort(`form_lacks_field:${missingFields.join(",")}`);
   if (!existingAnswersMatchForm(before)) return abort("existing_answers_not_in_form_order");
   const gates = evaluateSessionGates(before, input.gateInput);
-  if (!gates.ok) return { status: "aborted_precheck", reason: gates.reason, gate: true };
+  if (!gates.ok && !input.acceptGateReason?.(gates.reason)) return { status: "aborted_precheck", reason: gates.reason, gate: true };
   const teacherId = detailTeacherId(before);
   if (!teacherId) return abort("teacher_missing");
   const current = classifyTeacherSubmission(before);
@@ -289,7 +296,7 @@ export async function submitFeedbackGuarded(input: {
   if (input.dryRun) return { status: "preflight_ok", bodyHash };
   if (budgetTooSmall()) return abort("function_budget_too_small_for_post");
 
-  if (input.validateEvidence && !await input.validateEvidence(before)) return abort("iseb_evidence_changed");
+  if (input.validateEvidence && !await input.validateEvidence(before)) return abort(input.evidenceChangedReason ?? "iseb_evidence_changed");
   const claim = await store.claimPost({
     bodyHash,
     fieldsSha256: fieldsHash(plan.fields),

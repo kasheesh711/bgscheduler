@@ -512,7 +512,8 @@ async function settleGate(input: {
   // A student who never joined while the tutor waited: the hold carries the standard note, ready for one click.
   const noShow = state === "held" ? detectNoShow(detail, reason) : null;
   const patch = state === "held" ? input.draftPatch ?? {} : {};
-  await release({ ...patch, ...(noShow ? { metadata: { ...(patch.metadata ?? {}), noShow } } : {}), state, reason, alertKind });
+  // Always written on a hold (null when not a no-show): `||` never removes a key, and an older note must not linger.
+  await release({ ...patch, ...(state === "held" ? { metadata: { ...(patch.metadata ?? {}), noShow } } : {}), state, reason, alertKind });
   return out(state, reason);
 }
 

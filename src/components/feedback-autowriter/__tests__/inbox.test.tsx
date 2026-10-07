@@ -108,7 +108,7 @@ describe("Inbox", () => {
     expect(html).toContain("A critical error was found in a post");
     expect(html).toContain("Critical · 29 Sep");
     // The class's student comes before the incident's own sentence.
-    expect(html).toMatch(/Ben · [^<]+ · Critical verdict: Wrong person \(recorded by owner@example\.com\)/u);
+    expect(html).toMatch(/Ben · [^<·]+ · Critical verdict: Wrong person \(recorded by owner@example\.com\)/u);
     expect(html).toContain("Ben · A post did not verify in Wise");
     expect(html).toContain(">Verify failed<");
   });

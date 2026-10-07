@@ -1,121 +1,104 @@
-import { and, eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { FeedbackFieldMapping } from "@/lib/post-class-feedback/types";
 import { resolveBilling } from "./billing";
-import { isUniqueViolationError } from "./db-errors";
 import { detectNoShow, readNoShow } from "./no-show";
-import {
-  buildFeedbackPostBody, classifyTeacherSubmission, existingAnswersMatchForm, parseAutowriterSessionDetail,
-  planFeedbackForm, scheduledWindow, storedTeacherFields, studentParticipants, teacherSubmissionSnapshot,
-} from "./session";
-import { readControl } from "./store";
-import { feedbackBodyHash, fieldsHash, type WiseFeedbackOps } from "./submit";
+import { AUTOWRITER_TEACHER_ALLOWLIST } from "./roster";
+import { classifyTeacherSubmission, parseAutowriterSessionDetail, scheduledWindow, studentParticipants } from "./session";
+import { heldNoShowSubmitStore } from "./store";
+import { fieldsHash, submitFeedbackGuarded, type SubmitOutcome, type WiseFeedbackOps } from "./submit";
 
 const S = schema.feedbackAutowriterSessions;
-const P = schema.feedbackAutowriterPosts;
+const ATTENDANCE_GATE = /^attendance_\d+pct$/u;
 
 export type NoShowPostResult =
-  | { ok: true; state: "skipped_human" }
+  | { ok: true; outcome: "verified" | "awaiting_event" }
   | { ok: false; status: 404 | 409 | 502; reason: string };
 
 /**
- * The owner's one click on a held no-show class: post the standard note (`metadata.noShow`) to Wise. Every guard is
- * re-checked on a fresh read first — the student still never joined and the tutor still waited, nobody has written
- * feedback (Wise holds only its blank auto-submission), and the billing Wise already charged is re-sent unchanged.
- * The claim takes the institution-wide POST lock (`posting`, one at a time). Afterwards the read-back must show the
- * note with the same submission, billing and credits; the row ends `skipped_human` / `no_show_note_posted`, and a
- * `policy` post row records the save so the review job does not raise it as an unexplained API write.
+ * The owner's one click on a held no-show class: post the standard note (`metadata.noShow`) through the autowriter's
+ * own guarded POST (`submitFeedbackGuarded`), so every rule of an autowriter post holds:
+ * - credit baseline, fresh read, every gate before attendance (allowlist, scheduled one-to-one, ended, deadline
+ *   margin, no person's submission, one Wise student), Wise's blank auto-submission still there, billing re-sent
+ *   unchanged;
+ * - the note recomputed from the fresh read must be the one the owner saw (else `no_longer_a_no_show`);
+ * - the claim is atomic (`held → posting`: live, not halted, tutor on, no other POST unsettled);
+ * - a save by anyone else in the POST window, an unclear outcome or a failed read-back halts the autowriter before the
+ *   lock opens; a row left `posting`/`awaiting_event` is reconciled by the sweep.
+ * A verified note is an autowriter post like any other (first shot, review, coverage). Nothing posts without the click.
  */
 export async function postNoShowNote(db: Database, input: {
   wiseSessionId: string;
   actor: string;
+  apiActorId: string;
   ops: WiseFeedbackOps;
   loadMappings: (db: Database) => Promise<readonly FeedbackFieldMapping[]>;
+  remainingMs: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  eventWaitMs?: number;
 }): Promise<NoShowPostResult> {
   const [row] = await db.select().from(S).where(eq(S.wiseSessionId, input.wiseSessionId)).limit(1);
   if (!row) return { ok: false, status: 404, reason: "no_such_class" };
-  if (row.state !== "held" || !readNoShow(row.metadata)) return { ok: false, status: 409, reason: "not_a_held_no_show" };
+  const shown = readNoShow(row.metadata);
+  if (row.state !== "held" || !shown || !row.reason || !ATTENDANCE_GATE.test(row.reason)) {
+    return { ok: false, status: 409, reason: "not_a_held_no_show" };
+  }
   if (!row.wiseClassId) return { ok: false, status: 409, reason: "class_id_missing" };
-  const control = await readControl(db);
-  if (control.haltedAt) return { ok: false, status: 409, reason: "autowriter_halted" };
 
-  const read = async () => parseAutowriterSessionDetail(await input.ops.getSessionDetail(row.wiseClassId!, row.wiseSessionId));
-  const detail = await read();
-  const facts = detectNoShow(detail, row.reason);
-  if (!facts) return { ok: false, status: 409, reason: "no_longer_a_no_show" };
+  let detail;
+  try {
+    detail = parseAutowriterSessionDetail(await input.ops.getSessionDetail(row.wiseClassId, row.wiseSessionId));
+  } catch (error) {
+    return { ok: false, status: 502, reason: `detail_read_failed:${error instanceof Error ? error.name : "Error"}` };
+  }
   const submission = classifyTeacherSubmission(detail);
   // Anyone's text (the tutor's, an admin's) wins: the note only ever completes Wise's blank auto-submission.
   if (submission.kind !== "auto_blank") return { ok: false, status: 409, reason: `submission_${submission.kind}` };
   const billing = resolveBilling({ submission, scheduledMinutes: scheduledWindow(detail).minutes });
   if (!billing.ok) return { ok: false, status: 409, reason: `billing:${billing.reason}` };
-  const form = planFeedbackForm(detail, await input.loadMappings(db));
-  if (!form.ok) return { ok: false, status: 409, reason: form.reason };
-  if (!existingAnswersMatchForm(detail)) return { ok: false, status: 409, reason: "answers_do_not_match_form" };
-  const studentId = studentParticipants(detail).find((student) => student.wiseUserId)?.wiseUserId ?? null;
-  if (!studentId) return { ok: false, status: 409, reason: "student_unknown" };
+  const student = studentParticipants(detail).find((participant) => participant.wiseUserId)?.wiseUserId ?? null;
+  const sameNote = (fresh: typeof detail) => {
+    const facts = detectNoShow(fresh, row.reason);
+    return !!facts && fieldsHash(facts.note) === fieldsHash(shown.note);
+  };
+  if (!sameNote(detail)) return { ok: false, status: 409, reason: "no_longer_a_no_show" };
 
-  const fields = facts.note;
-  const plan = { sessionStatus: billing.plan.sessionStatus, creditsConsumed: billing.plan.creditsConsumed };
-  const body = buildFeedbackPostBody(form.plan, fields, plan);
-  const before = teacherSubmissionSnapshot(detail);
-  const creditsBefore = await input.ops.getSessionCreditEntries(row.wiseClassId, studentId, row.wiseSessionId);
+  const outcome = await submitFeedbackGuarded({
+    ops: input.ops,
+    store: heldNoShowSubmitStore(db, row.wiseSessionId, {
+      expected: submission, studentWiseUserId: student, noShowPost: { actor: input.actor, at: new Date().toISOString() },
+    }),
+    // `arm` is never stored for this claim (no model wrote the note).
+    plan: { sessionId: row.wiseSessionId, classId: row.wiseClassId, arm: "sol", fields: shown.note, billing: billing.plan,
+      expected: submission, mappings: await input.loadMappings(db) },
+    gateInput: { now: new Date(), allowlist: AUTOWRITER_TEACHER_ALLOWLIST, requireSummary: false },
+    acceptGateReason: (reason) => ATTENDANCE_GATE.test(reason),
+    validateEvidence: async (fresh) => sameNote(fresh),
+    evidenceChangedReason: "no_longer_a_no_show",
+    apiActorId: input.apiActorId,
+    remainingMs: input.remainingMs,
+    sleep: input.sleep,
+    eventWaitMs: input.eventWaitMs,
+  });
+  return noShowResult(outcome);
+}
 
-  let claimed: Array<{ id: string }>;
-  try {
-    claimed = await db.update(S).set({
-      state: "posting", postStartedAt: sql`now()`, bodyHash: feedbackBodyHash(body), fieldsSha256: fieldsHash(fields),
-      fields: fields as unknown as Record<string, string>, billing: billing.plan as unknown as Record<string, unknown>,
-      metadata: sql`${S.metadata} || ${JSON.stringify({ noShowPost: { actor: input.actor, claimedAt: new Date().toISOString() } })}::jsonb`,
-      updatedAt: sql`now()`,
-    }).where(and(eq(S.wiseSessionId, row.wiseSessionId), eq(S.state, "held"),
-      sql`not exists (select 1 from feedback_autowriter_sessions p where p.state in ('posting', 'awaiting_event'))`))
-      .returning({ id: S.id });
-  } catch (error) {
-    if (isUniqueViolationError(error)) return { ok: false, status: 409, reason: "post_in_flight" };
-    throw error;
+function noShowResult(outcome: SubmitOutcome): NoShowPostResult {
+  switch (outcome.status) {
+    case "verified":
+    case "awaiting_event":
+      return { ok: true, outcome: outcome.status };
+    case "aborted_precheck":
+      return { ok: false, status: 409, reason: outcome.reason };
+    case "not_claimed":
+      return { ok: false, status: 409, reason: outcome.reason === "post_in_flight" ? "post_in_flight" : "autowriter_not_live_halted_or_tutor_off" };
+    case "rate_limited":
+      return { ok: false, status: 502, reason: "wise_rate_limited_not_sent" };
+    case "preflight_ok":
+      return { ok: false, status: 409, reason: "dry_run" };
+    // Sent or maybe sent: the autowriter is halted (or the sweep reconciles a read that failed).
+    default:
+      return { ok: false, status: 502, reason: outcome.status };
   }
-  if (!claimed.length) return { ok: false, status: 409, reason: "post_in_flight_or_changed" };
-
-  const startedAt = new Date();
-  const result = await input.ops.postFeedback(row.wiseClassId, row.wiseSessionId, body);
-  const finishedAt = new Date();
-  let verification: Record<string, unknown> = { post: result.kind };
-  let state: "skipped_human" | "held" | "unknown_outcome" | "verify_failed";
-  if (result.kind === "sent") {
-    const after = await read().catch(() => null);
-    const snapshot = after ? teacherSubmissionSnapshot(after) : null;
-    const stored = after ? storedTeacherFields(after) : null;
-    const creditsAfter = await input.ops.getSessionCreditEntries(row.wiseClassId, studentId, row.wiseSessionId).catch(() => null);
-    verification = {
-      ...verification,
-      textMatches: !!stored && fieldsHash(stored) === fieldsHash(fields),
-      sameSubmission: !!snapshot && snapshot.count === 1 && snapshot.submissionId === before.submissionId,
-      billingUnchanged: !!snapshot && snapshot.sessionStatus === before.sessionStatus && snapshot.creditsConsumed === before.creditsConsumed,
-      creditsUnchanged: creditsAfter !== null && JSON.stringify(creditsAfter) === JSON.stringify(creditsBefore),
-    };
-    state = Object.values(verification).every((value) => value === true || value === "sent") ? "skipped_human" : "verify_failed";
-  } else {
-    // Not sent (rejected / rate limited) goes back to the hold; a request whose fate is unknown never does.
-    state = result.kind === "unknown" ? "unknown_outcome" : "held";
-  }
-  const alertKind = state === "verify_failed" || state === "unknown_outcome" ? state : null;
-  await db.update(S).set({
-    state,
-    reason: state === "skipped_human" ? "no_show_note_posted" : state === "held" ? row.reason : state,
-    metadata: sql`${S.metadata} || ${JSON.stringify({ noShowPost: { actor: input.actor, verification, at: finishedAt.toISOString() }, ...(alertKind ? { alertKind } : {}) })}::jsonb`,
-    updatedAt: sql`now()`,
-  }).where(and(eq(S.wiseSessionId, row.wiseSessionId), eq(S.state, "posting")));
-  if (result.kind !== "rejected" && result.kind !== "rate_limited") {
-    await db.insert(P).values({
-      wiseSessionId: row.wiseSessionId, wiseClassId: row.wiseClassId, wiseTeacherUserId: row.wiseTeacherUserId, kind: "policy",
-      fields: fields as unknown as Record<string, string>, fieldsSha256: fieldsHash(fields), bodyHash: feedbackBodyHash(body),
-      billing: billing.plan as unknown as Record<string, unknown>, actorKind: "owner", actor: input.actor,
-      reason: "no-show note (owner one-click)", postStartedAt: startedAt, postFinishedAt: finishedAt,
-      outcome: state === "skipped_human" ? "verified" : state === "unknown_outcome" ? "unknown_outcome" : "verify_failed",
-      verification, provenance: "live", dedupeKey: `no-show:${row.wiseSessionId}`,
-    }).onConflictDoNothing();
-  }
-  if (state === "skipped_human") return { ok: true, state };
-  return { ok: false, status: 502, reason: state === "held" ? `not_sent:${result.kind}` : state };
 }

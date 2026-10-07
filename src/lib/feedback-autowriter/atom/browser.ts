@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { z } from "zod";
 import { chromium as playwrightChromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { serverlessChromiumArgs } from "@/lib/onsite-foot-traffic/pdf";
-import { AtomCollectionError, ATOM_SUBJECT_IDS, isSkippableContradiction, normalizeAtomTranscript, parseActivityIndex } from "./normalize";
+import { AtomCollectionError, ATOM_MAX_SKIPPED_PER_STUDENT, ATOM_SUBJECT_IDS, isSkippableContradiction, normalizeAtomTranscript, parseActivityIndex } from "./normalize";
 import { withAtomTimeout } from "./deadline";
 import type { AtomActivity, AtomCollection, AtomSkippedRecord } from "./types";
 
@@ -141,6 +141,10 @@ export async function openAtomReadClient(input: {
             if (!isSkippableContradiction(error)) throw error;
             skipped.push({ id: ref.id, kind: ref.kind, startedAt: ref.startedAt, completedAt: ref.completedAt, cause: error.stage! });
           }
+        }
+        // More than a couple is not one bad record but Atom counting differently: fail the student, loudly, as before.
+        if (skipped.length > ATOM_MAX_SKIPPED_PER_STUDENT) {
+          throw new AtomCollectionError("source_contradiction", `many_records_skipped:${skipped.length}/${references.size}`);
         }
         return { activities: activities.sort((a, b) => a.id.localeCompare(b.id)), skipped: skipped.sort((a, b) => a.id.localeCompare(b.id)) };
       },

@@ -206,18 +206,6 @@ export async function runAtomCollector(input: {
       await withAtomTimeout((client as AtomReadClient | null)?.close() ?? Promise.resolve(), 10_000, "close").catch(() => undefined);
     }
   }
-  // One dashboard-only note per skipped record, ever: the data is Atom's to fix, and nothing is held meanwhile.
-  for (const [atomStudentId, records] of Object.entries(skippedRecords)) {
-    for (const record of records) {
-      await recordIncident(db, {
-        dedupeKey: `atom-record-skipped:${record.id}`, kind: "atom_record_skipped", severity: "info",
-        summary: `One Atom ${record.kind === "exam_topic" ? "exam topic" : record.kind} was left out: its list entry and transcript ` +
-          "disagree. The student's other Atom work is still used; open the record in Atom to check it.",
-        detail: { runId, atomStudentId, activityId: record.id, kind: record.kind, cause: record.cause,
-          atomUrl: `https://app.atomlearning.com/tutor/transcript/${record.id}` },
-      });
-    }
-  }
   if (failure) {
     const incident = {
       dedupeKey: `atom-collection:${bangkokDate(now.toISOString())}:${failure}`,
@@ -228,6 +216,23 @@ export async function runAtomCollector(input: {
     if (!await recordIncident(db, { ...incident, kind: "atom_collection_failed", severity: "critical" })) {
       await refreshOpenIncident(db, incident);
     }
+  }
+  // One dashboard-only note per skipped record, ever: the data is Atom's to fix, and nothing is held meanwhile. After
+  // the critical incident, and never able to lose it.
+  try {
+    for (const [atomStudentId, records] of Object.entries(skippedRecords)) {
+      for (const record of records) {
+        await recordIncident(db, {
+          dedupeKey: `atom-record-skipped:${record.id}`, kind: "atom_record_skipped", severity: "info",
+          summary: `One Atom ${record.kind === "exam_topic" ? "exam topic" : record.kind} was left out: its list entry and transcript ` +
+            "disagree. The student's other Atom work is still used; open the record in Atom to check it.",
+          detail: { runId, atomStudentId, activityId: record.id, kind: record.kind, cause: record.cause,
+            atomUrl: `https://app.atomlearning.com/tutor/transcript/${record.id}` },
+        });
+      }
+    }
+  } catch (error) {
+    console.error("[feedback-autowriter] Atom skipped-record note failed", error instanceof Error ? error.name : "Error");
   }
   return { ok: !failure, runId, snapshots: recorded.snapshots, activities: recorded.activities, catalogStudents: catalog.length, errorCode: failure,
     ...(failure ? { failureStage, failureCause } : {}) };

@@ -223,8 +223,9 @@ export function ReviewBody({ item, newer = null, canControl, onRecorded, onReloa
 }
 
 /** A held class: why, until when, what is stored, and what the judge said. */
-export function HoldBody({ hold, row, now, canControl = false, onPosted }: {
-  hold: Hold; row: ClassRow | null; now: Date; canControl?: boolean; onPosted?: () => Promise<void> | void;
+export function HoldBody({ hold, row, now, canControl = false, onPosted, onRefresh }: {
+  hold: Hold; row: ClassRow | null; now: Date; canControl?: boolean;
+  onPosted?: () => Promise<void> | void; onRefresh?: () => Promise<void> | void;
 }) {
   const written = hold.resolvedBy === "tutor_wrote";
   const overdue = hold.deadlineAt !== null && new Date(hold.deadlineAt).getTime() <= now.getTime();
@@ -257,7 +258,7 @@ export function HoldBody({ hold, row, now, canControl = false, onPosted }: {
         ]} />
       </Block>
       {hold.noShow && !written ? (
-        <NoShowNote wiseSessionId={hold.wiseSessionId} noShow={hold.noShow} canControl={canControl} onPosted={onPosted} />
+        <NoShowNote wiseSessionId={hold.wiseSessionId} noShow={hold.noShow} canControl={canControl} onPosted={onPosted} onRefresh={onRefresh} />
       ) : null}
       <StoredDraft row={row} label="Stored draft (not posted)" />
       {hold.hasDraft && !row?.fields ? (
@@ -279,11 +280,12 @@ export function HoldBody({ hold, row, now, canControl = false, onPosted }: {
  * The standard note of a no-show class and the owner's one click. The server re-checks everything on a fresh read
  * (still a no-show, nobody has written, billing unchanged) before the single POST.
  */
-function NoShowNote({ wiseSessionId, noShow, canControl, onPosted }: {
+function NoShowNote({ wiseSessionId, noShow, canControl, onPosted, onRefresh }: {
   wiseSessionId: string;
   noShow: NonNullable<Hold["noShow"]>;
   canControl: boolean;
   onPosted?: () => Promise<void> | void;
+  onRefresh?: () => Promise<void> | void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -300,6 +302,8 @@ function NoShowNote({ wiseSessionId, noShow, canControl, onPosted }: {
       if (!response.ok) {
         const json = await response.json().catch(() => null) as { error?: unknown } | null;
         setError(typeof json?.error === "string" ? json.error.replaceAll("_", " ") : `HTTP ${response.status}`);
+        // A 502 may have sent (the autowriter is then halted): reload so the class shows as it is now.
+        if (response.status === 502) await onRefresh?.();
         return;
       }
       await onPosted?.();
@@ -566,7 +570,8 @@ export function ItemDrawer({ target, dashboard, review, now, canControl, onChang
               onRecorded={async (outcome) => { if (outcome === "recorded") await done("Verdict recorded."); else await onChanged(); }} />
           ) : null}
           {content?.kind === "hold"
-            ? <HoldBody hold={content.hold} row={content.row} now={now} canControl={canControl} onPosted={() => done("No-show note posted.")} /> : null}
+            ? <HoldBody hold={content.hold} row={content.row} now={now} canControl={canControl}
+              onPosted={() => done("No-show note posted.")} onRefresh={onChanged} /> : null}
           {content?.kind === "failed_post"
             ? <FailedPostBody post={content.post} row={content.row} reviewable={content.reviewable} onOpen={onOpen} /> : null}
           {content?.kind === "class" ? <ClassBody row={content.row} /> : null}

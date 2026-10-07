@@ -17,13 +17,15 @@ export const STYLE_TREND_MIN_POSTS = 3;
 
 /** Plain categories for the reviewer's free-text problems; the first match wins, in this order. */
 const PROBLEM_CATEGORIES: ReadonlyArray<{ key: string; label: string; match: RegExp }> = [
-  { key: "audit_wording", label: "audit or evidence wording in the post", match: /\b(?:audit|matched|portion|assistance|evidence|marked|flag)/iu },
-  { key: "topic_repeat", label: "the performance paragraph repeats the topic list", match: /\b(?:repeat|restat|inventory|topic list|duplicat)/iu },
+  { key: "audit_wording", label: "audit or evidence wording in the post",
+    match: /\b(?:audit[- ]style|matched portion|assistance (?:was |is )?not marked|not marked (?:as )?assisted|evidence wording)\b/iu },
+  { key: "topic_repeat", label: "the performance paragraph repeats the topic list",
+    match: /\b(?:repeats?|restates?|duplicates?)\b[^.]{0,40}\b(?:topic|inventory|list)|\btopic inventory\b/iu },
   { key: "homework", label: "homework wording", match: /\bhomework\b/iu },
-  { key: "tone", label: "tone that is not warm or pupil-facing", match: /\b(?:warm|tone|pupil-facing|encourag|praise|cold|clinical)/iu },
-  { key: "length", label: "too long or wordy", match: /\b(?:too long|shorten|concise|wordy|brief)/iu },
-  { key: "format", label: "numbering or layout", match: /\b(?:number|bullet|layout|paragraph|format)/iu },
-];
+  { key: "tone", label: "tone that is not warm or pupil-facing", match: /\b(?:warm(?:er)?|pupil-facing|tone|encouraging|clinical)\b/iu },
+  { key: "length", label: "too long or wordy", match: /\b(?:too long|shorten|more concise|wordy)\b/iu },
+  { key: "format", label: "numbering or layout", match: /\b(?:numbered|numbering|bullet(?:s|ed)?|layout)\b/iu },
+]
 
 export function styleProblemCategory(problem: string): { key: string; label: string } {
   const found = PROBLEM_CATEGORIES.find((category) => category.match.test(problem));
@@ -73,9 +75,10 @@ export function recurringStyleProblems(reviews: ReadonlyArray<{ postId: string; 
     .sort((a, b) => b.posts.length - a.posts.length || a.key.localeCompare(b.key));
 }
 
-/** ISO week key ("2026-W41") of a moment, so a recurring problem is raised at most once a week. */
+/** ISO week key ("2026-W41") of a moment's Bangkok date, so a recurring problem is raised at most once a week. */
 export function isoWeekKey(at: Date): string {
-  const date = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()));
+  const bangkok = new Date(at.getTime() + 7 * 3_600_000);
+  const date = new Date(Date.UTC(bangkok.getUTCFullYear(), bangkok.getUTCMonth(), bangkok.getUTCDate()));
   const day = date.getUTCDay() || 7;
   date.setUTCDate(date.getUTCDate() + 4 - day);
   const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));

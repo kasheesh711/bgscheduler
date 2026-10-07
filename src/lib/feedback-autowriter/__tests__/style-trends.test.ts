@@ -31,5 +31,8 @@ describe("recurring style problems", () => {
   it("keys a week the ISO way", () => {
     expect(isoWeekKey(new Date("2026-10-07T12:00:00Z"))).toBe("2026-W41");
     expect(isoWeekKey(new Date("2027-01-01T00:00:00Z"))).toBe("2026-W53");
+    // Monday 05:00 Bangkok is Sunday 22:00 UTC: already the new week.
+    expect(isoWeekKey(new Date("2026-10-11T22:00:00Z"))).toBe("2026-W42");
+    expect(styleProblemCategory("Give the number of questions attempted.").key).toBe("other");
   });
 });
