@@ -53,6 +53,15 @@ interface Entry extends ReserveLine {
   settled: SettleLine | null;
 }
 
+/**
+ * A correction settled as `refused`: the guarded executor stopped before the POST (e.g. `lock:sweep_running` when
+ * the autowriter's own sweep held the lock), so Wise was never written. `not_sent` still counts: its lock was
+ * claimed and the class's one correction is used up.
+ */
+function refusedCorrection(entry: Entry): boolean {
+  return entry.settled?.outcome === "refused";
+}
+
 export class NightlyLedger {
   private readonly entries = new Map<string, Entry>();
   /** Reservations made by this process and not settled yet: in flight, not crashed. */
@@ -116,6 +125,19 @@ export class NightlyLedger {
     return { count: entries.length, usd: this.sum(entries) };
   }
 
+  /**
+   * Tonight's corrections that count toward the caps: a correction the executor refused before claiming a posts row
+   * (a guard or the lock said no, nothing was sent to Wise) does not use one up.
+   */
+  correctionsTonight(): number {
+    return this.tonight((entry) => entry.kind === "correction" && !refusedCorrection(entry)).length;
+  }
+
+  /** How many reservations of this key were refused tonight (bounds retries of one class). */
+  refusedTonight(key: string): number {
+    return this.tonight((entry) => entry.key === key && refusedCorrection(entry)).length;
+  }
+
   /** Claude (API-equivalent) spend tonight, and over the last 7 days. */
   claudeUsd(): { night: number; week: number; calls: number } {
     const tonight = this.tonight((entry) => CLAUDE_KINDS.has(entry.kind));
@@ -146,9 +168,9 @@ export class NightlyLedger {
     return { total: entries.length, failed, succeeded, other };
   }
 
-  /** Corrections reserved in the last `days` days (all nights). */
+  /** Corrections reserved in the last `days` days (all nights), less those the executor refused before sending. */
   correctionsSince(days: number): number {
-    return this.since(days, (entry) => entry.kind === "correction").length;
+    return this.since(days, (entry) => entry.kind === "correction" && !refusedCorrection(entry)).length;
   }
 
   /** Why one more reservation of this kind would pass a cap, or null. */
@@ -175,7 +197,7 @@ export class NightlyLedger {
     if (kind === "wise_read") {
       return this.used("wise_read").count + 1 > caps.maxWiseReads ? "cap:wise_reads_night" : null;
     }
-    if (this.used("correction").count + 1 > caps.maxCorrectionsPerNight) return "cap:corrections_night";
+    if (this.correctionsTonight() + 1 > caps.maxCorrectionsPerNight) return "cap:corrections_night";
     if (this.correctionsSince(7) + 1 > caps.maxCorrectionsPerWeek) return "cap:corrections_week";
     return null;
   }

@@ -53,6 +53,8 @@ const WAIT_SLICE_MS = 30_000;
 /** Outcomes after which a class is not tried again tonight. */
 const FINAL_APPLY_STATUSES = new Set(["verified", "awaiting_event", "awaiting_event_locked", "not_sent", "safety", "error"]);
 /** Outcomes whose text is (or may be) in Wise: the owner reviews the class again. */
+/** A class refused this many times tonight is not tried again tonight. */
+const MAX_REFUSED_PER_CLASS_NIGHT = 2;
 const LANDED_STATUSES = new Set(["verified", "awaiting_event", "awaiting_event_locked"]);
 
 // ---------------------------------------------------------------------------
@@ -303,7 +305,7 @@ export interface CorrectDeps {
   supervised: boolean;
   code: CodeFacts | null;
   hmacKey: HmacKeyResult;
-  ledger: Pick<NightlyLedger, "reserve" | "settle" | "used" | "correctionsSince">;
+  ledger: Pick<NightlyLedger, "reserve" | "settle" | "used" | "correctionsSince" | "correctionsTonight" | "refusedTonight">;
   ops: CorrectionWiseOps;
   /** A Wise 429 was seen (through `guardedWiseOps`). */
   throttled: () => boolean;
@@ -499,7 +501,7 @@ export async function stepCorrect(ctx: NightContext, deps: CorrectDeps): Promise
     if (stop) return stopOn(stop);
     if (deps.apply && typeof deps.max === "number" && applied >= deps.max) return finish({ stop: "max_reached", next: "correct", extra: { proposals: proposals.length } });
     if (deps.apply) {
-      if (deps.ledger.used("correction").count >= ctx.caps.maxCorrectionsPerNight) return stopOn(new NightlyStop("cap:corrections_night", EXIT.caps));
+      if (deps.ledger.correctionsTonight() >= ctx.caps.maxCorrectionsPerNight) return stopOn(new NightlyStop("cap:corrections_night", EXIT.caps));
       if (deps.ledger.correctionsSince(7) >= ctx.caps.maxCorrectionsPerWeek) return stopOn(new NightlyStop("cap:corrections_week", EXIT.caps));
     }
     const finished = done.get(sid);
@@ -575,6 +577,11 @@ export async function stepCorrect(ctx: NightContext, deps: CorrectDeps): Promise
     if (waited) return stopOn(waited);
     const beforePost = stopBeforeStep(ctx);
     if (beforePost) return stopOn(beforePost);
+    // Refusals no longer use up the night's cap, so bound them per class instead.
+    if (deps.ledger.refusedTonight(`correction:${sid}`) >= MAX_REFUSED_PER_CLASS_NIGHT) {
+      record({ ...about, status: "skipped", reason: "refused_twice_tonight" });
+      continue;
+    }
     const reserved = deps.ledger.reserve("correction", { key: `correction:${sid}`, estimateUsd: 0 });
     if (!reserved.ok) return stopOn(new NightlyStop(reserved.reason, EXIT.caps));
     applied += 1;
@@ -589,7 +596,9 @@ export async function stepCorrect(ctx: NightContext, deps: CorrectDeps): Promise
       return stopOn(new NightlyStop("correction_error", EXIT.safety));
     }
     const line = lineOf(outcome);
-    deps.ledger.settle(reserved.id, { actualUsd: 0, outcome: line.status });
+    // `record_failed:*` comes back as refused although the posts row may exist: count it like a claimed correction.
+    const claimedRefusal = line.status === "refused" && (line.reason ?? "").startsWith("record_failed:");
+    deps.ledger.settle(reserved.id, { actualUsd: 0, outcome: claimedRefusal ? "refused_after_claim" : line.status });
     let flag: string | undefined;
     if (LANDED_STATUSES.has(line.status)) {
       try {

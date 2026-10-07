@@ -454,6 +454,19 @@ describe("stepCorrect: applying", () => {
     expect(runStopForRefusal("db:owner_flag_open")).toBeNull();
   });
 
+  it("tries a class the executor refused at most twice a night, and refusals do not use up the cap", async () => {
+    clock = new Date("2026-10-02T23:10:30.000Z").getTime();
+    const ctx = context();
+    seed(ctx);
+    const h = harness(ctx, { apply: true, outcome: () => ({ status: "refused", stage: "lock", reason: "lock:sweep_running" }) });
+    await stepCorrect(ctx, h.deps);
+    await stepCorrect(ctx, h.deps);
+    const third = await stepCorrect(ctx, h.deps);
+    expect(h.log.filter((entry) => entry.startsWith(`apply:${SID}`))).toHaveLength(2);
+    expect(third.summary).toMatchObject({ classes: [expect.objectContaining({ status: "skipped", reason: "refused_twice_tonight" })] });
+    expect(h.ledger.correctionsTonight()).toBe(0);
+  });
+
   it("does not wait, reserve or post for a class its own read-only guards refuse", async () => {
     clock = new Date("2026-10-02T23:06:00.000Z").getTime();
     const ctx = context();
