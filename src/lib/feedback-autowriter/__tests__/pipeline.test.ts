@@ -203,23 +203,42 @@ describe("runWritingPipeline", () => {
       misattributed: [], homeworkNotSet: [],
     });
 
-    it("cuts what the judges quoted, has both levels judge the trimmed draft, and posts it", async () => {
-      const { promise, records, requests } = run({ writers: [SOL(withExtra)], judge: [GLM(QUOTED), GLM(FAITHFUL)] });
+    it("gives the fallback writer its turn first, then cuts what the judges quoted from the latest draft and posts it", async () => {
+      const { promise, records, requests } = run({ writers: [SOL(withExtra), LUNA(withExtra)], judge: [GLM(QUOTED), GLM(QUOTED), GLM(FAITHFUL)] });
       const result = await promise;
-      expect(result).toMatchObject({ kind: "draft", arm: "sol", repair: [{ field: "performance", text: "[STUDENT_1] also scored 95% on the end-of-lesson quiz." }] });
+      expect(result).toMatchObject({ kind: "draft", arm: "luna", repair: [{ field: "performance", text: "[STUDENT_1] also scored 95% on the end-of-lesson quiz." }] });
       if (result.kind === "draft") expect(result.fields.performance).toBe(GOOD_FIELDS.performance);
-      expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm", "judge:glm", "judge:glm"]);
-      const second = judgeRequests(requests).slice(2).map((request) => request.messages.map((message) => message.content).join("\n"));
-      for (const text of second) expect(text).not.toContain("95%");
-      expect(records.slice(3).map((record) => record.result.judgedGeneration)).toEqual(["g:repair", "g:repair"]);
+      expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm", "writer:luna", "judge:glm", "judge:glm", "judge:glm", "judge:glm"]);
+      const repairJudging = judgeRequests(requests).slice(4).map((request) => request.messages.map((message) => message.content).join("\n"));
+      for (const text of repairJudging) expect(text).not.toContain("95%");
+      expect(records.slice(6).map((record) => record.result.judgedGeneration)).toEqual(["g:repair", "g:repair"]);
     });
 
-    it("goes on to the fallback writer when the trimmed draft is rejected too", async () => {
-      const { promise, records } = run({ writers: [SOL(withExtra), LUNA(writerJson)], judge: [GLM(QUOTED), GLM(UNFAITHFUL), GLM(FAITHFUL)] });
+    it("posts the fallback writer's faithful draft without any repair", async () => {
+      const { promise, records } = run({ writers: [SOL(withExtra), LUNA(writerJson)], judge: [GLM(QUOTED), GLM(FAITHFUL)] });
       const result = await promise;
       expect(result).toMatchObject({ kind: "draft", arm: "luna" });
       expect(result).not.toHaveProperty("repair");
-      expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm", "judge:glm", "judge:glm", "writer:luna", "judge:glm", "judge:glm"]);
+      expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm", "writer:luna", "judge:glm", "judge:glm"]);
+    });
+
+    it("holds, saying why, when the trimmed draft is rejected too", async () => {
+      const { promise, records } = run({ writers: [SOL(withExtra), LUNA(withExtra)], judge: [GLM(QUOTED), GLM(QUOTED), GLM(UNFAITHFUL)] });
+      const result = await promise;
+      expect(result).toMatchObject({ kind: "held" });
+      if (result.kind === "held") expect(result.reasons.at(-1)).toMatch(/^luna:repair:unfaithful:scored 95%/u);
+      expect(roles(records)).toHaveLength(8);
+    });
+
+    it("holds rather than start a repair judging it has no time for", async () => {
+      const { promise, records } = run(
+        { writers: [SOL(withExtra), LUNA(withExtra)], judge: [GLM(QUOTED), GLM(QUOTED)] },
+        { evidence: "transcript", remainingMs: 700_000, latencyMs: (request) => request.schemaName === "post_class_feedback" ? 100_000 : 120_000 },
+      );
+      const result = await promise;
+      expect(result).toMatchObject({ kind: "held" });
+      if (result.kind === "held") expect(result.reasons.at(-1)).toBe("luna:repair:no_time");
+      expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm", "writer:luna", "judge:glm", "judge:glm"]);
     });
 
     it("does not repair when the quote is not in the draft", async () => {
