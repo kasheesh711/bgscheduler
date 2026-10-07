@@ -1141,6 +1141,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
   const evidence = buildTranscriptEvidence({
     transcript, audioDurationMs: status.audioDurationMs, scheduledMinutes,
     zoomCues: cues, teacherName: detailTeacherName(detail), alsoTeacher: tutorSelfNames(detail),
+    studentNames: [student.name, ...(student.joinedAsGuest ? [student.joinedAsGuest] : [])],
   });
   const { speakers, rendered, meta: transcriptMeta } = evidence;
   const holdFor = async (reason: string, extra: Record<string, unknown> = {}) => {
