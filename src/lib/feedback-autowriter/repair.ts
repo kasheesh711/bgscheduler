@@ -54,9 +54,19 @@ export function parseProblemQuote(problem: string): { field: DraftField | null; 
   } else {
     text = value.split(/\s[—–-]\s/u)[0].replace(/^[^:]{0,60}:\s*/u, "");
   }
+  // The label inside the quotes ("\"Homework and due date: I reminded …\""): it names the field, it is not draft text.
+  let named = field;
+  const inner = text.toLocaleLowerCase("en-US");
+  for (const [label, name] of FIELD_LABELS) {
+    if (inner.startsWith(`${label}:`)) {
+      named ??= name;
+      text = text.slice(label.length + 1).trim();
+      break;
+    }
+  }
   // A quote the judge shortened: match on what it kept.
   text = text.replace(/(?:\.\.\.|…)+$/u, "").replace(/^(?:\.\.\.|…)+/u, "").trim();
-  return { field, text };
+  return { field: named, text };
 }
 
 function isList(value: string): boolean {

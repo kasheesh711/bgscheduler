@@ -23,6 +23,9 @@ describe("parseProblemQuote", () => {
       .toEqual({ field: "performance", text: "[STUDENT_1] pointed out a star-position difference" });
     expect(parseProblemQuote("“and, with guidance, confirmed that a reflection changed…” — the transcript only shows the tutor"))
       .toEqual({ field: null, text: "and, with guidance, confirmed that a reflection changed" });
+    // 7 Oct production: the judge put the label inside the quotes.
+    expect(parseProblemQuote("\"Homework and due date: I reminded [STUDENT_1] to finish and submit the remaining Dr. Frost maths homework\" — the Dr. Frost maths homework was not set"))
+      .toEqual({ field: "homework", text: "I reminded [STUDENT_1] to finish and submit the remaining Dr. Frost maths homework" });
     expect(parseProblemQuote("Homework and due date: I reminded [STUDENT_1] to finish — not set by the tutor"))
       .toEqual({ field: "homework", text: "I reminded [STUDENT_1] to finish" });
   });
@@ -56,6 +59,20 @@ describe("repairRejectedDraft", () => {
       expect(repaired?.output.homework).toBe("");
       expect(repaired?.output.performance).toBe(draft.performance);
     }
+  });
+
+  it("repairs the 7 Oct production case: the label inside the quotes, two levels quoting the same homework", () => {
+    const linn: ModelOutput = { ...draft, homework: "I reminded [STUDENT_1] to finish and submit the remaining Dr. Frost maths homework, and to ask me about any questions if needed." };
+    const repaired = repairRejectedDraft(linn, {
+      unsupported: [],
+      misattributed: [],
+      homeworkNotSet: [
+        "\"I reminded [STUDENT_1] to finish and submit the remaining Dr. Frost maths homework, and to ask me about any questions if needed.\"",
+        "\"Homework and due date: I reminded [STUDENT_1] to finish and submit the remaining Dr. Frost maths homework\" — the Dr. Frost maths homework was not set by the tutor in this lesson",
+      ],
+    });
+    expect(repaired?.output.homework).toBe("");
+    expect(repaired?.output.performance).toBe(draft.performance);
   });
 
   it("cuts a numbered line and renumbers the list", () => {
