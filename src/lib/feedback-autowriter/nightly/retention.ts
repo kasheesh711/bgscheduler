@@ -6,13 +6,14 @@ import { isNightLabel, nightlyHome } from "./paths";
 /**
  * Local evidence is kept 7 days (owner decision), then deleted: the per-class cache (`cache/<sid>/`), cached audits
  * (`audits/<sid>/`, they quote posts and evidence) and each old night's real-data files (bundles, targets, report,
- * plan). Metadata stays: run.json, summary.md, claude-calls.jsonl, fix-brief.json (sanitised), and the root
- * ledgers. Only paths inside the state root are touched, never `~/.bgscheduler-nightly/` itself or its `backup/`.
+ * plan, correction proposals and their verification, the night's replay). Metadata stays: run.json, summary.md,
+ * claude-calls.jsonl, fix-brief.json (sanitised), corrections.jsonl (ids and codes), and the root ledgers. Only paths
+ * inside the state root are touched, never `~/.bgscheduler-nightly/` itself or its `backup/`.
  */
 
 export const RETENTION_DAYS = 7;
 /** A night folder's real-data files and folders. */
-const NIGHT_REAL_DATA = ["bundles", "targets.json", "report.md", "plan.md", "flags.json"];
+const NIGHT_REAL_DATA = ["bundles", "targets.json", "report.md", "plan.md", "flags.json", "proposals", "verify", "replay"];
 
 export interface PruneResult {
   cacheDirs: string[];

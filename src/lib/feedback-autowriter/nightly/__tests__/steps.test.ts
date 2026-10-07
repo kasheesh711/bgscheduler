@@ -62,6 +62,7 @@ const goodFacts: PreflightFacts = {
   code: { head: "abc123def456", branch: "main", dirty: false, onMain: true },
   claudeCliVersion: "2.1.287 (Claude Code)",
   lock: { ok: true },
+  corrections: { unsettled: 0, lock: null },
 };
 
 describe("run state", () => {
@@ -100,6 +101,10 @@ describe("stepPreflight", () => {
     expect(stepPreflight(context(), { ...goodFacts, missingEnv: ["DATABASE_URL"] })).toMatchObject({ stop: "env_missing:DATABASE_URL", exitCode: 6 });
     expect(stepPreflight(context(), { ...goodFacts, nodeVersion: "v20.20.2" })).toMatchObject({ stop: "node_v20.20.2_below_22", exitCode: 6 });
     expect(stepPreflight(context(), { ...goodFacts, lock: { ok: false, reason: "held", holder: { pid: 1 } } })).toMatchObject({ stop: "locked", exitCode: 7 });
+    // A correction a run left unsettled (or its lock) stops the night until `recover` has settled it.
+    expect(stepPreflight(context(), { ...goodFacts, corrections: { unsettled: 1, lock: null } })).toMatchObject({ ok: false, stop: "unsettled_correction", exitCode: 6 });
+    expect(stepPreflight(context(), { ...goodFacts, corrections: { unsettled: 0, lock: "stale" } })).toMatchObject({ ok: false, stop: "unsettled_correction", exitCode: 6 });
+    expect(stepPreflight(context(), { ...goodFacts, corrections: { error: "NeonDbError" } })).toMatchObject({ ok: false, stop: "corrections_unreadable:NeonDbError", exitCode: 6 });
     // No usable claude CLI: nothing can be audited.
     expect(stepPreflight(context(), { ...goodFacts, claudeCliVersion: null })).toMatchObject({ ok: false, stop: "claude_cli_missing", exitCode: 6 });
     expect(stepPreflight(context(), { ...goodFacts, claudeCliVersion: "2.0.77 (Claude Code)" })).toMatchObject({ stop: "claude_cli_unsupported", exitCode: 6 });

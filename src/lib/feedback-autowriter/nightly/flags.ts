@@ -3,6 +3,7 @@ import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { AutowriterCriticalCategory } from "@/lib/db/schema";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
+import { AGENT_CORRECTION_ACTOR } from "../correction";
 import { recordIncident } from "../incidents";
 import { insertFlag } from "../review-job";
 import type { ClassReport } from "./report";
@@ -32,6 +33,8 @@ export interface FlagPlanItem {
   /** A critical finding with high confidence: also an incident the review job pushes to the owner. */
   incident: boolean;
   modes: string[];
+  /** Who raised it (default `AGENT_FLAG_ACTOR`, the audit): a correction's flag says so (`AGENT_CORRECTION_FLAG_ACTOR`). */
+  createdBy?: string;
 }
 
 export function agentFlagKey(input: { wiseSessionId: string; fieldsSha256: string; auditVersion: number }): string {
@@ -71,6 +74,42 @@ export function planAgentFlags(reports: readonly ClassReport[], input: { auditVe
     });
   }
   return { items, overCap };
+}
+
+/** Who raises the flag after a correction: the correction's own actor, so the audit's nightly flag cap never counts it. */
+export const AGENT_CORRECTION_FLAG_ACTOR = AGENT_CORRECTION_ACTOR;
+
+/** The idempotency key of the flag a correction raises: one per class, as there is one agent correction per class. */
+export function agentCorrectionFlagKey(wiseSessionId: string): string {
+  return `agent-correction:${wiseSessionId}`;
+}
+
+/**
+ * The flag raised after the nightly agent corrected a post in Wise, so the owner reviews the class again: the original
+ * finding's severity and category (the verdict still judges the first shot), mode codes in the note, never text.
+ */
+export function correctionFlagItem(input: {
+  wiseSessionId: string;
+  /** The corrected text's hash. */
+  fieldsSha256: string;
+  modes: readonly string[];
+  severity: "critical" | "major";
+  criticalCategory: string | null;
+}): FlagPlanItem {
+  const category = input.criticalCategory && CRITICAL_CATEGORIES.has(input.criticalCategory as AutowriterCriticalCategory)
+    ? input.criticalCategory as AutowriterCriticalCategory : null;
+  return {
+    wiseSessionId: input.wiseSessionId,
+    fieldsSha256: input.fieldsSha256,
+    idempotencyKey: agentCorrectionFlagKey(input.wiseSessionId),
+    severity: input.severity,
+    suggestedSeverity: input.severity === "critical" ? "critical" : "factual",
+    suggestedCategory: input.severity === "critical" ? category : null,
+    note: `corrected by the nightly agent: ${[...new Set(input.modes)].join(", ")}`.slice(0, 500),
+    incident: false,
+    modes: [...input.modes],
+    createdBy: AGENT_CORRECTION_FLAG_ACTOR,
+  };
 }
 
 /** Agent flags the nightly has already raised on these classes (SELECT): what the night's flag cap counts. */
@@ -116,7 +155,7 @@ export async function applyAgentFlags(db: Database, items: readonly FlagPlanItem
         note: item.note,
         suggestedSeverity: item.suggestedSeverity,
         suggestedCategory: item.suggestedCategory,
-        createdBy: AGENT_FLAG_ACTOR,
+        createdBy: item.createdBy ?? AGENT_FLAG_ACTOR,
       });
       const pushed = item.incident ? await recordIncident(tx, {
         dedupeKey: item.idempotencyKey,

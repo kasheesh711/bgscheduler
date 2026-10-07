@@ -35,17 +35,36 @@
  *                                  then prune (not after a STOP file)
  *   prune [--dry-run]              delete local evidence older than 7 days (cache, audits, old nights' real data)
  *   costs [--days=7]               the last nights' spend from the local cost ledger
+ *   verify --root-cause-ref=<branch|PR> [--replay-dir=<dir>] [--sessions=a,b]
+ *                                  for each audited class with a major/critical issue a text can fix: the replay draft
+ *                                  (candidate A, never for a guided post) or the audit's minimal fixes (candidate B),
+ *                                  checked by production's text checks, both GLM judge levels and one Opus re-audit
+ *                                  (criticals first confirmed by a second Opus audit) → signed proposals/<sid>.json
+ *   correct [--apply] [--supervised] [--max=n] [--sessions=a,b]
+ *                                  the ONLY Wise write: each signed proposal through the guarded executor, one class at a
+ *                                  time, plan from the database; a dry run (every guard printed) unless --apply, which
+ *                                  needs a clean origin/main checkout or --supervised; waits ≤ 6 min for a correction
+ *                                  window (UTC :10–:15, :40–:45); ≤ 6 a night, ≤ 15 a week; an agent flag per correction
+ *   recover [--apply] [--supervised]
+ *                                  agent corrections a dead run left unsettled, settled from Wise reads (never a POST),
+ *                                  then a correction lock it left lifted; a dry run (database reads only) unless --apply
  * Global: --no-deadline (supervised runs only: ignore the 06:50 Bangkok stop); --supervised (preflight and run: allow
- * reviewed code that is not on origin/main yet, recorded in run.json).
+ * reviewed code that is not on origin/main yet, recorded in run.json; correct --apply and recover --apply: allow a
+ * checkout whose HEAD is not exactly origin/main, recorded on every outcome).
  *
  * State lives outside every worktree: $BGS_NIGHTLY_ROOT, default ~/.bgscheduler-nightly/nightly (0700 dirs, 0600 files).
  * Kill switches: ~/.bgscheduler-nightly/STOP and /Users/kevinhsieh/Developer/Scheduling/.feedback-autowriter/STOP.
  * Owner config (may only tighten caps): ~/.bgscheduler-nightly/config.json.
  * Exit codes: 0 ok/nothing, 1 error, 2 usage/config, 3 caps, 4 model usage/auth, 5 Wise throttled, 6 guard refused,
- * 7 STOP/lock/deadline, 10 SAFETY.
+ * 7 STOP/lock/deadline/outside the correction window, 10 SAFETY (a correction did not verify: the autowriter is halted).
  */
 import { execFileSync } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
 import { getDb, type Database } from "@/lib/db";
+import { openRouterApiKey, wiseApiActorId } from "@/lib/feedback-autowriter/config";
+import { AGENT_CORRECTION_ACTOR } from "@/lib/feedback-autowriter/correction";
+import { pgCorrectionStore, recoverStaleCorrections, releaseStaleCorrectionLock } from "@/lib/feedback-autowriter/correction-store";
 import { loadTutorPriorFeedback } from "@/lib/feedback-autowriter/job";
 import { planAudit, smokeCall } from "@/lib/feedback-autowriter/nightly/audit";
 import {
@@ -66,12 +85,25 @@ import {
   type ChildLike,
   type ClaudeRunnerDeps,
 } from "@/lib/feedback-autowriter/nightly/claude-runner";
+import {
+  guardedWiseOps,
+  loadCorrectionRows,
+  loadDisabledTutors,
+  preflightCorrections,
+  stepCorrect,
+  stepRecover,
+  unsettledCorrections,
+  type CodeFacts,
+} from "@/lib/feedback-autowriter/nightly/correct-step";
 import { createWiseReadGate, dbEvidenceSources, readOnlySoniox } from "@/lib/feedback-autowriter/nightly/evidence";
 import { EXIT, exitCodeForStop, type ExitCode } from "@/lib/feedback-autowriter/nightly/exit";
+import { applyAgentFlags } from "@/lib/feedback-autowriter/nightly/flags";
+import { judgeCandidate } from "@/lib/feedback-autowriter/nightly/judge-candidate";
 import { NightlyLedger } from "@/lib/feedback-autowriter/nightly/ledger";
 import { acquireLock, lockHolder } from "@/lib/feedback-autowriter/nightly/lock";
 import { isNightLabel, nightDeadline, nightLabel, nightlyPaths, nightlyRoot } from "@/lib/feedback-autowriter/nightly/paths";
 import { loadOtherStudentNames } from "@/lib/feedback-autowriter/nightly/prechecks";
+import { loadHmacKey, loadOrCreateHmacKey, readProposalFiles } from "@/lib/feedback-autowriter/nightly/proposals";
 import {
   readNightBundles,
   readRunState,
@@ -86,18 +118,23 @@ import {
   stepReport,
   stepSelect,
   stopBeforeStep,
+  type BundleFile,
   type NightContext,
+  type PreflightFacts,
   type StepResult,
 } from "@/lib/feedback-autowriter/nightly/steps";
+import { readReplayRecords, stepVerify } from "@/lib/feedback-autowriter/nightly/verify";
 import { createNightlyWiseReader } from "@/lib/feedback-autowriter/nightly/wise-reader";
-import { rosterTutor } from "@/lib/feedback-autowriter/roster";
+import { AUTOWRITER_TEACHER_ALLOWLIST, rosterTutor } from "@/lib/feedback-autowriter/roster";
+import { createWiseFeedbackOps, loadFieldMappings } from "@/lib/feedback-autowriter/run";
+import type { ReplayRecord } from "@/lib/feedback-autowriter/replay";
 import { createSonioxClient } from "@/lib/feedback-autowriter/soniox";
 import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similarity";
 import { loadPayoutScriptEnvironment } from "./lib/payout-script";
 
 loadPayoutScriptEnvironment();
 
-const COMMANDS = ["status", "preflight", "select", "collect", "audit", "report", "flag", "run", "prune", "costs"] as const;
+const COMMANDS = ["status", "preflight", "select", "collect", "audit", "report", "flag", "run", "prune", "costs", "verify", "correct", "recover"] as const;
 type Command = (typeof COMMANDS)[number];
 
 const REQUIRED_ENV = ["DATABASE_URL", "WISE_USER_ID", "WISE_API_KEY"] as const;
@@ -119,6 +156,13 @@ function sessionIdsOption(): string[] {
   const invalid = ids.filter((id) => !/^[0-9a-f]{24}$/iu.test(id));
   if (invalid.length > 0) throw new UsageError(`Not Wise session ids: ${invalid.join(", ")}`);
   return ids;
+}
+
+/** A branch name, PR number or URL: nothing that could carry lesson text. */
+const ROOT_CAUSE_REF = /^[\w./:#@+-]{1,200}$/u;
+
+function expandHome(value: string): string {
+  return path.resolve(value.replace(/^~(?=\/|$)/u, os.homedir()));
 }
 
 function print(result: StepResult): void {
@@ -160,6 +204,13 @@ function codeFacts(): { head: string | null; branch: string | null; dirty: boole
     dirty: (git(["status", "--porcelain", "--untracked-files=no"]) ?? "x") !== "",
     onMain: headOnMain(),
   };
+}
+
+/** The checkout `correct --apply` and `recover --apply` must run from: HEAD, and origin/main as last fetched. */
+function applyCodeFacts(): CodeFacts | null {
+  const facts = codeFacts();
+  if (!facts) return null;
+  return { ...facts, originMain: git(["rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"]) };
 }
 
 async function fetchText(url: string): Promise<string> {
@@ -235,11 +286,19 @@ function status(ctx: NightContext): StepResult {
       wiseCooldownUntil: activeWiseCooldown()?.toISOString() ?? null,
       spend: ledger.totals(),
       claude: ledger.claudeUsd(),
+      proposals: readProposalFiles(ctx.paths.proposalsDir).length,
     },
   };
 }
 
-function preflight(session: Session): StepResult {
+async function preflight(session: Session): Promise<StepResult> {
+  // The dry run of `recover`: database reads only.
+  let corrections: PreflightFacts["corrections"];
+  try {
+    corrections = preflightCorrections(await unsettledCorrections(session.db));
+  } catch (error) {
+    corrections = { error: error instanceof Error ? error.name : "Error" };
+  }
   return stepPreflight(session.ctx, {
     nodeVersion: process.version,
     missingEnv: REQUIRED_ENV.filter((name) => !process.env[name]?.trim()),
@@ -249,7 +308,19 @@ function preflight(session: Session): StepResult {
     lock: { ok: true },
     pinnedSha: session.runnerSha,
     supervised: flag("supervised"),
+    corrections,
   });
+}
+
+/** The tutor's prior feedback for the copy check, read once per tutor per invocation. */
+function priorFeedbackLoader(db: Database, now: Date): (tutorUserId: string | null) => Promise<PriorFeedbackComparison[]> {
+  const byTutor = new Map<string, Promise<PriorFeedbackComparison[]>>();
+  return (tutorUserId) => {
+    const tutor = tutorUserId ? rosterTutor(tutorUserId) : null;
+    if (!tutor) return Promise.resolve([]);
+    if (!byTutor.has(tutor.canonicalKey)) byTutor.set(tutor.canonicalKey, loadTutorPriorFeedback(db, tutor, now));
+    return byTutor.get(tutor.canonicalKey)!;
+  };
 }
 
 async function collect(session: Session): Promise<StepResult> {
@@ -258,7 +329,7 @@ async function collect(session: Session): Promise<StepResult> {
   if (flag("retranscribe") && !sonioxKey) throw new UsageError("--retranscribe needs SONIOX_API_KEY");
   const db = session.db;
   const now = new Date();
-  const priorByTutor = new Map<string, Promise<PriorFeedbackComparison[]>>();
+  const priorFeedback = priorFeedbackLoader(db, now);
   return stepCollect(ctx, {
     sessionIds: sessionIdsOption(),
     collect: {
@@ -274,12 +345,7 @@ async function collect(session: Session): Promise<StepResult> {
         shouldStop: () => (stopFilePresent(ctx.stopFiles) ? "stop_file" : ctx.deadline && Date.now() >= ctx.deadline.getTime() ? "deadline" : null),
       } : null,
     },
-    priorFeedback: (target) => {
-      const tutor = rosterTutor(target.wiseTeacherUserId);
-      if (!tutor) return Promise.resolve([]);
-      if (!priorByTutor.has(tutor.canonicalKey)) priorByTutor.set(tutor.canonicalKey, loadTutorPriorFeedback(db, tutor, now));
-      return priorByTutor.get(tutor.canonicalKey)!;
-    },
+    priorFeedback: (target) => priorFeedback(target.wiseTeacherUserId),
     otherStudentNames: (target) => loadOtherStudentNames(db, { tutorKey: target.tutorKey, excludeClassId: target.wiseClassId || null, now }),
   });
 }
@@ -344,6 +410,105 @@ async function report(session: Session, options: { synthesis: boolean }): Promis
     ledger: session.ledger,
     run: runner ? (call) => runClaude(call, runner) : null,
     cliVersion: runner?.cliVersion ?? null,
+  });
+}
+
+/** `verify`: candidates checked by production's checks, both judge levels and an Opus re-audit → signed proposals. */
+async function verify(session: Session): Promise<StepResult> {
+  const { ctx, ledger } = session;
+  const apiKey = openRouterApiKey();
+  if (!apiKey) throw new UsageError("verify needs OPENROUTER_API_KEY (the production judge)");
+  const rootCauseRef = option("root-cause-ref")?.trim() ?? "";
+  if (!ROOT_CAUSE_REF.test(rootCauseRef)) {
+    throw new UsageError("--root-cause-ref=<fix branch or PR> is required (letters, digits and . / : # @ + _ - only)");
+  }
+  const replayDirOption = option("replay-dir");
+  let replay: ReplayRecord[] | null = null;
+  if (replayDirOption) {
+    const read = readReplayRecords(expandHome(replayDirOption));
+    if (!read.ok) throw new UsageError(`--replay-dir: ${read.reason}`);
+    replay = read.records;
+  }
+  const key = loadOrCreateHmacKey();
+  if (!key.ok) return fail(key.reason, EXIT.guardRefused, { step: "verify", night: ctx.night });
+  const db = session.db;
+  const now = new Date();
+  const priorFeedback = priorFeedbackLoader(db, now);
+  const runner = session.claude();
+  return stepVerify(ctx, {
+    ledger,
+    run: (call) => runClaude(call, runner),
+    judge: (input) => judgeCandidate({ apiKey, ledger, key: input.key }, input),
+    priorFeedback: (file: BundleFile) => priorFeedback(file.target.wiseTeacherUserId),
+    otherStudentNames: (file: BundleFile) => loadOtherStudentNames(db, { tutorKey: file.target.tutorKey, excludeClassId: file.target.wiseClassId || null, now }),
+    replay,
+    hmacKey: key.key,
+    rootCauseRef,
+    sessionIds: sessionIdsOption(),
+    commit: codeFacts()?.head ?? null,
+  });
+}
+
+/** `correct`: signed proposals through the guarded executor, one class at a time (a dry run unless --apply). */
+async function correct(session: Session): Promise<StepResult> {
+  const { ctx, ledger } = session;
+  const maxOption = option("max");
+  const max = maxOption === undefined ? null : Number(maxOption);
+  if (max !== null && (!Number.isInteger(max) || max < 1 || max > ctx.caps.maxCorrectionsPerNight)) {
+    throw new UsageError(`--max must be a whole number from 1 to ${ctx.caps.maxCorrectionsPerNight}`);
+  }
+  const db = session.db;
+  const wise = guardedWiseOps(createWiseFeedbackOps(), ctx.stopFiles);
+  const now = new Date();
+  const priorFeedback = priorFeedbackLoader(db, now);
+  return stepCorrect(ctx, {
+    apply: flag("apply"),
+    supervised: flag("supervised"),
+    code: applyCodeFacts(),
+    hmacKey: loadHmacKey(),
+    ledger,
+    ops: wise.ops,
+    throttled: wise.throttled,
+    // The executor's clock and the store's must be the same (the store checks it against the database's: clock_skew).
+    store: pgCorrectionStore(db, { actor: AGENT_CORRECTION_ACTOR, now: ctx.now }),
+    apiActorId: wiseApiActorId(),
+    allowlist: AUTOWRITER_TEACHER_ALLOWLIST,
+    loadRows: (wiseSessionId) => loadCorrectionRows(db, wiseSessionId),
+    loadMappings: () => loadFieldMappings(db),
+    loadDisabledTutors: () => loadDisabledTutors(db),
+    unsettled: () => unsettledCorrections(db),
+    textContext: async (file) => ({
+      priorFeedback: await priorFeedback(file.target.wiseTeacherUserId),
+      otherStudentNames: await loadOtherStudentNames(db, { tutorKey: file.target.tutorKey, excludeClassId: file.target.wiseClassId || null, now }),
+    }),
+    raiseFlag: (item) => applyAgentFlags(db, [item]),
+    sessionIds: sessionIdsOption(),
+    max,
+  });
+}
+
+/** `recover`: settle what a dead correction run left (Wise reads only), then lift its lock; a dry run unless --apply. */
+async function recover(session: Session): Promise<StepResult> {
+  const { ctx } = session;
+  const db = session.db;
+  return stepRecover(ctx, {
+    apply: flag("apply"),
+    supervised: flag("supervised"),
+    code: applyCodeFacts(),
+    unsettled: () => unsettledCorrections(db),
+    recover: () => {
+      const apiActorId = wiseApiActorId();
+      if (!apiActorId) throw new UsageError("recover --apply needs WISE_USER_ID");
+      const wise = guardedWiseOps(createWiseFeedbackOps(), ctx.stopFiles);
+      // Reads only: recovery is handed no POST.
+      const reads = {
+        getSessionDetail: wise.ops.getSessionDetail,
+        getSessionCreditEntries: wise.ops.getSessionCreditEntries,
+        findFeedbackEvents: wise.ops.findFeedbackEvents,
+      };
+      return recoverStaleCorrections(db, reads, { apiActorId, actor: AGENT_CORRECTION_ACTOR });
+    },
+    release: () => releaseStaleCorrectionLock(db, { actor: AGENT_CORRECTION_ACTOR }),
   });
 }
 
@@ -427,7 +592,7 @@ async function main(): Promise<void> {
   process.once("SIGINT", onSignal);
   process.once("SIGTERM", onSignal);
   try {
-    if (command === "preflight") print(preflight(session));
+    if (command === "preflight") print(await preflight(session));
     else if (command === "select") print(await stepSelect(ctx, { db: session.db, ledger: session.ledger, sessionIds: sessionIdsOption(), force: flag("force") }));
     else if (command === "collect") print(await collect(session));
     else if (command === "audit") print(await audit(session));
@@ -435,6 +600,9 @@ async function main(): Promise<void> {
     else if (command === "flag") print(await stepFlag(ctx, { db: flag("apply") ? session.db : null, apply: flag("apply") }));
     else if (command === "run") print(await runAll(session));
     else if (command === "prune") print(stepPrune(ctx, { dryRun: flag("dry-run") }));
+    else if (command === "verify") print(await verify(session));
+    else if (command === "correct") print(await correct(session));
+    else if (command === "recover") print(await recover(session));
   } finally {
     handled = true;
     lock.release();

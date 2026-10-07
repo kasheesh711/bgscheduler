@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentFlagKey, planAgentFlags } from "../flags";
+import { AGENT_CORRECTION_FLAG_ACTOR, AGENT_FLAG_ACTOR, agentCorrectionFlagKey, agentFlagKey, correctionFlagItem, planAgentFlags } from "../flags";
 import type { ClassReport } from "../report";
 
 function report(sid: string, patch: Partial<ClassReport> = {}): ClassReport {
@@ -49,5 +49,22 @@ describe("planAgentFlags", () => {
 
   it("keys a flag by class, text and audit version", () => {
     expect(agentFlagKey({ wiseSessionId: "6a0000000000000000000a01", fieldsSha256: "abc", auditVersion: 2 })).toBe("agent-audit:6a0000000000000000000a01:abc:2");
+  });
+});
+
+describe("correctionFlagItem", () => {
+  it("asks for a re-review of a corrected class: keyed per class, the original severity, mode codes only", () => {
+    const item = correctionFlagItem({ wiseSessionId: "6a0000000000000000000a01", fieldsSha256: "e".repeat(64), modes: ["M03", "M06", "M03"], severity: "major", criticalCategory: null });
+    expect(item).toEqual({
+      wiseSessionId: "6a0000000000000000000a01", fieldsSha256: "e".repeat(64), idempotencyKey: "agent-correction:6a0000000000000000000a01",
+      severity: "major", suggestedSeverity: "factual", suggestedCategory: null, note: "corrected by the nightly agent: M03, M06",
+      incident: false, modes: ["M03", "M06", "M03"], createdBy: AGENT_CORRECTION_FLAG_ACTOR,
+    });
+    // Raised by the correction's own actor: the audit's nightly flag cap (`countAgentFlags`) never counts it.
+    expect(AGENT_CORRECTION_FLAG_ACTOR).not.toBe(AGENT_FLAG_ACTOR);
+    expect(agentCorrectionFlagKey("6a0000000000000000000a01")).toBe(item.idempotencyKey);
+    expect(correctionFlagItem({ wiseSessionId: "6a0000000000000000000a01", fieldsSha256: "e", modes: ["M01"], severity: "critical", criticalCategory: "wrong_person" }))
+      .toMatchObject({ suggestedSeverity: "critical", suggestedCategory: "wrong_person", incident: false });
+    expect(correctionFlagItem({ wiseSessionId: "6a0000000000000000000a01", fieldsSha256: "e", modes: ["M01"], severity: "critical", criticalCategory: "not_a_category" }).suggestedCategory).toBeNull();
   });
 });
