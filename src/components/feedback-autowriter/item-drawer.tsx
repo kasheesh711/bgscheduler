@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { AutowriterDashboard } from "@/lib/feedback-autowriter/dashboard";
 import { HOLD_REASON_CATEGORY_LABELS, holdReasonCategory, holdReasonLabel } from "@/lib/feedback-autowriter/hold-reasons";
-import { failedPostTitle, holdUrgency, incidentTitle, isListedIncident, type InboxItem } from "@/lib/feedback-autowriter/inbox";
+import { failedPostTitle, holdUrgency, incidentTitle, isListedIncident, noShowTitle, type InboxItem } from "@/lib/feedback-autowriter/inbox";
 import type { AutowriterReview, ReviewQueueItem } from "@/lib/feedback-autowriter/review-data";
 import { cn } from "@/lib/utils";
 import { Tag, Upper, type Tone } from "./atoms";
@@ -223,14 +223,16 @@ export function ReviewBody({ item, newer = null, canControl, onRecorded, onReloa
 }
 
 /** A held class: why, until when, what is stored, and what the judge said. */
-export function HoldBody({ hold, row, now }: { hold: Hold; row: ClassRow | null; now: Date }) {
+export function HoldBody({ hold, row, now, canControl = false, onPosted }: {
+  hold: Hold; row: ClassRow | null; now: Date; canControl?: boolean; onPosted?: () => Promise<void> | void;
+}) {
   const written = hold.resolvedBy === "tutor_wrote";
   const overdue = hold.deadlineAt !== null && new Date(hold.deadlineAt).getTime() <= now.getTime();
   return (
     <div className="space-y-4">
       <div className="space-y-2">
         <Upper className="block">Why it is held</Upper>
-        <p className="text-sm font-medium">{holdReasonLabel(hold.reason)}</p>
+        <p className="text-sm font-medium">{hold.noShow ? noShowTitle(hold.noShow.tutorMinutes) : holdReasonLabel(hold.reason)}</p>
         <div className="flex flex-wrap items-center gap-2">
           <Tag>{HOLD_REASON_CATEGORY_LABELS[holdReasonCategory(hold.reason)]}</Tag>
           {written
@@ -254,6 +256,9 @@ export function HoldBody({ hold, row, now }: { hold: Hold; row: ClassRow | null;
           ["Alert emailed", hold.alertSentAt ? when(hold.alertSentAt) : "Not emailed"],
         ]} />
       </Block>
+      {hold.noShow && !written ? (
+        <NoShowNote wiseSessionId={hold.wiseSessionId} noShow={hold.noShow} canControl={canControl} onPosted={onPosted} />
+      ) : null}
       <StoredDraft row={row} label="Stored draft (not posted)" />
       {hold.hasDraft && !row?.fields ? (
         <Block label="Stored draft (not posted)">
@@ -267,6 +272,62 @@ export function HoldBody({ hold, row, now }: { hold: Hold; row: ClassRow | null;
       ) : null}
       <WiseLink href={hold.wiseUrl} />
     </div>
+  );
+}
+
+/**
+ * The standard note of a no-show class and the owner's one click. The server re-checks everything on a fresh read
+ * (still a no-show, nobody has written, billing unchanged) before the single POST.
+ */
+function NoShowNote({ wiseSessionId, noShow, canControl, onPosted }: {
+  wiseSessionId: string;
+  noShow: NonNullable<Hold["noShow"]>;
+  canControl: boolean;
+  onPosted?: () => Promise<void> | void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const post = async () => {
+    if (!window.confirm("Post this no-show note to Wise? Check with the tutor first if the lesson may have happened outside the Wise room.")) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/feedback-autowriter/no-show", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "post_note", wiseSessionId }),
+      });
+      if (!response.ok) {
+        const json = await response.json().catch(() => null) as { error?: unknown } | null;
+        setError(typeof json?.error === "string" ? json.error.replaceAll("_", " ") : `HTTP ${response.status}`);
+        return;
+      }
+      await onPosted?.();
+    } catch {
+      setError("Could not post the note.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Block label="No-show note (ready, not posted)">
+      <p className="mb-2 text-xs text-muted-foreground">
+        Wise shows the student in the room for {noShow.studentSeconds} s while the tutor waited {noShow.tutorMinutes} min. The note
+        below marks the class as a no-show, so it is not counted as late feedback. If the lesson happened elsewhere, the tutor
+        should write it instead.
+      </p>
+      <Facts rows={[
+        ["Topics", noShow.note.topics],
+        ["Performance", noShow.note.performance],
+        ["Improvement", noShow.note.improvement],
+      ]} />
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {canControl
+          ? <Button size="sm" variant="outline" disabled={busy} onClick={() => void post()}>Post this no-show note</Button>
+          : <p className="text-xs text-muted-foreground">Only the owner posts it.</p>}
+        {error ? <span role="status" className="text-xs text-red-700">{error}</span> : null}
+      </div>
+    </Block>
   );
 }
 
@@ -385,6 +446,11 @@ export function IncidentBody({ incident, about, canControl, onAcknowledged, onOp
         <Upper className="block">What happened</Upper>
         <p className="text-sm font-medium">{incidentTitle(incident.kind)}</p>
         <p className="text-xs text-muted-foreground">{incident.summary}</p>
+        {incident.link ? (
+          <a href={incident.link} target="_blank" rel="noreferrer" className="inline-block text-xs font-medium text-primary underline underline-offset-2">
+            Open the record in Atom
+          </a>
+        ) : null}
         <div className="flex flex-wrap items-center gap-2">
           <Tag tone={incident.severity === "critical" ? "red" : "neutral"}>{incident.severity === "critical" ? "Critical" : "Info"}</Tag>
           {incident.acknowledgedAt ? <Tag tone="green">Acknowledged</Tag> : null}
@@ -419,7 +485,7 @@ export function IncidentBody({ incident, about, canControl, onAcknowledged, onOp
           <p className="text-xs text-muted-foreground">
             {incident.severity === "critical"
               ? "Acknowledging stops the alert's pushes, and an undelivered alert no longer keeps the review job red."
-              : "Style results are shown here only, never pushed. Acknowledging takes it off the list."}
+              : "Shown here only, never pushed. Acknowledging takes it off the list."}
           </p>
         </div>
       ) : null}
@@ -499,7 +565,8 @@ export function ItemDrawer({ target, dashboard, review, now, canControl, onChang
               canControl={canControl} onReload={() => setPin(nextReviewPin(pinned, shown, content.item, true))}
               onRecorded={async (outcome) => { if (outcome === "recorded") await done("Verdict recorded."); else await onChanged(); }} />
           ) : null}
-          {content?.kind === "hold" ? <HoldBody hold={content.hold} row={content.row} now={now} /> : null}
+          {content?.kind === "hold"
+            ? <HoldBody hold={content.hold} row={content.row} now={now} canControl={canControl} onPosted={() => done("No-show note posted.")} /> : null}
           {content?.kind === "failed_post"
             ? <FailedPostBody post={content.post} row={content.row} reviewable={content.reviewable} onOpen={onOpen} /> : null}
           {content?.kind === "class" ? <ClassBody row={content.row} /> : null}

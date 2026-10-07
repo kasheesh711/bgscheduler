@@ -1,5 +1,6 @@
 import { loadAtomLessonEvidence, retainIsebEvidence, storedIsebEvidenceMatches, eligibleForIseb } from "./atom/data";
 import { hasAtomEvidenceWording } from "./atom/statistics";
+import { detectNoShow } from "./no-show";
 import { matchingFormatStamp } from "./format";
 import { approvedFormatGuide, atomRolloutApproved } from "./iseb-rollout";
 import { MIMI_STYLE_GUIDE_V2 } from "./style";
@@ -508,7 +509,10 @@ async function settleGate(input: {
   }
   const state = disposition === "scope" ? "skipped_scope" : disposition === "human" ? "skipped_human" : disposition === "expired" ? "expired" : "held";
   const alertKind: AlertKind | null = state === "held" ? "held" : state === "expired" ? "expired" : null;
-  await release({ ...(state === "held" ? input.draftPatch ?? {} : {}), state, reason, alertKind });
+  // A student who never joined while the tutor waited: the hold carries the standard note, ready for one click.
+  const noShow = state === "held" ? detectNoShow(detail, reason) : null;
+  const patch = state === "held" ? input.draftPatch ?? {} : {};
+  await release({ ...patch, ...(noShow ? { metadata: { ...(patch.metadata ?? {}), noShow } } : {}), state, reason, alertKind });
   return out(state, reason);
 }
 

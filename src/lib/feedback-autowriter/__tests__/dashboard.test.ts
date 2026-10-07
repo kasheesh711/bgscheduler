@@ -383,13 +383,14 @@ describe("buildAutowriterDashboard: what needs the owner", () => {
       hasDraft: false,
       resolvedBy: null,
       wiseUrl: "https://learn.begiftededucation.com/links?type=classroom_entity&entityType=session&entityId=old&classId=6a0000000000000000000001&profile=teacher",
+      noShow: null,
     });
     // Postgres writes the time as text, in the session's time zone.
     expect(board.holds.find((row) => row.wiseSessionId === "later")).toMatchObject({ tutorKey: "Kevin", alertSentAt: "2026-09-30T03:20:05.123Z", hasDraft: true });
     expect(board.holds.find((row) => row.wiseSessionId === "sooner")?.alertSentAt).toBe("2026-09-30T03:20:05.500Z");
     expect(board.holds.find((row) => row.wiseSessionId === "no-deadline")).toEqual({
       wiseSessionId: "no-deadline", tutor: STRANGER, tutorKey: STRANGER, className: null, classEndedAt: null, deadlineAt: null, reason: null,
-      alertSentAt: null, hasDraft: false, resolvedBy: null, wiseUrl: null,
+      alertSentAt: null, hasDraft: false, resolvedBy: null, wiseUrl: null, noShow: null,
     });
     expect(board.holds.find((row) => row.wiseSessionId === "nobody")).toMatchObject({ tutor: "unknown", tutorKey: "unknown" });
     // The window's own counts are untouched by holds from outside it.

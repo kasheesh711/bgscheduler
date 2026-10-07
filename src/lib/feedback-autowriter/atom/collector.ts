@@ -54,6 +54,16 @@ export function atomFailureCause(error: unknown): string {
   return /^[A-Za-z]{1,40}$/u.test(error.name) ? error.name : "unknown";
 }
 
+/** What a person does about a failed run, by its code (the alert is pushed, so it says so in one line). */
+export function atomNextStep(code: string): string {
+  switch (code) {
+    case "authentication_failed": return "Next: check the Atom login (ATOM_USERNAME / ATOM_PASSWORD) by signing in to Atom with it.";
+    case "response_changed": return "Next: Atom changed a page or response; the collector needs updating before Atom data returns.";
+    case "source_contradiction": return "Next: a student's Atom data belongs to someone else or another subject; check that student's Atom link on the Atom review page.";
+    default: return "Next: usually passing (Wise or Atom slow); act only if the next runs fail too.";
+  }
+}
+
 export async function runAtomCollector(input: {
   db: Database;
   openClient: () => Promise<AtomReadClient>;
@@ -211,7 +221,8 @@ export async function runAtomCollector(input: {
   if (failure) {
     const incident = {
       dedupeKey: `atom-collection:${bangkokDate(now.toISOString())}:${failure}`,
-      summary: `Atom collection needs attention: ${failure} (${failureStage}: ${failureCause}). Lesson-only feedback remains available.`,
+      summary: `Atom collection needs attention: ${failure} (${failureStage}: ${failureCause}). Lesson-only feedback remains available. ` +
+        atomNextStep(failure),
       detail: { runId, code: failure, stage: failureStage, cause: failureCause, studentResults },
     };
     if (!await recordIncident(db, { ...incident, kind: "atom_collection_failed", severity: "critical" })) {
