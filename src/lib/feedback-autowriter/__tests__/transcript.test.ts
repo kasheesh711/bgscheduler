@@ -151,6 +151,43 @@ Ek: Can you hear me on the tablet?
       .toBe("zoom_alignment");
   });
 
+  it("does not let many small straddling speakers skip the purity check", () => {
+    const TEACHER = "Apivit (Ek) Sirithana Online";
+    const STUDENT = "Anucha (Nont.Bo) Boonmee";
+    const cues = [
+      { speakerName: TEACHER, startMs: 0, endMs: 1_000 },
+      { speakerName: STUDENT, startMs: 1_000, endMs: 10_000 },
+    ];
+    // Speaker "t" is the tutor; 4 small speakers (4.5% each, 18% together) straddle both sides.
+    const small = [0, 1, 2, 3].map((i): Segment => ({ speaker: `m${i}`, startMs: 400, endMs: 1_400, text: "x".repeat(45) }));
+    const segments: Segment[] = [
+      { speaker: "t", startMs: 0, endMs: 900, text: "t".repeat(250) },
+      { speaker: "s", startMs: 2_000, endMs: 9_000, text: "s".repeat(570) },
+      ...small,
+    ];
+    expect(assignSpeakerRoles({ segments, zoomCues: cues, teacherName: TEACHER, studentNames: [STUDENT] }).method).toBe("unclear");
+    // A name on both lists is never trusted on the relaxed path.
+    const chatty: Segment[] = [
+      { speaker: "1", startMs: 0, endMs: 800, text: "t".repeat(30) },
+      { speaker: "2", startMs: 900, endMs: 1_500, text: "s".repeat(70) },
+    ];
+    expect(assignSpeakerRoles({ segments: chatty, zoomCues: parseZoomVtt(VTT), teacherName: TEACHER, studentNames: [STUDENT, TEACHER] }).method)
+      .toBe("unclear");
+  });
+
+  it("passes the student's names through buildTranscriptEvidence", () => {
+    const transcript = {
+      text: "",
+      tokens: [
+        { text: "t".repeat(30), start_ms: 0, end_ms: 800, speaker: "1" },
+        { text: "s".repeat(70), start_ms: 900, end_ms: 1_500, speaker: "2" },
+      ],
+    };
+    const base = { transcript, audioDurationMs: null, scheduledMinutes: 60, zoomCues: parseZoomVtt(VTT), teacherName: "Apivit (Ek) Sirithana Online", alsoTeacher: [] };
+    expect(buildTranscriptEvidence(base).speakers.method).toBe("unclear");
+    expect(buildTranscriptEvidence({ ...base, studentNames: ["Anucha (Nont.Bo) Boonmee"] }).speakers.method).toBe("zoom_alignment");
+  });
+
   it("does not trust a Soniox speaker that straddles both people (diarization merged them)", () => {
     const TEACHER = "Apivit (Ek) Sirithana Online";
     const STUDENT = "Anucha (Nont.Bo) Boonmee";
