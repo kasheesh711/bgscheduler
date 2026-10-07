@@ -293,6 +293,12 @@ export async function runWritingPipeline(input: {
   // Every writer is on a zero-retention route, so transcripts get the fallback too.
   // Each tutor's own order: Sol then Luna, or Luna then Sol for the tutors added on 2 Oct (`writersFor`).
   const writers: AutowriterModelConfig[] = input.writers ? [...input.writers] : writersFor(session.canonicalTutorKey);
+  // Drafts every judge level rejected, with the judging of their own writer, for the repair after the loop.
+  const rejected: Array<{
+    arm: ModelArm; output: ModelOutput; verdict: StoredJudgeVerdict; generation: string;
+    judgeDraft: (draftOutput: ModelOutput, judgedGeneration: string) => Promise<
+      { kind: "return"; result: PipelineResult } | { kind: "judged"; verdict: StoredJudgeVerdict | null; problems: string[] }>;
+  }> = [];
   for (const writer of writers) {
     const written = await run(writer, "writer", buildFeedbackMessages({
       studentFullName: session.studentFullName,
@@ -450,43 +456,44 @@ export async function runWritingPipeline(input: {
 
     const first = await judgeDraft(parsed.output, writerGeneration);
     if (first.kind === "return") return first.result;
-    let accepted: { output: ModelOutput; fields: FeedbackFieldAnswers; verdict: StoredJudgeVerdict; repair: DraftRepair["removed"] | null } | null =
-      first.verdict?.faithful ? { output: parsed.output, fields, verdict: first.verdict, repair: null } : null;
-    if (!accepted) {
-      reasons.push(`${writer.arm}:unfaithful:${first.problems.slice(0, 3).join(" | ").slice(0, 300)}`);
-      // Owner decision (7 Oct): drop the claims the judges quoted and judge the trimmed draft again, once, at every
-      // level. Only on a full verdict (both levels gave one): the repair cuts what they quoted, nothing else.
-      const lists = first.verdict ?? null;
-      // The repair is tried before the fallback writer even when both may not fit in this run: a judge never starts
-      // without its full time-out (`run`), so a fallback writer left without time retries the class in a later sweep —
-      // it is not held. (7 Oct: requiring room for repair + fallback skipped every first-writer repair on transcripts.)
-      const repair = lists && !(styleGuide || formatGuide) ? repairRejectedDraft(parsed.output, lists) : null;
-      if (repair) {
-        const repairedFields = finalizeFields(repair.output, session.studentDisplayName);
-        const revalidated = validateFeedbackDraft({
-          output: repair.output,
-          fields: repairedFields,
-          studentFullName: session.studentFullName,
-          tutorNames: input.tutorNames,
-          lessonRecord: session.summary.text + (atomEvidence?.activities.length ? "\nAtom learning" : ""),
-          priorFeedback: input.priorFeedback.filter((prior) => prior.key !== session.wiseSessionId),
-        });
-        const revalidationReasons = [...(revalidated.ok ? [] : revalidated.reasons), ...validateAtomStatisticClaims(repairedFields, atomEvidence)];
-        if (revalidationReasons.length) {
-          reasons.push(...revalidationReasons.map((reason) => `${writer.arm}:repair:${reason}`));
-        } else {
-          const second = await judgeDraft(repair.output, `${writerGeneration}:repair`);
-          if (second.kind === "return") return second.result;
-          if (second.verdict?.faithful) {
-            accepted = { output: repair.output, fields: repairedFields, verdict: second.verdict, repair: repair.removed };
-          } else {
-            reasons.push(`${writer.arm}:repair:unfaithful:${second.problems.slice(0, 3).join(" | ").slice(0, 300)}`);
-          }
-        }
-      }
+    if (first.verdict?.faithful) {
+      return { kind: "draft", arm: writer.arm, output: parsed.output, fields, judge: first.verdict, ...(styleStamp ? { styleGuide: styleStamp } : {}), ...(formatStamp ? { formatGuide: formatStamp } : {}), ...(atomEvidence ? { atomEvidence } : {}) };
     }
-    if (!accepted) continue;
-    return { kind: "draft", arm: writer.arm, output: accepted.output, fields: accepted.fields, judge: accepted.verdict, ...(accepted.repair ? { repair: accepted.repair } : {}), ...(styleStamp ? { styleGuide: styleStamp } : {}), ...(formatStamp ? { formatGuide: formatStamp } : {}), ...(atomEvidence ? { atomEvidence } : {}) };
+    reasons.push(`${writer.arm}:unfaithful:${first.problems.slice(0, 3).join(" | ").slice(0, 300)}`);
+    // Kept for a repair once every writer has had its turn (only on a full verdict: both levels gave one).
+    if (first.verdict) rejected.push({ arm: writer.arm, output: parsed.output, verdict: first.verdict, judgeDraft, generation: writerGeneration });
+  }
+
+  // Owner decision (7 Oct): when every writer's draft was rejected, drop the claims the judges quoted and judge the
+  // trimmed draft again at every level — once, latest writer first. Tried after the fallback writer, never instead
+  // of it: a repair's judging cannot take the time the fallback writer needs, and a run that runs out of time here
+  // retries the class with the same order (7 Oct review of #170).
+  if (!(styleGuide || formatGuide)) {
+    for (const candidate of rejected.toReversed()) {
+      const repair = repairRejectedDraft(candidate.output, candidate.verdict);
+      if (!repair) continue;
+      const repairedFields = finalizeFields(repair.output, session.studentDisplayName);
+      const revalidated = validateFeedbackDraft({
+        output: repair.output,
+        fields: repairedFields,
+        studentFullName: session.studentFullName,
+        tutorNames: input.tutorNames,
+        lessonRecord: session.summary.text + (atomEvidence?.activities.length ? "\nAtom learning" : ""),
+        priorFeedback: input.priorFeedback.filter((prior) => prior.key !== session.wiseSessionId),
+      });
+      const revalidationReasons = [...(revalidated.ok ? [] : revalidated.reasons), ...validateAtomStatisticClaims(repairedFields, atomEvidence)];
+      if (revalidationReasons.length) {
+        reasons.push(...revalidationReasons.map((reason) => `${candidate.arm}:repair:${reason}`));
+        continue;
+      }
+      const second = await candidate.judgeDraft(repair.output, `${candidate.generation}:repair`);
+      if (second.kind === "return") return second.result;
+      if (second.verdict?.faithful) {
+        return { kind: "draft", arm: candidate.arm, output: repair.output, fields: repairedFields, judge: second.verdict, repair: repair.removed, ...(atomEvidence ? { atomEvidence } : {}) };
+      }
+      reasons.push(`${candidate.arm}:repair:unfaithful:${second.problems.slice(0, 3).join(" | ").slice(0, 300)}`);
+      break;
+    }
   }
   return { kind: "held", reasons };
 }
