@@ -1,6 +1,6 @@
 # Search, Compare & Platform Core API
 
-Mechanical HTTP reference for the **11 endpoints across 10 route files** that have no group page of their own: the tutor search and range-search workspace, the AI-scheduler assistant turn, compare and discover, the tutor/filter dropdown reads, the home summary that feeds the nav badges, the session-authenticated Wise-sync trigger, and the Auth.js catch-all.
+Mechanical HTTP reference for the **12 endpoints across 11 route files** that have no group page of their own: the tutor search and range-search workspace, the AI-scheduler assistant turn, compare and discover, the tutor/filter dropdown reads, the home summary that feeds the nav badges, the session-authenticated Wise-sync trigger, and the Auth.js catch-all.
 
 > **Canonical-home rule.** This page owns request/response signatures, side effects and status codes. *Why* these endpoints exist — the fail-closed availability doctrine, the compare workflow, what the AI scheduler is allowed to decide — lives in [docs/features/tutor-search.md](../../features/tutor-search.md), [docs/features/tutor-compare.md](../../features/tutor-compare.md) and [docs/features/ai-scheduler.md](../../features/ai-scheduler.md). The master method+path inventory across every group is [index.md](./index.md).
 
@@ -25,7 +25,7 @@ This page used to carry ten more route families — eleven `/api` prefixes. Each
 
 Everything else — AI Scheduler, class assignments, classrooms, credit control, LINE, payroll, proposals, room capacity, sales dashboard, Wise activity, and the internal cron surface — has had its own page all along; [index.md](./index.md) is the routing table.
 
-## Endpoint index (11)
+## Endpoint index (12)
 
 | Method | Path | Auth | Writes | Handler |
 |--------|------|------|--------|---------|
@@ -40,9 +40,10 @@ Everything else — AI Scheduler, class assignments, classrooms, credit control,
 | POST | `/api/admin/sync-wise` | session | full Wise snapshot write + promotion, `cron_invocations` row | [`admin/sync-wise/route.ts:8-24`](../../../src/app/api/admin/sync-wise/route.ts) |
 | GET | `/api/auth/[...nextauth]` | public | Auth.js session cookies; Google OAuth token row at sign-in | [`auth/[...nextauth]/route.ts:3`](../../../src/app/api/auth/[...nextauth]/route.ts) |
 | POST | `/api/auth/[...nextauth]` | public | same | [`auth/[...nextauth]/route.ts:3`](../../../src/app/api/auth/[...nextauth]/route.ts) |
+| POST | `/api/email/resend-webhook` | public (Svix signature in-handler) | one `email_delivery_events` row per `svix-id` (replays are no-ops) | [`email/resend-webhook/route.ts`](../../../src/app/api/email/resend-webhook/route.ts) |
 | POST | `/api/auth/email-code/request` | public, exact Origin | browser-bound code challenge, rate counters and email | [`auth/email-code/request/route.ts`](../../../src/app/api/auth/email-code/request/route.ts) |
 
-Ten route files, eleven endpoints: the Auth.js catch-all exports **two** methods from a single three-line file by destructuring (`export const { GET, POST } = handlers`), so it matches no `export async function` grep — this is the pair that makes the repo-wide count 243 rather than 241.
+Eleven route files, twelve endpoints: the Auth.js catch-all exports **two** methods from a single three-line file by destructuring (`export const { GET, POST } = handlers`), so it matches no `export async function` grep — this is the pair that makes the repo-wide count exceed the named-handler count by two.
 
 **In-repo callers.** Only six of these are reached from application code:
 
@@ -323,6 +324,23 @@ What the repo *does* own is the configuration ([`auth.ts:32-73`](../../../src/li
 The edge-side variant used by middleware is [`src/lib/auth-edge.ts`](../../../src/lib/auth-edge.ts); it shares the JWT but not the database callbacks.
 
 ---
+
+## Email webhook
+
+### `POST /api/email/resend-webhook`
+
+Resend delivery events (bounce, complaint, delivered, and so on). Middleware-public (`isPublicRoute` in `src/proxy.ts`); authenticated in-handler by the Svix signature (`svix-id`, `svix-timestamp`, `svix-signature`) against `RESEND_WEBHOOK_SECRET`.
+
+| Status | When |
+|---|---|
+| 503 | `RESEND_WEBHOOK_SECRET` unset |
+| 413 | `content-length` above 256,000 bytes |
+| 401 | Signature, timestamp window, or `svix-id` missing/invalid |
+| 200 `{ ok: true, ignored: true }` | Verified but not a parseable event |
+| 200 `{ ok: true }` | Stored (duplicate `svix-id` is a no-op via `ON CONFLICT DO NOTHING`) |
+| 500 | Store failed; Svix retries with backoff |
+
+Bounces and complaints are logged by event type, bounce type and message id only.
 
 ## Tests
 

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../data", () => ({
   getClassroomAssignmentForDate: vi.fn(),
@@ -11,6 +11,7 @@ vi.mock("../admin-email-claim", async (importOriginal) => ({
 }));
 import { assertAdminEmailClaim, sentAdminRecipients } from "../admin-email-claim";
 
+import type { Database } from "@/lib/db";
 import { getClassroomAssignmentForDate } from "../data";
 import { sendAdminClassroomScheduleEmail } from "../admin-schedule-email";
 
@@ -124,6 +125,8 @@ function makeDb(input: {
 }
 
 describe("sendAdminClassroomScheduleEmail", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(sentAdminRecipients).mockResolvedValue(new Set());
@@ -284,5 +287,15 @@ describe("sendAdminClassroomScheduleEmail", () => {
     const final = await sendAdminClassroomScheduleEmail(makeDb({}) as never, { ...options, now: new Date("2026-05-25T12:46:00Z") });
     expect(final.status).toBe("sent");
     expect(sender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ subject: expect.stringContaining("ACTION REQUIRED"), text: expect.stringContaining("17:00") }));
+  });
+  it("skips without touching the database when CLASSROOM_ADMIN_EMAIL_ENABLED=false", async () => {
+    vi.stubEnv("CLASSROOM_ADMIN_EMAIL_ENABLED", "false");
+    const db = { select: vi.fn(), insert: vi.fn(), update: vi.fn() } as unknown as Database;
+    const sender = { sendEmail: vi.fn() };
+    const result = await sendAdminClassroomScheduleEmail(db, { sender, assignmentDate: "2026-10-08" });
+    expect(result).toMatchObject({ status: "skipped", assignmentDate: "2026-10-08", attempted: 0 });
+    expect(result.message).toMatch(/disabled/i);
+    expect(sender.sendEmail).not.toHaveBeenCalled();
+    expect(db.select).not.toHaveBeenCalled();
   });
 });

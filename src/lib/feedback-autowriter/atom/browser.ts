@@ -118,7 +118,7 @@ export async function openAtomReadClient(input: {
     return {
       catalog: [...catalog.values()].sort((a, b) => a.name.localeCompare(b.name)),
       collect: async (studentId, dates) => {
-        if (!catalog.has(studentId)) throw new AtomCollectionError("source_contradiction");
+        if (!catalog.has(studentId)) throw new AtomCollectionError("source_contradiction", "student_not_in_catalog");
         const wanted = new Set(dates);
         const references = new Map<string, ReturnType<typeof parseActivityIndex>[number]>();
         const prefix = "/ms_mocks/students/" + encodeURIComponent(studentId);
