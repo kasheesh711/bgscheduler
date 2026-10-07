@@ -21,15 +21,27 @@ Use a **subdomain**, never the root domain. Google Workspace owns the root's mai
 1. Resend → **Domains → Add domain**
    - Domain: `notify.begiftededucation.com`
    - Region: **Tokyo (ap-northeast-1)** if offered. It's closest to the app's Singapore servers. Otherwise use the default.
-2. Resend shows 3–4 DNS records. Add them **exactly as shown** wherever DNS for `begiftededucation.com` is managed (registrar, Cloudflare, or Google Domains/Squarespace):
+2. Resend shows three DNS records: one TXT for DKIM and two CNAMEs for sending and bounces (Tokyo region). Add them at **Squarespace Domains**, where DNS for `begiftededucation.com` lives:
+   1. Go to https://account.squarespace.com/domains, select `begiftededucation.com`, then **DNS** → **DNS Settings**.
+   2. Scroll to **Custom records** and click **Add record** once per row below. Squarespace adds `.begiftededucation.com` to the host itself, so type only the short host.
 
-   | Type | Name (host) | Purpose |
-   |---|---|---|
-   | MX | `send.notify` | Bounce handling |
-   | TXT | `send.notify` | SPF (`v=spf1 include:amazonses.com ~all`) |
-   | TXT | `resend._domainkey.notify` | DKIM signature |
+   | Type | Host (type exactly) | Data / value | TTL |
+   |---|---|---|---|
+   | TXT | `resend._domainkey.notify` | the long `p=MIGfMA0…IDAQAB` string from Resend, pasted whole with no quotes or spaces | default |
+   | CNAME | `rsend.notify` | `rsend-apne1.forge.rmta.net` | default |
+   | CNAME | `send.notify` | `send.forge.rmta.net` | default |
 
-   Most DNS panels append the root domain automatically. Enter the host as shown in Resend, without `.begiftededucation.com`, unless the panel asks for the full name.
+   3. Save each record. Leave the **Google Workspace** preset (MX, SPF, DKIM on the root `@`) alone.
+   4. Check from a terminal after 5–30 minutes (all three should print a value):
+      ```bash
+      dig +short TXT resend._domainkey.notify.begiftededucation.com
+      ```
+      ```bash
+      dig +short CNAME send.notify.begiftededucation.com
+      ```
+      ```bash
+      dig +short CNAME rsend.notify.begiftededucation.com
+      ```
 
 3. **Recommended:** add a DMARC record for the subdomain:
    - Type `TXT`, Name `_dmarc.notify`, Value `v=DMARC1; p=none; rua=mailto:kevhsh7@gmail.com`
