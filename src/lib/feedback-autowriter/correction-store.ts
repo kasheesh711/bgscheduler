@@ -54,6 +54,13 @@ const P = schema.feedbackAutowriterPosts;
  * and waiting for our event). A run gives it back when it ends; one that dies keeps the backstop sweeps off this long.
  */
 export const CORRECTION_LOCK_LEASE_MS = 20 * 60_000;
+/**
+ * How long taking the lock waits for a sweep that holds the lease, and how often it tries. A backstop sweep (:08/:38)
+ * ran p50 2 s, p90 75 s, p99 4.3 min over 7 days to 7 Oct 2026: a correction starting at :10/:40 met it often enough
+ * that two verified corrections were refused `lock:sweep_running` that morning. Nothing is sent while waiting.
+ */
+export const CORRECTION_LOCK_WAIT_MS = 5 * 60_000;
+export const CORRECTION_LOCK_POLL_MS = 15_000;
 /** A POST claim that began before our halt committed can still commit after it: wait this long, then look for one. */
 export const CORRECTION_LOCK_SETTLE_MS = 2_000;
 /**
@@ -242,7 +249,12 @@ export function pgCorrectionStore(db: Database, opts: {
 
     async lock(plan) {
       if (held) throw new CorrectionStoreError("lock_already_held");
-      const token = await acquireSweepLease(db, CORRECTION_LOCK_LEASE_MS);
+      // A running sweep is waited for (bounded by attempts, not the clock, so a stubbed sleep cannot spin).
+      let token = await acquireSweepLease(db, CORRECTION_LOCK_LEASE_MS);
+      for (let attempt = 1; !token && attempt <= CORRECTION_LOCK_WAIT_MS / CORRECTION_LOCK_POLL_MS; attempt += 1) {
+        await sleep(CORRECTION_LOCK_POLL_MS);
+        token = await acquireSweepLease(db, CORRECTION_LOCK_LEASE_MS);
+      }
       if (!token) return { ok: false, reason: "sweep_running" };
       const reason = correctionLockReason(token, plan.wiseSessionId);
       let halted = false;

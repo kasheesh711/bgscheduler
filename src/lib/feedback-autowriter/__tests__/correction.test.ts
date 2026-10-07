@@ -692,11 +692,30 @@ describe("correctPostGuarded: the fresh read under the lock (refused → release
     expect(result.log.indexOf("store:lock")).toBeLessThan(result.log.indexOf("wise:events#1"));
   });
 
+  it("does not count the wait for a running sweep, inside taking the lock, against the lock budget", async () => {
+    const log: string[] = [];
+    const time = clock();
+    const wise = fakeWise(time, log);
+    const store = memoryStore(log, time, { onLock: () => time.advance(CORRECTION_LOCK_BUDGET_MS + 60_000) });
+    const outcome = await correctPostGuarded({
+      ops: wise, store, plan: plan(), apiActorId: API_ACTOR, allowlist: AUTOWRITER_TEACHER_ALLOWLIST, disabledTutors: [],
+      aiSuspect: AI_SUSPECT, textProblems: () => [], now: time.now, sleep: time.sleep, eventWaitMs: 0,
+    });
+    expect(outcome).not.toMatchObject({ reason: "lock_budget" });
+    expect(wise.postFeedback).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses once the lock budget is spent", async () => {
     const log: string[] = [];
     const time = clock();
     const wise = fakeWise(time, log);
-    const store = memoryStore(log, time, { onLock: () => time.advance(CORRECTION_LOCK_BUDGET_MS) });
+    // The budget is spent under the lock: the events read after it took the whole budget.
+    const events = wise.findFeedbackEvents.getMockImplementation()!;
+    wise.findFeedbackEvents.mockImplementation(async (...args) => {
+      if (log.includes("store:lock")) time.advance(CORRECTION_LOCK_BUDGET_MS);
+      return events(...args);
+    });
+    const store = memoryStore(log, time);
     const outcome = await correctPostGuarded({
       ops: wise, store, plan: plan(), apiActorId: API_ACTOR, allowlist: AUTOWRITER_TEACHER_ALLOWLIST, disabledTutors: [],
       aiSuspect: AI_SUSPECT, textProblems: () => [], now: time.now, sleep: time.sleep, eventWaitMs: 0,

@@ -563,8 +563,9 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
   if (baselineProblems.length > 0) return refuse("wise", baselineProblems.map((problem) => `credit_baseline:${problem}`).join(","));
   guards.push("wise_state_before_lock", "credit_baseline");
 
-  // 5. The lock.
-  const lockStartedAt = now().getTime();
+  // 5. The lock. Its budget runs from when `lock` returns: waiting there for a running sweep is not part of it (the
+  // autowriter is not halted while it waits; only the 2 s settle after the halt falls outside the budget).
+  let lockStartedAt = now().getTime();
   let lock: CorrectionLock | null = null;
   if (dryRun) {
     guards.push("lock (not taken: dry run)");
@@ -577,6 +578,7 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
     }
     if (!locked.ok) return refuse("lock", `lock:${locked.reason}`);
     lock = locked.lock;
+    lockStartedAt = now().getTime();
     guards.push("lock");
   }
   const held = lock;

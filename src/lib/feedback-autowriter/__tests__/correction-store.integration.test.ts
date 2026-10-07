@@ -317,6 +317,17 @@ describe("the correction lock", () => {
     expect(at.getTime()).toBeLessThanOrEqual((await dbNow()).getTime());
   });
 
+  it("waits for a sweep that holds the lease and takes the lock once the sweep ends", async () => {
+    const plan = planFor(await postedWithFirstShot());
+    const sweep = (await acquireSweepLease(db, 60_000))!;
+    let waits = 0;
+    // Only the polls count; the 2 s settle after the halt sleeps too.
+    const result = await store(async (ms) => { if (ms === 15_000 && ++waits === 3) await releaseSweepLease(db, sweep); }).lock(plan);
+    expect(result.ok).toBe(true);
+    expect(waits).toBe(3);
+    if (result.ok) await result.lock.release();
+  });
+
   it("is refused while halted, not live, a sweep holds the lease, or any POST is unsettled — leaving nothing behind", async () => {
     const plan = planFor(await postedWithFirstShot());
 
@@ -332,7 +343,10 @@ describe("the correction lock", () => {
     await updateControl(db, { mode: "live" }, OWNER);
 
     const sweep = (await acquireSweepLease(db, 60_000))!;
-    expect(await store().lock(plan)).toEqual({ ok: false, reason: "sweep_running" });
+    const waits: number[] = [];
+    expect(await store(async (ms) => { waits.push(ms); }).lock(plan)).toEqual({ ok: false, reason: "sweep_running" });
+    // It waited for the sweep (every 15 s, for 5 min) before giving up.
+    expect(waits).toEqual(Array(20).fill(15_000));
     expect(await readControl(db)).toMatchObject({ haltedAt: null });
     await releaseSweepLease(db, sweep);
 
