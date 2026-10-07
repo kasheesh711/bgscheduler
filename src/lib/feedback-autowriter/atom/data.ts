@@ -1,4 +1,5 @@
 import { and, desc, eq, sql } from "drizzle-orm";
+import { z } from "zod";
 import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
@@ -45,6 +46,16 @@ export async function approveAtomLink(db: Database, input: {
     }).returning();
     return created;
   });
+}
+
+const SkippedRecords = z.array(z.object({ id: z.string(), startedAt: z.string(), completedAt: z.string() }).passthrough());
+
+/** `counts.skipped[atomStudentId]` of a collector run; anything unreadable counts as none. */
+export function skippedRecordsOf(counts: unknown, atomStudentId: string): { id: string; startedAt: string; completedAt: string }[] {
+  const all = counts && typeof counts === "object" ? (counts as { skipped?: unknown }).skipped : undefined;
+  const mine = all && typeof all === "object" ? (all as Record<string, unknown>)[atomStudentId] : undefined;
+  const parsed = SkippedRecords.safeParse(mine ?? []);
+  return parsed.success ? parsed.data.map(({ id, startedAt, completedAt }) => ({ id, startedAt, completedAt })) : [];
 }
 
 export async function loadAtomLessonEvidence(db: Database, input: {
@@ -100,8 +111,12 @@ export async function loadAtomLessonEvidence(db: Database, input: {
       return { ...body, status: "contradiction", contradictions: ["snapshot_hash_conflict"],
         hash: evidenceHash({ ...body, status: "contradiction", contradictions: ["snapshot_hash_conflict"] }) };
     }
+    // The run that produced this snapshot lists the records it skipped for the student (their counts disagree).
+    const skipped = snapshot && studentRun && studentCode === "succeeded" && studentRun.id === snapshot.runId
+      ? skippedRecordsOf(studentRun.counts, link.atomStudentId) : [];
     return buildAtomLessonEvidence({
       ...base,
+      skipped,
       link: { ...link, approvedAt: link.approvedAt.toISOString() } satisfies AtomStudentLink,
       snapshot: snapshot && parsed?.success ? { id: snapshot.id, studentId: snapshot.atomStudentId,
         sourceHash: snapshot.sourceHash, collectedAt: snapshot.collectedAt.toISOString(), activities: parsed.data } : null,

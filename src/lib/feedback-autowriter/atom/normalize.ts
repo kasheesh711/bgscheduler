@@ -17,6 +17,10 @@ function contradiction(check: string, ref: Pick<AtomActivityReference, "kind" | 
   return new AtomCollectionError("source_contradiction",
     `${check}:${ref.kind}:${/^_[0-9]+$/u.test(ref.id) ? ref.id : "id"}${counts ? `|${counts}` : ""}`);
 }
+/** Only count disagreements between Atom's two views of one record; never a student, identity or subject check. */
+export function isSkippableContradiction(error: unknown): error is AtomCollectionError {
+  return error instanceof AtomCollectionError && error.code === "source_contradiction" && /^list_vs_transcript_/u.test(error.stage ?? "");
+}
 export const ATOM_SUBJECT_IDS: Readonly<Record<number, AtomSubject>> = {
   235: "english", 236: "verbal_reasoning", 237: "maths", 238: "non_verbal_reasoning",
 };

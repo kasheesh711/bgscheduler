@@ -12,8 +12,8 @@ import { recordIncident, refreshOpenIncident } from "../incidents";
 import { sqlStateOf } from "../db-errors";
 import { atomSubject, bangkokDate, evidenceHash } from "./evidence";
 import { openAtomReadClient, type AtomReadClient } from "./browser";
+import type { AtomLesson, AtomSkippedRecord } from "./types";
 import { AtomCollectionError } from "./normalize";
-import type { AtomLesson } from "./types";
 import { fetchAtomLessonTimetable, isCancelledWiseSession } from "./wise";
 import { configuredAtomTrial } from "./trial";
 import { withAtomTimeout } from "./deadline";
@@ -80,6 +80,8 @@ export async function runAtomCollector(input: {
   }
   let client: AtomReadClient | null = null;
   const studentResults: Record<string, string> = {};
+  // Records left out because their list entry and transcript disagree; the student's other activities are kept.
+  const skippedRecords: Record<string, AtomSkippedRecord[]> = {};
   // Assigned only through `fail`; the casts keep TS from narrowing these to their initial null.
   let failure = null as string | null;
   // The step in progress and a fixed cause label, so a failed run says where it stopped.
@@ -157,12 +159,13 @@ export async function runAtomCollector(input: {
         studentResults[studentId] = "collection_failed"; fail("collection_failed", "time_budget"); continue;
       }
       try {
-        const activities = await opened.collect(studentId, [...wanted]);
+        const { activities, skipped } = await opened.collect(studentId, [...wanted]);
         if (stopped) return;
         await db.insert(s.feedbackAtomSnapshots).values({
           runId, atomStudentId: studentId, sourceHash: evidenceHash(activities), activities, collectedAt: new Date(),
         });
         studentResults[studentId] = "succeeded";
+        if (skipped.length) skippedRecords[studentId] = skipped;
         snapshots += 1;
         activityCount += activities.length;
       } catch (error) {
@@ -186,11 +189,23 @@ export async function runAtomCollector(input: {
     try {
       await db.update(RUN).set({
         status: failure ? "failed" : "succeeded", finishedAt: new Date(), errorCode: failure,
-        counts: { snapshots: recorded.snapshots, activities: recorded.activities, catalog, studentResults, probe: Boolean(input.probe),
+        counts: { snapshots: recorded.snapshots, activities: recorded.activities, catalog, studentResults, skipped: skippedRecords, probe: Boolean(input.probe),
           trial: Boolean(input.trial), ...(failure ? { failureStage, failureCause } : {}) },
       }).where(eq(RUN.id, runId));
     } finally {
       await withAtomTimeout((client as AtomReadClient | null)?.close() ?? Promise.resolve(), 10_000, "close").catch(() => undefined);
+    }
+  }
+  // One dashboard-only note per skipped record, ever: the data is Atom's to fix, and nothing is held meanwhile.
+  for (const [atomStudentId, records] of Object.entries(skippedRecords)) {
+    for (const record of records) {
+      await recordIncident(db, {
+        dedupeKey: `atom-record-skipped:${record.id}`, kind: "atom_record_skipped", severity: "info",
+        summary: `One Atom ${record.kind === "exam_topic" ? "exam topic" : record.kind} was left out: its list entry and transcript ` +
+          "disagree. The student's other Atom work is still used; open the record in Atom to check it.",
+        detail: { runId, atomStudentId, activityId: record.id, kind: record.kind, cause: record.cause,
+          atomUrl: `https://app.atomlearning.com/tutor/transcript/${record.id}` },
+      });
     }
   }
   if (failure) {

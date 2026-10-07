@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { ATOM_MAX_AGE_MS, type AtomActivity, type AtomLesson, type AtomLessonEvidence, type AtomOmissionReason,
-  type AtomSnapshot, type AtomStudentLink, type AtomSubject, type MatchedAtomActivity } from "./types";
+  type AtomSkippedRecord, type AtomSnapshot, type AtomStudentLink, type AtomSubject, type MatchedAtomActivity } from "./types";
 
 /** Stable JSON hashing also makes object key order irrelevant during read-back. */
 export function evidenceHash(value: unknown): string {
@@ -31,6 +31,8 @@ export function buildAtomLessonEvidence(input: {
   /** Current lesson only. An exact, unique activity name or id can establish an outside-window match. */
   lessonRecord: string;
   unavailableReason?: AtomOmissionReason;
+  /** Records the collector skipped for this student (their list entry and transcript disagree). */
+  skipped?: readonly Pick<AtomSkippedRecord, "id" | "startedAt" | "completedAt">[];
 }): AtomLessonEvidence {
   const { lesson, link, snapshot } = input;
   const evidence: Omit<AtomLessonEvidence, "hash"> = {
@@ -90,6 +92,13 @@ export function buildAtomLessonEvidence(input: {
       modelledTopicEstimates: whole ? activity.modelledTopicEstimates : [],
     };
     evidence.activities.push(matched);
+  }
+  // A skipped record worked on during this lesson has no statistics the writer may use; saying so keeps a score
+  // repeated from the lesson record from reading as if Atom had confirmed it.
+  for (const record of [...(input.skipped ?? [])].sort((a, b) => a.id.localeCompare(b.id))) {
+    if (Date.parse(record.startedAt) < Date.parse(lesson.end) && Date.parse(record.completedAt) >= Date.parse(lesson.start)) {
+      omit("record_skipped", record.id);
+    }
   }
   if (!evidence.activities.length && !evidence.omissions.length) omit("no_matching_activity");
   return finish();

@@ -38,6 +38,14 @@ describe("Atom lesson ownership and statistics", () => {
     const earlier = { ...activity.answers[0], answeredAt: "2026-10-01T08:55:00Z" };
     expect(build({}, [{ ...activity, answers: [earlier, activity.answers[1]] }]).activities[0]).toMatchObject({ portion: "matched_portion", correctAnswers: 0, attemptedQuestions: 1, totalQuestions: 5, sas: null, seconds: 60, modelledTopicEstimates: [] });
   });
+  it("notes a skipped record worked on during the lesson, and ignores one from another time", () => {
+    const during = { id: "_9", startedAt: "2026-10-01T09:20:00Z", completedAt: "2026-10-01T09:40:00Z" };
+    const before = { id: "_8", startedAt: "2026-10-01T07:00:00Z", completedAt: "2026-10-01T08:00:00Z" };
+    const evidence = build({ skipped: [before, during] });
+    expect(evidence.status).toBe("matched");
+    expect(evidence.omissions).toEqual([{ activityId: "_9", reason: "record_skipped" }]);
+    expect(build({ skipped: [during] }, []).status).toBe("omitted");
+  });
   it("uses half-open lesson windows across Bangkok midnight", () => {
     const midnight = { ...lesson, start: "2026-09-30T16:30:00Z", end: "2026-09-30T17:30:00Z" };
     expect(bangkokDate(midnight.start)).toBe("2026-09-30");
