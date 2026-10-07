@@ -125,8 +125,9 @@ export const ATOM_MODEL_RULES = [
   "A score repeated in a lesson summary or transcript is not a validated activity result. If Atom evidence is omitted, leave out test/practice scores, correct-answer counts, percentages, SAS and completion times. Do not assume an unnamed activity was a worksheet or a different platform. Lesson methods and assigned task quantities can still be described.",
   "Exclude results of homework, historical attempts and other tutors' work, even when the tutor discusses or reviews them in this lesson. With matched Atom evidence, every included activity result must come from that evidence and name the activity.",
   "Keep correct answers, attempted questions, total questions, time, SAS and modelled topic estimates distinct. SAS is not a percentage; topic estimates are not raw correctness.",
-  "A matched_portion is only the matched part of an activity: explicitly say so; its denominator is attemptedQuestions, never totalQuestions. Do not report its whole-activity SAS or estimates.",
-  "Preserve assistance and unknown assistance. Not marked assisted does not prove independent mastery. Scores alone do not establish understanding.",
+  "A matched_portion is only the part of an activity done in this lesson: say so in plain words (for example \"in the part of <activity name> we worked through in class\"); its denominator is attemptedQuestions, never totalQuestions. Do not report its whole-activity SAS or estimates.",
+  "Assistance: when it is \"assisted\", say the work was done with the tutor's guidance. When it is \"not_marked_assisted\" or \"unknown\", never claim the student worked independently or unaided, and do not mention assistance at all. Scores alone do not establish understanding.",
+  "The post is read by the student and parent. Never use the evidence's field names or labels (matched, portion, marked, assisted, flag, attemptedQuestions) and never describe how the evidence was selected, checked or limited; state only what the student did, in plain teacher language.",
   "Atom assignments never prove homework was assigned in this class. Only the current lesson record can establish homework.",
   "If the lesson record and Atom explicitly contradict each other about a statistic or ownership, reject the draft for human review; never resolve the conflict by guessing.",
 ].join("\n");

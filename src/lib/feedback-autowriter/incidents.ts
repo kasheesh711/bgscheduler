@@ -53,6 +53,16 @@ export async function recordIncident(db: Database, input: IncidentInput): Promis
   return rows.length > 0;
 }
 
+/**
+ * The latest occurrence's summary and detail on an incident nobody has acknowledged yet. A repeat of a deduplicated
+ * incident (Atom's is one per day and failure code) otherwise keeps the first run's detail all day, even after a later
+ * run learned more. Severity and delivery are untouched, so nothing is pushed again.
+ */
+export async function refreshOpenIncident(db: Database, input: Pick<IncidentInput, "dedupeKey" | "summary" | "detail">): Promise<void> {
+  await db.update(I).set({ summary: input.summary.slice(0, 500), detail: input.detail ?? {} })
+    .where(and(eq(I.dedupeKey, input.dedupeKey), isNull(I.acknowledgedAt)));
+}
+
 export interface IncidentPushChannels {
   emailRecipients: readonly string[];
   lineTo: string | null;

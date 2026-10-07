@@ -8,7 +8,7 @@ import { isPreviewEnvironment } from "@/lib/preview-policy";
 import { isIsebClass } from "../format";
 import { describeClass } from "../prompt";
 import { rosterTutor } from "../roster";
-import { recordIncident } from "../incidents";
+import { recordIncident, refreshOpenIncident } from "../incidents";
 import { sqlStateOf } from "../db-errors";
 import { atomSubject, bangkokDate, evidenceHash } from "./evidence";
 import { openAtomReadClient, type AtomReadClient } from "./browser";
@@ -194,12 +194,14 @@ export async function runAtomCollector(input: {
     }
   }
   if (failure) {
-    await recordIncident(db, {
+    const incident = {
       dedupeKey: `atom-collection:${bangkokDate(now.toISOString())}:${failure}`,
-      kind: "atom_collection_failed", severity: "critical",
       summary: `Atom collection needs attention: ${failure} (${failureStage}: ${failureCause}). Lesson-only feedback remains available.`,
-      detail: { runId, code: failure, stage: failureStage, cause: failureCause },
-    });
+      detail: { runId, code: failure, stage: failureStage, cause: failureCause, studentResults },
+    };
+    if (!await recordIncident(db, { ...incident, kind: "atom_collection_failed", severity: "critical" })) {
+      await refreshOpenIncident(db, incident);
+    }
   }
   return { ok: !failure, runId, snapshots: recorded.snapshots, activities: recorded.activities, catalogStudents: catalog.length, errorCode: failure,
     ...(failure ? { failureStage, failureCause } : {}) };

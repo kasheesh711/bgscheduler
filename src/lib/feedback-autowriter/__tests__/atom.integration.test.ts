@@ -154,9 +154,28 @@ describe("unattended collector and rollout", () => {
     const [run] = await db.select().from(s.feedbackAtomSyncRuns);
     expect(run.counts).toMatchObject({ failureStage: "wise_timetable", failureCause: "timetable_conflict" });
     const [incident] = await db.select().from(s.feedbackAutowriterIncidents);
-    expect(incident.detail).toEqual({ runId: run.id, code: "collection_failed", stage: "wise_timetable", cause: "timetable_conflict" });
+    expect(incident.detail).toEqual({ runId: run.id, code: "collection_failed", stage: "wise_timetable", cause: "timetable_conflict", studentResults: {} });
     expect(incident.summary).toContain("(wise_timetable: timetable_conflict)");
     expect(JSON.stringify([run, incident])).not.toContain("teacher-secret-value");
+  });
+  it("a repeat of the same day's failure refreshes the open incident with the latest cause, without pushing it again", async () => {
+    const { runAtomCollector } = await import("../atom/collector");
+    await db.execute(sql`TRUNCATE feedback_atom_sync_runs, feedback_autowriter_incidents CASCADE`);
+    const failWith = (message: string) => runAtomCollector({ db, deadlineMs: Date.now() + 60000, triggerSource: "admin",
+      probe: { studentId: "_123", date: "2026-09-20" }, fetchDays: async () => { throw new Error(message); }, openClient: vi.fn() });
+    await failWith("Wise timetable occurrences conflict");
+    await db.update(s.feedbackAutowriterIncidents).set({ pushStatus: "sent", pushAttempts: 1 });
+    const second = await failWith("Wise pagination incomplete");
+    if (!("runId" in second) || !second.runId) throw new Error("second run was skipped");
+    const [refreshed] = await db.select().from(s.feedbackAutowriterIncidents);
+    expect(refreshed).toMatchObject({ pushStatus: "sent", pushAttempts: 1, severity: "critical",
+      detail: { runId: second.runId, cause: "pagination_incomplete" } });
+    expect(refreshed.summary).toContain("(wise_timetable: pagination_incomplete)");
+    // Once acknowledged, a later run leaves the record the owner saw alone.
+    await db.update(s.feedbackAutowriterIncidents).set({ acknowledgedAt: new Date(), acknowledgedBy: "owner" });
+    await failWith("Wise timetable occurrences conflict");
+    const [kept] = await db.select().from(s.feedbackAutowriterIncidents);
+    expect(kept.detail).toMatchObject({ runId: second.runId, cause: "pagination_incomplete" });
   });
   it("stops at its own deadline and records where, when the Atom browser never opens", async () => {
     const { runAtomCollector } = await import("../atom/collector");
