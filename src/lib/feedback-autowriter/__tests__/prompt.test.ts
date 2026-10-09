@@ -261,14 +261,15 @@ describe("v4 rules (30 Sep)", () => {
   });
 
   it("v5: never names anyone but the student — other people are referred to generically (owner decision, 30 Sep)", () => {
-    expect(PROMPT_VERSION).toBe(5);
+    expect(PROMPT_VERSION).toBe(6);
     const rules = (evidence: "summary" | "transcript") => messages(evidence, "[00:00] TUTOR: we read chapter two")[0].content.split("\n");
-    // Summary mode: a rule of its own, the last one.
-    expect(rules("summary").at(-1)).toBe(
+    // Summary mode: a rule of its own (12), followed since v6 by the careful-summary rule (13, owner decision 3 Oct).
+    expect(rules("summary").at(-2)).toBe(
       "12. Never name anyone but [STUDENT_1]: refer to any other person generically — " +
       "\"another student\", \"a classmate\", \"a family member\" — never by name.",
     );
-    expect(rules("summary").filter((line) => /^1[23]\. /u.test(line))).toHaveLength(1);
+    expect(rules("summary").at(-1)).toMatch(/^13\. The summary is a machine recap that can mishear and generalise\./u);
+    expect(rules("summary").filter((line) => /^1[23]\. /u.test(line))).toHaveLength(2);
     // Transcript mode: rule 13 already forbade repeating any name; it now says what to write for other people.
     expect(rules("transcript").at(-1)).toBe(
       "13. Names in the transcript may be written in Thai script; never repeat any name — write [STUDENT_1] for the student " +
@@ -412,5 +413,53 @@ describe("otherPeopleNamed", () => {
     expect(otherPeopleNamed("Nathan also said yes. Nathan still had one page. Ploy just finished.", STUDENT_NAME)).toEqual(["Nathan", "Ploy"]);
     const ten = ["Anya", "Bram", "Cleo", "Dara", "Emil", "Faye", "Gino", "Hana", "Ivo", "Juno"];
     expect(otherPeopleNamed(ten.map((name) => `${name} said hello.`).join(" "), STUDENT_NAME)).toEqual(ten.slice(0, 8));
+  });
+});
+
+describe("v6 rule 12: a STUDENT line that only echoes the tutor (nightly audit 3 Oct, M07)", () => {
+  // Invented lesson: the tutor reads a value out of the question and the student repeats it.
+  const record = "[16:15] TUTOR: The question gives the actual size, 5 mm, right?\n[16:58] STUDENT: 5 mm";
+  const system = (evidence: "summary" | "transcript") => buildFeedbackMessages({
+    studentFullName: STUDENT_NAME,
+    tutorNames,
+    classDetails: ["Programme: Y9-11 / G8-10 (Int.)", "Class subject: Biology"],
+    scheduledMinutes: 60,
+    summary: { text: record, meetingUUIDs: [] },
+    evidence,
+  })[0].content;
+
+  it("tells the transcript writer that repeating the tutor is not the student's own answer", () => {
+    expect(PROMPT_VERSION).toBe(6);
+    expect(system("transcript")).toContain(
+      "A STUDENT line that only repeats, confirms or reads out what the tutor has just said (a number, an answer, a word), or a value the question gives, " +
+      "is not [STUDENT_1]'s own answer: never write that [STUDENT_1] found, gave or knew it.",
+    );
+  });
+
+  it("leaves the summary prompt without the transcript-only rule", () => {
+    expect(system("summary")).not.toContain("A STUDENT line that only repeats");
+  });
+});
+
+describe("v6 careful summary mode (owner decision 3 Oct)", () => {
+  const system = (evidence: "summary" | "transcript") => buildFeedbackMessages({
+    studentFullName: STUDENT_NAME,
+    tutorNames,
+    classDetails: ["Programme: Y9-11 / G8-10 (Int.)", "Class subject: Maths"],
+    scheduledMinutes: 60,
+    summary: { text: "Overview: the session covered levels 1-4 and the student asked clarifying questions throughout.", meetingUUIDs: [] },
+    evidence,
+  })[0].content;
+
+  it("tells the summary writer to prefer the detailed sections, skip passing mentions and stock praise", () => {
+    const text = system("summary");
+    expect(text).toContain("Prefer its detailed sections to its opening overview");
+    expect(text).toContain("never a term from one passing mention");
+    expect(text).toContain("Never repeat a generic line about [STUDENT_1] (asked questions throughout, actively engaged, worked confidently)");
+    expect(text).toContain("Never be more specific or more positive than the summary.");
+  });
+
+  it("leaves the transcript prompt without the summary-only rule", () => {
+    expect(system("transcript")).not.toContain("machine recap");
   });
 });

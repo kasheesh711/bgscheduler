@@ -72,7 +72,7 @@ describe("judge v5: both levels must pass", () => {
   const flagged = (patch: Record<string, unknown>) => ({ ...CLEAN, faithful: false, ...patch });
 
   it("is version 5: the v4 prompt at medium and at high", () => {
-    expect(JUDGE_PROMPT_VERSION).toBe(5);
+    expect(JUDGE_PROMPT_VERSION).toBe(6);
     expect(AUTOWRITER_JUDGE_EFFORTS).toEqual(["medium", "high"]);
     // The stored verdict names exactly the levels that judge.
     expect(Object.keys(StoredJudgeVerdictSchema.shape.levels.shape)).toEqual([...AUTOWRITER_JUDGE_EFFORTS]);
@@ -152,7 +152,9 @@ describe("buildJudgeMessages", () => {
       "The student's and the tutor's names are replaced by [STUDENT_1] and [TUTOR]; that is expected. Any other name in the summary is someone else, never [STUDENT_1].",
       "The class details come from the school's system and are true: naming the programme, exam or subject they give is supported.",
       "List every problem of these three kinds, quoting the feedback's own words:",
-      "- unsupported: a factual claim about THIS lesson — topics, what the student did or got wrong, scores, materials, dates — that the summary does not state or clearly imply.",
+      "- unsupported: a factual claim about THIS lesson — topics, what the student did or got wrong, scores, materials, dates — that the summary does not state or clearly imply. " +
+        "So is a generic judgement of the student (asked questions throughout, engaged, confident) that the summary gives only as a stock line with no concrete exchange behind it, " +
+        "and any detail more specific than the summary states it (a range, level, count or named question type).",
       "- misattributed: something the feedback says [STUDENT_1] did, said, finished, got wrong or did not finish, when the summary says it about [TUTOR] or about another person.",
       "- homeworkNotSet: homework, a task or a due date the feedback says was set — everything under \"Homework and due date\", and any such statement in another field — " +
         "unless the summary clearly shows the tutor setting it for [STUDENT_1] to do after this lesson. Work only described as remaining, unfinished or still to complete was not set. " +
@@ -171,7 +173,8 @@ describe("buildJudgeMessages", () => {
       "List every problem of these three kinds, quoting the feedback's own words:",
       "- unsupported: a factual claim about THIS lesson — topics, what the student did or got wrong, scores, materials, dates — that the transcript does not state or clearly imply. " +
         "Claiming the student understood or solved something the transcript only shows the tutor explaining is unsupported.",
-      "- misattributed: something the feedback says [STUDENT_1] did, said, finished, got wrong or did not finish, when the transcript says it about [TUTOR] or about another person.",
+      "- misattributed: something the feedback says [STUDENT_1] did, said, finished, got wrong or did not finish, when the transcript says it about [TUTOR] or about another person. " +
+        "This includes an answer or value the feedback credits to [STUDENT_1] when the STUDENT line only repeats or confirms what the TUTOR line just before said.",
       "- homeworkNotSet: homework, a task or a due date the feedback says was set — everything under \"Homework and due date\", and any such statement in another field — " +
         "unless the transcript clearly shows the tutor setting it for [STUDENT_1] to do after this lesson. Work only described as remaining, unfinished or still to complete was not set.",
       "General advice, encouragement and suggested practice (including practice before the next lesson) are fine and must not be listed, unless they are presented as homework the tutor set.",
@@ -230,5 +233,24 @@ describe("buildJudgeMessages", () => {
     expect(withPeople.content).toContain(`${line}\n\nLesson summary:\n[TUTOR] noted`);
     expect(build("summary", [])[1].content).not.toContain("Other people named");
     expect(build("transcript", ["Nathan"])[1].content).not.toContain("Other people named");
+  });
+});
+
+describe("judge v6: an echoed answer is misattributed (nightly audit 3 Oct, M07)", () => {
+  const build = (evidence: "summary" | "transcript") => buildJudgeMessages({
+    redactedSummary: evidence === "summary"
+      ? "[TUTOR] read the actual size from the question."
+      : "[16:15] TUTOR: The question gives the actual size, 5 mm, right?\n[16:58] STUDENT: 5 mm",
+    classDetails: "- Programme: Y9-11 / G8-10 (Int.)",
+    placeholderFields: FIELDS,
+    evidence,
+    otherPeople: [],
+  });
+
+  it("lists crediting a repeated tutor value to the student, in transcript mode only", () => {
+    expect(JUDGE_PROMPT_VERSION).toBe(6);
+    const clause = "This includes an answer or value the feedback credits to [STUDENT_1] when the STUDENT line only repeats or confirms what the TUTOR line just before said.";
+    expect(build("transcript")[0].content).toContain(clause);
+    expect(build("summary")[0].content).not.toContain(clause);
   });
 });

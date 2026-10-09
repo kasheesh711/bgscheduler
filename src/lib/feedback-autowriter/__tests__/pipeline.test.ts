@@ -642,7 +642,7 @@ describe("judge v5: medium and high must both pass (owner decision, 30 Sep)", ()
     expect(judged.map((record) => [record.result.effort, record.result.error ?? record.result.faithful]).toSorted()).toEqual([
       ["high", true], ["medium", "judge_unparseable"], ["medium", true],
     ]);
-    expect(JUDGE_PROMPT_VERSION).toBe(5);
+    expect(JUDGE_PROMPT_VERSION).toBe(6);
     for (const record of judged) {
       expect(record).toMatchObject({ arm: "glm", requestedModel: "z-ai/glm-5.3-flash", promptVersion: JUDGE_PROMPT_VERSION });
       expect(record.result).toMatchObject({ judgedArm: "sol", judgedGeneration: "g", evidence: "summary" });
