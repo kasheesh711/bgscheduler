@@ -21,6 +21,10 @@ const BANK_SYLLABI = {
   chemistry: ["0620"],
   physics: ["0625"],
   maths: ["0580", "0607"],
+  literature: ["0475"],
+  english: ["0500"],
+  economics: ["0455"],
+  business: ["0450"],
 } as const;
 
 /**
@@ -32,13 +36,18 @@ const BANK_SYLLABI = {
 export function syllabiForAcademicSubject(subject: string | null | undefined): string[] | null {
   const label = norm(subject ?? "");
   if (!label) return null;
-  if (/\b(further|additional|add\.?)\b|combined|co-?ordinated|\bscience\b/.test(label)) return null;
+  if (/\b(further|additional|add\.?)\b|combined|co-?ordinated|\bscience\b|\b(esl|efl)\b|second language/.test(label)) return null;
+  if (/\bliterature\b/.test(label) && /\blanguage\b/.test(label)) return null;
 
   const hits: Array<keyof typeof BANK_SYLLABI> = [];
   if (/\bbiology\b/.test(label)) hits.push("biology");
   if (/\bchemistry\b/.test(label)) hits.push("chemistry");
   if (/\bphysics\b/.test(label)) hits.push("physics");
   if (/\bmath(?:s|ematics)?\b/.test(label)) hits.push("maths");
+  if (/\benglish literature\b/.test(label)) hits.push("literature");
+  else if (/\benglish\b/.test(label) && (/\bfirst[ -]language\b/.test(label) || /\b0500\b/.test(label))) hits.push("english");
+  if (/\becon(?:omic|omics)?\b/.test(label)) hits.push("economics");
+  if (/\bbusiness(?: studies)?\b/.test(label)) hits.push("business");
   if (hits.length !== 1) return null;
   return [...BANK_SYLLABI[hits[0]]];
 }
@@ -83,7 +92,7 @@ export function scienceSyllabiFromTags(
  * Trial-class titles that no reviewed mapping covers, e.g. "Live Session - Chemistry Trial".
  * Returns bank codes when the title contains "trial" plus exactly one bank subject keyword.
  * Anything after the first Thai character is a booking note and is dropped first.
- * Statistics trials and every non-bank trial (English, ...) return null; a science
+ * Statistics trials and other subjects outside the bank return null; a science
  * trial is handled by the generic-science rule before this runs.
  */
 export function trialSyllabi(title: string | null | undefined): string[] | null {

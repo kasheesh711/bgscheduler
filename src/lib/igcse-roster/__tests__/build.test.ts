@@ -87,9 +87,17 @@ describe("syllabiForAcademicSubject", () => {
     expect(syllabiForAcademicSubject("Math")).toEqual(["0580", "0607"]);
     expect(syllabiForAcademicSubject("IGCSE Mathematics")).toEqual(["0580", "0607"]);
     expect(syllabiForAcademicSubject("Maths")).toEqual(["0580", "0607"]);
+    expect(syllabiForAcademicSubject("IGCSE English Literature")).toEqual(["0475"]);
+    expect(syllabiForAcademicSubject("First Language English")).toEqual(["0500"]);
+    expect(syllabiForAcademicSubject("English (First Language)")).toEqual(["0500"]);
+    expect(syllabiForAcademicSubject("English 0500")).toEqual(["0500"]);
+    expect(syllabiForAcademicSubject("Economics")).toEqual(["0455"]);
+    expect(syllabiForAcademicSubject("Econ")).toEqual(["0455"]);
+    expect(syllabiForAcademicSubject("Economic")).toEqual(["0455"]);
+    expect(syllabiForAcademicSubject("Business Studies")).toEqual(["0450"]);
   });
   it("returns null for subjects outside the bank", () => {
-    for (const value of ["Economics", "Further Maths", "Additional Mathematics", "Combined Science", "Physics and Chemistry", "", null]) {
+    for (const value of ["History", "English", "English Language", "English as a Second Language", "EFL", "Spanish Literature", "Literature", "English Language and Literature", "English Literature and English Language", "Economics and Business", "Further Maths", "Additional Mathematics", "Combined Science", "Physics and Chemistry", "", null]) {
       expect(syllabiForAcademicSubject(value), String(value)).toBeNull();
     }
   });
@@ -121,11 +129,25 @@ describe("buildIgcseRoster", () => {
     expect(roster.students).toEqual([{ wiseStudentId: "s1", email: "student.one@example.test", name: "Student One" }]);
   });
 
+  it("syncs each new humanities subject with its class and tutor", () => {
+    for (const [subject, syllabus] of [["English Literature", "0475"], ["First Language English", "0500"], ["Economics", "0455"], ["Business Studies", "0450"]]) {
+      const data = fixture();
+      data.packages = [{ wiseClassId: "c-humanities", wiseStudentId: "s1", packageName: subject, subject: IGCSE_BAND, excludedReason: null }];
+      data.sessions = [{ wiseClassId: "c-humanities", title: subject, wiseTeacherUserId: "u-onsite", wiseTeacherId: "t-onsite", lastStart: NOW }];
+      data.mappings = [mapping("c-humanities", subject, subject)];
+      const roster = buildIgcseRoster(data, NOW);
+      expect(roster.tutors[0].syllabi).toEqual([syllabus]);
+      expect(roster.links).toEqual([expect.objectContaining({ wiseClassId: "c-humanities", syllabus })]);
+    }
+  });
+
   it("reports unmapped subjects and skips those links", () => {
-    const roster = buildIgcseRoster(fixture(), NOW);
+    const data = fixture();
+    data.mappings = data.mappings.map((m) => m.classId === "c-econ" ? { ...m, subject: "History" } : m);
+    const roster = buildIgcseRoster(data, NOW);
     expect(roster.links.some((l) => l.wiseClassId === "c-econ")).toBe(false);
     expect(roster.unmapped).toContainEqual({
-      wiseClassId: "c-econ", className: "Econ Class", sessionTitle: "Live Session-Economics", reason: "subject_not_in_bank:Economics", classLoaded: false,
+      wiseClassId: "c-econ", className: "Econ Class", sessionTitle: "Live Session-Economics", reason: "subject_not_in_bank:History", classLoaded: false,
     });
   });
 
@@ -158,7 +180,7 @@ describe("buildIgcseRoster", () => {
       ],
     }), NOW);
     expect(roster.links).toEqual([]);
-    expect(roster.unmapped.filter((u) => u.reason === "student_email_shared").map((u) => u.wiseStudentId).sort()).toEqual(["s1", "s1", "s2"]);
+    expect(roster.unmapped.filter((u) => u.reason === "student_email_shared").map((u) => u.wiseStudentId).sort()).toEqual(["s1", "s1", "s2", "s2"]);
   });
 
   it("skips links whose tutor has no valid email, is inactive, or cannot be resolved", () => {
@@ -264,6 +286,10 @@ describe("buildIgcseRoster", () => {
         ["Trial Physics", ["0625"]],
         ["Live Session - Chemistry Trial", ["0620"]],
         ["on-site session - biology TRIAL", ["0610"]],
+        ["First Language English Trial", ["0500"]],
+        ["English Literature Trial", ["0475"]],
+        ["Economics Trial", ["0455"]],
+        ["Business Studies Trial", ["0450"]],
       ];
       for (const [title, expected] of cases) expect(codes(run(title)), title).toEqual(expected);
     });
@@ -280,8 +306,8 @@ describe("buildIgcseRoster", () => {
       expect(none.unmapped.map((u) => u.reason)).toEqual(["science_no_tutor_tag"]);
     });
 
-    it("leaves statistics, English, other-subject, ambiguous and non-trial titles unmapped", () => {
-      for (const title of ["STAT Trial", "Math (Stat) Trial", "Live Session - Math Statics", "English Trial", "Economics Trial", "Physics Chemistry Trial", "Trial", "Further Maths Trial", "Live Session-Math"]) {
+    it("leaves statistics, other subjects, ambiguous and non-trial titles unmapped", () => {
+      for (const title of ["STAT Trial", "Math (Stat) Trial", "Live Session - Math Statics", "History Trial", "English Trial", "English as a Second Language Trial", "Spanish Literature Trial", "English Language and Literature Trial", "Physics Chemistry Trial", "Trial", "Further Maths Trial", "Live Session-Math"]) {
         const roster = run(title);
         expect(roster.links, title).toEqual([]);
         expect(roster.unmapped[0].reason, title).toBe("subject_unresolved:SUBJECT_MAPPING_UNMAPPED");
@@ -290,8 +316,8 @@ describe("buildIgcseRoster", () => {
 
     it("does not override a reviewed mapping", () => {
       const roster = buildIgcseRoster(scienceFixture("Live Session - Math Trial", [], "Economics"), NOW);
-      expect(roster.links).toEqual([]);
-      expect(roster.unmapped[0].reason).toBe("subject_not_in_bank:Economics");
+      expect(codes(roster)).toEqual(["0455"]);
+      expect(roster.unmapped).toEqual([]);
     });
   });
 
