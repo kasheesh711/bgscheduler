@@ -31,6 +31,7 @@ import {
   planFeedbackForm,
   scheduledWindow,
   studentParticipants,
+  type AutowriterSessionDetail,
 } from "./session";
 import type { WiseFeedbackOps } from "./submit";
 import { AUTOWRITER_POST_TIMEOUT_MS, AUTOWRITER_WISE_READ_TIMEOUT_MS, AUTOWRITER_WRITER_BY_ARM } from "./config";
@@ -208,9 +209,32 @@ function wiseCredentials() {
 
 const SessionCreditHistorySchema = z.object({
   data: z.object({
-    sessionCreditHistory: z.array(z.object({ _id: z.string(), credit: z.number() }).passthrough()),
+    sessionCreditHistory: z.array(z.object({
+      _id: z.string(), credit: z.number(),
+      type: z.string().nullable().optional(),
+      meetingStatus: z.string().nullable().optional(),
+      createdAt: z.string().nullable().optional(),
+      duration: z.number().nullable().optional(),
+      userId: z.union([z.string(), z.object({ _id: z.string() }).passthrough()]).nullable().optional(),
+      classroom: z.union([z.string(), z.object({ _id: z.string() }).passthrough()]).nullable().optional(),
+    }).passthrough()),
   }).passthrough(),
 }).passthrough();
+
+/** Wise can give a charge its own ID. Keep all exact matches so duplicate charges still fail billing. */
+export function sessionCreditEntries(response: unknown, detail: AutowriterSessionDetail, studentId: string): Array<{ credit: number }> {
+  const history = SessionCreditHistorySchema.parse(response).data.sessionCreditHistory;
+  const start = typeof detail.start_time === "string" ? new Date(detail.start_time).getTime() : NaN;
+  const duration = detail.duration;
+  const lessonKnown = detail.meetingStatus === "ENDED" && Number.isFinite(start) &&
+    typeof duration === "number" && duration > 0 && studentParticipants(detail).some((student) => student.wiseUserId === studentId);
+  return history.filter((entry) => entry._id === detail._id || (lessonKnown &&
+    entry.type === "SESSION" && entry.meetingStatus === "ENDED" &&
+    (typeof entry.classroom === "string" ? entry.classroom : entry.classroom?._id) === detailClassId(detail) &&
+    (typeof entry.userId === "string" ? entry.userId : entry.userId?._id) === studentId &&
+    typeof entry.createdAt === "string" && new Date(entry.createdAt).getTime() === start && entry.duration === duration))
+    .map((entry) => ({ credit: entry.credit }));
+}
 
 const FeedbackEventsSchema = z.object({
   data: z.object({
@@ -297,9 +321,12 @@ export function createWiseFeedbackOps(input: { stopFile?: string } = {}): WiseFe
         { fetchHistory: "true" },
         { cache: "no-store", signal: AbortSignal.timeout(AUTOWRITER_WISE_READ_TIMEOUT_MS) },
       );
-      return SessionCreditHistorySchema.parse(response).data.sessionCreditHistory
-        .filter((entry) => entry._id === sessionId)
-        .map((entry) => ({ credit: entry.credit }));
+      const detail = parseAutowriterSessionDetail(await read.get(
+        `/user/classes/${checkedId(classId)}/sessions/${checkedId(sessionId)}`, detailParams,
+        { cache: "no-store", signal: AbortSignal.timeout(AUTOWRITER_WISE_READ_TIMEOUT_MS) },
+      ));
+      if (detail._id !== sessionId || detailClassId(detail) !== classId) throw new Error("Credit lesson identity mismatch");
+      return sessionCreditEntries(response, detail, studentId);
     },
     async findFeedbackEvents(classId, sessionId, since) {
       const response = await read.get(`/institutes/${checkedId(credentials.instituteId)}/events`, {

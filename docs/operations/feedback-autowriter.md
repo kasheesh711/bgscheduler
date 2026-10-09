@@ -1,5 +1,17 @@
 # Feedback Autowriter — runbook
 
+## Credit matching and alert recovery — 10 October 2026
+
+Wise credit-history rows can use a charge ID instead of the lesson ID. Match the lesson ID when it is present.
+Also match a `SESSION` charge only when its class and student IDs, actual start time, duration, and `ENDED` status
+agree exactly with a fresh Wise lesson read. Do not use the scheduled time, a time tolerance, or the credit amount
+to choose a charge. Return every matching row: the billing guard still requires exactly one charge with the
+existing submission's credit amount before and after posting. Missing evidence or duplicate charges block posting.
+
+Autowriter digests and incident emails default to the existing Resend → Workspace Gmail → Apps Script path.
+An explicit `OUTBOUND_EMAIL_TRANSPORT` setting still takes priority. Other email callers keep their current default.
+Only a failure confirmed before acceptance can use another provider. Keep the same idempotency key on retries.
+
 Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowriter.md). CLI:
 `npx tsx --tsconfig scripts/tsconfig.json scripts/autowrite-online-feedback.ts …` (run from the repo root with a
 `.env.local` holding `DATABASE_URL`, `WISE_*`, `OPENROUTER_API_KEY`).

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createOutboundEmailSender } from "@/lib/email/outbound";
 import type { ScheduleEmailSendInput } from "@/lib/classrooms/schedule-email";
 import { buildAlertDigest, sendAlertDigest } from "../alerts";
 import type { PendingAlert } from "../store";
@@ -7,6 +8,11 @@ import { CLASS_ID, SESSION_ID } from "./fixtures";
 
 const KEVIN = "696e2c4343579bbada2340ed";
 const NOT_HALTED = { haltedAt: null, haltReason: null };
+
+vi.mock("@/lib/email/outbound", () => ({
+  createOutboundEmailSender: vi.fn(() => ({ sendEmail: vi.fn(async () => ({ id: "receipt" })) })),
+}));
+afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
 
 function alert(overrides: Partial<PendingAlert> = {}): PendingAlert {
   return {
@@ -32,6 +38,16 @@ function judgeFailing(judge: Partial<NonNullable<PendingAlert["judge"]>>, overri
 }
 
 const keyOf = (...parts: string[]) => `feedback-autowriter:${createHash("sha256").update(parts.toSorted().join("|")).digest("hex").slice(0, 32)}`;
+
+describe("autowriter alert transport", () => {
+  it.each([[undefined, "resend"], ["", "resend"], ["apps_script", "apps_script"], ["gmail", "gmail"]])(
+    "defaults an unset transport to Resend and keeps an explicit choice (%s)", async (configured, expected) => {
+      vi.stubEnv("OUTBOUND_EMAIL_TRANSPORT", configured);
+      expect(await sendAlertDigest({ alerts: [alert()], recipients: ["owner@example.test"], halt: NOT_HALTED })).toEqual({ sent: true, error: null });
+      expect(createOutboundEmailSender).toHaveBeenCalledWith("primary", { strictOutcome: true, audience: "staff" },
+        expect.objectContaining({ OUTBOUND_EMAIL_TRANSPORT: expected }));
+    });
+});
 
 describe("buildAlertDigest", () => {
   it("names the tutor, the deadline in Bangkok time, what to do and the class's reason", () => {
