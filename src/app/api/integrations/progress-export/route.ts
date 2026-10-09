@@ -10,6 +10,9 @@ import { rowHash } from "@/lib/progress-tests/transfer/hash";
 import { readBlobBytes } from "@/lib/progress-tests/workspace/files";
 import { workspaceError } from "@/lib/progress-tests/workspace/http";
 import { WorkspaceError } from "@/lib/progress-tests/workspace/model";
+import { launchConfig } from "@/lib/progress-tests/workspace/cutover";
+import { loadWorkspaceAttendance } from "@/lib/progress-tests/workspace/attendance";
+import { createWiseClient } from "@/lib/wise/client";
 export const maxDuration=300;
 function exportJson(data:unknown){const bytes=new TextEncoder().encode(JSON.stringify(data));let offset=0;return new Response(new ReadableStream({pull(c){if(offset>=bytes.length){c.close();return;}c.enqueue(bytes.subarray(offset,offset+1024*1024));offset+=1024*1024;}}),{headers:{"Content-Type":"application/json","Cache-Control":"private, no-store"}});}
 const rows=(r:unknown)=>(r as {rows:Record<string,unknown>[]}).rows;
@@ -18,6 +21,13 @@ export async function GET(request:Request) {
   const secret=process.env.PROGRESS_EXPORT_SECRET,provided=request.headers.get("authorization")?.replace(/^Bearer /,"");
   if(!secret||!provided||secret.length<32||Buffer.byteLength(secret)!==Buffer.byteLength(provided)||!timingSafeEqual(Buffer.from(secret),Buffer.from(provided)))throw new WorkspaceError(401,transferText.export_denied);
   const url=new URL(request.url),db=getDb(),type=url.searchParams.get("type")||"manifest";
+  if(type==="attendance"){
+   const launch=await launchConfig(db),instituteId=process.env.WISE_INSTITUTE_ID;
+   if(!launch||!instituteId)throw new WorkspaceError(503,"The attendance connection is not ready.");
+   const now=new Date();
+   const data=await loadWorkspaceAttendance(db,createWiseClient({requestsPerSecond:3,maxConcurrency:4,signal:AbortSignal.timeout(270_000)}),instituteId,launch.activatedAt,now);
+   return exportJson({schemaVersion:1,observedAt:now.toISOString(),launchedAt:launch.activatedAt.toISOString(),...data});
+  }
   if(type==="roster"){
    const [identities,contacts]=await Promise.all([loadActiveIdentityEntries(db),db.select().from(s.tutorContacts)]);
    const students=rows(await db.execute(sql`select distinct st.wise_student_id as "wiseStudentId",st.student_name as name,st.email,st.activated as active from credit_control_students st join credit_control_snapshots snap on snap.id=st.snapshot_id and snap.active=true where exists(select 1 from credit_control_packages pkg where pkg.snapshot_id=st.snapshot_id and pkg.wise_student_id=st.wise_student_id and pkg.class_type='ONE_TO_ONE')`));
