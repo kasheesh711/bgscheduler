@@ -1,4 +1,5 @@
 import {transferText} from "@/lib/progress-tests/transfer/text";
+import {exportStudentContext} from "@/lib/progress-tests/transfer/student-context";
 import { timingSafeEqual, createHash } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
@@ -21,6 +22,7 @@ export async function GET(request:Request) {
   const secret=process.env.PROGRESS_EXPORT_SECRET,provided=request.headers.get("authorization")?.replace(/^Bearer /,"");
   if(!secret||!provided||secret.length<32||Buffer.byteLength(secret)!==Buffer.byteLength(provided)||!timingSafeEqual(Buffer.from(secret),Buffer.from(provided)))throw new WorkspaceError(401,transferText.export_denied);
   const url=new URL(request.url),db=getDb(),type=url.searchParams.get("type")||"manifest";
+  if(type==="student-context")return exportJson(await exportStudentContext(url,db));
   if(type==="attendance"){
    const launch=await launchConfig(db),instituteId=process.env.WISE_INSTITUTE_ID;
    if(!launch||!instituteId)throw new WorkspaceError(503,"The attendance connection is not ready.");
