@@ -1,0 +1,206 @@
+{
+  "reviewedAt": "2026-10-09T22:25:36.785Z",
+  "seasonalMarkerAvailable": false,
+  "seasonalCount": 13,
+  "regularCount": 9,
+  "courses": [
+    {
+      "courseId": "696e3b916ed0911451b66522",
+      "classification": "regular",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-06-13T03:00:00.000Z",
+      "lastCompleted": "2026-08-25T11:00:00.000Z",
+      "lastScheduled": "2026-09-01T11:00:00.000Z",
+      "members": 2
+    },
+    {
+      "courseId": "6a0d1903462dd8f7b43b2522",
+      "classification": "seasonal",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-07-06T03:00:00.000Z",
+      "lastCompleted": "2026-07-09T05:00:00.000Z",
+      "lastScheduled": "2026-07-09T05:00:00.000Z",
+      "members": 5
+    },
+    {
+      "courseId": "6a0d19e287e1a9da07931ce7",
+      "classification": "seasonal",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-07-06T06:00:00.000Z",
+      "lastCompleted": "2026-07-09T08:00:00.000Z",
+      "lastScheduled": "2026-07-09T08:00:00.000Z",
+      "members": 6
+    },
+    {
+      "courseId": "6a0d1a6d24ee4ab44cd0bedb",
+      "classification": "seasonal",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-07-06T06:00:00.000Z",
+      "lastCompleted": "2026-07-09T08:00:00.000Z",
+      "lastScheduled": "2026-07-09T08:00:00.000Z",
+      "members": 5
+    },
+    {
+      "courseId": "6a0d1ac9462dd8f7b43b4538",
+      "classification": "seasonal",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-07-13T01:30:00.000Z",
+      "lastCompleted": "2026-07-17T08:00:00.000Z",
+      "lastScheduled": "2026-07-17T08:00:00.000Z",
+      "members": 5
+    },
+    {
+      "courseId": "6a0d1c8d7ee5250e5884daaf",
+      "classification": "seasonal",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-08-03T06:00:00.000Z",
+      "lastCompleted": "2026-08-07T08:00:00.000Z",
+      "lastScheduled": "2026-08-07T08:00:00.000Z",
+      "members": 6
+    },
+    {
+      "courseId": "6a0d1cdc7ee5250e5884e7f5",
+      "classification": "seasonal",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-07-20T03:00:00.000Z",
+      "lastCompleted": "2026-07-24T05:00:00.000Z",
+      "lastScheduled": "2026-07-24T05:00:00.000Z",
+      "members": 6
+    },
+    {
+      "courseId": "6a28d75f408b94644e66d03a",
+      "classification": "seasonal",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-08-11T06:00:00.000Z",
+      "lastCompleted": "2026-08-14T08:00:00.000Z",
+      "lastScheduled": "2026-08-14T08:00:00.000Z",
+      "members": 5
+    },
+    {
+      "courseId": "6a2fc6861afaec6c686335a7",
+      "classification": "seasonal",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-08-03T03:00:00.000Z",
+      "lastCompleted": "2026-08-07T05:00:00.000Z",
+      "lastScheduled": "2026-08-07T05:00:00.000Z",
+      "members": 6
+    },
+    {
+      "courseId": "6a378d7dcafecff277f0073d",
+      "classification": "regular",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-06-22T03:00:00.000Z",
+      "lastCompleted": "2026-07-29T05:00:00.000Z",
+      "lastScheduled": "2026-07-29T05:00:00.000Z",
+      "members": 2
+    },
+    {
+      "courseId": "6a37c5d5b065003672ddd5dc",
+      "classification": "regular",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-06-30T08:00:00.000Z",
+      "lastCompleted": "2026-06-30T09:00:00.000Z",
+      "lastScheduled": "2026-07-07T09:00:00.000Z",
+      "members": 2
+    },
+    {
+      "courseId": "6a39e40b47256ea8b0779bcf",
+      "classification": "seasonal",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-08-11T03:00:00.000Z",
+      "lastCompleted": "2026-08-14T05:00:00.000Z",
+      "lastScheduled": "2026-08-14T05:00:00.000Z",
+      "members": 6
+    },
+    {
+      "courseId": "6a39e4a1d166ff2bee051995",
+      "classification": "seasonal",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-08-11T03:00:00.000Z",
+      "lastCompleted": "2026-08-14T05:00:00.000Z",
+      "lastScheduled": "2026-08-14T05:00:00.000Z",
+      "members": 3
+    },
+    {
+      "courseId": "6a3a21ffd91d8d0bbd113e8c",
+      "classification": "seasonal",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-07-06T03:00:00.000Z",
+      "lastCompleted": "2026-07-09T05:00:00.000Z",
+      "lastScheduled": "2026-07-09T05:00:00.000Z",
+      "members": 2
+    },
+    {
+      "courseId": "6a4773156969c91feb94300e",
+      "classification": "regular",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-09-12T06:00:00.000Z",
+      "lastCompleted": "2026-10-02T03:00:00.000Z",
+      "lastScheduled": "2026-10-02T03:00:00.000Z",
+      "members": 1
+    },
+    {
+      "courseId": "6a6496f0db75f809a033319f",
+      "classification": "seasonal",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-08-03T06:00:00.000Z",
+      "lastCompleted": "2026-08-07T08:00:00.000Z",
+      "lastScheduled": "2026-08-07T08:00:00.000Z",
+      "members": 5
+    },
+    {
+      "courseId": "6a70c2677080221ef1c7c5d8",
+      "classification": "regular",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": null,
+      "lastCompleted": null,
+      "lastScheduled": "2026-11-17T05:00:00.000Z",
+      "members": 1
+    },
+    {
+      "courseId": "6a79954aca05ae4978b11142",
+      "classification": "seasonal",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates; Essay classification confirmed by user.",
+      "firstCompleted": "2026-08-16T09:30:00.000Z",
+      "lastCompleted": "2026-08-22T09:00:00.000Z",
+      "lastScheduled": "2026-08-22T09:00:00.000Z",
+      "members": 1
+    },
+    {
+      "courseId": "6a7e9af0b6ab7568e2337268",
+      "classification": "regular",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-09-12T04:00:00.000Z",
+      "lastCompleted": "2026-09-12T05:00:00.000Z",
+      "lastScheduled": "2026-11-13T08:00:00.000Z",
+      "members": 1
+    },
+    {
+      "courseId": "6a81799f735895bd3108695c",
+      "classification": "regular",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-08-28T08:30:00.000Z",
+      "lastCompleted": "2026-08-28T11:00:00.000Z",
+      "lastScheduled": "2026-08-28T11:00:00.000Z",
+      "members": 1
+    },
+    {
+      "courseId": "6a8ac450ee79651b10af6da9",
+      "classification": "regular",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": "2026-08-30T08:00:00.000Z",
+      "lastCompleted": "2026-10-04T09:00:00.000Z",
+      "lastScheduled": "2027-02-28T09:00:00.000Z",
+      "members": 2
+    },
+    {
+      "courseId": "6ac7246022f2e57c79998eb7",
+      "classification": "regular",
+      "evidence": "Release-owner review of Wise course name and completed/scheduled class dates.",
+      "firstCompleted": null,
+      "lastCompleted": null,
+      "lastScheduled": "2026-11-22T10:30:00.000Z",
+      "members": 1
+    }
+  ]
+}

@@ -5,7 +5,7 @@ export function verifiedInstructor(userId: string | null, teacherId: string | nu
   if (new Set(matches.map(i => i.canonicalKey)).size !== 1) return null;
   return matches[0] ?? null;
 }
-export const progressClassTypes = ["ONE_TO_ONE", "GROUP"] as const;
+export const progressClassTypes = ["ONE_TO_ONE", "GROUP", "LIVE"] as const;
 export const isProgressClass = (type: string | null | undefined) => progressClassTypes.some(value => value === type);
 export type Attendance = { sessionId: string; studentId: string; courseId: string; ownerKey: string | null; start: Date; status: string; credit: number };
 export const seriesKey = (owner: string, course: string, student: string) => JSON.stringify([owner, course, student]);
