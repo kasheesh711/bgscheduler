@@ -1,3 +1,4 @@
+import { assertSourceWriter } from "../transfer/control";
 import { createHash } from "node:crypto";
 import { WiseClient } from "@/lib/wise/client";
 import { MAX_FILE_BYTES, WorkspaceError } from "./model";
@@ -40,7 +41,7 @@ async function boundedBytes(response: Response) {
 }
 export function nativeWise(guard: () => Promise<void>, signal = AbortSignal.timeout(180_000)): NativeWise {
   // Non-idempotent POSTs must never be retried by the generic HTTP client.
-  const client = new WiseClient({ userId:process.env.WISE_USER_ID!,apiKey:process.env.WISE_API_KEY!,namespace:process.env.WISE_NAMESPACE ?? "begifted-education",maxRetries:0,maxConcurrency:1,requestsPerSecond:3,signal,beforeRequest:guard });
+  const client = new WiseClient({ userId:process.env.WISE_USER_ID!,apiKey:process.env.WISE_API_KEY!,namespace:process.env.WISE_NAMESPACE ?? "begifted-education",maxRetries:0,maxConcurrency:1,requestsPerSecond:3,signal,beforeRequest:async()=>{await assertSourceWriter();await guard();} });
   const checkedId = (id: string) => { if (!objectId.test(id)) throw new WorkspaceError(422,"Wise destination identifier needs review."); return id; };
   return {
     async verifyCourse(classId,studentId) {
@@ -59,7 +60,7 @@ export function nativeWise(guard: () => Promise<void>, signal = AbortSignal.time
     async upload(name,bytes) {
       const r = await client.get<{data:{uploadURL:string;uploadToken:string}}>("/user/uploadURL",{filename:name,type:"application/pdf",size:String(bytes.length)},{cache:"no-store"});
       if (!r.data?.uploadToken) throw new Error("Missing native upload authorization");
-      await guard();
+      await assertSourceWriter(); await guard();
       const put = await fetch(safeWiseUrl(r.data.uploadURL,"upload"),{method:"PUT",body:new Uint8Array(bytes),headers:{"Content-Type":"application/pdf"},redirect:"error",signal});
       if (!put.ok) throw new Error("Native binary upload failed");
       return r.data.uploadToken;

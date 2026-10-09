@@ -1,3 +1,4 @@
+import {assertSourceWriter} from "../transfer/control";
 import { createHash, randomUUID } from "node:crypto";
 import { eq, and } from "drizzle-orm";
 import { get, put } from "@vercel/blob";
@@ -62,6 +63,7 @@ export async function validateSource(bytes: Buffer, mime: string) {
   } else throw new WorkspaceError(400, "Unsupported file type.");
 }
 export async function finalizeUpload(scope: Scope, id: string, db: Database = getDb()) {
+  await assertSourceWriter(db);
   const file = await fileForScope(scope, id, db);
   if (file.status === "ready") return { id: file.id, status: "ready", pageCount: file.pageCount };
   if (file.status !== "pending") throw new WorkspaceError(409, "Create a new upload for this file.");
@@ -74,6 +76,7 @@ export async function finalizeUpload(scope: Scope, id: string, db: Database = ge
 export async function uploadHandler(request: Request, body: HandleUploadBody, scope?: Scope) {
   return handleUpload({ request, body,
     onBeforeGenerateToken: async (pathname, payload) => {
+      await assertSourceWriter();
       if (!scope) throw new WorkspaceError(401, "Sign in to upload a file.");
       const id = String(payload ?? "");
       if (!/^[a-f0-9-]{36}$/.test(id)) throw new WorkspaceError(400, "Invalid upload intent.");
@@ -86,6 +89,7 @@ export async function uploadHandler(request: Request, body: HandleUploadBody, sc
     },
     // handleUpload verifies the Blob callback signature BEFORE calling this.
     onUploadCompleted: async ({ blob, tokenPayload }) => {
+      await assertSourceWriter();
       const payload = JSON.parse(tokenPayload || "{}") as { id?: string; email?: string };
       if (!payload.id || !payload.email) throw new WorkspaceError(400, "Missing upload authorization.");
       const current = await scopeForEmail(payload.email);

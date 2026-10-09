@@ -1,3 +1,4 @@
+import { assertSourceWriter, withSourceWriter } from "./transfer/control";
 import { hasTodayRefresh } from "@/lib/credit-control/daily-refresh";
 // Progress Tests — once-daily admin digest to all admin_users.
 //
@@ -326,6 +327,7 @@ export async function sendProgressTestAdminDigest(
     message: "Progress test admin digest is disabled (PROGRESS_TEST_ADMIN_DIGEST_ENABLED=false).",
   };
 
+  await assertSourceWriter(db);
   if (!await hasTodayRefresh(db, "progress", now)) return {
     status: "skipped", digestDate, digestRunId: null, approachingCount: 0, dueCount: 0,
     unresolvedCount: 0, attempted: 0, success: 0, failed: 0,
@@ -422,17 +424,18 @@ export async function sendProgressTestAdminDigest(
   }
 
   for (const email of recipients) {
-    counts.attempted += 1;
-    try {
-      const sent = await sender.sendEmail({
-        to: email,
-        subject,
-        html,
-        text,
-        idempotencyKey: `progress-test-digest:${digestDate}:${email}`,
+    await withSourceWriter(db, async tx => {
+      counts.attempted += 1;
+      try {
+        const sent = await sender.sendEmail({
+          to: email,
+          subject,
+          html,
+          text,
+          idempotencyKey: `progress-test-digest:${digestDate}:${email}`,
       });
       counts.success += 1;
-      await db.insert(schema.progressTestAdminDigestRecipients).values({
+      await tx.insert(schema.progressTestAdminDigestRecipients).values({
         digestRunId: run.id,
         digestDate,
         recipientEmail: email,
@@ -443,7 +446,7 @@ export async function sendProgressTestAdminDigest(
       const message = error instanceof Error ? error.message : "Progress test admin digest email failed";
       counts.failed += 1;
       lastError = message;
-      await db.insert(schema.progressTestAdminDigestRecipients).values({
+      await tx.insert(schema.progressTestAdminDigestRecipients).values({
         digestRunId: run.id,
         digestDate,
         recipientEmail: email,
@@ -451,9 +454,10 @@ export async function sendProgressTestAdminDigest(
         error: message,
       });
     }
+    });
   }
 
-  await finalizeDigestRun(db, run.id, counts, lastError);
+  await withSourceWriter(db, tx => finalizeDigestRun(tx, run.id, counts, lastError));
   const status = counts.failed > 0 ? (counts.success > 0 ? "partial" : "failed") : "sent";
   return {
     status,

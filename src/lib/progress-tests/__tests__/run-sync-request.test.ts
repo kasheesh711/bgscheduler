@@ -30,6 +30,7 @@ function makeDbMock(options: {
   const staleRows = options.staleRows ?? [];
 
   return {
+    execute: vi.fn().mockResolvedValue({rows:[{table_name:null}]}),
     update: vi.fn(() => ({
       set: vi.fn(() => ({
         where: vi.fn(() => ({
@@ -70,6 +71,17 @@ describe("runProgressTestSyncRequest", () => {
   afterEach(() => {
     if (originalInstituteId === undefined) delete process.env.WISE_INSTITUTE_ID;
     else process.env.WISE_INSTITUTE_ID = originalInstituteId;
+  });
+
+  it("blocks a sync while the source writer has a pause", async () => {
+    const db = makeDbMock();
+    db.execute.mockResolvedValueOnce({rows:[{table_name:"progress_transfer_control"}]})
+      .mockResolvedValueOnce({rows:[{phase:"paused",targetUrl:null}]} as never);
+    vi.mocked(getDb).mockReturnValue(db as never);
+    await expect(runProgressTestSyncRequest({triggerType:"cron"})).rejects.toMatchObject({status:503});
+    expect(createWiseClient).not.toHaveBeenCalled();
+    expect(runProgressTestSync).not.toHaveBeenCalled();
+    expect(db.insert).not.toHaveBeenCalled();
   });
 
   it("acquires a run row and runs the sync when nothing is running", async () => {

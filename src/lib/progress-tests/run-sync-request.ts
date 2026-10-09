@@ -1,3 +1,4 @@
+import { assertSourceWriter } from "./transfer/control";
 import { bangkokDailyWindow, claimDailyRefresh, hasTodayRefresh, dailySkip } from "@/lib/credit-control/daily-refresh";
 import { NextResponse } from "next/server";
 import { and, desc, eq, lt } from "drizzle-orm";
@@ -145,6 +146,7 @@ async function acquireSyncRun(
 export async function runProgressTestSyncRequest(
   options: { triggerType?: string; actorEmail?: string | null } = {},
 ) {
+  await assertSourceWriter();
   const db = getDb();
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
   const now = new Date();

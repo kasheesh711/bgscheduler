@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "next-env.d.ts",
+    "src/app/api/integrations/progress-export/route.ts",
+    "src/app/api/integrations/progress-mail/route.ts",
+    "src/lib/progress-tests/transfer/*.ts",
+    "src/lib/progress-tests/workspace/data.ts",
+    "src/lib/progress-tests/workspace/jobs.ts",
+    "src/lib/progress-tests/workspace/files.ts",
+    "src/lib/progress-tests/workspace/sync.ts",
+    "src/lib/progress-tests/workspace/wise-publication.ts",
+    "src/lib/progress-tests/workspace/http.ts",
+    "src/lib/progress-tests/admin-digest.ts",
+    "src/lib/progress-tests/run-sync-request.ts",
+    "src/app/(app)/progress-tests/page.tsx"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}
