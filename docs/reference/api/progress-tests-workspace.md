@@ -73,3 +73,9 @@ Original content has `{kind: "original", title}` plus immutable version/file met
 Assessment and overview reads include preparation-publication state separately from final-result publication. The existing `retry-job` command supports failed preparation jobs. Only approved paper artifacts are uploaded; rubric and marking-key artifacts are excluded. Publishing pause preserves queued work. Migration 0087 adds the preparation ledger; no existing preparation triggers a bulk upload.
 
 A queued or paused preparation upload does not block submission or grading. Submission freezes the selected paper while its existing Wise job can finish; replacement and removal remain unavailable after submission.
+
+## Student lesson context
+
+The private Progress export supports `type=student-context` with `studentId`, `courseId`, `ownerKey`, and a JSON `sessionIds` list of at most eight sessions. The existing export secret is required. Current tutor identities, feedback authors, student participation and one-to-one course mappings must match. Deleted or unverified evidence is excluded.
+
+Verified tutor accounts in the participant list do not count as other students. A sole verified student's feedback is returned with names removed. For classes with other students, only common topics are returned. Personal fields, named-student topic sentences and contact or family details are excluded before export. Raw shared feedback and participant identities remain in Scheduler. This route does not change Wise data, attendance counts, grading settings or notifications.
