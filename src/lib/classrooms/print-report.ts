@@ -25,7 +25,9 @@ export function buildClassroomPrintDay(run: { id: string; assignmentDate: string
     blocks: tutor.blocks.map(block => {
       const roster = rosters.get(block.rowId)!;
       const room = activeRooms.find(room => physicalRoom(room.name) === physicalRoom(block.room));
-      const notes = [...block.exceptionReasons, ...roster.warnings];
+      const notes = [...block.exceptionReasons.filter(note => ![
+        "Outside usual rooms for this class", "Room change between consecutive classes",
+      ].includes(note)), ...roster.warnings];
       if (room && roster.studentCount > room.capacity) notes.push(`Enrollment exceeds room capacity: ${roster.studentCount} students / ${room.capacity} places.`);
       if (block.status !== "remote" && !room) notes.push("Room is unassigned or unavailable. Check with the team.");
       return { rowId: block.rowId, tutorDisplayName: tutor.tutorDisplayName,

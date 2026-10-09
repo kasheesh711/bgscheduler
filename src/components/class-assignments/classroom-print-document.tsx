@@ -22,8 +22,6 @@ function Students({ block }: { block: PrintBlock }) {
 
 function BlockNotes({ block }: { block: PrintBlock }) {
   return <div data-block-notes hidden={block.continued}>
-    {block.roomChange && <span className={styles.change}>Room change</span>}
-    {block.outsideUsualRooms && <span className={styles.note}>Outside usual rooms</span>}
     {block.publication === "draft" && <span className={styles.note}>Draft · awaiting publish</span>}
     {block.publication === "failed" && <span className={styles.problem}>Publish failed · check with team</span>}
     {block.publication === "needs_review" && <span className={styles.problem}>Check with the team</span>}
