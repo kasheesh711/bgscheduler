@@ -32,14 +32,6 @@
       "schedule": "20,50 * * * *"
     },
     {
-      "path": "/api/internal/sync-progress-tests",
-      "schedule": "25,55 * * * *"
-    },
-    {
-      "path": "/api/internal/progress-tests/admin-digest",
-      "schedule": "35 0 * * *"
-    },
-    {
       "path": "/api/internal/sync-wise-activity",
       "schedule": "2,17,32,47 * * * *"
     },
@@ -90,10 +82,6 @@
     {
       "path": "/api/internal/class-assignments/publish-recovery",
       "schedule": "1-56/5 * * * *"
-    },
-    {
-      "path": "/api/internal/progress-tests/process",
-      "schedule": "* * * * *"
     },
     {
       "path": "/api/internal/tutor-sit-ins",
