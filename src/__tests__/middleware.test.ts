@@ -25,6 +25,18 @@ function makeReq(pathname: string, isAuth = false, search = "", allowedPages?: s
 }
 
 describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
+  it.each(["/api/integrations/progress-export", "/api/integrations/progress-mail"])("passes the exact Progress integration route to its secret check: %s", async pathname => {
+    const response = await middleware(makeReq(pathname) as never, {} as never) as Response;
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    expect(validateSessionAccess).not.toHaveBeenCalled();
+  });
+
+  it.each(["/api/integrations/progress-export/extra", "/api/integrations/progress-mail-extra", "/api/integrations/other"])("keeps sign-in for neighboring integration paths: %s", async pathname => {
+    const response = await middleware(makeReq(pathname) as never, {} as never) as Response;
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toContain("/login");
+  });
   it.each(["/class-capture", "/class-capture/draft", "/api/class-capture/sessions", "/api/class-capture/captures/draft"])("passes authenticated capture requests to fresh feature authorization: %s", async pathname => {
     const response = await middleware(makeReq(pathname, true, "", ["/progress-tests"]) as never, {} as never) as Response;
     expect(response.status).toBe(200);
