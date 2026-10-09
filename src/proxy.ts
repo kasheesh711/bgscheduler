@@ -18,6 +18,9 @@ function isPublicRoute(pathname: string) {
     pathname.startsWith("/login") ||
     pathname.startsWith("/api/auth") ||
     pathname === "/api/search/assistant" ||
+    // Each exact Progress integration route checks its own shared secret.
+    pathname === "/api/integrations/progress-export" ||
+    pathname === "/api/integrations/progress-mail" ||
     pathname === "/api/classrooms/floor-plan-map" ||
     pathname === "/api/line/webhook" ||
     // Wise webhook: authenticated in-handler by its shared key (no session).
