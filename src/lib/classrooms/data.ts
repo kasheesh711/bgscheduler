@@ -27,7 +27,6 @@ import {
   type ExternalRoomBlock,
   type AssignmentResultRow,
   type AssignmentSession,
-  isOfflineSession,
   REMOTE_NO_ROOM_NEEDED,
 } from "./assignment-engine";
 import {
@@ -52,6 +51,7 @@ import { classroomTimestampToWiseIso } from "./timestamps";
 import { improveOverflowAllocation, liveVerifiedOnlineIds, sessionMatchesLive } from "./overflow-service";
 import { confirmedSuggestedRelease } from "./overflow-release";
 import { readOverflowPlan, type OverflowPlan } from "./overflow-types";
+import { getClassroomSessionMode, isRoomPublishSessionType } from "./session-mode";
 import { loadClassroomRecoveryContext, prepareClassroomRecoveryDay } from "./recovery-data";
 import { WEEKEND_ALLOCATION_ACTOR, WEEKEND_CHECK_LEASE_MS, type WeekendAllocationCheckpoint } from "./weekend-config";
 export { classroomTimestampToWiseIso } from "./timestamps";
@@ -229,7 +229,7 @@ function isLiveWiseRoomBlock(session: WiseSession, date: string): boolean {
     Boolean(location) &&
     bangkokDateKey(new Date(session.scheduledStartTime)) === date &&
     isBlockingStatus(session.meetingStatus) &&
-    isOfflineSession(session.type)
+    isRoomPublishSessionType(session.type)
   );
 }
 
@@ -1324,8 +1324,8 @@ export function isClassroomPublishEligible(
   if (!row.assignedRoom || row.assignedRoom === NO_ROOM_AVAILABLE) {
     return { eligible: false, reason: "No assigned room to publish" };
   }
-  if (!isOfflineSession(row.sessionType)) {
-    return { eligible: false, reason: "V1 publishes Wise locations for OFFLINE sessions only" };
+  if (!isRoomPublishSessionType(row.sessionType)) {
+    return { eligible: false, reason: "Unknown session modality; room publishing requires review" };
   }
   if (!row.wiseClassId) return { eligible: false, reason: "Missing Wise class id" };
   if (!row.wiseSessionId) return { eligible: false, reason: "Missing Wise session id" };
@@ -1697,7 +1697,8 @@ async function runClassroomPublishJobUnlocked(
         || getLocalMinuteOfDay(live.scheduledStartTime) !== row.startMinute
         || getLocalMinuteOfDay(live.scheduledEndTime) !== row.endMinute
         || getWiseSessionClassId(live) !== row.wiseClassId
-        || !isOfflineSession(live.type) || !isBlockingStatus(live.meetingStatus)
+        || !isRoomPublishSessionType(live.type) || getClassroomSessionMode(live.type) !== getClassroomSessionMode(row.sessionType)
+        || !isBlockingStatus(live.meetingStatus)
       );
       if (plannedBlocker || staleSession) {
         const result = await publishRowResult(db, jobId, row, {
@@ -1895,7 +1896,9 @@ async function runClassroomPublishJobUnlocked(
       if (findPublishRoomBlockers(row, changedOnlineReleases).length) {
         await markPublishResult(db, row.id, "failed", "Online classroom-release evidence changed during publishing; review the assignment");
         failedRows.set(row.id, row);
-      } else if (!live || getWiseSessionClassId(live) !== row.wiseClassId || !isOfflineSession(live.type)
+      } else if (!live || getWiseSessionClassId(live) !== row.wiseClassId || !isRoomPublishSessionType(live.type)
+        || getClassroomSessionMode(live.type) !== getClassroomSessionMode(row.sessionType)
+        || bangkokDateKey(new Date(live.scheduledStartTime)) !== run.assignmentDate
         || !isBlockingStatus(live.meetingStatus) || getLocalMinuteOfDay(live.scheduledStartTime) !== row.startMinute
         || getLocalMinuteOfDay(live.scheduledEndTime) !== row.endMinute) {
         await markPublishResult(db, row.id, "failed", "Live Wise session changed during publishing; review the assignment");

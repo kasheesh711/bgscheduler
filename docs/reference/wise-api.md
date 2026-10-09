@@ -37,7 +37,7 @@ answer — lives in the matching [`docs/features/*`](../features/) page.
 - **Request counting (new):** every `get`/`post`/`put` is tallied by normalized path on the client instance and persisted per run — `sync_runs.metadata.wiseCallCount` / `.wiseTopPaths` and `credit_control_sync_runs.metadata`. See [The EFF-00 request counter](#the-eff-00-request-counter).
 - **Availability is stitched, and must be:** the 180-day leave horizon is assembled from **26 seven-day windows** per teacher. A probe run on **2026-09-02** confirmed Wise **rejects any wider span with HTTP 400** — see [The 7-day availability ceiling](#the-7-day-availability-ceiling). Since 2026-09-04 those windows are fetched in two tiers (near every run, far every 6 hours) — see [Near/far tiering](#nearfar-tiering-avail-01-2026-09-04).
 - **Institute scoping:** most endpoints nest under `/institutes/{instituteId}`; callers pass `WISE_INSTITUTE_ID` (default `696e1f4d90102225641cc413`). A minority sit under `/user/...` or `/teacher/...`.
-- **Writeback is narrow and gated:** six standalone helpers mutate Wise. Classroom assignment writes only OFFLINE session `location`; Student Promotions writes registration answers, class `subject`, and (behind a flag + typed confirmation) single-session `subject`; Progress Tests creates a session behind `WISE_SESSION_CREATE_VERIFIED`; Tutor Offboarding removes one institute participant only after saved preview + explicit apply and with the verification flag in production. **Post-Class Feedback is a separate guarded feedback write; it does not call the general Wise client.**
+- **Writeback is narrow and gated:** six standalone helpers mutate Wise. Classroom assignment writes only the `location` of eligible onsite and online sessions with assigned center rooms; Student Promotions writes registration answers, class `subject`, and (behind a flag + typed confirmation) single-session `subject`; Progress Tests creates a session behind `WISE_SESSION_CREATE_VERIFIED`; Tutor Offboarding removes one institute participant only after saved preview + explicit apply and with the verification flag in production. **Post-Class Feedback is a separate guarded feedback write; it does not call the general Wise client.**
 
 ---
 
@@ -667,7 +667,7 @@ dummy-teacher probe; see [Tutor Offboarding](../features/tutor-offboarding.md#ow
 - **`updateType=SINGLE`:** edits this one occurrence only, never the recurring series.
 - **Returns:** `WiseSessionUpdateResponse` = `{ status?, message?, data? }` ([`types.ts:151-156`](../../src/lib/wise/types.ts)).
 
-Online room/booth assignments stay local — there is no Wise write for them.
+Assigned online room and booth locations are published with the same guards as onsite rooms. Remote lessons have no room to publish.
 
 #### Eligibility policy
 
@@ -681,12 +681,12 @@ any of these hold:
 | `status === "remote"` or `assignedRoom === REMOTE_NO_ROOM_NEEDED` | Remote online session has no Wise location to publish |
 | `status !== "assigned"` | Only assigned rows can publish |
 | no `assignedRoom`, or `assignedRoom === NO_ROOM_AVAILABLE` | No assigned room to publish |
-| **not** an OFFLINE session (`!isOfflineSession(sessionType)`) | V1 publishes Wise locations for OFFLINE sessions only |
+| unknown session modality (`!isRoomPublishSessionType(sessionType)`) | Unknown session modality; room publishing requires review |
 | missing `wiseClassId` | Missing Wise class id |
 | missing `wiseSessionId` | Missing Wise session id |
 | `warnings` includes `needs_review_missing_capacity` | Missing reliable group capacity |
 
-So the writeback fires only for an **assigned, OFFLINE** row that has both a Wise
+So the writeback fires only for an **assigned, onsite or online** row that has both a Wise
 class id and session id and a clean capacity signal. Publishing is an explicit
 admin action (`POST /api/class-assignments/runs/{runId}/publish`); local run
 generation never writes to Wise. The same helper is also used to break a room
@@ -845,7 +845,7 @@ subsystem plus trigger that drives it. Cron expressions are UTC, from
 | GET | `/institutes/{id}/fees/transactions` | `fetchWiseReceiptTransactions` | read | Wise Activity reconciliation → admin / request path |
 | POST | `/institutes/{id}/checkSessionsAvailability` | `checkTeacherAvailabilityForSessions` | read (validation) | Progress Tests booking → admin action |
 | POST | `/teacher/classes/{classId}/sessions` | `scheduleWiseSession` | **write** | Progress Tests booking → admin, gated `WISE_SESSION_CREATE_VERIFIED` |
-| PUT | `/teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE` | `updateSessionLocation` | **write** | Classroom publish → admin action; OFFLINE + eligible rows only |
+| PUT | `/teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE` | `updateSessionLocation` | **write** | Classroom publish → admin action; Eligible onsite and online rows with assigned center rooms only |
 | PUT | `/teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE` | `updateSessionSubject` | **write** | Student Promotions → gated `WISE_SESSION_SUBJECT_UPDATE_VERIFIED` + typed confirm |
 | PUT | `/institutes/{id}/students/{studentId}/registration` | `updateWiseStudentRegistrationAnswers` | **write** | Student Promotions → `5 17 30 6 *` / verified apply |
 | PUT | `/teacher/editClass` | `updateWiseCourseSubject` | **write** | Student Promotions → verified apply |

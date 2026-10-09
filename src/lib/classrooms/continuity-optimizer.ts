@@ -1,7 +1,7 @@
 import type { AssignmentResultRow, ExternalRoomBlock } from "./assignment-engine";
 import type { ClassroomRoomDefinition } from "./rooms";
 import { assignmentTutorKey, CONTINUITY_GAP_MINUTES, physicalRoom, policyForTutor, roomQualityMetrics, type TutorRoomPolicies } from "./room-policy";
-import { isOnsiteSessionType } from "./session-mode";
+import { isRoomPublishSessionType } from "./session-mode";
 
 export const CONTINUITY_MAX_NODES = 10_000;
 export const CONTINUITY_MAX_DEPTH = 4;
@@ -31,7 +31,7 @@ export function optimizeClassroomContinuity(input: Input) {
   const byId = new Map(rows.map(row => [row.wiseSessionId, row]));
   const roomByName = new Map(rooms.map(room => [physicalRoom(room.name), room]));
   const placed = rows.filter(row => ["assigned", "needs_review"].includes(row.status) && roomByName.has(physicalRoom(row.assignedRoom)));
-  const retained = (row: AssignmentResultRow) => isOnsiteSessionType(row.sessionType) ? row.currentWiseLocation : null;
+  const retained = (row: AssignmentResultRow) => row.status !== "remote" && isRoomPublishSessionType(row.sessionType) ? row.currentWiseLocation : null;
   const locked = (row: AssignmentResultRow) => input.locked(row) || input.frozenSessionIds?.has(row.wiseSessionId)
     || row.status !== "assigned" || Boolean(retained(row) && !row.wiseClassId);
   const candidates = new Map(placed.map(row => [row.wiseSessionId, rooms.filter(room =>

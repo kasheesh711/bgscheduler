@@ -13,7 +13,7 @@ See the [recovery runbook](../operations/classroom-publish-recovery.md).
 
 ## Purpose
 
-Classroom Assignments turns one Bangkok day's blocking Wise teaching sessions into a concrete room plan for the BeGifted center, lets admin staff review and hand-correct it, and then — only on an explicit publish action — writes each eligible OFFLINE session's room back to Wise as its `location`. The same run also feeds two outbound emails: a personalized teaching agenda for every tutor teaching that day (with a link to the highlighted floor-plan map) and a daily readiness/blocker digest for the admin team.
+Classroom Assignments turns one Bangkok day's blocking Wise teaching sessions into a concrete room plan for the BeGifted center, lets admin staff review and hand-correct it, and then — only on an explicit publish action — writes each eligible onsite or online session's assigned center room back to Wise as its `location`. The same run also feeds two outbound emails: a personalized teaching agenda for every tutor teaching that day (with a link to the highlighted floor-plan map) and a daily readiness/blocker digest for the admin team.
 
 Who uses it: the scheduling/operations admins on `/class-assignments` (nav label "Class Assignments", pinned shortcut in the Scheduling & Tutors section, `src/lib/navigation/tools.ts:127-133`). Two unattended crons prepare the next day at 17:00 Bangkok and deliver its schedules at 19:00 so that, on a normal day, nobody has to touch the page.
 
@@ -83,7 +83,7 @@ Both cron jobs are also runnable by hand from Data Health through `src/lib/data-
 
 - **Sync Wise, then run** — first `POST /api/admin/sync-wise`; a promoted snapshot allows generation even when teacher/contact review issues remain (`outcome: "partial"`, HTTP 200). If another sync is running, poll `GET /api/class-assignments?date=` every 5 s for up to 12 minutes, checking **`activeSnapshotMeta`**, independently of an older saved assignment. Generation retains its 15-minute freshness check. The button label cycles `Syncing Wise → Generating`; the request does not publish or email.
 - **Persistent sync review** — “Wise data refreshed with issues” shows the current refresh's whole-schedule `syncErrorSummary` separately from `run.changeSummary.unmanagedWiseSessionCount` for the displayed day. Saved warnings survive reload, and an unknown historical count is not shown as zero. Data Health and Tutor Profiles links lead to review; unresolved sessions stay excluded and recipient checks still block unsafe deliveries. True refresh failures display `errorSummary`, then `error`, then a readable HTTP fallback.
-- **Publish to Wise** — opens a confirmation dialog ("This writes location only for eligible OFFLINE rows. Live Wise room conflicts fail closed per row."), then `POST …/publish` and polls progress every 1.5 s until terminal (`:466-474`); a separate 1 s ticker only refreshes the elapsed-time display while a publish or email send is in flight (`:330-335`).
+- **Publish to Wise** — opens a confirmation dialog ("This writes room locations for eligible onsite and online classes. Remote classes have no room to publish. Conflicting room assignments are blocked."), then `POST …/publish` and polls progress every 1.5 s until terminal (`:466-474`); a separate 1 s ticker only refreshes the elapsed-time display while a publish or email send is in flight (`:330-335`).
 - **Email schedules** — loads the preview, pre-selects every `ready` tutor, and opens the "Email teacher schedules" dialog with per-tutor room route, map image and text preview; `Send selected` posts the chosen `recipientGroupIds` (`:490-555`).
 
 **Tabs** (`:782-1003`, default `floor-plan`):
@@ -114,7 +114,7 @@ flowchart TD
     ENGINE --> PERSIST["new classroom_assignment_runs + rows"]
     PERSIST --> OVR["PATCH override → re-run engine in place"]
     PERSIST --> PUB["POST publish → classroom_publish_jobs<br/>after(): runClassroomPublishJob"]
-    PUB --> WISE["PUT Wise session location<br/>(OFFLINE, verified location, no live conflict)"]
+    PUB --> WISE["PUT Wise session location<br/>(onsite or online, verified location, no live conflict)"]
     PERSIST --> MAIL["schedule-email preview / send<br/>→ Apps Script relay"]
   end
   subgraph Cron["Cron 0 10 * * * UTC (17:00 Bangkok)"]
@@ -209,7 +209,7 @@ Validation and rollout evidence: [2026-09-07 classroom stability](../operations/
 
 ### Publish eligibility and fail-closed writeback
 
-- **Eligibility** (`data.ts:1213-1234`): status must be `assigned`; not `remote`; a real room (not `NO_ROOM_AVAILABLE`); Wise `type` must be onsite ("V1 publishes Wise locations for OFFLINE sessions only"); both `wiseClassId` and `wiseSessionId` present; and no `needs_review_missing_capacity` warning. Everything else is recorded `skipped` with the reason.
+- **Eligibility** (`data.ts:1213-1234`): status must be `assigned`; not `remote`; a real room (not `NO_ROOM_AVAILABLE`); Wise `type` must have a known onsite or online mode; both `wiseClassId` and `wiseSessionId` present; and no `needs_review_missing_capacity` warning. Everything else is recorded `skipped` with the reason.
 - **Location names are verified against Wise before any write.** The catalog maps each active, non-`online_only` room to its expected Wise name — the room name with a `(TV)` suffix when `hasTv` (`:294-298`) — and only names that exactly exist in `fetchInstituteLocations` are publishable; a missing name fails the row with `Verified Wise location … is missing` (`:300-349`). An empty Wise catalog is treated as a catalog load failure: the throw at `:1414-1416` is caught into `catalogError` (`:1533-1540`), every eligible row is marked `failed` with that message (`:1548-1557`), and the job still finishes with a terminal `failed`/`partial` status (`:1715-1729`) — the job does not abort.
 - **Plan validation before writes.** Every affected destination is checked against the complete proposed plan before updates begin. Live Wise date, time, blocking status and onsite modality must still match. Existing location-only writes, live occupancy checks and temporary-room swap handling remain in place.
 - **No stale writes.** A row whose live Wise session is gone fails (`:1573-1582`); a row whose target room overlaps a live external Wise class fails with the conflicting class named (`:1584-1594`); when a subset is targeted, a room still occupied by an *unchanged* local row fails (`:1596-1609`).

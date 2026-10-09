@@ -12,6 +12,13 @@ const catalog = [{ id: "b", name: "Room B", sortOrder: 0, capacity: 2, active: t
 const roster = (patch: Partial<PrintRoster> = {}): PrintRoster => ({ students: ["Student"], studentCount: 1, rosterStatus: "verified", sessionState: "current", warnings: [], ...patch });
 const report = (day: ReturnType<typeof buildClassroomPrintDay>): ClassroomPrintReport => ({ days: [day], generatedAt: "2099-09-11T10:00:00Z", rosterCheckedAt: "2099-09-11T10:00:00Z", refreshFailed: false });
 describe("shared classroom print data", () => {
+  it("keeps assigned online rooms in draft until published, while remote rows need no publication", () => {
+    const online = row("online", { sessionType: "SCHEDULED", publishStatus: "not_published" });
+    const rosters = new Map([[online.id, roster()]]);
+    expect(buildClassroomPrintDay(run, [online], catalog, rosters).draft).toBe(true);
+    expect(buildClassroomPrintDay(run, [{ ...online, publishStatus: "success" }], catalog, rosters).draft).toBe(false);
+    expect(buildClassroomPrintDay(run, [{ ...online, status: "remote", assignedRoom: "REMOTE_NO_ROOM_NEEDED" }], catalog, rosters).draft).toBe(false);
+  });
   it("omits room preference and change notes only from print reports, while retaining real warnings", () => {
     const savedRun = { ...run, changeSummary: { roomPolicies: [{ canonicalKey: "a", revision: 1, rooms: ["Usual room"] }] } };
     const rows = [row("a", { assignedRoom: "Room A" }), row("b", { canonicalKey: "a", tutorDisplayName: "Tutor a", startMinute: 600, endMinute: 660 })];

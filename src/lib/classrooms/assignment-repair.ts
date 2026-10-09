@@ -1,5 +1,5 @@
 import type { AssignmentResultRow, ExternalRoomBlock } from "./assignment-engine";
-import { isOnsiteSessionType } from "./session-mode";
+import { isRoomPublishSessionType } from "./session-mode";
 import { NO_ROOM_AVAILABLE, type ClassroomRoomDefinition } from "./rooms";
 
 export const ROOM_REPAIR_MAX_NODES = 20_000;
@@ -32,9 +32,9 @@ export function repairClassroomAssignments(input: RepairInput): AssignmentResult
   const active = rows.filter(row => row.status !== "remote");
   const peers = new Map(active.map(row => [row.wiseSessionId,
     active.filter(other => other.wiseSessionId !== row.wiseSessionId && overlaps(row, other))]));
-  const canPublish = (row: AssignmentResultRow) => isOnsiteSessionType(row.sessionType)
+  const canPublish = (row: AssignmentResultRow) => isRoomPublishSessionType(row.sessionType)
     && Boolean(row.wiseClassId) && !row.warnings.includes("needs_review_missing_capacity");
-  const retainedLocation = (row: AssignmentResultRow) => isOnsiteSessionType(row.sessionType)
+  const retainedLocation = (row: AssignmentResultRow) => isRoomPublishSessionType(row.sessionType)
     ? row.currentWiseLocation?.trim() || null : null;
   const immovable = (row: AssignmentResultRow) => input.locked(row)
     || (Boolean(retainedLocation(row)) && !canPublish(row));
