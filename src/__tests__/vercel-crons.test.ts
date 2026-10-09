@@ -18,7 +18,6 @@ const EXPECTED_SCHEDULES: Record<string, string> = {
   "/api/internal/post-class-feedback/reminder-nightly": "0,30 * * * *",
   "/api/internal/tutor-sit-ins": "4,14,24,34,44,54 * * * *",
   "/api/internal/tutor-sit-ins/digest": "0 1 * * *",
-  "/api/internal/progress-tests/process": "* * * * *",
   "/api/internal/room-booking": "1,5,9,13,17,21,25,29,33,37,41,45,49,53,57 * * * *",
   "/api/internal/class-assignments/weekend-check": "0,16,31 2 * * 3-5",
   "/api/internal/class-assignments/publish-recovery": "1-56/5 * * * *",
@@ -28,8 +27,6 @@ const EXPECTED_SCHEDULES: Record<string, string> = {
   "/api/internal/sync-onsite-foot-traffic": "18 18 * * *",
   "/api/internal/sync-competitor-intelligence": "28 18 * * 0",
   "/api/internal/sync-credit-control": "20,50 * * * *",
-  "/api/internal/sync-progress-tests": "25,55 * * * *",
-  "/api/internal/progress-tests/admin-digest": "35 0 * * *",
   "/api/internal/sync-wise-activity": "2,17,32,47 * * * *",
   "/api/internal/sync-post-class-feedback": "13,43 * * * *",
   "/api/internal/post-class-feedback-backfill": "23,53 * * * *",
@@ -109,10 +106,10 @@ function canCollide(left: FiringSet, right: FiringSet): boolean {
 }
 
 describe("vercel cron configuration", () => {
-  it("registers exactly the 29 known crons, each on its pinned schedule", () => {
+  it("registers exactly the 26 known crons, each on its pinned schedule", () => {
     const crons = loadVercelConfig().crons;
 
-    expect(crons).toHaveLength(29);
+    expect(crons).toHaveLength(26);
     expect(Object.fromEntries(crons.map((cron) => [cron.path, cron.schedule]))).toEqual(EXPECTED_SCHEDULES);
   });
 

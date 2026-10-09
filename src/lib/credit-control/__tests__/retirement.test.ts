@@ -28,6 +28,6 @@ describe("Credit Control retirement", () => {
     vi.stubEnv("CREDIT_CONTROL_MODE", "retired");
     expect(effectiveCronJob(job)).toMatchObject({ label: "Shared Student Data", cadenceMinutes: 1440, requiresSuccessfulRun: true });
     expect(effectiveCronJob(getCronJobDefinition("line_credit_digest")!).paused).toBe(true);
-    expect(effectiveCronJob(getCronJobDefinition("progress_tests")!).cadenceMinutes).toBe(1440);
+    expect(effectiveCronJob(getCronJobDefinition("progress_tests")!)).toMatchObject({ paused: true, manualOnly: true });
   });
 });
