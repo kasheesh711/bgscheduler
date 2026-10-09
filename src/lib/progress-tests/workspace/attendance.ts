@@ -1,4 +1,5 @@
 import { isProgressClass } from "./cadence";
+import { recentClassWindowMs,courseExclusion } from "./course-policy";
 import { gte } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
@@ -14,14 +15,15 @@ export type AttendanceInput = { source: AttendanceRow[]; packages: { wiseClassId
 export async function loadWorkspaceAttendance(db: Database, client: WiseClient, instituteId: string, launch: Date, now: Date): Promise<AttendanceInput> {
   const [students, past, future, previous] = await Promise.all([
     fetchCreditStudents(client, instituteId),
-    fetchCreditSessions(client, instituteId, "PAST", new Date(launch.getTime() - 86400000), new Date(now.getTime() + 86400000)),
+    fetchCreditSessions(client, instituteId, "PAST", new Date(Math.min(launch.getTime(),now.getTime()-recentClassWindowMs) - 86400000), new Date(now.getTime() + 86400000)),
     fetchCreditSessions(client, instituteId, "FUTURE", now, new Date(now.getTime() + 30 * 86400000)),
     db.select().from(s.progressTestAttendanceLedger).where(gte(s.progressTestAttendanceLedger.scheduledStartTime, launch)),
   ]);
   const names = new Map(students.map(student => [student._id, student.name]));
+  const activeStudents = new Set(students.filter(student=>student.activated).map(student=>student._id));
   const pairs = new Map<string, { wiseClassId: string; wiseStudentId: string; classType: string | null }>();
   const key = (course: string, student: string) => JSON.stringify([course, student]);
-  for (const student of students) for (const course of student.classrooms) pairs.set(key(course._id, student._id), { wiseClassId: course._id, wiseStudentId: student._id, classType: course.classType ?? null });
+  for (const student of students) for (const course of student.classrooms) pairs.set(key(course._id, student._id), { wiseClassId: course._id, wiseStudentId: student._id, classType: student.activated ? course.classType ?? null : null });
   const rows = new Map<string, AttendanceRow>();
   // Retain evidence for sessions that disappeared from a date feed. Fresh credit
   // history still revokes refunded consumption; proven deletions are reconciled
@@ -32,19 +34,19 @@ export async function loadWorkspaceAttendance(db: Database, client: WiseClient, 
   }
   for (const session of [...past, ...future]) {
     const kind = session.scheduledStartTime > now ? "future" : "past";
-    if (session.scheduledStartTime < launch && !previous.some(row => row.wiseSessionId === session._id)) continue;
+    if (session.scheduledStartTime.getTime() < Math.min(launch.getTime(),now.getTime()-recentClassWindowMs) && !previous.some(row => row.wiseSessionId === session._id)) continue;
     if (session.scheduledStartTime.getTime() > now.getTime() + 30 * 86400000) continue;
     for (const studentId of session.students) {
       const pairKey = key(session.classId._id, studentId);
       const pair = pairs.get(pairKey);
       const sessionType = session.classId.classType;
-      const classType = pair?.classType && sessionType && pair.classType !== sessionType ? null : sessionType ?? pair?.classType ?? null;
+      const classType = !activeStudents.has(studentId) || pair?.classType && sessionType && pair.classType !== sessionType ? null : sessionType ?? pair?.classType ?? null;
       pairs.set(pairKey, { wiseClassId: session.classId._id, wiseStudentId: studentId, classType });
       rows.set(key(session._id, studentId), { wiseSessionId: session._id, wiseClassId: session.classId._id, wiseStudentId: studentId, studentKey: studentId, studentName: names.get(studentId) ?? "Unresolved student", subject: session.classId.subject ?? "", title: session.classId.name ?? session.title ?? "Course", packageName: "", scheduledStartTime: session.scheduledStartTime, scheduledEndTime: session.scheduledEndTime, meetingStatus: session.meetingStatus.toUpperCase(), sessionKind: kind, creditApplied: 0, ...creditSessionTeacher(session) });
     }
   }
   const credits = new Map<string, Map<string, number>>();
-  const needed = [...new Set([...rows.values()].filter(row => row.sessionKind === "past" && isProgressClass(pairs.get(key(row.wiseClassId, row.wiseStudentId))?.classType)).map(row => key(row.wiseClassId, row.wiseStudentId)))];
+  const needed = [...new Set([...rows.values()].filter(row => row.sessionKind === "past" && isProgressClass(pairs.get(key(row.wiseClassId, row.wiseStudentId))?.classType) && !courseExclusion(row.wiseClassId,pairs.get(key(row.wiseClassId, row.wiseStudentId))?.classType)).map(row => key(row.wiseClassId, row.wiseStudentId)))];
   // Avoid creating thousands of queued promises while preserving the shared
   // client's pacing and deadline. Check credit for each student in each course.
   for (let i = 0; i < needed.length; i += 4) await Promise.all(needed.slice(i, i + 4).map(async pairKey => {
