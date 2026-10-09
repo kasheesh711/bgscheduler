@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ClassroomPrintCard } from "@/components/class-assignments/classroom-print-document";
+import { buildTeacherSchedule } from "../schedule-projection";
 import { buildClassroomPrintDay, printRunsSchema, printViewSchema, type ClassroomPrintReport } from "../print-report";
 import { projectPrintRoster, type PrintRoster } from "../print-roster";
 import { buildPrintCards, paginatePrintCards, splitPrintCard } from "@/components/class-assignments/print-pagination";
@@ -8,6 +12,27 @@ const catalog = [{ id: "b", name: "Room B", sortOrder: 0, capacity: 2, active: t
 const roster = (patch: Partial<PrintRoster> = {}): PrintRoster => ({ students: ["Student"], studentCount: 1, rosterStatus: "verified", sessionState: "current", warnings: [], ...patch });
 const report = (day: ReturnType<typeof buildClassroomPrintDay>): ClassroomPrintReport => ({ days: [day], generatedAt: "2099-09-11T10:00:00Z", rosterCheckedAt: "2099-09-11T10:00:00Z", refreshFailed: false });
 describe("shared classroom print data", () => {
+  it("omits room preference and change notes only from print reports, while retaining real warnings", () => {
+    const savedRun = { ...run, changeSummary: { roomPolicies: [{ canonicalKey: "a", revision: 1, rooms: ["Usual room"] }] } };
+    const rows = [row("a", { assignedRoom: "Room A" }), row("b", { canonicalKey: "a", tutorDisplayName: "Tutor a", startMinute: 600, endMinute: 660 })];
+    const rosters = new Map(rows.map(r => [r.id, roster()]));
+    const schedule = buildTeacherSchedule(rows, run.assignmentDate, savedRun.changeSummary);
+    expect(schedule.tutors[0].blocks[1].exceptionReasons).toEqual([
+      "Outside usual rooms for this class", "Room change between consecutive classes",
+    ]);
+    const day = buildClassroomPrintDay(savedRun, rows, catalog, rosters);
+    expect(day.draft).toBe(false);
+    for (const view of ["tutors", "rooms"] as const) {
+      for (const card of buildPrintCards(report(day), view)[0].cards) {
+        const html = renderToStaticMarkup(createElement(ClassroomPrintCard, { card }));
+        expect(html).not.toMatch(/Outside usual rooms|Room change/i);
+      }
+    }
+    rosters.set("b", roster({ warnings: ["Session could not be verified in Wise."] }));
+    const warningDay = buildClassroomPrintDay(savedRun, rows, catalog, rosters);
+    expect(warningDay.draft).toBe(true);
+    expect(warningDay.tutors[0].blocks[1].notes).toEqual(["Session could not be verified in Wise."]);
+  });
   it("keeps live-verified database rows in alphabetical tutor groups and their assigned rooms", () => {
     const rows = [
       row("z", { tutorDisplayName: "Zulu" }),
