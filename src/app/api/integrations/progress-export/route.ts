@@ -8,7 +8,7 @@ import { sourceTransferControl } from "@/lib/progress-tests/transfer/control";
 import { TRANSFER_TABLES } from "@/lib/progress-tests/transfer/tables";
 import { rowHash } from "@/lib/progress-tests/transfer/hash";
 import { readBlobBytes } from "@/lib/progress-tests/workspace/files";
-import { privateJson, workspaceError } from "@/lib/progress-tests/workspace/http";
+import { workspaceError } from "@/lib/progress-tests/workspace/http";
 import { WorkspaceError } from "@/lib/progress-tests/workspace/model";
 export const maxDuration=300;
 function exportJson(data:unknown){const bytes=new TextEncoder().encode(JSON.stringify(data));let offset=0;return new Response(new ReadableStream({pull(c){if(offset>=bytes.length){c.close();return;}c.enqueue(bytes.subarray(offset,offset+1024*1024));offset+=1024*1024;}}),{headers:{"Content-Type":"application/json","Cache-Control":"private, no-store"}});}

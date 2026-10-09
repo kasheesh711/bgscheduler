@@ -1,8 +1,10 @@
 import { reviewIsebPosts } from "./iseb-review";
+import { raiseRecurringStyleProblems } from "./style-trends";
 import { randomBytes } from "node:crypto";
 import { and, between, count, desc, eq, getTableColumns, gte, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import type { AutowriterCriticalCategory, AutowriterVerdictSeverity } from "@/lib/db/schema";
 import { sqlStateOf } from "./db-errors";
 import { UNMATCHED_API_CRITICAL_FROM, ingestFixEvents, type FixActorKind, type FixEventIngestResult } from "./fix-events";
 import { landedProblemCategory, normalizeFields, postMayHaveLanded, postedBilling, problemCodes, proveFirstShot, type FirstShotProof } from "./first-shot";
@@ -283,13 +285,19 @@ const ACTOR_LABEL: Record<string, string> = {
   api_actor_unmatched: "Wise API user (no recorded post)",
 };
 
-async function insertFlag(db: Database, input: {
+/**
+ * Insert one flag (once per idempotency key) and put the class back in the owner's review list. Returns true when
+ * this call created it. Shared with the nightly audit, which raises `agent` flags (`nightly/flags.ts`).
+ */
+export async function insertFlag(db: Database, input: {
   wiseSessionId: string;
-  source: "measured_fix" | "api_unmatched" | "system";
+  source: "measured_fix" | "api_unmatched" | "system" | "agent";
   idempotencyKey: string;
   note: string;
-  suggestedSeverity?: "critical" | null;
-  suggestedCategory?: "billing_status" | "should_not_have_posted" | null;
+  suggestedSeverity?: AutowriterVerdictSeverity | null;
+  suggestedCategory?: AutowriterCriticalCategory | null;
+  /** Who raised it; the review job's own system actor by default. */
+  createdBy?: string;
 }): Promise<boolean> {
   const inserted = await db.insert(FL).values({
     wiseSessionId: input.wiseSessionId,
@@ -297,7 +305,7 @@ async function insertFlag(db: Database, input: {
     suggestedSeverity: input.suggestedSeverity ?? null,
     suggestedCategory: input.suggestedCategory ?? null,
     note: input.note.slice(0, 500),
-    createdBy: REVIEW_SYSTEM_ACTOR,
+    createdBy: input.createdBy ?? REVIEW_SYSTEM_ACTOR,
     idempotencyKey: input.idempotencyKey,
   }).onConflictDoNothing().returning({ id: FL.id });
   if (inserted.length === 0) return false;
@@ -977,6 +985,7 @@ export async function runReviewJob(deps: ReviewJobDeps): Promise<ReviewJobResult
 
     if (process.env.FEEDBACK_AUTOWRITER_ISEB_REVIEW_ENABLED === "true") {
       await step("iseb_style_review", () => reviewIsebPosts(db, deps.deadlineMs ?? Date.now() + 75_000));
+      await step("style_trends", () => raiseRecurringStyleProblems(db, now));
     }
     // Incidents this run raised.
     await drain("incidents", now);

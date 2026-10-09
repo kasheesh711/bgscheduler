@@ -1,4 +1,6 @@
 import { loadAtomLessonEvidence, retainIsebEvidence, storedIsebEvidenceMatches, eligibleForIseb } from "./atom/data";
+import { hasAtomEvidenceWording } from "./atom/statistics";
+import { detectNoShow } from "./no-show";
 import { matchingFormatStamp } from "./format";
 import { approvedFormatGuide, atomRolloutApproved } from "./iseb-rollout";
 import { MIMI_STYLE_GUIDE_V2 } from "./style";
@@ -507,7 +509,11 @@ async function settleGate(input: {
   }
   const state = disposition === "scope" ? "skipped_scope" : disposition === "human" ? "skipped_human" : disposition === "expired" ? "expired" : "held";
   const alertKind: AlertKind | null = state === "held" ? "held" : state === "expired" ? "expired" : null;
-  await release({ ...(state === "held" ? input.draftPatch ?? {} : {}), state, reason, alertKind });
+  // A student who never joined while the tutor waited: the hold carries the standard note, ready for one click.
+  const noShow = state === "held" ? detectNoShow(detail, reason) : null;
+  const patch = state === "held" ? input.draftPatch ?? {} : {};
+  // Always written on a hold (null when not a no-show): `||` never removes a key, and an older note must not linger.
+  await release({ ...patch, ...(state === "held" ? { metadata: { ...(patch.metadata ?? {}), noShow } } : {}), state, reason, alertKind });
   return out(state, reason);
 }
 
@@ -745,7 +751,7 @@ async function processLeased(deps: AutowriterDeps, input: {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
     draft: { arm: result.arm, fields: result.fields, judge: result.judge, pipeline: { ...pipelineStamp("summary", result.arm, result.styleGuide),
       formatGuide: result.formatGuide ?? null, atomEvidenceHash: result.atomEvidence?.hash ?? null,
-      atomMapping: result.atomEvidence?.mapping ?? null, lessonEvidenceHash, factualVerdicts: result.judge } }, evidence: "summary",
+      atomMapping: result.atomEvidence?.mapping ?? null, lessonEvidenceHash, factualVerdicts: result.judge, repair: result.repair ?? null } }, evidence: "summary",
     extraMetadata: { ...guestMetadata(student), ...judgeAnswered(row) }, release, out,
   });
 }
@@ -905,7 +911,10 @@ function reusableTranscriptDraft(row: AutowriterSessionRow): StoredDraft | null 
   const expectedStyle = process.env.FEEDBACK_AUTOWRITER_ISEB_FORMAT_ENABLED === "true" && storedFormat?.id === "iseb" && tutorKey === "Mimi"
     ? MIMI_STYLE_GUIDE_V2 : activeStyleGuide(tutorKey);
   if (!matchingStoredStyle(pipeline.styleGuide, expectedStyle)) return null;
-  return { arm: row.arm, fields: row.fields as unknown as FeedbackFieldAnswers, judge, pipeline };
+  const fields = row.fields as unknown as FeedbackFieldAnswers;
+  // 7 Oct: a draft written under the earlier Atom rules may carry their audit wording; it is written again.
+  if (hasAtomEvidenceWording(fields)) return null;
+  return { arm: row.arm, fields, judge, pipeline };
 }
 
 /**
@@ -1235,7 +1244,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
     row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
     draft: { arm: result.arm, fields: result.fields, judge: result.judge, pipeline: { ...pipelineStamp("transcript", result.arm, result.styleGuide),
       formatGuide: result.formatGuide ?? null, atomEvidenceHash: result.atomEvidence?.hash ?? null,
-      atomMapping: result.atomEvidence?.mapping ?? null, lessonEvidenceHash, factualVerdicts: result.judge } }, evidence: "transcript",
+      atomMapping: result.atomEvidence?.mapping ?? null, lessonEvidenceHash, factualVerdicts: result.judge, repair: result.repair ?? null } }, evidence: "transcript",
     // A stored draft: a later failure (a requeued shadow draft written again) starts a new count, of the writer's
     // failures and of the judge's.
     extraMetadata: { transcript: transcriptMeta, ...guestMetadata(student), ...(canFallBack ? { writerErrors: 0 } : {}), ...judgeAnswered(row) },

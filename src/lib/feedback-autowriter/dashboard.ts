@@ -1,6 +1,7 @@
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import type { FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
 import { wiseSessionLink } from "@/lib/wise/links";
 import { AUTOWRITER_MAX_TRANSCRIBE_ERRORS, AUTOWRITER_MAX_WRITER_ERRORS, AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS, writersFor } from "./config";
 import { HOLD_LISTED_AFTER_DEADLINE_MS } from "./inbox";
@@ -10,6 +11,7 @@ import { AUTOWRITER_TUTORS, rosterTutor, tutorLabel } from "./roster";
 import { readControl, sessionClassNameSql, type AutowriterSessionRow } from "./store";
 import { buildSystemStatus, type AutowriterSystemStatus } from "./system-status";
 import { SUMMARY_FALLBACK_CAUSES, type SummaryFallbackCause } from "./types";
+import { readNoShow } from "./no-show";
 
 const S = schema.feedbackAutowriterSessions;
 const CALLS = schema.feedbackAutowriterCalls;
@@ -44,6 +46,8 @@ export interface DashboardHoldRow extends Pick<AutowriterSessionRow,
   hasDraft: boolean;
   /** The class's teacher feedback in Wise holds text now, a person's (`loadHeldClassesAPersonWrote`). */
   personWrote: boolean;
+  /** `metadata.noShow`, read by `readNoShow`. */
+  noShow?: unknown;
 }
 
 /**
@@ -200,6 +204,8 @@ export interface AutowriterDashboard {
      */
     resolvedBy: "tutor_wrote" | null;
     wiseUrl: string | null;
+    /** The student never joined while the tutor waited: the standard note, ready for the owner's one click. */
+    noShow?: { tutorMinutes: number; studentSeconds: number; note: FeedbackFieldAnswers } | null;
   }>;
   /** Classes of the window whose POST did not end well, latest class first. */
   failedPosts: Array<{
@@ -385,6 +391,7 @@ export function buildAutowriterDashboard(input: {
         hasDraft: row.hasDraft,
         resolvedBy: row.personWrote ? "tutor_wrote" as const : null,
         wiseUrl: wiseUrlOf(row),
+        noShow: noShowOf(row.noShow),
       })),
     failedPosts: sessions
       .flatMap((row) => row.state === "verify_failed" || row.state === "unknown_outcome" || row.state === "rejected" ? [{ row, state: row.state }] : [])
@@ -531,6 +538,11 @@ function tallyBy<T>(rows: readonly T[], key: (row: T) => string): Array<[string,
  * The price is a hold someone settled without writing (a student marked absent, or homework alone): it stays listed
  * until a day after its deadline.
  */
+function noShowOf(value: unknown): AutowriterDashboard["holds"][number]["noShow"] {
+  const facts = readNoShow({ noShow: value });
+  return facts ? { tutorMinutes: facts.tutorMinutes, studentSeconds: facts.studentSeconds, note: facts.note } : null;
+}
+
 async function loadHeldClassesAPersonWrote(db: Database): Promise<Set<string>> {
   const rows = await db.select({ wiseSessionId: S.wiseSessionId }).from(S)
     .innerJoin(PC, eq(PC.wiseSessionId, S.wiseSessionId))
@@ -584,6 +596,7 @@ export async function loadAutowriterDashboard(
       reason: S.reason,
       alertsSent: S.alertsSent,
       hasDraft: sql<boolean>`${S.fields} is not null`,
+      noShow: sql<unknown>`${S.metadata}->'noShow'`,
       className: sessionClassNameSql,
     }).from(S)
       .leftJoin(schema.postClassSessions, eq(schema.postClassSessions.wiseSessionId, S.wiseSessionId))

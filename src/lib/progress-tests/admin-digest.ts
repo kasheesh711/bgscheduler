@@ -319,9 +319,15 @@ export async function sendProgressTestAdminDigest(
   now: Date = new Date(),
   options: { sender?: ScheduleEmailSender } = {},
 ): Promise<ProgressTestAdminDigestResult> {
-  await assertSourceWriter(db);
   const digestDate = todayBangkok(now);
 
+  if (process.env.PROGRESS_TEST_ADMIN_DIGEST_ENABLED?.trim().toLowerCase() === "false") return {
+    status: "skipped", digestDate, digestRunId: null, approachingCount: 0, dueCount: 0,
+    unresolvedCount: 0, attempted: 0, success: 0, failed: 0,
+    message: "Progress test admin digest is disabled (PROGRESS_TEST_ADMIN_DIGEST_ENABLED=false).",
+  };
+
+  await assertSourceWriter(db);
   if (!await hasTodayRefresh(db, "progress", now)) return {
     status: "skipped", digestDate, digestRunId: null, approachingCount: 0, dueCount: 0,
     unresolvedCount: 0, attempted: 0, success: 0, failed: 0,
@@ -395,7 +401,7 @@ export async function sendProgressTestAdminDigest(
   }
 
   const recipients = await loadAdminEmails(db);
-  const sender = options.sender ?? createOutboundEmailSender();
+  const sender = options.sender ?? createOutboundEmailSender("primary", { audience: "staff" });
   const html = renderHtml(digestDate, content);
   const text = renderText(digestDate, content);
   const counts = { attempted: 0, success: 0, failed: 0 };

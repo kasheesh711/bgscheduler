@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { ATOM_MAX_AGE_MS, type AtomActivity, type AtomLesson, type AtomLessonEvidence, type AtomOmissionReason,
-  type AtomSnapshot, type AtomStudentLink, type AtomSubject, type MatchedAtomActivity } from "./types";
+  type AtomSkippedRecord, type AtomSnapshot, type AtomStudentLink, type AtomSubject, type MatchedAtomActivity } from "./types";
 
 /** Stable JSON hashing also makes object key order irrelevant during read-back. */
 export function evidenceHash(value: unknown): string {
@@ -31,6 +31,8 @@ export function buildAtomLessonEvidence(input: {
   /** Current lesson only. An exact, unique activity name or id can establish an outside-window match. */
   lessonRecord: string;
   unavailableReason?: AtomOmissionReason;
+  /** Records the collector skipped for this student (their list entry and transcript disagree). */
+  skipped?: readonly Pick<AtomSkippedRecord, "id" | "startedAt" | "completedAt">[];
 }): AtomLessonEvidence {
   const { lesson, link, snapshot } = input;
   const evidence: Omit<AtomLessonEvidence, "hash"> = {
@@ -91,6 +93,13 @@ export function buildAtomLessonEvidence(input: {
     };
     evidence.activities.push(matched);
   }
+  // A skipped record worked on during this lesson has no statistics the writer may use; saying so keeps a score
+  // repeated from the lesson record from reading as if Atom had confirmed it.
+  for (const record of [...(input.skipped ?? [])].sort((a, b) => a.id.localeCompare(b.id))) {
+    if (Date.parse(record.startedAt) < Date.parse(lesson.end) && Date.parse(record.completedAt) >= Date.parse(lesson.start)) {
+      omit("record_skipped", record.id);
+    }
+  }
   if (!evidence.activities.length && !evidence.omissions.length) omit("no_matching_activity");
   return finish();
 }
@@ -125,8 +134,9 @@ export const ATOM_MODEL_RULES = [
   "A score repeated in a lesson summary or transcript is not a validated activity result. If Atom evidence is omitted, leave out test/practice scores, correct-answer counts, percentages, SAS and completion times. Do not assume an unnamed activity was a worksheet or a different platform. Lesson methods and assigned task quantities can still be described.",
   "Exclude results of homework, historical attempts and other tutors' work, even when the tutor discusses or reviews them in this lesson. With matched Atom evidence, every included activity result must come from that evidence and name the activity.",
   "Keep correct answers, attempted questions, total questions, time, SAS and modelled topic estimates distinct. SAS is not a percentage; topic estimates are not raw correctness.",
-  "A matched_portion is only the matched part of an activity: explicitly say so; its denominator is attemptedQuestions, never totalQuestions. Do not report its whole-activity SAS or estimates.",
-  "Preserve assistance and unknown assistance. Not marked assisted does not prove independent mastery. Scores alone do not establish understanding.",
+  "A matched_portion is only the part of an activity done in this lesson: say so in plain words (for example \"in the part of <activity name> we worked through in class\"); its denominator is attemptedQuestions, never totalQuestions. Do not report its whole-activity SAS or estimates.",
+  "Assistance: when Atom's assistance is \"assisted\", say the work was done with my guidance. When it is \"not_marked_assisted\" or \"unknown\", never claim the student worked independently or unaided, and do not mention Atom's assistance status; guidance the lesson record shows may still be described. Scores alone do not establish understanding.",
+  "The post is read by the student and parent. Never use the evidence's field names or labels (matched_portion, not_marked_assisted, attemptedQuestions) or say how the evidence was selected or checked; state what the student did in plain teacher language (a part-activity result still says it covers the part done in class).",
   "Atom assignments never prove homework was assigned in this class. Only the current lesson record can establish homework.",
   "If the lesson record and Atom explicitly contradict each other about a statistic or ownership, reject the draft for human review; never resolve the conflict by guessing.",
 ].join("\n");

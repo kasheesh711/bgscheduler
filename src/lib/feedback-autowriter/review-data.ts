@@ -292,8 +292,18 @@ export interface AutowriterReview {
     acknowledgedAt: string | null;
     acknowledgedBy: string | null;
     createdAt: string;
+    /** A link to the record the incident is about (an Atom transcript), when it has one; never the rest of `detail`. */
+    link?: string | null;
   }>;
   lastRun: { status: string; startedAt: string; finishedAt: string | null; errorSummary: string | null; dailyGateSkipped: string | null } | null;
+}
+
+const ATOM_TRANSCRIPT_URL = /^https:\/\/app\.atomlearning\.com\/tutor\/transcript\/_[0-9]+$/u;
+
+/** Only a known record link leaves the server: an Atom transcript (`detail.atomUrl`). */
+export function incidentLink(detail: unknown): string | null {
+  const url = detail && typeof detail === "object" ? (detail as { atomUrl?: unknown }).atomUrl : null;
+  return typeof url === "string" && ATOM_TRANSCRIPT_URL.test(url) ? url : null;
 }
 
 type ReviewRow = typeof R.$inferSelect;
@@ -596,6 +606,7 @@ export function buildAutowriterReview(input: { now: Date } & ReviewSourceRows): 
         acknowledgedAt: iso(incident.acknowledgedAt),
         acknowledgedBy: incident.acknowledgedBy,
         createdAt: incident.createdAt.toISOString(),
+        link: incidentLink(incident.detail),
       })),
     lastRun: input.lastRun ? {
       status: input.lastRun.status,

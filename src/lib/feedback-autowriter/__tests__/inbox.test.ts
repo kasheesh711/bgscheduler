@@ -156,7 +156,7 @@ describe("buildInbox", () => {
     expect(ids(items)).toEqual(["incident:newest", "incident:halt", "incident:older", "incident:unknown-class", "incident:on-hold", "incident:new-kind"]);
     expect(items[0]).toEqual({
       id: "incident:newest", kind: "incident", urgency: "critical", title: "A save by the Wise API user that no post explains",
-      detail: "A feedback save by the Wise API user matches no recorded autowriter post",
+      detail: `${STUDENT} · A feedback save by the Wise API user matches no recorded autowriter post`,
       tutorKey: "Chai", wiseSessionId: "class-queue", classEndedAt: inHours(-12), deadlineAt: null, tutorNotifiedAt: null, action: "open",
     });
     expect(items[1]).toMatchObject({ title: "Posting was halted", detail: "Posting halted: unknown outcome", tutorKey: null, wiseSessionId: null, classEndedAt: null });
@@ -183,6 +183,31 @@ describe("buildInbox", () => {
     expect(ids(items)).toEqual(["incident:atom", "incident:style-fix"]);
     expect(items[0]).toMatchObject({ urgency: "critical", title: "Atom lesson collection failed" });
     expect(items[1]).toMatchObject({ urgency: "normal", title: "A guided post needs a style fix", action: "open" });
+  });
+
+  it("names the class's student on an incident, so two style fixes for one tutor tell apart (7 Oct, Eng ×2)", () => {
+    const items = buildInbox(dashboard({ recent: [
+      { wiseSessionId: "deenah", tutorKey: "Eng", scheduledEndAt: inHours(-20), className: "Phonpassorn (Deenah.Kr) Krisadaphong" },
+      { wiseSessionId: "deenoh", tutorKey: "Eng", scheduledEndAt: inHours(-22), className: "Pollapas (Deenoh.Kr) Krisadaphong" },
+    ] }), review({ incidents: ["deenah", "deenoh"].map((id) => incident(id, { kind: "style_review_flagged", severity: "info",
+      pushStatus: "not_required", wiseSessionId: id, summary: "Guided feedback needs a style correction." })) }), { now: NOW });
+    expect(items.map((item) => item.detail)).toEqual([
+      "Phonpassorn (Deenah.Kr) Krisadaphong · Guided feedback needs a style correction.",
+      "Pollapas (Deenoh.Kr) Krisadaphong · Guided feedback needs a style correction.",
+    ]);
+  });
+
+  it("lists a skipped Atom record until acknowledged, not red", () => {
+    const items = buildInbox(dashboard(), review({ incidents: [
+      incident("skip", { kind: "atom_record_skipped", severity: "info", pushStatus: "not_required", summary: "One Atom practice was left out." }),
+    ] }), { now: NOW });
+    expect(items).toMatchObject([{ title: "An Atom record was left out", urgency: "normal" }]);
+  });
+
+  it("titles a no-show hold by what happened and says its note is ready", () => {
+    const noShow = { tutorMinutes: 12, studentSeconds: 0, note: { topics: "1. No lesson", performance: "Student did not attend the class.", improvement: "1. Tell us", homework: "" } };
+    const [item] = buildInbox(dashboard({ holds: [hold("avi", { reason: "attendance_0pct", noShow })] }), null, { now: NOW });
+    expect(item).toMatchObject({ title: "The student did not join (the tutor waited 12 min)", detail: `Anna Example · ${STUDENT} · no-show note ready` });
   });
 
   it("lists holds soonest deadline first, with the reason in plain words and no lesson text", () => {

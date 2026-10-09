@@ -175,6 +175,7 @@ None blocking roadmap execution.
 | Phase 12 P02 | 8 | 2 tasks | 4 files |
 | Phase 12 P03 | 6m | 3 tasks | 4 files |
 | 261002-r45 | Autowriter: guest under student's own name stands in at 50% | 2026-10-02 | d496be3a | [261002-r45-autowriter-guest-name-stand-in](./quick/261002-r45-autowriter-guest-name-stand-in/) |
+| 261003-12b | Nightly Opus 5.5 max audit of autowriter posts: audit path, guarded agent correction, first-night writer/judge rule fixes; first live correction verified, nightly scheduled task | 2026-10-04 | 565d8250 | [261003-12b-nightly-opus-audit-of-autowriter-posts](./quick/261003-12b-nightly-opus-audit-of-autowriter-posts/) |
 
 ## Session Continuity
 
