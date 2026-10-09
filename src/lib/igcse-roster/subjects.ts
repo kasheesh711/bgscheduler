@@ -37,14 +37,15 @@ export function syllabiForAcademicSubject(subject: string | null | undefined): s
   const label = norm(subject ?? "");
   if (!label) return null;
   if (/\b(further|additional|add\.?)\b|combined|co-?ordinated|\bscience\b|\b(esl|efl)\b|second language/.test(label)) return null;
+  if (/\bliterature\b/.test(label) && /\blanguage\b/.test(label)) return null;
 
   const hits: Array<keyof typeof BANK_SYLLABI> = [];
   if (/\bbiology\b/.test(label)) hits.push("biology");
   if (/\bchemistry\b/.test(label)) hits.push("chemistry");
   if (/\bphysics\b/.test(label)) hits.push("physics");
   if (/\bmath(?:s|ematics)?\b/.test(label)) hits.push("maths");
-  if (/\bliterature\b/.test(label)) hits.push("literature");
-  else if (/\benglish\b/.test(label)) hits.push("english");
+  if (/\benglish literature\b/.test(label)) hits.push("literature");
+  else if (/\benglish\b/.test(label) && (/\bfirst[ -]language\b/.test(label) || /\b0500\b/.test(label))) hits.push("english");
   if (/\becon(?:omic|omics)?\b/.test(label)) hits.push("economics");
   if (/\bbusiness(?: studies)?\b/.test(label)) hits.push("business");
   if (hits.length !== 1) return null;
