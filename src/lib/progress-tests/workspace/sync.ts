@@ -1,4 +1,4 @@
-import { assertSourceWriter } from "../transfer/control";
+import { assertSourceWriter, withSourceWriter } from "../transfer/control";
 import { createHash } from "node:crypto";
 import { and, eq, gte, isNull, sql } from "drizzle-orm";
 import { type Database } from "@/lib/db";
@@ -34,11 +34,21 @@ export async function notifyWorkspaceTutors(db: Database, sender?: ScheduleEmail
         paragraphs: [`${series.studentName} has completed ${series.count} classes with you in this course since launch. Assessment ${a.cycle} is due in your class ${a.cycle * 8}.`],
         sections: [{ heading: "Your next steps", bullets: [`Prepare your topic test and marking rubric.`, `Explain the covered topics to the student in class ${a.cycle * 8 - 1}.`, `Administer the test within class ${a.cycle * 8}, then upload the student's work for review.`], action: { label: "Open Progress Tests", url: `${base}/progress-tests?assessment=${a.id}` } }],
         logoUrl: teacherEmailLogoUrl(base), footerNote: "This test takes place in the student's ordinary lesson. The next assessment remains due every eight classes, even if an earlier submission is late." });
-      await (sender ?? createOutboundEmailSender()).sendEmail({ to: email, ...content, idempotencyKey: `pt-workspace-reminder:${a.id}` });
-      await db.update(s.ptAssessments).set({ notifiedAt: new Date(), notificationError: null }).where(eq(s.ptAssessments.id, a.id));
-      sent++;
+      const notified = await withSourceWriter(db, async tx => {
+        const currentScope = await scopeForEmail(email, tx);
+        if (currentScope.keys !== null && !currentScope.keys.includes(series.ownerKey)) throw new Error("Tutor email ownership needs review.");
+        try {
+          await (sender ?? createOutboundEmailSender()).sendEmail({ to: email, ...content, idempotencyKey: `pt-workspace-reminder:${a.id}` });
+          await tx.update(s.ptAssessments).set({ notifiedAt: new Date(), notificationError: null }).where(eq(s.ptAssessments.id, a.id));
+          return true;
+        } catch {
+          await tx.update(s.ptAssessments).set({ notificationError: "Tutor reminder failed. Check the active tutor email and delivery settings. The next sync will retry." }).where(eq(s.ptAssessments.id, a.id));
+          return false;
+        }
+      });
+      if (notified) sent++;
     } catch {
-      await db.update(s.ptAssessments).set({ notificationError: "Tutor reminder could not be delivered. Check the active tutor email binding and delivery configuration; the next sync will retry." }).where(eq(s.ptAssessments.id, a.id));
+      await withSourceWriter(db, tx => tx.update(s.ptAssessments).set({ notificationError: "Tutor reminder failed. Check the active tutor email and delivery settings. The next sync will retry." }).where(eq(s.ptAssessments.id, a.id)));
     }
   }
   return sent;

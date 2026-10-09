@@ -1,0 +1,22 @@
+export const transferText = {
+  "paused": "Progress checks have a pause for transfer.",
+  "moved": "Progress checks moved. Open the question bank.",
+  "export_denied": "You do not have export access.",
+  "pause_source": "Pause source writes before the final transfer.",
+  "active_jobs": "Check active source jobs before the transfer.",
+  "file_id": "The file ID is not valid.",
+  "file_missing": "Source file not found.",
+  "file_hash": "A source file failed its hash check.",
+  "table": "The source table is not valid.",
+  "page": "The export page is not valid.",
+  "route": "Export route not found.",
+  "mail_denied": "You do not have mail access.",
+  "mail_size": "The mail request is too large.",
+  "mail_rejected": "The mail service rejected this request.",
+  "mail_uncertain": "Mail acceptance is not confirmed. Check the saved delivery record.",
+  "moved_title": "Progress checks moved",
+  "paused_title": "Progress checks have a pause",
+  "history": "The source keeps your history.",
+  "open": "Open Progress checks",
+  "workspace_pause": "The tutor workspace has a pause. Your work, approvals, and class counts have saved copies."
+};

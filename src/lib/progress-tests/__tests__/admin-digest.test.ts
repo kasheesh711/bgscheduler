@@ -1,3 +1,4 @@
+import {PgDialect} from "drizzle-orm/pg-core";
 import { hasTodayRefresh } from "@/lib/credit-control/daily-refresh";
 vi.mock("@/lib/credit-control/daily-refresh", () => ({ hasTodayRefresh: vi.fn().mockResolvedValue(true) }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +16,7 @@ import { sendProgressTestAdminDigest } from "@/lib/progress-tests/admin-digest";
 
 interface FakeDbState {
   adminEmails: string[];
+  sourcePhase?: "source" | "paused" | "moved";
   cycleRows: Array<{
     studentName: string;
     subject: string;
@@ -41,6 +43,11 @@ function makeFakeDb(state: FakeDbState): Database {
   }
 
   const db = {
+    execute(query: import("drizzle-orm").SQL) {
+      const text = new PgDialect().sqlToQuery(query).sql;
+      return Promise.resolve({rows: text.includes("to_regclass") ? [{table_name:"progress_transfer_control"}] : [{phase:state.sourcePhase ?? "source",targetUrl:null}]});
+    },
+    transaction(callback: (tx: Database)=>Promise<unknown>): Promise<unknown> {return callback(db as unknown as Database);},
     select() {
       return {
         from(table: unknown) {
@@ -120,6 +127,15 @@ function makeSender(impl?: ScheduleEmailSender["sendEmail"]): ScheduleEmailSende
 const NOW = new Date("2026-06-04T01:00:00.000Z"); // 08:00 Bangkok → digestDate 2026-06-04
 
 describe("sendProgressTestAdminDigest", () => {
+  it("stops before the next recipient when source writes have a pause", async () => {
+    const state = freshState({cycleRows:[{studentName:"Ada",subject:"Biology",currentCount:6,status:"approaching",bookedTestWiseSessionId:null,tutorDisplayName:"Tutor"}]});
+    const sender = {sendEmail:vi.fn(async()=>{state.sourcePhase="paused";return {id:"first-receipt"};})};
+    await expect(sendProgressTestAdminDigest(makeFakeDb(state),NOW,{sender})).rejects.toMatchObject({status:503});
+    expect(sender.sendEmail).toHaveBeenCalledTimes(1);
+    expect(state.recipientInserts).toHaveLength(1);
+    expect(state.recipientInserts[0].providerMessageId).toBe("first-receipt");
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });

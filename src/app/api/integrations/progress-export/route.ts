@@ -1,3 +1,4 @@
+import {transferText} from "@/lib/progress-tests/transfer/text";
 import { timingSafeEqual, createHash } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
@@ -15,7 +16,7 @@ const rows=(r:unknown)=>(r as {rows:Record<string,unknown>[]}).rows;
 export async function GET(request:Request) {
  try {
   const secret=process.env.PROGRESS_EXPORT_SECRET,provided=request.headers.get("authorization")?.replace(/^Bearer /,"");
-  if(!secret||!provided||secret.length<32||Buffer.byteLength(secret)!==Buffer.byteLength(provided)||!timingSafeEqual(Buffer.from(secret),Buffer.from(provided)))throw new WorkspaceError(401,"Export access is denied.");
+  if(!secret||!provided||secret.length<32||Buffer.byteLength(secret)!==Buffer.byteLength(provided)||!timingSafeEqual(Buffer.from(secret),Buffer.from(provided)))throw new WorkspaceError(401,transferText.export_denied);
   const url=new URL(request.url),db=getDb(),type=url.searchParams.get("type")||"manifest";
   if(type==="roster"){
    const [identities,contacts]=await Promise.all([loadActiveIdentityEntries(db),db.select().from(s.tutorContacts)]);
@@ -32,26 +33,26 @@ export async function GET(request:Request) {
    return exportJson({sessions,participants,feedback});
   }
   const control=await sourceTransferControl(db);
-  if(control.phase!=="paused"&&control.phase!=="moved")throw new WorkspaceError(409,"Pause source writes before the final transfer.");
+  if(control.phase!=="paused"&&control.phase!=="moved")throw new WorkspaceError(409,transferText.pause_source);
   const running=rows(await db.execute(sql`select id from pt_jobs where status='running' union all select id from progress_test_sync_runs where status='running'`));
-  if(running.length)throw new WorkspaceError(409,"Reconcile active source jobs before the transfer.");
+  if(running.length)throw new WorkspaceError(409,transferText.active_jobs);
   if(type==="file"){
    const id=url.searchParams.get("id");
-   if(!id||!/^[a-f0-9-]{36}$/.test(id))throw new WorkspaceError(400,"Invalid file ID.");
+   if(!id||!/^[a-f0-9-]{36}$/.test(id))throw new WorkspaceError(400,transferText.file_id);
    const [file]=await db.select().from(s.ptFiles).where(and(eq(s.ptFiles.id,id),eq(s.ptFiles.status,"ready")));
-   if(!file)throw new WorkspaceError(404,"Source file not found.");
+   if(!file)throw new WorkspaceError(404,transferText.file_missing);
    const bytes=await readBlobBytes(file);
-   if(createHash("sha256").update(bytes).digest("hex")!==file.sha256||bytes.length!==file.size)throw new WorkspaceError(409,"A source file failed its hash check.");
+   if(createHash("sha256").update(bytes).digest("hex")!==file.sha256||bytes.length!==file.size)throw new WorkspaceError(409,transferText.file_hash);
    let offset=0;return new Response(new ReadableStream({pull(c){if(offset>=bytes.length){c.close();return;}c.enqueue(new Uint8Array(bytes.subarray(offset,offset+1024*1024)));offset+=1024*1024;}}),{headers:{"Cache-Control":"private, no-store","Content-Type":file.mime,"X-Content-Type-Options":"nosniff","Content-Security-Policy":"default-src 'none'; sandbox"}});
   }
   if(type==="records"){
    const table=url.searchParams.get("table");
-   if(!(TRANSFER_TABLES as readonly string[]).includes(table||""))throw new WorkspaceError(400,"Invalid source table.");
+   if(!(TRANSFER_TABLES as readonly string[]).includes(table||""))throw new WorkspaceError(400,transferText.table);
    const offset=Number(url.searchParams.get("offset")||0);
-   if(!Number.isSafeInteger(offset)||offset<0)throw new WorkspaceError(400,"Invalid export page.");
+   if(!Number.isSafeInteger(offset)||offset<0)throw new WorkspaceError(400,transferText.page);
    return exportJson({table,rows:rows(await db.execute(sql.raw(`select * from "${table}" t order by row_to_json(t)::text collate "C" limit 200 offset ${offset}`)))});
   }
-  if(type!=="manifest")throw new WorkspaceError(404,"Export route not found.");
+  if(type!=="manifest")throw new WorkspaceError(404,transferText.route);
   const manifest:Record<string,{count:number;sha256:string}>={};
   for(const table of TRANSFER_TABLES){const data=rows(await db.execute(sql.raw(`select * from "${table}"`)));manifest[table]={count:data.length,sha256:rowHash(data)};}
   return exportJson({schemaVersion:1,phase:control.phase,observedAt:new Date().toISOString(),tables:manifest});
