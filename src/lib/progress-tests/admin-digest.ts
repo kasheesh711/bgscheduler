@@ -1,3 +1,4 @@
+import { assertSourceWriter } from "./transfer/control";
 import { hasTodayRefresh } from "@/lib/credit-control/daily-refresh";
 // Progress Tests — once-daily admin digest to all admin_users.
 //
@@ -318,6 +319,7 @@ export async function sendProgressTestAdminDigest(
   now: Date = new Date(),
   options: { sender?: ScheduleEmailSender } = {},
 ): Promise<ProgressTestAdminDigestResult> {
+  await assertSourceWriter(db);
   const digestDate = todayBangkok(now);
 
   if (!await hasTodayRefresh(db, "progress", now)) return {

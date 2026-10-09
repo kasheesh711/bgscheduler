@@ -1,7 +1,9 @@
+import {MovedWorkflowError} from "../transfer/control";
 import { z } from "zod";
 import { WorkspaceError } from "./model";
 
 export function workspaceError(error: unknown) {
+  if (error instanceof MovedWorkflowError)return privateJson({error:error.message,code:error.code,url:error.targetUrl},error.status);
   if (error instanceof WorkspaceError) return privateJson({ error: error.message }, error.status);
   if (error instanceof z.ZodError) return privateJson({ error: error.issues[0]?.message || "Invalid request." }, 400);
   if (error instanceof Error && ["Unauthorized", "Forbidden"].includes(error.message)) return privateJson({ error: error.message }, error.message === "Unauthorized" ? 401 : 403);

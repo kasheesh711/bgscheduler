@@ -1,3 +1,4 @@
+import { assertSourceWriter } from "../transfer/control";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
@@ -143,6 +144,7 @@ export async function enqueue(db: Database, scope: Scope, kind: string, targetId
 }
 
 export async function executeCommand(scope: Scope, command: Command, db: Database = getDb()): Promise<{ id?: string; revision?: number; pathname?: string; versionId?: string; jobId?: string; publicationId?: string; preparationPublicationId?: string }> {
+  await assertSourceWriter(db);
   return withDatabaseTransaction(db, async tx => {
     const c = command;
     if (c.action === "activate") {

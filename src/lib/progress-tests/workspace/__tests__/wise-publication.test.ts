@@ -1,5 +1,6 @@
 import {describe,it,expect,vi,afterEach} from "vitest";
 import {validateCourse,safeWiseUrl,nativeWise,fileHash} from "../wise-publication";
+vi.mock("@/lib/progress-tests/transfer/control",()=>({assertSourceWriter:vi.fn()}));
 const course={_id:"a".repeat(24),classType:"ONE_TO_ONE",archived:false,hidden:false,joinedRequest:["b".repeat(24)],suspendedStudents:[],settings:{openClassroom:false,lockClassroom:false,lockAfter:0,validityInDays:-1}};
 afterEach(()=>vi.unstubAllGlobals());
 describe("verified native Wise boundary",()=>{

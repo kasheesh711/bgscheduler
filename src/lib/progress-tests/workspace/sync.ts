@@ -1,3 +1,4 @@
+import { assertSourceWriter } from "../transfer/control";
 import { createHash } from "node:crypto";
 import { and, eq, gte, isNull, sql } from "drizzle-orm";
 import { type Database } from "@/lib/db";
@@ -46,6 +47,7 @@ export async function notifyWorkspaceTutors(db: Database, sender?: ScheduleEmail
 /** Called under the existing progress-test sync run's database single-flight guard. */
 export async function syncWorkspace(deps: ProgressTestSyncDeps, launchedAt: Date, input?: AttendanceInput): Promise<ProgressTestSyncResult> {
   const db = deps.db;
+  await assertSourceWriter(deps.db);
   const now = deps.now ?? new Date();
   const [{ source, packages, snapshotId }, identities] = await Promise.all([
     input ?? loadWorkspaceAttendance(db, deps.client, deps.instituteId, launchedAt, now),

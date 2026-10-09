@@ -1,3 +1,4 @@
+import { assertSourceWriter } from "../transfer/control";
 import { createHash, randomUUID } from "node:crypto";
 import { and, eq, lte, or, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
@@ -22,6 +23,7 @@ const MAX_ATTEMPTS = 3;
 export function retryDelay(attempts: number) { return Math.min(30 * 60_000, 60_000 * 2 ** Math.max(0, attempts - 1)); }
 export async function claimJob(db: Database, now?: Date, jobId?: string): Promise<Job | null> {
   return withDatabaseTransaction(db, async tx => {
+    await assertSourceWriter(tx);
     const dueAt = now ?? sql`clock_timestamp()`;
     // A process that outlives its lease cannot commit: completion also checks the token.
     const [job] = await tx.select().from(s.ptJobs).where(and(jobId ? eq(s.ptJobs.id, jobId) : undefined, sql`(${s.ptJobs.kind} <> 'format-paper' or exists (select 1 from ${s.ptWorkspaceSettings} ws where ws.id = 'workspace' and ws.formatting_enabled = true))`, sql`(${s.ptJobs.kind} not in ('publish', 'publish-preparation') or exists (select 1 from ${s.ptWorkspaceSettings} ws where ws.id = 'workspace' and ws.publishing_enabled = true and ws.verified_at is not null))`,or(
@@ -172,6 +174,7 @@ export async function runJob(job: Job, db: Database = getDb(), deadline = Date.n
     scope = await scopeForEmail(job.createdBy, db);
     assertOwner(scope.keys, job.ownerKey);
     await withDatabaseTransaction(db, async tx => {
+      await assertSourceWriter(tx);
       const [claimed] = await tx.select().from(s.ptJobs).where(and(eq(s.ptJobs.id, job.id), eq(s.ptJobs.leaseToken, job.leaseToken!), eq(s.ptJobs.status, "running"))).for("update");
       if (!claimed) return;
       const current = paperJob ? (await getPaper(scope, job.targetId, tx, true)).revision : (await getAssessment(scope, job.targetId, tx, true)).assessment.revision;
@@ -210,6 +213,7 @@ export async function runJob(job: Job, db: Database = getDb(), deadline = Date.n
 }
 export async function processJobs(db: Database = getDb(), maxJobs = 1, jobId?: string) {
   if (!workspaceEnabled()) return { processed: 0, paused: true };
+  await assertSourceWriter(db);
   let processed = 0;
   const started = Date.now();
   while (processed < maxJobs && Date.now() - started < 210_000) {

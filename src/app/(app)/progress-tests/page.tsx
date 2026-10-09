@@ -1,3 +1,4 @@
+import { sourceTransferControl } from "@/lib/progress-tests/transfer/control";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { requireProgressTestsSession } from "@/lib/progress-tests/api";
@@ -17,6 +18,8 @@ async function ProgressTestsBody() {
     throw error;
   }
 
+  const transfer=await sourceTransferControl();
+  if(transfer.phase!=="source")return <section><h1>Progress checks moved</h1><p>Keep your source history here.</p>{transfer.targetUrl&&<a href={transfer.targetUrl}>Open Progress checks</a>}</section>;
   if (workspaceEnabled()) return <TutorProgressWorkspace />;
   if (await launchConfig()) return <p>The tutor Progress Tests workspace is temporarily paused. Your submissions, approvals and class counters are preserved.</p>;
   return <ProgressTestsDashboard sessionUser={user} />;
