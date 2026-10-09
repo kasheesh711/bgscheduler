@@ -201,9 +201,9 @@ export const AUTOWRITER_RETRY_DELAY_MS = 10 * 60 * 1000;
 export const AUTOWRITER_NO_SUMMARY_ALERT_MS = 3 * 60 * 60 * 1000;
 /**
  * A POST is only claimed when at least this much function time remains: the
- * POST phase's worst case is ~220 s (POST 60 s, pause 3 s, two 45 s reads,
+ * POST phase's worst case is ~220 s (POST 60 s, pause 3 s, three 45 s reads,
  * event polling bounded by the remaining time). Checked twice: before the
- * three pre-POST Wise reads (up to 45 s each — none is made for a POST that
+ * four pre-POST Wise reads (up to 45 s each — none is made for a POST that
  * could not be claimed) and again right before the claim.
  */
 export const AUTOWRITER_MIN_POST_BUDGET_MS = 240_000;

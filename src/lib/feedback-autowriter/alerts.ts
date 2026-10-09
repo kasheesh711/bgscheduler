@@ -87,7 +87,8 @@ export async function sendAlertDigest(input: {
 }): Promise<{ sent: boolean; error: string | null }> {
   if (input.alerts.length === 0) return { sent: false, error: null };
   if (input.recipients.length === 0) return { sent: false, error: "FEEDBACK_AUTOWRITER_ALERT_EMAILS is empty" };
-  const sender = input.sender ?? createOutboundEmailSender("primary", { strictOutcome: true, audience: "staff" });
+  const sender = input.sender ?? createOutboundEmailSender("primary", { strictOutcome: true, audience: "staff" },
+    { ...process.env, OUTBOUND_EMAIL_TRANSPORT: process.env.OUTBOUND_EMAIL_TRANSPORT?.trim() || "resend" });
   const digest = buildAlertDigest(input.alerts, input.halt);
   try {
     for (const to of input.recipients) {

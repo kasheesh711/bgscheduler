@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { generateDraft, summarizeCosts, type DraftRecord, type PreparedSession } from "../run";
-import { SESSION_ID, STUDENT_NAME } from "./fixtures";
+import { createWiseFeedbackOps, generateDraft, sessionCreditEntries, summarizeCosts, type DraftRecord, type PreparedSession } from "../run";
+import { creditProblems } from "../submit";
+import { parseAutowriterSessionDetail } from "../session";
+import { CLASS_ID, SESSION_ID, STUDENT_ID, STUDENT_NAME, sessionDetail } from "./fixtures";
 
 const session: PreparedSession = {
   purpose: "eval",
@@ -20,6 +22,55 @@ const session: PreparedSession = {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
+
+describe("session credit identity", () => {
+  const detail = () => parseAutowriterSessionDetail({ ...sessionDetail(), start_time: "2026-09-28T08:32:16.067Z", duration: 3569000 });
+  const charge = () => ({ _id: "6b0000000000000000000001", credit: 1, type: "SESSION", meetingStatus: "ENDED",
+    createdAt: "2026-09-28T08:32:16.067Z", duration: 3569000, userId: { _id: STUDENT_ID }, classroom: { _id: CLASS_ID } });
+  const response = (...entries: unknown[]) => ({ data: { sessionCreditHistory: entries } });
+  const billing = { sessionStatus: "COMPLETED", creditsConsumed: 1, source: "auto_blank_reuse", expectedConsumedDelta: 0 } as const;
+
+  it("keeps the legacy lesson-ID match", () => {
+    expect(sessionCreditEntries(response({ _id: SESSION_ID, credit: 1 }), detail(), STUDENT_ID)).toEqual([{ credit: 1 }]);
+  });
+
+  it("matches a charge ID through exact lesson evidence", () => {
+    expect(sessionCreditEntries(response(charge()), detail(), STUDENT_ID)).toEqual([{ credit: 1 }]);
+  });
+
+  it.each([
+    { classroom: { _id: "another-class" } }, { userId: { _id: "another-student" } },
+    { createdAt: "2026-09-28T08:32:16.068Z" }, { createdAt: "2026-09-28T08:30:00.000Z" },
+    { createdAt: "invalid" }, { createdAt: null }, { duration: 3569001 }, { duration: null },
+    { type: "CREDIT" }, { meetingStatus: "CANCELLED" }, { userId: null }, { classroom: null },
+  ])("refuses a charge with different or missing evidence: %j", (patch) => {
+    expect(sessionCreditEntries(response({ ...charge(), ...patch }), detail(), STUDENT_ID)).toEqual([]);
+  });
+
+  it.each([{ start_time: undefined }, { duration: undefined }, { duration: 0 }, { meetingStatus: "MISSED" }])(
+    "refuses an incomplete lesson: %j", (patch) => {
+      expect(sessionCreditEntries(response(charge()), parseAutowriterSessionDetail({ ...detail(), ...patch }), STUDENT_ID)).toEqual([]);
+    });
+
+  it("preserves duplicate and credit-amount failures, including mixed legacy and charge IDs", () => {
+    for (const entries of [response(charge(), { ...charge(), _id: "another-charge" }), response(charge(), { _id: SESSION_ID, credit: 1 })]) {
+      expect(creditProblems(sessionCreditEntries(entries, detail(), STUDENT_ID), billing)).toEqual(["session_credit_entries_2"]);
+    }
+    expect(creditProblems(sessionCreditEntries(response({ ...charge(), credit: 0 }), detail(), STUDENT_ID), billing)).toEqual(["session_credit_0"]);
+    expect(creditProblems(sessionCreditEntries(response(), detail(), STUDENT_ID), billing)).toEqual(["session_credit_entries_0"]);
+  });
+
+  it("reads fresh Wise evidence and refuses a different lesson before matching credits", async () => {
+    for (const [key, value] of Object.entries({ WISE_USER_ID: "actor", WISE_API_KEY: "key", WISE_INSTITUTE_ID: CLASS_ID })) vi.stubEnv(key, value);
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(response(charge())))
+      .mockResolvedValueOnce(Response.json({ data: { ...detail(), _id: "wrong-lesson" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(createWiseFeedbackOps().getSessionCreditEntries(CLASS_ID, STUDENT_ID, SESSION_ID)).rejects.toThrow("Credit lesson identity mismatch");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ cache: "no-store" });
+  });
 });
 
 describe("generateDraft (evaluation CLI)", () => {

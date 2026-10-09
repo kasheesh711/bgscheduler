@@ -8,7 +8,7 @@ import { pushLineTextMessage } from "@/lib/line/client";
 /**
  * Incident outbox of the operating loop. A critical incident (a critical verdict, an API write no post explains, a
  * first shot that landed without verifying) is pushed to the owner at any hour: email to each address in
- * `FEEDBACK_AUTOWRITER_ALERT_EMAILS` through the Apps Script relay, and LINE to `FEEDBACK_AUTOWRITER_LINE_TO` when
+ * `FEEDBACK_AUTOWRITER_ALERT_EMAILS` through the outbound email sender, and LINE to `FEEDBACK_AUTOWRITER_LINE_TO` when
  * set. Delivery is tracked per target (`email:<address>`, `line:<to>` in `pushed_channels`), so a retry never
  * re-sends to a target that already has it; a failed push is retried on the next run, up to MAX_PUSH_ATTEMPTS.
  * An undelivered critical incident keeps the review job red until the owner acknowledges it. Info incidents are
@@ -24,8 +24,8 @@ export const MAX_PUSH_ATTEMPTS = 5;
 /** Retry spacing after a failed push (the job itself runs hourly). */
 const RETRY_AFTER_MS = 30 * 60 * 1000;
 const DASHBOARD_URL = "https://bgscheduler.vercel.app/feedback-autowriter";
-/** Worst case of one relay send (the sender's own abort) plus slack; the drain never starts a push it cannot finish. */
-const EMAIL_SEND_BUDGET_MS = 21_000;
+/** Resend, two Gmail token/send attempts, then the relay: six 20 s requests plus slack. */
+const EMAIL_SEND_BUDGET_MS = 121_000;
 export const LINE_PUSH_TIMEOUT_MS = 10_000;
 const LINE_PUSH_BUDGET_MS = LINE_PUSH_TIMEOUT_MS + 1_000;
 const INCIDENT_WRITE_BUDGET_MS = 5_000;
@@ -145,7 +145,8 @@ export async function drainIncidentOutbox(
       try {
         if (target.startsWith("email:")) {
           const to = target.slice("email:".length);
-          emailSender ??= createOutboundEmailSender("primary", { strictOutcome: true, audience: "staff" });
+          emailSender ??= createOutboundEmailSender("primary", { strictOutcome: true, audience: "staff" },
+            { ...process.env, OUTBOUND_EMAIL_TRANSPORT: process.env.OUTBOUND_EMAIL_TRANSPORT?.trim() || "resend" });
           await emailSender.sendEmail({
             to,
             subject: `Feedback autowriter: ${incident.severity} — ${incident.summary.slice(0, 120)}`,
