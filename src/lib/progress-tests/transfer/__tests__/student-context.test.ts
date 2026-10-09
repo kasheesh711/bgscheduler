@@ -35,7 +35,7 @@ describe('student-specific source lesson context',()=>{
   const execute=vi.fn().mockResolvedValueOnce({rows:[{id:'session-id',wise_session_id:'lesson',scheduled_start_at:'2026-10-01T00:00:00Z',canonical_tutor_key:'A',wise_teacher_user_id:'teacher-a',feedback_id:'note',...fields},{id:'wrong',canonical_tutor_key:'A',wise_teacher_user_id:'wrong-teacher'}]}).mockResolvedValueOnce({rows:[target,peer,tutor].map(p=>({...p,session_id:'session-id'}))});
   const url=new URL('https://source.test/export?type=student-context&studentId=alice&courseId=course&ownerKey=A&sessionIds=%5B%22lesson%22%5D');
   const result=await exportStudentContext(url,{execute} as never);
-  expect(new PgDialect().sqlToQuery(execute.mock.calls[0][0]).sql).toContain("class_type in ('ONE_TO_ONE','GROUP')");
+  expect(new PgDialect().sqlToQuery(execute.mock.calls[0][0]).sql).toContain("class_type in ('ONE_TO_ONE','GROUP','LIVE')");
   expect(result.sessions).toEqual([{sessionId:'lesson',shared:true}]);expect(result.feedback).toHaveLength(1);
   expect(result.feedback[0].text).toBe('Shared-class topics (not evidence of personal mastery): We covered cells and osmosis.');
   expect(JSON.stringify(result)).not.toMatch(/teacher-a|Alice|Bob|performance|homework/);
