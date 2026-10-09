@@ -96,7 +96,6 @@ const DISPATCH_TARGETS = {
   post_class_feedback_nightly: runNightlyReminders,
   tutor_sit_ins: runSitInWorker,
   tutor_sit_ins_digest: processSitInJobs,
-  progress_tests_processing: processWorkspaceJobs,
   classroom_publish_recovery: runClassroomPublishRecovery,
   room_booking: runRoomRefresh,
   classroom_weekend_check: runWeekendClassroomCheck,
@@ -107,8 +106,6 @@ const DISPATCH_TARGETS = {
   onsite_foot_traffic: runOnsiteFootTrafficSync,
   competitor_intelligence: runCompetitorIntelligenceSync,
   credit_control: runCreditControlSyncRequest,
-  progress_tests: runProgressTestSyncRequest,
-  progress_tests_digest: sendProgressTestAdminDigest,
   post_class_feedback: runPostClassFeedbackSync,
   post_class_feedback_backfill: runPostClassBackfillJob,
   post_class_feedback_digest: sendPostClassAdminDigest,
@@ -303,24 +300,12 @@ describe("runDataHealthJob", () => {
     expect(runUnearnedRevenueSync).toHaveBeenCalledWith({ triggerType: "manual", actorEmail: OWNER });
   });
 
-  it("returns the progress-test sync response verbatim for a manual run by the actor", async () => {
-    const upstream = NextResponse.json({ skipped: true, reason: "already_running" }, { status: 202 });
-    vi.mocked(runProgressTestSyncRequest).mockResolvedValueOnce(upstream as never);
-
-    const response = await runDataHealthJob("progress_tests", OWNER);
-
-    expect(runProgressTestSyncRequest).toHaveBeenCalledWith({ triggerType: "manual", actorEmail: OWNER });
-    expect(response).toBe(upstream);
-  });
-
-  it("maps the progress-test admin digest status like its cron route", async () => {
-    vi.mocked(sendProgressTestAdminDigest)
-      .mockResolvedValueOnce({ status: "failed" } as never)
-      .mockResolvedValueOnce({ status: "skipped" } as never);
-
-    expect((await runDataHealthJob("progress_tests_digest", OWNER)).status).toBe(500);
-    expect((await runDataHealthJob("progress_tests_digest", OWNER)).status).toBe(200);
-    expect(sendProgressTestAdminDigest).toHaveBeenCalledWith();
+  it.each(["progress_tests", "progress_tests_digest", "progress_tests_processing"] as const)("blocks the retired source job %s", async (key) => {
+    const response = await runDataHealthJob(key, OWNER);
+    expect(response.status).toBe(409);
+    expect(JSON.stringify(await response.json())).toContain("Progress checks moved.");
+    expect(runProgressTestSyncRequest).not.toHaveBeenCalled();
+    expect(sendProgressTestAdminDigest).not.toHaveBeenCalled();
   });
 
   it("maps the LINE credit digest status like its cron route", async () => {

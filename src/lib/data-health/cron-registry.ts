@@ -1,5 +1,6 @@
 import { isWiseClassroomJob, wiseClassroomAutomationEnabled } from "@/lib/classrooms/operations-policy";
 import { creditControlActive } from "@/lib/credit-control/mode";
+import { transferText } from "@/lib/progress-tests/transfer/text";
 import type { CronJobStatus } from "./types";
 
 export type CronJobKey =
@@ -93,8 +94,8 @@ export const CRON_JOBS = [
     cadenceMinutes: 1440, expectedBangkokMinute: 480, lateAfterMinutes: 60, maxDurationSeconds: 300, manualOnly: false,
     dangerous: true, confirmationLabel: "Queues heads' daily observations digest and retries enabled delivery.", routeMethod: "GET" },
   { key: "progress_tests_processing", label: "Progress Test Processing", feature: "Progress Tests",
-    path: "/api/internal/progress-tests/process", schedule: "* * * * *", cadenceLabel: "Every minute; recovers document and publication jobs",
-    cadenceMinutes: 1, lateAfterMinutes: 5, maxDurationSeconds: 300, manualOnly: false,
+    path: "/api/internal/progress-tests/process", schedule: "* * * * *", cadenceLabel: transferText.moved,
+    cadenceMinutes: 1, lateAfterMinutes: 5, maxDurationSeconds: 300, manualOnly: true, paused: true, manualRunDisabledReason: transferText.moved,
     dangerous: false, confirmationLabel: null, routeMethod: "GET" },
   { key: "classroom_publish_recovery", label: "Classroom Publish Recovery", feature: "Class Assignments",
     path: "/api/internal/class-assignments/publish-recovery", schedule: "1-56/5 * * * *", cadenceLabel: "Every 5 min; resumes queued room publishing",
@@ -241,11 +242,11 @@ export const CRON_JOBS = [
     feature: "Progress Tests",
     path: "/api/internal/sync-progress-tests",
     schedule: "25,55 * * * *",
-    cadenceLabel: "Every 30 min",
+    cadenceLabel: transferText.moved,
     cadenceMinutes: 30,
     lateAfterMinutes: 45,
     maxDurationSeconds: 800,
-    manualOnly: false,
+    manualOnly: true, paused: true, manualRunDisabledReason: transferText.moved,
     dangerous: false,
     confirmationLabel: null,
     routeMethod: "GET",
@@ -256,11 +257,11 @@ export const CRON_JOBS = [
     feature: "Progress Tests",
     path: "/api/internal/progress-tests/admin-digest",
     schedule: "35 0 * * *",
-    cadenceLabel: "Daily 07:35 Bangkok",
+    cadenceLabel: transferText.moved,
     cadenceMinutes: 24 * 60,
     lateAfterMinutes: 60,
     maxDurationSeconds: 300,
-    manualOnly: false,
+    manualOnly: true, paused: true, manualRunDisabledReason: transferText.moved,
     dangerous: true,
     confirmationLabel: "Emails today's progress-test digest to admins with Progress Tests access once today's refresh has finished, unless today's digest has already run.",
     expectedBangkokMinute: 7 * 60 + 35,
@@ -532,8 +533,6 @@ export function effectiveCronJob(job: CronJobDefinition): CronJobDefinition {
   if (job.key.startsWith("tutor_sit_ins") && process.env.TUTOR_SIT_INS_ENABLED !== "true") return { ...job, paused: true, cadenceLabel: "Tutor Sit-ins disabled" };
   if (job.key === "credit_control" && process.env.TUTOR_SIT_INS_ENABLED === "true") return { ...job, label: "Shared Student Data", requiresSuccessfulRun: true, cadenceMinutes: 30, lateAfterMinutes: 90, cadenceLabel: "Every 30 min — observation source" };
   if (job.key === "line_credit_digest" && !creditControlActive()) return { ...job, paused: true, cadenceLabel: "Paused while Credit Control is retired" };
-  if (job.key === "progress_tests" && process.env.PROGRESS_TEST_WORKSPACE_ENABLED === "true") return { ...job, requiresSuccessfulRun: true, cadenceMinutes: 30, lateAfterMinutes: 60, cadenceLabel: "Every 30 min — tutor workspace" };
-  if (job.key === "progress_tests") return { ...job, requiresSuccessfulRun: true, cadenceMinutes: 1440, expectedBangkokMinute: 445, lateAfterMinutes: 90, cadenceLabel: "Daily 07:25 Bangkok; recovery 07:55 / 08:25" };
   if (job.key === "credit_control" && !creditControlActive()) return { ...job, label: "Shared Student Data", feature: "Student Data", requiresSuccessfulRun: true, cadenceMinutes: 1440, expectedBangkokMinute: 380, lateAfterMinutes: 90, cadenceLabel: "Daily 06:20 Bangkok; recovery 06:50 / 07:20" };
   return job;
 }
