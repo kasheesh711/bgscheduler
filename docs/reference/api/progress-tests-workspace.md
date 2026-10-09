@@ -79,3 +79,11 @@ A queued or paused preparation upload does not block submission or grading. Subm
 The private Progress export supports `type=student-context` with `studentId`, `courseId`, `ownerKey`, and a JSON `sessionIds` list of at most eight sessions. The existing export secret is required. Current tutor identities, feedback authors, student participation and one-to-one course mappings must match. Deleted or unverified evidence is excluded.
 
 Verified tutor accounts in the participant list do not count as other students. A sole verified student's feedback is returned with names removed. For classes with other students, only common topics are returned. Personal fields, named-student topic sentences and contact or family details are excluded before export. Raw shared feedback and participant identities remain in Scheduler. This route does not change Wise data, attendance counts, grading settings or notifications.
+
+## Full roster and group attendance release
+
+Kevin approved this rule on 10 October 2026: count eight completed classes for each student, course, and tutor. Include `ONE_TO_ONE` and `GROUP` classes. Read the credit history for each student in each course. A class counts only when it has ended, has positive credit for that student, and has a verified tutor. An absent member or refunded class must not gain a count from another student.
+
+The roster export must include verified students in both class types. Group lesson context must use the student-scoped export. Shared performance, improvement, and homework comments stay in Scheduler; only filtered common topics can leave as shared context. Unknown class types and unresolved tutor identities require admin review.
+
+This release is in preparation. The central release owner controls production changes and must verify the full rollout before 14:00 Bangkok time.

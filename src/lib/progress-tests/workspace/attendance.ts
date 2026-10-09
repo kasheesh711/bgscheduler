@@ -1,3 +1,4 @@
+import { isProgressClass } from "./cadence";
 import { gte } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
@@ -43,9 +44,9 @@ export async function loadWorkspaceAttendance(db: Database, client: WiseClient, 
     }
   }
   const credits = new Map<string, Map<string, number>>();
-  const needed = [...new Set([...rows.values()].filter(row => row.sessionKind === "past" && pairs.get(key(row.wiseClassId, row.wiseStudentId))?.classType === "ONE_TO_ONE").map(row => key(row.wiseClassId, row.wiseStudentId)))];
+  const needed = [...new Set([...rows.values()].filter(row => row.sessionKind === "past" && isProgressClass(pairs.get(key(row.wiseClassId, row.wiseStudentId))?.classType)).map(row => key(row.wiseClassId, row.wiseStudentId)))];
   // Avoid creating thousands of queued promises while preserving the shared
-  // client's pacing and deadline. Group histories are never requested.
+  // client's pacing and deadline. Check credit for each student in each course.
   for (let i = 0; i < needed.length; i += 4) await Promise.all(needed.slice(i, i + 4).map(async pairKey => {
     const pair = pairs.get(pairKey)!;
     const history = await fetchSessionCredits(client, instituteId, pair.wiseClassId, pair.wiseStudentId);
