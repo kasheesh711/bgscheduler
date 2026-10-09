@@ -22,6 +22,10 @@ export function isOnsiteSessionType(value: string | null | undefined): boolean {
   return getClassroomSessionMode(value) === "onsite";
 }
 
+export function isRoomPublishSessionType(value: string | null | undefined): boolean {
+  return getClassroomSessionMode(value) !== "unknown";
+}
+
 export function sessionModeLabel(value: string | null | undefined): string {
   const mode = getClassroomSessionMode(value);
   if (mode === "online") return "Online";

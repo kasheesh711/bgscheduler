@@ -1,6 +1,8 @@
 "use client";
 import { AdminRoomReservations, useAdminRoomReservations, reservationDisplayRows } from "@/components/room-booking/admin-reservations";
 
+import { isRoomPublishSessionType } from "@/lib/classrooms/session-mode";
+
 import { canRetryPausedPublish } from "./publish-controls";
 import { ClassroomReadiness } from "./readiness-notice";
 import { OverflowPlanSection } from "./overflow-plan";
@@ -201,8 +203,9 @@ function isPublishEligible(row: ClassroomRow): boolean {
     row.status === "assigned" &&
     row.assignedRoom !== NO_ROOM_AVAILABLE &&
     row.assignedRoom !== REMOTE_NO_ROOM_NEEDED &&
-    row.sessionType?.toUpperCase() === "OFFLINE" &&
+    isRoomPublishSessionType(row.sessionType) &&
     Boolean(row.wiseClassId) &&
+    Boolean(row.wiseSessionId) &&
     !row.warnings.includes("needs_review_missing_capacity")
   );
 }
@@ -667,7 +670,7 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
         <div className="space-y-1">
           <h1 className="text-xl font-semibold tracking-tight">Class Assignments</h1>
           <p className="text-sm text-muted-foreground">
-            {canOperate ? "Sync Wise first, generate local room assignments, then publish eligible OFFLINE locations." : "View saved classroom plans. Running assignments and publishing to Wise are restricted to Kevin."}
+            {canOperate ? "Sync Wise first, generate room assignments, then publish assigned room locations." : "View saved classroom plans. Running assignments and publishing to Wise are restricted to Kevin."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -1011,8 +1014,7 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
           <DialogHeader>
             <DialogTitle>Publish locations to Wise?</DialogTitle>
             <DialogDescription>
-              This writes location only for eligible OFFLINE rows. Live Wise room conflicts fail closed per row.
-              Online room assignments remain local.
+              This writes room locations for eligible onsite and online classes. Remote classes have no room to publish. Conflicting room assignments are blocked.
             </DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 space-y-3 overflow-auto pr-1">

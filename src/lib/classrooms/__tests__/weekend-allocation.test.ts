@@ -91,8 +91,8 @@ describe("Wednesday allocation checkpoint", () => {
 });
 
 describe("actual Wise publication evidence", () => {
-  it("ignores a stored success when the live location changed", () => {
-    expect(weekendPublication([{ ...row(), publishStatus: "success" }], [{ ...live(), location: "Elsewhere" }], "checked"))
+  it.each(["OFFLINE", "SCHEDULED"])("requires actual Wise publication for %s rooms", sessionType => {
+    expect(weekendPublication([{ ...row(), sessionType, publishStatus: "success" }], [{ ...live(), type: sessionType, location: "Elsewhere" }], "checked"))
       .toMatchObject({ state: "not_published", verified: 0, pending: 1 });
   });
   it("accepts room aliases only for the same full lesson and roster", () => {

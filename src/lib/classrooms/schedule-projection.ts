@@ -1,5 +1,5 @@
 import { assignmentTutorKey, CONTINUITY_GAP_MINUTES, physicalRoom, policiesFromMetadata, policyForTutor, roomQualityMetrics } from "./room-policy";
-import { isOnsiteSessionType } from "./session-mode";
+import { isRoomPublishSessionType } from "./session-mode";
 
 export interface ScheduleSourceRow {
   id: string;
@@ -51,7 +51,7 @@ export function buildTeacherSchedule(rows: ScheduleSourceRow[], date: string, me
         ...(row.status === "needs_review" ? ["Assignment needs review"] : []),
       ];
       const publication = row.status === "remote" ? "remote" : row.status !== "assigned" ? "needs_review"
-        : row.publishStatus === "failed" ? "failed" : isOnsiteSessionType(row.sessionType) && row.publishStatus !== "success" ? "draft" : "ready";
+        : row.publishStatus === "failed" ? "failed" : isRoomPublishSessionType(row.sessionType) && row.publishStatus !== "success" ? "draft" : "ready";
       return { rowId: row.id, date, startMinute: row.startMinute, endMinute: row.endMinute,
         startTime: formatScheduleMinute(row.startMinute), endTime: formatScheduleMinute(row.endMinute),
         room: row.status === "remote" ? row.overflowReleaseRoom ? "Teach elsewhere — classroom released" : "Remote / no room needed" : row.status === "no_room" ? "Room TBC" : row.assignedRoom,

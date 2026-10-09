@@ -11,7 +11,7 @@ import { assignmentReadinessFindings, readinessForFindings, type WeekendReport, 
 import { improveOverflowAllocation, liveVerifiedOnlineIds, sessionMatchesLive } from "./overflow-service";
 import { confirmedSuggestedRelease } from "./overflow-release";
 import { readOverflowPlan } from "./overflow-types";
-import { isOnsiteSessionType } from "./session-mode";
+import { isRoomPublishSessionType } from "./session-mode";
 import type { AssignmentSession } from "./assignment-engine";
 import type { WeekendAllocationCheckpoint } from "./weekend-config";
 
@@ -25,7 +25,7 @@ export function weekendPublication(rows: Array<AssignmentSession & { status: str
   live: WiseSession[], checkedAt: string): NonNullable<WeekendDayReport["publication"]> {
   const byId = new Map(live.map(row => [row._id, row]));
   let verified = 0, pending = 0, failed = 0;
-  for (const row of rows.filter(row => row.status === "assigned" && isOnsiteSessionType(row.sessionType))) {
+  for (const row of rows.filter(row => row.status === "assigned" && isRoomPublishSessionType(row.sessionType))) {
     const source = byId.get(row.wiseSessionId);
     if (source?.location && physicalRoom(source.location) === physicalRoom(row.assignedRoom) && sessionMatchesLive(row, source)) verified++;
     else if (row.publishStatus === "failed") failed++;

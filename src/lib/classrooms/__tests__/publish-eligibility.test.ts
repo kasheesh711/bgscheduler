@@ -51,10 +51,10 @@ describe("isClassroomPublishEligible", () => {
     expect(isClassroomPublishEligible(baseRow)).toEqual({ eligible: true });
   });
 
-  it("skips online rows in v1", () => {
-    expect(isClassroomPublishEligible({ ...baseRow, sessionType: "SCHEDULED" })).toEqual({
-      eligible: false,
-      reason: "V1 publishes Wise locations for OFFLINE sessions only",
+  it("allows assigned online rooms and rejects unknown modalities", () => {
+    expect(isClassroomPublishEligible({ ...baseRow, sessionType: "SCHEDULED" })).toEqual({ eligible: true });
+    expect(isClassroomPublishEligible({ ...baseRow, sessionType: "UNKNOWN" })).toEqual({
+      eligible: false, reason: "Unknown session modality; room publishing requires review",
     });
   });
 
@@ -226,7 +226,7 @@ describe("Wise publish location catalog", () => {
 });
 
 describe("live Wise room conflict helpers", () => {
-  it("builds date-scoped offline room blocks from live Wise sessions", () => {
+  it("builds date-scoped onsite and online room blocks from live Wise sessions", () => {
     const blocks = liveRoomBlocksForDate([
       {
         _id: "offline",
@@ -264,6 +264,9 @@ describe("live Wise room conflict helpers", () => {
       endMinute: 11 * 60,
       sessionType: "OFFLINE",
       wiseStatus: "CONFIRMED",
+    }, {
+      wiseSessionId: "online", wiseClassId: null, className: null, location: "Remember (TV)",
+      startMinute: 600, endMinute: 660, sessionType: "SCHEDULED", wiseStatus: "CONFIRMED",
     }]);
   });
 

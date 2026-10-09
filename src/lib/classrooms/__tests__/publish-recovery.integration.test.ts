@@ -20,19 +20,19 @@ beforeEach(async () => { await truncateAll(handle.db); await handle.db.execute(s
 afterEach(() => vi.unstubAllEnvs());
 const date = "2099-09-12";
 
-async function fixture(rooms = ["Cool", "Do It"], current = ["Do It", "Cool"]) {
+async function fixture(rooms = ["Cool", "Do It"], current = ["Do It", "Cool"], types = rooms.map(() => "OFFLINE")) {
   const [snapshot] = await handle.db.insert(s.snapshots).values({ active: true }).returning();
   const [group] = await handle.db.insert(s.tutorIdentityGroups).values({ snapshotId: snapshot.id, canonicalKey: "tutor", displayName: "Tutor" }).returning();
   const [run] = await handle.db.insert(s.classroomAssignmentRuns).values({ assignmentDate: date, snapshotId: snapshot.id, totalSessions: rooms.length }).returning();
   const rows = await handle.db.insert(s.classroomAssignmentRows).values(rooms.map((room, i) => ({
     runId: run.id, snapshotId: snapshot.id, groupId: group.id, canonicalKey: "tutor", tutorDisplayName: `Tutor ${i}`,
     wiseTeacherId: "teacher", wiseSessionId: randomUUID(), wiseClassId: `class-${i}`, startTime: new Date(`${date}T09:00:00Z`), endTime: new Date(`${date}T10:00:00Z`),
-    weekday: 6, startMinute: 540, endMinute: 600, wiseStatus: "CONFIRMED", sessionType: "OFFLINE", minCapacity: 1,
+    weekday: 6, startMinute: 540, endMinute: 600, wiseStatus: "CONFIRMED", sessionType: types[i], minCapacity: 1,
     assignedRoom: room, currentWiseLocation: current[i], status: "assigned" as const,
   }))).returning();
   const live = new Map<string, WiseSession>(rows.map((row, i) => [row.wiseSessionId, {
     _id: row.wiseSessionId, classId: row.wiseClassId!, scheduledStartTime: `${date}T02:00:00Z`, scheduledEndTime: `${date}T03:00:00Z`,
-    type: "OFFLINE", meetingStatus: "CONFIRMED", location: current[i],
+    type: types[i], meetingStatus: "CONFIRMED", location: current[i],
   }]));
   const get = vi.fn(async (path: string) => path.endsWith("/locations")
     ? { data: { locations: ["Cool", "Do It", "Nerd", "Joy (TV)"] } }
@@ -52,6 +52,37 @@ async function due(jobId: string) {
 }
 
 describe("durable classroom publication", () => {
+  it("publishes both onsite and assigned online locations without changing modality", async () => {
+    const f = await fixture(["Cool", "Do It"], ["Nerd", "Joy (TV)"], ["OFFLINE", "SCHEDULED"]);
+    const job = await createClassroomPublishJob(db, { runId: f.run.id });
+    expect(job.eligibleCount).toBe(2);
+    expect((await runClassroomPublishJob(db, job.jobId, f.client)).progress).toMatchObject({ status: "succeeded", successCount: 2 });
+    expect([...f.live.values()].map(row => [row.type, row.location])).toEqual([["OFFLINE", "Cool"], ["SCHEDULED", "Do It"]]);
+    expect(f.put.mock.calls.every(([path, body]) => path.endsWith("?updateType=SINGLE") && Object.keys(body).join() === "location")).toBe(true);
+  });
+  it.each(["OFFLINE", "SCHEDULED"])("rejects changed %s modality before publishing", async type => {
+    const f = await fixture(["Cool"], ["Do It"], [type]);
+    f.live.get(f.rows[0].wiseSessionId)!.type = type === "OFFLINE" ? "SCHEDULED" : "OFFLINE";
+    const job = await createClassroomPublishJob(db, { runId: f.run.id });
+    expect((await runClassroomPublishJob(db, job.jobId, f.client)).progress).toMatchObject({ status: "failed", failedCount: 1 });
+    expect(f.put).not.toHaveBeenCalled();
+  });
+  it("rejects online modality changes during final read-back", async () => {
+    const f = await fixture(["Cool"], ["Do It"], ["SCHEDULED"]), original = f.put.getMockImplementation()!;
+    f.put.mockImplementationOnce(async (...args) => {
+      const result = await original(...args); f.live.get(f.rows[0].wiseSessionId)!.type = "OFFLINE"; return result;
+    });
+    const job = await createClassroomPublishJob(db, { runId: f.run.id });
+    expect((await runClassroomPublishJob(db, job.jobId, f.client)).progress).toMatchObject({ status: "failed", successCount: 0, failedCount: 1 });
+  });
+  it("blocks an onsite publish into a room occupied by an external online class", async () => {
+    const f = await fixture(["Cool"], ["Do It"]);
+    f.live.set("external", { ...[...f.live.values()][0], _id: "external", type: "SCHEDULED", location: "Cool" });
+    const job = await createClassroomPublishJob(db, { runId: f.run.id });
+    expect((await runClassroomPublishJob(db, job.jobId, f.client)).progress).toMatchObject({ status: "failed", failedCount: 1 });
+    expect(f.put).not.toHaveBeenCalled();
+  });
+
   async function releasedOnlineFixture(releaseRoom = "REMOTE_NO_ROOM_NEEDED") {
     const f = await fixture(["Cool", releaseRoom], ["Do It", "Cool"]);
     const online = f.rows[1];
@@ -144,8 +175,8 @@ describe("durable classroom publication", () => {
     expect((await runClassroomPublishJob(db, job.jobId, f.client)).progress.status).toBe("succeeded");
     expect(f.put).toHaveBeenCalledTimes(1);
   });
-  it("does not claim success when Wise accepts a PUT but read-back differs", async () => {
-    const f = await fixture(["Cool"], ["Do It"]);
+  it.each(["OFFLINE", "SCHEDULED"])("does not claim %s room success when Wise accepts a PUT but read-back differs", async type => {
+    const f = await fixture(["Cool"], ["Do It"], [type]);
     f.put.mockResolvedValue({ data: {} });
     const job = await createClassroomPublishJob(db, { runId: f.run.id });
     const result = await runClassroomPublishJob(db, job.jobId, f.client);

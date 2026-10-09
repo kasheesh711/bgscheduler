@@ -93,9 +93,9 @@ describe("classroom incident regressions", () => {
     expect(blocked[0].status).toBe("no_room");
   });
 
-  it("never allocates another class into a non-publishable class's retained Wise room", () => {
+  it.each(["OFFLINE", "SCHEDULED"])("protects a non-publishable %s class's retained Wise room", (sessionType) => {
     const result = repairClassroomAssignmentRows([
-      row("unpublishable", NO_ROOM_AVAILABLE, { wiseClassId: null, currentWiseLocation: "A" }),
+      row("unpublishable", NO_ROOM_AVAILABLE, { sessionType, wiseClassId: null, currentWiseLocation: "A" }),
       row("large", "A", { studentCount: 3, minCapacity: 3 }),
     ], rooms);
     expect(result.find(r => r.wiseSessionId === "large")?.status).toBe("no_room");
@@ -118,8 +118,8 @@ describe("classroom incident regressions", () => {
     expect(result[0].assignedRoom).toBe("B");
   });
 
-  it("protects retained Wise occupancy even when both saved rows previously had rooms", () => {
-    const saved = [previous(row("fixed", "B", { currentWiseLocation: "A", wiseClassId: null })),
+  it.each(["OFFLINE", "SCHEDULED"])("protects retained %s occupancy when both saved rows had rooms", (sessionType) => {
+    const saved = [previous(row("fixed", "B", { sessionType, currentWiseLocation: "A", wiseClassId: null })),
       previous(row("other", "A", { minCapacity: 3, studentCount: 3 }))];
     const result = reconcileClassroomAssignments({ sessions: saved, previousRows: saved, rooms });
     expect(result.rows.find(r => r.wiseSessionId === "fixed")?.assignedRoom).toBe("A");
