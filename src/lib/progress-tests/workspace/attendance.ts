@@ -4,7 +4,7 @@ import * as s from "@/lib/db/schema";
 import { creditSessionTeacher, fetchCreditSessions, fetchCreditStudents, fetchSessionCredits } from "@/lib/credit-control/wise";
 import type { WiseClient } from "@/lib/wise/client";
 
-export type AttendanceRow = Pick<typeof s.creditControlSessions.$inferSelect, "wiseSessionId" | "wiseClassId" | "wiseStudentId" | "studentKey" | "studentName" | "subject" | "title" | "packageName" | "scheduledStartTime" | "meetingStatus" | "sessionKind" | "creditApplied" | "wiseTeacherUserId" | "wiseTeacherId">;
+export type AttendanceRow = Pick<typeof s.creditControlSessions.$inferSelect, "wiseSessionId" | "wiseClassId" | "wiseStudentId" | "studentKey" | "studentName" | "subject" | "title" | "packageName" | "scheduledStartTime" | "meetingStatus" | "sessionKind" | "creditApplied" | "wiseTeacherUserId" | "wiseTeacherId"> & {scheduledEndTime?:Date|null};
 export type AttendanceInput = { source: AttendanceRow[]; packages: { wiseClassId: string; wiseStudentId: string; classType: string | null }[]; snapshotId: string | null };
 
 /** Progress Tests owns its refresh after launch. The retired Credit Control UI's
@@ -39,7 +39,7 @@ export async function loadWorkspaceAttendance(db: Database, client: WiseClient, 
       const sessionType = session.classId.classType;
       const classType = pair?.classType && sessionType && pair.classType !== sessionType ? null : sessionType ?? pair?.classType ?? null;
       pairs.set(pairKey, { wiseClassId: session.classId._id, wiseStudentId: studentId, classType });
-      rows.set(key(session._id, studentId), { wiseSessionId: session._id, wiseClassId: session.classId._id, wiseStudentId: studentId, studentKey: studentId, studentName: names.get(studentId) ?? "Unresolved student", subject: session.classId.subject ?? "", title: session.classId.name ?? session.title ?? "Course", packageName: "", scheduledStartTime: session.scheduledStartTime, meetingStatus: session.meetingStatus.toUpperCase(), sessionKind: kind, creditApplied: 0, ...creditSessionTeacher(session) });
+      rows.set(key(session._id, studentId), { wiseSessionId: session._id, wiseClassId: session.classId._id, wiseStudentId: studentId, studentKey: studentId, studentName: names.get(studentId) ?? "Unresolved student", subject: session.classId.subject ?? "", title: session.classId.name ?? session.title ?? "Course", packageName: "", scheduledStartTime: session.scheduledStartTime, scheduledEndTime: session.scheduledEndTime, meetingStatus: session.meetingStatus.toUpperCase(), sessionKind: kind, creditApplied: 0, ...creditSessionTeacher(session) });
     }
   }
   const credits = new Map<string, Map<string, number>>();
