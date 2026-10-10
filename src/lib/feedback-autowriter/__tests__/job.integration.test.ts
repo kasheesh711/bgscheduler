@@ -423,6 +423,21 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     expect((await readSessionRow(db, SESSION_ID))?.state).toBe("pending");
   });
 
+  it("holds for a person, not out of scope, when the account was absent and the guest did not stand in", async () => {
+    // Most likely the student joining by Zoom link under a name the gate cannot tie to them (owner rule, 2 Oct).
+    const [teacher, student] = sessionDetail().participants;
+    const participants = [
+      teacher,
+      { ...student, inMeetingDuration: 0, absolutePercentAttendance: 0 },
+      { name: "Zoom user", isTeacher: false, inMeetingDuration: 2340, absolutePercentAttendance: 65 },
+    ];
+    const wise = fakeWise({ details: [sessionDetail({ participants })] });
+    expect(await processSession(deps(wise.ops), { wiseSessionId: SESSION_ID, wiseClassId: CLASS_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "held", detail: "guest_stand_in_65pct" });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "held", reason: "guest_stand_in_65pct", metadata: { alertKind: "held" } });
+    expect(wise.posts).toHaveLength(0);
+  });
+
   it("skips an in-person class on a main account at once, before any model call", async () => {
     const kevinMain = { _id: "695369c028118f629edcb986", name: "Kevin (Kev) Y. Hsieh" };
     const model = fakeModel();

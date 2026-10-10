@@ -226,6 +226,7 @@ describe("classifyCoverage", () => {
       ["No student", "excluded_data_quality"],
       ["Student absent (attendance below the minimum)", "excluded_data_quality"],
       ["Student not a Wise user", "excluded_data_quality"],
+      ["Student may have joined as a guest", "excluded_data_quality"],
       ["Student not a Wise user (POST check)", "excluded_data_quality"],
       ["Tutor switched off", "excluded_tutor_off"],
     ]);

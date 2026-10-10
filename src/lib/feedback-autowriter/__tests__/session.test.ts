@@ -147,11 +147,11 @@ describe("evaluateSessionGates", () => {
     expect(evaluateSessionGates(parse({ participants: [account, guest, teacher] }), gateInput)).toEqual({ ok: true });
 
     const gate = (participants: unknown[]) => evaluateSessionGates(parse({ participants }), gateInput);
-    // A guest not named as the student left early, or the tutor did: no stand-in (an account plus a guest:
-    // retried while attendance settles, then out of scope).
+    // A guest not named as the student left early, or the tutor did: no stand-in, and the reason says which
+    // (owner rule, 2 Oct: usually the student joining the wrong way, held for a person once attendance settles).
     const zoomGuest = { ...guest, name: "Zoom user" };
-    expect(gate([account, { ...zoomGuest, absolutePercentAttendance: 79, inMeetingDuration: 2844 }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
-    expect(gate([account, guest, { ...teacher, inMeetingDuration: 2800 }])).toEqual({ ok: false, reason: "student_count_2_guest" });
+    expect(gate([account, { ...zoomGuest, absolutePercentAttendance: 79, inMeetingDuration: 2844 }, teacher])).toEqual({ ok: false, reason: "guest_stand_in_79pct" });
+    expect(gate([account, guest, { ...teacher, inMeetingDuration: 2800 }])).toEqual({ ok: false, reason: "guest_stand_in_tutor_absent" });
     // The Wise account attended too: two people.
     expect(gate([{ ...account, inMeetingDuration: 3300, absolutePercentAttendance: 92 }, guest, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
     expect(classifyGateReason("student_count_2_guest", { minutesSinceEnd: 5 })).toBe("retry");
@@ -181,23 +181,60 @@ describe("evaluateSessionGates", () => {
     expect(gate([account, guest, teacher])).toEqual({ ok: true });
     // Exactly the usual minimum stands in; under it, no stand-in.
     expect(gate([account, { ...guest, absolutePercentAttendance: 50 }, teacher])).toEqual({ ok: true });
-    expect(gate([account, { ...guest, absolutePercentAttendance: 49 }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
+    expect(gate([account, { ...guest, absolutePercentAttendance: 49 }, teacher])).toEqual({ ok: false, reason: "guest_stand_in_49pct" });
     // The surname alone is enough (owner rule, 2 Oct)...
     expect(gate([account, { ...guest, name: "Nattapong Kaewmanee" }, teacher])).toEqual({ ok: true });
     // ...but a family word means a parent's or sibling's name for the device: the stricter guest bar.
-    expect(gate([account, { ...guest, name: "Kaewmanee Family" }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
-    expect(gate([account, { ...guest, name: "Mae Aim" }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
+    expect(gate([account, { ...guest, name: "Kaewmanee Family" }, teacher])).toEqual({ ok: false, reason: "guest_stand_in_65pct" });
+    expect(gate([account, { ...guest, name: "Mae Aim" }, teacher])).toEqual({ ok: false, reason: "guest_stand_in_65pct" });
     // A device whose model word is also a nickname is not the student.
     const air = { ...account, name: "Somchai (Air.Ka) Kaewmanee" };
-    expect(gate([air, { ...guest, name: "iPad Air" }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
+    expect(gate([air, { ...guest, name: "iPad Air" }, teacher])).toEqual({ ok: false, reason: "guest_stand_in_65pct" });
     // A guest not named as the student keeps the higher bar; so does a nameless guest or a device on someone else's name.
-    expect(gate([account, { ...guest, name: "Nattapong" }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
-    expect(gate([account, { ...guest, name: "" }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
-    expect(gate([account, { ...guest, name: "Mom's iPad" }, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
+    expect(gate([account, { ...guest, name: "Nattapong" }, teacher])).toEqual({ ok: false, reason: "guest_stand_in_65pct" });
+    expect(gate([account, { ...guest, name: "" }, teacher])).toEqual({ ok: false, reason: "guest_stand_in_65pct" });
+    expect(gate([account, { ...guest, name: "Mom's iPad" }, teacher])).toEqual({ ok: false, reason: "guest_stand_in_65pct" });
     // The tutor's bar does not move.
-    expect(gate([account, guest, { ...teacher, inMeetingDuration: 2800 }])).toEqual({ ok: false, reason: "student_count_2_guest" });
+    expect(gate([account, guest, { ...teacher, inMeetingDuration: 2800 }])).toEqual({ ok: false, reason: "guest_stand_in_tutor_absent" });
     // The Wise account attended too: two people.
     expect(gate([{ ...account, inMeetingDuration: 3300, absolutePercentAttendance: 92 }, guest, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
+  });
+
+  it("holds an absent account beside a guest who did not stand in for a person, not out of scope (owner rule, 2 Oct)", () => {
+    // The student joined as a guest under a name the gate cannot tie to them, while the Wise account shows 0 minutes.
+    const teacher = { ...sessionDetail().participants[0], inMeetingDuration: 3461 };
+    const account = { wiseUserId: "6a00000000000000000000a3", name: "Pimchanok (Fern.Su) Suksawat", isTeacher: false, inMeetingDuration: 0 };
+    const guest = { name: "Zoom user", isTeacher: false, inMeetingDuration: 2340, absolutePercentAttendance: 65 };
+    const gate = (participants: unknown[]) => evaluateSessionGates(parse({ participants }), gateInput);
+
+    // The guest's attendance names the reason, rounded down like `attendance_<n>pct`.
+    expect(gate([account, guest, teacher])).toEqual({ ok: false, reason: "guest_stand_in_65pct" });
+    expect(gate([account, { ...guest, absolutePercentAttendance: 79.6 }, teacher])).toEqual({ ok: false, reason: "guest_stand_in_79pct" });
+    expect(gate([account, { ...guest, absolutePercentAttendance: 0, inMeetingDuration: 0 }, teacher])).toEqual({ ok: false, reason: "guest_stand_in_0pct" });
+    // A guest who stayed but no attendance for them at all: unknown.
+    expect(gate([account, { ...guest, absolutePercentAttendance: undefined, inMeetingDuration: undefined }, teacher]))
+      .toEqual({ ok: false, reason: "guest_stand_in_unknown" });
+    // The guest qualified but the tutor did not; with both short, the guest's attendance is named.
+    const shortTutor = { ...teacher, inMeetingDuration: 1200 };
+    expect(gate([account, { ...guest, absolutePercentAttendance: 90 }, shortTutor])).toEqual({ ok: false, reason: "guest_stand_in_tutor_absent" });
+    expect(gate([account, guest, shortTutor])).toEqual({ ok: false, reason: "guest_stand_in_65pct" });
+    // The account under the minimum but not zero is still "absent" for this rule.
+    expect(gate([{ ...account, inMeetingDuration: 900, absolutePercentAttendance: 25 }, guest, teacher]))
+      .toEqual({ ok: false, reason: "guest_stand_in_65pct" });
+
+    // Retried while attendance settles, then held for a person (alert), and left out of coverage as the class's own data.
+    for (const reason of ["guest_stand_in_65pct", "guest_stand_in_0pct", "guest_stand_in_unknown", "guest_stand_in_tutor_absent"]) {
+      expect(classifyGateReason(reason, { minutesSinceEnd: 30 })).toBe("retry");
+      expect(classifyGateReason(reason, { minutesSinceEnd: 90 })).toBe("person");
+      expect(classifyGateReason(reason)).toBe("person");
+      expect(classifyCoverage({ state: "held", reason })).toBe("excluded_data_quality");
+    }
+
+    // The account attended at the minimum or more beside a guest: two people, out of scope as before.
+    expect(gate([{ ...account, inMeetingDuration: 1800, absolutePercentAttendance: 50 }, guest, teacher]))
+      .toEqual({ ok: false, reason: "student_count_2_guest" });
+    // No attendance for the account yet: still the plain account-plus-guest reason (it may settle either way).
+    expect(gate([{ ...account, inMeetingDuration: undefined }, guest, teacher])).toEqual({ ok: false, reason: "student_count_2_guest" });
   });
 
   it("does not count the tutor joining their own class again as a student", () => {
