@@ -687,17 +687,25 @@ async function buildSessionRows(
   const positiveCreditByPairSession = new Map<string, number>();
   const histories: Array<typeof schema.creditControlCreditHistory.$inferInsert> = [];
 
-  for (const pair of creditPairs) {
-    // Recomputed from THIS run's names, so a carried-forward history row keys
-    // to the same package as the pair's fresh session rows.
+  const resolvedPairs = await mapLimit(creditPairs, CREDIT_PAIR_CONCURRENCY, async (pair) => {
+    try {
+      const pastIds=new Set(pastSessions.filter(session=>session.meetingStatus.toUpperCase()==='ENDED'&&session.classId._id===pair.wiseClassId&&session.students.includes(pair.wiseStudentId)).map(session=>session._id));
+      const retained=retainedSessions.filter(session=>session.wiseClassId===pair.wiseClassId&&session.wiseStudentId===pair.wiseStudentId);
+      for(const session of retained)pastIds.add(session.wiseSessionId);
+      const resolved=sessionCreditMap(pair.history.map(history=>({...history.raw,_id:history.wiseCreditHistoryId,credit:history.credit})),anchors.filter(anchor=>pastIds.has(anchor.wiseSessionId)),pair.wiseClassId,pair.wiseStudentId);
+      for(const session of retained)if(session.creditApplied>0&&!resolved.credits.has(session.wiseSessionId))resolved.unresolved.add(session.wiseSessionId);
+      for(const id of resolved.unresolved)resolved.credits.set(id,await readSessionCredits(client,pair.wiseClassId,pair.wiseStudentId,id));
+      return { ok: true as const, pair, credits: resolved.credits };
+    } catch (error) {
+      return { ok: false as const, error };
+    }
+  });
+  // Finish bounded reads before reporting failures, so saved request counts are final.
+  for (const result of resolvedPairs) {
+    if (!result.ok) throw result.error;
+    const { pair, credits } = result;
     const packageKey = buildStudentPackageKey(pair.studentName, pair.packageName);
-    const pastIds=new Set(pastSessions.filter(session=>session.meetingStatus.toUpperCase()==='ENDED'&&session.classId._id===pair.wiseClassId&&session.students.includes(pair.wiseStudentId)).map(session=>session._id));
-    const retained=retainedSessions.filter(session=>session.wiseClassId===pair.wiseClassId&&session.wiseStudentId===pair.wiseStudentId);
-    for(const session of retained)pastIds.add(session.wiseSessionId);
-    const resolved=sessionCreditMap(pair.history.map(history=>({...history.raw,_id:history.wiseCreditHistoryId,credit:history.credit})),anchors.filter(anchor=>pastIds.has(anchor.wiseSessionId)),pair.wiseClassId,pair.wiseStudentId);
-    for(const session of retained)if(session.creditApplied>0&&!resolved.credits.has(session.wiseSessionId))resolved.unresolved.add(session.wiseSessionId);
-    for(const id of resolved.unresolved)resolved.credits.set(id,await readSessionCredits(client,pair.wiseClassId,pair.wiseStudentId,id));
-    for(const [id,credit] of resolved.credits)if(credit>0)positiveCreditByPairSession.set(`${pairKey(pair.wiseClassId,pair.wiseStudentId)}|${id}`,credit);
+    for(const [id,credit] of credits)if(credit>0)positiveCreditByPairSession.set(`${pairKey(pair.wiseClassId,pair.wiseStudentId)}|${id}`,credit);
     for (const history of pair.history) {
       histories.push({
         snapshotId,

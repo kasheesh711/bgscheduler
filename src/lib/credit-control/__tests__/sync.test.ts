@@ -918,6 +918,71 @@ describe("runCreditControlSync — pair reuse (CRED-01)", () => {
   });
 });
 
+describe('bounded current detail reads', () => {
+ const now = new Date('2026-05-26T08:00:00Z'), at = new Date('2026-05-20T08:00:00Z');
+ function fixture(count: number) {
+  const students = Array.from({ length: count }, (_, i) => ({ ...makeStudent(), _id: `student-${i}`, name: `Student ${i}`, classrooms: [{ ...makeStudent().classrooms[0], _id: `class-${i}` }] }));
+  const past = students.map((student, i) => ({ ...makeFutureSessions(1)[0], _id: `session-${i}`, classId: student.classrooms[0], students: [student._id], scheduledStartTime: at, scheduledEndTime: new Date(+at + 3600000), meetingStatus: 'ENDED' }));
+  const retained = past.map((session, i) => ({ snapshotId: 'old-complete-source', wiseSessionId: session._id, wiseClassId: `class-${i}`, wiseStudentId: `student-${i}`, studentKey: `old-key-${i}`, packageKey: `old-package-${i}`, studentName: students[i].name, packageName: 'Math Package', subject: 'Math', title: 'Original lesson', scheduledStartTime: at, scheduledEndTime: session.scheduledEndTime, durationMinutes: 60, meetingStatus: 'ENDED', sessionKind: 'past', teacherFeedback: 'Original note', creditApplied: 1, wiseTeacherUserId: 'original-tutor', wiseTeacherId: null, teacherName: 'Original tutor' }));
+  vi.mocked(fetchCreditStudents).mockResolvedValue(students);
+  vi.mocked(fetchCreditSessions).mockImplementation(async (_c, _i, status) => status === 'PAST' ? past : []);
+  vi.mocked(fetchSessionTeacherFeedback).mockResolvedValue('');
+  vi.mocked(fetchSessionCredits).mockImplementation(async (_c, _i, classId) => ({ credits: { total: 10, consumed: 1, remaining: 9, available: 9, bookedSessions: 0 }, sessionCreditHistory: [{ _id: `history-${classId.slice(6)}`, credit: 1, type: 'SESSION', createdAt: at }] }));
+  const { db, events } = makeDbMock({ selectRows: new Map<unknown, unknown[]>([[schema.creditControlSnapshots, [{ id: 'old-complete-source' }]], [schema.creditControlSessions, retained]]) });
+  return { db, events, retained };
+ }
+ function detail(i: number, credit: number) {
+  return { data: { _id: `session-${i}`, classId: `class-${i}`, attendanceRecorded: true, meetingStatus: 'ENDED', participants: [{ wiseUserId: 'peer', credits: 99 }, { wiseUserId: `student-${i}`, credits: credit }] } };
+ }
+ beforeEach(() => vi.clearAllMocks());
+ it('bounds concurrent reads at 15 and preserves input order, exact student credits, and original rows', async () => {
+  const { db, events, retained } = fixture(20), client = fakeClient();
+  const pending = new Map<number, (response: unknown) => void>();
+  let active = 0, peak = 0, attempts = 0;
+  vi.mocked(client.get).mockImplementation(async (path) => {
+   const i = Number(path.split('/').at(-1)!.slice(8)); attempts++; active++; peak = Math.max(peak, active);
+   return await new Promise(resolve => pending.set(i, resolve)).finally(() => active--);
+  });
+  const run = runCreditControlSync(db, client, 'institute-1', now, { syncRunId: 'run-1', requireComplete: true });
+  await vi.waitFor(() => expect(pending.size).toBe(15));
+  expect(attempts).toBe(15);
+  for (let i = 14; i >= 0; i--) pending.get(i)!(detail(i, i % 3 === 0 ? -1 : i % 3 === 1 ? 0 : .5));
+  await vi.waitFor(() => expect(pending.size).toBe(20));
+  for (let i = 19; i >= 15; i--) pending.get(i)!(detail(i, i % 3 === 0 ? -1 : i % 3 === 1 ? 0 : .5));
+  expect((await run).success).toBe(true);
+  expect(peak).toBe(15); expect(attempts).toBe(20); expect(active).toBe(0);
+  const histories = insertedRows<{ wiseCreditHistoryId: string }>(events, schema.creditControlCreditHistory);
+  expect(histories.map(row => row.wiseCreditHistoryId)).toEqual(Array.from({ length: 20 }, (_, i) => `history-${i}`));
+  const sessions = insertedRows<{ wiseSessionId: string; creditApplied: number }>(events, schema.creditControlSessions);
+  expect(sessions.map(row => row.creditApplied)).toEqual(Array.from({ length: 20 }, (_, i) => i % 3 === 2 ? .5 : 0));
+  expect(retained.every(row => row.creditApplied === 1 && row.wiseTeacherUserId === 'original-tutor')).toBe(true);
+ });
+ it.each(['failure', 'abort', 'wrong student'])('waits for in-flight reads and refuses all data insertion and promotion on %s', async kind => {
+  const { db, events } = fixture(2), client = fakeClient(), controller = new AbortController();
+  let attempts = 0, settled = false, release!: () => void;
+  vi.mocked(client.get).mockImplementation(async (path) => {
+   attempts++;
+   if (path.endsWith('session-0')) {
+    if (kind === 'abort') { controller.abort(new Error('Deadline reached')); throw controller.signal.reason; }
+    if (kind === 'wrong student') return { data: { ...detail(0, 1).data, participants: [{ wiseUserId: 'peer', credits: 99 }] } };
+    throw new WiseApiError(503, 'PRIVATE', 'PRIVATE', 500);
+   }
+   await new Promise<void>(resolve => { release = resolve; }); return detail(1, .5);
+  });
+  vi.mocked(client.getStats).mockImplementation(() => ({ requests: attempts, byPath: { '/detail': attempts } }));
+  const run = runCreditControlSync(db, client, 'institute-1', now, { syncRunId: 'run-1', requireComplete: true, signal: controller.signal }).then(result => { settled = true; return result; });
+  await vi.waitFor(() => expect(attempts).toBe(2));
+  await Promise.resolve(); expect(settled).toBe(false); release();
+  expect((await run).success).toBe(false);
+  const update = latestUpdate(events, 'failed')!;
+  const query = new PgDialect().sqlToQuery(update.setValue.metadata as Parameters<PgDialect['sqlToQuery']>[0]);
+  expect(JSON.parse(query.params[0] as string)).toMatchObject({ wiseCallCount: 2 });
+  expect(insertedRows(events, schema.creditControlSessions)).toHaveLength(0);
+  expect(insertedRows(events, schema.creditControlCreditHistory)).toHaveLength(0);
+  expect(events.some(event => event.type === 'update' && event.table === schema.creditControlSnapshots)).toBe(false);
+ });
+});
+
 describe('snapshot original credit evidence preservation',()=>{
  const now=new Date('2026-05-26T08:00:00Z'),at=new Date('2026-05-20T08:00:00Z');
  const raw={_id:'old-session',createdAt:'2026-05-20T09:01:02.345Z',duration:3600000,type:'SESSION',classroom:{_id:'class-1'},credit:1};
