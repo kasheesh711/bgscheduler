@@ -39,7 +39,7 @@ describe("snapshotDataBounds", () => {
   it("derives the retained date floor and ceiling from a fixed snapshot instant", () => {
     expect(snapshotDataBounds(new Date("2026-08-17T05:00:00.000Z"))).toEqual({
       floorDateKey: "2026-04-19",
-      ceilingDateKey: "2027-02-13",
+      ceilingDateKey: "2026-09-16",
     });
   });
 });

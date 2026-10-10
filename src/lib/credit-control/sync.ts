@@ -111,16 +111,16 @@ export interface CreditControlSyncResult {
 /** Days of past sessions each snapshot retains; the report's queryable floor. */
 export const PAST_WINDOW_DAYS = 120;
 /** Days of future sessions each snapshot retains; the report's queryable ceiling. */
-export const FUTURE_WINDOW_DAYS = 180;
+export const FUTURE_WINDOW_DAYS = 30;
 /** Matches the WiseClient limiter (`createWiseClient` maxConcurrency 15), so
  *  the pair fan-out saturates the client instead of throttling below it. */
 const CREDIT_PAIR_CONCURRENCY = 15;
 const FEEDBACK_CONCURRENCY = 6;
 /** Pair keys per carried-history SELECT, so the IN list stays a sane statement size. */
 const CARRIED_HISTORY_KEY_CHUNK_SIZE = 400;
-/** credit_control_sessions has 22 columns, so 500 rows is ~11k bind
- *  parameters per statement — well under the Postgres 65,535 ceiling. */
-export const CREDIT_CONTROL_INSERT_CHUNK_SIZE = 500;
+/** The widest snapshot table has 22 columns: 2,000 rows stays below 65,535 parameters. */
+export const CREDIT_CONTROL_INSERT_CHUNK_SIZE = 2_000;
+const CREDIT_CONTROL_INSERT_CONCURRENCY = 6;
 const ERROR_MESSAGE_MAX_LENGTH = 2_000;
 const ERROR_SUMMARY_MAX_LENGTH = 2_000;
 const DB_ERROR_FIELDS = [
@@ -798,28 +798,32 @@ async function buildSessionRows(
   return { sessions: rows, histories };
 }
 
-async function insertChunks<T extends Record<string, unknown>>(
+async function insertChunks(
   db: Database,
-  table: Parameters<Database["insert"]>[0],
-  rows: T[],
-  tableName: string,
+  tables: Array<{ table: Parameters<Database["insert"]>[0]; rows: Record<string, unknown>[]; tableName: string }>,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const parts = chunk(rows, CREDIT_CONTROL_INSERT_CHUNK_SIZE);
-  for (let chunkIndex = 0; chunkIndex < parts.length; chunkIndex += 1) {
-    const part = parts[chunkIndex];
-    if (part.length === 0) continue;
+  const tasks = tables.flatMap(({ table, rows, tableName }) =>
+    chunk(rows, CREDIT_CONTROL_INSERT_CHUNK_SIZE).map((part, chunkIndex) => ({ table, part, context: {
+      tableName, totalRows: rows.length, chunkIndex,
+      chunkStart: chunkIndex * CREDIT_CONTROL_INSERT_CHUNK_SIZE, chunkSize: part.length,
+    } })),
+  );
+  let failed = false;
+  const errors = await mapLimit(tasks, CREDIT_CONTROL_INSERT_CONCURRENCY, async ({ table, part, context }) => {
+    if (failed) return null;
     try {
+      signal?.throwIfAborted();
       await db.insert(table).values(part as never);
+      return null;
     } catch (error) {
-      throw new CreditControlInsertError({
-        tableName,
-        totalRows: rows.length,
-        chunkIndex,
-        chunkStart: chunkIndex * CREDIT_CONTROL_INSERT_CHUNK_SIZE,
-        chunkSize: part.length,
-      }, error);
+      failed = true;
+      return new CreditControlInsertError(context, error);
     }
-  }
+  });
+  // Settle all started writes before saving failure; an incomplete candidate stays inactive.
+  const error = errors.find(Boolean);
+  if (error) throw error;
 }
 
 /**
@@ -966,7 +970,7 @@ export async function runCreditControlSync(
   client: WiseClient,
   instituteId: string,
   now = new Date(),
-  options: { syncRunId?: string; runMetadata?: Record<string, unknown>; signal?: AbortSignal; requireComplete?: boolean } = {},
+  options: { syncRunId?: string; runMetadata?: Record<string, unknown>; signal?: AbortSignal; requireComplete?: boolean; writeDb?: Database; persistenceSignal?: AbortSignal } = {},
 ): Promise<CreditControlSyncResult> {
   const run = options.syncRunId
     ? { id: options.syncRunId }
@@ -1086,13 +1090,15 @@ export async function runCreditControlSync(
     );
 
     options.signal?.throwIfAborted();
-    await insertChunks(db, schema.creditControlStudents, studentRows, "credit_control_students");
-    await insertChunks(db, schema.creditControlPackages, packageRows, "credit_control_packages");
-    await insertChunks(db, schema.creditControlSessions, sessionRows, "credit_control_sessions");
-    await insertChunks(db, schema.creditControlCreditHistory, histories, "credit_control_credit_history");
+    await insertChunks(options.writeDb ?? db, [
+      { table: schema.creditControlStudents, rows: studentRows, tableName: "credit_control_students" },
+      { table: schema.creditControlPackages, rows: packageRows, tableName: "credit_control_packages" },
+      { table: schema.creditControlSessions, rows: sessionRows, tableName: "credit_control_sessions" },
+      { table: schema.creditControlCreditHistory, rows: histories, tableName: "credit_control_credit_history" },
+    ], options.persistenceSignal ?? options.signal);
     // Pair/feedback fetchers tolerate individual errors in active mode. An
     // aborted daily refresh must never promote their incomplete results.
-    options.signal?.throwIfAborted();
+    (options.persistenceSignal ?? options.signal)?.throwIfAborted();
 
     // Atomic promotion via a single UPDATE: PostgreSQL MVCC + the row-level
     // lock held for the duration of one statement guarantee that concurrent

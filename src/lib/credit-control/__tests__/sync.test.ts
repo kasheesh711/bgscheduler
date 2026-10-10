@@ -3,6 +3,10 @@ import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { WiseApiError, type WiseClient } from "@/lib/wise/client";
 import { PgDialect } from "drizzle-orm/pg-core";
+import { getTableColumns } from "drizzle-orm";
+import { getDb } from "@/lib/db";
+import { neon } from "@neondatabase/serverless";
+vi.mock("@neondatabase/serverless", () => ({ neon: vi.fn(() => vi.fn()) }));
 import { z } from "zod";
 import {
   fetchCreditSessions,
@@ -111,6 +115,7 @@ function makeDbMock(options: {
   failSelectTables?: unknown[];
   anchorRows?: unknown[];
   anchorReadError?: boolean;
+  insertWait?: (table: unknown, rows: unknown[]) => Promise<unknown>;
 } = {}): { db: Database; events: DbEvent[] } {
   const events: DbEvent[] = [];
   const snapshotId = options.snapshotId ?? "snapshot-1";
@@ -165,7 +170,7 @@ function makeDbMock(options: {
           }
         }
 
-        return Promise.resolve([]);
+        return options.insertWait?.(table, rows) ?? Promise.resolve([]);
       }),
     })),
     update: vi.fn((table: unknown) => ({
@@ -215,11 +220,20 @@ describe("runCreditControlSync", () => {
     vi.mocked(fetchSessionTeacherFeedback).mockResolvedValue("");
   });
 
-  // 500 rows x 22 columns on credit_control_sessions is ~11k bind parameters,
-  // well inside the 65,535 Postgres allows, so the ceiling stays safe.
-  it("uses 500-row chunks for credit-control inserts", () => {
-    expect(CREDIT_CONTROL_INSERT_CHUNK_SIZE).toBe(500);
-    expect(CREDIT_CONTROL_INSERT_CHUNK_SIZE * 22).toBeLessThan(65_535);
+  it("limits future source classes to 30 days while keeping 120 past days and correct snapshot metadata", async () => {
+    const now = new Date("2026-10-10T06:00:00Z"), { db, events } = makeDbMock();
+    expect((await runCreditControlSync(db, fakeClient(), "institute-1", now, { syncRunId: "run-1" })).success).toBe(true);
+    expect(fetchCreditSessions).toHaveBeenCalledWith(expect.anything(), "institute-1", "PAST", new Date(+now - 120 * 86_400_000), now);
+    expect(fetchCreditSessions).toHaveBeenCalledWith(expect.anything(), "institute-1", "FUTURE", now, new Date(+now + 30 * 86_400_000));
+    const snapshot = events.find((event): event is InsertEvent => event.type === "insert" && event.table === schema.creditControlSnapshots);
+    expect(snapshot?.rows[0]).toMatchObject({ metadata: { pastWindowDays: 120, futureWindowDays: 30 } });
+  });
+
+  it("keeps every snapshot-table insert below the PostgreSQL parameter limit", () => {
+    expect(CREDIT_CONTROL_INSERT_CHUNK_SIZE).toBe(2_000);
+    for (const table of [schema.creditControlStudents, schema.creditControlPackages, schema.creditControlSessions, schema.creditControlCreditHistory]) {
+      expect(CREDIT_CONTROL_INSERT_CHUNK_SIZE * Object.keys(getTableColumns(table)).length).toBeLessThan(65_535);
+    }
   });
 
   it.each(["timeout", "upstream failure"])("retains the prior snapshot after a daily credit-fetch %s", async kind => {
@@ -447,10 +461,10 @@ describe("runCreditControlSync", () => {
       new Error(`Failed query: insert into credit_control_sessions values ${"x".repeat(5_000)}`),
       dbCause,
     );
-    // 501 sessions spill past the 500-row chunk ceiling, so a second chunk
+    // A full chunk plus one session requires a second chunk
     // exists for the failure to land in.
     vi.mocked(fetchCreditSessions).mockImplementation(async (_client, _instituteId, status) => (
-      status === "PAST" ? [] : makeFutureSessions(501)
+      status === "PAST" ? [] : makeFutureSessions(CREDIT_CONTROL_INSERT_CHUNK_SIZE + 1)
     ));
     const { db, events } = makeDbMock({
       failSessionChunkIndex: 1,
@@ -1039,4 +1053,148 @@ describe('snapshot original credit evidence preservation',()=>{
  it('stops before candidate creation when original evidence cannot be read',async()=>{
   history(1);const {db,events}=makeDbMock({anchorReadError:true});expect((await runCreditControlSync(db,fakeClient(),'institute-1',now,{syncRunId:'run-1',requireComplete:true})).success).toBe(false);expect(rows(events,schema.creditControlSnapshots)).toHaveLength(0);
  });
+});
+
+
+describe("bounded snapshot persistence", () => {
+  function rows(events: DbEvent[], table: unknown): Record<string, unknown>[] {
+    return events.flatMap(event => event.type === "insert" && event.table === table ? event.rows as Record<string, unknown>[] : []);
+  }
+  function prepare(count: number) {
+    vi.mocked(fetchCreditStudents).mockResolvedValue([makeStudent()]);
+    vi.mocked(fetchCreditSessions).mockImplementation(async (_client, _instituteId, status) => status === "PAST" ? [] : makeFutureSessions(count));
+    vi.mocked(fetchSessionCredits).mockResolvedValue({ credits: { total: 20, consumed: 0, remaining: 20, available: 20, bookedSessions: 0 }, sessionCreditHistory: [] });
+    vi.mocked(fetchSessionTeacherFeedback).mockResolvedValue("");
+  }
+  it("bounds simultaneous writes, retains every row, and waits before promotion", async () => {
+    prepare(14_001);
+    let pending = 0, peak = 0;
+    const release: Array<() => void> = [];
+    const { db, events } = makeDbMock({ insertWait: async (table) => {
+      if (table !== schema.creditControlSessions) return [];
+      pending++; peak = Math.max(peak, pending);
+      if (release.length < 6) await new Promise<void>(resolve => release.push(resolve));
+      pending--; return [];
+    } });
+    const result = runCreditControlSync(db, fakeClient(), "institute-1", new Date(), { syncRunId: "run-1" });
+    await vi.waitFor(() => expect(release).toHaveLength(6));
+    expect(latestUpdate(events, "success")).toBeUndefined();
+    expect(events.some(e => e.type === "update" && e.table === schema.creditControlSnapshots)).toBe(false);
+    release.toReversed().forEach(resolve => resolve());
+    expect((await result).success).toBe(true);
+    expect(peak).toBe(6);
+    expect(pending).toBe(0);
+    const actual = rows(events, schema.creditControlSessions);
+    expect(actual).toHaveLength(14_001);
+    expect(new Set(actual.map(row => row.wiseSessionId)).size).toBe(14_001);
+    expect(events.filter((e): e is InsertEvent => e.type === "insert" && e.table === schema.creditControlSessions).every(e => e.rows.length <= 2_000)).toBe(true);
+  });
+  it.each(["failure", "abort"])("settles active writes after %s and retains the old active snapshot", async kind => {
+    prepare(14_001);
+    const controller = new AbortController();
+    const pending: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
+    const { db, events } = makeDbMock({ insertWait: async (table) => {
+      if (table !== schema.creditControlSessions) return [];
+      await new Promise<void>((resolve, reject) => pending.push({ resolve, reject })); return [];
+    } });
+    let finished = false;
+    const promise = runCreditControlSync(db, fakeClient(), "institute-1", new Date(), { syncRunId: "run-1", signal: controller.signal }).then(result => { finished = true; return result; });
+    await vi.waitFor(() => expect(pending).toHaveLength(6));
+    if (kind === "failure") pending[1].reject(new Error("write failed"));
+    else { controller.abort(new Error("expired")); pending[1].resolve(); }
+    await vi.waitFor(() => expect(events.filter(e => e.type === "insert" && e.table === schema.creditControlSessions)).toHaveLength(6));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(finished).toBe(false);
+    pending.forEach((entry, index) => { if (index !== 1) entry.resolve(); });
+    expect((await promise).success).toBe(false);
+    expect(events.some(e => e.type === "update" && e.table === schema.creditControlSnapshots)).toBe(false);
+    expect(latestUpdate(events, "failed")).toBeDefined();
+  });
+  it("uses the bounded writer only for child rows and preserves the base database for status and promotion", async () => {
+    prepare(2_001);
+    const base = makeDbMock(), writer = makeDbMock();
+    expect((await runCreditControlSync(base.db, fakeClient(), "institute-1", new Date(), { syncRunId: "run-1", writeDb: writer.db })).success).toBe(true);
+    expect(rows(writer.events, schema.creditControlSessions)).toHaveLength(2_001);
+    expect(rows(base.events, schema.creditControlSessions)).toHaveLength(0);
+    expect(latestUpdate(base.events, "success")).toBeDefined();
+    expect(writer.events.every(e => e.type === "insert")).toBe(true);
+  });
+  it("gives scoped HTTP writes an abort signal without changing the shared client", () => {
+    const priorUrl = process.env.DATABASE_URL, priorDb = globalThis.__bgscheduler_db;
+    try {
+      process.env.DATABASE_URL = "postgresql://test:test@example.invalid/test";
+      globalThis.__bgscheduler_db = undefined;
+      const base = getDb(), signal = new AbortController().signal;
+      expect(getDb({ signal })).not.toBe(base);
+      expect(vi.mocked(neon)).toHaveBeenLastCalledWith(process.env.DATABASE_URL, { fetchOptions: { signal } });
+      expect(getDb()).toBe(base);
+    } finally { if (priorUrl === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = priorUrl; globalThis.__bgscheduler_db = priorDb; }
+  });
+});
+
+
+describe("explicit persistence deadline", () => {
+  function prepare() {
+    vi.mocked(fetchCreditStudents).mockResolvedValue([makeStudent()]);
+    vi.mocked(fetchCreditSessions).mockImplementation(async (_client, _instituteId, status) => status === "PAST" ? [] : makeFutureSessions(2_001));
+    vi.mocked(fetchSessionCredits).mockResolvedValue({ credits: { total: 20, consumed: 0, remaining: 20, available: 20, bookedSessions: 0 }, sessionCreditHistory: [] });
+  }
+  it.each([false, true])("requires validated source before writes and an unexpired persistence deadline: expired=%s", async expired => {
+    prepare();
+    const source = new AbortController(), persistence = new AbortController();
+    const { db, events } = makeDbMock({ insertWait: async () => {
+      source.abort(new Error("source budget expired after validation"));
+      if (expired) persistence.abort(new Error("persistence budget expired"));
+      return [];
+    } });
+    const result = await runCreditControlSync(db, fakeClient(), "institute-1", new Date(), { syncRunId: "run-1", signal: source.signal, persistenceSignal: persistence.signal });
+    expect(result.success).toBe(!expired);
+    expect(events.some(e => e.type === "update" && e.table === schema.creditControlSnapshots)).toBe(!expired);
+    expect(latestUpdate(events, expired ? "failed" : "success")).toBeDefined();
+  });
+  it("keeps all deadlines relative to request start and uses a separate bounded write client", async () => {
+    const dbModule = await import("@/lib/db"), syncModule = await import("@/lib/credit-control/sync"), clientModule = await import("@/lib/wise/client");
+    const requestModule = await import("@/lib/credit-control/run-sync-request");
+    const oldMode = process.env.CREDIT_CONTROL_MODE, oldSitIns = process.env.TUTOR_SIT_INS_ENABLED;
+    const start = new Date("2026-10-10T06:00:00Z"), signals: AbortSignal[] = [];
+    vi.useFakeTimers(); vi.setSystemTime(start);
+    try {
+      process.env.CREDIT_CONTROL_MODE = "retired"; process.env.TUTOR_SIT_INS_ENABLED = "true";
+      const base = {
+        update: () => ({ set: () => ({ where: () => ({ returning: async () => { vi.setSystemTime(new Date(+start + 5_000)); return []; } }) }) }),
+        select: () => ({ from: () => ({ where: () => ({ orderBy: () => ({ limit: async () => [] }) }) }) }),
+        insert: () => ({ values: () => ({ onConflictDoNothing: () => ({ returning: async () => [{ id: "run-1" }] }) }) }),
+      } as unknown as Database;
+      const writer = makeDbMock().db;
+      const getDbSpy = vi.spyOn(dbModule, "getDb").mockImplementation(options => options?.signal ? writer : base);
+      vi.spyOn(clientModule, "createWiseClient").mockReturnValue(fakeClient());
+      const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => { const signal = new AbortController().signal; signals.push(signal); return signal; });
+      const run = vi.spyOn(syncModule, "runCreditControlSync").mockResolvedValue({ success: true, snapshotId: "snapshot-1", promotedSnapshotId: "snapshot-1", studentCount: 1, packageCount: 1, sessionCount: 1, failedCreditPairs: 0 });
+      expect((await requestModule.runCreditControlSyncRequest({ triggerSource: "admin" })).status).toBe(200);
+      expect(timeout.mock.calls.map(call => call[0])).toEqual([755_000, 775_000, 770_000]);
+      expect(getDbSpy.mock.calls[1][0]?.signal).toBe(signals[1]);
+      expect(run.mock.calls[0][0]).toBe(base);
+      expect(run.mock.calls[0][4]).toMatchObject({ signal: signals[0], persistenceSignal: signals[2], writeDb: writer, requireComplete: true });
+    } finally {
+      vi.restoreAllMocks(); vi.useRealTimers();
+      if (oldMode === undefined) delete process.env.CREDIT_CONTROL_MODE; else process.env.CREDIT_CONTROL_MODE = oldMode;
+      if (oldSitIns === undefined) delete process.env.TUTOR_SIT_INS_ENABLED; else process.env.TUTOR_SIT_INS_ENABLED = oldSitIns;
+    }
+  });
+  it("propagates the scoped signal to the installed Neon HTTP request", async () => {
+    const actual = await vi.importActual<typeof import("@neondatabase/serverless")>("@neondatabase/serverless");
+    const original = actual.neonConfig.fetchFunction, controller = new AbortController();
+    let received: AbortSignal | null = null;
+    try {
+      actual.neonConfig.fetchFunction = (async (_url: unknown, init: RequestInit) => {
+        received = init.signal as AbortSignal;
+        return new Promise((_resolve, reject) => received!.addEventListener("abort", () => reject(controller.signal.reason), { once: true }));
+      }) as typeof original;
+      const client = actual.neon("postgresql://test:test@example.invalid/test", { fetchOptions: { signal: controller.signal } });
+      const promise = client.query("select 1").then(() => null, error => error);
+      await vi.waitFor(() => expect(received).toBe(controller.signal));
+      controller.abort(new Error("bounded HTTP abort"));
+      expect(String(await promise)).toContain("bounded HTTP abort");
+    } finally { actual.neonConfig.fetchFunction = original; }
+  });
 });

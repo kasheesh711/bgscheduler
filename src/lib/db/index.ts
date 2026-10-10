@@ -2,12 +2,12 @@ import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
 import * as schema from "./schema";
 
-function createDb() {
+function createDb(signal?: AbortSignal) {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     throw new Error("DATABASE_URL is not set");
   }
-  const sql = neon(databaseUrl);
+  const sql = neon(databaseUrl, signal ? { fetchOptions: { signal } } : undefined);
   return drizzle({ client: sql, schema });
 }
 
@@ -19,7 +19,8 @@ declare global {
 }
 
 /** Get or create the DB singleton (survives HMR in dev). */
-export function getDb(): DbInstance {
+export function getDb(options: { signal?: AbortSignal } = {}): DbInstance {
+  if (options.signal) return createDb(options.signal);
   if (!globalThis.__bgscheduler_db) {
     globalThis.__bgscheduler_db = createDb();
   }
