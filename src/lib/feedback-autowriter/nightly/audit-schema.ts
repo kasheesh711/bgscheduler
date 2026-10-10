@@ -22,8 +22,9 @@ import type { EvidenceGrade } from "./types";
  * output), so the first live audit was rejected for "claim_1"-style ids and a fifth evidence quote. The model's JSON is
  * now normalised before zod (`normaliseAuditOutput`: ids renumbered, lists and strings clipped) and the prompt states
  * the limits; only structural problems still fail.
+ * v3 (10 Oct): invalidate audits that did not use the post's recorded format and style guides.
  */
-export const AUDIT_VERSION = 2;
+export const AUDIT_VERSION = 3;
 
 /** Every list and string limit of `AuditResultSchema`, stated in the prompt and applied by `normaliseAuditOutput`. */
 export const AUDIT_LIMITS = {

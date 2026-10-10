@@ -14,6 +14,7 @@ import type { PostResult, SubmitFeedbackEvent, WiseFeedbackOps } from "../submit
 import { SonioxError } from "../soniox";
 import type { WiseFeedbackPostBody } from "../types";
 import { CLASS_ID, GOOD_FIELDS, NOW, SESSION_ID, answers, autoBlankSubmission, sessionDetail } from "./fixtures";
+import { extractAiSummary } from "../session";
 
 let handle: Awaited<ReturnType<typeof startTestDb>>;
 let db: Database;
@@ -116,6 +117,7 @@ function deps(ops: WiseFeedbackOps, overrides: Partial<AutowriterDeps> = {}): Au
     apiKey: "test-key",
     apiActorId: API_ACTOR,
     writesAllowedHere: true,
+    holdSummaryOnly: false, // Summary-write fixtures use the explicit opt-out.
     deadlineMs: Date.now() + 740_000,
     alertRecipients: ["ops@example.com"],
     alertSender: { sendEmail: async (input) => { emails.push(input); return { id: "e" }; } },
@@ -223,6 +225,11 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     expect(row?.leaseToken).toBeNull();
     // Both judge levels passed the draft (v5), and the row says so.
     expect(row?.metadata).toMatchObject({ judge: PASSING_STORED, pipeline: { judgeVersion: JUDGE_PROMPT_VERSION } });
+    const hash = (row?.metadata.pipeline as { lessonEvidenceHash: string }).lessonEvidenceHash;
+    const [retained] = await db.select().from(schema.feedbackIsebEvidence)
+      .where(eq(schema.feedbackIsebEvidence.evidenceHash, hash));
+    expect(retained).toMatchObject({ wiseSessionId: SESSION_ID, atom: null, evidenceKind: "summary" });
+    expect(retained.lessonRecord).toBe(extractAiSummary(sessionDetail())?.text);
     const calls = await db.select().from(schema.feedbackAutowriterCalls);
     expect(calls.map((call) => `${call.role}:${call.arm}:${call.requestedModel}`).toSorted())
       .toEqual([`judge:glm:${GLM_MODEL}`, `judge:glm:${GLM_MODEL}`, "writer:sol:openai/gpt-6.1-sol"]);
@@ -1008,6 +1015,12 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     // Stamped with what produced it.
     expect(row?.metadata).toMatchObject({ pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION, arm: "sol", evidence: "transcript" } });
     expect(row?.metadata).toMatchObject({ transcript: { speakerMethod: "zoom_alignment", audioMinutes: 60 } });
+    const hash = (row?.metadata.pipeline as { lessonEvidenceHash: string }).lessonEvidenceHash;
+    const [retained] = await db.select().from(schema.feedbackIsebEvidence)
+      .where(eq(schema.feedbackIsebEvidence.evidenceHash, hash));
+    expect(retained).toMatchObject({ wiseSessionId: SESSION_ID, atom: null, evidenceKind: "transcript" });
+    expect(retained.lessonRecord).toContain("TUTOR: Today we add fractions");
+    expect(retained.lessonRecord).toContain("STUDENT: I got three quarters");
     const calls = await db.select().from(schema.feedbackAutowriterCalls).where(eq(schema.feedbackAutowriterCalls.role, "transcriber"));
     expect(calls).toHaveLength(1);
     expect(Number(calls[0].costUsd)).toBeCloseTo(0.1);
@@ -2415,6 +2428,21 @@ describe("transcript first (Postgres + fakes)", () => {
     expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail({ rawMeetingSummary: [] })] }).ops, fakeSoniox().client, { now: () => after(240) }), cron))
       .toMatchObject({ result: "retry", detail: "no_ai_summary" });
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "pending", evidence: "summary", metadata: { alertKind: "no_summary" } });
+  });
+
+  it("holds summary-only feedback by default before calling a model or writing Wise", async () => {
+    vi.stubEnv("FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY", undefined);
+    try {
+      await seedRow({});
+      const model = fakeModel();
+      const wise = fakeWise();
+      expect(await processSession(deps(wise.ops, { holdSummaryOnly: undefined, callModel: model.callModel as never }), cron))
+        .toMatchObject({ result: "held", detail: "summary_only_held" });
+      expect(model.calls).toEqual([]);
+      expect(wise.posts).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("holds a summary-only draft for a person while the switch is on: after a fallback, and with no transcript pass at all", async () => {

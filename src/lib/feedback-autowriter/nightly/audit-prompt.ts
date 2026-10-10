@@ -1,16 +1,18 @@
-import { buildFeedbackMessages, type EvidenceKind, type SpeakerLabels } from "../prompt";
+import { buildFeedbackMessages, type EvidenceKind, type SpeakerLabels, type PromptContext } from "../prompt";
+import { guidesFromStamp } from "./text-problems";
 import { AUDIT_LIMITS, type AuditResult } from "./audit-schema";
 import { FAILURE_MODES, ROOT_STAGES, postAuditModes } from "./modes";
 import type { AuditRecord, EvidenceBundle, PrecheckFinding } from "./types";
 
 /**
- * Prompts for the nightly Opus audit (quick 261003-12b). The system prompt depends only on the evidence kind and
- * speaker-label confidence, so it is byte-identical across classes of the same kind (prompt caching). Everything
+ * Prompts for the nightly Opus audit (quick 261003-12b). The system prompt uses the evidence kind, speaker-label
+ * confidence and recorded guides, so classes with the same rules can share its cache. Everything
  * about the class goes in the user message, inside tags the model is told are data, never instructions.
  * Bump `AUDIT_PROMPT_VERSION` whenever the wording changes. v2 (3 Oct): states the id formats and every length limit.
  * v3 (3 Oct): each deterministic candidate is listed under its unique id (`code#n`) and reviewed by it.
+ * v5 (10 Oct): use the guides recorded for the post so an approved format is not reported as an error.
  */
-export const AUDIT_PROMPT_VERSION = 4;
+export const AUDIT_PROMPT_VERSION = 5;
 
 /** Longest lesson record sent to the auditor; transcripts of a 2-hour lesson stay well under it. */
 const MAX_TRANSCRIPT_CHARS = 150_000;
@@ -36,7 +38,7 @@ function clip(text: string, max: number): string {
 }
 
 /** The writer's own system prompt for this evidence kind (rules 1–13), so issues can cite the rule broken. */
-function writerRules(evidence: EvidenceKind, labels: SpeakerLabels): string {
+function writerRules(evidence: EvidenceKind, labels: SpeakerLabels, guides: Pick<PromptContext, "formatGuide" | "styleGuide">): string {
   const [system] = buildFeedbackMessages({
     studentFullName: "Student",
     tutorNames: ["Tutor"],
@@ -45,6 +47,7 @@ function writerRules(evidence: EvidenceKind, labels: SpeakerLabels): string {
     summary: { text: "", meetingUUIDs: [] },
     evidence,
     speakerLabels: labels,
+    ...guides,
   });
   return system.content;
 }
@@ -59,7 +62,8 @@ function failureModeList(): string {
 }
 
 /** The auditor's system prompt for one evidence kind. */
-export function auditSystemPrompt(evidence: EvidenceKind, labels: SpeakerLabels): string {
+export function auditSystemPrompt(evidence: EvidenceKind, labels: SpeakerLabels,
+  guides: Pick<PromptContext, "formatGuide" | "styleGuide"> = {}): string {
   return [
     "You audit post-class feedback that an AI wrote and posted, as the tutor, to a student's parents after a one-to-one online lesson " +
       "at a tutoring school in Bangkok. You are independent: you are never told whether a production fact-checker passed it, which " +
@@ -151,7 +155,7 @@ export function auditSystemPrompt(evidence: EvidenceKind, labels: SpeakerLabels)
     "",
     "## Writer rules",
     "<writer_rules>",
-    writerRules(evidence, labels),
+    writerRules(evidence, labels, guides),
     "</writer_rules>",
     "",
     "## Output",
@@ -235,7 +239,9 @@ export function buildAuditPrompt(input: {
       ? "Audit this feedback, which is a corrected version. Also say for each prior issue whether it is still present."
       : "Audit this feedback.",
   ].join("\n");
-  return { system: auditSystemPrompt(evidence, labels), user };
+  // Judge the recorded guide, not today's switches: guided posts allow lists and longer performance text.
+  const guides = guidesFromStamp(bundle.pipeline);
+  return { system: auditSystemPrompt(evidence, labels, guides), user };
 }
 
 /** Which source files each pipeline stage lives in, for the synthesis' proposed fixes. */

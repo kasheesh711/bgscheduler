@@ -450,7 +450,7 @@ export async function collectRawEvidence(deps: CollectDeps, target: NightlyTarge
       status.rowMeta = "read";
     }
 
-    // a. The writer's exact input, retained for guided posts.
+    // a. The writer's exact input (older posts may have retained it only when guided).
     const lessonHash = typeof target.pipeline?.lessonEvidenceHash === "string" ? target.pipeline.lessonEvidenceHash : null;
     let iseb = readJsonFile<IsebRecord>(file("iseb.json"));
     // A record cached before the Atom evidence was kept (2 Oct) is read again.

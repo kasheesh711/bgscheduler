@@ -4,8 +4,8 @@ import { redactKnownNames } from "@/lib/post-class-feedback/similarity";
 import { styleInstructions, type FeedbackStyleGuide } from "./style";
 import type { AiSummary } from "./types";
 
-/** v5 (owner decision, 30 Sep): the feedback names no one but the student (summary rule 12, transcript rule 13). */
-export const PROMPT_VERSION = 5;
+/** v6: keep performance about the pupil and keep source-audit language out of parent feedback. */
+export const PROMPT_VERSION = 6;
 export const STUDENT_TOKEN = "[STUDENT_1]";
 export const TUTOR_TOKEN = "[TUTOR]";
 
@@ -298,13 +298,19 @@ function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels, styleGuide:
     "4. topics: the specific skills, sub-topics, question types, texts or papers covered.",
     `5. performance: concrete observations of what ${STUDENT_TOKEN} did well and found difficult, with examples from this lesson. ` +
       `Every judgement of how well ${STUDENT_TOKEN} did (confidently, well, engaged, quickly, struggled) must be stated in ${record}; ` +
-      `when ${record} does not say how it went, describe what ${STUDENT_TOKEN} worked on and practised instead of judging it.`,
+      `when ${record} does not say how it went, describe what ${STUDENT_TOKEN} worked on and practised instead of judging it. ` +
+      "Do not open with a recap of the topic list. Use topic details only to explain a specific student response or the guidance given. " +
+      "Report supported activity results directly. Never write source-audit phrases such as matched portion, assistance was not marked, " +
+      "or I am reporting the result. Do not imply independent mastery when the source does not prove it. " +
+      "Keep negations and distinguish intermediate values from final results.",
     // v4 (30 Sep): a summary's "problems still to complete" was posted as homework, and repeated under improvement.
     (guided ? "6. improvement: a short numbered list of specific skills to practise before the next lesson, "
       : "6. improvement: the specific weak areas and two or three concrete next steps or strategies to practise before the next lesson, ") +
       "written as suggestions — never as homework the tutor set, and never repeating the homework.",
     `7. homework: only work ${record} shows the tutor clearly setting ${STUDENT_TOKEN} to do after this lesson, with its timing if stated. ` +
       "Work only described as remaining, unfinished, left over or still to complete is not homework unless the tutor set it. " +
+      "Preserve question ranges, time limits and optional work, including any later change to the assignment. " +
+      "A timed attempt is not a requirement to finish every question. " +
       // Owner decision (30 Sep): Wise's "Next steps: …" line (`extractAiSummary`) is the summary's advice, not the tutor's.
       (evidence === "summary" ? "A \"Next steps\" line in the summary is the summary's own suggestion, not homework the tutor set. " : "") +
       `If ${record} does not clearly show the tutor setting homework, return an empty string. ` +

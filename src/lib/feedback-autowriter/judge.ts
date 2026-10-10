@@ -5,11 +5,11 @@ import { AUTOWRITER_JUDGE_EFFORTS } from "./config";
 import { otherPeopleLine, speakerLabelNote, type EvidenceKind, type SpeakerLabels } from "./prompt";
 
 /**
- * v5 (owner decision, 30 Sep): the v4 prompt below, unchanged, run at every effort in `AUTOWRITER_JUDGE_EFFORTS` on
+ * v6: check assignment limits and later changes. As in v5, run at every effort in `AUTOWRITER_JUDGE_EFFORTS` on
  * byte-identical messages; a draft passes only when every level passes it. Stored drafts and call records carry this
  * number, so a draft judged at one level (v4 and before) is never reused as if both had passed it.
  */
-export const JUDGE_PROMPT_VERSION = 5;
+export const JUDGE_PROMPT_VERSION = 6;
 
 export type JudgeEffort = (typeof AUTOWRITER_JUDGE_EFFORTS)[number];
 
@@ -82,7 +82,9 @@ const judgeSystemPrompt = (evidence: EvidenceKind, labels: SpeakerLabels) => [
     `when the ${evidence} says it about [TUTOR] or about another person.`,
   "- homeworkNotSet: homework, a task or a due date the feedback says was set — everything under \"Homework and due date\", " +
     `and any such statement in another field — unless the ${evidence} clearly shows the tutor setting it for [STUDENT_1] to do after this lesson. ` +
-    "Work only described as remaining, unfinished or still to complete was not set." +
+    "Work only described as remaining, unfinished or still to complete was not set. " +
+    "Check the tutor's later instructions for changed question ranges, time limits and optional work. " +
+    "A timed attempt does not require completing every question, and optional extension questions must not become required." +
     // Owner decision (30 Sep): Wise's "Next steps: …" line (`extractAiSummary`) is the summary's advice, not the tutor's.
     (evidence === "summary" ? " A \"Next steps\" line in the summary is the summary's own suggestion, not homework the tutor set." : ""),
   "General advice, encouragement and suggested practice (including practice before the next lesson) are fine and must not be listed, " +
