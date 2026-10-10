@@ -8,7 +8,8 @@ import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import { loadAttendanceObservations, recordModeObservations } from "@/lib/classrooms/mode-history-data";
 import * as schema from "@/lib/db/schema";
-import { topWisePaths, type WiseClient } from "@/lib/wise/client";
+import { topWisePaths, WiseApiError, type WiseClient } from "@/lib/wise/client";
+import { ZodError } from "zod";
 import {
   CHURN_INACTIVITY_DAYS,
   CREDIT_CONTROL_CACHE_TAG,
@@ -217,7 +218,7 @@ function serializeDbErrorFields(error: unknown): SerializedErrorNode["fields"] |
 function serializeErrorNode(error: unknown, depth = 0): SerializedErrorNode {
   const node: SerializedErrorNode = {
     name: errorName(error),
-    message: truncateText(errorMessage(error), ERROR_MESSAGE_MAX_LENGTH),
+    message: truncateText(error instanceof WiseApiError ? `Wise API returned HTTP ${error.status}.` : errorMessage(error), ERROR_MESSAGE_MAX_LENGTH),
   };
 
   if (error instanceof CreditControlInsertError) {
@@ -433,13 +434,22 @@ function toHistoryEntries(history: WiseSessionCredits["sessionCreditHistory"], r
   }));
 }
 
+interface PairCreditFailure {
+  wiseClassId: string;
+  wiseStudentId: string;
+  reason: "http" | "invalid_response" | "aborted" | "request_failed";
+  status?: number;
+  retryAfterMs?: number | null;
+  validationIssues?: Array<{ code: string; path: string }>;
+}
+
 async function fetchPairCredits(
   client: WiseClient,
   instituteId: string,
   pairs: PairRecord[],
   observedAt: Date,
-): Promise<{ records: PairCreditRecord[]; failed: number }> {
-  let failed = 0;
+): Promise<{ records: PairCreditRecord[]; failed: number; failures: PairCreditFailure[] }> {
+  const failures: PairCreditFailure[] = [];
   const results = await mapLimit(pairs, CREDIT_PAIR_CONCURRENCY, async (pair) => {
     try {
       const credits = await fetchSessionCredits(client, instituteId, pair.wiseClassId, pair.wiseStudentId);
@@ -449,14 +459,22 @@ async function fetchPairCredits(
         history: toHistoryEntries(credits.sessionCreditHistory, credits.rawSessionCreditHistory),
         creditsObservedAt: observedAt,
       } satisfies PairCreditRecord;
-    } catch {
-      failed += 1;
+    } catch (error) {
+      failures.push({
+        wiseClassId: pair.wiseClassId,
+        wiseStudentId: pair.wiseStudentId,
+        reason: error instanceof WiseApiError ? "http" : error instanceof ZodError ? "invalid_response"
+          : error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name) ? "aborted" : "request_failed",
+        ...(error instanceof WiseApiError ? { status: error.status, retryAfterMs: error.retryAfterMs } : {}),
+        ...(error instanceof ZodError ? { validationIssues: error.issues.slice(0, 10).map(issue => ({ code: issue.code, path: issue.path.join(".") })) } : {}),
+      });
       return null;
     }
   });
   return {
     records: results.filter((record): record is PairCreditRecord => Boolean(record)),
-    failed,
+    failed: failures.length,
+    failures,
   };
 }
 
@@ -949,6 +967,7 @@ export async function runCreditControlSync(
       .values({ status: "running", startedAt: now })
       .returning({ id: schema.creditControlSyncRuns.id }))[0];
   let snapshotId: string | undefined;
+  let pairFailures: PairCreditFailure[] | undefined;
 
   try {
     options.signal?.throwIfAborted();
@@ -1008,12 +1027,13 @@ export async function runCreditControlSync(
     const pairsReused = carriedPairs.filter(({ action }) => action === "reuse").length;
     const pairsSkippedExcluded = carriedPairs.filter(({ action }) => action === "skip").length;
 
-    const { records: fetchedPairs, failed: failedCreditPairs } = await fetchPairCredits(
+    const { records: fetchedPairs, failed: failedCreditPairs, failures } = await fetchPairCredits(
       client,
       instituteId,
       refetchPairs,
       now,
     );
+    pairFailures = failures;
     const creditPairs = [...fetchedPairs, ...carriedRecords];
     options.signal?.throwIfAborted();
     if (options.requireComplete && failedCreditPairs > 0) {
@@ -1117,6 +1137,7 @@ export async function runCreditControlSync(
         metadata: {
           ...options.runMetadata,
           failedCreditPairs,
+          ...(failedCreditPairs ? { failedPairs: pairFailures } : {}),
           creditHistoryRows: histories.length,
           // EFF-00: how much of this run was Wise, recorded per run so the
           // API cost of a sync is measurable instead of inferred.
@@ -1163,13 +1184,14 @@ export async function runCreditControlSync(
     };
   } catch (error) {
     const serialized = serializeCreditControlSyncError(error);
+    const wiseStats = client.getStats();
     await db
       .update(schema.creditControlSyncRuns)
       .set({
         status: "failed",
         finishedAt: new Date(),
         errorSummary: serialized.errorSummary,
-        metadata: sql`${schema.creditControlSyncRuns.metadata} || ${JSON.stringify({ error: serialized.error })}::jsonb`,
+        metadata: sql`${schema.creditControlSyncRuns.metadata} || ${JSON.stringify({ error: serialized.error, failedCreditPairs: pairFailures?.length, failedPairs: pairFailures, wiseCallCount: wiseStats.requests, wiseTopPaths: topWisePaths(wiseStats), ...(error instanceof WiseApiError ? { wiseFailure: { status: error.status, retryAfterMs: error.retryAfterMs } } : {}) })}::jsonb`,
       })
       .where(sql`${schema.creditControlSyncRuns.id} = ${run.id}`);
     return {

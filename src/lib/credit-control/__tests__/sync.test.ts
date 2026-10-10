@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
-import type { WiseClient } from "@/lib/wise/client";
+import { WiseApiError, type WiseClient } from "@/lib/wise/client";
+import { PgDialect } from "drizzle-orm/pg-core";
+import { z } from "zod";
 import {
   fetchCreditSessions,
   fetchCreditStudents,
@@ -233,6 +235,56 @@ describe("runCreditControlSync", () => {
     expect(result.success).toBe(false);
     expect(events.some(event => event.table === schema.creditControlSnapshots)).toBe(false);
     expect(latestUpdate(events, "failed")).toBeDefined();
+  });
+
+  it("records every failed pair and actual calls without private error payloads", async () => {
+    const { db, events } = makeDbMock();
+    const student = makeStudent();
+    student.classrooms = Array.from({ length: 5 }, (_, i) => ({ _id: `class-${i + 1}`, name: "Math Package", subject: "Math" }));
+    vi.mocked(fetchCreditStudents).mockResolvedValue([student]);
+    const invalid = z.object({ credit: z.number() }).safeParse({ credit: "secret-body" });
+    if (invalid.success) throw new Error("Fixture must reject invalid credit.");
+    const errors = [new WiseApiError(429, "secret-body", "https://private.invalid/?key=secret-key", 60000), invalid.error,
+      new Error("secret-body https://private.invalid/?key=secret-key"), new DOMException("secret-body", "TimeoutError"), new DOMException("secret-body", "AbortError")];
+    vi.mocked(fetchSessionCredits).mockImplementation(async (_client, _institute, classId) => { throw errors[Number(classId.slice(-1)) - 1]; });
+    const client = fakeClient();
+    vi.mocked(client.getStats).mockReturnValue({ requests: 42, byPath: { "/institutes/{id}/classes/{id}/students/{id}/sessionCredits": 42 } });
+    const result = await runCreditControlSync(db, client, "institute-1", new Date("2026-09-11T00:00:00Z"), { syncRunId: "run-1", requireComplete: true });
+    expect(result.success).toBe(false);
+    expect(result.errorSummary).toContain("5 credit fetches failed");
+    expect(events.some(event => event.table === schema.creditControlSnapshots)).toBe(false);
+    const update = latestUpdate(events, "failed")!;
+    const query = new PgDialect().sqlToQuery(update.setValue.metadata as Parameters<PgDialect["sqlToQuery"]>[0]);
+    const metadata = JSON.parse(query.params[0] as string);
+    expect(metadata.wiseCallCount).toBe(42);
+    expect(metadata.wiseTopPaths).toEqual({ "/institutes/{id}/classes/{id}/students/{id}/sessionCredits": 42 });
+    expect(metadata.failedCreditPairs).toBe(5);
+    expect(metadata.failedPairs).toHaveLength(5);
+    expect(metadata.failedPairs.map((row: { wiseClassId: string }) => row.wiseClassId).sort()).toEqual(student.classrooms.map(row => row._id).sort());
+    expect(metadata.failedPairs.every((row: { wiseStudentId: string }) => row.wiseStudentId === student._id)).toBe(true);
+    expect(metadata.failedPairs.find((row: { wiseClassId: string }) => row.wiseClassId === "class-1")).toMatchObject({ reason: "http", status: 429, retryAfterMs: 60000 });
+    expect(metadata.failedPairs.find((row: { wiseClassId: string }) => row.wiseClassId === "class-2")).toMatchObject({ reason: "invalid_response", validationIssues: [{ code: "invalid_type", path: "credit" }] });
+    expect(metadata.failedPairs.filter((row: { reason: string }) => row.reason === "aborted")).toHaveLength(2);
+    expect(JSON.stringify(metadata)).not.toMatch(/secret-body|secret-key|private\.invalid/);
+    expect(update.bounded).toBe(true);
+  });
+
+  it("records upstream Wise failure calls and cooldown without a raw URL or body", async () => {
+    const { db, events } = makeDbMock();
+    vi.mocked(fetchCreditStudents).mockRejectedValue(new WiseApiError(429, "secret-body", "https://private.invalid/?key=secret-key", 30000));
+    const client = fakeClient();
+    vi.mocked(client.getStats).mockReturnValue({ requests: 4, byPath: { "/institutes/{id}/students": 4 } });
+    const result = await runCreditControlSync(db, client, "institute-1", new Date("2026-09-11T00:00:00Z"), { syncRunId: "run-1", requireComplete: true });
+    expect(result.success).toBe(false);
+    const update = latestUpdate(events, "failed")!;
+    const query = new PgDialect().sqlToQuery(update.setValue.metadata as Parameters<PgDialect["sqlToQuery"]>[0]);
+    const metadata = JSON.parse(query.params[0] as string);
+    expect(metadata.wiseCallCount).toBe(4);
+    expect(metadata.wiseFailure).toEqual({ status: 429, retryAfterMs: 30000 });
+    expect(metadata).not.toHaveProperty("failedCreditPairs");
+    expect(metadata).not.toHaveProperty("failedPairs");
+    expect(JSON.stringify({ metadata, errorSummary: result.errorSummary })).not.toMatch(/secret-body|secret-key|private\.invalid/);
+    expect(events.some(event => event.table === schema.creditControlSnapshots)).toBe(false);
   });
 
   it("captures fetched evidence only after promotion and tolerates unavailable analytics", async () => {
