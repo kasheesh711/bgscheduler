@@ -184,7 +184,7 @@ describe("owner-requested held feedback recovery", () => {
     wise.ops.getSessionCreditEntries = vi.fn(async () => [{ credit: creditsBefore }]);
     const held = { reason: "thai_summary_no_transcript", fieldsSha256: fieldsHash(GOOD_FIELDS),
       authorizationRef: "synthetic direct owner request", expiresAt: new Date(Date.now() + HOUR) };
-    const store = heldRecoverySubmitStore(db, SESSION_ID, { expected: { kind: "auto_blank" } }, held);
+    const store = heldRecoverySubmitStore(db, SESSION_ID, { expected: { kind: "auto_blank" }, draftEvidence: "transcript" }, held);
     const outcome = await submitFeedbackGuarded({ ops: wise.ops, store,
       plan: { sessionId: SESSION_ID, classId: CLASS_ID, arm: "sol", fields: GOOD_FIELDS,
         billing: { sessionStatus: "COMPLETED", creditsConsumed: 1, source: "auto_blank_reuse", expectedConsumedDelta: 0 },
@@ -200,6 +200,7 @@ describe("owner-requested held feedback recovery", () => {
     expect(wise.posts).toHaveLength(1);
     expect(wise.posts[0]).toMatchObject({ sessionStatus: "COMPLETED", creditsConsumed: 1 });
     expect((await row()).metadata).toMatchObject({ ownerRecovery: { authorizationRef: "synthetic direct owner request" } });
+    expect((await row()).evidence).toBe("transcript");
   });
   it("refuses a missing charge before the claim or any Wise POST", async () => {
     const { wise, outcome } = await recovery(0);

@@ -408,6 +408,7 @@ function heldSubmitStore(db: Database, wiseSessionId: string, claimMetadata: Rec
           fields: input.fields as unknown as Record<string, string>,
           billing: input.billing as unknown as Record<string, unknown>,
           arm: recovery ? input.arm : null,
+          ...(recovery && claimMetadata.draftEvidence === "transcript" ? { evidence: "transcript" as const } : {}),
           metadata: sql`(${S.metadata} - 'alertKind') || ${JSON.stringify({ ...claimMetadata, freshReadAt: input.freshReadAt.toISOString() })}::jsonb`,
           updatedAt: nowSql,
         }).where(and(
