@@ -52,9 +52,9 @@ export const CORRECTION_WINDOW_MAX_WAIT_MS = 6 * 60_000;
 const WAIT_SLICE_MS = 30_000;
 /** Outcomes after which a class is not tried again tonight. */
 const FINAL_APPLY_STATUSES = new Set(["verified", "awaiting_event", "awaiting_event_locked", "not_sent", "safety", "error"]);
-/** Outcomes whose text is (or may be) in Wise: the owner reviews the class again. */
 /** A class refused this many times tonight is not tried again tonight. */
 const MAX_REFUSED_PER_CLASS_NIGHT = 2;
+/** Outcomes whose text is (or may be) in Wise: the owner reviews the class again. */
 const LANDED_STATUSES = new Set(["verified", "awaiting_event", "awaiting_event_locked"]);
 
 // ---------------------------------------------------------------------------
@@ -410,6 +410,8 @@ export function runStopForRefusal(reason: string | undefined): NightlyStop | nul
   if (!reason) return null;
   if (/daily_cap/u.test(reason)) return new NightlyStop("cap:daily_db", EXIT.caps);
   if (/clock_skew/u.test(reason)) return new NightlyStop("clock_skew", EXIT.guardRefused);
+  // A sweep that outlasted the wait holds the lease past this window: every later class would wait and be refused too.
+  if (/sweep_running/u.test(reason)) return new NightlyStop("sweep_running", EXIT.stopped);
   return null;
 }
 

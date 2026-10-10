@@ -101,6 +101,8 @@ describe("loadNightlyTargets (Postgres, SELECT only)", () => {
     await session(6, { scheduledEndAt: new Date("2026-10-02T08:00:00Z"), postStartedAt: new Date("2026-10-02T08:30:00Z") });
     await firstShot(6, { actorKind: "script", actor: "script:test" });
     await session(7, { scheduledEndAt: new Date("2026-10-02T07:00:00Z") });
+    // The owner's no-show note (#174): verified, in the night, but never audited.
+    await session(9, { scheduledEndAt: new Date("2026-10-02T06:00:00Z"), metadata: { noShowPost: { actor: "owner@example.invalid" } } });
 
     const targets = await loadNightlyTargets(db, { night: "2026-10-02" });
     expect(targets.map((target) => target.wiseSessionId)).toEqual([id(1), id(6), id(7), id(2)]);

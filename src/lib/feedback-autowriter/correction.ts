@@ -90,6 +90,14 @@ export function inCorrectionWindow(now: Date): boolean {
   return (minute >= 10 && minute <= 15) || (minute >= 40 && minute <= 45);
 }
 
+/** When the correction window `now` is in closes (minute 16 or 46, second 0); null outside a window. */
+export function correctionWindowEnd(now: Date): Date | null {
+  if (!inCorrectionWindow(now)) return null;
+  const end = new Date(now);
+  end.setUTCMinutes(now.getUTCMinutes() < 30 ? 16 : 46, 0, 0);
+  return end;
+}
+
 /** The post being corrected: our first shot, as Wise still shows it. */
 export interface CorrectionBase {
   fields: FeedbackFieldAnswers;
@@ -145,6 +153,15 @@ export interface CorrectionLock {
   /** Whether the lock is still ours on the database clock: live, our exact halt, our lease not expired, tutor on. */
   isHeld(): Promise<boolean>;
   release(): Promise<boolean>;
+  /** This machine's clock just before the halt: the lock budget runs from it. */
+  haltedAtMs?: number;
+}
+
+export interface CorrectionLockOptions {
+  /** Waiting for a running sweep stops before this (the end of the correction window): no halt after it. */
+  waitUntil?: Date;
+  /** Checked between waits; STOP ends the wait at once (`stop_requested`). */
+  stopRequested?: () => boolean;
 }
 
 /** The posts row's start: what recovery needs to read Wise back later (`verification` while unsettled). */
@@ -182,9 +199,10 @@ export interface CorrectionStore {
   preconditions(plan: CorrectionPlan, now: Date): Promise<CorrectionPreconditions>;
   /**
    * Stop every other autowriter POST until released. Refused (`clock_skew`, nothing left behind) when this machine's
-   * clock is more than 2 s off the database's when the lock is taken.
+   * clock is more than 2 s off the database's when the lock is taken. A backstop sweep holding the lease is waited for
+   * (up to 5 min, never past `waitUntil`; `sweep_running` after that), without halting anything meanwhile.
    */
-  lock(plan: CorrectionPlan): Promise<{ ok: true; lock: CorrectionLock } | { ok: false; reason: string }>;
+  lock(plan: CorrectionPlan, options?: CorrectionLockOptions): Promise<{ ok: true; lock: CorrectionLock } | { ok: false; reason: string }>;
   /** The database clock: every time compared with Wise's event times is read from it. */
   databaseNow(): Promise<Date>;
   /**
@@ -524,8 +542,10 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
   };
   const sid = plan.wiseSessionId;
 
-  // 2. The window.
-  if (inCorrectionWindow(now())) guards.push("window");
+  // 2. The window. Its end also bounds the wait for a running sweep (step 5).
+  const windowAt = now();
+  const windowEnd = correctionWindowEnd(windowAt);
+  if (inCorrectionWindow(windowAt)) guards.push("window");
   else if (dryRun) guards.push("window (not enforced: dry run outside the window)");
   else return refuse("window", "outside_window");
 
@@ -563,20 +583,24 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
   if (baselineProblems.length > 0) return refuse("wise", baselineProblems.map((problem) => `credit_baseline:${problem}`).join(","));
   guards.push("wise_state_before_lock", "credit_baseline");
 
-  // 5. The lock.
-  const lockStartedAt = now().getTime();
+  // 5. The lock. Its budget runs from the halt: waiting for a running sweep before it is not part of it (nothing is
+  // halted then), and that wait ends with the window, so the halt and the POST keep the window's timing.
+  let lockStartedAt = now().getTime();
   let lock: CorrectionLock | null = null;
   if (dryRun) {
     guards.push("lock (not taken: dry run)");
   } else {
+    // The reads since step 2 may have run past the window: then no halt at all.
+    if (windowEnd && now().getTime() >= windowEnd.getTime()) return refuse("window", "window_closed");
     let locked: Awaited<ReturnType<CorrectionStore["lock"]>>;
     try {
-      locked = await store.lock(plan);
+      locked = await store.lock(plan, { waitUntil: windowEnd ?? undefined, stopRequested: input.stopRequested });
     } catch (error) {
       return refuse("lock", `lock:error:${failureName(error)}`);
     }
     if (!locked.ok) return refuse("lock", `lock:${locked.reason}`);
     lock = locked.lock;
+    lockStartedAt = locked.lock.haltedAtMs ?? now().getTime();
     guards.push("lock");
   }
   const held = lock;
@@ -623,6 +647,17 @@ export async function correctPostGuarded(input: CorrectPostInput): Promise<Corre
   const freshStudent = soleStudentAccount(fresh);
   if (!freshStudent.ok) return refuseHeld("wise", freshStudent.reason);
   if (freshStudent.wiseUserId !== student.wiseUserId) return refuseHeld("wise", "student_changed");
+  // The credit baseline was read before the lock (and a wait for a running sweep): read it again under the lock, so a
+  // change by staff meanwhile is refused here rather than blamed on our POST at read-back.
+  if (held) {
+    let underLock: Array<{ credit: number }>;
+    try {
+      underLock = (await ops.getSessionCreditEntries(plan.wiseClassId, student.wiseUserId, sid)).map((entry) => ({ credit: entry.credit }));
+    } catch (error) {
+      return refuseHeld("wise", `credits_read_failed:${errorName(error)}`);
+    }
+    if (!sameCreditEntries(underLock, baseline)) return refuseHeld("wise", "credit_baseline_changed");
+  }
   guards.push(`no_save_since_first_shot${unlocked}`, `wise_state_under_lock${unlocked}`);
   if (held) {
     if (now().getTime() - lockStartedAt >= lockBudgetMs) return refuseHeld("lock", "lock_budget");

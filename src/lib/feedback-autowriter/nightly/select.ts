@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lt } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { POST_CLASS_FEEDBACK_FIELDS, type FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
@@ -145,6 +145,8 @@ export async function loadNightlyTargets(db: Database, input: { night: string; s
   const conditions = [
     eq(S.state, "verified"),
     isNotNull(S.fields),
+    // The owner's standard no-show note (#174) is not lesson feedback: never audited, flagged or corrected.
+    sql`not (${S.metadata} ? 'noShowPost')`,
     gte(S.scheduledEndAt, start),
     lt(S.scheduledEndAt, end),
     ...(input.sessionIds && input.sessionIds.length > 0 ? [inArray(S.wiseSessionId, [...input.sessionIds])] : []),

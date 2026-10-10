@@ -317,6 +317,34 @@ describe("the correction lock", () => {
     expect(at.getTime()).toBeLessThanOrEqual((await dbNow()).getTime());
   });
 
+  it("stops waiting at the window's end and on STOP, leaving nothing behind", async () => {
+    const plan = planFor(await postedWithFirstShot());
+    const sweep = (await acquireSweepLease(db, 60_000))!;
+    let at = Date.now();
+    const clockNow = () => new Date(at);
+    let waits = 0;
+    const ticking = async (ms: number) => { waits += 1; at += ms; };
+    // Three polls fit before the window closes 50 s from now.
+    expect(await store(ticking, clockNow).lock(plan, { waitUntil: new Date(at + 50_000) })).toEqual({ ok: false, reason: "sweep_running" });
+    expect(waits).toBe(3);
+    waits = 0;
+    expect(await store(ticking, clockNow).lock(plan, { stopRequested: () => waits >= 2 })).toEqual({ ok: false, reason: "stop_requested" });
+    expect(waits).toBe(2);
+    expect(await readControl(db)).toMatchObject({ haltedAt: null });
+    await releaseSweepLease(db, sweep);
+  });
+
+  it("waits for a sweep that holds the lease and takes the lock once the sweep ends", async () => {
+    const plan = planFor(await postedWithFirstShot());
+    const sweep = (await acquireSweepLease(db, 60_000))!;
+    let waits = 0;
+    // Only the polls count; the 2 s settle after the halt sleeps too.
+    const result = await store(async (ms) => { if (ms === 15_000 && ++waits === 3) await releaseSweepLease(db, sweep); }).lock(plan);
+    expect(result.ok).toBe(true);
+    expect(waits).toBe(3);
+    if (result.ok) await result.lock.release();
+  });
+
   it("is refused while halted, not live, a sweep holds the lease, or any POST is unsettled — leaving nothing behind", async () => {
     const plan = planFor(await postedWithFirstShot());
 
@@ -332,7 +360,14 @@ describe("the correction lock", () => {
     await updateControl(db, { mode: "live" }, OWNER);
 
     const sweep = (await acquireSweepLease(db, 60_000))!;
-    expect(await store().lock(plan)).toEqual({ ok: false, reason: "sweep_running" });
+    const waits: number[] = [];
+    const haltedWhileWaiting: unknown[] = [];
+    expect(await store(async (ms) => { waits.push(ms); haltedWhileWaiting.push((await readControl(db)).haltedAt); }).lock(plan))
+      .toEqual({ ok: false, reason: "sweep_running" });
+    // Nothing is halted while it waits.
+    expect(haltedWhileWaiting.every((at) => at === null)).toBe(true);
+    // It waited for the sweep (every 15 s, for 5 min) before giving up.
+    expect(waits).toEqual(Array(20).fill(15_000));
     expect(await readControl(db)).toMatchObject({ haltedAt: null });
     await releaseSweepLease(db, sweep);
 
@@ -671,6 +706,12 @@ describe("preconditions", () => {
     await db.insert(FL).values({ wiseSessionId: id24(73), source: "owner", note: "another class", createdBy: OWNER, idempotencyKey: "owner:4" });
     await db.insert(FL).values({ wiseSessionId: seeded.wiseSessionId, source: "measured_fix", note: "system", createdBy: "system", idempotencyKey: "fix:1" });
     expect((await store().preconditions(planFor(seeded), new Date())).problems).toEqual([]);
+  });
+
+  it("never corrects the owner's no-show note", async () => {
+    const seeded = await postedWithFirstShot();
+    await db.update(S).set({ metadata: sql`${S.metadata} || '{"noShowPost":{"actor":"owner"}}'::jsonb` }).where(eq(S.wiseSessionId, seeded.wiseSessionId));
+    expect((await store().preconditions(planFor(seeded), new Date())).problems).toContain("no_show_note");
   });
 
   it("accepts a first-shot time up to a minute after the recorded POST start (the verified event's own time)", async () => {

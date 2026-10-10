@@ -80,6 +80,8 @@ export interface FakeWiseOptions {
   credits?: Array<{ credit: number }>;
   creditsAfterPost?: Array<{ credit: number }>;
   creditsOn?: (call: number) => Error | undefined;
+  /** The credit entries one call (1-based) returns instead of the current ones. */
+  creditsValue?: (call: number) => Array<{ credit: number }> | undefined;
   eventsBefore?: SubmitFeedbackEvent[];
   eventsAfterPost?: (postedAt: Date) => SubmitFeedbackEvent[];
   eventsOn?: (call: number) => Error | undefined;
@@ -123,7 +125,7 @@ export function fakeWise(time: Clock, log: string[], options: FakeWiseOptions = 
       log.push(`wise:credits#${calls.credits}`);
       const failure = options.creditsOn?.(calls.credits);
       if (failure) throw failure;
-      return credits;
+      return options.creditsValue?.(calls.credits) ?? credits;
     }),
     findFeedbackEvents: vi.fn(async (_classId: string, _sessionId: string, since: Date) => {
       calls.events += 1;

@@ -54,6 +54,13 @@ const P = schema.feedbackAutowriterPosts;
  * and waiting for our event). A run gives it back when it ends; one that dies keeps the backstop sweeps off this long.
  */
 export const CORRECTION_LOCK_LEASE_MS = 20 * 60_000;
+/**
+ * How long taking the lock waits for a sweep that holds the lease, and how often it tries. A backstop sweep (:08/:38)
+ * ran p50 2 s, p90 75 s, p99 4.3 min over 7 days to 7 Oct 2026: a correction starting at :10/:40 met it often enough
+ * that two verified corrections were refused `lock:sweep_running` that morning. Nothing is sent while waiting.
+ */
+export const CORRECTION_LOCK_WAIT_MS = 5 * 60_000;
+export const CORRECTION_LOCK_POLL_MS = 15_000;
 /** A POST claim that began before our halt committed can still commit after it: wait this long, then look for one. */
 export const CORRECTION_LOCK_SETTLE_MS = 2_000;
 /**
@@ -184,6 +191,7 @@ export function pgCorrectionStore(db: Database, opts: {
         wiseTeacherUserId: S.wiseTeacherUserId,
         deadlineAt: S.deadlineAt,
         recordsRepost: sql<boolean>`${S.metadata} ?| array['corrections', 'nicknameFix', 'agentCorrection']`,
+        noShowNote: sql<boolean>`${S.metadata} ? 'noShowPost'`,
       }).from(S).where(eq(S.wiseSessionId, sid)).limit(1);
       const [firstShot] = await db.select({
         actorKind: P.actorKind, outcome: P.outcome, fieldsSha256: P.fieldsSha256, billing: P.billing, postStartedAt: P.postStartedAt,
@@ -206,6 +214,8 @@ export function pgCorrectionStore(db: Database, opts: {
       const stuck = await stuckPostInFlight(db, AUTOWRITER_STALE_POSTING_MS);
 
       const problems: string[] = [];
+      // The owner's no-show note: a correction would have to drop its absence wording (and with it the exemption).
+      if (row?.noShowNote) problems.push("no_show_note");
       if (!row) {
         problems.push("row_missing");
       } else {
@@ -240,9 +250,19 @@ export function pgCorrectionStore(db: Database, opts: {
       return { problems: [...new Set(problems)], firstShotPostedAt: firstShot?.postStartedAt ?? null };
     },
 
-    async lock(plan) {
+    async lock(plan, options = {}) {
       if (held) throw new CorrectionStoreError("lock_already_held");
-      const token = await acquireSweepLease(db, CORRECTION_LOCK_LEASE_MS);
+      // A running sweep is waited for: bounded by attempts (a stubbed sleep cannot spin) and by `waitUntil` (no wait
+      // runs past the correction window; the executor refuses a window already closed before calling), and given up
+      // at once on STOP. Nothing is halted meanwhile.
+      let token = await acquireSweepLease(db, CORRECTION_LOCK_LEASE_MS);
+      for (let attempt = 1; !token && attempt <= CORRECTION_LOCK_WAIT_MS / CORRECTION_LOCK_POLL_MS; attempt += 1) {
+        if (options.waitUntil && now().getTime() + CORRECTION_LOCK_POLL_MS >= options.waitUntil.getTime()) break;
+        if (options.stopRequested?.()) return { ok: false, reason: "stop_requested" };
+        await sleep(CORRECTION_LOCK_POLL_MS);
+        if (options.stopRequested?.()) return { ok: false, reason: "stop_requested" };
+        token = await acquireSweepLease(db, CORRECTION_LOCK_LEASE_MS);
+      }
       if (!token) return { ok: false, reason: "sweep_running" };
       const reason = correctionLockReason(token, plan.wiseSessionId);
       let halted = false;
@@ -284,7 +304,7 @@ export function pgCorrectionStore(db: Database, opts: {
           const facts = await readBooleans(db, { lockHeld: lockHeldSql(current), tutorDisabled: tutorDisabledSql(current.teacherId) });
           return facts.lockHeld && !facts.tutorDisabled;
         };
-        const lock: CorrectionLock = { isHeld, release };
+        const lock: CorrectionLock = { isHeld, release, haltedAtMs: before };
         return { ok: true, lock };
       } catch (error) {
         if (halted) await release().catch(() => false);
