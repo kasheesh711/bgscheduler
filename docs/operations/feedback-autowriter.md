@@ -105,7 +105,15 @@ writes it. With transcript first on, that is only a class that fell back from th
 speakers unclear, several parts, Soniox or writer failures). Why: audited summary-only posts had a real error 5 times
 in 7, even with left-out homework not counted, and the nightly correction cannot repair them (its judges read the same
 summary). Each held class is a coverage miss. Turn it off once Zoom captions reach the writer and the judges. The
-system line shows "Summary-only drafts: held" while it is on.
+system line shows "Summary-only drafts: held" while it is on. From 10 Oct 2026, the hold is on by default. Only
+`FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY=false` turns it off; a missing or invalid value keeps the hold on.
+
+For each new draft, the writer keeps the exact lesson input and its hash in `feedback_iseb_evidence`, including
+classes without an ISEB guide. The existing table also keeps the Atom input when used. The posted pipeline records
+`lessonEvidenceHash`. This lets a later review use the writer's input after the recording or Soniox job is removed.
+Older posts can still lack that retained input. Nightly reviews use the format and style guide versions recorded
+on the post. Unknown guide versions receive no guide exception. A correction preserves the first-shot verdict;
+it does not make the original draft count as accurate.
 
 Which switch in an incident: `--pause` (or mode `off`) stops all drafting and posting at once and **keeps
 reconciling** POSTs already made, emailing their alerts. `FEEDBACK_AUTOWRITER_ENABLED=false` stops everything,

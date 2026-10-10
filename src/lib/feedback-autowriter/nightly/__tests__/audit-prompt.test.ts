@@ -55,6 +55,25 @@ describe("buildAuditPrompt", () => {
     expect(user).toContain("<speaker_labels>not_applicable</speaker_labels>");
   });
 
+  it("uses the post's recorded presentation guides instead of the un-guided limits", () => {
+    const { system } = buildAuditPrompt({ bundle: bundle({ pipeline: {
+      formatGuide: { id: "iseb", version: 1 }, styleGuide: { id: "mimi", version: 2 },
+    } }), prechecks: [] });
+    expect(system).toContain("Shared ISEB format guide v1");
+    expect(system).toContain("Mimi voice guide v2");
+    expect(system).toContain("short numbered topic labels");
+    expect(system).not.toContain("each between 120 and 600 characters");
+    const legacy = buildAuditPrompt({ bundle: bundle({ pipeline: { styleGuide: { id: "mimi", version: 1 } } }), prechecks: [] });
+    expect(legacy.system).toContain("Writing guide mimi v1");
+    expect(legacy.system).not.toContain("Mimi voice guide v2");
+  });
+
+  it("does not apply a guide with an unknown version or without a recorded stamp", () => {
+    const { system } = buildAuditPrompt({ bundle: bundle({ pipeline: { formatGuide: { id: "iseb", version: 99 } } }), prechecks: [] });
+    expect(system).not.toContain("Shared ISEB format guide");
+    expect(system).toContain("each between 120 and 600 characters");
+  });
+
   it("puts the people, the posted fields, the evidence and the candidates in the user message", () => {
     const { user } = buildAuditPrompt({
       bundle: bundle(),

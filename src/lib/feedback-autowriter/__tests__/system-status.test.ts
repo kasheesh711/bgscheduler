@@ -28,8 +28,11 @@ describe("buildSystemStatus", () => {
     expect(buildSystemStatus({ FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST: "true" }).transcriptFirst).toBe(false);
     expect(buildSystemStatus({ ...secondPass, FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST: "true" })).toMatchObject({ secondPass: true, transcriptFirst: true });
     // Holding summary-only drafts does not depend on the second pass.
-    expect(buildSystemStatus({}).holdSummaryOnly).toBe(false);
+    expect(buildSystemStatus({}).holdSummaryOnly).toBe(true);
     expect(buildSystemStatus({ FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY: "true" }).holdSummaryOnly).toBe(true);
+    expect(buildSystemStatus({ FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY: "" }).holdSummaryOnly).toBe(true);
+    expect(buildSystemStatus({ FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY: "FALSE" }).holdSummaryOnly).toBe(true);
+    expect(buildSystemStatus({ FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY: "false" }).holdSummaryOnly).toBe(false);
   });
 
   it("names the commit that is running: the deploy's, else a local checkout's, else none", () => {

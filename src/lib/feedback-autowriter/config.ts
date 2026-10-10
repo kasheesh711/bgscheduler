@@ -39,10 +39,10 @@ export function autowriterTranscriptFirst(env: AutowriterEnvironment = process.e
  * Hold summary-only drafts (owner, 5 Oct 2026): a class that would be written from Wise's AI summary alone — no
  * transcript, or a transcript-first class that fell back — is held for the tutor before any model call. Audited
  * summary-only posts had a real error 5 times in 7 (homework left out not counted), and the nightly correction path
- * cannot repair them. Only the exact string `true` enables it; remove it once Zoom captions reach the writer.
+ * cannot repair them. Hold by default so a missing switch cannot restore unsafe writes; only `false` opts out.
  */
 export function autowriterHoldSummaryOnly(env: AutowriterEnvironment = process.env): boolean {
-  return env.FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY === "true";
+  return env.FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY !== "false";
 }
 
 export function sonioxApiKey(env: AutowriterEnvironment = process.env): string | null {

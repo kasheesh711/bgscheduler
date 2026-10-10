@@ -68,11 +68,11 @@ describe("judge output (the v4 verdict each level returns)", () => {
   });
 });
 
-describe("judge v5: both levels must pass", () => {
+describe("judge v6: both levels must pass", () => {
   const flagged = (patch: Record<string, unknown>) => ({ ...CLEAN, faithful: false, ...patch });
 
-  it("is version 5: the v4 prompt at medium and at high", () => {
-    expect(JUDGE_PROMPT_VERSION).toBe(5);
+  it("is version 6: the assignment checks at medium and at high", () => {
+    expect(JUDGE_PROMPT_VERSION).toBe(6);
     expect(AUTOWRITER_JUDGE_EFFORTS).toEqual(["medium", "high"]);
     // The stored verdict names exactly the levels that judge.
     expect(Object.keys(StoredJudgeVerdictSchema.shape.levels.shape)).toEqual([...AUTOWRITER_JUDGE_EFFORTS]);
@@ -146,7 +146,7 @@ describe("buildJudgeMessages", () => {
     otherPeople,
   });
 
-  it("is exactly the approved v4 prompt for a summary", () => {
+  it("is exactly the approved v6 prompt for a summary", () => {
     expect(build("summary")[0].content).toBe([
       "You check a tutor's post-class feedback against an automatic summary of the same lesson.",
       "The student's and the tutor's names are replaced by [STUDENT_1] and [TUTOR]; that is expected. Any other name in the summary is someone else, never [STUDENT_1].",
@@ -156,6 +156,8 @@ describe("buildJudgeMessages", () => {
       "- misattributed: something the feedback says [STUDENT_1] did, said, finished, got wrong or did not finish, when the summary says it about [TUTOR] or about another person.",
       "- homeworkNotSet: homework, a task or a due date the feedback says was set — everything under \"Homework and due date\", and any such statement in another field — " +
         "unless the summary clearly shows the tutor setting it for [STUDENT_1] to do after this lesson. Work only described as remaining, unfinished or still to complete was not set. " +
+        "Check the tutor's later instructions for changed question ranges, time limits and optional work. " +
+        "A timed attempt does not require completing every question, and optional extension questions must not become required. " +
         "A \"Next steps\" line in the summary is the summary's own suggestion, not homework the tutor set.",
       "General advice, encouragement and suggested practice (including practice before the next lesson) are fine and must not be listed, unless they are presented as homework the tutor set.",
       "faithful is true only when all three lists are empty.",
@@ -173,7 +175,9 @@ describe("buildJudgeMessages", () => {
         "Claiming the student understood or solved something the transcript only shows the tutor explaining is unsupported.",
       "- misattributed: something the feedback says [STUDENT_1] did, said, finished, got wrong or did not finish, when the transcript says it about [TUTOR] or about another person.",
       "- homeworkNotSet: homework, a task or a due date the feedback says was set — everything under \"Homework and due date\", and any such statement in another field — " +
-        "unless the transcript clearly shows the tutor setting it for [STUDENT_1] to do after this lesson. Work only described as remaining, unfinished or still to complete was not set.",
+        "unless the transcript clearly shows the tutor setting it for [STUDENT_1] to do after this lesson. Work only described as remaining, unfinished or still to complete was not set. " +
+        "Check the tutor's later instructions for changed question ranges, time limits and optional work. " +
+        "A timed attempt does not require completing every question, and optional extension questions must not become required.",
       "General advice, encouragement and suggested practice (including practice before the next lesson) are fine and must not be listed, unless they are presented as homework the tutor set.",
       "faithful is true only when all three lists are empty.",
     ].join("\n"));
