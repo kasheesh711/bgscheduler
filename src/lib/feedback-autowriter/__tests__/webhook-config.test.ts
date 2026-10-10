@@ -84,11 +84,12 @@ describe("config", () => {
     expect(autowriterTranscriptFirst({})).toBe(false);
   });
 
-  it("holds summary-only drafts only with the exact string true", () => {
+  it("holds summary-only drafts unless the exact string false opts out", () => {
     expect(autowriterHoldSummaryOnly({ FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY: "true" })).toBe(true);
-    expect(autowriterHoldSummaryOnly({ FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY: "TRUE" })).toBe(false);
-    expect(autowriterHoldSummaryOnly({ FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY: "1" })).toBe(false);
-    expect(autowriterHoldSummaryOnly({})).toBe(false);
+    expect(autowriterHoldSummaryOnly({ FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY: "TRUE" })).toBe(true);
+    expect(autowriterHoldSummaryOnly({ FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY: "1" })).toBe(true);
+    expect(autowriterHoldSummaryOnly({})).toBe(true);
+    expect(autowriterHoldSummaryOnly({ FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY: "false" })).toBe(false);
   });
 
   it("never writes from a preview deployment", () => {

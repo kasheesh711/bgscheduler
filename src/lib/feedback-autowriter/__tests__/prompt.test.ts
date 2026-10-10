@@ -213,19 +213,21 @@ describe("v4 rules (30 Sep)", () => {
         "written as suggestions — never as homework the tutor set, and never repeating the homework.",
       );
       // Owner decision (30 Sep): Wise's "Next steps: …" summary line is not homework the tutor set. A transcript has
-      // no such line, so its rule 7 is unchanged.
+      // no such line. Both modes preserve the assignment limits.
       const nextSteps = evidence === "summary"
         ? "A \"Next steps\" line in the summary is the summary's own suggestion, not homework the tutor set. "
         : "";
       expect(system.content.split("\n").find((line) => line.startsWith("7. "))).toBe(
         `7. homework: only work ${record} shows the tutor clearly setting [STUDENT_1] to do after this lesson, with its timing if stated. ` +
         "Work only described as remaining, unfinished, left over or still to complete is not homework unless the tutor set it. " +
+        "Preserve question ranges, time limits and optional work, including any later change to the assignment. " +
+        "A timed attempt is not a requirement to finish every question. " +
         nextSteps +
         `If ${record} does not clearly show the tutor setting homework, return an empty string. ` +
         "Never repeat or restate the homework in topics, performance or improvement.",
       );
       if (evidence === "transcript") expect(system.content).not.toContain("Next steps");
-      // Rules 1-5 and 8-10 are unchanged.
+      // The other rules still apply.
       for (const rule of [
         `1. Use only facts stated or clearly implied by ${record}. Never invent scores, topics, materials, homework, dates or events.`,
         "2. Never mention attendance, absence, lateness, cancellation, rescheduling, technical problems, recordings, transcripts, Zoom, AI or the summary itself.",
@@ -260,8 +262,8 @@ describe("v4 rules (30 Sep)", () => {
     expect(system.content).toContain("13. Names in the transcript may be written in Thai script;");
   });
 
-  it("v5: never names anyone but the student — other people are referred to generically (owner decision, 30 Sep)", () => {
-    expect(PROMPT_VERSION).toBe(5);
+  it("v6 preserves the rule that names only the student", () => {
+    expect(PROMPT_VERSION).toBe(6);
     const rules = (evidence: "summary" | "transcript") => messages(evidence, "[00:00] TUTOR: we read chapter two")[0].content.split("\n");
     // Summary mode: a rule of its own, the last one.
     expect(rules("summary").at(-1)).toBe(
@@ -277,6 +279,18 @@ describe("v4 rules (30 Sep)", () => {
     // The tutor is never named either, in both modes (unchanged): [TUTOR] is not an allowed name.
     for (const evidence of ["summary", "transcript"] as const) {
       expect(messages(evidence, "x")[0].content).toContain("Refer to the student only as [STUDENT_1]. Never name the tutor or write [TUTOR].");
+    }
+  });
+
+  it("keeps performance focused on the pupil and removes audit language in both evidence modes", () => {
+    for (const evidence of ["summary", "transcript"] as const) {
+      const [system] = messages(evidence, "A lesson record");
+      expect(system.content).toContain("Do not open with a recap of the topic list");
+      expect(system.content).toContain("Never write source-audit phrases");
+      expect(system.content).toContain("Do not imply independent mastery");
+      expect(system.content).toContain("Keep negations and distinguish intermediate values from final results");
+      expect(system.content).toContain("Preserve question ranges, time limits and optional work");
+      expect(system.content).toContain("A timed attempt is not a requirement to finish every question");
     }
   });
 

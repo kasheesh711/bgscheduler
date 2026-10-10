@@ -556,7 +556,7 @@ describe("per-tutor writer order (owner decision, 2 Oct: Luna first for the 13 t
   });
 });
 
-describe("judge v5: medium and high must both pass (owner decision, 30 Sep)", () => {
+describe("judge v6: medium and high must both pass", () => {
   it("judges at both levels on byte-identical messages, for a summary and a transcript", async () => {
     for (const evidence of ["summary", "transcript"] as const) {
       const { promise, requests } = run({ writers: [SOL(writerJson)], judge: [GLM(FAITHFUL)] }, { evidence });
@@ -635,14 +635,14 @@ describe("judge v5: medium and high must both pass (owner decision, 30 Sep)", ()
     expect(result.kind === "draft" ? result.judge : null).toEqual({ ...PASSING, levels: { medium: PASSING, high: PASSING } });
   });
 
-  it("records both judge calls with their effort, as judge v5", async () => {
+  it("records both judge calls with their effort, as judge v6", async () => {
     const { promise, records } = run({ writers: [SOL(writerJson)], medium: [GLM("not json"), GLM(FAITHFUL)], high: [GLM(FAITHFUL)] });
     await promise;
     const judged = records.filter((record) => record.role === "judge");
     expect(judged.map((record) => [record.result.effort, record.result.error ?? record.result.faithful]).toSorted()).toEqual([
       ["high", true], ["medium", "judge_unparseable"], ["medium", true],
     ]);
-    expect(JUDGE_PROMPT_VERSION).toBe(5);
+    expect(JUDGE_PROMPT_VERSION).toBe(6);
     for (const record of judged) {
       expect(record).toMatchObject({ arm: "glm", requestedModel: "z-ai/glm-5.3-flash", promptVersion: JUDGE_PROMPT_VERSION });
       expect(record.result).toMatchObject({ judgedArm: "sol", judgedGeneration: "g", evidence: "summary" });

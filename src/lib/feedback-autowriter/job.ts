@@ -706,9 +706,9 @@ async function processLeased(deps: AutowriterDeps, input: {
 
   const atomEvidence = await loadAtomLessonEvidence(db, { detail, studentId: student.wiseUserId, lessonRecord: summary.text, now });
   const formatGuide = await approvedFormatGuide(db, tutor.canonicalKey, describeClass({ programme: detail.classSubject, title: detail.title }));
-  const lessonEvidenceHash = atomEvidence || formatGuide ? await retainIsebEvidence(db, {
+  const lessonEvidenceHash = await retainIsebEvidence(db, {
     wiseSessionId: row.wiseSessionId, atom: atomEvidence, lessonRecord: summary.text, evidenceKind: "summary",
-  }) : null;
+  });
   const result: PipelineResult = await runWritingPipeline({
     apiKey: deps.apiKey,
     formatGuide,
@@ -1179,9 +1179,9 @@ async function processTranscript(deps: AutowriterDeps, input: {
   // 5. Write and judge from the transcript (Sol, Luna fallback, GLM judge — zero-retention routes only).
   const atomEvidence = await loadAtomLessonEvidence(db, { detail, studentId: student.wiseUserId, lessonRecord: rendered, now });
   const formatGuide = await approvedFormatGuide(db, tutor.canonicalKey, describeClass({ programme: detail.classSubject, title: detail.title }));
-  const lessonEvidenceHash = atomEvidence || formatGuide ? await retainIsebEvidence(db, {
+  const lessonEvidenceHash = await retainIsebEvidence(db, {
     wiseSessionId: row.wiseSessionId, atom: atomEvidence, lessonRecord: rendered, evidenceKind: "transcript",
-  }) : null;
+  });
   const result = await runWritingPipeline({
     apiKey: deps.apiKey,
     formatGuide,
