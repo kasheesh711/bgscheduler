@@ -5,6 +5,7 @@ import { ClassroomPrintCard } from "@/components/class-assignments/classroom-pri
 import { buildTeacherSchedule } from "../schedule-projection";
 import { buildClassroomPrintDay, printRunsSchema, printViewSchema, type ClassroomPrintReport } from "../print-report";
 import { projectPrintRoster, type PrintRoster } from "../print-roster";
+import { formatClassroomDaySummary } from "../hourly-summary";
 import { buildPrintCards, paginatePrintCards, splitPrintCard } from "@/components/class-assignments/print-pagination";
 const run = { id: "run", assignmentDate: "2099-09-12", changeSummary: {} };
 const row = (id: string, patch: Partial<Parameters<typeof buildClassroomPrintDay>[1][number]> = {}) => ({ id, runId: "run", canonicalKey: id, tutorDisplayName: `Tutor ${id}`, wiseSessionId: id, wiseClassId: "class", startTime: new Date("2099-09-12T09:00:00Z"), endTime: new Date("2099-09-12T10:00:00Z"), startMinute: 540, endMinute: 600, sessionType: "OFFLINE", assignedRoom: "Room B", status: "assigned", publishStatus: "success", ...patch });
@@ -94,6 +95,32 @@ describe("shared classroom print data", () => {
     expect(printRunsSchema.safeParse([...ids, crypto.randomUUID()]).success).toBe(false);
     expect(printRunsSchema.safeParse([ids[0], ids[0]]).success).toBe(false);
     expect(printViewSchema.parse("tutors")).toBe("tutors"); expect(printViewSchema.parse("rooms")).toBe("rooms");
+    expect(printViewSchema.parse("grid")).toBe("grid");
+  });
+  it("wires day.grid from buildClassroomPrintDay: room/online-booth/no-room columns, cancelledCount, and the day summary line", () => {
+    const gridCatalog = [
+      { id: "b", name: "Room B", sortOrder: 0, capacity: 2, active: true, hasTv: false, category: "standard" as const },
+      { id: "booth", name: "Booth", sortOrder: 1, capacity: 1, active: true, hasTv: false, category: "online_only" as const },
+    ];
+    const rows = [
+      row("assigned-row", { assignedRoom: "Room B" }),
+      row("booth-row", { canonicalKey: "booth-tutor", tutorDisplayName: "Booth Tutor", assignedRoom: "Booth", startMinute: 600, endMinute: 660, startTime: new Date("2099-09-12T10:00:00Z"), endTime: new Date("2099-09-12T11:00:00Z") }),
+      row("remote-row", { canonicalKey: "remote-tutor", tutorDisplayName: "Remote Tutor", status: "remote", assignedRoom: "REMOTE_NO_ROOM_NEEDED", sessionType: "ONLINE" }),
+      row("no-room-row", { canonicalKey: "no-room-tutor", tutorDisplayName: "No Room Tutor", status: "no_room", assignedRoom: "NO_ROOM_AVAILABLE" }),
+      row("cancelled-row", { canonicalKey: "cancelled-tutor", tutorDisplayName: "Cancelled Tutor" }),
+    ];
+    const rosters = new Map(rows.map(r => [r.id, roster()]));
+    rosters.set("cancelled-row", roster({ sessionState: "cancelled", warnings: ["Cancelled. Regenerate assignments."] }));
+    const day = buildClassroomPrintDay(run, rows, gridCatalog, rosters);
+    expect(day.grid.columns.map(c => ({ key: c.key, kind: c.kind }))).toEqual([
+      { key: "b", kind: "room" }, { key: "booth", kind: "room" }, { key: "no-room", kind: "no_room" }, { key: "online", kind: "online" },
+    ]);
+    expect(day.grid.columns.find(c => c.key === "b")!.blocks.map(b => b.rowId)).toEqual(["assigned-row"]);
+    expect(day.grid.columns.find(c => c.key === "booth")!.blocks.map(b => b.rowId)).toEqual(["booth-row"]);
+    expect(day.grid.columns.find(c => c.kind === "online")!.blocks.map(b => b.rowId)).toEqual(["remote-row"]);
+    expect(day.grid.columns.find(c => c.kind === "no_room")!.blocks.map(b => b.rowId)).toEqual(["no-room-row"]);
+    expect(day.grid.cancelledCount).toBe(1);
+    expect(day.grid.daySummaryLine).toBe(formatClassroomDaySummary(day.grid.day));
   });
 });
 describe("print pagination", () => {
