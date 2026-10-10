@@ -1,3 +1,4 @@
+import { sessionCreditMap, readSessionCredits, loadCreditSessionAnchors, type StoredCreditSessionAnchor } from '@/lib/progress-tests/workspace/credit-session';
 import { creditControlActive } from "@/lib/credit-control/mode";
 import { captureGrowthBookingMetadata } from "@/lib/tutor-offboarding/workforce/growth/capture";
 import { captureGrowthLifecycle } from "@/lib/tutor-offboarding/workforce/growth/reconcile";
@@ -661,6 +662,8 @@ async function buildSessionRows(
   creditPairs: PairCreditRecord[],
   pastSessions: WiseCreditSession[],
   futureSessions: WiseCreditSession[],
+  anchors: StoredCreditSessionAnchor[],
+  retainedSessions: Array<typeof schema.creditControlSessions.$inferSelect>,
 ): Promise<SessionCreditRows> {
   const pairsByKey = new Map(creditPairs.map((pair) => [pairKey(pair.wiseClassId, pair.wiseStudentId), pair]));
   const positiveCreditByPairSession = new Map<string, number>();
@@ -670,13 +673,14 @@ async function buildSessionRows(
     // Recomputed from THIS run's names, so a carried-forward history row keys
     // to the same package as the pair's fresh session rows.
     const packageKey = buildStudentPackageKey(pair.studentName, pair.packageName);
+    const pastIds=new Set(pastSessions.filter(session=>session.meetingStatus.toUpperCase()==='ENDED'&&session.classId._id===pair.wiseClassId&&session.students.includes(pair.wiseStudentId)).map(session=>session._id));
+    const retained=retainedSessions.filter(session=>session.wiseClassId===pair.wiseClassId&&session.wiseStudentId===pair.wiseStudentId);
+    for(const session of retained)pastIds.add(session.wiseSessionId);
+    const resolved=sessionCreditMap(pair.history.map(history=>({...history.raw,_id:history.wiseCreditHistoryId,credit:history.credit})),anchors.filter(anchor=>pastIds.has(anchor.wiseSessionId)),pair.wiseClassId,pair.wiseStudentId);
+    for(const session of retained)if(session.creditApplied>0&&!resolved.credits.has(session.wiseSessionId))resolved.unresolved.add(session.wiseSessionId);
+    for(const id of resolved.unresolved)resolved.credits.set(id,await readSessionCredits(client,pair.wiseClassId,pair.wiseStudentId,id));
+    for(const [id,credit] of resolved.credits)if(credit>0)positiveCreditByPairSession.set(`${pairKey(pair.wiseClassId,pair.wiseStudentId)}|${id}`,credit);
     for (const history of pair.history) {
-      if (history.credit > 0) {
-        positiveCreditByPairSession.set(
-          `${pairKey(pair.wiseClassId, pair.wiseStudentId)}|${history.wiseCreditHistoryId}`,
-          history.credit,
-        );
-      }
       histories.push({
         snapshotId,
         wiseCreditHistoryId: history.wiseCreditHistoryId,
@@ -756,6 +760,15 @@ async function buildSessionRows(
 
   addSessions(pastSessions, "past");
   addSessions(futureSessions, "future");
+  for(const retained of retainedSessions){
+    const key=`${retained.wiseSessionId}|${retained.wiseStudentId}`;
+    const pair=pairsByKey.get(pairKey(retained.wiseClassId,retained.wiseStudentId));
+    if(seenSessionRows.has(key)||!pair)continue;
+    // A missing date-feed row is not proof that this student's attendance was removed.
+    const {id: _id,createdAt: _createdAt,...evidence}=retained;
+    rows.push({...evidence,snapshotId,studentKey:buildDashboardStudentKey(pair.studentName,pair.parentName),studentName:pair.studentName,subject:pair.subject,packageName:pair.packageName,packageKey:buildStudentPackageKey(pair.studentName,pair.packageName),creditApplied:positiveCreditByPairSession.get(`${pairKey(pair.wiseClassId,pair.wiseStudentId)}|${retained.wiseSessionId}`)??0});
+    seenSessionRows.add(key);
+  }
   return { sessions: rows, histories };
 }
 
@@ -952,6 +965,14 @@ export async function runCreditControlSync(
     // CRED-01: ask Wise only about the pairs whose balance could matter this
     // run; carry the quiet ones forward from the previous snapshot.
     const prior = await loadPriorSnapshotCredits(db);
+    const anchors=await loadCreditSessionAnchors(db,pastStart,now);
+    if(anchors.length&&!prior)throw new Error('Prior credit snapshot could not be read; anchor preservation is not proved.');
+    const retainedSessions=prior?await db.select().from(schema.creditControlSessions).where(and(
+      eq(schema.creditControlSessions.snapshotId,prior.snapshotId),
+      eq(schema.creditControlSessions.sessionKind,'past'),eq(schema.creditControlSessions.meetingStatus,'ENDED'),
+      or(sql`${schema.creditControlSessions.creditApplied}>0`,inArray(sql`${schema.creditControlSessions.wiseSessionId} || '|' || ${schema.creditControlSessions.wiseClassId} || '|' || ${schema.creditControlSessions.wiseStudentId}`,anchors.map(anchor=>`${anchor.wiseSessionId}|${anchor.wiseClassId}|${anchor.wiseStudentId}`))),sql`${schema.creditControlSessions.scheduledStartTime}>=${pastStart}`,
+      sql`coalesce(${schema.creditControlSessions.scheduledEndTime},${schema.creditControlSessions.scheduledStartTime})<=${now}`,
+    )):[];
     const plan = planPairRefresh({
       pairs,
       prior,
@@ -1012,6 +1033,7 @@ export async function runCreditControlSync(
           rawPastSessions: pastSessions.length,
           rawFutureSessions: futureSessions.length,
           candidatePairs: pairs.length,
+          creditAnchorSnapshotIds: [...new Set(anchors.map(anchor=>anchor.snapshotId))],
           failedCreditPairs,
         },
       })
@@ -1031,6 +1053,8 @@ export async function runCreditControlSync(
       creditPairs,
       pastSessions,
       futureSessions,
+      anchors,
+      retainedSessions,
     );
 
     options.signal?.throwIfAborted();

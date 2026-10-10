@@ -1,7 +1,7 @@
-import {sessionCreditMap,readSessionCredits,type CreditSessionAnchor} from './credit-session';
+import {sessionCreditMap,readSessionCredits,loadCreditSessionAnchors} from './credit-session';
 import { isProgressClass } from "./cadence";
 import { recentClassWindowMs,courseExclusion } from "./course-policy";
-import { gte,sql } from "drizzle-orm";
+import { gte } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { creditSessionTeacher, fetchCreditSessions, fetchCreditStudents, fetchSessionCredits } from "@/lib/credit-control/wise";
@@ -47,7 +47,7 @@ export async function loadWorkspaceAttendance(db: Database, client: WiseClient, 
     }
   }
   const snapshotIds=[...new Set(previous.flatMap(row=>row.firstObservedSnapshotId?[row.firstObservedSnapshotId]:[]))];
-  const anchors=(await db.execute(sql`with retained as materialized (select sn.id from credit_control_snapshots sn where (sn.active or sn.id=any(ARRAY(select jsonb_array_elements_text(${JSON.stringify(snapshotIds)}::jsonb)::uuid))) and coalesce((sn.metadata->>'failedCreditPairs')::integer,0)=0 and exists(select 1 from credit_control_sync_runs cr where cr.promoted_snapshot_id=sn.id and cr.status='success')) select se.wise_session_id as "wiseSessionId",h.wise_class_id as "wiseClassId",h.wise_student_id as "wiseStudentId",h.raw from retained sn join credit_control_sessions se on se.snapshot_id=sn.id join credit_control_credit_history h on h.snapshot_id=sn.id and h.wise_class_id=se.wise_class_id and h.wise_student_id=se.wise_student_id and h.wise_credit_history_id=se.wise_session_id where h.credit>0 and h.raw->>'_id'=se.wise_session_id and h.raw->>'type'='SESSION' and se.scheduled_start_time>=${new Date(Math.min(launch.getTime(),now.getTime()-recentClassWindowMs))} and coalesce(se.scheduled_end_time,se.scheduled_start_time)<=${now}`)).rows as CreditSessionAnchor[];
+  const anchors=await loadCreditSessionAnchors(db,new Date(Math.min(launch.getTime(),now.getTime()-recentClassWindowMs)),now,snapshotIds);
   const observedAnchors=anchors.filter(a=>{const row=rows.get(key(a.wiseSessionId,a.wiseStudentId));return row?.wiseClassId===a.wiseClassId&&row.meetingStatus==='ENDED';});
   const retainedPositive=new Set(previous.filter(row=>row.creditApplied>0&&row.meetingStatus==='ENDED').map(row=>key(row.wiseSessionId,row.wiseStudentId)));
   const credits = new Map<string, Map<string, number>>();

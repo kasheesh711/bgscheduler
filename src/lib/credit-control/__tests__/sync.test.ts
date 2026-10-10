@@ -107,12 +107,15 @@ function makeDbMock(options: {
   selectRows?: Map<unknown, unknown[]>;
   /** Tables whose `select()` rejects, for the prior-snapshot failure paths. */
   failSelectTables?: unknown[];
+  anchorRows?: unknown[];
+  anchorReadError?: boolean;
 } = {}): { db: Database; events: DbEvent[] } {
   const events: DbEvent[] = [];
   const snapshotId = options.snapshotId ?? "snapshot-1";
   let sessionChunkIndex = 0;
 
   const db = {
+    execute: vi.fn(async()=>{if(options.anchorReadError)throw new Error('Anchor read failed');return {rows:options.anchorRows??[]};}),
     select: vi.fn(() => {
       let source: unknown;
       const chain = {
@@ -861,4 +864,62 @@ describe("runCreditControlSync — pair reuse (CRED-01)", () => {
     // The future session row survives — this is what the parent schedule reads.
     expect(insertedRows<unknown>(events, schema.creditControlSessions)).toHaveLength(1);
   });
+});
+
+describe('snapshot original credit evidence preservation',()=>{
+ const now=new Date('2026-05-26T08:00:00Z'),at=new Date('2026-05-20T08:00:00Z');
+ const raw={_id:'old-session',createdAt:'2026-05-20T09:01:02.345Z',duration:3600000,type:'SESSION',classroom:{_id:'class-1'},credit:1};
+ const anchor={snapshotId:'old-complete-source',wiseSessionId:'old-session',wiseClassId:'class-1',wiseStudentId:'student-1',raw};
+ const past={...makeFutureSessions(1)[0],_id:'old-session',scheduledStartTime:at,scheduledEndTime:new Date(+at+3600000),meetingStatus:'ENDED'};
+ const retained={id:'old-row',snapshotId:'old-complete-source',createdAt:at,wiseSessionId:'old-session',wiseClassId:'class-1',wiseStudentId:'student-1',studentKey:'prior-key',packageKey:'prior-package',studentName:'Prior name',packageName:'Prior package',subject:'Math',title:'Original lesson',scheduledStartTime:at,scheduledEndTime:past.scheduledEndTime,durationMinutes:60,meetingStatus:'ENDED',sessionKind:'past',teacherFeedback:'Verified note',creditApplied:1,wiseTeacherUserId:'original-tutor',wiseTeacherId:null,teacherName:'Original tutor'};
+ beforeEach(()=>{
+  vi.clearAllMocks();vi.mocked(fetchCreditStudents).mockResolvedValue([makeStudent()]);
+  vi.mocked(fetchCreditSessions).mockImplementation(async(_c,_i,status)=>status==='PAST'?[past]:[]);
+  vi.mocked(fetchSessionTeacherFeedback).mockResolvedValue('');
+ });
+ function history(credit:number,direct=false){vi.mocked(fetchSessionCredits).mockResolvedValue({credits:{total:10,consumed:credit,remaining:10-credit,available:10-credit,bookedSessions:0},sessionCreditHistory:[{...raw,_id:direct?'old-session':'renamed-history',createdAt:new Date(raw.createdAt),credit}]});}
+ function fixture(anchors:unknown[]=[anchor],keep=true){return makeDbMock({anchorRows:anchors,selectRows:new Map<unknown,unknown[]>([[schema.creditControlSnapshots,[{id:'old-complete-source'}]],[schema.creditControlSessions,keep?[retained]:[]]])});}
+ const rows=(events:DbEvent[],table:unknown)=>events.filter((event):event is InsertEvent=>event.type==='insert'&&event.table===table).flatMap(event=>event.rows) as Record<string,unknown>[];
+ it.each([1,0,-1,.5])('uses exact current renamed credit %s and keeps history raw IDs unchanged',async credit=>{
+  history(credit);const {db,events}=fixture();const result=await runCreditControlSync(db,fakeClient(),'institute-1',now,{syncRunId:'run-1',requireComplete:true});
+  expect(result.success).toBe(true);expect(rows(events,schema.creditControlSessions)[0].creditApplied).toBe(Math.max(0,credit));
+  const saved=rows(events,schema.creditControlCreditHistory);expect(saved).toHaveLength(1);expect(saved[0].wiseCreditHistoryId).toBe('renamed-history');expect((saved[0].raw as Record<string,unknown>)._id).toBe('renamed-history');
+  expect((rows(events,schema.creditControlSnapshots)[0].metadata as Record<string,unknown>).creditAnchorSnapshotIds).toEqual(['old-complete-source']);
+  expect(retained.creditApplied).toBe(1);
+ });
+ it('keeps direct current zero before any renamed positive credit',async()=>{
+  history(0,true);const value=await vi.mocked(fetchSessionCredits).getMockImplementation()!({} as never,'','','');
+  vi.mocked(fetchSessionCredits).mockResolvedValue({...value,sessionCreditHistory:[...value.sessionCreditHistory,{...raw,_id:'renamed-history',createdAt:new Date(raw.createdAt),credit:1}]});
+  const {db,events}=fixture();expect((await runCreditControlSync(db,fakeClient(),'institute-1',now,{syncRunId:'run-1',requireComplete:true})).success).toBe(true);
+  expect(rows(events,schema.creditControlSessions)[0].creditApplied).toBe(0);
+ });
+ it.each([1,0])('preserves a feed-absent prior row with current credit %s and original tutor evidence',async credit=>{
+  history(credit);vi.mocked(fetchCreditSessions).mockResolvedValue([]);const {db,events}=fixture();
+  expect((await runCreditControlSync(db,fakeClient(),'institute-1',now,{syncRunId:'run-1',requireComplete:true})).success).toBe(true);
+  const saved=rows(events,schema.creditControlSessions);expect(saved).toHaveLength(1);expect(saved[0]).toMatchObject({wiseSessionId:'old-session',creditApplied:credit,wiseTeacherUserId:'original-tutor',teacherFeedback:'Verified note',studentName:'Ada Lovelace'});expect(saved[0]).not.toHaveProperty('id');expect(saved[0]).not.toHaveProperty('createdAt');
+ });
+ it('restores a prior zero-credit row when current exact credit becomes positive',async()=>{
+  history(1);vi.mocked(fetchCreditSessions).mockResolvedValue([]);
+  const {db,events}=makeDbMock({anchorRows:[anchor],selectRows:new Map<unknown,unknown[]>([[schema.creditControlSnapshots,[{id:'old-complete-source'}]],[schema.creditControlSessions,[{...retained,creditApplied:0}]]])});
+  expect((await runCreditControlSync(db,fakeClient(),'institute-1',now,{syncRunId:'run-1',requireComplete:true})).success).toBe(true);expect(rows(events,schema.creditControlSessions)[0].creditApplied).toBe(1);
+ });
+ it('uses exact current detail for ambiguity and stops promotion if detail fails',async()=>{
+  history(1);const value=await vi.mocked(fetchSessionCredits).getMockImplementation()!({} as never,'','','');
+  vi.mocked(fetchSessionCredits).mockResolvedValue({...value,sessionCreditHistory:[...value.sessionCreditHistory,{...raw,_id:'duplicate',createdAt:new Date(raw.createdAt),credit:1}]});
+  const client=fakeClient();vi.mocked(client.get).mockRejectedValue(new Error('Exact current detail failed'));
+  const {db,events}=fixture();const result=await runCreditControlSync(db,client,'institute-1',now,{syncRunId:'run-1',requireComplete:true});
+  expect(result.success).toBe(false);expect(events.some(e=>e.type==='update'&&e.table===schema.creditControlSnapshots)).toBe(false);
+ });
+ it('uses the named student detail when the original history is missing',async()=>{
+  history(1);vi.mocked(fetchSessionCredits).mockResolvedValue({credits:{total:10,consumed:1,remaining:9,available:9,bookedSessions:0},sessionCreditHistory:[]});
+  const client=fakeClient();vi.mocked(client.get).mockResolvedValue({data:{_id:'old-session',classId:'class-1',attendanceRecorded:true,meetingStatus:'ENDED',participants:[{wiseUserId:'peer',credits:4},{wiseUserId:'student-1',credits:.5}]}});
+  const {db,events}=fixture([]);expect((await runCreditControlSync(db,client,'institute-1',now,{syncRunId:'run-1',requireComplete:true})).success).toBe(true);expect(rows(events,schema.creditControlSessions)[0].creditApplied).toBe(.5);
+ });
+ it('does not borrow an original anchor from another student',async()=>{
+  history(1);const {db,events}=fixture([{...anchor,wiseStudentId:'peer'}],false);
+  expect((await runCreditControlSync(db,fakeClient(),'institute-1',now,{syncRunId:'run-1',requireComplete:true})).success).toBe(true);expect(rows(events,schema.creditControlSessions)[0].creditApplied).toBe(0);
+ });
+ it('stops before candidate creation when original evidence cannot be read',async()=>{
+  history(1);const {db,events}=makeDbMock({anchorReadError:true});expect((await runCreditControlSync(db,fakeClient(),'institute-1',now,{syncRunId:'run-1',requireComplete:true})).success).toBe(false);expect(rows(events,schema.creditControlSnapshots)).toHaveLength(0);
+ });
 });
