@@ -572,7 +572,7 @@ export function evaluateSessionGates(
   const window = scheduledWindow(detail);
   if (!(window.end.getTime() < input.now.getTime())) return { ok: false, reason: "class_not_finished" };
   const deadline = calculateFeedbackDeadline(window.end);
-  if (deadline.getTime() - input.now.getTime() < AUTOWRITER_DEADLINE_MARGIN_MS) {
+  if (deadline.getTime() - input.now.getTime() < AUTOWRITER_DEADLINE_MARGIN_MS && input.deadlineRecoverySessionId !== detail._id) {
     return { ok: false, reason: "deadline_passed_or_too_close" };
   }
 

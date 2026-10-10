@@ -8,10 +8,11 @@ import { detectNoShow } from "../no-show";
 import { postNoShowNote } from "../no-show-post";
 import { KEVIN_ONLINE_WISE_USER_ID } from "../roster";
 import { parseAutowriterSessionDetail } from "../session";
-import { readControl, updateControl } from "../store";
-import type { PostResult, SubmitFeedbackEvent, WiseFeedbackOps } from "../submit";
+import { heldRecoverySubmitStore, readControl, updateControl } from "../store";
+import { fieldsHash, submitFeedbackGuarded, type PostResult, type SubmitFeedbackEvent, type WiseFeedbackOps } from "../submit";
 import type { WiseFeedbackPostBody } from "../types";
-import { answers, autoBlankSubmission, CLASS_ID, SESSION_ID, sessionDetail, STUDENT_ID, STUDENT_NAME } from "./fixtures";
+import { answers, autoBlankSubmission, CLASS_ID, GOOD_FIELDS, SESSION_ID, sessionDetail, STUDENT_ID, STUDENT_NAME } from "./fixtures";
+import { AUTOWRITER_TEACHER_ALLOWLIST } from "../roster";
 
 vi.mock("server-only", () => ({}));
 let handle: Awaited<ReturnType<typeof startTestDb>>;
@@ -170,5 +171,51 @@ describe("owner one-click no-show note, through the guarded POST", () => {
     ] })).ops)).toEqual({ ok: false, status: 409, reason: "no_longer_a_no_show" });
     await db.update(S).set({ metadata: { alertKind: "held", noShow: null } });
     expect(await post(fakeWise(noShowDetail()).ops)).toEqual({ ok: false, status: 409, reason: "not_a_held_no_show" });
+  });
+});
+
+describe("owner-requested held feedback recovery", () => {
+  async function recovery(creditsBefore = 1) {
+    const detail = sessionDetail({ scheduledStartTime: new Date(Date.now() - 100 * HOUR).toISOString(),
+      scheduledEndTime: new Date(Date.now() - 99 * HOUR).toISOString() });
+    await db.insert(S).values({ wiseSessionId: SESSION_ID, wiseClassId: CLASS_ID, wiseTeacherUserId: KEVIN_ONLINE_WISE_USER_ID,
+      state: "held", reason: "thai_summary_no_transcript", deadlineAt: new Date(Date.now() - HOUR) });
+    const wise = fakeWise(detail);
+    wise.ops.getSessionCreditEntries = vi.fn(async () => [{ credit: creditsBefore }]);
+    const held = { reason: "thai_summary_no_transcript", fieldsSha256: fieldsHash(GOOD_FIELDS),
+      authorizationRef: "synthetic direct owner request", expiresAt: new Date(Date.now() + HOUR) };
+    const store = heldRecoverySubmitStore(db, SESSION_ID, { expected: { kind: "auto_blank" }, draftEvidence: "transcript" }, held);
+    const outcome = await submitFeedbackGuarded({ ops: wise.ops, store,
+      plan: { sessionId: SESSION_ID, classId: CLASS_ID, arm: "sol", fields: GOOD_FIELDS,
+        billing: { sessionStatus: "COMPLETED", creditsConsumed: 1, source: "auto_blank_reuse", expectedConsumedDelta: 0 },
+        expected: { kind: "auto_blank", submissionId: "6a0000000000000000000004", sessionStatus: "COMPLETED", creditsConsumed: 1 },
+        mappings: DEFAULT_FEEDBACK_FIELD_MAPPINGS },
+      gateInput: { now: new Date(), allowlist: AUTOWRITER_TEACHER_ALLOWLIST, requireSummary: false, deadlineRecoverySessionId: SESSION_ID },
+      apiActorId: API_ACTOR, remainingMs: () => 280_000, sleep: async () => {}, eventWaitMs: 0 });
+    return { wise, outcome, store, held };
+  }
+  it("writes and verifies a pinned draft after the automatic deadline, with unchanged billing", async () => {
+    const { wise, outcome } = await recovery();
+    expect(outcome.status).toBe("verified");
+    expect(wise.posts).toHaveLength(1);
+    expect(wise.posts[0]).toMatchObject({ sessionStatus: "COMPLETED", creditsConsumed: 1 });
+    expect((await row()).metadata).toMatchObject({ ownerRecovery: { authorizationRef: "synthetic direct owner request" } });
+    expect((await row()).evidence).toBe("transcript");
+  });
+  it("refuses a missing charge before the claim or any Wise POST", async () => {
+    const { wise, outcome } = await recovery(0);
+    expect(outcome).toEqual({ status: "aborted_precheck", reason: "credit_baseline:session_credit_0" });
+    expect(wise.posts).toEqual([]);
+    expect((await row()).state).toBe("held");
+  });
+  it("refuses a different field hash or an expired authorization at the held claim", async () => {
+    const { store, held } = await recovery(0);
+    const claim = { bodyHash: "test", fieldsSha256: fieldsHash(GOOD_FIELDS), fields: GOOD_FIELDS,
+      billing: { sessionStatus: "COMPLETED", creditsConsumed: 1, source: "auto_blank_reuse" as const, expectedConsumedDelta: 0 },
+      arm: "sol" as const, teacherId: KEVIN_ONLINE_WISE_USER_ID, freshReadAt: new Date() };
+    expect(await store.claimPost({ ...claim, fieldsSha256: "changed" })).toEqual({ claimed: false, reason: "conditions" });
+    const expired = heldRecoverySubmitStore(db, SESSION_ID, {}, { ...held, expiresAt: new Date(Date.now() - 1) });
+    expect(await expired.claimPost(claim)).toEqual({ claimed: false, reason: "conditions" });
+    expect((await row()).state).toBe("held");
   });
 });

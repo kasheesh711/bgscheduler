@@ -10,7 +10,7 @@ import { AUTOWRITER_JUDGE_ERRORS_ALERT, AUTOWRITER_JUDGE_STAGE_ERRORS_ALERT } fr
 import { JUDGE_PROMPT_VERSION } from "./judge";
 import type { CallRecord } from "./pipeline";
 import { PROMPT_VERSION } from "./prompt";
-import type { PostFinishState, SubmitStore } from "./submit";
+import { fieldsHash, type PostFinishState, type SubmitStore } from "./submit";
 import type { BillingPlan, ModelArm } from "./types";
 
 const C = schema.feedbackAutowriterControl;
@@ -366,6 +366,17 @@ export function sessionSubmitStore(
  */
 export function heldNoShowSubmitStore(db: Database, wiseSessionId: string, claimMetadata: Record<string, unknown>,
   held: { reason: string }): SubmitStore {
+  return heldSubmitStore(db, wiseSessionId, claimMetadata, held);
+}
+
+/** A reviewed held draft from a direct owner request. Normal jobs and HTTP routes never use this store. */
+export function heldRecoverySubmitStore(db: Database, wiseSessionId: string, claimMetadata: Record<string, unknown>,
+  held: { reason: string; fieldsSha256: string; authorizationRef: string; expiresAt: Date }): SubmitStore {
+  return heldSubmitStore(db, wiseSessionId, { ...claimMetadata, ownerRecovery: held }, held, held);
+}
+
+function heldSubmitStore(db: Database, wiseSessionId: string, claimMetadata: Record<string, unknown>, held: { reason: string },
+  recovery?: { fieldsSha256: string; authorizationRef: string; expiresAt: Date }): SubmitStore {
   const base = sessionSubmitStore(db, wiseSessionId, "", claimMetadata);
   return {
     ...base,
@@ -381,25 +392,32 @@ export function heldNoShowSubmitStore(db: Database, wiseSessionId: string, claim
       }).where(and(eq(S.wiseSessionId, wiseSessionId), eq(S.state, "posting")));
     },
     async claimPost(input) {
+      if (recovery && (!recovery.authorizationRef.trim() || input.fieldsSha256 !== recovery.fieldsSha256 ||
+        fieldsHash(input.fields) !== recovery.fieldsSha256 || !Number.isFinite(recovery.expiresAt.getTime()) ||
+        recovery.expiresAt.getTime() <= Date.now() || recovery.expiresAt.getTime() > Date.now() + 24 * 60 * 60_000)) {
+        return { claimed: false, reason: "conditions" };
+      }
       let rows: Array<{ id: string }>;
       try {
         rows = await db.update(S).set({
           state: "posting",
-          reason: "no_show_note",
+          reason: recovery ? "owner_recovery" : "no_show_note",
           postStartedAt: nowSql,
           bodyHash: input.bodyHash,
           fieldsSha256: input.fieldsSha256,
           fields: input.fields as unknown as Record<string, string>,
           billing: input.billing as unknown as Record<string, unknown>,
-          arm: null,
+          arm: recovery ? input.arm : null,
+          ...(recovery && claimMetadata.draftEvidence === "transcript" ? { evidence: "transcript" as const } : {}),
           metadata: sql`(${S.metadata} - 'alertKind') || ${JSON.stringify({ ...claimMetadata, freshReadAt: input.freshReadAt.toISOString() })}::jsonb`,
           updatedAt: nowSql,
         }).where(and(
           eq(S.wiseSessionId, wiseSessionId),
           eq(S.state, "held"),
-          // Still the no-show hold the owner clicked: not re-held for something else meanwhile.
+          // Still the hold the owner selected: not re-held for something else meanwhile.
           eq(S.reason, held.reason),
-          sql`${S.metadata} -> 'noShow' is not null and ${S.metadata} -> 'noShow' <> 'null'::jsonb`,
+          recovery ? sql`now() < ${recovery.expiresAt.toISOString()}::timestamptz`
+            : sql`${S.metadata} -> 'noShow' is not null and ${S.metadata} -> 'noShow' <> 'null'::jsonb`,
           eq(S.wiseTeacherUserId, input.teacherId),
           sql`exists (select 1 from feedback_autowriter_control c where c.id = 'default' and c.mode = 'live'
             and c.halted_at is null and not (c.disabled_tutors ? ${input.teacherId}))`,
