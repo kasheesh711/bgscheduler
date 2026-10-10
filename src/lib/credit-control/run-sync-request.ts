@@ -157,11 +157,16 @@ export async function runCreditControlSyncRequest(options: { triggerSource?: "cr
     return NextResponse.json(guard, { status: 202 });
   }
 
-  const signal = retired ? AbortSignal.timeout(760_000) : undefined;
+  const signal = retired ? AbortSignal.timeout(Math.max(1, 760_000 - (Date.now() - now.getTime()))) : undefined;
   const client = createWiseClient(retired ? { requestsPerSecond: 2, signal } : {});
   const result = await runCreditControlSync(db, client, instituteId, now, {
     syncRunId: guard.syncRunId,
-    ...(retired ? { signal, requireComplete: true } : {}),
+    ...(retired ? {
+      signal, requireComplete: true,
+      // Cancel bulk HTTP writes by 780s; leave 20s for failure records before the 800s host limit.
+      writeDb: getDb({ signal: AbortSignal.timeout(Math.max(1, 780_000 - (Date.now() - now.getTime()))) }),
+      persistenceSignal: AbortSignal.timeout(Math.max(1, 775_000 - (Date.now() - now.getTime()))),
+    } : {}),
     runMetadata: dailyOnly && options.triggerSource === "cron" ? { dailyDate: bangkokDailyWindow(now, "shared").day, dailySlot: bangkokDailyWindow(now, "shared").slot, dailyTrigger: "cron" } : {},
   });
 

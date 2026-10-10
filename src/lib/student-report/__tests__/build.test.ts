@@ -381,7 +381,7 @@ describe("buildParentReportPayload", () => {
     ]);
     expect(payload.meta).toMatchObject({
       snapshotFloorDateKey: "2026-04-19",
-      snapshotCeilingDateKey: "2027-02-13",
+      snapshotCeilingDateKey: "2026-09-16",
       floorWarning: true,
       ceilingWarning: true,
     });
