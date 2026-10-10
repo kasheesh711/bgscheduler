@@ -662,6 +662,23 @@ outcome is appended to `<night>/corrections.jsonl` (codes and ids only).
 Wise read of `correct`); pause the autowriter (`--pause`) and every correction is refused at its guards; delete
 `~/.bgscheduler-nightly/hmac.key` and no proposal verifies; `--apply` from anything but a clean `origin/main` is refused.
 
+### Direct owner recovery
+
+An explicit owner request can repair old posts after the automatic deadline. It does not authorize the nightly
+runner to ignore that deadline. The operator records the request, reviews each draft against primary lesson
+records, and pins its class and exact field hashes in an authorization that expires within 24 hours.
+
+`pgCorrectionStore` accepts `ownerRecovery` only for that replacement. Its deadline and daily automatic-work cap
+can then be exceeded for the selected class. The one-correction limit, first-shot record, lock, teacher and student
+identity, current-text check, person-save checks, billing baseline, single POST and verified read-back still apply.
+The post records the authorization. No HTTP route or scheduled runner supplies this option.
+
+For a blank held class, `heldRecoverySubmitStore` claims only the selected hold and judged field hash while the
+authorization is valid. `submitFeedbackGuarded` checks the fresh Wise blank, unchanged billing, credits, form,
+identity and attendance, then checks the stored result. `deadlineRecoverySessionId` can omit only the selected
+class's automatic deadline check. A missing charge, partial attendance or missing lesson record still needs a
+person's decision. Keep first-shot quality verdicts separate from the corrected current text.
+
 
 ## Mimi style guide review and activation
 

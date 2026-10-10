@@ -254,6 +254,47 @@ beforeEach(async () => {
     disabled_tutors = '[]'::jsonb, lease_token = NULL, lease_until = NULL`);
 });
 
+describe("owner-requested correction recovery", () => {
+  const recoveryStore = (plan: CorrectionPlan, expiresAt = new Date(Date.now() + 3_600_000)) => pgCorrectionStore(db, {
+    actor: OWNER, sleep: noSleep,
+    ownerRecovery: { wiseSessionId: plan.wiseSessionId, baseFieldsSha256: plan.base.fieldsSha256,
+      fieldsSha256: plan.fieldsSha256, authorizationRef: "synthetic direct owner request", expiresAt },
+  });
+
+  it("allows only the pinned replacement after the deadline and records the request, with the lock still required", async () => {
+    const seeded = await postedWithFirstShot(), plan = planFor(seeded);
+    await db.update(S).set({ deadlineAt: new Date(Date.now() - 86_400_000) }).where(eq(S.wiseSessionId, seeded.wiseSessionId));
+    await insertAgentCorrections(CORRECTION_DAILY_CAP);
+    expect((await store().preconditions(plan, new Date())).problems).toEqual(["deadline_near", "daily_cap"]);
+    const recovery = recoveryStore(plan);
+    expect((await recovery.preconditions(plan, new Date())).problems).toEqual([]);
+    await expect(recovery.recordPostStart(plan, { bodyHash: "test" })).rejects.toMatchObject({ reason: "lock:not_held" });
+    const lock = await lockOrThrow(recovery, plan);
+    const posted = await recovery.recordPostStart(plan, { bodyHash: "test" });
+    const [row] = await db.select().from(P).where(eq(P.id, posted.postId));
+    expect(row.pipeline).toMatchObject({ ownerRecovery: { authorizationRef: "synthetic direct owner request", fieldsSha256: plan.fieldsSha256 } });
+    expect(await lock.release()).toBe(true);
+  });
+
+  it("refuses a different replacement, an expired request, and a request lasting more than a day", async () => {
+    const plan = planFor(await postedWithFirstShot()), recovery = recoveryStore(plan);
+    const changed = { ...plan, fieldsSha256: fieldsHash(OTHER_TEXT) };
+    expect((await recovery.preconditions(changed, new Date())).problems).toContain("owner_recovery_not_authorized");
+    for (const expiresAt of [new Date(Date.now() - 1), new Date(Date.now() + 25 * 3_600_000)]) {
+      expect((await recoveryStore(plan, expiresAt).preconditions(plan, new Date())).problems).toContain("owner_recovery_not_authorized");
+    }
+  });
+
+  it("still refuses changed billing and a person's save", async () => {
+    const seeded = await postedWithFirstShot(), plan = planFor(seeded);
+    const changed = { ...plan, base: { ...plan.base, billing: { ...BILLING, creditsConsumed: 2 } } };
+    expect((await recoveryStore(changed).preconditions(changed, new Date())).problems).toContain("base_billing_mismatch");
+    await db.insert(FX).values({ wiseEventId: "recovery-human", wiseSessionId: seeded.wiseSessionId, eventAt: new Date(),
+      actorWiseUserId: TEACHER, actorRole: "TEACHER", actorKind: "tutor", countsAsFix: true, classifierVersion: 1 });
+    expect((await recoveryStore(plan).preconditions(plan, new Date())).problems).toContain("human_save_since_post");
+  });
+});
+
 describe("the correction lock", () => {
   it("leases the sweep for longer than the longest run, with five minutes to spare", () => {
     const longestRun = CORRECTION_LOCK_BUDGET_MS + CORRECTION_READ_BACK_DELAY_MS + CORRECTION_READ_RETRY_WINDOW_MS +

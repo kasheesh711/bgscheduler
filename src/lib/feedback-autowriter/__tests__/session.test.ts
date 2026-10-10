@@ -98,6 +98,17 @@ describe("evaluateSessionGates", () => {
     expect(evaluateSessionGates(parse(), late)).toEqual({ ok: false, reason: "deadline_passed_or_too_close" });
   });
 
+  it("a scoped deadline recovery keeps attendance and human-submission gates", () => {
+    const detail = parse(), late = { ...gateInput, now: new Date("2026-10-01T00:00:00.000Z"), deadlineRecoverySessionId: detail._id };
+    expect(evaluateSessionGates(detail, late)).toEqual({ ok: true });
+    expect(evaluateSessionGates(detail, { ...late, deadlineRecoverySessionId: "another-session" }))
+      .toEqual({ ok: false, reason: "deadline_passed_or_too_close" });
+    const participants = sessionDetail().participants.map(p => p.isTeacher ? p : { ...p, absolutePercentAttendance: 20 });
+    expect(evaluateSessionGates(parse({ participants }), late)).toEqual({ ok: false, reason: "attendance_20pct" });
+    expect(evaluateSessionGates(parse({ feedbackSubmissions: [autoBlankSubmission({ metadata: null, answers: answers(["x", "y", "z", ""]) })] }), late))
+      .toEqual({ ok: false, reason: "human_submission" });
+  });
+
   it("rejects low attendance and group sessions", () => {
     const participants = sessionDetail().participants.map((participant) =>
       participant.isTeacher ? participant : { ...participant, absolutePercentAttendance: 20 });
