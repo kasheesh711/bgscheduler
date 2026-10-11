@@ -246,6 +246,9 @@ export async function submitFeedbackGuarded(input: {
   const { ops, store, plan } = input;
   const sleep = input.sleep ?? defaultSleep;
   const abort = (reason: string): SubmitOutcome => ({ status: "aborted_precheck", reason });
+  if (input.gateInput.deadlineRecoverySessionId && input.gateInput.deadlineRecoverySessionId !== plan.sessionId) {
+    return abort("deadline_recovery_session_mismatch");
+  }
 
   if (plan.expected.kind !== "auto_blank") return abort(`expected_${plan.expected.kind}_not_supported`);
   if (plan.billing.source !== "auto_blank_reuse" || plan.billing.expectedConsumedDelta !== 0) return abort("billing_plan_not_reuse");

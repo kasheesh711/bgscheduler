@@ -127,9 +127,19 @@ const ownerFlagOpenSql = (wiseSessionId: string) => sql`exists (select 1 from fe
   where f.wise_session_id = ${wiseSessionId} and f.source = 'owner' and f.resolved_by_verdict_id is null)`;
 
 /** SQL: the session row still holds the base text, verified, its deadline more than the margin away. */
-const sessionStillBaseSql = (plan: CorrectionPlan) => sql`exists (select 1 from feedback_autowriter_sessions s
+const sessionStillBaseSql = (plan: CorrectionPlan, recovery: SQL = sql`false`) => sql`exists (select 1 from feedback_autowriter_sessions s
   where s.wise_session_id = ${plan.wiseSessionId} and s.state = 'verified' and s.fields_sha256 = ${plan.base.fieldsSha256}
-    and s.deadline_at > now() + (${AUTOWRITER_DEADLINE_MARGIN_MS} * interval '1 millisecond'))`;
+    and s.deadline_at is not null
+    and (s.deadline_at > now() + (${AUTOWRITER_DEADLINE_MARGIN_MS} * interval '1 millisecond') or ${recovery}))`;
+
+/** A direct owner request for one reviewed replacement; never supplied by the nightly runner or an HTTP route. */
+export interface OwnerCorrectionRecovery {
+  wiseSessionId: string;
+  baseFieldsSha256: string;
+  fieldsSha256: string;
+  authorizationRef: string;
+  expiresAt: Date;
+}
 
 /** Several yes/no facts in one round trip (read off the control row, which always exists). */
 async function readBooleans<K extends string>(db: Database, columns: Record<K, SQL>): Promise<Record<K, boolean>> {
@@ -149,10 +159,19 @@ export function pgCorrectionStore(db: Database, opts: {
   actor: string;
   now?: () => Date;
   sleep?: (ms: number) => Promise<void>;
+  ownerRecovery?: OwnerCorrectionRecovery;
 }): CorrectionStore {
   const { actor } = opts;
   const now = opts.now ?? (() => new Date());
   const sleep = opts.sleep ?? defaultSleep;
+  const recovery = opts.ownerRecovery;
+  const authorizedRecovery = (plan: CorrectionPlan, at: Date): boolean => Boolean(recovery &&
+    recovery.authorizationRef.trim() && recovery.wiseSessionId === plan.wiseSessionId &&
+    /^[a-f0-9]{64}$/u.test(recovery.baseFieldsSha256) && /^[a-f0-9]{64}$/u.test(recovery.fieldsSha256) &&
+    recovery.baseFieldsSha256 === plan.base.fieldsSha256 && recovery.fieldsSha256 === plan.fieldsSha256 &&
+    recovery.expiresAt.getTime() > at.getTime() && recovery.expiresAt.getTime() <= at.getTime() + 24 * 60 * 60_000);
+  const recoverySql = (plan: CorrectionPlan): SQL => authorizedRecovery(plan, now())
+    ? sql`now() < ${recovery!.expiresAt.toISOString()}::timestamptz` : sql`false`;
   let held: { token: string; reason: string; wiseSessionId: string; teacherId: string } | null = null;
 
   /** SQL: the lock is still ours — live, halted with exactly our reason, our lease not expired. */
@@ -206,13 +225,15 @@ export function pgCorrectionStore(db: Database, opts: {
       const stuck = await stuckPostInFlight(db, AUTOWRITER_STALE_POSTING_MS);
 
       const problems: string[] = [];
+      const ownerRecovery = authorizedRecovery(plan, now);
+      if (recovery && !ownerRecovery) problems.push("owner_recovery_not_authorized");
       if (!row) {
         problems.push("row_missing");
       } else {
         if (row.state !== "verified" || row.fieldsSha256 !== plan.base.fieldsSha256) problems.push("row_changed");
         if (row.wiseClassId !== plan.wiseClassId || row.wiseTeacherUserId !== plan.wiseTeacherUserId) problems.push("row_mismatch");
         if (!row.deadlineAt) problems.push("deadline_unknown");
-        else if (row.deadlineAt.getTime() <= now.getTime() + AUTOWRITER_DEADLINE_MARGIN_MS) problems.push("deadline_near");
+        else if (!ownerRecovery && row.deadlineAt.getTime() <= now.getTime() + AUTOWRITER_DEADLINE_MARGIN_MS) problems.push("deadline_near");
         if (row.recordsRepost) problems.push("already_corrected");
       }
       if (!firstShot || firstShot.actorKind !== "autowriter" || firstShot.outcome !== "verified") {
@@ -235,7 +256,7 @@ export function pgCorrectionStore(db: Database, opts: {
       // An owner verdict (approve or needs fix) does not block: the owner asked for flagged posts to be corrected too.
       if (facts.humanSave) problems.push("human_save_since_post");
       if (facts.ownerFlagOpen) problems.push("owner_flag_open");
-      if (facts.dailyCapReached) problems.push("daily_cap");
+      if (facts.dailyCapReached && !ownerRecovery) problems.push("daily_cap");
       if (stuck) problems.push("app_post_stuck");
       return { problems: [...new Set(problems)], firstShotPostedAt: firstShot?.postStartedAt ?? null };
     },
@@ -294,6 +315,7 @@ export function pgCorrectionStore(db: Database, opts: {
     },
 
     async recordPostStart(plan, input) {
+      if (recovery && !authorizedRecovery(plan, now())) throw new CorrectionRefusedError("owner_recovery_not_authorized");
       const current = held;
       if (!current || current.wiseSessionId !== plan.wiseSessionId) throw new CorrectionRefusedError("lock:not_held");
       const sid = plan.wiseSessionId;
@@ -307,7 +329,8 @@ export function pgCorrectionStore(db: Database, opts: {
         ...(input.studentWiseUserId ? { studentWiseUserId: input.studentWiseUserId } : {}),
         ...(input.baselineCredits ? { baselineCredits: input.baselineCredits } : {}),
       };
-      const pipeline = { ...plan.pipeline, rootCauseRef: plan.rootCauseRef };
+      const pipeline = { ...plan.pipeline, rootCauseRef: plan.rootCauseRef,
+        ...(recovery ? { ownerRecovery: { ...recovery, expiresAt: recovery.expiresAt.toISOString() } } : {}) };
       // The claim: inserted only while the lock is still ours (an owner pause or resume, a mode change or the tutor
       // switched off since stop it), the session row still holds the base text, nothing else is in flight, and the
       // daily cap is not reached. Never touches the session row (its state, post_started_at, body_hash and
@@ -322,10 +345,10 @@ export function pgCorrectionStore(db: Database, opts: {
           ${JSON.stringify(verification)}::jsonb, 'live', ${agentCorrectionDedupeKey(sid)}
         where ${lockHeldSql(current)}
           and not ${tutorDisabledSql(plan.wiseTeacherUserId)}
-          and ${sessionStillBaseSql(plan)}
+          and ${sessionStillBaseSql(plan, recoverySql(plan))}
           and not ${ownerFlagOpenSql(sid)}
           and not ${postInFlightSql}
-          and not ${dailyCapReachedSql}
+          and (not ${dailyCapReachedSql} or ${recoverySql(plan)})
         returning id, post_started_at`);
       const row = result.rows[0] as { id?: unknown; post_started_at?: unknown } | undefined;
       if (row && typeof row.id === "string") {
@@ -337,7 +360,7 @@ export function pgCorrectionStore(db: Database, opts: {
       const why = await readBooleans(db, {
         lockHeld: lockHeldSql(current),
         tutorDisabled: tutorDisabledSql(plan.wiseTeacherUserId),
-        rowSame: sessionStillBaseSql(plan),
+        rowSame: sessionStillBaseSql(plan, recoverySql(plan)),
         ownerFlagOpen: ownerFlagOpenSql(sid),
         inFlight: postInFlightSql,
         dailyCap: dailyCapReachedSql,
