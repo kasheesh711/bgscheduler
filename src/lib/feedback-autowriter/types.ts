@@ -87,6 +87,8 @@ export interface GateInput {
   allowlist: ReadonlySet<string>;
   /** False for the transcript second pass (it does not write from the summary). Default true. */
   requireSummary?: boolean;
+  /** Direct owner recovery only: the submitter checks a pinned, expiring authorization before passing this id. */
+  deadlineRecoverySessionId?: string;
 }
 
 export type GateResult = { ok: true } | { ok: false; reason: string };
