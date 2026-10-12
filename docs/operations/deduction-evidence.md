@@ -6,7 +6,7 @@ Apply migration `0115_deduction_evidence.sql` before the code reaches production
 
 Install `skills/begifted-deduction-evidence` under the operator's Codex skills directory. Its format check must pass. Keep the Kevin daily-feedback skill and automation unchanged.
 
-The two Mac heartbeat jobs are **Prepare Wise deduction evidence** at 23:30 and **Capture Wise deduction evidence** at 00:00 Bangkok. Keep both paused until a real Wise multi-view test and image upload/read-back pass. The report server cron is `0 1 * * *` UTC, which is 08:00 Bangkok. It runs in production after deployment.
+The two Mac heartbeat jobs are **Prepare Wise deduction evidence** at 23:30 and **Capture Wise deduction evidence** at 00:00 Bangkok. Keep both paused until a real Wise multi-view test and image upload/read-back pass. The report server cron is `0 1 * * *` UTC, which is 08:00 Bangkok. Keep its platform schedule absent until the live pilot passes. The first release makes the report available for a deliberate manual test. Add its platform schedule and change the registry row to `manualOnly: false` only after the live checks pass.
 
 ## Pilot and release
 

@@ -7,7 +7,7 @@ import type { CaptureBinding } from "@/lib/post-class-feedback/capture-model";
 
 export function CaptureQueue({ canUpload, initialDate, sessionId }: { canUpload: boolean; initialDate: string; sessionId: string | null }) {
   const [date, setDate] = useState(initialDate);
-  const [classes, setClasses] = useState<Array<{ id: string; startAt: string; endAt: string; sourceStatus: string; binding: CaptureBinding }>>([]);
+  const [classes, setClasses] = useState<Array<{ id: string; startAt: string; endAt: string; sourceStatus: string; contentStatus: string; wiseUrl: string; binding: CaptureBinding }>>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(!sessionId);
   const [complete, setComplete] = useState(false);
@@ -26,12 +26,12 @@ export function CaptureQueue({ canUpload, initialDate, sessionId }: { canUpload:
     {sessionId ? <CaptureEvidencePanel sessionId={sessionId} canUpload={canUpload} /> : <>
       <label htmlFor="capture-date">Deadline date (Bangkok)</label><Input id="capture-date" type="date" value={date} onChange={event => { setLoading(true); setError(null); setDate(event.target.value); }} />
       {loading && <p>Loading due classes…</p>}{error && <p role="alert">{error}</p>}
-      {!loading && !error && <p>{classes.length} eligible classes have this deadline date.</p>}
+      {!loading && !error && <p>{classes.length} eligible classes have this deadline date. The queue includes classes with feedback. Stored feedback: {classes.filter(row => row.contentStatus === "substantive").length} substantive; {classes.filter(row => row.contentStatus !== "substantive").length} other states.</p>}
       {!loading && !error && !complete && <p role="alert">Incomplete source coverage. Check the listed classes, but do not treat this queue as a complete Wise check.</p>}
       {classes.map(row => <section key={row.id} className="space-y-3 rounded border p-4">
         <h2 className="font-medium">{row.binding.tutorName} — {row.binding.students.join(", ")} — {row.binding.subject}</h2>
         <p className="text-sm">Wise session: {row.binding.wiseSessionId}. Start: {new Date(row.startAt).toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })}. End: {new Date(row.endAt).toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })}. Source: {row.sourceStatus}.</p>
-        <a className="text-sm underline" href="https://learn.begiftededucation.com/get-started" target="_blank" rel="noreferrer">Open Wise</a>
+        <a className="text-sm underline" href={row.wiseUrl} target="_blank" rel="noreferrer">Open this class in Wise</a>
         <CaptureEvidencePanel sessionId={row.id} canUpload={canUpload} />
       </section>)}
     </>}

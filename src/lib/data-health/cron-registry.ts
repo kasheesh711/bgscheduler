@@ -68,8 +68,8 @@ export interface CronJobDefinition {
 
 export const CRON_JOBS = [
   { key: "post_class_deduction_report", label: "Daily Deduction Report", feature: "Class Feedback",
-    path: "/api/internal/post-class-feedback/deduction-report", schedule: "0 1 * * *", cadenceLabel: "Daily 08:00 Bangkok",
-    cadenceMinutes: 1440, expectedBangkokMinute: 480, lateAfterMinutes: 60, maxDurationSeconds: 300, manualOnly: false,
+    path: "/api/internal/post-class-feedback/deduction-report", schedule: null, cadenceLabel: "Daily 08:00 Bangkok",
+    cadenceMinutes: 1440, expectedBangkokMinute: 480, lateAfterMinutes: 60, maxDurationSeconds: 300, manualOnly: true,
     dangerous: true, confirmationLabel: "Emails new deduction candidates to the three report recipients.", routeMethod: "GET" },
   { key: "feedback_atom", label: "Atom Lesson Evidence", feature: "Class Feedback",
     path: "/api/internal/feedback-autowriter/atom", schedule: "6,21,36,51 * * * *", cadenceLabel: "Every 15 min",
@@ -96,7 +96,7 @@ export const CRON_JOBS = [
     dangerous: true, confirmationLabel: "Rechecks observations and retries enabled Calendar and email delivery.", routeMethod: "GET" },
   { key: "tutor_sit_ins_digest", label: "Tutor Sit-in Digest", feature: "Tutor Sit-ins",
     path: "/api/internal/tutor-sit-ins/digest", schedule: "0 1 * * *", cadenceLabel: "Daily 08:00 Bangkok",
-    cadenceMinutes: 1440, expectedBangkokMinute: 480, lateAfterMinutes: 60, maxDurationSeconds: 300, manualOnly: false,
+    cadenceMinutes: 1440, expectedBangkokMinute: 480, lateAfterMinutes: 60, maxDurationSeconds: 300, manualOnly: true,
     dangerous: true, confirmationLabel: "Queues heads' daily observations digest and retries enabled delivery.", routeMethod: "GET" },
   { key: "progress_tests_processing", label: "Progress Test Processing", feature: "Progress Tests",
     path: "/api/internal/progress-tests/process", schedule: "* * * * *", cadenceLabel: transferText.moved,
