@@ -417,18 +417,21 @@ export function parseAuditResult(
 
   // 5. Owner rule (5 Oct 2026): homework the feedback leaves out is not an error (not every class has homework).
   // Invented or wrong homework stays an issue (M03); only the omission goes.
-  const kept = result.omissions.filter((omission) => omission.what !== "homework_set_not_reported");
-  postCheck.droppedHomeworkOmissions = result.omissions.length - kept.length;
-  result.omissions = kept;
+  const dropped = result.omissions.filter((omission) => omission.what === "homework_set_not_reported");
+  postCheck.droppedHomeworkOmissions = dropped.length;
+  result.omissions = result.omissions.filter((omission) => omission.what !== "homework_set_not_reported");
 
-  // 6. The verdict is at least the worst issue or omission — and, once a homework omission was dropped, exactly that
-  // (the model's verdict may rest on the dropped omission).
+  // 6. The verdict is at least the worst issue or omission. It is lowered only when a dropped homework omission was at
+  // least as severe as the declared verdict (the verdict may rest on it), and then only to the worst remaining item.
   if (result.verdict !== "insufficient_evidence") {
     let worst: FailureSeverity | null = null;
     for (const issue of result.issues) worst = worst ? maxSeverity(worst, issue.severity) : issue.severity;
     for (const omission of result.omissions) worst = worst ? maxSeverity(worst, omission.severity) : omission.severity;
     const declared: FailureSeverity | null = result.verdict === "accurate" ? null : result.verdict;
-    if (postCheck.droppedHomeworkOmissions > 0) {
+    let droppedWorst: FailureSeverity | null = null;
+    for (const omission of dropped) droppedWorst = droppedWorst ? maxSeverity(droppedWorst, omission.severity) : omission.severity;
+    if (declared && droppedWorst && severityRank(droppedWorst) >= severityRank(declared) &&
+      (worst === null || severityRank(worst) < severityRank(declared))) {
       result.verdict = worst ?? "accurate";
     } else if (worst && (declared === null || severityRank(worst) > severityRank(declared))) {
       result.verdict = worst;

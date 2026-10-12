@@ -66,7 +66,8 @@ counts are refreshed by one weekly PR. A mode first seen less than twice in 14 n
 - **Default severity:** major. Owner precedent P2.
 - **Definition:** The feedback states homework, a task or a due date that the tutor did not clearly set for the student
   to do after this lesson: work only described as remaining or unfinished, an optional suggestion, the summary's own
-  "Next steps" line, or an invented due date. Critical only when it is part of a wrong-person error (M01).
+  "Next steps" line, or an invented due date. Critical only when it is part of a wrong-person error (M01). On a post
+  written from the Wise summary, homework the summary itself states is not M03 (owner rule, 7 Oct 2026).
 - **Synthetic example:** The tutor says "we can finish the last three questions next time"; the feedback says the
   homework is to complete the last three questions by Friday.
 - **Detection:** the Opus audit (its `homework` section: did the tutor clearly set homework, with a quote). The
@@ -86,7 +87,8 @@ counts are refreshed by one weekly PR. A mode first seen less than twice in 14 n
 
 - **Default severity:** major.
 - **Definition:** A specific detail that comes from a real exchange in the lesson but is wrong: a wrong number, word,
-  page, question or text, usually from a mis-heard transcript or a summary's mistake.
+  page, question or text, usually from a mis-heard transcript or a summary's mistake. On a post written from the Wise
+  summary, a detail the summary itself states is not M05 (owner rule, 7 Oct 2026).
 - **Synthetic example:** The class worked on exercise 4B; the feedback says exercise 14B.
 - **Detection:** the Opus audit (claims marked `contradicted`).
 - **Status:** open. **Counts (14 nights):** — . **Root cause:** — . **Fix PRs:** — .
@@ -121,12 +123,13 @@ counts are refreshed by one weekly PR. A mode first seen less than twice in 14 n
 - **Detection:** the Opus audit.
 - **Status:** open. **Counts (14 nights):** — . **Root cause:** — . **Fix PRs:** — .
 
-## M09 material_omission — Main topic or set homework left out
+## M09 material_omission — Main topic left out
 
 - **Default severity:** major.
-- **Definition:** The lesson's main topic is missing from the feedback, or homework the tutor clearly set is left out.
+- **Definition:** The lesson's main topic is missing from the feedback. Homework the feedback leaves out is not an
+  error (owner rule, 5 Oct 2026: not every class has homework).
 - **Synthetic example:** Most of the lesson was essay planning; the feedback only mentions a five-minute vocabulary
-  warm-up. Or: the tutor clearly set two practice pages for Monday and the homework field is empty.
+  warm-up.
 - **Detection:** the Opus audit (`omissions`).
 - **Status:** open. **Counts (14 nights):** — . **Root cause:** — . **Fix PRs:** — .
 

@@ -205,6 +205,18 @@ describe("parseAuditResult", () => {
       omissions: [{ what: "homework_set_not_reported", detail: "Other task set.", evidence: [], severity: "major" }],
     }), ctx);
     expect(out.ok && out.result.verdict).toBe("major");
+    expect(out.ok && out.result.postCheck.verdictRaised).toBe(true);
+  });
+
+  it("lowers a verdict only when a dropped homework omission was at least as severe as it", () => {
+    const cosmeticHomework = { what: "homework_set_not_reported" as const, detail: "Worksheet set.", evidence: [], severity: "cosmetic" as const };
+    // A major the model declared for some other reason stays major.
+    const kept = parseAuditResult(baseResult({ verdict: "major", omissions: [cosmeticHomework] }), ctx);
+    expect(kept.ok && kept.result.verdict).toBe("major");
+    // Insufficient evidence is never touched; the omission still goes.
+    const insufficient = parseAuditResult(baseResult({ verdict: "insufficient_evidence", omissions: [cosmeticHomework] }), { ...ctx, grade: "secondary_only" });
+    expect(insufficient.ok && insufficient.result.verdict).toBe("insufficient_evidence");
+    expect(insufficient.ok && insufficient.result.omissions).toEqual([]);
   });
 
   it("renumbers duplicate issue ids instead of failing", () => {
