@@ -494,6 +494,8 @@ export async function classSonioxThaiShares(db: Database, input: { wiseClassId: 
     eq(S.wiseClassId, input.wiseClassId),
     sql`${S.wiseSessionId} <> ${input.excludeSessionId}`,
     gte(S.scheduledEndAt, input.since),
+    // A transcript too short to write from is no evidence of how the class talks.
+    sql`coalesce(${S.reason}, '') not in ('recording_too_short', 'transcript_too_short')`,
     sql`${S.metadata} -> 'transcript' ->> 'thaiShare' is not null`,
     sql`coalesce(${S.metadata} -> 'transcript' ->> 'source', 'soniox') = 'soniox'`,
   ));
@@ -589,7 +591,7 @@ export async function flagNoRecording(db: Database, endedBefore: Date, disabledT
   }).where(and(
     inArray(S.state, ["awaiting_recording", "transcribing"]),
     lt(S.scheduledEndAt, endedBefore),
-    sql`coalesce(${S.reason}, '') not in ('recording_too_short', 'zoom_transcript_pending', 'wise_read_failed') and coalesce(${S.reason}, '') not like 'infra:%'`,
+    sql`coalesce(${S.reason}, '') not in ('recording_too_short', 'zoom_transcript_pending', 'zoom_draft_held', 'wise_read_failed') and coalesce(${S.reason}, '') not like 'infra:%'`,
     sql`not (${S.state} = 'awaiting_recording' and coalesce(${S.metadata} ->> 'handover', '') = 'transcript_first')`,
     disabledTutors.length > 0
       ? or(isNull(S.wiseTeacherUserId), notInArray(S.wiseTeacherUserId, [...disabledTutors]))
@@ -697,7 +699,7 @@ export async function retryHeldSession(db: Database, wiseSessionId: string, inpu
     metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'genericErrors' - 'writerErrors' - 'judgeErrors' - 'judgeUnreached'
       - 'judgeUnreachedCause' - 'judgeFailingSince' - 'recordingShortSeenAt' - 'judge'
       - 'draftEvidence' - 'pipeline' - 'transcript' - 'handover' - 'summaryAtHandover' - 'summaryFallback' - 'sonioxFailure'
-      - 'writerFailure' - 'sonioxRetainUntil' - 'triagedAt' - 'summaryOnlyHeld' - 'noShow')
+      - 'writerFailure' - 'sonioxRetainUntil' - 'triagedAt' - 'summaryOnlyHeld' - 'noShow' - 'zoomWaitSince')
       || ${JSON.stringify({ retriedBy: input.actor })}::jsonb
       || jsonb_build_object('retriedAt', now()::text, 'retriedFrom', ${S.state}::text)`,
     alertsSent: sql`${S.alertsSent} - 'held' - 'expired'`,

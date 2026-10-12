@@ -397,7 +397,7 @@ describe("English lessons from Zoom's captions", () => {
     if (options.extra) cues.push(`${at(3_000_000)} --> ${at(3_010_000)}\n${options.extra}: Hello, can you hear us?`);
     return `WEBVTT\n\n${cues.join("\n\n")}\n`;
   };
-  const base = { recordingSeconds: 3_600, scheduledMinutes: 60, teacherName: TUTOR, alsoTeacher: [] as string[], studentNames: [STUDENT] };
+  const base = { scheduledMinutes: 60, teacherName: TUTOR, alsoTeacher: [] as string[], studentNames: [STUDENT] };
 
   it("checks the summary and the class's recent Soniox transcripts before the captions are read", () => {
     expect(zoomEnglishPrecheck({ summaryText: "Fractions practice.", classThaiShares: [0, 0.02] })).toBeNull();
@@ -418,7 +418,7 @@ describe("English lessons from Zoom's captions", () => {
     expect(result.evidence.speakers.method).toBe("zoom_alignment");
     expect(result.evidence.speakerLabels).toBe("verified");
     expect(result.evidence.tooShort).toBeNull();
-    expect(result.evidence.meta).toMatchObject({ source: "zoom", speakerMethod: "zoom_alignment", audioMinutes: 60, thaiShare: 0 });
+    expect(result.evidence.meta).toMatchObject({ source: "zoom", speakerMethod: "zoom_alignment", audioMinutes: 49.92, thaiShare: 0 });
     expect(result.evidence.rendered).toContain("[00:00] TUTOR: Today we add fractions with unlike denominators and simplify.");
     expect(result.evidence.rendered).toContain("[00:31] STUDENT: I got three quarters with the common denominator.");
     expect(result.evidence.rendered).not.toContain(TUTOR);
@@ -429,6 +429,12 @@ describe("English lessons from Zoom's captions", () => {
     expect(thai).toMatchObject({ ok: false, reason: "zoom_thai" });
     // A parent's device, a second student: not the tutor's or the student's name.
     expect(zoomEnglishEvidence({ ...base, vtt: captions({ extra: "Mom iPad" }) })).toMatchObject({ ok: false, reason: "unnamed_speaker" });
+    // A caption Zoom could not put a name to: nobody can say who spoke it.
+    const nameless = `${captions()}\n${at(3_000_000)} --> ${at(3_010_000)}\nCan you hear us?\n`;
+    expect(zoomEnglishEvidence({ ...base, vtt: nameless })).toMatchObject({ ok: false, reason: "unnamed_speaker" });
+    // … and its words still count toward the language.
+    const namelessThai = `${captions({ minutes: 1 })}\n${at(70_000)} --> ${at(3_000_000)}\n${"สวัสดีครับ ".repeat(40)}\n`;
+    expect(zoomEnglishEvidence({ ...base, vtt: namelessThai })).toMatchObject({ ok: false, reason: "zoom_thai" });
     // Wise gives no teacher name: the tutor's cues cannot be told from anyone's.
     expect(zoomEnglishEvidence({ ...base, teacherName: null, vtt: captions() })).toMatchObject({ ok: false, reason: "unnamed_speaker" });
     // The student is never heard.
@@ -437,13 +443,13 @@ describe("English lessons from Zoom's captions", () => {
     expect(zoomEnglishEvidence({ ...base, vtt: captions({ tutorLine: "Good.", studentLine: "s".repeat(200) }) }))
       .toMatchObject({ ok: false, reason: "speakers_unclear" });
     expect(zoomEnglishEvidence({ ...base, vtt: "WEBVTT\n" })).toMatchObject({ ok: false, reason: "speakers_unclear" });
-    expect(zoomEnglishEvidence({ ...base, recordingSeconds: 1_800, vtt: captions() })).toMatchObject({ ok: false, reason: "recording_too_short" });
-    expect(zoomEnglishEvidence({ ...base, vtt: captions({ minutes: 5 }), recordingSeconds: 3_600 })).toMatchObject({ ok: false, reason: "transcript_too_short" });
+    const sparse = `WEBVTT\n\n${at(0)} --> ${at(5_000)}\n${TUTOR}: Hello there, ready?\n\n${at(3_000_000)} --> ${at(3_005_000)}\n${STUDENT}: Bye.\n`;
+    expect(zoomEnglishEvidence({ ...base, vtt: sparse })).toMatchObject({ ok: false, reason: "transcript_too_short" });
   });
 
-  it("without Wise's recording length, needs captions running to 70% of the class", () => {
-    expect(zoomEnglishEvidence({ ...base, recordingSeconds: null, vtt: captions({ minutes: 45 }) })).toMatchObject({ ok: true });
-    expect(zoomEnglishEvidence({ ...base, recordingSeconds: null, vtt: captions({ minutes: 30 }) })).toMatchObject({ ok: false, reason: "recording_too_short" });
+  it("needs captions running to 70% of the class (what was captioned, not the recording's length)", () => {
+    expect(zoomEnglishEvidence({ ...base, vtt: captions({ minutes: 45 }) })).toMatchObject({ ok: true });
+    expect(zoomEnglishEvidence({ ...base, vtt: captions({ minutes: 30 }) })).toMatchObject({ ok: false, reason: "recording_too_short" });
   });
 
   it("counts the tutor's other names and the student's guest name as theirs", () => {

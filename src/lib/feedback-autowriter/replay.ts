@@ -581,7 +581,7 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
 
   // English lessons from Zoom's captions: what production would decide, and the draft it would write from them.
   if (deps.passes?.zoomDraft && recording.ok) {
-    record.zoom = await zoomPass(deps, record, { detail, summaryText: summary?.text ?? null, recordingSeconds: recording.durationSeconds,
+    record.zoom = await zoomPass(deps, record, { detail, summaryText: summary?.text ?? null,
       scheduledMinutes: window.minutes, studentNames: [student.name, ...names.studentAliases], session, tutor, priorFeedback, names,
       classDetails, displayName, sonioxEvidence });
   }
@@ -621,7 +621,6 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
 async function zoomPass(deps: ReplayDeps, record: ReplayRecord, input: {
   detail: AutowriterSessionDetail;
   summaryText: string | null;
-  recordingSeconds: number | null;
   scheduledMinutes: number;
   studentNames: string[];
   session: Omit<Parameters<typeof runWritingPipeline>[0]["session"], "summary">;
@@ -639,7 +638,7 @@ async function zoomPass(deps: ReplayDeps, record: ReplayRecord, input: {
     return { route: `soniox:${vtt === null ? "zoom_transcript_missing" : "speakers_unclear"}`, captionsThaiShare: null, draft: null, againstSoniox: null };
   }
   const zoom = zoomEnglishEvidence({
-    vtt, recordingSeconds: input.recordingSeconds, scheduledMinutes: input.scheduledMinutes, teacherName,
+    vtt, scheduledMinutes: input.scheduledMinutes, teacherName,
     alsoTeacher: tutorSelfNames(input.detail), studentNames: input.studentNames,
   });
   const declined = zoomEnglishPrecheck({ summaryText: input.summaryText, classThaiShares: [0] }) ?? (zoom.ok ? null : zoom.reason);

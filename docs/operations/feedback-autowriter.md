@@ -273,12 +273,12 @@ nothing. Each check below sends the class to Soniox exactly as before:
 3. Zoom's captions are not published 20 minutes after the first look (`zoom_transcript_missing`). The class waits as
    "Transcribing" with `zoom_transcript_pending` and no Soniox job. That wait counts toward the usual 20-minute wait
    for Zoom's names, so Soniox does not wait a second time.
-4. The captions are 3% Thai or more (`zoom_thai`), or they name anyone besides the tutor (any of their names and
-   `selfNames`) and the student (Wise name or guest stand-in) (`unnamed_speaker`).
+4. The captions are 3% Thai or more (`zoom_thai`). Or a caption has no name, or names anyone besides the tutor
+   (any of their names and `selfNames`) and the student (Wise name or guest stand-in) (`unnamed_speaker`).
 5. Zoom's labels are not trusted by the Soniox alignment rules (`speakers_unclear`: tutor ≥ 50% of the talk, or
    ≥ 20% when only the two are named, student ≥ 5%).
-6. The recording is shorter than 70% of the class (Wise's length, else the last caption's end:
-   `recording_too_short`), or the captions are under 800 characters (`transcript_too_short`).
+6. The last caption ends before 70% of the class (`recording_too_short`; Wise's recording length is checked before,
+   as today), or the captions are under 800 characters (`transcript_too_short`).
 
 A class that passes every check is written and judged from the captions like any transcript, with the same
 writer, judges, Atom evidence and POST guards, and with `evidence = transcript`. A draft from the captions that the

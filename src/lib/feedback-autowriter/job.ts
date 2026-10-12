@@ -1062,7 +1062,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
   // is written from Zoom's own captions; anything less goes to Soniox below and stays there (`zoomEnglish.route`).
   const studentNames = [student.name, ...(student.joinedAsGuest ? [student.joinedAsGuest] : [])];
   const zoom = deps.zoomEnglish && !row.sonioxTranscriptionId && recording.ok && !zoomEnglishDeclined(row)
-    ? await zoomEnglishRoute(deps, { row, detail, recordingSeconds: recording.durationSeconds, scheduledMinutes, studentNames })
+    ? await zoomEnglishRoute(deps, { row, detail, scheduledMinutes, studentNames })
     : null;
   if (zoom?.kind === "wait") {
     await release({
@@ -1313,7 +1313,6 @@ function zoomEnglishDeclined(row: AutowriterSessionRow): boolean {
 async function zoomEnglishRoute(deps: AutowriterDeps, input: {
   row: AutowriterSessionRow;
   detail: AutowriterSessionDetail;
-  recordingSeconds: number | null;
   scheduledMinutes: number;
   studentNames: readonly string[];
 }): Promise<{ kind: "write"; evidence: TranscriptEvidence } | { kind: "wait"; since: string } | { kind: "soniox"; reason: string; thaiShare?: number }> {
@@ -1337,7 +1336,7 @@ async function zoomEnglishRoute(deps: AutowriterDeps, input: {
       : { kind: "soniox", reason: "zoom_transcript_missing" };
   }
   const zoom = zoomEnglishEvidence({
-    vtt, recordingSeconds: input.recordingSeconds, scheduledMinutes: input.scheduledMinutes,
+    vtt, scheduledMinutes: input.scheduledMinutes,
     teacherName, alsoTeacher: tutorSelfNames(input.detail), studentNames: input.studentNames,
   });
   return zoom.ok ? { kind: "write", evidence: zoom.evidence } : { kind: "soniox", reason: zoom.reason, thaiShare: zoom.thaiShare };
