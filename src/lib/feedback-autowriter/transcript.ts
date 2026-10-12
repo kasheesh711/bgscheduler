@@ -1,4 +1,8 @@
-import { AUTOWRITER_MIN_TRANSCRIPT_CHARACTERS, AUTOWRITER_ZOOM_ENGLISH_MAX_THAI_SHARE } from "./config";
+import {
+  AUTOWRITER_MIN_TRANSCRIPT_CHARACTERS,
+  AUTOWRITER_ZOOM_ENGLISH_MAX_THAI_SHARE,
+  AUTOWRITER_ZOOM_ENGLISH_MIN_CAPTION_COVERAGE,
+} from "./config";
 import { SONIOX_TERMS, describeClass, parseStudentName, type SpeakerLabels } from "./prompt";
 import { recordingTooShort, type AutowriterSessionDetail } from "./session";
 import type { SonioxClient, SonioxToken } from "./soniox";
@@ -399,7 +403,7 @@ function evidenceFromSegments(input: {
  */
 export type ZoomEnglishDecline =
   | "summary_thai" | "no_class_history" | "class_thai"
-  | "zoom_thai" | "speakers_unclear" | "unnamed_speaker" | "recording_too_short" | "transcript_too_short";
+  | "zoom_thai" | "speakers_unclear" | "unnamed_speaker" | "zoom_captions_partial" | "recording_too_short" | "transcript_too_short";
 
 /**
  * Before Zoom's captions are read (nothing to wait for when this already says no): Wise's summary is not Thai, and
@@ -417,13 +421,17 @@ export function zoomEnglishPrecheck(input: { summaryText: string | null; classTh
  * Zoom's captions as the lesson's transcript: English (`AUTOWRITER_ZOOM_ENGLISH_MAX_THAI_SHARE`), every cue under
  * the tutor's or the student's name — the same names as the Soniox alignment (`alsoTeacher` = the tutor's other names
  * and `selfNames`, `studentNames` = the student's Wise name and guest stand-in); a cue without a name is a speaker
- * nobody can place — Zoom's labels trusted by the same rules (`assignSpeakerRoles`: tutor ≥ 50% of the talk, or
- * ≥ 20% when only the two are named, student ≥ 5%), and the same coverage checks on what was captioned: the last
- * caption ends at ≥ 70% of the class (Wise's recording length was checked before), and the minimum transcript
- * length. Anything else goes to Soniox, never to the summary.
+ * nobody can place, and a name on both lists is nobody's — Zoom's labels trusted by the alignment rules
+ * (`assignSpeakerRoles`) and, stricter than the Soniox route, the tutor carrying ≥ 50% of the talk: Soniox's
+ * route may trust a student who out-talks the tutor because Soniox's own speakers are checked against Zoom's cues,
+ * and here Zoom's cues are the speakers, so there is nothing independent to check. Then the coverage checks on what
+ * was captioned: the last caption ends at ≥ 90% of Wise's recording (when Wise gives its length) and at ≥ 70% of
+ * the class, and the minimum transcript length. Anything else goes to Soniox, never to the summary.
  */
 export function zoomEnglishEvidence(input: {
   vtt: string;
+  /** Wise's length of the one recording part; null when Wise gave none. */
+  recordingSeconds: number | null;
   scheduledMinutes: number;
   teacherName: string | null;
   alsoTeacher: readonly string[];
@@ -433,9 +441,13 @@ export function zoomEnglishEvidence(input: {
   const text = lines.map((line) => line.text).join(" ");
   const share = Math.round(thaiShare(text) * 100) / 100;
   if (thaiShare(text) >= AUTOWRITER_ZOOM_ENGLISH_MAX_THAI_SHARE) return { ok: false, reason: "zoom_thai", thaiShare: share };
-  const known = new Set([input.teacherName ?? "", ...input.alsoTeacher, ...input.studentNames].filter((name) => name.trim() !== "").map(normalizeName));
+  const names = (list: readonly (string | null)[]) => new Set(list.filter((name): name is string => Boolean(name?.trim())).map(normalizeName));
+  const tutorNames = names([input.teacherName, ...input.alsoTeacher]);
+  const studentNames = names(input.studentNames);
+  // A name on both lists would be the student in one count and the tutor in the other: trust neither.
+  if ([...studentNames].some((name) => tutorNames.has(name))) return { ok: false, reason: "speakers_unclear", thaiShare: share };
   const cues = parseZoomVtt(input.vtt);
-  if (cues.length < lines.length || cues.some((cue) => !known.has(normalizeName(cue.speakerName)))) {
+  if (cues.length < lines.length || cues.some((cue) => !tutorNames.has(normalizeName(cue.speakerName)) && !studentNames.has(normalizeName(cue.speakerName)))) {
     return { ok: false, reason: "unnamed_speaker", thaiShare: share };
   }
   const segments: Segment[] = [];
@@ -448,19 +460,26 @@ export function zoomEnglishEvidence(input: {
       segments.push({ speaker: line.speakerName, startMs: line.startMs, endMs: line.endMs, text: line.text });
     }
   }
+  // What was captioned: a recording is at least as long, and captions that stop early would be half the lesson.
+  const captionedMs = Math.max(0, ...cues.map((cue) => cue.endMs));
+  if ((input.recordingSeconds ?? 0) > 0 && captionedMs < input.recordingSeconds! * 1000 * AUTOWRITER_ZOOM_ENGLISH_MIN_CAPTION_COVERAGE) {
+    return { ok: false, reason: "zoom_captions_partial", thaiShare: share };
+  }
+  const kept = segments.filter((segment) => segment.text.trim() !== "");
   const evidence = evidenceFromSegments({
     source: "zoom",
-    segments: segments.filter((segment) => segment.text.trim() !== ""),
+    segments: kept,
     text,
-    // What was captioned: a recording is at least as long, and captions that stop early would be half the lesson.
-    audioDurationMs: Math.max(0, ...cues.map((cue) => cue.endMs)),
+    audioDurationMs: captionedMs,
     scheduledMinutes: input.scheduledMinutes,
     zoomCues: cues,
     teacherName: input.teacherName,
     alsoTeacher: input.alsoTeacher,
     studentNames: input.studentNames,
   });
-  if (evidence.speakers.method !== "zoom_alignment") return { ok: false, reason: "speakers_unclear", thaiShare: share };
+  if (evidence.speakers.method !== "zoom_alignment" || roleRatios(kept, evidence.speakers.roles).tutor < ALIGNED_MIN_TUTOR_SHARE) {
+    return { ok: false, reason: "speakers_unclear", thaiShare: share };
+  }
   if (evidence.tooShort) return { ok: false, reason: evidence.tooShort, thaiShare: share };
   return { ok: true, evidence };
 }

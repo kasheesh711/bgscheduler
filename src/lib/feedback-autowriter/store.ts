@@ -487,11 +487,19 @@ export async function setSonioxTranscription(db: Database, wiseSessionId: string
 
 /**
  * Thai shares (`metadata.transcript.thaiShare`) of the class's Soniox transcripts — not those written from Zoom's
- * captions — for its other sessions that ended since `since`. Empty when the class has none.
+ * captions — for its other sessions with this tutor (`teacherIds`: their Wise accounts) that ended since `since`. A
+ * substitute or a new tutor of the class does not inherit another tutor's lessons. Empty when there are none.
  */
-export async function classSonioxThaiShares(db: Database, input: { wiseClassId: string; excludeSessionId: string; since: Date }): Promise<number[]> {
+export async function classSonioxThaiShares(db: Database, input: {
+  wiseClassId: string;
+  teacherIds: readonly string[];
+  excludeSessionId: string;
+  since: Date;
+}): Promise<number[]> {
+  if (input.teacherIds.length === 0) return [];
   const rows = await db.select({ share: sql<string>`${S.metadata} -> 'transcript' ->> 'thaiShare'` }).from(S).where(and(
     eq(S.wiseClassId, input.wiseClassId),
+    inArray(S.wiseTeacherUserId, [...input.teacherIds]),
     sql`${S.wiseSessionId} <> ${input.excludeSessionId}`,
     gte(S.scheduledEndAt, input.since),
     // A transcript too short to write from is no evidence of how the class talks.
@@ -591,7 +599,7 @@ export async function flagNoRecording(db: Database, endedBefore: Date, disabledT
   }).where(and(
     inArray(S.state, ["awaiting_recording", "transcribing"]),
     lt(S.scheduledEndAt, endedBefore),
-    sql`coalesce(${S.reason}, '') not in ('recording_too_short', 'zoom_transcript_pending', 'zoom_draft_held', 'wise_read_failed') and coalesce(${S.reason}, '') not like 'infra:%'`,
+    sql`coalesce(${S.reason}, '') not in ('recording_too_short', 'zoom_transcript_pending', 'zoom_draft_held', 'zoom_writer_failed', 'wise_read_failed') and coalesce(${S.reason}, '') not like 'infra:%'`,
     sql`not (${S.state} = 'awaiting_recording' and coalesce(${S.metadata} ->> 'handover', '') = 'transcript_first')`,
     disabledTutors.length > 0
       ? or(isNull(S.wiseTeacherUserId), notInArray(S.wiseTeacherUserId, [...disabledTutors]))

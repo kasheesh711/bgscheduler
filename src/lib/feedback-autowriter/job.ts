@@ -1036,14 +1036,14 @@ async function processTranscript(deps: AutowriterDeps, input: {
   }
 
   const transcribeErrors = Number((row.metadata as { transcribeErrors?: unknown }).transcribeErrors ?? 0) || 0;
-  const transcribeFailed = async (reason: string, options: { infra: boolean; keepJob: string | null }): Promise<ProcessOutcome> => {
+  const transcribeFailed = async (reason: string, options: { infra: boolean; keepJob: string | null; metadata?: Record<string, unknown> }): Promise<ProcessOutcome> => {
     const errors = transcribeErrors + 1;
     if (errors >= AUTOWRITER_MAX_TRANSCRIBE_ERRORS) {
       // A job id kept here is kept for review like any finished class's, then deleted by the sweep.
       if (canFallBack) {
-        return fallBackToSummary({ release, out, cause: "soniox_failed", now, metadata: { transcribeErrors: errors, sonioxFailure: reason } });
+        return fallBackToSummary({ release, out, cause: "soniox_failed", now, metadata: { ...options.metadata, transcribeErrors: errors, sonioxFailure: reason } });
       }
-      await release({ state: "held", reason, alertKind: "held", metadata: { transcribeErrors: errors } });
+      await release({ state: "held", reason, alertKind: "held", metadata: { ...options.metadata, transcribeErrors: errors } });
       return out("held", reason);
     }
     await release({
@@ -1052,7 +1052,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
       retryInMs: options.keepJob ? AUTOWRITER_TRANSCRIBING_RECHECK_MS : AUTOWRITER_RECORDING_RECHECK_MS,
       countRetry: true,
       sonioxTranscriptionId: options.keepJob,
-      metadata: { transcribeErrors: errors },
+      metadata: { ...options.metadata, transcribeErrors: errors },
     });
     return out(options.infra ? "infra" : "retry", reason);
   };
@@ -1062,7 +1062,10 @@ async function processTranscript(deps: AutowriterDeps, input: {
   // is written from Zoom's own captions; anything less goes to Soniox below and stays there (`zoomEnglish.route`).
   const studentNames = [student.name, ...(student.joinedAsGuest ? [student.joinedAsGuest] : [])];
   const zoom = deps.zoomEnglish && !row.sonioxTranscriptionId && recording.ok && !zoomEnglishDeclined(row)
-    ? await zoomEnglishRoute(deps, { row, detail, scheduledMinutes, studentNames })
+    ? await zoomEnglishRoute(deps, {
+      row, detail, recordingSeconds: recording.durationSeconds, scheduledMinutes, studentNames,
+      teacherIds: rosterAccountIds(tutor.canonicalKey),
+    })
     : null;
   if (zoom?.kind === "wait") {
     await release({
@@ -1073,21 +1076,25 @@ async function processTranscript(deps: AutowriterDeps, input: {
   }
   let jobId = row.sonioxTranscriptionId;
   let evidence: TranscriptEvidence;
+  // A class Zoom's captions could not carry after all — a draft from them that the checks or the judges reject, or
+  // the writer failing on them three times in a row: Soniox's transcript gets it, now, and its counts start again.
+  const zoomToSoniox = async (reason: string, extra: Record<string, unknown> = {}) => {
+    await release({
+      state: "awaiting_recording", reason, retryInMs: 0,
+      metadata: { ...extra, transcript: evidence.meta, zoomEnglish: { route: "soniox", reason }, writerErrors: 0, judgeErrors: 0, judgeUnreached: 0 },
+    });
+    return out("awaiting_recording", reason);
+  };
   const holdFor = async (reason: string, extra: Record<string, unknown> = {}) => {
-    if (evidence.meta.source === "zoom") {
-      // A draft from Zoom's captions that the checks or the judges reject: Soniox's transcript gets the class, now.
-      await release({
-        state: "awaiting_recording", reason: "zoom_draft_held", retryInMs: 0,
-        metadata: { transcript: evidence.meta, zoomEnglish: { route: "soniox", reason: "zoom_draft_held", hold: reason }, ...extra },
-      });
-      return out("awaiting_recording", "zoom_draft_held");
-    }
+    if (evidence.meta.source === "zoom") return zoomToSoniox("zoom_draft_held", { ...extra, zoomHold: reason });
     await release({ state: "held", reason, alertKind: "held", metadata: { transcript: evidence.meta, ...extra } });
     return out("held", reason);
   };
   if (zoom?.kind === "write") {
     evidence = zoom.evidence;
   } else {
+    // Why Zoom's captions did not do, kept from the submit on (also when it fails): this class now stays with Soniox.
+    const zoomStamp = zoom ? { zoomEnglish: { route: "soniox", reason: zoom.reason, thaiShare: zoom.thaiShare ?? null } } : {};
     // 1. The Soniox job: the one already submitted, or a new one on Wise's recording.
     // When the polled job was submitted: now for a new job; a stored stamp only if it is this job's.
     const stamp = row.metadata as { sonioxSubmittedJob?: unknown; sonioxSubmittedAt?: unknown };
@@ -1110,12 +1117,10 @@ async function processTranscript(deps: AutowriterDeps, input: {
           wiseSessionId: row.wiseSessionId, audioUrl: recording.url, detail, tutorNames: tutor.tutorNames, studentName: student.name,
         }))).id;
       } catch (error) {
-        return transcribeFailed(`soniox_create:${error instanceof Error ? error.message.slice(0, 120) : "error"}`, { infra: true, keepJob: null });
+        return transcribeFailed(`soniox_create:${error instanceof Error ? error.message.slice(0, 120) : "error"}`, { infra: true, keepJob: null, metadata: zoomStamp });
       }
       submittedAt = new Date();
-      // Why Zoom's captions did not do (kept: this class now stays with Soniox).
-      await setSonioxTranscription(db, row.wiseSessionId, input.token, jobId,
-        zoom ? { zoomEnglish: { route: "soniox", reason: zoom.reason, thaiShare: zoom.thaiShare ?? null } } : {});
+      await setSonioxTranscription(db, row.wiseSessionId, input.token, jobId, zoomStamp);
     }
 
     // 2. Wait for it — webhooks wait up to ~3 min; the backstop only looks, so it never starves other classes.
@@ -1222,6 +1227,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
     }
   }
   const { rendered, meta: transcriptMeta } = evidence;
+  const fromZoom = transcriptMeta.source === "zoom";
 
   // 5. Write and judge from the transcript (Sol, Luna fallback, GLM judge — zero-retention routes only).
   const atomEvidence = await loadAtomLessonEvidence(db, { detail, studentId: student.wiseUserId, lessonRecord: rendered, now });
@@ -1263,14 +1269,16 @@ async function processTranscript(deps: AutowriterDeps, input: {
     // run ends in a writer failure and counts (owner decision, 30 Sep 17:00). Wise and Soniox errors count apart
     // (above); our function's time, our OpenRouter account and our connection are not the writer's failure
     // (`modelFailure`) and leave the count as it is.
-    const writerFailed = canFallBack && result.stage === "writer" && result.modelFailure;
-    const writerDelivered = canFallBack && result.stage === "judge";
+    // From Zoom's captions the writer's failures count too, and the third goes to Soniox first (below).
+    const writerFailed = (canFallBack || fromZoom) && result.stage === "writer" && result.modelFailure;
+    const writerDelivered = (canFallBack || fromZoom) && result.stage === "judge";
     const previousErrors = Number((row.metadata as { writerErrors?: unknown }).writerErrors ?? 0) || 0;
     const writerErrors = writerFailed ? previousErrors + 1 : writerDelivered ? 0 : previousErrors;
     // A run that ends at the judge stage is counted, and a run of them alerts (`judgeFailed`); the class retries as
     // before. A verdict the judges gave before the run failed starts their counts again, also on the way to the summary.
     const judge = judgeFailed(row, result, { control: input.control, now });
     if (writerFailed && writerErrors >= AUTOWRITER_MAX_WRITER_ERRORS) {
+      if (fromZoom) return zoomToSoniox("zoom_writer_failed", { writerFailure: result.error, ...judge.metadata });
       return fallBackToSummary({
         release, out, cause: "writer_failed", now,
         metadata: { transcript: transcriptMeta, writerErrors, writerFailure: result.error, ...judge.metadata },
@@ -1294,7 +1302,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
       atomMapping: result.atomEvidence?.mapping ?? null, lessonEvidenceHash, factualVerdicts: result.judge, repair: result.repair ?? null } }, evidence: "transcript",
     // A stored draft: a later failure (a requeued shadow draft written again) starts a new count, of the writer's
     // failures and of the judge's.
-    extraMetadata: { transcript: transcriptMeta, ...guestMetadata(student), ...(canFallBack ? { writerErrors: 0 } : {}), ...judgeAnswered(row) },
+    extraMetadata: { transcript: transcriptMeta, ...guestMetadata(student), ...(canFallBack || fromZoom ? { writerErrors: 0 } : {}), ...judgeAnswered(row) },
     release, out,
   });
 }
@@ -1313,8 +1321,11 @@ function zoomEnglishDeclined(row: AutowriterSessionRow): boolean {
 async function zoomEnglishRoute(deps: AutowriterDeps, input: {
   row: AutowriterSessionRow;
   detail: AutowriterSessionDetail;
+  recordingSeconds: number | null;
   scheduledMinutes: number;
   studentNames: readonly string[];
+  /** The class's tutor's Wise accounts: only their own lessons of the class count as its history. */
+  teacherIds: readonly string[];
 }): Promise<{ kind: "write"; evidence: TranscriptEvidence } | { kind: "wait"; since: string } | { kind: "soniox"; reason: string; thaiShare?: number }> {
   const teacherName = detailTeacherName(input.detail);
   if (!teacherName) return { kind: "soniox", reason: "speakers_unclear" };
@@ -1322,11 +1333,14 @@ async function zoomEnglishRoute(deps: AutowriterDeps, input: {
     summaryText: extractAiSummary(input.detail)?.text ?? null,
     classThaiShares: await classSonioxThaiShares(deps.db, {
       wiseClassId: detailClassId(input.detail),
+      teacherIds: input.teacherIds,
       excludeSessionId: input.row.wiseSessionId,
       since: new Date(clock(deps).getTime() - AUTOWRITER_ZOOM_ENGLISH_HISTORY_MS),
     }),
   });
   if (declined) return { kind: "soniox", reason: declined };
+  // Captions in several parts (the meeting was restarted) never become one file: nothing to wait for.
+  if ((input.detail.rawTranscript ?? []).length > 1) return { kind: "soniox", reason: "zoom_transcript_parts" };
   const url = zoomTranscriptUrl(input.detail);
   const vtt = url ? await (deps.fetchText ?? fetchText)(url).catch(() => null) : null;
   if (vtt === null) {
@@ -1336,7 +1350,7 @@ async function zoomEnglishRoute(deps: AutowriterDeps, input: {
       : { kind: "soniox", reason: "zoom_transcript_missing" };
   }
   const zoom = zoomEnglishEvidence({
-    vtt, scheduledMinutes: input.scheduledMinutes,
+    vtt, recordingSeconds: input.recordingSeconds, scheduledMinutes: input.scheduledMinutes,
     teacherName, alsoTeacher: tutorSelfNames(input.detail), studentNames: input.studentNames,
   });
   return zoom.ok ? { kind: "write", evidence: zoom.evidence } : { kind: "soniox", reason: zoom.reason, thaiShare: zoom.thaiShare };
@@ -1478,14 +1492,17 @@ function tally(target: Record<string, number>, key: string) {
 
 /**
  * A due row the sweep can work on without calling a model, as far as the row shows: it posts its stored judged
- * draft, or waits for its recording or submits it to Soniox (no job yet). Any other row may reach the writer: a
+ * draft, or waits for its recording or submits it to Soniox (no job yet) — unless English lessons from Zoom's
+ * captions are on and the class was not sent to Soniox yet: it may then be written from them. Any other row may reach the writer: a
  * summary to write, a transcript whose Soniox job exists — ready, or still running at the last look
  * (`transcription_in_progress`: it may have finished since, and the row then calls the writer and both judges in the
  * same run) — a draft whose model call failed last time.
  */
-function worksWithoutModel(row: AutowriterSessionRow): boolean {
+function worksWithoutModel(row: AutowriterSessionRow, zoomEnglish = false): boolean {
   if (row.evidence !== "transcript") return false;
-  return Boolean(reusableTranscriptDraft(row)) || !row.sonioxTranscriptionId;
+  if (reusableTranscriptDraft(row)) return true;
+  // English lessons from Zoom's captions: a row without a job may be written from them in the same run.
+  return !row.sonioxTranscriptionId && !(zoomEnglish && !zoomEnglishDeclined(row));
 }
 
 /**
@@ -1500,10 +1517,10 @@ function worksWithoutModel(row: AutowriterSessionRow): boolean {
  * (`infra:…`) after the others. So do rows of group 1 with the same deadline — every class's deadline is 23:59
  * Bangkok, so those of one night all have the same — and among them the rows that call no model still come first.
  */
-function sweepOrder(due: readonly AutowriterSessionRow[], now: Date): AutowriterSessionRow[] {
+function sweepOrder(due: readonly AutowriterSessionRow[], now: Date, zoomEnglish = false): AutowriterSessionRow[] {
   const nearBy = now.getTime() + AUTOWRITER_SWEEP_NEAR_DEADLINE_MS;
   const deadline = (row: AutowriterSessionRow) => row.deadlineAt?.getTime() ?? Number.POSITIVE_INFINITY;
-  const byGroup = [...due.filter(worksWithoutModel), ...due.filter((row) => !worksWithoutModel(row))];
+  const byGroup = [...due.filter((row) => worksWithoutModel(row, zoomEnglish)), ...due.filter((row) => !worksWithoutModel(row, zoomEnglish))];
   return [
     ...byGroup.filter((row) => deadline(row) <= nearBy).toSorted((a, b) => deadline(a) - deadline(b)),
     ...byGroup.filter((row) => deadline(row) > nearBy),
@@ -1579,7 +1596,7 @@ export async function runSweep(deps: AutowriterDeps): Promise<SweepResult> {
           .filter((row) => !row.wiseTeacherUserId || !control.disabledTutors.includes(row.wiseTeacherUserId));
         const mappings = await loadFieldMappings(db);
         const rateLimitRetries: RateLimitRetries = { writer: true, judge: true };
-        for (const row of sweepOrder(due, now)) {
+        for (const row of sweepOrder(due, now, Boolean(deps.zoomEnglish))) {
           if (remaining(deps) < AUTOWRITER_SWEEP_MIN_REMAINING_MS) break;
           // Re-read the switches per session: a halt, pause or mode change made
           // while this sweep runs (e.g. by a webhook worker's POST) applies at once.

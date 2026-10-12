@@ -4,6 +4,7 @@ import {
   autowriterHoldSummaryOnly,
   autowriterTranscriptFirst,
   autowriterTranscriptsEnabled,
+  autowriterZoomEnglish,
   sonioxApiKey,
 } from "./config";
 import { JUDGE_PROMPT_VERSION } from "./judge";
@@ -23,6 +24,8 @@ export interface AutowriterSystemStatus {
   judge: { model: string; efforts: string[] };
   /** Transcript first as it acts: its switch, and the second pass on. */
   transcriptFirst: boolean;
+  /** English lessons from Zoom's captions as it acts: its switch, and the second pass on (`FEEDBACK_AUTOWRITER_ZOOM_ENGLISH`). */
+  zoomEnglish: boolean;
   /** Summary-only drafts are held for a person (`FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY`). */
   holdSummaryOnly: boolean;
   /** The second pass (Soniox transcript) as it acts: its switch, and a Soniox key. */
@@ -48,6 +51,7 @@ export function buildSystemStatus(env: Record<string, string | undefined> = proc
     fallbackWriter: { model: AUTOWRITER_MODELS.fallbackWriter.model, effort: AUTOWRITER_MODELS.fallbackWriter.effort },
     judge: { model: AUTOWRITER_MODELS.judge.model, efforts: [...AUTOWRITER_JUDGE_EFFORTS] },
     transcriptFirst: secondPass && autowriterTranscriptFirst(env),
+    zoomEnglish: secondPass && autowriterZoomEnglish(env),
     holdSummaryOnly: autowriterHoldSummaryOnly(env),
     secondPass,
     promptVersion: PROMPT_VERSION,

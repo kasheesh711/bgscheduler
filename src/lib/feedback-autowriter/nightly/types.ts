@@ -59,7 +59,8 @@ export interface EvidenceBundle {
   wiseTextMatchesPost: boolean | null;
   transcript: {
     text: string;
-    source: "production_soniox" | "retranscribed_soniox" | "iseb_record";
+    /** `iseb_record_zoom`: the writer's exact input, a transcript from Zoom's captions (English lessons), not Soniox. */
+    source: "production_soniox" | "retranscribed_soniox" | "iseb_record" | "iseb_record_zoom";
     speakerMethod: string | null;
     speakerLabels: string | null;
   } | null;

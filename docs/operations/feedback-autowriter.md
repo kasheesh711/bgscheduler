@@ -268,23 +268,31 @@ lessons, and much worse on Thai/English ones.
 nothing. Each check below sends the class to Soniox exactly as before:
 
 1. Wise's summary is 3% Thai or more (`summary_thai`). A missing summary does not count against the class.
-2. The class (`wise_class_id`, same tutor and student) has no Soniox transcript in the last 30 days
-   (`no_class_history`), or one of them is 3% Thai or more (`class_thai`).
-3. Zoom's captions are not published 20 minutes after the first look (`zoom_transcript_missing`). The class waits as
+2. This tutor (either of their Wise accounts) has no usable Soniox transcript of this class (`wise_class_id`) in the
+   last 30 days (`no_class_history`), or one of them is 3% Thai or more (`class_thai`). A substitute or a new tutor
+   does not inherit another tutor's lessons, and a transcript held as too short does not count.
+3. Zoom's captions come in several parts (`zoom_transcript_parts`: sent to Soniox at once), or they are not
+   published 20 minutes after the first look (`zoom_transcript_missing`). Until then the class waits as
    "Transcribing" with `zoom_transcript_pending` and no Soniox job. That wait counts toward the usual 20-minute wait
    for Zoom's names, so Soniox does not wait a second time.
 4. The captions are 3% Thai or more (`zoom_thai`). Or a caption has no name, or names anyone besides the tutor
    (any of their names and `selfNames`) and the student (Wise name or guest stand-in) (`unnamed_speaker`).
-5. Zoom's labels are not trusted by the Soniox alignment rules (`speakers_unclear`: tutor ≥ 50% of the talk, or
-   ≥ 20% when only the two are named, student ≥ 5%).
-6. The last caption ends before 70% of the class (`recording_too_short`; Wise's recording length is checked before,
-   as today), or the captions are under 800 characters (`transcript_too_short`).
+5. Zoom's labels are not trusted (`speakers_unclear`): a name is on both the tutor's and the student's lists, the
+   Soniox alignment rules fail, or the tutor has less than 50% of the talk. The Soniox route may trust a student who
+   out-talks the tutor (tutor ≥ 20%), because Soniox's own speakers are checked against Zoom's cues. On this route
+   Zoom's cues are the speakers, so there is nothing independent to check.
+6. The last caption ends before 90% of Wise's recording (`zoom_captions_partial`, when Wise gives a length) or before
+   70% of the class (`recording_too_short`), or the captions are under 800 characters (`transcript_too_short`).
 
 A class that passes every check is written and judged from the captions like any transcript, with the same
 writer, judges, Atom evidence and POST guards, and with `evidence = transcript`. A draft from the captions that the
-checks or the judges reject is not held: the class goes to Soniox at once (`zoom_draft_held`) and is written again
-from Soniox's transcript. A class sent to Soniox stays there (`metadata.zoomEnglish = {route: "soniox", reason}`),
-also after an owner retry. The recording-length and attendance gates are unchanged.
+checks or the judges reject is not held, and the writer failing on the captions three times in a row does not fall
+back to the summary. Either way the class goes to Soniox at once (`zoom_draft_held`, `zoom_writer_failed`; the
+writer's and the judges' counts start again) and is written again from Soniox's transcript. A class sent to Soniox
+stays there (`metadata.zoomEnglish = {route: "soniox", reason}`, kept even when the Soniox submit fails), also after
+an owner retry. The recording-length and attendance gates are unchanged. The dashboard's system line shows
+"English lessons: from Zoom captions" while the switch acts. The nightly audit's evidence for such a post is marked
+`iseb_record_zoom`.
 
 **Why the class's history.** Zoom captions a whole lesson in one language. On 86 cached classes with captions, the captions'
 Thai share was 0.00 or ≥ 0.99 and never in between, so the captions only show which language led the lesson. A
