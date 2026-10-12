@@ -80,11 +80,11 @@ describe("PairLanguagesTable", () => {
     expect(thai).not.toContain("English Y5");
   });
 
-  it("disables overrides with a notice before migration 0115", () => {
+  it("disables overrides with a notice before migration 0116", () => {
     const html = render({ data: payload({ overridesAvailable: false }) });
-    expect(html).toContain("Overrides need migration 0115");
+    expect(html).toContain("Overrides need migration 0116");
     expect(html.match(/<select[^>]*disabled/gu)).toHaveLength(4);
-    expect(render({ data: payload({ overridesAvailable: false }), canControl: false })).not.toContain("migration 0115");
+    expect(render({ data: payload({ overridesAvailable: false }), canControl: false })).not.toContain("migration 0116");
   });
 
   it("says so when there are no pairs", () => {

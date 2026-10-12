@@ -57,7 +57,7 @@ export function PairLanguagesTable({ data, canControl, filter, onFilter, busy, o
           Bilingual: the rest · last {data.lookbackDays} days · shown only, routing does not read these yet
         </p>
         {canControl && !data.overridesAvailable ? (
-          <p className="text-[11px] text-amber-700 dark:text-amber-400">Overrides need migration 0115 — the labels shown are automatic.</p>
+          <p className="text-[11px] text-amber-700 dark:text-amber-400">Overrides need migration 0116 — the labels shown are automatic.</p>
         ) : null}
       </div>
       {rows.length === 0 ? (

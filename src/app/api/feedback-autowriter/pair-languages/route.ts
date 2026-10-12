@@ -27,12 +27,12 @@ async function readJson(request: NextRequest): Promise<unknown> {
   }
 }
 
-/** Run an override write; before migration 0115 (SQLSTATE 42P01) it is a 409, not a failure. */
+/** Run an override write; before migration 0116 (SQLSTATE 42P01) it is a 409, not a failure. */
 async function withOverrideTable<T>(write: () => Promise<T>): Promise<T> {
   try {
     return await write();
   } catch (error) {
-    if (isMissingRelationError(error)) throw new AutowriterReviewError("Class-language overrides need migration 0115 applied first.", 409);
+    if (isMissingRelationError(error)) throw new AutowriterReviewError("Class-language overrides need migration 0116 applied first.", 409);
     throw error;
   }
 }

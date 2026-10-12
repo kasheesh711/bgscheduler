@@ -87,11 +87,11 @@ describe("PUT /api/feedback-autowriter/pair-languages", () => {
     expect(setMock.mock.calls[0][0]).toEqual({ ...body, setBy: "owner@example.com" });
     expect(await response.json()).toEqual(PAYLOAD);
   });
-  it("is a 409 before migration 0115", async () => {
+  it("is a 409 before migration 0116", async () => {
     setMock.mockRejectedValue(missingTable());
     const response = await PUT(request("PUT", body));
     expect(response.status).toBe(409);
-    expect((await response.json()).error).toMatch(/0115/u);
+    expect((await response.json()).error).toMatch(/0116/u);
   });
 });
 
@@ -117,7 +117,7 @@ describe("DELETE /api/feedback-autowriter/pair-languages", () => {
     response = await DELETE(request("DELETE", body));
     expect(response.status).toBe(200);
   });
-  it("is a 409 before migration 0115", async () => {
+  it("is a 409 before migration 0116", async () => {
     clearMock.mockRejectedValue(missingTable());
     expect((await DELETE(request("DELETE", body))).status).toBe(409);
   });
