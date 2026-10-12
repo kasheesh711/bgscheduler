@@ -669,7 +669,8 @@ preflight accepts besides anything on `origin/main`. The lock is stale when its 
 | Soniox a night | $2 (`--soniox-usd` up to $5 for one run) |
 | OpenRouter a night | $3 |
 | Agent flags a night | 10 |
-| Corrections (proposals, and POSTs) a night / a week | 6 / 15 (and the database's own 6 per 24 h) |
+| Verified proposals (`verify`, no Wise write) a night | 6 (`maxProposalsPerNight`; not affected by the correction caps) |
+| Corrections (POSTs to Wise) a night / a week | 6 / 15 (and the database's own 6 per 24 h; `maxCorrectionsPerNight: 0` pauses them) |
 | Stop | 06:50 Bangkok on the morning after the audited day |
 
 Every spend is reserved in `spend.jsonl` before it starts (a crash leaves the reservation counting at its estimate); a
