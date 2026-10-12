@@ -28,7 +28,8 @@ function ownership(session: WiseSession) {
  * 8–11 Oct 2026, all minutes after classes ended, each cleared by the next run). The read starts again from scratch
  * after a short pause; one that still fails on the last attempt fails the run, closed, as before.
  */
-const TRANSIENT_READ = /invalid, duplicate or out-of-date|duplicate, missing, or invalid session|pagination|advertised session page|page count contradicts/iu;
+// Only what a changing listing causes: a session met twice, or pages that disagree. Invalid rows are not read again.
+const TRANSIENT_READ = /duplicate (?:wise )?session|pagination|advertised session page|page count contradicts/iu;
 export const ATOM_TIMETABLE_ATTEMPTS = 3;
 const ATOM_TIMETABLE_RETRY_MS = 5_000;
 

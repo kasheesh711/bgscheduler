@@ -222,6 +222,12 @@ describe("runWritingPipeline", () => {
       expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm", "writer:luna", "judge:glm", "judge:glm"]);
     });
 
+    it("retries, not holds, when OpenRouter refuses the repaired draft's judging for lack of credit", async () => {
+      const keyLimit = "Key limit exceeded (monthly limit). $20.01 of $20.00 used";
+      const { promise } = run({ writers: [SOL(withExtra), LUNA(withExtra)], judge: [GLM(QUOTED), GLM(QUOTED), fail(keyLimit, 403)] });
+      expect(await promise).toMatchObject({ kind: "infra", stage: "judge", modelFailure: false, creditExhausted: true });
+    });
+
     it("holds, saying why, when the trimmed draft is rejected too", async () => {
       const { promise, records } = run({ writers: [SOL(withExtra), LUNA(withExtra)], judge: [GLM(QUOTED), GLM(QUOTED), GLM(UNFAITHFUL)] });
       const result = await promise;

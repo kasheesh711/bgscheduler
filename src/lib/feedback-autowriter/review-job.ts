@@ -896,8 +896,8 @@ export interface ReviewJobResult {
   incidents?: DrainResult;
   undeliveredCritical?: number;
   stepErrors?: string[];
-  /** What is short on OpenRouter credit this run (empty: nothing); unset when the watch did not run. */
-  modelCredit?: string[];
+  /** What is short on OpenRouter credit this run (empty: nothing), and whether the account balance could be read. */
+  modelCredit?: { problems: string[]; accountRead: boolean };
 }
 
 /** Single-flight on the database clock; a `running` row older than REVIEW_RUN_STALE_MS is failed first. */
@@ -988,18 +988,20 @@ export async function runReviewJob(deps: ReviewJobDeps): Promise<ReviewJobResult
       }
     }
 
-    if (process.env.FEEDBACK_AUTOWRITER_ISEB_REVIEW_ENABLED === "true") {
-      await step("iseb_style_review", () => reviewIsebPosts(db, deps.deadlineMs ?? Date.now() + 75_000));
-      await step("style_trends", () => raiseRecurringStyleProblems(db, now));
-    }
     // OpenRouter credit, before it runs out (11 Oct 2026: the key's limit stopped every writer and judge for 14 hours).
+    // Before the style review, which may use most of what is left of the run's time.
     const modelBudget = deps.modelBudget;
     if (modelBudget) {
       result.modelCredit = await step("model_credit", async () => {
-        const problems = creditProblems(await modelBudget(), now);
+        const budget = await modelBudget();
+        const problems = creditProblems(budget, now);
         await raiseCreditIncident(db, { problems, now, cause: "watch" });
-        return problems;
+        return { problems, accountRead: budget.accountRemainingUsd !== null };
       });
+    }
+    if (process.env.FEEDBACK_AUTOWRITER_ISEB_REVIEW_ENABLED === "true") {
+      await step("iseb_style_review", () => reviewIsebPosts(db, deps.deadlineMs ?? Date.now() + 75_000));
+      await step("style_trends", () => raiseRecurringStyleProblems(db, now));
     }
     // Incidents this run raised.
     await drain("incidents", now);

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { creditProblems, fetchOpenRouterBudget, type OpenRouterBudget } from "../model-credit";
+import { creditProblems, daysUntilReset, fetchOpenRouterBudget, type OpenRouterBudget } from "../model-credit";
 
 const NOW = new Date("2026-10-12T05:30:00Z"); // 11.23 days into October
 const budget = (patch: Partial<OpenRouterBudget> = {}): OpenRouterBudget => ({
@@ -26,6 +26,29 @@ describe("creditProblems", () => {
   it("warns when the account balance is near zero (a top-up that failed) and ignores a key with no limit", () => {
     const problems = creditProblems(budget({ keyLimitUsd: null, keyRemainingUsd: null, accountRemainingUsd: 0.4 }), NOW);
     expect(problems).toEqual(["account balance $0.40 left: add credits or check that auto top-up's payment works"]);
+  });
+
+  it("does not warn when the limit resets before the money runs out", () => {
+    // Review of #198: a $60 monthly limit on 27 Oct with $12 left lasts 6.7 days at $1.78/day, past the 1 Nov reset.
+    const late = new Date("2026-10-27T05:00:00Z");
+    expect(creditProblems(budget({ keyLimitUsd: 60, keyRemainingUsd: 12, keyUsageMonthUsd: 48 }), late)).toEqual([]);
+    // A daily or weekly limit is measured against its own reset, not the month's average.
+    expect(creditProblems(budget({ keyLimitUsd: 10, keyRemainingUsd: 9, keyLimitReset: "daily" }), NOW)).toEqual([]);
+    // Sunday 20:00 UTC: $1 left is ~0.5 days, but the weekly limit resets at midnight.
+    expect(creditProblems(budget({ keyLimitUsd: 15, keyRemainingUsd: 1, keyLimitReset: "weekly" }), new Date("2026-10-11T20:00:00Z"))).toEqual([]);
+    // A lifetime limit never resets: the runway alone decides.
+    expect(creditProblems(budget({ keyLimitUsd: 30, keyRemainingUsd: 9, keyLimitReset: null }), NOW)).toHaveLength(1);
+    // Spent before a reset still pages: it is an outage now.
+    expect(creditProblems(budget({ keyLimitUsd: 10, keyRemainingUsd: 0, keyLimitReset: "daily" }), NOW)[0]).toContain("has run out");
+  });
+
+  it("knows when each kind of limit resets (00:00 UTC)", () => {
+    const monday = new Date("2026-10-12T05:30:00Z"); // a Monday
+    expect(daysUntilReset("daily", monday)).toBeCloseTo(18.5 / 24, 5);
+    expect(daysUntilReset("weekly", monday)).toBeCloseTo(7 - 5.5 / 24, 5);
+    expect(daysUntilReset("weekly", new Date("2026-10-11T23:00:00Z"))).toBeCloseTo(1 / 24, 5);
+    expect(daysUntilReset("monthly", monday)).toBeCloseTo(19 + 18.5 / 24, 5);
+    expect(daysUntilReset(null, monday)).toBe(Infinity);
   });
 
   it("does not divide by zero at the start of a month or with no spending", () => {

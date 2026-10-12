@@ -52,7 +52,7 @@ describe("Atom complete Wise timetable", () => {
   it("reads the whole timetable again when a class ending mid-read shows one session on two pages", async () => {
     const sleep = vi.fn(async () => undefined);
     vi.mocked(fetchWiseSessionsForBangkokDates)
-      .mockRejectedValueOnce(new Error("Invalid, duplicate or out-of-date Wise session for 2026-10-01"))
+      .mockRejectedValueOnce(new Error("Duplicate Wise session for 2026-10-01 (the listing changed between pages)"))
       .mockResolvedValue([row("past")]);
     const result = await fetchAtomLessonTimetable(client, "i", ["2026-10-01"], { ...options, sleep });
     expect(result.map(s => s._id)).toEqual(["past"]);
@@ -64,9 +64,13 @@ describe("Atom complete Wise timetable", () => {
     vi.mocked(fetchWiseSessionsForBangkokDates).mockResolvedValue([row("same")]);
     vi.mocked(fetchAllFutureSessions).mockResolvedValue([{ ...row("same"), title: "other" } as unknown as WiseSession]);
     await expect(fetchAtomLessonTimetable(client, "i", ["2026-10-01"], { ...options, sleep })).rejects.toThrow("conflict");
-    vi.mocked(fetchAllFutureSessions).mockRejectedValue(new Error("Wise session read contains duplicate, missing, or invalid session data"));
+    vi.mocked(fetchAllFutureSessions).mockRejectedValue(new Error("Wise session read contains a duplicate session (the listing changed between pages)"));
     await expect(fetchAtomLessonTimetable(client, "i", ["2026-10-01"], { ...options, deadlineAt: Date.now() + 10_000, sleep }))
       .rejects.toThrow("duplicate");
+    // A row Wise sent broken is not a listing that changed: no second read.
+    vi.mocked(fetchAllFutureSessions).mockClear().mockRejectedValue(new Error("Wise session read contains missing or invalid session data"));
+    await expect(fetchAtomLessonTimetable(client, "i", ["2026-10-01"], { ...options, sleep })).rejects.toThrow("invalid");
+    expect(fetchAllFutureSessions).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
   });
   it("does not fetch FUTURE for historical-only comparisons", async () => {

@@ -947,16 +947,20 @@ describe("the daily gate", () => {
 describe("OpenRouter credit watch (migration 0114)", () => {
   const I = schema.feedbackAutowriterIncidents;
   it("raises one pushed model_credit incident a day while the key's limit is short, and none while it is not", async () => {
-    const short = { keyLimitUsd: 20, keyRemainingUsd: 2, keyLimitReset: "monthly", keyUsageMonthUsd: 18, accountRemainingUsd: 12 };
+    // A lifetime limit (no reset): NOW is 30 Sep, so a monthly one would reset at midnight and rightly not warn.
+    const short = { keyLimitUsd: 20, keyRemainingUsd: 2, keyLimitReset: null, keyUsageMonthUsd: 18, accountRemainingUsd: 12 };
     const first = await runReviewJob(deps({ modelBudget: async () => short }));
-    expect(first.modelCredit).toEqual([expect.stringContaining("monthly limit has $2.00 left")]);
+    expect(first.modelCredit).toEqual({ problems: [expect.stringContaining("$20.00 limit has $2.00 left")], accountRead: true });
     await runReviewJob(deps({ now: () => minutes(NOW, 60), modelBudget: async () => short }));
     const rows = await db.select().from(I).where(eq(I.kind, "model_credit"));
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ severity: "critical", detail: expect.objectContaining({ cause: "watch" }) });
-    expect(rows[0].dedupeKey).toMatch(/^model-credit:watch:\d{4}-\d{2}-\d{2}$/u);
+    expect(rows[0].dedupeKey).toMatch(/^model-credit:\d{4}-\d{2}-\d{2}$/u);
     const fine = await runReviewJob(deps({ now: () => minutes(NOW, 120), modelBudget: async () => ({ ...short, keyRemainingUsd: 30, keyLimitUsd: 50 }) }));
-    expect(fine.modelCredit).toEqual([]);
+    expect(fine.modelCredit).toEqual({ problems: [], accountRead: true });
+    // The account endpoint unread: reported, not taken as fine or as short.
+    const blind = await runReviewJob(deps({ now: () => minutes(NOW, 180), modelBudget: async () => ({ ...short, keyRemainingUsd: 30, keyLimitUsd: 50, accountRemainingUsd: null }) }));
+    expect(blind.modelCredit).toEqual({ problems: [], accountRead: false });
   });
 
   it("records a failed budget read as a step error, not as a credit problem", async () => {

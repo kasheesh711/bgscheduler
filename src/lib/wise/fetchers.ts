@@ -317,9 +317,10 @@ export async function fetchAllInstituteSessions(
       if (sessions.length === 0 && (page > 1 || (res.data?.page_count ?? 0) > 1)) throw new Error("Wise returned an empty advertised session page");
       if (sessions.length > 0 && res.data?.page_count === 0) throw new Error("Wise session page count contradicts its contents");
       for (const session of sessions) {
-        if (!session._id || seen.has(session._id) || !Number.isFinite(Date.parse(session.scheduledStartTime))
+        if (session._id && seen.has(session._id)) throw new Error("Wise session read contains a duplicate session (the listing changed between pages)");
+        if (!session._id || !Number.isFinite(Date.parse(session.scheduledStartTime))
           || !Number.isFinite(Date.parse(session.scheduledEndTime)) || Date.parse(session.scheduledEndTime) <= Date.parse(session.scheduledStartTime)) {
-          throw new Error("Wise session read contains duplicate, missing, or invalid session data");
+          throw new Error("Wise session read contains missing or invalid session data");
         }
         seen.add(session._id);
       }

@@ -1,5 +1,5 @@
 import type { Database } from "@/lib/db";
-import { recordIncident } from "./incidents";
+import { recordIncident, refreshOpenIncident } from "./incidents";
 import { bangkokDateKey } from "./quality";
 
 /**
@@ -35,15 +35,20 @@ export interface OpenRouterBudget {
 
 const finite = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) ? value : null;
 
-/** Both budgets, read with the production key. Throws on a key read failure; the account read may fail alone. */
+/**
+ * Both budgets, read together with the production key. Throws on a key read failure; a failed account read leaves
+ * `accountRemainingUsd` null (the watch reports it as unread rather than as fine).
+ */
 export async function fetchOpenRouterBudget(apiKey: string, fetchImpl: typeof fetch = fetch): Promise<OpenRouterBudget> {
   const get = async (url: string) => {
     const response = await fetchImpl(url, { headers: { authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(15_000), cache: "no-store" });
     if (!response.ok) throw new Error(`OpenRouter ${url.split("/").pop()} read: HTTP ${response.status}`);
     return ((await response.json()) as { data?: Record<string, unknown> }).data ?? {};
   };
-  const key = await get(OPENROUTER_KEY_URL);
-  const credits = await get(OPENROUTER_CREDITS_URL).catch(() => null);
+  const [keyRead, creditsRead] = await Promise.allSettled([get(OPENROUTER_KEY_URL), get(OPENROUTER_CREDITS_URL)]);
+  if (keyRead.status === "rejected") throw keyRead.reason;
+  const key = keyRead.value;
+  const credits = creditsRead.status === "fulfilled" ? creditsRead.value : null;
   const total = finite(credits?.total_credits);
   const used = finite(credits?.total_usage);
   return {
@@ -55,15 +60,28 @@ export async function fetchOpenRouterBudget(apiKey: string, fetchImpl: typeof fe
   };
 }
 
-/** This month's spending per day so far (UTC month, at least one day elapsed so day 1 does not divide by ~0). */
+/**
+ * This month's spending per day so far (UTC month). At least one day counts as elapsed, so the first hours of a month
+ * read low (a monthly limit has just reset then, so nothing is short).
+ */
 function dailyRate(budget: OpenRouterBudget, now: Date): number {
   const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
   return budget.keyUsageMonthUsd / Math.max(1, (now.getTime() - monthStart) / 86_400_000);
 }
 
+/** Days until the key's limit resets (OpenRouter resets at 00:00 UTC: daily, Mondays, the 1st); Infinity for none. */
+export function daysUntilReset(reset: string | null, now: Date): number {
+  const y = now.getUTCFullYear(), m = now.getUTCMonth(), d = now.getUTCDate();
+  const at = reset === "daily" ? Date.UTC(y, m, d + 1)
+    : reset === "weekly" ? Date.UTC(y, m, d + ((8 - now.getUTCDay()) % 7 || 7))
+      : reset === "monthly" ? Date.UTC(y, m + 1, 1) : Infinity;
+  return (at - now.getTime()) / 86_400_000;
+}
+
 /**
- * What is short, in plain words for the push; empty while nothing is. The key limit warns a week ahead at this month's
- * rate (for a monthly limit that is also when the pace reaches it); the account balance only near zero.
+ * What is short, in plain words for the push; empty while nothing is. The key's limit warns when, at this month's
+ * daily rate, it runs out within a week AND before it resets (a $60 monthly limit on the 27th with $12 left resets
+ * first: no warning). The account balance warns only near zero.
  */
 export function creditProblems(budget: OpenRouterBudget, now: Date): string[] {
   const rate = dailyRate(budget, now);
@@ -73,7 +91,7 @@ export function creditProblems(budget: OpenRouterBudget, now: Date): string[] {
   }
   if (budget.keyLimitUsd !== null && budget.keyRemainingUsd !== null) {
     const days = rate > 0 ? budget.keyRemainingUsd / rate : Infinity;
-    if (budget.keyRemainingUsd <= 0 || days < CREDIT_RUNWAY_WARN_DAYS) {
+    if (budget.keyRemainingUsd <= 0 || (days < CREDIT_RUNWAY_WARN_DAYS && days < daysUntilReset(budget.keyLimitReset, now))) {
       const left = budget.keyRemainingUsd <= 0 ? "has run out"
         : `has $${budget.keyRemainingUsd.toFixed(2)} left, about ${days.toFixed(1)} days at $${rate.toFixed(2)}/day (around ${new Date(now.getTime() + days * 86_400_000).toISOString().slice(0, 10)})`;
       problems.push(`the key's $${budget.keyLimitUsd.toFixed(2)}${budget.keyLimitReset ? ` ${budget.keyLimitReset}` : ""} limit ${left}: raise the key's limit`);
@@ -82,18 +100,21 @@ export function creditProblems(budget: OpenRouterBudget, now: Date): string[] {
   return problems;
 }
 
-/** One pushed incident a Bangkok day while credit is short. Returns whether this call raised it. */
+/**
+ * One pushed incident a Bangkok day while credit is short, whichever saw it first: the hourly watch or a refused call.
+ * A later sighting the same day refreshes its text (not pushed again). Returns whether this call raised it.
+ */
 export async function raiseCreditIncident(db: Database, input: { problems: string[]; now: Date; cause: "watch" | "exhausted"; detail?: Record<string, unknown> }): Promise<boolean> {
   if (input.problems.length === 0) return false;
-  const day = bangkokDateKey(input.now);
   const lead = input.cause === "exhausted"
     ? "OpenRouter refused a model call for lack of credit. No feedback is written until it is topped up; classes retry every 10 minutes meanwhile."
     : "OpenRouter credit is running short. Feedback stops when it runs out.";
-  return recordIncident(db, {
-    dedupeKey: `model-credit:${input.cause}:${day}`,
-    kind: "model_credit",
-    severity: "critical",
+  const incident = {
+    dedupeKey: `model-credit:${bangkokDateKey(input.now)}`,
     summary: `${lead} ${input.problems.join("; ")}.`,
     detail: { cause: input.cause, problems: input.problems, ...(input.detail ?? {}) },
-  });
+  };
+  if (await recordIncident(db, { ...incident, kind: "model_credit", severity: "critical" })) return true;
+  await refreshOpenIncident(db, incident);
+  return false;
 }

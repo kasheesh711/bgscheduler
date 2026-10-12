@@ -253,7 +253,7 @@ export function isRateLimited(call: OpenRouterCallResult): call is OpenRouterCal
  * Any other 403 (a moderation refusal) is the model's answer to this lesson, not an outage.
  */
 export function isCreditExhausted(call: Pick<OpenRouterCallFailure, "httpStatus" | "error">): boolean {
-  return call.httpStatus === 402 || (call.httpStatus === 403 && /limit exceeded|insufficient credit/iu.test(call.error));
+  return call.httpStatus === 402 || (call.httpStatus === 403 && /key limit exceeded|insufficient credits?|requires more credits/iu.test(call.error));
 }
 
 /**
