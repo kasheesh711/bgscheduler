@@ -8,6 +8,7 @@ migration (SQLSTATE 42P01/42703) → 503; anything else → 500 with a generic m
 | Method | Path | Gate | Purpose |
 |---|---|---|---|
 | GET | `/api/tutor-offboarding` | admin | Dashboard payload (`OffboardingDashboard`); `{ available: false, reason }` when not set up, no snapshot |
+| GET | `/api/tutor-offboarding/current-tutors` | admin | Tutors teaching now (an upcoming class or a class in the last 30 days) with one email each, plus `needsEmail` and sheet-confirmed `excludedConfirmed`; `{ available: false, reason }` when not set up. `?format=csv` downloads recipients only (503 when unavailable); any other query → 400. `Cache-Control: private, no-store`. Read-only; used by the `email-current-tutors` skill |
 | GET | `/api/tutor-offboarding/analytics` | admin | Read-only analytics report from 1 March 2026 onward; returns `TutorOffboardingAnalytics` directly |
 | GET | `/api/tutor-offboarding/analytics/workforce` | admin | Filtered workforce report, with source revision and metric completeness |
 | GET | `/api/tutor-offboarding/analytics/workforce/drilldown` | admin | Revision-bound contributing people, sessions, observations and exceptions |

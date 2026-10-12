@@ -233,6 +233,21 @@ rejection. The owner should re-invite the dummy in Wise, record whether it retur
 `WISE_TEACHER_REMOVAL_VERIFIED=true` in the Vercel **Production** environment and redeploy. Preview deployments and
 local runs remain manual even if the flag is set. Deployment does not run the probe or remove any account.
 
+## Current tutor list and the email skill
+
+`GET /api/tutor-offboarding/current-tutors` lists everyone teaching now: an upcoming class, or a taught class in
+the last 30 days (owner decision, 12 October 2026). A person crossed out in the tutor sheet is left out even
+while still teaching. Each person gets one address through the post-class rule: the primary override, else one
+distinct Wise email. Two different Wise emails, or none, are listed under `needsEmail` and never guessed.
+Teaching admins count when they teach. The route reads Postgres only; `?format=csv` downloads the recipients.
+`buildCurrentTutorList` (`src/lib/tutor-offboarding/current-tutors.ts`) holds the rule.
+
+The committed Claude Code skill `.claude/skills/email-current-tutors/` (`/email-current-tutors`) uses this list.
+It confirms recipients with the sender, renders a BeGifted v3 company email with a bundled copy of the
+`begifted-design` 3.2.0 renderer, and creates a **Gmail draft** with every tutor in BCC through the sender's
+claude.ai Gmail connector. It never sends; the sender reviews the draft and presses Send. Each sender connects
+Gmail once in claude.ai → Settings → Connectors.
+
 ## Page and access
 
 Nav: Scheduling & Tutors → Tutor Offboarding. Admins with the page in `allowedPages` see the review list, Analytics,
