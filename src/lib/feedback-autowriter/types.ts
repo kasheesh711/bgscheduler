@@ -46,7 +46,7 @@ export const SUMMARY_FALLBACK_CAUSES = [
 ] as const;
 export type SummaryFallbackCause = (typeof SUMMARY_FALLBACK_CAUSES)[number];
 
-export type ModelArm = "glm" | "luna" | "sol";
+export type ModelArm = "glm" | "luna" | "sol" | "mimo";
 
 export interface OpenRouterProviderPreferences {
   order?: string[];

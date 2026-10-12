@@ -148,7 +148,7 @@ const EMPTY_DAY: Omit<TrendDay, "date"> = {
   reviewed: 0, accurate: 0, critical: 0, accuracy: null, accuracy7d: null, wilson14d: null,
   posted: 0, eligible: 0, coverage: null, coverage7d: null,
   minutesToPost: null, minutesToPost7d: null, costUsd: 0, costPerClass: null, costPerClass7d: null,
-  fromSummary: 0, fromTranscript: 0, transcriptShare7d: null, writers: { sol: 0, luna: 0, glm: 0 },
+  fromSummary: 0, fromTranscript: 0, transcriptShare7d: null, writers: { sol: 0, luna: 0, glm: 0, mimo: 0 },
 };
 
 describe("buildAutowriterTrends", () => {
@@ -208,16 +208,16 @@ describe("buildAutowriterTrends", () => {
   it("measures speed, cost, evidence and writers over the classes posted with that class date", () => {
     expect(day("2026-09-29")).toMatchObject({
       minutesToPost: 50, minutesToPost7d: 50, costUsd: 0.22, costPerClass: 0.11, costPerClass7d: 0.11,
-      fromSummary: 1, fromTranscript: 1, transcriptShare7d: 1 / 2, writers: { sol: 1, luna: 1, glm: 0 },
+      fromSummary: 1, fromTranscript: 1, transcriptShare7d: 1 / 2, writers: { sol: 1, luna: 1, glm: 0, mimo: 0 },
     });
     // A POST still awaiting its event counts as posted; the pooled median is over the classes, not the daily medians.
     expect(day("2026-09-30")).toMatchObject({
       minutesToPost: 22.5, minutesToPost7d: 37.5, costUsd: 0.11, costPerClass: 0.055, costPerClass7d: 0.0825,
-      fromSummary: 1, fromTranscript: 1, transcriptShare7d: 2 / 4, writers: { sol: 1, luna: 0, glm: 1 },
+      fromSummary: 1, fromTranscript: 1, transcriptShare7d: 2 / 4, writers: { sol: 1, luna: 0, glm: 1, mimo: 0 },
     });
     expect(day("2026-10-02")).toMatchObject({
       minutesToPost: 90, minutesToPost7d: 40, costUsd: 0.12, costPerClass: 0.12, costPerClass7d: 0.09,
-      fromSummary: 0, fromTranscript: 1, transcriptShare7d: 3 / 5, writers: { sol: 1, luna: 0, glm: 0 },
+      fromSummary: 0, fromTranscript: 1, transcriptShare7d: 3 / 5, writers: { sol: 1, luna: 0, glm: 0, mimo: 0 },
     });
   });
 
@@ -226,7 +226,7 @@ describe("buildAutowriterTrends", () => {
       reviewed: 6, accurate: 4, critical: 2, posted: 7, eligible: 12,
       medianMinutesToPost: 40, p90MinutesToPost: 90,
       costUsd: 0.45, costPerClass: 0.09,
-      fromSummary: 2, fromTranscript: 3, writers: { sol: 3, luna: 1, glm: 1 },
+      fromSummary: 2, fromTranscript: 3, writers: { sol: 3, luna: 1, glm: 1, mimo: 0 },
       holdsByCategory: { data_quality: 1, judge: 1, validation: 0, billing_or_form: 0, error: 1, other: 0 },
     });
     const empty = buildAutowriterTrends(source({ metrics: [], reviews: [], classes: [] }));

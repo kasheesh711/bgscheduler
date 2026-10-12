@@ -24,7 +24,7 @@ export type DashboardWindowDays = (typeof DASHBOARD_WINDOWS)[number];
 export interface DashboardCallRow {
   wiseSessionId: string;
   role: "writer" | "judge" | "transcriber";
-  arm: "glm" | "luna" | "sol" | "soniox";
+  arm: "glm" | "luna" | "sol" | "mimo" | "soniox";
   requestedModel: string;
   ok: boolean;
   costUsd: number;

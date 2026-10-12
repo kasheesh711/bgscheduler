@@ -176,7 +176,7 @@ describe("loadAutowriterTrends", () => {
       reviewed: 2, accurate: 1, critical: 1, accuracy: 1 / 2, accuracy7d: 1 / 2, wilson14d: wilsonLowerBound(1, 2),
       posted: 2, eligible: 3, coverage: 2 / 3, coverage7d: 2 / 3,
       minutesToPost: 50, minutesToPost7d: 50, costUsd: 0.244, costPerClass: 0.122, costPerClass7d: 0.122,
-      fromSummary: 1, fromTranscript: 1, transcriptShare7d: 1 / 2, writers: { sol: 1, luna: 1, glm: 0 },
+      fromSummary: 1, fromTranscript: 1, transcriptShare7d: 1 / 2, writers: { sol: 1, luna: 1, glm: 0, mimo: 0 },
     });
     // The class that ended at 00:30 Bangkok time belongs to 30 Sep; its review has no verdict yet.
     expect(day("2026-09-30")).toEqual({
@@ -184,7 +184,7 @@ describe("loadAutowriterTrends", () => {
       reviewed: 0, accurate: 0, critical: 0, accuracy: null, accuracy7d: 1 / 2, wilson14d: wilsonLowerBound(1, 2),
       posted: 1, eligible: 1, coverage: 1, coverage7d: 3 / 4,
       minutesToPost: 20, minutesToPost7d: 40, costUsd: 0.03, costPerClass: 0.03, costPerClass7d: 0.0913,
-      fromSummary: 0, fromTranscript: 1, transcriptShare7d: 2 / 3, writers: { sol: 1, luna: 0, glm: 0 },
+      fromSummary: 0, fromTranscript: 1, transcriptShare7d: 2 / 3, writers: { sol: 1, luna: 0, glm: 0, mimo: 0 },
     });
     // The gap day: its own values are empty, the rolling ones carry on.
     expect(day("2026-10-01")).toEqual({
@@ -192,7 +192,7 @@ describe("loadAutowriterTrends", () => {
       reviewed: 0, accurate: 0, critical: 0, accuracy: null, accuracy7d: 1 / 2, wilson14d: wilsonLowerBound(1, 2),
       posted: 0, eligible: 0, coverage: null, coverage7d: 3 / 4,
       minutesToPost: null, minutesToPost7d: 40, costUsd: 0, costPerClass: null, costPerClass7d: 0.0913,
-      fromSummary: 0, fromTranscript: 0, transcriptShare7d: 2 / 3, writers: { sol: 0, luna: 0, glm: 0 },
+      fromSummary: 0, fromTranscript: 0, transcriptShare7d: 2 / 3, writers: { sol: 0, luna: 0, glm: 0, mimo: 0 },
     });
     // A held class costs money but is not a posted class.
     expect(day("2026-10-02")).toMatchObject({ costUsd: 0.06, costPerClass: null, costPerClass7d: 0.1113, minutesToPost: null, fromTranscript: 0 });
@@ -204,7 +204,7 @@ describe("loadAutowriterTrends", () => {
       reviewed: 2, accurate: 1, critical: 1, posted: 3, eligible: 4,
       medianMinutesToPost: 40, p90MinutesToPost: 60,
       costUsd: 0.334, costPerClass: 0.1113,
-      fromSummary: 1, fromTranscript: 2, writers: { sol: 2, luna: 1, glm: 0 },
+      fromSummary: 1, fromTranscript: 2, writers: { sol: 2, luna: 1, glm: 0, mimo: 0 },
       holdsByCategory: { data_quality: 1, judge: 1, validation: 0, billing_or_form: 0, error: 0, other: 0 },
     });
   });
@@ -215,7 +215,7 @@ describe("loadAutowriterTrends", () => {
     expect(mimi.tutorKey).toBe("Mimi");
     expect(mimi.days.find((entry) => entry.date === "2026-09-29")).toMatchObject({
       reviewed: 2, accurate: 1, critical: 1, posted: 2, eligible: 2, coverage: 1, minutesToPost: 50, costUsd: 0.154,
-      fromSummary: 1, fromTranscript: 1, writers: { sol: 1, luna: 1, glm: 0 },
+      fromSummary: 1, fromTranscript: 1, writers: { sol: 1, luna: 1, glm: 0, mimo: 0 },
     });
     expect(mimi.days.find((entry) => entry.date === "2026-09-30")).toMatchObject({ posted: 0, eligible: 0, coverage: null, coverage7d: 1, costUsd: 0 });
     expect(mimi.totals).toMatchObject({

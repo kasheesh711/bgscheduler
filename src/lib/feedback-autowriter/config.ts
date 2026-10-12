@@ -132,7 +132,16 @@ export const AUTOWRITER_MODELS = {
     arm: "glm", model: "z-ai/glm-5.3-flash", provider: GLM_ZDR_ROUTE,
     expectProvider: "Together", expectModel: "z-ai/glm-5.3-flash",
   },
-} as const satisfies { writer: AutowriterModelConfig; fallbackWriter: AutowriterModelConfig; judge: AutowriterModelRoute };
+  /**
+   * Xiaomi MiMo-V2.6-Pro (owner, 12 Oct 2026: "too expensive"): $0.43 / $0.87 per million tokens against Sol's $2 / $10
+   * on its Azure ZDR host. Only zero-data-retention hosts serve it (DeepInfra, Novita); not pinned to one.
+   * The first writer while `FEEDBACK_AUTOWRITER_PRIMARY_WRITER=mimo` (`writersFor`).
+   */
+  mimoWriter: {
+    arm: "mimo", model: "xiaomi/mimo-v2.6-pro", provider: OPENAI_ZDR_ROUTE, effort: "high",
+    expectModel: "xiaomi/mimo-v2.6-pro",
+  },
+} as const satisfies { writer: AutowriterModelConfig; fallbackWriter: AutowriterModelConfig; judge: AutowriterModelRoute; mimoWriter: AutowriterModelConfig };
 
 /**
  * Judge v5 (owner decision, 30 Sep): every draft is judged at each of these efforts, in parallel on byte-identical
@@ -178,6 +187,7 @@ export const AUTOWRITER_RATE_LIMIT_RETRY_MAX_TOTAL_WAIT_MS = 45_000;
 export const AUTOWRITER_WRITER_BY_ARM: Record<ModelArm, AutowriterModelConfig> = {
   sol: AUTOWRITER_MODELS.writer,
   luna: AUTOWRITER_MODELS.fallbackWriter,
+  mimo: AUTOWRITER_MODELS.mimoWriter,
   glm: {
     arm: "glm", model: "z-ai/glm-5.3-flash", provider: GLM_ZDR_ROUTE, effort: "max",
     expectProvider: "Together", expectModel: "z-ai/glm-5.3-flash",
@@ -189,10 +199,17 @@ export const AUTOWRITER_WRITER_BY_ARM: Record<ModelArm, AutowriterModelConfig> =
  * the tutors whose roster entries say `writer: "luna"` (the 13 added that day) — Luna first and Sol as their fallback.
  * Keyed by the canonical tutor key, so both of a tutor's Wise accounts write the same way.
  */
-export function writersFor(canonicalTutorKey: string | null | undefined): AutowriterModelConfig[] {
-  return rosterWriterArm(canonicalTutorKey) === "luna"
+export function writersFor(canonicalTutorKey: string | null | undefined, env: AutowriterEnvironment = process.env): AutowriterModelConfig[] {
+  const order = rosterWriterArm(canonicalTutorKey) === "luna"
     ? [AUTOWRITER_MODELS.fallbackWriter, AUTOWRITER_MODELS.writer]
     : [AUTOWRITER_MODELS.writer, AUTOWRITER_MODELS.fallbackWriter];
+  // MiMo first for every tutor, their own first writer as the fallback (owner, 12 Oct 2026: cost).
+  return autowriterPrimaryWriter(env) === "mimo" ? [AUTOWRITER_MODELS.mimoWriter, order[0]] : order;
+}
+
+/** `FEEDBACK_AUTOWRITER_PRIMARY_WRITER=mimo` puts MiMo-V2.6-Pro first for every tutor; anything else keeps each tutor's order. */
+export function autowriterPrimaryWriter(env: AutowriterEnvironment = process.env): "mimo" | null {
+  return value(env, "FEEDBACK_AUTOWRITER_PRIMARY_WRITER") === "mimo" ? "mimo" : null;
 }
 
 /** A session with no summary yet is retried this often … */

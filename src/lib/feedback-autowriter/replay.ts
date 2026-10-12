@@ -12,6 +12,7 @@ import {
   AUTOWRITER_TRANSCRIBE_POLL_MS,
   AUTOWRITER_TRANSCRIBE_TIMEOUT_MS,
   AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS,
+  type AutowriterModelConfig,
   type AutowriterModelRoute,
 } from "./config";
 import {
@@ -118,6 +119,8 @@ export interface ReplayDeps {
   summaryWhenNoCachedTranscript?: boolean;
   /** Passes to run besides the transcript draft (both on by default). */
   passes?: { summaryDraft?: boolean; postedJudge?: boolean };
+  /** Writers to draft with, in order, instead of each tutor's production order (a model bake-off). */
+  writers?: readonly AutowriterModelConfig[];
   /** What a draft must not copy (production: `loadTutorPriorFeedback`). */
   priorFeedback: (tutor: AutowriterTutor) => Promise<PriorFeedbackComparison[]>;
   /** Zoom's WEBVTT (tests inject a fake). */
@@ -512,6 +515,7 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
           priorFeedback,
           record: async () => {},
           remainingMs: () => REPLAY_BUDGET_MS,
+          writers: deps.writers,
           callModel: recordingCaller(deps, record, "transcript_draft", { writerContents }),
           sleep: deps.sleep,
           random: deps.random,
@@ -563,6 +567,7 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
       priorFeedback,
       record: async () => {},
       remainingMs: () => REPLAY_BUDGET_MS,
+      writers: deps.writers,
       callModel: recordingCaller(deps, record, "summary_draft", { writerContents }),
       sleep: deps.sleep,
       random: deps.random,

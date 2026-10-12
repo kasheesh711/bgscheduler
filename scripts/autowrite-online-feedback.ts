@@ -26,6 +26,7 @@
  *     [--out=<dir>]  write the run there instead of .feedback-autowriter/replay/<ts>/
  *     [--no-summary-draft] [--no-posted-judge]  skip those passes (model calls)
  *     [--max-model-usd=<n>]  stop starting classes once the finished classes' model calls cost this much
+ *     [--writers=mimo,sol]  draft with these writer arms, in order, instead of each tutor's production order
  *     [--summary-when-uncached]  with --transcripts-from: take production's summary route for a class with no cached transcript
  *
  * Run with: npx tsx --tsconfig scripts/tsconfig.json scripts/autowrite-online-feedback.ts …
@@ -37,6 +38,8 @@ import path from "node:path";
 import { getDb } from "@/lib/db";
 import { assignModelArms } from "@/lib/feedback-autowriter/ab";
 import {
+  AUTOWRITER_WRITER_BY_ARM,
+  type AutowriterModelConfig,
   autowriterAlertEmails,
   autowriterHoldSummaryOnly,
   autowriterTranscriptFirst,
@@ -285,6 +288,11 @@ async function replay(): Promise<void> {
   const perTutor = count("per-tutor", sessionIds.length > 0 || cacheDir ? 0 : 4, 20);
   const days = count("days", 7, 30);
   const concurrency = Math.max(1, count("concurrency", 3, 6));
+  const writersOption = option("writers")?.split(",").map((arm) => {
+    const writer = (AUTOWRITER_WRITER_BY_ARM as Partial<Record<string, AutowriterModelConfig>>)[arm.trim()];
+    if (!writer) throw new Error(`--writers: unknown arm "${arm}" (${Object.keys(AUTOWRITER_WRITER_BY_ARM).join(", ")})`);
+    return writer;
+  });
   const maxModelUsdOption = option("max-model-usd");
   const maxModelUsd = maxModelUsdOption === undefined ? undefined : Number(maxModelUsdOption);
   if (maxModelUsd !== undefined && !(Number.isFinite(maxModelUsd) && maxModelUsd > 0)) throw new Error("--max-model-usd must be a positive number");
@@ -370,6 +378,7 @@ async function replay(): Promise<void> {
     ...(fetchCaptions ? { fetchText: fetchCaptions } : {}),
     ...(transcriptSource ? { transcriptSource, requireCachedTranscript: true, summaryWhenNoCachedTranscript: flag("summary-when-uncached") } : {}),
     passes: { summaryDraft: !flag("no-summary-draft"), postedJudge: !flag("no-posted-judge") },
+    ...(writersOption ? { writers: writersOption } : {}),
   }, samples, {
     concurrency,
     maxModelUsd,

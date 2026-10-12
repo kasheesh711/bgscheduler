@@ -46,7 +46,7 @@ function day(date: string, patch: Partial<TrendDay> = {}): TrendDay {
   return {
     date, reviewed: 0, accurate: 0, critical: 0, accuracy: null, accuracy7d: null, wilson14d: null, posted: 0, eligible: 0, coverage: null, coverage7d: null,
     minutesToPost: null, minutesToPost7d: null, costUsd: 0, costPerClass: null, costPerClass7d: null, fromSummary: 0, fromTranscript: 0, transcriptShare7d: null,
-    writers: { sol: 0, luna: 0, glm: 0 }, ...patch,
+    writers: { sol: 0, luna: 0, glm: 0, mimo: 0 }, ...patch,
   };
 }
 

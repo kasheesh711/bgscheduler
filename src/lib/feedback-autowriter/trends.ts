@@ -80,7 +80,7 @@ export interface TrendDay {
   /** fromTranscript ÷ classes posted, pooled over seven days. */
   transcriptShare7d: number | null;
   /** Classes posted with this class date, by the writer of the posted draft. */
-  writers: { sol: number; luna: number; glm: number };
+  writers: { sol: number; luna: number; glm: number; mimo: number };
 }
 
 export interface AutowriterTrends {
@@ -108,7 +108,7 @@ export interface AutowriterTrends {
     costPerClass: number | null;
     fromSummary: number;
     fromTranscript: number;
-    writers: { sol: number; luna: number; glm: number };
+    writers: { sol: number; luna: number; glm: number; mimo: number };
     /** Classes in state `held` with a class date in the range, by `holdReasonCategory`. */
     holdsByCategory: Record<HoldReasonCategory, number>;
   };
@@ -189,7 +189,7 @@ const usd = (value: number | null) => round(value, 4);
 
 /** A POST claimed for the class: in flight, awaiting its event, or verified (as the dashboard counts "posted"). */
 const POSTED_STATES: ReadonlySet<AutowriterState> = new Set(["posting", "awaiting_event", "verified"]);
-const WRITER_ARMS = ["sol", "luna", "glm"] as const satisfies readonly ModelArm[];
+const WRITER_ARMS = ["sol", "luna", "glm", "mimo"] as const satisfies readonly ModelArm[];
 
 /** Everything counted for one class date. */
 interface DayCounts {
@@ -212,7 +212,7 @@ interface DayCounts {
 function emptyDayCounts(): DayCounts {
   return {
     hasData: false, reviewed: 0, accurate: 0, critical: 0, posted: 0, eligible: 0, postedClasses: 0, latencies: [],
-    costUsd: 0, fromSummary: 0, fromTranscript: 0, writers: { sol: 0, luna: 0, glm: 0 }, heldReasons: [],
+    costUsd: 0, fromSummary: 0, fromTranscript: 0, writers: { sol: 0, luna: 0, glm: 0, mimo: 0 }, heldReasons: [],
   };
 }
 

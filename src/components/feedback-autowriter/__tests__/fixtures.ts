@@ -456,13 +456,13 @@ export function trendsFixture(rangeDays: TrendRangeDays = 14, overrides: Partial
     fromSummary: POSTED[index] - FROM_TRANSCRIPT[index],
     fromTranscript: FROM_TRANSCRIPT[index],
     transcriptShare7d: pooled(FROM_TRANSCRIPT, POSTED, index),
-    writers: { sol: POSTED[index] - BY_LUNA[index] - BY_GLM[index], luna: BY_LUNA[index], glm: BY_GLM[index] },
+    writers: { sol: POSTED[index] - BY_LUNA[index] - BY_GLM[index], luna: BY_LUNA[index], glm: BY_GLM[index], mimo: 0 },
   }));
   const start = addDays(FIXTURE_TODAY, -(rangeDays - 1));
   const empty = Array.from({ length: rangeDays - 14 }, (_, index): TrendDay => ({
     date: addDays(start, index), reviewed: 0, accurate: 0, critical: 0, accuracy: null, accuracy7d: null, wilson14d: null, posted: 0, eligible: 0,
     coverage: null, coverage7d: null, minutesToPost: null, minutesToPost7d: null, costUsd: 0, costPerClass: null, costPerClass7d: null, fromSummary: 0,
-    fromTranscript: 0, transcriptShare7d: null, writers: { sol: 0, luna: 0, glm: 0 },
+    fromTranscript: 0, transcriptShare7d: null, writers: { sol: 0, luna: 0, glm: 0, mimo: 0 },
   }));
   return {
     generatedAt: FIXTURE_NOW,
@@ -475,7 +475,7 @@ export function trendsFixture(rangeDays: TrendRangeDays = 14, overrides: Partial
       reviewed: sum(REVIEWED), accurate: sum(ACCURATE), critical: 1, posted: sum(POSTED), eligible: sum(ELIGIBLE),
       medianMinutesToPost: 12.4, p90MinutesToPost: 71.5, costUsd: round(sum(cost), 4), costPerClass: round(sum(cost) / sum(POSTED), 4),
       fromSummary: sum(POSTED) - sum(FROM_TRANSCRIPT), fromTranscript: sum(FROM_TRANSCRIPT),
-      writers: { sol: sum(POSTED) - sum(BY_LUNA) - sum(BY_GLM), luna: sum(BY_LUNA), glm: sum(BY_GLM) },
+      writers: { sol: sum(POSTED) - sum(BY_LUNA) - sum(BY_GLM), luna: sum(BY_LUNA), glm: sum(BY_GLM), mimo: 0 },
       holdsByCategory: { data_quality: 5, judge: 3, validation: 1, billing_or_form: 0, error: 0, other: 0 },
     },
     ...overrides,
@@ -530,12 +530,12 @@ export function shortHistoryTrendsFixture(): AutowriterTrends {
   const days = full.days.map((day, index): TrendDay => index >= 12 ? {
     ...day, reviewed: 0, accurate: 0, critical: 0, accuracy: null, accuracy7d: null, wilson14d: null,
     posted: index === 12 ? 2 : 3, eligible: 3, coverage: index === 12 ? 2 / 3 : 1, coverage7d: index === 12 ? 2 / 3 : 5 / 6,
-    fromSummary: 1, fromTranscript: index === 12 ? 1 : 2, transcriptShare7d: index === 12 ? 0.5 : 0.6, writers: { sol: index === 12 ? 2 : 3, luna: 0, glm: 0 },
+    fromSummary: 1, fromTranscript: index === 12 ? 1 : 2, transcriptShare7d: index === 12 ? 0.5 : 0.6, writers: { sol: index === 12 ? 2 : 3, luna: 0, glm: 0, mimo: 0 },
     minutesToPost7d: day.minutesToPost, costPerClass7d: day.costPerClass, costUsd: round((index === 12 ? 2 : 3) * (day.costPerClass ?? 0), 4),
   } : {
     ...day, reviewed: 0, accurate: 0, critical: 0, accuracy: null, accuracy7d: null, wilson14d: null, posted: 0, eligible: 0, coverage: null, coverage7d: null,
     minutesToPost: null, minutesToPost7d: null, costUsd: 0, costPerClass: null, costPerClass7d: null, fromSummary: 0, fromTranscript: 0, transcriptShare7d: null,
-    writers: { sol: 0, luna: 0, glm: 0 },
+    writers: { sol: 0, luna: 0, glm: 0, mimo: 0 },
   });
   return {
     ...full,
@@ -543,7 +543,7 @@ export function shortHistoryTrendsFixture(): AutowriterTrends {
     days,
     totals: {
       reviewed: 0, accurate: 0, critical: 0, posted: 5, eligible: 6, medianMinutesToPost: 10.5, p90MinutesToPost: 11.1, costUsd: 0.167, costPerClass: 0.0334,
-      fromSummary: 2, fromTranscript: 3, writers: { sol: 5, luna: 0, glm: 0 },
+      fromSummary: 2, fromTranscript: 3, writers: { sol: 5, luna: 0, glm: 0, mimo: 0 },
       holdsByCategory: { data_quality: 0, judge: 0, validation: 0, billing_or_form: 0, error: 0, other: 0 },
     },
   };

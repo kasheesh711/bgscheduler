@@ -263,7 +263,7 @@ const HOLD_BAR_TONE = ["bg-amber-500/70", "bg-amber-400/60", "bg-amber-300/70", 
 function EvidenceCard({ trends }: { trends: AutowriterTrends }) {
   const { totals, days, range } = trends;
   const posted = totals.fromSummary + totals.fromTranscript;
-  const written = totals.writers.sol + totals.writers.luna + totals.writers.glm;
+  const written = totals.writers.sol + totals.writers.luna + totals.writers.glm + totals.writers.mimo;
   const holds = HOLD_REASON_CATEGORIES.map((category) => ({ category, held: totals.holdsByCategory[category] })).filter((entry) => entry.held > 0);
   const held = holds.reduce((sum, entry) => sum + entry.held, 0);
   return (
@@ -281,7 +281,7 @@ function EvidenceCard({ trends }: { trends: AutowriterTrends }) {
           <div>
             <Upper className="mb-[7px] block text-[9px]">Writer · last {range.days} days</Upper>
             <div className="flex flex-wrap gap-[7px]">
-              {(["sol", "luna", "glm"] as const).map((arm) => (
+              {(["mimo", "sol", "luna", "glm"] as const).filter((arm) => arm !== "mimo" || totals.writers.mimo > 0).map((arm) => (
                 <Pill key={arm} label={ARM_LABEL[arm]} value={<>{totals.writers[arm]} · {percent(ratio(totals.writers[arm], written), 0)}</>} />
               ))}
             </div>
