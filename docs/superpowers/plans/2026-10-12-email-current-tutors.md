@@ -736,7 +736,7 @@ Expected: the only import line printed is `import { escapeEmailHtml } from "./re
 
 `company.mjs`, `company-render.mjs` and `render.mjs` are unmodified copies of the `begifted-design` skill's
 `emails/runtime/` modules, release **3.2.0** (`assets/release.json`). Do not edit them here. To upgrade, copy the
-three files again from a newer `begifted-design` release and rerun `node --test .claude/skills/email-current-tutors/`.
+three files again from a newer `begifted-design` release and rerun `node --test .claude/skills/email-current-tutors/build-email.test.mjs`.
 
 The company templates adapt layouts from Colorlib's email templates. Their licence is reproduced in
 `LICENSE-colorlib-MIT.txt`. No upstream images, fonts or copy are bundled.
@@ -747,7 +747,7 @@ The company templates adapt layouts from Colorlib's email templates. Their licen
 Create `.claude/skills/email-current-tutors/build-email.test.mjs`:
 
 ```js
-// Self-check for build-email.mjs. Run: node --test .claude/skills/email-current-tutors/
+// Self-check for build-email.mjs. Run: node --test .claude/skills/email-current-tutors/build-email.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -817,7 +817,7 @@ test("prints usage for bad arguments", () => {
 
 - [ ] **Step 4: Run it to verify it fails**
 
-Run: `node --test .claude/skills/email-current-tutors/`
+Run: `node --test .claude/skills/email-current-tutors/build-email.test.mjs`
 Expected: FAIL. Every test fails because `build-email.mjs` does not exist (`Cannot find module` in stderr, non-zero status).
 
 - [ ] **Step 5: Write `build-email.mjs`**
@@ -872,7 +872,7 @@ try {
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
-Run: `node --test .claude/skills/email-current-tutors/`
+Run: `node --test .claude/skills/email-current-tutors/build-email.test.mjs`
 Expected: PASS, 4 tests, 0 failures.
 
 Confirm that Vitest and ESLint ignore the folder's `.test.mjs`. The unit project globs `src/**`. ESLint may lint it as plain JS, so run it:
@@ -1077,7 +1077,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Run the full local gate**
 
-Run: `npm run typecheck && npm test && node --test .claude/skills/email-current-tutors/ && npx eslint src/lib/tutor-offboarding src/app/api/tutor-offboarding .claude/skills/email-current-tutors && git diff --check origin/main...HEAD`
+Run: `npm run typecheck && npm test && node --test .claude/skills/email-current-tutors/build-email.test.mjs && npx eslint src/lib/tutor-offboarding src/app/api/tutor-offboarding .claude/skills/email-current-tutors && git diff --check origin/main...HEAD`
 Expected: every command exits 0. The full unit suite passes.
 
 Do not run `npm run build` locally; CI runs it (worktree policy).
@@ -1101,7 +1101,7 @@ gh pr create --draft --title "Email current tutors: read-only list endpoint + te
 Spec: `docs/superpowers/specs/2026-10-12-email-current-tutors-design.md` · Plan: `docs/superpowers/plans/2026-10-12-email-current-tutors.md`
 
 ## Checks run
-- `npm run typecheck`, `npm test`, `node --test .claude/skills/email-current-tutors/`, eslint on changed paths, `git diff --check`
+- `npm run typecheck`, `npm test`, `node --test .claude/skills/email-current-tutors/build-email.test.mjs`, eslint on changed paths, `git diff --check`
 
 ## Not included
 No migration, env var, cron or Wise write. Post-deploy dry run (plan Task 5 Step 4) still to do.
