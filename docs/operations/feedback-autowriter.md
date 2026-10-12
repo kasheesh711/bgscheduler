@@ -532,7 +532,8 @@ counts Sol drafts for them and Luna drafts for everyone else.
 **Luna time-outs (12 Oct).** Luna at reasoning `max` takes 1–4 minutes on an hour's transcript and times out at
 180 s on about a quarter of long lessons. A time-out now hands the class to Sol in the same run (a `luna` writer row
 with `error = 'timeout'`, then a `sol` row seconds later); only when Sol's draft does not pass either does the run end
-as `infra:luna:timeout` and count toward `writer_failed`. To see how often it happens:
+as `infra:luna:timeout` (`infra:luna:timeout; sol:…` when Sol failed too) and count toward `writer_failed`. To see how
+often Luna times out (the count also includes a Luna call our own deadline cut short):
 
 ```sql
 SELECT date(created_at AT TIME ZONE 'Asia/Bangkok') AS day, count(*) AS luna_timeouts

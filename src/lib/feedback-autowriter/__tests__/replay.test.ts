@@ -446,7 +446,9 @@ describe("replay: the same evidence and decisions as production", () => {
     );
     expect(transcriptWrites).toBe(5);
     // Two writer failures, not three in a row: no fallback.
-    expect(record).toMatchObject({ outcome: `error:${AUTOWRITER_MODELS.writer.arm}:timeout`, afterFallback: null });
+    expect(record).toMatchObject({
+      outcome: `error:${AUTOWRITER_MODELS.writer.arm}:timeout; ${AUTOWRITER_MODELS.fallbackWriter.arm}:timeout`, afterFallback: null,
+    });
   });
 
   it("holds a recording or transcript too short for the class, and skips a class that would not have passed the gates", async () => {
