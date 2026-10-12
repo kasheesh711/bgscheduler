@@ -217,7 +217,7 @@ export async function waitForSubmitEvents(ops: Pick<WiseFeedbackOps, "findFeedba
 /**
  * Complete Wise's blank auto-submission with the drafted feedback, never
  * anything a person wrote:
- *   credit baseline → fresh GET + every gate → store claim (lease, live, not
+ *   GET + every gate → credit baseline → fresh GET + every gate → store claim (lease, live, not
  *   halted, tutor on) → one POST (never retried) → GET verify + credit entry +
  *   a non-auto submit event by the API owner. A teacher/admin submit event by
  *   anyone else inside the POST window means a person may have been
@@ -263,6 +263,11 @@ export async function submitFeedbackGuarded(input: {
   } catch (error) {
     return abort(`detail_read_failed:${error instanceof Error ? error.name : "Error"}`);
   }
+  // A gate that already fails on this first read (above all: the tutor saved their own feedback while we were
+  // transcribing and writing) is the real reason the class cannot be posted. Checked before the credit read, because
+  // a tutor's save rewrites the credit ledger and would otherwise surface as a false `credit_baseline` hold.
+  const earlyGates = evaluateSessionGates(before, input.gateInput);
+  if (!earlyGates.ok && !input.acceptGateReason?.(earlyGates.reason)) return { status: "aborted_precheck", reason: earlyGates.reason, gate: true };
   const [student] = studentParticipants(before);
   if (!student?.wiseUserId) return abort("student_id_missing");
   // The slow, paced credit read happens BEFORE the fresh detail GET so the gap

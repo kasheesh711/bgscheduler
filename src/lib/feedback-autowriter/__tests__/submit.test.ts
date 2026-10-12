@@ -202,6 +202,18 @@ describe("submitFeedbackGuarded", () => {
     expect(ops.posts).toHaveLength(0);
   });
 
+  it("a tutor's own save wins over the credit check: skipped as the tutor's, never held as a credit mismatch", async () => {
+    // A tutor who saves while we transcribe and write rewrites the credit ledger (0 entries for the session).
+    const written = autoBlankSubmission({ metadata: null, answers: answers(["Tutor wrote this", "", "", ""]) });
+    const ops = fakeWise({ initial: sessionDetail({ feedbackSubmissions: [written] }), creditsBefore: [] });
+    const store = memoryStore();
+    expect(await submitFeedbackGuarded({ ...base, ops, store })).toEqual({ status: "aborted_precheck", reason: "human_submission", gate: true });
+    expect(ops.getSessionCreditEntries).not.toHaveBeenCalled();
+    expect(ops.getSessionDetail).toHaveBeenCalledTimes(1);
+    expect(store.claims).toBe(0);
+    expect(ops.posts).toHaveLength(0);
+  });
+
   it("refuses non-empty homework when the form has no homework question", async () => {
     const ops = fakeWise({
       initial: sessionDetail({
