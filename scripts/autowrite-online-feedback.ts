@@ -41,6 +41,7 @@ import {
   autowriterHoldSummaryOnly,
   autowriterTranscriptFirst,
   autowriterTranscriptsEnabled,
+  autowriterZoomEnglish,
   openRouterApiKey,
   sonioxApiKey,
   wiseApiActorId,
@@ -136,6 +137,7 @@ function cliDeps(budgetMs: number): AutowriterDeps {
     transcriptFirst: autowriterTranscriptFirst(),
     // Same switch as production (`FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY`).
     holdSummaryOnly: autowriterHoldSummaryOnly(),
+    zoomEnglish: autowriterZoomEnglish(),
   };
 }
 

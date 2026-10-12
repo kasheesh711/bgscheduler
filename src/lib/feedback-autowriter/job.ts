@@ -42,6 +42,7 @@ import {
   AUTOWRITER_TRANSCRIBE_WAIT_MS,
   AUTOWRITER_TRANSCRIBING_RECHECK_MS,
   AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS,
+  AUTOWRITER_ZOOM_ENGLISH_HISTORY_MS,
   AUTOWRITER_ZOOM_TRANSCRIPT_RECHECK_MS,
   AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS,
   autowriterHoldSummaryOnly,
@@ -75,6 +76,7 @@ import {
   acquireSweepLease,
   activeSonioxJobIds,
   claimGeneration,
+  classSonioxThaiShares,
   clearSonioxTranscription,
   ensureSessionRow,
   expireOverdueRows,
@@ -116,7 +118,16 @@ import {
   type WiseFeedbackOps,
 } from "./submit";
 import { SonioxError, sonioxCostUsd, type SonioxClient } from "./soniox";
-import { buildTranscriptEvidence, parseZoomVtt, sonioxJobInput, thaiShare, type ZoomCue } from "./transcript";
+import {
+  buildTranscriptEvidence,
+  parseZoomVtt,
+  sonioxJobInput,
+  thaiShare,
+  zoomEnglishEvidence,
+  zoomEnglishPrecheck,
+  type TranscriptEvidence,
+  type ZoomCue,
+} from "./transcript";
 import { AUTOWRITER_DEADLINE_MARGIN_MS, type BillingPlan, type ModelArm, type SubmissionState, type SummaryFallbackCause } from "./types";
 
 export interface AutowriterDeps {
@@ -147,6 +158,11 @@ export interface AutowriterDeps {
    * call. Unset: read from the environment, so a deps builder that forgets it still fails closed.
    */
   holdSummaryOnly?: boolean;
+  /**
+   * English lessons from Zoom's captions (`FEEDBACK_AUTOWRITER_ZOOM_ENGLISH`): in the transcript pass, a class whose
+   * captions, summary and recent Soniox transcripts are English is written from Zoom's captions, with no Soniox job.
+   */
+  zoomEnglish?: boolean;
   /** Fetches Zoom's WEBVTT (tests inject a fake). */
   fetchText?: (url: string) => Promise<string>;
   now?: () => Date;
@@ -1041,140 +1057,171 @@ async function processTranscript(deps: AutowriterDeps, input: {
     return out(options.infra ? "infra" : "retry", reason);
   };
 
-  // 1. The Soniox job: the one already submitted, or a new one on Wise's recording.
-  let jobId = row.sonioxTranscriptionId;
-  // When the polled job was submitted: now for a new job; a stored stamp only if it is this job's.
-  const stamp = row.metadata as { sonioxSubmittedJob?: unknown; sonioxSubmittedAt?: unknown };
-  let submittedAt = jobId && stamp.sonioxSubmittedJob === jobId ? metadataDate(stamp.sonioxSubmittedAt) : null;
-  if (!jobId) {
-    if (!recording.ok) {
-      // Transcript first: still no recording at the fallback time → the summary (no `no_recording` alert);
-      // until then the recheck never lands after that time.
-      if (canFallBack && now.getTime() >= transcriptFirstFallbackAt(detail)) {
-        return fallBackToSummary({ release, out, cause: "no_recording", now });
-      }
-      await release({
-        state: "awaiting_recording", reason: recording.reason,
-        retryInMs: canFallBack ? recordingRecheckMs(detail, now) : AUTOWRITER_RECORDING_RECHECK_MS,
-      });
-      return out("awaiting_recording", recording.reason);
-    }
-    try {
-      jobId = (await soniox.create(sonioxJobInput({
-        wiseSessionId: row.wiseSessionId, audioUrl: recording.url, detail, tutorNames: tutor.tutorNames, studentName: student.name,
-      }))).id;
-    } catch (error) {
-      return transcribeFailed(`soniox_create:${error instanceof Error ? error.message.slice(0, 120) : "error"}`, { infra: true, keepJob: null });
-    }
-    submittedAt = new Date();
-    await setSonioxTranscription(db, row.wiseSessionId, input.token, jobId);
-  }
-
-  // 2. Wait for it — webhooks wait up to ~3 min; the backstop only looks, so it never starves other classes.
-  const started = Date.now();
-  const waitMs = input.trigger === "cron"
-    ? 0
-    : Math.min(AUTOWRITER_TRANSCRIBE_WAIT_MS, Math.max(0, remaining(deps) - AUTOWRITER_SWEEP_MIN_REMAINING_MS));
-  const maxPolls = Math.max(1, Math.ceil(waitMs / AUTOWRITER_TRANSCRIBE_POLL_MS));
-  let status: Awaited<ReturnType<typeof soniox.get>> | null = null;
-  let lastGetError: string | null = null;
-  for (let polls = 1; ; polls += 1) {
-    try {
-      status = await soniox.get(jobId);
-    } catch (error) {
-      // An unknown job (deleted, expired) cannot finish: start over on a new one.
-      if (error instanceof SonioxError && error.status === 404) {
-        await clearSonioxTranscription(db, row.wiseSessionId, jobId);
-        return transcribeFailed("soniox_job_missing", { infra: false, keepJob: null });
-      }
-      // A failed check after a good one keeps the good answer: only never reaching Soniox counts as an error.
-      lastGetError = error instanceof Error ? error.message.slice(0, 120) : "error";
-    }
-    if (status?.status === "completed" || status?.status === "error") break;
-    if (polls >= maxPolls || Date.now() - started + AUTOWRITER_TRANSCRIBE_POLL_MS > waitMs) break;
-    await sleep(AUTOWRITER_TRANSCRIBE_POLL_MS);
-  }
-  if (!status) {
-    // Soniox could not be asked (key, credit, outage): an error, counted toward the hold.
-    return transcribeFailed(`soniox_status:${lastGetError ?? "unknown"}`, { infra: true, keepJob: jobId });
-  }
-  if (status.status === "queued" || status.status === "processing") {
-    // Wall clock, like the stored submit time. An hour of audio took 2–7 min in the pilot.
-    if (submittedAt && Date.now() - submittedAt.getTime() > AUTOWRITER_TRANSCRIBE_TIMEOUT_MS) {
-      const gone = await soniox.remove(jobId).catch(() => null);
-      if (gone) await clearSonioxTranscription(db, row.wiseSessionId, jobId);
-      return transcribeFailed("soniox_timeout", { infra: true, keepJob: gone ? null : jobId });
-    }
-    await release({ state: "transcribing", reason: "transcription_in_progress", retryInMs: AUTOWRITER_TRANSCRIBING_RECHECK_MS, sonioxTranscriptionId: jobId });
-    return out("transcribing", jobId);
-  }
-  if (status.status === "error") {
-    const gone = await soniox.remove(jobId).catch(() => null);
-    if (gone) await clearSonioxTranscription(db, row.wiseSessionId, jobId);
-    await recordTranscriptionCall(db, {
-      wiseSessionId: row.wiseSessionId, ok: false, audioDurationMs: status.audioDurationMs, latencyMs: Date.now() - started,
-      costUsd: null, error: status.errorMessage ?? "error",
-    });
-    return transcribeFailed(`soniox_error:${(status.errorMessage ?? "unknown").slice(0, 120)}`, { infra: false, keepJob: gone ? null : jobId });
-  }
-
-  // 3. Fetch (the job stays at Soniox until the class's review window ends; re-fetching is free).
-  let transcript: Awaited<ReturnType<typeof soniox.transcript>>;
-  try {
-    transcript = await soniox.transcript(jobId);
-  } catch (error) {
-    return transcribeFailed(`soniox_fetch:${error instanceof Error ? error.message.slice(0, 120) : "error"}`, { infra: true, keepJob: jobId });
-  }
-  const audioDurationMs = status.audioDurationMs ?? 0;
-  if ((row.metadata as { sonioxRecordedJob?: unknown }).sonioxRecordedJob !== jobId) {
-    await recordTranscriptionCall(db, {
-      wiseSessionId: row.wiseSessionId, ok: true, audioDurationMs, latencyMs: Date.now() - started,
-      costUsd: sonioxCostUsd(audioDurationMs),
-    });
-    await noteSonioxRecorded(db, row.wiseSessionId, jobId);
-  }
-
-  // 4. Who is who: Zoom's named cues when available, a clear talk-share split otherwise.
-  let cues: ZoomCue[] = [];
-  // Not published yet (or not readable right now) — as opposed to published without the teacher's name.
-  let zoomPending = true;
-  const vttUrl = zoomTranscriptUrl(detail);
-  if (vttUrl) {
-    try {
-      cues = parseZoomVtt(await (deps.fetchText ?? fetchText)(vttUrl));
-      zoomPending = false;
-    } catch {
-      cues = [];
-    }
-  }
-  const evidence = buildTranscriptEvidence({
-    transcript, audioDurationMs: status.audioDurationMs, scheduledMinutes,
-    zoomCues: cues, teacherName: detailTeacherName(detail), alsoTeacher: tutorSelfNames(detail),
-    studentNames: [student.name, ...(student.joinedAsGuest ? [student.joinedAsGuest] : [])],
-  });
-  const { speakers, rendered, meta: transcriptMeta } = evidence;
-  const holdFor = async (reason: string, extra: Record<string, unknown> = {}) => {
-    await release({ state: "held", reason, alertKind: "held", metadata: { transcript: transcriptMeta, ...extra } });
-    return out("held", reason);
-  };
-  // Soniox's own audio length catches a recording Wise gave no length for; then the transcript's own length.
-  if (evidence.tooShort) return holdFor(evidence.tooShort);
-  // Zoom's named transcript follows the recording by a few minutes: wait for it (keeping the job) so the
-  // labels are confirmed — only when it could name the tutor (Wise gives the teacher's name), only for a job
-  // this row stamped, and only up to the wait from its submit time.
-  const teacherName = detailTeacherName(detail);
-  if (zoomPending && teacherName && submittedAt && Date.now() - submittedAt.getTime() < AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS) {
+  // English lessons from Zoom's captions (FEEDBACK_AUTOWRITER_ZOOM_ENGLISH): decided before any Soniox job. A class
+  // whose captions, summary and recent Soniox transcripts are English, with only the tutor and the student named,
+  // is written from Zoom's own captions; anything less goes to Soniox below and stays there (`zoomEnglish.route`).
+  const studentNames = [student.name, ...(student.joinedAsGuest ? [student.joinedAsGuest] : [])];
+  const zoom = deps.zoomEnglish && !row.sonioxTranscriptionId && recording.ok && !zoomEnglishDeclined(row)
+    ? await zoomEnglishRoute(deps, { row, detail, recordingSeconds: recording.durationSeconds, scheduledMinutes, studentNames })
+    : null;
+  if (zoom?.kind === "wait") {
     await release({
       state: "transcribing", reason: "zoom_transcript_pending", retryInMs: AUTOWRITER_ZOOM_TRANSCRIPT_RECHECK_MS,
-      sonioxTranscriptionId: jobId, metadata: { transcript: transcriptMeta },
+      metadata: { zoomWaitSince: zoom.since },
     });
     return out("transcribing", "zoom_transcript_pending");
   }
-  if (speakers.method === "unclear") {
-    // Transcript first: without knowing who said what the summary is the better evidence.
-    if (canFallBack) return fallBackToSummary({ release, out, cause: "speakers_unclear", now, metadata: { transcript: transcriptMeta } });
-    return holdFor("speakers_unclear");
+  let jobId = row.sonioxTranscriptionId;
+  let evidence: TranscriptEvidence;
+  const holdFor = async (reason: string, extra: Record<string, unknown> = {}) => {
+    if (evidence.meta.source === "zoom") {
+      // A draft from Zoom's captions that the checks or the judges reject: Soniox's transcript gets the class, now.
+      await release({
+        state: "awaiting_recording", reason: "zoom_draft_held", retryInMs: 0,
+        metadata: { transcript: evidence.meta, zoomEnglish: { route: "soniox", reason: "zoom_draft_held", hold: reason }, ...extra },
+      });
+      return out("awaiting_recording", "zoom_draft_held");
+    }
+    await release({ state: "held", reason, alertKind: "held", metadata: { transcript: evidence.meta, ...extra } });
+    return out("held", reason);
+  };
+  if (zoom?.kind === "write") {
+    evidence = zoom.evidence;
+  } else {
+    // 1. The Soniox job: the one already submitted, or a new one on Wise's recording.
+    // When the polled job was submitted: now for a new job; a stored stamp only if it is this job's.
+    const stamp = row.metadata as { sonioxSubmittedJob?: unknown; sonioxSubmittedAt?: unknown };
+    let submittedAt = jobId && stamp.sonioxSubmittedJob === jobId ? metadataDate(stamp.sonioxSubmittedAt) : null;
+    if (!jobId) {
+      if (!recording.ok) {
+        // Transcript first: still no recording at the fallback time → the summary (no `no_recording` alert);
+        // until then the recheck never lands after that time.
+        if (canFallBack && now.getTime() >= transcriptFirstFallbackAt(detail)) {
+          return fallBackToSummary({ release, out, cause: "no_recording", now });
+        }
+        await release({
+          state: "awaiting_recording", reason: recording.reason,
+          retryInMs: canFallBack ? recordingRecheckMs(detail, now) : AUTOWRITER_RECORDING_RECHECK_MS,
+        });
+        return out("awaiting_recording", recording.reason);
+      }
+      try {
+        jobId = (await soniox.create(sonioxJobInput({
+          wiseSessionId: row.wiseSessionId, audioUrl: recording.url, detail, tutorNames: tutor.tutorNames, studentName: student.name,
+        }))).id;
+      } catch (error) {
+        return transcribeFailed(`soniox_create:${error instanceof Error ? error.message.slice(0, 120) : "error"}`, { infra: true, keepJob: null });
+      }
+      submittedAt = new Date();
+      // Why Zoom's captions did not do (kept: this class now stays with Soniox).
+      await setSonioxTranscription(db, row.wiseSessionId, input.token, jobId,
+        zoom ? { zoomEnglish: { route: "soniox", reason: zoom.reason, thaiShare: zoom.thaiShare ?? null } } : {});
+    }
+
+    // 2. Wait for it — webhooks wait up to ~3 min; the backstop only looks, so it never starves other classes.
+    const started = Date.now();
+    const waitMs = input.trigger === "cron"
+      ? 0
+      : Math.min(AUTOWRITER_TRANSCRIBE_WAIT_MS, Math.max(0, remaining(deps) - AUTOWRITER_SWEEP_MIN_REMAINING_MS));
+    const maxPolls = Math.max(1, Math.ceil(waitMs / AUTOWRITER_TRANSCRIBE_POLL_MS));
+    let status: Awaited<ReturnType<typeof soniox.get>> | null = null;
+    let lastGetError: string | null = null;
+    for (let polls = 1; ; polls += 1) {
+      try {
+        status = await soniox.get(jobId);
+      } catch (error) {
+        // An unknown job (deleted, expired) cannot finish: start over on a new one.
+        if (error instanceof SonioxError && error.status === 404) {
+          await clearSonioxTranscription(db, row.wiseSessionId, jobId);
+          return transcribeFailed("soniox_job_missing", { infra: false, keepJob: null });
+        }
+        // A failed check after a good one keeps the good answer: only never reaching Soniox counts as an error.
+        lastGetError = error instanceof Error ? error.message.slice(0, 120) : "error";
+      }
+      if (status?.status === "completed" || status?.status === "error") break;
+      if (polls >= maxPolls || Date.now() - started + AUTOWRITER_TRANSCRIBE_POLL_MS > waitMs) break;
+      await sleep(AUTOWRITER_TRANSCRIBE_POLL_MS);
+    }
+    if (!status) {
+      // Soniox could not be asked (key, credit, outage): an error, counted toward the hold.
+      return transcribeFailed(`soniox_status:${lastGetError ?? "unknown"}`, { infra: true, keepJob: jobId });
+    }
+    if (status.status === "queued" || status.status === "processing") {
+      // Wall clock, like the stored submit time. An hour of audio took 2–7 min in the pilot.
+      if (submittedAt && Date.now() - submittedAt.getTime() > AUTOWRITER_TRANSCRIBE_TIMEOUT_MS) {
+        const gone = await soniox.remove(jobId).catch(() => null);
+        if (gone) await clearSonioxTranscription(db, row.wiseSessionId, jobId);
+        return transcribeFailed("soniox_timeout", { infra: true, keepJob: gone ? null : jobId });
+      }
+      await release({ state: "transcribing", reason: "transcription_in_progress", retryInMs: AUTOWRITER_TRANSCRIBING_RECHECK_MS, sonioxTranscriptionId: jobId });
+      return out("transcribing", jobId);
+    }
+    if (status.status === "error") {
+      const gone = await soniox.remove(jobId).catch(() => null);
+      if (gone) await clearSonioxTranscription(db, row.wiseSessionId, jobId);
+      await recordTranscriptionCall(db, {
+        wiseSessionId: row.wiseSessionId, ok: false, audioDurationMs: status.audioDurationMs, latencyMs: Date.now() - started,
+        costUsd: null, error: status.errorMessage ?? "error",
+      });
+      return transcribeFailed(`soniox_error:${(status.errorMessage ?? "unknown").slice(0, 120)}`, { infra: false, keepJob: gone ? null : jobId });
+    }
+
+    // 3. Fetch (the job stays at Soniox until the class's review window ends; re-fetching is free).
+    let transcript: Awaited<ReturnType<typeof soniox.transcript>>;
+    try {
+      transcript = await soniox.transcript(jobId);
+    } catch (error) {
+      return transcribeFailed(`soniox_fetch:${error instanceof Error ? error.message.slice(0, 120) : "error"}`, { infra: true, keepJob: jobId });
+    }
+    const audioDurationMs = status.audioDurationMs ?? 0;
+    if ((row.metadata as { sonioxRecordedJob?: unknown }).sonioxRecordedJob !== jobId) {
+      await recordTranscriptionCall(db, {
+        wiseSessionId: row.wiseSessionId, ok: true, audioDurationMs, latencyMs: Date.now() - started,
+        costUsd: sonioxCostUsd(audioDurationMs),
+      });
+      await noteSonioxRecorded(db, row.wiseSessionId, jobId);
+    }
+
+    // 4. Who is who: Zoom's named cues when available, a clear talk-share split otherwise.
+    let cues: ZoomCue[] = [];
+    // Not published yet (or not readable right now) — as opposed to published without the teacher's name.
+    let zoomPending = true;
+    const vttUrl = zoomTranscriptUrl(detail);
+    if (vttUrl) {
+      try {
+        cues = parseZoomVtt(await (deps.fetchText ?? fetchText)(vttUrl));
+        zoomPending = false;
+      } catch {
+        cues = [];
+      }
+    }
+    evidence = buildTranscriptEvidence({
+      transcript, audioDurationMs: status.audioDurationMs, scheduledMinutes,
+      zoomCues: cues, teacherName: detailTeacherName(detail), alsoTeacher: tutorSelfNames(detail),
+      studentNames,
+    });
+    // Soniox's own audio length catches a recording Wise gave no length for; then the transcript's own length.
+    if (evidence.tooShort) return holdFor(evidence.tooShort);
+    // Zoom's named transcript follows the recording by a few minutes: wait for it (keeping the job) so the
+    // labels are confirmed — only when it could name the tutor (Wise gives the teacher's name), only for a job
+    // this row stamped, and only up to the wait from its submit time.
+    const teacherName = detailTeacherName(detail);
+    // A wait for Zoom's captions before the job (English lessons) counts toward the same wait.
+    const waitedSince = metadataDate((row.metadata as { zoomWaitSince?: unknown }).zoomWaitSince) ?? submittedAt;
+    if (zoomPending && teacherName && waitedSince && Date.now() - waitedSince.getTime() < AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS) {
+      await release({
+        state: "transcribing", reason: "zoom_transcript_pending", retryInMs: AUTOWRITER_ZOOM_TRANSCRIPT_RECHECK_MS,
+        sonioxTranscriptionId: jobId, metadata: { transcript: evidence.meta },
+      });
+      return out("transcribing", "zoom_transcript_pending");
+    }
+    if (evidence.speakers.method === "unclear") {
+      // Transcript first: without knowing who said what the summary is the better evidence.
+      if (canFallBack) return fallBackToSummary({ release, out, cause: "speakers_unclear", now, metadata: { transcript: evidence.meta } });
+      return holdFor("speakers_unclear");
+    }
   }
+  const { rendered, meta: transcriptMeta } = evidence;
 
   // 5. Write and judge from the transcript (Sol, Luna fallback, GLM judge — zero-retention routes only).
   const atomEvidence = await loadAtomLessonEvidence(db, { detail, studentId: student.wiseUserId, lessonRecord: rendered, now });
@@ -1250,6 +1297,50 @@ async function processTranscript(deps: AutowriterDeps, input: {
     extraMetadata: { transcript: transcriptMeta, ...guestMetadata(student), ...(canFallBack ? { writerErrors: 0 } : {}), ...judgeAnswered(row) },
     release, out,
   });
+}
+
+/** Zoom's captions were tried for this class and did not do: it stays with Soniox, also after an owner retry. */
+function zoomEnglishDeclined(row: AutowriterSessionRow): boolean {
+  return (row.metadata as { zoomEnglish?: { route?: unknown } }).zoomEnglish?.route === "soniox";
+}
+
+/**
+ * English lessons from Zoom's captions: write from them, wait for them, or go to Soniox (`reason`). The class's
+ * recent Soniox transcripts and Wise's summary are checked first, so a class that cannot qualify never waits.
+ * Zoom's captions follow the recording by a few minutes: not published yet (or not readable right now) is waited
+ * for like the Soniox route waits for Zoom's names, at most `AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS` from the first look.
+ */
+async function zoomEnglishRoute(deps: AutowriterDeps, input: {
+  row: AutowriterSessionRow;
+  detail: AutowriterSessionDetail;
+  recordingSeconds: number | null;
+  scheduledMinutes: number;
+  studentNames: readonly string[];
+}): Promise<{ kind: "write"; evidence: TranscriptEvidence } | { kind: "wait"; since: string } | { kind: "soniox"; reason: string; thaiShare?: number }> {
+  const teacherName = detailTeacherName(input.detail);
+  if (!teacherName) return { kind: "soniox", reason: "speakers_unclear" };
+  const declined = zoomEnglishPrecheck({
+    summaryText: extractAiSummary(input.detail)?.text ?? null,
+    classThaiShares: await classSonioxThaiShares(deps.db, {
+      wiseClassId: detailClassId(input.detail),
+      excludeSessionId: input.row.wiseSessionId,
+      since: new Date(clock(deps).getTime() - AUTOWRITER_ZOOM_ENGLISH_HISTORY_MS),
+    }),
+  });
+  if (declined) return { kind: "soniox", reason: declined };
+  const url = zoomTranscriptUrl(input.detail);
+  const vtt = url ? await (deps.fetchText ?? fetchText)(url).catch(() => null) : null;
+  if (vtt === null) {
+    const since = metadataDate((input.row.metadata as { zoomWaitSince?: unknown }).zoomWaitSince) ?? new Date();
+    return Date.now() - since.getTime() < AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS
+      ? { kind: "wait", since: since.toISOString() }
+      : { kind: "soniox", reason: "zoom_transcript_missing" };
+  }
+  const zoom = zoomEnglishEvidence({
+    vtt, recordingSeconds: input.recordingSeconds, scheduledMinutes: input.scheduledMinutes,
+    teacherName, alsoTeacher: tutorSelfNames(input.detail), studentNames: input.studentNames,
+  });
+  return zoom.ok ? { kind: "write", evidence: zoom.evidence } : { kind: "soniox", reason: zoom.reason, thaiShare: zoom.thaiShare };
 }
 
 async function fetchText(url: string): Promise<string> {

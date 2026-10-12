@@ -473,16 +473,31 @@ export async function listDueRows(db: Database): Promise<AutowriterSessionRow[]>
  * Persist a submitted Soniox job while holding the lease, so a dead worker's
  * job can be found again. Its submit time bounds how long it may keep running.
  */
-export async function setSonioxTranscription(db: Database, wiseSessionId: string, token: string, transcriptionId: string): Promise<boolean> {
+export async function setSonioxTranscription(db: Database, wiseSessionId: string, token: string, transcriptionId: string, metadata: Record<string, unknown> = {}): Promise<boolean> {
   const rows = await db.update(S).set({
     sonioxTranscriptionId: transcriptionId,
     evidence: "transcript",
     // App wall clock, as an ISO string, keyed to the job: the worker only times the job it is polling.
-    metadata: sql`${S.metadata} || ${JSON.stringify({ sonioxSubmittedJob: transcriptionId, sonioxSubmittedAt: new Date().toISOString() })}::jsonb`,
+    metadata: sql`${S.metadata} || ${JSON.stringify({ ...metadata, sonioxSubmittedJob: transcriptionId, sonioxSubmittedAt: new Date().toISOString() })}::jsonb`,
     updatedAt: nowSql,
   }).where(and(eq(S.wiseSessionId, wiseSessionId), eq(S.state, "generating"), eq(S.leaseToken, token)))
     .returning({ id: S.id });
   return rows.length > 0;
+}
+
+/**
+ * Thai shares (`metadata.transcript.thaiShare`) of the class's Soniox transcripts — not those written from Zoom's
+ * captions — for its other sessions that ended since `since`. Empty when the class has none.
+ */
+export async function classSonioxThaiShares(db: Database, input: { wiseClassId: string; excludeSessionId: string; since: Date }): Promise<number[]> {
+  const rows = await db.select({ share: sql<string>`${S.metadata} -> 'transcript' ->> 'thaiShare'` }).from(S).where(and(
+    eq(S.wiseClassId, input.wiseClassId),
+    sql`${S.wiseSessionId} <> ${input.excludeSessionId}`,
+    gte(S.scheduledEndAt, input.since),
+    sql`${S.metadata} -> 'transcript' ->> 'thaiShare' is not null`,
+    sql`coalesce(${S.metadata} -> 'transcript' ->> 'source', 'soniox') = 'soniox'`,
+  ));
+  return rows.map((row) => Number(row.share));
 }
 
 /**
