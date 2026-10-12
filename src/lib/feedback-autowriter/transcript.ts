@@ -35,13 +35,15 @@ export type SpeakerRole = "tutor" | "student" | "other";
 export interface RoleAssignment {
   roles: Map<string, SpeakerRole>;
   /**
-   * zoom_alignment: labels confirmed by Zoom's named cues. talk_share: inferred
-   * from a clear split (two main speakers, one with ≥ 60%). unclear: neither —
-   * the class is not written from this transcript.
+   * zoom_alignment: labels confirmed by Zoom's named cues. zoom_timing: Soniox heard one voice, so each phrase is
+   * labelled by whose Zoom cue it falls in (`labelByZoomTiming`). talk_share: inferred from a clear split (two main
+   * speakers, one with ≥ 60%). unclear: none of these — the class is not written from this transcript.
    */
-  method: "zoom_alignment" | "talk_share" | "unclear";
-  /** Share of all transcript characters spoken by each role, in percent. */
+  method: "zoom_alignment" | "zoom_timing" | "talk_share" | "unclear";
+  /** Share of all transcript characters spoken by each role, in percent (zoom_timing: of the labelled text). */
   shares: Record<SpeakerRole, number>;
+  /** zoom_timing only: the share of the transcript's text a Zoom cue labelled, in percent (the rest is left out). */
+  labelled?: number;
 }
 
 export function segmentsFromTokens(tokens: readonly SonioxToken[]): Segment[] {
@@ -245,6 +247,129 @@ export function assignSpeakerRoles(input: {
   return { roles, method: clear && !contradicts ? "talk_share" : "unclear", shares: percent(roleRatios(segments, roles)) };
 }
 
+// ---------------------------------------------------------------------------
+// Zoom timing: who spoke when, phrase by phrase, when Soniox hears one voice
+// ---------------------------------------------------------------------------
+
+/** A phrase ends at a Soniox speaker change, a pause of this long, or the end of a sentence. */
+const TIMING_PAUSE_MS = 400;
+/**
+ * A phrase takes the role of the cues covering at least this share of its overlapped time; otherwise it is left out.
+ * (Also requiring named cues over 30% of the phrase itself cost 2 of 10 rescued classes for no gain in precision on
+ * Thai lessons, 12 Oct 2026: not done.)
+ */
+const TIMING_MAJORITY = 0.6;
+/** Left-out speech of at least this long shows as a marker line, so neither model reads the gap as silence. */
+const TIMING_GAP_MARK_MS = 3_000;
+/** The speaker of a marker line (`renderTranscript` prints it without a role). */
+const LEFT_OUT = "left_out";
+/** Zoom must label at least this share of the transcript's text … */
+const TIMING_MIN_COVERAGE = 0.85;
+/** … the student must have been heard by Zoom (cues under their name) … */
+const TIMING_MIN_STUDENT_CUES = 10;
+/** … and, with only Zoom vouching for the labels, the tutor must carry half the labelled talk (as on the Zoom route). */
+const TIMING_MIN_TUTOR_SHARE = 0.5;
+
+function phrasesFromTokens(tokens: readonly SonioxToken[]): Segment[] {
+  const out: Segment[] = [];
+  for (const token of tokens) {
+    const speaker = token.speaker ?? "?";
+    const endMs = token.end_ms ?? token.start_ms;
+    const last = out.at(-1);
+    if (last && last.speaker === speaker && token.start_ms - last.endMs < TIMING_PAUSE_MS && !/[.?!]\s*$/u.test(last.text)) {
+      last.text += token.text;
+      last.endMs = Math.max(last.endMs, endMs);
+    } else {
+      out.push({ speaker, startMs: token.start_ms, endMs, text: token.text.replace(/^\s+/u, "") });
+    }
+  }
+  return out.filter((segment) => segment.text.trim() !== "");
+}
+
+/**
+ * Soniox sometimes hears the tutor and the student as one voice (most of the 35 "unclear" classes in October 2026:
+ * one Soniox speaker with 96–100% of the text), and no per-speaker label can then be right. Zoom times each
+ * participant's own microphone, so its named cues say who spoke when even where its words are poor. Each phrase
+ * takes the role of the cues it overlaps (≥ 60% of the overlapped time); a phrase no cue overlaps, or overlapped by
+ * both people about evenly, is left out, never guessed, and a left-out stretch of ≥ 3 s shows as a marker line.
+ * The labels stay "inferred" for the writer and the judges. Measured on 9–12 Oct classes against the per-speaker
+ * alignment of 16 aligned classes (itself imperfect on Thai lessons): of the STUDENT-labelled text, 10.7% (Thai-heavy)
+ * and 5.5% (English-heavy) was the tutor's by that yardstick, worst class 15.7%; 10 of 11 unclear classes labelled.
+ * Only when Zoom names nobody but the tutor and the student, the student is heard (≥ 10 cues), Zoom's captions run
+ * to ≥ 90% of the transcript, Zoom labels ≥ 85% of the text and the tutor carries ≥ 50% of it; null otherwise (the
+ * class stays unclear).
+ */
+export function labelByZoomTiming(input: {
+  tokens: readonly SonioxToken[];
+  zoomCues: readonly ZoomCue[];
+  teacherName: string | null;
+  alsoTeacher?: readonly string[];
+  studentNames?: readonly string[];
+}): { segments: Segment[]; speakers: RoleAssignment } | null {
+  const teacherNames = new Set([...(input.teacherName ? [input.teacherName] : []), ...(input.alsoTeacher ?? [])].map(normalizeName));
+  // Every cue is the tutor's or the student's (checked first), so a cue not under the tutor's names is the student's.
+  if (teacherNames.size === 0 || !onlyTutorAndStudentNamed(input.zoomCues, teacherNames, input.studentNames)) return null;
+  const cues = input.zoomCues
+    .map((cue) => ({ ...cue, role: teacherNames.has(normalizeName(cue.speakerName)) ? "tutor" as const : "student" as const }))
+    .toSorted((a, b) => a.startMs - b.startMs);
+  if (cues.filter((cue) => cue.role === "student").length < TIMING_MIN_STUDENT_CUES) return null;
+  // Captions that stop early would leave the lesson's end (where homework is set) out without a trace.
+  const lastSpeech = input.tokens.reduce((max, token) => Math.max(max, token.end_ms ?? token.start_ms), 0);
+  const lastCaption = cues.reduce((max, cue) => Math.max(max, cue.endMs), 0);
+  if (lastCaption < lastSpeech * AUTOWRITER_ZOOM_ENGLISH_MIN_CAPTION_COVERAGE) return null;
+
+  const roleOf = (phrase: Segment): "tutor" | "student" | null => {
+    const start = phrase.startMs;
+    const end = Math.max(phrase.endMs, phrase.startMs + 1);
+    const time = { tutor: 0, student: 0 };
+    for (const cue of cues) {
+      if (cue.startMs >= end) break;
+      const overlap = Math.min(end, cue.endMs) - Math.max(start, cue.startMs);
+      if (overlap > 0) time[cue.role] += overlap;
+    }
+    const covered = time.tutor + time.student;
+    if (covered === 0) return null;
+    const role = time.tutor >= time.student ? "tutor" : "student";
+    return time[role] / covered >= TIMING_MAJORITY ? role : null;
+  };
+
+  const phrases = phrasesFromTokens(input.tokens);
+  const total = phrases.reduce((sum, phrase) => sum + phrase.text.length, 0) || 1;
+  const segments: Segment[] = [];
+  // Counted on the phrases themselves: joining them into turns adds spaces.
+  let labelledChars = 0;
+  let leftOut: { startMs: number; endMs: number } | null = null;
+  const markLeftOut = () => {
+    if (leftOut && leftOut.endMs - leftOut.startMs >= TIMING_GAP_MARK_MS) {
+      const seconds = Math.round((leftOut.endMs - leftOut.startMs) / 1000);
+      segments.push({ speaker: LEFT_OUT, startMs: leftOut.startMs, endMs: leftOut.endMs, text: `[… ${seconds} s not attributable to either speaker, left out …]` });
+    }
+    leftOut = null;
+  };
+  for (const phrase of phrases) {
+    const role = roleOf(phrase);
+    if (!role) {
+      leftOut = leftOut ? { startMs: leftOut.startMs, endMs: Math.max(leftOut.endMs, phrase.endMs) } : { startMs: phrase.startMs, endMs: phrase.endMs };
+      continue;
+    }
+    markLeftOut();
+    labelledChars += phrase.text.length;
+    const last = segments.at(-1);
+    if (last && last.speaker === role) {
+      last.text += ` ${phrase.text.trim()}`;
+      last.endMs = Math.max(last.endMs, phrase.endMs);
+    } else {
+      segments.push({ ...phrase, speaker: role, text: phrase.text.trim() });
+    }
+  }
+  markLeftOut();
+  const roles = new Map<string, SpeakerRole>([["tutor", "tutor"], ["student", "student"]]);
+  // Shares of the labelled text only: the markers are no one's.
+  const ratios = roleRatios(segments.filter((segment) => segment.speaker !== LEFT_OUT), roles);
+  if (labelledChars / total < TIMING_MIN_COVERAGE || ratios.tutor < TIMING_MIN_TUTOR_SHARE || ratios.student <= 0) return null;
+  return { segments, speakers: { roles, method: "zoom_timing", shares: percent(ratios), labelled: Math.round((labelledChars / total) * 100) } };
+}
+
 function clock(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const minutes = Math.floor(totalSeconds / 60);
@@ -259,8 +384,9 @@ const ROLE_LABEL: Record<SpeakerRole, string> = { tutor: "TUTOR", student: "STUD
  * usually set) and drops the middle.
  */
 export function renderTranscript(segments: readonly Segment[], roles: Map<string, SpeakerRole>, maxChars = 120_000): string {
-  const lines = segments.map((segment) =>
-    `[${clock(segment.startMs)}] ${ROLE_LABEL[roles.get(segment.speaker) ?? "other"]}: ${segment.text.trim()}`);
+  const lines = segments.map((segment) => segment.speaker === LEFT_OUT
+    ? `[${clock(segment.startMs)}] ${segment.text}`
+    : `[${clock(segment.startMs)}] ${ROLE_LABEL[roles.get(segment.speaker) ?? "other"]}: ${segment.text.trim()}`);
   const total = lines.reduce((sum, line) => sum + line.length + 1, 0);
   if (total <= maxChars) return lines.join("\n");
   const take = (from: string[], budget: number) => {
@@ -327,6 +453,8 @@ export interface TranscriptEvidence {
     audioMinutes: number;
     speakerMethod: RoleAssignment["method"];
     shares: Record<SpeakerRole, number>;
+    /** zoom_timing only: percent of the transcript's text Zoom's cues labelled (the rest is left out). */
+    labelled?: number;
     thaiShare: number;
   };
   /**
@@ -352,7 +480,10 @@ export function buildTranscriptEvidence(input: {
   /** The student's Wise name and any guest name they joined under (see `assignSpeakerRoles`). */
   studentNames?: readonly string[];
 }): TranscriptEvidence {
-  return evidenceFromSegments({ ...input, source: "soniox", segments: segmentsFromTokens(input.transcript.tokens), text: input.transcript.text });
+  return evidenceFromSegments({
+    ...input, source: "soniox", segments: segmentsFromTokens(input.transcript.tokens), text: input.transcript.text,
+    tokens: input.transcript.tokens,
+  });
 }
 
 function evidenceFromSegments(input: {
@@ -365,12 +496,21 @@ function evidenceFromSegments(input: {
   teacherName: string | null;
   alsoTeacher: readonly string[];
   studentNames?: readonly string[];
+  /** Soniox's tokens: when its speakers are unclear, Zoom's timing may still label the phrases (`labelByZoomTiming`). */
+  tokens?: readonly SonioxToken[];
 }): TranscriptEvidence {
-  const { segments } = input;
-  const speakers = assignSpeakerRoles({
+  let segments = input.segments;
+  let speakers = assignSpeakerRoles({
     segments, zoomCues: input.zoomCues, teacherName: input.teacherName, alsoTeacher: input.alsoTeacher,
     studentNames: input.studentNames,
   });
+  if (speakers.method === "unclear" && input.tokens) {
+    const timed = labelByZoomTiming({
+      tokens: input.tokens, zoomCues: input.zoomCues, teacherName: input.teacherName, alsoTeacher: input.alsoTeacher,
+      studentNames: input.studentNames,
+    });
+    if (timed) ({ segments, speakers } = timed);
+  }
   const rendered = renderTranscript(segments, speakers.roles);
   const audioDurationMs = input.audioDurationMs ?? 0;
   const tooShort = input.audioDurationMs !== null && recordingTooShort(input.audioDurationMs / 1000, input.scheduledMinutes)
@@ -379,12 +519,14 @@ function evidenceFromSegments(input: {
   return {
     rendered,
     speakers,
+    // Only a per-speaker alignment is "verified"; phrase-by-phrase timing stays "inferred" (see `labelByZoomTiming`).
     speakerLabels: speakers.method === "zoom_alignment" ? "verified" : "inferred",
     meta: {
       source: input.source,
       audioMinutes: Math.round(audioDurationMs / 600) / 100,
       speakerMethod: speakers.method,
       shares: speakers.shares,
+      ...(speakers.labelled !== undefined ? { labelled: speakers.labelled } : {}),
       thaiShare: Math.round(thaiShare(input.text) * 100) / 100,
     },
     tooShort,
