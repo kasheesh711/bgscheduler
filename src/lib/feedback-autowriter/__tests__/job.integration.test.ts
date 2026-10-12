@@ -1265,6 +1265,150 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       .toMatchObject({ result: "transcribing", detail: "zoom_transcript_pending" });
   });
 
+  describe("English lessons from Zoom's captions (FEEDBACK_AUTOWRITER_ZOOM_ENGLISH)", () => {
+    const EARLIER = "6a00000000000000000000e1";
+    const at = (ms: number) => new Date(ms).toISOString().slice(11, 23);
+    /** Zoom's captions of a whole English lesson (50 of its 60 minutes), the tutor and the student by name. */
+    const englishCaptions = (extra = "") => {
+      const cues: string[] = [];
+      for (let minute = 0; minute < 50; minute += 1) {
+        const start = minute * 60_000;
+        cues.push(`${at(start)} --> ${at(start + 25_000)}\nKevin (Kev) Y. Hsieh Online: Today we add fractions with unlike denominators and simplify.`);
+        cues.push(`${at(start + 31_000)} --> ${at(start + 55_000)}\nSomchai (Tom.Ja) Jaidee: I got three quarters with the common denominator.`);
+      }
+      return `WEBVTT\n\n${cues.join("\n\n")}\n${extra}`;
+    };
+    /** An earlier lesson of the same class, transcribed by Soniox (or written from Zoom's captions). */
+    const seedEarlier = async (transcript: Record<string, unknown>) => {
+      await ensureSessionRow(db, {
+        wiseSessionId: EARLIER, wiseClassId: CLASS_ID, wiseTeacherUserId: KEVIN,
+        scheduledEndAt: new Date("2026-09-21T09:30:00.000Z"), deadlineAt: new Date("2026-09-23T16:59:59.999Z"), trigger: "test",
+      });
+      await db.update(S).set({ state: "verified", evidence: "transcript", metadata: { transcript } }).where(eq(S.wiseSessionId, EARLIER));
+    };
+    const zoomDeps = (ops: WiseFeedbackOps, soniox: ReturnType<typeof fakeSoniox>["client"], overrides: Partial<AutowriterDeps> = {}) =>
+      transcriptDeps(ops, soniox, { zoomEnglish: true, fetchText: async () => englishCaptions(), ...overrides });
+
+    it("writes an English lesson from Zoom's captions, with no Soniox job", async () => {
+      await seedEarlier({ thaiShare: 0, speakerMethod: "zoom_alignment" });
+      await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+      const wise = fakeWise({ details: [sessionDetail(RECORDING)] });
+      const soniox = fakeSoniox();
+      const prompts: string[] = [];
+      const callModel = vi.fn(async (request: { schemaName: string; messages: Array<{ content: string }> }) => {
+        prompts.push(request.messages.map((message) => message.content).join("\n"));
+        return request.schemaName === "post_class_feedback" ? sol(writerJson) : glm(FAITHFUL_VERDICT);
+      });
+      expect(await processSession(zoomDeps(wise.ops, soniox.client, { callModel: callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+        .toMatchObject({ result: "verified" });
+      expect(soniox.created).toEqual([]);
+      expect(prompts[0]).toContain("TUTOR: Today we add fractions with unlike denominators and simplify.");
+      expect(prompts[0]).toContain("STUDENT: I got three quarters with the common denominator.");
+      expect(wise.posts).toHaveLength(1);
+      const row = await readSessionRow(db, SESSION_ID);
+      expect(row).toMatchObject({ state: "verified", evidence: "transcript", sonioxTranscriptionId: null });
+      expect(row?.metadata).toMatchObject({
+        transcript: { source: "zoom", speakerMethod: "zoom_alignment", thaiShare: 0 },
+        pipeline: { evidence: "transcript" },
+      });
+      expect(await db.select().from(schema.feedbackAutowriterCalls).where(eq(schema.feedbackAutowriterCalls.role, "transcriber"))).toHaveLength(0);
+    });
+
+    it("sends a class to Soniox, and keeps it there, when its last Soniox transcript had Thai in it or it has none", async () => {
+      // Only a lesson written from Zoom's captions: that is not a Soniox measurement of the class's language.
+      await seedEarlier({ thaiShare: 0, source: "zoom" });
+      await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+      const soniox = fakeSoniox();
+      expect(await processSession(zoomDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+        .toMatchObject({ result: "verified" });
+      expect(soniox.created).toHaveLength(1);
+      expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({
+        zoomEnglish: { route: "soniox", reason: "no_class_history" }, transcript: { source: "soniox" },
+      });
+
+      await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
+      await seedEarlier({ thaiShare: 0.05 });
+      await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+      const second = fakeSoniox();
+      await processSession(zoomDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, second.client), { wiseSessionId: SESSION_ID, trigger: "webhook" });
+      expect(second.created).toHaveLength(1);
+      expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ zoomEnglish: { route: "soniox", reason: "class_thai" } });
+    });
+
+    it("sends Thai captions and captions with a third name to Soniox, which still uses them for the names", async () => {
+      await seedEarlier({ thaiShare: 0 });
+      await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+      const soniox = fakeSoniox();
+      const parent = "\n50:10.000 --> 50:20.000\nMom iPad: Thank you teacher\n";
+      expect(await processSession(zoomDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, { fetchText: async () => englishCaptions(parent) }),
+        { wiseSessionId: SESSION_ID, trigger: "webhook" })).toMatchObject({ result: "verified" });
+      expect(soniox.created).toHaveLength(1);
+      expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({
+        zoomEnglish: { route: "soniox", reason: "unnamed_speaker" }, transcript: { source: "soniox", speakerMethod: "zoom_alignment" },
+      });
+    });
+
+    it("waits for captions not published yet, then Soniox after 20 minutes without waiting for Zoom again", async () => {
+      await seedEarlier({ thaiShare: 0 });
+      await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+      const failing = async () => { throw new Error("HTTP 404"); };
+      const soniox = fakeSoniox();
+      expect(await processSession(zoomDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, { fetchText: failing }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+        .toMatchObject({ result: "transcribing", detail: "zoom_transcript_pending" });
+      expect(soniox.created).toEqual([]);
+      const waiting = await readSessionRow(db, SESSION_ID);
+      expect(waiting).toMatchObject({ state: "transcribing", reason: "zoom_transcript_pending", sonioxTranscriptionId: null });
+      expect(waiting?.metadata).toHaveProperty("zoomWaitSince");
+
+      // 21 minutes after the first look, still no captions: Soniox, and no second wait for Zoom's names.
+      await db.update(S).set({
+        nextAttemptAt: sql`now() - interval '1 second'` as never,
+        metadata: { ...waiting!.metadata, zoomWaitSince: new Date(Date.now() - 21 * 60_000).toISOString() },
+      }).where(eq(S.wiseSessionId, SESSION_ID));
+      const tokens = lessonTokens().map((token) => token.speaker === "2" ? { ...token, text: " Three quarters." } : token);
+      const later = fakeSoniox({ tokens });
+      expect(await processSession(zoomDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, later.client, { fetchText: failing }), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+        .toMatchObject({ result: "verified" });
+      expect(later.created).toHaveLength(1);
+      expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({
+        zoomEnglish: { route: "soniox", reason: "zoom_transcript_missing" }, transcript: { source: "soniox", speakerMethod: "talk_share" },
+      });
+    });
+
+    it("sends a draft from Zoom's captions that the judges reject to Soniox instead of a person", async () => {
+      await seedEarlier({ thaiShare: 0 });
+      await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+      const unfaithful = vi.fn(async (request: { schemaName: string; model: string }) => {
+        if (request.schemaName !== "post_class_feedback") return glm(JSON.stringify({ ...PASSING_VERDICT, faithful: false, unsupported: ["scored 95%"] }));
+        return request.model === "openai/gpt-6-luna" ? luna(writerJson) : sol(writerJson);
+      });
+      const soniox = fakeSoniox();
+      expect(await processSession(zoomDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, { callModel: unfaithful as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+        .toMatchObject({ result: "awaiting_recording", detail: "zoom_draft_held" });
+      expect(soniox.created).toEqual([]);
+      const handed = await readSessionRow(db, SESSION_ID);
+      expect(handed).toMatchObject({ state: "awaiting_recording", reason: "zoom_draft_held", evidence: "transcript" });
+      expect(handed?.metadata).toMatchObject({ zoomEnglish: { route: "soniox", reason: "zoom_draft_held" }, transcript: { source: "zoom" } });
+      expect(handed?.metadata).not.toHaveProperty("alertKind");
+
+      // Due now: the next look transcribes with Soniox (the captions are not tried again).
+      await db.update(S).set({ nextAttemptAt: sql`now() - interval '1 second'` as never }).where(eq(S.wiseSessionId, SESSION_ID));
+      expect(await processSession(zoomDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+        .toMatchObject({ result: "verified" });
+      expect(soniox.created).toHaveLength(1);
+      expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ transcript: { source: "soniox" }, zoomEnglish: { route: "soniox" } });
+    });
+
+    it("with the switch off, transcribes every class with Soniox as before", async () => {
+      await seedEarlier({ thaiShare: 0 });
+      await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+      const soniox = fakeSoniox();
+      await processSession(zoomDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, { zoomEnglish: false }), { wiseSessionId: SESSION_ID, trigger: "webhook" });
+      expect(soniox.created).toHaveLength(1);
+      expect((await readSessionRow(db, SESSION_ID))?.metadata).not.toHaveProperty("zoomEnglish");
+    });
+  });
+
   it("deletes a finished class's leftover Soniox job during the sweep once its review window is over", async () => {
     await seedRow({ state: "expired", sonioxTranscriptionId: "job-9", metadata: { sonioxRetainUntil: "2026-01-01T00:00:00.000Z" } });
     const soniox = fakeSoniox();
