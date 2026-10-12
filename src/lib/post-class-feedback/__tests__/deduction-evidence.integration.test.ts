@@ -91,14 +91,16 @@ describe("deduction report and screenshot storage", () => {
   });
   it("selects only projected deductions and removes a class after compliant feedback", async () => {
     const session = await seed();
-    await handle.db.insert(schema.postClassSettings).values({ id: "default", enforcementMode: "live", policyEffectiveAt: new Date("2026-10-01T00:00:00Z") });
+    await handle.db.insert(schema.postClassSettings).values({ id: "default", enforcementMode: "live", policyEffectiveAt: new Date("2026-10-01T00:00:00Z") })
+      .onConflictDoUpdate({ target: schema.postClassSettings.id, set: { enforcementMode: "live", policyEffectiveAt: new Date("2026-10-01T00:00:00Z") } });
     const [assessment] = await handle.db.insert(schema.postClassAssessments).values({
       sessionId: session.id, assessmentKey: "capture-projection", policyVersion: 1, mappingVersion: 1,
       sourceStatus: "ready", contentStatus: "blank", timingStatus: "not_due", enforcementMode: "live",
       fieldFailures: ["combined_characters:0/300"], details: { policyApplies: true, deadlineAt: deadline.toISOString(), timingReviewRequired: false },
     }).returning();
     expect((await dueCaptureQueue("2026-10-11", db())).classes.map(row => row.id)).toEqual([session.id]);
-    await handle.db.update(schema.postClassAssessments).set({ rawOnTime: true, adjustedCompliant: true, fieldFailures: [] }).where(eq(schema.postClassAssessments.id, assessment.id));
+    await handle.db.insert(schema.postClassAssessments).values({ ...assessment, id: undefined, assessmentKey: "capture-compliant",
+      assessedAt: new Date(assessment.assessedAt.getTime() + 1000), rawOnTime: true, adjustedCompliant: true, fieldFailures: [] });
     expect((await dueCaptureQueue("2026-10-11", db())).classes).toEqual([]);
   });
   it("records upload failure, retries without duplicates and flags deadline changes", async () => {
