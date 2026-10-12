@@ -34,12 +34,16 @@ export async function fetchWiseSessionsForBangkokDates(
           throw new Error(`Incomplete Wise day pagination for ${date} (${status}, page ${page})`);
         }
         for (const session of rows) {
-          if (!session || typeof session._id !== "string" || !session._id.trim() || seen.has(session._id)
+          // A class moving between statuses mid-read can shift one session onto two pages: callers may read again.
+          if (session && typeof session._id === "string" && seen.has(session._id)) {
+            throw new Error(`Duplicate Wise session for ${date} (the listing changed between pages)`);
+          }
+          if (!session || typeof session._id !== "string" || !session._id.trim()
             || !Number.isFinite(Date.parse(session.scheduledStartTime))
             || !Number.isFinite(Date.parse(session.scheduledEndTime))
             || Date.parse(session.scheduledEndTime) <= Date.parse(session.scheduledStartTime)
             || bangkokDateKey(new Date(session.scheduledStartTime)) !== date) {
-            throw new Error(`Invalid, duplicate or out-of-date Wise session for ${date}`);
+            throw new Error(`Invalid or out-of-date Wise session for ${date}`);
           }
           seen.add(session._id);
           all.push(session);

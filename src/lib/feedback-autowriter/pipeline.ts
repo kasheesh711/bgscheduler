@@ -28,7 +28,7 @@ import {
   type JudgeOutput,
   type StoredJudgeVerdict,
 } from "./judge";
-import { callOpenRouter, callWithRateLimitRetries, isRateLimited, type OpenRouterCallResult } from "./openrouter";
+import { callOpenRouter, callWithRateLimitRetries, isCreditExhausted, isRateLimited, type OpenRouterCallResult } from "./openrouter";
 import {
   FEEDBACK_JSON_SCHEMA,
   PROMPT_VERSION,
@@ -96,9 +96,10 @@ export type PipelineResult =
    * was still rate limited when the run gave up on it — a sweep then makes no in-run retries at that stage for its
    * other classes. `judgeAnswered`: earlier in this run the judges gave their verdict on a draft (they rejected the
    * first writer's, and the run went on to the fallback writer) — so the judge's failures in a row ended there, however
-   * the run then ended (`judgeFailed` in job.ts).
+   * the run then ended (`judgeFailed` in job.ts). `creditExhausted`: our OpenRouter key or account has no credit left
+   * (`isCreditExhausted`) — every class fails alike until someone tops up, so job.ts raises one pushed incident.
    */
-  | { kind: "infra"; error: string; modelFailure: boolean; stage: "writer" | "judge"; rateLimited?: true; judgeAnswered?: true };
+  | { kind: "infra"; error: string; modelFailure: boolean; stage: "writer" | "judge"; rateLimited?: true; judgeAnswered?: true; creditExhausted?: true };
 
 /**
  * In-run retries of a rate-limited call, per stage: the writers' route and the judge's are limited apart, so a sweep
@@ -117,7 +118,7 @@ export type RateLimitRetries = Record<"writer" | "judge", boolean>;
 export function isInfraFailure(call: Extract<OpenRouterCallResult, { ok: false }>): boolean {
   if (call.error === "finish_reason_error" || call.error === "finish_reason_missing") return true;
   if (call.error.startsWith("finish_reason_") || call.error === "empty_content") return false;
-  if (call.httpStatus === 403) return false;
+  if (call.httpStatus === 403) return isCreditExhausted(call);
   if (call.httpStatus === 400 && /context|too long|maximum.{0,20}tokens|token limit/iu.test(call.error)) return false;
   return true;
 }
@@ -144,9 +145,11 @@ function callFailure(
   shortened: boolean,
   stage: "writer" | "judge",
 ): PipelineResult {
-  const ours = (call.httpStatus !== null && ACCOUNT_STATUSES.has(call.httpStatus)) || call.error.startsWith("network_")
+  const credit = isCreditExhausted(call);
+  const ours = credit || (call.httpStatus !== null && ACCOUNT_STATUSES.has(call.httpStatus)) || call.error.startsWith("network_")
     || (call.error === "timeout" && shortened);
-  return { kind: "infra", error: `${who}:${call.error}`, modelFailure: !ours, stage, ...(isRateLimited(call) ? { rateLimited: true as const } : {}) };
+  return { kind: "infra", error: `${who}:${call.error}`, modelFailure: !ours, stage, ...(isRateLimited(call) ? { rateLimited: true as const } : {}),
+    ...(credit ? { creditExhausted: true as const } : {}) };
 }
 
 type Stop = { stop: PipelineResult };

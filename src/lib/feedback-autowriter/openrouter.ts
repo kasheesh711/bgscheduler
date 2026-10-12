@@ -248,6 +248,15 @@ export function isRateLimited(call: OpenRouterCallResult): call is OpenRouterCal
 }
 
 /**
+ * Our key or account has no credit left: HTTP 402 (account balance), or HTTP 403 "Key limit exceeded" (the key's own
+ * spending limit; 11 Oct 2026, both writers and the judges). Every class fails the same way until someone tops up.
+ * Any other 403 (a moderation refusal) is the model's answer to this lesson, not an outage.
+ */
+export function isCreditExhausted(call: Pick<OpenRouterCallFailure, "httpStatus" | "error">): boolean {
+  return call.httpStatus === 402 || (call.httpStatus === 403 && /key limit exceeded|insufficient credits?|requires more credits/iu.test(call.error));
+}
+
+/**
  * The wait before retry number `retry` (from 0) of a rate-limited call, or null when it is not tried again.
  * - The schedule's wait, anywhere within ±30% (`random` in [0, 1)); one call's waits never add up to more than 45 s,
  *   so the schedule's last wait is cut to what is left of them.
