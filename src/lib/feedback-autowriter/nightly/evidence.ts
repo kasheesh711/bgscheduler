@@ -680,7 +680,7 @@ export function buildEvidenceBundle(input: { target: NightlyTarget; night: strin
   const wiseCurrentFields = fieldsOf(wiseCurrent as Partial<Record<string, string>> | null);
   const scheduledMinutes = detail ? scheduledWindow(detail).minutes : null;
   const zoomCaptions = raw.zoomVtt ? renderZoomCaptions(raw.zoomVtt) || null : null;
-  const labelsFor = (method: string | null) => (method === "zoom_alignment" ? "verified" : "inferred");
+  const labelsFor = (method: string | null) => (method === "zoom_alignment" || method === "zoom_timing" ? "verified" : "inferred");
 
   let transcript: EvidenceBundle["transcript"] = null;
   let wiseSummary = summary;
@@ -695,9 +695,9 @@ export function buildEvidenceBundle(input: { target: NightlyTarget; night: strin
     wiseSummary = raw.iseb.lessonRecord;
   }
   if (!transcript && raw.transcript && detail) {
-    // Production rendered with Zoom's cues only when it aligned them (zoom_alignment); otherwise by talk share.
-    const cues = raw.zoomVtt && (raw.transcript.source === "retranscribed" || raw.rowMeta.speakerMethod === "zoom_alignment")
-      ? parseZoomVtt(raw.zoomVtt) : [];
+    // Production rendered with Zoom's cues only when it used them (zoom_alignment, zoom_timing); otherwise by talk share.
+    const usedZoom = raw.rowMeta.speakerMethod === "zoom_alignment" || raw.rowMeta.speakerMethod === "zoom_timing";
+    const cues = raw.zoomVtt && (raw.transcript.source === "retranscribed" || usedZoom) ? parseZoomVtt(raw.zoomVtt) : [];
     const rebuilt = buildTranscriptEvidence({
       transcript: raw.transcript,
       audioDurationMs: raw.transcript.audioDurationMs,
@@ -705,6 +705,8 @@ export function buildEvidenceBundle(input: { target: NightlyTarget; night: strin
       zoomCues: cues,
       teacherName: detailTeacherName(detail),
       alsoTeacher: tutorSelfNames(detail),
+      // Zoom timing needs the student's names to tell their cues from anyone else's.
+      studentNames: student ? [student.name, ...(student.joinedAsGuest ? [student.joinedAsGuest] : [])] : undefined,
     });
     transcript = {
       text: rebuilt.rendered,

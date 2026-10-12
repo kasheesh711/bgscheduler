@@ -176,6 +176,19 @@ draft or is waiting for Wise (attendance, status, the POST slot), not for the re
 `zoom_transcript_pending` is normal: the Soniox transcript is ready and the class waits for Zoom's name-labelled
 transcript, which confirms who is the tutor — until 20 minutes after the Soniox job was submitted (the last look is
 the next sweep after that, so at most ~35 minutes). No `no_recording` alert is raised for it.
+**Who said what (`metadata.transcript.speakerMethod`).** Soniox labels voices "1", "2", …; Zoom's captions name who
+spoke when (each participant's own microphone).
+- `zoom_alignment`: each Soniox voice mostly overlaps one person's Zoom cues. Labels verified.
+- `zoom_timing` (12 Oct 2026): Soniox heard tutor and student as one voice (most of October's 35 "unclear"
+  classes: one voice with 96–100% of the text). Each phrase instead takes the role of the Zoom cues it falls in;
+  a phrase no cue covers, or nearly touches (≤ 1 s), is left out rather than guessed (`metadata.transcript.labelled` =
+  percent kept). Used only when Zoom names nobody but the tutor and the student, the student has ≥ 10 cues, ≥ 85% of
+  the text is labelled and the tutor carries ≥ 50% of it. Labels verified. Measured on 9–12 Oct classes: on 14
+  Zoom-aligned classes it agreed with the aligned labels on 96.9% of the text (worst class 89.4%); it labels all 10
+  unclear classes of that sample (95–100% of the text).
+- `talk_share`: no usable Zoom cues; a clear split names the tutor. Labels inferred.
+- `unclear`: none of these → summary fallback (transcript first) or `speakers_unclear` hold.
+
 To turn the second pass off: `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED=false` + redeploy — classes already waiting are
 then held with an alert (`transcript_pass_unavailable`) so a person writes them; a transcript-first class falls back
 to the summary instead (§6).
