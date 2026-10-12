@@ -91,7 +91,7 @@ describe("deduction report and screenshot storage", () => {
   });
   it("selects only projected deductions and removes a class after compliant feedback", async () => {
     const session = await seed();
-    await handle.db.insert(schema.postClassSettings).values({ id: "default", enforcementMode: "live" });
+    await handle.db.insert(schema.postClassSettings).values({ id: "default", enforcementMode: "live", policyEffectiveAt: new Date("2026-10-01T00:00:00Z") });
     const [assessment] = await handle.db.insert(schema.postClassAssessments).values({
       sessionId: session.id, assessmentKey: "capture-projection", policyVersion: 1, mappingVersion: 1,
       sourceStatus: "ready", contentStatus: "blank", timingStatus: "not_due", enforcementMode: "live",
