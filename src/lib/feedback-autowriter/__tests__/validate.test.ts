@@ -114,8 +114,7 @@ describe("record commentary (owner, 12 Oct: no tutor writes \"No deadline was st
       .toBe("I asked Poom to complete the question sheet sent by email for homework.");
     expect(dropRecordCommentary("Try ten revision questions. The page numbers were not specified. Send me a photo of your notes."))
       .toBe("Try ten revision questions. Send me a photo of your notes.");
-    expect(dropRecordCommentary("We reviewed vectors. The summary does not show whether a test was set."))
-      .toBe("We reviewed vectors.");
+    expect(dropRecordCommentary("Complete page 12. No deadline was given for the homework.")).toBe("Complete page 12.");
     expect(dropRecordCommentary("There was no deadline stated.")).toBe("");
   });
 
@@ -126,6 +125,11 @@ describe("record commentary (owner, 12 Oct: no tutor writes \"No deadline was st
       "Finish past paper 2, although no specific deadline was given.",
       "1. Complete page 12\n2. No deadline was stated.",
       "Complete page 12. Dr. Lee's deadline was not stated.",
+      "Complete page 12. No deadline was set but Pim must finish it before the next lesson.",
+      "Complete page 12. No due date was given for the essay, which Pim should finish by Monday.",
+      "Complete page 12. No page numbers were given, so do the whole chapter.",
+      "Complete page 12. The timing was not given in the past paper, so Pim should time himself at 40 minutes.",
+      "Complete page 12. The summary does not show whether a test was set.",
     ]) {
       const fields = finalizeFields({ ...goodOutput, homework }, STUDENT_NAME);
       expect(fields.homework).toBe(homework);
@@ -142,6 +146,7 @@ describe("record commentary (owner, 12 Oct: no tutor writes \"No deadline was st
       "Pressure was not specified, so we assumed STP.",
       "Pim's summary did not mention the turning point of the story.",
       "Pim noticed that no electrons were lost.",
+      "We analysed Source B. The date was not stated in Source B, so Pim inferred it from the uniforms.",
     ]) {
       expect(dropRecordCommentary(text)).toBe(text);
       expect(feedbackTextChecks({ ...GOOD_FIELDS, performance: text }).form).not.toContain("record_commentary:performance");

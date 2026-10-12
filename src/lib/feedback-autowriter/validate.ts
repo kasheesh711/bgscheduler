@@ -46,15 +46,20 @@ export function tidyFeedbackText(value: string): string {
  * someone auditing the transcript). Only record-type subjects count, so coaching such as "units were not stated in
  * his answers" is never touched.
  */
-const RECORD_SUBJECT = String.raw`(?:deadline|due date|date|timing|time ?frame|timeline|page(?: number)?s|question numbers|number of questions)`;
+const RECORD_SUBJECT = String.raw`(?:deadline|due date|timing|time ?frame|page(?: number)?s|question numbers|number of questions)`;
 const RECORD_COMMENTARY_PARTS = [
   String.raw`\b(?:there (?:was|were) )?no (?:specific |particular |clear |exact |set |firm )?${RECORD_SUBJECT} (?:was |were |has been |had been )?(?:stated|given|set|mentioned|specified|agreed|confirmed)\b`,
   String.raw`\b(?:the )?${RECORD_SUBJECT} (?:was not|were not|wasn't|weren't) (?:stated|mentioned|specified|given|confirmed)\b`,
   String.raw`(?<!['’]s )\bthe (?:transcript|summary|recording|captions?) (?:does not|doesn't|did not|didn't) (?:show|say|state|mention|specify|indicate)\b`,
 ];
 const RECORD_COMMENTARY = new RegExp(RECORD_COMMENTARY_PARTS.join("|"), "iu");
-/** A whole sentence that is nothing but such commentary (the only text `dropRecordCommentary` may delete). */
-const RECORD_COMMENTARY_SENTENCE = new RegExp(String.raw`^(?:${RECORD_COMMENTARY_PARTS.join("|")})[^.!?;:()]*[.!?]?$`, "iu");
+/**
+ * A whole sentence that is nothing but such commentary, the only text `dropRecordCommentary` may delete: no free tail
+ * (a tail such as "…, but finish it before the next lesson" carries an instruction), only a fixed "for the homework" /
+ * "in the lesson" kind of ending.
+ */
+const RECORD_COMMENTARY_SENTENCE = new RegExp(String.raw`^(?:${RECORD_COMMENTARY_PARTS.slice(0, 2).join("|")})` +
+  String.raw`(?: (?:for|in) (?:this|the) (?:homework|task|work|worksheet|essay|assignment|lesson))?\s*[.!?]?$`, "iu");
 
 /**
  * Drops a sentence only when the whole sentence is record commentary and it is not a list item; deleting it never
