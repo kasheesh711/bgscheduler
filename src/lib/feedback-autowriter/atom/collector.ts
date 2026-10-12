@@ -126,7 +126,10 @@ export async function runAtomCollector(input: {
   let nonTransient = false;
   const fail = (code: string, cause: string) => {
     if (stopped) return;
-    if (!isTransientAtomFailure(code, cause)) nonTransient = true;
+    const transient = isTransientAtomFailure(code, cause);
+    // Keep the real failure's code, stage and cause for the alert: a later time-out must not overwrite it.
+    if (transient && nonTransient) return;
+    if (!transient) nonTransient = true;
     failure = code; failureStage = stage; failureCause = cause;
   };
   let snapshots = 0;

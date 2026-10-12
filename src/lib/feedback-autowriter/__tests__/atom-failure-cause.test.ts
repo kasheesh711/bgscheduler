@@ -46,4 +46,3 @@ describe("isTransientAtomFailure (what may wait one run before paging)", () => {
     expect(isTransientAtomFailure(code, cause)).toBe(expected);
   });
 });
-
