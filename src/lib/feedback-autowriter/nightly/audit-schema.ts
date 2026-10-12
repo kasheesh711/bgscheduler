@@ -16,15 +16,20 @@ import type { EvidenceGrade } from "./types";
  * - every quote said to come from the feedback must really be in it, and every evidence quote must really be in the
  *   evidence (a "supported" claim whose evidence cannot be found becomes unsupported);
  * - an unsupported, contradicted or misattributed claim that no issue covers gets an issue of its own;
- * - severities are raised to their failure mode's floor, and the verdict to the worst issue.
+ * - severities are raised to their failure mode's floor, and the verdict to the worst issue;
+ * - one owner rule (5 Oct 2026) is the only exception that loosens: an omission of homework the tutor set is dropped,
+ *   and the verdict is then the worst remaining issue or omission.
  * Bump `AUDIT_VERSION` whenever the schema or these rules change: cached audits are keyed by it.
  * v2 (3 Oct): the CLI's `--json-schema` carries no lengths, id patterns or item caps (they are stripped for structured
  * output), so the first live audit was rejected for "claim_1"-style ids and a fifth evidence quote. The model's JSON is
  * now normalised before zod (`normaliseAuditOutput`: ids renumbered, lists and strings clipped) and the prompt states
  * the limits; only structural problems still fail.
  * v3 (10 Oct): invalidate audits that did not use the post's recorded format and style guides.
+ * v4 (13 Oct): the owner's grading rules — a summary-faithful claim on a post written from the Wise summary is
+ * supported (7 Oct), and homework the feedback leaves out is not an omission (5 Oct; dropped here deterministically,
+ * the only post-check that can lower a verdict).
  */
-export const AUDIT_VERSION = 3;
+export const AUDIT_VERSION = 4;
 
 /** Every list and string limit of `AuditResultSchema`, stated in the prompt and applied by `normaliseAuditOutput`. */
 export const AUDIT_LIMITS = {
@@ -152,6 +157,8 @@ export interface AuditPostCheck {
   raisedIssues: string[];
   /** Whether the verdict was raised to match the worst issue or omission. */
   verdictRaised: boolean;
+  /** `homework_set_not_reported` omissions dropped by the owner's 5 Oct rule (the verdict is then the worst remaining item). */
+  droppedHomeworkOmissions: number;
 }
 
 export interface CheckedAuditResult extends AuditResult {
@@ -338,7 +345,9 @@ export function parseAuditResult(
   const issueIds = new Set(result.issues.map((issue) => issue.id));
   if (issueIds.size !== result.issues.length) return { ok: false, reason: "duplicate issue ids" };
 
-  const postCheck: AuditPostCheck = { quoteMismatchIssues: [], unverifiedSupport: [], addedIssues: [], raisedIssues: [], verdictRaised: false };
+  const postCheck: AuditPostCheck = {
+    quoteMismatchIssues: [], unverifiedSupport: [], addedIssues: [], raisedIssues: [], verdictRaised: false, droppedHomeworkOmissions: 0,
+  };
   const fieldText = (field: AuditedField) => ctx.postFields[field] ?? "";
 
   // 1. Supported claims need evidence that is really there.
@@ -406,13 +415,22 @@ export function parseAuditResult(
     if (issue.severity !== "critical") issue.criticalCategory = null;
   }
 
-  // 5. The verdict is at least the worst issue or omission.
+  // 5. Owner rule (5 Oct 2026): homework the feedback leaves out is not an error (not every class has homework).
+  // Invented or wrong homework stays an issue (M03); only the omission goes.
+  const kept = result.omissions.filter((omission) => omission.what !== "homework_set_not_reported");
+  postCheck.droppedHomeworkOmissions = result.omissions.length - kept.length;
+  result.omissions = kept;
+
+  // 6. The verdict is at least the worst issue or omission — and, once a homework omission was dropped, exactly that
+  // (the model's verdict may rest on the dropped omission).
   if (result.verdict !== "insufficient_evidence") {
     let worst: FailureSeverity | null = null;
     for (const issue of result.issues) worst = worst ? maxSeverity(worst, issue.severity) : issue.severity;
     for (const omission of result.omissions) worst = worst ? maxSeverity(worst, omission.severity) : omission.severity;
     const declared: FailureSeverity | null = result.verdict === "accurate" ? null : result.verdict;
-    if (worst && (declared === null || severityRank(worst) > severityRank(declared))) {
+    if (postCheck.droppedHomeworkOmissions > 0) {
+      result.verdict = worst ?? "accurate";
+    } else if (worst && (declared === null || severityRank(worst) > severityRank(declared))) {
       result.verdict = worst;
       postCheck.verdictRaised = true;
     }

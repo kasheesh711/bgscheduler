@@ -77,7 +77,9 @@ describe("parseAuditResult", () => {
     expect(out.ok).toBe(true);
     if (!out.ok) return;
     expect(out.result.verdict).toBe("accurate");
-    expect(out.result.postCheck).toEqual({ quoteMismatchIssues: [], unverifiedSupport: [], addedIssues: [], raisedIssues: [], verdictRaised: false });
+    expect(out.result.postCheck).toEqual({
+      quoteMismatchIssues: [], unverifiedSupport: [], addedIssues: [], raisedIssues: [], verdictRaised: false, droppedHomeworkOmissions: 0,
+    });
     expect(worstSeverity(out.result)).toBeNull();
   });
 
@@ -175,6 +177,34 @@ describe("parseAuditResult", () => {
     }), ctx);
     expect(out.ok && out.result.verdict).toBe("major");
     expect(out.ok && out.result.issues[0].criticalCategory).toBeNull();
+  });
+
+  it("drops homework the feedback left out (owner rule, 5 Oct) and grades the rest: a major resting only on it becomes accurate", () => {
+    const homework = { what: "homework_set_not_reported" as const, detail: "Mock tests set at the end.", evidence: [], severity: "major" as const };
+    const only = parseAuditResult(baseResult({ verdict: "major", omissions: [homework] }), ctx);
+    expect(only.ok).toBe(true);
+    if (!only.ok) return;
+    expect(only.result.verdict).toBe("accurate");
+    expect(only.result.omissions).toEqual([]);
+    expect(only.result.postCheck.droppedHomeworkOmissions).toBe(1);
+
+    const withTopic = parseAuditResult(baseResult({
+      verdict: "major",
+      omissions: [homework, { what: "other", detail: "Score left out.", evidence: [], severity: "cosmetic" }],
+    }), ctx);
+    expect(withTopic.ok && withTopic.result.verdict).toBe("cosmetic");
+  });
+
+  it("never lets the homework rule hide a real issue or invented homework", () => {
+    const out = parseAuditResult(baseResult({
+      verdict: "cosmetic",
+      issues: [{
+        id: "i1", claimIds: [], field: "homework", quote: "Complete page 12 by Friday.", mode: "M03", severity: "major", criticalCategory: null,
+        rootStage: "evidence", defense: "judge_list", mechanism: "Remaining work written as homework.", evidence: [], minimalFix: null, confidence: "high",
+      }],
+      omissions: [{ what: "homework_set_not_reported", detail: "Other task set.", evidence: [], severity: "major" }],
+    }), ctx);
+    expect(out.ok && out.result.verdict).toBe("major");
   });
 
   it("renumbers duplicate issue ids instead of failing", () => {
