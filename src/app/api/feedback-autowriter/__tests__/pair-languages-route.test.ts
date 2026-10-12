@@ -65,7 +65,9 @@ describe("PUT /api/feedback-autowriter/pair-languages", () => {
 
   it("is owner-only", async () => {
     ownerMock.mockRejectedValue(new AdminUsersAccessError("nope", 403));
-    expect((await PUT(request("PUT", body))).status).toBe(403);
+    const response = await PUT(request("PUT", body));
+    expect(response.status).toBe(403);
+    expect((await response.json()).error).toMatch(/class languages/u);
     expect(setMock).not.toHaveBeenCalled();
   });
   it("rejects invalid JSON and malformed bodies", async () => {

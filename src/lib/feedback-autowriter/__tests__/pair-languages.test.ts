@@ -4,6 +4,7 @@ vi.mock("server-only", () => ({}));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
 
 import type { Database } from "@/lib/db";
+import { AUTOWRITER_ROSTER } from "@/lib/feedback-autowriter/roster";
 import {
   buildPairLanguages,
   classifyPairLanguage,
@@ -62,6 +63,10 @@ describe("classifyPairLanguage", () => {
   it("is bilingual when one share reaches 0.03 and the median stays under 0.30", () => {
     expect(classifyPairLanguage([0.0, 0.02, 0.2])).toBe("bilingual");
   });
+  it("never reads english with a share that is not a number (as the Zoom-English check)", () => {
+    expect(classifyPairLanguage([0, Number.NaN])).toBe("bilingual");
+    expect(classifyPairLanguage([0.5, 0.6, Number.NaN])).toBe("thai");
+  });
 });
 
 describe("buildPairLanguages", () => {
@@ -80,8 +85,8 @@ describe("buildPairLanguages", () => {
     expect(rows.map((row) => [row.tutorKey, row.wiseClassId])).toEqual([["Anna", CLASS_B], ["Kevin", CLASS_A], ["Zed", CLASS_B]]);
     const kevin = rows[1];
     expect(kevin).toMatchObject({
-      className: "Maths Y9", lessons: 2, zoomLessons: 1, medianThaiShare: 0.015, maxThaiShare: 0.02,
-      lastLessonAt: "2026-10-08T10:00:00.000Z", auto: "english", override: "thai", effective: "thai",
+      className: "Maths Y9", lessons: 3, zoomLessons: 1, medianThaiShare: 0.015, maxThaiShare: 0.02,
+      lastLessonAt: "2026-10-08T10:00:00.000Z", auto: "bilingual", override: "thai", effective: "thai",
     });
     expect(rows[0]).toMatchObject({ auto: "thai", override: null, effective: "thai", lessons: 1, zoomLessons: 0 });
     expect(rows[2]).toMatchObject({
@@ -110,6 +115,15 @@ describe("loadPairLanguages", () => {
     expect(result.pairs).toHaveLength(1);
     expect(result.pairs[0]).toMatchObject({ auto: "thai", override: "bilingual", effective: "bilingual" });
   });
+  it("maps a roster account to its tutor from the code roster, before the review job records it", async () => {
+    const [tutor] = AUTOWRITER_ROSTER;
+    const result = await loadPairLanguages(fakeDb([
+      [{ ...lesson({ thaiShare: "0" }), wiseTeacherUserId: tutor.wiseUserId, tutorKey: tutor.wiseUserId }],
+      [],
+    ]), now);
+    expect(result.pairs[0]).toMatchObject({ tutorKey: tutor.canonicalKey, auto: "english" });
+  });
+
   it("still loads before migration 0116 (the override table missing)", async () => {
     const missing = Object.assign(new Error("Failed query"), { cause: { code: "42P01" } });
     const result = await loadPairLanguages(fakeDb([[lesson()], missing]), now);

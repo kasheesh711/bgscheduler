@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { AdminUsersAccessError } from "@/lib/admin-users/types";
 import { auth } from "@/lib/auth";
 import { requireClassroomOperationsOwner } from "@/lib/classrooms/operations-access";
 import { getDb } from "@/lib/db";
@@ -24,6 +25,18 @@ async function readJson(request: NextRequest): Promise<unknown> {
     return await request.json();
   } catch {
     throw new AutowriterReviewError("Invalid JSON body.", 400);
+  }
+}
+
+/** The owner gate, with a 403 that names this action (the shared mapper's 403 text is about verdicts). */
+async function requireOwner() {
+  try {
+    return await requireClassroomOperationsOwner();
+  } catch (error) {
+    if (error instanceof AdminUsersAccessError && error.status === 403) {
+      throw new AutowriterReviewError("Only the owner can change class languages.", 403);
+    }
+    throw error;
   }
 }
 
@@ -59,7 +72,7 @@ export async function GET() {
  */
 export async function PUT(request: NextRequest) {
   try {
-    const actor = await requireClassroomOperationsOwner();
+    const actor = await requireOwner();
     const parsed = PutBody.safeParse(await readJson(request));
     if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     const db = getDb();
@@ -76,7 +89,7 @@ export async function PUT(request: NextRequest) {
  */
 export async function DELETE(request: NextRequest) {
   try {
-    await requireClassroomOperationsOwner();
+    await requireOwner();
     const parsed = DeleteBody.safeParse(await readJson(request));
     if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     const db = getDb();

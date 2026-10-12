@@ -3,6 +3,7 @@ import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { AUTOWRITER_PAIR_THAI_MIN_MEDIAN_SHARE, AUTOWRITER_ZOOM_ENGLISH_MAX_THAI_SHARE } from "./config";
 import { isMissingRelationError } from "./db-errors";
+import { AUTOWRITER_ROSTER } from "./roster";
 import { median } from "./trends";
 
 const S = schema.feedbackAutowriterSessions;
@@ -15,6 +16,8 @@ export type AutoPairLanguage = PairLanguage | "unknown";
 
 export const PAIR_LANGUAGE_LOOKBACK_DAYS = 90;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** The code roster, as routing uses it (`rosterAccountIds`): a new account maps at once, before the review job records it. */
+const ROSTER_TUTOR_KEY = new Map(AUTOWRITER_ROSTER.map((tutor) => [tutor.wiseUserId, tutor.canonicalKey]));
 
 export interface PairLessonRow {
   wiseClassId: string;
@@ -62,7 +65,8 @@ export interface PairLanguages {
 export function classifyPairLanguage(shares: readonly number[]): AutoPairLanguage {
   if (shares.length === 0) return "unknown";
   if (shares.every((share) => share < AUTOWRITER_ZOOM_ENGLISH_MAX_THAI_SHARE)) return "english";
-  return median(shares)! >= AUTOWRITER_PAIR_THAI_MIN_MEDIAN_SHARE ? "thai" : "bilingual";
+  const valid = shares.filter(Number.isFinite);
+  return valid.length > 0 && median(valid)! >= AUTOWRITER_PAIR_THAI_MIN_MEDIAN_SHARE ? "thai" : "bilingual";
 }
 
 /**
@@ -86,10 +90,8 @@ export function buildPairLanguages(lessons: readonly PairLessonRow[], overrides:
     const group = groupOf(row.wiseClassId, row.tutorKey);
     const at = row.endedAt ? row.endedAt.getTime() : -Infinity;
     if (row.source === "zoom") group.zoomLessons += 1;
-    else if (row.thaiShare !== null) {
-      const share = Number(row.thaiShare);
-      if (Number.isFinite(share)) group.shares.push(share);
-    }
+    // A share that is not a number stays in: like the Zoom-English check, it keeps the pair from reading English.
+    else if (row.thaiShare !== null) group.shares.push(Number(row.thaiShare));
     if (row.className && at >= group.classNameAt) {
       group.className = row.className;
       group.classNameAt = at;
@@ -101,14 +103,15 @@ export function buildPairLanguages(lessons: readonly PairLessonRow[], overrides:
   return [...groups.values()]
     .map((group): PairLanguageRow => {
       const auto = classifyPairLanguage(group.shares);
+      const valid = group.shares.filter(Number.isFinite);
       return {
         wiseClassId: group.wiseClassId,
         tutorKey: group.tutorKey,
         className: group.className,
         lessons: group.shares.length,
         zoomLessons: group.zoomLessons,
-        medianThaiShare: median(group.shares),
-        maxThaiShare: group.shares.length ? Math.max(...group.shares) : null,
+        medianThaiShare: median(valid),
+        maxThaiShare: valid.length ? Math.max(...valid) : null,
         lastLessonAt: group.lastAt === null ? null : new Date(group.lastAt).toISOString(),
         auto,
         override: group.override,
@@ -129,6 +132,7 @@ export async function loadPairLanguages(db: Database = getDb(), now: Date = new 
   const since = new Date(now.getTime() - PAIR_LANGUAGE_LOOKBACK_DAYS * DAY_MS);
   const lessons = await db.select({
     wiseClassId: sql<string>`${S.wiseClassId}`,
+    wiseTeacherUserId: sql<string>`${S.wiseTeacherUserId}`,
     tutorKey: sql<string>`coalesce(${R.tutorKey}, ${S.wiseTeacherUserId})`,
     className: sql<string | null>`${S.metadata} ->> 'className'`,
     source: sql<string>`coalesce(${S.metadata} -> 'transcript' ->> 'source', 'soniox')`,
@@ -157,7 +161,10 @@ export async function loadPairLanguages(db: Database = getDb(), now: Date = new 
     lookbackDays: PAIR_LANGUAGE_LOOKBACK_DAYS,
     englishMaxThaiShare: AUTOWRITER_ZOOM_ENGLISH_MAX_THAI_SHARE,
     thaiMinMedianShare: AUTOWRITER_PAIR_THAI_MIN_MEDIAN_SHARE,
-    pairs: buildPairLanguages(lessons, overrides),
+    pairs: buildPairLanguages(
+      lessons.map(({ wiseTeacherUserId, ...row }) => ({ ...row, tutorKey: ROSTER_TUTOR_KEY.get(wiseTeacherUserId) ?? row.tutorKey })),
+      overrides,
+    ),
   };
 }
 

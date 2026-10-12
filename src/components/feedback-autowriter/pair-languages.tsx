@@ -61,7 +61,7 @@ export function PairLanguagesTable({ data, canControl, filter, onFilter, busy, o
         ) : null}
       </div>
       {rows.length === 0 ? (
-        <p className="border-t px-5 py-4 text-[11px] text-muted-foreground">No transcribed lessons in the last {data.lookbackDays} days.</p>
+        <p className="border-t px-5 py-4 text-[11px] text-muted-foreground">{data.pairs.length === 0 ? `No transcribed lessons in the last ${data.lookbackDays} days.` : "No pairs with this label."}</p>
       ) : (
         <Table>
           <TableHeader>
