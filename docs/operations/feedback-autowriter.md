@@ -731,8 +731,10 @@ hash, the source (`replay` or `minimal_fix`), every check, a reason of mode code
 versions behind it — signed with HMAC-SHA256 over its canonical JSON with `~/.bgscheduler-nightly/hmac.key` (32 random
 bytes, 0600, created by the first `verify`; never commit or copy it). Every paid call is reserved first and recorded in
 `<night>/verify/calls/` before it is made and after: a candidate is re-audited at most once, ever (also after a crash
-mid-call); nothing is retried in a loop, except a call a usage limit or login failure stopped. At most 6 proposals a
-night. `<night>/verify/<sid>.json` keeps each class's candidates and checks for the morning review. A proposal must
+mid-call); nothing is retried in a loop, except a call a usage limit or login failure stopped. At most
+`maxProposalsPerNight` (6) proposals a night, also while Wise corrections are paused (`maxCorrectionsPerNight: 0`): then
+`correct --apply` stops at `cap:corrections_night` (exit 3) before any read or write, which is expected, and the
+proposals wait for the owner. `<night>/verify/<sid>.json` keeps each class's candidates and checks for the morning review. A proposal must
 carry every check passed (`correct` refuses one that does not).
 
 **3. `correct` (dry run), then `correct --apply`.** Every proposal's signature is checked first (one that fails —
