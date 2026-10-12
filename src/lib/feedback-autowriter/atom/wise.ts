@@ -22,9 +22,34 @@ function ownership(session: WiseSession) {
   });
 }
 
+/**
+ * Wise pages its session lists while classes move from FUTURE to PAST, so a read that spans a class ending can meet
+ * one session on two pages, and the strict readers reject the whole read (`invalid_session`: 5 of 386 Atom runs on
+ * 8–11 Oct 2026, all minutes after classes ended, each cleared by the next run). The read starts again from scratch
+ * after a short pause; one that still fails on the last attempt fails the run, closed, as before.
+ */
+const TRANSIENT_READ = /invalid, duplicate or out-of-date|duplicate, missing, or invalid session|pagination|advertised session page|page count contradicts/iu;
+export const ATOM_TIMETABLE_ATTEMPTS = 3;
+const ATOM_TIMETABLE_RETRY_MS = 5_000;
+
+export async function fetchAtomLessonTimetable(client: WiseClient, instituteId: string, dates: string[],
+  options: { now?: Date; deadlineAt: number; sleep?: (ms: number) => Promise<void> }): Promise<WiseSession[]> {
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await readAtomLessonTimetable(client, instituteId, dates, { now: options.now, deadlineAt: options.deadlineAt });
+    } catch (error) {
+      const waitMs = ATOM_TIMETABLE_RETRY_MS * attempt;
+      if (attempt >= ATOM_TIMETABLE_ATTEMPTS || !(error instanceof Error) || !TRANSIENT_READ.test(error.message)
+        || options.deadlineAt - Date.now() < waitMs * 4) throw error;
+      await sleep(waitMs);
+    }
+  }
+}
+
 /** FUTURE ignores DATE boundaries in live Wise responses. Read its complete COUNT
  * listing, then select exact Bangkok dates. PAST retains its strict day reader. */
-export async function fetchAtomLessonTimetable(client: WiseClient, instituteId: string, dates: string[],
+async function readAtomLessonTimetable(client: WiseClient, instituteId: string, dates: string[],
   options: { now?: Date; deadlineAt: number }) {
   const today = bangkokDate((options.now ?? new Date()).toISOString());
   const unique = [...new Set(dates)].sort();

@@ -304,6 +304,24 @@ where state in ('pending', 'awaiting_recording', 'transcribing', 'generating')
 order by deadline_at;
 ```
 A switched-off tutor's classes are handed back to them silently when they reach the deadline window.
+
+**`model_credit`** (critical, pushed; migration 0114, 12 Oct 2026): OpenRouter credit. On 11 Oct the key's $20
+monthly limit was reached at 21:10 Bangkok. OpenRouter answers that with HTTP 403 "Key limit exceeded", which the
+writer read as a refusal of the draft, so four classes were held as "drafts rejected" for 14 hours. Now:
+
+- A model call refused for lack of credit (HTTP 402, or 403 "Key limit exceeded" / "insufficient credit") ends the
+  run as infra (`creditExhausted`): the class is not held, never counts as a writer failure, and retries every
+  10 minutes until the deadline. The first such refusal of a Bangkok day raises `model-credit:exhausted:<date>`.
+  Other 403s (a moderation refusal) still count as the model's answer.
+- The hourly review job reads `GET /api/v1/key` and `GET /api/v1/credits` with the production key (step
+  `model_credit`). It raises `model-credit:watch:<date>`, once a day while short, when the key's limit has under
+  7 days left at this month's daily rate (`usage_monthly` ÷ days elapsed), or when the account balance is under $1.
+  The balance warns only near zero because auto top-up is on (owner, 12 Oct 2026): a low balance is its normal state,
+  and near zero means a top-up payment failed.
+
+What to do: raise the key's limit (openrouter.ai → Keys) or add credits (Settings → Credits), then **Acknowledge**.
+Held classes are not created by this, so nothing needs a Retry: the pending classes post on their next attempt.
+Evaluation runs (replays, bake-offs) spend the same key; keep them off it near the limit.
 Nightly tutor reminders are separate (Class Feedback).
 
 ## 8. Writer model (GPT-6.1 Sol since 2026-09-30)
@@ -482,7 +500,9 @@ the API key first. Incidents: `critical_verdict`, `critical_flag` /
 `credit_entries_changed` (a post landed without verifying) and `api_actor_unmatched` (an API save no recorded post
 explains — check who wrote to Wise with the API key) are pushed; `first_shot_unverified` is shown only (critical when
 the post did not verify) — run the backfill script to prove it, or confirm by hand what was posted.
-`atom_collection_failed` (an Atom collector run failed; lesson-only feedback carries on) and
+`atom_collection_failed` (an Atom collector run failed; lesson-only feedback carries on; since 12 Oct 2026 a Wise
+timetable read that meets a session twice while classes end is read again up to 3 times, 5 s and 10 s apart, before
+the run fails) and
 `style_review_source_missing` (a guided post has no retained evidence or both factual verdicts) are critical and
 pushed. Style review results are dashboard-only, never pushed (owner, 2 Oct 2026): `style_review_flagged` (the post
 needs a style fix — listed in What needs you, not red, until acknowledged) and `style_review_unavailable` (the

@@ -944,6 +944,28 @@ describe("the daily gate", () => {
   });
 });
 
+describe("OpenRouter credit watch (migration 0114)", () => {
+  const I = schema.feedbackAutowriterIncidents;
+  it("raises one pushed model_credit incident a day while the key's limit is short, and none while it is not", async () => {
+    const short = { keyLimitUsd: 20, keyRemainingUsd: 2, keyLimitReset: "monthly", keyUsageMonthUsd: 18, accountRemainingUsd: 12 };
+    const first = await runReviewJob(deps({ modelBudget: async () => short }));
+    expect(first.modelCredit).toEqual([expect.stringContaining("monthly limit has $2.00 left")]);
+    await runReviewJob(deps({ now: () => minutes(NOW, 60), modelBudget: async () => short }));
+    const rows = await db.select().from(I).where(eq(I.kind, "model_credit"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ severity: "critical", detail: expect.objectContaining({ cause: "watch" }) });
+    expect(rows[0].dedupeKey).toMatch(/^model-credit:watch:\d{4}-\d{2}-\d{2}$/u);
+    const fine = await runReviewJob(deps({ now: () => minutes(NOW, 120), modelBudget: async () => ({ ...short, keyRemainingUsd: 30, keyLimitUsd: 50 }) }));
+    expect(fine.modelCredit).toEqual([]);
+  });
+
+  it("records a failed budget read as a step error, not as a credit problem", async () => {
+    const result = await runReviewJob(deps({ modelBudget: async () => { throw new Error("OpenRouter key read: HTTP 500"); } }));
+    expect(result.stepErrors).toEqual(expect.arrayContaining([expect.stringMatching(/^model_credit: Error/u)]));
+    expect(await db.select().from(I).where(eq(I.kind, "model_credit"))).toHaveLength(0);
+  });
+});
+
 describe("incident outbox", () => {
   it("retries a failed push, never re-sends a target that has it, and gives up after the cap", async () => {
     await recordIncident(db, { dedupeKey: "critical_verdict:x", kind: "critical_verdict", severity: "critical", summary: "Critical verdict" });

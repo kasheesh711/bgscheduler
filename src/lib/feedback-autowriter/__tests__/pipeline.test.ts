@@ -257,7 +257,15 @@ describe("runWritingPipeline", () => {
 
   it("treats an OpenRouter outage or missing credit as infra, not a hold", async () => {
     expect(await run({ writers: [fail("Insufficient credits", 402)] }).promise)
-      .toEqual({ kind: "infra", error: "sol:Insufficient credits", modelFailure: false, stage: "writer" });
+      .toEqual({ kind: "infra", error: "sol:Insufficient credits", modelFailure: false, stage: "writer", creditExhausted: true });
+    // 11 Oct 2026: the key's monthly limit came as HTTP 403, read as a refusal of the draft, and both writers held the
+    // class. It is our account, like a 402: one run ends as infra, without trying the fallback writer on it.
+    const keyLimit = "Key limit exceeded (monthly limit). Manage it using https://openrouter.ai/workspaces/default/keys/x $20.01 of $20.00 used";
+    const { promise, records } = run({ writers: [fail(keyLimit, 403), LUNA(writerJson)] });
+    expect(await promise).toEqual({ kind: "infra", error: `sol:${keyLimit}`, modelFailure: false, stage: "writer", creditExhausted: true });
+    expect(records.filter((record) => record.role === "writer")).toHaveLength(1);
+    expect(await run({ writers: [SOL(writerJson)], judge: [fail(keyLimit, 403)] }).promise)
+      .toMatchObject({ kind: "infra", stage: "judge", modelFailure: false, creditExhausted: true });
     expect(await run({ writers: [fail("timeout", null)] }).promise)
       .toEqual({ kind: "infra", error: "sol:timeout", modelFailure: true, stage: "writer" });
   });
