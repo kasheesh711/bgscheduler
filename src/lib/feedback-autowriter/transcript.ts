@@ -253,10 +253,12 @@ export function assignSpeakerRoles(input: {
 
 /** A phrase ends at a Soniox speaker change, a pause of this long, or the end of a sentence. */
 const TIMING_PAUSE_MS = 400;
-/** A phrase takes the role of the cues covering at least this share of its overlapped time … */
+/** A phrase takes the role of the cues covering at least this share of its overlapped time; otherwise it is left out. */
 const TIMING_MAJORITY = 0.6;
-/** … or, overlapping none, of the nearest cue at most this far away; otherwise it is left out. */
-const TIMING_NEAREST_MS = 1_000;
+/** Left-out speech of at least this long shows as a marker line, so neither model reads the gap as silence. */
+const TIMING_GAP_MARK_MS = 3_000;
+/** The speaker of a marker line (`renderTranscript` prints it without a role). */
+const LEFT_OUT = "left_out";
 /** Zoom must label at least this share of the transcript's text … */
 const TIMING_MIN_COVERAGE = 0.85;
 /** … the student must have been heard by Zoom (cues under their name) … */
@@ -284,11 +286,14 @@ function phrasesFromTokens(tokens: readonly SonioxToken[]): Segment[] {
  * Soniox sometimes hears the tutor and the student as one voice (most of the 35 "unclear" classes in October 2026:
  * one Soniox speaker with 96–100% of the text), and no per-speaker label can then be right. Zoom times each
  * participant's own microphone, so its named cues say who spoke when even where its words are poor. Each phrase
- * takes the role of the cues it falls in; a phrase no cue covers or nearly touches is left out, never guessed.
- * Measured on 9–12 Oct classes: on 17 Zoom-aligned classes it labelled 96.6% of the text and agreed with the aligned
- * labels 96.9% of the time (offset 0 fitted best); on the 11 unclear classes it labelled 87–100%.
- * Only when Zoom names nobody but the tutor and the student, the student is heard (≥ 10 cues), Zoom labels ≥ 85% of
- * the text and the tutor carries ≥ 50% of it; null otherwise (the class stays unclear).
+ * takes the role of the cues it overlaps (≥ 60% of the overlapped time); a phrase no cue overlaps, or overlapped by
+ * both people about evenly, is left out, never guessed, and a left-out stretch of ≥ 3 s shows as a marker line.
+ * The labels stay "inferred" for the writer and the judges. Measured on 9–12 Oct classes against the per-speaker
+ * alignment of 16 aligned classes (itself imperfect on Thai lessons): of the STUDENT-labelled text, 10.7% (Thai-heavy)
+ * and 5.5% (English-heavy) was the tutor's by that yardstick, worst class 15.7%; 10 of 11 unclear classes labelled.
+ * Only when Zoom names nobody but the tutor and the student, the student is heard (≥ 10 cues), Zoom's captions run
+ * to ≥ 90% of the transcript, Zoom labels ≥ 85% of the text and the tutor carries ≥ 50% of it; null otherwise (the
+ * class stays unclear).
  */
 export function labelByZoomTiming(input: {
   tokens: readonly SonioxToken[];
@@ -304,25 +309,24 @@ export function labelByZoomTiming(input: {
     .map((cue) => ({ ...cue, role: teacherNames.has(normalizeName(cue.speakerName)) ? "tutor" as const : "student" as const }))
     .toSorted((a, b) => a.startMs - b.startMs);
   if (cues.filter((cue) => cue.role === "student").length < TIMING_MIN_STUDENT_CUES) return null;
+  // Captions that stop early would leave the lesson's end (where homework is set) out without a trace.
+  const lastSpeech = input.tokens.reduce((max, token) => Math.max(max, token.end_ms ?? token.start_ms), 0);
+  const lastCaption = cues.reduce((max, cue) => Math.max(max, cue.endMs), 0);
+  if (lastCaption < lastSpeech * AUTOWRITER_ZOOM_ENGLISH_MIN_CAPTION_COVERAGE) return null;
 
   const roleOf = (phrase: Segment): "tutor" | "student" | null => {
     const start = phrase.startMs;
     const end = Math.max(phrase.endMs, phrase.startMs + 1);
     const time = { tutor: 0, student: 0 };
-    let nearest: { role: "tutor" | "student"; distance: number } | null = null;
     for (const cue of cues) {
-      if (cue.startMs > end + TIMING_NEAREST_MS) break;
+      if (cue.startMs >= end) break;
       const overlap = Math.min(end, cue.endMs) - Math.max(start, cue.startMs);
       if (overlap > 0) time[cue.role] += overlap;
-      const distance = Math.max(0, cue.startMs - end, start - cue.endMs);
-      if (!nearest || distance < nearest.distance) nearest = { role: cue.role, distance };
     }
     const covered = time.tutor + time.student;
-    if (covered > 0) {
-      const role = time.tutor >= time.student ? "tutor" : "student";
-      return time[role] / covered >= TIMING_MAJORITY ? role : null;
-    }
-    return nearest && nearest.distance <= TIMING_NEAREST_MS ? nearest.role : null;
+    if (covered === 0) return null;
+    const role = time.tutor >= time.student ? "tutor" : "student";
+    return time[role] / covered >= TIMING_MAJORITY ? role : null;
   };
 
   const phrases = phrasesFromTokens(input.tokens);
@@ -330,9 +334,21 @@ export function labelByZoomTiming(input: {
   const segments: Segment[] = [];
   // Counted on the phrases themselves: joining them into turns adds spaces.
   let labelledChars = 0;
+  let leftOut: { startMs: number; endMs: number } | null = null;
+  const markLeftOut = () => {
+    if (leftOut && leftOut.endMs - leftOut.startMs >= TIMING_GAP_MARK_MS) {
+      const seconds = Math.round((leftOut.endMs - leftOut.startMs) / 1000);
+      segments.push({ speaker: LEFT_OUT, startMs: leftOut.startMs, endMs: leftOut.endMs, text: `[… ${seconds} s of speech not attributable to either speaker, left out …]` });
+    }
+    leftOut = null;
+  };
   for (const phrase of phrases) {
     const role = roleOf(phrase);
-    if (!role) continue;
+    if (!role) {
+      leftOut = leftOut ? { startMs: leftOut.startMs, endMs: Math.max(leftOut.endMs, phrase.endMs) } : { startMs: phrase.startMs, endMs: phrase.endMs };
+      continue;
+    }
+    markLeftOut();
     labelledChars += phrase.text.length;
     const last = segments.at(-1);
     if (last && last.speaker === role) {
@@ -342,8 +358,10 @@ export function labelByZoomTiming(input: {
       segments.push({ ...phrase, speaker: role, text: phrase.text.trim() });
     }
   }
+  markLeftOut();
   const roles = new Map<string, SpeakerRole>([["tutor", "tutor"], ["student", "student"]]);
-  const ratios = roleRatios(segments, roles);
+  // Shares of the labelled text only: the markers are no one's.
+  const ratios = roleRatios(segments.filter((segment) => segment.speaker !== LEFT_OUT), roles);
   if (labelledChars / total < TIMING_MIN_COVERAGE || ratios.tutor < TIMING_MIN_TUTOR_SHARE || ratios.student <= 0) return null;
   return { segments, speakers: { roles, method: "zoom_timing", shares: percent(ratios), labelled: Math.round((labelledChars / total) * 100) } };
 }
@@ -362,8 +380,9 @@ const ROLE_LABEL: Record<SpeakerRole, string> = { tutor: "TUTOR", student: "STUD
  * usually set) and drops the middle.
  */
 export function renderTranscript(segments: readonly Segment[], roles: Map<string, SpeakerRole>, maxChars = 120_000): string {
-  const lines = segments.map((segment) =>
-    `[${clock(segment.startMs)}] ${ROLE_LABEL[roles.get(segment.speaker) ?? "other"]}: ${segment.text.trim()}`);
+  const lines = segments.map((segment) => segment.speaker === LEFT_OUT
+    ? `[${clock(segment.startMs)}] ${segment.text}`
+    : `[${clock(segment.startMs)}] ${ROLE_LABEL[roles.get(segment.speaker) ?? "other"]}: ${segment.text.trim()}`);
   const total = lines.reduce((sum, line) => sum + line.length + 1, 0);
   if (total <= maxChars) return lines.join("\n");
   const take = (from: string[], budget: number) => {
@@ -496,8 +515,8 @@ function evidenceFromSegments(input: {
   return {
     rendered,
     speakers,
-    // Zoom vouches for both: by speaker, or phrase by phrase.
-    speakerLabels: speakers.method === "zoom_alignment" || speakers.method === "zoom_timing" ? "verified" : "inferred",
+    // Only a per-speaker alignment is "verified"; phrase-by-phrase timing stays "inferred" (see `labelByZoomTiming`).
+    speakerLabels: speakers.method === "zoom_alignment" ? "verified" : "inferred",
     meta: {
       source: input.source,
       audioMinutes: Math.round(audioDurationMs / 600) / 100,

@@ -502,7 +502,8 @@ describe("Zoom timing: one Soniox voice, labelled phrase by phrase from Zoom's c
       zoomCues: cues, teacherName: TUTOR, alsoTeacher: ["Kevin Hsieh"], studentNames: [STUDENT],
     });
     expect(evidence.speakers.method).toBe("zoom_timing");
-    expect(evidence.speakerLabels).toBe("verified");
+    // Only a per-speaker alignment is verified: the writer and the judges treat these labels with care.
+    expect(evidence.speakerLabels).toBe("inferred");
     expect(evidence.meta).toMatchObject({ speakerMethod: "zoom_timing", labelled: 100 });
     expect(evidence.rendered).toContain("[00:00] TUTOR: Tutor question number 0");
     expect(evidence.rendered).toContain("[00:05] STUDENT: Answer 0 is three quarters.");
@@ -514,14 +515,30 @@ describe("Zoom timing: one Soniox voice, labelled phrase by phrase from Zoom's c
     expect(unnamed.speakers.method).toBe("unclear");
   });
 
-  it("labels a phrase between cues by the nearest cue within a second, and leaves out one further away", () => {
+  it("never guesses a phrase no cue overlaps: it is left out, and a stretch of 3 s or more shows as a marker", () => {
     const { tokens, cues } = lesson();
-    // 300 ms after the student's first cue ends (600 ms before the tutor's next): theirs. Far into silence: left out.
+    // 300 ms after the student's cue ends (no overlap): left out, not handed to the nearest speaker.
     tokens.push({ text: "Yes.", start_ms: 7_300, end_ms: 7_400, speaker: "1" });
-    tokens.push({ text: "Unheard words.", start_ms: 200_000, end_ms: 200_500, speaker: "1" });
-    const timed = labelByZoomTiming(input(tokens.toSorted((a, b) => a.start_ms - b.start_ms), cues));
-    expect(timed?.segments.find((s) => s.text.includes("Yes."))?.speaker).toBe("student");
+    tokens.push({ text: "Unheard words for a while.", start_ms: 200_000, end_ms: 205_000, speaker: "1" });
+    const timed = labelByZoomTiming(input(tokens.toSorted((a, b) => a.start_ms - b.start_ms), cues.concat({ speakerName: TUTOR, startMs: 206_000, endMs: 207_000 })));
+    expect(timed?.segments.some((s) => s.text.includes("Yes."))).toBe(false);
     expect(timed?.segments.some((s) => s.text.includes("Unheard"))).toBe(false);
+    expect(timed?.segments.filter((s) => s.speaker === "left_out").map((s) => s.text)).toEqual(["[… 5 s of speech not attributable to either speaker, left out …]"]);
+    expect(renderTranscript(timed!.segments, timed!.speakers.roles)).toContain("[03:20] [… 5 s of speech not attributable to either speaker, left out …]");
+  });
+
+  it("splits Thai speech without punctuation at pauses, so each turn takes its own speaker", () => {
+    const tokens: Array<{ text: string; start_ms: number; end_ms: number; speaker: string }> = [];
+    const cues: Array<{ speakerName: string; startMs: number; endMs: number }> = [];
+    for (let i = 0; i < 12; i += 1) {
+      const t = i * 8_000;
+      // Several tokens per turn, no sentence punctuation; a 600 ms pause between turns.
+      for (const [k, word] of ["ครู", "อธิบาย", "เรื่อง", "เศษส่วน", "นะครับ"].entries()) tokens.push({ text: word, start_ms: t + k * 700, end_ms: t + k * 700 + 600, speaker: "1" });
+      for (const [k, word] of ["ผม", "ได้", "สามส่วนสี่"].entries()) tokens.push({ text: word, start_ms: t + 4_200 + k * 300, end_ms: t + 4_200 + k * 300 + 250, speaker: "1" });
+      cues.push({ speakerName: TUTOR, startMs: t, endMs: t + 3_600 }, { speakerName: STUDENT, startMs: t + 4_200, endMs: t + 5_100 });
+    }
+    const timed = labelByZoomTiming(input(tokens, cues));
+    expect(timed?.segments.slice(0, 2).map((s) => [s.speaker, s.text])).toEqual([["tutor", "ครูอธิบายเรื่องเศษส่วนนะครับ"], ["student", "ผมได้สามส่วนสี่"]]);
   });
 
   it("leaves a phrase out when the cues it overlaps disagree (no 60% majority)", () => {
@@ -533,15 +550,20 @@ describe("Zoom timing: one Soniox voice, labelled phrase by phrase from Zoom's c
     expect(timed?.segments.some((s) => s.text.includes("Overlapping"))).toBe(false);
   });
 
-  it("declines (stays unclear) when Zoom names a third person, the student is barely heard, coverage is low or the tutor is under half", () => {
+  it("declines (stays unclear) when Zoom names a third person, the student is barely heard, captions stop early, coverage is low or the tutor is under half", () => {
     const { tokens, cues } = lesson();
     expect(labelByZoomTiming(input(tokens, [...cues, { speakerName: "Somebody Else", startMs: 100_000, endMs: 101_000 }]))).toBeNull();
     // Nine student cues: Zoom did not hear the student enough.
     const nine = lesson(9);
     expect(labelByZoomTiming(input(nine.tokens, nine.cues))).toBeNull();
-    // Half the tutor's talk outside any cue: under 85% labelled.
-    const sparse = cues.filter((cue, index) => cue.speakerName !== TUTOR || index % 4 !== 0);
-    expect(labelByZoomTiming(input(tokens, sparse.map((cue) => cue.speakerName === TUTOR ? { ...cue, endMs: cue.startMs + 500 } : cue)))).toBeNull();
+    // Captions stop after 80% of the speech: the end of the lesson (homework) would vanish.
+    const late = { text: "And for homework do page ten.", start_ms: 118_000, end_ms: 120_000, speaker: "1" };
+    expect(labelByZoomTiming(input([...tokens, late], cues))).toBeNull();
+    // Every third tutor question has no cue at all: 1 - 4×78/1296 ≈ 76% labelled, under 85%.
+    const sparse = cues.filter((cue, index) => !(cue.speakerName === TUTOR && index % 6 === 0));
+    expect(labelByZoomTiming(input(tokens, sparse))).toBeNull();
+    // The same with every question captioned passes: the coverage check is what refused it.
+    expect(labelByZoomTiming(input(tokens, cues))?.speakers.labelled).toBe(100);
     // The student talks more than the tutor: only Zoom vouches for the labels, so the tutor must carry half.
     const chatty = tokens.map((t, i) => i % 2 === 1 ? { ...t, text: t.text.repeat(4) } : t);
     expect(labelByZoomTiming(input(chatty, cues))).toBeNull();

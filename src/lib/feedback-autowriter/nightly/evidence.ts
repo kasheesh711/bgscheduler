@@ -680,7 +680,7 @@ export function buildEvidenceBundle(input: { target: NightlyTarget; night: strin
   const wiseCurrentFields = fieldsOf(wiseCurrent as Partial<Record<string, string>> | null);
   const scheduledMinutes = detail ? scheduledWindow(detail).minutes : null;
   const zoomCaptions = raw.zoomVtt ? renderZoomCaptions(raw.zoomVtt) || null : null;
-  const labelsFor = (method: string | null) => (method === "zoom_alignment" || method === "zoom_timing" ? "verified" : "inferred");
+  const labelsFor = (method: string | null) => (method === "zoom_alignment" ? "verified" : "inferred");
 
   let transcript: EvidenceBundle["transcript"] = null;
   let wiseSummary = summary;
@@ -706,7 +706,8 @@ export function buildEvidenceBundle(input: { target: NightlyTarget; night: strin
       teacherName: detailTeacherName(detail),
       alsoTeacher: tutorSelfNames(detail),
       // Zoom timing needs the student's names to tell their cues from anyone else's.
-      studentNames: student ? [student.name, ...(student.joinedAsGuest ? [student.joinedAsGuest] : [])] : undefined,
+      // The guest name production stored too: Wise's attendance may read differently by now.
+      studentNames: student ? unique([student.name, student.joinedAsGuest, raw.rowMeta.joinedAsGuest]) : undefined,
     });
     transcript = {
       text: rebuilt.rendered,

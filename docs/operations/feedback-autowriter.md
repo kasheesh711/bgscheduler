@@ -180,12 +180,16 @@ the next sweep after that, so at most ~35 minutes). No `no_recording` alert is r
 spoke when (each participant's own microphone).
 - `zoom_alignment`: each Soniox voice mostly overlaps one person's Zoom cues. Labels verified.
 - `zoom_timing` (12 Oct 2026): Soniox heard tutor and student as one voice (most of October's 35 "unclear"
-  classes: one voice with 96–100% of the text). Each phrase instead takes the role of the Zoom cues it falls in;
-  a phrase no cue covers, or nearly touches (≤ 1 s), is left out rather than guessed (`metadata.transcript.labelled` =
-  percent kept). Used only when Zoom names nobody but the tutor and the student, the student has ≥ 10 cues, ≥ 85% of
-  the text is labelled and the tutor carries ≥ 50% of it. Labels verified. Measured on 9–12 Oct classes: on 14
-  Zoom-aligned classes it agreed with the aligned labels on 96.9% of the text (worst class 89.4%); it labels all 10
-  unclear classes of that sample (95–100% of the text).
+  classes: one voice with 96–100% of the text). Each phrase instead takes the role of the Zoom cues it overlaps
+  (≥ 60% of the overlapped time). A phrase no cue overlaps, or both people overlap about evenly, is left out, never
+  guessed; a left-out stretch of ≥ 3 s shows as `[… N s of speech not attributable to either speaker, left out …]`
+  (`metadata.transcript.labelled` = percent of the text kept; `shares` are of the kept text). Used only when Zoom
+  names nobody but the tutor and the student, the student has ≥ 10 cues, the captions run to ≥ 90% of the
+  transcript, ≥ 85% of the text is labelled and the tutor carries ≥ 50% of it. **Labels stay inferred**: the writer
+  and the judges are told to treat a line as the student's own only when it clearly is. Measured on 9–12 Oct
+  classes against the per-speaker alignment of 16 aligned classes (an imperfect yardstick on Thai lessons): of the
+  STUDENT-labelled text, 10.7% (Thai-heavy) and 5.5% (English-heavy) was the tutor's by that yardstick, worst class
+  15.7%; it labels 10 of the 11 unclear classes of that sample (90–100% of the text).
 - `talk_share`: no usable Zoom cues; a clear split names the tutor. Labels inferred.
 - `unclear`: none of these → summary fallback (transcript first) or `speakers_unclear` hold.
 
