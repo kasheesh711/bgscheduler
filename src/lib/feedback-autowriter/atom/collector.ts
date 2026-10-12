@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { createWiseClient, WiseApiError } from "@/lib/wise/client";
@@ -63,6 +63,21 @@ export function atomNextStep(code: string): string {
     case "source_contradiction": return "Next: a student's Atom data belongs to someone else or another subject; check that student's Atom link on the Atom review page.";
     default: return "Next: usually passing (Wise or Atom slow); act only if the next runs fail too.";
   }
+}
+
+/**
+ * Causes that usually clear on the next run, 15 minutes later: Wise throttling or a Wise 5xx, a slow read, a listing
+ * that changed between pages. One of these pages only when the previous run failed too (12 Oct 2026: a single Wise
+ * 429 at 19:36 raised a critical alert although every run after it succeeded). Anything else pages at once.
+ */
+const TRANSIENT_FAILURE = /^(?:wise_http|wise_http_429|wise_http_5\d\d|time_budget|duplicate_session|pagination_incomplete|TimeoutError|AbortError)$/u;
+
+/** Whether the run started before this one failed (an abandoned run counts as failed). */
+async function previousRunFailed(db: Database, runId: string): Promise<boolean> {
+  const rows = await db.select({ status: RUN.status }).from(RUN)
+    .where(sql`${RUN.startedAt} < (select started_at from feedback_atom_sync_runs where id = ${runId}) and ${RUN.id} <> ${runId}`)
+    .orderBy(desc(RUN.startedAt)).limit(1);
+  return rows[0]?.status === "failed";
 }
 
 export async function runAtomCollector(input: {
@@ -207,7 +222,8 @@ export async function runAtomCollector(input: {
       await withAtomTimeout((client as AtomReadClient | null)?.close() ?? Promise.resolve(), 10_000, "close").catch(() => undefined);
     }
   }
-  if (failure) {
+  // A transient read failure pages only when the run before it failed too (see TRANSIENT_FAILURE).
+  if (failure && (failure !== "collection_failed" || !TRANSIENT_FAILURE.test(failureCause ?? "") || await previousRunFailed(db, runId))) {
     const incident = {
       dedupeKey: `atom-collection:${bangkokDate(now.toISOString())}:${failure}`,
       summary: `Atom collection needs attention: ${failure} (${failureStage}: ${failureCause}). Lesson-only feedback remains available. ` +
