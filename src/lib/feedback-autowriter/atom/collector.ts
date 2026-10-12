@@ -66,13 +66,19 @@ export function atomNextStep(code: string): string {
 }
 
 /**
- * Causes that usually clear on the next run, 15 minutes later: Wise throttling or a Wise 5xx, a slow read, a listing
- * that changed between pages. One of these pages only when the previous run failed too (12 Oct 2026: a single Wise
- * 429 at 19:36 raised a critical alert although every run after it succeeded). Anything else pages at once.
+ * Causes (`atomFailureCause` labels) that usually clear on the next run, 15 minutes later: Wise throttling or a Wise
+ * 5xx, a slow read, a listing that changed between pages. A run whose every failure is one of these pages only when
+ * the previous run failed too (12 Oct 2026: a single Wise 429 at 19:36 raised a critical alert although every run
+ * after it succeeded). Anything else pages at once.
  */
-const TRANSIENT_FAILURE = /^(?:wise_http|wise_http_429|wise_http_5\d\d|time_budget|duplicate_session|pagination_incomplete|TimeoutError|AbortError)$/u;
+export function isTransientAtomFailure(code: string, cause: string | null): boolean {
+  return code === "collection_failed" && /^(?:wise_http_429|wise_http_5\d\d|time_budget|duplicate_session|pagination_incomplete)$/u.test(cause ?? "");
+}
 
-/** Whether the run started before this one failed (an abandoned run counts as failed). */
+/**
+ * Whether the run started before this one failed (an abandoned run counts as failed: the stale sweep runs before this
+ * run's insert). Any run counts, an owner's probe or trial included: a failed one pages a run earlier (the safe side).
+ */
 async function previousRunFailed(db: Database, runId: string): Promise<boolean> {
   const rows = await db.select({ status: RUN.status }).from(RUN)
     .where(sql`${RUN.startedAt} < (select started_at from feedback_atom_sync_runs where id = ${runId}) and ${RUN.id} <> ${runId}`)
@@ -116,8 +122,11 @@ export async function runAtomCollector(input: {
   let failureCause = null as string | null;
   // Set once the run deadline passes. Work still in flight after that must not write evidence or change the outcome.
   let stopped = false;
+  // Sticky: one student's changed Atom page must still page when a later student only timed out (the last failure wins).
+  let nonTransient = false;
   const fail = (code: string, cause: string) => {
     if (stopped) return;
+    if (!isTransientAtomFailure(code, cause)) nonTransient = true;
     failure = code; failureStage = stage; failureCause = cause;
   };
   let snapshots = 0;
@@ -222,12 +231,14 @@ export async function runAtomCollector(input: {
       await withAtomTimeout((client as AtomReadClient | null)?.close() ?? Promise.resolve(), 10_000, "close").catch(() => undefined);
     }
   }
-  // A transient read failure pages only when the run before it failed too (see TRANSIENT_FAILURE).
-  if (failure && (failure !== "collection_failed" || !TRANSIENT_FAILURE.test(failureCause ?? "") || await previousRunFailed(db, runId))) {
+  // A run whose failures were all transient pages only when the run before it failed too (`isTransientAtomFailure`);
+  // a failed check of that run pages, rather than staying silent.
+  if (failure && (nonTransient || await previousRunFailed(db, runId).catch(() => true))) {
     const incident = {
       dedupeKey: `atom-collection:${bangkokDate(now.toISOString())}:${failure}`,
       summary: `Atom collection needs attention: ${failure} (${failureStage}: ${failureCause}). Lesson-only feedback remains available. ` +
-        atomNextStep(failure),
+        (nonTransient ? atomNextStep(failure)
+          : "Next: two runs in a row failed on a step that usually passes (Wise throttling or a slow read); check Data Health, and Wise if it keeps failing."),
       detail: { runId, code: failure, stage: failureStage, cause: failureCause, studentResults },
     };
     if (!await recordIncident(db, { ...incident, kind: "atom_collection_failed", severity: "critical" })) {
