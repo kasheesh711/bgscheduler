@@ -208,8 +208,20 @@ describe("submitFeedbackGuarded", () => {
     const ops = fakeWise({ initial: sessionDetail({ feedbackSubmissions: [written] }), creditsBefore: [] });
     const store = memoryStore();
     expect(await submitFeedbackGuarded({ ...base, ops, store })).toEqual({ status: "aborted_precheck", reason: "human_submission", gate: true });
-    expect(ops.getSessionCreditEntries).not.toHaveBeenCalled();
-    expect(ops.getSessionDetail).toHaveBeenCalledTimes(1);
+    expect(store.claims).toBe(0);
+    expect(ops.posts).toHaveLength(0);
+  });
+
+  it("a tutor's save that lands during the credit read (blank on the first read, written on the fresh one) is the tutor's too", async () => {
+    const written = autoBlankSubmission({ metadata: null, answers: answers(["Tutor wrote this", "", "", ""]) });
+    const ops = fakeWise({ creditsBefore: [] });
+    vi.mocked(ops.getSessionDetail)
+      .mockResolvedValueOnce({ data: sessionDetail() })
+      .mockResolvedValueOnce({ data: sessionDetail({ feedbackSubmissions: [written] }) });
+    const store = memoryStore();
+    expect(await submitFeedbackGuarded({ ...base, ops, store })).toEqual({ status: "aborted_precheck", reason: "human_submission", gate: true });
+    expect(ops.getSessionDetail).toHaveBeenCalledTimes(2);
+    expect(ops.getSessionCreditEntries).toHaveBeenCalledTimes(1);
     expect(store.claims).toBe(0);
     expect(ops.posts).toHaveLength(0);
   });
