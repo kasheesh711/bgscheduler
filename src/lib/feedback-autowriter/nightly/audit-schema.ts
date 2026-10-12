@@ -269,7 +269,9 @@ export function normaliseAuditOutput(raw: unknown): unknown {
       const fix = { ...issue.minimalFix };
       if (fix.to === undefined) fix.to = null;
       const tooLong = (typeof fix.from === "string" && fix.from.length > L.fixText) || (typeof fix.to === "string" && fix.to.length > L.fixText);
-      issue.minimalFix = tooLong ? null : fix;
+      // A fix with no span to act on (13 Oct: one live audit was rejected for `from: ""`) is dropped, never the audit:
+      // the issue stands, it just has no proposal.
+      issue.minimalFix = tooLong || isBlank(fix.from) ? null : fix;
     }
     return issue;
   });

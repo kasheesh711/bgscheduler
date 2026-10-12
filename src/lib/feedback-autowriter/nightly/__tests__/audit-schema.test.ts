@@ -276,6 +276,22 @@ describe("normaliseAuditOutput (v2: the CLI schema carries no lengths or id patt
     expect(out.result.priorIssueReview).toBeNull();
   });
 
+  it("drops a minimal fix with an empty span instead of rejecting the audit (13 Oct live failure)", () => {
+    const raw = baseResult({
+      verdict: "major",
+      issues: [{
+        id: "i1", claimIds: [], field: "homework", quote: "Complete page 12 by Friday.", mode: "M03", severity: "major", criticalCategory: null,
+        rootStage: "evidence", defense: "judge_list", mechanism: "Remaining work written as homework.", evidence: [],
+        minimalFix: { action: "delete_span", from: "", to: null }, confidence: "high",
+      }],
+    });
+    const out = parseAuditResult(raw, ctx);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.result.issues[0].minimalFix).toBeNull();
+    expect(out.result.verdict).toBe("major");
+  });
+
   it("still rejects structural problems", () => {
     expect(parseAuditResult(baseResult({ verdict: "fine" as never }), ctx)).toMatchObject({ ok: false });
     expect(parseAuditResult({ ...baseResult(), homework: null }, ctx)).toMatchObject({ ok: false });
