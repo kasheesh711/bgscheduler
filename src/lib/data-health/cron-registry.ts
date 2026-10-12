@@ -96,7 +96,7 @@ export const CRON_JOBS = [
     dangerous: true, confirmationLabel: "Rechecks observations and retries enabled Calendar and email delivery.", routeMethod: "GET" },
   { key: "tutor_sit_ins_digest", label: "Tutor Sit-in Digest", feature: "Tutor Sit-ins",
     path: "/api/internal/tutor-sit-ins/digest", schedule: "0 1 * * *", cadenceLabel: "Daily 08:00 Bangkok",
-    cadenceMinutes: 1440, expectedBangkokMinute: 480, lateAfterMinutes: 60, maxDurationSeconds: 300, manualOnly: true,
+    cadenceMinutes: 1440, expectedBangkokMinute: 480, lateAfterMinutes: 60, maxDurationSeconds: 300, manualOnly: false,
     dangerous: true, confirmationLabel: "Queues heads' daily observations digest and retries enabled delivery.", routeMethod: "GET" },
   { key: "progress_tests_processing", label: "Progress Test Processing", feature: "Progress Tests",
     path: "/api/internal/progress-tests/process", schedule: "* * * * *", cadenceLabel: transferText.moved,
