@@ -64,6 +64,10 @@ Offline, group and absence cases stay with the tutor (see *gate dispositions* be
    infrastructure failure, never a reason to fall back; the Luna fallback has no such model check.
    Service failures (credit, outage, time-out, a provider-side generation error, a judge level that gives no verdict
    twice) never go to the fallback: the session retries in 10 minutes and the run reports an infrastructure error.
+   One exception: a writer's own time-out (its full 180 s, not one our deadline cut short) hands the class to the
+   next writer in the same run, which may use only the time the judges do not need. If no later draft passes, the
+   run still ends as that time-out, counted toward `writer_failed` as before (see
+   [Writer time-outs](#writer-time-outs-go-to-the-next-writer-12-oct)).
    A rate limit is first tried again in the same run, a few seconds apart
    ([below](#rate-limits-tried-again-in-the-same-run-30-sep-evening)).
 6. **Shadow or live.** Shadow stores the draft (`would_submit`). Live runs
@@ -317,6 +321,36 @@ first is switched on. No prompt changed: writer and judge versions stay 5.
   already in flight is not cut off, and a call that fails on its own after the other
   level's verdict (a time-out) is still a judge failure, as before. A draft still passes only on a complete verdict
   from both levels.
+
+### Writer time-outs go to the next writer (12 Oct)
+
+Luna (reasoning `max`, first writer for the tutors added on 2 and 5 Oct) slowed down on hour-long transcripts: 23 of
+175 Luna transcript calls timed out at 180 s from 1 to 12 Oct (7 of 19 on 12 Oct alone). Each time-out ended the
+run, retried the class 10 minutes later with Luna first again, and the third sent it to Wise's summary
+(`writer_failed`) — Sol, the second writer, was never tried. Now (`runWritingPipeline` in
+[`pipeline.ts`](../../src/lib/feedback-autowriter/pipeline.ts)):
+
+- A writer's **own** time-out (it used its full 180 s) hands the class to the next writer in the same run. A time-out
+  our deadline cut short, and every other service failure (credit, rate limit, connection, provider error, wrong
+  model), still ends the run at once.
+- The next writer may use only the time the judges do not need: its call, rate-limit retries included, ends the
+  judges' full time-out (240 s on a transcript) before the deadline margin, and it is not called with less than 30 s.
+  After Luna's 180 s on a transcript Sol gets about 75 s (it answers in ~10 s), so the judges still always run with
+  their full time-out. The POST fits in the same run when the reads, Sol and the judges take under 140 s together;
+  otherwise the next run posts the judged draft as stored.
+- Its draft is validated, judged and (if rejected) repaired like any other. When no later draft passes, the run ends
+  as the first writer's time-out — a retry that counts toward `writer_failed`, exactly as before — and still says
+  what stopped the next writer (`rateLimited`, `creditExhausted`).
+- The same holds for every tutor's order (a Sol time-out goes to Luna), but Sol has not timed out since it became a
+  writer.
+
+Why this and not the alternatives (12 Oct measurements on 34 retained production transcripts, the exact text the
+writer was given): Luna at reasoning `high` answered in 16 s (p50; p90 44 s, never over 105 s) instead of 101 s (p90
+247 s, 8 of 34 over 180 s, one over 420 s), but the judges rejected 4 of its 32 judged drafts for giving the tutor's
+work to the student, against 1 of 32 at `max`; and a longer time-out cannot help, since 5 of 34 `max` calls took over
+240 s and the function cannot fit a writer over ~250 s plus the 240 s judges under `maxDuration` 800. In production
+Sol's transcript drafts pass the judges as often as Luna's (65/80 and 116/145, 1–12 Oct), and 18 of 23 after a Luna
+draft was rejected.
 
 ## Models
 

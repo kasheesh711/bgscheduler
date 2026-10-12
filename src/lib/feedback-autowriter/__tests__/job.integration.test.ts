@@ -2244,10 +2244,10 @@ describe("transcript first (Postgres + fakes)", () => {
     const arm = AUTOWRITER_MODELS.writer.arm;
     const counted = async () => ((await readSessionRow(db, SESSION_ID))?.metadata as { writerErrors?: unknown }).writerErrors;
 
-    // 1. The writer times out: retried on the kept job (an infra failure never goes to the fallback writer).
-    const first = attempt([failedCall("timeout")]);
+    // 1. The writer times out, and so does the next writer it hands the class to (12 Oct): retried on the kept job.
+    const first = attempt([failedCall("timeout"), failedCall("timeout")]);
     expect(await first.run()).toMatchObject({ result: "infra", detail: `${arm}:timeout` });
-    expect(first.model.seen).toEqual([writer]);
+    expect(first.model.seen).toEqual([writer, `writer:${AUTOWRITER_MODELS.fallbackWriter.model}`]);
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
       state: "transcribing", evidence: "transcript", sonioxTranscriptionId: "job-1", metadata: { writerErrors: 1 },
     });
@@ -2260,7 +2260,7 @@ describe("transcript first (Postgres + fakes)", () => {
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "transcribing", reason: "infra:judge:medium:timeout", metadata: { writerErrors: 0 } });
 
     // 3. Two writer failures in a row (a time-out, a provider error).
-    expect(await attempt([failedCall("timeout")]).run()).toMatchObject({ result: "infra", detail: `${arm}:timeout` });
+    expect(await attempt([failedCall("timeout"), failedCall("timeout")]).run()).toMatchObject({ result: "infra", detail: `${arm}:timeout` });
     expect(await attempt([failedCall("Provider returned error", 500)]).run()).toMatchObject({ result: "infra", detail: `${arm}:Provider returned error` });
     expect(await counted()).toBe(2);
 
@@ -2370,6 +2370,21 @@ describe("transcript first (Postgres + fakes)", () => {
     });
   });
 
+  it("hands a writer's own time-out to the next writer in the same run, posts that draft and starts the count again (12 Oct)", async () => {
+    await handedOver({ metadata: { ...HANDED_OVER, writerErrors: 2 } });
+    const soniox = fakeSoniox();
+    const model = scriptedModel([failedCall("timeout")]);
+    expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, {
+      callModel: model.callModel as never, now: () => after(40),
+    }), webhook)).toMatchObject({ result: "verified" });
+    const judge = `judge:${AUTOWRITER_MODELS.judge.model}`;
+    expect(model.seen).toEqual([`writer:${AUTOWRITER_MODELS.writer.model}`, `writer:${AUTOWRITER_MODELS.fallbackWriter.model}`, judge, judge]);
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+      state: "verified", evidence: "transcript", arm: AUTOWRITER_MODELS.fallbackWriter.arm, metadata: { writerErrors: 0 },
+    });
+    expect((await readSessionRow(db, SESSION_ID))?.metadata).not.toHaveProperty("summaryFallback");
+  });
+
   it("tells a person once when the judge has failed three runs in a row on a class, and keeps retrying it", async () => {
     await handedOver();
     const soniox = fakeSoniox();
@@ -2410,7 +2425,7 @@ describe("transcript first (Postgres + fakes)", () => {
 
     // It keeps failing: counted, not reported again. A writer failure in between says nothing about the judge.
     expect(await judgeFails()).toMatchObject({ result: "infra" });
-    expect(await attempt([failedCall("timeout")])).toMatchObject({ result: "infra", detail: `${AUTOWRITER_MODELS.writer.arm}:timeout` });
+    expect(await attempt([failedCall("timeout"), failedCall("timeout")])).toMatchObject({ result: "infra", detail: `${AUTOWRITER_MODELS.writer.arm}:timeout` });
     expect((await row()).metadata).toMatchObject({ judgeErrors: 4, writerErrors: 1 });
     expect(await digest()).toMatchObject({ sent: 0, emails: [] });
 
@@ -2560,7 +2575,7 @@ describe("transcript first (Postgres + fakes)", () => {
       expect(await digest(client)).toMatchObject({ sent: 0, emails: [] });
 
       // A writer failure with no verdict in the run says nothing about the judge: the counts stay.
-      expect(await attempt(client, [failedCall("timeout")])).toMatchObject({ result: "infra", detail: `${AUTOWRITER_MODELS.writer.arm}:timeout` });
+      expect(await attempt(client, [failedCall("timeout"), failedCall("timeout")])).toMatchObject({ result: "infra", detail: `${AUTOWRITER_MODELS.writer.arm}:timeout` });
       expect((await row()).metadata).toMatchObject({ judgeErrors: 1, judgeUnreached: 0 });
     });
 
@@ -2627,7 +2642,7 @@ describe("transcript first (Postgres + fakes)", () => {
     await handedOver({ reason: "thai_summary", metadata: { handover: "thai_summary" } });
     const soniox = fakeSoniox();
     for (let run = 1; run <= 4; run += 1) {
-      const model = scriptedModel([failedCall("timeout")]);
+      const model = scriptedModel([failedCall("timeout"), failedCall("timeout")]);
       expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, {
         callModel: model.callModel as never, now: () => after(40),
       }), webhook), `run ${run}`).toMatchObject({ result: "infra", detail: `${AUTOWRITER_MODELS.writer.arm}:timeout` });

@@ -144,7 +144,7 @@ function callFailure(
   call: Extract<OpenRouterCallResult, { ok: false }>,
   shortened: boolean,
   stage: "writer" | "judge",
-): PipelineResult {
+): Extract<PipelineResult, { kind: "infra" }> {
   const credit = isCreditExhausted(call);
   const ours = credit || (call.httpStatus !== null && ACCOUNT_STATUSES.has(call.httpStatus)) || call.error.startsWith("network_")
     || (call.error === "timeout" && shortened);
@@ -171,7 +171,9 @@ type CallModel = typeof callOpenRouter;
  * retention. Infra failures stop immediately so the session is retried later —
  * except that a rate-limited call is first tried again in this run (a few
  * seconds apart, while the function's time allows): still rate limited after
- * that, it is the same infra failure as before.
+ * that, it is the same infra failure as before; and that a writer's own
+ * time-out passes to the next writer, which must leave the judges their full
+ * time-out: when no later draft passes, the run ends as that time-out.
  */
 export async function runWritingPipeline(input: {
   apiKey: string;
@@ -226,6 +228,8 @@ export async function runWritingPipeline(input: {
    * The one place a model is called — writer, fallback writer and each judge level alike. `record` stores one
    * attempt; the returned `record` stores the last one, with what the pipeline made of its reply. `abandon` (a judge
    * level): asked before each retry wait and again after it; true once a retry can no longer change the outcome.
+   * `reserveMs`: time the call (with its rate-limit retries) leaves free before the deadline margin — the judges' full
+   * time-out, for a writer called after another writer timed out.
    */
   const run = async (
     config: AutowriterModelConfig,
@@ -234,8 +238,10 @@ export async function runWritingPipeline(input: {
     preferredTimeoutMs: number,
     record: (call: OpenRouterCallResult, result: Record<string, unknown>) => Promise<void>,
     abandon?: () => boolean,
+    reserveMs = 0,
   ) => {
-    const availableMs = input.remainingMs() - AUTOWRITER_CALL_DEADLINE_MARGIN_MS;
+    const remainingMs = () => input.remainingMs() - reserveMs;
+    const availableMs = remainingMs() - AUTOWRITER_CALL_DEADLINE_MARGIN_MS;
     // A judge never starts without its full time-out: cut short by our deadline it could not finish (owner decision,
     // 30 Sep). A writer may start with less (at least 30 s).
     if (role === "judge" ? availableMs < preferredTimeoutMs : availableMs < 30_000) return { kind: "budget" as const };
@@ -257,7 +263,7 @@ export async function runWritingPipeline(input: {
         maxTokens: 32_000,
         timeoutMs,
       },
-      remainingMs: input.remainingMs,
+      remainingMs,
       retries: input.rateLimitRetries?.[role],
       abandon,
       sleep: input.sleep,
@@ -302,6 +308,10 @@ export async function runWritingPipeline(input: {
     judgeDraft: (draftOutput: ModelOutput, judgedGeneration: string) => Promise<
       { kind: "return"; result: PipelineResult } | { kind: "judged"; verdict: StoredJudgeVerdict | null; problems: string[] }>;
   }> = [];
+  // A writer that timed out on its full time-out (Luna at reasoning `max` on a long transcript, 12 Oct) says nothing
+  // about the text: the next writer gets its turn in this run, in the time the judges do not need. When no later
+  // draft passes, the run still ends as that time-out — the writer's failure, retried and counted as before.
+  let timedOut: Extract<PipelineResult, { kind: "infra" }> | null = null;
   for (const writer of writers) {
     const written = await run(writer, "writer", buildFeedbackMessages({
       studentFullName: session.studentFullName,
@@ -319,14 +329,21 @@ export async function runWritingPipeline(input: {
     }), AUTOWRITER_WRITER_TIMEOUT_MS, (call, result) => input.record({
       wiseSessionId: session.wiseSessionId, role: "writer", arm: writer.arm, requestedModel: writer.model,
       promptVersion: PROMPT_VERSION, call, result: { ...result, evidence, ...(styleStamp ? { styleGuide: styleStamp } : {}), ...(formatStamp ? { formatGuide: formatStamp } : {}), ...(atomEvidence ? { atomEvidenceHash: atomEvidence.hash } : {}) },
-    }));
-    if (written.kind === "budget") return ended({ kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false, stage: "writer" });
+    }), undefined, timedOut ? AUTOWRITER_JUDGE_TIMEOUT_MS[evidence] : 0);
+    if (written.kind === "budget") return ended(timedOut ?? { kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false, stage: "writer" });
     const writeCall = written.call;
     const recordWriter = written.record;
 
     if (!writeCall.ok) {
       await recordWriter({ error: writeCall.error });
-      if (isInfraFailure(writeCall)) return ended(callFailure(writer.arm, writeCall, written.shortened, "writer"));
+      if (isInfraFailure(writeCall)) {
+        const failure = callFailure(writer.arm, writeCall, written.shortened, "writer");
+        // After a time-out the run ends as that time-out, still saying what stopped the next writer (a rate limit, no credit).
+        if (timedOut) return ended({ ...timedOut, ...(failure.rateLimited ? { rateLimited: true as const } : {}), ...(failure.creditExhausted ? { creditExhausted: true as const } : {}) });
+        if (writeCall.error !== "timeout" || written.shortened) return ended(failure);
+        timedOut = failure;
+        continue;
+      }
       reasons.push(`${writer.arm}:${writeCall.error}`);
       continue;
     }
@@ -503,5 +520,5 @@ export async function runWritingPipeline(input: {
       break;
     }
   }
-  return { kind: "held", reasons };
+  return timedOut ? ended(timedOut) : { kind: "held", reasons };
 }
