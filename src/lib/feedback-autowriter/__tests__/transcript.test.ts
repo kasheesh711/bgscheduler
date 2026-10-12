@@ -320,7 +320,7 @@ describe("buildTranscriptEvidence (shared by the second pass and the replay)", (
     expect(evidence.speakers.method).toBe("zoom_alignment");
     expect(evidence.rendered).toContain("[00:00] TUTOR: Today we add fractions");
     expect(evidence.rendered).toContain("[00:31] STUDENT: I got three quarters");
-    expect(evidence.meta).toEqual({ audioMinutes: 60, speakerMethod: "zoom_alignment", shares: { tutor: 57, student: 43, other: 0 }, thaiShare: 0 });
+    expect(evidence.meta).toEqual({ source: "soniox", audioMinutes: 60, speakerMethod: "zoom_alignment", shares: { tutor: 57, student: 43, other: 0 }, thaiShare: 0 });
   });
 
   it("says the labels are inferred when only the talk share names the tutor, and leaves an unclear split to the caller", () => {

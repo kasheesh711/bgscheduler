@@ -27,6 +27,8 @@
  *     [--no-summary-draft] [--no-posted-judge]  skip those passes (model calls)
  *     [--max-model-usd=<n>]  stop starting classes once the finished classes' model calls cost this much
  *     [--summary-when-uncached]  with --transcripts-from: take production's summary route for a class with no cached transcript
+ *     [--zoom-english]  also what FEEDBACK_AUTOWRITER_ZOOM_ENGLISH would do: the route per class (captions + summary; not the
+ *       class's Soniox history), a draft from Zoom's captions when they qualify, and that draft judged against the Soniox transcript
  *
  * Run with: npx tsx --tsconfig scripts/tsconfig.json scripts/autowrite-online-feedback.ts …
  */
@@ -371,7 +373,7 @@ async function replay(): Promise<void> {
     keepTranscripts: flag("keep-transcripts"),
     ...(fetchCaptions ? { fetchText: fetchCaptions } : {}),
     ...(transcriptSource ? { transcriptSource, requireCachedTranscript: true, summaryWhenNoCachedTranscript: flag("summary-when-uncached") } : {}),
-    passes: { summaryDraft: !flag("no-summary-draft"), postedJudge: !flag("no-posted-judge") },
+    passes: { summaryDraft: !flag("no-summary-draft"), postedJudge: !flag("no-posted-judge"), zoomDraft: flag("zoom-english") },
   }, samples, {
     concurrency,
     maxModelUsd,
