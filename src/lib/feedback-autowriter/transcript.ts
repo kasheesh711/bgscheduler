@@ -253,7 +253,11 @@ export function assignSpeakerRoles(input: {
 
 /** A phrase ends at a Soniox speaker change, a pause of this long, or the end of a sentence. */
 const TIMING_PAUSE_MS = 400;
-/** A phrase takes the role of the cues covering at least this share of its overlapped time; otherwise it is left out. */
+/**
+ * A phrase takes the role of the cues covering at least this share of its overlapped time; otherwise it is left out.
+ * (Also requiring named cues over 30% of the phrase itself cost 2 of 10 rescued classes for no gain in precision on
+ * Thai lessons, 12 Oct 2026: not done.)
+ */
 const TIMING_MAJORITY = 0.6;
 /** Left-out speech of at least this long shows as a marker line, so neither model reads the gap as silence. */
 const TIMING_GAP_MARK_MS = 3_000;
@@ -338,7 +342,7 @@ export function labelByZoomTiming(input: {
   const markLeftOut = () => {
     if (leftOut && leftOut.endMs - leftOut.startMs >= TIMING_GAP_MARK_MS) {
       const seconds = Math.round((leftOut.endMs - leftOut.startMs) / 1000);
-      segments.push({ speaker: LEFT_OUT, startMs: leftOut.startMs, endMs: leftOut.endMs, text: `[… ${seconds} s of speech not attributable to either speaker, left out …]` });
+      segments.push({ speaker: LEFT_OUT, startMs: leftOut.startMs, endMs: leftOut.endMs, text: `[… ${seconds} s not attributable to either speaker, left out …]` });
     }
     leftOut = null;
   };

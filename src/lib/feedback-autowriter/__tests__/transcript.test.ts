@@ -523,8 +523,8 @@ describe("Zoom timing: one Soniox voice, labelled phrase by phrase from Zoom's c
     const timed = labelByZoomTiming(input(tokens.toSorted((a, b) => a.start_ms - b.start_ms), cues.concat({ speakerName: TUTOR, startMs: 206_000, endMs: 207_000 })));
     expect(timed?.segments.some((s) => s.text.includes("Yes."))).toBe(false);
     expect(timed?.segments.some((s) => s.text.includes("Unheard"))).toBe(false);
-    expect(timed?.segments.filter((s) => s.speaker === "left_out").map((s) => s.text)).toEqual(["[… 5 s of speech not attributable to either speaker, left out …]"]);
-    expect(renderTranscript(timed!.segments, timed!.speakers.roles)).toContain("[03:20] [… 5 s of speech not attributable to either speaker, left out …]");
+    expect(timed?.segments.filter((s) => s.speaker === "left_out").map((s) => s.text)).toEqual(["[… 5 s not attributable to either speaker, left out …]"]);
+    expect(renderTranscript(timed!.segments, timed!.speakers.roles)).toContain("[03:20] [… 5 s not attributable to either speaker, left out …]");
   });
 
   it("splits Thai speech without punctuation at pauses, so each turn takes its own speaker", () => {

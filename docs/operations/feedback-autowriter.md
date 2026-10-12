@@ -181,8 +181,9 @@ spoke when (each participant's own microphone).
 - `zoom_alignment`: each Soniox voice mostly overlaps one person's Zoom cues. Labels verified.
 - `zoom_timing` (12 Oct 2026): Soniox heard tutor and student as one voice (most of October's 35 "unclear"
   classes: one voice with 96–100% of the text). Each phrase instead takes the role of the Zoom cues it overlaps
-  (≥ 60% of the overlapped time). A phrase no cue overlaps, or both people overlap about evenly, is left out, never
-  guessed; a left-out stretch of ≥ 3 s shows as `[… N s of speech not attributable to either speaker, left out …]`
+  (≥ 60% of the overlapped time). A phrase no named cue overlaps, or both people overlap about evenly, is left out,
+  never guessed; a left-out stretch of ≥ 3 s shows as
+  `[… N s not attributable to either speaker, left out …]`
   (`metadata.transcript.labelled` = percent of the text kept; `shares` are of the kept text). Used only when Zoom
   names nobody but the tutor and the student, the student has ≥ 10 cues, the captions run to ≥ 90% of the
   transcript, ≥ 85% of the text is labelled and the tutor carries ≥ 50% of it. **Labels stay inferred**: the writer
