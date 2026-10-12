@@ -35,6 +35,7 @@ import {
 import { PostClassValidationError } from "./errors";
 import { POST_CLASS_MIN_COMBINED_CHARACTERS } from "./policy";
 import { withPostClassTransaction } from "./transaction";
+import { attemptDeductionReportDelivery } from "./deduction-report";
 
 type ReminderKind = "tutor_day_after" | "tutor_deadline";
 
@@ -868,6 +869,7 @@ async function attemptDelivery(
     .where(eq(schema.postClassNotificationDeliveries.id, deliveryId))
     .limit(1);
   if (!loaded || loaded.delivery.status === "sent" || loaded.delivery.status === "cancelled") return "skipped";
+  if (loaded.run.kind === "deduction_report") return attemptDeductionReportDelivery(deliveryId, db, createOutboundEmailSender("primary", { strictOutcome: true, audience: "staff" }), now);
   if (loaded.delivery.attemptCount >= MAX_ATTEMPTS && loaded.delivery.status !== "sending") return "skipped";
 
   let content: {

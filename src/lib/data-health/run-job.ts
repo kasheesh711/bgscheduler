@@ -42,6 +42,7 @@ import { processJobs as processSitInJobs, queueDailyDigests, runSitInWorker } fr
 import { runUnearnedRevenueSync } from "@/lib/unearned-revenue/sync";
 import { withCronInvocationAudit } from "./cron-audit";
 import { getCronJobDefinition, type CronJobKey } from "./cron-registry";
+import { sendDeductionReport } from "@/lib/post-class-feedback/deduction-report";
 
 const DEFAULT_INSTITUTE_ID = "696e1f4d90102225641cc413";
 
@@ -213,6 +214,10 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
       if (jobKey === "post_class_feedback_digest") {
         const result = await sendPostClassAdminDigest();
         return NextResponse.json({ ok: true, result });
+      }
+      if (jobKey === "post_class_deduction_report") {
+        const result = await sendDeductionReport();
+        return NextResponse.json({ ok: result.status === "sent", result }, { status: result.status === "sent" ? 200 : 503 });
       }
 
       if (jobKey === "post_class_feedback_day_after" || jobKey === "post_class_feedback_deadline") {
