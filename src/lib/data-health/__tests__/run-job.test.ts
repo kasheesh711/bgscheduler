@@ -1,4 +1,6 @@
 vi.mock("server-only", () => ({}));
+vi.mock("@/lib/post-class-feedback/deduction-report", () => ({ sendDeductionReport: vi.fn() }));
+import { sendDeductionReport } from "@/lib/post-class-feedback/deduction-report";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextResponse } from "next/server";
 
@@ -90,6 +92,7 @@ type ManualRunKey = Exclude<(typeof CRON_JOBS)[number], { manualRunDisabledReaso
 
 /** One primary entry point per key Data Health can run; `satisfies` turns a missing branch into a type error. */
 const DISPATCH_TARGETS = {
+  post_class_deduction_report: sendDeductionReport,
   feedback_atom: collectAtomOnServer,
   feedback_autowriter: runAutowriterJob,
   feedback_autowriter_review: runAutowriterReviewJob,
@@ -144,6 +147,7 @@ function admissionsResult(runType: "daily" | "weekly", skipped = false): Admissi
 
 /** Gives every entry point an outcome its branch maps below 400. */
 function applyDefaults(): void {
+  vi.mocked(sendDeductionReport).mockResolvedValue({ status: "sent" } as never);
   vi.mocked(withCronInvocationAudit).mockImplementation(async (_input, handler) => handler());
   vi.mocked(getDb).mockReturnValue(SENTINEL_DB as never);
   vi.mocked(createWiseClient).mockReturnValue({} as never);

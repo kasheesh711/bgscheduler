@@ -515,3 +515,14 @@ All `/api/post-class-feedback/email` controls require `access_manager` and retur
 - `POST /reminders`: `shadow_preview`, `retry`, or `resolve`; the old primary/backup test action has been removed.
 
 Activation and resume require current Gmail receipt/renewal, verified private LINE, complete current-policy shadow and legacy-cutover evidence. See the [operator runbook](../../operations/nightly-feedback-reminders.md).
+
+
+## Screenshot evidence and daily deduction report
+
+- `GET /api/post-class-feedback/captures?date=YYYY-MM-DD`: fresh viewer grant. Returns the eligible due classes, complete-source flag, class binding, and capture history. The date is a Bangkok deadline date.
+- `GET /api/post-class-feedback/captures?sessionId=UUID`: fresh viewer grant. Returns the exact binding and capture history for one class.
+- `POST /api/post-class-feedback/captures`: fresh reviewer grant and same request origin. Multipart fields: `sessionId`, JSON `metadata`, and optional `image`. Metadata includes the exact queue binding plus `mode` (`deadline` or `current`), `state` (`missing`, `present`, or `uncheckable`), ISO UTC `observedAt` and `capturedAt`, and `note`. Checked states require an image. A failed check requires a note.
+- `GET /api/post-class-feedback/captures/[id]`: fresh viewer grant. Streams a ready private PNG or JPEG with `private, no-store` and `nosniff`. Storage paths are never public read capabilities.
+- `GET /api/internal/post-class-feedback/deduction-report`: cron secret. Creates or reuses the previous Bangkok day's frozen report and sends its three recipient deliveries. Returns run id, date, status, counts, and duplicate flag. An incomplete or uncertain delivery result returns 503.
+
+Image limits: 4 MB and 40 million pixels. The server checks image bytes, image metadata, class binding, time order, and private storage read-back hash. New deadline uploads must arrive within one hour of capture. The deadline window ends at 00:15 Bangkok. A late capture stays late. A `current` capture remains a later check. Reads recheck the full class binding and staff-only activity proof.

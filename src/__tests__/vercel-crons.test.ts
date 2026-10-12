@@ -15,6 +15,7 @@ function loadVercelConfig(): VercelConfig {
  * timing, so the only place a stagger regression can be caught is here.
  */
 const EXPECTED_SCHEDULES: Record<string, string> = {
+  "/api/internal/post-class-feedback/deduction-report": "0 1 * * *",
   "/api/internal/post-class-feedback/reminder-nightly": "0,30 * * * *",
   "/api/internal/tutor-sit-ins": "4,14,24,34,44,54 * * * *",
   "/api/internal/tutor-sit-ins/digest": "0 1 * * *",
@@ -106,10 +107,10 @@ function canCollide(left: FiringSet, right: FiringSet): boolean {
 }
 
 describe("vercel cron configuration", () => {
-  it("registers exactly the 26 known crons, each on its pinned schedule", () => {
+  it("registers exactly the 27 known crons, each on its pinned schedule", () => {
     const crons = loadVercelConfig().crons;
 
-    expect(crons).toHaveLength(26);
+    expect(crons).toHaveLength(27);
     expect(Object.fromEntries(crons.map((cron) => [cron.path, cron.schedule]))).toEqual(EXPECTED_SCHEDULES);
   });
 
@@ -162,7 +163,9 @@ describe("vercel cron configuration", () => {
         // The 15-minute Atom reader shares only the paced, usually idle publish recovery
         // (and the separately allowed room reader). It never calls a Wise mutation.
         const atomReadOverlap = pair.has("/api/internal/feedback-autowriter/atom") && pair.has("/api/internal/class-assignments/publish-recovery");
-        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck && !nextDayClassroomOverlap && !roomAvailabilityOverlap && !publishRecoveryOverlap && !progressProcessingOverlap && !sitInDigestOverlap && !nightlyOverlap && !atomReadOverlap) {
+        // The deduction report reads stored evidence and sends email; it never calls Wise.
+        const deductionReportOverlap = pair.has("/api/internal/post-class-feedback/deduction-report");
+        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck && !nextDayClassroomOverlap && !roomAvailabilityOverlap && !publishRecoveryOverlap && !progressProcessingOverlap && !sitInDigestOverlap && !nightlyOverlap && !atomReadOverlap && !deductionReportOverlap) {
           collisions.push(`${crons[i].path} vs ${crons[j].path}`);
         }
       }
