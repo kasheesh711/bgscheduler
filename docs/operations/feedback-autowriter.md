@@ -587,7 +587,8 @@ explains — check who wrote to Wise with the API key) are pushed; `first_shot_u
 the post did not verify) — run the backfill script to prove it, or confirm by hand what was posted.
 `atom_collection_failed` (an Atom collector run failed; lesson-only feedback carries on; since 12 Oct 2026 a Wise
 timetable read that meets a session twice while classes end (`duplicate_session`) is read again up to 3 times, 5 s and
-10 s apart, before the run fails; a broken row (`invalid_session`) is not read again) and
+10 s apart, before the run fails; a broken row (`invalid_session`) is not read again; and a transient failure — `wise_http_429`, a Wise
+5xx, `time_budget`, `duplicate_session`, `pagination_incomplete` — pages only when the run before it failed too) and
 `style_review_source_missing` (a guided post has no retained evidence or both factual verdicts) are critical and
 pushed. Style review results are dashboard-only, never pushed (owner, 2 Oct 2026): `style_review_flagged` (the post
 needs a style fix — listed in What needs you, not red, until acknowledged) and `style_review_unavailable` (the

@@ -202,6 +202,26 @@ describe("unattended collector and rollout", () => {
     const [kept] = await db.select().from(s.feedbackAutowriterIncidents);
     expect(kept.detail).toMatchObject({ runId: second.runId, cause: "pagination_incomplete" });
   });
+  it("pages a transient Wise failure (a 429, a changed listing) only when the run before it failed too", async () => {
+    const { runAtomCollector } = await import("../atom/collector");
+    const { WiseApiError } = await import("@/lib/wise/client");
+    await db.execute(sql`TRUNCATE feedback_atom_sync_runs, feedback_autowriter_incidents CASCADE`);
+    const run = (fetchDays: () => Promise<never[]>) => runAtomCollector({ db, deadlineMs: Date.now() + 60000, triggerSource: "admin",
+      probe: { studentId: "_123", date: "2026-09-20" }, fetchDays, openClient: vi.fn() });
+    const throttled = async (): Promise<never[]> => { throw new WiseApiError(429, "Too many requests", "/institutes/x/sessions"); };
+    // A succeeded run, then one 429: no page.
+    await db.insert(s.feedbackAtomSyncRuns).values({ triggerSource: "cron", status: "succeeded", startedAt: new Date(Date.now() - 900_000), finishedAt: new Date(Date.now() - 890_000) });
+    expect(await run(throttled)).toMatchObject({ ok: false, failureCause: "wise_http_429" });
+    expect(await db.select().from(s.feedbackAutowriterIncidents)).toEqual([]);
+    // The next run fails the same way: now it pages.
+    await run(throttled);
+    expect(await db.select().from(s.feedbackAutowriterIncidents)).toMatchObject([{ kind: "atom_collection_failed", severity: "critical", detail: { cause: "wise_http_429" } }]);
+    // A failure that is not transient pages at once, even after a success.
+    await db.execute(sql`TRUNCATE feedback_atom_sync_runs, feedback_autowriter_incidents CASCADE`);
+    await db.insert(s.feedbackAtomSyncRuns).values({ triggerSource: "cron", status: "succeeded", startedAt: new Date(Date.now() - 900_000), finishedAt: new Date(Date.now() - 890_000) });
+    await run(async () => { throw new Error("Invalid or out-of-date Wise session for 2026-09-20"); });
+    expect(await db.select().from(s.feedbackAutowriterIncidents)).toMatchObject([{ detail: { cause: "invalid_session" } }]);
+  });
   it("stops at its own deadline and records where, when the Atom browser never opens", async () => {
     const { runAtomCollector } = await import("../atom/collector");
     const startedAt = Date.now();
