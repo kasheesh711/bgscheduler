@@ -89,9 +89,22 @@ describe("deduction report and screenshot storage", () => {
     expect(seen).toHaveLength(3);
     expect((await handle.db.select().from(schema.postClassNotificationDeliveries)).every(row => row.status === "unknown")).toBe(true);
   });
+  it("selects only projected deductions and removes a class after compliant feedback", async () => {
+    const session = await seed();
+    await handle.db.insert(schema.postClassSettings).values({ id: "default", enforcementMode: "live" });
+    const [assessment] = await handle.db.insert(schema.postClassAssessments).values({
+      sessionId: session.id, assessmentKey: "capture-projection", policyVersion: 1, mappingVersion: 1,
+      sourceStatus: "ready", contentStatus: "blank", timingStatus: "not_due", enforcementMode: "live",
+      fieldFailures: ["combined_characters:0/300"], details: { policyApplies: true, deadlineAt: deadline.toISOString(), timingReviewRequired: false },
+    }).returning();
+    expect((await dueCaptureQueue("2026-10-11", db())).classes.map(row => row.id)).toEqual([session.id]);
+    await handle.db.update(schema.postClassAssessments).set({ rawOnTime: true, adjustedCompliant: true, fieldFailures: [] }).where(eq(schema.postClassAssessments.id, assessment.id));
+    expect((await dueCaptureQueue("2026-10-11", db())).classes).toEqual([]);
+  });
   it("records upload failure, retries without duplicates and flags deadline changes", async () => {
     const session = await seed();
-    expect((await dueCaptureQueue("2026-10-11", db())).classes.map(row => row.id)).toEqual([session.id]);
+    const queue = await dueCaptureQueue("2026-10-11", db());
+    expect(queue.classes).toEqual([]); expect(queue.dueClassCount).toBe(1); expect(queue.unresolvedClassCount).toBe(1);
     const { binding } = await captureClass(session.id, db());
     const at = new Date("2026-10-11T17:00:00Z");
     const input = { ...binding, mode: "deadline", state: "missing", observedAt: at.toISOString(), capturedAt: at.toISOString(), note: "Wise pending" };
