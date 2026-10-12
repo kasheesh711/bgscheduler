@@ -52,8 +52,11 @@ dashboard route does.
 2. The person is current when `signals.upcomingSessions > 0` (reason `upcoming`) or when
    `signals.lastTaughtAt` is at or after `now − 30 × 24 h` (reason `recent`). `upcoming` takes precedence.
    Everyone else is left out silently; they are not teaching.
-3. A current person with `termination` evidence (a matched strike-through sheet row) goes to `excludedConfirmed`
-   instead of `recipients`. Crossed-out people who are not teaching are not listed.
+3. A current person with `termination` evidence (a matched strike-through sheet row) or a match on the owner's
+   confirmed-departures list (`tutor_offboarding_sheet_source` key `owner-confirmed-departures`, matched with the same
+   exact-identity rule, `buildTerminationMatches`) goes to `excludedConfirmed` instead of `recipients`. Confirmed
+   people who are not teaching are not listed. (Owner decision, 12 October: a tutor who left recently can still
+   have taught within 30 days.)
 4. The email comes from the existing `resolvePostClassTutorRecipient`: first the `primaryEmail` override, then a
    single distinct Wise email. Where the contact row is absent or its `onsiteEmail`/`onlineEmail` is empty, every
    onsite or online Wise account email from the dashboard stands in; two different addresses within one variant are
@@ -72,7 +75,7 @@ dashboard route does.
   recipients: { name: string; email: string; reason: "upcoming" | "recent" }[],
   needsEmail: { name: string; candidates: string[] }[],
   excludedConfirmed: { name: string }[],
-  unmatchedSheetRows: number,   // terminationSource.unmatched.length, 0 when absent
+  unmatchedDepartures: number,  // unmatched rows on the sheet plus the owner-confirmed list
 }
 ```
 
@@ -149,5 +152,4 @@ The renderer already escapes HTML and rejects unsafe URLs. It runs on Node 24 on
 ## Out of scope
 
 Thai copy, attachments, campaign photography, batching across several drafts, scheduled sending, sending from
-`admin@begiftededucation.com`, a page button for the list, and the workforce-only owner-confirmed departures list
-(the 30-day rule already drops those people).
+`admin@begiftededucation.com`, and a page button for the list.

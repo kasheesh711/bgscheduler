@@ -30,7 +30,8 @@ export interface CurrentTutorList {
   recipients: CurrentTutorRecipient[];
   needsEmail: Array<{ name: string; candidates: string[] }>;
   excludedConfirmed: Array<{ name: string }>;
-  unmatchedSheetRows: number;
+  /** Departure rows (tutor sheet strike-throughs plus the owner-confirmed list) that matched no roster person. */
+  unmatchedDepartures: number;
 }
 
 export type CurrentTutorListResponse =
@@ -53,7 +54,8 @@ function validEmail(value: string | null | undefined): string | null {
  * The tutors teaching now:
  * 1. Each person (canonicalKey) once, across every dashboard list: review, active, exclusions and staff accounts.
  * 2. Current = an upcoming class, or a taught class in the last RECENT_TEACHING_DAYS ("upcoming" wins).
- * 3. A matched strike-through sheet row (OFF-15) leaves a current person out, listed in excludedConfirmed.
+ * 3. A matched strike-through sheet row (OFF-15) or owner-confirmed departure leaves a current person out, listed in
+ *    excludedConfirmed.
  * 4. Email = the post-class rule: the primary override, else one distinct Wise email (the contact row's, else every
  *    account of that variant). Two different addresses, or none, go to needsEmail, never guessed.
  * 5. One recipient per address (the first person wins), sorted by name.
@@ -61,6 +63,8 @@ function validEmail(value: string | null | undefined): string | null {
 export function buildCurrentTutorList(input: {
   dashboard: DashboardInput;
   contacts: TutorContactEmails[];
+  /** People matched on the owner-confirmed departures list, and how many of its rows matched nobody. */
+  ownerConfirmed?: { keys: ReadonlySet<string>; unmatched: number };
   now: Date;
 }): CurrentTutorList {
   const { dashboard, now } = input;
@@ -80,7 +84,7 @@ export function buildCurrentTutorList(input: {
       : lastTaughtAt !== null && Date.parse(lastTaughtAt) >= recentSince ? "recent"
         : null;
     if (!reason) continue;
-    if (row.termination) {
+    if (row.termination || input.ownerConfirmed?.keys.has(canonicalKey)) {
       excludedConfirmed.push({ name });
       continue;
     }
@@ -117,7 +121,7 @@ export function buildCurrentTutorList(input: {
     recipients: recipients.sort(byName),
     needsEmail: needsEmail.sort(byName),
     excludedConfirmed: excludedConfirmed.sort(byName),
-    unmatchedSheetRows: dashboard.terminationSource?.unmatched.length ?? 0,
+    unmatchedDepartures: (dashboard.terminationSource?.unmatched.length ?? 0) + (input.ownerConfirmed?.unmatched ?? 0),
   };
 }
 

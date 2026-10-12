@@ -29,7 +29,7 @@ const LIST = {
   ],
   needsEmail: [],
   excludedConfirmed: [],
-  unmatchedSheetRows: 0,
+  unmatchedDepartures: 0,
 };
 
 async function bytes(response: Response): Promise<string> {

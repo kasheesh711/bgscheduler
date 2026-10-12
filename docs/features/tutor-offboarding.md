@@ -236,8 +236,8 @@ local runs remain manual even if the flag is set. Deployment does not run the pr
 ## Current tutor list and the email skill
 
 `GET /api/tutor-offboarding/current-tutors` lists everyone teaching now: an upcoming class, or a taught class in
-the last 30 days (owner decision, 12 October 2026). A person crossed out in the tutor sheet is left out even
-while still teaching. Each person gets one address through the post-class rule: the primary override, else one
+the last 30 days (owner decision, 12 October 2026). A person crossed out in the tutor sheet, or matched on the
+owner-confirmed departures list, is left out even while still teaching. Each person gets one address through the post-class rule: the primary override, else one
 distinct Wise email. Two different Wise emails, or none, are listed under `needsEmail` and never guessed.
 Teaching admins count when they teach. The route reads Postgres only; `?format=csv` downloads the recipients.
 `buildCurrentTutorList` (`src/lib/tutor-offboarding/current-tutors.ts`) holds the rule.

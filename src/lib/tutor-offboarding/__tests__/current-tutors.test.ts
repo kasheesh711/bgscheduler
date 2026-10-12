@@ -36,13 +36,18 @@ function row(key: string, signals: Partial<PersonSignals> = {}, extra: Partial<O
 
 type Dashboard = Parameters<typeof buildCurrentTutorList>[0]["dashboard"];
 
-function build(dashboard: Partial<Dashboard>, contacts: TutorContactEmails[] = []) {
+function build(
+  dashboard: Partial<Dashboard>,
+  contacts: TutorContactEmails[] = [],
+  ownerConfirmed?: { keys: ReadonlySet<string>; unmatched: number },
+) {
   return buildCurrentTutorList({
     dashboard: {
       inbox: [], active: [], excluded: [], staff: [], snapshotCreatedAt: "2026-10-12T04:30:00.000Z",
       freshness: { ok: true, feeds: [] }, ...dashboard,
     },
     contacts,
+    ownerConfirmed,
     now: NOW,
   });
 }
@@ -96,6 +101,17 @@ describe("buildCurrentTutorList", () => {
     expect(list.recipients).toEqual([]);
     // Only crossed-out people who would otherwise be on the list are worth showing the sender.
     expect(list.excludedConfirmed).toEqual([{ name: "Eve" }]);
+  });
+
+  it("leaves out someone on the owner-confirmed departures list even while they still teach", () => {
+    const list = build(
+      { inbox: [row("Gil", { upcomingSessions: 1 })], active: [row("Ida", { lastTaughtAt: ago(DAY) })] },
+      [],
+      { keys: new Set(["Gil"]), unmatched: 2 },
+    );
+    expect(list.recipients).toEqual([{ name: "Ida", email: "ida@example.com", reason: "recent" }]);
+    expect(list.excludedConfirmed).toEqual([{ name: "Gil" }]);
+    expect(list.unmatchedDepartures).toBe(2);
   });
 
   it("uses the primary override, then one shared Wise email", () => {
@@ -181,9 +197,9 @@ describe("buildCurrentTutorList", () => {
       generatedAt: "2026-10-12T05:00:00.000Z",
       snapshotCreatedAt: "2026-10-12T04:30:00.000Z",
       stale: true,
-      unmatchedSheetRows: 3,
+      unmatchedDepartures: 3,
     });
-    expect(build({}).unmatchedSheetRows).toBe(0);
+    expect(build({}).unmatchedDepartures).toBe(0);
   });
 });
 
@@ -195,7 +211,7 @@ describe("currentTutorsCsv", () => {
         { name: 'Ana "A" Lee', email: "ana@example.com", reason: "upcoming" },
         { name: "=SUM(1)", email: "sum@example.com", reason: "recent" },
       ],
-      needsEmail: [{ name: "Hal", candidates: [] }], excludedConfirmed: [{ name: "Eve" }], unmatchedSheetRows: 0,
+      needsEmail: [{ name: "Hal", candidates: [] }], excludedConfirmed: [{ name: "Eve" }], unmatchedDepartures: 0,
     });
     expect(csv).toBe(
       '\uFEFF"name","email","reason"\r\n"Ana ""A"" Lee","ana@example.com","upcoming"\r\n"\'=SUM(1)","sum@example.com","recent"',
