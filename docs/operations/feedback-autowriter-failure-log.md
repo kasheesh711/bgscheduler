@@ -38,6 +38,8 @@ Operational failures have their own codes, **O01–O07** (new in this log):
 | O05 | Credit baseline mismatch: Wise holds a session charge other than the one the post expects |
 | O06 | The scheduled nightly audit did not run |
 | O07 | A Wise-side throttle (HTTP 429) failed a run |
+| O08 | The model provider refused calls for lack of credit (key limit or account balance) |
+| O09 | A code change silently reversed an owner decision on a switch's default |
 
 **Owner rule, 5 Oct 2026:** homework that the feedback leaves out is **not an error**, because not every class has
 homework and an empty field is acceptable. Invented or wrong homework (M03: homework the tutor did not set, or a
@@ -96,6 +98,10 @@ correction is listed in Status and does not change the verdict.
 | 5 Oct | Atom runs e350c4e5…, fb8b1b6d…, c6b191f3… | 4 Oct 09:06, 12:36, 17:36 | O03 O07 | Two `wise_timetable: invalid_session` failures and one Wise 429. 197 of 200 runs in three days succeeded | Unknown: the failed run stores nothing about the offending record, and the stored timetables before and after show only ordinary reschedules | Plan: Atom collector |
 | 5 Oct | incidents for 6a76aeca…, 6abccb84… | 2 Oct 21:27 | O04 | Two critical "style reviewer could not return a verdict" incidents stayed open, and their pushes were reported as undelivered, for 2.5 days after both style checks passed | No automatic close when a later check for the same post passes | Acknowledged 5 Oct; plan: incident hygiene |
 | 5 Oct | scheduled task `bgs-autowriter-nightly` | 4 and 5 Oct 01:44 | O06 | The nightly audit never ran for the nights of 3 and 4 Oct | The scheduled session waits on a Bash permission prompt in the main checkout | Run by hand for 4 Oct on 5 Oct (3 Oct not audited); plan: nightly audit |
+| 12 Oct | 699477acb50e50f4cc214d2e, 6ab62a0a530475558897e350, 6abf0c9054866cc81146afb6, 6ac314f1c1bf9633310c5800 | 11 Oct 21:10 – 12 Oct 10:52 | O08 | Four classes held as "drafts rejected" for 14 hours, with no alert | The OpenRouter key reached its $20 monthly limit. OpenRouter answers that with HTTP 403 "Key limit exceeded", which the pipeline read as a refusal of the draft (every 403 was) | Limit raised by the owner, classes retried and posted. Fixed by kasheesh711/bgscheduler#198: credit refusals retry as infra, and an hourly credit watch pushes `model_credit` before the limit is reached |
+| 12 Oct | 6ac9aa6331c9030275cac63a, 6ac8b2e47a63f39ca4ced44c, 699c06e5de07e9c7e85dab27, 6abf0bee1a436c5e1104de97 (and earlier ones tutors wrote) | from 10 Oct ~11:00 | O09 | Summary-only classes were held again, against the owner's 7 Oct decision that summaries are accepted | A 10 Oct change made "hold summary-only" the default when the switch is missing, and the switch was set in production. Nobody reconciled it with the 7 Oct decision | Owner re-confirmed 12 Oct; `FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY=false` set explicitly and redeployed; the four classes retried. Plan: owner decisions as explicit values |
+| 12 Oct | scheduled task `bgs-autowriter-nightly` | 8–12 Oct 01:44 | O06 | The nightly audit reported "succeeded" each night in about 6 seconds but audited nothing; 26 posts waited for review | Same permission prompt as 5 Oct: the scheduled session stops at its first Bash call | Nights of 10 and 11 Oct (and a late 3 Oct post) audited by hand on 12 Oct. Plan: nightly audit (unchanged, still needs the allow rule) |
+| 12 Oct | Atom runs 7afb5052…, a81ceffb… and three more | 8, 10, 11 Oct | O03 | Five `wise_timetable: invalid_session` failures, each minutes after classes ended, each clearing on the next run | Root cause found: on days with more than 100 sessions the PAST listing spans two pages, and a class moving from FUTURE to PAST between page reads shifts one session onto both pages; the strict reader rejects the duplicate | Fixed by kasheesh711/bgscheduler#198: the readers tell a duplicate (`duplicate_session`, re-read up to 3 times) from a broken row (`invalid_session`, not re-read) |
 
 ## Long-term improvement plan
 
@@ -189,6 +195,24 @@ next 20 eligible posts after release are audited with zero repeats of its code.
   3. Treat Wise 429 as "retry next run". Raise a critical incident only after 3 consecutive failed runs.
 - **Owner / cost:** engineering. No model cost.
 
+### P1 — Model credit never stops feedback silently (O08) — built in kasheesh711/bgscheduler#198
+
+- **Change:** done. A credit refusal (402, or 403 "Key limit exceeded") retries as infra and is never held. The
+  hourly review job checks the key limit and the account balance and pushes `model_credit` a week before the limit
+  runs out (only when that comes before the limit resets) or when the balance is near zero.
+- **Owner:** auto top-up is on (12 Oct). Raise the key's monthly limit above this month's projection (about $55 at
+  October's pace, against a $50 limit), or remove it.
+- **Next:** give evaluation runs (bake-offs, replays, recovery dry runs) their own OpenRouter key. About $15 of
+  October's $20 came from such runs on the production key.
+
+### P1 — Owner decisions as explicit values, not code defaults (O09)
+
+- **Change:** every switch the owner has decided is set to an explicit value in production (`true` or `false`),
+  never left to the code's default. A default change in code then cannot reverse a decision. The runbook §2 table
+  names the owner decision and date for each switch.
+- **Review rule:** a PR that changes a switch's default must say which owner decision it replaces, and link the
+  owner's new decision.
+
 ### P2 — Incident hygiene (O04)
 
 - **Change:**
@@ -200,6 +224,7 @@ next 20 eligible posts after release are audited with zero repeats of its code.
 
 ### P2 — The nightly audit must run and must be seen to run (O06)
 
+- **Recurred 8–12 Oct** (five nights reported "succeeded" in about 6 seconds, having audited nothing).
 - **Change:**
   1. Add the wrapper's Bash allow rule to the main checkout, which the owner has to do.
   2. Add a health-rail line: "Nightly audit for <night>: done / not run by 07:00".
