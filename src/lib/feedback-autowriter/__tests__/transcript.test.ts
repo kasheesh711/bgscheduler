@@ -580,4 +580,3 @@ describe("Zoom timing: one Soniox voice, labelled phrase by phrase from Zoom's c
     expect(evidence.meta).not.toHaveProperty("labelled");
   });
 });
-
