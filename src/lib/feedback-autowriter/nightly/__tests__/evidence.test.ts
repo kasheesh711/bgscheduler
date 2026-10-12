@@ -443,6 +443,19 @@ describe("buildEvidenceBundle", () => {
     expect(summaryIseb.wiseSummary).toBe("Overview: the summary the writer saw.");
   });
 
+  it("marks a post written from Zoom's captions (English lessons) so an audit can pick it out", () => {
+    const raw = (transcriptSource: string | null): RawEvidence => ({
+      wiseSessionId: SID, detail: { data: detail() }, transcript: null, zoomVtt: null,
+      iseb: { evidenceHash: "h", lessonRecord: "[00:00] TUTOR: x", evidenceKind: "transcript" },
+      rowMeta: { speakerMethod: "zoom_alignment", transcriptSource, judge: null, joinedAsGuest: null },
+      status: { collectedAt: "", rowMeta: "read", iseb: "found", detail: "fetched", soniox: "not_needed", zoom: "none", retranscribe: "not_needed" },
+      notes: [],
+    });
+    expect(buildEvidenceBundle({ target: target(), night: "2026-10-02", raw: raw("zoom") }).transcript?.source).toBe("iseb_record_zoom");
+    expect(buildEvidenceBundle({ target: target(), night: "2026-10-02", raw: raw("soniox") }).transcript?.source).toBe("iseb_record");
+    expect(buildEvidenceBundle({ target: target(), night: "2026-10-02", raw: raw(null) }).transcript?.source).toBe("iseb_record");
+  });
+
   it("gives the auditor the frozen Atom evidence an ISEB post was written with", () => {
     const base: RawEvidence = {
       wiseSessionId: SID, detail: { data: detail() }, iseb: null, transcript: null, zoomVtt: null,

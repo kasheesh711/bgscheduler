@@ -128,14 +128,14 @@ describe("other reads (Postgres, SELECT only)", () => {
   });
 
   it("reads the row's transcript facts and the retained ISEB record", async () => {
-    await session(1, { metadata: { transcript: { speakerMethod: "talk_share" }, judge: { faithful: true }, studentJoinedAsGuest: "Pim iPad" } });
+    await session(1, { metadata: { transcript: { speakerMethod: "talk_share", source: "zoom" }, judge: { faithful: true }, studentJoinedAsGuest: "Pim iPad" } });
     await db.insert(E).values({ wiseSessionId: id(1), evidenceHash: "hash-1", lessonRecord: "[00:00] TUTOR: Fractions.", evidenceKind: "transcript" });
     const sources = dbEvidenceSources(db);
-    expect(await sources.rowMeta(id(1))).toEqual({ speakerMethod: "talk_share", judge: { faithful: true }, joinedAsGuest: "Pim iPad" });
+    expect(await sources.rowMeta(id(1))).toEqual({ speakerMethod: "talk_share", transcriptSource: "zoom", judge: { faithful: true }, joinedAsGuest: "Pim iPad" });
     // The Atom record is read with it (da249460); none was retained for this class.
     expect(await sources.isebRecord(id(1), "hash-1")).toEqual({ evidenceHash: "hash-1", lessonRecord: "[00:00] TUTOR: Fractions.", evidenceKind: "transcript", atom: null });
     expect(await sources.isebRecord(id(1), "other")).toBeNull();
-    expect(await sources.rowMeta(id(99))).toEqual({ speakerMethod: null, judge: null, joinedAsGuest: null });
+    expect(await sources.rowMeta(id(99))).toEqual({ speakerMethod: null, transcriptSource: null, judge: null, joinedAsGuest: null });
   });
 
   it("totals the day's production calls per class and against the previous days", async () => {

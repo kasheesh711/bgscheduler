@@ -195,6 +195,8 @@ export interface IsebRecord {
 export interface RowMeta {
   /** `metadata.transcript.speakerMethod` of the transcript draft: zoom_alignment, talk_share or unclear. */
   speakerMethod: string | null;
+  /** `metadata.transcript.source`: `zoom` for a draft written from Zoom's captions; absent or `soniox` otherwise. */
+  transcriptSource?: string | null;
   /** The production judge's verdict stored with the draft. */
   judge: unknown;
   /** The guest name the student joined under, when they did. */
@@ -246,6 +248,7 @@ export function dbEvidenceSources(db: Database): EvidenceSources {
       const guest = metadata.studentJoinedAsGuest;
       return {
         speakerMethod: typeof transcript?.speakerMethod === "string" ? transcript.speakerMethod : null,
+        transcriptSource: typeof transcript?.source === "string" ? transcript.source : null,
         judge: metadata.judge ?? null,
         joinedAsGuest: typeof guest === "string" && guest !== "(unnamed guest)" && guest.trim() ? guest.trim() : null,
       };
@@ -683,7 +686,8 @@ export function buildEvidenceBundle(input: { target: NightlyTarget; night: strin
   let wiseSummary = summary;
   if (raw.iseb?.evidenceKind === "transcript") {
     transcript = {
-      text: raw.iseb.lessonRecord, source: "iseb_record", speakerMethod: raw.rowMeta.speakerMethod,
+      text: raw.iseb.lessonRecord, source: raw.rowMeta.transcriptSource === "zoom" ? "iseb_record_zoom" : "iseb_record",
+      speakerMethod: raw.rowMeta.speakerMethod,
       speakerLabels: labelsFor(raw.rowMeta.speakerMethod),
     };
   } else if (raw.iseb?.evidenceKind === "summary") {

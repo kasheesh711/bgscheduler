@@ -473,16 +473,41 @@ export async function listDueRows(db: Database): Promise<AutowriterSessionRow[]>
  * Persist a submitted Soniox job while holding the lease, so a dead worker's
  * job can be found again. Its submit time bounds how long it may keep running.
  */
-export async function setSonioxTranscription(db: Database, wiseSessionId: string, token: string, transcriptionId: string): Promise<boolean> {
+export async function setSonioxTranscription(db: Database, wiseSessionId: string, token: string, transcriptionId: string, metadata: Record<string, unknown> = {}): Promise<boolean> {
   const rows = await db.update(S).set({
     sonioxTranscriptionId: transcriptionId,
     evidence: "transcript",
     // App wall clock, as an ISO string, keyed to the job: the worker only times the job it is polling.
-    metadata: sql`${S.metadata} || ${JSON.stringify({ sonioxSubmittedJob: transcriptionId, sonioxSubmittedAt: new Date().toISOString() })}::jsonb`,
+    metadata: sql`${S.metadata} || ${JSON.stringify({ ...metadata, sonioxSubmittedJob: transcriptionId, sonioxSubmittedAt: new Date().toISOString() })}::jsonb`,
     updatedAt: nowSql,
   }).where(and(eq(S.wiseSessionId, wiseSessionId), eq(S.state, "generating"), eq(S.leaseToken, token)))
     .returning({ id: S.id });
   return rows.length > 0;
+}
+
+/**
+ * Thai shares (`metadata.transcript.thaiShare`) of the class's Soniox transcripts — not those written from Zoom's
+ * captions — for its other sessions with this tutor (`teacherIds`: their Wise accounts) that ended since `since`. A
+ * substitute or a new tutor of the class does not inherit another tutor's lessons. Empty when there are none.
+ */
+export async function classSonioxThaiShares(db: Database, input: {
+  wiseClassId: string;
+  teacherIds: readonly string[];
+  excludeSessionId: string;
+  since: Date;
+}): Promise<number[]> {
+  if (input.teacherIds.length === 0) return [];
+  const rows = await db.select({ share: sql<string>`${S.metadata} -> 'transcript' ->> 'thaiShare'` }).from(S).where(and(
+    eq(S.wiseClassId, input.wiseClassId),
+    inArray(S.wiseTeacherUserId, [...input.teacherIds]),
+    sql`${S.wiseSessionId} <> ${input.excludeSessionId}`,
+    gte(S.scheduledEndAt, input.since),
+    // A transcript too short to write from is no evidence of how the class talks.
+    sql`coalesce(${S.reason}, '') not in ('recording_too_short', 'transcript_too_short')`,
+    sql`${S.metadata} -> 'transcript' ->> 'thaiShare' is not null`,
+    sql`coalesce(${S.metadata} -> 'transcript' ->> 'source', 'soniox') = 'soniox'`,
+  ));
+  return rows.map((row) => Number(row.share));
 }
 
 /**
@@ -574,7 +599,7 @@ export async function flagNoRecording(db: Database, endedBefore: Date, disabledT
   }).where(and(
     inArray(S.state, ["awaiting_recording", "transcribing"]),
     lt(S.scheduledEndAt, endedBefore),
-    sql`coalesce(${S.reason}, '') not in ('recording_too_short', 'zoom_transcript_pending', 'wise_read_failed') and coalesce(${S.reason}, '') not like 'infra:%'`,
+    sql`coalesce(${S.reason}, '') not in ('recording_too_short', 'zoom_transcript_pending', 'zoom_draft_held', 'zoom_writer_failed', 'wise_read_failed') and coalesce(${S.reason}, '') not like 'infra:%'`,
     sql`not (${S.state} = 'awaiting_recording' and coalesce(${S.metadata} ->> 'handover', '') = 'transcript_first')`,
     disabledTutors.length > 0
       ? or(isNull(S.wiseTeacherUserId), notInArray(S.wiseTeacherUserId, [...disabledTutors]))
@@ -682,7 +707,7 @@ export async function retryHeldSession(db: Database, wiseSessionId: string, inpu
     metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'genericErrors' - 'writerErrors' - 'judgeErrors' - 'judgeUnreached'
       - 'judgeUnreachedCause' - 'judgeFailingSince' - 'recordingShortSeenAt' - 'judge'
       - 'draftEvidence' - 'pipeline' - 'transcript' - 'handover' - 'summaryAtHandover' - 'summaryFallback' - 'sonioxFailure'
-      - 'writerFailure' - 'sonioxRetainUntil' - 'triagedAt' - 'summaryOnlyHeld' - 'noShow')
+      - 'writerFailure' - 'sonioxRetainUntil' - 'triagedAt' - 'summaryOnlyHeld' - 'noShow' - 'zoomWaitSince')
       || ${JSON.stringify({ retriedBy: input.actor })}::jsonb
       || jsonb_build_object('retriedAt', now()::text, 'retriedFrom', ${S.state}::text)`,
     alertsSent: sql`${S.alertsSent} - 'held' - 'expired'`,

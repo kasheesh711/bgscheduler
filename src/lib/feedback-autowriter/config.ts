@@ -36,6 +36,16 @@ export function autowriterTranscriptFirst(env: AutowriterEnvironment = process.e
 }
 
 /**
+ * English lessons from Zoom's captions (owner decision, 12 Oct 2026: "Cut Soniox for English"): a transcript-pass
+ * class whose Zoom captions, Wise summary and this tutor's recent Soniox transcripts of the class are all English,
+ * and whose captions name only the tutor and the student, is written from Zoom's own captions — no Soniox job.
+ * Everything else goes to Soniox as before. Only the exact string `true` enables it; it acts only inside the transcript pass.
+ */
+export function autowriterZoomEnglish(env: AutowriterEnvironment = process.env): boolean {
+  return env.FEEDBACK_AUTOWRITER_ZOOM_ENGLISH === "true";
+}
+
+/**
  * Hold summary-only drafts (owner, 5 Oct 2026): a class that would be written from Wise's AI summary alone — no
  * transcript, or a transcript-first class that fell back — is held for the tutor before any model call. Audited
  * summary-only posts had a real error 5 times in 7 (homework left out not counted), and the nightly correction path
@@ -279,6 +289,24 @@ export const AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS = 20 * 60 * 1000;
  * next backstop sweep (~every 15 min) is the next look, so the last look can land up to ~35 min after submit.
  */
 export const AUTOWRITER_ZOOM_TRANSCRIPT_RECHECK_MS = 5 * 60 * 1000;
+/**
+ * English lessons from Zoom's captions: the most Thai (share of Thai among Thai + Latin letters) Zoom's captions,
+ * Wise's summary and each of the class's recent Soniox transcripts may be. Zoom captions a whole lesson in one
+ * language, so its captions are 0.00 or ≥ 0.99 Thai (86 cached classes with captions); the class's Soniox transcripts carry the
+ * real mix, and under 0.03 is a few Thai words (greetings, names), not Thai teaching.
+ */
+export const AUTOWRITER_ZOOM_ENGLISH_MAX_THAI_SHARE = 0.03;
+/**
+ * … over the class's Soniox transcripts of this long before (at least one): a class written from Zoom's captions for
+ * this long has no recent Soniox transcript and goes to Soniox once again, which re-checks its language.
+ */
+export const AUTOWRITER_ZOOM_ENGLISH_HISTORY_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * … and Zoom's captions must run to at least this share of Wise's recording length (when Wise gives one): captions
+ * that stop early leave the rest of the lesson out. The last caption ended at ≥ 99.5% of the recording on all 32
+ * cached English-captioned classes with a length.
+ */
+export const AUTOWRITER_ZOOM_ENGLISH_MIN_CAPTION_COVERAGE = 0.9;
 /** A Soniox job still queued or processing this long after it was submitted is abandoned (deleted, counted as an error). */
 export const AUTOWRITER_TRANSCRIBE_TIMEOUT_MS = 60 * 60 * 1000;
 export const AUTOWRITER_TRANSCRIBE_POLL_MS = 10_000;

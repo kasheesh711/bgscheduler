@@ -7,6 +7,7 @@ import {
   autowriterTranscriptFirst,
   autowriterTranscriptsEnabled,
   autowriterWritesAllowedHere,
+  autowriterZoomEnglish,
   openRouterApiKey,
   sonioxApiKey,
   wiseApiActorId,
@@ -32,6 +33,7 @@ function productionDeps(db: Database, budgetMs: number): AutowriterDeps {
     // Acts only together with the second pass (job.ts checks both).
     transcriptFirst: autowriterTranscriptFirst(),
     holdSummaryOnly: autowriterHoldSummaryOnly(),
+    zoomEnglish: autowriterZoomEnglish(),
   };
 }
 

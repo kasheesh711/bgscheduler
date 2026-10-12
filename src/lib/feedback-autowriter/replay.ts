@@ -43,7 +43,16 @@ import {
 } from "./session";
 import { sonioxCostUsd, type SonioxClient, type SonioxToken } from "./soniox";
 import { fieldsHash, type WiseFeedbackOps } from "./submit";
-import { buildTranscriptEvidence, parseZoomVtt, sonioxJobInput, thaiShare, type ZoomCue } from "./transcript";
+import {
+  buildTranscriptEvidence,
+  parseZoomVtt,
+  sonioxJobInput,
+  thaiShare,
+  zoomEnglishEvidence,
+  zoomEnglishPrecheck,
+  type TranscriptEvidence,
+  type ZoomCue,
+} from "./transcript";
 import { AUTOWRITER_MIN_SUMMARY_CHARACTERS, type SummaryFallbackCause } from "./types";
 import { finalizeFields, parseModelOutput } from "./validate";
 
@@ -116,8 +125,13 @@ export interface ReplayDeps {
    * Used to replay summary-only posts through a changed writer/judge.
    */
   summaryWhenNoCachedTranscript?: boolean;
-  /** Passes to run besides the transcript draft (both on by default). */
-  passes?: { summaryDraft?: boolean; postedJudge?: boolean };
+  /**
+   * Passes to run besides the transcript draft (summary draft and posted judge on by default). `zoomDraft` (off by
+   * default): English lessons from Zoom's captions — production's decision on the captions and the summary (not the
+   * class's Soniox history, which needs the database), a draft written from the captions when they qualify, and
+   * that draft judged at both levels against the Soniox transcript as well.
+   */
+  passes?: { summaryDraft?: boolean; postedJudge?: boolean; zoomDraft?: boolean };
   /** What a draft must not copy (production: `loadTutorPriorFeedback`). */
   priorFeedback: (tutor: AutowriterTutor) => Promise<PriorFeedbackComparison[]>;
   /** Zoom's WEBVTT (tests inject a fake). */
@@ -134,7 +148,7 @@ export interface ReplayDeps {
 }
 
 export interface ReplayCall {
-  purpose: "transcript_draft" | "summary_draft" | "posted_draft";
+  purpose: "transcript_draft" | "summary_draft" | "posted_draft" | "zoom_draft" | "zoom_vs_soniox";
   role: "writer" | "judge";
   model: string;
   /** The reasoning effort asked for; every draft is judged once per effort in `AUTOWRITER_JUDGE_EFFORTS`. */
@@ -195,6 +209,16 @@ export interface ReplayRecord {
   /** The posted draft, judged at both levels against the transcript (the verdict is their union). */
   posted: { source: string; verdict: StoredJudgeVerdict | null; problems: string[]; error: string | null } | null;
   calls: ReplayCall[];
+  /**
+   * `passes.zoomDraft`: `route` is `zoom` (written from the captions) or `soniox:<reason>`; the draft from the
+   * captions; and that draft judged at both levels against the Soniox transcript (when it is usable).
+   */
+  zoom?: {
+    route: string;
+    captionsThaiShare: number | null;
+    draft: ReplayDraft | null;
+    againstSoniox: { verdict: StoredJudgeVerdict | null; problems: string[]; error: string | null } | null;
+  } | null;
   /** Only with `keepTranscripts`. */
   transcript?: string;
 }
@@ -360,6 +384,7 @@ async function zoomCues(deps: ReplayDeps, detail: AutowriterSessionDetail): Prom
  * call is tried again first, as in production). Shared with the nightly verification (`judgeDraftAtEveryLevel`).
  */
 async function judgePostedDraft(deps: ReplayDeps, record: ReplayRecord, input: {
+  purpose?: ReplayCall["purpose"];
   fields: FeedbackFieldAnswers;
   source: string;
   rendered: string;
@@ -375,7 +400,7 @@ async function judgePostedDraft(deps: ReplayDeps, record: ReplayRecord, input: {
     speakerLabels: input.speakerLabels,
     names: input.names,
     classDetails: input.classDetails,
-    call: recordingCaller(deps, record, "posted_draft"),
+    call: recordingCaller(deps, record, input.purpose ?? "posted_draft"),
     remainingMs: () => REPLAY_BUDGET_MS,
     sleep: deps.sleep,
     random: deps.random,
@@ -456,6 +481,7 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
   let fallback: SummaryFallbackCause | null = null;
   const recording = recordingForTranscription(detail);
   let transcribed: Awaited<ReturnType<typeof transcribe>> | null = null;
+  let sonioxEvidence: TranscriptEvidence | null = null;
   if (cached) {
     // Collected while the recording was still listed: Wise may have dropped it since. Its length still counts.
     if (recording.ok && recordingTooShort(recording.durationSeconds, window.minutes)) {
@@ -496,6 +522,7 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
         zoomCues: await zoomCues(deps, detail), teacherName: detailTeacherName(detail), alsoTeacher: tutorSelfNames(detail),
         studentNames: [student.name, ...(student.joinedAsGuest ? [student.joinedAsGuest] : [])],
       });
+      sonioxEvidence = evidence.tooShort || evidence.speakers.method === "unclear" ? null : evidence;
       record.speakers = { method: evidence.speakers.method, labels: evidence.speakerLabels, shares: evidence.speakers.shares };
       record.transcriptCharacters = evidence.rendered.length;
       if (deps.keepTranscripts) record.transcript = evidence.rendered;
@@ -552,6 +579,13 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
     }
   }
 
+  // English lessons from Zoom's captions: what production would decide, and the draft it would write from them.
+  if (deps.passes?.zoomDraft && recording.ok) {
+    record.zoom = await zoomPass(deps, record, { detail, summaryText: summary?.text ?? null, recordingSeconds: recording.durationSeconds,
+      scheduledMinutes: window.minutes, studentNames: [student.name, ...names.studentAliases], session, tutor, priorFeedback, names,
+      classDetails, displayName, sonioxEvidence });
+  }
+
   // 2. A summary draft for every class: the fallback's evidence, and the comparison for the others.
   const summaryPass = deps.passes?.summaryDraft !== false;
   if (usableSummary && summaryPass) {
@@ -577,6 +611,61 @@ async function replayInto(deps: ReplayDeps, sample: ReplaySample, record: Replay
         : !summaryPass ? "skip:summary_draft_off"
           : record.summaryDraft?.outcome ?? "error:no_summary_draft";
   }
+}
+
+/**
+ * The Zoom pass (`passes.zoomDraft`): production's decision on the captions (`zoomEnglishEvidence`) and the summary
+ * (`zoomEnglishPrecheck`, with the class's Soniox history taken as English: the replay has no database), then one try
+ * of production's pipeline on the captions, and its draft judged against the Soniox transcript too.
+ */
+async function zoomPass(deps: ReplayDeps, record: ReplayRecord, input: {
+  detail: AutowriterSessionDetail;
+  summaryText: string | null;
+  recordingSeconds: number | null;
+  scheduledMinutes: number;
+  studentNames: string[];
+  session: Omit<Parameters<typeof runWritingPipeline>[0]["session"], "summary">;
+  tutor: AutowriterTutor;
+  priorFeedback: PriorFeedbackComparison[];
+  names: { studentFullName: string; studentAliases: readonly string[]; tutorNames: readonly string[] };
+  classDetails: readonly string[];
+  displayName: string;
+  sonioxEvidence: TranscriptEvidence | null;
+}): Promise<NonNullable<ReplayRecord["zoom"]>> {
+  if ((input.detail.rawTranscript ?? []).length > 1) return { route: "soniox:zoom_transcript_parts", captionsThaiShare: null, draft: null, againstSoniox: null };
+  const url = zoomTranscriptUrl(input.detail);
+  const vtt = url ? await (deps.fetchText ?? fetchText)(url).catch(() => null) : null;
+  const teacherName = detailTeacherName(input.detail);
+  if (vtt === null || !teacherName) {
+    return { route: `soniox:${vtt === null ? "zoom_transcript_missing" : "speakers_unclear"}`, captionsThaiShare: null, draft: null, againstSoniox: null };
+  }
+  const zoom = zoomEnglishEvidence({
+    vtt, recordingSeconds: input.recordingSeconds, scheduledMinutes: input.scheduledMinutes, teacherName,
+    alsoTeacher: tutorSelfNames(input.detail), studentNames: input.studentNames,
+  });
+  const declined = zoomEnglishPrecheck({ summaryText: input.summaryText, classThaiShares: [0] }) ?? (zoom.ok ? null : zoom.reason);
+  const captionsThaiShare = zoom.ok ? zoom.evidence.meta.thaiShare : zoom.thaiShare;
+  if (declined || !zoom.ok) return { route: `soniox:${declined}`, captionsThaiShare, draft: null, againstSoniox: null };
+  const writerContents: string[] = [];
+  const result = await runWritingPipeline({
+    apiKey: deps.apiKey,
+    session: { ...input.session, summary: { text: zoom.evidence.rendered, meetingUUIDs: [] }, evidence: "transcript", speakerLabels: zoom.evidence.speakerLabels },
+    tutorNames: input.tutor.tutorNames,
+    priorFeedback: input.priorFeedback,
+    record: async () => {},
+    remainingMs: () => REPLAY_BUDGET_MS,
+    callModel: recordingCaller(deps, record, "zoom_draft", { writerContents }),
+    sleep: deps.sleep,
+    random: deps.random,
+  });
+  const draft = draftOf(result, record, "zoom_draft", writerContents, input.displayName);
+  const againstSoniox = result.kind === "draft" && input.sonioxEvidence
+    ? await judgePostedDraft(deps, record, {
+      purpose: "zoom_vs_soniox", fields: result.fields, source: "zoom_draft", rendered: input.sonioxEvidence.rendered,
+      speakerLabels: input.sonioxEvidence.speakerLabels, names: input.names, classDetails: input.classDetails,
+    })
+    : null;
+  return { route: "zoom", captionsThaiShare, draft, againstSoniox: againstSoniox && { verdict: againstSoniox.verdict, problems: againstSoniox.problems, error: againstSoniox.error } };
 }
 
 /** Replay classes a few at a time (Soniox jobs run in parallel; Wise reads are paced by the client). */
@@ -799,6 +888,20 @@ export interface ReplaySummary {
     /** A judge call that failed or did not parse. */
     parseFailures: number;
   };
+  /**
+   * `passes.zoomDraft`: where each class would go, and on the classes written from Zoom's captions how often that draft
+   * passed (checks + both judge levels) next to the Soniox draft of the same classes, and the Zoom draft judged
+   * against the Soniox transcript.
+   */
+  zoom: {
+    classes: number;
+    routes: Array<{ route: string; count: number }>;
+    written: number;
+    zoomDraftPassed: number;
+    sonioxDraftPassed: number;
+    againstSonioxJudged: number;
+    againstSonioxPassed: number;
+  };
   acceptance: {
     transcriptHoldsAtMost15Percent: boolean | null;
     fallbacksAtMost20Percent: boolean | null;
@@ -895,6 +998,20 @@ export function summarizeReplay(records: readonly ReplayRecord[]): ReplaySummary
       };
     }),
     modelCostUsd: sum(calls.map((call) => call.costUsd)),
+    zoom: (() => {
+      const tried = records.filter((record) => record.zoom);
+      const written = tried.filter((record) => record.zoom?.route === "zoom");
+      const judged = written.filter((record) => record.zoom?.againstSoniox?.verdict);
+      return {
+        classes: tried.length,
+        routes: tally(tried.map((record) => record.zoom!.route)).map(([route, count]) => ({ route, count })),
+        written: written.length,
+        zoomDraftPassed: written.filter((record) => record.zoom?.draft?.outcome === "draft").length,
+        sonioxDraftPassed: written.filter((record) => record.transcriptDraft?.outcome === "draft").length,
+        againstSonioxJudged: judged.length,
+        againstSonioxPassed: judged.filter((record) => record.zoom?.againstSoniox?.verdict?.faithful).length,
+      };
+    })(),
     posted: {
       judged: posted.filter((entry) => !(entry.error?.startsWith("transcript_not_usable") ?? false)).length,
       flagged: posted.filter((entry) => entry.verdict && !entry.verdict.faithful).length,
@@ -983,6 +1100,15 @@ export function renderReplayMarkdown(input: { summary: ReplaySummary; records: r
       `homework not set ${summary.posted.homeworkNotSet}, unsupported ${summary.posted.unsupported}); not judged (transcript not usable) ` +
       `${summary.posted.notJudged}; judge failed ${summary.posted.parseFailures}.`,
     "",
+    ...(summary.zoom.classes === 0 ? [] : [
+      "## English lessons from Zoom's captions",
+      "",
+      `Routes (captions + summary; the class's Soniox history is not replayed): ${summary.zoom.routes.map((route) => `${route.route} ${route.count}`).join(", ")}.`,
+      `Written from the captions: ${summary.zoom.written}. Passed (checks + both judge levels): Zoom draft ${summary.zoom.zoomDraftPassed}, ` +
+        `Soniox draft of the same classes ${summary.zoom.sonioxDraftPassed}. Zoom draft judged against the Soniox transcript: ` +
+        `${summary.zoom.againstSonioxPassed} faithful of ${summary.zoom.againstSonioxJudged}.`,
+      "",
+    ]),
     "## Costs",
     "",
     `- Soniox: ${summary.soniox.jobs} job(s), ${summary.soniox.audioMinutes} audio minutes, $${summary.soniox.costUsd.toFixed(3)}; ` +
@@ -992,8 +1118,8 @@ export function renderReplayMarkdown(input: { summary: ReplaySummary; records: r
     "",
     "## Per class",
     "",
-    "| Session | Tutor | Ended | Row | Outcome | Then | Audio min | Soniox $ | Turnaround | Speakers (T/S %) | Transcript writer | Judge high | Judge medium | Summary draft (writer) | Posted (source) |",
-    "|---|---|---|---|---|---|---:|---:|---:|---|---|---|---|---|---|",
+    "| Session | Tutor | Ended | Row | Outcome | Then | Audio min | Soniox $ | Turnaround | Speakers (T/S %) | Transcript writer | Judge high | Judge medium | Summary draft (writer) | Posted (source) | Zoom route: draft / vs Soniox |",
+    "|---|---|---|---|---|---|---:|---:|---:|---|---|---|---|---|---|---|",
     ...records.map((record) => [
       record.wiseSessionId,
       record.tutor ?? "—",
@@ -1010,6 +1136,7 @@ export function renderReplayMarkdown(input: { summary: ReplaySummary; records: r
       verdictFlags(record.transcriptDraft?.judgeMedium ?? null),
       record.summaryDraft ? `${reasonCategory(record.summaryDraft.outcome)} (${record.summaryDraft.writerModel ?? "—"})` : "—",
       record.posted ? `${record.posted.verdict ? verdictFlags(record.posted.verdict) : reasonCategory(record.posted.error ?? "—")} (${record.posted.source})` : "—",
+      record.zoom ? `${record.zoom.route}${record.zoom.draft ? `: ${reasonCategory(record.zoom.draft.outcome)} / ${record.zoom.againstSoniox?.verdict ? verdictFlags(record.zoom.againstSoniox.verdict) : record.zoom.againstSoniox?.error ?? "—"}` : ""}` : "—",
     ].map((cell) => String(cell).replaceAll("|", "/")).join(" | ")).map((row) => `| ${row} |`),
     "",
     "Drafts, verdicts with their quotes and call records are in `records.json` next to this file (local, 0600); " +

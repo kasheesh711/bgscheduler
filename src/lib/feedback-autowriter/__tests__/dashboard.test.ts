@@ -11,6 +11,7 @@ const system: AutowriterSystemStatus = {
   judge: { model: "z-ai/glm-5.3-flash", efforts: ["medium", "high"] },
   transcriptFirst: true,
   holdSummaryOnly: false,
+  zoomEnglish: false,
   secondPass: true,
   promptVersion: 5,
   judgeVersion: 5,
