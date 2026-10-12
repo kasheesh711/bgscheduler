@@ -48,6 +48,7 @@ import {
   autowriterHoldSummaryOnly,
 } from "./config";
 import { JUDGE_PROMPT_VERSION, passingStoredVerdict, type StoredJudgeVerdict } from "./judge";
+import { raiseCreditIncident } from "./model-credit";
 import { FUNCTION_BUDGET_EXHAUSTED, runWritingPipeline, type PipelineResult, type RateLimitRetries } from "./pipeline";
 import { PROMPT_VERSION, chooseStudentDisplayName, describeClass, type EvidenceKind } from "./prompt";
 import { AUTOWRITER_ROSTER, AUTOWRITER_TEACHER_ALLOWLIST, rosterAccountIds, rosterTutor, type AutowriterTutor } from "./roster";
@@ -356,6 +357,20 @@ function atJudgeAlertMark(counts: JudgeFailureCounts): boolean {
 function judgeUnreachedCause(result: Extract<PipelineResult, { kind: "infra" }>): JudgeUnreachedCause {
   if (result.rateLimited) return "rate_limited";
   return result.error === FUNCTION_BUDGET_EXHAUSTED ? "out_of_time" : "account_or_connection";
+}
+
+/**
+ * Our OpenRouter credit ran out (`creditExhausted`: the key's limit or the account balance, 11 Oct 2026): one pushed
+ * incident a Bangkok day so the owner tops up, while the class retries as infra like any outage. A failed incident
+ * write never fails the class.
+ */
+async function noteCreditExhausted(db: Database, result: Extract<PipelineResult, { kind: "infra" }>, now: Date): Promise<void> {
+  if (!result.creditExhausted) return;
+  try {
+    await raiseCreditIncident(db, { problems: [result.error.replace(/https?:\/\/\S+/gu, "OpenRouter").slice(0, 240)], now, cause: "exhausted" });
+  } catch (error) {
+    console.error("[feedback-autowriter] credit incident not recorded", error instanceof Error ? error.name : "Error");
+  }
 }
 
 /**
@@ -749,6 +764,7 @@ async function processLeased(deps: AutowriterDeps, input: {
     rateLimitRetries: input.rateLimitRetries,
   });
   if (result.kind === "infra") {
+    await noteCreditExhausted(db, result, now);
     // A run that ends at the judge stage is counted, and a run of them alerts (`judgeFailed`); the class retries as before.
     await release({
       state: "pending", reason: `infra:${result.error}`, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true,
@@ -1269,6 +1285,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
     // run ends in a writer failure and counts (owner decision, 30 Sep 17:00). Wise and Soniox errors count apart
     // (above); our function's time, our OpenRouter account and our connection are not the writer's failure
     // (`modelFailure`) and leave the count as it is.
+    await noteCreditExhausted(db, result, now);
     // From Zoom's captions the writer's failures count too, and the third goes to Soniox first (below).
     const writerFailed = (canFallBack || fromZoom) && result.stage === "writer" && result.modelFailure;
     const writerDelivered = (canFallBack || fromZoom) && result.stage === "judge";

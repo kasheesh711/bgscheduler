@@ -13,6 +13,7 @@ import {
   wiseApiActorId,
 } from "./config";
 import { cleanUpSonioxJobs, markWebhookProcessed, processSession, runSweep, type AutowriterDeps, type SweepResult } from "./job";
+import { fetchOpenRouterBudget } from "./model-credit";
 import { runReviewJob, type ReviewJobResult } from "./review-job";
 import { createWiseFeedbackOps } from "./run";
 import { createSonioxClient } from "./soniox";
@@ -68,6 +69,7 @@ export async function runAutowriterReviewJob(
   if (!autowriterWritesAllowedHere()) {
     return { ok: true, skipped: true, reason: "Preview deployment: the review job never runs here." };
   }
+  const modelKey = openRouterApiKey();
   return runReviewJob({
     db: getDb(),
     apiActorId: wiseApiActorId(),
@@ -75,6 +77,7 @@ export async function runAutowriterReviewJob(
     triggerSource,
     deadlineMs: Date.now() + REVIEW_JOB_BUDGET_MS,
     channels: { emailRecipients: autowriterAlertEmails(), lineTo: autowriterLineTo() },
+    modelBudget: modelKey ? () => fetchOpenRouterBudget(modelKey) : undefined,
   });
 }
 

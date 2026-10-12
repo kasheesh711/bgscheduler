@@ -205,7 +205,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions, feedback_autowriter_calls, wise_webhook_events`);
+  await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions, feedback_autowriter_calls, wise_webhook_events, feedback_autowriter_incidents`);
   await db.execute(sql`UPDATE feedback_autowriter_control SET mode = 'live', halted_at = NULL, halt_reason = NULL,
     disabled_tutors = '[]'::jsonb, lease_token = NULL, lease_until = NULL`);
 });
@@ -281,6 +281,31 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     ]);
     expect(calls.filter((call) => call.role === "writer" && !call.ok).map((call) => call.error)).toEqual(Array(2).fill(limited.error));
     expect(calls.filter((call) => call.role === "judge")).toHaveLength(2);
+  });
+
+  it("never holds a class over OpenRouter credit (11 Oct 2026): it retries, and one pushed model_credit incident is raised", async () => {
+    const keyLimit: OpenRouterCallResult = { ok: false, error: "Key limit exceeded (monthly limit). Manage it using https://openrouter.ai/workspaces/default/keys/x $20.01 of $20.00 used",
+      httpStatus: 403, model: null, provider: null, finishReason: null, usage: null, latencyMs: 5 };
+    const incidents = () => db.select().from(schema.feedbackAutowriterIncidents);
+    // The summary path: the writer refused.
+    await seedRow();
+    for (const run of [1, 2]) {
+      expect(await processSession(deps(fakeWise().ops, { callModel: vi.fn(async () => keyLimit) as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }), `${run}`)
+        .toMatchObject({ result: "infra" });
+      const row = await readSessionRow(db, SESSION_ID);
+      expect(row, `${run}`).toMatchObject({ state: "pending", evidence: "summary" });
+      expect(row?.reason).toMatch(/^infra:sol:Key limit exceeded/u);
+      expect(row?.metadata).not.toHaveProperty("alertKind");
+    }
+    // A judge refused after the writer delivered: the same, and still one incident for the day.
+    const judgeRefused = vi.fn(async (request: { schemaName: string }) => request.schemaName === "post_class_feedback" ? sol(writerJson) : keyLimit);
+    expect(await processSession(deps(fakeWise().ops, { callModel: judgeRefused as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "infra" });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "pending" });
+    const [incident, ...more] = await incidents();
+    expect(more).toEqual([]);
+    expect(incident).toMatchObject({ kind: "model_credit", severity: "critical", pushStatus: "pending", detail: expect.objectContaining({ cause: "exhausted" }) });
+    expect(incident.summary).not.toContain("https://");
   });
 
   it("alerts on the third judge failure in a row for a class written from the summary too", async () => {
@@ -1024,6 +1049,20 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     const calls = await db.select().from(schema.feedbackAutowriterCalls).where(eq(schema.feedbackAutowriterCalls.role, "transcriber"));
     expect(calls).toHaveLength(1);
     expect(Number(calls[0].costUsd)).toBeCloseTo(0.1);
+  });
+
+  it("keeps a transcript class transcribing over OpenRouter credit, without counting a writer failure (no summary fallback)", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    const keyLimit: OpenRouterCallResult = { ok: false, error: "Insufficient credits", httpStatus: 402, model: null, provider: null, finishReason: null, usage: null, latencyMs: 5 };
+    for (const run of [1, 2, 3, 4]) {
+      const outcome = await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fakeSoniox().client, { callModel: vi.fn(async () => keyLimit) as never }),
+        { wiseSessionId: SESSION_ID, trigger: "webhook" });
+      expect(outcome, `${run}`).toMatchObject({ result: "infra" });
+      const row = await readSessionRow(db, SESSION_ID);
+      expect(row, `${run}`).toMatchObject({ state: "transcribing", evidence: "transcript", reason: "infra:sol:Insufficient credits" });
+      expect(Number(row?.metadata.writerErrors ?? 0), `${run}`).toBe(0);
+    }
+    expect(await db.select().from(schema.feedbackAutowriterIncidents)).toHaveLength(1);
   });
 
   it("falls back to Luna when one judge level rejects Sol's transcript draft, instead of holding the class", async () => {

@@ -49,7 +49,8 @@ export function atomFailureCause(error: unknown): string {
   if (/occurrences conflict/iu.test(message)) return "timetable_conflict";
   if (/pagination|advertised session page|page count contradicts/iu.test(message)) return "pagination_incomplete";
   if (/time budget/iu.test(message) || error.name === "TimeoutError" || error.name === "AbortError") return "time_budget";
-  if (/invalid, duplicate or out-of-date|duplicate, missing, or invalid session/iu.test(message)) return "invalid_session";
+  if (/duplicate (?:wise )?session/iu.test(message)) return "duplicate_session";
+  if (/invalid or out-of-date wise session|missing or invalid session/iu.test(message)) return "invalid_session";
   if (/invalid wise calendar date/iu.test(message)) return "invalid_date";
   return /^[A-Za-z]{1,40}$/u.test(error.name) ? error.name : "unknown";
 }
