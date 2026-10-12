@@ -107,6 +107,9 @@ in 7, even with left-out homework not counted, and the nightly correction cannot
 summary). Each held class is a coverage miss. Turn it off once Zoom captions reach the writer and the judges. The
 system line shows "Summary-only drafts: held" while it is on. From 10 Oct 2026, the hold is on by default. Only
 `FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY=false` turns it off; a missing or invalid value keeps the hold on.
+**Production value: `false` (owner, 7 Oct and again 12 Oct 2026: Wise summaries are accepted as a source).** It was
+removed on 7 Oct, which became "hold" when the 10 Oct default change shipped, and summary-only classes were held again
+until 12 Oct (failure log O09). Keep it set explicitly; do not rely on the default.
 
 For each new draft, the writer keeps the exact lesson input and its hash in `feedback_iseb_evidence`, including
 classes without an ISEB guide. The existing table also keeps the Atom input when used. The posted pipeline records
