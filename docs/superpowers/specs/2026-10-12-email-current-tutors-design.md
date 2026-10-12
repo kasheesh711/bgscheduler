@@ -53,8 +53,8 @@ dashboard route does.
    `signals.lastTaughtAt` is at or after `now − 30 × 24 h` (reason `recent`). `upcoming` takes precedence.
    Everyone else is left out silently; they are not teaching.
 4. The email comes from the existing `resolvePostClassTutorRecipient`: first the `primaryEmail` override, then a
-   single distinct Wise email. When no contact row exists, the onsite and online Wise account emails from the
-   dashboard stand in for `onsiteEmail`/`onlineEmail`. A `conflict` (two different Wise emails) or `missing`
+   single distinct Wise email. Where the contact row is absent or its `onsiteEmail`/`onlineEmail` is empty, the
+   first onsite or online Wise account email from the dashboard stands in. A `conflict` (two different Wise emails) or `missing`
    result is never guessed. The person goes to `needsEmail` together with every valid candidate address.
 5. Recipients are deduplicated by lowercased email (the first person wins) and sorted by name.
 
@@ -97,11 +97,11 @@ is defused.
 | `SKILL.md` | Steps and hard rules below |
 | `renderer/company.mjs`, `renderer/company-render.mjs`, `renderer/render.mjs` | Verbatim copies of the `begifted-design` 3.2.0 runtime (zero dependencies) |
 | `renderer/NOTICE.md` | Source skill and version, the Colorlib MIT licence text, and "do not edit; re-copy to upgrade" |
-| `build-email.mjs` | `node build-email.mjs <spec.json> --out <dir>` writes `email.html` and `email.txt` |
+| `build-email.mjs` | `node build-email.mjs <spec.json> --out <dir>` writes `email.html`, `email.txt` and `subject.txt` |
 | `build-email.test.mjs` | A `node --test` self-check |
 
 `build-email.mjs` accepts `template` (`newsletter`, `programme` or `event`), `subject`, `preheader`, `title`,
-`paragraphs`, and the optional `greeting`, `sections`, `action` and `eventDetails`. It fixes the logo
+`paragraphs`, and the optional `subtitle`, `greeting`, `sections`, `action`, `eventDetails` and `programmeDetails`. It fixes the logo
 (`https://bgscheduler.vercel.app/brand/email/v3/logo-horizontal.png`) and a standard BeGifted footer note, and
 passes everything else to `buildCompanyEmail`. It rejects unknown keys and a missing `subject`/`title`/`paragraphs`.
 The renderer already escapes HTML and rejects unsafe URLs. It runs on Node 24 on macOS and Windows.
