@@ -292,7 +292,7 @@ export const AUTOWRITER_ZOOM_TRANSCRIPT_RECHECK_MS = 5 * 60 * 1000;
 /**
  * English lessons from Zoom's captions: the most Thai (share of Thai among Thai + Latin letters) Zoom's captions,
  * Wise's summary and each of the class's recent Soniox transcripts may be. Zoom captions a whole lesson in one
- * language, so its captions are 0.00 or ≥ 0.99 Thai (87 cached classes); the class's Soniox transcripts carry the
+ * language, so its captions are 0.00 or ≥ 0.99 Thai (86 cached classes with captions); the class's Soniox transcripts carry the
  * real mix, and under 0.03 is a few Thai words (greetings, names), not Thai teaching.
  */
 export const AUTOWRITER_ZOOM_ENGLISH_MAX_THAI_SHARE = 0.03;

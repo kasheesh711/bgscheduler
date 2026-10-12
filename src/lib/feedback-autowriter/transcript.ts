@@ -392,10 +392,10 @@ function evidenceFromSegments(input: {
 // ---------------------------------------------------------------------------
 
 /**
- * Why an English-lesson candidate still goes to Soniox. Zoom captions a lesson in one language (measured on 87
- * cached classes: its captions' Thai share is 0.00 or ≥ 0.99, never between), so the captions only say which
- * language dominated; a Thai minority in an English-captioned lesson is invisible in them and is caught by the
- * class's own recent Soniox transcripts instead (`class_thai`, `no_class_history`).
+ * Why an English-lesson candidate still goes to Soniox. Zoom captions a lesson in one language (86 cached classes
+ * with captions: their Thai share is 0.00 or ≥ 0.99, never between), so the captions only say which language
+ * dominated; a Thai minority in an English-captioned lesson is invisible in them and is caught by the class's own
+ * recent Soniox transcripts instead (`class_thai`, `no_class_history`).
  */
 export type ZoomEnglishDecline =
   | "summary_thai" | "no_class_history" | "class_thai"

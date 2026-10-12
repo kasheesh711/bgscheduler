@@ -286,7 +286,7 @@ checks or the judges reject is not held: the class goes to Soniox at once (`zoom
 from Soniox's transcript. A class sent to Soniox stays there (`metadata.zoomEnglish = {route: "soniox", reason}`),
 also after an owner retry. The recording-length and attendance gates are unchanged.
 
-**Why the class's history.** Zoom captions a whole lesson in one language. On 87 cached classes the captions'
+**Why the class's history.** Zoom captions a whole lesson in one language. On 86 cached classes with captions, the captions'
 Thai share was 0.00 or ≥ 0.99 and never in between, so the captions only show which language led the lesson. A
 Thai minority in an English-led lesson is invisible in them: those lessons have English captions, and Soniox
 measured up to 14% Thai letters in them (half of one lesson's sentences were Thai). The summary is built from the
