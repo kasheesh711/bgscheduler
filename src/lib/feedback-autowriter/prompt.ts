@@ -4,8 +4,11 @@ import { redactKnownNames } from "@/lib/post-class-feedback/similarity";
 import { styleInstructions, type FeedbackStyleGuide } from "./style";
 import type { AiSummary } from "./types";
 
-/** v6: keep performance about the pupil and keep source-audit language out of parent feedback. */
-export const PROMPT_VERSION = 6;
+/**
+ * v6: keep performance about the pupil and keep source-audit language out of parent feedback.
+ * v7 (13 Oct): homework timing only when the tutor gave one — never "No deadline was stated." (owner, 12 Oct).
+ */
+export const PROMPT_VERSION = 7;
 export const STUDENT_TOKEN = "[STUDENT_1]";
 export const TUTOR_TOKEN = "[TUTOR]";
 
@@ -260,7 +263,7 @@ export const FEEDBACK_JSON_SCHEMA = {
     topics: { type: "string", description: "Specific skills, question types, texts or papers covered." },
     performance: { type: "string", description: "Concrete observations of how the student did, with lesson examples." },
     improvement: { type: "string", description: "Weak areas plus 2-3 concrete next steps or strategies." },
-    homework: { type: "string", description: "Only homework the tutor clearly set for after this lesson, with timing; empty string if none or unclear." },
+    homework: { type: "string", description: "Only homework the tutor clearly set for after this lesson, with its timing when the tutor gave one; empty string if none or unclear." },
     studentAttended: { type: "boolean", description: "True only if the summary shows the student actively took part." },
     lessonHappened: { type: "boolean", description: "True only if a real lesson took place." },
   },
@@ -307,7 +310,7 @@ function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels, styleGuide:
     (guided ? "6. improvement: a short numbered list of specific skills to practise before the next lesson, "
       : "6. improvement: the specific weak areas and two or three concrete next steps or strategies to practise before the next lesson, ") +
       "written as suggestions — never as homework the tutor set, and never repeating the homework.",
-    `7. homework: only work ${record} shows the tutor clearly setting ${STUDENT_TOKEN} to do after this lesson, with its timing if stated. ` +
+    `7. homework: only work ${record} shows the tutor clearly setting ${STUDENT_TOKEN} to do after this lesson, with its timing only when the tutor gave one (never write that no deadline or timing was stated). ` +
       "Work only described as remaining, unfinished, left over or still to complete is not homework unless the tutor set it. " +
       "Preserve question ranges, time limits and optional work, including any later change to the assignment. " +
       "A timed attempt is not a requirement to finish every question. " +

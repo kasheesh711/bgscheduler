@@ -40,11 +40,35 @@ export function tidyFeedbackText(value: string): string {
   return value.replace(/\r\n?/gu, "\n").replace(/[ \t]+\n/gu, "\n").replace(/\n{3,}/gu, "\n\n").trim();
 }
 
-/** Model placeholders → the student's name, with whitespace tidied for Wise. */
+/**
+ * A sentence that comments on what the lesson record does not say ("No deadline was stated.", "The page numbers were
+ * not specified.", "The summary does not show …") instead of on the lesson. No tutor writes that (owner, 12 Oct 2026:
+ * it reads as someone auditing the transcript). Deliberately narrow: "it was unclear whether …" can be a real
+ * judgement about the student and is kept.
+ */
+const RECORD_COMMENTARY = new RegExp([
+  String.raw`\bno (?:specific |particular |clear |exact |set |firm )?(?:deadline|due date|date|time ?frame|timeline)s? (?:was|were|has been|had been) (?:stated|given|set|mentioned|specified|agreed|confirmed)\b`,
+  String.raw`\b(?:was|were) not (?:stated|mentioned|specified)\b`,
+  String.raw`\b(?:the )?(?:transcript|summary|recording|captions?) (?:does not|doesn't|did not|didn't) (?:show|say|state|mention|specify|indicate)\b`,
+].join("|"), "iu");
+
+/**
+ * Drops every sentence matching `RECORD_COMMENTARY`, keeping the rest of each line as it was; a list line left with
+ * only its number goes too. Deleting a sentence never adds a fact, so no check is needed on what remains.
+ */
+export function dropRecordCommentary(text: string): string {
+  return text.split("\n").map((line) => {
+    if (!RECORD_COMMENTARY.test(line)) return line;
+    const kept = line.split(/(?<=[.!?])\s+/u).filter((sentence) => !RECORD_COMMENTARY.test(sentence)).join(" ");
+    return /^\s*(?:\d+[.)]|[-•*])?\s*$/u.test(kept) ? null : kept;
+  }).filter((line): line is string => line !== null).join("\n");
+}
+
+/** Model placeholders → the student's name, record commentary dropped, whitespace tidied for Wise. */
 export function finalizeFields(output: ModelOutput, studentDisplayName: string): FeedbackFieldAnswers {
   const fields = {} as FeedbackFieldAnswers;
   for (const field of POST_CLASS_FEEDBACK_FIELDS) {
-    fields[field] = tidyFeedbackText(restoreStudentName(output[field], studentDisplayName));
+    fields[field] = tidyFeedbackText(dropRecordCommentary(restoreStudentName(output[field], studentDisplayName)));
   }
   return fields;
 }

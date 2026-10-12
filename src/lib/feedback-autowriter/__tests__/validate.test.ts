@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { finalizeFields, parseModelOutput, validateFeedbackDraft, type ModelOutput } from "../validate";
+import { dropRecordCommentary, finalizeFields, parseModelOutput, validateFeedbackDraft, type ModelOutput } from "../validate";
 import { GOOD_FIELDS, STUDENT_NAME } from "./fixtures";
 
 const tutorNames = ["Kevin Hsieh", "Kev"];
@@ -107,3 +107,36 @@ describe("validateFeedbackDraft", () => {
     if (!result.ok) expect(result.reasons).toContain("ai_suspect:similar_prior_feedback");
   });
 });
+
+describe("dropRecordCommentary (owner, 12 Oct: no tutor writes \"No deadline was stated.\")", () => {
+  it("drops the live sentences and keeps the rest of the field as it was", () => {
+    expect(dropRecordCommentary("I asked Poom to complete the question sheet sent by email for homework. No deadline was stated."))
+      .toBe("I asked Poom to complete the question sheet sent by email for homework.");
+    expect(dropRecordCommentary("Try ten revision questions. The page numbers were not specified. Send me a photo of your notes."))
+      .toBe("Try ten revision questions. Send me a photo of your notes.");
+    expect(dropRecordCommentary("We reviewed vectors. The summary does not show whether a test was set."))
+      .toBe("We reviewed vectors.");
+  });
+
+  it("drops a list line left with only its number, and leaves other lines untouched", () => {
+    expect(dropRecordCommentary("1. Worksheet 4\n2. No specific deadline was given.\n3. Past paper Q5")).toBe("1. Worksheet 4\n3. Past paper Q5");
+  });
+
+  it("keeps judgements and ordinary sentences that merely look similar", () => {
+    for (const text of [
+      "It was unclear whether Pim had revised the formulas, so we went through them again.",
+      "The deadline is Friday.",
+      "We set a date for the mock test.",
+      "Pim noticed that no electrons were lost.",
+    ]) expect(dropRecordCommentary(text)).toBe(text);
+  });
+
+  it("is applied by finalizeFields to every field before posting", () => {
+    const fields = finalizeFields({
+      ...goodOutput,
+      homework: "Complete page 12. No deadline was stated.",
+    }, STUDENT_NAME);
+    expect(fields.homework).toBe("Complete page 12.");
+  });
+});
+
