@@ -77,6 +77,8 @@ export function buildOffboardingDashboard(input: {
   }));
   const inbox = rows.filter((row) => !row.score.exclusion && (row.score.band !== "active" || row.termination !== undefined))
     .sort((a, b) => b.score.likelihood - a.score.likelihood || byName(a, b));
+  const active = rows.filter((row) => !row.score.exclusion && row.score.band === "active" && row.termination === undefined)
+    .sort(byName);
   const veryLikely = inbox.filter((row) => row.score.band === "very_likely_gone");
   const names = new Map(input.signals.people.map((person) => [person.canonicalKey, person.displayName]));
   return {
@@ -86,7 +88,8 @@ export function buildOffboardingDashboard(input: {
     freshness,
     curve,
     inbox,
-    activeCount: rows.filter((row) => !row.score.exclusion && row.score.band === "active" && row.termination === undefined).length,
+    active,
+    activeCount: active.length,
     excluded: rows.filter((row) => row.score.exclusion && row.score.exclusion.code !== "wise_admin").sort(byName),
     staff: rows.filter((row) => row.score.exclusion?.code === "wise_admin").sort(byName),
     decisions: input.decisions.map((decision) => ({ ...decision, displayName: names.get(decision.canonicalKey) ?? decision.canonicalKey })),

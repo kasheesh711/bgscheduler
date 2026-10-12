@@ -244,7 +244,7 @@ describe("currentTutorsCsv", () => {
       needsEmail: [{ name: "Hal", candidates: [] }], excludedConfirmed: [{ name: "Eve" }], unmatchedSheetRows: 0,
     });
     expect(csv).toBe(
-      '﻿"name","email","reason"\r\n"Ana ""A"" Lee","ana@example.com","upcoming"\r\n"\'=SUM(1)","sum@example.com","recent"',
+      '\uFEFF"name","email","reason"\r\n"Ana ""A"" Lee","ana@example.com","upcoming"\r\n"\'=SUM(1)","sum@example.com","recent"',
     );
   });
 });
@@ -393,7 +393,7 @@ export function buildCurrentTutorList(input: {
 /** Recipients only, as UTF-8 with a BOM; formula-leading text is defused by the workforce export's `cell`. */
 export function currentTutorsCsv(list: CurrentTutorList): string {
   const rows = [["name", "email", "reason"], ...list.recipients.map((r) => [r.name, r.email, r.reason])];
-  return `﻿${rows.map((values) => values.map(cell).join(",")).join("\r\n")}`;
+  return `\uFEFF${rows.map((values) => values.map(cell).join(",")).join("\r\n")}`;
 }
 ```
 
@@ -606,7 +606,7 @@ describe("GET /api/tutor-offboarding/current-tutors", () => {
     expect(response.headers.get("Content-Disposition")).toBe('attachment; filename="current-tutors-2026-10-12.csv"');
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     expect(await bytes(response)).toBe(
-      '﻿"name","email","reason"\r\n"Ana ""A"" Lee","ana@example.com","upcoming"\r\n"\'=SUM(1)","sum@example.com","recent"',
+      '\uFEFF"name","email","reason"\r\n"Ana ""A"" Lee","ana@example.com","upcoming"\r\n"\'=SUM(1)","sum@example.com","recent"',
     );
   });
 

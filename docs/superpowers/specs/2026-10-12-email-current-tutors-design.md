@@ -39,7 +39,8 @@ users whose `allowedPages` include the page. No removal grant is needed. Errors 
 `tutorOffboardingErrorResponse`. Every response sends `Cache-Control: private, no-store`. Any parameter other than
 `format=csv` returns 400.
 
-**Source.** `loadTutorOffboardingDashboard(viewer)` (the people in `inbox`, `excluded` and `staff`) plus one read of
+**Source.** `loadTutorOffboardingDashboard(viewer)` (the people in `inbox`, `active`, `excluded` and `staff`; `active`
+is a new dashboard list of the rows that were previously only counted in `activeCount`) plus one read of
 `tutor_contacts` (`canonicalKey`, `primaryEmail`, `onsiteEmail`, `onlineEmail`). No Wise or Google Sheets call.
 When the dashboard is unavailable, the endpoint returns `{ available: false, reason }` with HTTP 200, as the
 dashboard route does.
@@ -48,13 +49,15 @@ dashboard route does.
 `src/lib/tutor-offboarding/current-tutors.ts`:
 
 1. Each person (by `canonicalKey`) is considered once.
-2. A person with `termination` evidence (a matched strike-through sheet row) goes to `excludedConfirmed`.
-3. Otherwise, the person is current when `signals.upcomingSessions > 0` (reason `upcoming`) or when
+2. The person is current when `signals.upcomingSessions > 0` (reason `upcoming`) or when
    `signals.lastTaughtAt` is at or after `now − 30 × 24 h` (reason `recent`). `upcoming` takes precedence.
    Everyone else is left out silently; they are not teaching.
+3. A current person with `termination` evidence (a matched strike-through sheet row) goes to `excludedConfirmed`
+   instead of `recipients`. Crossed-out people who are not teaching are not listed.
 4. The email comes from the existing `resolvePostClassTutorRecipient`: first the `primaryEmail` override, then a
-   single distinct Wise email. Where the contact row is absent or its `onsiteEmail`/`onlineEmail` is empty, the
-   first onsite or online Wise account email from the dashboard stands in. A `conflict` (two different Wise emails) or `missing`
+   single distinct Wise email. Where the contact row is absent or its `onsiteEmail`/`onlineEmail` is empty, every
+   onsite or online Wise account email from the dashboard stands in; two different addresses within one variant are
+   also a conflict. A `conflict` (two different Wise emails) or `missing`
    result is never guessed. The person goes to `needsEmail` together with every valid candidate address.
 5. Recipients are deduplicated by lowercased email (the first person wins) and sorted by name.
 

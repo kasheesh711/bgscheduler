@@ -38,17 +38,19 @@ sender must be signed in to BGScheduler with access to Tutor Offboarding.
 JSON fields:
 - `recipients`: `name`, `email`, `reason` (`upcoming` = has a future class; `recent` = taught in the last 30 days).
 - `needsEmail`: people teaching now whose address is unknown or ambiguous, with `candidates`.
-- `excludedConfirmed`: crossed out in the tutor sheet, left out on purpose.
+- `excludedConfirmed`: people still teaching who are crossed out in the tutor sheet, left out on purpose.
 - `stale`, `unmatchedSheetRows`, `snapshotCreatedAt`.
 
 `{ "available": false, "reason": … }` means BGScheduler has no list right now. Stop and tell the sender the reason.
+If the JSON has an `error` field instead, show it to the sender and stop. `Unauthorized` means they need to sign
+in again; `Forbidden` means their account does not have Tutor Offboarding access, which Kevin can grant.
 
 ## 2. Confirm the recipients
 
 Show the sender, in this order:
 1. "N tutors will be BCC'd", with their names in a compact list.
 2. Each `needsEmail` person with the candidate addresses. The sender picks one, types one, or skips the person.
-3. The `excludedConfirmed` names: "crossed out in the tutor sheet, not included".
+3. The `excludedConfirmed` names: "still teaching but crossed out in the tutor sheet, not included".
 4. Warnings:
    - `stale: true`: "BGScheduler's data is older than usual (snapshot at <snapshotCreatedAt>)."
    - `unmatchedSheetRows > 0`: "N crossed-out rows in the tutor sheet could not be matched to a tutor. Check

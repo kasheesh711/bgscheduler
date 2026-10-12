@@ -76,7 +76,7 @@ describe("GET /api/tutor-offboarding/current-tutors", () => {
     expect(response.headers.get("Content-Disposition")).toBe('attachment; filename="current-tutors-2026-10-12.csv"');
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     expect(await bytes(response)).toBe(
-      '﻿"name","email","reason"\r\n"Ana ""A"" Lee","ana@example.com","upcoming"\r\n"\'=SUM(1)","sum@example.com","recent"',
+      '\uFEFF"name","email","reason"\r\n"Ana ""A"" Lee","ana@example.com","upcoming"\r\n"\'=SUM(1)","sum@example.com","recent"',
     );
   });
 

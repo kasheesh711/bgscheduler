@@ -4,6 +4,7 @@ vi.mock("server-only", () => ({}));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
 
 import { buildCurrentTutorList, currentTutorsCsv, type TutorContactEmails } from "../current-tutors";
+import { buildOffboardingDashboard } from "../data";
 import type { OffboardingAccount, OffboardingPersonRow, PersonSignals } from "../types";
 
 // Made-up people and @example.com addresses only: never real tutors.
@@ -38,7 +39,7 @@ type Dashboard = Parameters<typeof buildCurrentTutorList>[0]["dashboard"];
 function build(dashboard: Partial<Dashboard>, contacts: TutorContactEmails[] = []) {
   return buildCurrentTutorList({
     dashboard: {
-      inbox: [], excluded: [], staff: [], snapshotCreatedAt: "2026-10-12T04:30:00.000Z",
+      inbox: [], active: [], excluded: [], staff: [], snapshotCreatedAt: "2026-10-12T04:30:00.000Z",
       freshness: { ok: true, feeds: [] }, ...dashboard,
     },
     contacts,
@@ -54,7 +55,7 @@ describe("buildCurrentTutorList", () => {
   it("keeps people with an upcoming class or a class in the last 30 days", () => {
     const list = build({
       excluded: [row("Ana", { upcomingSessions: 2 })],
-      inbox: [
+      active: [
         row("Ben", { lastTaughtAt: ago(30 * DAY) }),
         row("Cai", { lastTaughtAt: ago(30 * DAY + 1) }),
         row("Dee"),
@@ -68,6 +69,19 @@ describe("buildCurrentTutorList", () => {
     expect(list.excludedConfirmed).toEqual([]);
   });
 
+  it("includes someone who taught recently with nothing booked, whom the dashboard scores active", () => {
+    const at = NOW.toISOString();
+    const fern = row("Fern", { lastTaughtAt: ago(3 * DAY), accounts: [account("Fern", { joinedOn: "2026-01-20T00:00:00.000Z" })] }).signals;
+    const dashboard = buildOffboardingDashboard({
+      signals: { snapshotId: "snap", snapshotCreatedAt: at, generatedAt: at, people: [fern], taughtDates: { Fern: [ago(3 * DAY).slice(0, 10)] } },
+      feeds: { tutorSnapshot: at, progressTests: at, postClass: at, wiseActivity: at, leaveRequests: at },
+      decisions: [], grants: null, viewer: { email: "admin@example.com", isOwner: false, canRemove: false }, now: NOW,
+    });
+    expect(dashboard.activeCount).toBe(1);
+    expect(buildCurrentTutorList({ dashboard, contacts: [], now: NOW }).recipients)
+      .toEqual([{ name: "Fern", email: "fern@example.com", reason: "recent" }]);
+  });
+
   it("prefers the upcoming reason when both apply", () => {
     const list = build({ excluded: [row("Ana", { upcomingSessions: 1, lastTaughtAt: ago(DAY) })] });
     expect(list.recipients).toEqual([{ name: "Ana", email: "ana@example.com", reason: "upcoming" }]);
@@ -75,8 +89,12 @@ describe("buildCurrentTutorList", () => {
 
   it("leaves out a confirmed departure even while they still teach", () => {
     const termination = { sourceRow: 4, sourceName: "Eve", checkedAt: ago(DAY), sourceUrl: "https://example.com/sheet", match: "email" as const };
-    const list = build({ inbox: [row("Eve", { upcomingSessions: 3 }, { termination })] });
+    const list = build({ inbox: [
+      row("Eve", { upcomingSessions: 3 }, { termination }),
+      row("Old", { lastTaughtAt: ago(200 * DAY) }, { termination: { ...termination, sourceName: "Old" } }),
+    ] });
     expect(list.recipients).toEqual([]);
+    // Only crossed-out people who would otherwise be on the list are worth showing the sender.
     expect(list.excludedConfirmed).toEqual([{ name: "Eve" }]);
   });
 
@@ -118,14 +136,15 @@ describe("buildCurrentTutorList", () => {
     expect(list.recipients).toEqual([{ name: "Jon", email: "jon@example.com", reason: "upcoming" }]);
   });
 
-  it("uses the first onsite account when a person has two onsite emails", () => {
+  it("never guesses between two onsite accounts with different emails", () => {
     const list = build({
       excluded: [row("Kai", {
         upcomingSessions: 1,
         accounts: [account("Kai", { email: "kai.first@example.com" }), account("Kai-2", { email: "kai.second@example.com" })],
       })],
     });
-    expect(list.recipients).toEqual([{ name: "Kai", email: "kai.first@example.com", reason: "upcoming" }]);
+    expect(list.recipients).toEqual([]);
+    expect(list.needsEmail).toEqual([{ name: "Kai", candidates: ["kai.first@example.com", "kai.second@example.com"] }]);
   });
 
   it("keeps one recipient per address and sorts by name", () => {
@@ -179,7 +198,7 @@ describe("currentTutorsCsv", () => {
       needsEmail: [{ name: "Hal", candidates: [] }], excludedConfirmed: [{ name: "Eve" }], unmatchedSheetRows: 0,
     });
     expect(csv).toBe(
-      '﻿"name","email","reason"\r\n"Ana ""A"" Lee","ana@example.com","upcoming"\r\n"\'=SUM(1)","sum@example.com","recent"',
+      '\uFEFF"name","email","reason"\r\n"Ana ""A"" Lee","ana@example.com","upcoming"\r\n"\'=SUM(1)","sum@example.com","recent"',
     );
   });
 });

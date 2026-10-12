@@ -39,7 +39,7 @@ export type CurrentTutorListResponse =
 
 type DashboardInput = Pick<
   OffboardingDashboardData,
-  "inbox" | "excluded" | "staff" | "freshness" | "snapshotCreatedAt" | "terminationSource"
+  "inbox" | "active" | "excluded" | "staff" | "freshness" | "snapshotCreatedAt" | "terminationSource"
 >;
 
 const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
@@ -51,11 +51,11 @@ function validEmail(value: string | null | undefined): string | null {
 
 /**
  * The tutors teaching now:
- * 1. Each person (canonicalKey) once, across the review list, exclusions and staff accounts.
- * 2. A matched strike-through sheet row (OFF-15) leaves the person out, even while they still teach.
- * 3. Current = an upcoming class, or a taught class in the last RECENT_TEACHING_DAYS ("upcoming" wins).
- * 4. Email = the post-class rule: the primary override, else one distinct Wise email (contact row first, then the
- *    first onsite/online account). A conflict or a gap goes to needsEmail, never guessed.
+ * 1. Each person (canonicalKey) once, across every dashboard list: review, active, exclusions and staff accounts.
+ * 2. Current = an upcoming class, or a taught class in the last RECENT_TEACHING_DAYS ("upcoming" wins).
+ * 3. A matched strike-through sheet row (OFF-15) leaves a current person out, listed in excludedConfirmed.
+ * 4. Email = the post-class rule: the primary override, else one distinct Wise email (the contact row's, else every
+ *    account of that variant). Two different addresses, or none, go to needsEmail, never guessed.
  * 5. One recipient per address (the first person wins), sorted by name.
  */
 export function buildCurrentTutorList(input: {
@@ -72,27 +72,35 @@ export function buildCurrentTutorList(input: {
   const needsEmail: CurrentTutorList["needsEmail"] = [];
   const excludedConfirmed: CurrentTutorList["excludedConfirmed"] = [];
 
-  for (const row of [...dashboard.inbox, ...dashboard.excluded, ...dashboard.staff]) {
+  for (const row of [...dashboard.inbox, ...dashboard.active, ...dashboard.excluded, ...dashboard.staff]) {
     const { canonicalKey, displayName: name, accounts, upcomingSessions, lastTaughtAt } = row.signals;
     if (seenPeople.has(canonicalKey)) continue;
     seenPeople.add(canonicalKey);
-    if (row.termination) {
-      excludedConfirmed.push({ name });
-      continue;
-    }
     const reason = upcomingSessions > 0 ? "upcoming"
       : lastTaughtAt !== null && Date.parse(lastTaughtAt) >= recentSince ? "recent"
         : null;
     if (!reason) continue;
+    if (row.termination) {
+      excludedConfirmed.push({ name });
+      continue;
+    }
 
     const contact = contacts.get(canonicalKey);
-    const onsiteEmail = validEmail(contact?.onsiteEmail)
-      ?? validEmail(accounts.find((account) => !account.isOnlineVariant && validEmail(account.email))?.email);
-    const onlineEmail = validEmail(contact?.onlineEmail)
-      ?? validEmail(accounts.find((account) => account.isOnlineVariant && validEmail(account.email))?.email);
-    const { email } = resolvePostClassTutorRecipient({ primaryEmail: contact?.primaryEmail, onsiteEmail, onlineEmail });
+    const variantEmails = (online: boolean, contactEmail: string | null | undefined): string[] => {
+      const fromContact = validEmail(contactEmail);
+      if (fromContact) return [fromContact];
+      return [...new Set(accounts.filter((account) => account.isOnlineVariant === online)
+        .map((account) => validEmail(account.email)).filter((value): value is string => value !== null))];
+    };
+    const onsite = variantEmails(false, contact?.onsiteEmail);
+    const online = variantEmails(true, contact?.onlineEmail);
+    const resolved = resolvePostClassTutorRecipient({
+      primaryEmail: contact?.primaryEmail, onsiteEmail: onsite[0] ?? null, onlineEmail: online[0] ?? null,
+    });
+    // Two onsite (or two online) accounts with different addresses are a conflict too, unless a primary overrides.
+    const email = resolved.source === "primary" || (onsite.length <= 1 && online.length <= 1) ? resolved.email : null;
     if (!email) {
-      const candidates = [onsiteEmail, onlineEmail, ...accounts.map((account) => validEmail(account.email))]
+      const candidates = [...onsite, ...online, ...accounts.map((account) => validEmail(account.email))]
         .filter((value): value is string => value !== null);
       needsEmail.push({ name, candidates: [...new Set(candidates)] });
       continue;
@@ -116,5 +124,5 @@ export function buildCurrentTutorList(input: {
 /** Recipients only, as UTF-8 with a BOM; formula-leading text is defused by the workforce export's `cell`. */
 export function currentTutorsCsv(list: CurrentTutorList): string {
   const rows = [["name", "email", "reason"], ...list.recipients.map((r) => [r.name, r.email, r.reason])];
-  return `﻿${rows.map((values) => values.map(cell).join(",")).join("\r\n")}`;
+  return `\uFEFF${rows.map((values) => values.map(cell).join(",")).join("\r\n")}`;
 }
