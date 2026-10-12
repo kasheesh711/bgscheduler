@@ -695,9 +695,9 @@ export function buildEvidenceBundle(input: { target: NightlyTarget; night: strin
     wiseSummary = raw.iseb.lessonRecord;
   }
   if (!transcript && raw.transcript && detail) {
-    // Production rendered with Zoom's cues only when it aligned them (zoom_alignment); otherwise by talk share.
-    const cues = raw.zoomVtt && (raw.transcript.source === "retranscribed" || raw.rowMeta.speakerMethod === "zoom_alignment")
-      ? parseZoomVtt(raw.zoomVtt) : [];
+    // Production rendered with Zoom's cues only when it used them (zoom_alignment, zoom_timing); otherwise by talk share.
+    const usedZoom = raw.rowMeta.speakerMethod === "zoom_alignment" || raw.rowMeta.speakerMethod === "zoom_timing";
+    const cues = raw.zoomVtt && (raw.transcript.source === "retranscribed" || usedZoom) ? parseZoomVtt(raw.zoomVtt) : [];
     const rebuilt = buildTranscriptEvidence({
       transcript: raw.transcript,
       audioDurationMs: raw.transcript.audioDurationMs,
@@ -705,6 +705,9 @@ export function buildEvidenceBundle(input: { target: NightlyTarget; night: strin
       zoomCues: cues,
       teacherName: detailTeacherName(detail),
       alsoTeacher: tutorSelfNames(detail),
+      // Zoom timing needs the student's names to tell their cues from anyone else's.
+      // The guest name production stored too: Wise's attendance may read differently by now.
+      studentNames: student ? unique([student.name, student.joinedAsGuest, raw.rowMeta.joinedAsGuest]) : undefined,
     });
     transcript = {
       text: rebuilt.rendered,
