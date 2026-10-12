@@ -1,8 +1,10 @@
 import "server-only";
 
 import { cacheLife, cacheTag } from "next/cache";
-import { getDb } from "@/lib/db";
+import { getDb, type Database } from "@/lib/db";
+import * as schema from "@/lib/db/schema";
 import { sqlStateOf } from "@/lib/db/sql-state";
+import { buildCurrentTutorList, type CurrentTutorListResponse } from "./current-tutors";
 import { buildOffboardingDashboard } from "./data";
 import { listDecisions } from "./decisions";
 import { isMissingSchemaError } from "./errors";
@@ -54,4 +56,22 @@ export async function findPersonRow(viewer: TutorOffboardingViewer, canonicalKey
   const dashboard = await loadTutorOffboardingDashboard({ ...viewer, isOwner: false });
   if (!dashboard.available) return null;
   return [...dashboard.inbox, ...dashboard.excluded, ...dashboard.staff].find((row) => row.signals.canonicalKey === canonicalKey) ?? null;
+}
+
+/** Tutors teaching now (an upcoming class or a class in the last 30 days), for the email-current-tutors skill. Read-only. */
+export async function loadCurrentTutorList(
+  viewer: TutorOffboardingViewer,
+  now: Date = new Date(),
+  db: Database = getDb(),
+): Promise<CurrentTutorListResponse> {
+  // The owner-only grant list is not needed here.
+  const dashboard = await loadTutorOffboardingDashboard({ ...viewer, isOwner: false });
+  if (!dashboard.available) return { available: false, reason: dashboard.reason };
+  const contacts = await db.select({
+    canonicalKey: schema.tutorContacts.canonicalKey,
+    primaryEmail: schema.tutorContacts.primaryEmail,
+    onsiteEmail: schema.tutorContacts.onsiteEmail,
+    onlineEmail: schema.tutorContacts.onlineEmail,
+  }).from(schema.tutorContacts);
+  return { available: true, ...buildCurrentTutorList({ dashboard, contacts, now }) };
 }

@@ -12,7 +12,7 @@ import { loadFeedTimestamps, loadOffboardingSignals } from "../signals";
 import { listDecisions } from "../decisions";
 import { listGrants } from "../grants";
 import { loadTerminationSnapshot } from "../termination-sync";
-import { loadTutorOffboardingDashboard } from "../service";
+import { loadCurrentTutorList, loadTutorOffboardingDashboard } from "../service";
 import type { OffboardingSignals } from "../types";
 
 const viewer = { email: "admin@example.com", isOwner: false, canRemove: false };
@@ -83,5 +83,40 @@ describe("loadTutorOffboardingDashboard", () => {
   it("returns no_snapshot for an empty active roster snapshot", async () => {
     vi.mocked(loadOffboardingSignals).mockResolvedValue(null);
     expect(await loadTutorOffboardingDashboard(viewer)).toEqual({ available: false, reason: "no_snapshot", viewer });
+  });
+});
+
+describe("loadCurrentTutorList", () => {
+  it("passes unavailability through without reading contacts", async () => {
+    vi.mocked(loadFeedTimestamps).mockResolvedValue({ tutorSnapshot: null, progressTests: NOW, postClass: NOW, wiseActivity: NOW, leaveRequests: NOW });
+    const select = vi.fn();
+    expect(await loadCurrentTutorList(viewer, new Date(NOW), { select } as never)).toEqual({ available: false, reason: "no_snapshot" });
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("builds the list from the dashboard rows and tutor contacts", async () => {
+    vi.mocked(loadOffboardingSignals).mockResolvedValue({
+      ...signals(),
+      people: [{
+        canonicalKey: "Ana", displayName: "Ana",
+        accounts: [{
+          wiseTeacherId: "t-ana", wiseUserId: "u-ana", displayName: "Ana", isOnlineVariant: false, email: "ana@example.com",
+          status: "active", relation: "TEACHER", joinedOn: "2026-01-20T00:00:00.000Z", courseCount: 1, activated: true,
+          availabilityKnown: true, workingHourWindows: 2,
+        }],
+        lastTaughtAt: "2026-09-29T05:00:00.000Z",
+        lastTaughtBySource: { ledger: "2026-09-29T05:00:00.000Z", pastBlocks: null, postClass: null },
+        upcomingSessions: 2, nextSessionAt: "2026-10-03T05:00:00.000Z", upcomingLeaveUntil: null,
+        lastTeacherActionAt: null, lastAdminActionAt: null, fullTime: false,
+      }],
+    });
+    const from = vi.fn().mockResolvedValue([{ canonicalKey: "Ana", primaryEmail: "ana.primary@example.com", onsiteEmail: null, onlineEmail: null }]);
+    const result = await loadCurrentTutorList(viewer, new Date(NOW), { select: vi.fn(() => ({ from })) } as never);
+    expect(result).toMatchObject({
+      available: true,
+      recipients: [{ name: "Ana", email: "ana.primary@example.com", reason: "upcoming" }],
+      needsEmail: [],
+      excludedConfirmed: [],
+    });
   });
 });
