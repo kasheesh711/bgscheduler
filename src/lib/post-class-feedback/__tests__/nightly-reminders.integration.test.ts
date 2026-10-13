@@ -1,7 +1,7 @@
 import { randomUUID, createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { startTestDb, stopTestDb, truncateAll } from "@/tests/integration/db-helper";
 import { seedPayoutAssessment } from "@/tests/integration/payout-fixtures";
 import type { Database } from "@/lib/db";
@@ -9,6 +9,7 @@ import * as schema from "@/lib/db/schema";
 import { runNightlyReminders, resolveNightlyUnknown } from "../nightly-reminders";
 import { loadNightlyReminderHealth } from "../nightly-reminder-health";
 import { nightlyWindow } from "../nightly-reminder-model";
+import type { NightlyInventoryItem } from "../nightly-reminder-source";
 import { updatePostClassSettings } from "../settings";
 import { encryptToken } from "@/lib/sales-dashboard/google-oauth";
 import { GmailRejection, GMAIL_SEND_SCOPE, FEEDBACK_MAILBOX } from "../gmail";
@@ -42,7 +43,7 @@ async function seed(name = "Buzz", hasEmail = true, wiseId = randomUUID()) {
 function dependencies(at = now) {
   const primary = { sendEmail: vi.fn().mockResolvedValue({ id: "accepted-primary" }) };
   const backup = { sendEmail: vi.fn().mockResolvedValue({ id: "accepted-backup" }) };
-  return { db: db(), now: at, senders: { primary, backup }, refresh: vi.fn().mockResolvedValue(undefined),
+  return { db: db(), now: at, senders: { primary, backup }, refresh: vi.fn<(items: NightlyInventoryItem[], now: Date) => Promise<void>>().mockResolvedValue(undefined),
     discover: vi.fn(async (date: string) => ({ items: [], pages: 1, checkedAt: at,
       startDate: nightlyWindow(date).startDate, endDate: nightlyWindow(date).endDate })) };
 }
@@ -145,6 +146,41 @@ describe("durable nightly reminders", () => {
     await runNightlyReminders(options);
     const mail = await handle.db.select().from(schema.postClassNotificationDeliveries);
     expect(mail.find((m) => m.canonicalTutorKey === "Buzz")?.frozenContent?.sessionIds).toHaveLength(2);
+  });
+  it("refreshes more than 400 stale classes and sends the complete group in one pass", async () => {
+    const sessions = [];
+    for (let i = 0; i < 501; i++) sessions.push(await seed());
+    await handle.db.update(schema.postClassSessions).set({ lastObservedAt: new Date("2026-09-28") });
+    const options = dependencies();
+    options.refresh.mockImplementation(async (items, refreshedAt) => {
+      await handle.db.update(schema.postClassSessions).set({ lastObservedAt: refreshedAt })
+        .where(inArray(schema.postClassSessions.wiseSessionId, items.map((item) => item.wiseSessionId)));
+    });
+    const result = await runNightlyReminders(options);
+    expect(result.ok).toBe(true);
+    expect(options.refresh.mock.calls.map(([items]) => items.length)).toEqual([...Array(10).fill(50), 1]);
+    expect(new Set(options.refresh.mock.calls.flatMap(([items]) => items.map((item) => item.wiseSessionId))).size).toBe(501);
+    expect(options.senders.primary.sendEmail).toHaveBeenCalledOnce();
+    const [delivery] = await handle.db.select().from(schema.postClassNotificationDeliveries);
+    expect(delivery.frozenContent!.sessionIds.sort()).toEqual(sessions.map((session) => session.id).sort());
+    expect((await handle.db.select().from(schema.postClassReminderLedger)).every((row) => row.status === "sent")).toBe(true);
+  });
+  it("stops refreshing and sending when the eight-minute work budget is used", async () => {
+    for (let i = 0; i < 51; i++) await seed();
+    await handle.db.update(schema.postClassSessions).set({ lastObservedAt: new Date("2026-09-28") });
+    let current = now;
+    const options = { ...dependencies(), clock: () => current };
+    options.refresh.mockImplementation(async (items) => {
+      await handle.db.update(schema.postClassSessions).set({ lastObservedAt: now })
+        .where(inArray(schema.postClassSessions.wiseSessionId, items.map((item) => item.wiseSessionId)));
+      current = new Date(now.getTime() + 8 * 60_000);
+    });
+    expect((await runNightlyReminders(options)).ok).toBe(false);
+    expect(options.refresh).toHaveBeenCalledOnce();
+    expect(options.refresh.mock.calls[0][0]).toHaveLength(50);
+    expect(options.senders.primary.sendEmail).not.toHaveBeenCalled();
+    expect(options.senders.backup.sendEmail).not.toHaveBeenCalled();
+    expect((await handle.db.select().from(schema.postClassReminderLedger)).filter((row) => row.status === "blocked_source")).toHaveLength(1);
   });
   it("refreshes untouched rows before permanent blockers on the next bounded run", async () => {
     for (let i = 0; i < 51; i++) {
