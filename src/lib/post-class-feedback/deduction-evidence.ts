@@ -72,7 +72,7 @@ export function deductionEvidenceIssue(evidence: DeductionCandidateEvidence | un
 
 /** One shared current-policy/current-mapping read for approval, publishing and reconciliation. */
 export async function loadCurrentDeductionEvidence(db: Database, sessionIds: string[]) {
-  const result = new Map<string, DeductionCandidateEvidence & { fieldFailures: string[] }>();
+  const result = new Map<string, DeductionCandidateEvidence & { fieldFailures: string[]; timingReviewRequired: boolean; assessmentDeadlineAt: string | null; enforcementPaused: boolean }>();
   if (!sessionIds.length) return result;
   const [[settings], [blockingIssue], sessions] = await Promise.all([
     db.select().from(schema.postClassSettings).where(eq(schema.postClassSettings.id, "default")).limit(1),
@@ -111,6 +111,9 @@ export async function loadCurrentDeductionEvidence(db: Database, sessionIds: str
       formMappingValid: settings.formMappingValid,
       hasBlockingGlobalSourceIssue: Boolean(blockingIssue),
       fieldFailures: a?.fieldFailures ?? [],
+      enforcementPaused: settings.enforcementMode === "paused",
+      timingReviewRequired: a?.details?.timingReviewRequired === true,
+      assessmentDeadlineAt: typeof a?.details?.deadlineAt === "string" ? a.details.deadlineAt : null,
       assessment: a ? { ...a, policyApplies: a.details?.policyApplies === true } : null,
     });
   }

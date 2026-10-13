@@ -51,7 +51,7 @@ export async function loadWorkspaceAttendance(db: Database, client: WiseClient, 
   const observedAnchors=anchors.filter(a=>{const row=rows.get(key(a.wiseSessionId,a.wiseStudentId));return row?.wiseClassId===a.wiseClassId&&row.meetingStatus==='ENDED';});
   const retainedPositive=new Set(previous.filter(row=>row.creditApplied>0&&row.meetingStatus==='ENDED').map(row=>key(row.wiseSessionId,row.wiseStudentId)));
   const credits = new Map<string, Map<string, number>>();
-  const needed = [...new Set([...rows.values()].filter(row => row.sessionKind === "past" && isProgressClass(pairs.get(key(row.wiseClassId, row.wiseStudentId))?.classType) && !courseExclusion(row.wiseClassId,pairs.get(key(row.wiseClassId, row.wiseStudentId))?.classType)).map(row => key(row.wiseClassId, row.wiseStudentId)))];
+  const needed = [...new Set([...rows.values()].filter(row => row.sessionKind === "past" && row.meetingStatus === "ENDED" && isProgressClass(pairs.get(key(row.wiseClassId, row.wiseStudentId))?.classType) && !courseExclusion(row.wiseClassId,pairs.get(key(row.wiseClassId, row.wiseStudentId))?.classType)).map(row => key(row.wiseClassId, row.wiseStudentId)))];
   // Avoid creating thousands of queued promises while preserving the shared
   // client's pacing and deadline. Check credit for each student in each course.
   for (let i = 0; i < needed.length; i += 4) await Promise.all(needed.slice(i, i + 4).map(async pairKey => {
