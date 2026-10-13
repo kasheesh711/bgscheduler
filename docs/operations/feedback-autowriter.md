@@ -791,6 +791,10 @@ person's decision. Keep first-shot quality verdicts separate from the corrected 
 
 ## Mimi style guide review and activation
 
+Since 13 Oct 2026 the switch selects guide **v3** (homework as Mimi's short topic labels, performance about 500–600
+characters; owner decision 8 of the 13 Oct audit). Rollback to v1 is a code revert; the switch itself still turns every
+Mimi guide off. Watch her edit rate on the dashboard: the aim is from ~50% towards 20–25%.
+
 Keep `FEEDBACK_AUTOWRITER_MIMI_STYLE_ENABLED=false` until the owner has approved ten successful comparison drafts.
 The new read-only replay is separate from the production CLI: it issues only database SELECTs and Wise GETs, makes
 model calls, and writes local files with private permissions. It never posts feedback, changes modes or writes any

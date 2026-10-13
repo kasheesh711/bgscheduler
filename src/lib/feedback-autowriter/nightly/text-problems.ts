@@ -2,7 +2,7 @@ import type { PriorFeedbackComparison } from "@/lib/post-class-feedback/similari
 import { POST_CLASS_FEEDBACK_FIELDS, type FeedbackFieldAnswers } from "@/lib/post-class-feedback/types";
 import { ISEB_FORMAT_GUIDE, type FeedbackFormatGuide } from "../format";
 import { otherPeopleNamed, parseStudentName, redactForModel } from "../prompt";
-import { MIMI_STYLE_GUIDE, MIMI_STYLE_GUIDE_V2, type FeedbackStyleGuide } from "../style";
+import { mimiStyleGuideFor, type FeedbackStyleGuide } from "../style";
 import { validateFeedbackDraft, type ModelOutput } from "../validate";
 
 /**
@@ -96,8 +96,7 @@ function nameParts(name: string): string[] {
 export function guidesFromStamp(pipeline: Record<string, unknown> | null): { styleGuide: FeedbackStyleGuide | null; formatGuide: FeedbackFormatGuide | null } {
   const style = pipeline?.styleGuide as { id?: unknown; version?: unknown } | null | undefined;
   const format = pipeline?.formatGuide as { id?: unknown; version?: unknown } | null | undefined;
-  const styleGuide = style?.id === "mimi" && style.version === 1 ? MIMI_STYLE_GUIDE
-    : style?.id === "mimi" && style.version === 2 ? MIMI_STYLE_GUIDE_V2 : null;
+  const styleGuide = mimiStyleGuideFor(style);
   const formatGuide = format?.id === ISEB_FORMAT_GUIDE.id && format.version === ISEB_FORMAT_GUIDE.version ? ISEB_FORMAT_GUIDE : null;
   return { styleGuide, formatGuide };
 }

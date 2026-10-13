@@ -806,6 +806,13 @@ Drafts and writer call records carry guide id/version. Transcript reuse and shad
 guide; disabling or changing it invalidates guided drafts. A check before storing/posting also prevents a draft
 from crossing a guide switch. No database migration is required; stamps use existing JSON metadata.
 
+**v3 (owner decision, 13 Oct 2026).** With the switch on, Mimi's guide is v3: the same frozen examples, with two
+lines changed. Homework is her numbered topic label of one to three words ("1. Speed"), still only for homework the
+tutor clearly set, never invented. Performance is about 500–600 characters, never more than 700. Why: she edited 18 of
+her 34 posts (53%; no other tutor edited any), mostly turning a homework sentence into a 1–2-word label. Her own
+homework median is 28 characters (ours 62) and her performance 519 (ours 884). The ISEB v2 guide and every other
+tutor are unchanged. v1 drafts kept on a row are written again under v3; posts keep the stamp they were written with.
+
 See the [activation and replay procedure](../operations/feedback-autowriter.md#mimi-style-guide-review-and-activation).
 
 ## ISEB format v1, Mimi voice v2 and Atom evidence

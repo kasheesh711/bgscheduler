@@ -2872,7 +2872,7 @@ describe("Mimi style rollout (Postgres + fake Wise and models)", () => {
       const model = vi.fn(async (request: { schemaName: string }) => request.schemaName === "post_class_feedback" ? sol(JSON.stringify(fields)) : glm(FAITHFUL_VERDICT));
       expect(await processSession(deps(wise.ops, { callModel: model as never }), { wiseSessionId: SESSION_ID, trigger: "cron" })).toMatchObject({ result: "would_submit" });
       expect(wise.posts).toHaveLength(0);
-      expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ pipeline: { styleGuide: { id: "mimi", version: 1 } } });
+      expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ pipeline: { styleGuide: { id: "mimi", version: 3 } } });
     } finally { vi.unstubAllEnvs(); }
   });
   it.each([
@@ -2893,7 +2893,9 @@ describe("Mimi style rollout (Postgres + fake Wise and models)", () => {
   it("cannot reuse an old guide draft, or a guided draft after disabling the guide", async () => {
     const stamp = { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION };
     for (const [enabled, styleGuide, state] of [
-      ["true", { id: "mimi", version: 1 }, "pending"],
+      ["true", { id: "mimi", version: 3 }, "pending"],
+      // A v1 draft (before the 13 Oct homework/length rule) is written again under v3.
+      ["true", { id: "mimi", version: 1 }, "awaiting_recording"],
       ["true", { id: "mimi", version: 0 }, "awaiting_recording"],
       ["true", null, "awaiting_recording"],
       ["false", { id: "mimi", version: 1 }, "awaiting_recording"],

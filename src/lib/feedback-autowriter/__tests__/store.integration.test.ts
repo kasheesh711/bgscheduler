@@ -636,7 +636,8 @@ it("requeueing Mimi shadow drafts preserves the transcript window only for the a
   const passing = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
   const judge = { ...passing, levels: { medium: passing, high: passing } };
   for (const [enabled, styleGuide, retained] of [
-    ["true", { id: "mimi", version: 1 }, true],
+    ["true", { id: "mimi", version: 3 }, true],
+    ["true", { id: "mimi", version: 1 }, false],
     ["true", { id: "mimi", version: 0 }, false],
     ["true", null, false],
     ["false", { id: "mimi", version: 1 }, false],

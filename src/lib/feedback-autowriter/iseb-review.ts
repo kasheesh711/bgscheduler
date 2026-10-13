@@ -4,7 +4,7 @@ import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { AUTOWRITER_MODELS, openRouterApiKey } from "./config";
 import { ISEB_FORMAT_GUIDE, validateIsebFormat } from "./format";
-import { MIMI_STYLE_GUIDE, MIMI_STYLE_GUIDE_V2, styleInstructions, validateStyleFormat } from "./style";
+import { mimiStyleGuideFor, styleInstructions, validateStyleFormat } from "./style";
 import { callOpenRouter, callWithRateLimitRetries, isRateLimited } from "./openrouter";
 import { passingStoredVerdict } from "./judge";
 import { recordIncident } from "./incidents";
@@ -68,7 +68,7 @@ export async function reviewIsebPosts(
     }
     const style = pipeline.styleGuide as { id?: string; version?: number } | undefined;
     const format = pipeline.formatGuide as { id?: string; version?: number } | undefined;
-    const guide = style?.id === "mimi" ? (style.version === 2 ? MIMI_STYLE_GUIDE_V2 : MIMI_STYLE_GUIDE) : null;
+    const guide = mimiStyleGuideFor(style);
     const formatProblems = [...validateStyleFormat(fields, retained.lessonRecord + (retained.atom?.activities.length ? "\nAtom learning" : "")), ...validateAtomStatisticClaims(fields, retained.atom),
       ...(format?.id === "iseb" ? validateIsebFormat(fields) : [])];
     const { call, rateLimited } = await callWithRateLimitRetries({ call: callModel, remainingMs: () => deadlineMs - Date.now(), sleep, request: {
@@ -123,8 +123,8 @@ export async function isebMonitoringProgress(db: Database) {
   const result = await db.execute(sql`
     with guided as (
       select p.id, p.outcome, p.fields_sha256,
-        case when p.pipeline->'styleGuide' = '{"id":"mimi","version":2}'::jsonb then 'mimi_v2'
-          when p.pipeline->'styleGuide' = '{"id":"mimi","version":1}'::jsonb then 'mimi_v1'
+        -- Every Mimi guide version is its own cohort (v3, 13 Oct, must not count as another ISEB tutor).
+        case when p.pipeline->'styleGuide'->>'id' = 'mimi' then 'mimi_v' || (p.pipeline->'styleGuide'->>'version')
           else 'other_iseb' end as cohort,
         count(*) filter (where p.outcome = 'verified') over (partition by case when p.pipeline->'styleGuide'->>'id' = 'mimi'
           then 'mimi_v' || (p.pipeline->'styleGuide'->>'version') else 'other_iseb' end

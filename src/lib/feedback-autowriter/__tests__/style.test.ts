@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { buildFeedbackMessages } from "../prompt";
-import { activeStyleGuide, matchingStoredStyle, MIMI_STYLE_GUIDE, styleGuideStamp, validateStyleFormat } from "../style";
+import { activeStyleGuide, matchingStoredStyle, MIMI_STYLE_GUIDE, MIMI_STYLE_GUIDE_V2, MIMI_STYLE_GUIDE_V3, mimiStyleGuideFor, styleGuideStamp, styleInstructions, validateStyleFormat } from "../style";
 import { rosterAccountIds, rosterTutor } from "../roster";
 import { finalizeFields, validateFeedbackDraft } from "../validate";
 import examples from "../style-examples/mimi-v1.json";
@@ -18,7 +18,7 @@ describe("Mimi's frozen guide", () => {
     expect(activeStyleGuide("Mimi", { FEEDBACK_AUTOWRITER_MIMI_STYLE_ENABLED: "TRUE" })).toBeNull();
     expect(activeStyleGuide("Gift", enabled)).toBeNull();
     expect(rosterAccountIds("Mimi")).toHaveLength(2);
-    for (const id of rosterAccountIds("Mimi")) expect(activeStyleGuide(rosterTutor(id)!.canonicalKey, enabled)).toBe(MIMI_STYLE_GUIDE);
+    for (const id of rosterAccountIds("Mimi")) expect(activeStyleGuide(rosterTutor(id)!.canonicalKey, enabled)).toBe(MIMI_STYLE_GUIDE_V3);
   });
   it("freezes three anonymised examples with verification notes and hashes, without publishing source identifiers", () => {
     expect(examples.examples).toHaveLength(3);
@@ -42,6 +42,49 @@ describe("Mimi's frozen guide", () => {
     expect(guided).not.toContain("two or three concrete next steps");
     expect(guided).toContain("Historical presentation example 3");
     expect(guided).toContain("presentation only");
+  });
+});
+
+describe("Mimi guide v3 (owner decision, 13 Oct 2026): homework labels, performance near her length", () => {
+  const context = { studentFullName: STUDENT_NAME, tutorNames: ["Mimi"], classDetails: [], scheduledMinutes: 60, summary: { text: lessonRecord, meetingUUIDs: [] } };
+  it("keeps the frozen examples and gets its own stamp, so v1 drafts are written again", () => {
+    expect(MIMI_STYLE_GUIDE_V3.examples).toBe(MIMI_STYLE_GUIDE.examples);
+    expect(styleGuideStamp(MIMI_STYLE_GUIDE_V3)).toEqual({ id: "mimi", version: 3 });
+    expect(matchingStoredStyle({ id: "mimi", version: 1 }, MIMI_STYLE_GUIDE_V3)).toBe(false);
+    expect(matchingStoredStyle({ id: "mimi", version: 3 }, MIMI_STYLE_GUIDE_V3)).toBe(true);
+  });
+  it("maps every stored stamp to the guide it was written with", () => {
+    expect(mimiStyleGuideFor({ id: "mimi", version: 1 })).toBe(MIMI_STYLE_GUIDE);
+    expect(mimiStyleGuideFor({ id: "mimi", version: 2 })).toBe(MIMI_STYLE_GUIDE_V2);
+    expect(mimiStyleGuideFor({ id: "mimi", version: 3 })).toBe(MIMI_STYLE_GUIDE_V3);
+    expect(mimiStyleGuideFor({ id: "mimi", version: 4 })).toBeNull();
+    expect(mimiStyleGuideFor({ id: "other", version: 3 })).toBeNull();
+    expect(mimiStyleGuideFor(null)).toBeNull();
+  });
+  it("asks for homework as her short topic labels, never invented, and performance of about 500–600 characters", () => {
+    const v3 = styleInstructions(MIMI_STYLE_GUIDE_V3);
+    expect(v3).toContain("numbered topic label of one to three words");
+    expect(v3).toContain("not a sentence describing the task");
+    expect(v3).toContain("Empty when the tutor did not clearly assign homework");
+    expect(v3).toContain("never add homework, a topic or a date the record does not support");
+    expect(v3).toContain("about 500–600 characters in all and never more than 700");
+    // The rest of the v1 guide is unchanged.
+    const v1 = styleInstructions(MIMI_STYLE_GUIDE);
+    expect(v1).not.toContain("500–600");
+    expect(v1).toContain("homework: a short numbered list, one assigned task per line");
+    const shared = (text: string) => text.split("\n").filter((line) => !/^(performance|homework):/u.test(line));
+    expect(shared(v3)).toEqual(shared(v1).map((line) => line.replace("guide mimi v1", "guide mimi v3")));
+  });
+  it("changes only Mimi's prompt: other tutors and the ISEB v2 guide are untouched", () => {
+    const plain = buildFeedbackMessages(context)[0].content;
+    expect(plain).not.toContain("topic label of one to three words");
+    expect(plain).toContain("between 120 and 600");
+    expect(buildFeedbackMessages({ ...context, styleGuide: MIMI_STYLE_GUIDE_V3 })[0].content).toContain("topic label of one to three words");
+    expect(styleInstructions(MIMI_STYLE_GUIDE_V2)).not.toContain("topic label of one to three words");
+  });
+  it("still validates a one-line label homework, and v3 drafts against the same structure checks", () => {
+    expect(validateStyleFormat({ ...fields, homework: "1. Filtration" }, lessonRecord)).toEqual([]);
+    expect(validateStyleFormat({ ...fields, homework: "Filtration" }, lessonRecord)).toContain("style:list_structure:homework");
   });
 });
 

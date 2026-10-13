@@ -17,12 +17,27 @@ export const MIMI_STYLE_GUIDE_V2: FeedbackStyleGuide = Object.freeze({
   ...MIMI_STYLE_GUIDE, version: 2,
 });
 
-/** Disabled until the owner approves the ten-draft comparison. Both accounts resolve via the canonical key. */
+/**
+ * Owner decision, 13 Oct 2026 (v3, same frozen examples): homework as Mimi's short topic labels and performance near
+ * her own length. She edited 18 of her 34 posts, mostly turning a homework sentence into a 1–2-word label; her own
+ * homework median is 28 characters (ours 62) and her performance 519 (ours 884).
+ */
+export const MIMI_STYLE_GUIDE_V3: FeedbackStyleGuide = Object.freeze({
+  ...MIMI_STYLE_GUIDE, version: 3,
+});
+
+/** Off unless the switch is exactly "true". Both accounts resolve via the canonical key. */
 export function activeStyleGuide(
   canonicalTutorKey: string | undefined,
   env: Record<string, string | undefined> = process.env,
 ): FeedbackStyleGuide | null {
-  return canonicalTutorKey === "Mimi" && env.FEEDBACK_AUTOWRITER_MIMI_STYLE_ENABLED === "true" ? MIMI_STYLE_GUIDE : null;
+  return canonicalTutorKey === "Mimi" && env.FEEDBACK_AUTOWRITER_MIMI_STYLE_ENABLED === "true" ? MIMI_STYLE_GUIDE_V3 : null;
+}
+
+/** The guide a stored stamp names (older posts keep the guide they were written with); null when none or unknown. */
+export function mimiStyleGuideFor(stamp: { id?: unknown; version?: unknown } | null | undefined): FeedbackStyleGuide | null {
+  if (stamp?.id !== "mimi") return null;
+  return [MIMI_STYLE_GUIDE, MIMI_STYLE_GUIDE_V2, MIMI_STYLE_GUIDE_V3].find((guide) => guide.version === stamp.version) ?? null;
 }
 
 export function styleGuideStamp(guide: FeedbackStyleGuide | null): StyleGuideStamp | null {
@@ -49,9 +64,13 @@ export function styleInstructions(guide: FeedbackStyleGuide): string {
   return [
     `Writing guide ${guide.id} v${guide.version} (presentation only; the lesson record is the only evidence):`,
     "topics: concise numbered items, one item per line, numbered 1., 2., 3. in order. Use brief topic labels rather than explanations of every concept discussed. A short material label, Atom learning or Worksheets, may precede a list only when that material is named in THIS lesson record; restart numbering at 1 after a label.",
-    "performance: warm, clear, specific prose, usually one or two paragraphs (at most three). Describe strengths, difficulties and guidance only as supported by this lesson. Use I or we naturally, without generic praise or a forced closing sentence.",
+    guide.version === 3
+      ? "performance: warm, clear, specific prose in one or two short paragraphs, about 500–600 characters in all and never more than 700, like Mimi's own (about 520). Choose the few observations that matter most rather than covering every activity. Describe strengths, difficulties and guidance only as supported by this lesson. Use I or we naturally, without generic praise or a forced closing sentence."
+      : "performance: warm, clear, specific prose, usually one or two paragraphs (at most three). Describe strengths, difficulties and guidance only as supported by this lesson. Use I or we naturally, without generic praise or a forced closing sentence.",
     "improvement: a short numbered list of skills to practise, one item per line. Prefer brief skill labels of roughly 2–8 words per item, as in Mimi's examples; put fuller explanations and guidance in performance instead. One supported item is enough. Do not force two or three strategies, repeat homework or add detail merely to fill space.",
-    "homework: a short numbered list, one assigned task per line; empty when the tutor did not clearly assign homework. Never add a task or date from an example.",
+    guide.version === 3
+      ? "homework: Mimi's format is a numbered topic label of one to three words naming what the homework is on, as in her examples (\"1. Speed\", \"1. MCQ State of matter\") — not a sentence describing the task. One line per homework the tutor clearly set; a due date the tutor stated may follow the label in a few words. Empty when the tutor did not clearly assign homework. The label names the set work's own topic from this lesson record: never add homework, a topic or a date the record does not support, and never take one from an example."
+      : "homework: a short numbered list, one assigned task per line; empty when the tutor did not clearly assign homework. Never add a task or date from an example.",
     "Use plain text: no Markdown headings, emphasis, bullet symbols or section headings inside fields. A short indented hyphen sub-item is allowed only below a numbered topic or improvement item.",
     "Topics, improvement and homework can be very short; there is no per-field minimum. Performance is usually the fuller explanation. Keep the existing 300-character combined minimum, but never invent or pad facts to reach it. If the lesson evidence is sparse, write only what it supports and let validation hold the draft.",
     "The following anonymised historical examples demonstrate layout and voice ONLY. They are not this lesson: never borrow their topics, scores, materials, homework, observations or dates. Any historical claim in a draft still needs independent support in the current lesson record.",
