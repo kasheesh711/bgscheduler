@@ -11,8 +11,9 @@ import type { AuditRecord, EvidenceBundle, PrecheckFinding } from "./types";
  * Bump `AUDIT_PROMPT_VERSION` whenever the wording changes. v2 (3 Oct): states the id formats and every length limit.
  * v3 (3 Oct): each deterministic candidate is listed under its unique id (`code#n`) and reviewed by it.
  * v5 (10 Oct): use the guides recorded for the post so an approved format is not reported as an error.
+ * v6 (13 Oct): the owner's grading rules — summary-faithful claims on summary posts (7 Oct), left-out homework (5 Oct).
  */
-export const AUDIT_PROMPT_VERSION = 5;
+export const AUDIT_PROMPT_VERSION = 6;
 
 /** Longest lesson record sent to the auditor; transcripts of a 2-hour lesson stay well under it. */
 const MAX_TRANSCRIPT_CHARS = 150_000;
@@ -99,8 +100,12 @@ export function auditSystemPrompt(evidence: EvidenceKind, labels: SpeakerLabels,
       "kind \"suggestion\" with verdict \"advice_ok\" — unless presented as homework the tutor set, or they state how the student performed.",
     "2. For each claim find the evidence and quote it VERBATIM (an exact substring of the evidence, in its original language — Thai stays " +
       "Thai — with an English gloss for Thai) with its [mm:ss] or line locator. Order of trust: transcript, then Zoom captions, then class " +
-      "details and Atom evidence (system records), then the Wise summary. The summary never supports a claim the transcript contradicts; when a transcript exists, a claim " +
-      "only the summary supports is partly_supported at best.",
+      "details and Atom evidence (system records), then the Wise summary. When <posted_from> is transcript, the summary never supports a claim the " +
+      "transcript contradicts, and a claim only the summary supports is partly_supported at best.",
+    "   Owner rule (7 Oct 2026) when <posted_from> is summary: the writer was given only the Wise summary, and a post faithful to it counts as " +
+      "accurate. A claim the summary states is supported — quote the summary — even where the transcript or captions show the summary was " +
+      "wrong; say so in evidenceQuality.notes and set summaryVsTranscript to conflicts, but raise no issue for it. Claims the summary does not " +
+      "state are judged as usual, and wrong-person content is still critical, even when the summary itself attributes it to our student.",
     "   Verdicts: supported (the evidence states or clearly implies it); partly_supported (true in part — raise an issue for the rest); " +
       "unsupported (nothing in the evidence); contradicted (the evidence says otherwise); misattributed (the evidence says it about another " +
       "person: the tutor, another student, a family member, a character in the material); advice_ok.",
@@ -110,7 +115,8 @@ export function auditSystemPrompt(evidence: EvidenceKind, labels: SpeakerLabels,
       "only when nothing at all supports the text), a minimal fix, and your confidence.",
     "   Minimal fix: delete first (delete_span or clear_field). Use replace_span only when the replacement is itself supported by evidence " +
       "you quote in the issue. Never add a fact; keep the tutor's first-person voice and the student's display name.",
-    "4. Omissions: report the lesson's main topic if the feedback misses it, and homework the tutor clearly set that the feedback leaves out.",
+    "4. Omissions: report the lesson's main topic if the feedback misses it. Do not report homework the feedback leaves out: owner rule (5 Oct " +
+      "2026), not every class has homework and an empty field is acceptable — answer step 5 instead. Invented or wrong homework is still an issue (M03).",
     "5. Homework: does the feedback state homework anywhere (any field)? Did the tutor clearly set homework for after this lesson — \"yes\" " +
       "with a quote, \"no\", or \"unclear\"? Work described as remaining, unfinished or for \"next time\" was not set. The summary's \"Next " +
       "steps\" line is the summary's own suggestion, not homework.",
@@ -138,7 +144,8 @@ export function auditSystemPrompt(evidence: EvidenceKind, labels: SpeakerLabels,
     "Critical only for: wrong_person (the student given another person's work or words — M01, M02), invented_content (a concrete fact with " +
       "no basis anywhere — M04), billing_status (M13), should_not_have_posted (M14). The owner's own precedents:",
     "- P1 — critical, wrong_person: another student's unfinished exam, that student being named in the summary, was written as ours.",
-    "- P2 — major: homework claimed from a summary's mis-heard exchange about the right student (M03).",
+    "- P2 — major: homework claimed from a summary's mis-heard exchange about the right student (M03), on a post written from the " +
+      "transcript. On a post written from the summary, a summary-faithful claim is supported (owner rule, 7 Oct 2026).",
     "A real exchange that was mis-heard or overstated is major (M05, M06, M08); no basis anywhere is critical (M04). Uncertainty never " +
       "lowers severity: use confidence \"low\" to tell the reviewer where to look. Wording-only problems are cosmetic (M17).",
     "",

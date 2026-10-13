@@ -77,7 +77,9 @@ describe("parseAuditResult", () => {
     expect(out.ok).toBe(true);
     if (!out.ok) return;
     expect(out.result.verdict).toBe("accurate");
-    expect(out.result.postCheck).toEqual({ quoteMismatchIssues: [], unverifiedSupport: [], addedIssues: [], raisedIssues: [], verdictRaised: false });
+    expect(out.result.postCheck).toEqual({
+      quoteMismatchIssues: [], unverifiedSupport: [], addedIssues: [], raisedIssues: [], verdictRaised: false, droppedHomeworkOmissions: 0,
+    });
     expect(worstSeverity(out.result)).toBeNull();
   });
 
@@ -177,6 +179,46 @@ describe("parseAuditResult", () => {
     expect(out.ok && out.result.issues[0].criticalCategory).toBeNull();
   });
 
+  it("drops homework the feedback left out (owner rule, 5 Oct) and grades the rest: a major resting only on it becomes accurate", () => {
+    const homework = { what: "homework_set_not_reported" as const, detail: "Mock tests set at the end.", evidence: [], severity: "major" as const };
+    const only = parseAuditResult(baseResult({ verdict: "major", omissions: [homework] }), ctx);
+    expect(only.ok).toBe(true);
+    if (!only.ok) return;
+    expect(only.result.verdict).toBe("accurate");
+    expect(only.result.omissions).toEqual([]);
+    expect(only.result.postCheck.droppedHomeworkOmissions).toBe(1);
+
+    const withTopic = parseAuditResult(baseResult({
+      verdict: "major",
+      omissions: [homework, { what: "other", detail: "Score left out.", evidence: [], severity: "cosmetic" }],
+    }), ctx);
+    expect(withTopic.ok && withTopic.result.verdict).toBe("cosmetic");
+  });
+
+  it("never lets the homework rule hide a real issue or invented homework", () => {
+    const out = parseAuditResult(baseResult({
+      verdict: "cosmetic",
+      issues: [{
+        id: "i1", claimIds: [], field: "homework", quote: "Complete page 12 by Friday.", mode: "M03", severity: "major", criticalCategory: null,
+        rootStage: "evidence", defense: "judge_list", mechanism: "Remaining work written as homework.", evidence: [], minimalFix: null, confidence: "high",
+      }],
+      omissions: [{ what: "homework_set_not_reported", detail: "Other task set.", evidence: [], severity: "major" }],
+    }), ctx);
+    expect(out.ok && out.result.verdict).toBe("major");
+    expect(out.ok && out.result.postCheck.verdictRaised).toBe(true);
+  });
+
+  it("lowers a verdict only when a dropped homework omission was at least as severe as it", () => {
+    const cosmeticHomework = { what: "homework_set_not_reported" as const, detail: "Worksheet set.", evidence: [], severity: "cosmetic" as const };
+    // A major the model declared for some other reason stays major.
+    const kept = parseAuditResult(baseResult({ verdict: "major", omissions: [cosmeticHomework] }), ctx);
+    expect(kept.ok && kept.result.verdict).toBe("major");
+    // Insufficient evidence is never touched; the omission still goes.
+    const insufficient = parseAuditResult(baseResult({ verdict: "insufficient_evidence", omissions: [cosmeticHomework] }), { ...ctx, grade: "secondary_only" });
+    expect(insufficient.ok && insufficient.result.verdict).toBe("insufficient_evidence");
+    expect(insufficient.ok && insufficient.result.omissions).toEqual([]);
+  });
+
   it("renumbers duplicate issue ids instead of failing", () => {
     const issue = {
       id: "i1", claimIds: [], field: "homework" as const, quote: "Complete page 12 by Friday.", mode: "M03" as const, severity: "major" as const,
@@ -232,6 +274,22 @@ describe("normaliseAuditOutput (v2: the CLI schema carries no lengths or id patt
     expect(out.result.issues[0].evidence[0].quote).toHaveLength(400);
     expect(out.result.issues[0].minimalFix).toBeNull();
     expect(out.result.priorIssueReview).toBeNull();
+  });
+
+  it("drops a minimal fix with an empty span instead of rejecting the audit (13 Oct live failure)", () => {
+    const raw = baseResult({
+      verdict: "major",
+      issues: [{
+        id: "i1", claimIds: [], field: "homework", quote: "Complete page 12 by Friday.", mode: "M03", severity: "major", criticalCategory: null,
+        rootStage: "evidence", defense: "judge_list", mechanism: "Remaining work written as homework.", evidence: [],
+        minimalFix: { action: "delete_span", from: "", to: null }, confidence: "high",
+      }],
+    });
+    const out = parseAuditResult(raw, ctx);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.result.issues[0].minimalFix).toBeNull();
+    expect(out.result.verdict).toBe("major");
   });
 
   it("still rejects structural problems", () => {
