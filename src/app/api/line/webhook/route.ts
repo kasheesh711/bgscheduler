@@ -40,6 +40,8 @@ export async function POST(request: NextRequest) {
         try {
           // Loaded lazily for the same reason — keeps the pre-response cold
           // start to the ingest path only.
+          const { handleProgressGroupCommand } = await import("@/lib/line/progress-reminders");
+          if (await handleProgressGroupCommand({ db, ...command })) return;
           const { handleScheduleBotGroupCommand } = await import("@/lib/line/schedule-bot-group");
           await handleScheduleBotGroupCommand({ db, ...command });
         } catch (error) {

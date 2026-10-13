@@ -6945,3 +6945,25 @@ export const workforceCourseLifecycleEvents = pgTable("workforce_course_lifecycl
   index("workforce_lifecycle_student_subject_idx").on(t.studentId, t.subject, t.effectiveMonth),
   check("workforce_lifecycle_revision", sql`${t.revision} > 0`),
 ]);
+
+// LINE preparation reminders are separate from email and the moved Progress writer.
+export const progressLineGroups = pgTable("progress_line_groups", {
+ canonicalKey: text("canonical_key").primaryKey().references(()=>tutorContacts.canonicalKey),
+ groupId: text("group_id").notNull().unique(), groupName: text("group_name").notNull(),
+ enabled: boolean("enabled").notNull().default(false), registeredBy: text("registered_by").notNull(),
+ updatedAt: timestamp("updated_at", {withTimezone:true}).notNull().defaultNow(),
+});
+export const progressLineDeliveries = pgTable("progress_line_deliveries", {
+ id: uuid("id").primaryKey().defaultRandom(), canonicalKey: text("canonical_key").notNull().references(()=>progressLineGroups.canonicalKey),
+ seriesId: uuid("series_id").notNull(), cycle: integer("cycle").notNull(), stage: text("stage").notNull(),
+ lessonId: text("lesson_id").notNull(), scheduledAt: timestamp("scheduled_at",{withTimezone:true}).notNull(),
+ reminderDate: date("reminder_date",{mode:"string"}).notNull(), groupId: text("group_id").notNull(),
+ text: text("text").notNull(), candidate: jsonb("candidate").notNull().$type<import("../line/progress-reminders").ReminderCandidate>(),
+ retryKey: uuid("retry_key").notNull().defaultRandom(), status: text("status").notNull().default("pending"),
+ attempts: integer("attempts").notNull().default(0), firstAttemptAt: timestamp("first_attempt_at",{withTimezone:true}),
+ leaseUntil: timestamp("lease_until",{withTimezone:true}), nextAttemptAt: timestamp("next_attempt_at",{withTimezone:true}),
+ providerMessageId: text("provider_message_id"), providerReceipt: jsonb("provider_receipt"), error: text("error"),
+ sentAt: timestamp("sent_at",{withTimezone:true}), createdAt: timestamp("created_at",{withTimezone:true}).notNull().defaultNow(),
+ updatedAt: timestamp("updated_at",{withTimezone:true}).notNull().defaultNow(),
+},t=>[uniqueIndex("progress_line_delivery_occurrence_idx").on(t.seriesId,t.cycle,t.stage,t.lessonId,t.scheduledAt,t.groupId),
+ index("progress_line_delivery_work_idx").on(t.status,t.reminderDate)]);

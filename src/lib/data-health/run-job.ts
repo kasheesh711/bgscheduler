@@ -1,3 +1,4 @@
+import {sendProgressLineReminders} from "@/lib/line/progress-reminders";
 import { nightlyWorkerOutcome, runNightlyReminders } from "@/lib/post-class-feedback/nightly-reminders";
 import { isClassroomOperationsOwner, isWiseClassroomJob, pausedWiseClassroomResult, wiseClassroomAutomationEnabled } from "@/lib/classrooms/operations-policy";
 import { runClassroomPublishRecovery } from "@/lib/classrooms/publish-worker";
@@ -389,6 +390,11 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
         }
         const skipped = results.every((result) => result.skipped);
         return NextResponse.json({ ok: true, skipped, results }, { status: skipped ? 202 : 200 });
+      }
+
+      if (jobKey === "progress_line_reminders") {
+        const result=await sendProgressLineReminders();
+        return NextResponse.json(result,{status:result.failed?502:200});
       }
 
       if (jobKey === "line_credit_digest") {
