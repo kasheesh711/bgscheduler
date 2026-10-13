@@ -1006,6 +1006,69 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       .toMatchObject({ result: "awaiting_recording", detail: "no_usable_summary" });
   });
 
+  describe("low attendance (owner decision, 13 Oct 2026)", () => {
+    const absent = (extra: Record<string, unknown> = {}) => sessionDetail({
+      ...extra,
+      participants: sessionDetail().participants.map((participant) =>
+        participant.isTeacher ? participant : { ...participant, inMeetingDuration: 0, absolutePercentAttendance: 0 }),
+    });
+    const writing = () => vi.fn(async (request: { schemaName: string }) =>
+      request.schemaName === "post_class_feedback" ? sol(writerJson) : glm(FAITHFUL_VERDICT));
+
+    it("writes a 0% class whose recording clearly shows the student, re-sending Wise's own status and credits", async () => {
+      await seedRow();
+      const wise = fakeWise({ details: [absent(RECORDING)] });
+      const soniox = fakeSoniox();
+      const callModel = writing();
+      const run = () => processSession(transcriptDeps(wise.ops, soniox.client, { callModel: callModel as never }), { wiseSessionId: SESSION_ID, trigger: "cron" });
+      // The attendance hold becomes a handover to the transcript pass, due now; the summary draft is never written.
+      expect(await run()).toMatchObject({ result: "awaiting_recording", detail: "low_attendance" });
+      expect(callModel).not.toHaveBeenCalled();
+      expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+        state: "awaiting_recording", evidence: "transcript", metadata: { handover: "low_attendance", lowAttendance: "attendance_0pct" },
+      });
+      expect(await run()).toMatchObject({ result: "verified" });
+      expect(wise.posts).toHaveLength(1);
+      // Billing unchanged: exactly what Wise's own auto-submission already holds.
+      expect(wise.posts[0]).toMatchObject({ sessionStatus: "COMPLETED", creditsConsumed: 1 });
+      expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+        state: "verified", evidence: "transcript",
+        billing: { sessionStatus: "COMPLETED", creditsConsumed: 1, source: "auto_blank_reuse", expectedConsumedDelta: 0 },
+        metadata: { handover: "low_attendance", transcript: { speakerMethod: "zoom_alignment" } },
+      });
+    });
+
+    it("keeps today's attendance hold when there is no recording, without a Soniox job", async () => {
+      await seedRow();
+      const soniox = fakeSoniox();
+      expect(await processSession(transcriptDeps(fakeWise({ details: [absent()] }).ops, soniox.client), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+        .toMatchObject({ result: "held", detail: "attendance_0pct" });
+      expect(soniox.created).toEqual([]);
+      expect((await readSessionRow(db, SESSION_ID))?.metadata).not.toHaveProperty("handover");
+    });
+
+    it("holds as before when the transcript does not clearly show the student, with the no-show note", async () => {
+      await seedRow();
+      // The student only says "Okay." — Zoom confirms who is who, but far too few of their own words.
+      const quiet = lessonTokens().map((token) => token.speaker === "2" ? { ...token, text: " Okay." } : token);
+      const wise = fakeWise({ details: [absent(RECORDING)] });
+      const callModel = writing();
+      const run = () => processSession(transcriptDeps(wise.ops, fakeSoniox({ tokens: quiet }).client, { callModel: callModel as never }), { wiseSessionId: SESSION_ID, trigger: "cron" });
+      expect(await run()).toMatchObject({ result: "awaiting_recording", detail: "low_attendance" });
+      expect(await run()).toMatchObject({ result: "held", detail: "attendance_0pct" });
+      expect(callModel).not.toHaveBeenCalled();
+      expect(wise.posts).toEqual([]);
+      const row = await readSessionRow(db, SESSION_ID);
+      expect(row).toMatchObject({ state: "held", reason: "attendance_0pct", metadata: { alertKind: "held", noShow: { studentSeconds: 0 } } });
+    });
+
+    it("with the transcript pass off, holds a 0% class as before", async () => {
+      await seedRow();
+      expect(await processSession(deps(fakeWise({ details: [absent(RECORDING)] }).ops), { wiseSessionId: SESSION_ID, trigger: "cron" }))
+        .toMatchObject({ result: "held", detail: "attendance_0pct" });
+    });
+  });
+
   it("waits while Wise has no recording yet", async () => {
     await seedRow({ state: "awaiting_recording", evidence: "transcript" });
     const soniox = fakeSoniox();
