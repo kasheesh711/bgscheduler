@@ -8,7 +8,7 @@ import {fetchLineGroupSummary,LinePushError,pushLineTextMessage,replyLineMessage
 import {isScheduleBotAdmin} from "./schedule-bot";
 
 const iso=z.iso.datetime({offset:true});
-const candidateSchema=z.object({ownerKey:z.string().min(1),tutorName:z.string().min(1),seriesId:z.uuid(),assessmentId:z.uuid().nullable(),cycle:z.number().int().positive(),studentName:z.string().min(1),studentEmail:z.email().nullable().optional(),courseName:z.string().min(1),wiseClassId:z.string().min(1),wiseStudentId:z.string().min(1),lessonId:z.string().min(1),scheduledAt:iso,updatedAt:iso,url:z.literal("https://www.begifted.app/#/progress-checks")}).strict();
+const candidateSchema=z.object({ownerKey:z.string().min(1),tutorName:z.string().min(1),seriesId:z.uuid(),assessmentId:z.uuid().nullable(),cycle:z.number().int().positive(),studentName:z.string().min(1),studentEmail:z.string().min(3).max(320).nullable().optional(),courseName:z.string().min(1),wiseClassId:z.string().min(1),wiseStudentId:z.string().min(1),lessonId:z.string().min(1),scheduledAt:iso,updatedAt:iso,url:z.literal("https://www.begifted.app/#/progress-checks")}).strict();
 const snapshotSchema=z.object({schemaVersion:z.literal(1),ownerKey:z.string(),observedAt:iso,syncFinishedAt:iso,candidates:z.array(candidateSchema).max(1000)}).strict();
 export type ReminderCandidate=z.infer<typeof candidateSchema>;
 export type ReminderStage="week_before"|"night_before";

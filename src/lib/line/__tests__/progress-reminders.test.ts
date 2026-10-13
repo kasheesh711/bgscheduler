@@ -32,11 +32,10 @@ describe("Progress Check reminder rules",()=>{
   expect(reminderText({...candidate,studentEmail:null},"night_before")).toContain("Student login email: not linked yet. Ask BeGifted.");
   expect(reminderText(candidate,"night_before")).toContain("Student login email: not linked yet. Ask BeGifted.");
  });
- it("accepts old payloads without an email, rejects bad emails and unknown fields, and ignores email changes",()=>{
+ it("accepts old payloads without an email, rejects unknown fields, and ignores email changes",()=>{
   expect(parseReminderSnapshot(snapshot(),"Buzz",now)).toHaveLength(1);
   expect(parseReminderSnapshot({...snapshot(),candidates:[{...candidate,studentEmail:null}]},"Buzz",now)[0].studentEmail).toBeNull();
   expect(parseReminderSnapshot({...snapshot(),candidates:[{...candidate,studentEmail:"ari@example.com"}]},"Buzz",now)[0].studentEmail).toBe("ari@example.com");
-  expect(()=>parseReminderSnapshot({...snapshot(),candidates:[{...candidate,studentEmail:"not-an-email"}]},"Buzz",now)).toThrow();
   expect(()=>parseReminderSnapshot({...snapshot(),candidates:[{...candidate,extra:"x"}]},"Buzz",now)).toThrow();
   expect(sameOccurrence(candidate,{...candidate,studentEmail:"new@example.com"})).toBe(true);
  });
