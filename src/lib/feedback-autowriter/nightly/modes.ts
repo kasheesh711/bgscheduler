@@ -6,7 +6,8 @@
  * Severities follow the owner's 29 Sep definitions: critical = wrong person, billing/status, invented content,
  * should not have posted; major = a real fix; cosmetic = wording only (still first-shot accurate). Two owner verdicts
  * of 30 Sep fix the line between them: P1 (another student's unfinished exam credited to ours) is critical,
- * wrong_person; P2 (homework claimed from a summary's mis-heard exchange, right student) is major.
+ * wrong_person; P2 (homework claimed from a summary's mis-heard exchange, right student) is major — on a post written
+ * from the transcript; on a post written from the summary, a summary-faithful claim is accurate (owner rule, 7 Oct).
  *
  * Examples are synthetic: no real student, tutor or lesson appears here (the repository is public).
  */
@@ -78,7 +79,8 @@ export const FAILURE_MODES: readonly FailureMode[] = [
     title: "Homework the tutor did not set",
     definition: "The feedback states homework, a task or a due date that the tutor did not clearly set for the student to do " +
       "after this lesson: work only described as remaining or unfinished, an optional suggestion, the summary's own " +
-      "\"Next steps\" line, or an invented due date. Critical only when it is part of a wrong-person error (M01).",
+      "\"Next steps\" line, or an invented due date. Critical only when it is part of a wrong-person error (M01). On a post " +
+      "written from the Wise summary, homework the summary itself states is not M03 (owner rule, 7 Oct 2026).",
     defaultSeverity: "major",
     textFixable: true,
     auditedFromPost: true,
@@ -102,7 +104,8 @@ export const FAILURE_MODES: readonly FailureMode[] = [
     slug: "misheard_detail",
     title: "Mis-heard or mis-summarised detail",
     definition: "A specific detail that comes from a real exchange in the lesson but is wrong: a wrong number, word, page, " +
-      "question or text, usually from a mis-heard transcript or a summary's mistake.",
+      "question or text, usually from a mis-heard transcript or a summary's mistake. On a post written from the Wise summary, " +
+      "a detail the summary itself states is not M05 (owner rule, 7 Oct 2026).",
     defaultSeverity: "major",
     textFixable: true,
     auditedFromPost: true,
@@ -145,13 +148,13 @@ export const FAILURE_MODES: readonly FailureMode[] = [
   {
     id: "M09",
     slug: "material_omission",
-    title: "Main topic or set homework left out",
-    definition: "The lesson's main topic is missing from the feedback, or homework the tutor clearly set is left out.",
+    title: "Main topic left out",
+    definition: "The lesson's main topic is missing from the feedback. Homework the feedback leaves out is not an error " +
+      "(owner rule, 5 Oct 2026: not every class has homework).",
     defaultSeverity: "major",
     textFixable: true,
     auditedFromPost: true,
-    example: "Most of the lesson was essay planning; the feedback only mentions a five-minute vocabulary warm-up. Or: the " +
-      "tutor clearly set two practice pages for Monday and the homework field is empty.",
+    example: "Most of the lesson was essay planning; the feedback only mentions a five-minute vocabulary warm-up.",
   },
   {
     id: "M10",

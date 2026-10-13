@@ -57,9 +57,10 @@ export function Tag({ tone = "neutral", className, children }: { tone?: Tone; cl
 }
 
 /** A panel that opens on a click: the page's detail sections, collapsed by default. */
-export function Disclosure({ title, count, hint, children }: { title: string; count?: number; hint?: string; children: ReactNode }) {
+export function Disclosure({ title, count, hint, onToggle, children }: { title: string; count?: number; hint?: string; onToggle?: (open: boolean) => void; children: ReactNode }) {
   return (
-    <details className="group overflow-hidden rounded-[10px] border bg-card shadow-[0_2px_3px_rgb(37_52_65/0.02)]">
+    <details className="group overflow-hidden rounded-[10px] border bg-card shadow-[0_2px_3px_rgb(37_52_65/0.02)]"
+      onToggle={onToggle ? (event) => onToggle(event.currentTarget.open) : undefined}>
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-3.5 outline-none hover:bg-muted/30 focus-visible:bg-muted/40 [&::-webkit-details-marker]:hidden">
         <span className="flex items-center gap-[9px]">
           <ChevronRight aria-hidden className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" />

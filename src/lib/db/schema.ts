@@ -6661,6 +6661,18 @@ export const feedbackAutowriterRosterAccounts = pgTable("feedback_autowriter_ros
   check("feedback_autowriter_roster_accounts_seen_check", sql`${table.lastSeenAt} >= ${table.firstSeenAt}`),
 ]);
 
+/** Owner overrides of a tutor–student pair's lesson language (wise_class_id + tutor_key); clearing deletes the row. Display only until routing reads it (0116). */
+export const feedbackAutowriterPairLanguages = pgTable("feedback_autowriter_pair_languages", {
+  wiseClassId: text("wise_class_id").notNull(),
+  tutorKey: text("tutor_key").notNull(),
+  language: text("language").$type<"english" | "bilingual" | "thai">().notNull(),
+  setBy: text("set_by").notNull(),
+  setAt: timestamp("set_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.wiseClassId, table.tutorKey] }),
+  check("feedback_autowriter_pair_languages_language_check", sql`${table.language} IN ('english', 'bilingual', 'thai')`),
+]);
+
 // ── Tutor Offboarding ────────────────────────────────────────────────
 
 /** "Still with us" decisions on the departed-tutor detector; each keeps the score it overrode (future labels). */
