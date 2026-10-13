@@ -2,6 +2,10 @@ import { randomUUID } from "crypto";
 
 const LINE_API_BASE = "https://api.line.me";
 
+export class LinePushError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+
 export interface LineProfile {
   userId: string;
   displayName?: string;
@@ -132,7 +136,7 @@ export async function pushLineTextMessage(input: {
 
   const payload = asRecord(await response.json().catch(() => ({})));
   if (!response.ok && response.status !== 409) {
-    throw new Error(typeof payload.message === "string" ? payload.message : `LINE push returned HTTP ${response.status}`);
+    throw new LinePushError(typeof payload.message === "string" ? payload.message : `LINE push returned HTTP ${response.status}`, response.status);
   }
 
   const responsePayload: Record<string, unknown> = { ...payload };
@@ -206,4 +210,11 @@ export async function sendLineRoomMessages(input: { to: string; replyToken?: str
   };
   if (input.replyToken) { try { await send(true); return; } catch { /* Expired reply token: stable-key push fallback. */ } }
   await send(false);
+}
+
+export async function fetchLineGroupSummary(groupId:string):Promise<{groupId:string;groupName:string}>{
+ const response=await fetch(`${LINE_API_BASE}/v2/bot/group/${encodeURIComponent(groupId)}/summary`,{headers:{Authorization:`Bearer ${lineAccessToken()}`},signal:AbortSignal.timeout(10000)});
+ const payload=asRecord(await response.json().catch(()=>({})));
+ if(!response.ok||payload.groupId!==groupId||typeof payload.groupName!=="string")throw new Error("The LINE group could not be verified.");
+ return {groupId,groupName:payload.groupName};
 }

@@ -1,3 +1,5 @@
+vi.mock("@/lib/line/progress-reminders",()=>({sendProgressLineReminders:vi.fn()}));
+import {sendProgressLineReminders} from "@/lib/line/progress-reminders";
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/post-class-feedback/deduction-report", () => ({ sendDeductionReport: vi.fn() }));
 import { sendDeductionReport } from "@/lib/post-class-feedback/deduction-report";
@@ -92,6 +94,7 @@ type ManualRunKey = Exclude<(typeof CRON_JOBS)[number], { manualRunDisabledReaso
 
 /** One primary entry point per key Data Health can run; `satisfies` turns a missing branch into a type error. */
 const DISPATCH_TARGETS = {
+  progress_line_reminders: sendProgressLineReminders,
   post_class_deduction_report: sendDeductionReport,
   feedback_atom: collectAtomOnServer,
   feedback_autowriter: runAutowriterJob,
@@ -192,6 +195,7 @@ function applyDefaults(): void {
   vi.mocked(runPostClassBackfillJob).mockResolvedValue({ batches: 1 } as never);
   vi.mocked(runDailyNotifications).mockResolvedValue(admissionsResult("daily"));
   vi.mocked(runWeeklyDigest).mockResolvedValue(admissionsResult("weekly"));
+  vi.mocked(sendProgressLineReminders).mockResolvedValue({sent:0,failed:0});
   vi.mocked(sendLineCreditDigest).mockResolvedValue({ status: "sent" } as never);
   vi.mocked(runLineBacklogRecovery).mockResolvedValue({ inserted: 0 } as never);
 }

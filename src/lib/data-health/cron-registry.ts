@@ -4,6 +4,7 @@ import { transferText } from "@/lib/progress-tests/transfer/text";
 import type { CronJobStatus } from "./types";
 
 export type CronJobKey =
+  | "progress_line_reminders"
   | "post_class_deduction_report"
   | "tutor_sit_ins"
   | "tutor_sit_ins_digest"
@@ -513,6 +514,12 @@ export const CRON_JOBS = [
     confirmationLabel: "Fetches the full LINE follower roster, adds contacts for matched followers, and inserts suggested student links for review.",
     routeMethod: "GET",
   },
+  {
+    key: "progress_line_reminders", label: "Progress Check LINE reminders", feature: "LINE Integration",
+    path: "/api/internal/progress-line-reminders", schedule: "*/10 * * * *", cadenceLabel: "Every 10 min; sends after 19:00 Bangkok",
+    cadenceMinutes: 10, lateAfterMinutes: 30, maxDurationSeconds: 60, manualOnly: false, dangerous: true,
+    confirmationLabel: "Sends Progress Check reminders to enabled tutor groups.", routeMethod: "GET",
+  },
 ] as const satisfies readonly CronJobDefinition[];
 
 export const SCHEDULED_CRON_JOBS = CRON_JOBS.filter((job) => !job.manualOnly);
@@ -532,6 +539,7 @@ export function statusRank(status: CronJobStatus): number {
 
 /** Physical cron schedules remain registered; expected work follows feature mode. */
 export function effectiveCronJob(job: CronJobDefinition): CronJobDefinition {
+  if (job.key === "progress_line_reminders" && process.env.PROGRESS_LINE_REMINDERS_ENABLED !== "true") return { ...job, paused: true, cadenceLabel: "LINE Progress Check reminders disabled" };
   if (job.key === "feedback_atom" && process.env.FEEDBACK_ATOM_COLLECTOR_ENABLED !== "true") return { ...job, paused: true, cadenceLabel: "Atom collector disabled" };
   if (isWiseClassroomJob(job.key) && !wiseClassroomAutomationEnabled()) return { ...job, paused: true, cadenceLabel: "Paused by owner" };
   if (job.key.startsWith("feedback_autowriter") && process.env.FEEDBACK_AUTOWRITER_ENABLED !== "true") return { ...job, paused: true, cadenceLabel: "Feedback autowriter disabled" };

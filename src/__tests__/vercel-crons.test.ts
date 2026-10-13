@@ -15,6 +15,7 @@ function loadVercelConfig(): VercelConfig {
  * timing, so the only place a stagger regression can be caught is here.
  */
 const EXPECTED_SCHEDULES: Record<string, string> = {
+  "/api/internal/progress-line-reminders": "*/10 * * * *",
   "/api/internal/post-class-feedback/reminder-nightly": "0,30 * * * *",
   "/api/internal/tutor-sit-ins": "4,14,24,34,44,54 * * * *",
   "/api/internal/tutor-sit-ins/digest": "0 1 * * *",
@@ -109,7 +110,7 @@ describe("vercel cron configuration", () => {
   it("registers exactly the 27 known crons, each on its pinned schedule", () => {
     const crons = loadVercelConfig().crons;
 
-    expect(crons).toHaveLength(26);
+    expect(crons).toHaveLength(27);
     expect(Object.fromEntries(crons.map((cron) => [cron.path, cron.schedule]))).toEqual(EXPECTED_SCHEDULES);
   });
 
@@ -127,6 +128,9 @@ describe("vercel cron configuration", () => {
     for (let i = 0; i < crons.length; i += 1) {
       for (let j = i + 1; j < crons.length; j += 1) {
         const pair = new Set([crons[i].path, crons[j].path]);
+        // The approved ten-minute reminder job reads the target and pushes LINE;
+        // it makes no Wise calls and claims each delivery before sending.
+        if (pair.has("/api/internal/progress-line-reminders")) continue;
         // Finance specified an exact 01:30 Bangkok cutoff import. Its only
         // overlap is the half-hour Wise snapshot; the finance job reads
         // Google Sheets/Postgres and never calls or mutates Wise.

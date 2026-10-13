@@ -104,6 +104,7 @@ describe("data-health cron registry", () => {
     afterEach(() => vi.unstubAllEnvs());
 
     function stubFeatureFlags(enabled: boolean) {
+      vi.stubEnv("PROGRESS_LINE_REMINDERS_ENABLED", enabled ? "true" : undefined);
       vi.stubEnv("WISE_CLASSROOM_AUTOMATION_ENABLED", enabled ? "true" : undefined);
       vi.stubEnv("FEEDBACK_AUTOWRITER_ENABLED", enabled ? "true" : undefined);
       vi.stubEnv("FEEDBACK_ATOM_COLLECTOR_ENABLED", enabled ? "true" : undefined);
