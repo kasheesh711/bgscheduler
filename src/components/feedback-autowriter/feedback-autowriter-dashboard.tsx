@@ -14,6 +14,7 @@ import { HealthRail } from "./health-rail";
 import { Inbox } from "./inbox";
 import { ItemDrawer, type DrawerTarget } from "./item-drawer";
 import { StatusLines, reloadsWhenShown, staleReviewMessage } from "./page-status";
+import { PairLanguages } from "./pair-languages";
 import { SystemDetails } from "./system-details";
 import { SystemLine } from "./system-line";
 import { TrendCharts } from "./trend-charts";
@@ -296,6 +297,7 @@ export function FeedbackAutowriterDashboard({ initialData, canControl, initialRe
           <div className="space-y-3">
             <ClassesLog dashboard={data} review={loaded} tutorKey={tutorKey} onTutorChange={selectTutor} onOpen={setTarget} />
             <AtomReviewTools canControl={canControl} />
+            <PairLanguages canControl={canControl} />
             <SystemDetails dashboard={data} review={loaded} onOpen={setTarget} />
           </div>
         </section>
