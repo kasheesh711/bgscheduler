@@ -2,7 +2,7 @@ import "server-only";
 import { and, asc, desc, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
-import { createOutboundEmailSender } from "@/lib/email/outbound";
+import { createDeductionReportSender } from "./deduction-report-sender";
 import { ScheduleEmailRejection, type ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
 import { withPostClassTransaction } from "./transaction";
 import { listCaptures } from "./captures";
@@ -56,7 +56,7 @@ async function reportRunCounts(runId: string, db: Database) {
   await tx.update(runs).set({ status, sentCount, failedCount, finishedAt: status === "sent" ? new Date() : null, updatedAt: new Date() }).where(eq(runs.id, runId));
   });
 }
-export async function attemptDeductionReportDelivery(deliveryId: string, db: Database = getDb(), sender: ScheduleEmailSender = createOutboundEmailSender("primary", { strictOutcome: true, audience: "staff" }), now = new Date()): Promise<"sent" | "failed" | "skipped"> {
+export async function attemptDeductionReportDelivery(deliveryId: string, db: Database = getDb(), sender: ScheduleEmailSender = createDeductionReportSender(), now = new Date()): Promise<"sent" | "failed" | "skipped"> {
   const [loaded] = await db.select({ delivery: deliveries, run: runs }).from(deliveries).innerJoin(runs, eq(deliveries.runId, runs.id)).where(eq(deliveries.id, deliveryId));
   if (!loaded || loaded.run.kind !== "deduction_report") return "skipped";
   const row = loaded.delivery;

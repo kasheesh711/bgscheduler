@@ -1,6 +1,8 @@
 import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import { get, put } from "@vercel/blob";
+import { loadCurrentDeductionEvidence } from "./deduction-evidence";
+import { captureCandidateDecision } from "./capture-candidates";
 import { wiseSessionLink } from "@/lib/wise/links";
 import { and, asc, desc, eq, gte, isNull, lt, ne } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
@@ -49,12 +51,16 @@ export async function dueCaptureQueue(date: string, db: Database = getDb()) {
   const sessions = await db.select().from(schema.postClassSessions).where(and(eq(schema.postClassSessions.eligible, true),
     isNull(schema.postClassSessions.wiseDeletedAt), gte(schema.postClassSessions.deadlineAt, start), lt(schema.postClassSessions.deadlineAt, end)))
     .orderBy(asc(schema.postClassSessions.canonicalTutorName), asc(schema.postClassSessions.scheduledStartAt));
-  const classes = await Promise.all(sessions.map(async session => ({ id: session.id, startAt: session.scheduledStartAt,
+  const evidence = await loadCurrentDeductionEvidence(db, sessions.map(session => session.id));
+  const decisions = sessions.map(session => ({ session, ...captureCandidateDecision(session, evidence.get(session.id)) }));
+  const selected = decisions.filter(row => row.capture).map(row => row.session);
+  const unresolvedClassCount = decisions.filter(row => row.unresolved).length;
+  const classes = await Promise.all(selected.map(async session => ({ id: session.id, startAt: session.scheduledStartAt,
     endAt: session.scheduledEndAt, sourceStatus: session.sourceStatus, contentStatus: session.contentStatus, wiseUrl: wiseSessionLink(session), wiseTeacherUserId: session.wiseTeacherUserId, ...await listCaptures(session.id, db) })));
   const [sync] = await db.select().from(schema.postClassSyncRuns).where(eq(schema.postClassSyncRuns.status, "success")).orderBy(desc(schema.postClassSyncRuns.finishedAt)).limit(1);
   const issues = await db.select({ id: schema.postClassSourceIssues.id }).from(schema.postClassSourceIssues).where(and(eq(schema.postClassSourceIssues.status, "open"), eq(schema.postClassSourceIssues.blocksEnforcement, true)));
-  const complete = Boolean(sync?.finishedAt && Date.now() - sync.finishedAt.getTime() <= 60 * 60_000 && issues.length === 0);
-  return { date, timeZone: "Asia/Bangkok", classes, complete, sourceIssueCount: issues.length, lastSuccessfulSyncAt: sync?.finishedAt ?? null };
+  const complete = Boolean(sync?.finishedAt && Date.now() - sync.finishedAt.getTime() <= 60 * 60_000 && issues.length === 0 && unresolvedClassCount === 0);
+  return { date, timeZone: "Asia/Bangkok", classes, dueClassCount: sessions.length, unresolvedClassCount, complete, sourceIssueCount: issues.length, lastSuccessfulSyncAt: sync?.finishedAt ?? null };
 }
 export async function saveCapture(sessionId: string, raw: unknown, bytes: Buffer | null, actor: string, now = new Date(), db: Database = getDb()) {
   const input = captureInput.parse(raw);
