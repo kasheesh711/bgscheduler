@@ -953,7 +953,7 @@ function reusableTranscriptDraft(row: AutowriterSessionRow): StoredDraft | null 
  * Second pass: write from a Soniox transcript of Wise's recording. The lease is
  * held throughout. The Soniox job id is stored as soon as it exists, so a retry
  * re-fetches instead of re-transcribing. Once the class is done with it the job
- * is kept for review for at most 72 h, then the sweep deletes it (and reaps jobs
+ * is kept for review for 7 days, then the sweep deletes it (and reaps jobs
  * nothing references).
  * Transcript first (`handover = transcript_first`): what the transcript cannot
  * carry — no recording by the fallback time, a recording in several parts,
@@ -1689,9 +1689,9 @@ export async function runSweep(deps: AutowriterDeps): Promise<SweepResult> {
 
 /**
  * Keep finished classes' Soniox jobs for review, then delete them: the first
- * sweep to see a class done with its job starts a 72 h window (owner decision,
- * 29 Sep), and a later sweep deletes the job once the window is over or the
- * class is triaged. Orphans no row references (a create that timed out after
+ * sweep to see a class done with its job starts a 7-day window (owner decision,
+ * 13 Oct; 72 h before), and a later sweep deletes the job once the window is
+ * over. Orphans no row references (a create that timed out after
  * Soniox accepted it, or a worker that died before storing the id) are reaped
  * too. Bounded per sweep; failures are retried next time.
  */

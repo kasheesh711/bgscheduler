@@ -1029,7 +1029,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     const outcome = await processSession(transcriptDeps(wise.ops, soniox.client, { callModel: callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" });
     expect(outcome).toMatchObject({ result: "verified" });
     expect(soniox.created).toEqual([expect.objectContaining({ audioUrl: "https://files.wiseapp.live/rec.mp4" })]);
-    expect(soniox.removed).toEqual([]); // kept for review (triage), at most 72 h
+    expect(soniox.removed).toEqual([]); // kept for review, 7 days
     expect(models).toEqual(["openai/gpt-6.1-sol", GLM_MODEL, GLM_MODEL]);
     expect(prompts[0]).toContain("Lesson transcript:");
     expect(prompts[0]).toContain("TUTOR: Today we add fractions");
@@ -1725,7 +1725,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     // The window starts at the first sweep after the POST, not at the attempt that had to wait.
     await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client));
     const retainUntil = new Date(String(((await readSessionRow(db, SESSION_ID))?.metadata as { sonioxRetainUntil?: unknown }).sonioxRetainUntil)).getTime();
-    expect(retainUntil - Date.now()).toBeGreaterThan(71.9 * 3600_000);
+    expect(retainUntil - Date.now()).toBeGreaterThan(7 * 24 * 3600_000 - 360_000);
   });
 
   it("defers the POST when the judges end too late for it: no pre-POST read, the judged draft kept with its stamp, and the next run posts it once without a model or Soniox call", async () => {
@@ -1847,49 +1847,48 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     }
   });
 
-  it("keeps a finished class's Soniox job for review, and the sweep deletes it once triaged or after 72 h", async () => {
+  it("keeps a finished class's Soniox job for review for 7 days, a verdict does not end the window, and the sweep deletes it after", async () => {
     await updateControl(db, { mode: "shadow" }, "t@x.com");
     await seedRow({ state: "awaiting_recording", evidence: "transcript" });
     expect(await processSession(transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fakeSoniox().client), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
       .toMatchObject({ result: "would_submit" });
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "would_submit", sonioxTranscriptionId: "job-1" });
 
-    // The first sweep to see it done starts its 72 h window; neither the reaper nor the cleanup touch it.
+    // The first sweep to see it done starts its 7-day window; neither the reaper nor the cleanup touch it.
     const early = fakeSoniox({ listed: [{ id: "job-1", createdAt: new Date(Date.now() - 5 * 3600_000), clientReferenceId: SESSION_ID, status: "completed" }] });
     await runSweep(transcriptDeps(fakeWise().ops, early.client));
     expect(early.removed).toEqual([]);
     const retainUntil = new Date(String(((await readSessionRow(db, SESSION_ID))?.metadata as { sonioxRetainUntil?: unknown }).sonioxRetainUntil)).getTime();
-    expect(retainUntil - Date.now()).toBeGreaterThan(71.9 * 3600_000);
-    expect(retainUntil - Date.now()).toBeLessThanOrEqual(72.1 * 3600_000);
+    expect(retainUntil - Date.now()).toBeGreaterThan(7 * 24 * 3600_000 - 360_000);
+    expect(retainUntil - Date.now()).toBeLessThanOrEqual(7 * 24 * 3600_000 + 360_000);
 
-    // Triaged: deleted at the next sweep, and the id is cleared.
+    // A `triagedAt` left by the old rule (an accurate verdict) no longer ends the window early.
     await db.update(S).set({ metadata: sql`${S.metadata} || '{"triagedAt":"2026-09-29T15:00:00.000Z"}'::jsonb` as never }).where(eq(S.wiseSessionId, SESSION_ID));
+    const kept = fakeSoniox();
+    await runSweep(transcriptDeps(fakeWise().ops, kept.client));
+    expect(kept.removed).toEqual([]);
+    expect((await readSessionRow(db, SESSION_ID))?.sonioxTranscriptionId).toBe("job-1");
+
+    // The window ran out: deleted at the next sweep (a refused delete is retried), and the id is cleared.
+    await db.update(S).set({ metadata: sql`${S.metadata} || '{"sonioxRetainUntil":"2026-01-01T00:00:00.000Z"}'::jsonb` as never })
+      .where(eq(S.wiseSessionId, SESSION_ID));
     const refusing = fakeSoniox({ removeFails: true });
     await runSweep(transcriptDeps(fakeWise().ops, refusing.client));
-    expect((await readSessionRow(db, SESSION_ID))?.sonioxTranscriptionId).toBe("job-1"); // a refused delete is retried
+    expect((await readSessionRow(db, SESSION_ID))?.sonioxTranscriptionId).toBe("job-1");
     const working = fakeSoniox();
     await runSweep(transcriptDeps(fakeWise().ops, working.client));
     expect(working.removed).toEqual(["job-1"]);
     expect((await readSessionRow(db, SESSION_ID))?.sonioxTranscriptionId).toBeNull();
-
-    // A window that ran out without triage: deleted too.
-    await db.update(S).set({
-      sonioxTranscriptionId: "job-2",
-      metadata: sql`(${S.metadata} - 'triagedAt') || '{"sonioxRetainUntil":"2026-01-01T00:00:00.000Z"}'::jsonb` as never,
-    }).where(eq(S.wiseSessionId, SESSION_ID));
-    const expired = fakeSoniox();
-    await runSweep(transcriptDeps(fakeWise().ops, expired.client));
-    expect(expired.removed).toEqual(["job-2"]);
   });
 
-  it("starts the 72 h review window however a class ended, and a later sweep never extends it", async () => {
+  it("starts the 7-day review window however a class ended, and a later sweep never extends it", async () => {
     // An error cap ends the class without ever reaching the posting code: its transcript is still reviewable.
     await seedRow({ state: "held", reason: "error:boom", evidence: "transcript", sonioxTranscriptionId: "job-9" });
     const first = fakeSoniox();
     await runSweep(transcriptDeps(fakeWise().ops, first.client));
     expect(first.removed).toEqual([]);
     const stamped = ((await readSessionRow(db, SESSION_ID))?.metadata as { sonioxRetainUntil?: string }).sonioxRetainUntil;
-    expect(new Date(String(stamped)).getTime() - Date.now()).toBeGreaterThan(71.9 * 3600_000);
+    expect(new Date(String(stamped)).getTime() - Date.now()).toBeGreaterThan(7 * 24 * 3600_000 - 360_000);
 
     // Later sweeps (which touch the row's other columns) leave the window where it was.
     await runSweep(transcriptDeps(fakeWise().ops, fakeSoniox().client));
@@ -2816,7 +2815,7 @@ describe("transcript first (Postgres + fakes)", () => {
     await runSweep(firstDeps(fakeWise().ops, first.client));
     expect(first.removed).toEqual([]);
     const retainUntil = new Date(String(((await readSessionRow(db, SESSION_ID))?.metadata as { sonioxRetainUntil?: unknown }).sonioxRetainUntil)).getTime();
-    expect(retainUntil - Date.now()).toBeGreaterThan(71.9 * 3600_000);
+    expect(retainUntil - Date.now()).toBeGreaterThan(7 * 24 * 3600_000 - 360_000);
 
     await db.update(S).set({ metadata: sql`${S.metadata} || jsonb_build_object('sonioxRetainUntil', now() - interval '1 minute')` as never })
       .where(eq(S.wiseSessionId, SESSION_ID));

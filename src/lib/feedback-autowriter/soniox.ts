@@ -4,7 +4,7 @@ import { z } from "zod";
  * Soniox async speech-to-text for the autowriter's second pass. Soniox fetches
  * Wise's recording itself (`audio_url`), handles Thai/English code-switching in
  * one model, and tags every token with a speaker. Once the class is done with
- * it, a job is kept for review for at most 72 h, then deleted; we never store
+ * it, a job is kept for review for 7 days, then deleted; we never store
  * the transcript itself.
  */
 export const SONIOX_API_BASE = "https://api.soniox.com/v1";
