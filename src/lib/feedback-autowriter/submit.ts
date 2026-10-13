@@ -88,7 +88,7 @@ export type SubmitOutcome =
   | { status: "unverified"; problems: string[] }
   | { status: "preflight_ok"; bodyHash: string }
   | { status: "not_claimed"; reason: "post_in_flight" | "conditions" }
-  /** `gate`: the reason came from `evaluateSessionGates` on the fresh read. */
+  /** `gate`: the reason came from `evaluateSessionGates` on the fresh read (ahead of any credit-baseline problem). */
   | { status: "aborted_precheck"; reason: string; gate?: boolean }
   | { status: "rate_limited" }
   | { status: "rejected"; httpStatus: number; body: string }
@@ -217,7 +217,7 @@ export async function waitForSubmitEvents(ops: Pick<WiseFeedbackOps, "findFeedba
 /**
  * Complete Wise's blank auto-submission with the drafted feedback, never
  * anything a person wrote:
- *   credit baseline → fresh GET + every gate → store claim (lease, live, not
+ *   credit read → fresh GET + every gate → credit baseline → store claim (lease, live, not
  *   halted, tutor on) → one POST (never retried) → GET verify + credit entry +
  *   a non-auto submit event by the API owner. A teacher/admin submit event by
  *   anyone else inside the POST window means a person may have been
@@ -266,10 +266,12 @@ export async function submitFeedbackGuarded(input: {
   const [student] = studentParticipants(before);
   if (!student?.wiseUserId) return abort("student_id_missing");
   // The slow, paced credit read happens BEFORE the fresh detail GET so the gap
-  // between "still Wise's blank" and the POST stays as short as possible.
+  // between "still Wise's blank" and the POST stays as short as possible. Its verdict waits for the fresh read's
+  // checks: a tutor who saves their own feedback rewrites the credit ledger, and that save — seen on either read —
+  // must settle the class as the tutor's (`human_submission`), never as a `credit_baseline` hold.
+  let baseline: string[];
   try {
-    const baseline = creditProblems(await ops.getSessionCreditEntries(plan.classId, student.wiseUserId, plan.sessionId), plan.billing);
-    if (baseline.length > 0) return abort(`credit_baseline:${baseline.join(",")}`);
+    baseline = creditProblems(await ops.getSessionCreditEntries(plan.classId, student.wiseUserId, plan.sessionId), plan.billing);
   } catch (error) {
     return abort(`credits_read_failed:${error instanceof Error ? error.name : "Error"}`);
   }
@@ -293,6 +295,7 @@ export async function submitFeedbackGuarded(input: {
   if (!teacherId) return abort("teacher_missing");
   const current = classifyTeacherSubmission(before);
   if (!sameSubmission(plan.expected, current)) return abort(`submission_changed_to_${current.kind}`);
+  if (baseline.length > 0) return abort(`credit_baseline:${baseline.join(",")}`);
   if (current.kind !== "auto_blank" ||
     current.sessionStatus !== plan.billing.sessionStatus ||
     current.creditsConsumed !== plan.billing.creditsConsumed) {
