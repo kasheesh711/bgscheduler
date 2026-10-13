@@ -4,6 +4,7 @@ import { transferText } from "@/lib/progress-tests/transfer/text";
 import type { CronJobStatus } from "./types";
 
 export type CronJobKey =
+  | "post_class_deduction_report"
   | "tutor_sit_ins"
   | "tutor_sit_ins_digest"
   | "classroom_publish_recovery"
@@ -66,6 +67,10 @@ export interface CronJobDefinition {
 }
 
 export const CRON_JOBS = [
+  { key: "post_class_deduction_report", label: "Daily Deduction Report", feature: "Class Feedback",
+    path: "/api/internal/post-class-feedback/deduction-report", schedule: null, cadenceLabel: "Daily 08:00 Bangkok",
+    cadenceMinutes: 1440, expectedBangkokMinute: 480, lateAfterMinutes: 60, maxDurationSeconds: 300, manualOnly: true,
+    dangerous: true, confirmationLabel: "Emails new deduction candidates to the three report recipients.", routeMethod: "GET" },
   { key: "feedback_atom", label: "Atom Lesson Evidence", feature: "Class Feedback",
     path: "/api/internal/feedback-autowriter/atom", schedule: "6,21,36,51 * * * *", cadenceLabel: "Every 15 min",
     cadenceMinutes: 15, lateAfterMinutes: 45, maxDurationSeconds: 750, manualOnly: false, dangerous: false,

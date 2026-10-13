@@ -353,6 +353,7 @@ export const postClassFeedbackProvenanceEnum = pgEnum("post_class_feedback_prove
 ]);
 
 export const postClassNotificationKindEnum = pgEnum("post_class_notification_kind", [
+  "deduction_report",
   "tutor_day_after",
   "tutor_deadline",
   "tutor_nightly",
@@ -5199,6 +5200,36 @@ export const lineGroupSettings = pgTable("line_group_settings", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/** Browser observations are evidence only; they never change a financial decision. */
+export const postClassFeedbackCaptures = pgTable("post_class_feedback_captures", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sessionId: uuid("session_id").notNull().references(() => postClassSessions.id, { onDelete: "restrict" }),
+  binding: jsonb("binding").$type<{ wiseSessionId: string; tutorKey: string; tutorName: string; students: string[]; subject: string; deadlineAt: string }>().notNull(),
+  deadlineAt: timestamp("deadline_at", { withTimezone: true }).notNull(),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  mode: text("mode").$type<"deadline" | "current">().notNull(),
+  state: text("state").$type<"missing" | "present" | "uncheckable">().notNull(),
+  timing: text("timing").$type<"within_window" | "late" | "later_check">().notNull(),
+  note: text("note").notNull().default(""),
+  pathname: text("pathname"),
+  mime: text("mime"),
+  sha256: text("sha256"),
+  size: integer("size"),
+  uploadStatus: text("upload_status").$type<"pending" | "ready" | "failed" | "no_image">().notNull(),
+  uploadError: text("upload_error"),
+  uploadedBy: text("uploaded_by").notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => [
+  uniqueIndex("pc_capture_key_idx").on(table.idempotencyKey),
+  index("pc_capture_session_deadline_idx").on(table.sessionId, table.deadlineAt),
+  check("pc_capture_mode_check", sql`${table.mode} in ('deadline', 'current')`),
+  check("pc_capture_state_check", sql`${table.state} in ('missing', 'present', 'uncheckable')`),
+  check("pc_capture_timing_check", sql`${table.timing} in ('within_window', 'late', 'later_check')`),
+  check("pc_capture_upload_check", sql`${table.uploadStatus} in ('pending', 'ready', 'failed', 'no_image')`),
+]);
+
 /**
  * Every schedule link delivered into a LINE group.
  *
@@ -6628,6 +6659,18 @@ export const feedbackAutowriterRosterAccounts = pgTable("feedback_autowriter_ros
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
 }, (table) => [
   check("feedback_autowriter_roster_accounts_seen_check", sql`${table.lastSeenAt} >= ${table.firstSeenAt}`),
+]);
+
+/** Owner overrides of a tutor–student pair's lesson language (wise_class_id + tutor_key); clearing deletes the row. Display only until routing reads it (0116). */
+export const feedbackAutowriterPairLanguages = pgTable("feedback_autowriter_pair_languages", {
+  wiseClassId: text("wise_class_id").notNull(),
+  tutorKey: text("tutor_key").notNull(),
+  language: text("language").$type<"english" | "bilingual" | "thai">().notNull(),
+  setBy: text("set_by").notNull(),
+  setAt: timestamp("set_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.wiseClassId, table.tutorKey] }),
+  check("feedback_autowriter_pair_languages_language_check", sql`${table.language} IN ('english', 'bilingual', 'thai')`),
 ]);
 
 // ── Tutor Offboarding ────────────────────────────────────────────────

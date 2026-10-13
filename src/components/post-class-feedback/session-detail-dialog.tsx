@@ -1,5 +1,7 @@
 "use client";
 
+import { CaptureEvidencePanel } from "./capture-evidence-panel";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
@@ -399,6 +401,7 @@ function DetailBody({
         </div>
       </div>
 
+      <CaptureEvidencePanel sessionId={detail.session.id} canUpload={canReview} />
       <TimingEvidenceTimeline
         deadlineAt={detail.session.deadlineAt}
         events={detail.evidence.feedbackEvents}

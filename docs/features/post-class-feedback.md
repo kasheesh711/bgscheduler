@@ -551,3 +551,14 @@ The original formula backup and exact readback checks still apply.
   Only phrases of those three shapes changed result.
 - **Versioned ineligible-waive key.** The ineligible-waive sweep's key is
   `ineligible-waive:<id>:v<version>`, for the same reason as the approve key.
+
+
+## Daily deduction report and browser evidence
+
+The deduction report runs at 08:00 Asia/Bangkok. It selects `candidate_created` actions from the previous Bangkok calendar day, with an inclusive start and exclusive end. It keeps each candidate's current status, including waived or reversed candidates. It groups entries by tutor and shows counts and amounts for each status. Pending amounts are not confirmed charges. The reason comes from the assessment at candidate creation.
+
+The report uses the shared outbound sender with strict results and the staff audience. It sends only to Kevin (`kevhsh7@gmail.com`), Aya (`pakwalaan@gmail.com`), and `k.waritpariya@gmail.com`. Frozen content, recipient records, attempts, and provider receipts stay in the existing notification tables under `deduction_report`. Uncertain sends are held for inspection. A provider receipt proves acceptance; it does not prove inbox delivery.
+
+The evidence page at `/post-class-feedback/evidence` lists eligible classes by stored deadline date. A reviewer can attach an original Wise image or record a failed check. A viewer can read private images. Images never change eligibility, deductions, approval, or payout rules. The page shows changed class identities, changed deadlines, missing images, late captures, upload failures, and staff-event conflicts. It keeps later checks separate from deadline captures.
+
+See [the operating procedure](../operations/deduction-evidence.md) and [the skill](../../skills/begifted-deduction-evidence/SKILL.md).
