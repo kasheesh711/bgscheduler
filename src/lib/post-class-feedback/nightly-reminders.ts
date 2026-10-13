@@ -461,7 +461,7 @@ export async function runNightlyReminders(options: NightlyReminderOptions = {}) 
     const obsolete = exclusions.filter((row) => (row.status !== "expired" || row.deadlineAt > clock()) && exclusionStates.get(row.wiseSessionId)?.policyCurrent === false);
     if (obsolete.length) await db.update(ledger).set({ status: "pending", reason: "Policy changed; refresh required." })
       .where(inArray(ledger.id, obsolete.map((row) => row.id)));
-    for (let batch = 0; batch < (options.maxRefreshBatches ?? 8) && clock().getTime() - now.getTime() < BUDGET_MS; batch++) {
+    for (let batch = 0; batch < (options.maxRefreshBatches ?? Infinity) && clock().getTime() - now.getTime() < BUDGET_MS; batch++) {
       const rows = await db.select().from(ledger).where(and(eq(ledger.runId, run.id), notInArray(ledger.status, [...NIGHTLY_TERMINAL, "unknown"])))
         .orderBy(sql`${ledger.lastCheckedAt} asc nulls first`, asc(ledger.id));
       const states = await loadStates(db, rows);
