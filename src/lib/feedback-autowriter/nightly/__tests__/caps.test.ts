@@ -29,7 +29,7 @@ describe("caps", () => {
     expect(NIGHTLY_CAPS).toMatchObject({
       maxTargets: 60, maxWiseReads: 200, wisePacingMs: 5_000, maxOpusCalls: 80, perAuditUsd: 3, perReauditUsd: 3,
       perSynthesisUsd: 4, maxClaudeUsdNight: 60, maxClaudeUsdWeek: 300, maxSonioxUsdNight: 2, maxOpenRouterUsdNight: 3,
-      maxCorrectionsPerNight: 6, maxCorrectionsPerWeek: 15, maxFlagsPerNight: 10, auditConcurrency: 2, deadlineBangkok: "06:50",
+      maxCorrectionsPerNight: 6, maxCorrectionsPerWeek: 15, maxProposalsPerNight: 6, maxFlagsPerNight: 10, auditConcurrency: 2, deadlineBangkok: "06:50",
     });
     expect(Object.isFrozen(NIGHTLY_CAPS)).toBe(true);
   });
