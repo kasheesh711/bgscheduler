@@ -27,6 +27,18 @@ describe("Progress Check reminder rules",()=>{
  it("includes the exact course, student, Bangkok test time and preparation steps",()=>{
   const text=reminderText(candidate,"night_before");expect(text).toContain("Student: Student");expect(text).toContain("Course: Maths");expect(text).toContain("18:00");expect(text).toContain("marking guide");expect(text).toContain(candidate.url);
  });
+ it("shows the student login email, or says it is not linked",()=>{
+  expect(reminderText({...candidate,studentEmail:"ari@example.com"},"night_before")).toContain("Student: Student\nStudent login email: ari@example.com\nCourse: Maths");
+  expect(reminderText({...candidate,studentEmail:null},"night_before")).toContain("Student login email: not linked yet. Ask BeGifted.");
+  expect(reminderText(candidate,"night_before")).toContain("Student login email: not linked yet. Ask BeGifted.");
+ });
+ it("accepts old payloads without an email, rejects unknown fields, and ignores email changes",()=>{
+  expect(parseReminderSnapshot(snapshot(),"Buzz",now)).toHaveLength(1);
+  expect(parseReminderSnapshot({...snapshot(),candidates:[{...candidate,studentEmail:null}]},"Buzz",now)[0].studentEmail).toBeNull();
+  expect(parseReminderSnapshot({...snapshot(),candidates:[{...candidate,studentEmail:"ari@example.com"}]},"Buzz",now)[0].studentEmail).toBe("ari@example.com");
+  expect(()=>parseReminderSnapshot({...snapshot(),candidates:[{...candidate,extra:"x"}]},"Buzz",now)).toThrow();
+  expect(sameOccurrence(candidate,{...candidate,studentEmail:"new@example.com"})).toBe(true);
+ });
  it("silently rejects unauthorized setup without reading or writing data",async()=>{
   vi.stubEnv("LINE_SCHEDULE_BOT_ADMIN_IDS","admin");
   const db={select:vi.fn(()=>{throw new Error("Must not read");})};

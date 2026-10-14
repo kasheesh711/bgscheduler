@@ -8,7 +8,7 @@ import {fetchLineGroupSummary,LinePushError,pushLineTextMessage,replyLineMessage
 import {isScheduleBotAdmin} from "./schedule-bot";
 
 const iso=z.iso.datetime({offset:true});
-const candidateSchema=z.object({ownerKey:z.string().min(1),tutorName:z.string().min(1),seriesId:z.uuid(),assessmentId:z.uuid().nullable(),cycle:z.number().int().positive(),studentName:z.string().min(1),courseName:z.string().min(1),wiseClassId:z.string().min(1),wiseStudentId:z.string().min(1),lessonId:z.string().min(1),scheduledAt:iso,updatedAt:iso,url:z.literal("https://www.begifted.app/#/progress-checks")}).strict();
+const candidateSchema=z.object({ownerKey:z.string().min(1),tutorName:z.string().min(1),seriesId:z.uuid(),assessmentId:z.uuid().nullable(),cycle:z.number().int().positive(),studentName:z.string().min(1),studentEmail:z.string().min(3).max(320).nullable().optional(),courseName:z.string().min(1),wiseClassId:z.string().min(1),wiseStudentId:z.string().min(1),lessonId:z.string().min(1),scheduledAt:iso,updatedAt:iso,url:z.literal("https://www.begifted.app/#/progress-checks")}).strict();
 const snapshotSchema=z.object({schemaVersion:z.literal(1),ownerKey:z.string(),observedAt:iso,syncFinishedAt:iso,candidates:z.array(candidateSchema).max(1000)}).strict();
 export type ReminderCandidate=z.infer<typeof candidateSchema>;
 export type ReminderStage="week_before"|"night_before";
@@ -29,7 +29,7 @@ export function reminderAction(date:string,now:Date){
 }
 export function reminderText(c:ReminderCandidate,stage:ReminderStage){
  const when=new Date(c.scheduledAt).toLocaleString("en-GB",{timeZone:"Asia/Bangkok",dateStyle:"long",timeStyle:"short"});
- return `Progress Check reminder — ${stage==="week_before"?"one week before":"tomorrow"}\n\nHello ${c.tutorName},\nStudent: ${c.studentName}\nCourse: ${c.courseName}\nTest lesson: ${when} (Bangkok time)\nProgress Check: cycle ${c.cycle} (due after class ${c.cycle*8})\n\n${stage==="week_before"?"Prepare the test paper and marking guide. Explain the test topics to the student before the test lesson.":"Check that the test paper and marking guide are ready. Give the Progress Check in the scheduled lesson."}\n\nOpen Progress Checks: ${c.url}`;
+ return `Progress Check reminder — ${stage==="week_before"?"one week before":"tomorrow"}\n\nHello ${c.tutorName},\nStudent: ${c.studentName}\nStudent login email: ${c.studentEmail??"not linked yet. Ask BeGifted."}\nCourse: ${c.courseName}\nTest lesson: ${when} (Bangkok time)\nProgress Check: cycle ${c.cycle} (due after class ${c.cycle*8})\n\n${stage==="week_before"?"Prepare the test paper and marking guide. Explain the test topics to the student before the test lesson.":"Check that the test paper and marking guide are ready. Give the Progress Check in the scheduled lesson."}\n\nOpen Progress Checks: ${c.url}`;
 }
 export function sameOccurrence(a:ReminderCandidate,b:ReminderCandidate){return a.ownerKey===b.ownerKey&&a.seriesId===b.seriesId&&a.cycle===b.cycle&&a.lessonId===b.lessonId&&Date.parse(a.scheduledAt)===Date.parse(b.scheduledAt);}
 export function parseReminderSnapshot(value:unknown,ownerKey:string,now=new Date()){
