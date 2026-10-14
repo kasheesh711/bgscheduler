@@ -88,6 +88,48 @@ describe("mapSessionsToRosterInput", () => {
     expect(packages[0].subject).toBe(IGCSE_BAND);
   });
 
+  it("falls back to stored credit-control titles for a class with nothing booked", () => {
+    const pastOnly = [
+      past({ wiseClassId: "c3", wiseTeacherUserId: "u1", startTime: day(-1), studentIds: ["s3"] }),
+      past({ wiseClassId: "c4", wiseTeacherUserId: "u-new", startTime: day(-2), studentIds: ["s4"] }),
+      past({ wiseClassId: "c5", wiseTeacherUserId: "u1", startTime: day(-3), studentIds: ["s5"] }),
+    ];
+    const first = mapSessionsToRosterInput([], pastOnly, new Set(), NOW);
+    expect(first.sessions).toEqual([]);
+    expect(first.untitledClassIds).toEqual(["c3", "c4", "c5"]);
+
+    const stored = [
+      // c3: the same teacher's newest non-cancelled title wins.
+      { wiseClassId: "c3", title: "In-Person Session-Physics", wiseTeacherUserId: "u1", wiseTeacherId: "t1", lastStart: day(-40) },
+      { wiseClassId: "c3", title: "In-Person Session-Math", wiseTeacherUserId: "u1", wiseTeacherId: "t1", lastStart: day(-10) },
+      { wiseClassId: "c3", title: "In-Person Session-Math (Cancelled)", wiseTeacherUserId: "u1", wiseTeacherId: "t1", lastStart: day(-5) },
+      // c4: another teacher, but the class has only one stored title.
+      { wiseClassId: "c4", title: "Live Session-Biology", wiseTeacherUserId: "u-old", wiseTeacherId: "t-old", lastStart: day(-9) },
+      // c6: an upcoming class title wins over a stored one.
+      { wiseClassId: "c6", title: "Stored title", wiseTeacherUserId: "u1", wiseTeacherId: "t1", lastStart: day(-9) },
+      // c7: this teacher's stored titles are all cancelled, so the class's only stored title is used.
+      { wiseClassId: "c7", title: "In-Person Session-Chemistry (Cancelled)", wiseTeacherUserId: "u1", wiseTeacherId: "t1", lastStart: day(-8) },
+      { wiseClassId: "c7", title: "In-Person Session-Chemistry", wiseTeacherUserId: "u3", wiseTeacherId: "t3", lastStart: day(-20) },
+      // c5: another teacher and two titles, so no title.
+      { wiseClassId: "c5", title: "In-Person Session-Math", wiseTeacherUserId: "u2", wiseTeacherId: "t2", lastStart: day(-9) },
+      { wiseClassId: "c5", title: "In-Person Session-Physics", wiseTeacherUserId: "u2", wiseTeacherId: "t2", lastStart: day(-9) },
+    ];
+    const upcoming = [future({ wiseClassId: "c6", title: "Upcoming title", wiseTeacherUserId: "u2", wiseTeacherId: "t2", startTime: day(30) })];
+    const extraPast = [
+      past({ wiseClassId: "c6", wiseTeacherUserId: "u1", startTime: day(-4), studentIds: ["s6"] }),
+      past({ wiseClassId: "c7", wiseTeacherUserId: "u1", startTime: day(-5), studentIds: ["s7"] }),
+    ];
+    const second = mapSessionsToRosterInput(upcoming, [...pastOnly, ...extraPast], new Set(), NOW, stored);
+    expect(second.sessions).toEqual([
+      { wiseClassId: "c3", title: "In-Person Session-Math", wiseTeacherUserId: "u1", wiseTeacherId: "t1", lastStart: day(-1), sessionCount: 1 },
+      { wiseClassId: "c4", title: "Live Session-Biology", wiseTeacherUserId: "u-new", wiseTeacherId: null, lastStart: day(-2), sessionCount: 1 },
+      { wiseClassId: "c6", title: "Upcoming title", wiseTeacherUserId: "u1", wiseTeacherId: null, lastStart: day(-4), sessionCount: 1 },
+      { wiseClassId: "c7", title: "In-Person Session-Chemistry", wiseTeacherUserId: "u1", wiseTeacherId: null, lastStart: day(-5), sessionCount: 1 },
+    ]);
+    expect(second.untitledClassIds).toEqual(["c5"]);
+    expect(second.studentIds).toEqual(["s3", "s4", "s5", "s6", "s7"]);
+  });
+
   it("feeds the builder so recent sessions count toward co-teaching", () => {
     const mapped = mapSessionsToRosterInput([
       future({ startTime: day(2) }),

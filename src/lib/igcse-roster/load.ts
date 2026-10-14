@@ -1,4 +1,4 @@
-import { and, desc, eq, exists, gte, inArray, isNull, lte, ne, sql } from "drizzle-orm";
+import { and, desc, eq, exists, gte, inArray, isNull, lte, max, ne, notIlike, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { classroomTimestampToWiseIso } from "@/lib/classrooms/timestamps";
@@ -49,6 +49,15 @@ export interface PastSessionRow {
   studentIds: string[];
 }
 
+/** Session group from the newest stored credit-control sessions (stale, but class titles rarely change). */
+export interface StoredTitleRow {
+  wiseClassId: string;
+  title: string;
+  wiseTeacherUserId: string | null;
+  wiseTeacherId: string | null;
+  lastStart: Date;
+}
+
 const isCancelledStatus = (status: string) => /^cancel+ed$/i.test(status.trim());
 const teacherKey = (classId: string, userId: string | null) => (userId ? `${classId}|${userId}` : null);
 
@@ -56,8 +65,10 @@ const teacherKey = (classId: string, userId: string | null) => (userId ? `${clas
  * Pure mapping from session rows to the builder's class, student and session inputs.
  * Only non-cancelled sessions in [now - PAST_DAYS, now + FUTURE_DAYS] count. A past session
  * takes its title from an upcoming session of the same recurrence, else from the upcoming
- * sessions of the same class and teacher, else from the class's only upcoming title. With no
- * title it still makes its students current but gives no session (the builder reports the class).
+ * sessions of the same class and teacher, else from the class's only upcoming title, else from
+ * `stored` (newest title of the same class and teacher, then the class's only stored title).
+ * With no title it still makes its students current but gives no session (the builder reports
+ * the class); `untitledClassIds` names those classes so the loader can fetch `stored` for them.
  * Tutor Wise ids are dropped from student lists: tutors join sessions with their online accounts.
  * `packageName` is the class id; the loader replaces it with the class name.
  */
@@ -66,7 +77,8 @@ export function mapSessionsToRosterInput(
   past: PastSessionRow[],
   tutorIds: Set<string>,
   now: Date,
-): { packages: RosterPackageRow[]; sessions: RosterSessionRow[]; studentIds: string[] } {
+  stored: StoredTitleRow[] = [],
+): { packages: RosterPackageRow[]; sessions: RosterSessionRow[]; studentIds: string[]; untitledClassIds: string[] } {
   const from = now.getTime() - CURRENT_STUDENT_PAST_DAYS * DAY_MS;
   const to = now.getTime() + CURRENT_STUDENT_FUTURE_DAYS * DAY_MS;
   const inWindow = (start: Date) => start.getTime() >= from && start.getTime() <= to;
@@ -104,11 +116,20 @@ export function mapSessionsToRosterInput(
     }
     // The teacher changed (no upcoming sessions of theirs): a single-subject class still names the subject.
     const titles = classTitles.get(row.wiseClassId);
-    return titles?.size === 1 ? { title: [...titles][0], wiseTeacherId: null } : null;
+    if (titles?.size === 1) return { title: [...titles][0], wiseTeacherId: null };
+    // Last resort: the stored credit-control titles of the class.
+    const classStored = stored.filter((r) => r.wiseClassId === row.wiseClassId && !isCancelledTitle(r.title));
+    const [latest] = classStored.filter((r) => row.wiseTeacherUserId && r.wiseTeacherUserId === row.wiseTeacherUserId)
+      .sort((x, y) => y.lastStart.getTime() - x.lastStart.getTime() || x.title.localeCompare(y.title)
+        || (x.wiseTeacherId ?? "").localeCompare(y.wiseTeacherId ?? ""));
+    if (latest) return { title: latest.title, wiseTeacherId: latest.wiseTeacherId };
+    const storedTitles = new Set(classStored.map((r) => r.title));
+    return storedTitles.size === 1 ? { title: [...storedTitles][0], wiseTeacherId: null } : null;
   };
 
   type Live = { wiseClassId: string; title: string | null; wiseTeacherUserId: string | null; wiseTeacherId: string | null; start: Date; band: string; studentIds: string[] };
   const live: Live[] = [];
+  const untitledClassIds = new Set<string>();
   for (const row of liveFuture) {
     if (!inWindow(row.startTime)) continue;
     live.push({
@@ -121,6 +142,7 @@ export function mapSessionsToRosterInput(
   for (const row of past) {
     if (futureIds.has(row.wiseSessionId) || isCancelledStatus(row.finalStatus) || !inWindow(row.startTime)) continue;
     const match = titleFor(row);
+    if (!match) untitledClassIds.add(row.wiseClassId);
     live.push({
       wiseClassId: row.wiseClassId, title: match?.title ?? null, wiseTeacherUserId: row.wiseTeacherUserId,
       wiseTeacherId: match?.wiseTeacherId ?? null, start: row.startTime,
@@ -150,7 +172,7 @@ export function mapSessionsToRosterInput(
   }
 
   const studentIds = [...new Set([...packages.values()].map((row) => row.wiseStudentId))].sort();
-  return { packages: [...packages.values()], sessions: [...sessions.values()], studentIds };
+  return { packages: [...packages.values()], sessions: [...sessions.values()], studentIds, untitledClassIds: [...untitledClassIds].sort() };
 }
 
 export type FetchWiseStudents = () => Promise<RosterStudentRow[]>;
@@ -266,7 +288,31 @@ export async function loadIgcseRosterInput(
   }
 
   const tutorIds = new Set(accounts.flatMap((account) => (account.wiseUserId ? [account.wiseTeacherId, account.wiseUserId] : [account.wiseTeacherId])));
-  const { packages, sessions, studentIds } = mapSessionsToRosterInput(future, [...pastById.values()], tutorIds, now);
+  const pastSessions = [...pastById.values()];
+  let mapped = mapSessionsToRosterInput(future, pastSessions, tutorIds, now);
+  if (mapped.untitledClassIds.length) {
+    // Recent sessions with no upcoming title: read titles of those classes from the newest stored credit-control sessions.
+    const ccs = s.creditControlSessions;
+    const [sessionSnapshot] = await db.select({ id: s.creditControlSnapshots.id }).from(s.creditControlSnapshots)
+      .where(exists(db.select({ one: sql`1` }).from(ccs).where(eq(ccs.snapshotId, s.creditControlSnapshots.id))))
+      .orderBy(desc(s.creditControlSnapshots.generatedAt))
+      .limit(1);
+    const stored = sessionSnapshot
+      ? await db.select({
+        wiseClassId: ccs.wiseClassId,
+        title: ccs.title,
+        wiseTeacherUserId: ccs.wiseTeacherUserId,
+        wiseTeacherId: ccs.wiseTeacherId,
+        lastStart: max(ccs.scheduledStartTime),
+      }).from(ccs)
+        .where(and(eq(ccs.snapshotId, sessionSnapshot.id), inArray(ccs.wiseClassId, mapped.untitledClassIds),
+          ne(ccs.title, ""), notIlike(ccs.meetingStatus, "cancel%")))
+        .groupBy(ccs.wiseClassId, ccs.title, ccs.wiseTeacherUserId, ccs.wiseTeacherId)
+      : [];
+    mapped = mapSessionsToRosterInput(future, pastSessions, tutorIds, now,
+      stored.flatMap((row) => (row.lastStart ? [{ ...row, lastStart: row.lastStart }] : [])));
+  }
+  const { packages, sessions, studentIds } = mapped;
 
   // Class name: the newest post-class name of the class (any date); upcoming rows carry none.
   const classIds = [...new Set(packages.map((row) => row.wiseClassId))];
