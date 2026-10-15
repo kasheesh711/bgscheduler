@@ -455,8 +455,8 @@ describe("stepVerify: critical issues", () => {
 });
 
 describe("stepVerify: caps, stops and the ledger", () => {
-  it("writes at most maxCorrectionsPerNight proposals", async () => {
-    const ctx = context({ maxCorrectionsPerNight: 1, auditConcurrency: 1 });
+  it("writes at most maxProposalsPerNight proposals, whatever the correction cap (0 = Wise corrections paused)", async () => {
+    const ctx = context({ maxProposalsPerNight: 1, maxCorrectionsPerNight: 0, auditConcurrency: 1 });
     seed(ctx);
     seed(ctx, { sid: SID_B });
     const result = await stepVerify(ctx, harness(ctx).deps);

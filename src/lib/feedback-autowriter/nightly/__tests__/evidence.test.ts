@@ -456,6 +456,18 @@ describe("buildEvidenceBundle", () => {
     expect(buildEvidenceBundle({ target: target(), night: "2026-10-02", raw: raw(null) }).transcript?.source).toBe("iseb_record");
   });
 
+  it("tells the auditor a Zoom-timing post's labels were inferred, as production told the writer (only zoom_alignment is verified)", () => {
+    const raw = (speakerMethod: string): RawEvidence => ({
+      wiseSessionId: SID, detail: { data: detail() }, transcript: null, zoomVtt: null,
+      iseb: { evidenceHash: "h", lessonRecord: "[00:00] TUTOR: x", evidenceKind: "transcript" },
+      rowMeta: { speakerMethod, judge: null, joinedAsGuest: null },
+      status: { collectedAt: "", rowMeta: "read", iseb: "found", detail: "fetched", soniox: "not_needed", zoom: "none", retranscribe: "not_needed" },
+      notes: [],
+    });
+    expect(buildEvidenceBundle({ target: target(), night: "2026-10-02", raw: raw("zoom_timing") }).transcript).toMatchObject({ speakerMethod: "zoom_timing", speakerLabels: "inferred" });
+    expect(buildEvidenceBundle({ target: target(), night: "2026-10-02", raw: raw("zoom_alignment") }).transcript?.speakerLabels).toBe("verified");
+  });
+
   it("gives the auditor the frozen Atom evidence an ISEB post was written with", () => {
     const base: RawEvidence = {
       wiseSessionId: SID, detail: { data: detail() }, iseb: null, transcript: null, zoomVtt: null,

@@ -1,3 +1,4 @@
+import {sendProgressLineReminders} from "@/lib/line/progress-reminders";
 import { nightlyWorkerOutcome, runNightlyReminders } from "@/lib/post-class-feedback/nightly-reminders";
 import { isClassroomOperationsOwner, isWiseClassroomJob, pausedWiseClassroomResult, wiseClassroomAutomationEnabled } from "@/lib/classrooms/operations-policy";
 import { runClassroomPublishRecovery } from "@/lib/classrooms/publish-worker";
@@ -42,6 +43,7 @@ import { processJobs as processSitInJobs, queueDailyDigests, runSitInWorker } fr
 import { runUnearnedRevenueSync } from "@/lib/unearned-revenue/sync";
 import { withCronInvocationAudit } from "./cron-audit";
 import { getCronJobDefinition, type CronJobKey } from "./cron-registry";
+import { sendDeductionReport } from "@/lib/post-class-feedback/deduction-report";
 
 const DEFAULT_INSTITUTE_ID = "696e1f4d90102225641cc413";
 
@@ -214,6 +216,10 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
         const result = await sendPostClassAdminDigest();
         return NextResponse.json({ ok: true, result });
       }
+      if (jobKey === "post_class_deduction_report") {
+        const result = await sendDeductionReport();
+        return NextResponse.json({ ok: result.status === "sent", result }, { status: result.status === "sent" ? 200 : 503 });
+      }
 
       if (jobKey === "post_class_feedback_day_after" || jobKey === "post_class_feedback_deadline") {
         const result = await runPostClassReminderJob(
@@ -384,6 +390,11 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
         }
         const skipped = results.every((result) => result.skipped);
         return NextResponse.json({ ok: true, skipped, results }, { status: skipped ? 202 : 200 });
+      }
+
+      if (jobKey === "progress_line_reminders") {
+        const result=await sendProgressLineReminders();
+        return NextResponse.json(result,{status:result.failed?502:200});
       }
 
       if (jobKey === "line_credit_digest") {

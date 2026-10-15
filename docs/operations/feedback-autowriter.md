@@ -176,6 +176,24 @@ draft or is waiting for Wise (attendance, status, the POST slot), not for the re
 `zoom_transcript_pending` is normal: the Soniox transcript is ready and the class waits for Zoom's name-labelled
 transcript, which confirms who is the tutor — until 20 minutes after the Soniox job was submitted (the last look is
 the next sweep after that, so at most ~35 minutes). No `no_recording` alert is raised for it.
+**Who said what (`metadata.transcript.speakerMethod`).** Soniox labels voices "1", "2", …; Zoom's captions name who
+spoke when (each participant's own microphone).
+- `zoom_alignment`: each Soniox voice mostly overlaps one person's Zoom cues. Labels verified.
+- `zoom_timing` (12 Oct 2026): Soniox heard tutor and student as one voice (most of October's 35 "unclear"
+  classes: one voice with 96–100% of the text). Each phrase instead takes the role of the Zoom cues it overlaps
+  (≥ 60% of the overlapped time). A phrase no named cue overlaps, or both people overlap about evenly, is left out,
+  never guessed; a left-out stretch of ≥ 3 s shows as
+  `[… N s not attributable to either speaker, left out …]`
+  (`metadata.transcript.labelled` = percent of the text kept; `shares` are of the kept text). Used only when Zoom
+  names nobody but the tutor and the student, the student has ≥ 10 cues, the captions run to ≥ 90% of the
+  transcript, ≥ 85% of the text is labelled and the tutor carries ≥ 50% of it. **Labels stay inferred**: the writer
+  and the judges are told to treat a line as the student's own only when it clearly is. Measured on 9–12 Oct
+  classes against the per-speaker alignment of 16 aligned classes (an imperfect yardstick on Thai lessons): of the
+  STUDENT-labelled text, 10.7% (Thai-heavy) and 5.5% (English-heavy) was the tutor's by that yardstick, worst class
+  15.7%; it labels 10 of the 11 unclear classes of that sample (90–100% of the text).
+- `talk_share`: no usable Zoom cues; a clear split names the tutor. Labels inferred.
+- `unclear`: none of these → summary fallback (transcript first) or `speakers_unclear` hold.
+
 To turn the second pass off: `FEEDBACK_AUTOWRITER_TRANSCRIPTS_ENABLED=false` + redeploy — classes already waiting are
 then held with an alert (`transcript_pass_unavailable`) so a person writes them; a transcript-first class falls back
 to the summary instead (§6).
@@ -666,7 +684,8 @@ preflight accepts besides anything on `origin/main`. The lock is stale when its 
 | Soniox a night | $2 (`--soniox-usd` up to $5 for one run) |
 | OpenRouter a night | $3 |
 | Agent flags a night | 10 |
-| Corrections (proposals, and POSTs) a night / a week | 6 / 15 (and the database's own 6 per 24 h) |
+| Verified proposals (`verify`, no Wise write) a night | 6 (`maxProposalsPerNight`; not affected by the correction caps) |
+| Corrections (POSTs to Wise) a night / a week | 6 / 15 (and the database's own 6 per 24 h; `maxCorrectionsPerNight: 0` pauses them) |
 | Stop | 06:50 Bangkok on the morning after the audited day |
 
 Every spend is reserved in `spend.jsonl` before it starts (a crash leaves the reservation counting at its estimate); a
@@ -727,8 +746,10 @@ hash, the source (`replay` or `minimal_fix`), every check, a reason of mode code
 versions behind it — signed with HMAC-SHA256 over its canonical JSON with `~/.bgscheduler-nightly/hmac.key` (32 random
 bytes, 0600, created by the first `verify`; never commit or copy it). Every paid call is reserved first and recorded in
 `<night>/verify/calls/` before it is made and after: a candidate is re-audited at most once, ever (also after a crash
-mid-call); nothing is retried in a loop, except a call a usage limit or login failure stopped. At most 6 proposals a
-night. `<night>/verify/<sid>.json` keeps each class's candidates and checks for the morning review. A proposal must
+mid-call); nothing is retried in a loop, except a call a usage limit or login failure stopped. At most
+`maxProposalsPerNight` (6) proposals a night, also while Wise corrections are paused (`maxCorrectionsPerNight: 0`): then
+`correct --apply` stops at `cap:corrections_night` (exit 3) before any read or write, which is expected, and the
+proposals wait for the owner. `<night>/verify/<sid>.json` keeps each class's candidates and checks for the morning review. A proposal must
 carry every check passed (`correct` refuses one that does not).
 
 **3. `correct` (dry run), then `correct --apply`.** Every proposal's signature is checked first (one that fails —

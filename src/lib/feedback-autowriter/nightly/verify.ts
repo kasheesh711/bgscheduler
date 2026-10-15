@@ -59,7 +59,7 @@ import type { AuditRecord, EvidenceBundle, PrecheckFinding } from "./types";
  * Every paid call is reserved in the ledger first and recorded under `verify/calls/` before it is made (`started`) and
  * after (`done`): a candidate is re-audited at most once, ever — also after a crash mid-call — and nothing is retried
  * in a loop; only a usage limit or a login failure (nothing was audited) lets a later run make the call. At most
- * `maxCorrectionsPerNight` proposals a night.
+ * `maxProposalsPerNight` proposals a night (its own cap: pausing Wise corrections does not stop proposals).
  */
 
 export const NEEDS_KEVIN_MODES: ReadonlySet<string> = new Set(["M13", "M14"]);
@@ -547,7 +547,7 @@ async function verifyClass(state: VerifyState, file: BundleFile, record: AuditRe
   if (kevin.length > 0) return decide({ status: "needs_kevin", reasons: kevin });
   const blocked = blockedReasons(file);
   if (blocked.length > 0) return decide({ status: "blocked", reasons: blocked });
-  if (state.proposals >= ctx.caps.maxCorrectionsPerNight) return { skipped: "over_cap" };
+  if (state.proposals >= ctx.caps.maxProposalsPerNight) return { skipped: "over_cap" };
 
   const posted = postedFieldsOf(file);
   const criticals = serious.filter((issue) => issue.severity === "critical");
@@ -622,7 +622,7 @@ async function verifyClass(state: VerifyState, file: BundleFile, record: AuditRe
     tried.push({ source: candidate.source, fields: candidate.fields, fieldsHash: hash, evidence: candidate.evidence, arm: candidate.arm, checks, passed, unavailable: null });
     if (!passed) continue;
     // The cap is taken now, before anything is awaited again.
-    if (state.proposals >= ctx.caps.maxCorrectionsPerNight) return { skipped: "over_cap" };
+    if (state.proposals >= ctx.caps.maxProposalsPerNight) return { skipped: "over_cap" };
     state.proposals += 1;
     const proposal: CorrectionProposal = {
       version: 1,

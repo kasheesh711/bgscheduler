@@ -305,6 +305,8 @@ export const AUTOWRITER_ZOOM_TRANSCRIPT_RECHECK_MS = 5 * 60 * 1000;
  * real mix, and under 0.03 is a few Thai words (greetings, names), not Thai teaching.
  */
 export const AUTOWRITER_ZOOM_ENGLISH_MAX_THAI_SHARE = 0.03;
+/** A pair is labelled Thai when the median Thai share of its Soniox transcripts is at least this (owner rule, 12 Oct: under it Thai is the minority, the lesson bilingual). */
+export const AUTOWRITER_PAIR_THAI_MIN_MEDIAN_SHARE = 0.3;
 /**
  * … over the class's Soniox transcripts of this long before (at least one): a class written from Zoom's captions for
  * this long has no recent Soniox transcript and goes to Soniox once again, which re-checks its language.

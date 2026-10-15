@@ -4,7 +4,7 @@
 
 BGScheduler owns one grouped email per canonical tutor at 22:00 Asia/Bangkok. It considers ended classes on that date and the previous two Bangkok dates, using current Wise feedback policy and deadlines. Classes ending after 22:00 enter the next night's window. Online and onsite accounts share the canonical tutor's configured primary address; conflicting fallback addresses block that tutor and remain visible.
 
-The worker runs every 30 minutes at `/api/internal/post-class-feedback/reminder-nightly`. It validates every discovery page, stores the complete inventory, and refreshes canonical feedback in batches of 50 with a 20-minute freshness limit. A 15-minute fenced lease prevents overlapping workers; each pass has an eight-minute work budget. An unavailable class blocks its tutor's first grouped message while other tutors can proceed. Unattempted messages are regrouped when new classes arrive. After dispatch starts, content and membership stay immutable; later discoveries receive a separate recovery delivery.
+The worker runs every 30 minutes at `/api/internal/post-class-feedback/reminder-nightly`. It validates every discovery page, stores the complete inventory, and refreshes canonical feedback in batches of 50 with a 20-minute freshness limit. Refresh continues through the inventory while the eight-minute work budget permits; there is no default 400-class limit. Each class gets at most one refresh attempt per pass. A 15-minute fenced lease prevents overlapping workers. An unavailable class blocks its tutor's first grouped message while other tutors can proceed. Unattempted messages are regrouped when new classes arrive. After dispatch starts, content and membership stay immutable; later discoveries receive a separate recovery delivery.
 
 **Reminder settings do not change deduction rules, approvals, existing deductions, or payout publication.** The canonical feedback refresh uses the existing evidence and assessment pipeline; reminder success is never a prerequisite for deductions.
 
@@ -58,7 +58,7 @@ LINE API acceptance is distinct from delivery. The launch test requires the code
 
 Unit tests cover strict pagination beyond 13,603 rows, Bangkok boundaries, eligibility, tombstones, policy freshness and receipt parsing. Postgres integration tests cover durable grouping, missing/ambiguous source state, valid zero work, feedback completion during refresh, overlapping workers, retry timing, cross-midnight recovery, unknown outcomes across nights/off mode, interrupted sending, acceptance persistence failures, independent coverage gaps, bounded refresh fairness, immutable membership, prospective activation gates and deduction independence.
 
-Production rollout and seven-night acceptance are operational evidence recorded separately from these code checks.
+Integration tests also verify that 501 stale classes can be refreshed and sent in one pass, and that the eight-minute budget stops further refresh and dispatch. Production rollout and seven-night acceptance are operational evidence recorded separately from these code checks.
 
 ## Google Workspace connection
 

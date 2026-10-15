@@ -80,3 +80,6 @@ graphify-out/
 # Feedback autowriter pilot artifacts (student data, submit ledger)
 .feedback-autowriter/
 .tutor-offboarding/
+
+# Private local checks and reminder records
+.local/

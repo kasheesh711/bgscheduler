@@ -131,7 +131,7 @@ export const CO_TEACHING_MIN_SESSIONS = 3;
 /** The most recent teacher is also linked from this many non-cancelled sessions (a tutor change after their 2nd session). */
 export const LATEST_TEACHER_MIN_SESSIONS = 2;
 
-const isCancelledTitle = (title: string) => /\((?:cancelled|canceled)\)\s*$/i.test(title.trim());
+export const isCancelledTitle = (title: string) => /\((?:cancelled|canceled)\)\s*$/i.test(title.trim());
 
 /** One (class, title, teacher) group with its resolved subject. */
 interface SubjectCandidate {

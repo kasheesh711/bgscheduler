@@ -319,6 +319,7 @@ export function PostClassFeedbackWorkspace() {
 
       {invalidRange ? <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">The end date must be on or after the start date.</div> : null}
 
+      <a href="/post-class-feedback/evidence" className="text-sm underline">Wise screenshot evidence</a>
       <Tabs value={activeTab} onValueChange={(value) => { if (value) setActiveTab(value as WorkspaceTab); }} className="min-h-0 min-w-0 max-w-full flex-1">
         {/* h-10! (important) is required: the shared primitive sets `group-data-horizontal/tabs:h-8`
             via a `:where([data-orientation=horizontal])` variant that ties `.h-10` on specificity and

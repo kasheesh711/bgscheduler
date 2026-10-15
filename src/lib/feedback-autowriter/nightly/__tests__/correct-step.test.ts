@@ -415,6 +415,15 @@ describe("stepCorrect: applying", () => {
     expect(h.log.map((line) => line.split("@")[0])).toEqual([`dry:${SID}`, `apply:${SID}`]);
   });
 
+  it("with Wise corrections paused (night cap 0), stops before any read or write however many proposals verify made", async () => {
+    const ctx = context({ maxCorrectionsPerNight: 0 });
+    seed(ctx);
+    seed(ctx, correctionProposal({ wiseSessionId: SID_B }));
+    const h = harness(ctx, { apply: true });
+    expect(await stepCorrect(ctx, h.deps)).toMatchObject({ ok: false, stop: "cap:corrections_night", exitCode: 3 });
+    expect(h.execute).not.toHaveBeenCalled();
+  });
+
   it("keeps to the night (6) and week (15) caps, the database's daily cap and --max", async () => {
     const ctx = context({ maxCorrectionsPerNight: 1 });
     seed(ctx);

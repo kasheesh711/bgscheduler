@@ -1192,6 +1192,31 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(soniox.created).toHaveLength(1);
   });
 
+  it("writes from the transcript when Soniox hears one voice but Zoom's timing names each phrase (zoom_timing)", async () => {
+    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
+    const merged = lessonTokens().map((token) => ({ ...token, speaker: "1" }));
+    const at = (ms: number) => new Date(ms).toISOString().slice(11, 23);
+    const cues = lessonTokens().map((token, index) => `${index + 1}\n${at(token.start_ms)} --> ${at(token.end_ms)}\n` +
+      `${token.speaker === "1" ? "Kevin (Kev) Y. Hsieh Online" : "Somchai (Tom.Ja) Jaidee"}: words`).join("\n\n");
+    const prompts: string[] = [];
+    const callModel = vi.fn(async (request: { schemaName: string; messages: Array<{ content: string }> }) => {
+      prompts.push(request.messages.map((message) => message.content).join("\n"));
+      return request.schemaName === "post_class_feedback" ? sol(writerJson) : glm(FAITHFUL_VERDICT);
+    });
+    const outcome = await processSession(
+      transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fakeSoniox({ tokens: merged }).client,
+        { callModel: callModel as never, fetchText: async () => `WEBVTT\n\n${cues}\n` }),
+      { wiseSessionId: SESSION_ID, trigger: "webhook" },
+    );
+    expect(outcome).toMatchObject({ result: "verified" });
+    expect(prompts[0]).toContain("TUTOR: Today we add fractions");
+    expect(prompts[0]).toContain("STUDENT: I got three quarters");
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
+      state: "verified", evidence: "transcript",
+      metadata: { transcript: { speakerMethod: "zoom_timing", labelled: 100, shares: { tutor: 55, student: 45, other: 0 } } },
+    });
+  });
+
   it("holds the class when it cannot tell tutor from student", async () => {
     await seedRow({ state: "awaiting_recording", evidence: "transcript" });
     const even = lessonTokens().map((token, index) => ({ ...token, speaker: String((index % 3) + 1) }));

@@ -353,6 +353,7 @@ export const postClassFeedbackProvenanceEnum = pgEnum("post_class_feedback_prove
 ]);
 
 export const postClassNotificationKindEnum = pgEnum("post_class_notification_kind", [
+  "deduction_report",
   "tutor_day_after",
   "tutor_deadline",
   "tutor_nightly",
@@ -5199,6 +5200,36 @@ export const lineGroupSettings = pgTable("line_group_settings", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/** Browser observations are evidence only; they never change a financial decision. */
+export const postClassFeedbackCaptures = pgTable("post_class_feedback_captures", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sessionId: uuid("session_id").notNull().references(() => postClassSessions.id, { onDelete: "restrict" }),
+  binding: jsonb("binding").$type<{ wiseSessionId: string; tutorKey: string; tutorName: string; students: string[]; subject: string; deadlineAt: string }>().notNull(),
+  deadlineAt: timestamp("deadline_at", { withTimezone: true }).notNull(),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  mode: text("mode").$type<"deadline" | "current">().notNull(),
+  state: text("state").$type<"missing" | "present" | "uncheckable">().notNull(),
+  timing: text("timing").$type<"within_window" | "late" | "later_check">().notNull(),
+  note: text("note").notNull().default(""),
+  pathname: text("pathname"),
+  mime: text("mime"),
+  sha256: text("sha256"),
+  size: integer("size"),
+  uploadStatus: text("upload_status").$type<"pending" | "ready" | "failed" | "no_image">().notNull(),
+  uploadError: text("upload_error"),
+  uploadedBy: text("uploaded_by").notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => [
+  uniqueIndex("pc_capture_key_idx").on(table.idempotencyKey),
+  index("pc_capture_session_deadline_idx").on(table.sessionId, table.deadlineAt),
+  check("pc_capture_mode_check", sql`${table.mode} in ('deadline', 'current')`),
+  check("pc_capture_state_check", sql`${table.state} in ('missing', 'present', 'uncheckable')`),
+  check("pc_capture_timing_check", sql`${table.timing} in ('within_window', 'late', 'later_check')`),
+  check("pc_capture_upload_check", sql`${table.uploadStatus} in ('pending', 'ready', 'failed', 'no_image')`),
+]);
+
 /**
  * Every schedule link delivered into a LINE group.
  *
@@ -6630,6 +6661,18 @@ export const feedbackAutowriterRosterAccounts = pgTable("feedback_autowriter_ros
   check("feedback_autowriter_roster_accounts_seen_check", sql`${table.lastSeenAt} >= ${table.firstSeenAt}`),
 ]);
 
+/** Owner overrides of a tutor–student pair's lesson language (wise_class_id + tutor_key); clearing deletes the row. Display only until routing reads it (0116). */
+export const feedbackAutowriterPairLanguages = pgTable("feedback_autowriter_pair_languages", {
+  wiseClassId: text("wise_class_id").notNull(),
+  tutorKey: text("tutor_key").notNull(),
+  language: text("language").$type<"english" | "bilingual" | "thai">().notNull(),
+  setBy: text("set_by").notNull(),
+  setAt: timestamp("set_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.wiseClassId, table.tutorKey] }),
+  check("feedback_autowriter_pair_languages_language_check", sql`${table.language} IN ('english', 'bilingual', 'thai')`),
+]);
+
 // ── Tutor Offboarding ────────────────────────────────────────────────
 
 /** "Still with us" decisions on the departed-tutor detector; each keeps the score it overrode (future labels). */
@@ -6902,3 +6945,25 @@ export const workforceCourseLifecycleEvents = pgTable("workforce_course_lifecycl
   index("workforce_lifecycle_student_subject_idx").on(t.studentId, t.subject, t.effectiveMonth),
   check("workforce_lifecycle_revision", sql`${t.revision} > 0`),
 ]);
+
+// LINE preparation reminders are separate from email and the moved Progress writer.
+export const progressLineGroups = pgTable("progress_line_groups", {
+ canonicalKey: text("canonical_key").primaryKey().references(()=>tutorContacts.canonicalKey),
+ groupId: text("group_id").notNull().unique(), groupName: text("group_name").notNull(),
+ enabled: boolean("enabled").notNull().default(false), registeredBy: text("registered_by").notNull(),
+ updatedAt: timestamp("updated_at", {withTimezone:true}).notNull().defaultNow(),
+});
+export const progressLineDeliveries = pgTable("progress_line_deliveries", {
+ id: uuid("id").primaryKey().defaultRandom(), canonicalKey: text("canonical_key").notNull().references(()=>progressLineGroups.canonicalKey),
+ seriesId: uuid("series_id").notNull(), cycle: integer("cycle").notNull(), stage: text("stage").notNull(),
+ lessonId: text("lesson_id").notNull(), scheduledAt: timestamp("scheduled_at",{withTimezone:true}).notNull(),
+ reminderDate: date("reminder_date",{mode:"string"}).notNull(), groupId: text("group_id").notNull(),
+ text: text("text").notNull(), candidate: jsonb("candidate").notNull().$type<import("../line/progress-reminders").ReminderCandidate>(),
+ retryKey: uuid("retry_key").notNull().defaultRandom(), status: text("status").notNull().default("pending"),
+ attempts: integer("attempts").notNull().default(0), firstAttemptAt: timestamp("first_attempt_at",{withTimezone:true}),
+ leaseUntil: timestamp("lease_until",{withTimezone:true}), nextAttemptAt: timestamp("next_attempt_at",{withTimezone:true}),
+ providerMessageId: text("provider_message_id"), providerReceipt: jsonb("provider_receipt"), error: text("error"),
+ sentAt: timestamp("sent_at",{withTimezone:true}), createdAt: timestamp("created_at",{withTimezone:true}).notNull().defaultNow(),
+ updatedAt: timestamp("updated_at",{withTimezone:true}).notNull().defaultNow(),
+},t=>[uniqueIndex("progress_line_delivery_occurrence_idx").on(t.seriesId,t.cycle,t.stage,t.lessonId,t.scheduledAt,t.groupId),
+ index("progress_line_delivery_work_idx").on(t.status,t.reminderDate)]);

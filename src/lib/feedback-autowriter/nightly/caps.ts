@@ -30,6 +30,12 @@ export const NIGHTLY_CAPS = Object.freeze({
   maxOpenRouterUsdNight: 3,
   maxCorrectionsPerNight: 6,
   maxCorrectionsPerWeek: 15,
+  /**
+   * Verified minimal-fix proposals (`verify`: both judges + an Opus re-audit; no Wise write) a night. Separate from the
+   * correction caps (13 Oct 2026): pausing Wise corrections (`maxCorrectionsPerNight: 0`) must not also stop the
+   * proposals the owner reviews and approves by hand.
+   */
+  maxProposalsPerNight: 6,
   maxFlagsPerNight: 10,
   auditConcurrency: 2,
   /** Bangkok time on the morning after the audited day when every step stops. */
@@ -116,7 +122,8 @@ export function ownerConfigFile(home?: string): string {
 const PER_CALL_USD = new Set<keyof NightlyCaps>(["perAuditUsd", "perReauditUsd", "perSynthesisUsd"]);
 /** Counts: whole numbers (0 pauses that kind of work). */
 const COUNT_CAPS = new Set<keyof NightlyCaps>([
-  "maxTargets", "maxWiseReads", "maxOpusCalls", "maxCorrectionsPerNight", "maxCorrectionsPerWeek", "maxFlagsPerNight", "auditConcurrency",
+  "maxTargets", "maxWiseReads", "maxOpusCalls", "maxCorrectionsPerNight", "maxCorrectionsPerWeek", "maxProposalsPerNight", "maxFlagsPerNight",
+  "auditConcurrency",
 ]);
 
 /** Why a number cannot be used for this cap, or null. */
