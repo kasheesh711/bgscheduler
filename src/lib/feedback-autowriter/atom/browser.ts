@@ -9,7 +9,7 @@ import type { AtomActivity, AtomCollection, AtomSkippedRecord } from "./types";
 
 const APP = "https://app.atomlearning.com";
 const API = "https://api.atomlearning.com";
-const Student = z.object({ id_full_student: z.string().regex(/^_[0-9]+$/u), studentName: z.string(), surname: z.string().nullable().optional() });
+const Student = z.object({ id_full_student: z.string().regex(/^_[0-9]+$/u), studentName: z.string(), surname: z.string().nullable().optional(), activeCourses: z.number().int().nonnegative().optional() });
 export interface AtomCatalogStudent { id: string; name: string }
 /** Browser shutdown can hang on serverless Chromium; it never holds a run open longer than this. */
 const CLOSE_TIMEOUT_MS = 5_000;
@@ -64,14 +64,14 @@ export async function openAtomReadClient(input: {
     });
     page = await context.newPage();
     page.setDefaultTimeout(30_000);
-    const catalog = new Map<string, AtomCatalogStudent>();
+    const catalog = new Map<string, AtomCatalogStudent & { activeCourses?: number }>();
     const responseJobs = new Set<Promise<void>>();
     page.on("response", response => {
       if (!/^\/ms_accounts\/users\/_?\d+$/u.test(new URL(response.url()).pathname) || new URL(response.url()).origin !== API || response.status() !== 200) return;
       const job = (async () => {
         const parsed = Student.safeParse(await response.json());
         if (parsed.success) catalog.set(parsed.data.id_full_student, {
-          id: parsed.data.id_full_student, name: [parsed.data.studentName, parsed.data.surname].filter(Boolean).join(" "),
+          id: parsed.data.id_full_student, activeCourses: parsed.data.activeCourses, name: [parsed.data.studentName, parsed.data.surname].filter(Boolean).join(" "),
         });
       })().catch(() => undefined);
       responseJobs.add(job);
@@ -103,20 +103,22 @@ export async function openAtomReadClient(input: {
     const ownedContext = context;
     const ownedBrowser = browser;
     // All direct reads use paths observed on Atom's completed-work pages, and only this account's catalog IDs.
-    const get = async (path: string): Promise<unknown> => {
+    const get = async (path: string, noActiveCourse = false): Promise<unknown> => {
       const timeout = Math.min(30_000, input.deadlineMs - Date.now() - 5_000);
       if (timeout <= 0) throw new AtomCollectionError("collection_failed");
       const response = await ownedContext.request.get(API + path, {
         timeout, maxRedirects: 0,
       });
       if ([401, 403].includes(response.status())) throw new AtomCollectionError("authentication_failed");
+      // Atom hides the learning plan for expired courses; only that feed may be absent.
+      if (response.status() === 404 && noActiveCourse) return [];
       if (!response.ok()) throw new AtomCollectionError("collection_failed");
       const text = await response.text();
       if (text.length > 20_000_000) throw new AtomCollectionError("response_changed");
       try { return JSON.parse(text); } catch { throw new AtomCollectionError("response_changed"); }
     };
     return {
-      catalog: [...catalog.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      catalog: [...catalog.values()].map(({ id, name }) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)),
       collect: async (studentId, dates) => {
         if (!catalog.has(studentId)) throw new AtomCollectionError("source_contradiction", "student_not_in_catalog");
         const wanted = new Set(dates);
@@ -127,7 +129,7 @@ export async function openAtomReadClient(input: {
         for (const subjectId of Object.keys(ATOM_SUBJECT_IDS)) {
           const tests = parseActivityIndex("test", await get(prefix + "/mock_tests?type=HOME_MOCK%2CSCHOOL_MOCK&id_course_subjects=" + subjectId), studentId, wanted);
           tests.forEach(ref => references.set(ref.id, ref));
-          const islands = parseActivityIndex("exam_topic", await get("/ms_learning/students/" + encodeURIComponent(studentId) + "/islands?id_course_subjects=" + subjectId + "&status=completed"), studentId, wanted);
+          const islands = parseActivityIndex("exam_topic", await get("/ms_learning/students/" + encodeURIComponent(studentId) + "/islands?id_course_subjects=" + subjectId + "&status=completed", catalog.get(studentId)?.activeCourses === 0), studentId, wanted);
           islands.forEach(ref => references.set(ref.id, ref));
         }
         if (references.size > 300) throw new AtomCollectionError("collection_failed");
