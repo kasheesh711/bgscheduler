@@ -27,8 +27,8 @@ describe("validated Atom boundary", () => {
       .toEqual({ code: "source_contradiction", stage: "list_vs_transcript_correct+sas:test:_123|list:a=1,c=2,t=2|transcript:a=1,c=1,t=2,q=1,skip=0,auto=0" });
     expect(stageOf(() => normalizeAtomTranscript({ ...transcript, id_student: "_789" }, ref)).stage).toBe("transcript_identity:test:_123");
     expect(stageOf(() => normalizeAtomTranscript(transcript, { ...ref, id: "not-an-id" })).stage).toBe("transcript_identity:test:id");
-    const otherStudent = [{ id_mock_test: "_1", id_student: "_789", name: "T", completed: true, started: null, finished: null, id_course_subject: 237, score: null, totalQuestions: 1, questionsCorrect: 0, questionsAnswered: 0 }];
-    expect(stageOf(() => parseActivityIndex("test", otherStudent, "_456", new Set())).stage).toBe("index_student:test");
+    const otherStudent = [{ id_mock_test: "_1", id_student: "_789", name: "T", completed: true, started: ref.startedAt, finished: ref.completedAt, id_course_subject: 237, score: null, totalQuestions: 1, questionsCorrect: 0, questionsAnswered: 0 }];
+    expect(stageOf(() => parseActivityIndex("test", otherStudent, "_456", new Set(["2026-10-01"]))).stage).toBe("index_student:test");
   });
   it("accepts Atom's list counting skipped questions as answered, and still counts only real answers", () => {
     const questions = [1, 2, 3].map(id => ({ id_course_question: id, responses: [{ ...response, id_course_question: id, noAttempt: id === 3, correct: id !== 3 }] }));
@@ -69,8 +69,29 @@ describe("validated Atom boundary", () => {
     expect(() => normalizeAtomTranscript(changed({ id_student: "_789" }), listed)).toThrow("source_contradiction");
     expect(() => normalizeAtomTranscript({ ...practice, id_student: "_789" }, listed)).toThrow("source_contradiction");
   });
-  it.each([{ ...transcript, questionSessionType: "changed" }, { ...transcript, isScoredUsingMarks: true }, { ...transcript, questions: null }])("changed responses do not become empty success", changed => {
+  it.each([{ ...transcript, questionSessionType: "changed" }, { ...transcript, questions: null }])("changed responses do not become empty success", changed => {
     expect(() => normalizeAtomTranscript(changed, ref)).toThrow("response_changed");
+  });
+  it("preserves missing times and estimates without inventing zeros", () => {
+    const missing = { ...transcript, subtopicScore: null, questions: [{ id_course_question: 1, responses: [{ ...response, secondsTaken: null }] }] };
+    expect(normalizeAtomTranscript(missing, ref)).toMatchObject({ answers: [{ seconds: null }], modelledTopicEstimates: [], sas: 102 });
+  });
+  it("keeps a final answer one second after list completion, but rejects a larger time conflict", () => {
+    const at = (offset: number) => ({ ...transcript, questions: [{ id_course_question: 1, responses: [{ ...response, answeredAt: new Date(Date.parse(ref.completedAt) + offset).toISOString() }] }] });
+    expect(normalizeAtomTranscript(at(1000), ref)).toMatchObject({ completedAt: "2026-10-01T10:00:01.000Z", answers: [{ answeredAt: "2026-10-01T10:00:01.000Z" }] });
+    expect(() => normalizeAtomTranscript(at(1001), ref)).toThrow("source_contradiction");
+  });
+  it("omits mark-scored tests without turning marks into correct-question counts, and keeps identity checks", () => {
+    const marked = { ...transcript, isScoredUsingMarks: true, includesAiMarkedQuestions: true, subtopicScore: [{ title: "Writing" }] };
+    try { normalizeAtomTranscript(marked, ref); throw new Error("did not throw"); }
+    catch (error) { expect(error).toMatchObject({ code: "response_changed", stage: "unsupported_marking:test:_123" }); expect(isSkippableContradiction(error)).toBe(true); }
+    try { normalizeAtomTranscript({ ...marked, id_student: "_789" }, ref); throw new Error("did not throw"); }
+    catch (error) { expect(isSkippableContradiction(error)).toBe(false); expect(error).toMatchObject({ code: "source_contradiction" }); }
+  });
+  it("ignores a foreign historical test outside the requested dates but rejects one within them", () => {
+    const row = { id_mock_test: "_1", id_student: "_789", name: "T", completed: true, started: ref.startedAt, finished: ref.completedAt, id_course_subject: 237, score: null, totalQuestions: 1, questionsCorrect: 0, questionsAnswered: 0 };
+    expect(parseActivityIndex("test", [row], "_456", new Set(["2026-10-02"]))).toEqual([]);
+    expect(() => parseActivityIndex("test", [row], "_456", new Set(["2026-10-01"]))).toThrow("source_contradiction");
   });
   it("an error envelope cannot be interpreted as no completed activities", () => {
     expect(() => parseActivityIndex("test", { error: "expired" }, "_456", new Set())).toThrow("response_changed");

@@ -56,6 +56,25 @@ describe("Atom course access", () => {
       expect(mock.get.mock.calls.filter(([url]) => url.includes("custom_practices"))).toHaveLength(1);
     } finally { await client.close(); }
   });
+  it("retains a mock test also listed in the learning plan, and rejects conflicting entries", async () => {
+    const started = "2026-10-13T09:00:00.000Z", finished = "2026-10-13T10:00:00.000Z";
+    let conflict = false;
+    mock.get.mockImplementation(async (url: string) => {
+      const body = url.includes("transcripts") ? { id_question_session: "_2", id_student: "_1", name: "Test", questionSessionType: "mock_test", totalQuestions: 1,
+        isScoredUsingMarks: false, includesAiMarkedQuestions: false, score: 102, questions: [{ id_course_question: 1, responses: [{ id_student: "_1", id_course_question: 1,
+          id_course_subject: 237, answeredAt: started, correct: true, noAttempt: false, autoResponse: false, tutorMode: false, secondsTaken: 10, id_homework: null }] }] }
+        : !url.includes("id_course_subjects=237") ? [] : url.includes("mock_tests") ? [{ id_mock_test: "_2", id_student: "_1", name: "Test", completed: true,
+          started, finished, id_course_subject: 237, score: 102, totalQuestions: 1, questionsCorrect: 1, questionsAnswered: 1 }]
+        : [{ title: "Test", id_course_subject: conflict ? 235 : 237, status: "completed", sessions: [{ id_question_session: "_2", started, completed: finished }] }];
+      return { status: () => 200, ok: () => true, text: async () => JSON.stringify(body) };
+    });
+    const client = await openAtomReadClient({ username: "test", password: "test", deadlineMs: Date.now() + 120_000 });
+    try {
+      expect((await client.collect("_1", ["2026-10-13"])).activities).toMatchObject([{ kind: "test", sas: 102, answers: [{ correct: true }] }]);
+      conflict = true;
+      await expect(client.collect("_1", ["2026-10-13"])).rejects.toMatchObject({ code: "source_contradiction", stage: "index_activity_conflict" });
+    } finally { await client.close(); }
+  });
   it.each([
     { activeCourses: 1, status: 404, feed: "islands", code: "collection_failed" },
     { activeCourses: undefined, status: 404, feed: "islands", code: "collection_failed" },

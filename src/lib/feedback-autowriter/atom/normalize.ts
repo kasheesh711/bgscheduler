@@ -19,9 +19,10 @@ function contradiction(check: string, ref: Pick<AtomActivityReference, "kind" | 
 }
 /** Records one student may have skipped in a run; more fails the student (`many_records_skipped`, critical). */
 export const ATOM_MAX_SKIPPED_PER_STUDENT = 2;
-/** Only count disagreements between Atom's two views of one record; never a student, identity or subject check. */
+/** Known count disagreements and unsupported marking omit one record; identity and subject checks still fail. */
 export function isSkippableContradiction(error: unknown): error is AtomCollectionError {
-  return error instanceof AtomCollectionError && error.code === "source_contradiction" && /^list_vs_transcript_/u.test(error.stage ?? "");
+  return error instanceof AtomCollectionError && ((error.code === "source_contradiction" && /^list_vs_transcript_/u.test(error.stage ?? ""))
+    || (error.code === "response_changed" && /^unsupported_marking:/u.test(error.stage ?? "")));
 }
 export const ATOM_SUBJECT_IDS: Readonly<Record<number, AtomSubject>> = {
   235: "english", 236: "verbal_reasoning", 237: "maths", 238: "non_verbal_reasoning",
@@ -58,9 +59,9 @@ export function parseActivityIndex(kind: AtomActivity["kind"], raw: unknown, stu
     [...dates].some(day => bangkokDate(start) <= day && bangkokDate(end) >= day);
   try {
     if (kind === "test") return ListTest.array().max(20_000).parse(raw).flatMap(row => {
-      if (row.id_student !== studentId) throw new AtomCollectionError("source_contradiction", "index_student:test");
       const subject = row.id_course_subject === null ? null : ATOM_SUBJECT_IDS[row.id_course_subject];
       if (!row.completed || !subject || !inRange(row.started, row.finished)) return [];
+      if (row.id_student !== studentId) throw new AtomCollectionError("source_contradiction", "index_student:test");
       return [{ id: row.id_mock_test, studentId, name: row.name, subject, kind, completedAt: row.finished!, startedAt: row.started!,
         expectedCorrect: row.questionsCorrect, expectedAttempted: row.questionsAnswered, expectedTotal: row.totalQuestions, expectedSas: row.score }];
     });
@@ -89,16 +90,16 @@ export function parseActivityIndex(kind: AtomActivity["kind"], raw: unknown, stu
 const Response = z.object({
   id_student: id, id_course_question: z.number().int(), id_course_subject: z.number(),
   answeredAt: date, correct: z.boolean(), noAttempt: z.boolean(), autoResponse: z.boolean(),
-  tutorMode: z.boolean(), secondsTaken: z.number().finite().nonnegative(),
+  tutorMode: z.boolean(), secondsTaken: z.number().finite().nonnegative().nullable(),
   id_homework: z.union([z.string(), z.number()]).nullable(),
 }).passthrough();
 const Transcript = z.object({
   id_question_session: id, id_student: id, name: z.string().nullable(),
   questionSessionType: z.enum(["mock_test", "practice", "learning_journey_practice_island"]),
-  totalQuestions: z.number().int().nonnegative(), isScoredUsingMarks: z.literal(false),
-  includesAiMarkedQuestions: z.literal(false),
+  totalQuestions: z.number().int().nonnegative(), isScoredUsingMarks: z.boolean(),
+  includesAiMarkedQuestions: z.boolean(),
   score: z.number().finite().nullable().optional(),
-  subtopicScore: z.array(z.object({ title: z.string(), score: z.number().min(0).max(100) }).passthrough()).optional(),
+  subtopicScore: z.array(z.object({ title: z.string(), score: z.number().min(0).max(100).optional() }).passthrough()).nullish(),
   questions: z.array(z.object({ id_course_question: z.number().int(), responses: z.array(Response) }).passthrough()).max(2000),
 }).passthrough();
 
@@ -114,12 +115,18 @@ export function normalizeAtomTranscript(raw: unknown, ref: AtomActivityReference
       (ref.kind !== "practice" && ATOM_SUBJECT_IDS[response.id_course_subject] !== ref.subject))) {
       throw contradiction("transcript_subject", ref);
     }
+    if (parsed.isScoredUsingMarks || parsed.includesAiMarkedQuestions) {
+      throw new AtomCollectionError("response_changed", `unsupported_marking:${ref.kind}:${ref.id}`);
+    }
     // Multiple records for one question cannot silently inflate the attempted denominator.
     const answers = responses.map(response => ({
       questionId: String(response.id_course_question), answeredAt: response.answeredAt, correct: response.correct,
       seconds: response.secondsTaken, assisted: response.tutorMode || !!ref.assisted,
       ...(ref.kind === "practice" ? { subject: ATOM_SUBJECT_IDS[response.id_course_subject] } : {}),
     }));
+    const lastAnswerAt = Math.max(Date.parse(ref.completedAt), ...answers.map(answer => Date.parse(answer.answeredAt)));
+    // Atom can save the final answer one second after the list's completion time; keep its actual timestamp.
+    if (lastAnswerAt - Date.parse(ref.completedAt) > 1000) throw contradiction("answer_after_completion", ref);
     const correct = answers.filter(answer => answer.correct).length;
     // Atom's list counts a skipped question as answered: on 7 Oct a practice listed 10 answered where the transcript
     // held 8 answers and 2 `noAttempt` responses (no duplicates, no automatic ones). Either count agrees with the list;
@@ -148,10 +155,10 @@ export function normalizeAtomTranscript(raw: unknown, ref: AtomActivityReference
       id: ref.id, studentId: ref.studentId, kind: ref.kind, subject: ref.subject,
       name: parsed.name?.trim() || ref.name,
       sourceUrl: `https://app.atomlearning.com/tutor/transcript/${ref.id}`,
-      completedAt: ref.completedAt, purpose: responses.some(response => response.id_homework !== null) ? "homework" : "unknown",
+      completedAt: new Date(lastAnswerAt).toISOString(), purpose: responses.some(response => response.id_homework !== null) ? "homework" : "unknown",
       wiseTeacherUserId: null, totalQuestions: parsed.totalQuestions, answers,
       sas: ref.kind === "test" ? parsed.score ?? null : null,
-      modelledTopicEstimates: ref.kind === "test" ? (parsed.subtopicScore ?? []).map(topic => ({ topic: topic.title, percent: topic.score })) : [],
+      modelledTopicEstimates: ref.kind === "test" ? (parsed.subtopicScore ?? []).flatMap(topic => topic.score === undefined ? [] : [{ topic: topic.title, percent: topic.score }]) : [],
     });
   } catch (error) {
     if (error instanceof AtomCollectionError) throw error;

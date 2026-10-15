@@ -97,7 +97,7 @@ export function buildAtomLessonEvidence(input: {
     };
     evidence.activities.push(matched);
   }
-  // A skipped record worked on during this lesson has no statistics the writer may use; saying so keeps a score
+  // An omitted record worked on during this lesson has no statistics the writer may use; saying so keeps a score
   // repeated from the lesson record from reading as if Atom had confirmed it.
   for (const record of [...(input.skipped ?? [])].sort((a, b) => a.id.localeCompare(b.id))) {
     if (Date.parse(record.startedAt) < Date.parse(lesson.end) && Date.parse(record.completedAt) >= Date.parse(lesson.start)) {
