@@ -255,8 +255,9 @@ export async function runAtomCollector(input: {
       for (const record of records) {
         await recordIncident(db, {
           dedupeKey: `atom-record-skipped:${record.id}`, kind: "atom_record_skipped", severity: "info",
-          summary: `One Atom ${record.kind === "exam_topic" ? "exam topic" : record.kind} was left out: its list entry and transcript ` +
-            "disagree. The student's other Atom work is still used; open the record in Atom to check it.",
+          summary: `One Atom ${record.kind === "exam_topic" ? "exam topic" : record.kind} was left out: ` +
+            (record.cause.startsWith("unsupported_marking:") ? "its mark-based scoring is not supported. " : "its list entry and transcript disagree. ") +
+            "The student's other Atom work is still used; open the record in Atom to check it.",
           detail: { runId, atomStudentId, activityId: record.id, kind: record.kind, cause: record.cause,
             atomUrl: `https://app.atomlearning.com/tutor/transcript/${record.id}` },
         });

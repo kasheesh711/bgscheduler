@@ -32,6 +32,12 @@ Wise lesson titles labelled EFL resolve to English. Other unknown subject labels
 
 Atom can return HTTP 404 for completed learning topics when the student has no active course. The collector permits this only when the authenticated catalog explicitly reports zero active courses; it still reads and validates tests and practices. A missing course count, an active course, authentication errors and failures on other feeds still fail collection. An empty result supplies no statistics.
 
+The reader preserves an explicit null answer duration as unknown and null topic estimates as unavailable. Atom can record its final answer one second after the list completion time; collection keeps the answer time and extends the normalized completion time by at most one second. Larger conflicts still fail. Tests scored by marks or AI are recorded as omitted activities, never converted to question-correct counts. The existing two-record omission limit still applies.
+
+A mock test can appear in both the test feed and learning-plan feed. If its student, subject and times agree, collection retains the test entry and its count/SAS checks. Conflicting entries still fail.
+
+A historical test row outside the requested dates cannot block a current lesson solely because its student ID differs. Every test list still receives full shape validation, and any selected test for another student still fails collection. No student link is inferred or changed.
+
 Custom practices can contain questions from more than one subject despite having one subject label in Atom's list. Collection preserves each attempted answer's subject. Lesson matching uses those answer subjects, including for explicit references, and reports only the matching portion. Older snapshots without answer subjects retain their activity-level subject. Unknown subjects and wrong-student answers still fail collection; tests and exam topics must still match their listed subject.
 
 A partial activity uses only matched answers and their answer time. It retains the full activity question count as a separately labelled total, and drops whole-activity SAS and topic estimates. Correct answers, attempted questions, total questions, answer time, SAS and modelled topic estimates are distinct. Assistance flags remain visible; absence of a flag does not establish independent mastery.

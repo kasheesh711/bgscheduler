@@ -65,7 +65,7 @@ export interface AtomSnapshot {
   sourceHash: string;
 }
 /**
- * A record whose own list entry and transcript disagree on a count (`list_vs_transcript_*`). It is left out and the
+ * A record with a list/transcript count disagreement or unsupported mark-based scoring. It is left out and the
  * student's other activities are kept; an ownership or identity contradiction still fails the whole student.
  */
 export interface AtomSkippedRecord {

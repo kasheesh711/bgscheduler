@@ -130,7 +130,15 @@ export async function openAtomReadClient(input: {
           const tests = parseActivityIndex("test", await get(prefix + "/mock_tests?type=HOME_MOCK%2CSCHOOL_MOCK&id_course_subjects=" + subjectId), studentId, wanted);
           tests.forEach(ref => references.set(ref.id, ref));
           const islands = parseActivityIndex("exam_topic", await get("/ms_learning/students/" + encodeURIComponent(studentId) + "/islands?id_course_subjects=" + subjectId + "&status=completed", catalog.get(studentId)?.activeCourses === 0), studentId, wanted);
-          islands.forEach(ref => references.set(ref.id, ref));
+          islands.forEach(ref => {
+            const test = references.get(ref.id);
+            if (test && (test.kind !== "test" || test.studentId !== ref.studentId || test.subject !== ref.subject ||
+              test.startedAt !== ref.startedAt || test.completedAt !== ref.completedAt)) {
+              throw new AtomCollectionError("source_contradiction", "index_activity_conflict");
+            }
+            // Learning plans can also list mock tests; keep the test's identity and count checks.
+            if (!test) references.set(ref.id, ref);
+          });
         }
         if (references.size > 300) throw new AtomCollectionError("collection_failed");
         const activities: AtomActivity[] = [];
@@ -144,7 +152,7 @@ export async function openAtomReadClient(input: {
             skipped.push({ id: ref.id, kind: ref.kind, startedAt: ref.startedAt, completedAt: ref.completedAt, cause: error.stage! });
           }
         }
-        // More than a couple is not one bad record but Atom counting differently: fail the student, loudly, as before.
+        // More than a couple of omitted records needs review; fail the student as before.
         if (skipped.length > ATOM_MAX_SKIPPED_PER_STUDENT) {
           throw new AtomCollectionError("source_contradiction", `many_records_skipped:${skipped.length}/${references.size}`);
         }
