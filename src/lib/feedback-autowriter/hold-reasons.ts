@@ -73,7 +73,7 @@ const HOLD_REASONS: ReadonlyArray<{
   label: string | ((match: RegExpExecArray) => string);
 }> = [
   // Back on the summary after a transcript-first fallback, and the summary is mostly Thai.
-  { match: /^thai_summary_no_transcript$/u, category: "validation", label: "The summary is mostly Thai and there is no transcript to write from" },
+  { match: /^thai_summary_no_transcript$/u, category: "validation", label: "No draft could be written from the transcript, and the Thai summary needs manual review" },
   // `FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY`: only Wise's summary to write from, so a person writes it.
   { match: /^summary_only_held$/u, category: "validation", label: "Only Wise's summary to write from, which is held for a person" },
 
