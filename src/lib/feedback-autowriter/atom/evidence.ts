@@ -12,7 +12,7 @@ export function atomSubject(value: string): AtomSubject | null {
   if (/\b(?:nvr|non[ -]?(?:verbal|vr))\b/iu.test(value)) return "non_verbal_reasoning";
   if (/\b(?:vr|verbal reasoning)\b/iu.test(value)) return "verbal_reasoning";
   if (/\b(?:maths?|mathematics)\b/iu.test(value)) return "maths";
-  if (/\benglish\b/iu.test(value)) return "english";
+  if (/\b(?:english|efl)\b/iu.test(value)) return "english";
   if (/\b(?:science|physics|chemistry|biology)\b/iu.test(value)) return "science";
   return null;
 }

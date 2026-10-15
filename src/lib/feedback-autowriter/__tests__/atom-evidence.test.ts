@@ -12,6 +12,12 @@ function build(overrides: Partial<Parameters<typeof buildAtomLessonEvidence>[0]>
   return buildAtomLessonEvidence({ lesson, link, snapshot: { id: "snap", studentId: "atom1", collectedAt: "2026-10-01T10:00:00Z", sourceHash: evidenceHash(activities), activities }, now: new Date("2026-10-01T10:05:00Z"), otherLessons: [lesson], lessonRecord: "We practised fractions.", ...overrides });
 }
 describe("Atom lesson ownership and statistics", () => {
+  it("matches English work for a Wise EFL lesson without matching part of another word", () => {
+    const eflLesson = { ...lesson, subject: atomSubject("Live Session - EFL") };
+    expect(eflLesson.subject).toBe("english");
+    expect(build({ lesson: eflLesson }, [{ ...activity, subject: "english" }]).status).toBe("matched");
+    expect(atomSubject("Reflection")).toBeNull();
+  });
   it("keeps correct, attempted, total, time, SAS and estimates distinct, with assistance", () => {
     expect(build().activities[0]).toMatchObject({ correctAnswers: 1, attemptedQuestions: 2, totalQuestions: 5, seconds: 90, sas: 109, assistance: "assisted", modelledTopicEstimates: [{ percent: 72 }] });
   });
