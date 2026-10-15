@@ -547,6 +547,21 @@ counts Sol drafts for them and Luna drafts for everyone else.
 **Turning one tutor off:** the dashboard switch (`disabled_tutors`), no deploy. **Moving them to Sol first:** remove
 `writer: "luna"` from their roster entries and deploy.
 
+**Luna time-outs (12 Oct).** Luna at reasoning `max` takes 1–4 minutes on an hour's transcript and times out at
+180 s on about a quarter of long lessons. A time-out now hands the class to Sol in the same run (a `luna` writer row
+with `error = 'timeout'`, then a `sol` row seconds later); only when Sol's draft does not pass either does the run end
+as `infra:luna:timeout` (`infra:luna:timeout; sol:…` when Sol failed too) and count toward `writer_failed`. To see how
+often Luna times out (the count also includes a Luna call our own deadline cut short):
+
+```sql
+SELECT date(created_at AT TIME ZONE 'Asia/Bangkok') AS day, count(*) AS luna_timeouts
+FROM feedback_autowriter_calls
+WHERE role = 'writer' AND arm = 'luna' AND error = 'timeout' AND created_at > now() - interval '14 days'
+GROUP BY 1 ORDER BY 1;
+```
+
+**Rollback:** revert the PR and redeploy; a time-out then ends the run again, retried in 10 minutes. No data change.
+
 **Adding a new online tutor:** the dashboard ("The gate in full", Roster line) lists every Wise account with an
 online class in the last 14 days that the roster lacks. Append a roster entry for each of the tutor's two accounts
 (from `tutor_identity_group_members` on the active snapshot) with `writer: "luna"`. Name variants are redacted word by

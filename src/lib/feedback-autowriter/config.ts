@@ -151,7 +151,10 @@ export const AUTOWRITER_MODELS = {
  */
 export const AUTOWRITER_JUDGE_EFFORTS = ["medium", "high"] as const satisfies ReadonlyArray<AutowriterModelConfig["effort"]>;
 
-/** A writer call's time-out: Sol answers in ~6 s; the Luna fallback at reasoning `max` can take minutes. */
+/**
+ * A writer call's time-out: Sol answers in ~6 s; Luna at reasoning `max` can take minutes (p90 129 s on transcripts,
+ * 1–12 Oct). A writer that uses all of it hands the class to the next writer in the same run (`runWritingPipeline`).
+ */
 export const AUTOWRITER_WRITER_TIMEOUT_MS = 180_000;
 /**
  * A judge call's time-out, by what the draft is judged against (owner decision, 30 Sep). A summary is short; on
@@ -249,6 +252,12 @@ export const AUTOWRITER_WISE_READ_TIMEOUT_MS = 45_000;
  * case no longer posts in the same run either: 260 − 45 = 215 s are left after one such call, 170 s after two (the
  * writer, then the judges). Its draft is kept on the row, but only a transcript draft is posted as stored: the next
  * run writes a summary again.
+ * A writer that times out hands the class to the next writer (if any), whose call (rate-limit retries included) must
+ * end the judges' full time-out plus 5 s before the deadline − 45 s, and which is not called with less than 30 s: so
+ * the judges still start with their full time-out. After Luna's 180 s time-out on a transcript Sol has
+ * 560 − 180 − 45 − 240 − 5 = 90 s, less what the reads took (it answers in ~10 s). The POST still fits in the same run
+ * when the reads, Sol and the judges take under 140 s together (560 − 180 − 240); otherwise the draft is kept and the
+ * next run posts it, as above.
  */
 export const AUTOWRITER_SWEEP_MIN_REMAINING_MS = 560_000;
 /**
@@ -335,7 +344,9 @@ export const AUTOWRITER_TRANSCRIPT_FIRST_FALLBACK_MS = 3 * 60 * 60 * 1000;
  * deadline. Only the writer's failures count (owner decision, 30 Sep): a judge failure just retries. The count starts
  * again when a run ends in a judge failure or with a stored draft — not whenever a writer delivers one: a run in
  * which a judge rejects Sol's draft and the Luna fallback then fails is a writer failure and counts (owner decision,
- * 30 Sep 17:00). Wise and Soniox errors are counted apart.
+ * 30 Sep 17:00). Wise and Soniox errors are counted apart. A writer's time-out goes on to the next writer in the same
+ * run (12 Oct): the run counts as that time-out when the next writer's draft does not pass or it fails too, and ends
+ * as a judge failure (the count starts again) when the judges fail on that draft.
  */
 export const AUTOWRITER_MAX_WRITER_ERRORS = 3;
 /**

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildAutowriterDashboard, type DashboardCallRow } from "../dashboard";
 import { callOpenRouter, type OpenRouterCallResult } from "../openrouter";
-import { isInfraFailure, routeMismatch, runWritingPipeline, type CallRecord, type RateLimitRetries } from "../pipeline";
+import { HANDOVER_JUDGE_SLACK_MS, isInfraFailure, routeMismatch, runWritingPipeline, type CallRecord, type RateLimitRetries } from "../pipeline";
 import {
   AUTOWRITER_CALL_DEADLINE_MARGIN_MS,
   AUTOWRITER_JUDGE_TIMEOUT_MS,
@@ -272,8 +272,9 @@ describe("runWritingPipeline", () => {
     expect(records.filter((record) => record.role === "writer")).toHaveLength(1);
     expect(await run({ writers: [SOL(writerJson)], judge: [fail(keyLimit, 403)] }).promise)
       .toMatchObject({ kind: "infra", stage: "judge", modelFailure: false, creditExhausted: true });
-    expect(await run({ writers: [fail("timeout", null)] }).promise)
-      .toEqual({ kind: "infra", error: "sol:timeout", modelFailure: true, stage: "writer" });
+    // Both writers time out (a time-out passes to the next writer, below): the run ends as the first one.
+    expect(await run({ writers: [fail("timeout", null), fail("timeout", null)] }).promise)
+      .toEqual({ kind: "infra", error: "sol:timeout; luna:timeout", modelFailure: true, stage: "writer" });
   });
 
   it("tells whose call failed, and the models' failures from our account's, our connection's and our function's time", async () => {
@@ -284,7 +285,7 @@ describe("runWritingPipeline", () => {
     };
     const written = [SOL(writerJson)];
     // The writer: a time-out, a reply that is not JSON, a provider error, the wrong model.
-    expect(await infra({ writers: [fail("timeout", null)] })).toEqual(["sol:timeout", true, "writer"]);
+    expect(await infra({ writers: [fail("timeout", null), fail("timeout", null)] })).toEqual(["sol:timeout; luna:timeout", true, "writer"]);
     expect(await infra({ writers: [fail("invalid_json_response", 502)] })).toEqual(["sol:invalid_json_response", true, "writer"]);
     expect(await infra({ writers: [fail("Provider returned error", 500)] })).toEqual(["sol:Provider returned error", true, "writer"]);
     expect(await infra({ writers: [ok(writerJson, "Azure", "openai/gpt-6-luna")] })).toEqual(["sol:model_mismatch:openai/gpt-6-luna", true, "writer"]);
@@ -972,7 +973,10 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
       const result = await promise;
       return [result.kind === "infra" ? result.error : result.kind, requests.length, waits.length];
     };
-    expect(await once(fail("timeout", null))).toEqual(["sol:timeout", 1, 0]);
+    // A time-out is never retried as a rate limit: it goes to the next writer (Luna, timing out too here).
+    const timedOut = run({ writers: [fail("timeout", null), fail("timeout", null)] });
+    expect(await timedOut.promise).toMatchObject({ kind: "infra", error: "sol:timeout; luna:timeout" });
+    expect([timedOut.requests.length, timedOut.waits.length]).toEqual([2, 0]);
     expect(await once(fail("Provider returned error", 500))).toEqual(["sol:Provider returned error", 1, 0]);
     expect(await once(fail("HTTP 503", 503))).toEqual(["sol:HTTP 503", 1, 0]);
     expect(await once(fail("invalid_json_response", 502))).toEqual(["sol:invalid_json_response", 1, 0]);
@@ -980,12 +984,14 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
     expect(await once(fail("network_TypeError", null))).toEqual(["sol:network_TypeError", 1, 0]);
     expect(await once(ok(writerJson, "Azure", "openai/gpt-6-luna"))).toEqual(["sol:model_mismatch:openai/gpt-6-luna", 1, 0]);
 
-    // A retry that ends another way is that outcome: here a real time-out of the model, counted as the writer's.
-    const thenTimeout = run({ writers: [limited(), fail("timeout", null)] });
-    expect(await thenTimeout.promise).toEqual({ kind: "infra", error: "sol:timeout", modelFailure: true, stage: "writer" });
+    // A retry that ends another way is that outcome: here a real time-out of the model, counted as the writer's
+    // (Luna, given its turn after it, times out too).
+    const thenTimeout = run({ writers: [limited(), fail("timeout", null), fail("timeout", null)] });
+    expect(await thenTimeout.promise).toEqual({ kind: "infra", error: "sol:timeout; luna:timeout", modelFailure: true, stage: "writer" });
     expect(thenTimeout.waits).toEqual([4_000]);
     expect(written(thenTimeout.records)).toEqual([
       [false, 0, { error: LIMITED, evidence: "summary", ...sent(4_000) }], [false, 0, { error: "timeout", evidence: "summary", rateLimitRetry: 1 }],
+      [false, 0, { error: "timeout", evidence: "summary" }],
     ]);
   });
 
@@ -1099,7 +1105,7 @@ describe("hardening follow-ups (30 Sep reviews of #113 and #114)", () => {
 
     // No verdict on any draft in the run: nothing is said. The first writer failed; or a level failed on the first
     // draft — also when the other level had passed it (the draft was not checked: both levels are required).
-    expect(await answered({ writers: [fail("timeout", null)] })).toEqual(["sol:timeout", "writer", false]);
+    expect(await answered({ writers: [fail("timeout", null), fail("timeout", null)] })).toEqual(["sol:timeout; luna:timeout", "writer", false]);
     expect(await answered({ writers: [SOL(writerJson)], medium: [GLM(FAITHFUL)], high: [fail("timeout", null)] })).toEqual(["judge:high:timeout", "judge", false]);
     expect(await answered({ writers: [SOL(writerJson)], medium: [GLM("not json"), GLM("{}")], high: [GLM(FAITHFUL)] }))
       .toEqual(["judge:medium:judge_unparseable", "judge", false]);
@@ -1115,10 +1121,10 @@ describe("hardening follow-ups (30 Sep reviews of #113 and #114)", () => {
     };
     expect(await flag({ writers: Array(4).fill(limited()) })).toBe(true);
     expect(await flag({ writers: [SOL(writerJson)], medium: [GLM(FAITHFUL)], high: Array(4).fill(limited()) })).toBe(true);
-    // Rate limited, then a time-out: the run ended on the time-out.
-    expect(await flag({ writers: [limited(), fail("timeout", null)] })).toBe(false);
+    // Rate limited, then a time-out: the run ended on the time-out (and so did Luna's turn after it).
+    expect(await flag({ writers: [limited(), fail("timeout", null), fail("timeout", null)] })).toBe(false);
     expect(await flag({ writers: [fail("Insufficient credits", 402)] })).toBe(false);
-    expect(await flag({ writers: [fail("timeout", null)] })).toBe(false);
+    expect(await flag({ writers: [fail("timeout", null), fail("timeout", null)] })).toBe(false);
     expect(await flag({ writers: [limited(), SOL(writerJson)], judge: [GLM(FAITHFUL)] })).toBe("draft");
   });
 
@@ -1412,5 +1418,104 @@ describe("Mimi presentation guide in the production pipeline", () => {
     expect(await promise).toMatchObject({ kind: "infra", error: "luna:timeout", stage: "writer" });
     expect(writerRequests(requests)).toHaveLength(2);
     expect(judgeRequests(requests)).toHaveLength(0);
+  });
+});
+
+describe("a writer's time-out passes to the next writer (12 Oct: Luna at reasoning max timing out on long transcripts)", () => {
+  const timeouts = (requests: Request[]) => requests.map((request) => request.timeoutMs);
+  const LUNA_MODEL = AUTOWRITER_MODELS.fallbackWriter.model;
+  // Luna takes its whole time-out to time out; every other call answers at once. A Luna-first tutor (Mint) on a
+  // transcript, with the sweep's minimum time left less 20 s of reads.
+  const startMs = AUTOWRITER_SWEEP_MIN_REMAINING_MS - 20_000;
+  const lunaFirst = (script: Script, remainingMs = startMs) => run(script, {
+    canonicalTutorKey: "Mint", evidence: "transcript", remainingMs,
+    latencyMs: (request) => request.model === LUNA_MODEL ? request.timeoutMs : 0,
+  });
+  // What the next writer may use: what is left after Luna, less the deadline margin and the judges' 240 s (plus slack).
+  const nextWriterMs = startMs - AUTOWRITER_WRITER_TIMEOUT_MS - AUTOWRITER_CALL_DEADLINE_MARGIN_MS - AUTOWRITER_JUDGE_TIMEOUT_MS.transcript
+    - HANDOVER_JUDGE_SLACK_MS;
+  const LIMITED = "openai/gpt-6.1-sol is temporarily rate-limited upstream. Please retry shortly.";
+
+  it("writes with Sol in the same run, leaving the judges their full time-out, and posts Sol's draft", async () => {
+    expect(nextWriterMs).toBeGreaterThanOrEqual(30_000);
+    const { promise, records, requests } = lunaFirst({ writers: [fail("timeout", null), SOL(writerJson)], judge: [GLM(FAITHFUL)] });
+    expect(await promise).toMatchObject({ kind: "draft", arm: "sol" });
+    expect(writerRequests(requests).map((request) => request.model)).toEqual([LUNA_MODEL, AUTOWRITER_MODELS.writer.model]);
+    expect(timeouts(requests)).toEqual([AUTOWRITER_WRITER_TIMEOUT_MS, nextWriterMs, 240_000, 240_000]);
+    expect(roles(records)).toEqual(["writer:luna", "writer:sol", "judge:glm", "judge:glm"]);
+    expect(records[0].result).toMatchObject({ error: "timeout" });
+  });
+
+  it("still ends as Luna's time-out — counted, retried — when Sol's draft does not pass", async () => {
+    const rejected = lunaFirst({ writers: [fail("timeout", null), SOL(writerJson)], judge: [GLM(UNFAITHFUL)] });
+    expect(await rejected.promise).toEqual({ kind: "infra", error: "luna:timeout", modelFailure: true, stage: "writer", judgeAnswered: true });
+    const invalid = lunaFirst({ writers: [fail("timeout", null), SOL("not json")] });
+    expect(await invalid.promise).toEqual({ kind: "infra", error: "luna:timeout", modelFailure: true, stage: "writer" });
+    const bothTimedOut = lunaFirst({ writers: [fail("timeout", null), fail("timeout", null)] });
+    expect(await bothTimedOut.promise).toEqual({ kind: "infra", error: "luna:timeout; sol:timeout", modelFailure: true, stage: "writer" });
+    expect(timeouts(bothTimedOut.requests)).toEqual([AUTOWRITER_WRITER_TIMEOUT_MS, nextWriterMs]);
+  });
+
+  it("says what stopped Sol, but still counts Luna's time-out", async () => {
+    const keyLimit = "Key limit exceeded (monthly limit). $50.01 of $50.00 used";
+    // The key-limit message reaches the row's reason and the credit incident.
+    expect(await lunaFirst({ writers: [fail("timeout", null), fail(keyLimit, 403)] }).promise)
+      .toEqual({ kind: "infra", error: `luna:timeout; sol:${keyLimit}`, modelFailure: true, stage: "writer", creditExhausted: true });
+    // Sol's route rate limited: no retry, because a retry and its time-out would eat into the judges' time.
+    const limited = lunaFirst({ writers: [fail("timeout", null), fail(LIMITED, 429)] });
+    expect(await limited.promise).toEqual({ kind: "infra", error: `luna:timeout; sol:${LIMITED}`, modelFailure: true, stage: "writer", rateLimited: true });
+    expect(limited.waits).toEqual([]);
+    expect(writerRequests(limited.requests)).toHaveLength(2);
+  });
+
+  it("gives Sol no turn when it and the judges no longer fit", async () => {
+    const short = AUTOWRITER_WRITER_TIMEOUT_MS + AUTOWRITER_CALL_DEADLINE_MARGIN_MS + AUTOWRITER_JUDGE_TIMEOUT_MS.transcript
+      + HANDOVER_JUDGE_SLACK_MS + 30_000 - 1;
+    const { promise, requests } = lunaFirst({ writers: [fail("timeout", null)] }, short);
+    expect(await promise).toEqual({ kind: "infra", error: "luna:timeout", modelFailure: true, stage: "writer" });
+    expect(writerRequests(requests)).toHaveLength(1);
+  });
+
+  it("passes on only the writer's own time-out: not one our deadline cut short, nor any other failure", async () => {
+    // Cut short by our time: ours, as before, and nothing else is tried.
+    const cut = lunaFirst({ writers: [fail("timeout", null)] }, 150_000);
+    expect(await cut.promise).toEqual({ kind: "infra", error: "luna:timeout", modelFailure: false, stage: "writer" });
+    for (const failure of [fail("Provider returned error", 500), fail("invalid_json_response", 502), fail("network_TypeError", null)]) {
+      const { promise, requests } = lunaFirst({ writers: [failure] });
+      expect(await promise).toMatchObject({ kind: "infra", error: `luna:${failure.ok ? "" : failure.error}` });
+      expect(writerRequests(requests)).toHaveLength(1);
+    }
+  });
+
+  const EXTRA = " [STUDENT_1] also scored 95% on the end-of-lesson quiz.";
+  const withExtra = JSON.stringify({ ...JSON.parse(writerJson), performance: JSON.parse(writerJson).performance + EXTRA });
+  const QUOTED = JSON.stringify({
+    faithful: false, unsupported: ["How the student did in class: \"[STUDENT_1] also scored 95% on the end-of-lesson quiz\" — no score was given"],
+    misattributed: [], homeworkNotSet: [],
+  });
+
+  it("ends as a judge failure when the judges fail on the handed-over draft, like any judge failure", async () => {
+    expect(await lunaFirst({ writers: [fail("timeout", null), SOL(writerJson)], medium: [GLM(FAITHFUL)], high: [fail("timeout", null)] }).promise)
+      .toEqual({ kind: "infra", error: "judge:high:timeout", modelFailure: true, stage: "judge" });
+  });
+
+  it("repairs the handed-over draft when the judges leave time for it, and ends as the time-out when they do not", async () => {
+    const repaired = lunaFirst({ writers: [fail("timeout", null), SOL(withExtra)], judge: [GLM(QUOTED), GLM(FAITHFUL)] });
+    expect(await repaired.promise).toMatchObject({ kind: "draft", arm: "sol", repair: [{ field: "performance" }] });
+    // Judges that take 100 s leave 540 − 180 − 100 − 45 = 215 s, under the 240 s a repair judging needs: not held.
+    const noTime = run({ writers: [fail("timeout", null), SOL(withExtra)], judge: [GLM(QUOTED)] }, {
+      canonicalTutorKey: "Mint", evidence: "transcript", remainingMs: startMs,
+      latencyMs: (request) => request.model === LUNA_MODEL ? request.timeoutMs : request.schemaName === "feedback_faithfulness" ? 100_000 : 0,
+    });
+    expect(await noTime.promise).toEqual({ kind: "infra", error: "luna:timeout", modelFailure: true, stage: "writer", judgeAnswered: true });
+  });
+
+  it("ends at once, as before, when the last writer times out: no repair of an earlier draft in its place", async () => {
+    const { promise, records } = run(
+      { writers: [SOL(withExtra), fail("timeout", null)], judge: [GLM(QUOTED)] },
+      { evidence: "transcript", latencyMs: (request) => request.model === LUNA_MODEL ? request.timeoutMs : 0 },
+    );
+    expect(await promise).toEqual({ kind: "infra", error: "luna:timeout", modelFailure: true, stage: "writer", judgeAnswered: true });
+    expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm", "writer:luna"]);
   });
 });

@@ -307,12 +307,15 @@ describe("replay: the same evidence and decisions as production", () => {
 
   it("retries a transcript draft whose writer failed, and falls back after the third failure in a row like production", async () => {
     const pauses: number[] = [];
-    const cases: Array<[number, string, string | null, number]> = [
-      // Writer failures on the transcript draft, the record's outcome, then what the summary path gives, writer calls.
-      [2, "draft", null, 3 + 1],
-      [3, "fallback:writer_failed", "draft", 3 + 1],
+    const cases: Array<[number, string, string | null, number, number]> = [
+      // Writer time-outs on the transcript draft, the record's outcome, then what the summary path gives, writer calls,
+      // tries after the first. A time-out goes on to the next writer in the same try (12 Oct): a try is the writer's
+      // failure only when both writers time out.
+      [1, "draft", null, 2 + 1, 0],
+      [4, "draft", null, 5 + 1, 2],
+      [6, "fallback:writer_failed", "draft", 6 + 1, 2],
     ];
-    for (const [failures, outcome, afterFallback, writerCalls] of cases) {
+    for (const [failures, outcome, afterFallback, writerCalls, retries] of cases) {
       const soniox = fakeSoniox();
       const model = fakeModel({ writerFailures: failures });
       pauses.length = 0;
@@ -322,9 +325,8 @@ describe("replay: the same evidence and decisions as production", () => {
       }), SAMPLE);
       expect(record.outcome, outcome).toBe(outcome);
       expect(record.afterFallback, outcome).toBe(afterFallback);
-      // An infra failure never goes to the fallback writer: one writer call per try, then the summary draft's.
       expect(model.requests.filter((request) => request.schemaName === "post_class_feedback"), outcome).toHaveLength(writerCalls);
-      expect(pauses.filter((ms) => ms === 30_000), outcome).toHaveLength(Math.min(failures, 2));
+      expect(pauses.filter((ms) => ms === 30_000), outcome).toHaveLength(retries);
       expect(soniox.removed, outcome).toEqual(["job-1"]);
     }
   });
@@ -426,7 +428,7 @@ describe("replay: the same evidence and decisions as production", () => {
   });
 
   it("starts the writer's count again once it delivers a draft, even when that draft's judge then fails", async () => {
-    // Try 1: the writer times out. Try 2: it delivers and the high judge times out. Try 3: the writer times out again.
+    // Try 1: both writers time out. Try 2: the first delivers and the high judge times out. Try 3: both time out again.
     const failed = (latencyMs: number) => ({ ok: false, error: "timeout", httpStatus: null, model: null, provider: null, finishReason: null, usage: null, latencyMs }) as OpenRouterCallResult;
     let transcriptWrites = 0;
     const callModel = vi.fn(async (request: ModelRequest) => {
@@ -434,7 +436,7 @@ describe("replay: the same evidence and decisions as production", () => {
       if (request.schemaName === "post_class_feedback") {
         if (!transcript) return reply(request, WRITER_JSON);
         transcriptWrites += 1;
-        return transcriptWrites === 2 ? reply(request, WRITER_JSON) : failed(180_000);
+        return transcriptWrites === 3 ? reply(request, WRITER_JSON) : failed(180_000);
       }
       return transcript && request.effort === "high" ? failed(240_000) : reply(request, PASSING);
     });
@@ -442,9 +444,11 @@ describe("replay: the same evidence and decisions as production", () => {
       replayDeps({ wise: readOnlyWise(sessionDetail(RECORDING)).wise, soniox: fakeSoniox().client, callModel: callModel as never }),
       SAMPLE,
     );
-    expect(transcriptWrites).toBe(3);
+    expect(transcriptWrites).toBe(5);
     // Two writer failures, not three in a row: no fallback.
-    expect(record).toMatchObject({ outcome: `error:${AUTOWRITER_MODELS.writer.arm}:timeout`, afterFallback: null });
+    expect(record).toMatchObject({
+      outcome: `error:${AUTOWRITER_MODELS.writer.arm}:timeout; ${AUTOWRITER_MODELS.fallbackWriter.arm}:timeout`, afterFallback: null,
+    });
   });
 
   it("holds a recording or transcript too short for the class, and skips a class that would not have passed the gates", async () => {

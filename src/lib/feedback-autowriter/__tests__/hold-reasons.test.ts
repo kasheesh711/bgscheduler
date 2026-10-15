@@ -57,7 +57,7 @@ const EMITTED: ReadonlyArray<readonly [reason: string, category: HoldReasonCateg
   // job.ts processLeased and processTranscript.
   ["missing_student_or_tutor", "error", "The student or the tutor could not be identified"],
   ["missing_summary_student_or_tutor", "error", "The summary, the student or the tutor is missing"],
-  ["thai_summary_no_transcript", "validation", "The summary is mostly Thai and there is no transcript to write from"],
+  ["thai_summary_no_transcript", "validation", "No draft could be written from the transcript, and the Thai summary needs manual review"],
   ["summary_only_held", "validation", "Only Wise's summary to write from, which is held for a person"],
   ["transcript_pass_unavailable", "error", "The transcript pass is switched off"],
   ["recording_multiple_parts", "data_quality", "Recording in several parts"],
