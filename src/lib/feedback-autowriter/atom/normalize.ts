@@ -110,13 +110,15 @@ export function normalizeAtomTranscript(raw: unknown, ref: AtomActivityReference
     if (sourceKind !== parsed.questionSessionType || parsed.questions.some(question => question.responses.some(response =>
       response.id_course_question !== question.id_course_question || response.id_student !== ref.studentId))) throw contradiction("transcript_kind_or_response", ref);
     const responses = parsed.questions.flatMap(question => question.responses.filter(response => !response.noAttempt && !response.autoResponse));
-    if (responses.some(response => response.id_student !== ref.studentId || ATOM_SUBJECT_IDS[response.id_course_subject] !== ref.subject)) {
+    if (responses.some(response => response.id_student !== ref.studentId || !ATOM_SUBJECT_IDS[response.id_course_subject] ||
+      (ref.kind !== "practice" && ATOM_SUBJECT_IDS[response.id_course_subject] !== ref.subject))) {
       throw contradiction("transcript_subject", ref);
     }
     // Multiple records for one question cannot silently inflate the attempted denominator.
     const answers = responses.map(response => ({
       questionId: String(response.id_course_question), answeredAt: response.answeredAt, correct: response.correct,
       seconds: response.secondsTaken, assisted: response.tutorMode || !!ref.assisted,
+      ...(ref.kind === "practice" ? { subject: ATOM_SUBJECT_IDS[response.id_course_subject] } : {}),
     }));
     const correct = answers.filter(answer => answer.correct).length;
     // Atom's list counts a skipped question as answered: on 7 Oct a practice listed 10 answered where the transcript

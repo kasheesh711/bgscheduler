@@ -46,6 +46,15 @@ describe("Atom lesson ownership and statistics", () => {
     expect(evidence.omissions).toEqual([{ activityId: "_9", reason: "record_skipped" }]);
     expect(build({ skipped: [during] }, []).status).toBe("omitted");
   });
+  it("matches only a mixed practice's answers for the lesson subject, including explicit references", () => {
+    const practice: AtomActivity = { ...activity, kind: "practice", subject: "verbal_reasoning", sas: null, modelledTopicEstimates: [], answers: [
+      { ...activity.answers[0], subject: "maths" }, { ...activity.answers[1], subject: "english" },
+    ] };
+    expect(build({}, [practice]).activities[0]).toMatchObject({ portion: "matched_portion", correctAnswers: 1, attemptedQuestions: 1, seconds: 30, questionIds: ["q1"], sas: null });
+    expect(build({ lesson: { ...lesson, subject: "english" } }, [practice]).activities[0]).toMatchObject({ correctAnswers: 0, attemptedQuestions: 1, seconds: 60, questionIds: ["q2"] });
+    const outside = { ...practice, answers: practice.answers.map(answer => ({ ...answer, answeredAt: "2026-10-01T08:00:00Z" })) };
+    expect(build({ lessonRecord: "Today we completed ISEB Mathematics Test 7." }, [outside]).activities[0]).toMatchObject({ match: "explicit_reference", attemptedQuestions: 1, questionIds: ["q1"] });
+  });
   it("uses half-open lesson windows across Bangkok midnight", () => {
     const midnight = { ...lesson, start: "2026-09-30T16:30:00Z", end: "2026-09-30T17:30:00Z" };
     expect(bangkokDate(midnight.start)).toBe("2026-09-30");
