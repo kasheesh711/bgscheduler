@@ -60,16 +60,20 @@ export function buildAtomLessonEvidence(input: {
   if (!input.otherLessons) { omit("lesson_roster_unavailable"); return finish(); }
   for (const activity of [...snapshot.activities].sort((a, b) => a.id.localeCompare(b.id))) {
     if (activity.studentId !== link.atomStudentId) { evidence.contradictions.push("snapshot_student_conflict"); continue; }
-    if (activity.subject !== lesson.subject) continue;
+    // Atom's custom-practice label can name only one of its question subjects.
+    const subjectAnswers = activity.kind === "practice"
+      ? activity.answers.filter(answer => (answer.subject ?? activity.subject) === lesson.subject)
+      : activity.subject === lesson.subject ? activity.answers : [];
+    if (activity.subject !== lesson.subject && !subjectAnswers.length) continue;
     if (activity.purpose === "homework") { omit("homework", activity.id); continue; }
     if (activity.wiseTeacherUserId && activity.wiseTeacherUserId !== lesson.teacherId) { omit("other_tutor", activity.id); continue; }
     if (!activity.answers.length) { omit("timestamps_unavailable", activity.id); continue; }
-    const windowAnswers = activity.answers.filter(answer => contains(lesson, answer.answeredAt));
+    const windowAnswers = subjectAnswers.filter(answer => contains(lesson, answer.answeredAt));
     const uniqueName = snapshot.activities.filter(a => a.name.toLowerCase() === activity.name.toLowerCase()).length === 1;
     const reference = explicitReference(activity, input.lessonRecord, uniqueName);
-    const sameDate = activity.answers.every(answer => bangkokDate(answer.answeredAt) === bangkokDate(lesson.start));
+    const sameDate = subjectAnswers.every(answer => bangkokDate(answer.answeredAt) === bangkokDate(lesson.start));
     const explicit = !windowAnswers.length && reference !== null && sameDate;
-    const selected = explicit ? activity.answers : windowAnswers;
+    const selected = explicit ? subjectAnswers : windowAnswers;
     if (!selected.length) { omit("outside_lesson", activity.id); continue; }
     // A second scheduled lesson for the student makes ownership ambiguous, regardless of its subject.
     if (selected.some(answer => input.otherLessons!.some(other => other.sessionId !== lesson.sessionId &&

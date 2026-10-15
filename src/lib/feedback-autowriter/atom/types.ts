@@ -25,6 +25,8 @@ export const AtomActivitySchema = z.object({
   totalQuestions: z.number().int().nonnegative(),
   answers: z.array(z.object({
     questionId: id,
+    /** Custom practices can mix subjects; older snapshots use the activity subject. */
+    subject: AtomSubjectSchema.optional(),
     answeredAt: timestamp,
     correct: z.boolean(),
     seconds: z.number().finite().nonnegative().nullable(),

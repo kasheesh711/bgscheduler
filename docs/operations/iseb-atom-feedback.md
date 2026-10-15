@@ -28,6 +28,8 @@ Links are explicit Wise-ID to Atom-ID approvals in **Feedback Autowriter → Det
 
 Answers must match the student's approved ID, subject and half-open Wise interval `[start, end)` in Asia/Bangkok. Another lesson overlapping an answer prevents attribution. A unique activity name or exact ID can establish an outside-window match only when the current lesson record explicitly describes doing or reviewing that activity in this lesson on the same Bangkok date. Homework, assignment, historical and other-tutor references cannot establish that exception.
 
+Custom practices can contain questions from more than one subject despite having one subject label in Atom's list. Collection preserves each attempted answer's subject. Lesson matching uses those answer subjects, including for explicit references, and reports only the matching portion. Older snapshots without answer subjects retain their activity-level subject. Unknown subjects and wrong-student answers still fail collection; tests and exam topics must still match their listed subject.
+
 A partial activity uses only matched answers and their answer time. It retains the full activity question count as a separately labelled total, and drops whole-activity SAS and topic estimates. Correct answers, attempted questions, total questions, answer time, SAS and modelled topic estimates are distinct. Assistance flags remain visible; absence of a flag does not establish independent mastery.
 
 Snapshots older than 45 minutes, incomplete timetables, authentication failures and unknown response shapes omit statistics. A newer failed collection cannot silently fall back to an older successful snapshot. Confirmed student or source-count contradictions hold affected drafts until resolved by fresh evidence or staff.

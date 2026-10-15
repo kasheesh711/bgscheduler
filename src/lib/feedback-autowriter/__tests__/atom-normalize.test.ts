@@ -57,6 +57,18 @@ describe("validated Atom boundary", () => {
     expect(isSkippableContradiction(new AtomCollectionError("source_contradiction", "student_not_in_catalog"))).toBe(false);
     expect(isSkippableContradiction(new AtomCollectionError("response_changed", "list_vs_transcript_total:test:_1"))).toBe(false);
   });
+  it("keeps each custom-practice answer's subject while rejecting unknown subjects and wrong students", () => {
+    const practice = { ...transcript, questionSessionType: "practice", questions: [
+      transcript.questions[0],
+      { id_course_question: 2, responses: [{ ...response, id_course_question: 2, id_course_subject: 235 }] },
+    ] };
+    const listed = { ...ref, kind: "practice" as const, expectedCorrect: null, expectedAttempted: 2, expectedSas: null };
+    expect(normalizeAtomTranscript(practice, listed).answers.map(answer => answer.subject)).toEqual(["maths", "english"]);
+    const changed = (value: object) => ({ ...practice, questions: [{ id_course_question: 1, responses: [{ ...response, ...value }] }] });
+    expect(() => normalizeAtomTranscript(changed({ id_course_subject: 999 }), listed)).toThrow("source_contradiction");
+    expect(() => normalizeAtomTranscript(changed({ id_student: "_789" }), listed)).toThrow("source_contradiction");
+    expect(() => normalizeAtomTranscript({ ...practice, id_student: "_789" }, listed)).toThrow("source_contradiction");
+  });
   it.each([{ ...transcript, questionSessionType: "changed" }, { ...transcript, isScoredUsingMarks: true }, { ...transcript, questions: null }])("changed responses do not become empty success", changed => {
     expect(() => normalizeAtomTranscript(changed, ref)).toThrow("response_changed");
   });
