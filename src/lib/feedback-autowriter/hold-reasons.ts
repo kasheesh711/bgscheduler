@@ -128,6 +128,19 @@ function draftProblems(reason: string): string[] {
   return [...new Set(labels)];
 }
 
+/**
+ * A guest who did not stand in for an absent Wise account (`session.ts` `guest_stand_in_*`): usually the student who
+ * joined by Zoom link instead of their account. The label says what to check.
+ */
+function guestStandInLabel(code: string): string | null {
+  const account = "the student's account was under the attendance minimum";
+  const percent = /^guest_stand_in_(\d+)pct$/u.exec(code);
+  if (percent) return `A guest attended ${percent[1]}% while ${account}: check whether the guest is the student`;
+  if (code === "guest_stand_in_unknown") return `A guest joined while ${account}, but the guest's attendance is unknown`;
+  if (code === "guest_stand_in_tutor_absent") return `A guest may be the student (${account}), but the tutor attended too little for a stand-in`;
+  return null;
+}
+
 function describeHoldReason(reason: string | null): { category: HoldReasonCategory; label: string } {
   const code = reason?.trim() ?? "";
   if (!code) return { category: "other", label: NO_REASON };
@@ -136,7 +149,9 @@ function describeHoldReason(reason: string | null): { category: HoldReasonCatego
   const dataQuality = dataQualityReason(code);
   if (dataQuality?.coverage === "excluded_data_quality") {
     const attendance = /^attendance_(\d+)pct$/u.exec(code);
-    return { category: "data_quality", label: attendance ? `The student's attendance shows ${attendance[1]}%` : dataQuality.label };
+    if (attendance) return { category: "data_quality", label: `The student's attendance shows ${attendance[1]}%` };
+    const guest = guestStandInLabel(code);
+    return { category: "data_quality", label: guest ?? dataQuality.label };
   }
 
   if (ARM_PREFIX.test(code)) {
