@@ -57,6 +57,7 @@ import {
   observationEmail,
   reconcileObservation,
   runSitInWorker,
+  queueDailyDigests,
 } from "../worker";
 import {
   loadSources,
@@ -103,6 +104,7 @@ const lesson: Lesson = {
 };
 const sources = {
   lessons: [lesson],
+  index: { snapshotId: "test-snapshot", tutorGroups: [] },
   accounts: [],
   contacts: [],
   mappings: [],
@@ -110,6 +112,9 @@ const sources = {
 beforeAll(async () => {
   handle = await startTestDb();
   db = handle.db as unknown as Database;
+  // PostgreSQL does not use Vitest's frozen Date. Match queue readiness to the
+  // fixture clock so freshly inserted jobs are due in delivery regressions.
+  await db.execute(sql`ALTER TABLE tutor_sit_in_jobs ALTER COLUMN retry_at SET DEFAULT TIMESTAMPTZ '2026-10-01T00:00:00Z'`);
 }, 120_000);
 afterAll(async () => {
   vi.useRealTimers();
@@ -238,6 +243,29 @@ const googleList = () =>
     ],
   });
 describe("database-enforced QA workflow", () => {
+  it("queues the same daily digest set with one insert per observer and quarter", async () => {
+    const other = "alternate@example.test";
+    const rows = Array.from({ length: 24 }, (_, i) => ({
+      quarter: i < 18 ? "2026-Q4" : "2027-Q1",
+      department: "physics" as const,
+      canonicalKey: "digest-tutor-" + i,
+      tutorName: "Digest Tutor",
+      observerEmail: i < 12 ? email : other,
+    }));
+    await db.insert(s.tutorSitInAssignments).values(rows);
+    const inserts = vi.spyOn(db, "insert");
+    const date = new Date("2026-10-01T01:00:00Z");
+    await queueDailyDigests(db, date);
+    expect(inserts.mock.calls.filter(([table]) => table === s.tutorSitInJobs)).toHaveLength(3);
+    expect((await db.select().from(s.tutorSitInJobs)).map((job) => job.key).sort()).toEqual([
+      "digest:2026-10-01:2026-Q4:" + email,
+      "digest:2026-10-01:2026-Q4:" + other,
+      "digest:2026-10-01:2027-Q1:" + other,
+    ].sort());
+    await queueDailyDigests(db, date);
+    expect(await db.select().from(s.tutorSitInJobs)).toHaveLength(3);
+    expect(inserts.mock.calls.filter(([table]) => table === s.tutorSitInJobs)).toHaveLength(6);
+  });
   it("checks notice again after a slow live verification before persisting any booking", async () => {
     vi.setSystemTime(new Date(Date.parse(lesson.start) - 24 * 3600000 - 1));
     vi.mocked(verifyLiveLesson).mockImplementationOnce(
