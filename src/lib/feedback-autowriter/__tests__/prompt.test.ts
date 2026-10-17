@@ -202,7 +202,7 @@ describe("v4 rules (30 Sep)", () => {
 
   it("asks for homework only when the tutor clearly set it", () => {
     expect(FEEDBACK_JSON_SCHEMA.properties.homework.description)
-      .toBe("Only homework the tutor clearly set for after this lesson, with timing; empty string if none or unclear.");
+      .toBe("Only homework the tutor clearly set for after this lesson, with its timing when the tutor gave one; empty string if none or unclear.");
   });
 
   it("keeps improvement to suggestions and homework to what the tutor set, in both modes; a summary's Next steps are not homework", () => {
@@ -218,7 +218,7 @@ describe("v4 rules (30 Sep)", () => {
         ? "A \"Next steps\" line in the summary is the summary's own suggestion, not homework the tutor set. "
         : "";
       expect(system.content.split("\n").find((line) => line.startsWith("7. "))).toBe(
-        `7. homework: only work ${record} shows the tutor clearly setting [STUDENT_1] to do after this lesson, with its timing if stated. ` +
+        `7. homework: only work ${record} shows the tutor clearly setting [STUDENT_1] to do after this lesson, with its timing only when the tutor gave one (never write that no deadline or timing was stated). ` +
         "Work only described as remaining, unfinished, left over or still to complete is not homework unless the tutor set it. " +
         "Preserve question ranges, time limits and optional work, including any later change to the assignment. " +
         "A timed attempt is not a requirement to finish every question. " +
@@ -263,7 +263,7 @@ describe("v4 rules (30 Sep)", () => {
   });
 
   it("v6 preserves the rule that names only the student", () => {
-    expect(PROMPT_VERSION).toBe(6);
+    expect(PROMPT_VERSION).toBe(7);
     const rules = (evidence: "summary" | "transcript") => messages(evidence, "[00:00] TUTOR: we read chapter two")[0].content.split("\n");
     // Summary mode: a rule of its own, the last one.
     expect(rules("summary").at(-1)).toBe(

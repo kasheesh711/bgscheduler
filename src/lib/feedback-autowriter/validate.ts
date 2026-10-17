@@ -40,11 +40,45 @@ export function tidyFeedbackText(value: string): string {
   return value.replace(/\r\n?/gu, "\n").replace(/[ \t]+\n/gu, "\n").replace(/\n{3,}/gu, "\n\n").trim();
 }
 
-/** Model placeholders → the student's name, with whitespace tidied for Wise. */
+/**
+ * Commentary on what the lesson record does not say ("No deadline was stated.", "The page numbers were not specified.",
+ * "The summary does not show …") instead of on the lesson. No tutor writes that (owner, 12 Oct 2026: it reads as
+ * someone auditing the transcript). Only record-type subjects count, so coaching such as "units were not stated in
+ * his answers" is never touched.
+ */
+const RECORD_SUBJECT = String.raw`(?:deadline|due date|timing|time ?frame|page(?: number)?s|question numbers|number of questions)`;
+const RECORD_COMMENTARY_PARTS = [
+  String.raw`\b(?:there (?:was|were) )?no (?:specific |particular |clear |exact |set |firm )?${RECORD_SUBJECT} (?:was |were |has been |had been )?(?:stated|given|set|mentioned|specified|agreed|confirmed)\b`,
+  String.raw`\b(?:the )?${RECORD_SUBJECT} (?:was not|were not|wasn't|weren't) (?:stated|mentioned|specified|given|confirmed)\b`,
+  String.raw`(?<!['’]s )\bthe (?:transcript|summary|recording|captions?) (?:does not|doesn't|did not|didn't) (?:show|say|state|mention|specify|indicate)\b`,
+];
+const RECORD_COMMENTARY = new RegExp(RECORD_COMMENTARY_PARTS.join("|"), "iu");
+/**
+ * A whole sentence that is nothing but such commentary, the only text `dropRecordCommentary` may delete: no free tail
+ * (a tail such as "…, but finish it before the next lesson" carries an instruction), only a fixed "for the homework" /
+ * "in the lesson" kind of ending.
+ */
+const RECORD_COMMENTARY_SENTENCE = new RegExp(String.raw`^(?:${RECORD_COMMENTARY_PARTS.slice(0, 2).join("|")})` +
+  String.raw`(?: (?:for|in) (?:this|the) (?:homework|task|work|worksheet|essay|assignment|lesson))?\s*[.!?]?$`, "iu");
+
+/**
+ * Drops a sentence only when the whole sentence is record commentary and it is not a list item; deleting it never
+ * removes anything else and never adds a fact. Commentary anywhere else (inside a longer sentence, in a list item) is
+ * left in place for `feedbackTextChecks` to reject (`record_commentary:<field>`): fail closed, never a silent cut.
+ */
+export function dropRecordCommentary(text: string): string {
+  return text.split("\n").map((line) => {
+    if (!RECORD_COMMENTARY.test(line) || /^\s*(?:\d+[.)]|[-•*])\s/u.test(line)) return line;
+    const sentences = line.split(/(?<=[a-z0-9)][.!?])\s+(?=[A-Z])/u);
+    return sentences.filter((sentence) => !RECORD_COMMENTARY_SENTENCE.test(sentence.trim())).join(" ");
+  }).join("\n");
+}
+
+/** Model placeholders → the student's name, record commentary dropped, whitespace tidied for Wise. */
 export function finalizeFields(output: ModelOutput, studentDisplayName: string): FeedbackFieldAnswers {
   const fields = {} as FeedbackFieldAnswers;
   for (const field of POST_CLASS_FEEDBACK_FIELDS) {
-    fields[field] = tidyFeedbackText(restoreStudentName(output[field], studentDisplayName));
+    fields[field] = tidyFeedbackText(dropRecordCommentary(restoreStudentName(output[field], studentDisplayName)));
   }
   return fields;
 }
@@ -60,8 +94,9 @@ const MARKDOWN = /(?:^|\n)\s*#{1,6}\s|\*\*|(?<![_\p{L}\p{N}])_{2,3}(?=[^\s_])[\s
  * The checks of a feedback text that need nothing but the text, shared by `validateFeedbackDraft` and the agent
  * correction (`correctionTextProblems`), in two groups (a draft's style and format checks sit between them):
  * - `form`: a leftover placeholder token (`[STUDENT_1]`, `[TUTOR]`), Thai text (feedback is English for everyone:
- *   Thai means text copied from a Thai summary or transcript), Wise's answer limit, markdown, and a required field
- *   that is placeholder text;
+ *   Thai means text copied from a Thai summary or transcript), Wise's answer limit, markdown, commentary on what the
+ *   lesson record does not say that `dropRecordCommentary` could not remove whole, and a required field that is
+ *   placeholder text;
  * - `content`: Class Feedback's content bar (`policy:*`, `field:*`), and wording that makes the class exempt from
  *   deduction (`attendance_wording:*`: an absent student or a cancelled class makes Class Feedback mark the session
  *   ineligible).
@@ -81,6 +116,7 @@ export function feedbackTextChecks(fields: FeedbackFieldAnswers, options: {
     if (/[\u0e00-\u0e7f]/u.test(thaiSource[field])) form.push(`thai_text:${field}`);
     if ([...value].length > WISE_FEEDBACK_ANSWER_MAX_CHARACTERS) form.push(`too_long:${field}`);
     if (MARKDOWN.test(value)) form.push(options.styleGuide ? `style:prohibited_format:${field}` : `markdown:${field}`);
+    if (RECORD_COMMENTARY.test(value)) form.push(`record_commentary:${field}`);
   }
   for (const field of POST_CLASS_REQUIRED_FIELDS) {
     if (isPlaceholderFeedback(fields[field])) form.push(`placeholder_text:${field}`);

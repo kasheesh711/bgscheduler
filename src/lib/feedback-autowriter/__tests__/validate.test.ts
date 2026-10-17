@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { finalizeFields, parseModelOutput, validateFeedbackDraft, type ModelOutput } from "../validate";
+import { dropRecordCommentary, feedbackTextChecks, finalizeFields, parseModelOutput, validateFeedbackDraft, type ModelOutput } from "../validate";
 import { GOOD_FIELDS, STUDENT_NAME } from "./fixtures";
 
 const tutorNames = ["Kevin Hsieh", "Kev"];
@@ -105,5 +105,57 @@ describe("validateFeedbackDraft", () => {
     const result = check(goodOutput, [{ key: "prior", fields: GOOD_FIELDS, studentNames: [STUDENT_NAME] }] as never);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reasons).toContain("ai_suspect:similar_prior_feedback");
+  });
+});
+
+describe("record commentary (owner, 12 Oct: no tutor writes \"No deadline was stated.\")", () => {
+  it("drops a sentence that is nothing but commentary and keeps the rest of the field as it was", () => {
+    expect(dropRecordCommentary("I asked Poom to complete the question sheet sent by email for homework. No deadline was stated."))
+      .toBe("I asked Poom to complete the question sheet sent by email for homework.");
+    expect(dropRecordCommentary("Try ten revision questions. The page numbers were not specified. Send me a photo of your notes."))
+      .toBe("Try ten revision questions. Send me a photo of your notes.");
+    expect(dropRecordCommentary("Complete page 12. No deadline was given for the homework.")).toBe("Complete page 12.");
+    expect(dropRecordCommentary("There was no deadline stated.")).toBe("");
+  });
+
+  it("never cuts commentary out of a longer sentence or a list item: the draft is rejected instead", () => {
+    for (const homework of [
+      "Complete page 12 (no deadline was given).",
+      "Complete page 12; no deadline was set.",
+      "Finish past paper 2, although no specific deadline was given.",
+      "1. Complete page 12\n2. No deadline was stated.",
+      "Complete page 12. Dr. Lee's deadline was not stated.",
+      "Complete page 12. No deadline was set but Pim must finish it before the next lesson.",
+      "Complete page 12. No due date was given for the essay, which Pim should finish by Monday.",
+      "Complete page 12. No page numbers were given, so do the whole chapter.",
+      "Complete page 12. The timing was not given in the past paper, so Pim should time himself at 40 minutes.",
+      "Complete page 12. The summary does not show whether a test was set.",
+    ]) {
+      const fields = finalizeFields({ ...goodOutput, homework }, STUDENT_NAME);
+      expect(fields.homework).toBe(homework);
+      expect(feedbackTextChecks(fields).form).toContain("record_commentary:homework");
+    }
+  });
+
+  it("leaves coaching and lesson content that merely look similar alone", () => {
+    for (const text of [
+      "It was unclear whether Pim had revised the formulas, so we went through them again.",
+      "The deadline is Friday.",
+      "The deadline was given as Friday.",
+      "Pim lost marks because units were not stated in his answers.",
+      "Pressure was not specified, so we assumed STP.",
+      "Pim's summary did not mention the turning point of the story.",
+      "Pim noticed that no electrons were lost.",
+      "We analysed Source B. The date was not stated in Source B, so Pim inferred it from the uniforms.",
+    ]) {
+      expect(dropRecordCommentary(text)).toBe(text);
+      expect(feedbackTextChecks({ ...GOOD_FIELDS, performance: text }).form).not.toContain("record_commentary:performance");
+    }
+  });
+
+  it("is applied by finalizeFields before posting", () => {
+    const fields = finalizeFields({ ...goodOutput, homework: "Complete page 12. No deadline was stated." }, STUDENT_NAME);
+    expect(fields.homework).toBe("Complete page 12.");
+    expect(feedbackTextChecks(fields).form).not.toContain("record_commentary:homework");
   });
 });
