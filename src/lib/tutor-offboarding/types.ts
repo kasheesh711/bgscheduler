@@ -172,6 +172,8 @@ export interface OffboardingDashboardData {
   curve: CalibrationCurve;
   /** Not excluded; includes confirmed departures even with an Active score, most likely first. */
   inbox: OffboardingPersonRow[];
+  /** Not excluded, scored Active and not crossed out: everyone the review list leaves out, by name. */
+  active: OffboardingPersonRow[];
   activeCount: number;
   /** Excluded for any reason except a Wise ADMIN account. */
   excluded: OffboardingPersonRow[];
