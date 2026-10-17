@@ -12,6 +12,7 @@ import {
   zoomEnglishEvidence,
   zoomEnglishPrecheck,
   type Segment,
+  studentClearlyHeard,
 } from "../transcript";
 import { SESSION_ID, STUDENT_NAME } from "./fixtures";
 
@@ -578,5 +579,31 @@ describe("Zoom timing: one Soniox voice, labelled phrase by phrase from Zoom's c
     });
     expect(evidence.speakers.method).toBe("zoom_alignment");
     expect(evidence.meta).not.toHaveProperty("labelled");
+  });
+});
+
+describe("studentClearlyHeard (low attendance, owner decision 13 Oct 2026)", () => {
+  const line = (role: "TUTOR" | "STUDENT", text: string, at = "00:01") => `[${at}] ${role}: ${text}`;
+  const evidence = (method: "zoom_alignment" | "zoom_timing" | "talk_share" | "unclear", studentText: string) => ({
+    rendered: [line("TUTOR", "Today we add fractions."), line("STUDENT", studentText), "[00:02] [… 30 s left out …]"].join("\n"),
+    speakers: { roles: new Map(), method, shares: { tutor: 80, student: 20, other: 0 } },
+  });
+
+  it("needs Zoom-confirmed labels and at least 800 characters of the student's own lines", () => {
+    expect(studentClearlyHeard(evidence("zoom_alignment", "x".repeat(800)))).toBe(true);
+    expect(studentClearlyHeard(evidence("zoom_alignment", "x".repeat(799)))).toBe(false);
+    for (const method of ["zoom_timing", "talk_share", "unclear"] as const) {
+      expect(studentClearlyHeard(evidence(method, "x".repeat(5_000))), method).toBe(false);
+    }
+  });
+
+  it("counts only STUDENT lines, in characters (Thai included), never the tutor's", () => {
+    const thai = "ฉันคิดว่าคำตอบคือสามส่วนสี่"; // 27 code points
+    expect(studentClearlyHeard(evidence("zoom_alignment", thai.repeat(30)))).toBe(true);
+    expect(studentClearlyHeard(evidence("zoom_alignment", thai.repeat(29)))).toBe(false);
+    expect(studentClearlyHeard({
+      rendered: [line("TUTOR", "y".repeat(5_000)), line("STUDENT", "Okay.")].join("\n"),
+      speakers: { roles: new Map(), method: "zoom_alignment", shares: { tutor: 99, student: 1, other: 0 } },
+    })).toBe(false);
   });
 });
