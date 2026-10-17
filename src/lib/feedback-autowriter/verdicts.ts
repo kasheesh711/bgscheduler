@@ -5,13 +5,12 @@ import type { AutowriterCriticalCategory, AutowriterVerdictSeverity } from "@/li
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import { AutowriterReviewError } from "./api";
 import { recordIncident } from "./incidents";
-import { downgradeOf, isAccurate } from "./quality";
+import { downgradeOf } from "./quality";
 
 const R = schema.feedbackAutowriterReviews;
 const P = schema.feedbackAutowriterPosts;
 const V = schema.feedbackAutowriterVerdicts;
 const FL = schema.feedbackAutowriterFlags;
-const S = schema.feedbackAutowriterSessions;
 
 export const CRITICAL_CATEGORY_LABELS: Record<AutowriterCriticalCategory, string> = {
   wrong_person: "Wrong person",
@@ -138,18 +137,6 @@ export async function recordVerdict(db: Database, input: VerdictInput): Promise<
         .where(and(inArray(FL.id, openFlags.map((flag) => flag.id)), isNull(FL.resolvedByVerdictId)))
         .returning({ id: FL.id })
       : [];
-    // Triage of a verified post ends with an accurate verdict (approve, or a cosmetic fix): its Soniox transcript
-    // (kept for review, at most 72 h) may then go. A major or critical verdict keeps it for the root-cause work until
-    // the 72 h window closes — also when it replaces an earlier Approve that ended triage (the sweep has not deleted
-    // the job yet unless it already ran). Housekeeping only: `updated_at` is left alone.
-    if (isAccurate(input)) {
-      await tx.update(S).set({
-        metadata: sql`feedback_autowriter_sessions.metadata || jsonb_build_object('triagedAt', now()::text)`,
-      }).where(and(eq(S.wiseSessionId, input.wiseSessionId), eq(S.state, "verified"), sql`not (feedback_autowriter_sessions.metadata ? 'triagedAt')`));
-    } else {
-      await tx.update(S).set({ metadata: sql`feedback_autowriter_sessions.metadata - 'triagedAt'` })
-        .where(and(eq(S.wiseSessionId, input.wiseSessionId), sql`feedback_autowriter_sessions.metadata ? 'triagedAt'`));
-    }
     let criticalIncident = false;
     if (input.severity === "critical" && input.criticalCategory) {
       criticalIncident = await recordIncident(tx, {

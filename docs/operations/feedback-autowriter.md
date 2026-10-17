@@ -176,6 +176,15 @@ draft or is waiting for Wise (attendance, status, the POST slot), not for the re
 `zoom_transcript_pending` is normal: the Soniox transcript is ready and the class waits for Zoom's name-labelled
 transcript, which confirms who is the tutor — until 20 minutes after the Soniox job was submitted (the last look is
 the next sweep after that, so at most ~35 minutes). No `no_recording` alert is raised for it.
+
+**Transcript retention (owner decision, 13 Oct 2026).** BGScheduler never stores the transcript; it stays only as the
+Soniox job (text and per-word tokens with speaker labels). Once the class is done with it (posted, held, expired…), the
+next sweep stamps `metadata.sonioxRetainUntil` = now + 7 days, and the first sweep after that deletes the job and
+clears `soniox_transcription_id`. A verdict does not shorten it (before 13 Oct: 72 h, ended early by an accurate
+verdict). Why 7 days: the nightly audit's who-said-what (M07) failures must still have their tokens when a fix is
+replayed against them. Privacy intent is unchanged: every transcript is still deleted, a few days later than before,
+and Soniox's own 30-day expiry stays the backstop. To shorten it again, change `AUTOWRITER_SONIOX_RETAIN_MS`
+(`config.ts`); rows already stamped keep their date.
 **Who said what (`metadata.transcript.speakerMethod`).** Soniox labels voices "1", "2", …; Zoom's captions name who
 spoke when (each participant's own microphone).
 - `zoom_alignment`: each Soniox voice mostly overlaps one person's Zoom cues. Labels verified.
@@ -585,9 +594,8 @@ A class flagged by a measured fix (someone saved it in Wise after our post, befo
 marked Flagged, until a verdict answers it; the gate cannot pass while one waits, nor while a required post is unreviewed. A save
 after your Approve is listed ("after approval — not counted") and raises no flag. A first shot that landed without
 verifying (credits or status changed, text mismatch, unknown outcome) is flagged critical: open the class in Wise and
-judge what is there. An Approve or a cosmetic fix ends the class's Soniox review window; a major or critical verdict
-keeps the transcript (and re-opens a window an earlier Approve ended, if the sweep has not deleted it yet) until the
-72 h window closes.
+judge what is there. A verdict does not end the class's Soniox review window: the transcript stays until its 7-day
+window closes (§5).
 
 **Pilot health** (the rail on the right) shows the gate as one sentence, computed exactly as the nightly row, with the
 criteria that are not met; every criterion is under Details → The gate in full. The review job runs hourly at :27
