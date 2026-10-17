@@ -289,7 +289,7 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
   const readiness = useMemo(() => summarizeAssignmentReadiness(detail, date, loading), [detail, date, loading]);
   const projected = useMemo(() => buildTeacherSchedule(rows, date, run?.changeSummary ?? {}), [rows, date, run]);
   const [preparingPrint, setPreparingPrint] = useState(false);
-  const [printView, setPrintView] = useState<"tutors" | "rooms">("tutors");
+  const [printView, setPrintView] = useState<"tutors" | "rooms" | "grid">("tutors");
   async function printSevenDays() {
     const tab = window.open("about:blank", "_blank");
     setPreparingPrint(true);
@@ -715,8 +715,8 @@ export function ClassAssignmentsWorkspace({ canOperate = false, automationPaused
             <Mail />
             {loadingSchedulePreview ? "Loading email" : "Email schedules"}
           </Button>
-          <select aria-label="Print grouping" className="h-9 rounded-md border bg-background px-3 text-sm" value={printView} onChange={event => setPrintView(event.target.value as "tutors" | "rooms")}>
-            <option value="tutors">By tutor</option><option value="rooms">By room</option>
+          <select aria-label="Print grouping" className="h-9 rounded-md border bg-background px-3 text-sm" value={printView} onChange={event => setPrintView(event.target.value as "tutors" | "rooms" | "grid")}>
+            <option value="tutors">By tutor</option><option value="rooms">By room</option><option value="grid">Full day (all rooms)</option>
           </select>
           <Button variant="outline" disabled={!run} onClick={() => window.open(`/class-assignments/report?runIds=${run!.id}&view=${printView}`, "_blank", "noopener,noreferrer")}>Print day</Button>
           <Button variant="outline" disabled={!date || preparingPrint} onClick={printSevenDays}>{preparingPrint ? "Preparing…" : "Print seven days"}</Button>
