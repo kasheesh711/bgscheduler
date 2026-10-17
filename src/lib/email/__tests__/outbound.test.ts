@@ -9,7 +9,7 @@ const gmailSend = vi.hoisted(() => vi.fn<(input: unknown) => Promise<{ id: strin
 const createGmailSender = vi.hoisted(() => vi.fn<(...args: unknown[]) => { sendEmail: typeof gmailSend }>(() => ({ sendEmail: gmailSend })));
 const accessToken = vi.hoisted(() => vi.fn(async () => "token"));
 const resendSend = vi.hoisted(() => vi.fn<(input: unknown) => Promise<{ id: string }>>(async () => ({ id: "resend-1" })));
-const createResendSender = vi.hoisted(() => vi.fn(() => ({ sendEmail: resendSend })));
+const createResendSender = vi.hoisted(() => vi.fn((..._args: unknown[]) => ({ sendEmail: resendSend })));
 const resendConfigured = vi.hoisted(() => vi.fn(() => true));
 const gmailConfig = vi.hoisted(() => ({ value: { configured: true, trusted: true, available: true } }));
 
@@ -46,14 +46,14 @@ describe("outboundEmailTransport", () => {
 
 describe("createOutboundEmailSender", () => {
   it("keeps today's relay behaviour, sender key and strictness when the flag is off", async () => {
-    const sender = createOutboundEmailSender("backup", { strictOutcome: true }, {});
+    const sender = createOutboundEmailSender("backup", { strictOutcome: true, audience: "staff" }, {});
     expect(relay).toHaveBeenCalledWith("backup", { strictOutcome: true });
     expect(await sender.sendEmail(input)).toEqual({ id: "relay-1" });
     expect(createGmailSender).not.toHaveBeenCalled();
   });
 
   it("sends primary mail through Workspace Gmail with the configured reply-to and a single-line subject", async () => {
-    const sender = createOutboundEmailSender("primary", {}, { ...GMAIL, SCHEDULE_EMAIL_REPLY_TO: "kevhsh7@gmail.com" });
+    const sender = createOutboundEmailSender("primary", { audience: "staff" }, { ...GMAIL, SCHEDULE_EMAIL_REPLY_TO: "kevhsh7@gmail.com" });
     expect(await sender.sendEmail({ ...input, subject: "Incident:\nstyle reviewer down " })).toEqual({ id: "gmail-1" });
     expect(gmailSend).toHaveBeenCalledWith({ ...input, subject: "Incident: style reviewer down" });
     expect(createGmailSender).toHaveBeenCalledWith(expect.any(Function), undefined,
@@ -65,7 +65,7 @@ describe("createOutboundEmailSender", () => {
     gmailSend.mockRejectedValueOnce(new Rejection("Reconnect the dedicated Gmail sender"));
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      const sender = createOutboundEmailSender("primary", { strictOutcome: true }, GMAIL);
+      const sender = createOutboundEmailSender("primary", { strictOutcome: true, audience: "staff" }, GMAIL);
       expect(await sender.sendEmail(input)).toEqual({ id: "relay-1" });
       expect(relay).toHaveBeenCalledWith("primary", { strictOutcome: true });
       expect(relaySend).toHaveBeenCalledWith(input);
@@ -76,19 +76,19 @@ describe("createOutboundEmailSender", () => {
     gmailConfig.value = { configured: true, trusted: true, available: false };
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      expect(await createOutboundEmailSender("primary", {}, GMAIL).sendEmail(input)).toEqual({ id: "relay-1" });
+      expect(await createOutboundEmailSender("primary", { audience: "staff" }, GMAIL).sendEmail(input)).toEqual({ id: "relay-1" });
       expect(gmailSend).not.toHaveBeenCalled();
     } finally { error.mockRestore(); }
   });
 
   it("never resends through the relay after an uncertain Gmail outcome", async () => {
     gmailSend.mockRejectedValueOnce(new Error("Gmail acceptance is uncertain (HTTP 500)."));
-    await expect(createOutboundEmailSender("primary", {}, GMAIL).sendEmail(input)).rejects.toThrow("uncertain");
+    await expect(createOutboundEmailSender("primary", { audience: "staff" }, GMAIL).sendEmail(input)).rejects.toThrow("uncertain");
     expect(relaySend).not.toHaveBeenCalled();
   });
 
   it("routes the backup key straight to the primary relay", async () => {
-    const sender = createOutboundEmailSender("backup", { strictOutcome: true }, GMAIL);
+    const sender = createOutboundEmailSender("backup", { strictOutcome: true, audience: "staff" }, GMAIL);
     expect(relay).toHaveBeenCalledWith("primary", { strictOutcome: true });
     expect(await sender.sendEmail(input)).toEqual({ id: "relay-1" });
     expect(gmailSend).not.toHaveBeenCalled();
@@ -114,15 +114,30 @@ describe("resend transport", () => {
     expect(gmailSend).not.toHaveBeenCalled();
   });
 
-  it("keeps teacher mail (and untagged callers) on Workspace Gmail until RESEND_AUDIENCE=all", async () => {
-    expect(await createOutboundEmailSender("primary", {}, RESEND).sendEmail(input)).toEqual({ id: "gmail-1" });
-    expect(await createOutboundEmailSender("primary", { audience: "teacher" }, RESEND).sendEmail(input)).toEqual({ id: "gmail-1" });
-    expect(resendSend).not.toHaveBeenCalled();
+  it("sends teacher mail and untagged callers through Resend without rollout flags", async () => {
+    expect(await createOutboundEmailSender("primary", {}, {}).sendEmail(input)).toEqual({ id: "resend-1" });
+    expect(await createOutboundEmailSender("primary", { audience: "teacher" }, GMAIL).sendEmail(input)).toEqual({ id: "resend-1" });
+    expect(gmailSend).not.toHaveBeenCalled();
+    expect(relaySend).not.toHaveBeenCalled();
   });
 
   it("sends teacher mail through Resend once RESEND_AUDIENCE=all", async () => {
     const sender = createOutboundEmailSender("primary", { audience: "teacher" }, { ...RESEND, RESEND_AUDIENCE: "all" });
     expect(await sender.sendEmail(input)).toEqual({ id: "resend-1" });
+  });
+
+  it.each(["primary", "backup"] as const)("keeps tutor sender on Resend for %s, including rejection and missing config", async (key) => {
+    const env = { ...RESEND, RESEND_AUDIENCE: "all", RESEND_FROM: "Wrong <wrong@example.com>" };
+    const sender = createOutboundEmailSender(key, { audience: "teacher" }, env);
+    expect(createResendSender).toHaveBeenCalledWith(env, {
+      from: "BeGifted <no-reply@notify.begiftededucation.com>", replyTo: "admin@begiftededucation.com",
+    });
+    resendSend.mockRejectedValueOnce(new Rejection("403"));
+    await expect(sender.sendEmail(input)).rejects.toThrow("403");
+    resendConfigured.mockReturnValue(false);
+    await createOutboundEmailSender(key, {}, { OUTBOUND_EMAIL_TRANSPORT: "resend", RESEND_AUDIENCE: "all" }).sendEmail(input);
+    expect(gmailSend).not.toHaveBeenCalled();
+    expect(relaySend).not.toHaveBeenCalled();
   });
 
   it("rejection falls back to Gmail with the same input", async () => {

@@ -277,45 +277,26 @@ describe("durable nightly reminders", () => {
     expect(mail.find((m) => m.id === queued.id)?.status).toBe("cancelled");
     expect(mail.find((m) => m.status === "sent")?.frozenContent?.sessionIds).toHaveLength(2);
   });
-  it("uses Gmail as the production transport and records acceptance separately", async () => {
-    vi.stubEnv("AUTH_SECRET", "test-key"); vi.stubEnv("POST_CLASS_GMAIL_CLIENT_ID", "client");
-    vi.stubEnv("POST_CLASS_GMAIL_CLIENT_SECRET", "secret"); vi.stubEnv("POST_CLASS_GMAIL_WORKSPACE_TRUSTED", "true");
-    const request = vi.fn().mockResolvedValue(Response.json({ id: "gmail-message-id" })); vi.stubGlobal("fetch", request);
+  it.each([false, true])("uses Resend for tutor reminders without Gmail fallback (rejected: %s)", async (rejected) => {
+    vi.stubEnv("OUTBOUND_EMAIL_TRANSPORT", "resend"); vi.stubEnv("RESEND_AUDIENCE", "all");
+    vi.stubEnv("RESEND_API_KEY", "test-key");
+    const request = vi.fn().mockResolvedValue(rejected
+      ? Response.json({ name: "validation_error" }, { status: 403 })
+      : Response.json({ id: "resend-message-id" }));
+    vi.stubGlobal("fetch", request);
     try {
       await seed();
-      await handle.db.insert(schema.postClassEmailConnection).values({ id: "gmail", clientId: "client", mailbox: FEEDBACK_MAILBOX,
-        googleSubject: "subject", accessTokenCiphertext: encryptToken("token")!, refreshTokenCiphertext: encryptToken("refresh")!,
-        expiresAt: new Date(Date.now() + 3600000), scope: GMAIL_SEND_SCOPE, connectedBy: "admin@example.com", refreshedAt: now,
-        testEvidence: { hash: "proof", actor: "admin@example.com", binding: "client:subject:1", expiresAt: new Date(Date.now() + 86400000).toISOString(), attempts: 1, confirmedAt: now.toISOString(), acceptedAt: now.toISOString(), receipt: "verified-receipt" } });
-      const options = dependencies();
-      expect((await runNightlyReminders({ ...options, senders: undefined })).ok).toBe(true);
-      expect(request).toHaveBeenCalledWith("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", expect.any(Object));
-      expect((await handle.db.select().from(schema.postClassNotificationDeliveries))[0]).toMatchObject({ provider: "gmail", providerMessageId: "gmail-message-id", status: "sent" });
+      await runNightlyReminders({ ...dependencies(), senders: undefined });
+      expect(request).toHaveBeenCalledOnce();
+      expect(request).toHaveBeenCalledWith("https://api.resend.com/emails", expect.any(Object));
+      expect(JSON.parse(request.mock.calls[0][1].body)).toMatchObject({ from: "BeGifted <no-reply@notify.begiftededucation.com>" });
+      expect((await handle.db.select().from(schema.postClassNotificationDeliveries))[0]).toMatchObject({
+        provider: "resend", status: rejected ? "failed" : "sent",
+        ...(rejected ? {} : { providerMessageId: "resend-message-id" }),
+      });
     } finally { vi.unstubAllEnvs(); vi.unstubAllGlobals(); }
   });
-  it("recomposes a definitely unsent reminder when incomplete feedback changes during renewal", async () => {
-    vi.stubEnv("AUTH_SECRET", "test-key"); vi.stubEnv("POST_CLASS_GMAIL_CLIENT_ID", "client");
-    vi.stubEnv("POST_CLASS_GMAIL_CLIENT_SECRET", "secret"); vi.stubEnv("POST_CLASS_GMAIL_WORKSPACE_TRUSTED", "true");
-    try {
-      const session = await seed();
-      await handle.db.insert(schema.postClassEmailConnection).values({ id: "gmail", clientId: "client", mailbox: FEEDBACK_MAILBOX,
-        googleSubject: "subject", accessTokenCiphertext: encryptToken("token")!, refreshTokenCiphertext: encryptToken("refresh")!,
-        expiresAt: new Date(0), scope: GMAIL_SEND_SCOPE, connectedBy: "admin@example.com", refreshedAt: now,
-        testEvidence: { hash: "proof", actor: "admin@example.com", binding: "client:subject:1", expiresAt: new Date(Date.now() + 86400000).toISOString(), attempts: 1, confirmedAt: now.toISOString(), acceptedAt: now.toISOString(), receipt: "verified-receipt" } });
-      let sends = 0;
-      vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-        if (url.includes("oauth2")) {
-          await seedPayoutAssessment(db(), session.id, { assessedAt: new Date(now.getTime() + 1), combinedRawCharCount: 100 });
-          return Response.json({ access_token: "renewed", expires_in: 3600 });
-        }
-        sends++; return Response.json({ id: "gmail-message-id" });
-      }));
-      const options = { ...dependencies(), senders: undefined };
-      await runNightlyReminders(options); expect(sends).toBe(0);
-      await runNightlyReminders(options); expect(sends).toBe(1);
-      expect((await handle.db.select().from(schema.postClassNotificationAttempts)).some(row => row.status === "cancelled")).toBe(true);
-    } finally { vi.unstubAllEnvs(); vi.unstubAllGlobals(); }
-  });
+
   it("honors Gmail retry timing and does not retry permanent rejections", async () => {
     await seed(); const options = dependencies();
     const retryAt = new Date(now.getTime() + 2 * 60 * 60_000);

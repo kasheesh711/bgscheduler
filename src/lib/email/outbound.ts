@@ -140,22 +140,8 @@ function createResendFirstSender(env: OutboundEmailEnvironment, next: ScheduleEm
 }
 
 /**
- * The one factory every outbound email path should use instead of
- * `createAppsScriptScheduleEmailSender`.
- *
- * Under `gmail`, `primary` is the Workspace mailbox with a per-message relay
- * fallback, and `backup` is the Apps Script primary relay, so the existing
- * failover paths (tutor schedule quota failover, post-class retry attempts)
- * keep working. Gmail's own outcomes are strict: pre-acceptance failures throw
- * `ScheduleEmailRejection`, uncertain outcomes a plain `Error`.
- *
- * `backup` is not a separate provider under gmail/resend (resend: the Gmail
- * chain; gmail: the relay) — callers must not fail over to it after an
- * uncertain outcome.
- *
- * Under `resend`, `primary` mail for an audience RESEND_AUDIENCE serves goes
- * through Resend first and falls back to the `gmail` chain; everything else
- * (backup key, unserved audience, Resend unconfigured) takes the `gmail` chain.
+ * Tutor mail always uses the approved Resend identity with no other provider.
+ * Staff mail retains the transport flag and existing fallback chain.
  */
 export function createOutboundEmailSender(
   senderKey: ScheduleEmailSenderKey = "primary",
@@ -164,6 +150,11 @@ export function createOutboundEmailSender(
 ): ScheduleEmailSender {
   const { audience = "teacher", ...relayOptions } = options;
   const transport = outboundEmailTransport(env);
+  // Tutor mail must keep the approved sender, including retries and failures.
+  if (audience === "teacher") {
+    return createResendSender(env, { from: "BeGifted <no-reply@notify.begiftededucation.com>",
+      replyTo: env.RESEND_REPLY_TO?.trim() || "admin@begiftededucation.com" });
+  }
   const relay = createAppsScriptScheduleEmailSender(outboundRelayKey(senderKey, env), relayOptions);
   if (transport === "apps_script") return relay;
   const gmailChain = createWorkspaceGmailSender(env, relay);

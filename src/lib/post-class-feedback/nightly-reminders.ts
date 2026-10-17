@@ -1,3 +1,4 @@
+import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, ne, notInArray, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
@@ -9,8 +10,7 @@ import { teacherEmailPublicBaseUrl } from "@/lib/teacher-emails/config";
 import { resolvePostClassTutorRecipient, safePostClassWiseSessionUrl } from "./notifications";
 import { PostClassConflictError, PostClassValidationError } from "./errors";
 import { withPostClassTransaction } from "./transaction";
-import { createGmailSender, GmailRejection } from "./gmail";
-import { feedbackGmailAccessToken, feedbackReminderGrant } from "./gmail-credentials";
+import { GmailRejection } from "./gmail";
 import { latestNightlyDate, nightlyCheckpoint, nightlyCounts, nightlyDisposition, nightlyWindow,
   NIGHTLY_FRESHNESS_MS, NIGHTLY_RETRY_MINUTES, NIGHTLY_TERMINAL, type NightlySessionState } from "./nightly-reminder-model";
 import { discoverNightlyInventory, refreshNightlyItems, type NightlyInventory, type NightlyInventoryItem } from "./nightly-reminder-source";
@@ -339,7 +339,7 @@ async function dispatchDelivery(db: Database, id: string, token: string, clock: 
   }
   const number = delivery.attemptCount + 1;
   const senderKey = number === 1 ? "primary" : "backup";
-  const provider = senders ? senderKey : "gmail";
+  const provider = senders ? senderKey : "resend";
   const claimed = await withPostClassTransaction(db, async (tx) => {
     const currentConfig = await settings(tx);
     if (!await hasLease(tx, token, clock()) || currentConfig.reminderMode !== "live" ||
@@ -357,9 +357,7 @@ async function dispatchDelivery(db: Database, id: string, token: string, clock: 
   if (!claimed) return;
   let receipt: { id: string };
   try {
-    const grant = senders ? undefined : await feedbackReminderGrant(db);
-    const sender = senders?.[senderKey] ?? createGmailSender(force => feedbackGmailAccessToken(force, db, grant), async () => {
-      if (await feedbackReminderGrant(db) !== grant) throw new GmailRejection("Gmail authorization changed before submission.", true);
+    if (!senders) {
       const current = await settings(db);
       const finalStates = await loadStates(db, rows);
       const finalRecipient = await recipientFor(db, delivery.canonicalTutorKey);
@@ -370,7 +368,8 @@ async function dispatchDelivery(db: Database, id: string, token: string, clock: 
         rows.some(row => disposition(finalStates.get(row.wiseSessionId), clock(), nightlyCheckpoint(row.reminderDate)).status !== "ready")) {
         throw new ReminderChangedBeforeSubmission("Reminder eligibility changed before submission; refresh the queued classes.");
       }
-    });
+    }
+    const sender = senders?.[senderKey] ?? createOutboundEmailSender("primary");
     receipt = await sender.sendEmail({ to: delivery.recipientEmail, subject: delivery.subject,
       text: delivery.frozenContent.text, html: delivery.frozenContent.html, idempotencyKey: delivery.idempotencyKey });
   } catch (error) {
@@ -382,7 +381,7 @@ async function dispatchDelivery(db: Database, id: string, token: string, clock: 
       ? new Date(Math.max(failedAt.getTime() + NIGHTLY_RETRY_MINUTES[number - 1] * 60_000, gmail?.retryAt?.getTime() ?? 0)) : null;
     const reason = gmail?.message ?? "The email service rejected this message.";
     await withPostClassTransaction(db, async (tx) => {
-      await tx.update(attempts).set({ status: "failed", errorCode: gmail ? "gmail_rejected" : "relay_rejected", errorMessage: reason, finishedAt: failedAt })
+      await tx.update(attempts).set({ status: "failed", errorCode: gmail ? "gmail_rejected" : senders ? "relay_rejected" : "resend_rejected", errorMessage: reason, finishedAt: failedAt })
         .where(and(eq(attempts.deliveryId, id), eq(attempts.attemptNumber, number)));
       await tx.update(deliveries).set({ status: "failed", nextAttemptAt: retryAt,
         finalError: reason, updatedAt: failedAt }).where(eq(deliveries.id, id));

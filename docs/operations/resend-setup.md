@@ -1,5 +1,18 @@
 # Resend setup: owner steps
 
+## Tutor sender policy (17 October 2026)
+
+Kevin approved Resend for all future tutor mail. Tutor routing uses the existing production
+`RESEND_API_KEY` directly, independently of the staff rollout flags. Tutor mail uses `BeGifted <no-reply@notify.begiftededucation.com>`
+and replies go to `RESEND_REPLY_TO` (default `admin@begiftededucation.com`).
+Primary sends, backup sends, classroom schedules and nightly feedback reminders
+all use this path. A rejected or uncertain Resend send must not switch to Gmail
+or Apps Script. Record the failure and retain the existing retry/idempotency rules.
+Staff routing and its flags are unchanged. Repair Resend if tutor delivery fails. The wave and rollback steps below are historical.
+
+The Sunday 18 October schedules have already been sent. Do not resend them or
+change that day's locked allocation as part of sender configuration work.
+
 Owner: Kevin. Pairs with the engineering plan [`docs/superpowers/plans/2026-10-07-resend-email-transport.md`](../superpowers/plans/2026-10-07-resend-email-transport.md).
 
 The code ships in two PRs. **PR1** is the transport, staff routing, sign-in codes, Admissions and the digest switches (no migration). **PR2** is the delivery webhook plus migration 0111.

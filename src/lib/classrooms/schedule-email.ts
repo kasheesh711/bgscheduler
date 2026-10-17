@@ -296,22 +296,8 @@ async function loadContactByCanonicalKey(
   return new Map(contacts.filter((contact) => contact.active).map((contact) => [contact.canonicalKey, contact]));
 }
 
-function emailConfigBlockers(senderKey: ScheduleEmailSenderKey = "primary"): ScheduleEmailBlocker[] {
-  const config = appsScriptSenderConfig(senderKey);
-  const blockers: ScheduleEmailBlocker[] = [];
-  if (!config.url) {
-    blockers.push({
-      type: "missing_email_config",
-      message: `${config.urlEnvName} is not configured.`,
-    });
-  }
-  if (!config.secret) {
-    blockers.push({
-      type: "missing_email_config",
-      message: `${config.secretEnvName} is not configured.`,
-    });
-  }
-  return blockers;
+function emailConfigBlockers(_senderKey: ScheduleEmailSenderKey = "primary"): ScheduleEmailBlocker[] {
+  return process.env.RESEND_API_KEY?.trim() ? [] : [{ type: "missing_email_config", message: "RESEND_API_KEY is not configured." }];
 }
 
 export async function getScheduleEmailPreview(

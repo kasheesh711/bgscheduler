@@ -127,6 +127,7 @@ function makePreviewDb(input: {
 
 describe("schedule email preview", () => {
   beforeEach(() => {
+    vi.stubEnv("RESEND_API_KEY", "test-key");
     vi.stubEnv("SCHEDULE_EMAIL_APPS_SCRIPT_URL", "https://script.google.com/macros/s/test/exec");
     vi.stubEnv("SCHEDULE_EMAIL_APPS_SCRIPT_SECRET", "secret-1");
     vi.stubEnv("SCHEDULE_EMAIL_PUBLIC_BASE_URL", "https://schedule.example.com");
@@ -244,30 +245,15 @@ describe("schedule email preview", () => {
     expect(preview.previews[0].text).toContain("Teach elsewhere — classroom released");
   });
 
-  it("blocks on missing Apps Script config without requiring Resend config", async () => {
-    vi.stubEnv("SCHEDULE_EMAIL_APPS_SCRIPT_URL", "");
-    vi.stubEnv("SCHEDULE_EMAIL_APPS_SCRIPT_SECRET", "");
-    vi.stubEnv("RESEND_API_KEY", "");
-    vi.stubEnv("SCHEDULE_EMAIL_FROM", "");
-    const db = makePreviewDb({
-      rows: [row()],
-      contacts: [{
-        canonicalKey: "Kevin",
-        onsiteEmail: "kevhsh7@gmail.com",
-        active: true,
-      }],
-    });
-
+  it.each(["", "resend-key"])("checks the Resend key instead of relay settings for tutor mail: %s", async (key) => {
+    vi.stubEnv("OUTBOUND_EMAIL_TRANSPORT", "resend"); vi.stubEnv("RESEND_AUDIENCE", "all");
+    vi.stubEnv("RESEND_API_KEY", key);
+    vi.stubEnv("SCHEDULE_EMAIL_APPS_SCRIPT_URL", ""); vi.stubEnv("SCHEDULE_EMAIL_APPS_SCRIPT_SECRET", "");
+    const db = makePreviewDb({ rows: [row()], contacts: [{ canonicalKey: "Kevin", onsiteEmail: "tutor@example.com", active: true }] });
     const preview = await getScheduleEmailPreview(db as never, "run-1");
-
-    const messages = preview.hardBlockers.map((blocker) => blocker.message);
-    expect(messages).toEqual([
-      "SCHEDULE_EMAIL_APPS_SCRIPT_URL is not configured.",
-      "SCHEDULE_EMAIL_APPS_SCRIPT_SECRET is not configured.",
-    ]);
-    expect(messages.join(" ")).not.toContain("RESEND_API_KEY");
-    expect(messages.join(" ")).not.toContain("SCHEDULE_EMAIL_FROM");
+    expect(preview.hardBlockers.map(blocker => blocker.message)).toEqual(key ? [] : ["RESEND_API_KEY is not configured."]);
   });
+
 
   it("uses a valid Online email when the onsite address is absent or malformed", async () => {
     for (const onsiteEmail of [null, "invalid"]) {
