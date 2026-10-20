@@ -340,7 +340,7 @@ describe("stepVerify: the 2 Oct night's evidence shapes", () => {
         atomEvidence: "Matched activity: Fractions drill 3 — 18 of 20 correct (90%).",
       },
     });
-    const passing = JSON.stringify({ faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] });
+    const passing = JSON.stringify({ faithful: true, unsupported: [], misattributed: [], missingHomework: [], homeworkNotSet: [] });
     const modes = new Map<string, string>();
     const callModel = vi.fn(async (request: { messages: Array<{ content: string }> }): Promise<OpenRouterCallResult> => {
       const content = request.messages[1].content;
@@ -477,7 +477,7 @@ describe("stepVerify: caps, stops and the ledger", () => {
   it("reserves every judge call as openrouter before it is sent", async () => {
     const ctx = context();
     seed(ctx);
-    const passing = JSON.stringify({ faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] });
+    const passing = JSON.stringify({ faithful: true, unsupported: [], misattributed: [], missingHomework: [], homeworkNotSet: [] });
     const callModel = vi.fn(async (): Promise<OpenRouterCallResult> => ({
       ok: true, content: passing, model: AUTOWRITER_MODELS.judge.expectModel, provider: AUTOWRITER_MODELS.judge.expectProvider, generationId: "g",
       finishReason: "stop", usage: { promptTokens: 1, completionTokens: 1, reasoningTokens: 0, cachedTokens: 0, costUsd: 0.001 }, latencyMs: 1,

@@ -4,8 +4,8 @@ import { redactKnownNames } from "@/lib/post-class-feedback/similarity";
 import { styleInstructions, type FeedbackStyleGuide } from "./style";
 import type { AiSummary } from "./types";
 
-/** v6: keep performance about the pupil and keep source-audit language out of parent feedback. */
-export const PROMPT_VERSION = 6;
+/** v7: preserve final assignments, distinguish prompted steps, and check subject accuracy. */
+export const PROMPT_VERSION = 7;
 export const STUDENT_TOKEN = "[STUDENT_1]";
 export const TUTOR_TOKEN = "[TUTOR]";
 
@@ -302,7 +302,10 @@ function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels, styleGuide:
       "Do not open with a recap of the topic list. Use topic details only to explain a specific student response or the guidance given. " +
       "Report supported activity results directly. Never write source-audit phrases such as matched portion, assistance was not marked, " +
       "or I am reporting the result. Do not imply independent mastery when the source does not prove it. " +
-      "Keep negations and distinguish intermediate values from final results.",
+      "Keep negations and distinguish intermediate values from final results. " +
+      "Distinguish who supplied each step or answer: choosing an operation is not calculating its result. " +
+      "A yes, echo, or repeated answer after a tutor prompt does not prove independent understanding. " +
+      "When attribution is unclear, describe the guided work without crediting an unsupported student answer.",
     // v4 (30 Sep): a summary's "problems still to complete" was posted as homework, and repeated under improvement.
     (guided ? "6. improvement: a short numbered list of specific skills to practise before the next lesson, "
       : "6. improvement: the specific weak areas and two or three concrete next steps or strategies to practise before the next lesson, ") +
@@ -314,6 +317,10 @@ function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels, styleGuide:
       // Owner decision (30 Sep): Wise's "Next steps: …" line (`extractAiSummary`) is the summary's advice, not the tutor's.
       (evidence === "summary" ? "A \"Next steps\" line in the summary is the summary's own suggestion, not homework the tutor set. " : "") +
       `If ${record} does not clearly show the tutor setting homework, return an empty string. ` +
+      "Read through the closing instructions before deciding that no homework was set. Include every explicit final task, target and required frequency in homework, " +
+      "not only in improvement. Exclude conditional punishments and unassigned work. " +
+      "Put optional study suggestions and permission to use other resources in improvement; keep an optional part of an explicit assignment labelled optional. " +
+      "If no timing is given, omit timing; never add comments such as no deadline was stated, no additional homework was set, or timing was not specified. " +
       "Never repeat or restate the homework in topics, performance or improvement.",
     guided ? "8. Length: topics, performance and improvement together need at least 300 characters, with no per-field minimum; never pad sparse evidence."
       : "8. Length: topics, performance and improvement are each between 120 and 600 characters, and together at least 450 characters.",
@@ -340,6 +347,11 @@ function systemPrompt(evidence: EvidenceKind, labels: SpeakerLabels, styleGuide:
         `13. Names in the transcript may be written in Thai script; never repeat any name — write ${STUDENT_TOKEN} for the student ` +
           "and refer to anyone else generically (\"another student\", \"a classmate\", \"a family member\").",
       ]),
+    "Accuracy check: verify scientific terminology, calculations, units and final answers before stating them as correct. " +
+      "Do not repeat a tutor's factual or mathematical mistake as a correct result. Recompute it; if the correction is clear, label it as a correction. " +
+      "Otherwise omit the disputed result and describe the supported skill. " +
+      "Use a generic description when a paper, resource title or technical term is unclear; never guess a proper name. " +
+      "Cover the main skills taught, but do not call a new topic a review unless prior learning is established.",
     ...(styleGuide ? ["", styleInstructions(styleGuide)] : []),
     ...(formatGuide ? ["", formatGuide.instructions] : []),
     ...(atomEvidence ? ["", ATOM_MODEL_RULES] : []),

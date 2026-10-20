@@ -111,9 +111,11 @@ describe("mergeClassReport", () => {
   });
 
   it("reads the production judges' stored verdict", () => {
-    const pass = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
+    const pass = { faithful: true, unsupported: [], misattributed: [], missingHomework: [], homeworkNotSet: [] };
     expect(judgePassedOf({ ...pass, levels: { medium: pass, high: pass } })).toBe(true);
     expect(judgePassedOf({ ...pass, faithful: false, unsupported: ["x"], levels: { medium: pass, high: { ...pass, faithful: false, unsupported: ["x"] } } })).toBe(false);
+    const legacy = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
+    expect(judgePassedOf({ ...legacy, levels: { medium: legacy, high: legacy } })).toBe(true);
     expect(judgePassedOf(null)).toBeNull();
   });
 });

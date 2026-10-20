@@ -127,7 +127,9 @@ function renumber(value: string): string {
   }).join("\n");
 }
 
-export function repairRejectedDraft(output: ModelOutput, verdict: Pick<JudgeOutput, "unsupported" | "misattributed" | "homeworkNotSet">): DraftRepair | null {
+export function repairRejectedDraft(output: ModelOutput, verdict: Pick<JudgeOutput, "unsupported" | "misattributed" | "homeworkNotSet"> & Partial<Pick<JudgeOutput, "missingHomework">>): DraftRepair | null {
+  // Deletion cannot restore an assignment; keep the draft rejected for a new writer or human.
+  if (verdict.missingHomework?.length) return null;
   const problems: Array<{ kind: "homework" | "claim"; quote: string }> = [
     ...verdict.homeworkNotSet.map((quote) => ({ kind: "homework" as const, quote })),
     ...verdict.misattributed.map((quote) => ({ kind: "claim" as const, quote })),

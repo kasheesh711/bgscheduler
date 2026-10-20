@@ -107,3 +107,28 @@ describe("validateFeedbackDraft", () => {
     if (!result.ok) expect(result.reasons).toContain("ai_suspect:similar_prior_feedback");
   });
 });
+
+
+describe("parent feedback process notes", () => {
+  it.each([
+    "Complete Questions 15 and 16. No deadline was stated.",
+    "Finish the worksheet; no submission deadline was given.",
+    "Practise fractions. Timing was not specified.",
+    "No additional homework was set.",
+    "Continue the worksheet; no specific question range or amount was set.",
+  ])("rejects the recurring audit aside: %s", (homework) => {
+    const result = check({ ...goodOutput, homework });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reasons).toContain("process_note:homework");
+  });
+
+  it.each([
+    "Complete Questions 15 and 16 by Friday.",
+    "Use no time limit for the first attempt.",
+    "Summarise the article in your notebook.",
+    "Practise cancelling common factors.",
+    "Use an algebraic variable where no amount is given.",
+  ])("keeps actual assignment instructions: %s", (homework) => {
+    expect(check({ ...goodOutput, homework })).toEqual({ ok: true });
+  });
+});

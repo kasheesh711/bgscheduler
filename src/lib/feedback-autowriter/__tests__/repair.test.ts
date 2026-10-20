@@ -117,3 +117,13 @@ describe("repairRejectedDraft", () => {
     expect(repairRejectedDraft(short, { unsupported: ["\"Check reflections carefully\""], misattributed: [], homeworkNotSet: [] })).toBeNull();
   });
 });
+
+
+it("does not delete another error to repair a draft that also omitted assigned homework", () => {
+  expect(repairRejectedDraft(draft, {
+    unsupported: ["I provided hints during parts of the activity, so this was not wholly independent work."],
+    misattributed: [],
+    homeworkNotSet: [],
+    missingHomework: ["Finish Questions 15 and 16 after class."],
+  })).toBeNull();
+});

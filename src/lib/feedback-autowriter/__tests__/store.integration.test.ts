@@ -525,7 +525,7 @@ describe("feedback autowriter store (Postgres)", () => {
     // A transcript draft of the current prompt and judge that both judge levels passed (v5) is posted as it is: its
     // window keeps running.
     const current = { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION };
-    const passing = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
+    const passing = { faithful: true, unsupported: [], misattributed: [], missingHomework: [], homeworkNotSet: [] };
     const both = { ...passing, levels: { medium: passing, high: passing } };
     const next = (await claimGeneration(db, SESSION, 60_000))!;
     await releaseGeneration(db, SESSION, next, {
@@ -633,7 +633,7 @@ describe("feedback autowriter store (Postgres)", () => {
 
 
 it("requeueing Mimi shadow drafts preserves the transcript window only for the active guide", async () => {
-  const passing = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
+  const passing = { faithful: true, unsupported: [], misattributed: [], missingHomework: [], homeworkNotSet: [] };
   const judge = { ...passing, levels: { medium: passing, high: passing } };
   for (const [enabled, styleGuide, retained] of [
     ["true", { id: "mimi", version: 1 }, true],

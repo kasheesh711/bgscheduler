@@ -16,6 +16,27 @@ Feature page: [`features/feedback-autowriter.md`](../features/feedback-autowrite
 `npx tsx --tsconfig scripts/tsconfig.json scripts/autowrite-online-feedback.ts …` (run from the repo root with a
 `.env.local` holding `DATABASE_URL`, `WISE_*`, `OPENROUTER_API_KEY`).
 
+
+## Feedback checks v7 — 21 October 2026
+
+The writer and both judge levels now check each attributed step, final homework instructions, and subject accuracy.
+A tutor's answer, hint or correction is not evidence that the student independently supplied it. Unclear resource
+names must stay generic. The writer must check calculations and scientific terms, and label a clear correction
+rather than repeat a tutor's error as fact.
+
+The strict judge response adds `missingHomework`. It quotes explicit final assignments absent from the homework
+field, including missing required targets or frequency. Optional practice, conditional punishments and automatic
+summary suggestions do not count as assigned work. Either judge can reject the draft. A deletion-only repair cannot
+resolve this finding. Old verdicts without the coverage list cannot pass the stored-draft reuse check; both prompt
+versions also changed, so old drafts must be written and judged again.
+
+The shared text validator rejects process notes such as “no deadline was stated”. Use an empty homework field when
+no task was set; omit timing when none was stated. This check also applies to guided formats and corrections.
+
+These checks reduce known failure paths; they do not prove that a model will identify every error. The accepted
+summary fallback, model routes, spending rules, attendance gates, billing checks and protection for later teacher
+edits are unchanged. Use the retained evidence and original-post verdicts for further review.
+
 ## 1. One-time setup
 
 1. **Migration 0097** on production Neon (`DATABASE_URL=… npm run db:migrate`). It seeds the control row in

@@ -9,7 +9,7 @@ import { AutowriterReviewError, feedbackAutowriterErrorResponse } from "@/lib/fe
 import { approveAtomLink } from "@/lib/feedback-autowriter/atom/data";
 import { isebMonitoringProgress } from "@/lib/feedback-autowriter/iseb-review";
 import { evidenceHash } from "@/lib/feedback-autowriter/atom/evidence";
-import { JudgeOutputSchema } from "@/lib/feedback-autowriter/judge";
+import { RecordedJudgeOutputSchema } from "@/lib/feedback-autowriter/judge";
 import { hasAtomProof, hasIsebApproval, readIsebRollout } from "@/lib/feedback-autowriter/iseb-rollout";
 
 export async function GET(request: NextRequest) {
@@ -41,8 +41,8 @@ export async function GET(request: NextRequest) {
       const levels: Record<string, unknown> = {};
       for (const call of calls.filter(call => call.result?.judgedGeneration === generation)) {
         const result = call.result ?? {};
-        const parsed = JudgeOutputSchema.safeParse({ faithful: result.faithful, unsupported: result.unsupported,
-          misattributed: result.misattributed, homeworkNotSet: result.homeworkNotSet });
+        const parsed = RecordedJudgeOutputSchema.safeParse({ faithful: result.faithful, unsupported: result.unsupported,
+          misattributed: result.misattributed, homeworkNotSet: result.homeworkNotSet, missingHomework: result.missingHomework });
         if (parsed.success && (result.effort === "medium" || result.effort === "high") && !levels[result.effort]) levels[result.effort] = parsed.data;
       }
       return NextResponse.json({ pipeline: pipeline ?? null, evidence: evidence ?? null, reviews,

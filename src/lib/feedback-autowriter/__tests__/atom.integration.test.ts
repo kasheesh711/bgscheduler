@@ -306,7 +306,7 @@ describe("server review accounting", () => {
     vi.stubEnv("OPENROUTER_API_KEY", "test-key");
     await db.execute(sql`TRUNCATE feedback_autowriter_posts, feedback_autowriter_incidents CASCADE`);
     const fields={topics:"1. Fractions",performance:"We worked carefully on finding common denominators. Tom explained the fraction additions clearly and corrected his simplification after checking the highest common factor. We practised checking each result together.",improvement:"1. Check the highest common factor of the numerator and denominator before writing the final fraction.",homework:""};
-    const fact={faithful:true,unsupported:[],misattributed:[],homeworkNotSet:[]};
+    const fact={faithful:true,unsupported:[],misattributed:[],missingHomework: [], homeworkNotSet:[]};
     const posts=[];
     for (const wiseSessionId of ["style_fix","style_down"]) {
       const evidenceHash=await retainIsebEvidence(db,{wiseSessionId,atom:null,lessonRecord:"Tom practised fractions.",evidenceKind:"summary"});
@@ -332,7 +332,7 @@ describe("server review accounting", () => {
     vi.stubEnv("OPENROUTER_API_KEY", "test-key");
     await db.execute(sql`TRUNCATE feedback_autowriter_posts, feedback_autowriter_incidents CASCADE`);
     const fields={topics:"1. Fractions",performance:"We worked carefully on finding common denominators. Tom explained the fraction additions clearly and corrected his simplification after checking the highest common factor. We practised checking each result together.",improvement:"1. Check the highest common factor of the numerator and denominator before writing the final fraction.",homework:""};
-    const fact={faithful:true,unsupported:[],misattributed:[],homeworkNotSet:[]};
+    const fact={faithful:true,unsupported:[],misattributed:[],missingHomework: [], homeworkNotSet:[]};
     const posts=[];
     const order=["recovers","stays_limited","next_run"];
     for (const wiseSessionId of order) {

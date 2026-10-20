@@ -514,6 +514,7 @@ function storedJudgeProblems(metadata: unknown): string[] {
     unsupported: strings(judge.unsupported),
     misattributed: strings(judge.misattributed),
     homeworkNotSet: strings(judge.homeworkNotSet),
+    missingHomework: strings(judge.missingHomework),
   });
 }
 

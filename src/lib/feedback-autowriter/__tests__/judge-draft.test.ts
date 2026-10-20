@@ -8,7 +8,7 @@ import { GOOD_FIELDS, STUDENT_NAME } from "./fixtures";
 /** Synthetic lesson and people only. */
 type Request = Parameters<DraftJudgeInput["call"]>[0];
 
-const PASSING = JSON.stringify({ faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] });
+const PASSING = JSON.stringify({ faithful: true, unsupported: [], misattributed: [], missingHomework: [], homeworkNotSet: [] });
 const usage = { promptTokens: 900, completionTokens: 300, reasoningTokens: 200, cachedTokens: 0, costUsd: 0.001 };
 
 function reply(content: string, patch: Partial<Extract<OpenRouterCallResult, { ok: true }>> = {}): OpenRouterCallResult {
@@ -102,7 +102,7 @@ describe("judgeDraftAtEveryLevel", () => {
 
   it("lists the union of both levels' problems", async () => {
     const call = vi.fn(async (request: Request) => reply(request.effort === "high"
-      ? JSON.stringify({ faithful: false, unsupported: [], misattributed: [], homeworkNotSet: ["the worksheet"] })
+      ? JSON.stringify({ faithful: false, unsupported: [], misattributed: [], missingHomework: [], homeworkNotSet: ["the worksheet"] })
       : PASSING));
     const result = await judgeDraftAtEveryLevel(input(call));
     expect(result.verdict?.faithful).toBe(false);

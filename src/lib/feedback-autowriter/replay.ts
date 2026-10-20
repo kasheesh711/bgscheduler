@@ -833,7 +833,7 @@ export function reasonCategory(reason: string): string {
 function verdictFlags(verdict: JudgeOutput | null): string {
   if (!verdict) return "—";
   if (verdict.faithful) return "faithful";
-  return `unfaithful (u${verdict.unsupported.length}/m${verdict.misattributed.length}/h${verdict.homeworkNotSet.length})`;
+  return `unfaithful (u${verdict.unsupported.length}/m${verdict.misattributed.length}/h${verdict.homeworkNotSet.length}/missing${verdict.missingHomework?.length ?? 0})`;
 }
 
 export interface ReplaySummary {
@@ -882,6 +882,7 @@ export interface ReplaySummary {
     flagged: number;
     misattributed: number;
     homeworkNotSet: number;
+    missingHomework: number;
     unsupported: number;
     /** Not judged: the transcript was too short or its speakers unclear. */
     notJudged: number;
@@ -1017,6 +1018,7 @@ export function summarizeReplay(records: readonly ReplayRecord[]): ReplaySummary
       flagged: posted.filter((entry) => entry.verdict && !entry.verdict.faithful).length,
       misattributed: posted.filter((entry) => (entry.verdict?.misattributed.length ?? 0) > 0).length,
       homeworkNotSet: posted.filter((entry) => (entry.verdict?.homeworkNotSet.length ?? 0) > 0).length,
+      missingHomework: posted.filter((entry) => (entry.verdict?.missingHomework?.length ?? 0) > 0).length,
       unsupported: posted.filter((entry) => (entry.verdict?.unsupported.length ?? 0) > 0).length,
       notJudged: posted.filter((entry) => entry.error?.startsWith("transcript_not_usable") ?? false).length,
       parseFailures: posted.filter((entry) => !entry.verdict && !(entry.error?.startsWith("transcript_not_usable") ?? false)).length,
@@ -1097,7 +1099,7 @@ export function renderReplayMarkdown(input: { summary: ReplaySummary; records: r
     `## Posted drafts judged against the transcript (v${JUDGE_PROMPT_VERSION}: both levels)`,
     "",
     `Judged ${summary.posted.judged}; flagged ${summary.posted.flagged} (misattributed ${summary.posted.misattributed}, ` +
-      `homework not set ${summary.posted.homeworkNotSet}, unsupported ${summary.posted.unsupported}); not judged (transcript not usable) ` +
+      `homework not set ${summary.posted.homeworkNotSet}, homework missing ${summary.posted.missingHomework}, unsupported ${summary.posted.unsupported}); not judged (transcript not usable) ` +
       `${summary.posted.notJudged}; judge failed ${summary.posted.parseFailures}.`,
     "",
     ...(summary.zoom.classes === 0 ? [] : [

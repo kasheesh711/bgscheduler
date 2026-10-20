@@ -224,6 +224,10 @@ describe("v4 rules (30 Sep)", () => {
         "A timed attempt is not a requirement to finish every question. " +
         nextSteps +
         `If ${record} does not clearly show the tutor setting homework, return an empty string. ` +
+        "Read through the closing instructions before deciding that no homework was set. Include every explicit final task, target and required frequency in homework, " +
+        "not only in improvement. Exclude conditional punishments and unassigned work. " +
+        "Put optional study suggestions and permission to use other resources in improvement; keep an optional part of an explicit assignment labelled optional. " +
+        "If no timing is given, omit timing; never add comments such as no deadline was stated, no additional homework was set, or timing was not specified. " +
         "Never repeat or restate the homework in topics, performance or improvement.",
       );
       if (evidence === "transcript") expect(system.content).not.toContain("Next steps");
@@ -262,17 +266,17 @@ describe("v4 rules (30 Sep)", () => {
     expect(system.content).toContain("13. Names in the transcript may be written in Thai script;");
   });
 
-  it("v6 preserves the rule that names only the student", () => {
-    expect(PROMPT_VERSION).toBe(6);
+  it("v7 preserves the rule that names only the student", () => {
+    expect(PROMPT_VERSION).toBe(7);
     const rules = (evidence: "summary" | "transcript") => messages(evidence, "[00:00] TUTOR: we read chapter two")[0].content.split("\n");
     // Summary mode: a rule of its own, the last one.
-    expect(rules("summary").at(-1)).toBe(
+    expect(rules("summary").find((line) => line.startsWith("12. "))).toBe(
       "12. Never name anyone but [STUDENT_1]: refer to any other person generically — " +
       "\"another student\", \"a classmate\", \"a family member\" — never by name.",
     );
     expect(rules("summary").filter((line) => /^1[23]\. /u.test(line))).toHaveLength(1);
     // Transcript mode: rule 13 already forbade repeating any name; it now says what to write for other people.
-    expect(rules("transcript").at(-1)).toBe(
+    expect(rules("transcript").find((line) => line.startsWith("13. "))).toBe(
       "13. Names in the transcript may be written in Thai script; never repeat any name — write [STUDENT_1] for the student " +
       "and refer to anyone else generically (\"another student\", \"a classmate\", \"a family member\").",
     );

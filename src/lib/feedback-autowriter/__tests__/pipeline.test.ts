@@ -34,11 +34,11 @@ function fail(error: string, httpStatus: number | null): OpenRouterCallResult {
 const SOL = (content: string) => ok(content, "Azure", "openai/gpt-6.1-sol");
 const LUNA = (content: string) => ok(content, "Azure", "openai/gpt-6-luna");
 const GLM = (content: string) => ok(content, "Together", "z-ai/glm-5.3-flash");
-const PASSING = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
+const PASSING = { faithful: true, unsupported: [], misattributed: [], missingHomework: [], homeworkNotSet: [] };
 const FAITHFUL = JSON.stringify(PASSING);
-const UNFAITHFUL = JSON.stringify({ faithful: false, unsupported: ["scored 95%"], misattributed: [], homeworkNotSet: [] });
+const UNFAITHFUL = JSON.stringify({ faithful: false, unsupported: ["scored 95%"], misattributed: [], missingHomework: [], homeworkNotSet: [] });
 const MISATTRIBUTED = JSON.stringify({
-  faithful: false, unsupported: [], misattributed: ["[STUDENT_1] said 8 of the 10 pages have been covered"], homeworkNotSet: [],
+  faithful: false, unsupported: [], misattributed: ["[STUDENT_1] said 8 of the 10 pages have been covered"], missingHomework: [], homeworkNotSet: [],
 });
 const SUMMARY = "Overview: Kevin and Somchai practised fractions; Somchai rushed simplification but corrected it.";
 
@@ -200,7 +200,7 @@ describe("runWritingPipeline", () => {
     const withExtra = JSON.stringify({ ...JSON.parse(writerJson), performance: JSON.parse(writerJson).performance + EXTRA });
     const QUOTED = JSON.stringify({
       faithful: false, unsupported: ["How the student did in class: \"[STUDENT_1] also scored 95% on the end-of-lesson quiz\" — no score was given"],
-      misattributed: [], homeworkNotSet: [],
+      misattributed: [], missingHomework: [], homeworkNotSet: [],
     });
 
     it("gives the fallback writer its turn first, then cuts what the judges quoted from the latest draft and posts it", async () => {
@@ -493,7 +493,7 @@ describe("runWritingPipeline", () => {
       faithful: false,
       unsupported: [],
       misattributed: ["[STUDENT_1] said 8 of the 10 pages have been covered"],
-      homeworkNotSet: [],
+      missingHomework: [], homeworkNotSet: [],
       problems: ["wrong person: [STUDENT_1] said 8 of the 10 pages have been covered"],
       judgedGeneration: "g",
       evidence: "summary",
@@ -512,6 +512,7 @@ describe("runWritingPipeline", () => {
       faithful: false,
       unsupported: ["scored 95% on the test", "read chapter four aloud", "used a timer for every section"],
       misattributed: ["[STUDENT_1] mentioned only 8 pages"],
+      missingHomework: [],
       homeworkNotSet,
     }));
     const { promise } = run({
@@ -571,7 +572,7 @@ describe("per-tutor writer order (owner decision, 2 Oct: Luna first for the 13 t
   });
 });
 
-describe("judge v6: medium and high must both pass", () => {
+describe("judge v7: medium and high must both pass", () => {
   it("judges at both levels on byte-identical messages, for a summary and a transcript", async () => {
     for (const evidence of ["summary", "transcript"] as const) {
       const { promise, requests } = run({ writers: [SOL(writerJson)], judge: [GLM(FAITHFUL)] }, { evidence });
@@ -632,8 +633,8 @@ describe("judge v6: medium and high must both pass", () => {
   });
 
   it("holds for the union of both verdicts, each problem once, in the usual order", async () => {
-    const medium = GLM(JSON.stringify({ faithful: false, unsupported: ["scored 95%"], misattributed: [], homeworkNotSet: ["three problems by Friday"] }));
-    const high = GLM(JSON.stringify({ faithful: false, unsupported: ["scored 95%"], misattributed: ["[STUDENT_1] said 8 pages"], homeworkNotSet: [] }));
+    const medium = GLM(JSON.stringify({ faithful: false, unsupported: ["scored 95%"], misattributed: [], missingHomework: [], homeworkNotSet: ["three problems by Friday"] }));
+    const high = GLM(JSON.stringify({ faithful: false, unsupported: ["scored 95%"], misattributed: ["[STUDENT_1] said 8 pages"], missingHomework: [], homeworkNotSet: [] }));
     const { promise } = run({ writers: [SOL(writerJson), LUNA("not json")], medium: [medium], high: [high] });
     expect(await promise).toEqual({
       kind: "held",
@@ -650,14 +651,14 @@ describe("judge v6: medium and high must both pass", () => {
     expect(result.kind === "draft" ? result.judge : null).toEqual({ ...PASSING, levels: { medium: PASSING, high: PASSING } });
   });
 
-  it("records both judge calls with their effort, as judge v6", async () => {
+  it("records both judge calls with their effort, as judge v7", async () => {
     const { promise, records } = run({ writers: [SOL(writerJson)], medium: [GLM("not json"), GLM(FAITHFUL)], high: [GLM(FAITHFUL)] });
     await promise;
     const judged = records.filter((record) => record.role === "judge");
     expect(judged.map((record) => [record.result.effort, record.result.error ?? record.result.faithful]).toSorted()).toEqual([
       ["high", true], ["medium", "judge_unparseable"], ["medium", true],
     ]);
-    expect(JUDGE_PROMPT_VERSION).toBe(6);
+    expect(JUDGE_PROMPT_VERSION).toBe(7);
     for (const record of judged) {
       expect(record).toMatchObject({ arm: "glm", requestedModel: "z-ai/glm-5.3-flash", promptVersion: JUDGE_PROMPT_VERSION });
       expect(record.result).toMatchObject({ judgedArm: "sol", judgedGeneration: "g", evidence: "summary" });
@@ -1402,14 +1403,14 @@ describe("Mimi presentation guide in the production pipeline", () => {
     expect(judgeRequests(requests)).toHaveLength(0);
   });
   it("does not let good formatting bypass an invented score or homework verdict", async () => {
-    const verdict = JSON.stringify({ faithful: false, unsupported: ["scored 95%"], misattributed: [], homeworkNotSet: ["Complete worksheet 8"] });
+    const verdict = JSON.stringify({ faithful: false, unsupported: ["scored 95%"], misattributed: [], missingHomework: [], homeworkNotSet: ["Complete worksheet 8"] });
     const invented = JSON.stringify({ ...JSON.parse(numbered), topics: "1. Fractions; scored 95%", homework: "1. Complete worksheet 8" });
     const { promise } = run({ writers: [SOL(invented), LUNA(invented)], judge: [GLM(verdict), GLM(verdict)] }, options);
     expect(await promise).toMatchObject({ kind: "held" });
   });
   it("holds historical facts that are not supported by the current lesson, even in the correct layout", async () => {
     const copiedFact = JSON.stringify({ ...JSON.parse(numbered), topics: "1. Fractions; scored 19/27" });
-    const verdict = JSON.stringify({ faithful: false, unsupported: ["19/27 is from a historical example, not this lesson"], misattributed: [], homeworkNotSet: [] });
+    const verdict = JSON.stringify({ faithful: false, unsupported: ["19/27 is from a historical example, not this lesson"], misattributed: [], missingHomework: [], homeworkNotSet: [] });
     const { promise } = run({ writers: [SOL(copiedFact), LUNA(copiedFact)], judge: [GLM(verdict), GLM(verdict)] }, options);
     expect(await promise).toMatchObject({ kind: "held", reasons: expect.arrayContaining([expect.stringContaining("unfaithful:")]) });
   });
@@ -1491,7 +1492,7 @@ describe("a writer's time-out passes to the next writer (12 Oct: Luna at reasoni
   const withExtra = JSON.stringify({ ...JSON.parse(writerJson), performance: JSON.parse(writerJson).performance + EXTRA });
   const QUOTED = JSON.stringify({
     faithful: false, unsupported: ["How the student did in class: \"[STUDENT_1] also scored 95% on the end-of-lesson quiz\" — no score was given"],
-    misattributed: [], homeworkNotSet: [],
+    misattributed: [], missingHomework: [], homeworkNotSet: [],
   });
 
   it("ends as a judge failure when the judges fail on the handed-over draft, like any judge failure", async () => {
@@ -1517,5 +1518,26 @@ describe("a writer's time-out passes to the next writer (12 Oct: Luna at reasoni
     );
     expect(await promise).toEqual({ kind: "infra", error: "luna:timeout", modelFailure: true, stage: "writer", judgeAnswered: true });
     expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm", "writer:luna"]);
+  });
+});
+
+
+describe("reviewed homework omissions", () => {
+  it.each([
+    "[58:52] TUTOR: Find the remaining y-values after class.",
+    "[64:20] TUTOR: Complete the assigned Dr Frost topics to 100 percent.",
+  ])("holds a draft when one judge finds the final assignment missing: %s", async (assignment) => {
+    const missing = { ...PASSING, faithful: false, missingHomework: [assignment] };
+    const { promise, requests } = run({
+      writers: [SOL(writerJson), LUNA(writerJson)],
+      medium: [GLM(FAITHFUL), GLM(FAITHFUL)],
+      high: [GLM(JSON.stringify(missing)), GLM(JSON.stringify(missing))],
+    }, { evidence: "transcript", summaryText: assignment });
+    const result = await promise;
+    expect(result).toMatchObject({ kind: "held" });
+    if (result.kind === "held") expect(result.reasons.join(" ")).toContain(`homework missing: ${assignment}`);
+    // A deletion-only repair cannot manufacture the missing assignment.
+    expect(writerRequests(requests)).toHaveLength(2);
+    expect(judgeRequests(requests)).toHaveLength(4);
   });
 });
