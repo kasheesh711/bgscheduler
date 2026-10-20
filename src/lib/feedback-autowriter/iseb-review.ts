@@ -6,7 +6,7 @@ import { AUTOWRITER_MODELS, openRouterApiKey } from "./config";
 import { ISEB_FORMAT_GUIDE, validateIsebFormat } from "./format";
 import { MIMI_STYLE_GUIDE, MIMI_STYLE_GUIDE_V2, styleInstructions, validateStyleFormat } from "./style";
 import { callOpenRouter, callWithRateLimitRetries, isRateLimited } from "./openrouter";
-import { passingStoredVerdict } from "./judge";
+import { passingHistoricalVerdict } from "./judge";
 import { recordIncident } from "./incidents";
 import { evidenceHash } from "./atom/evidence";
 import { normalizeFields } from "./first-shot";
@@ -57,7 +57,7 @@ export async function reviewIsebPosts(
     const evidenceValid = retained && evidenceHash({
       wiseSessionId: retained.wiseSessionId, atom: retained.atom, lessonRecord: retained.lessonRecord, evidenceKind: retained.evidenceKind,
     }) === retained.evidenceHash;
-    const factual = passingStoredVerdict(pipeline.factualVerdicts);
+    const factual = passingHistoricalVerdict(pipeline.factualVerdicts);
     if (!fields || fieldsHash(fields) !== post.fieldsSha256 || !evidenceValid || !factual || retained.atom?.status === "contradiction") {
       // The incident first: a review row ends the post's turn, so it is written only once the incident exists.
       await recordIncident(db, { dedupeKey: `iseb-review-source:${post.id}`, kind: "style_review_source_missing", severity: "critical",

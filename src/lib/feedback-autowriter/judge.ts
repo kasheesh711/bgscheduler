@@ -65,6 +65,20 @@ export const StoredJudgeVerdictSchema = JudgeOutputSchema.extend({
 
 export type StoredJudgeVerdict = z.infer<typeof StoredJudgeVerdictSchema>;
 
+/** Read-only history may predate the homework-coverage check; never use this schema to authorize posting. */
+export const RecordedJudgeOutputSchema = JudgeOutputSchema.extend({ missingHomework: z.array(z.string()).optional() });
+const RecordedStoredVerdictSchema = RecordedJudgeOutputSchema.extend({
+  levels: z.object({ medium: RecordedJudgeOutputSchema, high: RecordedJudgeOutputSchema }).strict(),
+}).strict();
+
+export function passingHistoricalVerdict(value: unknown): z.infer<typeof RecordedStoredVerdictSchema> | null {
+  const parsed = RecordedStoredVerdictSchema.safeParse(value);
+  if (!parsed.success) return null;
+  const verdicts = [parsed.data, ...AUTOWRITER_JUDGE_EFFORTS.map((effort) => parsed.data.levels[effort])];
+  return verdicts.every((verdict) => verdict.faithful && judgeProblems(verdict).length === 0) ? parsed.data : null;
+}
+
+
 /**
  * v4 (30 Sep): a judge that only looked for unsupported claims passed a draft that gave another student's words to
  * ours and a "homework" line the tutor never set, so it now lists those two kinds separately. It is still never given

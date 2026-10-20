@@ -1,7 +1,7 @@
 import { and, gte, lt, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
-import { passingStoredVerdict } from "../judge";
+import { passingHistoricalVerdict } from "../judge";
 import { addDays, bangkokDayBounds } from "../quality";
 import type { AuditResult } from "./audit-schema";
 import { failureMode, severityRank, type FailureSeverity } from "./modes";
@@ -92,7 +92,7 @@ function precheckFinding(precheck: PrecheckFinding, confirmed: boolean | null): 
 /** Whether the production judges passed the stored draft: true, false, or null when there is no stored verdict. */
 export function judgePassedOf(storedJudge: unknown): boolean | null {
   if (!storedJudge || typeof storedJudge !== "object" || !("faithful" in storedJudge)) return null;
-  return passingStoredVerdict(storedJudge) !== null;
+  return passingHistoricalVerdict(storedJudge) !== null;
 }
 
 /**

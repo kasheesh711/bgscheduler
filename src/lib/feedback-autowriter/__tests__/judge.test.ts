@@ -9,6 +9,7 @@ import {
   judgeProblems,
   parseJudgeOutput,
   passingStoredVerdict,
+  passingHistoricalVerdict,
 } from "../judge";
 import { speakerLabelNote } from "../prompt";
 
@@ -262,7 +263,9 @@ describe("missing-homework verdict contract", () => {
   it("rejects a pre-coverage verdict and a claimed pass with a missing assignment", () => {
     const old = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
     expect(parseJudgeOutput(JSON.stringify(old))).toBeNull();
-    expect(passingStoredVerdict({ ...old, levels: { medium: old, high: old } })).toBeNull();
+    const historical = { ...old, levels: { medium: old, high: old } };
+    expect(passingStoredVerdict(historical)).toBeNull();
+    expect(passingHistoricalVerdict(historical)).toEqual(historical);
     const instruction = "Complete the assigned topic to 100 percent.";
     const high = parseJudgeOutput(JSON.stringify({ ...CLEAN, missingHomework: [instruction] }))!;
     expect(high.faithful).toBe(false);
