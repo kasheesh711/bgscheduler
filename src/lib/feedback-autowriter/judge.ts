@@ -5,20 +5,21 @@ import { AUTOWRITER_JUDGE_EFFORTS } from "./config";
 import { otherPeopleLine, speakerLabelNote, type EvidenceKind, type SpeakerLabels } from "./prompt";
 
 /**
- * v6: check assignment limits and later changes. As in v5, run at every effort in `AUTOWRITER_JUDGE_EFFORTS` on
+ * v7: check missing homework, attribution and subject accuracy. Run at every effort in
+ * `AUTOWRITER_JUDGE_EFFORTS` on
  * byte-identical messages; a draft passes only when every level passes it. Stored drafts and call records carry this
  * number, so a draft judged at one level (v4 and before) is never reused as if both had passed it.
  */
-export const JUDGE_PROMPT_VERSION = 6;
+export const JUDGE_PROMPT_VERSION = 7;
 
 export type JudgeEffort = (typeof AUTOWRITER_JUDGE_EFFORTS)[number];
 
 export const JUDGE_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["faithful", "unsupported", "misattributed", "homeworkNotSet"],
+  required: ["faithful", "unsupported", "misattributed", "homeworkNotSet", "missingHomework"],
   properties: {
-    faithful: { type: "boolean", description: "True only when all three lists are empty." },
+    faithful: { type: "boolean", description: "True only when all four lists are empty." },
     unsupported: {
       type: "array",
       items: { type: "string" },
@@ -29,6 +30,11 @@ export const JUDGE_JSON_SCHEMA = {
       items: { type: "string" },
       description: "Short quotes of what the feedback says [STUDENT_1] did or said that the lesson record says about [TUTOR] or another person.",
     },
+    missingHomework: {
+      type: "array",
+      items: { type: "string" },
+      description: "Short quotes of explicit final homework instructions missing from, or materially reduced in, the homework field. Quote the lesson record, not the draft.",
+    },
     homeworkNotSet: {
       type: "array",
       items: { type: "string" },
@@ -37,12 +43,13 @@ export const JUDGE_JSON_SCHEMA = {
   },
 } as const;
 
-/** Strict: a verdict missing any of the three lists is unparseable, so the draft is never accepted on it (fail closed). */
+/** Strict: a verdict missing any of the four lists is unparseable, so the draft is never accepted on it (fail closed). */
 export const JudgeOutputSchema = z.object({
   faithful: z.boolean(),
   unsupported: z.array(z.string()),
   misattributed: z.array(z.string()),
   homeworkNotSet: z.array(z.string()),
+  missingHomework: z.array(z.string()),
 }).strict();
 
 export type JudgeOutput = z.infer<typeof JudgeOutputSchema>;
@@ -74,7 +81,7 @@ const judgeSystemPrompt = (evidence: EvidenceKind, labels: SpeakerLabels) => [
     ? ["Only lines labelled STUDENT are the student's own words; anyone named in the lesson who is clearly not the student is someone else, never [STUDENT_1]."]
     : []),
   "The class details come from the school's system and are true: naming the programme, exam or subject they give is supported.",
-  "List every problem of these three kinds, quoting the feedback's own words:",
+  "List every problem of these four kinds. Quote the feedback except for missingHomework, where you quote the lesson instruction:",
   "- unsupported: a factual claim about THIS lesson — topics, what the student did or got wrong, scores, materials, dates — " +
     `that the ${evidence} does not state or clearly imply.` +
     (evidence === "transcript" ? " Claiming the student understood or solved something the transcript only shows the tutor explaining is unsupported." : ""),
@@ -87,9 +94,19 @@ const judgeSystemPrompt = (evidence: EvidenceKind, labels: SpeakerLabels) => [
     "A timed attempt does not require completing every question, and optional extension questions must not become required." +
     // Owner decision (30 Sep): Wise's "Next steps: …" line (`extractAiSummary`) is the summary's advice, not the tutor's.
     (evidence === "summary" ? " A \"Next steps\" line in the summary is the summary's own suggestion, not homework the tutor set." : ""),
+  "- missingHomework: read the whole lesson, especially its closing instructions. List each explicit final assignment omitted from the homework field, " +
+    "including a task left only in improvement, or a missing material question range, target or required frequency. Use the tutor's last version. " +
+    "Do not require optional practice, conditional punishments, unassigned unfinished work or automatic summary recommendations. Quote the assignment in the lesson record.",
+  "Check attribution at the level of each step: a student naming an operation does not establish that they supplied its result. " +
+    "A tutor's answer, prompt, correction or explanation, or a student's yes or repetition after it, does not prove independent student work. " +
+    "Apply this to summaries too; do not turn ambiguous attribution into a claim of student mastery.",
+  "Check scientific terms, calculations and final results for correctness as well as source support. Recompute numerical results, " +
+    "including sample spaces and units. A wrong statement remains wrong when the tutor said it: list it in unsupported. " +
+    "For an unclear transcription of a term, paper or title, reject invented specificity; generic supported wording is safer. " +
+    "Do not reject clearly labelled incorrect student answers or an explicit correction of the tutor's error.",
   "General advice, encouragement and suggested practice (including practice before the next lesson) are fine and must not be listed, " +
     "unless they are presented as homework the tutor set.",
-  "faithful is true only when all three lists are empty.",
+  "faithful is true only when all four lists are empty.",
 ].join("\n");
 
 /**
@@ -150,10 +167,11 @@ export function parseJudgeOutput(content: string): JudgeOutput | null {
  * unsupported claims. A stored v3 verdict has no misattributed or homeworkNotSet list: pass empty ones and its
  * unsupported quotes come back unchanged.
  */
-export function judgeProblems(verdict: Pick<JudgeOutput, "unsupported" | "misattributed" | "homeworkNotSet">): string[] {
+export function judgeProblems(verdict: Pick<JudgeOutput, "unsupported" | "misattributed" | "homeworkNotSet"> & Partial<Pick<JudgeOutput, "missingHomework">>): string[] {
   return [
     ...verdict.misattributed.map((quote) => `wrong person: ${quote}`),
     ...verdict.homeworkNotSet.map((quote) => `homework not set: ${quote}`),
+    ...(verdict.missingHomework ?? []).map((quote) => `homework missing: ${quote}`),
     ...verdict.unsupported,
   ];
 }
@@ -177,6 +195,7 @@ export function combineJudgeVerdicts(levels: Record<JudgeEffort, JudgeOutput>): 
     unsupported: union((verdict) => verdict.unsupported),
     misattributed: union((verdict) => verdict.misattributed),
     homeworkNotSet: union((verdict) => verdict.homeworkNotSet),
+    missingHomework: union((verdict) => verdict.missingHomework),
   };
   return {
     faithful: AUTOWRITER_JUDGE_EFFORTS.every((effort) => levels[effort].faithful) && judgeProblems(lists).length === 0,

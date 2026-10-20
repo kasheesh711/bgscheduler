@@ -87,6 +87,10 @@ export function feedbackTextChecks(fields: FeedbackFieldAnswers, options: {
   }
 
   const content: string[] = [];
+  const processNote = /\b(?:no\s+(?:(?:additional|further|specific|explicit|new)\s+)?(?:homework|(?:submission\s+)?deadline|due\s+date|time\s+limit|timing|question\s+range(?:\s+or\s+amount)?)\s+(?:(?:was|were|is|has\s+been)\s+)?(?:set|stated|specified|given|mentioned|assigned)|(?:deadline|due\s+date|time\s+limit|timing|question\s+range(?:\s+or\s+amount)?)\s+(?:was|is)\s+not\s+(?:set|stated|specified|given|mentioned))\b/iu;
+  for (const field of POST_CLASS_FEEDBACK_FIELDS) {
+    if (processNote.test(fields[field])) content.push(`process_note:${field}`);
+  }
   const assessed = assessFeedbackContent(fields);
   if (!assessed.compliant) content.push(...assessed.violationReasons.map((reason) => `policy:${reason}`));
   if (assessed.failedFields.length > 0) content.push(...assessed.failureReasons.map((reason) => `field:${reason}`));

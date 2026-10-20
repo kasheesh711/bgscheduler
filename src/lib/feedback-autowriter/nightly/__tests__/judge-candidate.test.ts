@@ -13,7 +13,7 @@ import { PIM_FIELDS, nightlyBundle } from "./nightly-fixtures";
 /** Synthetic people and lesson only. */
 type Request = Parameters<typeof import("../../openrouter").callOpenRouter>[0];
 
-const PASSING = JSON.stringify({ faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] });
+const PASSING = JSON.stringify({ faithful: true, unsupported: [], misattributed: [], missingHomework: [], homeworkNotSet: [] });
 
 function reply(content: string, costUsd: number | null = 0.002, patch: Partial<Extract<OpenRouterCallResult, { ok: true }>> = {}): OpenRouterCallResult {
   return {
@@ -63,7 +63,7 @@ describe("judgeCandidate", () => {
 
   it("fails when either level finds a problem", async () => {
     const callModel = vi.fn(async (request: Request) => reply(request.effort === "medium"
-      ? JSON.stringify({ faithful: false, unsupported: ["a test score"], misattributed: [], homeworkNotSet: [] })
+      ? JSON.stringify({ faithful: false, unsupported: ["a test score"], misattributed: [], missingHomework: [], homeworkNotSet: [] })
       : PASSING));
     const result = await judgeCandidate({ apiKey: "k", ledger: ledger(), key: "judge:k", callModel }, { fields: PIM_FIELDS, bundle: nightlyBundle() });
     expect(result).toMatchObject({ faithful: false, error: null, problems: ["a test score"] });

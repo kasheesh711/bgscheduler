@@ -12,7 +12,7 @@ import {
 } from "../judge";
 import { speakerLabelNote } from "../prompt";
 
-const CLEAN = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
+const CLEAN = { faithful: true, unsupported: [], misattributed: [], missingHomework: [], homeworkNotSet: [] };
 const verdict = (patch: Record<string, unknown>) => JSON.stringify({ ...CLEAN, ...patch });
 
 const FIELDS = {
@@ -22,9 +22,9 @@ const FIELDS = {
   homework: "",
 };
 
-describe("judge output (the v4 verdict each level returns)", () => {
-  it("parses a complete four-field verdict", () => {
-    expect(JUDGE_JSON_SCHEMA.required).toEqual(["faithful", "unsupported", "misattributed", "homeworkNotSet"]);
+describe("judge output (the v7 verdict each level returns)", () => {
+  it("parses a complete five-field verdict", () => {
+    expect(JUDGE_JSON_SCHEMA.required).toEqual(["faithful", "unsupported", "misattributed", "homeworkNotSet", "missingHomework"]);
     expect(parseJudgeOutput(JSON.stringify(CLEAN))).toEqual(CLEAN);
     expect(parseJudgeOutput(`\`\`\`json\n${JSON.stringify(CLEAN)}\n\`\`\``)).toEqual(CLEAN);
   });
@@ -40,7 +40,7 @@ describe("judge output (the v4 verdict each level returns)", () => {
   it("treats a self-contradicting verdict as unfaithful, whichever list is non-empty", () => {
     expect(parseJudgeOutput(verdict({ unsupported: ["x"] }))).toEqual({ ...CLEAN, faithful: false, unsupported: ["x"] });
     expect(parseJudgeOutput(verdict({ misattributed: ["y"] }))).toEqual({ ...CLEAN, faithful: false, misattributed: ["y"] });
-    expect(parseJudgeOutput(verdict({ homeworkNotSet: ["z"] }))).toEqual({ ...CLEAN, faithful: false, homeworkNotSet: ["z"] });
+    expect(parseJudgeOutput(verdict({ missingHomework: [], homeworkNotSet: ["z"] }))).toEqual({ ...CLEAN, faithful: false, missingHomework: [], homeworkNotSet: ["z"] });
   });
 
   it("lists every problem, wrong-person ones first, then homework ones, then unsupported claims", () => {
@@ -48,7 +48,7 @@ describe("judge output (the v4 verdict each level returns)", () => {
     expect(judgeProblems({
       unsupported: ["scored 95%", "read chapter four aloud", "used a timer"],
       misattributed: ["[STUDENT_1] said 8 of the 10 pages have been covered"],
-      homeworkNotSet: ["finish the three remaining problems"],
+      missingHomework: [], homeworkNotSet: ["finish the three remaining problems"],
     })).toEqual([
       "wrong person: [STUDENT_1] said 8 of the 10 pages have been covered",
       "homework not set: finish the three remaining problems",
@@ -57,7 +57,7 @@ describe("judge output (the v4 verdict each level returns)", () => {
       "used a timer",
     ]);
     // A stored v3 verdict read with empty new lists keeps its unsupported quotes as they were.
-    expect(judgeProblems({ unsupported: ["scored 95%", "used a timer"], misattributed: [], homeworkNotSet: [] }))
+    expect(judgeProblems({ unsupported: ["scored 95%", "used a timer"], misattributed: [], missingHomework: [], homeworkNotSet: [] }))
       .toEqual(["scored 95%", "used a timer"]);
   });
 
@@ -68,11 +68,11 @@ describe("judge output (the v4 verdict each level returns)", () => {
   });
 });
 
-describe("judge v6: both levels must pass", () => {
+describe("judge v7: both levels must pass", () => {
   const flagged = (patch: Record<string, unknown>) => ({ ...CLEAN, faithful: false, ...patch });
 
-  it("is version 6: the assignment checks at medium and at high", () => {
-    expect(JUDGE_PROMPT_VERSION).toBe(6);
+  it("is version 7: the assignment checks at medium and at high", () => {
+    expect(JUDGE_PROMPT_VERSION).toBe(7);
     expect(AUTOWRITER_JUDGE_EFFORTS).toEqual(["medium", "high"]);
     // The stored verdict names exactly the levels that judge.
     expect(Object.keys(StoredJudgeVerdictSchema.shape.levels.shape)).toEqual([...AUTOWRITER_JUDGE_EFFORTS]);
@@ -91,18 +91,18 @@ describe("judge v6: both levels must pass", () => {
   });
 
   it("lists the union of both verdicts once each, wrong-person problems first", () => {
-    const medium = flagged({ unsupported: ["scored 95%", "used a timer"], homeworkNotSet: ["three problems by Friday"] });
+    const medium = flagged({ unsupported: ["scored 95%", "used a timer"], missingHomework: [], homeworkNotSet: ["three problems by Friday"] });
     const high = flagged({
       unsupported: ["used a timer", "  scored   95% ", "read chapter four"],
       misattributed: ["[STUDENT_1] said 8 pages"],
-      homeworkNotSet: ["three problems by Friday"],
+      missingHomework: [], homeworkNotSet: ["three problems by Friday"],
     });
     const combined = combineJudgeVerdicts({ medium, high });
     expect(combined).toMatchObject({
       faithful: false,
       unsupported: ["scored 95%", "used a timer", "read chapter four"],
       misattributed: ["[STUDENT_1] said 8 pages"],
-      homeworkNotSet: ["three problems by Friday"],
+      missingHomework: [], homeworkNotSet: ["three problems by Friday"],
     });
     expect(judgeProblems(combined)).toEqual([
       "wrong person: [STUDENT_1] said 8 pages",
@@ -126,7 +126,7 @@ describe("judge v6: both levels must pass", () => {
     expect(passingStoredVerdict({ ...CLEAN, levels: { medium: { faithful: true, unsupported: [] }, high: CLEAN } })).toBeNull();
     expect(passingStoredVerdict({ ...CLEAN, levels: { medium: flagged({ unsupported: ["x"] }), high: CLEAN } })).toBeNull();
     expect(passingStoredVerdict({ ...CLEAN, levels: { medium: CLEAN, high: { ...CLEAN, faithful: false } } })).toBeNull();
-    expect(passingStoredVerdict({ ...CLEAN, levels: { medium: CLEAN, high: { ...CLEAN, homeworkNotSet: ["y"] } } })).toBeNull();
+    expect(passingStoredVerdict({ ...CLEAN, levels: { medium: CLEAN, high: { ...CLEAN, missingHomework: [], homeworkNotSet: ["y"] } } })).toBeNull();
     // A verdict that failed, or anything else.
     expect(passingStoredVerdict(combineJudgeVerdicts({ medium: CLEAN, high: flagged({ misattributed: ["z"] }) }))).toBeNull();
     expect(passingStoredVerdict({ ...passing, extra: true })).toBeNull();
@@ -146,12 +146,12 @@ describe("buildJudgeMessages", () => {
     otherPeople,
   });
 
-  it("is exactly the approved v6 prompt for a summary", () => {
+  it("is exactly the v7 prompt for a summary", () => {
     expect(build("summary")[0].content).toBe([
       "You check a tutor's post-class feedback against an automatic summary of the same lesson.",
       "The student's and the tutor's names are replaced by [STUDENT_1] and [TUTOR]; that is expected. Any other name in the summary is someone else, never [STUDENT_1].",
       "The class details come from the school's system and are true: naming the programme, exam or subject they give is supported.",
-      "List every problem of these three kinds, quoting the feedback's own words:",
+      "List every problem of these four kinds. Quote the feedback except for missingHomework, where you quote the lesson instruction:",
       "- unsupported: a factual claim about THIS lesson — topics, what the student did or got wrong, scores, materials, dates — that the summary does not state or clearly imply.",
       "- misattributed: something the feedback says [STUDENT_1] did, said, finished, got wrong or did not finish, when the summary says it about [TUTOR] or about another person.",
       "- homeworkNotSet: homework, a task or a due date the feedback says was set — everything under \"Homework and due date\", and any such statement in another field — " +
@@ -159,8 +159,18 @@ describe("buildJudgeMessages", () => {
         "Check the tutor's later instructions for changed question ranges, time limits and optional work. " +
         "A timed attempt does not require completing every question, and optional extension questions must not become required. " +
         "A \"Next steps\" line in the summary is the summary's own suggestion, not homework the tutor set.",
+      "- missingHomework: read the whole lesson, especially its closing instructions. List each explicit final assignment omitted from the homework field, " +
+        "including a task left only in improvement, or a missing material question range, target or required frequency. Use the tutor's last version. " +
+        "Do not require optional practice, conditional punishments, unassigned unfinished work or automatic summary recommendations. Quote the assignment in the lesson record.",
+      "Check attribution at the level of each step: a student naming an operation does not establish that they supplied its result. " +
+        "A tutor's answer, prompt, correction or explanation, or a student's yes or repetition after it, does not prove independent student work. " +
+        "Apply this to summaries too; do not turn ambiguous attribution into a claim of student mastery.",
+      "Check scientific terms, calculations and final results for correctness as well as source support. Recompute numerical results, " +
+        "including sample spaces and units. A wrong statement remains wrong when the tutor said it: list it in unsupported. " +
+        "For an unclear transcription of a term, paper or title, reject invented specificity; generic supported wording is safer. " +
+        "Do not reject clearly labelled incorrect student answers or an explicit correction of the tutor's error.",
       "General advice, encouragement and suggested practice (including practice before the next lesson) are fine and must not be listed, unless they are presented as homework the tutor set.",
-      "faithful is true only when all three lists are empty.",
+      "faithful is true only when all four lists are empty.",
     ].join("\n"));
   });
 
@@ -170,7 +180,7 @@ describe("buildJudgeMessages", () => {
       "The student's and the tutor's names are replaced by [STUDENT_1] and [TUTOR]; that is expected.",
       "Only lines labelled STUDENT are the student's own words; anyone named in the lesson who is clearly not the student is someone else, never [STUDENT_1].",
       "The class details come from the school's system and are true: naming the programme, exam or subject they give is supported.",
-      "List every problem of these three kinds, quoting the feedback's own words:",
+      "List every problem of these four kinds. Quote the feedback except for missingHomework, where you quote the lesson instruction:",
       "- unsupported: a factual claim about THIS lesson — topics, what the student did or got wrong, scores, materials, dates — that the transcript does not state or clearly imply. " +
         "Claiming the student understood or solved something the transcript only shows the tutor explaining is unsupported.",
       "- misattributed: something the feedback says [STUDENT_1] did, said, finished, got wrong or did not finish, when the transcript says it about [TUTOR] or about another person.",
@@ -178,8 +188,18 @@ describe("buildJudgeMessages", () => {
         "unless the transcript clearly shows the tutor setting it for [STUDENT_1] to do after this lesson. Work only described as remaining, unfinished or still to complete was not set. " +
         "Check the tutor's later instructions for changed question ranges, time limits and optional work. " +
         "A timed attempt does not require completing every question, and optional extension questions must not become required.",
+      "- missingHomework: read the whole lesson, especially its closing instructions. List each explicit final assignment omitted from the homework field, " +
+        "including a task left only in improvement, or a missing material question range, target or required frequency. Use the tutor's last version. " +
+        "Do not require optional practice, conditional punishments, unassigned unfinished work or automatic summary recommendations. Quote the assignment in the lesson record.",
+      "Check attribution at the level of each step: a student naming an operation does not establish that they supplied its result. " +
+        "A tutor's answer, prompt, correction or explanation, or a student's yes or repetition after it, does not prove independent student work. " +
+        "Apply this to summaries too; do not turn ambiguous attribution into a claim of student mastery.",
+      "Check scientific terms, calculations and final results for correctness as well as source support. Recompute numerical results, " +
+        "including sample spaces and units. A wrong statement remains wrong when the tutor said it: list it in unsupported. " +
+        "For an unclear transcription of a term, paper or title, reject invented specificity; generic supported wording is safer. " +
+        "Do not reject clearly labelled incorrect student answers or an explicit correction of the tutor's error.",
       "General advice, encouragement and suggested practice (including practice before the next lesson) are fine and must not be listed, unless they are presented as homework the tutor set.",
-      "faithful is true only when all three lists are empty.",
+      "faithful is true only when all four lists are empty.",
     ].join("\n"));
   });
 
@@ -190,7 +210,7 @@ describe("buildJudgeMessages", () => {
       "The student's and the tutor's names are replaced by [STUDENT_1] and [TUTOR]; that is expected. " +
       "Any other name in the summary is someone else, never [STUDENT_1].",
     );
-    expect(system.content).toContain("List every problem of these three kinds, quoting the feedback's own words:");
+    expect(system.content).toContain("List every problem of these four kinds. Quote the feedback except for missingHomework, where you quote the lesson instruction:");
     expect(system.content).toContain("that the summary does not state or clearly imply.");
     expect(system.content).toContain(
       "- misattributed: something the feedback says [STUDENT_1] did, said, finished, got wrong or did not finish, " +
@@ -203,7 +223,7 @@ describe("buildJudgeMessages", () => {
     // Owner decision (30 Sep): Wise's "Next steps: …" line is not homework the tutor set.
     expect(system.content).toContain("A \"Next steps\" line in the summary is the summary's own suggestion, not homework the tutor set.");
     expect(system.content).toContain("(including practice before the next lesson) are fine and must not be listed, unless they are presented as homework the tutor set.");
-    expect(system.content).toContain("faithful is true only when all three lists are empty.");
+    expect(system.content).toContain("faithful is true only when all four lists are empty.");
     expect(system.content).not.toContain("Only lines labelled STUDENT");
     expect(system.content).not.toContain("only shows the tutor explaining");
     // The judge checks facts: it never gets the writer's style rules or examples.
@@ -234,5 +254,20 @@ describe("buildJudgeMessages", () => {
     expect(withPeople.content).toContain(`${line}\n\nLesson summary:\n[TUTOR] noted`);
     expect(build("summary", [])[1].content).not.toContain("Other people named");
     expect(build("transcript", ["Nathan"])[1].content).not.toContain("Other people named");
+  });
+});
+
+
+describe("missing-homework verdict contract", () => {
+  it("rejects a pre-coverage verdict and a claimed pass with a missing assignment", () => {
+    const old = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
+    expect(parseJudgeOutput(JSON.stringify(old))).toBeNull();
+    expect(passingStoredVerdict({ ...old, levels: { medium: old, high: old } })).toBeNull();
+    const instruction = "Complete the assigned topic to 100 percent.";
+    const high = parseJudgeOutput(JSON.stringify({ ...CLEAN, missingHomework: [instruction] }))!;
+    expect(high.faithful).toBe(false);
+    const combined = combineJudgeVerdicts({ medium: CLEAN, high });
+    expect(judgeProblems(combined)).toContain(`homework missing: ${instruction}`);
+    expect(passingStoredVerdict(combined)).toBeNull();
   });
 });

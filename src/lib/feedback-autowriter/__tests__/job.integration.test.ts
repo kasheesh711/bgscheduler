@@ -41,7 +41,7 @@ const sol = (content: string): OpenRouterCallResult => ({
 });
 const luna = (content: string): OpenRouterCallResult => ({ ...sol(content), model: "openai/gpt-6-luna" });
 /** A v4 judge verdict that passes the draft, and the model reply carrying it. Rows seeded with `{ faithful, unsupported }` hold stored v3 verdicts. */
-const PASSING_VERDICT = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
+const PASSING_VERDICT = { faithful: true, unsupported: [], misattributed: [], missingHomework: [], homeworkNotSet: [] };
 const FAITHFUL_VERDICT = JSON.stringify(PASSING_VERDICT);
 /** What a draft both judge levels passed stores since v5; a bare `PASSING_VERDICT` on a row is a single-judge (v4) verdict. */
 const PASSING_STORED = { ...PASSING_VERDICT, levels: { medium: PASSING_VERDICT, high: PASSING_VERDICT } };
@@ -2060,7 +2060,7 @@ describe("transcript first (Postgres + fakes)", () => {
   };
   const unfaithfulModel = () => vi.fn(async (request: { model: string; schemaName: string }) => request.schemaName === "post_class_feedback"
     ? routed(request, writerJson)
-    : routed(request, JSON.stringify({ faithful: false, unsupported: ["scored 95%"], misattributed: [], homeworkNotSet: [] })));
+    : routed(request, JSON.stringify({ faithful: false, unsupported: ["scored 95%"], misattributed: [], missingHomework: [], homeworkNotSet: [] })));
   const promptRecorder = () => {
     const prompts: string[] = [];
     const callModel = vi.fn(async (request: { model: string; schemaName: string; messages: Array<{ content: string }> }) => {

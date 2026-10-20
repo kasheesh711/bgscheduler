@@ -34,8 +34,8 @@ const WRITER_JSON = JSON.stringify({
   studentAttended: true,
   lessonHappened: true,
 });
-const PASSING = JSON.stringify({ faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] });
-const UNFAITHFUL = JSON.stringify({ faithful: false, unsupported: [], misattributed: ["[STUDENT_1] finished; then left early"], homeworkNotSet: ["the last two pages"] });
+const PASSING = JSON.stringify({ faithful: true, unsupported: [], misattributed: [], missingHomework: [], homeworkNotSet: [] });
+const UNFAITHFUL = JSON.stringify({ faithful: false, unsupported: [], misattributed: ["[STUDENT_1] finished; then left early"], missingHomework: [], homeworkNotSet: ["the last two pages"] });
 
 const RECORDING = { rawRecordings: [{ url: "https://files.wiseapp.live/rec.mp4", partIndex: 1 }], rawTranscript: [{ url: "https://files.wiseapp.live/rec.vtt" }] };
 const ZOOM_VTT = `WEBVTT
@@ -636,7 +636,7 @@ describe("replay summary", () => {
     const markdown = renderReplayMarkdown({ summary, records, commit: "local:abc", generatedAt: new Date("2026-09-30T05:00:00.000Z") });
     expect(markdown).toContain("| fallback | 1 |");
     expect(markdown).toContain("acceptance ≤ 20%: **NO**");
-    expect(markdown).toContain("writer v6 and judge v6");
+    expect(markdown).toContain("writer v7 and judge v7");
     expect(markdown).toContain("at `medium` and `high` on the same messages (a draft passes only when every level passes it)");
     expect(markdown).toContain("| medium | 10 | 5 | 0 | 20.0 s | 20.0 s |");
     expect(markdown).toContain("Pairs: 2; same verdict 2;");

@@ -3,7 +3,7 @@ import { evidenceHash } from "../atom/evidence";
 import { hasAtomProof, hasIsebApproval, isSuccessfulCloudCollection, validateComparisonBundle } from "../iseb-rollout";
 import type { feedbackAtomSyncRuns, feedbackIsebRollouts } from "@/lib/db/schema";
 
-const verdict = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
+const verdict = { faithful: true, unsupported: [], misattributed: [], missingHomework: [], homeworkNotSet: [] };
 const fields = { topics: "1. Fractions", performance: "Tom checked his common denominators carefully and explained the addition clearly.", improvement: "1. Simplify the final fraction by checking for a common factor.", homework: "" };
 function bundle() {
   return { comparisons: Array.from({ length: 20 }, (_, i) => ({

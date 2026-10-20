@@ -7,7 +7,7 @@ import type { OpenRouterCallResult } from "../openrouter";
 import type { AtomLessonEvidence } from "../atom/types";
 import { GOOD_FIELDS, SESSION_ID, STUDENT_ID, STUDENT_NAME } from "./fixtures";
 const fields = { topics: "1. Adding fractions\n2. Mixed numbers", performance: GOOD_FIELDS.performance.replaceAll("Somchai", "[STUDENT_1]"), improvement: "1. After adding fractions, check the numerator and denominator for a common factor, then divide both by it before writing the final answer.", homework: "", studentAttended: true, lessonHappened: true };
-const pass = { faithful: true, unsupported: [], misattributed: [], homeworkNotSet: [] };
+const pass = { faithful: true, unsupported: [], misattributed: [], missingHomework: [], homeworkNotSet: [] };
 const atom = () => buildAtomLessonEvidence({ lesson: { sessionId: SESSION_ID, studentId: STUDENT_ID, teacherId: "teacher", start: "2026-10-01T09:00:00Z", end: "2026-10-01T10:00:00Z", subject: "maths" }, link: null, snapshot: null, now: new Date(), otherLessons: null, lessonRecord: "", unavailableReason: "student_unmapped" });
 async function run(writers: object[], options: { evidence?: AtomLessonEvidence; judge?: typeof pass; tutor?: string } = {}) {
   const requests: Parameters<NonNullable<Parameters<typeof runWritingPipeline>[0]["callModel"]>>[0][] = [];
