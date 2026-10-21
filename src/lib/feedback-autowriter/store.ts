@@ -550,14 +550,14 @@ export async function stampSonioxRetention(db: Database, retainMs: number): Prom
 }
 
 /**
- * Rows done with their Soniox job whose review window is over (`metadata.sonioxRetainUntil`, see above), or that
- * were triaged (`metadata.triagedAt`, stamped or not): the sweep deletes the job.
+ * Rows done with their Soniox job whose review window is over (`metadata.sonioxRetainUntil`, see above): the sweep
+ * deletes the job. A verdict no longer ends the window early (13 Oct 2026); a `triagedAt` left on older rows is ignored.
  */
 export async function listSonioxCleanup(db: Database): Promise<Array<{ wiseSessionId: string; sonioxTranscriptionId: string }>> {
   const rows = await db.select({ wiseSessionId: S.wiseSessionId, sonioxTranscriptionId: S.sonioxTranscriptionId })
     .from(S).where(and(
       doneWithSonioxJob(),
-      sql`(${S.metadata} ? 'triagedAt' or (${S.metadata} ->> 'sonioxRetainUntil')::timestamptz < now())`,
+      sql`(${S.metadata} ->> 'sonioxRetainUntil')::timestamptz < now()`,
     ));
   return rows.flatMap((row) => row.sonioxTranscriptionId ? [{ wiseSessionId: row.wiseSessionId, sonioxTranscriptionId: row.sonioxTranscriptionId }] : []);
 }

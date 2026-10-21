@@ -336,7 +336,7 @@ export interface OwnerVerdictApplyResult {
 
 /**
  * Record each decision once, through `recordVerdict` — the dashboard's own path: pinned to the recorded first shot's
- * `fields_sha256`, made current in one transaction, the transcript's triage re-opened for a major or critical verdict,
+ * `fields_sha256`, made current in one transaction,
  * a critical one queued as an incident — as `source: "backfill"` with the file's reviewer. The flags open at the
  * decision are the ones it resolves. Left alone and reported: a class that already has this verdict (a re-run, or an
  * overlapping run that got there first), and — for the owner to answer in the dashboard — one with no review row yet,
