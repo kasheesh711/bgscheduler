@@ -123,6 +123,7 @@ import {
   buildTranscriptEvidence,
   parseZoomVtt,
   sonioxJobInput,
+  studentClearlyHeard,
   thaiShare,
   zoomEnglishEvidence,
   zoomEnglishPrecheck,
@@ -465,6 +466,15 @@ function mayFallBackToSummary(row: AutowriterSessionRow): boolean {
   return metadata.handover === "transcript_first" && !metadata.summaryFallback;
 }
 
+const ATTENDANCE_HOLD = /^attendance_\d+pct$/u;
+
+/** Handed over for low attendance (`settleGate`): the attendance hold it would otherwise have been, e.g. `attendance_0pct`. */
+function lowAttendanceReason(row: AutowriterSessionRow): string | null {
+  const metadata = row.metadata as { handover?: unknown; lowAttendance?: unknown };
+  return metadata.handover === "low_attendance" && typeof metadata.lowAttendance === "string" && ATTENDANCE_HOLD.test(metadata.lowAttendance)
+    ? metadata.lowAttendance : null;
+}
+
 /**
  * Transcript first: the transcript cannot carry this class (no recording in time, a recording in several parts,
  * speakers that cannot be told apart, Soniox failing three times, the pass switched off, the writer failing three
@@ -537,6 +547,12 @@ async function settleGate(input: {
       alertKind: noSummaryLate ? "no_summary" : null,
     });
     return out("retry", reason);
+  }
+  // Owner decision, 13 Oct 2026: Wise often shows a student who joined on another device or link at 0%. With a
+  // recording, the transcript pass decides: it writes (flagged for review) only when the student is clearly heard,
+  // and holds the class with this same reason otherwise (`lowAttendanceReason`).
+  if (disposition === "person" && ATTENDANCE_HOLD.test(reason) && input.transcriptsEnabled && recordingForTranscription(detail).ok) {
+    return handOverToTranscript(release, out, "low_attendance", { lowAttendance: reason }, 0, true);
   }
   const state = disposition === "scope" ? "skipped_scope" : disposition === "human" ? "skipped_human" : disposition === "expired" ? "expired" : "held";
   const alertKind: AlertKind | null = state === "held" ? "held" : state === "expired" ? "expired" : null;
@@ -803,6 +819,8 @@ async function postDraft(deps: AutowriterDeps, input: {
   draft: StoredDraft;
   evidence: EvidenceKind;
   extraMetadata?: Record<string, unknown>;
+  /** A gate failure the transcript already answered (low attendance, the student clearly heard). */
+  acceptGateReason?: (reason: string) => boolean;
   release: Release;
   out: Out;
 }): Promise<ProcessOutcome> {
@@ -865,6 +883,7 @@ async function postDraft(deps: AutowriterDeps, input: {
         mappings: input.mappings,
       },
       gateInput: { now: clock(deps), allowlist: AUTOWRITER_TEACHER_ALLOWLIST, requireSummary },
+      acceptGateReason: input.acceptGateReason,
       apiActorId: deps.apiActorId,
       validateEvidence: evidenceValid,
       remainingMs: () => remaining(deps),
@@ -996,7 +1015,12 @@ async function processTranscript(deps: AutowriterDeps, input: {
 
   const gates = evaluateSessionGates(detail, { now, allowlist: AUTOWRITER_TEACHER_ALLOWLIST, requireSummary: false });
   const submission = classifyTeacherSubmission(detail);
-  const gateReason = !gates.ok ? gates.reason : submission.kind === "none" ? "submission_none_not_enabled_in_pilot" : null;
+  // Low attendance: the attendance gate (the last one when no summary is required) is the question this transcript
+  // answers below; every other gate still applies.
+  const lowAttendance = lowAttendanceReason(row);
+  const acceptGateReason = lowAttendance ? (reason: string) => ATTENDANCE_HOLD.test(reason) : undefined;
+  const gateReason = !gates.ok && !acceptGateReason?.(gates.reason) ? gates.reason
+    : submission.kind === "none" ? "submission_none_not_enabled_in_pilot" : null;
   // Wise is not ready (attendance, status, …): that is not a wait for the recording.
   if (gateReason) return settleGate({ reason: gateReason, detail, row, now, release, out });
 
@@ -1016,6 +1040,11 @@ async function processTranscript(deps: AutowriterDeps, input: {
   }
   // Re-checked on every attempt: a recording that gained a second part would be half the lesson.
   const recording = recordingForTranscription(detail);
+  // Low attendance without a usable recording: the attendance hold it would have been.
+  if (lowAttendance && !recording.ok) {
+    await release({ state: "held", reason: lowAttendance, alertKind: "held", metadata: { noShow: detectNoShow(detail, lowAttendance) } });
+    return out("held", lowAttendance);
+  }
   if (!recording.ok && recording.reason === "recording_multiple_parts") {
     if (canFallBack) return fallBackToSummary({ release, out, cause: "recording_multiple_parts", now });
     await release({ state: "held", reason: recording.reason, alertKind: "held" });
@@ -1047,7 +1076,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
     // The job id stays on the row: the sweep keeps it for review once the class is done with it.
     return postDraft(deps, {
       row, token: input.token, control: input.control, detail, submission, billing: planned.billing, mappings: planned.mappings,
-      draft: stored, evidence: "transcript", extraMetadata: guestMetadata(student), release, out,
+      draft: stored, evidence: "transcript", extraMetadata: guestMetadata(student), acceptGateReason, release, out,
     });
   }
 
@@ -1236,12 +1265,15 @@ async function processTranscript(deps: AutowriterDeps, input: {
       });
       return out("transcribing", "zoom_transcript_pending");
     }
-    if (evidence.speakers.method === "unclear") {
+    if (evidence.speakers.method === "unclear" && !lowAttendance) {
       // Transcript first: without knowing who said what the summary is the better evidence.
       if (canFallBack) return fallBackToSummary({ release, out, cause: "speakers_unclear", now, metadata: { transcript: evidence.meta } });
       return holdFor("speakers_unclear");
     }
   }
+  // Low attendance: write only when the student is clearly heard; otherwise the attendance hold (Zoom's captions
+  // first hand the class to Soniox, whose per-speaker alignment may still hear them).
+  if (lowAttendance && !studentClearlyHeard(evidence)) return holdFor(lowAttendance, { noShow: detectNoShow(detail, lowAttendance) });
   const { rendered, meta: transcriptMeta } = evidence;
   const fromZoom = transcriptMeta.source === "zoom";
 
@@ -1320,7 +1352,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
     // A stored draft: a later failure (a requeued shadow draft written again) starts a new count, of the writer's
     // failures and of the judge's.
     extraMetadata: { transcript: transcriptMeta, ...guestMetadata(student), ...(canFallBack || fromZoom ? { writerErrors: 0 } : {}), ...judgeAnswered(row) },
-    release, out,
+    acceptGateReason, release, out,
   });
 }
 
