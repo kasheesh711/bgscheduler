@@ -1,15 +1,18 @@
 import "server-only";
 
+import { eq } from "drizzle-orm";
 import { cacheLife, cacheTag } from "next/cache";
-import { getDb } from "@/lib/db";
+import { getDb, type Database } from "@/lib/db";
+import * as schema from "@/lib/db/schema";
 import { sqlStateOf } from "@/lib/db/sql-state";
+import { buildCurrentTutorList, type CurrentTutorListResponse } from "./current-tutors";
 import { buildOffboardingDashboard } from "./data";
 import { listDecisions } from "./decisions";
 import { isMissingSchemaError } from "./errors";
 import { listGrants } from "./grants";
 import { loadFeedTimestamps, loadOffboardingSignals } from "./signals";
 import { loadTerminationSnapshot } from "./termination-sync";
-import type { TerminationSnapshot } from "./termination-source";
+import { buildTerminationMatches, type TerminationSnapshot } from "./termination-source";
 import type { OffboardingDashboard, OffboardingPersonRow, OffboardingSignals, TutorOffboardingViewer } from "./types";
 
 /** Cached per snapshot: the sync's revalidateTag("snapshot") clears it. Freshness, decisions and grants are read uncached. */
@@ -54,4 +57,37 @@ export async function findPersonRow(viewer: TutorOffboardingViewer, canonicalKey
   const dashboard = await loadTutorOffboardingDashboard({ ...viewer, isOwner: false });
   if (!dashboard.available) return null;
   return [...dashboard.inbox, ...dashboard.excluded, ...dashboard.staff].find((row) => row.signals.canonicalKey === canonicalKey) ?? null;
+}
+
+/** Tutors teaching now (an upcoming class or a class in the last 30 days), for the email-current-tutors skill. Read-only. */
+export async function loadCurrentTutorList(
+  viewer: TutorOffboardingViewer,
+  now: Date = new Date(),
+  db: Database = getDb(),
+): Promise<CurrentTutorListResponse> {
+  // The owner-only grant list is not needed here.
+  const dashboard = await loadTutorOffboardingDashboard({ ...viewer, isOwner: false });
+  if (!dashboard.available) return { available: false, reason: dashboard.reason };
+  const contacts = await db.select({
+    canonicalKey: schema.tutorContacts.canonicalKey,
+    primaryEmail: schema.tutorContacts.primaryEmail,
+    onsiteEmail: schema.tutorContacts.onsiteEmail,
+    onlineEmail: schema.tutorContacts.onlineEmail,
+  }).from(schema.tutorContacts);
+  // The owner's confirmed departures (also read by workforce analytics) count as confirmed here too; matching is the
+  // sheet's exact-identity rule (OFF-15). This never grants removal eligibility.
+  const [owner] = await db.select({
+    rows: schema.tutorOffboardingSheetSource.rows,
+    checkedAt: schema.tutorOffboardingSheetSource.checkedAt,
+    lastError: schema.tutorOffboardingSheetSource.lastError,
+  }).from(schema.tutorOffboardingSheetSource)
+    .where(eq(schema.tutorOffboardingSheetSource.sourceKey, "owner-confirmed-departures")).limit(1);
+  const people = [...dashboard.inbox, ...dashboard.active, ...dashboard.excluded, ...dashboard.staff].map((row) => row.signals);
+  const ownerMatches = owner?.checkedAt
+    ? buildTerminationMatches(people, { rows: owner.rows, checkedAt: owner.checkedAt.toISOString(), lastError: owner.lastError }, now)
+    : null;
+  const ownerConfirmed = ownerMatches
+    ? { keys: new Set(Object.keys(ownerMatches.byKey)), unmatched: ownerMatches.source.unmatched.length }
+    : undefined;
+  return { available: true, ...buildCurrentTutorList({ dashboard, contacts, ownerConfirmed, now }) };
 }

@@ -12,7 +12,8 @@ import { loadFeedTimestamps, loadOffboardingSignals } from "../signals";
 import { listDecisions } from "../decisions";
 import { listGrants } from "../grants";
 import { loadTerminationSnapshot } from "../termination-sync";
-import { loadTutorOffboardingDashboard } from "../service";
+import * as schema from "@/lib/db/schema";
+import { loadCurrentTutorList, loadTutorOffboardingDashboard } from "../service";
 import type { OffboardingSignals } from "../types";
 
 const viewer = { email: "admin@example.com", isOwner: false, canRemove: false };
@@ -83,5 +84,64 @@ describe("loadTutorOffboardingDashboard", () => {
   it("returns no_snapshot for an empty active roster snapshot", async () => {
     vi.mocked(loadOffboardingSignals).mockResolvedValue(null);
     expect(await loadTutorOffboardingDashboard(viewer)).toEqual({ available: false, reason: "no_snapshot", viewer });
+  });
+});
+
+/** Answers the two reads loadCurrentTutorList makes: tutor contacts, then the owner-confirmed departures row. */
+function fakeDb(contacts: unknown[], ownerRows: unknown[] = []) {
+  return {
+    select: vi.fn(() => ({
+      from: vi.fn((table: unknown) => table === schema.tutorContacts
+        ? Promise.resolve(contacts)
+        : { where: vi.fn(() => ({ limit: vi.fn(async () => ownerRows) })) }),
+    })),
+  } as never;
+}
+
+const ANA = {
+  canonicalKey: "Ana", displayName: "Ana",
+  accounts: [{
+    wiseTeacherId: "t-ana", wiseUserId: "u-ana", displayName: "Ana Lee", isOnlineVariant: false, email: "ana@example.com",
+    status: "active", relation: "TEACHER", joinedOn: "2026-01-20T00:00:00.000Z", courseCount: 1, activated: true,
+    availabilityKnown: true, workingHourWindows: 2,
+  }],
+  lastTaughtAt: "2026-09-29T05:00:00.000Z",
+  lastTaughtBySource: { ledger: "2026-09-29T05:00:00.000Z", pastBlocks: null, postClass: null },
+  upcomingSessions: 2, nextSessionAt: "2026-10-03T05:00:00.000Z", upcomingLeaveUntil: null,
+  lastTeacherActionAt: null, lastAdminActionAt: null, fullTime: false,
+};
+
+describe("loadCurrentTutorList", () => {
+  it("passes unavailability through without reading contacts", async () => {
+    vi.mocked(loadFeedTimestamps).mockResolvedValue({ tutorSnapshot: null, progressTests: NOW, postClass: NOW, wiseActivity: NOW, leaveRequests: NOW });
+    const select = vi.fn();
+    expect(await loadCurrentTutorList(viewer, new Date(NOW), { select } as never)).toEqual({ available: false, reason: "no_snapshot" });
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("builds the list from the dashboard rows and tutor contacts", async () => {
+    vi.mocked(loadOffboardingSignals).mockResolvedValue({ ...signals(), people: [ANA] });
+    const db = fakeDb([{ canonicalKey: "Ana", primaryEmail: "ana.primary@example.com", onsiteEmail: null, onlineEmail: null }]);
+    const result = await loadCurrentTutorList(viewer, new Date(NOW), db);
+    expect(result).toMatchObject({
+      available: true,
+      recipients: [{ name: "Ana", email: "ana.primary@example.com", reason: "upcoming" }],
+      needsEmail: [],
+      excludedConfirmed: [],
+      unmatchedDepartures: 0,
+    });
+  });
+
+  it("excludes people matched on the owner-confirmed departures list and counts its unmatched rows", async () => {
+    vi.mocked(loadOffboardingSignals).mockResolvedValue({ ...signals(), people: [ANA] });
+    const db = fakeDb([], [{
+      checkedAt: new Date("2026-10-01T05:00:00.000Z"), lastError: null,
+      rows: [
+        { sourceRow: 3, fullName: "Ana Lee", wiseName: "", nickname: "", emails: ["ana@example.com"], terminated: true },
+        { sourceRow: 4, fullName: "Nobody Here", wiseName: "", nickname: "", emails: [], terminated: true },
+      ],
+    }]);
+    const result = await loadCurrentTutorList(viewer, new Date(NOW), db);
+    expect(result).toMatchObject({ available: true, recipients: [], excludedConfirmed: [{ name: "Ana" }], unmatchedDepartures: 1 });
   });
 });
