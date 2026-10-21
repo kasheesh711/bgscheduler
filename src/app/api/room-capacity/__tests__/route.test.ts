@@ -120,6 +120,19 @@ const utilizationResponse = {
   },
 };
 
+/**
+ * What drizzle-orm 0.45 throws for ANY failed forecast read: the message is the
+ * SQL text, so it always names the table; the SQLSTATE lives on `cause`.
+ */
+function drizzleForecastError(code: string): Error {
+  return Object.assign(
+    new Error(
+      'Failed query: select "id", "source_label", "forecast_start", "forecast_end", "imported_at" from "room_capacity_model_runs" order by "room_capacity_model_runs"."imported_at" desc limit $1\nparams: 1',
+    ),
+    { cause: { code } },
+  );
+}
+
 describe("room capacity API routes", () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -173,7 +186,7 @@ describe("room capacity API routes", () => {
   });
 
   it("returns a missing forecast response before aggregate tables exist", async () => {
-    vi.mocked(getRoomCapacityForecast).mockRejectedValue(new Error('relation "room_capacity_model_runs" does not exist') as never);
+    vi.mocked(getRoomCapacityForecast).mockRejectedValue(drizzleForecastError("42P01") as never);
 
     const res = await getForecast(new NextRequest("http://test.local/api/room-capacity/forecast?scenario=Bull"));
     const body = await res.json();
@@ -187,6 +200,34 @@ describe("room capacity API routes", () => {
       monthlyDrivers: [],
     });
     expect(body.weekdayResults).toHaveLength(7);
+  });
+
+  it("returns a missing forecast response for an unwrapped driver undefined_table error", async () => {
+    vi.mocked(getRoomCapacityForecast).mockRejectedValue(
+      Object.assign(new Error('relation "room_capacity_package_mix" does not exist'), { code: "42P01" }) as never,
+    );
+
+    const res = await getForecast(new NextRequest("http://test.local/api/room-capacity/forecast"));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ model: { status: "missing" } });
+  });
+
+  it("returns 500 when a forecast read fails for any other reason, though the drizzle message names the table", async () => {
+    vi.mocked(getRoomCapacityForecast).mockRejectedValue(drizzleForecastError("57014") as never);
+
+    const res = await getForecast(new NextRequest("http://test.local/api/room-capacity/forecast"));
+
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toEqual({ error: expect.any(String) });
+  });
+
+  it("returns 500 for a missing column — schema drift, not a pending migration", async () => {
+    vi.mocked(getRoomCapacityForecast).mockRejectedValue(drizzleForecastError("42703") as never);
+
+    const res = await getForecast(new NextRequest("http://test.local/api/room-capacity/forecast"));
+
+    expect(res.status).toBe(500);
   });
 
   it("requires auth for utilization", async () => {
