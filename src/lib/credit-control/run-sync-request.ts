@@ -10,6 +10,13 @@ import { runCreditControlSync } from "@/lib/credit-control/sync";
 
 export const STALE_RUNNING_CREDIT_CONTROL_SYNC_MS = 20 * 60 * 1000;
 
+// Retired mode paces Wise because Wise tightened its API rate limits in
+// September 2026. At 2 req/s the 760 s budget capped a run at ~1,520 calls;
+// runs needed ~1,510, so every run aborted and no snapshot was promoted after
+// 2026-10-10. 3 req/s gives ~2,280 calls of room.
+export const RETIRED_WISE_REQUESTS_PER_SECOND = 3;
+export const RETIRED_WISE_BUDGET_MS = 760_000;
+
 const STALE_RUNNING_CREDIT_CONTROL_SYNC_ERROR =
   "Credit control sync marked failed because it was still running after 20 minutes; likely timed out or the request was aborted.";
 
@@ -157,8 +164,8 @@ export async function runCreditControlSyncRequest(options: { triggerSource?: "cr
     return NextResponse.json(guard, { status: 202 });
   }
 
-  const signal = retired ? AbortSignal.timeout(Math.max(1, 760_000 - (Date.now() - now.getTime()))) : undefined;
-  const client = createWiseClient(retired ? { requestsPerSecond: 2, signal } : {});
+  const signal = retired ? AbortSignal.timeout(Math.max(1, RETIRED_WISE_BUDGET_MS - (Date.now() - now.getTime()))) : undefined;
+  const client = createWiseClient(retired ? { requestsPerSecond: RETIRED_WISE_REQUESTS_PER_SECOND, signal } : {});
   const result = await runCreditControlSync(db, client, instituteId, now, {
     syncRunId: guard.syncRunId,
     ...(retired ? {
