@@ -41,9 +41,13 @@ export async function readSessionCredits(client:WiseClient,courseId:string,stude
 export type StoredCreditSessionAnchor = CreditSessionAnchor & {snapshotId:string};
 export async function loadCreditSessionAnchors(db:Database,from:Date,to:Date,snapshotIds:string[]=[]):Promise<StoredCreditSessionAnchor[]> {
  // Keep actual source snapshot references; do not invent first-observed provenance.
+ // Start from the newest proven snapshot, not only the active one: a run can promote
+ // and then be marked failed, and that must not drop the anchor chain.
  const result=await db.execute(sql`with selected as materialized (
   select sn.id,sn.metadata from credit_control_snapshots sn
-  where (sn.active or sn.id=any(ARRAY(select jsonb_array_elements_text(${JSON.stringify(snapshotIds)}::jsonb)::uuid)))
+  where (sn.id=(select p.id from credit_control_sync_runs cr join credit_control_snapshots p on p.id=cr.promoted_snapshot_id
+    where cr.status='success' and coalesce((p.metadata->>'failedCreditPairs')::integer,0)=0
+    order by p.generated_at desc limit 1) or sn.id=any(ARRAY(select jsonb_array_elements_text(${JSON.stringify(snapshotIds)}::jsonb)::uuid)))
    and coalesce((sn.metadata->>'failedCreditPairs')::integer,0)=0
    and exists(select 1 from credit_control_sync_runs cr where cr.promoted_snapshot_id=sn.id and cr.status='success')
  ), retained as materialized (
