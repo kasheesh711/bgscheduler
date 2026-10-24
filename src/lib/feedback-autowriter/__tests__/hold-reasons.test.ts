@@ -30,6 +30,11 @@ const EMITTED: ReadonlyArray<readonly [reason: string, category: HoldReasonCateg
   ["student_not_wise_user", "data_quality", "Student not a Wise user"],
   ["attendance_0pct", "data_quality", "The student's attendance shows 0%"],
   ["attendance_45pct", "data_quality", "The student's attendance shows 45%"],
+  // The account under the minimum beside a guest who did not stand in (most likely the student joined the wrong way).
+  ["guest_stand_in_65pct", "data_quality", "A guest attended 65% while the student's account was under the attendance minimum: check whether the guest is the student"],
+  ["guest_stand_in_0pct", "data_quality", "A guest attended 0% while the student's account was under the attendance minimum: check whether the guest is the student"],
+  ["guest_stand_in_unknown", "data_quality", "A guest joined while the student's account was under the attendance minimum, but the guest's attendance is unknown"],
+  ["guest_stand_in_tutor_absent", "data_quality", "A guest may be the student (the student's account was under the attendance minimum), but the tutor attended too little for a stand-in"],
   ["submission_ambiguous:2 teacher submissions", "billing_or_form", "The teacher submission in Wise is ambiguous"],
   ["submission_ambiguous:auto-submission without id", "billing_or_form", "The teacher submission in Wise is ambiguous"],
   ["non_teacher_submission_with_billing", "billing_or_form", "A student's submission in Wise carries billing fields"],
@@ -195,10 +200,15 @@ describe("hold reasons as the code returns them", () => {
   it("labels every gate failure that holds a class for a person", () => {
     const student = { wiseUserId: STUDENT_ID, name: STUDENT_NAME, isTeacher: false, inMeetingDuration: 600, absolutePercentAttendance: 20 };
     const studentSubmission = { _id: "s1", profile: "student", answers: [], sessionStatus: "COMPLETED", creditsConsumed: 1 };
+    const absentAccount = { ...student, inMeetingDuration: 0, absolutePercentAttendance: 0 };
+    const zoomGuest = { name: "Zoom user", isTeacher: false, inMeetingDuration: 2340, absolutePercentAttendance: 65 };
     const held = [
       parse({ participants: [teacher] }),
       parse({ participants: [teacher, student] }),
       parse({ participants: [teacher, { name: "Guest", isTeacher: false, inMeetingDuration: 3700, absolutePercentAttendance: 98 }] }),
+      parse({ participants: [teacher, absentAccount, zoomGuest] }),
+      parse({ participants: [teacher, absentAccount, { ...zoomGuest, inMeetingDuration: undefined, absolutePercentAttendance: undefined }] }),
+      parse({ participants: [{ ...teacher, inMeetingDuration: 600 }, absentAccount, { ...zoomGuest, absolutePercentAttendance: 95 }] }),
       parse({ feedbackSubmissions: [autoBlankSubmission(), autoBlankSubmission({ _id: "6a0000000000000000000005" })] }),
       parse({ feedbackSubmissions: [autoBlankSubmission({ _id: undefined })] }),
       parse({ feedbackSubmissions: [autoBlankSubmission(), studentSubmission] }),
@@ -210,11 +220,13 @@ describe("hold reasons as the code returns them", () => {
       return gates.reason;
     });
     expect(held).toEqual([
-      "student_count_0", "attendance_20pct", "student_not_wise_user", "submission_ambiguous:2 teacher submissions",
-      "submission_ambiguous:auto-submission without id", "non_teacher_submission_with_billing",
+      "student_count_0", "attendance_20pct", "student_not_wise_user",
+      "guest_stand_in_65pct", "guest_stand_in_unknown", "guest_stand_in_tutor_absent",
+      "submission_ambiguous:2 teacher submissions", "submission_ambiguous:auto-submission without id",
+      "non_teacher_submission_with_billing",
     ]);
-    for (const reason of held.slice(0, 3)) expectKnown(reason, "data_quality");
-    for (const reason of held.slice(3)) expectKnown(reason, "billing_or_form");
+    for (const reason of held.slice(0, 6)) expectKnown(reason, "data_quality");
+    for (const reason of held.slice(6)) expectKnown(reason, "billing_or_form");
   });
 
   it("labels every way the feedback form or the billing can stop a post", () => {
