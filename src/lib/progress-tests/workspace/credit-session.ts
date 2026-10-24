@@ -45,9 +45,8 @@ export async function loadCreditSessionAnchors(db:Database,from:Date,to:Date,sna
  // and then be marked failed, and that must not drop the anchor chain.
  const result=await db.execute(sql`with selected as materialized (
   select sn.id,sn.metadata from credit_control_snapshots sn
-  where (sn.id=(select p.id from credit_control_snapshots p
-    where coalesce((p.metadata->>'failedCreditPairs')::integer,0)=0
-     and exists(select 1 from credit_control_sync_runs cr where cr.promoted_snapshot_id=p.id and cr.status='success')
+  where (sn.id=(select p.id from credit_control_sync_runs cr join credit_control_snapshots p on p.id=cr.promoted_snapshot_id
+    where cr.status='success' and coalesce((p.metadata->>'failedCreditPairs')::integer,0)=0
     order by p.generated_at desc limit 1) or sn.id=any(ARRAY(select jsonb_array_elements_text(${JSON.stringify(snapshotIds)}::jsonb)::uuid)))
    and coalesce((sn.metadata->>'failedCreditPairs')::integer,0)=0
    and exists(select 1 from credit_control_sync_runs cr where cr.promoted_snapshot_id=sn.id and cr.status='success')
