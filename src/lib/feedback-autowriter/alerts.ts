@@ -6,7 +6,7 @@ import { rosterTutor } from "./roster";
 import type { AlertKind, JudgeUnreachedCause, PendingAlert } from "./store";
 
 const KIND_TEXT: Record<Exclude<AlertKind, "judge_failing">, string> = {
-  held: "Not written — the draft failed checks. Please write this feedback. If it is still blank about 42 hours after class, the autowriter posts a short note itself (the no-show note when the student never joined, otherwise a fact-only note).",
+  held: "Not written — the draft failed checks. Please write this feedback. If it is still blank about 42 hours after class, the autowriter posts a short note itself (the no-show note when the student never joined, otherwise a fact-only note), unless billing, the form or the submission blocks it.",
   expired: "Not written before the deadline window. Please write this feedback now.",
   no_summary: "Wise has no AI summary 3 hours after class. The autowriter keeps trying; write it yourself if it stays blank.",
   no_recording: "Wise's recording, or its transcript, is still not ready 3 hours after class (second pass). The autowriter keeps trying until the deadline; write it yourself if you can.",

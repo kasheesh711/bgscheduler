@@ -563,7 +563,7 @@ resumes. Halt reasons accumulate (`first | then: second`), so a manual pause nev
 | retry | class still running, no summary yet, no auto-blank yet; no student or attendance under 50% **within 60 minutes of the class end** (Wise may still be computing attendance) | back to `pending` in 10 min; alert if still no summary 3 h after class |
 | scope | offline, group, cancelled | `skipped_scope`, no alert (tutor's own) |
 | human | someone already wrote feedback | `skipped_human` |
-| person | absence or partial attendance after the 60-minute settle window, form or billing drift, draft failed checks | `held` + alert; the 48-hour fallback note if nobody writes it |
+| person | absence or partial attendance after the 60-minute settle window, form or billing drift, draft failed checks | `held` + alert; the 48-hour fallback note if nobody writes it (never for billing, form or submission holds) |
 | expired | deadline too close | `expired` + alert; a class whose tutor is switched off when the sweep runs is handed back instead (`skipped_scope`, `tutor_off_at_deadline`, no alert) |
 
 The same dispositions apply when a gate fails on the fresh read just before the POST.
@@ -580,7 +580,9 @@ homework; owner decision: no AI text that the checks did not pass). It goes thro
 `heldFallbackSubmitStore`): Wise's blank auto-submission must still be there, billing is re-sent unchanged, and the
 claim re-checks the window. A class it can never post (billing, the form, the submission) keeps its hold, stops being
 tried (`metadata.deadlineFallbackStopped`) and raises one `fallback_failed` alert; a class a person wrote stops with no
-alert. The row records `metadata.deadlineFallback.kind` (`no_show` or `fact_only`). Before the window, a person can
+alert and stays `held` (the dashboard shows who wrote it). A class still not posted in the last 90 minutes before its
+deadline also raises `fallback_failed` and keeps being tried until the margin. At most 2 notes per sweep; a class that
+keeps failing goes behind classes not tried yet; an owner Retry clears every fallback mark. The row records `metadata.deadlineFallback.kind` (`no_show` or `fact_only`). Before the window, a person can
 still write the class, post the no-show note, or Retry it.
 
 Alerts go out as one digest per sweep to `FEEDBACK_AUTOWRITER_ALERT_EMAILS` through the Apps Script relay. Outside

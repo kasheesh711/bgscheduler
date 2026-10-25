@@ -334,6 +334,35 @@ describe("48-hour fallback note on a held class nobody wrote", () => {
     expect((await row()).alertsSent).toEqual({});
   });
 
+  it("for a class ending late in the evening, opens 6 h before the deadline margin instead of 42 h after class", async () => {
+    // A class ending 23:45 Bangkok: its deadline is 48 h 15 min later, so the margin (deadline − 30 min) binds first.
+    await heldClass("thai_summary_no_transcript", 41 + 40 / 60);
+    const setEnd = (minutesAgo: number) => {
+      const end = new Date(Date.now() - minutesAgo * 60_000);
+      return db.update(S).set({ scheduledEndAt: end, deadlineAt: new Date(end.getTime() + 48 * HOUR + 15 * 60_000) });
+    };
+    await setEnd(41 * 60 + 40);
+    expect(await listFallbackRows(db)).toEqual([]);
+    await setEnd(41 * 60 + 50);
+    await listedRow();
+  });
+
+  it("refuses at the claim inside the deadline margin, while not live, and leaves a switched-off tutor's class alone", async () => {
+    const wise = fakeWise(await heldClass("thai_summary_no_transcript", 43));
+    const listed = await listedRow();
+    await db.update(S).set({ deadlineAt: new Date(Date.now() + 10 * 60_000) });
+    expect(await fallback(wise.ops, { ...listed, deadlineAt: new Date(Date.now() + 10 * HOUR) })).toEqual({ result: "retry", reason: "conditions" });
+    await db.update(S).set({ deadlineAt: listed.deadlineAt });
+    await updateControl(db, { mode: "shadow" }, "t@x.com");
+    expect(await fallback(wise.ops, listed)).toEqual({ result: "retry", reason: "conditions" });
+    await updateControl(db, { mode: "live", disabledTutors: [KEVIN_ONLINE_WISE_USER_ID] }, "t@x.com");
+    const result = await runSweep({ db, ops: wise.ops, apiKey: "test-key", apiActorId: API_ACTOR, writesAllowedHere: true,
+      deadlineMs: Date.now() + 740_000, sleep: async () => {}, alertRecipients: [] });
+    expect(result.fallback).toEqual({});
+    expect(wise.ops.postFeedback).not.toHaveBeenCalled();
+    expect((await row()).state).toBe("held");
+  });
+
   it("is posted by the sweep", async () => {
     const wise = fakeWise(await heldClass("summary_only_held", 43));
     const result = await runSweep({ db, ops: wise.ops, apiKey: "test-key", apiActorId: API_ACTOR, writesAllowedHere: true,
