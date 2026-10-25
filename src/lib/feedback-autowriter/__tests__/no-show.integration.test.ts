@@ -11,7 +11,9 @@ import { detectNoShow } from "../no-show";
 import { postNoShowNote } from "../no-show-post";
 import { KEVIN_ONLINE_WISE_USER_ID } from "../roster";
 import { parseAutowriterSessionDetail } from "../session";
-import { heldRecoverySubmitStore, listFallbackRows, readControl, updateControl, type AutowriterSessionRow } from "../store";
+import {
+  heldRecoverySubmitStore, listFallbackRows, readControl, retryHeldSession, updateControl, type AutowriterSessionRow,
+} from "../store";
 import { fieldsHash, submitFeedbackGuarded, type PostResult, type SubmitFeedbackEvent, type WiseFeedbackOps } from "../submit";
 import type { WiseFeedbackPostBody } from "../types";
 import { answers, autoBlankSubmission, CLASS_ID, GOOD_FIELDS, SESSION_ID, sessionDetail, STUDENT_ID, STUDENT_NAME } from "./fixtures";
@@ -298,6 +300,38 @@ describe("48-hour fallback note on a held class nobody wrote", () => {
     expect(wise.ops.postFeedback).not.toHaveBeenCalled();
     expect((await row()).state).toBe("held");
     await listedRow();
+  });
+
+  it("refuses at the claim outside the window, and tries a class that has not failed yet first", async () => {
+    const wise = fakeWise(await heldClass("thai_summary_no_transcript", 41));
+    const [early] = await db.select().from(S).where(eq(S.wiseSessionId, SESSION_ID));
+    expect(await fallback(wise.ops, early)).toEqual({ result: "retry", reason: "conditions" });
+    expect(wise.ops.postFeedback).not.toHaveBeenCalled();
+    const end = new Date(Date.now() - 43 * HOUR);
+    await db.update(S).set({ scheduledEndAt: end, deadlineAt: calculateFeedbackDeadline(end) });
+    await db.insert(S).values({ wiseSessionId: "6a00000000000000000000aa", wiseClassId: CLASS_ID, wiseTeacherUserId: KEVIN_ONLINE_WISE_USER_ID,
+      state: "held", reason: "summary_only_held", scheduledEndAt: end, deadlineAt: calculateFeedbackDeadline(end) });
+    expect((await listFallbackRows(db)).map((listed) => listed.wiseSessionId)).toEqual(["6a00000000000000000000aa", SESSION_ID]);
+  });
+
+  it("keeps trying in its last hour, and alerts so a person can still write it", async () => {
+    const detail = await heldClass("thai_summary_no_transcript", 47);
+    await db.update(S).set({ deadlineAt: new Date(Date.now() + HOUR) });
+    const wise = fakeWise({ ...detail, feedbackSubmissions: [] });
+    expect(await fallback(wise.ops, await listedRow())).toEqual({ result: "retry", reason: "submission_none" });
+    expect((await row()).metadata).toMatchObject({ alertKind: "fallback_failed", deadlineFallbackRetry: { reason: "submission_none" } });
+    await listedRow();
+  });
+
+  it("is tried again after an owner Retry re-holds the class", async () => {
+    const detail = await heldClass("thai_summary_no_transcript", 43);
+    const wise = fakeWise({ ...detail, feedbackSubmissions: [autoBlankSubmission({ creditsConsumed: null })] });
+    expect(await fallback(wise.ops, await listedRow())).toMatchObject({ result: "stopped" });
+    await db.update(S).set({ alertsSent: { held: "x", fallback_failed: "y" } });
+    expect(await retryHeldSession(db, SESSION_ID, { minDeadline: new Date(), actor: "owner@example.com" })).toBe(true);
+    await db.update(S).set({ state: "held", reason: "summary_only_held" });
+    await listedRow();
+    expect((await row()).alertsSent).toEqual({});
   });
 
   it("is posted by the sweep", async () => {

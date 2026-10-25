@@ -374,7 +374,7 @@ export function heldNoShowSubmitStore(db: Database, wiseSessionId: string, claim
 
 /**
  * The SubmitStore for the 48-hour fallback note on a `held` class (`deadline-fallback.ts`): the no-show store's claim,
- * allowed only once the fallback window has opened (`fallbackWindowOpenSql`) instead of only for a stored no-show.
+ * allowed only inside the fallback window (`fallbackWindowSql`) instead of only for a stored no-show.
  */
 export function heldFallbackSubmitStore(db: Database, wiseSessionId: string, claimMetadata: Record<string, unknown>,
   held: { reason: string }): SubmitStore {
@@ -388,13 +388,14 @@ export function heldRecoverySubmitStore(db: Database, wiseSessionId: string, cla
 }
 
 /**
- * SQL: the 48-hour fallback may post this row now — `AUTOWRITER_FALLBACK_WINDOW_MS` before the earlier of 48 h after
- * the class and the deadline margin. A row without a deadline never qualifies.
+ * SQL: the 48-hour fallback may post this row now — from `AUTOWRITER_FALLBACK_WINDOW_MS` before the earlier of 48 h
+ * after the class and the deadline margin, until that margin. A row without a deadline never qualifies.
  */
-const fallbackWindowOpenSql = sql`least(
+const fallbackWindowSql = sql`(least(
     ${S.scheduledEndAt} + (${AUTOWRITER_PUBLISH_WITHIN_MS} * interval '1 millisecond'),
     ${S.deadlineAt} - (${AUTOWRITER_DEADLINE_MARGIN_MS} * interval '1 millisecond')
-  ) - (${AUTOWRITER_FALLBACK_WINDOW_MS} * interval '1 millisecond') <= now()`;
+  ) - (${AUTOWRITER_FALLBACK_WINDOW_MS} * interval '1 millisecond') <= now()
+  and ${S.deadlineAt} > ${plusMs(AUTOWRITER_DEADLINE_MARGIN_MS)})`;
 
 /** What a `held → posting` claim posts; the kind is also the reason the claim writes. */
 type HeldPost =
@@ -415,7 +416,8 @@ function heldSubmitStore(db: Database, wiseSessionId: string, claimMetadata: Rec
         state: "held",
         reason: held.reason,
         nextAttemptAt: null,
-        metadata: sql`${S.metadata} || ${JSON.stringify({ alertKind: "held", noShowPost: { notSent: detail } })}::jsonb`,
+        metadata: sql`${S.metadata} || ${JSON.stringify({ alertKind: "held",
+          [post.kind === "deadline_fallback" ? "deadlineFallbackPost" : "noShowPost"]: { notSent: detail } })}::jsonb`,
         updatedAt: nowSql,
       }).where(and(eq(S.wiseSessionId, wiseSessionId), eq(S.state, "posting")));
     },
@@ -445,7 +447,7 @@ function heldSubmitStore(db: Database, wiseSessionId: string, claimMetadata: Rec
           // Still the hold the owner selected: not re-held for something else meanwhile.
           eq(S.reason, held.reason),
           recovery ? sql`now() < ${recovery.expiresAt.toISOString()}::timestamptz`
-            : post.kind === "deadline_fallback" ? fallbackWindowOpenSql
+            : post.kind === "deadline_fallback" ? fallbackWindowSql
               : sql`${S.metadata} -> 'noShow' is not null and ${S.metadata} -> 'noShow' <> 'null'::jsonb`,
           eq(S.wiseTeacherUserId, input.teacherId),
           sql`exists (select 1 from feedback_autowriter_control c where c.id = 'default' and c.mode = 'live'
@@ -499,24 +501,34 @@ export async function listDueRows(db: Database): Promise<AutowriterSessionRow[]>
 }
 
 /**
- * Held classes the 48-hour fallback (`deadline-fallback.ts`) should post now: its window is open, the deadline margin
- * still ahead, and no earlier try stopped for good (`metadata.deadlineFallbackStopped`). Soonest deadline first.
+ * Held classes the 48-hour fallback (`deadline-fallback.ts`) should post now: inside the fallback window, and no
+ * earlier try stopped for good (`metadata.deadlineFallbackStopped`). Classes not tried yet first, then the one tried
+ * longest ago (`metadata.deadlineFallbackRetry`), so a class that keeps failing never blocks the others; then the
+ * soonest deadline.
  */
 export async function listFallbackRows(db: Database): Promise<AutowriterSessionRow[]> {
   return db.select().from(S).where(and(
     eq(S.state, "held"),
-    fallbackWindowOpenSql,
-    sql`${S.deadlineAt} > ${plusMs(AUTOWRITER_DEADLINE_MARGIN_MS)}`,
+    fallbackWindowSql,
     sql`not (${S.metadata} ? 'deadlineFallbackStopped')`,
-  )).orderBy(sql`${S.deadlineAt} asc`);
+  )).orderBy(sql`${S.metadata} -> 'deadlineFallbackRetry' ->> 'at' asc nulls first`, sql`${S.deadlineAt} asc`);
 }
 
 /**
- * The fallback will never post this held class (a person wrote it, or billing, the form or the submission is not as a
- * POST needs): stop trying, and raise `fallback_failed` unless a person's text is already there.
+ * A fallback try that did not post. `stopped`: it never will (a person wrote the class, or billing, the form or the
+ * submission is not as a POST needs) — no more tries. Otherwise the class waits for a later sweep. `alert` raises
+ * `fallback_failed` (sent once).
  */
-export async function stopDeadlineFallback(db: Database, wiseSessionId: string, reason: string, alert: boolean): Promise<void> {
-  const patch = { deadlineFallbackStopped: { reason, at: new Date().toISOString() }, ...(alert ? { alertKind: "fallback_failed" } : {}) };
+export async function recordDeadlineFallback(db: Database, wiseSessionId: string, outcome: {
+  reason: string;
+  stopped: boolean;
+  alert: boolean;
+}): Promise<void> {
+  const at = new Date().toISOString();
+  const patch = {
+    [outcome.stopped ? "deadlineFallbackStopped" : "deadlineFallbackRetry"]: { reason: outcome.reason, at },
+    ...(outcome.alert ? { alertKind: "fallback_failed" } : {}),
+  };
   await db.update(S).set({ metadata: sql`${S.metadata} || ${JSON.stringify(patch)}::jsonb`, updatedAt: nowSql })
     .where(and(eq(S.wiseSessionId, wiseSessionId), eq(S.state, "held")));
 }
@@ -759,10 +771,11 @@ export async function retryHeldSession(db: Database, wiseSessionId: string, inpu
     metadata: sql`(${S.metadata} - 'alertKind' - 'transcribeErrors' - 'genericErrors' - 'writerErrors' - 'judgeErrors' - 'judgeUnreached'
       - 'judgeUnreachedCause' - 'judgeFailingSince' - 'recordingShortSeenAt' - 'judge'
       - 'draftEvidence' - 'pipeline' - 'transcript' - 'handover' - 'summaryAtHandover' - 'summaryFallback' - 'sonioxFailure'
-      - 'writerFailure' - 'sonioxRetainUntil' - 'triagedAt' - 'summaryOnlyHeld' - 'noShow' - 'zoomWaitSince')
+      - 'writerFailure' - 'sonioxRetainUntil' - 'triagedAt' - 'summaryOnlyHeld' - 'noShow' - 'zoomWaitSince'
+      - 'deadlineFallback' - 'deadlineFallbackStopped' - 'deadlineFallbackRetry' - 'deadlineFallbackPost')
       || ${JSON.stringify({ retriedBy: input.actor })}::jsonb
       || jsonb_build_object('retriedAt', now()::text, 'retriedFrom', ${S.state}::text)`,
-    alertsSent: sql`${S.alertsSent} - 'held' - 'expired'`,
+    alertsSent: sql`${S.alertsSent} - 'held' - 'expired' - 'fallback_failed'`,
     updatedAt: nowSql,
   }).where(and(
     eq(S.wiseSessionId, wiseSessionId),

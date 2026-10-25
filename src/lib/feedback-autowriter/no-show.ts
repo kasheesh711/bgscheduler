@@ -5,7 +5,9 @@ import { scheduledWindow, studentParticipants, type AutowriterSessionDetail } fr
 /**
  * A student who never joined while the tutor waited (7 Oct: Avi 0 s, Ras about 12 min). Such a class is held like any
  * low-attendance class; this module only recognises it and prepares the standard note a person may post with one
- * click from the dashboard. It never posts by itself: Wise attendance can miss a lesson held outside the Wise room.
+ * click from the dashboard. Wise attendance can miss a lesson held outside the Wise room, so the note is not posted at
+ * once: only the 48-hour fallback (`deadline-fallback.ts`, owner rule 25 Oct 2026) posts it by itself, about 42 hours
+ * after class, when nobody has written the class by then.
  */
 
 /** At most this long in the room still counts as "did not join" (a join-and-drop, a stray reconnect). */

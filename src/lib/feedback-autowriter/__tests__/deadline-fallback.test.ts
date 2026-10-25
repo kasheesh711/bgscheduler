@@ -21,7 +21,7 @@ describe("48-hour fallback: the fact-only note", () => {
     expect(factOnlyNote(detail("Live Session - Chemistry", "Somchai (Tom.Ja) Jaidee"))).toEqual({
       topics: "1. Chemistry: the 60-minute online class scheduled for Monday 28 September",
       performance: "This is a short record of Tom's class. The detailed write-up for this class could not be completed within 48 hours, so this note keeps the class record complete. Please contact BeGifted if you would like more detail about this lesson.",
-      improvement: "1. We will review the work from this class at the start of the next lesson and agree the next steps with Tom then.",
+      improvement: "1. We will agree the next steps with Tom at the start of the next lesson.",
       homework: "",
     });
   });

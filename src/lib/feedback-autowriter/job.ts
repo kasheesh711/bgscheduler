@@ -17,6 +17,7 @@ import { sendAlertDigest } from "./alerts";
 import { resolveBilling } from "./billing";
 import {
   AUTOWRITER_EVENT_DEADLINE_MS,
+  AUTOWRITER_FALLBACK_MAX_PER_SWEEP,
   AUTOWRITER_GENERATION_LEASE_MS,
   AUTOWRITER_JUDGE_ERRORS_ALERT,
   AUTOWRITER_JUDGE_STAGE_ERRORS_ALERT,
@@ -1602,15 +1603,20 @@ export async function runSweep(deps: AutowriterDeps): Promise<SweepResult> {
       expired = settled.expired;
 
       // 2b. Owner rule: a held class nobody wrote is published within 48 h of its end (`deadline-fallback.ts`).
-      // Before the due rows, so it gets the start window; the claim re-checks live, halt and tutor atomically.
-      const fallbackRows = control.mode === "live" && !control.haltedAt && deps.apiActorId ? await listFallbackRows(db) : [];
+      // Before the due rows, at most `AUTOWRITER_FALLBACK_MAX_PER_SWEEP` of them, so the due rows keep most of the start
+      // window; the claim re-checks live, halt, tutor and the window atomically.
+      const fallbackRows = control.mode === "live" && !control.haltedAt && deps.apiActorId
+        ? (await listFallbackRows(db)).filter((row) => !row.wiseTeacherUserId || !control.disabledTutors.includes(row.wiseTeacherUserId))
+          .slice(0, AUTOWRITER_FALLBACK_MAX_PER_SWEEP)
+        : [];
       const fallbackMappings = fallbackRows.length > 0 ? await loadFieldMappings(db) : [];
       for (const row of fallbackRows) {
         if (!deps.apiActorId || remaining(deps) < AUTOWRITER_SWEEP_MIN_REMAINING_MS) break;
-        if (row.wiseTeacherUserId && control.disabledTutors.includes(row.wiseTeacherUserId)) continue;
+        const current = await readControl(db);
+        if (current.haltedAt || current.mode !== "live") break;
         const result = await postDeadlineFallback(db, {
-          row, ops: deps.ops, apiActorId: deps.apiActorId, mappings: fallbackMappings, now, remainingMs: () => remaining(deps),
-          sleep: deps.sleep,
+          row, ops: deps.ops, apiActorId: deps.apiActorId, mappings: fallbackMappings, now: clock(deps),
+          remainingMs: () => remaining(deps), sleep: deps.sleep,
         });
         tally(fallback, result.result);
         if (/read_failed/u.test(result.reason)) infraErrors.push(`${row.wiseSessionId}: Wise read failed for the 48-hour fallback note`);
