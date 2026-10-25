@@ -80,7 +80,8 @@ export async function postDeadlineFallback(db: Database, input: {
   const lastTries = !row.deadlineAt ||
     row.deadlineAt.getTime() - input.now.getTime() <= AUTOWRITER_DEADLINE_MARGIN_MS + LAST_TRIES_MS;
   const retry = async (reason: string): Promise<DeadlineFallbackOutcome> => {
-    await recordDeadlineFallback(db, row.wiseSessionId, { reason, stopped: false, alert: lastTries });
+    // A person saving between the reads is not a blank class: the next try tells written from blank.
+    await recordDeadlineFallback(db, row.wiseSessionId, { reason, stopped: false, alert: lastTries && reason !== "submission_changed_to_human" });
     return { result: "retry", reason };
   };
   if (!row.wiseClassId) return stop("class_id_missing");

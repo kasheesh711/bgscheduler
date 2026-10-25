@@ -13,7 +13,7 @@ const KIND_TEXT: Record<Exclude<AlertKind, "judge_failing">, string> = {
   unknown_outcome: "The Wise POST outcome is unclear. Autowriter halted — check this class in Wise before resuming.",
   verify_failed: "The Wise POST did not verify. Autowriter halted — check this class in Wise before resuming.",
   rejected: "Wise rejected the POST. Autowriter halted — check this class before resuming.",
-  fallback_failed: "The autowriter could not post its 48-hour fallback note (billing, the feedback form or the submission in Wise is not as a post needs, or its last tries failed), so this class is still blank. Please write this feedback now.",
+  fallback_failed: "The autowriter could not post its 48-hour fallback note (billing, the feedback form or the submission in Wise is not as a post needs, or its last tries failed), so this class is still blank. Please write this feedback now. The autowriter keeps trying until 30 minutes before the deadline unless billing, the form or the submission blocked it.",
 };
 
 /** What kept the judge from being asked, when it was not the judge model that failed. */
