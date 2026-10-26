@@ -45,7 +45,6 @@ import {
   AUTOWRITER_ZOOM_ENGLISH_HISTORY_MS,
   AUTOWRITER_ZOOM_TRANSCRIPT_RECHECK_MS,
   AUTOWRITER_ZOOM_TRANSCRIPT_WAIT_MS,
-  autowriterHoldSummaryOnly,
 } from "./config";
 import { JUDGE_PROMPT_VERSION, passingStoredVerdict, type StoredJudgeVerdict } from "./judge";
 import { raiseCreditIncident } from "./model-credit";
@@ -153,12 +152,6 @@ export interface AutowriterDeps {
    * and `soniox`).
    */
   transcriptFirst?: boolean;
-  /**
-   * Hold summary-only drafts (`FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY`): a class about to be written from Wise's summary
-   * goes to the transcript pass when it may, otherwise it is held for a person (`summary_only_held`) before any model
-   * call. Unset: read from the environment, so a deps builder that forgets it still fails closed.
-   */
-  holdSummaryOnly?: boolean;
   /**
    * English lessons from Zoom's captions (`FEEDBACK_AUTOWRITER_ZOOM_ENGLISH`): in the transcript pass, a class whose
    * captions, summary and recent Soniox transcripts are English is written from Zoom's captions, with no Soniox job.
@@ -329,7 +322,8 @@ function pipelineStamp(evidence: EvidenceKind, arm: ModelArm, styleGuide: StyleG
     styleGuide,
     commitSha: currentCommit(),
     promptVersion: PROMPT_VERSION,
-    judgeVersion: JUDGE_PROMPT_VERSION,
+    judgeVersion: null,
+    qualityReview: "deferred",
     arm,
     evidence,
   };
@@ -706,30 +700,8 @@ async function processLeased(deps: AutowriterDeps, input: {
   const summaryThai = thaiShare(summary.text);
   if (summaryThai >= AUTOWRITER_THAI_SUMMARY_SHARE) {
     if (mayHandOver) return handOverToTranscript(release, out, "thai_summary", { summaryThaiShare: Math.round(summaryThai * 100) / 100 });
-    // Back from the transcript, a mostly-Thai summary is still not good enough to write from: a person writes it.
-    if (fellBack) {
-      await release({
-        state: "held", reason: "thai_summary_no_transcript", alertKind: "held",
-        metadata: { summaryThaiShare: Math.round(summaryThai * 100) / 100 },
-      });
-      return out("held", "thai_summary_no_transcript");
-    }
   }
-  // Owner, 5 Oct 2026: while the switch is on, nothing is written from the summary alone. The transcript pass takes
-  // the class when it may; otherwise a person writes it, and any draft kept on the row is dropped so nobody is shown
-  // summary-only text to paste.
-  if (deps.holdSummaryOnly ?? autowriterHoldSummaryOnly()) {
-    if (mayHandOver) {
-      const recording = recordingForTranscription(detail);
-      return handOverToTranscript(release, out, "summary_only", {}, recording.ok || recording.reason === "recording_multiple_parts" ? 0 : recordingRecheckMs(detail, now), true);
-    }
-    await release({
-      state: "held", reason: "summary_only_held", alertKind: "held",
-      arm: null, fields: null, fieldsSha256: null, billing: null,
-      metadata: { judge: null, draftEvidence: null, pipeline: null, summaryOnlyHeld: { fellBack, at: now.toISOString() } },
-    });
-    return out("held", "summary_only_held");
-  }
+  // Summary fallback can write in either language; the writer returns English feedback.
   if (!deps.apiKey) {
     await release({ state: "pending", reason: "infra:OPENROUTER_API_KEY missing", retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true });
     return out("infra", "OPENROUTER_API_KEY missing");
@@ -742,6 +714,7 @@ async function processLeased(deps: AutowriterDeps, input: {
   });
   const result: PipelineResult = await runWritingPipeline({
     apiKey: deps.apiKey,
+    deferQualityReview: true,
     formatGuide,
     session: {
       wiseSessionId: row.wiseSessionId,
@@ -920,24 +893,20 @@ async function postDraft(deps: AutowriterDeps, input: {
   }
 }
 
-/** A judged draft on its way to a POST; `pipeline` is the stamp of the attempt that wrote it, when reused. */
-type StoredDraft = { arm: ModelArm; fields: FeedbackFieldAnswers; judge: StoredJudgeVerdict; pipeline?: Record<string, unknown> };
+/** A validated draft on its way to a POST; `pipeline` is the stamp of the attempt that wrote it, when reused. */
+type StoredDraft = { arm: ModelArm; fields: FeedbackFieldAnswers; judge: StoredJudgeVerdict | null; pipeline?: Record<string, unknown> };
 
 /**
- * A judged transcript draft kept from an attempt whose POST did not go out — only when the current prompt and judge
- * wrote and passed it. v4 (30 Sep): a draft from an older version (or with no stamp) would skip the newer rules and
- * checks, so the class is written and judged again from its kept transcript instead. v5 (30 Sep): only a draft both
- * judge levels passed (`passingStoredVerdict`) — one judged at a single level is judged again, never posted on its
- * old verdict. `requeueShadowDrafts` (store.ts) applies the same test when it decides which drafts keep their
- * transcript's review window.
+ * Reuse a current, validated post-first draft after a POST delay. Historical drafts need both passing judges.
+ * Prompt and style checks still apply; reuse keeps the original pipeline stamp and avoids another model call.
  */
 function reusableTranscriptDraft(row: AutowriterSessionRow): StoredDraft | null {
   const metadata = row.metadata as { draftEvidence?: unknown; judge?: unknown; pipeline?: unknown };
   if (metadata.draftEvidence !== "transcript" || !row.fields || !row.arm) return null;
   const judge = passingStoredVerdict(metadata.judge);
-  if (!judge) return null;
   const pipeline = metadata.pipeline && typeof metadata.pipeline === "object" ? metadata.pipeline as Record<string, unknown> : null;
-  if (pipeline?.promptVersion !== PROMPT_VERSION || pipeline.judgeVersion !== JUDGE_PROMPT_VERSION) return null;
+  if (pipeline?.promptVersion !== PROMPT_VERSION) return null;
+  if (pipeline.qualityReview !== "deferred" && (!judge || pipeline.judgeVersion !== JUDGE_PROMPT_VERSION)) return null;
   const tutorKey = rosterTutor(row.wiseTeacherUserId)?.canonicalKey;
   const storedFormat = pipeline.formatGuide as { id?: string; version?: number } | undefined;
   const expectedStyle = process.env.FEEDBACK_AUTOWRITER_ISEB_FORMAT_ENABLED === "true" && storedFormat?.id === "iseb" && tutorKey === "Mimi"
@@ -1245,7 +1214,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
   const { rendered, meta: transcriptMeta } = evidence;
   const fromZoom = transcriptMeta.source === "zoom";
 
-  // 5. Write and judge from the transcript (Sol, Luna fallback, GLM judge — zero-retention routes only).
+  // 5. Write from the transcript. Quality review follows posting; all model routes have zero retention.
   const atomEvidence = await loadAtomLessonEvidence(db, { detail, studentId: student.wiseUserId, lessonRecord: rendered, now });
   const formatGuide = await approvedFormatGuide(db, tutor.canonicalKey, describeClass({ programme: detail.classSubject, title: detail.title }));
   const lessonEvidenceHash = await retainIsebEvidence(db, {
@@ -1253,6 +1222,7 @@ async function processTranscript(deps: AutowriterDeps, input: {
   });
   const result = await runWritingPipeline({
     apiKey: deps.apiKey,
+    deferQualityReview: true,
     formatGuide,
     session: {
       wiseSessionId: row.wiseSessionId,

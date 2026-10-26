@@ -105,13 +105,12 @@ export function SystemLine({ dashboard, lastRun, canControl, busy, onControl }: 
       title: system.tutorWriter.model,
     }] : []),
     { key: "fallback", content: <>Fallback {modelLabel(system.fallbackWriter.model)} ({system.fallbackWriter.effort})</>, title: system.fallbackWriter.model },
-    { key: "judge", content: <>Judge {modelLabel(system.judge.model)} ({effortsLabel(system.judge.efforts)})</>, title: system.judge.model },
+    { key: "judge", content: <>Offline judge {modelLabel(system.judge.model)} ({effortsLabel(system.judge.efforts)})</>, title: system.judge.model },
     { key: "transcript-first", content: <>Transcript first: {system.transcriptFirst ? "on" : "off"}</> },
     ...(system.zoomEnglish ? [{ key: "zoom-english", content: <>English lessons: from Zoom captions</> }] : []),
-    ...(system.holdSummaryOnly ? [{ key: "hold-summary-only", content: <>Summary-only drafts: held</> }] : []),
     { key: "second-pass", content: <>Second pass: {system.secondPass ? "on" : "off"}</> },
     {
-      key: "versions", content: <>Prompt v{system.promptVersion} · Judge v{system.judgeVersion}</>,
+      key: "versions", content: <>Prompt v{system.promptVersion} · Post first; quality review later</>,
       title: system.commit ? `Commit ${system.commit}` : undefined,
     },
     {

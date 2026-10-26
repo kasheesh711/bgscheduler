@@ -51,7 +51,7 @@ export interface InboxReview {
 export const INBOX_GROUPS: ReadonlyArray<{ kind: InboxItemKind; label: string }> = [
   { kind: "incident", label: "Incidents" },
   { kind: "hold", label: "Held" },
-  { kind: "review", label: "To review" },
+  { kind: "review", label: "Optional quality review" },
   { kind: "decision", label: "Decisions" },
   { kind: "failed_post", label: "Failed posts" },
   { kind: "expansion_ready", label: "Expansion" },
@@ -269,11 +269,10 @@ export function buildInbox(
 }
 
 /**
- * How many things wait in the list: its classes, each counted once whatever its rows (a post to review with an incident
- * about it is one class), and each item about no class on its own.
+ * Count actions by class, excluding optional quality reviews. An incident and a failed post on one class count once.
  */
-export function openCount(items: ReadonlyArray<Pick<InboxItem, "id" | "wiseSessionId">>): number {
-  return new Set(items.map((item) => item.wiseSessionId === null ? `item:${item.id}` : `class:${item.wiseSessionId}`)).size;
+export function openCount(items: ReadonlyArray<Pick<InboxItem, "id" | "wiseSessionId" | "kind">>): number {
+  return new Set(items.filter((item) => item.kind !== "review").map((item) => item.wiseSessionId === null ? `item:${item.id}` : `class:${item.wiseSessionId}`)).size;
 }
 
 /**

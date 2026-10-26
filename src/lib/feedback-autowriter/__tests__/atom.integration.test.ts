@@ -281,15 +281,14 @@ describe("unattended collector and rollout", () => {
 });
 
 describe("server review accounting", () => {
-  it("counts only verified posts with source evidence, both factual verdicts and a passing style review", async () => {
+  it("reviews a verified post-first draft without requiring pre-post factual verdicts", async () => {
     const { reviewIsebPosts, isebMonitoringProgress } = await import("../iseb-review");
     const { fieldsHash } = await import("../submit");
     vi.stubEnv("OPENROUTER_API_KEY", "test-key");
     await db.execute(sql`TRUNCATE feedback_autowriter_posts CASCADE`);
     const fields={topics:"1. Fractions",performance:"We worked carefully on finding common denominators. Tom explained the fraction additions clearly and corrected his simplification after checking the highest common factor. We practised checking each result together.",improvement:"1. Check the highest common factor of the numerator and denominator before writing the final fraction.",homework:""};
     const evidenceHash=await retainIsebEvidence(db,{wiseSessionId:"verified",atom:null,lessonRecord:"Tom practised fractions.",evidenceKind:"summary"});
-    const fact={faithful:true,unsupported:[],misattributed:[],homeworkNotSet:[]};
-    const pipeline={formatGuide:{id:"iseb",version:1},styleGuide:{id:"mimi",version:2},lessonEvidenceHash:evidenceHash,factualVerdicts:{...fact,levels:{medium:fact,high:fact}}};
+    const pipeline={formatGuide:{id:"iseb",version:1},styleGuide:{id:"mimi",version:2},lessonEvidenceHash:evidenceHash,qualityReview:"deferred",factualVerdicts:null};
     const base={kind:"first_shot" as const,fields,fieldsSha256:fieldsHash(fields),pipeline,billing:{},actorKind:"autowriter" as const,actor:"test",provenance:"live" as const};
     await db.insert(s.feedbackAutowriterPosts).values([{...base,wiseSessionId:"unknown",outcome:"unknown_outcome"},{...base,wiseSessionId:"verified",outcome:"verified"},{...base,wiseSessionId:"source_missing",outcome:"verified"}]);
     const call=vi.fn(async ()=>({ok:true as const,content:JSON.stringify({matches:true,problems:[]}),model:"openai/gpt-6.1-sol",provider:"Azure",generationId:"g",finishReason:"stop",usage:{promptTokens:1,completionTokens:1,reasoningTokens:0,cachedTokens:0,costUsd:0},latencyMs:1}));

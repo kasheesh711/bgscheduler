@@ -5,7 +5,6 @@ import {
   AUTOWRITER_WRITER_BY_ARM,
   autowriterAlertEmails,
   autowriterEnabled,
-  autowriterHoldSummaryOnly,
   autowriterTranscriptFirst,
   autowriterWritesAllowedHere,
   openRouterApiKey,
@@ -82,14 +81,6 @@ describe("config", () => {
     expect(autowriterTranscriptFirst({ FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST: "True" })).toBe(false);
     expect(autowriterTranscriptFirst({ FEEDBACK_AUTOWRITER_TRANSCRIPT_FIRST: "1" })).toBe(false);
     expect(autowriterTranscriptFirst({})).toBe(false);
-  });
-
-  it("holds summary-only drafts unless the exact string false opts out", () => {
-    expect(autowriterHoldSummaryOnly({ FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY: "true" })).toBe(true);
-    expect(autowriterHoldSummaryOnly({ FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY: "TRUE" })).toBe(true);
-    expect(autowriterHoldSummaryOnly({ FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY: "1" })).toBe(true);
-    expect(autowriterHoldSummaryOnly({})).toBe(true);
-    expect(autowriterHoldSummaryOnly({ FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY: "false" })).toBe(false);
   });
 
   it("never writes from a preview deployment", () => {

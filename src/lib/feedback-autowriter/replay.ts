@@ -283,8 +283,8 @@ function lastVerdict(record: ReplayRecord, purpose: ReplayCall["purpose"], effor
 }
 
 function draftOf(result: PipelineResult, record: ReplayRecord, purpose: ReplayCall["purpose"], writerContents: string[], displayName: string): ReplayDraft {
-  const judgeHigh = result.kind === "draft" ? result.judge.levels.high : lastVerdict(record, purpose, "high");
-  const judgeMedium = result.kind === "draft" ? result.judge.levels.medium : lastVerdict(record, purpose, "medium");
+  const judgeHigh = result.kind === "draft" ? result.judge?.levels.high ?? null : lastVerdict(record, purpose, "high");
+  const judgeMedium = result.kind === "draft" ? result.judge?.levels.medium ?? null : lastVerdict(record, purpose, "medium");
   // The pipeline returns the first draft that passes, so the last writer call wrote it (or was the last to try).
   const writer = record.calls.filter((call) => call.purpose === purpose && call.role === "writer").at(-1);
   const writerModel = writer?.model ?? null;

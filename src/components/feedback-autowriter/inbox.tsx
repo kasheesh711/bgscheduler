@@ -21,7 +21,7 @@ import { ARM_LABEL } from "./model-labels";
 const GROUP_VIEW: Record<InboxItemKind, { icon: LucideIcon; note: string }> = {
   incident: { icon: TriangleAlert, note: "Not acknowledged" },
   hold: { icon: Clock, note: "Not posted · needs a person before the deadline" },
-  review: { icon: FileText, note: "Posted · awaiting your verdict" },
+  review: { icon: FileText, note: "Posted · internal assessment only" },
   decision: { icon: Split, note: "From the forward scan" },
   failed_post: { icon: CircleAlert, note: "The post did not end well · check Wise" },
   expansion_ready: { icon: UserPlus, note: "The gate passed" },

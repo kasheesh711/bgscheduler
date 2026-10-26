@@ -31,12 +31,12 @@ describe("Inbox", () => {
   it("lists what needs the owner in groups, in the list's order, each with its count and the total", () => {
     const html = render();
     expect(html).toContain("What needs you");
-    // 1 incident, 3 holds still waiting (not the written one, not the stale one), 4 posts to review, 1 failed post.
-    expect(html).toContain("9 open");
+    // 1 incident, 3 holds and 1 failed post; the 4 optional reviews do not count.
+    expect(html).toContain("5 open");
     expect(groupsOf(html)).toEqual(["incident", "hold", "review", "failed_post"]);
     expect(html).toMatch(/Incidents<\/span><span[^>]*>1<\/span>/u);
     expect(html).toMatch(/Held<\/span><span[^>]*>3<\/span>/u);
-    expect(html).toMatch(/To review<\/span><span[^>]*>4<\/span>/u);
+    expect(html).toMatch(/Optional quality review<\/span><span[^>]*>4<\/span>/u);
     expect(html).toMatch(/Failed posts<\/span><span[^>]*>1<\/span>/u);
     // Groups of later PRs are absent until their data exists.
     expect(html).not.toContain("Decisions");
@@ -49,9 +49,9 @@ describe("Inbox", () => {
     const busy = reviewFixture();
     const aboutFlagged = { ...busy.incidents[0], id: "44444444-4444-4444-8444-444444444444", wiseSessionId: SESSION.benFlagged };
     const html = render({ review: { ...busy, incidents: [...busy.incidents, aboutFlagged] } });
-    // Two incidents now, and still nine classes: Ben's flagged post has both a row to review and an incident.
+    // The added incident makes this class actionable; its optional review does not add another count.
     expect(html).toMatch(/Incidents<\/span><span[^>]*>2<\/span>/u);
-    expect(html).toContain("9 open");
+    expect(html).toContain("6 open");
     expect(html).not.toContain("10 open");
   });
 
@@ -130,7 +130,7 @@ describe("Inbox", () => {
   it("narrows to one tutor and says so", () => {
     const html = render({ tutorKey: "Chai" });
     expect(html).toContain("filtered to Chai");
-    expect(html).toContain("2 open");
+    expect(html).toContain("1 open");
     expect(groupsOf(html)).toEqual(["hold", "review"]);
     expect(html).not.toContain("Anna");
     expect(html).not.toContain("Ben");
@@ -177,7 +177,7 @@ describe("Inbox", () => {
   it("tells an admin who is not the owner that the list is read-only, with the same items to open", () => {
     const viewer = render({ canControl: false });
     expect(viewer).toContain("Only the owner records verdicts.");
-    expect(viewer).toContain("9 open");
+    expect(viewer).toContain("5 open");
     expect(viewer.match(/>Review<\/button>/gu)).toHaveLength(4);
     expect(render()).not.toContain("Only the owner records verdicts.");
   });

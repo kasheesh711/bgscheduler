@@ -635,18 +635,20 @@ describe("feedback autowriter store (Postgres)", () => {
 it("requeueing Mimi shadow drafts preserves the transcript window only for the active guide", async () => {
   const passing = { faithful: true, unsupported: [], misattributed: [], missingHomework: [], homeworkNotSet: [] };
   const judge = { ...passing, levels: { medium: passing, high: passing } };
-  for (const [enabled, styleGuide, retained] of [
-    ["true", { id: "mimi", version: 1 }, true],
-    ["true", { id: "mimi", version: 0 }, false],
-    ["true", null, false],
-    ["false", { id: "mimi", version: 1 }, false],
+  for (const [enabled, styleGuide, retained, deferred] of [
+    ["true", { id: "mimi", version: 1 }, true, false],
+    ["true", { id: "mimi", version: 0 }, false, false],
+    ["true", null, false, false],
+    ["false", { id: "mimi", version: 1 }, false, false],
+    ["true", { id: "mimi", version: 1 }, true, true],
+    ["true", { id: "mimi", version: 0 }, false, true],
   ] as const) {
     vi.stubEnv("FEEDBACK_AUTOWRITER_MIMI_STYLE_ENABLED", enabled);
     try {
       await db.update(schema.feedbackAutowriterSessions).set({
         state: "would_submit", wiseTeacherUserId: "695369c028118f629edcbaf3",
-        metadata: { sonioxRetainUntil: "2026-10-01T00:00:00.000Z", draftEvidence: "transcript", judge,
-          pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION, styleGuide } },
+        metadata: { sonioxRetainUntil: "2026-10-01T00:00:00.000Z", draftEvidence: "transcript", judge: deferred ? null : judge,
+          pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: deferred ? null : JUDGE_PROMPT_VERSION, qualityReview: deferred ? "deferred" : null, styleGuide } },
       }).where(eq(schema.feedbackAutowriterSessions.wiseSessionId, SESSION));
       expect(await requeueShadowDrafts(db, new Date())).toBe(1);
       expect(Object.hasOwn((await readSessionRow(db, SESSION))!.metadata, "sonioxRetainUntil")).toBe(retained);
