@@ -11,7 +11,7 @@ beforeAll(async()=>{h=await startTestDb();db=h.db as unknown as Database;},12000
 afterAll(async()=>{if(h)await stopTestDb(h);});
 afterEach(()=>vi.unstubAllEnvs());
 beforeEach(async()=>{
- await truncateAll(h.db);vi.stubEnv("PROGRESS_LINE_REMINDERS_ENABLED","true");vi.stubEnv("PROGRESS_LINE_TUTOR_KEYS","Buzz");
+ await truncateAll(h.db);vi.stubEnv("PROGRESS_LINE_REMINDERS_ENABLED","true");
  now=new Date("2026-10-13T14:00:00Z");c={ownerKey:"Buzz",tutorName:"Buzz",seriesId:randomUUID(),assessmentId:null,cycle:1,studentName:"Ari",courseName:"Maths",wiseClassId:"course",wiseStudentId:"student",lessonId:"lesson",scheduledAt:"2026-10-14T11:00:00Z",updatedAt:now.toISOString(),url:"https://www.begifted.app/#/progress-checks"};
  await db.insert(s.tutorContacts).values({canonicalKey:"Buzz",displayName:"Buzz"});
  await db.insert(s.progressLineGroups).values({canonicalKey:"Buzz",groupId:"buzz-group",groupName:"Kru Buzz x BeGifted",enabled:true,registeredBy:"admin"});
@@ -43,9 +43,14 @@ describe("durable LINE reminder delivery",()=>{
  it("rechecks the source before push and stops a newly submitted test",async()=>{
   load.mockResolvedValueOnce([c]).mockResolvedValue([]);await run();expect(push).not.toHaveBeenCalled();expect((await db.select().from(s.progressLineDeliveries)).some(r=>r.status==="cancelled")).toBe(true);
  });
- it("does not send after midnight or to another enabled tutor",async()=>{
+ it("does not send after midnight and reads every registered tutor",async()=>{
   await db.insert(s.tutorContacts).values({canonicalKey:"Gift",displayName:"Gift"});await db.insert(s.progressLineGroups).values({canonicalKey:"Gift",groupId:"other-group",groupName:"Other",enabled:true,registeredBy:"admin"});
-  now=new Date("2026-10-13T11:00:00Z");await run();now=new Date("2026-10-13T17:00:00Z");await run();expect(push).not.toHaveBeenCalled();expect(load.mock.calls.every(args=>args[0]==="Buzz")).toBe(true);
+  now=new Date("2026-10-13T11:00:00Z");await run();now=new Date("2026-10-13T17:00:00Z");await run();expect(push).not.toHaveBeenCalled();expect(new Set(load.mock.calls.map(args=>args[0]))).toEqual(new Set(["Buzz","Gift"]));
+ });
+ it("still sends to other tutors when one tutor's source data fails",async()=>{
+  await db.insert(s.tutorContacts).values({canonicalKey:"Gift",displayName:"Gift"});await db.insert(s.progressLineGroups).values({canonicalKey:"Gift",groupId:"gift-group",groupName:"Kru Gift x BeGifted",enabled:true,registeredBy:"admin"});
+  const gift={...c,ownerKey:"Gift",tutorName:"Gift",seriesId:randomUUID()};load.mockImplementation(async(key:string)=>{if(key==="Buzz")throw new Error("HTTP 409");return [gift];});
+  expect(await run()).toMatchObject({sent:1,failed:1});expect(push).toHaveBeenCalledTimes(1);expect(push.mock.calls[0][0].to).toBe("gift-group");
  });
  it("keeps a crashed send uncertain after the retry window",async()=>{
   await run();await db.execute(sql`update progress_line_deliveries set status='sending',lease_until=${new Date(now.getTime()-3600000)},first_attempt_at=${new Date(now.getTime()-25*3600000)},sent_at=null where stage='night_before'`);push.mockClear();await run();expect(push).not.toHaveBeenCalled();expect((await db.select().from(s.progressLineDeliveries)).find(r=>r.stage==="night_before")?.status).toBe("uncertain");

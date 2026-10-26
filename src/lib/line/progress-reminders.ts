@@ -14,7 +14,6 @@ export type ReminderCandidate=z.infer<typeof candidateSchema>;
 export type ReminderStage="week_before"|"night_before";
 type Delivery=typeof s.progressLineDeliveries.$inferSelect;
 export const progressLineEnabled=()=>process.env.PROGRESS_LINE_REMINDERS_ENABLED==="true";
-export const progressLineTutorKeys=()=>new Set((process.env.PROGRESS_LINE_TUTOR_KEYS??"Buzz").split(",").map(x=>x.trim()).filter(Boolean));
 const retryWindow=24*3600000;
 
 export function reminderDate(candidate:ReminderCandidate,stage:ReminderStage){
@@ -53,14 +52,14 @@ export async function handleProgressGroupCommand(input:{db:Database;groupId:stri
  if(!match)return false;
  if(!isScheduleBotAdmin(input.lineUserId))return true;
  const key=match[1].trim();
- if(!progressLineTutorKeys().has(key))throw new Error("This tutor is not enabled for LINE reminders.");
  const [contact]=await input.db.select().from(s.tutorContacts).where(and(eq(s.tutorContacts.canonicalKey,key),eq(s.tutorContacts.active,true)));
  if(!contact)throw new Error("The active tutor identity could not be verified.");
  const group=await fetchLineGroupSummary(input.groupId);
+ const [previous]=await input.db.select().from(s.progressLineGroups).where(eq(s.progressLineGroups.canonicalKey,key));
  if(key==="Buzz"&&group.groupName!=="Kru Buzz x BeGifted")throw new Error("Buzz reminders must use Kru Buzz x BeGifted.");
  await input.db.insert(s.progressLineGroups).values({canonicalKey:key,groupId:group.groupId,groupName:group.groupName,enabled:true,registeredBy:input.lineUserId}).onConflictDoUpdate({target:s.progressLineGroups.canonicalKey,set:{groupId:group.groupId,groupName:group.groupName,enabled:true,registeredBy:input.lineUserId,updatedAt:new Date()}});
  // A reply is the setup receipt; it is not a preparation reminder.
- if(input.replyToken)await replyLineMessage({replyToken:input.replyToken,text:`Progress Check reminders registered for ${contact.displayName} in ${group.groupName}. Send time: 19:00 Bangkok, seven days before and the night before. Only enabled tutors receive reminders.`});
+ if(input.replyToken)await replyLineMessage({replyToken:input.replyToken,text:`Progress Check reminders registered for ${contact.displayName} in ${group.groupName}${previous&&previous.groupId!==group.groupId?` (moved from ${previous.groupName})`:""}. Send time: 19:00 Bangkok, seven days before and the night before. Only tutors with a registered group receive reminders.`});
  return true;
 }
 
@@ -71,8 +70,9 @@ export async function sendProgressLineReminders(db:Database=getDb(),deps:{now?:(
  const groups=await db.select().from(s.progressLineGroups).where(eq(s.progressLineGroups.enabled,true));
  let sent=0,failed=0;
  for(const group of groups){
-  if(!progressLineTutorKeys().has(group.canonicalKey))continue;
-  const candidates=await load(group.canonicalKey,clock());
+  let candidates:ReminderCandidate[];
+  // One tutor's bad source data must not stop the other tutors' reminders.
+  try{candidates=await load(group.canonicalKey,clock());}catch{failed++;continue;}
   const prior=await db.select().from(s.progressLineDeliveries).where(and(eq(s.progressLineDeliveries.canonicalKey,group.canonicalKey),inArray(s.progressLineDeliveries.status,["pending","retry","sending"])));
   for(const row of prior){
    if(row.status==="sending"&&row.leaseUntil&&row.leaseUntil>clock())continue;
@@ -104,7 +104,7 @@ export async function sendProgressLineReminders(db:Database=getDb(),deps:{now?:(
      if(!current||current.status!=="sending"||current.attempts!==claim.attempts)return false;
      const other=await tx.select({id:s.progressLineDeliveries.id}).from(s.progressLineDeliveries).where(and(eq(s.progressLineDeliveries.seriesId,row.seriesId),eq(s.progressLineDeliveries.cycle,row.cycle),eq(s.progressLineDeliveries.stage,row.stage),ne(s.progressLineDeliveries.id,row.id),inArray(s.progressLineDeliveries.status,["sent","uncertain"])));
      const [contact]=await tx.select().from(s.tutorContacts).where(and(eq(s.tutorContacts.canonicalKey,row.canonicalKey),eq(s.tutorContacts.active,true)));
-     if(!progressLineEnabled()||!progressLineTutorKeys().has(row.canonicalKey)||!currentGroup?.enabled||currentGroup.groupId!==row.groupId||!contact||other.length){await finish(tx,row.id,"cancelled","The reminder is no longer enabled or another send is already recorded.");return false;}
+     if(!progressLineEnabled()||!currentGroup?.enabled||currentGroup.groupId!==row.groupId||!contact||other.length){await finish(tx,row.id,"cancelled","The reminder is no longer enabled or another send is already recorded.");return false;}
      const fresh=await load(row.canonicalKey,clock());
      if(!fresh.some(c=>sameOccurrence(c,row.candidate))||reminderAction(row.reminderDate,clock())!=="send"){await finish(tx,row.id,current.attempts>1?"uncertain":"cancelled","The lesson changed before delivery.");return false;}
      const result=await push({to:row.groupId,text:row.text,retryKey:row.retryKey,signal:AbortSignal.timeout(10000)});
