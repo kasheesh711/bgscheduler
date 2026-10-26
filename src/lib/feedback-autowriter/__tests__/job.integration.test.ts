@@ -46,8 +46,7 @@ const FAITHFUL_VERDICT = JSON.stringify(PASSING_VERDICT);
 /** What a draft both judge levels passed stores since v5; a bare `PASSING_VERDICT` on a row is a single-judge (v4) verdict. */
 const PASSING_STORED = { ...PASSING_VERDICT, levels: { medium: PASSING_VERDICT, high: PASSING_VERDICT } };
 /** One draft's model calls: the writer, then the judge at both levels. */
-const DRAFT_CALLS = ["post_class_feedback", "feedback_faithfulness", "feedback_faithfulness"];
-const GLM_MODEL = "z-ai/glm-5.3-flash";
+const DRAFT_CALLS = ["post_class_feedback"];
 
 /** Writer (Sol) + judge (GLM, both levels) replies for as many drafts as a test needs. */
 function fakeModel() {
@@ -117,7 +116,6 @@ function deps(ops: WiseFeedbackOps, overrides: Partial<AutowriterDeps> = {}): Au
     apiKey: "test-key",
     apiActorId: API_ACTOR,
     writesAllowedHere: true,
-    holdSummaryOnly: false, // Summary-write fixtures use the explicit opt-out.
     deadlineMs: Date.now() + 740_000,
     alertRecipients: ["ops@example.com"],
     alertSender: { sendEmail: async (input) => { emails.push(input); return { id: "e" }; } },
@@ -211,20 +209,20 @@ beforeEach(async () => {
 });
 
 describe("processSession (Postgres + fake Wise and models)", () => {
-  it("writes, judges, posts once and verifies a live session from a webhook", async () => {
+  it("writes, posts once and verifies a live session from a webhook", async () => {
     const wise = fakeWise();
     const model = fakeModel();
     const outcome = await processSession(deps(wise.ops, { callModel: model.callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" });
     expect(outcome).toMatchObject({ result: "verified" });
     expect(wise.posts).toHaveLength(1);
     expect(model.calls).toEqual(DRAFT_CALLS);
-    expect(model.models).toEqual(["openai/gpt-6.1-sol", GLM_MODEL, GLM_MODEL]);
+    expect(model.models).toEqual(["openai/gpt-6.1-sol"]);
     const row = await readSessionRow(db, SESSION_ID);
     // Arm `sol` passes the widened CHECK constraints (migration 0100) on both tables.
     expect(row).toMatchObject({ state: "verified", arm: "sol", wiseTeacherUserId: KEVIN });
     expect(row?.leaseToken).toBeNull();
-    // Both judge levels passed the draft (v5), and the row says so.
-    expect(row?.metadata).toMatchObject({ judge: PASSING_STORED, pipeline: { judgeVersion: JUDGE_PROMPT_VERSION } });
+    // The draft is stored without a fabricated approval.
+    expect(row?.metadata).toMatchObject({ judge: null, pipeline: { judgeVersion: null, qualityReview: "deferred" } });
     const hash = (row?.metadata.pipeline as { lessonEvidenceHash: string }).lessonEvidenceHash;
     const [retained] = await db.select().from(schema.feedbackIsebEvidence)
       .where(eq(schema.feedbackIsebEvidence.evidenceHash, hash));
@@ -232,11 +230,11 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     expect(retained.lessonRecord).toBe(extractAiSummary(sessionDetail())?.text);
     const calls = await db.select().from(schema.feedbackAutowriterCalls);
     expect(calls.map((call) => `${call.role}:${call.arm}:${call.requestedModel}`).toSorted())
-      .toEqual([`judge:glm:${GLM_MODEL}`, `judge:glm:${GLM_MODEL}`, "writer:sol:openai/gpt-6.1-sol"]);
-    // Each judge call is recorded with its effort, as judge v5.
+      .toEqual(["writer:sol:openai/gpt-6.1-sol"]);
+    // No pre-post judge call is made.
     const judged = calls.filter((call) => call.role === "judge");
-    expect(judged.map((call) => (call.result as { effort?: unknown }).effort).toSorted()).toEqual(["high", "medium"]);
-    expect(judged.map((call) => call.promptVersion)).toEqual([JUDGE_PROMPT_VERSION, JUDGE_PROMPT_VERSION]);
+    expect(judged).toEqual([]);
+
     // "Somchai (Tom.Ja) Jaidee" is called Tom, never by the first name.
     const posted = wise.posts[0].answers.map((answer) => answer.answer).join("\n");
     expect(posted).toContain("Tom found");
@@ -265,7 +263,7 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     expect(outcome).toMatchObject({ result: "verified" });
     expect(wise.posts).toHaveLength(1);
     // The writer's own model each time: a rate limit never sends the class on to the fallback writer.
-    expect(models).toEqual(["openai/gpt-6.1-sol", "openai/gpt-6.1-sol", "openai/gpt-6.1-sol", GLM_MODEL, GLM_MODEL]);
+    expect(models).toEqual(["openai/gpt-6.1-sol", "openai/gpt-6.1-sol", "openai/gpt-6.1-sol"]);
     // The two waits (4 s and 10 s, here at the low end of their ±30%) went through the injected wait.
     expect(waits.filter((ms) => ms === 2_800 || ms === 7_000)).toEqual([2_800, 7_000]);
     const row = await readSessionRow(db, SESSION_ID);
@@ -280,7 +278,7 @@ describe("processSession (Postgres + fake Wise and models)", () => {
       { ok: true, costUsd: "0.00200000", retry: 2 },
     ]);
     expect(calls.filter((call) => call.role === "writer" && !call.ok).map((call) => call.error)).toEqual(Array(2).fill(limited.error));
-    expect(calls.filter((call) => call.role === "judge")).toHaveLength(2);
+    expect(calls.filter((call) => call.role === "judge")).toHaveLength(0);
   });
 
   it("never holds a class over OpenRouter credit (11 Oct 2026): it retries, and one pushed model_credit incident is raised", async () => {
@@ -297,59 +295,15 @@ describe("processSession (Postgres + fake Wise and models)", () => {
       expect(row?.reason).toMatch(/^infra:sol:Key limit exceeded/u);
       expect(row?.metadata).not.toHaveProperty("alertKind");
     }
-    // A judge refused after the writer delivered: the same, and still one incident for the day.
+    // A recovered writer posts without waiting for the unavailable judge.
     const judgeRefused = vi.fn(async (request: { schemaName: string }) => request.schemaName === "post_class_feedback" ? sol(writerJson) : keyLimit);
     expect(await processSession(deps(fakeWise().ops, { callModel: judgeRefused as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
-      .toMatchObject({ result: "infra" });
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "pending" });
+      .toMatchObject({ result: "verified" });
+    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "verified" });
     const [incident, ...more] = await incidents();
     expect(more).toEqual([]);
     expect(incident).toMatchObject({ kind: "model_credit", severity: "critical", pushStatus: "pending", detail: expect.objectContaining({ cause: "exhausted" }) });
     expect(incident.summary).not.toContain("https://");
-  });
-
-  it("alerts on the third judge failure in a row for a class written from the summary too", async () => {
-    await seedRow();
-    const timeout: OpenRouterCallResult = { ok: false, error: "timeout", httpStatus: null, model: null, provider: null, finishReason: null, usage: null, latencyMs: 5 };
-    const judgeDown = () => vi.fn(async (request: { schemaName: string }) => request.schemaName === "post_class_feedback" ? sol(writerJson) : timeout);
-    for (const failures of [1, 2, 3]) {
-      expect(await processSession(deps(fakeWise().ops, { callModel: judgeDown() as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }), `${failures}`)
-        .toMatchObject({ result: "infra", detail: "judge:medium:timeout" });
-      const row = await readSessionRow(db, SESSION_ID);
-      expect(row, `${failures}`).toMatchObject({ state: "pending", evidence: "summary", reason: "infra:judge:medium:timeout", metadata: { judgeErrors: failures } });
-      if (failures < 3) expect(row?.metadata, `${failures}`).not.toHaveProperty("alertKind");
-      else expect(row?.metadata).toMatchObject({ alertKind: "judge_failing" });
-    }
-    // A writer failure is not the judge's: no count, no alert.
-    await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
-    await seedRow();
-    const writerDown = vi.fn(async () => timeout);
-    for (let run = 0; run < 4; run += 1) {
-      expect(await processSession(deps(fakeWise().ops, { callModel: writerDown as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
-        .toMatchObject({ result: "infra", detail: "sol:timeout; luna:timeout" });
-    }
-    const row = await readSessionRow(db, SESSION_ID);
-    expect(row?.metadata).not.toHaveProperty("judgeErrors");
-    expect(row?.metadata).not.toHaveProperty("alertKind");
-  });
-
-  it("counts a judge that could not be asked apart on the summary path too, and says at which stage a run was rate limited", async () => {
-    await seedRow();
-    const run = (callModel: unknown) => processSession(deps(fakeWise().ops, { callModel: callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" });
-    // The draft is written; the judge's route is rate limited through every retry.
-    expect(await run(vi.fn(async (request: { schemaName: string }) => request.schemaName === "post_class_feedback" ? sol(writerJson) : RATE_LIMITED)))
-      .toMatchObject({ result: "infra", detail: `judge:medium:${RATE_LIMITED.error}`, rateLimited: "judge" });
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
-      state: "pending", evidence: "summary", metadata: { judgeErrors: 0, judgeUnreached: 1, judgeUnreachedCause: "rate_limited" },
-    });
-    // The writer's route rate limited: that stage is named, and nothing is counted against the judge.
-    expect(await run(vi.fn(async () => RATE_LIMITED))).toMatchObject({ result: "infra", detail: `sol:${RATE_LIMITED.error}`, rateLimited: "writer" });
-    const row = await readSessionRow(db, SESSION_ID);
-    expect(row?.metadata).toMatchObject({ judgeErrors: 0, judgeUnreached: 1 });
-    expect(row?.metadata).not.toHaveProperty("alertKind");
-    // A run that ends another way names no rate limit.
-    const timeout: OpenRouterCallResult = { ok: false, error: "timeout", httpStatus: null, model: null, provider: null, finishReason: null, usage: null, latencyMs: 5 };
-    expect(await run(vi.fn(async () => timeout))).not.toHaveProperty("rateLimited");
   });
 
   it("does nothing at all while halted: no Wise read, no model call, no row", async () => {
@@ -596,7 +550,7 @@ describe("runSweep (Postgres + fake Wise and models)", () => {
     });
     const result = await runSweep(deps(wise.ops, { callModel: callModel as never }));
     expect(result.processed).toEqual({ not_claimed: 1 });
-    expect(calls).toHaveLength(3); // one draft (writer + both judge levels), the second session never started
+    expect(calls).toHaveLength(1); // one draft (writer + both judge levels), the second session never started
     expect(wise.posts).toHaveLength(0);
     expect((await readSessionRow(db, "6a0000000000000000000077"))?.state).toBe("pending");
   });
@@ -774,7 +728,7 @@ describe("runSweep: a lasting rate limit, and the order it starts its rows in (P
     expect(wise.started.map((id) => id.slice(-2))).toEqual(["57", "58"]);
     // It was no "row without a model call": its transcript was ready, and it was written and judged in this sweep.
     expect(soniox.polled).toEqual(["job-58"]);
-    expect(log).toEqual(["writer:57", "judge:57", "judge:57", "writer:58", "judge:58", "judge:58"]);
+    expect(log).toEqual(["writer:57", "writer:58"]);
     expect(result.processed).toEqual({ would_submit: 2 });
     expect(await readSessionRow(db, RUNNING)).toMatchObject({ state: "would_submit", evidence: "transcript", metadata: { draftEvidence: "transcript" } });
   });
@@ -827,32 +781,6 @@ describe("runSweep: a lasting rate limit, and the order it starts its rows in (P
     expect(result.processed).toEqual({ would_submit: 3, awaiting_recording: 1 });
   });
 
-  it("switches the in-run retries off for the judge only, once a class ends still rate limited at the judge: the writer keeps them", async () => {
-    await updateControl(db, { mode: "shadow" }, "t@x.com");
-    await seedClass(FIRST, 10);
-    await seedClass(SECOND, 11);
-    const wise = wiseForMany();
-    const log: string[] = [];
-    const limitedWriters = new Set([SECOND]);
-    // The judge's route is rate limited throughout. The second class's writer is rate limited once, then answers.
-    const callModel = vi.fn(async (request: { schemaName: string }) => {
-      const id = wise.current();
-      log.push(`${request.schemaName === "post_class_feedback" ? "writer" : "judge"}:${id.slice(-2)}`);
-      if (request.schemaName !== "post_class_feedback") return RATE_LIMITED;
-      return limitedWriters.delete(id) ? RATE_LIMITED : sol(writerJson);
-    });
-    const waits: number[] = [];
-    const result = await runSweep(deps(wise.ops, { callModel: callModel as never, sleep: async (ms) => { waits.push(ms); }, random: () => 0.5 }));
-    // The first class: its draft, then both judge levels through all their retries (four requests each). The second:
-    // its writer is still tried again (two requests, one wait) — and each judge level is asked once.
-    expect(log).toEqual(["writer:41", ...Array(8).fill("judge:41"), "writer:42", "writer:42", "judge:42", "judge:42"]);
-    expect(waits.filter((ms) => RETRY_WAITS.includes(ms))).toEqual([4_000, 4_000, 10_000, 10_000, 25_000, 25_000, 4_000]);
-    expect(result.processed).toEqual({ infra: 2 });
-    for (const id of [FIRST, SECOND]) {
-      expect(await readSessionRow(db, id), id).toMatchObject({ state: "pending", reason: `infra:judge:medium:${RATE_LIMITED.error}` });
-    }
-  });
-
   it("switches the in-run retries off for the writers only, once a class ends still rate limited at the writer: the judge keeps them", async () => {
     await updateControl(db, { mode: "shadow" }, "t@x.com");
     await seedClass(FIRST, 10);
@@ -879,9 +807,9 @@ describe("runSweep: a lasting rate limit, and the order it starts its rows in (P
     // The first class spends its three retries on the writer's limit; the second is asked once. The third is written,
     // and its rate-limited judge level is still tried again: the draft passes in this sweep.
     expect(log).toEqual([
-      ...Array(4).fill("writer:41"), "writer:42", "writer:43", "judge-medium:43", "judge-high:43", "judge-medium:43",
+      ...Array(4).fill("writer:41"), "writer:42", "writer:43",
     ]);
-    expect(waits.filter((ms) => RETRY_WAITS.includes(ms))).toEqual([...RETRY_WAITS, 4_000]);
+    expect(waits.filter((ms) => RETRY_WAITS.includes(ms))).toEqual(RETRY_WAITS);
     expect(result.processed).toEqual({ infra: 2, would_submit: 1 });
     expect(await readSessionRow(db, THIRD)).toMatchObject({ state: "would_submit", arm: "sol" });
   });
@@ -990,12 +918,12 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     const unfaithful = vi.fn(async (request: { schemaName: string; model: string }) => {
       models.push(request.model);
       if (request.schemaName !== "post_class_feedback") return glm(JSON.stringify({ ...PASSING_VERDICT, faithful: false, unsupported: ["scored 95%"] }));
-      return request.model === "openai/gpt-6-luna" ? luna(writerJson) : sol(writerJson);
+      return request.model === "openai/gpt-6-luna" ? luna("not JSON") : sol("not JSON");
     });
     const held = await processSession(transcriptDeps(fakeWise().ops, fakeSoniox().client, { callModel: unfaithful as never }), { wiseSessionId: SESSION_ID, trigger: "cron" });
     expect(held).toMatchObject({ result: "awaiting_recording", detail: "summary_draft_held" });
     // Both summary drafts were tried (Sol, then the Luna fallback), each judged at both levels, before the handover.
-    expect(models).toEqual(["openai/gpt-6.1-sol", GLM_MODEL, GLM_MODEL, "openai/gpt-6-luna", GLM_MODEL, GLM_MODEL]);
+    expect(models).toEqual(["openai/gpt-6.1-sol", "openai/gpt-6-luna"]);
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "awaiting_recording", evidence: "transcript" });
 
     await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
@@ -1030,7 +958,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(outcome).toMatchObject({ result: "verified" });
     expect(soniox.created).toEqual([expect.objectContaining({ audioUrl: "https://files.wiseapp.live/rec.mp4" })]);
     expect(soniox.removed).toEqual([]); // kept for review (triage), at most 72 h
-    expect(models).toEqual(["openai/gpt-6.1-sol", GLM_MODEL, GLM_MODEL]);
+    expect(models).toEqual(["openai/gpt-6.1-sol"]);
     expect(prompts[0]).toContain("Lesson transcript:");
     expect(prompts[0]).toContain("TUTOR: Today we add fractions");
     expect(prompts[0]).toContain("STUDENT: I got three quarters");
@@ -1038,7 +966,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     const row = await readSessionRow(db, SESSION_ID);
     expect(row).toMatchObject({ state: "verified", evidence: "transcript", arm: "sol", sonioxTranscriptionId: "job-1" });
     // Stamped with what produced it.
-    expect(row?.metadata).toMatchObject({ pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION, arm: "sol", evidence: "transcript" } });
+    expect(row?.metadata).toMatchObject({ pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: null, qualityReview: "deferred", arm: "sol", evidence: "transcript" } });
     expect(row?.metadata).toMatchObject({ transcript: { speakerMethod: "zoom_alignment", audioMinutes: 60 } });
     const hash = (row?.metadata.pipeline as { lessonEvidenceHash: string }).lessonEvidenceHash;
     const [retained] = await db.select().from(schema.feedbackIsebEvidence)
@@ -1063,30 +991,6 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       expect(Number(row?.metadata.writerErrors ?? 0), `${run}`).toBe(0);
     }
     expect(await db.select().from(schema.feedbackAutowriterIncidents)).toHaveLength(1);
-  });
-
-  it("falls back to Luna when one judge level rejects Sol's transcript draft, instead of holding the class", async () => {
-    await seedRow({ state: "awaiting_recording", evidence: "transcript" });
-    const wise = fakeWise({ details: [sessionDetail(RECORDING)] });
-    const soniox = fakeSoniox();
-    const models: string[] = [];
-    let judged = 0;
-    const callModel = vi.fn(async (request: { model: string; schemaName: string }) => {
-      models.push(request.model);
-      if (request.schemaName === "post_class_feedback") return request.model === "openai/gpt-6-luna" ? luna(writerJson) : sol(writerJson);
-      judged += 1;
-      // Only the first judge call (Sol's draft at one level) flags it: the other level's pass does not save the draft.
-      return glm(JSON.stringify(judged === 1 ? { ...PASSING_VERDICT, faithful: false, unsupported: ["scored 95%"] } : PASSING_VERDICT));
-    });
-    expect(await processSession(transcriptDeps(wise.ops, soniox.client, { callModel: callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
-      .toMatchObject({ result: "verified" });
-    expect(models).toEqual(["openai/gpt-6.1-sol", GLM_MODEL, GLM_MODEL, "openai/gpt-6-luna", GLM_MODEL, GLM_MODEL]);
-    expect(wise.posts).toHaveLength(1);
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
-      state: "verified", evidence: "transcript", arm: "luna", metadata: { pipeline: { arm: "luna", evidence: "transcript" } },
-    });
-    const writers = await db.select().from(schema.feedbackAutowriterCalls).where(eq(schema.feedbackAutowriterCalls.role, "writer"));
-    expect(writers.map((call) => call.arm).toSorted()).toEqual(["luna", "sol"]);
   });
 
   it("leaves a slow transcription for the next run, which finishes it", async () => {
@@ -1171,12 +1075,12 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       expect(model.calls, label).toEqual(DRAFT_CALLS);
       expect(wise.posts, label).toHaveLength(1);
       expect(wise.posts[0].answers.map((answer) => answer.answer).join("\n"), label).not.toContain("The older draft");
-      // The older GLM draft is replaced by one Sol writes now, judged at both levels.
+      // The older GLM draft is replaced by a current draft with quality review deferred.
       expect(await readSessionRow(db, SESSION_ID), label).toMatchObject({
         arm: "sol",
         metadata: {
-          judge: PASSING_STORED,
-          pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION, arm: "sol", evidence: "transcript" },
+          judge: null,
+          pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: null, qualityReview: "deferred", arm: "sol", evidence: "transcript" },
         },
       });
     }
@@ -1451,12 +1355,12 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       });
     });
 
-    it("sends a draft from Zoom's captions that the judges reject to Soniox instead of a person", async () => {
+    it("sends a draft from Zoom's captions that has invalid fields to Soniox instead of a person", async () => {
       await seedEarlier({ thaiShare: 0 });
       await seedRow({ state: "awaiting_recording", evidence: "transcript" });
       const unfaithful = vi.fn(async (request: { schemaName: string; model: string }) => {
         if (request.schemaName !== "post_class_feedback") return glm(JSON.stringify({ ...PASSING_VERDICT, faithful: false, unsupported: ["scored 95%"] }));
-        return request.model === "openai/gpt-6-luna" ? luna(writerJson) : sol(writerJson);
+        return request.model === "openai/gpt-6-luna" ? luna("not JSON") : sol("not JSON");
       });
       const soniox = fakeSoniox();
       expect(await processSession(zoomDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, { callModel: unfaithful as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
@@ -1518,7 +1422,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       await seedRow({ state: "awaiting_recording", evidence: "transcript", metadata: { writerErrors: 1, judgeErrors: 2, judgeUnreached: 1 } });
       const unfaithful = vi.fn(async (request: { schemaName: string; model: string }) => {
         if (request.schemaName !== "post_class_feedback") return glm(JSON.stringify({ ...PASSING_VERDICT, faithful: false, unsupported: ["scored 95%"] }));
-        return request.model === "openai/gpt-6-luna" ? luna(writerJson) : sol(writerJson);
+        return request.model === "openai/gpt-6-luna" ? luna("not JSON") : sol("not JSON");
       });
       expect(await processSession(zoomDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fakeSoniox().client, { callModel: unfaithful as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
         .toMatchObject({ result: "awaiting_recording", detail: "zoom_draft_held" });
@@ -1708,7 +1612,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       evidence: "transcript",
       arm: "sol",
       fields: expect.objectContaining({ topics: GOOD_FIELDS.topics }),
-      metadata: { draftEvidence: "transcript", judge: { faithful: true } },
+      metadata: { draftEvidence: "transcript", judge: null },
     });
     // Not done yet: its transcript's review window has not started.
     expect((await readSessionRow(db, SESSION_ID))?.metadata).not.toHaveProperty("sonioxRetainUntil");
@@ -1737,11 +1641,8 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     const lateDeps = transcriptDeps(wise.ops, soniox.client);
     lateDeps.callModel = vi.fn(async (request: { schemaName: string }) => {
       calls.push(request.schemaName);
-      if (request.schemaName === "post_class_feedback") return sol(writerJson);
-      // Both levels are in flight by the time either answers.
-      await new Promise((resolve) => setTimeout(resolve, 5));
       lateDeps.deadlineMs = Date.now() + 200_000;
-      return glm(FAITHFUL_VERDICT);
+      return sol(writerJson);
     }) as never;
     vi.stubEnv("VERCEL_GIT_COMMIT_SHA", "commit-that-wrote-it");
     try {
@@ -1762,8 +1663,8 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       sonioxTranscriptionId: "job-1", leaseToken: null,
       fields: expect.objectContaining({ topics: GOOD_FIELDS.topics }),
       metadata: {
-        draftEvidence: "transcript", judge: PASSING_STORED,
-        pipeline: { commitSha: "commit-that-wrote-it", promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION, arm: "sol", evidence: "transcript" },
+        draftEvidence: "transcript", judge: null,
+        pipeline: { commitSha: "commit-that-wrote-it", promptVersion: PROMPT_VERSION, judgeVersion: null, qualityReview: "deferred", arm: "sol", evidence: "transcript" },
       },
     });
     expect(kept?.nextAttemptAt?.getTime() ?? 0).toBeGreaterThan(Date.now() + 9 * 60_000);
@@ -1927,7 +1828,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       vi.unstubAllEnvs();
     }
     expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({
-      pipeline: { commitSha: "abc123", promptVersion: PROMPT_VERSION, judgeVersion: JUDGE_PROMPT_VERSION, arm: "sol", evidence: "summary" },
+      pipeline: { commitSha: "abc123", promptVersion: PROMPT_VERSION, judgeVersion: null, qualityReview: "deferred", arm: "sol", evidence: "summary" },
     });
   });
 
@@ -2058,9 +1959,6 @@ describe("transcript first (Postgres + fakes)", () => {
     const base = glm(content);
     return base.ok ? { ...base, model: config?.expectModel ?? request.model, provider: config?.expectProvider ?? base.provider } : base;
   };
-  const unfaithfulModel = () => vi.fn(async (request: { model: string; schemaName: string }) => request.schemaName === "post_class_feedback"
-    ? routed(request, writerJson)
-    : routed(request, JSON.stringify({ faithful: false, unsupported: ["scored 95%"], misattributed: [], missingHomework: [], homeworkNotSet: [] })));
   const promptRecorder = () => {
     const prompts: string[] = [];
     const callModel = vi.fn(async (request: { model: string; schemaName: string; messages: Array<{ content: string }> }) => {
@@ -2265,7 +2163,6 @@ describe("transcript first (Postgres + fakes)", () => {
       };
     };
     const writer = `writer:${AUTOWRITER_MODELS.writer.model}`;
-    const judge = `judge:${AUTOWRITER_MODELS.judge.model}`;
     const arm = AUTOWRITER_MODELS.writer.arm;
     const counted = async () => ((await readSessionRow(db, SESSION_ID))?.metadata as { writerErrors?: unknown }).writerErrors;
 
@@ -2277,12 +2174,8 @@ describe("transcript first (Postgres + fakes)", () => {
       state: "transcribing", evidence: "transcript", sonioxTranscriptionId: "job-1", metadata: { writerErrors: 1 },
     });
 
-    // 2. The writer answers and a judge level times out: a judge failure just retries (owner decision, 30 Sep) —
-    // and a run that ends in one starts the writer's count again.
-    const second = attempt([null, failedCall("timeout")]);
-    expect(await second.run()).toMatchObject({ result: "infra", detail: "judge:medium:timeout" });
-    expect(second.model.seen).toEqual([writer, judge, judge]);
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "transcribing", reason: "infra:judge:medium:timeout", metadata: { writerErrors: 0 } });
+    // Start a new run of writer failures.
+    await db.update(S).set({ metadata: { handover: "transcript_first", writerErrors: 0 } }).where(eq(S.wiseSessionId, SESSION_ID));
 
     // 3. Two writer failures in a row (a time-out, a provider error).
     expect(await attempt([failedCall("timeout"), failedCall("timeout")]).run()).toMatchObject({ result: "infra", detail: `${arm}:timeout; ${AUTOWRITER_MODELS.fallbackWriter.arm}:timeout` });
@@ -2339,62 +2232,6 @@ describe("transcript first (Postgres + fakes)", () => {
     });
   });
 
-  it("never falls back for a judge failure, however often the judge fails: only the writer's failures count", async () => {
-    // Two writer failures already counted: under the first rule (writer or judge) the next failure fell back.
-    await handedOver({ metadata: { ...HANDED_OVER, writerErrors: 2 } });
-    const soniox = fakeSoniox();
-    const judgeReply = (content: string) => routed({ model: AUTOWRITER_MODELS.judge.model }, content);
-    // Model calls in order: the writer, then the judge at medium and at high (a level's second try comes last).
-    const failures: Array<[string, Array<OpenRouterCallResult | null>, string]> = [
-      ["medium times out", [null, failedCall("timeout")], "judge:medium:timeout"],
-      ["high times out", [null, null, failedCall("timeout")], "judge:high:timeout"],
-      ["high gives no verdict in two tries", [null, null, judgeReply("not json"), judgeReply("{}")], "judge:high:judge_unparseable"],
-      ["medium answers from another host", [null, { ...judgeReply(FAITHFUL_VERDICT), provider: "SomeOtherHost" } as OpenRouterCallResult], "judge:medium:provider_mismatch:SomeOtherHost"],
-      ["both time out", [null, failedCall("timeout"), failedCall("timeout")], "judge:medium:timeout"],
-    ];
-    for (const [label, replies, detail] of failures) {
-      const model = scriptedModel(replies);
-      expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, {
-        callModel: model.callModel as never, now: () => after(40),
-      }), webhook), label).toMatchObject({ result: "infra", detail });
-      const row = await readSessionRow(db, SESSION_ID);
-      // Retried on the kept job in 10 minutes; each run ended in a judge failure, so the writer's count is back to zero.
-      expect(row, label).toMatchObject({ state: "transcribing", evidence: "transcript", sonioxTranscriptionId: "job-1", metadata: { writerErrors: 0 } });
-      expect(row?.metadata, label).not.toHaveProperty("summaryFallback");
-    }
-    expect((await readSessionRow(db, SESSION_ID))?.retryCount).toBe(failures.length);
-    expect(soniox.created).toHaveLength(1);
-
-    // Once the judge answers, the class is posted from its transcript.
-    const wise = fakeWise({ details: [sessionDetail(RECORDING)] });
-    expect(await processSession(firstDeps(wise.ops, soniox.client, { now: () => after(90) }), webhook)).toMatchObject({ result: "verified" });
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "verified", evidence: "transcript", metadata: { judge: PASSING_STORED } });
-  });
-
-  it("counts a run in which a judge rejects Sol's draft and the Luna fallback then fails: it ends in a writer failure (owner decision, 30 Sep 17:00)", async () => {
-    await handedOver({ metadata: { ...HANDED_OVER, writerErrors: 1 } });
-    const soniox = fakeSoniox();
-    const unfaithful = routed({ model: AUTOWRITER_MODELS.judge.model }, JSON.stringify({ ...PASSING_VERDICT, faithful: false, unsupported: ["scored 95%"] }));
-    const writer = `writer:${AUTOWRITER_MODELS.writer.model}`;
-    const fallback = `writer:${AUTOWRITER_MODELS.fallbackWriter.model}`;
-    const judge = `judge:${AUTOWRITER_MODELS.judge.model}`;
-    // Sol delivers, one judge level rejects the draft, the other passes it; then Luna times out.
-    const rejectedThenFailed = () => scriptedModel([null, unfaithful, null, failedCall("timeout")]);
-    const first = rejectedThenFailed();
-    expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, { callModel: first.callModel as never, now: () => after(40) }), webhook))
-      .toMatchObject({ result: "infra", detail: `${AUTOWRITER_MODELS.fallbackWriter.arm}:timeout` });
-    expect(first.seen).toEqual([writer, judge, judge, fallback]);
-    // Sol did deliver a draft in this run, and the count still goes up: 1 → 2.
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "transcribing", metadata: { writerErrors: 2 } });
-    // The third such run in a row writes the class from the summary.
-    const second = rejectedThenFailed();
-    expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, { callModel: second.callModel as never, now: () => after(50) }), webhook))
-      .toMatchObject({ result: "summary_fallback", detail: "writer_failed" });
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
-      state: "pending", evidence: "summary", metadata: { writerErrors: 3, writerFailure: `${AUTOWRITER_MODELS.fallbackWriter.arm}:timeout`, summaryFallback: { cause: "writer_failed" } },
-    });
-  });
-
   it("hands a writer's own time-out to the next writer in the same run, posts that draft and starts the count again (12 Oct)", async () => {
     await handedOver({ metadata: { ...HANDED_OVER, writerErrors: 2 } });
     const soniox = fakeSoniox();
@@ -2402,255 +2239,11 @@ describe("transcript first (Postgres + fakes)", () => {
     expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, {
       callModel: model.callModel as never, now: () => after(40),
     }), webhook)).toMatchObject({ result: "verified" });
-    const judge = `judge:${AUTOWRITER_MODELS.judge.model}`;
-    expect(model.seen).toEqual([`writer:${AUTOWRITER_MODELS.writer.model}`, `writer:${AUTOWRITER_MODELS.fallbackWriter.model}`, judge, judge]);
+    expect(model.seen).toEqual([`writer:${AUTOWRITER_MODELS.writer.model}`, `writer:${AUTOWRITER_MODELS.fallbackWriter.model}`]);
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
       state: "verified", evidence: "transcript", arm: AUTOWRITER_MODELS.fallbackWriter.arm, metadata: { writerErrors: 0 },
     });
     expect((await readSessionRow(db, SESSION_ID))?.metadata).not.toHaveProperty("summaryFallback");
-  });
-
-  it("tells a person once when the judge has failed three runs in a row on a class, and keeps retrying it", async () => {
-    await handedOver();
-    const soniox = fakeSoniox();
-    const attempt = (replies: Array<OpenRouterCallResult | null>) => processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, {
-      callModel: scriptedModel(replies).callModel as never, now: () => after(40),
-    }), webhook);
-    /** The writer delivers; the judge times out at one level. */
-    const judgeFails = () => attempt([null, failedCall("timeout")]);
-    /** A sweep with nothing due: it only sends the digest. */
-    const digest = async () => {
-      const sweepDeps = firstDeps(fakeWise().ops, soniox.client);
-      const result = await runSweep(sweepDeps);
-      return { sent: result.alertsSent, emails: sweepDeps.emails, processed: result.processed };
-    };
-    const row = async () => (await readSessionRow(db, SESSION_ID))!;
-
-    // Two failures: counted, nobody told yet.
-    expect(await judgeFails()).toMatchObject({ result: "infra", detail: "judge:medium:timeout" });
-    expect(await judgeFails()).toMatchObject({ result: "infra", detail: "judge:medium:timeout" });
-    expect((await row()).metadata).toMatchObject({ judgeErrors: 2 });
-    expect((await row()).metadata).not.toHaveProperty("alertKind");
-    expect(await digest()).toMatchObject({ sent: 0, emails: [], processed: {} });
-
-    // The third in a row: one alert in the digest. The class is where it was — retried every 10 minutes, never a fallback.
-    expect(await judgeFails()).toMatchObject({ result: "infra", detail: "judge:medium:timeout" });
-    expect(await row()).toMatchObject({
-      state: "transcribing", evidence: "transcript", reason: "infra:judge:medium:timeout", sonioxTranscriptionId: "job-1", retryCount: 3,
-      metadata: { judgeErrors: 3, alertKind: "judge_failing", writerErrors: 0 },
-    });
-    expect((await row()).metadata).not.toHaveProperty("summaryFallback");
-    expect((await row()).nextAttemptAt!.getTime()).toBeGreaterThan(Date.now() + 9 * 60_000);
-    const third = await digest();
-    expect(third).toMatchObject({ sent: 1, processed: {} });
-    expect(third.emails).toHaveLength(1);
-    expect(third.emails[0].text).toContain("could not be checked 3 runs in a row");
-    expect(third.emails[0].text).toContain("infra:judge:medium:timeout");
-    expect((await row()).alertsSent).toHaveProperty("judge_failing");
-
-    // It keeps failing: counted, not reported again. A writer failure in between says nothing about the judge.
-    expect(await judgeFails()).toMatchObject({ result: "infra" });
-    expect(await attempt([failedCall("timeout"), failedCall("timeout")])).toMatchObject({ result: "infra", detail: `${AUTOWRITER_MODELS.writer.arm}:timeout; ${AUTOWRITER_MODELS.fallbackWriter.arm}:timeout` });
-    expect((await row()).metadata).toMatchObject({ judgeErrors: 4, writerErrors: 1 });
-    expect(await digest()).toMatchObject({ sent: 0, emails: [] });
-
-    // The judge answers: posted from the transcript, and the count is back at zero.
-    expect(await attempt([])).toMatchObject({ result: "verified" });
-    expect(await row()).toMatchObject({ state: "verified", evidence: "transcript", metadata: { judgeErrors: 0 } });
-    expect(soniox.created).toHaveLength(1);
-  });
-
-  it("drops a judge_failing alert that was not sent yet once the judge answers", async () => {
-    await handedOver({ metadata: { ...HANDED_OVER, judgeErrors: 2 } });
-    const soniox = fakeSoniox();
-    const attempt = (replies: Array<OpenRouterCallResult | null>) => processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, {
-      callModel: scriptedModel(replies).callModel as never, now: () => after(40),
-    }), webhook);
-    expect(await attempt([null, null, failedCall("timeout")])).toMatchObject({ result: "infra", detail: "judge:high:timeout" });
-    expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ judgeErrors: 3, alertKind: "judge_failing" });
-    // A webhook run (no digest of its own) gets through before the next sweep.
-    expect(await attempt([])).toMatchObject({ result: "verified" });
-    const sweepDeps = firstDeps(fakeWise().ops, soniox.client);
-    expect(await runSweep(sweepDeps)).toMatchObject({ alertsSent: 0 });
-    expect(sweepDeps.emails).toEqual([]);
-    expect((await readSessionRow(db, SESSION_ID))?.alertsSent).not.toHaveProperty("judge_failing");
-  });
-
-  describe("judge_failing: what counts, and when it alerts", () => {
-    const RATE_LIMIT = "z-ai/glm-5.3-flash is temporarily rate-limited upstream. Please retry shortly.";
-    const BLAME = /the judge model failed|failures of the judge model/u;
-    const soniox = () => fakeSoniox();
-    type Soniox = ReturnType<typeof fakeSoniox>;
-    /** One run on the class's kept Soniox job, with the model replies given in call order. */
-    const attempt = (client: Soniox, replies: Array<OpenRouterCallResult | null>, overrides: Partial<AutowriterDeps> = {}) =>
-      processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, client.client, {
-        callModel: scriptedModel(replies).callModel as never, now: () => after(40), ...overrides,
-      }), webhook);
-    /** The writer delivers, and every judge call gets `reply` (a rate-limited level is asked four times in a webhook run). */
-    const judged = (client: Soniox, reply: OpenRouterCallResult, overrides: Partial<AutowriterDeps> = {}) =>
-      processSession(firstDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, client.client, {
-        callModel: vi.fn(async (request: { model: string; schemaName: string }) =>
-          request.schemaName === "post_class_feedback" ? routed(request, writerJson) : reply) as never,
-        now: () => after(40), ...overrides,
-      }), webhook);
-    const judgeTimesOut = (client: Soniox, overrides: Partial<AutowriterDeps> = {}) => attempt(client, [null, failedCall("timeout")], overrides);
-    const judgeRateLimited = (client: Soniox) => judged(client, failedCall(RATE_LIMIT, 429));
-    /** A sweep with nothing due: it only sends the digest. */
-    const digest = async (client: Soniox) => {
-      const sweepDeps = firstDeps(fakeWise().ops, client.client);
-      const result = await runSweep(sweepDeps);
-      return { sent: result.alertsSent, suppressed: result.alertsSuppressed, emails: sweepDeps.emails, processed: result.processed };
-    };
-    const row = async () => (await readSessionRow(db, SESSION_ID))!;
-    /** Sol's draft is rejected at one judge level, passed at the other. */
-    const unfaithful = () => routed({ model: AUTOWRITER_MODELS.judge.model }, JSON.stringify({ ...PASSING_VERDICT, faithful: false, unsupported: ["scored 95%"] }));
-
-    it("counts the runs in which the judge could not be asked apart from its own failures: alone they alert only at six in a row, and the alert never blames the judge", async () => {
-      await handedOver();
-      const client = soniox();
-      // Three runs rate limited at the judge — through every in-run retry. Under the first rule this alerted.
-      for (const runs of [1, 2, 3]) {
-        expect(await judgeRateLimited(client), `${runs}`).toMatchObject({ result: "infra", detail: `judge:medium:${RATE_LIMIT}`, rateLimited: "judge" });
-        expect((await row()).metadata, `${runs}`).toMatchObject({ judgeErrors: 0, judgeUnreached: runs, judgeUnreachedCause: "rate_limited" });
-      }
-      expect((await row()).metadata).not.toHaveProperty("alertKind");
-      expect(await digest(client)).toMatchObject({ sent: 0, emails: [], processed: {} });
-
-      // No time left in our own function to start the judge (it needs its full 240 s, 45 s before the deadline) …
-      expect(await judged(client, failedCall("never asked"), { deadlineMs: Date.now() + 200_000 })).toMatchObject({ result: "infra", detail: "function_budget_exhausted" });
-      expect((await row()).metadata).toMatchObject({ judgeErrors: 0, judgeUnreached: 4, judgeUnreachedCause: "out_of_time" });
-      // … and our OpenRouter account out of credit: neither is the judge's failure.
-      expect(await judged(client, failedCall("Insufficient credits", 402))).toMatchObject({ result: "infra", detail: "judge:medium:Insufficient credits" });
-      expect((await row()).metadata).toMatchObject({ judgeErrors: 0, judgeUnreached: 5, judgeUnreachedCause: "account_or_connection" });
-      expect((await row()).metadata).not.toHaveProperty("alertKind");
-      expect(await digest(client)).toMatchObject({ sent: 0, emails: [] });
-
-      // The sixth in a row: one alert, saying what it was. The class retries as before.
-      expect(await judgeRateLimited(client)).toMatchObject({ result: "infra" });
-      expect(await row()).toMatchObject({
-        state: "transcribing", reason: `infra:judge:medium:${RATE_LIMIT}`, sonioxTranscriptionId: "job-1", retryCount: 6,
-        metadata: { judgeErrors: 0, judgeUnreached: 6, judgeUnreachedCause: "rate_limited", alertKind: "judge_failing", judgeFailingSince: after(40).toISOString() },
-      });
-      const sixth = await digest(client);
-      expect(sixth).toMatchObject({ sent: 1, processed: {} });
-      expect(sixth.emails).toHaveLength(1);
-      expect(sixth.emails[0].text).toContain("could not be checked 6 runs in a row (not a failure of the judge model: OpenRouter rate limited the judge's route)");
-      expect(sixth.emails[0].text).not.toMatch(BLAME);
-
-      // It goes on: counted, not reported again. Then the judge answers: both counts start again.
-      expect(await judgeRateLimited(client)).toMatchObject({ result: "infra" });
-      expect((await row()).metadata).toMatchObject({ judgeUnreached: 7 });
-      expect(await digest(client)).toMatchObject({ sent: 0, emails: [] });
-      expect(await attempt(client, [])).toMatchObject({ result: "verified" });
-      expect(await row()).toMatchObject({ state: "verified", metadata: { judgeErrors: 0, judgeUnreached: 0 } });
-      expect(client.created).toHaveLength(1);
-    });
-
-    it("alerts at three failures of the judge itself whatever else is counted, and at six runs of both kinds together", async () => {
-      // Two runs already lost to a rate limit: they do not bring the judge's own mark nearer.
-      await handedOver({ metadata: { ...HANDED_OVER, judgeUnreached: 2, judgeUnreachedCause: "rate_limited" } });
-      const client = soniox();
-      expect(await judgeTimesOut(client)).toMatchObject({ result: "infra", detail: "judge:medium:timeout" });
-      expect(await judgeTimesOut(client)).toMatchObject({ result: "infra" });
-      expect((await row()).metadata).toMatchObject({ judgeErrors: 2, judgeUnreached: 2 });
-      expect((await row()).metadata).not.toHaveProperty("alertKind");
-      // The judge's third failure in a row: the alert, at five runs in all.
-      expect(await judgeTimesOut(client)).toMatchObject({ result: "infra" });
-      expect((await row()).metadata).toMatchObject({ judgeErrors: 3, judgeUnreached: 2, alertKind: "judge_failing", judgeFailingSince: after(40).toISOString() });
-      const own = await digest(client);
-      expect(own.emails).toHaveLength(1);
-      expect(own.emails[0].text).toContain(
-        "could not be checked 5 runs in a row (failures of the judge model: 3; not its failure: 2 — the last time, OpenRouter rate limited the judge's route)",
-      );
-
-      // Two failures of the judge and four runs in which it could not be asked: six together, so the alert — and the
-      // judge is blamed for its two only.
-      await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
-      await handedOver({ metadata: { ...HANDED_OVER, judgeErrors: 2, judgeUnreached: 3, judgeUnreachedCause: "out_of_time" } });
-      const mixed = soniox();
-      expect(await judgeRateLimited(mixed)).toMatchObject({ result: "infra" });
-      expect((await row()).metadata).toMatchObject({ judgeErrors: 2, judgeUnreached: 4, alertKind: "judge_failing" });
-      expect((await digest(mixed)).emails[0].text).toContain(
-        "could not be checked 6 runs in a row (failures of the judge model: 2; not its failure: 4 — the last time, OpenRouter rate limited the judge's route)",
-      );
-      // One alert per run of failures: the judge's third failure, later in the same run of them, raises no second one.
-      expect(await judgeTimesOut(mixed)).toMatchObject({ result: "infra" });
-      expect((await row()).metadata).toMatchObject({ judgeErrors: 3, judgeUnreached: 4 });
-      expect(await digest(mixed)).toMatchObject({ sent: 0, emails: [] });
-    });
-
-    it("never counts 'in a row' across an answer of the judge: a verdict given before the run failed starts both counts again", async () => {
-      await handedOver({ metadata: { ...HANDED_OVER, judgeErrors: 2, judgeUnreached: 1 } });
-      const client = soniox();
-      // The judges rejected Sol's draft (they answered), then the Luna fallback timed out: the run ended at the writer.
-      expect(await attempt(client, [null, unfaithful(), null, failedCall("timeout")]))
-        .toMatchObject({ result: "infra", detail: `${AUTOWRITER_MODELS.fallbackWriter.arm}:timeout` });
-      expect((await row()).metadata).toMatchObject({ judgeErrors: 0, judgeUnreached: 0, writerErrors: 1 });
-      // So the next judge failure is the first of a new run of them, not the third: no alert.
-      expect(await judgeTimesOut(client)).toMatchObject({ result: "infra", detail: "judge:medium:timeout" });
-      expect((await row()).metadata).toMatchObject({ judgeErrors: 1, judgeUnreached: 0 });
-      expect((await row()).metadata).not.toHaveProperty("alertKind");
-
-      // The same when the run itself ends at the judge after an answer: Sol's draft rejected, Luna's draft written,
-      // and its judge times out — one failure after an answer, not the third in a row.
-      await db.update(S).set({ metadata: { ...HANDED_OVER, judgeErrors: 2, judgeUnreached: 3 } }).where(eq(S.wiseSessionId, SESSION_ID));
-      expect(await attempt(client, [null, unfaithful(), null, null, failedCall("timeout")])).toMatchObject({ result: "infra", detail: "judge:medium:timeout" });
-      expect((await row()).metadata).toMatchObject({ judgeErrors: 1, judgeUnreached: 0 });
-      expect((await row()).metadata).not.toHaveProperty("alertKind");
-      expect(await digest(client)).toMatchObject({ sent: 0, emails: [] });
-
-      // A writer failure with no verdict in the run says nothing about the judge: the counts stay.
-      expect(await attempt(client, [failedCall("timeout"), failedCall("timeout")])).toMatchObject({ result: "infra", detail: `${AUTOWRITER_MODELS.writer.arm}:timeout; ${AUTOWRITER_MODELS.fallbackWriter.arm}:timeout` });
-      expect((await row()).metadata).toMatchObject({ judgeErrors: 1, judgeUnreached: 0 });
-    });
-
-    it("alerts again for a new run of failures on the same class, under a relay key of its own", async () => {
-      await handedOver();
-      const client = soniox();
-      for (let run = 0; run < 3; run += 1) expect(await judgeTimesOut(client)).toMatchObject({ result: "infra" });
-      expect((await row()).metadata).toMatchObject({ judgeErrors: 3, alertKind: "judge_failing", judgeFailingSince: after(40).toISOString() });
-      const first = await digest(client);
-      expect(first.emails).toHaveLength(1);
-      // The judge answers (it rejects Sol's draft; the fallback writer then fails), and fails three more times later on.
-      expect(await attempt(client, [null, unfaithful(), null, failedCall("timeout")], { now: () => after(60) })).toMatchObject({ result: "infra" });
-      expect(await digest(client)).toMatchObject({ sent: 0, emails: [] });
-      for (let run = 0; run < 3; run += 1) expect(await judgeTimesOut(client, { now: () => after(90) })).toMatchObject({ result: "infra" });
-      // A new episode: its own time, the kind re-armed, and a second email — which the relay does not take for the first.
-      expect((await row()).metadata).toMatchObject({ judgeErrors: 3, alertKind: "judge_failing", judgeFailingSince: after(90).toISOString() });
-      const second = await digest(client);
-      expect(second.emails).toHaveLength(1);
-      expect(second.emails[0].to).toBe(first.emails[0].to);
-      expect(second.emails[0].idempotencyKey).not.toBe(first.emails[0].idempotencyKey);
-    });
-
-    it("sends an alert that was only recorded outside live mode once the autowriter is live and the class still fails", async () => {
-      await updateControl(db, { mode: "shadow" }, "t@x.com");
-      await handedOver();
-      const client = soniox();
-      const recorded = async () => (await row()).alertsSent.judge_failing;
-      for (let run = 0; run < 3; run += 1) expect(await judgeTimesOut(client)).toMatchObject({ result: "infra" });
-      // Shadow: recorded, not emailed.
-      expect(await digest(client)).toMatchObject({ sent: 0, suppressed: 1, emails: [] });
-      expect(await recorded()).toBe("suppressed:shadow");
-      // Still shadow: a fourth failure changes nothing.
-      expect(await judgeTimesOut(client)).toMatchObject({ result: "infra" });
-      expect(await recorded()).toBe("suppressed:shadow");
-      expect(await digest(client)).toMatchObject({ sent: 0, suppressed: 0, emails: [] });
-
-      // Live, and the judge still fails: the alert is armed again by that failure and emailed.
-      await updateControl(db, { mode: "live" }, "t@x.com");
-      expect(await judgeTimesOut(client)).toMatchObject({ result: "infra" });
-      expect((await row()).metadata).toMatchObject({ judgeErrors: 5, alertKind: "judge_failing", judgeFailingSince: after(40).toISOString() });
-      expect(await recorded()).toBeUndefined();
-      const live = await digest(client);
-      expect(live).toMatchObject({ sent: 1, suppressed: 0 });
-      expect(live.emails).toHaveLength(1);
-      expect(live.emails[0].text).toContain("could not be checked 5 runs in a row");
-      // Sent now: later failures of the same run of them do not send it again.
-      expect(await recorded()).not.toMatch(/^suppressed:/u);
-      expect(await judgeTimesOut(client)).toMatchObject({ result: "infra" });
-      expect(await digest(client)).toMatchObject({ sent: 0, emails: [] });
-    });
   });
 
   it("starts a new count once a run stores a transcript draft", async () => {
@@ -2697,12 +2290,12 @@ describe("transcript first (Postgres + fakes)", () => {
       .toMatchObject({ result: "held", detail: "transcript_pass_unavailable" });
   });
 
-  it("still holds what the transcript shows: a recording or transcript too short for the class, a draft the judge rejects", async () => {
+  it("still holds a recording or transcript too short for the class", async () => {
     const cases: Array<[string, Parameters<typeof fakeSoniox>[0], Partial<AutowriterDeps>, RegExp]> = [
       ["recording too short", { audioDurationMs: 20 * 60_000 }, {}, /^recording_too_short$/u],
       ["transcript too short", { tokens: lessonTokens().slice(0, 4) }, {}, /^transcript_too_short$/u],
       // Whatever writes transcripts (and any fallback writer) had its draft rejected.
-      ["judge rejects the draft", {}, { callModel: unfaithfulModel() as never }, new RegExp(`^${AUTOWRITER_MODELS.writer.arm}:unfaithful:scored 95%`, "u")],
+
     ];
     for (const [label, sonioxOptions, overrides, reason] of cases) {
       await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
@@ -2715,97 +2308,25 @@ describe("transcript first (Postgres + fakes)", () => {
     }
   });
 
-  it("never goes back to the transcript after a fallback: a Thai summary or a held summary draft is held, a missing summary retries and alerts", async () => {
-    await seedRow({ metadata: FELL_BACK });
-    const model = fakeModel();
-    expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail({ rawMeetingSummary: THAI_SUMMARY })] }).ops, fakeSoniox().client,
-      { callModel: model.callModel as never, now: () => after(190) }), cron))
-      .toMatchObject({ result: "held", detail: "thai_summary_no_transcript" });
-    expect(model.calls).toEqual([]);
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "held", evidence: "summary", metadata: { alertKind: "held" } });
-
-    await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
-    await seedRow({ metadata: FELL_BACK });
-    const held = await processSession(firstDeps(fakeWise().ops, fakeSoniox().client, { callModel: unfaithfulModel() as never, now: () => after(190) }), cron);
-    expect(held).toMatchObject({ result: "held" });
-    expect(held.detail).toContain("unfaithful");
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "held", evidence: "summary" });
-
+  it("writes a summary without judges, including Thai fallback and the retired hold switch", async () => {
+    vi.stubEnv("FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY", "true");
+    try {
+      for (const rawMeetingSummary of [undefined, THAI_SUMMARY]) {
+        await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
+        await seedRow({ metadata: FELL_BACK });
+        const model = fakeModel();
+        const wise = fakeWise({ details: [sessionDetail(rawMeetingSummary ? { rawMeetingSummary } : {})] });
+        expect(await processSession(firstDeps(wise.ops, fakeSoniox().client,
+          { callModel: model.callModel as never, now: () => after(190) }), cron))
+          .toMatchObject({ result: "verified" });
+        expect(model.calls).toEqual(["post_class_feedback"]);
+        expect(wise.posts).toHaveLength(1);
+      }
+    } finally { vi.unstubAllEnvs(); }
     await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
     await seedRow({ metadata: FELL_BACK });
     expect(await processSession(firstDeps(fakeWise({ details: [sessionDetail({ rawMeetingSummary: [] })] }).ops, fakeSoniox().client, { now: () => after(240) }), cron))
       .toMatchObject({ result: "retry", detail: "no_ai_summary" });
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "pending", evidence: "summary", metadata: { alertKind: "no_summary" } });
-  });
-
-  it("holds summary-only feedback by default before calling a model or writing Wise", async () => {
-    vi.stubEnv("FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY", undefined);
-    try {
-      await seedRow({});
-      const model = fakeModel();
-      const wise = fakeWise();
-      expect(await processSession(deps(wise.ops, { holdSummaryOnly: undefined, callModel: model.callModel as never }), cron))
-        .toMatchObject({ result: "held", detail: "summary_only_held" });
-      expect(model.calls).toEqual([]);
-      expect(wise.posts).toEqual([]);
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it("holds a summary-only draft for a person while the switch is on: after a fallback, and with no transcript pass at all", async () => {
-    await seedRow({ metadata: FELL_BACK });
-    const model = fakeModel();
-    expect(await processSession(firstDeps(fakeWise().ops, fakeSoniox().client,
-      { holdSummaryOnly: true, callModel: model.callModel as never, now: () => after(190) }), cron))
-      .toMatchObject({ result: "held", detail: "summary_only_held" });
-    expect(model.calls).toEqual([]);
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
-      state: "held", reason: "summary_only_held", evidence: "summary", fields: null,
-      metadata: { alertKind: "held", summaryOnlyHeld: { fellBack: true } },
-    });
-
-    // The second pass off: the class never had a transcript route, and is still held.
-    await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
-    await seedRow({});
-    const offModel = fakeModel();
-    expect(await processSession(firstDeps(fakeWise().ops, fakeSoniox().client,
-      { holdSummaryOnly: true, transcriptsEnabled: false, callModel: offModel.callModel as never }), cron))
-      .toMatchObject({ result: "held", detail: "summary_only_held" });
-    expect(offModel.calls).toEqual([]);
-
-    // Transcript first still hands a fresh class over to the transcript: the switch only stops the summary route.
-    await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
-    await seedRow({});
-    await processSession(firstDeps(fakeWise().ops, fakeSoniox().client, { holdSummaryOnly: true }), cron);
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ evidence: "transcript", metadata: { handover: "transcript_first" } });
-
-    // Transcript first off but the second pass on: the class goes to the transcript instead of being held.
-    await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
-    await seedRow({
-      arm: "sol", fields: { topics: "t", performance: "p", improvement: "i", homework: "" } as never, fieldsSha256: "abc",
-      metadata: { judge: { faithful: true }, draftEvidence: "summary", pipeline: { arm: "sol" } },
-    });
-    const handModel = fakeModel();
-    await processSession(firstDeps(fakeWise().ops, fakeSoniox().client,
-      { holdSummaryOnly: true, transcriptFirst: false, callModel: handModel.callModel as never }), cron);
-    expect(handModel.calls).toEqual([]);
-    expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
-      evidence: "transcript", arm: null, fields: null, fieldsSha256: null,
-      metadata: { handover: "summary_only", judge: null, draftEvidence: null, pipeline: null },
-    });
-  });
-
-  it("drops a summary draft kept on the row when it holds a class as summary-only, so no one is shown it to paste", async () => {
-    await seedRow({
-      arm: "sol", fields: { topics: "t", performance: "p", improvement: "i", homework: "" } as never, fieldsSha256: "abc",
-      metadata: { ...FELL_BACK, judge: { faithful: true }, draftEvidence: "summary", pipeline: { arm: "sol" } },
-    });
-    expect(await processSession(firstDeps(fakeWise().ops, fakeSoniox().client, { holdSummaryOnly: true, now: () => after(190) }), cron))
-      .toMatchObject({ result: "held", detail: "summary_only_held" });
-    const row = await readSessionRow(db, SESSION_ID);
-    expect(row).toMatchObject({ state: "held", arm: null, fields: null, fieldsSha256: null, billing: null });
-    expect(row?.metadata).toMatchObject({ judge: null, draftEvidence: null, pipeline: null });
   });
 
   it("raises no no-recording alert for a transcript-first class waiting for its recording (it falls back instead), but does for one stuck transcribing", async () => {
@@ -2891,7 +2412,6 @@ describe("Mimi style rollout (Postgres + fake Wise and models)", () => {
     } finally { vi.unstubAllEnvs(); }
   });
   it.each([
-    ["paragraph fields", writerJson],
     ["missing topics", JSON.stringify({ ...JSON.parse(writerJson), topics: undefined })],
   ])("holds %s after the fallback, even when the transcript handover is available", async (_label, content) => {
     vi.stubEnv("FEEDBACK_AUTOWRITER_MIMI_STYLE_ENABLED", "true");

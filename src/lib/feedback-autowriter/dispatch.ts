@@ -3,7 +3,6 @@ import {
   autowriterAlertEmails,
   autowriterEnabled,
   autowriterLineTo,
-  autowriterHoldSummaryOnly,
   autowriterTranscriptFirst,
   autowriterTranscriptsEnabled,
   autowriterWritesAllowedHere,
@@ -32,7 +31,6 @@ function productionDeps(db: Database, budgetMs: number): AutowriterDeps {
     soniox: sonioxClient(),
     // Acts only together with the second pass (job.ts checks both).
     transcriptFirst: autowriterTranscriptFirst(),
-    holdSummaryOnly: autowriterHoldSummaryOnly(),
     zoomEnglish: autowriterZoomEnglish(),
   };
 }

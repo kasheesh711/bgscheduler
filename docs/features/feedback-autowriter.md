@@ -1,5 +1,7 @@
 # Feedback Autowriter
 
+**Posting policy, 27 October 2026:** The production path returns a valid writer draft before model quality review. Quality and style assessments remain internal. Summary-only feedback, including a Thai summary after transcript fallback, is no longer held solely for its source. Class identity, attendance, form, billing, existing-submission, single-POST and read-back checks still apply. The old `FEEDBACK_AUTOWRITER_HOLD_SUMMARY_ONLY` switch is retired. Earlier dated sections below record the former policy. See the [change and evidence report](../operations/autowriter-post-first-2026-10-27.md) for release status and measured limits.
+
 **Status:** live since 2026-09-29; every online tutor since 2026-10-05 (48 tutors, both of each tutor's Wise accounts). **Code:** [`src/lib/feedback-autowriter/`](../../src/lib/feedback-autowriter/).
 **Runbook:** [`operations/feedback-autowriter.md`](../operations/feedback-autowriter.md). **API:** [`reference/api/feedback-autowriter.md`](../reference/api/feedback-autowriter.md).
 **Dashboard:** `/feedback-autowriter` (nav: Scheduling & Tutors → Feedback Autowriter), described in

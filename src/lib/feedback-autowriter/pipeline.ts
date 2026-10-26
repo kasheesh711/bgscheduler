@@ -83,7 +83,7 @@ export interface CallRecord {
 }
 
 export type PipelineResult =
-  | { kind: "draft"; arm: ModelArm; output: ModelOutput; fields: FeedbackFieldAnswers; judge: StoredJudgeVerdict; styleGuide?: StyleGuideStamp; formatGuide?: StyleGuideStamp; atomEvidence?: AtomLessonEvidence;
+  | { kind: "draft"; arm: ModelArm; output: ModelOutput; fields: FeedbackFieldAnswers; judge: StoredJudgeVerdict | null; styleGuide?: StyleGuideStamp; formatGuide?: StyleGuideStamp; atomEvidence?: AtomLessonEvidence;
     /** Set when the judges rejected the written draft and passed it with these cuts (`repairRejectedDraft`). */
     repair?: DraftRepair["removed"] }
   | { kind: "held"; reasons: string[] }
@@ -171,7 +171,8 @@ export function routeMismatch(config: AutowriterModelRoute, call: OpenRouterCall
 type CallModel = typeof callOpenRouter;
 
 /**
- * Sol writes → deterministic validation → GLM judge (faithfulness) at `medium` and `high` → accepted.
+ * Production uses `deferQualityReview`: validate the writer output and return it without calling a judge.
+ * Offline replays keep the full path: writer → validation → GLM judge at `medium` and `high`.
  * Any content failure falls back to Luna (validated and judged the same
  * way), for a summary and a transcript alike: every route has zero data
  * retention. Infra failures stop immediately so the session is retried later —
@@ -184,6 +185,8 @@ type CallModel = typeof callOpenRouter;
  */
 export async function runWritingPipeline(input: {
   apiKey: string;
+  /** Production posts the valid draft; the internal audit assesses quality later. Offline replays can still judge it here. */
+  deferQualityReview?: boolean;
   session: PipelineSession;
   /** Explicit override for offline replay only; production resolves the disabled-by-default switch. */
   styleGuide?: FeedbackStyleGuide | null;
@@ -337,7 +340,7 @@ export async function runWritingPipeline(input: {
     }), AUTOWRITER_WRITER_TIMEOUT_MS, (call, result) => input.record({
       wiseSessionId: session.wiseSessionId, role: "writer", arm: writer.arm, requestedModel: writer.model,
       promptVersion: PROMPT_VERSION, call, result: { ...result, evidence, ...(styleStamp ? { styleGuide: styleStamp } : {}), ...(formatStamp ? { formatGuide: formatStamp } : {}), ...(atomEvidence ? { atomEvidenceHash: atomEvidence.hash } : {}) },
-    }), undefined, timedOut ? AUTOWRITER_JUDGE_TIMEOUT_MS[evidence] + HANDOVER_JUDGE_SLACK_MS : 0);
+    }), undefined, timedOut && !input.deferQualityReview ? AUTOWRITER_JUDGE_TIMEOUT_MS[evidence] + HANDOVER_JUDGE_SLACK_MS : 0);
     if (written.kind === "budget") return ended(timedOut ?? { kind: "infra", error: FUNCTION_BUDGET_EXHAUSTED, modelFailure: false, stage: "writer" });
     const writeCall = written.call;
     const recordWriter = written.record;
@@ -383,10 +386,19 @@ export async function runWritingPipeline(input: {
       priorFeedback: input.priorFeedback.filter((prior) => prior.key !== session.wiseSessionId),
     });
     const validationReasons = [...(validation.ok ? [] : validation.reasons), ...validateAtomStatisticClaims(fields, atomEvidence)];
-    await recordWriter(validationReasons.length ? { validation: validationReasons } : { validation: "ok" });
-    if (validationReasons.length) {
-      reasons.push(...validationReasons.map((reason) => `${writer.arm}:${reason}`));
+    const blockingReasons = input.deferQualityReview
+      ? validationReasons.filter((reason) => !/^(?:style:|markdown:|process_note:|ai_suspect:(?:short_required_field|borderline_total_length)$)/u.test(reason))
+      : validationReasons;
+    await recordWriter({ validation: validationReasons.length ? validationReasons : "ok",
+      ...(input.deferQualityReview ? { qualityReview: "deferred", blockingReasons } : {}) });
+    if (blockingReasons.length) {
+      reasons.push(...blockingReasons.map((reason) => `${writer.arm}:${reason}`));
       continue;
+    }
+    if (input.deferQualityReview) {
+      return { kind: "draft", arm: writer.arm, output: parsed.output, fields, judge: null,
+        ...(styleStamp ? { styleGuide: styleStamp } : {}), ...(formatStamp ? { formatGuide: formatStamp } : {}),
+        ...(atomEvidence ? { atomEvidence } : {}) };
     }
 
     // Judge v5 (owner decision, 30 Sep): every level in AUTOWRITER_JUDGE_EFFORTS judges the draft in parallel, on the

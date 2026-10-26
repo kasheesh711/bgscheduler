@@ -656,11 +656,8 @@ export async function expireOverdueRows(db: Database, input: {
 
 /** Shadow drafts become eligible again when the owner switches to live. */
 export async function requeueShadowDrafts(db: Database, minDeadline: Date): Promise<number> {
-  // Back to work. A judged transcript draft of the current prompt and judge versions that both judge levels passed
-  // (v5) is posted as it is, never re-read: its transcript's review window keeps running, as does a class that fell
-  // back to the summary (it never reads its transcript again). Any other draft may transcribe again (an older
-  // version's, or one judged at a single level, is written and judged again: `reusableTranscriptDraft` in job.ts),
-  // so its window starts again when it is next done. The levels are `AUTOWRITER_JUDGE_EFFORTS` (judge.ts schema).
+  // Current post-first drafts and historical drafts passed by both judges keep their review window.
+  // Other drafts must be generated again; reusableTranscriptDraft in job.ts applies the same policy.
   const guide = activeStyleGuide("Mimi");
   const matchingStyle = sql`case when ${Boolean(guide)} and ${inArray(S.wiseTeacherUserId, rosterAccountIds("Mimi"))}
     then ${S.metadata} -> 'pipeline' -> 'styleGuide' = ${JSON.stringify(styleGuideStamp(guide))}::jsonb
@@ -668,11 +665,11 @@ export async function requeueShadowDrafts(db: Database, minDeadline: Date): Prom
   const rows = await db.update(S).set({
     state: "pending",
     nextAttemptAt: null,
-    metadata: sql`case when (${S.metadata} ->> 'draftEvidence' = 'transcript' and ${S.metadata} -> 'judge' ->> 'faithful' = 'true'
+    metadata: sql`case when (${S.metadata} ->> 'draftEvidence' = 'transcript' and (${S.metadata} -> 'pipeline' ->> 'qualityReview' = 'deferred' or (${S.metadata} -> 'judge' ->> 'faithful' = 'true'
         and ${S.metadata} -> 'judge' -> 'levels' -> 'medium' ->> 'faithful' = 'true'
         and ${S.metadata} -> 'judge' -> 'levels' -> 'high' ->> 'faithful' = 'true'
+        and ${S.metadata} -> 'pipeline' ->> 'judgeVersion' = ${String(JUDGE_PROMPT_VERSION)}))
         and ${S.metadata} -> 'pipeline' ->> 'promptVersion' = ${String(PROMPT_VERSION)}
-        and ${S.metadata} -> 'pipeline' ->> 'judgeVersion' = ${String(JUDGE_PROMPT_VERSION)}
         and ${matchingStyle}) or ${S.metadata} ? 'summaryFallback'
       then ${S.metadata} - 'triagedAt' else ${S.metadata} - 'sonioxRetainUntil' - 'triagedAt' end`,
     updatedAt: nowSql,

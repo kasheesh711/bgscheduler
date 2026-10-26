@@ -31,10 +31,10 @@ describe("SystemLine", () => {
     expect(html).toContain("Mode LIVE");
     expect(html).toContain("Writer GPT-6.1 Sol (low)");
     expect(html).toContain("Fallback GPT-6 Luna (max)");
-    expect(html).toContain("Judge GLM Flash (medium + high)");
+    expect(html).toContain("Offline judge GLM Flash (medium + high)");
     expect(html).toContain("Transcript first: on");
     expect(html).toContain("Second pass: on");
-    expect(html).toContain("Prompt v5 · Judge v5");
+    expect(html).toContain("Prompt v5 · Post first; quality review later");
     expect(html).toContain('title="Commit abc1234"');
     expect(html).toContain("Last review run 6 Oct, 15:27 · succeeded");
     expect(html).toContain("Last Wise webhook 6 Oct, 15:31");

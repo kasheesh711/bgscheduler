@@ -64,6 +64,7 @@ interface Script {
 }
 
 interface Options {
+  deferQualityReview?: boolean;
   canonicalTutorKey?: string;
   styleGuide?: FeedbackStyleGuide | null;
   evidence?: "summary" | "transcript";
@@ -102,6 +103,7 @@ function run(script: Script, options: Options = {}) {
   });
   const promise = runWritingPipeline({
     apiKey: "k",
+    deferQualityReview: options.deferQualityReview,
     styleGuide: options.styleGuide,
     session: {
       canonicalTutorKey: options.canonicalTutorKey,
@@ -1539,5 +1541,29 @@ describe("reviewed homework omissions", () => {
     // A deletion-only repair cannot manufacture the missing assignment.
     expect(writerRequests(requests)).toHaveLength(2);
     expect(judgeRequests(requests)).toHaveLength(4);
+  });
+});
+
+
+describe("post-first quality review", () => {
+  it("returns a valid draft after one writer call even when no judge is available", async () => {
+    const { promise, requests, records } = run({ writers: [SOL(writerJson)] }, { deferQualityReview: true, remainingMs: 90_000 });
+    expect(await promise).toMatchObject({ kind: "draft", arm: "sol", judge: null });
+    expect(requests).toHaveLength(1);
+    expect(records[0].result).toMatchObject({ qualityReview: "deferred", blockingReasons: [] });
+  });
+
+  it("keeps style checks advisory but still rejects absent students and invalid field values", async () => {
+    const styled = JSON.parse(writerJson);
+    styled.topics = "**Fractions**: " + styled.topics;
+    const advisory = run({ writers: [SOL(JSON.stringify(styled))] }, { deferQualityReview: true });
+    expect(await advisory.promise).toMatchObject({ kind: "draft", judge: null });
+    expect(advisory.records[0].result.validation).toContain("markdown:topics");
+    for (const patch of [{ studentAttended: false }, { topics: "[STUDENT_2]" }]) {
+      const invalid = JSON.stringify({ ...JSON.parse(writerJson), ...patch });
+      const rejected = run({ writers: [SOL(invalid), LUNA(invalid)] }, { deferQualityReview: true });
+      expect(await rejected.promise).toMatchObject({ kind: "held" });
+      expect(judgeRequests(rejected.requests)).toEqual([]);
+    }
   });
 });

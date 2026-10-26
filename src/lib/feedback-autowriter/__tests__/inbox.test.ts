@@ -85,7 +85,7 @@ describe("INBOX_GROUPS", () => {
     expect(INBOX_GROUPS).toEqual([
       { kind: "incident", label: "Incidents" },
       { kind: "hold", label: "Held" },
-      { kind: "review", label: "To review" },
+      { kind: "review", label: "Optional quality review" },
       { kind: "decision", label: "Decisions" },
       { kind: "failed_post", label: "Failed posts" },
       { kind: "expansion_ready", label: "Expansion" },
@@ -413,9 +413,9 @@ describe("openCount", () => {
       }),
       { now: NOW },
     );
-    // Two incidents, a review and a failed post of one class, a hold, and another review: three classes.
+    // Optional reviews do not add to the two classes that need action.
     expect(items).toHaveLength(6);
-    expect(openCount(items)).toBe(3);
+    expect(openCount(items)).toBe(2);
   });
 
   it("counts each item about no class on its own", () => {
