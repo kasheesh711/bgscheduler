@@ -409,16 +409,15 @@ class; its `RecordingCompletedEvent` webhook (or the backstop, every 30 min) pic
    length after it;
 2. fetches the transcript. BGScheduler never stores it. The Soniox job is kept while the class is in progress (so a
    retry re-fetches instead of transcribing again) and, once the class is done with it (posted, shadow draft, held,
-   expired or skipped, however it got there), for review for 72 hours (owner decision, 29 Sep), then the sweep
-   deletes it. The first sweep to see the class done stamps `metadata.sonioxRetainUntil` = now + 72 h (so the window
+   expired or skipped, however it got there), for review for 7 days (owner decision, 13 Oct 2026; 72 hours before),
+   then the sweep deletes it. The first sweep to see the class done stamps `metadata.sonioxRetainUntil` = now + 7 days (so the window
    starts within one sweep of the class finishing). A class left unfinished past its deadline (mode `off` skips the
    expiry) counts as done, and the job's cleanup still runs when `FEEDBACK_AUTOWRITER_ENABLED` is off. An owner retry
    clears the stamp, and so does going live for a draft that may transcribe again (a judged transcript draft keeps
    its window); the window starts again when the class is next done. A reviewer finds the job by the row's
-   `soniox_transcription_id` (Soniox Console). `metadata.triagedAt` ends the window early: the owner's first
-   accurate verdict on the posted class (Approve, or Needs fix · cosmetic) writes it (the review drawer), and the next sweep
-   deletes the job. A major or critical verdict does not end triage — and re-opens it when it replaces an earlier
-   Approve: the transcript stays for the root-cause work until the 72 h window closes. A delete that fails keeps the job
+   `soniox_transcription_id` (Soniox Console). A verdict no longer ends the window early (until 13 Oct an accurate
+   verdict wrote `metadata.triagedAt` and the next sweep deleted the job, which left the nightly audit's
+   who-said-what failures without tokens to replay; a `triagedAt` on older rows is ignored). A delete that fails keeps the job
    id so the sweep retries it, and the sweep also
    reaps jobs no row references after 2 hours;
 3. tells tutor from student by lining up Soniox's speakers with Zoom's name-labelled WEBVTT (`rawTranscript`) — every
@@ -454,8 +453,8 @@ class still waiting for its recording (or its transcript) 3 hours after class ra
 mode; not for a switched-off tutor, a short recording waiting for its recheck, an infra retry, or a transcript-first
 class still waiting for its recording, which falls back instead); rows still waiting at the deadline margin expire
 with an alert as before.
-Soniox jobs of finished rows and of shadow drafts are deleted by the sweep once their review window is over or the
-class is triaged; a refused delete is retried at the next sweep.
+Soniox jobs of finished rows and of shadow drafts are deleted by the sweep once their 7-day review window is over; a
+refused delete is retried at the next sweep.
 
 Pilot (2026-09-29, 8 classes): on Thai/English lessons Soniox kept the English terms that Zoom's transcript lost and
 was preferred in 17 of 18 compared windows; no gain on English-only lessons.
@@ -505,7 +504,7 @@ pass is on. Off (the default), nothing changes.
   waiting for its recording raises no `no_recording` alert — it falls back at that point instead; one whose
   transcription is still running 3 h after class has no time-based fallback, so it alerts as before. A class that
   fell back is done with its Soniox job (the summary path never reads it again) unless a POST is in flight or a worker
-  holds it: 72 h review window, then deletion; going live keeps its window.
+  holds it: 7-day review window, then deletion; going live keeps its window.
 - **Dashboard.** "Waiting for the recording"; a fallback shows under its state, e.g. "No recording after 3 h — from
   summary"; fallback counts by cause; class end → post median and 90th percentile by what the post was written from
   (transcript, summary after a fallback, summary).

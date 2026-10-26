@@ -549,13 +549,11 @@ describe("recordVerdict", () => {
     return seeded;
   }
 
-  it("appends the verdict, makes it current, resolves the flags shown, ends triage and queues a critical incident", async () => {
+  it("appends the verdict, makes it current, resolves the flags shown and queues a critical incident", async () => {
     const { wiseSessionId } = await reviewed(50);
     await db.insert(FL).values({ wiseSessionId, source: "measured_fix", createdBy: "system", idempotencyKey: "flag-1" });
     const first = await recordVerdict(db, await verdictFor(wiseSessionId, { verdict: "needs_fix", severity: "cosmetic", note: "nickname" }));
     expect(first).toMatchObject({ supersedesId: null, resolvedFlags: 1, criticalIncident: false });
-    const triaged = async () => typeof ((await db.select().from(S).where(eq(S.wiseSessionId, wiseSessionId)))[0].metadata as { triagedAt?: unknown }).triagedAt;
-    expect(await triaged()).toBe("string");
     const second = await recordVerdict(db, await verdictFor(wiseSessionId, { verdict: "needs_fix", severity: "critical", criticalCategory: "wrong_person" }));
     expect(second).toMatchObject({ supersedesId: first.verdictId, resolvedFlags: 0, criticalIncident: true });
     const [row] = await db.select().from(R);
@@ -564,8 +562,6 @@ describe("recordVerdict", () => {
     expect(await db.select().from(V)).toHaveLength(2);
     expect((await db.select().from(FL))[0].resolvedByVerdictId).toBe(first.verdictId);
     expect(await db.select().from(I)).toMatchObject([{ kind: "critical_verdict", severity: "critical", pushStatus: "pending" }]);
-    // The critical verdict re-opened triage: the transcript stays for the root-cause work (72 h window).
-    expect(await triaged()).toBe("undefined");
   });
 
   it("refuses a stale page — a flag raised or a verdict recorded since it loaded — and resolves only the flags shown", async () => {
@@ -586,23 +582,17 @@ describe("recordVerdict", () => {
     await expect(recordVerdict(db, await verdictFor(id24(999), { verdict: "approve" }))).rejects.toMatchObject({ status: 404 });
   });
 
-  it("ends the transcript's review window only for an accurate verdict, without touching updated_at", async () => {
+  it("keeps the transcript's review window whatever the verdict (7 days, 13 Oct), without touching updated_at", async () => {
     const factual = await reviewed(52, { sonioxTranscriptionId: "job-52" });
     const cosmetic = await reviewed(53, { sonioxTranscriptionId: "job-53" });
     const approved = await reviewed(54, { sonioxTranscriptionId: "job-54" });
-    const before = await db.select({ id: S.wiseSessionId, updatedAt: S.updatedAt }).from(S);
+    const before = await db.select({ id: S.wiseSessionId, metadata: S.metadata, updatedAt: S.updatedAt }).from(S);
     await recordVerdict(db, await verdictFor(factual.wiseSessionId, { verdict: "needs_fix", severity: "factual", note: "invented a task" }));
     await recordVerdict(db, await verdictFor(cosmetic.wiseSessionId, { verdict: "needs_fix", severity: "cosmetic", note: "comma" }));
     await recordVerdict(db, await verdictFor(approved.wiseSessionId, { verdict: "approve" }));
-    const triaged = (await db.select().from(S)).filter((row) => "triagedAt" in (row.metadata as object)).map((row) => row.wiseSessionId);
-    expect(triaged.toSorted()).toEqual([cosmetic.wiseSessionId, approved.wiseSessionId].toSorted());
-    expect((await listSonioxCleanup(db)).map((job) => job.sonioxTranscriptionId).toSorted()).toEqual(["job-53", "job-54"]);
-    const after = await db.select({ id: S.wiseSessionId, updatedAt: S.updatedAt }).from(S);
+    expect(await listSonioxCleanup(db)).toEqual([]);
+    const after = await db.select({ id: S.wiseSessionId, metadata: S.metadata, updatedAt: S.updatedAt }).from(S);
     expect(after.toSorted((a, b) => a.id.localeCompare(b.id))).toEqual(before.toSorted((a, b) => a.id.localeCompare(b.id)));
-
-    // A major verdict replacing the Approve re-opens triage: the transcript stays for the 72 h window.
-    await recordVerdict(db, await verdictFor(approved.wiseSessionId, { verdict: "needs_fix", severity: "factual", note: "found a wrong fact" }));
-    expect((await listSonioxCleanup(db)).map((job) => job.sonioxTranscriptionId)).toEqual(["job-53"]);
   });
 
   it("lets the owner downgrade a critical verdict only explicitly, with a note, and records it", async () => {

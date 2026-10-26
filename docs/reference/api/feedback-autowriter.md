@@ -105,7 +105,7 @@ Returns the `AutowriterTrends` built by [`loadAutowriterTrends`](../../../src/li
 | `note` | optional, up to 2,000 characters; required for a downgrade |
 | `confirmDowngrade` | optional `true`: the owner confirms replacing a harsher judgement with a milder verdict — a critical current verdict or open critical flag with anything non-critical, or a major (`factual`) verdict with cosmetic or Approve |
 
-One transaction appends the verdict (superseding the current one), sets `reviews.current_verdict_id`, resolves the flags the page showed, stamps `metadata.triagedAt` on the `verified` session row for an accurate verdict only (Approve or cosmetic — ending the Soniox review window; a major or critical verdict removes it again; `updated_at` is left alone), records `downgraded_from`, and, for a critical verdict, queues a critical incident.
+One transaction appends the verdict (superseding the current one), sets `reviews.current_verdict_id`, resolves the flags the page showed, records `downgraded_from`, and, for a critical verdict, queues a critical incident.
 
 **Responses:** `200 { ok: true, verdictId, supersedesId, resolvedFlags, criticalIncident, downgradedFrom }` · `400` (bad JSON, body or shape; a downgrade without a note) · `401` · `403 "Only Kevin can record autowriter verdicts or acknowledge incidents."` · `404` (no review row) · `409` (stale page: another first shot, current verdict or set of open flags; or a downgrade not confirmed) · `500`.
 
