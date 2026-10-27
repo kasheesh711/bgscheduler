@@ -93,8 +93,8 @@ describe("config", () => {
     expect(openRouterApiKey({ OPENROUTER_API_KEY: "  " })).toBeNull();
   });
 
-  it("writes with Sol at reasoning low, falls back to Luna and judges with GLM — all with zero data retention", () => {
-    expect(AUTOWRITER_MODELS.writer).toMatchObject({ arm: "sol", model: "openai/gpt-6.1-sol", effort: "low", expectModel: "openai/gpt-6.1-sol" });
+  it("writes with Terra at reasoning low, falls back to Luna and judges with GLM — all with zero data retention", () => {
+    expect(AUTOWRITER_MODELS.writer).toMatchObject({ arm: "terra", model: "openai/gpt-6.1-terra", effort: "low", expectModel: "openai/gpt-6.1-terra" });
     expect(AUTOWRITER_MODELS.fallbackWriter).toMatchObject({ arm: "luna", model: "openai/gpt-6-luna", effort: "max" });
     expect(AUTOWRITER_MODELS.judge).toMatchObject({ arm: "glm", model: "z-ai/glm-5.3-flash", expectProvider: "Together" });
     // The judge has no effort of its own: it runs at every level in AUTOWRITER_JUDGE_EFFORTS.
@@ -105,21 +105,15 @@ describe("config", () => {
     }
   });
 
-  it("writes the tutors added on 2 Oct with Luna first and Sol as their fallback; everyone else Sol then Luna", () => {
-    const solFirst = [AUTOWRITER_MODELS.writer, AUTOWRITER_MODELS.fallbackWriter];
-    const lunaFirst = [AUTOWRITER_MODELS.fallbackWriter, AUTOWRITER_MODELS.writer];
-    expect(writersFor("Mimi")).toEqual(solFirst);
-    expect(writersFor("Kevin")).toEqual(solFirst);
-    for (const key of ["Ras", "Celeste", "Taki", "Dome", "Mandy", "Grace", "Mint", "Fluke", "Calvin", "Lukas", "A", "Ohm", "Mookie"]) {
-      expect(writersFor(key)).toEqual(lunaFirst);
+  it("uses Terra first for every tutor, including legacy Luna-first tutors", () => {
+    for (const key of ["Mimi", "Kevin", "Ras", "Lukas", "Fluke-Supha", undefined]) {
+      expect(writersFor(key)).toEqual([AUTOWRITER_MODELS.writer, AUTOWRITER_MODELS.fallbackWriter]);
     }
-    // Not on the roster (or unknown): the default order, never a guess.
-    expect(writersFor("Fluke-Supha")).toEqual(solFirst);
-    expect(writersFor(undefined)).toEqual(solFirst);
   });
 
   it("keeps a writer per arm for the evaluation CLI", () => {
-    expect(AUTOWRITER_WRITER_BY_ARM.sol).toBe(AUTOWRITER_MODELS.writer);
+    expect(AUTOWRITER_WRITER_BY_ARM.terra).toBe(AUTOWRITER_MODELS.writer);
+    expect(AUTOWRITER_WRITER_BY_ARM.sol.model).toBe("openai/gpt-6.1-sol");
     expect(AUTOWRITER_WRITER_BY_ARM.luna).toBe(AUTOWRITER_MODELS.fallbackWriter);
     // GLM evaluates with the config it wrote with until 30 Sep, not the judge's.
     expect(AUTOWRITER_WRITER_BY_ARM.glm).toMatchObject({ arm: "glm", model: "z-ai/glm-5.3-flash", effort: "max", provider: { order: ["together"], zdr: true } });

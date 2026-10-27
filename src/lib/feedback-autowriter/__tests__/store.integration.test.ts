@@ -73,6 +73,14 @@ beforeEach(async () => {
 });
 
 describe("feedback autowriter store (Postgres)", () => {
+  it("persists Terra sessions and calls while rejecting unknown writer arms", async () => {
+    await db.update(schema.feedbackAutowriterSessions).set({ arm: "terra" }).where(eq(schema.feedbackAutowriterSessions.wiseSessionId, SESSION));
+    await db.insert(schema.feedbackAutowriterCalls).values({ wiseSessionId: SESSION, role: "writer", arm: "terra", requestedModel: "openai/gpt-6.1-terra", ok: true, promptVersion: PROMPT_VERSION });
+    expect((await readSessionRow(db, SESSION))?.arm).toBe("terra");
+    await expect(db.execute(sql`UPDATE feedback_autowriter_sessions SET arm = 'unknown' WHERE wise_session_id = ${SESSION}`)).rejects.toThrow();
+    await expect(db.execute(sql`UPDATE feedback_autowriter_calls SET arm = 'unknown' WHERE wise_session_id = ${SESSION}`)).rejects.toThrow();
+  });
+
   it("keeps Wise's class name from the first read that has one, never replacing it", async () => {
     const metadataOf = async (id: string) => (await readSessionRow(db, id))?.metadata;
     expect(await metadataOf(SESSION)).toEqual({});

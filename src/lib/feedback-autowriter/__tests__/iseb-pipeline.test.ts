@@ -68,7 +68,7 @@ describe("ISEB format rollout", () => {
   it("falls back for a score repeated from a lesson record without matched Atom evidence", async () => {
     const scored = { ...fields, performance: fields.performance + " We scored 19 out of 25 answers correct." };
     expect((await run([scored, fields])).result).toMatchObject({ kind: "draft", arm: "luna" });
-    expect((await run([scored, scored])).result).toMatchObject({ kind: "held", reasons: expect.arrayContaining(["sol:atom:unmatched_result_statistic"]) });
+    expect((await run([scored, scored])).result).toMatchObject({ kind: "held", reasons: expect.arrayContaining(["terra:atom:unmatched_result_statistic"]) });
   });
   it("holds confirmed source contradictions before generating or on either judge's report", async () => {
     const { hash: _hash, ...body } = atom(); void _hash;

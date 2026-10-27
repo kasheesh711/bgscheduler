@@ -118,7 +118,7 @@ describe("labels", () => {
   });
 
   it("names a writer by its arm and a model by its id", () => {
-    expect(ARM_LABEL).toEqual({ sol: "GPT-6.1 Sol", luna: "GPT-6 Luna", glm: "GLM Flash" });
+    expect(ARM_LABEL).toEqual({ terra: "GPT-6.1 Terra", sol: "GPT-6.1 Sol", luna: "GPT-6 Luna", glm: "GLM Flash" });
     expect(modelLabel("openai/gpt-6.1-sol")).toBe("GPT-6.1 Sol");
     expect(modelLabel("openai/gpt-6-luna")).toBe("GPT-6 Luna");
     expect(modelLabel("z-ai/glm-5.3-flash")).toBe("GLM Flash");

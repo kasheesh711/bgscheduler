@@ -73,6 +73,8 @@ const ParticipantSchema = z.object({
   inMeetingDuration: z.number().optional(),
   duration: z.number().optional(),
   absolutePercentAttendance: z.number().optional(),
+  firstEntryTime: z.string().nullish(),
+  lastExitTime: z.string().nullish(),
 }).passthrough();
 
 const SummarySchema = z.object({
@@ -321,6 +323,7 @@ export function studentParticipants(detail: AutowriterSessionDetail): Autowriter
       name: participant.name?.trim() ?? "",
       inMeetingSeconds: participant.inMeetingDuration ?? participant.duration ?? null,
       absolutePercentAttendance: participant.absolutePercentAttendance ?? null,
+      ...(participant.firstEntryTime && participant.lastExitTime ? { firstEntryTime: participant.firstEntryTime, lastExitTime: participant.lastExitTime } : {}),
     }));
   return guestStandsInForStudent(detail, students) ?? students;
 }
@@ -442,7 +445,17 @@ function accountAndGuest(students: readonly AutowriterStudent[]): boolean {
   return students.length === 2 && students.filter((student) => student.wiseUserId).length === 1;
 }
 
-export function studentAttendancePercent(student: AutowriterStudent, scheduledMinutes: number): number | null {
+export function studentAttendancePercent(student: AutowriterStudent, scheduledMinutes: number, window?: { start: Date; end: Date }): number | null {
+  const entered = Date.parse(student.firstEntryTime ?? "");
+  const exited = Date.parse(student.lastExitTime ?? "");
+  const attended = student.inMeetingSeconds;
+  if (window && scheduledMinutes > 0 && Number.isFinite(entered) && Number.isFinite(exited) && exited > entered &&
+    attended !== null && Number.isFinite(attended) && attended >= 0 && attended * 1000 <= exited - entered + 1000) {
+    // Wise's absolute percentage uses the room duration. Subtract every possible gap from the scheduled overlap.
+    const gaps = Math.max(0, exited - entered - attended * 1000);
+    const overlap = Math.max(0, Math.min(exited, window.end.getTime()) - Math.max(entered, window.start.getTime()) - gaps);
+    return Math.min(100, overlap / (scheduledMinutes * 600));
+  }
   if (student.absolutePercentAttendance !== null) return student.absolutePercentAttendance;
   if (student.inMeetingSeconds === null || scheduledMinutes <= 0) return null;
   return Math.round((student.inMeetingSeconds / (scheduledMinutes * 60)) * 100);
@@ -587,7 +600,7 @@ export function evaluateSessionGates(
   if (students.length !== 1) return { ok: false, reason: `student_count_${students.length}` };
   // The one student must be the Wise user the session bills (the POST checks their credit): a guest join is not.
   if (!students[0].wiseUserId) return { ok: false, reason: "student_not_wise_user" };
-  const attendance = studentAttendancePercent(students[0], window.minutes);
+  const attendance = studentAttendancePercent(students[0], window.minutes, window);
   if (attendance === null) return { ok: false, reason: "attendance_unknown" };
   // Wise may report a fractional percentage: the reason names the whole percent, rounded down (42.5 → attendance_42pct),
   // so `classifyGateReason` and the coverage table (`^attendance_\d+pct$`) see it; the threshold compares the raw value.

@@ -41,7 +41,7 @@ const UNUSABLE_REPLY = "a reply that could not be used";
 const MAX_DRAFT_PROBLEMS = 3;
 
 /** A pipeline hold (`pipeline.ts`): one part per writer arm and reason, "; "-joined — `sol:markdown:topics; luna:…`. */
-const ARM_PREFIX = /^(?:sol|luna|glm):/u;
+const ARM_PREFIX = /^(?:terra|sol|luna|glm):/u;
 
 /** What stopped a writer's draft, by the code after the arm (`validate.ts`, and a reply that failed for its content). */
 const DRAFT_PROBLEMS: ReadonlyArray<{ match: RegExp; label: string }> = [

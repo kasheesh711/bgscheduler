@@ -1,5 +1,4 @@
 import { isPreviewEnvironment } from "@/lib/preview-policy";
-import { rosterWriterArm } from "./roster";
 import type { ModelArm, OpenRouterProviderPreferences } from "./types";
 
 type AutowriterEnvironment = Record<string, string | undefined>;
@@ -111,19 +110,16 @@ const OPENAI_ZDR_ROUTE: OpenRouterProviderPreferences = {
  * Every route has zero data retention, so a summary or transcript never
  * reaches a retaining host, whichever model handles it.
  *
- * Writer: GPT-6.1 Sol, reasoning `low` (owner decision, 30 Sep). In a blind
- * comparison on 11 classes (same Soniox transcripts, v4 rules) 82% of Sol-low
- * drafts needed no real fix (0 critical, 0.9 real errors per 100 claims), vs
- * Luna 64% and GLM 30% (4.1 per 100). ≈ $0.04 per draft, ~6 s per call.
- * Fallback writer: GPT-6 Luna, reasoning `max`, on the same route.
+ * Writer: GPT-6.1 Terra, reasoning `low` (owner decision, 28 Oct).
+ * Fallback writer: GPT-6 Luna, reasoning `max`, on the same zero-retention route.
  * Judge: GLM 5.3 Flash pinned to Together. It has no effort of its own here: it runs at every effort in
  * `AUTOWRITER_JUDGE_EFFORTS` (v5). v4 (30 Sep) had moved it from `medium` to `high`: at `medium` it passed a draft
  * that gave another student's words to ours after ~100 reasoning tokens.
  */
 export const AUTOWRITER_MODELS = {
   writer: {
-    arm: "sol", model: "openai/gpt-6.1-sol", provider: OPENAI_ZDR_ROUTE, effort: "low",
-    expectModel: "openai/gpt-6.1-sol",
+    arm: "terra", model: "openai/gpt-6.1-terra", provider: OPENAI_ZDR_ROUTE, effort: "low",
+    expectModel: "openai/gpt-6.1-terra",
   },
   fallbackWriter: {
     arm: "luna", model: "openai/gpt-6-luna", provider: OPENAI_ZDR_ROUTE, effort: "max",
@@ -179,7 +175,8 @@ export const AUTOWRITER_RATE_LIMIT_RETRY_MAX_TOTAL_WAIT_MS = 45_000;
  * autowriter itself only uses `AUTOWRITER_MODELS`.
  */
 export const AUTOWRITER_WRITER_BY_ARM: Record<ModelArm, AutowriterModelConfig> = {
-  sol: AUTOWRITER_MODELS.writer,
+  terra: AUTOWRITER_MODELS.writer,
+  sol: { arm: "sol", model: "openai/gpt-6.1-sol", provider: OPENAI_ZDR_ROUTE, effort: "low", expectModel: "openai/gpt-6.1-sol" },
   luna: AUTOWRITER_MODELS.fallbackWriter,
   glm: {
     arm: "glm", model: "z-ai/glm-5.3-flash", provider: GLM_ZDR_ROUTE, effort: "max",
@@ -187,15 +184,10 @@ export const AUTOWRITER_WRITER_BY_ARM: Record<ModelArm, AutowriterModelConfig> =
   },
 };
 
-/**
- * The writers a tutor's class is drafted with, in order (owner decision, 2 Oct): Sol then the Luna fallback, or — for
- * the tutors whose roster entries say `writer: "luna"` (the 13 added that day) — Luna first and Sol as their fallback.
- * Keyed by the canonical tutor key, so both of a tutor's Wise accounts write the same way.
- */
-export function writersFor(canonicalTutorKey: string | null | undefined): AutowriterModelConfig[] {
-  return rosterWriterArm(canonicalTutorKey) === "luna"
-    ? [AUTOWRITER_MODELS.fallbackWriter, AUTOWRITER_MODELS.writer]
-    : [AUTOWRITER_MODELS.writer, AUTOWRITER_MODELS.fallbackWriter];
+/** Every tutor uses Terra first; keep the existing Luna fallback. */
+export function writersFor(_canonicalTutorKey: string | null | undefined): AutowriterModelConfig[] {
+  void _canonicalTutorKey;
+  return [AUTOWRITER_MODELS.writer, AUTOWRITER_MODELS.fallbackWriter];
 }
 
 /** A session with no summary yet is retried this often … */

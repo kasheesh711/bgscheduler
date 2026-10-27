@@ -31,7 +31,7 @@ function ok(content: string, provider: string | null, model: string | null): Ope
 function fail(error: string, httpStatus: number | null): OpenRouterCallResult {
   return { ok: false, error, httpStatus, model: null, provider: null, finishReason: null, usage: null, latencyMs: 10 };
 }
-const SOL = (content: string) => ok(content, "Azure", "openai/gpt-6.1-sol");
+const SOL = (content: string) => ok(content, "Azure", "openai/gpt-6.1-terra");
 const LUNA = (content: string) => ok(content, "Azure", "openai/gpt-6-luna");
 const GLM = (content: string) => ok(content, "Together", "z-ai/glm-5.3-flash");
 const PASSING = { faithful: true, unsupported: [], misattributed: [], missingHomework: [], homeworkNotSet: [] };
@@ -64,6 +64,7 @@ interface Script {
 }
 
 interface Options {
+  writers?: import("../config").AutowriterModelConfig[];
   deferQualityReview?: boolean;
   canonicalTutorKey?: string;
   styleGuide?: FeedbackStyleGuide | null;
@@ -103,6 +104,7 @@ function run(script: Script, options: Options = {}) {
   });
   const promise = runWritingPipeline({
     apiKey: "k",
+    writers: options.writers,
     deferQualityReview: options.deferQualityReview,
     styleGuide: options.styleGuide,
     session: {
@@ -142,16 +144,16 @@ describe("runWritingPipeline", () => {
   it("accepts a valid Sol draft that GLM finds faithful at both levels", async () => {
     const { promise, records, requests } = run({ writers: [SOL(writerJson)], judge: [GLM(FAITHFUL)] });
     const result = await promise;
-    expect(result).toMatchObject({ kind: "draft", arm: "sol", judge: { ...PASSING, levels: { medium: PASSING, high: PASSING } } });
-    expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm"]);
-    expect(requests.map((request) => request.model)).toEqual(["openai/gpt-6.1-sol", "z-ai/glm-5.3-flash", "z-ai/glm-5.3-flash"]);
+    expect(result).toMatchObject({ kind: "draft", arm: "terra", judge: { ...PASSING, levels: { medium: PASSING, high: PASSING } } });
+    expect(roles(records)).toEqual(["writer:terra", "judge:glm", "judge:glm"]);
+    expect(requests.map((request) => request.model)).toEqual(["openai/gpt-6.1-terra", "z-ai/glm-5.3-flash", "z-ai/glm-5.3-flash"]);
   });
 
   it("asks for Sol at reasoning low on a zero-data-retention route, from any ZDR host", async () => {
     const { promise, requests } = run({ writers: [SOL(writerJson)], judge: [GLM(FAITHFUL)] });
     await promise;
     expect(requests[0]).toMatchObject({
-      model: "openai/gpt-6.1-sol",
+      model: "openai/gpt-6.1-terra",
       effort: "low",
       schemaName: "post_class_feedback",
       provider: { zdr: true, data_collection: "deny" },
@@ -162,8 +164,8 @@ describe("runWritingPipeline", () => {
       expect(request).toMatchObject({ model: "z-ai/glm-5.3-flash", provider: { order: ["together"], zdr: true } });
     }
 
-    const otherHost = run({ writers: [ok(writerJson, "OpenAI", "openai/gpt-6.1-sol")], judge: [GLM(FAITHFUL)] });
-    expect(await otherHost.promise).toMatchObject({ kind: "draft", arm: "sol" });
+    const otherHost = run({ writers: [ok(writerJson, "OpenAI", "openai/gpt-6.1-terra")], judge: [GLM(FAITHFUL)] });
+    expect(await otherHost.promise).toMatchObject({ kind: "draft", arm: "terra" });
   });
 
   it("never sends student or tutor names to the judge", async () => {
@@ -193,7 +195,7 @@ describe("runWritingPipeline", () => {
   it("falls back to Luna when the Sol draft is unfaithful, and has GLM judge it", async () => {
     const { promise, records, requests } = run({ writers: [SOL(writerJson), LUNA(writerJson)], judge: [GLM(UNFAITHFUL), GLM(FAITHFUL)] });
     expect(await promise).toMatchObject({ kind: "draft", arm: "luna" });
-    expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm", "writer:luna", "judge:glm", "judge:glm"]);
+    expect(roles(records)).toEqual(["writer:terra", "judge:glm", "judge:glm", "writer:luna", "judge:glm", "judge:glm"]);
     expect(requests[3]).toMatchObject({ model: "openai/gpt-6-luna", effort: "max", provider: { zdr: true, data_collection: "deny" } });
   });
 
@@ -210,7 +212,7 @@ describe("runWritingPipeline", () => {
       const result = await promise;
       expect(result).toMatchObject({ kind: "draft", arm: "luna", repair: [{ field: "performance", text: "[STUDENT_1] also scored 95% on the end-of-lesson quiz." }] });
       if (result.kind === "draft") expect(result.fields.performance).toBe(GOOD_FIELDS.performance);
-      expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm", "writer:luna", "judge:glm", "judge:glm", "judge:glm", "judge:glm"]);
+      expect(roles(records)).toEqual(["writer:terra", "judge:glm", "judge:glm", "writer:luna", "judge:glm", "judge:glm", "judge:glm", "judge:glm"]);
       const repairJudging = judgeRequests(requests).slice(4).map((request) => request.messages.map((message) => message.content).join("\n"));
       for (const text of repairJudging) expect(text).not.toContain("95%");
       expect(records.slice(6).map((record) => record.result.judgedGeneration)).toEqual(["g:repair", "g:repair"]);
@@ -221,7 +223,7 @@ describe("runWritingPipeline", () => {
       const result = await promise;
       expect(result).toMatchObject({ kind: "draft", arm: "luna" });
       expect(result).not.toHaveProperty("repair");
-      expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm", "writer:luna", "judge:glm", "judge:glm"]);
+      expect(roles(records)).toEqual(["writer:terra", "judge:glm", "judge:glm", "writer:luna", "judge:glm", "judge:glm"]);
     });
 
     it("retries, not holds, when OpenRouter refuses the repaired draft's judging for lack of credit", async () => {
@@ -246,13 +248,13 @@ describe("runWritingPipeline", () => {
       const result = await promise;
       expect(result).toMatchObject({ kind: "held" });
       if (result.kind === "held") expect(result.reasons.at(-1)).toBe("luna:repair:no_time");
-      expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm", "writer:luna", "judge:glm", "judge:glm"]);
+      expect(roles(records)).toEqual(["writer:terra", "judge:glm", "judge:glm", "writer:luna", "judge:glm", "judge:glm"]);
     });
 
     it("does not repair when the quote is not in the draft", async () => {
       const { promise, records } = run({ writers: [SOL(writerJson), LUNA(writerJson)], judge: [GLM(UNFAITHFUL), GLM(FAITHFUL)] });
       expect(await promise).toMatchObject({ kind: "draft", arm: "luna" });
-      expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm", "writer:luna", "judge:glm", "judge:glm"]);
+      expect(roles(records)).toEqual(["writer:terra", "judge:glm", "judge:glm", "writer:luna", "judge:glm", "judge:glm"]);
     });
   });
 
@@ -265,18 +267,18 @@ describe("runWritingPipeline", () => {
 
   it("treats an OpenRouter outage or missing credit as infra, not a hold", async () => {
     expect(await run({ writers: [fail("Insufficient credits", 402)] }).promise)
-      .toEqual({ kind: "infra", error: "sol:Insufficient credits", modelFailure: false, stage: "writer", creditExhausted: true });
+      .toEqual({ kind: "infra", error: "terra:Insufficient credits", modelFailure: false, stage: "writer", creditExhausted: true });
     // 11 Oct 2026: the key's monthly limit came as HTTP 403, read as a refusal of the draft, and both writers held the
     // class. It is our account, like a 402: one run ends as infra, without trying the fallback writer on it.
     const keyLimit = "Key limit exceeded (monthly limit). Manage it using https://openrouter.ai/workspaces/default/keys/x $20.01 of $20.00 used";
     const { promise, records } = run({ writers: [fail(keyLimit, 403), LUNA(writerJson)] });
-    expect(await promise).toEqual({ kind: "infra", error: `sol:${keyLimit}`, modelFailure: false, stage: "writer", creditExhausted: true });
+    expect(await promise).toEqual({ kind: "infra", error: `terra:${keyLimit}`, modelFailure: false, stage: "writer", creditExhausted: true });
     expect(records.filter((record) => record.role === "writer")).toHaveLength(1);
     expect(await run({ writers: [SOL(writerJson)], judge: [fail(keyLimit, 403)] }).promise)
       .toMatchObject({ kind: "infra", stage: "judge", modelFailure: false, creditExhausted: true });
     // Both writers time out (a time-out passes to the next writer, below): the run ends as the first one.
     expect(await run({ writers: [fail("timeout", null), fail("timeout", null)] }).promise)
-      .toEqual({ kind: "infra", error: "sol:timeout; luna:timeout", modelFailure: true, stage: "writer" });
+      .toEqual({ kind: "infra", error: "terra:timeout; luna:timeout", modelFailure: true, stage: "writer" });
   });
 
   it("tells whose call failed, and the models' failures from our account's, our connection's and our function's time", async () => {
@@ -287,28 +289,28 @@ describe("runWritingPipeline", () => {
     };
     const written = [SOL(writerJson)];
     // The writer: a time-out, a reply that is not JSON, a provider error, the wrong model.
-    expect(await infra({ writers: [fail("timeout", null), fail("timeout", null)] })).toEqual(["sol:timeout; luna:timeout", true, "writer"]);
-    expect(await infra({ writers: [fail("invalid_json_response", 502)] })).toEqual(["sol:invalid_json_response", true, "writer"]);
-    expect(await infra({ writers: [fail("Provider returned error", 500)] })).toEqual(["sol:Provider returned error", true, "writer"]);
-    expect(await infra({ writers: [ok(writerJson, "Azure", "openai/gpt-6-luna")] })).toEqual(["sol:model_mismatch:openai/gpt-6-luna", true, "writer"]);
+    expect(await infra({ writers: [fail("timeout", null), fail("timeout", null)] })).toEqual(["terra:timeout; luna:timeout", true, "writer"]);
+    expect(await infra({ writers: [fail("invalid_json_response", 502)] })).toEqual(["terra:invalid_json_response", true, "writer"]);
+    expect(await infra({ writers: [fail("Provider returned error", 500)] })).toEqual(["terra:Provider returned error", true, "writer"]);
+    expect(await infra({ writers: [ok(writerJson, "Azure", "openai/gpt-6-luna")] })).toEqual(["terra:model_mismatch:openai/gpt-6-luna", true, "writer"]);
     // The judge, at either level: a time-out, or no verdict in two tries. The writer had delivered.
     expect(await infra({ writers: written, medium: [GLM(FAITHFUL)], high: [fail("timeout", null)] })).toEqual(["judge:high:timeout", true, "judge"]);
     expect(await infra({ writers: written, medium: [fail("timeout", null)], high: [GLM(FAITHFUL)] })).toEqual(["judge:medium:timeout", true, "judge"]);
     expect(await infra({ writers: written, medium: [GLM("not json"), GLM("{}")], high: [GLM(FAITHFUL)] }))
       .toEqual(["judge:medium:judge_unparseable", true, "judge"]);
     // Ours: a bad key, no credit, rate limited, the connection, and a time-out on a call our remaining time cut short.
-    expect(await infra({ writers: [fail("User not found", 401)] })).toEqual(["sol:User not found", false, "writer"]);
+    expect(await infra({ writers: [fail("User not found", 401)] })).toEqual(["terra:User not found", false, "writer"]);
     expect(await infra({ writers: written, judge: [fail("Insufficient credits", 402)] })).toEqual(["judge:medium:Insufficient credits", false, "judge"]);
     // (A rate limit is first tried again in the same run, three times: see the retries below.)
-    expect(await infra({ writers: Array(4).fill(fail("Rate limit exceeded", 429)) })).toEqual(["sol:Rate limit exceeded", false, "writer"]);
-    expect(await infra({ writers: [fail("network_TypeError", null)] })).toEqual(["sol:network_TypeError", false, "writer"]);
-    expect(await infra({ writers: [fail("timeout", null)] }, 150_000)).toEqual(["sol:timeout", false, "writer"]);
+    expect(await infra({ writers: Array(4).fill(fail("Rate limit exceeded", 429)) })).toEqual(["terra:Rate limit exceeded", false, "writer"]);
+    expect(await infra({ writers: [fail("network_TypeError", null)] })).toEqual(["terra:network_TypeError", false, "writer"]);
+    expect(await infra({ writers: [fail("timeout", null)] }, 150_000)).toEqual(["terra:timeout", false, "writer"]);
     expect(await infra({ writers: [] }, 60_000)).toEqual(["function_budget_exhausted", false, "writer"]);
   });
 
   it("never takes an upstream rate limit for the writer's failure, though OpenRouter reports it inside a 200 response", async () => {
     // 30 Sep replay: Sol's route was rate-limited upstream; the error came as HTTP 200 with code 429 in the body.
-    const message = "openai/gpt-6.1-sol is temporarily rate-limited upstream. Please retry shortly.";
+    const message = "openai/gpt-6.1-terra is temporarily rate-limited upstream. Please retry shortly.";
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ error: { message, code: 429 } }), { status: 200 }));
     const result = await runWritingPipeline({
       apiKey: "k",
@@ -324,18 +326,18 @@ describe("runWritingPipeline", () => {
       sleep: async () => {},
     });
     // Retried later, never counted toward `writer_failed` and never sent on to the fallback writer.
-    expect(result).toEqual({ kind: "infra", error: `sol:${message}`, modelFailure: false, stage: "writer", rateLimited: true });
+    expect(result).toEqual({ kind: "infra", error: `terra:${message}`, modelFailure: false, stage: "writer", rateLimited: true });
     // The first request and its three retries in this run, all to the writer's own model.
     expect(fetchImpl).toHaveBeenCalledTimes(4);
     const models = (fetchImpl.mock.calls as unknown as Array<[string, RequestInit]>).map(([, init]) => JSON.parse(init.body as string).model);
-    expect(models).toEqual(Array(4).fill("openai/gpt-6.1-sol"));
+    expect(models).toEqual(Array(4).fill("openai/gpt-6.1-terra"));
   });
 
   it("never takes a rate limit for the writer's failure in any form OpenRouter reports it: the code as text, or carried on the choice", async () => {
-    const message = "openai/gpt-6.1-sol is temporarily rate-limited upstream. Please retry shortly.";
+    const message = "openai/gpt-6.1-terra is temporarily rate-limited upstream. Please retry shortly.";
     const forms: Array<[string, unknown]> = [
       ["code as text", { error: { message, code: "429" } }],
-      ["on the choice", { model: "openai/gpt-6.1-sol", provider: "Azure", choices: [{ finish_reason: "error", message: { content: "" }, error: { message, code: 429 } }] }],
+      ["on the choice", { model: "openai/gpt-6.1-terra", provider: "Azure", choices: [{ finish_reason: "error", message: { content: "" }, error: { message, code: 429 } }] }],
       ["on the choice, code as text", { choices: [{ finish_reason: "error", message: { content: "" }, error: { message, code: "429" } }] }],
     ];
     for (const [label, body] of forms) {
@@ -355,7 +357,7 @@ describe("runWritingPipeline", () => {
       });
       // Not the writer's failure (`modelFailure: false`), tried again in the run, and never sent on to the fallback
       // writer — a generation error carried on the choice would otherwise count as the model's (`finish_reason_error`).
-      expect(result, label).toEqual({ kind: "infra", error: `sol:${message}`, modelFailure: false, stage: "writer", rateLimited: true });
+      expect(result, label).toEqual({ kind: "infra", error: `terra:${message}`, modelFailure: false, stage: "writer", rateLimited: true });
       expect(fetchImpl, label).toHaveBeenCalledTimes(4);
     }
     // Any other error on the choice is still the model's own generation error: not retried here, counted as before.
@@ -374,7 +376,7 @@ describe("runWritingPipeline", () => {
       remainingMs: () => 700_000,
       callModel: (request) => callOpenRouter({ ...request, fetchImpl: other as unknown as typeof fetch }),
       sleep: async () => {},
-    })).toEqual({ kind: "infra", error: "sol:finish_reason_error", modelFailure: true, stage: "writer" });
+    })).toEqual({ kind: "infra", error: "terra:finish_reason_error", modelFailure: true, stage: "writer" });
     expect(other).toHaveBeenCalledTimes(1);
   });
 
@@ -394,27 +396,27 @@ describe("runWritingPipeline", () => {
       sleep: async () => {},
     });
     // A reply that is not JSON counts as the writer's own failure on any other status; on a 429 it is the rate limit.
-    expect(result).toEqual({ kind: "infra", error: "sol:invalid_json_response", modelFailure: false, stage: "writer", rateLimited: true });
+    expect(result).toEqual({ kind: "infra", error: "terra:invalid_json_response", modelFailure: false, stage: "writer", rateLimited: true });
     expect(fetchImpl).toHaveBeenCalledTimes(4);
   });
 
   it("never sends the summary to the fallback host after a provider-side generation error", async () => {
     const errored: OpenRouterCallResult = { ...fail("finish_reason_error", 200), finishReason: "error" };
     const { promise, requests } = run({ writers: [errored] });
-    expect(await promise).toEqual({ kind: "infra", error: "sol:finish_reason_error", modelFailure: true, stage: "writer" });
+    expect(await promise).toEqual({ kind: "infra", error: "terra:finish_reason_error", modelFailure: true, stage: "writer" });
     expect(requests).toHaveLength(1);
   });
 
   it("treats a moderation refusal as the text's problem and tries the fallback writer", async () => {
     const { promise, records } = run({ writers: [fail("Input flagged by moderation", 403), LUNA(writerJson)], judge: [GLM(FAITHFUL)] });
     expect(await promise).toMatchObject({ kind: "draft", arm: "luna" });
-    expect(roles(records)).toEqual(["writer:sol", "writer:luna", "judge:glm", "judge:glm"]);
+    expect(roles(records)).toEqual(["writer:terra", "writer:luna", "judge:glm", "judge:glm"]);
   });
 
   it("gives a judge level a second try, then retries later instead of falling back", async () => {
     // Only the level whose reply was unusable is asked again.
     const once = run({ writers: [SOL(writerJson)], medium: [GLM("not json"), GLM(FAITHFUL)], high: [GLM(FAITHFUL)] });
-    expect(await once.promise).toMatchObject({ kind: "draft", arm: "sol" });
+    expect(await once.promise).toMatchObject({ kind: "draft", arm: "terra" });
     expect(judgeRequests(once.requests).map((request) => request.effort).toSorted()).toEqual(["high", "medium", "medium"]);
 
     const twice = run({ writers: [SOL(writerJson)], medium: [GLM(FAITHFUL)], high: [GLM("not json"), GLM("{}")] });
@@ -428,7 +430,7 @@ describe("runWritingPipeline", () => {
     );
     expect(await promise).toMatchObject({ kind: "draft", arm: "luna" });
     expect(requests.map((request) => request.model)).toEqual([
-      "openai/gpt-6.1-sol", "z-ai/glm-5.3-flash", "z-ai/glm-5.3-flash", "openai/gpt-6-luna", "z-ai/glm-5.3-flash", "z-ai/glm-5.3-flash",
+      "openai/gpt-6.1-terra", "z-ai/glm-5.3-flash", "z-ai/glm-5.3-flash", "openai/gpt-6-luna", "z-ai/glm-5.3-flash", "z-ai/glm-5.3-flash",
     ]);
     for (const request of requests) expect(request.provider).toMatchObject({ zdr: true, data_collection: "deny" });
     expect(records.every((record) => record.result.evidence === "transcript")).toBe(true);
@@ -441,7 +443,7 @@ describe("runWritingPipeline", () => {
     const { promise } = run({ writers: [SOL(writerJson), LUNA("not json")], judge: [GLM(UNFAITHFUL)] }, { evidence: "transcript" });
     const result = await promise;
     expect(result.kind).toBe("held");
-    if (result.kind === "held") expect(result.reasons).toEqual([expect.stringMatching(/^sol:unfaithful:/u), expect.stringMatching(/^luna:/u)]);
+    if (result.kind === "held") expect(result.reasons).toEqual([expect.stringMatching(/^terra:unfaithful:/u), expect.stringMatching(/^luna:/u)]);
   });
 
   it("writes at low effort (Sol) and judges at medium and at high (v5)", async () => {
@@ -486,7 +488,7 @@ describe("runWritingPipeline", () => {
     expect(result).toEqual({
       kind: "held",
       reasons: [
-        "sol:unfaithful:wrong person: [STUDENT_1] said 8 of the 10 pages have been covered",
+        "terra:unfaithful:wrong person: [STUDENT_1] said 8 of the 10 pages have been covered",
         "luna:unfaithful:wrong person: [STUDENT_1] said 8 of the 10 pages have been covered",
       ],
     });
@@ -501,8 +503,8 @@ describe("runWritingPipeline", () => {
       evidence: "summary",
     };
     expect(records.filter((record) => record.role === "judge").map((record) => record.result)).toEqual([
-      { ...recorded, effort: "medium", judgedArm: "sol" },
-      { ...recorded, effort: "high", judgedArm: "sol" },
+      { ...recorded, effort: "medium", judgedArm: "terra" },
+      { ...recorded, effort: "high", judgedArm: "terra" },
       { ...recorded, effort: "medium", judgedArm: "luna" },
       { ...recorded, effort: "high", judgedArm: "luna" },
     ]);
@@ -523,7 +525,7 @@ describe("runWritingPipeline", () => {
     expect(await promise).toEqual({
       kind: "held",
       reasons: [
-        "sol:unfaithful:wrong person: [STUDENT_1] mentioned only 8 pages | scored 95% on the test | read chapter four aloud",
+        "terra:unfaithful:wrong person: [STUDENT_1] mentioned only 8 pages | scored 95% on the test | read chapter four aloud",
         "luna:unfaithful:wrong person: [STUDENT_1] mentioned only 8 pages | homework not set: finish the three remaining problems | " +
           "scored 95% on the test",
       ],
@@ -538,7 +540,7 @@ describe("runWritingPipeline", () => {
 
   it("treats a writer response from another model as infra — never the fallback", async () => {
     const { promise, requests } = run({ writers: [ok(writerJson, "Azure", "openai/gpt-6-luna")] });
-    expect(await promise).toEqual({ kind: "infra", error: "sol:model_mismatch:openai/gpt-6-luna", modelFailure: true, stage: "writer" });
+    expect(await promise).toEqual({ kind: "infra", error: "terra:model_mismatch:openai/gpt-6-luna", modelFailure: true, stage: "writer" });
     expect(requests).toHaveLength(1);
   });
 
@@ -548,29 +550,16 @@ describe("runWritingPipeline", () => {
   });
 });
 
-describe("per-tutor writer order (owner decision, 2 Oct: Luna first for the 13 tutors added that day)", () => {
-  it("writes an added tutor's class with Luna at reasoning max first, judged by GLM", async () => {
-    const { promise, records, requests } = run({ writers: [LUNA(writerJson)], judge: [GLM(FAITHFUL)] }, { canonicalTutorKey: "Celeste" });
+describe("per-tutor writer order", () => {
+  it("uses Terra first for a tutor formerly assigned to Luna", async () => {
+    const { promise, requests } = run({ writers: [SOL(writerJson)], judge: [GLM(FAITHFUL)] }, { canonicalTutorKey: "Celeste" });
+    expect(await promise).toMatchObject({ kind: "draft", arm: "terra" });
+    expect(requests[0]).toMatchObject({ model: "openai/gpt-6.1-terra", effort: "low" });
+  });
+  it("retains Luna as fallback for a tutor formerly assigned to Luna", async () => {
+    const { promise, requests } = run({ writers: [SOL(writerJson), LUNA(writerJson)], judge: [GLM(UNFAITHFUL), GLM(FAITHFUL)] }, { canonicalTutorKey: "Celeste" });
     expect(await promise).toMatchObject({ kind: "draft", arm: "luna" });
-    expect(roles(records)).toEqual(["writer:luna", "judge:glm", "judge:glm"]);
-    expect(requests[0]).toMatchObject({ model: "openai/gpt-6-luna", effort: "max", provider: { zdr: true, data_collection: "deny" } });
-  });
-
-  it("falls back to Sol when the Luna draft is unfaithful", async () => {
-    const { promise, records, requests } = run(
-      { writers: [LUNA(writerJson), SOL(writerJson)], judge: [GLM(UNFAITHFUL), GLM(FAITHFUL)] }, { canonicalTutorKey: "Mint" },
-    );
-    expect(await promise).toMatchObject({ kind: "draft", arm: "sol" });
-    expect(roles(records)).toEqual(["writer:luna", "judge:glm", "judge:glm", "writer:sol", "judge:glm", "judge:glm"]);
-    expect(requests[3]).toMatchObject({ model: "openai/gpt-6.1-sol", effort: "low" });
-  });
-
-  it("keeps Sol first for the first five tutors and for a session without a tutor key", async () => {
-    for (const canonicalTutorKey of ["Kevin", undefined]) {
-      const { promise, requests } = run({ writers: [SOL(writerJson)], judge: [GLM(FAITHFUL)] }, { canonicalTutorKey });
-      expect(await promise).toMatchObject({ kind: "draft", arm: "sol" });
-      expect(requests[0]).toMatchObject({ model: "openai/gpt-6.1-sol", effort: "low" });
-    }
+    expect(writerRequests(requests).map(r => r.model)).toEqual(["openai/gpt-6.1-terra", "openai/gpt-6-luna"]);
   });
 });
 
@@ -628,7 +617,7 @@ describe("judge v7: medium and high must both pass", () => {
     expect(await held.promise).toEqual({
       kind: "held",
       reasons: [
-        "sol:unfaithful:wrong person: [STUDENT_1] said 8 of the 10 pages have been covered",
+        "terra:unfaithful:wrong person: [STUDENT_1] said 8 of the 10 pages have been covered",
         "luna:unfaithful:scored 95%",
       ],
     });
@@ -641,7 +630,7 @@ describe("judge v7: medium and high must both pass", () => {
     expect(await promise).toEqual({
       kind: "held",
       reasons: [
-        "sol:unfaithful:wrong person: [STUDENT_1] said 8 pages | homework not set: three problems by Friday | scored 95%",
+        "terra:unfaithful:wrong person: [STUDENT_1] said 8 pages | homework not set: three problems by Friday | scored 95%",
         "luna:output_not_json",
       ],
     });
@@ -663,7 +652,7 @@ describe("judge v7: medium and high must both pass", () => {
     expect(JUDGE_PROMPT_VERSION).toBe(7);
     for (const record of judged) {
       expect(record).toMatchObject({ arm: "glm", requestedModel: "z-ai/glm-5.3-flash", promptVersion: JUDGE_PROMPT_VERSION });
-      expect(record.result).toMatchObject({ judgedArm: "sol", judgedGeneration: "g", evidence: "summary" });
+      expect(record.result).toMatchObject({ judgedArm: "terra", judgedGeneration: "g", evidence: "summary" });
     }
   });
 
@@ -768,7 +757,7 @@ describe("time budget (owner decision, 30 Sep: a longer judge time-out on transc
 
 describe("a rate-limited call is tried again in the same run (owner decision, 30 Sep)", () => {
   // As OpenRouter words the writer route's upstream limit (HTTP 200, code 429 in the body → `httpStatus` 429).
-  const LIMITED = "openai/gpt-6.1-sol is temporarily rate-limited upstream. Please retry shortly.";
+  const LIMITED = "openai/gpt-6.1-terra is temporarily rate-limited upstream. Please retry shortly.";
   const limited = (retryAfterMs?: number): OpenRouterCallResult => ({ ...fail(LIMITED, 429), ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
   const timeouts = (requests: Request[]) => requests.map((request) => request.timeoutMs);
   const written = (records: CallRecord[], role: "writer" | "judge" = "writer") => records.filter((record) => record.role === role)
@@ -779,13 +768,13 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
   it("writes and judges the draft in the same run when the writer is rate limited once or twice", async () => {
     for (const times of [1, 2]) {
       const { promise, records, requests, waits } = run({ writers: [...Array(times).fill(limited()), SOL(writerJson)], judge: [GLM(FAITHFUL)] });
-      expect(await promise, `${times}`).toMatchObject({ kind: "draft", arm: "sol", judge: { ...PASSING, levels: { medium: PASSING, high: PASSING } } });
+      expect(await promise, `${times}`).toMatchObject({ kind: "draft", arm: "terra", judge: { ...PASSING, levels: { medium: PASSING, high: PASSING } } });
       // The same request again, to the same model and with the same time-out — then the judges, as for any draft.
       const writes = writerRequests(requests);
       expect(writes, `${times}`).toHaveLength(times + 1);
       for (const request of writes) expect(request).toEqual(writes[0]);
       expect(requests.map((request) => request.model), `${times}`).toEqual([
-        ...Array(times + 1).fill("openai/gpt-6.1-sol"), "z-ai/glm-5.3-flash", "z-ai/glm-5.3-flash",
+        ...Array(times + 1).fill("openai/gpt-6.1-terra"), "z-ai/glm-5.3-flash", "z-ai/glm-5.3-flash",
       ]);
       expect(waits, `${times}`).toEqual([4_000, 10_000].slice(0, times));
       // One call record per attempt: a rate-limited one cost nothing, and every retry says which retry it was.
@@ -803,8 +792,8 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
     for (const evidence of ["summary", "transcript"] as const) {
       const { promise, records, requests, waits } = run({ writers: Array(4).fill(limited()) }, { evidence });
       // `modelFailure: false`: transcript first never counts it toward `writer_failed`.
-      expect(await promise, evidence).toEqual({ kind: "infra", error: `sol:${LIMITED}`, modelFailure: false, stage: "writer", rateLimited: true });
-      expect(requests.map((request) => request.model), evidence).toEqual(Array(4).fill("openai/gpt-6.1-sol"));
+      expect(await promise, evidence).toEqual({ kind: "infra", error: `terra:${LIMITED}`, modelFailure: false, stage: "writer", rateLimited: true });
+      expect(requests.map((request) => request.model), evidence).toEqual(Array(4).fill("openai/gpt-6.1-terra"));
       expect(waits, evidence).toEqual([4_000, 10_000, 25_000]);
       // No wait follows the last attempt.
       expect(written(records), evidence).toEqual([
@@ -864,7 +853,7 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
   it("does not try again when OpenRouter asks for a wait that does not fit: the rate limit stands, as without retries", async () => {
     // Over 30 s: a retry after 30 s would come before the time it named.
     const { promise, waits, requests, records } = run({ writers: [limited(120_000)] });
-    expect(await promise).toEqual({ kind: "infra", error: `sol:${LIMITED}`, modelFailure: false, stage: "writer", rateLimited: true });
+    expect(await promise).toEqual({ kind: "infra", error: `terra:${LIMITED}`, modelFailure: false, stage: "writer", rateLimited: true });
     expect(waits).toEqual([]);
     expect(requests).toHaveLength(1);
     expect(written(records)).toEqual([[false, 0, { error: LIMITED, evidence: "summary", retryAfterMs: 120_000, ...sent() }]]);
@@ -877,7 +866,7 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
 
   it("never waits past the run's time: without room for the wait and the call's time-out, the rate limit stands at once", async () => {
     const margin = AUTOWRITER_CALL_DEADLINE_MARGIN_MS;
-    const stands = { kind: "infra", error: `sol:${LIMITED}`, modelFailure: false, stage: "writer", rateLimited: true };
+    const stands = { kind: "infra", error: `terra:${LIMITED}`, modelFailure: false, stage: "writer", rateLimited: true };
     // The writer's 180 s fit; the 4 s wait on top of them does not, by one millisecond.
     const noRoom = run({ writers: [limited()] }, { remainingMs: 4_000 + AUTOWRITER_WRITER_TIMEOUT_MS + margin - 1 });
     expect(await noRoom.promise).toEqual(stands);
@@ -924,7 +913,7 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
   it("tries a rate-limited judge level again: both levels are still required, and their verdicts combined as before", async () => {
     const passed = run({ writers: [SOL(writerJson)], medium: [limited(), GLM(FAITHFUL)], high: [GLM(FAITHFUL)] });
     expect(await passed.promise).toEqual({
-      kind: "draft", arm: "sol", output: expect.anything(), fields: expect.anything(),
+      kind: "draft", arm: "terra", output: expect.anything(), fields: expect.anything(),
       judge: { ...PASSING, levels: { medium: PASSING, high: PASSING } },
     });
     // Only the level that was rate limited is asked again, on the same messages.
@@ -932,9 +921,9 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
     expect([medium.effort, high.effort, again.effort]).toEqual(["medium", "high", "medium"]);
     expect(again).toBe(medium);
     expect(passed.waits).toEqual([4_000]);
-    const judgeResult = { ...PASSING, problems: [], judgedArm: "sol", judgedGeneration: "g", evidence: "summary" };
+    const judgeResult = { ...PASSING, problems: [], judgedArm: "terra", judgedGeneration: "g", evidence: "summary" };
     expect(written(passed.records, "judge")).toEqual(expect.arrayContaining([
-      [false, 0, { effort: "medium", error: LIMITED, judgedArm: "sol", judgedGeneration: "g", evidence: "summary", ...sent(4_000) }],
+      [false, 0, { effort: "medium", error: LIMITED, judgedArm: "terra", judgedGeneration: "g", evidence: "summary", ...sent(4_000) }],
       [true, usage.costUsd, { ...judgeResult, effort: "medium", rateLimitRetry: 1 }],
       [true, usage.costUsd, { ...judgeResult, effort: "high" }],
     ]));
@@ -966,7 +955,7 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
       judge: [GLM(UNFAITHFUL), GLM(FAITHFUL)],
     });
     expect(await promise).toMatchObject({ kind: "draft", arm: "luna" });
-    expect(writerRequests(requests).map((request) => request.model)).toEqual(["openai/gpt-6.1-sol", "openai/gpt-6-luna", "openai/gpt-6-luna"]);
+    expect(writerRequests(requests).map((request) => request.model)).toEqual(["openai/gpt-6.1-terra", "openai/gpt-6-luna", "openai/gpt-6-luna"]);
     expect(waits).toEqual([4_000]);
   });
 
@@ -978,19 +967,19 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
     };
     // A time-out is never retried as a rate limit: it goes to the next writer (Luna, timing out too here).
     const timedOut = run({ writers: [fail("timeout", null), fail("timeout", null)] });
-    expect(await timedOut.promise).toMatchObject({ kind: "infra", error: "sol:timeout; luna:timeout" });
+    expect(await timedOut.promise).toMatchObject({ kind: "infra", error: "terra:timeout; luna:timeout" });
     expect([timedOut.requests.length, timedOut.waits.length]).toEqual([2, 0]);
-    expect(await once(fail("Provider returned error", 500))).toEqual(["sol:Provider returned error", 1, 0]);
-    expect(await once(fail("HTTP 503", 503))).toEqual(["sol:HTTP 503", 1, 0]);
-    expect(await once(fail("invalid_json_response", 502))).toEqual(["sol:invalid_json_response", 1, 0]);
-    expect(await once(fail("Insufficient credits", 402))).toEqual(["sol:Insufficient credits", 1, 0]);
-    expect(await once(fail("network_TypeError", null))).toEqual(["sol:network_TypeError", 1, 0]);
-    expect(await once(ok(writerJson, "Azure", "openai/gpt-6-luna"))).toEqual(["sol:model_mismatch:openai/gpt-6-luna", 1, 0]);
+    expect(await once(fail("Provider returned error", 500))).toEqual(["terra:Provider returned error", 1, 0]);
+    expect(await once(fail("HTTP 503", 503))).toEqual(["terra:HTTP 503", 1, 0]);
+    expect(await once(fail("invalid_json_response", 502))).toEqual(["terra:invalid_json_response", 1, 0]);
+    expect(await once(fail("Insufficient credits", 402))).toEqual(["terra:Insufficient credits", 1, 0]);
+    expect(await once(fail("network_TypeError", null))).toEqual(["terra:network_TypeError", 1, 0]);
+    expect(await once(ok(writerJson, "Azure", "openai/gpt-6-luna"))).toEqual(["terra:model_mismatch:openai/gpt-6-luna", 1, 0]);
 
     // A retry that ends another way is that outcome: here a real time-out of the model, counted as the writer's
     // (Luna, given its turn after it, times out too).
     const thenTimeout = run({ writers: [limited(), fail("timeout", null), fail("timeout", null)] });
-    expect(await thenTimeout.promise).toEqual({ kind: "infra", error: "sol:timeout; luna:timeout", modelFailure: true, stage: "writer" });
+    expect(await thenTimeout.promise).toEqual({ kind: "infra", error: "terra:timeout; luna:timeout", modelFailure: true, stage: "writer" });
     expect(thenTimeout.waits).toEqual([4_000]);
     expect(written(thenTimeout.records)).toEqual([
       [false, 0, { error: LIMITED, evidence: "summary", ...sent(4_000) }], [false, 0, { error: "timeout", evidence: "summary", rateLimitRetry: 1 }],
@@ -1010,7 +999,7 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
       const limitedReply = replies.shift();
       if (limitedReply) return limitedReply();
       const body = JSON.parse(init.body as string) as { model: string };
-      return body.model === "openai/gpt-6.1-sol" ? answer(body.model, "Azure", writerJson) : answer(body.model, "Together", FAITHFUL);
+      return body.model === "openai/gpt-6.1-terra" ? answer(body.model, "Azure", writerJson) : answer(body.model, "Together", FAITHFUL);
     });
     const waits: number[] = [];
     const records: CallRecord[] = [];
@@ -1028,7 +1017,7 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
       sleep: async (ms) => { waits.push(ms); },
       random: () => 0.5,
     });
-    expect(result).toMatchObject({ kind: "draft", arm: "sol" });
+    expect(result).toMatchObject({ kind: "draft", arm: "terra" });
     // Writer: rate limited twice, then answered; then the two judge levels.
     expect(fetchImpl).toHaveBeenCalledTimes(5);
     expect(waits).toEqual([4_000, 10_000]);
@@ -1038,14 +1027,14 @@ describe("a rate-limited call is tried again in the same run (owner decision, 30
 });
 
 describe("hardening follow-ups (30 Sep reviews of #113 and #114)", () => {
-  const LIMITED = "openai/gpt-6.1-sol is temporarily rate-limited upstream. Please retry shortly.";
+  const LIMITED = "openai/gpt-6.1-terra is temporarily rate-limited upstream. Please retry shortly.";
   const limited = (retryAfterMs?: number): OpenRouterCallResult => ({ ...fail(LIMITED, 429), ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
   afterEach(() => { vi.useRealTimers(); });
 
   it("makes no in-run retries at a stage the sweep has switched them off for: a rate limit stands at once, as before them", async () => {
     const NONE = { writer: false, judge: false };
     const writer = run({ writers: [limited()] }, { rateLimitRetries: NONE });
-    expect(await writer.promise).toEqual({ kind: "infra", error: `sol:${LIMITED}`, modelFailure: false, stage: "writer", rateLimited: true });
+    expect(await writer.promise).toEqual({ kind: "infra", error: `terra:${LIMITED}`, modelFailure: false, stage: "writer", rateLimited: true });
     expect(writer.requests).toHaveLength(1);
     expect(writer.waits).toEqual([]);
     expect(writer.records.map((record) => record.result)).toEqual([{ error: LIMITED, evidence: "summary", attemptAt: expect.any(String) }]);
@@ -1055,7 +1044,7 @@ describe("hardening follow-ups (30 Sep reviews of #113 and #114)", () => {
     expect(judge.waits).toEqual([]);
     expect(judgeRequests(judge.requests)).toHaveLength(2);
     // Everything else is as with retries on: a call that answers is a draft.
-    expect(await run({ writers: [SOL(writerJson)], judge: [GLM(FAITHFUL)] }, { rateLimitRetries: NONE }).promise).toMatchObject({ kind: "draft", arm: "sol" });
+    expect(await run({ writers: [SOL(writerJson)], judge: [GLM(FAITHFUL)] }, { rateLimitRetries: NONE }).promise).toMatchObject({ kind: "draft", arm: "terra" });
   });
 
   it("switches the retries off one stage at a time: the writers' route and the judge's are limited apart", async () => {
@@ -1070,7 +1059,7 @@ describe("hardening follow-ups (30 Sep reviews of #113 and #114)", () => {
     expect(fallback.waits).toEqual([]);
     // … while a rate-limited judge level is still tried again, and the draft passes in the same run.
     const judged = run({ writers: [SOL(writerJson)], medium: [limited(), GLM(FAITHFUL)], high: [GLM(FAITHFUL)] }, { rateLimitRetries: writerOff });
-    expect(await judged.promise).toMatchObject({ kind: "draft", arm: "sol" });
+    expect(await judged.promise).toMatchObject({ kind: "draft", arm: "terra" });
     expect(judged.waits).toEqual([4_000]);
 
     // Off for the judge: a rate-limited writer is still tried again, and the judge level that is rate limited is not.
@@ -1108,7 +1097,7 @@ describe("hardening follow-ups (30 Sep reviews of #113 and #114)", () => {
 
     // No verdict on any draft in the run: nothing is said. The first writer failed; or a level failed on the first
     // draft — also when the other level had passed it (the draft was not checked: both levels are required).
-    expect(await answered({ writers: [fail("timeout", null), fail("timeout", null)] })).toEqual(["sol:timeout; luna:timeout", "writer", false]);
+    expect(await answered({ writers: [fail("timeout", null), fail("timeout", null)] })).toEqual(["terra:timeout; luna:timeout", "writer", false]);
     expect(await answered({ writers: [SOL(writerJson)], medium: [GLM(FAITHFUL)], high: [fail("timeout", null)] })).toEqual(["judge:high:timeout", "judge", false]);
     expect(await answered({ writers: [SOL(writerJson)], medium: [GLM("not json"), GLM("{}")], high: [GLM(FAITHFUL)] }))
       .toEqual(["judge:medium:judge_unparseable", "judge", false]);
@@ -1178,7 +1167,7 @@ describe("hardening follow-ups (30 Sep reviews of #113 and #114)", () => {
     const judged = records.filter((record) => record.role === "judge");
     const keys = judged.map((record) => [record.result.judgedArm, record.result.judgedGeneration]);
     // Both levels' calls on a draft carry that draft's key; the two drafts have different ones.
-    expect(keys).toEqual([["sol", keys[0][1]], ["sol", keys[0][1]], ["luna", keys[2][1]], ["luna", keys[2][1]]]);
+    expect(keys).toEqual([["terra", keys[0][1]], ["terra", keys[0][1]], ["luna", keys[2][1]], ["luna", keys[2][1]]]);
     expect(keys[0][1]).toEqual(expect.stringMatching(/^draft:[0-9a-f-]{36}$/u));
     expect(keys[2][1]).toEqual(expect.stringMatching(/^draft:[0-9a-f-]{36}$/u));
     expect(keys[2][1]).not.toBe(keys[0][1]);
@@ -1248,7 +1237,7 @@ describe("hardening follow-ups (30 Sep reviews of #113 and #114)", () => {
     const efforts = (requests: Request[]) => judgeRequests(requests).map((request) => request.effort);
     /** Sol's draft is judged; the Luna fallback's reply is not JSON, so a rejected Sol draft ends in a hold. */
     const writers = () => [SOL(writerJson), LUNA("not json")];
-    const rejected = { kind: "held", reasons: ["sol:unfaithful:scored 95%", "luna:output_not_json"] };
+    const rejected = { kind: "held", reasons: ["terra:unfaithful:scored 95%", "luna:output_not_json"] };
 
     it("makes no second try after an unusable reply: the draft is rejected on the other level's verdict", async () => {
       const { promise, requests, records } = ordered({ writers: writers(), high: [GLM(UNFAITHFUL)], medium: [GLM("not json"), GLM(FAITHFUL)] }, "high");
@@ -1278,7 +1267,7 @@ describe("hardening follow-ups (30 Sep reviews of #113 and #114)", () => {
       expect(efforts(afterVerdict.requests)).toEqual(["medium", "high"]);
       // The request was made, so it is on record — with when it was sent, and no wait after it.
       expect(afterVerdict.records.find((record) => record.result.effort === "medium")?.result)
-        .toEqual({ effort: "medium", error: LIMITED, attemptAt: expect.any(String), judgedArm: "sol", judgedGeneration: "g", evidence: "summary" });
+        .toEqual({ effort: "medium", error: LIMITED, attemptAt: expect.any(String), judgedArm: "terra", judgedGeneration: "g", evidence: "summary" });
       // The other level stopped the run: its stop is the outcome, not this level's rate limit.
       const afterStop = ordered({ writers: writers(), high: [fail("timeout", null)], medium: [limited(), GLM(FAITHFUL)] }, "high");
       expect(await afterStop.promise).toEqual({ kind: "infra", error: "judge:high:timeout", modelFailure: true, stage: "judge" });
@@ -1289,10 +1278,10 @@ describe("hardening follow-ups (30 Sep reviews of #113 and #114)", () => {
     it("still tries again while the other level has only passed the draft, and still stops on a level's own failure", async () => {
       // High passed it: medium's verdict is still needed, so its second try and its retry are made.
       const secondTry = ordered({ writers: writers(), high: [GLM(FAITHFUL)], medium: [GLM("not json"), GLM(FAITHFUL)] }, "high");
-      expect(await secondTry.promise).toMatchObject({ kind: "draft", arm: "sol" });
+      expect(await secondTry.promise).toMatchObject({ kind: "draft", arm: "terra" });
       expect(efforts(secondTry.requests)).toEqual(["medium", "high", "medium"]);
       const retried = ordered({ writers: writers(), high: [GLM(FAITHFUL)], medium: [limited(), GLM(FAITHFUL)] }, "high");
-      expect(await retried.promise).toMatchObject({ kind: "draft", arm: "sol" });
+      expect(await retried.promise).toMatchObject({ kind: "draft", arm: "terra" });
       expect(retried.waits).toEqual([4_000]);
       // A call that fails on its own (a time-out) after the other level's verdict is a judge failure, as before.
       const failed = ordered({ writers: writers(), high: [GLM(UNFAITHFUL)], medium: [fail("timeout", null)] }, "high");
@@ -1345,7 +1334,7 @@ describe("hardening follow-ups (30 Sep reviews of #113 and #114)", () => {
       expect(efforts(requests)).toEqual(["medium", "high"]);
       // Its one request is on record with when it was sent and the wait it made — not as a failure of its own.
       expect(records.find((record) => record.result.effort === "medium")?.result)
-        .toEqual({ effort: "medium", error: LIMITED, attemptAt: expect.any(String), waitedMs: 4_000, judgedArm: "sol", judgedGeneration: "g", evidence: "summary" });
+        .toEqual({ effort: "medium", error: LIMITED, attemptAt: expect.any(String), waitedMs: 4_000, judgedArm: "terra", judgedGeneration: "g", evidence: "summary" });
     });
   });
 });
@@ -1371,10 +1360,10 @@ describe("helpers", () => {
 
   it("accepts Sol from any host and rejects any other model for the writer", () => {
     expect(routeMismatch(AUTOWRITER_MODELS.writer, SOL("x"))).toBeNull();
-    expect(routeMismatch(AUTOWRITER_MODELS.writer, ok("x", "OpenAI", "openai/gpt-6.1-sol"))).toBeNull();
+    expect(routeMismatch(AUTOWRITER_MODELS.writer, ok("x", "OpenAI", "openai/gpt-6.1-terra"))).toBeNull();
     expect(routeMismatch(AUTOWRITER_MODELS.writer, LUNA("x"))).toBe("model_mismatch:openai/gpt-6-luna");
     expect(routeMismatch(AUTOWRITER_MODELS.writer, GLM("x"))).toBe("model_mismatch:z-ai/glm-5.3-flash");
-    expect(routeMismatch(AUTOWRITER_MODELS.writer, ok("x", "Azure", "openai/gpt-6.1-sol-mini"))).toBe("model_mismatch:openai/gpt-6.1-sol-mini");
+    expect(routeMismatch(AUTOWRITER_MODELS.writer, ok("x", "Azure", "openai/gpt-6.1-terra-mini"))).toBe("model_mismatch:openai/gpt-6.1-terra-mini");
     expect(routeMismatch(AUTOWRITER_MODELS.writer, ok("x", "Azure", null))).toBe("model_mismatch:none");
   });
 });
@@ -1396,12 +1385,12 @@ describe("Mimi presentation guide in the production pipeline", () => {
   });
   it("holds for a human when both writers fail the format check, without asking a factual judge to waive it", async () => {
     const { promise, requests } = run({ writers: [SOL(writerJson), LUNA(writerJson)] }, options);
-    expect(await promise).toMatchObject({ kind: "held", reasons: expect.arrayContaining(["sol:style:list_structure:topics", "luna:style:list_structure:topics"]) });
+    expect(await promise).toMatchObject({ kind: "held", reasons: expect.arrayContaining(["terra:style:list_structure:topics", "luna:style:list_structure:topics"]) });
     expect(judgeRequests(requests)).toHaveLength(0);
   });
   it.each(["not JSON", JSON.stringify({ ...JSON.parse(numbered), topics: undefined })])("classifies missing fields and malformed JSON as format failures", async content => {
     const { promise, requests } = run({ writers: [SOL(content), LUNA(content)] }, options);
-    expect(await promise).toMatchObject({ kind: "held", reasons: [expect.stringContaining("sol:style:"), expect.stringContaining("luna:style:")] });
+    expect(await promise).toMatchObject({ kind: "held", reasons: [expect.stringContaining("terra:style:"), expect.stringContaining("luna:style:")] });
     expect(judgeRequests(requests)).toHaveLength(0);
   });
   it("does not let good formatting bypass an invented score or homework verdict", async () => {
@@ -1431,21 +1420,21 @@ describe("a writer's time-out passes to the next writer (12 Oct: Luna at reasoni
   // transcript, with the sweep's minimum time left less 20 s of reads.
   const startMs = AUTOWRITER_SWEEP_MIN_REMAINING_MS - 20_000;
   const lunaFirst = (script: Script, remainingMs = startMs) => run(script, {
-    canonicalTutorKey: "Mint", evidence: "transcript", remainingMs,
+    canonicalTutorKey: "Mint", writers: [AUTOWRITER_MODELS.fallbackWriter, AUTOWRITER_MODELS.writer], evidence: "transcript", remainingMs,
     latencyMs: (request) => request.model === LUNA_MODEL ? request.timeoutMs : 0,
   });
   // What the next writer may use: what is left after Luna, less the deadline margin and the judges' 240 s (plus slack).
   const nextWriterMs = startMs - AUTOWRITER_WRITER_TIMEOUT_MS - AUTOWRITER_CALL_DEADLINE_MARGIN_MS - AUTOWRITER_JUDGE_TIMEOUT_MS.transcript
     - HANDOVER_JUDGE_SLACK_MS;
-  const LIMITED = "openai/gpt-6.1-sol is temporarily rate-limited upstream. Please retry shortly.";
+  const LIMITED = "openai/gpt-6.1-terra is temporarily rate-limited upstream. Please retry shortly.";
 
   it("writes with Sol in the same run, leaving the judges their full time-out, and posts Sol's draft", async () => {
     expect(nextWriterMs).toBeGreaterThanOrEqual(30_000);
     const { promise, records, requests } = lunaFirst({ writers: [fail("timeout", null), SOL(writerJson)], judge: [GLM(FAITHFUL)] });
-    expect(await promise).toMatchObject({ kind: "draft", arm: "sol" });
+    expect(await promise).toMatchObject({ kind: "draft", arm: "terra" });
     expect(writerRequests(requests).map((request) => request.model)).toEqual([LUNA_MODEL, AUTOWRITER_MODELS.writer.model]);
     expect(timeouts(requests)).toEqual([AUTOWRITER_WRITER_TIMEOUT_MS, nextWriterMs, 240_000, 240_000]);
-    expect(roles(records)).toEqual(["writer:luna", "writer:sol", "judge:glm", "judge:glm"]);
+    expect(roles(records)).toEqual(["writer:luna", "writer:terra", "judge:glm", "judge:glm"]);
     expect(records[0].result).toMatchObject({ error: "timeout" });
   });
 
@@ -1455,7 +1444,7 @@ describe("a writer's time-out passes to the next writer (12 Oct: Luna at reasoni
     const invalid = lunaFirst({ writers: [fail("timeout", null), SOL("not json")] });
     expect(await invalid.promise).toEqual({ kind: "infra", error: "luna:timeout", modelFailure: true, stage: "writer" });
     const bothTimedOut = lunaFirst({ writers: [fail("timeout", null), fail("timeout", null)] });
-    expect(await bothTimedOut.promise).toEqual({ kind: "infra", error: "luna:timeout; sol:timeout", modelFailure: true, stage: "writer" });
+    expect(await bothTimedOut.promise).toEqual({ kind: "infra", error: "luna:timeout; terra:timeout", modelFailure: true, stage: "writer" });
     expect(timeouts(bothTimedOut.requests)).toEqual([AUTOWRITER_WRITER_TIMEOUT_MS, nextWriterMs]);
   });
 
@@ -1463,10 +1452,10 @@ describe("a writer's time-out passes to the next writer (12 Oct: Luna at reasoni
     const keyLimit = "Key limit exceeded (monthly limit). $50.01 of $50.00 used";
     // The key-limit message reaches the row's reason and the credit incident.
     expect(await lunaFirst({ writers: [fail("timeout", null), fail(keyLimit, 403)] }).promise)
-      .toEqual({ kind: "infra", error: `luna:timeout; sol:${keyLimit}`, modelFailure: true, stage: "writer", creditExhausted: true });
+      .toEqual({ kind: "infra", error: `luna:timeout; terra:${keyLimit}`, modelFailure: true, stage: "writer", creditExhausted: true });
     // Sol's route rate limited: no retry, because a retry and its time-out would eat into the judges' time.
     const limited = lunaFirst({ writers: [fail("timeout", null), fail(LIMITED, 429)] });
-    expect(await limited.promise).toEqual({ kind: "infra", error: `luna:timeout; sol:${LIMITED}`, modelFailure: true, stage: "writer", rateLimited: true });
+    expect(await limited.promise).toEqual({ kind: "infra", error: `luna:timeout; terra:${LIMITED}`, modelFailure: true, stage: "writer", rateLimited: true });
     expect(limited.waits).toEqual([]);
     expect(writerRequests(limited.requests)).toHaveLength(2);
   });
@@ -1504,10 +1493,10 @@ describe("a writer's time-out passes to the next writer (12 Oct: Luna at reasoni
 
   it("repairs the handed-over draft when the judges leave time for it, and ends as the time-out when they do not", async () => {
     const repaired = lunaFirst({ writers: [fail("timeout", null), SOL(withExtra)], judge: [GLM(QUOTED), GLM(FAITHFUL)] });
-    expect(await repaired.promise).toMatchObject({ kind: "draft", arm: "sol", repair: [{ field: "performance" }] });
+    expect(await repaired.promise).toMatchObject({ kind: "draft", arm: "terra", repair: [{ field: "performance" }] });
     // Judges that take 100 s leave 540 − 180 − 100 − 45 = 215 s, under the 240 s a repair judging needs: not held.
     const noTime = run({ writers: [fail("timeout", null), SOL(withExtra)], judge: [GLM(QUOTED)] }, {
-      canonicalTutorKey: "Mint", evidence: "transcript", remainingMs: startMs,
+      canonicalTutorKey: "Mint", writers: [AUTOWRITER_MODELS.fallbackWriter, AUTOWRITER_MODELS.writer], evidence: "transcript", remainingMs: startMs,
       latencyMs: (request) => request.model === LUNA_MODEL ? request.timeoutMs : request.schemaName === "feedback_faithfulness" ? 100_000 : 0,
     });
     expect(await noTime.promise).toEqual({ kind: "infra", error: "luna:timeout", modelFailure: true, stage: "writer", judgeAnswered: true });
@@ -1519,7 +1508,7 @@ describe("a writer's time-out passes to the next writer (12 Oct: Luna at reasoni
       { evidence: "transcript", latencyMs: (request) => request.model === LUNA_MODEL ? request.timeoutMs : 0 },
     );
     expect(await promise).toEqual({ kind: "infra", error: "luna:timeout", modelFailure: true, stage: "writer", judgeAnswered: true });
-    expect(roles(records)).toEqual(["writer:sol", "judge:glm", "judge:glm", "writer:luna"]);
+    expect(roles(records)).toEqual(["writer:terra", "judge:glm", "judge:glm", "writer:luna"]);
   });
 });
 
@@ -1548,7 +1537,7 @@ describe("reviewed homework omissions", () => {
 describe("post-first quality review", () => {
   it("returns a valid draft after one writer call even when no judge is available", async () => {
     const { promise, requests, records } = run({ writers: [SOL(writerJson)] }, { deferQualityReview: true, remainingMs: 90_000 });
-    expect(await promise).toMatchObject({ kind: "draft", arm: "sol", judge: null });
+    expect(await promise).toMatchObject({ kind: "draft", arm: "terra", judge: null });
     expect(requests).toHaveLength(1);
     expect(records[0].result).toMatchObject({ qualityReview: "deferred", blockingReasons: [] });
   });

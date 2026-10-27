@@ -46,7 +46,7 @@ export const SUMMARY_FALLBACK_CAUSES = [
 ] as const;
 export type SummaryFallbackCause = (typeof SUMMARY_FALLBACK_CAUSES)[number];
 
-export type ModelArm = "glm" | "luna" | "sol";
+export type ModelArm = "glm" | "luna" | "sol" | "terra";
 
 export interface OpenRouterProviderPreferences {
   order?: string[];
@@ -71,6 +71,8 @@ export interface AutowriterStudent {
   wiseUserId: string | null;
   name: string;
   inMeetingSeconds: number | null;
+  firstEntryTime?: string;
+  lastExitTime?: string;
   absolutePercentAttendance: number | null;
   /** Set when the student attended through a Zoom guest join under this name (see `studentParticipants`). */
   joinedAsGuest?: string | null;
