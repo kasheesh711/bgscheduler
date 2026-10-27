@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AUTOWRITER_MODELS } from "@/lib/feedback-autowriter/config";
+import { AUTOWRITER_WRITER_BY_ARM } from "@/lib/feedback-autowriter/config";
 import { callOpenRouter } from "@/lib/feedback-autowriter/openrouter";
 import { availability, CaptureError, type DraftFields } from "./model";
 
@@ -76,7 +76,7 @@ function renderDraft(value: unknown, sources: Source[]): DraftFields {
 export async function generateCaptureDraft(input: CaptureDraftInput): Promise<DraftFields> {
   if (!availability().drafting) throw new CaptureError(503, "Draft generation is unavailable. Keep your evidence and try again later.");
   const sources = currentSources(input);
-  const model = AUTOWRITER_MODELS.writer;
+  const model = AUTOWRITER_WRITER_BY_ARM.sol;
   const result = await callOpenRouter({
     apiKey: process.env.OPENROUTER_API_KEY!.trim(), model: model.model, provider: model.provider, effort: model.effort,
     messages: [
