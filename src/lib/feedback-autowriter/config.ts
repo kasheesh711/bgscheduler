@@ -118,8 +118,10 @@ const OPENAI_ZDR_ROUTE: OpenRouterProviderPreferences = {
  */
 export const AUTOWRITER_MODELS = {
   writer: {
-    arm: "terra", model: "openai/gpt-6.1-terra", provider: OPENAI_ZDR_ROUTE, effort: "low",
-    expectModel: "openai/gpt-6.1-terra",
+    arm: "terra", model: "openai/gpt-6.1-terra",
+    // OpenRouter automatic routing misses Terra's current ZDR endpoint; this exact route is verified.
+    provider: { ...OPENAI_ZDR_ROUTE, order: ["azure/eu"], allow_fallbacks: false }, effort: "low",
+    expectProvider: "Azure", expectModel: "openai/gpt-6.1-terra",
   },
   fallbackWriter: {
     arm: "luna", model: "openai/gpt-6-luna", provider: OPENAI_ZDR_ROUTE, effort: "max",
