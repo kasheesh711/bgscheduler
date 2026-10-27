@@ -94,7 +94,7 @@ describe("config", () => {
   });
 
   it("writes with Terra at reasoning low, falls back to Luna and judges with GLM — all with zero data retention", () => {
-    expect(AUTOWRITER_MODELS.writer).toMatchObject({ arm: "terra", model: "openai/gpt-6.1-terra", effort: "low", expectModel: "openai/gpt-6.1-terra" });
+    expect(AUTOWRITER_MODELS.writer).toMatchObject({ arm: "terra", model: "openai/gpt-6.1-terra", effort: "low", expectModel: "openai/gpt-6.1-terra", expectProvider: "Azure", provider: { order: ["azure/eu"], allow_fallbacks: false, zdr: true } });
     expect(AUTOWRITER_MODELS.fallbackWriter).toMatchObject({ arm: "luna", model: "openai/gpt-6-luna", effort: "max" });
     expect(AUTOWRITER_MODELS.judge).toMatchObject({ arm: "glm", model: "z-ai/glm-5.3-flash", expectProvider: "Together" });
     // The judge has no effort of its own: it runs at every level in AUTOWRITER_JUDGE_EFFORTS.

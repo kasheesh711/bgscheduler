@@ -149,7 +149,7 @@ describe("runWritingPipeline", () => {
     expect(requests.map((request) => request.model)).toEqual(["openai/gpt-6.1-terra", "z-ai/glm-5.3-flash", "z-ai/glm-5.3-flash"]);
   });
 
-  it("asks for Sol at reasoning low on a zero-data-retention route, from any ZDR host", async () => {
+  it("asks for Terra on its verified Azure EU zero-retention route", async () => {
     const { promise, requests } = run({ writers: [SOL(writerJson)], judge: [GLM(FAITHFUL)] });
     await promise;
     expect(requests[0]).toMatchObject({
@@ -158,14 +158,13 @@ describe("runWritingPipeline", () => {
       schemaName: "post_class_feedback",
       provider: { zdr: true, data_collection: "deny" },
     });
-    // Not pinned to one host: zdr alone decides where it may run.
-    expect(requests[0].provider.order).toBeUndefined();
+    expect(requests[0].provider).toMatchObject({ order: ["azure/eu"], allow_fallbacks: false, zdr: true });
     for (const request of judgeRequests(requests)) {
       expect(request).toMatchObject({ model: "z-ai/glm-5.3-flash", provider: { order: ["together"], zdr: true } });
     }
 
     const otherHost = run({ writers: [ok(writerJson, "OpenAI", "openai/gpt-6.1-terra")], judge: [GLM(FAITHFUL)] });
-    expect(await otherHost.promise).toMatchObject({ kind: "draft", arm: "terra" });
+    expect(await otherHost.promise).toMatchObject({ kind: "infra", error: "terra:provider_mismatch:OpenAI" });
   });
 
   it("never sends student or tutor names to the judge", async () => {
@@ -1358,11 +1357,11 @@ describe("helpers", () => {
     expect(routeMismatch(AUTOWRITER_MODELS.judge, ok("x", "Together", "z-ai/glm-6-flash"))).toBe("model_mismatch:z-ai/glm-6-flash");
   });
 
-  it("accepts Sol from any host and rejects any other model for the writer", () => {
+  it("accepts Terra only from Azure and rejects other writer models", () => {
     expect(routeMismatch(AUTOWRITER_MODELS.writer, SOL("x"))).toBeNull();
-    expect(routeMismatch(AUTOWRITER_MODELS.writer, ok("x", "OpenAI", "openai/gpt-6.1-terra"))).toBeNull();
+    expect(routeMismatch(AUTOWRITER_MODELS.writer, ok("x", "OpenAI", "openai/gpt-6.1-terra"))).toBe("provider_mismatch:OpenAI");
     expect(routeMismatch(AUTOWRITER_MODELS.writer, LUNA("x"))).toBe("model_mismatch:openai/gpt-6-luna");
-    expect(routeMismatch(AUTOWRITER_MODELS.writer, GLM("x"))).toBe("model_mismatch:z-ai/glm-5.3-flash");
+    expect(routeMismatch(AUTOWRITER_MODELS.writer, GLM("x"))).toBe("provider_mismatch:Together");
     expect(routeMismatch(AUTOWRITER_MODELS.writer, ok("x", "Azure", "openai/gpt-6.1-terra-mini"))).toBe("model_mismatch:openai/gpt-6.1-terra-mini");
     expect(routeMismatch(AUTOWRITER_MODELS.writer, ok("x", "Azure", null))).toBe("model_mismatch:none");
   });
