@@ -129,6 +129,8 @@ describe("evaluateSessionGates", () => {
     // Subtract all disconnected time, even if it could have occurred outside the scheduled hour.
     const gaps = participants.map(p => p.isTeacher ? p : { ...p, inMeetingDuration: 600 });
     expect(evaluateSessionGates(parse({ participants: gaps }), gateInput)).toEqual({ ok: false, reason: "attendance_8pct" });
+    const unknown = participants.map(p => p.isTeacher ? p : { ...p, firstEntryTime: null, lastExitTime: null });
+    expect(evaluateSessionGates(parse({ participants: unknown }), gateInput)).toEqual({ ok: false, reason: "attendance_23pct" });
   });
 
   it("names a fractional attendance by its whole percent, rounded down, so it is classified like any other", () => {

@@ -73,8 +73,8 @@ const ParticipantSchema = z.object({
   inMeetingDuration: z.number().optional(),
   duration: z.number().optional(),
   absolutePercentAttendance: z.number().optional(),
-  firstEntryTime: z.string().optional(),
-  lastExitTime: z.string().optional(),
+  firstEntryTime: z.string().nullish(),
+  lastExitTime: z.string().nullish(),
 }).passthrough();
 
 const SummarySchema = z.object({
