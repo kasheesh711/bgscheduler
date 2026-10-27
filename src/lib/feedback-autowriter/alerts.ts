@@ -53,7 +53,7 @@ function escapeHtml(value: string): string {
 }
 
 export function buildAlertDigest(alerts: readonly PendingAlert[], halt: { haltedAt: Date | null; haltReason: string | null }) {
-  const lines = alerts.map((alert) => {
+  const lines = [...alerts].sort((a, b) => a.id.localeCompare(b.id) || a.kind.localeCompare(b.kind)).map((alert) => {
     const tutor = rosterTutor(alert.wiseTeacherUserId)?.displayName ?? alert.wiseTeacherUserId ?? "unknown tutor";
     const link = alert.wiseClassId ? wiseSessionLink({ wiseClassId: alert.wiseClassId, wiseSessionId: alert.wiseSessionId }) : alert.wiseSessionId;
     const kind = kindText(alert);
@@ -66,12 +66,9 @@ export function buildAlertDigest(alerts: readonly PendingAlert[], halt: { halted
   const subject = `Feedback autowriter: ${alerts.length} class${alerts.length === 1 ? "" : "es"} need${alerts.length === 1 ? "s" : ""} attention`;
   const text = [haltLine, ...lines.map((line) => line.text)].filter(Boolean).join("\n\n");
   const html = `${haltLine ? `<p><b>${escapeHtml(haltLine)}</b></p>` : ""}<ul>${lines.map((line) => line.html).join("")}</ul>`;
-  // One key per set of alerts: the relay sends a digest it has already sent only once. A `judge_failing` alert can be
-  // raised again on the same class (a new run of failures after the judge answered), so its key carries the time that
-  // run reached its mark: a second episode is another digest, not a repeat of the first.
+  // Resend requires byte-identical content for a reused key; reasons and halt state can change between sweeps.
   const idempotencyKey = `feedback-autowriter:${createHash("sha256")
-    .update(alerts.map((alert) => `${alert.id}:${alert.kind}${alert.kind === "judge_failing" && alert.judge?.since ? `:${alert.judge.since}` : ""}`)
-      .toSorted().join("|")).digest("hex").slice(0, 32)}`;
+    .update(JSON.stringify({ subject, text, html })).digest("hex").slice(0, 32)}`;
   return { subject, text, html, idempotencyKey };
 }
 

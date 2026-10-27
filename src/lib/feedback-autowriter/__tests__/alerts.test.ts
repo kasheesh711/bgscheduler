@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
 import type { ScheduleEmailSendInput } from "@/lib/classrooms/schedule-email";
@@ -37,7 +36,6 @@ function judgeFailing(judge: Partial<NonNullable<PendingAlert["judge"]>>, overri
   });
 }
 
-const keyOf = (...parts: string[]) => `feedback-autowriter:${createHash("sha256").update(parts.toSorted().join("|")).digest("hex").slice(0, 32)}`;
 
 describe("autowriter alert transport", () => {
   it.each([[undefined, "resend"], ["", "resend"], ["apps_script", "apps_script"], ["gmail", "gmail"]])(
@@ -99,28 +97,19 @@ describe("buildAlertDigest", () => {
   });
 
   describe("the relay's idempotency key", () => {
-    it("is one key per set of alerts, whatever their order — as before for every kind but judge_failing", () => {
+    it("keeps reordered retries identical but gives changed content a new key", () => {
       const held = alert();
       const expired = alert({ id: "00000000-0000-4000-8000-000000000002", kind: "expired", state: "expired" });
-      expect(buildAlertDigest([held], NOT_HALTED).idempotencyKey).toBe(keyOf(`${held.id}:held`));
-      expect(buildAlertDigest([held, expired], NOT_HALTED).idempotencyKey).toBe(keyOf(`${held.id}:held`, `${expired.id}:expired`));
-      expect(buildAlertDigest([expired, held], NOT_HALTED).idempotencyKey).toBe(buildAlertDigest([held, expired], NOT_HALTED).idempotencyKey);
-      // Nothing about a run of judge failures enters another kind's key.
-      expect(buildAlertDigest([{ ...held, judge: { errors: 3, unreached: 0, unreachedCause: null, since: "2026-09-30T05:10:00.000Z" } }], NOT_HALTED).idempotencyKey)
-        .toBe(keyOf(`${held.id}:held`));
+      const first = buildAlertDigest([held, expired], NOT_HALTED);
+      expect(buildAlertDigest([expired, held], NOT_HALTED)).toEqual(first);
+      expect(buildAlertDigest([{ ...held, reason: "attendance_23pct" }, expired], NOT_HALTED).idempotencyKey).not.toBe(first.idempotencyKey);
+      expect(buildAlertDigest([held, expired], { haltedAt: new Date("2026-10-28T00:00:00Z"), haltReason: "Check Wise" }).idempotencyKey).not.toBe(first.idempotencyKey);
     });
-
-    it("differs for each run of judge failures on the same class, so the relay sends the second one too", () => {
+    it("gives each changed judge-failure episode its own message key", () => {
       const first = judgeFailing({ errors: 3, since: "2026-09-30T05:10:00.000Z" });
       const second = judgeFailing({ errors: 3, since: "2026-09-30T09:40:00.000Z" });
-      const keys = [first, second].map((episode) => buildAlertDigest([episode], NOT_HALTED).idempotencyKey);
-      expect(keys[0]).toBe(keyOf(`${first.id}:judge_failing:2026-09-30T05:10:00.000Z`));
-      expect(keys[1]).toBe(keyOf(`${first.id}:judge_failing:2026-09-30T09:40:00.000Z`));
-      expect(keys[1]).not.toBe(keys[0]);
-      // The same episode keeps its key: a digest the relay already sent is not sent twice.
-      expect(buildAlertDigest([judgeFailing({ errors: 4, since: "2026-09-30T05:10:00.000Z" })], NOT_HALTED).idempotencyKey).toBe(keys[0]);
-      // Without a recorded time the key is the plain one.
-      expect(buildAlertDigest([judgeFailing({ errors: 3, since: null })], NOT_HALTED).idempotencyKey).toBe(keyOf(`${first.id}:judge_failing`));
+      expect(buildAlertDigest([first], NOT_HALTED).idempotencyKey).toBe(buildAlertDigest([second], NOT_HALTED).idempotencyKey);
+      expect(buildAlertDigest([first], NOT_HALTED)).toEqual(buildAlertDigest([first], NOT_HALTED));
     });
   });
 });

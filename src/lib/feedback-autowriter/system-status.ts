@@ -8,7 +8,6 @@ import {
 } from "./config";
 import { JUDGE_PROMPT_VERSION } from "./judge";
 import { PROMPT_VERSION } from "./prompt";
-import { AUTOWRITER_TUTORS, rosterWriterArm } from "./roster";
 
 /**
  * What the autowriter is running with right now: the dashboard's system line. Built from `config.ts`, the prompt and
@@ -39,12 +38,9 @@ export interface AutowriterSystemStatus {
  */
 export function buildSystemStatus(env: Record<string, string | undefined> = process.env): AutowriterSystemStatus {
   const secondPass = autowriterTranscriptsEnabled(env) && sonioxApiKey(env) !== null;
-  const lunaTutors = AUTOWRITER_TUTORS.filter((tutor) => rosterWriterArm(tutor.canonicalKey) === "luna").length;
   return {
     writer: { model: AUTOWRITER_MODELS.writer.model, effort: AUTOWRITER_MODELS.writer.effort },
-    tutorWriter: lunaTutors > 0
-      ? { model: AUTOWRITER_MODELS.fallbackWriter.model, effort: AUTOWRITER_MODELS.fallbackWriter.effort, tutors: lunaTutors }
-      : null,
+    tutorWriter: null,
     fallbackWriter: { model: AUTOWRITER_MODELS.fallbackWriter.model, effort: AUTOWRITER_MODELS.fallbackWriter.effort },
     judge: { model: AUTOWRITER_MODELS.judge.model, efforts: [...AUTOWRITER_JUDGE_EFFORTS] },
     transcriptFirst: secondPass && autowriterTranscriptFirst(env),

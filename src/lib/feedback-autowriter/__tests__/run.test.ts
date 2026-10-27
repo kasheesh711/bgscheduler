@@ -95,7 +95,7 @@ describe("generateDraft (evaluation CLI)", () => {
       ["glm", "z-ai/glm-5.3-flash"],
       ["luna", "openai/gpt-6-luna"],
     ]);
-    expect(Object.keys(summarizeCosts(drafts))).toEqual(["sol", "glm", "luna"]);
+    expect(Object.keys(summarizeCosts(drafts))).toEqual(["sol", "glm", "luna", "terra"]);
     expect(summarizeCosts(drafts).sol).toMatchObject({ calls: 1, callsOk: 1, validatorPassed: 0 });
   });
 });

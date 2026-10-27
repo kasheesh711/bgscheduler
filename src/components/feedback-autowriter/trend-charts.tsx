@@ -281,7 +281,7 @@ function EvidenceCard({ trends }: { trends: AutowriterTrends }) {
           <div>
             <Upper className="mb-[7px] block text-[9px]">Writer · last {range.days} days</Upper>
             <div className="flex flex-wrap gap-[7px]">
-              {(["sol", "luna", "glm"] as const).map((arm) => (
+              {(["terra", "sol", "luna", "glm"] as const).map((arm) => (
                 <Pill key={arm} label={ARM_LABEL[arm]} value={<>{totals.writers[arm]} · {percent(ratio(totals.writers[arm], written), 0)}</>} />
               ))}
             </div>

@@ -117,6 +117,20 @@ describe("evaluateSessionGates", () => {
     expect(evaluateSessionGates(parse({ participants: extra }), gateInput)).toEqual({ ok: false, reason: "student_count_2" });
   });
 
+  it("uses confirmed scheduled overlap when the tutor leaves the room open", () => {
+    const participants = sessionDetail().participants.map(p => p.isTeacher ? { ...p, inMeetingDuration: 16111 } : {
+      ...p, absolutePercentAttendance: 23, inMeetingDuration: 3639,
+      firstEntryTime: "2026-09-28T08:33:01Z", lastExitTime: "2026-09-28T09:34:42Z",
+    });
+    expect(evaluateSessionGates(parse({ participants }), gateInput)).toEqual({ ok: true });
+    // A long connection outside the lesson is not proof of attendance during it.
+    const outside = participants.map(p => p.isTeacher ? p : { ...p, firstEntryTime: "2026-09-28T09:33:01Z", lastExitTime: "2026-09-28T10:34:42Z" });
+    expect(evaluateSessionGates(parse({ participants: outside }), gateInput)).toEqual({ ok: false, reason: "attendance_0pct" });
+    // Subtract all disconnected time, even if it could have occurred outside the scheduled hour.
+    const gaps = participants.map(p => p.isTeacher ? p : { ...p, inMeetingDuration: 600 });
+    expect(evaluateSessionGates(parse({ participants: gaps }), gateInput)).toEqual({ ok: false, reason: "attendance_8pct" });
+  });
+
   it("names a fractional attendance by its whole percent, rounded down, so it is classified like any other", () => {
     const attended = (percent: number) => parse({ participants: sessionDetail().participants.map((participant) =>
       participant.isTeacher ? participant : { ...participant, absolutePercentAttendance: percent }) });

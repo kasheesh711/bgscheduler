@@ -24,7 +24,7 @@ export type DashboardWindowDays = (typeof DASHBOARD_WINDOWS)[number];
 export interface DashboardCallRow {
   wiseSessionId: string;
   role: "writer" | "judge" | "transcriber";
-  arm: "glm" | "luna" | "sol" | "soniox";
+  arm: "glm" | "luna" | "sol" | "terra" | "soniox";
   requestedModel: string;
   ok: boolean;
   costUsd: number;
@@ -440,7 +440,7 @@ export function buildAutowriterDashboard(input: {
       byDay: [...days.values()].map((entry) => ({ ...entry, costUsd: round(entry.costUsd, 4) ?? 0 }))
         .toSorted((a, b) => a.date.localeCompare(b.date)),
     },
-    // A draft from the tutor's fallback writer: Luna, or Sol for the tutors added on 2 Oct (Luna first for them).
+    // A draft from the configured fallback writer.
     fallbackShare: armed.length > 0
       ? round(armed.filter((row) => row.arm === writersFor(rosterTutor(row.wiseTeacherUserId)?.canonicalKey)[1].arm).length / armed.length, 3)
       : null,

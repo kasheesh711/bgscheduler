@@ -359,6 +359,14 @@ draft was rejected.
 
 ## Models
 
+**Current, 28 October:** Every tutor uses GPT-6.1 Terra at low reasoning first, with GPT-6 Luna at max as fallback. The route still requires zero data retention, denied data collection and structured-output support. Migration 0117 permits the new `terra` arm. Labels and trend totals retain the historical Sol, Luna and GLM arms.
+
+Attendance uses confirmed overlap with the scheduled lesson when entry/exit times and total attendance are consistent. All possible disconnected time is subtracted. This prevents a tutor's room left open for several hours from reducing a full lesson to 23% attendance. Without that evidence, the existing Wise-percentage check remains.
+
+Alert email keys identify the exact message body. A changed reason or halt notice therefore cannot reuse a key for different content; identical retries stay idempotent.
+
+The dated model history below records earlier policies.
+
 Since 2026-09-30 (owner decision: "Switch the writer to Sol for everyone today"; migration 0100 adds the arm `sol`).
 Since 2026-10-02 the writer order is chosen per tutor (`writersFor` in `config.ts`, from the roster's `writer` field,
 keyed by canonical tutor key so both accounts match): the 22 tutors added that day are written by Luna first and Sol
