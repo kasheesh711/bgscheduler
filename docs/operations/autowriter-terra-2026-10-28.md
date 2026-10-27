@@ -15,13 +15,13 @@ Ten dashboard incidents were examined and resolved with evidence:
 
 - Six API saves match verified owner-requested manual feedback receipts.
 - Two historical Atom collection failures have later successful full collection runs.
-- Cayenne's homework is supported by the tutor's explicit instruction at 59:22.
-- Layya's two video-character claims were removed in one owner correction. Fresh Wise text, event and credit checks passed. The existing zero charge was preserved. Audit post: `b52861c6-e7c1-4b0e-909e-23a5cbec1d73`.
+- One homework flag is unsupported: the tutor explicitly assigned completion of that day’s work.
+- Two video-character claims were removed in one owner correction. Fresh Wise text, event and credit checks passed. The existing zero charge was preserved.
 
-Prom's raw record shows 3,639 attendance seconds during a one-hour lesson, but 23% against a teacher room open for 16,111 seconds. Entry and exit times prove at least 93% scheduled attendance after allowing for every possible gap. The attendance repair permits this case without accepting attendance outside the lesson.
+One held class’s raw record shows 3,639 attendance seconds during a one-hour lesson, but 23% against a teacher room open for 16,111 seconds. Entry and exit times prove at least 93% scheduled attendance after allowing for every possible gap. The attendance repair permits this case without accepting attendance outside the lesson.
 
 Private source receipts and before/after data are in `.feedback-autowriter/issues-terra-20261028/` in the operator's original checkout. They are not committed.
 
 ## Release checks
 
-Focused model, alert and dashboard checks: 1,463 passed before the attendance regression was added. Attendance checks: 44 passed. Database migration tests, full CI, deployment and the live Prom retry must finish before this release is reported complete.
+Focused model, alert, attendance and dashboard checks: 1,464 passed. Database and migration checks: 34 passed. Full CI, deployment and the live held-class retry must finish before this release is reported complete.
