@@ -47,6 +47,18 @@ describe("durable LINE reminder delivery",()=>{
   await db.insert(s.tutorContacts).values({canonicalKey:"Gift",displayName:"Gift"});await db.insert(s.progressLineGroups).values({canonicalKey:"Gift",groupId:"other-group",groupName:"Other",enabled:true,registeredBy:"admin"});
   now=new Date("2026-10-13T11:00:00Z");await run();now=new Date("2026-10-13T17:00:00Z");await run();expect(push).not.toHaveBeenCalled();expect(new Set(load.mock.calls.map(args=>args[0]))).toEqual(new Set(["Buzz","Gift"]));
  });
+ it("routes only the pilot through the tutor bot and retains duplicate protection",async()=>{
+  vi.stubEnv("PROGRESS_LINE_TUTOR_BOT_KEYS","Buzz");
+  await db.insert(s.tutorContacts).values({canonicalKey:"Gift",displayName:"Gift"});
+  await db.insert(s.progressLineGroups).values({canonicalKey:"Gift",groupId:"gift-group",groupName:"Kru Gift x BeGifted",enabled:true,registeredBy:"admin"});
+  const gift={...c,ownerKey:"Gift",tutorName:"Gift",seriesId:randomUUID()};
+  load.mockImplementation(async(key:string)=>key==="Buzz"?[c]:[gift]);
+  await run();await run();
+  expect(push).toHaveBeenCalledTimes(2);
+  expect(push.mock.calls.map(args=>({to:args[0].to,tutorBot:args[0].tutorBot}))).toEqual(expect.arrayContaining([
+   {to:"buzz-group",tutorBot:true},{to:"gift-group",tutorBot:false},
+  ]));
+ });
  it("still sends to other tutors when one tutor's source data fails",async()=>{
   await db.insert(s.tutorContacts).values({canonicalKey:"Gift",displayName:"Gift"});await db.insert(s.progressLineGroups).values({canonicalKey:"Gift",groupId:"gift-group",groupName:"Kru Gift x BeGifted",enabled:true,registeredBy:"admin"});
   const gift={...c,ownerKey:"Gift",tutorName:"Gift",seriesId:randomUUID()};load.mockImplementation(async(key:string)=>{if(key==="Buzz")throw new Error("HTTP 409");return [gift];});

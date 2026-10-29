@@ -39,6 +39,15 @@ describe("Progress Check reminder rules",()=>{
   expect(()=>parseReminderSnapshot({...snapshot(),candidates:[{...candidate,extra:"x"}]},"Buzz",now)).toThrow();
   expect(sameOccurrence(candidate,{...candidate,studentEmail:"new@example.com"})).toBe(true);
  });
+ it("does not register a pilot on the parent bot or another tutor on the pilot bot",async()=>{
+  vi.stubEnv("LINE_SCHEDULE_BOT_ADMIN_IDS","admin");
+  vi.stubEnv("PROGRESS_LINE_TUTOR_BOT_KEYS","Buzz");
+  const db={select:vi.fn(()=>{throw new Error("Must not read");})};
+  for(const [key,tutorBot] of [["Buzz",false],["Gift",true]] as const){
+   expect(await handleProgressGroupCommand({db:db as never,groupId:"group",lineUserId:"admin",text:`/progress setup ${key}`,replyToken:null,tutorBot})).toBe(true);
+  }
+  expect(db.select).not.toHaveBeenCalled();
+ });
  it("silently rejects unauthorized setup without reading or writing data",async()=>{
   vi.stubEnv("LINE_SCHEDULE_BOT_ADMIN_IDS","admin");
   const db={select:vi.fn(()=>{throw new Error("Must not read");})};

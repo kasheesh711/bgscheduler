@@ -44,6 +44,16 @@ async function ingest(events: unknown[]) {
 }
 
 describe("group command ingestion", () => {
+  it("ignores tutor-bot direct messages while retaining group commands", async () => {
+    const result = await recordLineWebhookPayload(untouchableDb, { events: [
+      groupTextEvent(),
+      groupTextEvent({ source: { type: "user", userId: SENDER } }),
+    ] }, true);
+    expect(result.groupCommands).toHaveLength(1);
+    expect(result.createdMessageIds).toEqual([]);
+    expect(result.ignoredEvents).toBe(1);
+  });
+
   it("collects a group text message without persisting anything", async () => {
     const result = await ingest([groupTextEvent()]);
 
