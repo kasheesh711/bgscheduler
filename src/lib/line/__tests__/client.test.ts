@@ -9,6 +9,7 @@ describe("LINE client", () => {
   });
 
   it("keeps tutor credentials separate and never falls back to the parent token", async () => {
+    vi.stubEnv("ENABLE_LINE_SCHEDULER", "true");
     vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "parent-token");
     vi.stubEnv("LINE_CHANNEL_SECRET", "parent-secret");
     vi.stubEnv("LINE_TUTOR_CHANNEL_ACCESS_TOKEN", "tutor-token");
