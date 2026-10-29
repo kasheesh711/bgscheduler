@@ -20,19 +20,20 @@ export interface LinePushResult {
   response: Record<string, unknown>;
 }
 
-export function lineSchedulerEnabled(): boolean {
+export function lineSchedulerEnabled(tutorBot = false): boolean {
   return process.env.ENABLE_LINE_SCHEDULER !== "false" &&
-    Boolean(process.env.LINE_CHANNEL_SECRET?.trim()) &&
-    Boolean(process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim());
+    Boolean(lineChannelSecret(tutorBot)) &&
+    Boolean((tutorBot ? process.env.LINE_TUTOR_CHANNEL_ACCESS_TOKEN : process.env.LINE_CHANNEL_ACCESS_TOKEN)?.trim());
 }
 
-export function lineChannelSecret(): string | undefined {
-  return process.env.LINE_CHANNEL_SECRET?.trim();
+export function lineChannelSecret(tutorBot = false): string | undefined {
+  return (tutorBot ? process.env.LINE_TUTOR_CHANNEL_SECRET : process.env.LINE_CHANNEL_SECRET)?.trim();
 }
 
-function lineAccessToken(): string {
-  const token = process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim();
-  if (!token) throw new Error("LINE_CHANNEL_ACCESS_TOKEN is not configured");
+function lineAccessToken(tutorBot = false): string {
+  const name = tutorBot ? "LINE_TUTOR_CHANNEL_ACCESS_TOKEN" : "LINE_CHANNEL_ACCESS_TOKEN";
+  const token = process.env[name]?.trim();
+  if (!token) throw new Error(`${name} is not configured`);
   return token;
 }
 
@@ -118,13 +119,14 @@ export async function pushLineTextMessage(input: {
   text: string;
   retryKey?: string;
   signal?: AbortSignal;
+  tutorBot?: boolean;
 }): Promise<LinePushResult> {
   const retryKey = input.retryKey ?? randomUUID();
   const response = await fetch(`${LINE_API_BASE}/v2/bot/message/push`, {
     signal: input.signal,
     method: "POST",
     headers: {
-      Authorization: `Bearer ${lineAccessToken()}`,
+      Authorization: `Bearer ${lineAccessToken(input.tutorBot)}`,
       "Content-Type": "application/json",
       "X-Line-Retry-Key": retryKey,
     },
@@ -168,11 +170,12 @@ export async function pushLineTextMessage(input: {
 export async function replyLineMessage(input: {
   replyToken: string;
   text: string;
+  tutorBot?: boolean;
 }): Promise<{ sentMessageId: string | null; response: Record<string, unknown> }> {
   const response = await fetch(`${LINE_API_BASE}/v2/bot/message/reply`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${lineAccessToken()}`,
+      Authorization: `Bearer ${lineAccessToken(input.tutorBot)}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -212,8 +215,8 @@ export async function sendLineRoomMessages(input: { to: string; replyToken?: str
   await send(false);
 }
 
-export async function fetchLineGroupSummary(groupId:string):Promise<{groupId:string;groupName:string}>{
- const response=await fetch(`${LINE_API_BASE}/v2/bot/group/${encodeURIComponent(groupId)}/summary`,{headers:{Authorization:`Bearer ${lineAccessToken()}`},signal:AbortSignal.timeout(10000)});
+export async function fetchLineGroupSummary(groupId:string,tutorBot=false):Promise<{groupId:string;groupName:string}>{
+ const response=await fetch(`${LINE_API_BASE}/v2/bot/group/${encodeURIComponent(groupId)}/summary`,{headers:{Authorization:`Bearer ${lineAccessToken(tutorBot)}`},signal:AbortSignal.timeout(10000)});
  const payload=asRecord(await response.json().catch(()=>({})));
  if(!response.ok||payload.groupId!==groupId||typeof payload.groupName!=="string")throw new Error("The LINE group could not be verified.");
  return {groupId,groupName:payload.groupName};

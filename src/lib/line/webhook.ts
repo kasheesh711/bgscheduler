@@ -21,6 +21,7 @@ export async function handleLineWebhookPost(input: {
   rawBody: string;
   signature: string | null;
   channelSecret: string | undefined;
+  progressOnly?: boolean;
   scheduleProcessing: (lineMessageId: string) => void;
   /** Optional so existing callers and tests keep working unchanged. */
   scheduleGroupCommand?: (command: LineGroupCommand) => void;
@@ -47,12 +48,14 @@ export async function handleLineWebhookPost(input: {
     };
   }
 
-  const roomEvents = splitRoomEvents(payload);
+  const roomEvents = input.progressOnly ? { room: [], otherPayload: payload } : splitRoomEvents(payload);
   if (roomEvents.room.length) {
     await ingestRoomEvents(input.db, roomEvents.room);
     for (const event of roomEvents.room) input.scheduleRoomCommand?.(event.eventId);
   }
-  const ingest = await recordLineWebhookPayload(input.db, roomEvents.otherPayload);
+  const ingest = input.progressOnly
+    ? await recordLineWebhookPayload(input.db, roomEvents.otherPayload, true)
+    : await recordLineWebhookPayload(input.db, roomEvents.otherPayload);
   for (const messageId of ingest.createdMessageIds) {
     input.scheduleProcessing(messageId);
   }

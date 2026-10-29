@@ -1,11 +1,36 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fetchLineFollowerIds, pushLineTextMessage, replyLineMessage } from "@/lib/line/client";
+import { fetchLineFollowerIds, fetchLineGroupSummary, lineChannelSecret, lineSchedulerEnabled, pushLineTextMessage, replyLineMessage } from "@/lib/line/client";
 
 describe("LINE client", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+  });
+
+  it("keeps tutor credentials separate and never falls back to the parent token", async () => {
+    vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "parent-token");
+    vi.stubEnv("LINE_CHANNEL_SECRET", "parent-secret");
+    vi.stubEnv("LINE_TUTOR_CHANNEL_ACCESS_TOKEN", "tutor-token");
+    vi.stubEnv("LINE_TUTOR_CHANNEL_SECRET", "tutor-secret");
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      groupId: "group", groupName: "Pilot", sentMessages: [{ id: "sent" }],
+    })));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(lineChannelSecret(true)).toBe("tutor-secret");
+    expect(lineChannelSecret()).toBe("parent-secret");
+    await pushLineTextMessage({ to: "group", text: "reminder", tutorBot: true });
+    await replyLineMessage({ replyToken: "reply", text: "registered", tutorBot: true });
+    await fetchLineGroupSummary("group", true);
+    expect(fetchMock.mock.calls).toHaveLength(3);
+    for (const call of fetchMock.mock.calls) {
+      expect((call as unknown as [string, RequestInit])[1].headers).toMatchObject({ Authorization: "Bearer tutor-token" });
+    }
+    vi.stubEnv("LINE_TUTOR_CHANNEL_ACCESS_TOKEN", "");
+    expect(lineSchedulerEnabled(true)).toBe(false);
+    expect(lineSchedulerEnabled()).toBe(true);
+    await expect(pushLineTextMessage({ to: "group", text: "reminder", tutorBot: true })).rejects.toThrow("LINE_TUTOR_CHANNEL_ACCESS_TOKEN");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("treats an accepted retry-key conflict as a successful push result", async () => {

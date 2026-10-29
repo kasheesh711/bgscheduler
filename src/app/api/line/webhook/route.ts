@@ -6,7 +6,12 @@ import { handleLineWebhookPost } from "@/lib/line/webhook";
 export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
-  if (!lineSchedulerEnabled()) {
+  const bot = request.nextUrl.searchParams.get("bot");
+  if (bot !== null && bot !== "tutors") {
+    return NextResponse.json({ ok: false, error: "Unknown LINE bot" }, { status: 400 });
+  }
+  const tutorBot = bot === "tutors";
+  if (!lineSchedulerEnabled(tutorBot)) {
     return NextResponse.json({ ok: false, error: "LINE scheduler is not configured" }, { status: 503 });
   }
 
@@ -16,7 +21,8 @@ export async function POST(request: NextRequest) {
     db,
     rawBody,
     signature: request.headers.get("x-line-signature"),
-    channelSecret: lineChannelSecret(),
+    channelSecret: lineChannelSecret(tutorBot),
+    progressOnly: tutorBot,
     scheduleRoomCommand: (eventId) => {
       after(async () => {
         const { processRoomEvent } = await import("@/lib/room-booking/bot");
@@ -41,7 +47,7 @@ export async function POST(request: NextRequest) {
           // Loaded lazily for the same reason — keeps the pre-response cold
           // start to the ingest path only.
           const { handleProgressGroupCommand } = await import("@/lib/line/progress-reminders");
-          if (await handleProgressGroupCommand({ db, ...command })) return;
+          if (await handleProgressGroupCommand({ db, ...command, tutorBot }) || tutorBot) return;
           const { handleScheduleBotGroupCommand } = await import("@/lib/line/schedule-bot-group");
           await handleScheduleBotGroupCommand({ db, ...command });
         } catch (error) {

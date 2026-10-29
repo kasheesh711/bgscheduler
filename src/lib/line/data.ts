@@ -422,6 +422,7 @@ export async function linkLineThreadConversation(
 export async function recordLineWebhookPayload(
   db: Database,
   payload: unknown,
+  groupsOnly = false,
 ): Promise<LineWebhookIngestResult> {
   const events = Array.isArray(asRecord(payload).events) ? asRecord(payload).events as unknown[] : [];
   const result: LineWebhookIngestResult = {
@@ -460,7 +461,7 @@ export async function recordLineWebhookPayload(
       }
     }
 
-    if (sourceType !== "user" || !lineUserId) {
+    if (groupsOnly || sourceType !== "user" || !lineUserId) {
       result.ignoredEvents += 1;
       continue;
     }

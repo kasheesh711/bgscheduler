@@ -51,6 +51,28 @@ describe("handleLineWebhookPost", () => {
     expect(scheduled).toEqual(["line-msg-1", "line-msg-2"]);
   });
 
+  it("keeps tutor bot events out of room booking and parent ingestion", async () => {
+    const payload = { events: [{ type: "message", webhookEventId: "event-1",
+      source: { type: "user", userId: "admin" },
+      message: { id: "msg-1", type: "text", text: "/room" } }] };
+    const rawBody = JSON.stringify(payload);
+    vi.mocked(recordLineWebhookPayload).mockResolvedValue({ createdMessageIds: [],
+      duplicateEvents: 0, ignoredEvents: 1, retractedMessages: 0, groupCommands: [] });
+    const processing = vi.fn(), room = vi.fn();
+    const result = await handleLineWebhookPost({ db: {} as never, rawBody,
+      signature: signature("tutor-secret", rawBody), channelSecret: "tutor-secret",
+      progressOnly: true, scheduleProcessing: processing, scheduleRoomCommand: room });
+    expect(result.status).toBe(200);
+    expect(recordLineWebhookPayload).toHaveBeenCalledWith(expect.anything(), payload, true);
+    expect(processing).not.toHaveBeenCalled();
+    expect(room).not.toHaveBeenCalled();
+    const rejected = await handleLineWebhookPost({ db: {} as never, rawBody,
+      signature: signature("parent-secret", rawBody), channelSecret: "tutor-secret",
+      progressOnly: true, scheduleProcessing: processing });
+    expect(rejected.status).toBe(401);
+    expect(recordLineWebhookPayload).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects bad signatures before touching persistence", async () => {
     const result = await handleLineWebhookPost({
       db: {} as never,

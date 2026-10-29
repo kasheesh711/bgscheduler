@@ -14,6 +14,7 @@ export type ReminderCandidate=z.infer<typeof candidateSchema>;
 export type ReminderStage="week_before"|"night_before";
 type Delivery=typeof s.progressLineDeliveries.$inferSelect;
 export const progressLineEnabled=()=>process.env.PROGRESS_LINE_REMINDERS_ENABLED==="true";
+export const progressUsesTutorBot=(key:string)=>(process.env.PROGRESS_LINE_TUTOR_BOT_KEYS??"").split(",").some(value=>value.trim()===key);
 const retryWindow=24*3600000;
 
 export function reminderDate(candidate:ReminderCandidate,stage:ReminderStage){
@@ -47,19 +48,20 @@ export async function loadLineReminderCandidates(ownerKey:string,now=new Date())
  return parseReminderSnapshot(await response.json(),ownerKey,now);
 }
 
-export async function handleProgressGroupCommand(input:{db:Database;groupId:string;lineUserId:string;text:string;replyToken:string|null}){
+export async function handleProgressGroupCommand(input:{db:Database;groupId:string;lineUserId:string;text:string;replyToken:string|null;tutorBot?:boolean}){
  const match=/^\/progress\s+setup\s+(.+)$/i.exec(input.text.trim());
  if(!match)return false;
  if(!isScheduleBotAdmin(input.lineUserId))return true;
  const key=match[1].trim();
+ if(progressUsesTutorBot(key)!==Boolean(input.tutorBot))return true;
  const [contact]=await input.db.select().from(s.tutorContacts).where(and(eq(s.tutorContacts.canonicalKey,key),eq(s.tutorContacts.active,true)));
  if(!contact)throw new Error("The active tutor identity could not be verified.");
- const group=await fetchLineGroupSummary(input.groupId);
+ const group=await fetchLineGroupSummary(input.groupId,input.tutorBot);
  const [previous]=await input.db.select().from(s.progressLineGroups).where(eq(s.progressLineGroups.canonicalKey,key));
  if(key==="Buzz"&&group.groupName!=="Kru Buzz x BeGifted")throw new Error("Buzz reminders must use Kru Buzz x BeGifted.");
  await input.db.insert(s.progressLineGroups).values({canonicalKey:key,groupId:group.groupId,groupName:group.groupName,enabled:true,registeredBy:input.lineUserId}).onConflictDoUpdate({target:s.progressLineGroups.canonicalKey,set:{groupId:group.groupId,groupName:group.groupName,enabled:true,registeredBy:input.lineUserId,updatedAt:new Date()}});
  // A reply is the setup receipt; it is not a preparation reminder.
- if(input.replyToken)await replyLineMessage({replyToken:input.replyToken,text:`Progress Check reminders registered for ${contact.displayName} in ${group.groupName}${previous&&previous.groupId!==group.groupId?` (moved from ${previous.groupName})`:""}. Send time: 19:00 Bangkok, seven days before and the night before. Only tutors with a registered group receive reminders.`});
+ if(input.replyToken)await replyLineMessage({tutorBot:input.tutorBot,replyToken:input.replyToken,text:`Progress Check reminders registered for ${contact.displayName} in ${group.groupName}${previous&&previous.groupId!==group.groupId?` (moved from ${previous.groupName})`:""}. Send time: 19:00 Bangkok, seven days before and the night before. Only tutors with a registered group receive reminders.`});
  return true;
 }
 
@@ -107,7 +109,7 @@ export async function sendProgressLineReminders(db:Database=getDb(),deps:{now?:(
      if(!progressLineEnabled()||!currentGroup?.enabled||currentGroup.groupId!==row.groupId||!contact||other.length){await finish(tx,row.id,"cancelled","The reminder is no longer enabled or another send is already recorded.");return false;}
      const fresh=await load(row.canonicalKey,clock());
      if(!fresh.some(c=>sameOccurrence(c,row.candidate))||reminderAction(row.reminderDate,clock())!=="send"){await finish(tx,row.id,current.attempts>1?"uncertain":"cancelled","The lesson changed before delivery.");return false;}
-     const result=await push({to:row.groupId,text:row.text,retryKey:row.retryKey,signal:AbortSignal.timeout(10000)});
+     const result=await push({tutorBot:progressUsesTutorBot(row.canonicalKey),to:row.groupId,text:row.text,retryKey:row.retryKey,signal:AbortSignal.timeout(10000)});
      await tx.update(s.progressLineDeliveries).set({status:"sent",sentAt:clock(),providerMessageId:result.sentMessageId,providerReceipt:result.response,error:null,leaseUntil:null,updatedAt:clock()}).where(eq(s.progressLineDeliveries.id,row.id));
      return true;
     });
