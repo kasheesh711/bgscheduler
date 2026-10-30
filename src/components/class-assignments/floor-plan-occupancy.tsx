@@ -4,6 +4,8 @@ import {
   FLOOR_PLAN_GUIDE_PATH,
   FLOOR_PLAN_ROOMS,
   FLOOR_PLAN_VIEWBOX,
+  FLOOR_PLAN_WIDTH,
+  FLOOR_PLAN_HEIGHT,
   type FloorPlanRoomGeometry,
 } from "@/lib/classrooms/floor-plan";
 import {
@@ -68,9 +70,9 @@ export function FloorPlanOccupancy({
           viewBox={FLOOR_PLAN_VIEWBOX}
           role="img"
           aria-label="Interactive BeGifted floor plan occupancy"
-          className="min-h-[520px] w-full min-w-[980px]"
+          className="min-h-[520px] w-full min-w-[1200px]"
         >
-          <rect x="0" y="0" width="1600" height="900" rx="18" fill="var(--background)" />
+          <rect x="0" y="0" width={FLOOR_PLAN_WIDTH} height={FLOOR_PLAN_HEIGHT} rx="18" fill="var(--background)" />
           <path
             d={FLOOR_PLAN_GUIDE_PATH}
             fill="none"
@@ -84,10 +86,11 @@ export function FloorPlanOccupancy({
             const snapshot = byRoom.get(geometry.roomName);
             const activeRows = snapshot?.activeRows ?? [];
             const assignable = geometry.assignable;
-            const fill = assignable
+            const active = snapshot?.room.active ?? false;
+            const fill = assignable && active
               ? roomFill(snapshot?.status ?? "empty", snapshot?.loadRatio ?? 0)
               : "var(--muted)";
-            const stroke = assignable ? roomStroke(snapshot?.status ?? "empty") : "var(--border)";
+            const stroke = assignable && active ? roomStroke(snapshot?.status ?? "empty") : "var(--border)";
             const lines = labelLines(geometry, activeRows);
             const detailRows = activeRows;
             const roomMeta = snapshot?.room;

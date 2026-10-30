@@ -206,11 +206,11 @@ describe("schedule email preview", () => {
     expect(preview.previews[0].roomSteps).toEqual([
       { order: 1, time: "16:00-17:00", room: "Focus" },
     ]);
-    expect(preview.previews[0].mapImageUrl).toBe("https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus&v=2026-05-18-corridor");
+    expect(preview.previews[0].mapImageUrl).toBe("https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus&v=2026-10-30-expansion");
     expect(preview.previews[0].html).toContain("View school map");
-    expect(preview.previews[0].html).toContain("https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus&amp;v=2026-05-18-corridor");
+    expect(preview.previews[0].html).toContain("https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus&amp;v=2026-10-30-expansion");
     expect(preview.previews[0].text).toContain("Here is your teaching schedule.");
-    expect(preview.previews[0].text).toContain("View school map: https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus&v=2026-05-18-corridor");
+    expect(preview.previews[0].text).toContain("View school map: https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus&v=2026-10-30-expansion");
   });
 
   it("formats schedule blocks from Bangkok minute columns", async () => {
