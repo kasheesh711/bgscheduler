@@ -7,6 +7,7 @@
   },
   "scripts": {
     "dev": "next dev",
+    "hiring:worker": "tsx --tsconfig scripts/tsconfig.json scripts/hiring-worker.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

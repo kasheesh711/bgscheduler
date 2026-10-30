@@ -24,6 +24,145 @@ import { sql } from "drizzle-orm";
 import type { Week, OfficeNetwork } from "@/lib/tutor-attendance/model";
 import type { WiseTeacher } from "@/lib/wise/types";
 import type { CaptureConsent, CaptureSession, DraftFields } from "@/lib/class-capture/model";
+import type { HiringConfig, PreScreen, Subject, Stage } from "@/lib/hiring/model";
+import type { Assessment } from "@/lib/hiring/scoring";
+
+export const hiringSettings = pgTable("hiring_settings", {
+  id: text("id").primaryKey().default("default"),
+  config: jsonb("config").$type<HiringConfig>().notNull(),
+  revision: integer("revision").notNull().default(0),
+  updatedBy: text("updated_by").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  workerAt: timestamp("worker_at", { withTimezone: true }),
+  workerSummary:
+    jsonb("worker_summary").$type<
+      import("@/lib/hiring/model").HiringSourceSummary
+    >(),
+  workerError: text("worker_error"),
+});
+export const hiringCandidates = pgTable(
+  "hiring_candidates",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    seekApplicationId: text("seek_application_id"),
+    sourceIds: jsonb("source_ids").$type<string[]>().notNull().default([]),
+    applicantId: text("applicant_id"),
+    trackerHash: text("tracker_hash"),
+    name: text("name").notNull(),
+    email: text("email"),
+    stage: text("stage").$type<Stage>().notNull().default("new"),
+    previouslyContacted: boolean("previously_contacted")
+      .notNull()
+      .default(false),
+    workRightsConfirmed: boolean("work_rights_confirmed"),
+    profileText: text("profile_text").notNull().default(""),
+    profileHash: text("profile_hash"),
+    profileAssessment: jsonb("profile_assessment").$type<Assessment>(),
+    universityAssessment: jsonb("university_assessment").$type<
+      import("@/lib/hiring/prestige").Prestige
+    >(),
+    preScreen: jsonb("pre_screen").$type<PreScreen>(),
+    preScreenHash: text("pre_screen_hash"),
+    preScreenAssessment: jsonb("pre_screen_assessment").$type<Assessment>(),
+    subjects: jsonb("subjects").$type<Subject[]>().notNull().default([]),
+    paperPassedSubjects: jsonb("paper_passed_subjects")
+      .$type<Subject[]>()
+      .notNull()
+      .default([]),
+    paperPassedAt: timestamp("paper_passed_at", { withTimezone: true }),
+    paperRecordedBy: text("paper_recorded_by"),
+    inviteExpiresAt: timestamp("invite_expires_at", { withTimezone: true }),
+    reviewNote: text("review_note"),
+    revision: integer("revision").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("hiring_seek_application_unique").on(t.seekApplicationId),
+    uniqueIndex("hiring_email_unique").on(t.email),
+    uniqueIndex("hiring_applicant_unique").on(t.applicantId),
+  ],
+);
+export const hiringBookings = pgTable(
+  "hiring_bookings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    candidateId: uuid("candidate_id")
+      .notNull()
+      .references(() => hiringCandidates.id),
+    kind: text("kind").$type<"paper" | "mock">().notNull(),
+    subjects: jsonb("subjects").$type<Subject[]>().notNull(),
+    interviewerKey: text("interviewer_key"),
+    interviewerEmail: text("interviewer_email"),
+    lineGroupId: text("line_group_id"),
+    calendarOwner: text("calendar_owner").notNull(),
+    startTime: timestamp("start_time", { withTimezone: true }).notNull(),
+    endTime: timestamp("end_time", { withTimezone: true }).notNull(),
+    status: text("status")
+      .$type<"confirmed" | "cancelled">()
+      .notNull()
+      .default("confirmed"),
+    evidence: jsonb("evidence").$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("hiring_booking_time").on(t.interviewerKey, t.startTime),
+    check("hiring_booking_time_order", sql`${t.endTime}>${t.startTime}`),
+  ],
+);
+export const hiringOutbox = pgTable(
+  "hiring_outbox",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    key: text("key").notNull().unique(),
+    candidateId: uuid("candidate_id")
+      .notNull()
+      .references(() => hiringCandidates.id),
+    bookingId: uuid("booking_id").references(() => hiringBookings.id),
+    kind: text("kind")
+      .$type<"email" | "line" | "calendar" | "calendar_cancel">()
+      .notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    status: text("status")
+      .$type<
+        "pending" | "processing" | "sent" | "failed" | "uncertain" | "cancelled"
+      >()
+      .notNull()
+      .default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    firstAttemptAt: timestamp("first_attempt_at", { withTimezone: true }),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+    receipt: jsonb("receipt").$type<Record<string, unknown>>(),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+  },
+  (t) => [index("hiring_outbox_work").on(t.status, t.nextAttemptAt)],
+);
+export const hiringAudit = pgTable("hiring_audit", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  candidateId: uuid("candidate_id").references(() => hiringCandidates.id),
+  actor: text("actor").notNull(),
+  action: text("action").notNull(),
+  detail: jsonb("detail")
+    .$type<Record<string, unknown>>()
+    .notNull()
+    .default({}),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
 
 // Short-lived onsite evidence. No relationship to feedback submission or payroll ledgers.
 export const classCaptures = pgTable("class_captures", {
