@@ -2,6 +2,8 @@ import {
   FLOOR_PLAN_GUIDE_PATH,
   FLOOR_PLAN_ROOMS,
   FLOOR_PLAN_VIEWBOX,
+  FLOOR_PLAN_WIDTH,
+  FLOOR_PLAN_HEIGHT,
   type FloorPlanRoomGeometry,
 } from "./floor-plan";
 
@@ -33,7 +35,7 @@ function selectedRoomOrder(roomNames: string[]): Map<string, number> {
 
 function roomText(geometry: FloorPlanRoomGeometry, highlighted: boolean): string {
   const lineHeight = geometry.labelLines.length > 2 ? 22 : 24;
-  const fontSize = geometry.labelLines.some((line) => line.length > 12) ? 23 : 26;
+  const fontSize = ["Big Memories (TV)", "Remember (TV)", "I learned (online)", "Doubt (TV)", "Here There (TV)", "Hope (online)"].includes(geometry.roomName) ? 16 : 23;
   const y = geometry.labelY - ((geometry.labelLines.length - 1) * lineHeight) / 2;
   return `
     <text x="${geometry.labelX}" y="${y}" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="700" fill="${highlighted ? BRAND_WHITE : TEXT}">
@@ -75,9 +77,9 @@ export function renderFloorPlanMapSvg(roomNames: string[] = []): string {
   }).join("");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="${FLOOR_PLAN_VIEWBOX}" width="1600" height="900" role="img" aria-label="BeGifted floor plan">
-  <rect x="0" y="0" width="1600" height="900" rx="26" fill="${BRAND_WHITE}" />
-  <rect x="28" y="28" width="1544" height="844" rx="24" fill="#eff6ff" stroke="${BRAND_BLUE}" stroke-width="4" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="${FLOOR_PLAN_VIEWBOX}" width="${FLOOR_PLAN_WIDTH}" height="${FLOOR_PLAN_HEIGHT}" role="img" aria-label="BeGifted floor plan">
+  <rect x="0" y="0" width="${FLOOR_PLAN_WIDTH}" height="${FLOOR_PLAN_HEIGHT}" rx="26" fill="${BRAND_WHITE}" />
+  <rect x="28" y="28" width="${FLOOR_PLAN_WIDTH - 56}" height="${FLOOR_PLAN_HEIGHT - 56}" rx="24" fill="#eff6ff" stroke="${BRAND_BLUE}" stroke-width="4" />
   <path d="${FLOOR_PLAN_GUIDE_PATH}" fill="none" stroke="${BRAND_BLUE}" stroke-width="5" stroke-dasharray="14 14" opacity="0.35" />
   ${rooms}
 </svg>`;

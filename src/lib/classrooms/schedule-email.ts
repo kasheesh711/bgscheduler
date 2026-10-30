@@ -13,7 +13,7 @@ import { notifiedTutorKeys } from "./notification-state";
 import { isRoomPublishSessionType, sessionModeLabel } from "./session-mode";
 
 type ClassroomRun = typeof schema.classroomAssignmentRuns.$inferSelect;
-const FLOOR_PLAN_MAP_VERSION = "2026-05-18-corridor";
+const FLOOR_PLAN_MAP_VERSION = "2026-10-30-expansion";
 
 interface AssignmentEmailRow {
   id: string;

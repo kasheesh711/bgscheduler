@@ -3,7 +3,7 @@ import { GET } from "../floor-plan-map/route";
 
 describe("floor plan map route", () => {
   it("returns public SVG with selected rooms from the query string", async () => {
-    const response = await GET(new Request("http://test.local/api/classrooms/floor-plan-map?rooms=Do%20It%7CJoy%20%28TV%29&v=2026-05-18-corridor"));
+    const response = await GET(new Request("http://test.local/api/classrooms/floor-plan-map?rooms=Do%20It%7CJoy%20%28TV%29&v=2026-10-30-expansion"));
     const text = await response.text();
 
     expect(response.headers.get("Content-Type")).toBe("image/svg+xml; charset=utf-8");
