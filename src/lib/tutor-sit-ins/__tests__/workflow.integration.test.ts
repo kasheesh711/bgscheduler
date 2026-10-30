@@ -120,6 +120,10 @@ afterAll(async () => {
 beforeEach(async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(now);
+  // PostgreSQL does not share Vitest's clock; new jobs must be due at the fixture time.
+  await db.execute(
+    sql`ALTER TABLE tutor_sit_in_jobs ALTER COLUMN retry_at SET DEFAULT ${sql.raw("'" + now.toISOString() + "'::timestamptz")}`,
+  );
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.stubEnv("TUTOR_SIT_INS_ENABLED", "true");
