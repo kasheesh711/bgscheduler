@@ -187,6 +187,7 @@ async function readApplication(
     await dialog
       .getByRole("button", { name: "Close modal", exact: true })
       .click();
+    await dialog.waitFor({ state: "hidden" });
   }
 }
 
@@ -269,25 +270,32 @@ export async function importSeek(
       );
       await page
         .getByTestId("job-application-card")
+        .locator('button[id$="-move-to"]')
         .first()
         .waitFor({ state: "visible", timeout: 30000 });
       const seenPages = new Set<string>();
       let folderScanned = 0;
       for (let p = 0; p < 200; p++) {
-        const cards = page.getByTestId("job-application-card");
+        const cards = page
+          .getByTestId("job-application-card")
+          .filter({ visible: true });
         const ids = await cards
           .locator('button[id$="-move-to"]')
           .evaluateAll((elements) =>
             elements.map((el) => el.id.replace(/-move-to$/, "")),
           );
         const pageKey = ids.join(",");
-        if (
-          !ids.length ||
-          seenPages.has(pageKey) ||
-          ids.some((id) => allIds.has(id))
-        )
+        if (!ids.length)
           throw new Error(
-            "SEEK changed during pagination. Retry before sending messages.",
+            `SEEK ${status} page ${p + 1} has no visible applications.`,
+          );
+        if (seenPages.has(pageKey))
+          throw new Error(
+            `SEEK ${status} page ${p + 1} repeated the previous page.`,
+          );
+        if (ids.some((id) => allIds.has(id)))
+          throw new Error(
+            `SEEK ${status} page ${p + 1} repeated an application from an earlier page or folder.`,
           );
         seenPages.add(pageKey);
         folderScanned += ids.length;
@@ -314,7 +322,15 @@ export async function importSeek(
         await next.click();
         await page.waitForFunction(
           (previous) => {
-            const el = document.querySelector('button[id$="-move-to"]');
+            const el = [
+              ...document.querySelectorAll(
+                '[data-testid="job-application-card"] button[id$="-move-to"]',
+              ),
+            ].find(
+              (button) =>
+                button.getClientRects().length > 0 &&
+                getComputedStyle(button).visibility !== "hidden",
+            );
             return !!el && !el.id.startsWith(previous);
           },
           ids[0],
