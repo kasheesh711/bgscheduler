@@ -4,6 +4,10 @@ Status: deployed. The Hiring workspace shows the current worker status and deliv
 
 The Hiring workspace follows a candidate from a SEEK application to an onsite mock teaching appointment. A human still marks the paper assessment. The automation offers mock teaching only after a recorded pass. It does not make a final hiring decision or send rejection messages.
 
+Open a candidate to read the full extracted profile and résumé text. The text is loaded separately from the candidate list and keeps the extraction's personal-detail redactions. Text unavailable in the source is shown as unavailable.
+
+For review before activation, keep processing and messages paused and run `npm run hiring:score` on the owner Mac with `HIRING_WRITES_ENABLED=true`. This uses the Claude subscription to score stored profiles in all stages. It preserves stages and does not queue or send invitations. The command resumes from stored source hashes and stops when no unscored source remains. It does not enable live hiring. Scores appear as each assessment completes; review scoring does not update the live worker's last-run timestamp.
+
 ## Source findings — 31 October 2026
 
 The [recruitment tracker](https://docs.google.com/spreadsheets/d/12bXS1Fnx0BTwrSZXzMU7fWzOgTDfA6-P6rT0v1zDF3M/edit) has 11 tabs. The reviewed ranges contained 84 sourcing records, 83 pre-screen responses, 81 main candidate records, 30 scheduling responses and 12 subject-level mock records. These include test records; they are not counts of active candidates.
