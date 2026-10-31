@@ -156,7 +156,7 @@ async function readApplication(
       .replace(/Employment status[\s\S]*?(?=Application questions|$)/i, "")
       .replace(/Preferred work rights in Thailand\s*\n[^\n]*/i, "")
       .replace(/Expected monthly salary\s*\n[^\n]*/i, "");
-    const resume = profile.getByRole("button", { name: "Resumé", exact: true });
+    const resume = dialog.getByRole("button", { name: "Resumé" });
     if (await resume.count()) {
       const dir = await mkdtemp(path.join(os.tmpdir(), "bgs-hiring-"));
       try {
