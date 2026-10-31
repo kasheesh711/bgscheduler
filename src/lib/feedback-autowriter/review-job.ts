@@ -353,6 +353,29 @@ export async function raiseVerificationFlags(db: Database): Promise<{ flags: num
 }
 
 /**
+ * Owner decision, 13 Oct 2026: a class posted although Wise showed the student under the attendance bar (the
+ * transcript pass found the student clearly speaking, `handover = low_attendance`) is flagged for the owner's review
+ * once its first shot may be in Wise. Idempotent per class.
+ */
+export async function raiseLowAttendanceFlags(db: Database): Promise<number> {
+  const rows = await db.selectDistinct({ wiseSessionId: S.wiseSessionId, reason: sql<string | null>`${S.metadata} ->> 'lowAttendance'` })
+    .from(S)
+    .innerJoin(P, and(eq(P.wiseSessionId, S.wiseSessionId), eq(P.kind, "first_shot"), landedPostSql))
+    .where(sql`${S.metadata} ->> 'handover' = 'low_attendance'`);
+  let flags = 0;
+  for (const row of rows) {
+    const percent = /^attendance_(\d+)pct$/u.exec(row.reason ?? "")?.[1] ?? "?";
+    if (await insertFlag(db, {
+      wiseSessionId: row.wiseSessionId,
+      source: "system",
+      idempotencyKey: `low_attendance:${row.wiseSessionId}`,
+      note: `Wise showed the student's attendance at ${percent}%. Posted because the recording shows the student speaking: check it was their lesson.`,
+    })) flags += 1;
+  }
+  return flags;
+}
+
+/**
  * Idempotent over every fix event in the look-back:
  * - an API save no post explains raises an incident (critical — pushed — from `criticalFrom`, the autowriter's
  *   go-live; info before) and, after our first post, a gate-blocking flag, whatever the verdicts say;
@@ -887,6 +910,7 @@ export interface ReviewJobResult {
   fixEvents?: Omit<FixEventIngestResult, "changed">;
   reviewsCreated?: number;
   verificationFlags?: { flags: number; incidents: number };
+  lowAttendanceFlags?: number;
   flags?: { flags: number; incidents: number };
   reviewCountsUpdated?: number;
   metricRows?: number;
@@ -969,6 +993,7 @@ export async function runReviewJob(deps: ReviewJobDeps): Promise<ReviewJobResult
     }
     result.reviewsCreated = await step("reviews", () => assignReviews(db, { draw: deps.draw, provenTutorKeys: deps.provenTutorKeys, now }));
     result.verificationFlags = await step("verification_flags", () => raiseVerificationFlags(db));
+    result.lowAttendanceFlags = await step("low_attendance_flags", () => raiseLowAttendanceFlags(db));
     result.flags = await step("flags", () => raiseFixFlags(db, { since, criticalFrom: deps.unmatchedCriticalFrom }));
     result.reviewCountsUpdated = await step("review_counts", () => refreshReviewCounts(db, { sinceDate: bangkokDateKey(since) }));
     result.metricRows = await step("metrics", () => refreshDailyMetrics(db, { dates: metricDates(now), now }));
