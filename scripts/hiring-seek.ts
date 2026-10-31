@@ -9,6 +9,8 @@ import {
   type Application,
 } from "../src/lib/hiring/model";
 
+const ID_CONTROL = 'input[id^="checkbox-"], button[id$="-move-to"]';
+
 export function redactProfile(text: string, name: string) {
   return text
     .replaceAll(name, "[candidate]")
@@ -94,8 +96,12 @@ async function readApplication(
   card: ReturnType<Page["getByTestId"]>,
   jobId: string,
 ): Promise<Application> {
-  const move = card.locator('button[id$="-move-to"]');
-  const id = (await move.getAttribute("id"))?.replace(/-move-to$/, "");
+  const move = card.locator(
+    'button[aria-label^="Move "][aria-haspopup="true"]',
+  );
+  const id = (await card.locator(ID_CONTROL).first().getAttribute("id"))
+    ?.replace(/^checkbox-/, "")
+    .replace(/-move-to$/, "");
   const label = await move.getAttribute("aria-label");
   const name = label?.match(
     /^Move (.+) (?:to a status|from (?:Inbox|Prescreen|Shortlist|Interview|Offer|Accept|Not Suitable))$/,
@@ -269,28 +275,34 @@ export async function importSeek(
     const allIds = new Set<string>();
     for (const { status, count } of folders) {
       if (!count) continue;
+      const filter = status === "Not Suitable" ? "Rejected" : status;
       await page.goto(
-        `https://th.employer.seek.com/candidates/?jobid=${jobId}&s=${encodeURIComponent(status)}`,
+        `https://th.employer.seek.com/candidates/?jobid=${jobId}&s=${encodeURIComponent(filter)}`,
         { waitUntil: "domcontentloaded" },
       );
       await page
         .getByTestId("job-application-card")
-        .locator('button[id$="-move-to"]')
+        .filter({ visible: true })
+        .locator(ID_CONTROL)
         .first()
-        .waitFor({ state: "visible", timeout: 30000 });
+        .waitFor({ state: "attached", timeout: 30000 });
       const seenPages = new Set<string>();
       let folderScanned = 0;
       for (let p = 0; p < 200; p++) {
         const cards = page
           .getByTestId("job-application-card")
           .filter({ visible: true });
-        const ids = await cards
-          .locator('button[id$="-move-to"]')
-          .evaluateAll((elements) =>
-            elements.map((el) => el.id.replace(/-move-to$/, "")),
-          );
+        const ids = await cards.evaluateAll(
+          (elements, selector) =>
+            elements.map((card) =>
+              (card.querySelector(selector)?.id ?? "")
+                .replace(/^checkbox-/, "")
+                .replace(/-move-to$/, ""),
+            ),
+          ID_CONTROL,
+        );
         const pageKey = ids.join(",");
-        if (!ids.length)
+        if (!ids.length || ids.some((id) => !id))
           throw new Error(
             `SEEK ${status} page ${p + 1} has no visible applications.`,
           );
@@ -310,7 +322,10 @@ export async function importSeek(
           allIds.add(id);
           if (knownIds.has(id)) {
             const contacted =
-              (await cards.nth(i).locator('button[id$="-emails"]').count()) > 0;
+              (await cards
+                .nth(i)
+                .getByRole("button", { name: /^Emails? \([1-9]\d*\)$/ })
+                .count()) > 0;
             await observe(id, status, contacted);
           } else if (["Inbox", "Prescreen", "Shortlist"].includes(status)) {
             if (imported >= 40) {
@@ -326,19 +341,20 @@ export async function importSeek(
         if (!(await next.count())) break;
         await next.click();
         await page.waitForFunction(
-          (previous) => {
-            const el = [
+          ({ previous, selector }) => {
+            const card = [
               ...document.querySelectorAll(
-                '[data-testid="job-application-card"] button[id$="-move-to"]',
+                '[data-testid="job-application-card"]',
               ),
             ].find(
-              (button) =>
-                button.getClientRects().length > 0 &&
-                getComputedStyle(button).visibility !== "hidden",
+              (card) =>
+                card.getClientRects().length > 0 &&
+                getComputedStyle(card).visibility !== "hidden",
             );
-            return !!el && !el.id.startsWith(previous);
+            const el = card?.querySelector(selector);
+            return !!el && !el.id.includes(previous);
           },
-          ids[0],
+          { previous: ids[0], selector: ID_CONTROL },
           { timeout: 30000 },
         );
         if (p === 199) throw new Error("SEEK page limit exceeded.");
