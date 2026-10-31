@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "next dev",
     "hiring:worker": "tsx --tsconfig scripts/tsconfig.json scripts/hiring-worker.ts",
+    "hiring:score": "tsx --tsconfig scripts/tsconfig.json scripts/hiring-score.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

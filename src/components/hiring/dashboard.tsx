@@ -40,6 +40,23 @@ export function HiringDashboard() {
     [selected, setSelected] = useState<string | null>(null),
     [subjects, setSubjects] = useState<Subject[]>([]),
     [reason, setReason] = useState("");
+  const [source, setSource] = useState<{ id: string; profileText: string } | null>(null);
+  const [sourceError, setSourceError] = useState("");
+  useEffect(() => {
+    if (!selected) return;
+    document.getElementById("candidate-details")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    let active = true;
+    setSource(null);
+    setSourceError("");
+    fetch(`/api/hiring?candidateId=${encodeURIComponent(selected)}`, { cache: "no-store" })
+      .then(async response => {
+        const value = await response.json();
+        if (!response.ok) throw new Error(value.error);
+        if (active) setSource(value);
+      })
+      .catch(error => { if (active) setSourceError(error.message); });
+    return () => { active = false; };
+  }, [selected]);
   async function load() {
     const response = await fetch("/api/hiring", { cache: "no-store" });
     const value = await response.json();
@@ -656,9 +673,16 @@ export function HiringDashboard() {
             </div>
           </section>
           {candidate && (
-            <section className="space-y-4 rounded-xl border bg-card p-5">
+            <section id="candidate-details" className="scroll-mt-4 space-y-4 rounded-xl border bg-card p-5">
               <h2 className="text-xl font-semibold">{candidate.name}</h2>
               <p>{candidate.reviewNote}</p>
+              <h3 className="font-semibold">Extracted profile and résumé</h3>
+              <p className="text-sm text-muted-foreground">Source text from SEEK. Some personal details are removed during extraction.</p>
+              {sourceError ? <p role="alert">{sourceError}</p> : source?.id !== candidate.id ? (
+                <p role="status">Loading source text…</p>
+              ) : source.profileText ? (
+                <pre className="max-h-[36rem] overflow-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/30 p-4 font-sans text-sm">{source.profileText}</pre>
+              ) : <p>No extracted profile or résumé text is available for this record.</p>}
               {[candidate.profileAssessment, candidate.preScreenAssessment].map(
                 (a, i) =>
                   a && (

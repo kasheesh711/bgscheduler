@@ -3,7 +3,8 @@ import { NextResponse } from "next/server";
 import { requireHiringAdmin } from "@/lib/hiring/access";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
 import { configSchema, subjectSchema } from "@/lib/hiring/model";
-import { dashboard, reviewCandidate, saveSettings } from "@/lib/hiring/service";
+import { candidateById, dashboard, reviewCandidate, saveSettings } from "@/lib/hiring/service";
+import { getDb } from "@/lib/db";
 import { googleConnectionStatus } from "@/lib/hiring/google";
 
 const command = z.discriminatedUnion("action", [
@@ -24,9 +25,17 @@ const command = z.discriminatedUnion("action", [
     })
     .strict(),
 ]);
-export async function GET() {
+export async function GET(request: Request) {
   try {
     await requireHiringAdmin();
+    const id = new URL(request.url).searchParams.get("candidateId");
+    if (id !== null) {
+      const candidate = await candidateById(getDb(), z.uuid().parse(id));
+      return NextResponse.json(
+        { id: candidate.id, profileText: candidate.profileText },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    }
     const data = await dashboard();
     return NextResponse.json(
       {

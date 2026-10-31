@@ -63,16 +63,17 @@ export async function assessCandidates(
   config: HiringConfig,
   assess: Assess,
   max = 10,
+  scoreOnly = false,
 ) {
   const rows = await db
     .select()
     .from(s.hiringCandidates)
-    .where(inArray(s.hiringCandidates.stage, ["new", "review", "pre_screen"]))
+    .where(scoreOnly ? undefined : inArray(s.hiringCandidates.stage, ["new", "review", "pre_screen"]))
     .orderBy(asc(s.hiringCandidates.createdAt));
   let calls = 0;
   for (const candidate of rows) {
     if (calls >= max) break;
-    const phase = candidate.preScreen ? "pre" : "profile";
+    const phase = !scoreOnly && candidate.preScreen ? "pre" : "profile";
     const source =
       phase === "pre"
         ? preScreenText(candidate.preScreen!) +
@@ -87,6 +88,8 @@ export async function assessCandidates(
       phase === "pre"
         ? candidate.preScreenAssessment
         : candidate.profileAssessment;
+    if (scoreOnly && assessment && oldHash === hash &&
+      candidate.universityAssessment?.catalogHash === sourceHash(config.universities)) continue;
     if (!assessment && oldHash === hash) continue;
     if (!assessment || oldHash !== hash) {
       const value = await assess(source, `${candidate.id}:${phase}:${hash}`);
@@ -98,7 +101,7 @@ export async function assessCandidates(
           const [held] = await tx
             .update(s.hiringCandidates)
             .set({
-              stage: "review",
+              ...(scoreOnly ? {} : { stage: "review" as const }),
               ...(phase === "pre"
                 ? { preScreenHash: hash, preScreenAssessment: null }
                 : { profileHash: hash, profileAssessment: null }),
@@ -142,7 +145,7 @@ export async function assessCandidates(
       if (
         fresh.revision !== candidate.revision ||
         sourceHash(current.config.universities) !== catalogHash ||
-        !current.config.enabled ||
+        (scoreOnly ? current.config.enabled || current.config.deliveryEnabled : !current.config.enabled) ||
         !current.config.rubricApproved ||
         !runtimeWritesAllowed()
       )
@@ -155,6 +158,10 @@ export async function assessCandidates(
         .update(s.hiringCandidates)
         .set({ ...update, universityAssessment: prestige })
         .where(eq(s.hiringCandidates.id, candidate.id));
+      if (scoreOnly) {
+        await audit(tx, "subscription-assessment", "profile-score-only", candidate.id, { sourceHash: hash });
+        return;
+      }
       // Historical messages are not a safe invitation ledger. Keep the first import for review.
       const historical =
         candidate.previouslyContacted && !candidate.profileText;
