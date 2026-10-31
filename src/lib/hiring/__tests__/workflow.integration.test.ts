@@ -152,6 +152,9 @@ describe("hiring workflow persistence", () => {
     expect(rows.map(c => c.stage).sort()).toEqual(["new", "stopped"]);
     expect(rows.every(c => c.profileAssessment !== null)).toBe(true);
     expect(await db.select().from(s.hiringOutbox)).toEqual([]);
+    const auditCount = (await db.select().from(s.hiringAudit)).length;
+    expect(await assessCandidates(db, paused, assess, 10, true)).toBe(0);
+    expect((await db.select().from(s.hiringAudit)).length).toBe(auditCount);
   });
   it("runs from a new application through both invitations, a recorded paper pass and a confirmed mock", async () => {
     const id = await importApplication(

@@ -88,6 +88,8 @@ export async function assessCandidates(
       phase === "pre"
         ? candidate.preScreenAssessment
         : candidate.profileAssessment;
+    if (scoreOnly && assessment && oldHash === hash &&
+      candidate.universityAssessment?.catalogHash === sourceHash(config.universities)) continue;
     if (!assessment && oldHash === hash) continue;
     if (!assessment || oldHash !== hash) {
       const value = await assess(source, `${candidate.id}:${phase}:${hash}`);
