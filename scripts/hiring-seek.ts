@@ -129,6 +129,7 @@ async function readApplication(
   await dialog.waitFor({ state: "visible" });
   let resumeText = "";
   try {
+    await dialog.getByRole("tab", { name: /^Profile(?:\s+Profile)*$/ }).click();
     const profile = dialog.getByRole("tabpanel", { name: "Profile" });
     await profile
       .getByRole("heading", { name: "Application questions", exact: true })
@@ -157,13 +158,23 @@ async function readApplication(
       .replace(/Preferred work rights in Thailand\s*\n[^\n]*/i, "")
       .replace(/Expected monthly salary\s*\n[^\n]*/i, "");
     const resume = dialog.getByRole("button", { name: "Resumé" });
-    if (await resume.count()) {
+    const resumeTab = dialog.getByRole("tab", { name: "Resumé" });
+    if ((await resume.count()) || (await resumeTab.count())) {
       const dir = await mkdtemp(path.join(os.tmpdir(), "bgs-hiring-"));
       try {
+        let downloadButton = resume;
+        if (await resumeTab.count()) {
+          await resumeTab.click();
+          downloadButton = dialog.getByRole("button", {
+            name: "Download document",
+            exact: true,
+          });
+        }
+        await downloadButton.waitFor({ state: "visible", timeout: 10000 });
         const downloadPromise = page.waitForEvent("download", {
           timeout: 20000,
         });
-        await resume.click();
+        await downloadButton.click();
         const download = await downloadPromise;
         const file = path.join(dir, "resume");
         await download.saveAs(file);
