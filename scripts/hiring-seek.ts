@@ -13,6 +13,7 @@ const ID_CONTROL = 'input[id^="checkbox-"], button[id$="-move-to"]';
 
 export function redactProfile(text: string, name: string) {
   return text
+    .replaceAll("\0", "")
     .replaceAll(name, "[candidate]")
     .split(/\r?\n/)
     .filter(

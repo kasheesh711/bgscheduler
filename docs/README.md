@@ -1,6 +1,6 @@
 # BGScheduler Documentation Handbook
 
-**Prepared feature:** [Tutor hiring](features/hiring.md) — application screening, editable scoring, paper assessments and Wise-checked mock appointments. Live activation is pending.
+**New feature:** [Tutor hiring](features/hiring.md) — application screening, editable scoring, paper assessments and Wise-checked mock appointments.
 
 **New feature:** [Tutor Sit-ins](features/tutor-sit-ins.md) — quarterly observations, adaptive scheduling, Google Calendar consent, native rubrics and family communication. See the [rollout record](operations/tutor-sit-ins-rollout.md); delivery is opt-in.
 

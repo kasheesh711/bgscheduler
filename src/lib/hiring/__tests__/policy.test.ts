@@ -19,6 +19,7 @@ import {
 } from "../scoring";
 import { indexedSlotAvailable } from "../availability";
 import type { IndexedTutorGroup } from "@/lib/search/index";
+import { redactProfile } from "../../../../scripts/hiring-seek";
 
 const assessment: Assessment = {
   criteria: (
@@ -55,6 +56,11 @@ const pre: PreScreen = {
 };
 
 describe("hiring decision boundaries", () => {
+  it("removes PDF null bytes without losing the surrounding profile evidence", () => {
+    expect(
+      redactProfile("Example Tutor\nMathematics\0 teacher\nภาษาไทย", "Example Tutor"),
+    ).toBe("[candidate]\nMathematics teacher\nภาษาไทย");
+  });
   it("reads total folder counts rather than new counts and refuses incomplete source coverage", () => {
     const labels = [
       "Inbox\n331 New\n1,362",

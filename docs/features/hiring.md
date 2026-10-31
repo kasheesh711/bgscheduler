@@ -1,6 +1,6 @@
 # Tutor hiring
 
-Status: local implementation; production activation and delivery verification pending.
+Status: deployed. The Hiring workspace shows the current worker status and delivery results.
 
 The Hiring workspace follows a candidate from a SEEK application to an onsite mock teaching appointment. A human still marks the paper assessment. The automation offers mock teaching only after a recorded pass. It does not make a final hiring decision or send rejection messages.
 
@@ -101,7 +101,7 @@ New paper appointments must use the Hiring booking page. The old scheduling form
 
 ## Setup and release
 
-The implementation is prepared on `codex/hiring-automation`. Do not apply migrations or send live messages from a development test.
+Use a checked release checkout. Do not apply migrations or send live messages from a development test.
 
 1. Complete the project release checks and review this feature.
 2. Apply **only the reviewed hiring migration**, after checking the target database and the current migration ledger. Do not apply unrelated pending migrations as a side effect.
@@ -111,7 +111,7 @@ The implementation is prepared on `codex/hiring-automation`. Do not apply migrat
 6. After release and live-send approval, set the write gate and enable the feature. Run one controlled `--once` cycle. Verify recipients and provider readbacks before enabling routine `--watch` cycles.
 7. To run without an open terminal, use the [macOS LaunchAgent template](../operations/hiring-worker.plist.example). Replace its five path placeholders with the release checkout, Node.js 24 executable and bin directory, Claude CLI bin directory, and user home. Ensure `~/.bgscheduler-hiring` exists. Install the reviewed file as `~/Library/LaunchAgents/com.begifted.hiring.plist`, validate it with `plutil -lint`, then load it with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.begifted.hiring.plist`. Use `launchctl bootout` with the same domain and path to stop it. The template contains no secrets; the worker reads the release checkout's protected environment file.
 
-`--watch` runs one cycle at a time, with 15 minutes between cycles. It uses the owner's Claude Code subscription and refuses API-key authentication. No model API-key spend is introduced. It queues decisions in Postgres and asks the production delivery endpoint to send messages using Vercel's existing private keys. The Mac needs the production database, application signing secret and source-read credentials, but no Resend or LINE sending keys. The owner machine must remain awake, connected and signed in; Vercel cannot run the subscription CLI. The worker records its last successful source counts and any failure in Hiring. The LaunchAgent starts at login and restarts a stopped worker. Its installation and activation are release steps; they have not been performed during development.
+`--watch` runs one cycle at a time, with 15 minutes between cycles. It uses the owner's Claude Code subscription and refuses API-key authentication. No model API-key spend is introduced. It queues decisions in Postgres and asks the production delivery endpoint to send messages using Vercel's existing private keys. The Mac needs the production database, application signing secret and source-read credentials, but no Resend or LINE sending keys. The owner machine must remain awake, connected and signed in; Vercel cannot run the subscription CLI. The worker records its last successful source counts and any failure in Hiring. The LaunchAgent starts at login and restarts a stopped worker. Keep the release checkout and its protected environment file while the agent is installed.
 
 Run these local checks from the checkout:
 
