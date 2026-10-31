@@ -8,12 +8,17 @@ import { loadEnvConfig } from "@next/env";
 import { getDb } from "../src/lib/db";
 import { settings } from "../src/lib/hiring/service";
 import { assessCandidates } from "../src/lib/hiring/worker";
-import { subscriptionAuthSchema } from "../src/lib/hiring/model";
+import { subscriptionAuthSchema, runtimeWritesAllowed } from "../src/lib/hiring/model";
 import { assessmentSchema, ASSESSMENT_SYSTEM } from "../src/lib/hiring/scoring";
-import { runClaude, claudeChildEnv } from "../src/lib/feedback-autowriter/nightly/claude-runner";
+import { runClaude, claudeChildEnv, killChildren, type ClaudeRunnerDeps } from "../src/lib/feedback-autowriter/nightly/claude-runner";
 
 async function main() {
   loadEnvConfig(process.cwd());
+  if (!runtimeWritesAllowed()) throw new Error("Set HIRING_WRITES_ENABLED to store review scores.");
+  const children: NonNullable<ClaudeRunnerDeps["children"]> = new Set();
+  const stop = async () => { await killChildren(children); process.exit(0); };
+  process.on("SIGTERM", stop);
+  process.on("SIGINT", stop);
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
   const lease = await pool.connect();
   try {
@@ -30,7 +35,7 @@ async function main() {
       const { config } = await settings(db);
       if (config.enabled || config.deliveryEnabled) throw new Error("Pause live hiring and messages before review scoring.");
       const calls = await assessCandidates(db, config, async (source, key) => {
-        const result = await runClaude({ purpose: "hiring-review-score", key, system: ASSESSMENT_SYSTEM, user: source, schema: z.toJSONSchema(assessmentSchema, { target: "draft-07" }), budgetUsd: 3 }, { cwd, cliVersion, callsLog: path.join(home, "model-calls.jsonl") });
+        const result = await runClaude({ purpose: "hiring-review-score", key, system: ASSESSMENT_SYSTEM, user: source, schema: z.toJSONSchema(assessmentSchema, { target: "draft-07" }), budgetUsd: 3 }, { cwd, cliVersion, children, callsLog: path.join(home, "model-calls.jsonl") });
         if (result.kind !== "success") throw new Error(`Subscription scoring stopped: ${result.kind}`);
         return result.value;
       }, 10, true);
