@@ -15,7 +15,8 @@ import {
 } from "../src/lib/hiring/model";
 import { settings } from "../src/lib/hiring/service";
 import { importApplication, observeSeekState } from "../src/lib/hiring/sources";
-import { deliverOutbox, runHiringCycle } from "../src/lib/hiring/worker";
+import { runHiringCycle } from "../src/lib/hiring/worker";
+import { requestDelivery } from "../src/lib/hiring/dispatch";
 import { assessmentSchema, ASSESSMENT_SYSTEM } from "../src/lib/hiring/scoring";
 import {
   runClaude,
@@ -74,7 +75,7 @@ async function main() {
         const { config } = await settings(db);
         configSchema.parse(config);
         if (!config.enabled) throw new Error("Hiring is paused in Scheduling.");
-        const bookingMessages = await deliverOutbox(db, config, 50, true);
+        const bookingMessages = await requestDelivery({ mode: "bookings" });
         subscriptionAuthSchema.parse(
           JSON.parse(
             execFileSync("claude", ["auth", "status"], {
@@ -124,8 +125,14 @@ async function main() {
           .update(hiringSettings)
           .set({ workerSummary: imported })
           .where(eq(hiringSettings.id, "default"));
+        const delivery = await requestDelivery({ mode: "all" });
         console.log(
-          JSON.stringify({ ...imported, ...result, bookingMessages }),
+          JSON.stringify({
+            ...imported,
+            ...result,
+            sent: delivery.sent,
+            bookingMessages: bookingMessages.sent,
+          }),
         );
       } catch (error) {
         const message =

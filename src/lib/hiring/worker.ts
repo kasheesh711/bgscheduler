@@ -455,13 +455,12 @@ export async function runHiringCycle(db: Database, assess: Assess) {
   try {
     const imported = await syncTracker(db, config);
     const calls = await assessCandidates(db, config, assess);
-    const sent = await deliverOutbox(db, config);
     await mirrorTracker(db, config);
     await db
       .update(s.hiringSettings)
       .set({ workerAt: new Date(), workerError: null })
       .where(eq(s.hiringSettings.id, "default"));
-    return { ...imported, calls, sent };
+    return { ...imported, calls };
   } catch (error) {
     await db
       .update(s.hiringSettings)
