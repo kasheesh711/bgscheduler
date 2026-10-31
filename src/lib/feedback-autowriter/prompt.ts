@@ -133,6 +133,12 @@ const CLASS_TERMS: ReadonlyArray<{ pattern: RegExp; meaning: string }> = [
 /** Our terms, given to Soniox as context (job.ts) and never taken for a person's name (`otherPeopleNamed`). */
 export const SONIOX_TERMS: readonly string[] = ["ISEB", "11+", "13+", "NVR", "Non-Verbal Reasoning", "Verbal Reasoning", "IGCSE", "IB", "SAT", "A-level"];
 
+/** The subject in a Wise session title ("Live Session - Chemistry" → "Chemistry"); null for a bare title. */
+export function classSubject(title: string | null | undefined): string | null {
+  const stripped = (title?.trim() ?? "").replace(SESSION_TITLE_PREFIX, "").replace(CANCELLED_SUFFIX, "").trim();
+  return stripped && !BARE_SESSION_TITLE.test(stripped) ? stripped : null;
+}
+
 /**
  * Class details from Wise that both the writer and the judge may rely on.
  * At BeGifted, Wise's `classSubject` holds the programme or level band
@@ -141,9 +147,7 @@ export const SONIOX_TERMS: readonly string[] = ["ISEB", "11+", "13+", "NVR", "No
  */
 export function describeClass(input: { programme: string | null | undefined; title: string | null | undefined }): string[] {
   const programme = input.programme?.trim() || null;
-  const title = input.title?.trim() ?? "";
-  const stripped = title.replace(SESSION_TITLE_PREFIX, "").replace(CANCELLED_SUFFIX, "").trim();
-  const subject = stripped && !BARE_SESSION_TITLE.test(stripped) ? stripped : null;
+  const subject = classSubject(input.title);
   const lines = [
     ...(programme ? [`Programme: ${programme}`] : []),
     ...(subject ? [`Class subject: ${subject}`] : []),

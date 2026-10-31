@@ -250,6 +250,16 @@ export const AUTOWRITER_SWEEP_MIN_REMAINING_MS = 560_000;
  * these are the classes with at most 2.5 h of tries left.
  */
 export const AUTOWRITER_SWEEP_NEAR_DEADLINE_MS = 3 * 60 * 60 * 1000;
+/**
+ * Owner rule (25 Oct 2026): feedback is published within 48 h of the class, never left on a hold. A `held` class that
+ * nobody has written gets its fallback note (`deadline-fallback.ts`) by this long after its end, or by the deadline
+ * margin when that comes first.
+ */
+export const AUTOWRITER_PUBLISH_WITHIN_MS = 48 * 60 * 60 * 1000;
+/** The fallback note may post from this long before that limit: the tutor keeps the hours before it, the sweep ~24 tries. */
+export const AUTOWRITER_FALLBACK_WINDOW_MS = 6 * 60 * 60 * 1000;
+/** Fallback notes a sweep posts at most (each may take ~3 min of Wise reads and POST): ~24 sweeps fit in one window. */
+export const AUTOWRITER_FALLBACK_MAX_PER_SWEEP = 2;
 /** While another POST is in flight, re-try the guarded submit this often … */
 export const AUTOWRITER_POST_IN_FLIGHT_WAIT_MS = 10_000;
 /** … at most this many times before leaving the session for the next sweep. */

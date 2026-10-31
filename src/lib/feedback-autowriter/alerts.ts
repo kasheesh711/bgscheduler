@@ -6,13 +6,14 @@ import { rosterTutor } from "./roster";
 import type { AlertKind, JudgeUnreachedCause, PendingAlert } from "./store";
 
 const KIND_TEXT: Record<Exclude<AlertKind, "judge_failing">, string> = {
-  held: "Not written — the draft failed checks. Please write this feedback.",
+  held: "Not written — the draft failed checks. Please write this feedback. If it is still blank about 42 hours after class, the autowriter posts a short note itself (the no-show note when the student never joined, otherwise a fact-only note), unless billing, the form or the submission blocks it.",
   expired: "Not written before the deadline window. Please write this feedback now.",
   no_summary: "Wise has no AI summary 3 hours after class. The autowriter keeps trying; write it yourself if it stays blank.",
   no_recording: "Wise's recording, or its transcript, is still not ready 3 hours after class (second pass). The autowriter keeps trying until the deadline; write it yourself if you can.",
   unknown_outcome: "The Wise POST outcome is unclear. Autowriter halted — check this class in Wise before resuming.",
   verify_failed: "The Wise POST did not verify. Autowriter halted — check this class in Wise before resuming.",
   rejected: "Wise rejected the POST. Autowriter halted — check this class before resuming.",
+  fallback_failed: "The autowriter could not post its 48-hour fallback note (billing, the feedback form or the submission in Wise is not as a post needs, or its last tries failed), so this class is still blank. Please write this feedback now. The autowriter keeps trying until 30 minutes before the deadline unless billing, the form or the submission blocked it.",
 };
 
 /** What kept the judge from being asked, when it was not the judge model that failed. */
