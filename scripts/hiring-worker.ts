@@ -135,14 +135,19 @@ async function main() {
           }),
         );
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Hiring worker failed.";
+        const cause =
+          error instanceof Error && error.cause instanceof Error
+            ? error.cause
+            : error;
+        const message = (
+          cause instanceof Error ? cause.message : "Hiring worker failed."
+        ).split("\n", 1)[0].slice(0, 300);
         await db
           .update(hiringSettings)
-          .set({ workerError: message.slice(0, 300) })
+          .set({ workerError: message })
           .where(eq(hiringSettings.id, "default"))
           .catch(() => {});
-        if (mode === "--once") throw error;
+        if (mode === "--once") throw new Error(message);
         console.error(message);
       }
       if (mode === "--watch" && !stop)
@@ -158,7 +163,9 @@ async function main() {
 }
 main().catch((error) => {
   console.error(
-    error instanceof Error ? error.message : "Hiring worker failed.",
+    (error instanceof Error ? error.message : "Hiring worker failed.")
+      .split("\n", 1)[0]
+      .slice(0, 300),
   );
   process.exitCode = 1;
 });
