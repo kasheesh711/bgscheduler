@@ -224,7 +224,7 @@ describe("hiring decision boundaries", () => {
       id: "g",
       canonicalKey: "Peat",
       displayName: "Peat",
-      supportedModes: ["OFFLINE"],
+      supportedModes: ["onsite"],
       qualifications: [],
       wiseRecords: [],
       availabilityWindows: [
@@ -232,7 +232,7 @@ describe("hiring decision boundaries", () => {
           weekday: 1,
           startMinute: 600,
           endMinute: 960,
-          modality: "OFFLINE",
+          modality: "onsite",
           wiseTeacherId: "w",
         },
       ],
@@ -242,6 +242,20 @@ describe("hiring decision boundaries", () => {
       dataIssues: [],
     };
     expect(indexedSlotAvailable(group, "2026-11-02", 600, 660)).toBe(true);
+    expect(
+      indexedSlotAvailable(
+        {
+          ...group,
+          availabilityWindows: group.availabilityWindows.map((window) => ({
+            ...window,
+            modality: "online",
+          })),
+        },
+        "2026-11-02",
+        600,
+        660,
+      ),
+    ).toBe(false);
     expect(
       indexedSlotAvailable(
         { ...group, availabilityWindows: [] },

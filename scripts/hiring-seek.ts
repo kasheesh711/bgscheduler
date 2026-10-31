@@ -97,7 +97,9 @@ async function readApplication(
   const move = card.locator('button[id$="-move-to"]');
   const id = (await move.getAttribute("id"))?.replace(/-move-to$/, "");
   const label = await move.getAttribute("aria-label");
-  const name = label?.match(/^Move (.+) to a status$/)?.[1];
+  const name = label?.match(
+    /^Move (.+) (?:to a status|from (?:Inbox|Prescreen|Shortlist|Interview|Offer|Accept|Not Suitable))$/,
+  )?.[1];
   if (!id || !name)
     throw new Error("SEEK candidate selectors changed; import stopped.");
   const summary = await card.innerText();
@@ -121,6 +123,10 @@ async function readApplication(
   await dialog.waitFor({ state: "visible" });
   let resumeText = "";
   try {
+    const profile = dialog.getByRole("tabpanel", { name: "Profile" });
+    await profile
+      .getByRole("heading", { name: "Application questions", exact: true })
+      .waitFor({ state: "visible" });
     const emailLink = dialog.locator('a[href^="mailto:"]');
     const emailHref =
       (await emailLink.count()) === 1
@@ -129,7 +135,6 @@ async function readApplication(
     const email = emailHref
       ? decodeURIComponent(emailHref.slice(7)).trim().toLowerCase()
       : null;
-    const profile = dialog.getByRole("tabpanel", { name: "Profile" });
     for (let i = 0; i < 20; i++) {
       const more = profile.getByRole("button", { name: "More", exact: true });
       if ((await more.count()) === 0) break;

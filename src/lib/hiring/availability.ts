@@ -48,7 +48,7 @@ export function indexedSlotAvailable(
     ) &&
     covers(
       group.availabilityWindows.filter(
-        (w) => w.modality.toUpperCase() === "OFFLINE",
+        (w) => w.modality === "onsite",
       ),
       date,
       start,
