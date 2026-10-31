@@ -70,6 +70,11 @@ describe("hiring decision boundaries", () => {
       count: 1362,
     });
     expect(parseSeekFolderCounts(labels)[3].count).toBe(0);
+    expect(
+      parseSeekFolderCounts(
+        labels.map((value) => value.replaceAll("\n", "")),
+      )[0].count,
+    ).toBe(1362);
     expect(() => parseSeekFolderCounts(labels.slice(1))).toThrow(/counts/);
   });
   it("accepts only a signed-in Claude subscription for automatic scoring", () => {

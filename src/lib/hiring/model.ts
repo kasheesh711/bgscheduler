@@ -19,8 +19,8 @@ export const SEEK_STAGES = [
 ] as const;
 export function parseSeekFolderCounts(labels: string[]) {
   const counts = SEEK_STAGES.map((status) => {
-    const rows = labels.filter(
-      (label) => label.split("\n")[0].trim() === status,
+    const rows = labels.filter((label) =>
+      label.trim().toLowerCase().startsWith(status.toLowerCase()),
     );
     const numbers = rows[0]?.match(/\d[\d,]*/g);
     if (rows.length !== 1 || !numbers)

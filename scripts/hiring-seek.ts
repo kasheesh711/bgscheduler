@@ -201,6 +201,7 @@ export async function importSeek(
     channel: "chrome",
     headless: true,
     acceptDownloads: true,
+    viewport: { width: 1440, height: 1000 },
   });
   let scanned = 0,
     imported = 0,
@@ -208,18 +209,57 @@ export async function importSeek(
   try {
     const page = browser.pages()[0] ?? (await browser.newPage());
     await page.goto(`https://th.employer.seek.com/candidates/?jobid=${jobId}`);
-    await page.getByText("Filter and search", { exact: true }).last().click();
-    const filter = page.getByRole("dialog", { name: "Filter applications by" });
-    const region = filter.getByRole("region", { name: "Status", exact: true });
-    if (!(await region.isVisible()))
-      await filter.getByRole("button", { name: "Status", exact: true }).click();
-    const labels = await region
-      .getByRole("button")
-      .evaluateAll((elements) =>
-        elements.map((el) => (el as HTMLElement).innerText),
-      );
+    const statusButtons = page.getByRole("button", {
+      name: /^(Inbox|Prescreen|Shortlist|Interview|Offer|Accept|Not Suitable).*applications?$/i,
+    });
+    const compactFilter = page
+      .getByText("Filter and search", { exact: true })
+      .filter({ visible: true })
+      .last();
+    const notice = page.getByRole("heading", {
+      name: "How to check references",
+      exact: true,
+    });
+    // Filters can hydrate after the first candidate card is visible.
+    await Promise.race([
+      statusButtons.first().waitFor({ state: "visible" }),
+      compactFilter.waitFor({ state: "visible" }),
+      notice.waitFor({ state: "visible" }),
+    ]);
+    if (await notice.isVisible()) {
+      await page
+        .getByRole("button", { name: "Close", exact: true })
+        .last()
+        .click();
+      await Promise.race([
+        statusButtons.first().waitFor({ state: "visible" }),
+        compactFilter.waitFor({ state: "visible" }),
+      ]);
+    }
+    let labels = await statusButtons.evaluateAll((elements) =>
+      elements.map((el) => (el as HTMLElement).innerText),
+    );
+    if (!labels.length) {
+      await compactFilter.click();
+      const filter = page.getByRole("dialog", {
+        name: "Filter applications by",
+      });
+      const region = filter.getByRole("region", {
+        name: "Status",
+        exact: true,
+      });
+      if (!(await region.isVisible()))
+        await filter
+          .getByRole("button", { name: "Status", exact: true })
+          .click();
+      labels = await region
+        .getByRole("button")
+        .evaluateAll((elements) =>
+          elements.map((el) => (el as HTMLElement).innerText),
+        );
+      await filter.getByRole("button", { name: "Close", exact: true }).click();
+    }
     const folders = parseSeekFolderCounts(labels);
-    await filter.getByRole("button", { name: "Close", exact: true }).click();
     const allIds = new Set<string>();
     for (const { status, count } of folders) {
       if (!count) continue;
