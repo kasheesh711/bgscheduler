@@ -1,6 +1,6 @@
 # Tutor hiring
 
-Status: deployed. The Hiring workspace shows the current worker status and delivery results.
+Status: deployed. The Hiring workspace opens on a one-screen Pipeline view: summary figures, stages, score distribution, profile evidence, subject supply, the candidate table and worker, delivery and activity status. The **Rules and setup** view holds the configuration.
 
 The Hiring workspace follows a candidate from a SEEK application to an onsite mock teaching appointment. A human still marks the paper assessment. The automation offers mock teaching only after a recorded pass. It does not make a final hiring decision or send rejection messages.
 
@@ -42,7 +42,7 @@ The [job advertisement](https://th.jobsdb.com/expiredjob/94844236?ref=cm-ui) ask
 
 ## Scoring and advancement
 
-Kevin set these weights. All six weights and the invitation threshold are editable in **Hiring → Screening rules and setup**. Weights must sum to 100; the initial threshold is 60. Saving records the actor, revision and full configuration.
+Kevin set these weights. All six weights and the invitation threshold are editable in **Hiring → Rules and setup**. Weights must sum to 100; the initial threshold is 60. Saving records the actor, revision and full configuration.
 
 | Criterion | Points |
 |---|---:|
