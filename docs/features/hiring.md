@@ -6,7 +6,7 @@ The Hiring workspace follows a candidate from a SEEK application to an onsite mo
 
 Open a candidate to read the full extracted profile and résumé text. The text is loaded separately from the candidate list and keeps the extraction's personal-detail redactions. Text unavailable in the source is shown as unavailable.
 
-For review before activation, keep processing and messages paused and run `npm run hiring:score` on the owner Mac with `HIRING_WRITES_ENABLED=true`. This uses the Claude subscription to score stored profiles in all stages. It preserves stages and does not queue or send invitations. The command resumes from stored source hashes and stops when no unscored source remains. It does not enable live hiring. Scores appear as each assessment completes; review scoring does not update the live worker's last-run timestamp.
+For review before activation, keep processing and messages paused and run `npm run hiring:score` on the owner Mac with `HIRING_WRITES_ENABLED=true`. This uses four concurrent Claude subscription calls to score separate stored profiles in all stages. It preserves stages and does not queue or send invitations. The command resumes from stored source hashes and stops when no unscored source remains. Set `HIRING_SCORE_UNTIL` to an ISO timestamp to stop model calls at a deadline. It does not enable live hiring. Scores appear as each assessment completes; review scoring does not update the live worker's last-run timestamp.
 
 ## Source findings — 31 October 2026
 

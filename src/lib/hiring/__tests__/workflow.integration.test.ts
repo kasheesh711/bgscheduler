@@ -137,17 +137,24 @@ const input = {
   teachingCommitmentConfirmed: true,
 };
 describe("hiring workflow persistence", () => {
-  it("scores paused candidates without changing stages or queuing invitations", async () => {
+  it("scores separate paused candidates concurrently without changing stages or queuing invitations", async () => {
     const paused = { ...config, enabled: false, deliveryEnabled: false };
     await db.update(s.hiringSettings).set({ config: paused }).where(eq(s.hiringSettings.id, "default"));
-    await db.insert(s.hiringCandidates).values(["new", "stopped"].map(stage => ({
+    const inserted = await db.insert(s.hiringCandidates).values(["new", "stopped"].map(stage => ({
       name: stage, stage: stage as "new" | "stopped", profileText: "degree subject curriculum teaching english Mathematics",
-    })));
-    const assess = async () => ({
+    }))).returning();
+    let entered = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const assess = async () => {
+      if (++entered === 2) release();
+      await gate;
+      return ({
       criteria: ["degree", "subject", "curriculum", "teaching", "english"].map(id => ({id,result:"met",evidence:id,reason:"Source"})),
       subjects: [{subject:"Mathematics",evidence:"Mathematics",relevant:true}], summary:"Evidence",
-    });
-    expect(await assessCandidates(db, paused, assess, 10, true)).toBe(2);
+      });
+    };
+    expect(await Promise.all(inserted.map(c => assessCandidates(db, paused, assess, 1, true, c.id)))).toEqual([1, 1]);
     const rows = await db.select().from(s.hiringCandidates);
     expect(rows.map(c => c.stage).sort()).toEqual(["new", "stopped"]);
     expect(rows.every(c => c.profileAssessment !== null)).toBe(true);

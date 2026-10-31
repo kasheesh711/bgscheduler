@@ -64,11 +64,12 @@ export async function assessCandidates(
   assess: Assess,
   max = 10,
   scoreOnly = false,
+  candidateId?: string,
 ) {
   const rows = await db
     .select()
     .from(s.hiringCandidates)
-    .where(scoreOnly ? undefined : inArray(s.hiringCandidates.stage, ["new", "review", "pre_screen"]))
+    .where(scoreOnly ? (candidateId ? eq(s.hiringCandidates.id, candidateId) : undefined) : inArray(s.hiringCandidates.stage, ["new", "review", "pre_screen"]))
     .orderBy(asc(s.hiringCandidates.createdAt));
   let calls = 0;
   for (const candidate of rows) {
