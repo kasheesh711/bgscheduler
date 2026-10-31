@@ -32,6 +32,8 @@ function isPublicRoute(pathname: string) {
     // see src/lib/student-schedule/links.ts. Note the trailing slash: it keeps
     // the authenticated /student-schedule admin page out of this allowlist.
     pathname.startsWith("/schedule/") ||
+    /^\/hiring\/book\/[^/]+$/.test(pathname) ||
+    /^\/api\/hiring\/book\/[^/]+$/.test(pathname) ||
     /^\/room\/[^/]+$/.test(pathname) ||
     pathname === "/api/room/availability" ||
     pathname === "/api/room/reservations" ||
@@ -121,7 +123,7 @@ export default edgeAuth(async (req) => {
 
   if (isPublicRoute(pathname)) {
     const response = NextResponse.next();
-    if (pathname.startsWith("/room/") || pathname.startsWith("/api/room/")) {
+    if (pathname.startsWith("/room/") || pathname.startsWith("/api/room/") || pathname.startsWith("/hiring/book/") || pathname.startsWith("/api/hiring/book/")) {
       response.headers.set("Cache-Control", "private, no-store");
       response.headers.set("Referrer-Policy", "no-referrer");
       response.headers.set("X-Robots-Tag", "noindex, nofollow");
