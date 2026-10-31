@@ -92,7 +92,7 @@ New paper appointments must use the Hiring booking page. The old scheduling form
 - Admin: `/hiring`, `/api/hiring`. Current admin session and page scope are required.
 - Worker delivery: `POST /api/internal/hiring-delivery`. A short-lived HMAC binds the complete request body to the existing application secret. The route rejects preview environments. Email and LINE keys stay in Vercel; they are not exported to the Mac. Test mail and Calendar entries address only the configured organizer; a LINE test requires the organizer's confirmed personal user ID and rejects group IDs.
 - Candidate: `/hiring/book/{token}`, `/api/hiring/book/{token}`. HMAC verification, expiry and stage checks protect access. No contact details or other candidates are returned. Responses prohibit caching and referrer disclosure.
-- Google consent: `/api/hiring/google/connect` and `/api/hiring/google/callback`. State is encrypted, short-lived and bound to the current admin account. The returned account email and scopes are verified. The existing encrypted token store and refresh code are reused.
+- Google consent uses the existing Auth.js sign-in flow and registered callback. It requests Calendar and Sheets access for the configured organizer and keeps the existing Drive grant. The existing account validation, encrypted token store and refresh code are reused.
 - Booking triggers share the existing sit-in observer lock and check overlap in both directions. Candidate overlap is also rejected. Adjacent appointments are allowed.
 - Email uses the existing outbound sender. LINE uses each tutor's current bot route and enabled group registration; the existing `PROGRESS_LINE_TUTOR_BOT_KEYS` pilot list selects the dedicated tutor bot. Calendar uses a stable event ID and verifies its private booking marker before reuse.
 - Jobs retain provider receipts. An uncertain email or LINE send reuses its original key only within the provider's retry window; it is held after 23 hours. Unsent invitations for a stage already completed are cancelled. Provider acceptance and recipient delivery remain distinct.
@@ -105,7 +105,7 @@ The implementation is prepared on `codex/hiring-automation`. Do not apply migrat
 
 1. Complete the project release checks and review this feature.
 2. Apply **only the reviewed hiring migration**, after checking the target database and the current migration ledger. Do not apply unrelated pending migrations as a side effect.
-3. Register the exact production callback `https://bgscheduler.vercel.app/api/hiring/google/callback` for the existing Google OAuth client. The organizer connects their own account in Hiring. No Calendar grant existed during source inspection.
+3. In Hiring, select **Connect Google** and grant Calendar and Sheets access using the configured organizer account. The existing application callback is reused; no new Google Cloud redirect URI is needed. No Calendar grant existed during source inspection.
 4. Review the suggested interviewer identities, email addresses, active LINE groups, closed dates, scoring weights and threshold. Confirm a real test recipient for each delivery channel.
 5. Use Node.js 24. From the release checkout, run `npm run hiring:worker -- --connect-seek` once and sign in to SEEK in its separate profile. That profile is stored under `~/.bgscheduler-hiring/seek-profile`, not in Git.
 6. After release and live-send approval, set the write gate and enable the feature. Run one controlled `--once` cycle. Verify recipients and provider readbacks before enabling routine `--watch` cycles.

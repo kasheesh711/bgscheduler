@@ -2,7 +2,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { Database } from "@/lib/db";
 import type { hiringBookings } from "@/lib/db/schema";
 import type { Candidate } from "../service";
-import { deliverCalendar, GOOGLE_SCOPES } from "../google";
+import { deliverCalendar } from "../google";
+import { GOOGLE_SCOPES } from "../model";
 
 vi.mock("@/lib/sales-dashboard/google-oauth", () => ({
   SHEETS_WRITE_SCOPE: "https://www.googleapis.com/auth/spreadsheets",

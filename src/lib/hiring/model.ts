@@ -3,6 +3,10 @@ import { z } from "zod";
 import { UNIVERSITY_CATALOG, THAI_UNIVERSITIES } from "./university-catalog";
 
 export const ZONE = "Asia/Bangkok";
+export const GOOGLE_SCOPES = [
+  "https://www.googleapis.com/auth/spreadsheets",
+  "https://www.googleapis.com/auth/calendar.events.owned",
+];
 export const subscriptionAuthSchema = z.object({
   loggedIn: z.literal(true),
   authMethod: z.literal("claude.ai"),

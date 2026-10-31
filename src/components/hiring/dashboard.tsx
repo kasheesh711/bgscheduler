@@ -1,9 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { signIn } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { SUBJECTS, type HiringConfig, type Subject } from "@/lib/hiring/model";
+import {
+  GOOGLE_SCOPES,
+  SUBJECTS,
+  type HiringConfig,
+  type Subject,
+} from "@/lib/hiring/model";
 import type { dashboard } from "@/lib/hiring/service";
 
 type Data = Awaited<ReturnType<typeof dashboard>> & {
@@ -68,10 +74,24 @@ export function HiringDashboard() {
     setBusy(true);
     setError("");
     try {
-      const r = await fetch("/api/hiring/google/connect", { method: "POST" });
-      const body = await r.json();
-      if (!r.ok) throw new Error(body.error);
-      window.location.assign(body.url);
+      if (!config) return;
+      await signIn(
+        "google",
+        { callbackUrl: "/hiring" },
+        {
+          prompt: "consent",
+          access_type: "offline",
+          include_granted_scopes: "true",
+          login_hint: config.connectedEmail,
+          scope: [
+            "openid",
+            "email",
+            "profile",
+            "https://www.googleapis.com/auth/drive.file",
+            ...GOOGLE_SCOPES,
+          ].join(" "),
+        },
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not connect.");
       setBusy(false);
