@@ -28,6 +28,7 @@ import {
   workRightsAccepted,
 } from "./scoring";
 import { googleConnectionStatus } from "./google";
+import { visitClashes } from "./head-schedule";
 import { bookingToken, readBookingToken, VISIT_LINK_DAYS } from "./tokens";
 import { blockingLimit, type LimitName } from "./limits";
 import { inviteRows, linkSentAt, lockQueue, preScreenTotal, readLimitUsage } from "./queue";
@@ -350,6 +351,8 @@ export async function dashboard(db: Database = getDb()) {
       },
     );
   }
+  // One shared read for all heads. Never fails the dashboard: a missing index reports stale.
+  const clashes = await visitClashes(db, bookings);
   return {
     config,
     revision: row?.revision ?? 0,
@@ -387,6 +390,7 @@ export async function dashboard(db: Database = getDb()) {
       };
     }),
     bookings,
+    visitClashes: clashes,
     outbox,
     audit: auditRows,
     tutors: contacts.map((c) => ({

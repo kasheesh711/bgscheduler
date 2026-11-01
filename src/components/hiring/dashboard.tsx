@@ -10,6 +10,7 @@ import type { dashboard } from "@/lib/hiring/service";
 import { CandidateInspector } from "./candidate-inspector";
 import { CandidateTable, matchesFilter } from "./candidate-table";
 import { AveragePentagon, EvidenceChart, KpiStrip, ScoreChart, StageChart, SubjectChart } from "./pipeline-charts";
+import { HeadSchedules } from "./head-schedules";
 import { OperationsRail } from "./operations-rail";
 import { SetupPanel } from "./setup-panel";
 import css from "./dashboard.module.css";
@@ -43,7 +44,7 @@ export function HiringDashboard() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
-  const [view, setView] = useState<"pipeline" | "setup">("pipeline");
+  const [view, setView] = useState<"pipeline" | "heads" | "setup">("pipeline");
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState<CandidateFilter>(NO_FILTER);
 
@@ -128,6 +129,7 @@ export function HiringDashboard() {
     () => data?.candidates.filter((c) => matchesFilter(c, filter, ready, extras)) ?? [],
     [data, filter, ready, extras],
   );
+  const clashes = useMemo(() => new Set(data?.visitClashes.candidateIds ?? []), [data]);
   const candidate = data?.candidates.find((c) => c.id === selected);
 
   return (
@@ -149,14 +151,14 @@ export function HiringDashboard() {
           {notice}
         </div>
         <div className={css.viewSwitch} role="group" aria-label="Hiring views">
-          {(["pipeline", "setup"] as const).map((name) => (
+          {(["pipeline", "heads", "setup"] as const).map((name) => (
             <button
               key={name}
               type="button"
               aria-pressed={view === name}
               onClick={() => setView(name)}
             >
-              {name === "pipeline" ? "Pipeline" : "Rules and setup"}
+              {{ pipeline: "Pipeline", heads: "Head schedules", setup: "Rules and setup" }[name]}
             </button>
           ))}
         </div>
@@ -169,6 +171,14 @@ export function HiringDashboard() {
       {data?.workerError && (
         <p role="alert" className={css.alert}>
           {data.workerError}
+        </p>
+      )}
+      {/* The Head schedules view explains its own clashes and old data. */}
+      {view !== "heads" && data && (clashes.size > 0 || data.visitClashes.stale) && (
+        <p role="alert" className={css.alert}>
+          {clashes.size > 0
+            ? `${clashes.size} booked visit${clashes.size === 1 ? "" : "s"} now clash${clashes.size === 1 ? "es" : ""} with a Wise class, leave or sit-in. The app did not move ${clashes.size === 1 ? "it" : "them"}. Staff must act. See Head schedules.`
+            : "Wise data is old or missing, so visit clashes may not show. Check Head schedules."}
         </p>
       )}
       {!data || !config || !insights ? (
@@ -189,7 +199,17 @@ export function HiringDashboard() {
           />
         )}
         {/* Hidden, not unmounted: a switch to setup keeps a drafted reason and table filters. */}
-        <div className={css.layout} hidden={view === "setup"}>
+        {view === "heads" && (
+          <HeadSchedules
+            heads={data.config.interviewers}
+            bookings={data.bookings}
+            onOpenCandidate={(id) => {
+              setSelected(id);
+              setView("pipeline");
+            }}
+          />
+        )}
+        <div className={css.layout} hidden={view !== "pipeline"}>
           <div className={css.main}>
             <KpiStrip
               insights={insights}
@@ -213,6 +233,7 @@ export function HiringDashboard() {
               insights={insights}
               ready={ready}
               extras={extras}
+              clashes={clashes}
               weights={data.config.profileWeights}
               threshold={data.config.profileThreshold}
               filter={filter}

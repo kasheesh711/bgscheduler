@@ -17,6 +17,7 @@ import {
   instant,
   localDate,
   overlap,
+  weekStart,
   HiringError,
   type HiringConfig,
   type InterviewKind,
@@ -61,7 +62,7 @@ export function indexedSlotAvailable(
   );
 }
 
-type OfficeContext = {
+export type OfficeContext = {
   schedules: ScheduleVersion[];
   exceptions: ExceptionVersion[];
   enrollments: {
@@ -75,18 +76,16 @@ const minuteOf = (time: string) =>
   Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
 
 /**
- * True when the whole [startMinute, endMinute) range sits inside the head's saved hours on that date.
- * An enrolled head uses the Tutor Attendance schedule version in force on the date (a future version
- * is not applied early). Any other head uses the fallback week in Hiring settings.
- * Closures, excused days and one-day hours follow Tutor Attendance for both.
+ * The head's saved hours on that date, or null when the head is out. An enrolled head uses the Tutor
+ * Attendance schedule version in force on the date (a future version is not applied early). Any other head
+ * uses the fallback week in Hiring settings. Closures, excused days and one-day hours follow Tutor
+ * Attendance for both.
  */
-export function headInOffice(
+export function headOfficeWindow(
   head: { canonicalKey: string; fallbackWeek?: ScheduleVersion["week"] },
   date: string,
-  startMinute: number,
-  endMinute: number,
   ctx: OfficeContext,
-): boolean {
+): { start: string; end: string } | null {
   const enrolled = ctx.enrollments.find(
     (e) => e.canonicalKey === head.canonicalKey,
   );
@@ -96,7 +95,7 @@ export function headInOffice(
       enrolled.startDate > date ||
       (enrolled.endDate && enrolled.endDate < date))
   )
-    return false;
+    return null;
   const schedules = enrolled
     ? ctx.schedules
     : head.fallbackWeek
@@ -116,11 +115,24 @@ export function headInOffice(
     schedules,
     ctx.exceptions,
   );
+  return required && "start" in required
+    ? { start: required.start, end: required.end }
+    : null;
+}
+
+/** True when the whole [startMinute, endMinute) range sits inside the head's saved hours on that date. */
+export function headInOffice(
+  head: { canonicalKey: string; fallbackWeek?: ScheduleVersion["week"] },
+  date: string,
+  startMinute: number,
+  endMinute: number,
+  ctx: OfficeContext,
+): boolean {
+  const window = headOfficeWindow(head, date, ctx);
   return (
-    !!required &&
-    "start" in required &&
-    minuteOf(required.start) <= startMinute &&
-    endMinute <= minuteOf(required.end)
+    !!window &&
+    minuteOf(window.start) <= startMinute &&
+    endMinute <= minuteOf(window.end)
   );
 }
 
@@ -131,11 +143,12 @@ export function assignHead(candidates: { key: string; weekMocks: number }[]) {
   ).key;
 }
 
+/** True when the index is older than the Wise freshness limit, or comes from the future. */
+export const indexIsStale = (index: { syncedAt: Date }, now: Date) =>
+  now.getTime() - index.syncedAt.getTime() > MAX_SOURCE_AGE ||
+  index.syncedAt.getTime() > now.getTime() + 60_000;
 function assertFreshIndex(index: { syncedAt: Date }, now: Date) {
-  if (
-    now.getTime() - index.syncedAt.getTime() > MAX_SOURCE_AGE ||
-    index.syncedAt.getTime() > now.getTime() + 60_000
-  )
+  if (indexIsStale(index, now))
     throw new HiringError(
       409,
       "Wise availability is stale. Please try again after the next sync.",
@@ -143,7 +156,7 @@ function assertFreshIndex(index: { syncedAt: Date }, now: Date) {
 }
 
 // One at a time: `db` can be a transaction on one connection, and pg@9 refuses overlapping queries on a connection.
-const readCalendar = async (db: Database) => {
+export const readCalendar = async (db: Database) => {
   const bookings = await db
     .select()
     .from(s.hiringBookings)
@@ -156,12 +169,6 @@ const readCalendar = async (db: Database) => {
   const exceptions = await db.select().from(s.tutorAttendanceExceptions);
   const enrollments = await db.select().from(s.tutorAttendanceEnrollments);
   return { bookings, observations, schedules, exceptions, enrollments };
-};
-// Monday of the Bangkok week that holds the date.
-const weekStart = (date: string) => {
-  const d = new Date(`${date}T12:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
-  return d.toISOString().slice(0, 10);
 };
 
 export async function availableSlots(

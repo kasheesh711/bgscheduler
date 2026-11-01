@@ -104,6 +104,15 @@ export const instant = (date: string, minute: number) =>
     `${date}T${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}:00`,
     ZONE,
   );
+/** Adds whole days to a yyyy-MM-dd date. Bangkok has no daylight saving, so noon UTC is safe. */
+export const shiftDate = (date: string, days: number) => {
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+};
+/** Monday of the Bangkok week that holds the date. */
+export const weekStart = (date: string) =>
+  shiftDate(date, -((new Date(`${date}T12:00:00Z`).getUTCDay() + 6) % 7));
 export const overlap = (
   a: { start: Date; end: Date },
   b: { start: Date; end: Date },

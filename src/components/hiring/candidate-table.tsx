@@ -50,6 +50,7 @@ export function CandidateTable({
   insights,
   ready,
   extras,
+  clashes,
   weights,
   threshold,
   filter,
@@ -61,6 +62,8 @@ export function CandidateTable({
   insights: Insights;
   ready: Set<string>;
   extras: Map<string, CandidateExtras>;
+  /** Candidates whose booked mock overlaps a Wise class, leave or sit-in. */
+  clashes: Set<string>;
   weights: HiringConfig["profileWeights"];
   threshold: number;
   filter: CandidateFilter;
@@ -236,6 +239,12 @@ export function CandidateTable({
                   <td className={c.stage === "stopped" ? css.mutedCell : undefined}>
                     {STAGE_LABELS[c.stage]}
                     {ready.has(c.id) && <span className={css.readyWord}>Ready</span>}
+                    {/* The Visit column is hidden on a phone, so the marker sits here with the stage. */}
+                    {clashes.has(c.id) && (
+                      <span className={css.clashWord} title="The booked mock overlaps a Wise class, leave or sit-in. The app did not move the visit.">
+                        Visit clash
+                      </span>
+                    )}
                     {/* The Pre-screen column is hidden on a phone, so its pill sits here. */}
                     {extra && (
                       <span className={`${css.pill} ${css.stagePill} ${PILL_CLASS[extra.pre.status]}`}>{extra.pre.status}</span>

@@ -2,12 +2,17 @@ import { z } from "zod";
 import { after, NextResponse } from "next/server";
 import { requireHiringAdmin } from "@/lib/hiring/access";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
-import { configSchema, subjectSchema } from "@/lib/hiring/model";
-import { candidateById, dashboard, reviewCandidate, saveSettings } from "@/lib/hiring/service";
+import { configSchema, localDate, subjectSchema } from "@/lib/hiring/model";
+import { headWeek } from "@/lib/hiring/head-schedule";
+import { candidateById, dashboard, reviewCandidate, saveSettings, settings } from "@/lib/hiring/service";
 import { deliverBookingMessages } from "@/lib/hiring/worker";
 import { getDb } from "@/lib/db";
 import { googleConnectionStatus } from "@/lib/hiring/google";
 
+const headQuery = z.object({
+  head: z.string().trim().min(1).max(200),
+  weekStart: z.iso.date().optional(),
+});
 const command = z.discriminatedUnion("action", [
   z
     .object({
@@ -29,7 +34,20 @@ const command = z.discriminatedUnion("action", [
 export async function GET(request: Request) {
   try {
     await requireHiringAdmin();
-    const id = new URL(request.url).searchParams.get("candidateId");
+    const params = new URL(request.url).searchParams;
+    if (params.has("head")) {
+      const query = headQuery.parse({
+        head: params.get("head"),
+        weekStart: params.get("weekStart") ?? undefined,
+      });
+      const db = getDb();
+      const { config } = await settings(db);
+      return NextResponse.json(
+        await headWeek(db, config, query.head, query.weekStart ?? localDate(new Date())),
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    }
+    const id = params.get("candidateId");
     if (id !== null) {
       const candidate = await candidateById(getDb(), z.uuid().parse(id));
       return NextResponse.json(

@@ -71,13 +71,14 @@ const extras = candidateExtras(
   new Set(["d"]),
 );
 const insights = { total: 4, ready: 1, stopped: 0, stages: [] } as unknown as Insights;
-const table = (candidates = people, filter = NO_FILTER, map: Map<string, CandidateExtras> = extras) =>
+const table = (candidates = people, filter = NO_FILTER, map: Map<string, CandidateExtras> = extras, clashes = new Set<string>()) =>
   renderToStaticMarkup(
     <CandidateTable
       candidates={candidates}
       insights={insights}
       ready={new Set(["d"])}
       extras={map}
+      clashes={clashes}
       weights={weights}
       threshold={60}
       filter={filter}
@@ -204,5 +205,14 @@ describe("CandidateInspector pre-screen score parts", () => {
   });
   it("shows the work-rights answer and whether it is accepted", () => {
     expect(html).toContain("Accepted: I have permanent work rights with no restrictions");
+  });
+});
+
+describe("visit clash marker", () => {
+  it("shows on the row of a candidate whose booked mock clashes, and on no other row", () => {
+    expect(table()).not.toContain("Visit clash");
+    const html = table(people, NO_FILTER, extras, new Set(["c"]));
+    expect(html.match(/Visit clash/g)).toHaveLength(1);
+    expect(html).toContain("did not move the visit");
   });
 });
