@@ -8,6 +8,8 @@ Open a candidate to read the full extracted profile and résumé text. The text 
 
 For review before activation, keep processing and messages paused and run `npm run hiring:score` on the owner Mac with `HIRING_WRITES_ENABLED=true`. This uses four concurrent Claude subscription calls to score separate stored profiles in all stages. It preserves stages and does not queue or send invitations. The command resumes from stored source hashes and stops when no unscored source remains. Set `HIRING_SCORE_UNTIL` to an ISO timestamp to stop model calls at a deadline. It does not enable live hiring. Scores appear as each assessment completes; review scoring does not update the live worker's last-run timestamp.
 
+Use `npm run hiring:score -- --retry-invalid` to revisit evidence-validation holds without redoing completed scores. Each held profile gets up to three attempts with exact-quote instructions and validation feedback. The same validator still rejects unsupported evidence. A valid retry clears its old automatic evidence warning; human notes and candidate stages remain unchanged. Unverified results remain held after the pass.
+
 ## Source findings — 31 October 2026
 
 The [recruitment tracker](https://docs.google.com/spreadsheets/d/12bXS1Fnx0BTwrSZXzMU7fWzOgTDfA6-P6rT0v1zDF3M/edit) has 11 tabs. The reviewed ranges contained 84 sourcing records, 83 pre-screen responses, 81 main candidate records, 30 scheduling responses and 12 subject-level mock records. These include test records; they are not counts of active candidates.

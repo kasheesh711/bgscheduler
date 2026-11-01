@@ -65,6 +65,7 @@ export async function assessCandidates(
   max = 10,
   scoreOnly = false,
   candidateId?: string,
+  retryInvalid = false,
 ) {
   const rows = await db
     .select()
@@ -91,7 +92,7 @@ export async function assessCandidates(
         : candidate.profileAssessment;
     if (scoreOnly && assessment && oldHash === hash &&
       candidate.universityAssessment?.catalogHash === sourceHash(config.universities)) continue;
-    if (!assessment && oldHash === hash) continue;
+    if (!assessment && oldHash === hash && !(scoreOnly && retryInvalid)) continue;
     if (!assessment || oldHash !== hash) {
       const value = await assess(source, `${candidate.id}:${phase}:${hash}`);
       calls++;
@@ -157,7 +158,12 @@ export async function assessCandidates(
           : { profileHash: hash, profileAssessment: assessment };
       await tx
         .update(s.hiringCandidates)
-        .set({ ...update, universityAssessment: prestige })
+        .set({
+          ...update,
+          universityAssessment: prestige,
+          ...(scoreOnly && fresh.reviewNote === "AI evidence could not be verified. Review this application before advancing it."
+            ? { reviewNote: null } : {}),
+        })
         .where(eq(s.hiringCandidates.id, candidate.id));
       if (scoreOnly) {
         await audit(tx, "subscription-assessment", "profile-score-only", candidate.id, { sourceHash: hash });

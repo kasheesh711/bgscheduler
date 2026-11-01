@@ -19,6 +19,7 @@ import {
   reviewCandidate,
   saveSettings,
   settings,
+  sourceHash,
 } from "../service";
 import { importApplication, observeSeekState } from "../sources";
 import { assessCandidates, deliverOutbox } from "../worker";
@@ -137,11 +138,29 @@ const input = {
   teachingCommitmentConfirmed: true,
 };
 describe("hiring workflow persistence", () => {
+  it("retries a held source only on explicit review retry and preserves its stage", async () => {
+    const paused = { ...config, enabled: false, deliveryEnabled: false };
+    const source = "degree subject curriculum teaching english Mathematics";
+    await db.update(s.hiringSettings).set({ config: paused }).where(eq(s.hiringSettings.id, "default"));
+    const [row] = await db.insert(s.hiringCandidates).values({ name: "Held", stage: "stopped", profileText: source, profileHash: sourceHash(source), reviewNote: "AI evidence could not be verified. Review this application before advancing it." }).returning();
+    const assess = vi.fn(async () => ({
+      criteria: ["degree", "subject", "curriculum", "teaching", "english"].map(id => ({id,result:"met",evidence:id,reason:"Source"})),
+      subjects: [{subject:"Mathematics",evidence:"Mathematics",relevant:true}], summary:"Evidence",
+    }));
+    expect(await assessCandidates(db, paused, assess, 1, true, row.id)).toBe(0);
+    expect(assess).not.toHaveBeenCalled();
+    expect(await assessCandidates(db, paused, assess, 1, true, row.id, true)).toBe(1);
+    const [saved] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, row.id));
+    expect(saved.profileAssessment).not.toBeNull();
+    expect(saved.stage).toBe("stopped");
+    expect(saved.reviewNote).toBeNull();
+    expect(await db.select().from(s.hiringOutbox)).toEqual([]);
+  });
   it("scores separate paused candidates concurrently without changing stages or queuing invitations", async () => {
     const paused = { ...config, enabled: false, deliveryEnabled: false };
     await db.update(s.hiringSettings).set({ config: paused }).where(eq(s.hiringSettings.id, "default"));
     const inserted = await db.insert(s.hiringCandidates).values(["new", "stopped"].map(stage => ({
-      name: stage, stage: stage as "new" | "stopped", profileText: "degree subject curriculum teaching english Mathematics",
+      name: stage, stage: stage as "new" | "stopped", profileText: "degree subject curriculum teaching english Mathematics", reviewNote: "Human review note",
     }))).returning();
     let entered = 0;
     let release!: () => void;
@@ -158,6 +177,7 @@ describe("hiring workflow persistence", () => {
     const rows = await db.select().from(s.hiringCandidates);
     expect(rows.map(c => c.stage).sort()).toEqual(["new", "stopped"]);
     expect(rows.every(c => c.profileAssessment !== null)).toBe(true);
+    expect(rows.every(c => c.reviewNote === "Human review note")).toBe(true);
     expect(await db.select().from(s.hiringOutbox)).toEqual([]);
     const auditCount = (await db.select().from(s.hiringAudit)).length;
     expect(await assessCandidates(db, paused, assess, 10, true)).toBe(0);
