@@ -311,7 +311,7 @@ describe("hiring decision boundaries", () => {
     expect(() => readBookingToken(token, expiry, "test-secret")).toThrow();
     expect(() => readBookingToken(token, now, "wrong-secret")).toThrow();
   });
-  it("needs positive onsite evidence, complete leave coverage, and no dated clash", () => {
+  it("needs complete leave coverage and no dated clash, but no Wise working hours", () => {
     const group: IndexedTutorGroup = {
       id: "g",
       canonicalKey: "Peat",
@@ -334,6 +334,7 @@ describe("hiring decision boundaries", () => {
       dataIssues: [],
     };
     expect(indexedSlotAvailable(group, "2026-11-02", 600, 660)).toBe(true);
+    // Wise working hours are not used: online-only or empty windows do not block.
     expect(
       indexedSlotAvailable(
         {
@@ -347,7 +348,7 @@ describe("hiring decision boundaries", () => {
         600,
         660,
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       indexedSlotAvailable(
         { ...group, availabilityWindows: [] },
@@ -355,7 +356,16 @@ describe("hiring decision boundaries", () => {
         600,
         660,
       ),
-    ).toBe(false);
+    ).toBe(true);
+    for (const type of ["identity_unresolved", "leave_gap", "session_gap"])
+      expect(
+        indexedSlotAvailable(
+          { ...group, dataIssues: [{ type, message: "m" }] },
+          "2026-11-02",
+          600,
+          660,
+        ),
+      ).toBe(false);
     expect(
       indexedSlotAvailable(
         { ...group, leavesCompleteThrough: null },
@@ -389,7 +399,22 @@ describe("hiring decision boundaries", () => {
         660,
       ),
     ).toBe(true);
-    expect(indexedSlotAvailable(group, "2026-11-02", 960, 1020)).toBe(false);
+    expect(
+      indexedSlotAvailable(
+        {
+          ...group,
+          leaves: [
+            {
+              startTime: new Date("2026-11-02T03:30:00Z"),
+              endTime: new Date("2026-11-02T04:30:00Z"),
+            },
+          ],
+        },
+        "2026-11-02",
+        600,
+        660,
+      ),
+    ).toBe(false);
   });
 });
 

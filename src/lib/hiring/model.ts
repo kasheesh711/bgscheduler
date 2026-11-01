@@ -356,6 +356,14 @@ export type Slot = {
   interviewerKey: string | null;
   subjects: Subject[];
 };
+export type VisitSlot = {
+  date: string;
+  examStart: string;
+  mockStart: string;
+  mockEnd: string;
+  interviewerKey: string;
+  subject: Subject;
+};
 export const bookingSchema = z
   .object({
     start: z.iso.datetime(),
