@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { CandidateExtras } from "@/lib/hiring/status";
-import { VisitBooking } from "../booking";
+import { VisitBooking, VisitConfirm } from "../booking";
 import { CandidateInspector } from "../candidate-inspector";
 import type { HiringCandidate } from "../dashboard";
 
@@ -47,6 +47,26 @@ describe("VisitBooking", () => {
     expect(html).not.toContain("I will attend onsite");
     expect(html).not.toContain("Confirm visit");
   });
+  it("makes the address in a notice a real link, with no second link in the footer, and renders no HTML from the text", () => {
+    const html = page({ slots: [], notice: `<b>Closed</b>. Contact BeGifted on LINE: ${LINE}` });
+    expect(html.match(/href="https:\/\/lin\.ee\/OjMHF41"/g)).toHaveLength(1);
+    expect(html).toContain(`>${LINE}</a>`);
+    expect(html).toContain("&lt;b&gt;Closed&lt;/b&gt;");
+    expect(html).not.toContain("For help or changes");
+    // With no notice, the footer stays.
+    expect(page()).toContain("For help or changes");
+  });
+  it("shows a fallback and the link for an empty list with no notice, never a blank page", () => {
+    const html = page({ slots: [], notice: null });
+    expect(html).toContain("no open visit times");
+    expect(html).toContain(`href="${LINE}"`);
+    expect(html).not.toContain("Confirm visit");
+  });
+  it("puts the error directly above the confirm button", () => {
+    const html = renderToStaticMarkup(<VisitConfirm error="That time is gone." disabled={false} label="Confirm visit" onConfirm={() => {}} />);
+    expect(html).toMatch(/role="alert"[^>]*>That time is gone\.<\/p><button/);
+    expect(renderToStaticMarkup(<VisitConfirm error="" disabled={false} label="Confirm visit" onConfirm={() => {}} />)).not.toContain("alert");
+  });
   const booked = {
     examStart: slot.examStart,
     mockStart: slot.mockStart,
@@ -60,6 +80,11 @@ describe("VisitBooking", () => {
     expect(html).toContain("Move this visit");
     // The times to choose stay hidden until the candidate presses Move.
     expect(html).not.toContain("I will attend onsite");
+    expect(html).not.toContain("You cannot move it now");
+  });
+  it("gives the reason beside a disabled Move button", () => {
+    const html = page({ visit: booked, canMove: true, slots: [], notice: `Try again later. Contact BeGifted on LINE: ${LINE}` });
+    expect(html).toMatch(/disabled[^>]*>Move this visit<\/button><p[^>]*>You cannot move it now/);
   });
   it("shows no Move button when the move is used", () => {
     const html = page({ visit: booked, slots: [], canMove: false, notice: `Contact BeGifted on LINE: ${LINE}` });

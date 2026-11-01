@@ -1295,6 +1295,29 @@ describe("hiring workflow persistence", () => {
         await observeSeekState(application, "Not Suitable", false, db);
         expect((await read(row.id)).stage).toBe("stopped");
       });
+      it("still stops an old-flow candidate with a future booking, as before", async () => {
+        const application = "00000000-0000-4000-8000-000000000304";
+        const [old] = await db
+          .insert(s.hiringCandidates)
+          .values({ name: "Old", email: "old-seek@example.com", stage: "mock_booked", subjects: ["Mathematics"], sourceIds: [application] })
+          .returning();
+        await db.insert(s.hiringBookings).values({
+          candidateId: old.id,
+          kind: "mock",
+          subjects: ["Mathematics"],
+          interviewerKey: "Peat",
+          interviewerEmail: "peat@example.com",
+          lineGroupId: "group",
+          calendarOwner: "owner@example.com",
+          startTime: new Date(MOCK),
+          endTime: new Date(MOCK_END),
+          evidence: {},
+        });
+        await observeSeekState(application, "Not Suitable", false, db);
+        const saved = await read(old.id);
+        expect(saved.stage).toBe("stopped");
+        expect(saved.reviewNote).toBe("SEEK status: Not Suitable.");
+      });
       it("still stops a candidate whose visit has ended", async () => {
         const application = "00000000-0000-4000-8000-000000000303";
         const row = await invited({ sourceIds: [application] });

@@ -1,4 +1,4 @@
-import { and, eq, gt, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull, or, sql, type SQL } from "drizzle-orm";
 import { type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -207,7 +207,8 @@ export async function observeSeekState(
     if (!candidate) return;
     const newlyContacted = contacted && !candidate.previouslyContacted;
     const seekStop = ["Not Suitable", "Accept"].includes(status);
-    // The same rule as the staff stop: a future appointment is cancelled in Hiring first. The stop then applies on the next read.
+    // The same rule as the staff stop: a future visit is cancelled in Hiring first, and the stop applies on the next read.
+    // Only a visit: an old-flow booking has no Cancel visit action, so holding it would strand the candidate.
     const held =
       seekStop &&
       candidate.stage !== "stopped" &&
@@ -219,6 +220,7 @@ export async function observeSeekState(
             and(
               eq(s.hiringBookings.candidateId, candidate.id),
               eq(s.hiringBookings.status, "confirmed"),
+              isNotNull(s.hiringBookings.visitId),
               gt(s.hiringBookings.endTime, new Date()),
             ),
           )

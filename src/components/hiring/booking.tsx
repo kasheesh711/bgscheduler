@@ -30,6 +30,52 @@ const Help = () => (
   </p>
 );
 
+/** A notice is plain text from the server. Only the known LINE address becomes a link, so no HTML comes through. */
+export function VisitNotice({ text }: { text: string }) {
+  const at = text.indexOf(LINE_URL);
+  return (
+    <p role="status">
+      {at < 0 ? (
+        text
+      ) : (
+        <>
+          {text.slice(0, at)}
+          <a className="underline" href={LINE_URL} rel="noreferrer">
+            {LINE_URL}
+          </a>
+          {text.slice(at + LINE_URL.length)}
+        </>
+      )}
+    </p>
+  );
+}
+
+/** The error sits directly above the button: on a phone the top of the page is out of sight after a failed booking. */
+export function VisitConfirm({
+  error,
+  disabled,
+  label,
+  onConfirm,
+}: {
+  error: string;
+  disabled: boolean;
+  label: string;
+  onConfirm: () => void;
+}) {
+  return (
+    <>
+      {error && (
+        <p role="alert" className="rounded-lg bg-red-50 p-3 text-red-900">
+          {error}
+        </p>
+      )}
+      <Button className="w-full" disabled={disabled} onClick={onConfirm}>
+        {label}
+      </Button>
+    </>
+  );
+}
+
 /** One subject and one visit. The server assigns the head, so a time appears once and names no one. */
 export function VisitBooking({
   token,
@@ -82,13 +128,12 @@ export function VisitBooking({
       setBusy(false);
     }
   }
+  // The server sends a notice for an empty list. The fallback keeps the page from ever showing nothing.
+  const notice =
+    view.notice ?? (view.slots.length ? null : `There are no open visit times at the moment. Contact BeGifted on LINE: ${LINE_URL}`);
+  const showForm = (!view.visit || moving) && !notice;
   return (
     <>
-      {error && (
-        <p role="alert" className="rounded-lg bg-red-50 p-3 text-red-900">
-          {error}
-        </p>
-      )}
       {saved && (
         <p role="status" className="rounded-lg bg-green-50 p-3 text-green-900">
           {saved}
@@ -118,12 +163,21 @@ export function VisitBooking({
               <Button className="mt-2" variant="outline" disabled={busy || !view.slots.length} onClick={() => setMoving(true)}>
                 Move this visit
               </Button>
+              {!view.slots.length && (
+                <p className="mt-2 text-sm text-muted-foreground">You cannot move it now, because no other time is open.</p>
+              )}
             </>
           )}
         </section>
       )}
-      {view.notice && <p role="status">{view.notice}</p>}
-      {(!view.visit || moving) && !view.notice && view.slots.length > 0 && (
+      {notice && <VisitNotice text={notice} />}
+      {/* With no form on the page, a failed booking still shows its error here. */}
+      {!showForm && error && (
+        <p role="alert" className="rounded-lg bg-red-50 p-3 text-red-900">
+          {error}
+        </p>
+      )}
+      {showForm && (
         <>
           <fieldset>
             <legend className="mb-2 font-semibold">{view.visit ? "Choose a new time" : "Choose a time"}</legend>
@@ -164,9 +218,12 @@ export function VisitBooking({
             />
             <span>I can teach onsite on Saturday or Sunday and on at least one weekday after 15:00.</span>
           </label>
-          <Button className="w-full" disabled={busy || !start || !onsite || !commitment} onClick={book}>
-            {busy ? "Confirming…" : view.visit ? "Confirm new time" : "Confirm visit"}
-          </Button>
+          <VisitConfirm
+            error={error}
+            disabled={busy || !start || !onsite || !commitment}
+            label={busy ? "Confirming…" : view.visit ? "Confirm new time" : "Confirm visit"}
+            onConfirm={book}
+          />
         </>
       )}
       {moving && (
@@ -183,7 +240,7 @@ export function VisitBooking({
           Keep my current time
         </Button>
       )}
-      <Help />
+      {!notice && <Help />}
     </>
   );
 }
