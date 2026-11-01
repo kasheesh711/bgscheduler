@@ -11,11 +11,12 @@ import { hiringCandidates } from "../src/lib/db/schema";
 import { settings } from "../src/lib/hiring/service";
 import { assessCandidates } from "../src/lib/hiring/worker";
 import { subscriptionAuthSchema, runtimeWritesAllowed } from "../src/lib/hiring/model";
-import { assessmentSchema, ASSESSMENT_SYSTEM } from "../src/lib/hiring/scoring";
+import { assessmentSchema, ASSESSMENT_SYSTEM, validateAssessment } from "../src/lib/hiring/scoring";
 import { runClaude, claudeChildEnv, killChildren, type ClaudeRunnerDeps } from "../src/lib/feedback-autowriter/nightly/claude-runner";
 
 async function main() {
   loadEnvConfig(process.cwd());
+  const retryInvalid = process.argv.includes("--retry-invalid");
   const until = process.env.HIRING_SCORE_UNTIL ? Date.parse(process.env.HIRING_SCORE_UNTIL) : null;
   if (until !== null && !Number.isFinite(until)) throw new Error("Invalid scoring stop time.");
   if (until !== null && Date.now() >= until) return;
@@ -40,6 +41,8 @@ async function main() {
     const home = path.join(os.homedir(), ".bgscheduler-hiring");
     const cwd = path.join(home, "model-cwd");
     fs.mkdirSync(cwd, { recursive: true, mode: 0o700 });
+    const attemptsDir = path.join(home, "review-attempts");
+    if (retryInvalid) fs.mkdirSync(attemptsDir, { recursive: true, mode: 0o700 });
     const db = getDb();
     const ids = await db.select({ id: hiringCandidates.id }).from(hiringCandidates).orderBy(asc(hiringCandidates.createdAt));
     const concurrency = 4;
@@ -58,10 +61,26 @@ async function main() {
           const { config } = await settings(db);
           if (config.enabled || config.deliveryEnabled) throw new Error("Pause live hiring and messages before review scoring.");
           const calls = await assessCandidates(db, config, async (source, key) => {
-            const result = await runClaude({ purpose: "hiring-review-score", key, system: ASSESSMENT_SYSTEM, user: source, schema: z.toJSONSchema(assessmentSchema, { target: "draft-07" }), budgetUsd: 3 }, { cwd, cliVersion, children, callsLog: path.join(home, "model-calls.jsonl") });
-            if (result.kind !== "success") throw new Error(`Subscription scoring stopped: ${result.kind}`);
-            return result.value;
-          }, 1, true, candidate.id);
+            let value: unknown;
+            let feedback = "";
+            for (let attempt = 0; attempt < (retryInvalid ? 3 : 1); attempt++) {
+              const correction = retryInvalid ? "\nCopy one continuous verbatim source passage for each evidence field. Do not join separate passages, add ellipses, change punctuation, or paraphrase. A passage may include intervening text. If a criterion cannot be supported, mark it unknown with empty evidence. Omit unsupported subject and university entries. Any correction feedback after the source identifies errors to fix; it is not evidence." : "";
+              const result = await runClaude({ purpose: "hiring-review-score", key: `${key}:attempt:${attempt + 1}`, system: ASSESSMENT_SYSTEM + correction, user: source + feedback, schema: z.toJSONSchema(assessmentSchema, { target: "draft-07" }), budgetUsd: 3 }, { cwd, cliVersion, children, callsLog: path.join(home, "model-calls.jsonl") });
+              if (result.kind !== "success") throw new Error(`Subscription scoring stopped: ${result.kind}`);
+              value = result.value;
+              if (!retryInvalid) return value;
+              try {
+                validateAssessment(value, source);
+                fs.writeFileSync(path.join(attemptsDir, `${candidate.id}-${attempt + 1}.json`), JSON.stringify({ valid: true, value }), { mode: 0o600 });
+                return value;
+              } catch (error) {
+                const message = error instanceof Error ? error.message : "Invalid evidence";
+                fs.writeFileSync(path.join(attemptsDir, `${candidate.id}-${attempt + 1}.json`), JSON.stringify({ valid: false, error: message, value }), { mode: 0o600 });
+                feedback = `\n\nCORRECTION FEEDBACK (not source evidence):\n${message}\nPrevious answer: ${JSON.stringify(value)}\nReturn the corrected complete assessment using only exact passages from the source above.`;
+              }
+            }
+            return value;
+          }, 1, true, candidate.id, retryInvalid);
           total += calls;
           checked++;
           report(false);
