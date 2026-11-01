@@ -30,7 +30,7 @@ import {
 import { googleConnectionStatus } from "./google";
 import { bookingToken, readBookingToken, VISIT_LINK_DAYS } from "./tokens";
 import { blockingLimit, type LimitName } from "./limits";
-import { linkSentAt, lockQueue, preScreenTotal, readLimitUsage } from "./queue";
+import { inviteRows, linkSentAt, lockQueue, preScreenTotal, readLimitUsage } from "./queue";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -196,8 +196,9 @@ const LIMIT_TEXT: Record<LimitName, string> = {
   perSubject: "open per subject",
 };
 // A candidate at any other stage already holds an invitation, is stopped, or stays on the old flow.
-// `new` here is a response scored by the backfill, which changes no stage. It has no form send, so only a click reaches it.
-const INVITABLE: Stage[] = ["new", "pre_screen", "no_reply", "review", "no_booking"];
+// `new` here is a response scored by the backfill, which changes no stage.
+// `stopped` is an earlier response a person chooses to invite. No queue reads `new` or `stopped`, so only a click reaches them.
+const INVITABLE: Stage[] = ["new", "pre_screen", "no_reply", "review", "no_booking", "stopped"];
 /**
  * The one gate for every onsite invitation, from a release or a click. It takes the queue lock and reads the limits
  * itself, so the two cannot both use the last place. Call it inside a transaction, before locking the candidate row:
@@ -415,8 +416,10 @@ export async function bookingView(
   const { config } = await settings(db);
   const permitted =
     cap.kind === "paper" ? candidate.subjects : candidate.paperPassedSubjects;
+  // A candidate on the visit flow books through the visit link only.
   if (
     candidate.stage === "stopped" ||
+    candidate.visitSubject ||
     !candidate.inviteExpiresAt ||
     candidate.inviteExpiresAt.getTime() < cap.exp * 1000
   )
@@ -529,6 +532,7 @@ export async function bookInterview(
     const candidate = await candidateById(tx, cap.id);
     if (
       candidate.stage === "stopped" ||
+      candidate.visitSubject ||
       !candidate.inviteExpiresAt ||
       candidate.inviteExpiresAt.getTime() < cap.exp * 1000
     )
@@ -579,6 +583,7 @@ export async function bookInterview(
         cap.kind,
         input.subjects,
         new Date(),
+        db,
       )
     ).find(
       (s) =>
@@ -718,8 +723,8 @@ function moveRefusal(rows: VisitRow[], now: Date) {
 }
 
 /** The current time is not a choice, and every time starts inside the link's life, so the link outlasts the wait for any booked visit. */
-const offeredSlots = async (db: Database, config: HiringConfig, subject: Subject, cap: VisitLink, rows: VisitRow[], now: Date) =>
-  (await availableVisitSlots(db, config, subject, now, cap.id)).filter((slot) => {
+const offeredSlots = async (db: Database, config: HiringConfig, subject: Subject, cap: VisitLink, rows: VisitRow[], now: Date, indexDb = db) =>
+  (await availableVisitSlots(db, config, subject, now, cap.id, indexDb)).filter((slot) => {
     const start = new Date(slot.examStart).getTime();
     return start < cap.exp * 1000 && start !== examOf(rows)?.startTime.getTime();
   });
@@ -770,12 +775,12 @@ const bangkok = (date: Date) =>
   date.toLocaleString("en-GB", { timeZone: ZONE, weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
 const bangkokTime = (date: Date) =>
   date.toLocaleTimeString("en-GB", { timeZone: ZONE, hour: "2-digit", minute: "2-digit" });
-const headNotice = (mock: VisitRow, notice?: "moved" | "cancelled") => ({
+const headNotice = (mock: VisitRow, notice?: "moved" | "cancelled", movedFrom?: Date) => ({
   key: `booking:${mock.id}:line${notice === "cancelled" ? "-cancelled" : ""}`,
   candidateId: mock.candidateId,
   bookingId: mock.id,
   kind: "line" as const,
-  payload: notice ? { notice } : {},
+  payload: { ...(notice ? { notice } : {}), ...(movedFrom ? { movedFrom: movedFrom.toISOString() } : {}) },
 });
 
 /** Stops a visit's rows blocking anyone. Unsent messages for them go; events still ahead are cancelled. */
@@ -848,7 +853,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
     if (examOf(rows)?.startTime.getTime() === start) return examOf(rows)!;
     refuseChange(rows);
     if (input.subject !== subject) throw new HiringError(409, onLine("This visit is for another subject."));
-    const fresh = (await offeredSlots(tx, latest.config, subject, cap, rows, new Date())).find(
+    const fresh = (await offeredSlots(tx, latest.config, subject, cap, rows, new Date(), db)).find(
       (v) => new Date(v.examStart).getTime() === start,
     );
     // Only this head's lock is held, and the live read was for this head.
@@ -916,7 +921,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
         kind: "calendar",
         payload: {},
       });
-    await enqueue(tx, headNotice(mock, rows.length ? "moved" : undefined));
+    await enqueue(tx, headNotice(mock, rows.length ? "moved" : undefined, oldMock?.startTime));
     // With a new head, the old head still needs to hear that the hour is free.
     if (oldMock && oldMock.interviewerKey !== head.canonicalKey) await enqueue(tx, headNotice(oldMock, "cancelled"));
     await audit(tx, "candidate-link", rows.length ? "visit-move" : "visit-booking", cap.id, {
@@ -963,7 +968,11 @@ export async function reviewCandidate(
       if (input.action === "send_new_link" && c.stage !== "no_booking")
         throw new HiringError(409, "A new link can be sent only after a cancel, a no-show or No booking.");
       // A first invitation has one key, shared with the queue, so only send_new_link can ever send another.
-      const key = input.action === "send_new_link" ? `${id}:visit-invite:${c.revision + 1}` : `${id}:visit-invite`;
+      // A stopped candidate's invitation that was cancelled before it left is not a repeat. One that may have left still refuses.
+      const earlier = c.stage === "stopped" ? await inviteRows(tx, id) : [];
+      const unsent = earlier.length > 0 && earlier.every((r) => r.status === "cancelled");
+      const key =
+        input.action === "send_new_link" || unsent ? `${id}:visit-invite:${c.revision + 1}` : `${id}:visit-invite`;
       const subject = await inviteToVisit(tx, c, config, key, now);
       await tx.update(s.hiringCandidates).set({ reviewNote: input.reason }).where(eq(s.hiringCandidates.id, id));
       detail = { subject, score: preScreenTotal(c, config), passScore: config.preScreenThreshold };

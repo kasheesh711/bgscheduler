@@ -1,4 +1,4 @@
-import { and, eq, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, gt, inArray, or, sql, type SQL } from "drizzle-orm";
 import { type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -206,12 +206,33 @@ export async function observeSeekState(
       .for("update");
     if (!candidate) return;
     const newlyContacted = contacted && !candidate.previouslyContacted;
-    const stopped = ["Not Suitable", "Accept"].includes(status);
+    const seekStop = ["Not Suitable", "Accept"].includes(status);
+    // The same rule as the staff stop: a future appointment is cancelled in Hiring first. The stop then applies on the next read.
+    const held =
+      seekStop &&
+      candidate.stage !== "stopped" &&
+      (
+        await tx
+          .select({ id: s.hiringBookings.id })
+          .from(s.hiringBookings)
+          .where(
+            and(
+              eq(s.hiringBookings.candidateId, candidate.id),
+              eq(s.hiringBookings.status, "confirmed"),
+              gt(s.hiringBookings.endTime, new Date()),
+            ),
+          )
+          .limit(1)
+      ).length > 0;
+    const heldNote = `SEEK status: ${status}. Cancel the visit in Hiring to stop this candidate.`;
+    const stopped = seekStop && !held;
     const externallyAdvanced = status !== "Inbox" && candidate.stage === "new";
+    // This runs for every known candidate each cycle. A repeated write would raise the revision and break panel clicks.
     if (
       !newlyContacted &&
       !externallyAdvanced &&
-      (!stopped || candidate.stage === "stopped")
+      (!stopped || candidate.stage === "stopped") &&
+      (!held || candidate.reviewNote === heldNote)
     )
       return;
     await tx
@@ -223,7 +244,9 @@ export async function observeSeekState(
           : externallyAdvanced
             ? "review"
             : candidate.stage,
-        reviewNote: `SEEK status: ${status}.${newlyContacted ? " New contact is recorded in SEEK; pending invitations were stopped." : ""}`,
+        reviewNote: held
+          ? heldNote
+          : `SEEK status: ${status}.${newlyContacted ? " New contact is recorded in SEEK; pending invitations were stopped." : ""}`,
         revision: candidate.revision + 1,
         updatedAt: new Date(),
       })

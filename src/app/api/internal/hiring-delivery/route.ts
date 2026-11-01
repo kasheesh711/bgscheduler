@@ -1,5 +1,7 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { getDb } from "@/lib/db";
+import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
+import { rejectInvalidCronSecret } from "@/lib/internal/cron-auth";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { pushLineTextMessage } from "@/lib/line/client";
 import {
@@ -14,6 +16,26 @@ import { hiringError } from "@/lib/hiring/http";
 import type { hiringBookings } from "@/lib/db/schema";
 
 export const maxDuration = 120;
+/**
+ * The retry for booking messages, so they do not depend on the Mac. It only delivers, and only booking rows: an invitation
+ * still waits for the worker's SEEK check. deliverOutbox does nothing unless messages and the write gate are on.
+ */
+export async function GET(request: NextRequest) {
+  const rejected = rejectInvalidCronSecret(request);
+  if (rejected) return rejected;
+  return withCronInvocationAudit(
+    { jobKey: "hiring_delivery", triggerSource: "cron", requestMethod: request.method },
+    async () => {
+      try {
+        const db = getDb(),
+          { config } = await settings(db);
+        return NextResponse.json({ sent: await deliverOutbox(db, config, 20, true) });
+      } catch (error) {
+        return hiringError(error);
+      }
+    },
+  );
+}
 export async function POST(request: Request) {
   try {
     const body = await request.text();

@@ -13,7 +13,7 @@ import css from "./dashboard.module.css";
 const POINTS = { met: 1, partial: 0.5, not_met: 0, unknown: 0 };
 // Mirrors the stages reviewCandidate accepts; the server still enforces them.
 const FORM_STAGES = ["new", "review"];
-const ONSITE_STAGES = ["new", "review", "pre_screen", "no_reply"];
+const ONSITE_STAGES = ["new", "review", "pre_screen", "no_reply", "stopped"];
 const PAPER_PASS_STAGES = ["paper_booked", "paper_invited", "paper_passed", "mock_booked"];
 const SUBJECT_ACTIONS = ["advance", "paper_pass"];
 
@@ -396,6 +396,9 @@ export function CandidateInspector({
             placeholder="Why you are doing this. For a paper pass, identify the marked assessment and the passed subjects."
           />
         </label>
+        {candidate.stage === "stopped" && candidate.preScreen && (
+          <p className={css.inspectorMeta}>Move this candidate out of Not Suitable in SEEK first.</p>
+        )}
         <div className={css.decisionActions}>
           {actions.map(({ action, label }, index) => (
             <button

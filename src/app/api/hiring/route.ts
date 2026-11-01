@@ -1,9 +1,10 @@
 import { z } from "zod";
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { requireHiringAdmin } from "@/lib/hiring/access";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
 import { configSchema, subjectSchema } from "@/lib/hiring/model";
 import { candidateById, dashboard, reviewCandidate, saveSettings } from "@/lib/hiring/service";
+import { deliverBookingMessages } from "@/lib/hiring/worker";
 import { getDb } from "@/lib/db";
 import { googleConnectionStatus } from "@/lib/hiring/google";
 
@@ -55,7 +56,10 @@ export async function POST(request: Request) {
     const input = command.parse(await request.json());
     if (input.action === "settings")
       await saveSettings(input.config, input.revision, actor);
-    else await reviewCandidate(input.id, input, actor);
+    else {
+      await reviewCandidate(input.id, input, actor);
+      after(() => deliverBookingMessages());
+    }
     return NextResponse.json({ ok: true });
   } catch (error) {
     return hiringError(error);

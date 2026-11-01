@@ -121,6 +121,12 @@ export async function formSentAt(db: Database, candidateId: string) {
   return form?.status === "sent" ? form.sentAt : null;
 }
 
+export const inviteRows = (db: Database, candidateId: string) =>
+  db
+    .select({ key: o.key, status: o.status })
+    .from(o)
+    .where(and(eq(o.candidateId, candidateId), isOnsiteInvite));
+
 /** The newest invitation's send time. A row not yet sent has no time, so no follow-up clock runs. */
 export async function linkSentAt(db: Database, candidateId: string) {
   const [link] = await db
@@ -327,33 +333,44 @@ export async function runFollowUps(db: Database, now = new Date()) {
 
     // Newest invitation first: only the current link has a clock, and one not yet sent has none.
     const links = await tx
-      .select({ id: c.id, status: o.status, sentAt: o.sentAt, payload: o.payload, expires: c.inviteExpiresAt })
+      .select({
+        id: c.id,
+        status: o.status,
+        sentAt: o.sentAt,
+        firstAttemptAt: o.firstAttemptAt,
+        payload: o.payload,
+        expires: c.inviteExpiresAt,
+      })
       .from(c)
-      .innerJoin(o, and(eq(o.candidateId, c.id), isOnsiteInvite, ne(o.status, "cancelled")))
+      .leftJoin(o, and(eq(o.candidateId, c.id), isOnsiteInvite, ne(o.status, "cancelled")))
       .where(eq(c.stage, "onsite_invited"))
       .orderBy(asc(c.id), desc(o.createdAt));
     const latest = new Map<string, (typeof links)[number]>();
     for (const link of links) if (!latest.has(link.id)) latest.set(link.id, link);
-    for (const { id, status, sentAt, payload, expires } of latest.values()) {
-      if (status !== "sent" || !sentAt) continue;
+    for (const { id, status, sentAt, firstAttemptAt, payload, expires } of latest.values()) {
       const { remindDays, expireDays } = config.onsiteFollowUp;
+      // These can never start the normal clock, so they would hold a place for good. `pending` is left alone: a pause starts no clock.
+      const noInvite = status === null;
+      const stuck = (status === "failed" || status === "uncertain") && !!firstAttemptAt && passed(firstAttemptAt, expireDays);
+      if (!noInvite && !stuck && (status !== "sent" || !sentAt)) continue;
       // expireDays can pass the token's 30 days. A dead link must not hold a place or go out in a reminder.
       const dead = !!expires && expires <= now;
-      if (!passed(sentAt, remindDays) && !passed(sentAt, expireDays) && !dead) continue;
+      const ended = noInvite || stuck || dead || passed(sentAt!, expireDays);
+      if (!ended && !passed(sentAt!, remindDays)) continue;
       const row = await lockCandidate(tx, id);
       if (row.stage !== "onsite_invited") continue;
-      if (passed(sentAt, expireDays) || dead) {
+      if (ended) {
         await tx
           .update(c)
           .set({ stage: "no_booking", inviteExpiresAt: null, revision: row.revision + 1, updatedAt: now })
           .where(eq(c.id, id));
-        await audit(tx, "hiring-follow-up", "no-booking", id, { sentAt });
+        await audit(tx, "hiring-follow-up", "no-booking", id, { sentAt, status });
         expired++;
       } else if (
         row.email &&
         row.inviteExpiresAt &&
         (await enqueue(tx, {
-          key: `${id}:visit-reminder:${payload.revision}`,
+          key: `${id}:visit-reminder:${payload!.revision}`,
           candidateId: id,
           kind: "email",
           createdAt: now,

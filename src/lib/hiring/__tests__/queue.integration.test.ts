@@ -275,8 +275,6 @@ describe("limits under concurrency", () => {
     const invited = await candidate(twice.id);
     await expect(withDatabaseTransaction(db, (tx) => inviteToVisit(tx, invited, config, "second"))).rejects.toThrow(HiringError);
     expect((await outbox()).filter((j) => j.key === "second")).toHaveLength(0);
-    const stoppedRow = await replied({ stage: "stopped" });
-    await expect(withDatabaseTransaction(db, (tx) => inviteToVisit(tx, stoppedRow, config, "k2"))).rejects.toThrow(HiringError);
     const rights = await replied({ workRightsAnswer: "Other" });
     await expect(withDatabaseTransaction(db, (tx) => inviteToVisit(tx, rights, config, "k3"))).rejects.toThrow(/work-rights/);
     const paper = await replied({ stage: "paper_invited" });

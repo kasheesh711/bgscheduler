@@ -9,7 +9,7 @@ import {
   or,
   sql,
 } from "drizzle-orm";
-import { type Database } from "@/lib/db";
+import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
@@ -599,9 +599,10 @@ export async function deliverOutbox(
             throw new Error(
               "The interviewer group registration changed. Review delivery.",
             );
+          const movedFrom = job.payload.movedFrom as string | undefined;
           const title =
             notice === "moved"
-              ? "Mock teaching moved. The old time is cancelled."
+              ? `Mock teaching moved. The old time ${movedFrom ? `${new Date(movedFrom).toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })} (Bangkok) ` : ""}is cancelled. The new time is below.`
               : notice === "cancelled"
                 ? "Mock teaching cancelled"
                 : "Mock teaching interview";
@@ -614,7 +615,7 @@ export async function deliverOutbox(
               tutorBot: progressUsesTutorBot(booking.interviewerKey),
             })),
           };
-        } else
+        } else {
           receipt = await deliverCalendar(
             booking,
             candidate,
@@ -622,6 +623,16 @@ export async function deliverOutbox(
             db,
             job.kind === "calendar_cancel",
           );
+          // Another delivery can run the cancel while this event is being created, and find nothing to cancel yet.
+          if (job.kind === "calendar") {
+            const [latest] = await db
+              .select({ status: s.hiringBookings.status })
+              .from(s.hiringBookings)
+              .where(eq(s.hiringBookings.id, booking.id));
+            if (latest?.status !== "confirmed")
+              receipt = await deliverCalendar(booking, candidate, current.config.location, db, true);
+          }
+        }
       }
       await db
         .update(s.hiringOutbox)
@@ -659,6 +670,17 @@ export async function deliverOutbox(
     }
   }
   return sent;
+}
+
+/** For `after()`: booking messages leave without the Mac. A failure stays out of the response, and the cron retries. */
+export async function deliverBookingMessages(db: Database = getDb()) {
+  try {
+    const { config } = await settings(db);
+    return await deliverOutbox(db, config, 20, true);
+  } catch (error) {
+    console.error("Hiring booking delivery failed", error instanceof Error ? error.name : "UnknownError");
+    return 0;
+  }
 }
 
 // A brief retry makes one assessment up to 4 calls at 180 seconds, and `max` counts assessments, so 10 could hold the

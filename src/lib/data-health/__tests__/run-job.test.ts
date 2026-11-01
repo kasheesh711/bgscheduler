@@ -12,6 +12,7 @@ vi.mock("@/lib/wise/client", () => ({ createWiseClient: vi.fn() }));
 // Branches that predate this test (the autowriter and workspace-jobs ones are dynamic imports inside run-job).
 vi.mock("@/lib/feedback-autowriter/dispatch", () => ({ runAutowriterJob: vi.fn(), runAutowriterReviewJob: vi.fn() }));
 vi.mock("@/lib/feedback-autowriter/atom/collector", () => ({ collectAtomOnServer: vi.fn() }));
+vi.mock("@/lib/hiring/worker", () => ({ deliverBookingMessages: vi.fn() }));
 vi.mock("@/lib/post-class-feedback/nightly-reminders", () => ({ nightlyWorkerOutcome: vi.fn(), runNightlyReminders: vi.fn() }));
 vi.mock("@/lib/progress-tests/workspace/jobs", () => ({ processJobs: vi.fn() }));
 vi.mock("@/lib/room-booking/refresh", () => ({ runRoomRefresh: vi.fn() }));
@@ -62,6 +63,7 @@ import { CRON_JOBS, getCronJobDefinition, manuallyRunnableCronJobs, type CronJob
 import { runDataHealthJob } from "@/lib/data-health/run-job";
 import { getDb } from "@/lib/db";
 import { collectAtomOnServer } from "@/lib/feedback-autowriter/atom/collector";
+import { deliverBookingMessages } from "@/lib/hiring/worker";
 import { runAutowriterJob, runAutowriterReviewJob } from "@/lib/feedback-autowriter/dispatch";
 import { runCronWatchdog } from "@/lib/internal/cron-watchdog";
 import { syncLeaveRequests } from "@/lib/leave-requests/sync";
@@ -126,6 +128,7 @@ const DISPATCH_TARGETS = {
   cron_watchdog: runCronWatchdog,
   room_utilization: syncRoomUtilizationSessions,
   line_backlog_recovery: runLineBacklogRecovery,
+  hiring_delivery: deliverBookingMessages,
 } satisfies Record<ManualRunKey, unknown>;
 
 // Widened view: on the as-const tuple only one member declares manualRunDisabledReason (TS2339).

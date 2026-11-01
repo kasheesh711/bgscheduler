@@ -27,7 +27,7 @@ import {
   type Candidate,
 } from "../service";
 import { importApplication, observeSeekState } from "../sources";
-import { assessCandidates, deliverOutbox, rewriteBriefs, scorePreScreens, type Rewrite } from "../worker";
+import { assessCandidates, deliverBookingMessages, deliverOutbox, rewriteBriefs, scorePreScreens, type Rewrite } from "../worker";
 import { readLimitUsage, releaseQueues, runFollowUps } from "../queue";
 import { availableSlots, verifyLiveSlot } from "../availability";
 import { deliverCalendar } from "../google";
@@ -767,6 +767,8 @@ describe("hiring workflow persistence", () => {
       expect((await read(row.id)).stage).toBe("onsite_booked");
       // The live Wise read is for the head's hour, not the exam.
       expect(verifyLiveSlot).toHaveBeenCalledWith(db, expect.objectContaining({ start: MOCK, end: MOCK_END, interviewerKey: "Peat" }));
+      // The index reads in parallel, so it never runs on the transaction's one connection.
+      expect(vi.mocked(ensureIndex).mock.calls.every((c) => c[0] === db)).toBe(true);
       // A retry returns the same visit.
       await bookVisit(link(row), choice(), db);
       expect(await rowsOf(row.id)).toHaveLength(2);
@@ -824,11 +826,15 @@ describe("hiring workflow persistence", () => {
       expect(fresh[0].visitId).not.toBe(before[0].visitId);
       const jobs = (await jobsOf(row.id)).filter((j) => j.status === "pending");
       expect(jobs.map((j) => j.kind).sort()).toEqual(["calendar", "calendar", "calendar_cancel", "calendar_cancel", "email", "line"]);
-      expect(jobs.find((j) => j.kind === "line")!.payload).toEqual({ notice: "moved" });
+      expect(jobs.find((j) => j.kind === "line")!.payload).toEqual({ notice: "moved", movedFrom: MOCK });
       expect((await read(row.id)).stage).toBe("onsite_booked");
       await deliverOutbox(db, base);
       expect(sendEmail).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/moved/i);
+      // The head can tell which of two mocks moved: it prints the old 12:00 and the new time.
+      const moved = vi.mocked(pushLineTextMessage).mock.calls[0][0].text;
+      expect(moved).toMatch(/moved/i);
+      expect(moved).toContain("02/11/2026, 12:00");
+      expect(moved).toContain("03/11/2026, 12:00");
       expect(vi.mocked(deliverCalendar).mock.calls.filter((c) => c[4] === true)).toHaveLength(2);
       // The same link still opens the moved visit.
       const view = await visitView(link(row), db);
@@ -1191,6 +1197,195 @@ describe("hiring workflow persistence", () => {
       const outcomes = await Promise.allSettled([bookVisit(link(a), choice(), db), bookVisit(link(b), choice(), db)]);
       expect(outcomes.filter((o) => o.status === "fulfilled")).toHaveLength(1);
       expect(await db.select().from(s.hiringBookings)).toHaveLength(2);
+    });
+    it("leaves the visit as it was when the live Wise read fails on a move", async () => {
+      const row = await invited();
+      await bookVisit(link(row), choice(), db);
+      const rows = await rowsOf(row.id);
+      const jobs = await jobsOf(row.id);
+      const saved = await read(row.id);
+      vi.mocked(verifyLiveSlot).mockRejectedValueOnce(new HiringError(409, "The interviewer now has a class. Choose another time."));
+      await expect(bookVisit(link(row), choice(EXAM_TUE, { move: true }), db)).rejects.toThrow(/now has a class/);
+      expect(await rowsOf(row.id)).toEqual(rows);
+      expect(await jobsOf(row.id)).toHaveLength(jobs.length);
+      expect(await read(row.id)).toEqual(saved);
+      // The move is not used up.
+      expect((await visitView(link(row), db)).canMove).toBe(true);
+    });
+    it("refuses an old paper or mock link once the candidate is on the visit flow", async () => {
+      const [c] = await db
+        .insert(s.hiringCandidates)
+        .values({
+          name: "Both",
+          email: "both@example.com",
+          stage: "paper_invited",
+          subjects: ["Mathematics"],
+          visitSubject: "Mathematics",
+          paperPassedSubjects: ["Mathematics"],
+          paperPassedAt: now,
+          inviteExpiresAt: LINK,
+        })
+        .returning();
+      vi.mocked(availableSlots).mockResolvedValue([slot]);
+      for (const kind of ["paper", "mock"] as const) {
+        const token = bookingToken(c.id, kind, LINK);
+        await expect(bookingView(token, undefined, db)).rejects.toThrow(/no longer active/);
+        await expect(bookInterview(token, input, db)).rejects.toThrow(HiringError);
+      }
+      expect(await rowsOf(c.id)).toEqual([]);
+    });
+
+    describe("a place with no clock", () => {
+      const eightDaysAgo = new Date(now.getTime() - 8 * 86400000);
+      it("frees a place whose invitation a SEEK contact cancelled, and Send new link works", async () => {
+        const application = "00000000-0000-4000-8000-000000000301";
+        const row = await invited({ sourceIds: [application] }, null);
+        await observeSeekState(application, "Inbox", true, db);
+        expect((await jobsOf(row.id))[0].status).toBe("cancelled");
+        expect((await readLimitUsage(db, "onsite", now)).unbooked).toBe(1);
+        expect(await runFollowUps(db)).toEqual({ reminded: 0, expired: 1 });
+        const saved = await read(row.id);
+        expect([saved.stage, saved.inviteExpiresAt]).toEqual(["no_booking", null]);
+        expect((await readLimitUsage(db, "onsite", now)).unbooked).toBe(0);
+        await click(row.id, "send_new_link");
+        expect((await read(row.id)).stage).toBe("onsite_invited");
+      });
+      it("frees a place when a hard-failed invitation is older than the expiry", async () => {
+        const row = await invited({}, null);
+        await db.update(s.hiringOutbox).set({ status: "failed", firstAttemptAt: eightDaysAgo }).where(eq(s.hiringOutbox.candidateId, row.id));
+        expect(await runFollowUps(db)).toEqual({ reminded: 0, expired: 1 });
+        expect((await read(row.id)).stage).toBe("no_booking");
+      });
+      it("frees a place when an uncertain invitation is older than the expiry", async () => {
+        const row = await invited({}, null);
+        await db.update(s.hiringOutbox).set({ status: "uncertain", firstAttemptAt: eightDaysAgo }).where(eq(s.hiringOutbox.candidateId, row.id));
+        expect(await runFollowUps(db)).toEqual({ reminded: 0, expired: 1 });
+        expect((await read(row.id)).stage).toBe("no_booking");
+      });
+      it("keeps a failed invitation inside the expiry, and a pending one at any age", async () => {
+        const failing = await invited({}, null);
+        await db.update(s.hiringOutbox).set({ status: "failed", firstAttemptAt: now }).where(eq(s.hiringOutbox.candidateId, failing.id));
+        const waiting = await invited({}, null);
+        await db.update(s.hiringOutbox).set({ createdAt: eightDaysAgo }).where(eq(s.hiringOutbox.candidateId, waiting.id));
+        expect(await runFollowUps(db)).toEqual({ reminded: 0, expired: 0 });
+        expect((await read(failing.id)).stage).toBe("onsite_invited");
+        expect((await read(waiting.id)).stage).toBe("onsite_invited");
+      });
+    });
+
+    describe("a SEEK stop with a future visit", () => {
+      it("keeps the visit, writes the note once, and stops on the first read after the cancel", async () => {
+        const application = "00000000-0000-4000-8000-000000000302";
+        const row = await invited({ sourceIds: [application] });
+        await bookVisit(link(row), choice(), db);
+        await observeSeekState(application, "Not Suitable", false, db);
+        const first = await read(row.id);
+        expect(first.stage).toBe("onsite_booked");
+        expect(first.reviewNote).toBe("SEEK status: Not Suitable. Cancel the visit in Hiring to stop this candidate.");
+        expect((await rowsOf(row.id)).map((b) => b.status)).toEqual(["confirmed", "confirmed"]);
+        const pendingJobs = (await jobsOf(row.id)).filter((j) => j.status === "pending").length;
+        const audits = (await db.select().from(s.hiringAudit)).length;
+        // Each cycle reads it again: no write, so a panel click keeps its revision.
+        await observeSeekState(application, "Not Suitable", false, db);
+        expect((await read(row.id)).revision).toBe(first.revision);
+        expect((await db.select().from(s.hiringAudit)).length).toBe(audits);
+        expect((await jobsOf(row.id)).filter((j) => j.status === "pending")).toHaveLength(pendingJobs);
+        await click(row.id, "cancel_visit");
+        expect((await read(row.id)).stage).toBe("no_booking");
+        await observeSeekState(application, "Not Suitable", false, db);
+        expect((await read(row.id)).stage).toBe("stopped");
+      });
+      it("still stops a candidate whose visit has ended", async () => {
+        const application = "00000000-0000-4000-8000-000000000303";
+        const row = await invited({ sourceIds: [application] });
+        await bookVisit(link(row), choice(), db);
+        vi.setSystemTime(new Date("2026-11-03T00:00:00Z"));
+        await observeSeekState(application, "Not Suitable", false, db);
+        expect((await read(row.id)).stage).toBe("stopped");
+      });
+    });
+
+    describe("a stopped candidate with an earlier response", () => {
+      const stoppedRow = async (status: "cancelled" | "sent" | null) => {
+        const row = await invited({ stage: "stopped", inviteExpiresAt: null, visitSubject: null }, null);
+        if (status) await db.update(s.hiringOutbox).set({ status }).where(eq(s.hiringOutbox.candidateId, row.id));
+        else await db.delete(s.hiringOutbox).where(eq(s.hiringOutbox.candidateId, row.id));
+        return row;
+      };
+      it("can be invited by a click, with the first key when nothing was queued", async () => {
+        const row = await stoppedRow(null);
+        await click(row.id, "invite_onsite");
+        expect((await read(row.id)).stage).toBe("onsite_invited");
+        expect((await jobsOf(row.id)).map((j) => j.key)).toEqual([`${row.id}:visit-invite`]);
+      });
+      it("uses a revision key when the earlier invitation was cancelled before it left", async () => {
+        const row = await stoppedRow("cancelled");
+        await click(row.id, "invite_onsite");
+        expect((await read(row.id)).stage).toBe("onsite_invited");
+        const keys = (await jobsOf(row.id)).map((j) => j.key).sort();
+        expect(keys).toEqual([`${row.id}:visit-invite`, `${row.id}:visit-invite:${row.revision + 1}`]);
+      });
+      it("refuses when the earlier invitation was sent", async () => {
+        const row = await stoppedRow("sent");
+        await expect(click(row.id, "invite_onsite")).rejects.toThrow(/new link/);
+        expect((await read(row.id)).stage).toBe("stopped");
+      });
+      it("keeps every other rule, and no queue takes them", async () => {
+        const rights = await stoppedRow(null);
+        await db.update(s.hiringCandidates).set({ workRightsAnswer: "Other" }).where(eq(s.hiringCandidates.id, rights.id));
+        await expect(click(rights.id, "invite_onsite")).rejects.toThrow(/work-rights/);
+        const open = await stoppedRow(null);
+        await setVisit({ subjectPriority: [{ subject: "Mathematics", hiring: false }] });
+        await expect(click(open.id, "invite_onsite")).rejects.toThrow(/open for hiring/);
+        await setVisit({ onsiteLimits: { perWeek: 3, unbooked: 0, perHeadPerWeek: 2, perSubject: 2 } });
+        await expect(click(open.id, "invite_onsite")).rejects.toThrow(/invited, not booked/);
+        await setVisit();
+        expect(await releaseQueues(db)).toEqual({ preScreen: 0, onsite: 0 });
+        expect((await read(open.id)).stage).toBe("stopped");
+        // A later first-invitation click after this one still cannot repeat.
+        await click(open.id, "invite_onsite");
+        await db.update(s.hiringCandidates).set({ stage: "no_booking" }).where(eq(s.hiringCandidates.id, open.id));
+        await expect(click(open.id, "invite_onsite")).rejects.toThrow(/new link/);
+      });
+    });
+
+    describe("delivery without the Mac", () => {
+      it("sends booking messages after the request and holds an invitation for the source check", async () => {
+        const row = await invited();
+        await bookVisit(link(row), choice(), db);
+        const held = await invited({}, null);
+        expect(await deliverBookingMessages(db)).toBe(4);
+        expect(sendEmail).toHaveBeenCalledTimes(1);
+        expect((await jobsOf(held.id))[0].status).toBe("pending");
+      });
+      it("does nothing while messages are off or the write gate is off, and a failure does not throw", async () => {
+        const row = await invited();
+        await bookVisit(link(row), choice(), db);
+        await setVisit({ deliveryEnabled: false });
+        expect(await deliverBookingMessages(db)).toBe(0);
+        await setVisit();
+        vi.stubEnv("HIRING_WRITES_ENABLED", "false");
+        expect(await deliverBookingMessages(db)).toBe(0);
+        expect(sendEmail).not.toHaveBeenCalled();
+        const log = vi.spyOn(console, "error").mockImplementation(() => {});
+        const broken = { select: () => { throw new Error("database down"); } } as unknown as Database;
+        await expect(deliverBookingMessages(broken)).resolves.toBe(0);
+        expect(log).toHaveBeenCalled();
+        log.mockRestore();
+      });
+      it("deletes a new event when the visit was cancelled while the event was being created", async () => {
+        const row = await invited();
+        await bookVisit(link(row), choice(), db);
+        vi.mocked(deliverCalendar).mockImplementationOnce(async () => {
+          await db.update(s.hiringBookings).set({ status: "cancelled" }).where(eq(s.hiringBookings.candidateId, row.id));
+          return { id: "calendar-event" };
+        });
+        await deliverOutbox(db, base);
+        const calls = vi.mocked(deliverCalendar).mock.calls;
+        expect(calls[0][4]).toBe(false);
+        expect(calls[1][0].id).toBe(calls[0][0].id);
+        expect(calls[1][4]).toBe(true);
+      });
     });
     it("refuses a booking when the head has no LINE group, with nothing saved", async () => {
       await db.delete(s.progressLineGroups).where(eq(s.progressLineGroups.canonicalKey, "Peat"));

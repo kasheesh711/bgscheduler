@@ -75,6 +75,8 @@ export function VisitBooking({
       setStart("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not confirm.");
+      // That time may be gone, so the candidate chooses again from the fresh list.
+      setStart("");
       await reload().catch(() => {});
     } finally {
       setBusy(false);
@@ -166,6 +168,20 @@ export function VisitBooking({
             {busy ? "Confirming…" : view.visit ? "Confirm new time" : "Confirm visit"}
           </Button>
         </>
+      )}
+      {moving && (
+        <Button
+          className="w-full"
+          variant="outline"
+          disabled={busy}
+          onClick={() => {
+            setMoving(false);
+            setStart("");
+            setError("");
+          }}
+        >
+          Keep my current time
+        </Button>
       )}
       <Help />
     </>

@@ -39,7 +39,8 @@ export type CronJobKey =
   | "competitor_intelligence"
   | "feedback_autowriter"
   | "feedback_autowriter_review"
-  | "feedback_atom";
+  | "feedback_atom"
+  | "hiring_delivery";
 
 export interface CronJobDefinition {
   key: CronJobKey;
@@ -72,6 +73,10 @@ export const CRON_JOBS = [
     path: "/api/internal/post-class-feedback/deduction-report", schedule: null, cadenceLabel: "Daily 08:00 Bangkok",
     cadenceMinutes: 1440, expectedBangkokMinute: 480, lateAfterMinutes: 60, maxDurationSeconds: 300, manualOnly: true,
     dangerous: true, confirmationLabel: "Emails new deduction candidates to the three report recipients.", routeMethod: "GET" },
+  { key: "hiring_delivery", label: "Hiring Booking Messages", feature: "Hiring",
+    path: "/api/internal/hiring-delivery", schedule: "19,35,48,59 * * * *", cadenceLabel: "About every 15 min",
+    cadenceMinutes: 15, lateAfterMinutes: 45, maxDurationSeconds: 120, manualOnly: false,
+    dangerous: true, confirmationLabel: "Retries queued booking emails, Calendar events and LINE notices. Sends nothing while Hiring messages are off.", routeMethod: "GET" },
   { key: "feedback_atom", label: "Atom Lesson Evidence", feature: "Class Feedback",
     path: "/api/internal/feedback-autowriter/atom", schedule: "6,21,36,51 * * * *", cadenceLabel: "Every 15 min",
     cadenceMinutes: 15, lateAfterMinutes: 45, maxDurationSeconds: 750, manualOnly: false, dangerous: false,

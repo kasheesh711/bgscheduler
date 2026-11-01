@@ -118,9 +118,17 @@ describe("CandidateInspector actions", () => {
     ["booked, started", { stage: "onsite_booked", preScreen: pre }, started, ["Mark no-show", "Stop processing"]],
     ["booked, ended", { stage: "onsite_booked", preScreen: pre }, null, ["Mark no-show", "Stop processing"]],
     ["no booking", { stage: "no_booking", preScreen: pre }, null, ["Send new link", "Stop processing"]],
+    ["stopped, response", { stage: "stopped", preScreen: pre }, null, ["Invite to onsite visit", "Stop processing"]],
+    ["stopped, no response", { stage: "stopped" }, null, ["Stop processing"]],
     ["old paper", { stage: "paper_booked" }, { kind: "paper", startTime: "2099-01-01T03:00:00Z" }, ["Record paper pass and invite to mock", "Stop processing"]],
   ])("%s", (_name, candidate, visit, expected) => {
     expect(buttons(panel(candidate, visit))).toEqual(expected);
+  });
+  it("tells staff to clear SEEK before inviting a stopped candidate", () => {
+    const hint = "Move this candidate out of Not Suitable in SEEK first.";
+    expect(panel({ stage: "stopped", preScreen: pre })).toContain(hint);
+    expect(panel({ stage: "stopped" })).not.toContain(hint);
+    expect(panel({ stage: "review", preScreen: pre })).not.toContain(hint);
   });
   it("asks for subjects only for an action that uses them", () => {
     expect(panel({ stage: "review" })).toContain("<legend>Subjects</legend>");

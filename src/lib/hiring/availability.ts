@@ -142,21 +142,19 @@ function assertFreshIndex(index: { syncedAt: Date }, now: Date) {
     );
 }
 
+// One at a time: `db` can be a transaction on one connection, and pg@9 refuses overlapping queries on a connection.
 const readCalendar = async (db: Database) => {
-  const [bookings, observations, schedules, exceptions, enrollments] =
-    await Promise.all([
-      db
-        .select()
-        .from(s.hiringBookings)
-        .where(eq(s.hiringBookings.status, "confirmed")),
-      db
-        .select()
-        .from(s.tutorSitInObservations)
-        .where(eq(s.tutorSitInObservations.current, true)),
-      db.select().from(s.tutorAttendanceSchedules),
-      db.select().from(s.tutorAttendanceExceptions),
-      db.select().from(s.tutorAttendanceEnrollments),
-    ]);
+  const bookings = await db
+    .select()
+    .from(s.hiringBookings)
+    .where(eq(s.hiringBookings.status, "confirmed"));
+  const observations = await db
+    .select()
+    .from(s.tutorSitInObservations)
+    .where(eq(s.tutorSitInObservations.current, true));
+  const schedules = await db.select().from(s.tutorAttendanceSchedules);
+  const exceptions = await db.select().from(s.tutorAttendanceExceptions);
+  const enrollments = await db.select().from(s.tutorAttendanceEnrollments);
   return { bookings, observations, schedules, exceptions, enrollments };
 };
 // Monday of the Bangkok week that holds the date.
@@ -172,6 +170,8 @@ export async function availableSlots(
   kind: InterviewKind,
   subjects: Subject[],
   now = new Date(),
+  // ensureIndex reads in parallel, so a caller inside a transaction passes its outer connection here.
+  indexDb: Database = db,
 ): Promise<Slot[]> {
   if (!subjects.length || (kind === "mock" && subjects.length !== 1)) return [];
   const dates = businessDates(now, config.holidays);
@@ -179,7 +179,7 @@ export async function availableSlots(
   const { bookings, observations } = calendar;
   const duration = kind === "mock" ? 60 : subjects.length * 120;
   const slots: Slot[] = [];
-  const index = kind === "mock" ? await ensureIndex(db) : null;
+  const index = kind === "mock" ? await ensureIndex(indexDb) : null;
   if (index) assertFreshIndex(index, now);
   for (const date of dates) {
     const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
@@ -260,13 +260,15 @@ export async function availableVisitSlots(
   subject: Subject,
   now = new Date(),
   movingCandidate?: string,
+  // ensureIndex reads in parallel, so a caller inside a transaction passes its outer connection here.
+  indexDb: Database = db,
 ): Promise<VisitSlot[]> {
   const heads = config.interviewers.filter((h) => h.subjects.includes(subject));
   if (!heads.length) return [];
   const calendar = await readCalendar(db);
   const { observations } = calendar;
   const bookings = calendar.bookings.filter((b) => !movingCandidate || b.candidateId !== movingCandidate);
-  const index = await ensureIndex(db);
+  const index = await ensureIndex(indexDb);
   assertFreshIndex(index, now);
   const mocks = bookings.filter((b) => b.kind === "mock");
   const weekMocks = (key: string, date: string) =>

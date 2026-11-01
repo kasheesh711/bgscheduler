@@ -108,6 +108,10 @@
       "schedule": "6,21,36,51 * * * *"
     },
     {
+      "path": "/api/internal/hiring-delivery",
+      "schedule": "19,35,48,59 * * * *"
+    },
+    {
       "path": "/api/internal/progress-line-reminders",
       "schedule": "*/10 * * * *"
     }
