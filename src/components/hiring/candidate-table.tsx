@@ -58,6 +58,7 @@ export function CandidateTable({
   setFilter,
   selected,
   onSelect,
+  onOpenResume = onSelect,
 }: {
   candidates: HiringCandidate[];
   insights: Insights;
@@ -73,6 +74,8 @@ export function CandidateTable({
   setFilter: (filter: CandidateFilter) => void;
   selected: string | null;
   onSelect: (id: string) => void;
+  /** Opens the panel with the résumé viewer open. */
+  onOpenResume?: (id: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const deferred = useDeferredValue(query);
@@ -238,6 +241,15 @@ export function CandidateTable({
                       {c.name}
                     </button>
                     <span className={css.email}>{c.email || "Email needs review"}</span>
+                    <button
+                      type="button"
+                      className={css.inlineLink}
+                      aria-label={`Résumé for ${c.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenResume(c.id);
+                      }}
+                    >Résumé</button>
                   </td>
                   <td className={c.stage === "stopped" ? css.mutedCell : undefined}>
                     {STAGE_LABELS[c.stage]}

@@ -8,13 +8,13 @@ import {
   parseSeekFolderCounts,
   type Application,
 } from "../src/lib/hiring/model";
+import type { ResumeFile } from "../src/lib/hiring/resume-files";
 import { readWorkRights, redactProfile, removeWorkRights } from "../src/lib/hiring/seek-text";
 
 const ID_CONTROL = 'input[id^="checkbox-"], button[id$="-move-to"]';
 
 export { redactProfile };
-async function documentText(file: string) {
-  const data = await readFile(file);
+async function documentText(data: Buffer) {
   if (data.length > 15 * 1024 * 1024)
     throw new Error("Resume exceeds the 15 MB import limit.");
   if (data.subarray(0, 5).toString() === "%PDF-") {
@@ -83,7 +83,7 @@ async function readApplication(
   page: Page,
   card: ReturnType<Page["getByTestId"]>,
   jobId: string,
-): Promise<Application> {
+): Promise<{ application: Application; resumeFile: ResumeFile | null }> {
   const move = card.locator(
     'button[aria-label^="Move "][aria-haspopup="true"]',
   );
@@ -116,6 +116,7 @@ async function readApplication(
   const dialog = page.getByRole("dialog", { name: "Candidate details" });
   await dialog.waitFor({ state: "visible" });
   let resumeText = "";
+  let resumeFile: ResumeFile | null = null;
   try {
     await dialog.getByRole("tab", { name: /^Profile(?:\s+Profile)*$/ }).click();
     const profile = dialog.getByRole("tabpanel", { name: "Profile" });
@@ -166,7 +167,10 @@ async function readApplication(
         const download = await downloadPromise;
         const file = path.join(dir, "resume");
         await download.saveAs(file);
-        resumeText = redactProfile(await documentText(file), name);
+        const bytes = await readFile(file);
+        resumeText = redactProfile(await documentText(bytes), name);
+        // Only a file that passed the extractor's limits is kept. The model reads the redacted text, never the file.
+        resumeFile = { bytes, name: download.suggestedFilename() };
       } catch {
         resumeText = "";
       } finally {
@@ -184,14 +188,17 @@ async function readApplication(
     if (new URL(page.url()).searchParams.get("jobid") !== jobId)
       throw new Error("SEEK changed to another job during import.");
     return {
-      applicationId: id,
-      name,
-      email,
-      profileText: redactProfile(cleaned, name),
-      resumeText,
-      previouslyContacted,
-      sourceStatus: status,
-      workRightsAnswer,
+      application: {
+        applicationId: id,
+        name,
+        email,
+        profileText: redactProfile(cleaned, name),
+        resumeText,
+        previouslyContacted,
+        sourceStatus: status,
+        workRightsAnswer,
+      },
+      resumeFile,
     };
   } finally {
     await dialog
@@ -205,8 +212,10 @@ export async function importSeek(
   profilePath: string,
   jobId: string,
   knownIds: Set<string>,
-  consume: (value: Application) => Promise<void>,
+  consume: (value: Application) => Promise<string>,
   observe: (id: string, status: string, contacted: boolean) => Promise<void>,
+  // Called after `consume` saved the text. It must not throw, so a failed upload cannot lose the import.
+  keepFile: (candidateId: string, file: ResumeFile) => Promise<unknown>,
 ) {
   const browser = await chromium.launchPersistentContext(profilePath, {
     channel: "chrome",
@@ -331,7 +340,9 @@ export async function importSeek(
               remaining++;
               continue;
             }
-            await consume(await readApplication(page, cards.nth(i), jobId));
+            const { application, resumeFile } = await readApplication(page, cards.nth(i), jobId);
+            const candidateId = await consume(application);
+            if (resumeFile) await keepFile(candidateId, resumeFile);
             knownIds.add(id);
             imported++;
           }

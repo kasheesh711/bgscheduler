@@ -47,6 +47,8 @@ export function HiringDashboard() {
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState<"pipeline" | "heads" | "setup">("pipeline");
   const [selected, setSelected] = useState<string | null>(null);
+  // The candidate whose résumé viewer is open. It loads the file only on request.
+  const [resumeFor, setResumeFor] = useState<string | null>(null);
   const [filter, setFilter] = useState<CandidateFilter>(NO_FILTER);
   // Head ticks not saved yet. They live here, not in the setup panel, so a tab switch does not drop them.
   const [dayDrafts, setDayDrafts] = useState<Record<string, boolean[]>>({});
@@ -271,6 +273,10 @@ export function HiringDashboard() {
               setFilter={setFilter}
               selected={selected}
               onSelect={setSelected}
+              onOpenResume={(id) => {
+                setSelected(id);
+                setResumeFor(id);
+              }}
             />
             <div className={css.charts}>
               <StageChart insights={insights} filter={filter} setFilter={setFilter} />
@@ -298,7 +304,13 @@ export function HiringDashboard() {
               error={error}
               notice={notice}
               command={command}
-              onClose={() => setSelected(null)}
+              onClose={() => {
+                setSelected(null);
+                setResumeFor(null);
+              }}
+              resumeOpen={resumeFor === candidate.id}
+              onResumeToggle={(open) => setResumeFor(open ? candidate.id : null)}
+              retentionMonths={data.config.resumeRetentionMonths}
             />
           ) : (
             <OperationsRail

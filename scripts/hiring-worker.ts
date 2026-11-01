@@ -15,6 +15,7 @@ import {
 } from "../src/lib/hiring/model";
 import { settings } from "../src/lib/hiring/service";
 import { importApplication, observeSeekState } from "../src/lib/hiring/sources";
+import { keepResume } from "../src/lib/hiring/resume-files";
 import { runHiringCycle } from "../src/lib/hiring/worker";
 import { requestDelivery } from "../src/lib/hiring/dispatch";
 import { assessmentOutputSchema, preScreenOutputSchema, assessWithBriefs, ASSESSMENT_SYSTEM, PRE_SCREEN_SYSTEM } from "../src/lib/hiring/scoring";
@@ -96,9 +97,10 @@ async function main() {
           profile,
           config.seekJobId,
           new Set(rows.flatMap((r) => r.ids)),
-          (value) => importApplication(value, db).then(() => {}),
+          (value) => importApplication(value, db),
           (id, status, contacted) =>
             observeSeekState(id, status, contacted, db),
+          (candidateId, file) => keepResume(candidateId, file, db),
         );
         const cliVersion = execFileSync("claude", ["--version"], {
           encoding: "utf8",

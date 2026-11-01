@@ -557,6 +557,10 @@ export async function dashboard(db: Database = getDb()) {
       return {
         ...c,
         profileText: undefined,
+        // The screen opens a file only through the guarded route, so it never gets the storage path.
+        resumePath: undefined,
+        resumeSha256: undefined,
+        resumeState: (c.resumePath ? "available" : c.resumeStoredAt ? "deleted" : "none") as "available" | "deleted" | "none",
         profileScore: c.profileAssessment
           ? profileScore(
               c.profileAssessment,

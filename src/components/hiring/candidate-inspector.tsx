@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { criterionValues, STAGE_LABELS } from "@/lib/hiring/insights";
-import { DEFAULT_PRE_SCREEN_WEIGHTS, SUBJECTS, type HiringConfig, type Subject } from "@/lib/hiring/model";
+import { DEFAULT_PRE_SCREEN_WEIGHTS, RESUME_TYPES, SUBJECTS, type HiringConfig, type Subject } from "@/lib/hiring/model";
 import type { Assessment, PreScreenAssessment } from "@/lib/hiring/scoring";
 import { preScreenNote, visitText, type CandidateExtras } from "@/lib/hiring/status";
 import type { Command, HiringCandidate } from "./dashboard";
@@ -127,6 +127,59 @@ function AssessmentBlock({
   );
 }
 
+const RESUME_FAILED = "The résumé could not be opened. Try again.";
+type ResumeCheck = { status: "checking" | "ready" } | { status: "failed"; message: string };
+/** An iframe cannot read a 404, so the route is asked first. Its message reaches the panel in place of raw JSON. */
+export async function checkResume(src: string): Promise<ResumeCheck> {
+  try {
+    const response = await fetch(src, { cache: "no-store" });
+    if (response.ok) {
+      await response.body?.cancel();
+      return { status: "ready" };
+    }
+    const value = await response.json();
+    return { status: "failed", message: value.error || RESUME_FAILED };
+  } catch {
+    return { status: "failed", message: RESUME_FAILED };
+  }
+}
+
+export function ResumeBody({
+  id,
+  name,
+  state,
+  type,
+  months,
+  check,
+}: {
+  id: string;
+  name: string;
+  state: HiringCandidate["resumeState"];
+  type: string | null;
+  months: number;
+  check: ResumeCheck;
+}) {
+  if (state === "deleted")
+    return (
+      <p className={css.inspectorMeta}>
+        Original résumé deleted after {months} month{months === 1 ? "" : "s"} with no activity. The extracted text stays below.
+      </p>
+    );
+  if (state !== "available") return <p className={css.inspectorMeta}>No original file is stored yet. The extracted text stays below.</p>;
+  if (check.status === "checking") return <p role="status" className={css.inspectorMeta}>Opening the file…</p>;
+  if (check.status === "failed") return <p role="alert" className={css.errorText}>{check.message}</p>;
+  const src = `/api/hiring/resume/${encodeURIComponent(id)}`;
+  return (
+    <>
+      {/* No sandbox attribute: Chrome blocks its PDF viewer in any sandboxed iframe, with every allow token. The route sends the sandbox as a CSP header, which the viewer accepts. */}
+      {type === RESUME_TYPES.pdf && <iframe className={css.resumeFrame} src={src} title={`Original résumé of ${name}`} />}
+      <a className={css.sourceLink} href={src} download>
+        Download
+      </a>
+    </>
+  );
+}
+
 export function CandidateInspector({
   candidate,
   extras,
@@ -139,6 +192,9 @@ export function CandidateInspector({
   notice,
   command,
   onClose,
+  resumeOpen = false,
+  onResumeToggle,
+  retentionMonths = 12,
 }: {
   candidate: HiringCandidate;
   extras?: CandidateExtras;
@@ -152,11 +208,15 @@ export function CandidateInspector({
   notice: string;
   command: Command;
   onClose: () => void;
+  resumeOpen?: boolean;
+  onResumeToggle?: (open: boolean) => void;
+  retentionMonths?: number;
 }) {
   const [subjects, setSubjects] = useState<Subject[]>(candidate.subjects);
   const [reason, setReason] = useState("");
   const [source, setSource] = useState<{ id: string; profileText: string } | null>(null);
   const [sourceError, setSourceError] = useState("");
+  const [resumeCheck, setResumeCheck] = useState<ResumeCheck>({ status: "checking" });
   const heading = useRef<HTMLHeadingElement>(null);
   const opener = useRef<HTMLElement | null>(null);
   useEffect(() => {
@@ -183,6 +243,19 @@ export function CandidateInspector({
       active = false;
     };
   }, [candidate.id]);
+
+  const hasResumeFile = candidate.resumeState === "available";
+  useEffect(() => {
+    if (!resumeOpen || !hasResumeFile) return;
+    let active = true;
+    checkResume(`/api/hiring/resume/${encodeURIComponent(candidate.id)}`).then((result) => {
+      if (active) setResumeCheck(result);
+    });
+    return () => {
+      active = false;
+      setResumeCheck({ status: "checking" });
+    };
+  }, [resumeOpen, hasResumeFile, candidate.id]);
 
   const university = candidate.universityAssessment;
   const applicationIds = [...new Set([candidate.seekApplicationId, ...candidate.sourceIds].filter((id): id is string => !!id))];
@@ -363,6 +436,28 @@ export function CandidateInspector({
             ))}
           </section>
         )}
+        <details
+          className={css.sourceText}
+          open={resumeOpen}
+          onToggle={(e) => {
+            // The browser also fires this after a re-render, with the same value.
+            if (e.currentTarget.open !== resumeOpen) onResumeToggle?.(e.currentTarget.open);
+          }}
+        >
+          <summary>
+            Original résumé{candidate.resumeState === "deleted" ? " (deleted)" : candidate.resumeState === "available" ? "" : " (no file yet)"}
+          </summary>
+          {resumeOpen && (
+            <ResumeBody
+              id={candidate.id}
+              name={candidate.name}
+              state={candidate.resumeState}
+              type={candidate.resumeType}
+              months={retentionMonths}
+              check={resumeCheck}
+            />
+          )}
+        </details>
         <details className={css.sourceText}>
           <summary>Extracted profile and résumé</summary>
           <p className={css.inspectorMeta}>

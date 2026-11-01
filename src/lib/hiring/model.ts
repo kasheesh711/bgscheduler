@@ -335,6 +335,13 @@ export const preScreenSchema = z
   })
   .strict();
 export type PreScreen = z.infer<typeof preScreenSchema>;
+/** The only types a stored résumé can have. Type comes from file bytes, never from a name. */
+export const RESUME_TYPES = {
+  pdf: "application/pdf",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+} as const;
+export type ResumeExtension = keyof typeof RESUME_TYPES;
+
 export const applicationSchema = z
   .object({
     applicationId: z.uuid(),

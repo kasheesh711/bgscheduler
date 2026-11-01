@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import { HiringError } from "./model";
+import { HiringError, RESUME_TYPES, type ResumeExtension } from "./model";
 
 export const deliveryRequestSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.enum(["all", "bookings"]) }).strict(),
@@ -17,45 +17,62 @@ export const deliveryRequestSchema = z.discriminatedUnion("mode", [
     .strict(),
 ]);
 export type DeliveryRequest = z.infer<typeof deliveryRequestSchema>;
-const digest = (body: string, timestamp: string, secret: string) =>
+export const resumeUploadRequestSchema = z
+  .object({
+    candidateId: z.uuid(),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    extension: z.enum(Object.keys(RESUME_TYPES) as [ResumeExtension, ...ResumeExtension[]]),
+  })
+  .strict();
+export type ResumeUploadRequest = z.infer<typeof resumeUploadRequestSchema>;
+
+// Each signed route has its own context, so a signature for one cannot be replayed on another.
+const DELIVERY = "hiring-delivery";
+const RESUME_UPLOAD = "hiring-resume-upload";
+const digest = (context: string, body: string, timestamp: string, secret: string) =>
   createHmac("sha256", secret)
-    .update(`hiring-delivery\n${timestamp}\n${body}`)
+    .update(`${context}\n${timestamp}\n${body}`)
     .digest();
 
-export function deliveryAuthorization(
-  body: string,
-  now = Date.now(),
-  secret = process.env.AUTH_SECRET,
-) {
+function authorization(context: string, body: string, now: number, secret: string | undefined) {
   if (!secret)
     throw new HiringError(
       503,
       "Hiring delivery authentication is not configured.",
     );
   const timestamp = String(Math.floor(now / 1000));
-  return `HMAC-HIRING ${timestamp}.${digest(body, timestamp, secret).toString("hex")}`;
+  return `HMAC-HIRING ${timestamp}.${digest(context, body, timestamp, secret).toString("hex")}`;
 }
-export function verifyDeliveryAuthorization(
-  body: string,
-  header: string | null,
-  now = Date.now(),
-  secret = process.env.AUTH_SECRET,
-) {
+function verify(context: string, body: string, header: string | null, now: number, secret: string | undefined) {
   const parts = /^HMAC-HIRING (\d{10})\.([0-9a-f]{64})$/.exec(header ?? "");
   if (!secret || !parts || body.length > 2000) return false;
   const age = now / 1000 - Number(parts[1]);
   if (age < -30 || age > 120) return false;
   return timingSafeEqual(
     Buffer.from(parts[2], "hex"),
-    digest(body, parts[1], secret),
+    digest(context, body, parts[1], secret),
   );
 }
-export async function requestDelivery(value: DeliveryRequest) {
-  const body = JSON.stringify(deliveryRequestSchema.parse(value));
-  const url = new URL(
-    "/api/internal/hiring-delivery",
-    process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
-  );
+export const deliveryAuthorization = (body: string, now = Date.now(), secret = process.env.AUTH_SECRET) =>
+  authorization(DELIVERY, body, now, secret);
+export const verifyDeliveryAuthorization = (
+  body: string,
+  header: string | null,
+  now = Date.now(),
+  secret = process.env.AUTH_SECRET,
+) => verify(DELIVERY, body, header, now, secret);
+export const resumeUploadAuthorization = (body: string, now = Date.now(), secret = process.env.AUTH_SECRET) =>
+  authorization(RESUME_UPLOAD, body, now, secret);
+export const verifyResumeUploadAuthorization = (
+  body: string,
+  header: string | null,
+  now = Date.now(),
+  secret = process.env.AUTH_SECRET,
+) => verify(RESUME_UPLOAD, body, header, now, secret);
+
+/** Posts a signed body from the worker to the configured HTTPS application address. */
+async function signedPost(route: string, body: string, signature: string) {
+  const url = new URL(route, process.env.APP_BASE_URL || "https://bgscheduler.vercel.app");
   if (url.protocol !== "https:" || url.username || url.password)
     throw new Error(
       "Hiring delivery requires the configured HTTPS application address.",
@@ -64,7 +81,7 @@ export async function requestDelivery(value: DeliveryRequest) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: deliveryAuthorization(body),
+      Authorization: signature,
     },
     body,
     signal: AbortSignal.timeout(120000),
@@ -76,5 +93,18 @@ export async function requestDelivery(value: DeliveryRequest) {
         ? result.error
         : `Hiring delivery returned ${response.status}.`,
     );
-  return result as { sent: number; receipt?: Record<string, unknown> };
+  return result;
+}
+export async function requestDelivery(value: DeliveryRequest) {
+  const body = JSON.stringify(deliveryRequestSchema.parse(value));
+  return (await signedPost("/api/internal/hiring-delivery", body, deliveryAuthorization(body))) as {
+    sent: number;
+    receipt?: Record<string, unknown>;
+  };
+}
+/** A short-lived Blob token for one exact path. The Mac holds no Blob key. */
+export async function requestResumeUploadToken(value: ResumeUploadRequest) {
+  const body = JSON.stringify(resumeUploadRequestSchema.parse(value));
+  const result = await signedPost("/api/internal/hiring-resume-upload", body, resumeUploadAuthorization(body));
+  return result.token as string;
 }

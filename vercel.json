@@ -112,6 +112,10 @@
       "schedule": "19,35,48,59 * * * *"
     },
     {
+      "path": "/api/internal/hiring-resume-retention",
+      "schedule": "28 20 * * *"
+    },
+    {
       "path": "/api/internal/progress-line-reminders",
       "schedule": "*/10 * * * *"
     }
