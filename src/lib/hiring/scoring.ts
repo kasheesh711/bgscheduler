@@ -8,7 +8,6 @@ import {
   subjectSchema,
 } from "./model";
 
-export const PROFILE_WEIGHTS = DEFAULT_WEIGHTS;
 const CRITERION_IDS = ["degree", "subject", "curriculum", "teaching", "english"] as const;
 /** `brief` is optional here so a stored row without it still parses. Model output must carry it (see the output schemas). */
 const criterionShape = {

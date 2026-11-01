@@ -17,6 +17,7 @@ import {
   backfillStatus,
   importApplication,
   importMissingTracker,
+  markTrackerContacted,
   reconcileTracker,
 } from "../sources";
 import { BackfillFatal, createBackfillStep, parseBackfillArgs } from "../backfill";
@@ -404,7 +405,7 @@ describe("source text in the dashboard", () => {
       ["Sourcing Log", "Scheduling Responses"].map((title) => ({ title, sheetId: 1, rowCount: 10, columnCount: 5 })) as never,
     );
     vi.mocked(sheets.fetchGoogleSheetRange).mockImplementation((async (_e: string, _i: string, range: string) =>
-      range.includes("Sourcing") ? [["Name", "Email"], ["Invented T", "t@example.com"]] : [["Name", "Email"]]) as never);
+      range.includes("Sourcing") ? [["Name", "Email", "Send email to invite"], ["Invented T", "t@example.com"]] : [["Name", "Email"]]) as never);
     await importMissingTracker(db, config);
     const { candidates } = await dashboard(db);
     const byEmail = (email: string) => candidates.find((c) => c.email === email)!;
@@ -414,12 +415,13 @@ describe("source text in the dashboard", () => {
     expect(tracker.hasSourceText).toBe(false);
     expect(tracker.reviewNote).toBe("Added from the tracker. No SEEK application is linked yet.");
     expect(JSON.stringify(candidates)).not.toContain("Invented profile text");
+    expect(JSON.stringify(candidates)).not.toContain("workRightsConfirmed");
   });
 });
 
 describe("tracker passes", () => {
   const TABS = ["Sourcing Log", "Scheduling Responses"];
-  const header = ["Timestamp", "Applicant Name", "Email Address", "Rating"];
+  const header = ["Timestamp", "Applicant Name", "Email Address", "Rating", "Send email to invite"];
   function tracker(rows: { sourcing?: unknown[][]; scheduling?: unknown[][] }, headerRow = 0) {
     vi.mocked(sheets.listGoogleSheetProperties).mockResolvedValue(
       [...TABS, "Recruitment Sheet"].map((title) => ({ title, sheetId: 1, rowCount: 100, columnCount: 10 })) as never,
@@ -490,6 +492,84 @@ describe("tracker passes", () => {
     tracker({});
     vi.mocked(sheets.fetchGoogleSheetRange).mockResolvedValue([["Name", "Phone"], ["A", "1"]] as never);
     await expect(reconcileTracker(db, config)).rejects.toThrow(/headers changed/i);
+    tracker({});
+    vi.mocked(sheets.fetchGoogleSheetRange).mockResolvedValue([["Name", "Email"], ["A", "a@example.com"]] as never);
+    await expect(reconcileTracker(db, config)).rejects.toThrow(/Send email to invite/);
+  });
+
+  describe("people already emailed through the tracker", () => {
+    const invited = (name: string, email: string) => [...person(name, email), "3/11/2026"];
+    async function people() {
+      const viewed = await seed({ stage: "new", email: "viewed@example.com" });
+      const emailed = await seed({ stage: "new", email: "emailed@example.com" });
+      const replied = await seed({ stage: "new", email: "replied@example.com" });
+      const later = await seed({ stage: "pre_screen", email: "later@example.com" });
+      const marked = await seed({ stage: "new", email: "marked@example.com", previouslyContacted: true });
+      tracker({
+        sourcing: [
+          person("Viewed", "viewed@example.com"),
+          invited("Emailed", " EMAILED@example.com "),
+          invited("Later", "later@example.com"),
+          invited("Marked", "marked@example.com"),
+          // A name not in the app is reported as missing, not as contacted.
+          invited("Unknown", "unknown@example.com"),
+        ],
+        scheduling: [person("Replied", "replied@example.com")],
+      });
+      return { viewed, emailed, replied, later, marked };
+    }
+    const contactedEmails = async () =>
+      (await db.select().from(c).where(eq(c.previouslyContacted, true))).map((r) => r.email).sort();
+
+    it("counts both kinds of contact at `new`, and not a view, another stage or a row already marked", async () => {
+      await people();
+      const before = await db.select().from(c);
+      expect((await reconcileTracker(db, config)).alreadyContactedAtNew).toBe(2);
+      expect(await db.select().from(c)).toEqual(before);
+    });
+
+    it("marks exactly those rows with one audit row each, changing nothing else, and a rerun marks none", async () => {
+      const { emailed, replied } = await people();
+      const before = new Map((await db.select().from(c)).map((r) => [r.id, r]));
+      const outboxBefore = (await counts()).outbox;
+      expect(await markTrackerContacted(db, config)).toBe(2);
+      expect(await contactedEmails()).toEqual(["emailed@example.com", "marked@example.com", "replied@example.com"]);
+      for (const row of await db.select().from(c)) {
+        const changed = [emailed.id, replied.id].includes(row.id);
+        expect(row).toEqual({ ...before.get(row.id), previouslyContacted: changed || before.get(row.id)!.previouslyContacted });
+      }
+      expect((await counts()).outbox).toBe(outboxBefore);
+      const audits = await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "tracker-mark-contacted"));
+      expect(audits.map((a) => a.actor)).toEqual(["hiring-backfill", "hiring-backfill"]);
+      expect(audits.map((a) => a.candidateId).sort()).toEqual([emailed.id, replied.id].sort());
+      // Idempotent.
+      expect(await markTrackerContacted(db, config)).toBe(0);
+      expect((await reconcileTracker(db, config)).alreadyContactedAtNew).toBe(0);
+      expect(await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "tracker-mark-contacted"))).toHaveLength(2);
+      expect(writeCalls()).toBe(0);
+    });
+
+    it("keeps a marked person out of the form queue", async () => {
+      const { emailed } = await people();
+      await db.update(c).set({ profileAssessment: { criteria: [], subjects: [], universities: [], summary: "" } }).where(eq(c.id, emailed.id));
+      await markTrackerContacted(db, config);
+      const [row] = await db.select().from(c).where(eq(c.id, emailed.id));
+      expect(profileGate(row, configSchema.parse({ profileThreshold: 0 })).reasons).toContain("There was earlier contact.");
+    });
+
+    it("refuses while Automation or Messages is on", async () => {
+      const { emailed } = await people();
+      for (const on of [{ enabled: true }, { deliveryEnabled: true }]) {
+        await db.insert(s.hiringSettings).values({ id: "default", config: configSchema.parse(on), updatedBy: "test" }).onConflictDoUpdate({ target: s.hiringSettings.id, set: { config: configSchema.parse(on) } });
+        await expect(markTrackerContacted(db, config)).rejects.toThrow(/Pause live hiring/);
+      }
+      expect((await db.select().from(c).where(eq(c.id, emailed.id)))[0].previouslyContacted).toBe(false);
+    });
+
+    it("parses the flag", () => {
+      expect(parseBackfillArgs(["--tracker-mark-contacted"], {}).mode).toBe("tracker-mark-contacted");
+      expect(() => parseBackfillArgs(["--tracker-mark-contacted", "--limit", "2"], {})).toThrow(/Usage/);
+    });
   });
 
   it("imports each missing person once, with earlier contact, review stage and no source text", async () => {

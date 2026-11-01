@@ -1,7 +1,8 @@
 import { formatInTimeZone } from "date-fns-tz";
 import { profileGate } from "./insights";
 import type { LimitName, QueueHold } from "./limits";
-import { ZONE, type HiringConfig, type Stage } from "./model";
+import { ZONE, type HiringConfig, type PreScreen, type Stage } from "./model";
+import { supportedVisitSubjects, topHiringSubject, visitSubject, type PreScreenAssessment } from "./scoring";
 
 export type PreScreenState = "Not sent" | "Queued" | "Sent" | "Reminded" | "Replied" | "No reply" | "Earlier contact";
 export type PreScreenResult = {
@@ -88,22 +89,46 @@ export type CandidateExtras = {
   pre: PreScreenResult;
   /** The current visit, or the latest confirmed old-flow booking, or null. */
   visit: { kind: "paper" | "mock"; startTime: Date | string; visitId?: string | null } | null;
+  /** Label and value lines for the panel, from the visit's two rows. Empty for an old-flow booking. */
+  visitFacts: [string, string][];
+  /** In the onsite queue: the Queued filter shows it, and its pill stays Replied. */
+  onsiteQueued: boolean;
 };
+
+type BookingRow = {
+  candidateId: string;
+  kind: "paper" | "mock";
+  status: string;
+  startTime: Date | string;
+  endTime?: Date | string;
+  visitId?: string | null;
+  interviewerKey?: string | null;
+  subjects?: string[];
+};
+
+function visitFacts(rows: BookingRow[]): [string, string][] {
+  const exam = rows.find((b) => b.kind === "paper");
+  const mock = rows.find((b) => b.kind === "mock");
+  const at = (b?: BookingRow) => (b ? when(new Date(b.startTime), true) : "Not set");
+  // A visit's rows always share one status.
+  const { status } = rows[0];
+  return [
+    ["Exam", at(exam)],
+    ["Mock", at(mock)],
+    ["Head", mock?.interviewerKey ?? "Not set"],
+    ["Subject", mock?.subjects?.[0] ?? "Not set"],
+    ["Status", status === "no_show" ? "No-show" : status[0].toUpperCase() + status.slice(1)],
+  ];
+}
 
 /** The pre-screen status and visit of every candidate, by candidate id. */
 export function candidateExtras(
   candidates: (Parameters<typeof preScreenStatus>[0])[],
   outbox: (OutboxRow & { candidateId: string })[],
-  bookings: {
-    candidateId: string;
-    kind: "paper" | "mock";
-    status: string;
-    startTime: Date | string;
-    endTime?: Date | string;
-    visitId?: string | null;
-  }[],
+  bookings: BookingRow[],
   ready: Set<string>,
   now = new Date(),
+  onsiteQueue = new Set<string>(),
 ) {
   // A visit shows until it ends. Old-flow bookings show as they always did.
   const confirmed = bookings
@@ -120,6 +145,9 @@ export function candidateExtras(
           pre: preScreenStatus(c, jobs.get(c.id) ?? [], ready.has(c.id)),
           // A visit reads as its exam, which starts it, until only the mock is left.
           visit: (latest?.visitId && confirmed.find((b) => b.visitId === latest.visitId && b.kind === "paper")) || latest,
+          // All rows of the visit, because a finished exam leaves `confirmed` but is still part of it.
+          visitFacts: latest?.visitId ? visitFacts(bookings.filter((b) => b.visitId === latest.visitId)) : [],
+          onsiteQueued: onsiteQueue.has(c.id),
         },
       ];
     }),
@@ -145,8 +173,8 @@ function limitText(hold: QueueHold, config: HiringConfig) {
 
 type HoldCandidate = Parameters<typeof profileGate>[0] & {
   stage: Stage;
-  preScreen: unknown;
-  preScreenAssessment: unknown;
+  preScreen: PreScreen | null;
+  preScreenAssessment: Pick<PreScreenAssessment, "subjects"> | null;
 };
 /**
  * Why a candidate has not been sent anything yet, from data the dashboard already has. `short` fits a table cell,
@@ -185,16 +213,26 @@ export function holdNote(
       long: gate.reasons,
     };
   }
-  if (
-    candidate.preScreen &&
-    candidate.preScreenAssessment &&
-    ["pre_screen", "no_reply"].includes(candidate.stage) &&
-    config.preScreenThreshold === null
-  )
-    return {
-      short: "Needs a pass score",
-      long: ["No pass score is set, so no automatic onsite invitation can run. A click can still invite."],
-    };
+  const { preScreen: pre, preScreenAssessment: assessment, workRightsAnswer: answer } = candidate;
+  if (pre && assessment && ["pre_screen", "no_reply"].includes(candidate.stage)) {
+    if (config.preScreenThreshold === null)
+      return {
+        short: "Needs a pass score",
+        long: ["No pass score is set, so no automatic onsite invitation can run. A click can still invite."],
+      };
+    // The queue's reply check waits here, because a setting can cure it.
+    const supported = supportedVisitSubjects(pre, answer, assessment, config);
+    if (supported.length && !visitSubject(pre, answer, assessment, config))
+      return topHiringSubject(supported, config.subjectPriority)
+        ? {
+            short: "No head for this subject",
+            long: [`No head covers the subject: ${supported.join(", ")}. Add a head in Rules and setup. The next cycle looks again.`],
+          }
+        : {
+            short: "Subject not hiring",
+            long: [`The subject is not open for hiring: ${supported.join(", ")}. Open it in Rules and setup. The next cycle looks again.`],
+          };
+  }
   return null;
 }
 

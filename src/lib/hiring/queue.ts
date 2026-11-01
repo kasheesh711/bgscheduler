@@ -315,18 +315,22 @@ export async function runFollowUps(db: Database, now = new Date()) {
     const passed = (sentAt: Date, days: number) => now.getTime() - sentAt.getTime() >= days * DAY;
 
     const forms = await tx
-      .select({ id: c.id, sentAt: o.sentAt })
+      .select({ id: c.id, status: o.status, sentAt: o.sentAt, firstAttemptAt: o.firstAttemptAt })
       .from(c)
       .innerJoin(o, and(eq(o.candidateId, c.id), isForm))
-      .where(and(eq(c.stage, "pre_screen"), isNull(c.preScreen), eq(o.status, "sent"), isNotNull(o.sentAt)));
-    for (const { id, sentAt } of forms) {
+      .where(and(eq(c.stage, "pre_screen"), isNull(c.preScreen), inArray(o.status, ["sent", "failed", "uncertain"])));
+    for (const { id, status, sentAt, firstAttemptAt } of forms) {
       const { remindDays, expireDays } = config.preScreenFollowUp;
-      if (!passed(sentAt!, remindDays) && !passed(sentAt!, expireDays)) continue;
+      // The same rule as onsite: these can never start the normal clock, so they would hold a place for good. `pending` holds no clock.
+      const stuck = status !== "sent" && !!firstAttemptAt && passed(firstAttemptAt, expireDays);
+      if (!stuck && (status !== "sent" || !sentAt)) continue;
+      const ended = stuck || passed(sentAt!, expireDays);
+      if (!ended && !passed(sentAt!, remindDays)) continue;
       const row = await lockCandidate(tx, id);
       if (row.stage !== "pre_screen" || row.preScreen) continue;
-      if (passed(sentAt!, expireDays)) {
+      if (ended) {
         await tx.update(c).set({ stage: "no_reply", revision: row.revision + 1, updatedAt: now }).where(eq(c.id, id));
-        await audit(tx, "hiring-follow-up", "no-reply", id, { sentAt });
+        await audit(tx, "hiring-follow-up", "no-reply", id, { sentAt, status });
         expired++;
       } else if (
         row.email &&

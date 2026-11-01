@@ -94,6 +94,40 @@ describe("VisitBooking", () => {
   });
 });
 
+describe("CandidateInspector visit details", () => {
+  const facts: [string, string][] = [
+    ["Exam", "5 Nov, 10:00"],
+    ["Mock", "5 Nov, 12:00"],
+    ["Head", "Peat"],
+    ["Subject", "Mathematics"],
+    ["Status", "Confirmed"],
+  ];
+  const render = (extras: Partial<CandidateExtras>) =>
+    renderToStaticMarkup(
+      <CandidateInspector
+        candidate={{ id: "a", name: "A", stage: "onsite_booked", subjects: [], sourceIds: [], paperPassedSubjects: [], preScreen: null } as unknown as HiringCandidate}
+        extras={{ pre: { status: "Replied", sentAt: null, remindedAt: null, repliedAt: null }, visit: null, visitFacts: [], onsiteQueued: false, ...extras }}
+        seekJobId="1"
+        weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0 }}
+        busy={false}
+        error=""
+        notice=""
+        command={async () => true}
+        onClose={() => {}}
+      />,
+    );
+  it("lists the exam, mock, head, subject and status of a visit", () => {
+    const html = render({ visit: { kind: "paper", startTime: "2026-11-05T03:00:00Z", visitId: "v1" }, visitFacts: facts });
+    for (const [label, value] of facts) expect(html).toContain(`<dt>${label}</dt><dd>${value}</dd>`);
+    expect(html).not.toContain("Booked:");
+  });
+  it("keeps one line for an old-flow booking", () => {
+    const html = render({ visit: { kind: "mock", startTime: "2026-11-05T05:00:00Z" } });
+    expect(html).toContain("Booked: Mock");
+    expect(html).not.toContain("<dt>Exam</dt>");
+  });
+});
+
 describe("CandidateInspector actions", () => {
   const pre = { degree: "BSc" };
   const panel = (extra: Record<string, unknown>, visit: CandidateExtras["visit"] = null) =>
@@ -116,7 +150,7 @@ describe("CandidateInspector actions", () => {
             ...extra,
           } as unknown as HiringCandidate
         }
-        extras={{ pre: { status: "Replied", sentAt: null, remindedAt: null, repliedAt: null }, visit }}
+        extras={{ pre: { status: "Replied", sentAt: null, remindedAt: null, repliedAt: null }, visit, visitFacts: [], onsiteQueued: false }}
         seekJobId="94844236"
         weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0 }}
         busy={false}

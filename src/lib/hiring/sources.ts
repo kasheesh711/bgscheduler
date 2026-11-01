@@ -715,29 +715,46 @@ export function trackerPeople(rows: unknown[][]) {
   );
 }
 
+/** The Sourcing Log column that holds an invitation. It is found by header text, so a moved column fails loudly. */
+function inviteColumn(rows: unknown[][]) {
+  const column = Math.max(-1, ...rows.slice(0, 5).map((r) => r.findIndex((v) => /send email to invite/i.test(String(v ?? "")))));
+  if (column < 0) throw new Error('Tracker headers changed: "Send email to invite" is missing. Review the source mapping.');
+  return column;
+}
+
+type TrackerPerson = { tab: PeopleTab; sourceTab: string; row: number; email: string | null; name: string; contacted: boolean };
+
 async function readPeople(config: HiringConfig) {
   const properties = await listGoogleSheetProperties(config.connectedEmail, TRACKER_ID);
-  const found: { tab: PeopleTab; sourceTab: string; row: number; email: string | null; name: string }[] = [];
+  const found: TrackerPerson[] = [];
   for (const { key, title } of PEOPLE_TABS) {
     const tab = properties.find((p) => p.title === title);
     if (!tab) throw new Error(`Required tracker tab is missing: ${title}`);
     if (tab.rowCount > 10000) throw new Error("Tracker grew beyond the verified import range.");
     const rows = await fetchGoogleSheetRange(config.connectedEmail, TRACKER_ID, `'${title}'!A1:AD${tab.rowCount}`);
-    for (const person of trackerPeople(rows)) found.push({ tab: key, sourceTab: title, ...person });
+    // Scheduling Responses means they were emailed. A Sourcing Log row only records a view until its invite column has a value.
+    const invite = key === "sourcing" ? inviteColumn(rows) : null;
+    for (const person of trackerPeople(rows))
+      found.push({
+        tab: key,
+        sourceTab: title,
+        ...person,
+        contacted: invite === null || !!cell(rows[person.row - 1], invite),
+      });
   }
   return found;
 }
 
 /** People on the two tabs who are not in the app, one per email per tab. Rows with no valid email are counted apart. */
-async function missingPeople(db: Database, config: HiringConfig) {
+async function missingPeople(db: Database, people: TrackerPerson[]) {
   const known = new Set(
     (await db.select({ email: s.hiringCandidates.email }).from(s.hiringCandidates).where(isNotNull(s.hiringCandidates.email)))
       .map((r) => r.email!.trim().toLowerCase()),
   );
   const noEmail = { sourcing: 0, scheduling: 0 };
   const seen = new Set<string>();
-  const missing: Awaited<ReturnType<typeof readPeople>> = [];
-  for (const person of await readPeople(config)) {
+  const missing: TrackerPerson[] = [];
+  for (const person of people) {
     if (!person.email) noEmail[person.tab]++;
     else if (!known.has(person.email) && !seen.has(`${person.tab}:${person.email}`)) {
       seen.add(`${person.tab}:${person.email}`);
@@ -747,15 +764,57 @@ async function missingPeople(db: Database, config: HiringConfig) {
   return { missing, noEmail };
 }
 
-/** Report only: it reads the app and the sheet and writes to neither. `sourcing` and `scheduling` count people missing from the app. */
+/** People in the app at `new`, not marked as contacted, whom the tracker shows as already emailed. */
+async function contactedAtNew(db: Database, people: TrackerPerson[]) {
+  const c = s.hiringCandidates;
+  const contacted = new Map(people.flatMap((p) => (p.contacted && p.email ? [[p.email, p] as const] : [])));
+  const rows = await db
+    .select({ id: c.id, email: c.email })
+    .from(c)
+    .where(and(eq(c.stage, "new"), eq(c.previouslyContacted, false), isNotNull(c.email)));
+  return rows.flatMap(({ id, email }) => {
+    const person = contacted.get(email!.trim().toLowerCase());
+    return person ? [{ id, sourceTab: person.sourceTab, row: person.row }] : [];
+  });
+}
+
+/**
+ * Report only: it reads the app and the sheet and writes to neither. `sourcing` and `scheduling` count people missing
+ * from the app. `alreadyContactedAtNew` counts the people `markTrackerContacted` would mark.
+ */
 export async function reconcileTracker(db: Database, config: HiringConfig) {
-  const { missing, noEmail } = await missingPeople(db, config);
+  const people = await readPeople(config);
+  const { missing, noEmail } = await missingPeople(db, people);
   return {
     sourcing: missing.filter((m) => m.tab === "sourcing").length,
     scheduling: missing.filter((m) => m.tab === "scheduling").length,
     missing: missing.map((m) => ({ sourceTab: m.sourceTab, row: m.row })),
     noEmail,
+    alreadyContactedAtNew: (await contactedAtNew(db, people)).length,
   };
+}
+
+/**
+ * Sets the earlier-contact flag on the people `contactedAtNew` finds, with one audit row each, so the queue sends them no
+ * form. It writes that column only. Stage, revision, `updated_at` and outbox stay as they were: nothing reads the flag
+ * through a saved copy, because each release locks and rereads the row. The first live cycle then moves them to review.
+ */
+export async function markTrackerContacted(db: Database, config: HiringConfig) {
+  await assertAutomationOff(db);
+  const c = s.hiringCandidates;
+  let marked = 0;
+  for (const { id, sourceTab, row } of await contactedAtNew(db, await readPeople(config)))
+    await withDatabaseTransaction(db, async (tx) => {
+      const [held] = await tx
+        .update(c)
+        .set({ previouslyContacted: true })
+        .where(and(eq(c.id, id), eq(c.stage, "new"), eq(c.previouslyContacted, false)))
+        .returning({ id: c.id });
+      if (!held) return;
+      await audit(tx, BACKFILL_ACTOR, "tracker-mark-contacted", id, { sourceTab, row });
+      marked++;
+    });
+  return marked;
 }
 
 /**
@@ -765,7 +824,7 @@ export async function reconcileTracker(db: Database, config: HiringConfig) {
  */
 export async function importMissingTracker(db: Database, config: HiringConfig) {
   await assertAutomationOff(db);
-  const { missing } = await missingPeople(db, config);
+  const { missing } = await missingPeople(db, await readPeople(config));
   let added = 0;
   const done = new Set<string>();
   for (const person of missing) {

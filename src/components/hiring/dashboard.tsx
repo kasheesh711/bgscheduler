@@ -143,7 +143,17 @@ export function HiringDashboard() {
     [data],
   );
   const extras = useMemo(
-    () => (data ? candidateExtras(data.candidates, data.outbox, data.bookings, ready) : new Map()),
+    () =>
+      data
+        ? candidateExtras(
+            data.candidates,
+            data.outbox,
+            data.bookings,
+            ready,
+            new Date(),
+            new Set(Object.keys(data.holds).filter((id) => data.holds[id].funnel === "onsite")),
+          )
+        : new Map(),
     [data, ready],
   );
   const shown = useMemo(

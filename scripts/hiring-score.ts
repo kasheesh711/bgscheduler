@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { Pool } from "pg";
-import { asc, isNotNull, or } from "drizzle-orm";
+import { and, asc, isNotNull, isNull, or } from "drizzle-orm";
 import { z } from "zod";
 import { loadEnvConfig } from "@next/env";
 import { getDb } from "../src/lib/db";
@@ -29,13 +29,22 @@ async function main() {
   const until = process.env.HIRING_SCORE_UNTIL ? Date.parse(process.env.HIRING_SCORE_UNTIL) : null;
   if (until !== null && !Number.isFinite(until)) throw new Error("Invalid scoring stop time.");
   if (briefs && until === null) throw new Error("Set HIRING_SCORE_UNTIL for the rewrite.");
-  if (until !== null && Date.now() >= until) return;
+  if (until !== null && Date.now() >= until) {
+    console.error("HIRING_SCORE_UNTIL has already passed. Nothing was scored (complete: false).");
+    process.exitCode = 2;
+    return;
+  }
   if (!runtimeWritesAllowed()) throw new Error("Set HIRING_WRITES_ENABLED to store review scores.");
   const children: NonNullable<ClaudeRunnerDeps["children"]> = new Set();
   const stop = async (code = 0) => { await killChildren(children); process.exit(code); };
-  process.on("SIGTERM", () => { void stop(); });
-  process.on("SIGINT", () => { void stop(); });
-  const cutoff = until === null ? null : setTimeout(() => { void stop(); }, until - Date.now());
+  // A pass cut off here leaves `complete: false`, so it must not exit like a finished one.
+  const cutOff = (why: string) => {
+    console.error(`${why} The pass did not finish (complete: false). Run it again: stored rows are skipped.`);
+    void stop(2);
+  };
+  process.on("SIGTERM", () => cutOff("Stopped by a signal."));
+  process.on("SIGINT", () => cutOff("Stopped by a signal."));
+  const cutoff = until === null ? null : setTimeout(() => cutOff("Reached HIRING_SCORE_UNTIL."), until - Date.now());
   cutoff?.unref();
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1, keepAlive: true });
   pool.on("error", () => { void stop(1); });
@@ -61,8 +70,8 @@ async function main() {
     let next = 0, assessments = 0, modelCalls = 0, voided = 0, checked = 0;
     const onVoided = () => { voided++; };
     let failure: unknown;
-    const report = (complete: boolean) => {
-      const progress = { at: new Date().toISOString(), mode: briefs ? "brief rewrite" : preScreen ? "pre-screen score only" : "score only", concurrency, checked, candidates: ids.length, assessments, calls: modelCalls, voided, complete };
+    const report = (complete: boolean, invalidPreScreenRows?: number) => {
+      const progress = { at: new Date().toISOString(), mode: briefs ? "brief rewrite" : preScreen ? "pre-screen score only" : "score only", concurrency, checked, candidates: ids.length, assessments, calls: modelCalls, voided, invalidPreScreenRows, complete };
       fs.writeFileSync(path.join(home, "scoring-progress.json"), JSON.stringify(progress), { mode: 0o600 });
       console.log(JSON.stringify(progress));
     };
@@ -120,7 +129,13 @@ async function main() {
     }));
     if (failure) throw failure;
     // A pass that stored nothing for some answers is not a clean finish.
-    report(voided === 0);
+    // An answer that failed validation keeps its hash with no assessment. `--pre-screen --retry-invalid` retries those rows.
+    report(
+      voided === 0,
+      preScreen
+        ? await db.$count(hiringCandidates, and(isNotNull(hiringCandidates.preScreen), isNotNull(hiringCandidates.preScreenHash), isNull(hiringCandidates.preScreenAssessment)))
+        : undefined,
+    );
     if (voided) { console.error(`${voided} finished answer(s) were not stored because a row or the settings changed. Run the pass again.`); process.exitCode = 2; }
   } finally {
     clearInterval(heartbeat);

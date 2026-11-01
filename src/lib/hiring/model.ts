@@ -13,7 +13,7 @@ export const subscriptionAuthSchema = z.object({
   authMethod: z.literal("claude.ai"),
   subscriptionType: z.enum(["max", "pro", "team", "enterprise"]),
 });
-export const SEEK_STAGES = [
+const SEEK_STAGES = [
   "Inbox",
   "Prescreen",
   "Shortlist",
@@ -70,8 +70,7 @@ export const SUBJECTS = [
 ] as const;
 export const subjectSchema = z.enum(SUBJECTS);
 export type Subject = z.infer<typeof subjectSchema>;
-export const kindSchema = z.enum(["paper", "mock"]);
-export type InterviewKind = z.infer<typeof kindSchema>;
+export type InterviewKind = "paper" | "mock";
 export const tokenKindSchema = z.enum(["paper", "mock", "visit"]);
 export const stageSchema = z.enum([
   "new",

@@ -509,6 +509,33 @@ describe("follow-ups", () => {
     vi.setSystemTime(after(7));
     expect(await runFollowUps(db)).toEqual({ reminded: 0, expired: 1 });
   });
+  it.each(["failed", "uncertain"] as const)("frees the place of a %s form row after the expiry days, with no reminder", async (status) => {
+    const row = await seed({ stage: "pre_screen", subjects: ["Mathematics"] });
+    await formRow(row.id, { status, sentAt: null, firstAttemptAt: now });
+    vi.setSystemTime(after(3));
+    expect(await runFollowUps(db)).toEqual({ reminded: 0, expired: 0 });
+    vi.setSystemTime(after(6.9));
+    expect(await runFollowUps(db)).toEqual({ reminded: 0, expired: 0 });
+    expect((await readLimitUsage(db, "pre_screen", after(6.9))).waiting).toBe(1);
+    vi.setSystemTime(after(7));
+    expect(await runFollowUps(db)).toEqual({ reminded: 0, expired: 1 });
+    expect((await candidate(row.id)).stage).toBe("no_reply");
+    expect((await readLimitUsage(db, "pre_screen", after(7))).waiting).toBe(0);
+    // The clock runs from the first attempt, and the stage change cancels the row before it can leave.
+    await db.update(s.hiringOutbox).set({ nextAttemptAt: null });
+    await deliverOutbox(db, config);
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+  it("holds no clock on a pending form row, or on a failed row with no first attempt", async () => {
+    const pending = await seed({ stage: "pre_screen" });
+    await formRow(pending.id, { status: "pending", sentAt: null, firstAttemptAt: now });
+    const unattempted = await seed({ stage: "pre_screen" });
+    await formRow(unattempted.id, { status: "failed", sentAt: null, firstAttemptAt: null });
+    vi.setSystemTime(after(30));
+    expect(await runFollowUps(db)).toEqual({ reminded: 0, expired: 0 });
+    expect((await candidate(pending.id)).stage).toBe("pre_screen");
+    expect((await candidate(unattempted.id)).stage).toBe("pre_screen");
+  });
   it("does not start the follow-up clock until sentAt", async () => {
     const row = await seed({ stage: "pre_screen" });
     await formRow(row.id, { status: "pending", sentAt: null, createdAt: after(-30) });
@@ -582,6 +609,50 @@ describe("follow-ups", () => {
     expect((await invites()).filter((j) => j.candidateId === invited.id)).toHaveLength(1);
   });
 });
+describe("university result on a live reply", () => {
+  const catalog = sourceHash(config.universities);
+  const stored = { name: "Stored", country: "US", rank: 5, edition: "e", fraction: 0.75, reason: "r", sources: [], catalogHash: catalog };
+  const inCatalog = config.universities.find((u) => u.rank)!;
+  const scored = (values: Values) =>
+    seed({ stage: "pre_screen", subjects: ["Mathematics"], preScreen: pre, previouslyContacted: true, ...values });
+  const assess = async (_s: string, _k: string, kind?: string) => assessment(kind);
+  it("keeps the stored fraction when the reply's assessment lists no university", async () => {
+    const row = await scored({ universityAssessment: stored });
+    await assessCandidates(db, config, assess);
+    const saved = await candidate(row.id);
+    expect(saved.preScreenAssessment).not.toBeNull();
+    expect(saved.universityAssessment).toEqual(stored);
+  });
+  it("recomputes a stale catalog result from the profile, not from the reply", async () => {
+    const row = await scored({
+      universityAssessment: { ...stored, catalogHash: "old" },
+      profileAssessment: {
+        ...five(),
+        universities: [{ name: inCatalog.name, evidence: inCatalog.name, completedDegree: true }],
+      } as never,
+    });
+    await assessCandidates(db, config, assess);
+    const saved = await candidate(row.id);
+    expect(saved.universityAssessment).toMatchObject({ name: inCatalog.name, catalogHash: catalog });
+    expect(saved.universityAssessment!.fraction).toBeGreaterThan(0);
+  });
+  it("computes a missing result from the profile too", async () => {
+    const row = await scored({
+      profileAssessment: {
+        ...five(),
+        universities: [{ name: inCatalog.name, evidence: inCatalog.name, completedDegree: true }],
+      } as never,
+    });
+    await assessCandidates(db, config, assess);
+    expect((await candidate(row.id)).universityAssessment).toMatchObject({ name: inCatalog.name, catalogHash: catalog });
+  });
+  it("falls back to the reply's universities only when there is no profile assessment", async () => {
+    const row = await scored({ profileAssessment: null });
+    await assessCandidates(db, config, assess);
+    expect((await candidate(row.id)).universityAssessment).toMatchObject({ name: null, fraction: 0, catalogHash: catalog });
+  });
+});
+
 describe("reply rule", () => {
   it("a first reply after the app send queues automatically", async () => {
     const row = await seed({ stage: "pre_screen", subjects: ["Mathematics"] });

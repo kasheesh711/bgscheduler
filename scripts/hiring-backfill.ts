@@ -7,7 +7,7 @@ import { getDb } from "../src/lib/db";
 import * as s from "../src/lib/db/schema";
 import { runtimeWritesAllowed } from "../src/lib/hiring/model";
 import { settings } from "../src/lib/hiring/service";
-import { importMissingTracker, reconcileTracker } from "../src/lib/hiring/sources";
+import { importMissingTracker, markTrackerContacted, reconcileTracker } from "../src/lib/hiring/sources";
 import { createBackfillStep, parseBackfillArgs } from "../src/lib/hiring/backfill";
 import { backfillSeek, SEEK_PAUSE_MS } from "./hiring-seek";
 
@@ -19,7 +19,7 @@ async function main() {
   const { config } = await settings(db);
   if (args.mode === "tracker-report") {
     const result = await reconcileTracker(db, config);
-    console.log(JSON.stringify({ sourcing: result.sourcing, scheduling: result.scheduling, missingRows: result.missing.length, noEmail: result.noEmail }));
+    console.log(JSON.stringify({ sourcing: result.sourcing, scheduling: result.scheduling, missingRows: result.missing.length, noEmail: result.noEmail, alreadyContactedAtNew: result.alreadyContactedAtNew }));
     return;
   }
   if (!runtimeWritesAllowed()) throw new Error("Set HIRING_WRITES_ENABLED only after the release checks.");
@@ -36,6 +36,10 @@ async function main() {
     if (!lock.rows[0]?.locked) throw new Error("Another hiring worker is running.");
     if (args.mode === "tracker-import") {
       console.log(JSON.stringify({ added: await importMissingTracker(db, config) }));
+      return;
+    }
+    if (args.mode === "tracker-mark-contacted") {
+      console.log(JSON.stringify({ marked: await markTrackerContacted(db, config) }));
       return;
     }
     let stopping = false;

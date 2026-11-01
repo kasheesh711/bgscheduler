@@ -153,18 +153,23 @@ export async function assessCandidates(
       }
     }
     const catalogHash = sourceHash(config.universities);
-    const prestige =
-      !candidate.universityAssessment ||
-      candidate.universityAssessment.catalogHash !== catalogHash ||
-      oldHash !== hash
-        ? await assessPrestige(assessment.universities, config, catalogHash)
-        : candidate.universityAssessment;
+    // Only the profile's universities count, so a reply keeps the stored result, as in scorePreScreens. A missing or
+    // old-catalog result is recomputed from the profile. A changed profile is recomputed from its new assessment.
+    const recomputed =
+      candidate.universityAssessment?.catalogHash !== catalogHash || (phase === "profile" && oldHash !== hash)
+        ? await assessPrestige(
+            (phase === "pre" ? (candidate.profileAssessment ?? assessment) : assessment).universities,
+            config,
+            catalogHash,
+          )
+        : null;
     await withDatabaseTransaction(db, async (tx) => {
       await tx.execute(
         sql`select id from hiring_candidates where id=${candidate.id} for update`,
       );
       const fresh = await candidateById(tx, candidate.id),
-        current = await settings(tx);
+        current = await settings(tx),
+        prestige = recomputed ?? fresh.universityAssessment!;
       if (
         fresh.revision !== candidate.revision ||
         sourceHash(current.config.universities) !== catalogHash ||
@@ -183,7 +188,7 @@ export async function assessCandidates(
         .update(s.hiringCandidates)
         .set({
           ...update,
-          universityAssessment: prestige,
+          ...(recomputed ? { universityAssessment: recomputed } : {}),
           ...(scoreOnly && fresh.reviewNote === "AI evidence could not be verified. Review this application before advancing it."
             ? { reviewNote: null } : {}),
         })

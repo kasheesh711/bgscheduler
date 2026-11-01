@@ -24,13 +24,14 @@ const COLUMNS: [SortKey, string][] = [
 
 const PRE_SCREEN_FILTERS: PreScreenFilter[] = ["all", "Queued", "Sent", "Replied", "No reply", "Visit booked"];
 // The Sent button covers Sent and Reminded; the pill still tells them apart.
+// The Queued button also covers a reply in the onsite queue, whose pill stays Replied.
 const matchesPreScreen = (extra: CandidateExtras | undefined, value: PreScreenFilter) =>
   value === "all" ||
   (value === "Visit booked"
     ? !!extra?.visit
     : value === "Sent"
       ? extra?.pre.status === "Sent" || extra?.pre.status === "Reminded"
-      : extra?.pre.status === value);
+      : extra?.pre.status === value || (value === "Queued" && !!extra?.onsiteQueued));
 
 /** The stage, score, subject and pre-screen filters. Search text stays inside the table. */
 export const matchesFilter = (

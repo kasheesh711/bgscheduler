@@ -557,6 +557,8 @@ export async function dashboard(db: Database = getDb()) {
       return {
         ...c,
         profileText: undefined,
+        // The screen reads workRightsAnswer. This old column stays in the database only.
+        workRightsConfirmed: undefined,
         // The text itself is read on demand. This tells the screen whether there is any, such as for a person added from the tracker.
         hasSourceText: c.profileText.trim().length > 0,
         // The screen opens a file only through the guarded route, so it never gets the storage path.

@@ -96,6 +96,17 @@ const table = (
     />,
   );
 
+describe("the Queued filter and the onsite queue", () => {
+  it("also matches a reply in the onsite queue, whose pill stays Replied", () => {
+    const queued = candidateExtras(people, [], [], new Set(), new Date(), new Set(["c"]));
+    const match = (map: Map<string, CandidateExtras>) =>
+      people.filter((c) => matchesFilter(c, { ...NO_FILTER, prescreen: "Queued" }, new Set(), map)).map((c) => c.id);
+    expect(match(queued)).toEqual(["c"]);
+    expect(queued.get("c")!.pre.status).toBe("Replied");
+    expect(match(candidateExtras(people, [], [], new Set()))).toEqual([]);
+  });
+});
+
 describe("pre-screen filter", () => {
   const pick = (prescreen: (typeof NO_FILTER)["prescreen"]) =>
     people.filter((c) => matchesFilter(c, { ...NO_FILTER, prescreen }, new Set(["d"]), extras)).map((c) => c.id);

@@ -410,7 +410,18 @@ export function CandidateInspector({
               <span className={`${css.pill} ${PILL_CLASS[extras.pre.status]}`}>{extras.pre.status}</span>
             </h3>
             <p className={css.inspectorText}>{preScreenNote(extras.pre, true)}</p>
-            {extras.visit && <p className={css.inspectorText}>Booked: {visitText(extras.visit)}</p>}
+            {extras.visitFacts.length > 0 ? (
+              <dl className={css.facts} aria-label="Booked visit">
+                {extras.visitFacts.map(([label, value]) => (
+                  <div key={label}>
+                    <dt>{label}</dt>
+                    <dd>{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : (
+              extras.visit && <p className={css.inspectorText}>Booked: {visitText(extras.visit)}</p>
+            )}
             {candidate.preScreen && (
               <details>
                 <summary className={css.inlineLink}>Read the full response</summary>
