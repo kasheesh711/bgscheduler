@@ -23,7 +23,7 @@ import {
   sourceHash,
 } from "../service";
 import { importApplication, observeSeekState } from "../sources";
-import { assessCandidates, deliverOutbox, scorePreScreens } from "../worker";
+import { assessCandidates, deliverOutbox, rewriteBriefs, scorePreScreens, type Rewrite } from "../worker";
 import { availableSlots, verifyLiveSlot } from "../availability";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { pushLineTextMessage } from "@/lib/line/client";
@@ -238,6 +238,124 @@ describe("hiring workflow persistence", () => {
     const auditCount = (await db.select().from(s.hiringAudit)).length;
     expect(await assessCandidates(db, paused, assess, 10, true)).toBe(0);
     expect((await db.select().from(s.hiringAudit)).length).toBe(auditCount);
+  });
+  describe("short evidence rewrite", () => {
+    const paused = { ...config, enabled: false, deliveryEnabled: false };
+    const ids = ["degree", "subject", "curriculum", "teaching", "english"] as const;
+    const stored = (withBriefs = false) => ({
+      criteria: ids.map((id) => ({ id, result: "met" as const, evidence: id, reason: `The source shows ${id}.`, ...(withBriefs ? { brief: "Kept line." } : {}) })),
+      subjects: [{ subject: "Mathematics" as const, evidence: "Mathematics", relevant: true }],
+      universities: [],
+      summary: "The tutor has a degree and teaches maths.",
+      ...(withBriefs ? { briefSummary: "Kept summary." } : {}),
+    });
+    const short = (text = "Short line.") => ({
+      briefSummary: "The tutor has a maths degree.",
+      briefs: Object.fromEntries(ids.map((id) => [id, text])),
+    });
+    const seed = async (assessment = stored()) => {
+      await db.update(s.hiringSettings).set({ config: paused }).where(eq(s.hiringSettings.id, "default"));
+      const [row] = await db
+        .insert(s.hiringCandidates)
+        .values({ name: "Rewrite", email: "rewrite@example.com", stage: "review", profileText: "Application text", profileAssessment: assessment, reviewNote: "Human note", revision: 7 })
+        .returning();
+      await db.insert(s.hiringOutbox).values({ key: `k-${row.id}`, candidateId: row.id, kind: "email", status: "pending", payload: { to: "a@example.com", subject: "s", text: "t" } });
+      return row;
+    };
+    it("rewrite changes only brief fields", async () => {
+      const before = await seed();
+      const rewrite = vi.fn<Rewrite>(async () => short());
+      expect(await rewriteBriefs(db, rewrite, { max: 5 })).toBe(1);
+      expect(rewrite).toHaveBeenCalledWith(expect.stringContaining("The source shows degree."), expect.stringContaining(before.id));
+      expect(rewrite.mock.calls[0][0]).not.toMatch(/Application text/);
+      const [after] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, before.id));
+      const a = after.profileAssessment!;
+      expect(a.briefSummary).toBe("The tutor has a maths degree.");
+      expect(a.criteria.map((c) => c.brief)).toEqual(ids.map(() => "Short line."));
+      const strip = (x: typeof a) => {
+        const copy = structuredClone(x);
+        delete copy.briefSummary;
+        for (const c of copy.criteria) delete c.brief;
+        return copy;
+      };
+      expect(strip(a)).toEqual(strip(before.profileAssessment!));
+      expect(after.stage).toBe(before.stage);
+      expect(after.revision).toBe(before.revision);
+      expect(after.reviewNote).toBe("Human note");
+      expect(after.updatedAt).toEqual(before.updatedAt);
+      expect(after.profileHash).toBe(before.profileHash);
+      expect(await db.select().from(s.hiringOutbox)).toHaveLength(1);
+      const audits = (await db.select().from(s.hiringAudit)).filter((r) => r.action === "brief-rewrite");
+      expect(audits).toHaveLength(1);
+      expect(audits[0].candidateId).toBe(before.id);
+    });
+    it("rewrite skips a row already holding briefs", async () => {
+      await seed(stored(true));
+      const rewrite = vi.fn(async () => short());
+      expect(await rewriteBriefs(db, rewrite, { max: 5 })).toBe(0);
+      expect(rewrite).not.toHaveBeenCalled();
+      expect(await db.select().from(s.hiringAudit)).toEqual([]);
+    });
+    it("retries a line over its limit with the exact count, then leaves the row without briefs", async () => {
+      const row = await seed();
+      const long = { briefSummary: Array(26).fill("w").join(" "), briefs: short().briefs };
+      const feedback: string[] = [];
+      const answers = [long, short("Fixed line.")];
+      expect(await rewriteBriefs(db, async (user) => (feedback.push(user), answers.shift()), { max: 5 })).toBe(1);
+      expect(feedback[1]).toMatch(/briefSummary has 26 words\. The limit is 25/);
+      const [fixed] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, row.id));
+      expect(fixed.profileAssessment!.criteria[0].brief).toBe("Fixed line.");
+      await db.update(s.hiringCandidates).set({ profileAssessment: stored() }).where(eq(s.hiringCandidates.id, row.id));
+      const rewrite = vi.fn(async () => long);
+      expect(await rewriteBriefs(db, rewrite, { max: 5 })).toBe(1);
+      expect(rewrite).toHaveBeenCalledTimes(4);
+      const [kept] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, row.id));
+      expect(kept.profileAssessment).toEqual(stored());
+      expect((await db.select().from(s.hiringAudit)).some((a) => a.action === "brief-rewrite-skipped")).toBe(true);
+    });
+    it("needs a brief for every criterion the row holds, including written on a pre-screen", async () => {
+      const row = await seed();
+      const six = { ...stored(), criteria: [...stored().criteria, { id: "written" as const, result: "met" as const, evidence: "", reason: "Specific actions." }] };
+      await db.update(s.hiringCandidates).set({ profileAssessment: null, preScreenAssessment: six }).where(eq(s.hiringCandidates.id, row.id));
+      const answers = [short(), { ...short(), briefs: { ...short().briefs, written: "Names clear actions." } }];
+      expect(await rewriteBriefs(db, async () => answers.shift(), { max: 5 })).toBe(1);
+      const [after] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, row.id));
+      expect(after.preScreenAssessment!.criteria.at(-1)!.brief).toBe("Names clear actions.");
+      expect(after.profileAssessment).toBeNull();
+    });
+    it("stops at max and rewrites one candidate on request", async () => {
+      const first = await seed();
+      const [second] = await db.insert(s.hiringCandidates).values({ name: "Two", email: "two@example.com", profileText: "x", profileAssessment: stored() }).returning();
+      const rewrite = vi.fn(async () => short());
+      expect(await rewriteBriefs(db, rewrite, { max: 1 })).toBe(1);
+      expect(await rewriteBriefs(db, rewrite, { max: 5, candidateId: first.id })).toBe(0);
+      expect(await rewriteBriefs(db, rewrite, { max: 5, candidateId: second.id })).toBe(1);
+    });
+    it("refuses to run while hiring or messages are on, and writes nothing if they are switched on during the call", async () => {
+      const row = await seed();
+      const rewrite = vi.fn(async () => short());
+      await db.update(s.hiringSettings).set({ config: { ...paused, enabled: true } }).where(eq(s.hiringSettings.id, "default"));
+      await expect(rewriteBriefs(db, rewrite, { max: 5 })).rejects.toThrow(/Pause/);
+      await db.update(s.hiringSettings).set({ config: { ...paused, deliveryEnabled: true } }).where(eq(s.hiringSettings.id, "default"));
+      await expect(rewriteBriefs(db, rewrite, { max: 5 })).rejects.toThrow(/Pause/);
+      expect(rewrite).not.toHaveBeenCalled();
+      await db.update(s.hiringSettings).set({ config: paused }).where(eq(s.hiringSettings.id, "default"));
+      await rewriteBriefs(db, async () => {
+        await db.update(s.hiringSettings).set({ config: { ...paused, enabled: true } }).where(eq(s.hiringSettings.id, "default"));
+        return short();
+      }, { max: 5 });
+      const [after] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, row.id));
+      expect(after.profileAssessment).toEqual(stored());
+    });
+    it("does not overwrite an assessment that was scored again during the call", async () => {
+      const row = await seed();
+      await rewriteBriefs(db, async () => {
+        await db.update(s.hiringCandidates).set({ profileAssessment: { ...stored(), summary: "Rescored." } }).where(eq(s.hiringCandidates.id, row.id));
+        return short();
+      }, { max: 5 });
+      const [after] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, row.id));
+      expect(after.profileAssessment).toEqual({ ...stored(), summary: "Rescored." });
+    });
   });
   it("records an unseen work-rights answer for the settings and never accepts it", async () => {
     const other = "I am a long term / permanent resident with eligibility for a work permit";

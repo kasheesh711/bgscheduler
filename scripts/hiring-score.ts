@@ -3,15 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { Pool } from "pg";
-import { asc, isNotNull } from "drizzle-orm";
+import { asc, isNotNull, or } from "drizzle-orm";
 import { z } from "zod";
 import { loadEnvConfig } from "@next/env";
 import { getDb } from "../src/lib/db";
 import { hiringCandidates } from "../src/lib/db/schema";
 import { settings } from "../src/lib/hiring/service";
-import { assessCandidates, scorePreScreens } from "../src/lib/hiring/worker";
+import { assessCandidates, rewriteBriefs, scorePreScreens } from "../src/lib/hiring/worker";
 import { subscriptionAuthSchema, runtimeWritesAllowed } from "../src/lib/hiring/model";
-import { assessmentSchema, preScreenAssessmentSchema, ASSESSMENT_SYSTEM, PRE_SCREEN_SYSTEM, validateAssessment, validatePreScreenAssessment } from "../src/lib/hiring/scoring";
+import { assessmentOutputSchema, preScreenOutputSchema, briefOutputSchema, assessWithBriefs, ASSESSMENT_SYSTEM, PRE_SCREEN_SYSTEM, BRIEF_SYSTEM, validateAssessment, validatePreScreenAssessment } from "../src/lib/hiring/scoring";
 import { runClaude, claudeChildEnv, killChildren, type ClaudeRunnerDeps } from "../src/lib/feedback-autowriter/nightly/claude-runner";
 
 async function main() {
@@ -19,8 +19,11 @@ async function main() {
   const retryInvalid = process.argv.includes("--retry-invalid");
   // Scores every held pre-screen response at any stage. It changes no stage and sends nothing.
   const preScreen = process.argv.includes("--pre-screen");
+  // Fills the short display lines of stored assessments. It changes no result, quote, score or stage and sends nothing.
+  const briefs = process.argv.includes("--briefs");
   const system = preScreen ? PRE_SCREEN_SYSTEM : ASSESSMENT_SYSTEM;
-  const schema = z.toJSONSchema(preScreen ? preScreenAssessmentSchema : assessmentSchema, { target: "draft-07" });
+  const schema = z.toJSONSchema(preScreen ? preScreenOutputSchema : assessmentOutputSchema, { target: "draft-07" });
+  const briefSchema = z.toJSONSchema(briefOutputSchema, { target: "draft-07" });
   const validate = preScreen ? validatePreScreenAssessment : validateAssessment;
   const until = process.env.HIRING_SCORE_UNTIL ? Date.parse(process.env.HIRING_SCORE_UNTIL) : null;
   if (until !== null && !Number.isFinite(until)) throw new Error("Invalid scoring stop time.");
@@ -49,12 +52,12 @@ async function main() {
     const attemptsDir = path.join(home, "review-attempts");
     if (retryInvalid) fs.mkdirSync(attemptsDir, { recursive: true, mode: 0o700 });
     const db = getDb();
-    const ids = await db.select({ id: hiringCandidates.id }).from(hiringCandidates).where(preScreen ? isNotNull(hiringCandidates.preScreen) : undefined).orderBy(asc(hiringCandidates.createdAt));
+    const ids = await db.select({ id: hiringCandidates.id }).from(hiringCandidates).where(briefs ? or(isNotNull(hiringCandidates.profileAssessment), isNotNull(hiringCandidates.preScreenAssessment)) : preScreen ? isNotNull(hiringCandidates.preScreen) : undefined).orderBy(asc(hiringCandidates.createdAt));
     const concurrency = 4;
     let next = 0, total = 0, checked = 0;
     let failure: unknown;
     const report = (complete: boolean) => {
-      const progress = { at: new Date().toISOString(), mode: preScreen ? "pre-screen score only" : "score only", concurrency, checked, candidates: ids.length, calls: total, complete };
+      const progress = { at: new Date().toISOString(), mode: briefs ? "brief rewrite" : preScreen ? "pre-screen score only" : "score only", concurrency, checked, candidates: ids.length, calls: total, complete };
       fs.writeFileSync(path.join(home, "scoring-progress.json"), JSON.stringify(progress), { mode: 0o600 });
       console.log(JSON.stringify(progress));
     };
@@ -70,9 +73,12 @@ async function main() {
             let feedback = "";
             for (let attempt = 0; attempt < (retryInvalid ? 3 : 1); attempt++) {
               const correction = retryInvalid ? "\nCopy one continuous verbatim source passage for each evidence field. Do not join separate passages, add ellipses, change punctuation, or paraphrase. A passage may include intervening text. If a criterion cannot be supported, mark it unknown with empty evidence. Omit unsupported subject and university entries. Any correction feedback after the source identifies errors to fix; it is not evidence." : "";
-              const result = await runClaude({ purpose: "hiring-review-score", key: `${key}:attempt:${attempt + 1}`, system: system + correction, user: source + feedback, schema, budgetUsd: 3 }, { cwd, cliVersion, children, callsLog: path.join(home, "model-calls.jsonl") });
-              if (result.kind !== "success") throw new Error(`Subscription scoring stopped: ${result.kind}`);
-              value = result.value;
+              let briefAttempt = 0;
+              value = await assessWithBriefs(async (briefFeedback) => {
+                const result = await runClaude({ purpose: "hiring-review-score", key: `${key}:attempt:${attempt + 1}${briefAttempt++ ? `:briefs:${briefAttempt}` : ""}`, system: system + correction, user: source + feedback + briefFeedback, schema, budgetUsd: 3 }, { cwd, cliVersion, children, callsLog: path.join(home, "model-calls.jsonl") });
+                if (result.kind !== "success") throw new Error(`Subscription scoring stopped: ${result.kind}`);
+                return result.value;
+              });
               if (!retryInvalid) return value;
               try {
                 validate(value, source);
@@ -86,7 +92,14 @@ async function main() {
             }
             return value;
           };
-          const calls = preScreen
+          const rewrite = async (user: string, key: string) => {
+            const result = await runClaude({ purpose: "hiring-brief-rewrite", key, system: BRIEF_SYSTEM, user, schema: briefSchema, budgetUsd: 1 }, { cwd, cliVersion, children, callsLog: path.join(home, "model-calls.jsonl") });
+            if (result.kind !== "success") throw new Error(`Subscription brief rewrite stopped: ${result.kind}`);
+            return result.value;
+          };
+          const calls = briefs
+            ? await rewriteBriefs(db, rewrite, { max: 2, candidateId: candidate.id })
+            : preScreen
             ? await scorePreScreens(db, config, assess, { candidateId: candidate.id, retryInvalid })
             : await assessCandidates(db, config, assess, 1, true, candidate.id, retryInvalid);
           total += calls;

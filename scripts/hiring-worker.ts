@@ -17,7 +17,7 @@ import { settings } from "../src/lib/hiring/service";
 import { importApplication, observeSeekState } from "../src/lib/hiring/sources";
 import { runHiringCycle } from "../src/lib/hiring/worker";
 import { requestDelivery } from "../src/lib/hiring/dispatch";
-import { assessmentSchema, preScreenAssessmentSchema, ASSESSMENT_SYSTEM, PRE_SCREEN_SYSTEM } from "../src/lib/hiring/scoring";
+import { assessmentOutputSchema, preScreenOutputSchema, assessWithBriefs, ASSESSMENT_SYSTEM, PRE_SCREEN_SYSTEM } from "../src/lib/hiring/scoring";
 import {
   runClaude,
   killChildren,
@@ -100,26 +100,30 @@ async function main() {
         }).trim();
         const result = await runHiringCycle(db, async (source, key, kind) => {
           if (stop) throw new Error("Worker stopped.");
-          const outcome = await runClaude(
-            {
-              purpose: "hiring-assessment",
-              key,
-              system: kind === "pre-screen" ? PRE_SCREEN_SYSTEM : ASSESSMENT_SYSTEM,
-              user: source,
-              schema: z.toJSONSchema(kind === "pre-screen" ? preScreenAssessmentSchema : assessmentSchema, { target: "draft-07" }),
-              budgetUsd: 3,
-              timeoutMs: 180000,
-            },
-            {
-              cwd,
-              cliVersion,
-              callsLog: path.join(home, "model-calls.jsonl"),
-              children,
-            },
-          );
-          if (outcome.kind !== "success")
-            throw new Error(`Subscription assessment stopped: ${outcome.kind}`);
-          return outcome.value;
+          // The call asks for the short lines too. A line over its limit is asked again with the exact count.
+          let attempt = 0;
+          return assessWithBriefs(async (feedback) => {
+            const outcome = await runClaude(
+              {
+                purpose: "hiring-assessment",
+                key: attempt++ ? `${key}:briefs:${attempt}` : key,
+                system: kind === "pre-screen" ? PRE_SCREEN_SYSTEM : ASSESSMENT_SYSTEM,
+                user: source + feedback,
+                schema: z.toJSONSchema(kind === "pre-screen" ? preScreenOutputSchema : assessmentOutputSchema, { target: "draft-07" }),
+                budgetUsd: 3,
+                timeoutMs: 180000,
+              },
+              {
+                cwd,
+                cliVersion,
+                callsLog: path.join(home, "model-calls.jsonl"),
+                children,
+              },
+            );
+            if (outcome.kind !== "success")
+              throw new Error(`Subscription assessment stopped: ${outcome.kind}`);
+            return outcome.value;
+          });
         });
         await db
           .update(hiringSettings)

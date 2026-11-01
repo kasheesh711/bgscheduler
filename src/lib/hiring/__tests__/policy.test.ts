@@ -22,7 +22,14 @@ import {
   profileCanAdvance,
   profileScore,
   assessmentSchema,
+  assessmentOutputSchema,
+  preScreenOutputSchema,
+  assessWithBriefs,
+  briefOutputSchema,
+  briefProblem,
+  validateBriefs,
   validateAssessment,
+  BRIEF_SYSTEM,
   validatePreScreenAssessment,
   workRightsAccepted,
   PRE_SCREEN_SYSTEM,
@@ -49,6 +56,8 @@ const assessment: Assessment = {
   universities: [],
   summary: "Evidence reviewed",
 };
+const words = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`).join(" ");
+const briefsOf = (text: string) => ({ degree: text, subject: text, curriculum: text, teaching: text, english: text });
 const pre: PreScreen = {
   sourceRow: 2,
   submittedAt: "2026-10-30",
@@ -170,9 +179,81 @@ describe("hiring decision boundaries", () => {
     expect(stageSchema.safeParse("nope").success).toBe(false);
     expect(tokenKindSchema.parse("visit")).toBe("visit");
   });
-  it("keeps the short display lines out of the model's JSON schema, and stored rows without them still parse", () => {
-    expect(JSON.stringify(z.toJSONSchema(assessmentSchema, { target: "draft-07" }))).not.toMatch(/brief/i);
+  it("new assessments need briefs; stored rows without them still parse", () => {
+    const ids = ["degree", "subject", "curriculum", "teaching", "english"];
+    const briefed = {
+      ...assessment,
+      briefSummary: "The tutor holds a maths degree.",
+      criteria: assessment.criteria.map((c) => ({ ...c, brief: "Short line." })),
+    };
+    // A stored row has no briefs and must parse, unchanged.
     expect(assessmentSchema.safeParse(assessment).success).toBe(true);
+    expect(validateAssessment(assessment, "degree subject teaching english Mathematics")).toEqual(assessment);
+    // The model's schema asks for them; its output without them does not parse.
+    expect(assessmentOutputSchema.safeParse(assessment).success).toBe(false);
+    expect(assessmentOutputSchema.safeParse(briefed).success).toBe(true);
+    const json = JSON.stringify(z.toJSONSchema(assessmentOutputSchema, { target: "draft-07" }));
+    expect(json).toMatch(/briefSummary/);
+    expect(json).toMatch(/"brief"/);
+    // A stored row that has them keeps them.
+    const kept = validateAssessment(briefed, "degree subject teaching english Mathematics");
+    expect(kept.briefSummary).toBe(briefed.briefSummary);
+    expect(kept.criteria.map((c) => c.brief)).toEqual(ids.map(() => "Short line."));
+    // Briefs in model output are checked against the limits, and a missing one is a problem.
+    expect(briefProblem(briefed)).toBeNull();
+    expect(briefProblem(assessment)).toMatch(/briefSummary is missing/);
+    expect(briefProblem({ ...briefed, briefSummary: words(26) })).toMatch(/briefSummary has 26 words\. The limit is 25/);
+    expect(briefProblem({ ...briefed, criteria: briefed.criteria.map((c, i) => (i === 1 ? { ...c, brief: words(16) } : c)) })).toMatch(/subject has 16 words\. The limit is 15/);
+  });
+  it("refuses a summary over 25 words or a brief over 15 words", () => {
+    expect(() => validateBriefs({ briefSummary: words(26), briefs: briefsOf(words(3)) })).toThrow(/briefSummary has 26 words/);
+    expect(() => validateBriefs({ briefSummary: words(3), briefs: { ...briefsOf(words(3)), english: words(16) } })).toThrow(/english has 16 words/);
+    expect(() => validateBriefs({ briefSummary: words(3), briefs: { ...briefsOf(words(3)), degree: "" } })).toThrow(/degree is missing/);
+    expect(() => validateBriefs({ briefSummary: words(3), briefs: { degree: words(3) } })).toThrow();
+    // Extra spaces and new lines do not add words.
+    expect(() => validateBriefs({ briefSummary: `  ${words(25).replace(/ /g, " \n ")}  `, briefs: briefsOf(words(15)) })).not.toThrow();
+  });
+  it("accepts text at exactly the limits", () => {
+    const out = validateBriefs({ briefSummary: words(25), briefs: { ...briefsOf(words(15)), written: words(15) } });
+    expect(out.briefSummary.split(" ")).toHaveLength(25);
+    expect(out.briefs.written).toBe(words(15));
+    expect(briefOutputSchema.safeParse({ briefSummary: words(1), briefs: briefsOf(words(1)) }).success).toBe(true);
+  });
+  it("asks for briefs in the same call, retries a violation with the exact count, then keeps the assessment without briefs", async () => {
+    const good = { ...assessment, briefSummary: words(5), criteria: assessment.criteria.map((c) => ({ ...c, brief: words(5) })) };
+    const long = { ...good, briefSummary: words(31) };
+    const feedbacks: string[] = [];
+    const answers = [long, good];
+    const fixed = await assessWithBriefs(async (feedback) => {
+      feedbacks.push(feedback);
+      return answers.shift();
+    });
+    expect(fixed).toEqual(good);
+    expect(feedbacks[0]).toBe("");
+    expect(feedbacks[1]).toMatch(/briefSummary has 31 words\. The limit is 25/);
+    expect(feedbacks[1]).toMatch(/not source evidence/);
+    // Three retries after the first call, then the briefs are dropped and nothing else changes.
+    let calls = 0;
+    const kept = (await assessWithBriefs(async () => (calls++, long))) as Record<string, unknown>;
+    expect(calls).toBe(4);
+    expect(kept).toEqual(assessment);
+    expect("briefSummary" in kept).toBe(false);
+    expect((kept.criteria as object[]).some((c) => "brief" in c)).toBe(false);
+    // An answer with no briefs at all is a violation too, not a pass.
+    calls = 0;
+    expect(await assessWithBriefs(async () => (calls++, assessment))).toEqual(assessment);
+    expect(calls).toBe(4);
+  });
+  it("tells the model to write short STE lines, and the rewrite prompt forbids new facts and quotes", () => {
+    expect(ASSESSMENT_SYSTEM).toMatch(/briefSummary/);
+    expect(ASSESSMENT_SYSTEM).toMatch(/25 words/);
+    expect(ASSESSMENT_SYSTEM).toMatch(/15 words/);
+    expect(BRIEF_SYSTEM).toMatch(/ASD-STE100/);
+    expect(BRIEF_SYSTEM).toMatch(/active voice/);
+    expect(BRIEF_SYSTEM).toMatch(/no new fact|Add no new fact/i);
+    expect(BRIEF_SYSTEM).toMatch(/quotes/);
+    expect(BRIEF_SYSTEM).toMatch(/25 words/);
+    expect(BRIEF_SYSTEM).toMatch(/15 words/);
   });
   it("requires exact source evidence and rejects duplicate criteria", () => {
     const source = "degree subject teaching english Mathematics";
@@ -487,7 +568,7 @@ describe("pre-screen scoring", () => {
     expect(ok.subjects).toEqual(["Art & Design Technology", "Biology"]);
     expect(hardStops(form(), answer, ["Art & Design Technology", "Biology"], config).subjects).toEqual(["Biology"]);
   });
-  it("accepts a six-criterion pre-screen assessment and keeps the short lines out of the model schema", () => {
+  it("accepts a six-criterion pre-screen assessment and asks the model for the short lines", () => {
     const six = {
       ...assessment,
       criteria: [
@@ -500,7 +581,10 @@ describe("pre-screen scoring", () => {
     expect(preScreenAssessmentSchema.safeParse(assessment).success).toBe(false);
     expect(() => validatePreScreenAssessment({ ...six, criteria: [...assessment.criteria, assessment.criteria[0]] }, source)).toThrow(/duplicate/);
     expect(() => validatePreScreenAssessment({ ...six, criteria: [...six.criteria.slice(0, 5), { ...six.criteria[5], evidence: "invented" }] }, source)).toThrow(/source/);
-    expect(JSON.stringify(z.toJSONSchema(preScreenAssessmentSchema, { target: "draft-07" }))).not.toMatch(/brief/i);
+    const json = JSON.stringify(z.toJSONSchema(preScreenOutputSchema, { target: "draft-07" }));
+    expect(json).toMatch(/briefSummary/);
+    expect(preScreenOutputSchema.safeParse(six).success).toBe(false);
+    expect(preScreenOutputSchema.safeParse({ ...six, briefSummary: "Short.", criteria: six.criteria.map((c) => ({ ...c, brief: "Short." })) }).success).toBe(true);
   });
   it("tells the model to score written answers on content only and keeps the rule against inferring English", () => {
     expect(PRE_SCREEN_SYSTEM.startsWith(ASSESSMENT_SYSTEM)).toBe(true);

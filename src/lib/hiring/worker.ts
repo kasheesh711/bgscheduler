@@ -22,13 +22,16 @@ import {
   type HiringConfig,
 } from "./model";
 import {
+  askForBriefs,
   availabilityFraction,
   preScreenPoints,
   preScreenResult,
   profileScore,
   validateAssessment,
+  validateBriefs,
   validatePreScreenAssessment,
   type Assessment,
+  type CriterionId,
   type PreScreenAssessment,
 } from "./scoring";
 import { profileGate } from "./insights";
@@ -388,6 +391,104 @@ export async function scorePreScreens(
       );
     });
   }
+  return calls;
+}
+
+/** One model call for the brief rewrite: the user text and an audit key in, the raw answer out. */
+export type Rewrite = (user: string, key: string) => Promise<unknown>;
+const withBriefs = <T extends Assessment | PreScreenAssessment>(
+  a: T,
+  out: ReturnType<typeof validateBriefs>,
+): T => ({
+  ...a,
+  briefSummary: out.briefSummary,
+  criteria: a.criteria.map((c) => ({ ...c, brief: out.briefs[c.id as CriterionId] })),
+});
+/**
+ * Fill the short display lines of stored assessments that have none. It writes only `briefSummary` and each criterion's
+ * `brief` into the assessment column: result, evidence, reason, stage, revision, `updatedAt` and the outbox stay as they
+ * are. The model sees the summary and reasons, never the source. A line that still breaks its limit after three retries
+ * leaves the row as it is. It refuses to run while hiring or messages are on. `max` limits assessments, not retries, and
+ * the return value counts the assessments sent to the model.
+ */
+export async function rewriteBriefs(
+  db: Database,
+  rewrite: Rewrite,
+  opts: { max: number; candidateId?: string },
+) {
+  const paused = (c: HiringConfig) => !c.enabled && !c.deliveryEnabled;
+  if (!paused((await settings(db)).config))
+    throw new Error("Pause live hiring and messages before the brief rewrite.");
+  const lacks = (column: typeof s.hiringCandidates.profileAssessment | typeof s.hiringCandidates.preScreenAssessment) =>
+    and(isNotNull(column), sql`${column}->>'briefSummary' is null`);
+  const rows = await db
+    .select()
+    .from(s.hiringCandidates)
+    .where(
+      and(
+        or(lacks(s.hiringCandidates.profileAssessment), lacks(s.hiringCandidates.preScreenAssessment)),
+        opts.candidateId ? eq(s.hiringCandidates.id, opts.candidateId) : undefined,
+      ),
+    )
+    .orderBy(asc(s.hiringCandidates.createdAt))
+    .limit(opts.max);
+  let calls = 0;
+  for (const candidate of rows)
+    for (const field of ["profileAssessment", "preScreenAssessment"] as const) {
+      const assessment = candidate[field];
+      if (!assessment || assessment.briefSummary || calls >= opts.max) continue;
+      calls++;
+      const user = JSON.stringify({
+        summary: assessment.summary,
+        criteria: assessment.criteria.map(({ id, result, reason }) => ({ id, result, reason })),
+      });
+      let attempt = 0;
+      const { value, problem } = await askForBriefs(
+        (feedback) => rewrite(user + feedback, `${candidate.id}:${field}:briefs:${++attempt}`),
+        (answer) => {
+          try {
+            const out = validateBriefs(answer);
+            const missing = assessment.criteria.filter((c) => !out.briefs[c.id as CriterionId]);
+            return missing.length
+              ? `The brief for ${missing.map((c) => c.id).join(", ")} is missing.`
+              : null;
+          } catch (error) {
+            return error instanceof Error ? error.message : "The answer does not fit the schema.";
+          }
+        },
+      );
+      if (problem) {
+        await audit(db, "subscription-assessment", "brief-rewrite-skipped", candidate.id, {
+          field,
+          problem: problem.slice(0, 300),
+        });
+        continue;
+      }
+      const out = validateBriefs(value);
+      await withDatabaseTransaction(db, async (tx) => {
+        await tx.execute(
+          sql`select id from hiring_candidates where id=${candidate.id} for update`,
+        );
+        const fresh = await candidateById(tx, candidate.id),
+          current = await settings(tx);
+        // A rescored assessment or a switched-on pipeline voids the briefs, which were written for the old text.
+        if (
+          !paused(current.config) ||
+          !runtimeWritesAllowed() ||
+          JSON.stringify(fresh[field]) !== JSON.stringify(assessment)
+        )
+          return;
+        await tx
+          .update(s.hiringCandidates)
+          .set(
+            field === "profileAssessment"
+              ? { profileAssessment: withBriefs(assessment as Assessment, out) }
+              : { preScreenAssessment: withBriefs(assessment as PreScreenAssessment, out) },
+          )
+          .where(eq(s.hiringCandidates.id, candidate.id));
+        await audit(tx, "subscription-assessment", "brief-rewrite", candidate.id, { field });
+      });
+    }
   return calls;
 }
 
