@@ -270,6 +270,29 @@ describe("hiring workflow persistence", () => {
     const [again] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, id));
     expect(again.workRightsAnswer).toBe(other);
   });
+  it("keeps the answer on the candidate, and leaves the settings alone, when the seen list is full", async () => {
+    const seen = Array.from({ length: 200 }, (_, i) => `Answer ${i}`);
+    const full = { ...config, seenWorkRights: seen };
+    await db.update(s.hiringSettings).set({ config: full }).where(eq(s.hiringSettings.id, "default"));
+    const before = (await settings(db)).row!.revision;
+    const id = await importApplication(
+      {
+        applicationId: "00000000-0000-4000-8000-000000000199",
+        name: "Full list",
+        email: "fulllist@example.com",
+        profileText: "profile",
+        previouslyContacted: false,
+        sourceStatus: "Inbox",
+        workRightsAnswer: "A new answer",
+      },
+      db,
+    );
+    const [c] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, id));
+    expect(c.workRightsAnswer).toBe("A new answer");
+    const after = await settings(db);
+    expect(after.row!.revision).toBe(before);
+    expect(after.config.seenWorkRights).toHaveLength(200);
+  });
   describe("score-only pre-screen pass", () => {
     const paused = { ...config, enabled: false, deliveryEnabled: false };
     const pre = {
@@ -359,6 +382,25 @@ describe("hiring workflow persistence", () => {
       expect(row.preScreenHash).not.toBeNull();
       expect([row.stage, row.reviewNote]).toEqual([one.stage, "Human note"]);
       expect((await db.select().from(s.hiringAudit)).some((a) => a.action === "pre-screen-invalid-evidence")).toBe(true);
+    });
+    it("scores a held answer again only on an explicit retry", async () => {
+      const [one] = await seed();
+      const bad = vi.fn(async () => six("invented quote"));
+      expect(await scorePreScreens(db, paused, bad, { candidateId: one.id })).toBe(1);
+      expect(await scorePreScreens(db, paused, bad, { candidateId: one.id })).toBe(0);
+      const good = vi.fn(async () => six());
+      expect(await scorePreScreens(db, paused, good, { candidateId: one.id, retryInvalid: true })).toBe(1);
+      const [row] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, one.id));
+      expect(row.preScreenAssessment).not.toBeNull();
+      expect([row.stage, row.reviewNote]).toEqual([one.stage, "Human note"]);
+      // A scored answer is not retried.
+      expect(await scorePreScreens(db, paused, good, { candidateId: one.id, retryInvalid: true })).toBe(0);
+    });
+    it("makes no model call while the rubric is not approved", async () => {
+      await seed();
+      const assess = vi.fn(async () => six());
+      await expect(scorePreScreens(db, { ...paused, rubricApproved: false }, assess)).rejects.toThrow(/rubric/);
+      expect(assess).not.toHaveBeenCalled();
     });
     it("refuses to run while hiring or messages are on", async () => {
       await seed();

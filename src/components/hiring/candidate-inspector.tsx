@@ -75,7 +75,7 @@ function CandidatePentagon({ profile, pre }: { profile: Assessment | null; pre: 
           </li>
           <li>
             <i className={css.keyPre} aria-hidden="true" />
-            Pre-screen (blue outline)
+            Pre-screen (orange outline)
           </li>
           <li>A change reads Profile → Pre-screen</li>
         </ul>
@@ -233,6 +233,9 @@ export function CandidateInspector({
           {candidate.profileScore !== null && <span>/100 profile</span>}
         </p>
         {candidate.reviewNote && <p className={css.inspectorNote}>{candidate.reviewNote}</p>}
+        {candidate.preScreen && candidate.preScreenHash && !candidate.preScreenAssessment && (
+          <p className={css.inspectorNote}>Pre-screen could not be scored. Its evidence could not be verified.</p>
+        )}
         <dl className={css.facts}>
           <div>
             <dt>Work rights</dt>

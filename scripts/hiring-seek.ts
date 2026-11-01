@@ -150,12 +150,14 @@ async function readApplication(
     }
     const full = await profile.innerText();
     const educationStart = full.indexOf("Career history");
+    // [^\S\n] skips spaces but not line breaks, so a blank answer never captures the next heading.
     const rights =
-      full.match(/Preferred work rights in Thailand\s*\n([^\n]+)/i)?.[1] ?? "";
-    const workRightsAnswer = rights.trim() || null;
+      full.match(/Preferred work rights in Thailand[^\S\n]*\n([^\n]*)/i)?.[1] ?? "";
+    // The import schema allows 300 characters.
+    const workRightsAnswer = rights.trim().slice(0, 300).trim() || null;
     const cleaned = (educationStart >= 0 ? full.slice(educationStart) : full)
       .replace(/Employment status[\s\S]*?(?=Application questions|$)/i, "")
-      .replace(/Preferred work rights in Thailand\s*\n[^\n]*/i, "")
+      .replace(/Preferred work rights in Thailand[^\S\n]*\n[^\n]*/i, "")
       .replace(/Expected monthly salary\s*\n[^\n]*/i, "");
     const resume = dialog.getByRole("button", { name: "Resumé" });
     const resumeTab = dialog.getByRole("tab", { name: "Resumé" });

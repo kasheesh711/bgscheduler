@@ -86,6 +86,8 @@ export async function recordWorkRightsAnswer(db: Database, answer: string | null
   const { row, config } = await settings(db);
   const key = (v: string) => v.replace(/\s+/g, " ").toLowerCase();
   if (config.seenWorkRights.some((a) => key(a) === key(text))) return;
+  // The settings schema allows 200. A longer list would make settings() throw, so stop recording; the candidate keeps the answer.
+  if (config.seenWorkRights.length >= 200) return;
   const next = { ...config, seenWorkRights: [...config.seenWorkRights, text] };
   await db
     .insert(s.hiringSettings)

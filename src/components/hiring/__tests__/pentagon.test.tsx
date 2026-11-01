@@ -196,13 +196,34 @@ describe("CandidateInspector evidence", () => {
     profile.criteria[0].result = "partial";
     const html = inspect(profile, assessment() as unknown as PreScreenAssessment);
     expect(html).toMatch(/<li><i[^>]*><\/i>Profile \(grey\)<\/li>/);
-    expect(html).toMatch(/<li><i[^>]*><\/i>Pre-screen \(blue outline\)<\/li>/);
+    expect(html).toMatch(/<li><i[^>]*><\/i>Pre-screen \(orange outline\)<\/li>/);
     expect(html).toContain("A change reads Profile → Pre-screen");
     expect(html).toMatch(/aria-label="DSCTE pentagon with a Profile shape and a Pre-screen shape\. Where a corner reads[^"]*the first is the Profile result and the second is the Pre-screen result\./);
     expect(html).toContain("Degree: Partial → Met");
   });
   it("shows no key when only one shape exists", () => {
     expect(inspect(assessment())).not.toContain("Profile (grey)");
+  });
+  it("says when a pre-screen answer could not be scored, and only then", () => {
+    const render = (extra: Record<string, unknown>) =>
+      renderToStaticMarkup(
+        <CandidateInspector
+          candidate={
+            { id: "c1", name: "Sam", stage: "review", email: "s@example.com", subjects: [], sourceIds: [], paperPassedSubjects: [], profileScore: null, profileAssessment: null, preScreenAssessment: null, universityAssessment: null, preScreen: {}, preScreenHash: "h", ...extra } as unknown as HiringCandidate
+          }
+          seekJobId="1"
+          weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0 }}
+          busy={false}
+          error=""
+          notice=""
+          command={async () => true}
+          onClose={() => {}}
+        />,
+      );
+    expect(render({})).toContain("Pre-screen could not be scored");
+    expect(render({ preScreenHash: null })).not.toContain("could not be scored");
+    expect(render({ preScreenAssessment: assessment() })).not.toContain("could not be scored");
+    expect(render({ preScreen: null })).not.toContain("could not be scored");
   });
   it("draws the pentagon when only a pre-screen assessment exists", () => {
     const html = renderToStaticMarkup(

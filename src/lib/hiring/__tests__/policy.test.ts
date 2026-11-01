@@ -384,6 +384,43 @@ describe("pre-screen scoring", () => {
     ).toBeCloseTo(0.1);
     expect(availabilityFraction(form({ weeklyHours: "" }))).toBeCloseTo(0.5);
   });
+  it("lets the form's English choice decide, and uses the evidence only for a blank field", () => {
+    expect(englishLevel("Intermediate (B1)", "IELTS 8.0")).toBe(2);
+    expect(englishLevel("Intermediate (B1)", "I teach C1 classes")).toBe(2);
+    expect(englishLevel("Upper-Intermediate (B2)", "CEFR C2")).toBe(3);
+    expect(englishLevel("Advanced (C1)", "")).toBe(4);
+    expect(englishLevel("Native", "B1")).toBe(5);
+    expect(englishLevel("", "CEFR C1")).toBe(4);
+    expect(englishLevel("   ", "")).toBeNull();
+    // A filled field with no recognised level is not replaced by free text.
+    expect(englishLevel("Other", "CEFR C2")).toBeNull();
+    const b1 = hardStops(form({ english: "Intermediate (B1)", englishEvidence: "IELTS 8.0" }), answer, ["Biology"], config);
+    expect(b1.stops.length).toBeGreaterThan(0);
+    expect(b1.subjects).toEqual([]);
+  });
+  it("reads each real degree choice", () => {
+    for (const degree of ["Bachelor's", "Master's", "PhD", "Bachelor's, Master's"]) {
+      expect(degreeEligible(degree)).toBe(true);
+      expect(hardStops(form({ degree }), answer, ["Biology"], config).stops).toEqual([]);
+    }
+    expect(degreeEligible("Below Bachelor's")).toBe(false);
+    expect(hardStops(form({ degree: "Below Bachelor's" }), answer, ["Biology"], config).stops).toHaveLength(1);
+  });
+  it("scores each real weekly-hours band", () => {
+    const only = (weeklyHours: string) => availabilityFraction(form({ weeklyHours })) - 0.5;
+    expect(only("1-10") / 0.5).toBeCloseTo(0.2);
+    expect(only("11-20") / 0.5).toBeCloseTo(0.6);
+    expect(only("20-40") / 0.5).toBeCloseTo(1);
+    expect(only("40+") / 0.5).toBeCloseTo(1);
+  });
+  it("applies the time-slot rule to the real form values", () => {
+    const stops = (availability: string) => hardStops(form({ availability }), answer, ["Biology"], config).stops;
+    expect(stops("Weekday Afternoon (12:00-17:00), Weekend Morning (before 12:00)")).toEqual([]);
+    expect(stops("Weekday Evening (17:00-21:00), Weekend Evening (17.00-21.00)")).toEqual([]);
+    expect(stops("Weekday Morning (before 12:00), Weekend Afternoon (12:00-17:00)")).toHaveLength(1);
+    expect(stops("Weekend Morning (before 12:00), Weekend Afternoon (12:00-17:00), Weekend Evening (17.00-21.00)")).toHaveLength(1);
+    expect(stops("Weekday Morning (before 12:00), Weekday Afternoon (12:00-17:00), Weekday Evening (17:00-21:00)")).toHaveLength(1);
+  });
   it("adds the eight parts with the editable weights", () => {
     const six = {
       ...assessment,

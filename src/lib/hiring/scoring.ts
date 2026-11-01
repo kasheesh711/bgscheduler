@@ -136,15 +136,18 @@ export function degreeEligible(degree: string): boolean | null {
   return null;
 }
 export function englishLevel(english: string, evidence: string): number | null {
-  const levels = [
-    ...`${english} ${evidence}`.matchAll(/\b([ABC][12])\b/gi),
-  ].map((m) =>
-    ["A1", "A2", "B1", "B2", "C1", "C2"].indexOf(m[1].toUpperCase()),
-  );
+  const read = (text: string) =>
+    [...text.matchAll(/\b([ABC][12])\b/gi)].map((m) =>
+      ["A1", "A2", "B1", "B2", "C1", "C2"].indexOf(m[1].toUpperCase()),
+    );
+  // The form choice decides ("Intermediate (B1)", "Advanced (C1)", "Native" = C2).
   // "Native" is the candidate's own claim, so it counts as C2 only from the form field.
-  // The same word in the free-text evidence, or in a name, never raises the level.
-  if (/^\s*native\b/i.test(english)) levels.push(5);
-  return levels.length ? Math.max(...levels) : null;
+  const chosen = [...read(english), ...(/^\s*native\b/i.test(english) ? [5] : [])];
+  if (chosen.length) return Math.max(...chosen);
+  // Free text only fills a blank field. It never replaces or raises a filled one.
+  if (english.trim()) return null;
+  const found = read(evidence);
+  return found.length ? Math.max(...found) : null;
 }
 export function preScreenResult(
   pre: PreScreen,
@@ -214,8 +217,9 @@ function timeSlots(availability: string) {
 }
 /**
  * Availability fraction, 0 to 1. Half comes from the time-slot rule (a weekend day and a weekday after 15:00).
- * The other half comes from weekly hours: 1-10 gets 20%, 11-20 gets 60%, more than 20 gets 100%.
- * shortcut: a single number such as "20" reads as the top of a 11-20 band, and an open end ("40+") reads as the top band.
+ * The other half comes from weekly hours. The form offers "1-10" (20%), "11-20" (60%), "20-40" (100%) and "40+" (100%).
+ * shortcut: the band is read from its highest number, and an open end ("40+") reads as the top band. A value outside
+ * these four choices, such as a bare "20", reads as the 11-20 band; check this if the form options change.
  */
 export function availabilityFraction(pre: PreScreen): number {
   const { weekend, weekdayLate } = timeSlots(pre.availability);

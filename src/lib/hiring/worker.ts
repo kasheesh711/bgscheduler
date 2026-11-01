@@ -300,10 +300,12 @@ export async function scorePreScreens(
   db: Database,
   config: HiringConfig,
   assess: Assess,
-  opts: { candidateId?: string } = {},
+  opts: { candidateId?: string; retryInvalid?: boolean } = {},
 ) {
   if (config.enabled || config.deliveryEnabled)
     throw new Error("Pause live hiring and messages before pre-screen scoring.");
+  if (!config.rubricApproved)
+    throw new Error("Approve the rubric before pre-screen scoring.");
   const rows = await db
     .select()
     .from(s.hiringCandidates)
@@ -322,8 +324,12 @@ export async function scorePreScreens(
       "\n\nApplication education and experience:\n" +
       candidate.profileText;
     const hash = sourceHash(source);
-    // An unchanged response is not scored again, even when an earlier answer failed validation.
-    if (candidate.preScreenHash === hash) continue;
+    // An unchanged response is not scored again. One whose answer failed validation is retried only on request.
+    if (
+      candidate.preScreenHash === hash &&
+      (candidate.preScreenAssessment || !opts.retryInvalid)
+    )
+      continue;
     const value = await assess(source, `${candidate.id}:pre:${hash}`, "pre-screen");
     calls++;
     let assessment: PreScreenAssessment | null = null;

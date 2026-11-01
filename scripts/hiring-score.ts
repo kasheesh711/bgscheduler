@@ -87,7 +87,7 @@ async function main() {
             return value;
           };
           const calls = preScreen
-            ? await scorePreScreens(db, config, assess, { candidateId: candidate.id })
+            ? await scorePreScreens(db, config, assess, { candidateId: candidate.id, retryInvalid })
             : await assessCandidates(db, config, assess, 1, true, candidate.id, retryInvalid);
           total += calls;
           checked++;
