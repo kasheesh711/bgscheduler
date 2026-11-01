@@ -131,6 +131,15 @@
 .thresholdLine span { position: absolute; top: -2px; left: 4px; color: var(--accent-text); font-size: 12px; font-weight: 500; }
 .axis { display: flex; justify-content: space-between; padding-top: 3px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 
+.pentagon { flex: none; max-width: 100%; height: auto; }
+.pentagonRing { fill: none; stroke: var(--stone); }
+.pentagonRingInner { fill: none; stroke: var(--line); }
+.pentagonProfile { fill: var(--stone-dark); fill-opacity: 0.3; stroke: var(--stone-dark); stroke-width: 1.5; }
+.pentagonPre { fill: var(--accent-text); fill-opacity: 0.12; stroke: var(--accent-text); stroke-width: 2; }
+.pentagonName { fill: var(--support); font-size: 13px; font-weight: 600; }
+.pentagonValue { fill: var(--muted); font-size: 12px; }
+.pentagonPanel { align-items: center; }
+
 .evidenceRows { display: grid; gap: 6px; }
 .evidenceRow { display: grid; grid-template-columns: 72px 1fr 34px; align-items: center; gap: 8px; }
 .stack { display: flex; gap: 2px; height: 12px; }
@@ -274,8 +283,9 @@
 .inspectorHeading { display: flex; justify-content: space-between; font-size: 14px; font-weight: 500; }
 .inspectorText { margin-top: 4px; color: var(--support); }
 .criterion { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 4px; }
-.criterion summary { display: grid; grid-template-columns: 9px 1fr auto 40px; align-items: center; gap: 8px; cursor: pointer; }
+.criterion summary { display: grid; grid-template-columns: 9px auto 1fr auto 40px; align-items: center; gap: 8px; cursor: pointer; }
 .criterion summary i { width: 9px; height: 9px; border-radius: 999px; }
+.criterion summary .inspectorText { margin-top: 0; }
 .criterionResult { color: var(--muted); }
 .criterion blockquote { margin-top: 4px; padding-left: 10px; border-left: 2px solid var(--line); color: var(--muted); overflow-wrap: anywhere; }
 .sourceLink { margin-right: 12px; color: var(--accent-text); text-decoration: underline; }
@@ -363,7 +373,7 @@
     box-shadow: none;
   }
   .inspector { overflow: hidden; }
-  .charts { grid-template-columns: 1.15fr 1.1fr 1.05fr 1fr; }
+  .charts { grid-template-columns: 1.1fr 1fr 1fr 0.9fr 1.1fr; }
   .panel { padding: 8px 16px 10px; border-top: 0; }
   .panel:first-child { padding-left: 24px; }
   .charts .panel:nth-child(n + 2) { border-left: 1px solid var(--line); }

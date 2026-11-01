@@ -1,17 +1,35 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { STAGE_LABELS } from "@/lib/hiring/insights";
+import { useEffect, useRef, useState, type ComponentProps } from "react";
+import { criterionValues, STAGE_LABELS } from "@/lib/hiring/insights";
 import { SUBJECTS, type HiringConfig, type Subject } from "@/lib/hiring/model";
 import type { Assessment } from "@/lib/hiring/scoring";
 import type { Command, HiringCandidate } from "./dashboard";
 import { CRITERION_LABELS, RESULT_CLASS, RESULT_LABELS } from "./pipeline-charts";
+import { Pentagon } from "./pentagon";
 import css from "./dashboard.module.css";
 
 const POINTS = { met: 1, partial: 0.5, not_met: 0, unknown: 0 };
 // Mirrors the stages reviewCandidate accepts; the server still enforces them.
 const ADVANCE_STAGES = ["new", "review", "pre_screen"];
 const PAPER_PASS_STAGES = ["paper_booked", "paper_invited", "paper_passed", "mock_booked"];
+
+function CandidatePentagon({ profile, pre }: { profile: Assessment; pre: Assessment | null }) {
+  const result = (a: Assessment, id: string) => a.criteria.find((c) => c.id === id)?.result ?? "unknown";
+  const shapes: ComponentProps<typeof Pentagon>["shapes"] = [{ label: "Profile", values: criterionValues(profile), tone: "profile" }];
+  if (pre) shapes.push({ label: "Pre-screen", values: criterionValues(pre), tone: "preScreen" });
+  return (
+    <Pentagon
+      shapes={shapes}
+      size={300}
+      labels={Object.entries(CRITERION_LABELS).map(([id, name]) => {
+        const before = RESULT_LABELS[result(profile, id)];
+        const after = pre ? RESULT_LABELS[result(pre, id)] : before;
+        return { name, value: before === after ? before : `${before} → ${after}` };
+      })}
+    />
+  );
+}
 
 function AssessmentBlock({
   title,
@@ -30,12 +48,14 @@ function AssessmentBlock({
         {title}
         <span className={css.num}>{score === null ? "" : `${Math.round(score * 10) / 10}/100`}</span>
       </h3>
-      <p className={css.inspectorText}>{assessment.summary}</p>
+      {/* Older assessments have no short summary, so they keep the long one. */}
+      <p className={css.inspectorText}>{assessment.briefSummary ?? assessment.summary}</p>
       {assessment.criteria.map((c) => (
         <details key={c.id} className={css.criterion}>
           <summary>
             <i className={RESULT_CLASS[c.result]} aria-hidden="true" />
             <span>{CRITERION_LABELS[c.id]}</span>
+            <span className={css.inspectorText}>{c.brief}</span>
             <span className={css.criterionResult}>{RESULT_LABELS[c.result]}</span>
             <span className={css.num}>
               {weights[c.id] * POINTS[c.result]}/{weights[c.id]}
@@ -167,6 +187,9 @@ export function CandidateInspector({
             <dd>{candidate.paperPassedSubjects.join(", ") || "None"}</dd>
           </div>
         </dl>
+        {candidate.profileAssessment && (
+          <CandidatePentagon profile={candidate.profileAssessment} pre={candidate.preScreenAssessment} />
+        )}
         {candidate.profileAssessment && (
           <AssessmentBlock
             title="Profile evidence"

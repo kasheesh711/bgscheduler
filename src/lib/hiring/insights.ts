@@ -24,6 +24,19 @@ export const CRITERIA = ["degree", "subject", "curriculum", "teaching", "english
 export const RESULTS = ["met", "partial", "not_met", "unknown"] as const;
 export type CriterionResult = (typeof RESULTS)[number];
 
+const POINTS: Record<CriterionResult, number> = { met: 1, partial: 0.5, not_met: 0, unknown: 0 };
+/** Degree, Subject, Curriculum, Teaching, English as 1, 0.5 or 0. */
+export const criterionValues = (assessment: { criteria: { id: string; result: CriterionResult }[] }) =>
+  CRITERIA.map((id) => {
+    const row = assessment.criteria.find((c) => c.id === id);
+    return row ? POINTS[row.result] : 0;
+  });
+/** Mean value per criterion across candidates that have a profile assessment. */
+export function averageValues(candidates: { profileAssessment: Assessment | null }[]) {
+  const rows = candidates.flatMap((c) => (c.profileAssessment ? [criterionValues(c.profileAssessment)] : []));
+  return CRITERIA.map((_, i) => (rows.length ? rows.reduce((n, r) => n + r[i], 0) / rows.length : 0));
+}
+
 type InsightCandidate = {
   id: string;
   stage: Stage;

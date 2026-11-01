@@ -13,6 +13,8 @@ const criterionSchema = z
     result: z.enum(["met", "partial", "not_met", "unknown"]),
     evidence: z.string().max(3000),
     reason: z.string().min(1).max(1500),
+    // Short plain-English line for the panel. Rows stored before it existed have none.
+    brief: z.string().max(200).optional(),
   })
   .strict();
 export const assessmentSchema = z
@@ -40,6 +42,7 @@ export const assessmentSchema = z
       .max(10)
       .default([]),
     summary: z.string().max(3000),
+    briefSummary: z.string().max(300).optional(),
   })
   .strict();
 export type Assessment = z.infer<typeof assessmentSchema>;

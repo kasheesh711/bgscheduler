@@ -1,7 +1,8 @@
 "use client";
 
-import { type buildInsights, RESULTS, STAGE_LABELS, type CriterionResult } from "@/lib/hiring/insights";
+import { averageValues, type buildInsights, RESULTS, STAGE_LABELS, type CriterionResult } from "@/lib/hiring/insights";
 import type { CandidateFilter } from "./dashboard";
+import { Pentagon } from "./pentagon";
 import css from "./dashboard.module.css";
 
 export type Insights = ReturnType<typeof buildInsights>;
@@ -228,6 +229,26 @@ export function EvidenceChart({ insights: i }: { insights: Insights }) {
           <span key={r}><i className={RESULT_CLASS[r]} />{RESULT_LABELS[r]}</span>
         ))}
       </p>
+    </section>
+  );
+}
+
+export function AveragePentagon({
+  candidates,
+}: {
+  candidates: Parameters<typeof averageValues>[0];
+}) {
+  const values = averageValues(candidates);
+  const scored = candidates.filter((c) => c.profileAssessment).length;
+  return (
+    <section className={`${css.panel} ${css.pentagonPanel}`}>
+      <h2 className={css.panelTitle}>Pipeline average</h2>
+      <p className={css.panelLede}>{scored} scored candidates shown</p>
+      <Pentagon
+        size={230}
+        shapes={[{ label: "Average", values, tone: "profile" }]}
+        labels={Object.values(CRITERION_LABELS).map((name, i) => ({ name, value: `${Math.round(values[i] * 100)}%` }))}
+      />
     </section>
   );
 }

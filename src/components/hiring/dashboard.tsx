@@ -7,8 +7,8 @@ import { GOOGLE_SCOPES, type HiringConfig, type Stage, type Subject } from "@/li
 import { buildInsights, readyToInvite } from "@/lib/hiring/insights";
 import type { dashboard } from "@/lib/hiring/service";
 import { CandidateInspector } from "./candidate-inspector";
-import { CandidateTable } from "./candidate-table";
-import { EvidenceChart, KpiStrip, ScoreChart, StageChart, SubjectChart } from "./pipeline-charts";
+import { CandidateTable, matchesFilter } from "./candidate-table";
+import { AveragePentagon, EvidenceChart, KpiStrip, ScoreChart, StageChart, SubjectChart } from "./pipeline-charts";
 import { OperationsRail } from "./operations-rail";
 import { SetupPanel } from "./setup-panel";
 import css from "./dashboard.module.css";
@@ -117,6 +117,10 @@ export function HiringDashboard() {
       ),
     [data],
   );
+  const shown = useMemo(
+    () => data?.candidates.filter((c) => matchesFilter(c, filter, ready)) ?? [],
+    [data, filter, ready],
+  );
   const candidate = data?.candidates.find((c) => c.id === selected);
 
   return (
@@ -194,6 +198,7 @@ export function HiringDashboard() {
                 setFilter={setFilter}
               />
               <EvidenceChart insights={insights} />
+              <AveragePentagon candidates={shown} />
               <SubjectChart insights={insights} filter={filter} setFilter={setFilter} />
             </div>
             <CandidateTable

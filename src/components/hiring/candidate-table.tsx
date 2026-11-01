@@ -21,6 +21,13 @@ const COLUMNS: [SortKey, string][] = [
   ["score", "Score"],
 ];
 
+/** The stage, score and subject filters. Search text stays inside the table. */
+export const matchesFilter = (c: HiringCandidate, filter: CandidateFilter, ready: Set<string>) =>
+  (filter.stage === "all" || (filter.stage === "ready" ? ready.has(c.id) : c.stage === filter.stage)) &&
+  (filter.bucket === null ||
+    (c.profileScore !== null && Math.min(Math.floor(c.profileScore / 10) * 10, 90) === filter.bucket)) &&
+  (!filter.subject || c.subjects.includes(filter.subject));
+
 export function CandidateTable({
   candidates,
   insights,
@@ -49,11 +56,7 @@ export function CandidateTable({
     const needle = deferred.trim().toLowerCase();
     const shown = candidates.filter(
       (c) =>
-        (filter.stage === "all" ||
-          (filter.stage === "ready" ? ready.has(c.id) : c.stage === filter.stage)) &&
-        (filter.bucket === null ||
-          (c.profileScore !== null && Math.min(Math.floor(c.profileScore / 10) * 10, 90) === filter.bucket)) &&
-        (!filter.subject || c.subjects.includes(filter.subject)) &&
+        matchesFilter(c, filter, ready) &&
         (!needle ||
           `${c.name} ${c.email ?? ""} ${STAGE_LABELS[c.stage]}`.toLowerCase().includes(needle)),
     );
