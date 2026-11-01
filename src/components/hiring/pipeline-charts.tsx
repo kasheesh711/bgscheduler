@@ -284,7 +284,7 @@ export function SubjectChart({
       <h2 className={css.panelTitle}>Subject supply</h2>
       <p className={css.panelLede}>
         {i.uncoveredSubjects
-          ? `${i.uncoveredSubjects} subjects have no interviewer (amber)`
+          ? `${i.uncoveredSubjects} subject${i.uncoveredSubjects === 1 ? " has" : "s have"} no interviewer`
           : "Every subject has an interviewer"}
       </p>
       <div className={css.subjectRows}>
@@ -297,9 +297,12 @@ export function SubjectChart({
             title={`${row.candidates} active, ${row.passed} paper passed. Interviewers: ${row.interviewers.join(", ") || "none"}`}
             onClick={() => setFilter({ ...filter, subject: filter.subject === row.subject ? null : row.subject })}
           >
-            <span className={`${css.subjectName} ${row.interviewers.length ? "" : css.warnWord}`}>
-              {row.subject}
-              {!row.interviewers.length && <span className="sr-only"> (no interviewer)</span>}
+            <span className={css.subjectLabel}>
+              <span className={css.subjectName}>{row.subject}</span>
+              {/* Text, not only colour, so it shows for colour-blind users. */}
+              {!row.interviewers.length && (
+                <span className={css.subjectTag} title="No interviewer for this subject">No head</span>
+              )}
             </span>
             <span className={css.subjectTrack}>
               <span style={{ width: `${(row.candidates / max) * 100}%` }} />

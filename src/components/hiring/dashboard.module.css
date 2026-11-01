@@ -156,9 +156,11 @@
 .resultUnknown { background: var(--stone); }
 
 .subjectRows { flex: 1; min-height: 0; max-height: 180px; overflow-y: auto; }
-.surface .subjectRow { display: grid; grid-template-columns: 112px 1fr 24px; align-items: center; gap: 8px; width: 100%; min-height: 20px; border-radius: 4px; text-align: left; transition: background-color 150ms; }
+.surface .subjectRow { display: grid; grid-template-columns: 160px 1fr 24px; align-items: center; gap: 8px; width: 100%; min-height: 20px; border-radius: 4px; text-align: left; transition: background-color 150ms; }
 .surface .subjectRow:hover, .surface .subjectRow[aria-pressed="true"] { background: var(--tint); }
-.subjectName { overflow: hidden; color: var(--support); text-overflow: ellipsis; white-space: nowrap; }
+.subjectLabel { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.subjectTag { flex: none; padding: 0 5px; border-radius: 4px; background: #fbeccd; color: var(--warn); font-size: 11px; font-weight: 500; white-space: nowrap; }
+.subjectName { min-width: 0; overflow: hidden; color: var(--support); text-overflow: ellipsis; white-space: nowrap; }
 .subjectTrack { display: block; height: 8px; }
 .subjectTrack span { display: block; height: 100%; min-width: 1px; border-radius: 0 3px 3px 0; background: var(--ink); }
 

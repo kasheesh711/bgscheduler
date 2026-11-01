@@ -1,11 +1,14 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { averageValues } from "@/lib/hiring/insights";
 import type { Assessment } from "@/lib/hiring/scoring";
 import { CandidateInspector } from "../candidate-inspector";
 import type { HiringCandidate } from "../dashboard";
 import { Pentagon } from "../pentagon";
-import { AveragePentagon, CRITERION_LABELS } from "../pipeline-charts";
+import { NO_FILTER } from "../dashboard";
+import { AveragePentagon, CRITERION_LABELS, SubjectChart, type Insights } from "../pipeline-charts";
+
+vi.mock("next/font/google", () => ({ Instrument_Serif: () => ({ variable: "" }) }));
 
 const DSCTE = Object.values(CRITERION_LABELS);
 const assessment = (extra: { brief?: string; briefSummary?: string } = {}): Assessment => ({
@@ -122,6 +125,39 @@ describe("AveragePentagon", () => {
     expect(html).toContain("No scored candidates in this filter");
     expect(html).not.toContain("<svg");
     expect(html).not.toContain("0%");
+  });
+});
+
+describe("SubjectChart", () => {
+  const chart = (subjects: { subject: string; interviewers: string[] }[]) =>
+    renderToStaticMarkup(
+      <SubjectChart
+        insights={
+          {
+            subjects: subjects.map((s) => ({ candidates: 3, passed: 0, ...s })),
+            uncoveredSubjects: subjects.filter((s) => !s.interviewers.length).length,
+          } as unknown as Insights
+        }
+        filter={NO_FILTER}
+        setFilter={() => {}}
+      />,
+    );
+  it("tags only a subject that has no interviewer, with visible text", () => {
+    const html = chart([
+      { subject: "Physics", interviewers: ["Peat"] },
+      { subject: "Biology", interviewers: [] },
+    ]);
+    expect(html.match(/No head/g)).toHaveLength(1);
+    expect(html).toMatch(/Biology<\/span><span[^>]*>No head</);
+    expect(html).not.toMatch(/Physics<\/span><span[^>]*>No head</);
+    expect(html).toContain("1 subject has no interviewer");
+    expect(html).not.toContain("amber");
+    expect(html).not.toContain("sr-only");
+  });
+  it("shows no tag when every subject has an interviewer", () => {
+    const html = chart([{ subject: "Physics", interviewers: ["Peat"] }]);
+    expect(html).not.toContain("No head");
+    expect(html).toContain("Every subject has an interviewer");
   });
 });
 
