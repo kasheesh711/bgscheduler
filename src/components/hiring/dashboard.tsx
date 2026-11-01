@@ -212,6 +212,7 @@ export function HiringDashboard() {
             <CandidateInspector
               key={candidate.id}
               candidate={candidate}
+              seekJobId={data.config.seekJobId}
               weights={data.config.profileWeights}
               busy={busy}
               error={error}

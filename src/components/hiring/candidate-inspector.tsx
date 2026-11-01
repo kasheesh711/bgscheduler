@@ -51,6 +51,7 @@ function AssessmentBlock({
 
 export function CandidateInspector({
   candidate,
+  seekJobId,
   weights,
   busy,
   error,
@@ -59,6 +60,7 @@ export function CandidateInspector({
   onClose,
 }: {
   candidate: HiringCandidate;
+  seekJobId: string;
   weights: HiringConfig["profileWeights"];
   busy: boolean;
   error: string;
@@ -98,6 +100,7 @@ export function CandidateInspector({
   }, [candidate.id]);
 
   const university = candidate.universityAssessment;
+  const applicationIds = [...new Set([candidate.seekApplicationId, ...candidate.sourceIds].filter((id): id is string => !!id))];
   const actions = [
     {
       action: "advance",
@@ -127,6 +130,18 @@ export function CandidateInspector({
           <p className={css.inspectorMeta}>
             {STAGE_LABELS[candidate.stage]} · {candidate.email || "Email needs review"}
           </p>
+          {applicationIds.map((id, index) => (
+            <a
+              key={id}
+              className={css.sourceLink}
+              href={`https://th.employer.seek.com/candidates/?jobid=${encodeURIComponent(seekJobId)}&selected=${encodeURIComponent(id)}&tab=profile`}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`View ${applicationIds.length > 1 ? `application ${index + 1} on SEEK` : "on SEEK"} for ${candidate.name} (opens in a new tab)`}
+            >
+              {applicationIds.length > 1 ? `View application ${index + 1} on SEEK` : "View on SEEK"}
+            </a>
+          ))}
         </div>
         <button type="button" className={css.inlineLink} onClick={close}>
           Close
