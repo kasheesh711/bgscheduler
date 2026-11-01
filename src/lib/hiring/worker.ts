@@ -22,12 +22,16 @@ import {
   type HiringConfig,
 } from "./model";
 import {
+  availabilityFraction,
+  preScreenPoints,
   preScreenResult,
-  profileCanAdvance,
   profileScore,
   validateAssessment,
+  validatePreScreenAssessment,
   type Assessment,
+  type PreScreenAssessment,
 } from "./scoring";
+import { profileGate } from "./insights";
 import {
   audit,
   candidateById,
@@ -40,7 +44,12 @@ import { deliverCalendar } from "./google";
 import { syncTracker, mirrorTracker } from "./sources";
 import { assessPrestige } from "./prestige";
 
-export type Assess = (source: string, key: string) => Promise<unknown>;
+/** `kind` tells the runner which prompt and JSON schema to use. */
+export type Assess = (
+  source: string,
+  key: string,
+  kind?: "profile" | "pre-screen",
+) => Promise<unknown>;
 const escape = (s: string) =>
   s.replace(
     /[&<>"']/g,
@@ -86,7 +95,7 @@ export async function assessCandidates(
     const hash = sourceHash(source);
     const oldHash =
       phase === "pre" ? candidate.preScreenHash : candidate.profileHash;
-    let assessment: Assessment | null =
+    let assessment: Assessment | PreScreenAssessment | null =
       phase === "pre"
         ? candidate.preScreenAssessment
         : candidate.profileAssessment;
@@ -94,10 +103,17 @@ export async function assessCandidates(
       candidate.universityAssessment?.catalogHash === sourceHash(config.universities)) continue;
     if (!assessment && oldHash === hash && !(scoreOnly && retryInvalid)) continue;
     if (!assessment || oldHash !== hash) {
-      const value = await assess(source, `${candidate.id}:${phase}:${hash}`);
+      const value = await assess(
+        source,
+        `${candidate.id}:${phase}:${hash}`,
+        phase === "pre" ? "pre-screen" : "profile",
+      );
       calls++;
       try {
-        assessment = validateAssessment(value, source);
+        assessment =
+          phase === "pre"
+            ? validatePreScreenAssessment(value, source)
+            : validateAssessment(value, source);
       } catch {
         await withDatabaseTransaction(db, async (tx) => {
           const [held] = await tx
@@ -154,8 +170,8 @@ export async function assessCandidates(
         return;
       const update =
         phase === "pre"
-          ? { preScreenHash: hash, preScreenAssessment: assessment }
-          : { profileHash: hash, profileAssessment: assessment };
+          ? { preScreenHash: hash, preScreenAssessment: assessment as PreScreenAssessment }
+          : { profileHash: hash, profileAssessment: assessment as Assessment };
       await tx
         .update(s.hiringCandidates)
         .set({
@@ -225,16 +241,15 @@ export async function assessCandidates(
             })
             .where(eq(s.hiringCandidates.id, candidate.id));
       } else if (
-        profileCanAdvance(
-          assessment!,
-          current.config.profileThreshold,
-          current.config.profileWeights,
-          prestige.fraction,
-        ) &&
-        fresh.workRightsConfirmed === true &&
-        fresh.stage === "new" &&
-        !fresh.previouslyContacted &&
-        fresh.email
+        profileGate(
+          {
+            ...fresh,
+            profileAssessment: assessment as Assessment,
+            universityAssessment: prestige,
+          },
+          current.config,
+        ).eligible &&
+        fresh.stage === "new"
       ) {
         await inviteToPreScreen(tx, fresh);
         await tx
@@ -272,6 +287,99 @@ export async function assessCandidates(
             university: prestige,
           },
         );
+    });
+  }
+  return calls;
+}
+
+/**
+ * Score every held pre-screen response, at any stage, with no stage change and no message.
+ * It refuses to run while hiring or delivery is on, and it writes one audit row per scored response.
+ */
+export async function scorePreScreens(
+  db: Database,
+  config: HiringConfig,
+  assess: Assess,
+  opts: { candidateId?: string } = {},
+) {
+  if (config.enabled || config.deliveryEnabled)
+    throw new Error("Pause live hiring and messages before pre-screen scoring.");
+  const rows = await db
+    .select()
+    .from(s.hiringCandidates)
+    .where(
+      and(
+        isNotNull(s.hiringCandidates.preScreen),
+        opts.candidateId ? eq(s.hiringCandidates.id, opts.candidateId) : undefined,
+      ),
+    )
+    .orderBy(asc(s.hiringCandidates.createdAt));
+  const catalogHash = sourceHash(config.universities);
+  let calls = 0;
+  for (const candidate of rows) {
+    const source =
+      preScreenText(candidate.preScreen!) +
+      "\n\nApplication education and experience:\n" +
+      candidate.profileText;
+    const hash = sourceHash(source);
+    // An unchanged response is not scored again, even when an earlier answer failed validation.
+    if (candidate.preScreenHash === hash) continue;
+    const value = await assess(source, `${candidate.id}:pre:${hash}`, "pre-screen");
+    calls++;
+    let assessment: PreScreenAssessment | null = null;
+    try {
+      assessment = validatePreScreenAssessment(value, source);
+    } catch {
+      // The hash is saved so a bad answer is not paid for twice. The note and the stage stay as they are.
+    }
+    // Keep the prestige the profile already earned. Only a missing or stale one is recomputed.
+    const prestige =
+      assessment &&
+      (candidate.universityAssessment?.catalogHash === catalogHash
+        ? candidate.universityAssessment
+        : await assessPrestige(assessment.universities, config, catalogHash));
+    await withDatabaseTransaction(db, async (tx) => {
+      await tx.execute(
+        sql`select id from hiring_candidates where id=${candidate.id} for update`,
+      );
+      const fresh = await candidateById(tx, candidate.id),
+        current = await settings(tx);
+      if (
+        fresh.revision !== candidate.revision ||
+        sourceHash(current.config.universities) !== catalogHash ||
+        current.config.enabled ||
+        current.config.deliveryEnabled ||
+        !current.config.rubricApproved ||
+        !runtimeWritesAllowed()
+      )
+        return;
+      await tx
+        .update(s.hiringCandidates)
+        .set({
+          preScreenHash: hash,
+          preScreenAssessment: assessment,
+          ...(prestige ? { universityAssessment: prestige } : {}),
+        })
+        .where(eq(s.hiringCandidates.id, candidate.id));
+      await audit(
+        tx,
+        "subscription-assessment",
+        assessment ? "pre-screen-score-only" : "pre-screen-invalid-evidence",
+        candidate.id,
+        {
+          sourceHash: hash,
+          ...(assessment && prestige
+            ? {
+                score: preScreenPoints(
+                  assessment,
+                  current.config.preScreenWeights,
+                  prestige.fraction,
+                  availabilityFraction(candidate.preScreen!),
+                ).total,
+              }
+            : {}),
+        },
+      );
     });
   }
   return calls;

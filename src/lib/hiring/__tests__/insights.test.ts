@@ -28,12 +28,14 @@ const candidate = (id: string, stage: Stage, overrides = {}) => ({
   subjects: [],
   paperPassedSubjects: [],
   previouslyContacted: false,
-  workRightsConfirmed: true as boolean | null,
+  workRightsAnswer: "I have permanent work rights with no restrictions" as string | null,
   ...overrides,
 });
 const config = {
   profileThreshold: 60,
   profileWeights: DEFAULT_WEIGHTS,
+  acceptedWorkRights: ["I have permanent work rights with no restrictions"],
+  subjectPriority: [],
   interviewers: [{ canonicalKey: "Peat", email: "p@example.com", subjects: ["Physics" as const] }],
 };
 
@@ -42,14 +44,18 @@ describe("readyToInvite", () => {
   it("accepts a new profile that meets the worker's gate", () => {
     expect(readyToInvite(candidate("a", "new", strong), config)).toBe(true);
   });
+  it("accepts a partial degree, which the old rule refused", () => {
+    expect(readyToInvite(candidate("a", "new", { profileAssessment: assessment("met", "partial") }), config)).toBe(true);
+  });
   it.each([
     ["a later stage", candidate("a", "review", strong)],
     ["prior contact", candidate("a", "new", { ...strong, previouslyContacted: true })],
-    ["unconfirmed work rights", candidate("a", "new", { ...strong, workRightsConfirmed: null })],
+    ["a missing work-rights answer", candidate("a", "new", { ...strong, workRightsAnswer: null })],
+    ["an unaccepted work-rights answer", candidate("a", "new", { ...strong, workRightsAnswer: "I am a long term / permanent resident with eligibility for a work permit" })],
     ["no email", candidate("a", "new", { ...strong, email: null })],
     ["no assessment", candidate("a", "new")],
     ["a tracker pre-screen, which takes the worker's other path", candidate("a", "new", { ...strong, preScreen: {} })],
-    ["a partial degree", candidate("a", "new", { profileAssessment: assessment("met", "partial") })],
+    ["a degree that is not met", candidate("a", "new", { profileAssessment: assessment("met", "not_met") })],
   ])("rejects %s", (_name, value) => {
     expect(readyToInvite(value, config)).toBe(false);
   });

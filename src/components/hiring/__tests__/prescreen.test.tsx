@@ -35,7 +35,8 @@ const person = (id: string, extra: Record<string, unknown> = {}) =>
     sourceIds: [],
     paperPassedSubjects: [],
     previouslyContacted: false,
-    workRightsConfirmed: true,
+    workRightsAnswer: "I have permanent work rights with no restrictions",
+    workRightsAccepted: true,
     profileScore: 80,
     profileAssessment: null,
     preScreen: null,
@@ -117,6 +118,15 @@ describe("CandidateTable pre-screen columns", () => {
     expect(without).toContain("Pre-screen score");
     expect(without).not.toContain("71.5");
   });
+  it("flags a missing and an unaccepted work-rights answer differently", () => {
+    const flagged = table([
+      person("m", { workRightsAnswer: null, workRightsAccepted: false }),
+      person("n", { workRightsAnswer: "Resident", workRightsAccepted: false }),
+      person("o"),
+    ]);
+    expect(flagged.match(/Rights unknown/g)).toHaveLength(1);
+    expect(flagged.match(/Rights not accepted/g)).toHaveLength(1);
+  });
   it("shows a confirmed booking in the Visit column and a dash otherwise", () => {
     expect(html).toContain("Mock · 5 Nov, 14:00");
   });
@@ -155,5 +165,44 @@ describe("CandidateInspector pre-screen answers", () => {
     expect(html).toContain("Reminded");
     expect(html).toContain("Sent 29 Oct, 10:00 · reminded 1 Nov, 10:00");
     expect(html).not.toContain("Read the full response");
+  });
+});
+
+describe("CandidateInspector pre-screen score parts", () => {
+  const parts = { degree: 10, subject: 10, curriculum: 7.5, teaching: 15, english: 15, prestige: 5, written: 7.5, availability: 8, total: 78 };
+  const six = {
+    criteria: (["degree", "subject", "curriculum", "teaching", "english", "written"] as const).map((id) => ({
+      id,
+      result: id === "curriculum" || id === "written" ? ("partial" as const) : ("met" as const),
+      evidence: "quote",
+      reason: "REASON",
+    })),
+    subjects: [],
+    universities: [],
+    summary: "SUMMARY",
+  };
+  const html = renderToStaticMarkup(
+    <CandidateInspector
+      candidate={person("p", { preScreen: pre, preScreenAssessment: six, preScreenScore: 78, preScreenParts: parts })}
+      extras={extras.get("c")!}
+      seekJobId="1"
+      weights={weights}
+      busy={false}
+      error=""
+      notice=""
+      command={async () => true}
+      onClose={() => {}}
+    />,
+  );
+  it("lists the eight parts against their weights, and the total", () => {
+    for (const label of ["Degree", "Subject", "Curriculum", "Teaching", "English", "University prestige", "Written answers", "Availability"])
+      expect(html).toContain(label);
+    expect(html).toContain("Pre-screen score parts");
+    expect(html).toContain("7.5/15");
+    expect(html).toContain("8/10");
+    expect(html).toContain("78/100");
+  });
+  it("shows the work-rights answer and whether it is accepted", () => {
+    expect(html).toContain("Accepted: I have permanent work rights with no restrictions");
   });
 });

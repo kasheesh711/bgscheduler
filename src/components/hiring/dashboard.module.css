@@ -137,6 +137,11 @@
 .pentagonRingInner { fill: none; stroke: var(--line); }
 .pentagonProfile { fill: var(--stone-dark); fill-opacity: 0.3; stroke: var(--stone-dark); stroke-width: 1.5; }
 .pentagonPre { fill: var(--accent-text); fill-opacity: 0.12; stroke: var(--accent-text); stroke-width: 2; }
+.pentagonKey { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 0 0 8px; padding: 0; list-style: none; color: var(--muted); font-size: 12px; }
+.pentagonKey li { display: inline-flex; align-items: center; gap: 4px; }
+.pentagonKey i { width: 10px; height: 10px; border-radius: 2px; }
+.keyProfile { background: var(--stone-dark); opacity: 0.5; }
+.keyPre { border: 2px solid var(--accent-text); }
 .pentagonName { fill: var(--support); font-size: 13px; font-weight: 600; }
 .pentagonValue { fill: var(--muted); font-size: 12px; }
 /* A whole row below the full dashboard: a narrow column would shrink the chart until its text is unreadable. */

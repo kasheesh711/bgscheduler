@@ -23,7 +23,7 @@ import {
   sourceHash,
 } from "../service";
 import { importApplication, observeSeekState } from "../sources";
-import { assessCandidates, deliverOutbox } from "../worker";
+import { assessCandidates, deliverOutbox, scorePreScreens } from "../worker";
 import { availableSlots, verifyLiveSlot } from "../availability";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { pushLineTextMessage } from "@/lib/line/client";
@@ -56,6 +56,7 @@ const slot: Slot = {
   subjects: ["Mathematics"],
 };
 const sendEmail = vi.fn();
+const ACCEPTED = "I have permanent work rights with no restrictions";
 const config = configSchema.parse({
   enabled: true,
   deliveryEnabled: true,
@@ -238,6 +239,139 @@ describe("hiring workflow persistence", () => {
     expect(await assessCandidates(db, paused, assess, 10, true)).toBe(0);
     expect((await db.select().from(s.hiringAudit)).length).toBe(auditCount);
   });
+  it("records an unseen work-rights answer for the settings and never accepts it", async () => {
+    const other = "I am a long term / permanent resident with eligibility for a work permit";
+    const application = (n: number, rights: string | null) => ({
+      applicationId: `00000000-0000-4000-8000-0000000001${n}0`,
+      name: `Rights ${n}`,
+      email: `rights${n}@example.com`,
+      profileText: "profile",
+      previouslyContacted: false,
+      sourceStatus: "Inbox",
+      workRightsAnswer: rights,
+    });
+    const before = (await settings(db)).row!.revision;
+    const id = await importApplication(application(1, other), db);
+    const read = async () => (await settings(db)).row!;
+    const first = await read();
+    expect(first.revision).toBe(before + 1);
+    expect(configSchema.parse(first.config).seenWorkRights).toEqual([other]);
+    expect(configSchema.parse(first.config).acceptedWorkRights).toEqual([ACCEPTED]);
+    const [saved] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, id));
+    expect(saved.workRightsAnswer).toBe(other);
+    // The same answer again, and a missing answer, change nothing.
+    await importApplication(application(2, ` ${other.toUpperCase()} `), db);
+    await importApplication(application(3, null), db);
+    expect((await read()).revision).toBe(before + 1);
+    await importApplication(application(4, ACCEPTED), db);
+    expect(configSchema.parse((await read()).config).seenWorkRights).toEqual([other, ACCEPTED]);
+    // A later import with no answer keeps the stored one.
+    await importApplication({ ...application(1, null), profileText: "changed profile" }, db);
+    const [again] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, id));
+    expect(again.workRightsAnswer).toBe(other);
+  });
+  describe("score-only pre-screen pass", () => {
+    const paused = { ...config, enabled: false, deliveryEnabled: false };
+    const pre = {
+      sourceRow: 2,
+      submittedAt: "31/10/2026, 18:30:05",
+      degree: "Bachelor's",
+      field: "Mathematics",
+      subjects: "Mathematics",
+      curricula: "IGCSE",
+      yearGroups: "Year 10",
+      english: "Advanced (C1)",
+      englishEvidence: "C1",
+      experience: "5+ years",
+      portfolio: "",
+      availability: "Weekday Evening (17:00-21:00), Weekend Morning (before 12:00)",
+      weeklyHours: "20",
+      motivation: "Teaching",
+      teachingApproach: "Check understanding",
+    };
+    const six = (evidence = "Check understanding") => ({
+      criteria: ["degree", "subject", "curriculum", "teaching", "english", "written"].map((id) => ({
+        id,
+        result: "met",
+        evidence: id === "written" ? evidence : "Mathematics",
+        reason: "Source",
+      })),
+      subjects: [{ subject: "Mathematics", evidence: "Mathematics", relevant: true }],
+      summary: "Evidence",
+    });
+    const seed = async () => {
+      await db.update(s.hiringSettings).set({ config: paused }).where(eq(s.hiringSettings.id, "default"));
+      return db
+        .insert(s.hiringCandidates)
+        .values(
+          (["new", "review", "stopped", "pre_screen"] as const).map((stage) => ({
+            name: stage,
+            email: `${stage}@example.com`,
+            stage,
+            preScreen: pre,
+            profileText: "Application text",
+            reviewNote: "Human note",
+          })),
+        )
+        .returning();
+    };
+    it("scores every stage with no stage change, no outbox row, and one audit row with the source hash", async () => {
+      const rows = await seed();
+      await db.insert(s.hiringCandidates).values({ name: "No response", stage: "new", profileText: "x" });
+      const assess = vi.fn(async () => six());
+      expect(await scorePreScreens(db, paused, assess)).toBe(4);
+      expect(assess).toHaveBeenCalledWith(expect.stringContaining("teachingApproach: Check understanding"), expect.stringContaining(":pre:"), "pre-screen");
+      const after = await db.select().from(s.hiringCandidates);
+      expect(after.filter((c) => c.preScreenAssessment).map((c) => c.stage).sort()).toEqual(["new", "pre_screen", "review", "stopped"]);
+      expect(after.find((c) => c.name === "No response")?.preScreenAssessment).toBeNull();
+      expect(after.filter((c) => c.preScreen).every((c) => c.reviewNote === "Human note")).toBe(true);
+      expect(await db.select().from(s.hiringOutbox)).toEqual([]);
+      const audits = (await db.select().from(s.hiringAudit)).filter((a) => a.action === "pre-screen-score-only");
+      expect(audits).toHaveLength(4);
+      for (const a of audits) {
+        const c = rows.find((r) => r.id === a.candidateId)!;
+        expect((a.detail as { sourceHash: string }).sourceHash).toBe(
+          after.find((x) => x.id === c.id)!.preScreenHash,
+        );
+      }
+      // An unchanged response is not scored again.
+      expect(await scorePreScreens(db, paused, assess)).toBe(0);
+      expect(assess).toHaveBeenCalledTimes(4);
+    });
+    it("scores one candidate on request and keeps the profile's university result", async () => {
+      const [one, two] = await seed();
+      const kept = { name: "Kept", country: "GB", rank: 5, edition: "2025-2026", fraction: 1, reason: "kept", sources: [], catalogHash: sourceHash(paused.universities) };
+      await db.update(s.hiringCandidates).set({ universityAssessment: kept }).where(eq(s.hiringCandidates.id, one.id));
+      const assess = vi.fn(async () => six());
+      expect(await scorePreScreens(db, paused, assess, { candidateId: one.id })).toBe(1);
+      const [scored] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, one.id));
+      expect(scored.universityAssessment).toEqual(kept);
+      const [other] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, two.id));
+      expect(other.preScreenAssessment).toBeNull();
+    });
+    it("holds an answer whose quote is not in the source, once, and changes nothing else", async () => {
+      const [one] = await seed();
+      const assess = vi.fn(async () => six("invented quote"));
+      expect(await scorePreScreens(db, paused, assess, { candidateId: one.id })).toBe(1);
+      expect(await scorePreScreens(db, paused, assess, { candidateId: one.id })).toBe(0);
+      const [row] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, one.id));
+      expect(row.preScreenAssessment).toBeNull();
+      expect(row.preScreenHash).not.toBeNull();
+      expect([row.stage, row.reviewNote]).toEqual([one.stage, "Human note"]);
+      expect((await db.select().from(s.hiringAudit)).some((a) => a.action === "pre-screen-invalid-evidence")).toBe(true);
+    });
+    it("refuses to run while hiring or messages are on", async () => {
+      await seed();
+      const assess = vi.fn(async () => six());
+      await expect(scorePreScreens(db, { ...paused, enabled: true }, assess)).rejects.toThrow(/Pause/);
+      await expect(scorePreScreens(db, { ...paused, deliveryEnabled: true }, assess)).rejects.toThrow(/Pause/);
+      expect(assess).not.toHaveBeenCalled();
+      // The settings row can be switched on after the check; the write is then skipped.
+      await db.update(s.hiringSettings).set({ config: { ...paused, enabled: true } }).where(eq(s.hiringSettings.id, "default"));
+      await scorePreScreens(db, paused, assess);
+      expect((await db.select().from(s.hiringCandidates)).every((c) => c.preScreenAssessment === null)).toBe(true);
+    });
+  });
   it("runs from a new application through both invitations, a recorded paper pass and a confirmed mock", async () => {
     const id = await importApplication(
       {
@@ -248,14 +382,24 @@ describe("hiring workflow persistence", () => {
         resumeText: "",
         previouslyContacted: false,
         sourceStatus: "Inbox",
-        workRightsConfirmed: true,
+        workRightsAnswer: ACCEPTED,
       },
       db,
     );
-    const profile = () => ({
-      criteria: ["degree", "subject", "curriculum", "teaching", "english"].map(
-        (id) => ({ id, result: "met", evidence: id, reason: "Source" }),
-      ),
+    const profile = (kind?: string) => ({
+      criteria: [
+        "degree",
+        "subject",
+        "curriculum",
+        "teaching",
+        "english",
+        ...(kind === "pre-screen" ? ["written"] : []),
+      ].map((id) => ({
+        id,
+        result: "met",
+        evidence: id === "written" ? "Check understanding" : id,
+        reason: "Source",
+      })),
       subjects: [
         { subject: "Mathematics", evidence: "Mathematics", relevant: true },
       ],
@@ -291,7 +435,7 @@ describe("hiring workflow persistence", () => {
         },
       })
       .where(eq(s.hiringCandidates.id, id));
-    await assessCandidates(db, config, async () => profile());
+    await assessCandidates(db, config, async (_s, _k, kind) => profile(kind));
     [c] = await db
       .select()
       .from(s.hiringCandidates)
@@ -373,7 +517,7 @@ describe("hiring workflow persistence", () => {
       resumeText: "",
       previouslyContacted: false,
       sourceStatus: "Inbox",
-      workRightsConfirmed: true,
+      workRightsAnswer: ACCEPTED,
     };
     const id = await importApplication(app, db);
     expect(await importApplication(app, db)).toBe(id);
@@ -415,7 +559,7 @@ describe("hiring workflow persistence", () => {
         resumeText: "",
         previouslyContacted: false,
         sourceStatus: "Inbox",
-        workRightsConfirmed: true,
+        workRightsAnswer: ACCEPTED,
       },
       db,
     );
@@ -456,7 +600,7 @@ describe("hiring workflow persistence", () => {
             resumeText: "",
             previouslyContacted: false,
             sourceStatus: "Inbox",
-            workRightsConfirmed: true,
+            workRightsAnswer: ACCEPTED,
           },
           db,
         ),
@@ -607,7 +751,7 @@ describe("hiring workflow persistence", () => {
       resumeText: "",
       previouslyContacted: false,
       sourceStatus: "Inbox",
-      workRightsConfirmed: true,
+      workRightsAnswer: ACCEPTED,
     };
     await importApplication(app, db);
     const assess = vi.fn().mockResolvedValue({
@@ -633,7 +777,8 @@ describe("hiring workflow persistence", () => {
         teaching: 30,
       },
     };
-    await saveSettings(changed, 0, "owner@example.com", db);
+    // Importing the accepted answer for the first time raised the revision.
+    await saveSettings(changed, (await settings(db)).row!.revision, "owner@example.com", db);
     const saved = await settings(db);
     expect(saved.config.profileThreshold).toBe(85);
     expect(saved.config.profileWeights.teaching).toBe(30);

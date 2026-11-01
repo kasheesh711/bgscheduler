@@ -17,7 +17,7 @@ import { settings } from "../src/lib/hiring/service";
 import { importApplication, observeSeekState } from "../src/lib/hiring/sources";
 import { runHiringCycle } from "../src/lib/hiring/worker";
 import { requestDelivery } from "../src/lib/hiring/dispatch";
-import { assessmentSchema, ASSESSMENT_SYSTEM } from "../src/lib/hiring/scoring";
+import { assessmentSchema, preScreenAssessmentSchema, ASSESSMENT_SYSTEM, PRE_SCREEN_SYSTEM } from "../src/lib/hiring/scoring";
 import {
   runClaude,
   killChildren,
@@ -98,15 +98,15 @@ async function main() {
         const cliVersion = execFileSync("claude", ["--version"], {
           encoding: "utf8",
         }).trim();
-        const result = await runHiringCycle(db, async (source, key) => {
+        const result = await runHiringCycle(db, async (source, key, kind) => {
           if (stop) throw new Error("Worker stopped.");
           const outcome = await runClaude(
             {
               purpose: "hiring-assessment",
               key,
-              system: ASSESSMENT_SYSTEM,
+              system: kind === "pre-screen" ? PRE_SCREEN_SYSTEM : ASSESSMENT_SYSTEM,
               user: source,
-              schema: z.toJSONSchema(assessmentSchema, { target: "draft-07" }),
+              schema: z.toJSONSchema(kind === "pre-screen" ? preScreenAssessmentSchema : assessmentSchema, { target: "draft-07" }),
               budgetUsd: 3,
               timeoutMs: 180000,
             },

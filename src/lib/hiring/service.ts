@@ -15,7 +15,12 @@ import {
   type InterviewKind,
   type Subject,
 } from "./model";
-import { profileScore } from "./scoring";
+import {
+  availabilityFraction,
+  preScreenPoints,
+  profileScore,
+  workRightsAccepted,
+} from "./scoring";
 import { googleConnectionStatus } from "./google";
 import { bookingToken, readBookingToken } from "./tokens";
 
@@ -248,24 +253,35 @@ export async function dashboard(db: Database = getDb()) {
     workerSummary: row?.workerSummary ?? null,
     workerError: row?.workerError ?? null,
     writeGate: runtimeWritesAllowed(),
-    candidates: candidates.map((c) => ({
-      ...c,
-      profileText: undefined,
-      profileScore: c.profileAssessment
-        ? profileScore(
-            c.profileAssessment,
-            config.profileWeights,
-            c.universityAssessment?.fraction ?? 0,
-          )
-        : null,
-      preScreenScore: c.preScreenAssessment
-        ? profileScore(
-            c.preScreenAssessment,
-            config.profileWeights,
-            c.universityAssessment?.fraction ?? 0,
-          )
-        : null,
-    })),
+    candidates: candidates.map((c) => {
+      const parts =
+        c.preScreenAssessment && c.preScreen
+          ? preScreenPoints(
+              c.preScreenAssessment,
+              config.preScreenWeights,
+              c.universityAssessment?.fraction ?? 0,
+              availabilityFraction(c.preScreen),
+            )
+          : null;
+      return {
+        ...c,
+        profileText: undefined,
+        profileScore: c.profileAssessment
+          ? profileScore(
+              c.profileAssessment,
+              config.profileWeights,
+              c.universityAssessment?.fraction ?? 0,
+            )
+          : null,
+        // The pre-screen score is the eight-part total, not the profile formula.
+        preScreenScore: parts?.total ?? null,
+        preScreenParts: parts,
+        workRightsAccepted: workRightsAccepted(
+          c.workRightsAnswer,
+          config.acceptedWorkRights,
+        ),
+      };
+    }),
     bookings,
     outbox,
     audit: auditRows,

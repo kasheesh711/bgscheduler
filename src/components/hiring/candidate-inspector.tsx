@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { criterionValues, STAGE_LABELS } from "@/lib/hiring/insights";
-import { SUBJECTS, type HiringConfig, type Subject } from "@/lib/hiring/model";
-import type { Assessment } from "@/lib/hiring/scoring";
+import { DEFAULT_PRE_SCREEN_WEIGHTS, SUBJECTS, type HiringConfig, type Subject } from "@/lib/hiring/model";
+import type { Assessment, PreScreenAssessment } from "@/lib/hiring/scoring";
 import { preScreenNote, visitText, type CandidateExtras } from "@/lib/hiring/status";
 import type { Command, HiringCandidate } from "./dashboard";
 import { CRITERION_LABELS, PILL_CLASS, RESULT_CLASS, RESULT_LABELS } from "./pipeline-charts";
@@ -31,20 +31,56 @@ const ANSWER_LABELS: [keyof NonNullable<HiringCandidate["preScreen"]>, string][]
   ["teachingApproach", "Teaching approach"],
 ];
 
-function CandidatePentagon({ profile, pre }: { profile: Assessment; pre: Assessment | null }) {
-  const result = (a: Assessment, id: string) => a.criteria.find((c) => c.id === id)?.result ?? "unknown";
-  const shapes: ComponentProps<typeof Pentagon>["shapes"] = [{ label: "Profile", values: criterionValues(profile), tone: "profile" }];
+const PRE_SCREEN_PARTS: [Exclude<keyof NonNullable<HiringCandidate["preScreenParts"]>, "total">, string][] = [
+  ["degree", "Degree"],
+  ["subject", "Subject"],
+  ["curriculum", "Curriculum"],
+  ["teaching", "Teaching"],
+  ["english", "English"],
+  ["prestige", "University prestige"],
+  ["written", "Written answers"],
+  ["availability", "Availability"],
+];
+const round = (n: number) => Math.round(n * 10) / 10;
+
+function CandidatePentagon({ profile, pre }: { profile: Assessment | null; pre: PreScreenAssessment | null }) {
+  const result = (a: { criteria: { id: string; result: keyof typeof RESULT_LABELS }[] }, id: string) => a.criteria.find((c) => c.id === id)?.result ?? "unknown";
+  const shapes: ComponentProps<typeof Pentagon>["shapes"] = [];
+  if (profile) shapes.push({ label: "Profile", values: criterionValues(profile), tone: "profile" });
   if (pre) shapes.push({ label: "Pre-screen", values: criterionValues(pre), tone: "preScreen" });
+  const both = !!(profile && pre);
+  const title = both
+    ? "DSCTE pentagon with a Profile shape and a Pre-screen shape. Where a corner reads one result then an arrow then another, the first is the Profile result and the second is the Pre-screen result"
+    : pre
+      ? "DSCTE pentagon for the Pre-screen"
+      : "DSCTE pentagon";
   return (
-    <Pentagon
-      shapes={shapes}
-      size={300}
-      labels={Object.entries(CRITERION_LABELS).map(([id, name]) => {
-        const before = RESULT_LABELS[result(profile, id)];
-        const after = pre ? RESULT_LABELS[result(pre, id)] : before;
-        return { name, value: before === after ? before : `${before} → ${after}` };
-      })}
-    />
+    <>
+      <Pentagon
+        shapes={shapes}
+        size={300}
+        title={title}
+        labels={Object.entries(CRITERION_LABELS).map(([id, name]) => {
+          const before = profile ? RESULT_LABELS[result(profile, id)] : null;
+          const after = pre ? RESULT_LABELS[result(pre, id)] : null;
+          const value = before === null ? after! : after === null || before === after ? before : `${before} → ${after}`;
+          return { name, value };
+        })}
+      />
+      {both && (
+        <ul className={css.pentagonKey}>
+          <li>
+            <i className={css.keyProfile} aria-hidden="true" />
+            Profile (grey)
+          </li>
+          <li>
+            <i className={css.keyPre} aria-hidden="true" />
+            Pre-screen (blue outline)
+          </li>
+          <li>A change reads Profile → Pre-screen</li>
+        </ul>
+      )}
+    </>
   );
 }
 
@@ -53,17 +89,20 @@ function AssessmentBlock({
   score,
   assessment,
   weights,
+  points,
 }: {
   title: string;
   score: number | null;
-  assessment: Assessment;
-  weights: HiringConfig["profileWeights"];
+  assessment: Assessment | PreScreenAssessment;
+  weights: Record<string, number>;
+  // Pre-screen points are calculated by the server. The profile score is weight times result.
+  points?: Record<string, number>;
 }) {
   return (
     <section className={css.inspectorSection}>
       <h3 className={css.inspectorHeading}>
         {title}
-        <span className={css.num}>{score === null ? "" : `${Math.round(score * 10) / 10}/100`}</span>
+        <span className={css.num}>{score === null ? "" : `${round(score)}/100`}</span>
       </h3>
       {/* Older assessments have no short summary, so they keep the long one. */}
       <p className={css.inspectorText}>{assessment.briefSummary ?? assessment.summary}</p>
@@ -71,11 +110,11 @@ function AssessmentBlock({
         <details key={c.id} className={css.criterion}>
           <summary>
             <i className={RESULT_CLASS[c.result]} aria-hidden="true" />
-            <span>{CRITERION_LABELS[c.id]}</span>
+            <span>{(CRITERION_LABELS as Record<string, string>)[c.id] ?? "Written answers"}</span>
             {c.brief && <span className={css.inspectorText}>{c.brief}</span>}
             <span className={css.criterionResult}>{RESULT_LABELS[c.result]}</span>
             <span className={css.num}>
-              {weights[c.id] * POINTS[c.result]}/{weights[c.id]}
+              {round(points?.[c.id] ?? (weights[c.id] ?? 0) * POINTS[c.result])}/{weights[c.id] ?? 0}
             </span>
           </summary>
           <p className={css.inspectorText}>{c.reason}</p>
@@ -91,6 +130,7 @@ export function CandidateInspector({
   extras,
   seekJobId,
   weights,
+  preWeights = DEFAULT_PRE_SCREEN_WEIGHTS,
   busy,
   error,
   notice,
@@ -101,6 +141,7 @@ export function CandidateInspector({
   extras?: CandidateExtras;
   seekJobId: string;
   weights: HiringConfig["profileWeights"];
+  preWeights?: HiringConfig["preScreenWeights"];
   busy: boolean;
   error: string;
   notice: string;
@@ -195,7 +236,11 @@ export function CandidateInspector({
         <dl className={css.facts}>
           <div>
             <dt>Work rights</dt>
-            <dd>{candidate.workRightsConfirmed ? "Confirmed" : candidate.workRightsConfirmed === false ? "Not confirmed" : "Unknown"}</dd>
+            <dd>
+              {candidate.workRightsAnswer
+                ? `${candidate.workRightsAccepted ? "Accepted" : "Not accepted"}: ${candidate.workRightsAnswer}`
+                : "No answer on file"}
+            </dd>
           </div>
           <div>
             <dt>Earlier contact</dt>
@@ -206,7 +251,7 @@ export function CandidateInspector({
             <dd>{candidate.paperPassedSubjects.join(", ") || "None"}</dd>
           </div>
         </dl>
-        {candidate.profileAssessment && (
+        {(candidate.profileAssessment || candidate.preScreenAssessment) && (
           <CandidatePentagon profile={candidate.profileAssessment} pre={candidate.preScreenAssessment} />
         )}
         {candidate.profileAssessment && (
@@ -218,12 +263,33 @@ export function CandidateInspector({
           />
         )}
         {candidate.preScreenAssessment && (
-          <AssessmentBlock
-            title="Pre-screen evidence"
-            score={candidate.preScreenScore}
-            assessment={candidate.preScreenAssessment}
-            weights={weights}
-          />
+          <>
+            <AssessmentBlock
+              title="Pre-screen evidence"
+              score={candidate.preScreenScore}
+              assessment={candidate.preScreenAssessment}
+              weights={preWeights}
+              points={candidate.preScreenParts ?? undefined}
+            />
+            {candidate.preScreenParts && (
+              <section className={css.inspectorSection}>
+                <h3 className={css.inspectorHeading}>
+                  Pre-screen score parts
+                  <span className={css.num}>{round(candidate.preScreenParts.total)}/100</span>
+                </h3>
+                <dl className={css.facts}>
+                  {PRE_SCREEN_PARTS.map(([key, label]) => (
+                    <div key={key}>
+                      <dt>{label}</dt>
+                      <dd className={css.num}>
+                        {round(candidate.preScreenParts![key])}/{preWeights[key]}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
+            )}
+          </>
         )}
         {extras && (extras.pre.status !== "Not sent" || extras.visit) && (
           <section className={css.inspectorSection}>

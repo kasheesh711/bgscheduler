@@ -295,7 +295,8 @@ export const applicationSchema = z
     resumeText: z.string().max(120000).default(""),
     previouslyContacted: z.boolean(),
     sourceStatus: z.string().max(100),
-    workRightsConfirmed: z.boolean().nullable().default(null),
+    // The exact SEEK answer. Whether it is accepted comes from the settings list, not from the import.
+    workRightsAnswer: z.string().trim().min(1).max(300).nullable().default(null),
   })
   .strict();
 export type Application = z.infer<typeof applicationSchema>;

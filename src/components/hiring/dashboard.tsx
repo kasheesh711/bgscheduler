@@ -228,6 +228,7 @@ export function HiringDashboard() {
               extras={extras.get(candidate.id)}
               seekJobId={data.config.seekJobId}
               weights={data.config.profileWeights}
+              preWeights={data.config.preScreenWeights}
               busy={busy}
               error={error}
               notice={notice}

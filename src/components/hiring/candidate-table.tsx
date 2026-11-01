@@ -216,7 +216,7 @@ export function CandidateTable({
               const flags = [
                 c.previouslyContacted && "Contacted",
                 !c.email && "No email",
-                c.workRightsConfirmed !== true && "Rights unknown",
+                !c.workRightsAnswer ? "Rights unknown" : !c.workRightsAccepted && "Rights not accepted",
               ].filter(Boolean);
               return (
                 <tr key={c.id} data-selected={selected === c.id ? "" : undefined} onClick={() => onSelect(c.id)}>

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { averageValues } from "@/lib/hiring/insights";
-import type { Assessment } from "@/lib/hiring/scoring";
+import type { Assessment, PreScreenAssessment } from "@/lib/hiring/scoring";
 import { CandidateInspector } from "../candidate-inspector";
 import type { HiringCandidate } from "../dashboard";
 import { Pentagon } from "../pentagon";
@@ -24,7 +24,7 @@ const assessment = (extra: { brief?: string; briefSummary?: string } = {}): Asse
   summary: "LONG SUMMARY TEXT",
   briefSummary: extra.briefSummary,
 });
-const inspect = (profileAssessment: Assessment, preScreenAssessment: Assessment | null = null) =>
+const inspect = (profileAssessment: Assessment, preScreenAssessment: PreScreenAssessment | null = null) =>
   renderToStaticMarkup(
     <CandidateInspector
       candidate={
@@ -183,12 +183,56 @@ describe("CandidateInspector evidence", () => {
   it("shows Partial → Met at a corner where the pre-screen differs from the profile", () => {
     const profile = assessment();
     profile.criteria[0].result = "partial";
-    const html = inspect(profile, assessment());
+    const html = inspect(profile, assessment() as unknown as PreScreenAssessment);
     expect(html).toContain("Degree: Partial → Met");
     expect(html).toContain(">Partial</text>");
     expect(html).toContain(">→ Met</text>");
   });
   it("draws the profile pentagon", () => {
     expect(inspect(assessment())).toContain("DSCTE pentagon");
+  });
+  it("shows a key that names both shapes, and says in the label which side of the arrow is which", () => {
+    const profile = assessment();
+    profile.criteria[0].result = "partial";
+    const html = inspect(profile, assessment() as unknown as PreScreenAssessment);
+    expect(html).toMatch(/<li><i[^>]*><\/i>Profile \(grey\)<\/li>/);
+    expect(html).toMatch(/<li><i[^>]*><\/i>Pre-screen \(blue outline\)<\/li>/);
+    expect(html).toContain("A change reads Profile → Pre-screen");
+    expect(html).toMatch(/aria-label="DSCTE pentagon with a Profile shape and a Pre-screen shape\. Where a corner reads[^"]*the first is the Profile result and the second is the Pre-screen result\./);
+    expect(html).toContain("Degree: Partial → Met");
+  });
+  it("shows no key when only one shape exists", () => {
+    expect(inspect(assessment())).not.toContain("Profile (grey)");
+  });
+  it("draws the pentagon when only a pre-screen assessment exists", () => {
+    const html = renderToStaticMarkup(
+      <CandidateInspector
+        candidate={
+          {
+            id: "c1",
+            name: "Sam",
+            stage: "stopped",
+            email: "s@example.com",
+            subjects: [],
+            sourceIds: [],
+            paperPassedSubjects: [],
+            profileScore: null,
+            profileAssessment: null,
+            preScreenAssessment: assessment() as unknown as PreScreenAssessment,
+            universityAssessment: null,
+          } as unknown as HiringCandidate
+        }
+        seekJobId="1"
+        weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0 }}
+        busy={false}
+        error=""
+        notice=""
+        command={async () => true}
+        onClose={() => {}}
+      />,
+    );
+    expect(html).toContain("DSCTE pentagon for the Pre-screen");
+    expect(html).toContain("Degree: Met");
+    expect(html).not.toContain("Profile (grey)");
   });
 });

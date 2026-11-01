@@ -19,7 +19,7 @@ import {
   type HiringConfig,
   type Stage,
 } from "./model";
-import { audit, inviteToBooking, sourceHash } from "./service";
+import { audit, inviteToBooking, settings, sourceHash } from "./service";
 
 const cell = (row: unknown[], index: number) => String(row[index] ?? "").trim();
 export function preScreenRows(rows: unknown[][]) {
@@ -78,12 +78,31 @@ export function legacyStage(row: unknown[]): Stage {
     return "paper_invited";
   return "review";
 }
+/** Remember a work-rights answer the settings have not seen, so Kevin can accept it there. It never accepts anything. */
+export async function recordWorkRightsAnswer(db: Database, answer: string | null) {
+  const text = answer?.trim();
+  if (!text) return;
+  await db.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-settings'))`);
+  const { row, config } = await settings(db);
+  const key = (v: string) => v.replace(/\s+/g, " ").toLowerCase();
+  if (config.seenWorkRights.some((a) => key(a) === key(text))) return;
+  const next = { ...config, seenWorkRights: [...config.seenWorkRights, text] };
+  await db
+    .insert(s.hiringSettings)
+    .values({ id: "default", config: next, revision: (row?.revision ?? 0) + 1, updatedBy: "seek-import" })
+    .onConflictDoUpdate({
+      target: s.hiringSettings.id,
+      set: { config: next, revision: (row?.revision ?? 0) + 1, updatedBy: "seek-import", updatedAt: new Date() },
+    });
+  await audit(db, "seek-import", "work-rights-seen", null, { answer: text });
+}
 export async function importApplication(value: unknown, db: Database) {
   const input: Application = applicationSchema.parse(value);
   return withDatabaseTransaction(db, async (tx) => {
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtext(${"hiring-import:" + (input.email ?? input.applicationId)}))`,
     );
+    await recordWorkRightsAnswer(tx, input.workRightsAnswer);
     const [existing] = await tx
       .select()
       .from(s.hiringCandidates)
@@ -103,7 +122,8 @@ export async function importApplication(value: unknown, db: Database) {
       if (
         existing.profileText !== text ||
         ids.length !== existing.sourceIds.length ||
-        existing.workRightsConfirmed !== input.workRightsConfirmed ||
+        (input.workRightsAnswer !== null &&
+          existing.workRightsAnswer !== input.workRightsAnswer) ||
         (!existing.previouslyContacted && input.previouslyContacted)
       ) {
         await tx
@@ -111,7 +131,8 @@ export async function importApplication(value: unknown, db: Database) {
           .set({
             profileText: text,
             sourceIds: ids,
-            workRightsConfirmed: input.workRightsConfirmed,
+            // A page that shows no answer must not erase one already read.
+            workRightsAnswer: input.workRightsAnswer ?? existing.workRightsAnswer,
             previouslyContacted:
               existing.previouslyContacted || input.previouslyContacted,
             updatedAt: new Date(),
@@ -132,7 +153,7 @@ export async function importApplication(value: unknown, db: Database) {
         name: input.name,
         email: input.email,
         profileText: text,
-        workRightsConfirmed: input.workRightsConfirmed,
+        workRightsAnswer: input.workRightsAnswer,
         previouslyContacted: input.previouslyContacted,
         stage:
           input.previouslyContacted ||

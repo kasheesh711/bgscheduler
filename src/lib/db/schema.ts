@@ -25,7 +25,7 @@ import type { Week, OfficeNetwork } from "@/lib/tutor-attendance/model";
 import type { WiseTeacher } from "@/lib/wise/types";
 import type { CaptureConsent, CaptureSession, DraftFields } from "@/lib/class-capture/model";
 import type { HiringConfig, PreScreen, Subject, Stage } from "@/lib/hiring/model";
-import type { Assessment } from "@/lib/hiring/scoring";
+import type { Assessment, PreScreenAssessment } from "@/lib/hiring/scoring";
 
 export const hiringSettings = pgTable("hiring_settings", {
   id: text("id").primaryKey().default("default"),
@@ -75,7 +75,7 @@ export const hiringCandidates = pgTable(
     >(),
     preScreen: jsonb("pre_screen").$type<PreScreen>(),
     preScreenHash: text("pre_screen_hash"),
-    preScreenAssessment: jsonb("pre_screen_assessment").$type<Assessment>(),
+    preScreenAssessment: jsonb("pre_screen_assessment").$type<PreScreenAssessment>(),
     subjects: jsonb("subjects").$type<Subject[]>().notNull().default([]),
     paperPassedSubjects: jsonb("paper_passed_subjects")
       .$type<Subject[]>()

@@ -1,5 +1,5 @@
 import { SUBJECTS, type HiringConfig, type Stage, type Subject } from "./model";
-import { profileCanAdvance, type Assessment } from "./scoring";
+import { profileScore, workRightsAccepted, type Assessment } from "./scoring";
 
 export const STAGE_LABELS: Record<Stage, string> = {
   new: "New",
@@ -54,10 +54,14 @@ type InsightCandidate = {
   subjects: Subject[];
   paperPassedSubjects: Subject[];
   previouslyContacted: boolean;
-  workRightsConfirmed: boolean | null;
+  workRightsAnswer: string | null;
 };
+type GateConfig = Pick<
+  HiringConfig,
+  "profileThreshold" | "profileWeights" | "acceptedWorkRights" | "subjectPriority"
+>;
 type InsightInput = {
-  config: Pick<HiringConfig, "profileThreshold" | "profileWeights" | "interviewers">;
+  config: GateConfig & Pick<HiringConfig, "interviewers">;
   candidates: InsightCandidate[];
   bookings: {
     candidateId: string;
@@ -69,24 +73,57 @@ type InsightInput = {
   outbox: { status: string }[];
 };
 
+/**
+ * Who may receive the pre-screen form: a profile score at or above the threshold, an accepted work-rights answer,
+ * a usable email, no earlier contact, a supported subject that is still hiring, and a degree that is not `not_met`.
+ * `subject` is the highest-ranked hiring subject the profile supports.
+ */
+export function profileGate(
+  candidate: Pick<
+    InsightCandidate,
+    "email" | "previouslyContacted" | "workRightsAnswer" | "profileAssessment" | "universityAssessment"
+  >,
+  config: GateConfig,
+): { eligible: boolean; reasons: string[]; subject: Subject | null } {
+  const reasons: string[] = [];
+  const assessment = candidate.profileAssessment;
+  const rank = (subject: Subject) => {
+    const at = config.subjectPriority.findIndex((p) => p.subject === subject);
+    // A subject missing from the saved list is hiring and ranks last.
+    return at < 0 ? { hiring: true, at: config.subjectPriority.length } : { hiring: config.subjectPriority[at].hiring, at };
+  };
+  const subject =
+    (assessment?.subjects ?? [])
+      .filter((s) => s.relevant && rank(s.subject).hiring)
+      .map((s) => s.subject)
+      .sort((a, b) => rank(a).at - rank(b).at)[0] ?? null;
+  if (!assessment) reasons.push("The profile is not scored.");
+  else {
+    if (
+      profileScore(assessment, config.profileWeights, candidate.universityAssessment?.fraction ?? 0) <
+      config.profileThreshold
+    )
+      reasons.push("The profile score is below the threshold.");
+    if (assessment.criteria.some((c) => c.id === "degree" && c.result === "not_met"))
+      reasons.push("The degree criterion is not met.");
+    if (!subject) reasons.push("No supported subject is open for hiring.");
+  }
+  if (!workRightsAccepted(candidate.workRightsAnswer, config.acceptedWorkRights))
+    reasons.push("The work-rights answer is missing or not accepted.");
+  if (!candidate.email) reasons.push("There is no usable email.");
+  if (candidate.previouslyContacted) reasons.push("There was earlier contact.");
+  return { eligible: reasons.length === 0, reasons, subject };
+}
+
 /** Mirrors the worker's gate for sending a new profile the pre-screen form. */
 export function readyToInvite(
   candidate: InsightCandidate,
-  config: InsightInput["config"],
+  config: GateConfig,
 ) {
   return (
     candidate.stage === "new" &&
     !candidate.preScreen &&
-    !!candidate.profileAssessment &&
-    !!candidate.email &&
-    !candidate.previouslyContacted &&
-    candidate.workRightsConfirmed === true &&
-    profileCanAdvance(
-      candidate.profileAssessment,
-      config.profileThreshold,
-      config.profileWeights,
-      candidate.universityAssessment?.fraction ?? 0,
-    )
+    profileGate(candidate, config).eligible
   );
 }
 

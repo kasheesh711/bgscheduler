@@ -152,8 +152,7 @@ async function readApplication(
     const educationStart = full.indexOf("Career history");
     const rights =
       full.match(/Preferred work rights in Thailand\s*\n([^\n]+)/i)?.[1] ?? "";
-    const workRightsConfirmed =
-      /permanent work rights with no restrictions/i.test(rights) ? true : null;
+    const workRightsAnswer = rights.trim() || null;
     const cleaned = (educationStart >= 0 ? full.slice(educationStart) : full)
       .replace(/Employment status[\s\S]*?(?=Application questions|$)/i, "")
       .replace(/Preferred work rights in Thailand\s*\n[^\n]*/i, "")
@@ -204,7 +203,7 @@ async function readApplication(
       resumeText,
       previouslyContacted,
       sourceStatus: status,
-      workRightsConfirmed,
+      workRightsAnswer,
     };
   } finally {
     await dialog
