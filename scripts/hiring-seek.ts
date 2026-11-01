@@ -218,6 +218,167 @@ export async function saveApplication(
   return !resumeFile || keepFile(candidateId, resumeFile);
 }
 
+/** Pause between candidates in a pass that opens many profiles. It is the worker's own 10-second watch step. */
+export const SEEK_PAUSE_MS = 10000;
+const SEEK_SIGNED_OUT = "SEEK is signed out. Run npm run hiring:worker -- --connect-seek, then start this again.";
+
+/** Signed in means SEEK stayed on the employer candidates page. A sign-in redirect leaves it. */
+export const seekSignedIn = (url: string) => {
+  try {
+    const { hostname, pathname } = new URL(url);
+    return hostname === "th.employer.seek.com" && pathname.startsWith("/candidates");
+  } catch {
+    return false;
+  }
+};
+
+type SeekCard = { page: Page; cards: ReturnType<Page["getByTestId"]>; index: number; id: string; status: string };
+
+/** Opens each status folder and walks every page of cards. `visit` decides what to do with one card. */
+async function walkSeek(
+  browser: Awaited<ReturnType<typeof chromium.launchPersistentContext>>,
+  jobId: string,
+  visit: (card: SeekCard) => Promise<void>,
+) {
+  let scanned = 0;
+  const page = browser.pages()[0] ?? (await browser.newPage());
+  await page.goto(`https://th.employer.seek.com/candidates/?jobid=${jobId}`);
+  if (!seekSignedIn(page.url())) throw new Error(SEEK_SIGNED_OUT);
+  const statusButtons = page.getByRole("button", {
+    name: /^(Inbox|Prescreen|Shortlist|Interview|Offer|Accept|Not Suitable).*applications?$/i,
+  });
+  const compactFilter = page
+    .getByText("Filter and search", { exact: true })
+    .filter({ visible: true })
+    .last();
+  const notice = page.getByRole("heading", {
+    name: "How to check references",
+    exact: true,
+  });
+  // Filters can hydrate after the first candidate card is visible.
+  try {
+    await Promise.race([
+      statusButtons.first().waitFor({ state: "visible" }),
+      compactFilter.waitFor({ state: "visible" }),
+      notice.waitFor({ state: "visible" }),
+    ]);
+  } catch (error) {
+    if (!seekSignedIn(page.url())) throw new Error(SEEK_SIGNED_OUT);
+    throw error;
+  }
+  if (await notice.isVisible()) {
+    await page
+      .getByRole("button", { name: "Close", exact: true })
+      .last()
+      .click();
+    await Promise.race([
+      statusButtons.first().waitFor({ state: "visible" }),
+      compactFilter.waitFor({ state: "visible" }),
+    ]);
+  }
+  let labels = await statusButtons.evaluateAll((elements) =>
+    elements.map((el) => (el as HTMLElement).innerText),
+  );
+  if (!labels.length) {
+    await compactFilter.click();
+    const filter = page.getByRole("dialog", {
+      name: "Filter applications by",
+    });
+    const region = filter.getByRole("region", {
+      name: "Status",
+      exact: true,
+    });
+    if (!(await region.isVisible()))
+      await filter
+        .getByRole("button", { name: "Status", exact: true })
+        .click();
+    labels = await region
+      .getByRole("button")
+      .evaluateAll((elements) =>
+        elements.map((el) => (el as HTMLElement).innerText),
+      );
+    await filter.getByRole("button", { name: "Close", exact: true }).click();
+  }
+  const folders = parseSeekFolderCounts(labels);
+  const allIds = new Set<string>();
+  for (const { status, count } of folders) {
+    if (!count) continue;
+    const filter = status === "Not Suitable" ? "Rejected" : status;
+    await page.goto(
+      `https://th.employer.seek.com/candidates/?jobid=${jobId}&s=${encodeURIComponent(filter)}`,
+      { waitUntil: "domcontentloaded" },
+    );
+    await page
+      .getByTestId("job-application-card")
+      .filter({ visible: true })
+      .locator(ID_CONTROL)
+      .first()
+      .waitFor({ state: "attached", timeout: 30000 });
+    const seenPages = new Set<string>();
+    let folderScanned = 0;
+    for (let p = 0; p < 200; p++) {
+      const cards = page
+        .getByTestId("job-application-card")
+        .filter({ visible: true });
+      const ids = await cards.evaluateAll(
+        (elements, selector) =>
+          elements.map((card) =>
+            (card.querySelector(selector)?.id ?? "")
+              .replace(/^checkbox-/, "")
+              .replace(/-move-to$/, ""),
+          ),
+        ID_CONTROL,
+      );
+      const pageKey = ids.join(",");
+      if (!ids.length || ids.some((id) => !id))
+        throw new Error(
+          `SEEK ${status} page ${p + 1} has no visible applications.`,
+        );
+      if (seenPages.has(pageKey))
+        throw new Error(
+          `SEEK ${status} page ${p + 1} repeated the previous page.`,
+        );
+      if (ids.some((id) => allIds.has(id)))
+        throw new Error(
+          `SEEK ${status} page ${p + 1} repeated an application from an earlier page or folder.`,
+        );
+      seenPages.add(pageKey);
+      folderScanned += ids.length;
+      scanned += ids.length;
+      for (let i = 0; i < ids.length; i++) {
+        allIds.add(ids[i]);
+        await visit({ page, cards, index: i, id: ids[i], status });
+      }
+      const next = page.getByRole("link", { name: "Next", exact: true });
+      if (!(await next.count())) break;
+      await next.click();
+      await page.waitForFunction(
+        ({ previous, selector }) => {
+          const card = [
+            ...document.querySelectorAll(
+              '[data-testid="job-application-card"]',
+            ),
+          ].find(
+            (card) =>
+              card.getClientRects().length > 0 &&
+              getComputedStyle(card).visibility !== "hidden",
+          );
+          const el = card?.querySelector(selector);
+          return !!el && !el.id.includes(previous);
+        },
+        { previous: ids[0], selector: ID_CONTROL },
+        { timeout: 30000 },
+      );
+      if (p === 199) throw new Error("SEEK page limit exceeded.");
+    }
+    if (folderScanned !== count)
+      throw new Error(
+        `SEEK ${status} count changed during import. Retry before sending messages.`,
+      );
+  }
+  return { scanned, folders };
+}
+
 export async function importSeek(
   profilePath: string,
   jobId: string,
@@ -233,158 +394,72 @@ export async function importSeek(
     acceptDownloads: true,
     viewport: { width: 1440, height: 1000 },
   });
-  let scanned = 0,
-    imported = 0,
+  let imported = 0,
     remaining = 0,
     resumeUploadsFailed = 0;
   try {
-    const page = browser.pages()[0] ?? (await browser.newPage());
-    await page.goto(`https://th.employer.seek.com/candidates/?jobid=${jobId}`);
-    const statusButtons = page.getByRole("button", {
-      name: /^(Inbox|Prescreen|Shortlist|Interview|Offer|Accept|Not Suitable).*applications?$/i,
-    });
-    const compactFilter = page
-      .getByText("Filter and search", { exact: true })
-      .filter({ visible: true })
-      .last();
-    const notice = page.getByRole("heading", {
-      name: "How to check references",
-      exact: true,
-    });
-    // Filters can hydrate after the first candidate card is visible.
-    await Promise.race([
-      statusButtons.first().waitFor({ state: "visible" }),
-      compactFilter.waitFor({ state: "visible" }),
-      notice.waitFor({ state: "visible" }),
-    ]);
-    if (await notice.isVisible()) {
-      await page
-        .getByRole("button", { name: "Close", exact: true })
-        .last()
-        .click();
-      await Promise.race([
-        statusButtons.first().waitFor({ state: "visible" }),
-        compactFilter.waitFor({ state: "visible" }),
-      ]);
-    }
-    let labels = await statusButtons.evaluateAll((elements) =>
-      elements.map((el) => (el as HTMLElement).innerText),
-    );
-    if (!labels.length) {
-      await compactFilter.click();
-      const filter = page.getByRole("dialog", {
-        name: "Filter applications by",
-      });
-      const region = filter.getByRole("region", {
-        name: "Status",
-        exact: true,
-      });
-      if (!(await region.isVisible()))
-        await filter
-          .getByRole("button", { name: "Status", exact: true })
-          .click();
-      labels = await region
-        .getByRole("button")
-        .evaluateAll((elements) =>
-          elements.map((el) => (el as HTMLElement).innerText),
-        );
-      await filter.getByRole("button", { name: "Close", exact: true }).click();
-    }
-    const folders = parseSeekFolderCounts(labels);
-    const allIds = new Set<string>();
-    for (const { status, count } of folders) {
-      if (!count) continue;
-      const filter = status === "Not Suitable" ? "Rejected" : status;
-      await page.goto(
-        `https://th.employer.seek.com/candidates/?jobid=${jobId}&s=${encodeURIComponent(filter)}`,
-        { waitUntil: "domcontentloaded" },
-      );
-      await page
-        .getByTestId("job-application-card")
-        .filter({ visible: true })
-        .locator(ID_CONTROL)
-        .first()
-        .waitFor({ state: "attached", timeout: 30000 });
-      const seenPages = new Set<string>();
-      let folderScanned = 0;
-      for (let p = 0; p < 200; p++) {
-        const cards = page
-          .getByTestId("job-application-card")
-          .filter({ visible: true });
-        const ids = await cards.evaluateAll(
-          (elements, selector) =>
-            elements.map((card) =>
-              (card.querySelector(selector)?.id ?? "")
-                .replace(/^checkbox-/, "")
-                .replace(/-move-to$/, ""),
-            ),
-          ID_CONTROL,
-        );
-        const pageKey = ids.join(",");
-        if (!ids.length || ids.some((id) => !id))
-          throw new Error(
-            `SEEK ${status} page ${p + 1} has no visible applications.`,
-          );
-        if (seenPages.has(pageKey))
-          throw new Error(
-            `SEEK ${status} page ${p + 1} repeated the previous page.`,
-          );
-        if (ids.some((id) => allIds.has(id)))
-          throw new Error(
-            `SEEK ${status} page ${p + 1} repeated an application from an earlier page or folder.`,
-          );
-        seenPages.add(pageKey);
-        folderScanned += ids.length;
-        scanned += ids.length;
-        for (let i = 0; i < ids.length; i++) {
-          const id = ids[i];
-          allIds.add(id);
-          if (knownIds.has(id)) {
-            const contacted =
-              (await cards
-                .nth(i)
-                .getByRole("button", { name: /^Emails? \([1-9]\d*\)$/ })
-                .count()) > 0;
-            await observe(id, status, contacted);
-          } else if (["Inbox", "Prescreen", "Shortlist"].includes(status)) {
-            if (imported >= 40) {
-              remaining++;
-              continue;
-            }
-            const read = await readApplication(page, cards.nth(i), jobId);
-            if (!(await saveApplication(read, consume, keepFile))) resumeUploadsFailed++;
-            knownIds.add(id);
-            imported++;
-          }
+    const { scanned, folders } = await walkSeek(browser, jobId, async ({ page, cards, index, id, status }) => {
+      if (knownIds.has(id)) {
+        const contacted =
+          (await cards
+            .nth(index)
+            .getByRole("button", { name: /^Emails? \([1-9]\d*\)$/ })
+            .count()) > 0;
+        await observe(id, status, contacted);
+      } else if (["Inbox", "Prescreen", "Shortlist"].includes(status)) {
+        if (imported >= 40) {
+          remaining++;
+          return;
         }
-        const next = page.getByRole("link", { name: "Next", exact: true });
-        if (!(await next.count())) break;
-        await next.click();
-        await page.waitForFunction(
-          ({ previous, selector }) => {
-            const card = [
-              ...document.querySelectorAll(
-                '[data-testid="job-application-card"]',
-              ),
-            ].find(
-              (card) =>
-                card.getClientRects().length > 0 &&
-                getComputedStyle(card).visibility !== "hidden",
-            );
-            const el = card?.querySelector(selector);
-            return !!el && !el.id.includes(previous);
-          },
-          { previous: ids[0], selector: ID_CONTROL },
-          { timeout: 30000 },
-        );
-        if (p === 199) throw new Error("SEEK page limit exceeded.");
+        const read = await readApplication(page, cards.nth(index), jobId);
+        if (!(await saveApplication(read, consume, keepFile))) resumeUploadsFailed++;
+        knownIds.add(id);
+        imported++;
       }
-      if (folderScanned !== count)
-        throw new Error(
-          `SEEK ${status} count changed during import. Retry before sending messages.`,
-        );
-    }
+    });
     return { scanned, imported, remaining, folders, resumeUploadsFailed };
+  } finally {
+    await browser.close();
+  }
+}
+
+/** Thrown from a visit to end the walk early and cleanly. */
+class PassStopped extends Error {}
+
+/**
+ * Read-only pass over every SEEK folder. For each card it asks `step` (see `createBackfillStep`) whether the profile still
+ * needs reading. The page actions are: open the job and each status folder by address, read the filter labels, open one
+ * candidate's detail panel by clicking the name, open its Profile tab, expand "More", open the Resumé tab and download the
+ * file, read the Emails tab label without opening it, close the panel, and click Next. It never clicks Move, the status
+ * controls, or the message controls, and it imports nobody.
+ */
+export async function backfillSeek(
+  profilePath: string,
+  jobId: string,
+  step: (
+    applicationId: string,
+    read: () => Promise<{ workRightsAnswer: string | null; file: ResumeFile | null }>,
+  ) => Promise<"read" | "skipped" | "stop">,
+) {
+  const browser = await chromium.launchPersistentContext(profilePath, {
+    channel: "chrome",
+    headless: true,
+    acceptDownloads: true,
+    viewport: { width: 1440, height: 1000 },
+  });
+  let stopped = false;
+  try {
+    await walkSeek(browser, jobId, async ({ page, cards, index, id }) => {
+      const outcome = await step(id, async () => {
+        const { application, resumeFile } = await readApplication(page, cards.nth(index), jobId);
+        return { workRightsAnswer: application.workRightsAnswer, file: resumeFile };
+      });
+      if (outcome === "stop") throw new PassStopped();
+    }).catch((error) => {
+      if (!(error instanceof PassStopped)) throw error;
+      stopped = true;
+    });
+    return { stopped };
   } finally {
     await browser.close();
   }

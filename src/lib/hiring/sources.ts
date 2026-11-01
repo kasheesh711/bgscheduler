@@ -20,6 +20,7 @@ import {
   type Stage,
 } from "./model";
 import { appInvited } from "./queue";
+import { storeResume, type ResumeFile } from "./resume-files";
 import { answerKey } from "./scoring";
 import { audit, inviteToMock, settings, sourceHash } from "./service";
 // The one copy stays in status.ts: client components import that file, and this one reaches the database.
@@ -94,7 +95,7 @@ export function legacyStage(row: unknown[]): Stage {
   return "review";
 }
 /** Remember a work-rights answer the settings have not seen, so Kevin can accept it there. It never accepts anything. */
-export async function recordWorkRightsAnswer(db: Database, answer: string | null) {
+export async function recordWorkRightsAnswer(db: Database, answer: string | null, actor = "seek-import") {
   const text = answer?.trim();
   if (!text) return;
   await db.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-settings'))`);
@@ -105,12 +106,12 @@ export async function recordWorkRightsAnswer(db: Database, answer: string | null
   const next = { ...config, seenWorkRights: [...config.seenWorkRights, text] };
   await db
     .insert(s.hiringSettings)
-    .values({ id: "default", config: next, revision: (row?.revision ?? 0) + 1, updatedBy: "seek-import" })
+    .values({ id: "default", config: next, revision: (row?.revision ?? 0) + 1, updatedBy: actor })
     .onConflictDoUpdate({
       target: s.hiringSettings.id,
-      set: { config: next, revision: (row?.revision ?? 0) + 1, updatedBy: "seek-import", updatedAt: new Date() },
+      set: { config: next, revision: (row?.revision ?? 0) + 1, updatedBy: actor, updatedAt: new Date() },
     });
-  await audit(db, "seek-import", "work-rights-seen", null, { answer: text });
+  await audit(db, actor, "work-rights-seen", null, { answer: text });
 }
 export async function importApplication(value: unknown, db: Database) {
   const input: Application = applicationSchema.parse(value);
@@ -589,4 +590,172 @@ export async function mirrorTracker(db: Database, config: HiringConfig) {
     rows,
     "RAW",
   );
+}
+
+// ---- One-time passes. Neither sends a message or changes a stage. ----
+
+const BACKFILL_ACTOR = "hiring-backfill";
+
+/** A pass that writes source data runs only while live hiring and messages are paused. */
+export async function assertAutomationOff(db: Database) {
+  const { config } = await settings(db);
+  if (config.enabled || config.deliveryEnabled) throw new Error("Pause live hiring and messages before this pass.");
+}
+
+const holdsApplication = (applicationId: string) =>
+  sql`${s.hiringCandidates.sourceIds} @> ${JSON.stringify([applicationId])}::jsonb`;
+
+/**
+ * The candidate a SEEK pass still has to read, or null. Null means: not one of ours, the file was deleted by retention,
+ * the candidate has an answer and a file, or an earlier pass already read the page (even if it showed no file).
+ */
+export async function backfillTodo(db: Database, applicationId: string) {
+  const c = s.hiringCandidates;
+  const [row] = await db
+    .select({ id: c.id, answer: c.workRightsAnswer, path: c.resumePath, storedAt: c.resumeStoredAt })
+    .from(c)
+    .where(holdsApplication(applicationId))
+    .limit(1);
+  if (!row || (!row.path && row.storedAt) || (row.answer !== null && row.path)) return null;
+  const [done] = await db
+    .select({ id: s.hiringAudit.id })
+    .from(s.hiringAudit)
+    .where(and(eq(s.hiringAudit.candidateId, row.id), eq(s.hiringAudit.action, "seek-backfill")))
+    .limit(1);
+  return done ? null : { candidateId: row.id };
+}
+
+/**
+ * Stores what a SEEK page showed: the exact work-rights answer and the original file. It writes only `work_rights_answer`,
+ * the résumé columns, `seenWorkRights` and one audit row. Stage, revision, `updated_at`, text, hashes, review note and outbox
+ * stay as they were, so nothing re-scores and nothing is sent. A different answer replaces the stored one and is never accepted.
+ */
+export async function applyBackfill(
+  db: Database,
+  applicationId: string,
+  { workRightsAnswer, file }: { workRightsAnswer: string | null; file: ResumeFile | null },
+) {
+  await assertAutomationOff(db);
+  const c = s.hiringCandidates;
+  const [row] = await db
+    .select({ id: c.id, path: c.resumePath, storedAt: c.resumeStoredAt })
+    .from(c)
+    .where(holdsApplication(applicationId))
+    .limit(1);
+  // Retention deleted this file on purpose, so it is not stored again.
+  if (!row || (!row.path && row.storedAt)) return;
+  // The file goes first. A failed upload throws before the audit row, so the next run reads this candidate again.
+  const store = !!file && !row.path;
+  if (store) await storeResume(row.id, file, db);
+  const text = workRightsAnswer?.trim() || null;
+  await withDatabaseTransaction(db, async (tx) => {
+    await recordWorkRightsAnswer(tx, text, BACKFILL_ACTOR);
+    const [now] = await tx.select({ answer: c.workRightsAnswer }).from(c).where(eq(c.id, row.id)).for("update");
+    const answer = !text ? "none" : now.answer === null ? "filled" : now.answer === text ? "same" : "replaced";
+    if (text && answer !== "same") await tx.update(c).set({ workRightsAnswer: text }).where(eq(c.id, row.id));
+    await audit(tx, BACKFILL_ACTOR, "seek-backfill", row.id, {
+      answer,
+      ...(answer === "replaced" ? { previous: now.answer } : {}),
+      file: store ? "stored" : "none",
+    });
+  });
+}
+
+/** The tabs the design names. Neither is read by the live sync. */
+const PEOPLE_TABS = [
+  { key: "sourcing", title: "Sourcing Log" },
+  { key: "scheduling", title: "Scheduling Responses" },
+] as const;
+type PeopleTab = (typeof PEOPLE_TABS)[number]["key"];
+
+/** People on one tab. The email (and name) columns are found by header text in the first rows, so a moved column fails loudly. */
+export function trackerPeople(rows: unknown[][]) {
+  const at = rows.slice(0, 5).findIndex((r) => r.some((v) => /e-?mail/i.test(String(v ?? ""))));
+  if (at < 0) throw new Error("Tracker headers changed. Review the source mapping.");
+  const head = rows[at].map((v) => String(v ?? ""));
+  const emailCol = head.findIndex((h) => /e-?mail/i.test(h));
+  const nameCol = head.findIndex((h) => /name/i.test(h) && !/e-?mail/i.test(h));
+  return rows.slice(at + 1).flatMap((row, i) =>
+    row.some((v) => String(v ?? "").trim())
+      ? [{ row: at + i + 2, email: normalizeEmail(row[emailCol]), name: nameCol >= 0 ? cell(row, nameCol) : "" }]
+      : [],
+  );
+}
+
+async function readPeople(config: HiringConfig) {
+  const properties = await listGoogleSheetProperties(config.connectedEmail, TRACKER_ID);
+  const found: { tab: PeopleTab; sourceTab: string; row: number; email: string | null; name: string }[] = [];
+  for (const { key, title } of PEOPLE_TABS) {
+    const tab = properties.find((p) => p.title === title);
+    if (!tab) throw new Error(`Required tracker tab is missing: ${title}`);
+    if (tab.rowCount > 10000) throw new Error("Tracker grew beyond the verified import range.");
+    const rows = await fetchGoogleSheetRange(config.connectedEmail, TRACKER_ID, `'${title}'!A1:AD${tab.rowCount}`);
+    for (const person of trackerPeople(rows)) found.push({ tab: key, sourceTab: title, ...person });
+  }
+  return found;
+}
+
+/** People on the two tabs who are not in the app, one per email per tab. Rows with no valid email are counted apart. */
+async function missingPeople(db: Database, config: HiringConfig) {
+  const known = new Set(
+    (await db.select({ email: s.hiringCandidates.email }).from(s.hiringCandidates).where(isNotNull(s.hiringCandidates.email)))
+      .map((r) => r.email!.trim().toLowerCase()),
+  );
+  const noEmail = { sourcing: 0, scheduling: 0 };
+  const seen = new Set<string>();
+  const missing: Awaited<ReturnType<typeof readPeople>> = [];
+  for (const person of await readPeople(config)) {
+    if (!person.email) noEmail[person.tab]++;
+    else if (!known.has(person.email) && !seen.has(`${person.tab}:${person.email}`)) {
+      seen.add(`${person.tab}:${person.email}`);
+      missing.push(person);
+    }
+  }
+  return { missing, noEmail };
+}
+
+/** Report only: it reads the app and the sheet and writes to neither. `sourcing` and `scheduling` count people missing from the app. */
+export async function reconcileTracker(db: Database, config: HiringConfig) {
+  const { missing, noEmail } = await missingPeople(db, config);
+  return {
+    sourcing: missing.filter((m) => m.tab === "sourcing").length,
+    scheduling: missing.filter((m) => m.tab === "scheduling").length,
+    missing: missing.map((m) => ({ sourceTab: m.sourceTab, row: m.row })),
+    noEmail,
+  };
+}
+
+/**
+ * Adds the people `reconcileTracker` reports, keyed by normalized email, so a rerun adds none. Each has earlier contact,
+ * stage `review`, no text, no score and no outbox row, so no queue can pick them. A tracker-only person has no SEEK
+ * application id and no applicant id (both unique columns stay null); a later SEEK import of the same email merges into the row.
+ */
+export async function importMissingTracker(db: Database, config: HiringConfig) {
+  await assertAutomationOff(db);
+  const { missing } = await missingPeople(db, config);
+  let added = 0;
+  const done = new Set<string>();
+  for (const person of missing) {
+    if (done.has(person.email!)) continue;
+    done.add(person.email!);
+    await withDatabaseTransaction(db, async (tx) => {
+      // The same lock as a SEEK import of this email, so the two cannot both create the row.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${"hiring-import:" + person.email}))`);
+      const [created] = await tx
+        .insert(s.hiringCandidates)
+        .values({
+          name: person.name || person.email!,
+          email: person.email,
+          previouslyContacted: true,
+          stage: "review",
+          reviewNote: "No source text",
+        })
+        .onConflictDoNothing({ target: s.hiringCandidates.email })
+        .returning({ id: s.hiringCandidates.id });
+      if (!created) return;
+      await audit(tx, BACKFILL_ACTOR, "tracker-import", created.id, { sourceTab: person.sourceTab, row: person.row });
+      added++;
+    });
+  }
+  return added;
 }
