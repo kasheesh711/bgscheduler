@@ -193,11 +193,14 @@ export async function dashboard(db: Database = getDb()) {
     db
       .select({
         id: s.hiringOutbox.id,
+        key: s.hiringOutbox.key,
         candidateId: s.hiringOutbox.candidateId,
         kind: s.hiringOutbox.kind,
         status: s.hiringOutbox.status,
         error: s.hiringOutbox.error,
         sentAt: s.hiringOutbox.sentAt,
+        // Never select the payload: it holds the email body.
+        workflowStage: sql<string | null>`${s.hiringOutbox.payload}->>'workflowStage'`,
       })
       .from(s.hiringOutbox)
       .orderBy(desc(s.hiringOutbox.createdAt))

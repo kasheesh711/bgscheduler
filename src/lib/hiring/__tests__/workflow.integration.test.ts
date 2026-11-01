@@ -16,6 +16,7 @@ import { configSchema, type Slot } from "../model";
 import { bookingToken } from "../tokens";
 import {
   bookInterview,
+  dashboard,
   reviewCandidate,
   saveSettings,
   settings,
@@ -138,6 +139,25 @@ const input = {
   teachingCommitmentConfirmed: true,
 };
 describe("hiring workflow persistence", () => {
+  it("does not return outbox payload from dashboard", async () => {
+    const [row] = await db
+      .insert(s.hiringCandidates)
+      .values({ name: "Private", email: "private@example.com", stage: "pre_screen" })
+      .returning();
+    await db.insert(s.hiringOutbox).values({
+      key: `${row.id}:pre-screen`,
+      candidateId: row.id,
+      kind: "email",
+      status: "sent",
+      sentAt: now,
+      payload: { to: "private@example.com", text: "SECRET BODY", workflowStage: "pre_screen" },
+    });
+    const { outbox } = await dashboard(db);
+    expect(outbox).toHaveLength(1);
+    expect(outbox[0]).toMatchObject({ key: `${row.id}:pre-screen`, workflowStage: "pre_screen" });
+    expect(outbox[0]).not.toHaveProperty("payload");
+    expect(JSON.stringify(outbox)).not.toContain("SECRET BODY");
+  });
   it("retries a held source only on explicit review retry and preserves its stage", async () => {
     const paused = { ...config, enabled: false, deliveryEnabled: false };
     const source = "degree subject curriculum teaching english Mathematics";

@@ -1,6 +1,7 @@
 "use client";
 
 import { averageValues, type buildInsights, RESULTS, STAGE_LABELS, type CriterionResult } from "@/lib/hiring/insights";
+import type { PreScreenState } from "@/lib/hiring/status";
 import type { CandidateFilter } from "./dashboard";
 import { Pentagon } from "./pentagon";
 import css from "./dashboard.module.css";
@@ -24,6 +25,15 @@ export const RESULT_CLASS: Record<CriterionResult, string> = {
   partial: css.resultPartial,
   not_met: css.resultNotMet,
   unknown: css.resultUnknown,
+};
+export const PILL_CLASS: Record<PreScreenState, string> = {
+  "Not sent": css.pillNone,
+  Queued: css.pillQueued,
+  Sent: css.pillSent,
+  Reminded: css.pillReminded,
+  Replied: css.pillReplied,
+  "No reply": css.pillNoReply,
+  "Earlier contact": css.pillNoReply,
 };
 const percent = (part: number, whole: number) => (whole ? Math.round((part / whole) * 100) : 0);
 const round = (value: number) => Math.round(value * 10) / 10;

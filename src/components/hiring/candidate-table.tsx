@@ -3,8 +3,9 @@
 import { useDeferredValue, useMemo, useState } from "react";
 import { ACTIVE_STAGES, CRITERIA, RESULTS, STAGE_LABELS } from "@/lib/hiring/insights";
 import type { HiringConfig, Stage } from "@/lib/hiring/model";
-import { NO_FILTER, type CandidateFilter, type HiringCandidate } from "./dashboard";
-import { CRITERION_LABELS, RESULT_CLASS, RESULT_LABELS, type Insights } from "./pipeline-charts";
+import { preScreenNote, visitText, type CandidateExtras } from "@/lib/hiring/status";
+import { NO_FILTER, type CandidateFilter, type HiringCandidate, type PreScreenFilter } from "./dashboard";
+import { CRITERION_LABELS, PILL_CLASS, RESULT_CLASS, RESULT_LABELS, type Insights } from "./pipeline-charts";
 import css from "./dashboard.module.css";
 
 type SortKey = "name" | "stage" | "score" | "updated";
@@ -21,8 +22,24 @@ const COLUMNS: [SortKey, string][] = [
   ["score", "Score"],
 ];
 
-/** The stage, score and subject filters. Search text stays inside the table. */
-export const matchesFilter = (c: HiringCandidate, filter: CandidateFilter, ready: Set<string>) =>
+const PRE_SCREEN_FILTERS: PreScreenFilter[] = ["all", "Queued", "Sent", "Replied", "No reply", "Visit booked"];
+// The Sent button covers Sent and Reminded; the pill still tells them apart.
+const matchesPreScreen = (extra: CandidateExtras | undefined, value: PreScreenFilter) =>
+  value === "all" ||
+  (value === "Visit booked"
+    ? !!extra?.visit
+    : value === "Sent"
+      ? extra?.pre.status === "Sent" || extra?.pre.status === "Reminded"
+      : extra?.pre.status === value);
+
+/** The stage, score, subject and pre-screen filters. Search text stays inside the table. */
+export const matchesFilter = (
+  c: HiringCandidate,
+  filter: CandidateFilter,
+  ready: Set<string>,
+  extras: Map<string, CandidateExtras>,
+) =>
+  matchesPreScreen(extras.get(c.id), filter.prescreen) &&
   (filter.stage === "all" || (filter.stage === "ready" ? ready.has(c.id) : c.stage === filter.stage)) &&
   (filter.bucket === null ||
     (c.profileScore !== null && Math.min(Math.floor(c.profileScore / 10) * 10, 90) === filter.bucket)) &&
@@ -32,6 +49,7 @@ export function CandidateTable({
   candidates,
   insights,
   ready,
+  extras,
   weights,
   threshold,
   filter,
@@ -42,6 +60,7 @@ export function CandidateTable({
   candidates: HiringCandidate[];
   insights: Insights;
   ready: Set<string>;
+  extras: Map<string, CandidateExtras>;
   weights: HiringConfig["profileWeights"];
   threshold: number;
   filter: CandidateFilter;
@@ -56,7 +75,7 @@ export function CandidateTable({
     const needle = deferred.trim().toLowerCase();
     const shown = candidates.filter(
       (c) =>
-        matchesFilter(c, filter, ready) &&
+        matchesFilter(c, filter, ready, extras) &&
         (!needle ||
           `${c.name} ${c.email ?? ""} ${STAGE_LABELS[c.stage]}`.toLowerCase().includes(needle)),
     );
@@ -74,7 +93,7 @@ export function CandidateTable({
       if (x === null || y === null) return x === y ? 0 : x === null ? 1 : -1;
       return (x < y ? -1 : x > y ? 1 : 0) * (sort.descending ? -1 : 1);
     });
-  }, [candidates, ready, filter, deferred, sort]);
+  }, [candidates, ready, extras, filter, deferred, sort]);
 
   const counts = Object.fromEntries(insights.stages.map((s) => [s.stage, s.at]));
   const tabs: [CandidateFilter["stage"], string, number][] = [
@@ -83,7 +102,10 @@ export function CandidateTable({
     ...ACTIVE_STAGES.map((s): [Stage, string, number] => [s, STAGE_LABELS[s], counts[s]]),
     ["stopped", STAGE_LABELS.stopped, insights.stopped],
   ];
-  const isFiltered = filter.bucket !== null || !!filter.subject || !!query;
+  const preCounts = PRE_SCREEN_FILTERS.map(
+    (value) => candidates.filter((c) => matchesPreScreen(extras.get(c.id), value)).length,
+  );
+  const isFiltered = filter.bucket !== null || !!filter.subject || filter.prescreen !== "all" || !!query;
 
   return (
     <section className={css.tableSection} aria-label="Candidates">
@@ -109,11 +131,26 @@ export function CandidateTable({
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
+      <div className={css.tableTools}>
+        <div className={css.tabs} role="group" aria-label="Filter by pre-screen status">
+          {PRE_SCREEN_FILTERS.map((value, i) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={filter.prescreen === value}
+              onClick={() => setFilter({ ...filter, prescreen: value })}
+            >
+              {value === "all" ? "All pre-screen" : value} <span className={css.tabCount}>{preCounts[i]}</span>
+            </button>
+          ))}
+        </div>
+      </div>
       {isFiltered && (
         <p className={css.activeFilters}>
           {rows.length} shown
           {filter.bucket !== null && ` · Score ${filter.bucket}–${filter.bucket === 90 ? 100 : filter.bucket + 9}`}
           {filter.subject && ` · ${filter.subject}`}
+          {filter.prescreen !== "all" && ` · ${filter.prescreen === "Visit booked" ? "Visit booked" : `Pre-screen ${filter.prescreen.toLowerCase()}`}`}
           <button
             type="button"
             className={css.inlineLink}
@@ -149,6 +186,9 @@ export function CandidateTable({
                   </button>
                 </th>
               ))}
+              <th>Pre-screen</th>
+              <th className={css.wideOnly}>Pre-screen score</th>
+              <th className={css.wideOnly}>Visit</th>
               <th className={css.wideOnly} title="Degree, Subject, Curriculum, Teaching, English">
                 <span className={css.evidenceHead}>
                   {CRITERIA.map((id) => (
@@ -172,6 +212,7 @@ export function CandidateTable({
           </thead>
           <tbody>
             {rows.map((c) => {
+              const extra = extras.get(c.id);
               const flags = [
                 c.previouslyContacted && "Contacted",
                 !c.email && "No email",
@@ -211,6 +252,24 @@ export function CandidateTable({
                         </span>
                       </span>
                     )}
+                  </td>
+                  <td>
+                    {extra && (
+                      <>
+                        <span className={`${css.pill} ${PILL_CLASS[extra.pre.status]}`}>{extra.pre.status}</span>
+                        <span className={css.pillNote}>{preScreenNote(extra.pre)}</span>
+                      </>
+                    )}
+                  </td>
+                  <td className={css.wideOnly}>
+                    {c.preScreenScore === null ? (
+                      <span className={css.mutedCell}>–</span>
+                    ) : (
+                      <span className={css.num}>{Math.round(c.preScreenScore * 10) / 10}</span>
+                    )}
+                  </td>
+                  <td className={`${css.wideOnly} ${extra?.visit ? "" : css.mutedCell}`}>
+                    {extra?.visit ? visitText(extra.visit) : "–"}
                   </td>
                   <td className={css.wideOnly}>
                     {c.profileAssessment ? (
