@@ -8,24 +8,11 @@ import {
   parseSeekFolderCounts,
   type Application,
 } from "../src/lib/hiring/model";
+import { readWorkRights, redactProfile, removeWorkRights } from "../src/lib/hiring/seek-text";
 
 const ID_CONTROL = 'input[id^="checkbox-"], button[id$="-move-to"]';
 
-export function redactProfile(text: string, name: string) {
-  return text
-    .replaceAll("\0", "")
-    .replaceAll(name, "[candidate]")
-    .split(/\r?\n/)
-    .filter(
-      (line) =>
-        !/(?:date of birth|nationality|marital status|religion|passport|gender|home address|salary|right to work)/i.test(
-          line,
-        ),
-    )
-    .join("\n")
-    .replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi, "[email]")
-    .replace(/(?:\+?\d[\d ()-]{8,}\d)/g, "[phone]");
-}
+export { redactProfile };
 async function documentText(file: string) {
   const data = await readFile(file);
   if (data.length > 15 * 1024 * 1024)
@@ -150,14 +137,13 @@ async function readApplication(
     }
     const full = await profile.innerText();
     const educationStart = full.indexOf("Career history");
-    // [^\S\n] skips spaces but not line breaks, so a blank answer never captures the next heading.
-    const rights =
-      full.match(/Preferred work rights in Thailand[^\S\n]*\n([^\n]*)/i)?.[1] ?? "";
-    // The import schema allows 300 characters.
-    const workRightsAnswer = rights.trim().slice(0, 300).trim() || null;
-    const cleaned = (educationStart >= 0 ? full.slice(educationStart) : full)
-      .replace(/Employment status[\s\S]*?(?=Application questions|$)/i, "")
-      .replace(/Preferred work rights in Thailand[^\S\n]*\n[^\n]*/i, "")
+    const workRightsAnswer = readWorkRights(full);
+    const cleaned = removeWorkRights(
+      (educationStart >= 0 ? full.slice(educationStart) : full).replace(
+        /Employment status[\s\S]*?(?=Application questions|$)/i,
+        "",
+      ),
+    )
       .replace(/Expected monthly salary\s*\n[^\n]*/i, "");
     const resume = dialog.getByRole("button", { name: "Resumé" });
     const resumeTab = dialog.getByRole("tab", { name: "Resumé" });

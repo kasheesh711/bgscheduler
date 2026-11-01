@@ -577,14 +577,37 @@ describe("pre-screen scoring", () => {
       ],
     };
     const source = "degree subject teaching english Mathematics Check understanding";
-    expect(validatePreScreenAssessment(six, source).criteria).toHaveLength(6);
+    const written = "Check understanding";
+    expect(validatePreScreenAssessment(six, source, written).criteria).toHaveLength(6);
     expect(preScreenAssessmentSchema.safeParse(assessment).success).toBe(false);
-    expect(() => validatePreScreenAssessment({ ...six, criteria: [...assessment.criteria, assessment.criteria[0]] }, source)).toThrow(/duplicate/);
-    expect(() => validatePreScreenAssessment({ ...six, criteria: [...six.criteria.slice(0, 5), { ...six.criteria[5], evidence: "invented" }] }, source)).toThrow(/source/);
+    expect(() => validatePreScreenAssessment({ ...six, criteria: [...assessment.criteria, assessment.criteria[0]] }, source, written)).toThrow(/duplicate/);
+    expect(() => validatePreScreenAssessment({ ...six, criteria: [...six.criteria.slice(0, 5), { ...six.criteria[5], evidence: "invented" }] }, source, written)).toThrow(/source/);
     const json = JSON.stringify(z.toJSONSchema(preScreenOutputSchema, { target: "draft-07" }));
     expect(json).toMatch(/briefSummary/);
     expect(preScreenOutputSchema.safeParse(six).success).toBe(false);
     expect(preScreenOutputSchema.safeParse({ ...six, briefSummary: "Short.", criteria: six.criteria.map((c) => ({ ...c, brief: "Short." })) }).success).toBe(true);
+  });
+  it("checks written evidence against the two written answers only", () => {
+    const source = "motivation: I like teaching\nteachingApproach: Ask what went wrong first\n\nApplication education and experience:\nTaught at Springfield School for ten years";
+    const written = "I like teaching\nAsk what went wrong first";
+    const base = (degree: string, evidence: string) => ({
+      ...assessment,
+      subjects: [],
+      criteria: [
+        ...assessment.criteria.map((c) => ({ ...c, evidence: c.id === "degree" ? degree : "I like teaching" })),
+        { id: "written", result: "met", evidence, reason: "Specific" },
+      ],
+    });
+    expect(validatePreScreenAssessment(base("I like teaching", "Ask what went wrong first"), source, written).criteria[5].evidence).toBe("Ask what went wrong first");
+    // The quote is in the source (the CV) but not in the written answers.
+    expect(() => validatePreScreenAssessment(base("I like teaching", "Taught at Springfield School"), source, written)).toThrow(/written/i);
+    // Other criteria may still quote the whole source.
+    expect(validatePreScreenAssessment(base("Taught at Springfield School", "I like teaching"), source, written).criteria).toHaveLength(6);
+  });
+  it("tells the model to count native only in the english field", () => {
+    expect(PRE_SCREEN_SYSTEM).toContain(
+      "Count the word native only in the english field. In any other text it is not evidence of proficiency.",
+    );
   });
   it("tells the model to score written answers on content only and keeps the rule against inferring English", () => {
     expect(PRE_SCREEN_SYSTEM.startsWith(ASSESSMENT_SYSTEM)).toBe(true);

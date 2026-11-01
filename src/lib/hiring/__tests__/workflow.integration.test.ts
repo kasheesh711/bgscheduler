@@ -357,6 +357,20 @@ describe("hiring workflow persistence", () => {
       expect(after.profileAssessment).toEqual({ ...stored(), summary: "Rescored." });
     });
   });
+  describe("switch-on guard", () => {
+    it("refuses to save with automation on, and still saves with it off", async () => {
+      const revision = (await settings(db)).row!.revision;
+      await expect(saveSettings({ ...config, enabled: true }, revision, "owner@example.com", db)).rejects.toThrow(/stays off/);
+      await expect(saveSettings({ ...config, enabled: true, deliveryEnabled: true }, revision, "owner@example.com", db)).rejects.toThrow(/stays off/);
+      expect((await settings(db)).row!.revision).toBe(revision);
+      await saveSettings({ ...config, enabled: false, deliveryEnabled: false, profileThreshold: 70 }, revision, "owner@example.com", db);
+      expect((await settings(db)).config.profileThreshold).toBe(70);
+    });
+    it("still reads a stored config that has automation on", async () => {
+      // beforeEach stored `config` with enabled true.
+      expect((await settings(db)).config.enabled).toBe(true);
+    });
+  });
   it("records an unseen work-rights answer for the settings and never accepts it", async () => {
     const other = "I am a long term / permanent resident with eligibility for a work permit";
     const application = (n: number, rights: string | null) => ({
@@ -461,7 +475,7 @@ describe("hiring workflow persistence", () => {
       await db.insert(s.hiringCandidates).values({ name: "No response", stage: "new", profileText: "x" });
       const assess = vi.fn(async () => six());
       expect(await scorePreScreens(db, paused, assess)).toBe(4);
-      expect(assess).toHaveBeenCalledWith(expect.stringContaining("teachingApproach: Check understanding"), expect.stringContaining(":pre:"), "pre-screen");
+      expect(assess).toHaveBeenCalledWith(expect.stringContaining("teachingApproach: Check understanding"), expect.stringContaining(":pre:"), "pre-screen", expect.any(String));
       const after = await db.select().from(s.hiringCandidates);
       expect(after.filter((c) => c.preScreenAssessment).map((c) => c.stage).sort()).toEqual(["new", "pre_screen", "review", "stopped"]);
       expect(after.find((c) => c.name === "No response")?.preScreenAssessment).toBeNull();
@@ -513,6 +527,97 @@ describe("hiring workflow persistence", () => {
       expect([row.stage, row.reviewNote]).toEqual([one.stage, "Human note"]);
       // A scored answer is not retried.
       expect(await scorePreScreens(db, paused, good, { candidateId: one.id, retryInvalid: true })).toBe(0);
+    });
+    it("redacts the candidate's name and contact details before the model sees the free text", async () => {
+      await db.update(s.hiringSettings).set({ config: paused }).where(eq(s.hiringSettings.id, "default"));
+      const [row] = await db
+        .insert(s.hiringCandidates)
+        .values({
+          name: "Pat Smith",
+          email: "pat@example.com",
+          stage: "review",
+          profileText: "Application text",
+          preScreen: {
+            ...pre,
+            motivation: "I am Pat Smith. Write to pat.smith@example.com.",
+            teachingApproach: "Pat Smith would ask what went wrong. Call +66 81 234 5678.",
+            englishEvidence: "Pat Smith, IELTS 8",
+            portfolio: "Pat Smith portfolio",
+          },
+        })
+        .returning();
+      const seen: { source: string; written?: string }[] = [];
+      const assess = vi.fn(async (source: string, _key: string, _kind?: string, written?: string) => {
+        seen.push({ source, written });
+        return six("would ask what went wrong");
+      });
+      expect(await scorePreScreens(db, paused, assess, { candidateId: row.id })).toBe(1);
+      expect(seen[0].source).not.toMatch(/Pat Smith|pat\.smith@|5678/);
+      expect(seen[0].source).toContain("motivation: I am [candidate]. Write to [email].");
+      expect(seen[0].source).toContain("[candidate] would ask what went wrong. Call [phone].");
+      expect(seen[0].written).not.toMatch(/Pat Smith/);
+      const [saved] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, row.id));
+      expect(saved.preScreenAssessment).not.toBeNull();
+    });
+    it("holds a written quote that comes from the CV rather than the written answers", async () => {
+      const [one] = await seed();
+      await db.update(s.hiringCandidates).set({ profileText: "Taught at Springfield School" }).where(eq(s.hiringCandidates.id, one.id));
+      const assess = vi.fn(async () => six("Taught at Springfield School"));
+      expect(await scorePreScreens(db, paused, assess, { candidateId: one.id })).toBe(1);
+      const [row] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, one.id));
+      expect(row.preScreenAssessment).toBeNull();
+      expect(row.preScreenHash).not.toBeNull();
+    });
+    it("leaves a university correction made during the model call alone", async () => {
+      const [one] = await seed();
+      const catalogHash = sourceHash(paused.universities);
+      const before = { name: "Before", country: "GB", rank: 5, edition: "2025-2026", fraction: 1, reason: "before", sources: [], catalogHash };
+      const corrected = { ...before, name: "Corrected", fraction: 0.5, reason: "corrected by a person" };
+      await db.update(s.hiringCandidates).set({ universityAssessment: before }).where(eq(s.hiringCandidates.id, one.id));
+      const assess = vi.fn(async () => {
+        // A correction does not change the row's revision.
+        await db.update(s.hiringCandidates).set({ universityAssessment: corrected }).where(eq(s.hiringCandidates.id, one.id));
+        return six();
+      });
+      expect(await scorePreScreens(db, paused, assess, { candidateId: one.id })).toBe(1);
+      const [row] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, one.id));
+      expect(row.preScreenAssessment).not.toBeNull();
+      expect(row.universityAssessment).toEqual(corrected);
+    });
+    it("recomputes a stale university result from the profile's universities, not the pre-screen's", async () => {
+      const catalog = [{ name: "Test University", aliases: [], country: "GB", rank: 5, edition: "2025-2026", sourceUrl: "https://example.com/rank" }];
+      const custom = configSchema.parse({ ...paused, universities: catalog });
+      await db.update(s.hiringSettings).set({ config: custom }).where(eq(s.hiringSettings.id, "default"));
+      const stale = { name: null, country: null, rank: null, edition: null, fraction: 0, reason: "old", sources: [], catalogHash: "old-catalog" };
+      const profileAssessment = {
+        criteria: ["degree", "subject", "curriculum", "teaching", "english"].map((id) => ({ id, result: "met", evidence: "x", reason: "r" })),
+        subjects: [],
+        universities: [{ name: "Test University", evidence: "x", completedDegree: true }],
+        summary: "s",
+      };
+      const [one] = await db
+        .insert(s.hiringCandidates)
+        .values({ name: "Stale", stage: "review", profileText: "Application text", preScreen: pre, universityAssessment: stale, profileAssessment: profileAssessment as never })
+        .returning();
+      // The pre-screen answer names no university.
+      expect(await scorePreScreens(db, custom, async () => six(), { candidateId: one.id })).toBe(1);
+      const [row] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, one.id));
+      expect(row.universityAssessment?.name).toBe("Test University");
+      expect(row.universityAssessment?.catalogHash).toBe(sourceHash(custom.universities));
+      const audit = (await db.select().from(s.hiringAudit)).find((a) => a.action === "pre-screen-score-only");
+      expect(audit?.detail).toMatchObject({ sourceHash: row.preScreenHash });
+    });
+    it("reports a finished answer that could not be stored", async () => {
+      const [one] = await seed();
+      const voided = vi.fn();
+      const assess = async () => {
+        await db.update(s.hiringSettings).set({ config: { ...paused, enabled: true } }).where(eq(s.hiringSettings.id, "default"));
+        return six();
+      };
+      expect(await scorePreScreens(db, paused, assess, { candidateId: one.id, onVoided: voided })).toBe(1);
+      expect(voided).toHaveBeenCalledTimes(1);
+      const [row] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, one.id));
+      expect(row.preScreenAssessment).toBeNull();
     });
     it("makes no model call while the rubric is not approved", async () => {
       await seed();
@@ -929,6 +1034,7 @@ describe("hiring workflow persistence", () => {
     expect(await db.select().from(s.hiringOutbox)).toHaveLength(1);
     const changed = {
       ...config,
+      enabled: false,
       deliveryEnabled: false,
       profileThreshold: 85,
       profileWeights: {

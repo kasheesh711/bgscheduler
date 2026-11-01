@@ -48,6 +48,10 @@ export async function saveSettings(
   db: Database = getDb(),
 ) {
   const config = configSchema.parse(value);
+  // PR C removes this. The old flow has no limits, pass score or hard stops.
+  // Only saving is refused: a stored `enabled: true` still parses and reads.
+  if (config.enabled)
+    throw new HiringError(409, "Automation stays off until the visit flow is released.");
   if (
     (config.enabled || config.deliveryEnabled) &&
     (!config.rubricApproved || !runtimeWritesAllowed())

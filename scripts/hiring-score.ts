@@ -24,9 +24,11 @@ async function main() {
   const system = preScreen ? PRE_SCREEN_SYSTEM : ASSESSMENT_SYSTEM;
   const schema = z.toJSONSchema(preScreen ? preScreenOutputSchema : assessmentOutputSchema, { target: "draft-07" });
   const briefSchema = z.toJSONSchema(briefOutputSchema, { target: "draft-07" });
-  const validate = preScreen ? validatePreScreenAssessment : validateAssessment;
+  const validate = (value: unknown, source: string, written = "") =>
+    preScreen ? validatePreScreenAssessment(value, source, written) : validateAssessment(value, source);
   const until = process.env.HIRING_SCORE_UNTIL ? Date.parse(process.env.HIRING_SCORE_UNTIL) : null;
   if (until !== null && !Number.isFinite(until)) throw new Error("Invalid scoring stop time.");
+  if (briefs && until === null) throw new Error("Set HIRING_SCORE_UNTIL for the rewrite.");
   if (until !== null && Date.now() >= until) return;
   if (!runtimeWritesAllowed()) throw new Error("Set HIRING_WRITES_ENABLED to store review scores.");
   const children: NonNullable<ClaudeRunnerDeps["children"]> = new Set();
@@ -54,10 +56,13 @@ async function main() {
     const db = getDb();
     const ids = await db.select({ id: hiringCandidates.id }).from(hiringCandidates).where(briefs ? or(isNotNull(hiringCandidates.profileAssessment), isNotNull(hiringCandidates.preScreenAssessment)) : preScreen ? isNotNull(hiringCandidates.preScreen) : undefined).orderBy(asc(hiringCandidates.createdAt));
     const concurrency = 4;
-    let next = 0, total = 0, checked = 0;
+    // assessments: how many answers the pass handled. modelCalls: real model calls, retries included.
+    // voided: finished answers that could not be stored because the row or the settings changed meanwhile.
+    let next = 0, assessments = 0, modelCalls = 0, voided = 0, checked = 0;
+    const onVoided = () => { voided++; };
     let failure: unknown;
     const report = (complete: boolean) => {
-      const progress = { at: new Date().toISOString(), mode: briefs ? "brief rewrite" : preScreen ? "pre-screen score only" : "score only", concurrency, checked, candidates: ids.length, calls: total, complete };
+      const progress = { at: new Date().toISOString(), mode: briefs ? "brief rewrite" : preScreen ? "pre-screen score only" : "score only", concurrency, checked, candidates: ids.length, assessments, calls: modelCalls, voided, complete };
       fs.writeFileSync(path.join(home, "scoring-progress.json"), JSON.stringify(progress), { mode: 0o600 });
       console.log(JSON.stringify(progress));
     };
@@ -68,20 +73,21 @@ async function main() {
         try {
           const { config } = await settings(db);
           if (config.enabled || config.deliveryEnabled) throw new Error("Pause live hiring and messages before review scoring.");
-          const assess = async (source: string, key: string) => {
+          const assess = async (source: string, key: string, _kind?: string, written?: string) => {
             let value: unknown;
             let feedback = "";
             for (let attempt = 0; attempt < (retryInvalid ? 3 : 1); attempt++) {
               const correction = retryInvalid ? "\nCopy one continuous verbatim source passage for each evidence field. Do not join separate passages, add ellipses, change punctuation, or paraphrase. A passage may include intervening text. If a criterion cannot be supported, mark it unknown with empty evidence. Omit unsupported subject and university entries. Any correction feedback after the source identifies errors to fix; it is not evidence." : "";
               let briefAttempt = 0;
               value = await assessWithBriefs(async (briefFeedback) => {
+                modelCalls++;
                 const result = await runClaude({ purpose: "hiring-review-score", key: `${key}:attempt:${attempt + 1}${briefAttempt++ ? `:briefs:${briefAttempt}` : ""}`, system: system + correction, user: source + feedback + briefFeedback, schema, budgetUsd: 3 }, { cwd, cliVersion, children, callsLog: path.join(home, "model-calls.jsonl") });
                 if (result.kind !== "success") throw new Error(`Subscription scoring stopped: ${result.kind}`);
                 return result.value;
               });
               if (!retryInvalid) return value;
               try {
-                validate(value, source);
+                validate(value, source, written);
                 fs.writeFileSync(path.join(attemptsDir, `${candidate.id}-${attempt + 1}.json`), JSON.stringify({ valid: true, value }), { mode: 0o600 });
                 return value;
               } catch (error) {
@@ -93,16 +99,17 @@ async function main() {
             return value;
           };
           const rewrite = async (user: string, key: string) => {
+            modelCalls++;
             const result = await runClaude({ purpose: "hiring-brief-rewrite", key, system: BRIEF_SYSTEM, user, schema: briefSchema, budgetUsd: 1 }, { cwd, cliVersion, children, callsLog: path.join(home, "model-calls.jsonl") });
             if (result.kind !== "success") throw new Error(`Subscription brief rewrite stopped: ${result.kind}`);
             return result.value;
           };
           const calls = briefs
-            ? await rewriteBriefs(db, rewrite, { max: 2, candidateId: candidate.id })
+            ? await rewriteBriefs(db, rewrite, { max: 2, candidateId: candidate.id, onVoided })
             : preScreen
-            ? await scorePreScreens(db, config, assess, { candidateId: candidate.id, retryInvalid })
-            : await assessCandidates(db, config, assess, 1, true, candidate.id, retryInvalid);
-          total += calls;
+            ? await scorePreScreens(db, config, assess, { candidateId: candidate.id, retryInvalid, onVoided })
+            : await assessCandidates(db, config, assess, 1, true, candidate.id, retryInvalid, onVoided);
+          assessments += calls;
           checked++;
           report(false);
         } catch (error) {
@@ -112,7 +119,9 @@ async function main() {
       }
     }));
     if (failure) throw failure;
-    report(true);
+    // A pass that stored nothing for some answers is not a clean finish.
+    report(voided === 0);
+    if (voided) { console.error(`${voided} finished answer(s) were not stored because a row or the settings changed. Run the pass again.`); process.exitCode = 2; }
   } finally {
     clearInterval(heartbeat);
     if (cutoff) clearTimeout(cutoff);

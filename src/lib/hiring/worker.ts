@@ -45,6 +45,7 @@ import {
 } from "./service";
 import { deliverCalendar } from "./google";
 import { syncTracker, mirrorTracker } from "./sources";
+import { redactProfile } from "./seek-text";
 import { assessPrestige } from "./prestige";
 
 /** `kind` tells the runner which prompt and JSON schema to use. */
@@ -52,6 +53,8 @@ export type Assess = (
   source: string,
   key: string,
   kind?: "profile" | "pre-screen",
+  /** Pre-screen only: the two written answers as they appear in `source`. */
+  written?: string,
 ) => Promise<unknown>;
 const escape = (s: string) =>
   s.replace(
@@ -61,14 +64,22 @@ const escape = (s: string) =>
         c
       ]!,
   );
-export function preScreenText(
-  pre: NonNullable<typeof s.hiringCandidates.$inferSelect.preScreen>,
-) {
+type PreScreenRow = NonNullable<typeof s.hiringCandidates.$inferSelect.preScreen>;
+// The candidate's own words. Names and contact details in them are redacted like SEEK text before a model sees them.
+const FREE_TEXT = ["motivation", "teachingApproach", "englishEvidence", "portfolio"];
+export function preScreenText(pre: PreScreenRow, name: string) {
   return Object.entries(pre)
     .filter(([key]) => !["sourceRow", "submittedAt"].includes(key))
-    .map(([key, value]) => `${key}: ${value}`)
+    .map(([key, value]) => `${key}: ${FREE_TEXT.includes(key) ? redactProfile(String(value), name) : value}`)
     .join("\n");
 }
+/** The two written answers, redacted the same way, for the `written` evidence check. */
+export const writtenText = (pre: PreScreenRow, name: string) =>
+  `${redactProfile(pre.motivation, name)}\n${redactProfile(pre.teachingApproach, name)}`;
+const preScreenSource = (c: typeof s.hiringCandidates.$inferSelect) =>
+  preScreenText(c.preScreen!, c.name) +
+  "\n\nApplication education and experience:\n" +
+  c.profileText;
 
 export async function assessCandidates(
   db: Database,
@@ -78,6 +89,8 @@ export async function assessCandidates(
   scoreOnly = false,
   candidateId?: string,
   retryInvalid = false,
+  // Called when a finished model answer could not be stored because the row or the settings changed meanwhile.
+  onVoided?: () => void,
 ) {
   const rows = await db
     .select()
@@ -89,11 +102,7 @@ export async function assessCandidates(
     if (calls >= max) break;
     const phase = !scoreOnly && candidate.preScreen ? "pre" : "profile";
     const source =
-      phase === "pre"
-        ? preScreenText(candidate.preScreen!) +
-          "\n\nApplication education and experience:\n" +
-          candidate.profileText
-        : candidate.profileText;
+      phase === "pre" ? preScreenSource(candidate) : candidate.profileText;
     if (!source.trim()) continue;
     const hash = sourceHash(source);
     const oldHash =
@@ -110,12 +119,13 @@ export async function assessCandidates(
         source,
         `${candidate.id}:${phase}:${hash}`,
         phase === "pre" ? "pre-screen" : "profile",
+        phase === "pre" ? writtenText(candidate.preScreen!, candidate.name) : undefined,
       );
       calls++;
       try {
         assessment =
           phase === "pre"
-            ? validatePreScreenAssessment(value, source)
+            ? validatePreScreenAssessment(value, source, writtenText(candidate.preScreen!, candidate.name))
             : validateAssessment(value, source);
       } catch {
         await withDatabaseTransaction(db, async (tx) => {
@@ -146,6 +156,7 @@ export async function assessCandidates(
               candidate.id,
               { sourceHash: hash, phase },
             );
+          else onVoided?.();
         });
         continue;
       }
@@ -169,8 +180,10 @@ export async function assessCandidates(
         (scoreOnly ? current.config.enabled || current.config.deliveryEnabled : !current.config.enabled) ||
         !current.config.rubricApproved ||
         !runtimeWritesAllowed()
-      )
+      ) {
+        onVoided?.();
         return;
+      }
       const update =
         phase === "pre"
           ? { preScreenHash: hash, preScreenAssessment: assessment as PreScreenAssessment }
@@ -303,7 +316,12 @@ export async function scorePreScreens(
   db: Database,
   config: HiringConfig,
   assess: Assess,
-  opts: { candidateId?: string; retryInvalid?: boolean } = {},
+  opts: {
+    candidateId?: string;
+    retryInvalid?: boolean;
+    /** Called when a finished model answer could not be stored because the row or the settings changed meanwhile. */
+    onVoided?: () => void;
+  } = {},
 ) {
   if (config.enabled || config.deliveryEnabled)
     throw new Error("Pause live hiring and messages before pre-screen scoring.");
@@ -322,10 +340,8 @@ export async function scorePreScreens(
   const catalogHash = sourceHash(config.universities);
   let calls = 0;
   for (const candidate of rows) {
-    const source =
-      preScreenText(candidate.preScreen!) +
-      "\n\nApplication education and experience:\n" +
-      candidate.profileText;
+    const source = preScreenSource(candidate);
+    const written = writtenText(candidate.preScreen!, candidate.name);
     const hash = sourceHash(source);
     // An unchanged response is not scored again. One whose answer failed validation is retried only on request.
     if (
@@ -333,20 +349,25 @@ export async function scorePreScreens(
       (candidate.preScreenAssessment || !opts.retryInvalid)
     )
       continue;
-    const value = await assess(source, `${candidate.id}:pre:${hash}`, "pre-screen");
+    const value = await assess(source, `${candidate.id}:pre:${hash}`, "pre-screen", written);
     calls++;
     let assessment: PreScreenAssessment | null = null;
     try {
-      assessment = validatePreScreenAssessment(value, source);
+      assessment = validatePreScreenAssessment(value, source, written);
     } catch {
       // The hash is saved so a bad answer is not paid for twice. The note and the stage stay as they are.
     }
-    // Keep the prestige the profile already earned. Only a missing or stale one is recomputed.
-    const prestige =
-      assessment &&
-      (candidate.universityAssessment?.catalogHash === catalogHash
-        ? candidate.universityAssessment
-        : await assessPrestige(assessment.universities, config, catalogHash));
+    // Leave the stored university result alone: a person may correct it while the model runs, and a stale copy would
+    // overwrite that. Only a missing or old-catalog result is recomputed, from the profile's universities, because the
+    // profile pass skips a row whose catalog hash is current.
+    const recomputed =
+      assessment && candidate.universityAssessment?.catalogHash !== catalogHash
+        ? await assessPrestige(
+            (candidate.profileAssessment ?? assessment).universities,
+            config,
+            catalogHash,
+          )
+        : null;
     await withDatabaseTransaction(db, async (tx) => {
       await tx.execute(
         sql`select id from hiring_candidates where id=${candidate.id} for update`,
@@ -360,14 +381,16 @@ export async function scorePreScreens(
         current.config.deliveryEnabled ||
         !current.config.rubricApproved ||
         !runtimeWritesAllowed()
-      )
+      ) {
+        opts.onVoided?.();
         return;
+      }
       await tx
         .update(s.hiringCandidates)
         .set({
           preScreenHash: hash,
           preScreenAssessment: assessment,
-          ...(prestige ? { universityAssessment: prestige } : {}),
+          ...(recomputed ? { universityAssessment: recomputed } : {}),
         })
         .where(eq(s.hiringCandidates.id, candidate.id));
       await audit(
@@ -377,12 +400,12 @@ export async function scorePreScreens(
         candidate.id,
         {
           sourceHash: hash,
-          ...(assessment && prestige
+          ...(assessment
             ? {
                 score: preScreenPoints(
                   assessment,
                   current.config.preScreenWeights,
-                  prestige.fraction,
+                  (recomputed ?? candidate.universityAssessment)?.fraction ?? 0,
                   availabilityFraction(candidate.preScreen!),
                 ).total,
               }
@@ -414,7 +437,12 @@ const withBriefs = <T extends Assessment | PreScreenAssessment>(
 export async function rewriteBriefs(
   db: Database,
   rewrite: Rewrite,
-  opts: { max: number; candidateId?: string },
+  opts: {
+    max: number;
+    candidateId?: string;
+    /** Called when a finished rewrite could not be stored because the row or the settings changed meanwhile. */
+    onVoided?: () => void;
+  },
 ) {
   const paused = (c: HiringConfig) => !c.enabled && !c.deliveryEnabled;
   if (!paused((await settings(db)).config))
@@ -476,8 +504,10 @@ export async function rewriteBriefs(
           !paused(current.config) ||
           !runtimeWritesAllowed() ||
           JSON.stringify(fresh[field]) !== JSON.stringify(assessment)
-        )
+        ) {
+          opts.onVoided?.();
           return;
+        }
         await tx
           .update(s.hiringCandidates)
           .set(
