@@ -19,6 +19,7 @@ import {
   preScreenAssessmentSchema,
   preScreenPoints,
   profileScore,
+  topHiringSubject,
   assessmentSchema,
   assessmentOutputSchema,
   preScreenOutputSchema,
@@ -586,7 +587,7 @@ describe("profile gate", () => {
   const gate = (extra = {}, over = {}) => profileGate({ ...base, ...extra }, { ...config, profileThreshold: 60, ...over });
   it("passes with a partial degree and names the subject", () => {
     const partial = { ...strong, criteria: strong.criteria.map((c) => (c.id === "degree" || c.id === "subject" ? { ...c, result: "partial" as const } : c)) };
-    expect(gate({ profileAssessment: partial }, { profileThreshold: 0 })).toEqual({ eligible: true, reasons: [], subject: "Mathematics" });
+    expect(gate({ profileAssessment: partial }, { profileThreshold: 0 })).toEqual({ eligible: true, reasons: [], review: [], subject: "Mathematics" });
     expect(gate().eligible).toBe(true);
   });
   it("refuses a not_met degree, a low score, and a missing assessment", () => {
@@ -600,6 +601,28 @@ describe("profile gate", () => {
     expect(gate({ workRightsAnswer: null }).eligible).toBe(false);
     expect(gate({ email: null }).eligible).toBe(false);
     expect(gate({ profileAssessment: { ...strong, subjects: [{ ...strong.subjects[0], relevant: false }] } }).eligible).toBe(false);
+  });
+  it("separates what a setting can cure from what goes to review", () => {
+    const notMet = { ...strong, criteria: strong.criteria.map((c) => (c.id === "degree" ? { ...c, result: "not_met" as const } : c)) };
+    const closed = { subjectPriority: [{ subject: "Mathematics" as const, hiring: false }] };
+    // A setting or a re-read cures these, so they wait.
+    expect(gate({}, closed)).toMatchObject({ eligible: false, review: [], subject: null });
+    expect(gate({ workRightsAnswer: "other" })).toMatchObject({ eligible: false, review: [] });
+    expect(gate({ workRightsAnswer: null })).toMatchObject({ eligible: false, review: [] });
+    expect(gate({}, { profileThreshold: 99 })).toMatchObject({ eligible: false, review: [] });
+    expect(gate({ profileAssessment: null })).toMatchObject({ eligible: false, review: [] });
+    // These do not change with a setting.
+    expect(gate({ profileAssessment: notMet }, { profileThreshold: 0 }).review).toHaveLength(1);
+    expect(gate({ profileAssessment: { ...strong, subjects: [] } }).review).toHaveLength(1);
+    expect(gate({ profileAssessment: { ...strong, subjects: [{ ...strong.subjects[0], relevant: false }] } }, closed).review).toHaveLength(1);
+    expect(gate({ email: null }).review).toHaveLength(1);
+    expect(gate({ previouslyContacted: true }).review).toHaveLength(1);
+    expect(gate({ workRightsAnswer: null, email: null }).reasons).toHaveLength(2);
+  });
+  it("counts a subject missing from the saved list as not hiring", () => {
+    expect(topHiringSubject(["Mathematics"], [])).toBeNull();
+    expect(topHiringSubject(["Mathematics", "Physics"], [{ subject: "Physics", hiring: true }])).toBe("Physics");
+    expect(gate({}, { subjectPriority: [{ subject: "Physics", hiring: true }] })).toMatchObject({ eligible: false, review: [], subject: null });
   });
   it("refuses a not-hiring subject and earlier contact, and picks the highest-ranked hiring subject", () => {
     const two = { ...strong, subjects: [

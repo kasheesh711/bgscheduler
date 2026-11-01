@@ -77,6 +77,8 @@ type InsightInput = {
  * Who may receive the pre-screen form: a profile score at or above the threshold, an accepted work-rights answer,
  * a usable email, no earlier contact, a supported subject that is still hiring, and a degree that is not `not_met`.
  * `subject` is the highest-ranked hiring subject the profile supports.
+ * `review` lists the reasons no setting can cure, which send a `new` row to review. A row with only other reasons waits at
+ * `new`, because the next cycle re-runs this gate and a changed setting or a re-read answer lets it through.
  */
 export function profileGate(
   candidate: Pick<
@@ -84,13 +86,16 @@ export function profileGate(
     "email" | "previouslyContacted" | "workRightsAnswer" | "profileAssessment" | "universityAssessment"
   >,
   config: GateConfig,
-): { eligible: boolean; reasons: string[]; subject: Subject | null } {
+): { eligible: boolean; reasons: string[]; review: string[]; subject: Subject | null } {
   const reasons: string[] = [];
+  const review: string[] = [];
+  const final = (reason: string) => {
+    reasons.push(reason);
+    review.push(reason);
+  };
   const assessment = candidate.profileAssessment;
-  const subject = topHiringSubject(
-    (assessment?.subjects ?? []).filter((s) => s.relevant).map((s) => s.subject),
-    config.subjectPriority,
-  );
+  const relevant = (assessment?.subjects ?? []).filter((s) => s.relevant).map((s) => s.subject);
+  const subject = topHiringSubject(relevant, config.subjectPriority);
   if (!assessment) reasons.push("The profile is not scored.");
   else {
     if (
@@ -99,14 +104,15 @@ export function profileGate(
     )
       reasons.push("The profile score is below the threshold.");
     if (assessment.criteria.some((c) => c.id === "degree" && c.result === "not_met"))
-      reasons.push("The degree criterion is not met.");
-    if (!subject) reasons.push("No supported subject is open for hiring.");
+      final("The degree criterion is not met.");
+    if (!relevant.length) final("The profile supports no subject.");
+    else if (!subject) reasons.push("No supported subject is open for hiring.");
   }
   if (!workRightsAccepted(candidate.workRightsAnswer, config.acceptedWorkRights))
     reasons.push("The work-rights answer is missing or not accepted.");
-  if (!candidate.email) reasons.push("There is no usable email.");
-  if (candidate.previouslyContacted) reasons.push("There was earlier contact.");
-  return { eligible: reasons.length === 0, reasons, subject };
+  if (!candidate.email) final("There is no usable email.");
+  if (candidate.previouslyContacted) final("There was earlier contact.");
+  return { eligible: reasons.length === 0, reasons, review, subject };
 }
 
 /** Mirrors the queue's gate for sending a new profile the pre-screen form. */

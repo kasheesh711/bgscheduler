@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, exists, inArray, isNotNull, isNull, ne, notExists, sql } from "drizzle-orm";
+import { and, asc, desc, eq, exists, inArray, isNotNull, isNull, ne, notExists, or, sql } from "drizzle-orm";
 import { type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -23,6 +23,7 @@ import {
   hardStops,
   preScreenPoints,
   profileScore,
+  supportedVisitSubjects,
   visitSubject,
 } from "./scoring";
 import {
@@ -42,9 +43,11 @@ const DAY = 86400000;
 const isForm = sql`${o.key} = ${o.candidateId}::text || ':pre-screen'`;
 // A reminder carries the same stage so that a stage change cancels it, but it is not a new invitation.
 const isOnsiteInvite = sql`${o.payload}->>'workflowStage' = 'onsite_invited' and ${o.key} not like '%:visit-reminder:%'`;
-const lockQueue = (tx: Database) => tx.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-queue'))`);
+/** Every release, click and follow-up takes this one lock, so they cannot share out the same place. */
+export const lockQueue = (tx: Database) => tx.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-queue'))`);
+// Rows queued while delivery is paused would all leave in one delivery call, so nothing is queued then.
 const allowed = (config: HiringConfig) =>
-  config.enabled && config.rubricApproved && runtimeWritesAllowed();
+  config.enabled && config.deliveryEnabled && config.rubricApproved && runtimeWritesAllowed();
 
 /**
  * Reads Postgres directly, never the capped dashboard list. Every outbox status but `cancelled` counts as used, because
@@ -99,6 +102,16 @@ export async function readLimitUsage(db: Database, funnel: Funnel, now: Date): P
   return usage;
 }
 
+/** The app has invited this candidate: a live form row, or a visit invitation at any status, which a click can send with no form. */
+export async function appInvited(db: Database, candidateId: string) {
+  const rows = await db
+    .select({ id: o.id })
+    .from(o)
+    .where(and(eq(o.candidateId, candidateId), or(and(isForm, ne(o.status, "cancelled")), isOnsiteInvite)))
+    .limit(1);
+  return rows.length > 0;
+}
+
 /** The form row's send time. A row not yet sent, or not known to be sent, has no time, so no follow-up clock runs. */
 export async function formSentAt(db: Database, candidateId: string) {
   const [form] = await db
@@ -118,7 +131,8 @@ const preScreenTotal = (candidate: Candidate, config: HiringConfig) =>
 
 /**
  * What a reply means for an automatic invitation (design calls 9 and 17).
- * `hold`: a person decides, with the reason. `wait`: nothing decides yet. `ready`: it may enter the onsite queue.
+ * `hold`: a person decides, with the reason. `wait`: a setting can still cure it, so the row keeps its stage and the next
+ * cycle looks again. `ready`: it may enter the onsite queue.
  */
 export function replyCheck(
   candidate: Candidate,
@@ -130,8 +144,8 @@ export function replyCheck(
   if (!pre || !assessment) return { kind: "wait" };
   const { stops } = hardStops(pre, answer, normalizeSubjects(pre.subjects), config);
   if (stops.length) return hold(stops.join(" "));
-  const subject = visitSubject(pre, answer, assessment, config);
-  if (!subject) return hold("No named subject is supported and open for hiring.");
+  if (!supportedVisitSubjects(pre, answer, assessment, config).length)
+    return hold("No named subject is supported by the assessment.");
   if (!sentAt) return hold("This response has no matching form send. A person decides.");
   if (!candidate.email) return hold("There is no usable email.");
   if (candidate.previouslyContacted) return hold("There was earlier contact. A person decides.");
@@ -143,7 +157,9 @@ export function replyCheck(
   const score = preScreenTotal(candidate, config);
   if (score < config.preScreenThreshold)
     return hold(`The pre-screen score ${score} is below the pass score ${config.preScreenThreshold}.`);
-  return { kind: "ready", subject, score };
+  // Opening the subject or adding a head cures this.
+  const subject = visitSubject(pre, answer, assessment, config);
+  return subject ? { kind: "ready", subject, score } : { kind: "wait" };
 }
 
 export const autoInviteEligible = (candidate: Candidate, sentAt: Date | null, config: HiringConfig) =>
@@ -259,7 +275,7 @@ export async function runFollowUps(db: Database, now = new Date()) {
     const { config } = await settings(tx);
     let reminded = 0,
       expired = 0;
-    if (!allowed(config) || !config.deliveryEnabled) return { reminded, expired };
+    if (!allowed(config)) return { reminded, expired };
     const passed = (sentAt: Date, days: number) => now.getTime() - sentAt.getTime() >= days * DAY;
 
     const forms = await tx

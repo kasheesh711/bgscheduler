@@ -11,9 +11,10 @@ import {
 } from "@/lib/sales-dashboard/sheets";
 import { configSchema, HiringError, type HiringConfig } from "../model";
 import { readBookingToken } from "../tokens";
-import { inviteToVisit, reviewCandidate, type Candidate } from "../service";
+import { inviteToVisit, reviewCandidate, sourceHash, type Candidate } from "../service";
+import { readyToInvite } from "../insights";
 import { isNewFlow, parseFormTimestamp, syncTracker } from "../sources";
-import { assessCandidates, deliverOutbox, runHiringCycle } from "../worker";
+import { assessCandidates, deliverOutbox, preScreenText, runHiringCycle } from "../worker";
 import {
   autoInviteEligible,
   onsiteQueue,
@@ -438,9 +439,11 @@ describe("form queue", () => {
     const queue = await preScreenQueue(db, config);
     expect(queue.map((e) => e.id)).toEqual([paused.id]);
   });
-  it("releases nothing unless automation, the rubric and the write gate all allow it", async () => {
+  it("releases nothing unless automation, delivery, the rubric and the write gate all allow it", async () => {
     await seed();
     await setConfig({ enabled: false });
+    expect((await releaseQueues(db)).preScreen).toBe(0);
+    await setConfig({ deliveryEnabled: false });
     expect((await releaseQueues(db)).preScreen).toBe(0);
     await setConfig({ rubricApproved: false });
     expect((await releaseQueues(db)).preScreen).toBe(0);
@@ -454,10 +457,26 @@ describe("form queue", () => {
     await assessCandidates(db, config, async () => five());
     expect((await candidate(row.id)).stage).toBe("new");
     expect(await outbox()).toEqual([]);
-    const low = await seed({ profileAssessment: null, workRightsAnswer: "Other" });
+    const low = await seed({ profileAssessment: null, previouslyContacted: true });
     await assessCandidates(db, config, async () => five());
     expect((await candidate(low.id)).stage).toBe("review");
     expect(await outbox()).toEqual([]);
+  });
+  it("adds no row over four days while delivery is paused, and starts at the daily limit on resume", async () => {
+    await setConfig({ deliveryEnabled: false });
+    for (let i = 0; i < 8; i++) await seed();
+    const waiting = await replied();
+    const before = await outbox();
+    for (let day = 0; day < 4; day++) {
+      vi.setSystemTime(after(day));
+      expect(await releaseQueues(db)).toEqual({ preScreen: 0, onsite: 0 });
+      expect(await runFollowUps(db)).toEqual({ reminded: 0, expired: 0 });
+      expect(await runHiringCycle(db, (_s, _k, kind) => assessment(kind))).toMatchObject({ preScreen: 0, onsite: 0, reminded: 0, expired: 0 });
+    }
+    expect(await outbox()).toEqual(before);
+    expect((await candidate(waiting.id)).stage).toBe("pre_screen");
+    await setConfig({ preScreenLimits: { perDay: 5, perWeek: 15, waiting: 15, perSubject: 8 } });
+    expect(await releaseQueues(db)).toEqual({ preScreen: 5, onsite: 1 });
   });
 });
 
@@ -760,13 +779,99 @@ describe("reply rule", () => {
     expect(saved.visitSubject).toBe("Physics");
     expect((await readLimitUsage(db, "onsite", now)).bySubject).toEqual({ Physics: 1 });
   });
-  it("sends a candidate with no such subject to review, not the onsite queue", async () => {
+  it("waits on a not-hiring result, and invites without a stage change when the subject opens", async () => {
     await setConfig({ subjectPriority: [{ subject: "Mathematics", hiring: false }] });
-    const row = await replied({ preScreenHash: null });
-    await assessCandidates(db, await settingsConfig(), async (_s, _k, kind) => assessment(kind));
-    expect((await candidate(row.id)).stage).toBe("review");
-    expect((await releaseQueues(db)).onsite).toBe(0);
+    const row = await replied({ preScreenHash: null, preScreenAssessment: null });
+    await runHiringCycle(db, (_s, _k, kind) => assessment(kind));
+    expect((await candidate(row.id)).stage).toBe("pre_screen");
+    expect(await onsiteQueue(db, await settingsConfig())).toEqual([]);
     expect(await invites()).toEqual([]);
+    const assess = vi.fn(async (_s: string, _k: string, kind?: string) => assessment(kind));
+    await setConfig({});
+    await runHiringCycle(db, assess);
+    expect(assess).not.toHaveBeenCalled();
+    expect((await candidate(row.id)).stage).toBe("onsite_invited");
+  });
+  it("still moves a low score to review when the subject is not hiring", async () => {
+    await setConfig({ preScreenThreshold: 95, subjectPriority: [{ subject: "Mathematics", hiring: false }] });
+    const row = await replied({ preScreenHash: null, preScreenAssessment: null });
+    await runHiringCycle(db, (_s, _k, kind) => assessment(kind));
+    expect((await candidate(row.id)).reviewNote).toMatch(/below the pass score/);
+  });
+  it("sends a candidate with no supported subject to review, not the onsite queue", async () => {
+    const unsupported = { ...six(), subjects: [{ subject: "Mathematics", evidence: "Mathematics", relevant: false }] };
+    const row = await replied({ preScreenHash: null, preScreenAssessment: null });
+    await runHiringCycle(db, async () => unsupported);
+    const saved = await candidate(row.id);
+    expect(saved.stage).toBe("review");
+    expect(saved.reviewNote).toMatch(/supported/);
+    expect(await invites()).toEqual([]);
+  });
+  it("keeps the visit subject to a subject with a head, and waits when none has one", async () => {
+    await setConfig({
+      subjectPriority: [
+        { subject: "Biology", hiring: true },
+        { subject: "Mathematics", hiring: true },
+      ],
+    });
+    const both = await replied({
+      preScreen: { ...pre, subjects: "Biology, Mathematics" },
+      preScreenAssessment: six(["Biology", "Mathematics"]) as never,
+    });
+    const biology = await replied({
+      preScreen: { ...pre, subjects: "Biology" },
+      preScreenAssessment: null,
+    });
+    await runHiringCycle(db, async (source) =>
+      six(source.includes("Biology, Mathematics") ? ["Biology", "Mathematics"] : ["Biology"]),
+    );
+    expect((await candidate(both.id)).visitSubject).toBe("Mathematics");
+    const waiting = await candidate(biology.id);
+    expect(waiting.stage).toBe("pre_screen");
+    expect(waiting.visitSubject).toBeNull();
+    expect((await invites()).map((j) => j.candidateId)).toEqual([both.id]);
+    // A click cannot spend a link on a page with no slots either.
+    const current = await settingsConfig();
+    await expect(withDatabaseTransaction(db, (tx) => inviteToVisit(tx, waiting, current, "click"))).rejects.toThrow(/subject/);
+    // Adding a head cures it, on the next cycle, with no model call.
+    const assess = vi.fn(async () => six(["Biology"]));
+    await setConfig({
+      subjectPriority: current.subjectPriority,
+      interviewers: [...current.interviewers, { canonicalKey: "Gift", email: "gift@example.com", subjects: ["Biology"] }],
+    });
+    await runHiringCycle(db, assess);
+    expect(assess).not.toHaveBeenCalled();
+    const invited = await candidate(biology.id);
+    expect([invited.stage, invited.visitSubject]).toEqual(["onsite_invited", "Biology"]);
+  });
+  it("counts a subject missing from the saved list as not hiring, for a release and for a click", async () => {
+    await setConfig({ subjectPriority: [{ subject: "Physics", hiring: true }] });
+    const current = await settingsConfig();
+    const fresh = await seed();
+    expect(await preScreenQueue(db, current)).toEqual([]);
+    const row = await replied();
+    expect(await onsiteQueue(db, current)).toEqual([]);
+    await expect(withDatabaseTransaction(db, (tx) => inviteToVisit(tx, row, current, "click"))).rejects.toThrow(/subject/);
+    expect(await releaseQueues(db)).toEqual({ preScreen: 0, onsite: 0 });
+    expect((await candidate(fresh.id)).stage).toBe("new");
+    expect((await candidate(row.id)).stage).toBe("pre_screen");
+  });
+  it("handles a reply that arrived during a pause when automation resumes", async () => {
+    const row = await seed({ stage: "pre_screen", subjects: ["Mathematics"] });
+    await formRow(row.id, { sentAt: after(-10), createdAt: after(-10) });
+    await setConfig({ enabled: false, deliveryEnabled: false });
+    await expect(runHiringCycle(db, (_s, _k, kind) => assessment(kind))).rejects.toThrow(/not enabled/);
+    expect((await candidate(row.id)).stage).toBe("pre_screen");
+    // The form time is 5 days after the send, inside the pause, and the send is now past the 7-day expiry.
+    tracker({ pre: [preRow(row.email!, "30/10/2026, 05:00:00")] });
+    await setConfig({});
+    const result = await runHiringCycle(db, (_s, _k, kind) => assessment(kind));
+    expect(result).toMatchObject({ reminded: 0, expired: 0, onsite: 1 });
+    const saved = await candidate(row.id);
+    expect(saved.preScreenRepliedAt?.toISOString()).toBe("2026-10-30T05:00:00.000Z");
+    expect(saved.stage).toBe("onsite_invited");
+    const audits = await db.select().from(s.hiringAudit);
+    expect(audits.filter((a) => a.action === "no-reply")).toEqual([]);
   });
   it("does not offer an onsite place to a subject at its limit, and passes it for the next subject", async () => {
     await setConfig({
@@ -829,6 +934,23 @@ describe("tracker guard", () => {
     expect(jobs[0].payload.workflowStage).toBe("paper_passed");
     expect(jobs[0].key).toContain(":tracker-mock:");
   });
+  it("treats a click-invited candidate with no form row as new flow, at any invite status", async () => {
+    const row = await seed({ stage: "review", preScreen: pre, preScreenAssessment: six() as never, subjects: ["Mathematics"], trackerHash: "old" });
+    await withDatabaseTransaction(db, (tx) => inviteToVisit(tx, row, config, "click-key"));
+    await db.update(s.hiringCandidates).set({ stage: "stopped" }).where(eq(s.hiringCandidates.id, row.id));
+    await db.update(s.hiringOutbox).set({ status: "cancelled" }).where(eq(s.hiringOutbox.key, "click-key"));
+    tracker({ recruit: [paperPass(row.email!)] });
+    await syncTracker(db, config);
+    const saved = await candidate(row.id);
+    expect(saved.stage).toBe("stopped");
+    expect(saved.paperPassedSubjects).toEqual([]);
+    expect((await outbox()).map((j) => j.key)).toEqual(["click-key"]);
+    // The paper path sees the same fact.
+    await db.update(s.hiringCandidates).set({ stage: "review" }).where(eq(s.hiringCandidates.id, row.id));
+    await expect(
+      reviewCandidate(row.id, { revision: saved.revision, action: "advance", subjects: ["Mathematics"], reason: "Checked by a person" }, "r@example.com", db),
+    ).rejects.toThrow(/visit flow/);
+  });
   it("treats an old stage as old-flow even when the old worker sent the form", () => {
     expect(isNewFlow({ stage: "paper_invited" }, true)).toBe(false);
     expect(isNewFlow({ stage: "mock_booked" }, true)).toBe(false);
@@ -862,6 +984,115 @@ describe("no paper invitation in the new flow", () => {
     await deliverOutbox(db, config);
     expect(sendEmail).not.toHaveBeenCalled();
     expect((await outbox())[0].status).toBe("cancelled");
+  });
+});
+
+describe("profile gate sweep", () => {
+  const text = "degree subject curriculum teaching english Mathematics";
+  const scored = (values: Values = {}) => seed({ profileText: text, profileHash: sourceHash(text), ...values });
+  const noModel = vi.fn(async (): Promise<unknown> => {
+    throw new Error("The model must not be called.");
+  });
+  const moves = async () => (await db.select().from(s.hiringAudit)).filter((a) => a.action === "move-to-review");
+  const notMet = { ...five(), criteria: five().criteria.map((c) => (c.id === "degree" ? { ...c, result: "not_met" } : c)) };
+  const ready = async (row: Candidate) =>
+    readyToInvite({ ...(await candidate(row.id)), profileScore: null }, await settingsConfig());
+  beforeEach(() => {
+    noModel.mockClear();
+  });
+  it.each<[string, Values, Partial<HiringConfig>, (row: Candidate) => Promise<unknown>]>([
+    ["a not-hiring subject", {}, { subjectPriority: [{ subject: "Mathematics", hiring: false }] }, () => setConfig({})],
+    [
+      "a work-rights answer not accepted",
+      { workRightsAnswer: "Other" },
+      {},
+      () => setConfig({ acceptedWorkRights: [ACCEPTED, "Other"] }),
+    ],
+    [
+      "a missing work-rights answer",
+      { workRightsAnswer: null },
+      {},
+      (row) => db.update(s.hiringCandidates).set({ workRightsAnswer: ACCEPTED }).where(eq(s.hiringCandidates.id, row.id)),
+    ],
+    ["a score below the threshold", {}, { profileThreshold: 90 }, () => setConfig({})],
+  ])("%s stays new and out of the queue, then enters after the change", async (_name, values, patch, cure) => {
+    await setConfig(patch);
+    const row = await scored(values);
+    for (let cycle = 0; cycle < 2; cycle++) await runHiringCycle(db, noModel);
+    const held = await candidate(row.id);
+    expect([held.stage, held.revision, held.reviewNote]).toEqual(["new", row.revision, null]);
+    expect(await preScreenQueue(db, await settingsConfig())).toEqual([]);
+    expect(await ready(row)).toBe(false);
+    expect(await outbox()).toEqual([]);
+    expect(await moves()).toEqual([]);
+    await cure(row);
+    expect((await preScreenQueue(db, await settingsConfig())).map((e) => e.id)).toEqual([row.id]);
+    expect(await ready(row)).toBe(true);
+    expect((await candidate(row.id)).stage).toBe("new");
+    expect(await runHiringCycle(db, noModel)).toMatchObject({ preScreen: 1 });
+    expect((await candidate(row.id)).stage).toBe("pre_screen");
+    expect(await forms()).toHaveLength(1);
+    expect(noModel).not.toHaveBeenCalled();
+  });
+  it.each<[string, Values, RegExp]>([
+    ["a degree that is not met", { profileAssessment: notMet as never }, /degree/i],
+    ["no supported subject", { profileAssessment: five([]) as never }, /supports no subject/],
+    ["no email", { email: null }, /email/],
+    ["earlier contact", { previouslyContacted: true }, /earlier contact/],
+  ])("%s moves to review, with an audit row of the reasons, though the hash did not change", async (_name, values, reason) => {
+    const row = await scored(values);
+    await runHiringCycle(db, noModel);
+    const saved = await candidate(row.id);
+    expect(saved.stage).toBe("review");
+    expect(saved.revision).toBe(row.revision + 1);
+    expect(saved.reviewNote).toMatch(reason);
+    const audits = await moves();
+    expect(audits).toHaveLength(1);
+    expect(audits[0].candidateId).toBe(row.id);
+    expect((audits[0].detail as { reasons: string[] }).reasons.join(" ")).toMatch(reason);
+    await runHiringCycle(db, noModel);
+    expect(await moves()).toHaveLength(1);
+    expect(noModel).not.toHaveBeenCalled();
+  });
+  it("names every real reason when a curable and a final failure come together", async () => {
+    const row = await scored({ profileAssessment: notMet as never, workRightsAnswer: null });
+    await runHiringCycle(db, noModel);
+    const saved = await candidate(row.id);
+    expect(saved.stage).toBe("review");
+    expect(saved.reviewNote).toMatch(/degree/i);
+    expect(saved.reviewNote).toMatch(/work-rights/);
+  });
+  it("audits a reply moved to review, though the hash did not change", async () => {
+    const row = await replied({ preScreen: { ...pre, degree: "Below Bachelor's" } });
+    await db
+      .update(s.hiringCandidates)
+      .set({ preScreenHash: sourceHash(preScreenText(row.preScreen!, row.name) + "\n\nApplication education and experience:\n" + row.profileText) })
+      .where(eq(s.hiringCandidates.id, row.id));
+    await runHiringCycle(db, noModel);
+    expect(noModel).not.toHaveBeenCalled();
+    expect((await candidate(row.id)).stage).toBe("review");
+    expect(await moves()).toHaveLength(1);
+  });
+  it("leaves 335 new candidates with no work-rights answer at new, with nothing sent and no model call", async () => {
+    const rows = Array.from({ length: 335 }, (_, i) => ({
+      name: `Bulk ${i}`,
+      email: `bulk${i}@example.com`,
+      profileText: text,
+      profileHash: sourceHash(text),
+      profileAssessment: five() as never,
+      workRightsAnswer: null,
+    }));
+    await db.insert(s.hiringCandidates).values(rows);
+    const result = await runHiringCycle(db, noModel);
+    expect(result).toMatchObject({ calls: 0, preScreen: 0, onsite: 0 });
+    expect(noModel).not.toHaveBeenCalled();
+    const all = await db.select({ stage: s.hiringCandidates.stage }).from(s.hiringCandidates);
+    const counts = Object.fromEntries(
+      [...new Set(all.map((c) => c.stage))].map((stage) => [stage, all.filter((c) => c.stage === stage).length]),
+    );
+    expect(counts).toEqual({ new: 335 });
+    expect(await outbox()).toEqual([]);
+    expect(await moves()).toEqual([]);
   });
 });
 

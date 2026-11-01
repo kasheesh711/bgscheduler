@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import { type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -19,6 +19,7 @@ import {
   type HiringConfig,
   type Stage,
 } from "./model";
+import { appInvited } from "./queue";
 import { audit, inviteToBooking, settings, sourceHash } from "./service";
 // The one copy stays in status.ts: client components import that file, and this one reaches the database.
 import { parseFormTimestamp } from "./status";
@@ -27,25 +28,12 @@ export { parseFormTimestamp };
 const NEW_FLOW_STAGES: Stage[] = ["onsite_invited", "onsite_booked", "no_reply", "no_booking"];
 const OLD_FLOW_STAGES: Stage[] = ["paper_invited", "paper_booked", "paper_passed", "mock_booked"];
 /**
- * A new-flow candidate is one whom the app sent the form, or who is at a visit stage. The tracker changes nothing for
+ * A new-flow candidate is one whom the app invited (see `appInvited`), or who is at a visit stage. The tracker changes nothing for
  * them. An old stage stays old-flow even if the earlier worker sent that candidate the form.
  */
 export const isNewFlow = (candidate: { stage: Stage }, appFormSent: boolean) =>
   NEW_FLOW_STAGES.includes(candidate.stage) ||
   (appFormSent && !OLD_FLOW_STAGES.includes(candidate.stage));
-/** A queued form counts as sent here: it can leave at any moment, and a tracker row must not move the candidate first. */
-async function appFormSent(db: Database, candidateId: string) {
-  const rows = await db
-    .select({ id: s.hiringOutbox.id })
-    .from(s.hiringOutbox)
-    .where(
-      and(
-        eq(s.hiringOutbox.key, `${candidateId}:pre-screen`),
-        ne(s.hiringOutbox.status, "cancelled"),
-      ),
-    );
-  return rows.length > 0;
-}
 
 const cell = (row: unknown[], index: number) => String(row[index] ?? "").trim();
 export function preScreenRows(rows: unknown[][]) {
@@ -303,7 +291,7 @@ export async function syncTracker(db: Database, config: HiringConfig) {
         .from(s.hiringCandidates)
         .where(eq(s.hiringCandidates.email, email));
       if (existing?.trackerHash === hash) return;
-      if (existing && isNewFlow(existing, await appFormSent(tx, existing.id))) {
+      if (existing && isNewFlow(existing, await appInvited(tx, existing.id))) {
         await tx
           .update(s.hiringCandidates)
           .set({ trackerHash: hash })
@@ -455,7 +443,7 @@ export async function syncTracker(db: Database, config: HiringConfig) {
     let [candidate] = await applicant(eq(s.hiringCandidates.applicantId, cell(row, 0)));
     if (!candidate && email)
       [candidate] = await applicant(eq(s.hiringCandidates.email, email));
-    if (candidate && isNewFlow(candidate, await appFormSent(db, candidate.id)))
+    if (candidate && isNewFlow(candidate, await appInvited(db, candidate.id)))
       continue;
     const subjects = normalizeSubjects(cell(row, 2));
     const key = cell(row, 3).replace(/^Kru\s+/i, "");

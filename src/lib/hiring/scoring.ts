@@ -250,24 +250,34 @@ export function hardStops(
     );
   return { stops, subjects };
 }
-/** The highest-ranked subject that is still hiring. A subject missing from the saved list is hiring and ranks last. */
+/** The highest-ranked subject that is hiring. A subject missing from the saved list is not hiring, as in `releaseQueue`. */
 export function topHiringSubject(subjects: Subject[], priority: HiringConfig["subjectPriority"]): Subject | null {
-  const rank = (subject: Subject) => {
-    const at = priority.findIndex((p) => p.subject === subject);
-    return at < 0 ? { hiring: true, at: priority.length } : { hiring: priority[at].hiring, at };
-  };
-  return subjects.filter((s) => rank(s).hiring).sort((a, b) => rank(a).at - rank(b).at)[0] ?? null;
+  const rank = (subject: Subject) => priority.findIndex((p) => p.subject === subject && p.hiring);
+  return subjects.filter((s) => rank(s) >= 0).sort((a, b) => rank(a) - rank(b))[0] ?? null;
 }
-/** The one subject of a visit: named on the form, not stopped, supported by the assessment, and the highest-ranked that is hiring. */
+/** Subjects named on the form, not stopped and supported by the assessment. No setting can add to this list. */
+export function supportedVisitSubjects(
+  pre: PreScreen,
+  answer: string | null,
+  assessment: Pick<PreScreenAssessment, "subjects">,
+  config: HiringConfig,
+): Subject[] {
+  const supported = assessment.subjects.filter((s) => s.relevant).map((s) => s.subject);
+  return hardStops(pre, answer, normalizeSubjects(pre.subjects), config).subjects.filter((s) => supported.includes(s));
+}
+/** The one subject of a visit: the highest-ranked supported subject that is hiring and has a head, so a link never opens on a page with no slots. */
 export function visitSubject(
   pre: PreScreen,
   answer: string | null,
   assessment: Pick<PreScreenAssessment, "subjects">,
   config: HiringConfig,
 ): Subject | null {
-  const supported = assessment.subjects.filter((s) => s.relevant).map((s) => s.subject);
-  const { subjects } = hardStops(pre, answer, normalizeSubjects(pre.subjects), config);
-  return topHiringSubject(subjects.filter((s) => supported.includes(s)), config.subjectPriority);
+  return topHiringSubject(
+    supportedVisitSubjects(pre, answer, assessment, config).filter((s) =>
+      config.interviewers.some((i) => i.subjects.includes(s)),
+    ),
+    config.subjectPriority,
+  );
 }
 
 const SUMMARY_WORDS = 25;

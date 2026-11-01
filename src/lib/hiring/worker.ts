@@ -193,11 +193,13 @@ export async function assessCandidates(
         return;
       }
       // This step only stores results and moves a row to review. Sends leave through the queue.
-      const toReview = (reviewNote: string) =>
-        tx
+      const toReview = async (reasons: string[]) => {
+        await tx
           .update(s.hiringCandidates)
-          .set({ stage: "review", reviewNote, revision: fresh.revision + 1, updatedAt: new Date() })
+          .set({ stage: "review", reviewNote: reasons.join(" "), revision: fresh.revision + 1, updatedAt: new Date() })
           .where(eq(s.hiringCandidates.id, candidate.id));
+        await audit(tx, "hiring-worker", "move-to-review", candidate.id, { phase, reasons });
+      };
       if (phase === "pre") {
         // A person's review stays as it is. A response at `new` has no matching send, so it goes to review too.
         if (["new", "pre_screen", "no_reply"].includes(fresh.stage)) {
@@ -210,20 +212,20 @@ export async function assessCandidates(
             await formSentAt(tx, candidate.id),
             current.config,
           );
-          if (check.kind === "hold") await toReview(check.reason);
+          if (check.kind === "hold") await toReview([check.reason]);
         }
-      } else if (
-        fresh.stage === "new" &&
-        !profileGate(
+      } else if (fresh.stage === "new") {
+        const gate = profileGate(
           {
             ...fresh,
             profileAssessment: assessment as Assessment,
             universityAssessment: prestige,
           },
           current.config,
-        ).eligible
-      )
-        await toReview("Profile evidence needs review; no rejection was sent.");
+        );
+        // A failure a setting can cure stays at `new`: this sweep runs on every row each cycle, and review has no way back.
+        if (gate.review.length) await toReview(gate.reasons);
+      }
       if (oldHash !== hash)
         await audit(
           tx,

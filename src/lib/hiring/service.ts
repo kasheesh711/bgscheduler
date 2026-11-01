@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -28,7 +28,7 @@ import {
 import { googleConnectionStatus } from "./google";
 import { bookingToken, readBookingToken, VISIT_LINK_DAYS } from "./tokens";
 import { blockingLimit, type LimitName } from "./limits";
-import { readLimitUsage } from "./queue";
+import { appInvited, lockQueue, readLimitUsage } from "./queue";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -215,7 +215,7 @@ export async function inviteToVisit(
   key: string,
   now = new Date(),
 ) {
-  await tx.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-queue'))`);
+  await lockQueue(tx);
   const [c] = await tx
     .select()
     .from(s.hiringCandidates)
@@ -237,7 +237,7 @@ export async function inviteToVisit(
   if (stops.length) throw new HiringError(409, stops.join(" "));
   const subject = visitSubject(c.preScreen, c.workRightsAnswer, c.preScreenAssessment, config);
   if (!subject)
-    throw new HiringError(409, "No supported subject is open for hiring.");
+    throw new HiringError(409, "No supported subject is open for hiring with a head.");
   const limit = blockingLimit("onsite", subject, await readLimitUsage(tx, "onsite", now), config);
   if (limit)
     throw new HiringError(409, `The onsite limit "${LIMIT_TEXT[limit]}" is full. Raise the number to send more.`);
@@ -777,23 +777,12 @@ export async function reviewCandidate(
             409,
             "A stopped candidate must be reviewed before a new application.",
           );
-        // The app sent this candidate the form, so they are on the visit flow and never get a paper invitation.
-        if (c.preScreen) {
-          const [form] = await tx
-            .select({ id: s.hiringOutbox.id })
-            .from(s.hiringOutbox)
-            .where(
-              and(
-                eq(s.hiringOutbox.key, `${id}:pre-screen`),
-                ne(s.hiringOutbox.status, "cancelled"),
-              ),
-            );
-          if (form)
-            throw new HiringError(
-              409,
-              "This candidate is on the visit flow. A paper invitation cannot be sent.",
-            );
-        }
+        // The app invited this candidate, so they are on the visit flow and never get a paper invitation.
+        if (c.preScreen && (await appInvited(tx, id)))
+          throw new HiringError(
+            409,
+            "This candidate is on the visit flow. A paper invitation cannot be sent.",
+          );
         const [updated] = await tx
           .update(s.hiringCandidates)
           .set({
