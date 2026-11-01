@@ -21,7 +21,7 @@ const assessment = (extra: { brief?: string; briefSummary?: string } = {}): Asse
   summary: "LONG SUMMARY TEXT",
   briefSummary: extra.briefSummary,
 });
-const inspect = (profileAssessment: Assessment) =>
+const inspect = (profileAssessment: Assessment, preScreenAssessment: Assessment | null = null) =>
   renderToStaticMarkup(
     <CandidateInspector
       candidate={
@@ -35,7 +35,7 @@ const inspect = (profileAssessment: Assessment) =>
           paperPassedSubjects: [],
           profileScore: 80,
           profileAssessment,
-          preScreenAssessment: null,
+          preScreenAssessment,
           universityAssessment: null,
         } as unknown as HiringCandidate
       }
@@ -79,6 +79,19 @@ describe("Pentagon", () => {
     for (const line of ["No evidence", "→ Partial"]) expect(html.match(new RegExp(`>${line}</text>`, "g"))).toHaveLength(5);
     expect(html).not.toContain(">No evidence → Partial</text>");
   });
+  it("keeps two-line text clear of the top apex and inside the view box", () => {
+    const html = renderToStaticMarkup(
+      <Pentagon shapes={[]} labels={DSCTE.map((name) => ({ name, value: "No evidence → Partial" }))} />,
+    );
+    const view = html.match(/viewBox="(\S+) (\S+) (\S+) (\S+)"/)!.slice(1).map(Number);
+    const ys = [...html.matchAll(/<text [^>]*y="([\d.-]+)"/g)].map((m) => Number(m[1]));
+    // Texts come in corner order: name, then two value lines. The apex is at y = 28.
+    expect(ys.slice(0, 3)).toHaveLength(3);
+    expect(Math.max(...ys.slice(0, 3))).toBeLessThanOrEqual(28 - 6);
+    // 13px names rise about 10 units above their baseline, and 12px values drop about 3 below it.
+    expect(Math.min(...ys) - 10).toBeGreaterThanOrEqual(view[1]);
+    expect(Math.max(...ys) + 3).toBeLessThanOrEqual(view[1] + view[3]);
+  });
 });
 
 describe("averageValues", () => {
@@ -95,7 +108,20 @@ describe("AveragePentagon", () => {
   it("shows a percentage at each corner", () => {
     const html = renderToStaticMarkup(<AveragePentagon candidates={[{ profileAssessment: assessment() }]} />);
     expect(html).toContain("Degree: 100%");
-    expect(html).toContain("Average DSCTE pentagon for 1 scored candidates");
+    expect(html).toContain("Average DSCTE pentagon for 1 scored candidate in this filter");
+    expect(html).toContain("1 scored candidate in this filter");
+  });
+  it("uses the plural for several candidates", () => {
+    const html = renderToStaticMarkup(
+      <AveragePentagon candidates={[{ profileAssessment: assessment() }, { profileAssessment: assessment() }]} />,
+    );
+    expect(html).toContain("2 scored candidates in this filter");
+  });
+  it("shows a message, not a chart at 0%, when no candidate in the filter is scored", () => {
+    const html = renderToStaticMarkup(<AveragePentagon candidates={[{ profileAssessment: null }]} />);
+    expect(html).toContain("No scored candidates in this filter");
+    expect(html).not.toContain("<svg");
+    expect(html).not.toContain("0%");
   });
 });
 
@@ -112,6 +138,19 @@ describe("CandidateInspector evidence", () => {
     const html = inspect(assessment({ brief: "BSc Physics, completed", briefSummary: "Strong physics tutor" }));
     expect(visibleWhenClosed(html)).toContain("BSc Physics, completed");
     expect(visibleWhenClosed(html)).toContain("Strong physics tutor");
+  });
+  it("falls back from the short summary to the long one", () => {
+    const html = inspect(assessment());
+    expect(visibleWhenClosed(html)).toContain("LONG SUMMARY TEXT");
+    expect(visibleWhenClosed(inspect(assessment({ briefSummary: "SHORT ONE" })))).not.toContain("LONG SUMMARY TEXT");
+  });
+  it("shows Partial → Met at a corner where the pre-screen differs from the profile", () => {
+    const profile = assessment();
+    profile.criteria[0].result = "partial";
+    const html = inspect(profile, assessment());
+    expect(html).toContain("Degree: Partial → Met");
+    expect(html).toContain(">Partial</text>");
+    expect(html).toContain(">→ Met</text>");
   });
   it("draws the profile pentagon", () => {
     expect(inspect(assessment())).toContain("DSCTE pentagon");

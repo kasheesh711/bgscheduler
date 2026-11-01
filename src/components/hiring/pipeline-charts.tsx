@@ -250,18 +250,21 @@ export function AveragePentagon({
 }) {
   const values = averageValues(candidates);
   const scored = candidates.filter((c) => c.profileAssessment).length;
+  const count = `${scored} scored candidate${scored === 1 ? "" : "s"} in this filter`;
   return (
     <section className={`${css.panel} ${css.pentagonPanel}`}>
       <div>
         <h2 className={css.panelTitle}>Pipeline average</h2>
-        <p className={css.panelLede}>{scored} scored candidates shown</p>
+        <p className={css.panelLede}>{scored ? count : "No scored candidates in this filter"}</p>
       </div>
-      <Pentagon
-        size={230}
-        title={`Average DSCTE pentagon for ${scored} scored candidates`}
-        shapes={[{ label: "Average", values, tone: "profile" }]}
-        labels={Object.values(CRITERION_LABELS).map((name, i) => ({ name, value: `${Math.round(values[i] * 100)}%` }))}
-      />
+      {scored > 0 && (
+        <Pentagon
+          size={290}
+          title={`Average DSCTE pentagon for ${count}`}
+          shapes={[{ label: "Average", values, tone: "profile" }]}
+          labels={Object.values(CRITERION_LABELS).map((name, i) => ({ name, value: `${Math.round(values[i] * 100)}%` }))}
+        />
+      )}
     </section>
   );
 }
@@ -281,7 +284,7 @@ export function SubjectChart({
       <h2 className={css.panelTitle}>Subject supply</h2>
       <p className={css.panelLede}>
         {i.uncoveredSubjects
-          ? `${i.uncoveredSubjects} subjects have no interviewer`
+          ? `${i.uncoveredSubjects} subjects have no interviewer (amber)`
           : "Every subject has an interviewer"}
       </p>
       <div className={css.subjectRows}>
@@ -294,12 +297,14 @@ export function SubjectChart({
             title={`${row.candidates} active, ${row.passed} paper passed. Interviewers: ${row.interviewers.join(", ") || "none"}`}
             onClick={() => setFilter({ ...filter, subject: filter.subject === row.subject ? null : row.subject })}
           >
-            <span className={css.subjectName}>{row.subject}</span>
+            <span className={`${css.subjectName} ${row.interviewers.length ? "" : css.warnWord}`}>
+              {row.subject}
+              {!row.interviewers.length && <span className="sr-only"> (no interviewer)</span>}
+            </span>
             <span className={css.subjectTrack}>
               <span style={{ width: `${(row.candidates / max) * 100}%` }} />
             </span>
             <span className={css.num}>{row.candidates}</span>
-            {!row.interviewers.length && <span className={css.warnWord}>No interviewer</span>}
           </button>
         ))}
       </div>

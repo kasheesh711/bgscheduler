@@ -205,8 +205,8 @@ export function HiringDashboard() {
                 setFilter={setFilter}
               />
               <EvidenceChart insights={insights} />
-              <AveragePentagon candidates={shown} />
               <SubjectChart insights={insights} filter={filter} setFilter={setFilter} />
+              <AveragePentagon candidates={shown} />
             </div>
             <CandidateTable
               candidates={data.candidates}

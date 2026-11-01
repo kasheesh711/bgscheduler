@@ -13,6 +13,10 @@ const polygon = (values: number[]) =>
   values.map((v, i) => point(i, v).map((n) => n.toFixed(1)).join(",")).join(" ");
 // Nudges keep each label clear of its corner: top label sits above, lower ones sit below.
 const NUDGE_X = [0, 6, 2, -2, -6];
+const LINE = 14;
+// Text sits 6 units clear of the ring: above the apex for the top corner, below the vertex for the lower two.
+const GAP = 6;
+const VIEW = { x: -50, y: -18, width: 320, height: 228 };
 const ANCHOR = ["middle", "start", "start", "end", "end"] as const;
 
 // "No evidence → Partial" is too wide for the edge corners on one line, so a changed result wraps at the arrow.
@@ -37,8 +41,8 @@ export function Pentagon({
   return (
     <svg
       width={size}
-      height={Math.round((size * 220) / 320)}
-      viewBox="-50 -14 320 220"
+      height={Math.round((size * VIEW.height) / VIEW.width)}
+      viewBox={`${VIEW.x} ${VIEW.y} ${VIEW.width} ${VIEW.height}`}
       role="img"
       aria-label={`${title}. ${description}`}
       className={css.pentagon}
@@ -59,12 +63,14 @@ export function Pentagon({
       ))}
       {labels.map((l, i) => {
         const [x, y] = point(i, 1);
-        const top = y + (i === 0 ? -22 : i === 2 || i === 3 ? 12 : 0);
+        const lines = valueLines(l.value);
+        // The name is the first baseline; the value lines follow it. The top corner's last line ends GAP above the apex.
+        const top = i === 0 ? y - GAP - LINE * lines.length : y + (i === 2 || i === 3 ? GAP + 9 : 0);
         return (
           <g key={l.name} textAnchor={ANCHOR[i]} aria-hidden="true">
             <text x={x + NUDGE_X[i]} y={top} className={css.pentagonName}>{l.name}</text>
-            {valueLines(l.value).map((line, n) => (
-              <text key={n} x={x + NUDGE_X[i]} y={top + 14 * (n + 1)} className={css.pentagonValue}>{line}</text>
+            {lines.map((line, n) => (
+              <text key={n} x={x + NUDGE_X[i]} y={top + LINE * (n + 1)} className={css.pentagonValue}>{line}</text>
             ))}
           </g>
         );

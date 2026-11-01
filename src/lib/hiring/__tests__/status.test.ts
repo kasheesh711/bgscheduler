@@ -81,8 +81,15 @@ describe("preScreenStatus", () => {
   it("is Queued while the pre-screen email waits in the outbox", () => {
     expect(preScreenStatus(candidate(), [job(`${id}:pre-screen`, "pending", null)], false).status).toBe("Queued");
   });
-  it("is Not sent after a failed email", () => {
-    expect(preScreenStatus(candidate(), [job(`${id}:pre-screen`, "failed", null)], false).status).toBe("Not sent");
+  it.each(["failed", "uncertain"])("stays Queued after a %s email, which may still reach the candidate", (status) => {
+    expect(preScreenStatus(candidate(), [job(`${id}:pre-screen`, status, null)], false).status).toBe("Queued");
+  });
+  it("is not Queued from an outbox row whose workflow stage no longer matches the candidate", () => {
+    const stale = { ...job(`${id}:pre-screen`, "pending", null), workflowStage: "pre_screen" };
+    expect(preScreenStatus(candidate({ stage: "stopped" }), [stale], false).status).toBe("Not sent");
+    expect(preScreenStatus(candidate({ stage: "stopped" }), [{ ...stale, status: "cancelled" }], false).status).toBe("Not sent");
+    // Ready alone still gives Queued.
+    expect(preScreenStatus(candidate({ stage: "new" }), [], true).status).toBe("Queued");
   });
 });
 

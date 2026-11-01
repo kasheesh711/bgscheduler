@@ -13,8 +13,6 @@ const criterionSchema = z
     result: z.enum(["met", "partial", "not_met", "unknown"]),
     evidence: z.string().max(3000),
     reason: z.string().min(1).max(1500),
-    // Short plain-English line for the panel. Rows stored before it existed have none.
-    brief: z.string().max(200).optional(),
   })
   .strict();
 export const assessmentSchema = z
@@ -42,10 +40,15 @@ export const assessmentSchema = z
       .max(10)
       .default([]),
     summary: z.string().max(3000),
-    briefSummary: z.string().max(300).optional(),
   })
   .strict();
-export type Assessment = z.infer<typeof assessmentSchema>;
+type Parsed = z.infer<typeof assessmentSchema>;
+// The short lines are not in the zod schema yet, so the model's JSON schema cannot ask for them.
+// The type is wider so the panel can read them from stored rows that have them.
+export type Assessment = Omit<Parsed, "criteria"> & {
+  criteria: (Parsed["criteria"][number] & { brief?: string })[];
+  briefSummary?: string;
+};
 const normal = (value: string) =>
   value.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
 export function validateAssessment(value: unknown, source: string): Assessment {

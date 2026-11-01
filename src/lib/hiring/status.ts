@@ -35,7 +35,13 @@ export function preScreenStatus(
   const sentAt = first?.status === "sent" ? asDate(first.sentAt) : null;
   const remindedAt = reminder?.status === "sent" ? asDate(reminder.sentAt) : null;
   const repliedAt = candidate.preScreen?.submittedAt ?? null;
-  const queued = ready || first?.status === "pending" || first?.status === "processing";
+  // A failed or uncertain send may still have reached the candidate, so it stays Queued.
+  // The worker cancels a row whose stage no longer matches the candidate's.
+  const queued =
+    ready ||
+    (!!first &&
+      ["pending", "processing", "failed", "uncertain"].includes(first.status) &&
+      first.workflowStage === candidate.stage);
   const status: PreScreenState = candidate.preScreen
     ? "Replied"
     : candidate.stage === "no_reply"

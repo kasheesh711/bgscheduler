@@ -186,7 +186,7 @@ export function CandidateTable({
                   </button>
                 </th>
               ))}
-              <th>Pre-screen</th>
+              <th className={css.wideOnly}>Pre-screen</th>
               <th className={css.wideOnly}>Pre-screen score</th>
               <th className={css.wideOnly}>Visit</th>
               <th className={css.wideOnly} title="Degree, Subject, Curriculum, Teaching, English">
@@ -236,6 +236,10 @@ export function CandidateTable({
                   <td className={c.stage === "stopped" ? css.mutedCell : undefined}>
                     {STAGE_LABELS[c.stage]}
                     {ready.has(c.id) && <span className={css.readyWord}>Ready</span>}
+                    {/* The Pre-screen column is hidden on a phone, so its pill sits here. */}
+                    {extra && (
+                      <span className={`${css.pill} ${css.stagePill} ${PILL_CLASS[extra.pre.status]}`}>{extra.pre.status}</span>
+                    )}
                   </td>
                   <td>
                     {c.profileScore === null ? (
@@ -253,7 +257,7 @@ export function CandidateTable({
                       </span>
                     )}
                   </td>
-                  <td>
+                  <td className={`${css.wideOnly} ${css.preCell}`}>
                     {extra && (
                       <>
                         <span className={`${css.pill} ${PILL_CLASS[extra.pre.status]}`}>{extra.pre.status}</span>
