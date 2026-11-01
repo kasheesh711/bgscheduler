@@ -467,6 +467,20 @@ Uses existing Google authentication and Postgres. Office networks are configured
 administrator workspace. See [enablement and verification](../operations/tutor-attendance.md).
 
 
+## Tutor hiring
+
+These variables are not in the counts at the top of this page. Read [the feature page](../features/hiring.md) for the flow.
+
+| Variable | Where | Purpose |
+|---|---|---|
+| `HIRING_WRITES_ENABLED` | Vercel Production and the owner Mac | Exactly `true` allows any hiring write: the worker, the scoring and backfill passes, message delivery and résumé retention. It is ignored in preview environments. Automation and Messages in Rules and setup are also required for sends. |
+| `HIRING_SCORE_UNTIL` | Owner Mac, per run | ISO time at which `npm run hiring:score` stops starting model calls. Optional, except that `--briefs` refuses to start without it. |
+| `HIRING_BACKFILL_UNTIL` | Owner Mac, per run | ISO time at which `npm run hiring:backfill -- --seek` stops. Required for that mode. It must be in the future when the pass starts. |
+| `HIRING_SEEK_JOB_ID` | Owner Mac | SEEK job id for `npm run hiring:worker -- --connect-seek`. Default `94844236`. |
+| `BLOB_READ_WRITE_TOKEN` | Vercel only | Private Blob store for original résumé files (see [Tutor Progress Tests](#tutor-progress-tests) for the same variable). The Mac holds no Blob key. It asks `/api/internal/hiring-resume-upload` for a 5-minute token for one path. |
+
+The Mac also needs `DATABASE_URL`, `AUTH_SECRET` (it signs the worker's requests) and optionally `APP_BASE_URL` (default `https://bgscheduler.vercel.app`). The Mac holds no Resend or LINE key.
+
 ## Tutor Sit-ins
 
 | Variable | Default and behavior |

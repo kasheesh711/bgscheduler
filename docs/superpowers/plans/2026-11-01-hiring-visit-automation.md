@@ -557,10 +557,37 @@ it("tracker import never makes a person eligible for an email", ...);
 
 ## Go-live runbook (Kevin approves each step)
 
-1. Apply `0119` to production, then merge PR B. Deploy each PR in order.
-2. `npm run hiring:backfill -- --seek`. Report counts and new work-rights answers.
-3. `npm run hiring:backfill -- --tracker-report`, then `--tracker-import` if Kevin approves.
-4. `npm run hiring:score -- --pre-screen`, then `npm run hiring:score -- --briefs`, with `HIRING_SCORE_UNTIL` set.
-5. Kevin reviews the spread, sets the pass score, ranks subjects and sets Gift's days.
-6. Kevin turns on automation and messages. Run `npm run hiring:worker -- --once`. Check recipients against the limits.
-7. Load the worker agent for routine cycles only after step 6 passes.
+Each step needs Kevin's approval. The step says who acts. Do the steps in order. Do not skip a step.
+
+Where the work stands: local checks passed on the five pull requests. Merge, migration, deployment, live delivery and acceptance are separate steps. None of them has happened. An approval for one step is not an approval for the next.
+
+1. **Merge PR A (#241).** Who: Claude merges after Kevin approves. PR A changes only what `/hiring` shows. It has no migration.
+2. **Apply migration `0119` to production, read it back, then merge PR B (#242).** Who: Claude applies and reads back after Kevin approves. Kevin approves again before PR B merges.
+   - Before the apply, check that `select max(created_at) from drizzle.__drizzle_migrations` returns `1793404800000` (migration `0118`). Then only `0119` applies. If it returns another value, stop and tell Kevin.
+   - Apply only `0119`. Do not apply other pending migrations.
+   - Read back: the ledger has a row with `created_at` `1793491200000` (the journal entry `0119_hiring_visit_automation`). `select conname, pg_get_constraintdef(oid) from pg_constraint where conname in ('hiring_stage','hiring_mock_window','hiring_bookings_status_check')` shows the four new stages, no weekday or time terms in `hiring_mock_window`, and `no_show` in the status check. This work-rights backfill check returns 0:
+     ```sql
+     SELECT count(*) FROM hiring_candidates WHERE work_rights_confirmed IS TRUE AND work_rights_answer IS DISTINCT FROM 'I have permanent work rights with no restrictions';
+     ```
+   - Merge PR B only after the migration is applied. The new code selects the new columns.
+   - **Rollback warning.** After the first settings save on the new code, the old code's strict check rejects the new settings keys. To go back, remove these keys from `hiring_settings.config`: `preScreenLimits`, `onsiteLimits`, `preScreenFollowUp`, `onsiteFollowUp`, `preScreenThreshold`, `preScreenWeights`, `acceptedWorkRights`, `seenWorkRights`, `subjectPriority`, `visitStartMinute`, `visitEndMinute`, `resumeRetentionMonths`. The exact SQL is in the description of PR B (#242). The Codex task `CW-20261101-hiring-university-seed` must rebase after PR B merges, for the same reason.
+3. **Save Gift's fallback week before PR C deploys.** Who: Claude makes a controlled settings write after Kevin approves. The week is Monday to Friday, 10:00 to 16:00. Gift is the only head for 11 subjects, and a head with no saved hours gets no times. Gift is not enrolled in Tutor Attendance, so the fallback week is the only source of hours. The Head office days control arrives in PR D, so this step uses the settings API: read the saved settings and revision, add the `fallbackWeek` to Gift's entry under Mock interviewers (add the entry if it is missing), save with the same revision, and read the settings back. A `fallbackWeek` has seven entries, Sunday first. Monday to Friday each hold `10:00` to `16:00`. Sunday and Saturday are null.
+4. **Merge PR C (#243), PR D (#244) and PR E (#245) in that order.** Who: Claude merges after Kevin approves each. Vercel deploys each merge. Automation and Messages stay off. PR C holds the queue and the visit. PR D holds the screens. PR E holds the résumés, the passes and this page. Deploy PR E before step 5, because the résumé upload route lives there.
+5. **Test the SEEK pass on 5 candidates.** Who: Claude runs it on the Mac after Kevin approves.
+   - If SEEK is signed out, run `npm run hiring:worker -- --connect-seek` first and sign in.
+   - Stop any paused `--watch` worker first. It holds the worker lock, and the pass cannot start while it runs.
+   - Run `HIRING_WRITES_ENABLED=true HIRING_BACKFILL_UNTIL=<ISO time> npm run hiring:backfill -- --seek --limit 5`.
+   - Check the counts: `read` is 5, `filesStored` is near 5, and `readFailed` is 0.
+   - Check those 5 rows in the Hiring panel. The table row has a **Résumé** button. The panel section **Original résumé** must not say "(no file yet)". A PDF must show in the frame, and a Word file must show **Download**.
+   - Read the real labels on the SEEK page. The pass looks for a button or tab named "Resumé" (one accent, SEEK's spelling) and a button named "Download document". If `read` is 5 but `filesStored` is 0, SEEK may use different labels. Stop and tell Claude.
+6. **Run the full SEEK pass.** Who: Claude runs it after Kevin approves. Use a stop time about 5 hours ahead. Expect 3 to 4 hours. The pass is finished only when the process exits with code 0 **and** the summary says `stoppedEarly: false`. If it stopped early, or the SEEK list changed while it ran, run the same command again. It skips candidates that are already read. Read the summary: `newWorkRightsAnswers` lists how many new answers appeared. Each new answer shows in Rules as not accepted.
+7. **Run the tracker report.** Who: Claude runs `npm run hiring:backfill -- --tracker-report`. The `Hiring Automation` tab holds at most 2,000 candidates. If the current number of candidates (654 on 1 November 2026) plus the `sourcing` and `scheduling` counts is over 2,000, stop and tell Kevin. Run `--tracker-import` only if Kevin approves the counts.
+8. **Score the held responses and write the short lines.** Who: Claude runs both on the Mac after Kevin approves. Automation and Messages must be off.
+   - `HIRING_WRITES_ENABLED=true npm run hiring:score -- --pre-screen`
+   - `HIRING_WRITES_ENABLED=true HIRING_SCORE_UNTIL=<ISO time> npm run hiring:score -- --briefs`
+   - Each pass uses Kevin's Claude subscription allowance. `--briefs` refuses to start without `HIRING_SCORE_UNTIL`. Exit code 2 means some answers were not stored. Run the pass again.
+9. **Kevin decides about the PDF link.** Kevin chooses to keep the warning line, to open PDFs in a new tab, or to render with pdf.js (see [Résumé files](../../features/hiring.md#résumé-files)). Claude makes any code change as a new pull request.
+10. **Kevin reviews the scores and sets the rules.** Who: Kevin, in Rules and setup. Kevin reads the spread of the pre-screen scores and sets the pass score. Kevin ranks the subjects and sets each head's days. Kevin ticks the SEEK work-rights answers he accepts. Kevin checks the limits.
+11. **Count before the switch.** Who: Claude, read-only, then reports to Kevin. Count the rows that would leave `new` for review at the first cycle. Count the tracker rows whose hash changed. On 2 November 2026, 6 of 335 `new` candidates would move to review for a `not_met` degree. The 2 candidates at `pre_screen` may go to No reply on the first cycle, with no reminder, because their sends are old. Kevin approves the counts.
+12. **Kevin turns on Automation and Messages.** Who: Kevin in Rules and setup. Messages needs the organizer's Google Calendar connected, or the save is refused. The save bar shows how many forms a day and a week the limits allow. Then Claude runs `npm run hiring:worker -- --once` on the Mac. Claude checks every recipient against the limits and checks the provider readbacks.
+13. **Load the worker agent.** Who: Claude, after step 12 passes and Kevin approves. Install the LaunchAgent from the template (see [Setup](../../features/hiring.md#setup)).
