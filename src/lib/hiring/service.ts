@@ -157,12 +157,24 @@ async function visitsOnRemovedDays(db: Database, key: string, before: Week | nul
   return rows.filter((r) => removed.includes(Number(formatInTimeZone(r.startTime, ZONE, "i")))).length;
 }
 /**
+ * The count runs after the change is saved, so a failure here must not report an error for a change that saved.
+ * It logs the error name only and returns null; the screen then asks staff to check Head schedules.
+ */
+async function countVisits(count: () => Promise<number>): Promise<number | null> {
+  try {
+    return await count();
+  } catch (error) {
+    console.error("Counting visits on a removed day failed", error instanceof Error ? error.name : "UnknownError");
+    return null;
+  }
+}
+/**
  * Saves one head's Monday to Friday days. `days[0]` is Monday. `revision` is the Hiring settings revision the screen
  * loaded, and a stale one gets a 409 on both paths.
  * An enrolled head goes through Tutor Attendance as a new schedule version from the next Bangkok day, with the actor in
  * its audit; that needs attendance admin. The new week is the version in force on that day, and a later version is
  * refused, because it would undo this change. Any other head gets a fallback week in Hiring settings and is not enrolled.
- * `affectedVisits` counts booked visits that now fall on a removed day. The app does not move them.
+ * `affectedVisits` counts booked visits that now fall on a removed day. The app does not move them. It is null when the count failed.
  */
 export async function saveHeadDays(
   key: string,
@@ -171,7 +183,7 @@ export async function saveHeadDays(
   actor: string,
   db: Database = getDb(),
   now = new Date(),
-): Promise<{ revision: number; fallbackWeek?: Week; affectedVisits: number }> {
+): Promise<{ revision: number; fallbackWeek?: Week; affectedVisits: number | null }> {
   if (days.length !== 5) throw new HiringError(400, "Choose Monday to Friday.");
   const current = await settings(db);
   const stale = () => new HiringError(409, "Settings changed. Refresh this page.");
@@ -184,7 +196,7 @@ export async function saveHeadDays(
     .where(eq(s.tutorAttendanceEnrollments.canonicalKey, key));
 
   if (!enrollment) {
-    return withDatabaseTransaction(db, async (tx) => {
+    const saved = await withDatabaseTransaction(db, async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-settings'))`);
       const fresh = await settings(tx);
       if (!fresh.row || fresh.row.revision !== revision) throw stale();
@@ -200,10 +212,12 @@ export async function saveHeadDays(
         .set({ config, revision: revision + 1, updatedBy: actor, updatedAt: new Date() })
         .where(eq(s.hiringSettings.id, "default"));
       await audit(tx, actor, "head-days", null, { key, days, via: "hiring-settings", revision: revision + 1 });
-      // A fallback week applies at once, so every visit from now is checked.
-      const affectedVisits = await visitsOnRemovedDays(tx, key, head.fallbackWeek ?? null, fallbackWeek, now);
-      return { revision: revision + 1, fallbackWeek, affectedVisits };
+      return { revision: revision + 1, fallbackWeek, before: head.fallbackWeek ?? null };
     });
+    // After the commit: a failed read inside the transaction would have aborted it. A fallback week applies at once,
+    // so every visit from now is checked.
+    const affectedVisits = await countVisits(() => visitsOnRemovedDays(db, key, saved.before, saved.fallbackWeek, now));
+    return { revision: saved.revision, fallbackWeek: saved.fallbackWeek, affectedVisits };
   }
   const effectiveFrom = shiftDate(localDate(now), 1);
   // A switched-off or finished enrollment still makes headOfficeWindow return no hours, so a fallback week would be ignored.
@@ -212,7 +226,7 @@ export async function saveHeadDays(
       409,
       "This head's Tutor Attendance enrollment has ended, so Hiring cannot set days for them. Switch the enrollment back on in Tutor Attendance first.",
     );
-  let affectedVisits = 0;
+  let affectedVisits: number | null = 0;
   try {
     const access = await attendanceAccessForEmail(actor, db);
     // Read the revision first: a change made while this runs then fails the revision check instead of passing it.
@@ -240,7 +254,7 @@ export async function saveHeadDays(
       db,
       now,
     );
-    affectedVisits = await visitsOnRemovedDays(db, key, base, week, instant(effectiveFrom, 0));
+    affectedVisits = await countVisits(() => visitsOnRemovedDays(db, key, base, week, instant(effectiveFrom, 0)));
   } catch (error) {
     if (!(error instanceof AttendanceError)) throw error;
     throw new HiringError(

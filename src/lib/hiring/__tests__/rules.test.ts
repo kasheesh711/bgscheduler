@@ -301,6 +301,8 @@ describe("head days", () => {
   });
   it("tells how many booked visits fall on a removed day", () => {
     expect(headDaysNotice(0)).toBe("Saved.");
+    // The count failed after the change saved: no number, and a pointer to where staff can look.
+    expect(headDaysNotice(null)).toBe("Saved. Check Head schedules for visits on a day you removed.");
     expect(headDaysNotice(1)).toBe("Saved. 1 booked visit falls on a day you removed. The app did not move it. Staff must act.");
     expect(headDaysNotice(3)).toBe("Saved. 3 booked visits fall on a day you removed. The app did not move them. Staff must act.");
   });

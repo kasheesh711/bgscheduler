@@ -91,7 +91,7 @@ export function HiringDashboard() {
           setConfig((c) =>
             c && { ...c, interviewers: c.interviewers.map((i) => (i.canonicalKey === key ? { ...i, fallbackWeek: value.fallbackWeek } : i)) },
           );
-        saved = headDaysNotice(value.affectedVisits ?? 0);
+        saved = headDaysNotice(value.affectedVisits === undefined ? 0 : value.affectedVisits);
       }
       setNotice(saved);
       // The save is done. If only the reload fails, say so, and do not call the save a failure.
@@ -257,18 +257,7 @@ export function HiringDashboard() {
               onShowReady={() => setFilter({ ...NO_FILTER, stage: "ready" })}
             />
             <LimitMeters usage={data.usage} headMocks={data.headMocks} config={data.config} tutors={data.tutors} />
-            <div className={css.charts}>
-              <StageChart insights={insights} filter={filter} setFilter={setFilter} />
-              <ScoreChart
-                insights={insights}
-                threshold={data.config.profileThreshold}
-                filter={filter}
-                setFilter={setFilter}
-              />
-              <EvidenceChart insights={insights} />
-              <SubjectChart insights={insights} filter={filter} setFilter={setFilter} />
-              <AveragePentagon candidates={shown} />
-            </div>
+            {/* The table is the main work surface, so it sits right under the meters. The charts follow and read the same filter. */}
             <CandidateTable
               candidates={data.candidates}
               insights={insights}
@@ -283,6 +272,18 @@ export function HiringDashboard() {
               selected={selected}
               onSelect={setSelected}
             />
+            <div className={css.charts}>
+              <StageChart insights={insights} filter={filter} setFilter={setFilter} />
+              <ScoreChart
+                insights={insights}
+                threshold={data.config.profileThreshold}
+                filter={filter}
+                setFilter={setFilter}
+              />
+              <EvidenceChart insights={insights} />
+              <SubjectChart insights={insights} filter={filter} setFilter={setFilter} />
+              <AveragePentagon candidates={shown} />
+            </div>
           </div>
           {candidate ? (
             <CandidateInspector

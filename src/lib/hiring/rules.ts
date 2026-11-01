@@ -212,9 +212,11 @@ export function unsavedHeadDays(
     .map(([key]) => names[key] ?? key)
     .sort();
 }
-/** The message after a head-days save. Booked visits on a removed day are not moved, so staff are told. */
-export const headDaysNotice = (affected: number) =>
-  affected === 0
+/** The message after a head-days save. Booked visits on a removed day are not moved, so staff are told. `null`: the count failed after the save. */
+export const headDaysNotice = (affected: number | null) =>
+  affected === null
+    ? "Saved. Check Head schedules for visits on a day you removed."
+    : affected === 0
     ? "Saved."
     : `Saved. ${affected} booked ${affected === 1 ? "visit falls" : "visits fall"} on a day you removed. The app did not move ${affected === 1 ? "it" : "them"}. Staff must act.`;
 

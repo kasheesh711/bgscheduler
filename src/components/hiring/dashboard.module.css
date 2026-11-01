@@ -110,7 +110,7 @@
 @media (min-width: 720px) { .limitCards { grid-template-columns: 1fr 1fr; } .limitCard + .limitCard { border-left: 1px solid var(--line); } }
 
 /* Charts */
-.charts { display: grid; flex-shrink: 0; grid-template-columns: 1fr; border-bottom: 1px solid var(--line); }
+.charts { display: grid; flex-shrink: 0; grid-template-columns: 1fr; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .panel { display: flex; flex-direction: column; min-width: 0; padding: 10px 24px 12px; border-top: 1px solid var(--line); }
 .panelTitle { font-size: 14px; font-weight: 500; }
 .panelLede { margin-bottom: 8px; color: var(--muted); }
