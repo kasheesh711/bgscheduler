@@ -242,10 +242,13 @@ export function AveragePentagon({
   const scored = candidates.filter((c) => c.profileAssessment).length;
   return (
     <section className={`${css.panel} ${css.pentagonPanel}`}>
-      <h2 className={css.panelTitle}>Pipeline average</h2>
-      <p className={css.panelLede}>{scored} scored candidates shown</p>
+      <div>
+        <h2 className={css.panelTitle}>Pipeline average</h2>
+        <p className={css.panelLede}>{scored} scored candidates shown</p>
+      </div>
       <Pentagon
         size={230}
+        title={`Average DSCTE pentagon for ${scored} scored candidates`}
         shapes={[{ label: "Average", values, tone: "profile" }]}
         labels={Object.values(CRITERION_LABELS).map((name, i) => ({ name, value: `${Math.round(values[i] * 100)}%` }))}
       />

@@ -55,7 +55,7 @@ function AssessmentBlock({
           <summary>
             <i className={RESULT_CLASS[c.result]} aria-hidden="true" />
             <span>{CRITERION_LABELS[c.id]}</span>
-            <span className={css.inspectorText}>{c.brief}</span>
+            {c.brief && <span className={css.inspectorText}>{c.brief}</span>}
             <span className={css.criterionResult}>{RESULT_LABELS[c.result]}</span>
             <span className={css.num}>
               {weights[c.id] * POINTS[c.result]}/{weights[c.id]}

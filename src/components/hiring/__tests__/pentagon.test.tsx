@@ -68,6 +68,17 @@ describe("Pentagon", () => {
     expect(html).toContain('role="img"');
     expect(html).toContain("Degree: Met");
   });
+  it("puts a changed result on its own lines so the longest pair stays inside the chart", () => {
+    const html = renderToStaticMarkup(
+      <Pentagon
+        shapes={[]}
+        labels={DSCTE.map((name) => ({ name, value: "No evidence → Partial" }))}
+      />,
+    );
+    expect(html).toContain("Degree: No evidence → Partial");
+    for (const line of ["No evidence", "→ Partial"]) expect(html.match(new RegExp(`>${line}</text>`, "g"))).toHaveLength(5);
+    expect(html).not.toContain(">No evidence → Partial</text>");
+  });
 });
 
 describe("averageValues", () => {
@@ -84,6 +95,7 @@ describe("AveragePentagon", () => {
   it("shows a percentage at each corner", () => {
     const html = renderToStaticMarkup(<AveragePentagon candidates={[{ profileAssessment: assessment() }]} />);
     expect(html).toContain("Degree: 100%");
+    expect(html).toContain("Average DSCTE pentagon for 1 scored candidates");
   });
 });
 
@@ -91,7 +103,8 @@ describe("CandidateInspector evidence", () => {
   it("shows a result label and keeps the long reason closed when a brief is missing", () => {
     const html = inspect(assessment());
     const closed = visibleWhenClosed(html);
-    expect(closed).toContain("Met");
+    // The pentagon has its own "Met" corner labels, so look at the criterion row itself.
+    expect(closed.match(/criterionResult[^>]*>Met</g)).toHaveLength(5);
     expect(closed).not.toContain("LONG REASON TEXT");
     expect(html).toContain("LONG REASON TEXT");
   });

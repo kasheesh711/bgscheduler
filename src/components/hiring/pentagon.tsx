@@ -15,16 +15,32 @@ const polygon = (values: number[]) =>
 const NUDGE_X = [0, 6, 2, -2, -6];
 const ANCHOR = ["middle", "start", "start", "end", "end"] as const;
 
+// "No evidence → Partial" is too wide for the edge corners on one line, so a changed result wraps at the arrow.
+const valueLines = (value: string) => {
+  const [before, after] = value.split(" → ");
+  return after === undefined ? [value] : [before, `→ ${after}`];
+};
+
 /** Five-corner DSCTE chart. Every corner shows its name and a result or percentage. */
-export function Pentagon({ shapes, labels, size = 270 }: { shapes: Shape[]; labels: Corner[]; size?: number }) {
+export function Pentagon({
+  shapes,
+  labels,
+  size = 270,
+  title = "DSCTE pentagon",
+}: {
+  shapes: Shape[];
+  labels: Corner[];
+  size?: number;
+  title?: string;
+}) {
   const description = labels.map((l) => `${l.name}: ${l.value}`).join(", ");
   return (
     <svg
       width={size}
-      height={Math.round((size * 210) / 320)}
-      viewBox="-50 -14 320 210"
+      height={Math.round((size * 220) / 320)}
+      viewBox="-50 -14 320 220"
       role="img"
-      aria-label={`DSCTE pentagon. ${description}`}
+      aria-label={`${title}. ${description}`}
       className={css.pentagon}
     >
       <polygon points={polygon([1, 1, 1, 1, 1])} className={css.pentagonRing} />
@@ -47,7 +63,9 @@ export function Pentagon({ shapes, labels, size = 270 }: { shapes: Shape[]; labe
         return (
           <g key={l.name} textAnchor={ANCHOR[i]} aria-hidden="true">
             <text x={x + NUDGE_X[i]} y={top} className={css.pentagonName}>{l.name}</text>
-            <text x={x + NUDGE_X[i]} y={top + 14} className={css.pentagonValue}>{l.value}</text>
+            {valueLines(l.value).map((line, n) => (
+              <text key={n} x={x + NUDGE_X[i]} y={top + 14 * (n + 1)} className={css.pentagonValue}>{line}</text>
+            ))}
           </g>
         );
       })}
