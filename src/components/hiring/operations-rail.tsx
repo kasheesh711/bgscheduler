@@ -53,6 +53,8 @@ export function OperationsRail({
   const nameOf = (id: string | null) => data.candidates.find((c) => c.id === id)?.name ?? "Unknown candidate";
   const folders = data.workerSummary?.folders.filter((f) => f.count) ?? [];
   const folderTotal = folders.reduce((n, f) => n + f.count, 0);
+  const uploadsFailed = data.workerSummary?.resumeUploadsFailed ?? 0;
+  const noResumeFile = data.candidates.filter((c) => c.resumeState === "none").length;
   const problems = data.outbox.filter((j) => j.status === "failed" || j.status === "uncertain");
   const appointments = [...data.bookings].sort(
     (a, b) => new Date(String(b.startTime)).getTime() - new Date(String(a.startTime)).getTime(),
@@ -66,6 +68,7 @@ export function OperationsRail({
           <Status label="Messages" value={data.config.deliveryEnabled ? "On" : "Paused"} good={data.config.deliveryEnabled} />
           <Status label="Production writes" value={data.writeGate ? "On" : "Off"} good={data.writeGate} />
           <Status label="Google" value={data.google.connected ? "Connected" : "Consent needed"} good={data.google.connected} />
+          <Status label="Résumé files" value={noResumeFile ? `${noResumeFile} with no file` : "All stored"} good={!noResumeFile} />
           <li className={css.statusRow}>
             <span>Last worker run</span>
             <span className={workerWarning(data.config.enabled, data.workerAt, now) ? css.warnWord : undefined}>
@@ -73,6 +76,11 @@ export function OperationsRail({
             </span>
           </li>
         </ul>
+        {uploadsFailed > 0 && (
+          <p className={css.warnWord}>
+            {uploadsFailed} résumé upload{uploadsFailed === 1 ? "" : "s"} failed
+          </p>
+        )}
         {!data.google.connected && (
           <button type="button" className={css.secondary} disabled={busy} onClick={connect}>
             Connect Google

@@ -88,7 +88,11 @@ beforeEach(async () => {
   vi.stubEnv("PREVIEW_SANDBOX_ENABLED", "false");
   vi.stubEnv("CRON_SECRET", "cron-secret");
   vi.mocked(getDb).mockReturnValue(db);
-  vi.mocked(list).mockResolvedValue({ blobs: [], hasMore: false } as never);
+  // By default each candidate's folder holds the one old stored file.
+  vi.mocked(list).mockImplementation((async (options: { prefix: string }) => ({
+    blobs: [{ pathname: `${options.prefix}${"a".repeat(64)}.pdf`, uploadedAt: OLD }],
+    hasMore: false,
+  })) as never);
   vi.mocked(del).mockResolvedValue(undefined);
   await db.execute(sql`truncate hiring_audit,hiring_outbox,hiring_bookings,hiring_candidates,hiring_settings cascade`);
 });
@@ -148,10 +152,59 @@ describe("deleteExpiredResumes", () => {
   it("deletes older copies of the candidate's file as well", async () => {
     const { id, path } = await candidate();
     const older = resumePath(id, "b".repeat(64), "docx");
-    vi.mocked(list).mockResolvedValue({ blobs: [{ pathname: path }, { pathname: older }], hasMore: false } as never);
+    vi.mocked(list).mockResolvedValue({
+      blobs: [{ pathname: path, uploadedAt: OLD }, { pathname: older, uploadedAt: OLD }],
+      hasMore: false,
+    } as never);
     await deleteExpiredResumes(db, now, 12);
     expect(list).toHaveBeenCalledWith(expect.objectContaining({ prefix: `hiring-resumes/${id}/` }));
     expect(vi.mocked(del).mock.calls[0][0]).toEqual([path, older]);
+  });
+
+  it.each([
+    ["a booking", (id: string) => booking(id, "confirmed")],
+    ["an import", (id: string) => auditRow(id, "seek-import", "source-update")],
+    ["a reply", (id: string) => db.update(c).set({ preScreenRepliedAt: RECENT }).where(eq(c.id, id))],
+  ])("%s that arrives during the run prevents the delete", async (_name, event) => {
+    await candidate({ resumeStoredAt: new Date(OLD.getTime() - 86400000) });
+    const second = await candidate();
+    // Both rows are in the batch. The event lands while the first file is deleted.
+    vi.mocked(del).mockImplementationOnce(async () => {
+      await event(second.id);
+    });
+    expect(await deleteExpiredResumes(db, now, 12)).toBe(1);
+    expect(list).toHaveBeenCalledTimes(1);
+    expect((await load(second.id)).resumePath).toBe(second.path);
+  });
+
+  it("keeps a file uploaded after the cutoff, and deletes the old one", async () => {
+    const { id, path } = await candidate();
+    const fresh = resumePath(id, "b".repeat(64), "pdf");
+    vi.mocked(list).mockResolvedValue({
+      blobs: [{ pathname: path, uploadedAt: OLD }, { pathname: fresh, uploadedAt: new Date(now.getTime() - 60000) }],
+      hasMore: false,
+    } as never);
+    expect(await deleteExpiredResumes(db, now, 12)).toBe(1);
+    expect(vi.mocked(del).mock.calls[0][0]).toEqual([path]);
+  });
+
+  it("changes nothing when the stored file itself was uploaded after the cutoff", async () => {
+    const { id, path } = await candidate();
+    vi.mocked(list).mockResolvedValue({
+      blobs: [{ pathname: path, uploadedAt: new Date(now.getTime() - 60000) }],
+      hasMore: false,
+    } as never);
+    expect(await deleteExpiredResumes(db, now, 12)).toBe(0);
+    expect(del).not.toHaveBeenCalled();
+    expect((await load(id)).resumePath).toBe(path);
+  });
+
+  it("clears the row when storage no longer holds the file", async () => {
+    const { id } = await candidate();
+    vi.mocked(list).mockResolvedValue({ blobs: [], hasMore: false } as never);
+    expect(await deleteExpiredResumes(db, now, 12)).toBe(1);
+    expect(del).not.toHaveBeenCalled();
+    expect((await load(id)).resumePath).toBeNull();
   });
 
   it("a failed delete leaves the row for the next run, and the run reports it", async () => {

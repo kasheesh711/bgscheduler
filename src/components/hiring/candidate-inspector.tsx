@@ -133,9 +133,10 @@ type ResumeCheck = { status: "checking" | "ready" } | { status: "failed"; messag
 export async function checkResume(src: string): Promise<ResumeCheck> {
   try {
     const response = await fetch(src, { cache: "no-store" });
-    if (response.ok) {
+    // A session that ended redirects to the login page, which is a 200.
+    if (response.redirected || response.ok) {
       await response.body?.cancel();
-      return { status: "ready" };
+      return response.redirected ? { status: "failed", message: "Sign in again to open this file." } : { status: "ready" };
     }
     const value = await response.json();
     return { status: "failed", message: value.error || RESUME_FAILED };
@@ -172,7 +173,12 @@ export function ResumeBody({
   return (
     <>
       {/* No sandbox attribute: Chrome blocks its PDF viewer in any sandboxed iframe, with every allow token. The route sends the sandbox as a CSP header, which the viewer accepts. */}
-      {type === RESUME_TYPES.pdf && <iframe className={css.resumeFrame} src={src} title={`Original résumé of ${name}`} />}
+      {type === RESUME_TYPES.pdf && (
+        <>
+          <p className={css.inspectorMeta}>A link in a résumé can open another site. Do not sign in on a page that opens from a résumé.</p>
+          <iframe className={css.resumeFrame} src={src} title={`Original résumé of ${name}`} />
+        </>
+      )}
       <a className={css.sourceLink} href={src} download>
         Download
       </a>

@@ -6,6 +6,7 @@ import { auth } from "@/lib/auth";
 import { getDb, type Database } from "@/lib/db";
 import { GET as readResume } from "@/app/api/hiring/resume/[id]/route";
 import { POST as requestUpload } from "@/app/api/internal/hiring-resume-upload/route";
+import { saveApplication } from "../../../../scripts/hiring-seek";
 import { deliveryAuthorization, resumeUploadAuthorization, verifyDeliveryAuthorization } from "../dispatch";
 import { RESUME_TYPES } from "../model";
 import { cleanResumeName, keepResume, resumePath, sniffResume, storedResume, storeResume } from "../resume-files";
@@ -128,7 +129,7 @@ describe("GET /api/hiring/resume/[id]", () => {
     expect(pdf.headers.get("Content-Type")).toBe(RESUME_TYPES.pdf);
     expect(pdf.headers.get("Cache-Control")).toBe("no-store");
     expect(pdf.headers.get("X-Content-Type-Options")).toBe("nosniff");
-    expect(pdf.headers.get("Content-Security-Policy")).toContain("sandbox");
+    expect(pdf.headers.get("Content-Security-Policy")).toBe("default-src 'none'; frame-ancestors 'self'; sandbox");
     expect(pdf.headers.get("Content-Disposition")).toBe("inline; filename*=UTF-8''cv.pdf");
     expect(await pdf.text()).toBe("%PDF-invented");
     // Only the stored path reaches storage.
@@ -277,6 +278,26 @@ describe("storeResume", () => {
   });
   it("uses the path helper for the stored location", () => {
     expect(resumePath(ID, SHA, "pdf")).toBe(PDF_PATH);
+  });
+  it("the worker saves the text first, and reports a file that was not stored", async () => {
+    const steps: string[] = [];
+    const consume = vi.fn(async () => {
+      steps.push("text");
+      return ID;
+    });
+    const read = { application: {} as never, resumeFile: { bytes: Buffer.from("%PDF-"), name: "cv.pdf" } };
+    const failing = vi.fn(async () => {
+      steps.push("file");
+      return false;
+    });
+    expect(await saveApplication(read, consume, failing)).toBe(false);
+    expect(steps).toEqual(["text", "file"]);
+    expect(failing).toHaveBeenCalledWith(ID, read.resumeFile);
+    expect(await saveApplication(read, consume, async () => true)).toBe(true);
+    // No file to keep is not a failure.
+    const keep = vi.fn(async () => false);
+    expect(await saveApplication({ ...read, resumeFile: null }, consume, keep)).toBe(true);
+    expect(keep).not.toHaveBeenCalled();
   });
   it("a failed upload does not stop the import, and logs no candidate data", async () => {
     const db = dbWith([{ resumePath: null, resumeSha256: null }]);

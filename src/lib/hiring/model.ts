@@ -42,6 +42,8 @@ export type HiringSourceSummary = {
   imported: number;
   remaining: number;
   folders: ReturnType<typeof parseSeekFolderCounts>;
+  /** In the last run. Older saved summaries do not have it. */
+  resumeUploadsFailed?: number;
 };
 export const TRACKER_ID = "12bXS1Fnx0BTwrSZXzMU7fWzOgTDfA6-P6rT0v1zDF3M";
 export const PRE_SCREEN_URL =

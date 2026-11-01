@@ -208,14 +208,24 @@ async function readApplication(
   }
 }
 
+/** Saves the text first, so a failed upload cannot lose the import. False means the file was not stored. */
+export async function saveApplication(
+  { application, resumeFile }: Awaited<ReturnType<typeof readApplication>>,
+  consume: (value: Application) => Promise<string>,
+  keepFile: (candidateId: string, file: ResumeFile) => Promise<boolean>,
+) {
+  const candidateId = await consume(application);
+  return !resumeFile || keepFile(candidateId, resumeFile);
+}
+
 export async function importSeek(
   profilePath: string,
   jobId: string,
   knownIds: Set<string>,
   consume: (value: Application) => Promise<string>,
   observe: (id: string, status: string, contacted: boolean) => Promise<void>,
-  // Called after `consume` saved the text. It must not throw, so a failed upload cannot lose the import.
-  keepFile: (candidateId: string, file: ResumeFile) => Promise<unknown>,
+  // Must not throw. It returns false when the file was not stored.
+  keepFile: (candidateId: string, file: ResumeFile) => Promise<boolean>,
 ) {
   const browser = await chromium.launchPersistentContext(profilePath, {
     channel: "chrome",
@@ -225,7 +235,8 @@ export async function importSeek(
   });
   let scanned = 0,
     imported = 0,
-    remaining = 0;
+    remaining = 0,
+    resumeUploadsFailed = 0;
   try {
     const page = browser.pages()[0] ?? (await browser.newPage());
     await page.goto(`https://th.employer.seek.com/candidates/?jobid=${jobId}`);
@@ -340,9 +351,8 @@ export async function importSeek(
               remaining++;
               continue;
             }
-            const { application, resumeFile } = await readApplication(page, cards.nth(i), jobId);
-            const candidateId = await consume(application);
-            if (resumeFile) await keepFile(candidateId, resumeFile);
+            const read = await readApplication(page, cards.nth(i), jobId);
+            if (!(await saveApplication(read, consume, keepFile))) resumeUploadsFailed++;
             knownIds.add(id);
             imported++;
           }
@@ -374,7 +384,7 @@ export async function importSeek(
           `SEEK ${status} count changed during import. Retry before sending messages.`,
         );
     }
-    return { scanned, imported, remaining, folders };
+    return { scanned, imported, remaining, folders, resumeUploadsFailed };
   } finally {
     await browser.close();
   }

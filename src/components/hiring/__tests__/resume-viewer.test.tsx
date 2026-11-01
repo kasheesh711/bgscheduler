@@ -9,6 +9,7 @@ import { NO_FILTER } from "../dashboard";
 vi.mock("next/font/google", () => ({ Instrument_Serif: () => ({ variable: "" }) }));
 
 const ID = "00000000-0000-4000-8000-000000000001";
+const LINK_WARNING = "A link in a résumé can open another site. Do not sign in on a page that opens from a résumé.";
 const body = (patch = {}) =>
   renderToStaticMarkup(
     <ResumeBody id={ID} name="Invented" state="available" type={RESUME_TYPES.pdf} months={12} check={{ status: "ready" }} {...patch} />,
@@ -23,16 +24,19 @@ describe("ResumeBody", () => {
     expect(html).toContain(`src="/api/hiring/resume/${ID}"`);
     expect(html).not.toContain("blob.vercel");
     expect(html).toContain("Download");
+    expect(html).toContain(LINK_WARNING);
   });
-  it("shows Download for a Word file, with no iframe", () => {
+  it("shows Download for a Word file, with no iframe and no link warning", () => {
     const html = body({ type: RESUME_TYPES.docx });
     expect(html).not.toContain("<iframe");
+    expect(html).not.toContain(LINK_WARNING);
     expect(html).toContain("Download");
     expect(html).toContain(`href="/api/hiring/resume/${ID}"`);
   });
   it("says there is no file yet", () => {
     const html = body({ state: "none" });
     expect(html).toContain("No original file");
+    expect(html).not.toContain(LINK_WARNING);
     expect(html).not.toContain("<iframe");
     expect(html).not.toContain("href=");
   });
@@ -117,6 +121,12 @@ describe("checkResume", () => {
     const cancel = vi.fn();
     stubFetch({ ok: true, body: { cancel } } as unknown as Response);
     expect(await checkResume(`/api/hiring/resume/${ID}`)).toEqual({ status: "ready" });
+    expect(cancel).toHaveBeenCalled();
+  });
+  it("asks for a new sign-in when the route redirects to the login page", async () => {
+    const cancel = vi.fn();
+    stubFetch({ ok: true, redirected: true, body: { cancel } } as unknown as Response);
+    expect(await checkResume(`/api/hiring/resume/${ID}`)).toEqual({ status: "failed", message: "Sign in again to open this file." });
     expect(cancel).toHaveBeenCalled();
   });
   it("gives the route's message when the file is gone", async () => {

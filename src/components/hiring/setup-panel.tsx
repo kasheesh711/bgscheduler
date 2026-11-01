@@ -512,6 +512,7 @@ export function SetupPanel({
               onChange={(e) => setConfig({ ...config, resumeRetentionMonths: Number(e.target.value) })}
             />
           </label>
+          <p className={css.railMeta}>Files past this age are deleted for good at the next nightly run. Lowering this number can delete many files.</p>
         </section>
 
         <section className={`${css.setupSection} ${css.setupWide}`}>

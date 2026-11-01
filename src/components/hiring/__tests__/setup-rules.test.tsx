@@ -391,4 +391,40 @@ describe("worker warning", () => {
     expect(rail(true, "2026-11-02T09:30:00.000Z")).not.toMatch(/Last worker run<\/span><span class="[^"]*warnWord/);
     expect(rail(false, "2026-10-01T00:00:00.000Z")).not.toMatch(/Last worker run<\/span><span class="[^"]*warnWord/);
   });
+  it("shows failed résumé uploads and candidates with no stored file, by count only", () => {
+    const rail = (extra: Record<string, unknown>) =>
+      renderToStaticMarkup(
+        <OperationsRail
+          data={dataFor(make(), extra)}
+          insights={{ messages: { sent: 0, waiting: 0, problems: 0 }, upcomingByInterviewer: { Peat: 0, Gift: 0 } } as never}
+          busy={false}
+          connect={() => {}}
+          onSelect={() => {}}
+          now={now}
+        />,
+      );
+    const summary = (resumeUploadsFailed?: number) => ({ workerSummary: { scanned: 1, imported: 0, remaining: 0, folders: [], resumeUploadsFailed } });
+    expect(rail(summary(3))).toContain("3 résumé uploads failed");
+    expect(rail(summary(1))).toContain("1 résumé upload failed");
+    // A clean run, and a summary saved before this field existed.
+    expect(rail(summary(0))).not.toContain("failed");
+    expect(rail(summary())).not.toContain("failed");
+    const candidates = [
+      { id: "a", name: "Hidden Person", resumeState: "none" },
+      { id: "b", name: "Other Person", resumeState: "none" },
+      { id: "c", name: "Stored Person", resumeState: "available" },
+      { id: "d", name: "Deleted Person", resumeState: "deleted" },
+    ];
+    const html = rail({ candidates });
+    expect(html).toContain("2 with no file");
+    expect(html).not.toContain("Hidden Person");
+    expect(rail({ candidates: candidates.slice(2) })).toContain("All stored");
+  });
+});
+describe("résumé retention setting", () => {
+  it("warns beside the field that a lower number can delete many files for good", () => {
+    expect(panel(make())).toContain(
+      "Files past this age are deleted for good at the next nightly run. Lowering this number can delete many files.",
+    );
+  });
 });

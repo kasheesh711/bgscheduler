@@ -114,11 +114,13 @@ const RETENTION_BUDGET_MS = 45000;
  *
  * Activity is the latest of the stored time, the pre-screen reply, a confirmed booking's end, and the newest audit row
  * that is not from an automatic pass. `updated_at` is not used, because automatic passes write it. When no activity
- * value exists the comparison is null, and the file stays.
+ * value exists the comparison is null, and the file stays. Activity is read again just before each delete, because the
+ * batch can be up to a minute old, and a file uploaded after the cutoff belongs to a newer import, so it stays.
  */
 export async function deleteExpiredResumes(db: Database, now: Date, months: number) {
   if (!runtimeWritesAllowed()) return 0;
   const c = s.hiringCandidates;
+  const cutoff = subMonths(now, months);
   const activity = sql`greatest(
     ${c.resumeStoredAt},
     ${c.preScreenRepliedAt},
@@ -128,10 +130,11 @@ export async function deleteExpiredResumes(db: Database, now: Date, months: numb
       where ${s.hiringAudit.candidateId} = ${c.id}
         and ${s.hiringAudit.actor} not in ('subscription-assessment', 'hiring-worker', 'hiring-backfill'))
   )`;
+  const expired = sql`${activity} < ${cutoff.toISOString()}::timestamptz`;
   const rows = await db
     .select({ id: c.id, path: c.resumePath, type: c.resumeType })
     .from(c)
-    .where(and(isNotNull(c.resumePath), sql`${activity} < ${subMonths(now, months).toISOString()}::timestamptz`))
+    .where(and(isNotNull(c.resumePath), expired))
     .orderBy(asc(c.resumeStoredAt))
     .limit(RETENTION_BATCH);
   const stopAt = Date.now() + RETENTION_BUDGET_MS;
@@ -145,11 +148,16 @@ export async function deleteExpiredResumes(db: Database, now: Date, months: numb
       continue;
     }
     try {
+      const [still] = await db
+        .select({ id: c.id })
+        .from(c)
+        .where(and(eq(c.id, row.id), eq(c.resumePath, stored.path), expired));
+      if (!still) continue;
       // A replaced file stays in storage under the same folder, and it must not outlive this one.
       const { blobs } = await list({ prefix: `hiring-resumes/${row.id}/`, abortSignal: AbortSignal.timeout(5000) });
-      await del([...new Set([stored.path, ...blobs.map((blob) => blob.pathname)])], {
-        abortSignal: AbortSignal.timeout(5000),
-      });
+      if (blobs.some((blob) => blob.pathname === stored.path && blob.uploadedAt >= cutoff)) continue;
+      const old = blobs.filter((blob) => blob.uploadedAt < cutoff).map((blob) => blob.pathname);
+      if (old.length) await del(old, { abortSignal: AbortSignal.timeout(5000) });
       const cleared = await db
         .update(c)
         .set({ resumePath: null, resumeName: null, resumeType: null, resumeSha256: null, resumeSize: null })
