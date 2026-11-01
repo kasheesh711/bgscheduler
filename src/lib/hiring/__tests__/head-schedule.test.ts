@@ -305,6 +305,7 @@ describe("head week", () => {
       groups: [group("Peat", { sessionBlocks: [block(MON, 900, 960)] })],
     });
     expect(w.stale).toBe(true);
+    expect(w.staleReason).toBe("snapshot");
     expect(w.days[0].blocks.map((b) => b.kind)).toContain("wise");
     // No identity in the index, or no index at all, is stale too and the bookings still show.
     expect((await run({ bookings: visit(), groups: [] })).stale).toBe(true);
@@ -313,9 +314,21 @@ describe("head week", () => {
     expect(none.visits).toHaveLength(1);
     expect(none.name).toBe("Peat");
     // Leave known only to a date before the end of the week cannot prove the week is clear.
-    expect(
-      (await run({ groups: [group("Peat", { leavesCompleteThrough: instant(TUE, 0) })] })).stale,
-    ).toBe(true);
+    const ahead = await run({ groups: [group("Peat", { leavesCompleteThrough: instant(TUE, 0) })] });
+    expect([ahead.stale, ahead.staleReason]).toEqual([true, "beyond_leave"]);
+    // Unknown leave coverage is a snapshot problem, and good data has no reason.
+    expect((await run({ groups: [group("Peat", { leavesCompleteThrough: null })] })).staleReason).toBe("snapshot");
+    expect((await run({})).staleReason).toBeNull();
+  });
+
+  it("changes week at Bangkok midnight, not UTC", async () => {
+    // Sun 1 Nov 23:30 Bangkok is still the week of Mon 26 Oct; Mon 2 Nov 00:30 Bangkok starts the next.
+    const sunday = new Date("2026-11-01T16:30:00Z");
+    const monday = new Date("2026-11-01T17:30:00Z");
+    await expect(run({}, "Peat", MON, undefined, sunday)).resolves.toMatchObject({ weekStart: MON });
+    await expect(run({}, "Peat", "2026-10-26", undefined, sunday)).resolves.toMatchObject({ weekStart: "2026-10-26" });
+    await expect(run({}, "Peat", "2026-10-26", undefined, monday)).rejects.toMatchObject({ status: 400 });
+    await expect(run({}, "Peat", MON, undefined, monday)).resolves.toMatchObject({ weekStart: MON });
   });
 
   it("refuses an unknown head and a week before the current week", async () => {
@@ -361,8 +374,50 @@ describe("visit clashes for the candidate table", () => {
     expect(ensureIndex).not.toHaveBeenCalled();
   });
 
+  it("reports stale instead of failing when the sit-in select fails", async () => {
+    vi.mocked(ensureIndex).mockResolvedValue({
+      snapshotId: "snap",
+      syncedAt: new Date(NOW.getTime() - 60_000),
+      tutorGroups: [group("Peat"), group("Ek")],
+    } as never);
+    const db = { select: () => ({ from: () => ({ where: () => Promise.reject(new Error("relation does not exist")) }) }) };
+    expect(await visitClashes(db as never, bookings() as never, NOW)).toEqual({ candidateIds: [], stale: true });
+  });
+
   it("reports stale instead of failing when the index cannot be read", async () => {
     vi.mocked(ensureIndex).mockRejectedValue(new Error("no snapshot"));
     expect(await visitClashes(dbWith() as never, bookings() as never, NOW)).toEqual({ candidateIds: [], stale: true });
+  });
+});
+
+describe("dashboard with a failing clash check", () => {
+  it("still returns when the sit-in select rejects", async () => {
+    vi.mocked(ensureIndex).mockResolvedValue({
+      snapshotId: "snap",
+      syncedAt: new Date(),
+      tutorGroups: [group("Peat")],
+    } as never);
+    const future = new Date("2099-01-05T05:00:00Z");
+    const mock = {
+      ...row("mock", MON, 720, 780),
+      startTime: future,
+      endTime: new Date(future.getTime() + 3600_000),
+    };
+    const rows = new Map<unknown, unknown[]>([[s.hiringBookings, [mock]]]);
+    // Any chain of where/orderBy/limit resolves to the table's rows; the sit-in table rejects.
+    const chain = (table: unknown): unknown =>
+      new Proxy(() => {}, {
+        get: (_t, prop) =>
+          prop === "then"
+            ? table === s.tutorSitInObservations
+              ? (_ok: unknown, bad: (e: Error) => void) => bad(new Error("relation does not exist"))
+              : (ok: (v: unknown[]) => void) => ok(rows.get(table) ?? [])
+            : () => chain(table),
+      });
+    const db = { select: () => ({ from: (table: unknown) => chain(table) }) };
+    const { dashboard } = await import("../service");
+    const data = await dashboard(db as never);
+    expect(data.visitClashes).toEqual({ candidateIds: [], stale: true });
+    expect(data.bookings).toHaveLength(1);
   });
 });

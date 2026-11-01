@@ -42,7 +42,9 @@ export function HeadCalendar({ week, onOpen }: { week: HeadWeek; onOpen: (candid
       </p>
       {week.stale && (
         <p role="status" className={`${css.headBanner} ${css.headBannerStale}`}>
-          Wise data for this head is old or incomplete, so classes and leave may be missing. Check Wise before you rely on this week.
+          {week.staleReason === "beyond_leave"
+            ? "Leave is not known this far ahead. Classes show, but leave may be missing. Check Wise before you rely on this week."
+            : "Wise data is old or incomplete. Classes and leave may be missing. Check Wise before you rely on this week."}
         </p>
       )}
       {clashes.length > 0 && (

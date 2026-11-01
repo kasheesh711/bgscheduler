@@ -9,6 +9,8 @@ import { deliverBookingMessages } from "@/lib/hiring/worker";
 import { getDb } from "@/lib/db";
 import { googleConnectionStatus } from "@/lib/hiring/google";
 
+// A dashboard or head-schedule load can trigger a cold Wise index build.
+export const maxDuration = 120;
 const headQuery = z.object({
   head: z.string().trim().min(1).max(200),
   weekStart: z.iso.date().optional(),

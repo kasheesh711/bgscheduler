@@ -38,6 +38,8 @@ export type HeadWeek = {
   mocks: number;
   limit: number;
   stale: boolean;
+  /** Why: "snapshot" = Wise data is old, missing or incomplete; "beyond_leave" = leave is not known this far ahead. */
+  staleReason: "snapshot" | "beyond_leave" | null;
   days: {
     date: string;
     office: { start: string; end: string } | null;
@@ -104,7 +106,7 @@ export function buildHeadWeek(input: {
   bookings: BookingRow[];
   observations: SitIn[];
   names: Map<string, string>;
-  stale: boolean;
+  staleReason: HeadWeek["staleReason"];
 }): HeadWeek {
   const { head, group, weekStart: ws } = input;
   const key = head.canonicalKey;
@@ -185,7 +187,8 @@ export function buildHeadWeek(input: {
     weekStart: ws,
     mocks: mocks.filter((m) => inWeek(m.startTime)).length,
     limit: input.limit,
-    stale: input.stale,
+    stale: input.staleReason !== null,
+    staleReason: input.staleReason,
     days,
     visits,
   };
@@ -233,6 +236,12 @@ export async function headWeek(
         .where(inArray(s.hiringCandidates.id, ids))
     : [];
   const weekEnd = instant(shiftDate(ws, 5), 0);
+  const snapshotStale =
+    !index ||
+    indexIsStale(index, now) ||
+    !group ||
+    blocksHead(group.dataIssues) ||
+    !group.leavesCompleteThrough;
   return buildHeadWeek({
     head,
     name: group?.displayName ?? key,
@@ -243,50 +252,54 @@ export async function headWeek(
     bookings: calendar.bookings,
     observations: calendar.observations,
     names: new Map(people.map((p) => [p.id, p.name])),
-    stale:
-      !index ||
-      indexIsStale(index, now) ||
-      !group ||
-      blocksHead(group.dataIssues) ||
-      !group.leavesCompleteThrough ||
-      group.leavesCompleteThrough < weekEnd,
+    staleReason: snapshotStale
+      ? "snapshot"
+      : group!.leavesCompleteThrough! < weekEnd
+        ? "beyond_leave"
+        : null,
   });
 }
 
 /**
  * The candidates whose booked mock now clashes, for the table's clash marker. `bookings` is the list the
  * dashboard already loaded, so this adds no booking query. With no upcoming mock it reads nothing. Otherwise
- * it costs one read of the warm in-memory index for all heads together (a cold index builds once, as for
- * any search) and one select of current sit-ins. A missing or old index returns `stale`, never an error.
+ * it makes one `ensureIndex` call for all heads together (on a warm call that is two small selects; a cold
+ * index builds once, as for any search) and one select of current sit-ins. Any failure, such as a missing
+ * table or a database error, returns `stale: true` with no clashes, so the dashboard never fails for it.
  */
 export async function visitClashes(
   db: Database,
   bookings: Pick<BookingRow, "candidateId" | "kind" | "status" | "interviewerKey" | "startTime" | "endTime">[],
   now = new Date(),
 ): Promise<{ candidateIds: string[]; stale: boolean }> {
-  const upcoming = bookings.filter(
-    (b) => b.status === "confirmed" && b.kind === "mock" && !!b.interviewerKey && b.endTime > now,
-  );
-  if (!upcoming.length) return { candidateIds: [], stale: false };
-  const index = await readIndex(db);
-  if (!index) return { candidateIds: [], stale: true };
-  const observations = await db
-    .select()
-    .from(s.tutorSitInObservations)
-    .where(eq(s.tutorSitInObservations.current, true));
-  let stale = indexIsStale(index, now);
-  const ids = new Set<string>();
-  for (const b of upcoming) {
-    const group = index.tutorGroups.find((g) => g.canonicalKey === b.interviewerKey);
-    if (!group) stale = true;
-    if (
-      headBusy(
-        group,
-        observations.filter((o) => o.observerCanonicalKey === b.interviewerKey),
-        { start: b.startTime, end: b.endTime },
+  try {
+    const upcoming = bookings.filter(
+      (b) => b.status === "confirmed" && b.kind === "mock" && !!b.interviewerKey && b.endTime > now,
+    );
+    if (!upcoming.length) return { candidateIds: [], stale: false };
+    const index = await readIndex(db);
+    if (!index) return { candidateIds: [], stale: true };
+    const observations = await db
+      .select()
+      .from(s.tutorSitInObservations)
+      .where(eq(s.tutorSitInObservations.current, true));
+    let stale = indexIsStale(index, now);
+    const ids = new Set<string>();
+    for (const b of upcoming) {
+      const group = index.tutorGroups.find((g) => g.canonicalKey === b.interviewerKey);
+      if (!group) stale = true;
+      if (
+        headBusy(
+          group,
+          observations.filter((o) => o.observerCanonicalKey === b.interviewerKey),
+          { start: b.startTime, end: b.endTime },
+        )
       )
-    )
-      ids.add(b.candidateId);
+        ids.add(b.candidateId);
+    }
+    return { candidateIds: [...ids], stale };
+  } catch (error) {
+    console.error("Visit clash check failed", error instanceof Error ? error.name : "UnknownError");
+    return { candidateIds: [], stale: true };
   }
-  return { candidateIds: [...ids], stale };
 }

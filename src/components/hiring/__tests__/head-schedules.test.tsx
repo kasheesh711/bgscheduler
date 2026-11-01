@@ -19,6 +19,7 @@ const week = (patch: Partial<HeadWeek> = {}): HeadWeek => ({
   mocks: 1,
   limit: 2,
   stale: false,
+  staleReason: null,
   days: [
     day("2026-11-02", hours, [
       { kind: "exam", start: "10:00", end: "12:00", candidateId: "c1", candidate: "Nina Porter", subject: "Mathematics", clash: false },
@@ -73,7 +74,12 @@ describe("HeadCalendar", () => {
     const clean = calendar(week());
     expect(clean).not.toContain("old or incomplete");
     expect(clean).not.toContain("Staff must act");
-    expect(calendar(week({ stale: true }))).toContain("old or incomplete");
+    const snapshot = calendar(week({ stale: true, staleReason: "snapshot" }));
+    expect(snapshot).toContain("Wise data is old or incomplete.");
+    expect(snapshot).not.toContain("Leave is not known this far ahead.");
+    const ahead = calendar(week({ stale: true, staleReason: "beyond_leave" }));
+    expect(ahead).toContain("Leave is not known this far ahead.");
+    expect(ahead).not.toContain("old or incomplete");
     const clash = week();
     clash.visits[0].clash = true;
     clash.days[0].blocks[1].clash = true;
