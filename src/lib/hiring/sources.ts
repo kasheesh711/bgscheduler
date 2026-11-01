@@ -20,7 +20,7 @@ import {
   type Stage,
 } from "./model";
 import { appInvited } from "./queue";
-import { storeResume, type ResumeFile } from "./resume-files";
+import { RESUME_MAX_BYTES, sniffResume, storeResume, type ResumeFile } from "./resume-files";
 import { answerKey } from "./scoring";
 import { audit, inviteToMock, settings, sourceHash } from "./service";
 // The one copy stays in status.ts: client components import that file, and this one reaches the database.
@@ -606,35 +606,56 @@ const holdsApplication = (applicationId: string) =>
   sql`${s.hiringCandidates.sourceIds} @> ${JSON.stringify([applicationId])}::jsonb`;
 
 /**
- * The candidate a SEEK pass still has to read, or null. Null means: not one of ours, the file was deleted by retention,
- * the candidate has an answer and a file, or an earlier pass already read the page (even if it showed no file).
+ * Whether a SEEK pass still has to read this application. `notOurs`: no candidate holds it. `done`: the file was deleted by
+ * retention, the candidate has an answer and a file, or an earlier pass already read the page (even if it showed no file).
  */
-export async function backfillTodo(db: Database, applicationId: string) {
+export async function backfillStatus(
+  db: Database,
+  applicationId: string,
+): Promise<{ state: "todo"; candidateId: string } | { state: "done" | "notOurs" }> {
   const c = s.hiringCandidates;
   const [row] = await db
     .select({ id: c.id, answer: c.workRightsAnswer, path: c.resumePath, storedAt: c.resumeStoredAt })
     .from(c)
     .where(holdsApplication(applicationId))
     .limit(1);
-  if (!row || (!row.path && row.storedAt) || (row.answer !== null && row.path)) return null;
-  const [done] = await db
+  if (!row) return { state: "notOurs" };
+  if ((!row.path && row.storedAt) || (row.answer !== null && row.path)) return { state: "done" };
+  const [marked] = await db
     .select({ id: s.hiringAudit.id })
     .from(s.hiringAudit)
     .where(and(eq(s.hiringAudit.candidateId, row.id), eq(s.hiringAudit.action, "seek-backfill")))
     .limit(1);
-  return done ? null : { candidateId: row.id };
+  return marked ? { state: "done" } : { state: "todo", candidateId: row.id };
 }
+
+/** What one page showed. `resumeFailed`: a résumé control was there but the download failed. `resumeUnusable`: the file can never be read. */
+export type BackfillPage = {
+  workRightsAnswer: string | null;
+  file: ResumeFile | null;
+  resumeFailed?: boolean;
+  resumeUnusable?: boolean;
+};
+export type BackfillOutcome = {
+  answer: "none" | "filled" | "same" | "replaced";
+  file: "stored" | "kept" | "none" | "failed" | "unusable";
+};
 
 /**
  * Stores what a SEEK page showed: the exact work-rights answer and the original file. It writes only `work_rights_answer`,
  * the résumé columns, `seenWorkRights` and one audit row. Stage, revision, `updated_at`, text, hashes, review note and outbox
  * stay as they were, so nothing re-scores and nothing is sent. A different answer replaces the stored one and is never accepted.
+ *
+ * The `seek-backfill` row marks the candidate as read. A failed download or upload saves the answer but leaves that row out
+ * (a `seek-backfill-retry` row records the answer), so the next run reads the candidate again. A file that can never be read
+ * (`.doc`, over the page limit, encrypted, not a PDF or Word file) is marked `unusable` and not retried.
+ * Returns null when no candidate holds the application, or retention deleted its file.
  */
 export async function applyBackfill(
   db: Database,
   applicationId: string,
-  { workRightsAnswer, file }: { workRightsAnswer: string | null; file: ResumeFile | null },
-) {
+  { workRightsAnswer, file, resumeFailed, resumeUnusable }: BackfillPage,
+): Promise<BackfillOutcome | null> {
   await assertAutomationOff(db);
   const c = s.hiringCandidates;
   const [row] = await db
@@ -643,21 +664,33 @@ export async function applyBackfill(
     .where(holdsApplication(applicationId))
     .limit(1);
   // Retention deleted this file on purpose, so it is not stored again.
-  if (!row || (!row.path && row.storedAt)) return;
-  // The file goes first. A failed upload throws before the audit row, so the next run reads this candidate again.
-  const store = !!file && !row.path;
-  if (store) await storeResume(row.id, file, db);
+  if (!row || (!row.path && row.storedAt)) return null;
+  let stored: BackfillOutcome["file"] = row.path ? "kept" : "none";
+  if (!row.path) {
+    // The file goes first, outside the transaction. Its failure must not stop the answer from being saved.
+    if (file && (!sniffResume(file.bytes) || file.bytes.length > RESUME_MAX_BYTES)) stored = "unusable";
+    else if (file)
+      try {
+        await storeResume(row.id, file, db);
+        stored = "stored";
+      } catch {
+        stored = "failed";
+      }
+    else if (resumeFailed) stored = "failed";
+    else if (resumeUnusable) stored = "unusable";
+  }
   const text = workRightsAnswer?.trim() || null;
-  await withDatabaseTransaction(db, async (tx) => {
+  return withDatabaseTransaction(db, async (tx) => {
     await recordWorkRightsAnswer(tx, text, BACKFILL_ACTOR);
     const [now] = await tx.select({ answer: c.workRightsAnswer }).from(c).where(eq(c.id, row.id)).for("update");
     const answer = !text ? "none" : now.answer === null ? "filled" : now.answer === text ? "same" : "replaced";
     if (text && answer !== "same") await tx.update(c).set({ workRightsAnswer: text }).where(eq(c.id, row.id));
-    await audit(tx, BACKFILL_ACTOR, "seek-backfill", row.id, {
+    await audit(tx, BACKFILL_ACTOR, stored === "failed" ? "seek-backfill-retry" : "seek-backfill", row.id, {
       answer,
       ...(answer === "replaced" ? { previous: now.answer } : {}),
-      file: store ? "stored" : "none",
+      file: stored,
     });
+    return { answer, file: stored };
   });
 }
 
@@ -748,7 +781,7 @@ export async function importMissingTracker(db: Database, config: HiringConfig) {
           email: person.email,
           previouslyContacted: true,
           stage: "review",
-          reviewNote: "No source text",
+          reviewNote: "Added from the tracker. No SEEK application is linked yet.",
         })
         .onConflictDoNothing({ target: s.hiringCandidates.email })
         .returning({ id: s.hiringCandidates.id });

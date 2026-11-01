@@ -38,7 +38,7 @@ function authorization(context: string, body: string, now: number, secret: strin
   if (!secret)
     throw new HiringError(
       503,
-      "Hiring delivery authentication is not configured.",
+      "Hiring request authentication is not configured.",
     );
   const timestamp = String(Math.floor(now / 1000));
   return `HMAC-HIRING ${timestamp}.${digest(context, body, timestamp, secret).toString("hex")}`;
@@ -70,12 +70,12 @@ export const verifyResumeUploadAuthorization = (
   secret = process.env.AUTH_SECRET,
 ) => verify(RESUME_UPLOAD, body, header, now, secret);
 
-/** Posts a signed body from the worker to the configured HTTPS application address. */
+/** Posts a signed body from the Mac (the worker, or a one-time pass that stores files) to the configured HTTPS application address. */
 async function signedPost(route: string, body: string, signature: string) {
   const url = new URL(route, process.env.APP_BASE_URL || "https://bgscheduler.vercel.app");
   if (url.protocol !== "https:" || url.username || url.password)
     throw new Error(
-      "Hiring delivery requires the configured HTTPS application address.",
+      "Hiring requests need the configured HTTPS application address.",
     );
   const response = await fetch(url, {
     method: "POST",
@@ -91,7 +91,7 @@ async function signedPost(route: string, body: string, signature: string) {
     throw new Error(
       typeof result.error === "string"
         ? result.error
-        : `Hiring delivery returned ${response.status}.`,
+        : `Hiring request returned ${response.status}.`,
     );
   return result;
 }

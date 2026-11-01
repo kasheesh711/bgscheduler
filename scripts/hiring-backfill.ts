@@ -8,7 +8,7 @@ import * as s from "../src/lib/db/schema";
 import { runtimeWritesAllowed } from "../src/lib/hiring/model";
 import { settings } from "../src/lib/hiring/service";
 import { importMissingTracker, reconcileTracker } from "../src/lib/hiring/sources";
-import { countOrphanResumes, createBackfillStep, parseBackfillArgs } from "../src/lib/hiring/backfill";
+import { createBackfillStep, parseBackfillArgs } from "../src/lib/hiring/backfill";
 import { backfillSeek, SEEK_PAUSE_MS } from "./hiring-seek";
 
 /** One-time passes over SEEK and the tracker. Counts are printed; names, emails and file names never are. */
@@ -41,31 +41,32 @@ async function main() {
     let stopping = false;
     process.on("SIGINT", () => { stopping = true; });
     process.on("SIGTERM", () => { stopping = true; });
-    const stored = async () => Number((await db.select({ n: sql<number>`count(${s.hiringCandidates.resumePath})` }).from(s.hiringCandidates))[0].n);
     const seen = async () => (await settings(db)).config.seenWorkRights.length;
-    const [filesBefore, answersBefore] = [await stored(), await seen()];
-    const step = createBackfillStep({
+    const answersBefore = await seen();
+    const { run, counts } = createBackfillStep({
       db,
       until: args.until!,
       limit: args.limit,
       pause: SEEK_PAUSE_MS,
       shouldStop: () => stopping || lost,
     });
-    let read = 0, skipped = 0, stoppedEarly = false;
+    let finished = false;
     try {
-      const outcome = await backfillSeek(path.join(os.homedir(), ".bgscheduler-hiring", "seek-profile"), config.seekJobId, async (id, load) => {
-        const result = await step(id, load);
-        if (result === "read") read++;
-        else if (result === "skipped") skipped++;
-        return result;
-      });
-      stoppedEarly = outcome.stopped;
+      const outcome = await backfillSeek(path.join(os.homedir(), ".bgscheduler-hiring", "seek-profile"), config.seekJobId, run);
+      finished = !outcome.stopped;
     } finally {
       // Printed even when the pass fails part-way, because each candidate was saved as it was read.
-      const [filesAfter, answersAfter] = [await stored(), await seen()];
       const noFile = await db.$count(s.hiringCandidates, sql`${s.hiringCandidates.resumePath} is null and ${s.hiringCandidates.resumeStoredAt} is null and jsonb_array_length(${s.hiringCandidates.sourceIds}) > 0`);
-      const orphanFiles = await countOrphanResumes(db).catch(() => null);
-      console.log(JSON.stringify({ read, skipped, stoppedEarly, filesStored: filesAfter - filesBefore, newWorkRightsAnswers: answersAfter - answersBefore, candidatesWithNoFile: noFile, orphanFiles }));
+      console.log(
+        JSON.stringify({
+          ...counts,
+          newWorkRightsAnswers: (await seen()) - answersBefore,
+          candidatesWithNoFile: noFile,
+          ...(finished ? {} : { candidatesWithNoFileNote: "partial run: candidates not read yet are counted too" }),
+          orphanFiles: "counted by the nightly job",
+          stoppedEarly: !finished,
+        }),
+      );
     }
   } finally {
     clearInterval(heartbeat);

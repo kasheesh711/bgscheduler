@@ -80,6 +80,8 @@ type InsightCandidate = {
   profileScore: number | null;
   profileAssessment: Assessment | null;
   universityAssessment: { fraction: number } | null;
+  /** False for a person with no profile text, who cannot be scored. Missing means true. */
+  hasSourceText?: boolean;
   subjects: Subject[];
   paperPassedSubjects: Subject[];
   previouslyContacted: boolean;
@@ -172,6 +174,8 @@ export function buildInsights(input: InsightInput, now = new Date()) {
   const byStage = Object.fromEntries(
     (Object.keys(STAGE_LABELS) as Stage[]).map((stage) => [stage, candidates.filter((c) => c.stage === stage).length]),
   ) as Record<Stage, number>;
+  // A person with no source text can never be scored, so they stay out of the "scored" share.
+  const scorable = candidates.filter((c) => c.hasSourceText !== false).length;
   const scores = candidates.flatMap((c) => (c.profileScore === null ? [] : [c.profileScore]));
   const sorted = [...scores].sort((a, b) => a - b);
   const mid = sorted.length >> 1;
@@ -226,7 +230,8 @@ export function buildInsights(input: InsightInput, now = new Date()) {
     byStage,
     stopped: candidates.length - active.length,
     scored: scores.length,
-    unscored: candidates.length - scores.length,
+    scorable,
+    unscored: scorable - scores.length,
     aboveThreshold: scores.filter((v) => v >= threshold).length,
     median: !sorted.length
       ? null

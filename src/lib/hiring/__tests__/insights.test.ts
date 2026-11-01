@@ -104,6 +104,22 @@ describe("buildInsights", () => {
     expect(result.unscored).toBe(0);
   });
 
+  it("leaves people with no source text out of the scored share", () => {
+    const result = buildInsights(
+      {
+        ...empty,
+        candidates: [
+          candidate("a", "review", { profileScore: 80 }),
+          candidate("b", "review"),
+          candidate("c", "review", { hasSourceText: false }),
+          candidate("d", "review", { hasSourceText: false }),
+        ],
+      },
+      now,
+    );
+    expect(result).toMatchObject({ total: 4, scorable: 2, scored: 1, unscored: 1 });
+  });
+
   it("names the criterion with the lowest share met", () => {
     const result = buildInsights(
       {

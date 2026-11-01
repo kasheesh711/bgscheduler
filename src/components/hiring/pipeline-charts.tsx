@@ -80,9 +80,9 @@ export function KpiStrip({
       />
       <Tile
         label="Scored"
-        value={`${percent(i.scored, i.total)}%`}
-        meter={percent(i.scored, i.total)}
-        note={`${i.scored} of ${i.total}`}
+        value={`${percent(i.scored, i.scorable)}%`}
+        meter={percent(i.scored, i.scorable)}
+        note={`${i.scored} of ${i.scorable}${i.scorable < i.total ? `, ${i.total - i.scorable} with no source text` : ""}`}
       />
       <Tile
         label={`At or above ${threshold}`}

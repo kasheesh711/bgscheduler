@@ -1,9 +1,5 @@
-import { list } from "@vercel/blob";
-import { isNotNull } from "drizzle-orm";
 import { type Database } from "@/lib/db";
-import * as s from "@/lib/db/schema";
-import type { ResumeFile } from "./resume-files";
-import { applyBackfill, assertAutomationOff, backfillTodo } from "./sources";
+import { applyBackfill, assertAutomationOff, backfillStatus, type BackfillPage } from "./sources";
 
 export const BACKFILL_USAGE =
   "Usage: npm run hiring:backfill -- --seek [--limit N] | --tracker-report | --tracker-import\n" +
@@ -30,11 +26,21 @@ export function parseBackfillArgs(argv: string[], env: Record<string, string | u
   return { mode, limit, until };
 }
 
-export type BackfillRead = () => Promise<{ workRightsAnswer: string | null; file: ResumeFile | null }>;
+/** What the page script returns for one card. `applicationId` is the id the page showed when it read, not the one planned. */
+export type BackfillRead = BackfillPage & { applicationId: string };
+
+/** An error the pass must not absorb as one unreadable card, such as a lost sign-in. */
+export class BackfillFatal extends Error {}
+
+export const MAX_READ_FAILURES = 5;
 
 /**
  * The decision for one SEEK card. It opens the page (`read`) only for a candidate that still needs it, waits `pause`
- * between candidates it reads, and says "stop" at the stop time, at the limit, or when asked. Paused automation throws.
+ * between candidates it reads, and says "stop" at the stop time, at the limit, or when asked.
+ *
+ * A read that throws, or that returns another application than the one expected (the list moved), writes nothing,
+ * is counted in `readFailed` and the pass goes on. Five failures in a row end the pass, because that means a lost
+ * sign-in or changed page. A paused-automation error and any write error are never absorbed.
  */
 export function createBackfillStep(options: {
   db: Database;
@@ -42,34 +48,56 @@ export function createBackfillStep(options: {
   limit: number | null;
   pause: number;
   shouldStop: () => boolean;
+  maxFailures?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }) {
-  const { db, until, limit, pause, shouldStop, now = Date.now, sleep = (ms) => new Promise<void>((r) => setTimeout(r, ms)) } = options;
-  let reads = 0;
-  return async (applicationId: string, read: BackfillRead): Promise<"read" | "skipped" | "stop"> => {
-    if (!(await backfillTodo(db, applicationId))) return "skipped";
-    if (reads) await sleep(pause);
-    if (shouldStop() || now() >= until || (limit !== null && reads >= limit)) return "stop";
+  const { db, until, limit, pause, shouldStop, maxFailures = MAX_READ_FAILURES, now = Date.now, sleep = (ms) => new Promise<void>((r) => setTimeout(r, ms)) } = options;
+  const counts = {
+    read: 0,
+    done: 0,
+    notOurs: 0,
+    answersFilled: 0,
+    answersReplaced: 0,
+    filesStored: 0,
+    fileFailed: 0,
+    fileUnusable: 0,
+    readFailed: 0,
+  };
+  let attempts = 0;
+  let streak = 0;
+  const run = async (applicationId: string, read: () => Promise<BackfillRead>): Promise<"read" | "skipped" | "failed" | "stop"> => {
+    if (shouldStop()) return "stop";
+    const status = await backfillStatus(db, applicationId);
+    if (status.state !== "todo") {
+      counts[status.state]++;
+      return "skipped";
+    }
+    if (attempts) await sleep(pause);
+    if (shouldStop() || now() >= until || (limit !== null && attempts >= limit)) return "stop";
     await assertAutomationOff(db);
-    reads++;
-    await applyBackfill(db, applicationId, await read());
+    attempts++;
+    let page: BackfillRead;
+    try {
+      page = await read();
+      if (page.applicationId !== applicationId) throw new Error("The SEEK list moved while the pass read it.");
+    } catch (error) {
+      if (error instanceof BackfillFatal) throw error;
+      counts.readFailed++;
+      if (++streak >= maxFailures)
+        throw new BackfillFatal(`${maxFailures} candidates in a row could not be read. SEEK may be signed out or its page may have changed.`);
+      return "failed";
+    }
+    streak = 0;
+    const outcome = await applyBackfill(db, applicationId, page);
+    if (!outcome) return "skipped";
+    counts.read++;
+    if (outcome.answer === "filled") counts.answersFilled++;
+    if (outcome.answer === "replaced") counts.answersReplaced++;
+    if (outcome.file === "stored") counts.filesStored++;
+    if (outcome.file === "failed") counts.fileFailed++;
+    if (outcome.file === "unusable") counts.fileUnusable++;
     return "read";
   };
-}
-
-/** Stored files that no candidate row points to. Only counted: nothing is deleted. */
-export async function countOrphanResumes(db: Database) {
-  const known = new Set(
-    (await db.select({ path: s.hiringCandidates.resumePath }).from(s.hiringCandidates).where(isNotNull(s.hiringCandidates.resumePath)))
-      .map((r) => r.path),
-  );
-  let orphans = 0;
-  let cursor: string | undefined;
-  do {
-    const page = await list({ prefix: "hiring-resumes/", cursor, limit: 1000, abortSignal: AbortSignal.timeout(20000) });
-    orphans += page.blobs.filter((blob) => !known.has(blob.pathname)).length;
-    cursor = page.hasMore ? page.cursor : undefined;
-  } while (cursor);
-  return orphans;
+  return { run, counts };
 }

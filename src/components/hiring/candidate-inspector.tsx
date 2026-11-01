@@ -330,6 +330,7 @@ export function CandidateInspector({
           {candidate.profileScore === null ? "Not scored" : Math.round(candidate.profileScore * 10) / 10}
           {candidate.profileScore !== null && <span>/100 profile</span>}
         </p>
+        {candidate.hasSourceText === false && <p className={css.inspectorNote}>No source text</p>}
         {candidate.reviewNote && <p className={css.inspectorNote}>{candidate.reviewNote}</p>}
         {candidate.preScreen && candidate.preScreenHash && !candidate.preScreenAssessment && (
           <p className={css.inspectorNote}>Pre-screen could not be scored. Its evidence could not be verified.</p>

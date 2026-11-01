@@ -1,24 +1,25 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq, sql } from "drizzle-orm";
-import { list } from "@vercel/blob";
+import { del, list } from "@vercel/blob";
 import { put } from "@vercel/blob/client";
 import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
 import { type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import * as sheets from "@/lib/sales-dashboard/sheets";
+import { dashboard } from "../service";
 import { configSchema } from "../model";
 import { profileGate } from "../insights";
 import { autoInviteEligible, onsiteQueue, preScreenQueue } from "../queue";
 import { RESUME_TYPES } from "../model";
-import { resumePath } from "../resume-files";
+import { countOrphanResumes, deleteExpiredResumes, resumePath, runResumeRetention } from "../resume-files";
 import {
   applyBackfill,
-  backfillTodo,
+  backfillStatus,
   importApplication,
   importMissingTracker,
   reconcileTracker,
 } from "../sources";
-import { countOrphanResumes, createBackfillStep, parseBackfillArgs } from "../backfill";
+import { BackfillFatal, createBackfillStep, parseBackfillArgs } from "../backfill";
 
 vi.mock("@vercel/blob", () => ({ del: vi.fn(), list: vi.fn(), get: vi.fn() }));
 vi.mock("@vercel/blob/client", () => ({ put: vi.fn() }));
@@ -124,19 +125,19 @@ describe("SEEK pass: applyBackfill", () => {
       resumePath: resumePath("00000000-0000-4000-8000-000000000001", "a".repeat(64), "pdf"),
       resumeStoredAt: new Date(),
     });
-    expect(await backfillTodo(db, done.sourceIds[0])).toBeNull();
+    expect(await backfillStatus(db, done.sourceIds[0])).toEqual({ state: "done" });
     const checked = await seed();
-    expect(await backfillTodo(db, checked.sourceIds[0])).not.toBeNull();
+    expect(await backfillStatus(db, checked.sourceIds[0])).toEqual({ state: "todo", candidateId: checked.id });
     await applyBackfill(db, checked.sourceIds[0], { workRightsAnswer: null, file: null });
     // Checked with nothing on the page: a rerun does not open it again.
-    expect(await backfillTodo(db, checked.sourceIds[0])).toBeNull();
-    expect(await backfillTodo(db, "unknown-application")).toBeNull();
+    expect(await backfillStatus(db, checked.sourceIds[0])).toEqual({ state: "done" });
+    expect(await backfillStatus(db, "unknown-application")).toEqual({ state: "notOurs" });
   });
 
   it("skips a row whose résumé was deleted by retention", async () => {
     const row = await seed({ resumePath: null, resumeStoredAt: new Date("2025-01-01T00:00:00Z") });
-    expect(await backfillTodo(db, row.sourceIds[0])).toBeNull();
-    await applyBackfill(db, row.sourceIds[0], { workRightsAnswer: ACCEPTED, file: pdf() });
+    expect(await backfillStatus(db, row.sourceIds[0])).toEqual({ state: "done" });
+    expect(await applyBackfill(db, row.sourceIds[0], { workRightsAnswer: ACCEPTED, file: pdf() })).toBeNull();
     expect(put).not.toHaveBeenCalled();
     const after = await load(row.id);
     expect(after.resumePath).toBeNull();
@@ -176,12 +177,51 @@ describe("SEEK pass: applyBackfill", () => {
     expect(put).toHaveBeenCalledTimes(1);
   });
 
-  it("does not mark the candidate checked when the upload fails, so a rerun retries", async () => {
+  it("saves the answer but writes no seek-backfill row when the upload fails, so a rerun retries", async () => {
     const row = await seed();
     vi.mocked(put).mockRejectedValueOnce(new Error("storage down"));
-    await expect(applyBackfill(db, "app-1", { workRightsAnswer: ACCEPTED, file: pdf() })).rejects.toThrow();
-    expect(await backfillTodo(db, "app-1")).not.toBeNull();
+    expect(await applyBackfill(db, "app-1", { workRightsAnswer: ACCEPTED, file: pdf() })).toEqual({ answer: "filled", file: "failed" });
+    expect(await backfillStatus(db, "app-1")).toEqual({ state: "todo", candidateId: row.id });
+    const after = await load(row.id);
+    expect(after.resumePath).toBeNull();
+    expect(after.workRightsAnswer).toBe(ACCEPTED);
+    const actions = (await db.select().from(s.hiringAudit)).map((a) => a.action);
+    expect(actions).not.toContain("seek-backfill");
+    expect(actions).toContain("seek-backfill-retry");
+  });
+
+  it("saves the answer and writes no seek-backfill row when the page download failed", async () => {
+    const row = await seed();
+    expect(await applyBackfill(db, "app-1", { workRightsAnswer: ACCEPTED, file: null, resumeFailed: true })).toEqual({ answer: "filled", file: "failed" });
+    expect((await load(row.id)).workRightsAnswer).toBe(ACCEPTED);
+    expect((await backfillStatus(db, "app-1")).state).toBe("todo");
+    // The next run gets the file and then marks the candidate.
+    expect(await applyBackfill(db, "app-1", { workRightsAnswer: ACCEPTED, file: pdf() })).toEqual({ answer: "same", file: "stored" });
+    expect((await backfillStatus(db, "app-1")).state).toBe("done");
+  });
+
+  it.each([
+    ["a page that reported an unusable file", { workRightsAnswer: ACCEPTED, file: null, resumeUnusable: true }],
+    ["a Word 97 file", { workRightsAnswer: ACCEPTED, file: { bytes: Buffer.from("\xd0\xcf\x11\xe0 old doc", "latin1"), name: "cv.doc" } }],
+  ])("marks %s as unusable and does not retry it", async (_name, page) => {
+    const row = await seed();
+    expect(await applyBackfill(db, "app-1", page)).toEqual({ answer: "filled", file: "unusable" });
+    expect(put).not.toHaveBeenCalled();
     expect((await load(row.id)).resumePath).toBeNull();
+    expect((await backfillStatus(db, "app-1")).state).toBe("done");
+    const [audit] = await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "seek-backfill"));
+    expect(audit.detail).toMatchObject({ file: "unusable" });
+  });
+
+  it("records file kept when a file already exists", async () => {
+    const row = await seed({
+      resumePath: resumePath("00000000-0000-4000-8000-000000000001", "a".repeat(64), "pdf"),
+      resumeStoredAt: new Date(),
+    });
+    await applyBackfill(db, row.sourceIds[0], { workRightsAnswer: ACCEPTED, file: pdf() });
+    expect(put).not.toHaveBeenCalled();
+    const [audit] = await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "seek-backfill"));
+    expect(audit.detail).toMatchObject({ file: "kept" });
   });
 
   it.each([["enabled"], ["deliveryEnabled"]])("refuses while %s is true", async (flag) => {
@@ -196,7 +236,7 @@ describe("SEEK pass: applyBackfill", () => {
 describe("SEEK pass: step and arguments", () => {
   const step = (over: Partial<Parameters<typeof createBackfillStep>[0]> = {}) => {
     const sleep = vi.fn().mockResolvedValue(undefined);
-    const run = createBackfillStep({
+    const made = createBackfillStep({
       db,
       until: Date.parse("2026-11-02T10:00:00Z"),
       limit: null,
@@ -206,44 +246,95 @@ describe("SEEK pass: step and arguments", () => {
       shouldStop: () => false,
       ...over,
     });
-    return { run, sleep };
+    return { ...made, sleep };
   };
-  const page = () => vi.fn().mockResolvedValue({ workRightsAnswer: OTHER, file: null });
+  const page = (id: string, over = {}) =>
+    vi.fn().mockResolvedValue({ applicationId: id, workRightsAnswer: OTHER, file: null, ...over });
 
-  it("reads only candidates that need it, and waits between reads", async () => {
+  it("reads only candidates that need it, waits between reads, and counts what it did", async () => {
     await seed();
     await seed();
     await seed({ workRightsAnswer: ACCEPTED, resumePath: "x", resumeStoredAt: new Date() });
-    const { run, sleep } = step();
-    const read = page();
+    const { run, sleep, counts } = step();
+    const read = page("app-1");
     expect(await run("app-1", read)).toBe("read");
-    expect(await run("app-2", read)).toBe("read");
+    expect(await run("app-2", page("app-2", { file: pdf() }))).toBe("read");
     expect(await run("app-3", read)).toBe("skipped");
     expect(await run("not-known", read)).toBe("skipped");
-    expect(read).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenCalledTimes(1);
     // No wait before the first read; one wait before the second; none for skipped ones.
     expect(sleep).toHaveBeenCalledTimes(1);
     expect(sleep).toHaveBeenCalledWith(10000);
+    expect(counts).toMatchObject({ read: 2, done: 1, notOurs: 1, answersFilled: 2, filesStored: 1, readFailed: 0 });
   });
 
   it("stops at the limit, at the stop time, and when asked", async () => {
     await seed();
     await seed();
     const limited = step({ limit: 1 });
-    expect(await limited.run("app-1", page())).toBe("read");
-    expect(await limited.run("app-2", page())).toBe("stop");
+    expect(await limited.run("app-1", page("app-1"))).toBe("read");
+    expect(await limited.run("app-2", page("app-2"))).toBe("stop");
     const late = step({ now: () => Date.parse("2026-11-02T10:00:00Z") });
-    expect(await late.run("app-2", page())).toBe("stop");
+    expect(await late.run("app-2", page("app-2"))).toBe("stop");
     const asked = step({ shouldStop: () => true });
-    expect(await asked.run("app-2", page())).toBe("stop");
+    expect(await asked.run("app-2", page("app-2"))).toBe("stop");
   });
 
-  it("does not open the page while automation is on", async () => {
+  it("does not open the page while automation is on, and does not absorb that error", async () => {
     await seed();
     await setConfig({ enabled: true });
-    const read = page();
-    await expect(step().run("app-1", read)).rejects.toThrow(/pause/i);
+    const read = page("app-1");
+    const made = step();
+    await expect(made.run("app-1", read)).rejects.toThrow(/pause/i);
     expect(read).not.toHaveBeenCalled();
+    expect(made.counts.readFailed).toBe(0);
+  });
+
+  it("writes nothing when the card that was read is another person's", async () => {
+    const first = await seed();
+    const second = await seed();
+    const before = await counts();
+    const made = step();
+    // The list moved: the card planned as app-1 now shows app-2, with its own answer and file.
+    expect(await made.run("app-1", page("app-2", { workRightsAnswer: ACCEPTED, file: pdf() }))).toBe("failed");
+    expect(put).not.toHaveBeenCalled();
+    expect(await counts()).toEqual(before);
+    for (const row of [first, second]) {
+      const after = await load(row.id);
+      expect(after.workRightsAnswer).toBeNull();
+      expect(after.resumePath).toBeNull();
+    }
+    expect(made.counts).toMatchObject({ readFailed: 1, read: 0 });
+  });
+
+  it("counts a failed read, writes no audit row, goes on, and stops after five in a row", async () => {
+    for (let i = 0; i < 8; i++) await seed();
+    const failing = () => vi.fn().mockRejectedValue(new Error("SEEK page step failed: TimeoutError"));
+    const made = step();
+    expect(await made.run("app-1", failing())).toBe("failed");
+    expect(await made.run("app-2", page("app-2"))).toBe("read");
+    // A good read resets the run of failures.
+    for (const n of [3, 4, 5, 6]) expect(await made.run(`app-${n}`, failing())).toBe("failed");
+    await expect(made.run("app-7", failing())).rejects.toThrow(/5 candidates in a row/);
+    expect(made.counts.readFailed).toBe(6);
+    expect(await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "seek-backfill"))).toHaveLength(1);
+    expect((await backfillStatus(db, "app-1")).state).toBe("todo");
+  });
+
+  it("does not absorb a fatal error such as a lost sign-in", async () => {
+    await seed();
+    const made = step();
+    await expect(made.run("app-1", vi.fn().mockRejectedValue(new BackfillFatal("SEEK is signed out.")))).rejects.toThrow(/signed out/);
+    expect(made.counts.readFailed).toBe(0);
+  });
+
+  it("counts a failed download and an unusable file apart", async () => {
+    await seed();
+    await seed();
+    const made = step();
+    await made.run("app-1", page("app-1", { resumeFailed: true }));
+    await made.run("app-2", page("app-2", { resumeUnusable: true }));
+    expect(made.counts).toMatchObject({ fileFailed: 1, fileUnusable: 1, filesStored: 0 });
   });
 
   const env = { HIRING_BACKFILL_UNTIL: "2099-01-01T00:00:00Z" };
@@ -283,6 +374,46 @@ describe("orphan files", () => {
       .mockResolvedValueOnce({ blobs: [{ pathname: "hiring-resumes/y/lost.docx" }], hasMore: false } as never);
     expect(await countOrphanResumes(db)).toBe(2);
     expect(list).toHaveBeenCalledWith(expect.objectContaining({ prefix: "hiring-resumes/" }));
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it("is recorded on the retention cron's audit row, and a failed count never fails the run", async () => {
+    vi.stubEnv("HIRING_WRITES_ENABLED", "true");
+    vi.stubEnv("VERCEL_ENV", "production");
+    vi.mocked(list).mockResolvedValueOnce({ blobs: [{ pathname: "hiring-resumes/x/lost.pdf" }], hasMore: false } as never);
+    await runResumeRetention(db, new Date("2026-11-02T00:00:00Z"));
+    vi.mocked(list).mockRejectedValueOnce(new Error("storage down"));
+    await runResumeRetention(db, new Date("2026-11-02T00:00:00Z"));
+    const rows = await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "resume-retention")).orderBy(s.hiringAudit.createdAt);
+    expect(rows.map((r) => r.detail)).toEqual([
+      { deleted: 0, failed: 0, orphans: 1 },
+      { deleted: 0, failed: 0, orphans: null },
+    ]);
+    // The old three-argument call writes the old shape.
+    await deleteExpiredResumes(db, new Date("2026-11-02T00:00:00Z"), 12);
+    const [last] = (await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "resume-retention")).orderBy(s.hiringAudit.createdAt)).slice(-1);
+    expect(last.detail).toEqual({ deleted: 0, failed: 0 });
+  });
+});
+
+describe("source text in the dashboard", () => {
+  it("derives hasSourceText, never sends the text, and fits tracker-only rows and empty-text rows", async () => {
+    const withText = await seed();
+    const empty = await seed({ profileText: "" });
+    vi.mocked(sheets.listGoogleSheetProperties).mockResolvedValue(
+      ["Sourcing Log", "Scheduling Responses"].map((title) => ({ title, sheetId: 1, rowCount: 10, columnCount: 5 })) as never,
+    );
+    vi.mocked(sheets.fetchGoogleSheetRange).mockImplementation((async (_e: string, _i: string, range: string) =>
+      range.includes("Sourcing") ? [["Name", "Email"], ["Invented T", "t@example.com"]] : [["Name", "Email"]]) as never);
+    await importMissingTracker(db, config);
+    const { candidates } = await dashboard(db);
+    const byEmail = (email: string) => candidates.find((c) => c.email === email)!;
+    expect(byEmail(withText.email!).hasSourceText).toBe(true);
+    expect(byEmail(empty.email!).hasSourceText).toBe(false);
+    const tracker = byEmail("t@example.com");
+    expect(tracker.hasSourceText).toBe(false);
+    expect(tracker.reviewNote).toBe("Added from the tracker. No SEEK application is linked yet.");
+    expect(JSON.stringify(candidates)).not.toContain("Invented profile text");
   });
 });
 
@@ -374,7 +505,7 @@ describe("tracker passes", () => {
       expect(row).toMatchObject({
         previouslyContacted: true,
         stage: "review",
-        reviewNote: "No source text",
+        reviewNote: "Added from the tracker. No SEEK application is linked yet.",
         profileText: "",
         sourceIds: [],
         seekApplicationId: null,

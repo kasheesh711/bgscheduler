@@ -6,7 +6,7 @@ import { CandidateInspector } from "../candidate-inspector";
 import type { HiringCandidate } from "../dashboard";
 import { Pentagon } from "../pentagon";
 import { NO_FILTER } from "../dashboard";
-import { AveragePentagon, CRITERION_LABELS, SubjectChart, type Insights } from "../pipeline-charts";
+import { AveragePentagon, CRITERION_LABELS, KpiStrip, SubjectChart, type Insights } from "../pipeline-charts";
 
 vi.mock("next/font/google", () => ({ Instrument_Serif: () => ({ variable: "" }) }));
 
@@ -255,5 +255,19 @@ describe("CandidateInspector evidence", () => {
     expect(html).toContain("DSCTE pentagon for the Pre-screen");
     expect(html).toContain("Degree: Met");
     expect(html).not.toContain("Profile (grey)");
+  });
+});
+
+describe("the Scored tile", () => {
+  it("counts people with source text only, and says how many have none", () => {
+    const html = renderToStaticMarkup(
+      <KpiStrip
+        insights={{ total: 10, active: 10, parked: 0, scored: 4, scorable: 5, ready: 0, median: null, aboveThreshold: 0, pastReview: 0, appointmentsThisWeek: 0, messages: { sent: 0, waiting: 0, problems: 0 } } as unknown as Insights}
+        threshold={60}
+        onShowReady={() => {}}
+      />,
+    );
+    expect(html).toContain("80%");
+    expect(html).toContain("4 of 5, 5 with no source text");
   });
 });

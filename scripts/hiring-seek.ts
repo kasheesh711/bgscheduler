@@ -8,6 +8,7 @@ import {
   parseSeekFolderCounts,
   type Application,
 } from "../src/lib/hiring/model";
+import { BackfillFatal, type BackfillRead } from "../src/lib/hiring/backfill";
 import type { ResumeFile } from "../src/lib/hiring/resume-files";
 import { readWorkRights, redactProfile, removeWorkRights } from "../src/lib/hiring/seek-text";
 
@@ -79,11 +80,24 @@ export async function connectSeek(profilePath: string, jobId: string) {
   }
 }
 
+/** `resumeFailed`: a résumé control was there but the download failed. `resumeUnusable`: the file can never be read (not PDF or Word, encrypted, too long). */
+type ApplicationRead = {
+  application: Application;
+  resumeFile: ResumeFile | null;
+  resumeFailed: boolean;
+  resumeUnusable: boolean;
+};
+
+/**
+ * `forBackfill` skips two checks the backfill does not use: the status line on the card and the Emails tab. The worker's
+ * own read keeps both.
+ */
 async function readApplication(
   page: Page,
   card: ReturnType<Page["getByTestId"]>,
   jobId: string,
-): Promise<{ application: Application; resumeFile: ResumeFile | null }> {
+  forBackfill = false,
+): Promise<ApplicationRead> {
   const move = card.locator(
     'button[aria-label^="Move "][aria-haspopup="true"]',
   );
@@ -111,12 +125,14 @@ async function readApplication(
       .map((t) => t.trim())
       .includes(s),
   );
-  if (!status) throw new Error("SEEK candidate status could not be verified.");
+  if (!status && !forBackfill) throw new Error("SEEK candidate status could not be verified.");
   await card.getByText(name, { exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Candidate details" });
   await dialog.waitFor({ state: "visible" });
   let resumeText = "";
   let resumeFile: ResumeFile | null = null;
+  let resumeFailed = false;
+  let resumeUnusable = false;
   try {
     await dialog.getByRole("tab", { name: /^Profile(?:\s+Profile)*$/ }).click();
     const profile = dialog.getByRole("tabpanel", { name: "Profile" });
@@ -146,7 +162,7 @@ async function readApplication(
       ),
     )
       .replace(/Expected monthly salary\s*\n[^\n]*/i, "");
-    const resume = dialog.getByRole("button", { name: "Resumé" });
+    const resume = dialog.getByRole("button", { name: "Resumé", exact: true });
     const resumeTab = dialog.getByRole("tab", { name: "Resumé" });
     if ((await resume.count()) || (await resumeTab.count())) {
       const dir = await mkdtemp(path.join(os.tmpdir(), "bgs-hiring-"));
@@ -168,11 +184,19 @@ async function readApplication(
         const file = path.join(dir, "resume");
         await download.saveAs(file);
         const bytes = await readFile(file);
-        resumeText = redactProfile(await documentText(bytes), name);
-        // Only a file that passed the extractor's limits is kept. The model reads the redacted text, never the file.
-        resumeFile = { bytes, name: download.suggestedFilename() };
+        // Playwright keeps its own copy in a temp folder until the browser closes.
+        await download.delete().catch(() => {});
+        try {
+          resumeText = redactProfile(await documentText(bytes), name);
+          // Only a file that passed the extractor's limits is kept. The model reads the redacted text, never the file.
+          resumeFile = { bytes, name: download.suggestedFilename() };
+        } catch {
+          // A file that is read but cannot be used will not be usable on a later run either.
+          resumeUnusable = true;
+        }
       } catch {
         resumeText = "";
+        resumeFailed = true;
       } finally {
         await rm(dir, { recursive: true, force: true });
       }
@@ -180,9 +204,9 @@ async function readApplication(
     const emailsTab = dialog.getByRole("tab", {
       name: /^Emails(?: \(\d+\))?$/,
     });
-    if ((await emailsTab.count()) !== 1)
+    if (!forBackfill && (await emailsTab.count()) !== 1)
       throw new Error("SEEK email history could not be verified.");
-    const emailsText = await emailsTab.innerText();
+    const emailsText = forBackfill ? "" : await emailsTab.innerText();
     const previouslyContacted =
       Number(emailsText.match(/\((\d+)\)/)?.[1] ?? 0) > 0;
     if (new URL(page.url()).searchParams.get("jobid") !== jobId)
@@ -195,10 +219,12 @@ async function readApplication(
         profileText: redactProfile(cleaned, name),
         resumeText,
         previouslyContacted,
-        sourceStatus: status,
+        sourceStatus: status ?? "",
         workRightsAnswer,
       },
       resumeFile,
+      resumeFailed,
+      resumeUnusable,
     };
   } finally {
     await dialog
@@ -210,7 +236,7 @@ async function readApplication(
 
 /** Saves the text first, so a failed upload cannot lose the import. False means the file was not stored. */
 export async function saveApplication(
-  { application, resumeFile }: Awaited<ReturnType<typeof readApplication>>,
+  { application, resumeFile }: Pick<ApplicationRead, "application" | "resumeFile">,
   consume: (value: Application) => Promise<string>,
   keepFile: (candidateId: string, file: ResumeFile) => Promise<boolean>,
 ) {
@@ -221,6 +247,10 @@ export async function saveApplication(
 /** Pause between candidates in a pass that opens many profiles. It is the worker's own 10-second watch step. */
 export const SEEK_PAUSE_MS = 10000;
 const SEEK_SIGNED_OUT = "SEEK is signed out. Run npm run hiring:worker -- --connect-seek, then start this again.";
+/** An error whose text is fixed here, so it is safe to print. Playwright's own errors can quote page text such as a name. */
+class SeekPageError extends Error {}
+/** The folder count changed while the pass walked it. */
+class SeekListChanged extends SeekPageError {}
 
 /** Signed in means SEEK stayed on the employer candidates page. A sign-in redirect leaves it. */
 export const seekSignedIn = (url: string) => {
@@ -243,7 +273,7 @@ async function walkSeek(
   let scanned = 0;
   const page = browser.pages()[0] ?? (await browser.newPage());
   await page.goto(`https://th.employer.seek.com/candidates/?jobid=${jobId}`);
-  if (!seekSignedIn(page.url())) throw new Error(SEEK_SIGNED_OUT);
+  if (!seekSignedIn(page.url())) throw new SeekPageError(SEEK_SIGNED_OUT);
   const statusButtons = page.getByRole("button", {
     name: /^(Inbox|Prescreen|Shortlist|Interview|Offer|Accept|Not Suitable).*applications?$/i,
   });
@@ -263,7 +293,7 @@ async function walkSeek(
       notice.waitFor({ state: "visible" }),
     ]);
   } catch (error) {
-    if (!seekSignedIn(page.url())) throw new Error(SEEK_SIGNED_OUT);
+    if (!seekSignedIn(page.url())) throw new SeekPageError(SEEK_SIGNED_OUT);
     throw error;
   }
   if (await notice.isVisible()) {
@@ -331,15 +361,15 @@ async function walkSeek(
       );
       const pageKey = ids.join(",");
       if (!ids.length || ids.some((id) => !id))
-        throw new Error(
+        throw new SeekPageError(
           `SEEK ${status} page ${p + 1} has no visible applications.`,
         );
       if (seenPages.has(pageKey))
-        throw new Error(
+        throw new SeekPageError(
           `SEEK ${status} page ${p + 1} repeated the previous page.`,
         );
       if (ids.some((id) => allIds.has(id)))
-        throw new Error(
+        throw new SeekPageError(
           `SEEK ${status} page ${p + 1} repeated an application from an earlier page or folder.`,
         );
       seenPages.add(pageKey);
@@ -369,10 +399,10 @@ async function walkSeek(
         { previous: ids[0], selector: ID_CONTROL },
         { timeout: 30000 },
       );
-      if (p === 199) throw new Error("SEEK page limit exceeded.");
+      if (p === 199) throw new SeekPageError("SEEK page limit exceeded.");
     }
     if (folderScanned !== count)
-      throw new Error(
+      throw new SeekListChanged(
         `SEEK ${status} count changed during import. Retry before sending messages.`,
       );
   }
@@ -430,36 +460,58 @@ class PassStopped extends Error {}
  * Read-only pass over every SEEK folder. For each card it asks `step` (see `createBackfillStep`) whether the profile still
  * needs reading. The page actions are: open the job and each status folder by address, read the filter labels, open one
  * candidate's detail panel by clicking the name, open its Profile tab, expand "More", open the Resumé tab and download the
- * file, read the Emails tab label without opening it, close the panel, and click Next. It never clicks Move, the status
- * controls, or the message controls, and it imports nobody.
+ * file, close the panel, and click Next. It never clicks Move, the status controls, or the message controls, and it imports
+ * nobody.
+ *
+ * Playwright errors can quote page text such as a candidate's name, so none is passed on: a failed page step becomes fixed
+ * text plus the error name. A list that changed during the walk stops the pass with `stopped` false and an error.
  */
 export async function backfillSeek(
   profilePath: string,
   jobId: string,
-  step: (
-    applicationId: string,
-    read: () => Promise<{ workRightsAnswer: string | null; file: ResumeFile | null }>,
-  ) => Promise<"read" | "skipped" | "stop">,
+  step: (applicationId: string, read: () => Promise<BackfillRead>) => Promise<"read" | "skipped" | "failed" | "stop">,
 ) {
   const browser = await chromium.launchPersistentContext(profilePath, {
     channel: "chrome",
     headless: true,
     acceptDownloads: true,
     viewport: { width: 1440, height: 1000 },
+    // Ctrl-C must reach the script, which finishes the current candidate and prints the summary.
+    handleSIGINT: false,
+    handleSIGTERM: false,
   });
-  let stopped = false;
+  const fixed = (error: unknown) => `SEEK page step failed: ${error instanceof Error ? error.name : "UnknownError"}`;
+  // Errors from the step (a paused-automation message, a database error) are not page errors and pass through unchanged.
+  let inStep = false;
+  const signedOut = () => !seekSignedIn(browser.pages()[0]?.url() ?? "");
   try {
     await walkSeek(browser, jobId, async ({ page, cards, index, id }) => {
+      inStep = true;
       const outcome = await step(id, async () => {
-        const { application, resumeFile } = await readApplication(page, cards.nth(index), jobId);
-        return { workRightsAnswer: application.workRightsAnswer, file: resumeFile };
+        try {
+          const { application, resumeFile, resumeFailed, resumeUnusable } = await readApplication(page, cards.nth(index), jobId, true);
+          return {
+            applicationId: application.applicationId,
+            workRightsAnswer: application.workRightsAnswer,
+            file: resumeFile,
+            resumeFailed,
+            resumeUnusable,
+          };
+        } catch (error) {
+          if (!seekSignedIn(page.url())) throw new BackfillFatal(SEEK_SIGNED_OUT);
+          throw new Error(fixed(error));
+        }
       });
+      inStep = false;
       if (outcome === "stop") throw new PassStopped();
-    }).catch((error) => {
-      if (!(error instanceof PassStopped)) throw error;
-      stopped = true;
     });
-    return { stopped };
+    return { stopped: false };
+  } catch (error) {
+    if (error instanceof PassStopped) return { stopped: true };
+    if (inStep || error instanceof BackfillFatal) throw error;
+    if (signedOut()) throw new BackfillFatal(SEEK_SIGNED_OUT);
+    if (error instanceof SeekListChanged) throw new BackfillFatal("The list changed during the run. Run it again.");
+    throw error instanceof SeekPageError ? error : new Error(fixed(error));
   } finally {
     await browser.close();
   }

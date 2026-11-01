@@ -94,7 +94,7 @@ export async function storeResume(candidateId: string, file: ResumeFile, db: Dat
     .where(eq(c.id, candidateId));
 }
 
-/** For the import: a failed upload must not stop it. The text is already saved, and a later pass can store the file. */
+/** For the worker's import: a failed upload must not stop it. The text is already saved, and a later pass can store the file. The backfill calls `storeResume` itself and records the failure. */
 export async function keepResume(candidateId: string, file: ResumeFile, db: Database) {
   try {
     await storeResume(candidateId, file, db);
@@ -103,6 +103,26 @@ export async function keepResume(candidateId: string, file: ResumeFile, db: Data
     console.error("Hiring résumé file not stored", error instanceof Error ? error.name : "UnknownError");
     return false;
   }
+}
+
+/**
+ * Stored files that no candidate row points to, counted by the nightly job because the Mac holds no Blob key. Nothing is
+ * deleted. Null when the folder is larger than five pages, so the count is unknown rather than wrong.
+ */
+export async function countOrphanResumes(db: Database) {
+  const known = new Set(
+    (await db.select({ path: s.hiringCandidates.resumePath }).from(s.hiringCandidates).where(isNotNull(s.hiringCandidates.resumePath)))
+      .map((r) => r.path),
+  );
+  let orphans = 0;
+  let cursor: string | undefined;
+  for (let page = 0; page < 5; page++) {
+    const result = await list({ prefix: "hiring-resumes/", cursor, limit: 1000, abortSignal: AbortSignal.timeout(4000) });
+    orphans += result.blobs.filter((blob) => !known.has(blob.pathname)).length;
+    if (!result.hasMore) return orphans;
+    cursor = result.cursor;
+  }
+  return null;
 }
 
 // Each file takes up to two storage calls of 5 seconds, so the time budget ends a slow run before the 60-second limit.
@@ -117,7 +137,13 @@ const RETENTION_BUDGET_MS = 45000;
  * value exists the comparison is null, and the file stays. Activity is read again just before each delete, because the
  * batch can be up to a minute old, and a file uploaded after the cutoff belongs to a newer import, so it stays.
  */
-export async function deleteExpiredResumes(db: Database, now: Date, months: number) {
+export async function deleteExpiredResumes(
+  db: Database,
+  now: Date,
+  months: number,
+  // The cron passes the orphan count, so its audit row carries it. A failed count is recorded as null and never fails the run.
+  countOrphans?: () => Promise<number | null>,
+) {
   if (!runtimeWritesAllowed()) return 0;
   const c = s.hiringCandidates;
   const cutoff = subMonths(now, months);
@@ -169,7 +195,8 @@ export async function deleteExpiredResumes(db: Database, now: Date, months: numb
       console.error("Hiring résumé retention failed", error instanceof Error ? error.name : "UnknownError");
     }
   }
-  await audit(db, "resume-retention", "resume-retention", null, { deleted, failed });
+  const orphans = countOrphans ? await countOrphans().catch(() => null) : undefined;
+  await audit(db, "resume-retention", "resume-retention", null, { deleted, failed, ...(countOrphans ? { orphans } : {}) });
   if (failed)
     throw new HiringError(503, `${failed} résumé file${failed === 1 ? "" : "s"} could not be deleted. The next run tries again.`);
   return deleted;
@@ -178,5 +205,5 @@ export async function deleteExpiredResumes(db: Database, now: Date, months: numb
 /** The cron and the Data Health Run button use the saved number of months. */
 export async function runResumeRetention(db: Database = getDb(), now = new Date()) {
   const { config } = await settings(db);
-  return deleteExpiredResumes(db, now, config.resumeRetentionMonths);
+  return deleteExpiredResumes(db, now, config.resumeRetentionMonths, () => countOrphanResumes(db));
 }

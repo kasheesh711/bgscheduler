@@ -104,6 +104,13 @@ describe("the candidate panel", () => {
     expect(html).toContain("Opening the file");
     expect(html).toContain("Extracted profile and résumé");
   });
+  it("shows No source text only for a person with none, beside a plain review note", () => {
+    const note = "Added from the tracker. No SEEK application is linked yet.";
+    const none = panel({ hasSourceText: false, reviewNote: note });
+    expect(none).toContain("No source text");
+    expect(none).toContain(note);
+    expect(panel({ hasSourceText: true, reviewNote: note })).not.toContain("No source text");
+  });
   it("names a deleted file or a missing file without being opened", () => {
     expect(panel({ resumeState: "deleted" })).toContain("Original résumé (deleted)");
     expect(panel({ resumeState: "none" })).toContain("Original résumé (no file yet)");
