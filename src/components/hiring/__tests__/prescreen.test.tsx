@@ -248,6 +248,10 @@ describe("table for the visit stages and holds", () => {
     );
     expect(html).toContain("Queue 3 · daily limit 5");
     expect(html).toContain("Subject not hiring");
+    // The wide Pre-screen column is hidden on a phone, so the note also sits in the Stage cell with the phone pill.
+    expect(html.match(/Queue 3 · daily limit 5/g)).toHaveLength(2);
+    const stageCell = html.slice(html.indexOf("Person d"));
+    expect(stageCell.slice(0, stageCell.indexOf("</td>", stageCell.indexOf("</td>") + 1))).toContain("Queue 3 · daily limit 5");
     expect(html).toContain('title="Position 3 in the pre-screen queue. Held by the daily limit (5)."');
     expect(table()).not.toContain("daily limit");
   });

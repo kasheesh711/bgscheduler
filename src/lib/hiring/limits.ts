@@ -108,11 +108,13 @@ export type QueueHold = {
   subject: Subject;
 };
 
-export type Meter = { label: string; used: number; max: number; pct: number; full: boolean };
+export type Meter = { label: string; used: number; max: number; over: number; pct: number; full: boolean };
 const meter = (label: string, used: number, max: number): Meter => ({
   label,
   used,
   max,
+  // Use can pass a limit that was lowered afterwards. The screen says how far over, not "17 of 12".
+  over: Math.max(0, used - max),
   // A limit of 0 is closed, so it reads as full.
   pct: max ? Math.min(100, Math.round((used / max) * 100)) : 100,
   full: used >= max,

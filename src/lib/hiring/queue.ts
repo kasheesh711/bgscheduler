@@ -182,10 +182,22 @@ export function replyCheck(
 export const autoInviteEligible = (candidate: Candidate, sentAt: Date | null, config: HiringConfig) =>
   replyCheck(candidate, sentAt, config).kind === "ready";
 
-/** Only stage `new` enters, and any earlier form row, even a cancelled one, keeps a candidate out. */
+/**
+ * Only stage `new` enters, and any earlier form row, even a cancelled one, keeps a candidate out.
+ * Reads only the columns the gate and the score use, because profile text and the other large fields are not needed to rank.
+ * A release locks and reads the full row before it sends anything.
+ */
 export async function preScreenQueue(db: Database, config: HiringConfig): Promise<QueueEntry[]> {
   const rows = await db
-    .select()
+    .select({
+      id: c.id,
+      createdAt: c.createdAt,
+      email: c.email,
+      previouslyContacted: c.previouslyContacted,
+      workRightsAnswer: c.workRightsAnswer,
+      profileAssessment: c.profileAssessment,
+      universityAssessment: c.universityAssessment,
+    })
     .from(c)
     .where(
       and(
@@ -221,9 +233,16 @@ export async function onsiteQueue(db: Database, config: HiringConfig): Promise<Q
         notExists(db.select({ id: o.id }).from(o).where(and(eq(o.candidateId, c.id), isOnsiteInvite))),
       ),
     );
+  if (!rows.length) return [];
+  // One read for every form row, not one per candidate. Same rule as formSentAt: only a sent row has a time.
+  const forms = await db
+    .select({ key: o.key, status: o.status, sentAt: o.sentAt })
+    .from(o)
+    .where(inArray(o.key, rows.map((row) => `${row.id}:pre-screen`)));
+  const sentAt = new Map(forms.map((f) => [f.key, f.status === "sent" ? f.sentAt : null]));
   const entries: QueueEntry[] = [];
   for (const row of rows) {
-    const check = replyCheck(row, await formSentAt(db, row.id), config);
+    const check = replyCheck(row, sentAt.get(`${row.id}:pre-screen`) ?? null, config);
     if (check.kind === "ready")
       entries.push({ id: row.id, subject: check.subject, score: check.score, createdAt: row.createdAt });
   }

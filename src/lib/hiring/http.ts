@@ -15,11 +15,15 @@ export function hiringError(error: unknown) {
       { error: error.message },
       { status: error.status, headers: { "Cache-Control": "no-store" } },
     );
-  if (error instanceof ZodError)
+  if (error instanceof ZodError) {
+    const issue = error.issues[0];
+    // A rule written for Kevin is a full sentence. A stock range message needs the setting's name to be useful.
+    const where = issue && issue.code !== "custom" && issue.path.length ? `${issue.path.join(" ")}: ` : "";
     return NextResponse.json(
-      { error: error.issues[0]?.message ?? "Invalid input." },
+      { error: issue ? `${where}${issue.message}` : "Invalid input." },
       { status: 400 },
     );
+  }
   console.error(
     "Hiring request failed",
     error instanceof Error ? error.name : "UnknownError",

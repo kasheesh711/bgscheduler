@@ -438,7 +438,8 @@
 /* The note is the widest thing in the row, so this column sizes to it instead of the 150px cap. */
 .table td.preCell { max-width: none; }
 .stagePill { display: table; margin-top: 2px; }
-@media (min-width: 720px) { .stagePill { display: none; } }
+.stageHold { display: block; }
+@media (min-width: 720px) { .stagePill { display: none; } .holdNote.stageHold { display: none; } }
 .answers div { padding: 5px 0; border-top: 1px solid var(--line); }
 .answers dt { color: var(--muted); font-size: 12px; }
 .answers dd { text-align: left; overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -471,6 +472,7 @@
 .surface .blk { position: absolute; right: 4px; left: 4px; box-sizing: border-box; padding: 2px 6px; overflow: hidden; border-radius: 6px; font-size: 11px; line-height: 1.25; text-align: left; }
 .blkTitle { display: block; font-weight: 600; }
 .surface .bWise { background: var(--stone); color: var(--ink); }
+.surface .bLeave { background: repeating-linear-gradient(135deg, #f3dca6 0 6px, #fbeccd 6px 12px); border: 1px solid #b88a1c; color: var(--warn); }
 .surface .bSitIn { background: var(--stone-dark); color: var(--paper); }
 .surface .bMock { z-index: 2; background: var(--ink); color: var(--paper); }
 .surface button.bMock:hover { outline: 2px solid var(--accent-text); }

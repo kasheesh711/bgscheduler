@@ -46,6 +46,30 @@ const week = (patch: Partial<HeadWeek> = {}): HeadWeek => ({
 });
 const calendar = (w: HeadWeek) => renderToStaticMarkup(<HeadCalendar week={w} onOpen={() => {}} />);
 
+describe("HeadCalendar leave", () => {
+  it("draws leave in its own style, apart from a Wise class, and says so in the legend", () => {
+    const html = calendar(
+      week({
+        days: [
+          day("2026-11-02", hours, [
+            { kind: "wise", start: "10:00", end: "11:00", clash: false },
+            { kind: "leave", start: "13:00", end: "15:00", clash: false },
+          ]),
+          day("2026-11-03", null),
+          day("2026-11-04", hours),
+          day("2026-11-05", hours),
+          day("2026-11-06", hours),
+        ],
+      }),
+    );
+    expect(html.match(/bWise/g)).toHaveLength(1);
+    expect(html.match(/bLeave/g)).toHaveLength(1);
+    expect(html).not.toContain("Wise class or leave");
+    expect(html).toMatch(/<\/i>Wise class</);
+    expect(html).toMatch(/<\/i>Leave</);
+  });
+});
+
 describe("HeadCalendar", () => {
   it("draws five day columns, hatches a day out of office, and labels every kind of block", () => {
     const html = calendar(week());

@@ -5,6 +5,7 @@ import { Instrument_Serif } from "next/font/google";
 import { signIn } from "next-auth/react";
 import { GOOGLE_SCOPES, type HiringConfig, type Stage, type Subject } from "@/lib/hiring/model";
 import { buildInsights, readyToInvite } from "@/lib/hiring/insights";
+import { dedupePriority, headDaysNotice } from "@/lib/hiring/rules";
 import { candidateExtras, holdNote } from "@/lib/hiring/status";
 import type { dashboard } from "@/lib/hiring/service";
 import { CandidateInspector } from "./candidate-inspector";
@@ -47,6 +48,8 @@ export function HiringDashboard() {
   const [view, setView] = useState<"pipeline" | "heads" | "setup">("pipeline");
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState<CandidateFilter>(NO_FILTER);
+  // Head ticks not saved yet. They live here, not in the setup panel, so a tab switch does not drop them.
+  const [dayDrafts, setDayDrafts] = useState<Record<string, boolean[]>>({});
 
   async function load(keepConfig = false) {
     const response = await fetch("/api/hiring", { cache: "no-store" });
@@ -55,7 +58,8 @@ export function HiringDashboard() {
     setData(value);
     // A candidate decision must not discard setup edits that are not yet saved.
     if (!keepConfig) {
-      setConfig(value.config);
+      // The server refuses a subject listed twice, so the draft drops the repeat and a save can repair it.
+      setConfig({ ...value.config, subjectPriority: dedupePriority(value.config.subjectPriority) });
       // A save must carry the revision these edits started from, so a stale save gets a 409.
       setConfigRevision(value.revision);
     }
@@ -76,18 +80,22 @@ export function HiringDashboard() {
       const value = await response.json();
       if (!response.ok) throw new Error(value.error);
       const action = (body as { action: string }).action;
-      await load(action !== "settings");
+      let saved = "Saved.";
       if (action === "head_days") {
         // The server checked the revision before it saved, so the new one belongs to this draft. A head with no
         // attendance record also has a new fallback week, which the draft must carry or the next save would undo it.
+        // This comes before the reload, so a failed reload does not leave the old revision.
         const key = (body as { key: string }).key;
         setConfigRevision(value.revision);
         if (value.fallbackWeek)
           setConfig((c) =>
             c && { ...c, interviewers: c.interviewers.map((i) => (i.canonicalKey === key ? { ...i, fallbackWeek: value.fallbackWeek } : i)) },
           );
+        saved = headDaysNotice(value.affectedVisits ?? 0);
       }
-      setNotice("Saved.");
+      setNotice(saved);
+      // The save is done. If only the reload fails, say so, and do not call the save a failure.
+      await load(action !== "settings").catch(() => setError("Saved, but the page could not refresh. Reload this page."));
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save.");
@@ -169,7 +177,8 @@ export function HiringDashboard() {
           )}
         </div>
         <div role="status" className={css.notice}>
-          {notice}
+          {/* Rules and setup shows these beside its Save button, where they are in view. */}
+          {view === "setup" ? "" : notice}
         </div>
         <div className={css.viewSwitch} role="group" aria-label="Hiring views">
           {(["pipeline", "heads", "setup"] as const).map((name) => (
@@ -184,7 +193,7 @@ export function HiringDashboard() {
           ))}
         </div>
       </header>
-      {error && (
+      {error && view !== "setup" && (
         <p role="alert" className={css.alert}>
           {error}
         </p>
@@ -223,12 +232,16 @@ export function HiringDashboard() {
             busy={busy}
             connect={connect}
             command={command}
+            dayDrafts={dayDrafts}
+            setDayDrafts={setDayDrafts}
+            error={error}
+            notice={notice}
           />
         )}
         {/* Hidden, not unmounted: a switch to setup keeps a drafted reason and table filters. */}
         {view === "heads" && (
           <HeadSchedules
-            heads={data.config.interviewers}
+            heads={data.configSaved ? data.config.interviewers : []}
             bookings={data.bookings}
             onOpenCandidate={(id) => {
               setSelected(id);

@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { localDate, SUBJECTS, type HiringConfig } from "@/lib/hiring/model";
 import {
   daysOf,
@@ -10,6 +9,8 @@ import {
   LIMIT_FIELDS,
   minutesToTime,
   movePriority,
+  PRE_SCREEN_WEIGHT_LABELS,
+  PROFILE_WEIGHT_LABELS,
   sendingNotice,
   setHiring,
   setLimit,
@@ -17,30 +18,13 @@ import {
   settingsProblems,
   startsSending,
   timeToMinutes,
+  unsavedHeadDays,
   workRightsRows,
   type LimitField,
 } from "@/lib/hiring/rules";
 import type { Command, HiringData } from "./dashboard";
 import css from "./dashboard.module.css";
 
-const WEIGHT_LABELS = {
-  degree: "Degree relevance",
-  subject: "Subject evidence",
-  curriculum: "Curriculum experience",
-  teaching: "Teaching experience",
-  english: "English evidence",
-  prestige: "University prestige",
-};
-const PRE_SCREEN_WEIGHT_LABELS = {
-  degree: "Degree",
-  subject: "Subject",
-  curriculum: "Curriculum",
-  teaching: "Teaching",
-  english: "English",
-  prestige: "University prestige",
-  written: "Written answers",
-  availability: "Availability",
-};
 const dayText = (date: string) =>
   new Date(`${date}T12:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 type University = HiringConfig["universities"][number];
@@ -83,6 +67,10 @@ export function SetupPanel({
   busy,
   connect,
   command,
+  dayDrafts,
+  setDayDrafts,
+  error,
+  notice,
 }: {
   data: HiringData;
   config: HiringConfig;
@@ -91,14 +79,23 @@ export function SetupPanel({
   busy: boolean;
   connect: () => void;
   command: Command;
+  /** Head ticks not saved yet. The dashboard holds them, so a tab switch does not drop them. */
+  dayDrafts: Record<string, boolean[]>;
+  setDayDrafts: (update: (drafts: Record<string, boolean[]>) => Record<string, boolean[]>) => void;
+  /** The last save result, shown beside the Save button so it is in view at any width. */
+  error: string;
+  notice: string;
 }) {
   const total = Object.values(config.profileWeights).reduce((a, b) => a + b, 0);
   const preTotal = Object.values(config.preScreenWeights).reduce((a, b) => a + b, 0);
   const problems = settingsProblems(config);
   const sending = startsSending(data.config, config);
   const today = localDate(new Date());
-  // Head day ticks the user has changed and not saved yet, by head. Saved ticks come from `data.heads`.
-  const [dayDrafts, setDayDrafts] = useState<Record<string, boolean[]>>({});
+  const unsavedHeads = unsavedHeadDays(
+    dayDrafts,
+    data.heads,
+    Object.fromEntries(data.tutors.map((t) => [t.canonicalKey, t.name])),
+  );
   const priority = fullPriority(config.subjectPriority);
   const setUniversity = (index: number, patch: Partial<University>) =>
     setConfig({
@@ -123,6 +120,21 @@ export function SetupPanel({
               The saved rules have a problem. {data.configProblems.join(" ")} Fix it here and save. Until then the worker stops.
             </p>
           )}
+          {unsavedHeads.length > 0 && (
+            <p className={css.warnWord} role="alert">
+              Head days not saved: {unsavedHeads.join(", ")}
+            </p>
+          )}
+          {error && (
+            <p className={css.errorText} role="alert">
+              {error}
+            </p>
+          )}
+          {notice && (
+            <p className={css.goodWord} role="status">
+              {notice}
+            </p>
+          )}
           {problems.map((problem) => (
             <p key={problem} className={css.errorText}>
               {problem}
@@ -145,13 +157,13 @@ export function SetupPanel({
             Weights must total 100. Degree and subject evidence must meet the rule. Lower scores go to review.
           </p>
           <div className={css.weightBar} aria-hidden="true">
-            {(Object.keys(WEIGHT_LABELS) as Array<keyof typeof WEIGHT_LABELS>).map((key) => (
+            {(Object.keys(PROFILE_WEIGHT_LABELS) as Array<keyof typeof PROFILE_WEIGHT_LABELS>).map((key) => (
               <span key={key} style={{ flexGrow: config.profileWeights[key] }} />
             ))}
           </div>
-          {(Object.keys(WEIGHT_LABELS) as Array<keyof typeof WEIGHT_LABELS>).map((key) => (
+          {(Object.keys(PROFILE_WEIGHT_LABELS) as Array<keyof typeof PROFILE_WEIGHT_LABELS>).map((key) => (
             <label key={key} className={css.weightRow}>
-              {WEIGHT_LABELS[key]}
+              {PROFILE_WEIGHT_LABELS[key]}
               <input
                 className={css.numberInput}
                 type="number"
@@ -455,7 +467,7 @@ export function SetupPanel({
                             type="checkbox"
                             checked={ticks[i]}
                             aria-label={`${name} ${day}`}
-                            onChange={(e) => setDayDrafts({ ...dayDrafts, [key]: ticks.map((on, j) => (j === i ? e.target.checked : on)) })}
+                            onChange={(e) => setDayDrafts((d) => ({ ...d, [key]: ticks.map((on, j) => (j === i ? e.target.checked : on)) }))}
                           />
                         </label>
                       ))}
@@ -516,7 +528,8 @@ export function SetupPanel({
                 value={interviewer.canonicalKey}
                 onChange={(e) => {
                   const tutor = data.tutors.find((t) => t.canonicalKey === e.target.value);
-                  setInterviewer(i, { canonicalKey: e.target.value, email: tutor?.email ?? "" });
+                  // Hours saved for the old tutor are not the new tutor's.
+                  setInterviewer(i, { canonicalKey: e.target.value, email: tutor?.email ?? "", fallbackWeek: undefined });
                 }}
               >
                 <option value="">Choose tutor</option>

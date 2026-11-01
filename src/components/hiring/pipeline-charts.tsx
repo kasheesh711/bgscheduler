@@ -76,7 +76,7 @@ export function KpiStrip({
       <Tile
         label="Candidates"
         value={i.total}
-        note={i.parked ? `${i.active} active, ${i.parked} no reply or no booking` : `${i.active} active`}
+        note={i.parked ? `${i.active} active, including ${i.parked} with no reply or no booking` : `${i.active} active`}
       />
       <Tile
         label="Scored"
@@ -114,8 +114,14 @@ function MeterCard({ title, lede, meters, children }: { title: string; lede: str
           <div key={m.label}>
             <p className={css.tileLabel}>{m.label}</p>
             <p className={css.meterValue}>
-              {m.used}
-              <span className={css.meterMax}> of {m.max}</span>
+              {m.over > 0 ? (
+                <>Over by {m.over}</>
+              ) : (
+                <>
+                  {m.used}
+                  <span className={css.meterMax}> of {m.max}</span>
+                </>
+              )}
             </p>
             <div className={css.meter} aria-hidden="true">
               <span data-full={m.full} style={{ width: `${m.pct}%` }} />

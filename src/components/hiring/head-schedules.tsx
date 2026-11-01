@@ -25,7 +25,7 @@ const at = (iso: string) => formatInTimeZone(new Date(iso), ZONE, "EEE d MMM, HH
 
 const KIND: Record<HeadBlock["kind"], { title: string; css: string }> = {
   wise: { title: "Wise class", css: css.bWise },
-  leave: { title: "Leave", css: css.bWise },
+  leave: { title: "Leave", css: css.bLeave },
   sit_in: { title: "Sit-in", css: css.bSitIn },
   mock: { title: "Mock", css: css.bMock },
   exam: { title: "Exam · head not needed", css: css.bExam },
@@ -123,7 +123,8 @@ export function HeadCalendar({ week, onOpen }: { week: HeadWeek; onOpen: (candid
         <span><i style={{ background: "#fffdf9", boxShadow: "inset 0 0 0 1px var(--stone)" }} />Free in office hours</span>
         <span><i style={{ background: "var(--ink)" }} />Mock (head busy)</span>
         <span><i style={{ boxShadow: "inset 0 0 0 1px var(--stone-dark)" }} />Exam (does not need the head)</span>
-        <span><i style={{ background: "var(--stone)" }} />Wise class or leave</span>
+        <span><i style={{ background: "var(--stone)" }} />Wise class</span>
+        <span><i style={{ background: "repeating-linear-gradient(135deg, #f3dca6 0 3px, #fbeccd 3px 6px)", boxShadow: "inset 0 0 0 1px #b88a1c" }} />Leave</span>
         <span><i style={{ background: "var(--stone-dark)" }} />Sit-in</span>
         <span><i style={{ background: "var(--danger)" }} />Clash</span>
         <span>Stripes: not in the office</span>

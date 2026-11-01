@@ -8,11 +8,14 @@ import {
   type HiringConfig,
 } from "../model";
 import { answerKey } from "../scoring";
+import { hiringError } from "../http";
 import {
   daysOf,
+  dedupePriority,
   fullPriority,
   hasSavedHours,
   headDayState,
+  headDaysNotice,
   LIMIT_FIELDS,
   minutesToTime,
   movePriority,
@@ -23,6 +26,7 @@ import {
   settingsProblems,
   startsSending,
   timeToMinutes,
+  unsavedHeadDays,
   weekWith,
   workRightsRows,
 } from "../rules";
@@ -90,6 +94,16 @@ describe("config rules", () => {
   });
 });
 
+describe("save errors", () => {
+  it("names the setting for a stock range error, and keeps a rule sentence as it is", async () => {
+    const range = configSchema.safeParse({ profileThreshold: 101 });
+    const named = await hiringError(range.error).json();
+    expect(named.error).toMatch(/^profileThreshold: /);
+    const rule = configSchema.safeParse({ visitStartMinute: 900, visitEndMinute: 600 });
+    expect((await hiringError(rule.error).json()).error).toBe("Visits must end after they start.");
+  });
+});
+
 describe("limit fields", () => {
   it("edits each limit and returns a config the server accepts", () => {
     const config = base();
@@ -130,6 +144,22 @@ describe("limit fields", () => {
     expect(settingsProblems({ ...base(), preScreenThreshold: 101 }).join(" ")).toMatch(/Pre-screen pass score/);
     expect(settingsProblems({ ...base(), preScreenThreshold: 0 })).toEqual([]);
   });
+  it("names a weight or the threshold that is not a whole number from 0 to 100, even when the total is 100", () => {
+    const profile = base().profileWeights;
+    const negative = { ...base(), profileWeights: { ...profile, degree: -10, subject: 30 } };
+    expect(Object.values(negative.profileWeights).reduce((n, v) => n + v, 0)).toBe(100);
+    expect(settingsProblems(negative)).toEqual(["Degree relevance: use a whole number from 0 to 100."]);
+    const half = { ...base(), profileWeights: { ...profile, degree: 10.5, subject: 9.5 } };
+    expect(settingsProblems(half).join(" ")).toMatch(/Degree relevance[^.]*\.[\s\S]*Subject evidence/);
+    const pre = base().preScreenWeights;
+    expect(settingsProblems({ ...base(), preScreenWeights: { ...pre, written: 115, degree: -90 } }).join(" ")).toMatch(
+      /Pre-screen written answers: use a whole number from 0 to 100\./,
+    );
+    expect(settingsProblems({ ...base(), profileThreshold: -1 })[0]).toMatch(/Invitation threshold/);
+    expect(settingsProblems({ ...base(), profileThreshold: 50.5 })[0]).toMatch(/Invitation threshold/);
+    expect(settingsProblems({ ...base(), profileThreshold: 101 })[0]).toMatch(/Invitation threshold/);
+    expect(settingsProblems({ ...base(), profileThreshold: 100 })).toEqual([]);
+  });
   it("converts visit times to minutes and back", () => {
     expect(minutesToTime(600)).toBe("10:00");
     expect(minutesToTime(965)).toBe("16:05");
@@ -150,6 +180,18 @@ describe("subject priority", () => {
     expect(full).toHaveLength(SUBJECTS.length);
     expect(full.slice(2).every((p) => !p.hiring)).toBe(true);
     expect(new Set(full.map((p) => p.subject)).size).toBe(SUBJECTS.length);
+  });
+  it("removes a duplicate subject, first entry wins, so the list on screen can be repaired", () => {
+    const dup = [
+      { subject: "Physics" as const, hiring: true },
+      { subject: "Mathematics" as const, hiring: false },
+      { subject: "Physics" as const, hiring: false },
+    ];
+    expect(dedupePriority(dup)).toEqual(dup.slice(0, 2));
+    const full = fullPriority(dup);
+    expect(new Set(full.map((p) => p.subject)).size).toBe(full.length);
+    expect(full[0]).toEqual({ subject: "Physics", hiring: true });
+    expect(configSchema.safeParse({ subjectPriority: dedupePriority(dup) }).success).toBe(true);
   });
   it("moves a subject up and down, stops at the ends, and marks one not hiring", () => {
     expect(movePriority(list, 1, -1).map((p) => p.subject)).toEqual(["Mathematics", "Physics"]);
@@ -192,6 +234,20 @@ describe("accepted work-rights answers", () => {
     expect(setWorkRightsAccepted(ticked, RESIDENT.toUpperCase(), false).acceptedWorkRights).toEqual([ACCEPTED]);
     expect(setWorkRightsAccepted(config, ACCEPTED, false).acceptedWorkRights).toEqual([]);
   });
+  it("keeps a row after it is unticked, even when the answer was never recorded as seen", () => {
+    const config = base();
+    expect(config.seenWorkRights).toEqual([]);
+    const off = setWorkRightsAccepted(config, ACCEPTED, false);
+    expect(off.seenWorkRights).toEqual([ACCEPTED]);
+    expect(workRightsRows(off)).toEqual([{ answer: ACCEPTED, accepted: false }]);
+    // Ticking it again brings it back, and nothing is recorded twice.
+    const on = setWorkRightsAccepted(off, ACCEPTED.toUpperCase(), true);
+    expect(workRightsRows(on)).toEqual([{ answer: ACCEPTED.toUpperCase(), accepted: true }]);
+    expect(setWorkRightsAccepted(on, ACCEPTED, false).seenWorkRights).toEqual([ACCEPTED]);
+    // The settings hold 200 seen answers at most.
+    const full = base({ seenWorkRights: Array.from({ length: 200 }, (_, i) => `Answer ${i}`) });
+    expect(setWorkRightsAccepted(full, ACCEPTED, false).seenWorkRights).toHaveLength(200);
+  });
 });
 
 describe("head days", () => {
@@ -229,6 +285,24 @@ describe("head days", () => {
     expect(headDayState({ canonicalKey: "Gift" }, [], [])).toEqual({ state: "fallback", week: null, from: null });
     expect(headDayState(head, [{ canonicalKey: "Peat", active: false }], []).state).toBe("ended");
     expect(headDayState(head, [{ canonicalKey: "Peat", active: true }], []).week).toBeNull();
+    // An enrollment whose end date has passed gives no hours, so it counts as ended.
+    const past = { canonicalKey: "Peat", active: true, endDate: "2026-10-31" };
+    expect(headDayState(head, [past], [], "2026-11-01").state).toBe("ended");
+    expect(headDayState(head, [past], [], "2026-10-31").state).toBe("enrolled");
+    expect(headDayState(head, [{ ...past, endDate: null }], [], "2026-11-01").state).toBe("enrolled");
+  });
+  it("lists the heads whose ticks are not saved, by name", () => {
+    const heads = { Peat: { state: "enrolled" as const, week: MON_FRI, from: null }, Gift: { state: "fallback" as const, week: null, from: null } };
+    const names = { Peat: "Peat", Gift: "Gift" };
+    expect(unsavedHeadDays({}, heads, names)).toEqual([]);
+    // A tick set back to what is saved is not unsaved.
+    expect(unsavedHeadDays({ Peat: [true, true, true, true, true] }, heads, names)).toEqual([]);
+    expect(unsavedHeadDays({ Peat: [true, false, true, true, true], Gift: [true, true, true, true, true] }, heads, names)).toEqual(["Gift", "Peat"]);
+  });
+  it("tells how many booked visits fall on a removed day", () => {
+    expect(headDaysNotice(0)).toBe("Saved.");
+    expect(headDaysNotice(1)).toBe("Saved. 1 booked visit falls on a day you removed. The app did not move it. Staff must act.");
+    expect(headDaysNotice(3)).toBe("Saved. 3 booked visits fall on a day you removed. The app did not move them. Staff must act.");
   });
   it("warns only when no weekday has saved hours", () => {
     expect(hasSavedHours(MON_FRI)).toBe(true);
@@ -247,11 +321,28 @@ describe("automation switch notice", () => {
     // Turning one off is not a start.
     expect(startsSending({ enabled: true, deliveryEnabled: true }, { enabled: true, deliveryEnabled: false })).toBe(false);
   });
-  it("says it starts sending, within the numbers on the page", () => {
-    const text = sendingNotice(base());
-    expect(text).toMatch(/starts sending/i);
+  it("says it starts sending, within the numbers on the page, when both switches are on", () => {
+    const text = sendingNotice(base({ enabled: true, deliveryEnabled: true, preScreenThreshold: 60 }));
+    expect(text).toMatch(/Saving starts sending/);
     expect(text).toContain("5 pre-screen forms a day");
     expect(text).toContain("15 a week");
     expect(text).toContain("3 onsite invitations a week");
+  });
+  it("does not promise onsite invitations while there is no pass score", () => {
+    const text = sendingNotice(base({ enabled: true, deliveryEnabled: true }));
+    expect(text).toMatch(/Saving starts sending/);
+    expect(text).toContain("5 pre-screen forms a day");
+    expect(text).not.toContain("onsite invitations a week");
+    expect(text).toContain("No onsite invitation is sent until you set a pass score.");
+  });
+  it("does not say it starts sending when only one switch is on", () => {
+    const auto = sendingNotice(base({ enabled: true, preScreenThreshold: 60 }));
+    expect(auto).not.toMatch(/starts sending/i);
+    expect(auto).toContain("Messages is off, so nothing is sent yet.");
+    const mail = sendingNotice(base({ deliveryEnabled: true, preScreenThreshold: 60 }));
+    expect(mail).not.toMatch(/starts sending/i);
+    expect(mail).toContain("Automation is off, so nothing is sent yet.");
+    expect(auto).toContain("3 onsite invitations a week");
+    expect(sendingNotice(base({ enabled: true }))).not.toContain("onsite invitations a week");
   });
 });

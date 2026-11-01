@@ -252,6 +252,7 @@ export function CandidateTable({
                     {extra && (
                       <span className={`${css.pill} ${css.stagePill} ${PILL_CLASS[extra.pre.status]}`}>{extra.pre.status}</span>
                     )}
+                    {holds.get(c.id) && <span className={`${css.holdNote} ${css.stageHold}`}>{holds.get(c.id)!.short}</span>}
                   </td>
                   <td>
                     {c.profileScore === null ? (

@@ -10,6 +10,7 @@ import {
   configRuleErrors,
   configSchema,
   HiringError,
+  instant,
   PRE_SCREEN_URL,
   normalizeSubjects,
   overlap,
@@ -48,7 +49,8 @@ import { headDayState, weekWith } from "./rules";
 import { attendanceAccessForEmail } from "@/lib/tutor-attendance/access";
 import { attendanceConfig } from "@/lib/tutor-attendance/data";
 import { saveAttendanceSettings } from "@/lib/tutor-attendance/service";
-import { AttendanceError, weekSchema } from "@/lib/tutor-attendance/model";
+import { applicableSchedule, AttendanceError, weekSchema, type Week } from "@/lib/tutor-attendance/model";
+import { formatInTimeZone } from "date-fns-tz";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -135,10 +137,32 @@ export async function saveSettings(
 const ATTENDANCE_ADMIN_NEEDED =
   "Changing this head's days also changes Tutor Attendance, which needs Tutor Attendance admin access. Ask an attendance admin to make the change.";
 /**
+ * Confirmed mocks with this head, from `from`, on a weekday the new week removes. The app moves none of them.
+ * `iso` weekday: 1 is Monday, which is also the index of Monday in a Tutor Attendance week.
+ */
+async function visitsOnRemovedDays(db: Database, key: string, before: Week | null, after: Week, from: Date) {
+  const removed = [1, 2, 3, 4, 5].filter((i) => before?.[i] && !after[i]);
+  if (!removed.length) return 0;
+  const rows = await db
+    .select({ startTime: s.hiringBookings.startTime })
+    .from(s.hiringBookings)
+    .where(
+      and(
+        eq(s.hiringBookings.interviewerKey, key),
+        eq(s.hiringBookings.kind, "mock"),
+        eq(s.hiringBookings.status, "confirmed"),
+        sql`${s.hiringBookings.startTime} >= ${from.toISOString()}::timestamptz`,
+      ),
+    );
+  return rows.filter((r) => removed.includes(Number(formatInTimeZone(r.startTime, ZONE, "i")))).length;
+}
+/**
  * Saves one head's Monday to Friday days. `days[0]` is Monday. `revision` is the Hiring settings revision the screen
  * loaded, and a stale one gets a 409 on both paths.
  * An enrolled head goes through Tutor Attendance as a new schedule version from the next Bangkok day, with the actor in
- * its audit; that needs attendance admin. Any other head gets a fallback week in Hiring settings and is not enrolled.
+ * its audit; that needs attendance admin. The new week is the version in force on that day, and a later version is
+ * refused, because it would undo this change. Any other head gets a fallback week in Hiring settings and is not enrolled.
+ * `affectedVisits` counts booked visits that now fall on a removed day. The app does not move them.
  */
 export async function saveHeadDays(
   key: string,
@@ -147,7 +171,7 @@ export async function saveHeadDays(
   actor: string,
   db: Database = getDb(),
   now = new Date(),
-): Promise<{ revision: number; fallbackWeek?: ReturnType<typeof weekWith> }> {
+): Promise<{ revision: number; fallbackWeek?: Week; affectedVisits: number }> {
   if (days.length !== 5) throw new HiringError(400, "Choose Monday to Friday.");
   const current = await settings(db);
   const stale = () => new HiringError(409, "Settings changed. Refresh this page.");
@@ -176,35 +200,47 @@ export async function saveHeadDays(
         .set({ config, revision: revision + 1, updatedBy: actor, updatedAt: new Date() })
         .where(eq(s.hiringSettings.id, "default"));
       await audit(tx, actor, "head-days", null, { key, days, via: "hiring-settings", revision: revision + 1 });
-      return { revision: revision + 1, fallbackWeek };
+      // A fallback week applies at once, so every visit from now is checked.
+      const affectedVisits = await visitsOnRemovedDays(tx, key, head.fallbackWeek ?? null, fallbackWeek, now);
+      return { revision: revision + 1, fallbackWeek, affectedVisits };
     });
   }
-  // A switched-off enrollment still makes headOfficeWindow return no hours, so a fallback week would be ignored.
-  if (!enrollment.active)
+  const effectiveFrom = shiftDate(localDate(now), 1);
+  // A switched-off or finished enrollment still makes headOfficeWindow return no hours, so a fallback week would be ignored.
+  if (!enrollment.active || (enrollment.endDate && enrollment.endDate < effectiveFrom))
     throw new HiringError(
       409,
       "This head's Tutor Attendance enrollment has ended, so Hiring cannot set days for them. Switch the enrollment back on in Tutor Attendance first.",
     );
+  let affectedVisits = 0;
   try {
     const access = await attendanceAccessForEmail(actor, db);
+    // Read the revision first: a change made while this runs then fails the revision check instead of passing it.
+    const expectedRevision = (await attendanceConfig(db)).revision;
     const schedules = await db
       .select()
       .from(s.tutorAttendanceSchedules)
       .where(eq(s.tutorAttendanceSchedules.canonicalKey, key));
-    const latest = headDayState({ canonicalKey: key }, [enrollment], schedules).week;
+    // A version that starts later would take over from this one, and undo it.
+    const later = schedules.find((v) => v.effectiveFrom > effectiveFrom);
+    if (later)
+      throw new HiringError(409, `Tutor Attendance has a schedule starting ${later.effectiveFrom}. Change it there.`);
+    const base = applicableSchedule(effectiveFrom, key, schedules)?.week ?? null;
+    const week = weekWith(days, base);
     await saveAttendanceSettings(
       access,
       {
         action: "schedule",
         canonicalKey: key,
-        effectiveFrom: shiftDate(localDate(now), 1),
-        week: weekWith(days, latest),
+        effectiveFrom,
+        week,
         reason: `Changed in Hiring by ${actor}.`,
-        expectedRevision: (await attendanceConfig(db)).revision,
+        expectedRevision,
       },
       db,
       now,
     );
+    affectedVisits = await visitsOnRemovedDays(db, key, base, week, instant(effectiveFrom, 0));
   } catch (error) {
     if (!(error instanceof AttendanceError)) throw error;
     throw new HiringError(
@@ -216,8 +252,11 @@ export async function saveHeadDays(
           : error.message,
     );
   }
-  await audit(db, actor, "head-days", null, { key, days, via: "tutor-attendance" });
-  return { revision };
+  // The attendance change is committed. A failed Hiring audit row must not turn that into an error.
+  await audit(db, actor, "head-days", null, { key, days, via: "tutor-attendance" }).catch((error) =>
+    console.error("Hiring audit for a head-days save failed", error instanceof Error ? error.name : "UnknownError"),
+  );
+  return { revision, affectedVisits };
 }
 export async function candidateById(db: Database, id: string) {
   const [row] = await db
@@ -476,13 +515,15 @@ export async function dashboard(db: Database = getDb()) {
   const schedules = await db.select().from(s.tutorAttendanceSchedules);
   return {
     config,
+    // False until the first save: the interviewers shown then are suggestions, not stored heads.
+    configSaved: !!row,
     // Rules the stored config breaks. The screen shows them, and a save will not pass until they are fixed.
     configProblems: configRuleErrors(config).map((e) => e.message),
     usage,
     holds,
     headMocks: headWeekMocks(bookings, now),
     heads: Object.fromEntries(
-      config.interviewers.map((head) => [head.canonicalKey, headDayState(head, enrollments, schedules)]),
+      config.interviewers.map((head) => [head.canonicalKey, headDayState(head, enrollments, schedules, localDate(now))]),
     ),
     revision: row?.revision ?? 0,
     workerAt: row?.workerAt ?? null,

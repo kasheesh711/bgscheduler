@@ -1856,6 +1856,118 @@ describe("hiring workflow persistence", () => {
       expect(view.Peat).toMatchObject({ state: "enrolled", from: "2026-11-01" });
     });
 
+    it("refuses a head-days save while a later attendance schedule exists, and writes no version", async () => {
+      await enrol();
+      await db.insert(s.tutorAttendanceSchedules).values({
+        canonicalKey: "Peat",
+        effectiveFrom: "2026-12-01",
+        week: [early, null, null, null, null, null, null],
+        revision: 2,
+      });
+      const error = await saveHeadDays("Peat", ALL, 4, ADMIN, db).catch((e) => e);
+      expect(error).toBeInstanceOf(HiringError);
+      expect(error.status).toBe(409);
+      expect(error.message).toBe("Tutor Attendance has a schedule starting 2026-12-01. Change it there.");
+      expect(await schedules()).toHaveLength(2);
+      expect(await attendanceAudit()).toHaveLength(0);
+    });
+
+    it("builds the new week from the version in force on the start date, not the newest one", async () => {
+      await enrol();
+      // Today is Saturday 31 October, so the change starts 1 November. This version starts that day and is in force.
+      const sunday = { start: "08:00", end: "10:00" };
+      await db.insert(s.tutorAttendanceSchedules).values({
+        canonicalKey: "Peat",
+        effectiveFrom: "2026-11-01",
+        week: [sunday, win, win, win, null, null, null],
+        revision: 1,
+      });
+      await saveHeadDays("Peat", [true, true, true, true, true], 4, ADMIN, db);
+      const newest = (await schedules()).sort((a, b) => b.revision - a.revision)[0];
+      expect(newest.effectiveFrom).toBe("2026-11-01");
+      // Sunday is the 1 November version's, Friday gets the default.
+      expect(newest.week).toEqual([sunday, win, win, win, win, win, null]);
+    });
+
+    it("counts booked visits that fall on a removed day, from the start date, for an enrolled head", async () => {
+      await enrol();
+      let n = 0;
+      const mock = async (start: string, extra: Partial<typeof s.hiringBookings.$inferInsert> = {}, who = "Peat") => {
+        n++;
+        const [c] = await db
+          .insert(s.hiringCandidates)
+          .values({ name: `Booked ${n}`, email: `booked${n}@example.com`, stage: "onsite_booked" })
+          .returning();
+        const startTime = new Date(start);
+        await db.insert(s.hiringBookings).values({
+          candidateId: c.id,
+          kind: "mock",
+          subjects: ["Mathematics"],
+          interviewerKey: who,
+          interviewerEmail: `${who}@example.com`,
+          lineGroupId: "group",
+          calendarOwner: "owner@example.com",
+          startTime,
+          endTime: new Date(startTime.getTime() + 3600000),
+          evidence: {},
+          ...extra,
+        });
+      };
+      // Tuesday 3 Nov and Tuesday 10 Nov, 12:00 Bangkok: both on a removed day.
+      await mock("2026-11-03T05:00:00Z");
+      await mock("2026-11-10T05:00:00Z");
+      // Wednesday stays. A cancelled one, another head's, and a Tuesday before the start date do not count.
+      await mock("2026-11-04T05:00:00Z");
+      await mock("2026-11-17T05:00:00Z", { status: "cancelled" });
+      await mock("2026-11-24T05:00:00Z", {}, "Ek");
+      await mock("2026-10-27T05:00:00Z");
+      // The saved week is [Sun early, Mon early, Tue win, Wed off, Thu win, Fri win, Sat off]. Tuesday is removed.
+      const removed = await saveHeadDays("Peat", [true, false, true, true, true], 4, ADMIN, db);
+      expect(removed.affectedVisits).toBe(2);
+      // Same days again: nothing newly removed.
+      expect((await saveHeadDays("Peat", [true, false, true, true, true], 4, ADMIN, db)).affectedVisits).toBe(0);
+      // Wednesday was just added; removing it now hits the one Wednesday visit.
+      expect((await saveHeadDays("Peat", [true, false, false, true, true], 4, ADMIN, db)).affectedVisits).toBe(1);
+      // Adding days removes nothing.
+      expect((await saveHeadDays("Peat", ALL, 4, ADMIN, db)).affectedVisits).toBe(0);
+    });
+
+    it("counts booked visits on a removed day for a fallback head, from now", async () => {
+      const week = [null, win, win, win, win, win, null];
+      await setHeads({ interviewers: [peat, { ...gift, fallbackWeek: week }] });
+      const [c] = await db
+        .insert(s.hiringCandidates)
+        .values({ name: "Gift visit", email: "gv@example.com", stage: "onsite_booked" })
+        .returning();
+      await db.insert(s.hiringBookings).values({
+        candidateId: c.id,
+        kind: "mock",
+        subjects: ["Biology"],
+        interviewerKey: "Gift",
+        interviewerEmail: "gift@example.com",
+        lineGroupId: "group",
+        calendarOwner: "owner@example.com",
+        startTime: new Date("2026-11-03T05:00:00Z"),
+        endTime: new Date("2026-11-03T06:00:00Z"),
+        evidence: {},
+      });
+      expect((await saveHeadDays("Gift", [true, true, true, true, true], 4, ADMIN, db)).affectedVisits).toBe(0);
+      expect((await saveHeadDays("Gift", [true, false, true, true, true], 5, ADMIN, db)).affectedVisits).toBe(1);
+      // A head with no saved week had no days to remove.
+      await setHeads();
+      expect((await saveHeadDays("Gift", [true, false, false, false, false], 4, ADMIN, db)).affectedVisits).toBe(0);
+    });
+
+    it("treats an attendance enrollment whose end date has passed as ended", async () => {
+      await enrol();
+      await db.update(s.tutorAttendanceEnrollments).set({ endDate: "2026-10-30" });
+      const error = await saveHeadDays("Peat", ALL, 4, ADMIN, db).catch((e) => e);
+      expect(error).toBeInstanceOf(HiringError);
+      expect(error.status).toBe(409);
+      expect((await dashboard(db)).heads.Peat.state).toBe("ended");
+      expect(await schedules()).toHaveLength(1);
+    });
+
     it("saves Gift's days to the fallback week and does not enrol Gift", async () => {
       await enrol();
       const result = await saveHeadDays("Gift", ALL, 4, ADMIN, db);

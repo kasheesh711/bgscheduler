@@ -200,11 +200,11 @@ describe("meters", () => {
       config,
     );
     expect(rows).toEqual([
-      { label: "Sent today", used: 5, max: 5, pct: 100, full: true },
-      { label: "Sent this week", used: 12, max: 15, pct: 80, full: false },
-      { label: "Waiting for reply", used: 9, max: 15, pct: 60, full: false },
-      { label: "Mathematics open", used: 2, max: 3, pct: 67, full: false },
-      { label: "Physics open", used: 3, max: 3, pct: 100, full: true },
+      { label: "Sent today", used: 5, max: 5, over: 0, pct: 100, full: true },
+      { label: "Sent this week", used: 12, max: 15, over: 0, pct: 80, full: false },
+      { label: "Waiting for reply", used: 9, max: 15, over: 0, pct: 60, full: false },
+      { label: "Mathematics open", used: 2, max: 3, over: 0, pct: 67, full: false },
+      { label: "Physics open", used: 3, max: 3, over: 0, pct: 100, full: true },
     ]);
   });
 
@@ -219,6 +219,12 @@ describe("meters", () => {
     ]);
     const closed = onsiteMeters(usage(), {}, cfg({ onsiteLimits: { perWeek: 0, unbooked: 2, perHeadPerWeek: 2, perSubject: 2 } }), names);
     expect(closed[0]).toMatchObject({ used: 0, max: 0, pct: 100, full: true });
+  });
+
+  it("reports how far use is over a limit that was lowered, and still calls it full", () => {
+    const rows = preScreenMeters(usage({ perDay: 17, perWeek: 3 }), cfg({ preScreenLimits: { perDay: 12, perWeek: 15, waiting: 15, perSubject: 3 } }));
+    expect(rows[0]).toEqual({ label: "Sent today", used: 17, max: 12, over: 5, pct: 100, full: true });
+    expect(rows[1].over).toBe(0);
   });
 
   it("counts this Bangkok week's confirmed mocks per head", () => {

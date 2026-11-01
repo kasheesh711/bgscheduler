@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { configSchema, type HiringConfig } from "@/lib/hiring/model";
+import { baseConfigSchema, configSchema, type HiringConfig } from "@/lib/hiring/model";
 import type { HeadDayState } from "@/lib/hiring/rules";
 import type { LimitUsage } from "@/lib/hiring/limits";
 import type { Week } from "@/lib/tutor-attendance/model";
@@ -56,7 +56,12 @@ const dataFor = (config: HiringConfig, extra: Record<string, unknown> = {}) =>
     google: { connected: true, email: "x@example.com", lastError: null },
     ...extra,
   }) as unknown as HiringData;
-const panel = (config: HiringConfig, extra: Record<string, unknown> = {}, saved = config) =>
+const panel = (
+  config: HiringConfig,
+  extra: Record<string, unknown> = {},
+  saved = config,
+  more: { dayDrafts?: Record<string, boolean[]>; error?: string; notice?: string } = {},
+) =>
   renderToStaticMarkup(
     <SetupPanel
       data={dataFor(saved, extra)}
@@ -66,6 +71,10 @@ const panel = (config: HiringConfig, extra: Record<string, unknown> = {}, saved 
       busy={false}
       connect={() => {}}
       command={async () => true}
+      dayDrafts={more.dayDrafts ?? {}}
+      setDayDrafts={() => {}}
+      error={more.error ?? ""}
+      notice={more.notice ?? ""}
     />,
   );
 const value = (html: string, label: string) =>
@@ -221,7 +230,7 @@ describe("Rules and setup", () => {
   it("says plainly that switching on Automation or Messages starts sending, only when it is a new switch-on", () => {
     const saved = make();
     const draft = { ...saved, enabled: true, deliveryEnabled: true };
-    const html = panel(draft, {}, saved);
+    const html = panel({ ...draft, preScreenThreshold: 60 }, {}, saved);
     expect(html).toContain("Saving starts sending");
     expect(html).toContain("5 pre-screen forms a day");
     expect(html).toContain("Save and start sending");
@@ -230,6 +239,52 @@ describe("Rules and setup", () => {
     expect(calm).toContain("Save rules and setup");
     // Already on: no notice.
     expect(panel(draft, {}, draft)).not.toContain("Saving starts sending");
+  });
+
+  it("shows a repairable list when the saved priority has a subject twice", () => {
+    // A stored config loads without the cross-field rules, so the panel can get one like this.
+    const config = baseConfigSchema.parse({
+      interviewers: [peat, gift],
+      subjectPriority: [
+        { subject: "Physics", hiring: true },
+        { subject: "Mathematics", hiring: true },
+        { subject: "Physics", hiring: false },
+      ],
+    });
+    const html = panel(config);
+    expect(html.match(/aria-label="Hiring Physics"/g)).toHaveLength(1);
+    expect(html.match(/aria-label="Hiring Mathematics"/g)).toHaveLength(1);
+  });
+
+  it("names the heads whose days are not saved in the sticky bar, and shows nothing when all are saved", () => {
+    const html = panel(make(), {}, make(), { dayDrafts: { Peat: [true, false, true, true, true], Gift: [true, true, true, true, true] } });
+    const bar = html.slice(0, html.indexOf("Screening rules"));
+    expect(bar).toContain("Head days not saved: Gift, Peat");
+    expect(bar).toMatch(/role="alert"|role="status"/);
+    expect(panel(make())).not.toContain("Head days not saved");
+    // A tick set back to the saved value is not unsaved.
+    expect(panel(make(), {}, make(), { dayDrafts: { Peat: [true, true, true, true, true] } })).not.toContain("Head days not saved");
+  });
+
+  it("shows the saved and error messages in the sticky bar, at every width", () => {
+    const html = panel(make(), {}, make(), { notice: "Saved.", error: "Settings changed. Refresh this page." });
+    const bar = html.slice(0, html.indexOf("Screening rules"));
+    expect(bar).toMatch(/role="status"[^>]*>Saved\./);
+    expect(bar).toMatch(/role="alert"[^>]*>Settings changed\. Refresh this page\./);
+    const quiet = panel(make()).slice(0, html.indexOf("Screening rules"));
+    expect(quiet).not.toContain("Saved.");
+  });
+
+  it("does not say Saving starts sending when only one switch is on, and does not promise onsite invitations without a pass score", () => {
+    const saved = make();
+    const oneOn = panel({ ...saved, enabled: true }, {}, saved);
+    expect(oneOn).not.toContain("Saving starts sending");
+    expect(oneOn).toContain("Messages is off, so nothing is sent yet.");
+    expect(oneOn).toContain("Save and start sending");
+    const noScore = panel({ ...saved, enabled: true, deliveryEnabled: true }, {}, saved);
+    expect(noScore).toContain("Saving starts sending");
+    expect(noScore).not.toContain("onsite invitations a week.");
+    expect(noScore).toContain("No onsite invitation is sent until you set a pass score.");
   });
 
   it("keeps the existing sections", () => {
@@ -263,6 +318,28 @@ describe("LimitMeters", () => {
     expect(html.match(/data-full="true"/g)).toHaveLength(2);
     expect(html.match(/>Full</g)).toHaveLength(2);
     expect(html).toMatch(/style="width:100%"/);
+  });
+
+  it("reads Over by N, not 17 of 12, when use is above a lowered limit, and still shows Full", () => {
+    const config = make({ preScreenLimits: { perDay: 12, perWeek: 15, waiting: 15, perSubject: 3 } });
+    const html = renderToStaticMarkup(
+      <LimitMeters
+        config={config}
+        tutors={tutors}
+        headMocks={{}}
+        usage={{ preScreen: usage({ perDay: 17 }), onsite: usage() }}
+      />,
+    );
+    expect(html).toContain("Over by 5");
+    expect(html).not.toMatch(/>17</);
+    expect(html).not.toContain("of 12");
+    expect(html.match(/>Full</g)).toHaveLength(1);
+    // At the limit exactly it still reads as a count.
+    const at = renderToStaticMarkup(
+      <LimitMeters config={config} tutors={tutors} headMocks={{}} usage={{ preScreen: usage({ perDay: 12 }), onsite: usage() }} />,
+    );
+    expect(at).not.toContain("Over by");
+    expect(at).toMatch(/Sent today[\s\S]*?>12<[\s\S]*?of 12</);
   });
 
   it("says automatic onsite invitations are blocked with no pass score, and paused when switches are off", () => {

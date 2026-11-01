@@ -1,5 +1,5 @@
 import { applicableSchedule, type Week } from "@/lib/tutor-attendance/model";
-import { configRuleErrors, SUBJECTS, VISIT_LINK_DAYS, type HiringConfig } from "./model";
+import { configRuleErrors, localDate, SUBJECTS, VISIT_LINK_DAYS, type HiringConfig } from "./model";
 import { answerKey } from "./scoring";
 
 /**
@@ -82,11 +82,38 @@ export function settingsProblems(config: HiringConfig): string[] {
     problems.push("Pre-screen pass score: use a whole number from 0 to 100, or leave it empty.");
   if (!Number.isInteger(config.resumeRetentionMonths) || config.resumeRetentionMonths < 1 || config.resumeRetentionMonths > 120)
     problems.push("Résumé files: use a whole number of months from 1 to 120.");
+  const whole = (n: number, min: number, max: number) => Number.isInteger(n) && n >= min && n <= max;
+  for (const [key, label] of Object.entries(PROFILE_WEIGHT_LABELS))
+    if (!whole(config.profileWeights[key as keyof typeof PROFILE_WEIGHT_LABELS], 0, 100))
+      problems.push(`${label}: use a whole number from 0 to 100.`);
+  for (const [key, label] of Object.entries(PRE_SCREEN_WEIGHT_LABELS))
+    if (!whole(config.preScreenWeights[key as keyof typeof PRE_SCREEN_WEIGHT_LABELS], 0, 100))
+      problems.push(`Pre-screen ${label.toLowerCase()}: use a whole number from 0 to 100.`);
+  if (!whole(config.profileThreshold, 0, 100)) problems.push("Invitation threshold: use a whole number from 0 to 100.");
   const total = Object.values(config.preScreenWeights).reduce((n, w) => n + w, 0);
   if (total !== 100) problems.push(`Pre-screen weights total ${total}. They must total 100.`);
   for (const e of configRuleErrors(config)) problems.push(e.message);
   return problems;
 }
+
+export const PROFILE_WEIGHT_LABELS = {
+  degree: "Degree relevance",
+  subject: "Subject evidence",
+  curriculum: "Curriculum experience",
+  teaching: "Teaching experience",
+  english: "English evidence",
+  prestige: "University prestige",
+};
+export const PRE_SCREEN_WEIGHT_LABELS = {
+  degree: "Degree",
+  subject: "Subject",
+  curriculum: "Curriculum",
+  teaching: "Teaching",
+  english: "English",
+  prestige: "University prestige",
+  written: "Written answers",
+  availability: "Availability",
+};
 
 export const minutesToTime = (minute: number) => {
   // A time field cannot show 24:00, so the last minute of the day stands in for it.
@@ -99,11 +126,14 @@ export const timeToMinutes = (time: string) => {
 };
 
 type Priority = HiringConfig["subjectPriority"];
+/** A subject listed twice keeps its first entry. The server refuses duplicates, so the screen drops them to let a save repair the list. */
+export const dedupePriority = (list: Priority): Priority =>
+  list.filter((p, i) => list.findIndex((q) => q.subject === p.subject) === i);
 /** The saved order, then every subject missing from it as not hiring. A missing subject is not hiring in the queue, too. */
-export const fullPriority = (list: Priority): Priority => [
-  ...list,
-  ...SUBJECTS.filter((s) => !list.some((p) => p.subject === s)).map((subject) => ({ subject, hiring: false })),
-];
+export const fullPriority = (list: Priority): Priority => {
+  const clean = dedupePriority(list);
+  return [...clean, ...SUBJECTS.filter((s) => !clean.some((p) => p.subject === s)).map((subject) => ({ subject, hiring: false }))];
+};
 export function movePriority(list: Priority, index: number, delta: -1 | 1): Priority {
   const to = index + delta;
   if (to < 0 || to >= list.length) return list;
@@ -128,7 +158,14 @@ export function workRightsRows(config: HiringConfig): { answer: string; accepted
 export function setWorkRightsAccepted(config: HiringConfig, answer: string, on: boolean): HiringConfig {
   const key = answerKey(answer);
   const rest = config.acceptedWorkRights.filter((a) => answerKey(a) !== key);
-  return { ...config, acceptedWorkRights: on ? [...rest, answer] : rest };
+  // An unticked answer must stay on the list so it can be ticked again, so record it as seen. The schema holds 200.
+  const seen = config.seenWorkRights;
+  const remember = !on && !seen.some((a) => answerKey(a) === key) && seen.length < 200;
+  return {
+    ...config,
+    acceptedWorkRights: on ? [...rest, answer] : rest,
+    seenWorkRights: remember ? [...seen, answer] : seen,
+  };
 }
 
 export const HEAD_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"] as const;
@@ -152,20 +189,48 @@ export const hasSavedHours = (week: Week | null | undefined) => daysOf(week).som
 /** The newest saved schedule counts, even one that starts tomorrow, so the screen shows what was last saved. */
 export function headDayState(
   head: { canonicalKey: string; fallbackWeek?: Week },
-  enrollments: { canonicalKey: string; active: boolean }[],
+  enrollments: { canonicalKey: string; active: boolean; endDate?: string | null }[],
   schedules: { id: string; canonicalKey: string; effectiveFrom: string; week: Week; revision: number }[],
+  today = localDate(new Date()),
 ): HeadDayState {
   const enrollment = enrollments.find((e) => e.canonicalKey === head.canonicalKey);
   if (!enrollment) return { state: "fallback", week: head.fallbackWeek ?? null, from: null };
   const version = applicableSchedule("9999-12-31", head.canonicalKey, schedules);
-  return { state: enrollment.active ? "enrolled" : "ended", week: version?.week ?? null, from: version?.effectiveFrom ?? null };
+  // headOfficeWindow gives no hours after the end date, so a past end date is ended too.
+  const ended = !enrollment.active || (!!enrollment.endDate && enrollment.endDate < today);
+  return { state: ended ? "ended" : "enrolled", week: version?.week ?? null, from: version?.effectiveFrom ?? null };
 }
+
+/** The heads whose ticks differ from what is saved, by name, in name order. */
+export function unsavedHeadDays(
+  drafts: Record<string, boolean[]>,
+  heads: Record<string, Pick<HeadDayState, "week">>,
+  names: Record<string, string>,
+): string[] {
+  return Object.entries(drafts)
+    .filter(([key, ticks]) => ticks.some((on, i) => on !== daysOf(heads[key]?.week)[i]))
+    .map(([key]) => names[key] ?? key)
+    .sort();
+}
+/** The message after a head-days save. Booked visits on a removed day are not moved, so staff are told. */
+export const headDaysNotice = (affected: number) =>
+  affected === 0
+    ? "Saved."
+    : `Saved. ${affected} booked ${affected === 1 ? "visit falls" : "visits fall"} on a day you removed. The app did not move ${affected === 1 ? "it" : "them"}. Staff must act.`;
 
 export const startsSending = (
   saved: Pick<HiringConfig, "enabled" | "deliveryEnabled">,
   draft: Pick<HiringConfig, "enabled" | "deliveryEnabled">,
 ) => (draft.enabled && !saved.enabled) || (draft.deliveryEnabled && !saved.deliveryEnabled);
-export const sendingNotice = (config: HiringConfig) =>
-  `Saving starts sending. It stays within your limits: ${config.preScreenLimits.perDay} pre-screen forms a day, ` +
-  `${config.preScreenLimits.perWeek} a week, and ${config.onsiteLimits.perWeek} onsite invitations a week. ` +
-  "Nothing goes out until both Automation and Messages are on. Untick to keep it paused.";
+export function sendingNotice(config: HiringConfig) {
+  const pre = config.preScreenLimits;
+  const limits =
+    `${pre.perDay} pre-screen forms a day, ${pre.perWeek} a week` +
+    (config.preScreenThreshold === null
+      ? ". No onsite invitation is sent until you set a pass score."
+      : `, and ${config.onsiteLimits.perWeek} onsite invitations a week.`);
+  if (config.enabled && config.deliveryEnabled) return `Saving starts sending. It stays within your limits: ${limits}`;
+  if (!config.enabled && !config.deliveryEnabled) return "";
+  // One switch alone sends nothing: the queue needs both.
+  return `${config.enabled ? "Messages" : "Automation"} is off, so nothing is sent yet. Once both are on, it stays within your limits: ${limits}`;
+}
