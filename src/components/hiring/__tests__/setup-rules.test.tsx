@@ -292,6 +292,13 @@ describe("Rules and setup", () => {
     for (const text of ["Screening rules", "Automation", "Connections", "Mock interviewers", "University prestige rules and reference data"])
       expect(html).toContain(text);
   });
+
+  it("describes the profile gate as the code applies it", () => {
+    const html = panel(make());
+    expect(html).toContain("waits at New");
+    expect(html).toContain("no supported subject, no email or earlier contact go to review");
+    expect(html).not.toContain("must meet the rule");
+  });
 });
 
 describe("LimitMeters", () => {

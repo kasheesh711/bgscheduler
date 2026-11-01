@@ -147,10 +147,10 @@ export function OperationsRail({
                   {nameOf(b.candidateId)}
                 </button>
                 <span className={css.railMeta}>
-                  {dateTime(b.startTime)} · {b.kind === "mock" ? "Mock" : "Paper"} · {b.subjects.join(", ")}
+                  {dateTime(b.startTime)} · {b.kind === "mock" ? "Mock" : b.visitId ? "Exam" : "Paper"} · {b.subjects.join(", ")}
                 </span>
                 <span className={css.railMeta}>
-                  {b.interviewerKey ?? "Paper assessment"} · {b.status}
+                  {b.interviewerKey ?? (b.visitId ? "Office exam" : "Paper assessment")} · {b.status}
                 </span>
               </li>
             ))}

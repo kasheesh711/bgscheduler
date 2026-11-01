@@ -154,7 +154,7 @@ export function SetupPanel({
         <section className={css.setupSection}>
           <h2 className={css.panelTitle}>Screening rules</h2>
           <p className={css.panelLede}>
-            Weights must total 100. Degree and subject evidence must meet the rule. Lower scores go to review.
+            Weights must total 100. A candidate needs this score, an accepted work-rights answer and a hiring subject to get the form. A candidate who misses only these waits at New, and a change here takes effect on the next cycle. A degree marked not met, no supported subject, no email or earlier contact go to review.
           </p>
           <div className={css.weightBar} aria-hidden="true">
             {(Object.keys(PROFILE_WEIGHT_LABELS) as Array<keyof typeof PROFILE_WEIGHT_LABELS>).map((key) => (
