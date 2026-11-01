@@ -84,32 +84,45 @@ export function preScreenNote(r: PreScreenResult, time = false) {
 
 export type CandidateExtras = {
   pre: PreScreenResult;
-  /** The latest confirmed booking, or null. */
-  visit: { kind: "paper" | "mock"; startTime: Date | string } | null;
+  /** The current visit, or the latest confirmed old-flow booking, or null. */
+  visit: { kind: "paper" | "mock"; startTime: Date | string; visitId?: string | null } | null;
 };
 
 /** The pre-screen status and visit of every candidate, by candidate id. */
 export function candidateExtras(
   candidates: (Parameters<typeof preScreenStatus>[0])[],
   outbox: (OutboxRow & { candidateId: string })[],
-  bookings: { candidateId: string; kind: "paper" | "mock"; status: string; startTime: Date | string }[],
+  bookings: {
+    candidateId: string;
+    kind: "paper" | "mock";
+    status: string;
+    startTime: Date | string;
+    endTime?: Date | string;
+    visitId?: string | null;
+  }[],
   ready: Set<string>,
+  now = new Date(),
 ) {
+  // A visit shows until it ends. Old-flow bookings show as they always did.
   const confirmed = bookings
-    .filter((b) => b.status === "confirmed")
+    .filter((b) => b.status === "confirmed" && (!b.visitId || new Date(b.endTime!) > now))
     .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
   const jobs = new Map<string, typeof outbox>();
   for (const j of outbox) jobs.set(j.candidateId, [...(jobs.get(j.candidateId) ?? []), j]);
   return new Map(
-    candidates.map((c): [string, CandidateExtras] => [
-      c.id,
-      {
-        pre: preScreenStatus(c, jobs.get(c.id) ?? [], ready.has(c.id)),
-        visit: confirmed.find((b) => b.candidateId === c.id) ?? null,
-      },
-    ]),
+    candidates.map((c): [string, CandidateExtras] => {
+      const latest = confirmed.find((b) => b.candidateId === c.id) ?? null;
+      return [
+        c.id,
+        {
+          pre: preScreenStatus(c, jobs.get(c.id) ?? [], ready.has(c.id)),
+          // A visit reads as its exam, which starts it, until only the mock is left.
+          visit: (latest?.visitId && confirmed.find((b) => b.visitId === latest.visitId && b.kind === "paper")) || latest,
+        },
+      ];
+    }),
   );
 }
 
 export const visitText = (visit: NonNullable<CandidateExtras["visit"]>) =>
-  `${visit.kind === "paper" ? "Paper" : "Mock"} · ${when(new Date(visit.startTime), true)}`;
+  `${visit.visitId ? "Visit" : visit.kind === "paper" ? "Paper" : "Mock"} · ${when(new Date(visit.startTime), true)}`;

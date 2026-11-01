@@ -121,7 +121,18 @@ export async function formSentAt(db: Database, candidateId: string) {
   return form?.status === "sent" ? form.sentAt : null;
 }
 
-const preScreenTotal = (candidate: Candidate, config: HiringConfig) =>
+/** The newest invitation's send time. A row not yet sent has no time, so no follow-up clock runs. */
+export async function linkSentAt(db: Database, candidateId: string) {
+  const [link] = await db
+    .select({ status: o.status, sentAt: o.sentAt })
+    .from(o)
+    .where(and(eq(o.candidateId, candidateId), isOnsiteInvite, ne(o.status, "cancelled")))
+    .orderBy(desc(o.createdAt))
+    .limit(1);
+  return link?.status === "sent" ? link.sentAt : null;
+}
+
+export const preScreenTotal = (candidate: Candidate, config: HiringConfig) =>
   preScreenPoints(
     candidate.preScreenAssessment!,
     config.preScreenWeights,
@@ -316,20 +327,22 @@ export async function runFollowUps(db: Database, now = new Date()) {
 
     // Newest invitation first: only the current link has a clock, and one not yet sent has none.
     const links = await tx
-      .select({ id: c.id, status: o.status, sentAt: o.sentAt, payload: o.payload })
+      .select({ id: c.id, status: o.status, sentAt: o.sentAt, payload: o.payload, expires: c.inviteExpiresAt })
       .from(c)
       .innerJoin(o, and(eq(o.candidateId, c.id), isOnsiteInvite, ne(o.status, "cancelled")))
       .where(eq(c.stage, "onsite_invited"))
       .orderBy(asc(c.id), desc(o.createdAt));
     const latest = new Map<string, (typeof links)[number]>();
     for (const link of links) if (!latest.has(link.id)) latest.set(link.id, link);
-    for (const { id, status, sentAt, payload } of latest.values()) {
+    for (const { id, status, sentAt, payload, expires } of latest.values()) {
       if (status !== "sent" || !sentAt) continue;
       const { remindDays, expireDays } = config.onsiteFollowUp;
-      if (!passed(sentAt, remindDays) && !passed(sentAt, expireDays)) continue;
+      // expireDays can pass the token's 30 days. A dead link must not hold a place or go out in a reminder.
+      const dead = !!expires && expires <= now;
+      if (!passed(sentAt, remindDays) && !passed(sentAt, expireDays) && !dead) continue;
       const row = await lockCandidate(tx, id);
       if (row.stage !== "onsite_invited") continue;
-      if (passed(sentAt, expireDays)) {
+      if (passed(sentAt, expireDays) || dead) {
         await tx
           .update(c)
           .set({ stage: "no_booking", inviteExpiresAt: null, revision: row.revision + 1, updatedAt: now })

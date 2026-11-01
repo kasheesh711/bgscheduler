@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Stage } from "../model";
-import { parseFormTimestamp, preScreenNote, preScreenStatus } from "../status";
+import { candidateExtras, parseFormTimestamp, preScreenNote, preScreenStatus, visitText } from "../status";
 
 const id = "c1";
 const sent = new Date("2026-10-29T03:00:00Z");
@@ -109,5 +109,33 @@ describe("form timestamps", () => {
   it("returns null for text it cannot read", () => {
     expect(parseFormTimestamp("last week")).toBeNull();
     expect(preScreenNote({ status: "Replied", sentAt: null, remindedAt: null, repliedAt: "last week" })).toBe("Replied");
+  });
+});
+
+describe("candidateExtras visit", () => {
+  const now = new Date("2026-11-04T05:00:00Z");
+  const person = { id: "a", stage: "onsite_booked" as const, previouslyContacted: false, preScreen: null };
+  const visit = (kind: "paper" | "mock", start: string, end: string, status = "confirmed") => ({
+    candidateId: "a",
+    kind,
+    status,
+    startTime: start,
+    endTime: end,
+    visitId: "v1",
+  });
+  const extras = (bookings: Parameters<typeof candidateExtras>[2]) => candidateExtras([person], [], bookings, new Set(), now).get("a")!;
+  it("shows a current visit by its exam time, and labels it a visit", () => {
+    const shown = extras([
+      visit("paper", "2026-11-05T03:00:00Z", "2026-11-05T05:00:00Z"),
+      visit("mock", "2026-11-05T05:00:00Z", "2026-11-05T06:00:00Z"),
+    ]).visit!;
+    expect(shown.startTime).toBe("2026-11-05T03:00:00Z");
+    expect(visitText(shown)).toBe("Visit · 5 Nov, 10:00");
+  });
+  it("drops a visit that has ended or was cancelled, and keeps an old-flow booking as today", () => {
+    expect(extras([visit("mock", "2026-11-03T05:00:00Z", "2026-11-03T06:00:00Z")]).visit).toBeNull();
+    expect(extras([visit("mock", "2026-11-05T05:00:00Z", "2026-11-05T06:00:00Z", "cancelled")]).visit).toBeNull();
+    const old = { candidateId: "a", kind: "mock" as const, status: "confirmed", startTime: "2026-10-01T05:00:00Z" };
+    expect(extras([old]).visit).toEqual(old);
   });
 });

@@ -252,17 +252,20 @@ export async function availableSlots(
  * office hours, free in Wise and on leave, free of sit-ins and hiring bookings, and under the weekly limit.
  * The server picks the head (fewest mocks that week, then settings order). Candidates never choose.
  * Every confirmed mock counts toward the weekly limit, old flow or new, because each one uses the head's hour.
+ * `movingCandidate`'s own rows are left out: a move gives them up, so they must not block its new time.
  */
 export async function availableVisitSlots(
   db: Database,
   config: HiringConfig,
   subject: Subject,
   now = new Date(),
+  movingCandidate?: string,
 ): Promise<VisitSlot[]> {
   const heads = config.interviewers.filter((h) => h.subjects.includes(subject));
   if (!heads.length) return [];
   const calendar = await readCalendar(db);
-  const { bookings, observations } = calendar;
+  const { observations } = calendar;
+  const bookings = calendar.bookings.filter((b) => !movingCandidate || b.candidateId !== movingCandidate);
   const index = await ensureIndex(db);
   assertFreshIndex(index, now);
   const mocks = bookings.filter((b) => b.kind === "mock");

@@ -546,11 +546,14 @@ export async function deliverOutbox(
             .from(s.hiringBookings)
             .where(eq(s.hiringBookings.id, job.bookingId))
         : [];
+      const notice = job.payload.notice as "moved" | "cancelled" | undefined;
+      // These report that a visit ended, so they still leave after a cancel, a no-show or a stop.
+      const closing = job.kind === "calendar_cancel" || notice === "cancelled";
       if (
-        candidate.stage === "stopped" ||
+        (candidate.stage === "stopped" && !closing) ||
         (job.payload.workflowStage &&
           candidate.stage !== job.payload.workflowStage) ||
-        (booking?.status === "cancelled" && job.kind !== "calendar_cancel") ||
+        (booking && booking.status !== "confirmed" && !closing) ||
         (booking &&
           booking.endTime <= now &&
           !job.firstAttemptAt &&
@@ -596,7 +599,13 @@ export async function deliverOutbox(
             throw new Error(
               "The interviewer group registration changed. Review delivery.",
             );
-          const message = `Mock teaching interview\nCandidate: ${candidate.name}\nSubject: ${booking.subjects.join(", ")}\nTime: ${booking.startTime.toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })}–${booking.endTime.toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok" })} (Bangkok)\nPlace: ${current.config.location}\nInterviewer: ${booking.interviewerKey}`;
+          const title =
+            notice === "moved"
+              ? "Mock teaching moved. The old time is cancelled."
+              : notice === "cancelled"
+                ? "Mock teaching cancelled"
+                : "Mock teaching interview";
+          const message = `${title}\nCandidate: ${candidate.name}\nSubject: ${booking.subjects.join(", ")}\nTime: ${booking.startTime.toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })}–${booking.endTime.toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok" })} (Bangkok)\nPlace: ${current.config.location}\nInterviewer: ${booking.interviewerKey}`;
           receipt = {
             ...(await pushLineTextMessage({
               to: booking.lineGroupId,

@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, like, or, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
-import { availableSlots, verifyLiveSlot } from "./availability";
+import { availableSlots, availableVisitSlots, verifyLiveSlot } from "./availability";
 import {
   bookingSchema,
   configSchema,
@@ -12,8 +12,9 @@ import {
   normalizeSubjects,
   overlap,
   runtimeWritesAllowed,
+  visitBookingSchema,
+  ZONE,
   type HiringConfig,
-  type InterviewKind,
   type Stage,
   type Subject,
 } from "./model";
@@ -22,13 +23,14 @@ import {
   hardStops,
   preScreenPoints,
   profileScore,
-  visitSubject,
+  supportedVisitSubjects,
+  topHiringSubject,
   workRightsAccepted,
 } from "./scoring";
 import { googleConnectionStatus } from "./google";
 import { bookingToken, readBookingToken, VISIT_LINK_DAYS } from "./tokens";
 import { blockingLimit, type LimitName } from "./limits";
-import { appInvited, lockQueue, readLimitUsage } from "./queue";
+import { linkSentAt, lockQueue, preScreenTotal, readLimitUsage } from "./queue";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -54,10 +56,6 @@ export async function saveSettings(
   db: Database = getDb(),
 ) {
   const config = configSchema.parse(value);
-  // PR C removes this. The old flow has no limits, pass score or hard stops.
-  // Only saving is refused: a stored `enabled: true` still parses and reads.
-  if (config.enabled)
-    throw new HiringError(409, "Automation stays off until the visit flow is released.");
   if (
     (config.enabled || config.deliveryEnabled) &&
     (!config.rubricApproved || !runtimeWritesAllowed())
@@ -134,37 +132,30 @@ export async function enqueue(
     .returning({ id: s.hiringOutbox.id });
   return rows.length > 0;
 }
-export async function inviteToBooking(
+/** Old flow only: a recorded paper pass. A paper invitation can no longer be sent. */
+export async function inviteToMock(
   db: Database,
   candidate: Candidate,
-  kind: InterviewKind,
   config: HiringConfig,
   key: string,
 ) {
   if (!candidate.email)
     throw new HiringError(409, "A verified application email is required.");
   const expiry = new Date(Date.now() + 14 * 86400000);
-  const token = bookingToken(candidate.id, kind, expiry);
+  const token = bookingToken(candidate.id, "mock", expiry);
   const url = new URL(
     `/hiring/book/${token}`,
     process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
   ).toString();
-  const text =
-    kind === "paper"
-      ? `Dear ${candidate.name},\n\nThank you for your interest in BeGifted. We invite you to our paper-based assessment. Each subject takes about two hours. Please select your subjects and book an onsite appointment:\n${url}\n\nUse the same email as your application. Add our LINE Official Account at https://lin.ee/OjMHF41 for follow-up.\n\nLocation: ${config.location}\n\nBeGifted Education`
-      : `Dear ${candidate.name},\n\nYou have passed the recorded paper assessment for ${candidate.paperPassedSubjects.join(", ")}. Please book your onsite mock teaching session:\n${url}\n\nEach subject has a one-hour session. Prepare one IGCSE topic of your choice. The interviewer will also select a topic, which may be from another level. You may use teaching materials or tools.\n\nLocation: ${config.location}\n\nBeGifted Education`;
   await enqueue(db, {
     key,
     candidateId: candidate.id,
     kind: "email",
     payload: {
       to: candidate.email,
-      subject:
-        kind === "paper"
-          ? "BeGifted paper assessment invitation"
-          : "BeGifted mock teaching invitation",
-      text,
-      workflowStage: kind === "paper" ? "paper_invited" : "paper_passed",
+      subject: "BeGifted mock teaching invitation",
+      text: `Dear ${candidate.name},\n\nYou have passed the recorded paper assessment for ${candidate.paperPassedSubjects.join(", ")}. Please book your onsite mock teaching session:\n${url}\n\nEach subject has a one-hour session. Prepare one IGCSE topic of your choice. The interviewer will also select a topic, which may be from another level. You may use teaching materials or tools.\n\nLocation: ${config.location}\n\nBeGifted Education`,
+      workflowStage: "paper_passed",
     },
   });
   await db
@@ -194,6 +185,9 @@ export const visitLink = (id: string, expires: Date) =>
     `/hiring/book/${bookingToken(id, "visit", expires)}`,
     process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
   ).toString();
+const LINE_URL = "https://lin.ee/OjMHF41";
+const onLine = (text: string) => `${text} Contact BeGifted on LINE: ${LINE_URL}`;
+const DAY = 86400000;
 const LIMIT_TEXT: Record<LimitName, string> = {
   perDay: "per day",
   perWeek: "per week",
@@ -202,7 +196,8 @@ const LIMIT_TEXT: Record<LimitName, string> = {
   perSubject: "open per subject",
 };
 // A candidate at any other stage already holds an invitation, is stopped, or stays on the old flow.
-const INVITABLE: Stage[] = ["pre_screen", "no_reply", "review", "no_booking"];
+// `new` here is a response scored by the backfill, which changes no stage. It has no form send, so only a click reaches it.
+const INVITABLE: Stage[] = ["new", "pre_screen", "no_reply", "review", "no_booking"];
 /**
  * The one gate for every onsite invitation, from a release or a click. It takes the queue lock and reads the limits
  * itself, so the two cannot both use the last place. Call it inside a transaction, before locking the candidate row:
@@ -235,9 +230,15 @@ export async function inviteToVisit(
     config,
   );
   if (stops.length) throw new HiringError(409, stops.join(" "));
-  const subject = visitSubject(c.preScreen, c.workRightsAnswer, c.preScreenAssessment, config);
+  const supported = supportedVisitSubjects(c.preScreen, c.workRightsAnswer, c.preScreenAssessment, config);
+  if (!topHiringSubject(supported, config.subjectPriority))
+    throw new HiringError(409, "No supported subject is open for hiring.");
+  const subject = topHiringSubject(
+    supported.filter((v) => config.interviewers.some((i) => i.subjects.includes(v))),
+    config.subjectPriority,
+  );
   if (!subject)
-    throw new HiringError(409, "No supported subject is open for hiring with a head.");
+    throw new HiringError(409, `No head is set for the subject: ${supported.join(", ")}.`);
   const limit = blockingLimit("onsite", subject, await readLimitUsage(tx, "onsite", now), config);
   if (limit)
     throw new HiringError(409, `The onsite limit "${LIMIT_TEXT[limit]}" is full. Raise the number to send more.`);
@@ -260,7 +261,10 @@ export async function inviteToVisit(
     },
   });
   if (!queued)
-    throw new HiringError(409, "This invitation was already queued.");
+    throw new HiringError(
+      409,
+      "This invitation was already queued or sent. Use Send new link after a cancel, a no-show or No booking.",
+    );
   await tx
     .update(s.hiringCandidates)
     .set({
@@ -394,13 +398,19 @@ export async function dashboard(db: Database = getDb()) {
     })),
   };
 }
+function oldFlowToken(token: string, now: Date) {
+  const cap = readBookingToken(token, now);
+  if (cap.kind === "visit")
+    throw new HiringError(404, "This booking link is no longer active.");
+  return { ...cap, kind: cap.kind };
+}
 export async function bookingView(
   token: string,
   subjects?: Subject[],
   db: Database = getDb(),
   now = new Date(),
 ) {
-  const cap = readBookingToken(token, now);
+  const cap = oldFlowToken(token, now);
   const candidate = await candidateById(db, cap.id);
   const { config } = await settings(db);
   const permitted =
@@ -471,7 +481,7 @@ export async function bookInterview(
   now = new Date(),
 ) {
   const input = bookingSchema.parse(value);
-  const cap = readBookingToken(token, now);
+  const cap = oldFlowToken(token, now);
   if (new Set(input.subjects).size !== input.subjects.length)
     throw new HiringError(400, "A subject can only be selected once.");
   const { config } = await settings(db);
@@ -659,18 +669,284 @@ export async function bookInterview(
     return booking;
   });
 }
+type VisitLink = { id: string; exp: number };
+function visitToken(token: string, now: Date): VisitLink {
+  const cap = readBookingToken(token, now);
+  if (cap.kind !== "visit") throw new HiringError(404, onLine("This booking link is no longer active."));
+  return cap;
+}
+const bookable = (config: HiringConfig) => config.enabled && config.rubricApproved && runtimeWritesAllowed();
+const visitRows = (db: Database, candidateId: string) =>
+  db
+    .select()
+    .from(s.hiringBookings)
+    .where(
+      and(
+        eq(s.hiringBookings.candidateId, candidateId),
+        eq(s.hiringBookings.status, "confirmed"),
+        isNotNull(s.hiringBookings.visitId),
+      ),
+    );
+type VisitRow = Awaited<ReturnType<typeof visitRows>>[number];
+const examOf = (rows: VisitRow[]) => rows.find((b) => b.kind === "paper");
+
+/**
+ * The link's expiry second must equal the row's, so a new link ends the old one. A booked link stays open until the visit
+ * starts. An unbooked link closes at expireDays even when the worker is not running to mark No booking.
+ */
+async function openVisit(db: Database, cap: VisitLink, config: HiringConfig, now: Date) {
+  const candidate = await candidateById(db, cap.id);
+  const rows = await visitRows(db, cap.id);
+  let open = candidate.inviteExpiresAt?.getTime() === cap.exp * 1000 && !!candidate.visitSubject;
+  if (open && candidate.stage === "onsite_booked") {
+    const exam = examOf(rows);
+    open = !!exam && exam.startTime > now;
+  } else if (open && candidate.stage === "onsite_invited") {
+    const sentAt = await linkSentAt(db, cap.id);
+    open = !sentAt || now.getTime() - sentAt.getTime() < config.onsiteFollowUp.expireDays * DAY;
+  } else open = false;
+  if (!open) throw new HiringError(404, onLine("This booking link is no longer active."));
+  return { candidate, subject: candidate.visitSubject!, rows };
+}
+
+/** Why this booked visit cannot move, or null. send_new_link needs a visit with no confirmed rows, and the next booking has no `reschedule_of`, so that click resets the count. */
+function moveRefusal(rows: VisitRow[], now: Date) {
+  if (rows.some((b) => b.rescheduleOf)) return onLine("This visit has already moved once.");
+  if (examOf(rows)!.startTime.getTime() - now.getTime() < DAY)
+    return onLine("A visit cannot move within 24 hours of its start.");
+  return null;
+}
+
+/** The current time is not a choice, and every time starts inside the link's life, so the link outlasts the wait for any booked visit. */
+const offeredSlots = async (db: Database, config: HiringConfig, subject: Subject, cap: VisitLink, rows: VisitRow[], now: Date) =>
+  (await availableVisitSlots(db, config, subject, now, cap.id)).filter((slot) => {
+    const start = new Date(slot.examStart).getTime();
+    return start < cap.exp * 1000 && start !== examOf(rows)?.startTime.getTime();
+  });
+
+export async function visitView(token: string, db: Database = getDb(), now = new Date()) {
+  const cap = visitToken(token, now);
+  const { config } = await settings(db);
+  const { subject, rows } = await openVisit(db, cap, config, now);
+  const enabled = bookable(config);
+  const exam = examOf(rows);
+  const mock = rows.find((b) => b.kind === "mock");
+  const refusal = exam ? moveRefusal(rows, now) : null;
+  let slots: Awaited<ReturnType<typeof offeredSlots>> = [];
+  let notice: string | null = null;
+  if (!enabled) notice = onLine("Booking is temporarily paused.");
+  else if (refusal) notice = refusal;
+  else {
+    try {
+      slots = await offeredSlots(db, config, subject, cap, rows, now);
+      if (!slots.length) notice = onLine("There are no open visit times at the moment. Please try again later.");
+    } catch (error) {
+      // A stale Wise snapshot. Anything else is not a state the candidate can act on.
+      if (!(error instanceof HiringError)) throw error;
+      notice = onLine("Visit times cannot be shown at the moment. Please try again later.");
+    }
+  }
+  return {
+    kind: "visit" as const,
+    subject,
+    location: config.location,
+    enabled,
+    slots,
+    visit:
+      exam && mock
+        ? {
+            examStart: exam.startTime.toISOString(),
+            mockStart: mock.startTime.toISOString(),
+            mockEnd: mock.endTime.toISOString(),
+            head: mock.interviewerKey,
+          }
+        : null,
+    canMove: enabled && !!exam && !refusal,
+    notice,
+  };
+}
+
+const bangkok = (date: Date) =>
+  date.toLocaleString("en-GB", { timeZone: ZONE, weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+const bangkokTime = (date: Date) =>
+  date.toLocaleTimeString("en-GB", { timeZone: ZONE, hour: "2-digit", minute: "2-digit" });
+const headNotice = (mock: VisitRow, notice?: "moved" | "cancelled") => ({
+  key: `booking:${mock.id}:line${notice === "cancelled" ? "-cancelled" : ""}`,
+  candidateId: mock.candidateId,
+  bookingId: mock.id,
+  kind: "line" as const,
+  payload: notice ? { notice } : {},
+});
+
+/** Stops a visit's rows blocking anyone. Unsent messages for them go; events still ahead are cancelled. */
+async function endVisit(tx: Database, rows: VisitRow[], status: "cancelled" | "no_show", now: Date) {
+  const ids = rows.map((b) => b.id);
+  const candidateId = rows[0].candidateId;
+  await tx.update(s.hiringBookings).set({ status }).where(inArray(s.hiringBookings.id, ids));
+  await tx
+    .update(s.hiringOutbox)
+    .set({ status: "cancelled" })
+    .where(
+      and(
+        eq(s.hiringOutbox.candidateId, candidateId),
+        inArray(s.hiringOutbox.status, ["pending", "failed"]),
+        or(inArray(s.hiringOutbox.bookingId, ids), like(s.hiringOutbox.key, `${candidateId}:visit-reminder:%`)),
+      ),
+    );
+  for (const row of rows)
+    if (row.startTime > now)
+      await enqueue(tx, {
+        key: `booking:${row.id}:calendar-cancel`,
+        candidateId,
+        bookingId: row.id,
+        kind: "calendar_cancel",
+        payload: {},
+      });
+}
+
+/** The candidate chooses a time and the server assigns the head. A move is this with `move: true`, once. */
+export async function bookVisit(token: string, value: unknown, db: Database = getDb(), now = new Date()) {
+  const input = visitBookingSchema.parse(value);
+  const cap = visitToken(token, now);
+  const start = new Date(input.start).getTime();
+  const { config } = await settings(db);
+  if (!bookable(config)) throw new HiringError(503, "Booking is temporarily unavailable.");
+  // A retry returns the original visit.
+  const prior = examOf(await visitRows(db, cap.id));
+  if (prior?.startTime.getTime() === start) return prior;
+  const open = await openVisit(db, cap, config, now);
+  const refuseChange = (rows: VisitRow[]) => {
+    if (!rows.length) return;
+    if (!input.move) throw new HiringError(409, "You already have a booked visit. Use Move this visit to change it.");
+    const refusal = moveRefusal(rows, now);
+    if (refusal) throw new HiringError(409, refusal);
+  };
+  refuseChange(open.rows);
+  if (input.subject !== open.subject)
+    throw new HiringError(409, onLine("This visit is for another subject."));
+  const unavailable = () => new HiringError(409, "That visit time is no longer available. Choose another time.");
+  const slot = (await offeredSlots(db, config, open.subject, cap, open.rows, now)).find(
+    (v) => new Date(v.examStart).getTime() === start,
+  );
+  if (!slot) throw unavailable();
+  // The head's hour is the only part Wise can block. Office staff supervise the exam.
+  const evidence = await verifyLiveSlot(db, {
+    date: slot.date,
+    start: slot.mockStart,
+    end: slot.mockEnd,
+    interviewerKey: slot.interviewerKey,
+    subjects: [slot.subject],
+  });
+  return withDatabaseTransaction(db, async (tx) => {
+    await tx.execute(sql`select id from hiring_candidates where id=${cap.id} for update`);
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"hiring-candidate:" + cap.id},0))`);
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"hiring:paper"},0))`);
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"sit-in:" + slot.interviewerKey},0))`);
+    const latest = await settings(tx);
+    if (!bookable(latest.config)) throw new HiringError(503, "Booking has been paused.");
+    const { candidate, subject, rows } = await openVisit(tx, cap, latest.config, now);
+    if (examOf(rows)?.startTime.getTime() === start) return examOf(rows)!;
+    refuseChange(rows);
+    if (input.subject !== subject) throw new HiringError(409, onLine("This visit is for another subject."));
+    const fresh = (await offeredSlots(tx, latest.config, subject, cap, rows, new Date())).find(
+      (v) => new Date(v.examStart).getTime() === start,
+    );
+    // Only this head's lock is held, and the live read was for this head.
+    if (!fresh || fresh.interviewerKey !== slot.interviewerKey) throw unavailable();
+    const head = latest.config.interviewers.find((i) => i.canonicalKey === fresh.interviewerKey);
+    const [group] = await tx
+      .select()
+      .from(s.progressLineGroups)
+      .where(and(eq(s.progressLineGroups.canonicalKey, fresh.interviewerKey), eq(s.progressLineGroups.enabled, true)));
+    if (!head || !group) throw new HiringError(409, onLine("Interviewer notifications are not configured."));
+    const oldMock = rows.find((b) => b.kind === "mock");
+    if (rows.length) await endVisit(tx, rows, "cancelled", now);
+    const visitId = randomUUID();
+    const shared = {
+      candidateId: cap.id,
+      subjects: [subject],
+      calendarOwner: latest.config.connectedEmail,
+      visitId,
+    };
+    const examRange = { startTime: new Date(fresh.examStart), endTime: new Date(fresh.mockStart) };
+    const mockRange = { startTime: new Date(fresh.mockStart), endTime: new Date(fresh.mockEnd) };
+    const [exam, mock] = await tx
+      .insert(s.hiringBookings)
+      .values([
+        {
+          ...shared,
+          ...examRange,
+          kind: "paper" as const,
+          rescheduleOf: examOf(rows)?.id,
+          evidence: { checkedAt: new Date().toISOString(), source: "office-capacity" },
+        },
+        {
+          ...shared,
+          ...mockRange,
+          kind: "mock" as const,
+          interviewerKey: head.canonicalKey,
+          interviewerEmail: head.email,
+          lineGroupId: group.groupId,
+          rescheduleOf: oldMock?.id,
+          evidence,
+        },
+      ])
+      .returning();
+    await tx
+      .update(s.hiringCandidates)
+      .set({ stage: "onsite_booked", revision: candidate.revision + 1, updatedAt: new Date() })
+      .where(eq(s.hiringCandidates.id, candidate.id));
+    if (candidate.email)
+      await enqueue(tx, {
+        key: `booking:${exam.id}:email`,
+        candidateId: cap.id,
+        bookingId: exam.id,
+        kind: "email",
+        payload: {
+          to: candidate.email,
+          subject: `BeGifted onsite visit ${rows.length ? "moved" : "confirmed"}`,
+          text: `Dear ${candidate.name},\n\nYour onsite visit ${rows.length ? "has moved. The new times are below" : "is confirmed"}.\nSubject: ${subject}\nExam: ${bangkok(exam.startTime)}–${bangkokTime(exam.endTime)} (Bangkok)\nMock teaching: ${bangkok(mock.startTime)}–${bangkokTime(mock.endTime)} (Bangkok), with ${head.canonicalKey}\nLocation: ${latest.config.location}\n\nFor the mock teaching session, prepare one IGCSE topic of your choice. The interviewer will also select a topic, which may be from another level. You may use teaching materials or tools.\n\n${rows.length ? "This visit cannot move again through the link." : `You can move this visit once, up to 24 hours before it starts:\n${visitLink(cap.id, candidate.inviteExpiresAt!)}`}\nFor other changes, contact BeGifted on LINE: ${LINE_URL}\n\nBeGifted Education`,
+        },
+      });
+    for (const row of [exam, mock])
+      await enqueue(tx, {
+        key: `booking:${row.id}:calendar`,
+        candidateId: cap.id,
+        bookingId: row.id,
+        kind: "calendar",
+        payload: {},
+      });
+    await enqueue(tx, headNotice(mock, rows.length ? "moved" : undefined));
+    // With a new head, the old head still needs to hear that the hour is free.
+    if (oldMock && oldMock.interviewerKey !== head.canonicalKey) await enqueue(tx, headNotice(oldMock, "cancelled"));
+    await audit(tx, "candidate-link", rows.length ? "visit-move" : "visit-booking", cap.id, {
+      visitId,
+      subject,
+      head: head.canonicalKey,
+      examStart: fresh.examStart,
+      movedFrom: examOf(rows)?.startTime.toISOString() ?? null,
+    });
+    return exam;
+  });
+}
 export async function reviewCandidate(
   id: string,
   input: {
     revision: number;
-    action: "advance" | "paper_pass" | "stop";
+    action: "advance" | "paper_pass" | "stop" | "invite_onsite" | "send_new_link" | "cancel_visit" | "mark_no_show";
     subjects: Subject[];
     reason: string;
   },
   actor: string,
   db: Database = getDb(),
+  now = new Date(),
 ) {
+  if (input.reason.trim().length < 5)
+    throw new HiringError(400, "Write a reason of at least 5 characters.");
   return withDatabaseTransaction(db, async (tx) => {
+    // Queue, then candidate, like a release: the other way round can deadlock against one. Settings come after the lock,
+    // so a click uses the limits in force when it runs.
+    await lockQueue(tx);
     await tx.execute(
       sql`select id from hiring_candidates where id=${id} for update`,
     );
@@ -678,7 +954,43 @@ export async function reviewCandidate(
       { config } = await settings(tx);
     if (c.revision !== input.revision)
       throw new HiringError(409, "This candidate changed. Refresh the page.");
-    if (input.action === "stop") {
+    let detail: Record<string, unknown> = {};
+    if (
+      input.action === "invite_onsite" ||
+      input.action === "send_new_link" ||
+      (input.action === "advance" && c.preScreen)
+    ) {
+      if (input.action === "send_new_link" && c.stage !== "no_booking")
+        throw new HiringError(409, "A new link can be sent only after a cancel, a no-show or No booking.");
+      // A first invitation has one key, shared with the queue, so only send_new_link can ever send another.
+      const key = input.action === "send_new_link" ? `${id}:visit-invite:${c.revision + 1}` : `${id}:visit-invite`;
+      const subject = await inviteToVisit(tx, c, config, key, now);
+      await tx.update(s.hiringCandidates).set({ reviewNote: input.reason }).where(eq(s.hiringCandidates.id, id));
+      detail = { subject, score: preScreenTotal(c, config), passScore: config.preScreenThreshold };
+    } else if (input.action === "cancel_visit" || input.action === "mark_no_show") {
+      const rows = await visitRows(tx, id);
+      const exam = examOf(rows);
+      if (!exam) throw new HiringError(409, "This candidate has no booked visit.");
+      if (input.action === "cancel_visit" && exam.startTime <= now)
+        throw new HiringError(409, "This visit has started. Mark a no-show instead.");
+      if (input.action === "mark_no_show" && exam.startTime > now)
+        throw new HiringError(409, "This visit has not started. Cancel it instead.");
+      await endVisit(tx, rows, input.action === "cancel_visit" ? "cancelled" : "no_show", now);
+      const mock = rows.find((b) => b.kind === "mock");
+      if (mock && mock.startTime > now) await enqueue(tx, headNotice(mock, "cancelled"));
+      await tx
+        .update(s.hiringCandidates)
+        .set({
+          // A SEEK stop can leave a future visit behind, and that candidate stays stopped.
+          stage: c.stage === "stopped" ? "stopped" : "no_booking",
+          inviteExpiresAt: null,
+          reviewNote: input.reason,
+          revision: c.revision + 1,
+          updatedAt: now,
+        })
+        .where(eq(s.hiringCandidates.id, id));
+      detail = { visitId: exam.visitId, examStart: exam.startTime.toISOString() };
+    } else if (input.action === "stop") {
       const appointments = await tx
         .select()
         .from(s.hiringBookings)
@@ -709,6 +1021,8 @@ export async function reviewCandidate(
           and(
             eq(s.hiringOutbox.candidateId, id),
             inArray(s.hiringOutbox.status, ["pending", "failed"]),
+            // A visit cancelled just before this stop must still leave the calendars.
+            sql`${s.hiringOutbox.kind} <> 'calendar_cancel' and coalesce(${s.hiringOutbox.payload}->>'notice','') <> 'cancelled'`,
           ),
         );
     } else {
@@ -759,55 +1073,46 @@ export async function reviewCandidate(
           })
           .where(eq(s.hiringCandidates.id, id))
           .returning();
-        await inviteToBooking(
+        await inviteToMock(
           tx,
           updated,
-          "mock",
           config,
           `${id}:mock-invite:${updated.revision}`,
         );
       } else {
-        if (!["new", "review", "pre_screen"].includes(c.stage))
+        // The form. A response went to the visit branch above, so this path can never send a paper invitation.
+        if (!["new", "review"].includes(c.stage))
           throw new HiringError(
             409,
-            "This candidate has already advanced. Do not send another paper invitation.",
+            "This candidate already had the pre-screen form. Do not send another.",
           );
-        if (c.stage === "stopped")
-          throw new HiringError(
-            409,
-            "A stopped candidate must be reviewed before a new application.",
-          );
-        // The app invited this candidate, so they are on the visit flow and never get a paper invitation.
-        if (c.preScreen && (await appInvited(tx, id)))
-          throw new HiringError(
-            409,
-            "This candidate is on the visit flow. A paper invitation cannot be sent.",
-          );
-        const [updated] = await tx
+        if (!workRightsAccepted(c.workRightsAnswer, config.acceptedWorkRights))
+          throw new HiringError(409, "The work-rights answer is missing or not accepted.");
+        const subject = topHiringSubject(input.subjects, config.subjectPriority);
+        if (!subject)
+          throw new HiringError(409, "None of the selected subjects is open for hiring.");
+        const limit = blockingLimit("pre_screen", subject, await readLimitUsage(tx, "pre_screen", now), config);
+        if (limit)
+          throw new HiringError(409, `The pre-screen limit "${LIMIT_TEXT[limit]}" is full. Raise the number to send more.`);
+        if (!(await inviteToPreScreen(tx, c, now)))
+          throw new HiringError(409, "A pre-screen form was already queued for this candidate. No new form can be sent.");
+        await tx
           .update(s.hiringCandidates)
           .set({
-            stage: c.preScreen ? "paper_invited" : "pre_screen",
-            subjects: input.subjects,
+            stage: "pre_screen",
+            // The limits read the first subject as the queue subject.
+            subjects: [subject, ...input.subjects.filter((v) => v !== subject)],
             reviewNote: input.reason,
             revision: c.revision + 1,
-            updatedAt: new Date(),
+            updatedAt: now,
           })
-          .where(eq(s.hiringCandidates.id, id))
-          .returning();
-        if (c.preScreen)
-          await inviteToBooking(
-            tx,
-            updated,
-            "paper",
-            config,
-            `${id}:paper-invite:${updated.revision}`,
-          );
-        else await inviteToPreScreen(tx, updated);
+          .where(eq(s.hiringCandidates.id, id));
       }
     }
     await audit(tx, actor, input.action, id, {
       subjects: input.subjects,
       reason: input.reason,
+      ...detail,
     });
   });
 }

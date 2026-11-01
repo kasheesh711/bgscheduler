@@ -12,8 +12,10 @@ import css from "./dashboard.module.css";
 
 const POINTS = { met: 1, partial: 0.5, not_met: 0, unknown: 0 };
 // Mirrors the stages reviewCandidate accepts; the server still enforces them.
-const ADVANCE_STAGES = ["new", "review", "pre_screen"];
+const FORM_STAGES = ["new", "review"];
+const ONSITE_STAGES = ["new", "review", "pre_screen", "no_reply"];
 const PAPER_PASS_STAGES = ["paper_booked", "paper_invited", "paper_passed", "mock_booked"];
+const SUBJECT_ACTIONS = ["advance", "paper_pass"];
 
 const ANSWER_LABELS: [keyof NonNullable<HiringCandidate["preScreen"]>, string][] = [
   ["degree", "Degree"],
@@ -181,19 +183,33 @@ export function CandidateInspector({
 
   const university = candidate.universityAssessment;
   const applicationIds = [...new Set([candidate.seekApplicationId, ...candidate.sourceIds].filter((id): id is string => !!id))];
+  const visit = extras?.visit;
+  // A visit that has ended no longer shows, and it counts as started.
+  const started = !visit || new Date(visit.startTime) <= new Date();
+  const ahead = !!visit?.visitId && !started;
   const actions = [
     {
       action: "advance",
-      label: candidate.preScreen ? "Invite to paper assessment" : "Invite to pre-screen",
-      allowed: ADVANCE_STAGES.includes(candidate.stage),
+      label: "Invite to pre-screen",
+      allowed: !candidate.preScreen && FORM_STAGES.includes(candidate.stage),
     },
+    {
+      action: "invite_onsite",
+      label: "Invite to onsite visit",
+      allowed: !!candidate.preScreen && ONSITE_STAGES.includes(candidate.stage),
+    },
+    { action: "send_new_link", label: "Send new link", allowed: candidate.stage === "no_booking" },
+    { action: "cancel_visit", label: "Cancel visit", allowed: ahead },
+    { action: "mark_no_show", label: "Mark no-show", allowed: candidate.stage === "onsite_booked" && started },
     {
       action: "paper_pass",
       label: "Record paper pass and invite to mock",
       allowed: PAPER_PASS_STAGES.includes(candidate.stage),
     },
-    { action: "stop", label: "Stop processing", allowed: true },
+    // The server refuses a stop while a visit is ahead.
+    { action: "stop", label: "Stop processing", allowed: !ahead },
   ].filter((a) => a.allowed);
+  const usesSubjects = actions.some((a) => SUBJECT_ACTIONS.includes(a.action));
 
   return (
     <aside
@@ -353,21 +369,23 @@ export function CandidateInspector({
       <footer className={css.decision}>
         {error && <p role="alert" className={css.errorText}>{error}</p>}
         {notice && <p role="status" className={css.goodWord}>{notice}</p>}
-        <fieldset className={css.subjectPicker}>
-          <legend>Subjects</legend>
-          {SUBJECTS.map((subject) => (
-            <label key={subject}>
-              <input
-                type="checkbox"
-                checked={subjects.includes(subject)}
-                onChange={(e) =>
-                  setSubjects(e.target.checked ? [...subjects, subject] : subjects.filter((v) => v !== subject))
-                }
-              />
-              {subject}
-            </label>
-          ))}
-        </fieldset>
+        {usesSubjects && (
+          <fieldset className={css.subjectPicker}>
+            <legend>Subjects</legend>
+            {SUBJECTS.map((subject) => (
+              <label key={subject}>
+                <input
+                  type="checkbox"
+                  checked={subjects.includes(subject)}
+                  onChange={(e) =>
+                    setSubjects(e.target.checked ? [...subjects, subject] : subjects.filter((v) => v !== subject))
+                  }
+                />
+                {subject}
+              </label>
+            ))}
+          </fieldset>
+        )}
         <label className={css.fieldLabel}>
           Decision evidence or reason
           <textarea
@@ -375,7 +393,7 @@ export function CandidateInspector({
             rows={2}
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            placeholder="For a paper pass, identify the marked assessment and the passed subjects."
+            placeholder="Why you are doing this. For a paper pass, identify the marked assessment and the passed subjects."
           />
         </label>
         <div className={css.decisionActions}>
@@ -384,7 +402,7 @@ export function CandidateInspector({
               key={action}
               type="button"
               className={action === "stop" ? css.stopButton : index === 0 ? css.primary : css.secondary}
-              disabled={busy || reason.trim().length < 5 || (action !== "stop" && !subjects.length)}
+              disabled={busy || reason.trim().length < 5 || (SUBJECT_ACTIONS.includes(action) && !subjects.length)}
               onClick={async () => {
                 const saved = await command({
                   action,
@@ -403,7 +421,7 @@ export function CandidateInspector({
         </div>
         <p className={css.inspectorMeta}>
           {reason.trim().length < 5 && "Write a reason of at least 5 characters to enable these actions. "}
-          These actions record a human decision. Stopping processing sends no rejection message.
+          These actions record a human decision. A click can pass a score below the pass score. It cannot pass a limit or a hard stop. Stopping processing sends no rejection message.
         </p>
       </footer>
     </aside>

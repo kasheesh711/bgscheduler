@@ -12,27 +12,36 @@ import { eq, sql } from "drizzle-orm";
 import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
 import { type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
-import { configSchema, type Slot } from "../model";
+import { configSchema, HiringError, type HiringConfig, type Slot } from "../model";
 import { bookingToken } from "../tokens";
 import {
   bookInterview,
+  bookingView,
+  bookVisit,
   dashboard,
   reviewCandidate,
   saveSettings,
   settings,
   sourceHash,
+  visitView,
+  type Candidate,
 } from "../service";
 import { importApplication, observeSeekState } from "../sources";
 import { assessCandidates, deliverOutbox, rewriteBriefs, scorePreScreens, type Rewrite } from "../worker";
-import { releaseQueues } from "../queue";
+import { readLimitUsage, releaseQueues, runFollowUps } from "../queue";
 import { availableSlots, verifyLiveSlot } from "../availability";
+import { deliverCalendar } from "../google";
+import { ensureIndex } from "@/lib/search/index";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { pushLineTextMessage } from "@/lib/line/client";
 
-vi.mock("../availability", () => ({
+// The visit tests use the real availableVisitSlots against this database. Only the Wise index and the live read are fake.
+vi.mock("../availability", async (actual) => ({
+  ...(await actual<typeof import("../availability")>()),
   availableSlots: vi.fn(),
   verifyLiveSlot: vi.fn(),
 }));
+vi.mock("@/lib/search/index", () => ({ ensureIndex: vi.fn() }));
 vi.mock("@/lib/email/outbound", () => ({ createOutboundEmailSender: vi.fn() }));
 vi.mock("../google", () => ({
   deliverCalendar: vi.fn().mockResolvedValue({ id: "calendar-event" }),
@@ -358,18 +367,15 @@ describe("hiring workflow persistence", () => {
       expect(after.profileAssessment).toEqual({ ...stored(), summary: "Rescored." });
     });
   });
-  describe("switch-on guard", () => {
-    it("refuses to save with automation on, and still saves with it off", async () => {
+  describe("switch-on", () => {
+    it("saves with automation on, and still needs the rubric and the write gate", async () => {
       const revision = (await settings(db)).row!.revision;
-      await expect(saveSettings({ ...config, enabled: true }, revision, "owner@example.com", db)).rejects.toThrow(/stays off/);
-      await expect(saveSettings({ ...config, enabled: true, deliveryEnabled: true }, revision, "owner@example.com", db)).rejects.toThrow(/stays off/);
-      expect((await settings(db)).row!.revision).toBe(revision);
-      await saveSettings({ ...config, enabled: false, deliveryEnabled: false, profileThreshold: 70 }, revision, "owner@example.com", db);
-      expect((await settings(db)).config.profileThreshold).toBe(70);
-    });
-    it("still reads a stored config that has automation on", async () => {
-      // beforeEach stored `config` with enabled true.
-      expect((await settings(db)).config.enabled).toBe(true);
+      await saveSettings({ ...config, enabled: true, deliveryEnabled: false }, revision, "owner@example.com", db);
+      const saved = await settings(db);
+      expect(saved.config.enabled).toBe(true);
+      await expect(
+        saveSettings({ ...config, enabled: true, deliveryEnabled: false, rubricApproved: false }, saved.row!.revision, "owner@example.com", db),
+      ).rejects.toThrow(/rubric/);
     });
   });
   it("records an unseen work-rights answer for the settings and never accepts it", async () => {
@@ -636,6 +642,562 @@ describe("hiring workflow persistence", () => {
       await db.update(s.hiringSettings).set({ config: { ...paused, enabled: true } }).where(eq(s.hiringSettings.id, "default"));
       await scorePreScreens(db, paused, assess);
       expect((await db.select().from(s.hiringCandidates)).every((c) => c.preScreenAssessment === null)).toBe(true);
+    });
+  });
+  describe("one-visit booking", () => {
+    const LINE = "https://lin.ee/OjMHF41";
+    const LINK = new Date("2026-11-30T00:00:00Z");
+    const EXAM = "2026-11-02T03:00:00.000Z";
+    const MOCK = "2026-11-02T05:00:00.000Z";
+    const MOCK_END = "2026-11-02T06:00:00.000Z";
+    const EXAM_TUE = "2026-11-03T03:00:00.000Z";
+    const week = [null, ...Array.from({ length: 5 }, () => ({ start: "10:00", end: "16:00" })), null];
+    const peat = { canonicalKey: "Peat", email: "peat@example.com", subjects: ["Mathematics", "Physics"], fallbackWeek: week };
+    const ek = { canonicalKey: "Ek", email: "ek@example.com", subjects: ["Mathematics", "Physics"], fallbackWeek: week };
+    const base = configSchema.parse({ enabled: true, deliveryEnabled: true, preScreenThreshold: 50, interviewers: [peat] });
+    const setVisit = async (patch: Partial<HiringConfig> = {}) =>
+      db.update(s.hiringSettings).set({ config: { ...base, ...patch } }).where(eq(s.hiringSettings.id, "default"));
+    const pre = {
+      sourceRow: 2,
+      submittedAt: "31/10/2026, 01:00:00",
+      degree: "Bachelor's",
+      field: "Mathematics",
+      subjects: "Mathematics",
+      curricula: "IGCSE",
+      yearGroups: "Year 10",
+      english: "Advanced (C1)",
+      englishEvidence: "",
+      experience: "5+ years",
+      portfolio: "",
+      availability: "Weekday Evening (17:00-21:00), Weekend Morning (before 12:00)",
+      weeklyHours: "20",
+      motivation: "Teaching",
+      teachingApproach: "Check understanding",
+    };
+    const six = {
+      criteria: ["degree", "subject", "curriculum", "teaching", "english", "written"].map((id) => ({
+        id,
+        result: "met",
+        evidence: "Mathematics",
+        reason: "Source",
+      })),
+      subjects: [{ subject: "Mathematics", evidence: "Mathematics", relevant: true }],
+      universities: [],
+      summary: "Evidence",
+    };
+    let serial = 0;
+    /** A candidate who holds a current link, as a release leaves them. */
+    async function invited(values: Partial<typeof s.hiringCandidates.$inferInsert> = {}, sentAt: Date | null = now) {
+      serial++;
+      const [row] = await db
+        .insert(s.hiringCandidates)
+        .values({
+          name: `Visitor ${serial}`,
+          email: `visitor${serial}@example.com`,
+          stage: "onsite_invited",
+          subjects: ["Mathematics"],
+          visitSubject: "Mathematics",
+          workRightsAnswer: ACCEPTED,
+          preScreen: pre,
+          preScreenAssessment: six as never,
+          preScreenRepliedAt: now,
+          inviteExpiresAt: LINK,
+          ...values,
+        })
+        .returning();
+      await db.insert(s.hiringOutbox).values({
+        key: `${row.id}:visit-invite`,
+        candidateId: row.id,
+        kind: "email",
+        status: sentAt ? "sent" : "pending",
+        sentAt,
+        createdAt: now,
+        payload: { to: row.email, subject: "s", text: "t", workflowStage: "onsite_invited", revision: row.revision },
+      });
+      return row;
+    }
+    const link = (row: Candidate, expires = row.inviteExpiresAt!) => bookingToken(row.id, "visit", expires);
+    const choice = (start = EXAM, extra: Record<string, unknown> = {}) => ({
+      start,
+      subject: "Mathematics",
+      onsiteConfirmed: true,
+      teachingCommitmentConfirmed: true,
+      ...extra,
+    });
+    const read = async (id: string) =>
+      (await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, id)))[0];
+    const rowsOf = async (id: string) =>
+      (await db.select().from(s.hiringBookings).where(eq(s.hiringBookings.candidateId, id))).sort(
+        (a, b) => a.startTime.getTime() - b.startTime.getTime(),
+      );
+    const jobsOf = async (id: string) => db.select().from(s.hiringOutbox).where(eq(s.hiringOutbox.candidateId, id));
+    const click = async (id: string, action: Parameters<typeof reviewCandidate>[1]["action"], subjects: Parameters<typeof reviewCandidate>[1]["subjects"] = ["Mathematics"], reason = "Checked by a person") =>
+      reviewCandidate(id, { revision: (await read(id)).revision, action, subjects, reason }, "staff@example.com", db);
+    /** The link in the newest invitation email. */
+    const newestLink = async (id: string) => {
+      const rows = (await jobsOf(id)).filter((j) => j.payload.workflowStage === "onsite_invited" && !j.key.includes("reminder"));
+      const text = String(rows.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0].payload.text);
+      return text.match(/\/hiring\/book\/([\w.-]+)/)![1];
+    };
+    beforeEach(async () => {
+      await setVisit();
+      await db.insert(s.tutorContacts).values({ canonicalKey: "Ek", displayName: "Ek" }).onConflictDoNothing();
+      await db.insert(s.progressLineGroups).values({ canonicalKey: "Ek", groupId: "ek-group", groupName: "Ek", enabled: true, registeredBy: "owner" });
+      const group = (canonicalKey: string) => ({
+        canonicalKey,
+        leavesCompleteThrough: new Date("2027-06-01T00:00:00Z"),
+        leaves: [],
+        sessionBlocks: [],
+        dataIssues: [],
+        wiseRecords: [],
+      });
+      vi.mocked(ensureIndex).mockImplementation(
+        async () => ({ snapshotId: "snapshot", syncedAt: new Date(), tutorGroups: [group("Peat"), group("Ek")] }) as never,
+      );
+    });
+
+    it("books an exam row and a mock row with one visit_id", async () => {
+      const row = await invited();
+      await bookVisit(link(row), choice(), db);
+      const [exam, mock] = await rowsOf(row.id);
+      expect([exam.kind, exam.startTime.toISOString(), exam.endTime.toISOString(), exam.interviewerKey]).toEqual(["paper", EXAM, MOCK, null]);
+      expect([mock.kind, mock.startTime.toISOString(), mock.endTime.toISOString(), mock.interviewerKey]).toEqual(["mock", MOCK, MOCK_END, "Peat"]);
+      expect(exam.visitId).toBeTruthy();
+      expect(mock.visitId).toBe(exam.visitId);
+      expect((await read(row.id)).stage).toBe("onsite_booked");
+      // The live Wise read is for the head's hour, not the exam.
+      expect(verifyLiveSlot).toHaveBeenCalledWith(db, expect.objectContaining({ start: MOCK, end: MOCK_END, interviewerKey: "Peat" }));
+      // A retry returns the same visit.
+      await bookVisit(link(row), choice(), db);
+      expect(await rowsOf(row.id)).toHaveLength(2);
+    });
+    it("sends one email holding both times", async () => {
+      const row = await invited();
+      await bookVisit(link(row), choice(), db);
+      const jobs = (await jobsOf(row.id)).filter((j) => j.bookingId);
+      expect(jobs.map((j) => j.kind).sort()).toEqual(["calendar", "calendar", "email", "line"]);
+      const text = String(jobs.find((j) => j.kind === "email")!.payload.text);
+      expect(text).toContain("10:00");
+      expect(text).toContain("12:00");
+      expect(text).toContain("13:00");
+      expect(text).toContain(LINE);
+      await deliverOutbox(db, base);
+      expect(sendEmail).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(deliverCalendar)).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(pushLineTextMessage)).toHaveBeenCalledTimes(1);
+    });
+    it("candidates cannot pick a head", async () => {
+      const row = await invited();
+      await expect(bookVisit(link(row), choice(EXAM, { interviewerKey: "Ek" }), db)).rejects.toThrow();
+      expect(await rowsOf(row.id)).toEqual([]);
+      // Ek has fewer mocks this week, so the server assigns Ek, and each time appears once.
+      await setVisit({ interviewers: [peat, ek] } as never);
+      const other = await invited();
+      await bookVisit(link(other), choice(EXAM), db);
+      const view = await visitView(link(row), db);
+      expect(view.slots.filter((v) => v.examStart === EXAM_TUE)).toHaveLength(1);
+      await bookVisit(link(row), choice(EXAM_TUE), db);
+      const heads = [(await rowsOf(other.id))[1].interviewerKey, (await rowsOf(row.id))[1].interviewerKey];
+      expect(heads).toEqual(["Peat", "Ek"]);
+    });
+    it("refuses a subject other than the visit subject and a token of another kind", async () => {
+      const row = await invited();
+      await expect(bookVisit(link(row), choice(EXAM, { subject: "Physics" }), db)).rejects.toThrow(HiringError);
+      await expect(bookVisit(bookingToken(row.id, "mock", LINK), choice(), db)).rejects.toThrow(HiringError);
+      await expect(visitView(bookingToken(row.id, "paper", LINK), db)).rejects.toThrow(HiringError);
+      await expect(bookingView(link(row), undefined, db)).rejects.toThrow(HiringError);
+    });
+    it("moves once, cancels the old rows, and notifies the head", async () => {
+      const row = await invited();
+      await bookVisit(link(row), choice(), db);
+      const before = await rowsOf(row.id);
+      await deliverOutbox(db, base);
+      sendEmail.mockClear();
+      vi.mocked(pushLineTextMessage).mockClear();
+      await expect(bookVisit(link(row), choice(EXAM_TUE), db)).rejects.toThrow(/already/);
+      await bookVisit(link(row), choice(EXAM_TUE, { move: true }), db);
+      const all = await rowsOf(row.id);
+      expect(all.filter((b) => b.status === "cancelled").map((b) => b.id).sort()).toEqual(before.map((b) => b.id).sort());
+      const fresh = all.filter((b) => b.status === "confirmed");
+      expect(fresh.map((b) => b.rescheduleOf).sort()).toEqual(before.map((b) => b.id).sort());
+      expect(fresh[0].visitId).toBe(fresh[1].visitId);
+      expect(fresh[0].visitId).not.toBe(before[0].visitId);
+      const jobs = (await jobsOf(row.id)).filter((j) => j.status === "pending");
+      expect(jobs.map((j) => j.kind).sort()).toEqual(["calendar", "calendar", "calendar_cancel", "calendar_cancel", "email", "line"]);
+      expect(jobs.find((j) => j.kind === "line")!.payload).toEqual({ notice: "moved" });
+      expect((await read(row.id)).stage).toBe("onsite_booked");
+      await deliverOutbox(db, base);
+      expect(sendEmail).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/moved/i);
+      expect(vi.mocked(deliverCalendar).mock.calls.filter((c) => c[4] === true)).toHaveLength(2);
+      // The same link still opens the moved visit.
+      const view = await visitView(link(row), db);
+      expect(view.visit?.examStart).toBe(EXAM_TUE);
+      expect(view.canMove).toBe(false);
+    });
+    it("tells the old head when a move assigns another head", async () => {
+      const row = await invited();
+      await bookVisit(link(row), choice(), db);
+      expect((await rowsOf(row.id))[1].interviewerKey).toBe("Peat");
+      await setVisit({ interviewers: [ek] } as never);
+      await bookVisit(link(row), choice(EXAM_TUE, { move: true }), db);
+      const confirmed = (await rowsOf(row.id)).filter((b) => b.status === "confirmed");
+      expect(confirmed[1].interviewerKey).toBe("Ek");
+      const lines = (await jobsOf(row.id)).filter((j) => j.kind === "line" && j.status === "pending");
+      expect(lines.map((j) => j.payload.notice).sort()).toEqual(["cancelled", "moved"]);
+      await deliverOutbox(db, base);
+      expect(vi.mocked(pushLineTextMessage).mock.calls.map((c) => c[0].to).sort()).toEqual(["ek-group", "group"]);
+    });
+    it("lets a move take the head's week place the visit already holds", async () => {
+      await setVisit({ onsiteLimits: { perWeek: 3, unbooked: 2, perHeadPerWeek: 1, perSubject: 2 } } as never);
+      const row = await invited();
+      await bookVisit(link(row), choice(), db);
+      const view = await visitView(link(row), db);
+      expect(view.canMove).toBe(true);
+      // The current time is not offered, and the move stays in the same week with the same head.
+      expect(view.slots.map((v) => v.examStart)).toContain(EXAM_TUE);
+      expect(view.slots.map((v) => v.examStart)).not.toContain(EXAM);
+      await bookVisit(link(row), choice(EXAM_TUE, { move: true }), db);
+      expect((await rowsOf(row.id)).filter((b) => b.status === "confirmed")).toHaveLength(2);
+    });
+    it("refuses a second move and a move inside 24 hours, with the LINE contact", async () => {
+      const row = await invited();
+      await bookVisit(link(row), choice(), db);
+      await bookVisit(link(row), choice(EXAM_TUE, { move: true }), db);
+      await expect(bookVisit(link(row), choice("2026-11-04T03:00:00.000Z", { move: true }), db)).rejects.toThrow(LINE);
+      const view = await visitView(link(row), db);
+      expect(view.notice).toContain(LINE);
+      expect(view.slots).toEqual([]);
+
+      const late = await invited();
+      await bookVisit(link(late), choice("2026-11-04T03:00:00.000Z"), db);
+      // Tuesday 11:00 Bangkok: 23 hours before Wednesday's exam.
+      vi.setSystemTime(new Date("2026-11-03T04:00:00Z"));
+      await expect(bookVisit(link(late), choice("2026-11-05T03:00:00.000Z", { move: true }), db)).rejects.toThrow(LINE);
+      expect((await visitView(link(late), db)).canMove).toBe(false);
+      // At exactly 24 hours the move is still allowed.
+      vi.setSystemTime(new Date("2026-11-03T03:00:00Z"));
+      expect((await visitView(link(late), db)).canMove).toBe(true);
+    });
+    it("keeps a booked link valid until the visit starts, past the unbooked expiry", async () => {
+      const booked = await invited();
+      await bookVisit(link(booked), choice("2026-11-06T03:00:00.000Z"), db);
+      const unbooked = await invited({}, new Date("2026-10-24T00:00:00Z"));
+      // Seven days after the send: the worker has not run, and the unbooked link is closed all the same.
+      await expect(visitView(link(unbooked), db)).rejects.toThrow(LINE);
+      await expect(bookVisit(link(unbooked), choice(EXAM_TUE), db)).rejects.toThrow(LINE);
+      // Booked: open just before the start, closed at the start.
+      vi.setSystemTime(new Date("2026-11-06T02:59:00Z"));
+      expect((await visitView(link(booked), db)).visit).not.toBeNull();
+      vi.setSystemTime(new Date("2026-11-06T03:00:00Z"));
+      await expect(visitView(link(booked), db)).rejects.toThrow(LINE);
+    });
+    it("offers only times inside the link's 30-day life, so a booked link outlives the wait to the visit", async () => {
+      const short = new Date("2026-11-03T00:00:00Z");
+      const row = await invited({ inviteExpiresAt: short });
+      const view = await visitView(link(row), db);
+      expect(view.slots.length).toBeGreaterThan(0);
+      expect(view.slots.every((v) => new Date(v.examStart) < short)).toBe(true);
+      await expect(bookVisit(link(row), choice(EXAM_TUE), db)).rejects.toThrow(/no longer available|taken|changed/);
+    });
+    it("closes a link whose life has ended, with no reminder holding a dead link", async () => {
+      await setVisit({ onsiteFollowUp: { remindDays: 40, expireDays: 60 } });
+      const row = await invited({ inviteExpiresAt: new Date("2026-11-01T00:00:00Z") });
+      vi.setSystemTime(new Date("2026-11-02T00:00:00Z"));
+      expect(await runFollowUps(db)).toEqual({ reminded: 0, expired: 1 });
+      expect((await read(row.id)).stage).toBe("no_booking");
+    });
+    it("ends the old link after send_new_link", async () => {
+      const row = await invited();
+      const old = link(row);
+      await bookVisit(old, choice(), db);
+      await click(row.id, "cancel_visit");
+      await expect(visitView(old, db)).rejects.toThrow(LINE);
+      vi.setSystemTime(new Date(now.getTime() + 3600000));
+      await click(row.id, "send_new_link");
+      await expect(visitView(old, db)).rejects.toThrow(LINE);
+      await expect(bookVisit(old, choice(), db)).rejects.toThrow(LINE);
+      const fresh = await newestLink(row.id);
+      expect(fresh).not.toBe(old);
+      expect((await visitView(fresh, db)).subject).toBe("Mathematics");
+      expect((await read(row.id)).stage).toBe("onsite_invited");
+    });
+    it("advance to the form obeys limits, work rights and not-hiring", async () => {
+      const fresh = async (values: Partial<typeof s.hiringCandidates.$inferInsert> = {}) => {
+        serial++;
+        return (
+          await db
+            .insert(s.hiringCandidates)
+            .values({ name: `Form ${serial}`, email: `form${serial}@example.com`, stage: "review", workRightsAnswer: ACCEPTED, ...values })
+            .returning()
+        )[0];
+      };
+      const forms = async () => (await db.select().from(s.hiringOutbox)).filter((j) => j.key.endsWith(":pre-screen"));
+      const rights = await fresh({ workRightsAnswer: "Other" });
+      await expect(click(rights.id, "advance")).rejects.toThrow(/work-rights/);
+      await expect(click((await fresh({ workRightsAnswer: null })).id, "advance")).rejects.toThrow(/work-rights/);
+      await setVisit({ subjectPriority: [{ subject: "Mathematics", hiring: false }] });
+      await expect(click((await fresh()).id, "advance")).rejects.toThrow(/open for hiring/);
+      await setVisit({ preScreenLimits: { perDay: 1, perWeek: 15, waiting: 15, perSubject: 3 } });
+      const first = await fresh();
+      await click(first.id, "advance");
+      expect((await read(first.id)).stage).toBe("pre_screen");
+      const second = await fresh();
+      await expect(click(second.id, "advance")).rejects.toThrow(/per day/);
+      expect((await read(second.id)).stage).toBe("review");
+      expect(await forms()).toHaveLength(1);
+      // A cancelled key must not move the stage with no email.
+      await setVisit();
+      await db.insert(s.hiringOutbox).values({ key: `${second.id}:pre-screen`, candidateId: second.id, kind: "email", status: "cancelled", payload: {} });
+      await expect(click(second.id, "advance")).rejects.toThrow(/already/);
+      expect((await read(second.id)).stage).toBe("review");
+    });
+    it("takes the queue lock before the candidate row, and reads limits after it", async () => {
+      const row = await invited({ stage: "review", inviteExpiresAt: null, visitSubject: null }, null);
+      await db.delete(s.hiringOutbox).where(eq(s.hiringOutbox.candidateId, row.id));
+      const revision = (await read(row.id)).revision;
+      const client = await handle.pool.connect();
+      await client.query("begin");
+      await client.query("select pg_advisory_xact_lock(hashtext('hiring-queue'))");
+      let settled = false;
+      let pending: Promise<unknown>;
+      try {
+        pending = reviewCandidate(
+          row.id,
+          { revision, action: "invite_onsite", subjects: [], reason: "Checked by a person" },
+          "staff@example.com",
+          db,
+        ).finally(() => (settled = true));
+        pending.catch(() => {});
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        expect(settled).toBe(false);
+        // The click waits on the queue and does not hold the row, so a writer of the row is not blocked.
+        await db.update(s.hiringCandidates).set({ reviewNote: "Row is free" }).where(eq(s.hiringCandidates.id, row.id));
+        // The limit set while it waited is the one it obeys.
+        await setVisit({ onsiteLimits: { perWeek: 3, unbooked: 0, perHeadPerWeek: 2, perSubject: 2 } });
+      } finally {
+        await client.query("commit");
+        client.release();
+      }
+      await expect(pending).rejects.toThrow(/invited, not booked/);
+      expect((await read(row.id)).stage).toBe("review");
+    });
+    it("advance with a response now goes to the onsite invite, not a paper invite", async () => {
+      const row = await invited({ stage: "review", inviteExpiresAt: null, visitSubject: null }, null);
+      await db.delete(s.hiringOutbox).where(eq(s.hiringOutbox.candidateId, row.id));
+      await click(row.id, "advance", []);
+      const saved = await read(row.id);
+      expect([saved.stage, saved.visitSubject]).toEqual(["onsite_invited", "Mathematics"]);
+      const jobs = await jobsOf(row.id);
+      expect(jobs.map((j) => j.payload.workflowStage)).toEqual(["onsite_invited"]);
+    });
+    it("click: passes a low score", async () => {
+      await setVisit({ preScreenThreshold: 100 });
+      const low = { ...six, criteria: six.criteria.map((c) => (c.id === "written" ? { ...c, result: "not_met" } : c)) };
+      for (const stage of ["review", "new"] as const) {
+        const row = await invited({ stage, inviteExpiresAt: null, visitSubject: null, preScreenAssessment: low as never }, null);
+        await db.delete(s.hiringOutbox).where(eq(s.hiringOutbox.candidateId, row.id));
+        await click(row.id, "invite_onsite", [], "Strong written answer in the call");
+        expect((await read(row.id)).stage).toBe("onsite_invited");
+        const [row2] = (await db.select().from(s.hiringAudit)).filter((a) => a.candidateId === row.id && a.action === "invite_onsite");
+        expect(row2.actor).toBe("staff@example.com");
+        expect(row2.detail).toMatchObject({ reason: "Strong written answer in the call", subject: "Mathematics", passScore: 100 });
+        expect(row2.detail.score).toBeLessThan(100);
+      }
+    });
+    it("click: refused for a hard stop, not-hiring subject, no head or full limit, naming the reason", async () => {
+      const row = async (values: Partial<typeof s.hiringCandidates.$inferInsert> = {}) => {
+        const c = await invited({ stage: "review", inviteExpiresAt: null, visitSubject: null, ...values }, null);
+        await db.delete(s.hiringOutbox).where(eq(s.hiringOutbox.candidateId, c.id));
+        return c;
+      };
+      const refused = async (id: string, pattern: RegExp) => {
+        await expect(click(id, "invite_onsite")).rejects.toThrow(pattern);
+        expect((await read(id)).stage).toBe("review");
+        expect(await jobsOf(id)).toEqual([]);
+      };
+      await refused((await row({ workRightsAnswer: "Other" })).id, /work-rights/);
+      await refused((await row({ preScreen: { ...pre, english: "Intermediate (B1)" } })).id, /English/);
+      await setVisit({ subjectPriority: [{ subject: "Mathematics", hiring: false }] });
+      await refused((await row()).id, /open for hiring/);
+      await setVisit({ interviewers: [] });
+      await refused((await row()).id, /head/);
+      await setVisit({ onsiteLimits: { perWeek: 3, unbooked: 0, perHeadPerWeek: 2, perSubject: 2 } });
+      await refused((await row()).id, /invited, not booked/);
+      // Every staff action needs a written reason.
+      const c = await row();
+      await expect(click(c.id, "invite_onsite", [], "ok")).rejects.toThrow(/reason/);
+    });
+    it("a first-invitation click cannot repeat an invitation; only send_new_link can", async () => {
+      const row = await invited({ stage: "no_booking", inviteExpiresAt: null });
+      await expect(click(row.id, "invite_onsite")).rejects.toThrow(/new link/);
+      const booked = await invited();
+      await expect(click(booked.id, "send_new_link")).rejects.toThrow(/cancel/);
+      expect(await jobsOf(booked.id)).toHaveLength(1);
+    });
+    it("cancel and no-show free the slot and the limit", async () => {
+      await setVisit({ onsiteLimits: { perWeek: 10, unbooked: 2, perHeadPerWeek: 1, perSubject: 1 } });
+      const row = await invited();
+      await bookVisit(link(row), choice(), db);
+      await db.insert(s.hiringOutbox).values({
+        key: `${row.id}:visit-reminder:9`,
+        candidateId: row.id,
+        kind: "email",
+        payload: { to: "x@example.com", subject: "r", text: "r", workflowStage: "onsite_invited" },
+      });
+      expect((await readLimitUsage(db, "onsite", now)).bySubject.Mathematics).toBe(1);
+      await click(row.id, "cancel_visit", [], "Candidate asked on LINE");
+      const saved = await read(row.id);
+      expect([saved.stage, saved.inviteExpiresAt, saved.reviewNote]).toEqual(["no_booking", null, "Candidate asked on LINE"]);
+      expect((await rowsOf(row.id)).map((b) => b.status)).toEqual(["cancelled", "cancelled"]);
+      expect((await readLimitUsage(db, "onsite", now)).bySubject.Mathematics).toBeUndefined();
+      const jobs = await jobsOf(row.id);
+      expect(jobs.find((j) => j.key.includes("visit-reminder"))!.status).toBe("cancelled");
+      expect(jobs.filter((j) => j.kind === "calendar_cancel")).toHaveLength(2);
+      expect(jobs.filter((j) => j.bookingId && j.kind !== "calendar_cancel" && j.status === "pending").map((j) => j.payload)).toEqual([{ notice: "cancelled" }]);
+      expect((await db.select().from(s.hiringAudit)).find((a) => a.action === "cancel_visit")!.detail).toMatchObject({ reason: "Candidate asked on LINE" });
+      // The head hears, though the booking is cancelled, and the slot is open for someone else.
+      await deliverOutbox(db, base);
+      expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/cancelled/i);
+      expect(vi.mocked(deliverCalendar).mock.calls.filter((c) => c[4] === true)).toHaveLength(2);
+      const other = await invited();
+      expect((await visitView(link(other), db)).slots.map((v) => v.examStart)).toContain(EXAM);
+
+      // A no-show waits for the start, then frees the head's weekly place.
+      await bookVisit(link(other), choice(), db);
+      await expect(click(other.id, "mark_no_show")).rejects.toThrow(/not started/);
+      vi.setSystemTime(new Date("2026-11-02T03:30:00Z"));
+      await expect(click(other.id, "cancel_visit")).rejects.toThrow(/started/);
+      await click(other.id, "mark_no_show", [], "Did not arrive at 10:00");
+      expect((await rowsOf(other.id)).map((b) => b.status)).toEqual(["no_show", "no_show"]);
+      expect((await read(other.id)).stage).toBe("no_booking");
+      // Only the mock is still ahead, so only it loses its calendar event.
+      const after = await jobsOf(other.id);
+      expect(after.filter((j) => j.kind === "calendar_cancel")).toHaveLength(1);
+      await deliverOutbox(db, base);
+      // A cancel or a no-show emails the candidate nothing: rejection messages stay manual.
+      expect(sendEmail).not.toHaveBeenCalled();
+      expect(await readLimitUsage(db, "onsite", new Date())).toMatchObject({ unbooked: 0, bySubject: {} });
+      await expect(click(other.id, "cancel_visit")).rejects.toThrow(/no booked visit/);
+    });
+    it("does not send a queued booking email after a no-show", async () => {
+      const row = await invited();
+      await bookVisit(link(row), choice(), db);
+      await db.update(s.hiringBookings).set({ status: "no_show" }).where(eq(s.hiringBookings.candidateId, row.id));
+      await deliverOutbox(db, base);
+      expect(sendEmail).not.toHaveBeenCalled();
+      expect(vi.mocked(deliverCalendar)).not.toHaveBeenCalled();
+      expect(vi.mocked(pushLineTextMessage)).not.toHaveBeenCalled();
+    });
+    it("still cancels the calendar when a person stops the candidate straight after a cancel", async () => {
+      const row = await invited();
+      await bookVisit(link(row), choice(), db);
+      await click(row.id, "cancel_visit");
+      await click(row.id, "stop");
+      expect((await read(row.id)).stage).toBe("stopped");
+      await deliverOutbox(db, base);
+      expect(vi.mocked(deliverCalendar).mock.calls.filter((c) => c[4] === true)).toHaveLength(2);
+      expect(sendEmail).not.toHaveBeenCalled();
+    });
+    it("send_new_link resets the move count and obeys limits", async () => {
+      await setVisit({ onsiteLimits: { perWeek: 10, unbooked: 0, perHeadPerWeek: 2, perSubject: 2 } });
+      const row = await invited();
+      await bookVisit(link(row), choice(), db);
+      await bookVisit(link(row), choice(EXAM_TUE, { move: true }), db);
+      await click(row.id, "cancel_visit");
+      await expect(click(row.id, "send_new_link")).rejects.toThrow(/invited, not booked/);
+      expect((await read(row.id)).stage).toBe("no_booking");
+      await setVisit({ onsiteLimits: { perWeek: 10, unbooked: 2, perHeadPerWeek: 2, perSubject: 2 } });
+      vi.setSystemTime(new Date(now.getTime() + 3600000));
+      await click(row.id, "send_new_link", [], "Candidate can come next week");
+      const fresh = await newestLink(row.id);
+      await bookVisit(fresh, choice(), db);
+      expect((await visitView(fresh, db)).canMove).toBe(true);
+      await bookVisit(fresh, choice(EXAM_TUE, { move: true }), db);
+      expect((await visitView(fresh, db)).canMove).toBe(false);
+      expect((await db.select().from(s.hiringAudit)).find((a) => a.action === "send_new_link")!.detail).toMatchObject({ reason: "Candidate can come next week" });
+      // The new link counts as a send.
+      expect((await readLimitUsage(db, "onsite", new Date())).perWeek).toBe(2);
+    });
+    it("old paper and mock links still work for old-flow candidates", async () => {
+      const paper = {
+        ...slot,
+        interviewerKey: null,
+        end: "2026-11-02T05:00:00.000Z",
+      };
+      vi.mocked(availableSlots).mockResolvedValue([paper]);
+      const [c] = await db
+        .insert(s.hiringCandidates)
+        .values({ name: "Old", email: "old@example.com", stage: "paper_invited", subjects: ["Mathematics"], inviteExpiresAt: LINK })
+        .returning();
+      const token = bookingToken(c.id, "paper", LINK);
+      expect((await bookingView(token, undefined, db)).kind).toBe("paper");
+      await bookInterview(token, { ...input, interviewerKey: null }, db);
+      expect((await read(c.id)).stage).toBe("paper_booked");
+      const [row] = await rowsOf(c.id);
+      expect(row.visitId).toBeNull();
+      // Their actions stay: a paper pass still sends a mock invitation with its own link.
+      vi.setSystemTime(new Date("2026-11-02T06:00:00Z"));
+      await click(c.id, "paper_pass", ["Mathematics"], "Marked paper 90 of 100");
+      const saved = await read(c.id);
+      expect(saved.stage).toBe("paper_passed");
+      expect((await jobsOf(c.id)).some((j) => j.key.includes(":mock-invite:"))).toBe(true);
+    });
+    it("shows a notice and the LINE contact when Wise is stale or no slot fits", async () => {
+      const row = await invited();
+      vi.mocked(ensureIndex).mockResolvedValueOnce({ snapshotId: "x", syncedAt: new Date(now.getTime() - 86400000), tutorGroups: [] } as never);
+      const stale = await visitView(link(row), db);
+      expect(stale.slots).toEqual([]);
+      expect(stale.notice).toContain(LINE);
+      expect(stale.notice).toMatch(/cannot be shown|try again/i);
+      await setVisit({ interviewers: [{ ...peat, fallbackWeek: Array(7).fill(null) }] } as never);
+      const empty = await visitView(link(row), db);
+      expect(empty.slots).toEqual([]);
+      expect(empty.notice).toContain(LINE);
+      await setVisit({ enabled: false });
+      const paused = await visitView(link(row), db);
+      expect([paused.enabled, paused.slots]).toEqual([false, []]);
+      expect(paused.notice).toContain(LINE);
+      await expect(bookVisit(link(row), choice(), db)).rejects.toThrow(HiringError);
+    });
+    it("lets only one of two candidates take the last exam place, on separate connections", async () => {
+      await setVisit({ interviewers: [peat, ek], paperCapacity: 1 } as never);
+      const a = await invited(),
+        b = await invited();
+      const client = await handle.pool.connect();
+      await client.query("begin");
+      await client.query("select pg_advisory_xact_lock(hashtextextended('hiring:paper',0))");
+      const finished: string[] = [];
+      let settled: Promise<PromiseSettledResult<unknown>[]>;
+      try {
+        settled = Promise.allSettled(
+          [a, b].map((c) => bookVisit(link(c), choice(), db).finally(() => finished.push(c.id))),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(finished).toEqual([]);
+      } finally {
+        await client.query("commit");
+        client.release();
+      }
+      const outcomes = await settled;
+      expect(outcomes.filter((o) => o.status === "fulfilled")).toHaveLength(1);
+      const rows = await db.select().from(s.hiringBookings);
+      expect(rows.map((r) => r.kind).sort()).toEqual(["mock", "paper"]);
+    });
+    it("lets only one of two candidates take the last head hour, with room for two exams", async () => {
+      await setVisit({ paperCapacity: 2 });
+      const a = await invited(),
+        b = await invited();
+      const outcomes = await Promise.allSettled([bookVisit(link(a), choice(), db), bookVisit(link(b), choice(), db)]);
+      expect(outcomes.filter((o) => o.status === "fulfilled")).toHaveLength(1);
+      expect(await db.select().from(s.hiringBookings)).toHaveLength(2);
+    });
+    it("refuses a booking when the head has no LINE group, with nothing saved", async () => {
+      await db.delete(s.progressLineGroups).where(eq(s.progressLineGroups.canonicalKey, "Peat"));
+      const row = await invited();
+      await expect(bookVisit(link(row), choice(), db)).rejects.toThrow(/notifications/);
+      expect(await rowsOf(row.id)).toEqual([]);
+      expect((await read(row.id)).stage).toBe("onsite_invited");
     });
   });
   it("keeps an old-flow candidate on the paper then mock path: a booked paper, a recorded pass and a confirmed mock", async () => {

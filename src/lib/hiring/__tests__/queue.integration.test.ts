@@ -10,8 +10,7 @@ import {
   listGoogleSheetProperties,
 } from "@/lib/sales-dashboard/sheets";
 import { configSchema, HiringError, type HiringConfig } from "../model";
-import { readBookingToken } from "../tokens";
-import { inviteToVisit, reviewCandidate, sourceHash, type Candidate } from "../service";
+import { bookingView, inviteToVisit, reviewCandidate, sourceHash, type Candidate } from "../service";
 import { readyToInvite } from "../insights";
 import { isNewFlow, parseFormTimestamp, syncTracker } from "../sources";
 import { assessCandidates, deliverOutbox, preScreenText, runHiringCycle } from "../worker";
@@ -561,7 +560,7 @@ describe("follow-ups", () => {
     expect(invited.inviteExpiresAt!.getTime()).toBe(payload.exp * 1000);
     expect(payload.exp * 1000).toBe(Math.floor(now.getTime() / 1000) * 1000 + 30 * DAY);
     // The old paper and mock routes do not accept it.
-    expect(() => readBookingToken(token, now)).toThrow(HiringError);
+    await expect(bookingView(token, undefined, db, now)).rejects.toThrow(HiringError);
     // Day 3: one reminder with the same link, once for this link even if the revision moves.
     vi.setSystemTime(after(3));
     expect(await runFollowUps(db)).toEqual({ reminded: 1, expired: 0 });
@@ -936,20 +935,21 @@ describe("tracker guard", () => {
   });
   it("treats a click-invited candidate with no form row as new flow, at any invite status", async () => {
     const row = await seed({ stage: "review", preScreen: pre, preScreenAssessment: six() as never, subjects: ["Mathematics"], trackerHash: "old" });
-    await withDatabaseTransaction(db, (tx) => inviteToVisit(tx, row, config, "click-key"));
+    const key = `${row.id}:visit-invite`;
+    await withDatabaseTransaction(db, (tx) => inviteToVisit(tx, row, config, key));
     await db.update(s.hiringCandidates).set({ stage: "stopped" }).where(eq(s.hiringCandidates.id, row.id));
-    await db.update(s.hiringOutbox).set({ status: "cancelled" }).where(eq(s.hiringOutbox.key, "click-key"));
+    await db.update(s.hiringOutbox).set({ status: "cancelled" }).where(eq(s.hiringOutbox.key, key));
     tracker({ recruit: [paperPass(row.email!)] });
     await syncTracker(db, config);
     const saved = await candidate(row.id);
     expect(saved.stage).toBe("stopped");
     expect(saved.paperPassedSubjects).toEqual([]);
-    expect((await outbox()).map((j) => j.key)).toEqual(["click-key"]);
-    // The paper path sees the same fact.
+    expect((await outbox()).map((j) => j.key)).toEqual([key]);
+    // A click sees the same fact: the used key refuses a second first invitation, even when that row was cancelled.
     await db.update(s.hiringCandidates).set({ stage: "review" }).where(eq(s.hiringCandidates.id, row.id));
     await expect(
       reviewCandidate(row.id, { revision: saved.revision, action: "advance", subjects: ["Mathematics"], reason: "Checked by a person" }, "r@example.com", db),
-    ).rejects.toThrow(/visit flow/);
+    ).rejects.toThrow(/new link/);
   });
   it("treats an old stage as old-flow even when the old worker sent the form", () => {
     expect(isNewFlow({ stage: "paper_invited" }, true)).toBe(false);
@@ -963,15 +963,15 @@ describe("tracker guard", () => {
 });
 
 describe("no paper invitation in the new flow", () => {
-  it("refuses a paper invitation for a new-flow response, and keeps it for an old-flow one", async () => {
+  it("never sends a paper invitation for a response: a scored one goes to the visit, an unscored one is refused", async () => {
     const row = await replied({ stage: "review" });
     const input = { revision: row.revision, action: "advance" as const, subjects: ["Mathematics" as const], reason: "Checked by a person" };
-    await expect(reviewCandidate(row.id, input, "r@example.com", db)).rejects.toThrow(HiringError);
-    expect((await candidate(row.id)).stage).toBe("review");
+    await reviewCandidate(row.id, input, "r@example.com", db);
+    expect((await candidate(row.id)).stage).toBe("onsite_invited");
+    const unscored = await seed({ stage: "review", preScreen: pre });
+    await expect(reviewCandidate(unscored.id, { ...input, revision: unscored.revision }, "r@example.com", db)).rejects.toThrow(/no score/);
+    expect((await candidate(unscored.id)).stage).toBe("review");
     expect((await outbox()).filter((j) => j.payload.workflowStage === "paper_invited")).toEqual([]);
-    const old = await seed({ stage: "review", preScreen: pre });
-    await reviewCandidate(old.id, { ...input, revision: old.revision }, "r@example.com", db);
-    expect((await candidate(old.id)).stage).toBe("paper_invited");
   });
   it("cancels an old paper invitation that is still unsent when the stage has moved on", async () => {
     const row = await seed({ stage: "onsite_invited" });

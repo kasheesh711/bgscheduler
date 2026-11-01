@@ -20,7 +20,7 @@ import {
   type Stage,
 } from "./model";
 import { appInvited } from "./queue";
-import { audit, inviteToBooking, settings, sourceHash } from "./service";
+import { audit, inviteToMock, settings, sourceHash } from "./service";
 // The one copy stays in status.ts: client components import that file, and this one reaches the database.
 import { parseFormTimestamp } from "./status";
 
@@ -338,10 +338,9 @@ export async function syncTracker(db: Database, config: HiringConfig) {
           JSON.stringify(existing.paperPassedSubjects) !==
             JSON.stringify(passed)
         ) {
-          await inviteToBooking(
+          await inviteToMock(
             tx,
             updated,
-            "mock",
             config,
             `${updated.id}:tracker-mock:${hash}`,
           );

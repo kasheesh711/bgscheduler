@@ -374,6 +374,17 @@ export const bookingSchema = z
   })
   .strict();
 
+// The server assigns the head, so a booking names no interviewer.
+export const visitBookingSchema = z
+  .object({
+    start: z.iso.datetime(),
+    subject: subjectSchema,
+    onsiteConfirmed: z.literal(true),
+    teachingCommitmentConfirmed: z.literal(true),
+    move: z.boolean().optional(),
+  })
+  .strict();
+
 export function runtimeWritesAllowed() {
   return (
     process.env.HIRING_WRITES_ENABLED === "true" &&
