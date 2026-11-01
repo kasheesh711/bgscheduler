@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   DEFAULT_WEIGHTS,
+  normalizeSubjects,
   type HiringConfig,
   type PreScreen,
   type Subject,
@@ -138,22 +139,6 @@ export function profileScore(
     (weights.prestige ?? 0) * prestige
   );
 }
-export function profileCanAdvance(
-  assessment: Scored & { subjects: Assessment["subjects"] },
-  threshold: number,
-  weights: Omit<typeof DEFAULT_WEIGHTS, "prestige"> & {
-    prestige?: number;
-  } = DEFAULT_WEIGHTS,
-  prestige = 0,
-) {
-  return (
-    profileScore(assessment, weights, prestige) >= threshold &&
-    ["degree", "subject"].every((id) =>
-      assessment.criteria.some((c) => c.id === id && c.result === "met"),
-    ) &&
-    assessment.subjects.some((s) => s.relevant)
-  );
-}
 export function degreeEligible(degree: string): boolean | null {
   if (/below|undergraduate|studying|in progress/i.test(degree)) return false;
   if (/bachelor|master|ph\.?d|doctor/i.test(degree)) return true;
@@ -173,62 +158,6 @@ export function englishLevel(english: string, evidence: string): number | null {
   const found = read(evidence);
   return found.length ? Math.max(...found) : null;
 }
-export function preScreenResult(
-  pre: PreScreen,
-  assessment: Scored & { subjects: Assessment["subjects"] },
-  requireBoth: boolean,
-) {
-  const issues: string[] = [];
-  const degree = degreeEligible(pre.degree);
-  const relatedDegree = assessment.criteria.some(
-    (c) => c.id === "degree" && c.result === "met",
-  );
-  const level = englishLevel(pre.english, pre.englishEvidence);
-  const weekend = /weekend|saturday|sunday/i.test(pre.availability);
-  const weekday =
-    /weekday (afternoon|evening)|weekday.*(?:15:|16:|17:|18:|19:)/i.test(
-      pre.availability,
-    );
-  if (degree !== true)
-    issues.push(
-      degree === false
-        ? "A completed bachelor's degree needs review."
-        : "Degree evidence is missing.",
-    );
-  if (!relatedDegree) issues.push("Degree relevance needs review.");
-  if (!(requireBoth ? weekend && weekday : weekend || weekday))
-    issues.push("Teaching availability needs review.");
-  if (level === null)
-    issues.push("An English proficiency level needs confirmation.");
-  const subjects: Subject[] = assessment.subjects
-    .filter((row) => row.relevant)
-    .map((row) => row.subject)
-    .filter((subject) => {
-      const englishRequired = /English|EFL|IELTS/.test(subject) ? 4 : 3;
-      if (level === null || level < englishRequired) {
-        issues.push(
-          `${subject}: English evidence is below the required level or missing.`,
-        );
-        return false;
-      }
-      if (subject === "Art & Design Technology" && !pre.portfolio.trim()) {
-        issues.push("Art: portfolio evidence is missing.");
-        return false;
-      }
-      return true;
-    });
-  const eligible =
-    degree === true &&
-    relatedDegree &&
-    (requireBoth ? weekend && weekday : weekend || weekday) &&
-    subjects.length > 0;
-  return {
-    eligible,
-    subjects,
-    issues: [...new Set(issues)],
-  };
-}
-
 /** The weekend option and the late-weekday option are read one option at a time, so "17:00" in a weekend option never counts as a weekday. */
 function timeSlots(availability: string) {
   const options = availability.split(",");
@@ -321,6 +250,25 @@ export function hardStops(
     );
   return { stops, subjects };
 }
+/** The highest-ranked subject that is still hiring. A subject missing from the saved list is hiring and ranks last. */
+export function topHiringSubject(subjects: Subject[], priority: HiringConfig["subjectPriority"]): Subject | null {
+  const rank = (subject: Subject) => {
+    const at = priority.findIndex((p) => p.subject === subject);
+    return at < 0 ? { hiring: true, at: priority.length } : { hiring: priority[at].hiring, at };
+  };
+  return subjects.filter((s) => rank(s).hiring).sort((a, b) => rank(a).at - rank(b).at)[0] ?? null;
+}
+/** The one subject of a visit: named on the form, not stopped, supported by the assessment, and the highest-ranked that is hiring. */
+export function visitSubject(
+  pre: PreScreen,
+  answer: string | null,
+  assessment: Pick<PreScreenAssessment, "subjects">,
+  config: HiringConfig,
+): Subject | null {
+  const supported = assessment.subjects.filter((s) => s.relevant).map((s) => s.subject);
+  const { subjects } = hardStops(pre, answer, normalizeSubjects(pre.subjects), config);
+  return topHiringSubject(subjects.filter((s) => supported.includes(s)), config.subjectPriority);
+}
 
 const SUMMARY_WORDS = 25;
 const BRIEF_WORDS = 15;
@@ -389,9 +337,10 @@ export async function askForBriefs(
 export async function assessWithBriefs(ask: (feedback: string) => Promise<unknown>) {
   const { value, problem } = await askForBriefs(ask, briefProblem);
   if (!problem) return value;
-  const copy = structuredClone(value) as { briefSummary?: unknown; criteria: { brief?: unknown }[] };
+  const copy = structuredClone(value) as { briefSummary?: unknown; criteria: ({ brief?: unknown } | null)[] };
   delete copy.briefSummary;
-  for (const c of copy.criteria) delete c.brief;
+  // A broken entry must reach validation, which holds this candidate, and not abort the whole cycle here.
+  for (const c of copy.criteria) if (c) delete c.brief;
   return copy;
 }
 

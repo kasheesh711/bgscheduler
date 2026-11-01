@@ -18,8 +18,6 @@ import {
   hardStops,
   preScreenAssessmentSchema,
   preScreenPoints,
-  preScreenResult,
-  profileCanAdvance,
   profileScore,
   assessmentSchema,
   assessmentOutputSchema,
@@ -127,10 +125,8 @@ describe("hiring decision boundaries", () => {
       }).success,
     ).toBe(false);
   });
-  it("uses the user's editable weights and threshold without ignoring mandatory evidence", () => {
+  it("uses the user's editable weights and refuses weights that do not total 100", () => {
     expect(profileScore(assessment, DEFAULT_WEIGHTS)).toBe(60);
-    expect(profileCanAdvance(assessment, 60, DEFAULT_WEIGHTS)).toBe(true);
-    expect(profileCanAdvance(assessment, 61, DEFAULT_WEIGHTS)).toBe(false);
     const changed = {
       degree: 10,
       subject: 10,
@@ -139,17 +135,6 @@ describe("hiring decision boundaries", () => {
       english: 20,
     };
     expect(profileScore(assessment, changed)).toBe(50);
-    expect(
-      profileCanAdvance(
-        {
-          ...assessment,
-          criteria: assessment.criteria.map((c) =>
-            c.id === "degree" ? { ...c, result: "unknown" } : c,
-          ),
-        },
-        0,
-      ),
-    ).toBe(false);
     expect(
       configSchema.safeParse({
         profileWeights: { ...DEFAULT_WEIGHTS, english: 19 },
@@ -244,6 +229,12 @@ describe("hiring decision boundaries", () => {
     expect(await assessWithBriefs(async () => (calls++, assessment))).toEqual(assessment);
     expect(calls).toBe(4);
   });
+  it("does not throw on a broken criterion entry: validation then holds that one candidate", async () => {
+    const broken = { ...assessment, criteria: [null, ...assessment.criteria.slice(1)] };
+    const kept = await assessWithBriefs(async () => broken);
+    expect(kept).toEqual(broken);
+    expect(() => validateAssessment(kept, "degree subject teaching english Mathematics")).toThrow();
+  });
   it("tells the model to write short STE lines, and the rewrite prompt forbids new facts and quotes", () => {
     expect(ASSESSMENT_SYSTEM).toMatch(/briefSummary/);
     expect(ASSESSMENT_SYSTEM).toMatch(/25 words/);
@@ -281,46 +272,11 @@ describe("hiring decision boundaries", () => {
       ),
     ).toThrow(/duplicate/);
   });
-  it("accepts combined degrees, handles Native without inventing a CEFR level, and requires both work periods", () => {
+  it("accepts combined degrees and handles Native without inventing a CEFR level", () => {
     expect(degreeEligible("Bachelor's, Master's")).toBe(true);
     expect(degreeEligible("Below Bachelor's")).toBe(false);
     expect(englishLevel("Native", "")).toBe(5);
     expect(englishLevel("Native", "CEFR C2")).toBe(5);
-    expect(preScreenResult(pre, assessment, true).eligible).toBe(true);
-    expect(
-      preScreenResult(
-        pre,
-        {
-          ...assessment,
-          criteria: assessment.criteria.map((c) =>
-            c.id === "degree" ? { ...c, result: "partial" } : c,
-          ),
-        },
-        true,
-      ).eligible,
-    ).toBe(false);
-    expect(
-      preScreenResult(
-        { ...pre, availability: "Weekday Evening (17:00-21:00)" },
-        assessment,
-        true,
-      ).eligible,
-    ).toBe(false);
-    // "Native" in the form field now counts as C2.
-    expect(
-      preScreenResult(
-        { ...pre, englishEvidence: "", english: "Native" },
-        assessment,
-        true,
-      ).eligible,
-    ).toBe(true);
-    expect(
-      preScreenResult(
-        { ...pre, englishEvidence: "", english: "" },
-        assessment,
-        true,
-      ).eligible,
-    ).toBe(false);
   });
   it("returns the next five whole Bangkok business days and respects closures", () => {
     expect(businessDates(new Date("2026-10-30T23:00:00Z"))).toEqual([

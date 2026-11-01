@@ -2,9 +2,12 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { kindSchema, HiringError, type InterviewKind } from "./model";
 
+/** A visit link lives this long. `inviteExpiresAt` holds the same second, so a new link ends the old one. */
+export const VISIT_LINK_DAYS = 30;
+
 export function bookingToken(
   id: string,
-  kind: InterviewKind,
+  kind: InterviewKind | "visit",
   expires: Date,
   secret = process.env.AUTH_SECRET,
 ) {

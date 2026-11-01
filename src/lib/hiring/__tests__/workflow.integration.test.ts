@@ -24,6 +24,7 @@ import {
 } from "../service";
 import { importApplication, observeSeekState } from "../sources";
 import { assessCandidates, deliverOutbox, rewriteBriefs, scorePreScreens, type Rewrite } from "../worker";
+import { releaseQueues } from "../queue";
 import { availableSlots, verifyLiveSlot } from "../availability";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { pushLineTextMessage } from "@/lib/line/client";
@@ -637,76 +638,18 @@ describe("hiring workflow persistence", () => {
       expect((await db.select().from(s.hiringCandidates)).every((c) => c.preScreenAssessment === null)).toBe(true);
     });
   });
-  it("runs from a new application through both invitations, a recorded paper pass and a confirmed mock", async () => {
-    const id = await importApplication(
-      {
-        applicationId: "00000000-0000-4000-8000-000000000003",
+  it("keeps an old-flow candidate on the paper then mock path: a booked paper, a recorded pass and a confirmed mock", async () => {
+    let [c] = await db
+      .insert(s.hiringCandidates)
+      .values({
         name: "Flow candidate",
         email: "flow@example.com",
-        profileText: "degree subject curriculum teaching english Mathematics",
-        resumeText: "",
-        previouslyContacted: false,
-        sourceStatus: "Inbox",
-        workRightsAnswer: ACCEPTED,
-      },
-      db,
-    );
-    const profile = (kind?: string) => ({
-      criteria: [
-        "degree",
-        "subject",
-        "curriculum",
-        "teaching",
-        "english",
-        ...(kind === "pre-screen" ? ["written"] : []),
-      ].map((id) => ({
-        id,
-        result: "met",
-        evidence: id === "written" ? "Check understanding" : id,
-        reason: "Source",
-      })),
-      subjects: [
-        { subject: "Mathematics", evidence: "Mathematics", relevant: true },
-      ],
-      summary: "Evidence",
-    });
-    await assessCandidates(db, config, async () => profile());
-    let [c] = await db
-      .select()
-      .from(s.hiringCandidates)
-      .where(eq(s.hiringCandidates.id, id));
-    expect(c.stage).toBe("pre_screen");
-    await deliverOutbox(db, config);
-    await db
-      .update(s.hiringCandidates)
-      .set({
-        preScreen: {
-          sourceRow: 2,
-          submittedAt: now.toISOString(),
-          degree: "Bachelor's",
-          field: "Mathematics",
-          subjects: "Mathematics",
-          curricula: "IGCSE",
-          yearGroups: "Year 10",
-          english: "Advanced (C1)",
-          englishEvidence: "C1",
-          experience: "5+ years",
-          portfolio: "",
-          availability:
-            "Weekday Evening (17:00-21:00), Weekend Morning (before 12:00)",
-          weeklyHours: "20",
-          motivation: "Teaching",
-          teachingApproach: "Check understanding",
-        },
+        stage: "paper_invited",
+        subjects: ["Mathematics"],
+        inviteExpiresAt: new Date("2026-11-15T00:00:00Z"),
       })
-      .where(eq(s.hiringCandidates.id, id));
-    await assessCandidates(db, config, async (_s, _k, kind) => profile(kind));
-    [c] = await db
-      .select()
-      .from(s.hiringCandidates)
-      .where(eq(s.hiringCandidates.id, id));
-    expect(c.stage).toBe("paper_invited");
-    await deliverOutbox(db, config);
+      .returning();
+    const id = c.id;
     const paper = {
       ...slot,
       interviewerKey: null,
@@ -767,7 +710,8 @@ describe("hiring workflow persistence", () => {
     ).toBe("mock_booked");
     expect(await db.select().from(s.hiringBookings)).toHaveLength(2);
     const jobs = await db.select().from(s.hiringOutbox);
-    expect(jobs).toHaveLength(8);
+    // Paper booking 2 (email, calendar), mock invitation 1, mock booking 3 (email, calendar, LINE).
+    expect(jobs).toHaveLength(6);
     expect(jobs.every((j) => j.status === "sent")).toBe(true);
     expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].tutorBot).toBe(
       false,
@@ -837,6 +781,7 @@ describe("hiring workflow persistence", () => {
       ],
       summary: "Evidence",
     }));
+    await releaseQueues(db);
     expect((await db.select().from(s.hiringOutbox))[0].status).toBe("pending");
     await observeSeekState(applicationId, "Inbox", true, db);
     expect((await db.select().from(s.hiringOutbox))[0].status).toBe(
@@ -888,6 +833,7 @@ describe("hiring workflow persistence", () => {
     await assessCandidates(db, config, assess);
     await assessCandidates(db, config, assess);
     expect(assess).toHaveBeenCalledTimes(2);
+    await releaseQueues(db);
     const rows = await db.select().from(s.hiringCandidates);
     expect(rows.find((c) => c.id === ids[0])?.stage).toBe("review");
     expect(rows.find((c) => c.id === ids[1])?.stage).toBe("pre_screen");
@@ -1030,6 +976,8 @@ describe("hiring workflow persistence", () => {
     });
     await assessCandidates(db, config, assess);
     await assessCandidates(db, config, assess);
+    await releaseQueues(db);
+    await releaseQueues(db);
     expect(assess).toHaveBeenCalledTimes(1);
     expect(await db.select().from(s.hiringOutbox)).toHaveLength(1);
     const changed = {
@@ -1049,6 +997,7 @@ describe("hiring workflow persistence", () => {
     expect(saved.config.profileThreshold).toBe(85);
     expect(saved.config.profileWeights.teaching).toBe(30);
     await assessCandidates(db, saved.config, assess);
+    await releaseQueues(db);
     expect(await db.select().from(s.hiringOutbox)).toHaveLength(1);
   });
 });

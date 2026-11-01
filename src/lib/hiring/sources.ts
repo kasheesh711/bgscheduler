@@ -1,4 +1,4 @@
-import { and, eq, or, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, or, sql, type SQL } from "drizzle-orm";
 import { type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -20,6 +20,32 @@ import {
   type Stage,
 } from "./model";
 import { audit, inviteToBooking, settings, sourceHash } from "./service";
+// The one copy stays in status.ts: client components import that file, and this one reaches the database.
+import { parseFormTimestamp } from "./status";
+
+export { parseFormTimestamp };
+const NEW_FLOW_STAGES: Stage[] = ["onsite_invited", "onsite_booked", "no_reply", "no_booking"];
+const OLD_FLOW_STAGES: Stage[] = ["paper_invited", "paper_booked", "paper_passed", "mock_booked"];
+/**
+ * A new-flow candidate is one whom the app sent the form, or who is at a visit stage. The tracker changes nothing for
+ * them. An old stage stays old-flow even if the earlier worker sent that candidate the form.
+ */
+export const isNewFlow = (candidate: { stage: Stage }, appFormSent: boolean) =>
+  NEW_FLOW_STAGES.includes(candidate.stage) ||
+  (appFormSent && !OLD_FLOW_STAGES.includes(candidate.stage));
+/** A queued form counts as sent here: it can leave at any moment, and a tracker row must not move the candidate first. */
+async function appFormSent(db: Database, candidateId: string) {
+  const rows = await db
+    .select({ id: s.hiringOutbox.id })
+    .from(s.hiringOutbox)
+    .where(
+      and(
+        eq(s.hiringOutbox.key, `${candidateId}:pre-screen`),
+        ne(s.hiringOutbox.status, "cancelled"),
+      ),
+    );
+  return rows.length > 0;
+}
 
 const cell = (row: unknown[], index: number) => String(row[index] ?? "").trim();
 export function preScreenRows(rows: unknown[][]) {
@@ -277,6 +303,13 @@ export async function syncTracker(db: Database, config: HiringConfig) {
         .from(s.hiringCandidates)
         .where(eq(s.hiringCandidates.email, email));
       if (existing?.trackerHash === hash) return;
+      if (existing && isNewFlow(existing, await appFormSent(tx, existing.id))) {
+        await tx
+          .update(s.hiringCandidates)
+          .set({ trackerHash: hash })
+          .where(eq(s.hiringCandidates.id, existing.id));
+        return;
+      }
       const passed =
         cell(row, 19) === "Passed" ? normalizeSubjects(cell(row, 20)) : [];
       const stage = legacyStage(row);
@@ -346,20 +379,47 @@ export async function syncTracker(db: Database, config: HiringConfig) {
         .where(eq(s.hiringCandidates.email, email))
         .for("update");
       if (existing) {
-        if (sourceHash(existing.preScreen) !== sourceHash(pre))
+        if (sourceHash(existing.preScreen) === sourceHash(pre)) return;
+        const first = !existing.preScreen;
+        // A row that only moved in the sheet is the same response.
+        const answered =
+          first ||
+          sourceHash({ ...existing.preScreen, sourceRow: 0 }) !==
+            sourceHash({ ...pre, sourceRow: 0 });
+        await tx
+          .update(s.hiringCandidates)
+          .set({
+            preScreen: pre,
+            ...(first
+              ? { preScreenRepliedAt: parseFormTimestamp(pre.submittedAt) }
+              : answered
+                ? { preScreenResubmitted: true }
+                : {}),
+            ...(answered && existing.stage === "no_reply"
+              ? { stage: "pre_screen" as const }
+              : {}),
+            updatedAt: new Date(),
+            revision: existing.revision + 1,
+          })
+          .where(eq(s.hiringCandidates.id, existing.id));
+        // They answered, so an unsent form or reminder must not follow. An uncertain row may already have left: it stays counted.
+        if (answered)
           await tx
-            .update(s.hiringCandidates)
-            .set({
-              preScreen: pre,
-              updatedAt: new Date(),
-              revision: existing.revision + 1,
-            })
-            .where(eq(s.hiringCandidates.id, existing.id));
+            .update(s.hiringOutbox)
+            .set({ status: "cancelled" })
+            .where(
+              and(
+                eq(s.hiringOutbox.candidateId, existing.id),
+                sql`${s.hiringOutbox.payload}->>'workflowStage' = 'pre_screen'`,
+                inArray(s.hiringOutbox.status, ["pending", "failed"]),
+              ),
+            );
       } else
         await tx.insert(s.hiringCandidates).values({
           name,
           email,
           preScreen: pre,
+          preScreenRepliedAt: parseFormTimestamp(pre.submittedAt),
           previouslyContacted: true,
           stage: "review",
           reviewNote:
@@ -367,6 +427,9 @@ export async function syncTracker(db: Database, config: HiringConfig) {
         });
     });
   }
+  const applicantEmails = new Map(
+    recruit.slice(2).map((row) => [cell(row, 0), normalizeEmail(row[2])]),
+  );
   for (let index = 2; index < mockRows.length; index++) {
     const row = mockRows[index];
     if (!/^APP-\d+$/.test(cell(row, 0)) || !row[4] || !row[5]) continue;
@@ -386,10 +449,14 @@ export async function syncTracker(db: Database, config: HiringConfig) {
     const start = instant(date, Number(times[1]) * 60 + Number(times[2])),
       end = instant(date, Number(times[3]) * 60 + Number(times[4]));
     if (start <= new Date()) continue;
-    const [candidate] = await db
-      .select()
-      .from(s.hiringCandidates)
-      .where(eq(s.hiringCandidates.applicantId, cell(row, 0)));
+    const applicant = (where: SQL) => db.select().from(s.hiringCandidates).where(where);
+    const email = applicantEmails.get(cell(row, 0));
+    // A new-flow row never stores the applicant ID, so such a candidate is found by the email on the Recruitment Sheet.
+    let [candidate] = await applicant(eq(s.hiringCandidates.applicantId, cell(row, 0)));
+    if (!candidate && email)
+      [candidate] = await applicant(eq(s.hiringCandidates.email, email));
+    if (candidate && isNewFlow(candidate, await appFormSent(db, candidate.id)))
+      continue;
     const subjects = normalizeSubjects(cell(row, 2));
     const key = cell(row, 3).replace(/^Kru\s+/i, "");
     const interviewer = config.interviewers.find(

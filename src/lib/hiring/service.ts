@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -9,20 +9,26 @@ import {
   configSchema,
   HiringError,
   PRE_SCREEN_URL,
+  normalizeSubjects,
   overlap,
   runtimeWritesAllowed,
   type HiringConfig,
   type InterviewKind,
+  type Stage,
   type Subject,
 } from "./model";
 import {
   availabilityFraction,
+  hardStops,
   preScreenPoints,
   profileScore,
+  visitSubject,
   workRightsAccepted,
 } from "./scoring";
 import { googleConnectionStatus } from "./google";
-import { bookingToken, readBookingToken } from "./tokens";
+import { bookingToken, readBookingToken, VISIT_LINK_DAYS } from "./tokens";
+import { blockingLimit, type LimitName } from "./limits";
+import { readLimitUsage } from "./queue";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -116,14 +122,17 @@ export async function candidateById(db: Database, id: string) {
   if (!row) throw new HiringError(404, "Candidate not found.");
   return row;
 }
+/** Returns false when the key already exists: nothing new was queued. */
 export async function enqueue(
   db: Database,
   value: typeof s.hiringOutbox.$inferInsert,
 ) {
-  await db
+  const rows = await db
     .insert(s.hiringOutbox)
     .values(value)
-    .onConflictDoNothing({ target: s.hiringOutbox.key });
+    .onConflictDoNothing({ target: s.hiringOutbox.key })
+    .returning({ id: s.hiringOutbox.id });
+  return rows.length > 0;
 }
 export async function inviteToBooking(
   db: Database,
@@ -163,13 +172,15 @@ export async function inviteToBooking(
     .set({ inviteExpiresAt: expiry, updatedAt: new Date() })
     .where(eq(s.hiringCandidates.id, candidate.id));
 }
-export async function inviteToPreScreen(db: Database, candidate: Candidate) {
+export async function inviteToPreScreen(db: Database, candidate: Candidate, now = new Date()) {
   if (!candidate.email)
     throw new HiringError(409, "A verified application email is required.");
-  await enqueue(db, {
+  return enqueue(db, {
     key: `${candidate.id}:pre-screen`,
     candidateId: candidate.id,
     kind: "email",
+    // Day and week limits read this time, so it comes from the same clock as the limit check.
+    createdAt: now,
     payload: {
       to: candidate.email,
       subject: "BeGifted tutor pre-screening questionnaire",
@@ -177,6 +188,90 @@ export async function inviteToPreScreen(db: Database, candidate: Candidate) {
       text: `Dear ${candidate.name},\n\nThank you for your interest in joining BeGifted. Please complete our short pre-screening questionnaire:\n${PRE_SCREEN_URL}\n\nUse this application email: ${candidate.email}. The form takes about 5–7 minutes. We will contact you after reviewing your response.\n\nBeGifted Education`,
     },
   });
+}
+export const visitLink = (id: string, expires: Date) =>
+  new URL(
+    `/hiring/book/${bookingToken(id, "visit", expires)}`,
+    process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
+  ).toString();
+const LIMIT_TEXT: Record<LimitName, string> = {
+  perDay: "per day",
+  perWeek: "per week",
+  waiting: "waiting for reply",
+  unbooked: "invited, not booked",
+  perSubject: "open per subject",
+};
+// A candidate at any other stage already holds an invitation, is stopped, or stays on the old flow.
+const INVITABLE: Stage[] = ["pre_screen", "no_reply", "review", "no_booking"];
+/**
+ * The one gate for every onsite invitation, from a release or a click. It takes the queue lock and reads the limits
+ * itself, so the two cannot both use the last place. Call it inside a transaction, before locking the candidate row:
+ * the lock order is queue, then candidate.
+ */
+export async function inviteToVisit(
+  tx: Database,
+  candidate: Candidate,
+  config: HiringConfig,
+  key: string,
+  now = new Date(),
+) {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-queue'))`);
+  const [c] = await tx
+    .select()
+    .from(s.hiringCandidates)
+    .where(eq(s.hiringCandidates.id, candidate.id))
+    .for("update");
+  if (!c) throw new HiringError(404, "Candidate not found.");
+  if (!INVITABLE.includes(c.stage))
+    throw new HiringError(409, "This candidate cannot get an onsite invitation at this stage.");
+  if (!c.email)
+    throw new HiringError(409, "A verified application email is required.");
+  if (!c.preScreen || !c.preScreenAssessment)
+    throw new HiringError(409, "The pre-screen response has no score yet.");
+  const { stops } = hardStops(
+    c.preScreen,
+    c.workRightsAnswer,
+    normalizeSubjects(c.preScreen.subjects),
+    config,
+  );
+  if (stops.length) throw new HiringError(409, stops.join(" "));
+  const subject = visitSubject(c.preScreen, c.workRightsAnswer, c.preScreenAssessment, config);
+  if (!subject)
+    throw new HiringError(409, "No supported subject is open for hiring.");
+  const limit = blockingLimit("onsite", subject, await readLimitUsage(tx, "onsite", now), config);
+  if (limit)
+    throw new HiringError(409, `The onsite limit "${LIMIT_TEXT[limit]}" is full. Raise the number to send more.`);
+  const expires = new Date(
+    (Math.floor(now.getTime() / 1000) + VISIT_LINK_DAYS * 86400) * 1000,
+  );
+  const revision = c.revision + 1;
+  const queued = await enqueue(tx, {
+    key,
+    candidateId: c.id,
+    kind: "email",
+    createdAt: now,
+    payload: {
+      to: c.email,
+      subject: "BeGifted onsite visit invitation",
+      workflowStage: "onsite_invited",
+      // The follow-up reminder for this link uses this number, so a later change to the row cannot send a second one.
+      revision,
+      text: `Dear ${c.name},\n\nThank you for your pre-screening response. We invite you to one onsite visit for ${subject}. The visit takes 3 hours: a 2-hour exam, then a 1-hour mock teaching session.\n\nPlease book your visit here:\n${visitLink(c.id, expires)}\n\nThis link closes after ${config.onsiteFollowUp.expireDays} days. For the mock teaching session, prepare one IGCSE topic of your choice. The interviewer will also select a topic, which may be from another level. You may use teaching materials or tools.\n\nLocation: ${config.location}\n\nFor questions, add our LINE Official Account at https://lin.ee/OjMHF41.\n\nBeGifted Education`,
+    },
+  });
+  if (!queued)
+    throw new HiringError(409, "This invitation was already queued.");
+  await tx
+    .update(s.hiringCandidates)
+    .set({
+      stage: "onsite_invited",
+      visitSubject: subject,
+      inviteExpiresAt: expires,
+      revision,
+      updatedAt: now,
+    })
+    .where(eq(s.hiringCandidates.id, c.id));
+  return subject;
 }
 export async function dashboard(db: Database = getDb()) {
   const [
@@ -682,6 +777,23 @@ export async function reviewCandidate(
             409,
             "A stopped candidate must be reviewed before a new application.",
           );
+        // The app sent this candidate the form, so they are on the visit flow and never get a paper invitation.
+        if (c.preScreen) {
+          const [form] = await tx
+            .select({ id: s.hiringOutbox.id })
+            .from(s.hiringOutbox)
+            .where(
+              and(
+                eq(s.hiringOutbox.key, `${id}:pre-screen`),
+                ne(s.hiringOutbox.status, "cancelled"),
+              ),
+            );
+          if (form)
+            throw new HiringError(
+              409,
+              "This candidate is on the visit flow. A paper invitation cannot be sent.",
+            );
+        }
         const [updated] = await tx
           .update(s.hiringCandidates)
           .set({

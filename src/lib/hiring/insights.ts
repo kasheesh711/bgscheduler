@@ -1,5 +1,5 @@
 import { SUBJECTS, type HiringConfig, type Stage, type Subject } from "./model";
-import { profileScore, workRightsAccepted, type Assessment } from "./scoring";
+import { profileScore, topHiringSubject, workRightsAccepted, type Assessment } from "./scoring";
 
 export const STAGE_LABELS: Record<Stage, string> = {
   new: "New",
@@ -87,16 +87,10 @@ export function profileGate(
 ): { eligible: boolean; reasons: string[]; subject: Subject | null } {
   const reasons: string[] = [];
   const assessment = candidate.profileAssessment;
-  const rank = (subject: Subject) => {
-    const at = config.subjectPriority.findIndex((p) => p.subject === subject);
-    // A subject missing from the saved list is hiring and ranks last.
-    return at < 0 ? { hiring: true, at: config.subjectPriority.length } : { hiring: config.subjectPriority[at].hiring, at };
-  };
-  const subject =
-    (assessment?.subjects ?? [])
-      .filter((s) => s.relevant && rank(s.subject).hiring)
-      .map((s) => s.subject)
-      .sort((a, b) => rank(a).at - rank(b).at)[0] ?? null;
+  const subject = topHiringSubject(
+    (assessment?.subjects ?? []).filter((s) => s.relevant).map((s) => s.subject),
+    config.subjectPriority,
+  );
   if (!assessment) reasons.push("The profile is not scored.");
   else {
     if (
@@ -115,7 +109,7 @@ export function profileGate(
   return { eligible: reasons.length === 0, reasons, subject };
 }
 
-/** Mirrors the worker's gate for sending a new profile the pre-screen form. */
+/** Mirrors the queue's gate for sending a new profile the pre-screen form. */
 export function readyToInvite(
   candidate: InsightCandidate,
   config: GateConfig,

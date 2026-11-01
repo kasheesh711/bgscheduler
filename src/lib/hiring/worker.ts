@@ -16,16 +16,11 @@ import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { ScheduleEmailRejection } from "@/lib/classrooms/schedule-email";
 import { pushLineTextMessage, LinePushError } from "@/lib/line/client";
 import { progressUsesTutorBot } from "@/lib/line/progress-reminders";
-import {
-  normalizeSubjects,
-  runtimeWritesAllowed,
-  type HiringConfig,
-} from "./model";
+import { runtimeWritesAllowed, type HiringConfig } from "./model";
 import {
   askForBriefs,
   availabilityFraction,
   preScreenPoints,
-  preScreenResult,
   profileScore,
   validateAssessment,
   validateBriefs,
@@ -35,14 +30,8 @@ import {
   type PreScreenAssessment,
 } from "./scoring";
 import { profileGate } from "./insights";
-import {
-  audit,
-  candidateById,
-  inviteToBooking,
-  inviteToPreScreen,
-  settings,
-  sourceHash,
-} from "./service";
+import { audit, candidateById, settings, sourceHash } from "./service";
+import { formSentAt, releaseQueues, replyCheck, runFollowUps } from "./queue";
 import { deliverCalendar } from "./google";
 import { syncTracker, mirrorTracker } from "./sources";
 import { redactProfile } from "./seek-text";
@@ -91,15 +80,17 @@ export async function assessCandidates(
   retryInvalid = false,
   // Called when a finished model answer could not be stored because the row or the settings changed meanwhile.
   onVoided?: () => void,
+  // No new assessment starts after this time. Rows left over wait for the next cycle.
+  stopAt = Infinity,
 ) {
   const rows = await db
     .select()
     .from(s.hiringCandidates)
-    .where(scoreOnly ? (candidateId ? eq(s.hiringCandidates.id, candidateId) : undefined) : inArray(s.hiringCandidates.stage, ["new", "review", "pre_screen"]))
+    .where(scoreOnly ? (candidateId ? eq(s.hiringCandidates.id, candidateId) : undefined) : inArray(s.hiringCandidates.stage, ["new", "review", "pre_screen", "no_reply"]))
     .orderBy(asc(s.hiringCandidates.createdAt));
   let calls = 0;
   for (const candidate of rows) {
-    if (calls >= max) break;
+    if (calls >= max || Date.now() >= stopAt) break;
     const phase = !scoreOnly && candidate.preScreen ? "pre" : "profile";
     const source =
       phase === "pre" ? preScreenSource(candidate) : candidate.profileText;
@@ -201,92 +192,38 @@ export async function assessCandidates(
         await audit(tx, "subscription-assessment", "profile-score-only", candidate.id, { sourceHash: hash });
         return;
       }
-      // Historical messages are not a safe invitation ledger. Keep the first import for review.
-      const historical =
-        candidate.previouslyContacted && !candidate.profileText;
+      // This step only stores results and moves a row to review. Sends leave through the queue.
+      const toReview = (reviewNote: string) =>
+        tx
+          .update(s.hiringCandidates)
+          .set({ stage: "review", reviewNote, revision: fresh.revision + 1, updatedAt: new Date() })
+          .where(eq(s.hiringCandidates.id, candidate.id));
       if (phase === "pre") {
-        const declared = normalizeSubjects(candidate.preScreen!.subjects);
-        const scoped = {
-          ...assessment!,
-          subjects: assessment!.subjects.filter((subject) =>
-            declared.includes(subject.subject),
-          ),
-        };
-        const result = preScreenResult(
-          candidate.preScreen!,
-          scoped,
-          current.config.requireWeekendAndWeekday,
-        );
-        if (
-          result.eligible &&
-          profileScore(
-            assessment!,
-            current.config.profileWeights,
-            prestige.fraction,
-          ) >= current.config.profileThreshold &&
-          !historical &&
-          fresh.stage !== "review"
-        ) {
-          const [updated] = await tx
-            .update(s.hiringCandidates)
-            .set({
-              stage: "paper_invited",
-              subjects: result.subjects,
-              revision: fresh.revision + 1,
-              updatedAt: new Date(),
-              reviewNote: result.issues.join(" ") || null,
-            })
-            .where(eq(s.hiringCandidates.id, candidate.id))
-            .returning();
-          await inviteToBooking(
-            tx,
-            updated,
-            "paper",
+        // A person's review stays as it is. A response at `new` has no matching send, so it goes to review too.
+        if (["new", "pre_screen", "no_reply"].includes(fresh.stage)) {
+          const check = replyCheck(
+            {
+              ...fresh,
+              preScreenAssessment: assessment as PreScreenAssessment,
+              universityAssessment: prestige,
+            },
+            await formSentAt(tx, candidate.id),
             current.config,
-            `${candidate.id}:paper:${hash}`,
           );
-        } else
-          await tx
-            .update(s.hiringCandidates)
-            .set({
-              stage: "review",
-              reviewNote: historical
-                ? "Historical contact requires review before a new invitation."
-                : result.issues.join(" ") ||
-                  "Pre-screen assessment needs review.",
-            })
-            .where(eq(s.hiringCandidates.id, candidate.id));
+          if (check.kind === "hold") await toReview(check.reason);
+        }
       } else if (
-        profileGate(
+        fresh.stage === "new" &&
+        !profileGate(
           {
             ...fresh,
             profileAssessment: assessment as Assessment,
             universityAssessment: prestige,
           },
           current.config,
-        ).eligible &&
-        fresh.stage === "new"
-      ) {
-        await inviteToPreScreen(tx, fresh);
-        await tx
-          .update(s.hiringCandidates)
-          .set({
-            stage: "pre_screen",
-            subjects: assessment!.subjects
-              .filter((s) => s.relevant)
-              .map((s) => s.subject),
-            revision: fresh.revision + 1,
-            updatedAt: new Date(),
-          })
-          .where(eq(s.hiringCandidates.id, candidate.id));
-      } else if (phase === "profile" && fresh.stage === "new")
-        await tx
-          .update(s.hiringCandidates)
-          .set({
-            stage: "review",
-            reviewNote: "Profile evidence needs review; no rejection was sent.",
-          })
-          .where(eq(s.hiringCandidates.id, candidate.id));
+        ).eligible
+      )
+        await toReview("Profile evidence needs review; no rejection was sent.");
       if (oldHash !== hash)
         await audit(
           tx,
@@ -295,11 +232,19 @@ export async function assessCandidates(
           candidate.id,
           {
             sourceHash: hash,
-            score: profileScore(
-              assessment!,
-              current.config.profileWeights,
-              prestige.fraction,
-            ),
+            score:
+              phase === "pre"
+                ? preScreenPoints(
+                    assessment!,
+                    current.config.preScreenWeights,
+                    prestige.fraction,
+                    availabilityFraction(candidate.preScreen!),
+                  ).total
+                : profileScore(
+                    assessment!,
+                    current.config.profileWeights,
+                    prestige.fraction,
+                  ),
             university: prestige,
           },
         );
@@ -705,6 +650,9 @@ export async function deliverOutbox(
   return sent;
 }
 
+// A brief retry makes one assessment up to 4 calls at 180 seconds, and `max` counts assessments, so 10 could hold the
+// cycle for two hours. With this budget a cycle stops starting them after 10 minutes, and one already running can add 12.
+const ASSESS_BUDGET_MS = 10 * 60000;
 export async function runHiringCycle(db: Database, assess: Assess) {
   const { config } = await settings(db);
   if (!config.enabled || !runtimeWritesAllowed())
@@ -713,13 +661,25 @@ export async function runHiringCycle(db: Database, assess: Assess) {
     );
   try {
     const imported = await syncTracker(db, config);
-    const calls = await assessCandidates(db, config, assess);
+    const calls = await assessCandidates(
+      db,
+      config,
+      assess,
+      10,
+      false,
+      undefined,
+      false,
+      undefined,
+      Date.now() + ASSESS_BUDGET_MS,
+    );
+    const followUps = await runFollowUps(db);
+    const released = await releaseQueues(db);
     await mirrorTracker(db, config);
     await db
       .update(s.hiringSettings)
       .set({ workerAt: new Date(), workerError: null })
       .where(eq(s.hiringSettings.id, "default"));
-    return { ...imported, calls };
+    return { ...imported, calls, ...followUps, ...released };
   } catch (error) {
     await db
       .update(s.hiringSettings)
