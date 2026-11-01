@@ -1,5 +1,6 @@
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { z } from "zod";
+import { weekSchema } from "@/lib/tutor-attendance/model";
 import { UNIVERSITY_CATALOG, THAI_UNIVERSITIES } from "./university-catalog";
 
 export const ZONE = "Asia/Bangkok";
@@ -69,6 +70,7 @@ export const subjectSchema = z.enum(SUBJECTS);
 export type Subject = z.infer<typeof subjectSchema>;
 export const kindSchema = z.enum(["paper", "mock"]);
 export type InterviewKind = z.infer<typeof kindSchema>;
+export const tokenKindSchema = z.enum(["paper", "mock", "visit"]);
 export const stageSchema = z.enum([
   "new",
   "review",
@@ -77,6 +79,10 @@ export const stageSchema = z.enum([
   "paper_booked",
   "paper_passed",
   "mock_booked",
+  "onsite_invited",
+  "onsite_booked",
+  "no_reply",
+  "no_booking",
   "stopped",
 ]);
 export type Stage = z.infer<typeof stageSchema>;
@@ -125,6 +131,39 @@ export const DEFAULT_WEIGHTS = {
   english: 20,
   prestige: 20,
 };
+export const preScreenWeightsSchema = z
+  .object({
+    degree: z.number().int().min(0).max(100),
+    subject: z.number().int().min(0).max(100),
+    curriculum: z.number().int().min(0).max(100),
+    teaching: z.number().int().min(0).max(100),
+    english: z.number().int().min(0).max(100),
+    prestige: z.number().int().min(0).max(100),
+    written: z.number().int().min(0).max(100),
+    availability: z.number().int().min(0).max(100),
+  })
+  .strict()
+  .refine(
+    (v) => Object.values(v).reduce((n, w) => n + w, 0) === 100,
+    "Pre-screen weights must total 100.",
+  );
+export const DEFAULT_PRE_SCREEN_WEIGHTS = {
+  degree: 10,
+  subject: 10,
+  curriculum: 15,
+  teaching: 15,
+  english: 15,
+  prestige: 10,
+  written: 15,
+  availability: 10,
+};
+const limit = z.number().int().min(0).max(1000);
+const followUpSchema = z
+  .object({
+    remindDays: z.number().int().min(1).max(60),
+    expireDays: z.number().int().min(1).max(120),
+  })
+  .strict();
 export const configSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -161,6 +200,7 @@ export const configSchema = z
             canonicalKey: z.string().min(1).max(200),
             subjects: z.array(subjectSchema).min(1),
             email: emailSchema,
+            fallbackWeek: weekSchema.optional(),
           })
           .strict(),
       )
@@ -192,6 +232,30 @@ export const configSchema = z
           lastArrivalMinute: 959,
         })),
       ),
+    preScreenLimits: z
+      .object({ perDay: limit, perWeek: limit, waiting: limit, perSubject: limit })
+      .strict()
+      .default({ perDay: 5, perWeek: 15, waiting: 15, perSubject: 3 }),
+    onsiteLimits: z
+      .object({ perWeek: limit, unbooked: limit, perHeadPerWeek: limit, perSubject: limit })
+      .strict()
+      .default({ perWeek: 3, unbooked: 2, perHeadPerWeek: 2, perSubject: 2 }),
+    preScreenFollowUp: followUpSchema.default({ remindDays: 3, expireDays: 7 }),
+    onsiteFollowUp: followUpSchema.default({ remindDays: 3, expireDays: 7 }),
+    preScreenThreshold: z.number().int().min(0).max(100).nullable().default(null),
+    preScreenWeights: preScreenWeightsSchema.default(DEFAULT_PRE_SCREEN_WEIGHTS),
+    acceptedWorkRights: z
+      .array(z.string().trim().min(1).max(300))
+      .max(50)
+      .default(["I have permanent work rights with no restrictions"]),
+    seenWorkRights: z.array(z.string().trim().min(1).max(300)).max(200).default([]),
+    subjectPriority: z
+      .array(z.object({ subject: subjectSchema, hiring: z.boolean() }).strict())
+      .max(SUBJECTS.length)
+      .default(SUBJECTS.map((subject) => ({ subject, hiring: true }))),
+    visitStartMinute: z.number().int().min(0).max(1439).default(600),
+    visitEndMinute: z.number().int().min(1).max(1440).default(960),
+    resumeRetentionMonths: z.number().int().min(1).max(120).default(12),
     location: z
       .string()
       .trim()

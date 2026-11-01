@@ -9,6 +9,10 @@ export const STAGE_LABELS: Record<Stage, string> = {
   paper_booked: "Paper booked",
   paper_passed: "Paper passed",
   mock_booked: "Mock booked",
+  onsite_invited: "Onsite invited",
+  onsite_booked: "Onsite booked",
+  no_reply: "No reply",
+  no_booking: "No booking",
   stopped: "Stopped",
 };
 export const ACTIVE_STAGES: Stage[] = [
@@ -19,6 +23,8 @@ export const ACTIVE_STAGES: Stage[] = [
   "paper_booked",
   "paper_passed",
   "mock_booked",
+  "onsite_invited",
+  "onsite_booked",
 ];
 export const CRITERIA = ["degree", "subject", "curriculum", "teaching", "english"] as const;
 export const RESULTS = ["met", "partial", "not_met", "unknown"] as const;

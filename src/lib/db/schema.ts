@@ -57,6 +57,16 @@ export const hiringCandidates = pgTable(
       .notNull()
       .default(false),
     workRightsConfirmed: boolean("work_rights_confirmed"),
+    workRightsAnswer: text("work_rights_answer"),
+    visitSubject: text("visit_subject").$type<Subject>(),
+    preScreenRepliedAt: timestamp("pre_screen_replied_at", { withTimezone: true }),
+    preScreenResubmitted: boolean("pre_screen_resubmitted").notNull().default(false),
+    resumePath: text("resume_path"),
+    resumeName: text("resume_name"),
+    resumeType: text("resume_type"),
+    resumeSha256: text("resume_sha256"),
+    resumeSize: integer("resume_size"),
+    resumeStoredAt: timestamp("resume_stored_at", { withTimezone: true }),
     profileText: text("profile_text").notNull().default(""),
     profileHash: text("profile_hash"),
     profileAssessment: jsonb("profile_assessment").$type<Assessment>(),
@@ -105,9 +115,13 @@ export const hiringBookings = pgTable(
     startTime: timestamp("start_time", { withTimezone: true }).notNull(),
     endTime: timestamp("end_time", { withTimezone: true }).notNull(),
     status: text("status")
-      .$type<"confirmed" | "cancelled">()
+      .$type<"confirmed" | "cancelled" | "no_show">()
       .notNull()
       .default("confirmed"),
+    visitId: uuid("visit_id"),
+    rescheduleOf: uuid("reschedule_of").references(
+      (): AnyPgColumn => hiringBookings.id,
+    ),
     evidence: jsonb("evidence").$type<Record<string, unknown>>().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -115,6 +129,7 @@ export const hiringBookings = pgTable(
   },
   (t) => [
     index("hiring_booking_time").on(t.interviewerKey, t.startTime),
+    index("hiring_booking_visit").on(t.visitId),
     check("hiring_booking_time_order", sql`${t.endTime}>${t.startTime}`),
   ],
 );

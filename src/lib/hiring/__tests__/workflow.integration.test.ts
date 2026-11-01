@@ -139,6 +139,41 @@ const input = {
   teachingCommitmentConfirmed: true,
 };
 describe("hiring workflow persistence", () => {
+  it("accepts the new stages and refuses an unknown stage", async () => {
+    for (const stage of ["onsite_invited", "onsite_booked", "no_reply", "no_booking"] as const) {
+      await db.insert(s.hiringCandidates).values({ name: stage, email: `${stage}@example.com`, stage });
+    }
+    await expect(
+      db.insert(s.hiringCandidates).values({ name: "Bad", email: "bad@example.com", stage: "nope" as never }),
+    ).rejects.toThrow();
+  });
+  it("accepts a mock outside 10:00-16:00 and refuses one over an hour; a paper then a mock back to back do not clash", async () => {
+    const [c] = await db.insert(s.hiringCandidates).values({ name: "Visit", email: "visit@example.com" }).returning();
+    const row = (kind: "paper" | "mock", start: string, end: string, status: "confirmed" | "no_show" = "confirmed") => ({
+      candidateId: c.id,
+      kind,
+      subjects: ["Mathematics"] as never,
+      interviewerKey: kind === "mock" ? "Peat" : null,
+      interviewerEmail: kind === "mock" ? "peat@example.com" : null,
+      lineGroupId: kind === "mock" ? "group" : null,
+      calendarOwner: "owner@example.com",
+      startTime: new Date(start),
+      endTime: new Date(end),
+      status,
+      evidence: {},
+    });
+    // Saturday 08:00-09:00 Bangkok
+    await db.insert(s.hiringBookings).values(row("mock", "2026-11-14T01:00:00Z", "2026-11-14T02:00:00Z", "no_show"));
+    await expect(
+      db.insert(s.hiringBookings).values(row("mock", "2026-11-14T01:00:00Z", "2026-11-14T03:00:00Z")),
+    ).rejects.toThrow();
+    // Paper 10:00-12:00 then mock 12:00-13:00 Bangkok, same candidate
+    await db.insert(s.hiringBookings).values(row("paper", "2026-11-16T03:00:00Z", "2026-11-16T05:00:00Z"));
+    await db.insert(s.hiringBookings).values(row("mock", "2026-11-16T05:00:00Z", "2026-11-16T06:00:00Z"));
+    // A no_show frees the slot: the same candidate can take the paper hour again
+    await db.update(s.hiringBookings).set({ status: "no_show" }).where(eq(s.hiringBookings.kind, "paper"));
+    await db.insert(s.hiringBookings).values(row("paper", "2026-11-16T03:00:00Z", "2026-11-16T05:00:00Z"));
+  });
   it("does not return outbox payload from dashboard", async () => {
     const [row] = await db
       .insert(s.hiringCandidates)

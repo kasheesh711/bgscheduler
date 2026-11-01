@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { Stage } from "../model";
 import { parseFormTimestamp, preScreenNote, preScreenStatus } from "../status";
 
 const id = "c1";
@@ -12,7 +13,7 @@ const job = (key: string, status = "sent", sentAt: Date | null = sent) => ({
 });
 const candidate = (extra: Record<string, unknown> = {}) => ({
   id,
-  stage: "pre_screen" as string,
+  stage: "pre_screen" as Stage,
   previouslyContacted: false,
   preScreen: null as { submittedAt: string } | null,
   ...extra,

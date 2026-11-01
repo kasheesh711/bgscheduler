@@ -1,5 +1,5 @@
 import { formatInTimeZone } from "date-fns-tz";
-import { ZONE } from "./model";
+import { ZONE, type Stage } from "./model";
 
 export type PreScreenState = "Not sent" | "Queued" | "Sent" | "Reminded" | "Replied" | "No reply" | "Earlier contact";
 export type PreScreenResult = {
@@ -21,8 +21,7 @@ const asDate = (value: Date | string | null | undefined) => (value ? new Date(va
 export function preScreenStatus(
   candidate: {
     id: string;
-    // A string compare, because the no_reply stage is not in the Stage type yet.
-    stage: string;
+    stage: Stage;
     previouslyContacted: boolean;
     preScreen: { submittedAt: string } | null;
   },

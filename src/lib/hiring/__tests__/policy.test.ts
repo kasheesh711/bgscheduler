@@ -5,6 +5,8 @@ import {
   configSchema,
   DEFAULT_WEIGHTS,
   parseSeekFolderCounts,
+  stageSchema,
+  tokenKindSchema,
   subscriptionAuthSchema,
   type PreScreen,
 } from "../model";
@@ -135,6 +137,29 @@ describe("hiring decision boundaries", () => {
         profileWeights: { ...DEFAULT_WEIGHTS, english: 19 },
       }).success,
     ).toBe(false);
+  });
+  it("parses a stored config without the new keys", () => {
+    const c = configSchema.parse({});
+    expect(c.onsiteLimits).toEqual({ perWeek: 3, unbooked: 2, perHeadPerWeek: 2, perSubject: 2 });
+    expect(c.preScreenLimits).toEqual({ perDay: 5, perWeek: 15, waiting: 15, perSubject: 3 });
+    expect(c.preScreenThreshold).toBeNull();
+    expect(c.acceptedWorkRights).toEqual(["I have permanent work rights with no restrictions"]);
+    expect(c.seenWorkRights).toEqual([]);
+    expect(c.subjectPriority[0]).toEqual({ subject: "Mathematics", hiring: true });
+    expect([c.visitStartMinute, c.visitEndMinute, c.resumeRetentionMonths]).toEqual([600, 960, 12]);
+    expect(c.preScreenFollowUp).toEqual({ remindDays: 3, expireDays: 7 });
+    expect(c.onsiteFollowUp).toEqual({ remindDays: 3, expireDays: 7 });
+  });
+  it("refuses pre-screen weights that do not total 100", () => {
+    const w = configSchema.parse({}).preScreenWeights;
+    expect(Object.values(w).reduce((n, v) => n + v, 0)).toBe(100);
+    expect(configSchema.safeParse({ preScreenWeights: { ...w, degree: 11 } }).success).toBe(false);
+    expect(configSchema.safeParse({ preScreenThreshold: 101 }).success).toBe(false);
+  });
+  it("knows the visit stages and token kind", () => {
+    for (const s of ["onsite_invited", "onsite_booked", "no_reply", "no_booking"]) expect(stageSchema.safeParse(s).success).toBe(true);
+    expect(stageSchema.safeParse("nope").success).toBe(false);
+    expect(tokenKindSchema.parse("visit")).toBe("visit");
   });
   it("keeps the short display lines out of the model's JSON schema, and stored rows without them still parse", () => {
     expect(JSON.stringify(z.toJSONSchema(assessmentSchema, { target: "draft-07" }))).not.toMatch(/brief/i);
