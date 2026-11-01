@@ -4,7 +4,7 @@ import { requireHiringAdmin } from "@/lib/hiring/access";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
 import { configSchema, localDate, subjectSchema } from "@/lib/hiring/model";
 import { headWeek } from "@/lib/hiring/head-schedule";
-import { candidateById, dashboard, reviewCandidate, saveSettings, settings } from "@/lib/hiring/service";
+import { candidateById, dashboard, reviewCandidate, saveHeadDays, saveSettings, settings } from "@/lib/hiring/service";
 import { deliverBookingMessages } from "@/lib/hiring/worker";
 import { getDb } from "@/lib/db";
 import { googleConnectionStatus } from "@/lib/hiring/google";
@@ -21,6 +21,15 @@ const command = z.discriminatedUnion("action", [
       action: z.literal("settings"),
       revision: z.number().int().nonnegative(),
       config: configSchema,
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("head_days"),
+      key: z.string().trim().min(1).max(200),
+      // Monday to Friday.
+      days: z.array(z.boolean()).length(5),
+      revision: z.number().int().nonnegative(),
     })
     .strict(),
   z
@@ -74,12 +83,16 @@ export async function POST(request: Request) {
     const actor = await requireHiringAdmin();
     requireSameOrigin(request);
     const input = command.parse(await request.json());
-    if (input.action === "settings")
+    if (input.action === "settings") {
       await saveSettings(input.config, input.revision, actor);
-    else {
-      await reviewCandidate(input.id, input, actor);
-      after(() => deliverBookingMessages());
+      return NextResponse.json({ ok: true });
     }
+    if (input.action === "head_days") {
+      const saved = await saveHeadDays(input.key, input.days, input.revision, actor);
+      return NextResponse.json({ ok: true, ...saved });
+    }
+    await reviewCandidate(input.id, input, actor);
+    after(() => deliverBookingMessages());
     return NextResponse.json({ ok: true });
   } catch (error) {
     return hiringError(error);

@@ -20,6 +20,7 @@ import {
   bookVisit,
   dashboard,
   reviewCandidate,
+  saveHeadDays,
   saveSettings,
   settings,
   sourceHash,
@@ -1779,5 +1780,226 @@ describe("hiring workflow persistence", () => {
     await assessCandidates(db, saved.config, assess);
     await releaseQueues(db);
     expect(await db.select().from(s.hiringOutbox)).toHaveLength(1);
+  });
+
+  describe("rules and head days", () => {
+    const win = { start: "10:00", end: "16:00" };
+    const early = { start: "09:00", end: "12:00" };
+    const peat = { canonicalKey: "Peat", email: "peat@example.com", subjects: ["Mathematics" as const, "Physics" as const] };
+    const gift = { canonicalKey: "Gift", email: "gift@example.com", subjects: ["Biology" as const] };
+    const ADMIN = "attendance.admin@example.com";
+    const NOT_ADMIN = "hiring.only@example.com";
+    const ALL = [true, true, true, true, true];
+    const setHeads = (extra: Record<string, unknown> = {}) =>
+      db
+        .update(s.hiringSettings)
+        .set({ config: { ...config, interviewers: [peat, gift], ...extra }, revision: 4 })
+        .where(eq(s.hiringSettings.id, "default"));
+    const hiringRevision = async () => (await db.select().from(s.hiringSettings))[0].revision;
+    const schedules = () => db.select().from(s.tutorAttendanceSchedules);
+    const attendanceAudit = () => db.select().from(s.tutorAttendanceAudit);
+    async function enrol(active = true) {
+      await db.insert(s.tutorAttendanceEnrollments).values({
+        canonicalKey: "Peat",
+        loginEmail: "peat@example.com",
+        startDate: "2026-09-01",
+        active,
+      });
+      await db.insert(s.tutorAttendanceSchedules).values({
+        canonicalKey: "Peat",
+        effectiveFrom: "2026-09-01",
+        week: [early, early, win, null, win, win, null],
+        revision: 1,
+      });
+      await db.insert(s.tutorAttendanceConfig).values({ id: "office", networks: [], revision: 1 });
+    }
+    beforeEach(async () => {
+      await db.execute(
+        sql`truncate tutor_attendance_enrollments,tutor_attendance_config,tutor_attendance_audit cascade`,
+      );
+      await db.delete(s.adminUsers).where(sql`email in (${ADMIN}, ${NOT_ADMIN})`);
+      await db.insert(s.adminUsers).values([
+        { email: ADMIN, allowedPages: null },
+        { email: NOT_ADMIN, allowedPages: ["/hiring"] },
+      ]);
+      await setHeads();
+    });
+    afterEach(async () => {
+      await db.delete(s.adminUsers).where(sql`email in (${ADMIN}, ${NOT_ADMIN})`);
+    });
+
+    it("saves an enrolled head's days as a new Tutor Attendance version from tomorrow, keeping saved hours", async () => {
+      await enrol();
+      const result = await saveHeadDays("Peat", [true, false, true, false, true], 4, ADMIN, db);
+      // Hiring settings are not touched.
+      expect(result.revision).toBe(4);
+      expect(await hiringRevision()).toBe(4);
+      const rows = (await schedules()).sort((a, b) => a.revision - b.revision);
+      expect(rows).toHaveLength(2);
+      // Now is Saturday 31 October in Bangkok, so the version starts Sunday 1 November.
+      expect(rows[1]).toMatchObject({ canonicalKey: "Peat", effectiveFrom: "2026-11-01", revision: 2 });
+      // Index 0 is Sunday and is not touched. Monday keeps 09:00 to 12:00, Wednesday gets the 10:00 to 16:00 default, Friday keeps its hours, Tuesday and Thursday are off.
+      expect(rows[1].week).toEqual([early, early, null, win, null, win, null]);
+      // The old version is not rewritten.
+      expect(rows[0].week).toEqual([early, early, win, null, win, win, null]);
+      const audit = await attendanceAudit();
+      expect(audit).toHaveLength(1);
+      expect(audit[0]).toMatchObject({ actor: ADMIN, action: "settings_schedule", canonicalKey: "Peat" });
+      expect(JSON.stringify(audit[0].data)).toContain("Changed in Hiring");
+      // The head was not given a fallback week.
+      expect(((await settings(db)).config.interviewers[0] as { fallbackWeek?: unknown }).fallbackWeek).toBeUndefined();
+      const hiringAudit = await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "head-days"));
+      expect(hiringAudit).toHaveLength(1);
+      expect(hiringAudit[0]).toMatchObject({ actor: ADMIN });
+      // A schedule starting tomorrow does not change today's office hours.
+      const view = (await dashboard(db)).heads;
+      expect(view.Peat).toMatchObject({ state: "enrolled", from: "2026-11-01" });
+    });
+
+    it("saves Gift's days to the fallback week and does not enrol Gift", async () => {
+      await enrol();
+      const result = await saveHeadDays("Gift", ALL, 4, ADMIN, db);
+      expect(result.revision).toBe(5);
+      expect(await hiringRevision()).toBe(5);
+      const saved = (await settings(db)).config.interviewers.find((i) => i.canonicalKey === "Gift")!;
+      expect(saved.fallbackWeek).toEqual([null, win, win, win, win, win, null]);
+      // No enrolment, no attendance schedule or audit row for Gift, and Peat's rows are untouched.
+      expect(await db.select().from(s.tutorAttendanceEnrollments)).toHaveLength(1);
+      expect((await schedules()).every((r) => r.canonicalKey === "Peat")).toBe(true);
+      expect(await schedules()).toHaveLength(1);
+      expect(await attendanceAudit()).toHaveLength(0);
+      expect((await db.select().from(s.tutorAttendanceConfig))[0].revision).toBe(1);
+      // A user without attendance rights can still change a fallback head.
+      await saveHeadDays("Gift", [true, false, false, false, false], 5, NOT_ADMIN, db);
+      const again = (await settings(db)).config.interviewers.find((i) => i.canonicalKey === "Gift")!;
+      expect(again.fallbackWeek).toEqual([null, win, null, null, null, null, null]);
+      expect((await dashboard(db)).heads.Gift).toMatchObject({ state: "fallback", from: null });
+    });
+
+    it("refuses attendance writes for a user without attendance admin, with a message, and writes nothing", async () => {
+      await enrol();
+      for (const actor of [NOT_ADMIN, "stranger@example.com"]) {
+        const error = await saveHeadDays("Peat", ALL, 4, actor, db).catch((e) => e);
+        expect(error).toBeInstanceOf(HiringError);
+        expect(error.status).toBe(403);
+        expect(error.message).toMatch(/Tutor Attendance admin/);
+      }
+      // Peat himself is enrolled but is not an administrator.
+      await db.insert(s.tutorContacts).values({ canonicalKey: "Peat", displayName: "Peat" }).onConflictDoNothing();
+      const self = await saveHeadDays("Peat", ALL, 4, "peat@example.com", db).catch((e) => e);
+      expect(self).toBeInstanceOf(HiringError);
+      expect(self.status).toBe(403);
+      expect(await schedules()).toHaveLength(1);
+      expect(await attendanceAudit()).toHaveLength(0);
+      expect(await hiringRevision()).toBe(4);
+    });
+
+    it("keeps the revision guard on both paths, and refuses a bad request", async () => {
+      await enrol();
+      for (const key of ["Peat", "Gift"]) {
+        const error = await saveHeadDays(key, ALL, 3, ADMIN, db).catch((e) => e);
+        expect(error).toBeInstanceOf(HiringError);
+        expect(error.status).toBe(409);
+      }
+      expect((await saveHeadDays("Nobody", ALL, 4, ADMIN, db).catch((e) => e)).status).toBe(404);
+      expect((await saveHeadDays("Gift", [true, true], 4, ADMIN, db).catch((e) => e)).status).toBe(400);
+      expect(await schedules()).toHaveLength(1);
+      expect(await hiringRevision()).toBe(4);
+    });
+
+    it("will not write a fallback week for a head whose attendance enrolment has ended", async () => {
+      await enrol(false);
+      const error = await saveHeadDays("Peat", ALL, 4, ADMIN, db).catch((e) => e);
+      expect(error).toBeInstanceOf(HiringError);
+      expect(error.status).toBe(409);
+      expect(error.message).toMatch(/enrollment has ended/);
+      expect(await hiringRevision()).toBe(4);
+      expect((await dashboard(db)).heads.Peat.state).toBe("ended");
+    });
+
+    it("edits each limit and saves it, with the stale-save guard", async () => {
+      const edited = configSchema.parse({
+        ...config,
+        enabled: false,
+        deliveryEnabled: false,
+        interviewers: [peat, gift],
+        preScreenLimits: { perDay: 6, perWeek: 16, waiting: 17, perSubject: 4 },
+        onsiteLimits: { perWeek: 5, unbooked: 3, perHeadPerWeek: 4, perSubject: 3 },
+        preScreenFollowUp: { remindDays: 2, expireDays: 8 },
+        onsiteFollowUp: { remindDays: 4, expireDays: 30 },
+        preScreenThreshold: 55,
+        visitStartMinute: 570,
+        visitEndMinute: 990,
+        resumeRetentionMonths: 6,
+      });
+      await saveSettings(edited, 4, ADMIN, db);
+      const saved = (await settings(db)).config;
+      expect(saved).toMatchObject({
+        preScreenLimits: edited.preScreenLimits,
+        onsiteLimits: edited.onsiteLimits,
+        preScreenFollowUp: edited.preScreenFollowUp,
+        onsiteFollowUp: edited.onsiteFollowUp,
+        preScreenThreshold: 55,
+        visitStartMinute: 570,
+        visitEndMinute: 990,
+        resumeRetentionMonths: 6,
+      });
+      expect(await hiringRevision()).toBe(5);
+      // A concurrent stale save gets a 409, as before.
+      const stale = await saveSettings(edited, 4, ADMIN, db).catch((e) => e);
+      expect(stale).toBeInstanceOf(HiringError);
+      expect(stale.status).toBe(409);
+      // A rule the server enforces is refused before anything is written.
+      await expect(
+        saveSettings({ ...edited, onsiteFollowUp: { remindDays: 4, expireDays: 31 } }, 5, ADMIN, db),
+      ).rejects.toThrow(/30 days/);
+      expect(await hiringRevision()).toBe(5);
+    });
+
+    it("loads a stored config that breaks a new rule, reports it, and lets a save repair it", async () => {
+      await db
+        .update(s.hiringSettings)
+        .set({ config: { ...config, enabled: false, deliveryEnabled: false, interviewers: [peat], visitStartMinute: 900, visitEndMinute: 600 } })
+        .where(eq(s.hiringSettings.id, "default"));
+      // Reads still work, so the dashboard and the worker's settings read do not break.
+      const loaded = await settings(db);
+      expect(loaded.config.visitEndMinute).toBe(600);
+      const data = await dashboard(db);
+      expect(data.configProblems).toEqual(["Visits must end after they start."]);
+      await expect(saveSettings(loaded.config, 4, ADMIN, db)).rejects.toThrow(/Visits must end after they start/);
+      await saveSettings({ ...loaded.config, visitEndMinute: 960 }, 4, ADMIN, db);
+      expect((await dashboard(db)).configProblems).toEqual([]);
+    });
+
+    it("returns limit usage, queue holds and week mock counts for the meters and the table", async () => {
+      const [held] = await db
+        .insert(s.hiringCandidates)
+        .values({
+          name: "Held",
+          email: "held@example.com",
+          stage: "new",
+          profileText: "degree subject curriculum teaching english Mathematics",
+          profileAssessment: {
+            criteria: ["degree", "subject", "curriculum", "teaching", "english"].map((id) => ({ id, result: "met", evidence: id, reason: "Source" })),
+            subjects: [{ subject: "Mathematics", evidence: "Mathematics", relevant: true }],
+            universities: [],
+            summary: "Evidence",
+          } as never,
+          workRightsAnswer: ACCEPTED,
+        })
+        .returning();
+      const [waiting] = await db
+        .insert(s.hiringCandidates)
+        .values({ name: "Waiting", email: "w@example.com", stage: "new", workRightsAnswer: ACCEPTED })
+        .returning();
+      await setHeads({ preScreenLimits: { perDay: 0, perWeek: 15, waiting: 15, perSubject: 3 } });
+      const data = await dashboard(db);
+      expect(data.usage.preScreen).toMatchObject({ perDay: 0, perWeek: 0, waiting: 0 });
+      expect(data.usage.onsite).toMatchObject({ perWeek: 0, unbooked: 0 });
+      expect(data.holds[held.id]).toEqual({ funnel: "pre_screen", state: "held", position: 1, limit: "perDay", subject: "Mathematics" });
+      // A candidate with no profile score is held by the gate, which the screen explains itself.
+      expect(data.holds[waiting.id]).toBeUndefined();
+      expect(data.headMocks).toEqual({});
+    });
   });
 });

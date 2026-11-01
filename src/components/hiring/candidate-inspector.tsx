@@ -130,6 +130,7 @@ function AssessmentBlock({
 export function CandidateInspector({
   candidate,
   extras,
+  hold,
   seekJobId,
   weights,
   preWeights = DEFAULT_PRE_SCREEN_WEIGHTS,
@@ -141,6 +142,8 @@ export function CandidateInspector({
 }: {
   candidate: HiringCandidate;
   extras?: CandidateExtras;
+  /** Queue place and limit, or the profile gate reasons. */
+  hold?: { short: string; long: string[] } | null;
   seekJobId: string;
   weights: HiringConfig["profileWeights"];
   preWeights?: HiringConfig["preScreenWeights"];
@@ -270,6 +273,16 @@ export function CandidateInspector({
             <dd>{candidate.paperPassedSubjects.join(", ") || "None"}</dd>
           </div>
         </dl>
+        {hold && (
+          <section className={css.inspectorSection} aria-label="Why this is waiting">
+            <h3 className={css.inspectorHeading}>Waiting to send</h3>
+            <ul className={css.holdList}>
+              {hold.long.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </section>
+        )}
         {(candidate.profileAssessment || candidate.preScreenAssessment) && (
           <CandidatePentagon profile={candidate.profileAssessment} pre={candidate.preScreenAssessment} />
         )}

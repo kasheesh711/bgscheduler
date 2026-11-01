@@ -97,3 +97,74 @@ export function releaseQueue(
   }
   return { release, held };
 }
+
+/** Where one candidate stands in a queue after `releaseQueue`: next to send, or held by the named limit. */
+export type QueueHold = {
+  funnel: Funnel;
+  state: "next" | "held";
+  /** Place among the held rows of that queue. 0 when the row is next to send. */
+  position: number;
+  limit: LimitName | null;
+  subject: Subject;
+};
+
+export type Meter = { label: string; used: number; max: number; pct: number; full: boolean };
+const meter = (label: string, used: number, max: number): Meter => ({
+  label,
+  used,
+  max,
+  // A limit of 0 is closed, so it reads as full.
+  pct: max ? Math.min(100, Math.round((used / max) * 100)) : 100,
+  full: used >= max,
+});
+/** Subjects that hold a place, in the order Kevin ranked them. */
+const subjectMeters = (bySubject: LimitUsage["bySubject"], max: number, config: HiringConfig) => {
+  const order = config.subjectPriority.map((p) => p.subject);
+  return (Object.keys(bySubject) as Subject[])
+    .filter((subject) => (bySubject[subject] ?? 0) > 0)
+    .sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99) || a.localeCompare(b))
+    .map((subject) => meter(`${subject} open`, bySubject[subject]!, max));
+};
+
+export function preScreenMeters(usage: LimitUsage, config: HiringConfig): Meter[] {
+  const limits = config.preScreenLimits;
+  return [
+    meter("Sent today", usage.perDay, limits.perDay),
+    meter("Sent this week", usage.perWeek, limits.perWeek),
+    meter("Waiting for reply", usage.waiting, limits.waiting),
+    ...subjectMeters(usage.bySubject, limits.perSubject, config),
+  ];
+}
+
+export function onsiteMeters(
+  usage: LimitUsage,
+  headMocks: Record<string, number>,
+  config: HiringConfig,
+  names: Record<string, string> = {},
+): Meter[] {
+  const limits = config.onsiteLimits;
+  return [
+    meter("Invited this week", usage.perWeek, limits.perWeek),
+    meter("Not booked", usage.unbooked, limits.unbooked),
+    ...config.interviewers.map((head) =>
+      meter(`${names[head.canonicalKey] ?? head.canonicalKey} this week`, headMocks[head.canonicalKey] ?? 0, limits.perHeadPerWeek),
+    ),
+    ...subjectMeters(usage.bySubject, limits.perSubject, config),
+  ];
+}
+
+/** Confirmed mocks per head in the Bangkok week that holds `now`. Old-flow and visit mocks both use the head's hour. */
+export function headWeekMocks(
+  bookings: { kind: string; status: string; interviewerKey: string | null; startTime: Date }[],
+  now: Date,
+): Record<string, number> {
+  const start = bangkokWeekStart(now).getTime();
+  const end = start + 7 * 86400000;
+  const counts: Record<string, number> = {};
+  for (const b of bookings) {
+    const at = b.startTime.getTime();
+    if (b.kind === "mock" && b.status === "confirmed" && b.interviewerKey && at >= start && at < end)
+      counts[b.interviewerKey] = (counts[b.interviewerKey] ?? 0) + 1;
+  }
+  return counts;
+}

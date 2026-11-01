@@ -1,5 +1,7 @@
 import { formatInTimeZone } from "date-fns-tz";
-import { ZONE, type Stage } from "./model";
+import { profileGate } from "./insights";
+import type { LimitName, QueueHold } from "./limits";
+import { ZONE, type HiringConfig, type Stage } from "./model";
 
 export type PreScreenState = "Not sent" | "Queued" | "Sent" | "Reminded" | "Replied" | "No reply" | "Earlier contact";
 export type PreScreenResult = {
@@ -126,3 +128,84 @@ export function candidateExtras(
 
 export const visitText = (visit: NonNullable<CandidateExtras["visit"]>) =>
   `${visit.visitId ? "Visit" : visit.kind === "paper" ? "Paper" : "Mock"} · ${when(new Date(visit.startTime), true)}`;
+
+const LIMIT_WORDS: Record<LimitName, string> = {
+  perDay: "daily limit",
+  perWeek: "weekly limit",
+  waiting: "waiting limit",
+  unbooked: "not-booked limit",
+  perSubject: "subject limit",
+};
+function limitText(hold: QueueHold, config: HiringConfig) {
+  const limit = hold.limit!;
+  const max = (hold.funnel === "pre_screen" ? config.preScreenLimits : config.onsiteLimits)[limit as "perWeek"];
+  // The subject limit names its subject, so the cell tells which of the 18 is full.
+  return { words: limit === "perSubject" ? `${hold.subject} limit` : LIMIT_WORDS[limit], max };
+}
+
+type HoldCandidate = Parameters<typeof profileGate>[0] & {
+  stage: Stage;
+  preScreen: unknown;
+  preScreenAssessment: unknown;
+};
+/**
+ * Why a candidate has not been sent anything yet, from data the dashboard already has. `short` fits a table cell,
+ * `long` is for the panel. A queue entry wins. Without one, a new candidate shows what the profile gate says,
+ * and a scored reply shows that no pass score is set. No Wise call, no model call.
+ */
+export function holdNote(
+  candidate: HoldCandidate,
+  hold: QueueHold | undefined,
+  config: HiringConfig,
+): { short: string; long: string[] } | null {
+  if (hold?.state === "next")
+    return {
+      short: "Next to send",
+      long: [
+        `Next to send in the ${hold.funnel === "pre_screen" ? "pre-screen" : "onsite"} queue.`,
+        "It goes in the next worker cycle, if Automation and Messages are on.",
+      ],
+    };
+  if (hold) {
+    const { words, max } = limitText(hold, config);
+    const prefix = hold.funnel === "pre_screen" ? "Queue" : "Onsite queue";
+    return {
+      short: `${prefix} ${hold.position} · ${words} ${max}`,
+      long: [
+        `Position ${hold.position} in the ${hold.funnel === "pre_screen" ? "pre-screen" : "onsite"} queue.`,
+        `Held by the ${words} (${max}). To send more, raise the number in Rules and setup.`,
+      ],
+    };
+  }
+  if (candidate.stage === "new" && !candidate.preScreen) {
+    const gate = profileGate(candidate, config);
+    if (gate.eligible) return null;
+    return {
+      short: gate.short[0] + (gate.short.length > 1 ? ` +${gate.short.length - 1}` : ""),
+      long: gate.reasons,
+    };
+  }
+  if (
+    candidate.preScreen &&
+    candidate.preScreenAssessment &&
+    ["pre_screen", "no_reply"].includes(candidate.stage) &&
+    config.preScreenThreshold === null
+  )
+    return {
+      short: "Needs a pass score",
+      long: ["No pass score is set, so no automatic onsite invitation can run. A click can still invite."],
+    };
+  return null;
+}
+
+/** The Mac worker does intake, scoring and new invitations. With automation on, an old run needs a visible warning. */
+export function workerWarning(enabled: boolean, workerAt: Date | string | null, now = new Date()) {
+  if (!enabled) return null;
+  const tail = " Intake, scoring and new invitations wait until it runs again. Booking links still work.";
+  if (!workerAt) return `Automation is on, but the worker has not run yet.${tail}`;
+  const minutes = Math.floor((now.getTime() - new Date(workerAt).getTime()) / 60000);
+  if (minutes <= 60) return null;
+  const hours = Math.floor(minutes / 60);
+  const ago = minutes < 120 ? `${minutes} minutes` : hours < 48 ? `${hours} hours` : `${Math.floor(hours / 24)} days`;
+  return `Automation is on, but the worker last ran ${ago} ago.${tail}`;
+}

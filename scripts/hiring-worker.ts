@@ -73,7 +73,12 @@ async function main() {
     do {
       try {
         const { config } = await settings(db);
-        configSchema.parse(config);
+        // A stored config that breaks a rule stops the worker with a message Kevin can act on. A save repairs it.
+        const rules = configSchema.safeParse(config);
+        if (!rules.success)
+          throw new Error(
+            `A saved rule has a problem: ${rules.error.issues[0]?.message ?? "invalid setting"} Fix it in Rules and setup.`,
+          );
         if (!config.enabled) throw new Error("Hiring is paused in Scheduling.");
         const bookingMessages = await requestDelivery({ mode: "bookings" });
         subscriptionAuthSchema.parse(

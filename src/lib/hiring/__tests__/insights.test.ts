@@ -160,3 +160,78 @@ describe("criterionValues", () => {
     expect(criterionValues(a)).toEqual([1, 0.5, 0, 0, 1]);
   });
 });
+
+describe("buildInsights with the visit stages", () => {
+  const now = new Date("2026-10-31T00:00:00Z");
+  const empty = { config, candidates: [], bookings: [], outbox: [] };
+  const stage = (result: ReturnType<typeof buildInsights>, name: Stage) => result.stages.find((s) => s.stage === name)!;
+  const people = [
+    candidate("a", "pre_screen"),
+    candidate("b", "onsite_invited"),
+    candidate("c", "onsite_booked"),
+    candidate("d", "paper_invited"),
+    candidate("e", "no_reply"),
+    candidate("f", "no_booking"),
+  ];
+
+  it("does not count an onsite candidate as having reached a paper step it never takes", () => {
+    const result = buildInsights({ ...empty, candidates: people }, now);
+    // Only the old-flow candidate is at or past paper invited.
+    expect(stage(result, "paper_invited")).toMatchObject({ at: 1, reached: 1 });
+    expect(stage(result, "paper_booked").reached).toBe(0);
+    expect(stage(result, "mock_booked").reached).toBe(0);
+  });
+
+  it("counts a candidate as having reached the onsite invitation when invited, booked or left with no booking", () => {
+    const result = buildInsights({ ...empty, candidates: people }, now);
+    expect(stage(result, "onsite_invited")).toMatchObject({ at: 1, reached: 3 });
+    expect(stage(result, "onsite_booked")).toMatchObject({ at: 1, reached: 1 });
+  });
+
+  it("counts a no reply or no booking candidate as past review, because the form or link went out", () => {
+    const result = buildInsights({ ...empty, candidates: people }, now);
+    expect(result.pastReview).toBe(6);
+    expect(stage(result, "pre_screen").reached).toBe(6);
+    expect(stage(result, "new").reached).toBe(6);
+  });
+
+  it("keeps no reply and no booking in active, and shows how many of the active are parked", () => {
+    const result = buildInsights({ ...empty, candidates: [...people, candidate("g", "stopped")] }, now);
+    expect(result.active).toBe(6);
+    expect(result.parked).toBe(2);
+    expect(result.stopped).toBe(1);
+    expect(result.byStage).toMatchObject({ no_reply: 1, no_booking: 1, onsite_invited: 1, stopped: 1 });
+  });
+
+  it("counts a visit once, not once for the exam and once for the mock", () => {
+    const row = (kind: "paper" | "mock", start: string, visitId: string | null, candidateId = "a") => ({
+      candidateId,
+      kind,
+      interviewerKey: kind === "mock" ? "Peat" : null,
+      status: "confirmed",
+      startTime: start,
+      visitId,
+    });
+    const result = buildInsights(
+      {
+        ...empty,
+        bookings: [
+          row("paper", "2026-11-02T03:00:00Z", "v1"),
+          row("mock", "2026-11-02T05:00:00Z", "v1"),
+          row("paper", "2026-11-03T03:00:00Z", "v2", "b"),
+          row("mock", "2026-11-03T05:00:00Z", "v2", "b"),
+          // Next week.
+          row("paper", "2026-12-03T03:00:00Z", "v3", "c"),
+          row("mock", "2026-12-03T05:00:00Z", "v3", "c"),
+          // Old flow: two separate appointments, as before.
+          row("paper", "2026-11-04T03:00:00Z", null, "d"),
+          row("mock", "2026-11-04T08:00:00Z", null, "d"),
+        ],
+      },
+      now,
+    );
+    expect(result.appointmentsThisWeek).toBe(4);
+    // The head is on the mock row only.
+    expect(result.upcomingByInterviewer.Peat).toBe(4);
+  });
+});

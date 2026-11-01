@@ -4,6 +4,9 @@ import {
   bangkokDayStart,
   bangkokWeekStart,
   blockingLimit,
+  headWeekMocks,
+  onsiteMeters,
+  preScreenMeters,
   rankQueue,
   releaseQueue,
   type LimitUsage,
@@ -179,5 +182,67 @@ describe("Bangkok boundaries", () => {
       if (before === undefined) delete process.env.TZ;
       else process.env.TZ = before;
     }
+  });
+});
+
+describe("meters", () => {
+  const names = { Peat: "Peat", Ek: "Ek" };
+  const config = cfg({
+    interviewers: [
+      { canonicalKey: "Peat", email: "p@example.com", subjects: ["Mathematics"] },
+      { canonicalKey: "Ek", email: "e@example.com", subjects: ["Physics"] },
+    ],
+  });
+
+  it("builds the pre-screen meters from usage and the limits, with a full one marked", () => {
+    const rows = preScreenMeters(
+      usage({ perDay: 5, perWeek: 12, waiting: 9, bySubject: { Mathematics: 2, Physics: 3 } }),
+      config,
+    );
+    expect(rows).toEqual([
+      { label: "Sent today", used: 5, max: 5, pct: 100, full: true },
+      { label: "Sent this week", used: 12, max: 15, pct: 80, full: false },
+      { label: "Waiting for reply", used: 9, max: 15, pct: 60, full: false },
+      { label: "Mathematics open", used: 2, max: 3, pct: 67, full: false },
+      { label: "Physics open", used: 3, max: 3, pct: 100, full: true },
+    ]);
+  });
+
+  it("builds the onsite meters, one per head, and counts a limit of 0 as full", () => {
+    const rows = onsiteMeters(usage({ perWeek: 2, unbooked: 1, bySubject: { Mathematics: 1 } }), { Peat: 1 }, config, names);
+    expect(rows.map((r) => [r.label, r.used, r.max])).toEqual([
+      ["Invited this week", 2, 3],
+      ["Not booked", 1, 2],
+      ["Peat this week", 1, 2],
+      ["Ek this week", 0, 2],
+      ["Mathematics open", 1, 2],
+    ]);
+    const closed = onsiteMeters(usage(), {}, cfg({ onsiteLimits: { perWeek: 0, unbooked: 2, perHeadPerWeek: 2, perSubject: 2 } }), names);
+    expect(closed[0]).toMatchObject({ used: 0, max: 0, pct: 100, full: true });
+  });
+
+  it("counts this Bangkok week's confirmed mocks per head", () => {
+    const at = new Date("2026-11-04T05:00:00Z");
+    const mock = (interviewerKey: string | null, startTime: string, status = "confirmed", kind = "mock") => ({
+      kind,
+      status,
+      interviewerKey,
+      startTime: new Date(startTime),
+    });
+    expect(
+      headWeekMocks(
+        [
+          mock("Peat", "2026-11-02T05:00:00Z"),
+          mock("Peat", "2026-11-06T05:00:00Z"),
+          mock("Ek", "2026-11-03T05:00:00Z"),
+          mock("Peat", "2026-11-03T05:00:00Z", "cancelled"),
+          mock("Peat", "2026-11-04T05:00:00Z", "no_show"),
+          mock(null, "2026-11-04T05:00:00Z", "confirmed", "paper"),
+          mock("Peat", "2026-11-09T05:00:00Z"),
+          mock("Peat", "2026-11-01T16:59:00Z"),
+        ],
+        at,
+      ),
+    ).toEqual({ Peat: 2, Ek: 1 });
   });
 });

@@ -5,13 +5,13 @@ import { Instrument_Serif } from "next/font/google";
 import { signIn } from "next-auth/react";
 import { GOOGLE_SCOPES, type HiringConfig, type Stage, type Subject } from "@/lib/hiring/model";
 import { buildInsights, readyToInvite } from "@/lib/hiring/insights";
-import { candidateExtras } from "@/lib/hiring/status";
+import { candidateExtras, holdNote } from "@/lib/hiring/status";
 import type { dashboard } from "@/lib/hiring/service";
 import { CandidateInspector } from "./candidate-inspector";
 import { CandidateTable, matchesFilter } from "./candidate-table";
-import { AveragePentagon, EvidenceChart, KpiStrip, ScoreChart, StageChart, SubjectChart } from "./pipeline-charts";
+import { AveragePentagon, EvidenceChart, KpiStrip, LimitMeters, ScoreChart, StageChart, SubjectChart } from "./pipeline-charts";
 import { HeadSchedules } from "./head-schedules";
-import { OperationsRail } from "./operations-rail";
+import { OperationsRail, WorkerBanner } from "./operations-rail";
 import { SetupPanel } from "./setup-panel";
 import css from "./dashboard.module.css";
 
@@ -75,7 +75,18 @@ export function HiringDashboard() {
       });
       const value = await response.json();
       if (!response.ok) throw new Error(value.error);
-      await load((body as { action: string }).action !== "settings");
+      const action = (body as { action: string }).action;
+      await load(action !== "settings");
+      if (action === "head_days") {
+        // The server checked the revision before it saved, so the new one belongs to this draft. A head with no
+        // attendance record also has a new fallback week, which the draft must carry or the next save would undo it.
+        const key = (body as { key: string }).key;
+        setConfigRevision(value.revision);
+        if (value.fallbackWeek)
+          setConfig((c) =>
+            c && { ...c, interviewers: c.interviewers.map((i) => (i.canonicalKey === key ? { ...i, fallbackWeek: value.fallbackWeek } : i)) },
+          );
+      }
       setNotice("Saved.");
       return true;
     } catch (e) {
@@ -130,6 +141,16 @@ export function HiringDashboard() {
     [data, filter, ready, extras],
   );
   const clashes = useMemo(() => new Set(data?.visitClashes.candidateIds ?? []), [data]);
+  const holds = useMemo(
+    () =>
+      new Map(
+        data?.candidates.flatMap((c) => {
+          const note = holdNote(c, data.holds[c.id], data.config);
+          return note ? [[c.id, note] as const] : [];
+        }) ?? [],
+      ),
+    [data],
+  );
   const candidate = data?.candidates.find((c) => c.id === selected);
 
   return (
@@ -171,6 +192,12 @@ export function HiringDashboard() {
       {data?.workerError && (
         <p role="alert" className={css.alert}>
           {data.workerError}
+        </p>
+      )}
+      {data && <WorkerBanner enabled={data.config.enabled} workerAt={data.workerAt} />}
+      {view !== "setup" && data && data.configProblems.length > 0 && (
+        <p role="alert" className={css.alert}>
+          The saved rules have a problem, so the worker has stopped. Open Rules and setup. {data.configProblems.join(" ")}
         </p>
       )}
       {/* The Head schedules view explains its own clashes and old data. */}
@@ -216,6 +243,7 @@ export function HiringDashboard() {
               threshold={data.config.profileThreshold}
               onShowReady={() => setFilter({ ...NO_FILTER, stage: "ready" })}
             />
+            <LimitMeters usage={data.usage} headMocks={data.headMocks} config={data.config} tutors={data.tutors} />
             <div className={css.charts}>
               <StageChart insights={insights} filter={filter} setFilter={setFilter} />
               <ScoreChart
@@ -233,6 +261,7 @@ export function HiringDashboard() {
               insights={insights}
               ready={ready}
               extras={extras}
+              holds={holds}
               clashes={clashes}
               weights={data.config.profileWeights}
               threshold={data.config.profileThreshold}
@@ -247,6 +276,7 @@ export function HiringDashboard() {
               key={candidate.id}
               candidate={candidate}
               extras={extras.get(candidate.id)}
+              hold={holds.get(candidate.id)}
               seekJobId={data.config.seekJobId}
               weights={data.config.profileWeights}
               preWeights={data.config.preScreenWeights}

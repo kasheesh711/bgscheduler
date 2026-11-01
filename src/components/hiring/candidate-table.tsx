@@ -50,6 +50,7 @@ export function CandidateTable({
   insights,
   ready,
   extras,
+  holds,
   clashes,
   weights,
   threshold,
@@ -62,6 +63,8 @@ export function CandidateTable({
   insights: Insights;
   ready: Set<string>;
   extras: Map<string, CandidateExtras>;
+  /** Why a candidate has not been sent anything yet: queue place and limit, or the profile gate. */
+  holds: Map<string, { short: string; long: string[] }>;
   /** Candidates whose booked mock overlaps a Wise class, leave or sit-in. */
   clashes: Set<string>;
   weights: HiringConfig["profileWeights"];
@@ -98,11 +101,11 @@ export function CandidateTable({
     });
   }, [candidates, ready, extras, filter, deferred, sort]);
 
-  const counts = Object.fromEntries(insights.stages.map((s) => [s.stage, s.at]));
   const tabs: [CandidateFilter["stage"], string, number][] = [
     ["all", "All", insights.total],
     ["ready", "Ready", insights.ready],
-    ...ACTIVE_STAGES.map((s): [Stage, string, number] => [s, STAGE_LABELS[s], counts[s]]),
+    // No reply and No booking are stages too, so they filter like the rest.
+    ...STAGE_ORDER.filter((s) => s !== "stopped").map((s): [Stage, string, number] => [s, STAGE_LABELS[s], insights.byStage[s]]),
     ["stopped", STAGE_LABELS.stopped, insights.stopped],
   ];
   const preCounts = PRE_SCREEN_FILTERS.map(
@@ -272,6 +275,11 @@ export function CandidateTable({
                         <span className={`${css.pill} ${PILL_CLASS[extra.pre.status]}`}>{extra.pre.status}</span>
                         <span className={css.pillNote}>{preScreenNote(extra.pre)}</span>
                       </>
+                    )}
+                    {holds.get(c.id) && (
+                      <span className={css.holdNote} title={holds.get(c.id)!.long.join(" ")}>
+                        {holds.get(c.id)!.short}
+                      </span>
                     )}
                   </td>
                   <td className={css.wideOnly}>

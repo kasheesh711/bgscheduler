@@ -1,5 +1,6 @@
 "use client";
 
+import { workerWarning } from "@/lib/hiring/status";
 import type { HiringData } from "./dashboard";
 import type { Insights } from "./pipeline-charts";
 import css from "./dashboard.module.css";
@@ -24,18 +25,30 @@ function Status({ label, value, good }: { label: string; value: string; good: bo
   );
 }
 
+/** Shows on every view when automation is on and the Mac worker has gone quiet. */
+export function WorkerBanner({ enabled, workerAt, now }: { enabled: boolean; workerAt: Date | string | null; now?: Date }) {
+  const text = workerWarning(enabled, workerAt, now);
+  return text ? (
+    <p role="alert" className={css.alert}>
+      {text}
+    </p>
+  ) : null;
+}
+
 export function OperationsRail({
   data,
   insights,
   busy,
   connect,
   onSelect,
+  now,
 }: {
   data: HiringData;
   insights: Insights;
   busy: boolean;
   connect: () => void;
   onSelect: (id: string) => void;
+  now?: Date;
 }) {
   const nameOf = (id: string | null) => data.candidates.find((c) => c.id === id)?.name ?? "Unknown candidate";
   const folders = data.workerSummary?.folders.filter((f) => f.count) ?? [];
@@ -55,7 +68,9 @@ export function OperationsRail({
           <Status label="Google" value={data.google.connected ? "Connected" : "Consent needed"} good={data.google.connected} />
           <li className={css.statusRow}>
             <span>Last worker run</span>
-            <span>{dateTime(data.workerAt)}</span>
+            <span className={workerWarning(data.config.enabled, data.workerAt, now) ? css.warnWord : undefined}>
+              {dateTime(data.workerAt)}
+            </span>
           </li>
         </ul>
         {!data.google.connected && (

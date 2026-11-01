@@ -70,14 +70,22 @@ const extras = candidateExtras(
   [{ candidateId: "c", kind: "mock", status: "confirmed", startTime: "2026-11-05T07:00:00Z" }],
   new Set(["d"]),
 );
-const insights = { total: 4, ready: 1, stopped: 0, stages: [] } as unknown as Insights;
-const table = (candidates = people, filter = NO_FILTER, map: Map<string, CandidateExtras> = extras, clashes = new Set<string>()) =>
+const byStage = { new: 1, review: 0, pre_screen: 3, paper_invited: 0, paper_booked: 0, paper_passed: 0, mock_booked: 0, onsite_invited: 0, onsite_booked: 0, no_reply: 2, no_booking: 1, stopped: 0 };
+const insights = { total: 4, ready: 1, stopped: 0, stages: [], byStage } as unknown as Insights;
+const table = (
+  candidates = people,
+  filter = NO_FILTER,
+  map: Map<string, CandidateExtras> = extras,
+  clashes = new Set<string>(),
+  holds = new Map<string, { short: string; long: string[] }>(),
+) =>
   renderToStaticMarkup(
     <CandidateTable
       candidates={candidates}
       insights={insights}
       ready={new Set(["d"])}
       extras={map}
+      holds={holds}
       clashes={clashes}
       weights={weights}
       threshold={60}
@@ -214,5 +222,52 @@ describe("visit clash marker", () => {
     const html = table(people, NO_FILTER, extras, new Set(["c"]));
     expect(html.match(/Visit clash/g)).toHaveLength(1);
     expect(html).toContain("did not move the visit");
+  });
+});
+
+describe("table for the visit stages and holds", () => {
+  it("has a filter chip for No reply and No booking, with their counts", () => {
+    const html = table();
+    expect(html).toMatch(/aria-pressed="false"[^>]*>No reply <span[^>]*>2<\/span>/);
+    expect(html).toMatch(/aria-pressed="false"[^>]*>No booking <span[^>]*>1<\/span>/);
+    const pressed = table(people, { ...NO_FILTER, stage: "no_reply" });
+    expect(pressed).toMatch(/aria-pressed="true"[^>]*>No reply /);
+    expect(matchesFilter(person("x", { stage: "no_booking" }), { ...NO_FILTER, stage: "no_booking" }, new Set(), new Map())).toBe(true);
+    expect(matchesFilter(person("x", { stage: "no_reply" }), { ...NO_FILTER, stage: "no_booking" }, new Set(), new Map())).toBe(false);
+  });
+  it("shows the queue place and limit in the Pre-screen column, and the gate reason for a held new candidate", () => {
+    const html = table(
+      people,
+      NO_FILTER,
+      extras,
+      new Set(),
+      new Map([
+        ["d", { short: "Queue 3 · daily limit 5", long: ["Position 3 in the pre-screen queue.", "Held by the daily limit (5)."] }],
+        ["a", { short: "Subject not hiring", long: ["No supported subject is open for hiring."] }],
+      ]),
+    );
+    expect(html).toContain("Queue 3 · daily limit 5");
+    expect(html).toContain("Subject not hiring");
+    expect(html).toContain('title="Position 3 in the pre-screen queue. Held by the daily limit (5)."');
+    expect(table()).not.toContain("daily limit");
+  });
+  it("lists the reasons in the panel", () => {
+    const html = renderToStaticMarkup(
+      <CandidateInspector
+        candidate={people[3]}
+        extras={extras.get("d")}
+        hold={{ short: "Work-rights answer not accepted +1", long: ["The work-rights answer is missing or not accepted.", "There is no usable email."] }}
+        seekJobId="94844236"
+        weights={weights}
+        busy={false}
+        error=""
+        notice=""
+        command={async () => true}
+        onClose={() => {}}
+      />,
+    );
+    expect(html).toContain("Waiting to send");
+    expect(html).toContain("The work-rights answer is missing or not accepted.");
+    expect(html).toContain("There is no usable email.");
   });
 });

@@ -1,6 +1,8 @@
 "use client";
 
 import { averageValues, type buildInsights, RESULTS, STAGE_LABELS, type CriterionResult } from "@/lib/hiring/insights";
+import { onsiteMeters, preScreenMeters, type LimitUsage, type Meter } from "@/lib/hiring/limits";
+import type { HiringConfig } from "@/lib/hiring/model";
 import type { PreScreenState } from "@/lib/hiring/status";
 import type { CandidateFilter } from "./dashboard";
 import { Pentagon } from "./pentagon";
@@ -71,7 +73,11 @@ export function KpiStrip({
           Show them <span aria-hidden="true">→</span>
         </button>
       </div>
-      <Tile label="Candidates" value={i.total} note={`${i.active} active`} />
+      <Tile
+        label="Candidates"
+        value={i.total}
+        note={i.parked ? `${i.active} active, ${i.parked} no reply or no booking` : `${i.active} active`}
+      />
       <Tile
         label="Scored"
         value={`${percent(i.scored, i.total)}%`}
@@ -95,6 +101,68 @@ export function KpiStrip({
         note={`${i.messages.sent} sent`}
       />
     </section>
+  );
+}
+
+function MeterCard({ title, lede, meters, children }: { title: string; lede: string; meters: Meter[]; children?: React.ReactNode }) {
+  return (
+    <section className={css.limitCard}>
+      <h2 className={css.panelTitle}>{title}</h2>
+      <p className={css.panelLede}>{lede}</p>
+      <div className={css.meterGrid}>
+        {meters.map((m) => (
+          <div key={m.label}>
+            <p className={css.tileLabel}>{m.label}</p>
+            <p className={css.meterValue}>
+              {m.used}
+              <span className={css.meterMax}> of {m.max}</span>
+            </p>
+            <div className={css.meter} aria-hidden="true">
+              <span data-full={m.full} style={{ width: `${m.pct}%` }} />
+            </div>
+            {/* Words, not only colour, so a full limit shows for colour-blind users. */}
+            {m.full && <span className={css.meterFull}>Full</span>}
+          </div>
+        ))}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** The sending limits as they stand now. The numbers come from Postgres through the same counts the worker uses. */
+export function LimitMeters({
+  usage,
+  headMocks,
+  config,
+  tutors,
+}: {
+  usage: { preScreen: LimitUsage; onsite: LimitUsage };
+  headMocks: Record<string, number>;
+  config: HiringConfig;
+  tutors: { canonicalKey: string; name: string }[];
+}) {
+  const names = Object.fromEntries(tutors.map((t) => [t.canonicalKey, t.name]));
+  return (
+    <div className={css.limitCards}>
+      <MeterCard
+        title="Pre-screen emails"
+        lede="The app stops at each limit. Others wait in the queue, in your subject order."
+        meters={preScreenMeters(usage.preScreen, config)}
+      />
+      <MeterCard
+        title="Onsite invitations"
+        lede="One visit: 2-hour exam, then 1-hour mock with the head."
+        meters={onsiteMeters(usage.onsite, headMocks, config, names)}
+      >
+        {config.preScreenThreshold === null && (
+          <p className={css.warnWord}>No pass score: automatic onsite invitations cannot run.</p>
+        )}
+      </MeterCard>
+      {!(config.enabled && config.deliveryEnabled) && (
+        <p className={`${css.railMeta} ${css.limitNote}`}>Automation or messages are paused, so nothing is sent.</p>
+      )}
+    </div>
   );
 }
 

@@ -20,6 +20,7 @@ import {
   type Stage,
 } from "./model";
 import { appInvited } from "./queue";
+import { answerKey } from "./scoring";
 import { audit, inviteToMock, settings, sourceHash } from "./service";
 // The one copy stays in status.ts: client components import that file, and this one reaches the database.
 import { parseFormTimestamp } from "./status";
@@ -98,8 +99,7 @@ export async function recordWorkRightsAnswer(db: Database, answer: string | null
   if (!text) return;
   await db.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-settings'))`);
   const { row, config } = await settings(db);
-  const key = (v: string) => v.replace(/\s+/g, " ").toLowerCase();
-  if (config.seenWorkRights.some((a) => key(a) === key(text))) return;
+  if (config.seenWorkRights.some((a) => answerKey(a) === answerKey(text))) return;
   // The settings schema allows 200. A longer list would make settings() throw, so stop recording; the candidate keeps the answer.
   if (config.seenWorkRights.length >= 200) return;
   const next = { ...config, seenWorkRights: [...config.seenWorkRights, text] };

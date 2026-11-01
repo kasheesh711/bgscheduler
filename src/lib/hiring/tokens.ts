@@ -1,9 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import { tokenKindSchema, HiringError, type InterviewKind } from "./model";
+import { tokenKindSchema, HiringError, VISIT_LINK_DAYS, type InterviewKind } from "./model";
 
-/** A visit link lives this long. `inviteExpiresAt` holds the same second, so a new link ends the old one. */
-export const VISIT_LINK_DAYS = 30;
+// A visit link lives VISIT_LINK_DAYS (model.ts). `inviteExpiresAt` holds the same second, so a new link ends the old one.
+export { VISIT_LINK_DAYS };
 
 export function bookingToken(
   id: string,

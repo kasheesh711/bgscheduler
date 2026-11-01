@@ -166,6 +166,8 @@ export const DEFAULT_PRE_SCREEN_WEIGHTS = {
   written: 15,
   availability: 10,
 };
+/** A visit link lives this long. Tokens and the onsite expiry rule both read it. */
+export const VISIT_LINK_DAYS = 30;
 const limit = z.number().int().min(0).max(1000);
 const followUpSchema = z
   .object({
@@ -173,7 +175,11 @@ const followUpSchema = z
     expireDays: z.number().int().min(1).max(120),
   })
   .strict();
-export const configSchema = z
+/**
+ * The config shape. Reads use this one, so a stored config that breaks a rule in `configRuleErrors` still loads:
+ * the dashboard shows the problem and a save repairs it. Saves use `configSchema`.
+ */
+export const baseConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
     deliveryEnabled: z.boolean().default(false),
@@ -273,7 +279,41 @@ export const configSchema = z
       .default("BeGifted Education, Gaysorn Amarin Tower, 14th floor, Bangkok"),
   })
   .strict();
-export type HiringConfig = z.infer<typeof configSchema>;
+export type HiringConfig = z.infer<typeof baseConfigSchema>;
+
+/** Rules that link two settings. Plain English, because Kevin reads them on the Rules screen. */
+export function configRuleErrors(
+  c: Pick<HiringConfig, "visitStartMinute" | "visitEndMinute" | "preScreenFollowUp" | "onsiteFollowUp" | "subjectPriority">,
+): { path: (string | number)[]; message: string }[] {
+  const errors: { path: (string | number)[]; message: string }[] = [];
+  if (c.visitEndMinute <= c.visitStartMinute)
+    errors.push({ path: ["visitEndMinute"], message: "Visits must end after they start." });
+  if (c.preScreenFollowUp.remindDays >= c.preScreenFollowUp.expireDays)
+    errors.push({
+      path: ["preScreenFollowUp", "remindDays"],
+      message: "The pre-screen reminder must come before the no-reply day.",
+    });
+  if (c.onsiteFollowUp.remindDays >= c.onsiteFollowUp.expireDays)
+    errors.push({
+      path: ["onsiteFollowUp", "remindDays"],
+      message: "The onsite reminder must come before the link ends.",
+    });
+  if (c.onsiteFollowUp.expireDays > VISIT_LINK_DAYS)
+    errors.push({
+      path: ["onsiteFollowUp", "expireDays"],
+      message: `The booking link lasts ${VISIT_LINK_DAYS} days, so the onsite link can end after ${VISIT_LINK_DAYS} days at most.`,
+    });
+  const seen = new Set<string>();
+  c.subjectPriority.forEach((p, i) => {
+    if (seen.has(p.subject))
+      errors.push({ path: ["subjectPriority", i], message: `${p.subject} is in the priority list twice.` });
+    seen.add(p.subject);
+  });
+  return errors;
+}
+export const configSchema = baseConfigSchema.superRefine((value, ctx) => {
+  for (const error of configRuleErrors(value)) ctx.addIssue({ code: "custom", ...error });
+});
 
 export const preScreenSchema = z
   .object({

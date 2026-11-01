@@ -204,7 +204,8 @@ export function preScreenPoints(
   };
   return { ...all, total: Object.values(all).reduce((n, v) => n + v, 0) };
 }
-const answerKey = (value: string) => value.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+/** The one key for a work-rights answer: the import records it and the check compares it. */
+export const answerKey = (value: string) => value.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
 /** Only an exact answer from the accepted list passes. A missing answer never passes. */
 export function workRightsAccepted(answer: string | null, accepted: string[]) {
   return !!answer?.trim() && accepted.some((a) => answerKey(a) === answerKey(answer));

@@ -5,13 +5,17 @@ import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
 import { availableSlots, availableVisitSlots, verifyLiveSlot } from "./availability";
 import {
+  baseConfigSchema,
   bookingSchema,
+  configRuleErrors,
   configSchema,
   HiringError,
   PRE_SCREEN_URL,
   normalizeSubjects,
   overlap,
   runtimeWritesAllowed,
+  shiftDate,
+  localDate,
   visitBookingSchema,
   ZONE,
   type HiringConfig,
@@ -30,8 +34,21 @@ import {
 import { googleConnectionStatus } from "./google";
 import { visitClashes } from "./head-schedule";
 import { bookingToken, readBookingToken, VISIT_LINK_DAYS } from "./tokens";
-import { blockingLimit, type LimitName } from "./limits";
-import { inviteRows, linkSentAt, lockQueue, preScreenTotal, readLimitUsage } from "./queue";
+import { blockingLimit, headWeekMocks, releaseQueue, type Funnel, type LimitName, type QueueHold } from "./limits";
+import {
+  inviteRows,
+  linkSentAt,
+  lockQueue,
+  onsiteQueue,
+  preScreenQueue,
+  preScreenTotal,
+  readLimitUsage,
+} from "./queue";
+import { headDayState, weekWith } from "./rules";
+import { attendanceAccessForEmail } from "@/lib/tutor-attendance/access";
+import { attendanceConfig } from "@/lib/tutor-attendance/data";
+import { saveAttendanceSettings } from "@/lib/tutor-attendance/service";
+import { AttendanceError, weekSchema } from "@/lib/tutor-attendance/model";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -39,7 +56,9 @@ export async function settings(db: Database = getDb()) {
     .select()
     .from(s.hiringSettings)
     .where(eq(s.hiringSettings.id, "default"));
-  return { row, config: configSchema.parse(row?.config ?? {}) };
+  // Reads use the shape without the cross-field rules, so a stored config that breaks one still loads.
+  // The dashboard lists the problem, and `saveSettings` refuses to store it again.
+  return { row, config: baseConfigSchema.parse(row?.config ?? {}) };
 }
 export async function audit(
   db: Database,
@@ -112,6 +131,93 @@ export async function saveSettings(
       config,
     });
   });
+}
+const ATTENDANCE_ADMIN_NEEDED =
+  "Changing this head's days also changes Tutor Attendance, which needs Tutor Attendance admin access. Ask an attendance admin to make the change.";
+/**
+ * Saves one head's Monday to Friday days. `days[0]` is Monday. `revision` is the Hiring settings revision the screen
+ * loaded, and a stale one gets a 409 on both paths.
+ * An enrolled head goes through Tutor Attendance as a new schedule version from the next Bangkok day, with the actor in
+ * its audit; that needs attendance admin. Any other head gets a fallback week in Hiring settings and is not enrolled.
+ */
+export async function saveHeadDays(
+  key: string,
+  days: boolean[],
+  revision: number,
+  actor: string,
+  db: Database = getDb(),
+  now = new Date(),
+): Promise<{ revision: number; fallbackWeek?: ReturnType<typeof weekWith> }> {
+  if (days.length !== 5) throw new HiringError(400, "Choose Monday to Friday.");
+  const current = await settings(db);
+  const stale = () => new HiringError(409, "Settings changed. Refresh this page.");
+  if (!current.row) throw new HiringError(409, "Save the rules and setup once before you change head days.");
+  if (!current.config.interviewers.some((i) => i.canonicalKey === key)) throw new HiringError(404, "Head not found.");
+  if (current.row.revision !== revision) throw stale();
+  const [enrollment] = await db
+    .select()
+    .from(s.tutorAttendanceEnrollments)
+    .where(eq(s.tutorAttendanceEnrollments.canonicalKey, key));
+
+  if (!enrollment) {
+    return withDatabaseTransaction(db, async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-settings'))`);
+      const fresh = await settings(tx);
+      if (!fresh.row || fresh.row.revision !== revision) throw stale();
+      const head = fresh.config.interviewers.find((i) => i.canonicalKey === key);
+      if (!head) throw new HiringError(404, "Head not found.");
+      const fallbackWeek = weekSchema.parse(weekWith(days, head.fallbackWeek));
+      const config = {
+        ...fresh.config,
+        interviewers: fresh.config.interviewers.map((i) => (i.canonicalKey === key ? { ...i, fallbackWeek } : i)),
+      };
+      await tx
+        .update(s.hiringSettings)
+        .set({ config, revision: revision + 1, updatedBy: actor, updatedAt: new Date() })
+        .where(eq(s.hiringSettings.id, "default"));
+      await audit(tx, actor, "head-days", null, { key, days, via: "hiring-settings", revision: revision + 1 });
+      return { revision: revision + 1, fallbackWeek };
+    });
+  }
+  // A switched-off enrollment still makes headOfficeWindow return no hours, so a fallback week would be ignored.
+  if (!enrollment.active)
+    throw new HiringError(
+      409,
+      "This head's Tutor Attendance enrollment has ended, so Hiring cannot set days for them. Switch the enrollment back on in Tutor Attendance first.",
+    );
+  try {
+    const access = await attendanceAccessForEmail(actor, db);
+    const schedules = await db
+      .select()
+      .from(s.tutorAttendanceSchedules)
+      .where(eq(s.tutorAttendanceSchedules.canonicalKey, key));
+    const latest = headDayState({ canonicalKey: key }, [enrollment], schedules).week;
+    await saveAttendanceSettings(
+      access,
+      {
+        action: "schedule",
+        canonicalKey: key,
+        effectiveFrom: shiftDate(localDate(now), 1),
+        week: weekWith(days, latest),
+        reason: `Changed in Hiring by ${actor}.`,
+        expectedRevision: (await attendanceConfig(db)).revision,
+      },
+      db,
+      now,
+    );
+  } catch (error) {
+    if (!(error instanceof AttendanceError)) throw error;
+    throw new HiringError(
+      error.status,
+      error.status === 403
+        ? ATTENDANCE_ADMIN_NEEDED
+        : error.code === "STALE_REVISION"
+          ? "Tutor Attendance changed while you were saving. Refresh this page and try again."
+          : error.message,
+    );
+  }
+  await audit(db, actor, "head-days", null, { key, days, via: "tutor-attendance" });
+  return { revision };
 }
 export async function candidateById(db: Database, id: string) {
   const [row] = await db
@@ -353,8 +459,31 @@ export async function dashboard(db: Database = getDb()) {
   }
   // One shared read for all heads. Never fails the dashboard: a missing index reports stale.
   const clashes = await visitClashes(db, bookings);
+  // The meters and the queue notes read the same counts and the same release function the worker uses. Postgres only.
+  const now = new Date();
+  const usage = {
+    preScreen: await readLimitUsage(db, "pre_screen", now),
+    onsite: await readLimitUsage(db, "onsite", now),
+  };
+  const holds: Record<string, QueueHold> = {};
+  for (const funnel of ["pre_screen", "onsite"] as const satisfies Funnel[]) {
+    const entries = funnel === "pre_screen" ? await preScreenQueue(db, config) : await onsiteQueue(db, config);
+    const { release, held } = releaseQueue(funnel, entries, funnel === "pre_screen" ? usage.preScreen : usage.onsite, config);
+    for (const e of release) holds[e.id] = { funnel, state: "next", position: 0, limit: null, subject: e.subject };
+    for (const e of held) holds[e.id] = { funnel, state: "held", position: e.position, limit: e.limit, subject: e.subject };
+  }
+  const enrollments = await db.select().from(s.tutorAttendanceEnrollments);
+  const schedules = await db.select().from(s.tutorAttendanceSchedules);
   return {
     config,
+    // Rules the stored config breaks. The screen shows them, and a save will not pass until they are fixed.
+    configProblems: configRuleErrors(config).map((e) => e.message),
+    usage,
+    holds,
+    headMocks: headWeekMocks(bookings, now),
+    heads: Object.fromEntries(
+      config.interviewers.map((head) => [head.canonicalKey, headDayState(head, enrollments, schedules)]),
+    ),
     revision: row?.revision ?? 0,
     workerAt: row?.workerAt ?? null,
     workerSummary: row?.workerSummary ?? null,
