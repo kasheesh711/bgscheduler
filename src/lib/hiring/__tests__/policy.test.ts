@@ -357,15 +357,17 @@ describe("hiring decision boundaries", () => {
         660,
       ),
     ).toBe(true);
-    for (const type of ["identity_unresolved", "leave_gap", "session_gap"])
-      expect(
-        indexedSlotAvailable(
-          { ...group, dataIssues: [{ type, message: "m" }] },
-          "2026-11-02",
-          600,
-          660,
-        ),
-      ).toBe(false);
+    const withIssue = (type: string, message: string) =>
+      indexedSlotAvailable(
+        { ...group, dataIssues: [{ type, message }] },
+        "2026-11-02",
+        600,
+        660,
+      );
+    expect(withIssue("alias", "identity_collision: x")).toBe(false);
+    expect(withIssue("completeness", "Wise session s1 references teacher u absent from the teacher roster.")).toBe(false);
+    expect(withIssue("completeness", 'Failed to fetch availability for teacher "Peat": 500')).toBe(true);
+    expect(withIssue("tag", 'Unmapped Wise tag: "x"')).toBe(true);
     expect(
       indexedSlotAvailable(
         { ...group, leavesCompleteThrough: null },

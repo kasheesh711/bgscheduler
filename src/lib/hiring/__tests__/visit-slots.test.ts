@@ -220,6 +220,22 @@ describe("visit slots", () => {
     );
   });
 
+  it("follows a changed visit window", async () => {
+    const starts = async (window: Partial<HiringConfig>) =>
+      (await run(
+        { interviewers: [head("Ek")], ...window },
+        { ...ek, schedules: [schedule("Ek", week([1], "09:00", "18:00"))] },
+      ))
+        .filter((x) => x.date === "2026-11-02")
+        .map((x) => x.examStart);
+    const at = (...hours: number[]) =>
+      hours.map((h) => instant("2026-11-02", h * 60).toISOString());
+    // End 17:00: the last exam starts 14:00, mock 16:00–17:00.
+    expect(await starts({ visitEndMinute: 1020 })).toEqual(at(10, 11, 12, 13, 14));
+    // Start 10:30 rounds up to 11:00.
+    expect(await starts({ visitStartMinute: 630 })).toEqual(at(11, 12, 13));
+  });
+
   it("refuses when exam capacity is full", async () => {
     const full = await run(
       { interviewers: [head("Ek")], paperCapacity: 1 },
@@ -361,22 +377,26 @@ describe("visit slots", () => {
     ).rejects.toMatchObject({ status: 409 });
     // A head missing from the index (unresolved identity) is never offered.
     expect(await run(cfg, { ...ek, groups: [] })).toEqual([]);
-    for (const type of ["identity_unresolved", "leave_incomplete", "session_unresolved"])
-      expect(
-        await run(cfg, {
-          ...ek,
-          groups: [group("Ek", { dataIssues: [{ type, message: "x" }] })],
-        }),
-      ).toEqual([]);
-    // Modality and availability issues no longer matter: Wise hours are not used.
-    expect(
-      (
-        await run(cfg, {
-          ...ek,
-          groups: [group("Ek", { dataIssues: [{ type: "modality_conflict", message: "x" }, { type: "availability_gap", message: "x" }] })],
-        })
-      ).length,
-    ).toBeGreaterThan(0);
+    const issue = (type: string, message: string) => ({ type, message });
+    const withIssue = (i: { type: string; message: string }) =>
+      run(cfg, { ...ek, groups: [group("Ek", { dataIssues: [i] })] });
+    // Real data_issue_type values. A blocked head has no session rows, so it would look free.
+    const blocking = [
+      issue("alias", "identity_collision: nickname \"Ek\" matched 2 teachers"),
+      issue("completeness", "Failed to fetch leave data for teacher \"Ek\": 500"),
+      issue("completeness", 'Wise session s1 references teacher u1 absent from the teacher roster. Restore/correct that teacher in Wise; the next sync will retry automatically.'),
+      issue("completeness", "Something new went wrong"), // unknown completeness message fails closed
+    ];
+    for (const i of blocking) expect(await withIssue(i)).toEqual([]);
+    // These do not block: Wise hours and modality are not used, and tag and model notes are not data gaps.
+    const allowed = [
+      issue("completeness", 'Failed to fetch availability for teacher "Ek": Wise 500'),
+      issue("completeness", 'Failed to fetch availability for teacher "Ek": missing Wise user id'),
+      issue("tag", 'Unmapped Wise tag: "x"'),
+      issue("modality", 'Cannot determine modality for "Ek" — insufficient evidence'),
+      issue("conflict_model", "x"),
+    ];
+    for (const i of allowed) expect((await withIssue(i)).length).toBeGreaterThan(0);
   });
 });
 

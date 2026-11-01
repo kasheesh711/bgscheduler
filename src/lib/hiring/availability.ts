@@ -26,6 +26,19 @@ import {
 } from "./model";
 
 const MAX_SOURCE_AGE = 90 * 60 * 1000;
+// Real data_issue_type values are alias, modality, tag, completeness, conflict_model and sync.
+// Block on alias (identity) and on every completeness issue except the sync's availability message
+// (orchestrator.ts: `Failed to fetch availability for teacher "…"`). Wise hours are not used, and a failed
+// near fetch also collapses leavesCompleteThrough, so leave stays fail-closed through that watermark.
+// An unknown completeness message blocks.
+const AVAILABILITY_ISSUE = /^Failed to fetch availability for teacher "/;
+export const blocksHead = (issues: { type: string; message: string }[]) =>
+  issues.some(
+    (i) =>
+      i.type === "alias" ||
+      (i.type === "completeness" && !AVAILABILITY_ISSUE.test(i.message)),
+  );
+
 // Saved office hours decide when a head is in. Wise working hours are not used (Kevin's instruction).
 export function indexedSlotAvailable(
   group: IndexedTutorGroup,
@@ -37,7 +50,7 @@ export function indexedSlotAvailable(
   return (
     !!group.leavesCompleteThrough &&
     group.leavesCompleteThrough >= range.end &&
-    !group.dataIssues.some((i) => /identity|leave|session/i.test(i.type)) &&
+    !blocksHead(group.dataIssues) &&
     !group.leaves.some((l) =>
       overlap(range, { start: l.startTime, end: l.endTime }),
     ) &&
