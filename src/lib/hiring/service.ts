@@ -475,7 +475,7 @@ async function assessmentData(db: Database, now: Date) {
     .where(and(eq(s.hiringAudit.action, "assessment-ai-call"), gte(s.hiringAudit.createdAt, monthStart)));
   return {
     papers: papers.map((row) => ({ ...row, aiMarks: undefined, stuck: row.status === "marking" && now.getTime() - row.updatedAt.getTime() > MARKING_STUCK_AFTER_MS })),
-    mocks: mocks.map((row) => ({ ...row, aiRubric: undefined })),
+    mocks: mocks.map((row) => ({ ...row, aiRubric: undefined, stuck: row.status === "marking" && now.getTime() - row.updatedAt.getTime() > MARKING_STUCK_AFTER_MS })),
     decisions,
     library,
     // A provider can leave the cost out, and then the total is only a floor.

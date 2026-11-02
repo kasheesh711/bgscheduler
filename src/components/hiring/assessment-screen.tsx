@@ -13,9 +13,9 @@ import {
   type AssessmentRange,
   type AssessmentRow,
 } from "@/lib/hiring/assessment-view";
-import { RUBRIC, computeSheet, passRulesFor, rubricTotals, type LevelResult } from "@/lib/hiring/marking-sheet";
+import { RUBRIC, computeSheet, passRulesFor, rubricTotals, type LevelResult, type RubricItem } from "@/lib/hiring/marking-sheet";
 import { SUBJECTS, ZONE, type Subject } from "@/lib/hiring/model";
-import { markAgain, runMarking } from "./assessment-setup";
+import { markAgain, runMarking, type ResultKind } from "./assessment-setup";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
 import { HeadSchedules } from "./head-schedules";
 import css from "./dashboard.module.css";
@@ -62,7 +62,7 @@ export function mockCell(mock: Mock) {
 type Reload = () => Promise<void>;
 
 /** The file picker for a candidate's scan. It stays on the row or the panel while the upload and the marking run. */
-export function PaperUpload({ candidateId, subject, reload, label, disabled, warning }: { candidateId: string; subject: Subject; reload: Reload; label: string; disabled?: boolean; warning?: string }) {
+export function ResultUpload({ kind, candidateId, subject, reload, label, disabled, warning }: { kind: ResultKind; candidateId: string; subject: Subject; reload: Reload; label: string; disabled?: boolean; warning?: string }) {
   const [state, setState] = useState<"idle" | "working">("idle");
   const [error, setError] = useState("");
   async function choose(file: File | undefined) {
@@ -70,14 +70,14 @@ export function PaperUpload({ candidateId, subject, reload, label, disabled, war
     setState("working");
     setError("");
     try {
-      await runMarking(candidateId, subject, file, reload);
+      await runMarking(kind, candidateId, subject, file, reload);
     } catch (e) {
       setError(e instanceof Error ? e.message : "The upload failed.");
     } finally {
       setState("idle");
     }
   }
-  if (state === "working") return <span role="status" className={css.warnWord}>Uploading and marking. This can take a few minutes.</span>;
+  if (state === "working") return <span role="status" className={css.warnWord}>Uploading and reading. This can take a few minutes.</span>;
   return (
     <span onClick={(e) => e.stopPropagation()}>
       <label className={css.uploadButton}>
@@ -87,7 +87,7 @@ export function PaperUpload({ candidateId, subject, reload, label, disabled, war
           type="file"
           accept="application/pdf"
           disabled={disabled}
-          aria-label={`${label} for ${subject}`}
+          aria-label={`${label} for ${kind === "paper" ? "the" : "the mock in"} ${subject}${kind === "paper" ? " paper" : ""}`}
           onChange={(e) => {
             void choose(e.target.files?.[0]);
             e.target.value = "";
@@ -99,7 +99,7 @@ export function PaperUpload({ candidateId, subject, reload, label, disabled, war
   );
 }
 
-function RetryMarking({ id, reload }: { id: string; reload: Reload }) {
+function RetryMarking({ kind, id, reload }: { kind: ResultKind; id: string; reload: Reload }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   return (
@@ -112,7 +112,7 @@ function RetryMarking({ id, reload }: { id: string; reload: Reload }) {
           setBusy(true);
           setError("");
           try {
-            await markAgain(id, reload);
+            await markAgain(kind, id, reload);
           } catch (e) {
             setError(e instanceof Error ? e.message : "Marking failed.");
           } finally {
@@ -120,7 +120,7 @@ function RetryMarking({ id, reload }: { id: string; reload: Reload }) {
           }
         }}
       >
-        {busy ? "Marking…" : "Mark again"}
+        {busy ? "Reading…" : "Run the AI again"}
       </button>
       {error && <p role="alert" className={css.errorText}>{error}</p>}
     </>
@@ -211,10 +211,11 @@ export function PaperSheetView({ paper, config, command, reload, busy }: { paper
       )}
       {paper.error && <p className={css.errorText}>{paper.error}</p>}
       {stuck && <p className={css.warnWord}>This run stopped before it finished.</p>}
-      {(paper.status === "failed" || paper.status === "uploaded" || stuck) && <RetryMarking id={paper.id} reload={reload} />}
+      {(paper.status === "failed" || paper.status === "uploaded" || stuck) && <RetryMarking kind="paper" id={paper.id} reload={reload} />}
       {paper.source === "ai" && paper.status !== "marking" && (
         <p>
-          <PaperUpload
+          <ResultUpload
+            kind="paper"
             candidateId={paper.candidateId}
             subject={paper.subject}
             reload={reload}
@@ -277,7 +278,7 @@ export function PaperSheetView({ paper, config, command, reload, busy }: { paper
           </dl>
           <p className={css.inspectorText}>{paper.marks.comment}</p>
           {editing ? (
-            <MarksEditor paper={paper} command={command} busy={busy} onDone={() => setEditing(false)} />
+            <MarksEditor key={String(paper.updatedAt)} paper={paper} command={command} busy={busy} onDone={() => setEditing(false)} />
           ) : (
             <button type="button" className={css.inlineLink} onClick={() => setEditing(true)}>
               Change marks
@@ -317,8 +318,58 @@ export function PaperSheetView({ paper, config, command, reload, busy }: { paper
   );
 }
 
-export function MockView({ mock }: { mock: Mock }) {
+function RubricEditor({ mock, command, busy, onDone }: { mock: Mock; command: Command; busy: boolean; onDone: () => void }) {
+  const [items, setItems] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(mock.rubric!.items).map(([id, value]) => [id, value === null ? "" : String(value)])));
+  const [comments, setComments] = useState(mock.rubric!.comments);
+  const values = Object.fromEntries(Object.entries(items).map(([id, text]) => [id, text.trim() === "" ? null : Number(text)]));
+  const valid = Object.values(values).every((value) => value === null || (Number.isInteger(value) && value >= 1 && value <= 10));
+  return (
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault();
+        const changed = Object.fromEntries(Object.entries(values).filter(([id, value]) => value !== mock.rubric!.items[id as RubricItem]));
+        if (await command({ action: "mock_edit", id: mock.id, updatedAt: new Date(mock.updatedAt).toISOString(), items: changed, comments })) onDone();
+      }}
+    >
+      <table className={css.sheetTable}>
+        <tbody>
+          {RUBRIC.flatMap(({ items: rows }) => [...rows] as (readonly [string, string])[]).map(([id, label]) => (
+            <tr key={id}>
+              <td>{label}</td>
+              <td>
+                <input
+                  className={css.numberInput}
+                  type="number"
+                  min={1}
+                  max={10}
+                  aria-label={`Score for ${label}`}
+                  value={items[id]}
+                  onChange={(e) => setItems({ ...items, [id]: e.target.value })}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <label className={css.fieldLabel}>
+        Other comments
+        <textarea className={css.textarea} rows={3} value={comments} onChange={(e) => setComments(e.target.value)} />
+      </label>
+      <div className={css.decisionActions}>
+        <button type="submit" className={css.primary} disabled={!valid || busy}>
+          Save scores
+        </button>
+        <button type="button" className={css.secondary} onClick={onDone}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
+export function MockView({ mock, command, reload, busy }: { mock: Mock; command: Command; reload: Reload; busy: boolean }) {
   const totals = mock.rubric ? rubricTotals(mock.rubric) : null;
+  const [editing, setEditing] = useState(false);
   return (
     <section className={css.inspectorSection} aria-label="Mock rubric">
       <h3 className={css.inspectorHeading}>
@@ -347,6 +398,28 @@ export function MockView({ mock }: { mock: Mock }) {
       )}
       {mock.history?.comment && <p className={css.inspectorText}>{mock.history.comment}</p>}
       {mock.error && <p className={css.errorText}>{mock.error}</p>}
+      {mock.stuck && <p className={css.warnWord}>This run stopped before it finished.</p>}
+      {(mock.status === "failed" || mock.status === "uploaded" || mock.stuck) && <RetryMarking kind="mock" id={mock.id} reload={reload} />}
+      {mock.source === "ai" && mock.status !== "marking" && (
+        <p>
+          <ResultUpload
+            kind="mock"
+            candidateId={mock.candidateId}
+            subject={mock.subject}
+            reload={reload}
+            label="Replace rubric"
+            warning={mock.rubric ? "The new file replaces these scores, including any change a person made. Continue?" : undefined}
+          />
+        </p>
+      )}
+      {mock.status === "needs_check" && (
+        <p className={css.inspectorNote}>
+          The AI could not read a score on this form, and a blank score counts as no points. Read it beside the form, change any score, then confirm.{" "}
+          <button type="button" className={css.inlineLink} disabled={busy} onClick={() => void command({ action: "result_check", kind: "mock", id: mock.id })}>
+            I have checked this
+          </button>
+        </p>
+      )}
       {totals && mock.rubric && (
         <>
           <table className={css.sheetTable}>
@@ -380,6 +453,20 @@ export function MockView({ mock }: { mock: Mock }) {
           </table>
           {mock.rubric.comments && <p className={css.inspectorText}>{mock.rubric.comments}</p>}
           {mock.changedBy && <p className={css.inspectorMeta}>Changed by {mock.changedBy}</p>}
+          {editing ? (
+            <RubricEditor key={String(mock.updatedAt)} mock={mock} command={command} busy={busy} onDone={() => setEditing(false)} />
+          ) : (
+            <button type="button" className={css.inlineLink} onClick={() => setEditing(true)}>
+              Change scores
+            </button>
+          )}
+          {mock.fileId && (
+            <details className={css.sourceText}>
+              <summary>The uploaded form</summary>
+              <p className={css.inspectorMeta}>A link in a file can open another site. Do not sign in on a page that opens from a file.</p>
+              <iframe className={css.resumeFrame} src={`/api/hiring/file/${encodeURIComponent(mock.fileId)}`} title="Scan of the mock rubric" />
+            </details>
+          )}
         </>
       )}
     </section>
@@ -404,7 +491,7 @@ function AddPaper({ candidateId, first, taken, reload }: { candidateId: string; 
             ))}
           </select>
         </label>
-        <PaperUpload candidateId={candidateId} subject={subject} reload={reload} label="Upload scanned PDF" />
+        <ResultUpload kind="paper" candidateId={candidateId} subject={subject} reload={reload} label="Upload scanned PDF" />
       </div>
     </section>
   );
@@ -451,9 +538,15 @@ function AssessmentPanel({
           <PaperSheetView key={paper.id} paper={paper} config={data.config} command={command} reload={reload} busy={busy} />
         ))}
         {!row.history && <AddPaper candidateId={candidate.id} first={row.subject} taken={papers.map((paper) => paper.subject)} reload={reload} />}
-        {!mocks.length && <p className={css.inspectorText}>No mock result yet.</p>}
+        {!mocks.some((mock) => mock.subject === row.subject) && !row.history && (
+          <section className={css.inspectorSection}>
+            <h3 className={css.inspectorHeading}>Mock: {row.subject}</h3>
+            <p className={css.inspectorText}>No mock result yet.</p>
+            {row.subject && <ResultUpload kind="mock" candidateId={candidate.id} subject={row.subject as Subject} reload={reload} label="Upload rubric" />}
+          </section>
+        )}
         {mocks.map((mock) => (
-          <MockView key={mock.id} mock={mock} />
+          <MockView key={mock.id} mock={mock} command={command} reload={reload} busy={busy} />
         ))}
         {blockers.length > 0 && (
           <section className={css.inspectorSection}>
@@ -572,7 +665,8 @@ export function AssessmentScreen({
                   {shown.map((row) => {
                     const c = names.get(row.candidateId);
                     const rowPapers = papers.get(row.candidateId) ?? [];
-                    const rowMocks = mocks.get(row.candidateId) ?? [];
+                    // A person can hold a mock in another subject. A history row has no subject of its own to match.
+                    const rowMocks = (mocks.get(row.candidateId) ?? []).filter((mock) => row.history || mock.subject === row.subject);
                     return (
                       <tr key={row.key} data-selected={selected === row.key ? "" : undefined} onClick={() => setSelected(row.key)}>
                         <td>
@@ -598,12 +692,20 @@ export function AssessmentScreen({
                           {rowPapers.length ? (
                             rowPapers.map((paper) => <span key={paper.id} className={css.pillNote}>{paperCell(paper, data.config)}</span>)
                           ) : row.kinds.includes("paper") && row.subject ? (
-                            <PaperUpload candidateId={row.candidateId} subject={row.subject as Subject} reload={reload} label="Upload PDF" />
+                            <ResultUpload kind="paper" candidateId={row.candidateId} subject={row.subject as Subject} reload={reload} label="Upload PDF" />
                           ) : (
                             <span className={css.mutedCell}>–</span>
                           )}
                         </td>
-                        <td>{rowMocks.length ? rowMocks.map((mock) => <span key={mock.id} className={css.pillNote}>{mockCell(mock)}</span>) : <span className={css.mutedCell}>–</span>}</td>
+                        <td>
+                          {rowMocks.length ? (
+                            rowMocks.map((mock) => <span key={mock.id} className={css.pillNote}>{mockCell(mock)}</span>)
+                          ) : row.kinds.includes("mock") && row.subject ? (
+                            <ResultUpload kind="mock" candidateId={row.candidateId} subject={row.subject as Subject} reload={reload} label="Upload rubric" />
+                          ) : (
+                            <span className={css.mutedCell}>–</span>
+                          )}
+                        </td>
                         <td>{decided.has(row.candidateId) ? data.decisions.find((d) => d.candidateId === row.candidateId && d.status === "sent")?.decision === "hire" ? "Hired" : "Rejected" : <span className={css.mutedCell}>–</span>}</td>
                       </tr>
                     );
