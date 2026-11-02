@@ -33,7 +33,7 @@ const person = (id: string, name: string, patch = {}) => ({
   resumeName: null, resumeType: "application/pdf", resumeSize: 1000, resumeStoredAt: "2026-10-20T00:00:00Z", resumeState: "available",
   profileHash: "h", profileAssessment: assessment("Degree and subject match."), universityAssessment: { name: "Mahidol University", country: "Thailand", fraction: 0.8, reason: "On the reference list", sources: [] },
   preScreen: null, preScreenHash: null, preScreenAssessment: null, preScreenRepliedAt: null, preScreenResubmitted: false, preScreenScore: null, preScreenParts: null,
-  paperPassedSubjects: [], paperPassedAt: null, paperRecordedBy: null, hasSourceText: true, profileScore: 86, ...patch,
+  paperPassedSubjects: [], paperPassedAt: null, paperRecordedBy: null, hasSourceText: true, profileScore: 86, queueManual: false, ...patch,
 });
 const candidates = [
   person("a", "Sample Ann"),
@@ -41,6 +41,7 @@ const candidates = [
   person("c", "Sample Cho", { profileScore: 74, subjects: ["Physics"], workRightsAnswer: "I require a visa", workRightsAccepted: false, resumeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }),
   person("d", "Sample Dao", { profileScore: 88, stage: "pre_screen", universityAssessment: { name: "Chulalongkorn University", country: "Thailand", fraction: 0.9, reason: "On the reference list", sources: [] } }),
   person("e", "Sample Eve", { profileScore: null, profileAssessment: null, universityAssessment: null, workRightsAnswer: null, workRightsAccepted: false, resumeState: "none", resumeType: null }),
+  person("c2", "Sample Fon", { profileScore: 70 }),
   person("t", "Tracker Only", { seekApplicationId: null }),
 ];
 const config = baseConfigSchema.parse({ connectedEmail: "fixture@example.test", seekJobId: "123456", profileThreshold: 80 });
@@ -49,14 +50,29 @@ const payload = {
   workerSummary: { scanned: 140, imported: 2, remaining: 8, folders: [{ status: "Inbox", count: 120, imported: 112 }, { status: "Prescreen", count: 34, imported: 34 }, { status: "Shortlist", count: 9, imported: 9 }, { status: "Not Suitable", count: 500, imported: 0 }] },
   usage: { preScreen: { perDay: 1, perWeek: 2, waiting: 1, unbooked: 0, bySubject: {} }, onsite: { perDay: 0, perWeek: 0, waiting: 0, unbooked: 0, bySubject: {} } },
   holds: { b: { funnel: "pre_screen", state: "next", position: 0, limit: null, subject: "Mathematics" }, a: { funnel: "pre_screen", state: "held", position: 2, limit: "perDay", subject: "Mathematics" } },
-  preScreenOrder: ["b", "a"], headMocks: {}, heads: {}, candidates, bookings: [],
+  preScreenOrder: ["b", "a", "c2"], headMocks: {}, heads: {}, candidates, bookings: [],
   visitClashes: { candidateIds: [], stale: false, clashes: {} },
   outbox: [{ id: "o1", key: "d:pre-screen", candidateId: "d", kind: "email", status: "sent", error: null, sentAt: "2026-11-01T03:00:00Z", workflowStage: "pre_screen" }],
   audit: [], tutors: [], google: { connected: true, email: "fixture@example.test", lastError: null },
 };
 const realFetch = window.fetch;
+(window as unknown as { posted: unknown[] }).posted = [];
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
+  if (url.pathname === "/api/hiring" && init?.method === "POST") {
+    const body = JSON.parse(String(init.body));
+    (window as unknown as { posted: unknown[] }).posted.push(body);
+    if (body.action === "queue_move") {
+      const rest = payload.preScreenOrder.filter((id) => id !== body.id && !body.ahead.includes(id));
+      payload.preScreenOrder = [...body.ahead, body.id, ...rest];
+      payload.candidates.find((c) => c.id === body.id)!.queueManual = true;
+    }
+    if (body.action === "queue_reset") {
+      payload.preScreenOrder = ["b", "a", "c2"];
+      payload.candidates.forEach((c) => { c.queueManual = false; });
+    }
+    return new Response(JSON.stringify({ ok: true }));
+  }
   if (url.pathname === "/api/hiring" && url.searchParams.get("candidateId"))
     return new Response(JSON.stringify({ id: url.searchParams.get("candidateId"), profileText: "Extracted resume text for the fixture." }));
   if (url.pathname === "/api/hiring") return new Response(JSON.stringify(payload));
@@ -151,25 +167,43 @@ try {
   });
   await check("the list leaves out tracker-only people and starts with the top score", async () => {
     const all = await names();
-    assert.deepEqual(all, ["Sample Ben", "Sample Dao", "Sample Ann", "Sample Cho", "Sample Eve"]);
+    assert.deepEqual(all, ["Sample Ben", "Sample Dao", "Sample Ann", "Sample Cho", "Sample Fon", "Sample Eve"]);
     await shot(page, "seek-all");
   });
   await check("the send queue is numbered, then shows who was sent", async () => {
     await page.getByRole("button", { name: "Send queue" }).click();
-    assert.deepEqual(await names(), ["Sample Ben", "Sample Ann", "Sample Dao"]);
+    assert.deepEqual(await names(), ["Sample Ben", "Sample Ann", "Sample Fon", "Sample Dao"]);
     const cells = await seekRows().locator("td:first-child").allInnerTexts();
-    assert.deepEqual(cells, ["1", "2", "Sent"]);
+    assert.deepEqual(cells.map((text) => text.replace(/[↑↓\s]/g, "")), ["1", "2", "3", "Sent"]);
     await shot(page, "seek-queue");
+  });
+  await check("a drag and the arrow buttons change the order and post only the move", async () => {
+    const row = (name) => seekRows().filter({ hasText: name });
+    await row("Sample Fon").dragTo(row("Sample Ben"));
+    await seekRows().first().getByText("Moved by hand").waitFor();
+    assert.deepEqual(await names(), ["Sample Fon", "Sample Ben", "Sample Ann", "Sample Dao"]);
+    await page.getByRole("button", { name: "Move Sample Ann up" }).click();
+    await page.waitForFunction(() => window.posted.length === 2);
+    await seekRows().nth(1).filter({ hasText: "Sample Ann" }).waitFor();
+    assert.deepEqual((await names()).slice(0, 3), ["Sample Fon", "Sample Ann", "Sample Ben"]);
+    await shot(page, "seek-queue-moved");
+    const posted = await page.evaluate(() => window.posted);
+    assert.deepEqual(posted.map((p) => p.action), ["queue_move", "queue_move"]);
+    assert.deepEqual(posted[0], { action: "queue_move", id: "c2", ahead: [] });
+    await page.getByRole("button", { name: "Back to automatic order" }).click();
+    await page.waitForFunction(() => window.posted.length === 3);
+    await page.waitForFunction(() => !document.body.innerText.includes("Moved by hand"));
+    assert.deepEqual((await names()).slice(0, 3), ["Sample Ben", "Sample Ann", "Sample Fon"]);
     await page.getByRole("button", { name: "All candidates" }).click();
   });
   await check("university names filter the list, and several can be picked", async () => {
     await page.getByText("University: all").click();
     await page.getByLabel("Search university names").fill("mahidol");
     await page.getByRole("checkbox", { name: /Mahidol/ }).check();
-    assert.deepEqual(await names(), ["Sample Ann", "Sample Cho"]);
+    assert.deepEqual(await names(), ["Sample Ann", "Sample Cho", "Sample Fon"]);
     await page.getByLabel("Search university names").fill("");
     await page.getByRole("checkbox", { name: /Chulalongkorn/ }).check();
-    assert.deepEqual(await names(), ["Sample Ben", "Sample Dao", "Sample Ann", "Sample Cho"]);
+    assert.deepEqual(await names(), ["Sample Ben", "Sample Dao", "Sample Ann", "Sample Cho", "Sample Fon"]);
     await shot(page, "seek-university");
     await page.getByRole("button", { name: "Clear filters" }).click();
     await page.getByText(/University: all/).click();

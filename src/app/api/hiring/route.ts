@@ -5,6 +5,7 @@ import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
 import { configSchema, localDate, subjectSchema } from "@/lib/hiring/model";
 import { headWeek } from "@/lib/hiring/head-schedule";
 import { candidateById, dashboard, reviewCandidate, saveHeadDays, saveSettings, settings } from "@/lib/hiring/service";
+import { moveInQueue, resetQueueOrder } from "@/lib/hiring/queue";
 import { deliverBookingMessages } from "@/lib/hiring/worker";
 import { getDb } from "@/lib/db";
 import { googleConnectionStatus } from "@/lib/hiring/google";
@@ -32,6 +33,15 @@ const command = z.discriminatedUnion("action", [
       revision: z.number().int().nonnegative(),
     })
     .strict(),
+  z
+    .object({
+      action: z.literal("queue_move"),
+      id: z.uuid(),
+      // Far above any real queue. The job has hundreds of applications.
+      ahead: z.array(z.uuid()).max(20000),
+    })
+    .strict(),
+  z.object({ action: z.literal("queue_reset") }).strict(),
   z
     .object({
       action: z.enum(["advance", "paper_pass", "stop", "invite_onsite", "send_new_link", "cancel_visit", "mark_no_show"]),
@@ -90,6 +100,14 @@ export async function POST(request: Request) {
     if (input.action === "head_days") {
       const saved = await saveHeadDays(input.key, input.days, input.revision, actor);
       return NextResponse.json({ ok: true, ...saved });
+    }
+    if (input.action === "queue_move") {
+      await moveInQueue(input.id, input.ahead, actor, getDb());
+      return NextResponse.json({ ok: true });
+    }
+    if (input.action === "queue_reset") {
+      await resetQueueOrder(actor, getDb());
+      return NextResponse.json({ ok: true });
     }
     await reviewCandidate(input.id, input, actor);
     after(() => deliverBookingMessages());

@@ -5,6 +5,7 @@ import { formatInTimeZone } from "date-fns-tz";
 import { RESUME_TYPES, SUBJECTS, ZONE, type Subject } from "@/lib/hiring/model";
 import {
   NO_SEEK_FILTER,
+  aheadAfterMove,
   isFromSeek,
   matchesSeekFilter,
   seekCoverage,
@@ -17,7 +18,7 @@ import {
 } from "@/lib/hiring/seek-view";
 import { preScreenNote, type CandidateExtras } from "@/lib/hiring/status";
 import { AssessmentBlock, ResumeBody, SeekLinks, SourceTextBody, useResumeCheck, useSourceText } from "./candidate-inspector";
-import type { HiringCandidate, HiringData } from "./dashboard";
+import type { Command, HiringCandidate, HiringData } from "./dashboard";
 import { PILL_CLASS } from "./pipeline-charts";
 import css from "./dashboard.module.css";
 
@@ -230,17 +231,23 @@ export function SeekScreen({
   extras,
   holds,
   onOpenRecord,
+  command,
+  busy,
   now,
 }: {
   data: HiringData;
   extras: Map<string, CandidateExtras>;
   holds: Holds;
   onOpenRecord: (id: string) => void;
+  command: Command;
+  busy: boolean;
   now?: Date;
 }) {
   const [filter, setFilter] = useState<SeekFilter>(NO_SEEK_FILTER);
   const [mode, setMode] = useState<"all" | "queue">("all");
   const [selected, setSelected] = useState<string | null>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [over, setOver] = useState<string | null>(null);
   const list = useRef<HTMLDivElement>(null);
   const threshold = data.config.profileThreshold;
 
@@ -277,6 +284,18 @@ export function SeekScreen({
     const next = rows[at === -1 ? 0 : Math.min(rows.length - 1, Math.max(0, at + step))].candidate.id;
     setSelected(next);
     focusRow(next);
+  };
+  const moveTo = (id: string, target: string | undefined) => {
+    // The full queue, not the filtered rows, so a hidden person keeps their place.
+    const ahead = target ? aheadAfterMove(data.preScreenOrder, id, target) : null;
+    if (ahead && !busy) void command({ action: "queue_move", id, ahead });
+  };
+  const anyMoved = pool.some((c) => c.queueManual && data.preScreenOrder.includes(c.id));
+  // The arrows pass the next person on the screen. A hidden person between them keeps their place.
+  const visibleQueue = rows.flatMap((row) => (row.place === null ? [] : [row.candidate.id]));
+  const dropSide = (id: string) => {
+    if (over !== id || !dragging || dragging === id) return undefined;
+    return data.preScreenOrder.indexOf(dragging) < data.preScreenOrder.indexOf(id) ? "below" : "above";
   };
   const isFiltered = Object.values(filter).some((value) => value.length > 0);
 
@@ -346,6 +365,12 @@ export function SeekScreen({
           </div>
           <p className={css.activeFilters}>
             {rows.length} shown of {pool.length}
+            {mode === "queue" && <span>Drag a row, or use its arrows, to change who goes first. The daily limits still apply.</span>}
+            {mode === "queue" && anyMoved && (
+              <button type="button" className={css.inlineLink} disabled={busy} onClick={() => void command({ action: "queue_reset" })}>
+                Back to automatic order
+              </button>
+            )}
             {isFiltered && (
               <button type="button" className={css.inlineLink} onClick={() => setFilter(NO_SEEK_FILTER)}>
                 Clear filters
@@ -368,16 +393,79 @@ export function SeekScreen({
                 {rows.map(({ candidate: c, place, sentAt }) => {
                   const extra = extras.get(c.id);
                   const hold = holds.get(c.id);
+                  const canMove = mode === "queue" && place !== null;
+                  const queueIndex = visibleQueue.indexOf(c.id);
                   return (
                     <tr
                       key={c.id}
                       data-selected={selected === c.id ? "" : undefined}
+                      data-drop={dropSide(c.id)}
+                      draggable={canMove && !busy}
+                      onDragStart={
+                        canMove
+                          ? (e) => {
+                              // Firefox starts a drag only when it carries data.
+                              e.dataTransfer.setData("text/plain", c.id);
+                              setDragging(c.id);
+                            }
+                          : undefined
+                      }
+                      onDragEnd={() => {
+                        setDragging(null);
+                        setOver(null);
+                      }}
+                      onDragOver={
+                        canMove && dragging
+                          ? (e) => {
+                              e.preventDefault();
+                              setOver(c.id);
+                            }
+                          : undefined
+                      }
+                      onDrop={
+                        canMove && dragging
+                          ? (e) => {
+                              e.preventDefault();
+                              moveTo(dragging, c.id);
+                              setDragging(null);
+                              setOver(null);
+                            }
+                          : undefined
+                      }
                       onClick={() => {
                         setSelected(c.id);
                         focusRow(c.id);
                       }}
                     >
-                      <td className={css.num}>{place ?? (sentAt ? "Sent" : "–")}</td>
+                      <td className={css.num}>
+                        {place ?? (sentAt ? "Sent" : "–")}
+                        {canMove && (
+                          <span className={css.moveButtons}>
+                            <button
+                              type="button"
+                              aria-label={`Move ${c.name} up`}
+                              disabled={busy || queueIndex === 0}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                moveTo(c.id, visibleQueue[queueIndex - 1]);
+                              }}
+                            >
+                              ↑
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Move ${c.name} down`}
+                              disabled={busy || queueIndex === visibleQueue.length - 1}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                moveTo(c.id, visibleQueue[queueIndex + 1]);
+                              }}
+                            >
+                              ↓
+                            </button>
+                          </span>
+                        )}
+                      </td>
                       <td className={css.candidateCell}>
                         <button
                           type="button"
@@ -390,7 +478,10 @@ export function SeekScreen({
                         >
                           {c.name}
                         </button>
-                        <span className={css.email}>{c.subjects.join(", ") || "No subject yet"}</span>
+                        <span className={css.email}>
+                          {c.subjects.join(", ") || "No subject yet"}
+                          {place !== null && c.queueManual && " · Moved by hand"}
+                        </span>
                       </td>
                       <td className={css.truncate} title={universityName(c)}>
                         {universityName(c)}

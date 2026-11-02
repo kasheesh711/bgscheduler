@@ -5,6 +5,7 @@ import {
   bangkokWeekStart,
   blockingLimit,
   headWeekMocks,
+  mergeManualOrder,
   onsiteMeters,
   preScreenMeters,
   rankQueue,
@@ -58,6 +59,55 @@ describe("rankQueue", () => {
   it("puts a subject missing from the priority list last", () => {
     const priority = [{ subject: "Physics" as const, hiring: true }];
     expect(ids(rankQueue([entry("m", "Mathematics", 99), entry("p", "Physics", 1)], priority))).toEqual(["p", "m"]);
+  });
+});
+
+describe("manual queue order", () => {
+  const drag = (row: QueueEntry, ahead: string[], movedAt = "2026-11-02T00:00:00Z") => ({ ...row, manual: { ahead, movedAt } });
+  const [c0, c1, c2, c3] = many(4);
+  it("places a dragged row after the people ahead of it, and leaves the others in rank order", () => {
+    expect(ids(mergeManualOrder([c0, c1, c2, drag(c3, ["c00"])]))).toEqual(["c00", "c03", "c01", "c02"]);
+    expect(ids(mergeManualOrder([c0, c1, c2, drag(c3, [])]))).toEqual(["c03", "c00", "c01", "c02"]);
+  });
+  it("keeps the place when the person ahead has left the queue", () => {
+    expect(ids(mergeManualOrder([c1, c2, drag(c3, ["c00"])]))).toEqual(["c03", "c01", "c02"]);
+    expect(ids(mergeManualOrder([c0, c2, drag(c3, ["c00", "c01"])]))).toEqual(["c00", "c03", "c02"]);
+  });
+  it("follows the current order when a re-rank changes who stood ahead", () => {
+    const ranked = [c2, c0, c1, drag(c3, ["c00", "c01", "c02"])];
+    expect(ids(mergeManualOrder(ranked))).toEqual(["c02", "c00", "c01", "c03"]);
+  });
+  it("keeps a person parked at the back behind later arrivals' earlier neighbours when everyone ahead has left", () => {
+    const later = (id: string) => ({ ...entry(id, "Mathematics", 90), createdAt: new Date("2026-12-01T00:00:00Z") });
+    expect(ids(mergeManualOrder([later("n1"), later("n2"), drag(c3, ["c00", "c01"])]))).toEqual(["n1", "n2", "c03"]);
+    expect(ids(mergeManualOrder([later("n1"), c2, drag(c3, ["c00"])]))).toEqual(["n1", "c03", "c02"]);
+  });
+  it("lets the latest of two drags win", () => {
+    const rows = [c0, drag(c1, ["c00", "c02"], "2026-11-01T00:00:00Z"), c2, drag(c3, ["c00"], "2026-11-02T00:00:00Z")];
+    expect(ids(mergeManualOrder(rows))).toEqual(["c00", "c03", "c02", "c01"]);
+  });
+  it("gives a new arrival its automatic place, which can be above a dragged row", () => {
+    const fresh = entry("new", "Mathematics", 99.5);
+    const ranked = rankQueue([c0, c1, c2, drag(c3, ["c02"]), fresh], cfg().subjectPriority);
+    expect(ids(mergeManualOrder(ranked))).toEqual(["c00", "new", "c01", "c02", "c03"]);
+  });
+  it("controls what the walk releases, and the limits still apply", () => {
+    const config = cfg({ preScreenLimits: { perDay: 2, ...wide, perSubject: 1000 } });
+    const { release, order } = releaseQueue("pre_screen", [c0, c1, c2, drag(c3, [])], usage(), config);
+    expect(ids(release)).toEqual(["c03", "c00"]);
+    expect(order).toEqual(["c03", "c00", "c01", "c02"]);
+  });
+  it("skips a dragged person whose subject is full, and the next person goes", () => {
+    const config = cfg({ preScreenLimits: { perDay: 1, ...wide, perSubject: 1 } });
+    const physics = entry("p", "Physics", 1);
+    const { release, held } = releaseQueue("pre_screen", [c0, physics].map((r) => (r.id === "c00" ? drag(r, []) : r)), usage({ bySubject: { Mathematics: 1 } }), config);
+    expect(ids(release)).toEqual(["p"]);
+    expect(held[0]).toMatchObject({ id: "c00", position: 1, limit: "perSubject" });
+  });
+  it("never applies a drag to the onsite queue", () => {
+    const config = cfg();
+    const { order } = releaseQueue("onsite", [c0, c1, drag(c2, [])], usage(), config);
+    expect(order).toEqual(["c00", "c01", "c02"]);
   });
 });
 

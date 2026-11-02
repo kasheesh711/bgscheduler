@@ -69,6 +69,15 @@ export function sendQueueRows<T extends { id: string }>(candidates: T[], order: 
   return [...queued, ...done];
 }
 
+/** Who stands ahead of `id` after it moves to `target`'s place in the full queue. Null when nothing would change. */
+export function aheadAfterMove(order: string[], id: string, target: string) {
+  const from = order.indexOf(id);
+  const to = order.indexOf(target);
+  if (from === -1 || to === -1 || from === to) return null;
+  const rest = order.filter((other) => other !== id);
+  return rest.slice(0, rest.indexOf(target) + (from < to ? 1 : 0));
+}
+
 const STALE_AFTER_MS = 60 * 60 * 1000;
 
 /** SEEK count against the website, per imported folder, from the last worker read. A summary from before this count has no number to show. */

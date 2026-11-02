@@ -16,10 +16,12 @@ import { isNewFlow, parseFormTimestamp, syncTracker } from "../sources";
 import { assessCandidates, deliverOutbox, preScreenText, runHiringCycle } from "../worker";
 import {
   autoInviteEligible,
+  moveInQueue,
   onsiteQueue,
   preScreenQueue,
   readLimitUsage,
   releaseQueues,
+  resetQueueOrder,
   runFollowUps,
 } from "../queue";
 
@@ -379,6 +381,45 @@ describe("usage counts", () => {
       payload: { workflowStage: "pre_screen" },
     });
     expect((await readLimitUsage(db, "pre_screen", now)).perDay).toBe(1);
+  });
+});
+
+describe("manual queue order", () => {
+  it("sends in the dragged order, and the drag itself sends nothing and changes no stage or revision", async () => {
+    await setConfig({ preScreenLimits: { perDay: 1, perWeek: 15, waiting: 15, perSubject: 3 } });
+    const a = await seed({ createdAt: after(-3) });
+    const b = await seed({ createdAt: after(-2) });
+    const late = await seed({ createdAt: after(-1) });
+    await moveInQueue(late.id, [], "owner@example.com", db);
+    const [moved] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, late.id));
+    expect(moved).toMatchObject({ stage: "new", revision: late.revision });
+    expect(moved.updatedAt).toEqual(late.updatedAt);
+    expect(await db.select().from(s.hiringOutbox)).toEqual([]);
+    const [row] = await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "queue-move"));
+    expect(row).toMatchObject({ actor: "owner@example.com", candidateId: late.id });
+
+    expect((await releaseQueues(db)).preScreen).toBe(1);
+    expect((await forms()).map((f) => f.candidateId)).toEqual([late.id]);
+    // The next day the automatic order carries on, and the person who left does not disturb it.
+    vi.setSystemTime(after(1));
+    await releaseQueues(db);
+    expect((await forms()).map((f) => f.candidateId).sort()).toEqual([a.id, late.id].sort());
+    expect((await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, b.id)))[0].stage).toBe("new");
+  });
+  it("puts the automatic order back on a reset", async () => {
+    await setConfig({ preScreenLimits: { perDay: 1, perWeek: 15, waiting: 15, perSubject: 3 } });
+    const a = await seed({ createdAt: after(-3) });
+    const late = await seed({ createdAt: after(-1) });
+    await moveInQueue(late.id, [], "owner@example.com", db);
+    await resetQueueOrder("owner@example.com", db);
+    await releaseQueues(db);
+    expect((await forms()).map((f) => f.candidateId)).toEqual([a.id]);
+  });
+  it("refuses a move for someone who has left the queue, or a list holding the person", async () => {
+    const gone = await seed({ stage: "pre_screen" });
+    await expect(moveInQueue(gone.id, [], "owner@example.com", db)).rejects.toMatchObject({ status: 409 });
+    const here = await seed();
+    await expect(moveInQueue(here.id, [here.id], "owner@example.com", db)).rejects.toMatchObject({ status: 400 });
   });
 });
 

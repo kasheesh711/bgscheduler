@@ -560,6 +560,8 @@ export async function dashboard(db: Database = getDb()) {
       return {
         ...c,
         profileText: undefined,
+        // The stored list can be long, and the screen only needs to know the row was moved.
+        queueManual: !!c.queueManual,
         // The screen reads workRightsAnswer. This old column stays in the database only.
         workRightsConfirmed: undefined,
         // The text itself is read on demand. This tells the screen whether there is any, such as for a person added from the tracker.
