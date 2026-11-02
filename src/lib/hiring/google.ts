@@ -122,8 +122,12 @@ export async function deliverCalendar(
       method: "POST",
       body: JSON.stringify({
         id,
-        summary: `BeGifted ${booking.kind === "mock" ? "mock teaching" : "paper assessment"}: ${candidate.name}`,
-        description: `Subjects: ${booking.subjects.join(", ")}\n${booking.kind === "mock" ? "Prepare an IGCSE topic of your choice and a topic selected by the interviewer." : "Two hours are allocated per subject."}`,
+        summary: booking.visitId
+          ? booking.kind === "mock"
+            ? "BeGifted mock teaching"
+            : "BeGifted exam"
+          : `BeGifted ${booking.kind === "mock" ? "mock teaching" : "paper assessment"}: ${candidate.name}`,
+        description: `${booking.visitId ? `Candidate: ${candidate.name}\n` : ""}Subjects: ${booking.subjects.join(", ")}\n${booking.kind === "mock" ? "Prepare an IGCSE topic of your choice and a topic selected by the interviewer." : booking.visitId ? "The 2-hour exam. The mock teaching session follows it." : "Two hours are allocated per subject."}`,
         location,
         start: { dateTime: booking.startTime.toISOString(), timeZone: ZONE },
         end: { dateTime: booking.endTime.toISOString(), timeZone: ZONE },

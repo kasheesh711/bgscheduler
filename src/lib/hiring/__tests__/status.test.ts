@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseFormTimestamp, preScreenNote, preScreenStatus } from "../status";
+import { configSchema, type Stage } from "../model";
+import { candidateExtras, holdNote, parseFormTimestamp, preScreenNote, preScreenStatus, visitText, workerWarning } from "../status";
 
 const id = "c1";
 const sent = new Date("2026-10-29T03:00:00Z");
@@ -12,7 +13,7 @@ const job = (key: string, status = "sent", sentAt: Date | null = sent) => ({
 });
 const candidate = (extra: Record<string, unknown> = {}) => ({
   id,
-  stage: "pre_screen" as string,
+  stage: "pre_screen" as Stage,
   previouslyContacted: false,
   preScreen: null as { submittedAt: string } | null,
   ...extra,
@@ -108,5 +109,177 @@ describe("form timestamps", () => {
   it("returns null for text it cannot read", () => {
     expect(parseFormTimestamp("last week")).toBeNull();
     expect(preScreenNote({ status: "Replied", sentAt: null, remindedAt: null, repliedAt: "last week" })).toBe("Replied");
+  });
+});
+
+describe("candidateExtras visit", () => {
+  const now = new Date("2026-11-04T05:00:00Z");
+  const person = { id: "a", stage: "onsite_booked" as const, previouslyContacted: false, preScreen: null };
+  const visit = (kind: "paper" | "mock", start: string, end: string, status = "confirmed") => ({
+    candidateId: "a",
+    kind,
+    status,
+    startTime: start,
+    endTime: end,
+    visitId: "v1",
+  });
+  const extras = (bookings: Parameters<typeof candidateExtras>[2]) => candidateExtras([person], [], bookings, new Set(), now).get("a")!;
+  it("shows a current visit by its exam time, and labels it a visit", () => {
+    const shown = extras([
+      visit("paper", "2026-11-05T03:00:00Z", "2026-11-05T05:00:00Z"),
+      visit("mock", "2026-11-05T05:00:00Z", "2026-11-05T06:00:00Z"),
+    ]).visit!;
+    expect(shown.startTime).toBe("2026-11-05T03:00:00Z");
+    expect(visitText(shown)).toBe("Visit · 5 Nov, 10:00");
+  });
+  it("drops a visit that has ended or was cancelled, and keeps an old-flow booking as today", () => {
+    expect(extras([visit("mock", "2026-11-03T05:00:00Z", "2026-11-03T06:00:00Z")]).visit).toBeNull();
+    expect(extras([visit("mock", "2026-11-05T05:00:00Z", "2026-11-05T06:00:00Z", "cancelled")]).visit).toBeNull();
+    const old = { candidateId: "a", kind: "mock" as const, status: "confirmed", startTime: "2026-10-01T05:00:00Z" };
+    expect(extras([old]).visit).toEqual(old);
+    expect(extras([old]).visitFacts).toEqual([]);
+  });
+  const full = (kind: "paper" | "mock", start: string, end: string) => ({
+    ...visit(kind, start, end),
+    interviewerKey: kind === "mock" ? "Peat" : null,
+    subjects: ["Mathematics"],
+  });
+  it("gives the exam time, mock time, head, subject and status from the visit's two rows", () => {
+    const facts = extras([
+      full("paper", "2026-11-05T03:00:00Z", "2026-11-05T05:00:00Z"),
+      full("mock", "2026-11-05T05:00:00Z", "2026-11-05T06:00:00Z"),
+    ]).visitFacts;
+    expect(facts).toEqual([
+      ["Exam", "5 Nov, 10:00"],
+      ["Mock", "5 Nov, 12:00"],
+      ["Head", "Peat"],
+      ["Subject", "Mathematics"],
+      ["Status", "Confirmed"],
+    ]);
+  });
+  it("still shows the exam time after the exam has ended", () => {
+    const facts = extras([
+      full("paper", "2026-11-04T02:00:00Z", "2026-11-04T04:00:00Z"),
+      full("mock", "2026-11-04T04:00:00Z", "2026-11-04T06:00:00Z"),
+    ]).visitFacts;
+    expect(facts[0]).toEqual(["Exam", "4 Nov, 09:00"]);
+    expect(facts[1]).toEqual(["Mock", "4 Nov, 11:00"]);
+  });
+});
+
+describe("holdNote", () => {
+  const config = configSchema.parse({ preScreenThreshold: null });
+  const asEntry = (extra: Record<string, unknown> = {}) => ({
+    id: "a",
+    stage: "new" as Stage,
+    email: "a@example.com",
+    previouslyContacted: false,
+    workRightsAnswer: "I have permanent work rights with no restrictions",
+    profileAssessment: assessment("Physics"),
+    universityAssessment: null,
+    preScreen: null,
+    preScreenAssessment: null,
+    ...extra,
+  });
+  function assessment(subject: string, degree: "met" | "not_met" = "met") {
+    return {
+      criteria: (["degree", "subject", "curriculum", "teaching", "english"] as const).map((id) => ({
+        id,
+        result: id === "degree" ? degree : ("met" as const),
+        evidence: "q",
+        reason: "r",
+      })),
+      subjects: [{ subject, evidence: "q", relevant: true }],
+      universities: [],
+      summary: "",
+    } as never;
+  }
+  const open = { ...config, profileThreshold: 0 };
+  const form = {
+    degree: "Bachelor's",
+    subjects: "Physics",
+    english: "Advanced (C1)",
+    englishEvidence: "",
+    availability: "Saturday, weekdays after 15:00",
+    portfolio: "",
+  } as never;
+  const passing = {
+    ...open,
+    preScreenThreshold: 50,
+    interviewers: [{ canonicalKey: "Peat", email: "peat@example.com", subjects: ["Physics" as const] }],
+  } as never as typeof open;
+
+  it("shows the queue position and the limit that holds a candidate", () => {
+    const note = holdNote(asEntry(), { funnel: "pre_screen", state: "held", position: 3, limit: "perDay", subject: "Physics" }, open)!;
+    expect(note.short).toBe("Queue 3 · daily limit 5");
+    expect(note.long.join(" ")).toContain("Held by the daily limit (5)");
+    const subject = holdNote(asEntry(), { funnel: "pre_screen", state: "held", position: 1, limit: "perSubject", subject: "Physics" }, open)!;
+    expect(subject.short).toBe("Queue 1 · Physics limit 3");
+    const onsite = holdNote(asEntry({ stage: "pre_screen" }), { funnel: "onsite", state: "held", position: 2, limit: "unbooked", subject: "Physics" }, open)!;
+    expect(onsite.short).toBe("Onsite queue 2 · not-booked limit 2");
+  });
+
+  it("says a released row is next to send", () => {
+    expect(holdNote(asEntry(), { funnel: "pre_screen", state: "next", position: 0, limit: null, subject: "Physics" }, open)!.short).toBe("Next to send");
+  });
+
+  it("gives the reason a new candidate is held by a setting, short in the column and in full for the panel", () => {
+    const word = (e: Record<string, unknown>, c = open) => holdNote(asEntry(e), undefined, c)!;
+    expect(word({ workRightsAnswer: "I am a long term / permanent resident" }).short).toBe("Work-rights answer not accepted");
+    expect(word({}, { ...open, subjectPriority: open.subjectPriority.map((p) => ({ ...p, hiring: false })) }).short).toBe("Subject not hiring");
+    expect(word({}, { ...open, profileThreshold: 100 }).short).toBe("Below profile threshold");
+    expect(word({ profileAssessment: null }).short).toBe("Not scored");
+    expect(word({ email: null }).short).toBe("No usable email");
+    const several = word({ workRightsAnswer: null, email: null });
+    expect(several.long).toEqual(expect.arrayContaining(["The work-rights answer is missing or not accepted.", "There is no usable email."]));
+    expect(several.short).toBe("Work-rights answer not accepted +1");
+  });
+
+  it("shows nothing for a candidate who can go ahead, or one past the form", () => {
+    expect(holdNote(asEntry(), undefined, open)).toBeNull();
+    expect(holdNote(asEntry({ stage: "review" }), undefined, open)).toBeNull();
+    expect(holdNote(asEntry({ stage: "stopped" }), undefined, open)).toBeNull();
+  });
+
+  it("says a scored reply waits for a pass score, for the onsite step only", () => {
+    const replied = asEntry({ stage: "pre_screen", preScreen: form, preScreenAssessment: assessment("Physics") });
+    expect(holdNote(replied, undefined, config)!.short).toBe("Needs a pass score");
+    expect(holdNote(replied, undefined, passing)).toBeNull();
+    expect(holdNote(asEntry(), undefined, open)).toBeNull();
+  });
+
+  it("says why a reply waits for a setting: the subject is not hiring, or it has no head", () => {
+    const replied = asEntry({ stage: "no_reply", preScreen: form, preScreenAssessment: assessment("Physics") });
+    const closed = { ...passing, subjectPriority: passing.subjectPriority.map((p) => ({ ...p, hiring: false })) };
+    const noHead = holdNote(replied, undefined, { ...passing, interviewers: [] })!;
+    expect(noHead.short).toBe("No head for this subject");
+    expect(noHead.long.join(" ")).toContain("Physics");
+    const notHiring = holdNote(replied, undefined, closed)!;
+    expect(notHiring.short).toBe("Subject not hiring");
+    expect(notHiring.long.join(" ")).toContain("Physics");
+    // A queue entry wins, and a person's review stage shows no such note.
+    expect(holdNote(replied, { funnel: "onsite", state: "next", position: 0, limit: null, subject: "Physics" }, closed)!.short).toBe("Next to send");
+    expect(holdNote({ ...replied, stage: "review" }, undefined, closed)).toBeNull();
+  });
+});
+
+describe("workerWarning", () => {
+  const now = new Date("2026-11-02T10:00:00Z");
+  it("warns when automation is on and the last run is over 60 minutes old", () => {
+    expect(workerWarning(true, new Date("2026-11-02T08:59:00Z"), now)).toMatch(/last ran 61 minutes ago/);
+    expect(workerWarning(true, new Date("2026-11-02T06:00:00Z"), now)).toMatch(/4 hours/);
+    expect(workerWarning(true, new Date("2026-10-30T10:00:00Z"), now)).toMatch(/3 days/);
+  });
+  it("is quiet at exactly 60 minutes, when automation is off, or for a recent run", () => {
+    expect(workerWarning(true, new Date("2026-11-02T09:00:00Z"), now)).toBeNull();
+    expect(workerWarning(true, new Date("2026-11-02T09:45:00Z"), now)).toBeNull();
+    expect(workerWarning(false, new Date("2026-10-01T00:00:00Z"), now)).toBeNull();
+  });
+  it("warns when automation is on and the worker has never run", () => {
+    expect(workerWarning(true, null, now)).toMatch(/has not run/);
+    expect(workerWarning(false, null, now)).toBeNull();
+  });
+  it("reads the time from a string, as the dashboard JSON gives it", () => {
+    expect(workerWarning(true, "2026-11-02T06:00:00.000Z", now)).toMatch(/4 hours/);
   });
 });

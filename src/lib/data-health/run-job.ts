@@ -1,4 +1,7 @@
 import {sendProgressLineReminders} from "@/lib/line/progress-reminders";
+import { deliverBookingMessages } from "@/lib/hiring/worker";
+import { runResumeRetention } from "@/lib/hiring/resume-files";
+import { hiringError } from "@/lib/hiring/http";
 import { nightlyWorkerOutcome, runNightlyReminders } from "@/lib/post-class-feedback/nightly-reminders";
 import { isClassroomOperationsOwner, isWiseClassroomJob, pausedWiseClassroomResult, wiseClassroomAutomationEnabled } from "@/lib/classrooms/operations-policy";
 import { runClassroomPublishRecovery } from "@/lib/classrooms/publish-worker";
@@ -318,6 +321,16 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
         } catch (error) {
           const message = error instanceof Error ? error.message : "Failed to sync onsite foot traffic";
           return NextResponse.json({ error: message }, { status: 500 });
+        }
+      }
+
+      if (jobKey === "hiring_delivery") return NextResponse.json({ sent: await deliverBookingMessages() });
+
+      if (jobKey === "hiring_resume_retention") {
+        try {
+          return NextResponse.json({ deleted: await runResumeRetention() });
+        } catch (error) {
+          return hiringError(error);
         }
       }
 

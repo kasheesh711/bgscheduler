@@ -25,7 +25,7 @@ import type { Week, OfficeNetwork } from "@/lib/tutor-attendance/model";
 import type { WiseTeacher } from "@/lib/wise/types";
 import type { CaptureConsent, CaptureSession, DraftFields } from "@/lib/class-capture/model";
 import type { HiringConfig, PreScreen, Subject, Stage } from "@/lib/hiring/model";
-import type { Assessment } from "@/lib/hiring/scoring";
+import type { Assessment, PreScreenAssessment } from "@/lib/hiring/scoring";
 
 export const hiringSettings = pgTable("hiring_settings", {
   id: text("id").primaryKey().default("default"),
@@ -57,6 +57,16 @@ export const hiringCandidates = pgTable(
       .notNull()
       .default(false),
     workRightsConfirmed: boolean("work_rights_confirmed"),
+    workRightsAnswer: text("work_rights_answer"),
+    visitSubject: text("visit_subject").$type<Subject>(),
+    preScreenRepliedAt: timestamp("pre_screen_replied_at", { withTimezone: true }),
+    preScreenResubmitted: boolean("pre_screen_resubmitted").notNull().default(false),
+    resumePath: text("resume_path"),
+    resumeName: text("resume_name"),
+    resumeType: text("resume_type"),
+    resumeSha256: text("resume_sha256"),
+    resumeSize: integer("resume_size"),
+    resumeStoredAt: timestamp("resume_stored_at", { withTimezone: true }),
     profileText: text("profile_text").notNull().default(""),
     profileHash: text("profile_hash"),
     profileAssessment: jsonb("profile_assessment").$type<Assessment>(),
@@ -65,7 +75,7 @@ export const hiringCandidates = pgTable(
     >(),
     preScreen: jsonb("pre_screen").$type<PreScreen>(),
     preScreenHash: text("pre_screen_hash"),
-    preScreenAssessment: jsonb("pre_screen_assessment").$type<Assessment>(),
+    preScreenAssessment: jsonb("pre_screen_assessment").$type<PreScreenAssessment>(),
     subjects: jsonb("subjects").$type<Subject[]>().notNull().default([]),
     paperPassedSubjects: jsonb("paper_passed_subjects")
       .$type<Subject[]>()
@@ -105,9 +115,13 @@ export const hiringBookings = pgTable(
     startTime: timestamp("start_time", { withTimezone: true }).notNull(),
     endTime: timestamp("end_time", { withTimezone: true }).notNull(),
     status: text("status")
-      .$type<"confirmed" | "cancelled">()
+      .$type<"confirmed" | "cancelled" | "no_show">()
       .notNull()
       .default("confirmed"),
+    visitId: uuid("visit_id"),
+    rescheduleOf: uuid("reschedule_of").references(
+      (): AnyPgColumn => hiringBookings.id,
+    ),
     evidence: jsonb("evidence").$type<Record<string, unknown>>().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -115,6 +129,7 @@ export const hiringBookings = pgTable(
   },
   (t) => [
     index("hiring_booking_time").on(t.interviewerKey, t.startTime),
+    index("hiring_booking_visit").on(t.visitId),
     check("hiring_booking_time_order", sql`${t.endTime}>${t.startTime}`),
   ],
 );

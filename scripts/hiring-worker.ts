@@ -15,9 +15,10 @@ import {
 } from "../src/lib/hiring/model";
 import { settings } from "../src/lib/hiring/service";
 import { importApplication, observeSeekState } from "../src/lib/hiring/sources";
+import { keepResume } from "../src/lib/hiring/resume-files";
 import { runHiringCycle } from "../src/lib/hiring/worker";
 import { requestDelivery } from "../src/lib/hiring/dispatch";
-import { assessmentSchema, ASSESSMENT_SYSTEM } from "../src/lib/hiring/scoring";
+import { assessmentOutputSchema, preScreenOutputSchema, assessWithBriefs, ASSESSMENT_SYSTEM, PRE_SCREEN_SYSTEM } from "../src/lib/hiring/scoring";
 import {
   runClaude,
   killChildren,
@@ -73,7 +74,12 @@ async function main() {
     do {
       try {
         const { config } = await settings(db);
-        configSchema.parse(config);
+        // A stored config that breaks a rule stops the worker with a message Kevin can act on. A save repairs it.
+        const rules = configSchema.safeParse(config);
+        if (!rules.success)
+          throw new Error(
+            `A saved rule has a problem: ${rules.error.issues[0]?.message ?? "invalid setting"} Fix it in Rules and setup.`,
+          );
         if (!config.enabled) throw new Error("Hiring is paused in Scheduling.");
         const bookingMessages = await requestDelivery({ mode: "bookings" });
         subscriptionAuthSchema.parse(
@@ -91,35 +97,40 @@ async function main() {
           profile,
           config.seekJobId,
           new Set(rows.flatMap((r) => r.ids)),
-          (value) => importApplication(value, db).then(() => {}),
+          (value) => importApplication(value, db),
           (id, status, contacted) =>
             observeSeekState(id, status, contacted, db),
+          (candidateId, file) => keepResume(candidateId, file, db),
         );
         const cliVersion = execFileSync("claude", ["--version"], {
           encoding: "utf8",
         }).trim();
-        const result = await runHiringCycle(db, async (source, key) => {
+        const result = await runHiringCycle(db, async (source, key, kind) => {
           if (stop) throw new Error("Worker stopped.");
-          const outcome = await runClaude(
-            {
-              purpose: "hiring-assessment",
-              key,
-              system: ASSESSMENT_SYSTEM,
-              user: source,
-              schema: z.toJSONSchema(assessmentSchema, { target: "draft-07" }),
-              budgetUsd: 3,
-              timeoutMs: 180000,
-            },
-            {
-              cwd,
-              cliVersion,
-              callsLog: path.join(home, "model-calls.jsonl"),
-              children,
-            },
-          );
-          if (outcome.kind !== "success")
-            throw new Error(`Subscription assessment stopped: ${outcome.kind}`);
-          return outcome.value;
+          // The call asks for the short lines too. A line over its limit is asked again with the exact count.
+          let attempt = 0;
+          return assessWithBriefs(async (feedback) => {
+            const outcome = await runClaude(
+              {
+                purpose: "hiring-assessment",
+                key: attempt++ ? `${key}:briefs:${attempt}` : key,
+                system: kind === "pre-screen" ? PRE_SCREEN_SYSTEM : ASSESSMENT_SYSTEM,
+                user: source + feedback,
+                schema: z.toJSONSchema(kind === "pre-screen" ? preScreenOutputSchema : assessmentOutputSchema, { target: "draft-07" }),
+                budgetUsd: 3,
+                timeoutMs: 180000,
+              },
+              {
+                cwd,
+                cliVersion,
+                callsLog: path.join(home, "model-calls.jsonl"),
+                children,
+              },
+            );
+            if (outcome.kind !== "success")
+              throw new Error(`Subscription assessment stopped: ${outcome.kind}`);
+            return outcome.value;
+          });
         });
         await db
           .update(hiringSettings)

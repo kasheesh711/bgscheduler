@@ -1,19 +1,54 @@
 "use client";
 
-import { SUBJECTS, type HiringConfig } from "@/lib/hiring/model";
+import { localDate, SUBJECTS, type HiringConfig } from "@/lib/hiring/model";
+import {
+  daysOf,
+  fullPriority,
+  HEAD_DAYS,
+  hasSavedHours,
+  LIMIT_FIELDS,
+  minutesToTime,
+  movePriority,
+  PRE_SCREEN_WEIGHT_LABELS,
+  PROFILE_WEIGHT_LABELS,
+  sendingNotice,
+  setHiring,
+  setLimit,
+  setWorkRightsAccepted,
+  settingsProblems,
+  startsSending,
+  timeToMinutes,
+  unsavedHeadDays,
+  workRightsRows,
+  type LimitField,
+} from "@/lib/hiring/rules";
 import type { Command, HiringData } from "./dashboard";
 import css from "./dashboard.module.css";
 
-const WEIGHT_LABELS = {
-  degree: "Degree relevance",
-  subject: "Subject evidence",
-  curriculum: "Curriculum experience",
-  teaching: "Teaching experience",
-  english: "English evidence",
-  prestige: "University prestige",
-};
+const dayText = (date: string) =>
+  new Date(`${date}T12:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 type University = HiringConfig["universities"][number];
 type Interviewer = HiringConfig["interviewers"][number];
+
+function LimitRows({ funnel, config, setConfig }: { funnel: LimitField["funnel"]; config: HiringConfig; setConfig: (c: HiringConfig) => void }) {
+  return (
+    <>
+      {LIMIT_FIELDS.filter((f) => f.funnel === funnel).map((f) => (
+        <label key={f.id} className={css.weightRow}>
+          {f.label}
+          <input
+            className={css.numberInput}
+            type="number"
+            min={f.min}
+            max={f.max}
+            value={f.get(config)}
+            onChange={(e) => setConfig(setLimit(config, f.id, Number(e.target.value)))}
+          />
+        </label>
+      ))}
+    </>
+  );
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -32,6 +67,10 @@ export function SetupPanel({
   busy,
   connect,
   command,
+  dayDrafts,
+  setDayDrafts,
+  error,
+  notice,
 }: {
   data: HiringData;
   config: HiringConfig;
@@ -40,8 +79,24 @@ export function SetupPanel({
   busy: boolean;
   connect: () => void;
   command: Command;
+  /** Head ticks not saved yet. The dashboard holds them, so a tab switch does not drop them. */
+  dayDrafts: Record<string, boolean[]>;
+  setDayDrafts: (update: (drafts: Record<string, boolean[]>) => Record<string, boolean[]>) => void;
+  /** The last save result, shown beside the Save button so it is in view at any width. */
+  error: string;
+  notice: string;
 }) {
   const total = Object.values(config.profileWeights).reduce((a, b) => a + b, 0);
+  const preTotal = Object.values(config.preScreenWeights).reduce((a, b) => a + b, 0);
+  const problems = settingsProblems(config);
+  const sending = startsSending(data.config, config);
+  const today = localDate(new Date());
+  const unsavedHeads = unsavedHeadDays(
+    dayDrafts,
+    data.heads,
+    Object.fromEntries(data.tutors.map((t) => [t.canonicalKey, t.name])),
+  );
+  const priority = fullPriority(config.subjectPriority);
   const setUniversity = (index: number, patch: Partial<University>) =>
     setConfig({
       ...config,
@@ -56,32 +111,59 @@ export function SetupPanel({
   return (
     <div className={css.setup}>
       <div className={css.setupBar}>
-        <p className={total === 100 ? css.railMeta : css.errorText}>
-          Weight total: {total}/100. Current invitation threshold: {config.profileThreshold}/100.
-        </p>
+        <div>
+          <p className={total === 100 ? css.railMeta : css.errorText}>
+            Weight total: {total}/100. Current invitation threshold: {config.profileThreshold}/100.
+          </p>
+          {data.configProblems.length > 0 && (
+            <p className={css.errorText} role="alert">
+              The saved rules have a problem. {data.configProblems.join(" ")} Fix it here and save. Until then the worker stops.
+            </p>
+          )}
+          {unsavedHeads.length > 0 && (
+            <p className={css.warnWord} role="alert">
+              Head days not saved: {unsavedHeads.join(", ")}
+            </p>
+          )}
+          {error && (
+            <p className={css.errorText} role="alert">
+              {error}
+            </p>
+          )}
+          {notice && (
+            <p className={css.goodWord} role="status">
+              {notice}
+            </p>
+          )}
+          {problems.map((problem) => (
+            <p key={problem} className={css.errorText}>
+              {problem}
+            </p>
+          ))}
+        </div>
         <button
           type="button"
           className={css.primary}
-          disabled={busy || total !== 100}
+          disabled={busy || total !== 100 || problems.length > 0}
           onClick={() => command({ action: "settings", revision, config })}
         >
-          Save rules and setup
+          {sending ? "Save and start sending" : "Save rules and setup"}
         </button>
       </div>
       <div className={css.setupGrid}>
         <section className={css.setupSection}>
           <h2 className={css.panelTitle}>Screening rules</h2>
           <p className={css.panelLede}>
-            Weights must total 100. Degree and subject evidence must meet the rule. Lower scores go to review.
+            Weights must total 100. A candidate needs this score, an accepted work-rights answer and a hiring subject to get the form. A candidate who misses only these waits at New, and a change here takes effect on the next cycle. A degree marked not met, no supported subject, no email or earlier contact go to review.
           </p>
           <div className={css.weightBar} aria-hidden="true">
-            {(Object.keys(WEIGHT_LABELS) as Array<keyof typeof WEIGHT_LABELS>).map((key) => (
+            {(Object.keys(PROFILE_WEIGHT_LABELS) as Array<keyof typeof PROFILE_WEIGHT_LABELS>).map((key) => (
               <span key={key} style={{ flexGrow: config.profileWeights[key] }} />
             ))}
           </div>
-          {(Object.keys(WEIGHT_LABELS) as Array<keyof typeof WEIGHT_LABELS>).map((key) => (
+          {(Object.keys(PROFILE_WEIGHT_LABELS) as Array<keyof typeof PROFILE_WEIGHT_LABELS>).map((key) => (
             <label key={key} className={css.weightRow}>
-              {WEIGHT_LABELS[key]}
+              {PROFILE_WEIGHT_LABELS[key]}
               <input
                 className={css.numberInput}
                 type="number"
@@ -141,6 +223,11 @@ export function SetupPanel({
               Enable messages
             </label>
           </div>
+          {sending && (
+            <p className={css.warnWord} role="note">
+              {sendingNotice(config)}
+            </p>
+          )}
           {!data.writeGate && <p className={css.warnWord}>Production write gate is off.</p>}
           <h2 className={css.panelTitle}>Connections</h2>
           <p className={css.statusRow}>
@@ -188,6 +275,246 @@ export function SetupPanel({
           </Field>
         </section>
 
+        <section className={css.setupSection}>
+          <h2 className={css.panelTitle}>Pre-screen email rules</h2>
+          <p className={css.panelLede}>
+            Change a number here and the meters on Pipeline change. The profile score a candidate needs to get the form is the invitation threshold under Screening rules.
+          </p>
+          <LimitRows funnel="pre" config={config} setConfig={setConfig} />
+          <p className={css.railMeta}>The pass score only controls automatic onsite invitations. The pre-screen form is not affected.</p>
+        </section>
+
+        <section className={css.setupSection}>
+          <h2 className={css.panelTitle}>Onsite invitation rules</h2>
+          {config.preScreenThreshold === null ? (
+            <p className={css.warnWord}>No pass score is set. Automatic onsite invitations cannot run until you set one.</p>
+          ) : (
+            <p className={css.panelLede}>A reply at or above the pass score, with every hard stop met, gets a booking link.</p>
+          )}
+          <label className={css.weightRow}>
+            Pre-screen pass score
+            <input
+              className={css.numberInput}
+              type="number"
+              min={0}
+              max={100}
+              value={config.preScreenThreshold ?? ""}
+              onChange={(e) =>
+                setConfig({ ...config, preScreenThreshold: e.target.value === "" ? null : Number(e.target.value) })
+              }
+            />
+          </label>
+          <LimitRows funnel="on" config={config} setConfig={setConfig} />
+          <label className={css.weightRow}>
+            Visits start no earlier than
+            <input
+              className={css.numberInput}
+              type="time"
+              value={minutesToTime(config.visitStartMinute)}
+              onChange={(e) => {
+                const minute = timeToMinutes(e.target.value);
+                if (minute !== null) setConfig({ ...config, visitStartMinute: minute });
+              }}
+            />
+          </label>
+          <label className={css.weightRow}>
+            Visits end no later than
+            <input
+              className={css.numberInput}
+              type="time"
+              value={minutesToTime(config.visitEndMinute)}
+              onChange={(e) => {
+                const minute = timeToMinutes(e.target.value);
+                if (minute !== null) setConfig({ ...config, visitEndMinute: minute });
+              }}
+            />
+          </label>
+          <p className={css.railMeta}>
+            Cancel and no-show free the open places. They do not free the weekly count, because the email has already gone. To send more this week, raise the number.
+          </p>
+          <p className={css.railMeta}>
+            The booking link lasts 30 days, so the link can expire after 30 days at most. Candidates can move a booking once, up to 24 hours before the visit. Later changes go through staff.
+          </p>
+        </section>
+
+        <section className={css.setupSection}>
+          <h2 className={css.panelTitle}>Pre-screen score weights</h2>
+          <p className={css.panelLede}>Separate from the profile weights. The total must be 100.</p>
+          {(Object.keys(PRE_SCREEN_WEIGHT_LABELS) as Array<keyof typeof PRE_SCREEN_WEIGHT_LABELS>).map((key) => (
+            <label key={key} className={css.weightRow}>
+              {PRE_SCREEN_WEIGHT_LABELS[key]}
+              <input
+                className={css.numberInput}
+                type="number"
+                min={0}
+                max={100}
+                value={config.preScreenWeights[key]}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    preScreenWeights: { ...config.preScreenWeights, [key]: Number(e.target.value) },
+                  })
+                }
+              />
+            </label>
+          ))}
+          <p className={preTotal === 100 ? css.goodWord : css.errorText}>Total {preTotal} of 100</p>
+        </section>
+
+        <section className={css.setupSection}>
+          <h2 className={css.panelTitle}>Hard stops</h2>
+          <p className={css.panelLede}>A candidate who fails one goes to review, even with a high score. No rejection is sent.</p>
+          <div className={css.checkList}>
+            {[
+              "Completed bachelor's degree or higher",
+              "English: C1 for English subjects, B2 for others. “Native” counts as C2.",
+              "A weekend day and a weekday after 15:00",
+            ].map((text) => (
+              <label key={text}>
+                <input type="checkbox" checked disabled readOnly />
+                {text}
+              </label>
+            ))}
+          </div>
+          <h3 className={css.inspectorHeading}>Accepted SEEK work-rights answers</h3>
+          <div className={css.checkList}>
+            {workRightsRows(config).map((row) => (
+              <label key={row.answer}>
+                <input
+                  type="checkbox"
+                  checked={row.accepted}
+                  onChange={(e) => setConfig(setWorkRightsAccepted(config, row.answer, e.target.checked))}
+                />
+                <span>{row.answer}</span>
+              </label>
+            ))}
+          </div>
+          <p className={css.railMeta}>A new answer from SEEK appears here, not accepted, until you tick it.</p>
+        </section>
+
+        <section className={css.setupSection}>
+          <h2 className={css.panelTitle}>Subject priority</h2>
+          <p className={css.panelLede}>Top subjects go first in both queues. Untick a subject to stop hiring for it.</p>
+          {priority.map((row, i) => (
+            <div key={row.subject} className={css.priorityRow}>
+              <span className={`${css.num} ${css.mutedCell}`}>{i + 1}</span>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={row.hiring}
+                  aria-label={`Hiring ${row.subject}`}
+                  onChange={(e) => setConfig({ ...config, subjectPriority: setHiring(priority, i, e.target.checked) })}
+                />
+                {row.subject}
+                {!row.hiring && <span className={css.railMeta}> Not hiring</span>}
+              </label>
+              <button
+                type="button"
+                className={css.secondary}
+                aria-label={`Move ${row.subject} up`}
+                disabled={i === 0}
+                onClick={() => setConfig({ ...config, subjectPriority: movePriority(priority, i, -1) })}
+              >
+                Up
+              </button>
+              <button
+                type="button"
+                className={css.secondary}
+                aria-label={`Move ${row.subject} down`}
+                disabled={i === priority.length - 1}
+                onClick={() => setConfig({ ...config, subjectPriority: movePriority(priority, i, 1) })}
+              >
+                Down
+              </button>
+            </div>
+          ))}
+        </section>
+
+        <section className={css.setupSection}>
+          <h2 className={css.panelTitle}>Head office days</h2>
+          <p className={css.panelLede}>
+            Visits need a head who is in the office for the mock hour. Tick the days, then save that head.
+          </p>
+          <p className={css.warnWord}>
+            This also changes Tutor Attendance. For a head enrolled there, a saved change starts tomorrow.
+          </p>
+          {config.interviewers
+            .filter((head) => head.canonicalKey)
+            .map((head) => {
+              const key = head.canonicalKey;
+              const state = data.heads[key];
+              const inSaved = data.config.interviewers.some((i) => i.canonicalKey === key);
+              const saved = daysOf(state?.week);
+              const ticks = dayDrafts[key] ?? saved;
+              const dirty = ticks.some((on, i) => on !== saved[i]);
+              const name = data.tutors.find((t) => t.canonicalKey === key)?.name ?? key;
+              const ended = state?.state === "ended";
+              return (
+                <div key={key} className={css.headDayRow}>
+                  <div>
+                    <strong>{name}</strong>
+                    <span className={css.railMeta}>
+                      {" "}
+                      {state?.state === "enrolled" || ended ? "Tutor Attendance schedule" : "Hiring settings only"}
+                    </span>
+                  </div>
+                  {inSaved && !ended ? (
+                    <div className={css.dayChecks}>
+                      {HEAD_DAYS.map((day, i) => (
+                        <label key={day}>
+                          {day}
+                          <input
+                            type="checkbox"
+                            checked={ticks[i]}
+                            aria-label={`${name} ${day}`}
+                            onChange={(e) => setDayDrafts((d) => ({ ...d, [key]: ticks.map((on, j) => (j === i ? e.target.checked : on)) }))}
+                          />
+                        </label>
+                      ))}
+                      <button
+                        type="button"
+                        className={css.secondary}
+                        disabled={busy || !dirty}
+                        onClick={async () => {
+                          if (await command({ action: "head_days", key, days: ticks, revision }))
+                            setDayDrafts((d) => Object.fromEntries(Object.entries(d).filter(([k]) => k !== key)));
+                        }}
+                      >
+                        {state?.state === "enrolled" ? "Save days to Tutor Attendance" : "Save days"}
+                      </button>
+                    </div>
+                  ) : (
+                    <p className={css.railMeta}>
+                      {ended
+                        ? "Their Tutor Attendance enrollment has ended, so they get no visit times. Switch it back on in Tutor Attendance."
+                        : "Save the rules and setup first, then set days."}
+                    </p>
+                  )}
+                  {inSaved && !ended && !hasSavedHours(state?.week) && (
+                    <p className={css.warnWord}>No saved hours: this head gets no visit times.</p>
+                  )}
+                  {state?.from && state.from > today && (
+                    <p className={css.railMeta}>The saved change starts {dayText(state.from)}.</p>
+                  )}
+                </div>
+              );
+            })}
+          <p className={css.railMeta}>Hours stay as saved. A day you add gets 10:00 to 16:00. A visit also needs a free Wise hour for the mock.</p>
+          <h3 className={css.inspectorHeading}>Résumé files</h3>
+          <label className={css.weightRow}>
+            Delete after months with no activity
+            <input
+              className={css.numberInput}
+              type="number"
+              min={1}
+              max={120}
+              value={config.resumeRetentionMonths}
+              onChange={(e) => setConfig({ ...config, resumeRetentionMonths: Number(e.target.value) })}
+            />
+          </label>
+          <p className={css.railMeta}>Files past this age are deleted for good at the next nightly run. Lowering this number can delete many files.</p>
+        </section>
+
         <section className={`${css.setupSection} ${css.setupWide}`}>
           <h2 className={css.panelTitle}>Mock interviewers</h2>
           <p className={css.panelLede}>
@@ -202,7 +529,8 @@ export function SetupPanel({
                 value={interviewer.canonicalKey}
                 onChange={(e) => {
                   const tutor = data.tutors.find((t) => t.canonicalKey === e.target.value);
-                  setInterviewer(i, { canonicalKey: e.target.value, email: tutor?.email ?? "" });
+                  // Hours saved for the old tutor are not the new tutor's.
+                  setInterviewer(i, { canonicalKey: e.target.value, email: tutor?.email ?? "", fallbackWeek: undefined });
                 }}
               >
                 <option value="">Choose tutor</option>

@@ -1,5 +1,5 @@
 import { SUBJECTS, type HiringConfig, type Stage, type Subject } from "./model";
-import { profileCanAdvance, type Assessment } from "./scoring";
+import { profileScore, topHiringSubject, workRightsAccepted, type Assessment } from "./scoring";
 
 export const STAGE_LABELS: Record<Stage, string> = {
   new: "New",
@@ -9,6 +9,10 @@ export const STAGE_LABELS: Record<Stage, string> = {
   paper_booked: "Paper booked",
   paper_passed: "Paper passed",
   mock_booked: "Mock booked",
+  onsite_invited: "Onsite invited",
+  onsite_booked: "Onsite booked",
+  no_reply: "No reply",
+  no_booking: "No booking",
   stopped: "Stopped",
 };
 export const ACTIVE_STAGES: Stage[] = [
@@ -19,7 +23,38 @@ export const ACTIVE_STAGES: Stage[] = [
   "paper_booked",
   "paper_passed",
   "mock_booked",
+  "onsite_invited",
+  "onsite_booked",
 ];
+/**
+ * Which stages count as having reached each funnel step. The old paper path and the new onsite path both follow
+ * `pre_screen`, so a step on one path never counts a candidate on the other. A parked candidate did get the form
+ * (`no_reply`) or the link (`no_booking`), so it counts as having reached that step.
+ */
+const AFTER_REVIEW: Stage[] = [
+  "pre_screen",
+  "paper_invited",
+  "paper_booked",
+  "paper_passed",
+  "mock_booked",
+  "onsite_invited",
+  "onsite_booked",
+  "no_reply",
+  "no_booking",
+];
+const REACHED: Partial<Record<Stage, Stage[]>> = {
+  new: ["new", "review", ...AFTER_REVIEW],
+  review: ["review", ...AFTER_REVIEW],
+  pre_screen: AFTER_REVIEW,
+  paper_invited: ["paper_invited", "paper_booked", "paper_passed", "mock_booked"],
+  paper_booked: ["paper_booked", "paper_passed", "mock_booked"],
+  paper_passed: ["paper_passed", "mock_booked"],
+  mock_booked: ["mock_booked"],
+  onsite_invited: ["onsite_invited", "onsite_booked", "no_booking"],
+  onsite_booked: ["onsite_booked"],
+};
+/** Parked: the form or link went out and nothing came back. They stay in `active`, because a late reply is scored and a click sends a new link. */
+const PARKED: Stage[] = ["no_reply", "no_booking"];
 export const CRITERIA = ["degree", "subject", "curriculum", "teaching", "english"] as const;
 export const RESULTS = ["met", "partial", "not_met", "unknown"] as const;
 export type CriterionResult = (typeof RESULTS)[number];
@@ -45,13 +80,19 @@ type InsightCandidate = {
   profileScore: number | null;
   profileAssessment: Assessment | null;
   universityAssessment: { fraction: number } | null;
+  /** False for a person with no profile text, who cannot be scored. Missing means true. */
+  hasSourceText?: boolean;
   subjects: Subject[];
   paperPassedSubjects: Subject[];
   previouslyContacted: boolean;
-  workRightsConfirmed: boolean | null;
+  workRightsAnswer: string | null;
 };
+type GateConfig = Pick<
+  HiringConfig,
+  "profileThreshold" | "profileWeights" | "acceptedWorkRights" | "subjectPriority"
+>;
 type InsightInput = {
-  config: Pick<HiringConfig, "profileThreshold" | "profileWeights" | "interviewers">;
+  config: GateConfig & Pick<HiringConfig, "interviewers">;
   candidates: InsightCandidate[];
   bookings: {
     candidateId: string;
@@ -59,48 +100,92 @@ type InsightInput = {
     interviewerKey: string | null;
     status: string;
     startTime: Date | string;
+    /** A visit is an exam row and a mock row with one id. */
+    visitId?: string | null;
   }[];
   outbox: { status: string }[];
 };
 
-/** Mirrors the worker's gate for sending a new profile the pre-screen form. */
+/**
+ * Who may receive the pre-screen form: a profile score at or above the threshold, an accepted work-rights answer,
+ * a usable email, no earlier contact, a supported subject that is still hiring, and a degree that is not `not_met`.
+ * `subject` is the highest-ranked hiring subject the profile supports.
+ * `review` lists the reasons no setting can cure, which send a `new` row to review. A row with only other reasons waits at
+ * `new`, because the next cycle re-runs this gate and a changed setting or a re-read answer lets it through.
+ */
+export function profileGate(
+  candidate: Pick<
+    InsightCandidate,
+    "email" | "previouslyContacted" | "workRightsAnswer" | "profileAssessment" | "universityAssessment"
+  >,
+  config: GateConfig,
+): { eligible: boolean; reasons: string[]; short: string[]; review: string[]; subject: Subject | null } {
+  const reasons: string[] = [];
+  // The same reasons in a few words, for a table cell.
+  const short: string[] = [];
+  const review: string[] = [];
+  const add = (reason: string, words: string) => {
+    reasons.push(reason);
+    short.push(words);
+  };
+  const final = (reason: string, words: string) => {
+    add(reason, words);
+    review.push(reason);
+  };
+  const assessment = candidate.profileAssessment;
+  const relevant = (assessment?.subjects ?? []).filter((s) => s.relevant).map((s) => s.subject);
+  const subject = topHiringSubject(relevant, config.subjectPriority);
+  if (!assessment) add("The profile is not scored.", "Not scored");
+  else {
+    if (
+      profileScore(assessment, config.profileWeights, candidate.universityAssessment?.fraction ?? 0) <
+      config.profileThreshold
+    )
+      add("The profile score is below the threshold.", "Below profile threshold");
+    if (assessment.criteria.some((c) => c.id === "degree" && c.result === "not_met"))
+      final("The degree criterion is not met.", "Degree not met");
+    if (!relevant.length) final("The profile supports no subject.", "No supported subject");
+    else if (!subject) add("No supported subject is open for hiring.", "Subject not hiring");
+  }
+  if (!workRightsAccepted(candidate.workRightsAnswer, config.acceptedWorkRights))
+    add("The work-rights answer is missing or not accepted.", "Work-rights answer not accepted");
+  if (!candidate.email) final("There is no usable email.", "No usable email");
+  if (candidate.previouslyContacted) final("There was earlier contact.", "Earlier contact");
+  return { eligible: reasons.length === 0, reasons, short, review, subject };
+}
+
+/** Mirrors the queue's gate for sending a new profile the pre-screen form. */
 export function readyToInvite(
   candidate: InsightCandidate,
-  config: InsightInput["config"],
+  config: GateConfig,
 ) {
   return (
     candidate.stage === "new" &&
     !candidate.preScreen &&
-    !!candidate.profileAssessment &&
-    !!candidate.email &&
-    !candidate.previouslyContacted &&
-    candidate.workRightsConfirmed === true &&
-    profileCanAdvance(
-      candidate.profileAssessment,
-      config.profileThreshold,
-      config.profileWeights,
-      candidate.universityAssessment?.fraction ?? 0,
-    )
+    profileGate(candidate, config).eligible
   );
 }
 
 export function buildInsights(input: InsightInput, now = new Date()) {
   const { candidates, config } = input;
   const threshold = config.profileThreshold;
+  // No reply and No booking stay in `active`: a late reply is scored and a click sends a new link. `parked` says how many they are.
   const active = candidates.filter((c) => c.stage !== "stopped");
+  const byStage = Object.fromEntries(
+    (Object.keys(STAGE_LABELS) as Stage[]).map((stage) => [stage, candidates.filter((c) => c.stage === stage).length]),
+  ) as Record<Stage, number>;
+  // A person with no source text can never be scored, so they stay out of the "scored" share.
+  const scorable = candidates.filter((c) => c.hasSourceText !== false).length;
   const scores = candidates.flatMap((c) => (c.profileScore === null ? [] : [c.profileScore]));
   const sorted = [...scores].sort((a, b) => a - b);
   const mid = sorted.length >> 1;
 
-  let reached = 0;
-  const stages = [...ACTIVE_STAGES]
-    .reverse()
-    .map((stage) => {
-      const at = active.filter((c) => c.stage === stage).length;
-      reached += at;
-      return { stage, label: STAGE_LABELS[stage], at, reached };
-    })
-    .reverse();
+  const stages = ACTIVE_STAGES.map((stage) => ({
+    stage,
+    label: STAGE_LABELS[stage],
+    at: byStage[stage],
+    reached: (REACHED[stage] ?? [stage]).reduce((n, s) => n + byStage[s], 0),
+  }));
 
   const histogram = Array.from({ length: 10 }, (_, i) => ({
     min: i * 10,
@@ -130,14 +215,23 @@ export function buildInsights(input: InsightInput, now = new Date()) {
   const weekEnd = now.getTime() + 7 * 86400000;
   const upcoming = confirmed.filter((b) => startOf(b) >= now.getTime());
   const booked = new Set(confirmed.map((b) => `${b.candidateId}:${b.kind}`));
+  // A visit is two rows (exam and mock) with one visit id. It is one appointment.
+  const appointments = new Set(
+    upcoming
+      .filter((b) => startOf(b) < weekEnd)
+      .map((b) => b.visitId ?? `${b.candidateId}:${b.kind}:${startOf(b)}`),
+  );
   const status = (name: string) => input.outbox.filter((j) => j.status === name).length;
 
   return {
     total: candidates.length,
     active: active.length,
+    parked: PARKED.reduce((n, stage) => n + byStage[stage], 0),
+    byStage,
     stopped: candidates.length - active.length,
     scored: scores.length,
-    unscored: candidates.length - scores.length,
+    scorable,
+    unscored: scorable - scores.length,
     aboveThreshold: scores.filter((v) => v >= threshold).length,
     median: !sorted.length
       ? null
@@ -154,7 +248,7 @@ export function buildInsights(input: InsightInput, now = new Date()) {
       : null,
     subjects,
     uncoveredSubjects: subjects.filter((s) => !s.interviewers.length).length,
-    appointmentsThisWeek: upcoming.filter((b) => startOf(b) < weekEnd).length,
+    appointmentsThisWeek: appointments.size,
     upcomingByInterviewer: Object.fromEntries(
       config.interviewers.map((i) => [
         i.canonicalKey,

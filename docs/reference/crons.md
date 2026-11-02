@@ -39,6 +39,19 @@ confirmation.
 
 Both require `CRON_SECRET` and are monitored. With `TUTOR_SIT_INS_ENABLED` unset they skip and appear paused. The worker uses a database single-flight lease; both handlers use persisted outbox claims. With delivery off they do not send external messages. Enabling Tutor Sit-ins restores shared Credit Control snapshot reads on its existing half-hour ticks, even in retired mode. See the [runbook](../operations/tutor-sit-ins-rollout.md). The older inventory totals below predate these jobs; `vercel.json` and registry contract tests remain authoritative.
 
+## Hiring jobs
+
+| Path | UTC schedule | Bangkok | Registry key | Maximum |
+|---|---|---|---|---|
+| `/api/internal/hiring-delivery` | `19,35,48,59 * * * *` | Four times an hour, at :19, :35, :48 and :59 | `hiring_delivery` | 120s |
+| `/api/internal/hiring-resume-retention` | `28 20 * * *` | 03:28 daily | `hiring_resume_retention` | 60s |
+
+Both are `GET` routes. Both require `CRON_SECRET` and are monitored. The registry marks both `dangerous`, so a manual **Run** in Data Health asks for confirmation. See the [feature page](../features/hiring.md).
+
+**`hiring_delivery`** retries queued booking messages (candidate email, Google Calendar events, LINE notices to heads), so they do not depend on the Mac worker. It delivers only outbox rows that belong to a booking, at most 20 per run. Invitations and reminders still leave from the Mac worker. It sends nothing unless Hiring Automation, Hiring Messages and the `HIRING_WRITES_ENABLED` write gate are all on. Each outbox row is claimed with a lease, so two runs cannot send the same row. The route has no `running`-row guard of its own. A Data Health manual run reports `sent: 0` when an error occurs inside the run.
+
+**`hiring_resume_retention`** deletes original résumé files from private Vercel Blob after the saved number of months with no candidate activity (12 at first, 1 to 120 allowed). It deletes at most 50 files per run and stops starting new deletes after 45 seconds. It deletes only the file and clears the file columns. The extracted text stays. It does nothing while the write gate is off. It writes one audit row with the deleted count, the failed count and an orphan-file count. It returns 503 when any delete failed, and the next run tries again.
+
 **Credit Control retirement:** physical cron expressions are retained for easy restoration. In default `CREDIT_CONTROL_MODE=retired`, shared student-data work runs at 06:20 Bangkok, with recovery at 06:50 / 07:20. Before tutor-workspace launch, Progress Tests runs daily at 07:25, recovering at 07:55 / 08:25. After launch it owns fresh Wise attendance reads every half-hour, independently of the shared daily snapshot. Other ticks are audited skips and never count as data freshness. LINE credit digests are paused; Progress Tests digests require today’s successful refresh. See [operating procedure](../operations/credit-control-retirement.md).
 
 **Status:** Stable. **Authoritative source:** [`vercel.json`](../../vercel.json).

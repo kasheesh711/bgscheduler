@@ -1,7 +1,9 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { subjectSchema } from "@/lib/hiring/model";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
-import { bookInterview, bookingView } from "@/lib/hiring/service";
+import { bookInterview, bookingView, bookVisit, visitView } from "@/lib/hiring/service";
+import { readBookingToken } from "@/lib/hiring/tokens";
+import { deliverBookingMessages } from "@/lib/hiring/worker";
 export const maxDuration = 120;
 const headers = {
   "Cache-Control": "private, no-store",
@@ -14,6 +16,8 @@ export async function GET(
 ) {
   try {
     const { token } = await params;
+    if (readBookingToken(token).kind === "visit")
+      return NextResponse.json(await visitView(token), { headers });
     const names = new URL(request.url).searchParams.getAll("subject");
     const subjects = names.length
       ? names.map((v) => subjectSchema.parse(v))
@@ -30,7 +34,9 @@ export async function POST(
   try {
     requireSameOrigin(request);
     const { token } = await params;
-    const booking = await bookInterview(token, await request.json());
+    const book = readBookingToken(token).kind === "visit" ? bookVisit : bookInterview;
+    const booking = await book(token, await request.json());
+    after(() => deliverBookingMessages());
     return NextResponse.json(
       {
         id: booking.id,

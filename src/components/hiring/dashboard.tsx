@@ -5,12 +5,14 @@ import { Instrument_Serif } from "next/font/google";
 import { signIn } from "next-auth/react";
 import { GOOGLE_SCOPES, type HiringConfig, type Stage, type Subject } from "@/lib/hiring/model";
 import { buildInsights, readyToInvite } from "@/lib/hiring/insights";
-import { candidateExtras } from "@/lib/hiring/status";
+import { dedupePriority, headDaysNotice } from "@/lib/hiring/rules";
+import { candidateExtras, holdNote } from "@/lib/hiring/status";
 import type { dashboard } from "@/lib/hiring/service";
 import { CandidateInspector } from "./candidate-inspector";
 import { CandidateTable, matchesFilter } from "./candidate-table";
-import { AveragePentagon, EvidenceChart, KpiStrip, ScoreChart, StageChart, SubjectChart } from "./pipeline-charts";
-import { OperationsRail } from "./operations-rail";
+import { AveragePentagon, EvidenceChart, KpiStrip, LimitMeters, ScoreChart, StageChart, SubjectChart } from "./pipeline-charts";
+import { HeadSchedules } from "./head-schedules";
+import { OperationsRail, WorkerBanner } from "./operations-rail";
 import { SetupPanel } from "./setup-panel";
 import css from "./dashboard.module.css";
 
@@ -43,9 +45,13 @@ export function HiringDashboard() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
-  const [view, setView] = useState<"pipeline" | "setup">("pipeline");
+  const [view, setView] = useState<"pipeline" | "heads" | "setup">("pipeline");
   const [selected, setSelected] = useState<string | null>(null);
+  // The candidate whose résumé viewer is open. It loads the file only on request.
+  const [resumeFor, setResumeFor] = useState<string | null>(null);
   const [filter, setFilter] = useState<CandidateFilter>(NO_FILTER);
+  // Head ticks not saved yet. They live here, not in the setup panel, so a tab switch does not drop them.
+  const [dayDrafts, setDayDrafts] = useState<Record<string, boolean[]>>({});
 
   async function load(keepConfig = false) {
     const response = await fetch("/api/hiring", { cache: "no-store" });
@@ -54,7 +60,8 @@ export function HiringDashboard() {
     setData(value);
     // A candidate decision must not discard setup edits that are not yet saved.
     if (!keepConfig) {
-      setConfig(value.config);
+      // The server refuses a subject listed twice, so the draft drops the repeat and a save can repair it.
+      setConfig({ ...value.config, subjectPriority: dedupePriority(value.config.subjectPriority) });
       // A save must carry the revision these edits started from, so a stale save gets a 409.
       setConfigRevision(value.revision);
     }
@@ -74,8 +81,23 @@ export function HiringDashboard() {
       });
       const value = await response.json();
       if (!response.ok) throw new Error(value.error);
-      await load((body as { action: string }).action !== "settings");
-      setNotice("Saved.");
+      const action = (body as { action: string }).action;
+      let saved = "Saved.";
+      if (action === "head_days") {
+        // The server checked the revision before it saved, so the new one belongs to this draft. A head with no
+        // attendance record also has a new fallback week, which the draft must carry or the next save would undo it.
+        // This comes before the reload, so a failed reload does not leave the old revision.
+        const key = (body as { key: string }).key;
+        setConfigRevision(value.revision);
+        if (value.fallbackWeek)
+          setConfig((c) =>
+            c && { ...c, interviewers: c.interviewers.map((i) => (i.canonicalKey === key ? { ...i, fallbackWeek: value.fallbackWeek } : i)) },
+          );
+        saved = headDaysNotice(value.affectedVisits === undefined ? 0 : value.affectedVisits);
+      }
+      setNotice(saved);
+      // The save is done. If only the reload fails, say so, and do not call the save a failure.
+      await load(action !== "settings").catch(() => setError("Saved, but the page could not refresh. Reload this page."));
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save.");
@@ -121,12 +143,33 @@ export function HiringDashboard() {
     [data],
   );
   const extras = useMemo(
-    () => (data ? candidateExtras(data.candidates, data.outbox, data.bookings, ready) : new Map()),
+    () =>
+      data
+        ? candidateExtras(
+            data.candidates,
+            data.outbox,
+            data.bookings,
+            ready,
+            new Date(),
+            new Set(Object.keys(data.holds).filter((id) => data.holds[id].funnel === "onsite")),
+          )
+        : new Map(),
     [data, ready],
   );
   const shown = useMemo(
     () => data?.candidates.filter((c) => matchesFilter(c, filter, ready, extras)) ?? [],
     [data, filter, ready, extras],
+  );
+  const clashes = useMemo(() => new Set(data?.visitClashes.candidateIds ?? []), [data]);
+  const holds = useMemo(
+    () =>
+      new Map(
+        data?.candidates.flatMap((c) => {
+          const note = holdNote(c, data.holds[c.id], data.config);
+          return note ? [[c.id, note] as const] : [];
+        }) ?? [],
+      ),
+    [data],
   );
   const candidate = data?.candidates.find((c) => c.id === selected);
 
@@ -146,22 +189,23 @@ export function HiringDashboard() {
           )}
         </div>
         <div role="status" className={css.notice}>
-          {notice}
+          {/* Rules and setup shows these beside its Save button, where they are in view. */}
+          {view === "setup" ? "" : notice}
         </div>
         <div className={css.viewSwitch} role="group" aria-label="Hiring views">
-          {(["pipeline", "setup"] as const).map((name) => (
+          {(["pipeline", "heads", "setup"] as const).map((name) => (
             <button
               key={name}
               type="button"
               aria-pressed={view === name}
               onClick={() => setView(name)}
             >
-              {name === "pipeline" ? "Pipeline" : "Rules and setup"}
+              {{ pipeline: "Pipeline", heads: "Head schedules", setup: "Rules and setup" }[name]}
             </button>
           ))}
         </div>
       </header>
-      {error && (
+      {error && view !== "setup" && (
         <p role="alert" className={css.alert}>
           {error}
         </p>
@@ -169,6 +213,20 @@ export function HiringDashboard() {
       {data?.workerError && (
         <p role="alert" className={css.alert}>
           {data.workerError}
+        </p>
+      )}
+      {data && <WorkerBanner enabled={data.config.enabled} workerAt={data.workerAt} />}
+      {view !== "setup" && data && data.configProblems.length > 0 && (
+        <p role="alert" className={css.alert}>
+          The saved rules have a problem, so the worker has stopped. Open Rules and setup. {data.configProblems.join(" ")}
+        </p>
+      )}
+      {/* The Head schedules view explains its own clashes and old data. */}
+      {view !== "heads" && data && (clashes.size > 0 || data.visitClashes.stale) && (
+        <p role="alert" className={css.alert}>
+          {clashes.size > 0
+            ? `${clashes.size} booked visit${clashes.size === 1 ? "" : "s"} now clash${clashes.size === 1 ? "es" : ""} with a Wise class, leave or sit-in. The app did not move ${clashes.size === 1 ? "it" : "them"}. Staff must act. See Head schedules.`
+            : "Wise data is old or missing, so visit clashes may not show. Check Head schedules."}
         </p>
       )}
       {!data || !config || !insights ? (
@@ -186,15 +244,49 @@ export function HiringDashboard() {
             busy={busy}
             connect={connect}
             command={command}
+            dayDrafts={dayDrafts}
+            setDayDrafts={setDayDrafts}
+            error={error}
+            notice={notice}
           />
         )}
         {/* Hidden, not unmounted: a switch to setup keeps a drafted reason and table filters. */}
-        <div className={css.layout} hidden={view === "setup"}>
+        {view === "heads" && (
+          <HeadSchedules
+            heads={data.configSaved ? data.config.interviewers : []}
+            bookings={data.bookings}
+            onOpenCandidate={(id) => {
+              setSelected(id);
+              setView("pipeline");
+            }}
+          />
+        )}
+        <div className={css.layout} hidden={view !== "pipeline"}>
           <div className={css.main}>
             <KpiStrip
               insights={insights}
               threshold={data.config.profileThreshold}
               onShowReady={() => setFilter({ ...NO_FILTER, stage: "ready" })}
+            />
+            <LimitMeters usage={data.usage} headMocks={data.headMocks} config={data.config} tutors={data.tutors} />
+            {/* The table is the main work surface, so it sits right under the meters. The charts follow and read the same filter. */}
+            <CandidateTable
+              candidates={data.candidates}
+              insights={insights}
+              ready={ready}
+              extras={extras}
+              holds={holds}
+              clashes={clashes}
+              weights={data.config.profileWeights}
+              threshold={data.config.profileThreshold}
+              filter={filter}
+              setFilter={setFilter}
+              selected={selected}
+              onSelect={setSelected}
+              onOpenResume={(id) => {
+                setSelected(id);
+                setResumeFor(id);
+              }}
             />
             <div className={css.charts}>
               <StageChart insights={insights} filter={filter} setFilter={setFilter} />
@@ -208,31 +300,27 @@ export function HiringDashboard() {
               <SubjectChart insights={insights} filter={filter} setFilter={setFilter} />
               <AveragePentagon candidates={shown} />
             </div>
-            <CandidateTable
-              candidates={data.candidates}
-              insights={insights}
-              ready={ready}
-              extras={extras}
-              weights={data.config.profileWeights}
-              threshold={data.config.profileThreshold}
-              filter={filter}
-              setFilter={setFilter}
-              selected={selected}
-              onSelect={setSelected}
-            />
           </div>
           {candidate ? (
             <CandidateInspector
               key={candidate.id}
               candidate={candidate}
               extras={extras.get(candidate.id)}
+              hold={holds.get(candidate.id)}
               seekJobId={data.config.seekJobId}
               weights={data.config.profileWeights}
+              preWeights={data.config.preScreenWeights}
               busy={busy}
               error={error}
               notice={notice}
               command={command}
-              onClose={() => setSelected(null)}
+              onClose={() => {
+                setSelected(null);
+                setResumeFor(null);
+              }}
+              resumeOpen={resumeFor === candidate.id}
+              onResumeToggle={(open) => setResumeFor(open ? candidate.id : null)}
+              retentionMonths={data.config.resumeRetentionMonths}
             />
           ) : (
             <OperationsRail

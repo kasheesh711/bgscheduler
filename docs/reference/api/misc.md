@@ -23,6 +23,8 @@ This page used to carry ten more route families — eleven `/api` prefixes. Each
 | Data Health | `/api/data-health/**`, `/api/internal/cron-watchdog` | [data-health.md](./data-health.md) |
 | Student Promotions | `/api/student-promotions/**` | [student-promotions.md](./student-promotions.md) |
 
+Tutor hiring (`/api/hiring/**` and three `/api/internal/hiring-*` routes) is documented in [Tutor hiring](#tutor-hiring) below.
+
 Everything else — AI Scheduler, class assignments, classrooms, credit control, LINE, payroll, proposals, room capacity, sales dashboard, Wise activity, and the internal cron surface — has had its own page all along; [index.md](./index.md) is the routing table.
 
 ## Endpoint index (12)
@@ -341,6 +343,60 @@ Resend delivery events (bounce, complaint, delivered, and so on). Middleware-pub
 | 500 | Store failed; Svix retries with backoff |
 
 Bounces and complaints are logged by event type, bounce type and message id only.
+
+## Tutor hiring
+
+Hiring routes sit outside the twelve endpoints above. The [feature page](../../features/hiring.md) explains the flow. This section lists the signatures that the visit automation added or changed. Errors come from `hiringError` (`src/lib/hiring/http.ts`): the route's own refusal keeps its status and message, a Zod failure returns 400, an overlap trigger (SQLSTATE 23P01) returns 409, and anything else returns 503 with a generic message.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/api/hiring` | admin with `/hiring` page scope | Dashboard, one candidate's profile text, or one head's week (by query) |
+| POST | `/api/hiring` | admin with `/hiring` page scope, same origin | Settings, head days and candidate actions |
+| GET | `/api/hiring/resume/{id}` | admin with `/hiring` page scope | Streams a candidate's original résumé file |
+| GET, POST | `/api/hiring/book/{token}` | signed token | Candidate booking page data and booking, for all three token kinds |
+| GET, POST | `/api/internal/hiring-delivery` | cron secret (GET), signed worker request (POST) | Retry booking messages; deliver for the Mac worker |
+| GET | `/api/internal/hiring-resume-retention` | cron secret | Delete expired résumé files |
+| POST | `/api/internal/hiring-resume-upload` | signed worker request | Upload token for one résumé path |
+
+The admin check (`requireHiringAdmin`) returns 401 with no session and 403 for a non-admin or an admin whose `allowedPages` lacks `/hiring`.
+
+### `GET /api/hiring`
+
+`maxDuration` is 120 seconds, because a load can trigger a cold Wise index build. Every response sets `Cache-Control: no-store`.
+
+- **No query.** The dashboard: `config`, `configSaved`, `configProblems`, `usage` (limit counts), `holds` (queue position and holding limit by candidate), `headMocks`, `heads` (head-day state), `revision`, the worker fields (`workerAt`, `workerSummary`, `workerError`), `writeGate`, `candidates`, `bookings`, `visitClashes`, `outbox`, `audit`, `tutors` and `google`. The candidate list carries `resumeState` (`available`, `deleted` or `none`) and never the storage path.
+- **`?candidateId={uuid}`.** `{ id, profileText }`.
+- **`?head={canonicalKey}&weekStart={yyyy-MM-dd}`.** One head's Monday-to-Friday week. `head` is required (1 to 200 characters). `weekStart` is optional and defaults to today in Bangkok. The server uses the Monday of that week. The reply has the head's name and subjects, the week's mock count and limit, a `stale` flag with `staleReason` (`snapshot` or `beyond_leave`), and for each day the office hours and the blocks (`wise`, `leave`, `mock`, `exam`, `sit_in`, each with a `clash` flag), plus the head's visits. No student name or lesson title is returned. Status 404 for an unknown head. Status 400 for a week before the current week, because Wise omits past sessions.
+
+### `POST /api/hiring`
+
+The request must carry an `Origin` header that matches the site (403 otherwise). The body is strict. Actions:
+
+| `action` | Body | Reply |
+|---|---|---|
+| `settings` | `revision`, `config` | `{ ok: true }`. Stale revision returns 409. |
+| `head_days` | `key`, `days` (five booleans, Monday first), `revision` | `{ ok, revision, fallbackWeek?, affectedVisits }`. `affectedVisits` counts booked visits on a removed day, or is `null` when the count failed. An enrolled head is saved in Tutor Attendance and needs attendance admin access (403 otherwise). |
+| `advance`, `paper_pass`, `stop`, `invite_onsite`, `send_new_link`, `cancel_visit`, `mark_no_show` | `id`, `revision`, `subjects` (at most 18), `reason` (5 to 2000 characters) | `{ ok: true }` |
+
+`invite_onsite`, `send_new_link`, `cancel_visit` and `mark_no_show` are new. Each candidate action writes an audit row. A stale candidate `revision` returns 409. A full limit, a hard stop or a not-hiring subject returns 409 with the reason. After the reply, the handler delivers booking messages in the background.
+
+### `GET /api/hiring/resume/{id}`
+
+`maxDuration` is 60 seconds. `id` is the candidate id. The route reads only the stored path and never takes a path from the request. It returns 404 when the candidate is unknown, has no file, had the file deleted by retention, or the file is gone from storage. It returns 409 when the stored record is not valid. A normal reply streams the file with `Content-Type` from the stored type, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, a `Content-Security-Policy` of `default-src 'none'; frame-ancestors 'self'; sandbox`, and `Content-Disposition` `inline` for a PDF or `attachment` for a Word file.
+
+### `GET` and `POST /api/hiring/book/{token}`
+
+The token kind (`paper`, `mock` or `visit`) selects the flow. The **visit** kind is new.
+
+- `GET` with a visit token returns `{ kind: "visit", subject, location, enabled, slots, visit, canMove, notice }`. Each slot has `date`, `examStart`, `mockStart`, `mockEnd`, `interviewerKey` and `subject`. `visit` is the booked visit or `null`. `canMove` is false after one move, within 24 hours of the start, or while booking is paused. `notice` holds a plain message when there are no slots.
+- `POST` with a visit token takes `{ start, subject, onsiteConfirmed: true, teachingCommitmentConfirmed: true, move? }`. `start` is the exam start (an ISO time). `move: true` is required to change a booked visit. The server picks the head. The reply is `{ id, kind, subjects, start, end }` for the exam row. The booking inserts one `paper` row and one `mock` row in one transaction.
+- An invalid or expired token returns 404. So does a link that a newer link replaced, a link past its follow-up expiry with no booking, and a link whose visit has started. A time that is no longer free, a second move, or a move within 24 hours returns 409. Paused booking returns 503. The old `paper` and `mock` tokens work as before. A visit token on an old-flow action returns 404.
+
+### Internal routes
+
+- `GET /api/internal/hiring-delivery` and `GET /api/internal/hiring-resume-retention` are crons. See [crons](../crons.md#hiring-jobs). They return `{ sent }` and `{ deleted }`.
+- `POST /api/internal/hiring-delivery` takes `{ mode: "all" | "bookings" }` or a `test` request. The `Authorization` header is `HMAC-HIRING <unix seconds>.<hex>`, an HMAC of the exact body with the application secret. Preview environments get 503.
+- `POST /api/internal/hiring-resume-upload` takes `{ candidateId, sha256, extension }` with `extension` `pdf` or `docx`. The signature uses its own context, so a delivery signature cannot replay here. It returns `{ token }`. The token is valid for 5 minutes, covers one exact path under `hiring-resumes/{candidateId}/`, allows one content type, and allows at most 15 MB. A wrong signature returns 401. A candidate that does not exist returns 404. Outside production the route returns 503.
 
 ## Tests
 

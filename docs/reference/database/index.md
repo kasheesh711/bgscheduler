@@ -564,3 +564,26 @@ session or event key. Classification observations are ordered by their original 
 newer current classification. Lifecycle reconciliation records explicit corrections and supersession; absence from a
 partial capture never deletes a known event. Neither table has a foreign key to rotating snapshots. The migration is
 additive; application reads do not create or update these records.
+
+## Tutor hiring — migrations 0118 and 0119
+
+The five hiring tables have no ERD page. The schema is in [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts). The aggregate counts at the top of this page predate them.
+
+| SQL table | Drizzle export | Grain |
+|---|---|---|
+| `hiring_settings` | `hiringSettings` | The one `default` row: the full config as JSON, a revision for optimistic saves, and the worker's last run, summary and error |
+| `hiring_candidates` | `hiringCandidates` | One candidate. Unique by SEEK application id, email and applicant id. Holds the stage, profile and pre-screen text, hashes and assessments, subjects, and the résumé file record |
+| `hiring_bookings` | `hiringBookings` | One appointment row. An old-flow paper or mock is one row. A visit is two rows (`paper` and `mock`) joined by `visit_id` |
+| `hiring_outbox` | `hiringOutbox` | One queued, sent or cancelled message (`email`, `line`, `calendar`, `calendar_cancel`), unique by `key` |
+| `hiring_audit` | `hiringAudit` | One audit row for an actor, an action and a candidate |
+
+**Migration `0119_hiring_visit_automation.sql`** (journal index 118) changes these tables and adds no table:
+
+- The `hiring_stage` check on `hiring_candidates` now allows `onsite_invited`, `onsite_booked`, `no_reply` and `no_booking` besides the earlier eight stages.
+- The `hiring_mock_window` check on `hiring_bookings` keeps the interviewer, one-subject, one-hour and same-Bangkok-date rules. It drops the fixed Monday–Friday, 10:00–16:00 terms. Those limits now live in settings and in the slot code.
+- The `hiring_bookings_status_check` check now allows `no_show` besides `confirmed` and `cancelled`.
+- `hiring_bookings`: new nullable `visit_id` (uuid) and `reschedule_of` (uuid, self-reference to `hiring_bookings.id`), and index `hiring_booking_visit` on `visit_id`.
+- `hiring_candidates`: new `work_rights_answer` (text, the exact SEEK answer), `visit_subject` (text), `pre_screen_replied_at` (timestamptz), `pre_screen_resubmitted` (boolean, not null, default false), and the résumé record `resume_path`, `resume_name`, `resume_type`, `resume_sha256`, `resume_size` and `resume_stored_at`.
+- A data step sets `work_rights_answer` to `I have permanent work rights with no restrictions` where `work_rights_confirmed` is true. The old `work_rights_confirmed` column stays. No code reads it. The accepted list and the stored answer decide.
+
+The migration stores no pre-screen queue time. The queue is derived from the outbox. The new settings keys live in `hiring_settings.config`, and an older stored config parses with defaults. Apply `0119` before the code that selects the new columns. The migration is safe for the code that runs now. It has no down path. See [Go-live](../../features/hiring.md#go-live) for the apply and read-back steps.

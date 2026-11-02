@@ -98,9 +98,19 @@
 .tileNote { color: var(--muted); font-size: 12px; }
 .meter { height: 3px; margin: 2px 0 3px; border-radius: 999px; background: var(--line); }
 .meter span { display: block; height: 100%; border-radius: 999px; background: var(--ink); }
+.meter span[data-full="true"] { background: var(--accent-text); }
+.limitCards { display: grid; grid-template-columns: 1fr; border-bottom: 1px solid var(--line); }
+.limitCard { min-width: 0; padding: 10px 24px 12px; border-top: 1px solid var(--line); }
+.limitCard .panelLede { margin-bottom: 8px; }
+.meterGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px 14px; }
+.meterValue { font-family: var(--serif); font-size: 24px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.meterMax { color: var(--muted); font-family: var(--sans); font-size: 12px; }
+.meterFull { color: var(--accent-text); font-size: 12px; font-weight: 500; }
+.limitNote { grid-column: 1 / -1; padding: 6px 24px 8px; }
+@media (min-width: 720px) { .limitCards { grid-template-columns: 1fr 1fr; } .limitCard + .limitCard { border-left: 1px solid var(--line); } }
 
 /* Charts */
-.charts { display: grid; flex-shrink: 0; grid-template-columns: 1fr; border-bottom: 1px solid var(--line); }
+.charts { display: grid; flex-shrink: 0; grid-template-columns: 1fr; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .panel { display: flex; flex-direction: column; min-width: 0; padding: 10px 24px 12px; border-top: 1px solid var(--line); }
 .panelTitle { font-size: 14px; font-weight: 500; }
 .panelLede { margin-bottom: 8px; color: var(--muted); }
@@ -137,6 +147,11 @@
 .pentagonRingInner { fill: none; stroke: var(--line); }
 .pentagonProfile { fill: var(--stone-dark); fill-opacity: 0.3; stroke: var(--stone-dark); stroke-width: 1.5; }
 .pentagonPre { fill: var(--accent-text); fill-opacity: 0.12; stroke: var(--accent-text); stroke-width: 2; }
+.pentagonKey { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 0 0 8px; padding: 0; list-style: none; color: var(--muted); font-size: 12px; }
+.pentagonKey li { display: inline-flex; align-items: center; gap: 4px; }
+.pentagonKey i { width: 10px; height: 10px; border-radius: 2px; }
+.keyProfile { background: var(--stone-dark); opacity: 0.5; }
+.keyPre { border: 2px solid var(--accent-text); }
 .pentagonName { fill: var(--support); font-size: 13px; font-weight: 600; }
 .pentagonValue { fill: var(--muted); font-size: 12px; }
 /* A whole row below the full dashboard: a narrow column would shrink the chart until its text is unreadable. */
@@ -298,6 +313,7 @@
 .sourceText { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
 .sourceText summary { cursor: pointer; font-size: 14px; font-weight: 500; }
 .sourceText pre { max-height: 360px; margin-top: 6px; overflow: auto; padding: 10px; border-radius: 12px; background: var(--tint); font: inherit; overflow-wrap: anywhere; white-space: pre-wrap; }
+.resumeFrame { display: block; width: 100%; height: 60vh; margin: 6px 0; border: 1px solid var(--line); border-radius: 12px; }
 .decision { display: grid; flex-shrink: 0; gap: 8px; padding: 10px 20px; border-top: 1px solid var(--line); background: var(--paper); }
 .subjectPicker { display: flex; flex-wrap: wrap; gap: 2px 10px; max-height: 76px; overflow-y: auto; }
 .subjectPicker legend { margin-bottom: 2px; color: var(--muted); }
@@ -327,6 +343,7 @@
 .weightRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--line); color: var(--support); }
 .weightTotal { border-bottom: 0; color: var(--ink); font-weight: 500; }
 .numberInput { width: 72px; height: 28px; padding: 0 8px; font-variant-numeric: tabular-nums; }
+.numberInput[type="time"] { width: 104px; }
 .input { width: 100%; height: 28px; padding: 0 8px; min-width: 0; }
 .checkList { display: grid; gap: 4px; }
 .checkList label { display: flex; align-items: center; gap: 6px; color: var(--support); }
@@ -422,7 +439,60 @@
 /* The note is the widest thing in the row, so this column sizes to it instead of the 150px cap. */
 .table td.preCell { max-width: none; }
 .stagePill { display: table; margin-top: 2px; }
-@media (min-width: 720px) { .stagePill { display: none; } }
+.stageHold { display: block; }
+@media (min-width: 720px) { .stagePill { display: none; } .holdNote.stageHold { display: none; } }
 .answers div { padding: 5px 0; border-top: 1px solid var(--line); }
 .answers dt { color: var(--muted); font-size: 12px; }
 .answers dd { text-align: left; overflow-wrap: anywhere; white-space: pre-wrap; }
+
+/* Head schedules */
+.heads { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px; padding: 12px 16px 24px; }
+.headsMain { flex: 999 1 640px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.headsSide { flex: 1 1 280px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.headsBar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.headTabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.surface .headTab { padding: 3px 12px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--stone); }
+.surface .headTab[aria-pressed="true"] { background: var(--ink); color: var(--paper); box-shadow: none; }
+.weekNav { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.weekLabel { font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.surface .navButton { min-height: 32px; padding: 6px 12px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--stone); background: #fff; font-weight: 500; }
+.headNote { margin-bottom: 8px; color: var(--muted); font-size: 12px; }
+.headBanner { margin-bottom: 8px; padding: 6px 10px; border-radius: 8px; font-weight: 500; }
+.headBannerClash { background: #fdecec; color: var(--danger); }
+.headBannerStale { background: #fbeccd; color: var(--warn); }
+.calScroll { overflow-x: auto; }
+.cal { display: grid; grid-template-columns: 44px repeat(5, minmax(96px, 1fr)); min-width: 640px; }
+.calDayHead { padding: 4px 6px; border-left: 1px solid var(--line); font-weight: 500; }
+.calDayTag { color: var(--muted); font-size: 12px; font-weight: 400; }
+.calHours { position: relative; height: 560px; }
+.hourLabel { position: absolute; right: 6px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; transform: translateY(-7px); }
+.calDay { position: relative; height: 560px; border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+.calOff { background: repeating-linear-gradient(135deg, var(--tint) 0 6px, var(--paper) 6px 12px); }
+.calBand { position: absolute; right: 0; left: 0; background: #fffdf9; }
+.hourLine { position: absolute; right: 0; left: 0; border-top: 1px solid var(--line); }
+.surface .blk { position: absolute; right: 4px; left: 4px; box-sizing: border-box; padding: 2px 6px; overflow: hidden; border-radius: 6px; font-size: 11px; line-height: 1.25; text-align: left; }
+.blkTitle { display: block; font-weight: 600; }
+.surface .bWise { background: var(--stone); color: var(--ink); }
+.surface .bLeave { background: repeating-linear-gradient(135deg, #f3dca6 0 6px, #fbeccd 6px 12px); border: 1px solid #b88a1c; color: var(--warn); }
+.surface .bSitIn { background: var(--stone-dark); color: var(--paper); }
+.surface .bMock { z-index: 2; background: var(--ink); color: var(--paper); }
+.surface button.bMock:hover { outline: 2px solid var(--accent-text); }
+.surface .bExam { background: transparent; border: 1px dashed var(--stone-dark); color: var(--support); }
+.surface .bClash { z-index: 3; background: var(--danger); color: #fff; }
+.headLegend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px; color: var(--muted); font-size: 12px; }
+.headLegend i { width: 9px; height: 9px; margin-right: 4px; border-radius: 999px; }
+.headName { font-size: 14px; font-weight: 500; }
+.headVisit { margin-top: 4px; padding: 7px 0; border-top: 1px solid var(--line); }
+.surface .headVisit button { font-weight: 500; text-align: left; text-decoration: underline; text-underline-offset: 2px; }
+.headMocks { display: flex; justify-content: space-between; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.clashWord { display: table; margin-top: 2px; color: var(--danger); font-size: 12px; font-weight: 500; }
+.holdNote { display: block; color: var(--warn); font-size: 12px; font-weight: 500; }
+.holdList { display: grid; gap: 2px; padding-left: 16px; list-style: disc; color: var(--support); }
+.priorityRow { display: grid; grid-template-columns: 24px 1fr auto auto; align-items: center; gap: 8px; padding: 3px 0; border-top: 1px solid var(--line); }
+.priorityRow label { display: flex; align-items: center; gap: 6px; color: var(--support); }
+.priorityRow input, .dayChecks input, .setupSection .checkList input { accent-color: var(--ink); }
+.surface .priorityRow .secondary { margin-top: 0; padding: 2px 10px; }
+.headDayRow { display: grid; gap: 4px; padding: 8px 0; border-top: 1px solid var(--line); }
+.dayChecks { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.dayChecks label { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; color: var(--muted); font-size: 12px; }
+.surface .dayChecks .secondary { margin-top: 0; }

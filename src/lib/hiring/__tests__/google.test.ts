@@ -69,3 +69,39 @@ it("creates one calendar event with both attendees and recovers it by identity o
     fetcher.mock.calls.filter(([, init]) => init?.method === "POST"),
   ).toHaveLength(1);
 });
+
+it("titles a visit's two private events, and only the mock invites the head", async () => {
+  const db = {
+    select: () => ({
+      from: () => ({ where: async () => [{ refreshTokenCiphertext: "encrypted", scope: GOOGLE_SCOPES.join(" ") }] }),
+    }),
+  } as unknown as Database;
+  const row = (kind: "paper" | "mock", id: string, interviewerEmail: string | null) =>
+    ({
+      id,
+      kind,
+      visitId: "00000000-0000-4000-8000-000000000009",
+      calendarOwner: "owner@example.com",
+      interviewerEmail,
+      subjects: ["Mathematics"],
+      startTime: new Date("2026-11-02T03:00:00Z"),
+      endTime: new Date("2026-11-02T05:00:00Z"),
+    }) as typeof hiringBookings.$inferSelect;
+  const candidate = { name: "Candidate", email: "candidate@example.com" } as Candidate;
+  const events: Record<string, unknown>[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method !== "POST") return new Response(null, { status: 404 });
+      events.push(JSON.parse(init.body as string));
+      return Response.json(events.at(-1));
+    }),
+  );
+  await deliverCalendar(row("paper", "00000000-0000-4000-8000-000000000002", null), candidate, "BeGifted", db);
+  await deliverCalendar(row("mock", "00000000-0000-4000-8000-000000000003", "peat@example.com"), candidate, "BeGifted", db);
+  expect(events.map((e) => e.summary)).toEqual(["BeGifted exam", "BeGifted mock teaching"]);
+  expect(events.map((e) => e.visibility)).toEqual(["private", "private"]);
+  expect(events[0].attendees).toEqual([{ email: "candidate@example.com" }]);
+  expect(events[1].attendees).toEqual([{ email: "peat@example.com" }, { email: "candidate@example.com" }]);
+  expect(String(events[1].description)).toContain("Candidate");
+});

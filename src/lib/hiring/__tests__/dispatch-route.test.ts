@@ -1,6 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { POST } from "@/app/api/internal/hiring-delivery/route";
+import { NextRequest } from "next/server";
+import { GET, POST } from "@/app/api/internal/hiring-delivery/route";
 import { deliveryAuthorization } from "../dispatch";
+import { deliverOutbox } from "../worker";
 import { getDb } from "@/lib/db";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
 
@@ -13,6 +15,9 @@ vi.mock("../service", () => ({
   audit: vi.fn(),
 }));
 vi.mock("@/lib/email/outbound", () => ({ createOutboundEmailSender: vi.fn() }));
+vi.mock("@/lib/data-health/cron-audit", () => ({
+  withCronInvocationAudit: vi.fn((_input, run) => run()),
+}));
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.clearAllMocks();
@@ -65,4 +70,22 @@ it("sends a signed test only to the configured organizer with a stable key", asy
       idempotencyKey: "hiring-self-test:00000000-0000-4000-8000-000000000001",
     }),
   );
+});
+
+it("delivers booking rows only on the cron, behind the shared secret", async () => {
+  vi.stubEnv("CRON_SECRET", "cron-secret");
+  const cron = (authorization?: string) =>
+    GET(
+      new NextRequest("https://bgscheduler.vercel.app/api/internal/hiring-delivery", {
+        headers: authorization ? { authorization } : {},
+      }),
+    );
+  expect((await cron()).status).toBe(401);
+  expect((await cron("Bearer wrong")).status).toBe(401);
+  expect(deliverOutbox).not.toHaveBeenCalled();
+  vi.mocked(deliverOutbox).mockResolvedValue(3);
+  const response = await cron("Bearer cron-secret");
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ sent: 3 });
+  expect(deliverOutbox).toHaveBeenCalledWith(expect.anything(), { connectedEmail: "owner@example.com" }, 20, true);
 });

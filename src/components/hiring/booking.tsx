@@ -3,16 +3,250 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { Subject, Slot } from "@/lib/hiring/model";
-import type { bookingView } from "@/lib/hiring/service";
+import type { bookingView, visitView } from "@/lib/hiring/service";
 type View = Awaited<ReturnType<typeof bookingView>>;
+type VisitView = Awaited<ReturnType<typeof visitView>>;
+const LINE_URL = "https://lin.ee/OjMHF41";
 const time = (value: string) =>
   new Date(value).toLocaleTimeString("en-GB", {
     timeZone: "Asia/Bangkok",
     hour: "2-digit",
     minute: "2-digit",
   });
+const day = (value: string) =>
+  new Date(value).toLocaleDateString("en-GB", {
+    timeZone: "Asia/Bangkok",
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+const Help = () => (
+  <p className="text-sm text-muted-foreground">
+    For help or changes,{" "}
+    <a className="underline" href={LINE_URL} rel="noreferrer">
+      contact BeGifted on LINE
+    </a>
+    .
+  </p>
+);
+
+/** A notice is plain text from the server. Only the known LINE address becomes a link, so no HTML comes through. */
+export function VisitNotice({ text }: { text: string }) {
+  const at = text.indexOf(LINE_URL);
+  return (
+    <p role="status">
+      {at < 0 ? (
+        text
+      ) : (
+        <>
+          {text.slice(0, at)}
+          <a className="underline" href={LINE_URL} rel="noreferrer">
+            {LINE_URL}
+          </a>
+          {text.slice(at + LINE_URL.length)}
+        </>
+      )}
+    </p>
+  );
+}
+
+/** The error sits directly above the button: on a phone the top of the page is out of sight after a failed booking. */
+export function VisitConfirm({
+  error,
+  disabled,
+  label,
+  onConfirm,
+}: {
+  error: string;
+  disabled: boolean;
+  label: string;
+  onConfirm: () => void;
+}) {
+  return (
+    <>
+      {error && (
+        <p role="alert" className="rounded-lg bg-red-50 p-3 text-red-900">
+          {error}
+        </p>
+      )}
+      <Button className="w-full" disabled={disabled} onClick={onConfirm}>
+        {label}
+      </Button>
+    </>
+  );
+}
+
+/** One subject and one visit. The server assigns the head, so a time appears once and names no one. */
+export function VisitBooking({
+  token,
+  view,
+  reload,
+}: {
+  token: string;
+  view: VisitView;
+  reload: () => Promise<void>;
+}) {
+  const [moving, setMoving] = useState(false),
+    [start, setStart] = useState(""),
+    [onsite, setOnsite] = useState(false),
+    [commitment, setCommitment] = useState(false),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState(""),
+    [saved, setSaved] = useState("");
+  async function book() {
+    setBusy(true);
+    setError("");
+    setSaved("");
+    try {
+      const r = await fetch(`/api/hiring/book/${token}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          start,
+          subject: view.subject,
+          onsiteConfirmed: onsite,
+          teachingCommitmentConfirmed: commitment,
+          ...(view.visit ? { move: true } : {}),
+        }),
+      });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.error);
+      await reload();
+      setSaved(
+        view.visit
+          ? "Your visit has moved. The new times are below. A confirmation email and calendar invitations will follow."
+          : "Your visit is confirmed. The details are below. A confirmation email and calendar invitations will follow.",
+      );
+      setMoving(false);
+      setStart("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not confirm.");
+      // That time may be gone, so the candidate chooses again from the fresh list.
+      setStart("");
+      await reload().catch(() => {});
+    } finally {
+      setBusy(false);
+    }
+  }
+  // The server sends a notice for an empty list. The fallback keeps the page from ever showing nothing.
+  const notice =
+    view.notice ?? (view.slots.length ? null : `There are no open visit times at the moment. Contact BeGifted on LINE: ${LINE_URL}`);
+  const showForm = (!view.visit || moving) && !notice;
+  return (
+    <>
+      {saved && (
+        <p role="status" className="rounded-lg bg-green-50 p-3 text-green-900">
+          {saved}
+        </p>
+      )}
+      <p>{view.location}</p>
+      <p className="text-sm text-muted-foreground">
+        One visit for {view.subject}: a 2-hour exam, then a 1-hour mock teaching session. All times are Bangkok time.
+      </p>
+      {view.visit && (
+        <section>
+          <h2 className="font-semibold">Your booked visit</h2>
+          <p className="mt-2 rounded-lg border p-3">
+            {day(view.visit.examStart)}
+            <span className="block">
+              Exam: {time(view.visit.examStart)}–{time(view.visit.mockStart)}
+            </span>
+            <span className="block">
+              Mock teaching: {time(view.visit.mockStart)}–{time(view.visit.mockEnd)} with {view.visit.head}
+            </span>
+          </p>
+          {view.canMove && !moving && (
+            <>
+              <p className="mt-2 text-sm text-muted-foreground">
+                You can move this visit once, up to 24 hours before it starts.
+              </p>
+              <Button className="mt-2" variant="outline" disabled={busy || !view.slots.length} onClick={() => setMoving(true)}>
+                Move this visit
+              </Button>
+              {!view.slots.length && (
+                <p className="mt-2 text-sm text-muted-foreground">You cannot move it now, because no other time is open.</p>
+              )}
+            </>
+          )}
+        </section>
+      )}
+      {notice && <VisitNotice text={notice} />}
+      {/* With no form on the page, a failed booking still shows its error here. */}
+      {!showForm && error && (
+        <p role="alert" className="rounded-lg bg-red-50 p-3 text-red-900">
+          {error}
+        </p>
+      )}
+      {showForm && (
+        <>
+          <fieldset>
+            <legend className="mb-2 font-semibold">{view.visit ? "Choose a new time" : "Choose a time"}</legend>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {view.slots.map((s) => (
+                <label
+                  key={s.examStart}
+                  className={`cursor-pointer rounded-lg border p-3 ${start === s.examStart ? "border-primary bg-primary/5" : ""}`}
+                >
+                  <input
+                    type="radio"
+                    name="slot"
+                    className="mr-2"
+                    checked={start === s.examStart}
+                    onChange={() => setStart(s.examStart)}
+                  />
+                  {day(s.examStart)}
+                  <span className="ml-5 block">
+                    Exam {time(s.examStart)}–{time(s.mockStart)}
+                  </span>
+                  <span className="ml-5 block">
+                    Mock teaching {time(s.mockStart)}–{time(s.mockEnd)}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <label className="flex items-start gap-2">
+            <input type="checkbox" className="mt-1" checked={onsite} onChange={(e) => setOnsite(e.target.checked)} />
+            <span>I will attend onsite at the address above.</span>
+          </label>
+          <label className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={commitment}
+              onChange={(e) => setCommitment(e.target.checked)}
+            />
+            <span>I can teach onsite on Saturday or Sunday and on at least one weekday after 15:00.</span>
+          </label>
+          <VisitConfirm
+            error={error}
+            disabled={busy || !start || !onsite || !commitment}
+            label={busy ? "Confirming…" : view.visit ? "Confirm new time" : "Confirm visit"}
+            onConfirm={book}
+          />
+        </>
+      )}
+      {moving && (
+        <Button
+          className="w-full"
+          variant="outline"
+          disabled={busy}
+          onClick={() => {
+            setMoving(false);
+            setStart("");
+            setError("");
+          }}
+        >
+          Keep my current time
+        </Button>
+      )}
+      {!notice && <Help />}
+    </>
+  );
+}
+
 export function HiringBooking({ token }: { token: string }) {
-  const [view, setView] = useState<View | null>(null),
+  const [view, setView] = useState<View | VisitView | null>(null),
     [subjects, setSubjects] = useState<Subject[]>([]),
     [slot, setSlot] = useState<Slot | null>(null),
     [onsite, setOnsite] = useState(false),
@@ -30,7 +264,7 @@ export function HiringBooking({ token }: { token: string }) {
     const body = await r.json();
     if (!r.ok) throw new Error(body.error);
     setView(body);
-    setSubjects(body.selectedSubjects);
+    setSubjects(body.selectedSubjects ?? []);
   }
   useEffect(() => {
     load().catch((e) => setError(e.message));
@@ -76,6 +310,7 @@ export function HiringBooking({ token }: { token: string }) {
   }
   const selectionBooked =
     view &&
+    view.kind !== "visit" &&
     subjects.some((subject) =>
       view.bookings.some(
         (booking) =>
@@ -91,9 +326,11 @@ export function HiringBooking({ token }: { token: string }) {
           </p>
           <h1 className="mt-2 text-2xl font-semibold">
             Book your{" "}
-            {view?.kind === "mock"
-              ? "mock teaching session"
-              : "paper assessment"}
+            {view?.kind === "visit"
+              ? "onsite visit"
+              : view?.kind === "mock"
+                ? "mock teaching session"
+                : "paper assessment"}
           </h1>
         </header>
         {error && (
@@ -116,6 +353,8 @@ export function HiringBooking({ token }: { token: string }) {
               ? "Contact BeGifted if you need a new booking link."
               : "Loading available appointments…"}
           </p>
+        ) : view.kind === "visit" ? (
+          <VisitBooking token={token} view={view} reload={() => load()} />
         ) : (
           <>
             <p>{view.location}</p>
@@ -261,17 +500,7 @@ export function HiringBooking({ token }: { token: string }) {
                 </Button>
               </>
             )}
-            <p className="text-sm text-muted-foreground">
-              For help or changes,{" "}
-              <a
-                className="underline"
-                href="https://lin.ee/OjMHF41"
-                rel="noreferrer"
-              >
-                contact BeGifted on LINE
-              </a>
-              .
-            </p>
+            <Help />
           </>
         )}
       </div>

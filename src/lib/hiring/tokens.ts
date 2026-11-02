@@ -1,10 +1,13 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import { kindSchema, HiringError, type InterviewKind } from "./model";
+import { tokenKindSchema, HiringError, VISIT_LINK_DAYS, type InterviewKind } from "./model";
+
+// A visit link lives VISIT_LINK_DAYS (model.ts). `inviteExpiresAt` holds the same second, so a new link ends the old one.
+export { VISIT_LINK_DAYS };
 
 export function bookingToken(
   id: string,
-  kind: InterviewKind,
+  kind: InterviewKind | "visit",
   expires: Date,
   secret = process.env.AUTH_SECRET,
 ) {
@@ -35,7 +38,7 @@ export function readBookingToken(
     )
       throw new Error();
     const value = z
-      .object({ id: z.uuid(), kind: kindSchema, exp: z.number().int() })
+      .object({ id: z.uuid(), kind: tokenKindSchema, exp: z.number().int() })
       .strict()
       .parse(JSON.parse(Buffer.from(payload, "base64url").toString()));
     if (value.exp <= now.getTime() / 1000) throw new Error();

@@ -9,7 +9,7 @@ import { CRITERION_LABELS, PILL_CLASS, RESULT_CLASS, RESULT_LABELS, type Insight
 import css from "./dashboard.module.css";
 
 type SortKey = "name" | "stage" | "score" | "updated";
-const STAGE_ORDER = [...ACTIVE_STAGES, "stopped"] as Stage[];
+const STAGE_ORDER = [...ACTIVE_STAGES, "no_reply", "no_booking", "stopped"] as Stage[];
 const shortDate = (value: unknown) =>
   new Date(String(value)).toLocaleDateString("en-GB", {
     day: "numeric",
@@ -24,13 +24,14 @@ const COLUMNS: [SortKey, string][] = [
 
 const PRE_SCREEN_FILTERS: PreScreenFilter[] = ["all", "Queued", "Sent", "Replied", "No reply", "Visit booked"];
 // The Sent button covers Sent and Reminded; the pill still tells them apart.
+// The Queued button also covers a reply in the onsite queue, whose pill stays Replied.
 const matchesPreScreen = (extra: CandidateExtras | undefined, value: PreScreenFilter) =>
   value === "all" ||
   (value === "Visit booked"
     ? !!extra?.visit
     : value === "Sent"
       ? extra?.pre.status === "Sent" || extra?.pre.status === "Reminded"
-      : extra?.pre.status === value);
+      : extra?.pre.status === value || (value === "Queued" && !!extra?.onsiteQueued));
 
 /** The stage, score, subject and pre-screen filters. Search text stays inside the table. */
 export const matchesFilter = (
@@ -50,23 +51,32 @@ export function CandidateTable({
   insights,
   ready,
   extras,
+  holds,
+  clashes,
   weights,
   threshold,
   filter,
   setFilter,
   selected,
   onSelect,
+  onOpenResume = onSelect,
 }: {
   candidates: HiringCandidate[];
   insights: Insights;
   ready: Set<string>;
   extras: Map<string, CandidateExtras>;
+  /** Why a candidate has not been sent anything yet: queue place and limit, or the profile gate. */
+  holds: Map<string, { short: string; long: string[] }>;
+  /** Candidates whose booked mock overlaps a Wise class, leave or sit-in. */
+  clashes: Set<string>;
   weights: HiringConfig["profileWeights"];
   threshold: number;
   filter: CandidateFilter;
   setFilter: (filter: CandidateFilter) => void;
   selected: string | null;
   onSelect: (id: string) => void;
+  /** Opens the panel with the résumé viewer open. */
+  onOpenResume?: (id: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const deferred = useDeferredValue(query);
@@ -95,11 +105,11 @@ export function CandidateTable({
     });
   }, [candidates, ready, extras, filter, deferred, sort]);
 
-  const counts = Object.fromEntries(insights.stages.map((s) => [s.stage, s.at]));
   const tabs: [CandidateFilter["stage"], string, number][] = [
     ["all", "All", insights.total],
     ["ready", "Ready", insights.ready],
-    ...ACTIVE_STAGES.map((s): [Stage, string, number] => [s, STAGE_LABELS[s], counts[s]]),
+    // No reply and No booking are stages too, so they filter like the rest.
+    ...STAGE_ORDER.filter((s) => s !== "stopped").map((s): [Stage, string, number] => [s, STAGE_LABELS[s], insights.byStage[s]]),
     ["stopped", STAGE_LABELS.stopped, insights.stopped],
   ];
   const preCounts = PRE_SCREEN_FILTERS.map(
@@ -216,7 +226,7 @@ export function CandidateTable({
               const flags = [
                 c.previouslyContacted && "Contacted",
                 !c.email && "No email",
-                c.workRightsConfirmed !== true && "Rights unknown",
+                !c.workRightsAnswer ? "Rights unknown" : !c.workRightsAccepted && "Rights not accepted",
               ].filter(Boolean);
               return (
                 <tr key={c.id} data-selected={selected === c.id ? "" : undefined} onClick={() => onSelect(c.id)}>
@@ -232,14 +242,30 @@ export function CandidateTable({
                       {c.name}
                     </button>
                     <span className={css.email}>{c.email || "Email needs review"}</span>
+                    <button
+                      type="button"
+                      className={css.inlineLink}
+                      aria-label={`Résumé for ${c.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenResume(c.id);
+                      }}
+                    >Résumé</button>
                   </td>
                   <td className={c.stage === "stopped" ? css.mutedCell : undefined}>
                     {STAGE_LABELS[c.stage]}
                     {ready.has(c.id) && <span className={css.readyWord}>Ready</span>}
+                    {/* The Visit column is hidden on a phone, so the marker sits here with the stage. */}
+                    {clashes.has(c.id) && (
+                      <span className={css.clashWord} title="The booked mock overlaps a Wise class, leave or sit-in. The app did not move the visit.">
+                        Visit clash
+                      </span>
+                    )}
                     {/* The Pre-screen column is hidden on a phone, so its pill sits here. */}
                     {extra && (
                       <span className={`${css.pill} ${css.stagePill} ${PILL_CLASS[extra.pre.status]}`}>{extra.pre.status}</span>
                     )}
+                    {holds.get(c.id) && <span className={`${css.holdNote} ${css.stageHold}`}>{holds.get(c.id)!.short}</span>}
                   </td>
                   <td>
                     {c.profileScore === null ? (
@@ -263,6 +289,11 @@ export function CandidateTable({
                         <span className={`${css.pill} ${PILL_CLASS[extra.pre.status]}`}>{extra.pre.status}</span>
                         <span className={css.pillNote}>{preScreenNote(extra.pre)}</span>
                       </>
+                    )}
+                    {holds.get(c.id) && (
+                      <span className={css.holdNote} title={holds.get(c.id)!.long.join(" ")}>
+                        {holds.get(c.id)!.short}
+                      </span>
                     )}
                   </td>
                   <td className={css.wideOnly}>
