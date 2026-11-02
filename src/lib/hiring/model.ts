@@ -41,7 +41,8 @@ export type HiringSourceSummary = {
   scanned: number;
   imported: number;
   remaining: number;
-  folders: ReturnType<typeof parseSeekFolderCounts>;
+  /** `imported` is the number of that folder's applications on the website. Older saved summaries do not have it. */
+  folders: (ReturnType<typeof parseSeekFolderCounts>[number] & { imported?: number })[];
   /** In the last run. Older saved summaries do not have it. */
   resumeUploadsFailed?: number;
 };

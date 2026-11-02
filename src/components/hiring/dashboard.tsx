@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { startTransition, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Instrument_Serif } from "next/font/google";
 import { signIn } from "next-auth/react";
 import { GOOGLE_SCOPES, type HiringConfig, type Stage, type Subject } from "@/lib/hiring/model";
@@ -13,6 +14,7 @@ import { CandidateTable, matchesFilter } from "./candidate-table";
 import { AveragePentagon, EvidenceChart, KpiStrip, LimitMeters, ScoreChart, StageChart, SubjectChart } from "./pipeline-charts";
 import { HeadSchedules } from "./head-schedules";
 import { OperationsRail, WorkerBanner } from "./operations-rail";
+import { SeekScreen } from "./seek-screen";
 import { SetupPanel } from "./setup-panel";
 import css from "./dashboard.module.css";
 
@@ -38,6 +40,14 @@ export type CandidateFilter = {
 export type Command = (body: unknown) => Promise<boolean>;
 export const NO_FILTER: CandidateFilter = { stage: "all", prescreen: "all", bucket: null, subject: null };
 
+const VIEWS = {
+  overview: "Overview",
+  seek: "1 Seek intake",
+  heads: "Head schedules",
+  setup: "Rules and setup",
+};
+export type HiringView = keyof typeof VIEWS;
+
 export function HiringDashboard() {
   const [data, setData] = useState<HiringData | null>(null);
   const [config, setConfig] = useState<HiringConfig | null>(null);
@@ -45,7 +55,12 @@ export function HiringDashboard() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
-  const [view, setView] = useState<"pipeline" | "heads" | "setup">("pipeline");
+  const param = useSearchParams().get("view");
+  const view: HiringView = param && Object.hasOwn(VIEWS, param) ? (param as HiringView) : "overview";
+  // Next.js keeps useSearchParams in step with pushState, and this does not reload the page.
+  const setView = (name: HiringView) => {
+    if (name !== view) window.history.pushState(null, "", `?view=${name}`);
+  };
   const [selected, setSelected] = useState<string | null>(null);
   // The candidate whose résumé viewer is open. It loads the file only on request.
   const [resumeFor, setResumeFor] = useState<string | null>(null);
@@ -172,6 +187,12 @@ export function HiringDashboard() {
     [data],
   );
   const candidate = data?.candidates.find((c) => c.id === selected);
+  // Next.js commits pushState in a transition. In one transition, the panel mounts visible, so it can take focus.
+  const openRecord = (id: string) =>
+    startTransition(() => {
+      setSelected(id);
+      setView("overview");
+    });
 
   return (
     <div className={`${css.surface} ${serif.variable}`}>
@@ -193,14 +214,14 @@ export function HiringDashboard() {
           {view === "setup" ? "" : notice}
         </div>
         <div className={css.viewSwitch} role="group" aria-label="Hiring views">
-          {(["pipeline", "heads", "setup"] as const).map((name) => (
+          {(Object.keys(VIEWS) as HiringView[]).map((name) => (
             <button
               key={name}
               type="button"
               aria-pressed={view === name}
               onClick={() => setView(name)}
             >
-              {{ pipeline: "Pipeline", heads: "Head schedules", setup: "Rules and setup" }[name]}
+              {VIEWS[name]}
             </button>
           ))}
         </div>
@@ -255,13 +276,19 @@ export function HiringDashboard() {
           <HeadSchedules
             heads={data.configSaved ? data.config.interviewers : []}
             bookings={data.bookings}
-            onOpenCandidate={(id) => {
-              setSelected(id);
-              setView("pipeline");
-            }}
+            onOpenCandidate={openRecord}
           />
         )}
-        <div className={css.layout} hidden={view !== "pipeline"}>
+        {/* Hidden, not unmounted, for the same reason: a tab switch keeps the filters and the open résumé. */}
+        <div hidden={view !== "seek"} className={css.viewPane}>
+          <SeekScreen
+            data={data}
+            extras={extras}
+            holds={holds}
+            onOpenRecord={openRecord}
+          />
+        </div>
+        <div className={css.layout} hidden={view !== "overview"}>
           <div className={css.main}>
             <KpiStrip
               insights={insights}

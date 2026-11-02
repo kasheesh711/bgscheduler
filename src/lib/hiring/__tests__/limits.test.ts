@@ -68,7 +68,8 @@ describe("releaseQueue", () => {
     expect(release).toHaveLength(5);
     expect(ids(release)).toEqual(["c00", "c01", "c02", "c03", "c04"]);
     expect(held).toHaveLength(35);
-    expect(held.map((h) => h.position)).toEqual(Array.from({ length: 35 }, (_, i) => i + 1));
+    // The place counts released rows too, so it matches the numbered list on the screen.
+    expect(held.map((h) => h.position)).toEqual(Array.from({ length: 35 }, (_, i) => i + 6));
     expect(new Set(held.map((h) => h.limit))).toEqual(new Set(["perDay"]));
   });
 
@@ -85,8 +86,8 @@ describe("releaseQueue", () => {
     const { release, held } = releaseQueue("pre_screen", rows, usage(), config);
     expect(ids(release)).toEqual(["c00", "c01", "c02", "p1", "p2"]);
     expect(held.map((h) => [h.id, h.position, h.limit])).toEqual([
-      ["c03", 1, "perSubject"],
-      ["c04", 2, "perSubject"],
+      ["c03", 4, "perSubject"],
+      ["c04", 5, "perSubject"],
     ]);
   });
 

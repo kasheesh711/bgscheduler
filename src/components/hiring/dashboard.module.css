@@ -67,6 +67,8 @@
 /* Page grid */
 .layout { display: flex; flex-direction: column; }
 .layout[hidden] { display: none; }
+.viewPane { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.viewPane[hidden] { display: none; }
 .main { display: flex; flex-direction: column; min-width: 0; }
 
 /* Summary */
@@ -426,6 +428,25 @@
 @media (prefers-reduced-motion: reduce) {
   .surface * { transition: none !important; }
 }
+
+/* Seek intake */
+.coverage { display: grid; flex-shrink: 0; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; padding: 10px 24px; border-bottom: 1px solid var(--line); }
+.coverageCard { display: grid; align-content: start; gap: 1px; min-width: 0; padding: 7px 10px; border-radius: 8px; background: var(--tint); }
+.coverageLabel { color: var(--muted); font-size: 12px; }
+.coverageValue { font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.coverageNote { padding: 10px 24px; border-bottom: 1px solid var(--line); color: var(--muted); }
+.filterSelect { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.filterSelect select { max-width: 170px; height: 28px; padding: 0 6px; border: 1px solid var(--stone-dark); border-radius: 8px; background: #fff; font: inherit; color: var(--ink); }
+.pick { position: relative; }
+.pick summary { display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border: 1px solid var(--stone-dark); border-radius: 8px; background: #fff; cursor: pointer; white-space: nowrap; }
+.pickMenu { position: absolute; z-index: 20; top: 32px; left: 0; display: grid; gap: 6px; width: 300px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); box-shadow: 0 12px 32px rgb(0 0 0 / 0.1); }
+.pickMenu .search { flex: none; width: 100%; }
+.pickMenu ul { max-height: 260px; overflow-y: auto; }
+.pickMenu label { display: flex; align-items: center; gap: 6px; padding: 2px 0; color: var(--support); }
+.pickMenu input[type="checkbox"] { accent-color: var(--ink); }
+.warnCell { color: var(--warn); }
+@media (min-width: 720px) { .inspector.seekPanel { width: min(560px, 60vw); } }
+@media (min-width: 1180px) and (min-height: 720px) { .inspector.seekPanel { flex: 0 0 min(48%, 760px); width: min(48%, 760px); } }
 
 /* Pre-screen status pills */
 .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; white-space: nowrap; }
