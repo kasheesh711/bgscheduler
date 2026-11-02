@@ -16,7 +16,8 @@ import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { ScheduleEmailRejection } from "@/lib/classrooms/schedule-email";
 import { pushLineTextMessage, LinePushError } from "@/lib/line/client";
 import { progressUsesTutorBot } from "@/lib/line/progress-reminders";
-import { runtimeWritesAllowed, type HiringConfig } from "./model";
+import {
+  isDecided, runtimeWritesAllowed, type HiringConfig } from "./model";
 import {
   askForBriefs,
   availabilityFraction,
@@ -480,6 +481,8 @@ export async function deliverOutbox(
   config: HiringConfig,
   max = 50,
   bookingsOnly = false,
+  // A result email leaves at Send. Without this it would wait for the Mac worker, as a row with no booking does.
+  onlyKey?: string,
 ) {
   if (!config.enabled || !config.deliveryEnabled || !runtimeWritesAllowed())
     return 0;
@@ -504,6 +507,7 @@ export async function deliverOutbox(
       and(
         inArray(s.hiringOutbox.status, ["pending", "failed", "uncertain"]),
         bookingsOnly ? isNotNull(s.hiringOutbox.bookingId) : undefined,
+        onlyKey ? eq(s.hiringOutbox.key, onlyKey) : undefined,
         or(
           isNull(s.hiringOutbox.nextAttemptAt),
           lte(s.hiringOutbox.nextAttemptAt, now),
@@ -557,6 +561,8 @@ export async function deliverOutbox(
       const closing = job.kind === "calendar_cancel" || notice === "cancelled";
       if (
         (candidate.stage === "stopped" && !closing) ||
+        // A booking row has no stage of its own. A retried visit email must not reach someone already decided.
+        (isDecided(candidate.stage) && !job.payload.workflowStage && !closing) ||
         (job.payload.workflowStage &&
           candidate.stage !== job.payload.workflowStage) ||
         (booking && booking.status !== "confirmed" && !closing) ||

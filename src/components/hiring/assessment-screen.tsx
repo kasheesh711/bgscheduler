@@ -473,6 +473,125 @@ export function MockView({ mock, command, reload, busy }: { mock: Mock; command:
   );
 }
 
+type DecisionRow = HiringData["decisions"][number];
+
+/** A result email's state from the outbox, as on the Pre-screen screen: stage alone is not proof that it left. */
+function resultEmailState(key: string | null, outbox: HiringData["inviteOutbox"]) {
+  const row = outbox.find((job) => job.key === key);
+  if (!row) return { label: "Not found", tone: css.warnWord, error: null };
+  if (row.status === "sent") return { label: row.sentAt ? `Sent ${when(new Date(row.sentAt))}` : "Sent", tone: css.goodWord, error: null };
+  if (row.status === "failed") return { label: "Failed, will retry", tone: css.errorText, error: row.error };
+  if (row.status === "uncertain") return { label: "May have sent. Check first", tone: css.errorText, error: row.error };
+  if (row.status === "cancelled") return { label: "Cancelled", tone: css.mutedCell, error: null };
+  return { label: "Queued", tone: css.warnWord, error: null };
+}
+
+function DecisionBox({ candidate, papers, mocks, data, command, busy }: { candidate: HiringCandidate; papers: Paper[]; mocks: Mock[]; data: HiringData; command: Command; busy: boolean }) {
+  const mine = data.decisions.filter((row) => row.candidateId === candidate.id);
+  const draft = mine.find((row) => row.status === "draft");
+  const sent = mine.find((row) => row.status === "sent");
+  const blockers = hireBlockers(papers, mocks);
+  const [reason, setReason] = useState("");
+  const blocked = !candidate.email;
+  const email = sent ? resultEmailState(sent.outboxKey, data.inviteOutbox) : null;
+  // A result that left or is on its way cannot be sent again. A failed one can.
+  const going = sent ? data.inviteOutbox.some((job) => job.key === sent.outboxKey && ["sent", "pending", "processing"].includes(job.status)) : false;
+  return (
+    <section className={css.inspectorSection} aria-label="Decision">
+      <h3 className={css.inspectorHeading}>Decision</h3>
+      {sent && email && (
+        <dl className={css.facts}>
+          <div>
+            <dt>{sent.decision === "hire" ? "Hired" : "Rejected"}</dt>
+            <dd>{sent.decidedBy}</dd>
+          </div>
+          <div>
+            <dt>Result email</dt>
+            <dd className={email.tone}>{email.label}</dd>
+          </div>
+        </dl>
+      )}
+      {email?.error && <p className={css.errorText}>{email.error}</p>}
+      {draft ? (
+        <DraftEditor key={draft.id} draft={draft} to={candidate.email} data={data} command={command} busy={busy} />
+      ) : (
+        <>
+          {sent && <p className={css.inspectorMeta}>A new decision needs its own email. The email already sent is not recalled.</p>}
+          {blocked && <p className={css.warnWord}>This candidate has no email address, so a result email cannot go. Use Stop in the full record.</p>}
+          {blockers.length > 0 && (
+            <ul className={css.holdList}>
+              {blockers.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          )}
+          <label className={css.fieldLabel}>
+            Reason
+            <textarea className={css.textarea} rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Needed to reject. The candidate does not see it." />
+          </label>
+          <div className={css.decisionActions}>
+            <button type="button" className={css.primary} disabled={busy || blocked || blockers.length > 0 || (going && sent?.decision === "hire")} onClick={() => void command({ action: "decision_draft", id: candidate.id, decision: "hire", reason })}>
+              Hire: preview email
+            </button>
+            <button type="button" className={css.secondary} disabled={busy || blocked || reason.trim().length < 5 || (going && sent?.decision === "reject")} onClick={() => void command({ action: "decision_draft", id: candidate.id, decision: "reject", reason })}>
+              Reject: preview email
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function DraftEditor({ draft, to, data, command, busy }: { draft: DecisionRow; to: string | null; data: HiringData; command: Command; busy: boolean }) {
+  const [subject, setSubject] = useState(draft.emailSubject);
+  const [body, setBody] = useState(draft.emailBody);
+  const off = !data.config.enabled || !data.config.deliveryEnabled;
+  return (
+    <>
+      <p className={css.inspectorText}>
+        {draft.decision === "hire" ? "Hire" : "Reject"}: read and edit the email. It goes only when you click Send, to this one candidate.
+      </p>
+      {off && <p className={css.warnWord}>Automation and Messages are off, so this cannot leave yet. Save your edits, and send later.</p>}
+      <dl className={css.facts}>
+        <div>
+          <dt>To</dt>
+          <dd>{to}</dd>
+        </div>
+      </dl>
+      <label className={css.fieldLabel}>
+        Email subject
+        <input className={css.input} maxLength={200} value={subject} onChange={(e) => setSubject(e.target.value)} />
+      </label>
+      <label className={css.fieldLabel}>
+        Email message
+        <textarea className={css.textarea} rows={8} maxLength={10000} value={body} onChange={(e) => setBody(e.target.value)} />
+      </label>
+      <div className={css.decisionActions}>
+        <button
+          type="button"
+          className={css.primary}
+          disabled={busy || off || !subject.trim() || !body.trim()}
+          onClick={() => void command({ action: "decision_send", id: draft.id, emailSubject: subject, emailBody: body })}
+        >
+          Send email
+        </button>
+        <button
+          type="button"
+          className={css.secondary}
+          disabled={busy || !subject.trim() || !body.trim()}
+          onClick={() => void command({ action: "decision_save", id: draft.id, emailSubject: subject, emailBody: body })}
+        >
+          Save draft
+        </button>
+        <button type="button" className={css.secondary} disabled={busy} onClick={() => void command({ action: "decision_discard", id: draft.id })}>
+          Discard
+        </button>
+      </div>
+    </>
+  );
+}
+
 function AddPaper({ candidateId, first, taken, reload }: { candidateId: string; first: string; taken: string[]; reload: Reload }) {
   const open = SUBJECTS.filter((subject) => !taken.includes(subject));
   const [choice, setChoice] = useState(first as Subject);
@@ -497,6 +616,18 @@ function AddPaper({ candidateId, first, taken, reload }: { candidateId: string; 
   );
 }
 
+function decisionCell(rows: DecisionRow[]) {
+  const draft = rows.find((row) => row.status === "draft");
+  const sent = rows.find((row) => row.status === "sent");
+  if (!draft && !sent) return <span className={css.mutedCell}>–</span>;
+  return (
+    <>
+      {sent && <span className={css.pillNote}>{sent.decision === "hire" ? "Hired" : "Rejected"}</span>}
+      {draft && <span className={css.warnWord}>Draft: {draft.decision === "hire" ? "Hire" : "Reject"}</span>}
+    </>
+  );
+}
+
 function AssessmentPanel({
   candidate,
   row,
@@ -518,7 +649,6 @@ function AssessmentPanel({
   busy: boolean;
   onClose: () => void;
 }) {
-  const blockers = hireBlockers(papers, mocks);
   return (
     <aside className={`${css.inspector} ${css.seekPanel}`} aria-label={`Assessment of ${candidate.name}`}>
       <header className={css.inspectorHead}>
@@ -548,16 +678,7 @@ function AssessmentPanel({
         {mocks.map((mock) => (
           <MockView key={mock.id} mock={mock} command={command} reload={reload} busy={busy} />
         ))}
-        {blockers.length > 0 && (
-          <section className={css.inspectorSection}>
-            <h3 className={css.inspectorHeading}>Before Hire</h3>
-            <ul className={css.holdList}>
-              {blockers.map((line) => (
-                <li key={line}>{line}</li>
-              ))}
-            </ul>
-          </section>
-        )}
+        {!row.history && <DecisionBox candidate={candidate} papers={papers} mocks={mocks} data={data} command={command} busy={busy} />}
       </div>
     </aside>
   );
@@ -673,6 +794,7 @@ export function AssessmentScreen({
                           {row.at ? when(row.at) : row.dateText || "–"}
                           {row.mockAt && <span className={css.pillNote}>Mock {clock(row.mockAt)}</span>}
                           {row.status === "no_show" && <span className={css.clashWord}>No-show</span>}
+                          {row.status === "cancelled" && <span className={css.clashWord}>Visit cancelled</span>}
                         </td>
                         <td className={css.candidateCell}>
                           <button
@@ -706,7 +828,7 @@ export function AssessmentScreen({
                             <span className={css.mutedCell}>–</span>
                           )}
                         </td>
-                        <td>{decided.has(row.candidateId) ? data.decisions.find((d) => d.candidateId === row.candidateId && d.status === "sent")?.decision === "hire" ? "Hired" : "Rejected" : <span className={css.mutedCell}>–</span>}</td>
+                        <td>{decisionCell(data.decisions.filter((d) => d.candidateId === row.candidateId))}</td>
                       </tr>
                     );
                   })}

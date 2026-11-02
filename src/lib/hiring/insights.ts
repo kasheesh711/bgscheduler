@@ -1,4 +1,4 @@
-import { SUBJECTS, type HiringConfig, type Stage, type Subject } from "./model";
+import { isDecided, SUBJECTS, type HiringConfig, type Stage, type Subject } from "./model";
 import { profileScore, topHiringSubject, workRightsAccepted, type Assessment } from "./scoring";
 
 export const STAGE_LABELS: Record<Stage, string> = {
@@ -14,6 +14,8 @@ export const STAGE_LABELS: Record<Stage, string> = {
   no_reply: "No reply",
   no_booking: "No booking",
   stopped: "Stopped",
+  hired: "Hired",
+  rejected: "Rejected",
 };
 export const ACTIVE_STAGES: Stage[] = [
   "new",
@@ -41,6 +43,8 @@ const AFTER_REVIEW: Stage[] = [
   "onsite_booked",
   "no_reply",
   "no_booking",
+  "hired",
+  "rejected",
 ];
 const REACHED: Partial<Record<Stage, Stage[]>> = {
   new: ["new", "review", ...AFTER_REVIEW],
@@ -75,6 +79,7 @@ export function averageValues(candidates: { profileAssessment: Assessment | null
 type InsightCandidate = {
   id: string;
   stage: Stage;
+  visitSubject?: Subject | null;
   email: string | null;
   preScreen: unknown;
   profileScore: number | null;
@@ -170,10 +175,11 @@ export function buildInsights(input: InsightInput, now = new Date()) {
   const { candidates, config } = input;
   const threshold = config.profileThreshold;
   // No reply and No booking stay in `active`: a late reply is scored and a click sends a new link. `parked` says how many they are.
-  const active = candidates.filter((c) => c.stage !== "stopped");
+  const active = candidates.filter((c) => c.stage !== "stopped" && !isDecided(c.stage));
   const byStage = Object.fromEntries(
     (Object.keys(STAGE_LABELS) as Stage[]).map((stage) => [stage, candidates.filter((c) => c.stage === stage).length]),
   ) as Record<Stage, number>;
+  const decidedWithVisit = candidates.filter((c) => isDecided(c.stage) && c.visitSubject).length;
   // A person with no source text can never be scored, so they stay out of the "scored" share.
   const scorable = candidates.filter((c) => c.hasSourceText !== false).length;
   const scores = candidates.flatMap((c) => (c.profileScore === null ? [] : [c.profileScore]));
@@ -184,7 +190,8 @@ export function buildInsights(input: InsightInput, now = new Date()) {
     stage,
     label: STAGE_LABELS[stage],
     at: byStage[stage],
-    reached: (REACHED[stage] ?? [stage]).reduce((n, s) => n + byStage[s], 0),
+    // A decided person with a visit passed through the onsite steps. An old-flow person never did.
+    reached: (REACHED[stage] ?? [stage]).reduce((n, s) => n + byStage[s], 0) + (stage === "onsite_invited" || stage === "onsite_booked" ? decidedWithVisit : 0),
   }));
 
   const histogram = Array.from({ length: 10 }, (_, i) => ({
@@ -228,7 +235,7 @@ export function buildInsights(input: InsightInput, now = new Date()) {
     active: active.length,
     parked: PARKED.reduce((n, stage) => n + byStage[stage], 0),
     byStage,
-    stopped: candidates.length - active.length,
+    stopped: byStage.stopped,
     scored: scores.length,
     scorable,
     unscored: scorable - scores.length,

@@ -46,6 +46,10 @@ describe("visitEmail", () => {
   it("says a stage change alone is not a sent email", () => {
     expect(visitEmail(person({ stage: "onsite_invited" }), [], 50).label).not.toMatch(/Sent/);
   });
+  it("names a sent decision in place of an old state", () => {
+    expect(visitEmail(person({ stage: "rejected", preScreen: null }), [], 50).label).toBe("Rejected");
+    expect(visitEmail(person({ stage: "hired" }), [], 50).label).toBe("Hired");
+  });
   it("gives the reason when there is no email", () => {
     expect(visitEmail(person({ preScreen: null }), [], 50).label).toBe("Waiting for reply");
     expect(visitEmail(person({ preScreen: null, stage: "no_reply" }), [], 50).label).toBe("Not sent: no reply");

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { isDecided } from "@/lib/hiring/model";
 import { PRE_SCREEN_FILTERS, matchesPreScreenList, preScreenFinalScore, visitEmail, wasSentForm, type PreScreenListFilter, type VisitEmail } from "@/lib/hiring/prescreen-view";
 import { preScreenNote, type CandidateExtras } from "@/lib/hiring/status";
 import { ANSWER_LABELS, AssessmentBlock, ONSITE_STAGES } from "./candidate-inspector";
@@ -73,7 +74,7 @@ function PreScreenPanel({
       label: "Resend with a new link",
       allowed: candidate.stage === "no_booking" || candidate.stage === "onsite_invited",
     },
-    { action: "stop", label: "Stop", allowed: !ahead },
+    { action: "stop", label: "Stop", allowed: !ahead && !isDecided(candidate.stage) },
   ].filter((button) => button.allowed);
   return (
     <aside className={`${css.inspector} ${css.seekPanel}`} aria-label={`Pre-screen of ${candidate.name}`}>

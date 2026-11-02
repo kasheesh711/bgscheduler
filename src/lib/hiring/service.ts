@@ -17,6 +17,7 @@ import {
   overlap,
   runtimeWritesAllowed,
   shiftDate,
+  isDecided,
   localDate,
   visitBookingSchema,
   ZONE,
@@ -584,7 +585,7 @@ export async function dashboard(db: Database = getDb()) {
     })
     .from(s.hiringOutbox)
     .where(
-      sql`${s.hiringOutbox.key} = ${s.hiringOutbox.candidateId}::text || ':pre-screen' or ${s.hiringOutbox.key} like ${s.hiringOutbox.candidateId}::text || ':visit-invite%'`,
+      sql`${s.hiringOutbox.key} = ${s.hiringOutbox.candidateId}::text || ':pre-screen' or ${s.hiringOutbox.key} like ${s.hiringOutbox.candidateId}::text || ':visit-invite%' or ${s.hiringOutbox.key} like ${s.hiringOutbox.candidateId}::text || ':result:%'`,
     )
     .orderBy(desc(s.hiringOutbox.createdAt));
   const assessment = await assessmentData(db, now);
@@ -682,6 +683,7 @@ export async function bookingView(
   // A candidate on the visit flow books through the visit link only.
   if (
     candidate.stage === "stopped" ||
+    isDecided(candidate.stage) ||
     candidate.visitSubject ||
     !candidate.inviteExpiresAt ||
     candidate.inviteExpiresAt.getTime() < cap.exp * 1000
@@ -795,6 +797,7 @@ export async function bookInterview(
     const candidate = await candidateById(tx, cap.id);
     if (
       candidate.stage === "stopped" ||
+      isDecided(candidate.stage) ||
       candidate.visitSubject ||
       !candidate.inviteExpiresAt ||
       candidate.inviteExpiresAt.getTime() < cap.exp * 1000
@@ -1047,7 +1050,7 @@ const headNotice = (mock: VisitRow, notice?: "moved" | "cancelled", movedFrom?: 
 });
 
 /** Stops a visit's rows blocking anyone. Unsent messages for them go; events still ahead are cancelled. */
-async function endVisit(tx: Database, rows: VisitRow[], status: "cancelled" | "no_show", now: Date) {
+export async function endVisit(tx: Database, rows: VisitRow[], status: "cancelled" | "no_show", now: Date) {
   const ids = rows.map((b) => b.id);
   const candidateId = rows[0].candidateId;
   await tx.update(s.hiringBookings).set({ status }).where(inArray(s.hiringBookings.id, ids));
@@ -1308,8 +1311,8 @@ export async function reviewCandidate(
       await tx
         .update(s.hiringCandidates)
         .set({
-          // A SEEK stop can leave a future visit behind, and that candidate stays stopped.
-          stage: c.stage === "stopped" ? "stopped" : "no_booking",
+          // A SEEK stop can leave a future visit behind, and that candidate stays stopped. A sent decision stands too.
+          stage: c.stage === "stopped" || isDecided(c.stage) ? c.stage : "no_booking",
           inviteExpiresAt: null,
           reviewNote: input.reason,
           revision: c.revision + 1,
@@ -1318,6 +1321,7 @@ export async function reviewCandidate(
         .where(eq(s.hiringCandidates.id, id));
       detail = { visitId: exam.visitId, examStart: exam.startTime.toISOString() };
     } else if (input.action === "stop") {
+      if (isDecided(c.stage)) throw new HiringError(409, "A result was already sent to this candidate. Send a new decision to change it.");
       const appointments = await tx
         .select()
         .from(s.hiringBookings)
