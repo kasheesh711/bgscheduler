@@ -1,6 +1,6 @@
 # Tutor hiring
 
-Status: visit automation is live with sending off (2 Nov 2026). The three-stage revamp is complete in code on stacked draft pull requests #246 to #254. Local checks passed. Merge, migrations `0120` and `0121`, deployment, live use and acceptance are separate steps, listed in [Go-live for the revamp](#go-live-for-the-revamp).
+Status: visit automation is live with sending off (2 Nov 2026). The three-stage revamp is complete in code on stacked pull requests #246 to #254. Local checks passed. Merge, migrations `0120` and `0121`, deployment, live use and acceptance are separate steps, listed in [Go-live for the revamp](#go-live-for-the-revamp).
 
 The Hiring page has five tabs. Each opens by address (`/hiring?view=seek`).
 
