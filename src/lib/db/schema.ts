@@ -76,6 +76,10 @@ export const hiringCandidates = pgTable(
     preScreen: jsonb("pre_screen").$type<PreScreen>(),
     preScreenHash: text("pre_screen_hash"),
     preScreenAssessment: jsonb("pre_screen_assessment").$type<PreScreenAssessment>(),
+    /** Set when a person drags this candidate in the pre-screen queue. Null keeps the automatic rank. */
+    queueManual: jsonb("queue_manual").$type<import("@/lib/hiring/limits").ManualPlace>(),
+    /** A person's pre-screen score. The AI assessment stays unchanged. */
+    preScreenOverride: jsonb("pre_screen_override").$type<import("@/lib/hiring/limits").ScoreOverride>(),
     subjects: jsonb("subjects").$type<Subject[]>().notNull().default([]),
     paperPassedSubjects: jsonb("paper_passed_subjects")
       .$type<Subject[]>()

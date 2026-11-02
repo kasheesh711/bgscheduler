@@ -286,6 +286,8 @@ export function HiringDashboard() {
             extras={extras}
             holds={holds}
             onOpenRecord={openRecord}
+            command={command}
+            busy={busy}
           />
         </div>
         <div className={css.layout} hidden={view !== "overview"}>

@@ -12,6 +12,7 @@ import {
   type QueueEntry,
 } from "./limits";
 import {
+  HiringError,
   normalizeSubjects,
   PRE_SCREEN_URL,
   runtimeWritesAllowed,
@@ -197,6 +198,7 @@ export async function preScreenQueue(db: Database, config: HiringConfig): Promis
       workRightsAnswer: c.workRightsAnswer,
       profileAssessment: c.profileAssessment,
       universityAssessment: c.universityAssessment,
+      queueManual: c.queueManual,
     })
     .from(c)
     .where(
@@ -215,9 +217,34 @@ export async function preScreenQueue(db: Database, config: HiringConfig): Promis
             subject,
             score: profileScore(row.profileAssessment!, config.profileWeights, row.universityAssessment?.fraction ?? 0),
             createdAt: row.createdAt,
+            manual: row.queueManual,
           },
         ]
       : [];
+  });
+}
+
+/**
+ * A drag sends nothing and changes no stage. It leaves `revision` alone, because a new revision would void a running AI
+ * score and an open panel's next click.
+ */
+export async function moveInQueue(id: string, ahead: string[], actor: string, db: Database, now = new Date()) {
+  if (ahead.includes(id)) throw new HiringError(400, "A candidate cannot stand ahead of themselves.");
+  await withDatabaseTransaction(db, async (tx) => {
+    await lockQueue(tx);
+    const { config } = await settings(tx);
+    if (!(await preScreenQueue(tx, config)).some((entry) => entry.id === id))
+      throw new HiringError(409, "This candidate has left the queue. Refresh the page.");
+    await tx.update(c).set({ queueManual: { ahead, movedAt: now.toISOString() } }).where(eq(c.id, id));
+    await audit(tx, actor, "queue-move", id, { ahead: ahead.length, after: ahead.at(-1) ?? null });
+  });
+}
+
+export async function resetQueueOrder(actor: string, db: Database) {
+  await withDatabaseTransaction(db, async (tx) => {
+    await lockQueue(tx);
+    const cleared = await tx.update(c).set({ queueManual: null }).where(isNotNull(c.queueManual)).returning({ id: c.id });
+    await audit(tx, actor, "queue-reset", null, { cleared: cleared.length });
   });
 }
 
@@ -277,11 +304,12 @@ export async function releaseQueues(db: Database, now = new Date()) {
         .set({
           stage: "pre_screen",
           subjects: [entry.subject, ...subjects.filter((v) => v !== entry.subject)],
+          queueManual: null,
           revision: row.revision + 1,
           updatedAt: now,
         })
         .where(eq(c.id, row.id));
-      await audit(tx, "hiring-queue", "pre-screen-release", row.id, { subject: entry.subject, score: entry.score });
+      await audit(tx, "hiring-queue", "pre-screen-release", row.id, { subject: entry.subject, score: entry.score, manual: !!entry.manual });
       preScreen++;
     }
     const visits = releaseQueue(

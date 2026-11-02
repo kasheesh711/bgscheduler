@@ -848,6 +848,13 @@
       "when": 1793491200000,
       "tag": "0119_hiring_visit_automation",
       "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1793577600000,
+      "tag": "0120_hiring_queue_and_score_change",
+      "breakpoints": true
     }
   ]
 }

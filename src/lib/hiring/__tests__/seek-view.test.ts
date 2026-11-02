@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NO_ANSWER, NOT_CONFIRMED, NO_SEEK_FILTER, isFromSeek, matchesSeekFilter, seekCoverage, sendQueueRows, universityOptions, workRightsOptions } from "../seek-view";
+import { NO_ANSWER, NOT_CONFIRMED, NO_SEEK_FILTER, aheadAfterMove, isFromSeek, matchesSeekFilter, seekCoverage, sendQueueRows, universityOptions, workRightsOptions } from "../seek-view";
 
 const person = (patch = {}) => ({
   id: "a",
@@ -102,6 +102,21 @@ describe("sendQueueRows", () => {
   it("keeps the true place when a filter hides people above", () => {
     const rows = sendQueueRows([person({ id: "x" })], ["y", "x"], new Map());
     expect(rows.map((r) => r.place)).toEqual([2]);
+  });
+});
+
+describe("aheadAfterMove", () => {
+  const order = ["a", "b", "c", "d"];
+  it("takes the target's place when moving up or down", () => {
+    expect(aheadAfterMove(order, "d", "b")).toEqual(["a"]);
+    expect(aheadAfterMove(order, "a", "c")).toEqual(["b", "c"]);
+    expect(aheadAfterMove(order, "c", "a")).toEqual([]);
+    expect(aheadAfterMove(order, "a", "d")).toEqual(["b", "c", "d"]);
+  });
+  it("does nothing for itself or someone not in the queue", () => {
+    expect(aheadAfterMove(order, "a", "a")).toBeNull();
+    expect(aheadAfterMove(order, "x", "a")).toBeNull();
+    expect(aheadAfterMove(order, "a", "x")).toBeNull();
   });
 });
 

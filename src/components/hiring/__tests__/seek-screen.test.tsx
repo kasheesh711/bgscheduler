@@ -33,7 +33,7 @@ const data = (patch = {}) =>
     ...patch,
   }) as unknown as HiringData;
 const screen = (d = data()) =>
-  renderToStaticMarkup(<SeekScreen data={d} extras={new Map()} holds={new Map([["a", { short: "Next to send", long: ["Next"] }]])} onOpenRecord={() => {}} now={NOW} />);
+  renderToStaticMarkup(<SeekScreen data={d} extras={new Map()} holds={new Map([["a", { short: "Next to send", long: ["Next"] }]])} onOpenRecord={() => {}} command={async () => true} busy={false} now={NOW} />);
 
 describe("SeekScreen", () => {
   it("shows people from SEEK with the required columns, and leaves out a person only in the tracker", () => {

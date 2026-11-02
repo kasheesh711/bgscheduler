@@ -10,7 +10,10 @@ export type LimitUsage = {
   unbooked: number;
   bySubject: Partial<Record<Subject, number>>;
 };
-export type QueueEntry = { id: string; subject: Subject; score: number; createdAt: Date };
+/** The ids that stood ahead of a dragged candidate, in order, so the place survives when some of them leave the queue. */
+export type ManualPlace = { ahead: string[]; movedAt: string };
+export type ScoreOverride = { score: number; reason: string; by: string; at: string };
+export type QueueEntry = { id: string; subject: Subject; score: number; createdAt: Date; manual?: ManualPlace | null };
 
 /** Midnight in Bangkok for the day that holds `now`. Bangkok has no daylight saving. */
 export function bangkokDayStart(now: Date): Date {
@@ -40,6 +43,31 @@ export function rankQueue(
       a.createdAt.getTime() - b.createdAt.getTime() ||
       (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   );
+}
+
+/**
+ * Puts dragged rows back after the automatic rank, oldest drag first, so the latest drag wins. A dragged row goes right
+ * after the last person still queued who stood ahead of it. When all of those have left, it goes before the first row that
+ * was already here at the drag, or last if none was, so a later arrival does not fall behind someone a person put at the
+ * back. A drag to the front has nobody ahead, so it stays first. A new arrival has no drag, so it takes its automatic place
+ * among the undragged rows.
+ */
+export function mergeManualOrder(ranked: QueueEntry[]): QueueEntry[] {
+  const out = ranked.filter((row) => !row.manual);
+  const moved = ranked
+    .filter((row) => row.manual)
+    .sort((a, b) => a.manual!.movedAt.localeCompare(b.manual!.movedAt));
+  for (const row of moved) {
+    const { ahead, movedAt } = row.manual!;
+    const anchor = Math.max(-1, ...ahead.map((id) => out.findIndex((other) => other.id === id)));
+    if (anchor >= 0 || !ahead.length) {
+      out.splice(anchor + 1, 0, row);
+      continue;
+    }
+    const older = out.findIndex((other) => other.createdAt <= new Date(movedAt));
+    out.splice(older === -1 ? out.length : older, 0, row);
+  }
+  return out;
 }
 
 /** The first limit that is used up for this funnel and subject. A limit the funnel does not have never blocks. */
@@ -81,10 +109,12 @@ export function releaseQueue(
   const used: LimitUsage = { ...usage, bySubject: { ...usage.bySubject } };
   const release: QueueEntry[] = [];
   const held: (QueueEntry & { position: number; limit: LimitName })[] = [];
-  const ranked = rankQueue(
+  const automatic = rankQueue(
     entries.filter((e) => hiring.has(e.subject)),
     config.subjectPriority,
   );
+  // Only the pre-screen queue can be dragged.
+  const ranked = funnel === "pre_screen" ? mergeManualOrder(automatic) : automatic;
   for (const [index, row] of ranked.entries()) {
     const limit = blockingLimit(funnel, row.subject, used, config);
     if (limit) {
