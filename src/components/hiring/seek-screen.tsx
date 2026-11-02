@@ -6,6 +6,7 @@ import { RESUME_TYPES, SUBJECTS, ZONE, type Subject } from "@/lib/hiring/model";
 import {
   NO_SEEK_FILTER,
   aheadAfterMove,
+  candidateSubjects,
   isFromSeek,
   matchesSeekFilter,
   seekCoverage,
@@ -167,7 +168,7 @@ function SeekPanel({
           </div>
           <div>
             <dt>Subjects</dt>
-            <dd>{candidate.subjects.join(", ") || "None yet"}</dd>
+            <dd>{candidateSubjects(candidate).join(", ") || "None yet"}</dd>
           </div>
           {extra && (
             <div>
@@ -479,7 +480,7 @@ export function SeekScreen({
                           {c.name}
                         </button>
                         <span className={css.email}>
-                          {c.subjects.join(", ") || "No subject yet"}
+                          {candidateSubjects(c).join(", ") || "No subject yet"}
                           {place !== null && c.queueManual && " · Moved by hand"}
                         </span>
                       </td>

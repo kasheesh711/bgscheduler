@@ -20,6 +20,8 @@ type SeekPerson = {
   seekApplicationId: string | null;
   sourceIds: string[];
   subjects: Subject[];
+  profileAssessment?: { subjects: { subject: Subject; relevant: boolean }[] } | null;
+  preScreenAssessment?: { subjects: { subject: Subject; relevant: boolean }[] } | null;
   profileScore: number | null;
   workRightsAnswer: string | null;
   universityAssessment: { name: string | null } | null;
@@ -27,6 +29,16 @@ type SeekPerson = {
 
 /** A person who exists only in the tracker has no SEEK application, so the intake screen does not show them. */
 export const isFromSeek = (c: Pick<SeekPerson, "seekApplicationId" | "sourceIds">) => !!c.seekApplicationId || c.sourceIds.length > 0;
+
+/**
+ * `subjects` stays empty until a form is sent, but the AI names them when it scores. The reply's assessment is the newer
+ * evidence, so it comes before the profile's.
+ */
+export function candidateSubjects(c: Pick<SeekPerson, "subjects" | "profileAssessment" | "preScreenAssessment">) {
+  if (c.subjects.length) return c.subjects;
+  const assessed = c.preScreenAssessment?.subjects ?? c.profileAssessment?.subjects ?? [];
+  return assessed.filter((row) => row.relevant).map((row) => row.subject);
+}
 
 export const universityName = (c: Pick<SeekPerson, "universityAssessment">) => c.universityAssessment?.name ?? NOT_CONFIRMED;
 export const workRightsText = (c: Pick<SeekPerson, "workRightsAnswer">) => c.workRightsAnswer ?? NO_ANSWER;
@@ -36,7 +48,7 @@ export function matchesSeekFilter(c: Omit<SeekPerson, "seekApplicationId" | "sou
   if (needle && !`${c.name} ${c.email ?? ""}`.toLowerCase().includes(needle)) return false;
   if (filter.universities.length && !filter.universities.includes(universityName(c))) return false;
   if (filter.workRights && workRightsText(c) !== filter.workRights) return false;
-  if (filter.subject && !c.subjects.includes(filter.subject)) return false;
+  if (filter.subject && !candidateSubjects(c).includes(filter.subject)) return false;
   if (filter.score === "none") return c.profileScore === null;
   if (filter.score === "pass") return c.profileScore !== null && c.profileScore >= threshold;
   if (filter.score === "below") return c.profileScore !== null && c.profileScore < threshold;
