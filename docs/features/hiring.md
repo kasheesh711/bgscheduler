@@ -1,8 +1,14 @@
 # Tutor hiring
 
-Status: the earlier hiring flow is deployed. Visit automation is complete in code on five stacked draft pull requests (#241 to #245). Local checks passed. Merge, migration `0119`, deployment, live delivery and acceptance are separate steps, and none of them has happened. Automation and Messages stay off until the owner turns them on (see [Go-live](#go-live)).
+Status: visit automation is live with sending off (2 Nov 2026). The three-stage revamp is complete in code on stacked draft pull requests #246 to #254. Local checks passed. Merge, migrations `0120` and `0121`, deployment, live use and acceptance are separate steps, listed in [Go-live for the revamp](#go-live-for-the-revamp).
 
-The Hiring workspace opens on a one-screen Pipeline view: summary figures, limit meters, the candidate table, stages, score distribution, profile evidence, subject supply and worker, delivery and activity status. Two more views sit beside it. **Head schedules** shows each head of department's week. **Rules and setup** holds the configuration.
+The Hiring page has five tabs. Each opens by address (`/hiring?view=seek`).
+
+- **Overview** (`view=overview`): summary figures, limit meters, the candidate table, charts, and worker, delivery and activity status.
+- **1 Seek intake** (`view=seek`): see [Seek intake](#seek-intake).
+- **2 Pre-screen** (`view=prescreen`): see [Pre-screen screen](#pre-screen-screen).
+- **3 Mock and paper** (`view=assessment`): see [Mock and paper](#mock-and-paper), including the calendar of heads.
+- **Rules and setup** (`view=setup`): the rules, plus pass marks and the paper library.
 
 The Hiring workspace follows a candidate from a SEEK application to one onsite visit: a 2-hour exam, then a 1-hour mock teaching session. The system scores the candidate, sends the invitations inside editable limits and books the visit. It does not record the visit result. It does not make a final hiring decision. It does not send rejection messages.
 
@@ -10,7 +16,7 @@ Open a candidate to read the full extracted profile and résumé text. The text 
 
 ## Review passes before activation
 
-Each pass below runs on the owner Mac. Each pass changes no stage and queues no message. Each pass refuses to run while Automation or Messages is on, and each needs `HIRING_WRITES_ENABLED=true` in the Mac's environment. The one exception is `--tracker-report`. It is read-only and needs neither.
+Each pass below runs on the owner Mac. Each pass changes no stage and queues no message. Each pass refuses to run while Automation or Messages is on, and each needs `HIRING_WRITES_ENABLED=true` in the Mac's environment. The exceptions are `--tracker-results-report`, which also reads only, and `--tracker-report`. It is read-only and needs neither.
 
 - `npm run hiring:score` scores stored profiles in all stages. It uses four concurrent Claude subscription calls and resumes from stored source hashes. It stops when no unscored source remains.
 - `npm run hiring:score -- --pre-screen` scores every held pre-screen response in all stages, including stopped candidates.
@@ -19,6 +25,72 @@ Each pass below runs on the owner Mac. Each pass changes no stage and queues no 
 - `npm run hiring:backfill -- --seek` reads SEEK once and stores the exact work-rights answer and the original résumé file of each known candidate. `--tracker-report` and `--tracker-import` handle people who exist only in the tracker. See [Backfill passes](#backfill-passes).
 
 Set `HIRING_SCORE_UNTIL` to an ISO timestamp to stop model calls at a deadline. These passes do not enable live hiring. Scores appear as each assessment completes. They do not update the live worker's last-run timestamp. A pass that could not store some answers because a row or the settings changed meanwhile prints a count and exits with code 2. Run it again.
+
+## Seek intake
+
+Coverage cards show each imported SEEK folder (Inbox, Prescreen, Shortlist) against the website: the count in SEEK, the count imported, what is waiting, and the last read. The worker writes these numbers. A summary saved before this change shows the SEEK count only. A read over one hour old shows a warning. An idle tab shows the warning only after the next page action.
+
+The list holds people with a SEEK application. People only in the tracker are in Overview. Filters: name or email, university names (several), the exact work rights answer, subject, and score against the profile threshold. Click a row to open the resume beside the list. Up and down arrows move between people, one press at a time, because each move opens a file. A Word file, or a PDF that will not open, shows the extracted text.
+
+**Send queue** numbers the pre-screen queue, then lists who was sent and when. A person can drag a row or use its arrows. The order controls real sends, through `mergeManualOrder` in `limits.ts`.
+
+- A drag sends nothing, and changes no stage or `revision`. It writes an audit row.
+- All limits and hard stops still apply. A full subject skips a dragged person, and the next person goes.
+- A new arrival takes its automatic place. **Back to automatic order** clears every drag.
+- Only the pre-screen queue can be dragged. The onsite queue stays automatic.
+
+## Pre-screen screen
+
+The list holds everyone sent a form, including people with no reply. The Visit email column reads `hiring_outbox`, not the stage, because the stage changes when the email is queued. It shows Queued, Sent with Bangkok time, Failed, May have sent, or the reason it was not sent. The panel shows the full answers, the score, and the AI's reasons with quotes.
+
+| Action | Rule |
+|---|---|
+| Invite despite low score | The existing invite. It obeys limits and hard stops. |
+| Stop | The existing stop. It cancels waiting emails. |
+| Change score | Stored in `pre_screen_override`. The AI assessment stays. It sends nothing and changes no stage. After it, only a person can invite this candidate: `replyCheck` holds the reply, and the worker does not move it to review. It is refused while a visit email is waiting, since that email would still leave. A changed response from the candidate clears it. |
+| Resend with a new link | For someone invited and not booked, or at `no_booking`. It cancels every unsent invitation and reminder holding the old link. It refuses while the worker holds a row or Messages is off. It uses no new weekly place. |
+
+Known limit: while the new email fails at the provider, the old link has already ended, so the candidate has no working link until the email leaves.
+
+## Mock and paper
+
+The dated list has one row per visit, soonest first, then past visits, newest first. A candidate whose only visit was cancelled keeps a row, so a person can still reject them. Filters: head, date, needs upload, needs check, ready to decide, past results. The Calendar switch shows each head's week.
+
+### Paper marking
+
+A person uploads one scanned PDF for each subject, up to 25 MB, on the row or in the panel. The browser sends it to private Blob. The server then checks that the bytes are a PDF of the size chosen, and deletes a refused file.
+
+`markPaper` sends the scan through OpenRouter, with the question paper and mark scheme from the [paper library](#rules-and-setup) when they exist. The model returns marks for each question. **The server calculates all totals, percentages, results and the "can teach up to" line** (`marking-sheet.ts`), from the marks and the current pass marks.
+
+| Rule | Detail |
+|---|---|
+| Result counts at once | Owner decision. There was no accuracy test before go-live. |
+| Needs check | Only when an answer is unreadable or a page is missing. It blocks Hire until a person clears it. Reject is still allowed. |
+| No mark scheme | The AI marks from its own knowledge, and the sheet shows a warning. |
+| No pass mark | The sheet shows the marks and "Pass mark missing". It never guesses. |
+| Can teach up to | The highest level passed. A failed lower level does not change it. AS / A-Level, IB and AP are peers, so a pass in more than one names them all. |
+| Refused answers | A mark above its maximum, a repeated question, marks on a question not tried, or any added total. The row fails with a plain message, and the upload stays. |
+| Old flow | An AI pass changes no stage and writes no `paperPassedSubjects`, because a difference there can queue a mock invitation. A person clicks the existing button. |
+| Privacy | Calls use `OPENROUTER_HIRING_API_KEY`, zero data retention and `data_collection: deny`. No file content is logged. A preview never sends a scan. Scans follow the resume retention rule, and the marks stay. |
+
+**Known risk, accepted by the owner:** a misread mark on a readable paper raises no flag, including a score close to the pass mark. A person sees it only by opening the marks beside the scan. A Reject email can follow from it. If this happens, the first fix is a "close to pass mark" flag.
+
+### Mock rubric
+
+A person uploads the head's completed rubric as a PDF. The AI copies the 10 scores and the comments, and the server calculates the four part scores and the total out of 100. A blank score or one off the scale stays blank and needs a check, so the good scores are kept. A file with no score at all fails as the wrong form. A person can change scores, replace the file, or run the AI again. The AI's first read stays unchanged.
+
+### Decision and result email
+
+Clicking Hire or Reject saves a draft with the email text. **A draft creates no outbox row and changes no stage**, so nothing can leave later when the switches come on. The person reads the address, edits the text, and clicks Send. It goes to one candidate at a time.
+
+- **Hire** needs one mock and every uploaded paper finished, with checks cleared. The person decides freely on low scores. A past result from the tracker does not count.
+- **Reject** works any time, with a reason and an email address. Someone with no address uses Stop in the full record.
+- **Send** refuses while Automation or Messages is off. The email leaves from the website at Send, through Resend.
+- A new Send cancels any earlier result email that has not left. The same result cannot go twice unless the first failed. A sent email is not recalled.
+- A visit still ahead must be cancelled first. A future old-flow booking ends at Send and leaves the head's calendar.
+- **A sent decision stands.** A move in SEEK, a tracker change, Stop, a booking link and a retried visit email cannot overwrite it or reach the candidate.
+
+The first email text is in `resultEmail` in `decisions.ts`.
 
 ## Source findings — 31 October 2026
 
@@ -238,6 +310,8 @@ A signed, expiring link at `/hiring/book/{token}` offers the visit.
 
 ## Head schedules
 
+These open from the Calendar switch in **3 Mock and paper**.
+
 The **Head schedules** view shows one head's Monday-to-Friday week at a time. A head switch and a week switch choose what to show. The week switch starts at the current week and cannot go back, because Wise omits past sessions. For each day the view shows the head's office hours, Wise classes, leave, sit-ins, exams and mocks. A list shows that head's visits. No student name reaches the page. Only a mock and an exam block name the candidate.
 
 A mock that overlaps a Wise class, leave or sit-in is a clash. The calendar and the candidate row show it. An old or missing Wise snapshot sets a stale warning. The warning never hides the week.
@@ -280,6 +354,15 @@ These passes print counts only. They never print names, emails or file names. Ea
 `npm run hiring:backfill -- --tracker-report` reads the tracker and the app, and writes to neither. It prints how many people on the Sourcing Log and the Scheduling Responses tabs are missing from the app. `--tracker-import` then adds them: stage `review`, earlier contact set, no text, no score and no email queued, keyed by email so a re-run adds none. The `Hiring Automation` tab holds at most 2,000 candidates, so check the report first. Both tabs must have their email column, and the Sourcing Log must have its "Send email to invite" column, or the pass stops with a message.
 
 The report also prints `alreadyContactedAtNew`: people at `new`, not marked as contacted, whom the tracker shows as already emailed. That means a row on Scheduling Responses, or a Sourcing Log row with a value in the invite column. A Sourcing Log row without that value only records a view. `--tracker-mark-contacted` marks those rows as contacted, with one audit row each under the `hiring-backfill` actor, so the queue sends them no form. It needs `HIRING_WRITES_ENABLED=true`, as `--tracker-import` does. It writes only the contact flag: no outbox row, no stage, no revision and no `updated_at`, because each release locks and rereads the row. A rerun marks none. Kevin approves this pass separately, because it changes who enters the queue.
+
+### Past results
+
+`npm run hiring:backfill -- --tracker-results-report` reads the tracker and the app, writes nothing, and needs no write setting. It prints counts only, including how many matched people hold a booking. `--tracker-results-import` stores the tracker's past paper and mock results with source `tracker`.
+
+- It reads Recruitment Sheet Q, T to V and Mock Teaching Test Log D to I. It joins on Applicant ID, then email. A moved column stops the pass.
+- One outcome covers a whole tracker row, so someone who passed Maths only and sat Maths and Physics stores Physics as "Not listed as passed".
+- It changes no stage, writes no old-flow pass, and queues nothing. A rerun refreshes or removes only its own rows, and never a result from this website.
+- A new visit's upload replaces a past result for that subject. The old values stay in the audit row.
 
 ## Implementation and protection
 
@@ -359,7 +442,31 @@ Where the work stands: local checks passed on the five pull requests. Merge, mig
    - The first cycle writes the `Hiring Automation` tab. If that first write fails, the cycle stops before it asks for delivery. Forms and invitations stay pending, so this is safe. The error shows in Hiring. Fix the cause and run the cycle again.
 15. **Load the worker agent.** Who: Claude, after step 14 passes and Kevin approves. Install the LaunchAgent from the template (see [Setup](#setup)). The agent has no write setting of its own and reads the same `.env.local`, so that file must hold `HIRING_WRITES_ENABLED=true` before the agent loads. Kevin approves that change.
 
+## Go-live for the revamp
+
+Do these in order. Each step needs Kevin's approval. Automation and Messages can stay off throughout.
+
+1. **Apply migrations, before merge.** Who: Claude, after Kevin approves. Apply `0120` and `0121` and read them back. `/hiring` returns 503 without them, because the dashboard reads the new tables.
+2. **Merge #246 to #254 in order.** Who: Kevin. Stacked pull requests start required CI only when based on `main`, so retarget each one and close and reopen it.
+3. **Check the page.** Who: Claude, signed in, on production or the preview: all five tabs, the Back button, a filter, and opening a resume. The offline check replaces `next/navigation`, so this is the first real check of tab addresses. Open one real PDF in the frame.
+4. **Update the Mac checkout before anyone saves settings.** The config schema is strict, so older code refuses a saved `paperPassRules` key. For the same reason, a Vercel rollback after a settings save needs a config repair. An old worker process also ignores the drag order, so restart it.
+5. **Create the OpenRouter key.** Who: Kevin.
+   1. Go to [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) and click **Create Key**.
+   2. Name it `BGScheduler hiring marking`. Set **Credit limit** to `30`, and set **Reset limit every** to **Month**. Click **Create**, and copy the key.
+   3. Go to vercel.com, open the **bgscheduler** project, then **Settings**, then **Environment Variables**.
+   4. Key: `OPENROUTER_HIRING_API_KEY`. Value: the key. Tick **Production** only. Click **Save**.
+   5. Open **Deployments**, open the top deployment's menu, and click **Redeploy**.
+6. **Run the technical check.** Who: Kevin runs it, so the key stays off the chat. It uses a made-up paper, and it costs one marking run. It proves the route reads a scan and measures the cost. It is not an accuracy test. In the release checkout, run `read -s OPENROUTER_HIRING_API_KEY && export OPENROUTER_HIRING_API_KEY`, paste the key, press Return, then run `npx tsx scripts/dev/check-hiring-marking.ts`. Send Claude the printed result. If the cost per paper is far from the estimate of $0.50 to $2, review the $30 cap and `HIRING_MARKING_MODEL`.
+7. **Fill in the settings.** Who: Kevin and the heads, in Rules and setup: the pass percentage for each subject and level, and the question paper and mark scheme for each subject. The Drive holds old versions. For example, the Math mark scheme dates from 2024 and the paper from 2026. Claude can prepare a list of which Drive file goes with which subject. Export Word and Google Docs files to PDF first.
+8. **Import past results.** Who: Claude runs `--tracker-results-report` and sends Kevin the counts. After Kevin approves, Claude runs `HIRING_WRITES_ENABLED=true npm run hiring:backfill -- --tracker-results-import`. Automation and Messages must be off for this pass.
+9. **Read the result emails.** Who: Kevin. Read `resultEmail` in `decisions.ts`, or a draft on the screen. Result emails can leave only after [Go-live](#go-live) turns on Automation and Messages.
+
+The new columns on the `Hiring Automation` tab stay empty until Automation is on, because the worker writes that tab.
+
 ## Checks
+
+`node scripts/dev/verify-hiring-screens.mjs [screenshot-folder]` drives the real screens in Chrome with made-up candidates. It uses no server, database or credentials.
+
 
 Run these local checks from the checkout:
 
