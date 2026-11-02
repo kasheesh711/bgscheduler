@@ -427,9 +427,12 @@ export async function importSeek(
   let imported = 0,
     remaining = 0,
     resumeUploadsFailed = 0;
+  const onWebsite = new Map<string, number>();
+  const count = (status: string) => onWebsite.set(status, (onWebsite.get(status) ?? 0) + 1);
   try {
     const { scanned, folders } = await walkSeek(browser, jobId, async ({ page, cards, index, id, status }) => {
       if (knownIds.has(id)) {
+        count(status);
         const contacted =
           (await cards
             .nth(index)
@@ -445,9 +448,16 @@ export async function importSeek(
         if (!(await saveApplication(read, consume, keepFile))) resumeUploadsFailed++;
         knownIds.add(id);
         imported++;
+        count(status);
       }
     });
-    return { scanned, imported, remaining, folders, resumeUploadsFailed };
+    return {
+      scanned,
+      imported,
+      remaining,
+      folders: folders.map((f) => ({ ...f, imported: onWebsite.get(f.status) ?? 0 })),
+      resumeUploadsFailed,
+    };
   } finally {
     await browser.close();
   }

@@ -74,18 +74,21 @@ export function releaseQueue(
 ): {
   release: QueueEntry[];
   held: (QueueEntry & { position: number; limit: LimitName })[];
+  /** Every row in walk order, released or held. The screen numbers the queue from this. */
+  order: string[];
 } {
   const hiring = new Set(config.subjectPriority.filter((p) => p.hiring).map((p) => p.subject));
   const used: LimitUsage = { ...usage, bySubject: { ...usage.bySubject } };
   const release: QueueEntry[] = [];
   const held: (QueueEntry & { position: number; limit: LimitName })[] = [];
-  for (const row of rankQueue(
+  const ranked = rankQueue(
     entries.filter((e) => hiring.has(e.subject)),
     config.subjectPriority,
-  )) {
+  );
+  for (const [index, row] of ranked.entries()) {
     const limit = blockingLimit(funnel, row.subject, used, config);
     if (limit) {
-      held.push({ ...row, position: held.length + 1, limit });
+      held.push({ ...row, position: index + 1, limit });
       continue;
     }
     release.push(row);
@@ -95,14 +98,14 @@ export function releaseQueue(
     else used.unbooked++;
     used.bySubject[row.subject] = (used.bySubject[row.subject] ?? 0) + 1;
   }
-  return { release, held };
+  return { release, held, order: ranked.map((row) => row.id) };
 }
 
 /** Where one candidate stands in a queue after `releaseQueue`: next to send, or held by the named limit. */
 export type QueueHold = {
   funnel: Funnel;
   state: "next" | "held";
-  /** Place among the held rows of that queue. 0 when the row is next to send. */
+  /** Place in that queue, counting released rows too, so it matches the numbered list. 0 when the row is next to send. */
   position: number;
   limit: LimitName | null;
   subject: Subject;

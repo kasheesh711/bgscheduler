@@ -86,7 +86,7 @@ function CandidatePentagon({ profile, pre }: { profile: Assessment | null; pre: 
   );
 }
 
-function AssessmentBlock({
+export function AssessmentBlock({
   title,
   score,
   assessment,
@@ -143,6 +143,69 @@ export async function checkResume(src: string): Promise<ResumeCheck> {
   } catch {
     return { status: "failed", message: RESUME_FAILED };
   }
+}
+
+/** Asks the route about the file once the viewer opens, and again for each candidate. */
+export function useResumeCheck(id: string, open: boolean, hasFile: boolean) {
+  const [check, setCheck] = useState<ResumeCheck>({ status: "checking" });
+  useEffect(() => {
+    if (!open || !hasFile) return;
+    let active = true;
+    checkResume(`/api/hiring/resume/${encodeURIComponent(id)}`).then((result) => {
+      if (active) setCheck(result);
+    });
+    return () => {
+      active = false;
+      setCheck({ status: "checking" });
+    };
+  }, [open, hasFile, id]);
+  return check;
+}
+
+/** The extracted profile and résumé text, read on demand because the dashboard data leaves it out. */
+export function useSourceText(id: string, load = true) {
+  const [source, setSource] = useState<{ id: string; profileText: string } | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!load) return;
+    let active = true;
+    fetch(`/api/hiring?candidateId=${encodeURIComponent(id)}`, { cache: "no-store" })
+      .then(async (response) => {
+        const value = await response.json();
+        if (!response.ok) throw new Error(value.error);
+        if (active) setSource(value);
+      })
+      .catch((e) => {
+        if (active) setError(e.message);
+      });
+    return () => {
+      active = false;
+    };
+  }, [id, load]);
+  return { source, error };
+}
+
+export function SourceTextBody({ id, source, error }: { id: string } & ReturnType<typeof useSourceText>) {
+  if (error) return <p role="alert" className={css.errorText}>{error}</p>;
+  if (source?.id !== id) return <p role="status" className={css.inspectorMeta}>Loading source text…</p>;
+  if (source.profileText) return <pre>{source.profileText}</pre>;
+  return <p className={css.inspectorMeta}>No extracted profile or résumé text is available for this record.</p>;
+}
+
+export function SeekLinks({ candidate, seekJobId }: { candidate: Pick<HiringCandidate, "name" | "seekApplicationId" | "sourceIds">; seekJobId: string }) {
+  const applicationIds = [...new Set([candidate.seekApplicationId, ...candidate.sourceIds].filter((id): id is string => !!id))];
+  return applicationIds.map((id, index) => (
+    <a
+      key={id}
+      className={css.sourceLink}
+      href={`https://th.employer.seek.com/candidates/?jobid=${encodeURIComponent(seekJobId)}&selected=${encodeURIComponent(id)}&tab=profile`}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={`View ${applicationIds.length > 1 ? `application ${index + 1} on SEEK` : "on SEEK"} for ${candidate.name} (opens in a new tab)`}
+    >
+      {applicationIds.length > 1 ? `View application ${index + 1} on SEEK` : "View on SEEK"}
+    </a>
+  ));
 }
 
 export function ResumeBody({
@@ -220,9 +283,8 @@ export function CandidateInspector({
 }) {
   const [subjects, setSubjects] = useState<Subject[]>(candidate.subjects);
   const [reason, setReason] = useState("");
-  const [source, setSource] = useState<{ id: string; profileText: string } | null>(null);
-  const [sourceError, setSourceError] = useState("");
-  const [resumeCheck, setResumeCheck] = useState<ResumeCheck>({ status: "checking" });
+  const sourceText = useSourceText(candidate.id);
+  const resumeCheck = useResumeCheck(candidate.id, resumeOpen, candidate.resumeState === "available");
   const heading = useRef<HTMLHeadingElement>(null);
   const opener = useRef<HTMLElement | null>(null);
   useEffect(() => {
@@ -234,37 +296,8 @@ export function CandidateInspector({
     onClose();
     opener.current?.focus();
   }
-  useEffect(() => {
-    let active = true;
-    fetch(`/api/hiring?candidateId=${encodeURIComponent(candidate.id)}`, { cache: "no-store" })
-      .then(async (response) => {
-        const value = await response.json();
-        if (!response.ok) throw new Error(value.error);
-        if (active) setSource(value);
-      })
-      .catch((error) => {
-        if (active) setSourceError(error.message);
-      });
-    return () => {
-      active = false;
-    };
-  }, [candidate.id]);
-
-  const hasResumeFile = candidate.resumeState === "available";
-  useEffect(() => {
-    if (!resumeOpen || !hasResumeFile) return;
-    let active = true;
-    checkResume(`/api/hiring/resume/${encodeURIComponent(candidate.id)}`).then((result) => {
-      if (active) setResumeCheck(result);
-    });
-    return () => {
-      active = false;
-      setResumeCheck({ status: "checking" });
-    };
-  }, [resumeOpen, hasResumeFile, candidate.id]);
 
   const university = candidate.universityAssessment;
-  const applicationIds = [...new Set([candidate.seekApplicationId, ...candidate.sourceIds].filter((id): id is string => !!id))];
   const visit = extras?.visit;
   // A visit that has ended no longer shows, and it counts as started.
   const started = !visit || new Date(visit.startTime) <= new Date();
@@ -308,18 +341,7 @@ export function CandidateInspector({
           <p className={css.inspectorMeta}>
             {STAGE_LABELS[candidate.stage]} · {candidate.email || "Email needs review"}
           </p>
-          {applicationIds.map((id, index) => (
-            <a
-              key={id}
-              className={css.sourceLink}
-              href={`https://th.employer.seek.com/candidates/?jobid=${encodeURIComponent(seekJobId)}&selected=${encodeURIComponent(id)}&tab=profile`}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label={`View ${applicationIds.length > 1 ? `application ${index + 1} on SEEK` : "on SEEK"} for ${candidate.name} (opens in a new tab)`}
-            >
-              {applicationIds.length > 1 ? `View application ${index + 1} on SEEK` : "View on SEEK"}
-            </a>
-          ))}
+          <SeekLinks candidate={candidate} seekJobId={seekJobId} />
         </div>
         <button type="button" className={css.inlineLink} onClick={close}>
           Close
@@ -481,15 +503,7 @@ export function CandidateInspector({
           <p className={css.inspectorMeta}>
             Source text from SEEK. Some personal details are removed during extraction.
           </p>
-          {sourceError ? (
-            <p role="alert" className={css.errorText}>{sourceError}</p>
-          ) : source?.id !== candidate.id ? (
-            <p role="status" className={css.inspectorMeta}>Loading source text…</p>
-          ) : source.profileText ? (
-            <pre>{source.profileText}</pre>
-          ) : (
-            <p className={css.inspectorMeta}>No extracted profile or résumé text is available for this record.</p>
-          )}
+          <SourceTextBody id={candidate.id} {...sourceText} />
         </details>
       </div>
       <footer className={css.decision}>

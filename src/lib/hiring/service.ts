@@ -519,9 +519,11 @@ export async function dashboard(db: Database = getDb()) {
     onsite: await readLimitUsage(db, "onsite", now),
   };
   const holds: Record<string, QueueHold> = {};
+  let preScreenOrder: string[] = [];
   for (const funnel of ["pre_screen", "onsite"] as const satisfies Funnel[]) {
     const entries = funnel === "pre_screen" ? await preScreenQueue(db, config) : await onsiteQueue(db, config);
-    const { release, held } = releaseQueue(funnel, entries, funnel === "pre_screen" ? usage.preScreen : usage.onsite, config);
+    const { release, held, order } = releaseQueue(funnel, entries, funnel === "pre_screen" ? usage.preScreen : usage.onsite, config);
+    if (funnel === "pre_screen") preScreenOrder = order;
     for (const e of release) holds[e.id] = { funnel, state: "next", position: 0, limit: null, subject: e.subject };
     for (const e of held) holds[e.id] = { funnel, state: "held", position: e.position, limit: e.limit, subject: e.subject };
   }
@@ -535,6 +537,7 @@ export async function dashboard(db: Database = getDb()) {
     configProblems: configRuleErrors(config).map((e) => e.message),
     usage,
     holds,
+    preScreenOrder,
     headMocks: headWeekMocks(bookings, now),
     heads: Object.fromEntries(
       config.interviewers.map((head) => [head.canonicalKey, headDayState(head, enrollments, schedules, localDate(now))]),
