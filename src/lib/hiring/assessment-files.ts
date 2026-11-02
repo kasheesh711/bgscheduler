@@ -85,8 +85,8 @@ async function resultIdOf(db: Database, file: typeof s.hiringAssessmentFiles.$in
 async function attachPaperScan(tx: Database, file: typeof s.hiringAssessmentFiles.$inferSelect, actor: string) {
   const p = s.hiringPaperResults;
   const [existing] = await tx.select().from(p).where(and(eq(p.candidateId, file.candidateId!), eq(p.subject, file.subject!))).for("update");
-  // A tracker result is the only copy of that past record.
-  if (existing?.source === "tracker") throw new HiringError(409, "This subject has a past result from the tracker, so it was not replaced.");
+  // A new visit's result replaces a past one from the tracker, which stays in the tracker and in this audit row.
+  if (existing?.source === "tracker") await audit(tx, actor, "tracker-result-replaced", file.candidateId, { subject: file.subject, history: existing.history });
   if (existing?.marks) await audit(tx, actor, "paper-marks-replaced", file.candidateId, { subject: file.subject, ai: existing.aiMarks, final: existing.marks });
   const [booking] = await tx
     .select({ id: s.hiringBookings.id })
@@ -124,7 +124,7 @@ async function attachPaperScan(tx: Database, file: typeof s.hiringAssessmentFile
 async function attachMockRubric(tx: Database, file: typeof s.hiringAssessmentFiles.$inferSelect, actor: string) {
   const m = s.hiringMockResults;
   const [existing] = await tx.select().from(m).where(and(eq(m.candidateId, file.candidateId!), eq(m.subject, file.subject!))).for("update");
-  if (existing?.source === "tracker") throw new HiringError(409, "This subject has a past result from the tracker, so it was not replaced.");
+  if (existing?.source === "tracker") await audit(tx, actor, "tracker-result-replaced", file.candidateId, { subject: file.subject, history: existing.history });
   if (existing?.rubric) await audit(tx, actor, "mock-rubric-replaced", file.candidateId, { subject: file.subject, ai: existing.aiRubric, final: existing.rubric });
   const [booking] = await tx
     .select({ id: s.hiringBookings.id })

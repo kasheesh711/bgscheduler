@@ -6,13 +6,15 @@ import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
 import {
+  batchUpdateGoogleSpreadsheet,
   fetchGoogleSheetRange,
   listGoogleSheetProperties,
+  updateGoogleSheetRangeValues,
 } from "@/lib/sales-dashboard/sheets";
 import { configSchema, HiringError, type HiringConfig } from "../model";
 import { bookingView, inviteToVisit, reviewCandidate, sourceHash, type Candidate } from "../service";
 import { readyToInvite } from "../insights";
-import { isNewFlow, parseFormTimestamp, syncTracker } from "../sources";
+import { isNewFlow, mirrorTracker, parseFormTimestamp, syncTracker } from "../sources";
 import { assessCandidates, deliverOutbox, preScreenText, runHiringCycle } from "../worker";
 import {
   autoInviteEligible,
@@ -381,6 +383,25 @@ describe("usage counts", () => {
       payload: { workflowStage: "pre_screen" },
     });
     expect((await readLimitUsage(db, "pre_screen", now)).perDay).toBe(1);
+  });
+});
+
+describe("the Hiring Automation tab", () => {
+  it("writes the result columns to its own tab only, and expands a tab with too few columns", async () => {
+    const row = await seed();
+    await db.insert(s.hiringPaperResults).values({ candidateId: row.id, subject: "Mathematics", source: "ai", status: "done", marks: { comment: "", missingPages: null, questions: [{ id: "1", level: "AP", marks: 8, max: 10, reason: "", attempted: true, readable: true }] } });
+    await db.insert(s.hiringMockResults).values({ candidateId: row.id, subject: "Mathematics", source: "tracker", status: "done", history: { score: 84, outcome: "Passed", comment: "", date: null, head: "" } });
+    await db.insert(s.hiringDecisions).values({ candidateId: row.id, decision: "hire", status: "sent", reason: "", emailSubject: "s", emailBody: "b", decidedBy: "a" });
+    vi.mocked(listGoogleSheetProperties).mockResolvedValue([{ title: "Hiring Automation", rowCount: 2500, columnCount: 10, sheetId: 7 }] as never);
+    vi.mocked(fetchGoogleSheetRange).mockResolvedValue([["Managed by Scheduling hiring automation"]] as never);
+    await mirrorTracker(db, config);
+    expect(vi.mocked(batchUpdateGoogleSpreadsheet).mock.calls[0][2]).toEqual([{ updateSheetProperties: { properties: { sheetId: 7, gridProperties: { columnCount: 14 } }, fields: "gridProperties.columnCount" } }]);
+    const writes = vi.mocked(updateGoogleSheetRangeValues).mock.calls;
+    expect(writes).toHaveLength(1);
+    const [, , range, rows] = writes[0];
+    expect(range).toBe("'Hiring Automation'!A1:L3");
+    expect((rows[1] as string[]).slice(8)).toEqual(["Paper results", "Levels passed", "Mock score", "Decision"]);
+    expect((rows[2] as string[]).slice(8)).toEqual(["Mathematics: 8/10", "Mathematics: Pass mark missing for AP", "Mathematics: 84", "Hired"]);
   });
 });
 

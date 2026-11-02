@@ -188,10 +188,13 @@ describe("limits", () => {
 });
 
 describe("uploads", () => {
-  it("does not overwrite a past result from the tracker", async () => {
+  it("replaces a past tracker result with a new visit's scan, and keeps the old one in the audit", async () => {
     const c = await candidate();
     await db.insert(s.hiringPaperResults).values({ candidateId: c.id, subject: "Mathematics", source: "tracker", status: "done", history: { outcome: "Passed", passedSubjects: "", levels: "", date: null } });
-    await expect(uploaded(c.id)).rejects.toThrow(/tracker/);
+    const id = await uploaded(c.id);
+    expect(await result(id)).toMatchObject({ source: "ai", status: "uploaded", history: null });
+    const [row] = await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "tracker-result-replaced"));
+    expect(row.detail).toMatchObject({ history: { outcome: "Passed" } });
   });
   it("keeps one result per subject, and a new scan replaces the old marks", async () => {
     const c = await candidate();
@@ -299,10 +302,10 @@ describe("readMockRubric", () => {
     await changeRubric(id, { updatedAt: opened, items: { pace: 8 }, comments: "" }, "a", db, new Date(Date.now() + 1000));
     await expect(changeRubric(id, { updatedAt: opened, items: { pace: 9 }, comments: "" }, "b", db)).rejects.toThrow(/Refresh/);
   });
-  it("does not overwrite a past result from the tracker", async () => {
+  it("replaces a past tracker result with a new visit's rubric", async () => {
     const c = await candidate();
     await db.insert(s.hiringMockResults).values({ candidateId: c.id, subject: "Mathematics", source: "tracker", status: "done", history: { score: 90, outcome: "Passed", comment: "", date: null, head: "" } });
-    await expect(uploadedMock(c.id)).rejects.toThrow(/tracker/);
+    expect(await mock(await uploadedMock(c.id))).toMatchObject({ source: "ai", status: "uploaded", history: null });
   });
 });
 

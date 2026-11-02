@@ -9,6 +9,7 @@ import { runtimeWritesAllowed } from "../src/lib/hiring/model";
 import { settings } from "../src/lib/hiring/service";
 import { importMissingTracker, markTrackerContacted, reconcileTracker } from "../src/lib/hiring/sources";
 import { createBackfillStep, parseBackfillArgs } from "../src/lib/hiring/backfill";
+import { importResultHistory } from "../src/lib/hiring/result-history";
 import { backfillSeek, SEEK_PAUSE_MS } from "./hiring-seek";
 
 /** One-time passes over SEEK and the tracker. Counts are printed; names, emails and file names never are. */
@@ -20,6 +21,10 @@ async function main() {
   if (args.mode === "tracker-report") {
     const result = await reconcileTracker(db, config);
     console.log(JSON.stringify({ sourcing: result.sourcing, scheduling: result.scheduling, missingRows: result.missing.length, noEmail: result.noEmail, alreadyContactedAtNew: result.alreadyContactedAtNew }));
+    return;
+  }
+  if (args.mode === "tracker-results-report") {
+    console.log(JSON.stringify(await importResultHistory(db, config, false)));
     return;
   }
   if (!runtimeWritesAllowed()) throw new Error("Set HIRING_WRITES_ENABLED only after the release checks.");
@@ -34,6 +39,10 @@ async function main() {
   try {
     const lock = await lease.query("select pg_try_advisory_lock(hashtext('hiring-worker')) as locked");
     if (!lock.rows[0]?.locked) throw new Error("Another hiring worker is running.");
+    if (args.mode === "tracker-results-import") {
+      console.log(JSON.stringify(await importResultHistory(db, config, true)));
+      return;
+    }
     if (args.mode === "tracker-import") {
       console.log(JSON.stringify({ added: await importMissingTracker(db, config) }));
       return;
