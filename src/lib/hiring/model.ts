@@ -70,6 +70,8 @@ export const SUBJECTS = [
   "Art & Design Technology",
 ] as const;
 export const subjectSchema = z.enum(SUBJECTS);
+export const PAPER_LEVELS = ["Key Stage 3", "IGCSE / GCSE", "AS / A-Level", "IB SL / HL", "AP", "Other"] as const;
+export type PaperLevel = (typeof PAPER_LEVELS)[number];
 export type Subject = z.infer<typeof subjectSchema>;
 export type InterviewKind = "paper" | "mock";
 export const tokenKindSchema = z.enum(["paper", "mock", "visit"]);
@@ -273,6 +275,11 @@ export const baseConfigSchema = z
     visitStartMinute: z.number().int().min(0).max(1439).default(600),
     visitEndMinute: z.number().int().min(1).max(1440).default(960),
     resumeRetentionMonths: z.number().int().min(1).max(120).default(12),
+    /** The pass percentage for each subject and level of the paper. A pair with no row has no pass mark yet. */
+    paperPassRules: z
+      .array(z.object({ subject: subjectSchema, level: z.enum(PAPER_LEVELS), percent: z.number().min(0).max(100) }).strict())
+      .max(SUBJECTS.length * PAPER_LEVELS.length)
+      .default([]),
     location: z
       .string()
       .trim()
@@ -314,6 +321,10 @@ export function configRuleErrors(
   return errors;
 }
 export const configSchema = baseConfigSchema.superRefine((value, ctx) => {
+  // The screen shows the first row and the sheet would use the last, so a repeat is refused.
+  const rules = value.paperPassRules.map((rule) => `${rule.subject}|${rule.level}`);
+  if (new Set(rules).size !== rules.length)
+    ctx.addIssue({ code: "custom", path: ["paperPassRules"], message: "A subject and level can have only one pass mark." });
   for (const error of configRuleErrors(value)) ctx.addIssue({ code: "custom", ...error });
 });
 

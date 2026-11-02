@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, isNotNull, like, or, sql } from "drizzle-orm";
+import { fromZonedTime } from "date-fns-tz";
+import { and, asc, desc, eq, gte, inArray, isNotNull, like, or, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -441,6 +442,45 @@ export async function inviteToVisit(
     .where(eq(s.hiringCandidates.id, c.id));
   return subject;
 }
+/**
+ * Results, the paper library and this month's marking cost. The AI's first answer stays on the server.
+ * shortcut: full marks go in every dashboard read. Fetch them on panel open if papers near 400, the 4.5 MB response limit.
+ */
+async function assessmentData(db: Database, now: Date) {
+  const [papers, mocks, decisions, library] = await Promise.all([
+    db.select().from(s.hiringPaperResults).orderBy(asc(s.hiringPaperResults.subject)),
+    db.select().from(s.hiringMockResults).orderBy(asc(s.hiringMockResults.subject)),
+    db.select().from(s.hiringDecisions).orderBy(desc(s.hiringDecisions.createdAt)),
+    db
+      .select({
+        id: s.hiringAssessmentFiles.id,
+        kind: s.hiringAssessmentFiles.kind,
+        subject: s.hiringAssessmentFiles.subject,
+        name: s.hiringAssessmentFiles.name,
+        createdAt: s.hiringAssessmentFiles.createdAt,
+      })
+      .from(s.hiringAssessmentFiles)
+      .where(eq(s.hiringAssessmentFiles.active, true)),
+  ]);
+  const monthStart = fromZonedTime(`${localDate(now).slice(0, 7)}-01T00:00:00`, ZONE);
+  // Each model call writes one audit row, so a repeat of a paper still counts.
+  const [spent = { usd: 0, unknown: 0 }] = await db
+    .select({
+      usd: sql<number>`coalesce(sum((${s.hiringAudit.detail}->>'costUsd')::float), 0)::float`,
+      unknown: sql<number>`(count(*) filter (where ${s.hiringAudit.detail}->>'costUsd' is null))::int`,
+    })
+    .from(s.hiringAudit)
+    .where(and(eq(s.hiringAudit.action, "assessment-ai-call"), gte(s.hiringAudit.createdAt, monthStart)));
+  return {
+    papers: papers.map((row) => ({ ...row, aiMarks: undefined })),
+    mocks: mocks.map((row) => ({ ...row, aiRubric: undefined })),
+    decisions,
+    library,
+    // A provider can leave the cost out, and then the total is only a floor.
+    markingSpend: { usd: spent.usd, complete: spent.unknown === 0 },
+  };
+}
+
 export async function dashboard(db: Database = getDb()) {
   const [
     { row, config },
@@ -545,8 +585,10 @@ export async function dashboard(db: Database = getDb()) {
       sql`${s.hiringOutbox.key} = ${s.hiringOutbox.candidateId}::text || ':pre-screen' or ${s.hiringOutbox.key} like ${s.hiringOutbox.candidateId}::text || ':visit-invite%'`,
     )
     .orderBy(desc(s.hiringOutbox.createdAt));
+  const assessment = await assessmentData(db, now);
   return {
     config,
+    ...assessment,
     // False until the first save: the interviewers shown then are suggestions, not stored heads.
     configSaved: !!row,
     // Rules the stored config breaks. The screen shows them, and a save will not pass until they are fixed.

@@ -12,7 +12,7 @@ import type { dashboard } from "@/lib/hiring/service";
 import { CandidateInspector } from "./candidate-inspector";
 import { CandidateTable, matchesFilter } from "./candidate-table";
 import { AveragePentagon, EvidenceChart, KpiStrip, LimitMeters, ScoreChart, StageChart, SubjectChart } from "./pipeline-charts";
-import { HeadSchedules } from "./head-schedules";
+import { AssessmentScreen } from "./assessment-screen";
 import { OperationsRail, WorkerBanner } from "./operations-rail";
 import { PreScreenScreen } from "./prescreen-screen";
 import { SeekScreen } from "./seek-screen";
@@ -45,7 +45,7 @@ const VIEWS = {
   overview: "Overview",
   seek: "1 Seek intake",
   prescreen: "2 Pre-screen",
-  heads: "Head schedules",
+  assessment: "3 Mock and paper",
   setup: "Rules and setup",
 };
 export type HiringView = keyof typeof VIEWS;
@@ -244,12 +244,12 @@ export function HiringDashboard() {
           The saved rules have a problem, so the worker has stopped. Open Rules and setup. {data.configProblems.join(" ")}
         </p>
       )}
-      {/* The Head schedules view explains its own clashes and old data. */}
-      {view !== "heads" && data && (clashes.size > 0 || data.visitClashes.stale) && (
+      {/* The Mock and paper calendar explains its own clashes and old data. */}
+      {data && (clashes.size > 0 || data.visitClashes.stale) && (
         <p role="alert" className={css.alert}>
           {clashes.size > 0
-            ? `${clashes.size} booked visit${clashes.size === 1 ? "" : "s"} now clash${clashes.size === 1 ? "es" : ""} with a Wise class, leave or sit-in. The app did not move ${clashes.size === 1 ? "it" : "them"}. Staff must act. See Head schedules.`
-            : "Wise data is old or missing, so visit clashes may not show. Check Head schedules."}
+            ? `${clashes.size} booked visit${clashes.size === 1 ? "" : "s"} now clash${clashes.size === 1 ? "es" : ""} with a Wise class, leave or sit-in. The app did not move ${clashes.size === 1 ? "it" : "them"}. Staff must act. See the calendar in 3 Mock and paper.`
+            : "Wise data is old or missing, so visit clashes may not show. Check the calendar in 3 Mock and paper."}
         </p>
       )}
       {!data || !config || !insights ? (
@@ -273,14 +273,6 @@ export function HiringDashboard() {
             notice={notice}
           />
         )}
-        {/* Hidden, not unmounted: a switch to setup keeps a drafted reason and table filters. */}
-        {view === "heads" && (
-          <HeadSchedules
-            heads={data.configSaved ? data.config.interviewers : []}
-            bookings={data.bookings}
-            onOpenCandidate={openRecord}
-          />
-        )}
         {/* Hidden, not unmounted, for the same reason: a tab switch keeps the filters and the open résumé. */}
         <div hidden={view !== "seek"} className={css.viewPane}>
           <SeekScreen
@@ -294,6 +286,9 @@ export function HiringDashboard() {
         </div>
         <div hidden={view !== "prescreen"} className={css.viewPane}>
           <PreScreenScreen data={data} extras={extras} holds={holds} command={command} busy={busy} error={error} notice={notice} />
+        </div>
+        <div hidden={view !== "assessment"} className={css.viewPane}>
+          <AssessmentScreen data={data} onOpenRecord={openRecord} />
         </div>
         <div className={css.layout} hidden={view !== "overview"}>
           <div className={css.main}>
