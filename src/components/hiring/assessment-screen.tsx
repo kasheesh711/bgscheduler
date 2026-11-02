@@ -14,8 +14,9 @@ import {
   type AssessmentRow,
 } from "@/lib/hiring/assessment-view";
 import { RUBRIC, computeSheet, passRulesFor, rubricTotals, type LevelResult } from "@/lib/hiring/marking-sheet";
-import { ZONE } from "@/lib/hiring/model";
-import type { HiringCandidate, HiringData } from "./dashboard";
+import { SUBJECTS, ZONE, type Subject } from "@/lib/hiring/model";
+import { markAgain, runMarking } from "./assessment-setup";
+import type { Command, HiringCandidate, HiringData } from "./dashboard";
 import { HeadSchedules } from "./head-schedules";
 import css from "./dashboard.module.css";
 
@@ -58,8 +59,130 @@ export function mockCell(mock: Mock) {
   return `${rubricTotals(mock.rubric).total} / 100`;
 }
 
-export function PaperSheetView({ paper, config }: { paper: Paper; config: HiringData["config"] }) {
+type Reload = () => Promise<void>;
+
+/** The file picker for a candidate's scan. It stays on the row or the panel while the upload and the marking run. */
+export function PaperUpload({ candidateId, subject, reload, label, disabled, warning }: { candidateId: string; subject: Subject; reload: Reload; label: string; disabled?: boolean; warning?: string }) {
+  const [state, setState] = useState<"idle" | "working">("idle");
+  const [error, setError] = useState("");
+  async function choose(file: File | undefined) {
+    if (!file || (warning && !window.confirm(warning))) return;
+    setState("working");
+    setError("");
+    try {
+      await runMarking(candidateId, subject, file, reload);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The upload failed.");
+    } finally {
+      setState("idle");
+    }
+  }
+  if (state === "working") return <span role="status" className={css.warnWord}>Uploading and marking. This can take a few minutes.</span>;
+  return (
+    <span onClick={(e) => e.stopPropagation()}>
+      <label className={css.uploadButton}>
+        {label}
+        <input
+          className="sr-only"
+          type="file"
+          accept="application/pdf"
+          disabled={disabled}
+          aria-label={`${label} for ${subject}`}
+          onChange={(e) => {
+            void choose(e.target.files?.[0]);
+            e.target.value = "";
+          }}
+        />
+      </label>
+      {error && <span role="alert" className={css.errorText}>{error}</span>}
+    </span>
+  );
+}
+
+function RetryMarking({ id, reload }: { id: string; reload: Reload }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  return (
+    <>
+      <button
+        type="button"
+        className={css.secondary}
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          setError("");
+          try {
+            await markAgain(id, reload);
+          } catch (e) {
+            setError(e instanceof Error ? e.message : "Marking failed.");
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? "Marking…" : "Mark again"}
+      </button>
+      {error && <p role="alert" className={css.errorText}>{error}</p>}
+    </>
+  );
+}
+
+function MarksEditor({ paper, command, busy, onDone }: { paper: Paper; command: Command; busy: boolean; onDone: () => void }) {
+  const [marks, setMarks] = useState<Record<string, string>>(() => Object.fromEntries(paper.marks!.questions.map((q) => [q.id, q.marks === null ? "" : String(q.marks)])));
+  const [comment, setComment] = useState(paper.marks!.comment);
+  const values = Object.fromEntries(Object.entries(marks).map(([id, text]) => [id, text.trim() === "" ? null : Number(text)]));
+  const valid = paper.marks!.questions.every((q) => values[q.id] === null || (values[q.id]! >= 0 && values[q.id]! <= q.max));
+  return (
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault();
+        // Only what this person changed, so another person's change to a different question stays.
+        const changed = Object.fromEntries(paper.marks!.questions.filter((q) => values[q.id] !== q.marks).map((q) => [q.id, values[q.id]]));
+        if (await command({ action: "paper_edit", id: paper.id, updatedAt: new Date(paper.updatedAt).toISOString(), marks: changed, comment })) onDone();
+      }}
+    >
+      <table className={css.sheetTable}>
+        <tbody>
+          {paper.marks!.questions.map((q) => (
+            <tr key={q.id}>
+              <td>{q.id}</td>
+              <td>
+                <input
+                  className={css.numberInput}
+                  type="number"
+                  min={0}
+                  max={q.max}
+                  step="any"
+                  aria-label={`Marks for question ${q.id}`}
+                  value={marks[q.id]}
+                  onChange={(e) => setMarks({ ...marks, [q.id]: e.target.value })}
+                />{" "}
+                / {q.max}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <label className={css.fieldLabel}>
+        Marker comment
+        <textarea className={css.textarea} rows={3} value={comment} onChange={(e) => setComment(e.target.value)} />
+      </label>
+      <div className={css.decisionActions}>
+        <button type="submit" className={css.primary} disabled={!valid || busy}>
+          Save marks
+        </button>
+        <button type="button" className={css.secondary} onClick={onDone}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
+export function PaperSheetView({ paper, config, command, reload, busy }: { paper: Paper; config: HiringData["config"]; command: Command; reload: Reload; busy: boolean }) {
+  const stuck = paper.stuck;
   const sheet = paper.marks ? computeSheet(paper.marks, passRulesFor(config, paper.subject)) : null;
+  const [editing, setEditing] = useState(false);
   return (
     <section className={css.inspectorSection} aria-label={`Paper marking sheet for ${paper.subject}`}>
       <h3 className={css.inspectorHeading}>
@@ -87,6 +210,27 @@ export function PaperSheetView({ paper, config }: { paper: Paper; config: Hiring
         </dl>
       )}
       {paper.error && <p className={css.errorText}>{paper.error}</p>}
+      {stuck && <p className={css.warnWord}>This run stopped before it finished.</p>}
+      {(paper.status === "failed" || paper.status === "uploaded" || stuck) && <RetryMarking id={paper.id} reload={reload} />}
+      {paper.source === "ai" && paper.status !== "marking" && (
+        <p>
+          <PaperUpload
+            candidateId={paper.candidateId}
+            subject={paper.subject}
+            reload={reload}
+            label="Replace scan"
+            warning={paper.marks ? "The new scan replaces these marks, including any change a person made. Continue?" : undefined}
+          />
+        </p>
+      )}
+      {paper.status === "needs_check" && (
+        <p className={css.inspectorNote}>
+          The AI could not read part of this paper, and an unreadable answer counts as no marks. Read it beside the scan, change any marks, then confirm.{" "}
+          <button type="button" className={css.inlineLink} disabled={busy} onClick={() => void command({ action: "result_check", kind: "paper", id: paper.id })}>
+            I have checked this
+          </button>
+        </p>
+      )}
       {paper.source === "ai" && paper.markSchemeUsed === false && (
         <p className={css.warnWord}>Marked without a mark scheme, from the AI&apos;s own subject knowledge.</p>
       )}
@@ -132,6 +276,13 @@ export function PaperSheetView({ paper, config }: { paper: Paper; config: Hiring
             )}
           </dl>
           <p className={css.inspectorText}>{paper.marks.comment}</p>
+          {editing ? (
+            <MarksEditor paper={paper} command={command} busy={busy} onDone={() => setEditing(false)} />
+          ) : (
+            <button type="button" className={css.inlineLink} onClick={() => setEditing(true)}>
+              Change marks
+            </button>
+          )}
           <details className={css.sourceText}>
             <summary>Marks for each question, beside the scan</summary>
             <div className={css.scanSplit}>
@@ -235,12 +386,39 @@ export function MockView({ mock }: { mock: Mock }) {
   );
 }
 
+function AddPaper({ candidateId, first, taken, reload }: { candidateId: string; first: string; taken: string[]; reload: Reload }) {
+  const open = SUBJECTS.filter((subject) => !taken.includes(subject));
+  const [choice, setChoice] = useState(first as Subject);
+  if (!open.length) return null;
+  // After an upload the choice can be taken, and it must never reach the upload that way.
+  const subject = open.includes(choice) ? choice : open[0];
+  return (
+    <section className={css.inspectorSection}>
+      <h3 className={css.inspectorHeading}>Add a paper</h3>
+      <div className={css.decisionActions}>
+        <label className={css.filterSelect}>
+          Subject
+          <select value={subject} onChange={(e) => setChoice(e.target.value as Subject)}>
+            {open.map((value) => (
+              <option key={value}>{value}</option>
+            ))}
+          </select>
+        </label>
+        <PaperUpload candidateId={candidateId} subject={subject} reload={reload} label="Upload scanned PDF" />
+      </div>
+    </section>
+  );
+}
+
 function AssessmentPanel({
   candidate,
   row,
   papers,
   mocks,
   data,
+  command,
+  reload,
+  busy,
   onClose,
 }: {
   candidate: HiringCandidate;
@@ -248,6 +426,9 @@ function AssessmentPanel({
   papers: Paper[];
   mocks: Mock[];
   data: HiringData;
+  command: Command;
+  reload: Reload;
+  busy: boolean;
   onClose: () => void;
 }) {
   const blockers = hireBlockers(papers, mocks);
@@ -267,8 +448,9 @@ function AssessmentPanel({
       <div className={css.inspectorBody}>
         {!papers.length && <p className={css.inspectorText}>No paper result yet.</p>}
         {papers.map((paper) => (
-          <PaperSheetView key={paper.id} paper={paper} config={data.config} />
+          <PaperSheetView key={paper.id} paper={paper} config={data.config} command={command} reload={reload} busy={busy} />
         ))}
+        {!row.history && <AddPaper candidateId={candidate.id} first={row.subject} taken={papers.map((paper) => paper.subject)} reload={reload} />}
         {!mocks.length && <p className={css.inspectorText}>No mock result yet.</p>}
         {mocks.map((mock) => (
           <MockView key={mock.id} mock={mock} />
@@ -288,7 +470,21 @@ function AssessmentPanel({
   );
 }
 
-export function AssessmentScreen({ data, onOpenRecord, now }: { data: HiringData; onOpenRecord: (id: string) => void; now?: Date }) {
+export function AssessmentScreen({
+  data,
+  onOpenRecord,
+  command,
+  reload,
+  busy,
+  now,
+}: {
+  data: HiringData;
+  onOpenRecord: (id: string) => void;
+  command: Command;
+  reload: Reload;
+  busy: boolean;
+  now?: Date;
+}) {
   const [mode, setMode] = useState<"list" | "calendar">("list");
   const [head, setHead] = useState("");
   const [range, setRange] = useState<AssessmentRange>("All dates");
@@ -399,7 +595,13 @@ export function AssessmentScreen({ data, onOpenRecord, now }: { data: HiringData
                         <td>{row.subject}</td>
                         <td>{row.headKey ? (heads.get(row.headKey) ?? row.headKey) : "–"}</td>
                         <td className={css.preCell}>
-                          {rowPapers.length ? rowPapers.map((paper) => <span key={paper.id} className={css.pillNote}>{paperCell(paper, data.config)}</span>) : <span className={css.mutedCell}>–</span>}
+                          {rowPapers.length ? (
+                            rowPapers.map((paper) => <span key={paper.id} className={css.pillNote}>{paperCell(paper, data.config)}</span>)
+                          ) : row.kinds.includes("paper") && row.subject ? (
+                            <PaperUpload candidateId={row.candidateId} subject={row.subject as Subject} reload={reload} label="Upload PDF" />
+                          ) : (
+                            <span className={css.mutedCell}>–</span>
+                          )}
                         </td>
                         <td>{rowMocks.length ? rowMocks.map((mock) => <span key={mock.id} className={css.pillNote}>{mockCell(mock)}</span>) : <span className={css.mutedCell}>–</span>}</td>
                         <td>{decided.has(row.candidateId) ? data.decisions.find((d) => d.candidateId === row.candidateId && d.status === "sent")?.decision === "hire" ? "Hired" : "Rejected" : <span className={css.mutedCell}>–</span>}</td>
@@ -421,6 +623,9 @@ export function AssessmentScreen({ data, onOpenRecord, now }: { data: HiringData
           papers={papers.get(open.candidateId) ?? []}
           mocks={mocks.get(open.candidateId) ?? []}
           data={data}
+          command={command}
+          reload={reload}
+          busy={busy}
           onClose={() => setSelected(null)}
         />
       )}

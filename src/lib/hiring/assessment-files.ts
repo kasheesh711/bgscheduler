@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { del, get } from "@vercel/blob";
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, ne, sql } from "drizzle-orm";
 import { type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -24,7 +24,7 @@ export async function createFileIntent(
   db: Database,
 ) {
   if (input.size <= 0 || input.size > MAX_ASSESSMENT_BYTES) throw new HiringError(400, "Choose a PDF smaller than 25 MB.");
-  if (LIBRARY.includes(input.kind) ? !input.subject : !input.candidateId)
+  if (!input.subject || (!LIBRARY.includes(input.kind) && !input.candidateId))
     throw new HiringError(400, "This file needs a subject or a candidate.");
   const id = crypto.randomUUID();
   const [file] = await db
@@ -63,15 +63,60 @@ export function assessmentUploadHandler(request: Request, body: HandleUploadBody
   });
 }
 
-export async function readAssessmentBytes(file: { id: string; path: string }) {
+export async function readAssessmentBytes(file: { id: string; path: string }, abortSignal?: AbortSignal) {
   if (!isStoredPath(file.path, file.id)) throw new HiringError(409, "The stored file record is not valid.");
-  const blob = await get(file.path, { access: "private", useCache: false });
+  const blob = await get(file.path, { access: "private", useCache: false, abortSignal });
   if (!blob || blob.statusCode !== 200) throw new HiringError(404, "The file is gone from storage.");
   if (blob.blob.size > MAX_ASSESSMENT_BYTES) {
     await blob.stream.cancel();
     throw new HiringError(400, "The file is larger than 25 MB.");
   }
   return Buffer.from(await new Response(blob.stream).arrayBuffer());
+}
+
+async function resultIdOf(db: Database, file: typeof s.hiringAssessmentFiles.$inferSelect) {
+  if (file.kind !== "paper_scan") return null;
+  const [row] = await db.select({ id: s.hiringPaperResults.id }).from(s.hiringPaperResults).where(eq(s.hiringPaperResults.fileId, file.id));
+  return row?.id ?? null;
+}
+
+/** One result per candidate and subject. A new scan replaces the old marks, and the marking route runs next. */
+async function attachPaperScan(tx: Database, file: typeof s.hiringAssessmentFiles.$inferSelect, actor: string) {
+  const p = s.hiringPaperResults;
+  const [existing] = await tx.select().from(p).where(and(eq(p.candidateId, file.candidateId!), eq(p.subject, file.subject!))).for("update");
+  // A tracker result is the only copy of that past record.
+  if (existing?.source === "tracker") throw new HiringError(409, "This subject has a past result from the tracker, so it was not replaced.");
+  if (existing?.marks) await audit(tx, actor, "paper-marks-replaced", file.candidateId, { subject: file.subject, ai: existing.aiMarks, final: existing.marks });
+  const [booking] = await tx
+    .select({ id: s.hiringBookings.id })
+    .from(s.hiringBookings)
+    .where(and(eq(s.hiringBookings.candidateId, file.candidateId!), eq(s.hiringBookings.kind, "paper"), ne(s.hiringBookings.status, "cancelled")))
+    .orderBy(desc(s.hiringBookings.startTime))
+    .limit(1);
+  const fresh = {
+    bookingId: booking?.id ?? null,
+    source: "ai" as const,
+    status: "uploaded" as const,
+    fileId: file.id,
+    aiMarks: null,
+    marks: null,
+    markSchemeUsed: null,
+    history: null,
+    model: null,
+    promptVersion: null,
+    costUsd: null,
+    costKnown: true,
+    error: null,
+    checkedBy: null,
+    checkedAt: null,
+    changedBy: null,
+    changedAt: null,
+    updatedAt: new Date(),
+  };
+  await tx
+    .insert(s.hiringPaperResults)
+    .values({ candidateId: file.candidateId!, subject: file.subject!, ...fresh })
+    .onConflictDoUpdate({ target: [s.hiringPaperResults.candidateId, s.hiringPaperResults.subject], set: fresh });
 }
 
 /**
@@ -81,7 +126,7 @@ export async function readAssessmentBytes(file: { id: string; path: string }) {
 export async function finishFile(id: string, actor: string, db: Database) {
   const [file] = await db.select().from(s.hiringAssessmentFiles).where(eq(s.hiringAssessmentFiles.id, id));
   if (!file) throw new HiringError(404, "File not found.");
-  if (file.status === "ready") return file;
+  if (file.status === "ready") return { ...file, resultId: await resultIdOf(db, file) };
   const bytes = await readAssessmentBytes(file);
   const refusal =
     bytes.length !== file.size ? "The uploaded size differs from the file chosen." : sniffResume(bytes)?.type !== PDF ? "Only a PDF can be used here." : null;
@@ -105,7 +150,8 @@ export async function finishFile(id: string, actor: string, db: Database) {
       .set({ status: "ready", sha256, active: LIBRARY.includes(file.kind) })
       .where(eq(s.hiringAssessmentFiles.id, id))
       .returning();
+    if (file.kind === "paper_scan") await attachPaperScan(tx, ready, actor);
     await audit(tx, actor, "assessment-file", file.candidateId, { id, kind: file.kind, subject: file.subject, name: file.name });
-    return ready;
+    return { ...ready, resultId: await resultIdOf(tx, ready) };
   });
 }

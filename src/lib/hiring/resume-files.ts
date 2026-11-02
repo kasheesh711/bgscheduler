@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { del, list } from "@vercel/blob";
 import { put } from "@vercel/blob/client";
 import { subMonths } from "date-fns";
-import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, lt, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { requestResumeUploadToken } from "./dispatch";
@@ -125,6 +125,16 @@ export async function countOrphanResumes(db: Database) {
   return null;
 }
 
+const f = s.hiringAssessmentFiles;
+const candidateActivity = sql`greatest(
+  ${s.hiringCandidates.resumeStoredAt},
+  ${s.hiringCandidates.preScreenRepliedAt},
+  (select max(${s.hiringBookings.endTime}) from ${s.hiringBookings}
+    where ${s.hiringBookings.candidateId} = ${s.hiringCandidates.id} and ${s.hiringBookings.status} = 'confirmed'),
+  (select max(${s.hiringAudit.createdAt}) from ${s.hiringAudit}
+    where ${s.hiringAudit.candidateId} = ${s.hiringCandidates.id}
+      and ${s.hiringAudit.actor} not in ('subscription-assessment', 'hiring-worker', 'hiring-backfill'))
+)`;
 // Each file takes up to two storage calls of 5 seconds, so the time budget ends a slow run before the 60-second limit.
 const RETENTION_BATCH = 50;
 const RETENTION_BUDGET_MS = 45000;
@@ -147,16 +157,7 @@ export async function deleteExpiredResumes(
   if (!runtimeWritesAllowed()) return 0;
   const c = s.hiringCandidates;
   const cutoff = subMonths(now, months);
-  const activity = sql`greatest(
-    ${c.resumeStoredAt},
-    ${c.preScreenRepliedAt},
-    (select max(${s.hiringBookings.endTime}) from ${s.hiringBookings}
-      where ${s.hiringBookings.candidateId} = ${c.id} and ${s.hiringBookings.status} = 'confirmed'),
-    (select max(${s.hiringAudit.createdAt}) from ${s.hiringAudit}
-      where ${s.hiringAudit.candidateId} = ${c.id}
-        and ${s.hiringAudit.actor} not in ('subscription-assessment', 'hiring-worker', 'hiring-backfill'))
-  )`;
-  const expired = sql`${activity} < ${cutoff.toISOString()}::timestamptz`;
+  const expired = sql`${candidateActivity} < ${cutoff.toISOString()}::timestamptz`;
   const rows = await db
     .select({ id: c.id, path: c.resumePath, type: c.resumeType })
     .from(c)
@@ -202,8 +203,37 @@ export async function deleteExpiredResumes(
   return deleted;
 }
 
+/**
+ * Scanned papers and mock rubrics follow the résumé rule: no activity for `months`, oldest first. The marks stay, and a
+ * result's file link clears by itself when its row goes.
+ */
+export async function deleteExpiredAssessmentFiles(db: Database, now: Date, months: number) {
+  if (!runtimeWritesAllowed()) return 0;
+  const cutoff = subMonths(now, months);
+  const rows = await db
+    .select({ id: f.id, path: f.path })
+    .from(f)
+    .innerJoin(s.hiringCandidates, eq(f.candidateId, s.hiringCandidates.id))
+    .where(and(lt(f.createdAt, cutoff), sql`${candidateActivity} < ${cutoff.toISOString()}::timestamptz`))
+    .orderBy(asc(f.createdAt))
+    .limit(RETENTION_BATCH);
+  if (!rows.length) return 0;
+  await del(rows.map((row) => row.path), { abortSignal: AbortSignal.timeout(5000) });
+  await db.delete(f).where(inArray(f.id, rows.map((row) => row.id)));
+  await audit(db, "resume-retention", "assessment-file-retention", null, { deleted: rows.length });
+  return rows.length;
+}
+
 /** The cron and the Data Health Run button use the saved number of months. */
 export async function runResumeRetention(db: Database = getDb(), now = new Date()) {
   const { config } = await settings(db);
-  return deleteExpiredResumes(db, now, config.resumeRetentionMonths, () => countOrphanResumes(db));
+  // A storage problem with these files must not stop the résumé run.
+  let filesFailed = false;
+  await deleteExpiredAssessmentFiles(db, now, config.resumeRetentionMonths).catch((error) => {
+    filesFailed = true;
+    console.error("Hiring file retention failed", error instanceof Error ? error.name : "UnknownError");
+  });
+  const deleted = await deleteExpiredResumes(db, now, config.resumeRetentionMonths, () => countOrphanResumes(db));
+  if (filesFailed) throw new HiringError(503, "Some paper or mock files could not be deleted. The next run tries again.");
+  return deleted;
 }

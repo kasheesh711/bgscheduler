@@ -72,6 +72,10 @@ describe("checkPaperMarks", () => {
     expect(checkPaperMarks(marks([q("1", "AP", 0, 0)]))[0]).toMatch(/no maximum/);
     expect(checkPaperMarks(marks([]))[0]).toMatch(/No questions/);
   });
+  it("refuses marks on a question that was not tried", () => {
+    expect(checkPaperMarks(marks([q("1", "AP", 5, 10, { attempted: false })]))[0]).toMatch(/not tried/);
+    expect(checkPaperMarks(marks([q("1", "AP", 0, 10, { attempted: false })]))).toEqual([]);
+  });
   it("refuses a blank mark on an answer the AI says it could read", () => {
     expect(checkPaperMarks(marks([q("1", "AP", null, 10, { readable: true })]))[0]).toMatch(/could be read/);
   });

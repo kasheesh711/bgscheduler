@@ -8,6 +8,31 @@ import css from "./dashboard.module.css";
 
 type FileKind = "question_paper" | "mark_scheme" | "paper_scan" | "mock_rubric";
 
+const postJson = async (url: string, body: unknown) => {
+  const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  // A platform timeout answers with a page, not JSON.
+  const value = await response.json().catch(() => null);
+  if (!value) throw new Error("The server did not answer. Refresh the page and check the result before you try again.");
+  if (!response.ok) throw new Error(value.error);
+  return value;
+};
+
+/** Uploads a scan, links it to the result, then marks it. The upload is saved first, so a failed mark keeps it. */
+export async function runMarking(candidateId: string, subject: Subject, file: File, reload: () => Promise<void>) {
+  const id = await uploadAssessmentFile({ kind: "paper_scan", subject, candidateId, file });
+  const ready = await postJson("/api/hiring", { action: "file_ready", id });
+  await markAgain(ready.resultId, reload);
+}
+
+export async function markAgain(id: string, reload: () => Promise<void>) {
+  try {
+    const value = await postJson("/api/hiring/marking", { kind: "paper", id });
+    if (value.error) throw new Error(value.error);
+  } finally {
+    await reload().catch(() => undefined);
+  }
+}
+
 /** Browser to private storage, because a function request body is limited to 4.5 MB. The server then checks the bytes. */
 export async function uploadAssessmentFile(input: { kind: FileKind; subject: Subject | null; candidateId: string | null; file: File }) {
   if (input.file.size > 25 * 1024 * 1024) throw new Error("Choose a PDF smaller than 25 MB.");
