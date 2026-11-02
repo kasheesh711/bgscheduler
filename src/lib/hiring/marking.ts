@@ -4,7 +4,7 @@ import { type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { callOpenRouter, isCreditExhausted, type OpenRouterCallResult } from "@/lib/feedback-autowriter/openrouter";
 import { readAssessmentBytes } from "./assessment-files";
-import { checkPaperMarks, paperNeedsCheck, type PaperMarks } from "./marking-sheet";
+import { checkPaperMarks, checkRubric, paperNeedsCheck, RUBRIC, RUBRIC_ITEMS, rubricNeedsCheck, type MockRubric, type PaperMarks } from "./marking-sheet";
 import { HiringError, PAPER_LEVELS, runtimeWritesAllowed } from "./model";
 import { audit, MARKING_STUCK_AFTER_MS } from "./service";
 
@@ -125,71 +125,79 @@ export async function activeLibrary(db: Database, subject: (typeof p.$inferSelec
   return { questionPaper: rows.find((row) => row.kind === "question_paper") ?? null, markScheme: rows.find((row) => row.kind === "mark_scheme") ?? null };
 }
 
-/**
- * Marks one uploaded paper. The result counts at once. It changes no stage, writes no old-flow paper pass, and queues no
- * message, so an AI "Passed" can never start the old flow's mock invitation.
- */
-export async function markPaper(id: string, actor: string, db: Database, callModel: CallModel = callOpenRouter, now = new Date()) {
+const m = s.hiringMockResults;
+type Spec<T> = {
+  kind: "paper" | "mock";
+  name: string;
+  schema: z.ZodType<T>;
+  instructions: string;
+  check: (answer: T) => string[];
+  needsCheck: (answer: T) => boolean;
+  /** The files to send, with the scan last. */
+  sources: (claimed: typeof p.$inferSelect, scan: typeof f.$inferSelect) => Promise<{ label: string; name: string; file: typeof f.$inferSelect }[]>;
+  /** Runs before the check, for what the AI may read but a result may not hold. */
+  normalize?: (answer: T) => T;
+  /** The columns for a good answer. */
+  stored: (answer: T, sources: { name: string }[]) => Record<string, unknown>;
+  doneAudit: string;
+};
+
+// The two tables have the same columns for this work, so one run serves both.
+async function runResult<T>(table: typeof p, spec: Spec<T>, id: string, actor: string, db: Database, callModel: CallModel, now: Date) {
   // A preview must not send a candidate's scan or spend money.
   if (!runtimeWritesAllowed()) throw new HiringError(503, "AI marking runs only in production.");
   const apiKey = markingKey();
   if (!apiKey) {
     const error = "AI marking is not set up yet. The upload is saved.";
-    await db.update(p).set({ error }).where(eq(p.id, id));
+    await db.update(table).set({ error }).where(eq(table.id, id));
     throw new HiringError(503, error);
   }
   const started = Date.now();
   // One run at a time. A run that died leaves "marking", so it can be claimed again after the longest possible call.
   const [claimed] = await db
-    .update(p)
+    .update(table)
     .set({ status: "marking", error: null, updatedAt: now })
-    .where(and(eq(p.id, id), or(inArray(p.status, ["uploaded", "failed"]), and(eq(p.status, "marking"), lt(p.updatedAt, new Date(now.getTime() - MARKING_STUCK_AFTER_MS))))))
+    .where(and(eq(table.id, id), or(inArray(table.status, ["uploaded", "failed"]), and(eq(table.status, "marking"), lt(table.updatedAt, new Date(now.getTime() - MARKING_STUCK_AFTER_MS))))))
     .returning();
-  if (!claimed) throw new HiringError(409, "This paper is being marked, or it is already marked. Refresh the page.");
+  if (!claimed) throw new HiringError(409, "This file is being read, or it is already finished. Refresh the page.");
   // A newer upload owns the row, so an older run changes nothing.
-  const mine = and(eq(p.id, id), eq(p.status, "marking"), claimed.fileId ? eq(p.fileId, claimed.fileId) : undefined);
+  const mine = and(eq(table.id, id), eq(table.status, "marking"), claimed.fileId ? eq(table.fileId, claimed.fileId) : undefined);
   const fail = async (error: string) => {
-    await db.update(p).set({ status: "failed", error, updatedAt: new Date() }).where(mine);
+    await db.update(table).set({ status: "failed", error, updatedAt: new Date() }).where(mine);
     return { status: "failed" as const, error };
   };
   try {
     const [scan] = claimed.fileId ? await db.select().from(f).where(eq(f.id, claimed.fileId)) : [];
     if (!scan) return await fail("The scan is gone. Upload it again.");
-    const { questionPaper, markScheme } = await activeLibrary(db, claimed.subject);
-    const sources = [
-      ...(questionPaper ? [{ label: "The question paper:", name: "question-paper.pdf", file: questionPaper }] : []),
-      ...(markScheme ? [{ label: "The mark scheme:", name: "mark-scheme.pdf", file: markScheme }] : []),
-      { label: `The candidate's scanned answers for ${claimed.subject}:`, name: "answers.pdf", file: scan },
-    ];
+    const sources = await spec.sources(claimed, scan);
     if (sources.reduce((sum, source) => sum + source.file.size, 0) > MAX_FILES_BYTES)
-      return await fail("The paper, the mark scheme and the scan total more than 45 MB. Scan at a lower resolution, then replace the scan.");
+      return await fail("The files total more than 45 MB. Scan at a lower resolution, then replace the scan.");
     const signal = AbortSignal.timeout(RUN_BUDGET_MS);
     const files: ModelFile[] = await Promise.all(sources.map(async ({ label, name, file }) => ({ label, name, bytes: await readAssessmentBytes(file, signal) })));
     const model = markingModel();
     const call = await callModelWithFiles({
       apiKey,
       model,
-      name: "paper_marks",
-      schema: paperAnswer,
-      instructions: PAPER_INSTRUCTIONS,
+      name: spec.name,
+      schema: spec.schema,
+      instructions: spec.instructions,
       files,
       callModel,
       timeoutMs: Math.max(1000, RUN_BUDGET_MS - (Date.now() - started)),
     });
-    await noteCall(db, actor, claimed.candidateId, "paper", call);
+    await noteCall(db, actor, claimed.candidateId, spec.kind, call);
     if (!call.ok) return await fail(callFailureText(call));
-    const marks: PaperMarks | null = parseAnswer(paperAnswer, call.content);
-    if (!marks) return await fail("The AI answer could not be read. The upload is saved. Retry.");
-    const problems = checkPaperMarks(marks);
+    const parsed = parseAnswer(spec.schema, call.content);
+    if (parsed === null) return await fail("The AI answer could not be read. The upload is saved. Retry.");
+    const answer = spec.normalize ? spec.normalize(parsed) : parsed;
+    const problems = spec.check(answer);
     if (problems.length) return await fail(`The AI answer could not be used: ${problems.slice(0, 3).join(" ")} The upload is saved. Retry.`);
-    const status = paperNeedsCheck(marks) ? "needs_check" : "done";
+    const status = spec.needsCheck(answer) ? ("needs_check" as const) : ("done" as const);
     const saved = await db
-      .update(p)
+      .update(table)
       .set({
         status,
-        aiMarks: marks,
-        marks,
-        markSchemeUsed: !!markScheme,
+        ...spec.stored(answer, sources),
         model: call.model ?? model,
         promptVersion: MARKING_PROMPT_VERSION,
         costUsd: call.usage.costUsd,
@@ -198,16 +206,90 @@ export async function markPaper(id: string, actor: string, db: Database, callMod
         updatedAt: new Date(),
       })
       .where(mine)
-      .returning({ id: p.id });
-    if (!saved.length) return { status: "replaced" as const, error: "A newer upload replaced this paper while it was being marked." };
-    await auditQuietly(db, actor, "paper-marked", claimed.candidateId, { subject: claimed.subject, status, markScheme: !!markScheme });
+      .returning({ id: table.id });
+    if (!saved.length) return { status: "replaced" as const, error: "A newer upload replaced this file while it was being read." };
+    await auditQuietly(db, actor, spec.doneAudit, claimed.candidateId, { subject: claimed.subject, status });
     return { status, error: null };
   } catch (error) {
     // Only a known message reaches the screen. An unknown error could hold file text, so only its name is logged.
     console.error("Hiring marking failed", error instanceof Error ? error.name : "UnknownError");
-    return await fail(error instanceof HiringError ? error.message : "Marking stopped. The upload is saved. Retry.");
+    return await fail(error instanceof HiringError ? error.message : "The run stopped. The upload is saved. Retry.");
   }
 }
+
+/**
+ * Marks one uploaded paper. The result counts at once. It changes no stage, writes no old-flow paper pass, and queues no
+ * message, so an AI "Passed" can never start the old flow's mock invitation.
+ */
+export const markPaper = (id: string, actor: string, db: Database, callModel: CallModel = callOpenRouter, now = new Date()) =>
+  runResult(
+    p,
+    {
+      kind: "paper",
+      name: "paper_marks",
+      schema: paperAnswer as z.ZodType<PaperMarks>,
+      instructions: PAPER_INSTRUCTIONS,
+      check: checkPaperMarks,
+      needsCheck: paperNeedsCheck,
+      doneAudit: "paper-marked",
+      sources: async (claimed, scan) => {
+        const { questionPaper, markScheme } = await activeLibrary(db, claimed.subject);
+        return [
+          ...(questionPaper ? [{ label: "The question paper:", name: "question-paper.pdf", file: questionPaper }] : []),
+          ...(markScheme ? [{ label: "The mark scheme:", name: "mark-scheme.pdf", file: markScheme }] : []),
+          { label: `The candidate's scanned answers for ${claimed.subject}:`, name: "answers.pdf", file: scan },
+        ];
+      },
+      stored: (marks, sources) => ({ aiMarks: marks, marks, markSchemeUsed: sources.some((source) => source.name === "mark-scheme.pdf") }),
+    },
+    id,
+    actor,
+    db,
+    callModel,
+    now,
+  );
+
+const rubricAnswer = z
+  .object({
+    items: z.object(Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, z.number().nullable()]))).strict(),
+    comments: z.string().max(4000),
+  })
+  .strict();
+
+export const MOCK_INSTRUCTIONS = `You read a completed form: a head teacher's scores for a candidate tutor's mock lesson at BeGifted. ${TRUST_BOUNDARY}
+Copy what the head wrote. Do not judge the lesson. Each item is scored from 1 to 10, usually 10, 7, 4 or 1:
+${RUBRIC.flatMap(({ part, items }) => items.map(([id, label]) => `- ${id}: ${label} (${part})`)).join("\n")}
+Give null for an item with no score you can read. Do not guess it, and do not work it out from a total on the form.
+comments: the head's other comments, word for word, translated to English if they are in another language. Use an empty string if there are none.
+Do not add up a total. The system does that.`;
+
+/** Reads an uploaded mock rubric. Same rules as a paper: it changes no stage and queues no message. */
+export const readMockRubric = (id: string, actor: string, db: Database, callModel: CallModel = callOpenRouter, now = new Date()) =>
+  runResult(
+    m as unknown as typeof p,
+    {
+      kind: "mock",
+      name: "mock_rubric",
+      schema: rubricAnswer as unknown as z.ZodType<MockRubric>,
+      instructions: MOCK_INSTRUCTIONS,
+      // A head can write 7.5 or 0. Losing nine good scores for that would strand the mock, so a person sets that one score.
+      normalize: (rubric) => ({
+        ...rubric,
+        items: Object.fromEntries(RUBRIC_ITEMS.map((item) => [item, checkRubric({ ...rubric, items: { ...rubric.items } }).some((problem) => problem.startsWith(`${item} `)) ? null : rubric.items[item]])) as MockRubric["items"],
+      }),
+      // Ten blanks means the wrong file, not ten unreadable scores.
+      check: (rubric) => (RUBRIC_ITEMS.every((item) => rubric.items[item] === null) ? ["No score could be read. Check that this is the right form."] : checkRubric(rubric)),
+      needsCheck: rubricNeedsCheck,
+      doneAudit: "mock-read",
+      sources: async (_claimed, scan) => [{ label: "The completed rubric:", name: "rubric.pdf", file: scan }],
+      stored: (rubric) => ({ aiRubric: rubric, rubric }),
+    },
+    id,
+    actor,
+    db,
+    callModel,
+    now,
+  );
 
 /** A person's change. The AI's first answer stays. The server recalculates the sheet from these marks. */
 export async function changePaperMarks(id: string, input: { updatedAt: string; marks: Record<string, number | null>; comment: string }, actor: string, db: Database, now = new Date()) {
@@ -230,6 +312,22 @@ export async function changePaperMarks(id: string, input: { updatedAt: string; m
     .returning({ id: p.id });
   if (!saved.length) throw new HiringError(409, "These marks changed while you were editing. Refresh the page.");
   await audit(db, actor, "paper-marks-changed", row.candidateId, { subject: row.subject, before: row.marks.questions.map((q) => [q.id, q.marks]), after: questions.map((q) => [q.id, q.marks]) });
+}
+
+/** A person's change to a rubric. Same rule as marks: the AI's first read stays, and the total is calculated. */
+export async function changeRubric(id: string, input: { updatedAt: string; items: Partial<MockRubric["items"]>; comments: string }, actor: string, db: Database, now = new Date()) {
+  const [row] = await db.select().from(m).where(eq(m.id, id));
+  if (!row?.rubric || !["done", "needs_check"].includes(row.status)) throw new HiringError(409, "This rubric has no scores to change yet.");
+  const rubric: MockRubric = { items: { ...row.rubric.items, ...input.items }, comments: input.comments };
+  const problems = checkRubric(rubric);
+  if (problems.length) throw new HiringError(400, problems.join(" "));
+  const saved = await db
+    .update(m)
+    .set({ rubric, status: rubricNeedsCheck(rubric) ? "needs_check" : row.status, changedBy: actor, changedAt: now, updatedAt: now })
+    .where(and(eq(m.id, id), eq(m.updatedAt, new Date(input.updatedAt)), inArray(m.status, ["done", "needs_check"])))
+    .returning({ id: m.id });
+  if (!saved.length) throw new HiringError(409, "These scores changed while you were editing. Refresh the page.");
+  await audit(db, actor, "mock-rubric-changed", row.candidateId, { subject: row.subject, before: row.rubric.items, after: rubric.items });
 }
 
 /** A person has read a result that needed a check, and it now counts. */

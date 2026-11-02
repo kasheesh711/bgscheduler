@@ -3,7 +3,8 @@ import { after, NextResponse } from "next/server";
 import { requireHiringAdmin } from "@/lib/hiring/access";
 import { createFileIntent, finishFile } from "@/lib/hiring/assessment-files";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
-import { changePaperMarks, clearResultCheck } from "@/lib/hiring/marking";
+import { changePaperMarks, changeRubric, clearResultCheck } from "@/lib/hiring/marking";
+import { RUBRIC_ITEMS, type RubricItem } from "@/lib/hiring/marking-sheet";
 import { configSchema, localDate, subjectSchema } from "@/lib/hiring/model";
 import { headWeek } from "@/lib/hiring/head-schedule";
 import { candidateById, changePreScreenScore, dashboard, reviewCandidate, saveHeadDays, saveSettings, settings } from "@/lib/hiring/service";
@@ -62,6 +63,15 @@ const command = z.discriminatedUnion("action", [
       updatedAt: z.iso.datetime(),
       marks: z.record(z.string().max(60), z.number().min(0).nullable()),
       comment: z.string().trim().max(4000),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("mock_edit"),
+      id: z.uuid(),
+      updatedAt: z.iso.datetime(),
+      items: z.partialRecord(z.enum(RUBRIC_ITEMS as [RubricItem, ...RubricItem[]]), z.number().nullable()),
+      comments: z.string().trim().max(4000),
     })
     .strict(),
   z.object({ action: z.literal("result_check"), kind: z.enum(["paper", "mock"]), id: z.uuid() }).strict(),
@@ -150,6 +160,10 @@ export async function POST(request: Request) {
     }
     if (input.action === "paper_edit") {
       await changePaperMarks(input.id, input, actor, getDb());
+      return NextResponse.json({ ok: true });
+    }
+    if (input.action === "mock_edit") {
+      await changeRubric(input.id, input, actor, getDb());
       return NextResponse.json({ ok: true });
     }
     if (input.action === "result_check") {

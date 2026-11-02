@@ -75,8 +75,9 @@ export async function readAssessmentBytes(file: { id: string; path: string }, ab
 }
 
 async function resultIdOf(db: Database, file: typeof s.hiringAssessmentFiles.$inferSelect) {
-  if (file.kind !== "paper_scan") return null;
-  const [row] = await db.select({ id: s.hiringPaperResults.id }).from(s.hiringPaperResults).where(eq(s.hiringPaperResults.fileId, file.id));
+  if (file.kind !== "paper_scan" && file.kind !== "mock_rubric") return null;
+  const table = file.kind === "paper_scan" ? s.hiringPaperResults : s.hiringMockResults;
+  const [row] = await db.select({ id: table.id }).from(table).where(eq(table.fileId, file.id));
   return row?.id ?? null;
 }
 
@@ -119,6 +120,43 @@ async function attachPaperScan(tx: Database, file: typeof s.hiringAssessmentFile
     .onConflictDoUpdate({ target: [s.hiringPaperResults.candidateId, s.hiringPaperResults.subject], set: fresh });
 }
 
+/** One rubric per candidate and subject, on the same rules as a scan. */
+async function attachMockRubric(tx: Database, file: typeof s.hiringAssessmentFiles.$inferSelect, actor: string) {
+  const m = s.hiringMockResults;
+  const [existing] = await tx.select().from(m).where(and(eq(m.candidateId, file.candidateId!), eq(m.subject, file.subject!))).for("update");
+  if (existing?.source === "tracker") throw new HiringError(409, "This subject has a past result from the tracker, so it was not replaced.");
+  if (existing?.rubric) await audit(tx, actor, "mock-rubric-replaced", file.candidateId, { subject: file.subject, ai: existing.aiRubric, final: existing.rubric });
+  const [booking] = await tx
+    .select({ id: s.hiringBookings.id })
+    .from(s.hiringBookings)
+    .where(and(eq(s.hiringBookings.candidateId, file.candidateId!), eq(s.hiringBookings.kind, "mock"), ne(s.hiringBookings.status, "cancelled")))
+    .orderBy(desc(s.hiringBookings.startTime))
+    .limit(1);
+  const fresh = {
+    bookingId: booking?.id ?? null,
+    source: "ai" as const,
+    status: "uploaded" as const,
+    fileId: file.id,
+    aiRubric: null,
+    rubric: null,
+    history: null,
+    model: null,
+    promptVersion: null,
+    costUsd: null,
+    costKnown: true,
+    error: null,
+    checkedBy: null,
+    checkedAt: null,
+    changedBy: null,
+    changedAt: null,
+    updatedAt: new Date(),
+  };
+  await tx
+    .insert(m)
+    .values({ candidateId: file.candidateId!, subject: file.subject!, ...fresh })
+    .onConflictDoUpdate({ target: [m.candidateId, m.subject], set: fresh });
+}
+
 /**
  * Step 3: checks the stored bytes. The type comes from the bytes, never from the browser. A library file then replaces
  * the one in use for its subject and kind. The caller links a candidate's file to their result.
@@ -151,6 +189,7 @@ export async function finishFile(id: string, actor: string, db: Database) {
       .where(eq(s.hiringAssessmentFiles.id, id))
       .returning();
     if (file.kind === "paper_scan") await attachPaperScan(tx, ready, actor);
+    if (file.kind === "mock_rubric") await attachMockRubric(tx, ready, actor);
     await audit(tx, actor, "assessment-file", file.candidateId, { id, kind: file.kind, subject: file.subject, name: file.name });
     return { ...ready, resultId: await resultIdOf(tx, ready) };
   });

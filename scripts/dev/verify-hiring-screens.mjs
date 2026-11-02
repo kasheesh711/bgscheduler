@@ -82,7 +82,7 @@ payload.tutors = [{ canonicalKey: "Peat", name: "Kru Peat", email: "p@example.te
 payload.config.interviewers = [{ canonicalKey: "Peat", email: "p@example.test", subjects: ["Mathematics"] }, { canonicalKey: "Ek", email: "e@example.test", subjects: ["Physics"] }] as never[];
 payload.config.paperPassRules = [{ subject: "Mathematics", level: "Key Stage 3", percent: 50 }, { subject: "Mathematics", level: "AS / A-Level", percent: 50 }, { subject: "Mathematics", level: "IB SL / HL", percent: 60 }];
 payload.papers = [{ id: "p1", candidateId: "r1", bookingId: "v1e", subject: "Mathematics", source: "ai", status: "done", fileId: "f1", updatedAt: "2026-11-02T00:00:00.000Z", markSchemeUsed: false, history: null, error: null, changedBy: null, marks: { missingPages: null, comment: "Strong algebra. Weak on IB vectors.", questions: [...markQuestions("Key Stage 3", [9, 9]), ...markQuestions("AS / A-Level", [6, 5]), ...markQuestions("IB SL / HL", [3, 4])] } }];
-payload.mocks = [{ id: "m1", candidateId: "r1", bookingId: "v1m", subject: "Mathematics", source: "ai", status: "done", fileId: "f2", history: null, error: null, changedBy: null, rubric: { comments: "Clear explanations.", items: { accuracy: 10, concepts: 10, clarity: 7, presentation: 7, interaction: 10, pace: 7, organization: 10, materials: 7, formative: 7, feedback: 9 } } }];
+payload.mocks = [{ id: "m1", candidateId: "r1", bookingId: "v1m", subject: "Mathematics", source: "ai", status: "done", fileId: "f2", updatedAt: "2026-11-02T00:00:00.000Z", history: null, error: null, changedBy: null, rubric: { comments: "Clear explanations.", items: { accuracy: 10, concepts: 10, clarity: 7, presentation: 7, interaction: 10, pace: 7, organization: 10, materials: 7, formative: 7, feedback: 9 } } }];
 const realFetch = window.fetch;
 (window as unknown as { posted: unknown[] }).posted = [];
 (window as unknown as { uploaded: unknown[] }).uploaded = [];
@@ -90,6 +90,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   if (url.pathname === "/api/hiring/marking") {
     (window as unknown as { posted: unknown[] }).posted.push({ marking: JSON.parse(String(init?.body)) });
+    if (JSON.parse(String(init?.body)).kind === "mock") {
+      Object.assign((payload.mocks as Record<string, unknown>[]).find((row) => row.id === "m2")!, { status: "needs_check", rubric: { comments: "Good pace.", items: { accuracy: 10, concepts: 7, clarity: 7, presentation: 7, interaction: 7, pace: 7, organization: 7, materials: 7, formative: 4, feedback: null } } });
+      return new Response(JSON.stringify({ status: "needs_check", error: null }));
+    }
     const paper = (payload.papers as Record<string, unknown>[]).find((row) => row.id === "p2")!;
     Object.assign(paper, { status: "needs_check", markSchemeUsed: true, marks: { missingPages: "Page 4", comment: "Part could not be read.", questions: [...markQuestions("IGCSE / GCSE", [7]), { id: "Q9", level: "IGCSE / GCSE", marks: null, max: 10, reason: "Unreadable", attempted: true, readable: false }] } });
     return new Response(JSON.stringify({ status: "needs_check", error: null }));
@@ -97,12 +101,22 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/hiring" && init?.method === "POST") {
     const body = JSON.parse(String(init.body));
     (window as unknown as { posted: unknown[] }).posted.push(body);
-    if (body.action === "file_intent") return new Response(JSON.stringify({ id: "f9", pathname: "hiring-assessment/f9.pdf" }));
+    if (body.action === "file_intent" && body.kind !== "mock_rubric") return new Response(JSON.stringify({ id: "f9", pathname: "hiring-assessment/f9.pdf" }));
+    if (body.action === "file_intent" && body.kind === "mock_rubric") return new Response(JSON.stringify({ id: "f8", pathname: "hiring-assessment/f8.pdf" }));
+    if (body.action === "file_ready" && body.id === "f8") {
+      (payload.mocks as Record<string, unknown>[]).push({ id: "m2", candidateId: "r2", bookingId: "v2m", subject: "Physics", source: "ai", status: "uploaded", fileId: "f8", updatedAt: "2026-11-02T00:00:00.000Z", history: null, error: null, changedBy: null, rubric: null });
+      return new Response(JSON.stringify({ ok: true, resultId: "m2" }));
+    }
     if (body.action === "file_ready") {
       (payload.papers as Record<string, unknown>[]).push({ id: "p2", candidateId: "r2", bookingId: "v2e", subject: "Physics", source: "ai", status: "uploaded", fileId: "f9", updatedAt: "2026-11-02T00:00:00.000Z", markSchemeUsed: null, history: null, error: null, changedBy: null, marks: null });
       return new Response(JSON.stringify({ ok: true, resultId: "p2" }));
     }
-    if (body.action === "result_check") (payload.papers as Record<string, unknown>[]).find((row) => row.id === body.id)!.status = "done";
+    if (body.action === "result_check") ((body.kind === "mock" ? payload.mocks : payload.papers) as Record<string, unknown>[]).find((row) => row.id === body.id)!.status = "done";
+    if (body.action === "mock_edit") {
+      const mock = (payload.mocks as { id: string; changedBy: string | null; rubric: { comments: string; items: Record<string, number | null> } }[]).find((row) => row.id === body.id)!;
+      mock.changedBy = "fixture";
+      mock.rubric = { comments: body.comments, items: { ...mock.rubric.items, ...body.items } };
+    }
     if (body.action === "paper_edit") {
       const paper = (payload.papers as { id: string; changedBy: string | null; marks: { comment: string; questions: { id: string; marks: number | null; readable: boolean }[] } }[]).find((row) => row.id === body.id)!;
       paper.changedBy = "fixture";
@@ -349,7 +363,7 @@ try {
   });
   await check("uploading a scan on the row marks it, and a person clears the check", async () => {
     const list = page.getByRole("region", { name: "Mock and paper" });
-    await page.locator("input[type=file][aria-label='Upload PDF for Physics']").setInputFiles({ name: "scan.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 fixture") });
+    await page.locator("input[type=file][aria-label='Upload PDF for the Physics paper']").setInputFiles({ name: "scan.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 fixture") });
     await list.getByText("Physics: Needs check").waitFor();
     const posted = await page.evaluate(() => window.posted);
     assert.deepEqual(posted.slice(-3).map((p) => p.action ?? "marking"), ["file_intent", "file_ready", "marking"]);
@@ -368,6 +382,24 @@ try {
     await shot(page, "assessment-needs-check");
     await sheet.getByRole("button", { name: "I have checked this" }).click();
     await list.getByText(/^Physics: \d+%/).waitFor();
+    await page.getByRole("complementary", { name: "Assessment of Reply Low" }).getByRole("button", { name: "Close" }).click();
+  });
+  await check("uploading a mock rubric reads it, a person fills the blank, and the total adds up", async () => {
+    const list = page.getByRole("region", { name: "Mock and paper" });
+    await page.locator("input[type=file][aria-label='Upload rubric for the mock in Physics']").first().setInputFiles({ name: "rubric.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 fixture") });
+    await list.getByText("Needs check", { exact: true }).first().waitFor();
+    const posted = await page.evaluate(() => window.posted);
+    assert.deepEqual(posted.at(-1), { marking: { kind: "mock", id: "m2" } });
+    await list.getByRole("button", { name: "Reply Low" }).click();
+    const rubric = page.getByRole("region", { name: "Mock rubric" });
+    await rubric.getByRole("row", { name: /Total 63 \/ 100/ }).waitFor();
+    await rubric.getByRole("button", { name: "Change scores" }).click();
+    await rubric.getByLabel("Score for Feedback Quality").fill("9");
+    await rubric.getByRole("button", { name: "Save scores" }).click();
+    await rubric.getByRole("row", { name: /Total 72 \/ 100/ }).waitFor();
+    await rubric.getByRole("button", { name: "I have checked this" }).click();
+    await list.getByText("72 / 100").waitFor();
+    assert.deepEqual((await page.evaluate(() => window.posted)).at(-2).items, { feedback: 9 });
     await page.getByRole("complementary", { name: "Assessment of Reply Low" }).getByRole("button", { name: "Close" }).click();
   });
   await check("the calendar switch opens the head schedule", async () => {

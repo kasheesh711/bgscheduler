@@ -6,6 +6,7 @@ import { PAPER_LEVELS, SUBJECTS, type HiringConfig, type PaperLevel, type Subjec
 import type { Command, HiringData } from "./dashboard";
 import css from "./dashboard.module.css";
 
+export type ResultKind = "paper" | "mock";
 type FileKind = "question_paper" | "mark_scheme" | "paper_scan" | "mock_rubric";
 
 const postJson = async (url: string, body: unknown) => {
@@ -18,15 +19,15 @@ const postJson = async (url: string, body: unknown) => {
 };
 
 /** Uploads a scan, links it to the result, then marks it. The upload is saved first, so a failed mark keeps it. */
-export async function runMarking(candidateId: string, subject: Subject, file: File, reload: () => Promise<void>) {
-  const id = await uploadAssessmentFile({ kind: "paper_scan", subject, candidateId, file });
+export async function runMarking(kind: ResultKind, candidateId: string, subject: Subject, file: File, reload: () => Promise<void>) {
+  const id = await uploadAssessmentFile({ kind: kind === "paper" ? "paper_scan" : "mock_rubric", subject, candidateId, file });
   const ready = await postJson("/api/hiring", { action: "file_ready", id });
-  await markAgain(ready.resultId, reload);
+  await markAgain(kind, ready.resultId, reload);
 }
 
-export async function markAgain(id: string, reload: () => Promise<void>) {
+export async function markAgain(kind: ResultKind, id: string, reload: () => Promise<void>) {
   try {
-    const value = await postJson("/api/hiring/marking", { kind: "paper", id });
+    const value = await postJson("/api/hiring/marking", { kind, id });
     if (value.error) throw new Error(value.error);
   } finally {
     await reload().catch(() => undefined);
