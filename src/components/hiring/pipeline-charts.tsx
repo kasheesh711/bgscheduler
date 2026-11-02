@@ -1,7 +1,9 @@
 "use client";
 
-import { type buildInsights, RESULTS, STAGE_LABELS, type CriterionResult } from "@/lib/hiring/insights";
+import { averageValues, type buildInsights, RESULTS, STAGE_LABELS, type CriterionResult } from "@/lib/hiring/insights";
+import type { PreScreenState } from "@/lib/hiring/status";
 import type { CandidateFilter } from "./dashboard";
+import { Pentagon } from "./pentagon";
 import css from "./dashboard.module.css";
 
 export type Insights = ReturnType<typeof buildInsights>;
@@ -23,6 +25,15 @@ export const RESULT_CLASS: Record<CriterionResult, string> = {
   partial: css.resultPartial,
   not_met: css.resultNotMet,
   unknown: css.resultUnknown,
+};
+export const PILL_CLASS: Record<PreScreenState, string> = {
+  "Not sent": css.pillNone,
+  Queued: css.pillQueued,
+  Sent: css.pillSent,
+  Reminded: css.pillReminded,
+  Replied: css.pillReplied,
+  "No reply": css.pillNoReply,
+  "Earlier contact": css.pillNoReply,
 };
 const percent = (part: number, whole: number) => (whole ? Math.round((part / whole) * 100) : 0);
 const round = (value: number) => Math.round(value * 10) / 10;
@@ -232,6 +243,32 @@ export function EvidenceChart({ insights: i }: { insights: Insights }) {
   );
 }
 
+export function AveragePentagon({
+  candidates,
+}: {
+  candidates: Parameters<typeof averageValues>[0];
+}) {
+  const values = averageValues(candidates);
+  const scored = candidates.filter((c) => c.profileAssessment).length;
+  const count = `${scored} scored candidate${scored === 1 ? "" : "s"} in this filter`;
+  return (
+    <section className={`${css.panel} ${css.pentagonPanel}`}>
+      <div>
+        <h2 className={css.panelTitle}>Pipeline average</h2>
+        <p className={css.panelLede}>{scored ? count : "No scored candidates in this filter"}</p>
+      </div>
+      {scored > 0 && (
+        <Pentagon
+          size={290}
+          title={`Average DSCTE pentagon for ${count}`}
+          shapes={[{ label: "Average", values, tone: "profile" }]}
+          labels={Object.values(CRITERION_LABELS).map((name, i) => ({ name, value: `${Math.round(values[i] * 100)}%` }))}
+        />
+      )}
+    </section>
+  );
+}
+
 export function SubjectChart({
   insights: i,
   filter,
@@ -247,7 +284,7 @@ export function SubjectChart({
       <h2 className={css.panelTitle}>Subject supply</h2>
       <p className={css.panelLede}>
         {i.uncoveredSubjects
-          ? `${i.uncoveredSubjects} subjects have no interviewer`
+          ? `${i.uncoveredSubjects} subject${i.uncoveredSubjects === 1 ? " has" : "s have"} no interviewer`
           : "Every subject has an interviewer"}
       </p>
       <div className={css.subjectRows}>
@@ -260,12 +297,17 @@ export function SubjectChart({
             title={`${row.candidates} active, ${row.passed} paper passed. Interviewers: ${row.interviewers.join(", ") || "none"}`}
             onClick={() => setFilter({ ...filter, subject: filter.subject === row.subject ? null : row.subject })}
           >
-            <span className={css.subjectName}>{row.subject}</span>
+            <span className={css.subjectLabel}>
+              <span className={css.subjectName}>{row.subject}</span>
+              {/* Text, not only colour, so it shows for colour-blind users. */}
+              {!row.interviewers.length && (
+                <span className={css.subjectTag} title="No interviewer for this subject">No head</span>
+              )}
+            </span>
             <span className={css.subjectTrack}>
               <span style={{ width: `${(row.candidates / max) * 100}%` }} />
             </span>
             <span className={css.num}>{row.candidates}</span>
-            {!row.interviewers.length && <span className={css.warnWord}>No interviewer</span>}
           </button>
         ))}
       </div>

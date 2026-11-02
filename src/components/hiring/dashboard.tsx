@@ -5,10 +5,11 @@ import { Instrument_Serif } from "next/font/google";
 import { signIn } from "next-auth/react";
 import { GOOGLE_SCOPES, type HiringConfig, type Stage, type Subject } from "@/lib/hiring/model";
 import { buildInsights, readyToInvite } from "@/lib/hiring/insights";
+import { candidateExtras } from "@/lib/hiring/status";
 import type { dashboard } from "@/lib/hiring/service";
 import { CandidateInspector } from "./candidate-inspector";
-import { CandidateTable } from "./candidate-table";
-import { EvidenceChart, KpiStrip, ScoreChart, StageChart, SubjectChart } from "./pipeline-charts";
+import { CandidateTable, matchesFilter } from "./candidate-table";
+import { AveragePentagon, EvidenceChart, KpiStrip, ScoreChart, StageChart, SubjectChart } from "./pipeline-charts";
 import { OperationsRail } from "./operations-rail";
 import { SetupPanel } from "./setup-panel";
 import css from "./dashboard.module.css";
@@ -25,13 +26,15 @@ export type HiringData = Awaited<ReturnType<typeof dashboard>> & {
   google: { connected: boolean; email: string; lastError: string | null };
 };
 export type HiringCandidate = HiringData["candidates"][number];
+export type PreScreenFilter = "all" | "Queued" | "Sent" | "Replied" | "No reply" | "Visit booked";
 export type CandidateFilter = {
   stage: Stage | "all" | "ready";
+  prescreen: PreScreenFilter;
   bucket: number | null;
   subject: Subject | null;
 };
 export type Command = (body: unknown) => Promise<boolean>;
-export const NO_FILTER: CandidateFilter = { stage: "all", bucket: null, subject: null };
+export const NO_FILTER: CandidateFilter = { stage: "all", prescreen: "all", bucket: null, subject: null };
 
 export function HiringDashboard() {
   const [data, setData] = useState<HiringData | null>(null);
@@ -117,6 +120,14 @@ export function HiringDashboard() {
       ),
     [data],
   );
+  const extras = useMemo(
+    () => (data ? candidateExtras(data.candidates, data.outbox, data.bookings, ready) : new Map()),
+    [data, ready],
+  );
+  const shown = useMemo(
+    () => data?.candidates.filter((c) => matchesFilter(c, filter, ready, extras)) ?? [],
+    [data, filter, ready, extras],
+  );
   const candidate = data?.candidates.find((c) => c.id === selected);
 
   return (
@@ -195,11 +206,13 @@ export function HiringDashboard() {
               />
               <EvidenceChart insights={insights} />
               <SubjectChart insights={insights} filter={filter} setFilter={setFilter} />
+              <AveragePentagon candidates={shown} />
             </div>
             <CandidateTable
               candidates={data.candidates}
               insights={insights}
               ready={ready}
+              extras={extras}
               weights={data.config.profileWeights}
               threshold={data.config.profileThreshold}
               filter={filter}
@@ -212,6 +225,7 @@ export function HiringDashboard() {
             <CandidateInspector
               key={candidate.id}
               candidate={candidate}
+              extras={extras.get(candidate.id)}
               seekJobId={data.config.seekJobId}
               weights={data.config.profileWeights}
               busy={busy}

@@ -104,6 +104,7 @@
 .panel { display: flex; flex-direction: column; min-width: 0; padding: 10px 24px 12px; border-top: 1px solid var(--line); }
 .panelTitle { font-size: 14px; font-weight: 500; }
 .panelLede { margin-bottom: 8px; color: var(--muted); }
+.pentagonPanel .panelLede { margin-bottom: 0; }
 .num { color: var(--ink); font-variant-numeric: tabular-nums; text-align: right; }
 .legend { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; margin-top: auto; padding-top: 6px; color: var(--muted); font-size: 12px; }
 .legend span { display: inline-flex; align-items: center; gap: 4px; }
@@ -131,6 +132,18 @@
 .thresholdLine span { position: absolute; top: -2px; left: 4px; color: var(--accent-text); font-size: 12px; font-weight: 500; }
 .axis { display: flex; justify-content: space-between; padding-top: 3px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 
+.pentagon { flex: none; max-width: 100%; height: auto; }
+.pentagonRing { fill: none; stroke: var(--stone); }
+.pentagonRingInner { fill: none; stroke: var(--line); }
+.pentagonProfile { fill: var(--stone-dark); fill-opacity: 0.3; stroke: var(--stone-dark); stroke-width: 1.5; }
+.pentagonPre { fill: var(--accent-text); fill-opacity: 0.12; stroke: var(--accent-text); stroke-width: 2; }
+.pentagonName { fill: var(--support); font-size: 13px; font-weight: 600; }
+.pentagonValue { fill: var(--muted); font-size: 12px; }
+/* A whole row below the full dashboard: a narrow column would shrink the chart until its text is unreadable. */
+.pentagonPanel { grid-column: 1 / -1; flex-flow: row wrap; align-items: center; justify-content: flex-start; gap: 8px 24px; }
+/* On a very narrow phone the chart keeps its full size (12px text) by using the panel's side padding. */
+@media (max-width: 399px) { .panel.pentagonPanel { padding-inline: 8px; } }
+
 .evidenceRows { display: grid; gap: 6px; }
 .evidenceRow { display: grid; grid-template-columns: 72px 1fr 34px; align-items: center; gap: 8px; }
 .stack { display: flex; gap: 2px; height: 12px; }
@@ -143,10 +156,11 @@
 .resultUnknown { background: var(--stone); }
 
 .subjectRows { flex: 1; min-height: 0; max-height: 180px; overflow-y: auto; }
-.surface .subjectRow { display: grid; grid-template-columns: 112px 1fr 24px; align-items: center; gap: 8px; width: 100%; min-height: 20px; border-radius: 4px; text-align: left; transition: background-color 150ms; }
+.surface .subjectRow { display: grid; grid-template-columns: 160px 1fr 24px; align-items: center; gap: 8px; width: 100%; min-height: 20px; border-radius: 4px; text-align: left; transition: background-color 150ms; }
 .surface .subjectRow:hover, .surface .subjectRow[aria-pressed="true"] { background: var(--tint); }
-.subjectRow .warnWord { grid-column: 1 / -1; font-size: 12px; }
-.subjectName { overflow: hidden; color: var(--support); text-overflow: ellipsis; white-space: nowrap; }
+.subjectLabel { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.subjectTag { flex: none; padding: 0 5px; border-radius: 4px; background: #fbeccd; color: var(--warn); font-size: 11px; font-weight: 500; white-space: nowrap; }
+.subjectName { min-width: 0; overflow: hidden; color: var(--support); text-overflow: ellipsis; white-space: nowrap; }
 .subjectTrack { display: block; height: 8px; }
 .subjectTrack span { display: block; height: 100%; min-width: 1px; border-radius: 0 3px 3px 0; background: var(--ink); }
 
@@ -274,9 +288,11 @@
 .inspectorHeading { display: flex; justify-content: space-between; font-size: 14px; font-weight: 500; }
 .inspectorText { margin-top: 4px; color: var(--support); }
 .criterion { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 4px; }
-.criterion summary { display: grid; grid-template-columns: 9px 1fr auto 40px; align-items: center; gap: 8px; cursor: pointer; }
+.criterion summary { display: grid; grid-template-columns: 9px 80px 1fr auto 40px; align-items: center; gap: 8px; cursor: pointer; }
 .criterion summary i { width: 9px; height: 9px; border-radius: 999px; }
-.criterionResult { color: var(--muted); }
+.criterion summary .inspectorText { margin-top: 0; }
+.criterion summary .num { grid-column: 5; }
+.criterionResult { grid-column: 4; color: var(--muted); }
 .criterion blockquote { margin-top: 4px; padding-left: 10px; border-left: 2px solid var(--line); color: var(--muted); overflow-wrap: anywhere; }
 .sourceLink { margin-right: 12px; color: var(--accent-text); text-decoration: underline; }
 .sourceText { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
@@ -351,7 +367,7 @@
 @media (min-width: 1180px) and (min-height: 720px) {
   .surface { overflow: hidden; }
   .layout { flex: 1; flex-direction: row; min-height: 0; }
-  .main { flex: 1; min-height: 0; }
+  .main { flex: 1; min-height: 0; overflow-y: auto; }
   .setup { flex: 1; min-height: 0; overflow-y: auto; }
   .rail, .inspector {
     position: static;
@@ -363,13 +379,19 @@
     box-shadow: none;
   }
   .inspector { overflow: hidden; }
-  .charts { grid-template-columns: 1.15fr 1.1fr 1.05fr 1fr; }
+  /* Stage, Score, Evidence on row 1. Row 2: Subject supply (two columns of rows) beside the average. */
+  /* The third column is wide enough for the average at its full size, so its text stays readable. */
+  .charts { grid-template-columns: repeat(2, minmax(0, 1fr)) 330px; }
   .panel { padding: 8px 16px 10px; border-top: 0; }
-  .panel:first-child { padding-left: 24px; }
-  .charts .panel:nth-child(n + 2) { border-left: 1px solid var(--line); }
-  .subjectRows { max-height: 168px; }
+  .charts .panel { border-left: 1px solid var(--line); }
+  .charts .panel:is(:nth-child(1), :nth-child(4)) { padding-left: 24px; border-left: 0; }
+  .charts .panel:nth-child(n + 4) { border-top: 1px solid var(--line); }
+  .charts .panel:nth-child(4) { grid-column: span 2; }
+  .charts .panel.pentagonPanel { grid-column: span 1; flex-direction: column; align-items: flex-start; gap: 4px; border-left: 1px solid var(--line); }
+  .subjectRows { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; align-content: start; max-height: none; overflow: visible; }
   .kpis { padding: 10px 24px; }
-  .tableSection { flex: 1; min-height: 0; }
+  /* The table always gets 480px; the column scrolls when the charts leave less. */
+  .tableSection { flex: 1 0 480px; min-height: 0; }
   .tableScroll { flex: 1; min-height: 0; max-height: none; }
   .setupGrid { grid-template-columns: 340px 340px minmax(0, 1fr); }
   .setupSection + .setupSection { border-left: 1px solid var(--line); }
@@ -377,6 +399,30 @@
   .setupFull { border-left: 0; }
   .interviewerRow { grid-template-columns: minmax(120px, 1fr) minmax(160px, 1.3fr) auto; }
 }
+/* Wide enough for the average beside the other charts, so Subject supply gets a full row and the table starts higher. */
+@media (min-width: 1360px) and (min-height: 720px) {
+  .charts { grid-template-columns: repeat(3, minmax(0, 1fr)) 330px; }
+  .charts .panel:nth-child(4) { grid-column: 1 / -1; grid-row: 2; }
+  .charts .panel.pentagonPanel { grid-column: 4; grid-row: 1; border-top: 0; }
+  .subjectRows { grid-template-columns: repeat(4, 1fr); }
+}
 @media (prefers-reduced-motion: reduce) {
   .surface * { transition: none !important; }
 }
+
+/* Pre-screen status pills */
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.pillReplied { background: #dcefe3; color: var(--good); }
+.pillSent { background: var(--tint); color: var(--support); }
+.pillReminded { background: #fbeccd; color: var(--warn); }
+.pillQueued { background: #fff; color: var(--support); box-shadow: inset 0 0 0 1px var(--stone-dark); }
+.pillNoReply { background: #ece9e4; color: #5f5f5f; }
+.pillNone { padding-left: 0; color: var(--muted); font-weight: 400; }
+.pillNote { display: block; color: var(--muted); font-size: 12px; }
+/* The note is the widest thing in the row, so this column sizes to it instead of the 150px cap. */
+.table td.preCell { max-width: none; }
+.stagePill { display: table; margin-top: 2px; }
+@media (min-width: 720px) { .stagePill { display: none; } }
+.answers div { padding: 5px 0; border-top: 1px solid var(--line); }
+.answers dt { color: var(--muted); font-size: 12px; }
+.answers dd { text-align: left; overflow-wrap: anywhere; white-space: pre-wrap; }

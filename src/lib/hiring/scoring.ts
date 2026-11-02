@@ -42,7 +42,13 @@ export const assessmentSchema = z
     summary: z.string().max(3000),
   })
   .strict();
-export type Assessment = z.infer<typeof assessmentSchema>;
+type Parsed = z.infer<typeof assessmentSchema>;
+// The short lines are not in the zod schema yet, so the model's JSON schema cannot ask for them.
+// The type is wider so the panel can read them from stored rows that have them.
+export type Assessment = Omit<Parsed, "criteria"> & {
+  criteria: (Parsed["criteria"][number] & { brief?: string })[];
+  briefSummary?: string;
+};
 const normal = (value: string) =>
   value.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
 export function validateAssessment(value: unknown, source: string): Assessment {

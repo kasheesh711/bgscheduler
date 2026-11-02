@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_WEIGHTS, type Stage } from "../model";
-import { buildInsights, readyToInvite } from "../insights";
+import { buildInsights, criterionValues, readyToInvite } from "../insights";
 import type { Assessment } from "../scoring";
 
 const assessment = (
@@ -139,5 +139,18 @@ describe("buildInsights", () => {
     const result = buildInsights({ ...empty, candidates: [] }, now);
     expect(result.uncoveredSubjects).toBe(17);
     expect(result.subjects.find((s) => s.subject === "Physics")?.interviewers).toEqual(["Peat"]);
+  });
+});
+
+describe("criterionValues", () => {
+  it("maps results to values in DSCTE order", () => {
+    const a = assessment("met");
+    const set = (id: string, result: Assessment["criteria"][number]["result"]) => {
+      a.criteria.find((c) => c.id === id)!.result = result;
+    };
+    set("subject", "partial");
+    set("curriculum", "unknown");
+    set("teaching", "not_met");
+    expect(criterionValues(a)).toEqual([1, 0.5, 0, 0, 1]);
   });
 });

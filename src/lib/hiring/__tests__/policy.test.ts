@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   businessDates,
   configSchema,
@@ -14,6 +15,7 @@ import {
   preScreenResult,
   profileCanAdvance,
   profileScore,
+  assessmentSchema,
   validateAssessment,
   type Assessment,
 } from "../scoring";
@@ -133,6 +135,10 @@ describe("hiring decision boundaries", () => {
         profileWeights: { ...DEFAULT_WEIGHTS, english: 19 },
       }).success,
     ).toBe(false);
+  });
+  it("keeps the short display lines out of the model's JSON schema, and stored rows without them still parse", () => {
+    expect(JSON.stringify(z.toJSONSchema(assessmentSchema, { target: "draft-07" }))).not.toMatch(/brief/i);
+    expect(assessmentSchema.safeParse(assessment).success).toBe(true);
   });
   it("requires exact source evidence and rejects duplicate criteria", () => {
     const source = "degree subject teaching english Mathematics";
