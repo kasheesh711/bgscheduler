@@ -217,7 +217,8 @@ export async function assessCandidates(
             await formSentAt(tx, candidate.id),
             current.config,
           );
-          if (check.kind === "hold") await toReview([check.reason]);
+          // A changed score is held by the queue. A person's change must not also move the stage.
+          if (check.kind === "hold" && !fresh.preScreenOverride) await toReview([check.reason]);
         }
       } else if (fresh.stage === "new") {
         const gate = profileGate(

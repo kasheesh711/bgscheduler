@@ -62,7 +62,14 @@ export async function readLimitUsage(db: Database, funnel: Funnel, now: Date): P
       perWeek: sql<number>`(count(*) filter (where ${since(bangkokWeekStart(now))}))::int`,
     })
     .from(o)
-    .where(and(ne(o.status, "cancelled"), funnel === "pre_screen" ? isForm : isOnsiteInvite));
+    .where(
+      and(
+        ne(o.status, "cancelled"),
+        funnel === "pre_screen" ? isForm : isOnsiteInvite,
+        // A resend goes to someone who already holds a place.
+        sql`coalesce(${o.payload}->>'resend', '') <> 'true'`,
+      ),
+    );
   const usage: LimitUsage = { ...sends, waiting: 0, unbooked: 0, bySubject: {} };
   const place = (subject: Subject | null) => {
     if (subject) usage.bySubject[subject] = (usage.bySubject[subject] ?? 0) + 1;
@@ -160,6 +167,8 @@ export function replyCheck(
   const hold = (reason: string) => ({ kind: "hold" as const, reason });
   const { preScreen: pre, preScreenAssessment: assessment, workRightsAnswer: answer } = candidate;
   if (!pre || !assessment) return { kind: "wait" };
+  // In either direction: after a person changes the score, only the Invite button can send the visit email.
+  if (candidate.preScreenOverride) return hold("A person changed this score. A person decides.");
   const { stops } = hardStops(pre, answer, normalizeSubjects(pre.subjects), config);
   if (stops.length) return hold(stops.join(" "));
   if (!supportedVisitSubjects(pre, answer, assessment, config).length)

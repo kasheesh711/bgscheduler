@@ -384,6 +384,34 @@ describe("usage counts", () => {
   });
 });
 
+describe("a person's score", () => {
+  it("takes a passing reply out of the automatic visit queue, and a raised score does not bring one in", async () => {
+    const form = (id: string) => ({ key: `${id}:pre-screen`, candidateId: id, kind: "email" as const, status: "sent" as const, sentAt: after(-1), payload: {} });
+    const replied = { stage: "pre_screen" as const, preScreen: pre, preScreenAssessment: six() as never, preScreenRepliedAt: after(0) };
+    const row = await seed(replied);
+    await db.insert(s.hiringOutbox).values(form(row.id));
+    expect((await onsiteQueue(db, await settingsConfig())).map((e) => e.id)).toEqual([row.id]);
+    await db.update(s.hiringCandidates).set({ preScreenOverride: { score: 10, reason: "Weak", by: "o", at: "" } }).where(eq(s.hiringCandidates.id, row.id));
+    expect(await onsiteQueue(db, await settingsConfig())).toEqual([]);
+    expect(await releaseQueues(db)).toEqual({ preScreen: 0, onsite: 0 });
+    await db.update(s.hiringCandidates).set({ preScreenOverride: { score: 99, reason: "Strong", by: "o", at: "" } }).where(eq(s.hiringCandidates.id, row.id));
+    expect(await onsiteQueue(db, await settingsConfig())).toEqual([]);
+    expect(await releaseQueues(db)).toEqual({ preScreen: 0, onsite: 0 });
+  });
+  it("the worker cycle leaves a changed score at its stage", async () => {
+    const row = await seed({
+      stage: "pre_screen",
+      preScreen: pre,
+      preScreenAssessment: six() as never,
+      preScreenRepliedAt: after(0),
+      preScreenOverride: { score: 99, reason: "Strong", by: "o", at: "" },
+    });
+    await assessCandidates(db, await settingsConfig(), async () => six());
+    const [fresh] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, row.id));
+    expect(fresh.stage).toBe("pre_screen");
+  });
+});
+
 describe("manual queue order", () => {
   it("sends in the dragged order, and the drag itself sends nothing and changes no stage or revision", async () => {
     await setConfig({ preScreenLimits: { perDay: 1, perWeek: 15, waiting: 15, perSubject: 3 } });

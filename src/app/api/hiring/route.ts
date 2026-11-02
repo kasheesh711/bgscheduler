@@ -4,7 +4,7 @@ import { requireHiringAdmin } from "@/lib/hiring/access";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
 import { configSchema, localDate, subjectSchema } from "@/lib/hiring/model";
 import { headWeek } from "@/lib/hiring/head-schedule";
-import { candidateById, dashboard, reviewCandidate, saveHeadDays, saveSettings, settings } from "@/lib/hiring/service";
+import { candidateById, changePreScreenScore, dashboard, reviewCandidate, saveHeadDays, saveSettings, settings } from "@/lib/hiring/service";
 import { moveInQueue, resetQueueOrder } from "@/lib/hiring/queue";
 import { deliverBookingMessages } from "@/lib/hiring/worker";
 import { getDb } from "@/lib/db";
@@ -42,6 +42,15 @@ const command = z.discriminatedUnion("action", [
     })
     .strict(),
   z.object({ action: z.literal("queue_reset") }).strict(),
+  z
+    .object({
+      action: z.literal("pre_screen_score"),
+      id: z.uuid(),
+      revision: z.number().int().nonnegative(),
+      score: z.number().min(0).max(100),
+      reason: z.string().trim().min(5).max(2000),
+    })
+    .strict(),
   z
     .object({
       action: z.enum(["advance", "paper_pass", "stop", "invite_onsite", "send_new_link", "cancel_visit", "mark_no_show"]),
@@ -107,6 +116,10 @@ export async function POST(request: Request) {
     }
     if (input.action === "queue_reset") {
       await resetQueueOrder(actor, getDb());
+      return NextResponse.json({ ok: true });
+    }
+    if (input.action === "pre_screen_score") {
+      await changePreScreenScore(input.id, input, actor);
       return NextResponse.json({ ok: true });
     }
     await reviewCandidate(input.id, input, actor);

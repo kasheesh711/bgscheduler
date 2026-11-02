@@ -370,6 +370,8 @@ export async function inviteToVisit(
   config: HiringConfig,
   key: string,
   now = new Date(),
+  // A repeat to someone already invited. They hold a place already, so the limits do not stop it.
+  resend = false,
 ) {
   await lockQueue(tx);
   const [c] = await tx
@@ -378,7 +380,7 @@ export async function inviteToVisit(
     .where(eq(s.hiringCandidates.id, candidate.id))
     .for("update");
   if (!c) throw new HiringError(404, "Candidate not found.");
-  if (!INVITABLE.includes(c.stage))
+  if (!INVITABLE.includes(c.stage) && !(resend && c.stage === "onsite_invited"))
     throw new HiringError(409, "This candidate cannot get an onsite invitation at this stage.");
   if (!c.email)
     throw new HiringError(409, "A verified application email is required.");
@@ -400,7 +402,7 @@ export async function inviteToVisit(
   );
   if (!subject)
     throw new HiringError(409, `No head is set for the subject: ${supported.join(", ")}.`);
-  const limit = blockingLimit("onsite", subject, await readLimitUsage(tx, "onsite", now), config);
+  const limit = resend ? null : blockingLimit("onsite", subject, await readLimitUsage(tx, "onsite", now), config);
   if (limit)
     throw new HiringError(409, `The onsite limit "${LIMIT_TEXT[limit]}" is full. Raise the number to send more.`);
   const expires = new Date(
@@ -418,6 +420,7 @@ export async function inviteToVisit(
       workflowStage: "onsite_invited",
       // The follow-up reminder for this link uses this number, so a later change to the row cannot send a second one.
       revision,
+      ...(resend ? { resend: true } : {}),
       text: `Dear ${c.name},\n\nThank you for your pre-screening response. We invite you to one onsite visit for ${subject}. The visit takes 3 hours: a 2-hour exam, then a 1-hour mock teaching session.\n\nPlease book your visit here:\n${visitLink(c.id, expires)}\n\nThis link closes after ${config.onsiteFollowUp.expireDays} days. For the mock teaching session, prepare one IGCSE topic of your choice. The interviewer will also select a topic, which may be from another level. You may use teaching materials or tools.\n\nLocation: ${config.location}\n\nFor questions, add our LINE Official Account at https://lin.ee/OjMHF41.\n\nBeGifted Education`,
     },
   });
@@ -529,6 +532,19 @@ export async function dashboard(db: Database = getDb()) {
   }
   const enrollments = await db.select().from(s.tutorAttendanceEnrollments);
   const schedules = await db.select().from(s.tutorAttendanceSchedules);
+  const inviteOutbox = await db
+    .select({
+      key: s.hiringOutbox.key,
+      candidateId: s.hiringOutbox.candidateId,
+      status: s.hiringOutbox.status,
+      error: s.hiringOutbox.error,
+      sentAt: s.hiringOutbox.sentAt,
+    })
+    .from(s.hiringOutbox)
+    .where(
+      sql`${s.hiringOutbox.key} = ${s.hiringOutbox.candidateId}::text || ':pre-screen' or ${s.hiringOutbox.key} like ${s.hiringOutbox.candidateId}::text || ':visit-invite%'`,
+    )
+    .orderBy(desc(s.hiringOutbox.createdAt));
   return {
     config,
     // False until the first save: the interviewers shown then are suggestions, not stored heads.
@@ -589,6 +605,8 @@ export async function dashboard(db: Database = getDb()) {
     bookings,
     visitClashes: clashes,
     outbox,
+    // The capped list above holds every kind of row, so the pre-screen screen reads its proof from this full read.
+    inviteOutbox,
     audit: auditRows,
     tutors: contacts.map((c) => ({
       canonicalKey: c.canonicalKey,
@@ -1135,6 +1153,57 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
     return exam;
   });
 }
+const WAITING_INVITE = ["pending", "failed", "uncertain"] as const;
+const isVisitStageRow = sql`${s.hiringOutbox.payload}->>'workflowStage' = 'onsite_invited'`;
+/**
+ * A new link replaces every unsent invitation and reminder of this candidate. They hold the old link, and the worker would
+ * otherwise send them too. A row the worker holds right now may be leaving, so that refuses.
+ */
+async function cancelWaitingInvites(tx: Database, id: string) {
+  const rows = await tx
+    .select({ status: s.hiringOutbox.status })
+    .from(s.hiringOutbox)
+    .where(and(eq(s.hiringOutbox.candidateId, id), isVisitStageRow));
+  if (rows.some((row) => row.status === "processing"))
+    throw new HiringError(409, "The invitation is being sent right now. Wait a minute and check before sending a new link.");
+  await tx
+    .update(s.hiringOutbox)
+    .set({ status: "cancelled" })
+    .where(and(eq(s.hiringOutbox.candidateId, id), isVisitStageRow, inArray(s.hiringOutbox.status, [...WAITING_INVITE])));
+}
+/**
+ * A person's score beside the AI's. It sends nothing and changes no stage. The queue then holds the reply for a person.
+ * It raises the revision, so another open panel cannot invite on the old score.
+ */
+export async function changePreScreenScore(
+  id: string,
+  input: { revision: number; score: number; reason: string },
+  actor: string,
+  db: Database = getDb(),
+  now = new Date(),
+) {
+  if (input.reason.trim().length < 5) throw new HiringError(400, "Write a reason of at least 5 characters.");
+  return withDatabaseTransaction(db, async (tx) => {
+    await tx.execute(sql`select id from hiring_candidates where id=${id} for update`);
+    const c = await candidateById(tx, id);
+    if (c.revision !== input.revision) throw new HiringError(409, "This candidate changed. Refresh the page.");
+    if (!c.preScreen || !c.preScreenAssessment)
+      throw new HiringError(409, "This candidate has no scored pre-screen response.");
+    const waiting = await tx
+      .select({ id: s.hiringOutbox.id })
+      .from(s.hiringOutbox)
+      .where(and(eq(s.hiringOutbox.candidateId, id), isVisitStageRow, inArray(s.hiringOutbox.status, [...WAITING_INVITE, "processing"])));
+    // The score change promises no email follows, and this one would. Stop cancels it.
+    if (waiting.length) throw new HiringError(409, "A visit email is waiting to send. Stop this candidate first if it must not go.");
+    const before = c.preScreenOverride?.score ?? null;
+    const reason = input.reason.trim();
+    await tx
+      .update(s.hiringCandidates)
+      .set({ preScreenOverride: { score: input.score, reason, by: actor, at: now.toISOString() }, revision: c.revision + 1 })
+      .where(eq(s.hiringCandidates.id, id));
+    await audit(tx, actor, "pre-screen-score", id, { score: input.score, before, reason });
+  });
+}
 export async function reviewCandidate(
   id: string,
   input: {
@@ -1166,15 +1235,19 @@ export async function reviewCandidate(
       input.action === "send_new_link" ||
       (input.action === "advance" && c.preScreen)
     ) {
-      if (input.action === "send_new_link" && c.stage !== "no_booking")
-        throw new HiringError(409, "A new link can be sent only after a cancel, a no-show or No booking.");
+      const resend = input.action === "send_new_link" && c.stage === "onsite_invited";
+      if (input.action === "send_new_link" && c.stage !== "no_booking" && !resend)
+        throw new HiringError(409, "A new link can be sent only to someone invited and not booked, or after a cancel, a no-show or No booking.");
+      if (resend && !config.deliveryEnabled)
+        throw new HiringError(409, "Messages are off, so a new link cannot leave. The old link stays valid.");
+      if (input.action === "send_new_link") await cancelWaitingInvites(tx, id);
       // A first invitation has one key, shared with the queue, so only send_new_link can ever send another.
       // A stopped candidate's invitation that was cancelled before it left is not a repeat. One that may have left still refuses.
       const earlier = c.stage === "stopped" ? await inviteRows(tx, id) : [];
       const unsent = earlier.length > 0 && earlier.every((r) => r.status === "cancelled");
       const key =
         input.action === "send_new_link" || unsent ? `${id}:visit-invite:${c.revision + 1}` : `${id}:visit-invite`;
-      const subject = await inviteToVisit(tx, c, config, key, now);
+      const subject = await inviteToVisit(tx, c, config, key, now, resend);
       await tx.update(s.hiringCandidates).set({ reviewNote: input.reason }).where(eq(s.hiringCandidates.id, id));
       detail = { subject, score: preScreenTotal(c, config), passScore: config.preScreenThreshold };
     } else if (input.action === "cancel_visit" || input.action === "mark_no_show") {
