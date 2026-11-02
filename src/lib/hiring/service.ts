@@ -442,6 +442,8 @@ export async function inviteToVisit(
     .where(eq(s.hiringCandidates.id, c.id));
   return subject;
 }
+/** Longer than the route's 300 seconds, so a live run is never taken for a dead one. */
+export const MARKING_STUCK_AFTER_MS = 6 * 60_000;
 /**
  * Results, the paper library and this month's marking cost. The AI's first answer stays on the server.
  * shortcut: full marks go in every dashboard read. Fetch them on panel open if papers near 400, the 4.5 MB response limit.
@@ -472,7 +474,7 @@ async function assessmentData(db: Database, now: Date) {
     .from(s.hiringAudit)
     .where(and(eq(s.hiringAudit.action, "assessment-ai-call"), gte(s.hiringAudit.createdAt, monthStart)));
   return {
-    papers: papers.map((row) => ({ ...row, aiMarks: undefined })),
+    papers: papers.map((row) => ({ ...row, aiMarks: undefined, stuck: row.status === "marking" && now.getTime() - row.updatedAt.getTime() > MARKING_STUCK_AFTER_MS })),
     mocks: mocks.map((row) => ({ ...row, aiRubric: undefined })),
     decisions,
     library,

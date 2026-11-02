@@ -3,6 +3,7 @@ import { after, NextResponse } from "next/server";
 import { requireHiringAdmin } from "@/lib/hiring/access";
 import { createFileIntent, finishFile } from "@/lib/hiring/assessment-files";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
+import { changePaperMarks, clearResultCheck } from "@/lib/hiring/marking";
 import { configSchema, localDate, subjectSchema } from "@/lib/hiring/model";
 import { headWeek } from "@/lib/hiring/head-schedule";
 import { candidateById, changePreScreenScore, dashboard, reviewCandidate, saveHeadDays, saveSettings, settings } from "@/lib/hiring/service";
@@ -54,6 +55,16 @@ const command = z.discriminatedUnion("action", [
     })
     .strict(),
   z.object({ action: z.literal("file_ready"), id: z.uuid() }).strict(),
+  z
+    .object({
+      action: z.literal("paper_edit"),
+      id: z.uuid(),
+      updatedAt: z.iso.datetime(),
+      marks: z.record(z.string().max(60), z.number().min(0).nullable()),
+      comment: z.string().trim().max(4000),
+    })
+    .strict(),
+  z.object({ action: z.literal("result_check"), kind: z.enum(["paper", "mock"]), id: z.uuid() }).strict(),
   z
     .object({
       action: z.literal("pre_screen_score"),
@@ -134,7 +145,15 @@ export async function POST(request: Request) {
       return NextResponse.json(await createFileIntent(input, actor, getDb()));
     }
     if (input.action === "file_ready") {
-      await finishFile(input.id, actor, getDb());
+      const file = await finishFile(input.id, actor, getDb());
+      return NextResponse.json({ ok: true, resultId: file.resultId });
+    }
+    if (input.action === "paper_edit") {
+      await changePaperMarks(input.id, input, actor, getDb());
+      return NextResponse.json({ ok: true });
+    }
+    if (input.action === "result_check") {
+      await clearResultCheck(input.kind, input.id, actor, getDb());
       return NextResponse.json({ ok: true });
     }
     if (input.action === "pre_screen_score") {

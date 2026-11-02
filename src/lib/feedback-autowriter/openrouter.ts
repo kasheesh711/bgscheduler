@@ -18,6 +18,10 @@ export interface OpenRouterUsage {
   costUsd: number | null;
 }
 
+export type OpenRouterContentPart =
+  | { type: "text"; text: string }
+  | { type: "file"; file: { filename: string; file_data: string } };
+
 export type OpenRouterCallResult =
   | {
     ok: true;
@@ -140,7 +144,11 @@ export async function callOpenRouter(input: {
   apiKey: string;
   model: string;
   provider: OpenRouterProviderPreferences;
-  messages: Array<{ role: "system" | "user"; content: string }>;
+  messages: Array<{ role: "system" | "user"; content: string | OpenRouterContentPart[] }>;
+  /** OpenRouter plugins, such as the PDF file parser. */
+  plugins?: object[];
+  /** How the call is named in OpenRouter's activity list. */
+  title?: string;
   schemaName: string;
   schema: object;
   effort: "max" | "high" | "medium" | "low";
@@ -157,12 +165,13 @@ export async function callOpenRouter(input: {
       headers: {
         Authorization: `Bearer ${input.apiKey}`,
         "Content-Type": "application/json",
-        "X-Title": "BGScheduler feedback autowriter",
+        "X-Title": input.title ?? "BGScheduler feedback autowriter",
       },
       body: JSON.stringify({
         model: input.model,
         provider: input.provider,
         messages: input.messages,
+        ...(input.plugins ? { plugins: input.plugins } : {}),
         reasoning: { effort: input.effort },
         max_tokens: input.maxTokens,
         response_format: {

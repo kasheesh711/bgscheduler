@@ -83,6 +83,7 @@ export function checkPaperMarks(marks: PaperMarks) {
     if (!(q.max > 0)) problems.push(`Question ${q.id} has no maximum.`);
     if (q.marks !== null && (q.marks < 0 || q.marks > q.max)) problems.push(`Question ${q.id} has ${q.marks} marks of ${q.max}.`);
     if (q.marks === null && q.readable) problems.push(`Question ${q.id} has no mark, but it could be read.`);
+    if (!q.attempted && q.marks) problems.push(`Question ${q.id} was not tried, but it has ${q.marks} marks.`);
   }
   if (!marks.questions.length) problems.push("No questions were marked.");
   return problems;

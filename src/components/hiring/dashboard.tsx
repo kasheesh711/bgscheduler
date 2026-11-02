@@ -288,7 +288,7 @@ export function HiringDashboard() {
           <PreScreenScreen data={data} extras={extras} holds={holds} command={command} busy={busy} error={error} notice={notice} />
         </div>
         <div hidden={view !== "assessment"} className={css.viewPane}>
-          <AssessmentScreen data={data} onOpenRecord={openRecord} />
+          <AssessmentScreen data={data} onOpenRecord={openRecord} command={command} reload={() => load(true)} busy={busy} />
         </div>
         <div className={css.layout} hidden={view !== "overview"}>
           <div className={css.main}>
