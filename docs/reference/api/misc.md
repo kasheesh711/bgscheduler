@@ -351,7 +351,10 @@ Hiring routes sit outside the twelve endpoints above. The [feature page](../../f
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | GET | `/api/hiring` | admin with `/hiring` page scope | Dashboard, one candidate's profile text, or one head's week (by query) |
-| POST | `/api/hiring` | admin with `/hiring` page scope, same origin | Settings, head days and candidate actions |
+| POST | `/api/hiring` | admin with `/hiring` page scope, same origin | Settings, head days, candidate actions, queue moves, score changes, file steps, mark and rubric edits, checks, and decisions |
+| POST | `/api/hiring/uploads` | admin with `/hiring` page scope, same origin | Browser upload token for one assessment file path. No callback; the browser finishes with `file_ready` |
+| POST | `/api/hiring/marking` | admin with `/hiring` page scope, same origin | Runs the AI on one uploaded paper or mock rubric. `maxDuration` 300 |
+| GET | `/api/hiring/file/{id}` | admin with `/hiring` page scope | Streams a stored assessment PDF, with the same sandbox header as the resume route |
 | GET | `/api/hiring/resume/{id}` | admin with `/hiring` page scope | Streams a candidate's original résumé file |
 | GET, POST | `/api/hiring/book/{token}` | signed token | Candidate booking page data and booking, for all three token kinds |
 | GET, POST | `/api/internal/hiring-delivery` | cron secret (GET), signed worker request (POST) | Retry booking messages; deliver for the Mac worker |
