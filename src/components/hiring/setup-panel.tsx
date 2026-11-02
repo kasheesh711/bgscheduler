@@ -23,6 +23,7 @@ import {
   type LimitField,
 } from "@/lib/hiring/rules";
 import type { Command, HiringData } from "./dashboard";
+import { PaperLibrary, PassRules } from "./assessment-setup";
 import css from "./dashboard.module.css";
 
 const dayText = (date: string) =>
@@ -706,6 +707,8 @@ export function SetupPanel({
             Add verified university
           </button>
         </section>
+        <PassRules config={config} setConfig={setConfig} />
+        <PaperLibrary data={data} command={command} busy={busy} />
       </div>
     </div>
   );

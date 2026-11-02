@@ -852,8 +852,15 @@
     {
       "idx": 119,
       "version": "7",
-      "when": 1793577600000,
+      "when": 1793534400000,
       "tag": "0120_hiring_queue_and_score_change",
+      "breakpoints": true
+    },
+    {
+      "idx": 120,
+      "version": "7",
+      "when": 1793538000000,
+      "tag": "0121_hiring_assessment_results",
       "breakpoints": true
     }
   ]

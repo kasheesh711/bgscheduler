@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { after, NextResponse } from "next/server";
 import { requireHiringAdmin } from "@/lib/hiring/access";
+import { createFileIntent, finishFile } from "@/lib/hiring/assessment-files";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
 import { configSchema, localDate, subjectSchema } from "@/lib/hiring/model";
 import { headWeek } from "@/lib/hiring/head-schedule";
@@ -42,6 +43,17 @@ const command = z.discriminatedUnion("action", [
     })
     .strict(),
   z.object({ action: z.literal("queue_reset") }).strict(),
+  z
+    .object({
+      action: z.literal("file_intent"),
+      kind: z.enum(["question_paper", "mark_scheme", "paper_scan", "mock_rubric"]),
+      subject: subjectSchema.nullable(),
+      candidateId: z.uuid().nullable(),
+      name: z.string().trim().min(1).max(300),
+      size: z.number().int().positive(),
+    })
+    .strict(),
+  z.object({ action: z.literal("file_ready"), id: z.uuid() }).strict(),
   z
     .object({
       action: z.literal("pre_screen_score"),
@@ -116,6 +128,13 @@ export async function POST(request: Request) {
     }
     if (input.action === "queue_reset") {
       await resetQueueOrder(actor, getDb());
+      return NextResponse.json({ ok: true });
+    }
+    if (input.action === "file_intent") {
+      return NextResponse.json(await createFileIntent(input, actor, getDb()));
+    }
+    if (input.action === "file_ready") {
+      await finishFile(input.id, actor, getDb());
       return NextResponse.json({ ok: true });
     }
     if (input.action === "pre_screen_score") {

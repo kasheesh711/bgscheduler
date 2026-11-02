@@ -68,9 +68,21 @@ const payload = {
     { id: "o1", key: "d:pre-screen", candidateId: "d", kind: "email", status: "sent", error: null, sentAt: "2026-11-01T03:00:00Z", workflowStage: "pre_screen" },
   ],
   inviteOutbox: [] as unknown[],
+  papers: [] as unknown[], mocks: [] as unknown[], decisions: [] as unknown[], library: [] as unknown[], markingSpend: { usd: 0, complete: true },
   audit: [], tutors: [], google: { connected: true, email: "fixture@example.test", lastError: null },
 };
 payload.inviteOutbox = payload.outbox;
+const markQuestions = (level: string, marks: number[]) => marks.map((value, i) => ({ id: level[0] + (i + 1), level, marks: value, max: 10, reason: "Correct method", attempted: true, readable: true }));
+const visitFor = (candidateId: string, visitId: string, startIso: string, head: string, subject: string) => [
+  { id: visitId + "e", candidateId, kind: "paper", status: "confirmed", startTime: startIso, endTime: startIso, visitId, interviewerKey: null, subjects: [subject] },
+  { id: visitId + "m", candidateId, kind: "mock", status: "confirmed", startTime: new Date(new Date(startIso).getTime() + 7200000).toISOString(), endTime: startIso, visitId, interviewerKey: head, subjects: [subject] },
+];
+payload.bookings = [...visitFor("r1", "v1", "2026-11-01T03:00:00Z", "Peat", "Mathematics"), ...visitFor("r2", "v2", new Date(Date.now() + 86400000).toISOString(), "Ek", "Physics")] as never[];
+payload.tutors = [{ canonicalKey: "Peat", name: "Kru Peat", email: "p@example.test", lineReady: true }, { canonicalKey: "Ek", name: "Kru Ek", email: "e@example.test", lineReady: true }] as never[];
+payload.config.interviewers = [{ canonicalKey: "Peat", email: "p@example.test", subjects: ["Mathematics"] }, { canonicalKey: "Ek", email: "e@example.test", subjects: ["Physics"] }] as never[];
+payload.config.paperPassRules = [{ subject: "Mathematics", level: "Key Stage 3", percent: 50 }, { subject: "Mathematics", level: "AS / A-Level", percent: 50 }, { subject: "Mathematics", level: "IB SL / HL", percent: 60 }];
+payload.papers = [{ id: "p1", candidateId: "r1", bookingId: "v1e", subject: "Mathematics", source: "ai", status: "done", fileId: "f1", markSchemeUsed: false, history: null, error: null, changedBy: null, marks: { missingPages: null, comment: "Strong algebra. Weak on IB vectors.", questions: [...markQuestions("Key Stage 3", [9, 9]), ...markQuestions("AS / A-Level", [6, 5]), ...markQuestions("IB SL / HL", [3, 4])] } }];
+payload.mocks = [{ id: "m1", candidateId: "r1", bookingId: "v1m", subject: "Mathematics", source: "ai", status: "done", fileId: "f2", history: null, error: null, changedBy: null, rubric: { comments: "Clear explanations.", items: { accuracy: 10, concepts: 10, clarity: 7, presentation: 7, interaction: 10, pace: 7, organization: 10, materials: 7, formative: 7, feedback: 9 } } }];
 const realFetch = window.fetch;
 (window as unknown as { posted: unknown[] }).posted = [];
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -94,6 +106,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.pathname === "/api/hiring" && url.searchParams.get("candidateId"))
     return new Response(JSON.stringify({ id: url.searchParams.get("candidateId"), profileText: "Extracted resume text for the fixture." }));
+  if (url.pathname === "/api/hiring" && url.searchParams.get("head"))
+    return new Response(JSON.stringify({ name: "Kru Peat", subjects: ["Mathematics"], days: [0, 1, 2, 3, 4].map((i) => ({ date: "2026-11-0" + (2 + i), office: { start: "09:00", end: "18:00" }, blocks: [] })), visits: [], mocks: 0, limit: 2, stale: false, staleReason: null, weekStart: "2026-11-02", head: "Peat" }));
   if (url.pathname === "/api/hiring") return new Response(JSON.stringify(payload));
   return realFetch(input, init);
 }) as typeof fetch;
@@ -282,6 +296,47 @@ try {
     await shot(page, "prescreen-panel");
     const posted = await page.evaluate(() => window.posted);
     assert.deepEqual(posted.at(-1), { action: "pre_screen_score", id: "r2", revision: 1, score: 70, reason: "Strong in a call" });
+  });
+  await check("the mock and paper tab lists visits with date, head and results", async () => {
+    await page.getByRole("button", { name: "3 Mock and paper" }).click();
+    const list = page.getByRole("region", { name: "Mock and paper" });
+    await list.locator("tbody tr").first().waitFor();
+    assert.deepEqual(await list.locator("tbody button").allInnerTexts(), ["Reply Low", "Reply Passed"]);
+    await list.getByRole("cell", { name: "Kru Peat" }).waitFor();
+    await list.getByText("Mathematics: 60% · AS / A-Level").waitFor();
+    await list.getByText("84 / 100").waitFor();
+    await shot(page, "assessment-list");
+    await list.getByLabel("Head").selectOption("Peat");
+    assert.deepEqual(await list.locator("tbody button").allInnerTexts(), ["Reply Passed"]);
+    await list.getByLabel("Head").selectOption("");
+    await list.getByRole("button", { name: /^Ready to decide/ }).click();
+    assert.deepEqual(await list.locator("tbody button").allInnerTexts(), ["Reply Passed"]);
+    await list.getByRole("button", { name: /^Ready to decide/ }).click();
+  });
+  await check("the panel tabulates the marking sheet and the rubric from the marks", async () => {
+    await page.getByRole("region", { name: "Mock and paper" }).getByRole("button", { name: "Reply Passed" }).click();
+    const panel = page.getByRole("complementary", { name: "Assessment of Reply Passed" });
+    const sheet = panel.getByRole("region", { name: "Paper marking sheet for Mathematics" });
+    await sheet.getByRole("row", { name: /Key Stage 3 18 \/ 20 50% Passed/ }).waitFor();
+    await sheet.getByRole("row", { name: /IB SL \/ HL 7 \/ 20 60% Not passed/ }).waitFor();
+    await sheet.getByRole("row", { name: /IGCSE \/ GCSE – – Not done/ }).waitFor();
+    await sheet.getByText("Marked without a mark scheme").waitFor();
+    assert.ok(await sheet.getByRole("definition").filter({ hasText: "AS / A-Level" }).isVisible());
+    const rubric = panel.getByRole("region", { name: "Mock rubric" });
+    await rubric.getByRole("row", { name: /Total 84 \/ 100/ }).waitFor();
+    await shot(page, "assessment-panel");
+  });
+  await check("the calendar switch opens the head schedule", async () => {
+    await page.getByRole("region", { name: "Mock and paper" }).getByRole("group", { name: "View" }).getByRole("button", { name: "Calendar" }).click();
+    await page.getByRole("region", { name: "Mock and paper" }).getByRole("group", { name: "View" }).getByRole("button", { name: "List" }).click();
+  });
+  await check("settings hold the pass marks and the paper library", async () => {
+    await page.getByRole("button", { name: "Rules and setup" }).click();
+    assert.equal(await page.getByLabel("Mathematics Key Stage 3 pass percentage").inputValue(), "50");
+    await page.getByRole("heading", { name: "Paper library" }).waitFor();
+    assert.ok((await page.getByText("Missing").count()) > 0);
+    await page.getByLabel("Mathematics Key Stage 3 pass percentage").scrollIntoViewIfNeeded();
+    await shot(page, "assessment-settings");
   });
   await check("the page has no script errors", async () => assert.deepEqual(errors, []));
 } finally {

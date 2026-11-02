@@ -53,6 +53,8 @@ const dataFor = (config: HiringConfig, extra: Record<string, unknown> = {}) =>
     usage: { preScreen: usage(), onsite: usage() },
     configProblems: [],
     visitClashes: { candidateIds: [], stale: false },
+    library: [],
+    markingSpend: { usd: 0, complete: true },
     google: { connected: true, email: "x@example.com", lastError: null },
     ...extra,
   }) as unknown as HiringData;
