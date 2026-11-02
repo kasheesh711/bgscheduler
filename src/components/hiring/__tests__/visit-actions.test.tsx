@@ -172,7 +172,7 @@ describe("CandidateInspector actions", () => {
     ["replied", { stage: "pre_screen", preScreen: pre }, null, ["Invite to onsite visit", "Stop processing"]],
     ["no reply", { stage: "no_reply" }, null, ["Stop processing"]],
     ["late reply", { stage: "no_reply", preScreen: pre }, null, ["Invite to onsite visit", "Stop processing"]],
-    ["invited", { stage: "onsite_invited", preScreen: pre }, null, ["Stop processing"]],
+    ["invited", { stage: "onsite_invited", preScreen: pre }, null, ["Send new link", "Stop processing"]],
     ["booked, ahead", { stage: "onsite_booked", preScreen: pre }, ahead, ["Cancel visit"]],
     ["booked, started", { stage: "onsite_booked", preScreen: pre }, started, ["Mark no-show", "Stop processing"]],
     ["booked, ended", { stage: "onsite_booked", preScreen: pre }, null, ["Mark no-show", "Stop processing"]],

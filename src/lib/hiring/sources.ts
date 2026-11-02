@@ -411,6 +411,8 @@ export async function syncTracker(db: Database, config: HiringConfig) {
             ...(answered && existing.stage === "no_reply"
               ? { stage: "pre_screen" as const }
               : {}),
+            // A person's score was for the old answers. A changed response is held for a person either way.
+            ...(answered ? { preScreenOverride: null } : {}),
             updatedAt: new Date(),
             revision: existing.revision + 1,
           })

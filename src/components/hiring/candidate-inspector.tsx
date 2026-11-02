@@ -13,11 +13,11 @@ import css from "./dashboard.module.css";
 const POINTS = { met: 1, partial: 0.5, not_met: 0, unknown: 0 };
 // Mirrors the stages reviewCandidate accepts; the server still enforces them.
 const FORM_STAGES = ["new", "review"];
-const ONSITE_STAGES = ["new", "review", "pre_screen", "no_reply", "stopped"];
+export const ONSITE_STAGES = ["new", "review", "pre_screen", "no_reply", "stopped"];
 const PAPER_PASS_STAGES = ["paper_booked", "paper_invited", "paper_passed", "mock_booked"];
 const SUBJECT_ACTIONS = ["advance", "paper_pass"];
 
-const ANSWER_LABELS: [keyof NonNullable<HiringCandidate["preScreen"]>, string][] = [
+export const ANSWER_LABELS: [keyof NonNullable<HiringCandidate["preScreen"]>, string][] = [
   ["degree", "Degree"],
   ["field", "Field of study"],
   ["subjects", "Subjects"],
@@ -313,7 +313,7 @@ export function CandidateInspector({
       label: "Invite to onsite visit",
       allowed: !!candidate.preScreen && ONSITE_STAGES.includes(candidate.stage),
     },
-    { action: "send_new_link", label: "Send new link", allowed: candidate.stage === "no_booking" },
+    { action: "send_new_link", label: "Send new link", allowed: candidate.stage === "no_booking" || candidate.stage === "onsite_invited" },
     { action: "cancel_visit", label: "Cancel visit", allowed: ahead },
     { action: "mark_no_show", label: "Mark no-show", allowed: candidate.stage === "onsite_booked" && started },
     {

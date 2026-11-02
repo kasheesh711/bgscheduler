@@ -18,6 +18,7 @@ import {
   bookInterview,
   bookingView,
   bookVisit,
+  changePreScreenScore,
   dashboard,
   reviewCandidate,
   saveHeadDays,
@@ -1038,9 +1039,58 @@ describe("hiring workflow persistence", () => {
     it("a first-invitation click cannot repeat an invitation; only send_new_link can", async () => {
       const row = await invited({ stage: "no_booking", inviteExpiresAt: null });
       await expect(click(row.id, "invite_onsite")).rejects.toThrow(/new link/);
-      const booked = await invited();
-      await expect(click(booked.id, "send_new_link")).rejects.toThrow(/cancel/);
-      expect(await jobsOf(booked.id)).toHaveLength(1);
+      expect((await db.select().from(s.hiringOutbox).where(eq(s.hiringOutbox.candidateId, row.id)))).toHaveLength(1);
+    });
+    it.each(["pending", "failed", "uncertain"] as const)("a resend cancels a %s invitation and any reminder, so only the new link leaves", async (status) => {
+      const row = await invited();
+      await db.update(s.hiringOutbox).set({ status, sentAt: null }).where(eq(s.hiringOutbox.candidateId, row.id));
+      await db.insert(s.hiringOutbox).values({ key: `${row.id}:visit-reminder:9`, candidateId: row.id, kind: "email", status: "failed", payload: { workflowStage: "onsite_invited", to: "a@example.com", subject: "Reminder", text: "Old link" } });
+      vi.setSystemTime(new Date(now.getTime() + 3600000));
+      await click(row.id, "send_new_link", [], "Candidate lost the email");
+      const rows = await db.select().from(s.hiringOutbox).where(eq(s.hiringOutbox.candidateId, row.id));
+      expect(rows.filter((r) => r.status !== "cancelled").map((r) => r.status)).toEqual(["pending"]);
+      expect(rows).toHaveLength(3);
+    });
+    it("refuses a resend while the worker holds a row, or while Messages is off", async () => {
+      const row = await invited();
+      await db.update(s.hiringOutbox).set({ status: "processing" }).where(eq(s.hiringOutbox.candidateId, row.id));
+      await expect(click(row.id, "send_new_link")).rejects.toThrow(/right now/);
+      const other = await invited({ email: "other@example.com" });
+      await setVisit({ deliveryEnabled: false });
+      await expect(click(other.id, "send_new_link")).rejects.toThrow(/Messages are off/);
+    });
+    it("resends to someone invited and not booked at a full limit, and uses no new weekly place", async () => {
+      const row = await invited();
+      await db.update(s.hiringOutbox).set({ status: "sent", sentAt: now }).where(eq(s.hiringOutbox.candidateId, row.id));
+      const before = await readLimitUsage(db, "onsite", now);
+      await setVisit({ onsiteLimits: { perWeek: 0, unbooked: 0, perHeadPerWeek: 2, perSubject: 0 } });
+      vi.setSystemTime(new Date(now.getTime() + 3600000));
+      await click(row.id, "send_new_link", [], "Candidate lost the email");
+      expect(await jobsOf(row.id)).toHaveLength(2);
+      expect((await read(row.id)).stage).toBe("onsite_invited");
+      expect((await readLimitUsage(db, "onsite", now)).perWeek).toBe(before.perWeek);
+    });
+    it("refuses a resend to a booked candidate", async () => {
+      const row = await invited();
+      await bookVisit(link(row), choice(), db);
+      await expect(click(row.id, "send_new_link")).rejects.toThrow(/cancel/);
+    });
+    it("a score change sends nothing, changes no stage, keeps the AI assessment, and voids an open panel", async () => {
+      const row = await invited({ stage: "pre_screen", inviteExpiresAt: null });
+      await db.delete(s.hiringOutbox).where(eq(s.hiringOutbox.candidateId, row.id));
+      const change = (revision: number) => changePreScreenScore(row.id, { revision, score: 95, reason: "Strong in the interview" }, "owner@example.com", db);
+      await change(row.revision);
+      const after = await read(row.id);
+      expect(after).toMatchObject({ stage: "pre_screen", revision: row.revision + 1, preScreenOverride: { score: 95, reason: "Strong in the interview", by: "owner@example.com" } });
+      expect(after.preScreenAssessment).toEqual(row.preScreenAssessment);
+      expect(await jobsOf(row.id)).toEqual([]);
+      await expect(change(row.revision)).rejects.toThrow(/Refresh/);
+      await expect(changePreScreenScore(row.id, { revision: after.revision, score: 95, reason: "no" }, "owner@example.com", db)).rejects.toThrow(/5 characters/);
+    });
+    it("refuses a score change while a visit email is waiting, because that email would still leave", async () => {
+      const row = await invited({ stage: "onsite_invited" });
+      await db.update(s.hiringOutbox).set({ status: "failed", sentAt: null }).where(eq(s.hiringOutbox.candidateId, row.id));
+      await expect(changePreScreenScore(row.id, { revision: row.revision, score: 10, reason: "Fake degree" }, "owner@example.com", db)).rejects.toThrow(/waiting to send/);
     });
     it("cancel and no-show free the slot and the limit", async () => {
       await setVisit({ onsiteLimits: { perWeek: 10, unbooked: 2, perHeadPerWeek: 1, perSubject: 1 } });

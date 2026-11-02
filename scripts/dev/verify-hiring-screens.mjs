@@ -33,8 +33,13 @@ const person = (id: string, name: string, patch = {}) => ({
   resumeName: null, resumeType: "application/pdf", resumeSize: 1000, resumeStoredAt: "2026-10-20T00:00:00Z", resumeState: "available",
   profileHash: "h", profileAssessment: assessment("Degree and subject match."), universityAssessment: { name: "Mahidol University", country: "Thailand", fraction: 0.8, reason: "On the reference list", sources: [] },
   preScreen: null, preScreenHash: null, preScreenAssessment: null, preScreenRepliedAt: null, preScreenResubmitted: false, preScreenScore: null, preScreenParts: null,
-  paperPassedSubjects: [], paperPassedAt: null, paperRecordedBy: null, hasSourceText: true, profileScore: 86, queueManual: false, ...patch,
+  paperPassedSubjects: [], paperPassedAt: null, paperRecordedBy: null, hasSourceText: true, profileScore: 86, queueManual: false, preScreenOverride: null as unknown, ...patch,
 });
+const answers = {
+  sourceRow: 2, submittedAt: "1/11/2026, 05:00:00", degree: "Bachelor's", field: "Mathematics", subjects: "Mathematics", curricula: "IGCSE", yearGroups: "Year 10", english: "Advanced (C1)", englishEvidence: "",
+  experience: "5+ years", portfolio: "", availability: "Weekend Morning", weeklyHours: "20", motivation: "I like teaching.", teachingApproach: "Worked examples, then the student tries one.",
+};
+const parts = { degree: 10, subject: 10, curriculum: 10, teaching: 10, english: 10, prestige: 10, written: 12, availability: 10, total: 82 };
 const candidates = [
   person("a", "Sample Ann"),
   person("b", "Sample Ben", { profileScore: 91, universityAssessment: { name: "Chulalongkorn University", country: "Thailand", fraction: 0.9, reason: "On the reference list", sources: [] } }),
@@ -43,8 +48,11 @@ const candidates = [
   person("e", "Sample Eve", { profileScore: null, profileAssessment: null, universityAssessment: null, workRightsAnswer: null, workRightsAccepted: false, resumeState: "none", resumeType: null }),
   person("c2", "Sample Fon", { profileScore: 70 }),
   person("t", "Tracker Only", { seekApplicationId: null }),
+  person("r1", "Reply Passed", { seekApplicationId: null, stage: "onsite_invited", preScreen: answers, preScreenHash: "x", preScreenAssessment: { ...assessment("Clear answers."), universities: [] }, preScreenScore: 82, preScreenParts: parts }),
+  person("r2", "Reply Low", { seekApplicationId: null, stage: "review", preScreen: answers, preScreenHash: "y", preScreenAssessment: { ...assessment("Thin answers."), universities: [] }, preScreenScore: 41, preScreenParts: parts }),
+  person("r3", "No Reply Yet", { seekApplicationId: null, stage: "pre_screen" }),
 ];
-const config = baseConfigSchema.parse({ connectedEmail: "fixture@example.test", seekJobId: "123456", profileThreshold: 80 });
+const config = baseConfigSchema.parse({ connectedEmail: "fixture@example.test", seekJobId: "123456", profileThreshold: 80, preScreenThreshold: 50 });
 const payload = {
   config, configSaved: true, configProblems: [], revision: 1, workerAt: new Date(Date.now() - 600000).toISOString(), workerError: null, writeGate: true,
   workerSummary: { scanned: 140, imported: 2, remaining: 8, folders: [{ status: "Inbox", count: 120, imported: 112 }, { status: "Prescreen", count: 34, imported: 34 }, { status: "Shortlist", count: 9, imported: 9 }, { status: "Not Suitable", count: 500, imported: 0 }] },
@@ -52,9 +60,17 @@ const payload = {
   holds: { b: { funnel: "pre_screen", state: "next", position: 0, limit: null, subject: "Mathematics" }, a: { funnel: "pre_screen", state: "held", position: 2, limit: "perDay", subject: "Mathematics" } },
   preScreenOrder: ["b", "a", "c2"], headMocks: {}, heads: {}, candidates, bookings: [],
   visitClashes: { candidateIds: [], stale: false, clashes: {} },
-  outbox: [{ id: "o1", key: "d:pre-screen", candidateId: "d", kind: "email", status: "sent", error: null, sentAt: "2026-11-01T03:00:00Z", workflowStage: "pre_screen" }],
+  outbox: [
+    { id: "o2", key: "r1:visit-invite", candidateId: "r1", kind: "email", status: "sent", error: null, sentAt: "2026-11-02T03:04:00Z", workflowStage: "onsite_invited" },
+    { id: "o3", key: "r1:pre-screen", candidateId: "r1", kind: "email", status: "sent", error: null, sentAt: "2026-11-01T03:00:00Z", workflowStage: "pre_screen" },
+    { id: "o4", key: "r2:pre-screen", candidateId: "r2", kind: "email", status: "sent", error: null, sentAt: "2026-11-01T03:00:00Z", workflowStage: "pre_screen" },
+    { id: "o5", key: "r3:pre-screen", candidateId: "r3", kind: "email", status: "sent", error: null, sentAt: "2026-11-01T03:00:00Z", workflowStage: "pre_screen" },
+    { id: "o1", key: "d:pre-screen", candidateId: "d", kind: "email", status: "sent", error: null, sentAt: "2026-11-01T03:00:00Z", workflowStage: "pre_screen" },
+  ],
+  inviteOutbox: [] as unknown[],
   audit: [], tutors: [], google: { connected: true, email: "fixture@example.test", lastError: null },
 };
+payload.inviteOutbox = payload.outbox;
 const realFetch = window.fetch;
 (window as unknown as { posted: unknown[] }).posted = [];
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -66,6 +82,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const rest = payload.preScreenOrder.filter((id) => id !== body.id && !body.ahead.includes(id));
       payload.preScreenOrder = [...body.ahead, body.id, ...rest];
       payload.candidates.find((c) => c.id === body.id)!.queueManual = true;
+    }
+    if (body.action === "pre_screen_score") {
+      payload.candidates.find((c) => c.id === body.id)!.preScreenOverride = { score: body.score, reason: body.reason, by: "fixture", at: "" };
     }
     if (body.action === "queue_reset") {
       payload.preScreenOrder = ["b", "a", "c2"];
@@ -233,6 +252,36 @@ try {
     await panel.getByText("Extracted resume text for the fixture.").waitFor();
     assert.equal(await panel.locator("iframe").count(), 0);
     assert.ok(await panel.getByText("I require a visa").isVisible());
+  });
+  await check("the pre-screen tab lists everyone sent a form, with proof of the visit email", async () => {
+    await page.getByRole("button", { name: "2 Pre-screen" }).click();
+    const list = page.getByRole("region", { name: "Pre-screen responses" });
+    const rows = list.locator("tbody tr");
+    await rows.first().waitFor();
+    assert.deepEqual((await list.locator("tbody button").allInnerTexts()).slice(0, 2), ["Reply Passed", "Reply Low"]);
+    assert.ok(!(await list.getByText("Sample Ann").count()));
+    await list.getByText("Sent 2 Nov, 10:04").waitFor();
+    await list.getByText("Not sent: below pass score").waitFor();
+    await list.getByText("Waiting for reply").first().waitFor();
+    await shot(page, "prescreen-list");
+    await list.getByRole("button", { name: /^Below pass score/ }).click();
+    assert.deepEqual(await list.locator("tbody button").allInnerTexts(), ["Reply Low"]);
+    await list.getByRole("button", { name: /^All/ }).click();
+  });
+  await check("the panel shows full answers, AI reasons and actions, and a score change posts only the change", async () => {
+    await page.getByRole("region", { name: "Pre-screen responses" }).getByRole("button", { name: "Reply Low" }).click();
+    const panel = page.getByRole("complementary", { name: "Pre-screen of Reply Low" });
+    await panel.getByText("Worked examples, then the student tries one.").waitFor();
+    assert.ok(await panel.getByText("Why the AI scored it this way").isVisible());
+    assert.ok(await panel.getByRole("button", { name: "Invite despite low score" }).isDisabled());
+    await panel.getByLabel("Reason").fill("Strong in a call");
+    await panel.getByLabel("New score").fill("70");
+    await panel.getByRole("button", { name: "Change score" }).click();
+    await panel.getByText("changed the AI score").waitFor();
+    assert.ok(await panel.getByRole("button", { name: "Invite to visit" }).isVisible());
+    await shot(page, "prescreen-panel");
+    const posted = await page.evaluate(() => window.posted);
+    assert.deepEqual(posted.at(-1), { action: "pre_screen_score", id: "r2", revision: 1, score: 70, reason: "Strong in a call" });
   });
   await check("the page has no script errors", async () => assert.deepEqual(errors, []));
 } finally {
