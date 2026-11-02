@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NO_ANSWER, NOT_CONFIRMED, NO_SEEK_FILTER, aheadAfterMove, isFromSeek, matchesSeekFilter, seekCoverage, sendQueueRows, universityOptions, workRightsOptions } from "../seek-view";
+import { NO_ANSWER, NOT_CONFIRMED, NO_SEEK_FILTER, aheadAfterMove, candidateSubjects, isFromSeek, matchesSeekFilter, seekCoverage, sendQueueRows, universityOptions, workRightsOptions } from "../seek-view";
 
 const person = (patch = {}) => ({
   id: "a",
@@ -53,6 +53,24 @@ describe("matchesSeekFilter", () => {
     expect(matchesSeekFilter(person(), { ...NO_SEEK_FILTER, query: "SAMPLE" }, 80)).toBe(true);
     expect(matchesSeekFilter(person(), { ...NO_SEEK_FILTER, query: "a@ex" }, 80)).toBe(true);
     expect(matchesSeekFilter(person(), { ...NO_SEEK_FILTER, query: "zzz" }, 80)).toBe(false);
+  });
+});
+
+describe("candidateSubjects", () => {
+  const assessed = (...subjects: [string, boolean][]) => ({ subjects: subjects.map(([subject, relevant]) => ({ subject, relevant })) }) as never;
+  it("uses the stored subjects first", () => {
+    expect(candidateSubjects(person({ profileAssessment: assessed(["Physics", true]) }))).toEqual(["Mathematics"]);
+  });
+  it("uses the AI's relevant subjects while the stored list is empty, with the reply before the profile", () => {
+    const empty = { subjects: [] };
+    expect(candidateSubjects(person({ ...empty, profileAssessment: assessed(["Physics", true], ["Biology", false]) }))).toEqual(["Physics"]);
+    expect(candidateSubjects(person({ ...empty, profileAssessment: assessed(["Physics", true]), preScreenAssessment: assessed(["Chemistry", true]) }))).toEqual(["Chemistry"]);
+    expect(candidateSubjects(person({ ...empty, profileAssessment: null }))).toEqual([]);
+  });
+  it("lets the subject filter find a person with an empty stored list", () => {
+    const c = person({ subjects: [], profileAssessment: assessed(["Physics", true]) });
+    expect(matchesSeekFilter(c, { ...NO_SEEK_FILTER, subject: "Physics" }, 80)).toBe(true);
+    expect(matchesSeekFilter(c, { ...NO_SEEK_FILTER, subject: "Biology" }, 80)).toBe(false);
   });
 });
 
