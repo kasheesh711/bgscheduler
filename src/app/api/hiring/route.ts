@@ -9,7 +9,8 @@ import { configSchema, localDate, subjectSchema } from "@/lib/hiring/model";
 import { headWeek } from "@/lib/hiring/head-schedule";
 import { candidateById, changePreScreenScore, dashboard, reviewCandidate, saveHeadDays, saveSettings, settings } from "@/lib/hiring/service";
 import { moveInQueue, resetQueueOrder } from "@/lib/hiring/queue";
-import { deliverBookingMessages } from "@/lib/hiring/worker";
+import { discardDecision, draftDecision, saveDraft, sendDecision } from "@/lib/hiring/decisions";
+import { deliverBookingMessages, deliverOutbox } from "@/lib/hiring/worker";
 import { getDb } from "@/lib/db";
 import { googleConnectionStatus } from "@/lib/hiring/google";
 
@@ -72,6 +73,31 @@ const command = z.discriminatedUnion("action", [
       updatedAt: z.iso.datetime(),
       items: z.partialRecord(z.enum(RUBRIC_ITEMS as [RubricItem, ...RubricItem[]]), z.number().nullable()),
       comments: z.string().trim().max(4000),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("decision_draft"),
+      id: z.uuid(),
+      decision: z.enum(["hire", "reject"]),
+      reason: z.string().trim().max(2000),
+    })
+    .strict(),
+  z.object({ action: z.literal("decision_discard"), id: z.uuid() }).strict(),
+  z
+    .object({
+      action: z.literal("decision_save"),
+      id: z.uuid(),
+      emailSubject: z.string().trim().min(1).max(200),
+      emailBody: z.string().trim().min(1).max(10000),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("decision_send"),
+      id: z.uuid(),
+      emailSubject: z.string().trim().min(1).max(200),
+      emailBody: z.string().trim().min(1).max(10000),
     })
     .strict(),
   z.object({ action: z.literal("result_check"), kind: z.enum(["paper", "mock"]), id: z.uuid() }).strict(),
@@ -164,6 +190,27 @@ export async function POST(request: Request) {
     }
     if (input.action === "mock_edit") {
       await changeRubric(input.id, input, actor, getDb());
+      return NextResponse.json({ ok: true });
+    }
+    if (input.action === "decision_draft") {
+      await draftDecision(input.id, input, actor, getDb());
+      return NextResponse.json({ ok: true });
+    }
+    if (input.action === "decision_save") {
+      await saveDraft(input.id, input, actor, getDb());
+      return NextResponse.json({ ok: true });
+    }
+    if (input.action === "decision_discard") {
+      await discardDecision(input.id, actor, getDb());
+      return NextResponse.json({ ok: true });
+    }
+    if (input.action === "decision_send") {
+      const db = getDb();
+      const key = await sendDecision(input.id, input, actor, db);
+      // The row is safe in the outbox, so a failed delivery here is a later retry, not a failed save.
+      await settings(db)
+        .then(({ config }) => deliverOutbox(db, config, 1, false, key))
+        .catch((error) => console.error("Hiring result email delivery failed", error instanceof Error ? error.name : "UnknownError"));
       return NextResponse.json({ ok: true });
     }
     if (input.action === "result_check") {

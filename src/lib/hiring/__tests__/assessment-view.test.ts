@@ -16,14 +16,19 @@ describe("assessmentRows", () => {
     expect(rows[0]).toMatchObject({ key: "v", candidateId: "c", subject: "Mathematics", headKey: "Peat", started: false, history: false });
     expect(rows[0].mockAt?.toISOString()).toBe("2026-11-05T05:00:00.000Z");
   });
-  it("keeps a finished visit and a no-show, and drops a cancelled one", () => {
+  it("keeps a finished visit and a no-show, and drops a cancelled visit when the person has another", () => {
     const rows = assessmentRows(
-      [...visit("past", "a", "2026-11-01T03:00:00Z"), ...visit("gone", "b", "2026-11-06T03:00:00Z", { status: "cancelled" }), ...visit("absent", "d", "2026-11-02T03:00:00Z", { status: "no_show" })],
+      [...visit("past", "a", "2026-11-01T03:00:00Z"), ...visit("gone", "a", "2026-11-06T03:00:00Z", { status: "cancelled" }), ...visit("absent", "d", "2026-11-02T03:00:00Z", { status: "no_show" })],
       [],
       [],
       NOW,
     );
     expect(rows.map((r) => [r.key, r.status, r.started])).toEqual([["absent", "no_show", true], ["past", "confirmed", true]]);
+  });
+  it("keeps a row for someone whose only visit was cancelled, so a person can still reject them", () => {
+    const rows = assessmentRows(visit("gone", "b", "2026-11-06T03:00:00Z", { status: "cancelled" }), [], [], NOW);
+    expect(rows.map((r) => [r.key, r.status])).toEqual([["gone", "cancelled"]]);
+    expect(matchesChip(rows[0], "Needs upload", [], [], false)).toBe(false);
   });
   it("makes a row for each old-flow booking", () => {
     const old = { candidateId: "c", status: "confirmed", startTime: at("2026-11-05T03:00:00Z"), endTime: at("2026-11-05T04:00:00Z"), interviewerKey: "Ek", subjects: ["Physics"] };
@@ -78,6 +83,9 @@ describe("filters", () => {
     expect(matchesChip(row(), "Needs upload", [result()], [result()], false)).toBe(false);
     expect(matchesChip(row({ status: "no_show" }), "Needs upload", [], [], false)).toBe(false);
     expect(matchesChip(row({ started: false }), "Needs upload", [], [], false)).toBe(false);
+  });
+  it("stops asking for an upload once a decision was sent", () => {
+    expect(matchesChip(row(), "Needs upload", [], [], true)).toBe(false);
   });
   it("asks an old-flow paper booking only for its paper", () => {
     expect(matchesChip(row({ kinds: ["paper"] }), "Needs upload", [result()], [], false)).toBe(false);

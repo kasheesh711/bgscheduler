@@ -111,6 +111,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       (payload.papers as Record<string, unknown>[]).push({ id: "p2", candidateId: "r2", bookingId: "v2e", subject: "Physics", source: "ai", status: "uploaded", fileId: "f9", updatedAt: "2026-11-02T00:00:00.000Z", markSchemeUsed: null, history: null, error: null, changedBy: null, marks: null });
       return new Response(JSON.stringify({ ok: true, resultId: "p2" }));
     }
+    if (body.action === "decision_draft") (payload.decisions as Record<string, unknown>[]).unshift({ id: "d1", candidateId: body.id, decision: body.decision, status: "draft", reason: body.reason, emailSubject: "Your BeGifted tutor application", emailBody: "Dear Reply Passed, we are pleased.", outboxKey: null, decidedBy: "fixture", createdAt: "", sentAt: null });
+    if (body.action === "decision_discard") (payload.decisions as Record<string, unknown>[]).splice(0, 1);
     if (body.action === "result_check") ((body.kind === "mock" ? payload.mocks : payload.papers) as Record<string, unknown>[]).find((row) => row.id === body.id)!.status = "done";
     if (body.action === "mock_edit") {
       const mock = (payload.mocks as { id: string; changedBy: string | null; rubric: { comments: string; items: Record<string, number | null> } }[]).find((row) => row.id === body.id)!;
@@ -401,6 +403,29 @@ try {
     await list.getByText("72 / 100").waitFor();
     assert.deepEqual((await page.evaluate(() => window.posted)).at(-2).items, { feedback: 9 });
     await page.getByRole("complementary", { name: "Assessment of Reply Low" }).getByRole("button", { name: "Close" }).click();
+  });
+  await check("a decision saves a draft and previews the email, and Send refuses while the switches are off", async () => {
+    const list = page.getByRole("region", { name: "Mock and paper" });
+    await list.getByRole("button", { name: "Reply Passed" }).click();
+    const panel = page.getByRole("complementary", { name: "Assessment of Reply Passed" });
+    const box = panel.getByRole("region", { name: "Decision" });
+    assert.ok(await box.getByRole("button", { name: "Reject: preview email" }).isDisabled());
+    await box.getByRole("button", { name: "Hire: preview email" }).click();
+    await box.getByLabel("Email message").waitFor();
+    await list.getByText("Draft: Hire").waitFor();
+    await box.getByText("Automation and Messages are off").waitFor();
+    await box.getByText("r1@example.test").waitFor();
+    await box.getByLabel("Email message").fill("Edited by a person.");
+    await box.getByRole("button", { name: "Save draft" }).click();
+    await page.waitForFunction(() => window.posted.at(-1).action === "decision_save");
+    assert.ok(await box.getByRole("button", { name: "Send email" }).isDisabled());
+    await shot(page, "decision-draft");
+    assert.ok(!(await page.evaluate(() => window.posted)).some((p) => p.action === "decision_send"));
+    await box.getByRole("button", { name: "Discard" }).click();
+    await box.getByRole("button", { name: "Hire: preview email" }).waitFor();
+    await box.getByLabel("Reason").fill("Not a fit for this level");
+    assert.ok(await box.getByRole("button", { name: "Reject: preview email" }).isEnabled());
+    await panel.getByRole("button", { name: "Close" }).click();
   });
   await check("the calendar switch opens the head schedule", async () => {
     await page.getByRole("region", { name: "Mock and paper" }).getByRole("group", { name: "View" }).getByRole("button", { name: "Calendar" }).click();

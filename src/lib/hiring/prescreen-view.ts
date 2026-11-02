@@ -1,6 +1,6 @@
 import { formatInTimeZone } from "date-fns-tz";
 import { STAGE_LABELS } from "./insights";
-import { ZONE, type Stage } from "./model";
+import { isDecided, ZONE, type Stage } from "./model";
 
 type OutboxRow = { key: string; status: string; sentAt: Date | string | null; error?: string | null };
 type Person = {
@@ -47,6 +47,7 @@ export function visitEmail(c: Person, outbox: OutboxRow[], threshold: number | n
     if (row.status === "uncertain") return says("May have sent. Check first", "bad", row.error);
     if (row.status === "cancelled") return says("Cancelled", "none");
   }
+  if (isDecided(c.stage)) return says(STAGE_LABELS[c.stage], "none");
   if (OLD_FLOW.includes(c.stage)) return says(`Old flow: ${STAGE_LABELS[c.stage]}`, "none");
   if (c.stage === "stopped") return says("Not sent: stopped", "none");
   if (!c.preScreen) return says(c.stage === "no_reply" ? "Not sent: no reply" : "Waiting for reply", "none");

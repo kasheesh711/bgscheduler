@@ -30,7 +30,9 @@ export type AssessmentRow = {
 
 /** One row for each visit, one for each old-flow booking, and one for a person known only from the tracker's results. */
 export function assessmentRows(bookings: Booking[], papers: TrackerRow[], mocks: TrackerRow[], now = new Date()): AssessmentRow[] {
-  const live = bookings.filter((b) => b.status !== "cancelled");
+  // A candidate whose only visit was cancelled keeps a row, or a person could never reject them.
+  const active = new Set(bookings.filter((b) => b.status !== "cancelled").map((b) => b.candidateId));
+  const live = bookings.filter((b) => b.status !== "cancelled" || !active.has(b.candidateId));
   const groups = new Map<string, Booking[]>();
   for (const b of live) {
     const key = b.visitId ?? `${b.kind}:${b.candidateId}:${new Date(b.startTime).getTime()}`;
@@ -117,7 +119,7 @@ export function matchesChip(row: AssessmentRow, chip: AssessmentChip | null, pap
     case null:
       return !row.history;
     case "Needs upload":
-      return !row.history && row.started && row.status === "confirmed" && ((row.kinds.includes("paper") && !papers.length) || (row.kinds.includes("mock") && !mocks.length));
+      return !decided && !row.history && row.started && row.status === "confirmed" && ((row.kinds.includes("paper") && !papers.length) || (row.kinds.includes("mock") && !mocks.length));
     case "Needs check":
       return [...papers, ...mocks].some((r) => r.status === "needs_check");
     case "Ready to decide":

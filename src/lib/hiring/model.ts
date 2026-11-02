@@ -88,7 +88,12 @@ export const stageSchema = z.enum([
   "no_reply",
   "no_booking",
   "stopped",
+  "hired",
+  "rejected",
 ]);
+/** A person sent the result. No import, queue or automatic pass may move this stage. */
+export const DECIDED_STAGES = ["hired", "rejected"] as const;
+export const isDecided = (stage: string) => (DECIDED_STAGES as readonly string[]).includes(stage);
 export type Stage = z.infer<typeof stageSchema>;
 export class HiringError extends Error {
   constructor(

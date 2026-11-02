@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { criterionValues, STAGE_LABELS } from "@/lib/hiring/insights";
-import { DEFAULT_PRE_SCREEN_WEIGHTS, RESUME_TYPES, SUBJECTS, type HiringConfig, type Subject } from "@/lib/hiring/model";
+import { DEFAULT_PRE_SCREEN_WEIGHTS, isDecided, RESUME_TYPES, SUBJECTS, type HiringConfig, type Subject } from "@/lib/hiring/model";
 import type { Assessment, PreScreenAssessment } from "@/lib/hiring/scoring";
 import { preScreenNote, visitText, type CandidateExtras } from "@/lib/hiring/status";
 import type { Command, HiringCandidate } from "./dashboard";
@@ -322,7 +322,7 @@ export function CandidateInspector({
       allowed: PAPER_PASS_STAGES.includes(candidate.stage),
     },
     // The server refuses a stop while a visit is ahead.
-    { action: "stop", label: "Stop processing", allowed: !ahead },
+    { action: "stop", label: "Stop processing", allowed: !ahead && !isDecided(candidate.stage) },
   ].filter((a) => a.allowed);
   const usesSubjects = actions.some((a) => SUBJECT_ACTIONS.includes(a.action));
 

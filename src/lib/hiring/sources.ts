@@ -10,6 +10,8 @@ import {
 } from "@/lib/sales-dashboard/sheets";
 import {
   applicationSchema,
+  DECIDED_STAGES,
+  isDecided,
   normalizeEmail,
   normalizeSubjects,
   preScreenSchema,
@@ -27,7 +29,7 @@ import { audit, inviteToMock, settings, sourceHash } from "./service";
 import { parseFormTimestamp } from "./status";
 
 export { parseFormTimestamp };
-const NEW_FLOW_STAGES: Stage[] = ["onsite_invited", "onsite_booked", "no_reply", "no_booking"];
+const NEW_FLOW_STAGES: Stage[] = ["onsite_invited", "onsite_booked", "no_reply", "no_booking", ...DECIDED_STAGES];
 const OLD_FLOW_STAGES: Stage[] = ["paper_invited", "paper_booked", "paper_passed", "mock_booked"];
 /**
  * A new-flow candidate is one whom the app invited (see `appInvited`), or who is at a visit stage. The tracker changes nothing for
@@ -207,6 +209,11 @@ export async function observeSeekState(
       .for("update");
     if (!candidate) return;
     const newlyContacted = contacted && !candidate.previouslyContacted;
+    // A person sent the result. A move in SEEK must not overwrite it or cancel its email, and our own email counts as contact.
+    if (isDecided(candidate.stage)) {
+      if (newlyContacted) await tx.update(s.hiringCandidates).set({ previouslyContacted: true }).where(eq(s.hiringCandidates.id, candidate.id));
+      return;
+    }
     const seekStop = ["Not Suitable", "Accept"].includes(status);
     // The same rule as the staff stop: a future visit is cancelled in Hiring first, and the stop applies on the next read.
     // Only a visit: an old-flow booking has no Cancel visit action, so holding it would strand the candidate.
