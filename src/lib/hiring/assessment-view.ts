@@ -91,8 +91,9 @@ export function assessmentRows(bookings: Booking[], papers: TrackerRow[], mocks:
  */
 export function hireBlockers(papers: Result[], mocks: Result[]) {
   const blockers: string[] = [];
-  if (!papers.length) blockers.push("No paper result yet.");
-  if (!mocks.length) blockers.push("No mock result yet.");
+  // A past result from the tracker is not a result of this visit, and it may say Not Passed.
+  if (!papers.some((p) => p.source !== "tracker")) blockers.push("No paper result yet.");
+  if (!mocks.some((m) => m.source !== "tracker")) blockers.push("No mock result yet.");
   if ([...papers, ...mocks].some((r) => r.status === "needs_check")) blockers.push("A result needs a person to check it.");
   if (papers.some((p) => p.status !== "done" && p.status !== "needs_check")) blockers.push("A paper is not finished.");
   if (mocks.length && !mocks.some((m) => m.status === "done" || m.status === "needs_check")) blockers.push("The mock is not finished.");
@@ -119,7 +120,7 @@ export function matchesChip(row: AssessmentRow, chip: AssessmentChip | null, pap
     case null:
       return !row.history;
     case "Needs upload":
-      return !decided && !row.history && row.started && row.status === "confirmed" && ((row.kinds.includes("paper") && !papers.length) || (row.kinds.includes("mock") && !mocks.length));
+      return !decided && !row.history && row.started && row.status === "confirmed" && ((row.kinds.includes("paper") && !papers.some((p) => p.source !== "tracker")) || (row.kinds.includes("mock") && !mocks.some((m) => m.source !== "tracker")));
     case "Needs check":
       return [...papers, ...mocks].some((r) => r.status === "needs_check");
     case "Ready to decide":

@@ -71,8 +71,9 @@ describe("hireBlockers", () => {
     expect(hireBlockers([result()], [result(), result("failed")])).toEqual([]);
     expect(hireBlockers([result()], [result("failed")])[0]).toMatch(/mock is not finished/);
   });
-  it("counts tracker results", () => {
-    expect(hireBlockers([result("done", "tracker")], [result("done", "tracker")])).toEqual([]);
+  it("does not count a past tracker result as a result of this visit", () => {
+    expect(hireBlockers([result("done", "tracker")], [result("done", "tracker")])).toEqual(["No paper result yet.", "No mock result yet."]);
+    expect(hireBlockers([result("done", "tracker"), result()], [result()])).toEqual([]);
   });
 });
 
@@ -83,6 +84,9 @@ describe("filters", () => {
     expect(matchesChip(row(), "Needs upload", [result()], [result()], false)).toBe(false);
     expect(matchesChip(row({ status: "no_show" }), "Needs upload", [], [], false)).toBe(false);
     expect(matchesChip(row({ started: false }), "Needs upload", [], [], false)).toBe(false);
+  });
+  it("still asks for an upload when only a tracker result exists", () => {
+    expect(matchesChip(row(), "Needs upload", [result("done", "tracker")], [result("done", "tracker")], false)).toBe(true);
   });
   it("stops asking for an upload once a decision was sent", () => {
     expect(matchesChip(row(), "Needs upload", [], [], true)).toBe(false);

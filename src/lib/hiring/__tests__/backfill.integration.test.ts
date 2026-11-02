@@ -343,6 +343,9 @@ describe("SEEK pass: step and arguments", () => {
     expect(parseBackfillArgs(["--seek", "--limit", "5"], env)).toMatchObject({ mode: "seek", limit: 5 });
     expect(parseBackfillArgs(["--tracker-report"], {})).toMatchObject({ mode: "tracker-report" });
     expect(parseBackfillArgs(["--tracker-import"], {})).toMatchObject({ mode: "tracker-import" });
+    expect(parseBackfillArgs(["--tracker-results-report"], {})).toMatchObject({ mode: "tracker-results-report" });
+    expect(parseBackfillArgs(["--tracker-results-import"], {})).toMatchObject({ mode: "tracker-results-import" });
+    expect(() => parseBackfillArgs(["--tracker-results-import", "--limit", "5"], {})).toThrow();
   });
   it.each([
     [[], env],

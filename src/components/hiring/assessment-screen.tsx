@@ -667,8 +667,8 @@ function AssessmentPanel({
         {papers.map((paper) => (
           <PaperSheetView key={paper.id} paper={paper} config={data.config} command={command} reload={reload} busy={busy} />
         ))}
-        {!row.history && <AddPaper candidateId={candidate.id} first={row.subject} taken={papers.map((paper) => paper.subject)} reload={reload} />}
-        {!mocks.some((mock) => mock.subject === row.subject) && !row.history && (
+        {!row.history && <AddPaper candidateId={candidate.id} first={row.subject} taken={papers.filter((paper) => paper.source !== "tracker").map((paper) => paper.subject)} reload={reload} />}
+        {!mocks.some((mock) => mock.subject === row.subject && mock.source !== "tracker") && !row.history && (
           <section className={css.inspectorSection}>
             <h3 className={css.inspectorHeading}>Mock: {row.subject}</h3>
             <p className={css.inspectorText}>No mock result yet.</p>
@@ -785,9 +785,10 @@ export function AssessmentScreen({
                 <tbody>
                   {shown.map((row) => {
                     const c = names.get(row.candidateId);
-                    const rowPapers = papers.get(row.candidateId) ?? [];
+                    // A row with a visit shows that visit's results. A past tracker result is in the panel.
+                    const rowPapers = (papers.get(row.candidateId) ?? []).filter((paper) => row.history || paper.source !== "tracker");
                     // A person can hold a mock in another subject. A history row has no subject of its own to match.
-                    const rowMocks = (mocks.get(row.candidateId) ?? []).filter((mock) => row.history || mock.subject === row.subject);
+                    const rowMocks = (mocks.get(row.candidateId) ?? []).filter((mock) => row.history || (mock.subject === row.subject && mock.source !== "tracker"));
                     return (
                       <tr key={row.key} data-selected={selected === row.key ? "" : undefined} onClick={() => setSelected(row.key)}>
                         <td>

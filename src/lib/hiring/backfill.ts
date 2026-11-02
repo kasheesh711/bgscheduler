@@ -2,14 +2,14 @@ import { type Database } from "@/lib/db";
 import { applyBackfill, assertAutomationOff, backfillStatus, type BackfillPage } from "./sources";
 
 export const BACKFILL_USAGE =
-  "Usage: npm run hiring:backfill -- --seek [--limit N] | --tracker-report | --tracker-import | --tracker-mark-contacted\n" +
+  "Usage: npm run hiring:backfill -- --seek [--limit N] | --tracker-report | --tracker-results-report | --tracker-results-import | --tracker-import | --tracker-mark-contacted\n" +
   "--seek also needs HIRING_BACKFILL_UNTIL, an ISO time at which the pass stops. No pass sends a message or changes a stage.";
 
-export type BackfillArgs = { mode: "seek" | "tracker-report" | "tracker-import" | "tracker-mark-contacted"; limit: number | null; until: number | null };
+export type BackfillArgs = { mode: "seek" | "tracker-report" | "tracker-import" | "tracker-mark-contacted" | "tracker-results-report" | "tracker-results-import"; limit: number | null; until: number | null };
 
 /** One mode flag. An unknown, repeated or missing flag throws the usage text. */
 export function parseBackfillArgs(argv: string[], env: Record<string, string | undefined>, now = Date.now()): BackfillArgs {
-  const modes = { "--seek": "seek", "--tracker-report": "tracker-report", "--tracker-import": "tracker-import", "--tracker-mark-contacted": "tracker-mark-contacted" } as const;
+  const modes = { "--tracker-results-report": "tracker-results-report", "--tracker-results-import": "tracker-results-import", "--seek": "seek", "--tracker-report": "tracker-report", "--tracker-import": "tracker-import", "--tracker-mark-contacted": "tracker-mark-contacted" } as const;
   let mode: BackfillArgs["mode"] | null = null;
   let limit: number | null = null;
   for (let i = 0; i < argv.length; i++) {

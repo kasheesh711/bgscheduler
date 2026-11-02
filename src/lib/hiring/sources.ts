@@ -24,6 +24,7 @@ import {
 import { appInvited } from "./queue";
 import { RESUME_MAX_BYTES, sniffResume, storeResume, type ResumeFile } from "./resume-files";
 import { answerKey } from "./scoring";
+import { resultColumns } from "./result-history";
 import { audit, inviteToMock, settings, sourceHash } from "./service";
 // The one copy stays in status.ts: client components import that file, and this one reaches the database.
 import { parseFormTimestamp } from "./status";
@@ -535,7 +536,8 @@ export async function mirrorTracker(db: Database, config: HiringConfig) {
     config.connectedEmail,
     TRACKER_ID,
   );
-  if (!tabs.some((t) => t.title === title))
+  const tab = tabs.find((t) => t.title === title);
+  if (!tab)
     await batchUpdateGoogleSpreadsheet(config.connectedEmail, TRACKER_ID, [
       {
         addSheet: {
@@ -543,7 +545,7 @@ export async function mirrorTracker(db: Database, config: HiringConfig) {
             title,
             gridProperties: {
               rowCount: 2500,
-              columnCount: 10,
+              columnCount: 14,
               frozenRowCount: 2,
             },
           },
@@ -559,6 +561,11 @@ export async function mirrorTracker(db: Database, config: HiringConfig) {
     throw new Error(
       "The Hiring Automation tab contains other data. It was not overwritten.",
     );
+  // The tab was made with 10 columns, and a write past the last column fails.
+  if (tab && (tab.columnCount ?? 0) < 14 && tab.sheetId !== undefined)
+    await batchUpdateGoogleSpreadsheet(config.connectedEmail, TRACKER_ID, [
+      { updateSheetProperties: { properties: { sheetId: tab.sheetId, gridProperties: { columnCount: 14 } }, fields: "gridProperties.columnCount" } },
+    ]);
   const candidates = await db
     .select()
     .from(s.hiringCandidates)
@@ -579,8 +586,17 @@ export async function mirrorTracker(db: Database, config: HiringConfig) {
       "Passed paper subjects",
       "Updated at",
       "Review note",
+      "Paper results",
+      "Levels passed",
+      "Mock score",
+      "Decision",
     ],
   ];
+  const [papers, mocks, decisions] = await Promise.all([
+    db.select().from(s.hiringPaperResults),
+    db.select().from(s.hiringMockResults),
+    db.select().from(s.hiringDecisions),
+  ]);
   for (const c of candidates)
     rows.push([
       c.applicantId ?? c.id,
@@ -591,11 +607,12 @@ export async function mirrorTracker(db: Database, config: HiringConfig) {
       c.paperPassedSubjects.join(", "),
       c.updatedAt.toISOString(),
       c.reviewNote ?? "",
+      ...resultColumns(c.id, papers, mocks, decisions, config),
     ]);
   await updateGoogleSheetRangeValues(
     config.connectedEmail,
     TRACKER_ID,
-    `'${title}'!A1:H${rows.length}`,
+    `'${title}'!A1:L${rows.length}`,
     rows,
     "RAW",
   );
