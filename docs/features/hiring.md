@@ -1,6 +1,6 @@
 # Tutor hiring
 
-Status: visit automation is live with sending off (2 Nov 2026). The three-stage revamp is complete in code on stacked pull requests #246 to #254. Local checks passed. Merge, migrations `0120` and `0121`, deployment, live use and acceptance are separate steps, listed in [Go-live for the revamp](#go-live-for-the-revamp).
+Status: visit automation is live with sending off (2 Nov 2026). The three-stage revamp is complete in code on stacked pull requests #246 to #254. Local checks passed. Migrations `0120` and `0121` are applied to production. Merge, deployment, live use and acceptance are separate steps, listed in [Go-live for the revamp](#go-live-for-the-revamp).
 
 The Hiring page has five tabs. Each opens by address (`/hiring?view=seek`).
 
@@ -446,7 +446,7 @@ Where the work stands: local checks passed on the five pull requests. Merge, mig
 
 Do these in order. Each step needs Kevin's approval. Automation and Messages can stay off throughout.
 
-1. **Apply migrations, before merge.** Who: Claude, after Kevin approves. Apply `0120` and `0121` and read them back. `/hiring` returns 503 without them, because the dashboard reads the new tables.
+1. **Apply migrations, before merge.** Done on 2 November 2026, and read back. `/hiring` returns 503 without them, because the dashboard reads the new tables.
 2. **Merge #246 to #254 in order.** Who: Kevin. Stacked pull requests start required CI only when based on `main`, so retarget each one and close and reopen it.
 3. **Check the page.** Who: Claude, signed in, on production or the preview: all five tabs, the Back button, a filter, and opening a resume. The offline check replaces `next/navigation`, so this is the first real check of tab addresses. Open one real PDF in the frame.
 4. **Update the Mac checkout before anyone saves settings.** The config schema is strict, so older code refuses a saved `paperPassRules` key. For the same reason, a Vercel rollback after a settings save needs a config repair. An old worker process also ignores the drag order, so restart it.
