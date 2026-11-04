@@ -32,6 +32,7 @@ const candidate = (id: string, stage: Stage, overrides = {}) => ({
   ...overrides,
 });
 const config = {
+  callThreshold: null,
   profileThreshold: 60,
   profileWeights: DEFAULT_WEIGHTS,
   acceptedWorkRights: ["I have permanent work rights with no restrictions"],

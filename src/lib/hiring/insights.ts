@@ -95,10 +95,8 @@ type InsightCandidate = {
 };
 type GateConfig = Pick<
   HiringConfig,
-  "profileThreshold" | "profileWeights" | "acceptedWorkRights" | "subjectPriority"
-> &
-  // Missing means calls are off.
-  Partial<Pick<HiringConfig, "callThreshold">>;
+  "profileThreshold" | "profileWeights" | "acceptedWorkRights" | "subjectPriority" | "callThreshold"
+>;
 type InsightInput = {
   config: GateConfig & Pick<HiringConfig, "interviewers">;
   candidates: InsightCandidate[];
@@ -121,6 +119,7 @@ type InsightInput = {
  * `review` lists the reasons no setting can cure, which send a `new` row to review. A row with only other reasons waits at
  * `new`, because the next cycle re-runs this gate and a changed setting or a re-read answer lets it through.
  */
+export const AWAITING_CALL = "HR must call this candidate before the form can go.";
 export function profileGate(
   candidate: Pick<
     InsightCandidate,
@@ -157,8 +156,7 @@ export function profileGate(
   else {
     const score = profileScore(assessment, config.profileWeights, candidate.universityAssessment?.fraction ?? 0);
     if (score < config.profileThreshold) add("The profile score is below the threshold.", "Below profile threshold");
-    const callThreshold = config.callThreshold ?? null;
-    awaitingCall = callThreshold !== null && score >= callThreshold && !called;
+    awaitingCall = config.callThreshold !== null && score >= config.callThreshold && !called;
     if (assessment.criteria.some((c) => c.id === "degree" && c.result === "not_met"))
       final("The degree criterion is not met.", "Degree not met");
     if (!relevant.length) final("The profile supports no subject.", "No supported subject");
@@ -170,7 +168,7 @@ export function profileGate(
   // HR's good call is the contact, so a SEEK message after it does not hold the form.
   if (candidate.previouslyContacted && !called) final("There was earlier contact.", "Earlier contact");
   // Last, so a reason a call cannot fix shows first.
-  if (awaitingCall) add("HR must call this candidate before the form can go.", "Waiting for a call");
+  if (awaitingCall) add(AWAITING_CALL, "Waiting for a call");
   return { eligible: reasons.length === 0, reasons, short, review, subject, awaitingCall };
 }
 

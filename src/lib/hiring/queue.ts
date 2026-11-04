@@ -277,10 +277,11 @@ export async function recordCall(
 ) {
   await withDatabaseTransaction(db, async (tx) => {
     await lockQueue(tx);
-    const { config } = await settings(tx);
-    if (!(await callQueue(tx, config)).some((entry) => entry.id === id))
-      throw new HiringError(409, "This candidate has left the call queue. Refresh the page.");
+    // The row lock comes before the check: a SEEK sync takes only the row lock, so it cannot move the row in between.
     const [row] = await tx.select({ callReview: c.callReview }).from(c).where(eq(c.id, id)).for("update");
+    const { config } = await settings(tx);
+    if (!row || !(await callQueue(tx, config)).some((entry) => entry.id === id))
+      throw new HiringError(409, "This candidate has left the call queue. Refresh the page.");
     const at = now.toISOString();
     const review = row.callReview ?? { good: null, tries: [] };
     await tx

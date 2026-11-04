@@ -1673,6 +1673,26 @@ describe("hiring workflow persistence", () => {
       const [form] = await db.select().from(s.hiringOutbox).where(eq(s.hiringOutbox.candidateId, row.id));
       expect([form.key, form.status]).toEqual([`${row.id}:pre-screen`, "pending"]);
     });
+    it("leaves the call reason out of the note when earlier contact sends a strong profile to review", async () => {
+      await db.update(s.hiringSettings).set({ config: { ...config, callThreshold: 80 } });
+      // A SEEK message after import, before the profile was scored.
+      const [{ id }] = await db
+        .insert(s.hiringCandidates)
+        .values({
+          name: "Contacted",
+          email: "contacted404@example.com",
+          profileText: "degree subject curriculum teaching english Mathematics",
+          workRightsAnswer: ACCEPTED,
+          sourceIds: ["00000000-0000-4000-8000-000000000404"],
+          previouslyContacted: true,
+        })
+        .returning();
+      await assessCandidates(db, config, async () => met);
+      const [row] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, id));
+      expect(row.stage).toBe("review");
+      expect(row.reviewNote).toContain("There was earlier contact.");
+      expect(row.reviewNote).not.toContain("HR must call");
+    });
     it("still stops on Not Suitable, and cancels the waiting form", async () => {
       const application = "00000000-0000-4000-8000-000000000403";
       const row = await called(application);
