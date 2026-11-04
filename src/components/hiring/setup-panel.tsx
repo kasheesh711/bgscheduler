@@ -191,6 +191,22 @@ export function SetupPanel({
               onChange={(e) => setConfig({ ...config, profileThreshold: Number(e.target.value) })}
             />
           </label>
+          <label className={css.weightRow}>
+            HR call score (blank: no calls)
+            <input
+              className={css.numberInput}
+              type="number"
+              min={0}
+              max={100}
+              value={config.callThreshold ?? ""}
+              onChange={(e) => setConfig({ ...config, callThreshold: e.target.value === "" ? null : Number(e.target.value) })}
+            />
+          </label>
+          <p className={css.panelLede}>
+            {config.callThreshold === null
+              ? "Every candidate who passes gets the form without a call."
+              : `A candidate at or above ${config.callThreshold} gets the form only after HR records a good call on the Calls tab.`}
+          </p>
         </section>
 
         <section className={css.setupSection}>

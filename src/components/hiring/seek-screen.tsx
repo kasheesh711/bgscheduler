@@ -107,7 +107,7 @@ function PickList({
   );
 }
 
-function SeekPanel({
+export function SeekPanel({
   candidate,
   extra,
   hold,
