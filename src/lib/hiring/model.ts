@@ -199,6 +199,8 @@ export const baseConfigSchema = z
       .regex(/^\d{6,12}$/)
       .default("94844236"),
     profileThreshold: z.number().int().min(0).max(100).default(60),
+    /** A gate pass at or above this profile score waits for HR's good call before the form can go. Null turns calls off. */
+    callThreshold: z.number().int().min(0).max(100).nullable().default(80),
     profileWeights: profileWeightsSchema.default(DEFAULT_WEIGHTS),
     universities: z
       .array(

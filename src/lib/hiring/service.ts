@@ -42,11 +42,13 @@ import {
   inviteRows,
   linkSentAt,
   lockQueue,
+  callQueue,
   onsiteQueue,
   preScreenQueue,
   preScreenTotal,
   readLimitUsage,
 } from "./queue";
+import { profileGate } from "./insights";
 import { headDayState, weekWith } from "./rules";
 import { attendanceAccessForEmail } from "@/lib/tutor-attendance/access";
 import { attendanceConfig } from "@/lib/tutor-attendance/data";
@@ -566,6 +568,7 @@ export async function dashboard(db: Database = getDb()) {
   };
   const holds: Record<string, QueueHold> = {};
   let preScreenOrder: string[] = [];
+  const callOrder = (await callQueue(db, config)).map((entry) => entry.id);
   for (const funnel of ["pre_screen", "onsite"] as const satisfies Funnel[]) {
     const entries = funnel === "pre_screen" ? await preScreenQueue(db, config) : await onsiteQueue(db, config);
     const { release, held, order } = releaseQueue(funnel, entries, funnel === "pre_screen" ? usage.preScreen : usage.onsite, config);
@@ -599,6 +602,7 @@ export async function dashboard(db: Database = getDb()) {
     usage,
     holds,
     preScreenOrder,
+    callOrder,
     headMocks: headWeekMocks(bookings, now),
     heads: Object.fromEntries(
       config.interviewers.map((head) => [head.canonicalKey, headDayState(head, enrollments, schedules, localDate(now))]),
@@ -1427,9 +1431,15 @@ export async function reviewCandidate(
           throw new HiringError(409, `The pre-screen limit "${LIMIT_TEXT[limit]}" is full. Raise the number to send more.`);
         if (!(await inviteToPreScreen(tx, c, now)))
           throw new HiringError(409, "A pre-screen form was already queued for this candidate. No new form can be sent.");
+        // Kevin's rule: a click past the call queue counts as HR's good call.
+        const skippedCall = profileGate(c, config).awaitingCall;
+        if (skippedCall) detail = { goodCall: "manual" };
         await tx
           .update(s.hiringCandidates)
           .set({
+            ...(skippedCall && {
+              callReview: { good: { at: now.toISOString(), by: actor, manual: true as const }, tries: c.callReview?.tries ?? [] },
+            }),
             stage: "pre_screen",
             // The limits read the first subject as the queue subject.
             subjects: [subject, ...input.subjects.filter((v) => v !== subject)],

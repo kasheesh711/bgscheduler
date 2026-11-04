@@ -197,8 +197,8 @@ export const autoInviteEligible = (candidate: Candidate, sentAt: Date | null, co
  * Reads only the columns the gate and the score use, because profile text and the other large fields are not needed to rank.
  * A release locks and reads the full row before it sends anything.
  */
-export async function preScreenQueue(db: Database, config: HiringConfig): Promise<QueueEntry[]> {
-  const rows = await db
+const formCandidates = (db: Database) =>
+  db
     .select({
       id: c.id,
       createdAt: c.createdAt,
@@ -208,6 +208,7 @@ export async function preScreenQueue(db: Database, config: HiringConfig): Promis
       profileAssessment: c.profileAssessment,
       universityAssessment: c.universityAssessment,
       queueManual: c.queueManual,
+      callReview: c.callReview,
     })
     .from(c)
     .where(
@@ -217,6 +218,9 @@ export async function preScreenQueue(db: Database, config: HiringConfig): Promis
         notExists(db.select({ id: o.id }).from(o).where(and(eq(o.candidateId, c.id), isForm))),
       ),
     );
+
+export async function preScreenQueue(db: Database, config: HiringConfig): Promise<QueueEntry[]> {
+  const rows = await formCandidates(db);
   return rows.flatMap((row) => {
     const { eligible, subject } = profileGate(row, config);
     return eligible && subject
@@ -230,6 +234,63 @@ export async function preScreenQueue(db: Database, config: HiringConfig): Promis
           },
         ]
       : [];
+  });
+}
+
+/**
+ * Who HR must call: the same rows as the form queue, held only because the score is at or above the call score.
+ * Highest score first, then the earlier application. A closed subject or any other gate reason keeps a row out,
+ * because the form could not go after the call.
+ */
+export async function callQueue(db: Database, config: HiringConfig): Promise<QueueEntry[]> {
+  const rows = await formCandidates(db);
+  return rows
+    .flatMap((row) => {
+      const gate = profileGate(row, config);
+      return gate.awaitingCall && gate.reasons.length === 1 && gate.subject
+        ? [
+            {
+              id: row.id,
+              subject: gate.subject,
+              score: profileScore(row.profileAssessment!, config.profileWeights, row.universityAssessment?.fraction ?? 0),
+              createdAt: row.createdAt,
+            },
+          ]
+        : [];
+    })
+    .sort(
+      (a, b) =>
+        b.score - a.score || a.createdAt.getTime() - b.createdAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    );
+}
+
+/**
+ * HR's call result. A good call lets the candidate into the form queue; a no answer adds a try. It sends nothing and
+ * changes no stage or `revision`. A bad call is the Stop action, so its rules stay in one place.
+ */
+export async function recordCall(
+  id: string,
+  result: "good" | "no_answer",
+  actor: string,
+  db: Database,
+  now = new Date(),
+) {
+  await withDatabaseTransaction(db, async (tx) => {
+    await lockQueue(tx);
+    const { config } = await settings(tx);
+    if (!(await callQueue(tx, config)).some((entry) => entry.id === id))
+      throw new HiringError(409, "This candidate has left the call queue. Refresh the page.");
+    const [row] = await tx.select({ callReview: c.callReview }).from(c).where(eq(c.id, id)).for("update");
+    const at = now.toISOString();
+    const review = row.callReview ?? { good: null, tries: [] };
+    await tx
+      .update(c)
+      .set({
+        callReview:
+          result === "good" ? { ...review, good: { at, by: actor } } : { ...review, tries: [...review.tries, { at, by: actor }] },
+      })
+      .where(eq(c.id, id));
+    await audit(tx, actor, result === "good" ? "call-good" : "call-no-answer", id, { tries: review.tries.length + (result === "good" ? 0 : 1) });
   });
 }
 

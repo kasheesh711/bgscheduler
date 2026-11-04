@@ -12,6 +12,8 @@ export type LimitUsage = {
 };
 /** The ids that stood ahead of a dragged candidate, in order, so the place survives when some of them leave the queue. */
 export type ManualPlace = { ahead: string[]; movedAt: string };
+/** HR's calls before the pre-screen form. Only a good call lets a candidate at or above the call score into the send queue. */
+export type CallReview = { good: { at: string; by: string; manual?: true } | null; tries: { at: string; by: string }[] };
 export type ScoreOverride = { score: number; reason: string; by: string; at: string };
 export type QueueEntry = { id: string; subject: Subject; score: number; createdAt: Date; manual?: ManualPlace | null };
 

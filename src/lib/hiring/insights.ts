@@ -1,5 +1,6 @@
 import { isDecided, SUBJECTS, type HiringConfig, type Stage, type Subject } from "./model";
 import { profileScore, topHiringSubject, workRightsAccepted, type Assessment } from "./scoring";
+import type { CallReview } from "./limits";
 
 export const STAGE_LABELS: Record<Stage, string> = {
   new: "New",
@@ -95,7 +96,9 @@ type InsightCandidate = {
 type GateConfig = Pick<
   HiringConfig,
   "profileThreshold" | "profileWeights" | "acceptedWorkRights" | "subjectPriority"
->;
+> &
+  // Missing means calls are off.
+  Partial<Pick<HiringConfig, "callThreshold">>;
 type InsightInput = {
   config: GateConfig & Pick<HiringConfig, "interviewers">;
   candidates: InsightCandidate[];
@@ -122,9 +125,17 @@ export function profileGate(
   candidate: Pick<
     InsightCandidate,
     "email" | "previouslyContacted" | "workRightsAnswer" | "profileAssessment" | "universityAssessment"
-  >,
+  > & { callReview?: CallReview | null },
   config: GateConfig,
-): { eligible: boolean; reasons: string[]; short: string[]; review: string[]; subject: Subject | null } {
+): {
+  eligible: boolean;
+  reasons: string[];
+  short: string[];
+  review: string[];
+  subject: Subject | null;
+  /** The score is at or above the call score and HR has not recorded a good call. */
+  awaitingCall: boolean;
+} {
   const reasons: string[] = [];
   // The same reasons in a few words, for a table cell.
   const short: string[] = [];
@@ -140,13 +151,17 @@ export function profileGate(
   const assessment = candidate.profileAssessment;
   const relevant = (assessment?.subjects ?? []).filter((s) => s.relevant).map((s) => s.subject);
   const subject = topHiringSubject(relevant, config.subjectPriority);
+  const called = !!candidate.callReview?.good;
+  let awaitingCall = false;
   if (!assessment) add("The profile is not scored.", "Not scored");
   else {
-    if (
-      profileScore(assessment, config.profileWeights, candidate.universityAssessment?.fraction ?? 0) <
-      config.profileThreshold
-    )
-      add("The profile score is below the threshold.", "Below profile threshold");
+    const score = profileScore(assessment, config.profileWeights, candidate.universityAssessment?.fraction ?? 0);
+    if (score < config.profileThreshold) add("The profile score is below the threshold.", "Below profile threshold");
+    const callThreshold = config.callThreshold ?? null;
+    if (callThreshold !== null && score >= callThreshold && !called) {
+      awaitingCall = true;
+      add("HR must call this candidate before the form can go.", "Waiting for a call");
+    }
     if (assessment.criteria.some((c) => c.id === "degree" && c.result === "not_met"))
       final("The degree criterion is not met.", "Degree not met");
     if (!relevant.length) final("The profile supports no subject.", "No supported subject");
@@ -155,8 +170,9 @@ export function profileGate(
   if (!workRightsAccepted(candidate.workRightsAnswer, config.acceptedWorkRights))
     add("The work-rights answer is missing or not accepted.", "Work-rights answer not accepted");
   if (!candidate.email) final("There is no usable email.", "No usable email");
-  if (candidate.previouslyContacted) final("There was earlier contact.", "Earlier contact");
-  return { eligible: reasons.length === 0, reasons, short, review, subject };
+  // HR's good call is the contact, so a SEEK message after it does not hold the form.
+  if (candidate.previouslyContacted && !called) final("There was earlier contact.", "Earlier contact");
+  return { eligible: reasons.length === 0, reasons, short, review, subject, awaitingCall };
 }
 
 /** Mirrors the queue's gate for sending a new profile the pre-screen form. */

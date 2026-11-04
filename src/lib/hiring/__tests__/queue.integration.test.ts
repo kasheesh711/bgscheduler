@@ -18,10 +18,12 @@ import { isNewFlow, mirrorTracker, parseFormTimestamp, syncTracker } from "../so
 import { assessCandidates, deliverOutbox, preScreenText, runHiringCycle } from "../worker";
 import {
   autoInviteEligible,
+  callQueue,
   moveInQueue,
   onsiteQueue,
   preScreenQueue,
   readLimitUsage,
+  recordCall,
   releaseQueues,
   resetQueueOrder,
   runFollowUps,
@@ -47,6 +49,8 @@ const ACCEPTED = "I have permanent work rights with no restrictions";
 const config = configSchema.parse({
   enabled: true,
   deliveryEnabled: true,
+  // Most suites here test the form queue alone. The call queue tests set a call score.
+  callThreshold: null,
   preScreenThreshold: 50,
   interviewers: [{ canonicalKey: "Peat", email: "peat@example.com", subjects: ["Mathematics", "Physics"] }],
 });
@@ -469,6 +473,67 @@ describe("manual queue order", () => {
     await expect(moveInQueue(gone.id, [], "owner@example.com", db)).rejects.toMatchObject({ status: 409 });
     const here = await seed();
     await expect(moveInQueue(here.id, [here.id], "owner@example.com", db)).rejects.toMatchObject({ status: 400 });
+  });
+});
+
+describe("call queue", () => {
+  // five() scores 80. With English partial it scores 70.
+  const seventy = () => ({ ...five(), criteria: five().criteria.map((c) => (c.id === "english" ? { ...c, result: "partial" } : c)) });
+  beforeEach(() => setConfig({ callThreshold: 80 }));
+  const hr = "hr@example.com";
+  it("holds a score of 80 for HR's call, and sends a score of 70 at once", async () => {
+    const strong = await seed();
+    const middle = await seed({ profileAssessment: seventy() as never });
+    expect((await callQueue(db, await settingsConfig())).map((e) => e.id)).toEqual([strong.id]);
+    expect(await releaseQueues(db)).toEqual({ preScreen: 1, onsite: 0 });
+    expect((await forms()).map((f) => f.candidateId)).toEqual([middle.id]);
+    await recordCall(strong.id, "good", hr, db);
+    expect(await callQueue(db, await settingsConfig())).toEqual([]);
+    expect(await releaseQueues(db)).toEqual({ preScreen: 1, onsite: 0 });
+    expect((await forms()).map((f) => f.candidateId).sort()).toEqual([strong.id, middle.id].sort());
+  });
+  it("orders the call queue by score, then the earlier application", async () => {
+    const late = await seed({ createdAt: after(-1) });
+    const early = await seed({ createdAt: after(-2) });
+    const top = await seed({ universityAssessment: { fraction: 1 } as never, createdAt: after(0) });
+    expect((await callQueue(db, await settingsConfig())).map((e) => e.id)).toEqual([top.id, early.id, late.id]);
+  });
+  it("records a no answer as a try, sends nothing, and changes no stage or revision", async () => {
+    const row = await seed();
+    await recordCall(row.id, "no_answer", hr, db);
+    vi.setSystemTime(after(1));
+    await recordCall(row.id, "no_answer", hr, db);
+    const stored = await candidate(row.id);
+    expect(stored).toMatchObject({ stage: "new", revision: row.revision });
+    expect(stored.callReview).toEqual({ good: null, tries: [{ at: now.toISOString(), by: hr }, { at: after(1).toISOString(), by: hr }] });
+    expect(await releaseQueues(db)).toEqual({ preScreen: 0, onsite: 0 });
+    expect(await outbox()).toEqual([]);
+    expect((await callQueue(db, await settingsConfig())).map((e) => e.id)).toEqual([row.id]);
+    const actions = (await db.select().from(s.hiringAudit)).map((a) => a.action);
+    expect(actions).toEqual(["call-no-answer", "call-no-answer"]);
+  });
+  it("refuses a call for someone who left the call queue", async () => {
+    const stopped = await seed({ stage: "stopped" });
+    await expect(recordCall(stopped.id, "good", hr, db)).rejects.toMatchObject({ status: 409 });
+    const middle = await seed({ profileAssessment: seventy() as never });
+    await expect(recordCall(middle.id, "good", hr, db)).rejects.toMatchObject({ status: 409 });
+    const called = await seed();
+    await recordCall(called.id, "good", hr, db);
+    await expect(recordCall(called.id, "no_answer", hr, db)).rejects.toMatchObject({ status: 409 });
+  });
+  it("counts a hand invite past the call queue as a good call", async () => {
+    const row = await seed();
+    await reviewCandidate(row.id, { revision: row.revision, action: "advance", subjects: ["Mathematics"], reason: "Strong profile" }, "owner@example.com", db);
+    const stored = await candidate(row.id);
+    expect(stored.stage).toBe("pre_screen");
+    expect(stored.callReview).toEqual({ good: { at: now.toISOString(), by: "owner@example.com", manual: true }, tries: [] });
+    expect(await forms()).toHaveLength(1);
+  });
+  it("needs no call when the call score is blank", async () => {
+    await setConfig({ callThreshold: null });
+    await seed();
+    expect(await callQueue(db, await settingsConfig())).toEqual([]);
+    expect((await releaseQueues(db)).preScreen).toBe(1);
   });
 });
 
