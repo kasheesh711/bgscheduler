@@ -529,6 +529,14 @@ describe("call queue", () => {
     expect(stored.callReview).toEqual({ good: { at: now.toISOString(), by: "owner@example.com", manual: true }, tries: [] });
     expect(await forms()).toHaveLength(1);
   });
+  it("stops on a bad call, which is the existing Stop, and sends nothing", async () => {
+    const row = await seed();
+    await reviewCandidate(row.id, { revision: row.revision, action: "stop", subjects: ["Mathematics"], reason: "Bad call before the pre-screen form." }, hr, db);
+    expect((await candidate(row.id)).stage).toBe("stopped");
+    expect(await callQueue(db, await settingsConfig())).toEqual([]);
+    expect(await releaseQueues(db)).toEqual({ preScreen: 0, onsite: 0 });
+    expect(await outbox()).toEqual([]);
+  });
   it("needs no call when the call score is blank", async () => {
     await setConfig({ callThreshold: null });
     await seed();

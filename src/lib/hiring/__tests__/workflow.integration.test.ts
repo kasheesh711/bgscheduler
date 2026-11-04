@@ -1693,11 +1693,11 @@ describe("hiring workflow persistence", () => {
       expect(row.reviewNote).toContain("There was earlier contact.");
       expect(row.reviewNote).not.toContain("HR must call");
     });
-    it("still stops on Not Suitable, and cancels the waiting form", async () => {
+    it.each(["Not Suitable", "Accept"])("still stops on %s, and cancels the waiting form", async (status) => {
       const application = "00000000-0000-4000-8000-000000000403";
       const row = await called(application);
       await releaseQueues(db);
-      await observeSeekState(application, "Not Suitable", true, db);
+      await observeSeekState(application, status, true, db);
       expect((await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, row.id)))[0].stage).toBe("stopped");
       expect((await db.select().from(s.hiringOutbox))[0].status).toBe("cancelled");
     });
