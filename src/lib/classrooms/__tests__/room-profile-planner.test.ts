@@ -35,6 +35,12 @@ describe("usual room initialization", () => {
       existing: [{ canonicalKey: "established", revision: 1, rooms: ["A"] }], history: [{ canonicalKey: "New", room: "A", minutes: 500 }] });
     expect(contested[0].roomIds).toEqual(["B", "C", "D"]);
   });
+  it("gives a new non-TV tutor right-wing rooms before spare 2-seat TV rooms", () => {
+    const names = ["Remember (TV)", "Turn The Page (TV)", "Here There (TV)", "Consistency Wins", "Shift", "Trust the Process"];
+    const catalog = rooms.filter(room => names.includes(room.name));
+    const profiles = proposeRoomProfiles({ sessions: [session("New teacher")], rooms: catalog, history: [], existing: [] });
+    expect(profiles[0].roomIds.map(id => catalog.find(r => r.id === id)!.name)).toEqual(["Consistency Wins", "Shift", "Trust the Process"]);
+  });
   it("never persists unresolved identities or remote-only teachers", () => {
     expect(proposeRoomProfiles({ sessions: [{ ...session("Unknown"), canonicalKey: null }, { ...session("Remote"), sessionType: "SCHEDULED" }], rooms, history: [], existing: [] })).toEqual([]);
   });
