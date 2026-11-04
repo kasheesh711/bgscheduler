@@ -15,6 +15,10 @@ describe("roomSyncError", () => {
       metadata: { roomDataErrorSummary: "2 sessions reference teachers absent from the Wise roster" } }))
       .toEqual({ roomSyncErrorSummary: "2 sessions reference teachers absent from the Wise roster" });
   });
+  it("blocks on a recorded room problem even without an error summary", () => {
+    expect(roomSyncError({ errorSummary: null, metadata: { roomDataErrorSummary: "1 Wise teacher identities conflict" } }))
+      .toEqual({ roomSyncErrorSummary: "1 Wise teacher identities conflict" });
+  });
   it("fails closed on a malformed value", () => {
     expect(roomSyncError({ errorSummary: "x", metadata: { roomDataErrorSummary: true } })).toEqual({ roomSyncErrorSummary: "x" });
   });

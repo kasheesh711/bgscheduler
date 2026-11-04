@@ -563,13 +563,12 @@ async function loadLatestSuccessfulSyncForSnapshot(
 }
 
 export function roomSyncError(sync: { errorSummary?: string | null; metadata?: unknown } | null): { roomSyncErrorSummary?: string } {
+  const metadata = sync?.metadata && typeof sync.metadata === "object" ? sync.metadata as Record<string, unknown> : {};
+  const recorded = metadata.roomDataErrorSummary;
+  if (typeof recorded === "string" && recorded) return { roomSyncErrorSummary: recorded };
   if (!sync?.errorSummary) return {};
-  const metadata = sync.metadata && typeof sync.metadata === "object" ? sync.metadata as Record<string, unknown> : {};
-  // Runs recorded before the split carry no key: treat the whole summary as room-affecting.
-  if (!("roomDataErrorSummary" in metadata)) return { roomSyncErrorSummary: sync.errorSummary };
-  const value = metadata.roomDataErrorSummary;
-  if (value === null) return {};
-  return { roomSyncErrorSummary: typeof value === "string" && value ? value : sync.errorSummary };
+  // Runs recorded before the split carry no key; a malformed value also fails closed.
+  return recorded === null ? {} : { roomSyncErrorSummary: sync.errorSummary };
 }
 
 export async function loadClassroomSnapshotMeta(
