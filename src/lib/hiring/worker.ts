@@ -476,8 +476,14 @@ export async function rewriteBriefs(
   return calls;
 }
 
-/** Why `--send-one` must not send this candidate's form, or null. It sends one form that a click already queued. */
-export function sendOneRefusal(stage: string | undefined, formStatus: string | undefined) {
+/**
+ * Why `--send-one` must not send this candidate's form, or null. It sends one form that a click already queued.
+ * `otherSendable` is every other row that could leave now: while Messages is on, the delivery cron, a dashboard action
+ * or a booking can send a waiting booking row, so the switch must find none.
+ */
+export function sendOneRefusal(stage: string | undefined, formStatus: string | undefined, otherSendable: string[] = []) {
+  if (otherSendable.length)
+    return `Other messages could leave while Messages is on (${otherSendable.join(", ")}). Cancel or send them first. Nothing was sent.`;
   if (!stage) return "No candidate has that ID.";
   if (stage !== "pre_screen") return `The candidate is at ${stage}, not pre_screen. Click Invite to pre-screen first.`;
   if (!formStatus) return "The candidate has no pre-screen form. Click Invite to pre-screen first.";

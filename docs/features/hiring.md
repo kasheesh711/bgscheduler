@@ -390,6 +390,8 @@ A campaign is one SEEK job ad. **Rules and setup → SEEK campaigns** holds up t
 - The same person in two jobs is one row, matched by email. The row keeps the first job, and both application IDs are in `source_ids`.
 - With more than one job, Seek intake shows coverage cards per campaign, the campaign name on each row and a campaign filter. Overview keeps the totals.
 - A config saved before campaigns has one `seekJobId`. It reads as one active campaign. The next save stores the list.
+- A page error in one job stops the whole cycle, as it did with one job: scoring, follow-ups and delivery wait until it is fixed or the job is set inactive. Imports already saved stay.
+- **Release order for this change:** apply migration `0122`, then deploy, then update the Mac checkout, before anyone saves Rules. An old worker refuses the new config shape, and the first new work-rights answer also stores it.
 - The rules are the same for every campaign. One profile threshold, one pre-screen form and one set of limits apply to all jobs.
 
 ## Setup
@@ -462,7 +464,7 @@ Use this to send one pre-screen form and nothing else, for example to test a new
 2. Pick one candidate. Click **Invite to pre-screen**. The form row stays `pending`.
 3. Turn Messages on. Run `HIRING_WRITES_ENABLED=true npm run hiring:worker -- --send-one <candidate id>`. Turn Messages off at once.
 
-`--send-one` takes the worker lock. It refuses unless the candidate is at `pre_screen` and its form row is `pending`. It asks the delivery endpoint for that one row (`mode: "one"`, which accepts only a `<id>:pre-screen` key). It reads no source, scores nothing, runs no follow-up and releases no queue. It prints `sent` and the row status. The 15-minute delivery cron sends booking rows only, so it sends nothing else while Messages is on.
+`--send-one` takes the worker lock. It refuses unless the candidate is at `pre_screen` and its form row is `pending`. It also refuses while any other outbox row is unsent (`pending`, `failed`, `uncertain` or `processing`), and names those rows. While Messages is on, the 15-minute delivery cron, any dashboard action and a candidate booking can send a waiting booking row, so step 3 must start with none. It asks the delivery endpoint for that one row (`mode: "one"`, which accepts only a `<id>:pre-screen` key). It reads no source, scores nothing, runs no follow-up and releases no queue. It prints `sent` and the row status. Do not send a decision email from the dashboard while Messages is on for this step.
 
 ## Go-live for the revamp
 

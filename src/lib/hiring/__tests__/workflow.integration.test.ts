@@ -418,6 +418,11 @@ describe("hiring workflow persistence", () => {
     const [tagged] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, fromJob));
     expect(tagged.seekJobId).toBe("95633167");
     expect(tagged.sourceIds).toEqual([application(5, null).applicationId, second.applicationId]);
+    // A person known only from the tracker takes the job of their first SEEK application.
+    const [trackerOnly] = await db.insert(s.hiringCandidates).values({ name: "Tracker Person", email: "tracker7@example.com" }).returning();
+    await importApplication({ ...application(7, ACCEPTED), email: "tracker7@example.com", jobId: "95633167" }, db);
+    const [joined] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, trackerOnly.id));
+    expect(joined.seekJobId).toBe("95633167");
   });
   it("keeps the answer on the candidate, and leaves the settings alone, when the seen list is full", async () => {
     const seen = Array.from({ length: 200 }, (_, i) => `Answer ${i}`);

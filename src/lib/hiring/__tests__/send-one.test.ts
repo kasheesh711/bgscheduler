@@ -10,4 +10,7 @@ describe("sendOneRefusal", () => {
     expect(sendOneRefusal("pre_screen", "sent")).toMatch(/is sent, not pending/);
     expect(sendOneRefusal("pre_screen", "failed")).toMatch(/is failed, not pending/);
   });
+  it("refuses while any other message could leave, and names it", () => {
+    expect(sendOneRefusal("pre_screen", "pending", ["b:visit-line"])).toMatch(/Other messages could leave .*b:visit-line.*Nothing was sent/);
+  });
 });

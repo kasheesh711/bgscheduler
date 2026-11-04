@@ -7,7 +7,7 @@ import { z } from "zod";
 import { loadEnvConfig } from "@next/env";
 import { getDb } from "../src/lib/db";
 import { hiringCandidates, hiringOutbox, hiringSettings } from "../src/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import {
   LEGACY_SEEK_JOB_ID,
   configSchema,
@@ -79,7 +79,11 @@ async function main() {
       const key = `${id}:pre-screen`;
       const [candidate] = await db.select({ stage: hiringCandidates.stage }).from(hiringCandidates).where(eq(hiringCandidates.id, id));
       const form = async () => (await db.select({ status: hiringOutbox.status }).from(hiringOutbox).where(eq(hiringOutbox.key, key)))[0]?.status;
-      const refusal = sendOneRefusal(candidate?.stage, await form());
+      const others = await db
+        .select({ key: hiringOutbox.key })
+        .from(hiringOutbox)
+        .where(and(inArray(hiringOutbox.status, ["pending", "failed", "uncertain", "processing"]), ne(hiringOutbox.key, key)));
+      const refusal = sendOneRefusal(candidate?.stage, await form(), others.map((o) => o.key));
       if (refusal) throw new Error(refusal);
       const { sent } = await requestDelivery({ mode: "one", key });
       console.log(JSON.stringify({ sent, status: await form() }));
