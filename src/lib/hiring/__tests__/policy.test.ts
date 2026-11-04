@@ -420,7 +420,8 @@ describe("hiring decision boundaries", () => {
   });
 });
 
-const config = configSchema.parse({});
+// The call step has its own tests in insights.test.ts.
+const config = configSchema.parse({ callThreshold: null });
 const answer = "I have permanent work rights with no restrictions";
 const form = (extra: Partial<PreScreen> = {}): PreScreen => ({
   ...pre,
@@ -614,7 +615,7 @@ describe("profile gate", () => {
   const gate = (extra = {}, over = {}) => profileGate({ ...base, ...extra }, { ...config, profileThreshold: 60, ...over });
   it("passes with a partial degree and names the subject", () => {
     const partial = { ...strong, criteria: strong.criteria.map((c) => (c.id === "degree" || c.id === "subject" ? { ...c, result: "partial" as const } : c)) };
-    expect(gate({ profileAssessment: partial }, { profileThreshold: 0 })).toEqual({ eligible: true, reasons: [], short: [], review: [], subject: "Mathematics" });
+    expect(gate({ profileAssessment: partial }, { profileThreshold: 0 })).toEqual({ eligible: true, reasons: [], short: [], review: [], subject: "Mathematics", awaitingCall: false });
     expect(gate().eligible).toBe(true);
   });
   it("refuses a not_met degree, a low score, and a missing assessment", () => {

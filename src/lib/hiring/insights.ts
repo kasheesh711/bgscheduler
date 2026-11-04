@@ -158,10 +158,7 @@ export function profileGate(
     const score = profileScore(assessment, config.profileWeights, candidate.universityAssessment?.fraction ?? 0);
     if (score < config.profileThreshold) add("The profile score is below the threshold.", "Below profile threshold");
     const callThreshold = config.callThreshold ?? null;
-    if (callThreshold !== null && score >= callThreshold && !called) {
-      awaitingCall = true;
-      add("HR must call this candidate before the form can go.", "Waiting for a call");
-    }
+    awaitingCall = callThreshold !== null && score >= callThreshold && !called;
     if (assessment.criteria.some((c) => c.id === "degree" && c.result === "not_met"))
       final("The degree criterion is not met.", "Degree not met");
     if (!relevant.length) final("The profile supports no subject.", "No supported subject");
@@ -172,6 +169,8 @@ export function profileGate(
   if (!candidate.email) final("There is no usable email.", "No usable email");
   // HR's good call is the contact, so a SEEK message after it does not hold the form.
   if (candidate.previouslyContacted && !called) final("There was earlier contact.", "Earlier contact");
+  // Last, so a reason a call cannot fix shows first.
+  if (awaitingCall) add("HR must call this candidate before the form can go.", "Waiting for a call");
   return { eligible: reasons.length === 0, reasons, short, review, subject, awaitingCall };
 }
 
