@@ -1,4 +1,6 @@
 /** Usage: npx tsx --tsconfig scripts/tsconfig.json scripts/preview-classroom-recovery.ts --date=2026-09-06 --days=7 --output=/private/tmp/classroom-recovery
+ * Add --compare-default-rooms to instead compare a fresh allocation with the active production rooms
+ * against one that also uses the DEFAULT_CLASSROOM_ROOMS entries production does not yet have active.
  * Reads Postgres in a READ ONLY transaction and Wise using GET requests. Never creates a run,
  * publishes a room, seeds configuration, or sends mail. Output excludes student/contact details.
  */
@@ -15,7 +17,8 @@ import { getLocalMinuteOfDay } from "../src/lib/normalization/timezone";
 import { addBangkokDays, bangkokDateKey } from "../src/lib/room-capacity/dates";
 import { liveRoomBlocksForDate } from "../src/lib/classrooms/data";
 import { previewClassroomRecovery } from "../src/lib/classrooms/recovery-preview";
-import type { AssignmentSession } from "../src/lib/classrooms/assignment-engine";
+import { assignClassrooms, type AssignmentSession } from "../src/lib/classrooms/assignment-engine";
+import { CORE_TEACHING_ROOM_RANK, DEFAULT_CLASSROOM_ROOMS } from "../src/lib/classrooms/rooms";
 import { isOnsiteSessionType } from "../src/lib/classrooms/session-mode";
 import { loadClassroomRecoveryContext, recoveryRoomPolicies } from "../src/lib/classrooms/recovery-data";
 import { preferenceFrozenSessionIds } from "../src/lib/classrooms/notification-state";
@@ -28,15 +31,16 @@ async function main() {
   process.env.TZ = "UTC";
   const args = new Map(process.argv.slice(2).map(arg => {
     const split = arg.indexOf("=");
-    return [arg.slice(0, split), arg.slice(split + 1)];
+    return split < 0 ? [arg, ""] : [arg.slice(0, split), arg.slice(split + 1)];
   }));
   const startDate = args.get("--date") ?? bangkokDateKey(new Date());
   const dayCount = Number(args.get("--days") ?? 1);
+  const compareDefaultRooms = args.has("--compare-default-rooms");
   if (!Number.isInteger(dayCount) || dayCount < 1 || dayCount > 7) throw new Error("--days must be between 1 and 7");
   const date = startDate;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date) throw new Error("Invalid --date");
   const dates = Array.from({ length: dayCount }, (_, i) => addBangkokDays(startDate, i));
-  const outputPrefix = resolve(args.get("--output") ?? `/private/tmp/classroom-recovery-${startDate}`);
+  const outputPrefix = resolve(args.get("--output") || `/private/tmp/classroom-recovery-${startDate}`);
   if (!process.env.DATABASE_URL || !process.env.WISE_USER_ID || !process.env.WISE_API_KEY || !process.env.WISE_INSTITUTE_ID) throw new Error("Missing database or Wise configuration");
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
@@ -63,6 +67,27 @@ async function main() {
     }
     const known = new Set(sessions.map(row => row.wiseSessionId));
     const externalRoomBlocks = liveRoomBlocksForDate(day, date).filter(block => !known.has(block.wiseSessionId));
+    if (compareDefaultRooms) {
+      const active = new Set(saved.rooms.map(room => room.name));
+      const added = DEFAULT_CLASSROOM_ROOMS.filter(room => room.active && !active.has(room.name));
+      const fresh = (rooms: typeof DEFAULT_CLASSROOM_ROOMS) => {
+        const started = performance.now();
+        const diagnostics: { quality?: RoomQualityMetrics } = {};
+        const result = assignClassrooms(sessions, rooms, new Map(), { roomPolicies, externalRoomBlocks, diagnostics });
+        return { ms: Math.round(performance.now() - started), noRoom: result.counts.noRoomCount,
+          needsReview: result.rows.filter(row => row.status === "needs_review").length,
+          spareTvForNonTv: result.rows.filter(row => row.status === "assigned" && !row.needsTv
+            && rooms.some(room => room.name === row.assignedRoom && room.hasTv && !CORE_TEACHING_ROOM_RANK.has(room.name))).length,
+          quality: diagnostics.quality ?? roomQualityMetrics(result.rows, roomPolicies),
+          addedRoomUse: Object.fromEntries(added.map(room => [room.name, result.rows.filter(row => row.assignedRoom === room.name).length])) };
+      };
+      const report = { assignmentDate: date, liveReadStartedAt, readOnly: true, onsiteSessions: sessions.filter(row => isOnsiteSessionType(row.sessionType)).length,
+        sessions: sessions.length, unmatchedLiveSessions: unmatched.length, addedRooms: added.map(room => room.name),
+        current: fresh(saved.rooms), expanded: fresh([...saved.rooms, ...added]) };
+      await writeFile(`${output}-rooms.json`, `${JSON.stringify(report, null, 2)}\n`);
+      console.log(JSON.stringify(report));
+      continue;
+    }
     const confirmedInactiveSessionIds = new Set<string>();
     const missingSessionChecks: Array<{ wiseSessionId: string; status: string; confirmedInactive: boolean }> = [];
     const cutoff = date === bangkokDateKey(new Date()) ? getLocalMinuteOfDay(new Date()) : -Infinity;

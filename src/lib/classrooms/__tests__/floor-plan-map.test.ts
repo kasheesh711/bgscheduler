@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { FLOOR_PLAN_GUIDE_PATH } from "../floor-plan";
+import { FLOOR_PLAN_GUIDE_PATH, FLOOR_PLAN_ROOMS } from "../floor-plan";
 import { renderFloorPlanMapSvg } from "../floor-plan-map";
+import { DEFAULT_CLASSROOM_ROOMS } from "../rooms";
 
 describe("floor plan map email SVG", () => {
   it("renders highlighted route markers for selected rooms", () => {
@@ -29,5 +30,12 @@ describe("floor plan map email SVG", () => {
 
     expect(svg).not.toContain("<script>");
     expect(svg).not.toContain("alert(1)");
+  });
+});
+
+describe("floor plan room catalog", () => {
+  it("draws every allocator room and allocates every drawn classroom", () => {
+    const drawn = FLOOR_PLAN_ROOMS.filter((room) => room.assignable).map((room) => room.roomName).sort();
+    expect(DEFAULT_CLASSROOM_ROOMS.map((room) => room.name).sort()).toEqual(drawn);
   });
 });
