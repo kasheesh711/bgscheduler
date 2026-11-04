@@ -2,10 +2,11 @@
 
 Status: visit automation is live with sending off (2 Nov 2026). The three-stage revamp is complete in code on stacked pull requests #246 to #254. Local checks passed. Migrations `0120` and `0121` are applied to production. Merge, deployment, live use and acceptance are separate steps, listed in [Go-live for the revamp](#go-live-for-the-revamp).
 
-The Hiring page has five tabs. Each opens by address (`/hiring?view=seek`).
+The Hiring page has six tabs. Each opens by address (`/hiring?view=seek`).
 
 - **Overview** (`view=overview`): summary figures, limit meters, the candidate table, charts, and worker, delivery and activity status.
 - **1 Seek intake** (`view=seek`): see [Seek intake](#seek-intake).
+- **Calls** (`view=calls`): see [HR calls](#hr-calls).
 - **2 Pre-screen** (`view=prescreen`): see [Pre-screen screen](#pre-screen-screen).
 - **3 Mock and paper** (`view=assessment`): see [Mock and paper](#mock-and-paper), including the calendar of heads.
 - **Rules and setup** (`view=setup`): the rules, plus pass marks and the paper library.
@@ -38,6 +39,25 @@ The list holds people with a SEEK application. People only in the tracker are in
 - All limits and hard stops still apply. A full subject skips a dragged person, and the next person goes.
 - A new arrival takes its automatic place. **Back to automatic order** clears every drag.
 - Only the pre-screen queue can be dragged. The onsite queue stays automatic.
+
+## HR calls
+
+HR phones the strongest applicants before the pre-screen form goes. A candidate who passes the [profile gate](#profile-score) with a profile score at or above the **HR call score** (Rules and setup, starts at 80) waits on the **Calls** tab. The form cannot go until HR records a good call. A candidate below the call score gets the form automatically, as before. A blank call score turns the step off.
+
+The list is sorted by profile score, highest first, then the earlier application. A candidate who fails another part of the gate (for example, a subject that is not hiring) is not on the list, because the form could not go after the call. Click a row to open the same résumé panel as Seek intake, with the candidate's SEEK page link, where the phone number is.
+
+| Button | Result |
+|---|---|
+| Good call | The candidate joins the pre-screen send queue at their automatic place. The limits, the drag order and the switches still control the send. |
+| No answer | The try is saved with its time. The candidate stays on the list. |
+| Bad call | Stop, after a confirm. Nothing is sent to the candidate. |
+
+- A result sends nothing and changes no stage or `revision`. Each click takes the queue lock and writes an audit row (`call-good`, `call-no-answer`, or `stop`). A click for someone who has left the list gets "Refresh the page".
+- A person can still use **Invite to pre-screen** in the full record. That click counts as a good call, marked `manual` (Kevin's decision, 4 Nov 2026).
+- A good call stays valid if the score or the call score changes later.
+- **After a good call, SEEK moves do not hold the form** (Kevin's decision, 4 Nov 2026). A SEEK card that leaves Inbox keeps the candidate at `new`. A SEEK message still sets `previouslyContacted`, but the gate does not hold on it, and a waiting form is not cancelled. Not Suitable and Accept in SEEK still stop the candidate. The onsite reply rule still holds a reply with earlier contact for a person.
+- **Release order.** Apply migration `0123` to production before the merge, because the dashboard reads every candidate column. Only the Mac worker releases forms, so update the Mac checkout to the merged code before Automation is on: an older worker does not know the call step and would send the form to uncalled candidates. An older worker also refuses a settings row saved with `callThreshold`, which stops it safely.
+- The data is `hiring_candidates.call_review` (migration `0123`). Design: `docs/superpowers/specs/2026-11-04-hiring-call-queue-design.md`.
 
 ## Pre-screen screen
 
@@ -153,6 +173,7 @@ For the five professional criteria, `met` earns the full weight, `partial` half,
 - There was no earlier contact.
 - The profile supports at least one subject that is open for hiring.
 - The degree criterion is not `not_met`.
+- Below the HR call score, or HR recorded a good call (see [HR calls](#hr-calls)). A good call also lets earlier contact pass.
 
 A `partial` degree or subject can pass. This is a change from the earlier rule, which needed both to be `met`. More candidates can pass the gate. The limits control the pace.
 
@@ -160,7 +181,7 @@ A `partial` degree or subject can pass. This is a change from the earlier rule, 
 
 | Reason | Result |
 |---|---|
-| Profile not scored, below the threshold, subject not open for hiring, work-rights answer missing or not accepted | The candidate waits at `new`. A change to a setting or a re-read answer takes effect on the next cycle. |
+| Profile not scored, below the threshold, subject not open for hiring, work-rights answer missing or not accepted, waiting for a call | The candidate waits at `new`. A change to a setting or a re-read answer takes effect on the next cycle. |
 | Degree `not_met`, no supported subject, no usable email, earlier contact | The candidate goes to review. A person decides. |
 
 ### Pre-screen score
@@ -222,7 +243,7 @@ The DSCTE pentagon shows five corners: Degree, Subject, Curriculum, Teaching and
 1. The owner worker reads the normal SEEK UI in a separate Chrome profile. It extracts the application ID, professional profile, résumé text where available, the exact work-rights answer and contact history. It stores the original résumé file. It never changes a SEEK candidate's status or sends through SEEK.
 2. It imports existing tracker decisions and the latest pre-screen response for each normalized email. Existing source IDs, repeated applications and prior contact are retained. Initial historical contact stays in review and receives no invitation.
 3. Claude Code runs through the existing subscription-only runner, with no tools, no MCP access, no API key, a schema and a bounded call. The server validates evidence quotes and computes scores.
-4. A candidate at `new` who passes the profile gate waits in the **pre-screen queue**. The queue releases a form email only while every limit has room.
+4. A candidate at `new` who passes the profile gate waits in the **pre-screen queue**. A candidate at or above the HR call score waits on the **Calls** tab first (see [HR calls](#hr-calls)). The queue releases a form email only while every limit has room.
 5. When the candidate replies, the worker scores the response. A response that meets the [reply rule](#reply-rule) and the pass score enters the **onsite queue**. The queue releases a booking link only while every limit has room.
 6. The candidate opens the signed link and books one visit for one subject. The server picks the head of department. A visit is a 2-hour exam, then a 1-hour mock with that head.
 7. A response below the pass score, or one that fails a hard stop, goes to review. A person decides. The system sends no rejection.
@@ -322,7 +343,7 @@ The data comes from `GET /api/hiring?head={canonicalKey}&weekStart={date}`.
 
 The **Rules and setup** view holds:
 
-- Profile weights and the invitation threshold.
+- Profile weights, the invitation threshold and the HR call score.
 - The automation switches: Automation and Messages. The save bar warns before a save starts sending.
 - Pre-screen email rules: the four limits, the reminder day and the no-reply day.
 - Onsite invitation rules: the pass score, the four limits, the reminder day, the link expiry day, and the visit window.
