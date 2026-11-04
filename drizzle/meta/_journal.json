@@ -876,6 +876,13 @@
       "when": 1793763187157,
       "tag": "0123_hiring_call_review",
       "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1793775191026,
+      "tag": "0124_activate_right_wing_rooms",
+      "breakpoints": true
     }
   ]
 }

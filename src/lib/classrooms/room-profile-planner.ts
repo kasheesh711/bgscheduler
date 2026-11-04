@@ -1,8 +1,11 @@
 import type { AssignmentSession } from "./assignment-engine";
-import { DEFAULT_CLASSROOM_ROOMS, getPreferredRoom, getPriorityPreferredRoom, isGiftTutor, TV_REQUIRED_TUTORS, type ClassroomRoomDefinition } from "./rooms";
+import { CORE_TEACHING_ROOM_RANK, DEFAULT_CLASSROOM_ROOMS, getPreferredRoom, getPriorityPreferredRoom, isGiftTutor, TV_REQUIRED_TUTORS, type ClassroomRoomDefinition } from "./rooms";
 import { physicalRoom, type TutorRoomPolicy } from "./room-policy";
 import { isOnsiteSessionType } from "./session-mode";
 import { bangkokDateKey } from "@/lib/room-capacity/dates";
+
+// Same fill order as the engine, so new profiles take the right wing before spare TV rooms.
+const rank = (room: { name: string }) => CORE_TEACHING_ROOM_RANK.get(room.name) ?? 1_000;
 
 export interface ProfileRoom extends ClassroomRoomDefinition { id: string }
 export interface RoomUse { canonicalKey: string; room: string; minutes: number }
@@ -60,7 +63,7 @@ export function proposeRoomProfiles(input: {
       const history = input.history.filter(use => use.canonicalKey.toLowerCase() === canonicalKey && physicalRoom(use.room) === physicalRoom(room.name)).reduce((sum, use) => sum + use.minutes, 0);
       return { room, usable, contention, history };
     }).filter(score => score.room.name === anchor || (score.usable > 0 && (!needsTv || score.room.hasTv)))
-      .sort((a, b) => Number(b.room.name === anchor) - Number(a.room.name === anchor) || b.usable - a.usable || a.contention - b.contention || b.history - a.history || a.room.capacity - b.room.capacity || a.room.sortOrder - b.room.sortOrder || a.room.name.localeCompare(b.room.name));
+      .sort((a, b) => Number(b.room.name === anchor) - Number(a.room.name === anchor) || b.usable - a.usable || a.contention - b.contention || b.history - a.history || a.room.capacity - b.room.capacity || rank(a.room) - rank(b.room) || a.room.sortOrder - b.room.sortOrder || a.room.name.localeCompare(b.room.name));
     const selected = roomScores.slice(0, isGiftTutor(tutorDisplayName) ? 1 : 3).map(score => score.room);
     if (!selected.length) continue;
     result.push({ canonicalKey, tutorDisplayName, roomIds: selected.map(room => room.id) });

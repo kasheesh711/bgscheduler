@@ -5,6 +5,7 @@ import {
   type AssignmentSession,
 } from "../assignment-engine";
 import {
+  CORE_TEACHING_ROOM_PRIORITY,
   DEFAULT_CLASSROOM_ROOMS,
   NO_ROOM_AVAILABLE,
   ROOM_JOY,
@@ -1011,5 +1012,31 @@ describe("assignClassrooms", () => {
     expect(ras.assignedRoom).not.toBe("Never Ever (TV)");
     expect(ras.assignedRoom).toBe("Remember (TV)");
     expect(ras.status).toBe("assigned");
+  });
+
+  it("fills the right-wing rooms before spare TV rooms when the core rooms are busy", () => {
+    // 14 core + 12 right-wing rooms take 26 simultaneous 1:1 classes without a spare TV room or Relax.
+    const sessions = Array.from({ length: 26 }, (_, index) => session({
+      groupId: `group-${index}`,
+      tutorDisplayName: `Plain Tutor ${index}`,
+      wiseTeacherId: `teacher-${index}`,
+      wiseSessionId: `session-${index}`,
+      wiseClassId: `class-${index}`,
+    }));
+    const result = assignClassrooms(sessions, DEFAULT_CLASSROOM_ROOMS);
+    const used = new Set(result.rows.map((row) => row.assignedRoom));
+
+    expect(result.counts.noRoomCount).toBe(0);
+    expect([...used].sort()).toEqual([...CORE_TEACHING_ROOM_PRIORITY].sort());
+  });
+
+  it("fills every original core room before the first right-wing room", () => {
+    const sessions = Array.from({ length: 15 }, (_, index) => session({
+      groupId: `group-${index}`, tutorDisplayName: `Plain Tutor ${index}`, wiseTeacherId: `teacher-${index}`,
+      wiseSessionId: `session-${index}`, wiseClassId: `class-${index}`,
+    }));
+    const used = assignClassrooms(sessions, DEFAULT_CLASSROOM_ROOMS).rows.map((row) => row.assignedRoom);
+
+    expect(used.filter((room) => !CORE_TEACHING_ROOM_PRIORITY.slice(0, 14).includes(room as never))).toEqual(["Consistency Wins"]);
   });
 });

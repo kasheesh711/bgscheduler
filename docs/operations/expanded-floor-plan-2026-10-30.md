@@ -24,3 +24,5 @@ Kevin's annotated labels assign the last three spaces to room names despite thei
 The interactive map and static teacher map use the same geometry. Inactive rooms stay visible but muted in the interactive map. Current database activation dates and saved allocations are unchanged. Adding geometry makes the expansion rooms eligible for the existing mapped-room filter when they become active; this does not activate them.
 
 Kevin approved the rendered preview and requested deployment. Classroom 4 retains the existing canonical name Try; no Wise or Scheduling rename has been made.
+
+Update 4 November 2026: Kevin confirmed each right-wing room seats 2 and has no TV. The allocator now uses all 12 rooms (migration `0124_activate_right_wing_rooms`). They fill after the 14 core rooms and before the spare TV rooms. All 12 names match Wise locations exactly.
