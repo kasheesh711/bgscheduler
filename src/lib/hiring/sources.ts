@@ -1,4 +1,4 @@
-import { and, eq, gt, inArray, isNotNull, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull, ne, or, sql, type SQL } from "drizzle-orm";
 import { type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -237,7 +237,9 @@ export async function observeSeekState(
       ).length > 0;
     const heldNote = `SEEK status: ${status}. Cancel the visit in Hiring to stop this candidate.`;
     const stopped = seekStop && !held;
-    const externallyAdvanced = status !== "Inbox" && candidate.stage === "new";
+    // Kevin's rule: after HR's good call, a SEEK move or a SEEK message does not hold the pre-screen form.
+    const called = !!candidate.callReview?.good;
+    const externallyAdvanced = status !== "Inbox" && candidate.stage === "new" && !called;
     // This runs for every known candidate each cycle. A repeated write would raise the revision and break panel clicks.
     if (
       !newlyContacted &&
@@ -257,7 +259,7 @@ export async function observeSeekState(
             : candidate.stage,
         reviewNote: held
           ? heldNote
-          : `SEEK status: ${status}.${newlyContacted ? " New contact is recorded in SEEK; pending invitations were stopped." : ""}`,
+          : `SEEK status: ${status}.${newlyContacted ? ` New contact is recorded in SEEK; pending invitations were stopped${called && !stopped ? ", except the pre-screen form after HR's good call" : ""}.` : ""}`,
         revision: candidate.revision + 1,
         updatedAt: new Date(),
       })
@@ -271,6 +273,7 @@ export async function observeSeekState(
             eq(s.hiringOutbox.candidateId, candidate.id),
             sql`${s.hiringOutbox.payload} ? 'workflowStage'`,
             sql`${s.hiringOutbox.status} in ('pending','failed','uncertain')`,
+            called && !stopped ? ne(s.hiringOutbox.key, `${candidate.id}:pre-screen`) : undefined,
           ),
         );
     }
