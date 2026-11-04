@@ -59,8 +59,9 @@ export async function previewWeekendReadiness(db: Database, dates: [string, stri
   const roomPolicies = enabled ? recoveryRoomPolicies(context, live, dates[0]).policies : new Map();
   const report: WeekendReport = { version: 2, checkedAt: sourceCheckedAt, dates, snapshotId,
     snapshotFinishedAt: snapshotMeta.latestSyncFinishedAt, readiness: "clear", days: [], findings: [] };
-  if (snapshotMeta.syncErrorSummary) report.findings.push({ date: dates[0], kind: "unverified",
-    message: `Wise refresh reported incomplete data: ${snapshotMeta.syncErrorSummary}` });
+  if (snapshotMeta.syncErrorSummary) report.findings.push({ date: dates[0], kind: snapshotMeta.roomSyncErrorSummary ? "unverified" : "review",
+    message: snapshotMeta.roomSyncErrorSummary ? `Wise refresh reported incomplete data: ${snapshotMeta.roomSyncErrorSummary}`
+      : `Wise refresh reported a contact issue that does not affect rooms: ${snapshotMeta.syncErrorSummary}` });
   for (const date of dates) {
     const day: WeekendDayReport = { date, liveSessions: 0, plannedSessions: 0, noRoomCount: 0,
       allocation: options.checkpoint ? "blocked" : "not_requested", runId: null, overflowPlan: null, sourceCheckedAt };
@@ -73,7 +74,7 @@ export async function previewWeekendReadiness(db: Database, dates: [string, stri
       const reservations = await reservationRoomBlocks(db, date);
       const externalRoomBlocks = [...prepared.externalRoomBlocks, ...reservations];
       if (options.checkpoint) {
-        if (snapshotMeta.syncErrorSummary || prepared.findings.some(finding => finding.kind === "unverified")) {
+        if (snapshotMeta.roomSyncErrorSummary || prepared.findings.some(finding => finding.kind === "unverified")) {
           day.allocationError = "Allocation withheld because the source data could not be fully verified.";
           report.findings.push({ date, kind: "unverified", message: day.allocationError });
           continue;
@@ -99,7 +100,7 @@ export async function previewWeekendReadiness(db: Database, dates: [string, stri
         const improved = await improveOverflowAllocation(db, { reconciliation: preview, rooms: context.rooms, assignmentDate: date,
           snapshotId, snapshotFinishedAt: snapshotMeta.latestSyncFinishedAt, liveSessions: live,
           externalRoomBlocks: preview.externalRoomBlocks, frozenSessionIds: prepared.frozenSessionIds,
-          unverifiedReasons: [snapshotMeta.syncErrorSummary, ...prepared.findings.map(finding => finding.message)].filter((value): value is string => Boolean(value)) });
+          unverifiedReasons: [snapshotMeta.roomSyncErrorSummary, ...prepared.findings.map(finding => finding.message)].filter((value): value is string => Boolean(value)) });
         const rows = improved.reconciliation.rows;
         Object.assign(day, { runId: previous?.id ?? null, allocationCreatedAt: previous?.createdAt.toISOString() ?? null,
           plannedSessions: rows.length, noRoomCount: rows.filter(row => row.status === "no_room").length, overflowPlan: improved.plan,

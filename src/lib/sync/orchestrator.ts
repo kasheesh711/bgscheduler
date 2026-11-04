@@ -665,13 +665,14 @@ export async function runFullSync(
     // duration was previously only ever returned to the caller, so a finished
     // run left no record of its own cost.
     const wiseStats = client.getStats();
-    const onboardingError = [
-      importContacts && !shouldPromote ? "Wise snapshot rejected because teacher identities are ambiguous; correct the roster and retry sync" : null,
-      contactSync?.blocked ? `${contactSync.blocked} Wise teacher contact accounts need review` : null,
-      importContacts && unmanagedSessions.length ? `${unmanagedSessions.length} sessions reference teachers absent from the Wise roster; correct the roster and retry sync` : null,
-    ].filter(Boolean).join("; ") || null;
+    const rejectedError = importContacts && !shouldPromote ? "Wise snapshot rejected because teacher identities are ambiguous; correct the roster and retry sync" : null;
+    const unmanagedError = importContacts && unmanagedSessions.length ? `${unmanagedSessions.length} sessions reference teachers absent from the Wise roster; correct the roster and retry sync` : null;
+    const contactError = contactSync?.blocked ? `${contactSync.blocked} Wise teacher contact accounts need review` : null;
+    const onboardingError = [rejectedError, contactError, unmanagedError].filter(Boolean).join("; ") || null;
+    // Contact (email) problems do not affect room data, so the weekend checkpoint may still allocate.
+    const roomDataErrorSummary = [rejectedError, unmanagedError].filter(Boolean).join("; ") || null;
     const successMetadata = {
-      contactSync, unmanagedTeacherSessions: unmanagedSessions,
+      contactSync, unmanagedTeacherSessions: unmanagedSessions, roomDataErrorSummary,
       diffHookDurationMs: diffHookResult.durationMs,
       pastSessionsCapturedCount: diffHookResult.capturedCount,
       durationMs: Date.now() - startTime,
