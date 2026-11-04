@@ -687,7 +687,7 @@ export type BackfillOutcome = {
  * The `seek-backfill` row marks the candidate as read. A failed download or upload saves the answer but leaves that row out
  * (a `seek-backfill-retry` row records the answer), so the next run reads the candidate again. A file that can never be read
  * (`.doc`, over the page limit, encrypted, not a PDF or Word file) is marked `unusable` and not retried. A file that SEEK
- * locks behind a paid upgrade is `locked` and is retried like a failed download, so a later run stores it after an upgrade.
+ * locks behind a paid upgrade is `locked`. It is marked read and not retried, because every run would reopen it for nothing.
  * Returns null when no candidate holds the application, or retention deleted its file.
  */
 export async function applyBackfill(
@@ -725,7 +725,7 @@ export async function applyBackfill(
     const [now] = await tx.select({ answer: c.workRightsAnswer }).from(c).where(eq(c.id, row.id)).for("update");
     const answer = !text ? "none" : now.answer === null ? "filled" : now.answer === text ? "same" : "replaced";
     if (text && answer !== "same") await tx.update(c).set({ workRightsAnswer: text }).where(eq(c.id, row.id));
-    await audit(tx, BACKFILL_ACTOR, stored === "failed" || stored === "locked" ? "seek-backfill-retry" : "seek-backfill", row.id, {
+    await audit(tx, BACKFILL_ACTOR, stored === "failed" ? "seek-backfill-retry" : "seek-backfill", row.id, {
       answer,
       ...(answer === "replaced" ? { previous: now.answer } : {}),
       file: stored,

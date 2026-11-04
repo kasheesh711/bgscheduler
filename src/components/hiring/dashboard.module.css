@@ -312,7 +312,7 @@
 .criterionResult { grid-column: 4; color: var(--muted); }
 .criterion blockquote { margin-top: 4px; padding-left: 10px; border-left: 2px solid var(--line); color: var(--muted); overflow-wrap: anywhere; }
 .sourceLink { margin-right: 12px; color: var(--accent-text); text-decoration: underline; }
-.seekButton { display: inline-block; padding: 6px 14px; border: 1px solid var(--stone-dark); border-radius: 999px; font-weight: 500; white-space: nowrap; }
+.seekButton { display: inline-block; margin: 0 6px 6px 0; padding: 6px 14px; border: 1px solid var(--stone-dark); border-radius: 999px; font-weight: 500; white-space: nowrap; }
 .seekButton:hover { background: var(--tint); }
 .sourceText { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
 .sourceText summary { cursor: pointer; font-size: 14px; font-weight: 500; }

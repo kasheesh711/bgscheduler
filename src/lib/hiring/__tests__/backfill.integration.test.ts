@@ -201,13 +201,13 @@ describe("SEEK pass: applyBackfill", () => {
     expect((await backfillStatus(db, "app-1")).state).toBe("done");
   });
 
-  it("saves the answer and retries later when SEEK locks the download behind an upgrade", async () => {
+  it("saves the answer and marks the candidate read when SEEK locks the download behind an upgrade", async () => {
     const row = await seed();
     expect(await applyBackfill(db, "app-1", { workRightsAnswer: ACCEPTED, file: null, resumeLocked: true })).toEqual({ answer: "filled", file: "locked" });
     expect(put).not.toHaveBeenCalled();
     expect((await load(row.id)).workRightsAnswer).toBe(ACCEPTED);
-    expect((await backfillStatus(db, "app-1")).state).toBe("todo");
-    const [audit] = await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "seek-backfill-retry"));
+    expect((await backfillStatus(db, "app-1")).state).toBe("done");
+    const [audit] = await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "seek-backfill"));
     expect(audit.detail).toMatchObject({ file: "locked" });
   });
 

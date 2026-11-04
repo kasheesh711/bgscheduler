@@ -182,7 +182,7 @@ async function readApplication(
           // Some job ads put the download behind a paid SEEK upgrade. The file is then out of reach, which is not a failure.
           const upgrade = dialog.getByRole("button", { name: "Upgrade to download", exact: true });
           await downloadButton.or(upgrade).first().waitFor({ state: "visible", timeout: 10000 });
-          resumeLocked = await upgrade.isVisible();
+          resumeLocked = await upgrade.first().isVisible();
         }
         if (!resumeLocked) {
           await downloadButton.waitFor({ state: "visible", timeout: 10000 });
