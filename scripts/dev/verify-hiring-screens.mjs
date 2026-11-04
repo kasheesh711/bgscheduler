@@ -60,7 +60,7 @@ const payload = {
   workerSummary: { scanned: 140, imported: 2, remaining: 8, folders: [{ status: "Inbox", count: 120, imported: 112 }, { status: "Prescreen", count: 34, imported: 34 }, { status: "Shortlist", count: 9, imported: 9 }, { status: "Not Suitable", count: 500, imported: 0 }] },
   usage: { preScreen: { perDay: 1, perWeek: 2, waiting: 1, unbooked: 0, bySubject: {} }, onsite: { perDay: 0, perWeek: 0, waiting: 0, unbooked: 0, bySubject: {} } },
   holds: { b: { funnel: "pre_screen", state: "next", position: 0, limit: null, subject: "Mathematics" }, a: { funnel: "pre_screen", state: "held", position: 2, limit: "perDay", subject: "Mathematics" } },
-  preScreenOrder: ["b", "a", "c2"], callOrder: ["k"], headMocks: {}, heads: {}, candidates, bookings: [],
+  preScreenOrder: ["b", "a", "c2"], callOrder: ["k", "b"], headMocks: {}, heads: {}, candidates, bookings: [],
   visitClashes: { candidateIds: [], stale: false, clashes: {} },
   outbox: [
     { id: "o2", key: "r1:visit-invite", candidateId: "r1", kind: "email", status: "sent", error: null, sentAt: "2026-11-02T03:04:00Z", workflowStage: "onsite_invited" },
@@ -226,12 +226,16 @@ try {
     await calls.getByText("Sample Kim").waitFor();
     assert.ok(await calls.getByText("1 no answer · last 3 Nov, 09:00").isVisible());
     await shot(page, "calls");
-    await calls.getByRole("button", { name: "Good call" }).click();
+    const ben = calls.getByRole("link", { name: "View on SEEK for Sample Ben (opens in a new tab)" });
+    assert.match(await ben.getAttribute("href"), /^https:\/\/th\.employer\.seek\.com\/candidates\/\?jobid=\d+&selected=[^&]+&tab=profile$/);
+    assert.equal(await ben.getAttribute("target"), "_blank");
+    assert.ok(await calls.getByText("Chulalongkorn University").isVisible());
+    await calls.getByRole("button", { name: "Good call" }).first().click();
     await page.waitForFunction(() => window.posted.length === 1);
-    await calls.getByRole("button", { name: "No answer" }).click();
+    await calls.getByRole("button", { name: "No answer" }).first().click();
     await page.waitForFunction(() => window.posted.length === 2);
     page.once("dialog", (dialog) => dialog.accept());
-    await calls.getByRole("button", { name: "Bad call" }).click();
+    await calls.getByRole("button", { name: "Bad call" }).first().click();
     await page.waitForFunction(() => window.posted.length === 3);
     const posted = await page.evaluate(() => window.posted);
     assert.deepEqual(posted.slice(0, 2), [
@@ -338,7 +342,7 @@ try {
     assert.ok(await panel.getByText("I require a visa").isVisible());
   });
   await check("the pre-screen tab lists everyone sent a form, with proof of the visit email", async () => {
-    await page.getByRole("button", { name: "2 Pre-screen" }).click();
+    await page.getByRole("button", { name: "3 Pre-screen" }).click();
     const list = page.getByRole("region", { name: "Pre-screen responses" });
     const rows = list.locator("tbody tr");
     await rows.first().waitFor();
@@ -368,7 +372,7 @@ try {
     assert.deepEqual(posted.at(-1), { action: "pre_screen_score", id: "r2", revision: 1, score: 70, reason: "Strong in a call" });
   });
   await check("the mock and paper tab lists visits with date, head and results", async () => {
-    await page.getByRole("button", { name: "3 Mock and paper" }).click();
+    await page.getByRole("button", { name: "4 Mock and paper" }).click();
     const list = page.getByRole("region", { name: "Mock and paper" });
     await list.locator("tbody tr").first().waitFor();
     assert.deepEqual(await list.locator("tbody button").allInnerTexts(), ["Reply Low", "Reply Passed"]);

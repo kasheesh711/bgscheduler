@@ -62,6 +62,7 @@ export function createBackfillStep(options: {
     filesStored: 0,
     fileFailed: 0,
     fileUnusable: 0,
+    fileLocked: 0,
     readFailed: 0,
   };
   let attempts = 0;
@@ -97,6 +98,7 @@ export function createBackfillStep(options: {
     if (outcome.file === "stored") counts.filesStored++;
     if (outcome.file === "failed") counts.fileFailed++;
     if (outcome.file === "unusable") counts.fileUnusable++;
+    if (outcome.file === "locked") counts.fileLocked++;
     return "read";
   };
   return { run, counts };

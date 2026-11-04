@@ -80,12 +80,16 @@ export async function connectSeek(profilePath: string, jobId: string) {
   }
 }
 
-/** `resumeFailed`: a résumé control was there but the download failed. `resumeUnusable`: the file can never be read (not PDF or Word, encrypted, too long). */
+/**
+ * `resumeFailed`: a résumé control was there but the download failed. `resumeUnusable`: the file can never be read (not PDF or
+ * Word, encrypted, too long). `resumeLocked`: SEEK shows the résumé but asks for a paid upgrade to download it.
+ */
 type ApplicationRead = {
   application: Application;
   resumeFile: ResumeFile | null;
   resumeFailed: boolean;
   resumeUnusable: boolean;
+  resumeLocked: boolean;
 };
 
 /**
@@ -133,6 +137,7 @@ async function readApplication(
   let resumeFile: ResumeFile | null = null;
   let resumeFailed = false;
   let resumeUnusable = false;
+  let resumeLocked = false;
   try {
     await dialog.getByRole("tab", { name: /^Profile(?:\s+Profile)*$/ }).click();
     const profile = dialog.getByRole("tabpanel", { name: "Profile" });
@@ -174,25 +179,31 @@ async function readApplication(
             name: "Download document",
             exact: true,
           });
+          // Some job ads put the download behind a paid SEEK upgrade. The file is then out of reach, which is not a failure.
+          const upgrade = dialog.getByRole("button", { name: "Upgrade to download", exact: true });
+          await downloadButton.or(upgrade).first().waitFor({ state: "visible", timeout: 10000 });
+          resumeLocked = await upgrade.isVisible();
         }
-        await downloadButton.waitFor({ state: "visible", timeout: 10000 });
-        const downloadPromise = page.waitForEvent("download", {
-          timeout: 20000,
-        });
-        await downloadButton.click();
-        const download = await downloadPromise;
-        const file = path.join(dir, "resume");
-        await download.saveAs(file);
-        const bytes = await readFile(file);
-        // Playwright keeps its own copy in a temp folder until the browser closes.
-        await download.delete().catch(() => {});
-        try {
-          resumeText = redactProfile(await documentText(bytes), name);
-          // Only a file that passed the extractor's limits is kept. The model reads the redacted text, never the file.
-          resumeFile = { bytes, name: download.suggestedFilename() };
-        } catch {
-          // A file that is read but cannot be used will not be usable on a later run either.
-          resumeUnusable = true;
+        if (!resumeLocked) {
+          await downloadButton.waitFor({ state: "visible", timeout: 10000 });
+          const downloadPromise = page.waitForEvent("download", {
+            timeout: 20000,
+          });
+          await downloadButton.click();
+          const download = await downloadPromise;
+          const file = path.join(dir, "resume");
+          await download.saveAs(file);
+          const bytes = await readFile(file);
+          // Playwright keeps its own copy in a temp folder until the browser closes.
+          await download.delete().catch(() => {});
+          try {
+            resumeText = redactProfile(await documentText(bytes), name);
+            // Only a file that passed the extractor's limits is kept. The model reads the redacted text, never the file.
+            resumeFile = { bytes, name: download.suggestedFilename() };
+          } catch {
+            // A file that is read but cannot be used will not be usable on a later run either.
+            resumeUnusable = true;
+          }
         }
       } catch {
         resumeText = "";
@@ -226,6 +237,7 @@ async function readApplication(
       resumeFile,
       resumeFailed,
       resumeUnusable,
+      resumeLocked,
     };
   } finally {
     await dialog
@@ -429,7 +441,8 @@ export async function importSeek(
   });
   let imported = 0,
     remaining = 0,
-    resumeUploadsFailed = 0;
+    resumeUploadsFailed = 0,
+    resumeLocked = 0;
   const onWebsite = new Map<string, number>();
   const count = (status: string) => onWebsite.set(status, (onWebsite.get(status) ?? 0) + 1);
   try {
@@ -449,6 +462,7 @@ export async function importSeek(
         }
         const read = await readApplication(page, cards.nth(index), jobId);
         if (!(await saveApplication(read, consume, keepFile))) resumeUploadsFailed++;
+        if (read.resumeLocked) resumeLocked++;
         knownIds.add(id);
         imported++;
         count(status);
@@ -460,6 +474,7 @@ export async function importSeek(
       remaining,
       folders: folders.map((f) => ({ ...f, imported: onWebsite.get(f.status) ?? 0 })),
       resumeUploadsFailed,
+      resumeLocked,
     };
   } finally {
     await browser.close();
@@ -502,13 +517,14 @@ export async function backfillSeek(
       inStep = true;
       const outcome = await step(id, async () => {
         try {
-          const { application, resumeFile, resumeFailed, resumeUnusable } = await readApplication(page, cards.nth(index), jobId, true);
+          const { application, resumeFile, resumeFailed, resumeUnusable, resumeLocked } = await readApplication(page, cards.nth(index), jobId, true);
           return {
             applicationId: application.applicationId,
             workRightsAnswer: application.workRightsAnswer,
             file: resumeFile,
             resumeFailed,
             resumeUnusable,
+            resumeLocked,
           };
         } catch (error) {
           if (!seekSignedIn(page.url())) throw new BackfillFatal(SEEK_SIGNED_OUT);

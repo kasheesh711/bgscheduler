@@ -663,16 +663,20 @@ export async function backfillStatus(
   return marked ? { state: "done" } : { state: "todo", candidateId: row.id };
 }
 
-/** What one page showed. `resumeFailed`: a résumé control was there but the download failed. `resumeUnusable`: the file can never be read. */
+/**
+ * What one page showed. `resumeFailed`: a résumé control was there but the download failed. `resumeUnusable`: the file can
+ * never be read. `resumeLocked`: SEEK asks for a paid upgrade to download it.
+ */
 export type BackfillPage = {
   workRightsAnswer: string | null;
   file: ResumeFile | null;
   resumeFailed?: boolean;
   resumeUnusable?: boolean;
+  resumeLocked?: boolean;
 };
 export type BackfillOutcome = {
   answer: "none" | "filled" | "same" | "replaced";
-  file: "stored" | "kept" | "none" | "failed" | "unusable";
+  file: "stored" | "kept" | "none" | "failed" | "unusable" | "locked";
 };
 
 /**
@@ -682,13 +686,14 @@ export type BackfillOutcome = {
  *
  * The `seek-backfill` row marks the candidate as read. A failed download or upload saves the answer but leaves that row out
  * (a `seek-backfill-retry` row records the answer), so the next run reads the candidate again. A file that can never be read
- * (`.doc`, over the page limit, encrypted, not a PDF or Word file) is marked `unusable` and not retried.
+ * (`.doc`, over the page limit, encrypted, not a PDF or Word file) is marked `unusable` and not retried. A file that SEEK
+ * locks behind a paid upgrade is `locked` and is retried like a failed download, so a later run stores it after an upgrade.
  * Returns null when no candidate holds the application, or retention deleted its file.
  */
 export async function applyBackfill(
   db: Database,
   applicationId: string,
-  { workRightsAnswer, file, resumeFailed, resumeUnusable }: BackfillPage,
+  { workRightsAnswer, file, resumeFailed, resumeUnusable, resumeLocked }: BackfillPage,
 ): Promise<BackfillOutcome | null> {
   await assertAutomationOff(db);
   const c = s.hiringCandidates;
@@ -712,6 +717,7 @@ export async function applyBackfill(
       }
     else if (resumeFailed) stored = "failed";
     else if (resumeUnusable) stored = "unusable";
+    else if (resumeLocked) stored = "locked";
   }
   const text = workRightsAnswer?.trim() || null;
   return withDatabaseTransaction(db, async (tx) => {
@@ -719,7 +725,7 @@ export async function applyBackfill(
     const [now] = await tx.select({ answer: c.workRightsAnswer }).from(c).where(eq(c.id, row.id)).for("update");
     const answer = !text ? "none" : now.answer === null ? "filled" : now.answer === text ? "same" : "replaced";
     if (text && answer !== "same") await tx.update(c).set({ workRightsAnswer: text }).where(eq(c.id, row.id));
-    await audit(tx, BACKFILL_ACTOR, stored === "failed" ? "seek-backfill-retry" : "seek-backfill", row.id, {
+    await audit(tx, BACKFILL_ACTOR, stored === "failed" || stored === "locked" ? "seek-backfill-retry" : "seek-backfill", row.id, {
       answer,
       ...(answer === "replaced" ? { previous: now.answer } : {}),
       file: stored,

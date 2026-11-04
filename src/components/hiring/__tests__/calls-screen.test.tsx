@@ -1,17 +1,33 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { BAD_CALL_REASON, CallsScreen, callCommand, triesText } from "../calls-screen";
+import { BAD_CALL_REASON, CallsScreen, callCommand, callSubjects, triesText } from "../calls-screen";
 import type { HiringData } from "../dashboard";
 
 vi.mock("next/font/google", () => ({ Instrument_Serif: () => ({ variable: "" }) }));
 
+const PRIORITY = [
+  { subject: "Mathematics", hiring: true },
+  { subject: "Physics", hiring: true },
+  { subject: "Chemistry", hiring: true },
+];
 const candidate = (patch = {}) => ({
   id: "a",
   name: "Sample A",
   revision: 3,
   subjects: ["Mathematics"],
   profileScore: 86,
-  profileAssessment: { briefSummary: "Strong maths tutor." },
+  profileAssessment: {
+    briefSummary: "Strong maths tutor.",
+    subjects: [
+      { subject: "Physics", relevant: true },
+      { subject: "Mathematics", relevant: true },
+      { subject: "Chemistry", relevant: false },
+    ],
+  },
+  universityAssessment: { name: "Chulalongkorn University" },
+  seekApplicationId: "app-1",
+  sourceIds: [],
+  seekJobId: "95633167",
   callReview: null,
   ...patch,
 });
@@ -19,7 +35,7 @@ const data = (patch = {}) =>
   ({
     candidates: [candidate(), candidate({ id: "b", name: "Sample B", profileScore: 92 }), candidate({ id: "c", name: "Not Listed" })],
     callOrder: ["b", "a"],
-    config: { callThreshold: 80 },
+    config: { callThreshold: 80, subjectPriority: PRIORITY, seekJobs: [{ jobId: "95633167" }] },
     ...patch,
   }) as unknown as HiringData;
 const screen = (d = data()) =>
@@ -30,11 +46,23 @@ describe("CallsScreen", () => {
     const html = screen();
     expect(html.indexOf("Sample B")).toBeLessThan(html.indexOf("Sample A"));
     expect(html).not.toContain("Not Listed");
-    for (const word of ["Good call", "No answer", "Bad call", "2 to call", "Strong maths tutor.", "Not called yet"]) expect(html).toContain(word);
+    for (const word of ["Good call", "No answer", "Bad call", "2 to call", "Strong maths tutor.", "Not called yet", "Chulalongkorn University", "Also Physics"])
+      expect(html).toContain(word);
+    expect(html).toContain('href="https://th.employer.seek.com/candidates/?jobid=95633167&amp;selected=app-1&amp;tab=profile"');
+    expect(html).toContain('target="_blank"');
   });
   it("says so when nobody is waiting, and when calls are off", () => {
     expect(screen(data({ callOrder: [] }))).toContain("Nobody is waiting for a call.");
     expect(screen(data({ callOrder: [], config: { callThreshold: null } }))).toContain("Calls are off.");
+  });
+});
+
+describe("callSubjects", () => {
+  it("names the subject the form goes for first, then the other supported subjects", () => {
+    expect(callSubjects(candidate() as never, PRIORITY as never)).toEqual({ main: "Mathematics", other: ["Physics"] });
+  });
+  it("says so when the profile supports no hiring subject", () => {
+    expect(callSubjects({ profileAssessment: null }, PRIORITY as never)).toEqual({ main: "None found", other: [] });
   });
 });
 

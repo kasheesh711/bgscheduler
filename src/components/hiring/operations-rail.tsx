@@ -54,6 +54,7 @@ export function OperationsRail({
   const folders = data.workerSummary?.folders.filter((f) => f.count) ?? [];
   const folderTotal = folders.reduce((n, f) => n + f.count, 0);
   const uploadsFailed = data.workerSummary?.resumeUploadsFailed ?? 0;
+  const locked = data.workerSummary?.resumeLocked ?? 0;
   const noResumeFile = data.candidates.filter((c) => c.resumeState === "none").length;
   const problems = data.outbox.filter((j) => j.status === "failed" || j.status === "uncertain");
   const appointments = [...data.bookings].sort(
@@ -79,6 +80,11 @@ export function OperationsRail({
         {uploadsFailed > 0 && (
           <p className={css.warnWord}>
             {uploadsFailed} résumé upload{uploadsFailed === 1 ? "" : "s"} failed
+          </p>
+        )}
+        {locked > 0 && (
+          <p className={css.warnWord}>
+            SEEK asks for an upgrade to download {locked} new résumé{locked === 1 ? "" : "s"}. Read {locked === 1 ? "it" : "them"} on SEEK.
           </p>
         )}
         {!data.google.connected && (

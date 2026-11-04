@@ -46,9 +46,9 @@ export const NO_FILTER: CandidateFilter = { stage: "all", prescreen: "all", buck
 const VIEWS = {
   overview: "Overview",
   seek: "1 Seek intake",
-  calls: "Calls",
-  prescreen: "2 Pre-screen",
-  assessment: "3 Mock and paper",
+  calls: "2 Calls",
+  prescreen: "3 Pre-screen",
+  assessment: "4 Mock and paper",
   setup: "Rules and setup",
 };
 export type HiringView = keyof typeof VIEWS;
@@ -251,8 +251,8 @@ export function HiringDashboard() {
       {data && (clashes.size > 0 || data.visitClashes.stale) && (
         <p role="alert" className={css.alert}>
           {clashes.size > 0
-            ? `${clashes.size} booked visit${clashes.size === 1 ? "" : "s"} now clash${clashes.size === 1 ? "es" : ""} with a Wise class, leave or sit-in. The app did not move ${clashes.size === 1 ? "it" : "them"}. Staff must act. See the calendar in 3 Mock and paper.`
-            : "Wise data is old or missing, so visit clashes may not show. Check the calendar in 3 Mock and paper."}
+            ? `${clashes.size} booked visit${clashes.size === 1 ? "" : "s"} now clash${clashes.size === 1 ? "es" : ""} with a Wise class, leave or sit-in. The app did not move ${clashes.size === 1 ? "it" : "them"}. Staff must act. See the calendar in 4 Mock and paper.`
+            : "Wise data is old or missing, so visit clashes may not show. Check the calendar in 4 Mock and paper."}
         </p>
       )}
       {!data || !config || !insights ? (

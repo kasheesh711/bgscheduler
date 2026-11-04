@@ -6,9 +6,9 @@ The Hiring page has six tabs. Each opens by address (`/hiring?view=seek`).
 
 - **Overview** (`view=overview`): summary figures, limit meters, the candidate table, charts, and worker, delivery and activity status.
 - **1 Seek intake** (`view=seek`): see [Seek intake](#seek-intake).
-- **Calls** (`view=calls`): see [HR calls](#hr-calls).
-- **2 Pre-screen** (`view=prescreen`): see [Pre-screen screen](#pre-screen-screen).
-- **3 Mock and paper** (`view=assessment`): see [Mock and paper](#mock-and-paper), including the calendar of heads.
+- **2 Calls** (`view=calls`): see [HR calls](#hr-calls).
+- **3 Pre-screen** (`view=prescreen`): see [Pre-screen screen](#pre-screen-screen).
+- **4 Mock and paper** (`view=assessment`): see [Mock and paper](#mock-and-paper), including the calendar of heads.
 - **Rules and setup** (`view=setup`): the rules, plus pass marks and the paper library.
 
 The Hiring workspace follows a candidate from a SEEK application to one onsite visit: a 2-hour exam, then a 1-hour mock teaching session. The system scores the candidate, sends the invitations inside editable limits and books the visit. It does not record the visit result. It does not make a final hiring decision. It does not send rejection messages.
@@ -42,9 +42,11 @@ The list holds people with a SEEK application. People only in the tracker are in
 
 ## HR calls
 
-HR phones the strongest applicants before the pre-screen form goes. A candidate who passes the [profile gate](#profile-score) with a profile score at or above the **HR call score** (Rules and setup, starts at 80) waits on the **Calls** tab. The form cannot go until HR records a good call. A candidate below the call score gets the form automatically, as before. A blank call score turns the step off.
+HR phones the strongest applicants before the pre-screen form goes. A candidate who passes the [profile gate](#profile-score) with a profile score at or above the **HR call score** (Rules and setup, starts at 80) waits on the **2 Calls** tab. The form cannot go until HR records a good call. A candidate below the call score gets the form automatically, as before. A blank call score turns the step off.
 
-The list is sorted by profile score, highest first, then the earlier application. A candidate who fails another part of the gate (for example, a subject that is not hiring) is not on the list, because the form could not go after the call. Click a row to open the same résumé panel as Seek intake, with the candidate's SEEK page link, where the phone number is.
+The list is sorted by profile score, highest first, then the earlier application. A candidate who fails another part of the gate (for example, a subject that is not hiring) is not on the list, because the form could not go after the call.
+
+Each row shows the subject, the university and a **View on SEEK** button. The subject is the one the form goes for after a good call: the highest subject in the subject ranking that the profile supports. The other supported subjects show under it. The university is the one that the [profile score](#profile-score) confirmed, or "Not confirmed". **View on SEEK** opens the candidate's SEEK page in a new tab, where the phone number and the résumé are. Click a row to open the same résumé panel as Seek intake.
 
 | Button | Result |
 |---|---|
@@ -332,7 +334,7 @@ A signed, expiring link at `/hiring/book/{token}` offers the visit.
 
 ## Head schedules
 
-These open from the Calendar switch in **3 Mock and paper**.
+These open from the Calendar switch in **4 Mock and paper**.
 
 The **Head schedules** view shows one head's Monday-to-Friday week at a time. A head switch and a week switch choose what to show. The week switch starts at the current week and cannot go back, because Wise omits past sessions. For each day the view shows the head's office hours, Wise classes, leave, sit-ins, exams and mocks. A list shows that head's visits. No student name reaches the page. Only a mock and an exam block name the candidate.
 
@@ -360,6 +362,7 @@ A stored setting that breaks a rule stops the worker with a message. The page st
 
 ## Résumé files
 
+- **SEEK can lock the download.** On some job ads, SEEK shows the résumé but replaces **Download document** with **Upgrade to download** (a paid SEEK upgrade). The new ad 95633167 does this; the old ad 94844236 does not (checked 4 Nov 2026). Then the worker gets no file and no résumé text, and the score uses the SEEK profile only. The worker counts these people and the Operations rail says "SEEK asks for an upgrade to download N new résumés". Read them on SEEK. The backfill marks them `locked` and tries again on each run, so the files come in after an upgrade.
 - The worker keeps the original file when it reads a SEEK profile and uploads it to private Vercel Blob. The Mac holds no Blob key. A signed internal route gives a 5-minute upload token for one exact path.
 - A PDF opens in the panel. A Word file (DOCX) downloads. The old `.doc` format is refused. The file type comes from the file bytes. Existing limits stay: 15 MB and 30 pages.
 - Only a signed-in admin with Hiring access can open a file. Access goes through `GET /api/hiring/resume/{id}`. The route reads only the stored path and sends `no-store`, `nosniff` and a sandbox header. The AI reads only redacted text.
@@ -371,7 +374,7 @@ A stored setting that breaks a rule stops the worker with a message. The page st
 
 These passes print counts only. They never print names, emails or file names. Each pass that writes refuses to run while Automation or Messages is on. No pass sends a message or changes a stage.
 
-`npm run hiring:backfill -- --seek` needs `HIRING_BACKFILL_UNTIL` (an ISO stop time in the future) and `HIRING_WRITES_ENABLED=true`. `--limit N` reads at most N candidates. The pass opens each known candidate's SEEK page and stores the exact work-rights answer and the original file. It imports nobody. It takes the worker lock, so a running worker (including a paused `--watch` worker) blocks it. It pauses 10 seconds between candidates. All seven folders take about 3 to 4 hours. A candidate that is already read is skipped on a re-run. A failed download is retried on the next run. A file that can never be read (`.doc`, over the page limit, encrypted) is marked and not retried. Five unreadable candidates in a row stop the pass, because SEEK may be signed out or the page may have changed. A different answer replaces the stored one and is never accepted automatically. The summary has `stoppedEarly`. The pass is finished only when the process exits with code 0 **and** `stoppedEarly` is `false`.
+`npm run hiring:backfill -- --seek` needs `HIRING_BACKFILL_UNTIL` (an ISO stop time in the future) and `HIRING_WRITES_ENABLED=true`. `--limit N` reads at most N candidates. The pass opens each known candidate's SEEK page and stores the exact work-rights answer and the original file. It imports nobody. It reads every SEEK job in Rules, active or not, because an expired ad still lets us download its résumés. It takes the worker lock, so a running worker (including a paused `--watch` worker) blocks it. It pauses 10 seconds between candidates. All seven folders take about 3 to 4 hours. A candidate that is already read is skipped on a re-run. A failed download is retried on the next run. A file that can never be read (`.doc`, over the page limit, encrypted) is marked and not retried. Five unreadable candidates in a row stop the pass, because SEEK may be signed out or the page may have changed. A different answer replaces the stored one and is never accepted automatically. The summary has `stoppedEarly`. The pass is finished only when the process exits with code 0 **and** `stoppedEarly` is `false`.
 
 `npm run hiring:backfill -- --tracker-report` reads the tracker and the app, and writes to neither. It prints how many people on the Sourcing Log and the Scheduling Responses tabs are missing from the app. `--tracker-import` then adds them: stage `review`, earlier contact set, no text, no score and no email queued, keyed by email so a re-run adds none. The `Hiring Automation` tab holds at most 2,000 candidates, so check the report first. Both tabs must have their email column, and the Sourcing Log must have its "Send email to invite" column, or the pass stops with a message.
 
