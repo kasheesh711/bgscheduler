@@ -16,6 +16,7 @@ import { AveragePentagon, EvidenceChart, KpiStrip, LimitMeters, ScoreChart, Stag
 import { AssessmentScreen } from "./assessment-screen";
 import { OperationsRail, WorkerBanner } from "./operations-rail";
 import { PreScreenScreen } from "./prescreen-screen";
+import { CallsScreen } from "./calls-screen";
 import { SeekScreen } from "./seek-screen";
 import { SetupPanel } from "./setup-panel";
 import css from "./dashboard.module.css";
@@ -45,6 +46,7 @@ export const NO_FILTER: CandidateFilter = { stage: "all", prescreen: "all", buck
 const VIEWS = {
   overview: "Overview",
   seek: "1 Seek intake",
+  calls: "Calls",
   prescreen: "2 Pre-screen",
   assessment: "3 Mock and paper",
   setup: "Rules and setup",
@@ -284,6 +286,9 @@ export function HiringDashboard() {
             command={command}
             busy={busy}
           />
+        </div>
+        <div hidden={view !== "calls"} className={css.viewPane}>
+          <CallsScreen data={data} extras={extras} holds={holds} onOpenRecord={openRecord} command={command} busy={busy} />
         </div>
         <div hidden={view !== "prescreen"} className={css.viewPane}>
           <PreScreenScreen data={data} extras={extras} holds={holds} command={command} busy={busy} error={error} notice={notice} />

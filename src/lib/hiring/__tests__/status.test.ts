@@ -168,7 +168,7 @@ describe("candidateExtras visit", () => {
 });
 
 describe("holdNote", () => {
-  const config = configSchema.parse({ preScreenThreshold: null });
+  const config = configSchema.parse({ preScreenThreshold: null, callThreshold: null });
   const asEntry = (extra: Record<string, unknown> = {}) => ({
     id: "a",
     stage: "new" as Stage,
@@ -239,6 +239,14 @@ describe("holdNote", () => {
     expect(holdNote(asEntry(), undefined, open)).toBeNull();
     expect(holdNote(asEntry({ stage: "review" }), undefined, open)).toBeNull();
     expect(holdNote(asEntry({ stage: "stopped" }), undefined, open)).toBeNull();
+  });
+
+  it("says a strong profile waits for HR's call, after any reason a call cannot fix", () => {
+    expect(holdNote(asEntry(), undefined, { ...open, callThreshold: 0 })).toEqual({
+      short: "Waiting for a call",
+      long: ["HR must call this candidate before the form can go."],
+    });
+    expect(holdNote(asEntry({ email: null }), undefined, { ...open, callThreshold: 0 })!.short).toBe("No usable email +1");
   });
 
   it("says a scored reply waits for a pass score, for the onsite step only", () => {

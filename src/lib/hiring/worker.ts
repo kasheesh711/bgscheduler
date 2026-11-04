@@ -30,7 +30,7 @@ import {
   type CriterionId,
   type PreScreenAssessment,
 } from "./scoring";
-import { profileGate } from "./insights";
+import { AWAITING_CALL, profileGate } from "./insights";
 import { audit, candidateById, settings, sourceHash } from "./service";
 import { formSentAt, releaseQueues, replyCheck, runFollowUps } from "./queue";
 import { deliverCalendar } from "./google";
@@ -231,7 +231,8 @@ export async function assessCandidates(
           current.config,
         );
         // A failure a setting can cure stays at `new`: this sweep runs on every row each cycle, and review has no way back.
-        if (gate.review.length) await toReview(gate.reasons);
+        // A row going to review leaves the Calls tab, so the note does not tell staff to call.
+        if (gate.review.length) await toReview(gate.reasons.filter((reason) => reason !== AWAITING_CALL));
       }
       if (oldHash !== hash)
         await audit(

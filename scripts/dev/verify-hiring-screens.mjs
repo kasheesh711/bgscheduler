@@ -48,6 +48,8 @@ const candidates = [
   person("e", "Sample Eve", { seekJobId: "654321", profileScore: null, profileAssessment: null, universityAssessment: null, workRightsAnswer: null, workRightsAccepted: false, resumeState: "none", resumeType: null }),
   person("c2", "Sample Fon", { profileScore: 70 }),
   person("t", "Tracker Only", { seekApplicationId: null }),
+  // Kept out of the SEEK list, so the Seek checks below are unchanged. The Calls tab reads callOrder only.
+  person("k", "Sample Kim", { seekApplicationId: null, profileScore: 95, callReview: { good: null, tries: [{ at: "2026-11-03T02:00:00Z", by: "hr@example.test" }] } }),
   person("r1", "Reply Passed", { seekApplicationId: null, stage: "onsite_invited", preScreen: answers, preScreenHash: "x", preScreenAssessment: { ...assessment("Clear answers."), universities: [] }, preScreenScore: 82, preScreenParts: parts }),
   person("r2", "Reply Low", { seekApplicationId: null, stage: "review", preScreen: answers, preScreenHash: "y", preScreenAssessment: { ...assessment("Thin answers."), universities: [] }, preScreenScore: 41, preScreenParts: parts }),
   person("r3", "No Reply Yet", { seekApplicationId: null, stage: "pre_screen" }),
@@ -58,7 +60,7 @@ const payload = {
   workerSummary: { scanned: 140, imported: 2, remaining: 8, folders: [{ status: "Inbox", count: 120, imported: 112 }, { status: "Prescreen", count: 34, imported: 34 }, { status: "Shortlist", count: 9, imported: 9 }, { status: "Not Suitable", count: 500, imported: 0 }] },
   usage: { preScreen: { perDay: 1, perWeek: 2, waiting: 1, unbooked: 0, bySubject: {} }, onsite: { perDay: 0, perWeek: 0, waiting: 0, unbooked: 0, bySubject: {} } },
   holds: { b: { funnel: "pre_screen", state: "next", position: 0, limit: null, subject: "Mathematics" }, a: { funnel: "pre_screen", state: "held", position: 2, limit: "perDay", subject: "Mathematics" } },
-  preScreenOrder: ["b", "a", "c2"], headMocks: {}, heads: {}, candidates, bookings: [],
+  preScreenOrder: ["b", "a", "c2"], callOrder: ["k"], headMocks: {}, heads: {}, candidates, bookings: [],
   visitClashes: { candidateIds: [], stale: false, clashes: {} },
   outbox: [
     { id: "o2", key: "r1:visit-invite", candidateId: "r1", kind: "email", status: "sent", error: null, sentAt: "2026-11-02T03:04:00Z", workflowStage: "onsite_invited" },
@@ -218,6 +220,28 @@ try {
   const names = () => page.locator("[data-candidate]").allInnerTexts();
   const seekRows = () => page.getByRole("region", { name: "Candidates from SEEK" }).locator("tbody tr");
 
+  await check("the Calls tab lists HR's queue and posts each result", async () => {
+    await page.goto(`${origin}/?view=calls`);
+    const calls = page.getByRole("region", { name: "Candidates for HR to call" });
+    await calls.getByText("Sample Kim").waitFor();
+    assert.ok(await calls.getByText("1 no answer · last 3 Nov, 09:00").isVisible());
+    await shot(page, "calls");
+    await calls.getByRole("button", { name: "Good call" }).click();
+    await page.waitForFunction(() => window.posted.length === 1);
+    await calls.getByRole("button", { name: "No answer" }).click();
+    await page.waitForFunction(() => window.posted.length === 2);
+    page.once("dialog", (dialog) => dialog.accept());
+    await calls.getByRole("button", { name: "Bad call" }).click();
+    await page.waitForFunction(() => window.posted.length === 3);
+    const posted = await page.evaluate(() => window.posted);
+    assert.deepEqual(posted.slice(0, 2), [
+      { action: "call_result", id: "k", result: "good" },
+      { action: "call_result", id: "k", result: "no_answer" },
+    ]);
+    assert.equal(posted[2].action, "stop");
+    await calls.getByText("Sample Kim").click();
+    await page.getByRole("complementary", { name: "Résumé and score of Sample Kim" }).waitFor();
+  });
   await check("the tab opens from the address and changes the address", async () => {
     await page.goto(`${origin}/?view=seek`);
     await page.getByRole("button", { name: "1 Seek intake" }).waitFor();

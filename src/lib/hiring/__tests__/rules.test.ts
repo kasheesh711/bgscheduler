@@ -45,6 +45,11 @@ describe("config rules", () => {
     expect(configSchema.safeParse({ enabled: false, profileThreshold: 55 }).success).toBe(true);
     expect(VISIT_LINK_DAYS).toBe(30);
   });
+  it("starts the call score at 80 and allows a blank one", () => {
+    expect(configSchema.parse({}).callThreshold).toBe(80);
+    expect(configSchema.safeParse({ callThreshold: null }).success).toBe(true);
+    expect(configSchema.safeParse({ callThreshold: 101 }).success).toBe(false);
+  });
   it("refuses a visit that ends at or before its start", () => {
     expect(configSchema.safeParse({ visitStartMinute: 600, visitEndMinute: 600 }).success).toBe(false);
     expect(configSchema.safeParse({ visitStartMinute: 700, visitEndMinute: 600 }).success).toBe(false);

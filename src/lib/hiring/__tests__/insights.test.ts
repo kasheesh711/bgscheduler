@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_WEIGHTS, type Stage } from "../model";
-import { buildInsights, criterionValues, readyToInvite } from "../insights";
+import { buildInsights, criterionValues, profileGate, readyToInvite } from "../insights";
 import type { Assessment } from "../scoring";
 
 const assessment = (
@@ -32,6 +32,7 @@ const candidate = (id: string, stage: Stage, overrides = {}) => ({
   ...overrides,
 });
 const config = {
+  callThreshold: null,
   profileThreshold: 60,
   profileWeights: DEFAULT_WEIGHTS,
   acceptedWorkRights: ["I have permanent work rights with no restrictions"],
@@ -58,6 +59,36 @@ describe("readyToInvite", () => {
     ["a degree that is not met", candidate("a", "new", { profileAssessment: assessment("met", "not_met") })],
   ])("rejects %s", (_name, value) => {
     expect(readyToInvite(value, config)).toBe(false);
+  });
+});
+
+describe("profileGate with the call score", () => {
+  // All five criteria met and no university points: exactly 80.
+  const at80 = { profileAssessment: assessment("met") };
+  const calls = { ...config, callThreshold: 80 };
+  const good = { good: { at: "2026-11-04T03:00:00.000Z", by: "hr@example.com" }, tries: [] };
+  it("holds a score at the call score until HR records a good call", () => {
+    const gate = profileGate(candidate("a", "new", at80), calls);
+    expect(gate).toMatchObject({ eligible: false, awaitingCall: true, review: [] });
+    expect(gate.short).toEqual(["Waiting for a call"]);
+  });
+  it("lets a score below the call score through without a call", () => {
+    const below = { profileAssessment: { ...assessment("met"), criteria: assessment("met").criteria.map((c) => (c.id === "english" ? { ...c, result: "partial" as const } : c)) } };
+    expect(profileGate(candidate("a", "new", below), calls)).toMatchObject({ eligible: true, awaitingCall: false });
+  });
+  it("lets a good call through, even after a later SEEK contact", () => {
+    expect(profileGate(candidate("a", "new", { ...at80, callReview: good }), calls).eligible).toBe(true);
+    expect(profileGate(candidate("a", "new", { ...at80, callReview: good, previouslyContacted: true }), calls).eligible).toBe(true);
+  });
+  it("keeps a no-answer try in the call queue", () => {
+    const tried = { good: null, tries: [{ at: "2026-11-04T03:00:00.000Z", by: "hr@example.com" }] };
+    expect(profileGate(candidate("a", "new", { ...at80, callReview: tried }), calls).awaitingCall).toBe(true);
+  });
+  it("needs no call when the call score is blank", () => {
+    expect(profileGate(candidate("a", "new", at80), { ...config, callThreshold: null })).toMatchObject({ eligible: true, awaitingCall: false });
+  });
+  it("still sends a contacted candidate with no good call to review", () => {
+    expect(profileGate(candidate("a", "new", { ...at80, previouslyContacted: true }), calls).review).toEqual(["There was earlier contact."]);
   });
 });
 

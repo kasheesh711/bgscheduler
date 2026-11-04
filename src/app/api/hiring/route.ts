@@ -8,7 +8,7 @@ import { RUBRIC_ITEMS, type RubricItem } from "@/lib/hiring/marking-sheet";
 import { configSchema, localDate, subjectSchema } from "@/lib/hiring/model";
 import { headWeek } from "@/lib/hiring/head-schedule";
 import { candidateById, changePreScreenScore, dashboard, reviewCandidate, saveHeadDays, saveSettings, settings } from "@/lib/hiring/service";
-import { moveInQueue, resetQueueOrder } from "@/lib/hiring/queue";
+import { moveInQueue, recordCall, resetQueueOrder } from "@/lib/hiring/queue";
 import { discardDecision, draftDecision, saveDraft, sendDecision } from "@/lib/hiring/decisions";
 import { deliverBookingMessages, deliverOutbox } from "@/lib/hiring/worker";
 import { getDb } from "@/lib/db";
@@ -46,6 +46,7 @@ const command = z.discriminatedUnion("action", [
     })
     .strict(),
   z.object({ action: z.literal("queue_reset") }).strict(),
+  z.object({ action: z.literal("call_result"), id: z.uuid(), result: z.enum(["good", "no_answer"]) }).strict(),
   z
     .object({
       action: z.literal("file_intent"),
@@ -175,6 +176,10 @@ export async function POST(request: Request) {
     }
     if (input.action === "queue_reset") {
       await resetQueueOrder(actor, getDb());
+      return NextResponse.json({ ok: true });
+    }
+    if (input.action === "call_result") {
+      await recordCall(input.id, input.result, actor, getDb());
       return NextResponse.json({ ok: true });
     }
     if (input.action === "file_intent") {

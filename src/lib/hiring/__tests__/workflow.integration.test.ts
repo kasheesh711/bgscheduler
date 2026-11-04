@@ -72,6 +72,8 @@ const ACCEPTED = "I have permanent work rights with no restrictions";
 const config = configSchema.parse({
   enabled: true,
   deliveryEnabled: true,
+  // These flows predate HR's call step. The call tests turn it on.
+  callThreshold: null,
   interviewers: [
     {
       canonicalKey: "Peat",
@@ -1640,6 +1642,78 @@ describe("hiring workflow persistence", () => {
     expect(c.stage).toBe("stopped");
     await deliverOutbox(db, config);
     expect(sendEmail).not.toHaveBeenCalled();
+  });
+  describe("after HR's good call", () => {
+    const met = {
+      criteria: ["degree", "subject", "curriculum", "teaching", "english"].map((id) => ({ id, result: "met", evidence: id, reason: "Source" })),
+      subjects: [{ subject: "Mathematics", evidence: "Mathematics", relevant: true }],
+      universities: [],
+      summary: "Evidence",
+    };
+    const called = async (applicationId: string, stage: "new" | "pre_screen" = "new") => {
+      const [row] = await db
+        .insert(s.hiringCandidates)
+        .values({
+          name: "Called",
+          email: `${applicationId.slice(-4)}@example.com`,
+          profileText: "degree subject curriculum teaching english Mathematics",
+          profileAssessment: met as never,
+          workRightsAnswer: ACCEPTED,
+          sourceIds: [applicationId],
+          stage,
+          subjects: ["Mathematics"],
+          callReview: { good: { at: now.toISOString(), by: "hr@example.com" }, tries: [] },
+        })
+        .returning();
+      await db.update(s.hiringSettings).set({ config: { ...config, callThreshold: 80 } });
+      return row;
+    };
+    it("keeps the candidate at new when the SEEK card leaves Inbox, and the form still goes", async () => {
+      const application = "00000000-0000-4000-8000-000000000401";
+      const row = await called(application);
+      await observeSeekState(application, "Shortlist", true, db);
+      expect((await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, row.id)))[0]).toMatchObject({
+        stage: "new",
+        previouslyContacted: true,
+      });
+      expect((await releaseQueues(db)).preScreen).toBe(1);
+    });
+    it("keeps a waiting form after a SEEK message", async () => {
+      const application = "00000000-0000-4000-8000-000000000402";
+      const row = await called(application);
+      await releaseQueues(db);
+      await observeSeekState(application, "Prescreen", true, db);
+      const [form] = await db.select().from(s.hiringOutbox).where(eq(s.hiringOutbox.candidateId, row.id));
+      expect([form.key, form.status]).toEqual([`${row.id}:pre-screen`, "pending"]);
+    });
+    it("leaves the call reason out of the note when earlier contact sends a strong profile to review", async () => {
+      await db.update(s.hiringSettings).set({ config: { ...config, callThreshold: 80 } });
+      // A SEEK message after import, before the profile was scored.
+      const [{ id }] = await db
+        .insert(s.hiringCandidates)
+        .values({
+          name: "Contacted",
+          email: "contacted404@example.com",
+          profileText: "degree subject curriculum teaching english Mathematics",
+          workRightsAnswer: ACCEPTED,
+          sourceIds: ["00000000-0000-4000-8000-000000000404"],
+          previouslyContacted: true,
+        })
+        .returning();
+      await assessCandidates(db, config, async () => met);
+      const [row] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, id));
+      expect(row.stage).toBe("review");
+      expect(row.reviewNote).toContain("There was earlier contact.");
+      expect(row.reviewNote).not.toContain("HR must call");
+    });
+    it.each(["Not Suitable", "Accept"])("still stops on %s, and cancels the waiting form", async (status) => {
+      const application = "00000000-0000-4000-8000-000000000403";
+      const row = await called(application);
+      await releaseQueues(db);
+      await observeSeekState(application, status, true, db);
+      expect((await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, row.id)))[0].stage).toBe("stopped");
+      expect((await db.select().from(s.hiringOutbox))[0].status).toBe("cancelled");
+    });
   });
   it("holds unverifiable AI evidence without blocking other candidates or retrying it unchanged", async () => {
     const ids: string[] = [];
