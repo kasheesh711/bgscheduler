@@ -566,11 +566,13 @@ export function roomSyncError(sync: { errorSummary?: string | null; metadata?: u
   if (!sync?.errorSummary) return {};
   const metadata = sync.metadata && typeof sync.metadata === "object" ? sync.metadata as Record<string, unknown> : {};
   // Runs recorded before the split carry no key: treat the whole summary as room-affecting.
-  const value = "roomDataErrorSummary" in metadata ? metadata.roomDataErrorSummary : sync.errorSummary;
-  return typeof value === "string" && value ? { roomSyncErrorSummary: value } : {};
+  if (!("roomDataErrorSummary" in metadata)) return { roomSyncErrorSummary: sync.errorSummary };
+  const value = metadata.roomDataErrorSummary;
+  if (value === null) return {};
+  return { roomSyncErrorSummary: typeof value === "string" && value ? value : sync.errorSummary };
 }
 
-async function loadClassroomSnapshotMeta(
+export async function loadClassroomSnapshotMeta(
   db: Database,
   snapshotId?: string,
   now = new Date(),

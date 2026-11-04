@@ -669,8 +669,11 @@ export async function runFullSync(
     const unmanagedError = importContacts && unmanagedSessions.length ? `${unmanagedSessions.length} sessions reference teachers absent from the Wise roster; correct the roster and retry sync` : null;
     const contactError = contactSync?.blocked ? `${contactSync.blocked} Wise teacher contact accounts need review` : null;
     const onboardingError = [rejectedError, contactError, unmanagedError].filter(Boolean).join("; ") || null;
-    // Contact (email) problems do not affect room data, so the weekend checkpoint may still allocate.
-    const roomDataErrorSummary = [rejectedError, unmanagedError].filter(Boolean).join("; ") || null;
+    // Identity conflicts withhold that tutor's sessions (see normalizeSessions above), so they affect rooms.
+    const conflictCount = importContacts ? groups.filter(g => identities.blocked.has(g.canonicalKey)).length : 0;
+    const identityError = conflictCount ? `${conflictCount} Wise teacher identities conflict; their sessions are withheld` : null;
+    // Contact email problems alone do not affect room data, so the weekend checkpoint may still allocate.
+    const roomDataErrorSummary = [rejectedError, identityError, unmanagedError].filter(Boolean).join("; ") || null;
     const successMetadata = {
       contactSync, unmanagedTeacherSessions: unmanagedSessions, roomDataErrorSummary,
       diffHookDurationMs: diffHookResult.durationMs,
