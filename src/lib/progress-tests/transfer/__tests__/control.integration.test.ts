@@ -4,14 +4,14 @@ import pg from "pg";
 import {drizzle} from "drizzle-orm/node-postgres";
 import {sql} from "drizzle-orm";
 import type {Database} from "@/lib/db";
+import {startTestDb,stopTestDb} from "@/tests/integration/db-helper";
 import {withSourceWriter} from "../control";
+let h:Awaited<ReturnType<typeof startTestDb>>;
 let pool:pg.Pool;
-const parent=process.env.PROGRESS_TEST_DATABASE_URL||"postgresql://kevinhsieh@127.0.0.1:54339/postgres";
-const url=new URL(parent),name=`progress_source_control_${randomUUID().replaceAll('-','')}`;
-if(!["localhost","127.0.0.1"].includes(url.hostname))throw new Error("Use a local synthetic database for the control test.");
-url.pathname=`/${name}`;
-beforeAll(async()=>{const root=new pg.Client({connectionString:parent});await root.connect();await root.query(`create database "${name}"`);await root.end();pool=new pg.Pool({connectionString:url.toString()});await pool.query("create table progress_transfer_control(id text primary key,phase text,target_url text);insert into progress_transfer_control values('writer','source',null);create table receipts(id text primary key)");});
-afterAll(async()=>{if(pool)await pool.end();});
+const name=`progress_source_control_${randomUUID().replaceAll('-','')}`;
+// A database of its own on the suite's test server (container or TEST_DATABASE_URL): these tests pause and delete the writer row.
+beforeAll(async()=>{h=await startTestDb();await h.pool.query(`create database "${name}"`);const url=new URL(h.pool.options.connectionString!);url.pathname=`/${name}`;pool=new pg.Pool({connectionString:url.toString()});await pool.query("create table progress_transfer_control(id text primary key,phase text,target_url text);insert into progress_transfer_control values('writer','source',null);create table receipts(id text primary key)");});
+afterAll(async()=>{try{if(pool)await pool.end();if(h)await h.pool.query(`drop database if exists "${name}" with (force)`);}finally{if(h)await stopTestDb(h);}});
 describe("source mail pause transaction",()=>{
  it("keeps the send receipt before a pause and stops the next send",async()=>{
   const db=drizzle(pool) as unknown as Database,pauseClient=await pool.connect();
