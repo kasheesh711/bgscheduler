@@ -54,6 +54,8 @@ export async function POST(request: Request) {
     const input = deliveryRequestSchema.parse(JSON.parse(body));
     const db = getDb(),
       { config } = await settings(db);
+    if (input.mode === "one")
+      return NextResponse.json({ sent: await deliverOutbox(db, config, 1, false, input.key) });
     if (input.mode !== "test")
       return NextResponse.json({
         sent: await deliverOutbox(db, config, 20, input.mode === "bookings"),

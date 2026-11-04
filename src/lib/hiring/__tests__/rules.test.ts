@@ -6,6 +6,7 @@ import {
   SUBJECTS,
   VISIT_LINK_DAYS,
   type HiringConfig,
+  withSeekJobs,
 } from "../model";
 import { answerKey } from "../scoring";
 import { hiringError } from "../http";
@@ -96,6 +97,27 @@ describe("config rules", () => {
     const fixed = { ...loaded, visitEndMinute: 960, onsiteFollowUp: { remindDays: 3, expireDays: 7 }, subjectPriority: loaded.subjectPriority.slice(0, 1) };
     expect(configSchema.safeParse(fixed).success).toBe(true);
     expect(configRuleErrors(fixed)).toEqual([]);
+  });
+});
+
+describe("SEEK campaigns", () => {
+  it("reads a config saved before campaigns as one active campaign, and keeps an existing list", () => {
+    const old = baseConfigSchema.parse(withSeekJobs({ seekJobId: "84021325", profileThreshold: 80 }));
+    expect(old.seekJobs).toEqual([{ jobId: "84021325", label: "Tutor ad 2026", active: true }]);
+    expect(old.profileThreshold).toBe(80);
+    const both = { seekJobId: "84021325", seekJobs: [{ jobId: "95633167", label: "Nov ad", active: true }] };
+    expect(baseConfigSchema.parse(withSeekJobs(both)).seekJobs.map((j) => j.jobId)).toEqual(["95633167"]);
+    expect(base().seekJobs).toEqual([{ jobId: "94844236", label: "Tutor ad 2026", active: true }]);
+  });
+  it("refuses a repeated job, no active job, a bad ID and more than five", () => {
+    const job = (jobId: string, active = true) => ({ jobId, label: "Ad", active });
+    const errors = (seekJobs: unknown[]) => configRuleErrors(baseConfigSchema.parse({ seekJobs })).map((e) => e.message);
+    expect(errors([job("95633167"), job("94844236", false)])).toEqual([]);
+    expect(errors([job("95633167"), job("95633167", false)])).toEqual(["SEEK job 95633167 is in the campaign list twice."]);
+    expect(errors([job("95633167", false)])).toEqual(["At least one SEEK campaign must be active."]);
+    expect(configSchema.safeParse({ seekJobs: [job("12ab")] }).success).toBe(false);
+    expect(configSchema.safeParse({ seekJobs: [] }).success).toBe(false);
+    expect(configSchema.safeParse({ seekJobs: ["1", "2", "3", "4", "5", "6"].map((n) => job(n.repeat(6))) }).success).toBe(false);
   });
 });
 

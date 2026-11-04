@@ -45,6 +45,8 @@ export type HiringSourceSummary = {
   folders: (ReturnType<typeof parseSeekFolderCounts>[number] & { imported?: number })[];
   /** In the last run. Older saved summaries do not have it. */
   resumeUploadsFailed?: number;
+  /** One entry per SEEK job read in the last run; the fields above are their sums. Older saved summaries do not have it. */
+  campaigns?: (Omit<HiringSourceSummary, "campaigns"> & { jobId: string })[];
 };
 export const TRACKER_ID = "12bXS1Fnx0BTwrSZXzMU7fWzOgTDfA6-P6rT0v1zDF3M";
 export const PRE_SCREEN_URL =
@@ -184,6 +186,15 @@ const followUpSchema = z
     expireDays: z.number().int().min(1).max(120),
   })
   .strict();
+const seekJobIdSchema = z.string().regex(/^\d{6,12}$/, "A SEEK job ID has 6 to 12 digits.");
+/** The only job before campaigns. Rows imported then carry it, and an old stored config converts to it. */
+export const LEGACY_SEEK_JOB_ID = "94844236";
+/** A config saved before campaigns has one `seekJobId`. It reads as one active campaign until the next save. */
+export function withSeekJobs(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object" || !("seekJobId" in raw)) return raw;
+  const { seekJobId, ...rest } = raw as Record<string, unknown>;
+  return "seekJobs" in rest ? rest : { ...rest, seekJobs: [{ jobId: seekJobId, label: "Tutor ad 2026", active: true }] };
+}
 /**
  * The config shape. Reads use this one, so a stored config that breaks a rule in `configRuleErrors` still loads:
  * the dashboard shows the problem and a save repairs it. Saves use `configSchema`.
@@ -194,10 +205,16 @@ export const baseConfigSchema = z
     deliveryEnabled: z.boolean().default(false),
     rubricApproved: z.boolean().default(true),
     connectedEmail: emailSchema.default("kevhsh7@gmail.com"),
-    seekJobId: z
-      .string()
-      .regex(/^\d{6,12}$/)
-      .default("94844236"),
+    /** Each SEEK job ad the worker reads. An inactive job keeps its candidates and is not read. */
+    seekJobs: z
+      .array(
+        z
+          .object({ jobId: seekJobIdSchema, label: z.string().trim().min(1).max(80), active: z.boolean() })
+          .strict(),
+      )
+      .min(1)
+      .max(5)
+      .default([{ jobId: LEGACY_SEEK_JOB_ID, label: "Tutor ad 2026", active: true }]),
     profileThreshold: z.number().int().min(0).max(100).default(60),
     /** A gate pass at or above this profile score waits for HR's good call before the form can go. Null turns calls off. */
     callThreshold: z.number().int().min(0).max(100).nullable().default(80),
@@ -299,9 +316,17 @@ export type HiringConfig = z.infer<typeof baseConfigSchema>;
 
 /** Rules that link two settings. Plain English, because Kevin reads them on the Rules screen. */
 export function configRuleErrors(
-  c: Pick<HiringConfig, "visitStartMinute" | "visitEndMinute" | "preScreenFollowUp" | "onsiteFollowUp" | "subjectPriority">,
+  c: Pick<HiringConfig, "visitStartMinute" | "visitEndMinute" | "preScreenFollowUp" | "onsiteFollowUp" | "subjectPriority" | "seekJobs">,
 ): { path: (string | number)[]; message: string }[] {
   const errors: { path: (string | number)[]; message: string }[] = [];
+  const jobs = new Set<string>();
+  c.seekJobs.forEach((job, i) => {
+    if (jobs.has(job.jobId))
+      errors.push({ path: ["seekJobs", i, "jobId"], message: `SEEK job ${job.jobId} is in the campaign list twice.` });
+    jobs.add(job.jobId);
+  });
+  if (!c.seekJobs.some((job) => job.active))
+    errors.push({ path: ["seekJobs"], message: "At least one SEEK campaign must be active." });
   if (c.visitEndMinute <= c.visitStartMinute)
     errors.push({ path: ["visitEndMinute"], message: "Visits must end after they start." });
   if (c.preScreenFollowUp.remindDays >= c.preScreenFollowUp.expireDays)
@@ -373,6 +398,8 @@ export const applicationSchema = z
     sourceStatus: z.string().max(100),
     // The exact SEEK answer. Whether it is accepted comes from the settings list, not from the import.
     workRightsAnswer: z.string().trim().min(1).max(300).nullable().default(null),
+    // The SEEK job the worker read it from. Kept on a new row only, for the SEEK link.
+    jobId: seekJobIdSchema.nullable().default(null),
   })
   .strict();
 export type Application = z.infer<typeof applicationSchema>;

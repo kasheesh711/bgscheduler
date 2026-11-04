@@ -26,7 +26,7 @@ const data = (patch = {}) =>
       candidate({ id: "b", name: "Sample B", profileScore: 90, seekApplicationId: "2", workRightsAnswer: "I need a visa", workRightsAccepted: false }),
       candidate({ id: "t", name: "Tracker Only", seekApplicationId: null }),
     ],
-    config: { profileThreshold: 80, seekJobId: "9", profileWeights: { prestige: 10 }, resumeRetentionMonths: 12 },
+    config: { profileThreshold: 80, seekJobs: [{ jobId: "9", label: "Tutor ad", active: true }], profileWeights: { prestige: 10 }, resumeRetentionMonths: 12 },
     preScreenOrder: ["a"],
     workerSummary: null,
     workerAt: null,
@@ -70,5 +70,15 @@ describe("SeekCoverage", () => {
   it("warns when the read is old, and says so when SEEK was never read", () => {
     expect(renderToStaticMarkup(<SeekCoverage summary={summary} workerAt={new Date("2026-11-01T09:50:00Z")} now={NOW} />)).toContain("Over 1 hour old");
     expect(renderToStaticMarkup(<SeekCoverage summary={null} workerAt={null} now={NOW} />)).toContain("has not read SEEK yet");
+  });
+  it("shows one row of cards per campaign, named from the settings", () => {
+    const other = { ...summary, folders: [{ status: "Inbox" as const, count: 5, imported: 5 }] };
+    const both = { ...summary, campaigns: [{ ...summary, jobId: "95633167" }, { ...other, jobId: "11111111" }] } as HiringData["workerSummary"];
+    const jobs = [{ jobId: "95633167", label: "Nov ad", active: true }];
+    const html = renderToStaticMarkup(<SeekCoverage summary={both} workerAt={new Date("2026-11-02T09:50:00Z")} now={NOW} jobs={jobs} />);
+    expect(html).toContain("Nov ad");
+    expect(html).toContain("SEEK job 11111111");
+    expect(html).toContain("112 / 120");
+    expect(html).toContain("5 / 5");
   });
 });

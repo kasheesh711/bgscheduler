@@ -264,13 +264,58 @@ export function SetupPanel({
               onChange={(e) => setConfig({ ...config, connectedEmail: e.target.value })}
             />
           </Field>
-          <Field label="SEEK job ID">
-            <input
-              className={css.input}
-              value={config.seekJobId}
-              onChange={(e) => setConfig({ ...config, seekJobId: e.target.value })}
-            />
-          </Field>
+          <h3 className={css.panelTitle}>SEEK campaigns</h3>
+          <p className={css.panelLede}>
+            The worker reads each active job ad. An inactive one keeps its candidates and is not read. The job ID is the
+            number after <code>jobid=</code> in the SEEK candidates address.
+          </p>
+          {config.seekJobs.map((job, i) => {
+            const setJob = (patch: Partial<typeof job>) =>
+              setConfig({ ...config, seekJobs: config.seekJobs.map((j, k) => (k === i ? { ...j, ...patch } : j)) });
+            return (
+              <fieldset className={css.interviewerRow} key={i}>
+                <legend className="sr-only">Campaign {i + 1}</legend>
+                <input
+                  className={css.input}
+                  aria-label={`Campaign ${i + 1} SEEK job ID`}
+                  inputMode="numeric"
+                  value={job.jobId}
+                  onChange={(e) => setJob({ jobId: e.target.value.trim() })}
+                />
+                <input
+                  className={css.input}
+                  aria-label={`Campaign ${i + 1} name`}
+                  value={job.label}
+                  onChange={(e) => setJob({ label: e.target.value })}
+                />
+                <button
+                  type="button"
+                  className={css.inlineLink}
+                  disabled={config.seekJobs.length === 1}
+                  onClick={() => setConfig({ ...config, seekJobs: config.seekJobs.filter((_, k) => k !== i) })}
+                >
+                  Remove
+                </button>
+                <div className={css.subjectChecks}>
+                  <label>
+                    <input type="checkbox" checked={job.active} onChange={(e) => setJob({ active: e.target.checked })} />
+                    Active: the worker reads this job
+                  </label>
+                </div>
+              </fieldset>
+            );
+          })}
+          {config.seekJobs.length < 5 && (
+            <button
+              type="button"
+              className={css.secondary}
+              onClick={() =>
+                setConfig({ ...config, seekJobs: [...config.seekJobs, { jobId: "", label: "New campaign", active: true }] })
+              }
+            >
+              Add campaign
+            </button>
+          )}
           <Field label="Office location">
             <input
               className={css.input}

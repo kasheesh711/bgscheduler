@@ -192,7 +192,15 @@ export function SourceTextBody({ id, source, error }: { id: string } & ReturnTyp
   return <p className={css.inspectorMeta}>No extracted profile or résumé text is available for this record.</p>;
 }
 
-export function SeekLinks({ candidate, seekJobId }: { candidate: Pick<HiringCandidate, "name" | "seekApplicationId" | "sourceIds">; seekJobId: string }) {
+/** `fallbackJobId` is for a row with no saved job. Each other row links to the job it was read from. */
+export function SeekLinks({
+  candidate,
+  fallbackJobId,
+}: {
+  candidate: Pick<HiringCandidate, "name" | "seekApplicationId" | "sourceIds" | "seekJobId">;
+  fallbackJobId: string;
+}) {
+  const seekJobId = candidate.seekJobId ?? fallbackJobId;
   const applicationIds = [...new Set([candidate.seekApplicationId, ...candidate.sourceIds].filter((id): id is string => !!id))];
   return applicationIds.map((id, index) => (
     <a
@@ -341,7 +349,7 @@ export function CandidateInspector({
           <p className={css.inspectorMeta}>
             {STAGE_LABELS[candidate.stage]} · {candidate.email || "Email needs review"}
           </p>
-          <SeekLinks candidate={candidate} seekJobId={seekJobId} />
+          <SeekLinks candidate={candidate} fallbackJobId={seekJobId} />
         </div>
         <button type="button" className={css.inlineLink} onClick={close}>
           Close

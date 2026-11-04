@@ -31,7 +31,7 @@ Set `HIRING_SCORE_UNTIL` to an ISO timestamp to stop model calls at a deadline. 
 
 Coverage cards show each imported SEEK folder (Inbox, Prescreen, Shortlist) against the website: the count in SEEK, the count imported, what is waiting, and the last read. The worker writes these numbers. A summary saved before this change shows the SEEK count only. A read over one hour old shows a warning. An idle tab shows the warning only after the next page action.
 
-The list holds people with a SEEK application. People only in the tracker are in Overview. Filters: name or email, university names (several), the exact work rights answer, subject, and score against the profile threshold. Click a row to open the resume beside the list. Up and down arrows move between people, one press at a time, because each move opens a file. A Word file, or a PDF that will not open, shows the extracted text.
+The list holds people with a SEEK application. People only in the tracker are in Overview. Filters: name or email, university names (several), the exact work rights answer, subject, campaign (when there is more than one), and score against the profile threshold. Click a row to open the resume beside the list. Up and down arrows move between people, one press at a time, because each move opens a file. A Word file, or a PDF that will not open, shows the extracted text.
 
 **Send queue** numbers the pre-screen queue, then lists who was sent and when. A person can drag a row or use its arrows. The order controls real sends, through `mergeManualOrder` in `limits.ts`.
 
@@ -402,13 +402,27 @@ The report also prints `alreadyContactedAtNew`: people at `new`, not marked as c
 - A cycle starts no new assessment after 10 minutes. A large backlog takes more than one cycle.
 - `HIRING_WRITES_ENABLED=true`, enabled settings and approved rules are all required for autonomous processing. Preview environments cannot enable writes. Delivery has its own pause switch.
 
+### SEEK campaigns
+
+A campaign is one SEEK job ad. **Rules and setup → SEEK campaigns** holds up to five, each with a job ID, a name and an **Active** box. The job ID is the number after `jobid=` in the SEEK candidates address.
+
+- Each cycle reads every active job, in list order. All jobs share one budget of 40 new imports per cycle and one set of known application IDs.
+- An inactive job keeps its candidates. The worker does not read it, so status changes in SEEK for those candidates are not seen.
+- Each new row stores the job it came from (`hiring_candidates.seek_job_id`). The SEEK link opens that job. Rows from before campaigns carry `94844236`.
+- The same person in two jobs is one row, matched by email. The row keeps the first job, and both application IDs are in `source_ids`.
+- With more than one job, Seek intake shows coverage cards per campaign, the campaign name on each row and a campaign filter. Overview keeps the totals.
+- A config saved before campaigns has one `seekJobId`. It reads as one active campaign. The next save stores the list.
+- A page error in one job stops the whole cycle, as it did with one job: scoring, follow-ups and delivery wait until it is fixed or the job is set inactive. Imports already saved stay.
+- **Release order for this change:** apply migration `0122`, then deploy, then update the Mac checkout, before anyone saves Rules. An old worker refuses the new config shape, and the first new work-rights answer also stores it.
+- The rules are the same for every campaign. One profile threshold, one pre-screen form and one set of limits apply to all jobs.
+
 ## Setup
 
 Use a checked release checkout. Do not apply migrations or send live messages from a development test. The ordered release steps are in [Go-live](#go-live).
 
 1. Connect Google. In Hiring, select **Connect Google** and grant Calendar and Sheets access using the configured organizer account. The existing application callback is reused; no new Google Cloud redirect URI is needed.
 2. Review the interviewer identities, email addresses, active LINE groups, closed dates, weights, limits and thresholds. Confirm a real test recipient for each delivery channel.
-3. Use Node.js 24. From the release checkout, run `npm run hiring:worker -- --connect-seek` once and sign in to SEEK in its separate profile. That profile is stored under `~/.bgscheduler-hiring/seek-profile`, not in Git.
+3. Use Node.js 24. From the release checkout, run `npm run hiring:worker -- --connect-seek` once and sign in to SEEK in its separate profile. It opens the first active campaign. That profile is stored under `~/.bgscheduler-hiring/seek-profile`, not in Git.
 4. To run without an open terminal, use the [macOS LaunchAgent template](../operations/hiring-worker.plist.example). Replace its five path placeholders with the release checkout, Node.js 24 executable and bin directory, Claude CLI bin directory, and user home. Ensure `~/.bgscheduler-hiring` exists. Install the reviewed file as `~/Library/LaunchAgents/com.begifted.hiring.plist`, validate it with `plutil -lint`, then load it with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.begifted.hiring.plist`. Use `launchctl bootout` with the same domain and path to stop it. The template contains no secrets; the worker reads the release checkout's protected environment file.
 
 `--watch` runs one cycle at a time, with 15 minutes between cycles. Each cycle runs in this order: deliver booking messages, read SEEK, sync the tracker, score, run follow-ups, release the queues, mirror the tracker, and deliver the rest. It uses the owner's Claude Code subscription and refuses API-key authentication. No model API-key spend is introduced. It queues decisions in Postgres and asks the production delivery endpoint to send messages using Vercel's existing private keys. The Mac needs the production database, application signing secret and source-read credentials, but no Resend or LINE sending keys. The owner machine must remain awake, connected and signed in; Vercel cannot run the subscription CLI. The worker records its last successful source counts and any failure in Hiring. The page warns when Automation is on and the worker last ran more than 60 minutes ago. Booking links still work then. The LaunchAgent starts at login and restarts a stopped worker. Keep the release checkout and its protected environment file while the agent is installed.
@@ -463,6 +477,16 @@ Where the work stands: local checks passed on the five pull requests. Merge, mig
 14. **Kevin turns on Automation and Messages.** Who: Kevin in Rules and setup. Messages needs the organizer's Google Calendar connected, or the save is refused. The save bar shows how many forms a day and a week the limits allow. Then Claude runs `HIRING_WRITES_ENABLED=true npm run hiring:worker -- --once` on the Mac. Claude checks every recipient against the limits and checks the provider readbacks.
    - The first cycle writes the `Hiring Automation` tab. If that first write fails, the cycle stops before it asks for delivery. Forms and invitations stay pending, so this is safe. The error shows in Hiring. Fix the cause and run the cycle again.
 15. **Load the worker agent.** Who: Claude, after step 14 passes and Kevin approves. Install the LaunchAgent from the template (see [Setup](#setup)). The agent has no write setting of its own and reads the same `.env.local`, so that file must hold `HIRING_WRITES_ENABLED=true` before the agent loads. Kevin approves that change.
+
+### Controlled first send
+
+Use this to send one pre-screen form and nothing else, for example to test a new campaign.
+
+1. Turn Automation on and keep Messages off. Run `HIRING_WRITES_ENABLED=true npm run hiring:worker -- --once`. The cycle reads SEEK and scores. Queues, follow-ups and delivery wait for Messages, so no email leaves.
+2. Pick one candidate. Click **Invite to pre-screen**. The form row stays `pending`.
+3. Turn Messages on. Run `HIRING_WRITES_ENABLED=true npm run hiring:worker -- --send-one <candidate id>`. Turn Messages off at once.
+
+`--send-one` takes the worker lock. It refuses unless the candidate is at `pre_screen` and its form row is `pending`. It also refuses while any other outbox row is unsent (`pending`, `failed`, `uncertain` or `processing`), and names those rows. While Messages is on, the 15-minute delivery cron, any dashboard action and a candidate booking can send a waiting booking row, so step 3 must start with none. It asks the delivery endpoint for that one row (`mode: "one"`, which accepts only a `<id>:pre-screen` key). It reads no source, scores nothing, runs no follow-up and releases no queue. It prints `sent` and the row status. Do not send a decision email from the dashboard while Messages is on for this step.
 
 ## Go-live for the revamp
 
