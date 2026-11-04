@@ -7,6 +7,7 @@ import * as s from "@/lib/db/schema";
 import { availableSlots, availableVisitSlots, verifyLiveSlot } from "./availability";
 import {
   baseConfigSchema,
+  withSeekJobs,
   bookingSchema,
   configRuleErrors,
   configSchema,
@@ -62,7 +63,7 @@ export async function settings(db: Database = getDb()) {
     .where(eq(s.hiringSettings.id, "default"));
   // Reads use the shape without the cross-field rules, so a stored config that breaks one still loads.
   // The dashboard lists the problem, and `saveSettings` refuses to store it again.
-  return { row, config: baseConfigSchema.parse(row?.config ?? {}) };
+  return { row, config: baseConfigSchema.parse(withSeekJobs(row?.config ?? {})) };
 }
 export async function audit(
   db: Database,

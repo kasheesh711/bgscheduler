@@ -1,4 +1,4 @@
-import type { HiringSourceSummary, Subject } from "./model";
+import type { HiringConfig, HiringSourceSummary, Subject } from "./model";
 
 export const NOT_CONFIRMED = "Not confirmed";
 export const NO_ANSWER = "No answer on file";
@@ -11,8 +11,10 @@ export type SeekFilter = {
   workRights: string;
   subject: Subject | "";
   score: "" | "pass" | "below" | "none";
+  /** A SEEK job ID. Empty means every campaign. */
+  campaign: string;
 };
-export const NO_SEEK_FILTER: SeekFilter = { query: "", universities: [], workRights: "", subject: "", score: "" };
+export const NO_SEEK_FILTER: SeekFilter = { query: "", universities: [], workRights: "", subject: "", score: "", campaign: "" };
 
 type SeekPerson = {
   name: string;
@@ -23,6 +25,7 @@ type SeekPerson = {
   profileScore: number | null;
   workRightsAnswer: string | null;
   universityAssessment: { name: string | null } | null;
+  seekJobId?: string | null;
 };
 
 /** A person who exists only in the tracker has no SEEK application, so the intake screen does not show them. */
@@ -37,6 +40,7 @@ export function matchesSeekFilter(c: Omit<SeekPerson, "seekApplicationId" | "sou
   if (filter.universities.length && !filter.universities.includes(universityName(c))) return false;
   if (filter.workRights && workRightsText(c) !== filter.workRights) return false;
   if (filter.subject && !c.subjects.includes(filter.subject)) return false;
+  if (filter.campaign && c.seekJobId !== filter.campaign) return false;
   if (filter.score === "none") return c.profileScore === null;
   if (filter.score === "pass") return c.profileScore !== null && c.profileScore >= threshold;
   if (filter.score === "below") return c.profileScore !== null && c.profileScore < threshold;
@@ -79,6 +83,37 @@ export function aheadAfterMove(order: string[], id: string, target: string) {
 }
 
 const STALE_AFTER_MS = 60 * 60 * 1000;
+
+type SeekJob = HiringConfig["seekJobs"][number];
+/** The header line: the active campaigns, by name and job ID. */
+export const campaignNames = (jobs: SeekJob[]) =>
+  jobs.filter((j) => j.active).map((j) => `${j.label} (${j.jobId})`).join(", ") || "no active campaign";
+/** A row's campaign name. A job no longer in the list shows its ID. */
+export const campaignName = (jobs: SeekJob[], jobId: string | null | undefined) =>
+  jobId ? (jobs.find((j) => j.jobId === jobId)?.label ?? `SEEK job ${jobId}`) : "No SEEK job";
+
+type CampaignSummary = NonNullable<HiringSourceSummary["campaigns"]>[number];
+/** The saved worker summary: each job's own numbers, and their sums for the screens that show one total. */
+export function mergeSourceSummaries(campaigns: CampaignSummary[]): HiringSourceSummary {
+  const sum = (key: "scanned" | "imported" | "remaining" | "resumeUploadsFailed") =>
+    campaigns.reduce((n, c) => n + (c[key] ?? 0), 0);
+  const folders = new Map<string, HiringSourceSummary["folders"][number]>();
+  for (const folder of campaigns.flatMap((c) => c.folders)) {
+    const seen = folders.get(folder.status);
+    folders.set(
+      folder.status,
+      seen ? { ...seen, count: seen.count + folder.count, imported: (seen.imported ?? 0) + (folder.imported ?? 0) } : { ...folder },
+    );
+  }
+  return {
+    scanned: sum("scanned"),
+    imported: sum("imported"),
+    remaining: sum("remaining"),
+    resumeUploadsFailed: sum("resumeUploadsFailed"),
+    folders: [...folders.values()],
+    campaigns,
+  };
+}
 
 /** SEEK count against the website, per imported folder, from the last worker read. A summary from before this count has no number to show. */
 export function seekCoverage(summary: HiringSourceSummary | null, workerAt: Date | string | null, now = new Date()) {

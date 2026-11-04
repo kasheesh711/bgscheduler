@@ -139,9 +139,12 @@ export async function importApplication(value: unknown, db: Database) {
       .join("\n\nResume:\n");
     if (existing) {
       const ids = [...new Set([...existing.sourceIds, input.applicationId])];
+      // A person first known from the tracker takes the job of their first SEEK application.
+      const seekJobId = existing.seekJobId ?? input.jobId;
       if (
         existing.profileText !== text ||
         ids.length !== existing.sourceIds.length ||
+        seekJobId !== existing.seekJobId ||
         (input.workRightsAnswer !== null &&
           existing.workRightsAnswer !== input.workRightsAnswer) ||
         (!existing.previouslyContacted && input.previouslyContacted)
@@ -151,6 +154,7 @@ export async function importApplication(value: unknown, db: Database) {
           .set({
             profileText: text,
             sourceIds: ids,
+            seekJobId,
             // A page that shows no answer must not erase one already read.
             workRightsAnswer: input.workRightsAnswer ?? existing.workRightsAnswer,
             previouslyContacted:
@@ -169,6 +173,7 @@ export async function importApplication(value: unknown, db: Database) {
       .insert(s.hiringCandidates)
       .values({
         seekApplicationId: input.applicationId,
+        seekJobId: input.jobId,
         sourceIds: [input.applicationId],
         name: input.name,
         email: input.email,

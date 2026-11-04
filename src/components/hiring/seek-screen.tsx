@@ -6,6 +6,7 @@ import { RESUME_TYPES, SUBJECTS, ZONE, type Subject } from "@/lib/hiring/model";
 import {
   NO_SEEK_FILTER,
   aheadAfterMove,
+  campaignName,
   isFromSeek,
   matchesSeekFilter,
   seekCoverage,
@@ -26,7 +27,25 @@ type Holds = Map<string, { short: string; long: string[] }>;
 const dateTime = (value: Date | string) => formatInTimeZone(new Date(value), ZONE, "d MMM, HH:mm");
 const score = (value: number) => Math.round(value * 10) / 10;
 
-export function SeekCoverage({ summary, workerAt, now }: { summary: HiringData["workerSummary"]; workerAt: HiringData["workerAt"]; now?: Date }) {
+export function SeekCoverage({
+  summary,
+  workerAt,
+  now,
+  jobs,
+}: {
+  summary: HiringData["workerSummary"];
+  workerAt: HiringData["workerAt"];
+  now?: Date;
+  jobs?: HiringData["config"]["seekJobs"];
+}) {
+  // Several jobs: one row of cards each. One job, or a summary saved before campaigns: the totals.
+  if (summary?.campaigns && summary.campaigns.length > 1)
+    return summary.campaigns.map((campaign) => (
+      <div key={campaign.jobId}>
+        <p className={css.coverageNote}>{jobs ? campaignName(jobs, campaign.jobId) : `SEEK job ${campaign.jobId}`}</p>
+        <SeekCoverage summary={campaign} workerAt={workerAt} now={now} />
+      </div>
+    ));
   const coverage = seekCoverage(summary, workerAt, now);
   if (!coverage)
     return <p className={css.coverageNote}>The worker has not read SEEK yet, so the folder counts are not available.</p>;
@@ -135,7 +154,7 @@ function SeekPanel({
         <div>
           <h2 className={css.inspectorName}>{candidate.name}</h2>
           <p className={css.inspectorMeta}>{candidate.email || "Email needs review"}</p>
-          <SeekLinks candidate={candidate} seekJobId={data.config.seekJobId} />
+          <SeekLinks candidate={candidate} fallbackJobId={data.config.seekJobs[0].jobId} />
           <button type="button" className={css.inlineLink} onClick={onOpenRecord}>
             Open full record
           </button>
@@ -302,7 +321,7 @@ export function SeekScreen({
   return (
     <div className={css.layout}>
       <div className={css.main}>
-        <SeekCoverage summary={data.workerSummary} workerAt={data.workerAt} now={now} />
+        <SeekCoverage summary={data.workerSummary} workerAt={data.workerAt} now={now} jobs={data.config.seekJobs} />
         <section className={css.tableSection} aria-label="Candidates from SEEK">
           <div className={css.tableTools}>
             <input
@@ -341,6 +360,19 @@ export function SeekScreen({
                 ))}
               </select>
             </label>
+            {data.config.seekJobs.length > 1 && (
+              <label className={css.filterSelect}>
+                Campaign
+                <select value={filter.campaign} onChange={(e) => setFilter({ ...filter, campaign: e.target.value })}>
+                  <option value="">All</option>
+                  {data.config.seekJobs.map((job) => (
+                    <option key={job.jobId} value={job.jobId}>
+                      {job.label} ({pool.filter((c) => c.seekJobId === job.jobId).length})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label className={css.filterSelect}>
               Score
               <select value={filter.score} onChange={(e) => setFilter({ ...filter, score: e.target.value as SeekFilter["score"] })}>
@@ -480,6 +512,7 @@ export function SeekScreen({
                         </button>
                         <span className={css.email}>
                           {c.subjects.join(", ") || "No subject yet"}
+                          {data.config.seekJobs.length > 1 && ` · ${campaignName(data.config.seekJobs, c.seekJobId)}`}
                           {place !== null && c.queueManual && " · Moved by hand"}
                         </span>
                       </td>

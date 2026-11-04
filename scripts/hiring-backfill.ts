@@ -65,8 +65,12 @@ async function main() {
     });
     let finished = false;
     try {
-      const outcome = await backfillSeek(path.join(os.homedir(), ".bgscheduler-hiring", "seek-profile"), config.seekJobId, run);
-      finished = !outcome.stopped;
+      let stopped = false;
+      for (const job of config.seekJobs.filter((j) => j.active)) {
+        stopped = (await backfillSeek(path.join(os.homedir(), ".bgscheduler-hiring", "seek-profile"), job.jobId, run)).stopped;
+        if (stopped) break;
+      }
+      finished = !stopped;
     } finally {
       // Printed even when the pass fails part-way, because each candidate was saved as it was read.
       const noFile = await db.$count(s.hiringCandidates, sql`${s.hiringCandidates.resumePath} is null and ${s.hiringCandidates.resumeStoredAt} is null and jsonb_array_length(${s.hiringCandidates.sourceIds}) > 0`);

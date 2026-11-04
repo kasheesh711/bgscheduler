@@ -8,6 +8,7 @@ import { GOOGLE_SCOPES, type HiringConfig, type Stage, type Subject } from "@/li
 import { buildInsights, readyToInvite } from "@/lib/hiring/insights";
 import { dedupePriority, headDaysNotice } from "@/lib/hiring/rules";
 import { candidateExtras, holdNote } from "@/lib/hiring/status";
+import { campaignNames } from "@/lib/hiring/seek-view";
 import type { dashboard } from "@/lib/hiring/service";
 import { CandidateInspector } from "./candidate-inspector";
 import { CandidateTable, matchesFilter } from "./candidate-table";
@@ -205,7 +206,7 @@ export function HiringDashboard() {
           </h1>
           {data && (
             <p className={css.subtitle}>
-              SEEK job {data.config.seekJobId} · Threshold {data.config.profileThreshold}/100 ·
+              SEEK {campaignNames(data.config.seekJobs)} · Threshold {data.config.profileThreshold}/100 ·
               Automation {data.config.enabled ? "on" : "paused"} · Messages{" "}
               {data.config.deliveryEnabled ? "on" : "paused"}
             </p>
@@ -336,7 +337,7 @@ export function HiringDashboard() {
               candidate={candidate}
               extras={extras.get(candidate.id)}
               hold={holds.get(candidate.id)}
-              seekJobId={data.config.seekJobId}
+              seekJobId={data.config.seekJobs[0].jobId}
               weights={data.config.profileWeights}
               preWeights={data.config.preScreenWeights}
               busy={busy}

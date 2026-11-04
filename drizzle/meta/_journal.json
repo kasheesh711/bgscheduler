@@ -862,6 +862,13 @@
       "when": 1793538000000,
       "tag": "0121_hiring_assessment_results",
       "breakpoints": true
+    },
+    {
+      "idx": 121,
+      "version": "7",
+      "when": 1793759587157,
+      "tag": "0122_hiring_campaigns",
+      "breakpoints": true
     }
   ]
 }

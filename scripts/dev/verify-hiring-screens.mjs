@@ -27,7 +27,7 @@ const assessment = (summary: string) => ({
   criteria: ["degree", "subject", "curriculum", "teaching", "english"].map((id) => ({ id, result: "met", evidence: "Taught IGCSE for 2 years", reason: "Seen in the resume", brief: "Clear evidence" })),
 });
 const person = (id: string, name: string, patch = {}) => ({
-  id, name, email: id + "@example.test", stage: "new", seekApplicationId: "seek-" + id, sourceIds: [], applicantId: null, trackerHash: null,
+  id, name, email: id + "@example.test", stage: "new", seekApplicationId: "seek-" + id, seekJobId: "123456", sourceIds: [], applicantId: null, trackerHash: null,
   previouslyContacted: false, visitSubject: null, subjects: ["Mathematics"], inviteExpiresAt: null, reviewNote: null, revision: 1,
   createdAt: "2026-10-20T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z", workRightsAnswer: "I am a Thai citizen", workRightsAccepted: true,
   resumeName: null, resumeType: "application/pdf", resumeSize: 1000, resumeStoredAt: "2026-10-20T00:00:00Z", resumeState: "available",
@@ -45,14 +45,14 @@ const candidates = [
   person("b", "Sample Ben", { profileScore: 91, universityAssessment: { name: "Chulalongkorn University", country: "Thailand", fraction: 0.9, reason: "On the reference list", sources: [] } }),
   person("c", "Sample Cho", { profileScore: 74, subjects: ["Physics"], workRightsAnswer: "I require a visa", workRightsAccepted: false, resumeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }),
   person("d", "Sample Dao", { profileScore: 88, stage: "pre_screen", universityAssessment: { name: "Chulalongkorn University", country: "Thailand", fraction: 0.9, reason: "On the reference list", sources: [] } }),
-  person("e", "Sample Eve", { profileScore: null, profileAssessment: null, universityAssessment: null, workRightsAnswer: null, workRightsAccepted: false, resumeState: "none", resumeType: null }),
+  person("e", "Sample Eve", { seekJobId: "654321", profileScore: null, profileAssessment: null, universityAssessment: null, workRightsAnswer: null, workRightsAccepted: false, resumeState: "none", resumeType: null }),
   person("c2", "Sample Fon", { profileScore: 70 }),
   person("t", "Tracker Only", { seekApplicationId: null }),
   person("r1", "Reply Passed", { seekApplicationId: null, stage: "onsite_invited", preScreen: answers, preScreenHash: "x", preScreenAssessment: { ...assessment("Clear answers."), universities: [] }, preScreenScore: 82, preScreenParts: parts }),
   person("r2", "Reply Low", { seekApplicationId: null, stage: "review", preScreen: answers, preScreenHash: "y", preScreenAssessment: { ...assessment("Thin answers."), universities: [] }, preScreenScore: 41, preScreenParts: parts }),
   person("r3", "No Reply Yet", { seekApplicationId: null, stage: "pre_screen" }),
 ];
-const config = baseConfigSchema.parse({ connectedEmail: "fixture@example.test", seekJobId: "123456", profileThreshold: 80, preScreenThreshold: 50 });
+const config = baseConfigSchema.parse({ connectedEmail: "fixture@example.test", seekJobs: [{ jobId: "123456", label: "Tutor ad", active: false }, { jobId: "654321", label: "Nov ad", active: true }], profileThreshold: 80, preScreenThreshold: 50 });
 const payload = {
   config, configSaved: true, configProblems: [], revision: 1, workerAt: new Date(Date.now() - 600000).toISOString(), workerError: null, writeGate: true,
   workerSummary: { scanned: 140, imported: 2, remaining: 8, folders: [{ status: "Inbox", count: 120, imported: 112 }, { status: "Prescreen", count: 34, imported: 34 }, { status: "Shortlist", count: 9, imported: 9 }, { status: "Not Suitable", count: 500, imported: 0 }] },
@@ -239,6 +239,15 @@ try {
     const all = await names();
     assert.deepEqual(all, ["Sample Ben", "Sample Dao", "Sample Ann", "Sample Cho", "Sample Fon", "Sample Eve"]);
     await shot(page, "seek-all");
+  });
+  await check("the campaign filter shows one job's applicants, and each row names its campaign", async () => {
+    const pick = page.getByRole("region", { name: "Candidates from SEEK" }).getByLabel("Campaign");
+    await pick.selectOption("654321");
+    assert.deepEqual(await names(), ["Sample Eve"]);
+    assert.ok(await seekRows().first().getByText("Nov ad", { exact: false }).isVisible());
+    await shot(page, "seek-campaign");
+    await pick.selectOption("");
+    assert.equal((await names()).length, 6);
   });
   await check("the send queue is numbered, then shows who was sent", async () => {
     await page.getByRole("button", { name: "Send queue" }).click();
@@ -438,6 +447,10 @@ try {
     assert.ok((await page.getByText("Missing").count()) > 0);
     await page.getByLabel("Mathematics Key Stage 3 pass percentage").scrollIntoViewIfNeeded();
     await shot(page, "assessment-settings");
+    assert.equal(await page.getByLabel("Campaign 2 SEEK job ID").inputValue(), "654321");
+    assert.equal(await page.getByLabel("Campaign 1 name").inputValue(), "Tutor ad");
+    await page.getByLabel("Campaign 1 name").scrollIntoViewIfNeeded();
+    await shot(page, "campaign-settings");
   });
   await check("the page has no script errors", async () => assert.deepEqual(errors, []));
 } finally {
