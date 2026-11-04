@@ -66,7 +66,8 @@ async function main() {
     let finished = false;
     try {
       let stopped = false;
-      for (const job of config.seekJobs.filter((j) => j.active)) {
+      // Every job, not only active ones: the pass imports nobody, and an expired ad still lets us download its résumés.
+      for (const job of config.seekJobs) {
         stopped = (await backfillSeek(path.join(os.homedir(), ".bgscheduler-hiring", "seek-profile"), job.jobId, run)).stopped;
         if (stopped) break;
       }

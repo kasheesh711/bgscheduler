@@ -196,16 +196,18 @@ export function SourceTextBody({ id, source, error }: { id: string } & ReturnTyp
 export function SeekLinks({
   candidate,
   fallbackJobId,
+  className = css.sourceLink,
 }: {
   candidate: Pick<HiringCandidate, "name" | "seekApplicationId" | "sourceIds" | "seekJobId">;
   fallbackJobId: string;
+  className?: string;
 }) {
   const seekJobId = candidate.seekJobId ?? fallbackJobId;
   const applicationIds = [...new Set([candidate.seekApplicationId, ...candidate.sourceIds].filter((id): id is string => !!id))];
   return applicationIds.map((id, index) => (
     <a
       key={id}
-      className={css.sourceLink}
+      className={className}
       href={`https://th.employer.seek.com/candidates/?jobid=${encodeURIComponent(seekJobId)}&selected=${encodeURIComponent(id)}&tab=profile`}
       target="_blank"
       rel="noopener noreferrer"

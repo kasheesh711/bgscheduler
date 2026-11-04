@@ -45,6 +45,8 @@ export type HiringSourceSummary = {
   folders: (ReturnType<typeof parseSeekFolderCounts>[number] & { imported?: number })[];
   /** In the last run. Older saved summaries do not have it. */
   resumeUploadsFailed?: number;
+  /** New people in the last run whose résumé SEEK would not let us download (a paid upgrade). Older summaries do not have it. */
+  resumeLocked?: number;
   /** One entry per SEEK job read in the last run; the fields above are their sums. Older saved summaries do not have it. */
   campaigns?: (Omit<HiringSourceSummary, "campaigns"> & { jobId: string })[];
 };

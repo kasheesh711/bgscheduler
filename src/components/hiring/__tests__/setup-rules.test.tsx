@@ -418,6 +418,10 @@ describe("worker warning", () => {
     // A clean run, and a summary saved before this field existed.
     expect(rail(summary(0))).not.toContain("failed");
     expect(rail(summary())).not.toContain("failed");
+    const lockedRun = (resumeLocked: number) => ({ workerSummary: { scanned: 1, imported: 1, remaining: 0, folders: [], resumeLocked } });
+    expect(rail(lockedRun(2))).toContain("SEEK asks for an upgrade to download 2 new résumés. Read them on SEEK.");
+    expect(rail(lockedRun(1))).toContain("download 1 new résumé. Read it on SEEK.");
+    expect(rail(lockedRun(0))).not.toContain("upgrade");
     const candidates = [
       { id: "a", name: "Hidden Person", resumeState: "none" },
       { id: "b", name: "Other Person", resumeState: "none" },

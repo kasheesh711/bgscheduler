@@ -201,6 +201,16 @@ describe("SEEK pass: applyBackfill", () => {
     expect((await backfillStatus(db, "app-1")).state).toBe("done");
   });
 
+  it("saves the answer and marks the candidate read when SEEK locks the download behind an upgrade", async () => {
+    const row = await seed();
+    expect(await applyBackfill(db, "app-1", { workRightsAnswer: ACCEPTED, file: null, resumeLocked: true })).toEqual({ answer: "filled", file: "locked" });
+    expect(put).not.toHaveBeenCalled();
+    expect((await load(row.id)).workRightsAnswer).toBe(ACCEPTED);
+    expect((await backfillStatus(db, "app-1")).state).toBe("done");
+    const [audit] = await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "seek-backfill"));
+    expect(audit.detail).toMatchObject({ file: "locked" });
+  });
+
   it.each([
     ["a page that reported an unusable file", { workRightsAnswer: ACCEPTED, file: null, resumeUnusable: true }],
     ["a Word 97 file", { workRightsAnswer: ACCEPTED, file: { bytes: Buffer.from("\xd0\xcf\x11\xe0 old doc", "latin1"), name: "cv.doc" } }],
@@ -336,6 +346,13 @@ describe("SEEK pass: step and arguments", () => {
     await made.run("app-1", page("app-1", { resumeFailed: true }));
     await made.run("app-2", page("app-2", { resumeUnusable: true }));
     expect(made.counts).toMatchObject({ fileFailed: 1, fileUnusable: 1, filesStored: 0 });
+  });
+
+  it("counts a locked download apart, and five in a row do not stop the pass", async () => {
+    for (let i = 1; i <= 6; i++) await seed();
+    const made = step();
+    for (let i = 1; i <= 6; i++) expect(await made.run(`app-${i}`, page(`app-${i}`, { resumeLocked: true }))).toBe("read");
+    expect(made.counts).toMatchObject({ fileLocked: 6, fileFailed: 0, readFailed: 0 });
   });
 
   const env = { HIRING_BACKFILL_UNTIL: "2099-01-01T00:00:00Z" };

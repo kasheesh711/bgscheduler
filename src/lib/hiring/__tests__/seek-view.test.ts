@@ -140,10 +140,10 @@ describe("campaigns", () => {
     expect(campaignName(jobs, null)).toBe("No SEEK job");
   });
   it("sums each job's read into one summary and keeps each job's own numbers", () => {
-    const one = { jobId: "95633167", scanned: 10, imported: 3, remaining: 0, resumeUploadsFailed: 1, folders: [{ status: "Inbox" as const, count: 8, imported: 7 }] };
+    const one = { jobId: "95633167", scanned: 10, imported: 3, remaining: 0, resumeUploadsFailed: 1, resumeLocked: 3, folders: [{ status: "Inbox" as const, count: 8, imported: 7 }] };
     const two = { jobId: "94844236", scanned: 30, imported: 0, remaining: 2, folders: [{ status: "Inbox" as const, count: 20, imported: 18 }, { status: "Shortlist" as const, count: 4, imported: 4 }] };
     const merged = mergeSourceSummaries([one, two]);
-    expect(merged).toMatchObject({ scanned: 40, imported: 3, remaining: 2, resumeUploadsFailed: 1, campaigns: [one, two] });
+    expect(merged).toMatchObject({ scanned: 40, imported: 3, remaining: 2, resumeUploadsFailed: 1, resumeLocked: 3, campaigns: [one, two] });
     expect(merged.folders).toEqual([{ status: "Inbox", count: 28, imported: 25 }, { status: "Shortlist", count: 4, imported: 4 }]);
     // The input folders are not changed by the sum.
     expect(one.folders[0].count).toBe(8);

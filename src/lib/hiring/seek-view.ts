@@ -95,7 +95,7 @@ export const campaignName = (jobs: SeekJob[], jobId: string | null | undefined) 
 type CampaignSummary = NonNullable<HiringSourceSummary["campaigns"]>[number];
 /** The saved worker summary: each job's own numbers, and their sums for the screens that show one total. */
 export function mergeSourceSummaries(campaigns: CampaignSummary[]): HiringSourceSummary {
-  const sum = (key: "scanned" | "imported" | "remaining" | "resumeUploadsFailed") =>
+  const sum = (key: "scanned" | "imported" | "remaining" | "resumeUploadsFailed" | "resumeLocked") =>
     campaigns.reduce((n, c) => n + (c[key] ?? 0), 0);
   const folders = new Map<string, HiringSourceSummary["folders"][number]>();
   for (const folder of campaigns.flatMap((c) => c.folders)) {
@@ -110,6 +110,7 @@ export function mergeSourceSummaries(campaigns: CampaignSummary[]): HiringSource
     imported: sum("imported"),
     remaining: sum("remaining"),
     resumeUploadsFailed: sum("resumeUploadsFailed"),
+    resumeLocked: sum("resumeLocked"),
     folders: [...folders.values()],
     campaigns,
   };
