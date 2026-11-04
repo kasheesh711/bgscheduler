@@ -6,9 +6,10 @@ import { Pool } from "pg";
 import { z } from "zod";
 import { loadEnvConfig } from "@next/env";
 import { getDb } from "../src/lib/db";
-import { hiringCandidates, hiringSettings } from "../src/lib/db/schema";
+import { hiringCandidates, hiringOutbox, hiringSettings } from "../src/lib/db/schema";
 import { eq } from "drizzle-orm";
 import {
+  LEGACY_SEEK_JOB_ID,
   configSchema,
   runtimeWritesAllowed,
   subscriptionAuthSchema,
@@ -16,8 +17,9 @@ import {
 import { settings } from "../src/lib/hiring/service";
 import { importApplication, observeSeekState } from "../src/lib/hiring/sources";
 import { keepResume } from "../src/lib/hiring/resume-files";
-import { runHiringCycle } from "../src/lib/hiring/worker";
+import { runHiringCycle, sendOneRefusal } from "../src/lib/hiring/worker";
 import { requestDelivery } from "../src/lib/hiring/dispatch";
+import { mergeSourceSummaries } from "../src/lib/hiring/seek-view";
 import { assessmentOutputSchema, preScreenOutputSchema, assessWithBriefs, ASSESSMENT_SYSTEM, PRE_SCREEN_SYSTEM } from "../src/lib/hiring/scoring";
 import {
   runClaude,
@@ -31,9 +33,9 @@ async function main() {
   if (Number(process.versions.node.split(".")[0]) < 24)
     throw new Error("Use Node.js 24 or newer for the hiring worker.");
   const mode = process.argv[2];
-  if (!["--connect-seek", "--once", "--watch"].includes(mode)) {
+  if (!["--connect-seek", "--once", "--watch", "--send-one"].includes(mode)) {
     console.log(
-      "Usage: npm run hiring:worker -- --connect-seek | --once | --watch\nConnect once, then use --watch for a 15-minute cycle. No model API key is used.",
+      "Usage: npm run hiring:worker -- --connect-seek | --once | --watch | --send-one <candidate id>\nConnect once, then use --watch for a 15-minute cycle. No model API key is used.\n--send-one sends one pre-screen form that a click queued, and nothing else.",
     );
     return;
   }
@@ -42,7 +44,8 @@ async function main() {
   const profile = path.join(home, "seek-profile");
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   if (mode === "--connect-seek") {
-    await connectSeek(profile, process.env.HIRING_SEEK_JOB_ID || "94844236");
+    const { config } = await settings();
+    await connectSeek(profile, config.seekJobs.find((j) => j.active)?.jobId ?? LEGACY_SEEK_JOB_ID);
     return;
   }
   if (!runtimeWritesAllowed())
@@ -71,6 +74,17 @@ async function main() {
   fs.mkdirSync(cwd, { recursive: true, mode: 0o700 });
   const db = getDb();
   try {
+    if (mode === "--send-one") {
+      const id = z.uuid().parse(process.argv[3]);
+      const key = `${id}:pre-screen`;
+      const [candidate] = await db.select({ stage: hiringCandidates.stage }).from(hiringCandidates).where(eq(hiringCandidates.id, id));
+      const form = async () => (await db.select({ status: hiringOutbox.status }).from(hiringOutbox).where(eq(hiringOutbox.key, key)))[0]?.status;
+      const refusal = sendOneRefusal(candidate?.stage, await form());
+      if (refusal) throw new Error(refusal);
+      const { sent } = await requestDelivery({ mode: "one", key });
+      console.log(JSON.stringify({ sent, status: await form() }));
+      return;
+    }
     do {
       try {
         const { config } = await settings(db);
@@ -93,15 +107,25 @@ async function main() {
         const rows = await db
           .select({ ids: hiringCandidates.sourceIds })
           .from(hiringCandidates);
-        const imported = await importSeek(
-          profile,
-          config.seekJobId,
-          new Set(rows.flatMap((r) => r.ids)),
-          (value) => importApplication(value, db),
-          (id, status, contacted) =>
-            observeSeekState(id, status, contacted, db),
-          (candidateId, file) => keepResume(candidateId, file, db),
-        );
+        // One known-id set and one import budget for all jobs, so a person seen in one job is not imported again from another.
+        const known = new Set(rows.flatMap((r) => r.ids));
+        const campaigns = [];
+        let budget = 40;
+        for (const { jobId } of config.seekJobs.filter((j) => j.active)) {
+          const read = await importSeek(
+            profile,
+            jobId,
+            known,
+            (value) => importApplication(value, db),
+            (id, status, contacted) =>
+              observeSeekState(id, status, contacted, db),
+            (candidateId, file) => keepResume(candidateId, file, db),
+            budget,
+          );
+          budget -= read.imported;
+          campaigns.push({ jobId, ...read });
+        }
+        const imported = mergeSourceSummaries(campaigns);
         const cliVersion = execFileSync("claude", ["--version"], {
           encoding: "utf8",
         }).trim();

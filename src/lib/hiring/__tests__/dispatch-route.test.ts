@@ -89,3 +89,20 @@ it("delivers booking rows only on the cron, behind the shared secret", async () 
   expect(await response.json()).toEqual({ sent: 3 });
   expect(deliverOutbox).toHaveBeenCalledWith(expect.anything(), { connectedEmail: "owner@example.com" }, 20, true);
 });
+
+it("delivers only the named pre-screen form in send-one mode", async () => {
+  vi.stubEnv("AUTH_SECRET", "test-secret");
+  vi.stubEnv("VERCEL_ENV", "production");
+  vi.stubEnv("PREVIEW_SANDBOX_ENABLED", "false");
+  vi.mocked(deliverOutbox).mockResolvedValue(1);
+  const key = "00000000-0000-4000-8000-000000000001:pre-screen";
+  const response = await POST(request(JSON.stringify({ mode: "one", key }), true));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ sent: 1 });
+  expect(deliverOutbox).toHaveBeenCalledWith(expect.anything(), expect.anything(), 1, false, key);
+  // Any other row kind, such as an onsite invitation, is refused before the database.
+  vi.mocked(getDb).mockClear();
+  const other = JSON.stringify({ mode: "one", key: "00000000-0000-4000-8000-000000000001:visit-invite" });
+  expect((await POST(request(other, true))).status).toBe(400);
+  expect(deliverOutbox).toHaveBeenCalledTimes(1);
+});

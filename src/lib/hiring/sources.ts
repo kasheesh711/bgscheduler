@@ -169,6 +169,7 @@ export async function importApplication(value: unknown, db: Database) {
       .insert(s.hiringCandidates)
       .values({
         seekApplicationId: input.applicationId,
+        seekJobId: input.jobId,
         sourceIds: [input.applicationId],
         name: input.name,
         email: input.email,

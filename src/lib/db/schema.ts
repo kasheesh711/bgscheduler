@@ -48,6 +48,8 @@ export const hiringCandidates = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     seekApplicationId: text("seek_application_id"),
+    /** The SEEK job of the first application. Null for a person only in the tracker. */
+    seekJobId: text("seek_job_id"),
     sourceIds: jsonb("source_ids").$type<string[]>().notNull().default([]),
     applicantId: text("applicant_id"),
     trackerHash: text("tracker_hash"),

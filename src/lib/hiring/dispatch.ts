@@ -4,6 +4,13 @@ import { HiringError, RESUME_TYPES, type ResumeExtension } from "./model";
 
 export const deliveryRequestSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.enum(["all", "bookings"]) }).strict(),
+  // One waiting pre-screen form and nothing else: the controlled first send.
+  z
+    .object({
+      mode: z.literal("one"),
+      key: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:pre-screen$/),
+    })
+    .strict(),
   z
     .object({
       mode: z.literal("test"),

@@ -221,6 +221,7 @@ async function readApplication(
         previouslyContacted,
         sourceStatus: status ?? "",
         workRightsAnswer,
+        jobId,
       },
       resumeFile,
       resumeFailed,
@@ -417,6 +418,8 @@ export async function importSeek(
   observe: (id: string, status: string, contacted: boolean) => Promise<void>,
   // Must not throw. It returns false when the file was not stored.
   keepFile: (candidateId: string, file: ResumeFile) => Promise<boolean>,
+  // New imports this pass. Several jobs share one budget per cycle.
+  max = 40,
 ) {
   const browser = await chromium.launchPersistentContext(profilePath, {
     channel: "chrome",
@@ -440,7 +443,7 @@ export async function importSeek(
             .count()) > 0;
         await observe(id, status, contacted);
       } else if (["Inbox", "Prescreen", "Shortlist"].includes(status)) {
-        if (imported >= 40) {
+        if (imported >= max) {
           remaining++;
           return;
         }

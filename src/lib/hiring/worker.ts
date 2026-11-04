@@ -476,6 +476,15 @@ export async function rewriteBriefs(
   return calls;
 }
 
+/** Why `--send-one` must not send this candidate's form, or null. It sends one form that a click already queued. */
+export function sendOneRefusal(stage: string | undefined, formStatus: string | undefined) {
+  if (!stage) return "No candidate has that ID.";
+  if (stage !== "pre_screen") return `The candidate is at ${stage}, not pre_screen. Click Invite to pre-screen first.`;
+  if (!formStatus) return "The candidate has no pre-screen form. Click Invite to pre-screen first.";
+  if (formStatus !== "pending") return `The form is ${formStatus}, not pending. Nothing was sent.`;
+  return null;
+}
+
 export async function deliverOutbox(
   db: Database,
   config: HiringConfig,
