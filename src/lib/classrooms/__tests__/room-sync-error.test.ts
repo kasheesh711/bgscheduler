@@ -51,4 +51,3 @@ describe("loadClassroomSnapshotMeta", () => {
     expect(meta.roomSyncErrorSummary).toBeUndefined();
   });
 });
-
