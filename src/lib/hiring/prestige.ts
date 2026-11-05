@@ -26,7 +26,7 @@ const normalized = (value: string) =>
     .trim();
 const countryCache = new Map<
   string,
-  { country: string; source: string } | null
+  { country: string; source: string; names: string[] } | null
 >();
 export function prestigeFraction(
   university: Pick<UniversityRecord, "name" | "country" | "rank">,
@@ -64,7 +64,7 @@ async function verifiedCountry(name: string, fetchImpl: typeof fetch) {
   const body = (await response.json()) as {
     items?: Array<{
       id?: string;
-      names?: Array<{ value?: string }>;
+      names?: Array<{ value?: string; types?: string[] }>;
       locations?: Array<{ geonames_details?: { country_code?: string } }>;
     }>;
   };
@@ -78,6 +78,9 @@ async function verifiedCountry(name: string, fetchImpl: typeof fetch) {
       ? {
           country: exact[0].locations[0].geonames_details?.country_code ?? "",
           source: exact[0].id,
+          names: (exact[0].names ?? [])
+            .filter((n) => !n.types?.includes("acronym"))
+            .map((n) => normalized(n.value ?? "")),
         }
       : null;
   const valid = result && /^[A-Z]{2}$/.test(result.country) ? result : null;
@@ -101,16 +104,26 @@ export async function assessPrestige(
     catalogHash,
   };
   for (const school of evidence.filter((s) => s.completedDegree)) {
-    const matches = config.universities.filter((u) =>
+    let matches = config.universities.filter((u) =>
       [u.name, ...u.aliases].some(
         (n) => normalized(n) === normalized(school.name),
       ),
     );
     if (matches.length > 1) continue;
+    const institution = matches.length
+      ? null
+      : await verifiedCountry(school.name, fetchImpl).catch(() => null);
+    // ROR's names identify one institution; never strip campus names or use fuzzy matching.
+    if (!matches.length && institution)
+      matches = config.universities.filter((u) =>
+        u.country === institution.country &&
+        [u.name, ...u.aliases].some((n) => institution.names.includes(normalized(n))),
+      );
+    if (matches.length > 1) continue;
     const matched = matches[0];
     const country = matched
       ? { country: matched.country, source: matched.sourceUrl }
-      : await verifiedCountry(school.name, fetchImpl).catch(() => null);
+      : institution;
     if (!country) continue;
     const fraction = prestigeFraction({
       name: matched?.name ?? school.name,
@@ -134,6 +147,7 @@ export async function assessPrestige(
         sources: [
           ...new Set([
             country.source,
+            ...(institution ? [institution.source] : []),
             ...(matched?.rank ? [matched.sourceUrl] : []),
           ]),
         ],

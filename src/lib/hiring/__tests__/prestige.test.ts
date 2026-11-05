@@ -108,6 +108,36 @@ describe("university prestige evidence", () => {
     expect(result.fraction).toBe(0.4);
     expect(result.sources).toEqual(["https://ror.org/test"]);
   });
+  it("resolves an official ROR name to the ranked campus without conflating campuses", async () => {
+    const config = configSchema.parse({ universities: [
+      { name: "University of Michigan--Ann Arbor", aliases: [], country: "US", rank: 21, edition: "2026-2027", sourceUrl: "https://www.usnews.com/michigan-ann-arbor" },
+      { name: "University of Michigan--Dearborn", aliases: [], country: "US", rank: 1200, edition: "2026-2027", sourceUrl: "https://www.usnews.com/michigan-dearborn" },
+    ] });
+    const fetcher = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [{
+      id: "https://ror.org/00jmfr291",
+      names: [{ value: "University of Michigan", types: ["ror_display"] }, { value: "University of Michigan–Ann Arbor", types: ["label"] }],
+      locations: [{ geonames_details: { country_code: "US" } }],
+    }] }) });
+    const result = await assessPrestige([{ name: "University of Michigan", evidence: "Degree from Michigan", completedDegree: true }], config, "catalog", fetcher);
+    expect(result).toMatchObject({ name: "University of Michigan--Ann Arbor", rank: 21, fraction: 0.9 });
+    expect(result.sources).toContain("https://ror.org/00jmfr291");
+    const campus = await assessPrestige([{ name: "University of Michigan--Dearborn", evidence: "Degree from Dearborn", completedDegree: true }], config, "catalog", fetcher);
+    expect(campus).toMatchObject({ name: "University of Michigan--Dearborn", rank: 1200, fraction: 0.4 });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("does not choose between multiple catalog matches for one ROR record", async () => {
+    const config = configSchema.parse({ universities: [
+      { name: "Ambiguous College A", aliases: [], country: "US", rank: 21, edition: "2026-2027", sourceUrl: "https://example.org/a" },
+      { name: "Ambiguous College B", aliases: [], country: "US", rank: 200, edition: "2026-2027", sourceUrl: "https://example.org/b" },
+    ] });
+    const fetcher = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [{
+      id: "https://ror.org/ambiguous", names: [{ value: "Ambiguous College" }, { value: "Ambiguous College A" }, { value: "Ambiguous College B" }],
+      locations: [{ geonames_details: { country_code: "US" } }],
+    }] }) });
+    const result = await assessPrestige([{ name: "Ambiguous College", evidence: "Degree", completedDegree: true }], config, "catalog", fetcher);
+    expect(result.fraction).toBe(0);
+    expect(result.rank).toBeNull();
+  });
   it("rejects invented university evidence even when the institution is in the reference list", () => {
     const value = {
       criteria: ["degree", "subject", "curriculum", "teaching", "english"].map(
