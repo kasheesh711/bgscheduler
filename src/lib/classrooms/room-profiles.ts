@@ -79,13 +79,20 @@ export async function ensureTutorRoomProfiles(db: Database, snapshotId: string, 
 /** Read-only: profiles plus a re-planned set (primary kept) for each tutor whose set would change. Nothing is saved. */
 export async function listTutorRoomProfilesWithSuggestions(db: Database, date: string) {
   const current = await listTutorRoomProfiles(db);
-  const [snapshot] = await db.select({ id: schema.snapshots.id }).from(schema.snapshots).where(eq(schema.snapshots.active, true)).limit(1);
   const suggested = new Map<string, string[]>();
-  if (snapshot) {
-    const [{ sessions }, { history }] = await Promise.all([upcomingProfileSessions(db, snapshot.id, date), recentRoomUse(db, date)]);
-    for (const profile of proposeRoomProfiles({ sessions, rooms: current.rooms, history, existing: [...toRoomPolicies(current.profiles).values()], replan: true })) {
-      suggested.set(profile.canonicalKey, profile.roomIds);
+  const active = new Set(current.rooms.filter(room => room.active).map(room => room.id));
+  try {
+    const [snapshot] = await db.select({ id: schema.snapshots.id }).from(schema.snapshots).where(eq(schema.snapshots.active, true)).limit(1);
+    if (snapshot) {
+      const [{ sessions }, { history }] = await Promise.all([upcomingProfileSessions(db, snapshot.id, date), recentRoomUse(db, date)]);
+      for (const profile of proposeRoomProfiles({ sessions, rooms: current.rooms, history, existing: [...toRoomPolicies(current.profiles).values()], replan: true })) {
+        // An inactive anchor cannot be saved, so such a set is not offered.
+        if (profile.roomIds.every(id => active.has(id))) suggested.set(profile.canonicalKey, profile.roomIds);
+      }
     }
+  } catch (error) {
+    // Suggestions are optional; the stored sets must stay editable.
+    console.error("Room profile suggestions failed", error instanceof Error ? error.name : "unknown");
   }
   return { ...current, profiles: current.profiles.map(profile => {
     const roomIds = suggested.get(profile.canonicalKey.toLowerCase());

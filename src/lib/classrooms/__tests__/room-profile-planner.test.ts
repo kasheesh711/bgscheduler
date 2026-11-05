@@ -49,6 +49,12 @@ describe("usual room initialization", () => {
     expect(names("art")[0]).toBe("Focus");
     expect(names("art")).toHaveLength(3);
     expect([...names("art"), ...names("ayush")]).not.toContain("Joy (TV)");
+    const locked = proposeRoomProfiles({ sessions: [session("Mek"), session("Gift")], rooms, history: [], replan: true,
+      existing: [{ canonicalKey: "mek", revision: 1, rooms: ["Iconic (TV)", "Focus"] }, { canonicalKey: "gift", revision: 1, rooms: ["Joy (TV)"] }] });
+    const lockedNames = (key: string) => locked.find(p => p.canonicalKey === key)!.roomIds.map(id => rooms.find(r => r.id === id)!);
+    expect(lockedNames("mek")[0].name).toBe("Iconic (TV)");
+    expect(lockedNames("mek").every(r => r.hasTv)).toBe(true);
+    expect(lockedNames("gift").map(r => r.name)).toEqual(["Joy (TV)"]);
     expect(proposeRoomProfiles({ ...input, sessions: [session("Da")], existing: [{ canonicalKey: "da", revision: 1, rooms: ["Cool"] }], replan: true })[0].roomIds
       .map(id => rooms.find(r => r.id === id)!.name)[0]).toBe("Do It");
   });

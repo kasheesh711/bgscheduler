@@ -45,13 +45,15 @@ export function optimizeClassroomContinuity(input: Input) {
   const scoredRows = (plan: Map<string, string>) => rows.map(row => ({ ...row, assignedRoom: plan.get(row.wiseSessionId) ?? row.assignedRoom }));
   const score = (plan: Map<string, string>) => {
     const metrics = roomQualityMetrics(scoredRows(plan), input.policies);
-    let changed = 0, preference = 0;
+    let changed = 0, moved = 0, preference = 0;
     for (const [id, room] of plan) {
       if (input.savedRooms?.has(id) && physicalRoom(input.savedRooms.get(id)!) !== physicalRoom(room)) changed++;
+      if (physicalRoom(byId.get(id)!.assignedRoom) !== physicalRoom(room)) moved++;
       preference += input.preferenceCost(byId.get(id)!, roomByName.get(physicalRoom(room))!);
     }
-    // Owner rule (5 Nov 2026): fewer rooms per tutor per day outranks usual-room use.
-    return [rows.filter(row => row.status === "no_room").length, metrics.roomChanges, metrics.distinctTeacherRooms, metrics.outsideUsualRooms, changed, preference];
+    // Owner rules (5 Nov 2026): saved rooms move only to fix no-room or back-to-back moves; otherwise
+    // fewer rooms per tutor per day outranks usual rooms, and the engine's first plan beats preference-only moves.
+    return [rows.filter(row => row.status === "no_room").length, metrics.roomChanges, changed, metrics.distinctTeacherRooms, metrics.outsideUsualRooms, moved, preference];
   };
   const groups = new Map<string, AssignmentResultRow[]>();
   for (const row of rows) {

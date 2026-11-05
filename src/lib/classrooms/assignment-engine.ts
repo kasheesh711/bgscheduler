@@ -761,7 +761,7 @@ export function repairClassroomAssignmentRows(
   if (!(options.optimizeContinuity ?? classroomContinuityEnabled())) return repaired;
   const optimized = optimizeClassroomContinuity({ ...repairInput, rows: repaired,
     preferenceCost: (row, room) => usualRoomPreferenceCost(row, room, options.roomPolicies) * 100_000 + repairInput.preferenceCost(row, room),
-    policies: options.roomPolicies, savedRooms: options.savedRooms ?? new Map(rows.map(row => [row.wiseSessionId, row.assignedRoom])), frozenSessionIds: options.frozenSessionIds,
+    policies: options.roomPolicies, savedRooms: options.savedRooms, frozenSessionIds: options.frozenSessionIds,
     maxNodes: options.continuityMaxNodes,
   });
   if (options.diagnostics) options.diagnostics.quality = optimized.metrics;
