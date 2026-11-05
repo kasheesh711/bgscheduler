@@ -5,6 +5,11 @@ vi.mock("@/lib/line/data", () => ({
   recordLineWebhookPayload: vi.fn(),
 }));
 
+vi.mock("@/lib/line/client", () => ({
+  replyLineMessage: vi.fn(),
+}));
+
+import { replyLineMessage } from "@/lib/line/client";
 import { recordLineWebhookPayload } from "@/lib/line/data";
 import { handleLineWebhookPost } from "@/lib/line/webhook";
 
@@ -73,16 +78,59 @@ describe("handleLineWebhookPost", () => {
     expect(recordLineWebhookPayload).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["user", false], ["group", false], ["room", false],
+    ["user", true], ["group", true], ["room", true],
+  ] as const)("replies to form commands in %s chats (tutor bot: %s) without forwarding them", async (sourceType, tutorBot) => {
+    const source = { type: sourceType, userId: "tutor-1", groupId: "group-1", roomId: "room-1" };
+    const unrelated = { type: "message", source, message: { type: "text", text: "/progress" } };
+    const rawBody = JSON.stringify({ events: [
+      { type: "message", source, replyToken: "leave-token", message: { type: "text", text: " /LEAVE " } },
+      { type: "message", source, replyToken: "request-token", message: { type: "text", text: "/request" } },
+      unrelated,
+    ] });
+    await handleLineWebhookPost({ db: {} as never, rawBody,
+      signature: signature("secret", rawBody), channelSecret: "secret",
+      progressOnly: tutorBot, scheduleProcessing: vi.fn() });
+
+    expect(replyLineMessage).toHaveBeenCalledTimes(2);
+    expect(replyLineMessage).toHaveBeenNthCalledWith(1, {
+      replyToken: "leave-token", tutorBot,
+      text: "Leave form\n- for taking leave (please inform 7 days in advance)\nhttps://docs.google.com/forms/d/e/1FAIpQLSd-tzTC1XrOq4MtvVjlueOrbZ-6vLJgKambL812dfItiGTJPw/formResponse",
+    });
+    expect(replyLineMessage).toHaveBeenNthCalledWith(2, {
+      replyToken: "request-token", tutorBot,
+      text: "- Request form (Changing availability and other issues)\nhttps://docs.google.com/forms/d/e/1FAIpQLSe8GzpXwjc-PPldy_nIat2kTQA8XQw6cGnKGALxn_vWEV_NAA/viewform",
+    });
+    const expectedArgs = [expect.anything(), { events: [unrelated] }, ...(tutorBot ? [true] : [])];
+    expect(recordLineWebhookPayload).toHaveBeenCalledWith(...expectedArgs);
+  });
+
+  it("leaves partial commands, non-text events and missing reply tokens on the existing path", async () => {
+    const payload = { events: [
+      { type: "message", replyToken: "token", message: { type: "text", text: "/leave tomorrow" } },
+      { type: "message", replyToken: "token", message: { type: "text", text: "/requests" } },
+      { type: "postback", replyToken: "token", message: { type: "text", text: "/leave" } },
+      { type: "message", message: { type: "text", text: "/request" } },
+    ] };
+    const rawBody = JSON.stringify(payload);
+    await handleLineWebhookPost({ db: {} as never, rawBody,
+      signature: signature("secret", rawBody), channelSecret: "secret", scheduleProcessing: vi.fn() });
+    expect(replyLineMessage).not.toHaveBeenCalled();
+    expect(recordLineWebhookPayload).toHaveBeenCalledWith(expect.anything(), payload);
+  });
+
   it("rejects bad signatures before touching persistence", async () => {
     const result = await handleLineWebhookPost({
       db: {} as never,
-      rawBody: JSON.stringify({ events: [] }),
+      rawBody: JSON.stringify({ events: [{ type: "message", replyToken: "token", message: { type: "text", text: "/leave" } }] }),
       signature: "bad",
       channelSecret: "secret",
       scheduleProcessing: vi.fn(),
     });
 
     expect(result.status).toBe(401);
+    expect(replyLineMessage).not.toHaveBeenCalled();
     expect(recordLineWebhookPayload).not.toHaveBeenCalled();
   });
 
