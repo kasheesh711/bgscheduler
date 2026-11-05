@@ -27,9 +27,9 @@ export function mentionedTheaText(raw: unknown): string | null {
   const event = raw as { type?: string; message?: { type?: string; text?: string; mention?: { mentionees?: Array<{ type?: string; isSelf?: boolean; index?: number; length?: number }> } } } | null;
   if (event?.type !== "message" || event.message?.type !== "text" || typeof event.message.text !== "string") return null;
   const mentions = event.message.mention?.mentionees;
-  if (!Array.isArray(mentions) || !mentions.some(m => m.type === "user" && m.isSelf === true)) return null;
+  if (!Array.isArray(mentions) || !mentions.some(m => m?.type === "user" && m.isSelf === true)) return null;
   let text = event.message.text;
-  for (const mention of mentions.filter(m => m.isSelf === true).sort((a, b) => (b.index ?? 0) - (a.index ?? 0))) {
+  for (const mention of mentions.filter(m => m?.isSelf === true).sort((a, b) => (b.index ?? 0) - (a.index ?? 0))) {
     if (!Number.isInteger(mention.index) || !Number.isInteger(mention.length) || mention.index! < 0
       || mention.length! <= 0 || mention.index! + mention.length! > text.length) return null;
     text = text.slice(0, mention.index) + text.slice(mention.index! + mention.length!);

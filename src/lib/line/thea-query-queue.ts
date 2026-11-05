@@ -13,7 +13,8 @@ export async function receiveTheaQuery(db: Database, raw: unknown): Promise<{ ha
   if (text === null) return { handled: false };
   const event = raw as { webhookEventId?: string; replyToken?: string; source?: { type?: string; groupId?: string; userId?: string } };
   if (!theaQueriesEnabled() || event.source?.type !== "group" || event.source.groupId !== process.env.THEA_LINE_GROUP_ID
-    || !event.source.userId || !event.webhookEventId) return { handled: true };
+    || typeof event.source.userId !== "string" || !event.source.userId || event.source.userId.length > 128
+    || typeof event.webhookEventId !== "string" || !event.webhookEventId || event.webhookEventId.length > 128) return { handled: true };
   let queued = false;
   let message = "Please mention Thea with a teacher question, date and time (maximum 1,000 characters).";
   if (text && text.length <= 1000) {
@@ -33,7 +34,7 @@ export async function receiveTheaQuery(db: Database, raw: unknown): Promise<{ ha
     message = queued ? "Thea is checking Wise. I will post the result here. A cold lookup can take a few minutes.\nกำลังตรวจสอบข้อมูล Wise แล้วจะส่งผลในกลุ่มนี้ค่ะ"
       : "Please wait ten seconds before asking Thea again.\nกรุณารอสิบวินาทีก่อนถามอีกครั้งค่ะ";
   }
-  if (event.replyToken) await replyLineMessage({ tutorBot: true, replyToken: event.replyToken, text: message }).catch(() => undefined);
+  if (typeof event.replyToken === "string" && event.replyToken) await replyLineMessage({ tutorBot: true, replyToken: event.replyToken, text: message }).catch(() => undefined);
   return { handled: true, queued };
 }
 

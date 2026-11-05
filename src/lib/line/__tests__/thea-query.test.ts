@@ -25,6 +25,7 @@ describe("Thea query boundaries", () => {
     const message = { type: "text", text, mention: { mentionees: [{ type: "user", isSelf: true, index: 3, length: 11 }] } };
     expect(mentionedTheaText({ type: "message", message })).toBe("🙂  Math tomorrow");
     expect(mentionedTheaText({ type: "message", message: { ...message, mention: undefined } })).toBeNull();
+    expect(mentionedTheaText({ type: "message", message: { ...message, mention: { mentionees: [null] } } })).toBeNull();
     expect(mentionedTheaText({ type: "message", message: { ...message, mention: { mentionees: [{ type: "user", isSelf: false }] } } })).toBeNull();
     expect(mentionedTheaText({ type: "message", message: { ...message, mention: { mentionees: [{ type: "user", isSelf: true, index: -1, length: 2 }] } } })).toBeNull();
   });

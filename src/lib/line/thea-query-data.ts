@@ -133,7 +133,9 @@ export function buildTheaIndex(roster: TheaRoster, query: ReadyTheaQuery, sessio
 export function checkedTheaAvailability(value: WiseAvailabilityResponse) {
   const time = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
   if (!Array.isArray(value.workingHours?.slots) || !Array.isArray(value.leaves)
-    || value.leaves.some(l => !Number.isFinite(Date.parse(l.startTime)) || !Number.isFinite(Date.parse(l.endTime)) || Date.parse(l.endTime) <= Date.parse(l.startTime))
+    || value.leaves.some(l => !l || typeof l.startTime !== "string" || typeof l.endTime !== "string"
+      || !/(?:Z|[+-]\d{2}:\d{2})$/.test(l.startTime) || !/(?:Z|[+-]\d{2}:\d{2})$/.test(l.endTime)
+      || !Number.isFinite(Date.parse(l.startTime)) || !Number.isFinite(Date.parse(l.endTime)) || Date.parse(l.endTime) <= Date.parse(l.startTime))
     || value.workingHours.slots.some(w => !(typeof w.day === "number" ? Number.isInteger(w.day) && w.day >= 0 && w.day <= 6
       : typeof w.day === "string" && /^(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/i.test(w.day))
       || !time.test(w.startTime) || !(time.test(w.endTime) || w.endTime === "24:00") || w.endTime <= w.startTime)) {
