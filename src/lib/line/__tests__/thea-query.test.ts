@@ -20,7 +20,7 @@ describe("Thea query boundaries", () => {
     expect(callOpenRouter).toHaveBeenLastCalledWith(expect.objectContaining({ model: "deepseek/deepseek-v4.1-flash-1017", effort: "none", maxTokens: 512,
       provider: expect.objectContaining({ max_price: { prompt: 0.3, completion: 1.2, request: 0 }, require_parameters: true }) }));
   });
-  it("requires the real bot mention and removes only its signed UTF-16 range", () => {
+  it("accepts native bot mentions or an exact desktop prefix, not lookalike names or mentions of someone else", () => {
     const text = "🙂 @Thea (BOT) Math tomorrow";
     const message = { type: "text", text, mention: { mentionees: [{ type: "user", isSelf: true, index: 3, length: 11 }] } };
     expect(mentionedTheaText({ type: "message", message })).toBe("🙂  Math tomorrow");
@@ -28,6 +28,10 @@ describe("Thea query boundaries", () => {
     expect(mentionedTheaText({ type: "message", message: { ...message, mention: { mentionees: [null] } } })).toBeNull();
     expect(mentionedTheaText({ type: "message", message: { ...message, mention: { mentionees: [{ type: "user", isSelf: false }] } } })).toBeNull();
     expect(mentionedTheaText({ type: "message", message: { ...message, mention: { mentionees: [{ type: "user", isSelf: true, index: -1, length: 2 }] } } })).toBeNull();
+    expect(mentionedTheaText({ type: "message", message: { type: "text", text: "@Thea (BOT) Math tomorrow" } })).toBe("Math tomorrow");
+    expect(mentionedTheaText({ type: "message", message: { type: "text", text: " @Thea Math tomorrow" } })).toBe("Math tomorrow");
+    expect(mentionedTheaText({ type: "message", message: { type: "text", text: "@Theatre Math tomorrow" } })).toBeNull();
+    expect(mentionedTheaText({ type: "message", message: { type: "text", text: "@Thea Math tomorrow", mention: { mentionees: [{ type: "user", isSelf: false }] } } })).toBeNull();
   });
   it("asks for missing/invalid dates and times, and does not drop unsupported qualification filters", () => {
     const now = new Date("2026-11-05T01:00:00Z");
