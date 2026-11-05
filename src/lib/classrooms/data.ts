@@ -1,3 +1,4 @@
+import { THEA_ACTOR_PREFIX } from "./thea-config";
 import { theaPublishAllowed } from "./thea-publish-access";
 import { isClassroomOperationsOwner, wiseClassroomAutomationEnabled } from "./operations-policy";
 import { createHash } from "node:crypto";
@@ -1573,7 +1574,7 @@ async function moveCycleRowToTemporaryLocation(
 
 export async function runClassroomPublishJob(db: Database, jobId: string, client?: WiseClient) {
   const existing = await loadPublishJob(db, jobId);
-  if (!wiseClassroomAutomationEnabled() && !isClassroomOperationsOwner(existing.createdBy) && !await theaPublishAllowed(db, existing)) {
+  if ((existing.createdBy?.startsWith(THEA_ACTOR_PREFIX) || (!wiseClassroomAutomationEnabled() && !isClassroomOperationsOwner(existing.createdBy))) && !await theaPublishAllowed(db, existing)) {
     await stopNonOwnerClassroomPublications(db, jobId);
     return getClassroomPublishJobProgress(db, existing.runId, jobId);
   }
@@ -1589,7 +1590,7 @@ export async function runClassroomPublishJob(db: Database, jobId: string, client
         const boundedClient = client ?? createWiseClientFromEnv(AbortSignal.timeout(Math.max(1, claim.deadlineAt - Date.now())), async (url, init) => {
           await assertPublishAttemptActive(db);
           if (init.method === "PUT") {
-            if (!wiseClassroomAutomationEnabled() && !isClassroomOperationsOwner(existing.createdBy) && !await theaPublishAllowed(db, existing)) {
+            if ((existing.createdBy?.startsWith(THEA_ACTOR_PREFIX) || (!wiseClassroomAutomationEnabled() && !isClassroomOperationsOwner(existing.createdBy))) && !await theaPublishAllowed(db, existing)) {
               throw new Error("Thea publication authorization expired.");
             }
             const sessionId = /\/sessions\/([^/?]+)/.exec(new URL(url).pathname)?.[1];
