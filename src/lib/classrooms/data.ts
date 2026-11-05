@@ -75,6 +75,8 @@ export interface ClassroomAssignmentDetail {
 
 export interface ClassroomSnapshotMeta {
   syncErrorSummary?: string;
+  /** The part of syncErrorSummary that affects room data; absent when only contacts need review. */
+  roomSyncErrorSummary?: string;
   snapshotId: string | null;
   latestSyncFinishedAt: string | null;
   staleAgeMs: number | null;
@@ -545,9 +547,9 @@ async function loadSnapshotById(db: Database, snapshotId: string): Promise<{ id:
 async function loadLatestSuccessfulSyncForSnapshot(
   db: Database,
   snapshotId: string,
-): Promise<{ finishedAt: Date | null; errorSummary?: string | null } | null> {
+): Promise<{ finishedAt: Date | null; errorSummary?: string | null; metadata?: unknown } | null> {
   const [syncRun] = await db
-    .select({ finishedAt: schema.syncRuns.finishedAt, errorSummary: schema.syncRuns.errorSummary })
+    .select({ finishedAt: schema.syncRuns.finishedAt, errorSummary: schema.syncRuns.errorSummary, metadata: schema.syncRuns.metadata })
     .from(schema.syncRuns)
     .where(
       and(
@@ -560,7 +562,16 @@ async function loadLatestSuccessfulSyncForSnapshot(
   return syncRun ?? null;
 }
 
-async function loadClassroomSnapshotMeta(
+export function roomSyncError(sync: { errorSummary?: string | null; metadata?: unknown } | null): { roomSyncErrorSummary?: string } {
+  const metadata = sync?.metadata && typeof sync.metadata === "object" ? sync.metadata as Record<string, unknown> : {};
+  const recorded = metadata.roomDataErrorSummary;
+  if (typeof recorded === "string" && recorded) return { roomSyncErrorSummary: recorded };
+  if (!sync?.errorSummary) return {};
+  // Runs recorded before the split carry no key; a malformed value also fails closed.
+  return recorded === null ? {} : { roomSyncErrorSummary: sync.errorSummary };
+}
+
+export async function loadClassroomSnapshotMeta(
   db: Database,
   snapshotId?: string,
   now = new Date(),
@@ -585,6 +596,7 @@ async function loadClassroomSnapshotMeta(
     snapshotId: snapshot.id,
     latestSyncFinishedAt: finishedAt?.toISOString() ?? null,
     ...(latestSync?.errorSummary ? { syncErrorSummary: latestSync.errorSummary } : {}),
+    ...roomSyncError(latestSync),
     staleAgeMs,
     fresh: staleAgeMs !== null && staleAgeMs <= CLASSROOM_ASSIGNMENT_FRESHNESS_MS,
   };
@@ -988,7 +1000,7 @@ async function runIncrementalClassroomAssignmentUnlocked(
     input.trustedSnapshotMeta?.snapshotId === snapshot.id
       ? input.trustedSnapshotMeta
       : await assertFreshClassroomSnapshot(db, snapshot.id);
-  if (checkpoint && snapshotMeta.syncErrorSummary) throw new Error(`Weekend allocation requires verified Wise data: ${snapshotMeta.syncErrorSummary}`);
+  if (checkpoint && snapshotMeta.roomSyncErrorSummary) throw new Error(`Weekend allocation requires verified Wise data: ${snapshotMeta.roomSyncErrorSummary}`);
   const rooms = await listClassroomRooms(db);
   const previousRun = await loadLatestRunForDate(db, date);
   const previousRows = previousRun ? await loadRowsForRun(db, previousRun.id) : [];
@@ -1061,7 +1073,7 @@ async function runIncrementalClassroomAssignmentUnlocked(
   const overflow = await improveOverflowAllocation(db, { reconciliation, rooms: rooms.map(toEngineRoom), assignmentDate: date,
     snapshotId: snapshot.id, snapshotFinishedAt: snapshotMeta.latestSyncFinishedAt, liveSessions,
     externalRoomBlocks: [...externalBlocks, ...reservations], frozenSessionIds,
-    unverifiedReasons: [snapshotMeta.syncErrorSummary,
+    unverifiedReasons: [snapshotMeta.roomSyncErrorSummary,
       unmanagedWiseSessionIds.length ? "Live Wise lessons are missing from the snapshot; refresh or resolve their identities." : null].filter((value): value is string => Boolean(value)),
   });
   reconciliation = overflow.reconciliation;

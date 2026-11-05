@@ -73,10 +73,20 @@ describe("Wednesday allocation checkpoint", () => {
   it("never saves from a failed source sync even if a snapshot was promoted", async () => {
     const fresh = await getFreshClassroomSnapshotForAssignment(db);
     vi.mocked(getFreshClassroomSnapshotForAssignment).mockResolvedValue({ ...fresh,
-      snapshotMeta: { ...fresh.snapshotMeta, syncErrorSummary: "Teacher identities require review" } });
+      snapshotMeta: { ...fresh.snapshotMeta, syncErrorSummary: "Teacher identities require review", roomSyncErrorSummary: "Teacher identities require review" } });
     const report = await previewWeekendReadiness(db, dates, { checkpoint: { id: "check", claimedAt: new Date() } });
     expect(report.readiness).toBe("unverified");
     expect(runIncrementalClassroomAssignment).not.toHaveBeenCalled();
+  });
+  it("still saves both days when only teacher contacts need review", async () => {
+    const fresh = await getFreshClassroomSnapshotForAssignment(db);
+    vi.mocked(getFreshClassroomSnapshotForAssignment).mockResolvedValue({ ...fresh,
+      snapshotMeta: { ...fresh.snapshotMeta, syncErrorSummary: "1 Wise teacher contact accounts need review" } });
+    const report = await previewWeekendReadiness(db, dates, { checkpoint: { id: "check", claimedAt: new Date() } });
+    expect(report.days.map(day => day.allocation)).toEqual(["saved", "saved"]);
+    expect(report.findings).toContainEqual(expect.objectContaining({ kind: "review",
+      message: expect.stringContaining("does not affect rooms") }));
+    expect(report.findings.some(finding => finding.kind === "unverified")).toBe(false);
   });
   it("keeps follow-up checks read-only and includes confirmed reservations", async () => {
     vi.mocked(reservationRoomBlocks).mockResolvedValue([{ wiseSessionId: "reservation", className: "Reserved room", location: room.name, startMinute: 600, endMinute: 660 }]);

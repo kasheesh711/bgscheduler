@@ -94,7 +94,10 @@ describe("atomic teacher onboarding", () => {
     expect(result.promotedSnapshotId).toBeTruthy();
     expect(result.unmanagedTeacherSessionCount).toBe(1);
     expect(result.errorSummary).toContain("absent from the Wise roster");
-    expect((await handle.db.select().from(schema.syncRuns))[0].status).toBe("failed");
+    const [run] = await handle.db.select().from(schema.syncRuns);
+    expect(run.status).toBe("failed");
+    // Absent-roster sessions affect rooms, so the weekend checkpoint must still see them.
+    expect((run.metadata as { roomDataErrorSummary?: string }).roomDataErrorSummary).toContain("absent from the Wise roster");
     expect(await resolveTeacherCanonicalKeys("new@example.com", db)).toEqual(["New"]);
     expect((await handle.db.select().from(schema.dataIssues)).some(i => i.entityId === "kem-session")).toBe(true);
   });
